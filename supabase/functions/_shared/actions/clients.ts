@@ -40,6 +40,7 @@ export async function activeFolderShare(ctx: ActionCtx, folderId: string): Promi
 
 const CLIENT_STATUS = ['active', 'prospect', 'inactive'] as const;
 const CLIENT_KIND = ['business', 'consumer'] as const;
+const E_INVOICE_CHANNEL = ['email', 'mollie'] as const;
 const FIELD_TYPES = ['text', 'textarea', 'number', 'amount', 'date', 'select', 'multiselect', 'boolean', 'url', 'email', 'phone'] as const;
 
 export const CLIENT_ACTIONS: ActionDef[] = [
@@ -49,10 +50,12 @@ export const CLIENT_ACTIONS: ActionDef[] = [
     module: 'clients',
     kind: 'write',
     description:
-      'Werkt de gegevens van een klant bij die het gewone klantformulier wél kent maar `propose_edit_client` niet: postadres, postcode, plaats, land, btw-nummer, KVK-nummer, soort klant (zakelijk of consument), klantwaarde, labels en de kleur op de kaart. ' +
+      'Werkt de gegevens van een klant bij die het gewone klantformulier wél kent maar `propose_edit_client` niet: postadres, postcode, plaats, land, btw-nummer, KVK-nummer, soort klant (zakelijk of consument), e-facturatie en het e-factuuradres, klantwaarde, labels en de kleur op de kaart. ' +
       'Het btw-nummer, KVK-nummer en adres zijn nodig voor een geldige UBL/Peppol-e-factuur; het soort klant bepaalt of een aanmaning de consumentenregels (WIK) volgt. ' +
+      'Staat e-facturatie aan, dan gaan facturen en creditnota\'s aan deze klant voortaan als e-factuur (UBL met de PDF erin) naar het e-factuuradres, of anders naar het gewone e-mailadres. ' +
+      'Met verzendkanaal "mollie" geeft Mollie de factuur uit en verstuurt hem over Peppol (eigen Mollie-nummer, betalen via Mollie; alleen klanten in NL, BE of DE). ' +
       'Geef alleen de velden die veranderen — wat je weglaat blijft staan. Zoek de klant eerst met `search_clients`.',
-    keywords: ['adres', 'postcode', 'plaats', 'land', 'btw', 'vat', 'kvk', 'zakelijk', 'consument', 'label', 'tag', 'kleur', 'klantwaarde', 'peppol', 'ubl'],
+    keywords: ['adres', 'postcode', 'plaats', 'land', 'btw', 'vat', 'kvk', 'zakelijk', 'consument', 'label', 'tag', 'kleur', 'klantwaarde', 'peppol', 'ubl', 'e-factuur', 'e-facturatie', 'e-factuuradres', 'mollie'],
     input: {
       client_id: { type: 'string', description: 'Id van de klant (exact, uit search_clients).' },
       address_line1: { type: 'string', description: 'Straat en huisnummer.' },
@@ -63,6 +66,9 @@ export const CLIENT_ACTIONS: ActionDef[] = [
       vat_number: { type: 'string', description: 'Btw-identificatienummer, bv. NL001234567B01.' },
       kvk_number: { type: 'string' },
       client_kind: { type: 'string', enum: [...CLIENT_KIND], description: 'business = zakelijk, consumer = particulier.' },
+      e_invoicing_enabled: { type: 'boolean', description: 'true = facturen aan deze klant gaan als e-factuur (UBL met de PDF erin); false = alleen de PDF.' },
+      e_invoice_email: { type: 'string', description: 'E-factuuradres, bijvoorbeeld het inkoopfacturenadres van het boekhoudpakket van de klant.' },
+      e_invoice_channel: { type: 'string', enum: [...E_INVOICE_CHANNEL], description: 'Hoe de e-factuur gaat: email = UBL met de PDF erin per mail; mollie = Mollie geeft hem uit en verstuurt hem over Peppol.' },
       status: { type: 'string', enum: [...CLIENT_STATUS] },
       value_eur: { type: 'number', description: 'Geschatte klantwaarde in euro.' },
       tags: { type: 'array', items: { type: 'string' }, description: 'Vervangt de bestaande labels volledig.' },
@@ -84,6 +90,13 @@ export const CLIENT_ACTIONS: ActionDef[] = [
       put('vat_number', optStr(input, 'vat_number', 40));
       put('kvk_number', optStr(input, 'kvk_number', 40));
       put('client_kind', optChoice(input, 'client_kind', CLIENT_KIND));
+      if (typeof input.e_invoicing_enabled === 'boolean') patch.e_invoicing_enabled = input.e_invoicing_enabled;
+      const eInvoiceEmail = optStr(input, 'e_invoice_email', 254)?.toLowerCase() ?? null;
+      if (eInvoiceEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(eInvoiceEmail)) {
+        throw new ActionError(`"${eInvoiceEmail}" is geen geldig e-factuuradres.`);
+      }
+      put('e_invoice_email', eInvoiceEmail);
+      put('e_invoice_channel', optChoice(input, 'e_invoice_channel', E_INVOICE_CHANNEL));
       put('status', optChoice(input, 'status', CLIENT_STATUS));
       const value = optNum(input, 'value_eur');
       if (value !== null) assertFieldWritable(ctx, 'finance', 'value_eur', 'Financiën');
@@ -103,6 +116,8 @@ export const CLIENT_ACTIONS: ActionDef[] = [
       const labels: Record<string, string> = {
         address_line1: 'adres', address_line2: 'adresregel 2', postal_code: 'postcode', city: 'plaats',
         country: 'land', vat_number: 'btw-nummer', kvk_number: 'KVK-nummer', client_kind: 'soort klant',
+        e_invoicing_enabled: patch.e_invoicing_enabled ? 'e-facturatie aan' : 'e-facturatie uit', e_invoice_email: 'e-factuuradres',
+        e_invoice_channel: patch.e_invoice_channel === 'mollie' ? 'e-factuur via Mollie' : 'e-factuur per e-mail',
         status: 'status', value_eur: 'klantwaarde', tags: 'labels', color: 'kleur', follow_up: 'opvolgdatum',
       };
       return {

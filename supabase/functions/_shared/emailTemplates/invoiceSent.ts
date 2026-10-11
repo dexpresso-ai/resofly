@@ -7,6 +7,8 @@ import type { InvoiceEmailLine, InvoiceSentEmailInput, RenderedEmailTemplate } f
 const DEFAULT_SUBJECT = 'Factuur {{invoice_number}} van {{company_name}}';
 const DEFAULT_INTRO = 'Beste {{recipient_name}},\nJe factuur staat klaar. In de bijlage vind je de PDF-snapshot.';
 const DEFAULT_CTA_WITH_PAYMENT = 'Bekijk en betaal factuur';
+// Vaste regel (geen aanpasbare tekst): legt uit wat het XML-bestand in de bijlage is.
+const E_INVOICE_NOTE = 'Deze factuur zit ook als e-factuur (UBL) in de bijlage, met de PDF erin — voor je boekhoudpakket.';
 const DEFAULT_CTA_WITHOUT_PAYMENT = 'Bekijk factuur';
 
 export function renderInvoiceSentEmail(input: InvoiceSentEmailInput): RenderedEmailTemplate {
@@ -51,6 +53,7 @@ export function renderInvoiceSentEmail(input: InvoiceSentEmailInput): RenderedEm
         totalAmount,
         dueDate,
         closingHtml,
+        eInvoice: Boolean(input.eInvoice),
       }),
       cta: { label: ctaLabel, url: input.publicUrl },
       footerHtml: `Deze beveiligde link is geldig tot ${escapeHtml(formatDateNl(input.expiresAt))}. Werkt de knop niet? Kopieer deze link: ${escapeHtml(input.publicUrl)}`,
@@ -65,6 +68,7 @@ export function renderInvoiceSentEmail(input: InvoiceSentEmailInput): RenderedEm
       input.quote?.number ? `Gekoppelde offerte: ${input.quote.number}` : undefined,
       `Totaalbedrag: ${totalAmount}`,
       `Vervaldatum: ${dueDate}`,
+      input.eInvoice ? E_INVOICE_NOTE : undefined,
       closingText ? '' : undefined,
       closingText || undefined,
       '',
@@ -73,13 +77,13 @@ export function renderInvoiceSentEmail(input: InvoiceSentEmailInput): RenderedEm
   };
 }
 
-function renderInvoiceSummary(input: { projectName: string | null; quoteNumber: string | null; totalAmount: string; dueDate: string; closingHtml: string | null }): string {
+function renderInvoiceSummary(input: { projectName: string | null; quoteNumber: string | null; totalAmount: string; dueDate: string; closingHtml: string | null; eInvoice: boolean }): string {
   return `<div style="background:#121215;border:1px solid #2a2a31;border-radius:18px;padding:18px;margin:18px 0;">
     <p style="margin:0;color:#b6b6c2;line-height:1.7;">
       ${input.projectName ? `Project: ${escapeHtml(input.projectName)}<br/>` : ''}
       ${input.quoteNumber ? `Offerte: ${escapeHtml(input.quoteNumber)}<br/>` : ''}
       Totaalbedrag: <strong style="color:#ffffff;">${escapeHtml(input.totalAmount)}</strong><br/>
-      Vervaldatum: ${escapeHtml(input.dueDate)}
+      Vervaldatum: ${escapeHtml(input.dueDate)}${input.eInvoice ? `<br/>${escapeHtml(E_INVOICE_NOTE)}` : ''}
     </p>
   </div>${input.closingHtml ? `<p style="margin:16px 0 0;color:#d8d8df;line-height:1.6;">${input.closingHtml}</p>` : ''}`;
 }

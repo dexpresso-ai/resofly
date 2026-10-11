@@ -68,6 +68,8 @@ import {
   downloadQuotePdfSnapshot,
   downloadInvoicePdfSnapshot,
   downloadInvoiceUbl,
+  downloadMollieInvoicePdf,
+  syncMollieSalesInvoice,
   downloadCreditNoteUbl,
   createInvoiceRefund,
   postSalesInvoiceToLedger,
@@ -119,6 +121,7 @@ import { inkSizeIssue } from './lib/ink';
 import { documentTypeLabels } from './features/Documents';
 import { ContentLibrary } from './features/ContentLibrary';
 import { clientFolderOptions } from './lib/folders';
+import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail } from './lib/eInvoicing';
 import { Invoices, Quotes, type RefundInput } from './features/Finance';
 import { LedgerPage, PurchaseInvoicesPage, SuppliersPage, nextPurchaseNumber, purchaseTotals } from './features/Bookkeeping';
 import type { InvoiceFormSeed } from './features/Bookkeeping';
@@ -2039,6 +2042,33 @@ function App() {
     }
   }
 
+  // E-factuur via Mollie: de stand bij Mollie ophalen (Peppol, betaald) en
+  // overnemen. Stil bij het openen van de factuur; met melding via de knop.
+  async function syncMollieInvoice(invoice: Invoice, options: { silent?: boolean } = {}) {
+    try {
+      const result = await syncMollieSalesInvoice(activeOrg.id, invoice.id);
+      await refresh();
+      if (options.silent) return;
+      if (result.recovered === 'completed') alert(`De verzending via Mollie is afgerond${result.mollie?.invoiceNumber ? ` (${result.mollie.invoiceNumber})` : ''}.`);
+      else if (result.recovered === 'abandoned') alert('Mollie had deze factuur nog niet uitgegeven; de afgebroken verzending is opgeruimd. Je kunt hem opnieuw versturen.');
+      else if (result.pending) alert('De verzending via Mollie loopt nog. Probeer het over een paar minuten opnieuw.');
+    } catch (e) {
+      if (!options.silent) setError(e instanceof Error ? e.message : 'De stand bij Mollie ophalen mislukt');
+      else console.warn('Mollie-stand verversen mislukte', e);
+    }
+  }
+
+  async function downloadMolliePdf(invoice: Invoice) {
+    setLoading(true); setError(null);
+    try {
+      await downloadMollieInvoicePdf(activeOrg.id, invoice.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'De PDF van Mollie downloaden mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // UBL-e-factuur (Peppol BIS 3.0): server-side gegenereerd. Blokkerende
   // gebreken (ontbrekende KVK/adres/land) komen als duidelijke NL-fout terug;
   // niet-blokkerende Peppol-waarschuwingen tonen we informatief.
@@ -2069,13 +2099,25 @@ function App() {
   async function sendInvoice(invoice: Invoice) {
     if (!ensureCanWrite()) return;
     const client = data.clients.find(item => item.id === invoice.client_id);
-    const recipientEmail = prompt('Naar welk e-mailadres wil je de factuur versturen?', client?.email || '');
+    // Staat e-facturatie aan bij de klant, dan gaat de factuur als e-factuur (UBL
+    // met de PDF erin) naar het e-factuuradres, of via Mollie over Peppol; de
+    // server dwingt dat af.
+    const eInvoice = clientWantsEInvoice(client);
+    const viaMollie = clientEInvoiceChannel(client) === 'mollie';
+    const recipientEmail = prompt(
+      viaMollie
+        ? 'Deze factuur gaat via Mollie: Mollie geeft hem uit met een eigen nummer, verstuurt hem over Peppol en mailt een PDF-kopie. Naar welk adres gaat die kopie?'
+        : eInvoice
+          ? 'Deze klant krijgt een e-factuur (UBL met de PDF erin). Naar welk adres wil je hem versturen?'
+          : 'Naar welk e-mailadres wil je de factuur versturen?',
+      invoiceRecipientFor(client),
+    );
     if (!recipientEmail) return;
     const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
 
     // Toon meteen de laad-overlay: de Mollie-statuscheck hieronder plus het
     // versturen zelf kunnen samen enkele seconden duren.
-    setSending('Factuur wordt verstuurd via Resend…');
+    setSending(viaMollie ? 'E-factuur wordt via Mollie uitgegeven…' : eInvoice ? 'E-factuur wordt verstuurd…' : 'Factuur wordt verstuurd via Resend…');
 
     // A Mollie payment link is included automatically whenever this organization
     // has its own Mollie account connected and the invoice is still payable. No
@@ -2083,7 +2125,8 @@ function App() {
     // opt-out. Organizations without a Mollie key simply send the PDF only.
     let includePaymentLink = false;
     const invoiceIsPayable = !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status);
-    if (invoiceIsPayable) {
+    // Via Mollie int Mollie zelf; dan geen eigen betaallink ernaast.
+    if (invoiceIsPayable && !viaMollie) {
       try {
         const mollie = await loadInvoiceMollieStatus(activeOrg.id);
         includePaymentLink = mollie.status === 'connected';
@@ -2097,20 +2140,27 @@ function App() {
       const result = await sendInvoiceEmailViaResend(activeOrg.id, invoice.id, { recipientEmail, recipientName, includePaymentLink });
       await refresh();
       // De factuur zelf ging goed de deur uit; alleen niet-blokkerende bijzaken
-      // (Mollie-link, e-factuur) verdienen een melding zodat de gebruiker weet
-      // wat er wél/niet is meegestuurd en de configuratie kan bijwerken.
+      // (Mollie-link, aandachtspunten bij de e-factuur) verdienen een melding.
+      // Een e-factuur die niet gemaakt kón worden, komt hier niet: dan weigert de
+      // server en staat de reden in de foutmelding hieronder.
       const notes: string[] = [];
       if (includePaymentLink && result.paymentLinkError) {
         notes.push(`de Mollie-betaallink kon niet worden aangemaakt: ${result.paymentLinkError}`);
       }
-      if (result.ubl && !result.ubl.attached) {
-        notes.push(`de e-factuur (UBL) is niet meegestuurd${result.ubl.reason ? ` — ${result.ubl.reason}` : ''}. Vul de ontbrekende gegevens aan om ook de e-factuur mee te sturen.`);
-      } else if (result.ubl?.attached && result.ubl.warnings && result.ubl.warnings.length > 0) {
-        notes.push(`e-factuur meegestuurd met aandachtspunten: ${result.ubl.warnings.join('; ')}`);
+      if (result.ubl?.attached && result.ubl.warnings && result.ubl.warnings.length > 0) {
+        notes.push(`de e-factuur heeft aandachtspunten: ${result.ubl.warnings.join('; ')}`);
       }
-      if (notes.length > 0) setError(`Factuur is verstuurd, maar ${notes.join(' Daarnaast: ')}`);
+      if (result.deliveryChannel === 'e_invoice_mollie' && result.warnings && result.warnings.length > 0) {
+        notes.push(result.warnings.join(' '));
+      }
+      if (notes.length > 0) {
+        const label = result.deliveryChannel === 'e_invoice_mollie'
+          ? `E-factuur is via Mollie uitgegeven${result.mollie?.invoiceNumber ? ` als ${result.mollie.invoiceNumber}` : ''}`
+          : `${result.ubl?.attached ? 'E-factuur' : 'Factuur'} is verstuurd`;
+        setError(`${label}. Let op: ${notes.join(' Daarnaast: ')}`);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Factuur verzenden via Resend mislukt');
+      setError(e instanceof Error ? e.message : (viaMollie ? 'E-factuur via Mollie versturen mislukt' : eInvoice ? 'E-factuur verzenden mislukt' : 'Factuur verzenden via Resend mislukt'));
     } finally {
       setLoading(false); setSending(null);
     }
@@ -2280,7 +2330,9 @@ function App() {
 
   async function emailCreditNote(creditNote: CreditNote) {
     if (!ensureCanWrite()) return;
-    setLoading(true); setSending('Creditfactuur wordt gemaild via Resend…'); setError(null);
+    const invoice = data.invoices.find(item => item.id === creditNote.invoice_id);
+    const eInvoice = clientWantsEInvoice(data.clients.find(item => item.id === invoice?.client_id));
+    setLoading(true); setSending(eInvoice ? 'E-creditnota wordt verstuurd…' : 'Creditfactuur wordt gemaild via Resend…'); setError(null);
     try {
       await sendCreditNoteEmail(activeOrg.id, creditNote.id);
       await refresh();
@@ -3102,7 +3154,7 @@ function App() {
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'contract' ? contractDraftFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onPostToLedger={postInvoiceToLedger} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onPostToLedger={postInvoiceToLedger} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'supplier' ? (view.pendingDraft.payload as Partial<Supplier>) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
@@ -3421,6 +3473,10 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
     return findClientDuplicateIssue(data.clients, duplicateValues, item as Client | undefined);
   }, [data.clients, edit.kind, form, item]);
   const saveBlockedByDuplicate = Boolean(clientDuplicateIssue?.blocksSave);
+  // E-facturatie: een e-factuuradres moet een e-mailadres zijn (de database weigert
+  // anders), en wat er voor een geldige e-factuur ontbreekt zie je hier al.
+  const eInvoiceEmailInvalid = edit.kind === 'client' && String(form.e_invoice_email ?? '').trim() !== '' && !isValidEmail(form.e_invoice_email);
+  const eInvoiceCheck = edit.kind === 'client' && form.e_invoicing_enabled ? eInvoiceReadiness({ ...form, channel: form.e_invoice_channel === 'mollie' ? 'mollie' : 'email' }) : null;
 
   const attachmentBlock = item ? <AttachmentList
     attachments={data.attachments}
@@ -3438,7 +3494,7 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
     edit.kind === 'task' || edit.kind === 'ticket' || edit.kind === 'project' ? 'modal-task-editor' : '',
   ].filter(Boolean).join(' ');
 
-  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && edit.kind === 'document' && item && !(item as InternalDocument).storage_key && <Button variant="ghost" onClick={() => { onClose(); onConvertToWord(item as InternalDocument); }}>Bewerk als Word</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form, data.clientFieldDefinitions))} disabled={saveBlockedByDuplicate}>Opslaan</Button>}</>}>
+  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && edit.kind === 'document' && item && !(item as InternalDocument).storage_key && <Button variant="ghost" onClick={() => { onClose(); onConvertToWord(item as InternalDocument); }}>Bewerk als Word</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form, data.clientFieldDefinitions))} disabled={saveBlockedByDuplicate || eInvoiceEmailInvalid}>Opslaan</Button>}</>}>
     {readOnly && <div className="readonly-note">Je bekijkt dit item met alleen-lezen rechten. Wijzigen, verwijderen en uploaden zijn uitgeschakeld.</div>}
     {quoteWorkflowLocked && <div className="readonly-note">Deze offerte zit al in de goedkeuringsflow. Inhoudelijke velden zijn vergrendeld zodat een goedgekeurde of verzonden offerte niet ongemerkt kan wijzigen.</div>}
     {edit.kind === 'client' && <FormGrid className="client-form-grid">
@@ -3496,6 +3552,35 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
       <Field label="KVK-nummer" hint="8 cijfers (of 20-cijferig OIN voor overheden). Verplicht voor e-facturen aan NL-bedrijven via Peppol.">
         <Input value={form.kvk_number} onChange={e=>set('kvk_number',e.target.value)} placeholder="12345678" disabled={disabled}/>
       </Field>
+      <label className="check-row client-einvoice-toggle">
+        <input type="checkbox" checked={Boolean(form.e_invoicing_enabled)} onChange={e=>set('e_invoicing_enabled', e.target.checked)} disabled={disabled}/>
+        <span>
+          <strong>E-facturatie</strong>
+          <small>Facturen en creditfacturen aan deze klant gaan als e-factuur (UBL, Peppol BIS 3.0) met de PDF erin, zodat zijn boekhoudpakket ze inleest én de PDF toont. Uit: alleen de PDF.</small>
+        </span>
+      </label>
+      {form.e_invoicing_enabled && <Field label="Versturen via" hint={form.e_invoice_channel === 'mollie'
+        ? 'Mollie geeft de factuur uit met een eigen nummer (het ResoFly-nummer staat erop), verstuurt hem over Peppol en mailt een PDF-kopie; de klant betaalt via Mollie. Nodig: je eigen Mollie-account gekoppeld, met e-facturatie aan in het Mollie-dashboard. Alleen voor bedrijven in Nederland, België en Duitsland.'
+        : 'De e-factuur (UBL met de PDF erin) gaat als bijlage per mail mee, met de gewone PDF ernaast.'}>
+        <Select value={form.e_invoice_channel === 'mollie' ? 'mollie' : 'email'} onChange={e=>set('e_invoice_channel', e.target.value)} disabled={disabled}>
+          <option value="email">E-mail — UBL met de PDF erin</option>
+          <option value="mollie">Mollie — via Peppol</option>
+        </Select>
+      </Field>}
+      {form.e_invoicing_enabled && <Field label="E-factuuradres" hint={form.e_invoice_channel === 'mollie'
+        ? 'Optioneel — hier stuurt Mollie de PDF-kopie heen. Leeg laten: het gewone e-mailadres.'
+        : 'Optioneel — bijvoorbeeld het inkoopfacturenadres van het boekhoudpakket van de klant. Leeg laten: de e-factuur gaat naar het gewone e-mailadres.'}>
+        <Input type="email" value={form.e_invoice_email} onChange={e=>set('e_invoice_email',e.target.value)} placeholder={String(form.email || '').trim() || 'facturen@bedrijf.nl'} disabled={disabled}/>
+      </Field>}
+      {eInvoiceEmailInvalid && <div className="client-duplicate-notice block client-einvoice-notice" role="alert">
+        <strong>Dit e-factuuradres klopt niet</strong>
+        <span>Vul een geldig e-mailadres in, of laat het veld leeg om het gewone e-mailadres te gebruiken.</span>
+      </div>}
+      {eInvoiceCheck && !eInvoiceEmailInvalid && (eInvoiceCheck.missing.length > 0 || eInvoiceCheck.advice.length > 0) && <div className={`client-duplicate-notice ${eInvoiceCheck.missing.length > 0 ? 'block' : 'warning'} client-einvoice-notice`}>
+        <strong>{eInvoiceCheck.missing.length > 0 ? (form.e_invoice_channel === 'mollie' ? 'Voor een e-factuur via Mollie ontbreekt nog' : 'Voor een e-factuur ontbreekt nog') : 'De e-factuur kan weg, maar niet via Peppol'}</strong>
+        {eInvoiceCheck.missing.length > 0 && <span>Nog nodig: {eInvoiceCheck.missing.join(', ')}. Zonder deze gegevens gaat een factuur aan deze klant niet de deur uit.</span>}
+        {eInvoiceCheck.advice.length > 0 && <span>Ontbreekt: {eInvoiceCheck.advice.join('; ')}.</span>}
+      </div>}
       <Field label="Klantwaarde" hint="Indicatieve waarde voor dashboard en klantoverzicht.">
         <Input type="number" value={form.value_eur} onChange={e=>set('value_eur',Number(e.target.value))} placeholder="Waarde" disabled={disabled}/>
       </Field>
@@ -4110,7 +4195,7 @@ function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: 
 function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
   if (edit.kind === "client") {
     const item = edit.item;
-    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", client_kind: item?.client_kind ?? "business", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", address_line1: item?.address_line1 ?? "", address_line2: item?.address_line2 ?? "", postal_code: item?.postal_code ?? "", city: item?.city ?? "", country: item?.country ?? (item ? "" : "Nederland"), vat_number: item?.vat_number ?? "", kvk_number: item?.kvk_number ?? "", custom_fields: { ...(item?.custom_fields ?? {}) }, _sendWelcomeEmail: !item };
+    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", client_kind: item?.client_kind ?? "business", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", address_line1: item?.address_line1 ?? "", address_line2: item?.address_line2 ?? "", postal_code: item?.postal_code ?? "", city: item?.city ?? "", country: item?.country ?? (item ? "" : "Nederland"), vat_number: item?.vat_number ?? "", kvk_number: item?.kvk_number ?? "", e_invoicing_enabled: item?.e_invoicing_enabled ?? false, e_invoice_email: item?.e_invoice_email ?? "", e_invoice_channel: item?.e_invoice_channel ?? "email", custom_fields: { ...(item?.custom_fields ?? {}) }, _sendWelcomeEmail: !item };
   }
   if (edit.kind === "project") {
     const item = edit.item;
@@ -4160,6 +4245,9 @@ function cleanForm(kind: string, form: Record<string, any>, clientFieldDefinitio
     cleaned.country = normalizeOptionalText(cleaned.country);
     cleaned.vat_number = normalizeOptionalText(cleaned.vat_number);
     cleaned.kvk_number = normalizeOptionalText(cleaned.kvk_number);
+    cleaned.e_invoicing_enabled = Boolean(cleaned.e_invoicing_enabled);
+    cleaned.e_invoice_email = normalizeOptionalText(cleaned.e_invoice_email)?.toLowerCase() ?? null;
+    cleaned.e_invoice_channel = cleaned.e_invoice_channel === 'mollie' ? 'mollie' : 'email';
   }
   for (const key of ["client_id","project_id","folder_id","quote_id","valid_until","due_date","start_date","end_date","planned_date","planned_end_date"]) {
     if (cleaned[key] === "") cleaned[key] = null;

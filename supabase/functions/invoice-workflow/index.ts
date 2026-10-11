@@ -7,6 +7,11 @@ import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateConte
 import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
 import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
+import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
+import {
+  amsterdamDate, buildMollieSalesInvoice, mollieAmountCents, mollieDate, mollieEmailBody, mollieFetchPolicy, molliePaymentStatus,
+  mollieSalesInvoiceSettled, readMollieSalesInvoice, uuidFromHex, type MollieSalesInvoiceState,
+} from '../_shared/mollieSalesInvoice.ts';
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
@@ -21,6 +26,7 @@ type ClientRow = {
   id: string; name: string; contact_name: string | null; email: string | null;
   client_code?: string | null; client_kind?: string | null; vat_number?: string | null; kvk_number?: string | null;
   address_line1?: string | null; address_line2?: string | null; postal_code?: string | null; city?: string | null; country?: string | null;
+  e_invoicing_enabled?: boolean | null; e_invoice_email?: string | null; e_invoice_channel?: string | null;
 };
 type ProjectRow = { id: string; name: string; description: string | null };
 type QuoteRow = { id: string; number: string };
@@ -32,7 +38,7 @@ type CompanySettingsRow = {
   kor_enabled?: boolean | null;
 };
 type InvoicePdfAttachment = { fileName: string; mimeType: 'application/pdf'; bytes: Uint8Array; base64: string; sizeBytes: number; sha256: string };
-type UblAttachment = { fileName: string; mimeType: 'application/xml'; base64: string; sizeBytes: number; sha256: string; warnings: string[] };
+type UblAttachment = { fileName: string; mimeType: 'application/xml'; base64: string; sizeBytes: number; sha256: string; warnings: string[]; pdfEmbedded: boolean };
 type StoredInvoicePdfSnapshot = { provider: 'r2' | 'database'; key: string | null; shouldStoreBase64InDatabase: boolean };
 type WorkflowHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
 
@@ -109,6 +115,12 @@ serve(async (req) => {
       return await handleDunningCron(req, url);
     }
 
+    // E-facturen via Mollie: de stand bij Mollie (Peppol-aflevering, betaald)
+    // bijwerken. Ook vóór de herinneringen hieronder; los vaker in te plannen.
+    if (url.searchParams.get('cron') === 'mollie-sales-invoices') {
+      return await handleMollieSalesInvoiceCron(req);
+    }
+
     assertAllowedOrigin(req);
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const action = String(body.action || '');
@@ -141,13 +153,24 @@ serve(async (req) => {
     // E-factuur (UBL 2.1 / Peppol BIS 3.0) genereren is niet-muterend: de XML
     // wordt live opgebouwd uit factuur + klant + bedrijfsgegevens, dus elke
     // actieve member (ook viewer) mag downloaden — net als de PDF-snapshot.
+    // De PDF gaat erin mee, zodat wie de XML inleest de factuur ook ziet.
     if (action === 'downloadInvoiceUbl') {
       if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
       const invoice = await loadInvoice(organizationId, invoiceId);
       // Geen officiële e-factuur genereren voor een geannuleerde/ongeldige factuur:
       // die zou naar buiten kunnen als geldig document terwijl hij dat niet is.
       if (['cancelled', 'void'].includes(invoice.status)) throw new WorkflowHttpError('Voor een geannuleerde of ongeldig gemaakte factuur kan geen e-factuur worden gemaakt.', 409);
-      const ubl = await createInvoiceUblAttachment(organizationId, invoice);
+      if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld — een e-factuur (UBL) vereist een klant.', 422);
+      const [client, company, vatKinds] = await Promise.all([
+        loadClient(organizationId, invoice.client_id),
+        loadCompanySettings(organizationId),
+        loadVatKindsByCode(organizationId),
+      ]);
+      // Eerst de gegevens, dan pas de PDF: wie een melding over een ontbrekend
+      // KVK-nummer krijgt, hoeft niet te wachten op een PDF die toch niet meegaat.
+      await assertInvoiceUblPossible(organizationId, invoice, { client, company, vatKinds });
+      const pdf = await invoicePdfForEInvoice(organizationId, invoice, { client, company });
+      const ubl = await createInvoiceUblAttachment(organizationId, invoice, { client, company, vatKinds, pdf });
       return json(req, { ok: true, ubl });
     }
     if (action === 'downloadCreditNoteUbl') {
@@ -157,8 +180,21 @@ serve(async (req) => {
       if (!creditNote) throw new WorkflowHttpError('Creditfactuur niet gevonden.', 404);
       if (creditNote.status === 'void') throw new WorkflowHttpError('Voor een ingetrokken creditfactuur kan geen e-creditnota worden gemaakt.', 409);
       const invoice = await loadInvoice(organizationId, String(creditNote.invoice_id));
-      const ubl = await createCreditNoteUblAttachment(organizationId, creditNote, invoice);
+      const ubl = await createCreditNoteUblAttachment(organizationId, creditNote, invoice, { pdf: await creditNotePdfForEInvoice(creditNote) });
       return json(req, { ok: true, ubl });
+    }
+
+    // E-factuur via Mollie: de status bij Mollie ophalen (Peppol-aflevering,
+    // betaald) en de PDF van Mollie tonen. Dat neemt alleen Mollies waarheid over
+    // — de gebruiker wijzigt niets — dus elk actief lid mag het, ook een viewer.
+    if (action === 'syncMollieSalesInvoice') {
+      if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+      const canWrite = ['owner', 'admin', 'member'].includes(role) && financeLevel === 'write';
+      return json(req, { ok: true, ...(await syncMollieSalesInvoice(organizationId, invoiceId, { actorUserId: user.id, canWrite })) });
+    }
+    if (action === 'downloadMollieInvoicePdf') {
+      if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+      return json(req, { ok: true, pdf: await downloadMollieInvoicePdf(organizationId, invoiceId) });
     }
 
     // Masked Mollie status is readable by any active member (no secret leaves the
@@ -219,9 +255,29 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     loadEmailTemplateContent(organizationId, 'invoice.sent'),
   ]);
 
-  const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
+  // E-facturatie staat per klant aan of uit. Aan: de e-factuur (UBL met de PDF
+  // erin) is verplicht en gaat naar het e-factuuradres van de klant. Uit: de
+  // klant krijgt alleen de PDF, zonder XML-bijlage.
+  const deliveryChannel = invoiceDeliveryChannel(client);
+  const eInvoicing = deliveryChannel === 'e_invoice_email';
+  const recipientEmail = defaultInvoiceRecipient(client, body.recipientEmail);
   const recipientName = String(body.recipientName || client.contact_name || client.name || '').trim();
-  if (!isEmail(recipientEmail)) throw new WorkflowHttpError('Vul een geldig klant-e-mailadres in voordat je de factuur verstuurt.', 422);
+  if (!isEmail(recipientEmail)) {
+    throw new WorkflowHttpError(eInvoicing || deliveryChannel === 'e_invoice_mollie'
+      ? 'Vul een geldig e-factuuradres of e-mailadres in bij de klant voordat je de e-factuur verstuurt.'
+      : 'Vul een geldig klant-e-mailadres in voordat je de factuur verstuurt.', 422);
+  }
+  // Via Mollie: Mollie geeft de factuur uit, verstuurt hem over Peppol, mailt de
+  // PDF-kopie en int de betaling. ResoFly stuurt dan zelf geen mail.
+  if (deliveryChannel === 'e_invoice_mollie') {
+    return await sendInvoiceViaMollie({ userId, organizationId, invoice, client, project, quote, company, content, recipientEmail, recipientName, subject: typeof body.subject === 'string' ? body.subject : '' });
+  }
+
+  // Kan de e-factuur gemaakt worden? Dat staat vast vóór er een betaallink,
+  // PDF-snapshot of mail ontstaat: gaat het niet, dan gaat er niets de deur uit
+  // en zegt de fout wat er bij de klant of in de instellingen ontbreekt.
+  const vatKinds = eInvoicing ? await loadVatKindsByCode(organizationId) : undefined;
+  if (eInvoicing) await assertInvoiceUblPossible(organizationId, invoice, { client, company, vatKinds, endpointEmail: recipientEmail });
 
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
@@ -249,25 +305,20 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     }
   }
 
-  const renderedEmail = renderEmailTemplate('invoice.sent', { invoice, client, project, quote, company, publicUrl, paymentUrl, recipientName, expiresAt, content });
+  const renderedEmail = renderEmailTemplate('invoice.sent', { invoice, client, project, quote, company, publicUrl, paymentUrl, recipientName, expiresAt, content, eInvoice: eInvoicing });
   const subject = String(body.subject || renderedEmail.subject || '').trim();
   if (!subject) throw new WorkflowHttpError('Er kon geen onderwerp voor de factuur-e-mail worden bepaald.', 500);
 
   const pdfAttachment = await createInvoicePdfAttachment({ invoice, client, project, quote, company, publicUrl, paymentUrl });
   validateInvoicePdfAttachment(pdfAttachment);
-  const storedPdf = await storeInvoicePdfSnapshot(organizationId, invoiceId, pdfAttachment);
 
-  // E-factuur (UBL) als tweede bijlage zodra de gegevens compleet zijn. Een
-  // onvolledige klant of instelling mag de verzending zelf nooit blokkeren:
-  // dan gaat alleen de PDF mee en rapporteren we de reden terug aan de UI.
-  let ublAttachment: UblAttachment | null = null;
-  let ublSkippedReason: string | null = null;
-  try {
-    ublAttachment = await createInvoiceUblAttachment(organizationId, invoice, { client, company });
-  } catch (ublError) {
-    ublSkippedReason = ublError instanceof Error ? ublError.message : 'E-factuur (UBL) kon niet worden gegenereerd.';
-    console.warn('UBL-bijlage overgeslagen bij factuurmail:', ublSkippedReason);
-  }
+  // De e-factuur zelf, met precies deze PDF erin — gemaakt vóór de snapshot
+  // wordt opgeslagen, zodat een fout hier geen verweesde PDF achterlaat.
+  const ublAttachment = eInvoicing
+    ? await createInvoiceUblAttachment(organizationId, invoice, { client, company, vatKinds, endpointEmail: recipientEmail, pdf: pdfAttachment })
+    : null;
+
+  const storedPdf = await storeInvoicePdfSnapshot(organizationId, invoiceId, pdfAttachment);
 
   const prepared = await beginInvoiceEmailSend({
     invoiceId,
@@ -287,6 +338,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     attachmentStorageProvider: storedPdf.provider,
     attachmentStorageKey: storedPdf.key ?? undefined,
   });
+  if (ublAttachment) await markDeliveryAsEInvoice(prepared.deliveryId, organizationId, userId, ublAttachment);
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   const resendPayload = {
@@ -296,6 +348,8 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     subject,
     html: renderedEmail.html,
     text: renderedEmail.text,
+    // De PDF blijft ook los meegaan: voor wie de mail gewoon leest, en voor
+    // een boekhoudpakket dat de XML niet opent.
     attachments: [
       { filename: pdfAttachment.fileName, content: pdfAttachment.base64 },
       ...(ublAttachment ? [{ filename: ublAttachment.fileName, content: ublAttachment.base64 }] : []),
@@ -336,7 +390,16 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   }
 
   const finalized = await completeInvoiceEmailSend(prepared.deliveryId, organizationId, userId, providerEmailId);
-  return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, paymentLinkIncluded: Boolean(paymentUrl), paymentLinkError, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key }, ubl: ublAttachment ? { attached: true, fileName: ublAttachment.fileName, warnings: ublAttachment.warnings } : { attached: false, reason: ublSkippedReason } };
+  if (ublAttachment) await recordEInvoiceSent({ organizationId, invoiceId, userId, deliveryId: prepared.deliveryId, recipientEmail, ubl: ublAttachment });
+  return {
+    delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, recipientEmail, deliveryChannel,
+    paymentLinkIncluded: Boolean(paymentUrl), paymentLinkError,
+    attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key },
+    // Zonder e-facturatie gaat er bewust geen UBL mee; dat is geen gebrek.
+    ubl: ublAttachment
+      ? { attached: true, fileName: ublAttachment.fileName, warnings: ublAttachment.warnings, pdfEmbedded: ublAttachment.pdfEmbedded }
+      : { attached: false, reason: null },
+  };
 }
 
 // ============================================================
@@ -359,8 +422,13 @@ async function handleReminderCron(req: Request, _url: URL): Promise<Response> {
   const provided = req.headers.get('x-cron-secret') || '';
   if (!timingSafeEqual(provided, INVOICE_REMINDER_CRON_SECRET)) return json(req, { ok: false, error: 'Invalid cron secret' }, 401);
   try {
+    // Eerst de stand bij Mollie: een daar betaalde factuur krijgt geen herinnering.
+    const mollieSalesInvoices = await syncOpenMollieSalesInvoices().catch((syncError) => {
+      console.warn('Mollie-facturen bijwerken vóór de herinneringen mislukte', describeError(syncError));
+      return { checked: 0, updated: 0, failed: 0 };
+    });
     const summary = await runInvoiceReminderBatch();
-    return json(req, { ok: true, ...summary });
+    return json(req, { ok: true, ...summary, mollieSalesInvoices });
   } catch (error) {
     console.error('invoice reminder cron error', describeError(error), serializeError(error));
     return json(req, { ok: false, error: describeError(error) }, 500);
@@ -1091,6 +1159,14 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   const amountCents = calculateTotals(invoice.lines).totalCents;
   if (amountCents <= 0) throw new WorkflowHttpError('Factuurbedrag moet groter zijn dan 0.', 422);
 
+  // Via Mollie als e-factuur uitgegeven: de klant betaalt via de link van Mollie,
+  // nooit via een tweede betaling ernaast (dan kan hij twee keer betalen).
+  const mollieCheckout = await mollieSalesInvoiceCheckout(organizationId, invoiceId);
+  if (mollieCheckout) {
+    if (!mollieCheckout.checkoutUrl) throw new WorkflowHttpError('Deze factuur is via Mollie als e-factuur uitgegeven; de klant betaalt via de betaallink van Mollie. Die is er nog niet — klik bij de factuur op "Ververs bij Mollie".', 409);
+    return { payment: null, checkoutUrl: mollieCheckout.checkoutUrl, providerPaymentId: mollieCheckout.salesInvoiceId, mock: false, reused: true };
+  }
+
   const existingPayment = await loadLatestOpenPayment(organizationId, invoiceId);
   if (existingPayment?.provider_checkout_url && isReusableCheckoutUrl(existingPayment.provider_checkout_url)) {
     return {
@@ -1342,7 +1418,8 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
   let finalCreditNote: Record<string, unknown> = created;
   let pdfBase64: string | null = null;
   try {
-    const attachment = await createCreditNotePdfAttachment({ creditNoteNumber, date: String(created.date || ''), invoice, client, company, currency, subtotal, vat, total, lines, reason });
+    const invoiceReference = await invoiceReferenceForClient(organizationId, invoice);
+    const attachment = await createCreditNotePdfAttachment({ creditNoteNumber, date: String(created.date || ''), invoice, client, company, currency, subtotal, vat, total, lines, reason, invoiceReference });
     validateInvoicePdfAttachment(attachment);
     const stored = await storeCreditNotePdfSnapshot(organizationId, invoice.id, String(created.id), attachment);
     pdfBase64 = attachment.base64;
@@ -1372,9 +1449,11 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
   //    mag de terugbetaling niet laten falen; de handmatige knop kan 'm opnieuw sturen.
   //    Enkel als alle vereiste voorwaarden zijn vervuld en de PDF beschikbaar is.
   const hasPdfAvailable = Boolean(finalCreditNote.pdf_data_base64 || (finalCreditNote.pdf_storage_provider === 'r2' && finalCreditNote.pdf_storage_key));
-  if (client.email && RESEND_API_KEY && RESEND_FROM_EMAIL && hasPdfAvailable) {
+  // Bij e-facturatie naar het e-factuuradres, net als de factuur zelf.
+  const creditRecipient = defaultInvoiceRecipient(client);
+  if (creditRecipient && RESEND_API_KEY && RESEND_FROM_EMAIL && hasPdfAvailable) {
     try {
-      await deliverCreditNoteEmail({ organizationId, userId, creditNote: finalCreditNote, invoice, client, company, recipientEmail: client.email, recipientName: null, pdfBase64: pdfBase64 ?? undefined });
+      await deliverCreditNoteEmail({ organizationId, userId, creditNote: finalCreditNote, invoice, client, company, recipientEmail: creditRecipient, recipientName: null, pdfBase64: pdfBase64 ?? undefined });
     } catch (emailError) {
       console.warn('Creditfactuur automatisch mailen mislukt; de creditnota is wel aangemaakt.', emailError instanceof Error ? emailError.message : emailError);
     }
@@ -1452,6 +1531,9 @@ async function findRefundableMolliePayment(organizationId: string, invoiceId: st
   for (const row of rows) {
     if (!row.provider_payment_id) continue;
     if (!INVOICE_ALLOW_MOCK && row.provider_payment_id.startsWith('mock_')) continue;
+    // Een Mollie-factuur (invoice_…) is geen betaling: terugbetalen gaat via het
+    // Mollie-dashboard of handmatig, niet via /payments/{id}/refunds.
+    if (row.provider_payment_id.startsWith('invoice_')) continue;
     const remaining = (row.amount_cents || 0) - (row.amount_refunded_cents || 0);
     if (remaining >= amountCents) return { id: row.id, provider_payment_id: row.provider_payment_id, amount_cents: row.amount_cents, amount_refunded_cents: row.amount_refunded_cents || 0 };
   }
@@ -1591,7 +1673,7 @@ async function downloadCreditNotePdf(organizationId: string, body: Record<string
 
 // Stuur de creditfactuur-PDF naar de klant via Resend. Gedeeld door de automatische
 // verzending (bij aanmaken) en de handmatige 'Mail creditfactuur'-actie.
-async function deliverCreditNoteEmail(input: { organizationId: string; userId: string | null; creditNote: Record<string, unknown>; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; recipientEmail: string; recipientName: string | null; pdfBase64?: string }): Promise<{ providerEmailId: string; recipientEmail: string }> {
+async function deliverCreditNoteEmail(input: { organizationId: string; userId: string | null; creditNote: Record<string, unknown>; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; recipientEmail: string; recipientName: string | null; pdfBase64?: string }): Promise<{ providerEmailId: string; recipientEmail: string; eInvoice: boolean }> {
   if (!RESEND_API_KEY) throw new WorkflowHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
   if (!RESEND_FROM_EMAIL) throw new WorkflowHttpError('RESEND_FROM_EMAIL ontbreekt in de Edge Function secrets.', 500);
   const recipientEmail = String(input.recipientEmail || '').trim().toLowerCase();
@@ -1603,14 +1685,15 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
   const creditNoteNumber = String(input.creditNote.number || '');
   const fileName = String(input.creditNote.pdf_file_name || `creditfactuur-${creditNoteNumber}.pdf`);
 
-  // E-creditnota (UBL) meesturen zodra de gegevens compleet zijn — nooit
-  // blokkerend voor de mail zelf (zelfde patroon als de factuurmail).
-  let creditUbl: UblAttachment | null = null;
-  try {
-    creditUbl = await createCreditNoteUblAttachment(input.organizationId, input.creditNote, input.invoice, { client: input.client, company: input.company });
-  } catch (ublError) {
-    console.warn('UBL-bijlage overgeslagen bij creditnota-mail:', ublError instanceof Error ? ublError.message : ublError);
-  }
+  // E-facturatie volgt de klant, net als bij de factuur: aan = de e-creditnota
+  // (UBL met de PDF erin) is verplicht en een fout houdt de mail tegen; uit =
+  // alleen de PDF. De automatische verzending na een terugbetaling vangt zo'n
+  // fout op — dan blijft de knop 'Mail' over, die zegt wat er ontbreekt.
+  const creditUbl = clientWantsEInvoice(input.client)
+    ? await createCreditNoteUblAttachment(input.organizationId, input.creditNote, input.invoice, {
+      client: input.client, company: input.company, endpointEmail: recipientEmail, pdf: { fileName, base64 },
+    })
+    : null;
   const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || null;
   const content = await loadEmailTemplateContent(input.organizationId, 'creditNote.sent');
 
@@ -1622,11 +1705,12 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
       currency: String(input.creditNote.currency || input.invoice.currency || 'EUR'),
       reason: (input.creditNote.reason as string | null) ?? null,
     },
-    invoice: { number: input.invoice.number },
+    invoice: { number: await invoiceReferenceForClient(input.organizationId, input.invoice) },
     client: { name: input.client.name, contact_name: input.client.contact_name, email: input.client.email },
     company: input.company,
     recipientName,
     content,
+    eInvoice: Boolean(creditUbl),
   });
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, input.organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
@@ -1662,15 +1746,23 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
   const providerEmailId = String(payload.id || payload.email_id || '').trim();
 
   // Event + audit (best-effort: een log-fout mag de geslaagde verzending niet ongedaan maken).
-  await supabaseAdmin.rpc('insert_invoice_workflow_event', {
+  // Een Supabase-query heeft geen .catch(): een fout komt terug als { error }.
+  const { error: eventError } = await supabaseAdmin.rpc('insert_invoice_workflow_event', {
     p_organization_id: input.organizationId,
     p_invoice_id: input.invoice.id,
     p_event_type: 'credit_note_emailed',
-    p_title: 'Creditfactuur gemaild',
-    p_description: `Creditfactuur ${creditNoteNumber} verstuurd naar ${recipientEmail}.`,
-    p_metadata: { credit_note_id: input.creditNote.id, recipient_email: recipientEmail, provider_email_id: providerEmailId },
+    p_title: creditUbl ? 'E-creditnota verstuurd' : 'Creditfactuur gemaild',
+    p_description: creditUbl
+      ? `Creditfactuur ${creditNoteNumber} als e-creditnota (${creditUbl.fileName}, met de PDF erin) verstuurd naar ${recipientEmail}.`
+      : `Creditfactuur ${creditNoteNumber} verstuurd naar ${recipientEmail}.`,
+    p_metadata: {
+      credit_note_id: input.creditNote.id, recipient_email: recipientEmail, provider_email_id: providerEmailId,
+      delivery_channel: creditUbl ? 'e_invoice_email' : 'email',
+      ...(creditUbl ? { e_invoice_file_name: creditUbl.fileName, e_invoice_sha256: creditUbl.sha256 } : {}),
+    },
     p_actor_user_id: input.userId,
-  }).catch((eventError) => console.warn('credit_note_emailed event insert mislukte', eventError instanceof Error ? eventError.message : eventError));
+  });
+  if (eventError) console.warn('credit_note_emailed event insert mislukte', eventError.message);
 
   await supabaseAdmin.from('audit_logs').insert({
     organization_id: input.organizationId,
@@ -1682,7 +1774,7 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
     metadata: { invoice_id: input.invoice.id, recipient_email: recipientEmail, provider_email_id: providerEmailId },
   }).then(({ error }) => { if (error) console.warn('credit_note_emailed audit insert mislukte', error.message); });
 
-  return { providerEmailId, recipientEmail };
+  return { providerEmailId, recipientEmail, eInvoice: Boolean(creditUbl) };
 }
 
 // Handmatige 'Mail creditfactuur'-actie (owner/admin/member via de write-gate).
@@ -1694,7 +1786,7 @@ async function sendCreditNoteEmail(userId: string, organizationId: string, body:
   const invoice = await loadInvoice(organizationId, String(creditNote.invoice_id));
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
   const [client, company] = await Promise.all([loadClient(organizationId, invoice.client_id), loadCompanySettings(organizationId)]);
-  const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
+  const recipientEmail = defaultInvoiceRecipient(client, body.recipientEmail);
   const recipientName = String(body.recipientName || '').trim() || null;
   if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) throw new WorkflowHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
   const result = await deliverCreditNoteEmail({ organizationId, userId, creditNote, invoice, client, company, recipientEmail, recipientName });
@@ -2071,7 +2163,7 @@ async function loadInvoice(organizationId: string, invoiceId: string): Promise<I
 }
 async function loadClient(organizationId: string, clientId: string): Promise<ClientRow> {
   const { data, error } = await supabaseAdmin.from('clients')
-    .select('id,name,contact_name,email,client_code,client_kind,vat_number,kvk_number,address_line1,address_line2,postal_code,city,country')
+    .select('id,name,contact_name,email,client_code,client_kind,vat_number,kvk_number,address_line1,address_line2,postal_code,city,country,e_invoicing_enabled,e_invoice_email,e_invoice_channel')
     .eq('id', clientId).eq('organization_id', organizationId).single();
   if (error || !data) throw new WorkflowHttpError('Klant niet gevonden.', 404);
   return data as ClientRow;
@@ -2114,15 +2206,21 @@ function companyToUblParty(company: CompanySettingsRow) {
     vatNumber: company.vat_number ?? null, kvkNumber: company.kvk_number ?? null,
     country: company.country ?? null, addressLine1: company.address_line1 ?? null, addressLine2: company.address_line2 ?? null,
     postalCode: company.postal_code ?? null, city: company.city ?? null, email: company.email ?? null,
+    endpointEmail: company.email ?? null,
   };
 }
 
-/** clients-rij -> UBL-koperpartij. */
-function clientToUblParty(client: ClientRow) {
+/**
+ * clients-rij -> UBL-koperpartij. Zonder Peppol-ID (KVK, OIN, btw-nummer) is het
+ * elektronisch adres het adres waar de e-factuur heen gaat: het gekozen adres,
+ * of anders het e-factuuradres van de klant.
+ */
+function clientToUblParty(client: ClientRow, endpointEmail?: string | null) {
   return {
     name: client.name, vatNumber: client.vat_number ?? null, kvkNumber: client.kvk_number ?? null,
     country: client.country ?? null, addressLine1: client.address_line1 ?? null, addressLine2: client.address_line2 ?? null,
     postalCode: client.postal_code ?? null, city: client.city ?? null, email: client.email ?? null,
+    endpointEmail: endpointEmail || defaultInvoiceRecipient(client) || null,
   };
 }
 
@@ -2143,11 +2241,15 @@ function financeLinesToUbl(lines: InvoiceLine[], vatKinds: Record<string, VatKin
 }
 
 // Aanroepers die client/company al geladen hebben (sendInvoiceEmail) kunnen ze
-// meegeven zodat we ze niet nogmaals uit de DB halen.
-type UblPreloaded = { client?: ClientRow; company?: CompanySettingsRow | null; vatKinds?: Record<string, VatKindRef> };
+// meegeven zodat we ze niet nogmaals uit de DB halen. `endpointEmail` is het
+// adres waar de e-factuur heen gaat, `pdf` de PDF die erin moet.
+type UblPreloaded = {
+  client?: ClientRow; company?: CompanySettingsRow | null; vatKinds?: Record<string, VatKindRef>;
+  endpointEmail?: string | null; pdf?: { fileName: string; base64: string } | null;
+};
 
-/** Bouwt de UBL-XML voor een verkoopfactuur, of gooit 422 met wat er ontbreekt. */
-async function createInvoiceUblAttachment(organizationId: string, invoice: InvoiceRow, preloaded: UblPreloaded = {}): Promise<UblAttachment> {
+/** De UBL-invoer voor een verkoopfactuur — nog niet gevalideerd. */
+async function invoiceUblInput(organizationId: string, invoice: InvoiceRow, preloaded: UblPreloaded): Promise<{ input: UblDocumentInput; warnings: string[] }> {
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld — een e-factuur (UBL) vereist een klant.', 422);
   const [client, company, vatKinds] = await Promise.all([
     preloaded.client ?? loadClient(organizationId, invoice.client_id),
@@ -2169,11 +2271,53 @@ async function createInvoiceUblAttachment(organizationId: string, invoice: Invoi
     paymentTermsNote: company.invoice_payment_terms ?? null,
     sellerIban: company.iban ?? null,
     seller: companyToUblParty(company),
-    buyer: clientToUblParty(client),
+    buyer: clientToUblParty(client, preloaded.endpointEmail),
     buyerIsConsumer: client.client_kind === 'consumer',
     lines: financeLinesToUbl(invoice.lines, vatKinds, Boolean(company.kor_enabled), warnings),
+    attachments: preloaded.pdf
+      ? [embeddedPdf({ reference: invoice.number, label: `Factuur ${invoice.number}`, fileName: preloaded.pdf.fileName, base64: preloaded.pdf.base64 })]
+      : [],
   };
+  return { input, warnings };
+}
+
+/** Bouwt de UBL-XML voor een verkoopfactuur, of gooit 422 met wat er ontbreekt. */
+async function createInvoiceUblAttachment(organizationId: string, invoice: InvoiceRow, preloaded: UblPreloaded = {}): Promise<UblAttachment> {
+  const { input, warnings } = await invoiceUblInput(organizationId, invoice, preloaded);
   return finalizeUblAttachment(input, `factuur-${sanitizeFileName(invoice.number || invoice.id)}-ubl.xml`, warnings);
+}
+
+/**
+ * Kan de e-factuur gemaakt worden? Gooit 422 met wat er ontbreekt. Bij een klant
+ * met e-facturatie gaat dit vóór alles uit: er mag geen betaallink, PDF-snapshot
+ * of mail ontstaan voor een factuur die niet als e-factuur weg kan.
+ */
+async function assertInvoiceUblPossible(organizationId: string, invoice: InvoiceRow, preloaded: UblPreloaded): Promise<void> {
+  const { input } = await invoiceUblInput(organizationId, invoice, preloaded);
+  assertUblValid(input);
+}
+
+/**
+ * De PDF voor in een gedownloade e-factuur: de verzonden snapshot als die er is
+ * (dan zit precies de PDF erin die de klant kreeg), anders een verse PDF. Die
+ * heeft nog geen online-link, want er is nog geen publieke link.
+ */
+async function invoicePdfForEInvoice(organizationId: string, invoice: InvoiceRow, preloaded: { client: ClientRow; company: CompanySettingsRow | null }): Promise<{ fileName: string; base64: string }> {
+  try {
+    const snapshot = await loadInvoicePdfSnapshot(organizationId, invoice.id);
+    return { fileName: snapshot.fileName, base64: snapshot.base64 };
+  } catch (snapshotError) {
+    if (!(snapshotError instanceof WorkflowHttpError && snapshotError.status === 404)) {
+      console.warn('PDF-snapshot voor de e-factuur niet te laden; er gaat een verse PDF in.', describeError(snapshotError));
+    }
+  }
+  const { client, company } = preloaded;
+  const [project, quote] = await Promise.all([
+    invoice.project_id ? loadProject(organizationId, invoice.project_id) : Promise.resolve(null),
+    invoice.quote_id ? loadQuote(organizationId, invoice.quote_id) : Promise.resolve(null),
+  ]);
+  const attachment = await createInvoicePdfAttachment({ invoice, client, project, quote, company, publicUrl: '' });
+  return { fileName: attachment.fileName, base64: attachment.base64 };
 }
 
 /** Bouwt de UBL-CreditNote-XML voor een creditnota (bedragen positief, type 381). */
@@ -2196,23 +2340,42 @@ async function createCreditNoteUblAttachment(organizationId: string, creditNote:
     currency: String(creditNote.currency || invoice.currency || 'EUR'),
     note: (creditNote.reason as string | null) ?? null,
     buyerReference: client.client_code || creditNumber,
-    originalInvoiceNumber: invoice.number,
+    // Het nummer dat de klant kreeg: bij een e-factuur via Mollie dat van Mollie.
+    originalInvoiceNumber: (await mollieInvoiceNumberFor(organizationId, invoice.id)) ?? invoice.number,
     originalInvoiceDate: invoice.date,
     seller: companyToUblParty(company),
-    buyer: clientToUblParty(client),
+    buyer: clientToUblParty(client, preloaded.endpointEmail),
     buyerIsConsumer: client.client_kind === 'consumer',
     lines: financeLinesToUbl(creditLines, vatKinds, Boolean(company.kor_enabled), warnings),
+    attachments: preloaded.pdf
+      ? [embeddedPdf({ reference: creditNumber, label: `Creditfactuur ${creditNumber}`, fileName: preloaded.pdf.fileName, base64: preloaded.pdf.base64 })]
+      : [],
   };
   return finalizeUblAttachment(input, `creditfactuur-${sanitizeFileName(creditNumber || String(creditNote.id))}-ubl.xml`, warnings);
 }
 
-/** Valideert, bouwt en verpakt de XML als downloadbare/mailbare bijlage. */
-async function finalizeUblAttachment(input: UblDocumentInput, fileName: string, warnings: string[]): Promise<UblAttachment> {
+/** De creditfactuur-PDF voor in de e-creditnota, als die er is. */
+async function creditNotePdfForEInvoice(creditNote: Record<string, unknown>, base64?: string | null): Promise<{ fileName: string; base64: string } | null> {
+  const content = base64 || await loadCreditNotePdfBase64(creditNote).catch((error) => {
+    console.warn('Creditfactuur-PDF niet te laden voor de e-creditnota; hij gaat zonder PDF.', describeError(error));
+    return '';
+  });
+  if (!content) return null;
+  return { fileName: String(creditNote.pdf_file_name || `creditfactuur-${String(creditNote.number || creditNote.id)}.pdf`), base64: content };
+}
+
+/** Gooit 422 met de blokkerende gebreken; geeft de waarschuwingen terug. */
+function assertUblValid(input: UblDocumentInput): string[] {
   const validation = validateUblInput(input);
   if (validation.errors.length > 0) {
     throw new WorkflowHttpError(`E-factuur (UBL) kan nog niet worden gemaakt:\n- ${validation.errors.join('\n- ')}`, 422);
   }
-  warnings.push(...validation.warnings);
+  return validation.warnings;
+}
+
+/** Valideert, bouwt en verpakt de XML als downloadbare/mailbare bijlage. */
+async function finalizeUblAttachment(input: UblDocumentInput, fileName: string, warnings: string[]): Promise<UblAttachment> {
+  warnings.push(...assertUblValid(input));
   const xml = buildUblXml(input);
   const bytes = new TextEncoder().encode(xml);
   return {
@@ -2222,7 +2385,825 @@ async function finalizeUblAttachment(input: UblDocumentInput, fileName: string, 
     sizeBytes: bytes.byteLength,
     sha256: await sha256HexBytes(bytes),
     warnings,
+    pdfEmbedded: (input.attachments ?? []).some((attachment) => attachment.mimeCode === 'application/pdf'),
   };
+}
+
+/**
+ * Legt vast dat deze verzending een e-factuur was, en welk UBL-bestand meeging.
+ * Lukt dat niet, dan gaat er niets weg: anders staat er in het overzicht een
+ * gewone mail terwijl de klant een e-factuur kreeg.
+ */
+async function markDeliveryAsEInvoice(deliveryId: string, organizationId: string, userId: string, ubl: UblAttachment): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .update({
+      delivery_channel: 'e_invoice_email',
+      e_invoice_file_name: ubl.fileName,
+      e_invoice_size_bytes: ubl.sizeBytes,
+      e_invoice_sha256: ubl.sha256,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', deliveryId)
+    .eq('organization_id', organizationId);
+  if (error) {
+    await failInvoiceEmailSend(deliveryId, organizationId, userId, `E-factuur kon niet worden vastgelegd: ${error.message}`);
+    throw new WorkflowHttpError('De e-factuur kon niet worden vastgelegd; er is niets verstuurd. Probeer het opnieuw.', 500);
+  }
+}
+
+/** Tijdlijn: de e-factuur is weg. Best-effort — de verzending zelf is al vastgelegd. */
+async function recordEInvoiceSent(input: { organizationId: string; invoiceId: string; userId: string; deliveryId: string; recipientEmail: string; ubl: UblAttachment }): Promise<void> {
+  const { error } = await supabaseAdmin.rpc('insert_invoice_workflow_event', {
+    p_organization_id: input.organizationId,
+    p_invoice_id: input.invoiceId,
+    p_event_type: 'e_invoice_sent',
+    p_title: 'E-factuur verstuurd',
+    p_description: `E-factuur ${input.ubl.fileName} (UBL${input.ubl.pdfEmbedded ? ', met de PDF erin' : ''}) verstuurd naar ${input.recipientEmail}.`,
+    p_metadata: {
+      delivery_id: input.deliveryId,
+      delivery_channel: 'e_invoice_email',
+      recipient_email: input.recipientEmail,
+      e_invoice_file_name: input.ubl.fileName,
+      e_invoice_sha256: input.ubl.sha256,
+      pdf_embedded: input.ubl.pdfEmbedded,
+    },
+    p_actor_user_id: input.userId,
+  });
+  if (error) console.warn('e_invoice_sent event insert mislukte', error.message);
+}
+
+// ============================================================
+// E-facturatie via Mollie (Sales Invoices API, Peppol)
+//
+// Mollie geeft de factuur uit, verstuurt hem over Peppol, mailt een PDF-kopie
+// en int de betaling. ResoFly legt de verzending vast zoals elke andere
+// (verzonden, vergrendeld, PDF-snapshot) met het id van de Mollie-factuur als
+// provider-id, en volgt daarna de stand bij Mollie: Peppol-aflevering, betaald.
+//
+// De poging staat vast vóór Mollie iets doet, en het concept wordt pas
+// uitgegeven als het totaal klopt. Gaat er ná het uitgeven iets mis, dan blijft
+// de poging 'queued' met het Mollie-id erbij en maakt syncMollieSalesInvoice
+// ("Ververs bij Mollie", of de statusronde) hem alsnog af. Zo wordt een factuur
+// nooit twee keer bij Mollie uitgegeven.
+// ============================================================
+
+const MOLLIE_API_BASE = 'https://api.mollie.com/v2';
+// Een poging die na zoveel tijd nog als concept bij Mollie staat, is afgebroken.
+const MOLLIE_STALE_ATTEMPT_MS = 10 * 60 * 1000;
+const MOLLIE_SYNC_BATCH_LIMIT = parsePositiveInt(Deno.env.get('MOLLIE_SALES_INVOICE_SYNC_LIMIT') ?? null, 50);
+const MOLLIE_DELIVERY_COLUMNS = 'id,status,provider_email_id,recipient_email,e_invoice_status,external_invoice_number,external_status,external_pdf_url,external_payment_url,external_synced_at,created_at,public_url:metadata->>publicUrl';
+
+type MollieApiResult = { ok: boolean; status: number; payload: Record<string, unknown> };
+type MollieDeliveryRow = {
+  id: string; status: string; provider_email_id: string | null; recipient_email: string;
+  e_invoice_status: string | null; external_invoice_number: string | null; external_status: string | null;
+  external_pdf_url: string | null; external_payment_url: string | null; external_synced_at: string | null;
+  created_at: string; public_url: string | null;
+};
+type MollieSendInput = {
+  userId: string; organizationId: string; invoice: InvoiceRow; client: ClientRow; project: ProjectRow | null; quote: QuoteRow | null;
+  company: CompanySettingsRow | null; content: EmailTemplateContent | null; recipientEmail: string; recipientName: string; subject: string;
+};
+type MollieFinalizeInput = {
+  organizationId: string; userId: string | null; invoice: InvoiceRow; client: ClientRow; project: ProjectRow | null; quote: QuoteRow | null;
+  company: CompanySettingsRow | null; deliveryId: string; apiKey: string; state: MollieSalesInvoiceState; recipientEmail: string;
+  totalCents: number; currency: string; publicUrl: string; issueDate: string; dueDate: string | null;
+};
+
+async function mollieApi(apiKey: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: Record<string, unknown>, idempotencyKey?: string): Promise<MollieApiResult> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
+  if (body) headers['Content-Type'] = 'application/json';
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+  const response = await fetch(`${MOLLIE_API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  return { ok: response.ok, status: response.status, payload };
+}
+
+function mollieErrorDetail(result: MollieApiResult): string {
+  const detail = String(result.payload.detail || result.payload.title || `HTTP ${result.status}`);
+  return typeof result.payload.field === 'string' ? `${detail} (veld: ${result.payload.field})` : detail;
+}
+
+const salesInvoicePath = (salesInvoiceId: string) => `/sales-invoices/${encodeURIComponent(salesInvoiceId)}`;
+
+/** Mollie wil een UUID als Idempotency-Key; afgeleid, zodat een herhaald verzoek dezelfde krijgt. */
+async function mollieIdempotencyKey(seed: string): Promise<string> {
+  return uuidFromHex(await sha256Hex(seed));
+}
+
+/** Een concept bij Mollie weggooien (alleen een concept kan dat). Best-effort. */
+async function discardMollieDraft(apiKey: string, salesInvoiceId: string): Promise<void> {
+  try {
+    const result = await mollieApi(apiKey, 'DELETE', salesInvoicePath(salesInvoiceId));
+    if (!result.ok && result.status !== 404) console.warn('Mollie-concept verwijderen mislukte', salesInvoiceId, mollieErrorDetail(result));
+  } catch (error) {
+    console.warn('Mollie-concept verwijderen mislukte', salesInvoiceId, describeError(error));
+  }
+}
+
+async function loadMollieDeliveries(organizationId: string, invoiceId: string): Promise<MollieDeliveryRow[]> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .select(MOLLIE_DELIVERY_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .eq('delivery_channel', 'e_invoice_mollie')
+    .order('created_at', { ascending: false })
+    .limit(20);
+  if (error) throwSupabaseError('Mollie-verzendingen opzoeken', error);
+  return (data ?? []) as unknown as MollieDeliveryRow[];
+}
+
+/** De Mollie-verzending die telt: de laatste die niet mislukt is. */
+function activeMollieDelivery(deliveries: MollieDeliveryRow[]): MollieDeliveryRow | null {
+  return deliveries.find((delivery) => delivery.status !== 'failed') ?? null;
+}
+
+/** Het nummer dat Mollie de factuur gaf, als hij via Mollie is uitgegeven. */
+async function mollieInvoiceNumberFor(organizationId: string, invoiceId: string): Promise<string | null> {
+  const deliveries = await loadMollieDeliveries(organizationId, invoiceId).catch(() => [] as MollieDeliveryRow[]);
+  return activeMollieDelivery(deliveries)?.external_invoice_number ?? null;
+}
+
+/** Hoe de klant de factuur kent, voor op een creditfactuur: "2026-041 (Mollie: INV-0000001)". */
+async function invoiceReferenceForClient(organizationId: string, invoice: InvoiceRow): Promise<string> {
+  const mollieNumber = await mollieInvoiceNumberFor(organizationId, invoice.id);
+  return mollieNumber ? `${invoice.number} (Mollie: ${mollieNumber})` : invoice.number;
+}
+
+/**
+ * Is deze factuur via Mollie uitgegeven (of wordt hij dat nu)? Dan betaalt de klant
+ * via de link van Mollie en maakt ResoFly geen eigen betaling aan — anders kan hij
+ * twee keer betalen.
+ */
+async function mollieSalesInvoiceCheckout(organizationId: string, invoiceId: string): Promise<{ checkoutUrl: string | null; salesInvoiceId: string | null } | null> {
+  const delivery = activeMollieDelivery(await loadMollieDeliveries(organizationId, invoiceId));
+  if (!delivery) return null;
+  return {
+    checkoutUrl: delivery.external_payment_url && isReusableCheckoutUrl(delivery.external_payment_url) ? delivery.external_payment_url : null,
+    salesInvoiceId: delivery.provider_email_id,
+  };
+}
+
+async function sendInvoiceViaMollie(input: MollieSendInput) {
+  const { userId, organizationId, invoice, client, project, quote, company, content, recipientEmail, recipientName } = input;
+
+  // 1. Mag deze factuur (nog) via Mollie? Nooit twee keer uitgeven.
+  const previous = await loadMollieDeliveries(organizationId, invoice.id);
+  const active = activeMollieDelivery(previous);
+  if (active?.status === 'queued') {
+    throw new WorkflowHttpError('Deze factuur wordt al via Mollie verstuurd, of een eerdere poging bleef halverwege steken. Klik bij de factuur op "Ververs bij Mollie" om de stand op te halen.', 409);
+  }
+  if (active) {
+    throw new WorkflowHttpError(`Deze factuur is al via Mollie uitgegeven${active.external_invoice_number ? ` als ${active.external_invoice_number}` : ''}. Mollie verstuurt hem niet nog eens; download zo nodig de PDF bij de factuur.`, 409);
+  }
+  if (invoice.status !== 'draft') {
+    throw new WorkflowHttpError('Deze factuur is al eerder verstuurd. Via Mollie krijgt de klant een nieuwe factuur met een eigen nummer — dat zou dubbel zijn. Verstuur hem opnieuw per e-mail (zet e-facturatie bij de klant daarvoor op "per e-mail"), of maak een nieuwe factuur.', 409);
+  }
+  const openPayment = await loadLatestOpenPayment(organizationId, invoice.id);
+  if (openPayment && ['pending', 'authorized'].includes(openPayment.status)) {
+    throw new WorkflowHttpError('Voor deze factuur loopt al een betaling. Wacht tot die is afgerond voordat je hem via Mollie verstuurt.', 409);
+  }
+  const orgKey = await resolveOrganizationMollieKey(organizationId);
+  if (!orgKey) throw new WorkflowHttpError('Koppel eerst je eigen Mollie-account (Instellingen → Facturatie) om e-facturen via Mollie te versturen, of kies bij deze klant "per e-mail".', 422);
+
+  const totals = calculateTotals(invoice.lines);
+  if (totals.totalCents <= 0) throw new WorkflowHttpError('Een e-factuur via Mollie moet een bedrag hoger dan € 0 hebben.', 422);
+  const currency = String(invoice.currency || 'EUR').toUpperCase();
+  const issueDate = amsterdamDate(new Date());
+  const { draft, errors } = buildMollieSalesInvoice({
+    invoice: { id: invoice.id, number: invoice.number, notes: invoice.notes, currency, lines: invoice.lines },
+    client,
+    sellerCountry: company?.country ?? null,
+    recipientEmail,
+    issueDate,
+    dueDate: invoice.due_date,
+    vatKinds: await loadVatKindsByCode(organizationId),
+    korEnabled: Boolean(company?.kor_enabled),
+  });
+  if (!draft) throw new WorkflowHttpError(`De e-factuur kan niet via Mollie:\n- ${errors.join('\n- ')}`, 422);
+
+  // 2. De poging vastleggen vóór Mollie iets doet. De verzending vraagt een PDF:
+  //    een voorlopige van ResoFly, die van Mollie vervangt hem na het uitgeven.
+  const token = randomToken();
+  const tokenHash = await sha256Hex(token);
+  const expiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
+  const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
+  const rendered = renderEmailTemplate('invoice.sent', { invoice, client, project, quote, company, publicUrl, paymentUrl: null, recipientName, expiresAt, content, eInvoice: true });
+  const subject = (input.subject.trim() || rendered.subject || `Factuur ${invoice.number}`).slice(0, 200);
+  const placeholderPdf = await createInvoicePdfAttachment({ invoice, client, project, quote, company, publicUrl });
+  validateInvoicePdfAttachment(placeholderPdf);
+  const storedPlaceholder = await storeInvoicePdfSnapshot(organizationId, invoice.id, placeholderPdf);
+  const prepared = await beginInvoiceEmailSend({
+    invoiceId: invoice.id,
+    organizationId,
+    userId,
+    tokenHash,
+    expiresAt,
+    recipientEmail,
+    recipientName,
+    subject,
+    publicUrl,
+    attachmentFileName: placeholderPdf.fileName,
+    attachmentMimeType: placeholderPdf.mimeType,
+    attachmentSizeBytes: placeholderPdf.sizeBytes,
+    attachmentSha256: placeholderPdf.sha256,
+    attachmentDataBase64: storedPlaceholder.shouldStoreBase64InDatabase ? placeholderPdf.base64 : undefined,
+    attachmentStorageProvider: storedPlaceholder.provider,
+    attachmentStorageKey: storedPlaceholder.key ?? undefined,
+  });
+  const deliveryId = prepared.deliveryId;
+  await markDeliveryAsMollie(deliveryId, organizationId, userId);
+
+  // 3. Het concept bij Mollie. Dezelfde poging met dezelfde inhoud krijgt dezelfde
+  //    sleutel, zodat een dubbelklik één concept oplevert.
+  const idempotencyKey = await mollieIdempotencyKey(`resofly:sales-invoice:${invoice.id}:${previous.length}:${await sha256Hex(JSON.stringify(draft.body))}`);
+  let created: MollieApiResult;
+  try {
+    created = await mollieApi(orgKey.apiKey, 'POST', '/sales-invoices', draft.body, idempotencyKey);
+  } catch (error) {
+    await failInvoiceEmailSend(deliveryId, organizationId, userId, `Mollie niet bereikbaar: ${describeError(error)}`);
+    throw new WorkflowHttpError('Mollie is niet bereikbaar; er is niets verstuurd. Probeer het zo opnieuw.', 502);
+  }
+  const salesInvoiceId = String(created.payload.id || '').trim();
+  if (!created.ok || !salesInvoiceId) {
+    const reason = created.ok ? 'Mollie gaf geen factuur-id terug' : mollieErrorDetail(created);
+    await failInvoiceEmailSend(deliveryId, organizationId, userId, `Mollie weigerde het concept: ${reason}`);
+    throw new WorkflowHttpError(`Mollie weigerde de e-factuur: ${reason}. Er is niets verstuurd.`, created.status === 422 ? 422 : 502);
+  }
+
+  // Het concept aan deze poging koppelen. Eén poging per Mollie-factuur (unieke
+  // index op provider + provider_email_id): verliest deze een gelijktijdige
+  // dubbelklik, dan stopt hij hier en is het concept van de andere poging.
+  const claimedAt = new Date().toISOString();
+  const { error: claimError } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .update({ provider_email_id: salesInvoiceId, external_status: 'draft', external_synced_at: claimedAt, updated_at: claimedAt })
+    .eq('id', deliveryId)
+    .eq('organization_id', organizationId);
+  if (claimError) {
+    const duplicate = (claimError as { code?: string }).code === '23505';
+    await failInvoiceEmailSend(deliveryId, organizationId, userId, duplicate ? 'Een andere verzending van deze factuur via Mollie was al bezig.' : `Mollie-concept kon niet worden vastgelegd: ${claimError.message}`);
+    if (duplicate) throw new WorkflowHttpError('Deze factuur wordt al via Mollie verstuurd. Wacht even en ververs de factuur.', 409);
+    await discardMollieDraft(orgKey.apiKey, salesInvoiceId);
+    throw new WorkflowHttpError('Het concept bij Mollie kon niet worden vastgelegd; het is weer verwijderd en er is niets verstuurd. Probeer het opnieuw.', 500);
+  }
+
+  // 4. Rekent Mollie precies hetzelfde totaal als ResoFly? Anders niet uitgeven:
+  //    het bedrag dat de klant betaalt moet gelijk zijn aan wat ResoFly boekt.
+  let mollieTotal = mollieAmountCents(created.payload.totalAmount);
+  if (mollieTotal === null) {
+    // Geen totaal in het antwoord: het concept zelf nog eens ophalen.
+    const check = await mollieApi(orgKey.apiKey, 'GET', salesInvoicePath(salesInvoiceId)).catch(() => null);
+    if (check?.ok) mollieTotal = mollieAmountCents(check.payload.totalAmount);
+  }
+  if (mollieTotal !== totals.totalCents) {
+    await discardMollieDraft(orgKey.apiKey, salesInvoiceId);
+    await failInvoiceEmailSend(deliveryId, organizationId, userId, `Totaal bij Mollie (${mollieTotal ?? '?'} cent) wijkt af van ResoFly (${totals.totalCents} cent).`);
+    throw new WorkflowHttpError(`Mollie rekent voor deze factuur ${mollieTotal === null ? 'een ander totaal' : formatEuro(mollieTotal / 100)} en ResoFly ${formatEuro(totals.total)} — waarschijnlijk door een andere afronding van de btw. Er is niets verstuurd. Verstuur deze factuur per e-mail, of pas de regels aan.`, 422);
+  }
+
+  // 5. Uitgeven: Mollie zet hem op Peppol en mailt de PDF-kopie.
+  const emailDetails = {
+    subject,
+    body: mollieEmailBody({ recipientName, invoiceNumber: invoice.number, companyName: String(company?.trade_name || company?.company_name || '').trim(), totalLabel: formatEuro(totals.total) }),
+  };
+  let issuedPayload: Record<string, unknown>;
+  try {
+    const issued = await mollieApi(orgKey.apiKey, 'PATCH', salesInvoicePath(salesInvoiceId), { status: 'issued', emailDetails }, await mollieIdempotencyKey(`resofly:sales-invoice-issue:${salesInvoiceId}`));
+    if (issued.ok) {
+      issuedPayload = issued.payload;
+    } else {
+      // Een fout kan ook ná het uitgeven komen. Alleen een concept wordt weggegooid.
+      const check = await mollieApi(orgKey.apiKey, 'GET', salesInvoicePath(salesInvoiceId)).catch(() => null);
+      const checkStatus = check?.ok ? readMollieSalesInvoice(check.payload).status : null;
+      if (checkStatus === 'draft') {
+        await discardMollieDraft(orgKey.apiKey, salesInvoiceId);
+        await failInvoiceEmailSend(deliveryId, organizationId, userId, `Mollie kon de factuur niet uitgeven: ${mollieErrorDetail(issued)}`);
+        throw new WorkflowHttpError(`Mollie kon de e-factuur niet uitgeven: ${mollieErrorDetail(issued)}. Er is niets verstuurd.${issued.status === 422 ? ' Staat e-facturatie aan in je Mollie-dashboard, en klopt het KVK- of btw-nummer van de klant?' : ''}`, issued.status === 422 ? 422 : 502);
+      }
+      if (!check?.ok) throw new Error(`uitgeven: ${mollieErrorDetail(issued)}; nakijken: ${check ? mollieErrorDetail(check) : 'geen antwoord'}`);
+      issuedPayload = check.payload; // Mollie meldde een fout, maar gaf hem wél uit.
+    }
+  } catch (error) {
+    if (error instanceof WorkflowHttpError) throw error;
+    // Onbekend of Mollie hem uitgaf: niets weggooien. De poging blijft staan met
+    // het Mollie-id; "Ververs bij Mollie" ziet wat er gebeurd is.
+    console.error('Mollie-factuur uitgeven: uitkomst onbekend', salesInvoiceId, describeError(error));
+    throw new WorkflowHttpError('De verbinding met Mollie viel weg tijdens het uitgeven. Klik bij de factuur op "Ververs bij Mollie" om te zien of hij verstuurd is — verstuur hem niet opnieuw voordat je dat weet.', 502);
+  }
+
+  // Vanaf hier is de factuur de deur uit; een fout maakt dat niet meer ongedaan.
+  const state = await currentMollieState(orgKey.apiKey, salesInvoiceId, issuedPayload);
+  try {
+    const result = await finalizeMollieIssue({
+      organizationId, userId, invoice, client, project, quote, company, deliveryId, apiKey: orgKey.apiKey, state, recipientEmail,
+      totalCents: totals.totalCents, currency, publicUrl, issueDate, dueDate: draft.dueDate,
+    });
+    return {
+      delivery: result.finalized.delivery,
+      version: result.finalized.version,
+      publicUrl,
+      providerEmailId: salesInvoiceId,
+      recipientEmail,
+      deliveryChannel: 'e_invoice_mollie' as const,
+      paymentLinkIncluded: Boolean(result.state.paymentUrl),
+      paymentLinkError: null,
+      attachment: result.attachment ?? { fileName: placeholderPdf.fileName, sizeBytes: placeholderPdf.sizeBytes, sha256: placeholderPdf.sha256, storageProvider: storedPlaceholder.provider, storageKey: storedPlaceholder.key, source: 'resofly' },
+      ubl: { attached: false, reason: null },
+      mollie: { salesInvoiceId, invoiceNumber: result.state.invoiceNumber, status: result.state.status, eInvoiceStatus: result.state.eInvoiceStatus, paymentUrl: result.state.paymentUrl, pdfFromMollie: result.pdfFromMollie },
+      warnings: [...draft.warnings, ...result.warnings],
+    };
+  } catch (error) {
+    console.error('Mollie-factuur uitgegeven, maar afronden in ResoFly mislukte', salesInvoiceId, describeError(error));
+    throw new WorkflowHttpError(`Mollie heeft de e-factuur uitgegeven${state.invoiceNumber ? ` (${state.invoiceNumber})` : ''} en verstuurd, maar ResoFly kon de verzending niet afronden. Klik bij de factuur op "Ververs bij Mollie" om dat alsnog te doen — verstuur hem niet opnieuw.`, 500);
+  }
+}
+
+/** De verzending staat vanaf het begin als Mollie-verzending geboekt. Lukt dat niet, dan gaat er niets weg. */
+async function markDeliveryAsMollie(deliveryId: string, organizationId: string, userId: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .update({ provider: 'mollie', delivery_channel: 'e_invoice_mollie', updated_at: new Date().toISOString() })
+    .eq('id', deliveryId)
+    .eq('organization_id', organizationId);
+  if (error) {
+    await failInvoiceEmailSend(deliveryId, organizationId, userId, `Verzending via Mollie kon niet worden vastgelegd: ${error.message}`);
+    throw new WorkflowHttpError('De verzending via Mollie kon niet worden vastgelegd; er is niets verstuurd. Probeer het opnieuw.', 500);
+  }
+}
+
+/**
+ * Wacht (hooguit een paar tellen) tot Mollie het nummer en de PDF-link van een
+ * net uitgegeven factuur heeft. Lukt dat niet, dan de stand zoals hij was: de
+ * statusronde haalt de rest later op.
+ */
+async function settleMollieIssue(apiKey: string, state: MollieSalesInvoiceState): Promise<MollieSalesInvoiceState> {
+  let current = state;
+  for (let attempt = 1; attempt <= 3 && (!current.invoiceNumber || !current.pdfUrl); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+    try {
+      const result = await mollieApi(apiKey, 'GET', salesInvoicePath(current.id));
+      if (result.ok) current = withMollieId(readMollieSalesInvoice(result.payload), current.id);
+    } catch (error) {
+      console.warn('Mollie-factuur ophalen mislukte', current.id, describeError(error));
+    }
+  }
+  return current;
+}
+
+/** De actuele stand bij Mollie (met de betaallink, die pas na het uitgeven bestaat). */
+async function currentMollieState(apiKey: string, salesInvoiceId: string, fallback: Record<string, unknown>): Promise<MollieSalesInvoiceState> {
+  try {
+    const result = await mollieApi(apiKey, 'GET', salesInvoicePath(salesInvoiceId));
+    if (result.ok) return withMollieId(readMollieSalesInvoice(result.payload), salesInvoiceId);
+    console.warn('Mollie-factuur ophalen mislukte', salesInvoiceId, mollieErrorDetail(result));
+  } catch (error) {
+    console.warn('Mollie-factuur ophalen mislukte', salesInvoiceId, describeError(error));
+  }
+  return withMollieId(readMollieSalesInvoice(fallback), salesInvoiceId);
+}
+
+function withMollieId(state: MollieSalesInvoiceState, salesInvoiceId: string): MollieSalesInvoiceState {
+  return state.id ? state : { ...state, id: salesInvoiceId };
+}
+
+/**
+ * Een bij Mollie uitgegeven factuur in ResoFly afronden: de datums gelijk aan die
+ * van Mollie, de PDF van Mollie als snapshot, verzonden + vergrendeld, en betalen
+ * via de link van Mollie. Bij het versturen én bij het herstel van een
+ * onderbroken verzending.
+ */
+async function finalizeMollieIssue(input: MollieFinalizeInput) {
+  const { organizationId, userId, deliveryId, apiKey } = input;
+  const warnings: string[] = [];
+  // Na het uitgeven staat de factuur even op 'issuing'; het nummer en de PDF-link
+  // komen een paar tellen later. Kort wachten, dan klopt de snapshot meteen.
+  const state = await settleMollieIssue(apiKey, input.state);
+  await recordMollieDeliveryState(organizationId, { id: deliveryId, status: 'queued', e_invoice_status: null }, state, input.invoice.id);
+
+  // Mollie dateert vandaag en kent alleen vaste termijnen: ResoFly neemt zijn
+  // datums over. Dat kan alleen zolang de factuur een concept is, dus vóór het
+  // vergrendelen — en een vergeten betaallink van dit concept vervalt eerst.
+  await retireCompetingPayments(organizationId, input.invoice.id, state.id);
+  const issueDate = mollieDate(state.issuedAt) ?? input.issueDate;
+  const dueDate = mollieDate(state.dueAt) ?? input.dueDate;
+  const aligned = await alignInvoiceDatesToMollie(organizationId, input.invoice, issueDate, dueDate);
+  const invoice = aligned.invoice;
+  if (aligned.warning) warnings.push(aligned.warning);
+
+  // De PDF zoals de klant hem kreeg: die van Mollie. Is die er (nog) niet, dan
+  // een ResoFly-PDF met de juiste datums en de betaallink van Mollie.
+  let pdfFromMollie = false;
+  let pdf: InvoicePdfAttachment | null = null;
+  const molliePdf = await fetchMolliePdfWithRetry(apiKey, state.pdfUrl, 3);
+  if (molliePdf) {
+    pdf = await pdfAttachmentFromBytes(molliePdfFileName(invoice.number, state.invoiceNumber), molliePdf);
+    pdfFromMollie = true;
+  } else {
+    warnings.push('De PDF van Mollie was nog niet klaar; ResoFly bewaarde een eigen PDF met de betaallink van Mollie. Bij de factuur zie je de PDF van Mollie zodra die er is.');
+    pdf = await createInvoicePdfAttachment({ invoice, client: input.client, project: input.project, quote: input.quote, company: input.company, publicUrl: input.publicUrl, paymentUrl: state.paymentUrl })
+      .catch((error) => { console.warn('ResoFly-PDF bij de Mollie-factuur maken mislukte', describeError(error)); return null; });
+  }
+  let attachment: Record<string, unknown> | null = null;
+  if (pdf) {
+    try {
+      validateInvoicePdfAttachment(pdf);
+      const stored = await storeInvoicePdfSnapshot(organizationId, invoice.id, pdf);
+      await replaceDeliveryPdf(organizationId, deliveryId, pdf, stored, pdfFromMollie ? 'mollie' : 'resofly');
+      attachment = { fileName: pdf.fileName, sizeBytes: pdf.sizeBytes, sha256: pdf.sha256, storageProvider: stored.provider, storageKey: stored.key, source: pdfFromMollie ? 'mollie' : 'resofly' };
+    } catch (error) {
+      console.warn('PDF bij de Mollie-factuur bewaren mislukte; de voorlopige PDF blijft staan.', describeError(error));
+      pdfFromMollie = false;
+    }
+  }
+
+  // Verzonden en vergrendeld, met de snapshot — net als een gewone verzending.
+  const finalized = await completeInvoiceEmailSend(deliveryId, organizationId, userId, state.id);
+  await recordMollieDeliveryState(organizationId, { id: deliveryId, status: 'sent', e_invoice_status: null }, state, invoice.id);
+
+  // Betalen loopt via de link van Mollie. Mislukt dit, dan haalt de statusronde het in.
+  await ensureMollieSalesInvoicePayment({ organizationId, invoiceId: invoice.id, userId, state, amountCents: input.totalCents, currency: input.currency })
+    .catch((error) => console.warn('Betaalregel voor de Mollie-factuur aanmaken mislukte; de statusronde probeert het opnieuw.', describeError(error)));
+  if (molliePaymentStatus(state.status)) {
+    await applyMolliePaymentStatus(state).catch((error) => console.warn('Betaalstatus van Mollie overnemen mislukte', describeError(error)));
+  }
+
+  await insertWorkflowEvent(organizationId, invoice.id, 'e_invoice_sent', 'E-factuur verstuurd via Mollie',
+    `Factuur ${invoice.number} is via Mollie uitgegeven${state.invoiceNumber ? ` als ${state.invoiceNumber}` : ''} en over Peppol verstuurd; Mollie mailde een PDF-kopie naar ${input.recipientEmail}.`,
+    { delivery_id: deliveryId, delivery_channel: 'e_invoice_mollie', recipient_email: input.recipientEmail, mollie_sales_invoice_id: state.id, mollie_invoice_number: state.invoiceNumber, pdf_from_mollie: pdfFromMollie },
+    userId);
+
+  return { finalized, pdfFromMollie, attachment, warnings, invoice, state };
+}
+
+/**
+ * Wat Mollie over zijn factuur zegt op de verzending zetten. Afgeleverd op
+ * Peppol = de verzending is 'delivered'; een wijziging in de aflevering komt op de
+ * tijdlijn, want bij een mislukte aflevering moet de gebruiker iets doen.
+ */
+async function recordMollieDeliveryState(organizationId: string, delivery: { id: string; status: string; e_invoice_status: string | null }, state: MollieSalesInvoiceState, invoiceId: string): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const patch: Record<string, unknown> = { external_status: state.status, external_synced_at: nowIso, updated_at: nowIso };
+  if (state.eInvoiceStatus) patch.e_invoice_status = state.eInvoiceStatus;
+  if (state.invoiceNumber) patch.external_invoice_number = state.invoiceNumber;
+  if (state.pdfUrl) patch.external_pdf_url = state.pdfUrl;
+  if (state.paymentUrl) patch.external_payment_url = state.paymentUrl;
+  if (state.eInvoiceStatus === 'issued' && delivery.status === 'sent') {
+    patch.status = 'delivered';
+    patch.delivered_at = nowIso;
+    patch.last_event_at = nowIso;
+  }
+  const { error } = await supabaseAdmin.from('invoice_email_deliveries').update(patch).eq('id', delivery.id).eq('organization_id', organizationId);
+  if (error) { console.warn('Mollie-stand op de verzending zetten mislukte', delivery.id, error.message); return; }
+
+  if (delivery.status === 'queued' || !state.eInvoiceStatus || state.eInvoiceStatus === delivery.e_invoice_status) return;
+  if (state.eInvoiceStatus === 'issued') {
+    await insertWorkflowEvent(organizationId, invoiceId, 'e_invoice_delivered', 'E-factuur afgeleverd via Peppol',
+      `Mollie heeft de e-factuur${state.invoiceNumber ? ` ${state.invoiceNumber}` : ''} over Peppol afgeleverd bij de klant.`,
+      { delivery_id: delivery.id, mollie_sales_invoice_id: state.id }, null);
+  } else if (state.eInvoiceStatus === 'failed') {
+    await insertWorkflowEvent(organizationId, invoiceId, 'e_invoice_failed', 'Peppol-aflevering mislukt',
+      'Mollie kon de e-factuur (nog) niet over Peppol afleveren en probeert het zelf opnieuw. Blijft het mislukken, controleer dan het KVK- of btw-nummer van de klant: daarmee moet hij op Peppol staan. De PDF-kopie per mail is wel verstuurd.',
+      { delivery_id: delivery.id, mollie_sales_invoice_id: state.id }, null);
+  }
+}
+
+async function insertWorkflowEvent(organizationId: string, invoiceId: string, eventType: string, title: string, description: string, metadata: Record<string, unknown>, actorUserId: string | null): Promise<void> {
+  const { error } = await supabaseAdmin.rpc('insert_invoice_workflow_event', {
+    p_organization_id: organizationId,
+    p_invoice_id: invoiceId,
+    p_event_type: eventType,
+    p_title: title,
+    p_description: description,
+    p_metadata: metadata,
+    p_actor_user_id: actorUserId,
+  });
+  if (error) console.warn(`${eventType} event insert mislukte`, error.message);
+}
+
+/** Een vergeten (nooit verstuurde) betaallink van dit concept laten vervallen: betalen loopt via Mollie. */
+async function retireCompetingPayments(organizationId: string, invoiceId: string, keepProviderPaymentId: string): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .select('id,provider_payment_id')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .eq('provider', 'mollie')
+    .in('status', ['creating', 'open']);
+  if (error) { console.warn('Openstaande betaallinks opzoeken mislukte', error.message); return; }
+  const ids = ((data ?? []) as Array<{ id: string; provider_payment_id: string | null }>)
+    .filter((row) => row.provider_payment_id !== keepProviderPaymentId)
+    .map((row) => row.id);
+  if (ids.length === 0) return;
+  const { error: updateError } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .update({ status: 'expired', error_message: 'Vervallen: de factuur is via Mollie als e-factuur uitgegeven en wordt via de link van Mollie betaald.', updated_at: new Date().toISOString() })
+    .in('id', ids);
+  if (updateError) console.warn('Openstaande betaallink laten vervallen mislukte', updateError.message);
+}
+
+/** Factuurdatum en vervaldatum gelijk aan die van Mollie — alleen een concept kan nog wijzigen. */
+async function alignInvoiceDatesToMollie(organizationId: string, invoice: InvoiceRow, issueDate: string, dueDate: string | null): Promise<{ invoice: InvoiceRow; warning: string | null }> {
+  const patch: Record<string, unknown> = {};
+  if (issueDate && invoice.date !== issueDate) patch.date = issueDate;
+  if (dueDate && invoice.due_date !== dueDate) patch.due_date = dueDate;
+  if (Object.keys(patch).length === 0) return { invoice, warning: null };
+  const { data, error } = await supabaseAdmin
+    .from('invoices')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', invoice.id)
+    .eq('organization_id', organizationId)
+    .eq('status', 'draft')
+    .select('*')
+    .maybeSingle();
+  if (error || !data) {
+    console.warn('Datums gelijkzetten met Mollie mislukte', invoice.id, error ? describeError(error) : 'de factuur is geen concept meer');
+    return { invoice, warning: `De factuurdatum en vervaldatum in ResoFly konden niet gelijk worden gezet aan die van Mollie (${formatDateNl(issueDate)}${dueDate ? ` en ${formatDateNl(dueDate)}` : ''}). Pas ze zo nodig met een creditfactuur aan.` };
+  }
+  return { invoice: data as InvoiceRow, warning: null };
+}
+
+/** De PDF op de verzending vervangen; complete_invoice_email_send neemt hem over in de snapshot. */
+async function replaceDeliveryPdf(organizationId: string, deliveryId: string, pdf: InvoicePdfAttachment, stored: StoredInvoicePdfSnapshot, source: 'mollie' | 'resofly'): Promise<void> {
+  const { data, error: readError } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .select('metadata')
+    .eq('id', deliveryId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (readError || !data) throw readError ?? new Error('Verzending niet gevonden.');
+  const metadata = {
+    ...((data as { metadata?: Record<string, unknown> | null }).metadata ?? {}),
+    attachmentDataBase64: stored.shouldStoreBase64InDatabase ? pdf.base64 : null,
+    attachmentStorageProvider: stored.provider,
+    attachmentStorageKey: stored.key,
+    pdfSource: source,
+  };
+  const { error } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .update({ attachment_file_name: pdf.fileName, attachment_mime_type: pdf.mimeType, attachment_size_bytes: pdf.sizeBytes, attachment_sha256: pdf.sha256, metadata, updated_at: new Date().toISOString() })
+    .eq('id', deliveryId)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+}
+
+function molliePdfFileName(invoiceNumber: string, mollieNumber: string | null): string {
+  return `factuur-${sanitizeFileName(invoiceNumber)}${mollieNumber ? `-${sanitizeFileName(mollieNumber)}` : ''}.pdf`;
+}
+
+async function pdfAttachmentFromBytes(fileName: string, bytes: Uint8Array): Promise<InvoicePdfAttachment> {
+  return { fileName, mimeType: 'application/pdf', bytes, base64: bytesToBase64(bytes), sizeBytes: bytes.byteLength, sha256: await sha256HexBytes(bytes) };
+}
+
+/**
+ * De PDF van Mollie ophalen. De sleutel gaat alleen mee naar api.mollie.com; een
+ * doorverwijzing (bv. naar een opslag-URL) volgen we zonder sleutel.
+ */
+async function fetchMolliePdf(apiKey: string, pdfUrl: string | null): Promise<Uint8Array | null> {
+  const policy = mollieFetchPolicy(pdfUrl);
+  if (!pdfUrl || policy === 'refuse') return null;
+  let url = pdfUrl;
+  let withKey = policy === 'with-key';
+  for (let hop = 0; hop < 4; hop += 1) {
+    const response = await fetch(url, { headers: { Accept: 'application/pdf', ...(withKey ? { Authorization: `Bearer ${apiKey}` } : {}) }, redirect: 'manual' });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      await response.body?.cancel();
+      if (!location) return null;
+      const next = new URL(location, url);
+      if (next.protocol !== 'https:') return null;
+      withKey = withKey && mollieFetchPolicy(next.href) === 'with-key';
+      url = next.href;
+      continue;
+    }
+    if (!response.ok || Number(response.headers.get('content-length') || 0) > INVOICE_PDF_MAX_ATTACHMENT_BYTES) {
+      await response.body?.cancel();
+      return null;
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const isPdf = bytes.byteLength > 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46; // %PDF
+    return isPdf && bytes.byteLength <= INVOICE_PDF_MAX_ATTACHMENT_BYTES ? bytes : null;
+  }
+  return null;
+}
+
+/** Vlak na het uitgeven kan de PDF nog in de maak zijn: een paar keer proberen. */
+async function fetchMolliePdfWithRetry(apiKey: string, pdfUrl: string | null, attempts: number): Promise<Uint8Array | null> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+    try {
+      const bytes = await fetchMolliePdf(apiKey, pdfUrl);
+      if (bytes) return bytes;
+    } catch (error) {
+      console.warn('PDF van Mollie ophalen mislukte', describeError(error));
+    }
+  }
+  return null;
+}
+
+/** De betaalregel voor de Mollie-factuur: de klant betaalt via de link van Mollie. */
+async function ensureMollieSalesInvoicePayment(input: { organizationId: string; invoiceId: string; userId: string | null; state: MollieSalesInvoiceState; amountCents: number; currency: string }): Promise<void> {
+  const { data: existing, error: lookupError } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .select('id,provider_checkout_url')
+    .eq('provider', 'mollie')
+    .eq('provider_payment_id', input.state.id)
+    .maybeSingle();
+  if (lookupError) throw lookupError;
+  if (existing) {
+    const row = existing as { id: string; provider_checkout_url: string | null };
+    if (!row.provider_checkout_url && input.state.paymentUrl) {
+      const { error } = await supabaseAdmin
+        .from('invoice_payment_records')
+        .update({ provider_checkout_url: input.state.paymentUrl, updated_at: new Date().toISOString() })
+        .eq('id', row.id);
+      if (error) console.warn('Betaallink van Mollie bewaren mislukte', error.message);
+    }
+    return;
+  }
+  const { error } = await supabaseAdmin.from('invoice_payment_records').insert({
+    organization_id: input.organizationId,
+    invoice_id: input.invoiceId,
+    provider: 'mollie',
+    provider_payment_id: input.state.id,
+    provider_checkout_url: input.state.paymentUrl,
+    idempotency_key: `invoice-${input.invoiceId}-mollie-sales-invoice`,
+    status: 'open',
+    amount_cents: input.amountCents,
+    currency: input.currency,
+    checkout_expires_at: null,
+    metadata: { source: 'mollie_sales_invoice', mollieInvoiceNumber: input.state.invoiceNumber },
+    created_by: input.userId,
+  });
+  if (error && (error as { code?: string }).code !== '23505') throw error;
+}
+
+/** Betaald (of geannuleerd/verlopen) bij Mollie -> de betaalregel; 'paid' zet de factuur op betaald en boekt. */
+async function applyMolliePaymentStatus(state: MollieSalesInvoiceState): Promise<boolean> {
+  const target = molliePaymentStatus(state.status);
+  if (!target) return false;
+  const { error } = await supabaseAdmin.rpc('update_invoice_payment_status', {
+    p_provider_payment_id: state.id,
+    p_status: target,
+    p_paid_at: target === 'paid' ? state.paidAt : null,
+    p_metadata: { source: 'mollie_sales_invoice', mollieStatus: state.status, mollieInvoiceNumber: state.invoiceNumber },
+  });
+  if (error) throwRpcError('update_invoice_payment_status', error);
+  return true;
+}
+
+/** Wat de frontend over de Mollie-factuur te zien krijgt (geen sleutels, geen PDF-URL). */
+function publicMollieState(state: MollieSalesInvoiceState) {
+  return { salesInvoiceId: state.id, invoiceNumber: state.invoiceNumber, status: state.status, eInvoiceStatus: state.eInvoiceStatus, paymentUrl: state.paymentUrl, paidAt: state.paidAt, dueAt: mollieDate(state.dueAt) };
+}
+
+/**
+ * De stand van een via Mollie verstuurde factuur ophalen en overnemen: het
+ * Mollie-nummer, de Peppol-aflevering, de betaallink en of hij betaald is. Maakt
+ * ook een onderbroken verzending af of ruimt hem op — dat alleen met schrijfrecht.
+ */
+async function syncMollieSalesInvoice(organizationId: string, invoiceId: string, options: { actorUserId: string | null; canWrite: boolean }) {
+  const delivery = (await loadMollieDeliveries(organizationId, invoiceId)).find((row) => row.status !== 'failed' && row.provider_email_id) ?? null;
+  if (!delivery?.provider_email_id) throw new WorkflowHttpError('Deze factuur is niet via Mollie verstuurd.', 404);
+  const salesInvoiceId = delivery.provider_email_id;
+  const orgKey = await resolveOrganizationMollieKey(organizationId);
+  if (!orgKey) throw new WorkflowHttpError('De Mollie-koppeling van deze organisatie ontbreekt, dus de stand bij Mollie kan niet worden opgehaald.', 409);
+
+  let result: MollieApiResult;
+  try {
+    result = await mollieApi(orgKey.apiKey, 'GET', salesInvoicePath(salesInvoiceId));
+  } catch (error) {
+    throw new WorkflowHttpError(`Mollie is niet bereikbaar: ${describeError(error)}`, 502);
+  }
+  if (result.status === 404 || result.status === 410) {
+    if (delivery.status === 'queued' && options.canWrite) {
+      await failInvoiceEmailSend(delivery.id, organizationId, options.actorUserId, 'Mollie kent deze factuur niet (meer); de verzending is afgebroken.');
+      return { mollie: null, recovered: 'abandoned' as const, pending: false };
+    }
+    throw new WorkflowHttpError('Mollie kent deze factuur niet (meer). Is hij in het Mollie-dashboard verwijderd?', 404);
+  }
+  if (!result.ok) throw new WorkflowHttpError(`Mollie gaf een fout: ${mollieErrorDetail(result)}`, 502);
+  const state = withMollieId(readMollieSalesInvoice(result.payload), salesInvoiceId);
+
+  let recovered: 'completed' | 'abandoned' | null = null;
+  let deliveryStatus = delivery.status;
+  if (delivery.status === 'queued') {
+    if (!options.canWrite) return { mollie: publicMollieState(state), recovered, pending: true };
+    if (state.status === 'draft') {
+      // Nooit uitgegeven. Pas als de poging duidelijk afgebroken is het concept opruimen.
+      if (Date.now() - Date.parse(delivery.created_at) < MOLLIE_STALE_ATTEMPT_MS) return { mollie: publicMollieState(state), recovered, pending: true };
+      await discardMollieDraft(orgKey.apiKey, salesInvoiceId);
+      await failInvoiceEmailSend(delivery.id, organizationId, options.actorUserId, 'De verzending via Mollie is afgebroken voordat de factuur werd uitgegeven; het concept bij Mollie is verwijderd.');
+      return { mollie: publicMollieState(state), recovered: 'abandoned' as const, pending: false };
+    }
+    // Wel uitgegeven, maar ResoFly maakte de verzending niet af: nu alsnog.
+    await recoverMollieIssue(organizationId, invoiceId, delivery, state, orgKey.apiKey, options.actorUserId);
+    recovered = 'completed';
+    deliveryStatus = 'sent';
+  }
+
+  await recordMollieDeliveryState(organizationId, { id: delivery.id, status: deliveryStatus, e_invoice_status: recovered ? null : delivery.e_invoice_status }, state, invoiceId);
+
+  // Betaald bij Mollie -> betaald in ResoFly. Een factuur die in ResoFly al op een
+  // andere manier is afgehandeld (handmatig betaald, geannuleerd) laten we staan:
+  // anders boekt ResoFly de betaling dubbel.
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  let paymentApplied = false;
+  if (!['paid', 'refunded', 'cancelled', 'void', 'written_off'].includes(invoice.status)) {
+    await ensureMollieSalesInvoicePayment({ organizationId, invoiceId, userId: options.actorUserId, state, amountCents: state.totalCents ?? calculateTotals(invoice.lines).totalCents, currency: invoice.currency || 'EUR' });
+    paymentApplied = await applyMolliePaymentStatus(state);
+  }
+  return { mollie: publicMollieState(state), recovered, pending: false, paymentApplied };
+}
+
+/** Een onderbroken verzending afmaken: Mollie gaf de factuur uit, ResoFly legde dat nog niet vast. */
+async function recoverMollieIssue(organizationId: string, invoiceId: string, delivery: MollieDeliveryRow, state: MollieSalesInvoiceState, apiKey: string, actorUserId: string | null): Promise<void> {
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  const [client, project, quote, company] = await Promise.all([
+    loadClient(organizationId, invoice.client_id),
+    invoice.project_id ? loadProject(organizationId, invoice.project_id) : Promise.resolve(null),
+    invoice.quote_id ? loadQuote(organizationId, invoice.quote_id) : Promise.resolve(null),
+    loadCompanySettings(organizationId),
+  ]);
+  await finalizeMollieIssue({
+    organizationId, userId: actorUserId, invoice, client, project, quote, company, deliveryId: delivery.id, apiKey, state,
+    recipientEmail: delivery.recipient_email, totalCents: state.totalCents ?? calculateTotals(invoice.lines).totalCents,
+    currency: String(invoice.currency || 'EUR').toUpperCase(), publicUrl: delivery.public_url || '',
+    issueDate: amsterdamDate(new Date(delivery.created_at)), dueDate: null,
+  });
+}
+
+/**
+ * De PDF van de Mollie-factuur, zoals de klant hem kreeg. Lukt dat niet (Mollie
+ * onbereikbaar, koppeling weg), dan de bewaarde snapshot.
+ */
+async function downloadMollieInvoicePdf(organizationId: string, invoiceId: string) {
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  const delivery = (await loadMollieDeliveries(organizationId, invoiceId)).find((row) => row.status !== 'failed' && row.provider_email_id) ?? null;
+  if (!delivery?.provider_email_id) throw new WorkflowHttpError('Deze factuur is niet via Mollie verstuurd.', 404);
+  const orgKey = await resolveOrganizationMollieKey(organizationId);
+  if (orgKey) {
+    // De PDF-link kan verlopen; daarom eerst de verse link bij Mollie ophalen.
+    const state = await currentMollieState(orgKey.apiKey, delivery.provider_email_id, { _links: delivery.external_pdf_url ? { pdfLink: { href: delivery.external_pdf_url } } : {} });
+    const bytes = await fetchMolliePdfWithRetry(orgKey.apiKey, state.pdfUrl, 2);
+    if (bytes) {
+      const pdf = await pdfAttachmentFromBytes(molliePdfFileName(invoice.number, state.invoiceNumber ?? delivery.external_invoice_number), bytes);
+      return { fileName: pdf.fileName, mimeType: pdf.mimeType, base64: pdf.base64, sizeBytes: pdf.sizeBytes, sha256: pdf.sha256, source: 'mollie' as const };
+    }
+  }
+  const snapshot = await loadInvoicePdfSnapshot(organizationId, invoiceId);
+  return { ...snapshot, source: 'snapshot' as const };
+}
+
+/**
+ * Statusronde: de openstaande Mollie-facturen bijwerken (Peppol-aflevering,
+ * betaald). Draait vóór de herinneringen, zodat een bij Mollie betaalde factuur
+ * geen herinnering krijgt, en los via ?cron=mollie-sales-invoices.
+ */
+async function syncOpenMollieSalesInvoices(): Promise<{ checked: number; updated: number; failed: number }> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .select('organization_id,invoice_id,external_status,e_invoice_status')
+    .eq('delivery_channel', 'e_invoice_mollie')
+    .in('status', ['queued', 'sent', 'delivered'])
+    .not('provider_email_id', 'is', null)
+    .order('external_synced_at', { ascending: true, nullsFirst: true })
+    .limit(MOLLIE_SYNC_BATCH_LIMIT * 4);
+  if (error) throwSupabaseError('Mollie-facturen opzoeken', error);
+  const seen = new Set<string>();
+  const due = ((data ?? []) as Array<{ organization_id: string; invoice_id: string; external_status: string | null; e_invoice_status: string | null }>)
+    .filter((row) => !mollieSalesInvoiceSettled(row.external_status) || row.e_invoice_status === 'issuing')
+    .filter((row) => (seen.has(row.invoice_id) ? false : (seen.add(row.invoice_id), true)))
+    .slice(0, MOLLIE_SYNC_BATCH_LIMIT);
+
+  const actors = new Map<string, string | null>();
+  let updated = 0;
+  let failed = 0;
+  for (const row of due) {
+    try {
+      if (!actors.has(row.organization_id)) actors.set(row.organization_id, await resolveOrgActorUserId(row.organization_id));
+      await syncMollieSalesInvoice(row.organization_id, row.invoice_id, { actorUserId: actors.get(row.organization_id) ?? null, canWrite: true });
+      updated += 1;
+    } catch (syncError) {
+      failed += 1;
+      console.warn('Mollie-factuur bijwerken mislukte', row.invoice_id, describeError(syncError));
+    }
+  }
+  return { checked: due.length, updated, failed };
+}
+
+async function handleMollieSalesInvoiceCron(req: Request): Promise<Response> {
+  if (!INVOICE_REMINDER_CRON_SECRET) return json(req, { ok: false, error: 'INVOICE_REMINDER_CRON_SECRET ontbreekt in de Edge Function secrets.' }, 500);
+  if (!timingSafeEqual(req.headers.get('x-cron-secret') || '', INVOICE_REMINDER_CRON_SECRET)) return json(req, { ok: false, error: 'Invalid cron secret' }, 401);
+  try {
+    return json(req, { ok: true, ...(await syncOpenMollieSalesInvoices()) });
+  } catch (error) {
+    console.error('Mollie sales invoice cron error', describeError(error), serializeError(error));
+    return json(req, { ok: false, error: describeError(error) }, 500);
+  }
 }
 
 // Per-organisatie aanpasbare e-mailtekst (onderwerp/aanhef/afsluiting/knoptekst).
@@ -2279,11 +3260,11 @@ async function beginInvoiceEmailSend(input: { invoiceId: string; organizationId:
   if (!payload?.deliveryId) throw new WorkflowHttpError('Verzendpoging kon niet worden voorbereid.', 500);
   return payload as { deliveryId: string; invoiceId?: string };
 }
-async function completeInvoiceEmailSend(deliveryId: string, organizationId: string, userId: string, providerEmailId: string): Promise<{ delivery?: unknown; invoice?: unknown; version?: unknown }> {
+async function completeInvoiceEmailSend(deliveryId: string, organizationId: string, userId: string | null, providerEmailId: string): Promise<{ delivery?: unknown; invoice?: unknown; version?: unknown }> {
   const { data, error } = await supabaseAdmin.rpc('complete_invoice_email_send', { p_delivery_id: deliveryId, p_organization_id: organizationId, p_actor_user_id: userId, p_provider_email_id: providerEmailId });
   if (error) throwRpcError('complete_invoice_email_send', error); return (data ?? {}) as { delivery?: unknown; invoice?: unknown; version?: unknown };
 }
-async function failInvoiceEmailSend(deliveryId: string, organizationId: string, userId: string, errorMessage: string): Promise<void> {
+async function failInvoiceEmailSend(deliveryId: string, organizationId: string, userId: string | null, errorMessage: string): Promise<void> {
   const { error } = await supabaseAdmin.rpc('fail_invoice_email_send', { p_delivery_id: deliveryId, p_organization_id: organizationId, p_actor_user_id: userId, p_error_message: errorMessage });
   if (error) console.warn('Invoice email send failure registration failed', error.message);
 }
@@ -2505,9 +3486,14 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   drawPdfText(page, 'Totaal', 365, y, bold, 13); drawPdfText(page, formatEuro(totals.total), 547, y, bold, 13, { align: 'right' });
   if (company?.iban) { y -= 30; drawPdfText(page, `Betalen op IBAN: ${company.iban}`, 365, y, regular, 9, { color: muted }); }
   if (invoice.notes) { y -= 42; drawSectionTitle(page, 'Notities', 48, y, bold, accent, muted); y -= 24; y = drawWrappedPdfText(page, invoice.notes, 48, y, 310, regular, 9, 12, muted); }
-  y = Math.max(94, y - 28);
-  drawPdfText(page, paymentUrl ? 'Bekijk en betaal deze factuur online:' : 'Bekijk deze factuur online:', 48, y, bold, 9, { color: muted }); y -= 13;
-  drawWrappedPdfText(page, paymentUrl || publicUrl, 48, y, 500, regular, 8, 11, muted);
+  // Zonder publieke link (een e-factuur die vóór het versturen wordt
+  // gedownload) is er niets online te bekijken: dan geen linkregel.
+  const onlineUrl = paymentUrl || publicUrl;
+  if (onlineUrl) {
+    y = Math.max(94, y - 28);
+    drawPdfText(page, paymentUrl ? 'Bekijk en betaal deze factuur online:' : 'Bekijk deze factuur online:', 48, y, bold, 9, { color: muted }); y -= 13;
+    drawWrappedPdfText(page, onlineUrl, 48, y, 500, regular, 8, 11, muted);
+  }
   drawPdfFooter(page, regular, company);
   const bytes = await pdfDoc.save();
   const sha256 = await sha256HexBytes(bytes);
@@ -2515,7 +3501,7 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   return { fileName, mimeType: 'application/pdf', bytes, base64: bytesToBase64(bytes), sizeBytes: bytes.byteLength, sha256 };
 }
 
-async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; date: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[]; reason: string | null }): Promise<InvoicePdfAttachment> {
+async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; date: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[]; reason: string | null; invoiceReference?: string }): Promise<InvoicePdfAttachment> {
   const { creditNoteNumber, date, invoice, client, company, subtotal, vat, total, lines, reason } = input;
   const pdfDoc = await PDFDocument.create();
   const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -2534,7 +3520,7 @@ async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; 
   for (const line of companyAddressLines(company).slice(0, 8)) { drawPdfText(page, line, 48, y, regular, 9, { color: muted }); y -= 12; }
   let rightY = 742;
   drawPdfText(page, `Datum: ${formatDateNl(date)}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14;
-  drawPdfText(page, `Creditering van factuur: ${invoice.number}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14;
+  drawPdfText(page, `Creditering van factuur: ${input.invoiceReference || invoice.number}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14;
   if (invoice.date) drawPdfText(page, `Factuurdatum: ${formatDateNl(invoice.date)}`, 547, rightY, regular, 9, { align: 'right', color: muted });
 
   y = 620;

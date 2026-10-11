@@ -96,6 +96,8 @@ export type InvoiceSentEmailInput = {
   recipientName?: string | null;
   expiresAt: string;
   content?: EmailTemplateContent | null;
+  /** De factuur gaat ook als e-factuur (UBL met de PDF erin) in de bijlage mee. */
+  eInvoice?: boolean;
 };
 
 export type InvoiceReminderEmailInput = {
@@ -218,6 +220,8 @@ export type CreditNoteSentEmailInput = {
   } | null;
   recipientName?: string | null;
   content?: EmailTemplateContent | null;
+  /** De creditfactuur gaat ook als e-creditnota (UBL met de PDF erin) in de bijlage mee. */
+  eInvoice?: boolean;
 };
 
 type ContractEmailCompany = {

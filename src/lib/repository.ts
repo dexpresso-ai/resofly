@@ -3609,6 +3609,26 @@ export async function downloadQuotePdfSnapshot(organizationId: UUID, quoteId: UU
  * regenerates the PDF, so the file always matches what was sent.
  */
 export async function downloadInvoicePdfSnapshot(organizationId: UUID, invoiceId: UUID): Promise<void> {
+  const { blob, fileName } = await loadInvoicePdfSnapshot(organizationId, invoiceId);
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+}
+
+/**
+ * De opgeslagen PDF-snapshot van een factuur als Blob — precies de PDF die de
+ * klant kreeg, ook als hij als e-factuur ging (dan zit dezelfde PDF in de UBL).
+ * Voor het tonen in de app én voor de download hierboven.
+ */
+export async function loadInvoicePdfSnapshot(organizationId: UUID, invoiceId: UUID): Promise<{ blob: Blob; fileName: string }> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
     body: {
       action: 'downloadInvoicePdf',
@@ -3616,8 +3636,8 @@ export async function downloadInvoicePdfSnapshot(organizationId: UUID, invoiceId
       invoiceId,
     },
   });
-  if (error) throw error;
-  if (!data?.ok) throw new Error(data?.error || 'Factuur-PDF downloaden mislukt');
+  if (error) await throwFunctionError(error, 'Factuur-PDF ophalen mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'Factuur-PDF ophalen mislukt');
 
   const pdf = data.pdf as { fileName?: string; mimeType?: string; base64?: string } | undefined;
   if (!pdf?.base64) throw new Error('Geen PDF-snapshot beschikbaar voor deze factuur.');
@@ -3625,19 +3645,66 @@ export async function downloadInvoicePdfSnapshot(organizationId: UUID, invoiceId
   const binary = atob(pdf.base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes], { type: pdf.mimeType || 'application/pdf' });
+  return { blob: new Blob([bytes], { type: pdf.mimeType || 'application/pdf' }), fileName: pdf.fileName || `factuur-${invoiceId}.pdf` };
+}
 
+/**
+ * De PDF van een via Mollie verstuurde factuur, zoals de klant hem kreeg: live
+ * bij Mollie opgehaald, of — als Mollie onbereikbaar is — de bewaarde snapshot.
+ */
+export async function loadMollieInvoicePdf(organizationId: UUID, invoiceId: UUID): Promise<{ blob: Blob; fileName: string; source: 'mollie' | 'snapshot' }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'downloadMollieInvoicePdf', organizationId, invoiceId },
+  });
+  if (error) await throwFunctionError(error, 'De PDF van Mollie ophalen mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'De PDF van Mollie ophalen mislukt');
+  const pdf = data.pdf as { fileName?: string; mimeType?: string; base64?: string; source?: string } | undefined;
+  if (!pdf?.base64) throw new Error('Er kwam geen PDF terug.');
+  const binary = atob(pdf.base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return {
+    blob: new Blob([bytes], { type: pdf.mimeType || 'application/pdf' }),
+    fileName: pdf.fileName || `factuur-${invoiceId}.pdf`,
+    source: pdf.source === 'mollie' ? 'mollie' : 'snapshot',
+  };
+}
+
+export async function downloadMollieInvoicePdf(organizationId: UUID, invoiceId: UUID): Promise<void> {
+  const { blob, fileName } = await loadMollieInvoicePdf(organizationId, invoiceId);
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement('a');
     a.href = url;
-    a.download = pdf.fileName || `factuur-${invoiceId}.pdf`;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     a.remove();
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
+}
+
+export type MollieSalesInvoiceSync = {
+  mollie: { salesInvoiceId: string; invoiceNumber: string | null; status: string | null; eInvoiceStatus: 'issuing' | 'issued' | 'failed' | null; paymentUrl: string | null; paidAt: string | null; dueAt: string | null } | null;
+  /** Een onderbroken verzending afgemaakt ('completed') of opgeruimd ('abandoned'). */
+  recovered: 'completed' | 'abandoned' | null;
+  /** De verzending loopt nog; later opnieuw kijken. */
+  pending: boolean;
+  paymentApplied?: boolean;
+};
+
+/**
+ * De stand bij Mollie ophalen en overnemen: Mollie-nummer, Peppol-aflevering,
+ * betaallink en of hij betaald is. Maakt ook een onderbroken verzending af.
+ */
+export async function syncMollieSalesInvoice(organizationId: UUID, invoiceId: UUID): Promise<MollieSalesInvoiceSync> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'syncMollieSalesInvoice', organizationId, invoiceId },
+  });
+  if (error) await throwFunctionError(error, 'De stand bij Mollie ophalen mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'De stand bij Mollie ophalen mislukt');
+  return data as MollieSalesInvoiceSync;
 }
 
 
@@ -3702,7 +3769,22 @@ export async function convertAcceptedQuoteToInvoice(organizationId: UUID, quoteI
   return row as Invoice;
 }
 
-export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string; includePaymentLink?: boolean } = {}): Promise<{ publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null; ubl?: { attached: boolean; fileName?: string; reason?: string | null; warnings?: string[] } }> {
+export type InvoiceSendResult = {
+  publicUrl?: string;
+  providerEmailId?: string;
+  recipientEmail?: string;
+  /** 'e_invoice_email' = als e-factuur (UBL met de PDF erin) verstuurd; 'e_invoice_mollie' = via Mollie over Peppol. */
+  deliveryChannel?: 'email' | 'e_invoice_email' | 'e_invoice_mollie';
+  paymentLinkIncluded?: boolean;
+  paymentLinkError?: string | null;
+  ubl?: { attached: boolean; fileName?: string; reason?: string | null; warnings?: string[]; pdfEmbedded?: boolean };
+  /** Alleen via Mollie: Mollies nummer en status, en of de bewaarde PDF die van Mollie is. */
+  mollie?: { salesInvoiceId: string; invoiceNumber: string | null; status: string | null; eInvoiceStatus: string | null; paymentUrl: string | null; pdfFromMollie: boolean };
+  /** Niet-blokkerende meldingen, zoals een afgeronde betaaltermijn bij Mollie. */
+  warnings?: string[];
+};
+
+export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string; includePaymentLink?: boolean } = {}): Promise<InvoiceSendResult> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
     body: {
       action: 'sendInvoiceEmail',
@@ -3711,9 +3793,11 @@ export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId:
       ...input,
     },
   });
-  if (error) throw error;
+  // De servermelding doorgeven: bij een klant met e-facturatie zegt die precies
+  // wat er voor de e-factuur nog ontbreekt (KVK, adres, land, …).
+  if (error) await throwFunctionError(error, 'Factuur verzenden mislukt.');
   if (!data?.ok) throw new Error(data?.error || 'Factuur verzenden mislukt');
-  return data as { publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null; ubl?: { attached: boolean; fileName?: string; reason?: string | null; warnings?: string[] } };
+  return data as InvoiceSendResult;
 }
 
 /**
@@ -4804,13 +4888,13 @@ export async function sendCreditNoteEmail(
   creditNoteId: UUID,
   recipientEmail?: string,
   options: { expectedRecipientEmail?: string } = {},
-): Promise<{ providerEmailId: string; recipientEmail: string }> {
+): Promise<{ providerEmailId: string; recipientEmail: string; eInvoice?: boolean }> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
     body: { action: 'sendCreditNoteEmail', organizationId, creditNoteId, recipientEmail, expectedRecipientEmail: options.expectedRecipientEmail },
   });
-  if (error) throw error;
+  if (error) await throwFunctionError(error, 'Creditfactuur mailen mislukt.');
   if (!data?.ok) throw new Error(data?.error || 'Creditfactuur mailen mislukt');
-  return data as { providerEmailId: string; recipientEmail: string };
+  return data as { providerEmailId: string; recipientEmail: string; eInvoice?: boolean };
 }
 
 /**

@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
-import { AlertTriangle, Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RotateCcw, ShieldCheck, Send, XCircle } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Send, XCircle } from 'lucide-react';
 import type { AppData, CreditNote, DunningNotice, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
-import { FinanceDocPreview } from '../components/FinanceDocPreview';
+import { FinanceDocPreview, type SentPdfSource } from '../components/FinanceDocPreview';
 import { Button, Select } from '../components/Ui';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import type { FilterField } from '../components/SearchFilterPanel';
@@ -10,6 +10,8 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF } from '../lib/pdf';
 import { safeCheckoutUrl } from '../lib/safeUrl';
+import { clientEInvoiceChannel, invoiceRecipientFor, latestEInvoiceDelivery, mollieNeedsSync, mollieStatusLabel, peppolStatusLabel } from '../lib/eInvoicing';
+import { loadInvoicePdfSnapshot, loadMollieInvoicePdf } from '../lib/repository';
 
 export type RefundInput = { amountCents: number; reason: string; createCreditNote: boolean; idempotencyKey: string; kind: 'manual' | 'mollie' };
 
@@ -56,8 +58,8 @@ export function Quotes({
   />;
 }
 
-export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onDownloadUbl, onRefund, onDownloadCreditNote, onDownloadCreditNoteUbl, onEmailCreditNote, onPostCreditNote, onPostToLedger, onBookAllUnbooked, onProposeDunning, onSendDunning, onCancelDunning }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onDownloadUbl?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostCreditNote?: (creditNote: CreditNote) => void; onPostToLedger?: (i: Invoice) => void; onBookAllUnbooked?: () => void; onProposeDunning?: (i: Invoice) => void; onSendDunning?: (n: DunningNotice) => void; onCancelDunning?: (n: DunningNotice) => void }) {
-  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onDownloadInvoiceUbl={onDownloadUbl} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onDownloadCreditNoteUbl={onDownloadCreditNoteUbl} onEmailCreditNote={onEmailCreditNote} onPostCreditNote={onPostCreditNote} onPostInvoiceToLedger={onPostToLedger} onBookAllUnbooked={onBookAllUnbooked} onProposeDunning={onProposeDunning} onSendDunning={onSendDunning} onCancelDunning={onCancelDunning}/>;
+export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onDownloadUbl, onRefund, onDownloadCreditNote, onDownloadCreditNoteUbl, onEmailCreditNote, onPostCreditNote, onPostToLedger, onBookAllUnbooked, onProposeDunning, onSendDunning, onCancelDunning, onSyncMollie, onDownloadMolliePdf }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onDownloadUbl?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostCreditNote?: (creditNote: CreditNote) => void; onPostToLedger?: (i: Invoice) => void; onBookAllUnbooked?: () => void; onProposeDunning?: (i: Invoice) => void; onSendDunning?: (n: DunningNotice) => void; onCancelDunning?: (n: DunningNotice) => void; onSyncMollie?: (i: Invoice, options?: { silent?: boolean }) => Promise<void>; onDownloadMolliePdf?: (i: Invoice) => void }) {
+  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onDownloadInvoiceUbl={onDownloadUbl} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onDownloadCreditNoteUbl={onDownloadCreditNoteUbl} onEmailCreditNote={onEmailCreditNote} onPostCreditNote={onPostCreditNote} onPostInvoiceToLedger={onPostToLedger} onBookAllUnbooked={onBookAllUnbooked} onProposeDunning={onProposeDunning} onSendDunning={onSendDunning} onCancelDunning={onCancelDunning} onSyncMollie={onSyncMollie} onDownloadMolliePdf={onDownloadMolliePdf}/>;
 }
 
 function FinanceList<T extends Quote | Invoice>({
@@ -90,6 +92,8 @@ function FinanceList<T extends Quote | Invoice>({
   onProposeDunning,
   onSendDunning,
   onCancelDunning,
+  onSyncMollie,
+  onDownloadMolliePdf,
 }: {
   kind: 'quote' | 'invoice';
   title: string;
@@ -120,6 +124,8 @@ function FinanceList<T extends Quote | Invoice>({
   onProposeDunning?: (i: Invoice) => void;
   onSendDunning?: (n: DunningNotice) => void;
   onCancelDunning?: (n: DunningNotice) => void;
+  onSyncMollie?: (invoice: Invoice, options?: { silent?: boolean }) => Promise<void>;
+  onDownloadMolliePdf?: (invoice: Invoice) => void;
 }) {
   if (kind === 'quote') {
     return <QuoteTable
@@ -162,6 +168,8 @@ function FinanceList<T extends Quote | Invoice>({
     onProposeDunning={onProposeDunning}
     onSendDunning={onSendDunning}
     onCancelDunning={onCancelDunning}
+    onSyncMollie={onSyncMollie}
+    onDownloadMolliePdf={onDownloadMolliePdf}
   />;
 }
 
@@ -346,7 +354,7 @@ function buildFinanceSearchText<T extends Quote | Invoice>(kind: FinanceKind, do
   const linkedQuote = kind === 'invoice' ? data.quotes.find(item => item.id === (doc as Invoice).quote_id) ?? null : null;
   const emailDeliveryText = kind === 'quote'
     ? data.quoteEmailDeliveries.filter(delivery => delivery.quote_id === doc.id).map(delivery => `${delivery.recipient_email} ${delivery.recipient_name ?? ''} ${delivery.subject} ${emailStatusLabel(delivery.status)} ${delivery.attachment_file_name ?? ''}`).join(' ')
-    : data.invoiceEmailDeliveries.filter(delivery => delivery.invoice_id === doc.id).map(delivery => `${delivery.recipient_email} ${delivery.recipient_name ?? ''} ${delivery.subject} ${emailStatusLabel(delivery.status)} ${delivery.attachment_file_name ?? ''}`).join(' ');
+    : data.invoiceEmailDeliveries.filter(delivery => delivery.invoice_id === doc.id).map(delivery => `${delivery.recipient_email} ${delivery.recipient_name ?? ''} ${delivery.subject} ${emailStatusLabel(delivery.status)} ${delivery.attachment_file_name ?? ''} ${delivery.delivery_channel === 'e_invoice_email' ? `e-factuur ubl ${delivery.e_invoice_file_name ?? ''}` : ''} ${delivery.delivery_channel === 'e_invoice_mollie' ? `e-factuur mollie peppol ${delivery.external_invoice_number ?? ''}` : ''}`).join(' ');
   const invoicePaymentText = kind === 'invoice'
     ? data.invoicePaymentRecords.filter(payment => payment.invoice_id === doc.id).map(payment => `${paymentStatusLabel(payment.status)} ${payment.provider_payment_id ?? ''} ${payment.currency} ${euro(payment.amount_cents / 100)}`).join(' ')
     : '';
@@ -553,6 +561,8 @@ function InvoiceTable({
   onProposeDunning,
   onSendDunning,
   onCancelDunning,
+  onSyncMollie,
+  onDownloadMolliePdf,
 }: {
   title: string;
   invoices: Invoice[];
@@ -576,6 +586,8 @@ function InvoiceTable({
   onProposeDunning?: (invoice: Invoice) => void;
   onSendDunning?: (notice: DunningNotice) => void;
   onCancelDunning?: (notice: DunningNotice) => void;
+  onSyncMollie?: (invoice: Invoice, options?: { silent?: boolean }) => Promise<void>;
+  onDownloadMolliePdf?: (invoice: Invoice) => void;
 }) {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [searchFilters, setSearchFilters] = useState<FinanceSearchFilters>(() => createDefaultFinanceSearchFilters());
@@ -588,6 +600,14 @@ function InvoiceTable({
   const unbookedInvoices = useMemo(
     () => invoices.filter(i => ['sent', 'accepted', 'paid', 'overdue'].includes(i.status) && !i.journal_entry_id),
     [invoices]);
+  // Per factuur de laatste verzending als e-factuur (de lijst staat nieuwste-eerst).
+  const eInvoiceDeliveries = useMemo(() => {
+    const byInvoice = new Map<string, InvoiceEmailDelivery>();
+    for (const delivery of data.invoiceEmailDeliveries) {
+      if ((delivery.delivery_channel === 'e_invoice_email' || delivery.delivery_channel === 'e_invoice_mollie') && delivery.status !== 'failed' && !byInvoice.has(delivery.invoice_id)) byInvoice.set(delivery.invoice_id, delivery);
+    }
+    return byInvoice;
+  }, [data.invoiceEmailDeliveries]);
 
   return <>
     <div className="fin-header quote-table-header">
@@ -624,7 +644,8 @@ function InvoiceTable({
               return <tr key={invoice.id} className={`quote-table-row st-${invoice.status}`} onClick={() => setSelectedInvoiceId(invoice.id)} tabIndex={0} onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedInvoiceId(invoice.id); }
               }}>
-                <td data-label="Factuur"><strong>{invoice.number}</strong></td>
+                {/* Het e-factuurlabel onder het nummer: in de statuskolom maakte het de tabel breder. */}
+                <td data-label="Factuur"><strong>{invoice.number}</strong><EInvoicePill delivery={eInvoiceDeliveries.get(invoice.id) ?? null} upcoming={clientEInvoiceChannel(client) !== null && !invoiceHasStoredPdf(invoice)} upcomingVia={clientEInvoiceChannel(client)} /></td>
                 <td data-label="Klant"><span>{client?.name ?? 'Geen klant'}</span></td>
                 <td data-label="Project"><span>{project?.name ?? 'Geen project'}</span></td>
                 <td data-label="Offerte"><span>{quote?.number ?? '—'}</span></td>
@@ -670,6 +691,8 @@ function InvoiceTable({
       onProposeDunning={onProposeDunning}
       onSendDunning={onSendDunning}
       onCancelDunning={onCancelDunning}
+      onSyncMollie={onSyncMollie}
+      onDownloadMolliePdf={onDownloadMolliePdf}
     />}
   </>;
 }
@@ -773,6 +796,8 @@ function InvoiceDetailModal({
   onProposeDunning,
   onSendDunning,
   onCancelDunning,
+  onSyncMollie,
+  onDownloadMolliePdf,
 }: {
   invoice: Invoice;
   data: AppData;
@@ -794,6 +819,8 @@ function InvoiceDetailModal({
   onProposeDunning?: (invoice: Invoice) => void;
   onSendDunning?: (notice: DunningNotice) => void;
   onCancelDunning?: (notice: DunningNotice) => void;
+  onSyncMollie?: (invoice: Invoice, options?: { silent?: boolean }) => Promise<void>;
+  onDownloadMolliePdf?: (invoice: Invoice) => void;
 }) {
   const client = data.clients.find(c => c.id === invoice.client_id) ?? null;
   const project = data.projects.find(p => p.id === invoice.project_id) ?? null;
@@ -806,6 +833,33 @@ function InvoiceDetailModal({
   const payments = data.invoicePaymentRecords.filter(payment => payment.invoice_id === invoice.id);
   const latestPayment = payments[0] ?? null;
   const versions = data.invoiceVersions.filter(version => version.invoice_id === invoice.id);
+  // E-facturatie: ging hij als e-factuur, of gaat hij er een worden?
+  const eInvoiceDelivery = latestEInvoiceDelivery(deliveries, invoice.id);
+  const eInvoiceChannel = clientEInvoiceChannel(client);
+  const eInvoiceClient = eInvoiceChannel !== null;
+  // Via Mollie: Mollie gaf hem uit (eigen nummer), over Peppol, en int de betaling.
+  const mollieDelivery = eInvoiceDelivery?.delivery_channel === 'e_invoice_mollie' ? eInvoiceDelivery : null;
+  // De verzonden PDF tonen zodra er een snapshot is — dezelfde PDF die in de
+  // e-factuur zit. Via Mollie: de PDF van Mollie, zoals de klant hem kreeg.
+  // Zonder snapshot (oude facturen) blijft het live voorbeeld.
+  const snapshotVersion = versions.find(version => Boolean(version.pdf_file_name) && Boolean(version.pdf_storage_key || version.pdf_data_base64)) ?? null;
+  const sentPdf: SentPdfSource | null = mollieDelivery && mollieDelivery.status !== 'queued' ? {
+    key: `${mollieDelivery.id}:${mollieDelivery.external_invoice_number ?? ''}`,
+    label: `PDF van Mollie${mollieDelivery.external_invoice_number ? ` · ${mollieDelivery.external_invoice_number}` : ''}`,
+    load: () => loadMollieInvoicePdf(invoice.organization_id, invoice.id).then(result => result.blob),
+  } : snapshotVersion ? {
+    key: snapshotVersion.id,
+    label: eInvoiceDelivery ? 'Verzonden PDF · zit ook in de e-factuur' : 'Verzonden PDF',
+    load: () => loadInvoicePdfSnapshot(invoice.organization_id, invoice.id).then(result => result.blob),
+  } : null;
+  // De stand bij Mollie stil verversen bij het openen (hooguit eens per tien
+  // minuten per factuur; betaald + afgeleverd = klaar).
+  const mollieSyncedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onSyncMollie || !mollieNeedsSync(mollieDelivery) || mollieSyncedFor.current === invoice.id) return;
+    mollieSyncedFor.current = invoice.id;
+    void onSyncMollie(invoice, { silent: true });
+  }, [invoice, mollieDelivery, onSyncMollie]);
   const refunds = data.invoiceRefunds.filter(refund => refund.invoice_id === invoice.id);
   const creditNotes = data.creditNotes.filter(creditNote => creditNote.invoice_id === invoice.id);
   const chargebacks = data.invoiceChargebacks.filter(chargeback => chargeback.invoice_id === invoice.id);
@@ -819,10 +873,12 @@ function InvoiceDetailModal({
     .reduce((sum, refund) => sum + refund.amount_cents, 0);
   // Mollie-terugbetaling is alleen mogelijk als de factuur via Mollie is betaald en er
   // nog terugbetaalbaar bedrag op die betaling staat.
+  // Een Mollie-factuur (invoice_…) is geen betaling: die betaal je terug via Mollie zelf.
   const mollieRefundable = payments.some(payment =>
     payment.provider === 'mollie'
     && (payment.status === 'paid' || payment.status === 'refunded')
     && !!payment.provider_payment_id
+    && !payment.provider_payment_id.startsWith('invoice_')
     && ((payment.amount_cents || 0) - (payment.amount_refunded_cents || 0)) > 0);
   const [showRefund, setShowRefund] = useState(false);
 
@@ -843,7 +899,8 @@ function InvoiceDetailModal({
         <QuoteMetric label="BTW" value={euro(amounts.vat)} />
         <QuoteMetric label="Totaal" value={euro(amounts.total)} strong />
         <QuoteMetric label="Gekoppelde offerte" value={quote?.number ?? 'Geen'} />
-        <QuoteMetric label="Mailstatus" value={latestDelivery?.status ? emailStatusLabel(latestDelivery.status) : (invoice.last_email_delivery_status ? emailStatusLabel(invoice.last_email_delivery_status) : 'Nog niet verstuurd')} />
+        <QuoteMetric label={mollieDelivery ? 'Peppol' : 'Mailstatus'} value={mollieDelivery ? (mollieDelivery.status === 'queued' ? 'Bezig' : upperFirst(peppolStatusLabel(mollieDelivery.e_invoice_status))) : latestDelivery?.status ? deliveryStatusLabel(latestDelivery) : (invoice.last_email_delivery_status ? emailStatusLabel(invoice.last_email_delivery_status) : 'Nog niet verstuurd')} />
+        <QuoteMetric label="Verzendwijze" value={mollieDelivery || (!eInvoiceDelivery && !latestDelivery && eInvoiceChannel === 'mollie') ? 'Via Mollie' : eInvoiceDelivery || (!latestDelivery && eInvoiceClient) ? 'E-factuur' : 'PDF per mail'} />
         <QuoteMetric label="Betaalstatus" value={latestPayment ? paymentStatusLabel(latestPayment.status) : statusLabel(invoice.status)} />
         {refundedAmount > 0 && <QuoteMetric label="Terugbetaald" value={euro(refundedAmount)} />}
         {chargedBackAmount > 0 && <QuoteMetric label="Teruggeboekt" value={euro(chargedBackAmount)} />}
@@ -855,8 +912,9 @@ function InvoiceDetailModal({
 
       <section className="quote-detail-section">
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
-        <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} />
-        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} />
+        <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} eInvoiceDelivery={eInvoiceDelivery} upcomingEInvoiceTo={eInvoiceClient && !invoiceHasStoredPdf(invoice) ? invoiceRecipientFor(client) : null} upcomingVia={eInvoiceChannel} />
+        {mollieDelivery && <MollieEInvoicePanel invoice={invoice} delivery={mollieDelivery} onSync={onSyncMollie} onDownloadPdf={onDownloadMolliePdf} />}
+        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} />
         {showRefund && onRefund && <RefundModal invoice={invoice} mollieRefundable={mollieRefundable} inFlightCents={inFlightCents} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
       </section>
 
@@ -872,7 +930,7 @@ function InvoiceDetailModal({
 
       <section className="quote-detail-split">
         <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Regels</span><strong>Factuurbedragen</strong></div></div><FinanceLineTable lines={invoice.lines} emptyText="Geen factuurregels." /></div>
-        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Verzendhistorie</span><strong>Resend en PDF</strong></div></div><InvoiceDeliveries deliveries={deliveries} /></div>
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Verzendhistorie</span><strong>Resend, PDF en e-factuur</strong></div></div><InvoiceDeliveries deliveries={deliveries} /></div>
       </section>
 
       <section className="quote-detail-split">
@@ -893,7 +951,7 @@ function InvoiceDetailModal({
       <section className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Audit-timeline</span><strong>Alle factuur-events</strong></div></div><InvoiceTimeline events={events} emptyText="Nog geen factuur-events." /></section>
       </div>
       <div className="finance-preview-pane">
-        <FinanceDocPreview doc={invoice} kind="invoice" client={client} company={data.companySettings} title="Factuur-voorbeeld" />
+        <FinanceDocPreview doc={invoice} kind="invoice" client={client} company={data.companySettings} title="Factuur-voorbeeld" sentPdf={sentPdf} />
       </div>
     </div>
   </Modal>;
@@ -1010,21 +1068,28 @@ function quoteHasStoredPdf(quote: Quote): boolean {
   return ['sent', 'accepted', 'rejected', 'expired'].includes(quote.status) || Boolean(quote.sent_at);
 }
 
-function InvoiceStatusStrip({ invoice, delivery, payment }: { invoice: Invoice; delivery: InvoiceEmailDelivery | null; payment: InvoicePaymentRecord | null }) {
+function InvoiceStatusStrip({ invoice, delivery, payment, eInvoiceDelivery = null, upcomingEInvoiceTo = null, upcomingVia = null }: { invoice: Invoice; delivery: InvoiceEmailDelivery | null; payment: InvoicePaymentRecord | null; eInvoiceDelivery?: InvoiceEmailDelivery | null; upcomingEInvoiceTo?: string | null; upcomingVia?: 'email' | 'mollie' | null }) {
   return <div className="quote-email-status invoice-status-strip">
-    <Mail size={14}/><span>{delivery?.status ? emailStatusLabel(delivery.status) : 'Nog niet verstuurd'}</span>
+    <Mail size={14}/><span>{delivery?.status ? deliveryStatusLabel(delivery) : 'Nog niet verstuurd'}</span>
     {delivery?.recipient_email && <small>{delivery.recipient_email}</small>}
     {delivery?.attachment_file_name && <small>PDF: {delivery.attachment_file_name}</small>}
+    {eInvoiceDelivery?.delivery_channel === 'e_invoice_mollie'
+      ? <small title="Mollie gaf de factuur uit en verstuurde hem over Peppol; de PDF-kopie ging per mail">Via Mollie{eInvoiceDelivery.external_invoice_number ? `: ${eInvoiceDelivery.external_invoice_number}` : ''}</small>
+      : eInvoiceDelivery && <small title="De e-factuur (UBL, Peppol BIS 3.0) met de PDF erin">E-factuur: {eInvoiceDelivery.e_invoice_file_name ?? 'UBL'} · PDF erin</small>}
+    {!eInvoiceDelivery && upcomingEInvoiceTo !== null && (upcomingVia === 'mollie'
+      ? <small title="Bij deze klant gaan facturen via Mollie over Peppol">Gaat via Mollie (Peppol){upcomingEInvoiceTo ? `, kopie naar ${upcomingEInvoiceTo}` : ''}</small>
+      : <small title="Bij deze klant staat e-facturatie aan">Gaat als e-factuur (UBL + PDF){upcomingEInvoiceTo ? ` naar ${upcomingEInvoiceTo}` : ''}</small>)}
     <CreditCard size={14}/><span>{payment ? paymentStatusLabel(payment.status) : 'Nog geen betaallink'}</span>
     {safeCheckoutUrl(payment?.provider_checkout_url, window.location.origin) && <a href={safeCheckoutUrl(payment?.provider_checkout_url, window.location.origin)!} target="_blank" rel="noreferrer">Open betaallink</a>}
     {invoice.public_token_expires_at && <small>Publieke link tot {dateNL(invoice.public_token_expires_at)}</small>}
   </div>;
 }
 
-function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void }) {
+function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, eInvoice = false, mollieIssued = false, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; eInvoice?: boolean | 'mollie'; mollieIssued?: boolean; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void }) {
   const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
   const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off','refunded'].includes(invoice.status) || Boolean(payment);
-  const canSend = canWrite && !invoiceClosed;
+  // Via Mollie uitgegeven: opnieuw versturen zou een tweede factuur bij Mollie worden.
+  const canSend = canWrite && !invoiceClosed && !mollieIssued;
   const canDownloadStored = Boolean(onDownloadPdf) && invoiceHasStoredPdf(invoice);
   // A refund is only possible for a paid invoice that still has a non-refunded
   // remainder. Gated to owners/admins (passed as onRefund only when allowed).
@@ -1044,10 +1109,14 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, onEdit, 
   // button — sending is the single action that produces invoice + betaallink.
   return <div className="quote-actions invoice-actions">
     <Button onClick={onEdit} disabled={isLocked} title={isLocked ? 'Deze factuur is vergrendeld na verzending of betaallink.' : undefined}>Bewerken</Button>
-    {canSend && <Button variant="primary" onClick={() => onSend?.(invoice)}><Send size={14}/> Verstuur via Resend</Button>}
+    {canSend && (eInvoice === 'mollie'
+      ? <Button variant="primary" onClick={() => onSend?.(invoice)} title="Bij deze klant gaan facturen via Mollie: Mollie geeft hem uit met een eigen nummer, verstuurt hem over Peppol, mailt een PDF-kopie en int de betaling."><Send size={14}/> Verstuur via Mollie</Button>
+      : eInvoice
+        ? <Button variant="primary" onClick={() => onSend?.(invoice)} title="Bij deze klant staat e-facturatie aan: de factuur gaat als e-factuur (UBL, Peppol BIS 3.0) met de PDF erin naar het e-factuuradres."><Send size={14}/> Verstuur e-factuur</Button>
+        : <Button variant="primary" onClick={() => onSend?.(invoice)}><Send size={14}/> Verstuur via Resend</Button>)}
     {canRemind && <Button onClick={() => onSendReminder?.(invoice)} title={`Stuurt betalingsherinnering niveau ${nextReminderLevel} naar de klant.`}><Bell size={14}/> Stuur herinnering (niveau {nextReminderLevel})</Button>}
-    {canDownloadStored && <Button onClick={() => onDownloadPdf?.(invoice)}><Download size={14}/> Download verzonden PDF</Button>}
-    {onDownloadUbl && !['cancelled', 'void'].includes(invoice.status) && <Button onClick={() => onDownloadUbl(invoice)} title="Download deze factuur als UBL 2.1 e-factuur (Peppol BIS 3.0) — voor overheden en boekhoudpakketten."><Download size={14}/> E-factuur (UBL)</Button>}
+    {canDownloadStored && !mollieIssued && <Button onClick={() => onDownloadPdf?.(invoice)}><Download size={14}/> Download verzonden PDF</Button>}
+    {onDownloadUbl && !mollieIssued && !['cancelled', 'void'].includes(invoice.status) && <Button onClick={() => onDownloadUbl(invoice)} title="Download deze factuur als UBL 2.1 e-factuur (Peppol BIS 3.0) met de PDF erin — voor overheden en boekhoudpakketten."><Download size={14}/> E-factuur (UBL)</Button>}
     {canRefund && <Button variant="danger" onClick={() => onRefund?.()}><RotateCcw size={14}/> Terugbetaling</Button>}
     {canPostToLedger && <Button onClick={() => onPostToLedger?.(invoice)} title="Boekt de omzet en af te dragen BTW van deze factuur in het grootboek."><BookOpen size={14}/> Boek naar grootboek</Button>}
     {isPosted && <span className="status-pill bk-je-posted" title="Deze factuur staat in het grootboek."><BookOpen size={13}/> In grootboek</span>}
@@ -1072,6 +1141,67 @@ function invoiceHasStoredPdf(invoice: Invoice): boolean {
   return ['sent', 'overdue', 'paid', 'cancelled', 'void', 'written_off'].includes(invoice.status) || Boolean(invoice.sent_at);
 }
 
+/**
+ * Label in het overzicht: ging de factuur als e-factuur, of gaat hij er een
+ * worden omdat bij de klant e-facturatie aan staat?
+ */
+function EInvoicePill({ delivery, upcoming, upcomingVia = null }: { delivery: InvoiceEmailDelivery | null; upcoming: boolean; upcomingVia?: 'email' | 'mollie' | null }) {
+  if (delivery?.delivery_channel === 'e_invoice_mollie') return <span className="fin-reminder-pill einvoice" title={`Via Mollie uitgegeven${delivery.external_invoice_number ? ` als ${delivery.external_invoice_number}` : ''} en over Peppol verstuurd (${peppolStatusLabel(delivery.e_invoice_status)})`}>via Mollie</span>;
+  if (delivery) return <span className="fin-reminder-pill einvoice" title={`Verstuurd als e-factuur (UBL met de PDF erin) naar ${delivery.recipient_email}`}>e-factuur</span>;
+  // Nog niet verstuurd: dezelfde korte tekst, met een stippelrand (past in de kolom).
+  if (upcoming && upcomingVia === 'mollie') return <span className="fin-reminder-pill einvoice upcoming" title="Bij deze klant gaan facturen via Mollie over Peppol." aria-label="gaat via Mollie">via Mollie</span>;
+  if (upcoming) return <span className="fin-reminder-pill einvoice upcoming" title="Bij deze klant staat e-facturatie aan: bij het versturen gaat de factuur als e-factuur (UBL met de PDF erin)." aria-label="wordt e-factuur">e-factuur</span>;
+  return null;
+}
+
+/**
+ * Een via Mollie verstuurde factuur: Mollies nummer, de Peppol-aflevering, de
+ * betaallink van Mollie en wanneer ResoFly voor het laatst bij Mollie keek.
+ */
+function MollieEInvoicePanel({ invoice, delivery, onSync, onDownloadPdf }: { invoice: Invoice; delivery: InvoiceEmailDelivery; onSync?: (invoice: Invoice, options?: { silent?: boolean }) => Promise<void>; onDownloadPdf?: (invoice: Invoice) => void }) {
+  const [syncing, setSyncing] = useState(false);
+  const paymentHref = safeCheckoutUrl(delivery.external_payment_url, window.location.origin);
+  const pending = delivery.status === 'queued';
+  async function sync() {
+    if (!onSync) return;
+    setSyncing(true);
+    try { await onSync(invoice); } finally { setSyncing(false); }
+  }
+  return <div className={`mollie-einvoice-panel${delivery.e_invoice_status === 'failed' ? ' failed' : ''}`} aria-label="E-factuur via Mollie">
+    <dl>
+      <div><dt>Mollie-nummer</dt><dd>{delivery.external_invoice_number ?? (pending ? 'wordt verstuurd…' : 'nog niet bekend')}</dd></div>
+      <div><dt>Bij Mollie</dt><dd>{pending ? 'verzending niet afgerond' : mollieStatusLabel(delivery.external_status)}</dd></div>
+      <div><dt>Peppol</dt><dd>{peppolStatusLabel(delivery.e_invoice_status)}</dd></div>
+      <div><dt>Bijgewerkt</dt><dd>{delivery.external_synced_at ? dateTimeNL(delivery.external_synced_at) : '—'}</dd></div>
+    </dl>
+    {delivery.e_invoice_status === 'failed' && <p className="mollie-einvoice-note">Mollie kon de e-factuur (nog) niet over Peppol afleveren en probeert het zelf opnieuw. Blijft het mislukken, controleer dan het KVK- of btw-nummer van de klant: daarmee moet hij op Peppol staan. De PDF-kopie per mail is wel verstuurd.</p>}
+    {pending && <p className="mollie-einvoice-note">De verzending is niet helemaal afgerond. Ververs om te zien wat Mollie heeft gedaan; ResoFly maakt hem dan af of ruimt hem op.</p>}
+    <div className="mollie-einvoice-actions">
+      {onSync && <Button onClick={() => void sync()} disabled={syncing}><RefreshCw size={14}/> {syncing ? 'Bezig…' : 'Ververs bij Mollie'}</Button>}
+      {onDownloadPdf && !pending && <Button onClick={() => onDownloadPdf(invoice)}><Download size={14}/> PDF van Mollie</Button>}
+      {paymentHref && <a href={paymentHref} target="_blank" rel="noreferrer">Betaallink van Mollie</a>}
+    </div>
+  </div>;
+}
+
+/**
+ * De status van een verzending in woorden. Via Mollie telt de Peppol-aflevering
+ * (Mollie mailt de PDF-kopie zelf); anders de status van de mail.
+ */
+function deliveryStatusLabel(delivery: InvoiceEmailDelivery): string {
+  if (delivery.delivery_channel !== 'e_invoice_mollie') return emailStatusLabel(delivery.status);
+  if (delivery.status === 'queued') return 'Wordt via Mollie verstuurd';
+  if (delivery.status === 'failed') return 'Via Mollie mislukt';
+  return `Peppol ${peppolStatusLabel(delivery.e_invoice_status)}`;
+}
+
+const upperFirst = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+function dateTimeNL(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 function QuoteVersions({ versions, compact = false }: { versions: QuoteVersion[]; compact?: boolean }) {
   if (versions.length === 0) return <div className={`quote-versions ${compact ? 'compact' : ''}`}><span>Nog geen offerteversies vastgelegd.</span></div>;
   return <div className={`quote-versions ${compact ? 'compact' : ''}`}>{versions.map(version => <div className="quote-version-pill" key={version.id} title={version.pdf_sha256 ? `PDF SHA-256: ${version.pdf_sha256}` : undefined}><strong>v{version.version_number}</strong><span>{quoteVersionReasonLabel(version.snapshot_reason)}</span>{!compact && <small>{dateNL(version.created_at)} · {euro(Number(version.total_amount || 0))}</small>}{!compact && version.pdf_file_name && <small>PDF-snapshot: {version.pdf_file_name}{version.pdf_size_bytes ? ` · ${formatBytes(version.pdf_size_bytes)}` : ''}</small>}</div>)}</div>;
@@ -1084,7 +1214,7 @@ function InvoiceVersions({ versions }: { versions: InvoiceVersion[] }) {
 
 function InvoiceDeliveries({ deliveries }: { deliveries: InvoiceEmailDelivery[] }) {
   if (deliveries.length === 0) return <div className="quote-timeline-empty">Nog geen factuurmail verzonden.</div>;
-  return <div className="quote-versions">{deliveries.map(delivery => <div className="quote-version-pill" key={delivery.id}><strong>{delivery.delivery_kind === 'reminder' ? `Herinnering N${delivery.reminder_level ?? '?'} · ` : delivery.delivery_kind === 'dunning' ? 'Aanmaning · ' : ''}{emailStatusLabel(delivery.status)}</strong><span>{delivery.recipient_email}</span><small>{dateNL(delivery.created_at)} · {delivery.subject}</small>{delivery.attachment_file_name && <small>{delivery.attachment_file_name}</small>}{delivery.error_message && <small>{delivery.error_message}</small>}</div>)}</div>;
+  return <div className="quote-versions">{deliveries.map(delivery => <div className="quote-version-pill" key={delivery.id}><strong>{delivery.delivery_kind === 'reminder' ? `Herinnering N${delivery.reminder_level ?? '?'} · ` : delivery.delivery_kind === 'dunning' ? 'Aanmaning · ' : delivery.delivery_channel === 'e_invoice_mollie' ? `Via Mollie${delivery.external_invoice_number ? ` (${delivery.external_invoice_number})` : ''} · ` : delivery.delivery_channel === 'e_invoice_email' ? 'E-factuur · ' : ''}{deliveryStatusLabel(delivery)}</strong><span>{delivery.recipient_email}</span><small>{dateNL(delivery.created_at)} · {delivery.subject}</small>{delivery.attachment_file_name && <small>{delivery.attachment_file_name}</small>}{delivery.e_invoice_file_name && <small>{delivery.e_invoice_file_name} · met de PDF erin</small>}{delivery.error_message && <small>{delivery.error_message}</small>}</div>)}</div>;
 }
 
 function reminderLevelLabel(level: number): string {
@@ -1294,7 +1424,7 @@ function CreditNotes({ creditNotes, canWrite = false, onDownload, onDownloadUbl,
     {creditNote.journal_entry_id && <small className="cn-ledger-pill" title="Deze creditnota is in het grootboek verwerkt (omzet en btw teruggeboekt)."><BookOpen size={12}/> In grootboek</small>}
     <div className="cn-pill-actions">
       {onDownload && creditNote.pdf_file_name && <button type="button" className="att-btn" title="Download creditfactuur-PDF" onClick={() => onDownload(creditNote)}><Download size={14}/> PDF</button>}
-      {onDownloadUbl && creditNote.status !== 'void' && <button type="button" className="att-btn" title="Download als UBL 2.1 e-creditnota (Peppol BIS 3.0)" onClick={() => onDownloadUbl(creditNote)}><Download size={14}/> UBL</button>}
+      {onDownloadUbl && creditNote.status !== 'void' && <button type="button" className="att-btn" title="Download als UBL 2.1 e-creditnota (Peppol BIS 3.0) met de PDF erin" onClick={() => onDownloadUbl(creditNote)}><Download size={14}/> UBL</button>}
       {onEmail && creditNote.pdf_file_name && <button type="button" className="att-btn" title="Mail creditfactuur naar de klant" onClick={() => onEmail(creditNote)}><Mail size={14}/> Mail</button>}
       {onPostToLedger && canWrite && !creditNote.journal_entry_id && creditNote.status === 'issued'
         && <button type="button" className="att-btn" title="Boek de creditering naar het grootboek: omzet en af te dragen btw worden teruggenomen, debiteuren verlaagd." onClick={() => onPostToLedger(creditNote)}><BookOpen size={14}/> Boek naar grootboek</button>}

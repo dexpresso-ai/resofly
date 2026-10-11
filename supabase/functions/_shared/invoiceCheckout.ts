@@ -70,6 +70,16 @@ export async function createPortalInvoiceCheckout(
   const amountCents = calculateTotalCents(Array.isArray(invoice.lines) ? invoice.lines : []);
   if (amountCents <= 0) return { ok: false, status: 422, error: 'Factuurbedrag moet groter zijn dan 0.' };
 
+  // Via Mollie als e-factuur uitgegeven? Dan alleen de betaallink van Mollie —
+  // een eigen betaling ernaast zou de klant twee keer laten betalen.
+  const mollieInvoice = await loadMollieSalesInvoiceCheckout(supabaseAdmin, organizationId, invoiceId);
+  if (mollieInvoice) {
+    if (mollieInvoice.checkoutUrl) {
+      return { ok: true, checkoutUrl: mollieInvoice.checkoutUrl, providerPaymentId: mollieInvoice.salesInvoiceId ?? '', status: 'open', mock: false, reused: true };
+    }
+    return { ok: false, status: 409, error: 'Deze factuur betaal je via de betaallink in de e-mail van Mollie.' };
+  }
+
   // Bestaande, herbruikbare open betaallink? Meteen teruggeven — nooit dubbel
   // aanmaken (zelfde gedrag als de medewerkers-app).
   const existing = await loadLatestOpenPayment(supabaseAdmin, organizationId, invoiceId);
@@ -229,6 +239,26 @@ async function failAndReturn(
   });
   if (error) console.warn('client-portal payment checkout failure registration failed', describeError(error));
   return { ok: false, status, error: message };
+}
+
+/** De e-factuur via Mollie van deze factuur (niet mislukt), met de betaallink van Mollie. */
+async function loadMollieSalesInvoiceCheckout(
+  supabaseAdmin: SupabaseAdmin, organizationId: string, invoiceId: string,
+): Promise<{ checkoutUrl: string | null; salesInvoiceId: string | null } | null> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .select('provider_email_id,external_payment_url')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .eq('delivery_channel', 'e_invoice_mollie')
+    .neq('status', 'failed')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) { console.warn('client-portal: Mollie-factuur opzoeken mislukte', describeError(error)); return null; }
+  if (!data) return null;
+  const row = data as { provider_email_id: string | null; external_payment_url: string | null };
+  return { checkoutUrl: isReusableCheckoutUrl(row.external_payment_url) ? row.external_payment_url : null, salesInvoiceId: row.provider_email_id };
 }
 
 async function loadLatestOpenPayment(

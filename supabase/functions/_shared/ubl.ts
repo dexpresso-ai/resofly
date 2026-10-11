@@ -1,13 +1,15 @@
 // ============================================================
 // UBL 2.1 e-facturatie (Peppol BIS Billing 3.0, NL-regels) — gedeelde module.
 //
-// Drie verantwoordelijkheden, bewust in één bestand zodat builder en parser
-// dezelfde categorie-/landlogica delen:
-//  1. buildUblXml()      — verkoopfactuur/creditnota -> UBL 2.1 XML-string.
+// Twee verantwoordelijkheden, met de categorie-/landlogica en het
+// centenrekenwerk die de parser (ublParse.ts) hier vandaan haalt:
+//  1. buildUblXml()      — verkoopfactuur/creditnota -> UBL 2.1 XML-string,
+//                          desgewenst mét de PDF erin (AdditionalDocumentReference).
 //  2. validateUblInput() — NL-foutenlijst VÓÓR generatie (ontbrekende KVK,
 //                          adres, IBAN, btw-nummer bij verlegd/ICP, …).
-//  3. parseUblDocument() — inkomende UBL-XML -> genormaliseerde factuurdata
-//                          (deterministisch, geen AI), voor de inkoopflow.
+// De parser voor inkomende UBL staat sinds de e-facturatie per klant in
+// ublParse.ts: hij heeft als enige een externe import, en zonder die import
+// is deze module in node te testen (ubl.test.ts).
 //
 // Normkeuzes:
 //  - CustomizationID = Peppol BIS Billing 3.0. De Peppol-schematron bevat de
@@ -18,11 +20,11 @@
 //    TARIEFGROEP afgerond — exact dezelfde conventie als calculateTotals in
 //    invoice-workflow en src/lib/money.ts, zodat XML, PDF en betaallink
 //    hetzelfde totaal tonen én BR-CO-10/13/15 en BR-S-08/BR-CO-17 sluiten.
-//  - Builder/validator zijn pure functies (patroon _shared/dunning.ts); alleen
-//    de parser heeft een dependency (fast-xml-parser, gepind via esm.sh).
+//  - Builder/validator zijn pure functies (patroon _shared/dunning.ts).
+//  - De factuur-PDF gaat als ingesloten bijlage mee (BT-122..BT-125), zodat
+//    de ontvanger hem in zijn boekhoudpakket naast de gestructureerde
+//    gegevens ziet. Toegestane MIME-typen: de Peppol-lijst hieronder.
 // ============================================================
-
-import { XMLParser } from 'https://esm.sh/fast-xml-parser@4.5.0';
 
 // Peppol BIS Billing 3.0 (bevat de NL-R-regels; geverifieerd tegen
 // docs.peppol.eu PEPPOL-EN16931-R004/R007, 2026-07).
@@ -44,7 +46,41 @@ export interface UblParty {
   postalCode?: string | null;
   city?: string | null;
   email?: string | null;
+  /**
+   * Elektronisch adres als er geen Peppol-ID (KVK, OIN, btw-nummer) af te leiden
+   * is: dan wordt dit het EndpointID met schemeID EM. Bij een klant met
+   * e-facturatie is dat het e-factuuradres, want daar gaat de e-factuur heen.
+   */
+  endpointEmail?: string | null;
 }
+
+/**
+ * Ingesloten bijlage (BT-122..BT-125), bijvoorbeeld de factuur-PDF. Peppol staat
+ * alleen de MIME-typen uit UBL_ATTACHMENT_MIME_CODES toe; de inhoud gaat als
+ * base64 in cbc:EmbeddedDocumentBinaryObject.
+ */
+export interface UblEmbeddedDocument {
+  /** BT-122 — referentie van de bijlage, bv. het factuurnummer. */
+  id: string;
+  /** BT-123 — korte omschrijving, bv. "Factuur 2026-014 (PDF)". */
+  description?: string | null;
+  /** BT-125-2 — bestandsnaam. */
+  fileName: string;
+  /** BT-125-1 — MIME-type. */
+  mimeCode: string;
+  /** De inhoud als base64, zonder data:-voorvoegsel. */
+  base64: string;
+}
+
+/** Peppol BIS Billing 3.0: toegestane MIME-typen voor een ingesloten bijlage. */
+export const UBL_ATTACHMENT_MIME_CODES = [
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+  'text/csv',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.oasis.opendocument.spreadsheet',
+] as const;
 
 export interface UblLine {
   description: string;
@@ -78,6 +114,8 @@ export interface UblDocumentInput {
   /** Consument-koper: KVK/btw-eisen worden dan niet als gebrek gemeld. */
   buyerIsConsumer?: boolean;
   lines: UblLine[];
+  /** Ingesloten bijlagen — in de praktijk de factuur-PDF zelf. */
+  attachments?: UblEmbeddedDocument[];
 }
 
 export interface UblValidationResult {
@@ -139,19 +177,46 @@ const normalizeVat = (raw: string | null | undefined): string => String(raw ?? '
 const normalizeIban = (raw: string | null | undefined): string => String(raw ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const normalizeKvk = (raw: string | null | undefined): string => String(raw ?? '').replace(/\D/g, '');
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 /**
- * Peppol-endpoint (BT-34/BT-49) afleiden: KVK (0106) of OIN (0190, 20 cijfers)
- * heeft voorrang; anders het NL-btw-nummer (9944). Buitenlandse partijen zonder
- * KVK krijgen geen endpoint — dat levert een waarschuwing op, geen fout, want
- * levering per download/e-mail heeft geen endpoint nodig.
+ * Een Belgisch ondernemingsnummer (KBO, 10 cijfers) in het KVK-veld van een
+ * Belgische partij: dat is schema 0208, niet het Nederlandse 0106.
  */
-function deriveEndpoint(party: UblParty): { schemeId: string; value: string } | null {
+function isBelgianEnterpriseNumber(party: Pick<UblParty, 'country'>, kvk: string): boolean {
+  return kvk.length === 10 && normalizeCountryCode(party.country) === 'BE';
+}
+
+/**
+ * Peppol-ID (BT-34/BT-49) afleiden: KVK (0106) of OIN (0190, 20 cijfers) heeft
+ * voorrang; dan het NL-btw-nummer (9944). Voor een Belgische partij het
+ * ondernemingsnummer (0208) — het schema waarmee Belgische bedrijven sinds de
+ * B2B-plicht van 2026 op Peppol staan — uit het KVK-veld of het BE-btw-nummer.
+ * Is er niets af te leiden, dan null.
+ */
+export function derivePeppolEndpoint(party: Pick<UblParty, 'kvkNumber' | 'vatNumber' | 'country'>): { schemeId: string; value: string } | null {
   const kvk = normalizeKvk(party.kvkNumber);
+  if (isBelgianEnterpriseNumber(party, kvk)) return { schemeId: '0208', value: kvk };
   if (kvk.length === 20) return { schemeId: '0190', value: kvk };
   if (kvk.length >= 8) return { schemeId: '0106', value: kvk };
   const vat = normalizeVat(party.vatNumber);
   if (vat.startsWith('NL') && vat.length >= 12) return { schemeId: '9944', value: vat };
+  const belgian = /^BE(\d{9,10})$/.exec(vat);
+  if (belgian) return { schemeId: '0208', value: belgian[1].padStart(10, '0') };
   return null;
+}
+
+/**
+ * Het elektronisch adres in de XML: het Peppol-ID, of anders het e-mailadres
+ * waarop de e-factuur binnenkomt (schemeID EM). Zonder allebei geen endpoint —
+ * dat levert een waarschuwing op, geen fout, want een download heeft hem niet
+ * nodig.
+ */
+function deriveElectronicAddress(party: UblParty): { schemeId: string; value: string } | null {
+  const peppol = derivePeppolEndpoint(party);
+  if (peppol) return peppol;
+  const email = String(party.endpointEmail ?? '').trim().toLowerCase();
+  return EMAIL_PATTERN.test(email) ? { schemeId: 'EM', value: email } : null;
 }
 
 // ── Btw-categorie afleiden uit verkoopregels ───────────────────────────────────
@@ -212,7 +277,8 @@ export function deriveSalesLineCategory(
 
 // ── Geldrekenwerk (identiek aan calculateTotals in invoice-workflow) ───────────
 
-function toCents(euros: number): number {
+/** Euro -> hele centen, round half away from zero. Ook voor de parser (ublParse.ts). */
+export function toCents(euros: number): number {
   if (!Number.isFinite(euros)) return 0;
   const scaled = euros * 100;
   return scaled >= 0 ? Math.round(scaled + 1e-6) : -Math.round(Math.abs(scaled) + 1e-6);
@@ -339,8 +405,8 @@ export function validateUblInput(input: UblDocumentInput): UblValidationResult {
   if (buyerIsNl && !input.buyerIsConsumer && normalizeKvk(buyer.kvkNumber).length < 8) {
     warnings.push('De NL-klant heeft geen KVK-nummer — voor verzending via Peppol is dat verplicht (NL-R-005); voor download/e-mail kan de e-factuur wel gemaakt worden.');
   }
-  if (!input.buyerIsConsumer && !deriveEndpoint(buyer)) {
-    warnings.push('Voor deze klant is geen elektronisch adres (KVK- of NL-btw-nummer) af te leiden — nodig zodra je via Peppol wilt versturen.');
+  if (!input.buyerIsConsumer && !derivePeppolEndpoint(buyer)) {
+    warnings.push('Voor deze klant is geen Peppol-ID (KVK-, OIN- of btw-nummer) af te leiden — nodig zodra je via Peppol wilt versturen.');
   }
 
   // Verlegd/ICP: zonder koper-btw-nummer is de verleggingsfactuur ongeldig.
@@ -356,7 +422,28 @@ export function validateUblInput(input: UblDocumentInput): UblValidationResult {
     errors.push('Een creditnota moet verwijzen naar de oorspronkelijke factuur (NL-R-001).');
   }
 
+  // Ingesloten bijlagen (BT-122..BT-125): referentie, bestandsnaam en een
+  // MIME-type uit de Peppol-lijst zijn verplicht, en de inhoud moet base64 zijn.
+  (input.attachments ?? []).forEach((doc, index) => {
+    const label = String(doc.fileName ?? '').trim() ? `'${String(doc.fileName).trim()}'` : `nr. ${index + 1}`;
+    if (!String(doc.id ?? '').trim()) errors.push(`Bijlage ${label} heeft geen referentie (BT-122).`);
+    if (!String(doc.fileName ?? '').trim()) errors.push(`Bijlage ${label} heeft geen bestandsnaam (BT-125).`);
+    if (!(UBL_ATTACHMENT_MIME_CODES as readonly string[]).includes(String(doc.mimeCode ?? ''))) {
+      errors.push(`Bijlage ${label} is van een type (${doc.mimeCode || 'onbekend'}) dat een e-factuur niet toestaat.`);
+    }
+    if (!isBase64(doc.base64)) errors.push(`Bijlage ${label} is leeg of geen geldige base64.`);
+  });
+
   return { errors, warnings };
+}
+
+function compactBase64(value: string | null | undefined): string {
+  return String(value ?? '').replace(/\s+/g, '');
+}
+
+function isBase64(value: string | null | undefined): boolean {
+  const compact = compactBase64(value);
+  return compact.length > 0 && compact.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact);
 }
 
 // ── XML-generatie ──────────────────────────────────────────────────────────────
@@ -378,11 +465,11 @@ function amountEl(tag: string, cents: number, currency: string): string {
 
 /** Partijblok — elementvolgorde volgt het UBL 2.1 Party-schema. */
 function renderParty(role: 'AccountingSupplierParty' | 'AccountingCustomerParty', party: UblParty, fallbackCountry: string): string {
-  const endpoint = deriveEndpoint(party);
+  const endpoint = deriveElectronicAddress(party);
   const country = normalizeCountryCode(party.country) ?? fallbackCountry;
   const vat = normalizeVat(party.vatNumber);
   const kvk = normalizeKvk(party.kvkNumber);
-  const kvkSchemeId = kvk.length === 20 ? '0190' : '0106';
+  const kvkSchemeId = isBelgianEnterpriseNumber(party, kvk) ? '0208' : kvk.length === 20 ? '0190' : '0106';
   const tradeName = String(party.tradeName ?? '').trim();
   const parts = [
     endpoint ? el('cbc:EndpointID', endpoint.value, ` schemeID="${endpoint.schemeId}"`) : '',
@@ -458,6 +545,20 @@ export function buildUblXml(input: UblDocumentInput): string {
     ? `<cac:BillingReference><cac:InvoiceDocumentReference>${el('cbc:ID', input.originalInvoiceNumber)}${el('cbc:IssueDate', input.originalInvoiceDate)}</cac:InvoiceDocumentReference></cac:BillingReference>`
     : '';
 
+  // Ingesloten bijlagen, zoals de factuur-PDF. In zowel Invoice als CreditNote
+  // staat AdditionalDocumentReference ná BillingReference en vóór de partijen.
+  // Geen DocumentTypeCode: in Peppol betekent 130 "gefactureerd object", niet
+  // "bijlage".
+  const additionalDocuments = (input.attachments ?? []).map((doc) => [
+    '<cac:AdditionalDocumentReference>',
+    el('cbc:ID', doc.id),
+    el('cbc:DocumentDescription', doc.description),
+    '<cac:Attachment>',
+    `<cbc:EmbeddedDocumentBinaryObject mimeCode="${escapeXml(String(doc.mimeCode).trim())}" filename="${escapeXml(String(doc.fileName).trim())}">${compactBase64(doc.base64)}</cbc:EmbeddedDocumentBinaryObject>`,
+    '</cac:Attachment>',
+    '</cac:AdditionalDocumentReference>',
+  ].filter(Boolean).join('')).join('');
+
   // Betaalwijze alleen op facturen: NL-R-007 geldt "als de betaling van koper
   // naar verkoper loopt" — bij een creditnota is dat andersom.
   const paymentMeans = !isCredit && iban
@@ -479,6 +580,7 @@ export function buildUblXml(input: UblDocumentInput): string {
     el('cbc:DocumentCurrencyCode', currency),
     el('cbc:BuyerReference', input.buyerReference),
     billingReference,
+    additionalDocuments,
     renderParty('AccountingSupplierParty', input.seller, 'NL'),
     renderParty('AccountingCustomerParty', input.buyer, buyerCountry),
     paymentMeans,
@@ -496,45 +598,9 @@ export function buildUblXml(input: UblDocumentInput): string {
   return `<?xml version="1.0" encoding="UTF-8"?><${rootTag} xmlns="urn:oasis:names:specification:ubl:schema:xsd:${rootTag}-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">${body}</${rootTag}>`;
 }
 
-// ── Parser (inkomende UBL) ─────────────────────────────────────────────────────
-
-export interface ParsedUblParty {
-  name: string;
-  vatNumber: string | null;
-  kvkNumber: string | null;
-  iban: string | null;
-  email: string | null;
-  addressLine1: string | null;
-  postalCode: string | null;
-  city: string | null;
-  countryCode: string | null;
-}
-
-export interface ParsedUblLine {
-  description: string;
-  /** Regelbedrag EXCL btw in centen (creditnota: negatief). */
-  netCents: number;
-  vatRate: number;
-  category: string;
-}
-
-export interface ParsedUblDocument {
-  docType: 'invoice' | 'creditNote';
-  customizationId: string | null;
-  number: string | null;
-  issueDate: string | null;
-  dueDate: string | null;
-  currency: string;
-  note: string | null;
-  buyerReference: string | null;
-  paymentReference: string | null;
-  supplier: ParsedUblParty;
-  lines: ParsedUblLine[];
-  /** Documenttotalen zoals de afzender ze vermeldt (creditnota: negatief). */
-  totals: { netCents: number | null; vatCents: number | null; grossCents: number | null };
-  /** Korting/toeslag op documentniveau — wordt niet als regel overgenomen. */
-  hasDocumentAllowanceCharge: boolean;
-}
+// ── Herkenning (inkomende UBL) ─────────────────────────────────────────────────
+// De parser zelf staat in ublParse.ts; deze snelle vooraf-check heeft geen
+// XML-parser nodig en blijft daarom hier.
 
 /** Snelle vooraf-check: is dit bestand vermoedelijk een UBL-factuur? */
 export function looksLikeUblXml(fileName: string, mimeType: string, contentStart: string): boolean {
@@ -542,213 +608,4 @@ export function looksLikeUblXml(fileName: string, mimeType: string, contentStart
   const start = contentStart.slice(0, 2000);
   const xmlByContent = start.trimStart().startsWith('<?xml') || /<\s*(?:\w+:)?(?:Invoice|CreditNote)[\s>]/.test(start);
   return xmlByType || xmlByContent;
-}
-
-// Elementen die (ook) meervoudig kunnen voorkomen — altijd als array parsen.
-const UBL_ARRAY_ELEMENTS = new Set(['InvoiceLine', 'CreditNoteLine', 'TaxSubtotal', 'TaxTotal', 'PaymentMeans', 'PartyTaxScheme', 'Note', 'Description', 'PartyIdentification']);
-
-/** Tekstwaarde van een fast-xml-parser-knoop ('#text' bij attributen). */
-function nodeText(node: unknown): string | null {
-  if (node == null) return null;
-  if (Array.isArray(node)) return nodeText(node[0]);
-  if (typeof node === 'object') {
-    const text = (node as Record<string, unknown>)['#text'];
-    return text == null ? null : String(text).trim() || null;
-  }
-  const text = String(node).trim();
-  return text || null;
-}
-
-function nodeAttr(node: unknown, attr: string): string | null {
-  if (node == null || typeof node !== 'object' || Array.isArray(node)) return null;
-  const value = (node as Record<string, unknown>)[`@_${attr}`];
-  return value == null ? null : String(value).trim() || null;
-}
-
-function asArray<T>(node: T | T[] | undefined | null): T[] {
-  if (node == null) return [];
-  return Array.isArray(node) ? node : [node];
-}
-
-/**
- * Bedrag -> centen. UBL schrijft '.' als decimaalteken voor, maar sommige
- * afzenders sturen een decimaalkomma of zelfs duizend-scheiders. Naïef ','->'.'
- * verminkt '1.234,56' tot 1.234 (stille factor-1000-fout). We nemen daarom het
- * LAATSTE scheidingsteken als decimaalteken en strippen de rest, en verwerpen
- * alles wat daarna nog geen zuiver getal is (null -> zichtbare mismatch/warning).
- */
-function centsFromAmount(node: unknown): number | null {
-  const text = nodeText(node);
-  if (text == null) return null;
-  const cleaned = text.replace(/\s/g, '');
-  const lastDot = cleaned.lastIndexOf('.');
-  const lastComma = cleaned.lastIndexOf(',');
-  let normalized: string;
-  if (lastDot === -1 && lastComma === -1) {
-    normalized = cleaned;
-  } else {
-    const decimalPos = Math.max(lastDot, lastComma);
-    const intPart = cleaned.slice(0, decimalPos).replace(/[.,]/g, '');
-    const fracPart = cleaned.slice(decimalPos + 1);
-    normalized = `${intPart}.${fracPart}`;
-  }
-  if (!/^-?\d+(\.\d+)?$/.test(normalized)) return null;
-  const value = Number.parseFloat(normalized);
-  if (!Number.isFinite(value)) return null;
-  return toCents(value);
-}
-
-function rateFromPercent(node: unknown): number {
-  const text = nodeText(node);
-  const value = Number.parseFloat(String(text ?? '').replace(',', '.'));
-  return Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
-}
-
-function parseParty(partyContainer: Record<string, unknown> | undefined): ParsedUblParty {
-  const party = (asArray(partyContainer?.Party as unknown)[0] ?? {}) as Record<string, unknown>;
-  // Defensief het eerste element pakken: bij (technisch ongeldige) herhaalde
-  // elementen maakt fast-xml-parser er een array van, en dan zou een directe
-  // property-toegang undefined geven -> stil naamverlies.
-  const legalEntity = (asArray(party.PartyLegalEntity as unknown)[0] ?? {}) as Record<string, unknown>;
-  const address = (asArray(party.PostalAddress as unknown)[0] ?? {}) as Record<string, unknown>;
-  const contact = (asArray(party.Contact as unknown)[0] ?? {}) as Record<string, unknown>;
-  const partyName = (asArray(party.PartyName as unknown)[0] ?? {}) as Record<string, unknown>;
-
-  // Btw-nummer: de PartyTaxScheme met TaxScheme/ID = VAT (er kan er ook één
-  // met een lokale heffing tussen zitten).
-  let vatNumber: string | null = null;
-  for (const scheme of asArray(party.PartyTaxScheme as unknown)) {
-    const schemeObj = (scheme ?? {}) as Record<string, unknown>;
-    const taxSchemeId = nodeText(((schemeObj.TaxScheme ?? {}) as Record<string, unknown>).ID);
-    const companyId = nodeText(schemeObj.CompanyID);
-    if (companyId && (!taxSchemeId || taxSchemeId.toUpperCase() === 'VAT')) { vatNumber = companyId; break; }
-  }
-
-  // KVK: PartyLegalEntity/CompanyID met schemeID 0106/0190, of een kaal
-  // 8-cijferig nummer (veel afzenders laten de schemeID weg).
-  let kvkNumber: string | null = null;
-  const legalCompanyId = legalEntity.CompanyID;
-  const legalIdText = nodeText(legalCompanyId);
-  const legalIdScheme = nodeAttr(legalCompanyId, 'schemeID');
-  if (legalIdText && (legalIdScheme === '0106' || legalIdScheme === '0190' || /^\d{8}$/.test(legalIdText.replace(/\D/g, '')))) {
-    kvkNumber = legalIdText;
-  }
-
-  const country = (address.Country ?? {}) as Record<string, unknown>;
-  return {
-    name: nodeText(legalEntity.RegistrationName) ?? nodeText(partyName.Name) ?? '',
-    vatNumber,
-    kvkNumber,
-    iban: null, // wordt uit PaymentMeans gevuld
-    email: nodeText(contact.ElectronicMail),
-    addressLine1: nodeText(address.StreetName),
-    postalCode: nodeText(address.PostalZone),
-    city: nodeText(address.CityName),
-    countryCode: nodeText(country.IdentificationCode),
-  };
-}
-
-/**
- * Parseert een UBL 2.1 Invoice of CreditNote naar genormaliseerde factuurdata.
- * Namespace-agnostisch (removeNSPrefix): afzenders gebruiken cbc:/cac:-prefixen
- * in alle varianten. Gooit een Error met NL-melding als het geen UBL-factuur is.
- */
-export function parseUblDocument(xmlText: string): ParsedUblDocument {
-  // Weiger een DTD/DOCTYPE: geldige UBL-facturen hebben er nooit één, en het
-  // dicht een entity-amplificatie (billion laughs / lineaire expansie) af vóór
-  // de parser hem verwerkt — de 10MB-cap is daar geen bescherming tegen.
-  if (/<!DOCTYPE/i.test(xmlText)) {
-    throw new Error('Dit XML-bestand bevat een DTD/DOCTYPE en wordt om veiligheidsredenen geweigerd — een UBL-factuur heeft die niet nodig.');
-  }
-  if (!xmlText.includes('urn:oasis:names:specification:ubl')) {
-    throw new Error('Dit XML-bestand is geen UBL-factuur (de UBL-naamruimte ontbreekt).');
-  }
-
-  const parser = new XMLParser({
-    ignoreAttributes: false,
-    attributeNamePrefix: '@_',
-    removeNSPrefix: true,
-    parseTagValue: false,
-    parseAttributeValue: false,
-    trimValues: true,
-    isArray: (name: string) => UBL_ARRAY_ELEMENTS.has(name),
-  });
-
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = parser.parse(xmlText) as Record<string, unknown>;
-  } catch {
-    throw new Error('Het XML-bestand kon niet worden gelezen (geen geldige XML).');
-  }
-
-  const invoiceRoot = parsed.Invoice as Record<string, unknown> | undefined;
-  const creditRoot = parsed.CreditNote as Record<string, unknown> | undefined;
-  const root = invoiceRoot ?? creditRoot;
-  if (!root) throw new Error('Dit XML-bestand is geen UBL-factuur (rootelement Invoice of CreditNote ontbreekt).');
-  const docType: 'invoice' | 'creditNote' = invoiceRoot ? 'invoice' : 'creditNote';
-  // Creditnota: bedragen negatief overnemen zodat de inkoopadministratie de
-  // creditering als negatieve kosten/voorbelasting boekt.
-  const sign = docType === 'creditNote' ? -1 : 1;
-
-  const currency = nodeText(root.DocumentCurrencyCode)?.toUpperCase() || 'EUR';
-
-  const supplier = parseParty(root.AccountingSupplierParty as Record<string, unknown> | undefined);
-  const paymentMeans = asArray(root.PaymentMeans as unknown).map((pm) => (pm ?? {}) as Record<string, unknown>);
-  for (const pm of paymentMeans) {
-    const account = (pm.PayeeFinancialAccount ?? {}) as Record<string, unknown>;
-    const accountId = nodeText(account.ID);
-    if (accountId && /^[A-Z]{2}\d{2}[A-Z0-9]{6,}$/i.test(accountId.replace(/\s/g, ''))) {
-      supplier.iban = accountId.replace(/\s/g, '').toUpperCase();
-      break;
-    }
-  }
-  const paymentReference = paymentMeans.map((pm) => nodeText(pm.PaymentID)).find(Boolean) ?? null;
-
-  const lineNodes = asArray((docType === 'invoice' ? root.InvoiceLine : root.CreditNoteLine) as unknown);
-  const lines: ParsedUblLine[] = lineNodes.map((node, index) => {
-    const line = (node ?? {}) as Record<string, unknown>;
-    const item = (asArray(line.Item as unknown)[0] ?? {}) as Record<string, unknown>;
-    const taxCategory = (asArray(item.ClassifiedTaxCategory as unknown)[0] ?? {}) as Record<string, unknown>;
-    const descriptions = asArray(item.Description as unknown).map(nodeText).filter(Boolean) as string[];
-    const noteTexts = asArray(line.Note as unknown).map(nodeText).filter(Boolean) as string[];
-    // Artikelidentificatie (BT-155/BT-157) als extra fallback vóór 'Regel N':
-    // sommige afzenders zetten de omschrijving alleen als artikelnummer.
-    const sellersId = nodeText((asArray(item.SellersItemIdentification as unknown)[0] as Record<string, unknown> | undefined)?.ID);
-    const standardId = nodeText((asArray(item.StandardItemIdentification as unknown)[0] as Record<string, unknown> | undefined)?.ID);
-    const description = nodeText(item.Name) ?? descriptions[0] ?? noteTexts[0] ?? sellersId ?? standardId ?? `Regel ${index + 1}`;
-    return {
-      description,
-      netCents: sign * (centsFromAmount(line.LineExtensionAmount) ?? 0),
-      vatRate: rateFromPercent(taxCategory.Percent),
-      category: (nodeText(taxCategory.ID) ?? 'S').toUpperCase(),
-    };
-  });
-
-  // Documenttotalen: LegalMonetaryTotal + de TaxTotal in documentvaluta.
-  const monetary = (root.LegalMonetaryTotal ?? {}) as Record<string, unknown>;
-  const taxTotals = asArray(root.TaxTotal as unknown).map((tt) => (tt ?? {}) as Record<string, unknown>);
-  const documentTaxTotal = taxTotals.find((tt) => nodeAttr(tt.TaxAmount, 'currencyID') === currency) ?? taxTotals[0];
-  const netCents = centsFromAmount(monetary.TaxExclusiveAmount) ?? centsFromAmount(monetary.LineExtensionAmount);
-  const vatCents = documentTaxTotal ? centsFromAmount(documentTaxTotal.TaxAmount) : null;
-  const grossCents = centsFromAmount(monetary.TaxInclusiveAmount) ?? centsFromAmount(monetary.PayableAmount);
-
-  return {
-    docType,
-    customizationId: nodeText(root.CustomizationID),
-    number: nodeText(root.ID),
-    issueDate: nodeText(root.IssueDate),
-    dueDate: docType === 'invoice' ? nodeText(root.DueDate) : null,
-    currency,
-    note: asArray(root.Note as unknown).map(nodeText).find(Boolean) ?? null,
-    buyerReference: nodeText(root.BuyerReference),
-    paymentReference,
-    supplier,
-    lines,
-    totals: {
-      netCents: netCents == null ? null : sign * netCents,
-      vatCents: vatCents == null ? null : sign * vatCents,
-      grossCents: grossCents == null ? null : sign * grossCents,
-    },
-    hasDocumentAllowanceCharge: asArray(root.AllowanceCharge as unknown).length > 0,
-  };
 }
