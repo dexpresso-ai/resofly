@@ -25,7 +25,7 @@ import {
   type AccountRef, type InvoiceConfidence, type InvoiceExtraction, type VatCodeRef,
 } from './claudeInvoice.ts';
 import { recordAiUsage } from './claudeSummary.ts';
-import { parseUblDocument, type ParsedUblDocument } from './ubl.ts';
+import { parseUblDocument, type ParsedUblDocument } from './ublParse.ts';
 import { isXmlFile, normEmail, normIban, normName, normVat } from './invoiceInboxRules.ts';
 
 export { SUPPORTED_MIME_TYPES, isXmlFile, normEmail, normIban, normName, normVat };

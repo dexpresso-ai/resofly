@@ -15,7 +15,7 @@ export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled' | 'void' | 'written_off';
 export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
 export type InvoiceEmailDeliveryStatus = QuoteEmailDeliveryStatus;
-export type InvoiceWorkflowEventType = 'created_from_quote' | 'public_token_created' | 'public_link_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'payment_link_created' | 'payment_open' | 'payment_paid' | 'payment_failed' | 'payment_expired' | 'invoice_version_created' | 'invoice_pdf_attached' | 'locked' | 'expired' | 'cancelled' | 'void' | 'written_off' | 'payment_refunded' | 'credit_note_issued' | 'payment_charged_back' | 'chargeback_reversed' | 'credit_note_emailed';
+export type InvoiceWorkflowEventType = 'created_from_quote' | 'public_token_created' | 'public_link_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'payment_link_created' | 'payment_open' | 'payment_paid' | 'payment_failed' | 'payment_expired' | 'invoice_version_created' | 'invoice_pdf_attached' | 'locked' | 'expired' | 'cancelled' | 'void' | 'written_off' | 'payment_refunded' | 'credit_note_issued' | 'payment_charged_back' | 'chargeback_reversed' | 'credit_note_emailed' | 'e_invoice_sent' | 'e_invoice_delivered' | 'e_invoice_failed';
 export type InvoiceVersionReason = 'sent_to_client' | 'payment_created' | 'paid' | 'manual';
 export type InvoicePaymentStatus = 'creating' | 'open' | 'pending' | 'authorized' | 'paid' | 'failed' | 'expired' | 'canceled' | 'refunded' | 'charged_back';
 export type InvoiceRefundKind = 'manual' | 'mollie';
@@ -283,8 +283,16 @@ export interface ContractVersion {
   pdf_size_bytes: number | null;
 }
 
+export type EInvoiceChannel = 'email' | 'mollie';
+
 export interface Client extends OrgScopedRow {
   name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; client_kind: ClientKind; tags: string[]; follow_up: string | null; value_eur: number; vat_number: string | null; kvk_number: string | null; address_line1: string | null; address_line2: string | null; postal_code: string | null; city: string | null; country: string | null;
+  /** Facturen aan deze klant gaan als e-factuur (UBL met de PDF erin). Ontbreekt op rijen van vóór de migratie. */
+  e_invoicing_enabled?: boolean;
+  /** Optioneel e-factuuradres; leeg = het gewone e-mailadres. */
+  e_invoice_email?: string | null;
+  /** Hoe de e-factuur gaat: 'email' = UBL met de PDF erin per mail; 'mollie' = via Mollie over Peppol. */
+  e_invoice_channel?: EInvoiceChannel | null;
   /** Waarden van de zelf gedefinieerde vrije velden, als {field_key: waarde}. */
   custom_fields: Record<string, CustomFieldValue>;
   created_at: string; updated_at: string;
@@ -1397,6 +1405,21 @@ export interface InvoiceEmailDelivery {
   status: InvoiceEmailDeliveryStatus;
   delivery_kind?: 'invoice' | 'reminder' | 'dunning';
   reminder_level?: number | null;
+  /**
+   * 'e_invoice_email' = als e-factuur (UBL met de PDF erin) per mail verstuurd;
+   * 'e_invoice_mollie' = via Mollie over Peppol (provider_email_id = het id van de Mollie-factuur).
+   */
+  delivery_channel?: 'email' | 'e_invoice_email' | 'e_invoice_mollie';
+  e_invoice_file_name?: string | null;
+  e_invoice_size_bytes?: number | null;
+  e_invoice_sha256?: string | null;
+  /** Alleen via Mollie: de Peppol-aflevering (issuing, issued, failed). */
+  e_invoice_status?: 'issuing' | 'issued' | 'failed' | null;
+  /** Alleen via Mollie: het nummer dat Mollie gaf (INV-…), Mollies status en zijn betaallink. */
+  external_invoice_number?: string | null;
+  external_status?: string | null;
+  external_payment_url?: string | null;
+  external_synced_at?: string | null;
   sent_at: string | null;
   delivered_at: string | null;
   opened_at: string | null;

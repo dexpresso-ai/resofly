@@ -31,6 +31,7 @@ const TIME_SORTS = ['-created_at', 'created_at', '-updated_at', 'updated_at'] as
 
 export const CLIENT_STATUSES = ['active', 'prospect', 'inactive'] as const;
 export const CLIENT_KINDS = ['business', 'consumer'] as const;
+export const CLIENT_E_INVOICE_CHANNELS = ['email', 'mollie'] as const;
 export const PROJECT_BILLING_TYPES = ['hourly', 'fixed_price'] as const;
 export const TASK_STATUSES = ['todo', 'doing', 'review', 'done'] as const;
 export const PRIORITIES = ['low', 'med', 'high'] as const;
@@ -64,6 +65,9 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       postal_code: { type: 'text', description: 'Postcode.', nullable: true, maxLength: 20 },
       city: { type: 'text', description: 'Plaats.', nullable: true, maxLength: 100 },
       country: { type: 'text', description: 'Land.', nullable: true, maxLength: 100 },
+      e_invoicing_enabled: { type: 'boolean', description: 'Facturen aan deze klant gaan als e-factuur (UBL met de PDF erin); uit = alleen de PDF.', default: false },
+      e_invoice_email: { type: 'email', description: 'E-factuuradres, bijvoorbeeld het inkoopfacturenadres van het boekhoudpakket van de klant. Leeg = het gewone e-mailadres.', nullable: true },
+      e_invoice_channel: { type: 'enum', description: 'Hoe de e-factuur gaat: email = UBL met de PDF erin per mail; mollie = via Mollie over het Peppol-netwerk.', values: CLIENT_E_INVOICE_CHANNELS, default: 'email' },
       notes: { type: 'text', description: 'Notities.', nullable: true, maxLength: 10_000 },
       tags: { type: 'text_array', description: 'Labels (hooguit 30).', maxLength: 60, maxItems: 30 },
       color: { type: 'color', description: 'Kleur in de app, als #RRGGBB.', default: '#FFD966' },
@@ -79,6 +83,7 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       status: { column: 'status', op: 'eq', type: 'enum', values: CLIENT_STATUSES, description: 'Alleen klanten met deze status.' },
       client_kind: { column: 'client_kind', op: 'eq', type: 'enum', values: CLIENT_KINDS, description: 'Zakelijk of particulier.' },
       email: { column: 'email', op: 'eq', type: 'text', description: 'Precies dit e-mailadres (hoofdletters maken niet uit).', lowercase: true },
+      e_invoicing_enabled: { column: 'e_invoicing_enabled', op: 'eq_bool', type: 'boolean', description: 'Alleen klanten met (true) of zonder (false) e-facturatie.' },
     },
     search: ['name', 'contact_name', 'email', 'client_code'],
     sort: ['-created_at', 'created_at', 'name', '-name', '-updated_at', 'updated_at'],

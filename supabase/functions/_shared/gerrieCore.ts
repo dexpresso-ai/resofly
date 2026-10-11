@@ -7,6 +7,7 @@ import {
 } from '../_shared/mergeTokens.ts';
 import { ACTIONS } from '../_shared/actions/index.ts';
 import { getAction, searchActions } from '../_shared/actions/registry.ts';
+import { defaultInvoiceRecipient, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
 import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '../_shared/actions/types.ts';
 
 // ============================================================
@@ -748,7 +749,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_invoice` — conceptfactuur klaarzetten. Zoek eerst de klant met `search_clients` (gebruik diens exacte id) en bepaal de regels (omschrijving, aantal, prijs per stuk EXCL. btw, btw% — meestal 21).',
           '- `propose_quote` — conceptofferte klaarzetten. Net als de factuur, met een optionele geldig-tot-datum.',
           '- `propose_client` — nieuwe klant klaarzetten. Controleer eerst met `search_clients` of de klant al bestaat (voorkom dubbelen). Naam is verplicht; contactpersoon/e-mail/telefoon optioneel.',
-          '- `propose_send_invoice` / `propose_send_quote` — ÉÉN BESTAANDE factuur/offerte per e-mail naar de klant versturen. Zoek het document eerst met `list_invoices`/`list_quotes` en gebruik het exacte id. Het gaat naar het e-mailadres van de gekoppelde klant; benoem dat adres in je antwoord zodat de gebruiker het kan controleren vóór hij bevestigt.',
+          '- `propose_send_invoice` / `propose_send_quote` — ÉÉN BESTAANDE factuur/offerte per e-mail naar de klant versturen. Zoek het document eerst met `list_invoices`/`list_quotes` en gebruik het exacte id. Het gaat naar het e-mailadres van de gekoppelde klant — of, staat bij die klant e-facturatie aan, als e-factuur (UBL met de PDF erin) naar het e-factuuradres; benoem dat adres in je antwoord zodat de gebruiker het kan controleren vóór hij bevestigt. Staat bij de klant "via Mollie", dan geeft Mollie de factuur uit en verstuurt hem over Peppol, met een eigen Mollie-nummer en betalen via Mollie; dat kan alleen voor een factuur die nog niet verstuurd is.',
           '- `propose_send_invoices` / `propose_send_quotes` — MEERDERE facturen/offertes tegelijk. Gaat het om meer dan één document, gebruik dan ALTIJD deze en geef alle id\'s in één aanroep mee: de gebruiker krijgt dan één lijst waarin hij per regel een vinkje zet (of in één klik alles aan- of uitzet). Zet nooit meerdere losse voorstellen achter elkaar.',
           '- `propose_send_reminders` — de betalingsherinneringen die vandaag aan de beurt zijn (per factuur het volgende niveau: 1e/2e/3e), of beperkt tot één niveau. Ook dit wordt een afvinklijst: de gebruiker beslist per factuur. Met `list_due_reminders` kun je eerst tonen wat er klaarstaat (groepeer in je antwoord per niveau).',
           '- `propose_send_client_email` — een VRIJE e-mail naar één of meer klanten, zoals vanaf de klantenkaart. Zoek de klanten met `search_clients` en geef ze in ÉÉN aanroep mee. Schrijf per klant een kort, persoonlijk bericht en noem in je antwoord wie hem krijgt, zodat de gebruiker het kan nalezen vóór hij afvinkt. Klanten zonder e-mailadres vallen automatisch af.',
@@ -1334,7 +1335,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_send_invoice',
-    description: 'Stel voor om een BESTAANDE factuur per e-mail naar de klant te versturen. Je verstuurt NIETS zelf: de gebruiker bevestigt de verzending met een knop in de chat. Zoek de factuur eerst met list_invoices en gebruik het exacte id. De factuur gaat naar het e-mailadres van de gekoppelde klant.',
+    description: 'Stel voor om een BESTAANDE factuur per e-mail naar de klant te versturen. Je verstuurt NIETS zelf: de gebruiker bevestigt de verzending met een knop in de chat. Zoek de factuur eerst met list_invoices en gebruik het exacte id. De factuur gaat naar het e-mailadres van de gekoppelde klant; staat bij die klant e-facturatie aan, dan als e-factuur (UBL met de PDF erin) naar het e-factuuradres, of — met "via Mollie" — via Mollie over Peppol.',
     input_schema: {
       type: 'object',
       properties: { id: { type: 'string', description: 'Het exacte id van de factuur (uit list_invoices).' } },
@@ -3419,6 +3420,31 @@ async function buildConvertQuoteProposal(ctx: GerrieContext, input: Record<strin
   };
 }
 
+/**
+ * Waar een document heen gaat. Een factuur volgt de e-facturatie van de klant
+ * (eInvoicing.ts); een offerte gaat altijd naar het gewone e-mailadres.
+ */
+function sendRecipient(kind: 'invoice' | 'quote', client: Record<string, unknown> | null): string {
+  if (!client) return '';
+  if (kind === 'quote') return client.email ? String(client.email).trim() : '';
+  return defaultInvoiceRecipient({
+    email: client.email ? String(client.email) : null,
+    e_invoicing_enabled: client.e_invoicing_enabled === true,
+    e_invoice_email: client.e_invoice_email ? String(client.e_invoice_email) : null,
+  });
+}
+
+/** Gaat een factuur aan deze klant via Mollie (Peppol)? Zelfde regel als invoice-workflow. */
+function sendsViaMollie(client: Record<string, unknown> | null): boolean {
+  return invoiceDeliveryChannel({
+    email: client?.email ? String(client.email) : null,
+    e_invoicing_enabled: client?.e_invoicing_enabled === true,
+    e_invoice_channel: client?.e_invoice_channel ? String(client.e_invoice_channel) : null,
+  }) === 'e_invoice_mollie';
+}
+
+const MOLLIE_RESEND_REFUSAL = 'Deze factuur is al verstuurd. Bij deze klant gaan facturen via Mollie, en Mollie zou er een nieuwe factuur met een eigen nummer van maken — dat is dubbel. Opnieuw versturen kan per e-mail: zet bij de klant het e-factuurkanaal op "per e-mail".';
+
 /** Bereidt het versturen van een bestaande factuur/offerte voor (alleen vóórstellen). */
 async function buildSendProposal(ctx: GerrieContext, kind: 'invoice' | 'quote', input: Record<string, unknown>): Promise<ProposalResult> {
   const table = kind === 'invoice' ? 'invoices' : 'quotes';
@@ -3437,10 +3463,16 @@ async function buildSendProposal(ctx: GerrieContext, kind: 'invoice' | 'quote', 
   if (blocked.includes(status)) return { ok: false, error: `Deze ${docLabel} heeft status "${status}" en kan niet verstuurd worden.` };
   if (!doc.client_id) return { ok: false, error: `Aan deze ${docLabel} is geen klant gekoppeld; er is geen e-mailadres om naar te versturen.` };
 
-  const { data: client } = await supabaseAdmin.from('clients')
-    .select('name, contact_name, email').eq('organization_id', ctx.organizationId).eq('id', doc.client_id).maybeSingle();
-  const email = client?.email ? String(client.email).trim() : '';
+  // Als string getypt: de select-parser van supabase-js struikelt over een ternary.
+  const clientColumns: string = kind === 'invoice' ? 'name, contact_name, email, e_invoicing_enabled, e_invoice_email, e_invoice_channel' : 'name, contact_name, email';
+  const { data: clientRow } = await supabaseAdmin.from('clients')
+    .select(clientColumns).eq('organization_id', ctx.organizationId).eq('id', doc.client_id).maybeSingle();
+  const client = (clientRow ?? null) as unknown as Record<string, unknown> | null;
+  // Een factuur aan een klant met e-facturatie gaat naar het e-factuuradres —
+  // hetzelfde adres dat invoice-workflow kiest, zodat de kaart klopt.
+  const email = sendRecipient(kind, client);
   if (!email) return { ok: false, error: `De klant heeft geen e-mailadres; vul dat eerst in voordat je de ${docLabel} verstuurt.` };
+  if (kind === 'invoice' && sendsViaMollie(client) && status !== 'draft') return { ok: false, error: MOLLIE_RESEND_REFUSAL };
 
   return {
     ok: true,
@@ -3491,9 +3523,10 @@ async function buildSendBatchProposal(ctx: GerrieContext, kind: 'invoice' | 'quo
   const clientIds = [...new Set(rows.map((r) => (r.client_id ? String(r.client_id) : '')).filter(Boolean))];
   const clientById = new Map<string, Record<string, unknown>>();
   if (clientIds.length) {
+    const clientColumns: string = kind === 'invoice' ? 'id, name, contact_name, email, e_invoicing_enabled, e_invoice_email, e_invoice_channel' : 'id, name, contact_name, email';
     const { data: clients } = await supabaseAdmin.from('clients')
-      .select('id, name, contact_name, email').eq('organization_id', ctx.organizationId).in('id', clientIds);
-    for (const c of (clients ?? []) as Array<Record<string, unknown>>) clientById.set(String(c.id), c);
+      .select(clientColumns).eq('organization_id', ctx.organizationId).in('id', clientIds);
+    for (const c of (clients ?? []) as unknown as Array<Record<string, unknown>>) clientById.set(String(c.id), c);
   }
 
   const blocked = kind === 'invoice' ? ['cancelled', 'void', 'written_off'] : ['cancelled'];
@@ -3509,8 +3542,9 @@ async function buildSendBatchProposal(ctx: GerrieContext, kind: 'invoice' | 'quo
     if (blocked.includes(status)) { skipped.push({ number, reason: `status "${status}" — mag niet verstuurd worden` }); continue; }
     if (!doc.client_id) { skipped.push({ number, reason: 'geen klant gekoppeld' }); continue; }
     const client = clientById.get(String(doc.client_id));
-    const email = client?.email ? String(client.email).trim() : '';
+    const email = sendRecipient(kind, client ?? null);
     if (!email) { skipped.push({ number, reason: `${String(client?.name ?? 'de klant')} heeft geen e-mailadres` }); continue; }
+    if (kind === 'invoice' && sendsViaMollie(client ?? null) && status !== 'draft') { skipped.push({ number, reason: 'al verstuurd; via Mollie zou het een tweede factuur worden' }); continue; }
 
     items.push({
       id, number, status,

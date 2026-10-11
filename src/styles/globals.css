@@ -1146,6 +1146,21 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .fin-reminder-pill { display:inline-flex; align-items:center; justify-content:center; margin-left:6px; min-width:20px; padding:1px 6px; border-radius:999px; font-size:11px; font-weight:700; line-height:1.5; background:rgba(var(--warn-rgb),.16); color:var(--warn); border:1px solid rgba(var(--warn-rgb),.32); vertical-align:middle; }
 .fin-reminder-pill.paused { background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k))); color:rgba(var(--sheen-rgb),calc(.6 * var(--sheen-k))); border-color:rgba(var(--sheen-rgb),calc(.16 * var(--sheen-k))); }
 .fin-reminder-pill.unbooked { background:rgba(var(--danger-rgb),.16); color:var(--danger); border-color:rgba(var(--danger-rgb),.32); }
+/* E-facturatie: ging als e-factuur (vol), of gaat er een worden (omlijnd). */
+.fin-reminder-pill.einvoice { display:flex; width:max-content; margin:4px 0 0; background:rgba(var(--accent-rgb),.16); color:var(--accent-ink); border-color:rgba(var(--accent-rgb),.36); }
+.fin-reminder-pill.einvoice.upcoming { background:transparent; color:var(--muted2); border-style:dashed; }
+/* E-factuur via Mollie: Mollies nummer, de Peppol-aflevering en de acties. */
+.mollie-einvoice-panel { display:grid; gap:10px; padding:12px 14px; border:1px solid rgba(var(--accent-rgb),.3); border-radius:16px; background:rgba(var(--accent-rgb),.06); min-width:0; }
+.mollie-einvoice-panel.failed { border-color:rgba(220,80,60,.45); background:rgba(220,80,60,.06); }
+.mollie-einvoice-panel dl { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:0; }
+.mollie-einvoice-panel dl div { display:grid; gap:3px; min-width:0; }
+.mollie-einvoice-panel dt { color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
+.mollie-einvoice-panel dd { margin:0; color:var(--text); font-size:13px; font-weight:600; overflow-wrap:anywhere; }
+.mollie-einvoice-note { margin:0; color:var(--muted2); font-size:12px; line-height:1.45; }
+.mollie-einvoice-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.mollie-einvoice-actions button { display:inline-flex; align-items:center; gap:6px; }
+.mollie-einvoice-actions a { color:var(--accent-ink); font-size:12px; font-weight:700; }
+@media (max-width:760px) { .mollie-einvoice-panel dl { grid-template-columns:1fr 1fr; } }
 /* Vangnet-banner: uitgegeven facturen die (nog) niet in het grootboek staan */
 .fin-autobook-banner { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:12px 0; padding:10px 14px; border-radius:12px; background:rgba(var(--warn-rgb),.12); border:1px solid rgba(var(--warn-rgb),.32); color:var(--warn); font-size:13px; font-weight:600; }
 .fin-autobook-banner span { flex:1; min-width:220px; }
@@ -1819,6 +1834,10 @@ body::before{
 .client-view-toggle button{appearance:none;border:0;background:transparent;color:var(--muted2);font:inherit;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:7px 11px;cursor:pointer;transition:all .15s ease}
 .client-view-toggle button:hover{color:var(--text);background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)))}
 .client-view-toggle button.active{background:var(--accent);color:var(--on-accent);box-shadow:0 6px 18px rgba(var(--accent-rgb),.16)}
+/* In de kop van het PDF-paneel: verzonden PDF of live voorbeeld — kleiner dan in het klantoverzicht. */
+.finance-preview-head .finance-preview-toggle{width:auto;padding:2px;gap:2px}
+.finance-preview-head .finance-preview-toggle button{flex:0 0 auto;padding:4px 9px;font-size:10px}
+.finance-preview-head:has(.finance-preview-toggle){flex-wrap:wrap}
 .client-empty-state{min-height:280px;display:grid;place-items:center;text-align:center;gap:8px;padding:34px;border:1px dashed var(--border2);border-radius:22px;background:rgba(var(--sheen-rgb),calc(.025 * var(--sheen-k)))}
 .client-empty-state strong{font-size:20px;font-weight:700;color:var(--text)}
 .client-empty-state span{max-width:520px;color:var(--muted2);line-height:1.55}
@@ -2738,6 +2757,11 @@ button.chat-member:hover{background:var(--bg3)}
 .client-portal-access-hint{color:var(--muted)}
 .client-welcome-toggle{grid-column:1/-1}
 .client-welcome-hint{color:var(--muted);font-style:normal}
+/* E-facturatie per klant: de schakelaar met uitleg eronder, op de volle breedte. */
+.client-einvoice-toggle{grid-column:1/-1;align-items:flex-start}
+.client-einvoice-toggle input{margin-top:2px;flex:0 0 auto}
+.client-einvoice-toggle span{display:flex;flex-direction:column;gap:3px;min-width:0}
+.client-einvoice-toggle small{color:var(--muted2);font-size:12px;line-height:1.45}
 
 /* ── Klantportaal: offerte-/factuurdetail met acties ──────────────────── */
 .portal-status.accepted,.portal-status.paid{background:rgba(var(--ok-rgb),.16);color:var(--ok-ink,var(--accent-g))}
