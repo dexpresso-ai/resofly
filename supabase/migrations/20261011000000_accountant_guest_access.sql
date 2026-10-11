@@ -971,8 +971,8 @@ revoke all on function public.my_accountant_organization_ids() from public, anon
 grant execute on function public.my_accountant_organization_ids() to authenticated, service_role;
 
 -- Zet het hek op één tabel. Zonder p_select_using staat alles dicht voor de
--- boekhouder; met p_select_using mag hij de rijen lezen waarvoor die expressie
--- waar is, en schrijven nooit. Alleen voor migraties, net als apply_module_gate.
+-- boekhouder; met p_select_using mag de boekhouder de rijen lezen waarvoor die
+-- expressie waar is, en schrijven nooit. Alleen voor migraties, net als apply_module_gate.
 create or replace function public.apply_accountant_fence(p_table text, p_select_using text default null)
 returns void
 language plpgsql
@@ -1062,8 +1062,8 @@ grant execute on function public.accountant_fence_gaps() to service_role;
 
 -- Elke organisatietabel zonder module gate krijgt het hek; vier met een eigen
 -- regel. Tabellen mét module gate hebben het niet nodig: daar geeft
--- member_module_level de boekhouder 'none' — behalve Financiën, en daar mag hij
--- juist lezen.
+-- member_module_level de boekhouder 'none' — behalve Financiën, en daar mag de
+-- boekhouder juist lezen.
 do $$
 declare
   v_table  text;
@@ -1094,7 +1094,7 @@ begin
 end;
 $$;
 
--- De teamlijst: alleen zijn eigen rij (de app leest daar zijn rol uit).
+-- De teamlijst: alleen de eigen rij (de app leest daar de rol uit).
 select public.apply_accountant_fence('organization_members', 'user_id = (select auth.uid())');
 -- Bedrijfsgegevens, btw-periode, KOR: lezen.
 select public.apply_accountant_fence('company_settings', 'true');
