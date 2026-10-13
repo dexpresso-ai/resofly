@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowLeft, ExternalLink, Inbox, Mail, MailOpen, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, User, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CalendarDays, ExternalLink, Inbox, Layers, Mail, MailOpen, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, User, Users, X } from 'lucide-react';
 import type { AppData, Client, ClientCall, ClientEmail, ClientEmailSearchHit, ClientEmailThreadOverview, Ticket } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { DetailTabs } from '../components/DetailTabs';
@@ -379,8 +379,14 @@ export function CommunicationPage({
     await reload();
   }
 
+  /** Alleen de keuzelijsten (soort, klant, periode); de zoekterm heeft zijn eigen wisknop. */
+  function clearFilters() {
+    setClientFilter(''); setKindFilter(''); setPeriod(''); setCustomFrom(''); setCustomTo('');
+  }
+
   function resetFilters() {
-    setQuery(''); setClientFilter(''); setKindFilter(''); setPeriod(''); setCustomFrom(''); setCustomTo('');
+    setQuery('');
+    clearFilters();
   }
 
   const singlePane = narrow;
@@ -516,19 +522,23 @@ export function CommunicationPage({
           label="Berichten"
           className="comm-tabs"
         />
+        {/* Elke keuzelijst is een compacte knop met een icoon dat zegt waaróp
+            hij filtert; staat er iets anders dan "alle", dan kleurt hij goud.
+            Het menu mag breder zijn dan de knop, anders kapt "Alleen
+            telefoon" of een lange klantnaam af. */}
         {tab !== 'inbox' && <div className={`comm-filters${filtersOpen ? ' is-open' : ''}`}>
-          <Select className="comm-filter" value={kindFilter} onChange={e => setKindFilter(e.target.value as '' | ConversationKind)} aria-label="Soort">
+          <Select className={`form-select comm-filter${kindFilter ? ' is-set' : ''}`} icon={<Layers size={14} />} menuMinWidth={200} value={kindFilter} onChange={e => setKindFilter(e.target.value as '' | ConversationKind)} aria-label="Soort">
             <option value="">Alle soorten</option>
             <option value="email">Alleen e-mail</option>
             {canReadTickets && <option value="ticket">Alleen tickets</option>}
             <option value="call">Alleen telefoon</option>
           </Select>
-          <Select className="comm-filter" value={clientFilter} onChange={e => setClientFilter(e.target.value)} aria-label="Filter op klant" searchPlaceholder="Zoek een klant…">
+          <Select className={`form-select comm-filter${clientFilter ? ' is-set' : ''}`} icon={<Users size={14} />} menuMinWidth={260} value={clientFilter} onChange={e => setClientFilter(e.target.value)} aria-label="Filter op klant" searchPlaceholder="Zoek een klant…">
             <option value="">Alle klanten</option>
             {hasNoClient && <option value={NO_CLIENT}>Zonder klant</option>}
             {clientOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
           </Select>
-          <Select className="comm-filter" value={period} onChange={e => setPeriod(e.target.value as DatePeriod)} aria-label="Periode">
+          <Select className={`form-select comm-filter${period ? ' is-set' : ''}`} icon={<CalendarDays size={14} />} menuMinWidth={200} value={period} onChange={e => setPeriod(e.target.value as DatePeriod)} aria-label="Periode">
             {DATE_PERIOD_OPTIONS.map(opt => <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>)}
           </Select>
           {period === 'custom' && <div className="comm-date-range">
@@ -536,6 +546,9 @@ export function CommunicationPage({
             <span>tot</span>
             <Input type="date" value={customTo} min={customFrom || undefined} onChange={e => setCustomTo(e.target.value)} aria-label="Tot en met" />
           </div>}
+          {filterCount > 0 && <button type="button" className="comm-filter-reset" onClick={clearFilters} aria-label="Filters wissen" title="Soort, klant en periode terugzetten">
+            <RotateCcw size={13} aria-hidden="true" /> <span>Wissen</span>
+          </button>}
         </div>}
       </div>
 
