@@ -14,6 +14,9 @@ tabellen, en de opruimtaak roept een functie aan.
      logboek, opruimwachtrij; `recipient_kind 'client'` voor Delen; opslagmeter telt
      zendingen mee). Maakt ook een index op `attachments(organization_id, storage_key)` en
      `documents(organization_id, storage_key)`; bij een grote tabel duurt dat even.
+   - `20261013110000_file_transfers_accountant_fence.sql`: het boekhouder-hek op de drie
+     interne tabellen (codes, sessies, opruimwachtrij). De rooktest na de eerste deploy
+     ving dat gat; de tabellen waren al dicht (geen policies), het hek maakt het expliciet.
    - Let op: `20261013000000_teamchat_teams.sql` (teamchat, een andere wijziging) staat er
      vóór en gaat dus mee als die nog niet is toegepast.
 2. **Edge functions** — `supabase functions deploy` (alles), of minimaal:

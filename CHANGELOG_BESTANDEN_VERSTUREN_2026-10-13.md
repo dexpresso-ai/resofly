@@ -63,7 +63,10 @@ waarmee ze meekwamen, en onder het ticketantwoord.
 
 ## Toegevoegd
 
-- **Migratie `20261013100000_file_transfers.sql`**
+- **Migratie `20261013100000_file_transfers.sql`** (+ `20261013110000_file_transfers_accountant_fence.sql`:
+  het boekhouder-hek op de drie interne tabellen; de rooktest na de eerste deploy ving dat ze
+  het misten — ze waren al dicht, nu ook expliciet. `roles.test.ts` vangt zo'n vergeten tabel
+  voortaan al vóór de deploy.)
   - `file_transfers`, `file_transfer_items`, `file_transfer_recipients`,
     `file_transfer_codes`, `file_transfer_sessions`, `file_transfer_events`,
     `storage_purge_queue`, met RLS (lezen voor de organisatie, modulepoort Inhoud);

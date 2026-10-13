@@ -160,6 +160,25 @@ test('het hek: elke organisatietabel zonder module gate, en de migratie controle
   assert.match(smoke, /accountant_fence_gaps\(\)/);
 });
 
+test('elke organisatietabel van na het hek krijgt een module gate of het hek', () => {
+  // De rooktest ziet een vergeten tabel pas ná de deploy (accountant_fence_gaps);
+  // dit vangt hem al in de migratie. Zo gemist in 20261013100000 (drie interne
+  // tabellen van bestanden versturen), hersteld in 20261013110000.
+  const all = migrationFiles.map((name) => migration(name).replace(/\r\n/g, '\n')).join('\n');
+  const missing: string[] = [];
+  for (const file of migrationFiles.filter((name) => name > ACCOUNTANT)) {
+    const sql = migration(file).replace(/\r\n/g, '\n').replace(/--[^\n]*/g, '');
+    for (const match of sql.matchAll(/create table (?:if not exists )?(?:public\.)?(\w+)\s*\(([\s\S]*?)\n\);/gi)) {
+      const [, table, body] = match;
+      if (!/\borganization_id\b/.test(body)) continue;
+      const covered = new RegExp(`apply_module_gate\\(\\s*'${table}'`).test(all)
+        || new RegExp(`apply_accountant_fence\\(\\s*'${table}'`).test(all);
+      if (!covered) missing.push(`${file}: ${table}`);
+    }
+  }
+  assert.deepEqual(missing, [], 'deze tabellen hebben geen module gate en geen boekhouder-hek (apply_accountant_fence)');
+});
+
 test('een lezer trekt geen inkoopnummer meer', () => {
   const { file, body } = latestDefinition('next_purchase_invoice_number');
   assert.equal(file, ACCOUNTANT);
