@@ -2721,6 +2721,19 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   const [baseline, setBaseline] = useState<EventDetailForm | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  /**
+   * De notitie die bij een mislukte inktopslag al is aangemaakt. Zonder dit
+   * maakte een tweede poging — en die is waarschijnlijk, want het venster
+   * blijft open staan met de tekening erin — een tweede notitie bij dezelfde
+   * afspraak. Bij een geslaagde poging wordt hij weer leeggemaakt.
+   *
+   * Hoort bij de andere hooks, vóór `if (!event) return null`. Stond hij
+   * daaronder, dan telde React bij een gesloten paneel één hook minder dan bij
+   * een open paneel, en gooide het bij elke afspraak die je opende "Rendered
+   * more hooks than during the previous render": de hele app viel weg en je
+   * keek naar een zwart scherm.
+   */
+  const pendingInkNoteRef = useRef<string | null>(null);
 
   useEffect(() => {
     setSelectedNoteId('');
@@ -2728,6 +2741,10 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
     setQuickText('');
     setQuickError(null);
     setInkOpen(false);
+    // Het paneel blijft gemount terwijl je van afspraak wisselt: een notitie
+    // die bij de vorige afspraak achterbleef, hoort niet de tekening van deze
+    // te krijgen.
+    pendingInkNoteRef.current = null;
     const f = event ? detailFormFromEvent(event) : null;
     setForm(f);
     setBaseline(f);
@@ -2847,14 +2864,6 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   }
 
   /** Handgeschreven notitie vanuit de overlay: notitie + koppeling, daarna de inkt. */
-  /**
-   * De notitie die bij een mislukte inktopslag al is aangemaakt. Zonder dit
-   * maakte een tweede poging — en die is waarschijnlijk, want het venster
-   * blijft open staan met de tekening erin — een tweede notitie bij dezelfde
-   * afspraak. Bij een geslaagde poging wordt hij weer leeggemaakt.
-   */
-  const pendingInkNoteRef = useRef<string | null>(null);
-
   async function saveInkNote(doc: InkDocument, title: string) {
     if (!event) return;
     // Eerst de maat, dan pas iets aanmaken: boven 6 MB weigert de trigger, en
