@@ -47,6 +47,9 @@ const PLACEHOLDERS: Record<string, Omit<EmailPlaceholder, 'token'>> = {
   item_name: { label: 'Naam van het gedeelde item', example: 'Oplevering fase 2' },
   item_kind: { label: 'Soort item', example: 'Map' },
   item_kind_lower: { label: 'Soort item (kleine letter)', example: 'map' },
+  transfer_subject: { label: 'Onderwerp van de zending', example: 'Ontwerpen homepage' },
+  file_count_sentence: { label: 'Aantal bestanden als zinsdeel', example: '3 bestanden' },
+  total_size: { label: 'Totale grootte', example: '24,6 MB' },
   client_name: { label: 'Klantnaam', example: 'Jansen Bouw BV' },
   ticket_title: { label: 'Titel van het ticket', example: 'Website laadt traag op mobiel' },
   ticket_status: { label: 'Huidige status', example: 'In behandeling' },
@@ -219,6 +222,22 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
       cta_label: 'Bekijk {{item_kind_lower}}',
     },
     placeholders: placeholders('recipient_name', 'sender_name', 'company_name', 'item_name', 'item_kind', 'item_kind_lower', 'client_name', 'valid_until'),
+  },
+  // Spiegelt FILE_TRANSFER_DEFAULTS en FILE_TRANSFER_PLACEHOLDERS in
+  // _shared/emailTemplates/fileTransfer.ts; emailTemplateContent.test.ts houdt ze gelijk.
+  {
+    key: 'file.transfer',
+    label: 'Bestanden verstuurd',
+    group: 'bestanden',
+    description: 'De e-mail die een ontvanger krijgt als je bestanden verstuurt (Inhoud → Versturen, of Bestanden versturen in het klantdossier). Onder je tekst staat altijd het overzicht: hoeveel bestanden, hoe groot en tot wanneer ze beschikbaar zijn. De knop gaat naar een persoonlijke, beveiligde pagina; de ontvanger komt daar binnen met een code die naar het eigen e-mailadres gaat. Stuur je bestanden mee met een gewoon bericht, dan geldt jouw eigen tekst en komt het bestandenblok eronder.',
+    fields: ['subject', 'intro', 'closing', 'cta_label'],
+    defaults: {
+      subject: '{{transfer_subject}}',
+      intro: 'Beste {{recipient_name}},\n{{sender_name}} heeft je {{file_count_sentence}} gestuurd via een beveiligde link.',
+      closing: '',
+      cta_label: 'Bestanden bekijken',
+    },
+    placeholders: placeholders('recipient_name', 'sender_name', 'company_name', 'transfer_subject', 'file_count_sentence', 'total_size', 'valid_until', 'client_name'),
   },
   // Klantmeldingen over tickets (portal-notify). Spiegelt PORTAL_TICKET_DEFAULTS
   // en PORTAL_TICKET_PLACEHOLDERS in _shared/emailTemplates/portalTicketUpdate.ts;

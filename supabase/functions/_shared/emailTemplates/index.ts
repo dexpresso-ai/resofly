@@ -3,6 +3,7 @@ import { renderContractSignedClientEmail } from './contractSignedClient.ts';
 import { renderContractSignedInternalEmail } from './contractSignedInternal.ts';
 import { renderCreditNoteSentEmail } from './creditNoteSent.ts';
 import { renderFileSharedEmail } from './fileShared.ts';
+import { renderFileTransferCodeEmail, renderFileTransferEmail } from './fileTransfer.ts';
 import { renderInvoiceDunningWik14Email } from './invoiceDunningWik14.ts';
 import { renderInvoiceReminderEmail } from './invoiceReminder.ts';
 import { renderInvoiceSentEmail } from './invoiceSent.ts';
@@ -35,6 +36,10 @@ export function renderEmailTemplate<K extends EmailTemplateKey>(templateKey: K, 
       return renderContractSignedInternalEmail(data as EmailTemplateInputMap['contract.signed.internal']);
     case 'file.shared':
       return renderFileSharedEmail(data as EmailTemplateInputMap['file.shared']);
+    case 'file.transfer':
+      return renderFileTransferEmail(data as EmailTemplateInputMap['file.transfer']);
+    case 'file.transferCode':
+      return renderFileTransferCodeEmail(data as EmailTemplateInputMap['file.transferCode']);
     case 'portal.ticketUpdate':
       return renderPortalTicketUpdateEmail(data as EmailTemplateInputMap['portal.ticketUpdate']);
     default: {

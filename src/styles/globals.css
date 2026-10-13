@@ -9182,6 +9182,142 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .share-public-foot{max-width:1040px;margin:20px auto 0;font-size:11.5px;color:rgba(var(--sheen-rgb),calc(.5 * var(--sheen-k)));text-align:center}
 .modal.share-read-modal{width:760px;max-width:100%}
 
+/* ── Bestanden versturen ──────────────────────────────────────────────────
+   Een zending: een bevroren pakket kopieën met een vervaldatum, naar de klant
+   of een contactpersoon. Het verstuurvenster leunt op de klassen van het
+   deelvenster (.share-*); hier staat alleen wat een zending extra heeft — de
+   bestandenlijst met voortgang, de status van een zending, het overzicht onder
+   "Gedeeld & verzonden", het blok onder een bericht en de ontvangstpagina
+   /ontvang/<token>. */
+.modal.xfer-modal{width:680px;max-width:100%}
+.modal.xfer-picker{width:620px;max-width:100%}
+.xfer-link-btn{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:0;border:none;background:none;color:var(--accent-ink);font:inherit;font-size:12px;font-weight:700;cursor:pointer}
+.xfer-link-btn:hover:not(:disabled){text-decoration:underline}
+.xfer-link-btn:disabled{opacity:.5;cursor:not-allowed}
+.xfer-new-contact{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) auto auto;gap:8px;align-items:center;margin-top:10px}
+
+.xfer-files{position:relative;border-radius:12px;transition:background .15s,box-shadow .15s}
+.xfer-files.is-dragging{background:rgba(var(--accent-rgb),.06);box-shadow:0 0 0 2px rgba(var(--accent-rgb),.45);padding-left:10px;padding-right:10px}
+.xfer-items{list-style:none;margin:0;padding:0;display:grid;gap:6px;max-height:300px;overflow:auto}
+.xfer-items li{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:var(--bg2);min-width:0}
+.xfer-items li.is-uploading{border-style:dashed}
+.xfer-items li.is-error{border-color:rgba(var(--danger-rgb),.45);background:rgba(var(--danger-rgb),.06)}
+.xfer-items li.is-purged{opacity:.55}
+.xfer-items li.is-purged .xfer-item-main strong{text-decoration:line-through}
+.xfer-items-compact{max-height:180px;gap:4px}
+.xfer-items-compact li{padding:6px 8px}
+.xfer-item-ic{display:inline-flex;flex-shrink:0;color:var(--accent-ink)}
+.xfer-item-main{display:grid;gap:3px;flex:1;min-width:0}
+.xfer-item-main strong{font-size:12.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xfer-item-main>span{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xfer-item-error{color:var(--danger)!important;white-space:normal!important}
+.xfer-item-remove,.xfer-item-open{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:26px;height:26px;border-radius:7px;border:1px solid transparent;background:none;color:var(--muted);cursor:pointer}
+.xfer-item-remove:hover:not(:disabled){color:var(--danger);border-color:rgba(var(--danger-rgb),.35);background:rgba(var(--danger-rgb),.08)}
+.xfer-item-open:hover:not(:disabled){color:var(--text);border-color:var(--border2);background:var(--bg3)}
+.xfer-item-remove:disabled,.xfer-item-open:disabled{opacity:.45;cursor:not-allowed}
+.xfer-progress{display:block;height:5px;border-radius:999px;background:var(--bg4);overflow:hidden}
+.xfer-progress>span{display:block;height:100%;border-radius:inherit;background:var(--accent);transition:width .2s ease}
+.xfer-skipped{margin:10px 0 0;padding:9px 11px;border-radius:10px;border:1px solid rgba(var(--warn-rgb),.38);background:rgba(var(--warn-rgb),.08);font-size:11.5px;line-height:1.5;color:var(--muted2)}
+.xfer-skipped p{display:flex;align-items:center;gap:6px;margin:0 0 4px;font-weight:700;color:var(--text)}
+.xfer-skipped ul{margin:0;padding-left:18px}
+.xfer-skipped strong{color:var(--text)}
+.xfer-add-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.xfer-options{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));align-items:end}
+.xfer-options .share-toggle{grid-column:1/-1}
+.xfer-sentence{display:flex;align-items:flex-start;gap:7px;margin:4px 0 0;padding:10px 12px;border-radius:10px;background:rgba(var(--accent-rgb),.08);border:1px solid rgba(var(--accent-rgb),.25);font-size:12.5px;line-height:1.55;color:var(--text)}
+.xfer-sentence svg{flex-shrink:0;margin-top:2px;color:var(--accent-ink)}
+.xfer-picker-search{display:flex;align-items:center;gap:8px;margin:0 0 14px;color:var(--muted)}
+.xfer-picker-search .form-input{flex:1;min-width:0}
+
+/* "Gedeeld & verzonden": tabs, lijst en detail van een zending */
+.xfer-tabs{display:flex;gap:4px;margin:0 0 16px;padding:3px;border-radius:11px;background:var(--bg2);border:1px solid var(--border)}
+.xfer-tabs button{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:7px 10px;border:none;border-radius:8px;background:none;color:var(--muted2);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.xfer-tabs button:hover{color:var(--text)}
+.xfer-tabs button.active{background:var(--bg4);color:var(--text);box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.25 * var(--shade-k)))}
+.xfer-list-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px}
+.xfer-list-head .share-lede{margin:0}
+.xfer-rows li{padding:0;border:none;background:none}
+.xfer-row{display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--bg2);color:inherit;font:inherit;text-align:left;cursor:pointer}
+.xfer-row:hover{border-color:var(--border2);background:var(--bg3)}
+.xfer-row .share-current-main{gap:3px}
+.xfer-row-warn{flex-shrink:0;color:var(--danger)}
+.xfer-state{flex-shrink:0;padding:2px 8px;border-radius:999px;border:1px solid var(--border);background:var(--bg3);font-size:10.5px;font-weight:700;color:var(--muted2);white-space:nowrap}
+.xfer-state-active{border-color:rgba(var(--ok-rgb),.4);background:rgba(var(--ok-rgb),.12);color:var(--ok)}
+.xfer-state-draft{border-style:dashed}
+.xfer-state-expired{color:var(--muted)}
+.xfer-state-revoked{border-color:rgba(var(--danger-rgb),.35);background:rgba(var(--danger-rgb),.08);color:var(--danger)}
+.xfer-detail{display:grid;gap:12px}
+.xfer-detail .share-section{margin-bottom:0}
+.xfer-back{display:inline-flex;align-items:center;gap:6px;justify-self:start;padding:0;border:none;background:none;color:var(--muted2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.xfer-back:hover{color:var(--text)}
+.xfer-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.xfer-detail-head h4{margin:0 0 3px;font-size:15px;font-weight:700;color:var(--text)}
+.xfer-detail-head p{margin:0}
+.xfer-detail>.share-hint{margin:0}
+.xfer-notice{display:flex;align-items:center;gap:7px;margin:0;padding:8px 11px;border-radius:9px;background:rgba(var(--ok-rgb),.1);border:1px solid rgba(var(--ok-rgb),.3);font-size:12px;color:var(--text)}
+.xfer-message{margin:0;padding:10px 12px;border-radius:10px;background:var(--bg2);border:1px solid var(--border);font-size:12.5px}
+.xfer-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:3px;vertical-align:1px;background:var(--muted)}
+.xfer-tone-ok{background:var(--ok)}
+.xfer-tone-warn{background:var(--warn)}
+.xfer-tone-danger{background:var(--danger)}
+.xfer-tone-muted{background:var(--muted)}
+.xfer-add-recipients{display:grid;gap:8px;margin-top:10px;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--bg2)}
+.xfer-inline-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.xfer-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;border-bottom:none}
+.xfer-extend{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;width:100%}
+.xfer-extend .share-option{min-width:200px}
+.xfer-events{list-style:none;margin:0;padding:0;display:grid;gap:5px;max-height:240px;overflow:auto;font-size:12px;color:var(--muted2)}
+.xfer-events li{display:flex;gap:10px;align-items:baseline}
+.xfer-event-when{flex-shrink:0;min-width:96px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* Onder een verstuurd bericht of ticketantwoord: wat er meeging, en hoe het ervoor staat */
+.xfer-msg-block{margin-top:10px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);overflow:hidden}
+.xfer-msg-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;width:100%;padding:8px 11px;border:none;background:none;color:var(--muted2);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.xfer-msg-head:hover{background:var(--bg3)}
+.xfer-msg-head svg{color:var(--accent-ink);flex-shrink:0}
+.xfer-msg-head strong{color:var(--text)}
+.xfer-msg-detail{padding:12px;border-top:1px solid var(--border);background:var(--bg1, var(--bg2))}
+
+/* Het mailvenster: paperclip, lijst en termijn */
+.xfer-mail-files{display:grid;gap:8px}
+.xfer-mail-files-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.xfer-mail-files-head .xfer-link-btn{margin-top:0}
+.xfer-mail-attach{position:relative}
+.drive-pop.xfer-mail-pop{top:calc(100% + 6px)}
+.xfer-mail-expiry{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted2)}
+.xfer-mail-expiry .form-input{width:auto}
+.xfer-mail-files .share-hint{margin:0}
+
+/* Ontvangstpagina /ontvang/<token> */
+.xfer-public-gate h2{display:flex;align-items:center;gap:9px;margin:0 0 10px}
+.xfer-public-gate p{margin:0 0 14px;line-height:1.6}
+.xfer-public-gate .xfer-link-btn{margin-top:10px}
+.xfer-code-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 4px}
+.xfer-code-row .form-input{flex:0 1 200px;min-width:150px;font-size:20px;letter-spacing:.18em;text-align:center;font-variant-numeric:tabular-nums}
+.xfer-public-note{margin:16px 0 0!important;font-size:12px}
+.xfer-public-list-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 12px}
+.xfer-public-list-head h2{margin:0}
+
+/* Klantportaal: ontvangen bestanden (tab Bestanden, onder berichten en ticketantwoorden) */
+.portal-files-heading{margin:6px 2px 10px;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.portal-transfer{display:grid;gap:10px}
+.portal-transfer.is-compact{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.portal-transfer.is-compact .portal-row{padding:8px 10px}
+.portal-transfer-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px}
+.portal-transfer-head strong{color:var(--text)}
+.portal-transfer-head span{color:var(--muted)}
+.portal-transfer-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.portal-transfer-gone{margin:8px 0 0;line-height:1.55}
+.portal-transfer-gone.is-compact{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+
+@media(max-width:640px){
+  .xfer-new-contact{grid-template-columns:1fr}
+  .xfer-detail-head{flex-direction:column}
+  .xfer-event-when{min-width:0}
+  .xfer-events li{flex-direction:column;gap:1px}
+  .xfer-code-row .form-input{flex:1 1 100%}
+}
+
 /* ── Selecteren en slepen in de verkenner ─────────────────────────────────
    Het vinkje ligt óver het icoon en verschijnt pas als je erlangs gaat of als
    er al iets aanstaat — zoals in OneDrive. Zo blijft een rustige lijst rustig,

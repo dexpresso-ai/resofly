@@ -1731,6 +1731,7 @@ export const selectDriveShares = (organizationId: UUID) =>
 /** Eén ontvanger voor een nieuwe deling. Precies één van de drie velden is gevuld. */
 export type DriveShareRecipientInput =
   | { kind: Extract<DriveShareRecipientKind, 'contact'>; clientContactId: UUID }
+  | { kind: Extract<DriveShareRecipientKind, 'client'> }
   | { kind: Extract<DriveShareRecipientKind, 'member'>; memberUserId: UUID }
   | { kind: Extract<DriveShareRecipientKind, 'link'>; email: string; name?: string | null };
 

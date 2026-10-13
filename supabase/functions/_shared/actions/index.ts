@@ -9,6 +9,7 @@ import { TICKETS_ACTIONS } from './tickets.ts';
 import { MARKETING_ACTIONS } from './marketing.ts';
 import { ADMIN_ACTIONS } from './admin.ts';
 import { INSIGHT_ACTIONS } from './insight.ts';
+import { FILES_ACTIONS } from './files.ts';
 
 /**
  * De volledige handelingenregistry, samengesteld uit de domeinbestanden.
@@ -31,4 +32,5 @@ export const ACTIONS: ActionDef[] = [
   ...MARKETING_ACTIONS,
   ...ADMIN_ACTIONS,
   ...INSIGHT_ACTIONS,
+  ...FILES_ACTIONS,
 ];

@@ -141,6 +141,7 @@ export function shareRecipientLabel(share: DriveShare): string {
 export function shareChannelLabel(share: DriveShare): string {
   switch (share.recipient_kind) {
     case 'contact': return 'Klantportaal';
+    case 'client': return 'Klantportaal · hoofdadres';
     case 'member': return 'Collega';
     default: return 'Deellink';
   }

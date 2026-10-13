@@ -86,6 +86,8 @@ jobs:
             supabase/functions/email-unsubscribe/index.ts \
             supabase/functions/file-share-public/index.ts \
             supabase/functions/file-share/index.ts \
+            supabase/functions/file-transfer-public/index.ts \
+            supabase/functions/file-transfer/index.ts \
             supabase/functions/gallery-public/index.ts \
             supabase/functions/gerrie-agent-runner/index.ts \
             supabase/functions/gerrie-agent/index.ts \

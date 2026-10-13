@@ -20,6 +20,10 @@ import {
   fetchPortalProjectDetail,
   fetchPortalSharedFiles,
   fetchPortalTicketThread,
+  fetchPortalTransfers,
+  portalTransferDownload,
+  portalTransferRead,
+  portalTransferZip,
   requestPortalLogin,
   sendPortalMessage,
   togglePortalGalleryFavorite,
@@ -43,6 +47,8 @@ import {
   type PortalTicketEvent,
   type PortalTicketNote,
   type PortalTicketThread,
+  type PortalTransfer,
+  type PortalTransferItem,
 } from '../../lib/portalApi';
 import {
   isThreadUnread,
@@ -488,7 +494,7 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
     { id: 'invoices', label: 'Facturen', count: account.invoices.length },
     { id: 'quotes', label: 'Offertes', count: account.quotes.length },
     { id: 'contracts', label: 'Contracten', count: account.contracts?.length ?? 0 },
-    { id: 'files', label: 'Bestanden', count: account.sharedFileCount ?? 0 },
+    { id: 'files', label: 'Bestanden', count: (account.sharedFileCount ?? 0) + (account.transferCount ?? 0) },
     { id: 'projects', label: 'Projecten', count: ongoingProjects.length },
     // Galerijen horen bij de creatieve module; zonder galerij is het een lege tab.
     ...((account.galleries?.length ?? 0) > 0 || tab === 'galleries'
@@ -998,14 +1004,25 @@ function PortalInvoiceDetail({ invoice, account, onBack }: { invoice: PortalInvo
 
 function SharedFilesTab({ account }: { account: PortalAccount }) {
   const [shares, setShares] = useState<PortalShare[] | null>(null);
+  const [transfers, setTransfers] = useState<PortalTransfer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [transferError, setTransferError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setShares(null); setError(null);
+    setShares(null); setTransfers(null); setError(null); setTransferError(null);
     fetchPortalSharedFiles(account.id)
       .then(rows => { if (!cancelled) setShares(rows); })
       .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Gedeelde bestanden ophalen mislukt'); });
+    // Verstuurde bestanden staan los van gedeelde mappen: lukt het ene niet,
+    // dan blijft het andere gewoon zichtbaar.
+    fetchPortalTransfers(account.id)
+      .then(rows => { if (!cancelled) setTransfers(rows); })
+      .catch(e => {
+        if (cancelled) return;
+        setTransfers([]);
+        setTransferError(e instanceof Error ? e.message : 'Ontvangen bestanden ophalen mislukt');
+      });
     return () => { cancelled = true; };
   }, [account.id]);
 
@@ -1015,22 +1032,146 @@ function SharedFilesTab({ account }: { account: PortalAccount }) {
       <p className="portal-row-error">{error}</p>
     </article>;
   }
-  if (shares === null) {
+  if (shares === null || transfers === null) {
     return <article className="portal-card">
       <div className="portal-card-head"><h2>Bestanden</h2></div>
       <p className="portal-muted">Bestanden laden…</p>
     </article>;
   }
-  if (shares.length === 0) {
+  if (shares.length === 0 && transfers.length === 0) {
     return <article className="portal-card">
       <div className="portal-card-head"><h2>Bestanden</h2></div>
-      <p className="portal-muted">Er zijn nog geen bestanden met je gedeeld.</p>
+      {transferError
+        ? <p className="portal-row-error">{transferError}</p>
+        : <p className="portal-muted">Er zijn nog geen bestanden met je gedeeld of naar je verstuurd.</p>}
     </article>;
   }
 
   return <>
-    {shares.map(share => <SharedShareCard key={share.id} share={share} />)}
+    {transferError && <article className="portal-card"><p className="portal-row-error">{transferError}</p></article>}
+    {transfers.length > 0 && <>
+      <h2 className="portal-files-heading">Ontvangen</h2>
+      {transfers.map(transfer => <PortalTransferCard key={transfer.id} transfer={transfer} />)}
+    </>}
+    {shares.length > 0 && <>
+      {transfers.length > 0 && <h2 className="portal-files-heading">Gedeeld met jou</h2>}
+      {shares.map(share => <SharedShareCard key={share.id} share={share} />)}
+    </>}
   </>;
+}
+
+/** Eén zending: wat de leverancier je stuurde, met het bericht erbij. */
+function PortalTransferCard({ transfer }: { transfer: PortalTransfer }) {
+  return <article className="portal-card">
+    <div className="portal-card-head">
+      <h2>{transfer.subject || 'Bestanden'}</h2>
+      {portalTransferOpen(transfer) && <span>{transfer.items.length}</span>}
+    </div>
+    <p className="portal-muted">
+      {transfer.sentAt ? `Verstuurd op ${dateNL(transfer.sentAt)}` : 'Verstuurd'}
+      {transfer.senderName ? ` door ${transfer.senderName}` : ''}
+      {portalTransferOpen(transfer) ? ` · beschikbaar tot ${dateNL(transfer.expiresAt)}` : ''}
+      {transfer.canDownload ? '' : ' · alleen lezen'}
+    </p>
+    {transfer.message && <p className="portal-shared-message">{transfer.message}</p>}
+    <PortalTransferFiles transfer={transfer} />
+  </article>;
+}
+
+function portalTransferOpen(transfer: PortalTransfer): boolean {
+  return transfer.available && (Date.parse(transfer.expiresAt) || 0) > Date.now();
+}
+
+/**
+ * De bestanden van een zending, met downloaden, lezen en (bij meer dan één
+ * bestand) alles als zip. Ook gebruikt onder een bericht of ticketantwoord.
+ */
+function PortalTransferFiles({ transfer, compact }: { transfer: PortalTransfer; compact?: boolean }) {
+  const [reading, setReading] = useState<{ title: string; html: string } | null>(null);
+  const [zipBusy, setZipBusy] = useState(false);
+  const [zipError, setZipError] = useState<string | null>(null);
+  const open = portalTransferOpen(transfer);
+  const downloadable = transfer.items.filter(item => item.downloadable);
+
+  async function zip() {
+    setZipBusy(true); setZipError(null);
+    try {
+      startUrlDownload(await portalTransferZip(transfer.id));
+    } catch (e) {
+      setZipError(e instanceof Error ? e.message : 'Downloaden mislukt');
+    } finally {
+      setZipBusy(false);
+    }
+  }
+
+  if (!open) {
+    return <p className={`portal-muted portal-transfer-gone${compact ? ' is-compact' : ''}`}>
+      Deze bestanden zijn niet meer beschikbaar: de termijn is verlopen of de toegang is ingetrokken.
+      Heb je ze nog nodig? Vraag ze opnieuw aan.
+    </p>;
+  }
+
+  return <div className={`portal-transfer${compact ? ' is-compact' : ''}`}>
+    {compact && <div className="portal-transfer-head">
+      <strong>Bijgevoegde bestanden</strong>
+      <span>beschikbaar tot {dateNL(transfer.expiresAt)}</span>
+    </div>}
+    {transfer.items.length === 0
+      ? <p className="portal-muted">Er staan geen bestanden meer in deze zending.</p>
+      : <div className="portal-rows">
+          {transfer.items.map(item => <PortalTransferItemRow
+            key={item.id}
+            transferId={transfer.id}
+            item={item}
+            canDownload={transfer.canDownload}
+            onRead={setReading}
+          />)}
+        </div>}
+    {transfer.canDownload && downloadable.length > 1 && <div className="portal-transfer-actions">
+      <Button onClick={zip} disabled={zipBusy}>{zipBusy ? 'Bezig…' : 'Alles downloaden (zip)'}</Button>
+      {zipError && <span className="portal-row-error">{zipError}</span>}
+    </div>}
+    {reading && <ReadModal title={reading.title} html={reading.html} onClose={() => setReading(null)} />}
+  </div>;
+}
+
+function PortalTransferItemRow({ transferId, item, canDownload, onRead }: {
+  transferId: string;
+  item: PortalTransferItem;
+  canDownload: boolean;
+  onRead: (value: { title: string; html: string }) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function open() {
+    setBusy(true); setError(null);
+    try {
+      if (item.kind === 'text') {
+        const text = await portalTransferRead(transferId, item.id);
+        onRead({ title: text.title || item.name, html: text.html });
+      } else {
+        startUrlDownload((await portalTransferDownload(transferId, item.id)).url);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Openen mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="portal-row">
+    <div className="portal-row-main">
+      <span className="portal-row-number">{item.name}</span>
+      <span className="portal-muted">{[item.path, item.kind === 'text' ? 'tekst' : fmtSharedBytes(item.sizeBytes)].filter(Boolean).join(' · ')}</span>
+    </div>
+    <div className="portal-row-actions">
+      {(item.readable || item.downloadable)
+        ? <Button onClick={open} disabled={busy}>{busy ? 'Bezig…' : item.kind === 'text' ? 'Lezen' : 'Downloaden'}</Button>
+        : <span className="portal-muted" style={{ fontSize: 12 }}>{canDownload ? 'Niet beschikbaar' : 'Downloaden staat uit'}</span>}
+      {error && <span className="portal-row-error">{error}</span>}
+    </div>
+  </div>;
 }
 
 function SharedShareCard({ share }: { share: PortalShare }) {
@@ -1075,6 +1216,7 @@ function SharedItemRow({ shareId, item, canDownload, onRead }: {
     try {
       const result = await downloadPortalSharedItem(shareId, item.itemType, item.itemId);
       if (result.kind === 'text') onRead({ title: result.title || item.name, html: result.html });
+      else if (result.kind === 'url') startUrlDownload(result.url);
       else downloadBase64File(result.base64, result.fileName, result.mimeType);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Openen mislukt');
@@ -1417,6 +1559,7 @@ function PortalThreadItem({ note, supplierName }: { note: PortalTicketNote; supp
       <span>{formatThreadTime(note.created_at)}</span>
     </div>
     <p>{note.body}</p>
+    {note.files && <PortalTransferFiles transfer={note.files} compact />}
   </div>;
 }
 
@@ -1618,6 +1761,7 @@ function PortalMessageBubble({ message }: { message: PortalMessage }) {
             {showQuoted && <p className="portal-msg-quoted">{parts.quoted}</p>}
           </>}
         </>}
+    {message.transfer && <PortalTransferFiles transfer={message.transfer} compact />}
   </div>;
 }
 
@@ -1969,6 +2113,19 @@ function isInvoiceOverdue(invoice: PortalInvoice): boolean {
   if (invoice.status === 'overdue') return true;
   if (!invoice.due_date) return false;
   return invoice.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Een download via een kortlevende link van de bestandsserver. Die stuurt het
+ * bestand als bijlage mee, dus de pagina blijft gewoon staan.
+ */
+function startUrlDownload(url: string) {
+  const link = document.createElement('a');
+  link.href = url;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 function downloadBase64File(base64: string, fileName: string, mimeType: string) {

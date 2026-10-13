@@ -14,6 +14,11 @@
 #      'portal-notify-drain' er nog niet, dan een nieuw PORTAL_NOTIFY_CRON_SECRET
 #      en de taak (elke minuut). Staat de migratie van 2026-10-04 nog niet op de
 #      database, dan slaat het script deze stap over.
+#   5. Bestanden versturen: staat de pg_cron-taak 'file-transfer-purge' er nog
+#      niet, dan een nieuw FILE_TRANSFER_CRON_SECRET en de taak (elk kwartier).
+#      Die ruimt de bestanden van verlopen en ingetrokken zendingen op. Staat de
+#      migratie van 2026-10-13 nog niet op de database, dan slaat het script
+#      deze stap over.
 #
 # Veilig om opnieuw te draaien: het zet alleen wat ontbreekt, en geen enkele
 # waarde komt in beeld. Draait in de workflow "Deploy Supabase (staging)"
@@ -124,6 +129,26 @@ select cron.schedule(
     :'url', :'secret'));
 SQL
   echo "PORTAL_NOTIFY_CRON_SECRET gezet en de taak 'portal-notify-drain' ingepland (elke minuut)."
+fi
+
+# ── 5. Bestanden versturen: opruimen na de vervaldatum, elk kwartier ──────
+if [ "$(sql -c "select to_regprocedure('public.file_transfer_purge_candidates(integer)') is not null")" != "t" ]; then
+  echo "Bestanden versturen: de migratie 20261013100000 staat nog niet op deze database; overgeslagen."
+elif [ "$(sql -c "select count(*) from cron.job where jobname = 'file-transfer-purge'")" != "0" ]; then
+  echo "De taak 'file-transfer-purge' staat al ingepland; taak en FILE_TRANSFER_CRON_SECRET blijven zoals ze zijn."
+else
+  # Zelfde volgorde als hierboven: eerst het secret, dan de taak.
+  purge_secret="$(generate)"; mask "$purge_secret"
+  "$supabase_cli" secrets set --project-ref "$ref" "FILE_TRANSFER_CRON_SECRET=$purge_secret" >/dev/null
+  sql -v secret="$purge_secret" -v url="https://${ref}.functions.supabase.co/file-transfer?cron=purge" >/dev/null <<'SQL'
+select cron.schedule(
+  'file-transfer-purge',
+  '*/15 * * * *',
+  format(
+    'select net.http_post(url := %L, headers := jsonb_build_object(''Content-Type'', ''application/json'', ''x-cron-secret'', %L), body := ''{}''::jsonb, timeout_milliseconds := 120000);',
+    :'url', :'secret'));
+SQL
+  echo "FILE_TRANSFER_CRON_SECRET gezet en de taak 'file-transfer-purge' ingepland (elk kwartier)."
 fi
 
 echo "Klaar: de webhooks zijn ingericht op ${ref}."

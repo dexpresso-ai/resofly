@@ -152,6 +152,21 @@ verify_jwt = false
 [functions.file-share-public]
 verify_jwt = false
 
+# file-transfer (bestanden versturen) handelt CORS-preflight + auth zelf af:
+# elke actie verifieert requireUser() + requireOrganizationAccess() +
+# assertModuleAccess('content', 'write') (plus 'clients' of 'tickets' waar het
+# daarbij hoort). Daarnaast de opruimtaak van pg_cron (?cron=purge), die geen
+# gebruikers-JWT heeft maar het FILE_TRANSFER_CRON_SECRET in x-cron-secret.
+[functions.file-transfer]
+verify_jwt = false
+
+# file-transfer-public bedient /ontvang/<token>: de ontvanger is per definitie
+# niet ingelogd. De token is alleen de sleutel tot de deur; binnen komt pas wie
+# de code uit de mail naar het eigen adres invult (of al in het klantportaal is
+# ingelogd). De database bewaart alleen sha256(token) en sha256(code).
+[functions.file-transfer-public]
+verify_jwt = false
+
 # mcp-oauth is de autorisatieserver waarmee een klant zijn eigen AI (Claude,
 # ChatGPT) aan zijn werkruimte koppelt. Registratie, /authorize en /token worden
 # aangeroepen door die AI-client, die geen Supabase-JWT heeft — met verify_jwt

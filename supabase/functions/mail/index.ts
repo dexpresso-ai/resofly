@@ -4,6 +4,8 @@ import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { sanitizeEmailBodyHtml } from '../_shared/htmlSanitize.ts';
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
+import { renderTransferBlockHtml, renderTransferBlockText } from '../_shared/emailTemplates/fileTransfer.ts';
+import { issueRecipientLink, loadCompanyForMail, recordTransferEvent } from '../_shared/fileTransferServer.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
@@ -683,7 +685,7 @@ async function sendClientEmail(
   organizationId: string,
   user: { id: string; email?: string },
   body: Record<string, unknown>,
-): Promise<{ threadId: string; clientEmailId: string; providerEmailId: string; recipientEmail: string }> {
+): Promise<{ threadId: string; clientEmailId: string; providerEmailId: string; recipientEmail: string; transferId: string | null }> {
   if (!RESEND_API_KEY) {
     throw new MailHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
   }
@@ -707,13 +709,37 @@ async function sendClientEmail(
   }
 
   const client = await loadClient(organizationId, clientId);
-  const recipientEmail = String(client.email || '').trim().toLowerCase();
+
+  // Aan: het hoofdadres van de klant, of — sinds de bestanden in het
+  // mailvenster (2026-10-13) — een actieve contactpersoon van díe klant.
+  const contactId = String(body.contactId || '').trim();
+  let recipientEmail = String(client.email || '').trim().toLowerCase();
+  let contactRecipient: { id: string; name: string; email: string } | null = null;
+  if (contactId) {
+    if (!isUuid(contactId)) throw new MailHttpError('Ongeldige contactpersoon.', 400);
+    const { data: contact, error: contactError } = await supabaseAdmin
+      .from('client_contacts')
+      .select('id,name,email,is_active,client_id,organization_id')
+      .eq('id', contactId)
+      .maybeSingle();
+    if (contactError) throw contactError;
+    if (!contact || contact.organization_id !== organizationId || contact.client_id !== clientId) {
+      throw new MailHttpError('Deze contactpersoon hoort niet bij deze klant.', 403);
+    }
+    if (!contact.is_active) throw new MailHttpError(`Contactpersoon “${contact.name}” staat op inactief.`, 422);
+    recipientEmail = String(contact.email || '').trim().toLowerCase();
+    contactRecipient = { id: String(contact.id), name: String(contact.name), email: recipientEmail };
+  }
   if (!isEmail(recipientEmail)) {
-    throw new MailHttpError('Deze klant heeft geen geldig e-mailadres.', 422);
+    throw new MailHttpError(contactRecipient ? 'Deze contactpersoon heeft geen geldig e-mailadres.' : 'Deze klant heeft geen geldig e-mailadres.', 422);
   }
   if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) {
     throw new MailHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
   }
+
+  // Bestanden bij de mail: een concept-zending van deze gebruiker voor deze
+  // klant. De bestanden gaan niet als bijlage mee, maar als beveiligde link.
+  const transfer = await loadDraftTransferForMail(organizationId, user.id, clientId, body.transferId);
 
   const organization = await loadOrganization(organizationId);
   const company = await loadCompanySettings(organizationId);
@@ -800,11 +826,52 @@ async function sendClientEmail(
     ? `reply+${clientEmailId}@${MAIL_INBOUND_DOMAIN}`
     : (sender.replyTo || fromEmailForRow || undefined);
 
+  // De ontvanger van de bestanden is precies de ontvanger van deze mail. De
+  // database toetst dat die bij de klant hoort (trigger op file_transfer_recipients).
+  let transferRecipientId: string | null = null;
+  let transferBlockHtml = '';
+  let transferBlockText = '';
+  if (transfer) {
+    try {
+      const { data: recipientRow, error: recipientError } = await supabaseAdmin
+        .from('file_transfer_recipients')
+        .insert({
+          organization_id: organizationId,
+          transfer_id: transfer.id,
+          kind: contactRecipient ? 'contact' : 'client',
+          client_contact_id: contactRecipient?.id ?? null,
+          email: recipientEmail,
+          client_email_id: clientEmailId,
+        })
+        .select('id,email')
+        .single();
+      if (recipientError) throw recipientError;
+      if (String(recipientRow.email) !== recipientEmail) throw new MailHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
+      transferRecipientId = String(recipientRow.id);
+      const link = await issueRecipientLink(supabaseAdmin, transferRecipientId);
+      const blockInput = {
+        url: link.url,
+        fileCount: transfer.item_count,
+        totalBytes: transfer.total_bytes,
+        expiresAt: transfer.expires_at,
+        accentColor: transfer.accentColor,
+      };
+      transferBlockHtml = renderTransferBlockHtml(blockInput);
+      transferBlockText = renderTransferBlockText(blockInput);
+    } catch (error) {
+      await markClientEmailFailed(clientEmailId, 'De bestanden konden niet aan de mail worden gekoppeld.');
+      if (transferRecipientId) await supabaseAdmin.from('file_transfer_recipients').delete().eq('id', transferRecipientId);
+      if (error instanceof MailHttpError) throw error;
+      const message = (error as { message?: string })?.message || 'De bestanden konden niet aan de mail worden gekoppeld.';
+      throw new MailHttpError(message, 422);
+    }
+  }
+
   const html = buildClientEmailHtml({
     organizationName,
-    bodyHtml: bodyHtmlInput || escapeHtml(bodyTextInput).replace(/\n/g, '<br/>'),
+    bodyHtml: (bodyHtmlInput || escapeHtml(bodyTextInput).replace(/\n/g, '<br/>')) + transferBlockHtml,
   });
-  const text = bodyTextInput || htmlToText(bodyHtmlInput);
+  const text = (bodyTextInput || htmlToText(bodyHtmlInput)) + (transferBlockText ? `\n${transferBlockText}` : '');
 
   // 4. Versturen via Resend; bij een providerfout de rij als 'failed' markeren.
   let providerEmailId = '';
@@ -821,23 +888,35 @@ async function sendClientEmail(
           { name: 'organization_id', value: sanitizeTagValue(organizationId) },
           { name: 'client_id', value: sanitizeTagValue(clientId) },
           { name: 'client_email_id', value: sanitizeTagValue(clientEmailId) },
+          ...(transfer && transferRecipientId
+            ? [
+              { name: 'transfer_id', value: sanitizeTagValue(transfer.id) },
+              { name: 'transfer_recipient_id', value: sanitizeTagValue(transferRecipientId) },
+            ]
+            : []),
         ],
       },
       `client-email-${sanitizeIdempotencyPart(clientEmailId)}`,
     );
     providerEmailId = String(resendPayload.id || resendPayload.email_id || '').trim();
   } catch (error) {
-    const now = new Date().toISOString();
-    await supabaseAdmin
-      .from('client_emails')
-      .update({
-        status: 'failed',
-        failed_at: now,
-        last_event_at: now,
-        error_message: error instanceof Error ? error.message : 'Versturen mislukt.',
-      })
-      .eq('id', clientEmailId);
+    await markClientEmailFailed(clientEmailId, error instanceof Error ? error.message : 'Versturen mislukt.');
+    // De mail ging niet weg: de bestanden blijven een concept, zodat opnieuw
+    // versturen gewoon kan. De ontvangerregel (met de nu nutteloze link) gaat weg.
+    if (transferRecipientId) await supabaseAdmin.from('file_transfer_recipients').delete().eq('id', transferRecipientId);
     throw error;
+  }
+
+  if (transfer && transferRecipientId) {
+    await finishTransferAfterMail({
+      transferId: transfer.id,
+      recipientId: transferRecipientId,
+      clientEmailId,
+      threadId,
+      subject,
+      senderName: fromNameForRow || extractDisplayName(sender.from) || organizationName,
+      userId: user.id,
+    });
   }
 
   // 5. Rij + thread bijwerken na succesvolle verzending.
@@ -851,7 +930,96 @@ async function sendClientEmail(
     .update({ last_message_at: sentAt, last_direction: 'outbound' })
     .eq('id', threadId);
 
-  return { threadId, clientEmailId, providerEmailId, recipientEmail };
+  return { threadId, clientEmailId, providerEmailId, recipientEmail, transferId: transfer?.id ?? null };
+}
+
+type DraftTransferForMail = {
+  id: string;
+  item_count: number;
+  total_bytes: number;
+  expires_at: string;
+  accentColor: string | null;
+};
+
+/**
+ * De concept-zending die met deze mail mee moet (of null). Het moet een eigen
+ * concept zijn, voor deze klant, met bestanden erin; en wie bestanden
+ * meestuurt, heeft schrijfrecht op Inhoud nodig.
+ */
+async function loadDraftTransferForMail(
+  organizationId: string,
+  userId: string,
+  clientId: string,
+  rawTransferId: unknown,
+): Promise<DraftTransferForMail | null> {
+  const transferId = String(rawTransferId || '').trim();
+  if (!transferId) return null;
+  if (!isUuid(transferId)) throw new MailHttpError('Ongeldige bestanden bij de mail.', 400);
+
+  const level = await getModuleLevel(supabaseAdmin, userId, organizationId, 'content');
+  if (level !== 'write') throw new MailHttpError('Je mag geen bestanden versturen (module Inhoud).', 403);
+
+  const { data, error } = await supabaseAdmin
+    .from('file_transfers')
+    .select('id,organization_id,client_id,created_by,status,item_count,total_bytes,expires_at')
+    .eq('id', transferId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new MailHttpError('De bestanden bij deze mail bestaan niet (meer). Voeg ze opnieuw toe.', 404);
+  if (data.status !== 'draft') throw new MailHttpError('Deze bestanden zijn al verstuurd. Voeg ze opnieuw toe.', 409);
+  if (data.created_by !== userId) throw new MailHttpError('Deze bestanden zijn door een collega klaargezet.', 403);
+  if (data.client_id !== clientId) throw new MailHttpError('Deze bestanden horen bij een andere klant dan de mail.', 403);
+  if (!Number(data.item_count)) throw new MailHttpError('Er zitten nog geen bestanden bij de mail.', 422);
+  if (Date.parse(String(data.expires_at)) <= Date.now()) throw new MailHttpError('De termijn van de bestanden ligt in het verleden. Kies een nieuwe.', 422);
+
+  const company = await loadCompanyForMail(supabaseAdmin, organizationId);
+  return {
+    id: String(data.id),
+    item_count: Number(data.item_count) || 0,
+    total_bytes: Number(data.total_bytes) || 0,
+    expires_at: String(data.expires_at),
+    accentColor: company?.invoice_accent_color ?? null,
+  };
+}
+
+async function markClientEmailFailed(clientEmailId: string, message: string): Promise<void> {
+  const now = new Date().toISOString();
+  await supabaseAdmin
+    .from('client_emails')
+    .update({ status: 'failed', failed_at: now, last_event_at: now, error_message: message })
+    .eq('id', clientEmailId);
+}
+
+/** Na een geslaagde mail: de zending is verstuurd, met deze mail als bericht. */
+async function finishTransferAfterMail(input: {
+  transferId: string;
+  recipientId: string;
+  clientEmailId: string;
+  threadId: string;
+  subject: string;
+  senderName: string;
+  userId: string;
+}): Promise<void> {
+  const now = new Date().toISOString();
+  await supabaseAdmin.from('file_transfer_recipients')
+    .update({ notified_at: now, delivery_status: 'sent', delivery_updated_at: now, client_email_id: input.clientEmailId })
+    .eq('id', input.recipientId);
+  const { error } = await supabaseAdmin.from('file_transfers')
+    .update({
+      subject: input.subject.replace(/\s+/g, ' ').trim().slice(0, 200) || 'Bestanden',
+      sender_name: input.senderName,
+      client_email_thread_id: input.threadId,
+      origin: 'message',
+      status: 'sent',
+    })
+    .eq('id', input.transferId);
+  if (error) {
+    // De mail is weg; zonder 'sent' werkt de link niet. Luid en duidelijk loggen.
+    console.error('mail: zending kon niet op verstuurd worden gezet', input.transferId, error.message);
+    return;
+  }
+  await recordTransferEvent(supabaseAdmin, { transferId: input.transferId, recipientId: input.recipientId, kind: 'sent', actorUserId: input.userId, detail: 'met een mail' });
 }
 
 function buildClientEmailHtml(input: { organizationName: string; bodyHtml: string }): string {

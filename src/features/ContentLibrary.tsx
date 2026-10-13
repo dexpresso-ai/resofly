@@ -3,7 +3,7 @@ import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, 
 import {
   ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, Eye, EyeOff,
   File, FilePen, FileText, Folder, FolderOpen, FolderPlus, Info, LayoutGrid, Link2, List, MoreVertical,
-  Pencil, Plus, Presentation, Search, Share2, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, Users, X,
+  Pencil, Plus, Presentation, Search, Send, Share2, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, Users, X,
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
@@ -18,6 +18,8 @@ import { childFolders, folderDescendantIds, folderPath, scopedFolders } from '..
 import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentAccentColor, fmtBytes } from '../components/DriveGlyphs';
 import { ShareDialog } from '../components/ShareDialog';
 import { SharedOverview, SharedOverviewButton } from '../components/SharedOverview';
+import { SendFilesDialog } from '../components/SendFilesDialog';
+import type { TransferSource } from '../lib/transfers-api';
 import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
 import {
   activeDriveDrag, beginDriveDrag, dragHasDriveItems, dragHasFiles, driveItemLocation, endDriveDrag, itemCountLabel,
@@ -173,8 +175,10 @@ export function ContentLibrary({
   const [opening, setOpening] = useState(false);
   /** Het item waarvoor het deelvenster openstaat. */
   const [sharing, setSharing] = useState<ShareTarget | null>(null);
-  /** Het overzicht "wat hebben we allemaal gedeeld". */
+  /** Het overzicht "wat hebben we allemaal gedeeld en verzonden". */
   const [sharedOpen, setSharedOpen] = useState(false);
+  /** Het venster "Bestanden versturen": wat er al in zit, en voor welke klant. */
+  const [sendingFiles, setSendingFiles] = useState<{ sources: TransferSource[]; clientId: string | null; chooseClient: boolean } | null>(null);
   /** Waar de sleep op dit moment boven hangt — stuurt alleen de oplichting. */
   const [dropKey, setDropKey] = useState<string | null>(null);
   /** De items waarvoor het venster "Verplaatsen naar…" openstaat. */
@@ -547,6 +551,17 @@ export function ContentLibrary({
 
   /** Opent het deelvenster voor één item. De klantregel bepaalt daar wie er in beeld komt. */
   function openShare(target: ShareTarget) { setMenu(null); setSharing(target); }
+  /** Versturen: de klant volgt uit de bestanden (de server toetst het nog eens). */
+  function openSend(sources: TransferSource[]) {
+    setMenu(null); setNewOpen(false);
+    setSendingFiles({ sources, clientId: null, chooseClient: false });
+  }
+  /** "+ Nieuw → Bestanden versturen": leeg beginnen, voor de klant waar je nu staat. */
+  function openSendEmpty() {
+    setNewOpen(false);
+    if (realClient) setSendingFiles({ sources: [], clientId: scopeClientId, chooseClient: false });
+    else setSendingFiles({ sources: [], clientId: null, chooseClient: clientId !== NO_CLIENT });
+  }
 
   function attOpen(att: Attachment) {
     if (isOfficeEditable(att)) void openOffice(att);
@@ -913,6 +928,7 @@ export function ContentLibrary({
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openFolder(folder.id)}><FolderOpen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind: 'folder', id: folder.id, name: folder.name }])}><Folder size={16} /> Verplaatsen naar…</button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openSend([{ type: 'folder', id: folder.id }])}><Send size={16} /> Versturen…</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'folder', id: folder.id, name: folder.name })}><Share2 size={16} /> Delen…</button>
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFolder(folder); }}><Trash2 size={16} /> Verwijderen</button>
@@ -924,6 +940,7 @@ export function ContentLibrary({
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><FilePen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind, id, name }])}><Folder size={16} /> Verplaatsen naar…</button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openSend([{ type: kind, id }])}><Send size={16} /> Versturen…</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteContent(kind, id, name); }}><Trash2 size={16} /> Verwijderen</button>
@@ -934,6 +951,7 @@ export function ContentLibrary({
     return <>
       {isOfficeEditable(att) && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); void openOffice(att); }}><FilePen size={16} style={{ color: 'var(--accent-o)' }} /> Openen in editor</button>}
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); void handleDownload(att); }}><Download size={16} /> Downloaden</button>
+      {canWrite && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openSend([{ type: 'attachment', id: att.id }])}><Send size={16} /> Versturen…</button>}
       {canWrite && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'attachment', id: att.id, name: att.name })}><Share2 size={16} /> Delen…</button>}
       {canWrite && <>
         <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
@@ -1114,6 +1132,8 @@ export function ContentLibrary({
               <div className="drive-pop-sep" />
               <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); setLinkOpen(true); }}><Link2 size={16} /> Bestaande inhoud koppelen</button>
             </>}
+            <div className="drive-pop-sep" />
+            <button type="button" className="drive-pop-item" role="menuitem" onClick={openSendEmpty}><Send size={16} style={{ color: 'var(--accent)' }} /> Bestanden versturen…</button>
           </div>}
         </div>}
         {canGoUp && <button
@@ -1213,6 +1233,9 @@ export function ContentLibrary({
                 <strong>{itemCountLabel(selection.count)} geselecteerd</strong>
                 {selection.count < selectable.filter(e => e.selectable).length && <button type="button" className="odrv-selbar-link" onClick={selection.selectAll}>Alles selecteren</button>}
                 <span className="odrv-selbar-spacer" />
+                {canWrite && selectedItems.length > 0 && <button type="button" className="odrv-tool" disabled={busy} onClick={() => openSend(selectedItems.map(item => ({ type: item.kind, id: item.id })))}>
+                  <Send size={14} /> Versturen…
+                </button>}
                 {canWrite && selectedItems.length > 0 && <button type="button" className="odrv-tool" disabled={busy} onClick={() => openMove(selectedItems)}>
                   <Folder size={14} /> Verplaatsen naar…
                 </button>}
@@ -1257,7 +1280,17 @@ export function ContentLibrary({
     {opening && <span className="drive-uploading drive-opening-toast"><UploadCloud size={14} /> Editor openen…</span>}
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
     {sharing && <ShareDialog data={data} organizationId={organizationId} target={sharing} onClose={() => setSharing(null)} onChanged={onChanged} />}
-    {sharedOpen && <SharedOverview data={data} organizationId={organizationId} canWrite={canWrite} onClose={() => setSharedOpen(false)} onChanged={onChanged} />}
+    {sharedOpen && <SharedOverview data={data} organizationId={organizationId} canWrite={canWrite} clientId={embedded ? rootClientId : null} onClose={() => setSharedOpen(false)} onChanged={onChanged} />}
+    {sendingFiles && <SendFilesDialog
+      data={data}
+      organizationId={organizationId}
+      sources={sendingFiles.sources}
+      clientId={sendingFiles.clientId}
+      chooseClient={sendingFiles.chooseClient}
+      origin={embedded ? 'client' : 'content'}
+      onClose={() => { setSendingFiles(null); clearSelection(); }}
+      onChanged={onChanged}
+    />}
     {moving && <MoveDialog
       data={data}
       items={moving}

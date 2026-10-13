@@ -20,6 +20,17 @@ import {
   type PortalMessageRow,
   type PortalThreadSummary,
 } from '../_shared/portalMessages.ts';
+import { transferZipName } from '../_shared/fileTransfer.ts';
+import {
+  storageKeyBelongsOnlyTo,
+  itemForRecipient,
+  loadTransferItems,
+  recordTransferEvent,
+  signedDownloadUrls,
+  transferIsOpen,
+  type TransferItemRow,
+  type TransferRow,
+} from '../_shared/fileTransferServer.ts';
 
 // ============================================================
 // ResoFly — Klantportaal (client portal) edge function
@@ -158,6 +169,14 @@ serve(async (req) => {
         return json(req, { ok: true, ...(await getMessageThread(user, body)) });
       case 'sendMessage':
         return json(req, { ok: true, ...(await sendMessage(user, body)) });
+      case 'getTransfers':
+        return json(req, { ok: true, ...(await getTransfers(user, body)) });
+      case 'transferDownload':
+        return json(req, { ok: true, ...(await transferDownload(user, body)) });
+      case 'transferRead':
+        return json(req, { ok: true, ...(await transferRead(user, body)) });
+      case 'transferZip':
+        return json(req, { ok: true, ...(await transferZip(user, body)) });
       default:
         throw new PortalError(`Onbekende actie: ${action}`, 400);
     }
@@ -180,10 +199,12 @@ async function getPortalData(user: { id: string; email: string }) {
   // Eén keer ophalen en per klant tellen: het aantal met jou gedeelde bestanden
   // voedt alleen het tabblad-badgetje, de inhoud komt pas als je erop klikt.
   const shares = await loadSharesForUser(user.email);
+  const transfers = await loadTransferAccessForUser(user.email);
   const accounts = [];
   for (const client of clients) {
     const sharedFileCount = shares.filter((share) => share.client_id === client.id).length;
-    accounts.push({ ...(await buildAccount(client, user.email)), sharedFileCount });
+    const transferCount = transfers.filter((row) => row.client_id === client.id).length;
+    accounts.push({ ...(await buildAccount(client, user.email)), sharedFileCount, transferCount });
   }
   return { email: user.email, accounts };
 }
@@ -276,9 +297,12 @@ async function getTicketThread(user: { id: string; email: string }, body: Record
   // Openen = lezen: de stip "nieuw antwoord" gaat weg.
   if (ticket.client_id) await markPortalRead(user.email, ticket.client_id, ticket.organization_id, 'ticket', ticket.id);
 
+  // Bestanden die het team bij een zichtbaar antwoord meestuurde.
+  const filesByNote = await ticketNoteFiles(ticket.organization_id, ticket.id, ticket.client_id ?? null, (notes || []).map((note) => String(note.id)));
+
   return {
     ticket: sanitizeTicket(ticket),
-    notes: (notes || []).map(sanitizeTicketNote),
+    notes: (notes || []).map((note) => ({ ...sanitizeTicketNote(note), files: filesByNote.get(String(note.id)) ?? null })),
     events: statusRows.map((row) => ({
       id: row.id,
       kind: 'status',
@@ -784,6 +808,31 @@ async function downloadSharedFile(user: { id: string; email: string }, body: Rec
   if (!item.storage_key.startsWith(`${share.organization_id}/`) || item.storage_key.includes('..')) {
     throw new PortalError('Dit bestand hoort niet bij deze deling.', 403);
   }
+  // De sleutel moet van precies dit item zijn (en uit Inhoud of een dossier).
+  if (!(await storageKeyBelongsOnlyTo(supabaseAdmin, String(share.organization_id), item.storage_key, {
+    table: item.item_type === 'document' ? 'documents' : 'attachments',
+    id: String(item.item_id),
+  }))) {
+    throw new PortalError('Dit bestand kan niet via deze deling worden geopend.', 403);
+  }
+
+  // Bij voorkeur een kortlevende, getekende link van de media-worker: dan komen
+  // de bytes niet door deze functie (geen base64, geen 25 MB-plafond, hervatten
+  // werkt). Kent een nog niet bijgewerkte worker die route niet, dan zoals
+  // vroeger: het bestand als base64 in het antwoord.
+  try {
+    const signed = await signedDownloadUrls({
+      organizationId: String(share.organization_id),
+      files: [{ key: item.storage_key, fileName: item.name }],
+    });
+    const url = signed.files[0]?.url;
+    if (url) {
+      return { file: { fileName: item.name, mimeType: item.mime_type || 'application/octet-stream', sizeBytes: item.size_bytes, url } };
+    }
+  } catch (error) {
+    console.warn('client-portal signed url niet beschikbaar, terugval op base64', error instanceof Error ? error.message : error);
+  }
+
   const response = await fetch(`${MEDIA_WORKER_URL}/internal/media/${encodeURIComponent(item.storage_key)}`, {
     headers: { Authorization: `Bearer ${MEDIA_INTERNAL_SECRET}`, 'x-organization-id': String(share.organization_id) },
   });
@@ -800,6 +849,203 @@ async function downloadSharedFile(user: { id: string; email: string }, body: Rec
       base64: arrayBufferToBase64(await response.arrayBuffer()),
     },
   };
+}
+
+// ── Zendingen (bestanden versturen) ───────────────────────────────────
+//
+// Een zending aan het hoofdadres of een contactpersoon staat ook in het
+// portaal — voor precies die persoon: iedereen ziet alleen wat aan hem of haar
+// gestuurd is, zoals bij Berichten. Hier is geen code nodig: de portaallogin
+// (een magische link naar hetzelfde adres) is hetzelfde bewijs. Bestanden bij
+// een zichtbaar ticketantwoord ziet iedereen die dat ticket in het portaal ziet.
+// Toegang wordt bij elke aanvraag opnieuw afgeleid; een id uit de browser wordt
+// nooit blind vertrouwd.
+
+type TransferAccessRow = { transfer_id: string; recipient_id: string; organization_id: string; client_id: string };
+
+async function loadTransferAccessForUser(email: string): Promise<TransferAccessRow[]> {
+  const { data, error } = await supabaseAdmin.rpc('portal_file_transfers_for_email', { p_email: email });
+  if (error) {
+    if (isMissingRelationError(error)) return [];
+    throw error;
+  }
+  return (data || []) as TransferAccessRow[];
+}
+
+async function loadTransfersByIds(ids: string[]): Promise<TransferRow[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await supabaseAdmin.from('file_transfers').select('*').in('id', ids);
+  if (error) {
+    if (isMissingRelationError(error)) return [];
+    throw error;
+  }
+  return (data || []) as TransferRow[];
+}
+
+/** Een zending zoals de klant hem ziet: geen sleutels, geen hashes, geen interne velden. */
+function portalTransfer(transfer: TransferRow, items: TransferItemRow[]) {
+  return {
+    id: transfer.id,
+    clientId: transfer.client_id,
+    subject: transfer.subject,
+    message: transfer.message,
+    senderName: transfer.sender_name,
+    sentAt: transfer.sent_at,
+    expiresAt: transfer.expires_at,
+    canDownload: transfer.can_download,
+    available: transferIsOpen(transfer),
+    items: transferIsOpen(transfer)
+      ? items.filter((item) => !item.purged_at).map((item) => itemForRecipient(item, transfer.can_download))
+      : [],
+  };
+}
+
+async function getTransfers(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const clientId = String(body.clientId || '').trim();
+  const access = await loadTransferAccessForUser(user.email);
+  const scoped = isUuid(clientId) ? access.filter((row) => row.client_id === clientId) : access;
+  const transfers = (await loadTransfersByIds([...new Set(scoped.map((row) => row.transfer_id))]))
+    .filter((transfer) => transferIsOpen(transfer))
+    .sort((a, b) => Date.parse(b.sent_at || b.created_at) - Date.parse(a.sent_at || a.created_at));
+  const out = [];
+  for (const transfer of transfers) out.push(portalTransfer(transfer, await loadTransferItems(supabaseAdmin, transfer.id)));
+  return { transfers: out };
+}
+
+/** Mag deze portaalgebruiker bij deze zending? Als ontvanger, of via een ticket dat die persoon ziet. */
+async function requirePortalTransfer(user: { email: string }, transferIdRaw: unknown): Promise<{ transfer: TransferRow; recipientId: string | null }> {
+  const transferId = String(transferIdRaw || '').trim();
+  if (!isUuid(transferId)) throw new PortalError('Ongeldige zending.', 400);
+  const [transfer] = await loadTransfersByIds([transferId]);
+  if (!transfer || !transferIsOpen(transfer)) throw new PortalError('Deze bestanden zijn niet meer beschikbaar.', 410);
+
+  const access = await loadTransferAccessForUser(user.email);
+  const mine = access.find((row) => row.transfer_id === transferId);
+  if (mine) return { transfer, recipientId: mine.recipient_id };
+
+  // Bijlage bij een ticketantwoord: het antwoord is zichtbaar en het ticket hoort bij een eigen dossier.
+  if (transfer.ticket_id && transfer.ticket_note_id && transfer.client_id) {
+    const { data: note, error: noteError } = await supabaseAdmin
+      .from('ticket_notes')
+      .select('id,is_internal,ticket_id,organization_id')
+      .eq('id', transfer.ticket_note_id)
+      .maybeSingle();
+    if (noteError) throw noteError;
+    if (note && note.is_internal === false && note.ticket_id === transfer.ticket_id && note.organization_id === transfer.organization_id) {
+      const { data: ticket, error: ticketError } = await supabaseAdmin
+        .from('tickets')
+        .select('id,organization_id,client_id')
+        .eq('id', transfer.ticket_id)
+        .maybeSingle();
+      if (ticketError) throw ticketError;
+      if (ticket && ticket.organization_id === transfer.organization_id && ticket.client_id === transfer.client_id) {
+        const clients = await resolveAccountsForEmail(user.email);
+        await assertEntityBelongsToClients({ client_id: ticket.client_id, project_id: null, organization_id: ticket.organization_id }, clients);
+        return { transfer, recipientId: null };
+      }
+    }
+  }
+  throw new PortalError('Deze bestanden zijn niet (meer) met je gedeeld.', 403);
+}
+
+async function requirePortalTransferItem(transfer: TransferRow, itemIdRaw: unknown, withSnapshot = false): Promise<TransferItemRow> {
+  const itemId = String(itemIdRaw || '').trim();
+  if (!isUuid(itemId)) throw new PortalError('Ongeldig bestand.', 400);
+  const items = await loadTransferItems(supabaseAdmin, transfer.id, withSnapshot);
+  const item = items.find((candidate) => candidate.id === itemId);
+  if (!item || item.purged_at) throw new PortalError('Dit bestand hoort niet bij deze zending, of is niet meer beschikbaar.', 404);
+  return item;
+}
+
+async function transferDownload(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const { transfer, recipientId } = await requirePortalTransfer(user, body.transferId);
+  if (!transfer.can_download) throw new PortalError('De afzender heeft downloaden voor deze bestanden uitgezet.', 403);
+  const item = await requirePortalTransferItem(transfer, body.itemId);
+  if (!item.storage_key) throw new PortalError('Dit item lees je op de pagina zelf.', 400);
+  const signed = await signedDownloadUrls({
+    organizationId: transfer.organization_id,
+    files: [{ key: item.storage_key, fileName: item.name }],
+    transfer: { id: transfer.id, recipientId },
+  });
+  const url = signed.files[0]?.url;
+  if (!url) throw new PortalError('Het bestand kon niet worden klaargezet.', 502);
+  await recordTransferEvent(supabaseAdmin, { transferId: transfer.id, recipientId, kind: 'downloaded', itemId: item.id, detail: 'via het klantportaal' });
+  return { url, fileName: item.name };
+}
+
+async function transferRead(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const { transfer, recipientId } = await requirePortalTransfer(user, body.transferId);
+  const item = await requirePortalTransferItem(transfer, body.itemId, true);
+  if (item.storage_key || item.html_snapshot == null) throw new PortalError('Dit is een bestand om te downloaden.', 400);
+  await recordTransferEvent(supabaseAdmin, { transferId: transfer.id, recipientId, kind: 'opened', itemId: item.id, detail: 'gelezen in het klantportaal' });
+  return { text: { title: item.name, html: item.html_snapshot } };
+}
+
+async function transferZip(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const { transfer, recipientId } = await requirePortalTransfer(user, body.transferId);
+  if (!transfer.can_download) throw new PortalError('De afzender heeft downloaden voor deze bestanden uitgezet.', 403);
+  const signed = await signedDownloadUrls({
+    organizationId: transfer.organization_id,
+    files: [],
+    zip: { transferId: transfer.id, fileName: transferZipName(transfer.subject) },
+    transfer: { id: transfer.id, recipientId },
+  });
+  if (!signed.zipUrl) throw new PortalError('De zip kon niet worden klaargezet.', 502);
+  await recordTransferEvent(supabaseAdmin, { transferId: transfer.id, recipientId, kind: 'zip_downloaded', detail: 'via het klantportaal' });
+  return { url: signed.zipUrl };
+}
+
+/**
+ * De bestanden bij de zichtbare antwoorden van één ticket, per antwoord. Alleen
+ * van de klant van het ticket NU: verhuist een ticket naar een andere klant,
+ * dan gaan de bestanden van de vorige klant niet mee.
+ */
+async function ticketNoteFiles(organizationId: string, ticketId: string, clientId: string | null, noteIds: string[]) {
+  const map = new Map<string, ReturnType<typeof portalTransfer>>();
+  if (noteIds.length === 0 || !clientId) return map;
+  const { data, error } = await supabaseAdmin
+    .from('file_transfers')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('ticket_id', ticketId)
+    .eq('client_id', clientId)
+    .eq('status', 'sent')
+    .in('ticket_note_id', noteIds);
+  if (error) {
+    if (isMissingRelationError(error)) return map;
+    throw error;
+  }
+  for (const transfer of (data || []) as TransferRow[]) {
+    if (!transfer.ticket_note_id || transfer.client_id !== clientId || !transferIsOpen(transfer)) continue;
+    map.set(transfer.ticket_note_id, portalTransfer(transfer, await loadTransferItems(supabaseAdmin, transfer.id)));
+  }
+  return map;
+}
+
+/** De zending achter een bericht van het team — alleen als die aan déze persoon gestuurd is. */
+async function messageTransfers(messageIds: string[], email: string) {
+  const map = new Map<string, ReturnType<typeof portalTransfer>>();
+  if (messageIds.length === 0) return map;
+  const { data, error } = await supabaseAdmin
+    .from('file_transfer_recipients')
+    .select('client_email_id,transfer_id,email,revoked_at')
+    .in('client_email_id', messageIds);
+  if (error) {
+    if (isMissingRelationError(error)) return map;
+    throw error;
+  }
+  const me = normalizeEmail(email);
+  const rows = ((data || []) as Array<{ client_email_id: string; transfer_id: string; email: string; revoked_at: string | null }>)
+    .filter((row) => row.email === me);
+  const transfers = await loadTransfersByIds([...new Set(rows.map((row) => row.transfer_id))]);
+  for (const row of rows) {
+    const transfer = transfers.find((candidate) => candidate.id === row.transfer_id);
+    if (!transfer) continue;
+    // Ingetrokken voor deze persoon = niet meer beschikbaar, ook al loopt de zending nog.
+    const view = portalTransfer(transfer, row.revoked_at ? [] : await loadTransferItems(supabaseAdmin, transfer.id));
+    map.set(row.client_email_id, row.revoked_at ? { ...view, available: false, items: [] } : view);
+  }
+  return map;
 }
 
 // ── Galerijen (foto/video-oplevering) ─────────────────────────────────
@@ -1266,9 +1512,21 @@ async function getMessageThread(user: { id: string; email: string }, body: Recor
 
   await markPortalRead(user.email, client.id, client.organization_id, 'thread', thread.id);
 
+  // Bestanden die het team met een bericht meestuurde (aan deze persoon).
+  const transfers = await messageTransfers(
+    ordered.filter((message) => message.direction === 'outbound').map((message) => String(message.id)),
+    person.email,
+  ).catch((error) => {
+    console.warn('client-portal bestanden bij berichten overgeslagen', error instanceof Error ? error.message : error);
+    return new Map<string, ReturnType<typeof portalTransfer>>();
+  });
+
   return {
     thread: { id: thread.id, clientId: client.id, subject: summary.subject },
-    messages: ordered.map((message) => sanitizePortalMessage(message, person, people, supplierName)),
+    messages: ordered.map((message) => ({
+      ...sanitizePortalMessage(message, person, people, supplierName),
+      transfer: transfers.get(String(message.id)) ?? null,
+    })),
   };
 }
 

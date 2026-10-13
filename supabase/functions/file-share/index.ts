@@ -67,6 +67,7 @@ const MAX_RECIPIENTS = 25;
 
 type Recipient =
   | { kind: 'contact'; clientContactId: string }
+  | { kind: 'client' }
   | { kind: 'member'; memberUserId: string }
   | { kind: 'link'; email: string; name?: string | null };
 
@@ -161,8 +162,8 @@ async function shareItem(
         403,
       );
     }
-  } else if (recipients.some((r) => r.kind === 'contact')) {
-    throw new HttpError('Dit item hoort niet bij een klantdossier, dus er is geen contactpersoon om mee te delen.', 400);
+  } else if (recipients.some((r) => r.kind === 'contact' || r.kind === 'client')) {
+    throw new HttpError('Dit item hoort niet bij een klantdossier, dus er is geen klant of contactpersoon om mee te delen.', 400);
   }
 
   const company = await loadCompany(organizationId);
@@ -373,6 +374,7 @@ async function findActiveShare(
     .is('revoked_at', null);
 
   if (recipient.kind === 'contact') query = query.eq('client_contact_id', recipient.clientContactId);
+  else if (recipient.kind === 'client') query = query.eq('recipient_kind', 'client');
   else if (recipient.kind === 'member') query = query.eq('member_user_id', recipient.memberUserId);
   else query = query.eq('recipient_kind', 'link').eq('recipient_email', recipient.email);
 
@@ -392,7 +394,7 @@ function buildShareUrl(share: ShareRow, token: string | null): string {
   if (share.recipient_kind === 'link') {
     return token ? `${base}/gedeeld/${encodeURIComponent(token)}` : `${base}/gedeeld`;
   }
-  if (share.recipient_kind === 'contact') return `${base}/portal`;
+  if (share.recipient_kind === 'contact' || share.recipient_kind === 'client') return `${base}/portal`;
   return `${base}/`;
 }
 
@@ -411,6 +413,11 @@ function parseRecipients(raw: unknown): Recipient[] {
       if (seen.has(`c:${id}`)) continue;
       seen.add(`c:${id}`);
       out.push({ kind: 'contact', clientContactId: id });
+    } else if (kind === 'client') {
+      // Het hoofdadres van de klant; welk adres dat is, zet de database erin.
+      if (seen.has('client')) continue;
+      seen.add('client');
+      out.push({ kind: 'client' });
     } else if (kind === 'member') {
       const id = String(item.memberUserId || '');
       if (!isUuid(id)) throw new HttpError('Ongeldige collega.', 400);
@@ -538,7 +545,7 @@ async function sendShareEmail(input: {
     return { ok: false, error: 'APP_PUBLIC_URL ontbreekt, dus er kon geen werkende link in de mail. De deling zelf staat wel klaar.' };
   }
 
-  const accessHint = input.share.recipient_kind === 'contact'
+  const accessHint = input.share.recipient_kind === 'contact' || input.share.recipient_kind === 'client'
     ? 'Log in op het klantportaal met dit e-mailadres; je krijgt dan een inloglink toegestuurd.'
     : input.share.recipient_kind === 'link'
       ? 'Deze link is persoonlijk. Deel hem niet door.'

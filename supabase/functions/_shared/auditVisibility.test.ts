@@ -34,7 +34,8 @@ function latestDefinition(fn: string): { file: string; body: string } {
 /** De CASE uit audit_entity_module(), als { entity_type: module }. */
 function sqlMapping(): Record<string, string | null> {
   const { file, body } = latestDefinition('audit_entity_module');
-  assert.equal(file, RECHECK, 'de indeling staat in de herkontrole-migratie (of de test moet mee)');
+  // Sinds de herkontrole; een latere migratie mag hem uitbreiden (bestanden versturen: file_transfer).
+  assert.ok(file >= RECHECK, `de indeling hoort in de herkontrole-migratie of een latere te staan, niet in ${file}`);
   const mapping: Record<string, string | null> = {};
   for (const branch of body.matchAll(/when p_entity_type in \(([^)]*)\) then (null|'[a-z]+')/g)) {
     const module = branch[2] === 'null' ? null : branch[2].slice(1, -1);

@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
+import { signedDownloadUrls, storageKeyBelongsOnlyTo } from '../_shared/fileTransferServer.ts';
 
 // ============================================================
 // ResoFly — Publieke deellink (file-share-public)
@@ -166,6 +167,33 @@ async function downloadItem(tokenHash: string, body: Record<string, unknown>) {
   }
   if (share.can_download !== true) throw new ShareError('Downloaden is voor deze deling uitgezet.', 403);
   if (!item.storage_key) throw new ShareError('Voor dit item is geen bestand om te downloaden.', 404);
+  if (!item.storage_key.startsWith(`${share.organization_id}/`) || item.storage_key.includes('..')) {
+    throw new ShareError('Dit bestand hoort niet bij deze deellink.', 403);
+  }
+  // De sleutel moet van precies dit item zijn (en uit Inhoud of een dossier):
+  // een rij die naar het bestand van een ander item wijst, opent hier niets.
+  if (!(await storageKeyBelongsOnlyTo(supabaseAdmin, share.organization_id, item.storage_key, {
+    table: item.item_type === 'document' ? 'documents' : 'attachments',
+    id: item.item_id,
+  }))) {
+    throw new ShareError('Dit bestand kan niet via deze deellink worden geopend.', 403);
+  }
+
+  // Bij voorkeur een kortlevende link van de media-worker: geen base64, geen
+  // 25 MB-plafond, en een afgebroken download kan hervatten. Kent de worker
+  // die route nog niet, dan zoals voorheen.
+  try {
+    const signed = await signedDownloadUrls({
+      organizationId: share.organization_id,
+      files: [{ key: item.storage_key, fileName: item.name }],
+    });
+    const url = signed.files[0]?.url;
+    if (url) {
+      return { file: { fileName: item.name, mimeType: item.mime_type || 'application/octet-stream', sizeBytes: item.size_bytes, url } };
+    }
+  } catch (error) {
+    console.warn('file-share-public signed url niet beschikbaar, terugval op base64', error instanceof Error ? error.message : error);
+  }
 
   return {
     file: {

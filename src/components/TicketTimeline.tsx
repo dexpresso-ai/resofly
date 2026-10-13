@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { TicketNote } from '../types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { AppData, FileTransferBundle, TicketNote, UUID } from '../types';
 import { Button, Textarea } from './Ui';
 import { createTicketNote, deleteTicketNote, setTicketNoteInternal, ticketEmailsEnabled } from '../lib/repository';
+import { attachTransferToTicket, loadTransfersForTicket } from '../lib/transfers-api';
+import { MessageFilesBar, useMessageFiles } from './MessageFiles';
+import { TransferMessageBlock } from './TransfersPanel';
 
 /**
  * De tijdlijn van een ticket: notities van het team (zichtbaar voor de klant
@@ -13,7 +16,7 @@ import { createTicketNote, deleteTicketNote, setTicketNoteInternal, ticketEmails
  * dit ticket); na een wijziging vraagt `onChanged` de werkruimte-data opnieuw
  * op, zodat elke plek die dezelfde tijdlijn toont meteen bij is.
  */
-export function TicketTimeline({ ticketId, organizationId, currentUserId, notes, canWrite, onChanged, clientId = null }: {
+export function TicketTimeline({ ticketId, organizationId, currentUserId, notes, canWrite, onChanged, clientId = null, data }: {
   ticketId: string;
   organizationId: string;
   currentUserId: string | null;
@@ -22,11 +25,23 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
   onChanged: () => void;
   /** De klant van het ticket; alleen dan gaat een zichtbare notitie ook naar buiten. */
   clientId?: string | null;
+  /** Met de werkruimte-data kun je bestanden meesturen met een zichtbaar antwoord. */
+  data?: AppData;
 }) {
   const [draft, setDraft] = useState('');
   const [internal, setInternal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bestanden bij een zichtbaar antwoord: de klant ziet ze in het portaal onder dat antwoord.
+  const files = useMessageFiles(organizationId, clientId ?? null, ticketId);
+  const canAttach = Boolean(data && clientId && canWrite);
+  const [noteFiles, setNoteFiles] = useState<Map<UUID, FileTransferBundle>>(new Map());
+  const hasData = Boolean(data);
+  const reloadNoteFiles = useCallback(() => {
+    if (!hasData) return;
+    loadTransfersForTicket(organizationId, ticketId).then(setNoteFiles).catch(() => { /* zonder bestanden blijft de tijdlijn bruikbaar */ });
+  }, [hasData, organizationId, ticketId]);
+  useEffect(() => { reloadNoteFiles(); }, [reloadNoteFiles, notes.length]);
   // Krijgt de klant van een zichtbare notitie ook een e-mail? (Instellingen → E-mail)
   const [emailsOn, setEmailsOn] = useState<boolean | null>(null);
   useEffect(() => {
@@ -58,7 +73,15 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
     const body = draft.trim();
     if (!body) return;
     await run(async () => {
-      await createTicketNote(organizationId, { ticketId, body, isInternal: internal });
+      // Een intern antwoord neemt geen bestanden mee: die zijn voor de klant.
+      const transferId = !internal && canAttach ? await files.finalize() : null;
+      if (transferId) {
+        await attachTransferToTicket(organizationId, { transferId, body, expiresAt: files.expiresAtForServer(), canDownload: true });
+        files.markSent();
+        reloadNoteFiles();
+      } else {
+        await createTicketNote(organizationId, { ticketId, body, isInternal: internal });
+      }
       setDraft(''); setInternal(false);
     });
   }
@@ -81,8 +104,10 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
               <input type="checkbox" checked={internal} onChange={e => setInternal(e.target.checked)} disabled={busy} />
               <span>{internal ? 'Verborgen voor klant' : 'Zichtbaar voor klant'}</span>
             </label>
-            <Button variant="primary" onClick={add} disabled={busy || !draft.trim()}>{busy ? 'Plaatsen…' : (internal ? 'Plaats interne notitie' : 'Plaats notitie')}</Button>
+            <Button variant="primary" onClick={add} disabled={busy || !draft.trim() || (!internal && files.uploading)}>{busy ? 'Plaatsen…' : (internal ? 'Plaats interne notitie' : 'Plaats notitie')}</Button>
           </div>
+          {canAttach && data && !internal && <MessageFilesBar state={files} data={data} clientId={clientId ?? null} disabled={busy} />}
+          {canAttach && internal && files.items.length > 0 && <p className="ticket-timeline-mailhint">Bestanden gaan alleen mee met een antwoord dat zichtbaar is voor de klant.</p>}
           {clientId && !internal && <p className="ticket-timeline-mailhint">
             {emailsOn === false
               ? 'De klant ziet dit in het klantportaal. E-mailmeldingen aan klanten staan uit (Instellingen → E-mail).'
@@ -106,6 +131,14 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
                   <span className="ttl-time">{new Date(note.created_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
                 <p className="ttl-text">{note.body}</p>
+                {data && noteFiles.get(note.id) && <TransferMessageBlock
+                  data={data}
+                  organizationId={organizationId}
+                  bundle={noteFiles.get(note.id) as FileTransferBundle}
+                  recipientId={null}
+                  canWrite={canWrite}
+                  onChanged={reloadNoteFiles}
+                />}
                 {canWrite && <div className="ttl-actions">
                   {!isClient && <button type="button" disabled={busy} onClick={() => run(() => setTicketNoteInternal(note.id, !note.is_internal, organizationId))}>{note.is_internal ? 'Zichtbaar maken voor klant' : 'Verbergen voor klant'}</button>}
                   <button type="button" className="ttl-delete" disabled={busy} onClick={() => { if (confirm('Deze notitie uit de tijdlijn verwijderen?')) void run(() => deleteTicketNote(note.id, organizationId)); }}>Verwijderen</button>

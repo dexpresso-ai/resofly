@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Phone, PhoneIncoming, PhoneOutgoing, Receipt, RotateCcw, Search, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
-import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote, Ticket } from '../types';
+import { ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Phone, PhoneIncoming, PhoneOutgoing, Receipt, RotateCcw, Search, Send, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
+import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, FileTransferBundle, FileTransferRecipient, InternalDocument, Invoice, Note, Project, Quote, Ticket } from '../types';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, priorityLabel, total } from '../lib/format';
 import { TICKET_STATUS_LABELS, TICKET_STATUS_ORDER, groupNotesByTicket, ticketLastActivity, ticketMatchesStatus } from '../lib/tickets';
@@ -27,6 +27,11 @@ import { ContentLibrary } from './ContentLibrary';
 import type { ContentCreateTarget } from './ContentLibrary';
 import type { NewOfficeType } from '../lib/office';
 import { ClientContacts } from './ClientContacts';
+import { SendFilesDialog } from '../components/SendFilesDialog';
+import { MailRecipientSelect, MessageFilesBar, mailRecipientFor, useMessageFiles } from '../components/MessageFiles';
+import { TransferMessageBlock } from '../components/TransfersPanel';
+import { loadTransfersForEmails } from '../lib/transfers-api';
+import { transferRecipientOptions } from '../lib/transfers';
 import { ContractStatusBadge } from './Contracts';
 
 // Vaste kolommen voor de bulk CSV-import van klanten. Het klantnummer ontbreekt
@@ -507,6 +512,8 @@ export function ClientDetailPage({
   // en notities). De KPI's en facturatie-waarschuwing blijven het totaalbeeld
   // tonen; alleen de detaillijsten hieronder reageren op de filters.
   const [activeTab, setActiveTab] = useState<ClientTab>('overview');
+  /** Het venster "Bestanden versturen" voor deze klant. */
+  const [sendingFiles, setSendingFiles] = useState(false);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const normalizedQuery = clientSearchNormalize(query.trim());
@@ -582,6 +589,7 @@ export function ClientDetailPage({
       </div>
       <div className="client-detail-actions">
         <Button onClick={onEditClient}>Klant bewerken</Button>
+        <Button onClick={() => setSendingFiles(true)} disabled={!canWrite} title="Bestanden veilig naar deze klant sturen"><Send size={14} /> Bestanden versturen</Button>
         <Button onClick={onNewProject} disabled={!canWrite}>+ Project</Button>
         <Button onClick={onNewQuote} disabled={!canWrite}>+ Offerte</Button>
         <Button variant="primary" onClick={onNewInvoice} disabled={!canWrite}>+ Factuur</Button>
@@ -808,6 +816,14 @@ export function ClientDetailPage({
       onNewOfficeDocument={onNewOfficeDocument}
       onEditDocument={onEditDocument}
     />}
+    {sendingFiles && <SendFilesDialog
+      data={data}
+      organizationId={organizationId}
+      clientId={client.id}
+      origin="client"
+      onClose={() => setSendingFiles(false)}
+      onChanged={onChanged}
+    />}
   </div>;
 }
 
@@ -876,11 +892,18 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
   const [sendMessage, setSendMessage] = useState<string | null>(null);
   /** Wie er straks als afzender komt te staan; null zolang we het nog niet weten. */
   const [sender, setSender] = useState<EffectiveSender | null>(null);
+  /** Aan: het hoofdadres of een contactpersoon ('client' / 'contact:<id>'). */
+  const [recipientKey, setRecipientKey] = useState('client');
+  /** Bestanden bij de mail (als beveiligde link, niet als bijlage). */
+  const mailFiles = useMessageFiles(organizationId, client.id);
+  /** De bestanden die met eerdere berichten meegingen, per bericht. */
+  const [transfersByEmail, setTransfersByEmail] = useState<Map<string, { bundle: FileTransferBundle; recipient: FileTransferRecipient }>>(new Map());
 
-  const recipient = (client.email ?? '').trim();
-  const hasRecipient = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient);
+  const target = mailRecipientFor(data, client.id, recipientKey);
+  const recipient = target?.email ?? '';
+  const hasRecipient = Boolean(target);
   const bodyText = body.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' ').trim();
-  const canSend = canWrite && hasRecipient && subject.trim().length > 0 && bodyText.length > 0 && !sending;
+  const canSend = canWrite && hasRecipient && subject.trim().length > 0 && bodyText.length > 0 && !sending && !mailFiles.uploading;
 
   useEffect(() => {
     let cancelled = false;
@@ -918,6 +941,17 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
     setReadIds(loadedReadIds);
   }
 
+  // Welke verstuurde berichten bestanden bij zich hadden (en hoe het ermee staat).
+  useEffect(() => {
+    let cancelled = false;
+    const outbound = emails.filter(msg => msg.direction === 'outbound').map(msg => msg.id);
+    if (outbound.length === 0) { setTransfersByEmail(new Map()); return; }
+    loadTransfersForEmails(organizationId, outbound)
+      .then(map => { if (!cancelled) setTransfersByEmail(map); })
+      .catch(() => { if (!cancelled) setTransfersByEmail(new Map()); });
+    return () => { cancelled = true; };
+  }, [organizationId, emails]);
+
   // Optie A brengt post van niet-klanten binnen; zonder wisrecht zou een fout
   // gekoppeld bericht voorgoed in het dossier blijven staan. Soft delete: de
   // rij blijft bestaan maar valt buiten de RLS-policy.
@@ -936,9 +970,15 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
     if (!canSend) return;
     setSending(true); setSendError(null); setSendMessage(null);
     try {
-      const result = await sendClientEmail(organizationId, { clientId: client.id, subject: subject.trim(), bodyHtml: body });
+      const transferId = await mailFiles.finalize();
+      const fileCount = mailFiles.items.length;
+      const result = await sendClientEmail(organizationId, {
+        clientId: client.id, subject: subject.trim(), bodyHtml: body,
+        contactId: target?.contactId ?? null, transferId, expectedRecipientEmail: target?.email,
+      });
+      if (transferId) mailFiles.markSent();
       setSubject(''); setBody('');
-      setSendMessage(`E-mail verzonden naar ${result.recipientEmail}.`);
+      setSendMessage(`E-mail verzonden naar ${result.recipientEmail}${transferId ? `, met ${fileCount === 1 ? '1 bestand' : `${fileCount} bestanden`} als beveiligde link` : ''}.`);
       await reload();
     } catch (err) {
       setSendError(err instanceof Error ? err.message : 'E-mail versturen mislukt.');
@@ -988,7 +1028,9 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
       {!hasRecipient
         ? <div className="client-empty-line">Deze klant heeft geen e-mailadres. Vul er een in bij de klantgegevens om te kunnen mailen.</div>
         : <>
-          <p className="client-comm-to">Aan: <strong>{recipient}</strong></p>
+          {transferRecipientOptions(data, client.id).length > 1
+            ? <MailRecipientSelect data={data} clientId={client.id} value={recipientKey} onChange={setRecipientKey} disabled={!canWrite || sending} />
+            : <p className="client-comm-to">Aan: <strong>{recipient}</strong></p>}
           {sender && (sender.fallback
             ? <p className="client-comm-from is-fallback">
                 Afzender: het algemene ResoFly-adres. Wil je dat de klant <em>jouw</em> naam en adres ziet?
@@ -1004,6 +1046,7 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
           <div className="client-comm-field">Bericht
             <RichTextEditor value={body} onChange={setBody} placeholder="Schrijf je bericht…" disabled={!canWrite || sending} />
           </div>
+          {canWrite && <MessageFilesBar state={mailFiles} data={data} clientId={client.id} disabled={sending} />}
           {sendMessage && <div className="success">{sendMessage}</div>}
           {sendError && <div className="error">{sendError}</div>}
           <div className="client-comm-actions">
@@ -1041,6 +1084,9 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
                   isUnread={msg.direction === 'inbound' && !readIds.has(msg.id)}
                   canWrite={canWrite}
                   onRemove={(id) => void removeMessage(id)}
+                  footer={transfersByEmail.has(msg.id)
+                    ? <TransferMessageBlock data={data} organizationId={organizationId} bundle={transfersByEmail.get(msg.id)!.bundle} recipientId={transfersByEmail.get(msg.id)!.recipient.id} canWrite={canWrite} />
+                    : null}
                 />
               ))}
             </div>}

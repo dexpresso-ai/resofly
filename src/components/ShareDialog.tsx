@@ -49,6 +49,14 @@ export function ShareDialog({
 
   const existing = useMemo(() => activeSharesFor(data, target.type, target.id), [data, target.type, target.id]);
 
+  // Het hoofdadres van de klant (de klantkaart) kan ook iets ontvangen; dat
+  // logt al in op het portaal. Alleen als het een geldig adres is.
+  const clientRow = context.clientId ? data.clients.find(c => c.id === context.clientId) ?? null : null;
+  const mainEmail = String(clientRow?.email ?? '').trim().toLowerCase();
+  const hasMainAddress = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mainEmail);
+  const mainAlreadyShared = existing.some(s => s.recipient_kind === 'client');
+  const [shareWithMain, setShareWithMain] = useState(false);
+
   const [members, setMembers] = useState<OrganizationMember[] | null>(null);
   /** Je deelt niet met jezelf; wie "jij" is halen we uit de sessie i.p.v. via zes prop-lagen. */
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -93,7 +101,7 @@ export function ShareDialog({
   // kun je jezelf aanvinken (wat de database daarna gewoon accepteert).
   const membersReady = members !== null && currentUserId !== null;
   const selectableMembers = (members ?? []).filter(m => m.user_id && m.user_id !== currentUserId);
-  const chosenCount = contactIds.length + memberIds.length + linkRecipients.length;
+  const chosenCount = contactIds.length + memberIds.length + linkRecipients.length + (shareWithMain ? 1 : 0);
 
   function toggle(list: string[], setList: (next: string[]) => void, id: string) {
     setList(list.includes(id) ? list.filter(x => x !== id) : [...list, id]);
@@ -129,6 +137,7 @@ export function ShareDialog({
     setBusy(true); setError(null);
     try {
       const recipients: DriveShareRecipientInput[] = [
+        ...(shareWithMain ? [{ kind: 'client' as const }] : []),
         ...contactIds.map(id => ({ kind: 'contact' as const, clientContactId: id })),
         ...memberIds.map(id => ({ kind: 'member' as const, memberUserId: id })),
         ...linkRecipients.map(email => ({ kind: 'link' as const, email })),
@@ -145,7 +154,7 @@ export function ShareDialog({
         notify,
       });
       setResults(outcome);
-      setContactIds([]); setMemberIds([]); setLinkRecipients([]); setMessage('');
+      setContactIds([]); setMemberIds([]); setLinkRecipients([]); setMessage(''); setShareWithMain(false);
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Delen is niet gelukt.');
@@ -238,8 +247,20 @@ export function ShareDialog({
     {error && <p className="error">{error}</p>}
 
     {isClientRelated && <section className="share-section">
-      <h4><UserRound size={14} /> Contactpersonen van {context.clientName ?? 'deze klant'}</h4>
-      {contacts.length === 0
+      <h4><UserRound size={14} /> {context.clientName ?? 'Deze klant'}</h4>
+      {hasMainAddress && <ul className="share-people">
+        <li className={mainAlreadyShared ? 'is-shared' : undefined}>
+          <label>
+            <input type="checkbox" checked={shareWithMain} disabled={busy || mainAlreadyShared} onChange={() => setShareWithMain(v => !v)} />
+            <span className="share-person">
+              <strong>{clientRow?.contact_name?.trim() || clientRow?.name}</strong>
+              <span className="share-person-meta">{mainEmail} · hoofdadres</span>
+            </span>
+          </label>
+          {mainAlreadyShared && <span className="share-tag">Al gedeeld</span>}
+        </li>
+      </ul>}
+      {contacts.length === 0 && !hasMainAddress
         ? <p className="share-empty">
             Deze klant heeft nog geen actieve contactpersonen. Voeg ze toe in het klantdossier onder
             “Contactpersonen”; daarna kun je hier met ze delen.

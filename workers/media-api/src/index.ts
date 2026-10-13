@@ -44,7 +44,7 @@ const ALLOWED_METHODS = 'GET,POST,PUT,DELETE,OPTIONS';
 // blokkeert de browser het request al bij de preflight — de Worker ziet dat
 // niet eens. X-Key/X-Upload-Id/X-Part-Number horen bij /gallery/multipart/part.
 const ALLOWED_HEADERS =
-  'Content-Type, Authorization, X-File-Name, X-File-Type, X-Organization-Id, X-Entity-Type, X-Entity-Id, X-Parent-Task-Id, X-Storage-Key, X-SHA256, X-Size-Bytes, X-Gallery-Id, X-Item-Id, X-Variant, X-Key, X-Upload-Id, X-Part-Number';
+  'Content-Type, Authorization, X-File-Name, X-File-Type, X-Organization-Id, X-Entity-Type, X-Entity-Id, X-Parent-Task-Id, X-Storage-Key, X-SHA256, X-Size-Bytes, X-Gallery-Id, X-Item-Id, X-Variant, X-Key, X-Upload-Id, X-Part-Number, X-Transfer-Id';
 const MAX_AGE_SECONDS = '86400';
 
 /** 25 MB — must stay in sync with MAX_UPLOAD_BYTES in src/lib/r2.ts. */
@@ -238,6 +238,43 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
     return errorResponse('Method not allowed', 405, context);
   }
 
+  // ── Bestanden versturen (zendingen) ────────────────────────────────────
+  // Uploaden in een eigen concept (Supabase-JWT), tot 1 GB per bestand:
+  if (method === 'POST' && pathname === '/transfer/upload') {
+    return handleTransferUpload(request, env, context);
+  }
+  if (method === 'POST' && pathname === '/transfer/multipart/create') {
+    return handleTransferMultipartCreate(request, env, context);
+  }
+  if (method === 'PUT' && pathname === '/transfer/multipart/part') {
+    return handleTransferMultipartPart(request, env, context);
+  }
+  if (method === 'POST' && pathname === '/transfer/multipart/complete') {
+    return handleTransferMultipartComplete(request, env, context);
+  }
+  if (method === 'POST' && pathname === '/transfer/multipart/abort') {
+    return handleTransferMultipartAbort(request, env, context);
+  }
+  // Intern (gedeeld geheim): kopiëren uit Inhoud en downloadlinks munten.
+  if (method === 'POST' && pathname === '/internal/transfer/copy') {
+    return handleInternalTransferCopy(request, env, context);
+  }
+  if (method === 'POST' && pathname === '/internal/signed-urls') {
+    return handleInternalSignedUrls(request, env, context);
+  }
+  // Downloaden met een getekende link (geen login; het token is de sleutel).
+  const signedFileKey = matchSignedFileRoute(pathname);
+  if (signedFileKey) {
+    if (method === 'GET' || method === 'HEAD') return handleSignedFile(request, env, context, signedFileKey);
+    return errorResponse('Method not allowed', 405, context);
+  }
+  const transferZip = pathname.match(/^\/signed\/transfer-zip\/([^/]+)$/);
+  if (transferZip) {
+    if (!isUuid(transferZip[1])) return errorResponse('Ongeldige zending.', 400, context);
+    if (method === 'GET') return handleSignedTransferZip(request, env, context, transferZip[1]);
+    return errorResponse('Method not allowed', 405, context);
+  }
+
   // ── Online Office-bewerken (Collabora via WOPI) ────────────────────────
   // Boot-health: bewijst zonder login dat media-api de Collabora-discovery kan bereiken
   // (via de service binding). Lekt niets — alleen ok/fail.
@@ -380,6 +417,9 @@ async function handleUserDelete(
   if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten in deze organisatie.');
   const segment = keySegment(key);
   if (IMMUTABLE_KEY_SEGMENTS.has(segment)) throw new HttpError(403, 'Een vastgelegd bewijsstuk kan niet worden verwijderd.');
+  // De bestanden van een zending horen bij die zending: weghalen gaat via de
+  // zending zelf (intrekken of verwijderen), zodat het logboek klopt.
+  if (segment === 'transfer') throw new HttpError(403, 'Bestanden van een zending verwijder je via de zending zelf.');
   await requireModuleLevel(env, organizationId, userId, moduleForSegment(segment), 'write');
 
   await env.MEDIA_BUCKET.delete(key);
@@ -1748,6 +1788,25 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
     );
   }
 
+  const stem = sanitizeFileName(gallery.title || 'galerij').replace(/\.[A-Za-z0-9]+$/, '') || 'galerij';
+  const zipName = `${stem}${media === 'photos' ? '-fotos' : media === 'videos' ? '-videos' : ''}.zip`;
+  return streamZipResponse(env, context, entries, zipName, 'gallery zip stream error');
+}
+
+/**
+ * De zip zelf: elk R2-object streamend erdoor, met de CRC32 tijdens het
+ * schrijven en zip64 waar nodig. Gedeeld door de galerij en de zendingen.
+ * Een object dat onderweg verdwenen is, slaat hij over; een fout halverwege
+ * breekt de stream af (de browser ziet dan een mislukte download, geen
+ * kapotte zip die "gelukt" lijkt).
+ */
+function streamZipResponse(
+  env: Env,
+  context: RouteContext,
+  entries: Array<{ key: string; zipName: string }>,
+  zipName: string,
+  logLabel: string,
+): Response {
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
 
@@ -1786,7 +1845,7 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
       }
       await writer.close();
     } catch (error) {
-      console.error('gallery zip stream error', {
+      console.error(logLabel, {
         requestId: context.requestId,
         message: error instanceof Error ? error.message : String(error),
       });
@@ -1795,14 +1854,714 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
   })();
   context.waitUntil(pump);
 
-  const stem = sanitizeFileName(gallery.title || 'galerij').replace(/\.[A-Za-z0-9]+$/, '') || 'galerij';
-  const zipName = `${stem}${media === 'photos' ? '-fotos' : media === 'videos' ? '-videos' : ''}.zip`;
   const headers = new Headers(context.corsHeaders);
   headers.set('Content-Type', 'application/zip');
   headers.set('Cache-Control', 'private, no-store');
   headers.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(zipName)}`);
   headers.set('X-Request-Id', context.requestId);
   return new Response(readable, { status: 200, headers });
+}
+
+// ── Bestanden versturen (zendingen) ─────────────────────────────────────────
+//
+// Een zending is een bevroren pakket: eigen kopieën onder
+// {organisatie}/transfer/{zending}/. Drie soorten routes:
+//  - uploaden (Supabase-JWT, alleen in een eigen concept): /transfer/upload en
+//    /transfer/multipart/* — tot 1 GB per bestand. De worker schrijft de
+//    bestandsrij zelf (service-role), zodat de grootte altijd de echte is.
+//  - intern (gedeeld geheim, alleen de edge functions): een bestand uit Inhoud
+//    kopiëren (/internal/transfer/copy) en kortlevende downloadlinks munten
+//    (/internal/signed-urls). Wie mag downloaden, beslist de edge function.
+//  - downloaden met zo'n link (/signed/file/<key>, /signed/transfer-zip/<id>):
+//    zonder login; het getekende token in de URL is de sleutel, gebonden aan
+//    precies één bestand of één zending en hoogstens een uur geldig. Hoort de
+//    link bij een zending, dan staan zending en ontvanger in het token en kijkt
+//    de worker bij élke aanvraag of die nog loopt en of de ontvanger niet is
+//    ingetrokken — een link die al uitgedeeld is, stopt dan meteen mee.
+
+/** Moet gelijk blijven aan TRANSFER_MAX_FILE_BYTES in supabase/functions/_shared/fileTransfer.ts. */
+const TRANSFER_MAX_FILE_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * Programma's en scripts gaan nooit mee. Moet gelijk blijven aan
+ * TRANSFER_BLOCKED_EXTENSIONS in supabase/functions/_shared/fileTransfer.ts
+ * (fileTransfer.test.ts legt ze naast elkaar).
+ */
+const TRANSFER_BLOCKED_EXTENSIONS = [
+  'exe', 'msi', 'msp', 'msix', 'appx', 'appxbundle', 'bat', 'cmd', 'com', 'scr', 'pif', 'cpl',
+  'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'ps1', 'psm1', 'psd1', 'lnk', 'jar', 'hta',
+  'reg', 'dll', 'iso', 'img', 'vhd', 'vhdx', 'application', 'gadget', 'msc',
+];
+const TRANSFER_BLOCKED = new Set<string>(TRANSFER_BLOCKED_EXTENSIONS);
+
+/** Uit welke mappen van de opslag een bestand in een zending gekopieerd mag worden. Nooit financiële bewijsstukken. */
+const TRANSFER_COPY_SEGMENTS = new Set(['folder', 'client', 'project', 'task', 'subtask', 'ticket', 'note', 'document']);
+
+const SIGNED_URL_DEFAULT_TTL_MS = 15 * 60 * 1000;
+const SIGNED_URL_MAX_TTL_MS = 60 * 60 * 1000;
+
+/** `x` = zending, `r` = ontvanger: dan toetst de worker hun stand bij elke aanvraag. */
+type SignedFilePayload = { t: 'sf'; org: string; k: string; exp: number; n?: string; x?: string; r?: string };
+type SignedZipPayload = { t: 'sz'; org: string; x: string; exp: number; n?: string; r?: string };
+
+type TransferRow = {
+  id: string;
+  organization_id: string;
+  status: string;
+  created_by: string | null;
+  can_download: boolean;
+  expires_at: string;
+  purged_at: string | null;
+  subject: string;
+};
+
+function transferBlockedExtension(fileName: string): string | null {
+  const name = String(fileName ?? '').trim().toLowerCase().replace(/[\s.]+$/, '');
+  const dot = name.lastIndexOf('.');
+  if (dot < 0 || dot === name.length - 1) return null;
+  const ext = name.slice(dot + 1);
+  return TRANSFER_BLOCKED.has(ext) ? ext : null;
+}
+
+/** De naam zoals de ontvanger hem ziet: geen pad, geen stuurtekens, hoogstens 300 tekens. */
+function transferDisplayName(raw: string): string {
+  const base = String(raw ?? '').split(/[\\/]/).pop() ?? '';
+  // eslint-disable-next-line no-control-regex
+  const cleaned = base.replace(/[\u0000-\u001f\u007f]+/g, '').replace(/\s+/g, ' ').trim();
+  return (cleaned || 'bestand').slice(0, 300);
+}
+
+function transferTooLarge(): HttpError {
+  return new HttpError(413, `Bestand is te groot. Per bestand kun je hoogstens ${Math.round(TRANSFER_MAX_FILE_BYTES / 1073741824)} GB versturen.`);
+}
+
+/**
+ * Mag er (nog) gedownload worden uit deze zending, door deze ontvanger? Voor de
+ * getekende links: verstuurd, niet verlopen, niet opgeruimd, downloaden aan, en
+ * de ontvanger niet ingetrokken.
+ */
+async function assertTransferDownloadable(env: Env, organizationId: string, transferId: string, recipientId: string | undefined): Promise<void> {
+  const transfer = await fetchTransferRow(env, transferId, organizationId).catch((error) => {
+    if (error instanceof HttpError && error.status === 404) throw new HttpError(410, 'Deze bestanden zijn niet meer beschikbaar.');
+    throw error;
+  });
+  if (transfer.status !== 'sent' || transfer.purged_at || Date.parse(transfer.expires_at) <= Date.now()) {
+    throw new HttpError(410, 'Deze bestanden zijn niet meer beschikbaar.');
+  }
+  if (!transfer.can_download) throw new HttpError(403, 'De afzender heeft downloaden voor deze zending uitgezet.');
+  if (!recipientId) return;
+  const query = new URLSearchParams({
+    select: 'id,transfer_id,revoked_at',
+    id: `eq.${recipientId}`,
+    organization_id: `eq.${organizationId}`,
+    limit: '1',
+  });
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/file_transfer_recipients?${query.toString()}`, { headers: serviceHeaders(env) });
+  if (!res.ok) throw new HttpError(502, 'Kon de ontvanger niet controleren.');
+  const rows = (await res.json()) as Array<{ id: string; transfer_id: string; revoked_at: string | null }>;
+  const recipient = Array.isArray(rows) ? rows[0] : undefined;
+  if (!recipient || recipient.transfer_id !== transferId || recipient.revoked_at) {
+    throw new HttpError(410, 'Deze bestanden zijn niet meer met je gedeeld.');
+  }
+}
+
+async function fetchTransferRow(env: Env, transferId: string, organizationId: string): Promise<TransferRow> {
+  const query = new URLSearchParams({
+    select: 'id,organization_id,status,created_by,can_download,expires_at,purged_at,subject',
+    id: `eq.${transferId}`,
+    organization_id: `eq.${organizationId}`,
+    limit: '1',
+  });
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/file_transfers?${query.toString()}`, { headers: serviceHeaders(env) });
+  if (!res.ok) throw new HttpError(502, 'Kon de zending niet ophalen.');
+  const rows = (await res.json()) as TransferRow[];
+  const row = Array.isArray(rows) ? rows[0] : undefined;
+  if (!row) throw new HttpError(404, 'Zending niet gevonden.');
+  return row;
+}
+
+/**
+ * Uploaden mag alleen in een eigen concept: ingelogd, lid met schrijfrecht,
+ * schrijfrecht op Inhoud, en de zending is van deze organisatie, nog niet
+ * verstuurd en door deze gebruiker begonnen.
+ */
+async function authorizeTransferDraftWrite(request: Request, env: Env, organizationId: string, transferId: string): Promise<{ userId: string; transfer: TransferRow }> {
+  const userId = await requireUser(request, env);
+  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige of ontbrekende organization id.');
+  if (!isUuid(transferId)) throw new HttpError(400, 'Ongeldige of ontbrekende zending.');
+  const role = await membershipRole(env, organizationId, userId);
+  if (!role) throw new HttpError(403, 'Geen toegang tot deze organisatie.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
+  await requireModuleLevel(env, organizationId, userId, 'content', 'write');
+  const transfer = await fetchTransferRow(env, transferId, organizationId);
+  if (transfer.status !== 'draft') throw new HttpError(409, 'Deze zending is al verstuurd; bestanden toevoegen kan niet meer.');
+  if (transfer.created_by !== userId) throw new HttpError(403, 'Alleen wie de zending begon, kan er bestanden aan toevoegen.');
+  return { userId, transfer };
+}
+
+function assertTransferKeyBelongs(key: string, organizationId: string, transferId: string): void {
+  if (!isSafeStorageKey(key)) throw new HttpError(400, 'Ongeldige key.');
+  if (!key.startsWith(`${organizationId}/transfer/${transferId}/`)) throw new HttpError(403, 'Key hoort niet bij deze zending.');
+}
+
+/** De bestandsrij in de database. De triggers daar toetsen nog eens of de zending een concept is en de sleutel klopt. */
+/**
+ * Een upload of kopie die nog geen bestandsrij heeft, staat alvast in de
+ * opruimwachtrij, met uitstel. Lukt alles, dan gaat hij er weer uit; sneuvelt
+ * er onderweg iets (een time-out, een geweigerde rij, een afgebroken functie),
+ * dan haalt de opruimtaak het object na het uitstel alsnog weg. Zo blijft er
+ * nooit een kopie in R2 staan die nergens bij hoort en ook niet meetelt.
+ */
+const PENDING_PURGE_REASON = 'file_transfer_pending';
+
+async function registerPendingPurge(env: Env, organizationId: string, key: string, delayMs: number): Promise<void> {
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/storage_purge_queue`, {
+    method: 'POST',
+    headers: serviceHeaders(env, { 'content-type': 'application/json', prefer: 'return=minimal' }),
+    body: JSON.stringify({
+      organization_id: organizationId,
+      storage_key: key,
+      reason: PENDING_PURGE_REASON,
+      purge_after: new Date(Date.now() + delayMs).toISOString(),
+    }),
+  });
+  if (!res.ok) throw new HttpError(503, 'De upload kon niet worden voorbereid. Probeer het zo opnieuw.');
+}
+
+async function clearPendingPurge(env: Env, organizationId: string, key: string): Promise<void> {
+  const query = new URLSearchParams({
+    organization_id: `eq.${organizationId}`,
+    storage_key: `eq.${key}`,
+    reason: `eq.${PENDING_PURGE_REASON}`,
+  });
+  // Mislukt dit, dan is dat niet erg: de opruimtaak slaat een sleutel over die
+  // bij een bestaande bestandsrij hoort, en haalt alleen de wachtrijregel weg.
+  await fetch(`${supabaseBase(env)}/rest/v1/storage_purge_queue?${query.toString()}`, {
+    method: 'DELETE',
+    headers: serviceHeaders(env),
+  }).catch(() => undefined);
+}
+
+async function insertTransferItem(env: Env, row: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/file_transfer_items`, {
+    method: 'POST',
+    headers: serviceHeaders(env, { 'content-type': 'application/json', prefer: 'return=representation' }),
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let message = 'Het bestand kon niet aan de zending worden toegevoegd.';
+    try {
+      const parsed = JSON.parse(text) as { message?: string; code?: string };
+      // De triggers schrijven hun weigering als gebruikerstekst.
+      if (parsed?.message && ['42501', '23514', '02000'].includes(String(parsed.code ?? ''))) message = parsed.message;
+    } catch { /* geen JSON */ }
+    throw new HttpError(res.status === 409 ? 409 : 400, message);
+  }
+  const rows = (await res.json()) as Array<Record<string, unknown>>;
+  return Array.isArray(rows) && rows[0] ? rows[0] : {};
+}
+
+function hexOf(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Zet een stream met bekende lengte weg in R2 en rekent intussen de SHA-256
+ * uit (het bewijs van wát er verstuurd is). R2 wil een stream met bekende
+ * lengte; een afgesplitste tak heeft die niet meer, vandaar de FixedLengthStream.
+ */
+async function putWithSha256(
+  env: Env,
+  key: string,
+  body: ReadableStream<Uint8Array>,
+  length: number,
+  options: R2PutOptions,
+): Promise<{ object: R2Object; sha256: string }> {
+  const [toStore, toHash] = body.tee();
+  const fixed = new FixedLengthStream(length);
+  // `crypto.DigestStream` is de Workers-API; de WebWorker-lib in tsconfig kent
+  // hem niet op het crypto-object, vandaar de expliciete typering.
+  const DigestStreamCtor = (crypto as unknown as { DigestStream: typeof DigestStream }).DigestStream;
+  const digest = new DigestStreamCtor('SHA-256');
+  const piping = toStore.pipeTo(fixed.writable);
+  const hashing = toHash.pipeTo(digest);
+  const [object] = await Promise.all([env.MEDIA_BUCKET.put(key, fixed.readable, options), piping, hashing]);
+  if (!object) throw new HttpError(500, 'Het bestand kon niet worden opgeslagen.');
+  return { object, sha256: hexOf(await digest.digest) };
+}
+
+/** Eén bestand in één request (tot 64 MB; groter gaat in delen). */
+async function handleTransferUpload(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const organizationId = (request.headers.get('x-organization-id') || '').trim();
+  const transferId = (request.headers.get('x-transfer-id') || '').trim();
+  const rawName = decodeMaybe(request.headers.get('x-file-name')) || 'bestand';
+  const contentType = (request.headers.get('x-file-type') || 'application/octet-stream').trim().slice(0, 200) || 'application/octet-stream';
+
+  const { userId } = await authorizeTransferDraftWrite(request, env, organizationId, transferId);
+  const displayName = transferDisplayName(rawName);
+  const blocked = transferBlockedExtension(displayName);
+  if (blocked) throw new HttpError(422, `“${displayName}” is een .${blocked}-bestand. Programma’s en scripts kun je niet versturen.`);
+  if (!request.body) throw new HttpError(400, 'Lege upload.');
+
+  const declared = Number(request.headers.get('content-length') || '0');
+  if (!Number.isFinite(declared) || declared <= 0) throw new HttpError(411, 'De grootte van het bestand ontbreekt.');
+  if (declared > TRANSFER_MAX_FILE_BYTES) throw transferTooLarge();
+  if (declared > GALLERY_SINGLE_REQUEST_MAX_BYTES) throw new HttpError(413, 'Dit bestand is te groot voor één keer uploaden; de app stuurt het in delen.');
+  await assertStorageCapacity(env, organizationId, declared);
+
+  const key = `${organizationId}/transfer/${transferId}/${crypto.randomUUID()}-${sanitizeFileName(displayName)}`;
+  await registerPendingPurge(env, organizationId, key, 60 * 60 * 1000);
+  const { object, sha256 } = await putWithSha256(env, key, request.body, declared, {
+    httpMetadata: { contentType },
+    customMetadata: { name: displayName, organizationId, entityType: 'transfer', entityId: transferId, uploadedBy: userId, uploadedAt: new Date().toISOString() },
+  });
+  if (object.size > TRANSFER_MAX_FILE_BYTES) {
+    await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
+    throw transferTooLarge();
+  }
+
+  try {
+    const item = await insertTransferItem(env, {
+      organization_id: organizationId,
+      transfer_id: transferId,
+      source_type: 'upload',
+      name: displayName,
+      mime_type: contentType,
+      size_bytes: object.size,
+      sha256,
+      storage_key: key,
+    });
+    await clearPendingPurge(env, organizationId, key);
+    return jsonResponse({ ok: true, item }, 200, context);
+  } catch (error) {
+    await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function handleTransferMultipartCreate(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    organizationId?: string; transferId?: string; fileName?: string; contentType?: string; fileSize?: number;
+  };
+  const organizationId = (body.organizationId || '').trim();
+  const transferId = (body.transferId || '').trim();
+  const fileSize = Number(body.fileSize || 0);
+  const contentType = (body.contentType || 'application/octet-stream').trim().slice(0, 200) || 'application/octet-stream';
+
+  const { userId } = await authorizeTransferDraftWrite(request, env, organizationId, transferId);
+  const displayName = transferDisplayName(body.fileName || 'bestand');
+  const blocked = transferBlockedExtension(displayName);
+  if (blocked) throw new HttpError(422, `“${displayName}” is een .${blocked}-bestand. Programma’s en scripts kun je niet versturen.`);
+  if (!Number.isFinite(fileSize) || fileSize <= 0) throw new HttpError(400, 'Ongeldige bestandsgrootte.');
+  if (fileSize > TRANSFER_MAX_FILE_BYTES) throw transferTooLarge();
+  await assertStorageCapacity(env, organizationId, fileSize);
+
+  const key = `${organizationId}/transfer/${transferId}/${crypto.randomUUID()}-${sanitizeFileName(displayName)}`;
+  // Een upload in delen kan lang duren; pas na een dag ruimt de taak hem op.
+  await registerPendingPurge(env, organizationId, key, 24 * 60 * 60 * 1000);
+  const upload = await env.MEDIA_BUCKET.createMultipartUpload(key, {
+    httpMetadata: { contentType },
+    // De aangekondigde grootte: daarop is de opslagruimte getoetst. Bij het
+    // afronden mag het echte bestand niet groter zijn.
+    customMetadata: { name: displayName, organizationId, entityType: 'transfer', entityId: transferId, uploadedBy: userId, uploadedAt: new Date().toISOString(), declaredSize: String(Math.round(fileSize)) },
+  });
+  return jsonResponse({ ok: true, key, uploadId: upload.uploadId, partSize: GALLERY_MULTIPART_PART_BYTES }, 200, context);
+}
+
+async function handleTransferMultipartPart(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const organizationId = (request.headers.get('x-organization-id') || '').trim();
+  const transferId = (request.headers.get('x-transfer-id') || '').trim();
+  const key = decodeMaybe(request.headers.get('x-key')) || '';
+  const uploadId = decodeMaybe(request.headers.get('x-upload-id')) || '';
+  const partNumber = Number(request.headers.get('x-part-number') || '0');
+
+  await authorizeTransferDraftWrite(request, env, organizationId, transferId);
+  assertTransferKeyBelongs(key, organizationId, transferId);
+  if (!uploadId) throw new HttpError(400, 'Ontbrekende upload id.');
+  // 1 GB / 64 MiB = 16 parts; ruim daarboven is per definitie een fout.
+  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 64) throw new HttpError(400, 'Ongeldig partnummer.');
+  if (!request.body) throw new HttpError(400, 'Leeg part.');
+  const declared = Number(request.headers.get('content-length') || '0');
+  if (declared > GALLERY_MULTIPART_PART_MAX_BYTES) throw new HttpError(413, 'Part is te groot.');
+
+  const upload = env.MEDIA_BUCKET.resumeMultipartUpload(key, uploadId);
+  const part = await upload.uploadPart(partNumber, request.body);
+  return jsonResponse({ ok: true, partNumber: part.partNumber, etag: part.etag }, 200, context);
+}
+
+async function handleTransferMultipartComplete(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    organizationId?: string; transferId?: string; key?: string; uploadId?: string;
+    parts?: Array<{ partNumber?: number; etag?: string }>;
+  };
+  const organizationId = (body.organizationId || '').trim();
+  const transferId = (body.transferId || '').trim();
+  const key = (body.key || '').trim();
+  const uploadId = (body.uploadId || '').trim();
+
+  await authorizeTransferDraftWrite(request, env, organizationId, transferId);
+  assertTransferKeyBelongs(key, organizationId, transferId);
+  if (!uploadId) throw new HttpError(400, 'Ontbrekende upload id.');
+  const parts = (body.parts || []).map(part => ({ partNumber: Number(part?.partNumber), etag: String(part?.etag ?? '') }));
+  if (parts.length === 0 || parts.some(p => !Number.isInteger(p.partNumber) || p.partNumber < 1 || !p.etag)) {
+    throw new HttpError(400, 'Ongeldige partlijst.');
+  }
+
+  const upload = env.MEDIA_BUCKET.resumeMultipartUpload(key, uploadId);
+  const object = await upload.complete(parts);
+  // Pas hier is de echte omvang bekend: niet groter dan 1 GB, niet groter dan
+  // aangekondigd (daarop is de opslag getoetst) en nog steeds binnen de opslag
+  // van het account — ook als er intussen andere uploads klaar zijn.
+  const head = await env.MEDIA_BUCKET.head(key);
+  const declaredSize = Number(head?.customMetadata?.declaredSize || 0);
+  if (object.size > TRANSFER_MAX_FILE_BYTES) {
+    await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
+    throw transferTooLarge();
+  }
+  if (declaredSize > 0 && object.size > declaredSize) {
+    await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
+    throw new HttpError(400, 'Het bestand is groter dan bij het begin van de upload. Probeer het opnieuw.');
+  }
+  try {
+    await assertStorageCapacity(env, organizationId, object.size);
+  } catch (error) {
+    await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
+    throw error;
+  }
+
+  const displayName = transferDisplayName(head?.customMetadata?.name || key.slice(key.lastIndexOf('/') + 1));
+  try {
+    const item = await insertTransferItem(env, {
+      organization_id: organizationId,
+      transfer_id: transferId,
+      source_type: 'upload',
+      name: displayName,
+      mime_type: head?.httpMetadata?.contentType || 'application/octet-stream',
+      size_bytes: object.size,
+      storage_key: key,
+    });
+    await clearPendingPurge(env, organizationId, key);
+    return jsonResponse({ ok: true, item }, 200, context);
+  } catch (error) {
+    await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function handleTransferMultipartAbort(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as { organizationId?: string; transferId?: string; key?: string; uploadId?: string };
+  const organizationId = (body.organizationId || '').trim();
+  const transferId = (body.transferId || '').trim();
+  const key = (body.key || '').trim();
+  const uploadId = (body.uploadId || '').trim();
+
+  await authorizeTransferDraftWrite(request, env, organizationId, transferId);
+  assertTransferKeyBelongs(key, organizationId, transferId);
+  if (!uploadId) throw new HttpError(400, 'Ontbrekende upload id.');
+  await env.MEDIA_BUCKET.resumeMultipartUpload(key, uploadId).abort().catch(() => undefined);
+  await clearPendingPurge(env, organizationId, key);
+  return jsonResponse({ ok: true }, 200, context);
+}
+
+/**
+ * Kopieert een bestand uit Inhoud naar een zending (intern, alleen de edge
+ * function file-transfer). De kopie is van de zending: wordt het origineel
+ * daarna in de editor bewerkt, verplaatst of verwijderd, dan verandert er aan
+ * wat de klant krijgt niets.
+ */
+async function handleInternalTransferCopy(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  requireInternalSecret(request, env);
+  const body = (await request.json().catch(() => ({}))) as {
+    organizationId?: string; transferId?: string; sourceKey?: string; fileName?: string;
+  };
+  const organizationId = (body.organizationId || '').trim();
+  const transferId = (body.transferId || '').trim();
+  const sourceKey = (body.sourceKey || '').trim();
+  if (!isUuid(organizationId) || !isUuid(transferId)) throw new HttpError(400, 'Ongeldige organisatie of zending.');
+  assertKeyInOrg(sourceKey, organizationId);
+  if (!TRANSFER_COPY_SEGMENTS.has(keySegment(sourceKey))) throw new HttpError(403, 'Dit bestand kan niet worden verstuurd.');
+
+  const transfer = await fetchTransferRow(env, transferId, organizationId);
+  if (transfer.status !== 'draft') throw new HttpError(409, 'Deze zending is al verstuurd.');
+
+  const source = await env.MEDIA_BUCKET.get(sourceKey);
+  if (!source) throw new HttpError(404, 'Het bestand staat niet (meer) in de opslag.');
+  if (source.size > TRANSFER_MAX_FILE_BYTES) {
+    await source.body.cancel().catch(() => undefined);
+    throw transferTooLarge();
+  }
+  try {
+    await assertStorageCapacity(env, organizationId, source.size);
+  } catch (error) {
+    await source.body.cancel().catch(() => undefined);
+    throw error;
+  }
+
+  const displayName = transferDisplayName(body.fileName || source.customMetadata?.name || 'bestand');
+  const key = `${organizationId}/transfer/${transferId}/${crypto.randomUUID()}-${sanitizeFileName(displayName)}`;
+  const contentType = source.httpMetadata?.contentType || 'application/octet-stream';
+  // De bestandsrij schrijft de edge function; die haalt deze regel weg zodra
+  // dat gelukt is (clearPendingPurge-equivalent in file-transfer).
+  try {
+    await registerPendingPurge(env, organizationId, key, 60 * 60 * 1000);
+  } catch (error) {
+    await source.body.cancel().catch(() => undefined);
+    throw error;
+  }
+  const { object, sha256 } = await putWithSha256(env, key, source.body, source.size, {
+    httpMetadata: { contentType },
+    customMetadata: { name: displayName, organizationId, entityType: 'transfer', entityId: transferId, copiedFrom: sourceKey, uploadedAt: new Date().toISOString() },
+  });
+  return jsonResponse({ ok: true, key, size: object.size, sha256, contentType }, 200, context);
+}
+
+async function signPayload(payload: Record<string, unknown>, secret: string): Promise<string> {
+  const body = b64urlEncode(new TextEncoder().encode(JSON.stringify(payload)));
+  const sig = await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(body));
+  return `${body}.${b64urlEncode(new Uint8Array(sig))}`;
+}
+
+/** Een getekend downloadtoken van één soort ('sf' of 'sz'); null bij een fout, een andere soort of verlopen. */
+async function verifySignedPayload<T extends { t: string; org: string; exp: number }>(token: string, secret: string, type: T['t']): Promise<T | null> {
+  const dot = token.indexOf('.');
+  if (dot <= 0) return null;
+  const body = token.slice(0, dot);
+  const providedSig = token.slice(dot + 1);
+  const expectedSig = b64urlEncode(new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(body))));
+  if (!timingSafeEqual(providedSig, expectedSig)) return null;
+  try {
+    const payload = JSON.parse(b64urlDecodeToStr(body)) as T;
+    if (!payload || payload.t !== type) return null;
+    if (typeof payload.exp !== 'number' || payload.exp < Date.now()) return null;
+    if (!isUuid(payload.org)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function signingSecret(env: Env): string {
+  if (!env.MEDIA_SIGNING_SECRET) throw new HttpError(500, 'Downloadlinks niet geconfigureerd (MEDIA_SIGNING_SECRET).');
+  return env.MEDIA_SIGNING_SECRET;
+}
+
+/**
+ * Munt kortlevende downloadlinks (intern). De edge function heeft al
+ * beslist dat deze bezoeker deze bestanden mag hebben; hier wordt alleen
+ * gecontroleerd dat elke sleutel bij de genoemde organisatie hoort.
+ */
+async function handleInternalSignedUrls(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  requireInternalSecret(request, env);
+  const body = (await request.json().catch(() => ({}))) as {
+    organizationId?: string;
+    files?: Array<{ key?: string; fileName?: string }>;
+    zip?: { transferId?: string; fileName?: string } | null;
+    /** Links voor een zending: de worker toetst zending en ontvanger bij elke download. */
+    transfer?: { id?: string; recipientId?: string | null } | null;
+    ttlSeconds?: number;
+  };
+  const organizationId = (body.organizationId || '').trim();
+  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organisatie.');
+  const boundTransfer = body.transfer ? String(body.transfer.id || '').trim() : '';
+  const boundRecipient = body.transfer?.recipientId ? String(body.transfer.recipientId).trim() : '';
+  if (body.transfer && !isUuid(boundTransfer)) throw new HttpError(400, 'Ongeldige zending.');
+  if (boundRecipient && !isUuid(boundRecipient)) throw new HttpError(400, 'Ongeldige ontvanger.');
+  const files = Array.isArray(body.files) ? body.files.slice(0, 500) : [];
+  const requested = Number(body.ttlSeconds || 0) * 1000;
+  const ttl = Math.min(Math.max(requested || SIGNED_URL_DEFAULT_TTL_MS, 60_000), SIGNED_URL_MAX_TTL_MS);
+  const exp = Date.now() + ttl;
+  const secret = signingSecret(env);
+  const base = (env.MEDIA_PUBLIC_URL || new URL(request.url).origin).replace(/\/+$/, '');
+
+  const out: Array<{ key: string; url: string }> = [];
+  for (const file of files) {
+    const key = String(file?.key || '').trim();
+    assertKeyInOrg(key, organizationId);
+    if (boundTransfer && !key.startsWith(`${organizationId}/transfer/${boundTransfer}/`)) {
+      throw new HttpError(403, 'Dit bestand hoort niet bij deze zending.');
+    }
+    const name = transferDisplayName(String(file?.fileName || '') || key.slice(key.lastIndexOf('/') + 1));
+    const payload: SignedFilePayload = { t: 'sf', org: organizationId, k: key, exp, n: name };
+    if (boundTransfer) payload.x = boundTransfer;
+    if (boundRecipient) payload.r = boundRecipient;
+    const token = await signPayload(payload, secret);
+    out.push({ key, url: `${base}/signed/file/${encodeURIComponent(key)}?token=${encodeURIComponent(token)}` });
+  }
+
+  let zipUrl: string | null = null;
+  if (body.zip) {
+    const transferId = String(body.zip.transferId || '').trim();
+    if (!isUuid(transferId)) throw new HttpError(400, 'Ongeldige zending.');
+    if (boundTransfer && boundTransfer !== transferId) throw new HttpError(400, 'Deze zip hoort bij een andere zending.');
+    const name = transferDisplayName(String(body.zip.fileName || 'bestanden.zip'));
+    const payload: SignedZipPayload = { t: 'sz', org: organizationId, x: transferId, exp, n: name };
+    if (boundRecipient) payload.r = boundRecipient;
+    const token = await signPayload(payload, secret);
+    zipUrl = `${base}/signed/transfer-zip/${transferId}?token=${encodeURIComponent(token)}`;
+  }
+
+  return jsonResponse({ ok: true, files: out, zipUrl, exp }, 200, context);
+}
+
+/** `/signed/file/{key}` — key bevat slashes. */
+function matchSignedFileRoute(pathname: string): string | null {
+  const match = pathname.match(/^\/signed\/file\/(.+)$/);
+  if (!match?.[1]) return null;
+  const key = decodeURIComponent(match[1]);
+  return isSafeStorageKey(key) ? key : null;
+}
+
+/**
+ * Eén bestand met een getekende link: altijd als download (met de echte
+ * naam), Range voor hervatten, en de vaste bestandsbeveiliging. Een afbeelding
+ * mag met ?inline=1 in beeld, voor een voorvertoning.
+ */
+async function handleSignedFile(request: Request, env: Env, context: RouteContext, key: string): Promise<Response> {
+  const token = context.url.searchParams.get('token') || '';
+  const payload = token ? await verifySignedPayload<SignedFilePayload>(token, signingSecret(env), 'sf') : null;
+  if (!payload) throw new HttpError(401, 'Deze downloadlink is verlopen. Ga terug naar de pagina en probeer het opnieuw.');
+  if (payload.k !== key || organizationFromKey(key) !== payload.org) throw new HttpError(403, 'Deze link hoort niet bij dit bestand.');
+  if (payload.x) {
+    if (!isUuid(payload.x) || (payload.r && !isUuid(payload.r)) || !key.startsWith(`${payload.org}/transfer/${payload.x}/`)) {
+      throw new HttpError(403, 'Deze link hoort niet bij dit bestand.');
+    }
+    // Ingetrokken of verlopen telt meteen, ook met een token dat nog even geldig is.
+    await assertTransferDownloadable(env, payload.org, payload.x, payload.r);
+  }
+
+  const head = await env.MEDIA_BUCKET.head(key);
+  if (!head) throw new HttpError(404, 'Dit bestand is niet meer beschikbaar.');
+  const totalSize = head.size;
+
+  const rangeHeader = request.headers.get('range') || '';
+  const rangeMatch = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+  let start: number | null = null;
+  let end: number | null = null;
+  if (rangeMatch && (rangeMatch[1] !== '' || rangeMatch[2] !== '')) {
+    if (rangeMatch[1] === '') {
+      const suffix = Number(rangeMatch[2]);
+      if (!Number.isFinite(suffix) || suffix <= 0) throw new HttpError(416, 'Ongeldige range.');
+      start = Math.max(0, totalSize - suffix);
+      end = totalSize - 1;
+    } else {
+      start = Number(rangeMatch[1]);
+      end = rangeMatch[2] === '' ? totalSize - 1 : Number(rangeMatch[2]);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) throw new HttpError(416, 'Ongeldige range.');
+      if (start >= totalSize) {
+        const headers = new Headers(context.corsHeaders);
+        headers.set('Content-Range', `bytes */${totalSize}`);
+        return new Response(null, { status: 416, headers });
+      }
+      end = Math.min(end, totalSize - 1);
+    }
+  }
+  const isRanged = start !== null && end !== null && totalSize > 0;
+
+  const wantsInline = context.url.searchParams.get('inline') === '1';
+  const safeType = inlineSafeType(head.httpMetadata?.contentType);
+  const inline = wantsInline && Boolean(safeType) && (safeType || '').startsWith('image/');
+  const name = payload.n || head.customMetadata?.name || 'bestand';
+
+  const headers = new Headers(context.corsHeaders);
+  headers.set('Content-Type', inline && safeType ? safeType : 'application/octet-stream');
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('Cache-Control', 'private, no-store');
+  headers.set('X-Request-Id', context.requestId);
+  headers.set('Referrer-Policy', 'no-referrer');
+  setFileSecurityHeaders(headers);
+  if (head.httpEtag) headers.set('ETag', head.httpEtag);
+  headers.set('Content-Disposition', inline ? 'inline' : `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
+
+  if (request.method === 'HEAD') {
+    headers.set('Content-Length', String(totalSize));
+    return new Response(null, { status: 200, headers });
+  }
+
+  const object = await env.MEDIA_BUCKET.get(
+    key,
+    isRanged ? { range: { offset: start as number, length: (end as number) - (start as number) + 1 } } : undefined,
+  );
+  if (!object) throw new HttpError(404, 'Dit bestand is niet meer beschikbaar.');
+  if (isRanged) {
+    headers.set('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+    headers.set('Content-Length', String((end as number) - (start as number) + 1));
+    return new Response(object.body, { status: 206, headers });
+  }
+  headers.set('Content-Length', String(totalSize));
+  return new Response(object.body, { status: 200, headers });
+}
+
+/**
+ * De hele zending als zip. Hier kijkt de worker wél zelf in de database:
+ * ingetrokken, verlopen of "downloaden uit" betekent geen zip, ook niet met een
+ * token dat nog een paar minuten geldig is.
+ */
+async function handleSignedTransferZip(request: Request, env: Env, context: RouteContext, transferId: string): Promise<Response> {
+  const token = context.url.searchParams.get('token') || '';
+  const payload = token ? await verifySignedPayload<SignedZipPayload>(token, signingSecret(env), 'sz') : null;
+  if (!payload) throw new HttpError(401, 'Deze downloadlink is verlopen. Ga terug naar de pagina en probeer het opnieuw.');
+  if (payload.x !== transferId) throw new HttpError(403, 'Deze link hoort niet bij deze zending.');
+  if (payload.r && !isUuid(payload.r)) throw new HttpError(403, 'Deze link hoort niet bij deze zending.');
+  await assertTransferDownloadable(env, payload.org, transferId, payload.r);
+
+  const query = new URLSearchParams({
+    select: 'name,path,storage_key,size_bytes',
+    transfer_id: `eq.${transferId}`,
+    organization_id: `eq.${payload.org}`,
+    purged_at: 'is.null',
+    storage_key: 'not.is.null',
+    order: 'position.asc,created_at.asc',
+    limit: '1000',
+  });
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/file_transfer_items?${query.toString()}`, { headers: serviceHeaders(env) });
+  if (!res.ok) throw new HttpError(502, 'Kon de bestanden niet ophalen.');
+  const items = (await res.json()) as Array<{ name: string; path: string | null; storage_key: string; size_bytes: number | null }>;
+
+  const prefix = `${payload.org}/transfer/${transferId}/`;
+  const used = new Set<string>();
+  const entries: Array<{ key: string; zipName: string }> = [];
+  let totalBytes = 0;
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item.storage_key || !item.storage_key.startsWith(prefix)) continue;
+    totalBytes += typeof item.size_bytes === 'number' && item.size_bytes > 0 ? item.size_bytes : 0;
+    const full = transferZipPath(item.path, item.name);
+    const dot = full.lastIndexOf('.');
+    const slash = full.lastIndexOf('/');
+    const stem = dot > slash + 1 ? full.slice(0, dot) : full;
+    const ext = dot > slash + 1 ? full.slice(dot) : '';
+    let zipName = full;
+    let suffix = 1;
+    while (used.has(zipName.toLowerCase())) {
+      suffix += 1;
+      zipName = `${stem}_${suffix}${ext}`;
+    }
+    used.add(zipName.toLowerCase());
+    entries.push({ key: item.storage_key, zipName });
+  }
+  if (entries.length === 0) throw new HttpError(404, 'Er zijn geen bestanden om te downloaden.');
+  if (totalBytes > GALLERY_ZIP_MAX_BYTES) throw new HttpError(413, 'Deze zending is te groot voor één zip. Download de bestanden los.');
+
+  return streamZipResponse(env, context, entries, payload.n || 'bestanden.zip', 'transfer zip stream error');
+}
+
+/**
+ * Pad binnen een meegestuurde map → zip-pad, zonder ".." of tekens die een
+ * uitpakker niet lust. Moet gelijk blijven aan zipPath() in
+ * supabase/functions/_shared/fileTransfer.ts. Eerst trimmen, dán punten en
+ * spaties aan beide kanten weg: anders wordt " .. " alsnog "..".
+ */
+function transferZipPath(path: string | null | undefined, name: string): string {
+  const clean = (value: string) => String(value ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, '_')
+    .trim()
+    .replace(/^[.\s]+|[.\s]+$/g, '')
+    .slice(0, 200)
+    .trim();
+  const parts = String(path ?? '').split(' / ').map(clean).filter(Boolean);
+  parts.push(clean(name) || 'bestand');
+  return parts.join('/');
 }
 
 // ── Online Office-bewerken (Collabora via WOPI) ─────────────────────────────
@@ -2835,7 +3594,7 @@ const SEGMENT_MODULE: Record<string, string> = {
   client: 'clients',
   project: 'projects', task: 'projects', subtask: 'projects', gallery: 'projects',
   ticket: 'tickets',
-  note: 'content', document: 'content', folder: 'content',
+  note: 'content', document: 'content', folder: 'content', transfer: 'content',
   quote: 'finance', invoice: 'finance', supplier: 'finance', purchase_invoice: 'finance',
   fixed_asset: 'finance', annual_account: 'finance', contract: 'finance',
   'invoice-pdfs': 'finance', 'quote-pdfs': 'finance', 'contract-pdfs': 'finance',
@@ -2907,6 +3666,9 @@ function sanitizeFileName(name: string): string {
   const cleaned = base
     .replace(/[^A-Za-z0-9._-]+/g, '_')
     .replace(/_+/g, '_')
+    // "offerte..pdf" → "offerte.pdf": een sleutel met ".." weigert isSafeStorageKey()
+    // overal, ook bij het opruimen — dan bleef het object als wees staan.
+    .replace(/\.{2,}/g, '.')
     .replace(/^[._]+/, '');
   return (cleaned || 'bestand').slice(0, 200);
 }

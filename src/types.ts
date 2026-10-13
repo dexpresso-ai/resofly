@@ -407,8 +407,9 @@ export type DriveShareItemType = 'folder' | 'attachment' | 'note' | 'document';
  * - `member`  — collega in dezelfde organisatie; krijgt een melding met een link.
  * - `link`    — los e-mailadres met een geheime deellink. Alleen toegestaan als het
  *               item NIET bij een klantdossier hoort (de database weigert de rest).
+ * - `client`  — het hoofdadres van de klant (clients.email); ziet het in het klantportaal.
  */
-export type DriveShareRecipientKind = 'contact' | 'member' | 'link';
+export type DriveShareRecipientKind = 'contact' | 'member' | 'link' | 'client';
 
 export interface DriveShare extends OrgScopedRow {
   item_type: DriveShareItemType;
@@ -433,6 +434,110 @@ export interface DriveShare extends OrgScopedRow {
   notified_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ── Bestanden versturen (zendingen) ─────────────────────────────────────────
+// Een bevroren pakket bestanden met een bericht, aan het hoofdadres of de
+// contactpersonen van één klant (of aan losse adressen als het pakket bij geen
+// klant hoort). Zie supabase/migrations/20261013100000_file_transfers.sql.
+// Teamleden lezen deze tabellen via RLS; schrijven gaat via de edge function
+// `file-transfer`.
+
+export type FileTransferStatus = 'draft' | 'sent' | 'revoked' | 'expired';
+export type FileTransferOrigin = 'content' | 'client' | 'message' | 'ticket' | 'gerrie';
+export type FileTransferSourceType = 'attachment' | 'note' | 'document' | 'upload';
+/** client = hoofdadres van de klant · contact = contactpersoon · email = los adres (alleen zonder klant). */
+export type FileTransferRecipientKind = 'client' | 'contact' | 'email';
+
+export interface FileTransfer extends OrgScopedRow {
+  client_id: UUID | null;
+  project_id: UUID | null;
+  subject: string;
+  message: string | null;
+  can_download: boolean;
+  expires_at: string;
+  status: FileTransferStatus;
+  origin: FileTransferOrigin;
+  ticket_id: UUID | null;
+  ticket_note_id: UUID | null;
+  client_email_thread_id: UUID | null;
+  sender_name: string | null;
+  item_count: number;
+  total_bytes: number;
+  sent_at: string | null;
+  revoked_at: string | null;
+  revoked_by: UUID | null;
+  purged_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FileTransferItem {
+  id: UUID;
+  organization_id: UUID;
+  transfer_id: UUID;
+  source_type: FileTransferSourceType;
+  source_id: UUID | null;
+  name: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string | null;
+  /** Eigen kopie onder {organisatie}/transfer/{zending}/; null = notitie of tekstdocument (gelezen op de pagina). */
+  storage_key: string | null;
+  path: string;
+  position: number;
+  purged_at: string | null;
+  created_at: string;
+}
+
+export interface FileTransferRecipient {
+  id: UUID;
+  organization_id: UUID;
+  transfer_id: UUID;
+  kind: FileTransferRecipientKind;
+  client_contact_id: UUID | null;
+  email: string;
+  name: string | null;
+  client_email_id: UUID | null;
+  notified_at: string | null;
+  notify_error: string | null;
+  /** sent | delivered | bounced | complained | failed */
+  delivery_status: string | null;
+  first_opened_at: string | null;
+  last_opened_at: string | null;
+  open_count: number;
+  first_downloaded_at: string | null;
+  last_downloaded_at: string | null;
+  download_count: number;
+  revoked_at: string | null;
+  /** Te vaak een verkeerde code: de link is dicht tot je opnieuw verstuurt. */
+  code_blocked_at?: string | null;
+  created_at: string;
+}
+
+export type FileTransferEventKind =
+  | 'sent' | 'resent' | 'recipient_added' | 'delivered' | 'bounced' | 'complained' | 'failed'
+  | 'code_sent' | 'code_failed' | 'code_locked'
+  | 'opened' | 'downloaded' | 'zip_downloaded'
+  | 'extended' | 'revoked' | 'recipient_revoked' | 'expired' | 'purged';
+
+export interface FileTransferEvent {
+  id: UUID;
+  organization_id: UUID;
+  transfer_id: UUID;
+  recipient_id: UUID | null;
+  item_id: UUID | null;
+  kind: FileTransferEventKind;
+  actor_user_id: UUID | null;
+  detail: string | null;
+  created_at: string;
+}
+
+/** Een zending met wat erbij hoort, zoals de schermen hem gebruiken. */
+export interface FileTransferBundle {
+  transfer: FileTransfer;
+  items: FileTransferItem[];
+  recipients: FileTransferRecipient[];
 }
 
 
@@ -738,6 +843,8 @@ export interface OrganizationStorageStatus {
   plan_storage_gb: number | null;
   storage_addons: number;
   storage_addon_gb: number | null;
+  /** Kopieën in zendingen (bestanden versturen) die nog niet zijn opgeruimd. Ontbreekt vóór migratie 20261013100000. */
+  transfers_bytes?: number;
 }
 
 /** favorite = persoonlijke selectie van de kijker; like = zichtbare waardering. */
@@ -3159,6 +3266,7 @@ export type EmailTemplateKey =
   | 'meetingBooking.linkSent'
   | 'meetingBooking.confirmed'
   | 'file.shared'
+  | 'file.transfer'
   | 'portal.ticket.received'
   | 'portal.ticket.created'
   | 'portal.ticket.reply'

@@ -69,6 +69,12 @@
 /gedeeld/*
   X-Robots-Tag: noindex, nofollow
 
+# Zending (bestanden versturen): de token zit in het pad. Geen zoekmachine, en
+# geen Referer naar buiten (een link in een meegestuurde notitie lekt de token dan niet).
+/ontvang/*
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer
+
 /gallerij/*
   X-Robots-Tag: noindex, nofollow
 

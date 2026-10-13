@@ -7,6 +7,10 @@ import {
   PORTAL_TICKET_PLACEHOLDERS,
   PORTAL_TICKET_TEMPLATE_KEYS,
 } from '../../supabase/functions/_shared/emailTemplates/portalTicketUpdate.ts';
+import {
+  FILE_TRANSFER_DEFAULTS,
+  FILE_TRANSFER_PLACEHOLDERS,
+} from '../../supabase/functions/_shared/emailTemplates/fileTransfer.ts';
 
 /**
  * De e-mailteksten-editor (Instellingen → E-mail) toont per mail de
@@ -37,6 +41,26 @@ test('ticketmeldingen: editor en mailtemplate hebben dezelfde standaardtekst en 
     for (const placeholder of meta.placeholders) {
       assert.ok(placeholder.label && placeholder.example, `${key}: {{${placeholder.token}}} heeft een label en voorbeeld`);
     }
+  }
+});
+
+test('bestanden versturen: editor en mailtemplate hebben dezelfde standaardtekst en plaatshouders', () => {
+  const meta = EMAIL_TEMPLATES.find((t) => t.key === 'file.transfer');
+  assert.ok(meta, 'file.transfer staat niet in de editor');
+  assert.deepEqual(meta.defaults, {
+    subject: FILE_TRANSFER_DEFAULTS.subject,
+    intro: FILE_TRANSFER_DEFAULTS.intro,
+    closing: FILE_TRANSFER_DEFAULTS.closing,
+    cta_label: FILE_TRANSFER_DEFAULTS.ctaLabel,
+  });
+  assert.deepEqual(meta.placeholders.map((p) => p.token), [...FILE_TRANSFER_PLACEHOLDERS]);
+  for (const field of Object.values(meta.defaults)) {
+    for (const token of tokensIn(field)) {
+      assert.ok((FILE_TRANSFER_PLACEHOLDERS as readonly string[]).includes(token), `{{${token}}} staat niet in de lijst`);
+    }
+  }
+  for (const placeholder of meta.placeholders) {
+    assert.ok(placeholder.label && placeholder.example, `{{${placeholder.token}}} heeft een label en voorbeeld`);
   }
 });
 

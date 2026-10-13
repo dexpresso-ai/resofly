@@ -67,8 +67,8 @@ export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   task: 'projects', task_assignee: 'projects',
   ticket: 'tickets', ticket_note: 'tickets',
   time_entry: 'time',
-  attachment: 'content', content_folder: 'content', document: 'content', drive_share: 'content', note: 'content',
-  note_handwriting: 'content',
+  attachment: 'content', content_folder: 'content', document: 'content', drive_share: 'content', file_transfer: 'content',
+  note: 'content', note_handwriting: 'content',
   saved_report: 'stats',
 };
 
@@ -132,6 +132,7 @@ const EMAIL_TEMPLATES: Array<{ key: string; label: string; fields: string[] }> =
   { key: 'meetingBooking.linkSent', label: 'Boekingslink versturen', fields: ['subject', 'intro', 'cta_label'] },
   { key: 'meetingBooking.confirmed', label: 'Boeking bevestigd', fields: ['subject', 'intro', 'closing'] },
   { key: 'file.shared', label: 'Bestand gedeeld', fields: ['subject', 'intro', 'closing', 'cta_label'] },
+  { key: 'file.transfer', label: 'Bestanden verstuurd', fields: ['subject', 'intro', 'closing', 'cta_label'] },
   { key: 'portal.ticket.received', label: 'Ticketmelding · ontvangen (bevestiging)', fields: ['subject', 'intro', 'closing', 'cta_label'] },
   { key: 'portal.ticket.created', label: 'Ticketmelding · nieuw ticket', fields: ['subject', 'intro', 'closing', 'cta_label'] },
   { key: 'portal.ticket.reply', label: 'Ticketmelding · nieuw antwoord', fields: ['subject', 'intro', 'closing', 'cta_label'] },
@@ -148,6 +149,7 @@ const NOTIFICATION_EVENTS = [
   { type: 'client_email_inbound', label: 'Inkomende klant-e-mail' },
   { type: 'booking_new', label: 'Nieuwe boeking' },
   { type: 'invoice_paid', label: 'Factuur betaald' },
+  { type: 'file_transfer_downloaded', label: 'Verstuurde bestanden gedownload' },
 ] as const;
 const NOTIFICATION_TYPES = NOTIFICATION_EVENTS.map((e) => e.type) as unknown as readonly string[];
 

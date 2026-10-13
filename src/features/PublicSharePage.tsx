@@ -99,6 +99,8 @@ export function PublicSharePage({ token }: { token: string }) {
       if (fnError) throw new Error(await extractFunctionError(fnError, 'Openen mislukt.'));
       if (!data?.ok) throw new Error(data?.error || 'Openen mislukt.');
       if (data.text) { setReading({ title: data.text.title || item.name, html: data.text.html || '' }); return; }
+      // Sinds 2026-10-13 meestal een kortlevende downloadlink; base64 blijft als terugval.
+      if (typeof data.file?.url === 'string' && data.file.url) { downloadFromUrl(data.file.url as string); return; }
       if (!data.file?.base64) throw new Error('Openen mislukt.');
       downloadBase64(data.file.base64 as string, data.file.fileName || item.name, data.file.mimeType || 'application/octet-stream');
     } catch (e) {
@@ -195,6 +197,16 @@ function groupByPath(items: ShareItem[]): Array<{ path: string; items: ShareItem
   return [...map.entries()]
     .sort((a, b) => a[0].localeCompare(b[0], 'nl'))
     .map(([path, list]) => ({ path, items: list }));
+}
+
+/** De bestandsserver stuurt het bestand als bijlage; de pagina blijft staan. */
+function downloadFromUrl(url: string) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 function downloadBase64(base64: string, fileName: string, mimeType: string) {

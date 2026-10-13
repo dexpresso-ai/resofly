@@ -201,6 +201,10 @@ export async function sendClientEmail(
     clientId: UUID; subject: string; bodyHtml: string; bodyText?: string; threadId?: UUID | null;
     /** Bij een goedgekeurd voorstel: het adres op de kaart. De server weigert als het sindsdien veranderde. */
     expectedRecipientEmail?: string;
+    /** Naar een contactpersoon van de klant in plaats van het hoofdadres. */
+    contactId?: UUID | null;
+    /** Bestanden bij de mail: een concept-zending (file-transfer) van deze gebruiker voor deze klant. */
+    transferId?: UUID | null;
   },
 ): Promise<SendClientEmailResult> {
   const { data, error } = await supabase.functions.invoke('mail', {
@@ -213,6 +217,8 @@ export async function sendClientEmail(
       bodyText: input.bodyText,
       threadId: input.threadId ?? undefined,
       expectedRecipientEmail: input.expectedRecipientEmail,
+      contactId: input.contactId ?? undefined,
+      transferId: input.transferId ?? undefined,
     },
   });
   if (error) await throwFunctionError(error, 'E-mail versturen mislukt.');

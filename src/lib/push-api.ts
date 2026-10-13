@@ -20,7 +20,8 @@ export type PushEventType =
   | 'invoice_paid'
   | 'decision_digest'
   | 'mcp_proposal'
-  | 'purchase_invoice_inbox';
+  | 'purchase_invoice_inbox'
+  | 'file_transfer_downloaded';
 
 export const PUSH_EVENTS: Array<{ type: PushEventType; label: string; hint: string }> = [
   { type: 'ticket_new', label: 'Nieuw ticket', hint: 'Een klant maakt een ticket aan via het portaal.' },
@@ -32,6 +33,7 @@ export const PUSH_EVENTS: Array<{ type: PushEventType; label: string; hint: stri
   { type: 'decision_digest', label: 'Dagelijkse beslislijst', hint: 'Eén melding per dag als Gerrie kaarten voor je heeft klaargezet.' },
   { type: 'mcp_proposal', label: 'Je gekoppelde AI zet iets klaar', hint: 'Zodra je eigen AI (Claude, ChatGPT) een voorstel in je goedkeurwachtrij zet. Alleen voor jouw eigen koppelingen.' },
   { type: 'purchase_invoice_inbox', label: 'Inkoopfactuur per e-mail', hint: 'Een factuur op je factuur-doorstuuradres is klaargezet, geboekt, of heeft je aandacht nodig.' },
+  { type: 'file_transfer_downloaded', label: 'Verstuurde bestanden gedownload', hint: 'Een ontvanger downloadt voor het eerst bestanden die jij verstuurde.' },
 ];
 
 /** Draait deze browser Web Push? (nodig: service worker + PushManager + Notification) */

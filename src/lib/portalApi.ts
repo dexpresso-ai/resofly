@@ -127,6 +127,35 @@ export interface PortalTicketNote {
   author_name: string | null;
   body: string;
   created_at: string;
+  /** Bestanden die de leverancier bij dit antwoord meestuurde (sinds 2026-10-13). */
+  files?: PortalTransfer | null;
+}
+
+/** Eén bestand in een zending, zoals de klant het ziet. */
+export interface PortalTransferItem {
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  path: string | null;
+  kind: 'file' | 'text';
+  downloadable: boolean;
+  readable: boolean;
+}
+
+/** Bestanden die de leverancier stuurde (een zending): met bericht en vervaldatum. */
+export interface PortalTransfer {
+  id: string;
+  clientId: string | null;
+  subject: string;
+  message: string | null;
+  senderName: string | null;
+  sentAt: string | null;
+  expiresAt: string;
+  canDownload: boolean;
+  /** Nog te openen? Na de vervaldatum of na intrekken: nee, en dan zonder bestanden. */
+  available: boolean;
+  items: PortalTransferItem[];
 }
 
 export interface PortalTask {
@@ -197,6 +226,8 @@ export interface PortalMessage {
   bodyHtml: string | null;
   bodyText: string;
   at: string;
+  /** Bestanden die met dit bericht meegingen (sinds 2026-10-13). */
+  transfer?: PortalTransfer | null;
 }
 
 export interface PortalMessageThread {
@@ -228,6 +259,8 @@ export interface PortalAccount {
   galleries: PortalGallery[];
   /** Aantal met deze contactpersoon gedeelde mappen/bestanden — voedt het tabbladtelletje. */
   sharedFileCount?: number;
+  /** Aantal zendingen (bestanden versturen) dat nu voor deze persoon klaarstaat. */
+  transferCount?: number;
   /** Mailgesprekken met de leverancier: hoeveel, en hoeveel met nieuws (sinds 2026-10-04). */
   messages?: { threads: number; unread: number };
 }
@@ -502,6 +535,7 @@ export async function fetchPortalSharedFiles(clientId?: string): Promise<PortalS
 
 export type PortalSharedDownload =
   | { kind: 'file'; fileName: string; mimeType: string; base64: string }
+  | { kind: 'url'; fileName: string; url: string }
   | { kind: 'text'; title: string; html: string };
 
 /** Haalt één gedeeld item op: bestandsbytes (base64) of de tekst van een notitie/document. */
@@ -516,6 +550,10 @@ export async function downloadPortalSharedItem(
   if (error) throw new Error(await extractFunctionError(error, 'Downloaden mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Downloaden mislukt');
   if (data.text) return { kind: 'text', title: data.text.title || '', html: data.text.html || '' };
+  // Sinds 2026-10-13: een kortlevende downloadlink van de media-worker (geen base64).
+  if (typeof data.file?.url === 'string' && data.file.url) {
+    return { kind: 'url', fileName: data.file.fileName || 'bestand', url: data.file.url as string };
+  }
   if (data.file?.base64) {
     return {
       kind: 'file',
@@ -589,6 +627,46 @@ export async function sendPortalMessage(input: { clientId: string; threadId?: st
   if (error) throw new Error(await extractFunctionError(error, 'Bericht versturen mislukt'));
   if (!data?.ok || !data.message) throw new Error(data?.error || 'Bericht versturen mislukt');
   return { threadId: String(data.threadId), subject: String(data.subject || ''), message: data.message as PortalMessage };
+}
+
+/** De zendingen die nu voor jou klaarstaan in dit dossier. */
+export async function fetchPortalTransfers(clientId: string): Promise<PortalTransfer[]> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getTransfers', clientId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Bestanden ophalen mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Bestanden ophalen mislukt');
+  return Array.isArray(data.transfers) ? data.transfers as PortalTransfer[] : [];
+}
+
+/** Een kortlevende downloadlink voor één bestand uit een zending. */
+export async function portalTransferDownload(transferId: string, itemId: string): Promise<{ url: string; fileName: string }> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'transferDownload', transferId, itemId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Downloaden mislukt'));
+  if (!data?.ok || !data.url) throw new Error(data?.error || 'Downloaden mislukt');
+  return { url: String(data.url), fileName: String(data.fileName || 'bestand') };
+}
+
+/** De tekst van een notitie of document uit een zending. */
+export async function portalTransferRead(transferId: string, itemId: string): Promise<{ title: string; html: string }> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'transferRead', transferId, itemId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Openen mislukt'));
+  if (!data?.ok || !data.text) throw new Error(data?.error || 'Openen mislukt');
+  return { title: String(data.text.title || ''), html: String(data.text.html || '') };
+}
+
+/** Een downloadlink voor de hele zending als zip. */
+export async function portalTransferZip(transferId: string): Promise<string> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'transferZip', transferId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Downloaden mislukt'));
+  if (!data?.ok || !data.url) throw new Error(data?.error || 'Downloaden mislukt');
+  return String(data.url);
 }
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan

@@ -40,6 +40,14 @@ async function handleResendEvent(req: Request, payload: Record<string, unknown>)
   const eventType = normalizeEventType(type);
   const occurredAt = parseDate(createdAt) || new Date().toISOString();
 
+  // Een zending (bestanden versturen): de afleverstatus per ontvanger. Los van
+  // de rest — een mail voor een klant staat óók als client_emails-rij hieronder.
+  try {
+    await updateTransferRecipient(eventType, data, occurredAt);
+  } catch (error) {
+    console.warn('resend-webhook zending-status overgeslagen', error instanceof Error ? error.message : error);
+  }
+
   const delivery = await findDelivery(providerEmailId);
   if (!delivery) {
     const invoiceDelivery = await findInvoiceDelivery(providerEmailId);
@@ -468,6 +476,52 @@ async function suppressPortalNotificationAddress(eventType: string, data: Record
     if (error) throw error;
   }
   return true;
+}
+
+const TRANSFER_DELIVERY_RANK: Record<string, number> = { sent: 0, delivered: 1, failed: 2, bounced: 3, complained: 3 };
+
+/**
+ * Mails van een zending (de melding uit file-transfer, of een mail met
+ * bestanden uit het mailvenster) dragen de tag transfer_recipient_id. Hier komt
+ * hun afleverstatus bij de ontvanger, plus een regel in het logboek als hij
+ * niet aankwam. Nooit terug van gebounced naar afgeleverd.
+ */
+async function updateTransferRecipient(eventType: string, data: Record<string, unknown>, occurredAt: string): Promise<void> {
+  if (!['delivered', 'bounced', 'complained', 'failed'].includes(eventType)) return;
+  const tags = readResendTags(data.tags);
+  const recipientId = String(tags.transfer_recipient_id || '');
+  const transferId = String(tags.transfer_id || '');
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(recipientId) || !uuid.test(transferId)) return;
+
+  const { data: row, error } = await supabaseAdmin
+    .from('file_transfer_recipients')
+    .select('id,delivery_status')
+    .eq('id', recipientId)
+    .eq('transfer_id', transferId)
+    .maybeSingle();
+  if (error) {
+    if (/file_transfer|schema cache|does not exist|relation/i.test(`${error.message ?? ''} ${error.details ?? ''}`)) return;
+    throw error;
+  }
+  if (!row) return;
+  const current = String((row as { delivery_status?: string | null }).delivery_status || 'sent');
+  if ((TRANSFER_DELIVERY_RANK[eventType] ?? 0) < (TRANSFER_DELIVERY_RANK[current] ?? 0)) return;
+
+  const { error: updateError } = await supabaseAdmin
+    .from('file_transfer_recipients')
+    .update({ delivery_status: eventType, delivery_updated_at: occurredAt })
+    .eq('id', recipientId);
+  if (updateError) throw updateError;
+
+  await supabaseAdmin.rpc('file_transfer_record', {
+    p_transfer_id: transferId,
+    p_recipient_id: recipientId,
+    p_kind: eventType,
+    p_item_id: null,
+    p_detail: eventType === 'delivered' ? null : String(data.reason || data.error || '').slice(0, 300) || null,
+    p_actor_user_id: null,
+  });
 }
 
 /** Resend levert tags als object ({ naam: waarde }) of als lijst ([{ name, value }]). */

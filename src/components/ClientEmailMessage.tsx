@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { ClientEmail, ClientEmailStatus } from '../types';
 import { sanitizeEmailHtml } from '../lib/sanitizeHtml';
 
@@ -58,12 +59,14 @@ export function inboundOriginLabel(msg: ClientEmail): string | null {
   }
 }
 
-export function ClientEmailMessageCard({ message: msg, isUnread, canWrite, onRemove }: {
+export function ClientEmailMessageCard({ message: msg, isUnread, canWrite, onRemove, footer }: {
   message: ClientEmail;
   isUnread: boolean;
   canWrite: boolean;
   /** "Verwijderen" op een inkomend bericht: haalt het uit het klantdossier (soft delete). */
   onRemove: (clientEmailId: string) => void;
+  /** Onder de tekst, bv. de bestanden die met dit bericht meegingen. */
+  footer?: ReactNode;
 }) {
   return <div className={`client-comm-message ${msg.direction}${isUnread ? ' unread' : ''}`}>
     <div className="client-comm-message-meta">
@@ -83,6 +86,7 @@ export function ClientEmailMessageCard({ message: msg, isUnread, canWrite, onRem
     {msg.body_html
       ? <div className="client-comm-body" dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msg.body_html) }} />
       : <div className="client-comm-body client-comm-body-plain">{msg.body_text}</div>}
+    {footer}
     {msg.error_message && <div className="client-comm-error">{msg.error_message}</div>}
     {canWrite && msg.direction === 'inbound' && <div className="client-comm-message-actions">
       <button

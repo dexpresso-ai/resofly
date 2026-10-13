@@ -13,6 +13,8 @@ export type EmailTemplateKey =
   | 'contract.signed.client'
   | 'contract.signed.internal'
   | 'file.shared'
+  | 'file.transfer'
+  | 'file.transferCode'
   | 'portal.ticketUpdate';
 
 // De per-organisatie tekstsleutels in de email_templates-tabel. Herinneringen
@@ -29,6 +31,7 @@ export type EmailTemplateContentKey =
   | 'contract.sent'
   | 'contract.signed.client'
   | 'file.shared'
+  | 'file.transfer'
   | PortalTicketTemplateKey;
 
 /**
@@ -351,5 +354,39 @@ export type EmailTemplateInputMap = {
   'contract.signed.client': ContractSignedClientEmailInput;
   'contract.signed.internal': ContractSignedInternalEmailInput;
   'file.shared': FileSharedEmailInput;
+  'file.transfer': FileTransferEmailInput;
+  'file.transferCode': FileTransferCodeEmailInput;
   'portal.ticketUpdate': PortalTicketUpdateEmailInput;
+};
+
+/** "Er staan bestanden voor je klaar" — de melding bij een zending. */
+export type FileTransferEmailInput = {
+  /** Het onderwerp van de zending; ook de titel in de mail. */
+  subject: string;
+  /** De persoonlijke link (/ontvang/<token>). */
+  url: string;
+  recipientName?: string | null;
+  senderName?: string | null;
+  clientName?: string | null;
+  /** Vrij bericht van de afzender. Wordt altijd ge-escaped weergegeven. */
+  personalMessage?: string | null;
+  fileCount: number;
+  totalBytes: number;
+  expiresAt: string;
+  /** De ontvanger kan ook op het klantportaal: dan noemt de mail dat. */
+  portalUser?: boolean;
+  company?: {
+    company_name?: string | null;
+    trade_name?: string | null;
+    invoice_accent_color?: string | null;
+  } | null;
+  content?: EmailTemplateContent | null;
+};
+
+/** De code om een zending te openen (niet aanpasbaar). */
+export type FileTransferCodeEmailInput = {
+  code: string;
+  companyName?: string | null;
+  accentColor?: string | null;
+  validSeconds?: number;
 };

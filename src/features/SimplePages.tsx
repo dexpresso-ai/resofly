@@ -8,7 +8,8 @@ import { Modal } from '../components/Modal';
 import { BRAND_BODY_FONTS, BRAND_FONTS, CLIENT_THEMES, GALLERY_BACKGROUNDS, brandFont, brandStyle, brandThemeVars, ensureBrandFontsLoaded } from '../lib/branding';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
+import { formatBytes } from '../lib/transfers';
 import { invoiceInboxAddress } from '../lib/invoiceInbox';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
@@ -1661,6 +1662,8 @@ export function Settings({
   const storageLimitGb = billingOverview?.storage_limit_gb ?? null;
   const storageUsedGb = storageUsedBytes / 1073741824;
   const storagePct = storageLimitGb != null && storageLimitGb > 0 ? Math.min(100, (storageUsedGb / storageLimitGb) * 100) : null;
+  // Hoeveel van het gebruik in verstuurde bestanden zit: dat komt vanzelf vrij als een zending verloopt.
+  const [transfersBytes, setTransfersBytes] = useState<number | null>(null);
 
   useEffect(() => {
     setForm(settingsToForm(settings));
@@ -1678,6 +1681,14 @@ export function Settings({
     });
     return () => { cancelled = true; };
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeOrganization) { setTransfersBytes(null); return; }
+    fetchOrganizationStorageStatus(activeOrganization.id)
+      .then(status => { if (!cancelled) setTransfersBytes(status?.transfers_bytes ?? null); })
+      .catch(() => { if (!cancelled) setTransfersBytes(null); });
+    return () => { cancelled = true; };
+  }, [activeOrganization?.id, billingOverview?.storage_used_bytes]);
   useEffect(() => {
     // Val terug op maandelijks zodra het gekozen plan geen jaarprijs (meer) heeft.
     if (!selectedPlanHasYearly && selectedInterval === 'year') setSelectedInterval('month');
@@ -2822,6 +2833,7 @@ export function Settings({
             {storagePct != null && <div className="billing-storage-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(storagePct)}>
               <div className={`billing-storage-fill${storagePct >= 90 ? ' warn' : ''}`} style={{ width: `${storagePct}%` }} />
             </div>}
+            {transfersBytes != null && transfersBytes > 0 && <p className="settings-help">Waarvan {formatBytes(transfersBytes)} in verstuurde bestanden. Dat komt vanzelf vrij zodra een zending verloopt of wordt ingetrokken.</p>}
             {storagePct != null && storagePct >= 90 && <p className="settings-help billing-storage-warn">Je opslag is bijna vol — nieuwe uploads worden geweigerd zodra de limiet is bereikt.</p>}
           </div>
           {canAdminOrganization && !isBillingExempt && storageLimitGb != null && (

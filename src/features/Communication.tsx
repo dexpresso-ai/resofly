@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowLeft, CalendarDays, ExternalLink, Inbox, Layers, Mail, MailOpen, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, User, Users, X } from 'lucide-react';
-import type { AppData, Client, ClientCall, ClientEmail, ClientEmailSearchHit, ClientEmailThreadOverview, Ticket } from '../types';
+import type { AppData, Client, ClientCall, ClientEmail, ClientEmailSearchHit, ClientEmailThreadOverview, FileTransferBundle, FileTransferRecipient, Ticket } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { DetailTabs } from '../components/DetailTabs';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { InboundInboxTab } from '../components/InboundInbox';
 import { TicketTimeline } from '../components/TicketTimeline';
 import { ClientEmailMessageCard, formatEmailDateTime } from '../components/ClientEmailMessage';
+import { MailRecipientSelect, MessageFilesBar, mailRecipientFor, useMessageFiles } from '../components/MessageFiles';
+import { TransferMessageBlock } from '../components/TransfersPanel';
+import { loadTransfersForEmails } from '../lib/transfers-api';
+import { transferRecipientOptions } from '../lib/transfers';
 import {
   deleteClientEmail, loadClientEmailReadIds, loadClientEmailThreadOverview, loadClientEmailThreadOverviewByIds,
   loadClientEmailThreadOverviewForClient, loadClientEmailsForThread,
@@ -613,6 +617,7 @@ export function CommunicationPage({
           {showDetail && <div className="comm-detail">
             {composing && <ComposePane
               key="compose"
+              data={data}
               organizationId={organizationId}
               clients={data.clients}
               canWrite={canWrite}
@@ -622,6 +627,7 @@ export function CommunicationPage({
             />}
             {!composing && selected?.kind === 'email' && <ThreadPane
               key={selected.key}
+              data={data}
               thread={selected.thread}
               client={clientById.get(selected.clientId) ?? null}
               organizationId={organizationId}
@@ -635,6 +641,7 @@ export function CommunicationPage({
             />}
             {!composing && selected?.kind === 'ticket' && <TicketPane
               key={selected.key}
+              data={data}
               item={selected}
               client={selected.clientId ? clientById.get(selected.clientId) ?? null : null}
               organizationId={organizationId}
@@ -822,7 +829,8 @@ function stripHtml(html: string): string {
 }
 
 /** Eén gesprek: kop, antwoordknop en de berichten (nieuwste eerst, zoals in het klantdossier). */
-function ThreadPane({ thread, client, organizationId, canWrite, activity, singlePane, onBack, onOpenClient, onRead, onChanged }: {
+function ThreadPane({ data, thread, client, organizationId, canWrite, activity, singlePane, onBack, onOpenClient, onRead, onChanged }: {
+  data: AppData;
   thread: ClientEmailThreadOverview;
   client: Client | null;
   organizationId: string;
@@ -848,10 +856,27 @@ function ThreadPane({ thread, client, organizationId, canWrite, activity, single
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendMessage, setSendMessage] = useState<string | null>(null);
   const sender = useEffectiveSender(organizationId);
+  /** Aan: het hoofdadres of een contactpersoon van de klant. */
+  const [recipientKey, setRecipientKey] = useState('client');
+  /** Bestanden bij het antwoord (beveiligde link, geen bijlage). */
+  const mailFiles = useMessageFiles(organizationId, thread.client_id);
+  const [transfersByEmail, setTransfersByEmail] = useState<Map<string, { bundle: FileTransferBundle; recipient: FileTransferRecipient }>>(new Map());
 
-  const recipient = (client?.email ?? thread.client_email ?? '').trim();
+  const target = mailRecipientFor(data, thread.client_id, recipientKey);
+  const recipient = (target?.email ?? client?.email ?? thread.client_email ?? '').trim();
   const hasRecipient = EMAIL_RE.test(recipient);
-  const canSend = canWrite && hasRecipient && subject.trim().length > 0 && stripHtml(body).length > 0 && !sending;
+  const canSend = canWrite && hasRecipient && subject.trim().length > 0 && stripHtml(body).length > 0 && !sending && !mailFiles.uploading;
+
+  // Welke verstuurde berichten in dit gesprek bestanden bij zich hadden.
+  useEffect(() => {
+    let cancelled = false;
+    const outbound = emails.filter(m => m.direction === 'outbound').map(m => m.id);
+    if (outbound.length === 0) { setTransfersByEmail(new Map()); return; }
+    loadTransfersForEmails(organizationId, outbound)
+      .then(map => { if (!cancelled) setTransfersByEmail(map); })
+      .catch(() => { if (!cancelled) setTransfersByEmail(new Map()); });
+    return () => { cancelled = true; };
+  }, [organizationId, emails]);
 
   const load = useCallback(async () => {
     const [loadedEmails, loadedReadIds] = await Promise.all([
@@ -905,10 +930,16 @@ function ThreadPane({ thread, client, organizationId, canWrite, activity, single
     if (!canSend) return;
     setSending(true); setSendError(null); setSendMessage(null);
     try {
-      const result = await sendClientEmail(organizationId, { clientId: thread.client_id, threadId: thread.id, subject: subject.trim(), bodyHtml: body });
+      const transferId = await mailFiles.finalize();
+      const fileCount = mailFiles.items.length;
+      const result = await sendClientEmail(organizationId, {
+        clientId: thread.client_id, threadId: thread.id, subject: subject.trim(), bodyHtml: body,
+        contactId: target?.contactId ?? null, transferId, expectedRecipientEmail: target?.email,
+      });
+      if (transferId) mailFiles.markSent();
       setBody('');
       setReplying(false);
-      setSendMessage(`E-mail verzonden naar ${result.recipientEmail}.`);
+      setSendMessage(`E-mail verzonden naar ${result.recipientEmail}${transferId ? `, met ${fileCount === 1 ? '1 bestand' : `${fileCount} bestanden`} als beveiligde link` : ''}.`);
       await load();
       onChanged();
     } catch (err) {
@@ -943,7 +974,9 @@ function ThreadPane({ thread, client, organizationId, canWrite, activity, single
     <div className="comm-detail-scroll">
       {replying && <article className="client-panel client-comm-compose comm-reply">
         <div className="client-panel-head"><h3>Antwoord</h3></div>
-        <p className="client-comm-to">Aan: <strong>{recipient}</strong></p>
+        {transferRecipientOptions(data, thread.client_id).length > 1
+          ? <MailRecipientSelect data={data} clientId={thread.client_id} value={recipientKey} onChange={setRecipientKey} disabled={!canWrite || sending} />
+          : <p className="client-comm-to">Aan: <strong>{recipient}</strong></p>}
         <SenderNote sender={sender} />
         <label className="client-comm-field">Onderwerp
           <Input value={subject} onChange={e => { setSubject(e.target.value); setSendError(null); }} placeholder="Onderwerp van je e-mail" disabled={!canWrite || sending} />
@@ -951,6 +984,7 @@ function ThreadPane({ thread, client, organizationId, canWrite, activity, single
         <div className="client-comm-field">Bericht
           <RichTextEditor value={body} onChange={setBody} placeholder="Schrijf je antwoord…" disabled={!canWrite || sending} />
         </div>
+        {canWrite && <MessageFilesBar state={mailFiles} data={data} clientId={thread.client_id} disabled={sending} />}
         {sendError && <div className="error">{sendError}</div>}
         <div className="client-comm-actions">
           <Button onClick={() => { setReplying(false); setSendError(null); }} disabled={sending}>Annuleren</Button>
@@ -971,6 +1005,9 @@ function ThreadPane({ thread, client, organizationId, canWrite, activity, single
             isUnread={msg.direction === 'inbound' && !readIds.has(msg.id)}
             canWrite={canWrite}
             onRemove={(id) => void removeMessage(id)}
+            footer={transfersByEmail.has(msg.id)
+              ? <TransferMessageBlock data={data} organizationId={organizationId} bundle={transfersByEmail.get(msg.id)!.bundle} recipientId={transfersByEmail.get(msg.id)!.recipient.id} canWrite={canWrite} />
+              : null}
           />
         ))}
       </div>
@@ -984,7 +1021,8 @@ function ThreadPane({ thread, client, organizationId, canWrite, activity, single
  * in het bewerkvenster. Openen = lezen: de "Nieuw"-markering gaat weg zodra
  * het ticket hier openstaat, net als bij een mailgesprek.
  */
-function TicketPane({ item, client, organizationId, currentUserId, canWrite, singlePane, onBack, onOpenClient, onOpenTicket, onRead, onChanged }: {
+function TicketPane({ data, item, client, organizationId, currentUserId, canWrite, singlePane, onBack, onOpenClient, onOpenTicket, onRead, onChanged }: {
+  data: AppData;
   item: TicketConversation;
   client: Client | null;
   organizationId: string;
@@ -1055,6 +1093,7 @@ function TicketPane({ item, client, organizationId, currentUserId, canWrite, sin
           canWrite={canWrite}
           onChanged={onChanged}
           clientId={ticket.client_id}
+          data={data}
         />
         {!canWrite && <p className="client-empty-line">Je hebt geen schrijfrechten voor tickets; je kunt de tijdlijn wel lezen.</p>}
       </article>
@@ -1161,7 +1200,8 @@ function CallPane({ item, client, organizationId, canWrite, singlePane, onBack, 
 }
 
 /** Nieuw bericht aan een klant naar keuze — hetzelfde formulier als in het klantdossier, met de klant als extra veld. */
-function ComposePane({ organizationId, clients, canWrite, singlePane, onBack, onSent }: {
+function ComposePane({ data, organizationId, clients, canWrite, singlePane, onBack, onSent }: {
+  data: AppData;
   organizationId: string;
   clients: Client[];
   canWrite: boolean;
@@ -1175,18 +1215,28 @@ function ComposePane({ organizationId, clients, canWrite, singlePane, onBack, on
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const sender = useEffectiveSender(organizationId);
+  /** Aan: het hoofdadres of een contactpersoon van de gekozen klant. */
+  const [recipientKey, setRecipientKey] = useState('client');
+  /** Bestanden bij de mail (beveiligde link, geen bijlage). */
+  const mailFiles = useMessageFiles(organizationId, clientId || null);
 
   const sorted = useMemo(() => [...clients].sort((a, b) => a.name.localeCompare(b.name, 'nl')), [clients]);
   const client = clients.find(c => c.id === clientId) ?? null;
-  const recipient = (client?.email ?? '').trim();
+  const target = client ? mailRecipientFor(data, client.id, recipientKey) : null;
+  const recipient = (target?.email ?? '').trim();
   const hasRecipient = EMAIL_RE.test(recipient);
-  const canSend = canWrite && Boolean(client) && hasRecipient && subject.trim().length > 0 && stripHtml(body).length > 0 && !sending;
+  const canSend = canWrite && Boolean(client) && hasRecipient && subject.trim().length > 0 && stripHtml(body).length > 0 && !sending && !mailFiles.uploading;
 
   async function send() {
     if (!canSend || !client) return;
     setSending(true); setSendError(null);
     try {
-      const result = await sendClientEmail(organizationId, { clientId: client.id, subject: subject.trim(), bodyHtml: body });
+      const transferId = await mailFiles.finalize();
+      const result = await sendClientEmail(organizationId, {
+        clientId: client.id, subject: subject.trim(), bodyHtml: body,
+        contactId: target?.contactId ?? null, transferId, expectedRecipientEmail: target?.email,
+      });
+      if (transferId) mailFiles.markSent();
       await onSent(result.threadId);
     } catch (err) {
       setSendError(err instanceof Error ? err.message : 'E-mail versturen mislukt.');
@@ -1208,13 +1258,15 @@ function ComposePane({ organizationId, clients, canWrite, singlePane, onBack, on
     <div className="comm-detail-scroll">
       <article className="client-panel client-comm-compose">
         <label className="client-comm-field">Aan
-          <Select value={clientId} onChange={e => { setClientId(e.target.value); setSendError(null); }} disabled={!canWrite || sending} searchable searchPlaceholder="Zoek een klant…">
+          <Select value={clientId} onChange={e => { setClientId(e.target.value); setRecipientKey('client'); setSendError(null); }} disabled={!canWrite || sending} searchable searchPlaceholder="Zoek een klant…">
             <option value="">Kies een klant…</option>
             {sorted.map(c => <option key={c.id} value={c.id}>{c.name}{c.email ? ` — ${c.email}` : ' (geen e-mailadres)'}</option>)}
           </Select>
         </label>
-        {client && !hasRecipient && <div className="client-empty-line">Deze klant heeft geen e-mailadres. Vul er een in bij de klantgegevens om te kunnen mailen.</div>}
-        {client && hasRecipient && <p className="client-comm-to">Aan: <strong>{recipient}</strong></p>}
+        {client && !hasRecipient && <div className="client-empty-line">Deze klant heeft geen e-mailadres en geen contactpersonen. Vul er een in bij de klantgegevens om te kunnen mailen.</div>}
+        {client && hasRecipient && (transferRecipientOptions(data, client.id).length > 1
+          ? <MailRecipientSelect data={data} clientId={client.id} value={recipientKey} onChange={setRecipientKey} disabled={!canWrite || sending} />
+          : <p className="client-comm-to">Aan: <strong>{recipient}</strong></p>)}
         <SenderNote sender={sender} />
         <label className="client-comm-field">Onderwerp
           <Input value={subject} onChange={e => { setSubject(e.target.value); setSendError(null); }} placeholder="Onderwerp van je e-mail" disabled={!canWrite || sending} />
@@ -1222,6 +1274,7 @@ function ComposePane({ organizationId, clients, canWrite, singlePane, onBack, on
         <div className="client-comm-field">Bericht
           <RichTextEditor value={body} onChange={setBody} placeholder="Schrijf je bericht…" disabled={!canWrite || sending} />
         </div>
+        {canWrite && client && <MessageFilesBar state={mailFiles} data={data} clientId={client.id} disabled={sending} />}
         {sendError && <div className="error">{sendError}</div>}
         <div className="client-comm-actions">
           <Button onClick={onBack} disabled={sending}>Annuleren</Button>
