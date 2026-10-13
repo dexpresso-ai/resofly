@@ -51,6 +51,12 @@ const PAGES = {
   // het hoogst is, en precies daar ging het liggend mis: de lijst werd tot
   // nul samengedrukt achter een rand waar je niet langs kon scrollen.
   communication: { page: 'communication', prepare: '.comm-filter-toggle' },
+  // De agenda met een afspraak open, en met een taak open. Het detailpaneel
+  // van een afspraak had een hook ná zijn vroege return: elke afspraak die je
+  // aantikte gooide de hele app weg en liet een zwart scherm achter. Geen
+  // lay-outfout, dus geen enkele meting hier zag het — alleen openen doet dat.
+  'calendar-event': { page: 'calendar', prepare: 'button.tb-ev:not(.tb-task-block)' },
+  'calendar-task': { page: 'calendar', prepare: '.tb-task-block' },
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
   'clients-table': { page: 'clients', storage: { 'resofly.clients.viewMode': 'table' } },
   'projects-table': { page: 'projects', storage: { 'resofly.projects.viewMode': 'table' } },
@@ -189,7 +195,14 @@ try {
         // dit formaat, dan gebeurt er niets.
         if (spec.prepare) {
           const knop = page.locator(spec.prepare).first();
-          if (await knop.isVisible().catch(() => false)) { await knop.click(); await page.waitForTimeout(250); }
+          if (await knop.isVisible().catch(() => false)) {
+            // De muis van de testbrowser staat op (0,0); op tabletformaat klapt
+            // de niet-vastgezette zijbalk daardoor open over de eerste
+            // agendakolom en vangt hij de klik af. Een echte tablet heeft geen
+            // hover — dan gaat de klik rechtstreeks naar het element.
+            await knop.click({ timeout: 3000 }).catch(() => knop.dispatchEvent('click'));
+            await page.waitForTimeout(250);
+          }
         }
         const m = await page.evaluate((firstSel) => {
           const box = (sel) => { const el = document.querySelector(sel); if (!el) return 0; const cs = getComputedStyle(el); if (cs.display === 'none') return 0; return Math.round(el.getBoundingClientRect().height); };
