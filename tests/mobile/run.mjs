@@ -117,7 +117,10 @@ const FIRST_ITEM = {
   'project-planning': { selector: '.ptl-board', maxTop: 496 },
   content: { selector: '.odrv-tr', maxTop: 336 },
   // Teamchat opent op de telefoon in de gesprekslijst (één venster tegelijk).
-  chat: { selector: '.chat-conv', maxTop: 260 },
+  // 2026-10-13 — de chat kreeg de opbouw van Microsoft Teams: bovenaan de
+  // tabbladen (Activiteit · Chat · Teams · Bestanden · Opgeslagen), dan de kop
+  // en het zoekveld. Het eerste gesprek is een .tmc-row; de grens blijft 260px.
+  chat: { selector: '.tmc-row', maxTop: 260 },
   // Berichten: idem. De balk met zoeken, filters en tabbladen is in twee
   // stappen gekrompen — eerst door hem bovenaan te zetten en de werkbalk van
   // de app hier weg te laten (206px), daarna door de titel aan de tabstrook

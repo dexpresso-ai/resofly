@@ -2305,163 +2305,13 @@ body::before{
 /* Lift the calendar create-FAB above Gerrie so they never overlap. */
 .tb-fab{bottom:94px;right:24px;z-index:55}
 
-/* ── Teamchat ─────────────────────────────────────────────────────────────── */
-.chat-shell{display:flex;min-height:0}
-.chat-shell.chat-page{height:calc(100vh - 140px);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden}
-/* Breed genoeg voor twee kolommen: de gesprekslijst links, het gesprek rechts. */
-.chat-page:not(.chat-single) .chat-list{width:300px;min-width:300px;border-right:1px solid var(--border)}
-.team-chat-dock .chat-shell{flex:1;min-height:0}
-.chat-shell.chat-dock{height:100%}
-/* Eén venster tegelijk — het zwevende paneel, en de pagina op een telefoon.
-   React zet `.chat-single` en toont dan óf de lijst óf het gesprek. */
-.chat-shell.chat-single{flex-direction:column}
-.chat-single>.chat-list,.chat-single>.chat-thread{flex:1;min-height:0;width:100%}
-
-/* Avatar met status-stip */
-.chat-avatar{border-radius:11px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:var(--on-accent);flex-shrink:0;position:relative;overflow:visible}
-.chat-avatar-channel{background:var(--bg4);color:var(--accent-ink)}
-.chat-avatar-dot{position:absolute;bottom:-1px;right:-1px;width:10px;height:10px;border-radius:50%;background:var(--muted);border:2px solid var(--bg2)}
-.chat-avatar-dot.is-online{background:var(--accent-g)}
-.chat-avatar-spacer{width:28px;flex-shrink:0}
-.chat-icon-btn{background:transparent;border:none;color:var(--muted2);width:32px;height:32px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .14s}
-.chat-icon-btn:hover{background:var(--bg3);color:var(--text)}
-
-/* Gesprekslijst */
-.chat-list{display:flex;flex-direction:column;min-height:0;background:var(--bg2)}
-.chat-list-head{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 10px;border-bottom:1px solid var(--border)}
-.chat-list-title{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px}
-.chat-list-head-actions{display:flex;gap:2px}
-.chat-search{display:flex;align-items:center;gap:7px;margin:10px 12px;padding:7px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;color:var(--muted)}
-.chat-search input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:inherit;font-size:13px}
-.chat-list-scroll{flex:1;overflow-y:auto;padding:0 8px 10px}
-.chat-list-section{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:12px 6px 5px}
-.chat-list-hint{font-size:11px;color:var(--muted);padding:4px 8px 8px;line-height:1.6;display:flex;align-items:center;gap:3px;flex-wrap:wrap}
-.chat-conv{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border-radius:9px;border:none;background:transparent;cursor:pointer;text-align:left;color:var(--text)}
-.chat-conv:hover{background:var(--bg3)}
-.chat-conv.active{background:var(--bg4)}
-.chat-conv-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.chat-conv-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
-.chat-conv-name{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chat-conv-time{font-size:10px;color:var(--muted);flex-shrink:0}
-.chat-conv-sub{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chat-conv-badge{min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:var(--accent);color:var(--on-accent);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-
-/* Gespreksvenster */
-.chat-thread{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
-.chat-thread-head{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);background:var(--bg2)}
-.chat-thread-id{flex:1;min-width:0}
-.chat-thread-name{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chat-thread-sub{font-size:11px;color:var(--muted);margin-top:1px}
-.chat-msgs{flex:1;min-height:0;overflow-y:auto;padding:14px 14px 6px;display:flex;flex-direction:column}
-.chat-loading,.chat-thread-empty{text-align:center;color:var(--muted);padding:24px;font-size:13px}
-.chat-error{background:rgba(var(--danger-rgb),.13);border:1px solid rgba(var(--danger-rgb),.3);color:var(--accent-r);padding:8px 10px;border-radius:8px;margin:6px 0;font-size:12px}
-.chat-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);text-align:center;padding:24px}
-.chat-day-sep{display:flex;align-items:center;justify-content:center;margin:10px 0}
-.chat-day-sep span{font-size:10px;color:var(--muted);background:var(--bg3);border:1px solid var(--border);border-radius:99px;padding:2px 10px;text-transform:uppercase;letter-spacing:.06em}
-
-/* Bericht */
-.chat-msg{display:flex;gap:8px;align-items:flex-end;margin:2px 0}
-.chat-msg.mine{flex-direction:row-reverse}
-.chat-msg-main{display:flex;flex-direction:column;gap:3px;max-width:78%;min-width:0}
-.chat-msg.mine .chat-msg-main{align-items:flex-end}
-.chat-msg-sender{font-size:11px;font-weight:600;color:var(--muted2);margin-left:4px}
-.chat-bubble-wrap{position:relative;display:inline-flex;max-width:100%}
-.chat-bubble{background:var(--bg3);border:1px solid var(--border);border-radius:14px;border-bottom-left-radius:4px;padding:8px 11px;font-size:13px;line-height:1.5;color:var(--text);word-wrap:break-word;overflow-wrap:anywhere;min-width:0}
-.chat-msg.mine .chat-bubble{background:var(--accent);color:var(--on-accent);border:1px solid var(--accent);border-bottom-left-radius:14px;border-bottom-right-radius:4px}
-.chat-bubble-text{white-space:pre-wrap}
-.chat-bubble-atts{margin-top:3px}
-.chat-bubble-meta{display:block;font-size:10px;color:var(--muted);margin-top:3px;text-align:right}
-.chat-msg.mine .chat-bubble-meta{color:rgba(var(--surface2-rgb),.6)}
-.chat-bubble-deleted{font-style:italic;color:var(--muted);background:var(--bg2)}
-.chat-mention{color:var(--accent-ink);font-weight:600}
-.chat-msg.mine .chat-mention{color:#6d4f00}
-/* Zweef-acties op een bericht */
-.chat-msg-tools{position:absolute;top:-13px;right:6px;display:none;gap:2px;background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:2px;box-shadow:0 6px 18px rgba(var(--shade-rgb),calc(.4 * var(--shade-k)));z-index:3}
-.chat-bubble-wrap:hover .chat-msg-tools{display:flex}
-.chat-msg.mine .chat-msg-tools{right:auto;left:6px}
-.chat-msg-tools button{background:transparent;border:none;color:var(--muted2);width:26px;height:26px;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center}
-.chat-msg-tools button:hover{background:var(--bg3);color:var(--text)}
-.chat-react-picker{position:absolute;top:32px;right:0;display:flex;gap:2px;background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:4px;box-shadow:0 8px 22px rgba(var(--shade-rgb),calc(.5 * var(--shade-k)))}
-.chat-msg.mine .chat-react-picker{right:auto;left:0}
-.chat-react-picker button{font-size:17px;background:transparent;border:none;cursor:pointer;padding:3px;border-radius:6px;line-height:1}
-.chat-react-picker button:hover{background:var(--bg3)}
-/* Touchscreen: hover bestaat daar niet. Eén tik op het bericht zet de rij open
-   (TeamChat.tsx zet `.is-open`), een tik ernaast weer dicht. Lang indrukken
-   blijft van het toestel zelf — tekst selecteren en kopiëren werkt gewoon. */
-@media(hover:none){
-  .chat-bubble-wrap:hover .chat-msg-tools{display:none}
-  .chat-bubble-wrap.is-open .chat-msg-tools{display:flex}
-  .chat-msg-tools button{width:34px;height:34px}
-  .chat-react-picker button{font-size:20px;padding:6px}
-}
-.chat-reactions{display:flex;flex-wrap:wrap;gap:4px}
-.chat-reaction{display:inline-flex;align-items:center;gap:4px;background:var(--bg3);border:1px solid var(--border);border-radius:11px;padding:2px 7px;font-size:12px;cursor:pointer;color:var(--text)}
-.chat-reaction.mine{border-color:var(--accent);background:rgba(var(--accent-rgb),.14)}
-.chat-reaction-n{font-size:11px;color:var(--muted2);font-variant-numeric:tabular-nums}
-/* Inline bewerken */
-.chat-edit{display:flex;flex-direction:column;gap:6px;min-width:200px}
-.chat-edit textarea{width:100%;background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:7px 9px;color:var(--text);font-family:inherit;font-size:13px;resize:vertical;min-height:44px;outline:none}
-.chat-edit-actions{display:flex;gap:6px;justify-content:flex-end}
-.chat-edit-actions button{font-size:11px;font-weight:600;padding:5px 10px;border-radius:6px;cursor:pointer;border:1px solid var(--border2);background:var(--bg2);color:var(--muted2)}
-.chat-edit-actions button.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
-/* Typ-indicator + leesbevestiging */
-.chat-typing-row{padding:2px 0}
-.chat-typing{display:inline-flex;gap:4px;align-items:center;padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:14px;border-bottom-left-radius:4px;width:fit-content}
-.chat-typing span{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:gerrie-typing-dot 1.2s infinite ease-in-out}
-.chat-typing span:nth-child(2){animation-delay:.18s}
-.chat-typing span:nth-child(3){animation-delay:.36s}
-.chat-receipt{display:flex;align-items:center;gap:4px;justify-content:flex-end;padding:2px 14px 0;font-size:11px;color:var(--muted)}
-
-/* Composer */
-.chat-composer-wrap{position:relative;border-top:1px solid var(--border);background:var(--bg2)}
-.chat-composer{display:flex;gap:8px;align-items:flex-end;padding:10px 12px}
-.chat-input{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:9px 12px;color:var(--text);font-family:inherit;font-size:13px;line-height:1.5;resize:none;outline:none;max-height:140px;overflow-y:auto}
-.chat-input:focus{border-color:var(--accent)}
-.chat-input::placeholder{color:var(--muted)}
-.chat-send{width:38px;height:38px;border-radius:11px;border:none;background:var(--accent);color:var(--on-accent);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:transform .15s,opacity .15s}
-.chat-send:hover:not(:disabled){transform:scale(1.08)}
-.chat-send:disabled{opacity:.4;cursor:not-allowed}
-.chat-staged{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px 0}
-.chat-staged-file{display:inline-flex;align-items:center;gap:5px;font-size:11px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:4px 8px;color:var(--muted2)}
-.chat-staged-file button{background:transparent;border:none;color:var(--muted);cursor:pointer;display:flex;padding:0}
-.chat-mention-pop{position:absolute;left:12px;right:12px;bottom:calc(100% + 4px);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:5px;box-shadow:0 -8px 24px rgba(var(--shade-rgb),calc(.5 * var(--shade-k)));max-height:210px;overflow:auto;z-index:6}
-.chat-mention-pop button{display:flex;align-items:center;gap:8px;width:100%;background:transparent;border:none;color:var(--text);padding:6px 8px;border-radius:7px;cursor:pointer;font-size:13px;text-align:left}
-.chat-mention-pop button:hover{background:var(--bg3)}
-
-/* Kanaalleden */
-.chat-members{border-bottom:1px solid var(--border);background:var(--bg2);padding:10px 12px;max-height:300px;overflow:auto}
-.chat-members-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:700;color:var(--muted2);margin-bottom:8px}
-.chat-members-list{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
-.chat-member{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);background:transparent;border:none;text-align:left;padding:4px;border-radius:7px}
-button.chat-member{cursor:pointer;width:100%}
-button.chat-member:hover{background:var(--bg3)}
-.chat-members-add{display:flex;flex-direction:column;gap:3px;margin-bottom:8px;max-height:180px;overflow:auto}
-.chat-members-btn,.chat-members-leave{display:flex;align-items:center;gap:6px;width:100%;justify-content:center;font-size:12px;font-weight:600;padding:8px;border-radius:8px;cursor:pointer;border:1px solid var(--border)}
-.chat-members-btn{background:var(--bg3);color:var(--text);margin-bottom:6px}
-.chat-members-leave{background:transparent;color:var(--accent-r);border-color:rgba(var(--danger-rgb),.35)}
-
-/* Nieuw gesprek/kanaal-modal */
-.chat-modal-bg{position:fixed;inset:0;background:rgba(var(--shade-rgb),calc(.75 * var(--shade-k)));backdrop-filter:blur(4px);z-index:130;display:flex;align-items:center;justify-content:center;padding:16px}
-.chat-modal{background:var(--bg2);border:1px solid var(--border2);border-radius:14px;width:440px;max-width:100%;max-height:88vh;overflow:auto;display:flex;flex-direction:column;padding:16px}
-.chat-modal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.chat-modal-head h3{font-size:17px;font-weight:700}
-.chat-modal-input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 12px;color:var(--text);font-family:inherit;font-size:14px;outline:none;margin-bottom:12px}
-.chat-modal-input:focus{border-color:var(--accent)}
-.chat-modal-sub{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
-.chat-modal-members{display:flex;flex-direction:column;gap:4px;max-height:320px;overflow:auto}
-.chat-modal-member{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border-radius:9px;border:1px solid transparent;background:var(--bg3);cursor:pointer;text-align:left;color:var(--text);font-size:13px}
-.chat-modal-member:hover{background:var(--bg4)}
-.chat-modal-member.selected{border-color:var(--accent);background:rgba(var(--accent-rgb),.12)}
-.chat-modal-member>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chat-modal-check{color:var(--accent-ink);flex-shrink:0}
-.chat-modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
-.chat-modal-actions button{font-size:13px;font-weight:600;padding:8px 16px;border-radius:8px;cursor:pointer;border:1px solid var(--border2);background:var(--bg3);color:var(--muted2)}
-.chat-modal-actions button.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
-.chat-modal-actions button:disabled{opacity:.6;cursor:default}
-
+/* ── Teamchat ───────────────────────────────────────────────────────────────
+   De chat zelf (de opbouw van Microsoft Teams) staat in src/styles/teamchat.css.
+   Hier alleen het zwevende paneel en zijn knop, die met de rest van de
+   zwevende knoppen (Gerrie, de agenda-"+") moeten samenspelen. */
 /* Zwevend paneel (rechtsonder, links van Gerrie) */
 .team-chat-dock-root{position:fixed;right:92px;bottom:22px;z-index:60;display:flex;flex-direction:column;align-items:flex-end;gap:14px;font-family:inherit}
-.team-chat-dock{width:380px;max-width:calc(100vw - 32px);height:600px;max-height:calc(100vh - 130px);background:var(--bg2);border:1px solid var(--border2);border-radius:16px;box-shadow:0 26px 64px rgba(var(--shade-rgb),calc(.6 * var(--shade-k)));overflow:hidden;display:flex;flex-direction:column;animation:gerrie-in .22s cubic-bezier(.2,.8,.2,1)}
+.team-chat-dock{width:420px;max-width:calc(100vw - 32px);height:620px;max-height:calc(100vh - 130px);background:var(--bg2);border:1px solid var(--border2);border-radius:16px;box-shadow:0 26px 64px rgba(var(--shade-rgb),calc(.6 * var(--shade-k)));overflow:hidden;display:flex;flex-direction:column;animation:gerrie-in .22s cubic-bezier(.2,.8,.2,1)}
 .team-chat-fab{position:relative;width:54px;height:54px;border-radius:50%;border:none;cursor:pointer;background:var(--bg4);color:var(--text);display:flex;align-items:center;justify-content:center;box-shadow:0 12px 32px rgba(var(--shade-rgb),calc(.45 * var(--shade-k))),0 0 0 1px rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));transition:transform .18s,box-shadow .18s}
 .team-chat-fab:hover{transform:translateY(-3px) scale(1.05);box-shadow:0 18px 42px rgba(var(--shade-rgb),calc(.55 * var(--shade-k)))}
 .team-chat-fab.is-open{background:var(--bg3)}
@@ -7176,92 +7026,28 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
     position:fixed;inset:0;width:100%;max-width:100%;
     height:100dvh;max-height:none;border-radius:0;border:none;
   }
-  .team-chat-dock .chat-composer,
-  .team-chat-dock .chat-foot{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  .team-chat-dock .tmc-compose-wrap{padding-bottom:calc(10px + env(safe-area-inset-bottom))}
   /* De open-knop zou over zijn eigen paneel zweven. */
   .team-chat-fab.is-open{display:none}
 }
 
 /* 13b ── Teamchat op de telefoon: één venster tegelijk, zoals MS Teams ────
-   Op de telefoon stonden de gesprekslijst (afgeknepen tot 230px) en het
-   gesprek ónder elkaar in hetzelfde venster. Van het gesprek bleef een strook
-   van ruim 300px over: twee berichten in beeld, een gesprekskop die de lijst
-   herhaalde en een invoerveld dat tegen de onderbalk aanliep.
-
-   Teams doet het op een telefoon anders, en dat is precies wat hier nodig is:
-   de gesprekslijst vult het scherm, je tikt een gesprek aan en dát vult het
-   scherm — met een terugpijl in de kop. Welk van de twee je ziet bepaalt
-   React (`.chat-single`, zie TeamChat.tsx); hieronder staat hoe het eruitziet.
+   De gesprekslijst vult het scherm, je tikt een gesprek aan en dát vult het
+   scherm — met een terugpijl in de kop. Welk van de twee je ziet bepaalt React
+   (`.chat-single`); hoe het eruitziet staat in teamchat.css.
 
      - De chat vult exact de ruimte tussen de werktabs en de onderbalk. Geen
-       eigen hoogtesom meer: `.content` wordt een pad-loze flex-kolom, net als
-       bij de agenda (regel 4053). Zo kan er niets onder de onderbalk vallen.
-     - Kop en invoerveld staan vast, alleen de berichten schuiven — de invoer
-       blijft dus in beeld terwijl je terugleest.
-     - Duimformaat: gespreksregels 64px, knoppen 40px. Het invoerveld is 16px,
-       want bij kleinere tekst zoomt iOS bij het aantikken op het veld in en
-       staat de halve pagina scheef.
-   De onderbalk houdt via `.main` al rekening met de home-indicator; de
-   invoerbalk hoeft daar dus niets bovenop te doen (het zwevende paneel wél,
-   dat staat los van de shell — zie blok 13). */
+       eigen hoogtesom: `.content` wordt een pad-loze flex-kolom, net als bij
+       de agenda. Zo kan er niets onder de onderbalk vallen.
+     - Niets zweeft over de invoerbalk. Gerrie stond precies op de
+       verstuurknop; op elke andere pagina zijn Gerrie en de agenda-"+" gewoon
+       bereikbaar. `.content:not([hidden])` want een chattab die achter een
+       andere tab open staat, telt niet. */
 @media(max-width:760px){
   .content:has(.chat-shell.chat-page){padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
   .chat-shell.chat-page{flex:1;height:auto;min-height:0;border:none;border-radius:0}
-
-  /* Kop van de gesprekslijst + zoekveld. */
-  .chat-list-head{padding:10px 10px 8px;min-height:52px}
-  .chat-list-title{font-size:16px}
-  .chat-icon-btn{width:40px;height:40px}
-  .chat-search{margin:8px 12px 4px;padding:10px 12px;border-radius:11px}
-  .chat-search input{font-size:15px}
-  .chat-list-scroll{padding:0 8px 12px}
-  .chat-list-section{font-size:10px;padding:14px 8px 6px}
-  .chat-list-hint{font-size:12px}
-
-  /* Een gespreksregel is een duimdoel, geen tabelrij. */
-  .chat-conv{gap:12px;padding:10px 8px;min-height:64px;border-radius:12px}
-  .chat-conv-name{font-size:15px}
-  .chat-conv-sub{font-size:12.5px}
-  .chat-conv-time{font-size:11px}
-  .chat-conv-badge{min-width:20px;height:20px;font-size:11px}
-
-  /* Gesprekskop: terugpijl, naam, status. */
-  .chat-thread-head{padding:8px 10px;min-height:56px;gap:8px}
-  .chat-thread-name{font-size:16px}
-  .chat-thread-sub{font-size:12px}
-  .chat-back{margin-left:-4px}
-
-  /* Berichten: iets groter, en breder dan 78% — het scherm is al smal. */
-  .chat-msgs{padding:12px 12px 4px}
-  .chat-msg-main{max-width:84%}
-  .chat-msg-sender{font-size:12px}
-  .chat-bubble{font-size:15px;line-height:1.45;padding:9px 12px;border-radius:16px;border-bottom-left-radius:5px}
-  .chat-msg.mine .chat-bubble{border-bottom-left-radius:16px;border-bottom-right-radius:5px}
-  .chat-bubble-meta{font-size:10.5px}
-  .chat-day-sep{margin:12px 0}
-  .chat-receipt{padding:2px 14px 0}
-
-  /* Invoerbalk onderaan, altijd in beeld. */
-  .chat-staged{padding:8px 12px 0}
-  .chat-composer{padding:8px 10px;gap:6px}
-  /* 118px = precies vier regels (4 × 24px + 20px padding + 2px rand): het veld
-     groeit mee tot vier regels en scrollt daarna, zonder halve regel bovenaan. */
-  .chat-input{font-size:16px;padding:10px 14px;border-radius:18px;max-height:118px}
-  .chat-send{width:42px;height:42px}
-
-  /* Niets zweeft over de invoerbalk. Gerrie stond precies op de verstuurknop:
-     de chatpagina vult het scherm tot aan de onderbalk, dus er is geen vrije
-     hoek meer waar een zwevende knop onschuldig kan staan. Gerrie en de
-     agenda-"+" zijn op elke andere pagina gewoon bereikbaar.
-     `.content:not([hidden])` want een chattab die achter een andere tab open
-     staat, telt niet — die is verborgen, maar staat wél in de DOM. */
   .app:has(.content:not([hidden]) .chat-shell.chat-page) .gerrie-root,
   .app:has(.content:not([hidden]) .chat-shell.chat-page) .tb-fab{display:none}
-
-  /* Kanaalleden en "nieuw gesprek" als vol venster i.p.v. een kleine kaart. */
-  .chat-members{max-height:46dvh}
-  .chat-modal{max-height:82dvh}
-  .chat-modal-member{padding:10px;font-size:14px;min-height:52px}
 }
 
 /* 14 ── Inhoud-verkenner: hoogte volgt het scherm ─────────────────────────
@@ -12038,13 +11824,8 @@ body::before{display:none}
 .nav-item>svg.lucide-sparkles,.nav-item.active>svg.lucide-sparkles,.nav-item:hover>svg.lucide-sparkles,.tab-ico svg.lucide-sparkles,.bn-item svg.lucide-sparkles{color:var(--ai-ink)}
 
 /* ── 17 · Teamchat en grafieken ──────────────────────────────────────────── */
-/* Je eigen berichten staan rechts in een iets diepere tint, niet in goud:
-   goud is voor wat je moet doen. */
-.chat-bubble{background:var(--surface);border-color:var(--line)}
-.chat-msg.mine .chat-bubble{background:var(--surface-3);border-color:var(--line-2);color:var(--ink)}
-.chat-msg.mine .chat-bubble-meta{color:var(--ink-3)}
-.chat-msg.mine .chat-mention{color:var(--accent-ink)}
-.chat-bubble-meta{color:var(--ink-3)}
+/* De teamchat heeft zijn eigen opbouw en kleuren (teamchat.css): je eigen
+   berichten in Teams-lavendel, niet in goud — goud is voor wat je moet doen. */
 /* Staven in de grafiektint (op Dag diep genoeg om op wit te lezen). */
 .rb-bar-fill{background:var(--viz-1)}
 /* Rolnamen ("owner", "member") met een hoofdletter, zoals overal in de app. */

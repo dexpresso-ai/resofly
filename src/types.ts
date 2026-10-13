@@ -2882,8 +2882,11 @@ export interface Attachment extends OrgScopedRow {
 }
 
 // ── Teamchat (interne chat tussen organisatieleden) ──────────────────────────
-export type ChatConversationKind = 'dm' | 'channel';
+/** dm = 1-op-1 · group = groepschat (meerdere collega's) · channel = kanaal met draadjes. */
+export type ChatConversationKind = 'dm' | 'group' | 'channel';
 export type ChatParticipantRole = 'member' | 'admin';
+/** Alleen voor kanalen: openbaar (vindbaar voor iedereen in de organisatie) of privé. */
+export type ChatConversationVisibility = 'public' | 'private';
 
 export interface ChatConversation {
   id: UUID;
@@ -2893,10 +2896,25 @@ export interface ChatConversation {
   description: string | null;
   /** DM-only: de twee user-id's gesorteerd ("a:b"); uniek per organisatie. */
   dm_key: string | null;
+  /** Ontbreekt nog zolang migratie 20261013000000 niet is toegepast. */
+  visibility?: ChatConversationVisibility;
   is_archived: boolean;
   last_message_at: string | null;
   created_by: UUID | null;
   created_at: string;
+  updated_at: string;
+}
+
+/** Eigen voorkeuren per gesprek — alleen voor jezelf zichtbaar. */
+export interface ChatConversationPrefs {
+  conversation_id: UUID;
+  user_id: UUID;
+  organization_id: UUID;
+  is_pinned: boolean;
+  is_muted: boolean;
+  /** Verborgen sinds; een nieuwer bericht haalt het gesprek weer tevoorschijn. */
+  hidden_at: string | null;
+  marked_unread: boolean;
   updated_at: string;
 }
 
@@ -2908,6 +2926,24 @@ export interface ChatParticipant {
   /** Laatste keer dat dit lid het gesprek opende — drijft ongelezen + leesbevestiging. */
   last_read_at: string;
   joined_at: string;
+}
+
+/** text = gewoon bericht · system = regel van de app ("Ann heeft Bob toegevoegd") · meeting = vergadering met link. */
+export type ChatMessageKind = 'text' | 'system' | 'meeting';
+export type ChatImportance = 'normal' | 'important' | 'urgent';
+export type ChatSystemEvent = 'members_added' | 'member_removed' | 'member_left' | 'member_joined' | 'renamed';
+
+export interface ChatMessageMeta {
+  /** Systeemregel: wat er gebeurde, en met wie / welke naam. */
+  event?: ChatSystemEvent;
+  user_ids?: UUID[];
+  title?: string | null;
+  /** Vergadering: de https-link, de dienst en of het een belletje (alleen audio) is. */
+  url?: string;
+  provider?: string;
+  audio_only?: boolean;
+  /** Doorgestuurd: waar het oorspronkelijk vandaan kwam. */
+  forwarded?: { sender_id: UUID | null; conversation_title: string | null; created_at: string };
 }
 
 export interface ChatMessage {
@@ -2922,6 +2958,18 @@ export interface ChatMessage {
   deleted_at: string | null;
   created_at: string;
   updated_at: string;
+  // Sinds migratie 20261013000000 (optioneel zolang die nog niet overal draait).
+  kind?: ChatMessageKind;
+  /** Antwoord met citaat (chat). */
+  reply_to_id?: UUID | null;
+  /** Antwoord in een kanaaldraadje: de post waaronder het hangt. */
+  parent_id?: UUID | null;
+  /** Onderwerp boven een nieuwe post in een kanaal. */
+  subject?: string | null;
+  importance?: ChatImportance;
+  meta?: ChatMessageMeta;
+  pinned_at?: string | null;
+  pinned_by?: UUID | null;
 }
 
 export interface ChatMessageReaction {
@@ -2936,6 +2984,61 @@ export interface ChatMessageReaction {
 export interface ChatUnreadCount {
   conversation_id: UUID;
   unread_count: number;
+}
+
+/** Het laatste bericht per gesprek (rpc chat_last_messages) — de voorbeeldregel in de lijst. */
+export interface ChatLastMessage {
+  conversation_id: UUID;
+  message_id: UUID;
+  sender_id: UUID | null;
+  body: string;
+  kind: ChatMessageKind;
+  meta: ChatMessageMeta;
+  attachment_count: number;
+  deleted_at: string | null;
+  created_at: string;
+}
+
+export interface ChatSavedMessage {
+  user_id: UUID;
+  message_id: UUID;
+  conversation_id: UUID;
+  organization_id: UUID;
+  created_at: string;
+}
+
+/** auto = de app bepaalt het (online → Beschikbaar, even weg → Afwezig). De rest kies je zelf. */
+export type ChatAvailability = 'auto' | 'available' | 'busy' | 'dnd' | 'brb' | 'away' | 'offline';
+
+export interface ChatMemberStatus {
+  organization_id: UUID;
+  user_id: UUID;
+  availability: ChatAvailability;
+  status_message: string | null;
+  message_expires_at: string | null;
+  updated_at: string;
+}
+
+/** Eén regel in Activiteit (rpc chat_activity). */
+export interface ChatActivityItem {
+  activity_type: 'mention' | 'reply' | 'reaction';
+  /** De vermelding/het antwoord zelf, of — bij een reactie — jouw bericht. */
+  message_id: UUID;
+  conversation_id: UUID;
+  actor_id: UUID | null;
+  emoji: string | null;
+  body: string;
+  created_at: string;
+}
+
+/** Een openbaar kanaal waar je nog niet in zit (rpc chat_public_channels). */
+export interface ChatPublicChannel {
+  id: UUID;
+  title: string | null;
+  description: string | null;
+  member_count: number;
+  last_message_at: string | null;
+  created_at: string;
 }
 
 // ── Meeting-opnames + AI-notulen ─────────────────────────────────────────────

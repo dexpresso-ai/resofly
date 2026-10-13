@@ -106,7 +106,7 @@ import { useDecisionAlerts, DecisionToasts } from './components/DecisionNotifica
 import { usePurchaseInvoiceInbox } from './components/PurchaseInvoiceInboxAlerts';
 import type { DecisionTarget } from './lib/decisions-api';
 import { useTicketUnread, TicketToasts } from './components/TicketNotifications';
-import { useTeamChat, TeamChatPage, TeamChatDock } from './components/TeamChat';
+import { useTeamChat, TeamChatPage, TeamChatDock, TeamChatToasts } from './components/TeamChat';
 import { usePushNotifications } from './components/usePushNotifications';
 import { McpConsent } from './components/McpConsent';
 import { readAuthorizeRequest } from './lib/mcp-api';
@@ -177,6 +177,9 @@ import './styles/globals.css';
 // Na globals.css: de Cockpit-laag (look & feel naar Value Backlog) moet van
 // alle eerdere regels winnen.
 import './styles/cockpit.css';
+// De teamchat (de opbouw van Microsoft Teams) als laatste: eigen klassen, en de
+// paar gedeelde haken (.chat-shell, .team-chat-dock) moeten van eerdere regels winnen.
+import './styles/teamchat.css';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
@@ -238,6 +241,22 @@ function hasBankReturn(): boolean {
   return typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).has('code')
     && new URLSearchParams(window.location.search).has('state');
+}
+
+/** Een pushmelding van de teamchat opent /?chat=<gesprek>. Eén keer lezen en
+ *  meteen uit de adresbalk halen, zodat verversen niet opnieuw springt. */
+function readChatDeepLink(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const url = new URL(window.location.href);
+    const id = url.searchParams.get('chat');
+    if (!id) return null;
+    url.searchParams.delete('chat');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Past een React-setterwaarde (directe waarde óf updater-functie) toe op de vorige waarde. */
@@ -820,12 +839,23 @@ function App() {
   });
 
   // Teamchat — één realtime-/presence-abonnement op App-niveau, gedeeld door de
-  // sidebar-badge, de volledige chatpagina en het zwevende paneel.
+  // sidebar-badge, de volledige chatpagina, het zwevende paneel en de meldingen.
   const teamChat = useTeamChat({
     organizationId: organizationFor('chat'),
+    organizationName: activeOrganization?.name ?? null,
     currentUserId,
     teamMembers: workMembers,
+    canWrite: orgCanWrite && permissions.canWrite('chat'),
   });
+  // Uit een pushmelding: dit gesprek openen zodra de werkruimte (en de
+  // herstelde tabbladen) er staan.
+  const [chatDeepLink, setChatDeepLink] = useState<string | null>(() => readChatDeepLink());
+  // (Hier en niet bij openTeamChat: na de vroege returns verderop mag geen hook meer staan.)
+  useEffect(() => {
+    if (!chatDeepLink || loading || !activeOrganization || tabsLoadedForRef.current !== activeOrganization.id) return;
+    if (permissions.canRead('chat')) openTeamChat(chatDeepLink);
+    setChatDeepLink(null);
+  }, [chatDeepLink, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // OS-/device-pushmeldingen (service worker + Web Push). Registreert de worker,
   // houdt het abonnement bij en biedt aan/uit + per-gebeurtenis voorkeuren aan.
@@ -2721,6 +2751,16 @@ function App() {
   }
 
   /**
+   * Naar de teamchat, meteen op het juiste gesprek (en bericht). Vanuit een
+   * melding, de deeplink van een pushmelding of het zwevende paneel.
+   */
+  function openTeamChat(conversationId: string | null, messageId: string | null = null) {
+    if (conversationId) teamChat.requestFocus(conversationId, messageId);
+    setProjectId(null); setClientId(null); setStatsReportId(null);
+    setPage('chat');
+  }
+
+  /**
    * Naar de pagina Berichten, meteen op het juiste gesprek of tabblad. De
    * teller maakt elke sprong uniek, zodat twee keer dezelfde melding ook twee
    * keer werkt.
@@ -3040,7 +3080,7 @@ function App() {
         onCancel={() => setProjectShift(null)}
         onConfirm={(taskIds, shiftDeadlines) => { void applyProjectShift(taskIds, shiftDeadlines); }}
       />}
-      {page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && page !== 'communication' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!(orgCanWrite && permissions.canWritePage(page)) && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
+      {page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && page !== 'communication' && page !== 'chat' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!(orgCanWrite && permissions.canWritePage(page)) && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       {/* Alle open tabbladen blijven gemount (keep-alive); alleen het actieve is
           zichtbaar. Elk pane is z'n eigen scrollcontainer én bevat z'n eigen
           EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}
@@ -3089,7 +3129,7 @@ function App() {
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} />}
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
-    <TeamChatDock api={teamChat} hidden={page === 'chat' || !permissions.canRead('chat')} />
+    <TeamChatDock api={teamChat} hidden={page === 'chat' || !permissions.canRead('chat')} onExpand={(id) => openTeamChat(id)} />
     {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
         actieve tabblad naar een kerndestinatie; sluit onderweg het uitschuifmenu. */}
     <BottomNav page={page} permissions={permissions} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
@@ -3111,6 +3151,7 @@ function App() {
         onOpen={() => { setPage('dashboard'); setProjectId(null); setClientId(null); setStatsReportId(null); }}
         onDismiss={decisionAlerts.dismissToast}
       />
+      {permissions.canRead('chat') && <TeamChatToasts api={teamChat} onOpen={(conversationId, messageId) => openTeamChat(conversationId, messageId)} />}
       <TicketToasts
         toasts={ticketToasts}
         onOpen={(ticketId) => { const t = data.tickets.find(x => x.id === ticketId); if (t) { setEdit({ kind: 'ticket', item: t }); markTicketRead(t.id).then(refreshTicketUnread).catch(() => {}); } }}
@@ -3181,7 +3222,7 @@ function App() {
     if (page === 'communication') return <CommunicationPage data={data} organizationId={activeOrg.id} canWrite={canWrite} inboxCount={inboxCount} activity={communicationActivity} focus={view.commFocus} ticketUnreadIds={ticketUnreadIds} currentUserId={currentUserId} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} onUnreadChanged={refreshClientEmailUnread} onInboxChanged={refreshInbox} onTicketUnreadChanged={refreshTicketUnread} onOpenClient={(id) => { setClientId(id); setProjectId(null); setPage('client'); }} onOpenTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} onChanged={refresh} />;
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} unreadTicketIds={ticketUnreadIds}/>;
-    if (page === 'chat') return <TeamChatPage api={teamChat} />;
+    if (page === 'chat') return <TeamChatPage api={teamChat} active={view.id === activeTab.id} />;
     if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} isAdmin={activeMembership?.role === 'owner' || activeMembership?.role === 'admin'} onOpenDecisionTarget={openDecisionTarget} {...gerrieActions} />;
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       openCampaignId={view.pendingDraft?.kind === 'campaign' ? String(view.pendingDraft.payload.id ?? '') : null} onCampaignOpened={() => setPendingDraft(null)}/>;
