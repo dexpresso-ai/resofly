@@ -62,7 +62,6 @@ agendakolom; een echte tablet heeft geen hover.
   een afspraak aantikken en in de agenda openen. Overal het juiste venster, geen
   JavaScript-fouten. Vóór de fix liep elk pad met een afspraak vast op een leeg
   scherm, ook op desktop.
-- `npm run test:mobile -- --pages=calendar,calendar-event,calendar-task,communication,settings-boekhouder`
-  (telefoon, tablet, liggend) — 15 metingen, geen problemen; daarmee zijn ook
-  de bestaande voorbereidingsklikken (`communication`, `settings-boekhouder`)
-  na de aanpassing nagelopen.
+- `npm run test:mobile` (telefoon, tablet, liggend) — 138 metingen, geen
+  problemen, inclusief de twee nieuwe en de bestaande voorbereidingsklikken
+  (`communication`, `settings-boekhouder`).
