@@ -104,6 +104,15 @@ interface SelectProps {
    *  lijst lang genoeg is om niet meer in één blik te scannen. */
   searchable?: boolean;
   searchPlaceholder?: string;
+  /** Minimale breedte van het menu in px. Standaard is het menu precies zo
+   *  breed als de knop; een compacte knop (een filterpil met "Alle soorten")
+   *  is smaller dan zijn langste optie en kapte die dan af. Past het bredere
+   *  menu rechts niet meer in beeld, dan lijnt het uit op de rechterkant van
+   *  de knop. */
+  menuMinWidth?: number;
+  /** Icoon vóór de waarde in de knop, bv. bij een filter dat geen label
+   *  boven zich heeft en toch moet zeggen waaróp het filtert. */
+  icon?: ReactNode;
   'aria-label'?: string;
 }
 interface ParsedOption { value: string; label: ReactNode; disabled: boolean; text: string }
@@ -151,7 +160,7 @@ function parseOptions(children: ReactNode): ParsedOption[] {
   return out;
 }
 
-export function Select({ value, onChange, disabled = false, children, className, placeholder = 'Selecteer…', inline = false, id, searchable, searchPlaceholder = 'Zoeken…', ...rest }: SelectProps) {
+export function Select({ value, onChange, disabled = false, children, className, placeholder = 'Selecteer…', inline = false, id, searchable, searchPlaceholder = 'Zoeken…', menuMinWidth, icon, ...rest }: SelectProps) {
   const options = parseOptions(children);
   const currentValue = value == null ? '' : String(value);
   const selected = options.find(o => o.value === currentValue);
@@ -179,20 +188,30 @@ export function Select({ value, onChange, disabled = false, children, className,
     // Een zoekveld eet zelf een strook op, dus mag het menu iets hoger worden —
     // anders blijven er maar een paar opties over om uit te kiezen.
     const cap = isSearchable ? 336 : 264;
+    // Een lijst zonder zoekveld is kort (minder dan tien opties) en hoort in
+    // één blik te passen: op 264px viel bij acht opties de laatste half weg
+    // ("Aangepast…" onder de periodes). Hij mag daarom tot 320px hoog worden
+    // als die ruimte er is. De richting (omhoog of omlaag) kiest nog steeds op
+    // `cap`, zodat er geen menu ineens de andere kant op openklapt.
+    const tallest = isSearchable ? cap : 320;
     const spaceBelow = window.innerHeight - r.bottom - gap;
     const spaceAbove = r.top - gap;
     const openUp = spaceBelow < cap && spaceAbove > spaceBelow;
     // Beperk de hoogte tot de beschikbare ruimte in de gekozen richting zodat
     // het menu nooit buiten beeld valt (anders zijn onderste opties onbereikbaar).
     const available = (openUp ? spaceAbove : spaceBelow) - margin;
+    // Breder dan de knop alleen op verzoek (menuMinWidth), en nooit breder dan
+    // het scherm. Zonder dat verzoek blijft alles precies zoals het was.
+    const width = Math.max(r.width, Math.min(menuMinWidth ?? 0, window.innerWidth - margin * 2));
+    const left = width > r.width && r.left + width > window.innerWidth - margin ? Math.max(margin, r.right - width) : r.left;
     setMenuStyle({
       position: 'fixed',
-      left: Math.round(r.left),
-      width: Math.round(r.width),
-      maxHeight: Math.min(cap, Math.max(120, Math.round(available))),
+      left: Math.round(left),
+      width: Math.round(width),
+      maxHeight: Math.min(tallest, Math.max(120, Math.round(available))),
       ...(openUp ? { bottom: Math.round(window.innerHeight - r.top + gap) } : { top: Math.round(r.bottom + gap) }),
     });
-  }, [isSearchable]);
+  }, [isSearchable, menuMinWidth]);
 
   /** Sluiten wist meteen de zoekterm. Bleef die staan, dan opende het menu de
    *  volgende keer een frame lang op je vórige zoekopdracht — en dus soms op
@@ -314,6 +333,7 @@ export function Select({ value, onChange, disabled = false, children, className,
         aria-expanded={open}
         aria-label={rest['aria-label']}
       >
+        {icon && <span className="select-icon" aria-hidden="true">{icon}</span>}
         <span className="select-value">{selected ? selected.label : placeholder}</span>
         <span className="select-chevron" aria-hidden="true">
           <svg width="12" height="8" viewBox="0 0 12 8" fill="none"><path d="M1 1l5 5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
