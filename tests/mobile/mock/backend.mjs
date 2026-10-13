@@ -33,9 +33,9 @@ function restRows(table, url) {
   if (!rows) return [];
   let out = rows;
   for (const [k, v] of url.searchParams.entries()) {
-    if (['select', 'order', 'limit', 'offset', 'or', 'and'].includes(k)) continue;
-    const m = /^eq\.(.*)$/.exec(v);
-    if (m && out.length && k in out[0]) out = out.filter(r => String(r[k]) === m[1]);
+    if (['select', 'order', 'limit', 'offset', 'or', 'and', 'on_conflict', 'columns'].includes(k)) continue;
+    if (!out.length || !(k in out[0])) continue;
+    out = out.filter(r => matchFilter(r[k], v));
   }
   // Sortering meenemen (?order=last_message_at.desc.nullslast,created_at.desc):
   // een pagina die op datum aflopend opvraagt, hoort dat ook zo terug te krijgen.
@@ -56,12 +56,90 @@ function restRows(table, url) {
   return out;
 }
 
+// De PostgREST-filters die de pagina's gebruiken: eq/neq, lt/lte/gt/gte (ISO-
+// tijden vergelijken als tekst, binnen de seed overal hetzelfde formaat),
+// in.(…), is.null/true/false, not.is.null, cs.{…} en ilike met * als joker.
+function matchFilter(value, spec) {
+  const m = /^(not\.)?(eq|neq|lt|lte|gt|gte|in|is|cs|ilike|like)\.(.*)$/s.exec(spec);
+  if (!m) return true;
+  const [, neg, op, arg] = m;
+  let ok;
+  switch (op) {
+    case 'eq': ok = String(value) === arg; break;
+    case 'neq': ok = String(value) !== arg; break;
+    case 'lt': ok = value != null && String(value) < arg; break;
+    case 'lte': ok = value != null && String(value) <= arg; break;
+    case 'gt': ok = value != null && String(value) > arg; break;
+    case 'gte': ok = value != null && String(value) >= arg; break;
+    case 'in': ok = arg.replace(/^\(|\)$/g, '').split(',').map(x => x.replace(/^"|"$/g, '')).includes(String(value)); break;
+    case 'is': ok = arg === 'null' ? value == null : String(value) === arg; break;
+    case 'cs': ok = Array.isArray(value) && arg.replace(/^\{|\}$/g, '').split(',').every(x => value.includes(x)); break;
+    default: {
+      const pattern = arg.replace(/[.+?^${}()|[\]\\]/g, (c) => `\\${c}`).replace(/[*%]/g, '.*');
+      ok = new RegExp(`^${pattern}$`, op === 'ilike' ? 'is' : 's').test(String(value ?? ''));
+    }
+  }
+  return neg ? !ok : ok;
+}
+
+// Schrijven op de chattabellen: in het geheugen bijhouden, zodat versturen,
+// reageren en opslaan bij het handmatig testen echt iets doen. De lay-outtest
+// klikt niets, dus die merkt hier niets van.
+const CHAT_WRITABLE = new Set(['chat_messages', 'chat_message_reactions', 'chat_saved_messages', 'chat_member_status']);
+function chatWrite(table, method, url, body) {
+  const rows = seed.tables[table];
+  if (!rows) return [];
+  const now = new Date().toISOString();
+  if (method === 'POST') {
+    const list = Array.isArray(body) ? body : [body];
+    const out = [];
+    for (const input of list) {
+      let row;
+      if (table === 'chat_messages') {
+        const conv = seed.chatConversations.find(c => c.id === input.conversation_id);
+        row = { id: input.id ?? `m${Math.random().toString(16).slice(2, 10)}-0000-4000-8000-000000000000`, organization_id: seed.ids.ORG, sender_id: seed.ids.USER, body: '', mentions: [], attachment_count: 0, edited_at: null, deleted_at: null, kind: 'text', reply_to_id: null, parent_id: null, subject: null, importance: 'normal', meta: {}, pinned_at: null, pinned_by: null, ...input, created_at: now, updated_at: now };
+        if (conv) conv.last_message_at = now;
+      } else if (table === 'chat_message_reactions') {
+        const msg = seed.chatMessages.find(x => x.id === input.message_id);
+        row = { ...input, user_id: seed.ids.USER, conversation_id: msg?.conversation_id, organization_id: seed.ids.ORG, created_at: now };
+      } else if (table === 'chat_saved_messages') {
+        const msg = seed.chatMessages.find(x => x.id === input.message_id);
+        row = { ...input, user_id: seed.ids.USER, conversation_id: msg?.conversation_id, organization_id: seed.ids.ORG, created_at: now };
+      } else {
+        const idx = rows.findIndex(r => r.user_id === seed.ids.USER && r.organization_id === input.organization_id);
+        row = { ...(idx >= 0 ? rows[idx] : {}), ...input, user_id: seed.ids.USER, updated_at: now };
+        if (idx >= 0) { rows[idx] = row; out.push(row); continue; }
+      }
+      rows.push(row);
+      out.push(row);
+    }
+    return out;
+  }
+  const matches = rows.filter(r => [...url.searchParams.entries()].every(([k, v]) => ['select', 'order', 'limit', 'offset', 'on_conflict', 'columns'].includes(k) || !(k in r) || matchFilter(r[k], v)));
+  if (method === 'PATCH') {
+    for (const r of matches) Object.assign(r, body, { updated_at: now });
+    return matches;
+  }
+  if (method === 'DELETE') {
+    for (const r of matches) rows.splice(rows.indexOf(r), 1);
+    return matches;
+  }
+  return [];
+}
+
 function rpc(fn) {
   switch (fn) {
     case 'ensure_user_default_organization': return null;
     case 'organization_license_usage': return [{ organization_id: seed.ids.ORG, licensed_seats: 3, active_members: 2, pending_invitations: 0, used_seats: 2, available_seats: 1, license_status: 'active', billing_exempt: false }];
     case 'organization_billing_overview': return [];
-    case 'chat_unread_counts': return [{ conversation_id: seed.chatConversations[0].id, unread_count: 2 }];
+    case 'chat_unread_counts': return seed.chatUnread;
+    case 'chat_last_messages': {
+      const latest = new Map();
+      for (const m of seed.chatMessages) { const cur = latest.get(m.conversation_id); if (!cur || cur.created_at < m.created_at) latest.set(m.conversation_id, m); }
+      return [...latest.values()].map(m => ({ conversation_id: m.conversation_id, message_id: m.id, sender_id: m.sender_id, body: m.body, kind: m.kind ?? 'text', meta: m.meta ?? {}, attachment_count: m.attachment_count, deleted_at: m.deleted_at, created_at: m.created_at }));
+    }
+    case 'chat_activity': return seed.chatActivity;
+    case 'chat_public_channels': return seed.chatPublicChannels;
     case 'organization_creative_status': return [{ active: true, enabled: true, included_in_plan: true, in_grace: false, grace_until: null, addon_price_cents: 900, addon_yearly_price_cents: 9000, billing_interval: 'month' }];
     case 'organization_business_status': return [{ active: true, enabled: true, included_in_plan: true, in_grace: false, grace_until: null, legal_form: 'bv', fiscal_regime: 'vpb', is_corporate: true }];
     // Debiteuren voor wie Financiën wel en Klanten niet mag lezen (de boekhouder).
@@ -113,7 +191,13 @@ export async function installMock(context) {
     if (p.startsWith('/rest/v1/rpc/')) return json(route, rpc(p.slice('/rest/v1/rpc/'.length)));
     if (p.startsWith('/rest/v1/')) {
       const table = p.slice('/rest/v1/'.length);
-      if (req.method() !== 'GET' && req.method() !== 'HEAD') return json(route, []);
+      if (req.method() !== 'GET' && req.method() !== 'HEAD') {
+        if (!CHAT_WRITABLE.has(table)) return json(route, []);
+        let body = null; try { body = req.postDataJSON(); } catch { /* geen json-body */ }
+        const written = chatWrite(table, req.method(), url, body);
+        const wantsObject = (req.headers()['accept'] ?? '').includes('pgrst.object');
+        return json(route, wantsObject ? (written[0] ?? null) : written, req.method() === 'POST' ? 201 : 200);
+      }
       const rows = restRows(table, url);
       const accept = req.headers()['accept'] ?? '';
       const headers = { 'content-range': `0-${Math.max(0, rows.length - 1)}/${rows.length}` };

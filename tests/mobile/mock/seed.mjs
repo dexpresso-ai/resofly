@@ -3,6 +3,7 @@
 const ORG = '11111111-1111-4111-8111-111111111111';
 const USER = '22222222-2222-4222-8222-222222222222';
 const USER2 = '33333333-3333-4333-8333-333333333333';
+const USER3 = '44444444-4444-4444-8444-444444444444';
 const NOW = new Date();
 const iso = (d) => d.toISOString();
 const day = (offset) => { const d = new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + offset); return d; };
@@ -18,6 +19,7 @@ export const user = { id: USER, aud: 'authenticated', role: 'authenticated', ema
 export const members = [
   { id: uid('m'), organization_id: ORG, user_id: USER, role: 'owner', status: 'active', invited_by: null, joined_at: iso(day(-200)), created_at: iso(day(-200)), updated_at: iso(day(-200)), email: 'gerjan@studiolopik.nl', module_access: null },
   { id: uid('m'), organization_id: ORG, user_id: USER2, role: 'member', status: 'active', invited_by: USER, joined_at: iso(day(-100)), created_at: iso(day(-100)), updated_at: iso(day(-100)), email: 'sanne@studiolopik.nl', module_access: null },
+  { id: uid('m'), organization_id: ORG, user_id: USER3, role: 'member', status: 'active', invited_by: USER, joined_at: iso(day(-60)), created_at: iso(day(-60)), updated_at: iso(day(-60)), email: 'daan.bakker@studiolopik.nl', module_access: null },
 ];
 
 const clientDefs = [
@@ -167,32 +169,80 @@ export const events = [
 ];
 
 // ── Teamchat ───────────────────────────────────────────────────────────────
-// Eén kanaal en één 1-op-1 gesprek, met berichten van vandaag en gisteren.
-// Genoeg om de chatpagina op elk formaat echt te laten renderen: gesprekslijst,
-// dagscheiding, eigen en andermans bubbels, en een leesbevestiging.
+// Zoals in Teams: een 1-op-1-chat, een groepschat (vastgemaakt, met een
+// vermelding en iets dringends), en twee kanalen met posts en draadjes. Plus
+// reacties, een citaat, een vergadering, statussen en wat activiteit — genoeg
+// om de chat op elk formaat echt te laten renderen.
 const CHAT_CHANNEL = uid('h');
 const CHAT_DM = uid('h');
+const CHAT_GROUP = uid('h');
+const CHAT_MARKETING = uid('h');
 const at = (dayOff, h, m) => iso(new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + dayOff, h, m));
+const conv = (id, kind, title, description, visibility, lastAt, createdOff) => ({
+  id, organization_id: ORG, kind, title, description, dm_key: kind === 'dm' ? [USER, USER2].sort().join(':') : null,
+  visibility, is_archived: false, last_message_at: lastAt, created_by: USER, created_at: iso(day(createdOff)), updated_at: lastAt,
+});
 export const chatConversations = [
-  { id: CHAT_CHANNEL, organization_id: ORG, kind: 'channel', title: 'Studio algemeen', description: 'Alles wat het hele team aangaat', dm_key: null, is_archived: false, last_message_at: at(0, 9, 12), created_by: USER, created_at: iso(day(-60)), updated_at: at(0, 9, 12) },
-  { id: CHAT_DM, organization_id: ORG, kind: 'dm', title: null, description: null, dm_key: [USER, USER2].sort().join(':'), is_archived: false, last_message_at: at(0, 8, 38), created_by: USER, created_at: iso(day(-40)), updated_at: at(0, 8, 38) },
+  conv(CHAT_GROUP, 'group', 'Lancering Korenaar', null, 'private', at(0, 10, 2), -12),
+  conv(CHAT_DM, 'dm', null, null, 'private', at(0, 9, 41), -40),
+  conv(CHAT_CHANNEL, 'channel', 'Studio algemeen', 'Alles wat het hele team aangaat', 'public', at(0, 9, 20), -60),
+  conv(CHAT_MARKETING, 'channel', 'Marketing', 'Campagnes, social en de nieuwsbrief', 'private', at(-1, 15, 5), -30),
 ];
+const part = (conversation_id, user_id, role, lastRead, joinedOff) => ({ conversation_id, organization_id: ORG, user_id, role, last_read_at: lastRead, joined_at: iso(day(joinedOff)) });
 export const chatParticipants = [
-  { conversation_id: CHAT_CHANNEL, organization_id: ORG, user_id: USER, role: 'admin', last_read_at: at(0, 9, 30), joined_at: iso(day(-60)) },
-  { conversation_id: CHAT_CHANNEL, organization_id: ORG, user_id: USER2, role: 'member', last_read_at: at(0, 9, 30), joined_at: iso(day(-60)) },
-  { conversation_id: CHAT_DM, organization_id: ORG, user_id: USER, role: 'member', last_read_at: at(0, 9, 30), joined_at: iso(day(-40)) },
-  { conversation_id: CHAT_DM, organization_id: ORG, user_id: USER2, role: 'member', last_read_at: at(0, 9, 30), joined_at: iso(day(-40)) },
+  part(CHAT_GROUP, USER, 'admin', at(0, 9, 0), -12), part(CHAT_GROUP, USER2, 'member', at(0, 10, 2), -12), part(CHAT_GROUP, USER3, 'member', at(0, 9, 58), -12),
+  part(CHAT_DM, USER, 'member', at(0, 9, 45), -40), part(CHAT_DM, USER2, 'member', at(0, 9, 44), -40),
+  part(CHAT_CHANNEL, USER, 'admin', at(0, 9, 0), -60), part(CHAT_CHANNEL, USER2, 'member', at(0, 9, 30), -60), part(CHAT_CHANNEL, USER3, 'member', at(0, 9, 30), -50),
+  part(CHAT_MARKETING, USER, 'admin', at(-1, 16, 0), -30), part(CHAT_MARKETING, USER2, 'member', at(-1, 16, 0), -30),
 ];
-const chatMsg = (conversation_id, sender_id, body, created_at) => ({
+const chatMsg = (conversation_id, sender_id, body, created_at, extra = {}) => ({
   id: uid('g'), organization_id: ORG, conversation_id, sender_id, body, mentions: [], attachment_count: 0,
   edited_at: null, deleted_at: null, created_at, updated_at: created_at,
+  kind: 'text', reply_to_id: null, parent_id: null, subject: null, importance: 'normal', meta: {}, pinned_at: null, pinned_by: null,
+  ...extra,
 });
-export const chatMessages = [
-  chatMsg(CHAT_CHANNEL, USER2, 'Goedemorgen! De drukproef van de Korenaar ligt op je bureau.', at(-1, 16, 40)),
-  chatMsg(CHAT_CHANNEL, USER, 'Top, ik kijk er vanochtend naar.', at(0, 8, 55)),
-  chatMsg(CHAT_CHANNEL, USER2, 'Ook de fotoshoot van donderdag staat rond — Karim heeft bevestigd.', at(0, 9, 12)),
-  chatMsg(CHAT_DM, USER2, 'We dienen even naar het logo te kijken.', at(0, 8, 35)),
-  chatMsg(CHAT_DM, USER, 'Ja tuurlijk, geen enkel probleem! Laten we dat samen doen.', at(0, 8, 38)),
+const dm1 = chatMsg(CHAT_DM, USER2, 'We moeten even naar het logo van de Korenaar kijken. De klant twijfelt over het korenaartje.', at(-1, 16, 12));
+const dm2 = chatMsg(CHAT_DM, USER, 'Ja tuurlijk, geen enkel probleem! Laten we dat samen doen.', at(-1, 16, 20));
+const dm3 = chatMsg(CHAT_DM, USER2, 'Ik heb drie varianten gemaakt:\n- **A**: het bestaande, iets strakker\n- **B**: zonder aar, alleen de letters\n- **C**: aar als accent op de _K_', at(0, 9, 31));
+const dm4 = chatMsg(CHAT_DM, USER, 'Mooi! Ik neig naar C. Zullen we het even bespreken?', at(0, 9, 36), { reply_to_id: dm3.id });
+const dm5 = chatMsg(CHAT_DM, USER2, 'Vergadering', at(0, 9, 41), { kind: 'meeting', meta: { url: 'https://meet.jit.si/ResoFly-demo-korenaar', provider: 'jitsi', audio_only: false } });
+const g1 = chatMsg(CHAT_GROUP, USER, 'Goedemorgen allebei! Vrijdag gaat de nieuwe huisstijl live. Wat staat er nog open?', at(0, 8, 50));
+const g2 = chatMsg(CHAT_GROUP, USER3, 'De menukaarten zijn bij de drukker. Levering donderdag.', at(0, 9, 5));
+const g3 = chatMsg(CHAT_GROUP, USER3, 'Ik zet de social posts klaar in de planning 📅', at(0, 9, 6));
+const g4 = chatMsg(CHAT_GROUP, USER2, '@Gerjan kun jij de definitieve bestanden vandaag nog naar de klant sturen? Ze willen het voor de lunch zien.', at(0, 9, 58), { mentions: [USER], importance: 'urgent' });
+const g5 = chatMsg(CHAT_GROUP, USER2, '👍', at(0, 10, 2));
+const c1 = chatMsg(CHAT_CHANNEL, USER2, 'Goedemorgen! De drukproef van de Korenaar ligt op je bureau. Graag vóór 12:00 akkoord, dan kan hij vandaag nog de pers in.', at(-1, 16, 40), { subject: 'Drukproef De Korenaar', importance: 'important', pinned_at: at(-1, 16, 45), pinned_by: USER });
+const c1r1 = chatMsg(CHAT_CHANNEL, USER, 'Top, ik kijk er vanochtend naar.', at(0, 8, 55), { parent_id: c1.id });
+const c1r2 = chatMsg(CHAT_CHANNEL, USER3, 'Let op de afloop rechtsonder, die was vorige keer te krap.', at(0, 9, 2), { parent_id: c1.id });
+const c1r3 = chatMsg(CHAT_CHANNEL, USER2, 'Goed punt, staat genoteerd.', at(0, 9, 4), { parent_id: c1.id });
+const c2 = chatMsg(CHAT_CHANNEL, USER2, 'De fotoshoot van donderdag staat rond — Karim heeft bevestigd. We beginnen om 9:00 bij Restaurant Bloem.', at(0, 9, 12), { subject: 'Fotoshoot Bloem' });
+const c2r1 = chatMsg(CHAT_CHANNEL, USER3, 'Ik neem de reflectieschermen mee.', at(0, 9, 20), { parent_id: c2.id });
+const m1 = chatMsg(CHAT_MARKETING, USER, 'Nieuwsbrief van november: wie levert de tekst over de winteractie aan?', at(-1, 15, 0), { subject: 'Nieuwsbrief november' });
+const m1r1 = chatMsg(CHAT_MARKETING, USER2, 'Doe ik! Morgen in je mail.', at(-1, 15, 5), { parent_id: m1.id });
+export const chatMessages = [dm1, dm2, dm3, dm4, dm5, g1, g2, g3, g4, g5, c1, c1r1, c1r2, c1r3, c2, c2r1, m1, m1r1];
+const react = (message, user_id, emoji) => ({ message_id: message.id, conversation_id: message.conversation_id, organization_id: ORG, user_id, emoji, created_at: message.created_at });
+export const chatReactions = [
+  react(dm3, USER, '❤️'), react(g1, USER2, '👍'), react(g1, USER3, '👍'), react(g3, USER, '🎉'),
+  react(c1, USER, '👍'), react(c1, USER3, '👍'), react(c2, USER, '😆'), react(c1r2, USER2, '❤️'),
+];
+export const chatPrefs = [
+  { conversation_id: CHAT_GROUP, user_id: USER, organization_id: ORG, is_pinned: true, is_muted: false, hidden_at: null, marked_unread: false, updated_at: iso(day(-2)) },
+];
+export const chatStatuses = [
+  { organization_id: ORG, user_id: USER2, availability: 'busy', status_message: 'Op locatie bij Restaurant Bloem tot 14:00', message_expires_at: null, updated_at: iso(day(0)) },
+  { organization_id: ORG, user_id: USER3, availability: 'auto', status_message: null, message_expires_at: null, updated_at: iso(day(-1)) },
+];
+export const chatUnread = [
+  { conversation_id: CHAT_GROUP, unread_count: 3 },
+  { conversation_id: CHAT_CHANNEL, unread_count: 2 },
+];
+export const chatActivity = [
+  { activity_type: 'mention', message_id: g4.id, conversation_id: CHAT_GROUP, actor_id: USER2, emoji: null, body: g4.body, created_at: g4.created_at },
+  { activity_type: 'reply', message_id: c1r2.id, conversation_id: CHAT_CHANNEL, actor_id: USER3, emoji: null, body: c1r2.body, created_at: c1r2.created_at },
+  { activity_type: 'reaction', message_id: g1.id, conversation_id: CHAT_GROUP, actor_id: USER3, emoji: '👍', body: g1.body, created_at: g1.created_at },
+];
+export const chatPublicChannels = [
+  { id: uid('h'), title: 'Klantenservice', description: 'Vragen van klanten die even moeten landen', member_count: 2, last_message_at: at(-2, 11, 0), created_at: iso(day(-20)) },
 ];
 
 // ── Klantmail ──────────────────────────────────────────────────────────────
@@ -306,7 +356,7 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
-  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: [], contracts: [],
+  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: [], contracts: [],
   client_email_threads: clientEmailThreads, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
   inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias],
   // Het eerste ticket heeft een klantreactie die nog niet gelezen is (view
