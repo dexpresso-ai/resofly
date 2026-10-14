@@ -8,6 +8,7 @@ import {
 import { ACTIONS } from '../_shared/actions/index.ts';
 import { getAction, searchActions } from '../_shared/actions/registry.ts';
 import { defaultInvoiceRecipient, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
+import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
 import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '../_shared/actions/types.ts';
 import { isOrganizationRole, memberModuleLevel, type OrganizationRole } from '../_shared/roles.ts';
 
@@ -162,7 +163,8 @@ interface CreateTasksItem { title: string; description: string | null; priority:
 interface CreateTasksSource { kind: 'meeting' | 'chat'; recording_id: string | null; title: string | null; date: string | null }
 interface CreateTasksProposal { type: 'create_tasks'; project_id: string; project_name: string; source: CreateTasksSource; items: CreateTasksItem[]; total: number }
 interface EditTaskProposal { type: 'edit_task'; id: string; title: string; project_id: string | null; changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: ProposalSubtask[] } }
-interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null }
+/** `meeting_url`: een Jitsi Meet-link, al gemaakt bij het voorstellen (video_call), zodat de kaart toont wat erop komt. */
+interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null; meeting_url: string | null }
 /**
  * Verwijzing naar een BESTAAND agenda-item. De agenda is multi-provider, dus een
  * item is niet met één id te vinden: native items hebben een eigen rij-id, externe
@@ -2002,7 +2004,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_calendar_event',
-    description: "Stel voor om een agenda-item aan te maken in een gekoppelde agenda (Google/Microsoft). Je maakt niets zelf aan: de gebruiker bevestigt met een knop in de chat. Tijden zijn in lokale tijd (Europe/Amsterdam). Is er één schrijfbare agenda, dan wordt die gebruikt; bij meerdere vraag je welke (of gebruik list_calendars). Reken relatieve datums ('morgen', 'volgende week vrijdag') om naar YYYY-MM-DD op basis van de datum van vandaag.",
+    description: "Stel voor om een agenda-item aan te maken in een agenda (de eigen ResoFly-agenda of een gekoppelde Google-/Microsoft-agenda). Je maakt niets zelf aan: de gebruiker bevestigt met een knop in de chat. Tijden zijn in lokale tijd (Europe/Amsterdam). Is er één schrijfbare agenda, dan wordt die gebruikt; bij meerdere vraag je welke (of gebruik list_calendars). Reken relatieve datums ('morgen', 'volgende week vrijdag') om naar YYYY-MM-DD op basis van de datum van vandaag. Gaat het om een videocall of online afspraak, zet dan video_call: er komt een Jitsi Meet-link bij.",
     input_schema: {
       type: 'object',
       properties: {
@@ -2014,6 +2016,7 @@ const TOOL_DEFINITIONS = [
         description: { type: 'string' },
         location: { type: 'string' },
         source_id: { type: 'string', description: 'Optioneel: id van de agenda (uit list_calendars).' },
+        video_call: { type: 'boolean', description: "true = er komt een Jitsi Meet-videovergadering bij: een eigen vergaderlink, zonder account en zonder Google of Microsoft (op de eigen Jitsi-server van de organisatie, anders meet.jit.si). Zet dit als de gebruiker om een videocall, online afspraak, videovergadering of Jitsi vraagt." },
       },
       required: ['title', 'date', 'start_time'],
     },
@@ -2950,6 +2953,13 @@ async function buildCalendarEventProposal(ctx: GerrieContext, input: Record<stri
   const source = await resolveWritableSource(ctx, input.source_id);
   if (!source.ok) return source;
 
+  let meetingUrl: string | null = null;
+  if (input.video_call === true) {
+    const { data: cs } = await supabaseAdmin.from('company_settings').select('jitsi_base_url')
+      .eq('organization_id', ctx.organizationId).maybeSingle();
+    meetingUrl = jitsiMeetingUrl(cs?.jitsi_base_url ?? null);
+  }
+
   return {
     ok: true,
     proposal: {
@@ -2957,6 +2967,7 @@ async function buildCalendarEventProposal(ctx: GerrieContext, input: Record<stri
       date, start_time: startTime, end_time: endTime,
       description: input.description ? String(input.description).slice(0, 2000) : null,
       location: input.location ? String(input.location).slice(0, 300) : null,
+      meeting_url: meetingUrl,
     },
   };
 }

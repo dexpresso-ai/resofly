@@ -192,6 +192,8 @@ export interface GerrieCalendarEventProposal {
   end_time: string;
   description: string | null;
   location: string | null;
+  /** Jitsi Meet-link als Gerrie een videocall voorstelt; ontbreekt bij oudere voorstellen. */
+  meeting_url?: string | null;
 }
 export interface GerrieWeekActionProposal {
   type: 'week_action';

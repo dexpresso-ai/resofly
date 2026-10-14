@@ -225,7 +225,7 @@ export function assertIso(value: string, field: string): string {
   return date.toISOString();
 }
 
-// ── Videovergadering-link (Google Meet / Teams / Zoom / overig) ──────────────
+// ── Videovergadering-link (Google Meet / Teams / Zoom / Jitsi / overig) ──────
 
 /** Vertaalt de RSVP-status van Google/Microsoft naar onze eigen statussen. */
 export function mapAttendeeStatus(raw: unknown): 'needs-action' | 'accepted' | 'declined' | 'tentative' {
@@ -238,55 +238,18 @@ export function mapAttendeeStatus(raw: unknown): 'needs-action' | 'accepted' | '
   }
 }
 
-/** Alleen http(s)-links toestaan; onzin of te lange waarden vervallen naar null. */
-export function sanitizeMeetingUrl(value: unknown): string | null {
-  if (!value) return null;
-  const raw = String(value).trim();
-  if (!raw || raw.length > 2048) return null;
-  try {
-    const u = new URL(raw);
-    return (u.protocol === 'http:' || u.protocol === 'https:') ? raw : null;
-  } catch { return null; }
-}
-
-// Externe agenda's (Google/Microsoft) hebben geen eigen veld voor een geplakte
-// (bv. Zoom-)link. Die zetten we als herkenbare regel onderaan de omschrijving,
-// zodat hij ook in Google Calendar / Outlook zichtbaar blijft, en lezen hem er
-// bij het ophalen weer uit. Automatisch gegenereerde Meet/Teams-links komen uit
-// het native conferentie-veld van de provider en gaan hier langs.
-const MEETING_LINE_RE = /\n*[ \t]*(?:🎥[ \t]*)?Videocall:[ \t]*(https?:\/\/\S+)[ \t]*$/i;
-const MEETING_HOST_RE = /https?:\/\/[^\s]*(?:meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|zoom\.us|zoom\.com)[^\s]*/i;
-
-/** Voegt de geplakte link als aparte regel onderaan de omschrijving toe. */
-export function withMeetingLine(description: string | null, url: string | null): string | null {
-  const base = stripMeetingLine(description);
-  if (!url) return base;
-  return `${base ? `${base}\n\n` : ''}🎥 Videocall: ${url}`;
-}
-
-/** Verwijdert een eerder toegevoegde "Videocall:"-regel uit de omschrijving. */
-export function stripMeetingLine(description: string | null): string | null {
-  if (!description) return null;
-  const cleaned = description.replace(MEETING_LINE_RE, '').replace(/\s+$/, '');
-  return cleaned || null;
-}
-
-/** Leidt de videocall-link af: eerst de native conferentie, dan een geplakte regel of losse link. */
-export function readMeetingUrl(nativeConference: string | null, description: string | null, location: string | null): string | null {
-  if (nativeConference) return nativeConference;
-  const marked = (description ?? '').match(MEETING_LINE_RE);
-  if (marked) return marked[1];
-  return (description ?? '').match(MEETING_HOST_RE)?.[0] ?? (location ?? '').match(MEETING_HOST_RE)?.[0] ?? null;
-}
-
-/** Videocall-link uit de eerste video-entrypoint van Google conferenceData. */
-export function googleConferenceUrl(item: Record<string, unknown>): string | null {
-  if (item.hangoutLink) return String(item.hangoutLink);
-  const conf = (item.conferenceData ?? {}) as Record<string, unknown>;
-  const entries = (conf.entryPoints ?? []) as Record<string, string>[];
-  const video = entries.find(e => e.entryPointType === 'video') ?? entries[0];
-  return video?.uri ? String(video.uri) : null;
-}
+// De link-helpers zelf (geplakte regel in de omschrijving, native conferentie,
+// welke van de twee geldt) zijn puur en staan in meetingLinks.ts, zodat
+// meetingLinks.test.ts ze onder node kan vastleggen. Hier doorgegeven zodat
+// bestaande imports uit calendarCore blijven werken.
+export {
+  sanitizeMeetingUrl,
+  withMeetingLine,
+  stripMeetingLine,
+  readMeetingUrl,
+  googleConferenceUrl,
+  type MeetingLinePosition,
+} from './meetingLinks.ts';
 
 // ── Datum-/tijd-helpers ─────────────────────────────────────────────────────
 

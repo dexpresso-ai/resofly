@@ -55,6 +55,8 @@ type LinkRow = {
   max_total_bookings: number;
   max_per_week: number;
   auto_conference: boolean;
+  /** Bij auto_conference: Meet/Teams van de agenda, of een eigen Jitsi-kamer per boeking. */
+  conference_provider?: 'calendar' | 'jitsi';
   status: 'active' | 'closed';
   public_token_hash: string | null;
   public_token_expires_at: string | null;
@@ -246,6 +248,7 @@ function normalizeLinkInput(body: Record<string, unknown>): Record<string, unkno
   }
   if (body.status === 'active' || body.status === 'closed') patch.status = body.status;
   if (typeof body.autoConference === 'boolean') patch.auto_conference = body.autoConference;
+  if (body.conferenceProvider === 'calendar' || body.conferenceProvider === 'jitsi') patch.conference_provider = body.conferenceProvider;
   return patch;
 }
 

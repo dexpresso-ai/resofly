@@ -15,6 +15,7 @@
 import { supabaseAdmin } from '../_shared/calendarCore.ts';
 import { listEvents } from '../_shared/calendarAvailability.ts';
 import { createEvent } from '../_shared/calendarEventWrite.ts';
+import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingConfirmedEmail } from '../_shared/emailTemplates/meetingBookingConfirmed.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
@@ -41,6 +42,8 @@ type LinkRow = {
   max_total_bookings: number;
   max_per_week: number;
   auto_conference: boolean;
+  /** Ontbreekt zolang migratie 20261014000000 er niet op staat; dan geldt 'calendar'. */
+  conference_provider?: 'calendar' | 'jitsi';
   status: 'active' | 'closed';
   public_token_hash: string | null;
   public_token_expires_at: string | null;
@@ -153,12 +156,16 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
   if (!link.source_id) throw new HttpErr('Deze boekingslink is niet meer gekoppeld aan een agenda. Neem contact op.', 409);
   if (!link.user_id) throw new HttpErr('Deze boekingslink is niet meer beschikbaar. Neem contact op.', 409);
 
-  // Provider van de agenda bepalen: bij Google/Microsoft kan er automatisch een
-  // videovergadering (Google Meet / Teams) worden aangemaakt. Een zelf geplakte
-  // vaste videolink heeft voorrang; native heeft geen provider.
+  // Welke videovergadering de boeking krijgt. Een zelf geplakte vaste videolink
+  // heeft altijd voorrang. Anders, met auto_conference aan:
+  //   jitsi    — per geboekt blok een eigen Jitsi-kamer op de server van de
+  //              organisatie; werkt op elke agenda, ook de eigen ResoFly-agenda;
+  //   calendar — Google Meet / Teams van de gekoppelde agenda (native: geen).
   const { data: srcRow } = await supabaseAdmin.from('calendar_sources').select('provider').eq('id', link.source_id).maybeSingle();
   const provider = srcRow ? String(srcRow.provider) : 'native';
-  const addConference = link.auto_conference && provider !== 'native' && !link.meeting_url;
+  const useJitsi = link.auto_conference && link.conference_provider === 'jitsi' && !link.meeting_url;
+  const addConference = link.auto_conference && !useJitsi && provider !== 'native' && !link.meeting_url;
+  const jitsiBase = useJitsi ? await loadJitsiBaseUrl(link.organization_id) : null;
 
   const confirmed: Array<{ slot_id: string; starts_at: string; ends_at: string; meeting_url: string | null }> = [];
   const failed: Array<{ slot_id: string; reason: string }> = [];
@@ -181,13 +188,14 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
       await assertNoConflict(link.organization_id, link.user_id, link.source_id, starts, ends);
 
       // Fase B: agenda-item aanmaken bij de provider (klant als genodigde).
+      const slotMeetingUrl = useJitsi ? jitsiMeetingUrl(jitsiBase) : link.meeting_url;
       const ev = await createEvent(link.organization_id, link.user_id, {
         sourceId: link.source_id,
         title: name ? `${link.title} — ${name}` : link.title,
         description: link.invite_message,
         startsAt: starts,
         endsAt: ends,
-        meetingUrl: link.meeting_url,
+        meetingUrl: slotMeetingUrl,
         addConference,
         attendees: [{ email, name: name || undefined }],
       }) as Record<string, unknown>;
@@ -205,7 +213,7 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
       });
       if (finalizeError) throw new Error(finalizeError.message);
 
-      const evMeetingUrl = ev.meeting_url ? String(ev.meeting_url) : null;
+      const evMeetingUrl = ev.meeting_url ? String(ev.meeting_url) : slotMeetingUrl;
       confirmed.push({ slot_id: slotId, starts_at: starts, ends_at: ends, meeting_url: evMeetingUrl });
     } catch (err) {
       if (bookingId) {
@@ -216,8 +224,9 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
   }
 
   // Toon één deelnamelink als die eenduidig is: de vaste link, of bij precies één
-  // geboekt blok de zojuist gegenereerde Meet/Teams-link. Bij meerdere auto-links
-  // verschilt de link per afspraak en staat hij in de losse agenda-uitnodigingen.
+  // geboekt blok de zojuist gegenereerde Meet/Teams/Jitsi-link. Bij meerdere
+  // auto-links verschilt de link per afspraak en staat hij in de losse
+  // agenda-uitnodigingen.
   const displayMeetingUrl = link.meeting_url || (confirmed.length === 1 ? confirmed[0].meeting_url : null);
 
   if (confirmed.length > 0) {
@@ -290,6 +299,13 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
 async function orgBrandName(organizationId: string): Promise<string> {
   const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).maybeSingle();
   return (data?.name as string) || 'ResoFly';
+}
+
+/** De eigen Jitsi-server van de organisatie (Instellingen → Agenda); null = meet.jit.si. */
+async function loadJitsiBaseUrl(organizationId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin.from('company_settings').select('jitsi_base_url').eq('organization_id', organizationId).maybeSingle();
+  if (error || !data) return null;
+  return (data.jitsi_base_url as string | null) ?? null;
 }
 
 /** Aangepaste e-mailtekst (email_templates) voor een booking-template; null = defaults. */

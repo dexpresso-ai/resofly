@@ -182,6 +182,8 @@ export const CALENDAR_EXECUTORS: Record<string, ActionExecutor> = {
       maxTotalBookings: Number(payload.maxTotalBookings) || 1,
       maxPerWeek: Number(payload.maxPerWeek) || 1,
       autoConference: flag(payload, 'autoConference'),
+      // Voorstellen van vóór de Jitsi-keuze hebben dit veld niet; dan beslist de server ('calendar').
+      conferenceProvider: payload.conferenceProvider === 'jitsi' || payload.conferenceProvider === 'calendar' ? payload.conferenceProvider : undefined,
     };
     const result = await createBookingLink(ctx.organizationId, input);
     // De URL staat maar één keer in beeld: hij is alleen als hash opgeslagen.

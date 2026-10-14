@@ -3,6 +3,7 @@ import {
   orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
+import { isJitsiMeetingUrl, jitsiMeetingUrl } from '../jitsi.ts';
 
 /**
  * Handelingen rond de AGENDA: de agenda's zelf, de koppeling van een afspraak aan
@@ -29,6 +30,7 @@ import {
 
 const VISIBILITY = ['private', 'organization'] as const;
 const LINK_STATUS = ['active', 'closed'] as const;
+const CONFERENCE_PROVIDERS = ['calendar', 'jitsi'] as const;
 const ENTRY_TYPE = ['direct', 'indirect'] as const;
 const INDIRECT_CATEGORY = ['admin', 'acquisition', 'travel', 'education', 'other'] as const;
 
@@ -76,6 +78,24 @@ function nlMoment(iso: string | null | undefined): string {
   return at.toLocaleString('nl-NL', {
     timeZone: AMS, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
   });
+}
+
+/**
+ * De Jitsi-server van de organisatie (Instellingen → Agenda); null = meet.jit.si.
+ * Nieuwe links worden bij het plannen gemaakt, zodat de goedkeurkaart precies de
+ * link toont die erop komt.
+ */
+async function jitsiBase(ctx: ActionCtx): Promise<string | null> {
+  const { data } = await orgQuery(ctx, 'company_settings', 'jitsi_base_url').maybeSingle();
+  return (data as { jitsi_base_url?: string | null } | null)?.jitsi_base_url ?? null;
+}
+
+/** Leesbare naam van de videovergadering bij een boekingslink. */
+function conferenceLabel(provider: string, sourceProvider: string | null): string {
+  if (provider === 'jitsi') return 'Jitsi Meet';
+  if (sourceProvider === 'microsoft') return 'Teams';
+  if (sourceProvider === 'google') return 'Google Meet';
+  return 'geen videovergadering';
 }
 
 /** Verplichte tijd als UU:MM. */
@@ -194,11 +214,12 @@ async function attendeesOf(ctx: ActionCtx, eventId: string): Promise<Array<{ ema
 interface BookingLinkRow {
   id: string; title: string; status: string; client_id: string | null; source_id: string | null; user_id: string | null;
   max_total_bookings: number; max_per_week: number; auto_conference: boolean;
+  conference_provider: 'calendar' | 'jitsi' | null;
   meeting_url: string | null; public_token_hash: string | null;
 }
 
 const BOOKING_LINK_FIELDS =
-  'id, title, status, client_id, source_id, user_id, max_total_bookings, max_per_week, auto_conference, meeting_url, public_token_hash';
+  'id, title, status, client_id, source_id, user_id, max_total_bookings, max_per_week, auto_conference, conference_provider, meeting_url, public_token_hash';
 
 async function bookingLink(ctx: ActionCtx, linkId: string): Promise<BookingLinkRow> {
   return await row<BookingLinkRow>(ctx, 'meeting_booking_links', linkId, BOOKING_LINK_FIELDS, 'Boekingslink');
@@ -689,13 +710,15 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     module: 'calendar',
     kind: 'write',
     description:
-      'Zet een zelf gekozen videocall-link (Google Meet, Teams, Zoom of iets anders) op een ResoFly-afspraak, of haalt hem er weer af door `meeting_url` leeg te laten. Alleen http(s)-links worden geaccepteerd. ' +
+      'Zet een videocall-link op een ResoFly-afspraak: een nieuwe Jitsi Meet-vergadering (`jitsi: true`, geen account of Google/Microsoft nodig), of een zelf gekozen link (Google Meet, Teams, Zoom of iets anders) in `meeting_url`. Laat beide weg om de link eraf te halen. Alleen http(s)-links worden geaccepteerd. ' +
+      'De Jitsi-link komt op de eigen Jitsi-server van de organisatie als die in Instellingen → Agenda staat, anders op meet.jit.si. ' +
       'Werkt op afspraken in een ResoFly-agenda (het veld `event_id` uit `list_calendar_events`); voor een Google- of Microsoft-item zet je de link in het agendascherm zelf. ' +
       'Staan er genodigden op de afspraak, dan krijgen die opnieuw een uitnodiging met de bijgewerkte gegevens.',
-    keywords: ['videocall', 'meet', 'teams', 'zoom', 'videovergadering', 'belafspraak', 'link', 'online'],
+    keywords: ['videocall', 'meet', 'teams', 'zoom', 'jitsi', 'videovergadering', 'belafspraak', 'link', 'online'],
     input: {
       native_event_id: { type: 'string', description: 'Id van de ResoFly-afspraak (het veld event_id uit list_calendar_events).' },
-      meeting_url: { type: 'string', description: 'De http(s)-link naar de videocall. Leeg laten haalt de link eraf.' },
+      jitsi: { type: 'boolean', description: 'true = maak een nieuwe Jitsi Meet-vergadering aan en zet die link erop. Niet samen met meeting_url.' },
+      meeting_url: { type: 'string', description: 'De http(s)-link naar de videocall. Leeg laten (en geen jitsi) haalt de link eraf.' },
     },
     required: ['native_event_id'],
     async plan(ctx, input) {
@@ -704,7 +727,17 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       if (event.recurs) {
         throw new ActionError(`"${event.title}" is een herhalende afspraak; die pas je aan in het agendascherm, anders gaat de herhaling verloren.`);
       }
-      const url = optStr(input, 'meeting_url', 2048);
+      const wantsJitsi = bool(input, 'jitsi', false);
+      if (wantsJitsi && optStr(input, 'meeting_url', 2048)) throw new ActionError('Kies óf een nieuwe Jitsi-vergadering (jitsi) óf een eigen link (meeting_url), niet allebei.');
+      let url: string | null;
+      if (wantsJitsi) {
+        const base = await jitsiBase(ctx);
+        // Een bestaande Jitsi-link niet vervangen: de genodigden hebben die al.
+        if (isJitsiMeetingUrl(event.meeting_url, base)) throw new ActionError(`Er staat al een Jitsi-vergadering op "${event.title}": ${event.meeting_url}`);
+        url = jitsiMeetingUrl(base);
+      } else {
+        url = optStr(input, 'meeting_url', 2048);
+      }
       if (url) {
         try {
           const parsed = new URL(url);
@@ -715,7 +748,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       const attendees = await attendeesOf(ctx, event.id);
 
       return {
-        title: url ? `Videocall-link op "${event.title}" zetten` : `Videocall-link van "${event.title}" weghalen`,
+        title: wantsJitsi ? `Jitsi-vergadering op "${event.title}" zetten` : url ? `Videocall-link op "${event.title}" zetten` : `Videocall-link van "${event.title}" weghalen`,
         sub: joinShort([nlMoment(event.starts_at), src.name, url ? new URL(url).hostname : 'geen link meer']),
         warning: attendees.length
           ? `De ${attendees.length} genodigde${attendees.length === 1 ? '' : 'n'} krijgen een bijgewerkte uitnodiging per e-mail.`
@@ -1046,10 +1079,14 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       client_id: { type: 'string', description: 'Klant waar deze link bij hoort (optioneel, maar nodig om hem later te kunnen mailen zonder adres).' },
       intro_text: { type: 'string', description: 'Tekst boven de tijdblokken op de boekingspagina.' },
       invite_message: { type: 'string', description: 'Tekst in de bevestigingsmail en de agenda-uitnodiging.' },
-      meeting_url: { type: 'string', description: 'Vaste videocall-link voor elke boeking (http(s)).' },
+      meeting_url: { type: 'string', description: 'Vaste videocall-link voor elke boeking (http(s)). Gaat vóór een automatische videovergadering.' },
       max_total_bookings: { type: 'number', description: 'Hoeveel keer er in totaal via deze link geboekt mag worden. Standaard 1.' },
       max_per_week: { type: 'number', description: 'Maximaal aantal boekingen per week. Standaard 1.' },
-      auto_conference: { type: 'boolean', description: 'Laat Google/Microsoft zelf een videovergadering aanmaken bij de boeking. Standaard aan.' },
+      auto_conference: { type: 'boolean', description: 'Maak bij elke boeking automatisch een videovergadering aan (zie conference_provider). Standaard aan.' },
+      conference_provider: {
+        type: 'string', enum: [...CONFERENCE_PROVIDERS],
+        description: "Welke videovergadering: 'jitsi' = per boeking een eigen Jitsi Meet-kamer, werkt op elke agenda zonder Google of Microsoft; 'calendar' = Google Meet of Teams van de gekoppelde Google-/Microsoft-agenda. Standaard 'jitsi' op een ResoFly-agenda en 'calendar' op Google/Microsoft.",
+      },
     },
     required: ['source_id'],
     async plan(ctx, input) {
@@ -1076,10 +1113,14 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       const clientId = optId(input, 'client_id');
       let clientName: string | null = null;
       if (clientId) clientName = (await row<{ name: string }>(ctx, 'clients', clientId, 'name', 'Klant')).name;
+      const autoConference = bool(input, 'auto_conference', true);
+      // Op een ResoFly-agenda maakt 'calendar' niets aan; daar is Jitsi de enige automatische keuze.
+      const conferenceProvider = optChoice(input, 'conference_provider', CONFERENCE_PROVIDERS) ?? (src.provider === 'native' ? 'jitsi' : 'calendar');
+      const video = meetingUrl ? 'vaste videolink' : autoConference ? conferenceLabel(conferenceProvider, src.provider) : 'geen videovergadering';
 
       return {
         title: `Boekingslink maken: ${title}`,
-        sub: joinShort([src.name, clientName, `max ${maxTotal} boeking${maxTotal === 1 ? '' : 'en'}`, `max ${maxPerWeek}/week`]),
+        sub: joinShort([src.name, clientName, `max ${maxTotal} boeking${maxTotal === 1 ? '' : 'en'}`, `max ${maxPerWeek}/week`, video]),
         warning: 'Er wordt een openbare token-link aangemaakt: iedereen die hem heeft kan zonder inloggen een moment in deze agenda boeken.',
         kind: 'agenda',
         payload: {
@@ -1093,7 +1134,8 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
           meetingUrl,
           maxTotalBookings: maxTotal,
           maxPerWeek,
-          autoConference: bool(input, 'auto_conference', true),
+          autoConference,
+          conferenceProvider,
         },
       };
     },
@@ -1117,6 +1159,10 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       max_total_bookings: { type: 'number' },
       max_per_week: { type: 'number' },
       auto_conference: { type: 'boolean' },
+      conference_provider: {
+        type: 'string', enum: [...CONFERENCE_PROVIDERS],
+        description: "'jitsi' = per boeking een eigen Jitsi Meet-kamer (elke agenda), 'calendar' = Google Meet/Teams van de agenda.",
+      },
       status: { type: 'string', enum: [...LINK_STATUS], description: "closed = er kan niet meer geboekt worden, active = weer open." },
       source_id: { type: 'string', description: 'Andere agenda waarin de boekingen moeten landen.' },
       client_id: { type: 'string', description: 'Andere klant koppelen.' },
@@ -1158,6 +1204,17 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       if (typeof input.auto_conference === 'boolean' && input.auto_conference !== link.auto_conference) {
         patch.autoConference = input.auto_conference;
         described.push(input.auto_conference ? 'videovergadering automatisch' : 'geen automatische videovergadering');
+      }
+      const conferenceProvider = optChoice(input, 'conference_provider', CONFERENCE_PROVIDERS);
+      if (conferenceProvider && conferenceProvider !== (link.conference_provider ?? 'calendar')) {
+        patch.conferenceProvider = conferenceProvider;
+        described.push(conferenceProvider === 'jitsi' ? 'videovergadering via Jitsi Meet' : 'videovergadering via Google Meet/Teams');
+      }
+      // Een videodienst kiezen bij een link waar de automatische videovergadering
+      // uit staat, betekent: zet hem aan. Behalve als auto_conference er zelf bij staat.
+      if (conferenceProvider && typeof input.auto_conference !== 'boolean' && !link.auto_conference) {
+        patch.autoConference = true;
+        described.push('videovergadering automatisch');
       }
       const status = optChoice(input, 'status', LINK_STATUS);
       if (status && status !== link.status) {

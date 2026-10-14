@@ -98,7 +98,7 @@ export function MeetingCard({ msg }: { msg: ChatMessage }) {
   const { api } = useMessageContext();
   const url = safeHttpUrl(msg.meta?.url);
   const audio = !!msg.meta?.audio_only;
-  const provider = msg.meta?.provider === 'jitsi' ? 'Jitsi Meet' : detectMeetingKind(url).label;
+  const provider = msg.meta?.provider === 'jitsi' ? 'Jitsi Meet' : detectMeetingKind(url, api.jitsiBaseUrl).label;
   const starter = msg.sender_id === api.currentUserId ? 'jou' : memberDisplay(api.memberById.get(msg.sender_id ?? '')).name;
   return (
     <div className="tmc-meeting">

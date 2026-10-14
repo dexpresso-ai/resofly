@@ -51,6 +51,8 @@ export interface TeamChatApi {
   ready: boolean;
   organizationId: string | null;
   organizationName: string;
+  /** Eigen Jitsi-server van de organisatie (Instellingen → Agenda); null = meet.jit.si. */
+  jitsiBaseUrl: string | null;
   currentUserId: string | null;
   canWrite: boolean;
   teamMembers: OrganizationMember[];
@@ -134,8 +136,10 @@ export function useTeamChat(params: {
   currentUserId: string | null;
   teamMembers: OrganizationMember[];
   canWrite?: boolean;
+  jitsiBaseUrl?: string | null;
 }): TeamChatApi {
   const { organizationId, currentUserId, teamMembers } = params;
+  const jitsiBaseUrl = params.jitsiBaseUrl ?? null;
   const organizationName = params.organizationName?.trim() || 'Organisatie';
   const canWrite = params.canWrite ?? true;
 
@@ -584,7 +588,7 @@ export function useTeamChat(params: {
   const activityUnseen = useMemo(() => activity.filter((a) => ts(a.created_at) > ts(activitySeenAt)).length, [activity, activitySeenAt]);
 
   return useMemo<TeamChatApi>(() => ({
-    ready, organizationId, organizationName, currentUserId, canWrite, teamMembers, memberById,
+    ready, organizationId, organizationName, jitsiBaseUrl, currentUserId, canWrite, teamMembers, memberById,
     conversations, participants, prefs, unread, vms, unreadTotal, unreadChats, unreadChannels,
     online, idle, statuses, presenceOf, myStatus, setMyAvailability, setMyStatusMessage,
     savedIds, toggleSaved,
@@ -594,7 +598,7 @@ export function useTeamChat(params: {
     getDraft, setDraft, draftIds,
     toasts, dismissToast, registerView,
   }), [
-    ready, organizationId, organizationName, currentUserId, canWrite, teamMembers, memberById,
+    ready, organizationId, organizationName, jitsiBaseUrl, currentUserId, canWrite, teamMembers, memberById,
     conversations, participants, prefs, unread, vms, unreadTotal, unreadChats, unreadChannels,
     online, idle, statuses, presenceOf, myStatus, setMyAvailability, setMyStatusMessage,
     savedIds, toggleSaved,

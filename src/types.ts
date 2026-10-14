@@ -3246,6 +3246,10 @@ export interface CompanySettings extends OrgScopedRow {
    *  offerte/factuur/contract): 'dark' of 'light'. De merkkleur bepaalt de
    *  tint, deze kolom de helderheid (zie brandThemeVars in lib/branding.ts). */
   brand_client_theme: string;
+  /** Eigen Jitsi-server (https://…) voor videovergaderingen; leeg = meet.jit.si.
+   *  Optioneel: wordt los opgeslagen (Instellingen → Agenda), niet via het
+   *  formulier met bedrijfsgegevens, en ontbreekt vóór migratie 20261014000000. */
+  jitsi_base_url?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -3599,6 +3603,8 @@ export type MeetingBookingLinkStatus = 'active' | 'closed';
 export type MeetingBookingSlotStatus = 'open' | 'pending' | 'booked' | 'cancelled';
 export type MeetingBookingStatus = 'pending' | 'confirmed' | 'cancelled' | 'failed';
 
+export type ConferenceProvider = 'calendar' | 'jitsi';
+
 export interface MeetingBookingLink {
   id: UUID;
   organization_id: UUID;
@@ -3612,6 +3618,12 @@ export interface MeetingBookingLink {
   max_total_bookings: number;
   max_per_week: number;
   auto_conference: boolean;
+  /**
+   * Welke videovergadering een boeking krijgt als auto_conference aan staat:
+   * 'calendar' = Google Meet/Teams van de agenda, 'jitsi' = een eigen Jitsi-kamer
+   * per boeking (op elke agenda). Ontbreekt zolang de migratie er niet op staat.
+   */
+  conference_provider?: ConferenceProvider;
   status: MeetingBookingLinkStatus;
   public_token_hash: string | null;
   public_token_expires_at: string | null;
