@@ -44,14 +44,16 @@ op élke agenda, en kun je het op je eigen server draaien.
 
 ### Eigen Jitsi-server (Instellingen → Agenda)
 - Nieuwe kaart **Videovergaderen met Jitsi Meet**. Leeg = de gratis openbare
-  server meet.jit.si. Wie zelf een Jitsi-server draait (of JaaS van 8x8), vult
-  hier het adres in; alle nieuwe links gaan dan daarheen: agenda,
-  boekingslinks, Gerrie en de teamchat. Met een knop om meteen een
-  testvergadering te openen.
+  server meet.jit.si. Wie zelf een Jitsi-server draait, vult hier het adres in;
+  alle nieuwe links gaan dan daarheen: agenda, boekingslinks, Gerrie en de
+  teamchat. Met een knop om meteen een testvergadering te openen.
+- De server moet gasten met alleen de link binnenlaten. **JaaS van 8x8 werkt
+  daarom niet**: die vraagt per deelnemer een ondertekend token (JWT), en dat
+  maakt ResoFly niet. (Links naar 8x8.vc worden wel herkend als Jitsi.)
 - Alleen owners en admins kunnen het wijzigen (de bestaande policy op
   `company_settings`); teamleden zien welke server er gebruikt wordt.
-- Alleen https, geen query/#/inloggegevens, hooguit één padstuk (tenant of
-  JaaS-app-id). De app normaliseert (`meet.example.nl` → `https://meet.example.nl`),
+- Alleen https, geen query/#/inloggegevens, hooguit één padstuk (een tenant of
+  submap). De app normaliseert (`meet.example.nl` → `https://meet.example.nl`),
   de database controleert hetzelfde.
 
 ### Gerrie en gekoppelde AI (MCP / API)
@@ -124,7 +126,7 @@ op élke agenda, en kun je het op je eigen server draaien.
   een import map naar npm, omdat de proxy hier esm.sh en deno.land niet doorlaat.)
 - De migratie gedraaid op een lege Postgres 16: twee keer achter elkaar
   (idempotent), bestaande boekingslinks krijgen `calendar`, geldige adressen
-  (`https://meet.example.nl`, met poort, JaaS-pad, punycode) gaan erin, en
+  (`https://meet.example.nl`, met poort, met één padstuk, punycode) gaan erin, en
   `http://…`, een slash of tweede padstuk, `?x`, hoofdletters en
   `javascript:` worden geweigerd.
 - Met Playwright tegen de nagebootste backend (`tests/mobile/mock`), desktop en
@@ -166,5 +168,5 @@ op élke agenda, en kun je het op je eigen server draaien.
   bestaan (Teams kan via de API nooit van een afspraak af). Haal die daar
   eventueel weg.
 - Vergaderen ín ResoFly (Jitsi ingebed in een venster) zit hier bewust niet in:
-  meet.jit.si staat inbedden niet toe voor echt gebruik; dat kan wel met een
-  eigen server of JaaS. Een mogelijke volgende stap.
+  meet.jit.si staat inbedden niet toe voor echt gebruik; met een eigen server
+  kan het wel. Een mogelijke volgende stap.

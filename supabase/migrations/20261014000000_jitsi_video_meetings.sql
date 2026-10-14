@@ -7,13 +7,14 @@
 -- en vraagt geen koppeling of account.
 --
 -- 1. company_settings.jitsi_base_url — de Jitsi-server van de organisatie.
---    Leeg = de openbare server meet.jit.si. Wie zelf een Jitsi-server draait
---    (of JaaS van 8x8 gebruikt), vult hier het adres in; alle nieuwe links in de
---    agenda, de boekingslinks en de teamchat gaan dan daarheen. Alleen https,
---    zonder query, # of inloggegevens, hooguit één padstuk (tenant of JaaS-
---    app-id). De app normaliseert vóór het opslaan (src/lib/meeting.ts); deze
---    check is het vangnet. Lezen mag elk teamlid, wijzigen alleen owner/admin
---    (de bestaande policies op company_settings).
+--    Leeg = de openbare server meet.jit.si. Wie zelf een Jitsi-server draait,
+--    vult hier het adres in; alle nieuwe links in de agenda, de boekingslinks
+--    en de teamchat gaan dan daarheen. Alleen https, zonder query, # of
+--    inloggegevens, hooguit één padstuk (een tenant of submap). De server moet
+--    gasten met alleen de link binnenlaten (JaaS van 8x8, met een JWT per
+--    deelnemer, dus niet). De app normaliseert vóór het opslaan
+--    (src/lib/meeting.ts); deze check is het vangnet. Lezen mag elk teamlid,
+--    wijzigen alleen owner/admin (de bestaande policies op company_settings).
 --
 -- 2. meeting_booking_links.conference_provider — welke videovergadering een
 --    boeking krijgt als auto_conference aan staat:

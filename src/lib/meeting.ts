@@ -55,7 +55,7 @@ export const DEFAULT_JITSI_BASE_URL = 'https://meet.jit.si';
  * Maakt van wat iemand als Jitsi-server invult een nette basis-URL:
  * `meet.example.nl` → `https://meet.example.nl`. Alleen https (de browser geeft
  * camera en microfoon niet vrij op http), geen inloggegevens, query of #, en
- * hooguit één padstuk (een tenant, of de JaaS-app-id op 8x8.vc). Leeg of
+ * hooguit één padstuk (een tenant of submap op de eigen server). Leeg of
  * ongeldig → null; dan geldt meet.jit.si.
  */
 export function normalizeJitsiBaseUrl(value: unknown): string | null {

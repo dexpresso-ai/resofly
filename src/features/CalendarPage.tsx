@@ -3295,9 +3295,11 @@ const CALDAV_SERVER_HOST = 'caldav.resofly.com';
 /* ── Videovergaderen: Jitsi Meet (Instellingen → Agenda) ─────────────── */
 
 // Eén instelling voor de hele organisatie: op welke Jitsi-server de links komen.
-// Leeg = de gratis openbare server meet.jit.si. Wie zelf een server draait (of
-// JaaS van 8x8 gebruikt), vult hier het adres in; de agenda, boekingslinks,
-// Gerrie en de teamchat maken hun links dan allemaal daar.
+// Leeg = de gratis openbare server meet.jit.si. Wie zelf een server draait, vult
+// hier het adres in; de agenda, boekingslinks, Gerrie en de teamchat maken hun
+// links dan allemaal daar. De server moet gasten met alleen de link binnenlaten:
+// JaaS van 8x8 vraagt per deelnemer een ondertekend token (JWT), en dat maakt
+// ResoFly (nog) niet.
 function VideoMeetingCard({ organizationId, jitsiBaseUrl, canAdmin, onSaved }: {
   organizationId: UUID;
   jitsiBaseUrl: string | null;
@@ -3358,7 +3360,8 @@ function VideoMeetingCard({ organizationId, jitsiBaseUrl, canAdmin, onSaved }: {
         {usesPublicJitsi(jitsiBaseUrl)
           ? <p>Nu: de gratis openbare server <strong>meet.jit.si</strong>. Wie een vergadering start, logt daar één keer kort in (Google, GitHub of Facebook); de anderen doen direct mee.</p>
           : <p>Nu: je eigen server <strong>{current}</strong>. Links die al in afspraken staan, blijven naar hun oude server wijzen en gewoon werken.</p>}
-        <p>Draai je zelf een Jitsi-server, of gebruik je JaaS van 8x8? Vul dan hier het adres in; alle nieuwe links (agenda, boekingslinks, Gerrie en de teamchat) komen dan daar. Leeg laten = meet.jit.si.</p>
+        <p>Draai je zelf een Jitsi-server? Vul dan hier het adres in; alle nieuwe links (agenda, boekingslinks, Gerrie en de teamchat) komen dan daar. Leeg laten = meet.jit.si.</p>
+        <p>De server moet gasten met alleen de link binnenlaten. JaaS van 8x8 werkt daarom niet: die vraagt per deelnemer een eigen sleutel.</p>
         {!canAdmin && <p>Alleen een owner of admin kan dit aanpassen.</p>}
       </div>
     </section>
