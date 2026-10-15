@@ -1,5 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
-import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
+import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { HttpError, createAdminClient, isUuid, makeCors, parseAllowedOrigins } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
@@ -169,11 +169,16 @@ async function createSession(recipientId: string, organizationId: string): Promi
 }
 
 async function loadCompany(organizationId: string): Promise<Record<string, unknown> | null> {
-  const { data, error } = await admin
+  const query = (columns: string) => admin
     .from('company_settings')
-    .select(`email,phone,website,${BRANDING_COLUMNS},invoice_accent_color`)
+    .select(columns)
     .eq('organization_id', organizationId)
     .maybeSingle();
+  const columns = `email,phone,website,${BRANDING_COLUMNS},invoice_accent_color`;
+  let { data, error } = await query(columns);
+  // De nieuwste huisstijlkolommen bestaan pas na hun migratie; zonder blijft de
+  // rest van de huisstijl staan.
+  if (error) ({ data, error } = await query(withoutNewestBrandingColumns(columns)));
   if (error) {
     console.warn('file-transfer-public company_settings overgeslagen', error.message);
     return null;

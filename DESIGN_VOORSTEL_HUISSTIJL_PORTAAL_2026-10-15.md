@@ -7,7 +7,10 @@
 > voorbeeld ook in te zien zijn hoe dat dan op de klantpagina te zien is. Laat me zien hoe je dit
 > voor je ziet voordat je dit gaat bouwen.
 
-Dit is het voorstel. **Er is nog niets gebouwd**; de code is niet aangeraakt.
+Dit is het voorstel zoals het vóór de bouw is voorgelegd.
+
+> **Ingebouwd op 2026-10-15**, met de keuzes onderaan dit stuk. Wat er precies is veranderd, hoe
+> het is getest en hoe het wordt uitgerold: `CHANGELOG_HUISSTIJL_PORTAAL_2026-10-15.md`.
 
 ## Bekijken
 
@@ -62,12 +65,12 @@ het portaal en op de publieke pagina's terecht. Drie dingen kloppen niet:
 Daarna eventueel: dezelfde kop op de publieke offerte-, factuur- en contractpagina, en de kopkleur
 in de e-mails.
 
-## Keuzes die nog open staan
+## Keuzes
 
-| vraag | advies |
-|---|---|
-| Een tweede kleur (kopkleur)? | Ja, met Automatisch als standaard |
-| Kerncijfers in de kop? | Ja, als glazen tegels |
-| Donker logo op een donkere kop | Vanzelf een licht plaatje, plus optioneel een lichte versie |
-| Publieke offerte-, factuur- en contractpagina meteen mee? | Eerst het portaal, dan die drie |
-| Kleuren uit het logo voorstellen? | Meenemen |
+| vraag | advies | gekozen |
+|---|---|---|
+| Een tweede kleur (kopkleur)? | Ja, met Automatisch als standaard | Zo |
+| Kerncijfers in de kop? | Ja, als glazen tegels | Zo |
+| Donker logo op een donkere kop | Vanzelf een licht plaatje, plus optioneel een lichte versie | Zo |
+| Publieke offerte-, factuur- en contractpagina meteen mee? | Eerst het portaal, dan die drie | Meteen mee |
+| Kleuren uit het logo voorstellen? | Meenemen | Meenemen |

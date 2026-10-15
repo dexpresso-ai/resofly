@@ -3,7 +3,7 @@ import { Button, Input, Textarea } from '../components/Ui';
 import { sanitizeRichText } from '../components/RichTextEditor';
 import { supabase } from '../lib/supabase';
 import { dateNL } from '../lib/format';
-import { PublicBrandFooter, PublicBrandMark, usePublicBrandTheme } from '../components/PublicBrand';
+import { PublicBrandFooter, PublicDocHero, PublicDocState, usePublicBrandTheme } from '../components/PublicBrand';
 import type { BrandingPayload } from '../lib/branding';
 
 const CONSENT_TEXT =
@@ -197,33 +197,29 @@ export function PublicContractPage({ token }: { token: string }) {
     // ook het iframe — intrekken zou de weergave leegmaken.
   }
 
-  if (loading) return <main className="public-quote-page"><div className="public-quote-card"><h1>Contract laden…</h1></div></main>;
-  if (error && !payload) return <main className="public-quote-page"><div className="public-quote-card"><p className="eyebrow">Contract</p><h1>Deze link werkt niet meer</h1><p>{error}</p></div></main>;
-  if (!contract) return <main className="public-quote-page"><div className="public-quote-card"><h1>Contract niet gevonden</h1></div></main>;
+  if (loading) return <PublicDocState><h1>Contract laden…</h1></PublicDocState>;
+  if (error && !payload) return <PublicDocState><p className="eyebrow">Contract</p><h1>Deze link werkt niet meer</h1><p>{error}</p></PublicDocState>;
+  if (!contract) return <PublicDocState><h1>Contract niet gevonden</h1></PublicDocState>;
 
-  return <main className="public-quote-page">
-    <section className="public-quote-card public-quote-hero">
-      <div>
-        <PublicBrandMark branding={branding} name={companyName} />
-        {companyName && <p className="eyebrow">{companyName}</p>}
-        <h1>Contract {contract.number}</h1>
-        <p>{contract.title || 'Bekijk je contract en onderteken het digitaal.'}</p>
-      </div>
-      <div className={`public-quote-status st-${contract.status}`}>{statusLabel(contract.status)}</div>
-    </section>
+  // De samenvatting (onderwerp, datum, uiterste datum, van wie) staat in de kop,
+  // vóór de fijne lettertjes; de losse kaart "In het kort" is daarin opgegaan.
+  return <main className="public-quote-page public-doc">
+    <PublicDocHero
+      branding={branding}
+      companyName={companyName}
+      kind="Contract"
+      title={`Contract ${contract.number}`}
+      intro={contract.title || 'Bekijk je contract en onderteken het digitaal.'}
+      status={<div className={`public-quote-status st-${contract.status}`}>{statusLabel(contract.status)}</div>}
+      facts={[
+        { label: 'Ondertekenen vóór', value: contract.valid_until ? dateNL(contract.valid_until) : 'Geen einddatum', tone: isFinal ? undefined : 'accent' },
+        { label: 'Datum', value: dateNL(contract.date) },
+        ...(companyName ? [{ label: 'Van', value: companyName }] : []),
+      ]}
+    />
 
+    <div className="public-canvas">
     {error && <div className="public-quote-alert">{error}</div>}
-
-    {/* Samenvatting (TL;DR) bovenaan, vóór de fijne lettertjes */}
-    <section className="public-quote-card">
-      <h2>In het kort</h2>
-      <div className="quote-facts">
-        <span>Onderwerp</span><strong>{contract.title || '—'}</strong>
-        <span>Datum</span><strong>{dateNL(contract.date)}</strong>
-        <span>Ondertekenen vóór</span><strong>{contract.valid_until ? dateNL(contract.valid_until) : 'Geen einddatum'}</strong>
-        <span>Van</span><strong>{companyName}</strong>
-      </div>
-    </section>
 
     <section className="public-quote-card">
       <h2>Het contract</h2>
@@ -304,6 +300,9 @@ export function PublicContractPage({ token }: { token: string }) {
         </div>)}
       </div>
     </section>}
+
+    <PublicBrandFooter branding={branding} />
+    </div>
   </main>;
 }
 

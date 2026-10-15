@@ -27,12 +27,35 @@ export interface Branding {
   galleryBg: string;
   /** Sfeer van de klantgerichte pagina's: 'dark' of 'light'. */
   clientTheme: 'dark' | 'light';
+  /** Kleur van de kop (portaal, publieke pagina's); null = automatisch, afgeleid
+   *  uit de merkkleur. Sinds migratie 20261015000000. */
+  headerColor: string | null;
+  /** Lichte versie van het logo voor op een donkere kop; null = het gewone logo
+   *  (op een licht plaatje als het wegvalt). Sinds migratie 20261015000000. */
+  logoDarkDataUrl: string | null;
 }
 
 /** De huisstijlkolommen, plus de twee naamvelden waar `companyName` uit komt. */
 export const BRANDING_COLUMNS =
   'company_name,trade_name,brand_logo_data_url,brand_accent_color,brand_footer_text,' +
-  'brand_hide_powered_by,brand_heading_font,brand_body_font,brand_gallery_bg,brand_client_theme';
+  'brand_hide_powered_by,brand_heading_font,brand_body_font,brand_gallery_bg,brand_client_theme,' +
+  'brand_header_color,brand_logo_dark_data_url';
+
+/**
+ * De kolommen die de nieuwste huisstijlmigratie (20261015000000) toevoegt. Draait
+ * een functie al terwijl `db push` nog moet, dan faalt een opvraag met deze
+ * kolommen erin; vraag dan opnieuw zonder. De kop valt dan terug op automatisch
+ * en het gewone logo, wat precies is wat de pagina vóór die migratie toonde.
+ */
+export const NEWEST_BRANDING_COLUMNS = ['brand_header_color', 'brand_logo_dark_data_url'];
+
+/** Een kolomlijst zonder de kolommen van de nieuwste huisstijlmigratie. */
+export function withoutNewestBrandingColumns(columns: string): string {
+  return columns
+    .split(',')
+    .filter((column) => !NEWEST_BRANDING_COLUMNS.includes(column.trim()))
+    .join(',');
+}
 
 export const DEFAULT_BRANDING: Branding = {
   logoDataUrl: null,
@@ -44,9 +67,13 @@ export const DEFAULT_BRANDING: Branding = {
   bodyFont: 'system',
   galleryBg: '#0B0B0B',
   clientTheme: 'dark',
+  headerColor: null,
+  logoDarkDataUrl: null,
 };
 
 const HEX = /^#[0-9A-Fa-f]{6}$/;
+/** Dezelfde eis als de CHECK op de logokolommen: alleen een ingesloten raster. */
+const LOGO = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
 
 /**
  * Zet een company_settings-rij om in de huisstijl die naar de klant mag. De
@@ -58,6 +85,8 @@ export function sanitizeBranding(row: Record<string, unknown> | null | undefined
   if (!row) return { ...DEFAULT_BRANDING };
   const accent = String(row.brand_accent_color ?? '');
   const galleryBg = String(row.brand_gallery_bg ?? '');
+  const header = String(row.brand_header_color ?? '');
+  const logoDark = typeof row.brand_logo_dark_data_url === 'string' ? row.brand_logo_dark_data_url : '';
   return {
     logoDataUrl: (row.brand_logo_data_url as string | null) ?? null,
     accentColor: HEX.test(accent) ? accent : DEFAULT_BRANDING.accentColor,
@@ -68,6 +97,8 @@ export function sanitizeBranding(row: Record<string, unknown> | null | undefined
     bodyFont: String(row.brand_body_font ?? 'system'),
     galleryBg: HEX.test(galleryBg) ? galleryBg : DEFAULT_BRANDING.galleryBg,
     clientTheme: row.brand_client_theme === 'light' ? 'light' : 'dark',
+    headerColor: HEX.test(header) ? header.toUpperCase() : null,
+    logoDarkDataUrl: LOGO.test(logoDark) ? logoDark : null,
   };
 }
 
@@ -81,11 +112,17 @@ export async function loadBranding(
   organizationId: string,
 ): Promise<Branding> {
   try {
-    const { data, error } = await supabaseAdmin
+    const query = (columns: string) => supabaseAdmin
       .from('company_settings')
-      .select(BRANDING_COLUMNS)
+      .select(columns)
       .eq('organization_id', organizationId)
       .maybeSingle();
+    let { data, error } = await query(BRANDING_COLUMNS);
+    if (error) {
+      // Eerst opnieuw zonder de kolommen van de nieuwste migratie: dan klopt de
+      // rest van de huisstijl alvast wel.
+      ({ data, error } = await query(withoutNewestBrandingColumns(BRANDING_COLUMNS)));
+    }
     if (error) {
       // Meestal: de migratie met een nieuwe huisstijlkolom is nog niet
       // toegepast, waardoor de hele select faalt. Dan liever de ResoFly-stijl

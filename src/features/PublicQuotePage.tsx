@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button, Input, Textarea } from '../components/Ui';
 import { supabase } from '../lib/supabase';
 import { dateNL, euro, total, lineGross } from '../lib/format';
-import { PublicBrandFooter, PublicBrandMark, usePublicBrandTheme } from '../components/PublicBrand';
+import { PublicBrandFooter, PublicDocHero, PublicDocState, usePublicBrandTheme } from '../components/PublicBrand';
 import type { BrandingPayload } from '../lib/branding';
 
 async function extractFunctionError(error: unknown, fallback: string): Promise<string> {
@@ -109,43 +109,33 @@ export function PublicQuotePage({ token }: { token: string }) {
   const totals = useMemo(() => total(quote?.lines || []), [quote?.lines]);
   const finalStatus = quote?.status === 'accepted' || quote?.status === 'rejected';
 
-  if (loading) return <main className="public-quote-page"><div className="public-quote-card"><h1>Offerte laden…</h1></div></main>;
+  if (loading) return <PublicDocState><h1>Offerte laden…</h1></PublicDocState>;
 
-  if (error && !payload) return <main className="public-quote-page"><div className="public-quote-card"><p className="eyebrow">Offerte</p><h1>Deze link werkt niet meer</h1><p>{error}</p></div></main>;
+  if (error && !payload) return <PublicDocState><p className="eyebrow">Offerte</p><h1>Deze link werkt niet meer</h1><p>{error}</p></PublicDocState>;
 
-  if (!quote) return <main className="public-quote-page"><div className="public-quote-card"><h1>Offerte niet gevonden</h1></div></main>;
+  if (!quote) return <PublicDocState><h1>Offerte niet gevonden</h1></PublicDocState>;
 
-  return <main className="public-quote-page">
-    <section className="public-quote-card public-quote-hero">
-      <div>
-        <PublicBrandMark branding={branding} name={companyName} />
-        {companyName && <p className="eyebrow">{companyName}</p>}
-        <h1>Offerte {quote.number}</h1>
-        <p>{payload?.project?.name ? `Project: ${payload.project.name}` : 'Bekijk de offerte en geef digitaal akkoord.'}</p>
-      </div>
-      <div className={`public-quote-status st-${quote.status}`}>{statusLabel(quote.status)}</div>
-    </section>
+  // De kern (bedrag, geldigheid, datum, voor wie) staat in de kop; de kaart
+  // "Offertegegevens" die dat herhaalde, is weg. Zo staan de regels op de
+  // telefoon direct onder de kop.
+  return <main className="public-quote-page public-doc">
+    <PublicDocHero
+      branding={branding}
+      companyName={companyName}
+      kind="Offerte"
+      title={`Offerte ${quote.number}`}
+      intro={payload?.project?.name ? `Project: ${payload.project.name}` : 'Bekijk de offerte en geef digitaal akkoord.'}
+      status={<div className={`public-quote-status st-${quote.status}`}>{statusLabel(quote.status)}</div>}
+      facts={[
+        { label: 'Totaal incl. btw', value: euro(totals.total), tone: finalStatus ? undefined : 'accent' },
+        { label: 'Geldig tot', value: dateNL(quote.valid_until) },
+        { label: 'Datum', value: dateNL(quote.date) },
+        { label: 'Voor', value: payload?.client?.name || '—' },
+      ]}
+    />
 
+    <div className="public-canvas">
     {error && <div className="public-quote-alert">{error}</div>}
-
-    <section className="public-quote-grid">
-      <article className="public-quote-card">
-        <h2>Offertegegevens</h2>
-        <div className="quote-facts">
-          <span>Datum</span><strong>{dateNL(quote.date)}</strong>
-          <span>Geldig tot</span><strong>{dateNL(quote.valid_until)}</strong>
-          <span>Klant</span><strong>{payload?.client?.name || '—'}</strong>
-          <span>Totaal incl. btw</span><strong>{euro(totals.total)}</strong>
-        </div>
-      </article>
-      <article className="public-quote-card">
-        <h2>Contact</h2>
-        <p>{companyName}</p>
-        {payload?.company?.email && <p>{payload.company.email}</p>}
-        {payload?.company?.phone && <p>{payload.company.phone}</p>}
-        {payload?.company?.website && <p>{payload.company.website}</p>}
-      </article>
-    </section>
 
     <section className="public-quote-card">
       <h2>Regels</h2>
@@ -165,7 +155,8 @@ export function PublicQuotePage({ token }: { token: string }) {
       {quote.notes && <div className="public-notes"><strong>Toelichting</strong><p>{quote.notes}</p></div>}
     </section>
 
-    <section className="public-quote-card">
+    <section className="public-quote-grid">
+    <article className="public-quote-card">
       <h2>Goedkeuring</h2>
       {finalStatus ? <div className="public-decision-done">
         <h3>{quote.status === 'accepted' ? 'Offerte geaccepteerd' : 'Offerte geweigerd'}</h3>
@@ -180,6 +171,14 @@ export function PublicQuotePage({ token }: { token: string }) {
           <Button variant="primary" onClick={() => decide('accept')} disabled={submitting || !name || !email}>Akkoord geven</Button>
         </div>
       </div>}
+    </article>
+    <article className="public-quote-card">
+      <h2>Contact</h2>
+      <p>{companyName}</p>
+      {payload?.company?.email && <p>{payload.company.email}</p>}
+      {payload?.company?.phone && <p>{payload.company.phone}</p>}
+      {payload?.company?.website && <p>{payload.company.website}</p>}
+    </article>
     </section>
 
     <section className="public-quote-card">
@@ -194,6 +193,7 @@ export function PublicQuotePage({ token }: { token: string }) {
     </section>
 
     <PublicBrandFooter branding={branding} />
+    </div>
   </main>;
 }
 

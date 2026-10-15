@@ -14,14 +14,23 @@ if (inline.length === 0) {
   process.exit(0);
 }
 
+// Er kunnen meer CSP-regels zijn (het voorbeeld van het portaal heeft een eigen
+// regel die inlijsten door de eigen origin toestaat); de hash hoort in élke regel.
+const policies = headers.split('\n').filter((line) => line.trim().startsWith('Content-Security-Policy:'));
+if (policies.length === 0) {
+  console.error('FOUT geen Content-Security-Policy gevonden in public/_headers.');
+  process.exit(1);
+}
+
 let missing = 0;
 for (const script of inline) {
   const hash = `'sha256-${createHash('sha256').update(script, 'utf8').digest('base64')}'`;
-  if (headers.includes(hash)) {
-    console.log(`OK  ${hash} staat in public/_headers`);
+  const without = policies.filter((policy) => !policy.includes(hash)).length;
+  if (without === 0) {
+    console.log(`OK  ${hash} staat in alle ${policies.length} CSP-regels van public/_headers`);
   } else {
     missing += 1;
-    console.error(`FOUT ${hash} ontbreekt in de script-src van public/_headers (inline script in index.html is gewijzigd).`);
+    console.error(`FOUT ${hash} ontbreekt in ${without} van de ${policies.length} CSP-regels van public/_headers (inline script in index.html is gewijzigd).`);
   }
 }
 process.exit(missing ? 1 : 0);

@@ -614,18 +614,22 @@ export const ADMIN_ACTIONS: ActionDef[] = [
     module: 'clients',
     kind: 'read',
     description:
-      'Geeft de huidige huisstijl: merknaam, merkkleur, sfeer (licht of donker), galerij-achtergrond, de lettertypen voor koppen en tekst, de afsluittekst en of "Geleverd via ResoFly" verborgen is. Ook staat er in welke lettertypen je kunt kiezen.',
-    keywords: ['huisstijl', 'merk', 'branding', 'logo', 'merkkleur', 'accentkleur', 'lettertype', 'font', 'sfeer', 'donker', 'licht'],
+      'Geeft de huidige huisstijl: merknaam, merkkleur, kopkleur (leeg = automatisch, afgeleid uit de merkkleur), sfeer (licht of donker), galerij-achtergrond, de lettertypen voor koppen en tekst, de afsluittekst en of "Geleverd via ResoFly" verborgen is. Ook staat er in welke lettertypen je kunt kiezen.',
+    keywords: ['huisstijl', 'merk', 'branding', 'logo', 'merkkleur', 'accentkleur', 'kopkleur', 'lettertype', 'font', 'sfeer', 'donker', 'licht'],
     input: {},
     async read(ctx) {
-      const settings = await settingsRow(ctx,
-        'trade_name, company_name, brand_accent_color, brand_client_theme, brand_gallery_bg, brand_heading_font, brand_body_font, brand_footer_text, brand_hide_powered_by, brand_logo_data_url');
+      const columns =
+        'trade_name, company_name, brand_accent_color, brand_client_theme, brand_gallery_bg, brand_heading_font, brand_body_font, brand_footer_text, brand_hide_powered_by, brand_logo_data_url';
+      // De kopkleur en de lichte logoversie bestaan pas na migratie 20261015000000.
+      const settings = await settingsRow(ctx, `${columns}, brand_header_color, brand_logo_dark_data_url`)
+        .catch(() => settingsRow(ctx, columns));
       return {
         branding: settings
           ? {
             trade_name: settings.trade_name,
             company_name: settings.company_name,
             brand_accent_color: settings.brand_accent_color,
+            brand_header_color: settings.brand_header_color ?? null,
             brand_client_theme: settings.brand_client_theme,
             brand_gallery_bg: settings.brand_gallery_bg,
             brand_heading_font: settings.brand_heading_font,
@@ -633,6 +637,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
             brand_footer_text: settings.brand_footer_text,
             brand_hide_powered_by: settings.brand_hide_powered_by,
             has_logo: Boolean(settings.brand_logo_data_url),
+            has_dark_logo: Boolean(settings.brand_logo_dark_data_url),
           }
           : null,
         available_fonts: BRAND_FONTS.map((key) => ({ key, label: BRAND_FONT_LABELS[key], heading_only: HEADING_ONLY_FONTS.includes(key) })),
@@ -648,12 +653,13 @@ export const ADMIN_ACTIONS: ActionDef[] = [
     module: 'clients',
     kind: 'write',
     description:
-      'Slaat de huisstijl op die je klanten te zien krijgen: merknaam, merkkleur, sfeer (licht of donker), achtergrond van de galerij, lettertype voor koppen en voor lopende tekst, de afsluittekst onder de klantpagina\'s en of "Geleverd via ResoFly" verborgen wordt. ' +
+      'Slaat de huisstijl op die je klanten te zien krijgen: merknaam, merkkleur, kopkleur, sfeer (licht of donker), achtergrond van de galerij, lettertype voor koppen en voor lopende tekst, de afsluittekst onder de klantpagina\'s en of "Geleverd via ResoFly" verborgen wordt. ' +
       'De merkkleur werkt door in het klantportaal, de galerij, facturen, offertes, contracten en e-mails. Geef alleen wat verandert; wat je weglaat blijft staan. Een logo instellen kan hier niet — daar hoort een bestand bij.',
-    keywords: ['huisstijl', 'merknaam', 'merkkleur', 'accentkleur', 'lettertype', 'font', 'sfeer', 'donker', 'licht', 'galerij achtergrond', 'afsluittekst', 'powered by'],
+    keywords: ['huisstijl', 'merknaam', 'merkkleur', 'accentkleur', 'kopkleur', 'lettertype', 'font', 'sfeer', 'donker', 'licht', 'galerij achtergrond', 'afsluittekst', 'powered by'],
     input: {
       trade_name: { type: 'string', description: 'De naam waaronder je naar buiten treedt (je juridische naam staat bij de bedrijfsgegevens).' },
       brand_accent_color: { type: 'string', description: 'Merkkleur als hexcode, bijvoorbeeld #FFD966.' },
+      brand_header_color: { type: 'string', description: 'Kleur van de kop van het klantportaal en de publieke offerte-, factuur- en contractpagina, als hexcode (bijvoorbeeld #0F2A4A). "automatisch" zet hem terug: dan wordt de kop afgeleid uit de merkkleur.' },
       brand_client_theme: { type: 'string', enum: ['dark', 'light'], description: 'Sfeer van portaal, galerij en de publieke offerte-, factuur- en contractpagina.' },
       brand_gallery_bg: { type: 'string', description: 'Achtergrondkleur van de galerij als hexcode, bijvoorbeeld #0B0B0B.' },
       brand_heading_font: { type: 'string', enum: [...BRAND_FONTS], description: 'Lettertype voor koppen.' },
@@ -675,6 +681,17 @@ export const ADMIN_ACTIONS: ActionDef[] = [
         patch.brand_accent_color = accent;
         patch.invoice_accent_color = accent;
         described.push(`merkkleur ${accent}`);
+      }
+      if (input.brand_header_color !== undefined) {
+        const raw = optStr(input, 'brand_header_color', 20);
+        if (!raw || /^auto(matisch)?$/i.test(raw)) {
+          patch.brand_header_color = null;
+          described.push('kopkleur automatisch');
+        } else {
+          const header = optHex(input, 'brand_header_color');
+          patch.brand_header_color = header;
+          described.push(`kopkleur ${header}`);
+        }
       }
       const theme = optChoice(input, 'brand_client_theme', ['dark', 'light'] as const);
       if (theme) { patch.brand_client_theme = theme; described.push(`sfeer ${theme === 'dark' ? 'donker' : 'licht'}`); }

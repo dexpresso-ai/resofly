@@ -3,7 +3,8 @@ import { Button } from '../components/Ui';
 import { supabase } from '../lib/supabase';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import type { FinanceLine } from '../types';
-import { PublicBrandFooter, PublicBrandMark, usePublicBrandTheme } from '../components/PublicBrand';
+import { PublicBrandFooter, PublicDocHero, PublicDocState, usePublicBrandTheme } from '../components/PublicBrand';
+import { formatISODate } from '../lib/dates';
 import type { BrandingPayload } from '../lib/branding';
 import { safeCheckoutUrl } from '../lib/safeUrl';
 
@@ -123,45 +124,48 @@ export function PublicInvoicePage({ token }: { token: string }) {
     }
   }
 
-  if (loading) return <main className="public-quote-page"><div className="public-quote-card"><h1>Factuur laden…</h1></div></main>;
+  if (loading) return <PublicDocState><h1>Factuur laden…</h1></PublicDocState>;
 
-  if (error && !payload) return <main className="public-quote-page"><div className="public-quote-card"><p className="eyebrow">Factuur</p><h1>Deze link werkt niet meer</h1><p>{error}</p></div></main>;
+  if (error && !payload) return <PublicDocState><p className="eyebrow">Factuur</p><h1>Deze link werkt niet meer</h1><p>{error}</p></PublicDocState>;
 
-  if (!invoice) return <main className="public-quote-page"><div className="public-quote-card"><h1>Factuur niet gevonden</h1></div></main>;
+  if (!invoice) return <PublicDocState><h1>Factuur niet gevonden</h1></PublicDocState>;
 
-  return <main className="public-quote-page public-invoice-page">
-    <section className="public-quote-card public-quote-hero">
-      <div>
-        <PublicBrandMark branding={branding} name={companyName} />
-        {companyName && <p className="eyebrow">{companyName}</p>}
-        <h1>Factuur {invoice.number}</h1>
-        <p>{payload?.project?.name ? `Project: ${payload.project.name}` : 'Bekijk en betaal deze factuur veilig online.'}</p>
-      </div>
-      <div className={`public-quote-status st-${invoice.status}`}>{statusLabel(invoice.status, invoice.paid_at)}</div>
-    </section>
+  // Bedrag, vervaldatum, factuurdatum en klant staan in de kop; de betaalkaart
+  // komt er direct onder, dan de regels.
+  const overdue = !isPaid && (invoice.status === 'overdue'
+    || (Boolean(invoice.due_date) && String(invoice.due_date).slice(0, 10) < formatISODate(new Date())));
+  return <main className="public-quote-page public-doc public-invoice-page">
+    <PublicDocHero
+      branding={branding}
+      companyName={companyName}
+      kind="Factuur"
+      title={`Factuur ${invoice.number}`}
+      intro={payload?.project?.name ? `Project: ${payload.project.name}` : 'Bekijk en betaal deze factuur veilig online.'}
+      status={<div className={`public-quote-status st-${invoice.status}`}>{statusLabel(invoice.status, invoice.paid_at)}</div>}
+      facts={[
+        { label: isPaid ? 'Betaald' : 'Te betalen', value: euro(totals.total), tone: isPaid ? undefined : 'accent' },
+        { label: 'Vervaldatum', value: dateNL(invoice.due_date), tone: overdue ? 'danger' : undefined, sub: overdue ? 'Vervallen' : undefined },
+        { label: 'Factuurdatum', value: dateNL(invoice.date) },
+        { label: 'Voor', value: payload?.client?.name || '—' },
+      ]}
+    />
 
+    <div className="public-canvas">
     {error && <div className="public-quote-alert">{error}</div>}
     {payload?.mockPaymentWarning && <div className="public-quote-alert">{payload.mockPaymentWarning}</div>}
 
-    <section className="public-quote-grid">
-      <article className="public-quote-card public-payment-card">
-        <h2>Te betalen</h2>
-        <strong className="public-invoice-amount">{euro(totals.total)}</strong>
+    <section className="public-quote-card public-payment-card">
+      <div className="public-payment-row">
+        <div>
+          <h2>{isPaid ? 'Deze factuur is betaald' : 'Te betalen'}</h2>
+          <strong className="public-invoice-amount">{euro(totals.total)}</strong>
+        </div>
         <div className="public-decision-actions public-invoice-actions">
           <Button onClick={downloadPdf} disabled={downloading}>{downloading ? 'PDF maken…' : 'PDF downloaden'}</Button>
           <Button variant="primary" disabled={isPaid || !checkoutHref} onClick={() => checkoutHref && window.open(checkoutHref, '_blank', 'noopener,noreferrer')}>{isPaid ? 'Betaald' : 'Betaal nu'}</Button>
         </div>
-        {!checkoutHref && !isPaid && <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName}.</p>}
-      </article>
-      <article className="public-quote-card">
-        <h2>Factuurgegevens</h2>
-        <div className="quote-facts">
-          <span>Datum</span><strong>{dateNL(invoice.date)}</strong>
-          <span>Vervaldatum</span><strong>{dateNL(invoice.due_date)}</strong>
-          <span>Klant</span><strong>{payload?.client?.name || '—'}</strong>
-          <span>Gekoppelde offerte</span><strong>{payload?.quote?.number || '—'}</strong>
-        </div>
-      </article>
+      </div>
+      {!checkoutHref && !isPaid && <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName}.</p>}
     </section>
 
     <section className="public-quote-card">
@@ -190,6 +194,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
           <span>Verzonden</span><strong>{dateNL(invoice.sent_at)}</strong>
           <span>Betaald op</span><strong>{dateNL(invoice.paid_at)}</strong>
           <span>IBAN</span><strong>{payload?.company?.iban || '—'}</strong>
+          <span>Gekoppelde offerte</span><strong>{payload?.quote?.number || '—'}</strong>
         </div>
       </article>
       <article className="public-quote-card">
@@ -224,6 +229,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
     </section>
 
     <PublicBrandFooter branding={branding} />
+    </div>
   </main>;
 }
 
