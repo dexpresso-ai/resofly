@@ -5,7 +5,7 @@ import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
-import { BRAND_BODY_FONTS, BRAND_FONTS, CLIENT_THEMES, GALLERY_BACKGROUNDS, brandFont, brandStyle, brandThemeVars, ensureBrandFontsLoaded } from '../lib/branding';
+import { BrandStudio } from './BrandStudio';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
@@ -71,6 +71,8 @@ const emptySettings: CompanySettingsInput = {
   brand_body_font: 'system',
   brand_gallery_bg: '#0B0B0B',
   brand_client_theme: 'dark',
+  brand_header_color: null,
+  brand_logo_dark_data_url: null,
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -151,7 +153,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
   { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
   { id: 'klantvelden', label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
-  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur en afsluiting op alles wat je klant ziet — het klantportaal en de galerij — zodat het van jou is, niet van ResoFly.' },
+  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en afsluiting op alles wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
   { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
@@ -1718,7 +1720,9 @@ export function Settings({
     setIsSaving(true);
     try {
       await onSave(cleanSettingsInput(form));
-      setMessage('Bedrijfsinstellingen opgeslagen. Nieuwe factuur-PDFs gebruiken deze gegevens direct.');
+      setMessage(activeTab === 'huisstijl'
+        ? 'Huisstijl opgeslagen. Het klantportaal en je offerte-, factuur- en contractpagina\'s gebruiken hem direct.'
+        : 'Bedrijfsinstellingen opgeslagen. Nieuwe factuur-PDFs gebruiken deze gegevens direct.');
     } catch (error) {
       setTemplateError(error instanceof Error ? error.message : 'Bedrijfsinstellingen opslaan mislukt.');
     } finally {
@@ -2391,11 +2395,12 @@ export function Settings({
 
     {activeTab === 'huisstijl' && <div className="settings-tab-panel">
       <div className="settings-save-bar">
-        <p className="settings-help">Zo ziet je klant de galerij: je eigen logo, je eigen accentkleur en je eigen afsluiting. Opslaan is nodig voordat het live staat.</p>
+        <p className="settings-help">Je merk op alles wat je klant ziet: het klantportaal, je offerte-, factuur- en contractpagina's en de galerij. Het voorbeeld verandert meteen mee; je klanten zien het pas na Opslaan.</p>
         <Button variant="primary" onClick={save} disabled={isSaving || !canAdminOrganization}>{isSaving ? 'Opslaan…' : 'Opslaan'}</Button>
       </div>
       {message && <div className="success">{message}</div>}
-      <BrandingCard form={form} setForm={setForm} canWrite={canAdminOrganization} />
+      {templateError && <div className="error">{templateError}</div>}
+      <BrandStudio form={form} setForm={setForm} canWrite={canAdminOrganization} />
     </div>}
 
     {activeTab === 'facturatie' && <div className="settings-tab-panel">
@@ -3033,295 +3038,6 @@ function formatDateTime(value: string) {
   return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
-/** Max. logobreedte; groter heeft geen zin en het logo gaat als data-URL mee. */
-const BRAND_LOGO_MAX_WIDTH = 600;
-const BRAND_LOGO_MAX_BYTES = 300 * 1024;
-
-/**
- * Schaalt het logo terug en levert een data-URL op. Data-URL i.p.v. R2 omdat de
- * publieke galerijpagina geen sessie heeft en dus geen media-token kan gebruiken;
- * zo blijft het logo daar gewoon zichtbaar. PNG blijft PNG (transparantie),
- * de rest wordt JPEG.
- */
-async function logoToDataUrl(file: File): Promise<string> {
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-    throw new Error('Kies een PNG-, JPEG- of WebP-bestand.');
-  }
-  const bitmap = await createImageBitmap(file);
-  try {
-    const scale = Math.min(1, BRAND_LOGO_MAX_WIDTH / bitmap.width);
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Canvas niet beschikbaar.');
-    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const usePng = file.type === 'image/png';
-    const dataUrl = canvas.toDataURL(usePng ? 'image/png' : 'image/jpeg', usePng ? undefined : 0.9);
-    if (dataUrl.length > BRAND_LOGO_MAX_BYTES * 1.4) {
-      throw new Error('Dit logo is te groot. Gebruik een kleiner bestand (richtlijn: onder 300 kB).');
-    }
-    return dataUrl;
-  } finally {
-    bitmap.close();
-  }
-}
-
-function BrandingCard({ form, setForm, canWrite }: {
-  form: CompanySettingsInput;
-  setForm: React.Dispatch<React.SetStateAction<CompanySettingsInput>>;
-  canWrite: boolean;
-}) {
-  const [logoError, setLogoError] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement | null>(null);
-
-  // Het voorbeeld moet de échte letters tonen, dus de gekozen families laden.
-  useEffect(() => {
-    ensureBrandFontsLoaded([form.brand_heading_font, form.brand_body_font]);
-  }, [form.brand_heading_font, form.brand_body_font]);
-
-  async function pickLogo(file: File | undefined) {
-    if (!file) return;
-    setLogoError(null);
-    try {
-      const dataUrl = await logoToDataUrl(file);
-      setForm(prev => ({ ...prev, brand_logo_data_url: dataUrl }));
-    } catch (e) {
-      setLogoError(e instanceof Error ? e.message : 'Logo verwerken mislukt.');
-    }
-  }
-
-  return (
-    <section className="settings-card">
-      <h3>Je merk</h3>
-      <p className="settings-help">
-        Hier staat je merk in z&apos;n geheel: naam, logo, kleur en lettertypen. De merkkleur werkt door in
-        álles wat je klant ziet — het klantportaal, galerijen, facturen, offertes, contracten en e-mails.
-      </p>
-
-      <div className="brand-grid">
-        <div className="brand-field brand-field-wide">
-          <span className="brand-label">Merknaam</span>
-          <Input
-            value={form.trade_name ?? ''}
-            onChange={(e) => setForm(prev => ({ ...prev, trade_name: e.target.value }))}
-            placeholder="Bijv. Studio Noord"
-            disabled={!canWrite}
-          />
-          <p className="settings-help">De naam waaronder je naar buiten treedt. Je juridische bedrijfsnaam staat bij Facturatie.</p>
-        </div>
-        <div className="brand-field">
-          <span className="brand-label">Logo</span>
-          <div className="brand-logo-row">
-            <div className="brand-logo-preview">
-              {form.brand_logo_data_url
-                ? <img src={form.brand_logo_data_url} alt="Je logo" />
-                : <span className="brand-logo-empty">Geen logo</span>}
-            </div>
-            <div className="brand-logo-actions">
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                style={{ display: 'none' }}
-                onChange={(e) => { void pickLogo(e.target.files?.[0]); e.target.value = ''; }}
-              />
-              <Button onClick={() => fileRef.current?.click()} disabled={!canWrite}>Logo kiezen</Button>
-              {form.brand_logo_data_url && (
-                <Button variant="ghost" onClick={() => setForm(prev => ({ ...prev, brand_logo_data_url: null }))} disabled={!canWrite}>
-                  Verwijderen
-                </Button>
-              )}
-              <p className="settings-help">PNG, JPEG of WebP. We schalen het automatisch terug naar {BRAND_LOGO_MAX_WIDTH}px breed.</p>
-            </div>
-          </div>
-          {logoError && <div className="error">{logoError}</div>}
-        </div>
-
-        <div className="brand-field">
-          <span className="brand-label">Merkkleur</span>
-          <div className="brand-color-row">
-            <input
-              type="color"
-              className="brand-color"
-              value={/^#[0-9A-Fa-f]{6}$/.test(form.brand_accent_color) ? form.brand_accent_color : '#FFD966'}
-              onChange={(e) => setForm(prev => ({ ...prev, brand_accent_color: e.target.value.toUpperCase() }))}
-              disabled={!canWrite}
-              aria-label="Accentkleur"
-            />
-            <Input
-              value={form.brand_accent_color}
-              onChange={(e) => setForm(prev => ({ ...prev, brand_accent_color: e.target.value.toUpperCase() }))}
-              disabled={!canWrite}
-              maxLength={7}
-              aria-label="Accentkleur als hexcode"
-            />
-          </div>
-          <p className="settings-help">Werkt door in het klantportaal en de galerij, én op je facturen, offertes, contracten en e-mails.</p>
-        </div>
-
-        <div className="brand-field brand-field-wide">
-          <span className="brand-label">Achtergrond van de galerij</span>
-          <div className="brand-bg-row">
-            {GALLERY_BACKGROUNDS.map(option => (
-              <button
-                key={option.value}
-                type="button"
-                className={`brand-bg-swatch${form.brand_gallery_bg?.toUpperCase() === option.value ? ' is-active' : ''}`}
-                style={{ background: option.value }}
-                onClick={() => setForm(prev => ({ ...prev, brand_gallery_bg: option.value }))}
-                disabled={!canWrite}
-                title={option.label}
-                aria-label={option.label}
-                aria-pressed={form.brand_gallery_bg?.toUpperCase() === option.value}
-              />
-            ))}
-            <input
-              type="color"
-              className="brand-color"
-              value={/^#[0-9A-Fa-f]{6}$/.test(form.brand_gallery_bg) ? form.brand_gallery_bg : '#0B0B0B'}
-              onChange={(e) => setForm(prev => ({ ...prev, brand_gallery_bg: e.target.value.toUpperCase() }))}
-              disabled={!canWrite}
-              aria-label="Eigen achtergrondkleur"
-            />
-          </div>
-          <p className="settings-help">
-            Tekst, randen en knoppen passen zich automatisch aan: bij een lichte achtergrond wordt de tekst donker.
-          </p>
-        </div>
-
-        <div className="brand-field brand-field-wide">
-          <span className="brand-label">Sfeer van je klantpagina&apos;s</span>
-          <div className="brand-theme-row">
-            {CLIENT_THEMES.map(option => (
-              <button
-                key={option.value}
-                type="button"
-                className={`brand-theme-card${form.brand_client_theme === option.value ? ' is-active' : ''}`}
-                onClick={() => setForm(prev => ({ ...prev, brand_client_theme: option.value }))}
-                disabled={!canWrite}
-                aria-pressed={form.brand_client_theme === option.value}
-              >
-                {/* Geen kleurstaal maar een echt stukje pagina: kop, gedempte
-                    regel, statuschip en knop zijn precies de vier plekken waar
-                    een heel licht of heel donker merk uit de bocht kan vliegen. */}
-                <span
-                  className="brand-theme-preview"
-                  style={brandThemeVars({
-                    logoDataUrl: null,
-                    accentColor: form.brand_accent_color,
-                    footerText: null,
-                    hidePoweredBy: false,
-                    companyName: null,
-                    headingFont: form.brand_heading_font,
-                    bodyFont: form.brand_body_font,
-                    clientTheme: option.value,
-                  }) as React.CSSProperties}
-                >
-                  <span className="brand-theme-card-mock">
-                    {form.brand_logo_data_url
-                      ? <img className="brand-theme-logo" src={form.brand_logo_data_url} alt="" />
-                      : <span className="brand-theme-mark">{(form.trade_name || 'A').slice(0, 1).toUpperCase()}</span>}
-                    <strong className="brand-theme-title">Factuur 2026-014</strong>
-                    <span className="brand-theme-sub">Vervalt 15 september · € 1.240</span>
-                    <span className="brand-theme-row-inline">
-                      <em className="brand-theme-chip">Verstuurd</em>
-                      <i className="brand-theme-btn">Betaal nu</i>
-                    </span>
-                  </span>
-                </span>
-                <strong>{option.label}</strong>
-                <small>{option.hint}</small>
-              </button>
-            ))}
-          </div>
-          <p className="settings-help">
-            Geldt voor het klantportaal en de publieke offerte-, factuur- en contractpagina. Licht of donker
-            kiezen is genoeg: vlakken, randen en tekst worden uit je merkkleur afgeleid en halen overal het
-            vereiste contrast — ook als je merkkleur heel licht of heel donker is.
-          </p>
-        </div>
-
-        <div className="brand-field">
-          <span className="brand-label">Lettertype koppen</span>
-          <Select
-            value={form.brand_heading_font}
-            onChange={(e) => setForm(prev => ({ ...prev, brand_heading_font: e.target.value }))}
-            disabled={!canWrite}
-          >
-            {BRAND_FONTS.map(font => <option key={font.key} value={font.key}>{font.label}</option>)}
-          </Select>
-          <p className="settings-help">{brandFont(form.brand_heading_font).hint}</p>
-        </div>
-
-        <div className="brand-field">
-          <span className="brand-label">Lettertype tekst</span>
-          <Select
-            value={form.brand_body_font}
-            onChange={(e) => setForm(prev => ({ ...prev, brand_body_font: e.target.value }))}
-            disabled={!canWrite}
-          >
-            {BRAND_BODY_FONTS.map(font => <option key={font.key} value={font.key}>{font.label}</option>)}
-          </Select>
-          <p className="settings-help">{brandFont(form.brand_body_font).hint}</p>
-        </div>
-
-        {/* Voorbeeld met de daadwerkelijke lettertypen en accentkleur. */}
-        <div className="brand-field brand-field-wide">
-          <span className="brand-label">Voorbeeld galerij</span>
-          <div
-            className="brand-preview"
-            style={{
-              ...brandStyle({
-                logoDataUrl: null,
-                accentColor: form.brand_accent_color,
-                footerText: null,
-                hidePoweredBy: false,
-                companyName: null,
-                headingFont: form.brand_heading_font,
-                bodyFont: form.brand_body_font,
-                galleryBg: form.brand_gallery_bg,
-              }),
-              background: /^#[0-9A-Fa-f]{6}$/.test(form.brand_gallery_bg) ? form.brand_gallery_bg : undefined,
-              fontFamily: brandFont(form.brand_body_font).stack,
-            } as React.CSSProperties}
-          >
-            {form.brand_logo_data_url && <img className="brand-preview-logo" src={form.brand_logo_data_url} alt="" />}
-            <h4 style={{ fontFamily: brandFont(form.brand_heading_font).stack }}>Bruiloft Sanne &amp; Tim</h4>
-            <p>De mooiste beelden van jullie dag — kies je favorieten en download ze in hoge resolutie.</p>
-            <span className="brand-preview-chips">
-              <span className="brand-preview-chip is-active">Ceremonie</span>
-              <span className="brand-preview-chip">Diner</span>
-              <span className="brand-preview-chip">Feest</span>
-            </span>
-          </div>
-        </div>
-
-        <div className="brand-field brand-field-wide">
-          <span className="brand-label">Afsluiting onder je klantpagina&apos;s</span>
-          <Input
-            value={form.brand_footer_text ?? ''}
-            onChange={(e) => setForm(prev => ({ ...prev, brand_footer_text: e.target.value || null }))}
-            placeholder="Bijv. Bedankt voor het vertrouwen — Studio Noord"
-            disabled={!canWrite}
-            maxLength={160}
-          />
-        </div>
-
-        <label className="brand-field brand-field-wide check-row">
-          <input
-            type="checkbox"
-            checked={form.brand_hide_powered_by}
-            onChange={(e) => setForm(prev => ({ ...prev, brand_hide_powered_by: e.target.checked }))}
-            disabled={!canWrite}
-          />
-          <span>&ldquo;Geleverd via ResoFly&rdquo; verbergen op de publieke galerijpagina</span>
-        </label>
-      </div>
-    </section>
-  );
-}
-
 function settingsToForm(settings: CompanySettings | null): CompanySettingsInput {
   if (!settings) return emptySettings;
   return {
@@ -3364,6 +3080,8 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     brand_body_font: settings.brand_body_font ?? 'system',
     brand_gallery_bg: settings.brand_gallery_bg ?? '#0B0B0B',
     brand_client_theme: settings.brand_client_theme === 'light' ? 'light' : 'dark',
+    brand_header_color: settings.brand_header_color ?? null,
+    brand_logo_dark_data_url: settings.brand_logo_dark_data_url ?? null,
   };
 }
 
@@ -3407,6 +3125,8 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     invoice_accent_color: normalizeHex(input.brand_accent_color, '#FFD966'),
     // Twee vaste waarden; de CHECK op de kolom laat niets anders toe.
     brand_client_theme: input.brand_client_theme === 'light' ? 'light' : 'dark',
+    // Leeg (of een half getypte code) = automatisch: de kop volgt de merkkleur.
+    brand_header_color: /^#[0-9a-f]{6}$/i.test(input.brand_header_color ?? '') ? input.brand_header_color!.toUpperCase() : null,
     invoice_font_size: Math.max(8, Math.min(14, Number(input.invoice_font_size ?? 10))),
   };
 }

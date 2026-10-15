@@ -3246,6 +3246,12 @@ export interface CompanySettings extends OrgScopedRow {
    *  offerte/factuur/contract): 'dark' of 'light'. De merkkleur bepaalt de
    *  tint, deze kolom de helderheid (zie brandThemeVars in lib/branding.ts). */
   brand_client_theme: string;
+  /** Kleur van de kop van het portaal en de publieke pagina's; leeg = automatisch
+   *  (afgeleid uit de merkkleur). Ontbreekt vóór migratie 20261015000000. */
+  brand_header_color?: string | null;
+  /** Lichte versie van het logo voor op een donkere kop, als data-URL (zelfde
+   *  eisen als het logo). Ontbreekt vóór migratie 20261015000000. */
+  brand_logo_dark_data_url?: string | null;
   /** Eigen Jitsi-server (https://…) voor videovergaderingen; leeg = meet.jit.si.
    *  Optioneel: wordt los opgeslagen (Instellingen → Agenda), niet via het
    *  formulier met bedrijfsgegevens, en ontbreekt vóór migratie 20261014000000. */

@@ -1,0 +1,1309 @@
+<!doctype html>
+<html lang="nl">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Huisstijl in het klantportaal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Voorstel: de merkkleuren uit Instellingen → Huisstijl doortrekken naar het klantportaal, met een live voorbeeld in de instellingen.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap">
+<style>
+/* Opbouw: zoals de werkruimte zelf. Bovenaan een donker commandovlak met de
+   kern van het voorstel, daaronder papier met het prototype in twee kolommen
+   (instellingen links, het portaal dat meekleurt rechts) en de onderbouwing.
+   Kleuren en vorm komen uit de Belicht- en Cockpit-tokens van ResoFly. */
+:root{
+  --paper:#F3F2EE;
+  --card:#FFFFFF;
+  --card-2:#FAF9F6;
+  --well:#ECEAE4;
+  --ink:#1A1710;
+  --ink-2:#3E392E;
+  --ink-3:#6C6557;
+  --line:#E0DACD;
+  --line-2:#CAC3B2;
+  --gold:#F7C548;
+  --gold-ink:#855800;
+  --on-gold:#1A1405;
+  --gold-face:linear-gradient(150deg,#FFE08A 0%,#F6C143 48%,#E4A11C 100%);
+  --ok:#0F6344;
+  --warn:#77500A;
+  --danger:#A32A30;
+  --focus:0 0 0 4px rgba(247,197,72,.38);
+  --shadow-card:0 1px 2px rgba(28,27,24,.05),0 10px 28px -18px rgba(28,27,24,.24);
+  --shadow-pop:0 30px 60px -30px rgba(28,27,24,.45);
+
+  /* Het commandovlak is in beide thema's donker (Cockpit-regel). */
+  --cmd-bg:#0F0F11;
+  --cmd-ink:#F4F3F0;
+  --cmd-ink-2:#B5B3AD;
+  --cmd-glass:rgba(255,255,255,.055);
+  --cmd-line:rgba(255,255,255,.09);
+  --cmd-gold:#F7C548;
+
+  --font:'Poppins',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+  --r-canvas:22px;
+  --r-card:18px;
+  --r-ctl:12px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0F0F11; --card:#141417; --card-2:#1A1A1E; --well:#0B0B0D;
+    --ink:#F4F3F0; --ink-2:#B5B3AD; --ink-3:#908E88; --line:#232327; --line-2:#2F2F35;
+    --gold-ink:#F7C548; --ok:#4CD9A0; --warn:#FFA24C; --danger:#FF6B72;
+    --shadow-card:inset 0 1px 0 rgba(255,255,255,.045),0 1px 2px rgba(0,0,0,.35);
+    --shadow-pop:0 30px 70px -24px rgba(0,0,0,.85);
+    --cmd-bg:#09090A;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0F0F11; --card:#141417; --card-2:#1A1A1E; --well:#0B0B0D;
+  --ink:#F4F3F0; --ink-2:#B5B3AD; --ink-3:#908E88; --line:#232327; --line-2:#2F2F35;
+  --gold-ink:#F7C548; --ok:#4CD9A0; --warn:#FFA24C; --danger:#FF6B72;
+  --shadow-card:inset 0 1px 0 rgba(255,255,255,.045),0 1px 2px rgba(0,0,0,.35);
+  --shadow-pop:0 30px 70px -24px rgba(0,0,0,.85);
+  --cmd-bg:#09090A;
+  color-scheme:dark;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{text-wrap:balance;line-height:1.2;margin:0}
+p{margin:0}
+code{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.86em;padding:.1em .38em;border-radius:6px;background:var(--well);color:var(--ink-2);overflow-wrap:anywhere}
+a{color:var(--gold-ink)}
+button{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus);border-radius:10px}
+.wrap{max-width:1320px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+/* ── Kop: het commandovlak ─────────────────────────────────────────────── */
+.hero{background:
+    radial-gradient(720px 340px at 0% 0%,rgba(247,197,72,.17),transparent 62%),
+    radial-gradient(560px 320px at 100% 0%,rgba(150,148,172,.13),transparent 64%),
+    linear-gradient(135deg,#0B0B0D 0%,#141417 48%,#1E1E23 100%);
+  color:var(--cmd-ink);position:relative;overflow:hidden}
+.hero::after{content:"";position:absolute;inset:0;background:var(--rings-light) no-repeat;background-position:-560px -620px;opacity:.9;pointer-events:none}
+.hero .wrap{position:relative;z-index:1;padding-block:42px 30px;display:grid;gap:26px}
+.eyebrow{font-size:11.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--cmd-gold)}
+.hero h1{font-size:clamp(30px,4.4vw,50px);font-weight:800;letter-spacing:-.03em;max-width:17ch}
+.hero h1 span{color:var(--cmd-gold)}
+.hero .lead{font-size:16.5px;color:var(--cmd-ink-2);max-width:62ch}
+.hero .lead strong{color:var(--cmd-ink);font-weight:600}
+.pillars{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.pillar{background:var(--cmd-glass);border:1px solid var(--cmd-line);border-radius:16px;padding:16px 18px;display:grid;gap:6px;align-content:start;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.pillar strong{font-size:15px;font-weight:700;display:flex;gap:9px;align-items:center}
+.pillar strong svg{flex:none;color:var(--cmd-gold)}
+.pillar p{font-size:13.5px;color:var(--cmd-ink-2);line-height:1.55}
+.toc{display:flex;flex-wrap:wrap;gap:6px}
+.toc a{color:var(--cmd-ink-2);text-decoration:none;font-size:13px;font-weight:500;padding:6px 12px;border-radius:999px;border:1px solid var(--cmd-line);background:rgba(255,255,255,.03)}
+.toc a:hover{color:var(--cmd-ink);border-color:rgba(255,255,255,.2)}
+@media (max-width:860px){.pillars{grid-template-columns:1fr}}
+
+/* ── Secties ───────────────────────────────────────────────────────────── */
+section{padding-block:52px 8px}
+.sec-head{display:grid;gap:8px;margin-bottom:22px;max-width:74ch}
+.sec-head .kicker{font-size:11.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--gold-ink)}
+.sec-head h2{font-size:clamp(24px,2.6vw,31px);font-weight:800;letter-spacing:-.025em}
+.sec-head p{color:var(--ink-2)}
+
+/* ── Prototype: instellingen + voorbeeld ───────────────────────────────── */
+.proto{display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:1060px){.proto{grid-template-columns:minmax(0,1fr)}}
+
+.settings{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-card);overflow:hidden}
+.set-head{padding:16px 20px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+.set-tile{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(135deg,#0B0B0D,#1E1E23);color:var(--cmd-gold);flex:none}
+.set-head .crumb{font-size:12px;color:var(--ink-3)}
+.set-head h3{font-size:17px;font-weight:700;letter-spacing:-.01em}
+.set-body{padding:6px 20px 4px}
+.set-block{padding:15px 0;border-bottom:1px solid var(--line);display:grid;gap:9px}
+.set-block:last-child{border-bottom:0}
+.set-label{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-2);display:flex;align-items:center;gap:8px}
+.tag-new{font-size:9.5px;letter-spacing:.06em;padding:2px 7px;border-radius:999px;background:var(--gold);color:var(--on-gold);font-weight:700}
+.help{font-size:12.5px;color:var(--ink-3);line-height:1.5}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:7px;padding:6px 11px 6px 7px;border-radius:999px;border:1px solid var(--line-2);background:var(--card);font-size:12.5px;font-weight:600;cursor:pointer;color:var(--ink-2);transition:border-color .15s,background .15s}
+.chip:hover{border-color:var(--ink-3);color:var(--ink)}
+.chip[aria-pressed="true"]{border-color:var(--ink);color:var(--ink);background:var(--card-2);box-shadow:inset 0 0 0 1px var(--ink)}
+.chip .duo{display:inline-flex;width:22px;height:22px;border-radius:50%;overflow:hidden;box-shadow:0 0 0 1px rgba(128,128,128,.45);flex:none}
+.chip .duo i{flex:1}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.swatch-input{width:46px;height:40px;padding:3px;border:1px solid var(--line-2);border-radius:11px;background:var(--card);cursor:pointer;flex:none}
+.swatch-input:disabled{opacity:.45;cursor:not-allowed}
+.text-input{height:40px;border:1px solid var(--line-2);border-radius:var(--r-ctl);background:var(--card);padding:0 12px;font:inherit;font-size:13.5px;color:var(--ink);min-width:0}
+.text-input.hex{width:112px;font-variant-numeric:tabular-nums;text-transform:uppercase}
+.text-input:focus{border-color:var(--gold-ink);box-shadow:var(--focus);outline:none}
+.text-input[aria-invalid="true"]{border-color:var(--danger)}
+.seg{display:inline-flex;padding:3px;border-radius:12px;background:var(--well);border:1px solid var(--line);gap:2px;flex-wrap:wrap}
+.seg button{border:0;background:transparent;padding:6px 12px;border-radius:9px;font-size:12.5px;font-weight:600;color:var(--ink-3);cursor:pointer;white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08),0 0 0 1px var(--line)}
+.from-logo{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px;color:var(--ink-3)}
+.from-logo button{width:24px;height:24px;border-radius:7px;border:0;box-shadow:inset 0 0 0 1px rgba(128,128,128,.55);cursor:pointer;padding:0}
+.from-logo button:hover{transform:translateY(-1px)}
+.logo-row{display:flex;gap:12px;align-items:center}
+.logo-box{width:132px;height:60px;border:1px dashed var(--line-2);border-radius:12px;display:grid;place-items:center;background:#F7F6F2;overflow:hidden;flex:none;padding:6px}
+.logo-box.is-dark{background:#17171A;border-style:solid;border-color:#2A2A2F}
+.logo-box img,.logo-box svg{max-width:100%;max-height:44px;display:block}
+.logo-box .empty{font-size:11.5px;color:#6C6557}
+.logo-box.is-dark .empty{color:#A4A29C}
+.logo-actions{display:flex;flex-wrap:wrap;gap:6px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:0 13px;border-radius:var(--r-ctl);border:1px solid var(--line-2);background:var(--card);font-size:12.5px;font-weight:600;cursor:pointer;color:var(--ink)}
+.btn:hover{border-color:var(--ink-3)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink-3)}
+.btn.ghost:hover{color:var(--ink)}
+.btn.gold{background:var(--gold-face);border:0;color:var(--on-gold);box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 0 0 1px rgba(247,197,72,.35),0 10px 24px -10px rgba(247,197,72,.75)}
+.btn.small{min-height:30px;padding:0 10px;font-size:12px}
+.sub-field{display:grid;gap:7px;padding:10px 12px;border-radius:12px;background:var(--card-2);border:1px solid var(--line)}
+.sub-field .set-label{font-size:10.5px}
+.theme-cards{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.theme-card{border:1px solid var(--line-2);border-radius:14px;background:var(--card);padding:8px;display:grid;gap:7px;text-align:left;cursor:pointer}
+.theme-card[aria-pressed="true"]{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.theme-card .mini{height:58px;border-radius:9px;position:relative;overflow:hidden}
+.theme-card .mini i{position:absolute;left:8px;right:8px;border-radius:5px}
+.theme-card strong{font-size:13px}
+.theme-card small{font-size:11.5px;color:var(--ink-3);line-height:1.4}
+.two{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.two label{display:grid;gap:6px;min-width:0}
+select.text-input{width:100%;padding-right:28px;appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--ink-3) 50%),linear-gradient(135deg,var(--ink-3) 50%,transparent 50%);background-position:calc(100% - 15px) 17px,calc(100% - 10px) 17px;background-size:5px 5px;background-repeat:no-repeat}
+.checks{display:grid;gap:6px}
+.check{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:9px;align-items:start;font-size:12.5px;padding:8px 10px;border-radius:11px;background:var(--card-2);border:1px solid var(--line)}
+.check .ic{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800}
+.check .ic.ok{background:rgba(15,99,68,.12);color:var(--ok)}
+.check .ic.adj{background:rgba(119,80,10,.12);color:var(--warn)}
+.check b{font-weight:600;color:var(--ink)}
+.check span.note{display:block;color:var(--ink-3);font-size:11.5px;margin-top:1px}
+.check .ratio{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink-2);white-space:nowrap}
+.set-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 20px;border-top:1px solid var(--line);background:var(--card-2)}
+.set-foot .help{max-width:28ch}
+
+/* Voorbeeld */
+.preview{position:sticky;top:max(12px,env(safe-area-inset-top,0px));display:grid;gap:10px;min-width:0}
+.pv-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 12px;box-shadow:var(--shadow-card)}
+.pv-title{display:grid;gap:0;min-width:0}
+.pv-title strong{font-size:14.5px;font-weight:700}
+.pv-title span{font-size:12px;color:var(--ink-3)}
+.pv-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stage{position:relative;border-radius:var(--r-canvas);background:
+   radial-gradient(circle at 50% 0%,rgba(0,0,0,.05),transparent 60%),var(--well);
+   border:1px solid var(--line);padding:18px;min-width:0;overflow:hidden}
+.device{margin:0 auto;border-radius:14px;overflow:hidden;background:#0D0D0F;box-shadow:var(--shadow-pop),0 0 0 1px rgba(0,0,0,.25)}
+.device .chrome{height:34px;display:flex;align-items:center;gap:7px;padding:0 12px;background:#1B1B1F;border-bottom:1px solid #26262B}
+.device .chrome i{width:10px;height:10px;border-radius:50%;background:#3A3A40}
+.device .chrome .url{margin-left:10px;flex:1;max-width:340px;height:22px;border-radius:7px;background:#111114;color:#A4A29C;font-size:11px;display:flex;align-items:center;padding:0 10px;gap:6px;overflow:hidden;white-space:nowrap}
+.device .chrome .url svg{flex:none}
+.viewport-wrap{position:relative;overflow:hidden}
+.viewport{position:absolute;top:0;left:0;transform-origin:top left;overflow:auto;scrollbar-width:thin}
+.device.is-phone{border-radius:38px;padding:10px;background:#0B0B0D;box-shadow:var(--shadow-pop),0 0 0 2px #2A2A30}
+.device.is-phone .chrome{display:none}
+.device.is-phone .viewport-wrap{border-radius:29px}
+.device.is-phone .pm-hdr{padding-top:46px}
+.device.is-phone .pm-login{padding-top:76px}
+.device.is-phone .notch{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:96px;height:24px;border-radius:14px;background:#000;z-index:5;pointer-events:none}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--ink-3);padding:0 4px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:12px;height:12px;border-radius:4px;box-shadow:inset 0 0 0 1px rgba(128,128,128,.55)}
+.preview.is-full{position:fixed;inset:0;z-index:50;background:var(--paper);padding:max(12px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) max(12px,env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px));grid-template-rows:auto 1fr auto;overflow:auto}
+.preview.is-full .stage{display:flex;align-items:flex-start;justify-content:center}
+.toast{font-size:12px;color:var(--ok);font-weight:600}
+
+/* ── Het portaal (de nagebouwde klantpagina) ───────────────────────────── */
+/* Alle kleuren komen uit variabelen die het script zet: dezelfde afleiding als
+   brandThemeVars() in src/lib/branding.ts, plus de koptokens die ik voorstel. */
+.pm{container-type:inline-size;font-family:var(--brand-body);color:var(--ink-p);min-height:100%;
+  background:
+    radial-gradient(720px 360px at 0% 0%,var(--hdr-glow),transparent 62%),
+    radial-gradient(520px 300px at 100% 0%,var(--hdr-counter),transparent 64%),
+    linear-gradient(135deg,var(--hdr-top) 0%,var(--hdr-mid) 50%,var(--hdr-bottom) 100%);
+  position:relative;font-size:14px;line-height:1.5;display:flex;flex-direction:column}
+.pm::before{content:"";position:absolute;inset:0 0 auto 0;height:620px;background:var(--hdr-rings) no-repeat;background-position:-640px -660px;pointer-events:none}
+.pm h1,.pm h2,.pm h3{font-family:var(--brand-heading);font-weight:var(--heading-weight,700)}
+.pm-hdr{position:relative;z-index:1;padding:18px 28px 0;color:var(--hdr-ink);display:grid;grid-template-columns:minmax(0,1fr);gap:22px}
+.pm-top{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.pm-brand{display:flex;align-items:center;gap:12px;min-width:0}
+.pm-name{font-family:var(--brand-heading);font-weight:700;font-size:16px;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pm-sub{font-size:12px;color:var(--hdr-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pm-mark{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;flex:none;background:var(--btn-face);color:var(--on-accent);font-weight:800;font-size:17px;font-family:var(--brand-heading);box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 8px 20px -8px var(--accent-glow)}
+.pm-logo{display:flex;align-items:center;height:40px;max-width:200px}
+.pm-logo img,.pm-logo svg{max-height:40px;max-width:200px;display:block}
+.pm-logo.plate{background:#FFFFFF;border-radius:11px;padding:5px 10px;height:44px;box-shadow:0 6px 18px -10px rgba(0,0,0,.5)}
+.pm-logo.plate img,.pm-logo.plate svg{max-height:34px}
+.pm-actions{display:flex;gap:8px;flex:none}
+.pm .only-phone{display:none}
+.pm-gbtn{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 13px;border-radius:12px;background:var(--hdr-glass);border:1px solid var(--hdr-glass-line);color:var(--hdr-ink);font-size:12.5px;font-weight:600;white-space:nowrap}
+.pm-greet{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;max-width:60ch}
+.pm-eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--hdr-accent)}
+.pm-greet h1{font-size:30px;letter-spacing:-.025em;line-height:1.15}
+.pm-greet h1 .hl{color:var(--hdr-accent)}
+.pm-greet p{color:var(--hdr-ink-2);font-size:14px}
+.pm-greet p b{color:var(--hdr-ink);font-weight:600}
+.pm-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.pm-kpi{position:relative;background:var(--hdr-glass);border:1px solid var(--hdr-glass-line);border-radius:16px;padding:13px 15px;display:grid;gap:3px;box-shadow:inset 0 1px 0 var(--hdr-hi);overflow:hidden}
+.pm-kpi.has-line::before{content:"";position:absolute;left:14px;right:14px;top:0;height:2px;border-radius:0 0 2px 2px;background:var(--hdr-accent);box-shadow:0 0 12px var(--hdr-accent)}
+.pm-kpi span{font-size:12px;color:var(--hdr-ink-2)}
+.pm-kpi strong{font-family:var(--brand-heading);font-size:24px;font-weight:700;letter-spacing:-.02em;color:var(--hdr-ink);font-variant-numeric:tabular-nums;line-height:1.2}
+.pm-kpi strong small{font-size:.62em;font-weight:600;color:var(--hdr-ink-2)}
+.pm-kpi em{font-style:normal;font-size:12px;color:var(--hdr-ink-2)}
+.pm-tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;margin:0 -6px;padding:0 6px}
+.pm-tabs::-webkit-scrollbar{display:none}
+.pm-tab{position:relative;display:inline-flex;align-items:center;gap:7px;padding:11px 12px 13px;font-size:13.5px;font-weight:600;color:var(--hdr-ink-2);white-space:nowrap;border-radius:10px 10px 0 0}
+.pm-tab.is-on{color:var(--hdr-ink)}
+.pm-tab.is-on::after{content:"";position:absolute;left:12px;right:12px;bottom:0;height:3px;border-radius:3px 3px 0 0;background:var(--hdr-accent);box-shadow:0 0 14px var(--hdr-accent)}
+.pm-badge{min-width:19px;height:19px;padding:0 6px;border-radius:999px;font-size:10.5px;font-weight:700;display:inline-grid;place-items:center;background:var(--hdr-glass-2);color:var(--hdr-ink-2)}
+.pm-badge.is-new{background:var(--accent);color:var(--on-accent);box-shadow:0 0 0 3px var(--accent-soft),0 4px 12px -4px var(--accent-glow)}
+.pm-canvas{position:relative;z-index:1;flex:1 0 auto;align-content:start;margin:0 10px 10px;background:var(--bg-p);border-radius:22px;padding:24px;display:grid;grid-template-columns:minmax(0,1fr);gap:16px;box-shadow:0 -1px 0 var(--canvas-hi),0 30px 60px -34px rgba(0,0,0,.6);border:1px solid var(--canvas-edge)}
+.pm-card{background:var(--surface-p);border:1px solid var(--line-p);border-radius:18px;padding:18px 20px;box-shadow:var(--card-shadow);display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0}
+.pm-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.pm-card h2{font-size:16px;letter-spacing:-.01em}
+.pm-more{color:var(--accent-ink);font-weight:600;font-size:13px;white-space:nowrap}
+.pm-new{border-color:var(--line-accent);box-shadow:var(--card-shadow),0 0 0 3px var(--accent-soft)}
+.pm-rows{display:grid;gap:8px}
+.pm-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:13px;background:var(--row-p);border:1px solid var(--line-p);min-width:0}
+.pm-row-main{flex:1;display:grid;gap:2px;min-width:0}
+.pm-row-main b{font-size:13.5px;font-weight:700;display:flex;align-items:center;gap:8px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pm-row-main span{font-size:12px;color:var(--ink-3p);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pm-dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);flex:none}
+.pm-amount{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pm-chip{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:4px 9px;border-radius:7px;white-space:nowrap}
+.pm-chip.warn{background:rgba(var(--warn-rgb),.16);color:var(--warn-ink)}
+.pm-chip.ok{background:rgba(var(--ok-rgb),.16);color:var(--ok-ink)}
+.pm-chev{color:var(--ink-3p);font-size:18px;line-height:1}
+.pm-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 15px;border-radius:12px;font-weight:700;font-size:13px;white-space:nowrap;background:var(--surface-p);color:var(--ink-p);border:1px solid var(--line2-p)}
+.pm-btn.primary{background:var(--btn-face);color:var(--on-accent);border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 0 0 1px var(--accent-edge-soft),0 10px 26px -10px var(--accent-glow)}
+.pm-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.pm-proj{display:flex;gap:12px;align-items:flex-start}
+.pm-proj-dot{width:12px;height:12px;border-radius:4px;margin-top:5px;flex:none;background:var(--accent)}
+.pm-proj b{font-size:14px}
+.pm-proj span{display:block;font-size:12.5px;color:var(--ink-3p)}
+.pm-bar{height:8px;border-radius:99px;background:var(--track-p);overflow:hidden}
+.pm-bar i{display:block;height:100%;border-radius:99px;background:var(--btn-face)}
+.pm-foot{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--ink-3p);padding:4px 0 2px;text-align:center}
+.pm-foot b{font-weight:600;color:var(--ink-2p)}
+/* Factuur */
+.pm-back{font-size:13px;font-weight:600;color:var(--hdr-ink-2)}
+.pm-doc-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;align-items:start}
+.pm-doc-title{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.pm-doc-title h2{font-size:24px;letter-spacing:-.02em}
+.pm-doc-title p{font-size:12.5px;color:var(--ink-3p)}
+.pm-k{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-ink)}
+.pm-lines{display:grid}
+.pm-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 14px;padding:11px 0;border-bottom:1px solid var(--line-p);font-size:13px}
+.pm-line span{color:var(--ink-3p);font-size:12px;grid-column:1}
+.pm-line b{font-weight:600}
+.pm-line .pm-amount{grid-row:1/span 2;grid-column:2;align-self:center}
+.pm-tot{display:flex;justify-content:space-between;font-size:13px;color:var(--ink-2p);padding:3px 0}
+.pm-tot.grand{font-size:16px;font-weight:700;color:var(--ink-p);padding-top:9px;margin-top:4px;border-top:1px solid var(--line2-p)}
+.pm-pay{display:grid;gap:12px}
+.pm-pay .pm-btn{width:100%;height:44px;font-size:14px}
+.pm-bank{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:12.5px;padding:12px 14px;border-radius:12px;background:var(--row-p);border:1px solid var(--line-p)}
+.pm-bank dt{color:var(--ink-3p)}
+.pm-bank dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.pm-muted{font-size:12px;color:var(--ink-3p)}
+/* Inloggen */
+.pm-login{display:grid;place-items:center;padding:56px 18px 30px;min-height:100%}
+.pm-login::before{background-position:center -260px;height:100%}
+.pm-login-card{position:relative;z-index:1;width:min(420px,100%);background:var(--surface-p);border:1px solid var(--line-p);border-radius:22px;padding:28px 28px 22px;display:grid;gap:14px;box-shadow:0 40px 80px -40px rgba(0,0,0,.75)}
+.pm-login-card .pm-brand{gap:11px}
+.pm-login-card .pm-name{color:var(--ink-p)}
+.pm-login-card h1{font-size:27px;letter-spacing:-.02em}
+.pm-login-card p{font-size:13.5px;color:var(--ink-2p)}
+.pm-input{height:44px;border-radius:12px;border:1px solid var(--line2-p);background:var(--field-p);padding:0 14px;display:flex;align-items:center;color:var(--ink-p);font-size:14px;box-shadow:var(--ring-p)}
+.pm-login-card .pm-btn{height:44px;font-size:14px}
+.pm-eb{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-ink)}
+.pm-login-foot{position:relative;z-index:1;margin-top:18px;font-size:12px;color:var(--hdr-ink-2);text-align:center}
+
+/* Telefoon: dezelfde pagina, smaller. Container queries, zodat het voorbeeld
+   reageert op de breedte van het toestel en niet op die van dit scherm. */
+@container (max-width: 640px){
+  .pm-hdr{padding:14px 16px 0;gap:16px}
+  .pm-gbtn .lbl{display:none}
+  .pm .only-phone{display:block}
+  .pm-gbtn{padding:0 10px}
+  .pm-greet h1{font-size:23px}
+  .pm-greet p{font-size:13px}
+  .pm-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .pm-kpi{padding:11px 12px;border-radius:14px}
+  .pm-kpi strong{font-size:20px}
+  .pm-tab{padding:10px 10px 12px;font-size:13px}
+  .pm-canvas{margin:0;border-radius:22px 22px 0 0;padding:16px 12px;border-left:0;border-right:0;border-bottom:0}
+  .pm-card{padding:15px 14px;border-radius:16px}
+  .pm-grid,.pm-doc-grid{grid-template-columns:minmax(0,1fr)}
+  .pm-row{flex-wrap:wrap;row-gap:8px}
+  .pm-row .pm-row-main{flex-basis:calc(100% - 30px)}
+  .pm-row.doc .pm-amount{margin-left:auto}
+  .pm-login-card{padding:22px 18px 18px}
+  .pm-login-card h1{font-size:23px}
+  .pm-logo{max-width:150px}
+}
+
+/* ── Nu ────────────────────────────────────────────────────────────────── */
+.findings{display:grid;gap:18px}
+.finding{display:grid;grid-template-columns:minmax(0,330px) minmax(0,1fr);gap:22px;align-items:start;background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);padding:22px;box-shadow:var(--shadow-card)}
+.finding h3{font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px}
+.finding p{color:var(--ink-2);font-size:14.5px}
+.finding p+p{margin-top:8px}
+.finding .n{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:9px;background:var(--well);color:var(--ink-2);font-size:12.5px;font-weight:700;margin-bottom:10px}
+.shots{display:grid;gap:10px;min-width:0}
+.shots.pair{grid-template-columns:repeat(2,minmax(0,1fr))}
+figure{margin:0;display:grid;gap:6px;min-width:0}
+figure img{display:block;width:100%;height:auto;border-radius:12px;border:1px solid var(--line);background:var(--well)}
+figcaption{font-size:12px;color:var(--ink-3)}
+figure img.natural{width:auto;max-width:100%}
+@media (max-width:900px){.finding{grid-template-columns:minmax(0,1fr)}.shots.pair{grid-template-columns:minmax(0,1fr)}}
+
+/* ── Tabel: waar elke kleur landt ──────────────────────────────────────── */
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r-card);background:var(--card);box-shadow:var(--shadow-card)}
+table{border-collapse:collapse;width:100%;min-width:720px;font-size:14px}
+th,td{text-align:left;vertical-align:top;padding:14px 18px;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:0}
+th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:700;background:var(--card-2)}
+td:first-child{font-weight:700;white-space:nowrap}
+td .sw{display:inline-block;width:14px;height:14px;border-radius:5px;margin-right:9px;vertical-align:-2px;box-shadow:inset 0 0 0 1px rgba(128,128,128,.55)}
+td{color:var(--ink-2)}
+td:first-child{color:var(--ink)}
+
+/* ── Bouwplan ──────────────────────────────────────────────────────────── */
+.steps{display:grid;gap:12px;counter-reset:step;margin:0;padding:0;list-style:none}
+.step{display:grid;grid-template-columns:44px minmax(0,1fr);gap:16px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);padding:18px 20px;box-shadow:var(--shadow-card)}
+.step::before{counter-increment:step;content:counter(step);width:44px;height:44px;border-radius:14px;display:grid;place-items:center;font-weight:800;font-size:17px;background:linear-gradient(135deg,#0B0B0D,#1E1E23);color:var(--cmd-gold)}
+.step h3{font-size:16.5px;font-weight:700;margin-bottom:5px}
+.step p,.step li{color:var(--ink-2);font-size:14px}
+.step ul{margin:6px 0 0;padding-left:18px;display:grid;gap:3px}
+.phase2{margin-top:14px;padding:14px 18px;border-radius:14px;border:1px dashed var(--line-2);color:var(--ink-2);font-size:14px}
+.phase2 strong{color:var(--ink)}
+
+/* ── Keuzes ────────────────────────────────────────────────────────────── */
+.choices{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-card);overflow:hidden}
+.choice-head,.choice{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) minmax(0,.8fr);gap:20px;padding:16px 20px;align-items:start}
+.choice-head{padding-block:11px;background:var(--card-2);border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+.choice+.choice{border-top:1px solid var(--line)}
+.choice h3{font-size:15.5px;font-weight:700;margin-bottom:3px}
+.choice p{color:var(--ink-2);font-size:14px}
+.advice{font-size:14px;padding:10px 12px;border-radius:12px;background:rgba(247,197,72,.13);border:1px solid rgba(247,197,72,.42);color:var(--ink)}
+.alt{font-size:13.5px;color:var(--ink-3)}
+@media (max-width:860px){
+  .choice-head{display:none}
+  .choice{grid-template-columns:minmax(0,1fr);gap:10px}
+  .advice::before{content:'Wat ik zou doen: ';font-weight:700;color:var(--gold-ink)}
+  .alt::before{content:'Anders: ';font-weight:600}
+}
+
+footer.end{padding-block:48px 56px;color:var(--ink-3);font-size:13px}
+footer.end .wrap{display:flex;flex-wrap:wrap;gap:8px 18px;justify-content:space-between;border-top:1px solid var(--line);padding-top:18px}
+
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+@media (max-width:520px){
+  .two{grid-template-columns:minmax(0,1fr)}
+  .theme-cards{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .stage{padding:10px}
+  .finding{padding:16px}
+  .step{grid-template-columns:minmax(0,1fr);padding:16px}
+}
+</style>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Voorstel · Huisstijl · donderdag 15 oktober 2026</div>
+    <h1>Je huisstijl, <span>tot in het klantportaal</span></h1>
+    <p class="lead">Wat je bij <strong>Instellingen → Huisstijl</strong> kiest, moet je klant terugzien in het portaal. En jij moet dat al zien vóór je op Opslaan drukt. Hieronder staat hoe ik dat voor me zie, als werkend voorbeeld. <strong>Er is nog niets gebouwd.</strong></p>
+    <div class="pillars">
+      <div class="pillar">
+        <strong><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg>Twee merkkleuren</strong>
+        <p>Je merkkleur voor knoppen en accenten, en een kopkleur voor het vlak bovenin. Kies je geen kopkleur, dan maken we hem uit je merkkleur.</p>
+      </div>
+      <div class="pillar">
+        <strong><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M3 10h18"/><path d="M8 15h3"/></svg>Het portaal in de Cockpit-opbouw</strong>
+        <p>Dezelfde opbouw als je werkruimte: een kop met groet en kerncijfers, een zwevend werkvlak en zachte kaarten. Alleen dan in jouw kleuren.</p>
+      </div>
+      <div class="pillar">
+        <strong><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>Live voorbeeld bij Instellingen</strong>
+        <p>Rechts naast je instellingen staat het échte portaal met voorbeeldgegevens. Het verandert mee terwijl je kiest, op desktop en op de telefoon.</p>
+      </div>
+    </div>
+    <nav class="toc" aria-label="Inhoud">
+      <a href="#probeer">Probeer het</a>
+      <a href="#nu">Wat er nu misgaat</a>
+      <a href="#kleuren">Waar elke kleur landt</a>
+      <a href="#bouwplan">Wat ik ga bouwen</a>
+      <a href="#keuzes">Keuzes voor jou</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section id="probeer">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="kicker">Probeer het</span>
+        <h2>Instellingen → Huisstijl, met het portaal ernaast</h2>
+        <p>Links de instellingen zoals ik ze voorstel, rechts wat je klant ziet. Kies een voorbeeldmerk, upload je eigen logo of draai aan de kleuren. Er wordt niets opgeslagen.</p>
+      </div>
+
+      <div class="proto">
+        <!-- Instellingen -->
+        <form class="settings" id="settings" autocomplete="off">
+          <div class="set-head">
+            <div class="set-tile" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg></div>
+            <div><div class="crumb">Instellingen</div><h3>Huisstijl</h3></div>
+          </div>
+          <div class="set-body">
+            <div class="set-block">
+              <span class="set-label">Voorbeeldmerken</span>
+              <div class="chips" id="presets" role="group" aria-label="Voorbeeldmerken"></div>
+              <p class="help">Alleen in dit voorstel, om snel te zien hoe het portaal zich aanpast aan een ander merk.</p>
+            </div>
+
+            <div class="set-block">
+              <span class="set-label">Logo</span>
+              <div class="logo-row">
+                <div class="logo-box" id="logoBox"></div>
+                <div class="logo-actions">
+                  <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" hidden>
+                  <button type="button" class="btn small" id="logoPick">Logo kiezen</button>
+                  <button type="button" class="btn small ghost" id="logoClear">Verwijderen</button>
+                </div>
+              </div>
+              <div class="sub-field">
+                <span class="set-label">Logo voor op donker <span class="help" style="text-transform:none;letter-spacing:0;font-weight:500">optioneel</span></span>
+                <div class="logo-row">
+                  <div class="logo-box is-dark" id="logoDarkBox"></div>
+                  <div class="logo-actions">
+                    <input type="file" id="logoDarkFile" accept="image/png,image/jpeg,image/webp" hidden>
+                    <button type="button" class="btn small" id="logoDarkPick">Kiezen</button>
+                    <button type="button" class="btn small ghost" id="logoDarkClear">Verwijderen</button>
+                  </div>
+                </div>
+                <p class="help">Valt je logo weg op een donkere kop, dan zetten we het op een licht plaatje. Met een lichte versie hoeft dat niet.</p>
+              </div>
+            </div>
+
+            <div class="set-block">
+              <label class="set-label" for="accentHex">Merkkleur</label>
+              <div class="row">
+                <input type="color" class="swatch-input" id="accentPick" aria-label="Merkkleur kiezen">
+                <input type="text" class="text-input hex" id="accentHex" maxlength="7" spellcheck="false">
+              </div>
+              <div class="from-logo" id="accentFromLogo" hidden></div>
+              <p class="help">Hoofdknoppen, het actieve tabblad, de stip bij iets nieuws, tellers, links en de focusrand.</p>
+            </div>
+
+            <div class="set-block">
+              <span class="set-label">Kopkleur <span class="tag-new">nieuw</span></span>
+              <div class="seg" role="group" aria-label="Kopkleur">
+                <button type="button" id="hdrAuto" aria-pressed="true">Automatisch</button>
+                <button type="button" id="hdrOwn" aria-pressed="false">Eigen kleur</button>
+              </div>
+              <div class="row">
+                <input type="color" class="swatch-input" id="hdrPick" aria-label="Kopkleur kiezen">
+                <input type="text" class="text-input hex" id="hdrHex" maxlength="7" spellcheck="false" aria-label="Kopkleur als hexcode">
+              </div>
+              <div class="from-logo" id="hdrFromLogo" hidden></div>
+              <p class="help">Het vlak bovenin het portaal en achter het inlogscherm. Automatisch is diep grafiet in de tint van je merkkleur, net als je eigen werkruimte.</p>
+            </div>
+
+            <div class="set-block">
+              <span class="set-label">Werkvlak</span>
+              <div class="theme-cards" role="group" aria-label="Werkvlak">
+                <button type="button" class="theme-card" id="themeLight" aria-pressed="true">
+                  <span class="mini" id="miniLight" aria-hidden="true"></span>
+                  <strong>Licht</strong><small>Open en zakelijk; leest als papier.</small>
+                </button>
+                <button type="button" class="theme-card" id="themeDark" aria-pressed="false">
+                  <span class="mini" id="miniDark" aria-hidden="true"></span>
+                  <strong>Donker</strong><small>Rustig; foto's en video springen eruit.</small>
+                </button>
+              </div>
+            </div>
+
+            <div class="set-block">
+              <div class="two">
+                <label><span class="set-label">Lettertype koppen</span><select class="text-input" id="headingFont"></select></label>
+                <label><span class="set-label">Lettertype tekst</span><select class="text-input" id="bodyFont"></select></label>
+              </div>
+            </div>
+
+            <div class="set-block">
+              <span class="set-label">Leesbaarheid</span>
+              <div class="checks" id="checks" aria-live="polite"></div>
+              <p class="help">Rekent mee terwijl je kiest. Een kleur die als tekst te weinig afsteekt, schuiven we in helderheid op tot hij leest; de tint blijft die van jou.</p>
+            </div>
+          </div>
+          <div class="set-foot">
+            <p class="help" id="saveNote">Het portaal gebruikt je huisstijl direct na opslaan.</p>
+            <button type="button" class="btn gold" id="saveBtn">Opslaan</button>
+          </div>
+        </form>
+
+        <!-- Voorbeeld -->
+        <div class="preview" id="preview">
+          <div class="pv-bar">
+            <div class="pv-title"><strong>Zo ziet je klant het</strong><span>Voorbeeldgegevens · Joost Vermeer, Bakkerij De Korenaar</span></div>
+            <div class="pv-controls">
+              <div class="seg" role="group" aria-label="Scherm">
+                <button type="button" data-screen="overview" aria-pressed="true">Overzicht</button>
+                <button type="button" data-screen="invoice" aria-pressed="false">Factuur</button>
+                <button type="button" data-screen="login" aria-pressed="false">Inloggen</button>
+              </div>
+              <div class="seg" role="group" aria-label="Toestel">
+                <button type="button" data-device="desktop" aria-pressed="true">Desktop</button>
+                <button type="button" data-device="phone" aria-pressed="false">Telefoon</button>
+              </div>
+              <button type="button" class="btn small" id="fullBtn" aria-pressed="false">Volledig scherm</button>
+            </div>
+          </div>
+          <div class="stage" id="stage">
+            <div class="device" id="device">
+              <div class="chrome"><i></i><i></i><i></i><span class="url"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>app.resofly.nl/portal</span></div>
+              <div class="viewport-wrap" id="vpWrap"><span class="notch"></span><div class="viewport" id="viewport"></div></div>
+            </div>
+          </div>
+          <div class="legend" id="legend"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="nu">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="kicker">Wat er nu misgaat</span>
+        <h2>De huisstijl werkt al door, maar het portaal hangt achter</h2>
+        <p>Je merkkleur, lettertypen en donker/licht komen vandaag al in het portaal terecht: <code>brandThemeVars()</code> leidt er het hele palet uit af. Drie dingen kloppen alleen niet. De beelden komen uit de app zelf, met de testgegevens.</p>
+      </div>
+      <div class="findings">
+        <article class="finding">
+          <div>
+            <span class="n">1</span>
+            <h3>Het portaal heeft de opbouw van je werkruimte niet</h3>
+            <p>Sinds 5 oktober heeft je werkruimte de Cockpit-laag: een donker commandovlak met kerncijfers in glazen tegels en een werkvlak dat erop zweeft. Het portaal is toen bewust ongemoeid gelaten.</p>
+            <p>Je klant ziet daardoor nog de vlakke opbouw van daarvoor: omlijnde knoppen in een rij, kaarten met randen en geen kop. Het voelt als een ander product dan het jouwe.</p>
+          </div>
+          <div class="shots pair">
+            <figure><img src="beelden/nu-werkruimte-dag.jpg" alt="Het dashboard van de werkruimte: donker commandovlak met groet, glazen tegels met kerncijfers en het weekspoor" loading="lazy" width="1200" height="567"><figcaption>Jouw werkruimte (Dag)</figcaption></figure>
+            <figure><img src="beelden/nu-portaal-donker.jpg" alt="Het klantportaal nu: een rij omlijnde tabknoppen, vier omlijnde tegels en kaarten met lijsten" loading="lazy" width="1200" height="633"><figcaption>Wat je klant ziet</figcaption></figure>
+          </div>
+        </article>
+        <article class="finding">
+          <div>
+            <span class="n">2</span>
+            <h3>Het merkteken blijft goud</h3>
+            <p>Zonder logo toont het portaal je initiaal in een tegeltje. Dat tegeltje heeft een vast goudverloop (<code>.brand-icon</code> in <code>globals.css</code>), dus bij een blauw merk staat er een gouden S naast blauwe tellers.</p>
+          </div>
+          <div class="shots">
+            <figure><img class="natural" src="beelden/nu-merkteken-blauw.jpg" alt="Kop van het portaal met merkkleur blauw: het tegeltje met de S is goud, de tellers op de tabs zijn blauw" loading="lazy" width="720" height="140"><figcaption>Merkkleur #2457C5, werkvlak licht</figcaption></figure>
+          </div>
+        </article>
+        <article class="finding">
+          <div>
+            <span class="n">3</span>
+            <h3>In Instellingen zie je het portaal niet</h3>
+            <p>Er staan twee factuurkaartjes en een galerijkop. Die zijn met de hand nagebouwd en lopen al uit de pas met het echte scherm: de gekozen chip <em>Ceremonie</em> staat in de Dag-kleur van de werkruimte op de donkere galerij, 2,3 : 1. De norm is 4,5 : 1.</p>
+            <p>Een voorbeeld dat het échte portaal laat zien, kan niet uit de pas lopen.</p>
+          </div>
+          <div class="shots">
+            <figure><img src="beelden/nu-huisstijl-voorbeeld.jpg" alt="Instellingen, Huisstijl: twee factuurkaartjes voor donker en licht, en een galerijvoorbeeld met een slecht leesbare gouden chip" loading="lazy" width="1000" height="416"><figcaption>Instellingen → Huisstijl vandaag</figcaption></figure>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="kleuren">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="kicker">Waar elke kleur landt</span>
+        <h2>Jij kiest twee kleuren en een werkvlak, de rest rekenen we uit</h2>
+        <p>De bolletjes volgen wat je hierboven instelt.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Keuze</th><th>Waar je klant hem ziet</th><th>Wat wij bewaken</th></tr></thead>
+          <tbody>
+            <tr><td><span class="sw" data-sw="accent"></span>Merkkleur</td><td>Hoofdknoppen (Betalen, Akkoord geven), het actieve tabblad, de stip en teller bij iets nieuws, links, de voortgangsbalk, de focusrand</td><td>Als tekst of lijn schuift alleen de helderheid op tot 4,5 : 1 (lijnen 3 : 1). Tekst óp een knop wordt bijna-zwart of bijna-wit, wat het beste leest.</td></tr>
+            <tr><td><span class="sw" data-sw="header"></span>Kopkleur</td><td>Het vlak bovenin met groet, kerncijfers en tabbladen; de achtergrond van het inlogscherm</td><td>Tekst op de kop wordt vanzelf licht of donker. Steekt je merkkleur er te weinig op af, dan gebruiken we op de kop een lichtere of donkere variant. Een donker logo krijgt een licht plaatje.</td></tr>
+            <tr><td><span class="sw" data-sw="canvas"></span>Werkvlak</td><td>Kaarten, lijsten, de factuur, Berichten en Tickets</td><td>Vlakken, randen en tekst komen uit de bestaande trap van Licht of Donker, in de tint van je merkkleur. Dat werkt nu al zo.</td></tr>
+            <tr><td><span class="sw" style="background:linear-gradient(90deg,#0F6344 33%,#77500A 33% 66%,#A32A30 66%)"></span>Statuskleuren</td><td>Betaald, Openstaand, Vervallen, Geaccepteerd</td><td>Blijven vast. Rood is altijd rood, ook bij een rood merk.</td></tr>
+            <tr><td><span class="sw" style="background:var(--well)"></span>Lettertypen</td><td>Koppen en lopende tekst</td><td>Alleen uit de vaste lijst. Een onbekende waarde valt terug op Poppins.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="bouwplan">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="kicker">Wat ik ga bouwen</span>
+        <h2>Vijf stappen, op de bestaande huisstijl</h2>
+        <p>Niets hiervan vervangt wat er al is. De afleiding in <code>brandThemeVars()</code> blijft de basis; er komt een kleur en een laag bij.</p>
+      </div>
+      <ol class="steps">
+        <li class="step"><div><h3>De kopkleur opslaan</h3><p>Een kolom <code>brand_header_color</code> in <code>company_settings</code>: leeg is Automatisch, anders een hexcode (met dezelfde controle als de merkkleur). Hij gaat mee in <code>create_child_organization</code> en in de huisstijl die <code>_shared/branding.ts</code> aan het portaal, de galerij en de publieke pagina's geeft. Optioneel ook <code>brand_logo_dark_data_url</code> voor het lichte logo.</p></div></li>
+        <li class="step"><div><h3>De kleuren van de kop afleiden</h3><p><code>brandThemeVars()</code> in <code>src/lib/branding.ts</code> levert ook de koptokens (<code>--hdr-*</code>): het verloop, tekst en gedempte tekst op de kop, de glazen tegels, de merkkleur op de kop en het verloop van de hoofdknop. Met tests die over een raster van merk- en kopkleuren nameten dat alles AA haalt, zoals de bestaande meting van 24 combinaties × 50 tekstvlakken.</p></div></li>
+        <li class="step"><div><h3>Het portaal in de Cockpit-opbouw</h3><p>Een eigen laag <code>src/styles/portal-cockpit.css</code>, net als <code>cockpit.css</code> maar onder <code>.portal</code>, zodat de werkruimte er niets van merkt.</p>
+          <ul>
+            <li>De kop met groet, de vier kerncijfers als glazen tegels en de tabbladen; het werkvlak zweeft eronder.</li>
+            <li>Kaarten met zachte schaduw, de hoofdknop met het verloop uit je merkkleur.</li>
+            <li>Het merkteken krijgt je merkkleur in plaats van het vaste goud.</li>
+            <li>Telefoon: compacte kop, tegels twee bij twee, tabbladen schuiven zijwaarts.</li>
+          </ul></div></li>
+        <li class="step"><div><h3>Het voorbeeld in Instellingen</h3><p>Een route <code>/portal/voorbeeld</code> toont het échte portaal met voorbeeldgegevens en krijgt je keuzes van de instellingenpagina via <code>postMessage</code>, ook als je nog niet hebt opgeslagen. In Instellingen → Huisstijl staat het rechts naast de instellingen, met Overzicht, Factuur en Inloggen, desktop en telefoon, en een knop voor volledig scherm. De nagebouwde factuurkaartjes en het galerijvoorbeeld verdwijnen.</p></div></li>
+        <li class="step"><div><h3>Nameten</h3><p><code>npm test</code>, de typecheck en de build, en <code>npm run test:mobile</code>. Die meet de portaalschermen al (inloggen, overzicht, Berichten, Instellingen); ik draai hem in Licht en Donker met een paar merk- en kopkleuren.</p></div></li>
+      </ol>
+      <p class="phase2"><strong>Daarna, als je wilt:</strong> de publieke offerte-, factuur- en contractpagina met dezelfde kop (ze delen de tokens al), en de kopbalk van je e-mails in je kopkleur.</p>
+    </div>
+  </section>
+
+  <section id="keuzes">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="kicker">Keuzes voor jou</span>
+        <h2>Vijf vragen voordat ik begin</h2>
+        <p>Bij elke vraag staat wat ik zou doen. Zeg het als je het anders wilt.</p>
+      </div>
+      <div class="choices">
+        <div class="choice-head" aria-hidden="true"><span>Vraag</span><span>Wat ik zou doen</span><span>Anders</span></div>
+        <article class="choice"><div><h3>Een tweede kleur: de kopkleur</h3><p>Veel merken hebben een donkere hoofdkleur en een felle accentkleur, zoals navy met koraal.</p></div><div class="advice">Ja, met Automatisch als standaard. Wie niets kiest, merkt er niets van.</div><p class="alt">Alleen de merkkleur, en de kop altijd in grafiet.</p></article>
+        <article class="choice"><div><h3>Kerncijfers in de kop</h3><p>Openstaand, vervallen, open tickets en lopende projecten staan nu als losse kaarten.</p></div><div class="advice">Ja, als glazen tegels in de kop. Je klant ziet meteen wat er openstaat.</div><p class="alt">Een rustige kop met alleen je logo en de tabbladen.</p></article>
+        <article class="choice"><div><h3>Een donker logo op een donkere kop</h3><p>De meeste logo's zijn donker op transparant en vallen weg op een donker vlak.</p></div><div class="advice">Vanzelf een licht plaatje, plus een optioneel veld voor een lichte versie.</div><p class="alt">Alleen het plaatje, zonder extra veld.</p></article>
+        <article class="choice"><div><h3>De publieke offerte-, factuur- en contractpagina</h3><p>Die openen klanten vaak zonder in te loggen, vanuit de mail.</p></div><div class="advice">Eerst het portaal, dan deze drie in een tweede ronde.</div><p class="alt">Alles in één keer.</p></article>
+        <article class="choice"><div><h3>Kleuren uit je logo voorstellen</h3><p>Niet iedereen kent de hexcodes van zijn eigen merk. Upload hierboven een logo om het te proberen.</p></div><div class="advice">Meenemen; het is klein werk en het helpt bij de eerste keer instellen.</div><p class="alt">Later, of niet.</p></article>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="end">
+  <div class="wrap">
+    <span>ResoFly · voorstel huisstijl in het klantportaal · 15 oktober 2026</span>
+    <span>De kleuren in het voorbeeld komen uit dezelfde afleiding als <code>brandThemeVars()</code></span>
+  </div>
+</footer>
+
+<script>
+(() => {
+'use strict';
+
+/* ── Kleurrekenwerk: een letterlijke vertaling van src/lib/branding.ts ── */
+const HEX = /^#[0-9A-Fa-f]{6}$/;
+const clamp = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
+function hexToRgb(hex) { const v = hex.replace('#', ''); return [0, 2, 4].map(i => parseInt(v.slice(i, i + 2), 16)); }
+const rgbTriplet = hex => hexToRgb(hex).join(',');
+function luminance(hex) {
+  const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const [r, g, b] = hexToRgb(hex);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+function hexToHsl(hex) {
+  const [r, g, b] = hexToRgb(hex).map(c => c / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2, d = max - min;
+  if (d === 0) return { h: 0, s: 0, l };
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h *= 60;
+  return { h: h < 0 ? h + 360 : h, s, l };
+}
+function hslToHex({ h, s, l }) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  const ch = v => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+  return `#${ch(r)}${ch(g)}${ch(b)}`.toUpperCase();
+}
+function blend(front, back, alpha) {
+  const f = hexToRgb(front), b = hexToRgb(back);
+  return '#' + [0, 1, 2].map(i => Math.round(f[i] * alpha + b[i] * (1 - alpha)).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+function contrast(a, b) { const la = luminance(a), lb = luminance(b); return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05); }
+const INK_TARGET = 4.75;
+function readableInk(accent, backgrounds, darker, target = INK_TARGET) {
+  const base = hexToHsl(accent);
+  const step = darker ? -0.02 : 0.02;
+  let l = base.l;
+  for (let i = 0; i <= 50; i++) {
+    const cand = hslToHex({ h: base.h, s: base.s, l });
+    if (backgrounds.every(bg => contrast(cand, bg) >= target)) return cand;
+    l += step;
+    if (l < 0 || l > 1) break;
+  }
+  return darker ? '#000000' : '#FFFFFF';
+}
+function inkOnAccent(accent) {
+  const { h, s } = hexToHsl(accent);
+  const cands = [hslToHex({ h, s: Math.min(s, 0.3), l: 0.08 }), hslToHex({ h, s: Math.min(s, 0.12), l: 0.97 }), '#000000', '#FFFFFF'];
+  const tinted = cands.slice(0, 2).sort((a, b) => contrast(b, accent) - contrast(a, accent))[0];
+  if (contrast(tinted, accent) >= 4.5) return tinted;
+  return cands.sort((a, b) => contrast(b, accent) - contrast(a, accent))[0];
+}
+const DARK_RAMP = { bg: { s: .125, l: .0627 }, bgDeep: { s: .176, l: .0333 }, surface: { s: .125, l: .0941 }, surface2: { s: .1525, l: .1157 }, surface3: { s: .135, l: .1451 }, line: { s: .108, l: .1627 }, line2: { s: .119, l: .2137 }, ink: { s: .28, l: .951 }, ink2: { s: .143, l: .753 }, ink3: { s: .0875, l: .5745 } };
+const LIGHT_RAMP = { bg: { s: .282, l: .9235 }, bgDeep: { s: .233, l: .8824 }, surface: { s: 0, l: 1 }, surface2: { s: .474, l: .9627 }, surface3: { s: .351, l: .9275 }, line: { s: .235, l: .8412 }, line2: { s: .185, l: .7451 }, ink: { s: .238, l: .0824 }, ink2: { s: .148, l: .2118 }, ink3: { s: .108, l: .3824 } };
+const DARK_STATUS = { ok: '#4FCB92', warn: '#EDB25A', danger: '#FF7B7B' };
+const LIGHT_STATUS = { ok: '#0F6344', warn: '#77500A', danger: '#A32A30' };
+
+/** Het palet van het werkvlak: zoals brandThemeVars() het vandaag al doet. */
+function canvasTokens(accent, theme) {
+  const light = theme === 'light';
+  const ramp = light ? LIGHT_RAMP : DARK_RAMP;
+  const status = light ? LIGHT_STATUS : DARK_STATUS;
+  const { h, s: sat } = hexToHsl(accent);
+  const tint = Math.min(1, sat / 0.35);
+  const shade = k => hslToHex({ h, s: ramp[k].s * tint, l: ramp[k].l });
+  const t = { bg: shade('bg'), bgDeep: shade('bgDeep'), surface: shade('surface'), surface2: shade('surface2'), surface3: shade('surface3'), line: shade('line'), line2: shade('line2'), ink: shade('ink'), ink2: shade('ink2'), ink3: shade('ink3') };
+  const sheenHex = light ? '#1A1710' : '#FFFFFF';
+  const sheenK = light ? 0.55 : 1;
+  const row = blend(sheenHex, t.surface, 0.035 * sheenK + (light ? 0.01 : 0.02));
+  t.row = row;
+  t.accentInk = readableInk(accent, [t.bg, t.surface, t.surface2, t.surface3, row, blend(accent, t.surface, 0.16)], light);
+  t.accentEdge = contrast(accent, t.surface) >= 3 && contrast(accent, t.bg) >= 3 ? accent : readableInk(accent, [t.surface, t.bg], light, 3);
+  t.onAccent = inkOnAccent(accent);
+  const panel = blend(sheenHex, t.surface, 0.09 * sheenK);
+  const statusInk = c => readableInk(c, [panel, t.surface, row, blend(c, panel, 0.16)], light);
+  t.ok = status.ok; t.warn = status.warn; t.danger = status.danger;
+  t.okInk = statusInk(status.ok); t.warnInk = statusInk(status.warn); t.dangerInk = statusInk(status.danger);
+  t.light = light;
+  return t;
+}
+
+/** Nieuw: de kop. Automatisch = het grafiet van de cockpit in de tint van het merk. */
+function headerTokens(accent, headerColor) {
+  const a = hexToHsl(accent);
+  const tint = Math.min(1, a.s / 0.35);
+  let top, mid, bottom;
+  if (!headerColor) {
+    top = hslToHex({ h: a.h, s: 0.16 * tint, l: 0.043 });
+    mid = hslToHex({ h: a.h, s: 0.13 * tint, l: 0.078 });
+    bottom = hslToHex({ h: a.h, s: 0.11 * tint, l: 0.125 });
+  } else {
+    const k = hexToHsl(headerColor);
+    top = hslToHex({ h: k.h, s: k.s, l: clamp(k.l - 0.045) });
+    mid = headerColor.toUpperCase();
+    bottom = hslToHex({ h: k.h, s: k.s, l: clamp(k.l + 0.06) });
+  }
+  const dark = luminance(mid) < 0.2;
+  const glassA = dark ? 0.065 : 0.05;
+  const glassHex = blend(dark ? '#FFFFFF' : '#000000', bottom, glassA);
+  const surfaces = [top, mid, bottom, glassHex];
+  const pick = list => list.find(c => surfaces.every(s => contrast(c, s) >= 4.6)) ?? (dark ? '#FFFFFF' : '#000000');
+  const ink = pick(dark ? [hslToHex({ h: a.h, s: 0.25 * tint, l: 0.965 }), '#FFFFFF'] : [hslToHex({ h: a.h, s: 0.3 * tint, l: 0.08 }), '#000000']);
+  let ink2 = null;
+  for (let w = 0.62; w <= 1.0001; w += 0.04) { const c = blend(ink, mid, w); if (surfaces.every(s => contrast(c, s) >= 4.6)) { ink2 = c; break; } }
+  ink2 = ink2 ?? ink;
+  const hdrAccent = readableInk(accent, surfaces, !dark, 4.5);
+  const close = contrast(accent, mid) < 1.8;
+  const accentRgb = rgbTriplet(accent);
+  return {
+    top, mid, bottom, dark, ink, ink2, accent: hdrAccent, adjusted: hdrAccent.toUpperCase() !== accent.toUpperCase(),
+    glass: dark ? 'rgba(255,255,255,.065)' : 'rgba(0,0,0,.05)',
+    glass2: dark ? 'rgba(255,255,255,.11)' : 'rgba(0,0,0,.08)',
+    glassLine: dark ? 'rgba(255,255,255,.10)' : 'rgba(0,0,0,.09)',
+    hi: dark ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.35)',
+    glow: `rgba(${accentRgb},${close ? 0.1 : dark ? 0.2 : 0.16})`,
+    counter: dark ? 'rgba(160,160,185,.12)' : 'rgba(255,255,255,.18)',
+    rings: ringsUrl(dark ? '#FFFFFF' : '#000000', dark ? 0.085 : 0.07),
+  };
+}
+
+/** Het verloop van de hoofdknop, uit de merkkleur (zoals --gold-face uit het goud). */
+function buttonFace(accent, onAccent) {
+  const a = hexToHsl(accent);
+  for (const spread of [0.07, 0.05, 0.03, 0]) {
+    const top = hslToHex({ h: a.h, s: a.s, l: clamp(a.l + spread) });
+    const bot = hslToHex({ h: a.h, s: a.s, l: clamp(a.l - spread) });
+    if (contrast(onAccent, top) >= 4.5 && contrast(onAccent, bot) >= 4.5) {
+      return `linear-gradient(160deg,${top} 0%,${accent} 50%,${bot} 100%)`;
+    }
+  }
+  return accent;
+}
+
+function ringsUrl(color, opacity) {
+  const circles = Array.from({ length: 13 }, (_, i) => `<circle cx='600' cy='600' r='${44 * (i + 1)}'/>`).join('');
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='1200' viewBox='0 0 1200 1200'><g fill='none' stroke='${color}' stroke-opacity='${opacity}'>${circles}</g></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+document.documentElement.style.setProperty('--rings-light', ringsUrl('#FFFFFF', 0.1));
+
+/* ── Lettertypen (dezelfde lijst als BRAND_FONTS) ── */
+const FONTS = [
+  { key: 'system', label: 'Poppins (standaard)', stack: "'Poppins', system-ui, sans-serif", google: null },
+  { key: 'inter', label: 'Inter', stack: "'Inter', system-ui, sans-serif", google: 'Inter:wght@400;500;600;700;800' },
+  { key: 'jost', label: 'Jost', stack: "'Jost', system-ui, sans-serif", google: 'Jost:wght@400;500;600;700' },
+  { key: 'space-grotesk', label: 'Space Grotesk', stack: "'Space Grotesk', system-ui, sans-serif", google: 'Space+Grotesk:wght@400;500;600;700' },
+  { key: 'dm-sans', label: 'DM Sans', stack: "'DM Sans', system-ui, sans-serif", google: 'DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700' },
+  { key: 'playfair', label: 'Playfair Display', stack: "'Playfair Display', Georgia, serif", google: 'Playfair+Display:wght@500;600;700;800' },
+  { key: 'cormorant', label: 'Cormorant Garamond', stack: "'Cormorant Garamond', Georgia, serif", google: 'Cormorant+Garamond:wght@500;600;700' },
+  { key: 'lora', label: 'Lora', stack: "'Lora', Georgia, serif", google: 'Lora:wght@400;500;600;700' },
+  { key: 'bebas', label: 'Bebas Neue (alleen koppen)', stack: "'Bebas Neue', Impact, sans-serif", google: 'Bebas+Neue', headingOnly: true },
+];
+const font = key => FONTS.find(f => f.key === key) ?? FONTS[0];
+function ensureFont(key) {
+  const f = font(key);
+  if (!f.google || document.getElementById('font-' + f.key)) return;
+  const link = document.createElement('link');
+  link.id = 'font-' + f.key; link.rel = 'stylesheet';
+  link.href = `https://fonts.googleapis.com/css2?family=${f.google}&display=swap`;
+  document.head.appendChild(link);
+}
+
+/* ── Voorbeeldmerken (fictief, behalve Studio Lopik) ── */
+const LOGO_TUINWERK = (ink, leaf) => `<svg viewBox="0 0 236 56" width="190" height="45" role="img" aria-label="Tuinwerk Groenland"><path d="M8 46C8 24 24 10 46 9c0 23-15 37-38 37Z" fill="${leaf}"/><path d="M11 43 39 15" stroke="${ink}" stroke-width="2.6" stroke-linecap="round"/><text x="56" y="26" font-family="Jost, sans-serif" font-size="20" font-weight="600" fill="${ink}" textLength="94" lengthAdjust="spacingAndGlyphs">Tuinwerk</text><text x="56" y="48" font-family="Jost, sans-serif" font-size="20" font-weight="400" fill="${leaf}" textLength="104" lengthAdjust="spacingAndGlyphs">Groenland</text></svg>`;
+const LOGO_MAAS = (ink, dot) => `<svg viewBox="0 0 200 52" width="168" height="44" role="img" aria-label="Maas Advies"><text x="0" y="38" font-family="Inter, sans-serif" font-size="36" font-weight="800" letter-spacing="-1.6" fill="${ink}" textLength="88" lengthAdjust="spacingAndGlyphs">maas</text><circle cx="98" cy="33" r="5.5" fill="${dot}"/><text x="110" y="38" font-family="Inter, sans-serif" font-size="18" font-weight="500" fill="${ink}" textLength="62" lengthAdjust="spacingAndGlyphs">advies</text></svg>`;
+const LOGO_NOOR = ink => `<svg viewBox="0 0 170 56" width="146" height="48" role="img" aria-label="Noor Fotografie"><text x="85" y="32" text-anchor="middle" font-family="'Cormorant Garamond', Georgia, serif" font-size="34" font-weight="600" fill="${ink}" textLength="104" lengthAdjust="spacing">NOOR</text><text x="85" y="50" text-anchor="middle" font-family="Jost, sans-serif" font-size="10" font-weight="500" fill="${ink}" textLength="96" lengthAdjust="spacing">FOTOGRAFIE</text></svg>`;
+
+const PRESETS = [
+  { id: 'lopik', name: 'Studio Lopik', legal: 'Studio Lopik B.V.', accent: '#FFD966', header: null, theme: 'dark', heading: 'system', body: 'system',
+    logo: null, logoInk: null, logoDark: null, logoColors: [],
+    footer: 'Studio Lopik · Kerkstraat 12, Lopik', iban: 'NL12 ABNA 0123 4567 89',
+    ticket: 'Nieuwe flyer voor herfstactie', project: 'Nieuwe huisstijl De Korenaar', done: 6, of: 10,
+    invoice: { nr: '2026-041', date: '3 oktober 2026', due: '2 november 2026', dueShort: '2 nov', lines: [['Ontwerp flyer herfstactie', '12 uur × € 85,00', 1020], ['Drukwerk flyers', '2.500 stuks', 780], ['Huisstijlhandboek', 'Vaste prijs', 600]] },
+    quote: { nr: '2026-019', amount: 6957.5, meta: '5 okt · geldig tot 4 nov' } },
+  { id: 'tuinwerk', name: 'Tuinwerk Groenland', legal: 'Tuinwerk Groenland', accent: '#3F8F4E', header: '#173A2A', theme: 'light', heading: 'jost', body: 'dm-sans',
+    logo: LOGO_TUINWERK('#173A2A', '#3F8F4E'), logoInk: '#173A2A', logoDark: null, logoColors: ['#3F8F4E', '#173A2A'],
+    footer: 'Tuinwerk Groenland · Dorpsweg 4, Polsbroek', iban: 'NL44 RABO 0312 4455 66',
+    ticket: 'Planning snoeiwerk najaar', project: 'Terras en voortuin', done: 3, of: 8,
+    invoice: { nr: '2026-118', date: '6 oktober 2026', due: '20 oktober 2026', dueShort: '20 okt', lines: [['Snoeiwerk en blad ruimen', '6 uur × € 55,00', 330], ['Beplanting voortuin', 'Vaste prijs', 925], ['Afvoer groenafval', '2 kuub', 145]] },
+    quote: { nr: '2026-077', amount: 12480, meta: '12 sep · aanleg terras' } },
+  { id: 'maas', name: 'Maas Advies', legal: 'Maas Advies B.V.', accent: '#E4572E', header: '#0F2A4A', theme: 'light', heading: 'inter', body: 'inter',
+    logo: LOGO_MAAS('#0F2A4A', '#E4572E'), logoInk: '#0F2A4A', logoDark: LOGO_MAAS('#FFFFFF', '#E4572E'), logoColors: ['#0F2A4A', '#E4572E'],
+    footer: 'Maas Advies · Stationsplein 9, Utrecht', iban: 'NL86 INGB 0007 6543 21',
+    ticket: 'Vraag over de btw-aangifte Q3', project: 'Jaarrekening 2025', done: 4, of: 9,
+    invoice: { nr: '2026-207', date: '1 oktober 2026', due: '15 oktober 2026', dueShort: '15 okt', lines: [['Btw-aangifte derde kwartaal', 'Vaste prijs', 275], ['Loonadministratie september', '3 medewerkers', 185], ['Adviesgesprek financiering', '2 uur × € 120,00', 240]] },
+    quote: { nr: '2026-061', amount: 3400, meta: '2 sep · jaarrekening 2025' } },
+  { id: 'noor', name: 'Noor Fotografie', legal: 'Noor Fotografie', accent: '#2B2B2B', header: null, theme: 'light', heading: 'cormorant', body: 'jost',
+    logo: LOGO_NOOR('#1C1C1C'), logoInk: '#1C1C1C', logoDark: null, logoColors: ['#1C1C1C'],
+    footer: 'Noor Fotografie · noorfotografie.nl', iban: 'NL20 ASNB 0708 1122 33',
+    ticket: 'Selectie foto’s broodlijn', project: 'Fotoshoot nieuwe broodlijn', done: 5, of: 6,
+    invoice: { nr: '2026-033', date: '29 september 2026', due: '13 oktober 2026', dueShort: '13 okt', lines: [['Fotoshoot nieuwe broodlijn', 'Halve dag', 650], ['Nabewerking', '40 beelden', 320], ['Gebruiksrecht web en print', 'Eén jaar', 250]] },
+    quote: { nr: '2026-028', amount: 2150, meta: '8 sep · fotoshoot' } },
+];
+
+/* ── Toestand ── */
+const state = {
+  preset: 'lopik', screen: 'overview', device: 'desktop', full: false,
+  accent: '#FFD966', header: null, headerOwn: '#1B2A3A', theme: 'dark', heading: 'system', body: 'system',
+  logo: null, logoInk: null, logoDark: null, logoColors: [], uploaded: false,
+};
+function applyPreset(id) {
+  const p = PRESETS.find(x => x.id === id);
+  Object.assign(state, { preset: p.id, accent: p.accent, header: p.header, theme: p.theme, heading: p.heading, body: p.body, logo: p.logo, logoInk: p.logoInk, logoDark: p.logoDark, logoColors: p.logoColors, uploaded: false });
+  if (p.header) state.headerOwn = p.header;
+}
+const preset = () => PRESETS.find(x => x.id === state.preset) ?? PRESETS[0];
+
+/* ── Geld en datum ── */
+const euro = n => '€ ' + n.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const euroSplit = n => { const s = n.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); const i = s.lastIndexOf(','); return `€ ${s.slice(0, i)}<small>${s.slice(i)}</small>`; };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ── Alles uitrekenen ── */
+function compute() {
+  const accent = HEX.test(state.accent) ? state.accent.toUpperCase() : '#FFD966';
+  const c = canvasTokens(accent, state.theme);
+  const hd = headerTokens(accent, state.header);
+  const face = buttonFace(accent, c.onAccent);
+  // Logo op de kop: een lichte versie als die er is, anders een plaatje als het wegvalt.
+  let logoMode = 'none';
+  if (state.logo) {
+    if (hd.dark && state.logoDark) logoMode = 'dark-version';
+    else if (state.logoInk && Math.min(contrast(state.logoInk, hd.mid), contrast(state.logoInk, hd.bottom)) < 3) logoMode = 'plate';
+    else logoMode = 'as-is';
+  }
+  return { accent, c, hd, face, logoMode };
+}
+
+function vars(k) {
+  const { accent, c, hd, face } = k;
+  const accentRgb = rgbTriplet(accent);
+  return {
+    '--accent': accent, '--accent-ink': c.accentInk, '--on-accent': c.onAccent, '--btn-face': face,
+    '--accent-soft': `rgba(${accentRgb},.16)`, '--accent-glow': `rgba(${accentRgb},.55)`,
+    '--accent-edge-soft': `rgba(${rgbTriplet(c.accentEdge)},.45)`, '--line-accent': `rgba(${rgbTriplet(c.accentEdge)},.5)`,
+    '--bg-p': c.bg, '--surface-p': c.surface, '--row-p': c.row, '--field-p': c.light ? '#FFFFFF' : c.bgDeep,
+    '--line-p': c.line, '--line2-p': c.line2, '--ink-p': c.ink, '--ink-2p': c.ink2, '--ink-3p': c.ink3,
+    '--track-p': c.surface3,
+    '--card-shadow': c.light ? '0 1px 2px rgba(26,23,16,.05),0 10px 28px -18px rgba(26,23,16,.28)' : 'inset 0 1px 0 rgba(255,255,255,.04),0 1px 2px rgba(0,0,0,.35)',
+    '--canvas-hi': c.light ? 'rgba(255,255,255,.7)' : 'rgba(255,255,255,.06)',
+    '--canvas-edge': c.light ? 'transparent' : c.line,
+    '--ring-p': `0 0 0 4px rgba(${rgbTriplet(c.accentEdge)},.22)`,
+    '--ok-rgb': rgbTriplet(c.ok), '--warn-rgb': rgbTriplet(c.warn), '--ok-ink': c.okInk, '--warn-ink': c.warnInk,
+    '--hdr-top': hd.top, '--hdr-mid': hd.mid, '--hdr-bottom': hd.bottom, '--hdr-ink': hd.ink, '--hdr-ink-2': hd.ink2,
+    '--hdr-accent': hd.accent, '--hdr-glass': hd.glass, '--hdr-glass-2': hd.glass2, '--hdr-glass-line': hd.glassLine,
+    '--hdr-hi': hd.hi, '--hdr-glow': hd.glow, '--hdr-counter': hd.counter, '--hdr-rings': hd.rings,
+    '--brand-heading': font(state.heading).stack, '--brand-body': font(state.body).stack,
+    '--heading-weight': state.heading === 'bebas' ? '400' : state.heading === 'cormorant' ? '700' : '700',
+  };
+}
+
+/* ── Het portaal tekenen ── */
+function brandMark(k, onCard) {
+  const p = preset();
+  const name = state.uploaded ? 'Je merk' : p.name;
+  if (!state.logo) return `<div class="pm-mark" aria-hidden="true">${esc(name.slice(0, 1).toUpperCase())}</div>`;
+  const asImg = src => src.startsWith('<svg') ? src : `<img src="${src}" alt="${esc(name)}">`;
+  if (onCard) {
+    // Op de inlogkaart: het licht/donker van het werkvlak telt.
+    const cardDark = !k.c.light;
+    if (cardDark && state.logoDark) return `<div class="pm-logo">${asImg(state.logoDark)}</div>`;
+    if (cardDark && state.logoInk && contrast(state.logoInk, k.c.surface) < 3) return `<div class="pm-logo plate">${asImg(state.logo)}</div>`;
+    return `<div class="pm-logo">${asImg(state.logo)}</div>`;
+  }
+  if (k.logoMode === 'dark-version') return `<div class="pm-logo">${asImg(state.logoDark)}</div>`;
+  if (k.logoMode === 'plate') return `<div class="pm-logo plate">${asImg(state.logo)}</div>`;
+  return `<div class="pm-logo">${asImg(state.logo)}</div>`;
+}
+
+function topRow(k) {
+  const p = preset();
+  const name = state.uploaded ? 'Je merk' : p.name;
+  const showName = !state.logo;
+  return `<div class="pm-top">
+    <div class="pm-brand">${brandMark(k, false)}${showName ? `<div style="min-width:0"><div class="pm-name">${esc(name)}</div><div class="pm-sub">Klantportaal · Joost Vermeer</div></div>` : `<div style="min-width:0"><div class="pm-sub">Klantportaal · Joost Vermeer</div></div>`}</div>
+    <div class="pm-actions">
+      <span class="pm-gbtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg><span class="lbl">Instellingen</span></span>
+      <span class="pm-gbtn"><span class="lbl">Uitloggen</span><svg class="only-phone" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg></span>
+    </div>
+  </div>`;
+}
+
+function tabs(active) {
+  const t = [['overview', 'Overzicht'], ['messages', 'Berichten', 2, true], ['tickets', 'Tickets', 1, true], ['invoices', 'Facturen', 1], ['quotes', 'Offertes', 1], ['contracts', 'Contracten', 1], ['files', 'Bestanden', 3], ['projects', 'Projecten', 1]];
+  return `<nav class="pm-tabs" aria-label="Portaal">${t.map(([id, label, n, fresh]) => `<span class="pm-tab${id === active ? ' is-on' : ''}">${label}${n ? `<span class="pm-badge${fresh ? ' is-new' : ''}">${n}</span>` : ''}</span>`).join('')}</nav>`;
+}
+
+function invoiceTotals(inv) {
+  const sub = inv.lines.reduce((s, l) => s + l[2], 0);
+  const vat = Math.round(sub * 21) / 100;
+  return { sub, vat, total: sub + vat };
+}
+
+function footer() {
+  const p = preset();
+  return `<footer class="pm-foot"><b>${esc(state.uploaded ? 'Je merk · je adres' : p.footer)}</b><span>Geleverd via ResoFly</span></footer>`;
+}
+
+function renderOverview(k) {
+  const p = preset();
+  const sup = state.uploaded ? 'je leverancier' : p.name;
+  const inv = invoiceTotals(p.invoice);
+  return `<div class="pm">
+    <header class="pm-hdr">
+      ${topRow(k)}
+      <div class="pm-greet">
+        <div class="pm-eyebrow">Donderdag 15 oktober</div>
+        <h1>Goedemiddag, <span class="hl">Joost</span></h1>
+        <p>Er staat <b>1 factuur</b> open en er is <b>1 nieuw antwoord</b> op je ticket.</p>
+      </div>
+      <div class="pm-kpis">
+        <div class="pm-kpi has-line"><span>Openstaand</span><strong>${euroSplit(inv.total)}</strong><em>1 factuur · vervalt ${p.invoice.dueShort}</em></div>
+        <div class="pm-kpi"><span>Vervallen</span><strong>${euroSplit(0)}</strong><em>Niets te laat</em></div>
+        <div class="pm-kpi"><span>Open tickets</span><strong>1</strong><em>1 met nieuw antwoord</em></div>
+        <div class="pm-kpi"><span>Lopende projecten</span><strong>1</strong><em>${esc(p.project)}</em></div>
+      </div>
+      ${tabs('overview')}
+    </header>
+    <main class="pm-canvas">
+      <article class="pm-card pm-new">
+        <div class="pm-card-head"><h2>Nieuw voor jou</h2></div>
+        <div class="pm-rows">
+          <div class="pm-row"><div class="pm-row-main"><b><span class="pm-dot"></span>${esc(p.ticket)}</b><span>Nieuw antwoord van ${esc(sup)} · 11:00</span></div><span class="pm-chev">›</span></div>
+          <div class="pm-row"><div class="pm-row-main"><b><span class="pm-dot"></span>Nieuw bericht</b><span>Van ${esc(sup)}, onder Berichten</span></div><span class="pm-chev">›</span></div>
+        </div>
+      </article>
+      <div class="pm-grid">
+        <article class="pm-card">
+          <div class="pm-card-head"><h2>Recente facturen</h2><span class="pm-more">Alle facturen →</span></div>
+          <div class="pm-row doc"><div class="pm-row-main"><b>${p.invoice.nr}</b><span>Vervalt ${p.invoice.dueShort}</span></div><span class="pm-amount">${euro(inv.total)}</span><span class="pm-chip warn">Openstaand</span></div>
+          <span class="pm-btn primary" style="justify-self:start">Betalen</span>
+        </article>
+        <article class="pm-card">
+          <div class="pm-card-head"><h2>Recente offertes</h2><span class="pm-more">Alle offertes →</span></div>
+          <div class="pm-row doc"><div class="pm-row-main"><b>${p.quote.nr}</b><span>${esc(p.quote.meta)}</span></div><span class="pm-amount">${euro(p.quote.amount)}</span><span class="pm-chip ok">Geaccepteerd</span></div>
+          <span class="pm-btn" style="justify-self:start">Bekijk offerte</span>
+        </article>
+      </div>
+      <article class="pm-card">
+        <div class="pm-card-head"><h2>Je project</h2><span class="pm-more">Projecten →</span></div>
+        <div class="pm-proj"><span class="pm-proj-dot"></span><div><b>${esc(p.project)}</b><span>${p.done} van ${p.of} taken klaar</span></div></div>
+        <div class="pm-bar" role="img" aria-label="${Math.round(p.done / p.of * 100)} procent klaar"><i style="width:${Math.round(p.done / p.of * 100)}%"></i></div>
+      </article>
+      ${footer()}
+    </main>
+  </div>`;
+}
+
+function renderInvoice(k) {
+  const p = preset();
+  const inv = invoiceTotals(p.invoice);
+  const legal = state.uploaded ? 'Je bedrijf' : p.legal;
+  return `<div class="pm">
+    <header class="pm-hdr">
+      ${topRow(k)}
+      ${tabs('invoices')}
+    </header>
+    <main class="pm-canvas">
+      <div class="pm-doc-grid">
+        <article class="pm-card">
+          <span class="pm-more">← Alle facturen</span>
+          <div class="pm-doc-title"><div><div class="pm-k">Factuur</div><h2>${p.invoice.nr}</h2><p>${p.invoice.date} · vervalt ${p.invoice.due}</p></div><span class="pm-chip warn">Openstaand</span></div>
+          <div class="pm-lines">${p.invoice.lines.map(([d, m, a]) => `<div class="pm-line"><b>${esc(d)}</b><span>${esc(m)}</span><span class="pm-amount">${euro(a)}</span></div>`).join('')}</div>
+          <div><div class="pm-tot"><span>Totaal excl. btw</span><span>${euro(inv.sub)}</span></div><div class="pm-tot"><span>Btw 21%</span><span>${euro(inv.vat)}</span></div><div class="pm-tot grand"><span>Totaal</span><span>${euro(inv.total)}</span></div></div>
+        </article>
+        <aside class="pm-card pm-pay">
+          <h2>Betalen</h2>
+          <span class="pm-btn primary">Betaal ${euro(inv.total)} met iDEAL</span>
+          <p class="pm-muted">Veilig online betalen via iDEAL, creditcard en meer.</p>
+          <dl class="pm-bank"><dt>IBAN</dt><dd>${p.iban}</dd><dt>T.n.v.</dt><dd>${esc(legal)}</dd><dt>Kenmerk</dt><dd>${p.invoice.nr}</dd></dl>
+          <span class="pm-btn">Download pdf</span>
+        </aside>
+      </div>
+      ${footer()}
+    </main>
+  </div>`;
+}
+
+function renderLogin(k) {
+  const p = preset();
+  const name = state.uploaded ? 'je leverancier' : p.name;
+  return `<div class="pm pm-login">
+    <div class="pm-login-card">
+      <div class="pm-brand">${brandMark(k, true)}${state.logo ? '' : `<div class="pm-name">${esc(name)}</div>`}</div>
+      <div class="pm-eb">Facturen · Offertes · Tickets · Projecten</div>
+      <h1>Inloggen</h1>
+      <p>Vul je e-mailadres in. Je ontvangt een veilige inloglink in je mailbox, zonder wachtwoord.</p>
+      <div class="pm-input">joost@bakkerij.nl</div>
+      <span class="pm-btn primary">Stuur inloglink</span>
+    </div>
+    <p class="pm-login-foot">${esc(state.uploaded ? 'Je merk · je adres' : p.footer)} · Geleverd via ResoFly</p>
+  </div>`;
+}
+
+/* ── Instellingen tekenen ── */
+const $ = id => document.getElementById(id);
+function renderPresets() {
+  $('presets').innerHTML = PRESETS.map(p => {
+    const k = headerTokens(p.accent, p.header);
+    return `<button type="button" class="chip" data-preset="${p.id}" aria-pressed="${!state.uploaded && state.preset === p.id}"><span class="duo" aria-hidden="true"><i style="background:${k.mid}"></i><i style="background:${p.accent}"></i></span>${esc(p.name)}</button>`;
+  }).join('');
+}
+function renderLogoBoxes() {
+  const show = (box, src, empty) => { box.innerHTML = src ? (src.startsWith('<svg') ? src : `<img src="${src}" alt="">`) : `<span class="empty">${empty}</span>`; };
+  show($('logoBox'), state.logo, 'Geen logo');
+  show($('logoDarkBox'), state.logoDark, 'Geen');
+  $('logoClear').hidden = !state.logo;
+  $('logoDarkClear').hidden = !state.logoDark;
+}
+function renderFromLogo() {
+  const has = state.logoColors.length > 0;
+  for (const [id, target] of [['accentFromLogo', 'accent'], ['hdrFromLogo', 'header']]) {
+    const el = $(id);
+    el.hidden = !has;
+    el.innerHTML = has ? `<span>Uit je logo:</span>${state.logoColors.map(c => `<button type="button" data-from="${target}" data-color="${c}" style="background:${c}" title="${c} als ${target === 'accent' ? 'merkkleur' : 'kopkleur'}" aria-label="${c} als ${target === 'accent' ? 'merkkleur' : 'kopkleur'}"></button>`).join('')}` : '';
+  }
+}
+function renderControls(k) {
+  $('accentPick').value = k.accent.toLowerCase();
+  if (document.activeElement !== $('accentHex')) { $('accentHex').value = k.accent; $('accentHex').removeAttribute('aria-invalid'); }
+  const own = !!state.header;
+  $('hdrAuto').setAttribute('aria-pressed', String(!own));
+  $('hdrOwn').setAttribute('aria-pressed', String(own));
+  $('hdrPick').disabled = !own; $('hdrHex').disabled = !own;
+  $('hdrPick').value = (own ? state.header : k.hd.mid).toLowerCase();
+  if (document.activeElement !== $('hdrHex')) { $('hdrHex').value = own ? state.header.toUpperCase() : k.hd.mid; $('hdrHex').removeAttribute('aria-invalid'); }
+  $('themeLight').setAttribute('aria-pressed', String(state.theme === 'light'));
+  $('themeDark').setAttribute('aria-pressed', String(state.theme === 'dark'));
+  for (const [id, theme] of [['miniLight', 'light'], ['miniDark', 'dark']]) {
+    const c = canvasTokens(k.accent, theme);
+    $(id).style.background = `linear-gradient(135deg,${k.hd.top},${k.hd.bottom})`;
+    $(id).innerHTML = `<i style="top:8px;height:8px;width:38%;background:${k.hd.ink2};opacity:.55"></i><i style="top:22px;bottom:0;border-radius:7px 7px 0 0;background:${c.bg}"></i><i style="top:30px;left:14px;right:14px;height:16px;background:${c.surface};border:1px solid ${c.line}"></i><i style="top:34px;left:auto;right:20px;width:22px;height:8px;border-radius:4px;background:${k.accent}"></i>`;
+  }
+  $('headingFont').value = state.heading;
+  $('bodyFont').value = state.body;
+  renderPresets();
+  renderLogoBoxes();
+  renderFromLogo();
+}
+const fmt = r => r.toFixed(1).replace('.', ',') + ' : 1';
+function renderChecks(k) {
+  const { accent, c, hd } = k;
+  const items = [];
+  items.push({ ok: true, title: 'Tekst op je knoppen', ratio: contrast(c.onAccent, accent), note: c.onAccent === '#000000' || c.onAccent === '#FFFFFF' ? 'Puur zwart of wit: meer laat deze kleur niet toe.' : (luminance(c.onAccent) < 0.2 ? 'Bijna-zwart op je merkkleur.' : 'Bijna-wit op je merkkleur.') });
+  const adjInk = c.accentInk.toUpperCase() !== accent;
+  items.push({ ok: !adjInk, title: 'Merkkleur als tekst', ratio: contrast(c.accentInk, c.surface), note: adjInk ? `Links en bedragen tonen we in ${c.accentInk}: ${luminance(c.accentInk) < luminance(accent) ? 'donkerder' : 'lichter'}, zelfde tint.` : 'Leest zoals hij is.' });
+  items.push({ ok: true, title: 'Tekst op de kop', ratio: Math.min(contrast(hd.ink, hd.top), contrast(hd.ink, hd.bottom)), note: hd.dark ? 'Lichte tekst op een donkere kop.' : 'Donkere tekst op een lichte kop.' });
+  items.push({ ok: !hd.adjusted, title: 'Merkkleur op de kop', ratio: Math.min(contrast(hd.accent, hd.top), contrast(hd.accent, hd.bottom)), note: hd.adjusted ? `Op de kop gebruiken we ${hd.accent}, zodat het actieve tabblad en de groet afsteken.` : 'Steekt genoeg af.' });
+  let logoNote = 'Zonder logo: je initiaal in een tegel van je merkkleur.';
+  let logoOk = true;
+  if (k.logoMode === 'plate') { logoNote = 'Je logo valt weg op de kop; we zetten het op een licht plaatje. Een lichte versie kan ook.'; logoOk = false; }
+  else if (k.logoMode === 'dark-version') logoNote = 'Op de kop staat je lichte versie.';
+  else if (k.logoMode === 'as-is') logoNote = 'Je logo steekt genoeg af op de kop.';
+  items.push({ ok: logoOk, title: 'Logo op de kop', ratio: null, note: logoNote });
+  $('checks').innerHTML = items.map(i => `<div class="check"><span class="ic ${i.ok ? 'ok' : 'adj'}" aria-hidden="true">${i.ok ? '✓' : '↻'}</span><div><b>${i.title}</b><span class="note">${esc(i.note)}</span></div><span class="ratio">${i.ratio ? fmt(i.ratio) : ''}</span></div>`).join('');
+}
+function renderLegend(k) {
+  const cols = [['Kopkleur', `linear-gradient(135deg,${k.hd.top},${k.hd.bottom})`], ['Merkkleur', k.accent], ['Merkkleur als tekst', k.c.accentInk], ['Werkvlak', k.c.bg], ['Kaart', k.c.surface]];
+  $('legend').innerHTML = cols.map(([l, c]) => `<span><i style="background:${c}"></i>${l}</span>`).join('') + `<span>Statuskleuren blijven vast</span>`;
+  document.querySelectorAll('[data-sw="accent"]').forEach(el => { el.style.background = k.accent; });
+  document.querySelectorAll('[data-sw="header"]').forEach(el => { el.style.background = `linear-gradient(135deg,${k.hd.top},${k.hd.bottom})`; });
+  document.querySelectorAll('[data-sw="canvas"]').forEach(el => { el.style.background = `linear-gradient(90deg,${k.c.bg} 50%,${k.c.surface} 50%)`; });
+}
+
+/* ── Het toestel en de schaal ── */
+const DESKTOP = { w: 1120, h: 760 };
+const PHONE = { w: 390, h: 800 };
+function layout() {
+  const phone = state.device === 'phone';
+  const dev = $('device'), wrap = $('vpWrap'), vp = $('viewport'), stage = $('stage');
+  dev.classList.toggle('is-phone', phone);
+  const size = phone ? PHONE : DESKTOP;
+  const avail = stage.clientWidth - parseFloat(getComputedStyle(stage).paddingLeft) * 2 - (phone ? 20 : 0);
+  let kScale = Math.min(1, avail / size.w);
+  if (phone) {
+    const maxH = state.full ? window.innerHeight - 170 : Math.min(720, window.innerHeight - 140);
+    kScale = Math.min(kScale, Math.max(0.5, maxH / size.h));
+  } else {
+    const maxH = window.innerHeight - (state.full ? 190 : 210);
+    kScale = Math.min(kScale, Math.max(0.35, maxH / (size.h + 34)));
+  }
+  vp.style.width = size.w + 'px';
+  vp.style.height = size.h + 'px';
+  vp.style.transform = `scale(${kScale})`;
+  wrap.style.width = Math.round(size.w * kScale) + 'px';
+  wrap.style.height = Math.round(size.h * kScale) + 'px';
+  dev.style.width = phone ? Math.round(size.w * kScale + 20) + 'px' : Math.round(size.w * kScale) + 'px';
+}
+
+/* ── Alles bijwerken ── */
+function update() {
+  ensureFont(state.heading); ensureFont(state.body);
+  const k = compute();
+  const vp = $('viewport');
+  const html = state.screen === 'invoice' ? renderInvoice(k) : state.screen === 'login' ? renderLogin(k) : renderOverview(k);
+  const scroll = vp.scrollTop;
+  vp.innerHTML = html;
+  vp.scrollTop = scroll;
+  const root = vp.firstElementChild;
+  for (const [name, value] of Object.entries(vars(k))) root.style.setProperty(name, value);
+  renderControls(k);
+  renderChecks(k);
+  renderLegend(k);
+  layout();
+}
+
+/* ── Logo: inlezen en de kleuren eruit halen ── */
+function readFile(file) {
+  return new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(r.error); r.readAsDataURL(file); });
+}
+async function analyseLogo(dataUrl) {
+  const img = new Image(); img.src = dataUrl; await img.decode();
+  const w = 72, h = Math.max(1, Math.round(72 * img.naturalHeight / Math.max(1, img.naturalWidth)));
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const buckets = new Map();
+  let lumSum = 0, lumN = 0, rs = 0, gs = 0, bs = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 180) continue;
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    if (Math.min(r, g, b) > 236) continue; // achtergrondwit telt niet mee
+    rs += r; gs += g; bs += b; lumN++;
+    const key = ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5);
+    const e = buckets.get(key) ?? { n: 0, r: 0, g: 0, b: 0 }; e.n++; e.r += r; e.g += g; e.b += b; buckets.set(key, e);
+  }
+  const toHex = (r, g, b) => '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('').toUpperCase();
+  const ranked = [...buckets.values()].sort((a, b) => b.n - a.n).map(e => toHex(e.r / e.n, e.g / e.n, e.b / e.n));
+  const dist = (a, b) => { const x = hexToRgb(a), y = hexToRgb(b); return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]); };
+  const colors = [];
+  for (const hex of ranked) { if (colors.every(c => dist(c, hex) > 70)) colors.push(hex); if (colors.length === 4) break; }
+  const ink = lumN ? toHex(rs / lumN, gs / lumN, bs / lumN) : '#000000';
+  return { colors, ink };
+}
+
+/* ── Bediening ── */
+$('presets').addEventListener('click', e => { const b = e.target.closest('[data-preset]'); if (!b) return; applyPreset(b.dataset.preset); update(); });
+$('logoPick').addEventListener('click', () => $('logoFile').click());
+$('logoDarkPick').addEventListener('click', () => $('logoDarkFile').click());
+$('logoFile').addEventListener('change', async e => {
+  const file = e.target.files?.[0]; e.target.value = '';
+  if (!file) return;
+  try {
+    const url = await readFile(file);
+    const { colors, ink } = await analyseLogo(url);
+    Object.assign(state, { logo: url, logoInk: ink, logoColors: colors, uploaded: true, logoDark: null });
+    const vivid = colors.find(c => { const x = hexToHsl(c); return x.s > 0.35 && x.l > 0.18 && x.l < 0.86; });
+    if (vivid) state.accent = vivid;
+    update();
+  } catch { $('saveNote').textContent = 'Dit bestand kon niet als afbeelding worden gelezen. Probeer een PNG, JPEG of WebP.'; }
+});
+$('logoDarkFile').addEventListener('change', async e => {
+  const file = e.target.files?.[0]; e.target.value = '';
+  if (!file) return;
+  try { state.logoDark = await readFile(file); update(); } catch { /* niets */ }
+});
+$('logoClear').addEventListener('click', () => { Object.assign(state, { logo: null, logoInk: null, logoColors: [], logoDark: null }); update(); });
+$('logoDarkClear').addEventListener('click', () => { state.logoDark = null; update(); });
+$('accentPick').addEventListener('input', e => { state.accent = e.target.value.toUpperCase(); update(); });
+$('accentHex').addEventListener('input', e => {
+  let v = e.target.value.trim(); if (v && v[0] !== '#') v = '#' + v;
+  const ok = HEX.test(v); e.target.setAttribute('aria-invalid', String(!ok));
+  if (ok) { state.accent = v.toUpperCase(); update(); }
+});
+$('hdrAuto').addEventListener('click', () => { if (state.header) state.headerOwn = state.header; state.header = null; update(); });
+$('hdrOwn').addEventListener('click', () => { state.header = state.header ?? state.headerOwn; update(); });
+$('hdrPick').addEventListener('input', e => { state.header = e.target.value.toUpperCase(); state.headerOwn = state.header; update(); });
+$('hdrHex').addEventListener('input', e => {
+  let v = e.target.value.trim(); if (v && v[0] !== '#') v = '#' + v;
+  const ok = HEX.test(v); e.target.setAttribute('aria-invalid', String(!ok));
+  if (ok) { state.header = v.toUpperCase(); state.headerOwn = state.header; update(); }
+});
+document.querySelector('.settings').addEventListener('click', e => {
+  const b = e.target.closest('[data-from]'); if (!b) return;
+  if (b.dataset.from === 'accent') state.accent = b.dataset.color; else { state.header = b.dataset.color; state.headerOwn = b.dataset.color; }
+  update();
+});
+$('themeLight').addEventListener('click', () => { state.theme = 'light'; update(); });
+$('themeDark').addEventListener('click', () => { state.theme = 'dark'; update(); });
+$('headingFont').innerHTML = FONTS.map(f => `<option value="${f.key}">${f.label}</option>`).join('');
+$('bodyFont').innerHTML = FONTS.filter(f => !f.headingOnly).map(f => `<option value="${f.key}">${f.label}</option>`).join('');
+$('headingFont').addEventListener('change', e => { state.heading = e.target.value; update(); });
+$('bodyFont').addEventListener('change', e => { state.body = e.target.value; update(); });
+$('saveBtn').addEventListener('click', () => { $('saveNote').innerHTML = '<span class="toast">Dit is een voorbeeld; er is niets opgeslagen.</span>'; });
+document.querySelectorAll('[data-screen]').forEach(b => b.addEventListener('click', () => {
+  state.screen = b.dataset.screen;
+  document.querySelectorAll('[data-screen]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  $('viewport').scrollTop = 0; update();
+}));
+document.querySelectorAll('[data-device]').forEach(b => b.addEventListener('click', () => {
+  state.device = b.dataset.device;
+  document.querySelectorAll('[data-device]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  update();
+}));
+function setFull(on) {
+  state.full = on;
+  $('preview').classList.toggle('is-full', on);
+  $('fullBtn').setAttribute('aria-pressed', String(on));
+  $('fullBtn').textContent = on ? 'Sluiten' : 'Volledig scherm';
+  document.body.style.overflow = on ? 'hidden' : '';
+  layout();
+}
+$('fullBtn').addEventListener('click', () => setFull(!state.full));
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.full) setFull(false); });
+if ('ResizeObserver' in window) new ResizeObserver(() => layout()).observe($('stage'));
+window.addEventListener('resize', layout);
+
+applyPreset('lopik');
+if (window.matchMedia('(max-width: 700px)').matches) {
+  state.device = 'phone';
+  document.querySelectorAll('[data-device]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.device === 'phone')));
+}
+update();
+// Lettertypen die later binnenkomen veranderen de maten; daarna nog één keer schikken.
+if (document.fonts?.ready) document.fonts.ready.then(layout);
+})();
+</script>
+
+</html>

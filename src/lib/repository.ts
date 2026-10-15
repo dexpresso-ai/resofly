@@ -1647,13 +1647,30 @@ export async function saveJitsiServer(organizationId: UUID, jitsiBaseUrl: string
   if (insertError) throw fail(insertError);
 }
 
+/** Kolommen die de nieuwste huisstijlmigratie (20261015000000) toevoegt. */
+const NEWEST_BRANDING_COLUMNS = ['brand_header_color', 'brand_logo_dark_data_url'] as const;
+
 export async function upsertCompanySettings(organizationId: UUID, values: CompanySettingsInput): Promise<CompanySettings> {
   const createdBy = await currentUserId();
-  const { data, error } = await supabase
+  const write = (row: Record<string, unknown>) => supabase
     .from('company_settings')
-    .upsert({ ...sanitizeMutationValues(values as unknown as Record<string, unknown>), organization_id: organizationId, created_by: createdBy }, { onConflict: 'organization_id' })
+    .upsert({ ...row, organization_id: organizationId, created_by: createdBy }, { onConflict: 'organization_id' })
     .select('*')
     .single();
+  const row = sanitizeMutationValues(values as unknown as Record<string, unknown>);
+  let { data, error } = await write(row);
+  // Staat de migratie met de kopkleur en de lichte logoversie hier nog niet, dan
+  // mag dat het opslaan van al het andere niet tegenhouden. Alleen als iemand
+  // die nieuwe velden echt invulde, zeggen we dat ze nog niet kunnen.
+  const missing = NEWEST_BRANDING_COLUMNS.filter(column => isMissingColumn(error, column));
+  if (error && missing.length > 0) {
+    if (NEWEST_BRANDING_COLUMNS.some(column => row[column] != null && row[column] !== '')) {
+      throw new NotMigratedError('De kopkleur en de lichte versie van je logo kunnen in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de kopkleur op Automatisch en haal de lichte versie weg om de rest op te slaan.');
+    }
+    const rest = { ...row };
+    for (const column of NEWEST_BRANDING_COLUMNS) delete rest[column];
+    ({ data, error } = await write(rest));
+  }
   if (error) throw error;
   return data as CompanySettings;
 }

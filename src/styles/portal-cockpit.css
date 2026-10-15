@@ -1,0 +1,629 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   PORTAAL-COCKPIT — het klantportaal en de publieke offerte-, factuur- en
+   contractpagina in de opbouw van de werkruimte (2026-10-15)
+   ──────────────────────────────────────────────────────────────────────────
+   Dezelfde beeldtaal als cockpit.css, maar in het merk van de leverancier.
+   De kleuren staan hier niet: brandThemeVars() in src/lib/branding.ts leidt
+   ze af uit de merkkleur en de kopkleur en applyBrandTheme() zet ze op :root
+   zolang een klantpagina in beeld is (--hdr-* voor de kop, --accent-face voor
+   de hoofdknop en het merkteken, en de rest van het palet zoals altijd).
+
+   Spelregels
+     • Bovenaan een kop in de kopkleur: het merk, de knoppen, op het overzicht
+       de groet en de kerncijfers als glazen tegels, en de tabbladen. Met de
+       gloed van de merkkleur linksboven en de resonantieringen erachter.
+     • Daaronder zweeft het werkvlak (Licht of Donker, zoals de leverancier
+       koos) met grote ronde hoeken; kaarten liggen er zacht gelaagd op.
+     • Alles wat op de kop staat, leest: brandThemeVars() rekent tekst, glas en
+       de merkkleur op de kop na tegen elk vlak van het verloop.
+     • Op de telefoon blijft de kop klein: geen groet, de tegels twee bij twee,
+       de tabbladen als veegrij. tests/mobile/run.mjs meet hoe laag de eerste
+       regel begint.
+     • Alles hier staat onder .portal of .public-doc: de werkruimte merkt er
+       niets van.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 0 · Standaardwaarden ────────────────────────────────────────────────────
+   Alleen voor het frame vóór applyBrandTheme() draait: dezelfde uitkomst als
+   brandThemeVars(null), dus de standaardhuisstijl (merkgoud, automatische kop).
+   applyBrandTheme() zet zijn waarden inline op <html> en wint daarvan. */
+:root{
+  --hdr-top:#0D0C09;
+  --hdr-mid:#161511;
+  --hdr-bottom:#23221C;
+  --hdr-ink:#F8F7F4;
+  --hdr-ink-2:#ABAAA7;
+  --hdr-accent:#FFD966;
+  --hdr-danger:#FF6B72;
+  --hdr-scheme:dark;
+  --hdr-glass:rgba(255,255,255,.065);
+  --hdr-glass-2:rgba(255,255,255,.11);
+  --hdr-glass-line:rgba(255,255,255,.10);
+  --hdr-hi:rgba(255,255,255,.05);
+  --hdr-glow:rgba(255,217,102,.2);
+  --hdr-counter:rgba(160,160,185,.12);
+  --hdr-rings:none;
+  --accent-face:linear-gradient(150deg,#FFE28A 0%,#FFD966 50%,#FFD042 100%);
+}
+
+/* ── 1 · De grond: de kopkleur, met gloed en ringen ─────────────────────────
+   De grond loopt onder het werkvlak door (het zweeft erop). Het verloop staat
+   op een eigen laag die naar onderen vervaagt in de kopkleur, zodat een lange
+   pagina bovenin precies hetzelfde oogt als een korte. */
+.portal.portal-app,
+.portal.login,
+.portal.boot,
+.public-doc{
+  position:relative;
+  isolation:isolate;
+  background:var(--hdr-mid);
+  color-scheme:var(--hdr-scheme);
+}
+.portal.portal-app::before,
+.portal.login::before,
+.portal.boot::before,
+.public-doc::before{
+  content:"";
+  position:absolute;
+  inset:0 0 auto 0;
+  height:min(780px,100%);
+  z-index:-1;
+  pointer-events:none;
+  background:
+    var(--hdr-rings) no-repeat -560px -600px,
+    radial-gradient(760px 380px at 0% 0%,var(--hdr-glow),transparent 62%),
+    radial-gradient(560px 320px at 100% 0%,var(--hdr-counter),transparent 64%),
+    linear-gradient(135deg,var(--hdr-top) 0%,var(--hdr-mid) 55%,var(--hdr-bottom) 100%);
+  -webkit-mask-image:linear-gradient(to bottom,#000 62%,transparent);
+  mask-image:linear-gradient(to bottom,#000 62%,transparent);
+}
+
+/* Het portaal scrolt als pagina: de kop schuift mee omhoog en het werkvlak
+   loopt tot onderaan door. */
+.portal.portal-app{
+  display:flex;
+  flex-direction:column;
+  height:auto;
+  min-height:100vh;
+  min-height:100dvh;
+}
+
+/* ── 2 · De kop ──────────────────────────────────────────────────────────── */
+.portal-hero{
+  position:relative;
+  z-index:1;
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:20px;
+  /* Binnen dezelfde 1080px als de inhoud eronder, zodat merk, groet en kaarten
+     op één lijn beginnen. */
+  padding:18px max(28px,calc((100% - 1080px) / 2)) 0;
+  color:var(--hdr-ink);
+}
+.portal-hero .portal-topbar{
+  padding:0;
+  border:0;
+  background:none;
+  flex-wrap:nowrap;
+  gap:14px;
+}
+.portal-hero .portal-brand{gap:12px;min-width:0;flex:1 1 auto}
+.portal-brand-text{display:grid;gap:1px;min-width:0}
+.portal-hero .portal-brand-name{color:var(--hdr-ink);font-size:16.5px}
+.portal-hero .portal-brand-sub{color:var(--hdr-ink-2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.portal-hero .portal-topbar-actions{flex:0 0 auto;flex-wrap:nowrap}
+
+/* Knoppen en de dossierkeuze op de kop: glas. */
+.portal-hero .btn,
+.portal-hero .select-trigger,
+.portal-hero .form-select{
+  border:1px solid var(--hdr-glass-line);
+  background:var(--hdr-glass);
+  color:var(--hdr-ink);
+  border-radius:12px;
+  box-shadow:inset 0 1px 0 var(--hdr-hi);
+  -webkit-backdrop-filter:blur(8px);
+  backdrop-filter:blur(8px);
+}
+.portal-hero .btn:hover:not(:disabled),
+.portal-hero .select-trigger:hover:not(:disabled){
+  border-color:var(--hdr-glass-line);
+  background:var(--hdr-glass-2);
+  color:var(--hdr-ink);
+}
+.portal-hero .btn:focus-visible,
+.portal-hero .select-trigger:focus-visible{outline:2px solid var(--hdr-accent);outline-offset:2px;box-shadow:inset 0 1px 0 var(--hdr-hi)}
+.portal-hero .select-trigger *{color:inherit}
+
+/* De groet: de datum in de merkkleur, de naam ook. */
+.portal-greet{display:grid;gap:6px;max-width:64ch}
+.portal-greet-date{
+  margin:0;
+  font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--hdr-accent);
+}
+.portal-greet h1{
+  margin:0;
+  font-family:var(--brand-heading,inherit);
+  font-size:clamp(26px,3vw,33px);
+  font-weight:700;
+  letter-spacing:-.025em;
+  line-height:1.14;
+  color:var(--hdr-ink);
+  text-wrap:balance;
+}
+.portal-greet-name{color:var(--hdr-accent)}
+.portal-greet-sum{margin:0;font-size:14.5px;line-height:1.5;color:var(--hdr-ink-2)}
+
+/* De kerncijfers: glazen tegels. Een tegel met iets te melden krijgt een dun
+   lijntje bovenaan — de merkkleur voor wat openstaat, rood voor te laat. */
+.portal-hero .portal-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.portal-hero .portal-kpi{
+  position:relative;
+  overflow:hidden;
+  gap:3px;
+  padding:14px 16px;
+  border:1px solid var(--hdr-glass-line);
+  border-radius:16px;
+  background:var(--hdr-glass);
+  box-shadow:inset 0 1px 0 var(--hdr-hi);
+  -webkit-backdrop-filter:blur(10px);
+  backdrop-filter:blur(10px);
+}
+.portal-hero .portal-kpi>span{font-size:12px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--hdr-ink-2)}
+.portal-hero .portal-kpi strong,
+.portal-hero .portal-kpi.warning strong,
+.portal-hero .portal-kpi.danger strong{
+  font-size:26px;font-weight:700;letter-spacing:-.02em;line-height:1.15;
+  color:var(--hdr-ink);
+  font-variant-numeric:tabular-nums;
+}
+.portal-hero .portal-kpi small{font-size:12px;color:var(--hdr-ink-2)}
+.portal-kpi-cents{font-style:normal;font-size:.62em;font-weight:600;color:var(--hdr-ink-2)}
+.portal-hero .portal-kpi.warning::before,
+.portal-hero .portal-kpi.danger::before{
+  content:"";
+  position:absolute;
+  left:14px;right:14px;top:0;
+  height:2px;
+  border-radius:0 0 2px 2px;
+  background:var(--hdr-accent);
+  box-shadow:0 0 12px var(--hdr-accent);
+}
+.portal-hero .portal-kpi.danger::before{background:var(--hdr-danger);box-shadow:0 0 12px var(--hdr-danger)}
+
+/* De tabbladen: een rij op de onderrand van de kop. Waar je bent, gloeit. */
+.portal-hero .portal-tabs{
+  display:flex;
+  flex-wrap:nowrap;
+  gap:2px;
+  margin:0 -10px;
+  padding:0 10px;
+  overflow-x:auto;
+  overscroll-behavior-x:contain;
+  scrollbar-width:none;
+}
+.portal-hero .portal-tabs::-webkit-scrollbar{display:none}
+.portal-hero .portal-tab{
+  position:relative;
+  flex:0 0 auto;
+  min-height:0;
+  padding:10px 12px 14px;
+  border:0;
+  border-radius:10px 10px 0 0;
+  background:none;
+  box-shadow:none;
+  color:var(--hdr-ink-2);
+  font-size:13.5px;
+  font-weight:600;
+  white-space:nowrap;
+}
+.portal-hero .portal-tab:hover{color:var(--hdr-ink);background:var(--hdr-glass)}
+.portal-hero .portal-tab.active{color:var(--hdr-ink);background:none}
+.portal-hero .portal-tab.active::after{
+  content:"";
+  position:absolute;
+  left:12px;right:12px;bottom:0;
+  height:3px;
+  border-radius:3px 3px 0 0;
+  background:var(--hdr-accent);
+  box-shadow:0 0 14px var(--hdr-accent);
+}
+.portal-hero .portal-tab:focus-visible{outline:2px solid var(--hdr-accent);outline-offset:-2px}
+.portal-hero .portal-tab-badge{
+  display:inline-grid;place-items:center;
+  min-width:19px;height:19px;padding:0 6px;
+  border-radius:999px;
+  background:var(--hdr-glass-2);
+  color:var(--hdr-ink);
+  font-size:10.5px;font-weight:700;
+}
+.portal-hero .portal-tab-badge.is-new{
+  background:var(--accent-face,var(--accent));
+  color:var(--on-accent);
+  box-shadow:0 0 0 3px rgba(var(--accent-rgb),.2),0 4px 12px -4px rgba(var(--accent-rgb),.6);
+}
+
+/* ── 3 · Het werkvlak ────────────────────────────────────────────────────── */
+.portal .portal-content{
+  position:relative;
+  z-index:1;
+  flex:1 0 auto;
+  width:auto;
+  max-width:none;
+  overflow:visible;
+  margin:0 10px 10px;
+  padding:24px max(24px,calc((100% - 1100px) / 2)) 30px;
+  border:1px solid rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));
+  border-radius:22px;
+  background:var(--bg);
+  box-shadow:inset 0 1px 0 var(--hi,rgba(255,255,255,.04)),0 30px 60px -34px rgba(0,0,0,.6);
+}
+
+/* ── 4 · Op het werkvlak: kaarten, regels, knoppen, velden ───────────────── */
+.portal .portal-card,
+.portal .portal-empty{
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:var(--surface);
+  box-shadow:var(--shadow-card);
+}
+.portal .portal-card{padding:18px 20px}
+.portal .portal-card-head h2{font-size:16px;letter-spacing:-.01em}
+.portal .portal-new-card{border-color:var(--line-accent);box-shadow:var(--shadow-card),0 0 0 3px rgba(var(--accent-rgb),.12)}
+.portal .portal-row,
+.portal .portal-conv,
+.portal .portal-project,
+.portal .portal-task-row,
+.portal .portal-choice{border-radius:13px}
+.portal .portal-row-clickable,
+.portal .portal-conv{transition:transform .2s cubic-bezier(.16,1,.3,1),border-color .12s ease,background .12s ease}
+.portal .portal-row-clickable:hover,
+.portal .portal-conv:hover{transform:translateY(-1px);border-color:var(--line-2)}
+.portal .portal-unread-dot{background:var(--accent-face,var(--accent));box-shadow:0 0 0 3px rgba(var(--accent-rgb),.2)}
+
+.portal .portal-content .btn{border-radius:12px;font-weight:600}
+.portal .btn-primary,
+.public-doc .btn-primary{
+  border-color:transparent;
+  background:var(--accent-face,var(--accent));
+  color:var(--on-accent);
+  font-weight:700;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 0 0 1px rgba(var(--accent-rgb),.22),0 10px 26px -10px rgba(var(--accent-rgb),.75);
+}
+.portal .btn-primary:hover:not(:disabled),
+.public-doc .btn-primary:hover:not(:disabled){
+  border-color:transparent;
+  background:var(--accent-face,var(--accent));
+  color:var(--on-accent);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 0 0 1px rgba(var(--accent-rgb),.4),0 12px 30px -8px rgba(var(--accent-rgb),.9);
+}
+.portal .btn-primary:focus-visible,
+.public-doc .btn-primary:focus-visible{box-shadow:var(--ring),inset 0 1px 0 rgba(255,255,255,.4)}
+.portal .portal-content :where(.form-input,.form-textarea,.form-select),
+.portal.login :where(.form-input,.form-select),
+.public-doc :where(.form-input,.form-textarea,.form-select){border-radius:12px}
+.portal .portal-content :where(.form-input,.form-textarea,.form-select):focus,
+.portal.login .form-input:focus,
+.public-doc :where(.form-input,.form-textarea,.form-select):focus{
+  border-color:var(--accent-edge,var(--accent));
+  box-shadow:0 0 0 4px rgba(var(--accent-rgb),.18);
+}
+
+/* ── 5 · Het merkteken ───────────────────────────────────────────────────────
+   Zonder logo: de initiaal in een tegel van de merkkleur (was: een vast
+   goudverloop, ook bij een blauw merk). Met logo: het logo, of de lichte
+   versie op een donkere kop, of een plaatje als het wegvalt (BrandMark in
+   src/components/PublicBrand.tsx beslist). */
+.brand-tile{
+  display:inline-grid;
+  place-items:center;
+  flex:none;
+  width:38px;height:38px;
+  border-radius:12px;
+  background:var(--accent-face,var(--accent));
+  color:var(--on-accent);
+  font-family:var(--brand-heading,inherit);
+  font-size:17px;font-weight:800;line-height:1;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 8px 20px -8px rgba(var(--accent-rgb),.6);
+}
+.brand-logo{display:inline-flex;align-items:center;flex:none;max-width:200px;min-width:0}
+.brand-logo img{display:block;height:38px;width:auto;max-width:100%;object-fit:contain}
+.brand-logo.on-plate{padding:5px 10px;border-radius:12px;box-shadow:0 6px 18px -10px rgba(0,0,0,.55)}
+.brand-logo.plate-light{background:#FFFFFF}
+.brand-logo.plate-dark{background:#17171A}
+.brand-logo.on-plate img{height:30px}
+
+/* ── 6 · Inloggen en laden ───────────────────────────────────────────────────
+   Het hele scherm in de kopkleur met de kaart erop, zoals het inlogscherm van
+   de werkruimte; de ringen waaieren uit achter de kaart. */
+.portal.login::before{height:100%;background-position:center -250px,0 0,100% 0,0 0}
+.portal.login .login-card{
+  border:1px solid var(--line);
+  border-radius:22px;
+  background:var(--surface);
+  box-shadow:inset 0 1px 0 var(--hi,rgba(255,255,255,.04)),0 40px 80px -40px rgba(0,0,0,.75);
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+}
+.portal.login .portal-login-brand{display:flex;align-items:center;gap:11px;font-family:var(--brand-heading,inherit);font-weight:700;font-size:16px;color:var(--ink)}
+.portal.login .login-eyebrow{color:var(--accent-ink)}
+.portal.login .login-card h1{font-family:var(--brand-heading,inherit);letter-spacing:-.02em}
+.portal.login .brand-tile{width:34px;height:34px;border-radius:10px;font-size:15px}
+.portal.login .brand-logo img{height:34px}
+.portal.login .brand-logo.on-plate img{height:28px}
+.portal.boot{color:var(--hdr-ink)}
+.portal.boot .portal-boot{color:var(--hdr-ink-2)}
+
+/* ── 7 · Telefoon ────────────────────────────────────────────────────────── */
+@media (max-width:760px){
+  .portal-hero{padding:10px 12px 0;gap:12px}
+  /* Zoals de cockpit: op de telefoon alleen de tegels, geen groet. */
+  .portal-greet{display:none}
+  .portal-hero .portal-topbar{gap:8px}
+  .portal-hero .portal-brand{gap:9px}
+  .portal-hero .portal-brand-name{font-size:14px}
+  .portal-hero .portal-brand-sub{font-size:11px}
+  .portal-hero .portal-topbar-actions{gap:5px}
+  .portal-hero .portal-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .portal-hero .portal-kpi{padding:9px 11px;gap:1px;border-radius:13px}
+  .portal-hero .portal-kpi>span{font-size:10.5px}
+  .portal-hero .portal-kpi strong,
+  .portal-hero .portal-kpi.warning strong,
+  .portal-hero .portal-kpi.danger strong{font-size:17px}
+  .portal-hero .portal-kpi small{font-size:10.5px}
+  .portal-hero .portal-tabs{margin:0 -12px;padding:0 12px}
+  .portal-hero .portal-tab{padding:8px 10px 11px;font-size:12.5px;min-height:38px}
+  .portal-hero .portal-tab.active::after{left:10px;right:10px}
+  .portal .portal-content{margin:0;padding:14px 12px 32px;border-width:1px 0 0;border-radius:20px 20px 0 0}
+  .portal .portal-card{padding:12px;border-radius:15px}
+  .brand-tile{width:30px;height:30px;border-radius:9px;font-size:14px}
+  .brand-logo{max-width:150px}
+  .brand-logo img{height:30px}
+  .brand-logo.on-plate{padding:4px 8px;border-radius:10px}
+  .brand-logo.on-plate img{height:24px}
+}
+
+/* ── 8 · De publieke offerte-, factuur- en contractpagina ────────────────────
+   Dezelfde kop en hetzelfde werkvlak als het portaal. De oude "heldkaart"
+   (.public-quote-hero) is de kop geworden; de kern van het stuk (bedrag,
+   datums, voor wie) staat daar in glazen tegels. Alleen deze drie pagina's
+   dragen .public-doc; de boekings-, deel- en verzendpagina blijven zoals ze
+   waren. */
+.public-quote-page.public-doc{
+  display:flex;
+  flex-direction:column;
+  min-height:100vh;
+  min-height:100dvh;
+  padding:0;
+}
+.public-hero{
+  position:relative;
+  z-index:1;
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:18px;
+  padding:20px max(28px,calc((100% - 1040px) / 2)) 26px;
+  color:var(--hdr-ink);
+}
+.public-hero-top{display:flex;align-items:center;justify-content:space-between;gap:14px;min-width:0}
+.public-hero-brand{display:flex;align-items:center;gap:12px;min-width:0}
+.public-hero-name{font-family:var(--brand-heading,inherit);font-weight:700;font-size:16.5px;color:var(--hdr-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.public-hero .public-quote-status{
+  flex:0 0 auto;
+  display:inline-flex;align-items:center;gap:8px;
+  padding:8px 14px;
+  border:1px solid var(--hdr-glass-line);
+  border-radius:999px;
+  background:var(--hdr-glass-2);
+  color:var(--hdr-ink);
+  font-size:13px;font-weight:600;
+}
+/* De status staat op de kop: geen gekleurde tekst (die leest op elke kop
+   anders), maar een stip in de statuskleur. */
+.public-hero .public-quote-status::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--hdr-accent);flex:none}
+.public-hero .public-quote-status:is(.st-accepted,.st-paid,.st-signed)::before{background:#4CD9A0}
+.public-hero .public-quote-status:is(.st-rejected,.st-declined,.st-expired,.st-voided,.st-cancelled,.st-overdue)::before{background:var(--hdr-danger)}
+.public-hero .public-quote-status:is(.st-accepted,.st-rejected){background:var(--hdr-glass-2);color:var(--hdr-ink)}
+.public-hero-title{display:grid;gap:6px;max-width:70ch;min-width:0}
+.public-hero-eyebrow{margin:0;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--hdr-accent)}
+.public-hero h1{
+  margin:0;
+  font-family:var(--brand-heading,inherit);
+  font-size:clamp(30px,4.4vw,46px);
+  font-weight:700;
+  letter-spacing:-.025em;
+  line-height:1.1;
+  color:var(--hdr-ink);
+  overflow-wrap:anywhere;
+  text-wrap:balance;
+}
+.public-hero-intro{margin:0;font-size:15px;line-height:1.5;color:var(--hdr-ink-2)}
+.public-hero-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.public-hero-fact{
+  position:relative;
+  overflow:hidden;
+  display:grid;gap:3px;align-content:start;
+  min-width:0;
+  padding:14px 16px;
+  border:1px solid var(--hdr-glass-line);
+  border-radius:16px;
+  background:var(--hdr-glass);
+  box-shadow:inset 0 1px 0 var(--hdr-hi);
+  -webkit-backdrop-filter:blur(10px);
+  backdrop-filter:blur(10px);
+}
+.public-hero-fact span{font-size:12px;color:var(--hdr-ink-2)}
+.public-hero-fact strong{font-family:var(--brand-heading,inherit);font-size:21px;font-weight:700;letter-spacing:-.015em;line-height:1.2;color:var(--hdr-ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.public-hero-fact em{font-style:normal;font-size:12px;color:var(--hdr-ink-2)}
+.public-hero-fact:is(.is-accent,.is-danger)::before{
+  content:"";
+  position:absolute;
+  left:14px;right:14px;top:0;
+  height:2px;
+  border-radius:0 0 2px 2px;
+  background:var(--hdr-accent);
+  box-shadow:0 0 12px var(--hdr-accent);
+}
+.public-hero-fact.is-danger::before{background:var(--hdr-danger);box-shadow:0 0 12px var(--hdr-danger)}
+
+.public-canvas{
+  position:relative;
+  z-index:1;
+  flex:1 0 auto;
+  margin:0 10px 10px;
+  padding:24px max(24px,calc((100% - 1060px) / 2)) 40px;
+  border:1px solid rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));
+  border-radius:22px;
+  background:var(--bg);
+  box-shadow:inset 0 1px 0 var(--hi,rgba(255,255,255,.04)),0 30px 60px -34px rgba(0,0,0,.6);
+  font-family:var(--brand-body,var(--font-sans));
+}
+/* Laden, verlopen link: alleen de kaart, een eind onder de rand. */
+.public-canvas.is-state{margin-top:clamp(16px,8vh,90px)}
+.public-doc .public-quote-card{
+  max-width:1040px;
+  margin:0 auto 16px;
+  padding:22px 24px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:var(--surface);
+  box-shadow:var(--shadow-card);
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+}
+.public-doc .public-quote-grid{margin:0 auto 16px}
+.public-doc .public-quote-grid .public-quote-card{margin:0}
+.public-doc .public-line{border-radius:13px}
+.public-doc .public-quote-alert{max-width:1040px}
+.public-payment-row{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* Het bedrag staat al groot in de kop; hier is het de knop die telt. */
+.public-doc .public-invoice-amount{font-size:clamp(26px,3.4vw,34px);line-height:1.05;letter-spacing:-.025em}
+.public-payment-row h2{margin:0 0 8px}
+.public-doc .public-invoice-page .public-payment-card,
+.public-invoice-page.public-doc .public-payment-card{display:grid;gap:12px}
+
+@media (max-width:760px){
+  .public-hero{padding:12px 12px 16px;gap:12px}
+  .public-hero .public-quote-status{padding:6px 11px;font-size:12px}
+  .public-hero h1{font-size:25px;line-height:1.15}
+  .public-hero-intro{font-size:14px}
+  .public-hero-facts{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .public-hero-fact{padding:9px 11px;border-radius:13px;gap:1px}
+  .public-hero-fact span,.public-hero-fact em{font-size:10.5px}
+  .public-hero-fact strong{font-size:16px}
+  .public-canvas{margin:0;padding:12px 12px 36px;border-width:1px 0 0;border-radius:20px 20px 0 0}
+  .public-canvas.is-state{margin-top:16px}
+  .public-doc .public-quote-card{padding:14px 16px;border-radius:15px;margin-bottom:10px}
+  .public-doc .public-quote-grid{margin-bottom:10px}
+  .public-payment-row{align-items:stretch}
+  .public-payment-row .public-invoice-actions{width:100%}
+}
+
+/* ── 9 · Galerij: de merkkleur als tekst leest op de galerij zelf ────────────
+   brandStyle() rekent --gal-accent-ink uit tegen de achtergrond van de
+   galerij; zonder huisstijl blijft het de gewone accenttekst. */
+.galv-chip.is-active,
+.galv-ss-toggle.is-on,
+.pgal-pin-icon,
+.brand-preview-chip.is-active{color:var(--gal-accent-ink,var(--accent-ink))}
+
+/* ── 10 · Instellingen → Huisstijl: de instellingen met het portaal ernaast ──
+   Links de instellingen, rechts het échte portaal in een iframe
+   (src/features/BrandStudio.tsx). Het voorbeeld blijft staan terwijl je door de
+   instellingen scrolt; op een smal werkvlak staat het eronder. */
+.brand-studio{container-type:inline-size}
+.brand-studio-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
+@container (min-width:960px){
+  .brand-studio-grid{grid-template-columns:minmax(340px,430px) minmax(0,1fr)}
+  .brand-preview-panel{position:sticky;top:12px}
+}
+.brand-card .brand-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.brand-card .brand-field{min-width:0}
+/* `.brand-field` staat later in globals.css dan `.check-row` en zette het
+   vinkje boven de tekst; hier staat het er weer naast. */
+.brand-card .brand-field.check-row{flex-direction:row;align-items:center}
+.brand-label em{font-style:normal;font-weight:500;letter-spacing:0;text-transform:none;color:var(--ink-3)}
+.brand-subfield{display:grid;gap:8px;margin-top:6px;padding:12px;border:1px dashed var(--line-2);border-radius:14px}
+/* Een logo is gemaakt voor een licht vlak; zo laten we het hier ook zien, ook
+   in Nacht. De lichte versie staat op donker. */
+.brand-logo-preview{background:#F7F6F2;border-color:#D9D4C7}
+.brand-logo-preview .brand-logo-empty{color:#6C6557}
+.brand-logo-preview.is-dark{background:#17171A;border-style:solid;border-color:#2A2A2F}
+.brand-logo-preview.is-dark .brand-logo-empty{color:#A4A29C}
+.brand-seg{display:inline-flex;flex-wrap:wrap;gap:2px;padding:3px;border-radius:12px;background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)))}
+.brand-seg button{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border:0;border-radius:9px;background:none;color:var(--ink-3);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.brand-seg button:hover:not(:disabled){color:var(--ink)}
+.brand-seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.2 * var(--shade-k))),0 0 0 1px var(--line)}
+.brand-seg button:disabled{opacity:.5;cursor:not-allowed}
+.brand-seg button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.brand-from-logo{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px;color:var(--ink-3)}
+.brand-from-logo span{margin-right:2px}
+.brand-from-logo-swatch{width:24px;height:24px;padding:0;border:0;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(128,128,128,.5);cursor:pointer}
+.brand-from-logo-swatch:hover:not(:disabled){transform:translateY(-1px)}
+.brand-from-logo-swatch.is-active{box-shadow:inset 0 0 0 1px rgba(128,128,128,.5),0 0 0 2px var(--surface),0 0 0 4px var(--ink)}
+.brand-from-logo-swatch:disabled{opacity:.5;cursor:not-allowed}
+
+/* Licht of donker: een miniatuur van het portaal met de echte tokens. */
+.brand-theme-mini{
+  position:relative;display:block;width:100%;height:66px;overflow:hidden;
+  border:1px solid var(--line);border-radius:10px;
+  background:linear-gradient(135deg,var(--hdr-top) 0%,var(--hdr-mid) 55%,var(--hdr-bottom) 100%);
+}
+.brand-theme-mini-kop i{position:absolute;left:10px;top:9px;width:38%;height:7px;border-radius:4px;background:var(--hdr-ink-2);opacity:.65}
+.brand-theme-mini-canvas{position:absolute;left:6px;right:6px;top:24px;bottom:0;border-radius:8px 8px 0 0;background:var(--bg)}
+.brand-theme-mini-card{position:absolute;left:8px;right:8px;top:8px;height:24px;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+.brand-theme-mini-card i{position:absolute;left:8px;top:9px;width:40%;height:5px;border-radius:3px;background:var(--ink-3);opacity:.55}
+.brand-theme-mini-card b{position:absolute;right:7px;top:5px;width:28px;height:12px;border-radius:6px;background:var(--accent-face,var(--accent))}
+
+/* Leesbaarheid: wat de afleiding met je kleuren deed. */
+.brand-checks{display:grid;gap:6px;margin:0;padding:0;list-style:none}
+.brand-check{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:9px;align-items:start;padding:8px 10px;border:1px solid var(--line);border-radius:11px;background:rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k)))}
+.brand-check-icon{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:rgba(var(--ok-rgb),.14);color:var(--ok-ink,var(--ok))}
+.brand-check.is-adjusted .brand-check-icon{background:rgba(var(--warn-rgb),.14);color:var(--warn-ink,var(--warn))}
+.brand-check-text{display:grid;gap:1px;min-width:0;font-size:12.5px}
+.brand-check-text strong{font-weight:600;color:var(--ink)}
+.brand-check-text span{color:var(--ink-3);font-size:11.5px;line-height:1.45;overflow-wrap:anywhere}
+.brand-check-ratio{font-size:12px;font-weight:700;color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* Het voorbeeld. */
+.brand-preview-panel{display:grid;gap:12px;min-width:0}
+.brand-preview-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.brand-preview-title h3{margin:0}
+.brand-preview-title p{margin:2px 0 0;font-size:12px;color:var(--ink-3)}
+.brand-preview-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.brand-preview-stage{display:grid;justify-items:center;align-content:start;gap:10px;min-width:0;min-height:220px;padding:16px;border:1px solid var(--line);border-radius:16px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));overflow:hidden}
+.brand-preview-device{max-width:100%;overflow:hidden;border-radius:12px;background:#0D0D0F;box-shadow:0 0 0 1px rgba(0,0,0,.22),0 30px 60px -30px rgba(0,0,0,.6)}
+.brand-preview-device.is-phone{padding:10px;border-radius:34px;background:#0B0B0D;box-shadow:0 0 0 2px #2A2A30,0 30px 60px -30px rgba(0,0,0,.6)}
+.brand-preview-chrome{display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;background:#1B1B1F;border-bottom:1px solid #26262B}
+.brand-preview-chrome i{width:9px;height:9px;border-radius:50%;background:#3A3A40}
+.brand-preview-chrome span{flex:0 1 280px;min-width:0;margin-left:8px;height:20px;display:flex;align-items:center;padding:0 9px;border-radius:6px;background:#111114;color:#A4A29C;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand-preview-viewport{position:relative;overflow:hidden;background:#0D0D0F}
+.brand-preview-device.is-phone .brand-preview-viewport{border-radius:25px}
+.brand-preview-viewport iframe{position:absolute;top:0;left:0;display:block;border:0;transform-origin:0 0;background:transparent}
+.brand-preview-failed{margin:0;font-size:12.5px;color:var(--ink-2);text-align:center}
+.brand-preview-foot{margin:0}
+/* Volledig scherm: hetzelfde voorbeeld (het iframe blijft staan), groter. */
+.brand-preview-panel.is-full{
+  position:fixed;
+  inset:max(12px,env(safe-area-inset-top,0px)) 12px 12px;
+  z-index:400;
+  grid-template-rows:auto minmax(0,1fr) auto;
+  padding:16px;
+  background:var(--surface);
+  box-shadow:0 0 0 100vmax rgba(0,0,0,.55),0 40px 90px -30px rgba(0,0,0,.8);
+}
+.brand-preview-panel.is-full .brand-preview-stage{min-height:0}
+@container (max-width:520px){
+  .brand-card .brand-grid{grid-template-columns:minmax(0,1fr)}
+}
+
+/* Los geopend voorbeeld (/portal/voorbeeld zonder instellingen eromheen). */
+.portal-preview-note{position:relative;z-index:5;margin:0;padding:8px 16px;background:#17171A;color:#F4F3F0;font-size:12.5px;font-weight:600;text-align:center}
+
+@media (prefers-reduced-motion:reduce){
+  .portal .portal-row-clickable,
+  .portal .portal-conv{transition:none}
+  .portal .portal-row-clickable:hover,
+  .portal .portal-conv:hover{transform:none}
+}

@@ -377,7 +377,7 @@ export interface CreatePortalTicketInput {
 /** Zet (alleen voor bekende klantadressen) het account klaar. Het antwoord zegt
  *  bewust niet óf een adres bekend is. */
 export async function requestPortalLogin(email: string): Promise<void> {
-  const { data, error } = await supabasePortal.functions.invoke('portal-login', {
+  const { data, error } = await portalInvoke('portal-login', {
     body: { action: 'requestLogin', email },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Inloggen voorbereiden mislukt'));
@@ -385,7 +385,7 @@ export async function requestPortalLogin(email: string): Promise<void> {
 }
 
 export async function fetchPortalData(): Promise<PortalData> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getPortalData' },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Portaalgegevens laden mislukt'));
@@ -394,7 +394,7 @@ export async function fetchPortalData(): Promise<PortalData> {
 }
 
 export async function createPortalTicket(input: CreatePortalTicketInput): Promise<PortalTicket> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: {
       action: 'createTicket',
       clientId: input.clientId,
@@ -409,7 +409,7 @@ export async function createPortalTicket(input: CreatePortalTicketInput): Promis
 }
 
 export async function fetchPortalTicketThread(ticketId: string): Promise<PortalTicketThread> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getTicketThread', ticketId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Ticket laden mislukt'));
@@ -422,7 +422,7 @@ export async function fetchPortalTicketThread(ticketId: string): Promise<PortalT
 }
 
 export async function addPortalTicketNote(ticketId: string, body: string): Promise<PortalTicketNote> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'addTicketNote', ticketId, body },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Notitie plaatsen mislukt'));
@@ -431,7 +431,7 @@ export async function addPortalTicketNote(ticketId: string, body: string): Promi
 }
 
 export async function fetchPortalProjectDetail(projectId: string): Promise<PortalProjectDetail> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getProjectDetail', projectId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Project laden mislukt'));
@@ -441,7 +441,7 @@ export async function fetchPortalProjectDetail(projectId: string): Promise<Porta
 
 /** Galerij-detail: items + kijk-/downloadtokens + eigen favorieten. */
 export async function fetchPortalGalleryDetail(galleryId: string): Promise<PortalGalleryDetail> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getGalleryDetail', galleryId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Galerij laden mislukt'));
@@ -465,7 +465,7 @@ export async function togglePortalGalleryFavorite(
   on: boolean,
   reaction: 'favorite' | 'like' = 'favorite',
 ): Promise<void> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'toggleGalleryFavorite', galleryId, itemId, on, reaction },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Favoriet bijwerken mislukt'));
@@ -477,7 +477,7 @@ export async function togglePortalGalleryFavorite(
  * rechtstreeks vanuit het portaal. Geeft de bijgewerkte offerte terug.
  */
 export async function decidePortalQuote(quoteId: string, kind: 'accept' | 'reject', note?: string): Promise<PortalQuote> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'decideQuote', quoteId, kind, note: note ?? '' },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Offertebeslissing verwerken mislukt'));
@@ -487,7 +487,7 @@ export async function decidePortalQuote(quoteId: string, kind: 'accept' | 'rejec
 
 /** Betaalinfo van één factuur (bedrag, betaalbaarheid, Mollie-beschikbaarheid, IBAN). */
 export async function fetchPortalInvoicePaymentInfo(invoiceId: string): Promise<PortalInvoicePaymentInfo> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getInvoicePaymentInfo', invoiceId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Betaalinfo laden mislukt'));
@@ -497,7 +497,7 @@ export async function fetchPortalInvoicePaymentInfo(invoiceId: string): Promise<
 
 /** Maakt (of hergebruikt) een Mollie-betaallink voor een factuur en geeft de checkout-URL terug. */
 export async function createPortalInvoicePayment(invoiceId: string): Promise<{ checkoutUrl: string; mock: boolean; reused: boolean }> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'createInvoicePayment', invoiceId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Betaallink aanmaken mislukt'));
@@ -506,7 +506,7 @@ export async function createPortalInvoicePayment(invoiceId: string): Promise<{ c
 }
 
 export async function downloadPortalInvoicePdf(invoiceId: string): Promise<{ fileName: string; mimeType: string; base64: string }> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getInvoicePdf', invoiceId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Factuur-PDF downloaden mislukt'));
@@ -515,7 +515,7 @@ export async function downloadPortalInvoicePdf(invoiceId: string): Promise<{ fil
 }
 
 export async function downloadPortalContractPdf(contractId: string): Promise<{ fileName: string; mimeType: string; base64: string }> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getContractPdf', contractId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Contract-PDF downloaden mislukt'));
@@ -525,7 +525,7 @@ export async function downloadPortalContractPdf(contractId: string): Promise<{ f
 
 /** De mappen/bestanden die met deze contactpersoon zijn gedeeld. */
 export async function fetchPortalSharedFiles(clientId?: string): Promise<PortalShare[]> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getSharedFiles', clientId: clientId ?? null },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Gedeelde bestanden ophalen mislukt'));
@@ -544,7 +544,7 @@ export async function downloadPortalSharedItem(
   itemType: string,
   itemId: string,
 ): Promise<PortalSharedDownload> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'downloadSharedFile', shareId, itemType, itemId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Downloaden mislukt'));
@@ -567,7 +567,7 @@ export async function downloadPortalSharedItem(
 
 /** Je eigen meldingskeuzes voor één dossier, plus of de leverancier meldingen verstuurt. */
 export async function fetchPortalNotificationSettings(clientId: string): Promise<PortalNotificationState> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getNotificationSettings', clientId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Instellingen laden mislukt'));
@@ -587,7 +587,7 @@ export async function updatePortalNotificationSettings(
   clientId: string,
   settings: Partial<PortalNotificationSettings>,
 ): Promise<PortalNotificationSettings> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'updateNotificationSettings', clientId, settings },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Instellingen opslaan mislukt'));
@@ -597,7 +597,7 @@ export async function updatePortalNotificationSettings(
 
 /** De mailgesprekken met de leverancier, nieuwste eerst. */
 export async function fetchPortalMessageThreads(clientId: string): Promise<PortalMessageThreadSummary[]> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getMessageThreads', clientId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Berichten laden mislukt'));
@@ -607,7 +607,7 @@ export async function fetchPortalMessageThreads(clientId: string): Promise<Porta
 
 /** Eén gesprek met alle berichten. Openen telt als gelezen. */
 export async function fetchPortalMessageThread(threadId: string): Promise<PortalMessageThread> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getMessageThread', threadId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Gesprek laden mislukt'));
@@ -621,7 +621,7 @@ export async function sendPortalMessage(input: { clientId: string; threadId?: st
   subject: string;
   message: PortalMessage;
 }> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'sendMessage', clientId: input.clientId, threadId: input.threadId ?? null, subject: input.subject ?? '', body: input.body },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Bericht versturen mislukt'));
@@ -631,7 +631,7 @@ export async function sendPortalMessage(input: { clientId: string; threadId?: st
 
 /** De zendingen die nu voor jou klaarstaan in dit dossier. */
 export async function fetchPortalTransfers(clientId: string): Promise<PortalTransfer[]> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'getTransfers', clientId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Bestanden ophalen mislukt'));
@@ -641,7 +641,7 @@ export async function fetchPortalTransfers(clientId: string): Promise<PortalTran
 
 /** Een kortlevende downloadlink voor één bestand uit een zending. */
 export async function portalTransferDownload(transferId: string, itemId: string): Promise<{ url: string; fileName: string }> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'transferDownload', transferId, itemId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Downloaden mislukt'));
@@ -651,7 +651,7 @@ export async function portalTransferDownload(transferId: string, itemId: string)
 
 /** De tekst van een notitie of document uit een zending. */
 export async function portalTransferRead(transferId: string, itemId: string): Promise<{ title: string; html: string }> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'transferRead', transferId, itemId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Openen mislukt'));
@@ -661,12 +661,30 @@ export async function portalTransferRead(transferId: string, itemId: string): Pr
 
 /** Een downloadlink voor de hele zending als zip. */
 export async function portalTransferZip(transferId: string): Promise<string> {
-  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+  const { data, error } = await portalInvoke('client-portal', {
     body: { action: 'transferZip', transferId },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Downloaden mislukt'));
   if (!data?.ok || !data.url) throw new Error(data?.error || 'Downloaden mislukt');
   return String(data.url);
+}
+
+/**
+ * Wie de aanroepen beantwoordt. Normaal de edge functions; in het voorbeeld van
+ * het portaal (Instellingen → Huisstijl, /portal/voorbeeld) een nagebootste
+ * backend met verzonnen gegevens, zodat het voorbeeld precies dezelfde
+ * componenten draait als het echte portaal en toch niets ophaalt of verstuurt.
+ */
+export type PortalBackend = (name: string, body: Record<string, unknown>) => Promise<{ data: any; error: unknown }>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+let portalBackend: PortalBackend | null = null;
+
+export function setPortalBackend(backend: PortalBackend | null): void {
+  portalBackend = backend;
+}
+
+function portalInvoke(name: string, options: { body: Record<string, unknown> }) {
+  return portalBackend ? portalBackend(name, options.body) : supabasePortal.functions.invoke(name, options);
 }
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan

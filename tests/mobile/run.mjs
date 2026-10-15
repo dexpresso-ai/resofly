@@ -66,6 +66,9 @@ const PAGES = {
   // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat
   // op de telefoon onder elkaar.
   'settings-boekhouder': { page: 'settings', prepare: '[data-settings-tab="boekhouder"]' },
+  // Instellingen → Huisstijl: de instellingen met het klantportaal als
+  // voorbeeld ernaast (op de telefoon eronder), in een iframe.
+  'settings-huisstijl': { page: 'settings', prepare: '[data-settings-tab="huisstijl"]' },
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },
@@ -79,6 +82,10 @@ const PAGES = {
   // Via de deeplink uit de meldingsmail, zoals een klant er ook binnenkomt.
   'portal-messages': { path: '/portal?view=berichten', portal: true },
   'portal-settings': { path: '/portal?view=instellingen', portal: true },
+  // Het voorbeeld dat Instellingen → Huisstijl in een iframe toont: het echte
+  // portaal op verzonnen gegevens, zonder sessie. Los geopend moet het net zo
+  // goed staan als het portaal zelf.
+  'portal-preview': { path: '/portal/voorbeeld' },
   login: { path: '/', login: true },
 };
 

@@ -1,6 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
-import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
+import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { signedDownloadUrls, storageKeyBelongsOnlyTo } from '../_shared/fileTransferServer.ts';
 
 // ============================================================
@@ -274,11 +274,16 @@ async function fetchStorageBase64(organizationId: string, storageKey: string, si
 }
 
 async function loadCompany(organizationId: string): Promise<Record<string, unknown> | null> {
-  const { data, error } = await supabaseAdmin
+  const query = (columns: string) => supabaseAdmin
     .from('company_settings')
-    .select(`email,phone,website,city,country,${BRANDING_COLUMNS}`)
+    .select(columns)
     .eq('organization_id', organizationId)
     .maybeSingle();
+  const columns = `email,phone,website,city,country,${BRANDING_COLUMNS}`;
+  let { data, error } = await query(columns);
+  // De nieuwste huisstijlkolommen bestaan pas na hun migratie; zonder blijft de
+  // rest van de huisstijl staan.
+  if (error) ({ data, error } = await query(withoutNewestBrandingColumns(columns)));
   if (error) {
     console.warn('file-share-public company_settings overgeslagen', error.message);
     return null;

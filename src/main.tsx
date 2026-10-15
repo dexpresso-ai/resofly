@@ -144,7 +144,8 @@ import { PublicSharePage } from './features/PublicSharePage';
 import { PublicTransferPage } from './features/PublicTransferPage';
 import { GalleryTab } from './features/ProjectGallery';
 import { Contracts } from './features/Contracts';
-import { ClientPortal } from './features/portal/ClientPortal';
+import { ClientPortal, PortalPreview } from './features/portal/ClientPortal';
+import { PORTAL_PREVIEW_PATH } from './lib/portalPreview';
 import { Archive, Settings, type SettingsTab } from './features/SimplePages';
 import { ProjectTemplatePicker } from './features/ProjectTemplates';
 import { Statistics } from './features/Statistics';
@@ -178,6 +179,10 @@ import './styles/globals.css';
 // Na globals.css: de Cockpit-laag (look & feel naar Value Backlog) moet van
 // alle eerdere regels winnen.
 import './styles/cockpit.css';
+// Het klantportaal en de publieke offerte-, factuur- en contractpagina in
+// dezelfde opbouw, in het merk van de leverancier. Na cockpit.css: hergebruikt
+// zijn tokens (--shadow-card) en wint van de oudere portaalregels.
+import './styles/portal-cockpit.css';
 // De teamchat (de opbouw van Microsoft Teams) als laatste: eigen klassen, en de
 // paar gedeelde haken (.chat-shell, .team-chat-dock) moeten van eerdere regels winnen.
 import './styles/teamchat.css';
@@ -553,6 +558,11 @@ function getPublicGalleryTokenFromLocation(): string | null {
  *  los van de medewerkers-app en -sessie. */
 function isClientPortalRoute(): boolean {
   return window.location.pathname === '/portal' || window.location.pathname.startsWith('/portal/');
+}
+
+/** Het voorbeeld van het portaal bij Instellingen → Huisstijl (in een iframe). */
+function isPortalPreviewRoute(): boolean {
+  return window.location.pathname.replace(/\/+$/, '') === PORTAL_PREVIEW_PATH;
 }
 
 /** Schermvullend opstartscherm met draaiend laadicoon. Wordt getoond zolang de
@@ -1228,7 +1238,7 @@ function App() {
     }
   }
 
-  if (portalRoute) return <ClientPortal />;
+  if (portalRoute) return isPortalPreviewRoute() ? <PortalPreview /> : <ClientPortal />;
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
   if (publicQuoteToken) return <PublicQuotePage token={publicQuoteToken} />;
   if (publicInvoiceToken) return <PublicInvoicePage token={publicInvoiceToken} />;

@@ -18,6 +18,11 @@ export type BrandingPayload = {
   galleryBg?: string | null;
   /** Sfeer van de klantgerichte pagina's: 'dark' (standaard) of 'light'. */
   clientTheme?: string | null;
+  /** Kleur van de kop van het portaal en de publieke pagina's; leeg =
+   *  automatisch, afgeleid uit de merkkleur (zie `headerTheme()`). */
+  headerColor?: string | null;
+  /** Lichte versie van het logo voor op een donkere kop. */
+  logoDarkDataUrl?: string | null;
 };
 
 /** Achtergronden die het vaakst gekozen worden; de kleurkiezer kan alles. */
@@ -181,6 +186,19 @@ export function brandStyle(branding: BrandingPayload | null | undefined): React.
   }
   if (branding.galleryBg && /^#[0-9A-Fa-f]{6}$/.test(branding.galleryBg)) {
     Object.assign(style, galleryPalette(branding.galleryBg));
+    // De merkkleur als tekst (de gekozen categorie, een like) staat op de
+    // galerij-achtergrond, niet op het vlak van de pagina eromheen. Die
+    // erfde tot nu toe de accenttekst van de werkruimte: diep amber op een
+    // zwarte galerij, 2,3 : 1. Hier dezelfde afleiding als op de klantpagina's,
+    // maar dan tegen de galerij zelf gemeten.
+    const accent = /^#[0-9A-Fa-f]{6}$/.test(branding.accentColor || '') ? branding.accentColor : '#FFD966';
+    const bg = branding.galleryBg;
+    const light = luminance(bg) > 0.5;
+    style['--gal-accent-ink'] = readableInk(accent, [
+      bg,
+      blend(light ? '#141414' : '#FFFFFF', bg, 0.09),
+      blend(accent, bg, 0.12),
+    ], light);
   }
   return Object.keys(style).length > 0 ? (style as React.CSSProperties) : undefined;
 }
@@ -313,6 +331,217 @@ function inkOnAccent(accent: string): string {
   return candidates.sort((a, b) => contrast(b, accent) - contrast(a, accent))[0];
 }
 
+// ── De kop ──────────────────────────────────────────────────────────────────
+//
+// Het portaal en de publieke offerte-, factuur- en contractpagina hebben
+// bovenaan een kop: het commandovlak van de werkruimte (cockpit.css), maar in
+// het merk van de leverancier. Zonder eigen kopkleur is dat het grafiet van de
+// cockpit (#0B0B0D → #1E1E23) in de tint van de merkkleur; met een kopkleur is
+// het die kleur, met hetzelfde verloop eroverheen. Alles wat erop staat —
+// tekst, glazen tegels, de merkkleur zelf — rekenen we hier uit, tegen élk vlak
+// van dat verloop én de gloed van de merkkleur linksboven.
+
+export type HeaderTheme = {
+  /** Verloop van linksboven naar rechtsonder; `mid` is de kopkleur zelf. */
+  top: string;
+  mid: string;
+  bottom: string;
+  /** Donkere kop: lichte tekst. */
+  dark: boolean;
+  /** Eigen kopkleur (true) of automatisch (false). */
+  custom: boolean;
+  ink: string;
+  /** Gedempte tekst (onderschriften, tabbladen die niet gekozen zijn). */
+  ink2: string;
+  /** De merkkleur als tekst en lijn op de kop. */
+  accent: string;
+  /** Is `accent` in helderheid opgeschoven om af te steken? */
+  accentAdjusted: boolean;
+  /** Is de eigen kopkleur in helderheid opgeschoven omdat er niets op leesde? */
+  headerAdjusted: boolean;
+  /** Alfa van de gloed linksboven; laag als merkkleur en kop op elkaar lijken. */
+  glowAlpha: number;
+  /** Alle vlakken waar tekst op de kop kan belanden (voor het nameten). */
+  surfaces: string[];
+};
+
+/** Glas op de kop: een tegel is een laagje wit (of zwart op een lichte kop). */
+const HEADER_GLASS = { dark: 0.065, light: 0.05 };
+/** De koele tegenlamp rechtsboven, zoals in de cockpit. */
+const HEADER_COUNTER = { dark: '#A0A0B9', darkAlpha: 0.12, light: '#FFFFFF', lightAlpha: 0.22 };
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+export function headerTheme(branding: BrandingPayload | null | undefined): HeaderTheme {
+  const accent = /^#[0-9A-Fa-f]{6}$/.test(branding?.accentColor || '')
+    ? branding!.accentColor.toUpperCase()
+    : '#FFD966';
+  const custom = /^#[0-9A-Fa-f]{6}$/.test(branding?.headerColor || '');
+  const a = hexToHsl(accent);
+  const tint = Math.min(1, a.s / 0.35);
+  const lightInk = hslToHex({ h: a.h, s: 0.25 * tint, l: 0.965 });
+  const darkInk = hslToHex({ h: a.h, s: 0.3 * tint, l: 0.08 });
+
+  /** Het verloop rond één helderheid: linksboven donkerder, rechtsonder lichter.
+   *  Zolang er niets is opgeschoven, is het midden letterlijk de gekozen kleur
+   *  (heen en terug via HSL kan een afrondingsverschil van één stap geven). */
+  const stops = (l: number, exact: boolean) => {
+    if (!custom) {
+      // Dezelfde helderheid als het verloop van de cockpit, in de tint van het
+      // merk; een grijs merk krijgt dus gewoon grafiet.
+      return {
+        top: hslToHex({ h: a.h, s: 0.16 * tint, l: 0.043 }),
+        mid: hslToHex({ h: a.h, s: 0.13 * tint, l: 0.078 }),
+        bottom: hslToHex({ h: a.h, s: 0.11 * tint, l: 0.125 }),
+      };
+    }
+    const k = hexToHsl(branding!.headerColor!);
+    return {
+      top: hslToHex({ h: k.h, s: k.s, l: clamp01(l - 0.045) }),
+      mid: exact ? branding!.headerColor!.toUpperCase() : hslToHex({ h: k.h, s: k.s, l: clamp01(l) }),
+      bottom: hslToHex({ h: k.h, s: k.s, l: clamp01(l + 0.06) }),
+    };
+  };
+
+  /** Alle vlakken waar tekst op de kop kan belanden. */
+  const surfacesOf = (top: string, mid: string, bottom: string, dark: boolean, glowAlpha: number) => {
+    const glass = dark ? '#FFFFFF' : '#000000';
+    const glassAlpha = dark ? HEADER_GLASS.dark : HEADER_GLASS.light;
+    return [
+      top, mid, bottom,
+      // Een glazen tegel op de lichtste en de donkerste plek van het verloop.
+      blend(glass, top, glassAlpha),
+      blend(glass, bottom, glassAlpha),
+      // De gloed van de merkkleur en de tegenlamp, waar de groet en de knoppen staan.
+      blend(accent, top, glowAlpha),
+      dark
+        ? blend(HEADER_COUNTER.dark, top, HEADER_COUNTER.darkAlpha)
+        : blend(HEADER_COUNTER.light, top, HEADER_COUNTER.lightAlpha),
+    ];
+  };
+  const passes = (ink: string, surfaces: string[]) => surfaces.every(bg => contrast(ink, bg) >= INK_TARGET);
+  const strongest = (dark: boolean) => (dark ? [lightInk, '#FFFFFF'] : [darkInk, '#000000']);
+
+  // Licht of donker kiezen we niet op een drempel maar op wat het beste leest.
+  // Een kopkleur precies in het midden van de grijstrap (#808080) laat geen van
+  // beide tot de norm komen; dan schuift de helderheid van de kop zelf een
+  // stukje op, van het midden af. De tint blijft die van de gebruiker.
+  let l = custom ? hexToHsl(branding!.headerColor!).l : 0;
+  let { top, mid, bottom } = stops(l, true);
+  let dark = true;
+  let glowAlpha = 0.2;
+  let surfaces: string[] = [];
+  for (let step = 0; step <= 40; step++) {
+    ({ top, mid, bottom } = stops(l, step === 0));
+    const plain = [top, mid, bottom];
+    const worst = (ink: string) => Math.min(...plain.map(bg => contrast(ink, bg)));
+    dark = worst('#FFFFFF') >= worst('#000000');
+    glowAlpha = contrast(accent, mid) < 1.8 ? 0.1 : dark ? 0.2 : 0.16;
+    surfaces = surfacesOf(top, mid, bottom, dark, glowAlpha);
+    if (!custom || strongest(dark).some(ink => passes(ink, surfaces))) break;
+    l = clamp01(l + (dark ? -0.02 : 0.02));
+  }
+
+  const candidates = strongest(dark);
+  const ink = candidates.find(c => passes(c, surfaces)) ?? candidates[candidates.length - 1];
+  // Gedempt: de inkt een stuk naar de kop toe gemengd, maar nooit onder de norm.
+  let ink2 = ink;
+  for (let w = 0.62; w <= 1.0001; w += 0.04) {
+    const candidate = blend(ink, mid, w);
+    if (passes(candidate, surfaces)) { ink2 = candidate; break; }
+  }
+  const headerAccent = readableInk(accent, surfaces, !dark);
+
+  return {
+    top, mid, bottom, dark, custom, ink, ink2,
+    accent: headerAccent,
+    accentAdjusted: headerAccent.toUpperCase() !== accent,
+    headerAdjusted: custom && mid.toUpperCase() !== branding!.headerColor!.toUpperCase(),
+    glowAlpha,
+    surfaces,
+  };
+}
+
+/**
+ * Het vlak van de hoofdknop en het merkteken: de merkkleur met een verloop van
+ * licht (linksboven) naar donker, zoals `--gold-face` in de werkruimte. Het
+ * verloop wordt smaller tot de tekst erop overal leesbaar blijft.
+ */
+export function accentFace(accentColor: string, onAccent: string): string {
+  const a = hexToHsl(accentColor);
+  for (const spread of [0.07, 0.05, 0.03]) {
+    const lighter = hslToHex({ h: a.h, s: a.s, l: clamp01(a.l + spread) });
+    const darker = hslToHex({ h: a.h, s: a.s, l: clamp01(a.l - spread) });
+    if (contrast(onAccent, lighter) >= 4.5 && contrast(onAccent, darker) >= 4.5) {
+      return `linear-gradient(150deg,${lighter} 0%,${accentColor} 50%,${darker} 100%)`;
+    }
+  }
+  return accentColor;
+}
+
+/**
+ * Resonantieringen, de textuur van het commandovlak (zie `--rings` in
+ * cockpit.css): wit op een donkere kop, inkt op een lichte.
+ */
+function ringsImage(dark: boolean): string {
+  const circles = Array.from({ length: 13 }, (_, i) => `%3Ccircle cx='600' cy='600' r='${44 * (i + 1)}'/%3E`).join('');
+  const stroke = dark ? '%23fff' : '%23000';
+  const opacity = dark ? 0.085 : 0.07;
+  return `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='1200' viewBox='0 0 1200 1200'%3E%3Cg fill='none' stroke='${stroke}' stroke-opacity='${opacity}'%3E${circles}%3C/g%3E%3C/svg%3E")`;
+}
+
+/**
+ * Moet een logo op een licht plaatje? De meeste logo's zijn donker op
+ * transparant; op een donkere kop vallen ze weg. `ink` is de gemiddelde kleur
+ * van het logo (zie `summarizeLogoPixels()` in logoColors.ts). 2,6 : 1 is
+ * strenger dan de 3 : 1 voor iconen niet, maar een logo is groter en vetter
+ * dan een icoon: bij 2,6 is een merkteken nog goed te zien.
+ */
+export function logoNeedsPlate(ink: string | null | undefined, backgrounds: string[]): boolean {
+  if (!ink || !/^#[0-9A-Fa-f]{6}$/.test(ink)) return false;
+  return backgrounds.some(bg => contrast(ink, bg) < 2.6);
+}
+
+/**
+ * Welk plaatje een logo nodig heeft op deze vlakken: geen, een licht (voor een
+ * donker logo) of een donker (voor een wit logo op een lichte kaart).
+ */
+export function logoPlate(ink: string | null | undefined, backgrounds: string[]): 'light' | 'dark' | null {
+  if (!logoNeedsPlate(ink, backgrounds)) return null;
+  return contrast(ink!, '#FFFFFF') >= contrast(ink!, PLATE_DARK) ? 'light' : 'dark';
+}
+
+/** Het donkere plaatje: het grafiet van de cockpit. */
+export const PLATE_DARK = '#17171A';
+
+/** Leest lichte tekst hier beter dan donkere? */
+export function isDarkSurface(hex: string): boolean {
+  return contrast('#FFFFFF', hex) >= contrast('#000000', hex);
+}
+
+/** Exporteren voor de instellingen en de tests; zelfde formule als de rest. */
+export function contrastRatio(a: string, b: string): number {
+  return contrast(a, b);
+}
+
+/**
+ * Een eerste voorstel als iemand een eigen kopkleur kiest: de merkkleur, diep
+ * en wat rustiger. Zo verandert er meteen iets zichtbaars (de automatische kop
+ * is al grafiet) en past het voorstel bij het merk.
+ */
+export function suggestHeaderColor(accentColor: string): string {
+  const accent = /^#[0-9A-Fa-f]{6}$/.test(accentColor) ? accentColor : '#FFD966';
+  const { h, s } = hexToHsl(accent);
+  return hslToHex({ h, s: Math.min(s, 0.65), l: 0.18 });
+}
+
+/** Is `color` lichter dan `reference`? Voor de uitleg bij een bijgestelde kleur. */
+export function isLighterThan(color: string, reference: string): boolean {
+  return luminance(color) > luminance(reference);
+}
+
 /**
  * De neutrale trap van het thema, maar in de tint van het merk. Verzadiging en
  * helderheid komen letterlijk uit het THEMA-TOKENS-blok in globals.css; alleen
@@ -402,6 +631,16 @@ export function sanitizeStoredBranding(raw: unknown): BrandingPayload | null {
     headingFont: brandFont(typeof row.headingFont === 'string' ? row.headingFont : null).key,
     bodyFont: brandFont(typeof row.bodyFont === 'string' ? row.bodyFont : null).key,
     clientTheme: clientTheme(typeof row.clientTheme === 'string' ? row.clientTheme : null),
+    headerColor: typeof row.headerColor === 'string' && /^#[0-9A-Fa-f]{6}$/.test(row.headerColor)
+      ? row.headerColor
+      : null,
+    // Dezelfde eis als het logo hierboven (company_settings_brand_logo_dark_check).
+    logoDarkDataUrl:
+      typeof row.logoDarkDataUrl === 'string'
+        && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(row.logoDarkDataUrl)
+        && row.logoDarkDataUrl.length <= 400_000
+        ? row.logoDarkDataUrl
+        : null,
   };
 }
 
@@ -492,6 +731,11 @@ export function brandThemeVars(branding: BrandingPayload | null | undefined): Re
     s: accentHi.s,
     l: accentHi.l > 0.85 ? accentHi.l - 0.08 : accentHi.l + 0.08,
   });
+  const onAccent = inkOnAccent(accent);
+  const header = headerTheme(branding);
+  const counter = header.dark
+    ? `rgba(${rgbTriplet(HEADER_COUNTER.dark)},${HEADER_COUNTER.darkAlpha})`
+    : `rgba(${rgbTriplet(HEADER_COUNTER.light)},${HEADER_COUNTER.lightAlpha})`;
 
   return {
     // ── 1. Kanalen ──
@@ -518,7 +762,8 @@ export function brandThemeVars(branding: BrandingPayload | null | undefined): Re
     '--accent-ink': accentInk,
     '--accent-edge': accentEdge,
     '--accent-hover': accentHover,
-    '--on-accent': inkOnAccent(accent),
+    '--on-accent': onAccent,
+    '--accent-face': accentFace(accent, onAccent),
     '--two': status.two,
     '--two-ink': status.two,
     '--ok': status.ok,
@@ -568,6 +813,25 @@ export function brandThemeVars(branding: BrandingPayload | null | undefined): Re
     // De lettertypen; de galerij gebruikt dezelfde twee tokens.
     '--brand-heading': brandFont(branding?.headingFont).stack,
     '--brand-body': brandFont(branding?.bodyFont).stack,
+
+    // ── 4. De kop (portal-cockpit.css) ──
+    '--hdr-top': header.top,
+    '--hdr-mid': header.mid,
+    '--hdr-bottom': header.bottom,
+    '--hdr-ink': header.ink,
+    '--hdr-ink-2': header.ink2,
+    '--hdr-accent': header.accent,
+    '--hdr-scheme': header.dark ? 'dark' : 'light',
+    '--hdr-glass': header.dark ? `rgba(255,255,255,${HEADER_GLASS.dark})` : `rgba(0,0,0,${HEADER_GLASS.light})`,
+    '--hdr-glass-2': header.dark ? 'rgba(255,255,255,.11)' : 'rgba(0,0,0,.08)',
+    '--hdr-glass-line': header.dark ? 'rgba(255,255,255,.10)' : 'rgba(0,0,0,.09)',
+    '--hdr-hi': header.dark ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.4)',
+    '--hdr-glow': `rgba(${accentRgb},${header.glowAlpha})`,
+    // Het lijntje boven een tegel met iets dat te laat is: rood, maar zichtbaar
+    // op deze kop (3 : 1, de norm voor een lijn).
+    '--hdr-danger': readableInk(header.dark ? '#FF6B72' : '#A32A30', header.surfaces, !header.dark, 3),
+    '--hdr-counter': counter,
+    '--hdr-rings': ringsImage(header.dark),
   };
 }
 

@@ -1,6 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
-import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
+import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { createPortalInvoiceCheckout, calculateTotalCents, orgHasInvoiceMollie } from '../_shared/invoiceCheckout.ts';
 import {
   defaultPortalPrefs,
@@ -1908,14 +1908,12 @@ const COMPANY_COLUMNS = [
   BRANDING_COLUMNS,
 ].join(',');
 
-// Dezelfde lijst zonder de kolommen die de nieuwste migratie toevoegt. Draait de
-// functie al terwijl `db push` nog moet, dan faalt de brede lijst en levert deze
-// terugval nog altijd alles behalve de sfeerkeuze — beter dan terugvallen op
-// `select('*')`, want dan komt het rauwe briefpapier alsnog mee.
-const COMPANY_COLUMNS_LEGACY = COMPANY_COLUMNS
-  .split(',')
-  .filter((column) => column !== 'brand_client_theme')
-  .join(',');
+// Dezelfde lijst zonder de kolommen die de nieuwste huisstijlmigratie toevoegt
+// (kopkleur en lichte logoversie). Draait de functie al terwijl `db push` nog
+// moet, dan faalt de brede lijst en levert deze terugval nog altijd alles
+// behalve die twee — beter dan terugvallen op `select('*')`, want dan komt het
+// rauwe briefpapier alsnog mee.
+const COMPANY_COLUMNS_LEGACY = withoutNewestBrandingColumns(COMPANY_COLUMNS);
 
 async function optionalCompany(organizationId: string) {
   const row = (columns: string) => supabaseAdmin
@@ -1927,8 +1925,8 @@ async function optionalCompany(organizationId: string) {
     let { data, error } = await row(COMPANY_COLUMNS);
     if (error) {
       // Draait deze versie al terwijl de migratie nog niet is toegepast, dan
-      // bestaat de nieuwste kolom nog niet en faalt de hele opvraag. Liever de
-      // sfeerkeuze missen dan een portaal zonder bedrijfsgegevens.
+      // bestaan de nieuwste kolommen nog niet en faalt de hele opvraag. Liever
+      // de kopkleur missen dan een portaal zonder bedrijfsgegevens.
       console.warn('client-portal company lookup mislukt, opnieuw zonder de nieuwste kolom', error.message);
       ({ data, error } = await row(COMPANY_COLUMNS_LEGACY));
     }

@@ -84,5 +84,19 @@
 /portal/*
   X-Robots-Tag: noindex, nofollow
 
+# Het voorbeeld van het klantportaal (/portal/voorbeeld) staat bij Instellingen
+# → Huisstijl in een iframe op de eigen werkruimte. Alleen deze route mag dus
+# door de eigen origin worden ingelijst: de regels van /* hierboven worden
+# losgekoppeld (!) en vervangen door dezelfde CSP met frame-ancestors 'self'.
+# Overal anders blijft het frame-ancestors 'none' en X-Frame-Options: DENY.
+# Het voorbeeld toont alleen verzonnen gegevens en haalt niets op.
+# Pas je de CSP hierboven aan, doe dat dan hier ook (scripts/check-csp-hash.mjs
+# controleert dat de hash in elke CSP-regel staat).
+/portal/voorbeeld
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev https://*.cloudflarestream.com; worker-src 'self'; manifest-src 'self'; script-src 'self' 'sha256-V/oe7aF6R9J4ANY5JssZPD/Y+bGirzuFM+mHzAaPrvY='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.workers.dev; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org https://upload.videodelivery.net https://*.cloudflarestream.com
+  X-Frame-Options: SAMEORIGIN
+
 /mcp/*
   X-Robots-Tag: noindex, nofollow
