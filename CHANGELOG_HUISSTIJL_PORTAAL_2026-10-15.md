@@ -209,9 +209,10 @@ Wat de pagina's doen (akkoord geven, betalen, ondertekenen, downloaden) is niet 
   `SAMEORIGIN`, niet twee aan elkaar geplakt; `/`, `/portal` en `/quote/…` houden `'none'` en
   `DENY`.
 - `npm run test:mobile -- --theme=both`, met de twee nieuwe pagina's (`settings-huisstijl` en
-  `portal-preview`) in de ronde: de uitslag volgt in de volgende commit. Een eerdere ronde op
-  alleen het portaal en de publieke pagina's (telefoon, tablet en liggend): 42 metingen, 0
-  problemen.
+  `portal-preview`) in de ronde: 288 pagina's (licht en donker × telefoon, tablet, liggend), 0
+  problemen. Op de telefoon begint het eerste item in het portaal op 303px (grens 380), op de
+  offerte op 345px (grens 560) en op de factuur op 545px (grens 700): de nieuwe kop met groet
+  en kerncijfers blijft binnen de grenzen.
 - In de browser met de nagebootste backend: het portaal in vier merken (goud standaard, oranje met
   navy kop, blauw licht, groen met eigen kop) op 1440px en de telefoon, inloggen, de drie publieke
   pagina's (ook op de telefoon), en Instellingen → Huisstijl in Dag en Nacht op 1440px, in Nacht
