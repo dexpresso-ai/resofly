@@ -215,8 +215,10 @@ export function buildMicrosoftEventBody(event: NormalizedEventInput): Record<str
     start = { dateTime: toMicrosoftDateTime(event.startsAt), timeZone: 'UTC' };
     end = { dateTime: toMicrosoftDateTime(event.endsAt), timeZone: 'UTC' };
   }
-  // Geplakte link onderaan de omschrijving; automatische Teams-vergadering via isOnlineMeeting.
-  const content = event.addConference ? (event.description || '') : (withMeetingLine(event.description, event.meetingUrl) || '');
+  // Geplakte (of Jitsi-)link bovenaan de omschrijving: Graph geeft bij het
+  // ophalen alleen de eerste 255 tekens (bodyPreview), onderaan viel hij weg.
+  // Automatische Teams-vergadering via isOnlineMeeting.
+  const content = event.addConference ? (event.description || '') : (withMeetingLine(event.description, event.meetingUrl, 'start') || '');
   const body: Record<string, unknown> = {
     subject: event.title,
     body: { contentType: 'HTML', content },

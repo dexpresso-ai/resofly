@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Maximize2, Minimize2 } from 'lucide-react';
-import type { AppData, CalendarExternalEvent, CalendarSource, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID } from '../types';
+import type { AppData, CalendarExternalEvent, CalendarSource, ConferenceProvider, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID } from '../types';
 import { Button, Input, Textarea, Select, normalizeColor } from '../components/Ui';
 import { listExternalCalendarEvents, loadCalendarIntegrations } from '../lib/calendar-api';
 import { addDays, startOfWeek } from '../lib/dates';
 import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
 import { TimeBlockGrid, slotSelectionToIso, type BookingOverlaySlot } from './CalendarPage';
+import { BookingVideoSelect } from '../components/BookingVideoSelect';
+import { bookingVideoFields, bookingVideoFromLink, defaultBookingVideo, type BookingVideo } from '../lib/meeting';
 import {
   addBookingSlots,
   cancelBooking,
@@ -150,6 +152,7 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
                 maxTotalBookings: payload.maxTotalBookings,
                 maxPerWeek: payload.maxPerWeek,
                 autoConference: payload.autoConference,
+                conferenceProvider: payload.conferenceProvider,
               });
               setTokenByLink(prev => ({ ...prev, [res.link.id]: { token: res.token, url: res.booking_url } }));
               await reloadLinks();
@@ -228,6 +231,7 @@ interface LinkFormPayload {
   maxTotalBookings: number;
   maxPerWeek: number;
   autoConference: boolean;
+  conferenceProvider: ConferenceProvider;
 }
 
 function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }: {
@@ -247,11 +251,13 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
   const [meetingUrl, setMeetingUrl] = useState(initial?.meetingUrl ?? '');
   const [maxTotal, setMaxTotal] = useState(String(initial?.maxTotalBookings ?? 1));
   const [maxWeek, setMaxWeek] = useState(String(initial?.maxPerWeek ?? 1));
-  const [autoConference, setAutoConference] = useState(initial?.autoConference ?? true);
+  const initialProvider = sources.find(s => s.id === (initial?.sourceId ?? sources[0]?.id))?.provider ?? null;
+  // Bestaande link: wat hij nu doet. Nieuwe link: wat de agenda zelf kan, anders Jitsi.
+  const [video, setVideo] = useState<BookingVideo>(() => mode === 'edit'
+    ? bookingVideoFromLink(initial?.autoConference, initial?.conferenceProvider, initialProvider)
+    : defaultBookingVideo(initialProvider));
 
   const selectedProvider = sources.find(s => s.id === sourceId)?.provider ?? null;
-  const isExternal = selectedProvider === 'google' || selectedProvider === 'microsoft';
-  const conferenceLabel = selectedProvider === 'microsoft' ? 'Teams-vergadering' : 'Google Meet';
 
   const submit = () => {
     if (!sourceId) return;
@@ -264,7 +270,7 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
       meetingUrl: meetingUrl.trim() || null,
       maxTotalBookings: Math.max(1, parseInt(maxTotal, 10) || 1),
       maxPerWeek: Math.max(1, parseInt(maxWeek, 10) || 1),
-      autoConference,
+      ...bookingVideoFields(video, selectedProvider),
     });
   };
 
@@ -291,15 +297,8 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
       </div>
       <label>Intro-tekst op de boekingspagina<Textarea value={introText} onChange={e => setIntroText(e.target.value)} rows={2} placeholder="Kies hieronder een moment dat jou uitkomt." /></label>
       <label>Begeleidende tekst bij de uitnodiging<Textarea value={inviteMessage} onChange={e => setInviteMessage(e.target.value)} rows={2} placeholder="Fijn dat we een moment inplannen. Tot dan!" /></label>
-      {isExternal && (
-        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          <input type="checkbox" checked={autoConference} onChange={e => setAutoConference(e.target.checked)} style={{ marginTop: 3 }} />
-          <span>Automatisch een {conferenceLabel} aanmaken bij het boeken.<br />
-            <span className="muted" style={{ fontSize: 12 }}>De klant krijgt de deelnamelink in de agenda-uitnodiging. Vul je hieronder een eigen vaste link in, dan wordt die gebruikt in plaats hiervan.</span>
-          </span>
-        </label>
-      )}
-      <label>Vaste videocall-link (optioneel)<Input value={meetingUrl} onChange={e => setMeetingUrl(e.target.value)} placeholder="https://meet.google.com/… of Teams/Zoom" /></label>
+      <BookingVideoSelect value={video} sourceProvider={selectedProvider} onChange={setVideo} />
+      <label>Vaste videocall-link (optioneel)<Input value={meetingUrl} onChange={e => setMeetingUrl(e.target.value)} placeholder="https://… — gaat vóór de keuze hierboven" /></label>
       {sources.length === 0 && <p className="muted">Er is nog geen schrijfbare agenda beschikbaar. Koppel of maak eerst een agenda.</p>}
       <div className="mbk-form-actions">
         <Button variant="primary" onClick={submit} disabled={busy || !sourceId}>{mode === 'create' ? 'Aanmaken' : 'Opslaan'}</Button>
@@ -433,9 +432,10 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
           title: link.title, sourceId: link.source_id ?? '', clientId: link.client_id ?? '',
           introText: link.intro_text, inviteMessage: link.invite_message, meetingUrl: link.meeting_url,
           maxTotalBookings: link.max_total_bookings, maxPerWeek: link.max_per_week, autoConference: link.auto_conference,
+          conferenceProvider: link.conference_provider ?? 'calendar',
         }}
         onCancel={() => setEditing(false)}
-        onSubmit={(p) => { onSavedPatch({ title: p.title, sourceId: p.sourceId, clientId: p.clientId, introText: p.introText, inviteMessage: p.inviteMessage, meetingUrl: p.meetingUrl, maxTotalBookings: p.maxTotalBookings, maxPerWeek: p.maxPerWeek, autoConference: p.autoConference }); setEditing(false); }}
+        onSubmit={(p) => { onSavedPatch({ title: p.title, sourceId: p.sourceId, clientId: p.clientId, introText: p.introText, inviteMessage: p.inviteMessage, meetingUrl: p.meetingUrl, maxTotalBookings: p.maxTotalBookings, maxPerWeek: p.maxPerWeek, autoConference: p.autoConference, conferenceProvider: p.conferenceProvider }); setEditing(false); }}
       />
     );
   }

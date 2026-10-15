@@ -1621,6 +1621,32 @@ export async function loadCompanySettings(organizationId: UUID): Promise<Company
   return (data ?? null) as CompanySettings | null;
 }
 
+/**
+ * Slaat alleen de Jitsi-server op (Instellingen → Agenda). Los van
+ * upsertCompanySettings: dat formulier kent dit veld niet, en een volledige
+ * upsert vanuit hier zou de bedrijfsgegevens met een verouderde kopie kunnen
+ * overschrijven. Bestaat de rij nog niet, dan maken we hem aan met alleen deze
+ * instelling (de rest heeft standaardwaarden). Alleen owners/admins mogen dit
+ * (policy op company_settings).
+ */
+export async function saveJitsiServer(organizationId: UUID, jitsiBaseUrl: string | null): Promise<void> {
+  const fail = (error: { code?: string; message?: string }) => isMissingColumn(error, 'jitsi_base_url')
+    ? new NotMigratedError('De instelling voor een eigen Jitsi-server staat in deze omgeving nog niet aan: de database-update moet nog draaien.')
+    : new Error(error.message || 'Opslaan mislukt.');
+  const { data, error } = await supabase
+    .from('company_settings')
+    .update({ jitsi_base_url: jitsiBaseUrl })
+    .eq('organization_id', organizationId)
+    .select('id');
+  if (error) throw fail(error);
+  if (data && data.length > 0) return;
+  const createdBy = await currentUserId();
+  const { error: insertError } = await supabase
+    .from('company_settings')
+    .insert({ organization_id: organizationId, created_by: createdBy, jitsi_base_url: jitsiBaseUrl });
+  if (insertError) throw fail(insertError);
+}
+
 export async function upsertCompanySettings(organizationId: UUID, values: CompanySettingsInput): Promise<CompanySettings> {
   const createdBy = await currentUserId();
   const { data, error } = await supabase

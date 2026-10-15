@@ -855,6 +855,7 @@ function App() {
     currentUserId,
     teamMembers: workMembers,
     canWrite: orgCanWrite && permissions.canWrite('chat'),
+    jitsiBaseUrl: data.companySettings?.jitsi_base_url ?? null,
   });
   // Uit een pushmelding: dit gesprek openen zodra de werkruimte (en de
   // herstelde tabbladen) er staan.
@@ -2919,7 +2920,7 @@ function App() {
       // Lokale tijd (browser = Europe/Amsterdam) -> UTC ISO voor de agenda-API.
       const startsAt = new Date(`${p.date}T${p.start_time}:00`).toISOString();
       const endsAt = new Date(`${p.date}T${p.end_time}:00`).toISOString();
-      await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined });
+      await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined, meetingUrl: p.meeting_url ?? undefined });
     },
     onCreateWeekAction: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
@@ -3269,7 +3270,7 @@ function App() {
       // teamlid, dan geven we niets mee en verdwijnt het tabblad. Schrijfrecht
       // komt hier uit de agenda-module, niet uit de instellingenpagina.
       const calendarSettings = permissions.canRead('calendar')
-        ? <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={orgCanWrite && permissions.canWrite('calendar')} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>
+        ? <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={orgCanWrite && permissions.canWrite('calendar')} canAdmin={canAdmin} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>
         : null;
       return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
     }

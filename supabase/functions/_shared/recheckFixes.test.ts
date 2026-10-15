@@ -201,7 +201,7 @@ function calendarTables(): Record<string, Row[]> {
       { id: uuid(73), note_id: uuid(83), calendar_source_id: SRC.minePrivate, visibility_snapshot: 'private', is_private_masked_snapshot: false, event_starts_at: '2026-10-02T09:00:00Z', event_title_snapshot: 'Mijn eigen', provider: 'native', provider_event_id: 'uid-eigen' },
     ],
     notes: [80, 81, 82, 83].map((n) => ({ id: uuid(n), title: `Notitie ${n}` })),
-    meeting_booking_links: [{ id: uuid(95), title: 'Kennismaking', status: 'active', client_id: null, source_id: SRC.colleagueShared, user_id: COLLEAGUE, max_total_bookings: 1, max_per_week: 1, auto_conference: true, meeting_url: null, public_token_hash: null }],
+    meeting_booking_links: [{ id: uuid(95), title: 'Kennismaking', status: 'active', client_id: null, source_id: SRC.colleagueShared, user_id: COLLEAGUE, max_total_bookings: 1, max_per_week: 1, auto_conference: true, conference_provider: 'calendar', meeting_url: null, public_token_hash: null }],
   };
 }
 

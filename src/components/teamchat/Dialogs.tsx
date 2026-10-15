@@ -3,7 +3,7 @@ import { Check, Globe, Link2, Lock, Phone, Search, Video, X } from 'lucide-react
 import {
   addParticipants, createChannel, createGroup, joinChannel, loadPublicChannels, sendMessage, updateConversation,
 } from '../../lib/chat';
-import { detectMeetingKind, isValidMeetingUrl } from '../../lib/meeting';
+import { detectMeetingKind, isValidMeetingUrl, jitsiMeetingUrl, usesPublicJitsi } from '../../lib/meeting';
 import type { ChatMessage, ChatPublicChannel } from '../../types';
 import {
   formatListTime, memberDisplay, plainSnippet, PRESENCE_LABEL, type ConversationVM,
@@ -280,13 +280,6 @@ export function RenameDialog({ api, vm, onClose }: { api: TeamChatApi; vm: Conve
 
 // ── Vergaderen en bellen ─────────────────────────────────────────────────────
 
-function jitsiRoom(): string {
-  const alphabet = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const bytes = new Uint8Array(14);
-  crypto.getRandomValues(bytes);
-  return `ResoFly-${Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('')}`;
-}
-
 export function MeetingDialog({ api, vm, audio, onClose }: { api: TeamChatApi; vm: ConversationVM; audio: boolean; onClose: () => void }) {
   const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
@@ -305,7 +298,8 @@ export function MeetingDialog({ api, vm, audio, onClose }: { api: TeamChatApi; v
 
   async function startJitsi() {
     if (busy) return;
-    const url = `https://meet.jit.si/${jitsiRoom()}${audio ? '#config.startWithVideoMuted=true&config.startAudioOnly=true' : ''}`;
+    // Op de Jitsi-server van de organisatie (Instellingen → Agenda), anders meet.jit.si.
+    const url = `${jitsiMeetingUrl(api.jitsiBaseUrl)}${audio ? '#config.startWithVideoMuted=true&config.startAudioOnly=true' : ''}`;
     // Eerst het venster openen: na een await ziet de browser het niet meer als
     // een klik van jou en houdt hij het pop-upvenster tegen.
     window.open(url, '_blank', 'noopener,noreferrer');
@@ -317,7 +311,7 @@ export function MeetingDialog({ api, vm, audio, onClose }: { api: TeamChatApi; v
   async function shareLink() {
     if (!linkOk || busy) return;
     setBusy(true); setError(null);
-    try { await post(normalized, detectMeetingKind(normalized).kind); onClose(); }
+    try { await post(normalized, detectMeetingKind(normalized, api.jitsiBaseUrl).kind); onClose(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Delen mislukt'); setBusy(false); }
   }
 
@@ -338,8 +332,8 @@ export function MeetingDialog({ api, vm, audio, onClose }: { api: TeamChatApi; v
         <button type="submit" className="tmc-btn is-primary" disabled={!linkOk || busy}>Delen</button>
       </form>
       {link.trim() && !linkOk && <div className="tmc-field-hint">Plak een volledige https-link.</div>}
-      {linkOk && <div className="tmc-field-hint">Herkend als {detectMeetingKind(normalized).label}.</div>}
-      <p className="tmc-modal-foot-note">Bij Jitsi Meet logt degene die de vergadering opent één keer kort in (bijvoorbeeld met Google of GitHub); de anderen doen direct mee.</p>
+      {linkOk && <div className="tmc-field-hint">Herkend als {detectMeetingKind(normalized, api.jitsiBaseUrl).label}.</div>}
+      {usesPublicJitsi(api.jitsiBaseUrl) && <p className="tmc-modal-foot-note">Bij Jitsi Meet logt degene die de vergadering opent één keer kort in (bijvoorbeeld met Google of GitHub); de anderen doen direct mee.</p>}
       {error && <div className="tmc-inline-error">{error}</div>}
     </Modal>
   );

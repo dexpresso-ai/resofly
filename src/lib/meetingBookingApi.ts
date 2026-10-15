@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import type {
+  ConferenceProvider,
   MeetingBooking,
   MeetingBookingLink,
   MeetingBookingLinkListItem,
@@ -35,6 +36,8 @@ export interface CreateBookingLinkInput {
   maxTotalBookings: number;
   maxPerWeek: number;
   autoConference?: boolean;
+  /** Bij autoConference: Meet/Teams van de agenda, of een eigen Jitsi-kamer per boeking. */
+  conferenceProvider?: ConferenceProvider;
 }
 
 export interface BookingLinkPatch {
@@ -45,6 +48,7 @@ export interface BookingLinkPatch {
   maxTotalBookings?: number;
   maxPerWeek?: number;
   autoConference?: boolean;
+  conferenceProvider?: ConferenceProvider;
   status?: 'active' | 'closed';
   sourceId?: UUID;
   clientId?: UUID | null;
