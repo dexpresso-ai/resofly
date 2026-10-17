@@ -265,6 +265,22 @@ function readChatDeepLink(): string | null {
   }
 }
 
+/** Een pushmelding van een agent opent /?agent=<id>: die agent klapt open in het
+ *  commandocentrum. Net als bij de chat één keer lezen en uit de adresbalk halen. */
+function readAgentDeepLink(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const url = new URL(window.location.href);
+    const id = url.searchParams.get('agent');
+    if (!id) return null;
+    url.searchParams.delete('agent');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Past een React-setterwaarde (directe waarde óf updater-functie) toe op de vorige waarde. */
 function applyUpdater<T>(value: React.SetStateAction<T>, prev: T): T {
   return typeof value === 'function' ? (value as (p: T) => T)(prev) : value;
@@ -876,6 +892,17 @@ function App() {
     if (permissions.canRead('chat')) openTeamChat(chatDeepLink);
     setChatDeepLink(null);
   }, [chatDeepLink, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Uit een pushmelding van een agent: naar het commandocentrum, met die agent open.
+  const [agentDeepLink, setAgentDeepLink] = useState<string | null>(() => readAgentDeepLink());
+  useEffect(() => {
+    if (!agentDeepLink || loading || !activeOrganization || tabsLoadedForRef.current !== activeOrganization.id) return;
+    if (permissions.canRead('gerrie')) {
+      setPage('gerrie'); setProjectId(null); setClientId(null);
+      setOpenAgentId(agentDeepLink);
+    }
+    setAgentDeepLink(null);
+  }, [agentDeepLink, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // OS-/device-pushmeldingen (service worker + Web Push). Registreert de worker,
   // houdt het abonnement bij en biedt aan/uit + per-gebeurtenis voorkeuren aan.
@@ -2902,15 +2929,20 @@ function App() {
     // seconden en het resultaat hoort thuis in de run-historie, niet in een
     // spinnende chatkaart. Mislukt hij, dan staat dat daar met reden en logboek.
     onCreateAgent: async (p) => {
-      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      // Een agent is van wie hem maakt en draait met diens rechten: iedereen die
+      // Gerrie mag gebruiken mag er een hebben. Wat hij niet mag, snoeit de server eraf.
+      if (!permissions.canRead('gerrie')) throw new Error('Je hebt geen toegang tot Gerrie.');
       const saved = await saveRoutine(activeOrg.id, {
         name: p.name, instruction: p.instruction, icon: p.icon, hue: null,
         email_mode: p.email_mode, email_subject: p.email_subject, email_body: p.email_body,
         max_emails_per_run: p.max_emails_per_run,
-        model_kind: 'cheap', mode: p.mode, enabled_tools: p.enabled_tools,
-        schedule_kind: p.schedule_kind, hour: p.hour,
+        model_kind: 'strong', mode: p.mode, enabled_tools: p.enabled_tools,
+        schedule_kind: p.schedule_kind, hour: p.hour, minute: p.minute ?? 0, end_hour: p.end_hour ?? null,
         day_of_week: p.day_of_week, day_of_month: p.day_of_month,
-        timezone: 'Europe/Amsterdam', delivery: { channels: ['inapp'] },
+        max_proposals_per_run: p.max_proposals_per_run ?? 3,
+        // In de app en met een pushmelding; een agent die elk uur kijkt, meldt
+        // zich alleen als hij iets vond.
+        timezone: 'Europe/Amsterdam', delivery: { channels: ['inapp', 'push'], quiet: p.schedule_kind === 'hourly' },
       }, undefined, true);
       if (!saved.id) throw new Error('De agent is niet aangemaakt.');
       const agentId = saved.id;
@@ -3244,7 +3276,7 @@ function App() {
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} unreadTicketIds={ticketUnreadIds}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} active={view.id === activeTab.id} />;
-    if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} isAdmin={activeMembership?.role === 'owner' || activeMembership?.role === 'admin'} onOpenDecisionTarget={openDecisionTarget} {...gerrieActions} />;
+    if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} isAdmin={activeMembership?.role === 'owner' || activeMembership?.role === 'admin'} onOpenDecisionTarget={openDecisionTarget} currentUserId={currentUserId} teamMembers={workMembers} {...gerrieActions} />;
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       openCampaignId={view.pendingDraft?.kind === 'campaign' ? String(view.pendingDraft.payload.id ?? '') : null} onCampaignOpened={() => setPendingDraft(null)}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument}/>;

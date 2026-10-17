@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, Bot, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, Link2, ListChecks, Loader2, Mail, RefreshCw, Sparkles, Webhook, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, Link2, ListChecks, Loader2, Mail, RefreshCw, Sparkles, Users2, Webhook, X } from 'lucide-react';
 import {
   batchDecision, claimingHandlers, confirmGerrieAction, listPendingAgentApprovals, rejectGerrieAction, runGerrieDecision,
   type AgentApproval,
 } from '../lib/gerrie-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { executeProposal, openProposal, proposalLabel, type ProposalKind } from '../lib/gerrie-proposals';
+import { approvalScope } from '../lib/agents';
+import { memberShortName } from '../lib/members';
 import { AgentGlyph } from './AgentGlyph';
 import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
-import type { UUID } from '../types';
+import type { OrganizationMember, UUID } from '../types';
 
 /**
  * De goedkeurwachtrij — het "human in the loop"-bord.
@@ -22,6 +24,11 @@ import type { UUID } from '../types';
  * Twee gedaantes:
  *   variant="dashboard" — op het startscherm; verdwijnt volledig als er niets wacht.
  *   variant="page"      — in het commandocentrum; houdt een lege staat aan.
+ *
+ * Wat er staat, is wat op JOU wacht (approvalScope): de voorstellen van je eigen
+ * agents, en als owner/admin die van een gekoppelde AI of API-sleutel. Een
+ * voorstel van de agent van een collega wacht op die collega; een owner/admin
+ * kan die er op de pagina bij halen (toezicht), maar ze tellen niet mee.
  */
 
 type Variant = 'dashboard' | 'page';
@@ -38,6 +45,7 @@ const KIND_ICON: Record<ProposalKind, typeof Mail> = {
 
 export function AgentApprovals({
   organizationId, canWrite, handlers, variant = 'page', onOpenCommandCenter, onCountChange, onChanged, refreshKey = 0,
+  currentUserId = null, canOversee = false, teamMembers = [],
 }: {
   organizationId: UUID;
   /** Mag dit teamlid daadwerkelijk versturen/aanmaken? Zo nee: alleen afwijzen. */
@@ -51,6 +59,12 @@ export function AgentApprovals({
   onChanged?: () => void;
   /** Verhoog dit om een verse ophaal af te dwingen (bv. na "Nu draaien"). */
   refreshKey?: number;
+  /** De ingelogde gebruiker: zijn voorstellen zijn "jouw akkoord". */
+  currentUserId?: string | null;
+  /** Owner/admin: beslist over gekoppelde AI en API-sleutels, en kan die van collega's inzien. */
+  canOversee?: boolean;
+  /** Voor de naam bij een voorstel van een collega. */
+  teamMembers?: OrganizationMember[];
 }) {
   const [items, setItems] = useState<AgentApproval[]>([]);
   const [loading, setLoading] = useState(true);
@@ -58,6 +72,7 @@ export function AgentApprovals({
   const [rowState, setRowState] = useState<Record<string, RowState>>({});
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [tick, setTick] = useState(0);
+  const [showTeam, setShowTeam] = useState(false);
   const alive = useRef(true);
 
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -84,7 +99,15 @@ export function AgentApprovals({
     return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); };
   }, [load]);
 
-  useEffect(() => { onCountChange?.(items.length); }, [items.length, onCountChange]);
+  // Wat op jou wacht, en (voor toezicht) wat op een collega wacht. Alleen het
+  // eerste telt: de badge zegt hoeveel JIJ te beslissen hebt.
+  const mine = items.filter((item) => approvalScope(item, currentUserId, canOversee) === 'mine');
+  const team = items.filter((item) => approvalScope(item, currentUserId, canOversee) === 'team');
+  const shown = showTeam && variant === 'page'
+    ? [...mine, ...team].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    : mine;
+
+  useEffect(() => { onCountChange?.(mine.length); }, [mine.length, onCountChange]);
 
   function drop(auditId: string) {
     setItems((prev) => prev.filter((i) => i.auditId !== auditId));
@@ -120,7 +143,7 @@ export function AgentApprovals({
     }
   }
 
-  const count = items.length;
+  const count = mine.length;
 
   // Op het startscherm is "niets te doen" geen bericht maar afwezigheid.
   if (variant === 'dashboard' && (count === 0 || error)) return null;
@@ -138,6 +161,13 @@ export function AgentApprovals({
           </p>
         </div>
         {count > 0 && <span className="ag-queue-count">{count}</span>}
+        {variant === 'page' && team.length > 0 && (
+          <button type="button" className={`ag-queue-team${showTeam ? ' on' : ''}`} aria-pressed={showTeam}
+            onClick={() => setShowTeam((v) => !v)}
+            title="Voorstellen van de agents van collega's. Ze wachten op die collega; als owner/admin kun je er ook over beslissen.">
+            <Users2 size={13} /> {showTeam ? 'Verberg' : 'Toon'} {team.length} van collega’s
+          </button>
+        )}
         <button type="button" className="ag-queue-refresh" onClick={() => setTick((t) => t + 1)} title="Wachtrij verversen" aria-label="Wachtrij verversen">
           <RefreshCw size={14} className={loading ? 'ag-spin' : undefined} />
         </button>
@@ -145,16 +175,20 @@ export function AgentApprovals({
 
       {error && variant === 'page' && <p className="ag-queue-error"><AlertTriangle size={13} /> {error}</p>}
 
-      {loading && count === 0 && !error
+      {loading && shown.length === 0 && !error
         ? <p className="ag-queue-empty">Wachtrij laden…</p>
-        : count === 0 && !error
+        : shown.length === 0 && !error
           ? <div className="ag-queue-zero">
               <span aria-hidden="true"><Check size={15} /></span>
               <div><strong>Niets te beslissen</strong>Zodra een agent iets wil versturen of aanmaken, staat het hier klaar.</div>
             </div>
           : <ul className="ag-queue-list">
-              {items.map((item) => {
+              {shown.map((item) => {
                 const info = proposalLabel(item.proposal);
+                // Van de agent van een collega: zeg op wie het wacht.
+                const colleague = item.source === 'agent' && item.userId && currentUserId && item.userId !== currentUserId
+                  ? memberShortName(item.userId, teamMembers, currentUserId)
+                  : null;
                 const state = rowState[item.auditId] ?? 'idle';
                 const KindIcon = KIND_ICON[info.kind];
                 const blocked = info.write && !canWrite;
@@ -192,6 +226,7 @@ export function AgentApprovals({
                         <span className="ag-queue-agent">
                           {item.agentName}{item.source === 'mcp' && ' · gekoppelde AI'}{item.source === 'api' && ' · API-koppeling'}
                         </span>
+                        {colleague && <span className="ag-queue-owner">wacht op {colleague}</span>}
                         {info.sub && <span className="ag-queue-sub">{info.sub}</span>}
                         <span className="ag-queue-when">{relativeTime(item.createdAt)}</span>
                       </div>

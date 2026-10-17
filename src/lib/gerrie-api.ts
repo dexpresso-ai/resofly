@@ -252,8 +252,14 @@ export interface GerrieAgentProposal {
   enabled_tools: string[];
   schedule_kind: RoutineScheduleKind;
   hour: number;
+  /** Ontbreekt bij voorstellen van vóór de minuut-kolom; dan :00. */
+  minute?: number;
+  /** Alleen bij 'hourly': het laatste uur van het venster. */
+  end_hour?: number | null;
   day_of_week: number | null;
   day_of_month: number | null;
+  /** Hoeveel dingen één run hoogstens klaarzet; ontbreekt bij oudere voorstellen. */
+  max_proposals_per_run?: number;
   email_mode: AgentEmailMode;
   email_subject: string | null;
   email_body: string | null;
@@ -910,15 +916,36 @@ export async function loadGerrieUsage(organizationId: UUID): Promise<GerrieUsage
 
 // ── Gerrie Routines (gebruikers bouwen eigen geplande agents) ─────────────────
 
-export type RoutineScheduleKind = 'daily' | 'weekly' | 'monthly';
+/**
+ * Het ritme van een agent. 'weekdays' = elke werkdag (ma-vr); 'hourly' = elk uur op
+ * werkdagen, van `hour` tot en met `end_hour`. Dezelfde lijst als SCHEDULE_KINDS in
+ * supabase/functions/_shared/agentSchedule.ts en de check in de database.
+ */
+export type RoutineScheduleKind = 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'hourly';
 export type RoutineMode = 'report' | 'propose';
 export type RoutineStatus = 'draft' | 'active' | 'paused' | 'archived';
 /** Wie schrijft de klantmail: de agent zelf, of jouw vastgelegde tekst met variabelen. */
 export type AgentEmailMode = 'compose' | 'template';
 export type RoutineRunStatus = 'claimed' | 'running' | 'succeeded' | 'failed' | 'partial' | 'skipped_budget' | 'cancelled';
+/** private = alleen jij (en owners/admins); team = je collega's kunnen er een eigen kopie van maken. */
+export type AgentVisibility = 'private' | 'team';
+
+/** Waar het resultaat van een run heen gaat. In de app staat het altijd. */
+export interface AgentDelivery {
+  channels: string[];
+  recipient_user_ids?: string[];
+  /** Niets te melden = geen mail en geen pushmelding (de run staat wel in de app). */
+  quiet?: boolean;
+}
 
 export interface GerrieRoutine {
   id: UUID;
+  /** Namens wie hij draait — met diens rechten. Null als die medewerker niet meer bestaat. */
+  run_as_user_id: UUID | null;
+  created_by: UUID | null;
+  visibility: AgentVisibility;
+  /** De gedeelde agent waar deze een kopie van is. */
+  copied_from: UUID | null;
   name: string;
   description: string | null;
   /** Zelfgekozen embleem-sleutel; null = de app leidt hem af uit opdracht + tools. */
@@ -932,21 +959,26 @@ export interface GerrieRoutine {
   /** Hard plafond op het aantal klantmails dat één run mag klaarzetten. */
   max_emails_per_run: number;
   instruction: string;
+  /** strong = Sonnet 5.5 dat grondig nadenkt; cheap = hetzelfde model, kort nadenken. */
   model_kind: 'cheap' | 'strong';
   mode: RoutineMode;
   enabled_tools: string[];
   schedule_kind: RoutineScheduleKind;
   hour: number;
+  minute: number;
+  end_hour: number | null;
   day_of_week: number | null;
   day_of_month: number | null;
   timezone: string;
+  /** Hoeveel dingen één run hoogstens klaarzet (bij 'propose'). */
+  max_proposals_per_run: number;
   status: RoutineStatus;
   /** Wanneer de agent gearchiveerd is ("verwijderd"). Null = gewoon in gebruik. */
   archived_at: string | null;
   next_run_at: string | null;
   last_run_at: string | null;
   consecutive_failures: number;
-  delivery: { channels: string[]; recipient_user_ids: string[] };
+  delivery: AgentDelivery;
   created_at: string;
   updated_at: string;
 }
@@ -964,6 +996,8 @@ export interface GerrieRoutineRun {
   cost_usd: number;
   proposals_created: number;
   error: string | null;
+  /** Wat de runner erbij bewaarde; `quiet` = niets te melden, dus geen mail of melding. */
+  result?: { quiet?: boolean; auditIds?: string[] } | null;
   created_at: string;
 }
 
@@ -983,13 +1017,37 @@ export interface GerrieRoutineInput {
   enabled_tools: string[];
   schedule_kind: RoutineScheduleKind;
   hour: number;
+  minute?: number;
+  end_hour?: number | null;
   day_of_week?: number | null;
   day_of_month?: number | null;
   timezone: string;
+  max_proposals_per_run?: number;
+  visibility?: AgentVisibility;
   // Bewust géén budget-velden: kosten lopen via het maandtegoed van het account
   // (secret GERRIE_MONTHLY_USER_COST_EUR). `max_emails_per_run` is geen budget maar
   // een grens op hoeveel post één run mag klaarzetten, en wordt wél afgedwongen.
-  delivery: { channels: string[] };
+  delivery: AgentDelivery;
+}
+
+/**
+ * Wat de server van een opgeslagen agent maakte. Een agent kan nooit meer dan zijn
+ * eigenaar: tools buiten diens rechten vallen eraf (`dropped`), en wie zelf niet mag
+ * wijzigen krijgt een agent die alleen meekijkt (`downgraded`).
+ */
+export interface RoutineSaveResult {
+  id?: string;
+  status?: string;
+  mode?: RoutineMode;
+  dropped: string[];
+  downgraded: boolean;
+}
+
+/** Wat dit teamlid met agents mag — uit dezelfde regel als de server (agentAccess.ts). */
+export interface AgentCapabilities {
+  canUse: boolean;
+  canPropose: boolean;
+  canOversee: boolean;
 }
 
 const RUNNER_FN = 'gerrie-agent-runner';
@@ -1011,7 +1069,11 @@ async function postRunner(body: Record<string, unknown>): Promise<Record<string,
   return (await res.json()) as Record<string, unknown>;
 }
 
-/** Alle Routines van de organisatie (owner/admin, via RLS). */
+/**
+ * Alle agents die jij mag zien (RLS): je eigen, de agents die collega's met het
+ * team deelden, en als owner/admin die van iedereen. Waar ze op het scherm staan,
+ * bepaalt sortAgents (src/lib/agents.ts).
+ */
 export async function listRoutines(organizationId: UUID): Promise<GerrieRoutine[]> {
   const { data, error } = await supabase.from('ai_agents')
     .select('*').eq('organization_id', organizationId).order('created_at', { ascending: false });
@@ -1033,10 +1095,74 @@ export async function listRoutineRuns(organizationId: UUID, agentId: UUID, limit
  *
  * `activate` zet een nieuwe agent in dezelfde aanroep aan — een net samengestelde
  * agent hoort niet als slapend concept te blijven liggen.
+ *
+ * De server snoeit de agent bij tot wat jij mag; wat eraf viel staat in het
+ * antwoord (`dropped`, `downgraded`), zodat het scherm het kan zeggen.
  */
-export async function saveRoutine(organizationId: UUID, input: GerrieRoutineInput, id?: UUID, activate = false): Promise<{ id?: string; status?: string }> {
+export async function saveRoutine(organizationId: UUID, input: GerrieRoutineInput, id?: UUID, activate = false): Promise<RoutineSaveResult> {
   const payload = await postRunner({ action: id ? 'update' : 'create', organizationId, id, activate: !id && activate, ...input });
-  return { id: typeof payload?.id === 'string' ? payload.id : id, status: typeof payload?.status === 'string' ? payload.status : undefined };
+  return saveResult(payload, id);
+}
+
+function saveResult(payload: Record<string, unknown>, id?: UUID): RoutineSaveResult {
+  const mode = payload?.mode;
+  return {
+    id: typeof payload?.id === 'string' ? payload.id : id,
+    status: typeof payload?.status === 'string' ? payload.status : undefined,
+    mode: mode === 'propose' || mode === 'report' ? mode : undefined,
+    dropped: Array.isArray(payload?.dropped) ? (payload.dropped as unknown[]).map(String) : [],
+    downgraded: payload?.downgraded === true,
+  };
+}
+
+/**
+ * Maakt een eigen agent op basis van een bestaande: een sjabloon dat een collega
+ * deelde, of een eigen agent als startpunt. De kopie is van jou en draait met
+ * JOUW rechten; wat jij niet mag, valt eraf (zie RoutineSaveResult).
+ */
+export async function cloneRoutine(organizationId: UUID, id: UUID, activate = false): Promise<RoutineSaveResult> {
+  const payload = await postRunner({ action: 'clone', organizationId, id, activate });
+  return saveResult(payload);
+}
+
+/**
+ * Deel je agent met het team als startpunt, of maak hem weer privé. Collega's
+ * zien dan zijn instellingen en kunnen er een eigen kopie van maken — niet zijn
+ * runs, logboek of voorstellen.
+ */
+export async function shareRoutine(organizationId: UUID, id: UUID, visibility: AgentVisibility): Promise<AgentVisibility> {
+  const payload = await postRunner({ action: 'share', organizationId, id, visibility });
+  return payload?.visibility === 'team' ? 'team' : 'private';
+}
+
+/**
+ * Wat één agent deze maand deed: zijn runs, en wat er met zijn voorstellen
+ * gebeurde. Leest alleen wat RLS jou laat zien (je eigen agent, of als owner/admin
+ * elke), en valt bij een fout terug op niets in plaats van de pagina te breken.
+ */
+export async function loadAgentMonth(organizationId: UUID, agentId: UUID, since: string): Promise<{
+  runs: Array<Pick<GerrieRoutineRun, 'status' | 'cost_usd' | 'proposals_created' | 'result'>>;
+  decisions: Array<{ status: string; decision: string | null }>;
+}> {
+  const [runs, decisions] = await Promise.all([
+    supabase.from('ai_agent_runs')
+      .select('status, cost_usd, proposals_created, result')
+      .eq('organization_id', organizationId).eq('agent_id', agentId).gte('created_at', since)
+      .limit(1000),
+    supabase.from('ai_action_audit')
+      .select('status, result')
+      .eq('organization_id', organizationId).eq('agent_id', agentId).gte('created_at', since)
+      .limit(1000),
+  ]);
+  if (runs.error) throw new Error(runs.error.message);
+  if (decisions.error) throw new Error(decisions.error.message);
+  return {
+    runs: (runs.data ?? []) as Array<Pick<GerrieRoutineRun, 'status' | 'cost_usd' | 'proposals_created' | 'result'>>,
+    decisions: ((decisions.data ?? []) as Array<{ status: string; result: { decision?: unknown } | null }>).map((d) => ({
+      status: String(d.status ?? ''),
+      decision: d.result?.decision != null ? String(d.result.decision) : null,
+    })),
+  };
 }
 
 /** Activeer/pauzeer een Routine. */
@@ -1087,6 +1213,11 @@ export interface AgentApproval {
   createdAt: string;
   runId: UUID | null;
   agentId: UUID | null;
+  /**
+   * Op wiens naam het voorstel staat. Bij een agent is dat zijn eigenaar: die
+   * beslist erover (en een owner/admin, als toezicht). Zie approvalScope.
+   */
+  userId: UUID | null;
   /** Naam van de agent; valt terug op "Gerrie-agent" als de naam niet leesbaar is. */
   agentName: string;
   agentIcon: string | null;
@@ -1115,9 +1246,12 @@ export interface AgentApproval {
  * ontstonden; die hier nóg een keer tonen zou elke genegeerde chat-suggestie voor
  * altijd op het startscherm plakken.
  *
- * De agentnamen zijn best-effort: `ai_agents` is owner/admin-only, dus een gewoon
- * teamlid ziet de wachtrij wél maar de naam niet. Dan valt hij terug op een
- * neutraal label in plaats van de hele kaart te laten mislukken.
+ * Wat je hier terugkrijgt bepaalt RLS: een teamlid ziet alleen wat op zijn eigen
+ * naam staat, een owner/admin alles. Wat daarvan op JOU wacht en wat op een
+ * collega, beslist approvalScope (src/lib/agents.ts) op het scherm.
+ *
+ * De agentnamen zijn best-effort: is een agent niet (meer) leesbaar, dan valt hij
+ * terug op een neutraal label in plaats van de hele kaart te laten mislukken.
  */
 export async function listPendingAgentApprovals(organizationId: UUID, limit = 30): Promise<AgentApproval[]> {
   // Drie soorten voorstellen wachten hier: die van een geplande agent, die van
@@ -1132,21 +1266,21 @@ export async function listPendingAgentApprovals(organizationId: UUID, limit = 30
     .order('created_at', { ascending: false })
     .limit(limit);
   let { data, error } = await pending(
-    'id, params, created_at, agent_id, agent_run_id, mcp_grant_id, api_key_id, result',
+    'id, params, created_at, user_id, agent_id, agent_run_id, mcp_grant_id, api_key_id, result',
     'agent_run_id.not.is.null,mcp_grant_id.not.is.null,api_key_id.not.is.null',
   );
   // De app loopt vóór op de database: zonder de API-migratie bestaat de kolom
   // api_key_id nog niet. Dan de wachtrij zoals hij was, in plaats van leeg.
   if (error && isMissingColumn(error, 'api_key_id')) {
     ({ data, error } = await pending(
-      'id, params, created_at, agent_id, agent_run_id, mcp_grant_id, result',
+      'id, params, created_at, user_id, agent_id, agent_run_id, mcp_grant_id, result',
       'agent_run_id.not.is.null,mcp_grant_id.not.is.null',
     ));
   }
   if (error) throw new Error(error.message);
 
   const rows = (data ?? []) as unknown as Array<{
-    id: string; params: unknown; created_at: string;
+    id: string; params: unknown; created_at: string; user_id: string | null;
     agent_id: string | null; agent_run_id: string | null;
     mcp_grant_id: string | null; api_key_id?: string | null; result: { via?: string } | null;
   }>;
@@ -1178,6 +1312,7 @@ export async function listPendingAgentApprovals(organizationId: UUID, limit = 30
       createdAt: r.created_at,
       runId: (r.agent_run_id as UUID | null) ?? null,
       agentId: (r.agent_id as UUID | null) ?? null,
+      userId: (r.user_id as UUID | null) ?? null,
       agentName: fromMcp
         ? (r.result?.via?.trim() || 'Een gekoppelde AI')
         : fromApi ? (r.result?.via?.trim() || 'Een API-koppeling') : (meta?.name ?? 'Gerrie-agent'),
@@ -1286,7 +1421,28 @@ export interface RoutineTool { name: string; label: string; module: string | nul
  * automatisch ook.
  */
 export async function listRoutineTools(organizationId: UUID): Promise<RoutineTool[]> {
+  return (await fetchRoutineCatalog(organizationId)).tools;
+}
+
+/**
+ * De catalogus, met wat dit teamlid met agents mag (dezelfde regel als de runner,
+ * _shared/agentAccess.ts) en hoeveel agents er op één naam mogen staan.
+ */
+export interface RoutineCatalog {
+  tools: RoutineTool[];
+  /** null = niet van de server gekregen (terugval, of een oudere functie-versie). */
+  capabilities: AgentCapabilities | null;
+  maxAgents: number | null;
+  /** true = de beperkte terugvallijst; de echte catalogus was niet op te halen. */
+  fallback: boolean;
+}
+
+async function fetchRoutineCatalog(organizationId: UUID): Promise<Omit<RoutineCatalog, 'fallback'>> {
   const payload = await postRunner({ action: 'tools', organizationId });
+  const caps = payload?.capabilities && typeof payload.capabilities === 'object'
+    ? (payload.capabilities as Record<string, unknown>)
+    : null;
+  const maxAgents = Math.floor(Number(payload?.maxAgents));
   const rows = Array.isArray(payload?.tools) ? (payload.tools as unknown[]) : [];
   const tools = rows
     .map((r) => r as Record<string, unknown>)
@@ -1299,7 +1455,11 @@ export async function listRoutineTools(organizationId: UUID): Promise<RoutineToo
       kind: r.kind === 'propose' ? 'propose' as const : 'read' as const,
     }));
   for (const t of tools) { toolLabels.set(t.name, t.label); toolKinds.set(t.name, t.kind); }
-  return tools;
+  return {
+    tools,
+    capabilities: caps ? { canUse: caps.canUse === true, canPropose: caps.canPropose === true, canOversee: caps.canOversee === true } : null,
+    maxAgents: Number.isFinite(maxAgents) && maxAgents > 0 ? maxAgents : null,
+  };
 }
 
 /**
@@ -1396,13 +1556,28 @@ export async function previewRoutine(organizationId: UUID, input: {
   };
 }
 
+/**
+ * Per organisatie even onthouden: het commandocentrum, de bouwer en de editor
+ * vragen hem alle drie op, en hij verandert alleen als je rechten veranderen.
+ * Een terugval wordt niet onthouden — de volgende keer gewoon opnieuw proberen.
+ */
+const catalogCache = new Map<string, { at: number; promise: Promise<RoutineCatalog> }>();
+const CATALOG_TTL_MS = 5 * 60_000;
+
 /** De catalogus, of de terugval als de server hem niet kon leveren. */
-export async function listRoutineToolsSafe(organizationId: UUID): Promise<{ tools: RoutineTool[]; fallback: boolean }> {
-  try {
-    const tools = await listRoutineTools(organizationId);
-    if (tools.length > 0) return { tools, fallback: false };
-  } catch { /* val terug */ }
-  return { tools: ROUTINE_FALLBACK_TOOLS, fallback: true };
+export async function listRoutineToolsSafe(organizationId: UUID): Promise<RoutineCatalog> {
+  const cached = catalogCache.get(organizationId);
+  if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.promise;
+  const promise: Promise<RoutineCatalog> = fetchRoutineCatalog(organizationId)
+    .then((catalog) => (catalog.tools.length > 0
+      ? { ...catalog, fallback: false }
+      : { ...catalog, tools: ROUTINE_FALLBACK_TOOLS, fallback: true }))
+    .catch(() => ({ tools: ROUTINE_FALLBACK_TOOLS, capabilities: null, maxAgents: null, fallback: true }));
+  catalogCache.set(organizationId, { at: Date.now(), promise });
+  void promise.then((catalog) => {
+    if (catalog.fallback && catalogCache.get(organizationId)?.promise === promise) catalogCache.delete(organizationId);
+  });
+  return promise;
 }
 
 function parseSseBlock(block: string): { event: string; data: unknown } | null {

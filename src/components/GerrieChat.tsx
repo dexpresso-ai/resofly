@@ -7,6 +7,7 @@ import { euro, formatMinutes } from '../lib/format';
 import { supabase } from '../lib/supabase';
 import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
 import { isFormBackedProposal, openProposal, proposalLabel, proposalVerb, type ProposalKind } from '../lib/gerrie-proposals';
+import { scheduleLabel } from '../lib/agents';
 import type { UUID } from '../types';
 
 /**
@@ -453,10 +454,8 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
       />;
     }
     if (p.type === 'agent') {
-      const days = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
-      const when = p.schedule_kind === 'daily' ? `elke dag om ${String(p.hour).padStart(2, '0')}:00`
-        : p.schedule_kind === 'weekly' ? `elke ${days[(p.day_of_week ?? 1) - 1]} om ${String(p.hour).padStart(2, '0')}:00`
-        : `maandelijks op dag ${p.day_of_month ?? 1} om ${String(p.hour).padStart(2, '0')}:00`;
+      const label = scheduleLabel(p);
+      const when = label.charAt(0).toLowerCase() + label.slice(1);
       // Akkoord = de agent bestaat, staat aan en draait meteen zijn eerste ronde.
       // Wat hij daarna wil versturen komt gewoon weer als afvinklijst terug.
       return <ConfirmActionCard

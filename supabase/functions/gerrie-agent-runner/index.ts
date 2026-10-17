@@ -1,19 +1,27 @@
 // ============================================================
-// gerrie-agent-runner — de headless motor voor "Gerrie Routines"
-// (gebruikers bouwen eigen geplande/terugkerende agents).
+// gerrie-agent-runner — de headless motor voor geplande agents
+// ("Gerrie Routines": gebruikers bouwen eigen terugkerende agents).
 //
 // Dual-path Edge Function (zelfde vorm als web-push):
 //  1. ?cron=tick  — server-to-server, geauthenticeerd met x-cron-secret
 //     (AGENTS_CRON_SECRET). pg_cron roept dit per minuut aan (GERRIE_ROUTINES_SETUP.md).
-//     Claimt due agents (lease) en draait elk via HETZELFDE brein als de chat
-//     (_shared/gerrieCore.ts) met een no-op emit (geen browser).
-//  2. app-pad    — Supabase-JWT + owner/admin; beheer (create/update/status/delete)
-//     en "nu draaien". Lezen doet de client rechtstreeks via RLS (owner/admin).
+//     Claimt due agents (lease) en draait ze naast elkaar via HETZELFDE brein als
+//     de chat (_shared/gerrieCore.ts) met een no-op emit (geen browser).
+//  2. app-pad    — Supabase-JWT; beheer (create/update/status/archive/clone/share),
+//     "nu draaien", antwoorden en proefdraaien. Lezen doet de client rechtstreeks
+//     via RLS: je eigen agents, en als owner/admin die van het hele team.
 //
-// Veiligheidsinvariant (v1): een geplande agent voert NOOIT onbewaakt schrijf-acties
-// uit. 'report'-agents krijgen alleen lees-tools; 'propose'-agents mogen daarnaast één
-// actie VOORSTELLEN, die (net als in de chat) in ai_action_audit ('proposed') belandt
-// en pas door een mens in de app wordt uitgevoerd. Budget is FAIL-CLOSED op dit pad.
+// Wie mag wat (_shared/agentAccess.ts): iedereen die Gerrie mag gebruiken, kan
+// eigen agents hebben. Een agent kan nooit meer dan degene namens wie hij draait
+// (run_as_user_id): zijn tools volgen diens modulerechten, en iets klaarzetten mag
+// hij alleen als die persoon zelf mag wijzigen. Dat wordt bij het opslaan
+// afgedwongen én bij elke run opnieuw, want rechten kunnen intussen veranderen.
+//
+// Veiligheidsinvariant: een geplande agent voert NOOIT onbewaakt schrijf-acties
+// uit. 'report'-agents krijgen alleen lees-tools; 'propose'-agents mogen daarnaast
+// een paar acties VOORSTELLEN, die (net als in de chat) in ai_action_audit
+// ('proposed') belanden en pas door een mens in de app worden uitgevoerd — onder
+// diens eigen sessie. Budget is FAIL-CLOSED op dit pad.
 //
 // Tenant-grens: de runner draait als service-role (RLS uit). organization_id komt
 // ALTIJD uit ai_agents.organization_id, nooit uit het model; elke tool-query is
@@ -21,18 +29,26 @@
 // ============================================================
 
 import {
-  supabaseAdmin, HttpError, ANTHROPIC_API_KEY, TOOL_DEFINITIONS, toolCatalog, AGENT_FORBIDDEN_TOOLS,
+  supabaseAdmin, HttpError, ANTHROPIC_API_KEY, TOOL_DEFINITIONS, toolCatalog, AGENT_FORBIDDEN_TOOLS, MAX_AGENT_ITERATIONS,
   resolveModelKind, runAgent, buildContext, createConversation, insertMessage,
   recordUsage, costUsd, checkUserBudget, requireUser, requireOrganizationAccess,
-  describeError, isUuid, todayIso, parseAllowedOrigins, loadHistory,
+  describeError, isUuid, todayIso, parseAllowedOrigins, loadHistory, describeProposal,
   AGENT_ICON_KEYS, isEnabledToolName, isReadOnlyToolName, auditActionName,
 } from '../_shared/gerrieCore.ts';
-import type { AgentStep, Emit, OrganizationRole } from '../_shared/gerrieCore.ts';
-import { localYmd, wallToUtc, daysInMonth } from '../_shared/schedule.ts';
+import type { AgentOutcome, AgentStep, Emit, GerrieContext, OrganizationRole, Proposal } from '../_shared/gerrieCore.ts';
+import {
+  agentCapabilities, allowedAgentMode, canCloneAgent, canManageAgent, manageRefusal, permittedAgentTools,
+  DEFAULT_MAX_PROPOSALS, MAX_AGENTS_PER_USER, MAX_PROPOSALS_LIMIT,
+  type AgentAction, type AgentCapabilities, type AgentMode,
+} from '../_shared/agentAccess.ts';
+import { clampInt, computeNextRunAt, normalizeSchedule } from '../_shared/agentSchedule.ts';
+import { buildScheduledRunMessage, decisionStatusLabel, isNothingToReport, MEMORY_RUNS, type PastRun } from '../_shared/agentRun.ts';
 import { sendViaResend } from '../_shared/resend.ts';
 
 const AGENTS_CRON_SECRET = Deno.env.get('AGENTS_CRON_SECRET') || '';
-const CLAIM_LIMIT = Math.max(1, Math.min(5, Number(Deno.env.get('AGENTS_CLAIM_LIMIT') || '3') || 3));
+// Hoeveel agents één minuut-tik claimt (1-10). Ze draaien naast elkaar, dus een tik
+// duurt zo lang als de langzaamste — niet als alle samen.
+const CLAIM_LIMIT = Math.max(1, Math.min(10, Number(Deno.env.get('AGENTS_CLAIM_LIMIT') || '5') || 5));
 const CIRCUIT_BREAKER_FAILURES = 3;
 
 const ALLOWED_ORIGINS = parseAllowedOrigins([
@@ -46,6 +62,8 @@ const noopEmit: Emit = async () => {};
 // De vaste lees-tools (alles wat niet met propose_ begint). Uit gerrieCore, dus geen drift.
 const ALL_TOOL_NAMES: string[] = (TOOL_DEFINITIONS as Array<{ name: string }>).map((t) => t.name);
 const READ_TOOL_NAMES: string[] = ALL_TOOL_NAMES.filter((n) => !n.startsWith('propose_'));
+
+const DELIVERY_CHANNELS = ['inapp', 'email', 'push'];
 
 // De embleem-allowlist staat in gerrieCore, zodat de bouwer en deze schrijfpoort
 // niet uit elkaar kunnen lopen.
@@ -115,7 +133,8 @@ Deno.serve(async (req) => {
     }
   }
 
-  // App-pad: JWT + owner/admin.
+  // App-pad: JWT + toegang tot Gerrie. Wat iemand daarna met een agent mag, beslist
+  // agentAccess per actie (eigenaar, of owner/admin voor toezicht).
   try {
     if (req.method !== 'POST') return json(req, { error: 'Method not allowed.' }, 405);
     assertAllowedOrigin(req);
@@ -123,32 +142,39 @@ Deno.serve(async (req) => {
     const organizationId = String(body.organizationId || '');
     const user = await requireUser(req);
     const role = await requireOrganizationAccess(user.id, organizationId);
-    if (!['owner', 'admin'].includes(role)) throw new HttpError('Alleen owners en admins kunnen Routines beheren.', 403);
+    const ctx = await buildContext(organizationId, role, user);
+    const caps = agentCapabilities(role, ctx.moduleAccess);
+    if (!caps.canUse) throw new HttpError('Je hebt in deze organisatie geen toegang tot Gerrie, en dus ook niet tot agents.', 403);
 
     const action = String(body.action || '');
+    const id = String(body.id || '');
     switch (action) {
-      case 'create': return json(req, await createAgent(organizationId, user.id, body));
-      case 'update': return json(req, await updateAgent(organizationId, user.id, body));
-      case 'set_status': return json(req, await setStatus(organizationId, String(body.id || ''), String(body.status || '')));
+      case 'create': return json(req, await createAgent(ctx, caps, body));
+      case 'update': return json(req, await updateAgent(ctx, caps, body));
+      case 'set_status': return json(req, await setStatus(ctx, caps, id, String(body.status || '')));
       // 'delete' bestaat alleen nog als oude naam voor archiveren: een agent met
       // historie gooien we niet weg (zie archiveAgent).
       case 'delete':
-      case 'archive': return json(req, await archiveAgent(organizationId, String(body.id || '')));
-      case 'restore': return json(req, await restoreAgent(organizationId, String(body.id || '')));
-      case 'run_now': return json(req, await runNow(organizationId, user.id, String(body.id || '')));
-      case 'reply': return json(req, await replyToRun(organizationId, user.id, role, body));
+      case 'archive': return json(req, await archiveAgent(ctx, caps, id));
+      case 'restore': return json(req, await restoreAgent(ctx, caps, id));
+      case 'run_now': return json(req, await runNow(ctx, caps, id));
+      case 'reply': return json(req, await replyToRun(ctx, caps, body));
+      case 'clone': return json(req, await cloneAgent(ctx, caps, id, body.activate === true));
+      case 'share': return json(req, await shareAgent(ctx, caps, id, body.visibility));
       // Alles wat een agent MAG kunnen, afgeleid uit de echte tooldefinities en
       // gefilterd op de modulerechten van dit teamlid. De bouwer hoeft dus geen
       // eigen lijst bij te houden — zie de opmerking bij TOOL_LABELS in gerrieCore.
-      case 'tools': return json(req, { tools: await listAgentTools(organizationId, user.id, role) });
-      case 'preview': return json(req, await previewAgent(organizationId, user.id, role, body));
+      // Met wat dit teamlid met agents mag, zodat de app niets aanbiedt wat straks
+      // toch wordt geweigerd.
+      case 'tools': return json(req, { tools: toolCatalog(ctx), capabilities: caps, maxAgents: MAX_AGENTS_PER_USER });
+      case 'preview': return json(req, await previewAgent(ctx, body));
       default: throw new HttpError('Onbekende actie.', 400);
     }
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     const internal = describeError(error);
     if (status >= 500) console.error('gerrie-agent-runner error', internal); else console.warn('gerrie-agent-runner warning', internal);
-    const publicMessage = error instanceof HttpError ? error.message : 'Er ging iets mis met de Routines-motor.';
+    const publicMessage = error instanceof HttpError ? error.message : 'Er ging iets mis met de agents.';
     return json(req, { error: publicMessage }, status);
   }
 });
@@ -159,17 +185,17 @@ async function runTick(): Promise<{ ok: true; claimed: number; results: Array<Re
   const { data: agents, error } = await supabaseAdmin.rpc('claim_due_agents', { p_limit: CLAIM_LIMIT });
   if (error) throw new HttpError(`Claimen van agents mislukt: ${error.message}`, 500);
   const claimed = (agents ?? []) as Array<Record<string, unknown>>;
-  const results: Array<Record<string, unknown>> = [];
-  for (const agent of claimed) {
+  // Naast elkaar: een agent wacht vooral op het model, niet op de processor.
+  const results = await Promise.all(claimed.map(async (agent) => {
     try {
-      results.push(await executeAgentRun(agent, 'schedule', occurrenceKeyForSlot(agent), { reschedule: true }));
+      return await executeAgentRun(agent, 'schedule', occurrenceKeyForSlot(agent), { reschedule: true });
     } catch (err) {
       // Vangnet: één kapotte agent mag de batch niet vastzetten.
       console.error('gerrie-agent-runner agent-run error', String(agent.id), describeError(err));
       await failAndReschedule(agent, describeError(err));
-      results.push({ agentId: agent.id, status: 'failed', error: describeError(err) });
+      return { agentId: agent.id, status: 'failed', error: describeError(err) } as Record<string, unknown>;
     }
-  }
+  }));
   return { ok: true, claimed: claimed.length, results };
 }
 
@@ -189,9 +215,9 @@ async function executeAgentRun(
   const agentId = String(agent.id);
   const orgId = String(agent.organization_id);
   const runAsUserId = agent.run_as_user_id ? String(agent.run_as_user_id) : '';
-  const name = String(agent.name || 'Naamloze routine');
-  const mode = String(agent.mode || 'report') === 'propose' ? 'propose' : 'report';
+  const name = String(agent.name || 'Naamloze agent');
   const modelKind = resolveModelKind(agent.model_kind);
+  const maxProposals = clampInt(agent.max_proposals_per_run, DEFAULT_MAX_PROPOSALS, 1, MAX_PROPOSALS_LIMIT);
 
   // Gearchiveerd = met pensioen. Hij bestaat nog voor de historie, maar draait niet.
   if (String(agent.status) === 'archived') {
@@ -215,18 +241,7 @@ async function executeAgentRun(
     throw new HttpError(`Run aanmaken mislukt: ${runErr.message}`, 500);
   }
   const runId = String(runRow.id);
-
-  // 1b) Logboek openen. Vanaf hier is elke stap na te lezen op de agentpagina.
-  const allowedToolNames = resolveAllowedTools(agent, mode);
   const log = runLogger(orgId, agentId, runId);
-  log.add('start', triggeredBy === 'manual' ? 'Handmatig gestart' : 'Gestart volgens schema', {
-    mode,
-    model: modelKind,
-    instruction: String(agent.instruction || '').slice(0, 2000),
-    tools: allowedToolNames,
-    scheduled_for: agent.next_run_at ?? null,
-  });
-  await log.flush();
 
   // 2) Identiteit herleiden (geen live sessie). Geen actief lid meer → pauzeer.
   let role: OrganizationRole;
@@ -237,15 +252,39 @@ async function executeAgentRun(
     const reason = runAsUserId
       ? 'De medewerker namens wie deze agent draait, is geen actief lid meer. Agent gepauzeerd.'
       : 'De medewerker namens wie deze agent draaide, bestaat niet meer. Agent gepauzeerd; de historie blijft bewaard.';
-    log.add('error', reason, {});
-    log.add('finish', 'Afgebroken', { status: 'cancelled' });
-    await log.flush();
-    await finishRun(runId, { status: 'cancelled', error: reason });
-    await supabaseAdmin.from('ai_agents').update({ status: 'paused', next_run_at: null, lease_until: null }).eq('id', agentId);
-    return { agentId, status: 'cancelled', reason: 'actor_inactive' };
+    return await cancelRun(agentId, runId, log, reason, 'actor_inactive');
   }
 
-  // 3) Budget — FAIL-CLOSED op dit onbewaakte pad. Er is één grens: het maandtegoed
+  // 3) Zijn rechten van VANDAAG — niet die van toen de agent gemaakt werd. Gerrie
+  //    dicht = geen agent; niet meer mogen wijzigen = alleen nog meekijken.
+  const { data: actor } = await supabaseAdmin.auth.admin.getUserById(runAsUserId);
+  const actorEmail = actor?.user?.email || undefined;
+  const ctx = await buildContext(orgId, role, { id: runAsUserId, email: actorEmail });
+  ctx.clientEmail = clientEmailSettings(agent);
+  const caps = agentCapabilities(role, ctx.moduleAccess);
+  if (!caps.canUse) {
+    return await cancelRun(agentId, runId, log, 'De medewerker namens wie deze agent draait, heeft geen toegang meer tot Gerrie. Agent gepauzeerd.', 'gerrie_closed');
+  }
+  const wanted: AgentMode = String(agent.mode || 'report') === 'propose' ? 'propose' : 'report';
+  const mode = allowedAgentMode(wanted, caps);
+
+  // 3b) Het logboek begint: wat deze run mag. Vanaf hier is elke stap na te lezen op
+  //     de agentpagina — ook dat hij als meekijker draait als de rechten dat vragen.
+  const allowedToolNames = resolveAllowedTools(agent, mode);
+  log.add('start', triggeredBy === 'manual' ? 'Handmatig gestart' : 'Gestart volgens schema', {
+    mode,
+    model: modelKind,
+    instruction: String(agent.instruction || '').slice(0, 2000),
+    tools: allowedToolNames,
+    max_proposals: mode === 'propose' ? maxProposals : 0,
+    scheduled_for: agent.next_run_at ?? null,
+  });
+  if (wanted === 'propose' && mode === 'report') {
+    log.add('error', 'Draait als meekijker: de eigenaar mag zelf niet (meer) wijzigen, dus deze agent zet niets klaar.', {});
+  }
+  await log.flush();
+
+  // 4) Budget — FAIL-CLOSED op dit onbewaakte pad. Er is één grens: het maandtegoed
   //    van het account. Wat een agent verbruikt telt daar gewoon in mee, want het
   //    verbruik wordt geboekt op de gebruiker namens wie hij draait.
   const userBudget = await checkUserBudget(runAsUserId);
@@ -258,30 +297,29 @@ async function executeAgentRun(
     return { agentId, status: 'skipped_budget' };
   }
 
-  // 4) Gesprek (transcript) aanhaken.
+  // 5) Gesprek (transcript) aanhaken.
   const convId = await createConversation(orgId, runAsUserId, `Agent: ${name} — ${todayIso()}`);
   await supabaseAdmin.from('ai_conversations').update({ agent_id: agentId, agent_run_id: runId }).eq('id', convId);
   await supabaseAdmin.from('ai_agent_runs').update({ conversation_id: convId }).eq('id', runId);
 
-  // 5) Context (met de e-mail van de actor voor het label + eventuele bezorging).
-  const { data: actor } = await supabaseAdmin.auth.admin.getUserById(runAsUserId);
-  const actorEmail = actor?.user?.email || undefined;
-  const ctx = await buildContext(orgId, role, { id: runAsUserId, email: actorEmail });
-  ctx.clientEmail = clientEmailSettings(agent);
-
-  // 6) De tool-allowlist is hierboven al bepaald (report = alleen lezen) en staat
-  //    in het logboek, zodat achteraf vaststaat wat deze run mócht.
-
-  // 7) De opdracht als bericht + een korte autonome-run-notitie.
+  // 6) De opdracht, met de spelregels van deze run en wat hij de vorige keren vond.
   const instruction = String(agent.instruction || '').trim();
-  const runMessage = `${instruction}\n\n(Automatische, geplande run — er is nu geen gebruiker om iets na te vragen. Werk zelfstandig met de beschikbare gegevens en geef een bondige samenvatting.)`;
+  const delivery = deliverySettings(agent);
+  const memory = await loadMemory(agentId, runId);
+  const runMessage = buildScheduledRunMessage({
+    instruction, mode, maxProposals, quietWhenEmpty: delivery.quiet, memory,
+    timeZone: String(agent.timezone || 'Europe/Amsterdam'),
+  });
   await insertMessage(convId, orgId, runAsUserId, 'user', instruction, []);
 
   try {
-    // 8) Het brein draaien (headless, no-op emit).
-    const outcome = await runAgent(ctx, [], runMessage, noopEmit, modelKind, allowedToolNames);
+    // 7) Het brein draaien (headless, no-op emit).
+    const outcome = await runAgent(ctx, [], runMessage, noopEmit, modelKind, allowedToolNames, {
+      maxProposals: mode === 'propose' ? maxProposals : 1,
+      maxIterations: MAX_AGENT_ITERATIONS,
+    });
 
-    // 8b) Elke stap uit de loop het logboek in — dít is "wat heeft hij gedaan?".
+    // 7b) Elke stap uit de loop het logboek in — dít is "wat heeft hij gedaan?".
     for (const step of outcome.steps) log.addStep(step);
 
     const assistantId = await insertMessage(convId, orgId, runAsUserId, 'assistant', outcome.text, outcome.toolCalls);
@@ -290,43 +328,47 @@ async function executeAgentRun(
     // De VOLLEDIGE eindtekst; `summary` op de run is een afgekapte digest.
     log.add('answer', 'Zijn antwoord', { text: outcome.text });
 
-    // 9) Voorstel (propose-modus) → goedkeurwachtrij, NIET uitvoeren.
-    let proposalsCreated = 0;
-    let auditId: string | null = null;
-    if (outcome.proposal && mode === 'propose') {
-      const { data: auditRow } = await supabaseAdmin.from('ai_action_audit').insert({
-        organization_id: orgId, conversation_id: convId, message_id: assistantId, user_id: runAsUserId,
-        action: auditActionName(outcome.proposal), params: outcome.proposal, status: 'proposed',
-        agent_id: agentId, agent_run_id: runId,
-      }).select('id').single();
-      auditId = (auditRow?.id as string) ?? null;
-      proposalsCreated = 1;
-      log.add('proposal', 'Wacht op jouw akkoord', { auditId, type: auditActionName(outcome.proposal) });
-    } else if (outcome.proposal) {
-      // Kan alleen als iemand de modus terugzet terwijl er al een run liep.
-      log.add('proposal', 'Voorstel niet klaargezet: deze agent mag alleen rapporteren.', { type: auditActionName(outcome.proposal) });
+    // 8) Voorstellen (propose-modus) → goedkeurwachtrij, NIET uitvoeren.
+    const auditIds = mode === 'propose'
+      ? await queueProposals(orgId, convId, assistantId, runAsUserId, agentId, runId, outcome.proposals)
+      : [];
+    auditIds.forEach((auditId, i) => {
+      log.add('proposal', 'Wacht op jouw akkoord', { auditId, type: auditActionName(outcome.proposals[i]), what: describeProposal(outcome.proposals[i]) });
+    });
+    if (mode !== 'propose' && outcome.proposals.length > 0) {
+      // Kan alleen als iemand de modus of de rechten veranderde terwijl er een run liep.
+      log.add('proposal', 'Voorstel niet klaargezet: deze agent mag alleen rapporteren.', { type: auditActionName(outcome.proposals[0]) });
     }
+    const proposalsCreated = auditIds.length;
 
+    // 9) Stil-als-leeg: niets gevonden en niets klaargezet → geen mail of push.
+    const quiet = delivery.quiet && proposalsCreated === 0 && !outcome.refused && isNothingToReport(outcome.text);
     const costUsdVal = costUsd(outcome.usage, modelKind);
     await finishRun(runId, {
-      status: 'succeeded',
-      summary: outcome.text.slice(0, 4000),
-      result: { toolCalls: outcome.toolCalls.map((t) => t.name), auditId },
+      // Een weigering van de veiligheidsfilter is geen storing, maar ook niet "gelukt".
+      status: outcome.refused ? 'partial' : 'succeeded',
+      summary: quiet ? 'Niets te melden.' : outcome.text.slice(0, 4000),
+      result: { toolCalls: outcome.toolCalls.map((t) => t.name), auditIds, quiet, models: outcome.models },
       input_tokens: outcome.usage.input + outcome.usage.cacheRead + outcome.usage.cacheWrite,
       output_tokens: outcome.usage.output,
       cost_usd: costUsdVal,
       proposals_created: proposalsCreated,
     });
 
-    // 10) Bezorgen (in-app = de run-rij zelf; e-mail best-effort).
-    const delivered = await deliver(agent, runId, name, outcome.text, proposalsCreated, actorEmail);
-    log.add('delivery', delivered.emailed ? `Bezorgd in de app en per e-mail (${delivered.to})` : 'Bezorgd in de app', delivered);
+    // 10) Bezorgen (in-app = de run-rij zelf; e-mail en push best-effort).
+    if (quiet) {
+      log.add('delivery', 'Niets te melden — geen mail of pushmelding verstuurd', { quiet: true });
+    } else {
+      const delivered = await deliver(agent, runId, name, outcome.text, proposalsCreated, actorEmail);
+      log.add('delivery', deliveryLabel(delivered), { ...delivered });
+    }
 
-    log.add('finish', 'Klaar', {
-      status: 'succeeded',
+    log.add('finish', outcome.refused ? 'Deels — de veiligheidsfilter hield iets tegen' : 'Klaar', {
+      status: outcome.refused ? 'partial' : 'succeeded',
       tokens: outcome.usage.input + outcome.usage.cacheRead + outcome.usage.cacheWrite + outcome.usage.output,
       cost_usd: costUsdVal,
       proposals_created: proposalsCreated,
+      models: outcome.models,
     });
     await log.flush();
 
@@ -334,7 +376,7 @@ async function executeAgentRun(
     if (opts.reschedule) await rescheduleAgent(agent, { resetFailures: true });
     else await supabaseAdmin.from('ai_agents').update({ last_run_at: new Date().toISOString(), lease_until: null }).eq('id', agentId);
 
-    return { agentId, runId, status: 'succeeded', proposalsCreated };
+    return { agentId, runId, status: outcome.refused ? 'partial' : 'succeeded', proposalsCreated, quiet };
   } catch (err) {
     // Ook een mislukte run hoort in het logboek: juist die wil je terugzoeken.
     log.add('error', describeError(err), {});
@@ -344,6 +386,63 @@ async function executeAgentRun(
     if (opts.reschedule) await rescheduleAgent(agent, { failure: true });
     else await supabaseAdmin.from('ai_agents').update({ lease_until: null }).eq('id', agentId);
     throw err;
+  }
+}
+
+/** Afbreken omdat de eigenaar er niet (meer) is of niet meer mag; de agent gaat op pauze. */
+async function cancelRun(agentId: string, runId: string, log: ReturnType<typeof runLogger>, reason: string, code: string): Promise<Record<string, unknown>> {
+  log.add('error', reason, {});
+  log.add('finish', 'Afgebroken', { status: 'cancelled' });
+  await log.flush();
+  await finishRun(runId, { status: 'cancelled', error: reason });
+  await supabaseAdmin.from('ai_agents').update({ status: 'paused', next_run_at: null, lease_until: null }).eq('id', agentId);
+  return { agentId, status: 'cancelled', reason: code };
+}
+
+/**
+ * Zet de voorstellen van een run in de goedkeurwachtrij. Op naam van de eigenaar
+ * (user_id): hij beslist erover, en voert ze uit onder zijn eigen sessie.
+ */
+async function queueProposals(
+  orgId: string, convId: string, messageId: string, userId: string, agentId: string, runId: string, proposals: Proposal[],
+): Promise<string[]> {
+  if (proposals.length === 0) return [];
+  const { data, error } = await supabaseAdmin.from('ai_action_audit').insert(proposals.map((proposal) => ({
+    organization_id: orgId, conversation_id: convId, message_id: messageId, user_id: userId,
+    action: auditActionName(proposal), params: proposal, status: 'proposed',
+    agent_id: agentId, agent_run_id: runId,
+  }))).select('id');
+  if (error) throw new HttpError(`Voorstellen klaarzetten mislukt: ${error.message}`, 500);
+  return ((data ?? []) as Array<{ id: string }>).map((row) => String(row.id));
+}
+
+/**
+ * Het geheugen van een agent: zijn laatste runs, met wat er van zijn voorstellen
+ * werd. Best-effort — zonder geheugen draait hij gewoon zoals vroeger.
+ */
+async function loadMemory(agentId: string, currentRunId: string): Promise<PastRun[]> {
+  try {
+    const { data: runs } = await supabaseAdmin.from('ai_agent_runs')
+      .select('id, created_at, summary')
+      .eq('agent_id', agentId).in('status', ['succeeded', 'partial']).neq('id', currentRunId)
+      .order('created_at', { ascending: false }).limit(MEMORY_RUNS);
+    const rows = (runs ?? []) as Array<{ id: string; created_at: string; summary: string | null }>;
+    if (rows.length === 0) return [];
+    const { data: audits } = await supabaseAdmin.from('ai_action_audit')
+      .select('agent_run_id, params, status, result')
+      .in('agent_run_id', rows.map((r) => r.id));
+    const byRun = new Map<string, PastRun['decisions']>();
+    for (const a of (audits ?? []) as Array<{ agent_run_id: string; params: unknown; status: string; result: { decision?: string } | null }>) {
+      let title = 'een voorstel';
+      try { title = describeProposal(a.params as Proposal); } catch { /* een oud voorstel in een andere vorm */ }
+      const list = byRun.get(a.agent_run_id) ?? [];
+      list.push({ title, status: decisionStatusLabel(a.status, a.result?.decision ?? null) });
+      byRun.set(a.agent_run_id, list);
+    }
+    return rows.map((r) => ({ at: r.created_at, summary: String(r.summary ?? ''), decisions: byRun.get(r.id) ?? [] }));
+  } catch (error) {
+    console.warn('gerrie-agent-runner geheugen laden mislukt', agentId, describeError(error));
+    return [];
   }
 }
 
@@ -362,13 +461,11 @@ function clientEmailSettings(agent: Record<string, unknown>): { mode: 'compose' 
   };
 }
 
-/**
- * Welke tools de gebruiker aan een agent kan geven. Draait langs `buildContext`
- * zodat modules die voor dít teamlid dichtstaan er niet eens in staan.
- */
-async function listAgentTools(orgId: string, userId: string, role: OrganizationRole) {
-  const ctx = await buildContext(orgId, role, { id: userId });
-  return toolCatalog(ctx);
+/** Waar het resultaat heen gaat, en of een lege run stil mag blijven. */
+function deliverySettings(agent: Record<string, unknown>): { channels: string[]; quiet: boolean } {
+  const raw = (agent.delivery ?? {}) as { channels?: unknown; quiet?: unknown };
+  const channels = Array.isArray(raw.channels) ? raw.channels.map(String).filter((c) => DELIVERY_CHANNELS.includes(c)) : ['inapp'];
+  return { channels: channels.length ? channels : ['inapp'], quiet: raw.quiet === true };
 }
 
 /**
@@ -378,33 +475,34 @@ async function listAgentTools(orgId: string, userId: string, role: OrganizationR
  * hem in een gesprek, zette hem aan, en pas bij de eerste run bleek dat de opdracht
  * iets vroeg wat de tools niet kunnen. Nu draait hij één keer vóór hij bestaat.
  *
- * Twee harde grenzen: er wordt NIETS aangemaakt (geen agent, geen run, geen gesprek)
- * en er worden ALLEEN lees-tools meegegeven — ook als de agent straks in
- * propose-modus komt. Een proefrun hoort niets klaar te zetten dat op je akkoord
- * gaat wachten. Het verbruik telt wel mee met je maandtegoed; het is een echte run.
+ * Twee harde grenzen: er wordt NIETS aangemaakt (geen agent, geen run) en er worden
+ * ALLEEN lees-tools meegegeven — ook als de agent straks in propose-modus komt. Een
+ * proefrun hoort niets klaar te zetten dat op je akkoord gaat wachten. Het verbruik
+ * telt wel mee met je maandtegoed; het is een echte run.
  */
-async function previewAgent(orgId: string, userId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function previewAgent(ctx: GerrieContext, body: Record<string, unknown>): Promise<Record<string, unknown>> {
   if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
   const instruction = String(body.instruction || '').trim();
   if (!instruction) throw new HttpError('Geef een opdracht om te proefdraaien.', 400);
 
-  const budget = await checkUserBudget(userId);
+  const budget = await checkUserBudget(ctx.userId);
   if (!budget.allowed) return { ok: false, budget: true, text: '', steps: [] };
 
   const fields = sanitizeAgentFields({ ...body, mode: 'report' });
-  const ctx = await buildContext(orgId, role, { id: userId });
   ctx.clientEmail = clientEmailSettings(fields);
-  const allowedToolNames = resolveAllowedTools(fields, 'report');
+  // Alleen wat deze gebruiker zelf mag lezen.
+  const { tools } = permittedAgentTools(fields.enabled_tools as string[], toolCatalog(ctx), 'report');
+  const allowedToolNames = resolveAllowedTools({ ...fields, enabled_tools: tools }, 'report');
   const modelKind = resolveModelKind(fields.model_kind);
 
   const message = `${instruction}\n\n(PROEFRUN — laat zien wat je met de beschikbare gegevens vindt. Zet niets klaar en verstuur niets; je mag alleen kijken. Kun je iets niet met de tools die je hebt, zeg dat dan expliciet in plaats van het te benaderen.)`;
-  const outcome = await runAgent(ctx, [], message, noopEmit, modelKind, allowedToolNames);
+  const outcome = await runAgent(ctx, [], message, noopEmit, modelKind, allowedToolNames, { maxIterations: MAX_AGENT_ITERATIONS });
 
   // Verbruik boeken op een los gesprek: een proefrun kost tegoed, dus die mag niet
   // buiten de telling vallen.
-  const convId = await createConversation(orgId, userId, `Proefrun: ${instruction.slice(0, 50)}`);
-  const msgId = await insertMessage(convId, orgId, userId, 'assistant', outcome.text, outcome.toolCalls);
-  await recordUsage(orgId, convId, msgId, userId, outcome.usage, modelKind);
+  const convId = await createConversation(ctx.organizationId, ctx.userId, `Proefrun: ${instruction.slice(0, 50)}`);
+  const msgId = await insertMessage(convId, ctx.organizationId, ctx.userId, 'assistant', outcome.text, outcome.toolCalls);
+  await recordUsage(ctx.organizationId, convId, msgId, ctx.userId, outcome.usage, modelKind);
 
   return {
     ok: true,
@@ -416,7 +514,7 @@ async function previewAgent(orgId: string, userId: string, role: OrganizationRol
   };
 }
 
-function resolveAllowedTools(agent: Record<string, unknown>, mode: 'report' | 'propose'): string[] {
+function resolveAllowedTools(agent: Record<string, unknown>, mode: AgentMode): string[] {
   const raw = Array.isArray(agent.enabled_tools) ? (agent.enabled_tools as unknown[]).map(String) : [];
   // Een onbewaakte agent mag nooit zelf nieuwe agents laten klaarzetten: dat is
   // een chat-handeling waar een mens bij zit. Ook niet als iemand hem aanvinkt.
@@ -435,7 +533,7 @@ async function finishRun(runId: string, fields: Record<string, unknown>): Promis
   await supabaseAdmin.from('ai_agent_runs').update({ ...fields, finished_at: new Date().toISOString() }).eq('id', runId);
 }
 
-// Bereken de volgende run-tijd (DST-bewust) en zet het schema door.
+// Bereken de volgende run-tijd (DST-bewust, _shared/agentSchedule.ts) en zet het schema door.
 async function rescheduleAgent(agent: Record<string, unknown>, opts: { failure?: boolean; resetFailures?: boolean }): Promise<void> {
   const patch: Record<string, unknown> = {
     last_run_at: new Date().toISOString(),
@@ -460,72 +558,56 @@ async function failAndReschedule(agent: Record<string, unknown>, _error: string)
 
 // ── Bezorging ────────────────────────────────────────────────────────────────
 
-async function deliver(agent: Record<string, unknown>, runId: string, name: string, summary: string, proposals: number, actorEmail?: string): Promise<{ emailed: boolean; to: string | null; note?: string }> {
-  const delivery = (agent.delivery ?? {}) as { channels?: unknown };
-  const channels = Array.isArray(delivery.channels) ? delivery.channels.map(String) : ['inapp'];
-  // in-app = de ai_agent_runs-rij; niets extra's nodig.
-  if (!channels.includes('email')) return { emailed: false, to: null };
+interface Delivered { emailed: boolean; to: string | null; pushed: boolean; note?: string }
 
-  const apiKey = Deno.env.get('RESEND_API_KEY') || '';
-  const from = Deno.env.get('GERRIE_ROUTINES_FROM') || Deno.env.get('RESEND_FROM') || '';
-  if (!apiKey || !from || !actorEmail) {
-    return { emailed: false, to: actorEmail ?? null, note: 'e-mailbezorging staat aan maar is niet geconfigureerd' };
+function deliveryLabel(d: Delivered): string {
+  const ways = ['in de app', d.emailed ? `per e-mail (${d.to})` : null, d.pushed ? 'met een pushmelding' : null].filter(Boolean);
+  return `Bezorgd ${ways.join(', ').replace(/, ([^,]*)$/, ' en $1')}`;
+}
+
+async function deliver(agent: Record<string, unknown>, runId: string, name: string, summary: string, proposals: number, actorEmail?: string): Promise<Delivered> {
+  const { channels } = deliverySettings(agent);
+  // in-app = de ai_agent_runs-rij; niets extra's nodig.
+  const result: Delivered = { emailed: false, to: null, pushed: false };
+  const notes: string[] = [];
+
+  if (channels.includes('push')) {
+    // De ontvanger (de eigenaar) en de tekst bepaalt de database; geen push-abonnement
+    // of de melding uitgezet in Instellingen → Meldingen = er gaat niets uit.
+    const { error } = await supabaseAdmin.rpc('ai_agent_run_push', { p_run_id: runId });
+    if (error) notes.push(`pushmelding mislukt: ${error.message}`);
+    else result.pushed = true;
   }
-  const extra = proposals > 0 ? ` (${proposals} voorstel${proposals === 1 ? '' : 'len'} klaargezet om goed te keuren)` : '';
-  const safe = summary.slice(0, 4000);
-  try {
-    await sendViaResend(apiKey, {
-      from, to: [actorEmail],
-      subject: `Gerrie Routine: ${name}${extra}`,
-      text: safe,
-      html: `<div style="font-family:system-ui,sans-serif;max-width:640px"><h2 style="margin:0 0 8px">${escapeHtml(name)}</h2>${extra ? `<p style="color:#b8860b"><strong>${escapeHtml(extra.trim())}</strong></p>` : ''}<div style="white-space:pre-wrap;line-height:1.5">${escapeHtml(safe)}</div><p style="color:#888;font-size:12px;margin-top:16px">Automatisch gegenereerd door je Gerrie Routine.</p></div>`,
-    }, `agent-run-${runId}`);
-    return { emailed: true, to: actorEmail };
-  } catch (e) {
-    console.warn('gerrie-agent-runner e-mailbezorging mislukt', describeError(e));
-    return { emailed: false, to: actorEmail, note: `e-mail mislukt: ${describeError(e)}` };
+
+  if (channels.includes('email')) {
+    const apiKey = Deno.env.get('RESEND_API_KEY') || '';
+    const from = Deno.env.get('GERRIE_ROUTINES_FROM') || Deno.env.get('RESEND_FROM') || '';
+    result.to = actorEmail ?? null;
+    if (!apiKey || !from || !actorEmail) {
+      notes.push('e-mailbezorging staat aan maar is niet geconfigureerd');
+    } else {
+      const extra = proposals > 0 ? ` (${proposals} voorstel${proposals === 1 ? '' : 'len'} klaargezet om goed te keuren)` : '';
+      const safe = summary.slice(0, 4000);
+      try {
+        await sendViaResend(apiKey, {
+          from, to: [actorEmail],
+          subject: `Je agent: ${name}${extra}`,
+          text: safe,
+          html: `<div style="font-family:system-ui,sans-serif;max-width:640px"><h2 style="margin:0 0 8px">${escapeHtml(name)}</h2>${extra ? `<p style="color:#b8860b"><strong>${escapeHtml(extra.trim())}</strong></p>` : ''}<div style="white-space:pre-wrap;line-height:1.5">${escapeHtml(safe)}</div><p style="color:#888;font-size:12px;margin-top:16px">Automatisch gegenereerd door je Gerrie-agent. Er is niets verstuurd of aangemaakt zonder jouw akkoord.</p></div>`,
+        }, `agent-run-${runId}`);
+        result.emailed = true;
+      } catch (e) {
+        console.warn('gerrie-agent-runner e-mailbezorging mislukt', describeError(e));
+        notes.push(`e-mail mislukt: ${describeError(e)}`);
+      }
+    }
   }
+  if (notes.length) result.note = notes.join('; ');
+  return result;
 }
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
-}
-
-// ── Schema-berekening (presets, DST-bewust) ──────────────────────────────────
-
-// localYmd, wallToUtc en daysInMonth staan in _shared/schedule.ts: dezelfde DST-rekensom
-// voor de routines én (Fase 1 beslislijst) de dagelijkse veegronde.
-
-/** Eerstvolgende run-tijd na `after`, volgens de preset (daily/weekly/monthly) in de agent-tijdzone. */
-function computeNextRunAt(agent: Record<string, unknown>, after: Date): Date {
-  const tz = String(agent.timezone || 'Europe/Amsterdam');
-  const kind = String(agent.schedule_kind || 'weekly');
-  const hour = clampInt(agent.hour, 8, 0, 23);
-  const dow = agent.day_of_week != null ? clampInt(agent.day_of_week, 1, 1, 7) : null;   // ISO 1=ma..7=zo
-  const domWanted = agent.day_of_month != null ? clampInt(agent.day_of_month, 1, 1, 31) : 1;
-
-  const base = localYmd(tz, after);
-  for (let off = 0; off <= 400; off += 1) {
-    const cd = new Date(Date.UTC(base.y, base.m - 1, base.d + off));
-    const y = cd.getUTCFullYear(), m = cd.getUTCMonth() + 1, d = cd.getUTCDate();
-    const isoDow = ((cd.getUTCDay() + 6) % 7) + 1; // 1=ma..7=zo
-
-    let matches = false;
-    if (kind === 'daily') matches = true;
-    else if (kind === 'weekly') matches = dow === null ? true : isoDow === dow;
-    else if (kind === 'monthly') matches = d === Math.min(domWanted, daysInMonth(y, m));
-
-    if (!matches) continue;
-    const cand = wallToUtc(tz, y, m, d, hour);
-    if (cand.getTime() > after.getTime()) return cand;
-  }
-  return new Date(after.getTime() + 86400000); // vangnet
-}
-
-function clampInt(v: unknown, def: number, min: number, max: number): number {
-  const n = Math.floor(Number(v));
-  if (!Number.isFinite(n)) return def;
-  return Math.max(min, Math.min(max, n));
 }
 
 // ── Beheer (app-pad) ─────────────────────────────────────────────────────────
@@ -533,14 +615,16 @@ function clampInt(v: unknown, def: number, min: number, max: number): number {
 function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unknown> {
   const modelKind = String(body.model_kind || 'cheap') === 'strong' ? 'strong' : 'cheap';
   const mode = String(body.mode || 'report') === 'propose' ? 'propose' : 'report';
-  const scheduleKind = ['daily', 'weekly', 'monthly'].includes(String(body.schedule_kind)) ? String(body.schedule_kind) : 'weekly';
+  const schedule = normalizeSchedule(body);
   const enabledTools = Array.isArray(body.enabled_tools)
     ? [...new Set((body.enabled_tools as unknown[]).map(String).filter(isEnabledToolName))]
     : [];
-  const channelsRaw = Array.isArray((body.delivery as { channels?: unknown })?.channels)
-    ? ((body.delivery as { channels: unknown[] }).channels).map(String).filter((c) => ['inapp', 'email'].includes(c))
+  const rawDelivery = (body.delivery ?? {}) as { channels?: unknown; quiet?: unknown };
+  const channelsRaw = Array.isArray(rawDelivery.channels)
+    ? rawDelivery.channels.map(String).filter((c) => DELIVERY_CHANNELS.includes(c))
     : ['inapp'];
-  const channels = channelsRaw.length ? [...new Set(channelsRaw)] : ['inapp'];
+  // In de app staat een run altijd; mail en push komen erbij.
+  const channels = [...new Set(['inapp', ...channelsRaw])];
 
   // Embleem: alleen een bekende sleutel en een geldige tint komen erdoor. Alles
   // anders wordt null — de app leidt het embleem dan zelf af uit de opdracht.
@@ -561,85 +645,115 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
     model_kind: modelKind,
     mode,
     enabled_tools: enabledTools,
-    schedule_kind: scheduleKind,
-    hour: clampInt(body.hour, 8, 0, 23),
-    day_of_week: scheduleKind === 'weekly' ? clampInt(body.day_of_week, 1, 1, 7) : null,
-    day_of_month: scheduleKind === 'monthly' ? clampInt(body.day_of_month, 1, 1, 31) : null,
-    timezone: String(body.timezone || 'Europe/Amsterdam').slice(0, 64),
+    schedule_kind: schedule.kind,
+    hour: schedule.hour,
+    minute: schedule.minute,
+    end_hour: schedule.endHour,
+    day_of_week: schedule.dayOfWeek,
+    day_of_month: schedule.dayOfMonth,
+    timezone: schedule.timezone.slice(0, 64),
     // Geen budget-velden meer: kosten worden begrensd door het maandtegoed van het
     // account (checkUserBudget). Zie migratie 20260820000000.
-    delivery: { channels, recipient_user_ids: [] },
+    delivery: { channels, recipient_user_ids: [], quiet: rawDelivery.quiet === true },
     icon,
     hue,
     email_mode: emailMode,
     email_subject: emailSubject,
     email_body: emailBody,
     max_emails_per_run: clampInt(body.max_emails_per_run, 5, 1, 25),
+    max_proposals_per_run: clampInt(body.max_proposals_per_run, DEFAULT_MAX_PROPOSALS, 1, MAX_PROPOSALS_LIMIT),
+    visibility: body.visibility === 'team' ? 'team' : 'private',
   };
 }
 
 /**
- * Maakt een agent aan. Met `activate` gaat hij in DEZELFDE aanroep aan.
+ * Snoeit een agent bij tot wat zijn eigenaar mag: wie niet mag wijzigen, krijgt
+ * een agent die alleen meekijkt, en tools buiten zijn modulerechten vallen eraf.
+ * `dropped` en `downgraded` gaan terug naar de app, zodat die het kan zeggen in
+ * plaats van het stil weg te laten.
+ */
+function fitToOwner(fields: Record<string, unknown>, ctx: GerrieContext, caps: AgentCapabilities): { fields: Record<string, unknown>; dropped: string[]; downgraded: boolean } {
+  const mode = allowedAgentMode(fields.mode, caps);
+  const { tools, dropped } = permittedAgentTools(fields.enabled_tools as string[], toolCatalog(ctx), mode);
+  return {
+    fields: { ...fields, mode, enabled_tools: tools },
+    dropped,
+    downgraded: fields.mode === 'propose' && mode === 'report',
+  };
+}
+
+async function loadAgent(orgId: string, id: string): Promise<Record<string, unknown>> {
+  if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
+  const { data, error } = await supabaseAdmin.from('ai_agents').select('*').eq('id', id).eq('organization_id', orgId).maybeSingle();
+  if (error) throw new HttpError(`Agent ophalen mislukt: ${error.message}`, 500);
+  if (!data) throw new HttpError('Agent niet gevonden.', 404);
+  return data as Record<string, unknown>;
+}
+
+function assertMay(agent: Record<string, unknown>, ctx: GerrieContext, caps: AgentCapabilities, action: AgentAction): void {
+  if (!canManageAgent(agent, ctx.userId, caps, action)) throw new HttpError(manageRefusal(action), 403);
+}
+
+/** Een plafond op het aantal agents per persoon: elke actieve agent is een run per tik. */
+async function assertRoomForAgent(orgId: string, ownerId: string): Promise<void> {
+  const { count, error } = await supabaseAdmin.from('ai_agents').select('id', { count: 'exact', head: true })
+    .eq('organization_id', orgId).eq('run_as_user_id', ownerId).neq('status', 'archived');
+  if (error) throw new HttpError(`Agents tellen mislukt: ${error.message}`, 500);
+  if (Number(count ?? 0) >= MAX_AGENTS_PER_USER) {
+    throw new HttpError(`Er staan al ${MAX_AGENTS_PER_USER} agents op deze naam. Archiveer er eerst een die je niet meer gebruikt.`, 409);
+  }
+}
+
+/**
+ * Maakt een agent aan, op naam van wie hem maakt. Met `activate` gaat hij in
+ * DEZELFDE aanroep aan.
  *
  * Dat is bewust één stap: een agent die je net hebt samengesteld hoort niet als
  * slapend concept te blijven liggen tot je hem nog eens apart aanzet. De grens
  * blijft waar hij hoort — alles wat hij vervolgens wil versturen komt als
  * afvinklijst bij jou terug.
  */
-async function createAgent(orgId: string, userId: string, body: Record<string, unknown>): Promise<{ id: string; status: string; next_run_at: string | null }> {
-  const fields = sanitizeAgentFields(body);
-  if (!fields.instruction) throw new HttpError('Geef een opdracht voor de agent.', 400);
+async function createAgent(ctx: GerrieContext, caps: AgentCapabilities, body: Record<string, unknown>) {
+  const fitted = fitToOwner(sanitizeAgentFields(body), ctx, caps);
+  if (!fitted.fields.instruction) throw new HttpError('Geef een opdracht voor de agent.', 400);
+  await assertRoomForAgent(ctx.organizationId, ctx.userId);
   const activate = body.activate === true;
-  const nextRunAt = activate ? computeNextRunAt(fields, new Date()).toISOString() : null;
+  const nextRunAt = activate ? computeNextRunAt(fitted.fields, new Date()).toISOString() : null;
   const { data, error } = await supabaseAdmin.from('ai_agents').insert({
-    organization_id: orgId, created_by: userId, run_as_user_id: userId,
-    status: activate ? 'active' : 'draft', next_run_at: nextRunAt, ...fields,
+    organization_id: ctx.organizationId, created_by: ctx.userId, run_as_user_id: ctx.userId,
+    status: activate ? 'active' : 'draft', next_run_at: nextRunAt, ...fitted.fields,
   }).select('id').single();
   if (error) throw new HttpError(`Agent aanmaken mislukt: ${error.message}`, 500);
-  return { id: data.id as string, status: activate ? 'active' : 'draft', next_run_at: nextRunAt };
+  return {
+    id: data.id as string, status: activate ? 'active' : 'draft', next_run_at: nextRunAt,
+    mode: fitted.fields.mode, dropped: fitted.dropped, downgraded: fitted.downgraded,
+  };
 }
 
-/**
- * Een routine draait als haar maker (run_as_user_id): met diens rechten,
- * privé-agenda's, gesprekken en AI-tegoed. Aanpassen, handmatig starten en erop
- * antwoorden doet daarom alleen die persoon; een owner/admin kan de routine van
- * een collega wel pauzeren of archiveren.
- */
-function assertRoutineOwner(agent: Record<string, unknown>, userId: string): void {
-  const runAs = agent.run_as_user_id ? String(agent.run_as_user_id) : String(agent.created_by || '');
-  if (runAs && runAs !== userId) {
-    throw new HttpError('Deze routine draait namens een collega. Alleen die kan hem aanpassen, handmatig starten of erop antwoorden; jij kunt hem wel pauzeren of archiveren.', 403);
-  }
-}
+async function updateAgent(ctx: GerrieContext, caps: AgentCapabilities, body: Record<string, unknown>) {
+  const existing = await loadAgent(ctx.organizationId, String(body.id || ''));
+  // Een agent draait als zijn maker (run_as_user_id): met diens rechten, privé-
+  // agenda's, gesprekken en AI-tegoed. Aanpassen doet daarom alleen die persoon.
+  assertMay(existing, ctx, caps, 'edit');
+  const fitted = fitToOwner(sanitizeAgentFields(body), ctx, caps);
+  if (!fitted.fields.instruction) throw new HttpError('Geef een opdracht voor de agent.', 400);
 
-async function updateAgent(orgId: string, userId: string, body: Record<string, unknown>): Promise<{ ok: true }> {
-  const id = String(body.id || '');
-  if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
-  const fields = sanitizeAgentFields(body);
-  if (!fields.instruction) throw new HttpError('Geef een opdracht voor de agent.', 400);
-  const { data: existing, error: exErr } = await supabaseAdmin.from('ai_agents')
-    .select('*').eq('id', id).eq('organization_id', orgId).maybeSingle();
-  if (exErr) throw new HttpError(`Agent ophalen mislukt: ${exErr.message}`, 500);
-  if (!existing) throw new HttpError('Agent niet gevonden.', 404);
-  assertRoutineOwner(existing, userId);
-
-  const patch: Record<string, unknown> = { ...fields };
+  const patch: Record<string, unknown> = { ...fitted.fields };
   // Draait de agent al? Herbereken de volgende run met het nieuwe schema.
   if (String(existing.status) === 'active') {
-    patch.next_run_at = computeNextRunAt({ ...existing, ...fields }, new Date()).toISOString();
+    patch.next_run_at = computeNextRunAt({ ...existing, ...fitted.fields }, new Date()).toISOString();
   }
-  const { error } = await supabaseAdmin.from('ai_agents').update(patch).eq('id', id).eq('organization_id', orgId);
+  const { error } = await supabaseAdmin.from('ai_agents').update(patch).eq('id', String(existing.id)).eq('organization_id', ctx.organizationId);
   if (error) throw new HttpError(`Agent bijwerken mislukt: ${error.message}`, 500);
-  return { ok: true };
+  return { ok: true as const, mode: fitted.fields.mode, dropped: fitted.dropped, downgraded: fitted.downgraded };
 }
 
-async function setStatus(orgId: string, id: string, status: string): Promise<{ ok: true; next_run_at: string | null }> {
-  if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
+async function setStatus(ctx: GerrieContext, caps: AgentCapabilities, id: string, status: string): Promise<{ ok: true; next_run_at: string | null }> {
   if (!['draft', 'active', 'paused', 'archived'].includes(status)) throw new HttpError('Ongeldige status.', 400);
-  const { data: existing, error: exErr } = await supabaseAdmin.from('ai_agents')
-    .select('*').eq('id', id).eq('organization_id', orgId).maybeSingle();
-  if (exErr) throw new HttpError(`Agent ophalen mislukt: ${exErr.message}`, 500);
-  if (!existing) throw new HttpError('Agent niet gevonden.', 404);
+  const existing = await loadAgent(ctx.organizationId, id);
+  // Aanzetten (of terug naar concept) is van de eigenaar: anders gaat hij draaien
+  // namens iemand die daar niet om vroeg. Pauzeren en archiveren mag ook toezicht.
+  assertMay(existing, ctx, caps, status === 'active' ? 'activate' : status === 'paused' ? 'pause' : status === 'archived' ? 'archive' : 'edit');
 
   const patch: Record<string, unknown> = { status, lease_until: null };
   // Het archief-moment loopt mee met de status, zodat "gearchiveerd zonder datum"
@@ -652,7 +766,7 @@ async function setStatus(orgId: string, id: string, status: string): Promise<{ o
   } else {
     patch.next_run_at = null;
   }
-  const { error } = await supabaseAdmin.from('ai_agents').update(patch).eq('id', id).eq('organization_id', orgId);
+  const { error } = await supabaseAdmin.from('ai_agents').update(patch).eq('id', id).eq('organization_id', ctx.organizationId);
   if (error) throw new HttpError(`Status bijwerken mislukt: ${error.message}`, 500);
   return { ok: true, next_run_at: (patch.next_run_at as string | null) ?? null };
 }
@@ -660,39 +774,80 @@ async function setStatus(orgId: string, id: string, status: string): Promise<{ o
 /**
  * "Verwijderen" van een agent = ARCHIVEREN.
  *
- * Een agent heeft namens de organisatie gewerkt: mail klaargezet, facturen
- * voorgesteld, cijfers gelezen. Dat weggooien betekent dat je achteraf niet meer
- * kunt verantwoorden wat er is gebeurd. Hij gaat dus uit (geen schema, geen lease)
- * maar blijft met zijn volledige logboek bestaan. Er is bewust géén hard-delete-pad.
+ * Een agent heeft namens iemand gewerkt: mail klaargezet, facturen voorgesteld,
+ * cijfers gelezen. Dat weggooien betekent dat je achteraf niet meer kunt
+ * verantwoorden wat er is gebeurd. Hij gaat dus uit (geen schema, geen lease) maar
+ * blijft met zijn volledige logboek bestaan. Er is bewust géén hard-delete-pad.
  */
-async function archiveAgent(orgId: string, id: string): Promise<{ ok: true; archived: true }> {
-  if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
-  const { data, error } = await supabaseAdmin.from('ai_agents')
-    .update({ status: 'archived', archived_at: new Date().toISOString(), next_run_at: null, lease_until: null })
-    .eq('id', id).eq('organization_id', orgId).select('id').maybeSingle();
+async function archiveAgent(ctx: GerrieContext, caps: AgentCapabilities, id: string): Promise<{ ok: true; archived: true }> {
+  const existing = await loadAgent(ctx.organizationId, id);
+  assertMay(existing, ctx, caps, 'archive');
+  const { error } = await supabaseAdmin.from('ai_agents')
+    .update({ status: 'archived', archived_at: new Date().toISOString(), next_run_at: null, lease_until: null, visibility: 'private' })
+    .eq('id', id).eq('organization_id', ctx.organizationId);
   if (error) throw new HttpError(`Agent archiveren mislukt: ${error.message}`, 500);
-  if (!data) throw new HttpError('Agent niet gevonden.', 404);
   return { ok: true, archived: true };
 }
 
-/** Terug uit het archief: hij komt gepauzeerd terug, jij zet hem zelf weer aan. */
-async function restoreAgent(orgId: string, id: string): Promise<{ ok: true }> {
-  if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
-  const { data, error } = await supabaseAdmin.from('ai_agents')
+/** Terug uit het archief: hij komt gepauzeerd terug; de eigenaar zet hem zelf weer aan. */
+async function restoreAgent(ctx: GerrieContext, caps: AgentCapabilities, id: string): Promise<{ ok: true }> {
+  const existing = await loadAgent(ctx.organizationId, id);
+  assertMay(existing, ctx, caps, 'restore');
+  if (existing.run_as_user_id) await assertRoomForAgent(ctx.organizationId, String(existing.run_as_user_id));
+  const { error } = await supabaseAdmin.from('ai_agents')
     .update({ status: 'paused', archived_at: null, next_run_at: null, lease_until: null })
-    .eq('id', id).eq('organization_id', orgId).select('id').maybeSingle();
+    .eq('id', id).eq('organization_id', ctx.organizationId);
   if (error) throw new HttpError(`Agent terugzetten mislukt: ${error.message}`, 500);
-  if (!data) throw new HttpError('Agent niet gevonden.', 404);
   return { ok: true };
 }
 
-async function runNow(orgId: string, userId: string, id: string): Promise<Record<string, unknown>> {
-  if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
+/**
+ * Een eigen agent maken op basis van een bestaande: een sjabloon dat een collega
+ * deelde, of een eigen agent als startpunt. De kopie is van wie hem maakt en draait
+ * met DIENS rechten — wat die niet mag, valt eraf en dat staat in het antwoord.
+ */
+async function cloneAgent(ctx: GerrieContext, caps: AgentCapabilities, id: string, activate: boolean) {
+  const source = await loadAgent(ctx.organizationId, id);
+  if (!canCloneAgent(source, ctx.userId, caps)) throw new HttpError('Deze agent is niet gedeeld; vraag de eigenaar om hem met het team te delen.', 403);
+  await assertRoomForAgent(ctx.organizationId, ctx.userId);
+  const own = String(source.run_as_user_id ?? '') === ctx.userId;
+  const fields = sanitizeAgentFields({
+    ...source,
+    name: own ? `${String(source.name || 'Agent')} (kopie)` : String(source.name || 'Agent'),
+    visibility: 'private',
+  });
+  const fitted = fitToOwner(fields, ctx, caps);
+  if (!fitted.fields.instruction) throw new HttpError('Deze agent heeft geen opdracht om over te nemen.', 400);
+  const nextRunAt = activate ? computeNextRunAt(fitted.fields, new Date()).toISOString() : null;
+  const { data, error } = await supabaseAdmin.from('ai_agents').insert({
+    organization_id: ctx.organizationId, created_by: ctx.userId, run_as_user_id: ctx.userId,
+    status: activate ? 'active' : 'draft', next_run_at: nextRunAt, copied_from: String(source.id), ...fitted.fields,
+  }).select('id').single();
+  if (error) throw new HttpError(`Agent kopiëren mislukt: ${error.message}`, 500);
+  return {
+    id: data.id as string, status: activate ? 'active' : 'draft', next_run_at: nextRunAt,
+    mode: fitted.fields.mode, dropped: fitted.dropped, downgraded: fitted.downgraded,
+  };
+}
+
+/**
+ * Delen met het team: collega's zien hem als startpunt en kunnen er een eigen kopie
+ * van maken. Ze zien zijn instellingen, niet zijn runs, logboek of voorstellen.
+ */
+async function shareAgent(ctx: GerrieContext, caps: AgentCapabilities, id: string, visibility: unknown): Promise<{ ok: true; visibility: string }> {
+  const existing = await loadAgent(ctx.organizationId, id);
+  assertMay(existing, ctx, caps, 'share');
+  if (String(existing.status) === 'archived') throw new HttpError('Een gearchiveerde agent kun je niet delen.', 400);
+  const next = visibility === 'team' ? 'team' : 'private';
+  const { error } = await supabaseAdmin.from('ai_agents').update({ visibility: next }).eq('id', id).eq('organization_id', ctx.organizationId);
+  if (error) throw new HttpError(`Delen mislukt: ${error.message}`, 500);
+  return { ok: true, visibility: next };
+}
+
+async function runNow(ctx: GerrieContext, caps: AgentCapabilities, id: string): Promise<Record<string, unknown>> {
   if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
-  const { data: agent, error } = await supabaseAdmin.from('ai_agents').select('*').eq('id', id).eq('organization_id', orgId).maybeSingle();
-  if (error) throw new HttpError(`Agent ophalen mislukt: ${error.message}`, 500);
-  if (!agent) throw new HttpError('Agent niet gevonden.', 404);
-  assertRoutineOwner(agent, userId);
+  const agent = await loadAgent(ctx.organizationId, id);
+  assertMay(agent, ctx, caps, 'run');
   if (String(agent.status) === 'archived') throw new HttpError('Deze agent is gearchiveerd. Zet hem eerst terug als je hem weer wilt laten draaien.', 400);
   if (!String(agent.instruction || '').trim()) throw new HttpError('Deze agent heeft nog geen opdracht.', 400);
   // Handmatige run: eigen occurrence-key, verandert het schema NIET.
@@ -701,13 +856,13 @@ async function runNow(orgId: string, userId: string, id: string): Promise<Record
 }
 
 /**
- * Antwoord van de (aanwezige) gebruiker op een run: zet het gesprek van die run voort.
- * Handig als de agent om input vroeg ("mag ik dit versturen?") — de gebruiker antwoordt,
- * de agent draait nog een beurt en kan alsnog een propose_* voorstel klaarzetten. Draait
- * met dezelfde modus/tools als de agent; een voorstel belandt (zoals altijd) in de
- * goedkeurwachtrij en wordt pas na expliciete goedkeuring uitgevoerd.
+ * Antwoord van de (aanwezige) eigenaar op een run: zet het gesprek van die run voort.
+ * Handig als de agent om input vroeg ("mag ik dit versturen?") — de eigenaar antwoordt,
+ * de agent draait nog een beurt en kan alsnog iets klaarzetten. Draait met dezelfde
+ * modus/tools als de agent; een voorstel belandt (zoals altijd) in de goedkeurwachtrij
+ * en wordt pas na expliciete goedkeuring uitgevoerd.
  */
-async function replyToRun(orgId: string, userId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function replyToRun(ctx: GerrieContext, caps: AgentCapabilities, body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const runId = String(body.runId || '');
   const message = String(body.message || '').trim();
   if (!isUuid(runId)) throw new HttpError('Ongeldig run-id.', 400);
@@ -715,6 +870,7 @@ async function replyToRun(orgId: string, userId: string, role: OrganizationRole,
   if (message.length > 4000) throw new HttpError('Bericht is te lang.', 400);
   if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
 
+  const orgId = ctx.organizationId;
   const { data: run, error: runErr } = await supabaseAdmin.from('ai_agent_runs')
     .select('agent_id, conversation_id').eq('id', runId).eq('organization_id', orgId).maybeSingle();
   if (runErr) throw new HttpError(`Run ophalen mislukt: ${runErr.message}`, 500);
@@ -722,53 +878,51 @@ async function replyToRun(orgId: string, userId: string, role: OrganizationRole,
   const convId = run.conversation_id ? String(run.conversation_id) : '';
   if (!convId) throw new HttpError('Deze run heeft geen gesprek om op te antwoorden.', 400);
 
-  const { data: agent, error: agErr } = await supabaseAdmin.from('ai_agents')
-    .select('*').eq('id', run.agent_id).eq('organization_id', orgId).maybeSingle();
-  if (agErr) throw new HttpError(`Agent ophalen mislukt: ${agErr.message}`, 500);
-  if (!agent) throw new HttpError('Agent niet gevonden.', 404);
-  assertRoutineOwner(agent, userId);
-  const mode = String(agent.mode || 'report') === 'propose' ? 'propose' : 'report';
+  const agent = await loadAgent(orgId, String(run.agent_id));
+  assertMay(agent, ctx, caps, 'reply');
+  const mode = allowedAgentMode(agent.mode, caps);
   const modelKind = resolveModelKind(agent.model_kind);
+  const maxProposals = clampInt(agent.max_proposals_per_run, DEFAULT_MAX_PROPOSALS, 1, MAX_PROPOSALS_LIMIT);
 
-  const budget = await checkUserBudget(userId);
+  const budget = await checkUserBudget(ctx.userId);
   if (!budget.allowed) throw new HttpError('Je AI-tegoed voor deze maand is op.', 429);
 
   const history = await loadHistory(convId, orgId);
-  await insertMessage(convId, orgId, userId, 'user', message, []);
+  await insertMessage(convId, orgId, ctx.userId, 'user', message, []);
 
   // Het logboek loopt door waar de run gebleven was: een antwoordbeurt hoort bij
   // dezelfde run, en wat de agent daarna deed hoort er net zo goed in.
   const log = runLogger(orgId, String(agent.id), runId, await nextLogSeq(runId));
   log.add('reply', 'Jij antwoordde de agent', { message: message.slice(0, 2000) });
 
-  const ctx = await buildContext(orgId, role, { id: userId });
   // Antwoorden op een run gebruikt dezelfde schrijfwijze en hetzelfde mailplafond
   // als de geplande run zelf; anders zou "ja, stuur maar" ineens andere post opleveren.
   ctx.clientEmail = clientEmailSettings(agent);
   const allowedToolNames = resolveAllowedTools(agent, mode);
-  const outcome = await runAgent(ctx, history, message, noopEmit, modelKind, allowedToolNames);
+  const outcome: AgentOutcome = await runAgent(ctx, history, message, noopEmit, modelKind, allowedToolNames, {
+    maxProposals: mode === 'propose' ? maxProposals : 1,
+    maxIterations: MAX_AGENT_ITERATIONS,
+  });
   for (const step of outcome.steps) log.addStep(step);
 
-  const assistantId = await insertMessage(convId, orgId, userId, 'assistant', outcome.text, outcome.toolCalls);
-  await recordUsage(orgId, convId, assistantId, userId, outcome.usage, modelKind, String(agent.id), runId);
+  const assistantId = await insertMessage(convId, orgId, ctx.userId, 'assistant', outcome.text, outcome.toolCalls);
+  await recordUsage(orgId, convId, assistantId, ctx.userId, outcome.usage, modelKind, String(agent.id), runId);
   log.add('answer', 'Zijn antwoord', { text: outcome.text });
 
-  let proposalCreated = 0;
-  if (outcome.proposal && mode === 'propose') {
-    const { data: auditRow } = await supabaseAdmin.from('ai_action_audit').insert({
-      organization_id: orgId, conversation_id: convId, message_id: assistantId, user_id: userId,
-      action: auditActionName(outcome.proposal), params: outcome.proposal, status: 'proposed',
-      agent_id: String(agent.id), agent_run_id: runId,
-    }).select('id').single();
-    proposalCreated = 1;
-    log.add('proposal', 'Wacht op jouw akkoord', { auditId: auditRow?.id ?? null, type: auditActionName(outcome.proposal) });
+  const auditIds = mode === 'propose'
+    ? await queueProposals(orgId, convId, assistantId, ctx.userId, String(agent.id), runId, outcome.proposals)
+    : [];
+  auditIds.forEach((auditId, i) => {
+    log.add('proposal', 'Wacht op jouw akkoord', { auditId, type: auditActionName(outcome.proposals[i]), what: describeProposal(outcome.proposals[i]) });
+  });
+  if (auditIds.length > 0) {
     // Houd de teller op de run bij (voor de UI-badge).
     const { data: cur } = await supabaseAdmin.from('ai_agent_runs').select('proposals_created').eq('id', runId).maybeSingle();
-    await supabaseAdmin.from('ai_agent_runs').update({ proposals_created: Number(cur?.proposals_created || 0) + 1 }).eq('id', runId);
+    await supabaseAdmin.from('ai_agent_runs').update({ proposals_created: Number(cur?.proposals_created || 0) + auditIds.length }).eq('id', runId);
   }
   await log.flush();
 
-  return { text: outcome.text, proposalCreated };
+  return { text: outcome.text, proposalCreated: auditIds.length };
 }
 
 // ── HTTP-helpers ─────────────────────────────────────────────────────────────

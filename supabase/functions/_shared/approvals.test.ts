@@ -45,10 +45,14 @@ test('alleen de server legt een beslissing vast, met de rol vers uit organizatio
   assert.match(sql, /grant execute on function public\.ai_action_decide\(uuid, uuid, uuid, text, text\) to service_role;/);
 });
 
-test('een teamlid beslist alleen over zijn eigen chatvoorstel; de wachtrij is van owners en admins', () => {
+test('een teamlid beslist over zijn eigen chatvoorstel en zijn eigen agent; de rest is van owners en admins', () => {
   const member = decide.slice(decide.indexOf("if v_role not in ('owner', 'admin') then"));
   assert.ok(member.length > 0, 'de regel voor teamleden staat er');
-  // Agents, gekoppelde AI en API-sleutels: alleen owners en admins.
+  // Een voorstel van een geplande agent: alleen de eigenaar van díe agent, op zijn
+  // eigen naam, met Gerrie op volledig — en nooit als er een koppeling of signaal aan hangt.
+  assert.match(member, /elsif \(v_row\.agent_id is not null or v_row\.agent_run_id is not null\)\s*\n\s*and v_row\.mcp_grant_id is null and v_row\.api_key_id is null and v_row\.signal_id is null then/);
+  assert.match(member, /if v_row\.user_id is distinct from p_user_id\s*\n\s*or coalesce\(nullif\(v_access ->> 'gerrie', ''\), 'write'\) <> 'write'\s*\n\s*or not exists \(\s*\n\s*select 1 from public\.ai_agents a\s*\n\s*where a\.id = v_row\.agent_id and a\.organization_id = p_organization_id and a\.run_as_user_id = p_user_id/);
+  // Gekoppelde AI, API-sleutels en signalen: alleen owners en admins.
   assert.match(member, /elsif v_row\.agent_id is not null or v_row\.agent_run_id is not null or v_row\.mcp_grant_id is not null\s*\n\s*or v_row\.api_key_id is not null or v_row\.signal_id is not null\s*\n\s*or v_row\.user_id is distinct from p_user_id then\s*\n\s*raise exception 'Over dit voorstel beslist een owner of admin\.'/);
   // Een kaart uit de Beslissingen-feed: dezelfde regel als de feed (ai_decision_resolve).
   assert.match(member, /if v_row\.signal_id is not null and v_row\.agent_id is null and v_row\.agent_run_id is null\s*\n\s*and v_row\.mcp_grant_id is null and v_row\.api_key_id is null then/);
