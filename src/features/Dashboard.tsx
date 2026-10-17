@@ -364,6 +364,9 @@ export function Dashboard({
         handlers={gerrieActions}
         variant="dashboard"
         onOpenCommandCenter={() => openPage('gerrie')}
+        currentUserId={currentUserId}
+        canOversee={organizationContext.activeMembership?.role === 'owner' || organizationContext.activeMembership?.role === 'admin'}
+        teamMembers={organizationContext.teamMembers ?? []}
       />}
 
       <section className={`dashboard-layout${showToday ? '' : ' dash-layout-single'}`}>

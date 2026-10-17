@@ -8,22 +8,23 @@
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { HttpError } from './edgeAuth.ts';
+import {
+  anthropicHeaders, claudeModelSpec, DEFAULT_CLAUDE_MODEL, modelCostUsd, modelRequestFields, refusalText, usageFromResponse,
+  type TokenUsage,
+} from './claudeModels.ts';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
-const ANTHROPIC_MODEL = Deno.env.get('GERRIE_MODEL') || 'claude-sonnet-4-6';
-const ANTHROPIC_VERSION = '2023-06-01';
-const MAX_OUTPUT_TOKENS = 2048;
-
-// Prijzen per 1M tokens (Claude Sonnet 4.6) — gelijk aan gerrie-agent.
-const PRICE_INPUT = 3.0;
-const PRICE_OUTPUT = 15.0;
-const PRICE_CACHE_READ = 0.3;
-const PRICE_CACHE_WRITE = 3.75;
+// Hetzelfde model als Gerrie (Claude Sonnet 5.5); per secret te overrulen.
+const MODEL = claudeModelSpec(Deno.env.get('GERRIE_MODEL') || DEFAULT_CLAUDE_MODEL);
+// Thinking telt mee in max_tokens. Samenvatten vraagt weinig nadenken (effort low),
+// maar een lang gesprek levert lange notulen op: ruim genoeg voor allebei.
+const MAX_OUTPUT_TOKENS = 8192;
 
 const USD_TO_EUR = Number(Deno.env.get('GERRIE_USD_TO_EUR') || '0.92');
 const MONTHLY_USER_COST_EUR = Number(Deno.env.get('GERRIE_MONTHLY_USER_COST_EUR') || '0');
 
-export interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
+/** Tokens, en wat ze kostten per model dat ze verbruikte (zie claudeModels.ts). */
+export type Usage = TokenUsage;
 
 export interface MeetingSummary {
   samenvatting: string;
@@ -67,9 +68,9 @@ export async function summarizeTranscript(transcript: string, meta: SummaryMeta)
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
+    headers: anthropicHeaders(ANTHROPIC_API_KEY, MODEL),
     body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
+      ...modelRequestFields(MODEL, 'low'),
       max_tokens: MAX_OUTPUT_TOKENS,
       system,
       messages: [{ role: 'user', content: user }],
@@ -81,16 +82,18 @@ export async function summarizeTranscript(transcript: string, meta: SummaryMeta)
     throw new HttpError(`Claude-call mislukt (${res.status}): ${detail.slice(0, 300)}`, 502);
   }
 
-  const data = await res.json() as { content?: Array<{ type: string; text?: string }>; usage?: Record<string, number> };
-  const text = (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('').trim();
-  const usage: Usage = {
-    input: Number(data.usage?.input_tokens || 0),
-    output: Number(data.usage?.output_tokens || 0),
-    cacheRead: Number(data.usage?.cache_read_input_tokens || 0),
-    cacheWrite: Number(data.usage?.cache_creation_input_tokens || 0),
+  const data = await res.json() as {
+    content?: Array<{ type: string; text?: string }>; usage?: Record<string, unknown>;
+    stop_reason?: string; stop_details?: { category?: unknown } | null; model?: string;
   };
+  // Een weigering is een gewone 200; de notulen blijven dan leeg en het transcript staat er gewoon.
+  if (data.stop_reason === 'refusal') throw new HttpError(refusalText(data.stop_details?.category), 422);
+  // Thinking-blokken komen eerst; alleen de tekst is de JSON.
+  const text = (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('').trim();
+  // Met de prijs per poging: na een fallback rekent het vangnetmodel zijn eigen tarief.
+  const usage: Usage = usageFromResponse(data.usage, MODEL, data.model ?? null);
 
-  return { summary: parseSummary(text), text, usage, model: ANTHROPIC_MODEL };
+  return { summary: parseSummary(text), text, usage, model: data.model || MODEL.id };
 }
 
 /** Parseert de JSON-notulen defensief (Claude kan onbedoeld een code-fence toevoegen). */
@@ -117,8 +120,9 @@ function parseSummary(text: string): MeetingSummary {
   }
 }
 
-export function costUsd(usage: Usage): number {
-  return (usage.input * PRICE_INPUT + usage.output * PRICE_OUTPUT + usage.cacheRead * PRICE_CACHE_READ + usage.cacheWrite * PRICE_CACHE_WRITE) / 1_000_000;
+/** Kosten in USD tegen de prijzen van het model dat het werk deed. */
+export function costUsd(usage: Usage, model: string = MODEL.id): number {
+  return modelCostUsd(claudeModelSpec(model), usage);
 }
 
 /** Logt het tokenverbruik in ai_usage (zelfde tabel als Gerrie). */
@@ -126,7 +130,7 @@ export async function recordAiUsage(admin: SupabaseClient, organizationId: strin
   await admin.from('ai_usage').insert({
     organization_id: organizationId, conversation_id: null, message_id: null, user_id: userId, model,
     input_tokens: usage.input, output_tokens: usage.output, cache_read_tokens: usage.cacheRead, cache_creation_tokens: usage.cacheWrite,
-    cost_usd: costUsd(usage),
+    cost_usd: costUsd(usage, model),
   });
 }
 

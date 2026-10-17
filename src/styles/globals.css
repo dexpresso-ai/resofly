@@ -8136,6 +8136,53 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .ag-history-label{ display:inline-flex; align-items:center; gap:6px; font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
 .ag-history .cc-runs{ margin-top:0; border-top:0; padding-top:8px; }
 
+/* 5b ── Agents voor iedereen: van wie is hij, en wat deelt het team  (2026-10-17)
+   Elk teamlid heeft nu eigen agents, met precies zijn eigen rechten. Dat moet je
+   zien: bij een agent van een collega staat van wie hij is, een gedeelde agent
+   draagt een klein vlagje, en de agents van het team staan in een eigen sectie
+   onder je eigen galerij — nooit ertussen. */
+.ag-tile-owner{ display:inline-flex; align-items:center; gap:4px; max-width:100%; font-size:11px; color:var(--muted2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ag-tile-flag{
+  position:absolute; top:11px; left:11px; z-index:2;
+  display:grid; place-items:center; width:22px; height:22px; border-radius:var(--r-pill);
+  border:1px solid var(--border-strong); background:var(--accent-soft); color:var(--accent-ink);
+}
+.ag-sheet-owner{ display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:500; padding:3px 9px; border-radius:20px; border:1px solid var(--border2); color:var(--muted2); }
+
+.ag-section{ display:flex; flex-direction:column; gap:12px; margin-top:6px; border-top:1px solid var(--border); padding-top:16px; }
+.ag-section-head{ display:flex; flex-wrap:wrap; align-items:center; gap:6px 9px; font-size:13px; color:var(--muted2); }
+.ag-section-head svg{ color:var(--muted); flex:none; }
+.ag-section-head strong{ font-weight:600; color:var(--text); }
+.ag-section-head span{ flex-basis:100%; font-size:11.5px; color:var(--muted); line-height:1.5; }
+
+/* Een gedeelde agent is een startpunt, geen tegel: je ziet wat hij doet en neemt hem over. */
+.ag-shared-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; }
+.ag-shared{ display:flex; flex-direction:column; gap:10px; padding:14px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--panel); }
+.ag-shared-top{ display:flex; align-items:center; gap:11px; min-width:0; }
+.ag-shared-top>div{ display:flex; flex-direction:column; gap:3px; min-width:0; }
+.ag-shared-top strong{ font-size:13.5px; font-weight:600; line-height:1.3; }
+/* Blok met een inline icoon, geen flex: anders wordt de tekst één los flex-item
+   dat als geheel naar de volgende regel springt en het icoon alleen laat staan. */
+.ag-shared-meta{ display:block; font-size:11px; line-height:1.45; color:var(--muted); }
+.ag-shared-meta svg{ display:inline-block; vertical-align:-1px; margin-right:3px; }
+.ag-shared p{ margin:0; font-size:12.5px; line-height:1.5; color:var(--muted2); overflow-wrap:anywhere; }
+.ag-shared .cc-btn{ align-self:flex-start; margin-top:auto; }
+
+/* Bezorging in de editor: vier vinkjes naast elkaar, op een telefoon onder elkaar. */
+.ag-delivery{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:7px; }
+.ag-delivery .cc-tool input:disabled{ opacity:.6; }
+
+/* De wachtrij: wat op een collega wacht, haal je er bewust bij. */
+.ag-queue-team{
+  all:unset; box-sizing:border-box; cursor:pointer; flex:none;
+  display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:var(--r-pill);
+  border:1px solid var(--border2); font-size:11.5px; font-weight:600; color:var(--muted2);
+}
+.ag-queue-team:hover{ background:var(--bg4); color:var(--text); }
+.ag-queue-team.on{ border-color:var(--border-strong); background:var(--accent-soft); color:var(--accent-ink); }
+.ag-queue-team:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.ag-queue-owner{ font-weight:600; color:var(--accent-ink); }
+
 /* 6 ── Gezicht kiezen in de editor ─────────────────────────────────────── */
 .ag-picker{ display:flex; flex-wrap:wrap; gap:7px; align-items:center; }
 .ag-pick-icon{
@@ -8243,6 +8290,12 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .ag-queue-actions{ width:100%; justify-content:flex-end; }
   .ag-btn{ min-height:40px; padding:8px 14px; }
   .ag-queue-sub{ max-width:100%; }
+  .ag-queue-head{ flex-wrap:wrap; }
+  .ag-queue-team{ min-height:36px; }
+  .ag-shared-grid{ grid-template-columns:1fr; }
+  .ag-shared .cc-btn{ align-self:stretch; justify-content:center; min-height:40px; }
+  .ag-delivery{ grid-template-columns:1fr; }
+  .ag-sheet-actions .cc-btn{ min-height:40px; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════

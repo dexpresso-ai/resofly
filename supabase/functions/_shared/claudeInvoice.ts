@@ -2,10 +2,13 @@
 // Gedeelde Claude-inkoopfactuurherkenning: PDF/afbeelding -> gestructureerde
 // factuurgegevens + grootboekvoorstel.
 //
-// Eén niet-streamende Claude-call met een geforceerde tool ("extract_invoice"),
-// zodat we altijd schema-geldige JSON terugkrijgen. Kosten + budget lopen tegen
-// dezelfde `ai_usage`-tabel en hetzelfde maandplafond als Gerrie (zie
-// claudeSummary.ts), zodat alle AI-kosten van een gebruiker onder één limiet vallen.
+// Eén niet-streamende Claude-call met de tool "extract_invoice", zodat we de
+// gegevens gestructureerd terugkrijgen. Op een model dat het accepteert wordt die
+// tool geforceerd; Claude Sonnet 5.5 weigert een geforceerde tool_choice (400),
+// daar vraagt de prompt erom en controleren we dat hij er is (met één herkansing).
+// Kosten + budget lopen tegen dezelfde `ai_usage`-tabel en hetzelfde maandplafond
+// als Gerrie (zie claudeSummary.ts), zodat alle AI-kosten van een gebruiker onder
+// één limiet vallen.
 //
 // Beveiliging: de factuurinhoud is DATA, geen instructies. De AI krijgt het
 // rekeningschema/BTW-codes enkel als referentie mee en stelt codes voor; de
@@ -16,12 +19,16 @@
 import { HttpError } from './edgeAuth.ts';
 import type { Usage } from './claudeSummary.ts';
 import { DOCUMENT_MIME_TYPES } from './invoiceInboxRules.ts';
+import {
+  addUsage, anthropicHeaders, claudeModelSpec, DEFAULT_CLAUDE_MODEL, modelRequestFields, refusalText, usageFromResponse,
+} from './claudeModels.ts';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
-// Standaard hetzelfde model als Gerrie (Sonnet); per secret te overrulen.
-const ANTHROPIC_MODEL = Deno.env.get('INVOICE_EXTRACT_MODEL') || Deno.env.get('GERRIE_MODEL') || 'claude-sonnet-4-6';
-const ANTHROPIC_VERSION = '2023-06-01';
-const MAX_OUTPUT_TOKENS = 3072;
+// Standaard hetzelfde model als Gerrie (Claude Sonnet 5.5); per secret te overrulen.
+const MODEL = claudeModelSpec(Deno.env.get('INVOICE_EXTRACT_MODEL') || Deno.env.get('GERRIE_MODEL') || DEFAULT_CLAUDE_MODEL);
+// Thinking telt mee in max_tokens; een factuur met veel regels vraagt ook ruimte
+// voor de tool-invoer zelf. Niet-streamend, dus niet onbeperkt.
+const MAX_OUTPUT_TOKENS = 12000;
 
 export type InvoiceConfidence = 'high' | 'medium' | 'low';
 
@@ -69,7 +76,7 @@ export function hasAnthropicKey(): boolean {
 }
 
 export function invoiceExtractModel(): string {
-  return ANTHROPIC_MODEL;
+  return MODEL.id;
 }
 
 /** Toegestane bestandstypen voor het uitlezen (één bron: invoiceInboxRules.ts). */
@@ -225,45 +232,54 @@ async function runExtraction(
   if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
 
   const system = buildSystemPrompt(accounts, vatCodes);
+  const spec = MODEL;
+  const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      // Rekeningschema/BTW-codes zijn per organisatie stabiel -> cache de systeemprompt.
-      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
-      tools: [EXTRACT_TOOL],
-      tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [{ role: 'user', content }],
-    }),
-  });
+  // Zonder geforceerde tool kan het model (zelden) met tekst antwoorden; dan één
+  // herkansing. Op een model dat forceren accepteert, is één poging genoeg.
+  const attempts = spec.forcedToolChoice ? 1 : 2;
+  let servedBy = spec.id;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: anthropicHeaders(ANTHROPIC_API_KEY, spec),
+      body: JSON.stringify({
+        // Bedragen en btw-codes overnemen vraagt zorg, geen diep redeneren: effort medium.
+        ...modelRequestFields(spec, 'medium'),
+        max_tokens: MAX_OUTPUT_TOKENS,
+        // Rekeningschema/BTW-codes zijn per organisatie stabiel -> cache de systeemprompt.
+        system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+        tools: [EXTRACT_TOOL],
+        tool_choice: spec.forcedToolChoice ? { type: 'tool', name: TOOL_NAME } : { type: 'auto', disable_parallel_tool_use: true },
+        messages: [{ role: 'user', content }],
+      }),
+    });
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new HttpError(`Claude-call mislukt (${res.status}): ${detail.slice(0, 300)}`, 502);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new HttpError(`Claude-call mislukt (${res.status}): ${detail.slice(0, 300)}`, 502);
+    }
+
+    const data = await res.json() as {
+      content?: Array<{ type: string; name?: string; input?: unknown }>;
+      usage?: Record<string, unknown>;
+      stop_reason?: string;
+      stop_details?: { category?: unknown } | null;
+      model?: string;
+    };
+    // Elke poging tegen het tarief van het model dat hem deed (ook na een fallback).
+    addUsage(usage, usageFromResponse(data.usage, spec, data.model ?? null), spec);
+    if (data.model) servedBy = data.model;
+    if (data.stop_reason === 'refusal') throw new HttpError(refusalText(data.stop_details?.category), 422);
+
+    // Bij 'max_tokens' kan de tool-invoer afgekapt zijn: dan niet als factuur gebruiken.
+    const toolBlock = (data.content ?? []).find((b) => b.type === 'tool_use' && b.name === TOOL_NAME);
+    if (toolBlock && data.stop_reason !== 'max_tokens' && typeof toolBlock.input === 'object' && toolBlock.input !== null) {
+      return { extraction: coerceExtraction(toolBlock.input as Record<string, unknown>), usage, model: servedBy };
+    }
   }
 
-  const data = await res.json() as {
-    content?: Array<{ type: string; name?: string; input?: unknown }>;
-    usage?: Record<string, number>;
-    stop_reason?: string;
-  };
-
-  const toolBlock = (data.content ?? []).find((b) => b.type === 'tool_use' && b.name === TOOL_NAME);
-  if (!toolBlock || typeof toolBlock.input !== 'object' || toolBlock.input === null) {
-    throw new HttpError('De AI kon de factuur niet gestructureerd uitlezen. Probeer een scherpere scan of PDF.', 422);
-  }
-
-  const usage: Usage = {
-    input: Number(data.usage?.input_tokens || 0),
-    output: Number(data.usage?.output_tokens || 0),
-    cacheRead: Number(data.usage?.cache_read_input_tokens || 0),
-    cacheWrite: Number(data.usage?.cache_creation_input_tokens || 0),
-  };
-
-  return { extraction: coerceExtraction(toolBlock.input as Record<string, unknown>), usage, model: ANTHROPIC_MODEL };
+  throw new HttpError('De AI kon de factuur niet gestructureerd uitlezen. Probeer een scherpere scan of PDF.', 422);
 }
 
 // ── Defensieve coercion van de tool-output ────────────────────────────────────

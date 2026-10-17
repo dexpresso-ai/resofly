@@ -1,6 +1,7 @@
 import { euro, formatMinutes } from './format';
 import { describeReportDefinition } from './reporting';
 import type { GerrieActionHandlers, GerrieCreateTasksProposal, GerrieProposal, GerrieTaskProposal } from './gerrie-api';
+import { scheduleLabel, type RhythmFields } from './agents';
 
 /**
  * Eén bron van waarheid voor "wat stelt Gerrie hier voor, en wat gebeurt er als ik
@@ -201,13 +202,10 @@ export function createTasksItemToTask(p: GerrieCreateTasksProposal, item: Gerrie
 /** "3 regels" — het aantal factuur-/offerteregels in het onderschrift. */
 function lineLabel(n: number): string { return `${n} regel${n === 1 ? '' : 's'}`; }
 
-/** "Elke maandag om 08:00" — voor het onderschrift van een agent-voorstel. */
-function scheduleSummary(p: { schedule_kind: string; hour: number; day_of_week: number | null; day_of_month: number | null }): string {
-  const days = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
-  const time = `${String(p.hour).padStart(2, '0')}:00`;
-  if (p.schedule_kind === 'daily') return `elke dag om ${time}`;
-  if (p.schedule_kind === 'weekly') return `elke ${days[(p.day_of_week ?? 1) - 1]} om ${time}`;
-  return `maandelijks op dag ${p.day_of_month ?? 1} om ${time}`;
+/** "elke maandag om 08:00" — voor het onderschrift van een agent-voorstel. */
+function scheduleSummary(p: RhythmFields): string {
+  const label = scheduleLabel(p);
+  return label.charAt(0).toLowerCase() + label.slice(1);
 }
 
 /**

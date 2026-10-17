@@ -11,6 +11,12 @@ import { defaultInvoiceRecipient, invoiceDeliveryChannel } from '../_shared/eInv
 import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
 import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '../_shared/actions/types.ts';
 import { isOrganizationRole, memberModuleLevel, type OrganizationRole } from '../_shared/roles.ts';
+import {
+  addUsage, anthropicHeaders, assistantContentForHistory, claudeModelSpec, DEFAULT_CLAUDE_MODEL, modelCostUsd, modelRequestFields,
+  refusalText, usageFromResponse, type ClaudeModelSpec, type Effort, type TokenUsage,
+} from '../_shared/claudeModels.ts';
+import { DEFAULT_MAX_PROPOSALS, MAX_PROPOSALS_LIMIT } from '../_shared/agentAccess.ts';
+import { SCHEDULE_KINDS, isScheduleKind, type ScheduleKind } from '../_shared/agentSchedule.ts';
 
 // ============================================================
 // gerrie-agent — Gerrie, de AI-assistent, gekoppeld aan Claude (Anthropic).
@@ -40,38 +46,28 @@ const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
 
-// Sonnet 4.6: snel + kostenefficiënt en ruim voldoende voor deze (lees-)tooltaak.
-// Via de secret GERRIE_MODEL omschakelbaar (bijv. naar claude-opus-4-8) zonder code-wijziging.
-const ANTHROPIC_MODEL = Deno.env.get('GERRIE_MODEL') || 'claude-sonnet-4-6';
-const ANTHROPIC_VERSION = '2023-06-01';
+// Claude Sonnet 5.5 voor de chat, de agents en de beslislijst. Via de secret
+// GERRIE_MODEL omschakelbaar zonder code-wijziging; wat een ander model aan
+// request-vorm nodig heeft (thinking, effort, het vangnet), staat in claudeModels.ts.
+const ANTHROPIC_MODEL = Deno.env.get('GERRIE_MODEL') || DEFAULT_CLAUDE_MODEL;
 const MAX_TOOL_ITERATIONS = 8; // veiligheidsklep tegen vastlopende loops
 const MAX_HISTORY_MESSAGES = 20; // hoeveel eerdere beurten we meesturen
-const MAX_OUTPUT_TOKENS = 8192; // ruim genoeg voor thinking + een volledig antwoord (non-streaming blijft onder de SDK-timeoutgrens)
+// Thinking telt mee in max_tokens, ook als de tekst ervan niet terugkomt. De loop
+// streamt, dus een ruim plafond kost niets zolang het niet gebruikt wordt.
+const MAX_OUTPUT_TOKENS = 16000;
 
-// Prijzen per 1M tokens (Claude Sonnet 4.6) — voor de kostenraming in ai_usage.
-const PRICE_INPUT = 3.0;
-const PRICE_OUTPUT = 15.0;
-const PRICE_CACHE_READ = 0.3; // ~0,1x input
-const PRICE_CACHE_WRITE = 3.75; // ~1,25x input
+// 'cheap' is sinds Sonnet 5.5 geen kleiner model meer maar hetzelfde model dat kort
+// nadenkt (effort low): voor de beslislijst en de "snelle" agents. Een goedkoper
+// model kiezen kan nog via de secret GERRIE_CHEAP_MODEL.
+const ANTHROPIC_CHEAP_MODEL = Deno.env.get('GERRIE_CHEAP_MODEL') || DEFAULT_CLAUDE_MODEL;
 
-// Zuinig model voor de PARALLELLE deel-agents van het Commandocentrum. Via de secret
-// GERRIE_CHEAP_MODEL omschakelbaar. Haiku 4.5: een fractie van de Sonnet-prijs, zodat
-// een missie met meerdere agents binnen het maandtegoed betaalbaar blijft.
-const ANTHROPIC_CHEAP_MODEL = Deno.env.get('GERRIE_CHEAP_MODEL') || 'claude-haiku-4-5';
-const PRICE_CHEAP_INPUT = 1.0;
-const PRICE_CHEAP_OUTPUT = 5.0;
-const PRICE_CHEAP_CACHE_READ = 0.1;
-const PRICE_CHEAP_CACHE_WRITE = 1.25;
-
-// Model-register: 'strong' = huidig Sonnet (plannen/samenvatten + gewone chat),
-// 'cheap' = Haiku (deel-agents). Prijzen zitten erbij zodat de kostenlog per model klopt.
+// 'strong' = de chat, de agent-bouwer en de "grondige" agents: medium is het
+// aanbevolen beginpunt voor werk met meerdere tool-rondes. 'cheap' = low.
 type ModelKind = 'strong' | 'cheap';
-// `thinking`: of het model adaptive thinking + de effort-parameter ondersteunt. Sonnet 4.6 wel;
-// Haiku 4.5 NIET (die geeft anders "adaptive thinking is not supported on this model", 400).
-interface ModelSpec { id: string; input: number; output: number; cacheRead: number; cacheWrite: number; thinking: boolean }
+interface ModelSpec extends ClaudeModelSpec { effort: Effort }
 const MODELS: Record<ModelKind, ModelSpec> = {
-  strong: { id: ANTHROPIC_MODEL, input: PRICE_INPUT, output: PRICE_OUTPUT, cacheRead: PRICE_CACHE_READ, cacheWrite: PRICE_CACHE_WRITE, thinking: true },
-  cheap: { id: ANTHROPIC_CHEAP_MODEL, input: PRICE_CHEAP_INPUT, output: PRICE_CHEAP_OUTPUT, cacheRead: PRICE_CHEAP_CACHE_READ, cacheWrite: PRICE_CHEAP_CACHE_WRITE, thinking: false },
+  strong: { ...claudeModelSpec(ANTHROPIC_MODEL), effort: 'medium' },
+  cheap: { ...claudeModelSpec(ANTHROPIC_CHEAP_MODEL), effort: 'low' },
 };
 function resolveModelKind(raw: unknown): ModelKind { return String(raw || '') === 'cheap' ? 'cheap' : 'strong'; }
 
@@ -119,7 +115,8 @@ interface GerrieContext {
   /** Handelingen die deze run mag gebruiken (geplande agent). null/undefined = alles wat de rechten toestaan. */
   allowedActionIds?: Set<string> | null;
 }
-interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
+/** Tokens, en (na de eerste beurt) wat ze kostten per model dat ze verbruikte — zie claudeModels.ts. */
+type Usage = TokenUsage;
 interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number }
 interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
 interface QuoteProposal { type: 'quote'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; valid_until: string | null; total_eur: number }
@@ -336,10 +333,16 @@ interface AgentProposal {
   instruction: string;
   mode: 'report' | 'propose';
   enabled_tools: string[];
-  schedule_kind: 'daily' | 'weekly' | 'monthly';
+  schedule_kind: ScheduleKind;
   hour: number;
+  /** Minuut binnen het uur (0-59), zodat "om half negen" ook kan. */
+  minute: number;
+  /** Alleen bij 'hourly': het laatste uur van het venster. */
+  end_hour: number | null;
   day_of_week: number | null;
   day_of_month: number | null;
+  /** Hoeveel dingen één run hoogstens mag klaarzetten (propose). */
+  max_proposals_per_run: number;
   email_mode: 'compose' | 'template';
   email_subject: string | null;
   email_body: string | null;
@@ -384,9 +387,38 @@ interface AgentStep {
   /** Machineleesbaar: de tool-invoer, hoeveel er gevonden is, of de foutmelding. */
   detail: Record<string, unknown>;
 }
-interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal; steps: AgentStep[] }
+interface AgentOutcome {
+  text: string;
+  toolCalls: Array<{ name: string; input: unknown }>;
+  usage: Usage;
+  /** Het eerste voorstel — in de chat het enige. */
+  proposal?: Proposal;
+  /** Alle voorstellen van deze beurt; een geplande agent mag er meer dan één klaarzetten. */
+  proposals: Proposal[];
+  steps: AgentStep[];
+  /** De veiligheidsfilter van het model hield het verzoek tegen; de tekst zegt dat. */
+  refused?: boolean;
+  /** Welke modellen antwoordden (meer dan één = het vangnet nam het over na een weigering). */
+  models: string[];
+}
 
-async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit, modelKind: ModelKind = 'strong', allowedToolNames?: string[]): Promise<AgentOutcome> {
+/** Hoe ver één beurt mag gaan. Zonder opties: de chat — één voorstel, dan terug naar de gebruiker. */
+interface RunAgentOptions {
+  /**
+   * Hoeveel voorstellen deze beurt mag opleveren. Wie dit meegeeft, draait een
+   * agent zonder scherm: die zet tot dit plafond klaar en rondt altijd af met een
+   * eigen samenvatting — ook bij een plafond van één. Zonder: de chat, die bij het
+   * eerste voorstel stopt zodat de kaart onder de tekst komt.
+   */
+  maxProposals?: number;
+  /** Plafond op het aantal modelrondes (hoogstens MAX_AGENT_ITERATIONS). */
+  maxIterations?: number;
+}
+
+/** Een geplande agent die meer dan één ding klaarzet, heeft meer rondes nodig dan de chat. */
+const MAX_AGENT_ITERATIONS = 12;
+
+async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit, modelKind: ModelKind = 'strong', allowedToolNames?: string[], options: RunAgentOptions = {}): Promise<AgentOutcome> {
   const system = buildSystemPrompt(ctx);
   // Optionele tool-allowlist (voor geplande agents): beperk welke tools het model
   // ziet. Zonder allowlist (de gewone chat) krijgt het model álle tools — dus dat
@@ -413,51 +445,106 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
   const tools = TOOL_DEFINITIONS
     .filter((t) => permittedNames.includes(t.name))
     .map((t) => withActionMenu(t, toolCtx));
+  // Wat het model krijgt, is ook het enige wat het mag gebruiken. Een tool die bestaat
+  // maar niet aan deze opdracht is gegeven (een agent die alleen herinneringen mag,
+  // die toch een mail probeert), voeren we niet uit.
+  const offered = tools.map((t) => String(t.name));
   // Anthropic-berichten: eerdere beurten als platte tekst, daarna het nieuwe bericht.
   const messages: AnthropicMessage[] = [
     ...history.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
     { role: 'user' as const, content: message },
   ];
 
+  const chatMode = options.maxProposals === undefined;
+  const maxProposals = Math.max(1, Math.min(MAX_PROPOSALS_LIMIT, Math.floor(options.maxProposals ?? 1)));
+  const maxIterations = Math.max(1, Math.min(MAX_AGENT_ITERATIONS, Math.floor(options.maxIterations ?? MAX_TOOL_ITERATIONS)));
+
   const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const toolCalls: Array<{ name: string; input: unknown }> = [];
   const steps: AgentStep[] = []; // het logboek: wat de agent onderweg deed
   const answerChunks: string[] = []; // tekst over alle iteraties — matcht exact de gestreamde deltas
+  const proposals: Proposal[] = [];
+  const proposedKeys = new Set<string>(); // tegen twee keer hetzelfde voorstel in één run
+  const models = new Set<string>();
+  const done = (text: string, extra: Partial<AgentOutcome> = {}): AgentOutcome =>
+    ({ text, toolCalls, usage, proposal: proposals[0], proposals, steps, models: [...models], ...extra });
+  // De chat streamt elke ronde letterlijk door: daar is het antwoord precies de som
+  // van de deltas. Een agent zonder scherm streamt niets; daar krijgt elke ronde een
+  // eigen alinea, anders plakt "…loopt nog." vast aan "Ik heb de taak klaargezet".
+  const answer = (): string => (chatMode
+    ? answerChunks.join('')
+    : answerChunks.map((chunk) => chunk.trim()).filter(Boolean).join('\n\n'));
+  // Wat eerdere rondes opleverden blijft staan; de zin over de filter komt erachter.
+  const refused = (category: unknown): AgentOutcome => {
+    const note = refusalText(category);
+    steps.push(logStep('error', 'refusal', note, false, { category: category ?? null }));
+    return done([answer().trim(), note].filter(Boolean).join('\n\n'), { refused: true });
+  };
 
-  for (let i = 0; i < MAX_TOOL_ITERATIONS; i += 1) {
+  for (let i = 0; i < maxIterations; i += 1) {
     await emit('status', { kind: 'thinking', label: 'Gerrie denkt na…' });
-    const response = await callAnthropicStream(system, messages, emit, false, modelKind, tools);
-    accumulateUsage(usage, response.usage);
-    const chunkText = extractText(response.content);
+    const response = await callAnthropicStream(system, messages, emit, modelKind, tools);
+    accumulateUsage(usage, response.usage, MODELS[modelKind], response.model);
+    if (response.model) models.add(response.model);
+
+    // Een weigering kan een antwoord of een tool_use halverwege afkappen: van deze
+    // ronde gebruiken we niets, ook de tekst niet die al gestreamd was.
+    if (response.stop_reason === 'refusal') return refused(response.stopDetails?.category);
+
+    // Na een fallback halverwege valt het deel van de weigerende poging eruit (alleen
+    // de tekst blijft); verder gaat het volledige bericht, thinking-blokken incluis,
+    // ongewijzigd de geschiedenis in — vereist voor de tool-loop op hetzelfde model.
+    const content = assistantContentForHistory(response.content);
+    const chunkText = extractText(content);
     if (chunkText) answerChunks.push(chunkText);
+    messages.push({ role: 'assistant', content });
 
-    // Bewaar het volledige assistant-bericht (incl. thinking/tool_use-blokken)
-    // ongewijzigd in de geschiedenis — vereist voor de tool-loop op hetzelfde model.
-    messages.push({ role: 'assistant', content: response.content });
-
-    const toolUses = response.content.filter((b: AnthropicBlock) => b.type === 'tool_use');
+    // Alleen bij stop_reason 'tool_use' voeren we tools uit: bij 'max_tokens' kan de
+    // invoer van de laatste tool afgekapt zijn, en die hoort dan niet te draaien.
+    const toolUses = content.filter((b: AnthropicBlock) => b.type === 'tool_use');
     if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
-      return { text: answerChunks.join('') || 'Sorry, dat begrijp ik niet helemaal. Kun je het anders verwoorden of iets specifieker maken?', toolCalls, usage, steps };
+      return done(answer() || (proposals.length > 0 ? proposalsSummaryText(proposals) : 'Sorry, dat begrijp ik niet helemaal. Kun je het anders verwoorden of iets specifieker maken?'));
     }
 
     // Voer elke gevraagde tool uit (strikt org-scoped). Een schrijf-tool (propose_*)
-    // wordt NIET uitgevoerd: bij geldige invoer stoppen we en sturen we een voorstel
-    // dat de gebruiker zelf in de app controleert en opslaat.
+    // wordt NIET uitgevoerd: hij levert een voorstel op dat de gebruiker zelf in de
+    // app goedkeurt. De chat stopt bij het eerste voorstel; een geplande agent mag er
+    // `maxProposals` klaarzetten en hoort na elk voorstel dat het gelukt is.
     const toolResults: AnthropicBlock[] = [];
-    let proposal: Proposal | null = null;
+    let stopForUser = false;
     for (const use of toolUses) {
-      const toolName = String(use.name);
+      const askedName = String(use.name);
       const toolUseId = String(use.id);
       const toolInput = (use.input ?? {}) as Record<string, unknown>;
-      toolCalls.push({ name: toolName, input: toolInput });
+      const toolName = resolveOfferedTool(askedName, offered);
+      toolCalls.push({ name: toolName ?? askedName, input: toolInput });
+
+      if (!toolName) {
+        steps.push(logStep('error', askedName, `Probeerde "${askedName}", maar die hoort niet bij deze opdracht`, false, { input: trimForLog(toolInput) }));
+        toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `De tool "${askedName}" is in deze opdracht niet beschikbaar. Gebruik alleen de tools die je gekregen hebt.`, is_error: true });
+        continue;
+      }
 
       if (toolName.startsWith('propose_')) {
+        if (proposals.length >= maxProposals) {
+          toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Je hebt het maximum van ${maxProposals} voorstel${maxProposals === 1 ? '' : 'len'} voor deze opdracht bereikt. Zet niets meer klaar en rond af met een samenvatting.`, is_error: true });
+          continue;
+        }
+        const key = `${toolName}:${stableJson(toolInput)}`;
+        if (proposedKeys.has(key)) {
+          toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: 'Dit heb je in deze opdracht al klaargezet; een tweede keer is niet nodig.', is_error: true });
+          continue;
+        }
         await emit('status', { kind: 'tool', label: proposeLabel(toolName) });
         const built = await buildProposal(toolCtx, toolName, toolInput);
         if (built.ok) {
           steps.push(logStep('proposal', toolName, `Klaargezet: ${describeProposal(built.proposal)}`, true, { input: trimForLog(toolInput) }));
-          proposal = built.proposal;
-          break;
+          proposals.push(built.proposal);
+          proposedKeys.add(key);
+          // De chat stopt hier: de kaart staat onder de tekst en de gebruiker beslist.
+          if (chatMode) { stopForUser = true; break; }
+          toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Klaargezet: ${describeProposal(built.proposal)}. Dit wacht nu op het akkoord van de gebruiker; zet het niet nog een keer klaar.` });
+          continue;
         }
         // Ongeldig voorstel -> stuur de fout terug zodat het model het kan corrigeren.
         steps.push(logStep('proposal', toolName, `Kon dit niet klaarzetten: ${built.error}`, false, { input: trimForLog(toolInput), error: built.error }));
@@ -477,48 +564,83 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
       }
     }
 
-    if (proposal) {
-      const fallback = proposal.type === 'quote' ? 'Ik heb een conceptofferte voor je klaargezet. Controleer hem en sla op:'
-        : proposal.type === 'client' ? 'Ik heb de nieuwe klant voor je klaargezet. Controleer de gegevens en sla op:'
-        : proposal.type === 'send_invoice' ? `Wil je dat ik factuur ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
-        : proposal.type === 'send_quote' ? `Wil je dat ik offerte ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
-        : proposal.type === 'send_invoices' ? `Ik heb ${proposal.total} factu${proposal.total === 1 ? 'ur' : 'ren'} klaargezet om te versturen. Vink hieronder aan welke er weg mogen.`
-        : proposal.type === 'send_quotes' ? `Ik heb ${proposal.total} offerte${proposal.total === 1 ? '' : 's'} klaargezet om te versturen. Vink hieronder aan welke er weg mogen.`
-        : proposal.type === 'convert_quote' ? `Wil je dat ik offerte ${proposal.number} omzet naar een factuur? Bevestig hieronder.`
-        : proposal.type === 'edit_invoice' ? `Ik heb de wijziging van concept-factuur ${proposal.number} klaargezet. Controleer hem en sla op:`
-        : proposal.type === 'edit_quote' ? `Ik heb de wijziging van concept-offerte ${proposal.number} klaargezet. Controleer hem en sla op:`
-        : proposal.type === 'edit_client' ? `Ik heb de wijziging van klant ${proposal.name} klaargezet. Controleer de gegevens en sla op:`
-        : proposal.type === 'send_reminders' ? `Ik heb ${proposal.total} herinnering${proposal.total === 1 ? '' : 'en'} klaargezet. Vink hieronder aan welke er weg mogen.`
-        : proposal.type === 'project' ? `Ik heb het project "${proposal.name}" voor je klaargezet. Controleer en sla op:`
-        : proposal.type === 'edit_project' ? `Ik heb de wijziging van project "${proposal.name}" klaargezet. Controleer en sla op:`
-        : proposal.type === 'task' ? `Ik heb de taak "${proposal.title}" voor je klaargezet. Controleer en sla op:`
-        : proposal.type === 'create_tasks' ? `Ik heb ${proposal.total} ta${proposal.total === 1 ? 'ak' : 'ken'} klaargezet in "${proposal.project_name}". Vink hieronder aan welke je wilt aanmaken.`
-        : proposal.type === 'edit_task' ? `Ik heb de wijziging van taak "${proposal.title}" klaargezet. Controleer en sla op:`
-        : proposal.type === 'calendar_event' ? `Wil je dat ik dit agenda-item aanmaak in "${proposal.source_name}"? Bevestig hieronder.`
-        : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
-        : proposal.type === 'report' ? `Ik heb de rapportage "${proposal.name}" voor je klaargezet op de Statistieken-pagina. Controleer de grafiek en sla hem op:`
-        : proposal.type === 'supplier' ? `Ik heb de leverancier "${proposal.name}" klaargezet. Controleer de gegevens en sla op:`
-        : proposal.type === 'purchase_invoice' ? 'Ik heb een concept-inkoopfactuur klaargezet. Controleer de regels en boek hem zelf:'
-        : proposal.type === 'contract' ? `Ik heb een concept-contract "${proposal.title}" klaargezet. Controleer de tekst en sla op:`
-        : proposal.type === 'campaign' ? `Ik heb een concept-campagne "${proposal.name}" klaargezet. Er gaat niets weg — jij bepaalt de doelgroep en drukt zelf op verzenden:`
-        : proposal.type === 'content' ? `Ik heb ${proposal.kind === 'note' ? 'de notitie' : 'het document'} "${proposal.title}" klaargezet. Controleer en sla op:`
-        : proposal.type === 'ticket' ? `Ik heb het ticket "${proposal.title}" voor je klaargezet. Controleer het en sla op:`
-        : proposal.type === 'edit_ticket' ? `Ik heb de wijziging van ticket "${proposal.title}" klaargezet. Controleer en sla op:`
-        : proposal.type === 'ticket_note' ? `Wil je dat ik deze ${proposal.is_internal ? 'interne notitie' : 'reactie (zichtbaar voor de klant)'} bij "${proposal.ticket_title}" plaats? Bevestig hieronder.`
-        : proposal.type === 'edit_time_entry' ? 'Wil je dat ik deze urenregistratie aanpas? Bevestig hieronder.'
-        : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
-      return { text: answerChunks.join('') || fallback, toolCalls, usage, proposal, steps };
-    }
+    if (stopForUser) return done(answer() || chatProposalText(proposals[0]));
     messages.push({ role: 'user', content: toolResults });
+    // Het plafond van voorstellen is bereikt: geen nieuwe rondes meer, wel een
+    // afsluitende samenvatting hieronder.
+    if (proposals.length >= maxProposals) break;
   }
 
-  // Loop-plafond bereikt: vraag nog één samenvattend antwoord zonder verdere tools.
+  // Afronden — loop-plafond of voorstellen-plafond bereikt: nog één antwoord zonder
+  // tools. Met tool_choice 'none' en dezelfde tools, niet zonder tools: een andere
+  // toollijst halverwege maakt de thinking-blokken van eerdere rondes ongeldig.
   await emit('status', { kind: 'thinking', label: 'Gerrie rondt af…' });
-  const final = await callAnthropicStream(system, messages, emit, true, modelKind, tools);
-  accumulateUsage(usage, final.usage);
-  const finalText = extractText(final.content);
+  const final = await callAnthropicStream(system, messages, emit, modelKind, tools, 'none');
+  accumulateUsage(usage, final.usage, MODELS[modelKind], final.model);
+  if (final.model) models.add(final.model);
+  if (final.stop_reason === 'refusal') return refused(final.stopDetails?.category);
+  const finalText = extractText(assistantContentForHistory(final.content));
   if (finalText) answerChunks.push(finalText);
-  return { text: answerChunks.join('') || 'Ik kon dit niet helemaal afronden — kun je je vraag iets specifieker stellen?', toolCalls, usage, steps };
+  return done(answer()
+    || (proposals.length > 0 ? proposalsSummaryText(proposals) : 'Ik kon dit niet helemaal afronden — kun je je vraag iets specifieker stellen?'));
+}
+
+/** Een naam die de opdracht kreeg; een afwijking in hoofdletters is dezelfde tool, al het andere niet. */
+function resolveOfferedTool(name: string, offered: readonly string[]): string | null {
+  if (offered.includes(name)) return name;
+  const matches = offered.filter((n) => n.toLowerCase() === name.toLowerCase());
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/** JSON met gesorteerde sleutels: twee keer dezelfde invoer geeft dezelfde tekst. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson((value as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** Als het model na meerdere voorstellen geen eigen tekst gaf. */
+function proposalsSummaryText(proposals: Proposal[]): string {
+  const list = proposals.map((p) => describeProposal(p)).join('; ');
+  return proposals.length === 1
+    ? `Ik heb dit klaargezet: ${list}. Het wacht op je akkoord.`
+    : `Ik heb ${proposals.length} dingen klaargezet: ${list}. Ze wachten op je akkoord.`;
+}
+
+/** De zin onder een voorstel in de chat, als het model er zelf geen tekst bij gaf. */
+function chatProposalText(proposal: Proposal): string {
+  return proposal.type === 'quote' ? 'Ik heb een conceptofferte voor je klaargezet. Controleer hem en sla op:'
+    : proposal.type === 'client' ? 'Ik heb de nieuwe klant voor je klaargezet. Controleer de gegevens en sla op:'
+    : proposal.type === 'send_invoice' ? `Wil je dat ik factuur ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
+    : proposal.type === 'send_quote' ? `Wil je dat ik offerte ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
+    : proposal.type === 'send_invoices' ? `Ik heb ${proposal.total} factu${proposal.total === 1 ? 'ur' : 'ren'} klaargezet om te versturen. Vink hieronder aan welke er weg mogen.`
+    : proposal.type === 'send_quotes' ? `Ik heb ${proposal.total} offerte${proposal.total === 1 ? '' : 's'} klaargezet om te versturen. Vink hieronder aan welke er weg mogen.`
+    : proposal.type === 'convert_quote' ? `Wil je dat ik offerte ${proposal.number} omzet naar een factuur? Bevestig hieronder.`
+    : proposal.type === 'edit_invoice' ? `Ik heb de wijziging van concept-factuur ${proposal.number} klaargezet. Controleer hem en sla op:`
+    : proposal.type === 'edit_quote' ? `Ik heb de wijziging van concept-offerte ${proposal.number} klaargezet. Controleer hem en sla op:`
+    : proposal.type === 'edit_client' ? `Ik heb de wijziging van klant ${proposal.name} klaargezet. Controleer de gegevens en sla op:`
+    : proposal.type === 'send_reminders' ? `Ik heb ${proposal.total} herinnering${proposal.total === 1 ? '' : 'en'} klaargezet. Vink hieronder aan welke er weg mogen.`
+    : proposal.type === 'project' ? `Ik heb het project "${proposal.name}" voor je klaargezet. Controleer en sla op:`
+    : proposal.type === 'edit_project' ? `Ik heb de wijziging van project "${proposal.name}" klaargezet. Controleer en sla op:`
+    : proposal.type === 'task' ? `Ik heb de taak "${proposal.title}" voor je klaargezet. Controleer en sla op:`
+    : proposal.type === 'create_tasks' ? `Ik heb ${proposal.total} ta${proposal.total === 1 ? 'ak' : 'ken'} klaargezet in "${proposal.project_name}". Vink hieronder aan welke je wilt aanmaken.`
+    : proposal.type === 'edit_task' ? `Ik heb de wijziging van taak "${proposal.title}" klaargezet. Controleer en sla op:`
+    : proposal.type === 'calendar_event' ? `Wil je dat ik dit agenda-item aanmaak in "${proposal.source_name}"? Bevestig hieronder.`
+    : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
+    : proposal.type === 'report' ? `Ik heb de rapportage "${proposal.name}" voor je klaargezet op de Statistieken-pagina. Controleer de grafiek en sla hem op:`
+    : proposal.type === 'supplier' ? `Ik heb de leverancier "${proposal.name}" klaargezet. Controleer de gegevens en sla op:`
+    : proposal.type === 'purchase_invoice' ? 'Ik heb een concept-inkoopfactuur klaargezet. Controleer de regels en boek hem zelf:'
+    : proposal.type === 'contract' ? `Ik heb een concept-contract "${proposal.title}" klaargezet. Controleer de tekst en sla op:`
+    : proposal.type === 'campaign' ? `Ik heb een concept-campagne "${proposal.name}" klaargezet. Er gaat niets weg — jij bepaalt de doelgroep en drukt zelf op verzenden:`
+    : proposal.type === 'content' ? `Ik heb ${proposal.kind === 'note' ? 'de notitie' : 'het document'} "${proposal.title}" klaargezet. Controleer en sla op:`
+    : proposal.type === 'ticket' ? `Ik heb het ticket "${proposal.title}" voor je klaargezet. Controleer het en sla op:`
+    : proposal.type === 'edit_ticket' ? `Ik heb de wijziging van ticket "${proposal.title}" klaargezet. Controleer en sla op:`
+    : proposal.type === 'ticket_note' ? `Wil je dat ik deze ${proposal.is_internal ? 'interne notitie' : 'reactie (zichtbaar voor de klant)'} bij "${proposal.ticket_title}" plaats? Bevestig hieronder.`
+    : proposal.type === 'edit_time_entry' ? 'Wil je dat ik deze urenregistratie aanpas? Bevestig hieronder.'
+    : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
 }
 
 // ── Logboek-hulpjes ──────────────────────────────────────────────────────────
@@ -605,29 +727,41 @@ function describeProposal(p: Proposal): string {
 
 interface AnthropicBlock { type: string; [key: string]: unknown }
 interface AnthropicMessage { role: 'user' | 'assistant'; content: string | AnthropicBlock[] }
-interface AnthropicResponse { content: AnthropicBlock[]; stop_reason: string; usage: Record<string, number> }
+interface AnthropicResponse {
+  content: AnthropicBlock[];
+  stop_reason: string;
+  usage: Record<string, unknown>;
+  /** Bij stop_reason 'refusal': de soort weigering (informatief; kan null zijn). */
+  stopDetails: { category?: unknown } | null;
+  /** Het model dat antwoordde — na een fallback het vangnetmodel. */
+  model: string | null;
+}
 
-async function callAnthropicStream(system: string, messages: AnthropicMessage[], emit: Emit, noTools = false, modelKind: ModelKind = 'strong', tools: readonly unknown[] = TOOL_DEFINITIONS): Promise<AnthropicResponse> {
+/**
+ * Eén streamende Messages-call. `toolChoice: 'none'` is voor de afrondende beurt:
+ * dezelfde tools blijven in het request (een andere toollijst halverwege maakt de
+ * thinking-blokken van eerdere rondes ongeldig), het model gebruikt ze alleen niet.
+ */
+async function callAnthropicStream(system: string, messages: AnthropicMessage[], emit: Emit, modelKind: ModelKind = 'strong', tools: readonly unknown[] = TOOL_DEFINITIONS, toolChoice?: 'none'): Promise<AnthropicResponse> {
   const spec = MODELS[modelKind];
   const requestBody: Record<string, unknown> = {
-    model: spec.id,
+    // Model, adaptive thinking + effort (waar het model dat kent) en het vangnet bij
+    // een weigering — zie claudeModels.ts.
+    ...modelRequestFields(spec, spec.effort),
     max_tokens: MAX_OUTPUT_TOKENS,
     stream: true,
     // Prompt-caching: tools + systeemprompt zijn stabiel -> cache ze samen (~90% goedkoper input).
     system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
     messages,
   };
-  // Adaptive thinking + effort alleen op modellen die het ondersteunen (het sterke model).
-  // Zuinige deel-agents (Haiku) draaien zonder — die kennen deze parameters niet.
-  if (spec.thinking) {
-    requestBody.thinking = { type: 'adaptive' };
-    requestBody.output_config = { effort: 'medium' };
+  if (tools.length > 0) {
+    requestBody.tools = tools;
+    if (toolChoice) requestBody.tool_choice = { type: toolChoice };
   }
-  if (!noTools) requestBody.tools = tools;
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
+    headers: anthropicHeaders(ANTHROPIC_API_KEY, spec),
     body: JSON.stringify(requestBody),
   });
   if (!res.ok || !res.body) {
@@ -641,7 +775,9 @@ async function callAnthropicStream(system: string, messages: AnthropicMessage[],
   const blocks: AnthropicBlock[] = [];
   const partialJson: Record<number, string> = {};
   let stopReason = 'end_turn';
-  const usage: Record<string, number> = {};
+  let stopDetails: { category?: unknown } | null = null;
+  let model: string | null = null;
+  const usage: Record<string, unknown> = {};
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -661,8 +797,12 @@ async function callAnthropicStream(system: string, messages: AnthropicMessage[],
       const type = String(ev.type);
 
       if (type === 'message_start') {
-        Object.assign(usage, (ev.message as { usage?: Record<string, number> })?.usage ?? {});
+        const message = (ev.message ?? {}) as { usage?: Record<string, unknown>; model?: unknown };
+        Object.assign(usage, message.usage ?? {});
+        if (typeof message.model === 'string') model = message.model;
       } else if (type === 'content_block_start') {
+        // Ook een `fallback`-blok (het vangnetmodel neemt het over) komt hier binnen als
+        // gewoon blok; runAgent haalt de weigerende poging eruit (assistantContentForHistory).
         const index = Number(ev.index);
         const cb = (ev.content_block ?? {}) as AnthropicBlock;
         blocks[index] = { ...cb };
@@ -684,33 +824,38 @@ async function callAnthropicStream(system: string, messages: AnthropicMessage[],
         const b = blocks[index];
         if (b && b.type === 'tool_use') { try { b.input = partialJson[index] ? JSON.parse(partialJson[index]) : {}; } catch { b.input = {}; } }
       } else if (type === 'message_delta') {
-        const delta = (ev.delta ?? {}) as { stop_reason?: string };
+        const delta = (ev.delta ?? {}) as { stop_reason?: string; stop_details?: { category?: unknown } | null };
         if (delta.stop_reason) stopReason = delta.stop_reason;
-        Object.assign(usage, (ev.usage as Record<string, number>) ?? {});
+        if (delta.stop_details) stopDetails = delta.stop_details;
+        Object.assign(usage, (ev.usage as Record<string, unknown>) ?? {});
       } else if (type === 'error') {
         throw new HttpError(`Claude-streamfout: ${(ev.error as { message?: string })?.message ?? 'onbekend'}`, 502);
       }
     }
   }
 
-  return { content: blocks.filter(Boolean), stop_reason: stopReason, usage };
+  // Nam een vangnetmodel het halverwege over, dan noemt message_start nog het
+  // gevraagde model; het laatste fallback-blok zegt wie het antwoord afmaakte.
+  const content = blocks.filter(Boolean);
+  const switched = [...content].reverse().find((b) => b.type === 'fallback') as { to?: { model?: unknown } } | undefined;
+  if (typeof switched?.to?.model === 'string' && switched.to.model) model = switched.to.model;
+  return { content, stop_reason: stopReason, usage, stopDetails, model };
 }
 
 function extractText(content: AnthropicBlock[]): string {
   return content.filter((b) => b.type === 'text').map((b) => String(b.text ?? '')).join('').trim();
 }
 
-function accumulateUsage(usage: Usage, raw: Record<string, number>): void {
-  usage.input += Number(raw.input_tokens || 0);
-  usage.output += Number(raw.output_tokens || 0);
-  usage.cacheRead += Number(raw.cache_read_input_tokens || 0);
-  usage.cacheWrite += Number(raw.cache_creation_input_tokens || 0);
+/**
+ * Telt het verbruik van één antwoord op — na een fallback per poging, elk tegen
+ * het tarief van het model dat hem deed (zie claudeModels.ts).
+ */
+function accumulateUsage(usage: Usage, raw: Record<string, unknown>, requested: ClaudeModelSpec, servedModel: string | null): void {
+  addUsage(usage, usageFromResponse(raw, requested, servedModel), requested);
 }
 
 function costUsd(usage: Usage, kind: ModelKind = 'strong'): number {
-  const p = MODELS[kind];
-  const c = (usage.input * p.input + usage.output * p.output + usage.cacheRead * p.cacheRead + usage.cacheWrite * p.cacheWrite) / 1_000_000;
-  return Math.round(c * 10000) / 10000;
+  return modelCostUsd(MODELS[kind], usage);
 }
 
 // ── Systeemprompt ────────────────────────────────────────────────────────────
@@ -917,9 +1062,17 @@ export async function designAgent(
     '',
     'JE BENT NU DE AGENT-BOUWER. De gebruiker vertelt in gewone taal wat hij terugkerend gedaan wil hebben; jij zet daar een geplande agent van in elkaar.',
     '',
-    'Een agent is een opdracht die vanzelf op een vast moment draait. Twee soorten:',
+    'Een agent is een opdracht die vanzelf op een vast moment draait, namens deze gebruiker en met precies zijn rechten. Twee soorten:',
     '- `report` — kijkt alleen mee en vat samen. Raakt niets aan.',
-    '- `propose` — mag daarnaast iets KLAARZETTEN (mail, herinnering, factuur, afspraak). Er gaat nooit iets weg zonder dat de gebruiker het in de app afvinkt.',
+    '- `propose` — mag daarnaast iets KLAARZETTEN (mail, herinnering, factuur, afspraak). Er gaat nooit iets weg zonder dat de gebruiker het in de app afvinkt. Per run mag hij hoogstens `max_proposals_per_run` dingen klaarzetten (1-10, standaard 3).',
+    ['owner', 'admin', 'member'].includes(ctx.role) && moduleLevel(ctx, 'gerrie') === 'write'
+      ? '- Deze gebruiker mag beide soorten maken.'
+      : '- Deze gebruiker mag alleen meekijken (geen schrijfrechten): bouw ALTIJD een `report`-agent, ook als hij om versturen vraagt, en zeg dat eerlijk in `summary`.',
+    '',
+    'Het ritme (`schedule_kind`):',
+    '- `daily` — elke dag; `weekdays` — elke werkdag (ma-vr); `weekly` — één dag per week (`day_of_week`); `monthly` — één dag per maand (`day_of_month`);',
+    '- `hourly` — elk uur op werkdagen, van `hour` tot en met `end_hour` (bijv. 9 tot 17): voor iets wat de hele dag in de gaten gehouden moet worden, zoals nieuwe klantmail of tickets.',
+    '- `hour` en `minute` zijn de wandkloktijd in Nederland (bijv. 8 en 30 voor half negen).',
     '',
     'Deze tools kun je aan de agent geven:',
     toolMenu,
@@ -928,6 +1081,7 @@ export async function designAgent(
     actionMenu,
     '',
     'Werkwijze:',
+    '- Antwoord ALTIJD met precies één tool-aanroep: `ask_user` of `emit_agent`. Geef nooit een los tekstantwoord.',
     '- Ontbreekt er iets ESSENTIEELS (hoe vaak, of er iets verstuurd mag worden, welke klanten), gebruik dan `ask_user`. Stel één korte vraag tegelijk en geef 2 tot 4 concrete keuzes mee. Vraag hoogstens twee keer iets; kun je het redelijk invullen, doe dat dan gewoon.',
     '- Vraag NOOIT naar zaken die je zelf goed kunt kiezen: naam, embleem, tijdstip, de precieze tool-set, het maximum aantal mails.',
     '- Zodra je genoeg weet: `emit_agent`. Vul álles in, ook naam en embleem.',
@@ -969,10 +1123,13 @@ export async function designAgent(
         instruction: { type: 'string', description: 'De opdracht in de je-vorm.' },
         mode: { type: 'string', enum: ['report', 'propose'] },
         enabled_tools: { type: 'array', items: { type: 'string' } },
-        schedule_kind: { type: 'string', enum: ['daily', 'weekly', 'monthly'] },
-        hour: { type: 'number', description: 'Uur van de dag, 0-23.' },
+        schedule_kind: { type: 'string', enum: [...SCHEDULE_KINDS] },
+        hour: { type: 'number', description: 'Uur van de dag, 0-23 (bij elk uur: het eerste uur).' },
+        minute: { type: 'number', description: 'Minuut, 0-59. Standaard 0.' },
+        end_hour: { type: 'number', description: 'Alleen bij hourly: het laatste uur, 0-23.' },
         day_of_week: { type: 'number', description: 'Bij wekelijks: 1=maandag t/m 7=zondag.' },
         day_of_month: { type: 'number', description: 'Bij maandelijks: 1-31.' },
+        max_proposals_per_run: { type: 'number', description: 'Bij propose: hoeveel dingen één run hoogstens klaarzet, 1-10.' },
         email_mode: { type: 'string', enum: ['compose', 'template'] },
         email_subject: { type: 'string' },
         email_body: { type: 'string' },
@@ -988,8 +1145,13 @@ export async function designAgent(
   // Verbruik boeken op een los gesprek, net als de missie-planner.
   const first = messages.find((m) => m.role === 'user')?.content ?? 'Agent bouwen';
   const convId = await createConversation(ctx.organizationId, userId, `Agent bouwen: ${first.slice(0, 60)}`);
-  const msgId = await insertMessage(convId, ctx.organizationId, userId, 'assistant', String(chosen.input?.summary || chosen.input?.question || ''), [{ name: chosen.name, input: chosen.input }]);
+  const said = 'text' in chosen ? chosen.text : String(chosen.input?.summary || chosen.input?.question || '');
+  const msgId = await insertMessage(convId, ctx.organizationId, userId, 'assistant', said, 'text' in chosen ? [] : [{ name: chosen.name, input: chosen.input }]);
   await recordUsage(ctx.organizationId, convId, msgId, userId, usage, 'strong');
+
+  // Antwoordde het model toch met gewone tekst (of weigerde de filter), dan is dat
+  // in de bouwer gewoon de volgende vraag: het gesprek loopt door in plaats van vast.
+  if ('text' in chosen) return { kind: 'question', question: chosen.text.slice(0, 400), suggestions: [] };
 
   if (chosen.name === 'ask_user') {
     const suggestions = Array.isArray(chosen.input?.suggestions)
@@ -998,7 +1160,7 @@ export async function designAgent(
     return { kind: 'question', question: String(chosen.input?.question || 'Kun je dat iets concreter maken?').slice(0, 400), suggestions };
   }
 
-  const built = buildAgentProposal(chosen.input as Record<string, unknown>);
+  const built = buildAgentProposal(ctx, chosen.input as Record<string, unknown>);
   if (!built.ok) return { kind: 'question', question: `Ik kreeg het nog niet rond: ${built.error} Kun je het iets concreter maken?`, suggestions: [] };
   return {
     kind: 'agent',
@@ -1008,24 +1170,31 @@ export async function designAgent(
 }
 
 /**
- * Eén beurt met een geforceerde toolkeuze (`tool_choice: any`): het model MOET
- * één van de aangeboden tools aanroepen. Geeft terug welke, plus de invoer.
+ * Eén niet-streamende beurt met tools, voor de agent-bouwer en de missie-planner.
+ *
+ * Hier stond eerst een geforceerde toolkeuze (`tool_choice` any of tool). Claude
+ * Sonnet 5.5 weigert die met een 400; daarom `auto` met hoogstens één aanroep, en
+ * staat in de systeemprompt welke tool er hoort te komen. Of die aanroep er ook
+ * echt is, controleren de twee functies hieronder.
  */
-async function callAnthropicChoice(
+async function callAnthropicOnce(
   system: string,
   messages: Array<{ role: string; content: string }>,
   tools: Array<Record<string, unknown>>,
   usage: Usage,
-): Promise<{ name: string; input: Record<string, unknown> }> {
+): Promise<{ blocks: AnthropicBlock[]; refusal: unknown | null }> {
+  const spec = MODELS.strong;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
+    headers: anthropicHeaders(ANTHROPIC_API_KEY, spec),
     body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 3072,
+      ...modelRequestFields(spec, spec.effort),
+      // Niet-streamend: ruim genoeg voor nadenken plus de tool-invoer, en onder de
+      // grens waarboven een niet-streamend verzoek te lang kan duren.
+      max_tokens: 16000,
       system: [{ type: 'text', text: system }],
       tools,
-      tool_choice: { type: 'any' },
+      tool_choice: { type: 'auto', disable_parallel_tool_use: true },
       messages: messages.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
     }),
   });
@@ -1036,45 +1205,50 @@ async function callAnthropicChoice(
     throw new HttpError(`Claude-fout (${res.status}): ${detail || 'onbekend'}`, res.status === 429 ? 429 : 502);
   }
   const data = await res.json();
-  accumulateUsage(usage, (data?.usage ?? {}) as Record<string, number>);
-  const blocks = Array.isArray(data?.content) ? (data.content as Record<string, unknown>[]) : [];
-  const block = blocks.find((b) => b?.type === 'tool_use');
-  if (!block) throw new HttpError('Gerrie gaf geen bruikbaar antwoord. Probeer het opnieuw.', 502);
-  return { name: String(block.name), input: (block.input ?? {}) as Record<string, unknown> };
+  accumulateUsage(usage, (data?.usage ?? {}) as Record<string, unknown>, spec, typeof data?.model === 'string' ? data.model : null);
+  if (data?.stop_reason === 'refusal') return { blocks: [], refusal: data?.stop_details?.category ?? null };
+  const content = Array.isArray(data?.content) ? (data.content as AnthropicBlock[]) : [];
+  return { blocks: assistantContentForHistory(content), refusal: null };
 }
 
+/**
+ * De agent-bouwer: het model hoort één van de aangeboden tools te kiezen. Doet het
+ * dat toch niet, dan komt zijn tekst terug (of de zin over de filter) — de bouwer
+ * toont die als de volgende vraag in het gesprek.
+ */
+async function callAnthropicChoice(
+  system: string,
+  messages: Array<{ role: string; content: string }>,
+  tools: Array<Record<string, unknown>>,
+  usage: Usage,
+): Promise<{ name: string; input: Record<string, unknown> } | { text: string }> {
+  const { blocks, refusal } = await callAnthropicOnce(system, messages, tools, usage);
+  if (refusal !== null) return { text: refusalText(refusal) };
+  const names = tools.map((t) => String(t.name));
+  const block = blocks.find((b) => b.type === 'tool_use' && names.includes(String(b.name)));
+  if (block) return { name: String(block.name), input: (block.input ?? {}) as Record<string, unknown> };
+  const text = extractText(blocks);
+  if (text) return { text };
+  throw new HttpError('Gerrie gaf geen bruikbaar antwoord. Probeer het opnieuw.', 502);
+}
+
+/** De missie-planner: één aanroep van de plan-tool, met één herkansing als hij uitblijft. */
 async function callAnthropicPlan(system: string, goal: string, tool: Record<string, unknown>, usage: Usage): Promise<Record<string, unknown>> {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 2048,
-      system: [{ type: 'text', text: system }],
-      tools: [tool],
-      tool_choice: { type: 'tool', name: String(tool.name) },
-      messages: [{ role: 'user', content: goal }],
-    }),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    let detail = text.slice(0, 300);
-    try { detail = (JSON.parse(text)?.error?.message as string) || detail; } catch { /* niet-JSON */ }
-    throw new HttpError(`Claude-fout (${res.status}): ${detail || 'onbekend'}`, res.status === 429 ? 429 : 502);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const { blocks, refusal } = await callAnthropicOnce(system, [{ role: 'user', content: goal }], [tool], usage);
+    if (refusal !== null) return {};
+    const block = blocks.find((b) => b.type === 'tool_use' && b.name === tool.name);
+    if (block) return (block.input ?? {}) as Record<string, unknown>;
   }
-  const data = await res.json();
-  accumulateUsage(usage, (data?.usage ?? {}) as Record<string, number>);
-  const blocks = Array.isArray(data?.content) ? (data.content as Record<string, unknown>[]) : [];
-  const block = blocks.find((b) => b?.type === 'tool_use');
-  return (block?.input ?? {}) as Record<string, unknown>;
+  return {};
 }
 
 /** Ruwe kosteninschatting van een missie als fractie (0..1) van het maandtegoed; null bij geen limiet. */
 function estimateMission(budget: BudgetCheck, subtaskCount: number, withPlanner: boolean): { estimatePct: number | null } {
   if (!(budget.limitEur > 0)) return { estimatePct: null };
   const n = Math.max(1, Math.min(subtaskCount, MISSION_MAX_SUBTASKS));
-  const plannerUsd = withPlanner ? (EST_PLANNER_INPUT * PRICE_INPUT + EST_PLANNER_OUTPUT * PRICE_OUTPUT) / 1_000_000 : 0;
-  const taskUsd = n * (EST_TASK_INPUT * PRICE_CHEAP_INPUT + EST_TASK_OUTPUT * PRICE_CHEAP_OUTPUT) / 1_000_000;
+  const plannerUsd = withPlanner ? (EST_PLANNER_INPUT * MODELS.strong.input + EST_PLANNER_OUTPUT * MODELS.strong.output) / 1_000_000 : 0;
+  const taskUsd = n * (EST_TASK_INPUT * MODELS.cheap.input + EST_TASK_OUTPUT * MODELS.cheap.output) / 1_000_000;
   const estEur = (plannerUsd + taskUsd) * USD_TO_EUR;
   const remainingEur = Math.max(0, budget.limitEur - budget.usedEur);
   const pct = remainingEur > 0 ? estEur / budget.limitEur : 1;
@@ -1837,10 +2011,13 @@ const TOOL_DEFINITIONS = [
         instruction: { type: 'string', description: 'De opdracht in gewone taal, zoals je hem aan Gerrie zou typen.' },
         mode: { type: 'string', enum: ['report', 'propose'], description: 'report = alleen lezen en rapporteren; propose = mag acties klaarzetten.' },
         enabled_tools: { type: 'array', items: { type: 'string' }, description: 'Namen van de tools die de agent mag gebruiken (bv. list_invoices, propose_send_client_email).' },
-        schedule_kind: { type: 'string', enum: ['daily', 'weekly', 'monthly'], description: 'Hoe vaak hij draait.' },
-        hour: { type: 'number', description: 'Uur van de dag, 0-23.' },
+        schedule_kind: { type: 'string', enum: [...SCHEDULE_KINDS], description: 'Hoe vaak hij draait: daily (elke dag), weekdays (elke werkdag), weekly, monthly, of hourly (elk uur op werkdagen tussen hour en end_hour).' },
+        hour: { type: 'number', description: 'Uur van de dag, 0-23 (bij hourly: het eerste uur).' },
+        minute: { type: 'number', description: 'Minuut, 0-59. Standaard 0.' },
+        end_hour: { type: 'number', description: 'Alleen bij hourly: het laatste uur van de dag, 0-23.' },
         day_of_week: { type: 'number', description: 'Bij wekelijks: 1=maandag t/m 7=zondag.' },
         day_of_month: { type: 'number', description: 'Bij maandelijks: dag van de maand, 1-31.' },
+        max_proposals_per_run: { type: 'number', description: 'Bij propose: hoeveel dingen één run hoogstens klaarzet, 1-10 (standaard 3).' },
         email_mode: { type: 'string', enum: ['compose', 'template'], description: 'Alleen relevant als de agent klantmail mag sturen. compose = de agent schrijft zelf; template = onderstaande vaste tekst.' },
         email_subject: { type: 'string', description: 'Bij template: het vaste onderwerp. Mag variabelen bevatten, bv. {{klantnaam}}.' },
         email_body: { type: 'string', description: 'Bij template: de vaste tekst. Mag variabelen bevatten, bv. {{voornaam|klant}}.' },
@@ -2851,7 +3028,7 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_send_invoices': return buildSendBatchProposal(ctx, 'invoice', input);
     case 'propose_send_quotes': return buildSendBatchProposal(ctx, 'quote', input);
     case 'propose_send_client_email': return buildClientEmailProposal(ctx, input);
-    case 'propose_create_agent': return buildAgentProposal(input);
+    case 'propose_create_agent': return buildAgentProposal(ctx, input);
     case 'propose_convert_quote': return buildConvertQuoteProposal(ctx, input);
     case 'propose_edit_invoice': return buildEditFinanceProposal(ctx, 'invoice', input);
     case 'propose_edit_quote': return buildEditFinanceProposal(ctx, 'quote', input);
@@ -3697,26 +3874,30 @@ async function buildClientEmailProposal(ctx: GerrieContext, input: Record<string
  * gebruiker hem nog controleert, opslaat en zelf activeert. Een agent die zichzelf
  * agents laat aanmaken is precies het soort onbewaakte groei dat v1 niet wil.
  */
-function buildAgentProposal(input: Record<string, unknown>): ProposalResult {
+function buildAgentProposal(ctx: GerrieContext, input: Record<string, unknown>): ProposalResult {
   const name = String(input.name || '').trim();
   const instruction = String(input.instruction || '').trim();
   if (!name) return { ok: false, error: 'Geef de agent een naam.' };
   if (!instruction) return { ok: false, error: 'Geef de agent een opdracht in gewone taal.' };
 
-  const mode: 'report' | 'propose' = String(input.mode) === 'propose' ? 'propose' : 'report';
-  const scheduleKind = ['daily', 'weekly', 'monthly'].includes(String(input.schedule_kind))
-    ? (String(input.schedule_kind) as 'daily' | 'weekly' | 'monthly') : 'weekly';
+  // Een agent kan nooit meer dan degene voor wie hij gebouwd wordt: wie zelf niet
+  // mag wijzigen, krijgt een agent die alleen meekijkt.
+  const mayPropose = ['owner', 'admin', 'member'].includes(ctx.role) && moduleLevel(ctx, 'gerrie') === 'write';
+  const mode: 'report' | 'propose' = String(input.mode) === 'propose' && mayPropose ? 'propose' : 'report';
+  const scheduleKind: ScheduleKind = isScheduleKind(input.schedule_kind) ? input.schedule_kind : 'weekly';
 
+  // Alleen tools uit de catalogus van DEZE gebruiker (al gefilterd op zijn
+  // modulerechten); een naam die hij niet mag, valt hier al weg.
+  const usable = new Set(toolCatalog(ctx).map((t) => t.name));
   const tools = Array.isArray(input.enabled_tools)
-    ? [...new Set((input.enabled_tools as unknown[]).map(String).filter(isEnabledToolName))]
+    ? [...new Set((input.enabled_tools as unknown[]).map(String).filter((n) => isEnabledToolName(n) && usable.has(n)))]
     : [];
   // Een report-agent mag per definitie niets voorstellen; laat schrijf-tools en
   // schrijf-handelingen dan niet meelekken naar het formulier, anders lijkt hij meer
   // te mogen dan hij mag.
   const enabled_tools = mode === 'report' ? tools.filter(isReadOnlyToolName) : tools;
 
-  const hourRaw = Math.floor(num(input.hour));
-  const hour = Number.isFinite(hourRaw) && hourRaw >= 0 && hourRaw <= 23 ? hourRaw : 8;
+  const hour = clampInt(input.hour, 8, 0, 23);
   const dowRaw = Math.floor(num(input.day_of_week));
   const domRaw = Math.floor(num(input.day_of_month));
 
@@ -3738,8 +3919,11 @@ function buildAgentProposal(input: Record<string, unknown>): ProposalResult {
       enabled_tools,
       schedule_kind: scheduleKind,
       hour,
+      minute: clampInt(input.minute, 0, 0, 59),
+      end_hour: scheduleKind === 'hourly' ? Math.max(hour, clampInt(input.end_hour, 17, 0, 23)) : null,
       day_of_week: scheduleKind === 'weekly' ? (dowRaw >= 1 && dowRaw <= 7 ? dowRaw : 1) : null,
       day_of_month: scheduleKind === 'monthly' ? (domRaw >= 1 && domRaw <= 31 ? domRaw : 1) : null,
+      max_proposals_per_run: clampInt(input.max_proposals_per_run, DEFAULT_MAX_PROPOSALS, 1, MAX_PROPOSALS_LIMIT),
       email_mode: emailMode,
       email_subject: emailSubject ? emailSubject.slice(0, 300) : null,
       email_body: emailBody ? emailBody.slice(0, 8000) : null,
@@ -5309,7 +5493,7 @@ function requiredEnv(name: string): string { const value = Deno.env.get(name); i
 // Gedeeld door de HTTP/SSE-schil (gerrie-agent/index.ts) én de headless motor
 // voor geplande agents (gerrie-agent-runner). Niets hieronder is HTTP-specifiek.
 export {
-  supabaseAdmin, HttpError, ANTHROPIC_API_KEY, MISSION_MAX_SUBTASKS, USD_TO_EUR, MODELS,
+  supabaseAdmin, HttpError, ANTHROPIC_API_KEY, MISSION_MAX_SUBTASKS, USD_TO_EUR, MODELS, MAX_AGENT_ITERATIONS,
   TOOL_DEFINITIONS, toolCatalog, AGENT_FORBIDDEN_TOOLS, resolveModelKind, runAgent, planMission, estimateMission,
   isEnabledToolName, isReadOnlyToolName, ACTION_TOOL_NAMES, auditActionName,
   buildContext, buildSystemPrompt, createConversation, loadHistory, insertMessage,
@@ -5321,6 +5505,6 @@ export {
 };
 export type {
   GerrieContext, Emit, Proposal, CreateTasksProposal, ModelKind, Usage, AgentOutcome, AgentStep, BudgetCheck,
-  OrganizationRole, HttpStatus, MissionSubtask,
+  OrganizationRole, HttpStatus, MissionSubtask, RunAgentOptions,
 };
 // ToolCatalogEntry wordt hierboven al als interface geëxporteerd.

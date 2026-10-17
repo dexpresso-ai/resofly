@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowUp, ChevronDown, ChevronUp, Clock, Eye, Loader2, Pencil, Sparkles, Wand2, X } from 'lucide-react';
 import {
-  designGerrieAgent, routineToolLabel, previewRoutine,
+  designGerrieAgent, routineToolLabel, routineToolIsRead, previewRoutine,
   type GerrieAgentProposal, type RoutinePreview,
 } from '../lib/gerrie-api';
+import { scheduleLabel } from '../lib/agents';
 import { AgentGlyph } from './AgentGlyph';
 import type { UUID } from '../types';
 
@@ -36,14 +37,6 @@ const STARTERS = [
   'Klanten met een afgerond project een bedankje sturen',
 ];
 
-const DOW =['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
-
-function scheduleText(a: GerrieAgentProposal): string {
-  const time = `${String(a.hour).padStart(2, '0')}:00`;
-  if (a.schedule_kind === 'daily') return `Elke dag om ${time}`;
-  if (a.schedule_kind === 'weekly') return `Elke ${DOW[(a.day_of_week ?? 1) - 1]} om ${time}`;
-  return `Maandelijks op dag ${a.day_of_month ?? 1} om ${time}`;
-}
 
 export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }: {
   organizationId: UUID;
@@ -114,7 +107,7 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
       setPreview(await previewRoutine(organizationId, {
         instruction: built.agent.instruction,
         enabled_tools: built.agent.enabled_tools,
-        model_kind: 'cheap',
+        model_kind: 'strong',
       }));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Proefdraaien lukte niet.');
@@ -132,8 +125,10 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
   }
 
   const agent = built?.agent ?? null;
-  const readTools = agent ? agent.enabled_tools.filter((t) => !t.startsWith('propose_')) : [];
-  const proposeTools = agent ? agent.enabled_tools.filter((t) => t.startsWith('propose_')) : [];
+  // Lezen of klaarzetten volgt de catalogus: een handeling uit de registry
+  // ('action:gallery.publish') zet iets klaar, ook al begint hij niet met propose_.
+  const readTools = agent ? agent.enabled_tools.filter(routineToolIsRead) : [];
+  const proposeTools = agent ? agent.enabled_tools.filter((t) => !routineToolIsRead(t)) : [];
 
   return (
     <div className="ag-page">
@@ -214,7 +209,7 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
               <AgentGlyph agent={{ id: agent.name, name: agent.name, instruction: agent.instruction, enabled_tools: agent.enabled_tools, icon: agent.icon }} size="md" state="active" />
               <div>
                 <strong>{agent.name}</strong>
-                <span><Clock size={11} /> {scheduleText(agent)}</span>
+                <span><Clock size={11} /> {scheduleLabel(agent)}</span>
               </div>
               <span className={`cc-kind ${agent.mode === 'propose' ? 'write' : 'read'}`}>
                 {agent.mode === 'propose' ? 'stelt acties voor' : 'alleen lezen'}
@@ -241,7 +236,10 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
                 {agent.mode === 'propose' && (
                   <div>
                     <dt><Wand2 size={12} /> Mag klaarzetten</dt>
-                    <dd>{proposeTools.length ? proposeTools.map(routineToolLabel).join(', ') : 'niets'}</dd>
+                    <dd>
+                      {proposeTools.length ? proposeTools.map(routineToolLabel).join(', ') : 'niets'}
+                      {proposeTools.length > 0 && <em> — hoogstens {agent.max_proposals_per_run ?? 3} per run, elk achter jouw akkoord</em>}
+                    </dd>
                   </div>
                 )}
                 {agent.enabled_tools.includes('propose_send_client_email') && (
