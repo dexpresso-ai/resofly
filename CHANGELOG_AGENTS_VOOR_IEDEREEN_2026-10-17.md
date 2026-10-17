@@ -139,9 +139,42 @@ Eén regel voor de runner, de tests en de app: `supabase/functions/_shared/agent
 
 ## Getest
 
-- `npm test` (806 tests), `npm run typecheck`, `npm run build`.
+- `npm test` (807 tests), `npm run typecheck`, `npm run build`.
 - `deno check` op alle functies die de gewijzigde modules gebruiken.
 - `npm run test:mobile` op Gerrie en het dashboard (telefoon, tablet, desktop),
   en de agentspagina met voorbeeldagents als owner én als member (eigen, gedeeld,
   van het team, het paneel, de editor en de wachtrij): geen fouten, geen
   horizontale overloop.
+
+## Uitgerold op staging — 2026-10-17
+
+Op `Resofly-staging` (`enzghpduqwaojcxgwarr`), vanaf branch `ccr-01e0d48b-cd8y32`:
+
+1. **Migratie** toegepast. Bewust nog níet in `supabase_migrations.schema_migrations`
+   gezet: zolang de branch niet in `staging` zit, zou de CI anders falen op een
+   migratie die hij lokaal niet kent. Na de merge past `db push` hem opnieuw toe;
+   dat hij idempotent is, is op staging gecontroleerd (twee keer gedraaid, niets
+   dubbel).
+2. **Functies** gedeployd met `supabase functions deploy --use-api` (zoals de CI),
+   `verify_jwt` ongewijzigd uit `config.toml`. De runner, `gerrie-signals` en
+   `invoice-inbox` antwoorden hun cron-aanroepen daarna met 200.
+3. **Secrets**: `GERRIE_MODEL`, `GERRIE_CHEAP_MODEL` en `INVOICE_EXTRACT_MODEL`
+   stonden niet; alles draait dus op Claude Sonnet 5.5. `AGENTS_CLAIM_LIMIT` = 3
+   (geldig, gelaten).
+4. **Rooktest**:
+   - rechten per rol in de database (in een transactie die wordt teruggedraaid):
+     member, owner, viewer en "Gerrie uit" zien precies wat ze horen te zien;
+     de beslisregel en de pushmelding doen wat ze moeten doen;
+   - echte runs via de cron, op Claude Sonnet 5.5: een rapport-agent ("elke
+     werkdag" — op zaterdag doorgeschoven naar maandag 08:30), een agent die een
+     taak klaarzet (in de wachtrij op naam van de eigenaar, daarna afgewezen via
+     `ai_action_decide`), het geheugen (de volgende run wist dat de vorige taak
+     was afgewezen) en "stil als er niets te melden is". Vijf runs, samen ± $ 0,14.
+     De twee testagents ("Rooktest — … (mag weg)") staan gearchiveerd.
+   - De rooktest vond twee fouten, beide opgelost en opnieuw getest: een agent met
+     één voorstel per run sloeg zijn afsluitende samenvatting over (hij gedroeg zich
+     als de chat), en "niets te melden" werd gemist als de agent eerst een
+     aanloopzin schreef.
+   - Niet getest vanaf hier: de functies rechtstreeks aanroepen (de proxy van deze
+     sessie laat alleen `api.supabase.com` door; `scripts/supabase-smoke-test.sh`
+     draait in de CI) en de nieuwe schermen, die pas na een merge op staging staan.
