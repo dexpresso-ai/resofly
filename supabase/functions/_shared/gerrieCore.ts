@@ -404,7 +404,12 @@ interface AgentOutcome {
 
 /** Hoe ver één beurt mag gaan. Zonder opties: de chat — één voorstel, dan terug naar de gebruiker. */
 interface RunAgentOptions {
-  /** Hoeveel voorstellen deze beurt mag opleveren. 1 = stoppen bij het eerste, zoals de chat. */
+  /**
+   * Hoeveel voorstellen deze beurt mag opleveren. Wie dit meegeeft, draait een
+   * agent zonder scherm: die zet tot dit plafond klaar en rondt altijd af met een
+   * eigen samenvatting — ook bij een plafond van één. Zonder: de chat, die bij het
+   * eerste voorstel stopt zodat de kaart onder de tekst komt.
+   */
   maxProposals?: number;
   /** Plafond op het aantal modelrondes (hoogstens MAX_AGENT_ITERATIONS). */
   maxIterations?: number;
@@ -450,6 +455,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
     { role: 'user' as const, content: message },
   ];
 
+  const chatMode = options.maxProposals === undefined;
   const maxProposals = Math.max(1, Math.min(MAX_PROPOSALS_LIMIT, Math.floor(options.maxProposals ?? 1)));
   const maxIterations = Math.max(1, Math.min(MAX_AGENT_ITERATIONS, Math.floor(options.maxIterations ?? MAX_TOOL_ITERATIONS)));
 
@@ -462,11 +468,17 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
   const models = new Set<string>();
   const done = (text: string, extra: Partial<AgentOutcome> = {}): AgentOutcome =>
     ({ text, toolCalls, usage, proposal: proposals[0], proposals, steps, models: [...models], ...extra });
+  // De chat streamt elke ronde letterlijk door: daar is het antwoord precies de som
+  // van de deltas. Een agent zonder scherm streamt niets; daar krijgt elke ronde een
+  // eigen alinea, anders plakt "…loopt nog." vast aan "Ik heb de taak klaargezet".
+  const answer = (): string => (chatMode
+    ? answerChunks.join('')
+    : answerChunks.map((chunk) => chunk.trim()).filter(Boolean).join('\n\n'));
   // Wat eerdere rondes opleverden blijft staan; de zin over de filter komt erachter.
   const refused = (category: unknown): AgentOutcome => {
     const note = refusalText(category);
     steps.push(logStep('error', 'refusal', note, false, { category: category ?? null }));
-    return done([answerChunks.join('').trim(), note].filter(Boolean).join('\n\n'), { refused: true });
+    return done([answer().trim(), note].filter(Boolean).join('\n\n'), { refused: true });
   };
 
   for (let i = 0; i < maxIterations; i += 1) {
@@ -491,7 +503,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
     // invoer van de laatste tool afgekapt zijn, en die hoort dan niet te draaien.
     const toolUses = content.filter((b: AnthropicBlock) => b.type === 'tool_use');
     if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
-      return done(answerChunks.join('') || (proposals.length > 0 ? proposalsSummaryText(proposals) : 'Sorry, dat begrijp ik niet helemaal. Kun je het anders verwoorden of iets specifieker maken?'));
+      return done(answer() || (proposals.length > 0 ? proposalsSummaryText(proposals) : 'Sorry, dat begrijp ik niet helemaal. Kun je het anders verwoorden of iets specifieker maken?'));
     }
 
     // Voer elke gevraagde tool uit (strikt org-scoped). Een schrijf-tool (propose_*)
@@ -529,7 +541,8 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
           steps.push(logStep('proposal', toolName, `Klaargezet: ${describeProposal(built.proposal)}`, true, { input: trimForLog(toolInput) }));
           proposals.push(built.proposal);
           proposedKeys.add(key);
-          if (maxProposals === 1) { stopForUser = true; break; }
+          // De chat stopt hier: de kaart staat onder de tekst en de gebruiker beslist.
+          if (chatMode) { stopForUser = true; break; }
           toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Klaargezet: ${describeProposal(built.proposal)}. Dit wacht nu op het akkoord van de gebruiker; zet het niet nog een keer klaar.` });
           continue;
         }
@@ -551,7 +564,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
       }
     }
 
-    if (stopForUser) return done(answerChunks.join('') || chatProposalText(proposals[0]));
+    if (stopForUser) return done(answer() || chatProposalText(proposals[0]));
     messages.push({ role: 'user', content: toolResults });
     // Het plafond van voorstellen is bereikt: geen nieuwe rondes meer, wel een
     // afsluitende samenvatting hieronder.
@@ -568,7 +581,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
   if (final.stop_reason === 'refusal') return refused(final.stopDetails?.category);
   const finalText = extractText(assistantContentForHistory(final.content));
   if (finalText) answerChunks.push(finalText);
-  return done(answerChunks.join('')
+  return done(answer()
     || (proposals.length > 0 ? proposalsSummaryText(proposals) : 'Ik kon dit niet helemaal afronden — kun je je vraag iets specifieker stellen?'));
 }
 

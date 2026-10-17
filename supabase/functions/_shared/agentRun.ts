@@ -23,14 +23,18 @@ export interface PastRunDecision { title: string; status: string }
 export interface PastRun { at: string; summary: string; decisions: PastRunDecision[] }
 
 /**
- * Zei de agent "niets te melden"? Alleen als de EERSTE regel precies dat is
- * (opmaak en leestekens tellen niet mee). "Niets te melden over facturen, maar
- * drie tickets wachten" is wél iets te melden.
+ * Zei de agent "niets te melden"? Als de eerste of de laatste regel precies dat is
+ * (opmaak en leestekens tellen niet mee). De laatste regel telt mee omdat een
+ * agent vóór het zoeken soms al een zinnetje schrijft ("Ik kijk naar de
+ * tickets.") en pas daarna antwoordt. "Niets te melden over facturen, maar drie
+ * tickets wachten" is wél iets te melden.
  */
 export function isNothingToReport(text: string): boolean {
-  const firstLine = String(text ?? '').trim().split('\n')[0] ?? '';
-  const normalized = firstLine.replace(/[*_`"'.!:—–-]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
-  return normalized === NOTHING_TO_REPORT;
+  const lines = String(text ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0) return false;
+  const marker = (line: string) =>
+    line.replace(/[*_`"'.!:—–-]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase() === NOTHING_TO_REPORT;
+  return marker(lines[0]) || marker(lines[lines.length - 1]);
 }
 
 /** Een beslissing over een voorstel in gewone taal. */

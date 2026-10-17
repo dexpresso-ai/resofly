@@ -1,18 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { buildScheduledRunMessage, decisionStatusLabel, formatMemory, isNothingToReport, NOTHING_TO_REPORT } from './agentRun.ts';
 
 /**
  * De opdracht van een geplande run: spelregels, geheugen en "niets te melden".
  */
 
-test('"niets te melden" alleen als de eerste regel precies dat zegt', () => {
+test('"niets te melden" alleen als de eerste of de laatste regel precies dat zegt', () => {
   assert.equal(isNothingToReport(NOTHING_TO_REPORT), true);
   assert.equal(isNothingToReport('**Niets te melden.**'), true);
   assert.equal(isNothingToReport('NIETS TE MELDEN\nAlle facturen zijn betaald.'), true);
+  // Een zinnetje vóór het zoeken, en pas daarna het antwoord.
+  assert.equal(isNothingToReport('Ik kijk even naar de tickets.\n\nNIETS TE MELDEN'), true);
   assert.equal(isNothingToReport('Niets te melden over facturen, maar drie tickets wachten op je.'), false);
+  assert.equal(isNothingToReport('Drie tickets wachten.\n\nNiets te melden over de facturen.'), false);
   assert.equal(isNothingToReport('Drie facturen staan open.'), false);
   assert.equal(isNothingToReport(''), false);
+  assert.equal(isNothingToReport('\n  \n'), false);
+});
+
+test('een agent met één voorstel per run rondt af met een samenvatting; alleen de chat stopt meteen', () => {
+  const core = readFileSync(new URL('./gerrieCore.ts', import.meta.url), 'utf8');
+  // Het plafond van één is een geldige instelling voor een agent; dat mag niet
+  // betekenen dat hij zich als de chat gedraagt en zijn slotbeurt overslaat.
+  assert.doesNotMatch(core, /if \(maxProposals === 1\) \{ stopForUser = true/);
+  assert.match(core, /const chatMode = options\.maxProposals === undefined;/);
+  assert.match(core, /if \(chatMode\) \{ stopForUser = true; break; \}/);
+  // De runner geeft bij een run en een antwoord altijd een plafond mee.
+  const runner = readFileSync(new URL('../gerrie-agent-runner/index.ts', import.meta.url), 'utf8');
+  assert.equal((runner.match(/maxProposals: mode === 'propose' \? maxProposals : 1,/g) ?? []).length, 2);
 });
 
 test('beslissingen in gewone taal', () => {
