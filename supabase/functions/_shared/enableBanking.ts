@@ -182,3 +182,134 @@ export function pickBookedBalance(raw: unknown, currency: string, today: string)
   const best = candidates[0];
   return best ? { amount_cents: best.amount_cents, date: best.date, type: best.type } : null;
 }
+
+// ── De koppeling laten lopen: PSU-headers, toestemmingsduur, fouten, pagina's ──
+
+/**
+ * Met deze headers weet de bank dat de gebruiker er zelf bij is. Een opvraging
+ * telt dan niet mee voor de PSD2-grens van vier keer per 24 uur op de
+ * achtergrond (EBA Q&A 2018_4172). Alleen met een publiek IP: een intern adres
+ * zegt de bank niets en sommige banken weigeren het.
+ */
+export type PsuHeaders = { 'Psu-Ip-Address'?: string; 'Psu-User-Agent'?: string };
+
+function ipv4Parts(ip: string): number[] | null {
+  const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const parts = m.slice(1).map(Number);
+  return parts.every((n) => n <= 255) ? parts : null;
+}
+
+/** Een adres dat op internet bestaat: geen privé-, loopback-, link-local- of CGNAT-reeks. */
+export function isPublicIp(ip: string): boolean {
+  const v4 = ipv4Parts(ip);
+  if (v4) {
+    const [a, b] = v4;
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false;   // CGNAT
+    if (a === 169 && b === 254) return false;             // link-local
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 192 && b === 0) return false;               // 192.0.0.0/24 en 192.0.2.0/24
+    if (a === 198 && (b === 18 || b === 19)) return false;
+    return true;
+  }
+  const v6 = ip.toLowerCase();
+  if (!/^[0-9a-f:]+$/.test(v6) || !v6.includes(':')) return false;
+  if (v6 === '::' || v6 === '::1') return false;
+  if (/^f[cd]/.test(v6)) return false;                    // unique local fc00::/7
+  if (/^fe[89ab]/.test(v6)) return false;                 // link-local fe80::/10
+  if (v6.startsWith('ff')) return false;                  // multicast
+  if (v6.startsWith('2001:db8')) return false;            // documentatie
+  return true;
+}
+
+/** Het IP van de gebruiker uit x-forwarded-for (eerste adres), zonder poort of haken. */
+export function clientIpFrom(forwardedFor: string | null | undefined): string | null {
+  const first = String(forwardedFor ?? '').split(',')[0]?.trim() ?? '';
+  if (!first) return null;
+  const bracketed = first.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracketed) return bracketed[1];
+  const v4WithPort = first.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+  return v4WithPort ? v4WithPort[1] : first;
+}
+
+export function psuHeaders(forwardedFor: string | null | undefined, userAgent: string | null | undefined): PsuHeaders {
+  const ip = clientIpFrom(forwardedFor);
+  if (!ip || !isPublicIp(ip)) return {};
+  const headers: PsuHeaders = { 'Psu-Ip-Address': ip };
+  const ua = String(userAgent ?? '').trim();
+  if (ua) headers['Psu-User-Agent'] = ua.slice(0, 512);
+  return headers;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Weet de bank zijn maximum niet, dan dit: elke bank staat minstens 90 dagen toe. */
+export const SAFE_CONSENT_DAYS = 90;
+
+/**
+ * Tot wanneer we toestemming vragen: wat we willen (standaard 180 dagen, de
+ * PSD2-grens sinds juli 2023), maar nooit langer dan de bank toestaat
+ * (`maximum_consent_validity`, in seconden). Een uur speling voor klokverschil:
+ * vraagt het meer dan het maximum, dan weigert de bank de hele koppeling.
+ */
+export function consentValidUntil(nowMs: number, wantedDays: number, maxSeconds: number | null | undefined): Date {
+  const wanted = Math.max(1, Math.floor(wantedDays)) * DAY_MS;
+  const max = Number(maxSeconds);
+  const cap = Number.isFinite(max) && max > 0 ? Math.max(DAY_MS, max * 1000 - 60 * 60 * 1000) : SAFE_CONSENT_DAYS * DAY_MS;
+  return new Date(nowMs + Math.min(wanted, cap));
+}
+
+/**
+ * Wat een fout van Enable Banking betekent voor wat de gebruiker moet doen:
+ *   auth             401/403: de toestemming is weg, óf onze eigen sleutel klopt
+ *                    niet — bank-sync zoekt uit welke van de twee (GET /application)
+ *   reconsent        de sessie is verlopen, ingetrokken of gesloten: opnieuw koppelen
+ *   rate_limited     429: de bank staat even geen ophalen toe; later vanzelf weer
+ *   bank_unavailable 5xx of geen antwoord: tijdelijk, later opnieuw
+ *   other            iets anders (bv. een fout in de aanvraag)
+ */
+export type EbErrorKind = 'auth' | 'reconsent' | 'rate_limited' | 'bank_unavailable' | 'other';
+
+export function classifyEbError(status: number, body: unknown): EbErrorKind {
+  if (status === 401 || status === 403) return 'auth';
+  if (status === 429) return 'rate_limited';
+  if (!status || status >= 500) return 'bank_unavailable';
+  const b = (body && typeof body === 'object') ? body as Record<string, unknown> : {};
+  const code = String(b.error ?? b.code ?? '').toUpperCase();
+  const message = String(b.message ?? b.detail ?? (typeof body === 'string' ? body : '')).toLowerCase();
+  if (/(EXPIRED|CLOSED|REVOKED|INVALID)_SESSION|SESSION_(EXPIRED|CLOSED|REVOKED|DOES_NOT_EXIST|NOT_FOUND)/.test(code)) return 'reconsent';
+  if (/session/.test(message) && /(expired|closed|revoked|not found|does not exist|verlopen)/.test(message)) return 'reconsent';
+  if (status === 404 && /account/.test(message)) return 'reconsent';
+  return 'other';
+}
+
+/** Hoogstens zoveel pagina's per rekening per keer; de rest komt de volgende keer. */
+export const MAX_TRANSACTION_PAGES = 100;
+
+/**
+ * Alle pagina's van /transactions ophalen, tot er geen continuation_key meer
+ * komt. Komt dezelfde sleutel terug, dan is er niets meer (sommige banken doen
+ * dat in plaats van hem weg te laten). Bij het plafond: `truncated`, en dan mag
+ * de sync zijn startpunt NIET vooruitzetten — anders valt de rest buiten het
+ * venster van de volgende keer en komt hij nooit meer binnen. Hetzelfde als de
+ * tijd op is (`outOfTime`, vóór elke volgende pagina gevraagd).
+ */
+export async function fetchAllTransactionPages(
+  fetchPage: (continuationKey: string | null) => Promise<{ transactions?: unknown; continuation_key?: unknown } | null | undefined>,
+  maxPages: number = MAX_TRANSACTION_PAGES,
+  outOfTime: () => boolean = () => false,
+): Promise<{ transactions: unknown[]; pages: number; truncated: boolean }> {
+  const transactions: unknown[] = [];
+  let key: string | null = null;
+  let pages = 0;
+  for (;;) {
+    const page = await fetchPage(key);
+    pages += 1;
+    if (Array.isArray(page?.transactions)) transactions.push(...page.transactions);
+    const next = typeof page?.continuation_key === 'string' && page.continuation_key ? page.continuation_key : null;
+    if (!next || next === key) return { transactions, pages, truncated: false };
+    if (pages >= maxPages || outOfTime()) return { transactions, pages, truncated: true };
+    key = next;
+  }
+}

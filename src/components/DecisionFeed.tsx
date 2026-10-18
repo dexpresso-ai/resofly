@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, BellOff, CalendarClock, Check, ChevronRight, Clock, Coins, ListChecks, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, BellOff, CalendarClock, Check, ChevronRight, Clock, Coins, Landmark, ListChecks, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
 import { supabase, supabaseAuth } from '../lib/supabase';
 import { isDue, listDecisions, muteDecision, resolveDecision, type AiDecision, type DecisionKind, type DecisionTarget } from '../lib/decisions-api';
 import { batchDecision, claimingHandlers, confirmGerrieAction, runGerrieDecision, type GerrieActionHandlers } from '../lib/gerrie-api';
@@ -36,6 +36,7 @@ const KIND_ICON: Record<DecisionKind, typeof Mail> = {
   meeting_notes_ready: ListChecks,
   meeting_notes_unsent: Mail,
   gallery_favorites_chosen: ListChecks,
+  bank_consent_expiring: Landmark,
 };
 
 export function DecisionFeed({

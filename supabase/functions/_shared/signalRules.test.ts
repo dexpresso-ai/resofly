@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   GERRIE_ALLOWED_TOOLS, MAX_TASKS_PER_CARD, buildGerrieBrief, buildRuleCard, severityForProposal,
-  type FavoritesFacts, type InboundMailFacts, type MailUnmatchedFacts, type NotesReadyFacts, type QuoteExpiringFacts,
+  type BankConsentFacts, type FavoritesFacts, type InboundMailFacts, type MailUnmatchedFacts, type NotesReadyFacts,
+  type QuoteExpiringFacts,
 } from './signalRules.ts';
 
 /**
@@ -53,6 +54,31 @@ test('een verlopende offerte wordt een actiepunt voor vandaag, geen wijziging va
   assert.match(items[0].title, /verloopt vandaag/);
   assert.match(card.title, /verloopt vandaag/);
   assert.ok(card.evidence.some((e) => e.includes('€ 1.250,00')));
+});
+
+test('een verlopende banktoestemming wordt een actiepunt om opnieuw te koppelen, met "Openen" naar Bank', () => {
+  const facts: BankConsentFacts = {
+    requisition_id: 'r', institution_name: 'Rabobank', expires_at: '2026-10-28T10:00:00Z', days_left: 10,
+    accounts: ['Rabobank zakelijk', 'Spaarrekening'], last_synced_at: '2026-10-18T05:12:00Z', today: '2026-10-18',
+  };
+  const card = buildRuleCard({ kind: 'bank_consent_expiring', facts });
+  assert.equal(card.tool, 'propose_week_action');
+  const items = card.input.items as Array<{ title: string; date: string }>;
+  assert.equal(items[0].date, '2026-10-18');
+  assert.match(items[0].title, /Rabobank opnieuw koppelen/);
+  assert.match(card.title, /verloopt over 10 dagen/);
+  assert.match(card.summary, /Rabobank zakelijk, Spaarrekening/);
+  assert.deepEqual(card.target, { kind: 'bank', id: null });
+  assert.equal(card.severity, 'normal');
+  assert.ok(card.evidence.some((e) => e.includes('28 oktober')));
+
+  const soon = buildRuleCard({ kind: 'bank_consent_expiring', facts: { ...facts, days_left: 1 } });
+  assert.match(soon.title, /verloopt morgen/);
+  assert.equal(soon.severity, 'high', 'de laatste drie dagen: hoog');
+  const gone = buildRuleCard({ kind: 'bank_consent_expiring', facts: { ...facts, days_left: -2, accounts: [] } });
+  assert.match(gone.title, /is verlopen/);
+  assert.match(gone.summary, /geen nieuwe transacties meer binnen van de gekoppelde rekeningen/);
+  assert.ok(gone.evidence.some((e) => e.startsWith('Toestemming liep af op')));
 });
 
 test('een bericht uit de opvangbak wordt een koppel-handeling met de juiste id\'s', () => {

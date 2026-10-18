@@ -2834,6 +2834,7 @@ function App() {
       case 'contract': setPage('contracts'); setProjectId(null); setClientId(null); return;
       case 'inbox': openCommunication({ tab: 'inbox' }); return;
       case 'calendar': setPage('calendar'); setProjectId(null); setClientId(null); return;
+      case 'bank': setPage('bank'); setProjectId(null); setClientId(null); return;
       default: return;
     }
   }

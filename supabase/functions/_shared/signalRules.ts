@@ -3,7 +3,7 @@
  *
  * Hier staat welke kaartsoorten er zijn, bij welke module en herkomst ze horen,
  * en hoe de FEITEN van een signaal (trap 1, verzameld door de edge function
- * gerrie-signals) een kaart worden (trap 2). Vijf soorten zijn regelkaarten: het
+ * gerrie-signals) een kaart worden (trap 2). Zes soorten zijn regelkaarten: het
  * voorstel volgt volledig uit de data, zonder model. Drie soorten zijn
  * Gerrie-kaarten: daar is tekst of oordeel nodig en krijgt het model één
  * opdracht met een strikte tool-allowlist.
@@ -26,10 +26,11 @@ export const SIGNAL_KINDS = [
   'meeting_notes_ready',
   'meeting_notes_unsent',
   'gallery_favorites_chosen',
+  'bank_consent_expiring',
 ] as const;
 export type SignalKind = typeof SIGNAL_KINDS[number];
 
-export const RULE_KINDS = ['quote_expiring', 'mail_unmatched', 'meeting_notes_ready', 'meeting_notes_unsent', 'gallery_favorites_chosen'] as const;
+export const RULE_KINDS = ['quote_expiring', 'mail_unmatched', 'meeting_notes_ready', 'meeting_notes_unsent', 'gallery_favorites_chosen', 'bank_consent_expiring'] as const;
 export const GERRIE_KINDS = ['quote_opened_unanswered', 'contract_unsigned', 'inbound_mail'] as const;
 export type RuleKind = typeof RULE_KINDS[number];
 export type GerrieKind = typeof GERRIE_KINDS[number];
@@ -43,6 +44,7 @@ export const KIND_ORIGIN: Record<SignalKind, 'rule' | 'gerrie'> = {
   meeting_notes_ready: 'rule',
   meeting_notes_unsent: 'rule',
   gallery_favorites_chosen: 'rule',
+  bank_consent_expiring: 'rule',
 };
 
 /** De module van het SCHRIJF-voorstel: daar hangen kijk- en akkoordrechten aan. */
@@ -55,6 +57,7 @@ export const KIND_MODULE: Record<SignalKind, string> = {
   meeting_notes_ready: 'projects',
   meeting_notes_unsent: 'calendar',
   gallery_favorites_chosen: 'projects',
+  bank_consent_expiring: 'finance',
 };
 
 export const KIND_LABEL: Record<SignalKind, string> = {
@@ -66,6 +69,7 @@ export const KIND_LABEL: Record<SignalKind, string> = {
   meeting_notes_ready: 'Actiepunten uit notulen',
   meeting_notes_unsent: 'Notulen nog niet gemaild',
   gallery_favorites_chosen: 'Favorieten gekozen in een galerij',
+  bank_consent_expiring: 'Banktoestemming verloopt',
 };
 
 /**
@@ -80,7 +84,7 @@ export const GERRIE_ALLOWED_TOOLS: Record<GerrieKind, string[]> = {
 };
 
 export type Severity = 'info' | 'normal' | 'high';
-export interface DecisionTarget { kind: 'client' | 'project' | 'quote' | 'contract' | 'calendar' | 'inbox' | 'gallery'; id: string | null }
+export interface DecisionTarget { kind: 'client' | 'project' | 'quote' | 'contract' | 'calendar' | 'inbox' | 'gallery' | 'bank'; id: string | null }
 
 // ── Feiten per soort (verzameld door de edge function) ───────────────────────
 
@@ -119,12 +123,18 @@ export interface FavoritesFacts {
   favorites_total: number; favorites_today: number; today: string;
 }
 
+export interface BankConsentFacts {
+  requisition_id: string; institution_name: string; expires_at: string; days_left: number;
+  accounts: string[]; last_synced_at: string | null; today: string;
+}
+
 export type RuleFacts =
   | { kind: 'quote_expiring'; facts: QuoteExpiringFacts }
   | { kind: 'mail_unmatched'; facts: MailUnmatchedFacts }
   | { kind: 'meeting_notes_ready'; facts: NotesReadyFacts }
   | { kind: 'meeting_notes_unsent'; facts: NotesUnsentFacts }
-  | { kind: 'gallery_favorites_chosen'; facts: FavoritesFacts };
+  | { kind: 'gallery_favorites_chosen'; facts: FavoritesFacts }
+  | { kind: 'bank_consent_expiring'; facts: BankConsentFacts };
 export type GerrieFacts =
   | { kind: 'quote_opened_unanswered'; facts: QuoteOpenedFacts }
   | { kind: 'contract_unsigned'; facts: ContractUnsignedFacts }
@@ -284,6 +294,29 @@ export function buildRuleCard(input: RuleFacts): RuleCard {
         ],
         severity: 'normal',
         target: { kind: 'project', id: f.project_id },
+      };
+    }
+    case 'bank_consent_expiring': {
+      const f = input.facts;
+      const expired = f.days_left <= 0;
+      const when = expired ? 'is verlopen' : f.days_left === 1 ? 'verloopt morgen' : `verloopt over ${f.days_left} dagen`;
+      const accounts = f.accounts.length ? f.accounts.join(', ') : 'de gekoppelde rekeningen';
+      // Opnieuw koppelen kan alleen de gebruiker zelf, bij zijn bank: een
+      // actiepunt voor vandaag, met "Openen" naar het bankscherm.
+      return {
+        tool: 'propose_week_action',
+        input: { items: [{ title: `Bank ${f.institution_name} opnieuw koppelen (toestemming ${when}) — Bank → Rekeningen & koppeling`, date: f.today }] },
+        title: `Bankkoppeling ${f.institution_name} ${when}`,
+        summary: expired
+          ? `Er komen geen nieuwe transacties meer binnen van ${accounts}. Koppel de bank opnieuw; de rekeningen en hun boekingen blijven gewoon staan.`
+          : `Daarna komen er geen nieuwe transacties meer binnen van ${accounts}. Opnieuw koppelen duurt een minuut, bij je bank.`,
+        evidence: [
+          `Toestemming ${expired ? 'liep af op' : 'geldig t/m'} ${dateNl(f.expires_at)}`,
+          `Rekeningen: ${accounts}`,
+          f.last_synced_at ? `Laatst opgehaald ${dateTimeNl(f.last_synced_at)}` : 'Nog niet opgehaald',
+        ],
+        severity: expired || f.days_left <= 3 ? 'high' : 'normal',
+        target: { kind: 'bank', id: null },
       };
     }
   }

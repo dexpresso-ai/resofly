@@ -10,6 +10,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { SetupBanner } from './Bookkeeping';
 import { parseBankFile } from '../lib/bankImport';
+import { consentState } from '../lib/bankConsent';
 import {
   bookBankTransaction, createBankRequisition, deleteRow, finalizeBankRequisition, importBankTransactions,
   insertRow, listBankInstitutions, matchBankTransactions, reportOpenItems, selectBankReconciliation,
@@ -234,6 +235,9 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmoun
           {isOpen && txn.match_confidence === 'tax_authority' && (
             <small className="bank-tx-hint">Herkend als Belastingdienst — voorgesteld: omzetbelasting (1530). De aangifte met dit saldo wordt bij boeken automatisch op “Betaald” gezet.</small>
           )}
+          {isOpen && txn.match_confidence === 'own_transfer' && (
+            <small className="bank-tx-hint">Overboeking tussen je eigen rekeningen — voorgesteld: kruisposten bankrekeningen. Boek beide kanten hierop; samen vallen ze tegen elkaar weg.</small>
+          )}
         </div>
         <div className={`bank-tx-amount ${incoming ? 'bk-pos' : 'bk-neg'}`}>{incoming ? '+ ' : '− '}{euroCents(abs)}</div>
       </div>
@@ -405,8 +409,10 @@ function syncSummary(r: BankSyncResult | undefined): string {
   if (r?.pending) parts.push(`${r.pending} nog in behandeling bij de bank — die komen vanzelf binnen zodra ze geboekt zijn.`);
   if (r?.unknownStatus) parts.push(`${r.unknownStatus} met een status die we niet kennen; die zijn niet ingelezen. Controleer ze in je bankomgeving.`);
   if (r?.balance) parts.push(`Saldo volgens de bank: ${euroCents(r.balance.cents)} per ${dateNL(r.balance.date)}.`);
+  if (r?.truncated) parts.push('Nog niet alles opgehaald: de volgende synchronisatie gaat verder waar deze stopte.');
   return parts.join(' ');
 }
+
 
 function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [edit, setEdit] = useState<BankAccount | 'new' | null>(null);
@@ -457,13 +463,32 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
       .finally(() => setFinalizing(false));
   }, [organizationId, onChanged]);
 
+  // Opnieuw koppelen bij dezelfde bank: na de toestemming komt de gebruiker hier
+  // terug en hangt de afronding de bestaande rekeningen (op extern id of IBAN) aan
+  // de nieuwe toestemming — geen nieuwe rekeningen, geen andere grootboekrekening.
+  const [relinkingId, setRelinkingId] = useState<string | null>(null);
+  async function relink(req: BankRequisition) {
+    if (!canWrite) return;
+    setRelinkingId(req.id); setBanner(null);
+    try {
+      const redirectUrl = window.location.origin + window.location.pathname;
+      const { link } = await createBankRequisition(organizationId, {
+        institutionId: req.institution_id, institutionName: req.institution_name ?? req.institution_id, redirectUrl,
+      });
+      window.location.assign(link);
+    } catch (e) {
+      setBanner({ kind: 'err', text: e instanceof Error ? e.message : 'Opnieuw koppelen mislukt' });
+      setRelinkingId(null);
+    }
+  }
+
   async function sync(a: BankAccount) {
     if (!canWrite) return;
     setSyncingId(a.id); setBanner(null);
     try {
       const res = await syncBankAccount(organizationId, a.id);
       const r = res.results[0];
-      if (res.needsReconsent) setBanner({ kind: 'err', text: 'De banktoestemming is verlopen. Koppel de bank opnieuw via "Koppel bank".' });
+      if (res.needsReconsent) setBanner({ kind: 'err', text: 'De toestemming voor deze rekening is verlopen of ingetrokken. Koppel de rekening opnieuw met "Opnieuw koppelen".' });
       else if (r?.error) setBanner({ kind: 'err', text: `Synchroniseren mislukt: ${r.error}` });
       else setBanner({ kind: 'ok', text: syncSummary(r) });
       onChanged();
@@ -474,7 +499,7 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
   return (
     <div className="bk-page">
       <div className="bk-subhead">
-        <p className="bk-muted">Koppel elke bankrekening aan een grootboekrekening (meestal 1100 Bank). Lees afschriften in (CAMT.053, MT940 of CSV) of koppel je bank direct (PSD2) voor automatisch ophalen.</p>
+        <p className="bk-muted">Elke bankrekening boekt op een eigen grootboekrekening: de eerste op 1100 Bank, een volgende gekoppelde rekening krijgt vanzelf 1110, 1120, …. Lees afschriften in (CAMT.053, MT940 of CSV) of koppel je bank direct (PSD2) voor automatisch ophalen.</p>
         <div className="bank-subhead-actions">
           <Button disabled={!canWrite || finalizing} onClick={() => setConnect(true)}><Link2 size={15} /> Koppel bank</Button>
           <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Handmatige rekening</Button>
@@ -492,7 +517,7 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
               const count = data.bankTransactions.filter(t => t.bank_account_id === a.id).length;
               const linked = a.source !== 'import';
               const req = reqFor(a);
-              const expired = req?.status === 'expired';
+              const consent = linked ? consentState(req) : { kind: 'none' as const };
               return (
                 <div key={a.id} className="bank-account-card">
                   <div className="bank-account-head">
@@ -502,19 +527,29 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
                     </div>
                     <button className="bk-cell-action" onClick={() => setEdit(a)} disabled={!canWrite}>Bewerk</button>
                   </div>
-                  {expired && <div className="bank-reconsent"><AlertTriangle size={14} /> Toestemming verlopen — koppel de bank opnieuw via "Koppel bank".</div>}
+                  {req && (consent.kind === 'expired' || consent.kind === 'soon') && (
+                    <div className={`bank-reconsent${consent.kind === 'expired' ? ' is-expired' : ''}`}>
+                      <AlertTriangle size={14} />
+                      <span>
+                        {consent.kind === 'expired'
+                          ? <>Toestemming verlopen{consent.until ? ` op ${dateNL(consent.until.slice(0, 10))}` : ''} — er komen geen nieuwe transacties meer binnen.</>
+                          : <>Toestemming verloopt {consent.daysLeft === 0 ? 'vandaag' : consent.daysLeft === 1 ? 'morgen' : `over ${consent.daysLeft} dagen`}{consent.until ? ` (${dateNL(consent.until.slice(0, 10))})` : ''}. Koppel opnieuw om de transacties door te laten lopen.</>}
+                      </span>
+                      <span className="bk-spacer" />
+                      <Button disabled={!canWrite || relinkingId !== null} onClick={() => relink(req)}><Link2 size={14} /> {relinkingId === req.id ? 'Doorsturen…' : 'Opnieuw koppelen'}</Button>
+                    </div>
+                  )}
                   {(() => {
                     const rec = recon.find(r => r.bank_account_id === a.id);
                     return rec ? <ReconciliationPanel rec={rec} /> : null;
                   })()}
                   <div className="bank-account-meta">
-                    <span className="bk-muted">{count} transacties · {linked ? lastSync(a) : lastImport(a)}</span>
+                    <span className="bk-muted">{count} transacties · {linked ? lastSync(a) : lastImport(a)}{consent.kind === 'ok' && consent.until ? ` · toestemming tot ${dateNL(consent.until.slice(0, 10))}` : ''}</span>
                     <span className="bk-spacer" />
-                    {/* Afschrift inlezen kan ALTIJD, ook bij een gekoppelde rekening: de
-                        PSD2-sync levert geen begin-/eindsaldo mee, dus zonder een CAMT- of
-                        MT940-afschrift is de saldo-aansluiting hierboven onmogelijk — terwijl
-                        die er juist om vraagt. Dubbele transacties worden op inhoud ontdubbeld
-                        en wat er tóch doorheen glipt zie je meteen in het aansluitpaneel. */}
+                    {/* Afschrift inlezen kan ALTIJD, ook bij een gekoppelde rekening: om een
+                        periode van vóór de koppeling aan te vullen, of als de toestemming
+                        verlopen is. Dubbele transacties worden op inhoud ontdubbeld en wat er
+                        tóch doorheen glipt zie je meteen in het aansluitpaneel. */}
                     {linked && (
                       <Button disabled={!canWrite || syncingId === a.id} onClick={() => sync(a)}><RefreshCw size={14} /> {syncingId === a.id ? 'Synchroniseren…' : 'Synchroniseer'}</Button>
                     )}
@@ -630,7 +665,7 @@ function BankAccountForm({ data, organizationId, canWrite, account, onClose, onS
   data: AppData; organizationId: string; canWrite: boolean; account: BankAccount | null; onClose: () => void; onSaved: () => void;
 }) {
   const bankAccounts = useMemo(() => data.ledgerAccounts.filter(a => a.type === 'asset'), [data.ledgerAccounts]);
-  const defaultLedger = data.ledgerAccounts.find(a => a.subtype === 'bank') ?? data.ledgerAccounts.find(a => a.code === '1100');
+  const defaultLedger = data.ledgerAccounts.find(a => a.code === '1100') ?? data.ledgerAccounts.find(a => a.subtype === 'bank');
   const [form, setForm] = useState<Record<string, any>>(() => account ? {
     name: account.name, iban: account.iban ?? '', currency: account.currency, ledger_account_id: account.ledger_account_id, is_active: account.is_active,
   } : { name: '', iban: '', currency: 'EUR', ledger_account_id: defaultLedger?.id ?? '', is_active: true });

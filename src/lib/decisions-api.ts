@@ -23,7 +23,8 @@ export type DecisionKind =
   | 'mail_unmatched'
   | 'meeting_notes_ready'
   | 'meeting_notes_unsent'
-  | 'gallery_favorites_chosen';
+  | 'gallery_favorites_chosen'
+  | 'bank_consent_expiring';
 
 /**
  * Spiegel van SIGNAL_KINDS in supabase/functions/_shared/signalRules.ts —
@@ -38,11 +39,12 @@ export const DECISION_KIND_INFO: Record<DecisionKind, { label: string; hint: str
   meeting_notes_ready: { label: 'Actiepunten uit notulen', hint: 'Zodra de notulen klaar zijn: de actiepunten als afvinklijst van taken.', origin: 'rule' },
   meeting_notes_unsent: { label: 'Notulen nog niet gemaild', hint: 'Notulen die na een etmaal nog niet naar de genodigden zijn gestuurd.', origin: 'rule' },
   gallery_favorites_chosen: { label: 'Favorieten gekozen in een galerij', hint: 'Een taak om de selectie na te bewerken, zes uur na de eerste favoriet.', origin: 'rule' },
+  bank_consent_expiring: { label: 'Banktoestemming verloopt', hint: 'Twee weken voordat een bankkoppeling afloopt een actiepunt om opnieuw te koppelen.', origin: 'rule' },
 };
 
 export type DecisionStatus = 'open' | 'snoozed' | 'done' | 'dismissed' | 'expired';
 export type DecisionSeverity = 'info' | 'normal' | 'high';
-export interface DecisionTarget { kind: 'client' | 'project' | 'quote' | 'contract' | 'calendar' | 'inbox' | 'gallery'; id: string | null }
+export interface DecisionTarget { kind: 'client' | 'project' | 'quote' | 'contract' | 'calendar' | 'inbox' | 'gallery' | 'bank'; id: string | null }
 
 export interface AiDecision {
   id: UUID;

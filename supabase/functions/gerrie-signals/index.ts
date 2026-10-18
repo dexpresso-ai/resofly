@@ -499,6 +499,29 @@ async function gatherFacts(kind: SignalKind, signal: SignalRow, settings: Settin
         } },
       };
     }
+    case 'bank_consent_expiring': {
+      const r = await one(org, 'bank_requisitions', 'id, institution_id, institution_name, expires_at', signal.entity_id);
+      if (!r) return { skip: 'bankkoppeling niet gevonden' };
+      const expiresAt = (r.expires_at as string | null) ?? null;
+      if (!expiresAt || !Number.isFinite(Date.parse(expiresAt))) return { skip: 'koppeling zonder einddatum' };
+      // Hangen de rekeningen inmiddels aan een nieuwe toestemming, dan is er niets te doen.
+      const { data: accounts, error: accErr } = await supabaseAdmin.from('bank_accounts').select('name, last_synced_at')
+        .eq('organization_id', org).eq('bank_requisition_id', String(r.id)).eq('is_active', true);
+      if (accErr) throw new HttpError(`bank_accounts ophalen mislukt: ${accErr.message}`, 500);
+      const list = (accounts ?? []) as Array<{ name: string | null; last_synced_at: string | null }>;
+      if (list.length === 0) return { skip: 'opnieuw gekoppeld of geen actieve rekening meer' };
+      const tz = settings.timezone || 'Europe/Amsterdam';
+      const daysLeft = daysBetween(today, new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(expiresAt)));
+      if (daysLeft > 14) return { skip: 'verloopt pas over meer dan twee weken' };
+      const lastSynced = list.map((a) => a.last_synced_at).filter((v): v is string => !!v).sort().at(-1) ?? null;
+      return {
+        rule: { kind, facts: {
+          requisition_id: String(r.id), institution_name: String(r.institution_name || r.institution_id || 'de bank'),
+          expires_at: expiresAt, days_left: daysLeft, accounts: list.map((a) => a.name || 'rekening').slice(0, 5),
+          last_synced_at: lastSynced, today,
+        } },
+      };
+    }
   }
   return { skip: 'onbekende soort' };
 }

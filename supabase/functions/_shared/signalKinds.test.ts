@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 /**
  * Bewaakt de naden van de beslislijst tegen enum-drift.
  *
- * De acht kaartsoorten staan op vier plekken: de migratie (ai_signal_kinds()),
+ * De negen kaartsoorten staan op vier plekken: de migratie (ai_signal_kinds()),
  * de regels (signalRules.ts), de frontend (decisions-api.ts) en de
  * moduletabel/herkomsttabel in de regels. Eén plek vergeten en je krijgt een
  * signaal dat de database weigert, of een kaart zonder label — stil, pas
@@ -21,6 +21,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const read = (rel: string) => readFileSync(join(here, rel), 'utf8');
 
 const migration = read('../../migrations/20260914000000_gerrie_beslislijst.sql');
+// De soortenlijst wordt bij elke nieuwe soort opnieuw gedefinieerd: de laatste telt.
+const kindsMigration = readdirSync(join(here, '../../migrations')).filter((f) => f.endsWith('.sql')).sort()
+  .map((f) => read(`../../migrations/${f}`))
+  .filter((sql) => sql.includes('create or replace function public.ai_signal_kinds()'))
+  .at(-1) ?? migration;
 const rules = read('signalRules.ts');
 const api = read('../../../src/lib/decisions-api.ts');
 const core = read('gerrieCore.ts');
@@ -37,14 +42,14 @@ function between(source: string, start: string, end: string, label: string): str
   return source.slice(a + start.length, b);
 }
 
-const sqlKinds = quoted(between(migration, 'create or replace function public.ai_signal_kinds()', ']::text[]', 'de migratie'));
+const sqlKinds = quoted(between(kindsMigration, 'create or replace function public.ai_signal_kinds()', ']::text[]', 'de migratie'));
 const tsKinds = quoted(between(rules, 'export const SIGNAL_KINDS = [', '] as const', 'signalRules.ts'));
 const apiKinds = [...between(api, 'export const DECISION_KIND_INFO', '\n};', 'decisions-api.ts').matchAll(/^\s{2}([a-z_]+): \{/gm)].map((m) => m[1]);
 const ruleKinds = quoted(between(rules, 'export const RULE_KINDS = [', '] as const', 'RULE_KINDS'));
 const gerrieKinds = quoted(between(rules, 'export const GERRIE_KINDS = [', '] as const', 'GERRIE_KINDS'));
 
-test('de acht soorten staan in migratie, regels en frontend gelijk', () => {
-  assert.equal(sqlKinds.length, 8, 'de migratie kent niet precies acht soorten');
+test('de negen soorten staan in migratie, regels en frontend gelijk', () => {
+  assert.equal(sqlKinds.length, 9, 'de migratie kent niet precies negen soorten');
   assert.deepEqual([...tsKinds].sort(), [...sqlKinds].sort(), 'signalRules.ts en de migratie lopen uit de pas');
   assert.deepEqual([...apiKinds].sort(), [...sqlKinds].sort(), 'decisions-api.ts en de migratie lopen uit de pas');
 });

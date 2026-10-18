@@ -2849,7 +2849,9 @@ export interface BankInstitution {
   name: string;
   bic: string | null;
   logo: string | null;
-  transaction_total_days: number | null;
+  /** Hoe lang deze bank een toestemming laat lopen (Enable Banking geeft seconden). */
+  max_consent_days: number | null;
+  psu_types: string[] | null;
 }
 
 export interface BankStatement {
