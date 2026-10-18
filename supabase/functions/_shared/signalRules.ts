@@ -124,7 +124,8 @@ export interface FavoritesFacts {
 }
 
 export interface BankConsentFacts {
-  requisition_id: string; institution_name: string; expires_at: string; days_left: number;
+  /** expired: de einddatum is voorbij, of de bank beëindigde de toestemming eerder (status expired). */
+  requisition_id: string; institution_name: string; expires_at: string | null; days_left: number; expired: boolean;
   accounts: string[]; last_synced_at: string | null; today: string;
 }
 
@@ -298,8 +299,11 @@ export function buildRuleCard(input: RuleFacts): RuleCard {
     }
     case 'bank_consent_expiring': {
       const f = input.facts;
-      const expired = f.days_left <= 0;
-      const when = expired ? 'is verlopen' : f.days_left === 1 ? 'verloopt morgen' : `verloopt over ${f.days_left} dagen`;
+      const expired = f.expired || f.days_left < 0;
+      // Beëindigd terwijl de einddatum nog moet komen: ingetrokken of door de bank gestopt.
+      const endedEarly = expired && f.days_left > 0;
+      const when = endedEarly ? 'is beëindigd' : expired ? 'is verlopen'
+        : f.days_left <= 0 ? 'verloopt vandaag' : f.days_left === 1 ? 'verloopt morgen' : `verloopt over ${f.days_left} dagen`;
       const accounts = f.accounts.length ? f.accounts.join(', ') : 'de gekoppelde rekeningen';
       // Opnieuw koppelen kan alleen de gebruiker zelf, bij zijn bank: een
       // actiepunt voor vandaag, met "Openen" naar het bankscherm.
@@ -311,7 +315,8 @@ export function buildRuleCard(input: RuleFacts): RuleCard {
           ? `Er komen geen nieuwe transacties meer binnen van ${accounts}. Koppel de bank opnieuw; de rekeningen en hun boekingen blijven gewoon staan.`
           : `Daarna komen er geen nieuwe transacties meer binnen van ${accounts}. Opnieuw koppelen duurt een minuut, bij je bank.`,
         evidence: [
-          `Toestemming ${expired ? 'liep af op' : 'geldig t/m'} ${dateNl(f.expires_at)}`,
+          endedEarly ? `Toestemming door de bank beëindigd (liep tot ${dateNl(f.expires_at)})`
+            : `Toestemming ${expired ? 'liep af op' : 'geldig t/m'} ${dateNl(f.expires_at)}`,
           `Rekeningen: ${accounts}`,
           f.last_synced_at ? `Laatst opgehaald ${dateTimeNl(f.last_synced_at)}` : 'Nog niet opgehaald',
         ],

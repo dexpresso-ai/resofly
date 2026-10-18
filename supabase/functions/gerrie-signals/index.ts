@@ -500,10 +500,13 @@ async function gatherFacts(kind: SignalKind, signal: SignalRow, settings: Settin
       };
     }
     case 'bank_consent_expiring': {
-      const r = await one(org, 'bank_requisitions', 'id, institution_id, institution_name, expires_at', signal.entity_id);
+      const r = await one(org, 'bank_requisitions', 'id, institution_id, institution_name, status, expires_at', signal.entity_id);
       if (!r) return { skip: 'bankkoppeling niet gevonden' };
       const expiresAt = (r.expires_at as string | null) ?? null;
-      if (!expiresAt || !Number.isFinite(Date.parse(expiresAt))) return { skip: 'koppeling zonder einddatum' };
+      const validDate = !!expiresAt && Number.isFinite(Date.parse(expiresAt));
+      // Verlopen: de einddatum is voorbij, of de bank beëindigde hem eerder (status).
+      const expired = String(r.status) === 'expired' || (validDate && Date.parse(expiresAt!) <= Date.now());
+      if (!validDate && !expired) return { skip: 'koppeling zonder einddatum' };
       // Hangen de rekeningen inmiddels aan een nieuwe toestemming, dan is er niets te doen.
       const { data: accounts, error: accErr } = await supabaseAdmin.from('bank_accounts').select('name, last_synced_at')
         .eq('organization_id', org).eq('bank_requisition_id', String(r.id)).eq('is_active', true);
@@ -511,14 +514,15 @@ async function gatherFacts(kind: SignalKind, signal: SignalRow, settings: Settin
       const list = (accounts ?? []) as Array<{ name: string | null; last_synced_at: string | null }>;
       if (list.length === 0) return { skip: 'opnieuw gekoppeld of geen actieve rekening meer' };
       const tz = settings.timezone || 'Europe/Amsterdam';
-      const daysLeft = daysBetween(today, new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(expiresAt)));
-      if (daysLeft > 14) return { skip: 'verloopt pas over meer dan twee weken' };
+      // Kalenderdagen in de tijdzone van de organisatie: op de laatste dag is het "vandaag".
+      const daysLeft = validDate ? daysBetween(today, new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(expiresAt!))) : 0;
+      if (!expired && daysLeft > 14) return { skip: 'verloopt pas over meer dan twee weken' };
       const lastSynced = list.map((a) => a.last_synced_at).filter((v): v is string => !!v).sort().at(-1) ?? null;
       return {
         rule: { kind, facts: {
           requisition_id: String(r.id), institution_name: String(r.institution_name || r.institution_id || 'de bank'),
-          expires_at: expiresAt, days_left: daysLeft, accounts: list.map((a) => a.name || 'rekening').slice(0, 5),
-          last_synced_at: lastSynced, today,
+          expires_at: validDate ? expiresAt : null, days_left: daysLeft, expired,
+          accounts: list.map((a) => a.name || 'rekening').slice(0, 5), last_synced_at: lastSynced, today,
         } },
       };
     }

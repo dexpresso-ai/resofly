@@ -8,9 +8,11 @@
 --     en dan kan de saldo-aansluiting per rekening niet (het paneel weigert dan
 --     terecht een getal). assign_own_bank_ledger_account() geeft een rekening
 --     die zijn grootboekrekening deelt met een rekening met een ander IBAN een
---     eigen 11x0-rekening — alleen zolang er nog niets op geboekt is, want
---     verhangen zou de historie splitsen. bank-sync roept hem aan bij het
---     koppelen; bestaande gekoppelde rekeningen krijgen hem hieronder (sectie 5).
+--     eigen 11x0-rekening — alleen zolang er nog niets op geboekt is en er op
+--     de gedeelde rekening niets anders staat dan bankboekingen (een
+--     beginbalans valt niet te verdelen), want verhangen zou de historie
+--     splitsen. bank-sync roept hem aan bij het koppelen; bestaande gekoppelde
+--     rekeningen krijgen hem hieronder (sectie 5).
 --
 --  2  OVERBOEKING TUSSEN EIGEN REKENINGEN. Geld van de betaalrekening naar de
 --     spaarrekening komt twee keer binnen: −X op de ene, +X op de andere. Wie
@@ -22,10 +24,11 @@
 --     getal in de omschrijving.
 --
 --  3  bank_accounts_due_for_sync(): welke gekoppelde rekeningen de geplande
---     sync nu mag ophalen — toestemming geldig, langst niet opgehaald eerst, en
---     ruim binnen de PSD2-grens: zonder dat de gebruiker erbij is, mag een
---     rekening maximaal vier keer per 24 uur worden opgevraagd, en een sync
---     vraagt transacties én saldo op. Standaard dus elke twaalf uur.
+--     sync nu mag ophalen — toestemming geldig, niet in een wachttijd na een
+--     fout, langst niet geprobeerd eerst, en ruim binnen de PSD2-grens: zonder
+--     dat de gebruiker erbij is, mag een rekening maximaal vier keer per 24 uur
+--     worden opgevraagd, en een sync vraagt transacties én saldo op.
+--     Standaard dus elke twaalf uur.
 --
 --  4  BESLISLIJST: 'bank_consent_expiring'. Een toestemming verloopt stil; daarna
 --     komt er niets meer binnen en merkt niemand het tot de aansluiting niet
@@ -35,6 +38,37 @@
 -- ============================================================
 
 begin;
+
+-- ------------------------------------------------------------
+-- 0. Wat de sync per rekening bijhoudt (na review):
+--    sync_through       t/m deze boekdatum staat alles vast: opgehaald, en toen
+--                       al meer dan een week oud (banken boeken soms tot een week
+--                       met een eerdere datum na). Een sync begint de dag erna,
+--                       in stukken, en legt na elk stuk vast hoe ver hij is;
+--                       wordt hij afgekapt, dan gaat de volgende daar verder.
+--    sync_slice_days    hoe groot die stukken zijn (leeg: 30 dagen). Past één
+--                       stuk niet in de tijd, dan de volgende keer de helft
+--                       (anders begon een trage rekening steeds opnieuw aan
+--                       hetzelfde stuk); lukt een hele sync, dan weer groter.
+--    sync_attempted_at  de laatste poging, gelukt of niet. De geplande ronde
+--                       neemt de langst niet geprobeerde rekening eerst, zodat
+--                       één trage of falende rekening de rest niet verdringt.
+--    sync_failures, sync_retry_after
+--                       mislukt: niet elk uur opnieuw, maar met toenemende
+--                       wachttijd (en na een 429 een halve dag).
+--    sync_error, sync_error_kind
+--                       de laatste fout, voor de gebruiker; een probleem met één
+--                       rekening hoort bij die rekening, niet bij de toestemming.
+-- ------------------------------------------------------------
+alter table public.bank_accounts
+  add column if not exists sync_through date,
+  add column if not exists sync_slice_days smallint
+    check (sync_slice_days is null or sync_slice_days between 1 and 30),
+  add column if not exists sync_attempted_at timestamptz,
+  add column if not exists sync_failures integer not null default 0,
+  add column if not exists sync_retry_after timestamptz,
+  add column if not exists sync_error text,
+  add column if not exists sync_error_kind text;
 
 -- ------------------------------------------------------------
 -- 1. Eigen grootboekrekening per bankrekening
@@ -59,6 +93,10 @@ begin
     raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
   end if;
 
+  -- Eén tegelijk per organisatie: twee gelijktijdige aanroepen kozen anders
+  -- dezelfde vrije code, en de tweede liep vast op de unieke sleutel.
+  perform pg_advisory_xact_lock(hashtext('bank-ledger-codes:' || p_organization_id::text));
+
   select * into v_ba from public.bank_accounts
   where id = p_bank_account_id and organization_id = p_organization_id for update;
   if not found then
@@ -67,10 +105,13 @@ begin
 
   v_iban := upper(replace(coalesce(v_ba.iban, ''), ' ', ''));
 
+  -- Wie deelt de grootboekrekening? Een inactieve rekening waar nooit iets op
+  -- is geboekt, telt niet mee: die heeft geen historie die kan verschuiven.
   -- Heeft hij hem al voor zich alleen, dan is er niets te doen.
   if not exists (
     select 1 from public.bank_accounts o
     where o.organization_id = p_organization_id and o.id <> v_ba.id and o.ledger_account_id = v_ba.ledger_account_id
+      and (o.is_active or exists (select 1 from public.bank_transactions t where t.bank_account_id = o.id and t.status = 'booked'))
   ) then
     return v_ba.ledger_account_id;
   end if;
@@ -81,12 +122,25 @@ begin
   if v_iban = '' or exists (
     select 1 from public.bank_accounts o
     where o.organization_id = p_organization_id and o.id <> v_ba.id and o.ledger_account_id = v_ba.ledger_account_id
+      and (o.is_active or exists (select 1 from public.bank_transactions t where t.bank_account_id = o.id and t.status = 'booked'))
       and upper(replace(coalesce(o.iban, ''), ' ', '')) in ('', v_iban)
   ) then
     return v_ba.ledger_account_id;
   end if;
   -- Al geboekt op de gedeelde rekening: verhangen zou de historie splitsen.
   if exists (select 1 from public.bank_transactions t where t.bank_account_id = v_ba.id and t.status = 'booked') then
+    return v_ba.ledger_account_id;
+  end if;
+  -- Staat er op de gedeelde rekening ook iets anders dan bankboekingen (een
+  -- beginbalans, een memoriaal), dan valt niet te zeggen welk deel bij deze
+  -- rekening hoort: na het verhangen klopte de aansluiting dan bij geen van
+  -- beide. Laat dat aan de gebruiker (Bewerk → grootboekrekening).
+  if exists (
+    select 1 from public.journal_lines jl
+    join public.journal_entries je on je.id = jl.entry_id
+    where jl.account_id = v_ba.ledger_account_id and jl.organization_id = p_organization_id
+      and je.status = 'posted' and je.source_type <> 'payment'
+  ) then
     return v_ba.ledger_account_id;
   end if;
 
@@ -210,13 +264,20 @@ begin
     -- Overboeking tussen eigen rekeningen: de tegenrekening is een andere, actieve
     -- bankrekening van deze organisatie. Beide kanten komen binnen en vallen op de
     -- kruispostenrekening tegen elkaar weg. Vóór de factuurherkenning: een eigen
-    -- IBAN zegt meer dan een getal in de omschrijving.
+    -- IBAN zegt meer dan een getal in de omschrijving. Maar niet als de gebruiker
+    -- zelf een regel voor die IBAN heeft: die gaat voor (ook automatisch boeken).
     if v_iban <> '' and exists (
       select 1 from public.bank_accounts ob
       where ob.organization_id = p_organization_id
         and ob.id <> v_txn.bank_account_id
         and ob.is_active
         and upper(replace(coalesce(ob.iban, ''), ' ', '')) = v_iban
+    ) and not exists (
+      select 1 from public.bank_rules br
+      where br.organization_id = p_organization_id
+        and br.is_active
+        and br.match_counterparty_iban is not null
+        and upper(replace(br.match_counterparty_iban, ' ', '')) = v_iban
     ) then
       v_clearing := public.bank_clearing_account_id(p_organization_id);
       if v_clearing is not null then
@@ -407,7 +468,10 @@ as $$
     and br.status = 'linked'
     and (br.expires_at is null or br.expires_at > now())
     and (ba.last_synced_at is null or ba.last_synced_at < now() - p_min_interval)
-  order by ba.last_synced_at nulls first, ba.id
+    and (ba.sync_retry_after is null or ba.sync_retry_after <= now())
+  -- De langst niet GEPROBEERDE eerst (niet de langst niet gelukte): een rekening
+  -- die elke keer afgekapt wordt of faalt, schuift zo achteraan.
+  order by ba.sync_attempted_at nulls first, ba.last_synced_at nulls first, ba.id
   limit greatest(1, least(coalesce(p_limit, 200), 1000));
 $$;
 
@@ -475,16 +539,16 @@ begin
          jsonb_build_object('recording_id', r.id, 'title', r.event_title_snapshot, 'project_id', r.project_id, 'done_at', r.updated_at), now()) is not null then n := n + 1; end if;
   end loop;
 
-  -- Banktoestemming verloopt binnen twee weken (of is al verlopen en nog niet
-  -- vervangen): daarna komt er niets meer binnen. Alleen zolang er een actieve
-  -- rekening aan hangt — na opnieuw koppelen hangen de rekeningen aan de nieuwe.
+  -- Banktoestemming verloopt binnen twee weken, is al verlopen, of is door de
+  -- bank ingetrokken (status expired terwijl de datum nog ver weg is): daarna
+  -- komt er niets meer binnen. Alleen zolang er een actieve rekening aan hangt —
+  -- na opnieuw koppelen hangen de rekeningen aan de nieuwe.
   for r in
     select br.id, br.institution_name, br.expires_at
       from public.bank_requisitions br
      where br.organization_id = p_org and br.status in ('linked', 'expired')
-       and br.expires_at is not null
-       and br.expires_at < now() + interval '14 days'
-       and br.expires_at > now() - interval '30 days'
+       and (br.status = 'expired' or (br.expires_at is not null and br.expires_at < now() + interval '14 days'))
+       and (br.expires_at is null or br.expires_at > now() - interval '30 days')
        and exists (select 1 from public.bank_accounts ba where ba.bank_requisition_id = br.id and ba.is_active)
   loop
     if public.ai_signal_enqueue(p_org, 'bank_consent_expiring', 'bank_requisition:' || r.id::text || ':expiring', 'bank_requisition', r.id, null,

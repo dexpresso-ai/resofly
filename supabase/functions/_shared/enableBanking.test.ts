@@ -2,10 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  amsterdamDate, classifyEbError, clientIpFrom, consentValidUntil, decimalToCents, ebTransactionState,
+  addDays, amsterdamDate, classifyEbError, clientIpFrom, consentValidUntil, dateSlices, decimalToCents, ebTransactionState,
   fetchAllTransactionPages, isBookedEbTransaction, isPublicIp, mapEbTransaction, pickBookedBalance,
-  prepareEbTransactions, psuHeaders, SAFE_CONSENT_DAYS,
+  prepareEbTransactions, psuHeaders, retryAfter, SAFE_CONSENT_DAYS, sessionState, settledThrough, sliceDaysOf, syncWindow,
 } from './enableBanking.ts';
+
+const hdrs = (h: Record<string, string>) => ({ get: (name: string) => h[name.toLowerCase()] ?? null });
 
 /**
  * Wat er van Enable Banking binnenkomt, bepaalt wat er geboekt kan worden. Een
@@ -180,16 +182,26 @@ test('bank-sync gebruikt deze functies en legt het saldo vast', () => {
 });
 
 test('PSU-headers alleen met een publiek IP van de gebruiker', () => {
-  assert.deepEqual(psuHeaders('203.0.113.9, 10.0.0.1', 'Mozilla/5.0'), { 'Psu-Ip-Address': '203.0.113.9', 'Psu-User-Agent': 'Mozilla/5.0' });
-  assert.deepEqual(psuHeaders('84.24.1.2:51234', ''), { 'Psu-Ip-Address': '84.24.1.2' }, 'poort eraf, geen lege user-agent');
-  assert.deepEqual(psuHeaders('[2a02:a46a:1::5]:443', 'x'), { 'Psu-Ip-Address': '2a02:a46a:1::5', 'Psu-User-Agent': 'x' });
-  for (const internal of ['10.1.2.3', '192.168.1.10', '172.20.0.5', '127.0.0.1', '100.64.3.3', '169.254.1.1', '::1', 'fd00::1', 'fe80::1', '', null, 'onzin', '999.1.1.1']) {
-    assert.deepEqual(psuHeaders(internal as string | null, 'ua'), {}, String(internal));
+  const xff = (v: string) => hdrs({ 'x-forwarded-for': v });
+  assert.deepEqual(psuHeaders(xff('203.0.113.9, 10.0.0.1'), 'Mozilla/5.0'), { 'Psu-Ip-Address': '203.0.113.9', 'Psu-User-Agent': 'Mozilla/5.0' });
+  assert.deepEqual(psuHeaders(xff('84.24.1.2:51234'), ''), { 'Psu-Ip-Address': '84.24.1.2' }, 'poort eraf, geen lege user-agent');
+  assert.deepEqual(psuHeaders(xff('[2a02:a46a:1::5]:443'), 'x'), { 'Psu-Ip-Address': '2a02:a46a:1::5', 'Psu-User-Agent': 'x' });
+  for (const internal of ['10.1.2.3', '192.168.1.10', '172.20.0.5', '127.0.0.1', '100.64.3.3', '169.254.1.1', '::1', 'fd00::1', 'fe80::1', '', 'onzin', '999.1.1.1']) {
+    assert.deepEqual(psuHeaders(xff(internal), 'ua'), {}, internal);
   }
-  assert.equal(psuHeaders('84.24.1.2', 'a'.repeat(900))['Psu-User-Agent']?.length, 512);
-  assert.equal(clientIpFrom(' 84.24.1.2 , 1.1.1.1'), '84.24.1.2');
+  assert.deepEqual(psuHeaders(hdrs({}), 'ua'), {});
+  assert.equal(psuHeaders(xff('84.24.1.2'), 'a'.repeat(900))['Psu-User-Agent']?.length, 512);
   assert.equal(isPublicIp('8.8.8.8'), true);
   assert.equal(isPublicIp('172.32.0.1'), true, 'net buiten 172.16/12');
+});
+
+test('IP van de gebruiker: eerst wat de infrastructuur zet, x-forwarded-for pas als laatste', () => {
+  // De meest linkse x-forwarded-for is door de browser te vervalsen.
+  assert.equal(clientIpFrom(hdrs({ 'x-forwarded-for': '1.2.3.4, 84.24.1.2', 'cf-connecting-ip': '84.24.1.2' })), '84.24.1.2');
+  assert.equal(clientIpFrom(hdrs({ 'x-forwarded-for': '1.2.3.4', 'x-real-ip': '84.24.1.3' })), '84.24.1.3');
+  assert.equal(clientIpFrom(hdrs({ 'cf-connecting-ip': '84.24.1.2', 'x-real-ip': '84.24.1.3' })), '84.24.1.2');
+  assert.equal(clientIpFrom(hdrs({ 'x-forwarded-for': ' 84.24.1.2 , 1.1.1.1' })), '84.24.1.2');
+  assert.equal(clientIpFrom(hdrs({})), null);
 });
 
 test('toestemming: 180 dagen, maar nooit langer dan de bank toestaat', () => {
@@ -214,7 +226,10 @@ test('fouten van Enable Banking: wat de gebruiker moet doen', () => {
   assert.equal(classifyEbError(400, { error: 'EXPIRED_SESSION', message: 'Session expired' }), 'reconsent');
   assert.equal(classifyEbError(422, { error: 'CLOSED_SESSION' }), 'reconsent');
   assert.equal(classifyEbError(400, { message: 'The session has been revoked by the PSU' }), 'reconsent');
-  assert.equal(classifyEbError(404, { message: 'Account not found' }), 'reconsent');
+  assert.equal(classifyEbError(404, { message: 'Session not found' }), 'reconsent');
+  // Eén rekening weg (opgeheven, niet meer vrijgegeven): die rekening, niet de hele toestemming.
+  assert.equal(classifyEbError(404, { message: 'Account not found' }), 'account');
+  assert.equal(classifyEbError(422, { error: 'ACCOUNT_DOES_NOT_EXIST' }), 'account');
   assert.equal(classifyEbError(400, { error: 'WRONG_REQUEST_PARAMETERS', message: 'date_from is invalid' }), 'other');
 });
 
@@ -226,26 +241,79 @@ test('pagina\'s: tot er geen sleutel meer komt; bij het plafond afgekapt', async
   ];
   const asked: Array<string | null> = [];
   const all = await fetchAllTransactionPages(async (key) => { asked.push(key); return pages[asked.length - 1]; });
-  assert.deepEqual(all, { transactions: [1, 2, 3], pages: 3, truncated: false });
+  assert.deepEqual(all, { transactions: [1, 2, 3], pages: 3, truncated: false, reason: null });
   assert.deepEqual(asked, [null, 'a', 'b']);
 
   // Dezelfde sleutel terug: klaar (niet eindeloos doorvragen).
   let n = 0;
   const same = await fetchAllTransactionPages(async () => { n += 1; return { transactions: [n], continuation_key: 'zelfde' }; });
-  assert.deepEqual(same, { transactions: [1, 2], pages: 2, truncated: false });
+  assert.deepEqual(same, { transactions: [1, 2], pages: 2, truncated: false, reason: null });
 
   // Bank blijft nieuwe sleutels geven: na het plafond afgekapt.
   let k = 0;
   const capped = await fetchAllTransactionPages(async () => { k += 1; return { transactions: [k], continuation_key: `k${k}` }; }, 5);
-  assert.deepEqual(capped, { transactions: [1, 2, 3, 4, 5], pages: 5, truncated: true });
+  assert.deepEqual(capped, { transactions: [1, 2, 3, 4, 5], pages: 5, truncated: true, reason: 'pages' });
 
   const empty = await fetchAllTransactionPages(async () => null);
-  assert.deepEqual(empty, { transactions: [], pages: 1, truncated: false });
+  assert.deepEqual(empty, { transactions: [], pages: 1, truncated: false, reason: null });
 
   // De tijd is op: wat er is, en afgekapt (de volgende sync gaat verder).
   let t = 0;
   const late = await fetchAllTransactionPages(async () => { t += 1; return { transactions: [t], continuation_key: `t${t}` }; }, 100, () => t >= 2);
-  assert.deepEqual(late, { transactions: [1, 2], pages: 2, truncated: true });
+  assert.deepEqual(late, { transactions: [1, 2], pages: 2, truncated: true, reason: 'time' });
+});
+
+test('ophaalvenster: de dag na wat vaststaat, hoogstens 89 dagen terug', () => {
+  const today = '2026-10-18';
+  assert.deepEqual(syncWindow(null, null, today), { from: '2026-07-21', capped: null }, 'eerste keer: 89 dagen terug');
+  // Gisteren alles opgehaald: vast t/m 8 dagen daarvoor, dus de laatste week opnieuw.
+  assert.equal(settledThrough('2026-10-17', '2026-10-17'), '2026-10-09');
+  assert.deepEqual(syncWindow('2026-10-09', '2026-10-17T05:00:00Z', today), { from: '2026-10-10', capped: null });
+  // Midden in een achterstand: verder waar hij was, zonder een week opnieuw.
+  assert.equal(settledThrough('2026-08-19', today), '2026-08-19');
+  assert.deepEqual(syncWindow('2026-08-19', null, today), { from: '2026-08-20', capped: null });
+  // Oude rekeningen hebben nog geen sync_through: een week vóór de laatste sync (in NL).
+  assert.deepEqual(syncWindow(null, '2026-10-16T22:30:00Z', today), { from: '2026-10-10', capped: null });
+  // Lang niets: niet verder terug dan de bank toestaat, en zeggen vanaf wanneer het ontbreekt.
+  assert.deepEqual(syncWindow('2026-05-24', null, today), { from: '2026-07-21', capped: '2026-05-25' });
+  assert.deepEqual(syncWindow(null, '2026-06-01T10:00:00Z', today), { from: '2026-07-21', capped: '2026-05-25' });
+  assert.equal(addDays('2026-12-31', 1), '2027-01-01');
+});
+
+test('stukgrootte: leeg of onzinnig is 30 dagen, nooit meer', () => {
+  assert.equal(sliceDaysOf(null), 30);
+  assert.equal(sliceDaysOf(undefined), 30);
+  assert.equal(sliceDaysOf(0), 30);
+  assert.equal(sliceDaysOf('abc'), 30);
+  assert.equal(sliceDaysOf(7), 7);
+  assert.equal(sliceDaysOf(1), 1);
+  assert.equal(sliceDaysOf(90), 30);
+});
+
+test('in stukken van 30 dagen, van oud naar nieuw, het laatste tot vandaag', () => {
+  assert.deepEqual(dateSlices('2026-07-21', '2026-10-18'), [
+    ['2026-07-21', '2026-08-19'], ['2026-08-20', '2026-09-18'], ['2026-09-19', '2026-10-18'],
+  ]);
+  assert.deepEqual(dateSlices('2026-10-10', '2026-10-18'), [['2026-10-10', '2026-10-18']]);
+  assert.deepEqual(dateSlices('2026-10-18', '2026-10-18'), [['2026-10-18', '2026-10-18']]);
+  assert.deepEqual(dateSlices('2026-10-19', '2026-10-18'), []);
+});
+
+test('na een fout: steeds langer wachten, na een 429 een halve dag', () => {
+  const now = Date.parse('2026-10-18T10:00:00Z');
+  const hours = (d: Date | null) => (d ? (d.getTime() - now) / 3_600_000 : null);
+  assert.equal(hours(retryAfter('bank_unavailable', 1, now)), 1);
+  assert.equal(hours(retryAfter('bank_unavailable', 2, now)), 2);
+  assert.equal(hours(retryAfter('other', 4, now)), 8);
+  assert.equal(hours(retryAfter('account', 9, now)), 24, 'hoogstens een dag');
+  assert.equal(hours(retryAfter('rate_limited', 1, now)), 12);
+  assert.equal(retryAfter('reconsent', 1, now), null, 'verlopen toestemming: de geplande sync slaat hem toch al over');
+});
+
+test('sessie bij Enable Banking: alleen een eindstatus telt als "toestemming weg"', () => {
+  assert.equal(sessionState({ status: 'AUTHORIZED' }), 'active');
+  for (const status of ['EXPIRED', 'REVOKED', 'CLOSED', 'CANCELLED', 'INVALID', 'expired']) assert.equal(sessionState({ status }), 'ended', status);
+  for (const s of [{}, { status: 'PENDING_AUTHORIZATION' }, null, undefined]) assert.equal(sessionState(s), 'unknown');
 });
 
 test('bank-sync: geplande sync, PSU-headers, paginering en eigen grootboekrekening zijn aangesloten', () => {
@@ -260,10 +328,18 @@ test('bank-sync: geplande sync, PSU-headers, paginering en eigen grootboekrekeni
   assert.match(source, /rpc\('bank_accounts_due_for_sync'/);
   // Met de gebruiker erbij gaan de PSU-headers mee; de geplande sync heeft ze niet.
   assert.match(source, /syncAccounts\(organizationId, body\.bankAccountId \? String\(body\.bankAccountId\) : null, \{ psu, deadline \}\)/);
-  assert.match(source, /syncAccounts\(row\.organization_id, row\.bank_account_id, \{ deadline \}\)/);
-  // Alle pagina's, en bij afkappen het startpunt niet vooruit.
+  assert.match(source, /syncAccounts\(row\.organization_id, row\.bank_account_id, \{ deadline, perAccountMs: CRON_PER_ACCOUNT_MS \}\)/);
+  // Alle pagina's, in stukken met voortgang; pas als alles binnen is telt hij als bijgewerkt.
   assert.match(source, /fetchAllTransactionPages\(/);
-  assert.match(source, /if \(!fetched\.truncated\) \{\s*await supabaseAdmin\.from\('bank_accounts'\)\.update\(\{ last_synced_at/);
+  assert.match(source, /dateSlices\(from, today, sliceDays\)/);
+  assert.match(source, /const settled = settledThrough\(sliceTo, today\);/);
+  assert.match(source, /update\(\{ sync_through: settled \}\)/);
+  assert.match(source, /sync_slice_days: nextSliceDays === SLICE_DAYS \? null : nextSliceDays/, 'stukgrootte onthouden');
+  assert.match(source, /const balance = truncated \? null : await recordBookedBalance\(/, 'saldo alleen als alles binnen is');
+  assert.match(source, /\.\.\.\(truncated \? \{\} : \{ last_synced_at: new Date\(\)\.toISOString\(\) \}\)/);
+  assert.match(source, /update\(\{ sync_attempted_at:/, 'elke poging vastgelegd');
+  assert.match(source, /retryAfter\(kind!, failures, Date\.now\(\)\)/, 'wachttijd na een fout');
+  assert.match(source, /resolveAuthError\(e, req\?\.requisition_id \?\? null\)/, 'sessie gecontroleerd voor "verlopen"');
   assert.doesNotMatch(source, /guard < 25/, 'geen stille paginalimiet meer');
   // Toestemming begrensd per bank; nieuwe rekening krijgt een eigen grootboekrekening.
   assert.match(source, /consentValidUntil\(Date\.now\(\), EB_CONSENT_DAYS, await maxConsentSeconds\(/);

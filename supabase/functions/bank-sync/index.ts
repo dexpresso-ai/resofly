@@ -2,8 +2,9 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { assertModuleAccess } from '../_shared/edgeAuth.ts';
 import {
-  classifyEbError, consentValidUntil, fetchAllTransactionPages, pickBookedBalance, prepareEbTransactions, psuHeaders,
-  type EbErrorKind, type PsuHeaders,
+  addDays, amsterdamDate, classifyEbError, consentValidUntil, dateSlices, fetchAllTransactionPages,
+  pickBookedBalance, prepareEbTransactions, psuHeaders, retryAfter, sessionState, settledThrough, SLICE_DAYS, sliceDaysOf, syncWindow,
+  type EbErrorKind, type MappedBankTransaction, type PsuHeaders,
 } from '../_shared/enableBanking.ts';
 
 // ============================================================
@@ -50,6 +51,12 @@ const BANK_SYNC_CRON_SECRET = Deno.env.get('BANK_SYNC_CRON_SECRET') || '';
 // volgende uur aan de beurt.
 const CRON_TIME_BUDGET_MS = 100_000;
 const MANUAL_TIME_BUDGET_MS = 110_000;
+// Per rekening in de geplande ronde: één trage bank mag de rest niet opeten.
+const CRON_PER_ACCOUNT_MS = 40_000;
+// Had een rekening minstens zoveel tijd en paste één stuk er niet in, dan is het
+// stuk te groot (en niet de ronde bijna om): de volgende keer de helft.
+const MIN_SLICE_BUDGET_MS = 30_000;
+const HOUR_MS = 60 * 60 * 1000;
 // Op de achtergrond hoogstens twee keer per dag per rekening: een sync vraagt
 // transacties én saldo op, en de bank staat zonder gebruiker vier opvragingen per
 // 24 uur toe.
@@ -96,7 +103,7 @@ serve(async (req) => {
     const action = String(body.action || '');
     const user = await requireUser(req);
     // De gebruiker is erbij: zijn IP en browser gaan mee naar de bank.
-    const psu = psuHeaders(req.headers.get('x-forwarded-for'), req.headers.get('user-agent'));
+    const psu = psuHeaders(req.headers, req.headers.get('user-agent'));
     const deadline = Date.now() + MANUAL_TIME_BUDGET_MS;
 
     // finalize leidt de organisatie af uit de requisition (state), niet uit de body.
@@ -192,6 +199,8 @@ function ebMessage(kind: EbErrorKind | 'config', status: number, detail: string)
     case 'reconsent':
     case 'auth':
       return 'De toestemming voor deze bankrekening is verlopen of ingetrokken. Koppel de rekening opnieuw.';
+    case 'account':
+      return 'De bank geeft deze rekening nu niet vrij, terwijl de toestemming nog geldig is. Is de rekening opgeheven, zet hem dan op inactief; anders proberen we het later opnieuw.';
     case 'config':
       return 'De bankkoppeling van ResoFly zelf is niet goed ingesteld (Enable Banking-sleutel of app). Dit ligt niet aan je bank; de beheerder moet het oplossen.';
     case 'rate_limited':
@@ -204,29 +213,39 @@ function ebMessage(kind: EbErrorKind | 'config', status: number, detail: string)
 }
 
 /**
- * Een 401/403 bij het ophalen kan twee dingen betekenen: de toestemming van de
- * klant is weg (opnieuw koppelen), of onze eigen sleutel of app klopt niet (dan
- * helpt opnieuw koppelen niets en moet de beheerder iets doen). GET /application
- * met dezelfde sleutel maakt het onderscheid. Vijf minuten onthouden.
+ * Een 401/403 bij het ophalen van één rekening kan drie dingen betekenen:
+ *  - onze eigen sleutel of app klopt niet (GET /application geeft ook 401/403):
+ *    configuratie — opnieuw koppelen helpt niet, en de toestemmingen blijven staan;
+ *  - de sessie bij Enable Banking is beëindigd (GET /sessions/{id} met een
+ *    eindstatus, of de sessie bestaat niet meer): opnieuw koppelen;
+ *  - de sessie staat nog: dan gaat het om déze rekening (bv. opgeheven), en de
+ *    andere rekeningen van dezelfde toestemming lopen gewoon door.
+ * Is Enable Banking zelf even onbereikbaar, dan weten we het niet: tijdelijk.
+ * De uitkomst van de sleutelcontrole wordt vijf minuten onthouden.
  */
 let appCheck: { ok: boolean; at: number } | null = null;
-async function resolveAuthError(err: EbError): Promise<EbError> {
+async function resolveAuthError(err: EbError, sessionId: string | null): Promise<EbError> {
   if (err.kind !== 'auth') return err;
+  const as = (kind: EbErrorKind | 'config') => new EbError(ebMessage(kind, err.ebStatus, ''), 502, err.ebStatus, kind, err.detail);
   if (!appCheck || Date.now() - appCheck.at > 5 * 60_000) {
     try {
       await eb('/application');
       appCheck = { ok: true, at: Date.now() };
     } catch (e) {
-      // Alleen een 401/403 op onze eigen app zegt iets over de sleutel; is
-      // Enable Banking zelf even weg, dan weten we het niet en gaan we uit van de
-      // toestemming (de gebruiker ziet dan "koppel opnieuw" en dat kan geen kwaad).
       const status = e instanceof EbError ? e.ebStatus : 0;
-      appCheck = { ok: !(status === 401 || status === 403), at: Date.now() };
+      if (status !== 401 && status !== 403) return as('bank_unavailable');
+      appCheck = { ok: false, at: Date.now() };
     }
   }
-  return appCheck.ok
-    ? new EbError(ebMessage('reconsent', err.ebStatus, ''), 502, err.ebStatus, 'reconsent', err.detail)
-    : new EbError(ebMessage('config', err.ebStatus, ''), 502, err.ebStatus, 'config', err.detail);
+  if (!appCheck.ok) return as('config');
+  if (!sessionId) return as('account');
+  try {
+    const session = await eb(`/sessions/${encodeURIComponent(sessionId)}`);
+    return as(sessionState(session) === 'ended' ? 'reconsent' : 'account');
+  } catch (e) {
+    if (e instanceof EbError && (e.kind === 'reconsent' || e.ebStatus === 404)) return as('reconsent');
+    return as('bank_unavailable');
+  }
 }
 
 /** Een aanroep die niet aan een toestemming hangt: een 401/403 is dan onze eigen sleutel. */
@@ -368,13 +387,15 @@ async function finalizeRequisition(userId: string, code: string, state: string, 
       const sameIban = (candidates ?? []).filter((c: { id: string; iban: string | null; external_account_id: string | null }) =>
         (c.iban || '').replace(/\s+/g, '').toUpperCase() === normalized);
       // Een IBAN is wereldwijd uniek, dus een rij met deze IBAN ís deze rekening.
-      // Bij voorkeur een rij die nog nooit gekoppeld was (de klassieke
-      // import→koppel-samenvoeging); anders een rij met een ANDER extern id — dat
-      // is het herkoppel-geval: na het verlopen van de toestemming geeft Enable
-      // Banking vaak een nieuw account-uid uit. Zouden we die overslaan, dan komt
-      // er een tweede rij met dezelfde IBAN die óók op 1100 boekt, en is de
-      // dubbeltelling alleen maar verschoven van "import→koppel" naar "herkoppel".
-      const match = sameIban.find(c => !c.external_account_id) ?? sameIban[0];
+      // Een rij met een ANDER extern id is het herkoppel-geval: na het verlopen
+      // van de toestemming geeft Enable Banking vaak een nieuw account-uid uit.
+      // Zouden we die overslaan, dan komt er een tweede rij met dezelfde IBAN die
+      // óók op dezelfde grootboekrekening boekt (dubbeltelling). Een rij die nog
+      // nooit gekoppeld was, is de klassieke import→koppel-samenvoeging.
+      // Na review: bij herkoppelen gaat de rij die al gekoppeld was voor — die
+      // heeft de geschiedenis van de koppeling. Anders bleef die oude rij aan de
+      // verlopen toestemming hangen (met rode melding en 401 bij elke sync).
+      const match = sameIban.find(c => c.external_account_id) ?? sameIban[0];
       if (match) existing = { id: match.id };
     }
     let bankAccountId: string | null = null;
@@ -412,15 +433,40 @@ async function finalizeRequisition(userId: string, code: string, state: string, 
   return { status: 'linked', linked, imported };
 }
 
-type SyncOptions = { psu?: PsuHeaders; deadline?: number };
+type SyncOptions = { psu?: PsuHeaders; deadline?: number; perAccountMs?: number };
 type SyncResult = {
   bankAccountId: string; inserted: number; skipped: number;
   pending?: number; unknownStatus?: number; balance?: { cents: number; date: string } | null;
-  /** Niet alles opgehaald (paginaplafond of tijd op): de volgende sync gaat verder. */
+  /** Niet alles opgehaald (tijd op): de volgende sync gaat verder waar deze stopte. */
   truncated?: boolean;
+  /** Zo ver terug geeft de bank niets meer zonder nieuwe bankauthenticatie: deze dagen ontbreken. */
+  gap?: { from: string; through: string };
   error?: string; errorKind?: EbErrorKind | 'config' | 'internal';
 };
 
+async function importTransactions(organizationId: string, bankAccountId: string, txns: MappedBankTransaction[]) {
+  if (txns.length === 0) return { inserted: 0, skipped: 0 };
+  const dates = txns.map((t) => t.booking_date).sort();
+  const statement = {
+    format: 'enablebanking', file_name: null, file_hash: null,
+    period_start: dates[0], period_end: dates[dates.length - 1],
+    opening_balance_cents: null, closing_balance_cents: null,
+  };
+  const { data, error } = await supabaseAdmin.rpc('import_bank_transactions', {
+    p_organization_id: organizationId, p_bank_account_id: bankAccountId, p_statement: statement, p_transactions: txns,
+  });
+  if (error) throw new Error(error.message);
+  return { inserted: Number((data as any)?.inserted ?? 0), skipped: Number((data as any)?.skipped ?? 0) };
+}
+
+/**
+ * Per rekening: ophalen vanaf de dag na sync_through (hoogstens 89 dagen terug),
+ * in stukken van oud naar nieuw. Na elk volledig stuk staat in sync_through hoe
+ * ver alles vaststaat; is de tijd op, dan gaat de volgende sync daar verder
+ * (vroeger begon hij steeds opnieuw en kwam hij nooit verder). Past al het eerste
+ * stuk niet, dan is het de volgende keer half zo groot (sync_slice_days).
+ * Elke poging, en elke fout met zijn wachttijd, staat op de rekening.
+ */
 async function syncAccounts(organizationId: string, bankAccountId: string | null, opts: SyncOptions = {}) {
   let query = supabaseAdmin.from('bank_accounts').select('*')
     .eq('organization_id', organizationId).eq('source', 'enablebanking').eq('is_active', true);
@@ -429,65 +475,124 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
   if (error) throw new HttpError(`Bankrekeningen ophalen mislukt: ${error.message}`, 500);
   if (!accounts || accounts.length === 0) return { results: [] as SyncResult[], needsReconsent: false };
 
+  // De toestemmingen erbij: hun sessie-id maakt het onderscheid tussen een
+  // verlopen toestemming en een probleem met één rekening.
+  const reqIds = [...new Set(accounts.map((a: any) => a.bank_requisition_id).filter(Boolean))] as string[];
+  const { data: reqRows } = reqIds.length
+    ? await supabaseAdmin.from('bank_requisitions').select('id, requisition_id, status, expires_at').in('id', reqIds)
+    : { data: [] };
+  const reqById = new Map(((reqRows ?? []) as any[]).map((r) => [r.id as string, r]));
+
   const psu = opts.psu ?? {};
-  const outOfTime = () => opts.deadline !== undefined && Date.now() > opts.deadline;
   const results: SyncResult[] = [];
   let needsReconsent = false;
 
   for (const acc of accounts) {
     if (!acc.external_account_id) { results.push({ bankAccountId: acc.id, inserted: 0, skipped: 0, error: 'geen extern account-id', errorKind: 'internal' }); continue; }
-    const since = acc.last_synced_at
-      ? new Date(new Date(acc.last_synced_at).getTime() - 7 * 24 * 60 * 60 * 1000)
-      : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    const dateFrom = since.toISOString().slice(0, 10);
-    try {
-      // Alle pagina's, ook na een lege; bij het plafond of als de tijd op is
-      // afgekapt — en dan blijft het startpunt staan (zie hieronder).
-      const fetched = await fetchAllTransactionPages(
-        (key) => eb(`/accounts/${acc.external_account_id}/transactions?date_from=${dateFrom}`
-          + (key ? `&continuation_key=${encodeURIComponent(key)}` : ''), undefined, psu),
-        undefined,
-        outOfTime,
-      );
+    // Is de tijd al op voordat deze rekening begint, dan de volgende keer.
+    if (opts.deadline !== undefined && Date.now() > opts.deadline) { results.push({ bankAccountId: acc.id, inserted: 0, skipped: 0, truncated: true }); continue; }
 
-      // Alleen geboekte transacties; pending komt later als geboekt terug.
-      const { transactions: txns, pending, unknownStatus } = prepareEbTransactions(fetched.transactions);
-      const dates = txns.map((t) => t.booking_date).sort();
-      const statement = {
-        format: 'enablebanking', file_name: null, file_hash: null,
-        period_start: dates[0] ?? null, period_end: dates[dates.length - 1] ?? null,
-        opening_balance_cents: null, closing_balance_cents: null,
-      };
-      let inserted = 0, skipped = 0;
-      if (txns.length > 0) {
-        const { data: imp, error: impErr } = await supabaseAdmin.rpc('import_bank_transactions', {
-          p_organization_id: organizationId, p_bank_account_id: acc.id, p_statement: statement, p_transactions: txns,
-        });
-        if (impErr) throw new Error(impErr.message);
-        inserted = (imp as any)?.inserted ?? 0; skipped = (imp as any)?.skipped ?? 0;
+    const startedAt = Date.now();
+    const accountDeadline = Math.min(opts.deadline ?? Infinity, opts.perAccountMs ? startedAt + opts.perAccountMs : Infinity);
+    const outOfTime = () => Date.now() > accountDeadline;
+    await supabaseAdmin.from('bank_accounts').update({ sync_attempted_at: new Date(startedAt).toISOString() }).eq('id', acc.id);
+    const req = acc.bank_requisition_id ? reqById.get(acc.bank_requisition_id) : undefined;
+    const today = amsterdamDate(new Date(startedAt).toISOString())!;
+    const { from, capped } = syncWindow(acc.sync_through ?? null, acc.last_synced_at ?? null, today);
+    const sliceDays = sliceDaysOf(acc.sync_slice_days);
+    let nextSliceDays = sliceDays;
+    let through: string | null = acc.sync_through ?? null;
+    let inserted = 0, skipped = 0, pending = 0, unknownStatus = 0, truncated = false, completed = 0;
+
+    try {
+      const slices = dateSlices(from, today, sliceDays);
+      while (slices.length > 0) {
+        const [sliceFrom, sliceTo] = slices.shift()!;
+        const fetched = await fetchAllTransactionPages(
+          (key) => eb(`/accounts/${acc.external_account_id}/transactions?date_from=${sliceFrom}&date_to=${sliceTo}`
+            + (key ? `&continuation_key=${encodeURIComponent(key)}` : ''), undefined, psu),
+          undefined,
+          outOfTime,
+        );
+        // Alleen geboekte transacties; pending komt later als geboekt terug.
+        const prepared = prepareEbTransactions(fetched.transactions);
+        pending += prepared.pending; unknownStatus += prepared.unknownStatus;
+        const imported = await importTransactions(organizationId, acc.id, prepared.transactions);
+        inserted += imported.inserted; skipped += imported.skipped;
+
+        const days = Math.round((Date.parse(sliceTo) - Date.parse(sliceFrom)) / 86_400_000) + 1;
+        if (fetched.reason === 'pages' && days > 1) {
+          // Te veel voor één stuk: in tweeën en opnieuw. Wat al binnen is, slaat de
+          // import over.
+          const mid = addDays(sliceFrom, Math.floor((days - 1) / 2));
+          slices.unshift([sliceFrom, mid], [addDays(mid, 1), sliceTo]);
+          continue;
+        }
+        if (fetched.reason === 'time' && (completed > 0 || days > 1 || accountDeadline - startedAt < MIN_SLICE_BUDGET_MS)) {
+          // Nog niet alles: de volgende keer verder vanaf sync_through. Was dit het
+          // eerste stuk en had de rekening zijn tijd, dan is het stuk te groot.
+          if (completed === 0 && days > 1 && accountDeadline - startedAt >= MIN_SLICE_BUDGET_MS) {
+            nextSliceDays = Math.max(1, Math.floor(days / 2));
+          }
+          truncated = true;
+          break;
+        }
+        // Een enkele dag die niet binnen het plafond (pagina's of tijd) past: verder
+        // dan dit gaat het niet, en zonder door te schuiven kwam de rekening nooit
+        // meer verder. Ligt die dag in de laatste week, dan komt hij nog terug.
+        if (fetched.reason) console.warn('bank-sync: één dag past niet', fetched.reason, acc.id, sliceFrom);
+        completed += 1;
+        const settled = settledThrough(sliceTo, today);
+        if (!through || settled > through) {
+          await supabaseAdmin.from('bank_accounts').update({ sync_through: settled }).eq('id', acc.id);
+          through = settled;
+        }
+        if (slices.length > 0 && outOfTime()) { truncated = true; break; }
       }
-      const balance = await recordBookedBalance(organizationId, acc, psu);
-      // Afgekapt: last_synced_at NIET vooruitzetten. Het venster van de volgende
-      // sync begint een week vóór last_synced_at; schoof dat op, dan viel de rest
-      // erbuiten en kwam die nooit meer binnen. Wat al binnen is, slaat de import
-      // de volgende keer gewoon over.
-      if (!fetched.truncated) {
-        await supabaseAdmin.from('bank_accounts').update({ last_synced_at: new Date().toISOString() }).eq('id', acc.id);
+      // Een hele sync gelukt: weer grotere stukken, tot 30 dagen.
+      if (!truncated && sliceDays < SLICE_DAYS) nextSliceDays = Math.min(SLICE_DAYS, sliceDays * 2);
+
+      // Het saldo alleen als alles binnen is: anders klopt het niet met de boekingen.
+      const balance = truncated ? null : await recordBookedBalance(organizationId, acc, psu);
+      await supabaseAdmin.from('bank_accounts').update({
+        // Pas als alles binnen is, telt hij als bijgewerkt.
+        ...(truncated ? {} : { last_synced_at: new Date().toISOString() }),
+        sync_slice_days: nextSliceDays === SLICE_DAYS ? null : nextSliceDays,
+        sync_failures: 0, sync_error: null, sync_error_kind: null,
+        // Afgekapt: over een uur verder; de geplande ronde neemt eerst de anderen.
+        sync_retry_after: truncated ? new Date(Date.now() + HOUR_MS).toISOString() : null,
+      }).eq('id', acc.id);
+      // Het werkt weer, dan staat de toestemming ook (weer).
+      if (req && req.status === 'expired' && (!req.expires_at || Date.parse(req.expires_at) > Date.now())) {
+        await supabaseAdmin.from('bank_requisitions').update({ status: 'linked' }).eq('id', req.id).eq('status', 'expired');
+        req.status = 'linked';
       }
-      results.push({ bankAccountId: acc.id, inserted, skipped, pending, unknownStatus, balance, ...(fetched.truncated ? { truncated: true } : {}) });
+      results.push({
+        bankAccountId: acc.id, inserted, skipped, pending, unknownStatus, balance,
+        ...(truncated ? { truncated: true } : {}), ...(capped ? { gap: { from: capped, through: addDays(from, -1) } } : {}),
+      });
     } catch (e) {
-      const err = e instanceof EbError ? await resolveAuthError(e) : null;
-      if (err?.kind === 'reconsent') {
+      const err = e instanceof EbError ? await resolveAuthError(e, req?.requisition_id ?? null) : null;
+      const kind: SyncResult['errorKind'] = err ? err.kind : 'internal';
+      const failures = (Number(acc.sync_failures) || 0) + 1;
+      const retry = retryAfter(kind!, failures, Date.now());
+      const message = err ? err.message : 'Synchroniseren mislukt door een interne fout.';
+      await supabaseAdmin.from('bank_accounts').update({
+        sync_failures: failures, sync_retry_after: retry ? retry.toISOString() : null,
+        sync_error: message, sync_error_kind: kind,
+      }).eq('id', acc.id);
+      if (kind === 'reconsent') {
         needsReconsent = true;
-        if (acc.bank_requisition_id) await supabaseAdmin.from('bank_requisitions').update({ status: 'expired' }).eq('id', acc.bank_requisition_id);
+        if (req && req.status !== 'expired') {
+          await supabaseAdmin.from('bank_requisitions').update({ status: 'expired' }).eq('id', req.id);
+          req.status = 'expired';
+        }
       }
       const technical = e instanceof EbError ? e.detail : describeError(e);
-      if (err?.kind === 'config') console.error('bank-sync: Enable Banking weigert onze sleutel', technical);
-      else console.warn('bank-sync: rekening niet gesynchroniseerd', acc.id, err?.kind ?? 'internal', technical);
-      results.push({
-        bankAccountId: acc.id, inserted: 0, skipped: 0,
-        error: err ? err.message : describeError(e), errorKind: err ? err.kind : 'internal',
-      });
+      if (kind === 'config') console.error('bank-sync: Enable Banking weigert onze sleutel', technical);
+      else console.warn('bank-sync: rekening niet gesynchroniseerd', acc.id, kind, technical);
+      // Wat vóór de fout al binnen was, telt gewoon mee.
+      results.push({ bankAccountId: acc.id, inserted, skipped, error: message, errorKind: kind });
     }
   }
   return { results, needsReconsent };
@@ -539,7 +644,7 @@ async function runScheduledSync() {
   for (const [index, row] of rows.entries()) {
     if (Date.now() > deadline) { summary.postponed = rows.length - index; break; }
     // Zonder PSU-headers: de gebruiker is er niet bij (dit telt mee voor de vier per dag).
-    const { results } = await syncAccounts(row.organization_id, row.bank_account_id, { deadline });
+    const { results } = await syncAccounts(row.organization_id, row.bank_account_id, { deadline, perAccountMs: CRON_PER_ACCOUNT_MS });
     for (const r of results) {
       if (r.error) summary.failed += 1; else summary.synced += 1;
       summary.inserted += r.inserted || 0;
@@ -562,7 +667,7 @@ async function recordBookedBalance(organizationId: string, acc: any, psu: PsuHea
   try {
     const data = await eb(`/accounts/${acc.external_account_id}/balances`, undefined, psu);
     // Boekdatums van NL-banken zijn lokale datums; "vandaag" dus ook in NL-tijd.
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+    const today = amsterdamDate(new Date().toISOString())!;
     const balance = pickBookedBalance(data?.balances, acc.currency || 'EUR', today);
     if (!balance) return null;
     const { error } = await supabaseAdmin.rpc('record_bank_balance', {

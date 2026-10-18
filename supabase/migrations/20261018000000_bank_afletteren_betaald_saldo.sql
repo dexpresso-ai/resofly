@@ -263,8 +263,10 @@ $$;
 --      'sent'/'overdue' → 'paid', met de laatste afgeletterde bankbetaling als
 --      koppeling (leeg als het geld via Mollie kwam);
 --    · zette de bank de factuur op betaald (koppeling gevuld) en staat er weer
---      iets open: terug naar 'sent'/'overdue'. Handmatig of via Mollie op
---      betaald gezet (geen koppeling) blijft ongemoeid.
+--      iets open, of is er niets meer betaald (alleen nog gecrediteerd): terug
+--      naar 'sent'/'overdue'. "Bankbetaling teruggedraaid" alleen als die
+--      bankbetaling ook echt weg is. Handmatig of via Mollie op betaald gezet
+--      (geen koppeling) blijft ongemoeid.
 --    Bij betaald dezelfde sporen als de Mollie-route: tijdlijn, audit, versie
 --    en vergrendeling.
 -- ------------------------------------------------------------
@@ -284,6 +286,7 @@ declare
   v_open bigint;
   v_txn public.bank_transactions;
   v_date date;
+  v_bank_gone boolean;
 begin
   -- for update: boeken, terugdraaien en crediteren van dezelfde factuur wachten
   -- op elkaar, ook als hun boekdatums in verschillende jaren vallen (de
@@ -345,7 +348,16 @@ begin
     end;
 
   elsif v_inv.status = 'paid' and v_inv.paid_bank_transaction_id is not null then
-    if v_open > 0 then
+    v_bank_gone := not exists (
+      select 1 from public.bank_transactions bt
+      where bt.id = v_inv.paid_bank_transaction_id
+        and bt.organization_id = p_organization_id
+        and bt.status = 'booked'
+    );
+    -- Weer open als er iets openstaat, maar ook als er niets meer betaald is
+    -- (betaald, volledig gecrediteerd, en dan de betaling teruggedraaid): dan
+    -- is hij "voldaan" door de creditnota alleen, en dat is niet betaald.
+    if v_open > 0 or v_paid <= 0 then
       update public.invoices
       set status = case when due_date is not null and due_date < current_date then 'overdue' else 'sent' end,
           paid_at = null,
@@ -353,20 +365,24 @@ begin
           updated_at = now()
       where id = v_inv.id;
 
-      perform public.insert_invoice_workflow_event(
-        p_organization_id, v_inv.id, 'payment_unbooked', 'Bankbetaling teruggedraaid',
-        'De afgeletterde bankbetaling is teruggedraaid; de factuur staat weer open.',
-        jsonb_build_object('source', 'bank', 'bank_transaction_id', v_inv.paid_bank_transaction_id),
-        auth.uid());
-      insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
-      values (p_organization_id, auth.uid(), 'updated', 'invoice', v_inv.id, coalesce(v_inv.number, ''),
-              jsonb_build_object('reason', 'bank_payment_unbooked', 'bank_transaction_id', v_inv.paid_bank_transaction_id));
-    elsif not exists (
-      select 1 from public.bank_transactions bt
-      where bt.id = v_inv.paid_bank_transaction_id
-        and bt.organization_id = p_organization_id
-        and bt.status = 'booked'
-    ) then
+      if v_bank_gone then
+        perform public.insert_invoice_workflow_event(
+          p_organization_id, v_inv.id, 'payment_unbooked', 'Bankbetaling teruggedraaid',
+          'De afgeletterde bankbetaling is teruggedraaid; de factuur staat weer open.',
+          jsonb_build_object('source', 'bank', 'bank_transaction_id', v_inv.paid_bank_transaction_id),
+          auth.uid());
+        insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
+        values (p_organization_id, auth.uid(), 'updated', 'invoice', v_inv.id, coalesce(v_inv.number, ''),
+                jsonb_build_object('reason', 'bank_payment_unbooked', 'bank_transaction_id', v_inv.paid_bank_transaction_id));
+      else
+        -- De bankbetaling staat er nog; iets anders opende de factuur weer (bv.
+        -- een Mollie-terugboeking, die zijn eigen tijdlijnregel schrijft). Geen
+        -- melding dat de bankbetaling is teruggedraaid, want dat is niet zo.
+        insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
+        values (p_organization_id, auth.uid(), 'updated', 'invoice', v_inv.id, coalesce(v_inv.number, ''),
+                jsonb_build_object('reason', 'reopened', 'open_cents', v_open, 'paid_cents', v_paid));
+      end if;
+    elsif v_bank_gone then
       -- Nog steeds voldaan, maar niet meer door die transactie: naar de
       -- bankbetaling die er nog is, of leeg (dan kwam het geld via Mollie).
       update public.invoices set paid_bank_transaction_id = v_txn.id where id = v_inv.id;
@@ -499,7 +515,9 @@ begin
     raise exception 'Deze transactie is al geboekt.' using errcode = '23514';
   end if;
 
-  select * into v_ba from public.bank_accounts where id = v_txn.bank_account_id and organization_id = p_organization_id;
+  -- for share: zo kan assign_own_bank_ledger_account de rekening niet tegelijk naar
+  -- een andere grootboekrekening verhangen (dan zou deze boeking op de oude landen).
+  select * into v_ba from public.bank_accounts where id = v_txn.bank_account_id and organization_id = p_organization_id for share;
   if not found then
     raise exception 'Bankrekening niet gevonden.' using errcode = '02000';
   end if;

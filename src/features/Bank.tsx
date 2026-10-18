@@ -410,6 +410,7 @@ function syncSummary(r: BankSyncResult | undefined): string {
   if (r?.unknownStatus) parts.push(`${r.unknownStatus} met een status die we niet kennen; die zijn niet ingelezen. Controleer ze in je bankomgeving.`);
   if (r?.balance) parts.push(`Saldo volgens de bank: ${euroCents(r.balance.cents)} per ${dateNL(r.balance.date)}.`);
   if (r?.truncated) parts.push('Nog niet alles opgehaald: de volgende synchronisatie gaat verder waar deze stopte.');
+  if (r?.gap) parts.push(`Van ${dateNL(r.gap.from)} t/m ${dateNL(r.gap.through)} geeft de bank via de koppeling niets meer; lees die periode in met een afschrift.`);
   return parts.join(' ');
 }
 
@@ -531,13 +532,18 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
                     <div className={`bank-reconsent${consent.kind === 'expired' ? ' is-expired' : ''}`}>
                       <AlertTriangle size={14} />
                       <span>
-                        {consent.kind === 'expired'
+                        {consent.kind === 'expired' && (consent.daysLeft ?? 0) > 0
+                          ? <>De bank heeft de toestemming beëindigd — er komen geen nieuwe transacties meer binnen.</>
+                          : consent.kind === 'expired'
                           ? <>Toestemming verlopen{consent.until ? ` op ${dateNL(consent.until.slice(0, 10))}` : ''} — er komen geen nieuwe transacties meer binnen.</>
                           : <>Toestemming verloopt {consent.daysLeft === 0 ? 'vandaag' : consent.daysLeft === 1 ? 'morgen' : `over ${consent.daysLeft} dagen`}{consent.until ? ` (${dateNL(consent.until.slice(0, 10))})` : ''}. Koppel opnieuw om de transacties door te laten lopen.</>}
                       </span>
                       <span className="bk-spacer" />
                       <Button disabled={!canWrite || relinkingId !== null} onClick={() => relink(req)}><Link2 size={14} /> {relinkingId === req.id ? 'Doorsturen…' : 'Opnieuw koppelen'}</Button>
                     </div>
+                  )}
+                  {linked && a.sync_error && consent.kind !== 'expired' && (
+                    <div className="bank-sync-error"><AlertTriangle size={13} /> <span>Laatste poging{a.sync_attempted_at ? ` (${dateNL(a.sync_attempted_at.slice(0, 10))})` : ''} mislukt: {a.sync_error}</span></div>
                   )}
                   {(() => {
                     const rec = recon.find(r => r.bank_account_id === a.id);

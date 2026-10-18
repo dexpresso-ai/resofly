@@ -152,6 +152,20 @@ En de matcher stelt geen factuur meer voor als de ontvangst groter is dan wat er
 die boeking mislukte altijd. Eén overboeking voor meerdere facturen vraagt om splitsen
 (blok 3).
 
+### Bij de review van stap 2
+Drie punten uit de tweede review zitten in deze migratie (zie ook
+`CHANGELOG_BANK_KOPPELING_LOOPT_VANZELF_2026-10-18.md`, "Na de review"):
+- **Betaald, volledig gecrediteerd, en dan de bankbetaling teruggedraaid** bleef op betaald
+  staan zonder dat er iets betaald was. Nu weer open, net als een factuur die alleen
+  gecrediteerd is.
+- **Een Mollie-terugboeking op een factuur die de bank sloot** zette "bankbetaling
+  teruggedraaid" in tijdlijn en audit, terwijl de bankbetaling er nog stond. Nu alleen een
+  auditregel "weer open" met de bedragen; de terugboeking schrijft zijn eigen tijdlijnregel.
+  Verdwijnt de bankbetaling terwijl de factuur voldaan blijft, dan wijst de koppeling naar de
+  bankbetaling die er nog is (of wordt leeg).
+- **Boeken leest de bankrekening met een lock**: verhangt iemand tegelijk de
+  grootboekrekening, dan landt de boeking niet meer op de oude.
+
 ## Front-end
 - `src/features/Bank.tsx`: de afletterkeuze volgt het openstaande bedrag uit het grootboek
   (zie hierboven; de huidige match blijft altijd zichtbaar); het aansluitpaneel en de

@@ -46,8 +46,14 @@ npx --no-install supabase functions deploy bank-sync --project-ref enzghpduqwaoj
 
 ## 3b. Geplande sync inrichten (pg_cron + pg_net)
 Eén job, elk uur. Per aanroep haalt `bank-sync` de gekoppelde rekeningen op die aan de beurt
-zijn: toestemming geldig, langer dan twaalf uur niet opgehaald, langst geleden eerst, binnen
-een tijdsbudget van 100 seconden (wat niet past, komt het uur erna). Zo wordt elke rekening
+zijn: toestemming geldig, langer dan twaalf uur niet opgehaald, niet in een wachttijd na een
+fout, langst niet geprobeerd eerst. Binnen een tijdsbudget van 100 seconden, en hoogstens
+40 seconden per rekening; wat niet past, komt het uur erna. Een rekening haalt op in stukken
+van hoogstens 30 dagen en onthoudt hoe ver alles vaststaat (`sync_through`; de laatste week
+haalt hij steeds opnieuw op, omdat banken soms met een eerdere datum naboeken): wordt hij
+afgekapt, dan gaat de volgende ronde daar verder. Past al het eerste stuk niet in de tijd, dan
+is het de volgende keer half zo groot (`sync_slice_days`), tot het past. Mislukt hij, dan wacht
+hij steeds langer (1, 2, 4 … uur, hoogstens een dag; na een 429 een halve dag). Zo wordt elke rekening
 zonder handwerk twee keer per dag bijgewerkt — binnen de PSD2-grens van vier opvragingen per
 24 uur zonder dat de gebruiker erbij is (een sync vraagt transacties én saldo op). Een klik op
 "Synchroniseer" telt daar niet voor mee: dan gaan IP en browser van de gebruiker mee als
@@ -61,7 +67,8 @@ select cron.schedule(
   select net.http_post(
     url    := 'https://enzghpduqwaojcxgwarr.functions.supabase.co/bank-sync?cron=sync',
     headers:= jsonb_build_object('content-type','application/json','x-cron-secret','<BANK_SYNC_CRON_SECRET>'),
-    body   := '{}'::jsonb
+    body   := '{}'::jsonb,
+    timeout_milliseconds := 150000  -- een ronde mag tot ruim anderhalve minuut duren (pg_net: standaard 5 s)
   );
   $$
 );
@@ -94,11 +101,15 @@ flow kunt doorlopen met testdata (geen echte bank nodig). Voor de mock-bank werk
   (zelfde extern id of IBAN, bijvoorbeeld na opnieuw koppelen) wordt hergebruikt. Een nieuwe
   rekening komt op 1100; deelt hij die met een rekening met een ander IBAN, dan krijgt hij een
   eigen grootboekrekening (1110, 1120, …) via `assign_own_bank_ledger_account`.
-- **Synchroniseer** (of de geplande sync) → haalt nieuwe transacties op vanaf een week vóór de
-  laatste sync, alle pagina's via `continuation_key` (hoogstens 100 per keer; afgekapt = het
-  startpunt blijft staan en de volgende sync gaat verder). Alleen geboekte transacties komen
+- **Synchroniseer** (of de geplande sync) → haalt nieuwe transacties op vanaf de dag na
+  `sync_through` (dus de laatste week opnieuw), in stukken, alle pagina's via
+  `continuation_key` (hoogstens 100 per stuk; te veel = het stuk in tweeën). Na elk stuk staat
+  vast hoe ver hij is; is de tijd op, dan gaat de volgende sync daar verder. Het saldo komt pas
+  mee als alles binnen is. Alleen geboekte transacties komen
   binnen; pending (`PDNG`, `SCHD`, `HOLD`) komt later vanzelf als geboekt terug, geweigerd of
-  geannuleerd (`RJCT`, `CNCL`) nooit, en een onbekende status wordt gemeld.
+  geannuleerd (`RJCT`, `CNCL`) nooit, en een onbekende status wordt gemeld. Verder dan 89 dagen
+  terug vraagt hij niet (zonder nieuwe bankauthenticatie geven banken niet meer); wat daarvoor
+  ligt, lees je met een afschrift in.
 - Een overboeking naar of van een andere eigen rekening wordt herkend: voorstel 1190
   Kruisposten bankrekeningen. Beide kanten daarop geboekt vallen tegen elkaar weg.
 - Daarna haalt `sync` het **geboekte saldo** op (`/accounts/{uid}/balances`) en legt het vast
@@ -112,11 +123,13 @@ flow kunt doorlopen met testdata (geen echte bank nodig). Voor de mock-bank werk
   bank, de rekeningen en hun boekingen blijven), daarna rood. Staat de beslislijst aan, dan zet
   die twee weken vooraf een kaart klaar ("Banktoestemming verloopt"); die vervalt zodra de
   rekeningen aan een nieuwe toestemming hangen.
-- **Fouten**: een 401/403 bij het ophalen betekent óf een verlopen toestemming (de rekening
-  krijgt "koppel opnieuw") óf een probleem met onze eigen sleutel — `GET /application` maakt het
-  onderscheid, zodat een sleutelfout niet alle koppelingen op verlopen zet. Een 429 geeft
-  "probeer het over een uur", een sessiefout (`EXPIRED_SESSION` e.d.) "koppel opnieuw". De
-  technische details staan in de logs van de functie.
+- **Fouten**: een 401/403 bij het ophalen kan drie dingen zijn. `GET /application` zegt of
+  onze eigen sleutel het probleem is (dan blijven de koppelingen staan), `GET /sessions/{id}` of
+  de sessie bij Enable Banking is beëindigd (dan "koppel opnieuw"); staat de sessie nog, dan
+  gaat het om die ene rekening en lopen de andere door. Een 429 geeft "probeer het over een
+  uur", een sessiefout (`EXPIRED_SESSION` e.d.) "koppel opnieuw". De laatste fout staat op de
+  rekeningkaart; de technische details in de logs van de functie. Lukt een sync weer, dan gaat
+  een ten onrechte verlopen toestemming vanzelf terug naar gekoppeld.
 
 ## Belangrijk voor "alle klanten" (productie)
 - De gratis **Restricted Production** dekt alleen je **eigen / gewhiteliste** rekeningen — prima

@@ -224,18 +224,27 @@ export function isPublicIp(ip: string): boolean {
   return true;
 }
 
-/** Het IP van de gebruiker uit x-forwarded-for (eerste adres), zonder poort of haken. */
-export function clientIpFrom(forwardedFor: string | null | undefined): string | null {
-  const first = String(forwardedFor ?? '').split(',')[0]?.trim() ?? '';
-  if (!first) return null;
-  const bracketed = first.match(/^\[([^\]]+)\](?::\d+)?$/);
+function stripPort(value: string): string {
+  const bracketed = value.match(/^\[([^\]]+)\](?::\d+)?$/);
   if (bracketed) return bracketed[1];
-  const v4WithPort = first.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
-  return v4WithPort ? v4WithPort[1] : first;
+  const v4WithPort = value.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+  return v4WithPort ? v4WithPort[1] : value;
 }
 
-export function psuHeaders(forwardedFor: string | null | undefined, userAgent: string | null | undefined): PsuHeaders {
-  const ip = clientIpFrom(forwardedFor);
+/**
+ * Het IP van de gebruiker. Eerst de headers die de infrastructuur zet
+ * (cf-connecting-ip, x-real-ip): die kan de browser niet vervalsen. De meest
+ * linkse x-forwarded-for wél, dus die is alleen de laatste terugval — zoals
+ * clientIp() in contract-public.
+ */
+export function clientIpFrom(headers: { get(name: string): string | null }): string | null {
+  const trusted = (headers.get('cf-connecting-ip') || headers.get('x-real-ip') || '').trim();
+  const value = trusted || (String(headers.get('x-forwarded-for') ?? '').split(',')[0] ?? '').trim();
+  return value ? stripPort(value) : null;
+}
+
+export function psuHeaders(request: { get(name: string): string | null }, userAgent: string | null | undefined): PsuHeaders {
+  const ip = clientIpFrom(request);
   if (!ip || !isPublicIp(ip)) return {};
   const headers: PsuHeaders = { 'Psu-Ip-Address': ip };
   const ua = String(userAgent ?? '').trim();
@@ -265,11 +274,13 @@ export function consentValidUntil(nowMs: number, wantedDays: number, maxSeconds:
  *   auth             401/403: de toestemming is weg, óf onze eigen sleutel klopt
  *                    niet — bank-sync zoekt uit welke van de twee (GET /application)
  *   reconsent        de sessie is verlopen, ingetrokken of gesloten: opnieuw koppelen
+ *   account          alleen deze rekening (bv. opgeheven of niet meer vrijgegeven);
+ *                    de toestemming voor de andere rekeningen staat nog
  *   rate_limited     429: de bank staat even geen ophalen toe; later vanzelf weer
  *   bank_unavailable 5xx of geen antwoord: tijdelijk, later opnieuw
  *   other            iets anders (bv. een fout in de aanvraag)
  */
-export type EbErrorKind = 'auth' | 'reconsent' | 'rate_limited' | 'bank_unavailable' | 'other';
+export type EbErrorKind = 'auth' | 'reconsent' | 'account' | 'rate_limited' | 'bank_unavailable' | 'other';
 
 export function classifyEbError(status: number, body: unknown): EbErrorKind {
   if (status === 401 || status === 403) return 'auth';
@@ -280,8 +291,96 @@ export function classifyEbError(status: number, body: unknown): EbErrorKind {
   const message = String(b.message ?? b.detail ?? (typeof body === 'string' ? body : '')).toLowerCase();
   if (/(EXPIRED|CLOSED|REVOKED|INVALID)_SESSION|SESSION_(EXPIRED|CLOSED|REVOKED|DOES_NOT_EXIST|NOT_FOUND)/.test(code)) return 'reconsent';
   if (/session/.test(message) && /(expired|closed|revoked|not found|does not exist|verlopen)/.test(message)) return 'reconsent';
-  if (status === 404 && /account/.test(message)) return 'reconsent';
+  if (status === 404 || /ACCOUNT/.test(code)) return 'account';
   return 'other';
+}
+
+/**
+ * Staat de sessie bij Enable Banking nog (GET /sessions/{id})? Alleen een
+ * expliciete eindstatus telt als "toestemming weg"; zonder status weten we het
+ * niet, en dan blijft de toestemming staan.
+ */
+export function sessionState(session: unknown): 'active' | 'ended' | 'unknown' {
+  const status = String((session as Record<string, unknown> | null)?.status ?? '').trim().toUpperCase();
+  if (status === 'AUTHORIZED') return 'active';
+  if (['EXPIRED', 'REVOKED', 'CLOSED', 'CANCELLED', 'INVALID'].includes(status)) return 'ended';
+  return 'unknown';
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Wanneer een mislukte rekening weer aan de beurt is: na een 429 een halve dag
+ * (de bank telt elke opvraging mee), anders 1, 2, 4, 8, 16 uur en dan elke dag.
+ * Zonder wachttijd probeerde de geplande sync een falende rekening elk uur, en
+ * stond hij steeds vooraan.
+ */
+export function retryAfter(kind: string, failures: number, nowMs: number): Date | null {
+  if (kind === 'reconsent') return null; // de toestemming gaat op verlopen; dan haalt de geplande sync hem niet meer op
+  if (kind === 'rate_limited') return new Date(nowMs + 12 * HOUR_MS);
+  const hours = Math.min(24, 2 ** Math.max(0, Math.min(failures, 10) - 1));
+  return new Date(nowMs + hours * HOUR_MS);
+}
+
+/** Zoveel dagen terug geven banken transacties zonder nieuwe bankauthenticatie (PSD2: 90). */
+export const MAX_HISTORY_DAYS = 89;
+/** Zo laat boekt een bank soms nog met een eerdere datum na: de laatste week halen we steeds opnieuw op. */
+export const OVERLAP_DAYS = 7;
+/** Een sync haalt op in stukken van hoogstens zoveel dagen en legt na elk stuk vast hoe ver hij is. */
+export const SLICE_DAYS = 30;
+
+export function addDays(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Vanaf welke boekdatum deze sync ophaalt: de dag na `sync_through` (t/m daar
+ * staat alles vast, zie `settledThrough`), maar niet verder terug dan de bank
+ * zonder nieuwe authenticatie toestaat. Een rekening van vóór sync_through
+ * begint een week vóór zijn laatste sync. `capped` is de dag waar we eigenlijk
+ * hadden moeten beginnen als dat niet meer kan (de gebruiker leest die periode
+ * dan met een afschrift in).
+ */
+export function syncWindow(syncThrough: string | null, lastSyncedAt: string | null, today: string): { from: string; capped: string | null } {
+  const earliest = addDays(today, -MAX_HISTORY_DAYS);
+  const through = isoDate(syncThrough);
+  const lastSync = amsterdamDate(lastSyncedAt);
+  const wanted = through ? addDays(through, 1) : lastSync ? addDays(lastSync, -OVERLAP_DAYS) : null;
+  if (!wanted) return { from: earliest, capped: null };
+  if (wanted < earliest) return { from: earliest, capped: wanted };
+  return { from: wanted > today ? today : wanted, capped: null };
+}
+
+/**
+ * Hoe ver alles vaststaat na een opgehaald stuk dat t/m `sliceTo` liep: tot het
+ * eind van het stuk, maar nooit de laatste week (die kan nog veranderen; de
+ * volgende sync haalt hem opnieuw op). Vroeger begon elke sync een week vóór
+ * het vorige eindpunt, ook midden in een achterstand: een trage rekening haalde
+ * dan elke ronde een week opnieuw op en kwam nauwelijks verder.
+ */
+export function settledThrough(sliceTo: string, today: string): string {
+  const limit = addDays(today, -(OVERLAP_DAYS + 1));
+  return sliceTo < limit ? sliceTo : limit;
+}
+
+/** De opgeslagen stukgrootte van een rekening (leeg of onzinnig: 30 dagen). */
+export function sliceDaysOf(value: unknown): number {
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n >= 1 ? Math.min(SLICE_DAYS, n) : SLICE_DAYS;
+}
+
+/** [van, t/m]-stukken van hoogstens `days` dagen, oud naar nieuw; het laatste eindigt op `to`. */
+export function dateSlices(from: string, to: string, days: number = SLICE_DAYS): Array<[string, string]> {
+  const slices: Array<[string, string]> = [];
+  let start = from;
+  while (start <= to) {
+    const end = addDays(start, Math.max(1, days) - 1);
+    slices.push([start, end < to ? end : to]);
+    start = addDays(end, 1);
+  }
+  return slices;
 }
 
 /** Hoogstens zoveel pagina's per rekening per keer; de rest komt de volgende keer. */
@@ -299,7 +398,7 @@ export async function fetchAllTransactionPages(
   fetchPage: (continuationKey: string | null) => Promise<{ transactions?: unknown; continuation_key?: unknown } | null | undefined>,
   maxPages: number = MAX_TRANSACTION_PAGES,
   outOfTime: () => boolean = () => false,
-): Promise<{ transactions: unknown[]; pages: number; truncated: boolean }> {
+): Promise<{ transactions: unknown[]; pages: number; truncated: boolean; reason: 'pages' | 'time' | null }> {
   const transactions: unknown[] = [];
   let key: string | null = null;
   let pages = 0;
@@ -308,8 +407,9 @@ export async function fetchAllTransactionPages(
     pages += 1;
     if (Array.isArray(page?.transactions)) transactions.push(...page.transactions);
     const next = typeof page?.continuation_key === 'string' && page.continuation_key ? page.continuation_key : null;
-    if (!next || next === key) return { transactions, pages, truncated: false };
-    if (pages >= maxPages || outOfTime()) return { transactions, pages, truncated: true };
+    if (!next || next === key) return { transactions, pages, truncated: false, reason: null };
+    if (pages >= maxPages) return { transactions, pages, truncated: true, reason: 'pages' };
+    if (outOfTime()) return { transactions, pages, truncated: true, reason: 'time' };
     key = next;
   }
 }

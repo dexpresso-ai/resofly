@@ -2822,6 +2822,15 @@ export interface BankAccount extends OrgScopedRow {
   last_synced_at: string | null;
   last_imported_at: string | null;
   is_active: boolean;
+  /** Gekoppelde rekening: t/m deze boekdatum is alles opgehaald (de sync gaat in stukken). */
+  sync_through?: string | null;
+  sync_slice_days?: number | null;
+  sync_attempted_at?: string | null;
+  sync_failures?: number;
+  sync_retry_after?: string | null;
+  /** De laatste fout bij ophalen, voor de gebruiker geformuleerd. */
+  sync_error?: string | null;
+  sync_error_kind?: string | null;
   created_at: string;
   updated_at: string;
 }

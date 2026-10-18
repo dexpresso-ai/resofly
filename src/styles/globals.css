@@ -3431,6 +3431,8 @@ body::before{
 .bank-reconsent{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--accent-ink);background:rgba(var(--accent-rgb),.1);border:1px solid rgba(var(--accent-rgb),.28);border-radius:8px;padding:7px 10px}
 .bank-reconsent>span:not(.bk-spacer){flex:1 1 220px;min-width:0}
 .bank-reconsent.is-expired{color:var(--danger-ink,var(--accent-r));background:rgba(var(--danger-rgb),.1);border-color:rgba(var(--danger-rgb),.28)}
+.bank-sync-error{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--muted);line-height:1.45}
+.bank-sync-error svg{flex-shrink:0;margin-top:2px;color:var(--danger-ink,var(--accent-r))}
 .bank-inst-search{display:flex;align-items:center;gap:8px;margin:10px 0;color:var(--muted)}
 .bank-inst-search .form-input{flex:1}
 .bank-inst-list{display:flex;flex-direction:column;gap:6px;max-height:46vh;overflow:auto}

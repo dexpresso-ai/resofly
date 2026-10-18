@@ -58,7 +58,7 @@ test('een verlopende offerte wordt een actiepunt voor vandaag, geen wijziging va
 
 test('een verlopende banktoestemming wordt een actiepunt om opnieuw te koppelen, met "Openen" naar Bank', () => {
   const facts: BankConsentFacts = {
-    requisition_id: 'r', institution_name: 'Rabobank', expires_at: '2026-10-28T10:00:00Z', days_left: 10,
+    requisition_id: 'r', institution_name: 'Rabobank', expires_at: '2026-10-28T10:00:00Z', days_left: 10, expired: false,
     accounts: ['Rabobank zakelijk', 'Spaarrekening'], last_synced_at: '2026-10-18T05:12:00Z', today: '2026-10-18',
   };
   const card = buildRuleCard({ kind: 'bank_consent_expiring', facts });
@@ -75,10 +75,18 @@ test('een verlopende banktoestemming wordt een actiepunt om opnieuw te koppelen,
   const soon = buildRuleCard({ kind: 'bank_consent_expiring', facts: { ...facts, days_left: 1 } });
   assert.match(soon.title, /verloopt morgen/);
   assert.equal(soon.severity, 'high', 'de laatste drie dagen: hoog');
-  const gone = buildRuleCard({ kind: 'bank_consent_expiring', facts: { ...facts, days_left: -2, accounts: [] } });
+  // De laatste dag, nog niet voorbij: "vandaag", niet "verlopen".
+  const lastDay = buildRuleCard({ kind: 'bank_consent_expiring', facts: { ...facts, days_left: 0 } });
+  assert.match(lastDay.title, /verloopt vandaag/);
+  const gone = buildRuleCard({ kind: 'bank_consent_expiring', facts: { ...facts, days_left: -2, expired: true, accounts: [] } });
   assert.match(gone.title, /is verlopen/);
   assert.match(gone.summary, /geen nieuwe transacties meer binnen van de gekoppelde rekeningen/);
   assert.ok(gone.evidence.some((e) => e.startsWith('Toestemming liep af op')));
+  // Door de bank beëindigd terwijl de einddatum nog moet komen.
+  const ended = buildRuleCard({ kind: 'bank_consent_expiring', facts: { ...facts, days_left: 150, expired: true } });
+  assert.match(ended.title, /is beëindigd/);
+  assert.equal(ended.severity, 'high');
+  assert.ok(ended.evidence.some((e) => e.startsWith('Toestemming door de bank beëindigd')));
 });
 
 test('een bericht uit de opvangbak wordt een koppel-handeling met de juiste id\'s', () => {

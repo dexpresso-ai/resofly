@@ -1957,11 +1957,13 @@ export interface BankSyncResult {
   unknownStatus?: number;
   /** Het geboekte saldo dat de bank opgaf, vastgelegd voor de saldo-aansluiting. */
   balance?: { cents: number; date: string } | null;
-  /** Niet alles opgehaald (paginaplafond of tijd op): de volgende sync gaat verder. */
+  /** Niet alles opgehaald (tijd op): de volgende sync gaat verder waar deze stopte. */
   truncated?: boolean;
+  /** Zo ver terug geeft de bank niets meer zonder nieuwe bankauthenticatie: deze dagen ontbreken. */
+  gap?: { from: string; through: string };
   /** Voor de gebruiker geformuleerd; errorKind zegt wat er moet gebeuren. */
   error?: string;
-  errorKind?: 'auth' | 'reconsent' | 'rate_limited' | 'bank_unavailable' | 'config' | 'other' | 'internal';
+  errorKind?: 'auth' | 'reconsent' | 'account' | 'rate_limited' | 'bank_unavailable' | 'config' | 'other' | 'internal';
 }
 
 /** Haalt nieuwe transacties en het geboekte saldo op voor één of alle gekoppelde rekeningen. */
