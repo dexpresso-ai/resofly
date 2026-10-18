@@ -95,6 +95,7 @@ import type {
   BankAccount,
   BankStatement,
   BankTransaction,
+  BankTransactionAllocation,
   BankRule,
   BankRequisition,
   BankInstitution,
@@ -1905,6 +1906,12 @@ export const selectBankRules = (organizationId: UUID) =>
   selectOptional<BankRule>('bank_rules', organizationId, { orderBy: 'priority', ascending: true, hint: BANKFEED_MIGRATION_HINT });
 export const selectBankRequisitions = (organizationId: UUID) =>
   selectOptional<BankRequisition>('bank_requisitions', organizationId, { orderBy: 'created_at', ascending: false, hint: BANKFEED_MIGRATION_HINT });
+/** De verdelingen van geboekte banktransacties (20261018020000); leeg zolang die migratie er niet is. */
+export const selectBankTransactionAllocations = (organizationId: UUID) =>
+  selectOptional<BankTransactionAllocation>('bank_transaction_allocations', organizationId, {
+    orderBy: 'created_at', ascending: true,
+    hint: 'Voer de migratie 20261018020000_bank_verdelen.sql uit om banktransacties te kunnen verdelen.',
+  });
 
 /**
  * Directe PSD2-koppeling (Enable Banking) — alles loopt via de `bank-sync` Edge
@@ -2059,6 +2066,8 @@ export async function bookBankTransaction(
     lines?: Array<Record<string, unknown>>;
     matchedInvoiceId?: UUID | null;
     matchedPurchaseInvoiceId?: UUID | null;
+    /** Verdelen over (inkoop)facturen: [{invoice_id | purchase_invoice_id, amount_cents}]. */
+    allocations?: Array<{ invoice_id?: UUID; purchase_invoice_id?: UUID; amount_cents: number }>;
   } = {},
 ): Promise<JournalEntry> {
   const { data, error } = await supabase.rpc('book_bank_transaction', {
@@ -2067,6 +2076,9 @@ export async function bookBankTransaction(
     p_lines: options.lines ?? null,
     p_matched_invoice_id: options.matchedInvoiceId ?? null,
     p_matched_purchase_invoice_id: options.matchedPurchaseInvoiceId ?? null,
+    // Alleen meesturen bij een verdeling: zo blijft gewoon boeken werken op een
+    // database zonder 20261018020000.
+    ...(options.allocations && options.allocations.length > 0 ? { p_allocations: options.allocations } : {}),
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as JournalEntry;

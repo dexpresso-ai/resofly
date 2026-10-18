@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Banknote, Check, Landmark, Link2, Plus, RefreshCw, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import type {
   AppData, BankAccount, BankInstitution, BankReconciliation, BankRequisition, BankRule, BankTransaction,
-  Invoice, LedgerAccount, PurchaseInvoice,
+  BankTransactionAllocation, Invoice, LedgerAccount, PurchaseInvoice,
 } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
@@ -11,10 +11,12 @@ import { dateNL, euro } from '../lib/format';
 import { SetupBanner } from './Bookkeeping';
 import { parseBankFile } from '../lib/bankImport';
 import { consentState } from '../lib/bankConsent';
+import { centsToInput, checkSplit, newSplitRow, parseEuroCents, rowsFromSuggestion, splitPayload, type SplitRow, type SplitRowKind } from '../lib/bankSplit';
 import {
   bookBankTransaction, createBankRequisition, deleteRow, finalizeBankRequisition, importBankTransactions,
   insertRow, listBankInstitutions, matchBankTransactions, reportOpenItems, selectBankReconciliation,
-  setBankTransactionStatus, syncBankAccount, unbookBankTransaction, updateRow, type BankSyncResult,
+  selectBankTransactionAllocations, setBankTransactionStatus, syncBankAccount, unbookBankTransaction, updateRow,
+  type BankSyncResult,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -94,6 +96,26 @@ function ReconcileTab({ data, organizationId, canWrite, onChanged }: PageProps) 
     return () => { active = false; };
   }, [organizationId, data.bankTransactions, data.invoices, data.purchaseInvoices]);
 
+  // Waarover een geboekte transactie verdeeld is (alleen het huidige boekstuk:
+  // een teruggedraaide verdeling blijft als geschiedenis in de tabel staan).
+  const [allocations, setAllocations] = useState<Map<string, BankTransactionAllocation[]>>(new Map());
+  useEffect(() => {
+    let active = true;
+    selectBankTransactionAllocations(organizationId)
+      .then(rows => {
+        if (!active) return;
+        const entryOf = new Map(data.bankTransactions.map(t => [t.id, t.journal_entry_id]));
+        const byTxn = new Map<string, BankTransactionAllocation[]>();
+        for (const a of rows) {
+          if (entryOf.get(a.bank_transaction_id) !== a.journal_entry_id) continue;
+          byTxn.set(a.bank_transaction_id, [...(byTxn.get(a.bank_transaction_id) ?? []), a]);
+        }
+        setAllocations(byTxn);
+      })
+      .catch(() => { if (active) setAllocations(new Map()); });
+    return () => { active = false; };
+  }, [organizationId, data.bankTransactions]);
+
   async function runMatch() {
     if (!canWrite) return;
     setMatching(true); setError(null);
@@ -130,7 +152,8 @@ function ReconcileTab({ data, organizationId, canWrite, onChanged }: PageProps) 
         : <div className="bank-tx-list">
             {transactions.map(txn => (
               <BankTxRow key={txn.id} txn={txn} data={data} organizationId={organizationId} canWrite={canWrite}
-                accountName={accountName(txn.bank_account_id)} openAmounts={openAmounts} onChanged={onChanged} />
+                accountName={accountName(txn.bank_account_id)} openAmounts={openAmounts}
+                allocations={allocations.get(txn.id)} onChanged={onChanged} />
             ))}
           </div>}
     </div>
@@ -140,19 +163,23 @@ function ReconcileTab({ data, organizationId, canWrite, onChanged }: PageProps) 
 /** Openstaand bedrag in centen per factuur-id; ontbreekt een factuur, dan staat er niets open. */
 type OpenAmounts = { invoices: Map<string, number>; purchases: Map<string, number> };
 
-function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmounts, onChanged }: {
+function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmounts, allocations, onChanged }: {
   txn: BankTransaction; data: AppData; organizationId: string; canWrite: boolean; accountName: string;
-  openAmounts: OpenAmounts | null; onChanged: () => void;
+  openAmounts: OpenAmounts | null; allocations: BankTransactionAllocation[] | undefined; onChanged: () => void;
 }) {
   const incoming = txn.amount_cents > 0;
   const abs = Math.abs(txn.amount_cents);
-  const [mode, setMode] = useState<'invoice' | 'purchase' | 'account'>(
-    incoming ? (txn.matched_invoice_id ? 'invoice' : 'account') : (txn.matched_purchase_invoice_id ? 'purchase' : 'account'),
+  const suggestedSplit = (txn.match_confidence === 'invoices' || txn.match_confidence === 'purchase_invoices')
+    ? rowsFromSuggestion(txn.suggested_allocations) : [];
+  const [mode, setMode] = useState<'invoice' | 'purchase' | 'account' | 'split'>(
+    suggestedSplit.length > 0 ? 'split'
+      : incoming ? (txn.matched_invoice_id ? 'invoice' : 'account') : (txn.matched_purchase_invoice_id ? 'purchase' : 'account'),
   );
   const [invoiceId, setInvoiceId] = useState<string>(txn.matched_invoice_id ?? '');
   const [purchaseId, setPurchaseId] = useState<string>(txn.matched_purchase_invoice_id ?? '');
   const [accountId, setAccountId] = useState<string>(txn.suggested_account_id ?? '');
   const [vatCode, setVatCode] = useState<string>(txn.suggested_vat_code ?? '');
+  const [splitRows, setSplitRows] = useState<SplitRow[]>(suggestedSplit);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -182,16 +209,100 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmoun
   const clientName = (id: string | null) => data.clients.find(c => c.id === id)?.name ?? '';
   const supplierName = (id: string | null) => data.suppliers.find(s => s.id === id)?.name ?? '';
 
+  // ── Verdelen ──
+  // In de richting van het geld: bij een ontvangst verkoopfacturen met iets open
+  // (en inkoopfacturen waar wij tegoed hebben), bij een betaling inkoopfacturen
+  // met iets open (en verkoopfacturen waar de klant tegoed heeft).
+  const splitInvoices = useMemo(
+    () => data.invoices.filter(i => i.status !== 'cancelled' && i.status !== 'void' && i.journal_entry_id != null
+      && (!openAmounts || (incoming ? (openAmounts.invoices.get(i.id) ?? 0) > 0 : (openAmounts.invoices.get(i.id) ?? 0) < 0)))
+      .slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [data.invoices, openAmounts, incoming],
+  );
+  const splitPurchases = useMemo(
+    () => data.purchaseInvoices.filter(p => p.status !== 'cancelled' && p.journal_entry_id != null
+      && (!openAmounts || (incoming ? (openAmounts.purchases.get(p.id) ?? 0) < 0 : (openAmounts.purchases.get(p.id) ?? 0) > 0)))
+      .slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [data.purchaseInvoices, openAmounts, incoming],
+  );
+  // Debiteuren en crediteuren gaan via de factuur zelf (de server weigert een losse regel).
+  const splitAccounts = useMemo(
+    () => accounts.filter(a => a.subtype !== 'accounts_receivable' && a.subtype !== 'accounts_payable'),
+    [accounts],
+  );
+  const invoiceLabel = (i: Invoice) => `factuur ${i.number || '—'}`;
+  const purchaseLabel = (p: PurchaseInvoice) => `inkoopfactuur ${p.internal_number || p.supplier_invoice_number || '—'}`;
+  const splitCtx = {
+    incoming,
+    openOf: (kind: SplitRowKind, id: string) => kind === 'invoice' ? openAmounts?.invoices.get(id) ?? (openAmounts ? 0 : undefined)
+      : kind === 'purchase' ? openAmounts?.purchases.get(id) ?? (openAmounts ? 0 : undefined) : undefined,
+    labelOf: (kind: SplitRowKind, id: string) => {
+      if (kind === 'invoice') { const i = data.invoices.find(x => x.id === id); return i ? invoiceLabel(i) : 'deze factuur'; }
+      if (kind === 'purchase') { const p = data.purchaseInvoices.find(x => x.id === id); return p ? purchaseLabel(p) : 'deze inkoopfactuur'; }
+      const a = data.ledgerAccounts.find(x => x.id === id); return a ? `${a.code} ${a.name}` : 'deze rekening';
+    },
+  };
+  const split = checkSplit(splitRows, abs, splitCtx);
+
+  function startSplit() {
+    setMode('split');
+    setError(null);
+    if (splitRows.length > 0) return;
+    // Begin met wat er al gekozen was, en een lege regel voor de rest.
+    const first = incoming && invoiceId ? newSplitRow('invoice', invoiceId) : !incoming && purchaseId ? newSplitRow('purchase', purchaseId) : null;
+    if (first) {
+      const open = splitCtx.openOf(first.kind, first.targetId);
+      first.amount = open !== undefined && open > 0 && open < abs ? centsToInput(open) : '';
+    }
+    setSplitRows(first ? [first, newSplitRow(incoming ? 'invoice' : 'purchase')] : [newSplitRow(incoming ? 'invoice' : 'purchase'), newSplitRow(incoming ? 'invoice' : 'purchase')]);
+  }
+  function updateRow(index: number, patch: Partial<SplitRow>) {
+    setSplitRows(rows => rows.map((row, i) => {
+      if (i !== index) return row;
+      const next = { ...row, ...patch };
+      if (patch.kind && patch.kind !== row.kind) { next.targetId = ''; next.vatCode = ''; }
+      // Een factuur gekozen en nog geen bedrag: wat er openstaat, hoogstens wat er nog te verdelen is.
+      if (patch.targetId && next.kind !== 'account' && !row.amount.trim()) {
+        const others = rows.reduce((sum, r, j) => sum + (j === index ? 0 : Math.max(0, parseEuroCents(r.amount) ?? 0)), 0);
+        const left = abs - others;
+        const open = splitCtx.openOf(next.kind, patch.targetId);
+        const room = open === undefined ? left : ((next.kind === 'invoice') === incoming ? open : -open);
+        const fill = Math.min(left, room);
+        if (fill > 0) next.amount = centsToInput(fill);
+      }
+      return next;
+    }));
+  }
+  function addRow() {
+    const left = split.remainingCents;
+    // Wat er overblijft gaat meestal naar een grootboekrekening (kosten, een verschil).
+    setSplitRows(rows => [...rows, newSplitRow(rows.length >= 2 ? 'account' : incoming ? 'invoice' : 'purchase', '', left > 0 ? left : undefined)]);
+  }
+  function removeRow(index: number) {
+    setSplitRows(rows => rows.filter((_, i) => i !== index));
+  }
+
   async function book() {
     if (!canWrite) return;
     if (mode === 'invoice' && !invoiceId) { setError('Kies een verkoopfactuur.'); return; }
     if (mode === 'purchase' && !purchaseId) { setError('Kies een inkoopfactuur.'); return; }
     if (mode === 'account' && !accountId) { setError('Kies een grootboekrekening.'); return; }
+    if (mode === 'split' && !split.ready) {
+      setError(split.rowErrors.size > 0 ? 'Niet elke regel klopt; zie hieronder.'
+        : split.remainingCents > 0 ? `Nog ${euroCents(split.remainingCents)} te verdelen.`
+        : split.remainingCents < 0 ? `${euroCents(-split.remainingCents)} te veel verdeeld.` : 'Voeg een regel toe.');
+      return;
+    }
     setBusy(true); setError(null);
+    const description = txn.counterparty_name || txn.description || 'Banktransactie';
     try {
       if (mode === 'invoice') await bookBankTransaction(organizationId, txn.id, { matchedInvoiceId: invoiceId });
       else if (mode === 'purchase') await bookBankTransaction(organizationId, txn.id, { matchedPurchaseInvoiceId: purchaseId });
-      else await bookBankTransaction(organizationId, txn.id, { lines: [{ account_id: accountId, amount_cents: abs, vat_code: vatCode || null, description: txn.counterparty_name || txn.description || 'Banktransactie' }] });
+      else if (mode === 'split') {
+        const { allocations: parts, lines } = splitPayload(splitRows, description);
+        await bookBankTransaction(organizationId, txn.id, { allocations: parts, ...(lines.length > 0 ? { lines } : {}) });
+      }
+      else await bookBankTransaction(organizationId, txn.id, { lines: [{ account_id: accountId, amount_cents: abs, vat_code: vatCode || null, description }] });
       onChanged();
     } catch (e) { setError(e instanceof Error ? e.message : 'Boeken mislukt'); }
     finally { setBusy(false); }
@@ -212,7 +323,9 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmoun
     finally { setBusy(false); }
   }
   async function unbook() {
-    if (!canWrite || !confirm('Deze geboekte transactie terugdraaien (tegenboeking in het grootboek)?')) return;
+    if (!canWrite || !confirm(allocations && allocations.length > 0
+      ? 'Deze verdeelde transactie terugdraaien (tegenboeking in het grootboek)? Alle facturen in de verdeling staan daarna weer open.'
+      : 'Deze geboekte transactie terugdraaien (tegenboeking in het grootboek)?')) return;
     setBusy(true); setError(null);
     try { await unbookBankTransaction(organizationId, txn.id); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Terugdraaien mislukt'); }
@@ -220,6 +333,12 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmoun
   }
 
   const isOpen = txn.status === 'unmatched' || txn.status === 'suggested';
+  const splitParts = (allocations ?? []).map(a => {
+    const inv = a.invoice_id ? data.invoices.find(i => i.id === a.invoice_id) : undefined;
+    const pi = a.purchase_invoice_id ? data.purchaseInvoices.find(p => p.id === a.purchase_invoice_id) : undefined;
+    return { id: a.id, label: inv ? inv.number || 'factuur' : pi ? pi.internal_number || pi.supplier_invoice_number || 'inkoopfactuur' : 'factuur', cents: a.amount_cents };
+  });
+  const splitRest = abs - splitParts.reduce((sum, p) => sum + p.cents, 0);
 
   return (
     <div className={`bank-tx bank-tx-${txn.status}`}>
@@ -238,6 +357,9 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmoun
           {isOpen && txn.match_confidence === 'own_transfer' && (
             <small className="bank-tx-hint">Overboeking tussen je eigen rekeningen — voorgesteld: kruisposten bankrekeningen. Boek beide kanten hierop; samen vallen ze tegen elkaar weg.</small>
           )}
+          {isOpen && suggestedSplit.length > 0 && (
+            <small className="bank-tx-hint">Eén {incoming ? 'betaling' : 'overboeking'} voor {suggestedSplit.length} {txn.match_confidence === 'purchase_invoices' ? 'inkoopfacturen' : 'facturen'}: de nummers staan in de omschrijving en samen is het precies dit bedrag. Voorgesteld: verdelen.</small>
+          )}
         </div>
         <div className={`bank-tx-amount ${incoming ? 'bk-pos' : 'bk-neg'}`}>{incoming ? '+ ' : '− '}{euroCents(abs)}</div>
       </div>
@@ -251,6 +373,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmoun
               ? <button className={mode === 'invoice' ? 'is-active' : ''} onClick={() => setMode('invoice')}>Verkoopfactuur</button>
               : <button className={mode === 'purchase' ? 'is-active' : ''} onClick={() => setMode('purchase')}>Inkoopfactuur</button>}
             <button className={mode === 'account' ? 'is-active' : ''} onClick={() => setMode('account')}>Grootboekrekening</button>
+            <button className={mode === 'split' ? 'is-active' : ''} onClick={startSplit}>Verdelen</button>
           </div>
 
           {mode === 'invoice' && (
@@ -292,15 +415,83 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmoun
             </>
           )}
 
-          <span className="bk-spacer" />
-          <Button onClick={ignore} disabled={!canWrite || busy} title="Negeren"><X size={14} /> Negeren</Button>
-          <Button variant="primary" onClick={book} disabled={!canWrite || busy}><Check size={14} /> {busy ? 'Boeken…' : 'Boeken'}</Button>
+          {mode !== 'split' && <span className="bk-spacer" />}
+          {mode !== 'split' && <Button onClick={ignore} disabled={!canWrite || busy} title="Negeren"><X size={14} /> Negeren</Button>}
+          {mode !== 'split' && <Button variant="primary" onClick={book} disabled={!canWrite || busy}><Check size={14} /> {busy ? 'Boeken…' : 'Boeken'}</Button>}
+
+          {mode === 'split' && (
+            <div className="bank-split">
+              {splitRows.map((row, i) => {
+                const rowError = split.rowErrors.get(i);
+                const showError = rowError && (row.targetId || row.amount.trim());
+                return (
+                  <div className="bank-split-row" key={row.key}>
+                    <div className="bank-split-kind"><Select value={row.kind} onChange={e => updateRow(i, { kind: e.target.value as SplitRowKind })} disabled={!canWrite}>
+                      <option value="invoice">Verkoopfactuur</option>
+                      <option value="purchase">Inkoopfactuur</option>
+                      <option value="account">Grootboekrekening</option>
+                    </Select></div>
+                    {row.kind === 'invoice' && (
+                      <div className="bank-split-target"><Select value={row.targetId} onChange={e => updateRow(i, { targetId: e.target.value })} disabled={!canWrite} searchable>
+                        <option value="">{splitInvoices.length ? '— kies factuur —' : incoming ? '— geen factuur met iets open —' : '— geen klant met tegoed —'}</option>
+                        {splitInvoices.map(inv => {
+                          const open = openAmounts?.invoices.get(inv.id);
+                          return <option key={inv.id} value={inv.id}>{inv.number} · {open !== undefined ? `${open < 0 ? 'tegoed' : 'open'} ${euroCents(Math.abs(open))}` : euro(inv.total_amount ?? 0)}{clientName(inv.client_id) ? ` · ${clientName(inv.client_id)}` : ''}</option>;
+                        })}
+                      </Select></div>
+                    )}
+                    {row.kind === 'purchase' && (
+                      <div className="bank-split-target"><Select value={row.targetId} onChange={e => updateRow(i, { targetId: e.target.value })} disabled={!canWrite} searchable>
+                        <option value="">{splitPurchases.length ? '— kies inkoopfactuur —' : incoming ? '— geen tegoed bij een leverancier —' : '— geen inkoopfactuur met iets open —'}</option>
+                        {splitPurchases.map(p => {
+                          const open = openAmounts?.purchases.get(p.id);
+                          return <option key={p.id} value={p.id}>{p.internal_number || p.supplier_invoice_number || '—'} · {open !== undefined ? `${open < 0 ? 'tegoed' : 'open'} ${euroCents(Math.abs(open))}` : euroCents(p.total_cents)}{supplierName(p.supplier_id) ? ` · ${supplierName(p.supplier_id)}` : ''}</option>;
+                        })}
+                      </Select></div>
+                    )}
+                    {row.kind === 'account' && (
+                      <>
+                        <div className="bank-split-target"><Select value={row.targetId} onChange={e => updateRow(i, { targetId: e.target.value })} disabled={!canWrite} searchable>
+                          <option value="">— grootboekrekening —</option>
+                          {splitAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                        </Select></div>
+                        <div className="bank-split-vat"><Select value={row.vatCode} onChange={e => updateRow(i, { vatCode: e.target.value })} disabled={!canWrite}>
+                          <option value="">Geen BTW</option>
+                          {data.vatCodes.map(v => <option key={v.id} value={v.code}>{v.label}</option>)}
+                        </Select></div>
+                      </>
+                    )}
+                    <Input className="form-input bank-split-amount" inputMode="decimal" placeholder="0,00" aria-label="Bedrag"
+                      value={row.amount} onChange={e => updateRow(i, { amount: e.target.value })} disabled={!canWrite} />
+                    <button type="button" className="bank-split-remove" onClick={() => removeRow(i)} disabled={!canWrite} aria-label="Regel weghalen" title="Regel weghalen"><Trash2 size={14} /></button>
+                    {showError && <small className="bank-split-error">{rowError}</small>}
+                  </div>
+                );
+              })}
+              <div className="bank-split-foot">
+                <Button onClick={addRow} disabled={!canWrite}><Plus size={14} /> Regel</Button>
+                <span className={`bank-split-left ${split.remainingCents === 0 ? 'bk-pos' : split.remainingCents < 0 ? 'bk-neg' : ''}`}>
+                  {split.remainingCents === 0 ? 'Precies verdeeld'
+                    : split.remainingCents > 0 ? `Nog te verdelen: ${euroCents(split.remainingCents)}`
+                    : `${euroCents(-split.remainingCents)} te veel verdeeld`}
+                </span>
+                <span className="bk-spacer" />
+                <Button onClick={ignore} disabled={!canWrite || busy} title="Negeren"><X size={14} /> Negeren</Button>
+                <Button variant="primary" onClick={book} disabled={!canWrite || busy || !split.ready}><Check size={14} /> {busy ? 'Boeken…' : 'Boeken'}</Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {txn.status === 'booked' && (
         <div className="bank-tx-actions">
           <span className="status-pill bk-status-booked">Geboekt</span>
+          {splitParts.length > 0 && (
+            <small className="bk-muted bank-split-done">
+              Verdeeld: {splitParts.map(p => `${p.label} ${euroCents(p.cents)}`).join(' · ')}{splitRest > 0 ? ` · grootboek ${euroCents(splitRest)}` : ''}
+            </small>
+          )}
           <span className="bk-spacer" />
           {canWrite && <Button onClick={unbook} disabled={busy}><RotateCcw size={13} /> {busy ? '…' : 'Terugdraaien'}</Button>}
         </div>

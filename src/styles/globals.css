@@ -3399,6 +3399,20 @@ body::before{
 .bank-tx-actions .form-input,.bank-tx-actions select{min-height:34px;max-width:280px}
 .bank-tx-error{margin:0}
 .bank-mode{flex-shrink:0}
+/* Verdelen: één regel per factuur of grootboekrekening, met wat er nog te verdelen is. */
+.bank-split{flex:1 1 100%;display:flex;flex-direction:column;gap:8px;min-width:0}
+.bank-split-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.bank-split-row .bank-split-kind{flex:0 0 170px}
+.bank-split-row .bank-split-target{flex:1 1 240px;min-width:0}
+.bank-split-row .bank-split-vat{flex:0 0 160px}
+.bank-split-row .select-control,.bank-split-row .select-trigger{width:100%;max-width:none}
+.bank-tx-actions .bank-split-row .bank-split-amount{flex:0 0 120px;max-width:120px;text-align:right;font-variant-numeric:tabular-nums}
+.bank-split-remove{flex:0 0 34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:9px;background:none;color:var(--muted);cursor:pointer}
+.bank-split-remove:hover:not(:disabled){color:var(--danger);border-color:var(--danger)}
+.bank-split-error{flex-basis:100%;color:var(--danger);font-weight:600;font-size:.8rem}
+.bank-split-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.bank-split-left{font-weight:600;font-variant-numeric:tabular-nums}
+.bank-split-done{white-space:normal;flex:1 1 200px;min-width:0}
 .bank-accounts{display:flex;flex-direction:column;gap:12px;margin-top:6px}
 .bank-account-card{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
 .bank-account-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -7398,6 +7412,15 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .bank-tx-actions .form-input,.bank-tx-actions select,
   .bank-tx-actions .select-trigger{min-height:44px;max-width:none}
   .bank-tx-actions{flex-wrap:wrap}
+  /* Verdelen op de telefoon: soort en bedrag naast elkaar, de factuur eronder over de hele breedte. */
+  .bank-split-row{padding-bottom:8px;border-bottom:1px dashed var(--border)}
+  .bank-split-row .bank-split-kind{flex:1 1 0;min-width:0}
+  .bank-split-row .bank-split-kind .select-trigger{min-width:0}
+  .bank-split-row .bank-split-target{flex:1 1 100%;order:3}
+  .bank-split-row .bank-split-vat{flex:1 1 100%;order:4}
+  .bank-split-error{order:5}
+  .bank-tx-actions .bank-split-row .bank-split-amount{flex:0 0 104px;max-width:104px}
+  .bank-split-remove{flex:0 0 44px;height:44px}
 }
 
 /* 36 ── Financiële zoekbalk ───────────────────────────────────────────────

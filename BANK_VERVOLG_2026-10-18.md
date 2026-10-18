@@ -5,7 +5,7 @@ Wat na blok 1 en 2 nog niet kan, in deze volgorde. Achtergrond:
 
 | # | Wat | Status |
 |---|---|---|
-| 1 | Eén overboeking verdelen over meerdere facturen | in uitvoering |
+| 1 | Eén overboeking verdelen over meerdere facturen | gebouwd, nog niet uitgerold (`CHANGELOG_BANK_VERDELEN_2026-10-18.md`) |
 | 2 | Mollie-uitbetalingen automatisch aansluiten | open |
 | 3 | Een koppeling verbreken | open |
 | 4 | De koppeling openzetten voor al je klanten | open |

@@ -2904,12 +2904,28 @@ export interface BankTransaction {
   match_confidence: string | null;
   matched_invoice_id: UUID | null;
   matched_purchase_invoice_id: UUID | null;
+  /** Verdeelvoorstel van de matcher (match_confidence 'invoices' / 'purchase_invoices'). */
+  suggested_allocations?: Array<{ invoice_id?: UUID; purchase_invoice_id?: UUID; amount_cents: number }> | null;
   journal_entry_id: UUID | null;
   booked_at: string | null;
   booked_by: UUID | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Welk deel van een geboekte, verdeelde banktransactie op welke (inkoop)factuur ging. */
+export interface BankTransactionAllocation {
+  id: UUID;
+  organization_id: UUID;
+  bank_transaction_id: UUID;
+  /** Het boekstuk; is dat tegengeboekt, dan telt dit deel niet meer. */
+  journal_entry_id: UUID;
+  invoice_id: UUID | null;
+  purchase_invoice_id: UUID | null;
+  amount_cents: number;
+  incoming: boolean;
+  created_at: string;
 }
 
 export interface BankRule extends OrgScopedRow {
