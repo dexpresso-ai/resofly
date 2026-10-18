@@ -13,7 +13,7 @@ import { parseBankFile } from '../lib/bankImport';
 import {
   bookBankTransaction, createBankRequisition, deleteRow, finalizeBankRequisition, importBankTransactions,
   insertRow, listBankInstitutions, matchBankTransactions, selectBankReconciliation, setBankTransactionStatus,
-  syncBankAccount, unbookBankTransaction, updateRow,
+  syncBankAccount, unbookBankTransaction, updateRow, type BankSyncResult,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -136,13 +136,17 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
   // Alleen documenten die in het grootboek staan zijn afletterbaar (fix 20260721):
   // zonder debitering van 1300/creditering van 1600 zou de bankboeking de
   // debiteuren-/crediteurenstand negatief maken — de server weigert die nu ook.
+  // Een betaalde factuur valt af: daar staat niets meer open (20261018). De
+  // huidige match blijft altijd zichtbaar, ook als die inmiddels betaald is.
   const openInvoices = useMemo(
-    () => data.invoices.filter(i => i.status !== 'cancelled' && i.status !== 'void' && i.journal_entry_id != null).slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
-    [data.invoices],
+    () => data.invoices.filter(i => i.status !== 'cancelled' && i.status !== 'void' && i.journal_entry_id != null
+      && (i.status !== 'paid' || i.id === txn.matched_invoice_id)).slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [data.invoices, txn.matched_invoice_id],
   );
   const openPurchases = useMemo(
-    () => data.purchaseInvoices.filter(p => p.status !== 'cancelled' && p.journal_entry_id != null).slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
-    [data.purchaseInvoices],
+    () => data.purchaseInvoices.filter(p => p.status !== 'cancelled' && p.journal_entry_id != null
+      && (p.payment_status !== 'paid' || p.id === txn.matched_purchase_invoice_id)).slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [data.purchaseInvoices, txn.matched_purchase_invoice_id],
   );
   const clientName = (id: string | null) => data.clients.find(c => c.id === id)?.name ?? '';
   const supplierName = (id: string | null) => data.suppliers.find(s => s.id === id)?.name ?? '';
@@ -224,7 +228,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
                 ))}
               </Select>
               {openInvoices.length === 0 && (
-                <small className="bank-tx-hint">Geen afletterbare facturen: alleen facturen die in het grootboek staan kun je afletteren. Gebruik eerst “Boek naar grootboek” op de factuur.</small>
+                <small className="bank-tx-hint">Geen afletterbare facturen: alleen geboekte facturen die nog niet betaald zijn kun je afletteren. Gebruik zo nodig eerst “Boek naar grootboek” op de factuur.</small>
               )}
             </>
           )}
@@ -237,7 +241,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
                 ))}
               </Select>
               {openPurchases.length === 0 && (
-                <small className="bank-tx-hint">Geen afletterbare inkoopfacturen: boek de inkoopfactuur eerst naar het grootboek.</small>
+                <small className="bank-tx-hint">Geen afletterbare inkoopfacturen: alleen geboekte inkoopfacturen die nog niet betaald zijn. Boek de inkoopfactuur zo nodig eerst naar het grootboek.</small>
               )}
             </>
           )}
@@ -288,14 +292,18 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
  * merk je dat pas bij de jaarrekening.
  */
 function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
+  // Een gekoppelde rekening krijgt bij elke synchronisatie het geboekte saldo van
+  // de bank zelf; een rekening die met afschriften wordt gevoed, het eindsaldo
+  // van het laatste afschrift.
+  const linked = rec.source !== 'import';
+  const balanceLabel = linked ? 'Saldo volgens de bank' : 'Saldo volgens afschrift';
   if (rec.statement_closing_cents === null) {
     return (
       <div className="bank-recon bank-recon-unknown">
         <span className="bk-muted">
-          Geen afschriftsaldo bekend — saldocontrole niet mogelijk.
-          {rec.source === 'import'
-            ? ' CSV bevat geen begin-/eindsaldo; gebruik een CAMT.053- of MT940-export.'
-            : ' De bankkoppeling levert geen saldo mee; lees met “Afschrift inlezen” eens per periode een CAMT.053-afschrift in — dan kan de aansluiting wél worden gecontroleerd.'}
+          {linked
+            ? 'Nog geen saldo van de bank bekend — saldocontrole nog niet mogelijk. Synchroniseer om het geboekte saldo op te halen; geeft je bank dat niet mee, lees dan eens per periode een CAMT.053-afschrift in met “Afschrift inlezen”.'
+            : 'Geen afschriftsaldo bekend — saldocontrole niet mogelijk. CSV bevat geen begin-/eindsaldo; gebruik een CAMT.053- of MT940-export.'}
         </span>
       </div>
     );
@@ -307,7 +315,7 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
     return (
       <div className="bank-recon bank-recon-unknown">
         <span className="bk-muted">
-          Saldo volgens afschrift {euroCents(rec.statement_closing_cents)}
+          {balanceLabel} {euroCents(rec.statement_closing_cents)}
           {rec.as_of ? ` per ${dateNL(rec.as_of)}` : ''}. Aansluiting niet te berekenen: meerdere
           bankrekeningen boeken op {rec.ledger_code}, dus die stand is de som van al die rekeningen.
           Geef elke bankrekening een eigen grootboekrekening om per rekening te kunnen aansluiten.
@@ -326,7 +334,7 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
         {rec.as_of && <span className="bk-muted">per {dateNL(rec.as_of)}</span>}
       </div>
       <dl className="bank-recon-rows">
-        <div><dt>Saldo volgens afschrift</dt><dd>{euroCents(rec.statement_closing_cents)}</dd></div>
+        <div><dt>{balanceLabel}</dt><dd>{euroCents(rec.statement_closing_cents)}</dd></div>
         <div><dt>Grootboek {rec.ledger_code}</dt><dd>{euroCents(rec.ledger_balance_cents)}</dd></div>
         {rec.unbooked_count > 0 && (
           <div><dt>Nog te boeken ({rec.unbooked_count})</dt><dd>{euroCents(rec.unbooked_sum_cents)}</dd></div>
@@ -359,6 +367,14 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
       )}
     </div>
   );
+}
+
+/** Wat een synchronisatie opleverde, in één zin of drie. */
+function syncSummary(r: BankSyncResult | undefined): string {
+  const parts = [`${r?.inserted ?? 0} nieuwe, ${r?.skipped ?? 0} al bekende transacties.`];
+  if (r?.pending) parts.push(`${r.pending} nog in behandeling bij de bank — die komen vanzelf binnen zodra ze geboekt zijn.`);
+  if (r?.balance) parts.push(`Saldo volgens de bank: ${euroCents(r.balance.cents)} per ${dateNL(r.balance.date)}.`);
+  return parts.join(' ');
 }
 
 function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
@@ -400,7 +416,8 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
     setFinalizing(true); setBanner(null);
     finalizeBankRequisition(organizationId, { code, state })
       .then(res => {
-        if (res.status === 'linked') setBanner({ kind: 'ok', text: `Bank gekoppeld: ${res.linked} rekening(en), ${res.imported} transacties opgehaald.` });
+        if (res.alreadyLinked) setBanner({ kind: 'ok', text: 'Deze koppeling was al afgerond.' });
+        else if (res.status === 'linked') setBanner({ kind: 'ok', text: `Bank gekoppeld: ${res.linked} rekening(en), ${res.imported} transacties opgehaald.` });
         else if (res.status === 'expired') setBanner({ kind: 'err', text: 'De toestemming is verlopen of geweigerd. Probeer de koppeling opnieuw.' });
         else setBanner({ kind: 'err', text: 'De koppeling is nog niet voltooid. Rond de toestemming bij je bank af en probeer opnieuw.' });
         onChanged();
@@ -417,7 +434,7 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
       const r = res.results[0];
       if (res.needsReconsent) setBanner({ kind: 'err', text: 'De banktoestemming is verlopen. Koppel de bank opnieuw via "Koppel bank".' });
       else if (r?.error) setBanner({ kind: 'err', text: `Synchroniseren mislukt: ${r.error}` });
-      else setBanner({ kind: 'ok', text: `${r?.inserted ?? 0} nieuwe, ${r?.skipped ?? 0} al bekende transacties.` });
+      else setBanner({ kind: 'ok', text: syncSummary(r) });
       onChanged();
     } catch (e) { setBanner({ kind: 'err', text: e instanceof Error ? e.message : 'Synchroniseren mislukt' }); }
     finally { setSyncingId(null); }

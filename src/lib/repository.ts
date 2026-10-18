@@ -1943,12 +1943,23 @@ export async function createBankRequisition(
  * rekeningen en synchroniseert. `state` is onze referentie (de bank geeft hem samen
  * met `code` terug op de redirect); daaruit leidt de server de organisatie af.
  */
-export async function finalizeBankRequisition(organizationId: UUID, input: { code: string; state: string }): Promise<{ status: string; linked: number; imported: number }> {
+export async function finalizeBankRequisition(organizationId: UUID, input: { code: string; state: string }): Promise<{ status: string; linked: number; imported: number; alreadyLinked?: boolean }> {
   return invokeBankSync('finalizeRequisition', organizationId, { code: input.code, state: input.state });
 }
 
-/** Haalt nieuwe transacties op voor één of alle gekoppelde rekeningen. */
-export async function syncBankAccount(organizationId: UUID, bankAccountId?: UUID): Promise<{ results: Array<{ bankAccountId: string; inserted: number; skipped: number; error?: string }>; needsReconsent: boolean }> {
+export interface BankSyncResult {
+  bankAccountId: string;
+  inserted: number;
+  skipped: number;
+  /** Nog niet geboekt bij de bank (pending): niet ingelezen, komt later vanzelf. */
+  pending?: number;
+  /** Het geboekte saldo dat de bank opgaf, vastgelegd voor de saldo-aansluiting. */
+  balance?: { cents: number; date: string } | null;
+  error?: string;
+}
+
+/** Haalt nieuwe transacties en het geboekte saldo op voor één of alle gekoppelde rekeningen. */
+export async function syncBankAccount(organizationId: UUID, bankAccountId?: UUID): Promise<{ results: BankSyncResult[]; needsReconsent: boolean }> {
   return invokeBankSync('sync', organizationId, { bankAccountId: bankAccountId ?? null });
 }
 

@@ -54,9 +54,14 @@ flow kunt doorlopen met testdata (geen echte bank nodig). Voor de mock-bank werk
 - Terug in de app (`?code=&state=`) → `finalizeRequisition` wisselt de code in (`/sessions`),
   koppelt de rekening(en) aan grootboek 1100 en haalt meteen de eerste transacties op.
 - **Synchroniseer** → `sync` haalt nieuwe transacties op vanaf de laatste sync (met
-  paginering via `continuation_key`).
+  paginering via `continuation_key`). Alleen geboekte transacties komen binnen; pending
+  (`PDNG`) komt later vanzelf als geboekt terug.
+- Daarna haalt `sync` het **geboekte saldo** op (`/accounts/{uid}/balances`) en legt het vast
+  met `record_bank_balance`, zodat de saldo-aansluiting ook voor gekoppelde rekeningen werkt
+  (sinds 2026-10-18; migratie `20261018000000` moet vóór de functie zijn toegepast).
 - Alle transacties lopen via dezelfde `import_bank_transactions` RPC → dezelfde match/boek-laag
-  als de afschrift-import (fase 1).
+  als de afschrift-import (fase 1). Afletteren tegen een factuur zet die op betaald zodra het
+  openstaande bedrag is voldaan.
 - Toestemming verloopt na ~90 dagen → de UI toont een herauthenticatie-melding.
 
 ## Belangrijk voor "alle klanten" (productie)

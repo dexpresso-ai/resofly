@@ -1,5 +1,9 @@
 # Onderzoek — Boekingen via Enable Banking (2026-10-18)
 
+> **Blok 1 en 2.1 gebouwd op 2026-10-18** (nog niet uitgerold): zie
+> `CHANGELOG_BANK_AFLETTEREN_BETAALD_SALDO_2026-10-18.md`. De rest van het bouwplan (§6)
+> staat nog open.
+
 Vraag: *hoe kunnen we Enable Banking gebruiken om boekingen te realiseren? Er stond al iets in
 de code — kunnen we daarop verder bouwen, en wat moet er nog gebeuren?*
 

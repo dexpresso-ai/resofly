@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { assertModuleAccess } from '../_shared/edgeAuth.ts';
+import { pickBookedBalance, prepareEbTransactions } from '../_shared/enableBanking.ts';
 
 // ============================================================
 // bank-sync — directe PSD2-bankkoppeling via Enable Banking (EU/Fins AISP).
@@ -9,7 +10,8 @@ import { assertModuleAccess } from '../_shared/edgeAuth.ts';
 //  - listInstitutions   : banken (ASPSP's) voor de bankkiezer (lezen, elk lid)
 //  - createRequisition  : start consent; geeft de redirect-link terug (schrijfrol)
 //  - finalizeRequisition: na de redirect (?code=&state=); koppelt rekeningen + 1e sync
-//  - sync               : nieuwe transacties ophalen voor 1/alle rekeningen (schrijfrol)
+//  - sync               : nieuwe transacties + het geboekte saldo ophalen voor
+//                         1/alle rekeningen (schrijfrol)
 //
 // Auth richting Enable Banking: een JWT (RS256), gesigneerd met de private sleutel
 // (ENABLEBANKING_PRIVATE_KEY, PKCS#8 PEM) en kid = ENABLEBANKING_APP_ID. App-breed
@@ -186,11 +188,19 @@ async function finalizeRequisition(userId: string, code: string, state: string) 
   // module moet ook echt openstaan voor dit teamlid.
   await assertModuleAccess(supabaseAdmin, userId, organizationId, 'finance', 'write');
 
+  // Dezelfde terugkeer-URL nog eens geopend: de code is al ingewisseld en een
+  // tweede poging faalt bij de bank. Niets opnieuw doen, en vooral de
+  // werkende koppeling niet op 'error' zetten.
+  if (reqRow.status === 'linked') {
+    return { status: 'linked', linked: 0, imported: 0, alreadyLinked: true };
+  }
+
   let session: any;
   try {
     session = await eb('/sessions', { method: 'POST', body: JSON.stringify({ code }) });
   } catch (e) {
-    await supabaseAdmin.from('bank_requisitions').update({ status: 'error', error: describeError(e) }).eq('id', reqRow.id);
+    await supabaseAdmin.from('bank_requisitions').update({ status: 'error', error: describeError(e) })
+      .eq('id', reqRow.id).in('status', ['created', 'error']);
     throw e;
   }
 
@@ -276,7 +286,10 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
   if (error) throw new HttpError(`Bankrekeningen ophalen mislukt: ${error.message}`, 500);
   if (!accounts || accounts.length === 0) return { results: [], needsReconsent: false };
 
-  const results: Array<{ bankAccountId: string; inserted: number; skipped: number; error?: string }> = [];
+  const results: Array<{
+    bankAccountId: string; inserted: number; skipped: number;
+    pending?: number; balance?: { cents: number; date: string } | null; error?: string;
+  }> = [];
   let needsReconsent = false;
 
   for (const acc of accounts) {
@@ -298,7 +311,8 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
         guard += 1;
       } while (continuationKey && guard < 25);
 
-      const txns = raw.map(mapEbTransaction).filter((t) => t.booking_date && t.amount_cents !== 0);
+      // Alleen geboekte transacties; pending komt later als geboekt terug.
+      const { transactions: txns, pending } = prepareEbTransactions(raw);
       const dates = txns.map((t) => t.booking_date).sort();
       const statement = {
         format: 'enablebanking', file_name: null, file_hash: null,
@@ -313,8 +327,9 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
         if (impErr) throw new Error(impErr.message);
         inserted = (imp as any)?.inserted ?? 0; skipped = (imp as any)?.skipped ?? 0;
       }
+      const balance = await recordBookedBalance(organizationId, acc);
       await supabaseAdmin.from('bank_accounts').update({ last_synced_at: new Date().toISOString() }).eq('id', acc.id);
-      results.push({ bankAccountId: acc.id, inserted, skipped });
+      results.push({ bankAccountId: acc.id, inserted, skipped, pending, balance });
     } catch (e) {
       const ebStatus = (e as any)?.ebStatus;
       if (ebStatus === 401 || ebStatus === 403) {
@@ -327,31 +342,33 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
   return { results, needsReconsent };
 }
 
-// ── Mapping + helpers ──────────────────────────────────────────────────────
-
-function mapEbTransaction(tx: any) {
-  const magnitude = Math.abs(Math.round((parseFloat(tx?.transaction_amount?.amount ?? '0') || 0) * 100));
-  const indicator = String(tx?.credit_debit_indicator || '').toUpperCase();
-  const cents = indicator === 'DBIT' ? -magnitude : magnitude;
-  const id = tx?.entry_reference || tx?.transaction_id || null;
-  const bookingDate = (tx?.booking_date || tx?.value_date || '').slice(0, 10) || null;
-  const valueDate = (tx?.value_date || '').slice(0, 10) || null;
-  const incoming = cents > 0;
-  const counterpartyName = (incoming ? tx?.debtor?.name : tx?.creditor?.name) || null;
-  const counterpartyIban = (incoming ? tx?.debtor_account?.iban : tx?.creditor_account?.iban) || null;
-  const remittance = Array.isArray(tx?.remittance_information)
-    ? tx.remittance_information.filter(Boolean).join(' ').trim()
-    : (tx?.remittance_information || '');
-  // Géén dedup_key meer: import_bank_transactions leidt die server-side af uit de
-  // inhoud. Voorheen maakte deze functie `eb:`-sleutels terwijl de afschrift-import
-  // `tx:`/`h:` gebruikte — dezelfde transactie via beide wegen gaf dus twee rijen.
-  return {
-    booking_date: bookingDate, value_date: valueDate, amount_cents: cents,
-    currency: tx?.transaction_amount?.currency || 'EUR', counterparty_name: counterpartyName,
-    counterparty_iban: counterpartyIban, description: remittance || null, structured_reference: null,
-    end_to_end_id: null, bank_tx_id: id,
-  };
+/**
+ * Het geboekte saldo van de bank vastleggen als afschriftsaldo, zodat de
+ * saldo-aansluiting ook voor een gekoppelde rekening werkt (die had nooit een
+ * eindsaldo; alleen CAMT/MT940-imports leverden er een). Optioneel: levert de
+ * bank geen geboekt saldo, of faalt de aanroep, dan blijft de sync geslaagd.
+ */
+async function recordBookedBalance(organizationId: string, acc: any): Promise<{ cents: number; date: string } | null> {
+  try {
+    const data = await eb(`/accounts/${acc.external_account_id}/balances`);
+    // Boekdatums van NL-banken zijn lokale datums; "vandaag" dus ook in NL-tijd.
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+    const balance = pickBookedBalance(data?.balances, acc.currency || 'EUR', today);
+    if (!balance) return null;
+    const { error } = await supabaseAdmin.rpc('record_bank_balance', {
+      p_organization_id: organizationId, p_bank_account_id: acc.id,
+      p_balance_date: balance.date, p_balance_cents: balance.amount_cents,
+      p_source: 'enablebanking', p_label: `Saldo volgens de bank (${balance.type})`,
+    });
+    if (error) throw new Error(error.message);
+    return { cents: balance.amount_cents, date: balance.date };
+  } catch (e) {
+    console.warn('bank-sync: saldo niet vastgelegd', acc.id, describeError(e));
+    return null;
+  }
 }
+
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 async function defaultBankLedgerAccount(organizationId: string): Promise<string> {
   const { data: bySubtype } = await supabaseAdmin.from('ledger_accounts').select('id')

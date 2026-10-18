@@ -1065,7 +1065,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     module: 'finance',
     kind: 'write',
     description:
-      'Haalt nieuwe transacties op bij een via PSD2 gekoppelde bank en zet ze in de af-te-letteren-lijst. Al bekende transacties worden overgeslagen. ' +
+      'Haalt nieuwe transacties op bij een via PSD2 gekoppelde bank en zet ze in de af-te-letteren-lijst, en legt het geboekte saldo van de bank vast voor de saldo-aansluiting. Al bekende transacties worden overgeslagen; transacties die de bank nog niet heeft geboekt (pending) komen later vanzelf. ' +
       'Dit werkt alleen bij een gekoppelde rekening; een rekening die met afschriften wordt gevoed heeft geen synchronisatie. Is de banktoestemming verlopen, dan meldt de synchronisatie dat en moet de bank opnieuw worden gekoppeld — dat kan alleen handmatig. ' +
       'Let op: staan er bankregels met "automatisch boeken" aan, dan kunnen binnengekomen transacties meteen worden geboekt.',
     keywords: ['synchroniseren', 'bank ophalen', 'psd2', 'transacties binnenhalen', 'sync'],
@@ -1150,7 +1150,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     description:
       'Letter een banktransactie af en boek hem in het grootboek. Twee manieren: `purchase` tegen een geboekte inkoopfactuur, of `account` rechtstreeks op een grootboekrekening met optionele btw-code (bankkosten, btw-afdracht aan de Belastingdienst, rente). ' +
       'Voor een BINNENGEKOMEN betaling op een verkoopfactuur gebruik je `invoice.reconcile_bank_transaction` — niet deze handeling. ' +
-      'Afletteren tegen een inkoopfactuur kan alleen als die factuur zélf al in het grootboek staat. Boek je op "Te betalen omzetbelasting" en herkent de app de Belastingdienst, dan wordt de bijbehorende btw-aangifte automatisch op betaald gezet. ' +
+      'Afletteren tegen een inkoopfactuur kan alleen als die factuur zélf al in het grootboek staat en nog niet volledig betaald is; de betaalstatus van de inkoopfactuur (deels betaald / betaald) volgt daarna vanzelf. Boek je op "Te betalen omzetbelasting" en herkent de app de Belastingdienst, dan wordt de bijbehorende btw-aangifte automatisch op betaald gezet. ' +
       'Zoek de transactie met `list_bank_transactions`. DIT IS EEN DEFINITIEVE GROOTBOEKBOEKING; terugdraaien kan alleen met `bank_transaction.unbook`, dat een tegenboeking maakt.',
     keywords: ['afletteren', 'banktransactie boeken', 'betaling koppelen', 'inkoopfactuur betaald', 'bankkosten', 'grootboekrekening', 'btw-afdracht'],
     input: {

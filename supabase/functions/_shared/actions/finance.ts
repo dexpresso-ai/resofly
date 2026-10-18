@@ -848,8 +848,8 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Koppelt een BINNENGEKOMEN banktransactie aan een verkoopfactuur en registreert daarmee de betaling: er komt een journaalpost (bank tegen debiteuren) en de factuur gaat op betaald. ' +
-      'De factuur moet al in het grootboek staan (`invoice.post_to_ledger`), anders zou de debiteurenstand negatief worden — de database weigert dat ook. Zoek de transactie met `list_bank_transactions` en de factuur met `list_invoices`; let op dat het bedrag klopt.',
+      'Koppelt een BINNENGEKOMEN banktransactie aan een verkoopfactuur en registreert daarmee de betaling: er komt een journaalpost (bank tegen debiteuren), en is het openstaande bedrag daarmee voldaan, dan gaat de factuur op betaald en stoppen herinneringen en aanmaningen. Een deelbetaling laat de factuur open staan. ' +
+      'De factuur moet al in het grootboek staan (`invoice.post_to_ledger`), anders zou de debiteurenstand negatief worden — de database weigert dat ook. Een factuur die al volledig betaald is (ook via Mollie) of gecrediteerd, is niet meer af te letteren. Zoek de transactie met `list_bank_transactions` en de factuur met `list_invoices`; let op dat het bedrag klopt.',
     keywords: ['afletteren', 'bank', 'banktransactie', 'betaling', 'matchen', 'koppelen', 'bijschrijving', 'reconciliatie', 'betaald'],
     input: {
       transaction_id: { type: 'string', description: 'Id van de banktransactie (exact, uit list_bank_transactions).' },
@@ -886,7 +886,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
           diff === 0 ? 'bedrag klopt exact' : `${diff > 0 ? 'te veel' : 'te weinig'}: ${euroCents(Math.abs(diff))}`,
         ]),
         kind: 'money',
-        warning: 'Afletteren maakt een journaalpost en zet de factuur op betaald. Terugdraaien kan alleen met een tegenboeking op de Bankpagina.',
+        warning: 'Afletteren maakt een journaalpost; is het openstaande bedrag daarmee voldaan, dan gaat de factuur op betaald. Terugdraaien kan alleen met een tegenboeking op de Bankpagina, en zet de factuur dan ook weer open.',
         payload: { transaction_id: transactionId, invoice_id: invoiceId, number: invoice.number, amount_cents: Number(txn.amount_cents) },
       };
     },

@@ -1140,6 +1140,8 @@ export interface Invoice extends OrgScopedRow {
   last_pdf_size_bytes?: number | null;
   last_pdf_sha256?: string | null;
   journal_entry_id?: UUID | null;
+  /** De banktransactie die de factuur op betaald zette (bij afletteren); null als dat handmatig of via Mollie ging. */
+  paid_bank_transaction_id?: UUID | null;
   created_at: string;
   updated_at: string;
 }
@@ -2583,8 +2585,10 @@ export interface PurchaseInvoice extends OrgScopedRow {
   total_cents: number;
   currency: string;
   status: PurchaseInvoiceStatus;
+  /** Afgeleid uit het grootboek zodra er een banktransactie tegen is afgeletterd. */
   payment_status: PurchaseInvoicePaymentStatus;
   paid_at: string | null;
+  paid_bank_transaction_id?: UUID | null;
   project_id: UUID | null;
   journal_entry_id: UUID | null;
   notes: string | null;
