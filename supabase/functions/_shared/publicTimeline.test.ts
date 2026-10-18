@@ -39,3 +39,27 @@ test('onbekende of nieuwe event-types worden niet getoond', () => {
     { event_type: 'toString', title: 'x', created_at: '2026-09-01T00:00:00Z' },
   ]), []);
 });
+
+test('factuur: een teruggedraaide bankbetaling neemt zijn "Betaald" mee', () => {
+  // Zoals invoice-public ze aanlevert: nieuwste eerst.
+  const events = [
+    { event_type: 'payment_paid', title: 'Factuur betaald', created_at: '2026-10-12T09:00:00Z' },
+    { event_type: 'payment_unbooked', title: 'Bankbetaling teruggedraaid', created_at: '2026-10-11T09:00:00Z' },
+    { event_type: 'payment_paid', title: 'Factuur betaald', created_at: '2026-10-10T09:00:00Z' },
+    { event_type: 'sent_to_client', title: 'Verstuurd', created_at: '2026-10-01T09:00:00Z' },
+  ];
+  assert.deepEqual(toPublicTimeline('invoice', events).map((e) => [e.event_type, e.created_at]), [
+    ['payment_paid', '2026-10-12T09:00:00Z'],
+    ['sent_to_client', '2026-10-01T09:00:00Z'],
+  ]);
+  // Betaald en teruggedraaid op hetzelfde tijdstip (één transactie): weg.
+  assert.deepEqual(toPublicTimeline('invoice', [
+    { event_type: 'payment_unbooked', created_at: '2026-10-10T09:00:00Z' },
+    { event_type: 'payment_paid', created_at: '2026-10-10T09:00:00Z' },
+  ]), []);
+  // Een terugdraaiing zonder eerdere betaling laat de rest staan.
+  assert.equal(toPublicTimeline('invoice', [
+    { event_type: 'payment_unbooked', created_at: '2026-10-09T09:00:00Z' },
+    { event_type: 'payment_paid', created_at: '2026-10-10T09:00:00Z' },
+  ]).length, 1);
+});

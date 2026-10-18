@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  decimalToCents, isBookedEbTransaction, mapEbTransaction, pickBookedBalance, prepareEbTransactions,
+  amsterdamDate, decimalToCents, ebTransactionState, isBookedEbTransaction, mapEbTransaction, pickBookedBalance,
+  prepareEbTransactions,
 } from './enableBanking.ts';
 
 /**
@@ -85,18 +86,39 @@ test('alleen geboekte transacties komen binnen', () => {
   }
 });
 
-test('een batch: pending en onbruikbare regels geteld, niet ingelezen', () => {
+test('status: wat komt binnen, wat komt nog, wat nooit', () => {
+  assert.equal(ebTransactionState(tx()), 'booked');
+  for (const status of ['PDNG', 'pdng', 'SCHD', 'HOLD']) assert.equal(ebTransactionState(tx({ status })), 'pending', status);
+  // Geweigerd of geannuleerd: daar ging geen geld over, en het komt ook niet meer.
+  for (const status of ['RJCT', 'CNCL']) assert.equal(ebTransactionState(tx({ status })), 'dropped', status);
+  // OTHR of iets nieuws: niet raden of het geboekt is.
+  for (const status of ['OTHR', 'XYZ']) assert.equal(ebTransactionState(tx({ status })), 'unknown', status);
+});
+
+test('een batch: pending, onbekende status en onbruikbare regels geteld, niet ingelezen', () => {
   const out = prepareEbTransactions([
     tx(),
     tx({ status: 'PDNG', booking_date: null }),
     tx({ status: 'PDNG' }),
+    tx({ status: 'RJCT' }),
+    tx({ status: 'CNCL' }),
+    tx({ status: 'OTHR' }),
     tx({ transaction_amount: { amount: '0', currency: 'EUR' } }),
     tx({ credit_debit_indicator: 'DBIT', entry_reference: 'ref-2' }),
   ]);
   assert.equal(out.transactions.length, 2);
-  assert.equal(out.pending, 2);
+  assert.equal(out.pending, 2, 'geweigerd/geannuleerd telt niet als "komt nog"');
+  assert.equal(out.unknownStatus, 1);
   assert.equal(out.unusable, 1);
-  assert.deepEqual(prepareEbTransactions(undefined), { transactions: [], pending: 0, unusable: 0 });
+  assert.deepEqual(prepareEbTransactions(undefined), { transactions: [], pending: 0, unknownStatus: 0, unusable: 0 });
+});
+
+test('dag in Nederland van een UTC-tijdstip', () => {
+  assert.equal(amsterdamDate('2026-10-15T23:30:00Z'), '2026-10-16', 'zomertijd: UTC+2');
+  assert.equal(amsterdamDate('2026-12-31T23:30:00Z'), '2027-01-01', 'wintertijd: UTC+1');
+  assert.equal(amsterdamDate('2026-10-15T12:00:00+02:00'), '2026-10-15');
+  assert.equal(amsterdamDate('2026-10-15'), '2026-10-15');
+  for (const bad of [null, undefined, '', 'gisteren']) assert.equal(amsterdamDate(bad), null, String(bad));
 });
 
 const bal = (balance_type: string, amount: string, extra: Record<string, unknown> = {}) =>
@@ -127,6 +149,8 @@ test('saldo: datum ontbreekt', () => {
   assert.equal(pickBookedBalance([bal('CLBD', '100.00')], 'EUR', '2026-10-17'), null);
   // Een tussensaldo zonder datum geldt nu: laatste wijziging, anders vandaag.
   assert.equal(pickBookedBalance([bal('ITBD', '100.00', { last_change_date_time: '2026-10-15T12:00:00Z' })], 'EUR', '2026-10-17')?.date, '2026-10-15');
+  // Vlak voor middernacht UTC is het in Nederland al de volgende dag.
+  assert.equal(pickBookedBalance([bal('ITBD', '100.00', { last_change_date_time: '2026-10-15T22:45:00Z' })], 'EUR', '2026-10-17')?.date, '2026-10-16');
   assert.equal(pickBookedBalance([bal('ITBD', '100.00')], 'EUR', '2026-10-17')?.date, '2026-10-17');
 });
 

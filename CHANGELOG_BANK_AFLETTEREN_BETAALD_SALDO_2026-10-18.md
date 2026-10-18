@@ -7,7 +7,8 @@ overboeking werd betaald bleef open staan, Mollie-betalingen telden niet mee als
 pending-transacties kwamen binnen als echte, en een gekoppelde rekening had geen saldo om
 op aan te sluiten. Bron: `ENABLEBANKING_BOEKINGEN_ONDERZOEK_2026-10-18.md` §6, blok 1 + 2.1.
 
-Migratie: `supabase/migrations/20261018000000_bank_afletteren_betaald_saldo.sql`.
+Migratie: `supabase/migrations/20261018000000_bank_afletteren_betaald_saldo.sql` (na een
+tegenlezing aangevuld, zie "Na de review"; nog nergens uitgerold).
 
 ## 1.1 — Afletteren zet de factuur op betaald
 `book_bank_transaction` werkte alleen de banktransactie bij. De factuur bleef `sent` of
@@ -60,8 +61,11 @@ Dezelfde functie wordt nu gebruikt door:
 Enable Banking levert ook nog niet geboekte transacties mee (`status: "PDNG"`). Die
 hebben vaak nog geen boekdatum en later een andere omschrijving, dus de geboekte versie gaf
 op inhoud een tweede rij — twee keer boekbaar. Nu komt alleen binnen wat de status `BOOK`
-heeft (of geen status, zoals sommige banken doen). Het aantal overgeslagen pending-posten
-staat in de syncmelding.
+heeft (of geen status, zoals sommige banken doen). Wat later nog geboekt binnenkomt
+(`PDNG`, `SCHD`, `HOLD`) staat als "in behandeling" in de syncmelding; geweigerd of
+geannuleerd (`RJCT`, `CNCL`) telt nergens mee, daar ging geen geld over. Een status die we
+niet kennen (`OTHR` of iets nieuws) komt niet binnen maar wordt wel gemeld, zodat een bank
+die geboekte posten zo noemt niet stil wegvalt.
 
 ## 1.4 — Teken zonder indicator
 Zonder `credit_debit_indicator` werd elk bedrag een ontvangst. Nu volgt het teken dan het
@@ -83,7 +87,9 @@ in te lezen.
 
 Nu haalt `bank-sync` bij elke synchronisatie `GET /accounts/{uid}/balances` op en kiest een
 **geboekt** saldo: het eindsaldo (`CLBD`/`PRCD`) of tussensaldo (`ITBD`) met zijn
-peildatum, of een beginsaldo (`OPBD`) als eindsaldo van de dag ervoor. Beschikbare en
+peildatum, of een beginsaldo (`OPBD`) als eindsaldo van de dag ervoor. Heeft een
+tussensaldo geen peildatum, dan telt de dag in Nederland van de laatste wijziging (de bank
+geeft UTC; vlak voor middernacht is dat anders de vorige dag). Beschikbare en
 verwachte saldi (`CLAV`/`ITAV`/`XPCD`) tellen niet: die nemen de kredietlimiet of de
 pending-posten mee en sluiten dus nooit aan op geboekte transacties. Het saldo wordt
 vastgelegd met de nieuwe RPC **`record_bank_balance`**: één rij per rekening per peildatum,
@@ -97,9 +103,58 @@ Let op: delen meerdere bankrekeningen dezelfde grootboekrekening (op staging sta
 organisatie vier op 1100), dan kan het paneel ook met saldo niet per rekening aansluiten
 en legt het uit waarom. Een eigen grootboekrekening per gekoppelde rekening is blok 2.4.
 
+## Na de review
+Een tegenlezer heeft de eerste versie aangevallen (met een eigen kopie van de database en
+twee gelijktijdige sessies). Wat dat opleverde, en wat er nu anders is:
+
+1. **De matcher kon een net geboekte transactie overschrijven.** Liep "Opnieuw matchen" of
+   een sync terwijl iemand boekte, dan zette de matcher de rij terug op `suggested` — met
+   boekstuk en al. De factuur stond dan op betaald met € 100 open, en terugdraaien én
+   opnieuw boeken werden allebei geweigerd. Nu vergrendelt de matcher elke rij en slaat hij
+   een rij over die intussen is geboekt of die iemand op dat moment boekt.
+2. **De afletterkeuze verborg facturen die nog openstonden.** Een factuur die met de hand op
+   betaald is gezet (dat boekt niets), staat in het grootboek nog volledig open — maar was
+   niet meer te kiezen. De keuze kijkt nu naar het openstaande bedrag uit het grootboek
+   (dezelfde berekening als de boeking zelf), niet naar de status, en toont bij een
+   deelbetaling wat er nog openstaat. Lukt het ophalen niet, dan staan alle geboekte
+   facturen erin, zoals vroeger.
+3. **De volgorde van creditnota en betaling maakte uit.** Eerst € 30 per bank en dan € 70
+   gecrediteerd liet de factuur op `overdue` staan — herinneringen en aanmaningen liepen
+   door — terwijl andersom wel op betaald ging. Nu geldt in beide volgordes dezelfde regel:
+   niets meer open én er is echt betaald. Een creditnota boeken werkt de status ook bij.
+   Alleen gecrediteerd blijft onbetaald.
+4. **De bankkoppeling op de factuur** (`paid_bank_transaction_id`) kon door de client
+   worden gezet, ook naar een transactie van een andere organisatie, en bleef staan als
+   iemand de status met de hand wijzigde — waarna terugdraaien die handmatige status
+   overschreef. Nu zet alleen het afletteren hem, altijd binnen de eigen organisatie; wie de
+   status met de hand wijzigt, neemt het over van de bank.
+5. **Terugbetalingen en terugboekingen via Mollie stonden niet in het grootboek.** Zodra
+   "betaald" de Mollie-betalingen meetelt, telt dat mee: een teruggeboekte betaling gold als
+   voldaan (een latere overboeking van de klant werd geweigerd), en een terugbetaling met
+   creditnota liet een tegoed van de klant zien. Beide worden nu geboekt als 1300 aan 1102
+   (het spiegelbeeld van de betaling), automatisch bij de Mollie-melding; een teruggedraaide
+   terugboeking wordt tegengeboekt. Alleen als de betaling zelf in het grootboek staat.
+6. **Betaald via de bank liet minder sporen na dan via Mollie.** Nu ook een regel in de
+   tijdlijn (de klant ziet "Betaald"), een auditregel, een versie en de vergrendeling. Wordt
+   de bankbetaling teruggedraaid, dan komt er een interne tijdlijnregel bij en verdwijnt
+   "Betaald" weer uit de tijdlijn die de klant ziet.
+7. **De eenmalige bijwerking bij de migratie** stuurde voor elke oude factuur de push
+   "Factuur betaald" en de webhook `invoice.paid`. Die staan tijdens het bijwerken nu uit;
+   tijdlijn en audit krijgen hun regel wel.
+8. **Enable Banking**: de statussen en de saldodatum zoals bij 1.3 en 2.1 hierboven.
+9. **Vergrendeling**: terugdraaien vergrendelt de factuur vóór de tegenboeking, en de
+   statusfuncties lezen de factuur met een lock. De tegenboeking krijgt de datum van
+   vandaag; viel die in een ander jaar dan de boeking, dan hield de boekstuk-lock (per jaar)
+   die twee niet uit elkaar. Een creditnota boeken vergrendelt de factuur nu ook vóór het
+   boekstuk, in dezelfde volgorde als een bankboeking.
+
+En de matcher stelt geen factuur meer voor als de ontvangst groter is dan wat er openstaat:
+die boeking mislukte altijd. Eén overboeking voor meerdere facturen vraagt om splitsen
+(blok 3).
+
 ## Front-end
-- `src/features/Bank.tsx`: de afletterkeuze biedt geen betaalde facturen meer aan (de
-  server weigert die nu; de huidige match blijft wel zichtbaar); het aansluitpaneel en de
+- `src/features/Bank.tsx`: de afletterkeuze volgt het openstaande bedrag uit het grootboek
+  (zie hierboven; de huidige match blijft altijd zichtbaar); het aansluitpaneel en de
   syncmelding zoals hierboven; "Deze koppeling was al afgerond."
 - `src/types.ts` (`paid_bank_transaction_id`), `src/lib/repository.ts` (`BankSyncResult`).
 - Gerrie: de teksten van `invoice.reconcile_bank_transaction`, `bank_transaction.book` en
@@ -128,9 +183,25 @@ en legt het uit waarom. Een eigen grootboekrekening per gekoppelde rekening is b
   grootboek-, bank- en factuurdata), op desktop en telefoon: betaalde facturen niet in de
   keuze, de huidige match wel, aansluitpaneel met "Saldo volgens de bank", syncmelding met
   saldo en pending, geen JS-fouten, geen horizontale overloop.
-- `npm test`: 821/821 groen, waarvan 14 nieuw voor `enableBanking.ts` (incl. een controle
-  dat `bank-sync` ze gebruikt); `npm run typecheck` ✓; `npm run build` ✓; `bank-sync` los
-  gecontroleerd met esbuild (Deno niet lokaal).
+- **Na de review** nog 8 scenario's, ook als eigenaar via de echte RPC's: creditnota en
+  bank in beide volgordes; de bankkoppeling (handmatig gaat voor, zelf aanwijzen en een
+  andere organisatie geweigerd, een kopie is niet betaald); Mollie-terugboeking (geboekt,
+  weer open, per bank te betalen, herhaalde melding niet dubbel, terugdraaien) en
+  -terugbetaling (met creditnota open 0, niet in de open posten, 1102 netto 0); tijdlijn,
+  audit, versie en vergrendeling; geen voorstel boven het openstaande saldo; de backfill
+  zonder push en webhook (en met beide triggers daarna weer aan).
+- **Race met twee sessies**: sessie 1 boekt en houdt de transactie 4 s open, sessie 2 draait
+  de matcher. Oude versie: transactie `suggested` mét boekstuk, factuur betaald met € 100
+  open. Nieuwe versie: de matcher slaat de rij over (12 ms), transactie geboekt, open € 0.
+- **Snelheid** na de review: `match_bank_transactions` 3,1 s voor 1.000 open transacties
+  (de lock per rij kost niets meetbaars), `report_open_items` 0,27 s.
+- `npm test`: alles groen, met nieuwe tests voor `enableBanking.ts` (statussen, de dag in
+  Nederland, en een controle dat `bank-sync` ze gebruikt) en voor de tijdlijn van de klant;
+  `npm run typecheck` ✓; `npm run build` ✓; `bank-sync` los gecontroleerd met esbuild
+  (Deno niet lokaal).
+- **Scherm** na de review: de keuze toont een met de hand op betaald gezette factuur die in
+  het grootboek openstaat, verbergt echt voldane facturen, toont "open € …" bij een
+  deelbetaling, en valt terug op alle geboekte facturen als de open posten niet laden.
 - **Niet getest**: de echte Enable Banking-API — die is vanuit de bouwomgeving niet
   bereikbaar. De `/balances`-respons van de sandbox dus bij de uitrol controleren.
 
@@ -143,12 +214,24 @@ en legt het uit waarom. Een eigen grootboekrekening per gekoppelde rekening is b
 4. Rooktest: de sandbox-toestemming van 26-06 is op 24-09 verlopen, dus eerst opnieuw
    koppelen; dan synchroniseren → de melding noemt het saldo, het aansluitpaneel toont het.
 
-Bij de migratie worden bestaande afletteringen bijgewerkt. Gaat daardoor een factuur op
-betaald, dan krijgen teamleden de push "Factuur betaald" en gaat de webhook `invoice.paid`
-uit. Op staging zijn er geen geboekte banktransacties, dus daar gebeurt niets.
+Bij de migratie worden bestaande afletteringen bijgewerkt en worden bestaande
+Mollie-terugbetalingen en -terugboekingen alsnog geboekt (alleen waar de betaling zelf in het
+grootboek staat). Push en webhook staan daarbij uit: een factuur die zo op betaald gaat,
+levert geen "Factuur betaald" en geen `invoice.paid` op. Op staging gebeurt er niets: er
+zijn geen geboekte banktransacties en geen geboekte Mollie-betalingen (wel 4 terugbetalingen,
+maar zonder geboekte betaling).
 
 ## Bewust buiten dit blok
 Uit het bouwplan nog open: automatische sync (2.2), verloop van de toestemming zichtbaar
 maken (2.3), een eigen grootboekrekening per gekoppelde rekening en interne overboekingen
 (2.4), foutafhandeling en de stille paginalimiet (2.5), splitsen, Mollie-uitbetalingen,
 regels en betere herkenning (blok 3), ontkoppelen en live gaan (blok 4).
+
+Ook nog open, gevonden bij de review:
+- Een **handmatige terugbetaling** (via de bank, niet via Mollie) is niet tegen de factuur
+  af te letteren; de bankboeking gaat via een grootboekrekening.
+- Na een **Mollie-terugboeking** blijft een factuur die Mollie op betaald zette op betaald
+  staan (zo was het al); in het grootboek en de open posten staat hij wel weer open. Alleen
+  een factuur die de bank op betaald zette, gaat terug naar open.
+- De **kosten** van een terugboeking zitten niet in deze boeking; die horen bij de
+  aansluiting van de Mollie-uitbetalingen (blok 3).

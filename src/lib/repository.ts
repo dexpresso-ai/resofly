@@ -1953,6 +1953,8 @@ export interface BankSyncResult {
   skipped: number;
   /** Nog niet geboekt bij de bank (pending): niet ingelezen, komt later vanzelf. */
   pending?: number;
+  /** Met een status die we niet kennen (bv. OTHR): niet ingelezen, wel gemeld. */
+  unknownStatus?: number;
   /** Het geboekte saldo dat de bank opgaf, vastgelegd voor de saldo-aansluiting. */
   balance?: { cents: number; date: string } | null;
   error?: string;

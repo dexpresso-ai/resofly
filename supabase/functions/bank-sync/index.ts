@@ -288,7 +288,7 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
 
   const results: Array<{
     bankAccountId: string; inserted: number; skipped: number;
-    pending?: number; balance?: { cents: number; date: string } | null; error?: string;
+    pending?: number; unknownStatus?: number; balance?: { cents: number; date: string } | null; error?: string;
   }> = [];
   let needsReconsent = false;
 
@@ -312,7 +312,7 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
       } while (continuationKey && guard < 25);
 
       // Alleen geboekte transacties; pending komt later als geboekt terug.
-      const { transactions: txns, pending } = prepareEbTransactions(raw);
+      const { transactions: txns, pending, unknownStatus } = prepareEbTransactions(raw);
       const dates = txns.map((t) => t.booking_date).sort();
       const statement = {
         format: 'enablebanking', file_name: null, file_hash: null,
@@ -329,7 +329,7 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
       }
       const balance = await recordBookedBalance(organizationId, acc);
       await supabaseAdmin.from('bank_accounts').update({ last_synced_at: new Date().toISOString() }).eq('id', acc.id);
-      results.push({ bankAccountId: acc.id, inserted, skipped, pending, balance });
+      results.push({ bankAccountId: acc.id, inserted, skipped, pending, unknownStatus, balance });
     } catch (e) {
       const ebStatus = (e as any)?.ebStatus;
       if (ebStatus === 401 || ebStatus === 403) {

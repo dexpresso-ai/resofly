@@ -53,10 +53,37 @@ function isoDate(value: unknown): string | null {
   return ISO_DATE.test(text) ? text : null;
 }
 
-/** Alleen geboekt: zonder status (sommige banken sturen hem niet mee) of "BOOK". */
-export function isBookedEbTransaction(tx: any): boolean {
+/** Kalenderdag in Nederland van een tijdstip; de bank geeft tijdstippen in UTC. */
+export function amsterdamDate(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  if (ISO_DATE.test(text)) return text;
+  const t = Date.parse(text);
+  if (!Number.isFinite(t)) return null;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(t));
+}
+
+/**
+ * Wat er met een transactie gebeurt:
+ *   booked   binnenhalen — geen status (sommige banken sturen hem niet mee) of BOOK
+ *   pending  komt later geboekt binnen — PDNG, SCHD (ingepland), HOLD (gereserveerd)
+ *   dropped  komt nooit — RJCT (geweigerd), CNCL (geannuleerd)
+ *   unknown  OTHR of een nieuwe code: niet gokken, wel melden
+ */
+export type EbTransactionState = 'booked' | 'pending' | 'dropped' | 'unknown';
+
+export function ebTransactionState(tx: any): EbTransactionState {
   const status = String(tx?.status ?? '').trim().toUpperCase();
-  return status === '' || status === 'BOOK';
+  if (status === '' || status === 'BOOK') return 'booked';
+  if (status === 'PDNG' || status === 'SCHD' || status === 'HOLD') return 'pending';
+  if (status === 'RJCT' || status === 'CNCL') return 'dropped';
+  return 'unknown';
+}
+
+export function isBookedEbTransaction(tx: any): boolean {
+  return ebTransactionState(tx) === 'booked';
 }
 
 /**
@@ -94,18 +121,27 @@ export function mapEbTransaction(tx: any): MappedBankTransaction | null {
   };
 }
 
-/** Wat er van een opgehaalde batch binnenkomt, en waarom de rest niet. */
-export function prepareEbTransactions(raw: unknown): { transactions: MappedBankTransaction[]; pending: number; unusable: number } {
+/**
+ * Wat er van een opgehaalde batch binnenkomt, en waarom de rest niet. Geweigerde
+ * en geannuleerde posten tellen nergens mee: daar ging geen geld over.
+ */
+export function prepareEbTransactions(raw: unknown): {
+  transactions: MappedBankTransaction[]; pending: number; unknownStatus: number; unusable: number;
+} {
   const list = Array.isArray(raw) ? raw : [];
   const transactions: MappedBankTransaction[] = [];
   let pending = 0;
+  let unknownStatus = 0;
   let unusable = 0;
   for (const tx of list) {
-    if (!isBookedEbTransaction(tx)) { pending += 1; continue; }
+    const state = ebTransactionState(tx);
+    if (state === 'pending') { pending += 1; continue; }
+    if (state === 'unknown') { unknownStatus += 1; continue; }
+    if (state === 'dropped') continue;
     const mapped = mapEbTransaction(tx);
     if (mapped) transactions.push(mapped); else unusable += 1;
   }
-  return { transactions, pending, unusable };
+  return { transactions, pending, unknownStatus, unusable };
 }
 
 function dayBefore(date: string): string {
@@ -118,7 +154,8 @@ function dayBefore(date: string): string {
  * Kies uit /accounts/{uid}/balances het saldo dat op de geboekte transacties
  * aansluit, met de dag waarop het geldt.
  *   CLBD / PRCD  geboekt eindsaldo op reference_date (zonder datum: onbruikbaar)
- *   ITBD         geboekt saldo nu; zonder datum: de laatste wijziging, anders vandaag
+ *   ITBD         geboekt saldo nu; zonder datum: de dag (in Nederland) van de
+ *                laatste wijziging, anders vandaag
  *   OPBD         geboekt beginsaldo van reference_date = eindsaldo van de dag ervoor
  * Saldi in een andere valuta dan de rekening tellen niet.
  */
@@ -135,7 +172,7 @@ export function pickBookedBalance(raw: unknown, currency: string, today: string)
     if (type === 'CLBD' || type === 'PRCD') {
       if (reference) candidates.push({ amount_cents: amount, date: reference, type, rank: 0 });
     } else if (type === 'ITBD') {
-      candidates.push({ amount_cents: amount, date: reference ?? isoDate(b?.last_change_date_time) ?? today, type, rank: 1 });
+      candidates.push({ amount_cents: amount, date: reference ?? amsterdamDate(b?.last_change_date_time) ?? today, type, rank: 1 });
     } else if (type === 'OPBD' && reference) {
       candidates.push({ amount_cents: amount, date: dayBefore(reference), type, rank: 2 });
     }

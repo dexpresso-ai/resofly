@@ -12,8 +12,8 @@ import { SetupBanner } from './Bookkeeping';
 import { parseBankFile } from '../lib/bankImport';
 import {
   bookBankTransaction, createBankRequisition, deleteRow, finalizeBankRequisition, importBankTransactions,
-  insertRow, listBankInstitutions, matchBankTransactions, selectBankReconciliation, setBankTransactionStatus,
-  syncBankAccount, unbookBankTransaction, updateRow, type BankSyncResult,
+  insertRow, listBankInstitutions, matchBankTransactions, reportOpenItems, selectBankReconciliation,
+  setBankTransactionStatus, syncBankAccount, unbookBankTransaction, updateRow, type BankSyncResult,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -74,6 +74,25 @@ function ReconcileTab({ data, organizationId, canWrite, onChanged }: PageProps) 
 
   const openCount = data.bankTransactions.filter(t => t.status === 'unmatched' || t.status === 'suggested').length;
 
+  // Wat er per factuur nog openstaat, uit het grootboek (dezelfde berekening als
+  // de afletterboeking zelf). De status zegt dat niet: een factuur die met de hand
+  // op betaald is gezet, staat in het grootboek nog volledig open. Null zolang het
+  // laden loopt of als het mislukt: dan biedt de keuze alle geboekte facturen.
+  const [openAmounts, setOpenAmounts] = useState<OpenAmounts | null>(null);
+  useEffect(() => {
+    let active = true;
+    reportOpenItems(organizationId, '9999-12-31')
+      .then(rep => {
+        if (!active) return;
+        setOpenAmounts({
+          invoices: new Map(rep.receivables.rows.map(r => [r.invoice_id, r.open_cents])),
+          purchases: new Map(rep.payables.rows.map(r => [r.purchase_invoice_id, r.open_cents])),
+        });
+      })
+      .catch(() => { if (active) setOpenAmounts(null); });
+    return () => { active = false; };
+  }, [organizationId, data.bankTransactions, data.invoices, data.purchaseInvoices]);
+
   async function runMatch() {
     if (!canWrite) return;
     setMatching(true); setError(null);
@@ -110,15 +129,19 @@ function ReconcileTab({ data, organizationId, canWrite, onChanged }: PageProps) 
         : <div className="bank-tx-list">
             {transactions.map(txn => (
               <BankTxRow key={txn.id} txn={txn} data={data} organizationId={organizationId} canWrite={canWrite}
-                accountName={accountName(txn.bank_account_id)} onChanged={onChanged} />
+                accountName={accountName(txn.bank_account_id)} openAmounts={openAmounts} onChanged={onChanged} />
             ))}
           </div>}
     </div>
   );
 }
 
-function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged }: {
-  txn: BankTransaction; data: AppData; organizationId: string; canWrite: boolean; accountName: string; onChanged: () => void;
+/** Openstaand bedrag in centen per factuur-id; ontbreekt een factuur, dan staat er niets open. */
+type OpenAmounts = { invoices: Map<string, number>; purchases: Map<string, number> };
+
+function BankTxRow({ txn, data, organizationId, canWrite, accountName, openAmounts, onChanged }: {
+  txn: BankTransaction; data: AppData; organizationId: string; canWrite: boolean; accountName: string;
+  openAmounts: OpenAmounts | null; onChanged: () => void;
 }) {
   const incoming = txn.amount_cents > 0;
   const abs = Math.abs(txn.amount_cents);
@@ -136,18 +159,25 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
   // Alleen documenten die in het grootboek staan zijn afletterbaar (fix 20260721):
   // zonder debitering van 1300/creditering van 1600 zou de bankboeking de
   // debiteuren-/crediteurenstand negatief maken — de server weigert die nu ook.
-  // Een betaalde factuur valt af: daar staat niets meer open (20261018). De
-  // huidige match blijft altijd zichtbaar, ook als die inmiddels betaald is.
+  // Een factuur waar volgens het grootboek niets meer openstaat valt af: daar
+  // weigert de server een aflettering (20261018). Niet op de status filteren: een
+  // met de hand op betaald gezette factuur staat in het grootboek nog open en moet
+  // hier te kiezen zijn. De huidige match blijft altijd zichtbaar.
   const openInvoices = useMemo(
     () => data.invoices.filter(i => i.status !== 'cancelled' && i.status !== 'void' && i.journal_entry_id != null
-      && (i.status !== 'paid' || i.id === txn.matched_invoice_id)).slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
-    [data.invoices, txn.matched_invoice_id],
+      && (!openAmounts || (openAmounts.invoices.get(i.id) ?? 0) > 0 || i.id === txn.matched_invoice_id))
+      .slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [data.invoices, txn.matched_invoice_id, openAmounts],
   );
   const openPurchases = useMemo(
     () => data.purchaseInvoices.filter(p => p.status !== 'cancelled' && p.journal_entry_id != null
-      && (p.payment_status !== 'paid' || p.id === txn.matched_purchase_invoice_id)).slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
-    [data.purchaseInvoices, txn.matched_purchase_invoice_id],
+      && (!openAmounts || (openAmounts.purchases.get(p.id) ?? 0) > 0 || p.id === txn.matched_purchase_invoice_id))
+      .slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [data.purchaseInvoices, txn.matched_purchase_invoice_id, openAmounts],
   );
+  // Bij een deelbetaling zegt het factuurbedrag weinig: toon dan wat er nog openstaat.
+  const openNote = (open: number | undefined, totalCents: number) =>
+    open !== undefined && open > 0 && open !== totalCents ? ` · open ${euroCents(open)}` : '';
   const clientName = (id: string | null) => data.clients.find(c => c.id === id)?.name ?? '';
   const supplierName = (id: string | null) => data.suppliers.find(s => s.id === id)?.name ?? '';
 
@@ -224,11 +254,11 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
               <Select value={invoiceId} onChange={e => setInvoiceId(e.target.value)} disabled={!canWrite}>
                 <option value="">— kies factuur —</option>
                 {openInvoices.map((i: Invoice) => (
-                  <option key={i.id} value={i.id}>{i.number} · {euro(i.total_amount ?? 0)}{clientName(i.client_id) ? ` · ${clientName(i.client_id)}` : ''}</option>
+                  <option key={i.id} value={i.id}>{i.number} · {euro(i.total_amount ?? 0)}{openNote(openAmounts?.invoices.get(i.id), Math.round((i.total_amount ?? 0) * 100))}{clientName(i.client_id) ? ` · ${clientName(i.client_id)}` : ''}</option>
                 ))}
               </Select>
               {openInvoices.length === 0 && (
-                <small className="bank-tx-hint">Geen afletterbare facturen: alleen geboekte facturen die nog niet betaald zijn kun je afletteren. Gebruik zo nodig eerst “Boek naar grootboek” op de factuur.</small>
+                <small className="bank-tx-hint">Geen afletterbare facturen: alleen geboekte facturen waar nog iets op openstaat kun je afletteren. Gebruik zo nodig eerst “Boek naar grootboek” op de factuur.</small>
               )}
             </>
           )}
@@ -237,11 +267,11 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
               <Select value={purchaseId} onChange={e => setPurchaseId(e.target.value)} disabled={!canWrite}>
                 <option value="">— kies inkoopfactuur —</option>
                 {openPurchases.map((p: PurchaseInvoice) => (
-                  <option key={p.id} value={p.id}>{p.internal_number || p.supplier_invoice_number || '—'} · {euroCents(p.total_cents)}{supplierName(p.supplier_id) ? ` · ${supplierName(p.supplier_id)}` : ''}</option>
+                  <option key={p.id} value={p.id}>{p.internal_number || p.supplier_invoice_number || '—'} · {euroCents(p.total_cents)}{openNote(openAmounts?.purchases.get(p.id), p.total_cents ?? 0)}{supplierName(p.supplier_id) ? ` · ${supplierName(p.supplier_id)}` : ''}</option>
                 ))}
               </Select>
               {openPurchases.length === 0 && (
-                <small className="bank-tx-hint">Geen afletterbare inkoopfacturen: alleen geboekte inkoopfacturen die nog niet betaald zijn. Boek de inkoopfactuur zo nodig eerst naar het grootboek.</small>
+                <small className="bank-tx-hint">Geen afletterbare inkoopfacturen: alleen geboekte inkoopfacturen waar nog iets op openstaat. Boek de inkoopfactuur zo nodig eerst naar het grootboek.</small>
               )}
             </>
           )}
@@ -373,6 +403,7 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
 function syncSummary(r: BankSyncResult | undefined): string {
   const parts = [`${r?.inserted ?? 0} nieuwe, ${r?.skipped ?? 0} al bekende transacties.`];
   if (r?.pending) parts.push(`${r.pending} nog in behandeling bij de bank — die komen vanzelf binnen zodra ze geboekt zijn.`);
+  if (r?.unknownStatus) parts.push(`${r.unknownStatus} met een status die we niet kennen; die zijn niet ingelezen. Controleer ze in je bankomgeving.`);
   if (r?.balance) parts.push(`Saldo volgens de bank: ${euroCents(r.balance.cents)} per ${dateNL(r.balance.date)}.`);
   return parts.join(' ');
 }
