@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Archive, BarChart3, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Scale, Settings, Sparkles, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData } from '../types';
 import { viewTitle } from '../lib/workspaceTabs';
@@ -27,13 +27,15 @@ export const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
 
 /** Browser-achtige tabbalk boven de werkruimte. Klik = wisselen, ×/middenklik =
  *  sluiten, + = nieuw tabblad. */
-export function TabBar({ tabs, activeTabId, data, onSelect, onClose, onNew }: {
+export function TabBar({ tabs, activeTabId, data, onSelect, onClose, onNew, trailing }: {
   tabs: TabLike[];
   activeTabId: string;
   data: AppData;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
+  /** Rechts in de rij, na "nieuw tabblad": in Zenit de vraagbalk. */
+  trailing?: ReactNode;
 }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLDivElement | null>(null);
@@ -52,8 +54,10 @@ export function TabBar({ tabs, activeTabId, data, onSelect, onClose, onNew }: {
   }, [activeTabId, tabs.length]);
 
   return (
-    <div className="tabbar" role="tablist" aria-label="Open tabbladen" ref={stripRef}>
-      <div className="tabbar-strip">
+    <div className="tabbar" ref={stripRef}>
+      {/* Alleen de tabbladen zelf vormen de tablist; "nieuw" en de vraagbalk
+          ernaast zijn gewone knoppen en velden. */}
+      <div className="tabbar-strip" role="tablist" aria-label="Open tabbladen">
         {tabs.map(tab => {
           const active = tab.id === activeTabId;
           const label = viewTitle(tab, data);
@@ -97,6 +101,7 @@ export function TabBar({ tabs, activeTabId, data, onSelect, onClose, onNew }: {
       <button type="button" className="tab-new" aria-label="Nieuw tabblad" title="Nieuw tabblad" onClick={onNew}>
         <Plus size={15} />
       </button>
+      {trailing && <div className="tabbar-trailing">{trailing}</div>}
     </div>
   );
 }

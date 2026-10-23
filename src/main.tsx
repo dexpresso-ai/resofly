@@ -1,17 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Sidebar } from './components/Sidebar';
+import { Sidebar, type SidebarProps } from './components/Sidebar';
+import { ZenitNav } from './components/ZenitNav';
 import { TabBar } from './components/TabBar';
 import { BottomNav } from './components/BottomNav';
 import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type PersistedTab } from './lib/workspaceTabs';
 import { Breadcrumbs } from './components/Breadcrumbs';
 import type { CrumbTarget } from './lib/breadcrumbs';
 import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey } from './lib/permissions';
-import type { SearchResult } from './components/GlobalSearch';
+import { GlobalSearch, type SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
 import { Modal } from './components/Modal';
-import { CheckCircle2, FileText, FolderOpen, Menu, Receipt, Users, X } from 'lucide-react';
+import { CheckCircle2, FileText, FolderOpen, Lock, Menu, Receipt, Users, X } from 'lucide-react';
+import { useLook } from './lib/look';
+import { useNarrowViewport } from './lib/useNarrowViewport';
 import { isSupabaseConfigured, supabase, supabaseAuth } from './lib/supabase';
 import { signOutOnThisDevice } from './lib/signOut';
 import {
@@ -160,7 +163,7 @@ import type { ProjectShift } from './components/ProjectShiftDialog';
 import { applyPeriodLocally, applyPlanningLocally, applyTimeLocally, clockLabel, mergeTaskRows, restoreTasksForDates, splitTitleAndEstimate } from './lib/planning';
 import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
 import { AttachmentList } from './components/AttachmentList';
-import { GerrieChat } from './components/GerrieChat';
+import { GerrieChat, askGerrie } from './components/GerrieChat';
 import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
 import { watchForReturn, type FinishedCall } from './lib/callBridge';
 import { GerrieCommandCenter } from './features/GerrieCommandCenter';
@@ -186,6 +189,10 @@ import './styles/portal-cockpit.css';
 // De teamchat (de opbouw van Microsoft Teams) als laatste: eigen klassen, en de
 // paar gedeelde haken (.chat-shell, .team-chat-dock) moeten van eerdere regels winnen.
 import './styles/teamchat.css';
+// Zenit (designvoorstel 2026-10-22) helemaal achteraan: alleen actief met
+// `data-look="zenit"` op <html> (accountmenu → Probeer Zenit), en dan moet hij
+// van Cockpit en de teamchat winnen.
+import './styles/zenit.css';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
@@ -746,6 +753,13 @@ function App() {
     if (stored === '1' || stored === '0') return stored === '1';
     return typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1280px)').matches === true;
   });
+  // De look van de werkruimte: Cockpit (de standaard) of Zenit, de nieuwe
+  // voorkant achter "Probeer Zenit" in het accountmenu. Zenit heeft zijn eigen
+  // navigatie (nachtrail + contextpaneel) en een vraagbalk in de tabrij. Op de
+  // telefoon is er geen vraagbalk: daar zoekt ook Cockpit niet (globals.css
+  // verbergt .global-search onder 761px).
+  const [look] = useLook();
+  const narrowViewport = useNarrowViewport();
   // Het werkvlak. De bovenregel krijgt pas een haarlijn en schaduw als de inhoud
   // eronder schuift (`is-scrolled`), en een nieuwe pagina schuift zacht in.
   const [mainEl, setMainEl] = useState<HTMLElement | null>(null);
@@ -3115,6 +3129,39 @@ function App() {
     },
   };
 
+  const pageReadOnly = !(orgCanWrite && permissions.canWritePage(page));
+  // Dezelfde gegevens voor beide navigaties: de zijbalk van Cockpit en de
+  // nachtrail met contextpaneel van Zenit.
+  const navProps: SidebarProps = {
+    page,
+    data,
+    organizations: organizationContext.organizations,
+    activeOrganizationId: activeOrg.id,
+    activeRole: activeMembership?.role ?? null,
+    onOrganization: switchOrganization,
+    onNewOrganization: createNewOrganization,
+    onNewEntity: (organizationContext.businessStatus?.active && activeMembership?.role === 'owner') ? createNewEntity : null,
+    onPage: (p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); },
+    onSearchNavigate: handleSearchNavigate,
+    userEmail: currentUserEmail ?? activeMembership?.email ?? null,
+    onOpenSettings: openSettings,
+    onSignOut: () => void signOutOnThisDevice(),
+    messageUnread: clientEmailUnread.total,
+    inboxOpen: inboxCount,
+    ticketUnread: ticketUnreadIds.size,
+    chatUnread: teamChat.unreadTotal,
+    decisionCount: decisionAlerts.count,
+    purchaseInboxOpen: purchaseInbox.count,
+    mobileOpen: mobileNavOpen,
+    onCloseMobile: () => setMobileNavOpen(false),
+    pinned: sidebarPinned,
+    onTogglePin: () => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; }),
+    permissions,
+    onRefresh: refresh,
+    refreshing: loading,
+    readOnly: pageReadOnly,
+  };
+
   return <div className={`app${sidebarPinned ? ' sidebar-pinned' : ''}`}>
     <button
       type="button"
@@ -3124,16 +3171,24 @@ function App() {
       onClick={() => setMobileNavOpen(open => !open)}
     >{mobileNavOpen ? <X size={22}/> : <Menu size={22}/>}</button>
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
-    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onNewEntity={(organizationContext.businessStatus?.active && activeMembership?.role === 'owner') ? createNewEntity : null} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => void signOutOnThisDevice()} messageUnread={clientEmailUnread.total} inboxOpen={inboxCount} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} decisionCount={decisionAlerts.count} purchaseInboxOpen={purchaseInbox.count} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })} permissions={permissions} onRefresh={refresh} refreshing={loading} readOnly={!(orgCanWrite && permissions.canWritePage(page))}/>
+    {look === 'zenit' ? <ZenitNav {...navProps}/> : <Sidebar {...navProps}/>}
     <main className="main" ref={setMainEl}>
-      <TabBar tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab} />
+      <TabBar
+        tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab}
+        trailing={look === 'zenit' && !narrowViewport ? <>
+          {pageReadOnly && <span className="ztab-ro" title="Je kunt hier kijken, niet wijzigen"><Lock size={12} aria-hidden="true"/>Alleen lezen</span>}
+          <GlobalSearch variant="ask" data={data} onNavigate={handleSearchNavigate} canOpenPage={permissions.canOpenPage} onAsk={permissions.canRead('gerrie') ? askGerrie : undefined} />
+        </> : undefined}
+      />
       {projectShift && <ProjectShiftDialog
         shift={projectShift}
         busy={projectShiftBusy}
         onCancel={() => setProjectShift(null)}
         onConfirm={(taskIds, shiftDeadlines) => { void applyProjectShift(taskIds, shiftDeadlines); }}
       />}
-      {page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && page !== 'communication' && page !== 'chat' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!(orgCanWrite && permissions.canWritePage(page)) && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
+      {/* Zenit heeft geen titelbalk: de werktab draagt de naam, "Ververs" staat in
+          het contextpaneel en "Alleen lezen" naast de vraagbalk. */}
+      {look !== 'zenit' && page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && page !== 'communication' && page !== 'chat' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{pageReadOnly && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       {/* Alle open tabbladen blijven gemount (keep-alive); alleen het actieve is
           zichtbaar. Elk pane is z'n eigen scrollcontainer én bevat z'n eigen
           EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}

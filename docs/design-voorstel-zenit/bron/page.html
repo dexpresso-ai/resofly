@@ -1,0 +1,335 @@
+<a class="skip" href="#prototype">Ga naar het prototype</a>
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="ResoFly Zenit, naar boven"><span class="logo">R</span><b>ResoFly</b><span class="zen">Zenit</span></a>
+    <nav class="nav-links" aria-label="Secties">
+      <a href="#prototype">Prototype</a><a href="#ideeen">Ideeën</a><a href="#mobiel">Mobiel</a><a href="#systeem">Systeem</a><a href="#toekomst">Toekomst</a><a href="#invoering">Invoering</a>
+    </nav>
+    <div class="seg theme-seg" role="group" aria-label="Thema van deze pagina">
+      <button data-pmode="dag" aria-pressed="false" title="Dag"><svg class="i" aria-hidden="true"><use href="#i-sun"></use></svg><span>Dag</span></button>
+      <button data-pmode="nacht" aria-pressed="false" title="Nacht"><svg class="i" aria-hidden="true"><use href="#i-moon"></use></svg><span>Nacht</span></button>
+      <button data-pmode="zon" aria-pressed="false" title="Met de zon mee"><svg class="i" aria-hidden="true"><use href="#i-sunrise"></use></svg><span>Zon</span></button>
+      <button data-pmode="auto" aria-pressed="false" title="Volgt je systeem"><svg class="i" aria-hidden="true"><use href="#i-contrast"></use></svg><span>Auto</span></button>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="hero-stars" aria-hidden="true"></div>
+    <div class="wrap hero-in">
+      <div class="sky">
+        <div class="sky-text">
+          <p class="eyebrow">Designvoorstel · donderdag 22 oktober 2026</p>
+          <h1 class="display">Het werk<br>van vandaag.<br><span class="em">Het platform<br>van morgen.</span></h1>
+        </div>
+        <svg class="sky-arc" viewBox="0 0 640 352" aria-hidden="true">
+          <defs>
+            <radialGradient id="h-glow" cx="50%" cy="50%" r="50%"><stop offset="0" style="stop-color:var(--gold);stop-opacity:.5"></stop><stop offset=".4" style="stop-color:var(--gold);stop-opacity:.14"></stop><stop offset="1" style="stop-color:var(--gold);stop-opacity:0"></stop></radialGradient>
+          </defs>
+          <line class="h-hz" x1="-3000" y1="318" x2="3640" y2="318"></line>
+          <path class="h-day" d="M40 318 C 150 -40, 490 -40, 600 318"></path>
+          <path class="h-past" id="h-past" d="M40 318 C 150 -40, 490 -40, 600 318"></path>
+          <circle class="h-glow" id="h-glow" r="120" cx="40" cy="318" fill="url(#h-glow)"></circle>
+          <circle class="h-sun" id="h-sun" r="13" cx="40" cy="318"></circle>
+          <text class="h-lbl" x="40" y="342" text-anchor="middle" data-sun="rise">08:15</text>
+          <text class="h-lbl" x="600" y="342" text-anchor="middle" data-sun="set">18:34</text>
+          <text class="h-lbl zen" id="h-zen" x="320" y="14" text-anchor="middle">Zenit <tspan data-sun="noon">13:25</tspan></text>
+        </svg>
+      </div>
+      <div class="ground">
+        <p class="lead">Zenit is de nieuwe voorkant van ResoFly. Hetzelfde grafiet, hetzelfde zongoud en dezelfde Poppins, opnieuw gecomponeerd rond hoe je werkt: je dag als horizon, één vraagbalk voor alles, en Gerrie die voorbereidt terwijl jij beslist.</p>
+        <div class="hero-cta">
+          <a class="btn btn-gold btn-lg" href="#prototype"><svg class="i" aria-hidden="true"><use href="#i-mouse-pointer-click"></use></svg>Probeer het prototype</a>
+          <button class="btn btn-2 btn-lg" data-demo="cmdk"><svg class="i" aria-hidden="true"><use href="#i-command"></use></svg>Typ een opdracht</button>
+        </div>
+        <ul class="hero-facts" aria-label="In het kort">
+          <li><svg class="i" aria-hidden="true"><use href="#i-sun-moon"></use></svg>Dag, Nacht en met de zon mee</li>
+          <li><svg class="i" aria-hidden="true"><use href="#i-command"></use></svg>Eén vraagbalk voor alles</li>
+          <li><svg class="i i-ai" aria-hidden="true"><use href="#i-sparkles"></use></svg>Gerrie zet klaar, jij beslist</li>
+          <li><svg class="i" aria-hidden="true"><use href="#i-accessibility"></use></svg>AA-contrast in beide thema's</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec proto" id="prototype" aria-labelledby="proto-h">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">Prototype</p>
+        <h2 id="proto-h">Klik, sleep en typ. Het werkt echt.</h2>
+        <p class="lead">Een volledig werkende werkruimte met voorbeeldgegevens van Studio Lopik. Sleep de zon over de Dagboog, vink taken af, beslis over voorstellen van Gerrie, open een factuur ernaast of druk op <kbd>⌘K</kbd>.</p>
+      </div>
+      <div class="proto-bar">
+        <div class="seg screens" role="tablist" aria-label="Scherm van het prototype">
+          <button role="tab" data-screen="vandaag" aria-selected="true"><svg class="i" aria-hidden="true"><use href="#i-sunrise"></use></svg>Vandaag</button>
+          <button role="tab" data-screen="klant" aria-selected="false"><svg class="i" aria-hidden="true"><use href="#i-users"></use></svg>Klant</button>
+          <button role="tab" data-screen="project" aria-selected="false"><svg class="i" aria-hidden="true"><use href="#i-folder-kanban"></use></svg>Project</button>
+          <button role="tab" data-screen="facturen" aria-selected="false"><svg class="i" aria-hidden="true"><use href="#i-receipt"></use></svg>Facturen</button>
+          <button role="tab" data-screen="agenda" aria-selected="false"><svg class="i" aria-hidden="true"><use href="#i-calendar"></use></svg>Agenda</button>
+          <button role="tab" data-screen="gerrie" aria-selected="false"><svg class="i i-ai" aria-hidden="true"><use href="#i-sparkles"></use></svg>Gerrie</button>
+        </div>
+        <div class="proto-tools">
+          <button class="btn btn-2 btn-sm" id="notes-toggle" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-lightbulb"></use></svg>Ontwerpnotities</button>
+          <button class="btn btn-2 btn-sm" data-demo="cmdk"><svg class="i" aria-hidden="true"><use href="#i-command"></use></svg>Vraagbalk</button>
+        </div>
+      </div>
+    </div>
+    <div class="frame-wrap">
+      <div class="frame" id="frame"><div class="app" id="app"></div></div>
+    </div>
+    <div class="wrap">
+      <div class="notebar" id="notebar" hidden>
+        <span class="nb-n" id="nb-n">1</span>
+        <div class="nb-b"><b id="nb-t"></b><p id="nb-d"></p></div>
+        <div class="nb-ctl"><span id="nb-c" class="nb-c"></span><button class="btn-icon" id="nb-prev" aria-label="Vorige notitie"><svg class="i" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><button class="btn-icon" id="nb-next" aria-label="Volgende notitie"><svg class="i" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button></div>
+      </div>
+      <p class="proto-small"><svg class="i" aria-hidden="true"><use href="#i-monitor"></use></svg><span>Het prototype is gemaakt voor een groot scherm. Op de telefoon zie je hieronder bij <a href="#mobiel">Mobiel</a> hoe Zenit daar werkt.</span></p>
+      <p class="proto-hint"><svg class="i" aria-hidden="true"><use href="#i-keyboard"></use></svg>Sneltoetsen in het prototype: <kbd>⌘K</kbd> of <kbd>/</kbd> vraagbalk · <kbd>G</kbd> dan <kbd>V</kbd>, <kbd>A</kbd>, <kbd>W</kbd>, <kbd>F</kbd> of <kbd>G</kbd> om te springen · op Gerrie <kbd>A</kbd> akkoord, <kbd>L</kbd> later, <kbd>N</kbd> niet meer.</p>
+    </div>
+  </section>
+
+  <section class="sec" id="ideeen" aria-labelledby="ideas-h">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">Zes ideeën</p>
+        <h2 id="ideas-h">Wat Zenit anders doet</h2>
+        <p class="lead">Geen nieuw merk, wel een nieuwe manier van werken. Elk idee hieronder kun je in het prototype laten zien.</p>
+      </div>
+      <div class="ideas">
+        <article class="idea">
+          <span class="idea-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-sunrise"></use></svg></span>
+          <h3>Je dag als horizon</h3>
+          <p>De Dagboog legt je afspraken en focusblokken op de baan van de zon. Je ziet in één oogopslag wat er geweest is, wat er nu speelt en hoeveel dag er nog over is.</p>
+          <button class="idea-go" data-demo="play">Speel de dag af<svg class="i" aria-hidden="true"><use href="#i-arrow-right"></use></svg></button>
+        </article>
+        <article class="idea">
+          <span class="idea-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-command"></use></svg></span>
+          <h3>Eén vraagbalk voor alles</h3>
+          <p>Zoeken, springen, iets maken of Gerrie iets vragen gebeurt op één plek, in gewone taal. “Factuur Bloem content oktober 650” wordt een klaargezette factuur.</p>
+          <button class="idea-go" data-demo="cmdk">Typ het voor me<svg class="i" aria-hidden="true"><use href="#i-arrow-right"></use></svg></button>
+        </article>
+        <article class="idea">
+          <span class="idea-ic ai"><svg class="i i-lg i-ai" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
+          <h3>Gerrie zet klaar, jij beslist</h3>
+          <p>Voorstellen van Gerrie en je agents komen met het waarom en een voorbeeld van wat er gebeurt. Akkoord, later of niet meer, met een klik of één toets.</p>
+          <button class="idea-go" data-demo="gerrie">Bekijk de beslissingen<svg class="i" aria-hidden="true"><use href="#i-arrow-right"></use></svg></button>
+        </article>
+        <article class="idea">
+          <span class="idea-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-panel-right"></use></svg></span>
+          <h3>Blijf waar je bent</h3>
+          <p>Een factuur, taak of klant opent in het spiekpaneel naast je lijst. Geen paginawissel, geen kwijtgeraakte plek. Werktabs blijven voor wat je langer open wilt houden.</p>
+          <button class="idea-go" data-demo="peek">Open factuur 2026-040<svg class="i" aria-hidden="true"><use href="#i-arrow-right"></use></svg></button>
+        </article>
+        <article class="idea">
+          <span class="idea-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-users"></use></svg></span>
+          <h3>De klant in één oogopslag</h3>
+          <p>Eén tijdlijn met mail, chat, agenda, offertes en facturen, plus de relatiepuls en wat Gerrie over de klant weet. Iedereen in het team is meteen bij.</p>
+          <button class="idea-go" data-demo="klant">Open De Korenaar<svg class="i" aria-hidden="true"><use href="#i-arrow-right"></use></svg></button>
+        </article>
+        <article class="idea">
+          <span class="idea-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-sun-moon"></use></svg></span>
+          <h3>Met de zon mee</h3>
+          <p>Naast Dag, Nacht en Systeem is er een stand die de echte zon volgt: overdag Dag, na zonsondergang Nacht. De nacht valt als een cirkel vanuit de zon.</p>
+          <button class="idea-go" data-demo="sunset">Laat de zon ondergaan<svg class="i" aria-hidden="true"><use href="#i-arrow-right"></use></svg></button>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="verschil" aria-labelledby="diff-h">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">Voor en na</p>
+        <h2 id="diff-h">Wat er verandert, en wat blijft</h2>
+        <p class="lead">Gemeten aan de werkruimte zoals die nu op staging staat, met de Cockpit-laag van 5 oktober.</p>
+      </div>
+      <div class="diff-scroll">
+        <table class="diff">
+          <thead><tr><th scope="col">Onderdeel</th><th scope="col">Nu</th><th scope="col">Zenit</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Menu</th><td>Eén zijbalk met zes groepen; Financiën klapt uit tot vijftien regels</td><td>Nachtrail met zeven modules, plus een contextpaneel per module met vastgezette klanten en weergaven</td></tr>
+            <tr><th scope="row">Zoeken en maken</th><td>Zoekveld in de zijbalk, maken per pagina, Gerrie als zwevende knop</td><td>Eén vraagbalk (<kbd>⌘K</kbd>) voor zoeken, springen, maken en vragen, in gewone taal</td></tr>
+            <tr><th scope="row">Dashboard</th><td>Cockpit met zes kerncijfers en het weekspoor</td><td>Vandaag: de Dagboog, Te beslissen, Puls, je taken en de geldstroom</td></tr>
+            <tr><th scope="row">Gerrie</th><td>Commandocentrum met beslislijst, chat en agents</td><td>Een laag door de hele app: voorstellen staan waar je ze nodig hebt, in het poollicht</td></tr>
+            <tr><th scope="row">Details openen</th><td>Een nieuwe pagina of een venster</td><td>Het spiekpaneel naast de lijst; werktabs voor wat je open wilt houden</td></tr>
+            <tr><th scope="row">Thema</th><td>Donker of Licht in het accountmenu</td><td>Dag, Nacht, Met de zon mee of Systeem, plus Ruim of Compact</td></tr>
+            <tr class="keep"><th scope="row">Blijft</th><td colspan="2">Het R-merkteken, grafiet en zongoud, het poollicht van Gerrie, Poppins, werktabs, de rechten per module en de huisstijl van de klant op portaal, offertes en facturen</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="mobiel" aria-labelledby="mob-h">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">Mobiel</p>
+        <h2 id="mob-h">Dezelfde dag, in je hand</h2>
+        <p class="lead">Op de telefoon draait alles om je duim: een zwevende dock onderin, beslissen met een veeg en de vraagbalk die ook luistert.</p>
+      </div>
+      <div class="phones">
+        <figure class="phone-fig">
+          <div class="phone tn"><div class="ph">
+            <div class="m-top"><span class="logo sm">R</span><b>Vandaag</b><span class="av av-sm">GL</span></div>
+            <div class="m-greet"><span>Do 22 okt · week 43</span><b>Goedemorgen, <em>Gerjan</em></b></div>
+            <div class="m-arc" id="m-arc"></div>
+            <div class="m-card m-nn"><span class="nn-l now">Nu</span><div><b>Focus · Logo-schetsen</b><span>nog 14 min · De Korenaar</span></div></div>
+            <div class="m-card m-next"><span class="nn-l">Volgende</span><div><b>10:00 · Overleg Joost</b><span>over 19 min · Video</span></div><span class="m-join"><svg class="i" aria-hidden="true"><use href="#i-video"></use></svg></span></div>
+            <div class="m-h"><span class="orb sm"></span>Te beslissen<span class="count">4</span></div>
+            <div class="m-card m-dec"><span class="glyph run"><svg class="i" aria-hidden="true"><use href="#i-bell-ring"></use></svg></span><div><b>Herinnering 2026-040</b><span>Bloem · € 786,50 · 10 d te laat</span></div></div>
+            <div class="m-card m-dec"><span class="glyph"><svg class="i" aria-hidden="true"><use href="#i-clock"></use></svg></span><div><b>3u 15m uit je agenda</b><span>Wireframes en belafspraak</span></div></div>
+            <nav class="dock" aria-label="Dock"><span class="on"><svg class="i" aria-hidden="true"><use href="#i-sunrise"></use></svg></span><span><svg class="i" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span class="plus"><svg class="i" aria-hidden="true"><use href="#i-plus"></use></svg></span><span><svg class="i" aria-hidden="true"><use href="#i-folder-kanban"></use></svg></span><span><svg class="i i-ai" aria-hidden="true"><use href="#i-sparkles"></use></svg></span></nav>
+          </div></div>
+          <figcaption><b>Vandaag, in Nacht</b>De Dagboog in het klein, met nu en volgende eronder. De dock zweeft boven de rand.</figcaption>
+        </figure>
+        <figure class="phone-fig">
+          <div class="phone td"><div class="ph">
+            <div class="m-top"><svg class="i" aria-hidden="true"><use href="#i-chevron-left"></use></svg><b>Te beslissen</b><span class="m-step">1 van 4</span></div>
+            <div class="m-stack">
+              <div class="m-sc s3"></div><div class="m-sc s2"></div>
+              <div class="m-sc s1">
+                <div class="m-sc-h"><span class="glyph run"><svg class="i" aria-hidden="true"><use href="#i-bell-ring"></use></svg></span><div><b>Herinnering voor factuur 2026-040</b><span>Debiteurenbewaker · 08:30</span></div></div>
+                <div class="m-facts"><div><span>Te laat</span><b>10 dagen</b></div><div><span>Bedrag</span><b>€ 786,50</b></div></div>
+                <p class="m-why">Karim betaalde de vorige twee facturen binnen twee dagen na een herinnering.</p>
+                <div class="m-mail"><span>Aan Karim El Amrani · Herinnering: factuur 2026-040</span><p>Hoi Karim,</p><p>Een vriendelijke herinnering: factuur <mark>2026-040</mark> voor de content van september (<mark>€ 786,50</mark>) stond op <mark>12 oktober</mark> open. Misschien is hij tussen de drukte door geschoten. Via de link hieronder betaal je hem direct met iDEAL.</p><p>Groet,<br>Gerjan, Studio Lopik</p><span class="m-ideal">Betaal met iDEAL</span></div>
+              </div>
+            </div>
+            <div class="m-swipe"><span><svg class="i" aria-hidden="true"><use href="#i-arrow-left"></use></svg>Later</span><span>Akkoord<svg class="i" aria-hidden="true"><use href="#i-arrow-right"></use></svg></span></div>
+            <div class="m-acts"><span class="btn btn-2 btn-lg">Later</span><span class="btn btn-gold btn-lg"><svg class="i" aria-hidden="true"><use href="#i-check"></use></svg>Akkoord</span></div>
+          </div></div>
+          <figcaption><b>Beslissen met je duim, in Dag</b>Veeg naar rechts voor akkoord, naar links voor later. De knoppen staan waar je duim al is.</figcaption>
+        </figure>
+        <figure class="phone-fig">
+          <div class="phone tn"><div class="ph">
+            <div class="m-dim">
+              <div class="m-top"><span class="logo sm">R</span><b>Vandaag</b><span class="av av-sm">GL</span></div>
+              <div class="m-greet"><span>Do 22 okt · week 43</span><b>Goedemorgen, <em>Gerjan</em></b></div>
+              <div class="m-card" style="height:120px"></div>
+            </div>
+            <div class="m-sheet">
+              <span class="m-grab"></span>
+              <div class="m-heard">“Factuur voor Bloem, content oktober, zeshonderdvijftig euro”</div>
+              <div class="m-toks"><span class="tok"><svg class="i" aria-hidden="true"><use href="#i-receipt"></use></svg>Factuur</span><span class="tok"><svg class="i" aria-hidden="true"><use href="#i-users"></use></svg>Restaurant Bloem</span><span class="tok"><svg class="i" aria-hidden="true"><use href="#i-type"></use></svg>Content oktober</span><span class="tok"><svg class="i" aria-hidden="true"><use href="#i-euro"></use></svg>€ 650,00 excl.</span></div>
+              <div class="m-prev"><div><span>Factuur 2026-043 · concept</span><b>€ 786,50 <small>incl. btw</small></b></div><span class="btn btn-gold">Klaarzetten</span></div>
+              <div class="m-mic"><span class="m-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="m-micbtn"><svg class="i i-lg" aria-hidden="true"><use href="#i-mic"></use></svg></span><span class="m-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
+              <p class="m-note"><svg class="i" aria-hidden="true"><use href="#i-shield-check"></use></svg>Komt als concept klaar te staan. Er wordt niets verstuurd.</p>
+            </div>
+          </div></div>
+          <figcaption><b>Vraag het gewoon</b>Houd de knop vast en zeg wat je wilt. Gerrie laat zien wat hij verstond voordat er iets gebeurt.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="systeem" aria-labelledby="sys-h">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">Systeem</p>
+        <h2 id="sys-h">Eén systeem, twee lichten</h2>
+        <p class="lead">De kleuren van ResoFly blijven precies zoals ze zijn. Wat verandert is hoe ze samen spelen. Elke tekstkleur haalt AA op kaart, werkvlak én grond; de pagina rekent het hieronder zelf na.</p>
+      </div>
+
+      <h3 class="sys-h">Kleur</h3>
+      <div class="pal-pair">
+        <div class="pal tn" data-pal="Nacht"><div class="pal-head"><svg class="i" aria-hidden="true"><use href="#i-moon"></use></svg>Nacht<span>grafiet met één warme lamp</span></div><div class="pal-grid"></div></div>
+        <div class="pal td" data-pal="Dag"><div class="pal-head"><svg class="i" aria-hidden="true"><use href="#i-sun"></use></svg>Dag<span>papier op warm steen</span></div><div class="pal-grid"></div></div>
+      </div>
+
+      <h3 class="sys-h">Letter</h3>
+      <div class="type-card">
+        <div class="type-row"><span class="tr-l">Display<small>64 · 600 · −0,04em</small></span><span class="tr-s" style="font-size:clamp(34px,5vw,64px);font-weight:600;letter-spacing:-.04em;line-height:1.02">Goedemorgen, <span style="color:var(--gold-ink)">Gerjan</span></span></div>
+        <div class="type-row"><span class="tr-l">Titel<small>30 · 600 · −0,032em</small></span><span class="tr-s" style="font-size:30px;font-weight:600;letter-spacing:-.032em;line-height:1.12">Nieuwe huisstijl De Korenaar</span></div>
+        <div class="type-row"><span class="tr-l">Kop<small>19 · 600 · −0,022em</small></span><span class="tr-s" style="font-size:19px;font-weight:600;letter-spacing:-.022em">Herinnering voor factuur 2026-040</span></div>
+        <div class="type-row"><span class="tr-l">Tekst<small>13,5 · 400 · 1,5</small></span><span class="tr-s" style="font-size:13.5px;line-height:1.5;color:var(--ink-2);max-width:62ch">Joost reageert meestal binnen vier uur en belt liever dan dat hij mailt. Hij koos dinsdag voor richting C.</span></div>
+        <div class="type-row"><span class="tr-l">Label<small>12 · 500</small></span><span class="tr-s" style="font-size:12px;font-weight:500;color:var(--ink-3)">Gefactureerd in oktober · bijgewerkt 09:30</span></div>
+        <div class="type-row"><span class="tr-l">Bedrag<small>25 · 600, centen 62%</small></span><span class="tr-s" style="font-size:25px;font-weight:600;letter-spacing:-.035em"><span class="amt">€ 3.690<small>,50</small></span></span></div>
+        <p class="type-note"><svg class="i" aria-hidden="true"><use href="#i-info"></use></svg>Poppins heeft geen tabelcijfers. Bedragen onder elkaar lijnen daarom rechts uit, met de centen kleiner zodat de euro's het ritme bepalen.</p>
+      </div>
+
+      <div class="sys-two">
+        <div>
+          <h3 class="sys-h">Vorm en diepte</h3>
+          <div class="depth">
+            <div class="layer l1"><span>Grond</span></div>
+            <div class="layer l2"><span>Werkvlak · 20</span></div>
+            <div class="layer l3"><span>Kaart · 16</span></div>
+            <div class="layer l4"><span>Zwevend · 20</span></div>
+          </div>
+          <p class="sys-note">Hoeken 6 · 8 · 10 · 14 · 16 · 20, binnen elkaar concentrisch. In Nacht maakt licht van boven diepte (een glansrand), in Dag een zachte schaduw.</p>
+        </div>
+        <div>
+          <h3 class="sys-h">Beweging</h3>
+          <div class="motion">
+            <button class="mo" data-motion="1"><span class="mo-dot"></span><b>Reageren</b><span>120 ms · hover, vinkjes</span></button>
+            <button class="mo" data-motion="2"><span class="mo-dot"></span><b>Openen</b><span>200 ms · met veer, menu's</span></button>
+            <button class="mo" data-motion="3"><span class="mo-dot"></span><b>Overgaan</b><span>320 ms · panelen, pagina's</span></button>
+            <button class="mo" data-motion="4"><span class="mo-dot sun"></span><b>Zonsopgang</b><span>700 ms · thema, vanuit de zon</span></button>
+          </div>
+          <p class="sys-note">Alles staat uit bij ‘minder beweging’. Dan verschijnt alles direct, zonder dat er iets verdwijnt.</p>
+        </div>
+      </div>
+
+      <h3 class="sys-h">Bouwstenen</h3>
+      <div class="kit">
+        <div class="kit-cell"><span class="kit-l">Knoppen</span><div class="kit-row"><button class="btn btn-gold">Akkoord</button><button class="btn btn-2">Aanpassen</button><button class="btn btn-ghost">Later</button><button class="btn btn-ai"><svg class="i" aria-hidden="true"><use href="#i-sparkles"></use></svg>Vraag Gerrie</button></div></div>
+        <div class="kit-cell"><span class="kit-l">Status</span><div class="kit-row"><span class="pill ok">Betaald</span><span class="pill info">Openstaand</span><span class="pill danger">Te laat</span><span class="pill warn">Let op</span><span class="pill ai">Voorstel</span><span class="pill">Concept</span></div></div>
+        <div class="kit-cell"><span class="kit-l">Keuze</span><div class="kit-row"><div class="seg" role="group" aria-label="Voorbeeld"><button aria-pressed="true">Bord</button><button aria-pressed="false">Lijst</button><button aria-pressed="false">Tijdlijn</button></div><span class="kit-field"><svg class="i" aria-hidden="true"><use href="#i-search"></use></svg>Zoek op klant</span></div></div>
+        <div class="kit-cell"><span class="kit-l">Wie en wat</span><div class="kit-row"><span class="avs"><span class="av">GL</span><span class="av av-sb">SB</span><span class="av av-db">DB</span></span><span class="glyph run"><svg class="i" aria-hidden="true"><use href="#i-bell-ring"></use></svg></span><span class="glyph"><svg class="i" aria-hidden="true"><use href="#i-clock"></use></svg></span><span class="orb"></span><span class="count">4</span></div></div>
+        <div class="kit-cell wide"><span class="kit-l">Melding</span><div class="kit-row"><div class="toast" style="animation:none"><svg class="i" aria-hidden="true"><use href="#i-send"></use></svg><span>Herinnering verstuurd naar Karim <span class="tm">· gaat over 8 s de deur uit</span></span><button type="button">Ongedaan maken</button></div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="toekomst" aria-labelledby="fut-h">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">Toekomstbestendig</p>
+        <h2 id="fut-h">Gebouwd voor wat komt</h2>
+        <p class="lead">Zenit is meer dan een nieuwe jas. Het maakt zichtbaar wat ResoFly onder de motorkap al kan, en legt een basis die meegroeit met nieuwe modules, nieuwe schermen en nieuwe agents.</p>
+      </div>
+      <div class="future">
+        <article class="fu"><span class="fu-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-layers"></use></svg></span><h3>Eén tokenbron</h3><p>Kleur, letter, vorm en beweging in drie lagen: merk, betekenis, component. Eén wijziging en elk scherm, elke mail en elke pdf volgt.</p><span class="tag new">Nieuw in Zenit</span></article>
+        <article class="fu"><span class="fu-ic ai"><svg class="i i-lg i-ai" aria-hidden="true"><use href="#i-bot"></use></svg></span><h3>Agent-klaar</h3><p>Wat je in de app kunt, kan een agent klaarzetten: dezelfde handelingen via Gerrie, de MCP-koppeling en de openbare API. Altijd met een menselijke klik.</p><span class="tag has">Staat al in ResoFly</span></article>
+        <article class="fu"><span class="fu-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-layout-grid"></use></svg></span><h3>Ruimte voor modules</h3><p>De rail heeft plek voor wat nog komt, en elk contextpaneel groeit mee. De BV- en VPB-module past erin zonder dat het menu langer wordt.</p><span class="tag new">Nieuw in Zenit</span></article>
+        <article class="fu"><span class="fu-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-monitor"></use></svg></span><h3>Elk scherm</h3><p>Componenten passen zich aan hun plek aan, niet aan het apparaat. Dezelfde kaart werkt in een smal paneel, op een tablet en op een breed scherm.</p><span class="tag new">Nieuw in Zenit</span></article>
+        <article class="fu"><span class="fu-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-zap"></use></svg></span><h3>Snel als een gedachte</h3><p>Het doel: binnen 100 ms zichtbare reactie op elke klik, direct bijgewerkt in beeld, sneltoetsen overal en een vraagbalk die altijd één toets ver weg is.</p><span class="tag new">Nieuw in Zenit</span></article>
+        <article class="fu"><span class="fu-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-accessibility"></use></svg></span><h3>Toegankelijk als ondergrens</h3><p>WCAG 2.2 AA in beide thema's, focus altijd zichtbaar, kleur nooit de enige drager van betekenis en alles te bedienen met het toetsenbord.</p><span class="tag new">Nieuw in Zenit</span></article>
+        <article class="fu"><span class="fu-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-code-xml"></use></svg></span><h3>Moderne webstandaarden</h3><p>View transitions, container queries en :has() in plaats van extra bibliotheken. Werkt met de huidige React 18-app, zonder herbouw.</p><span class="tag new">Nieuw in Zenit</span></article>
+        <article class="fu"><span class="fu-ic"><svg class="i i-lg" aria-hidden="true"><use href="#i-smartphone"></use></svg></span><h3>Overal bij de hand</h3><p>Installeerbaar als app met pushmeldingen, zodat een beslissing van Gerrie je ook onderweg bereikt.</p><span class="tag has">Staat al in ResoFly</span></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="invoering" aria-labelledby="roll-h">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">Invoering</p>
+        <h2 id="roll-h">Zo komt Zenit in de app</h2>
+        <p class="lead">In vijf stappen, elk zelfstandig op te leveren. Zenit staat eerst achter de schakelaar <b>Probeer Zenit</b> naast de huidige look, zodat niemand van de ene op de andere dag een andere app opent.</p>
+      </div>
+      <ol class="steps-roll">
+        <li><span class="sr-n">1</span><div><h3>Fundament</h3><p>Tokens in <code>src/styles/zenit.css</code>, de Poppins-letterschaal en de vier themastanden in <code>src/lib/theme.ts</code> en het opstartscript in <code>index.html</code>.</p><p class="done-when"><b>Klaar als</b> beide thema's AA halen en <code>npm run test:mobile -- --theme=both</code> groen is.</p></div></li>
+        <li><span class="sr-n">2</span><div><h3>Werkruimte</h3><p>Nachtrail en contextpaneel (<code>Sidebar.tsx</code>), werktabs (<code>TabBar.tsx</code>), de vraagbalk op de handelingenregistry van Gerrie (<code>GlobalSearch.tsx</code>) en het spiekpaneel.</p><p class="done-when"><b>Klaar als</b> elke pagina bereikbaar is via rail, paneel en <kbd>⌘K</kbd>.</p></div></li>
+        <li><span class="sr-n">3</span><div><h3>Vandaag</h3><p>Dagboog, Te beslissen (<code>DecisionFeed.tsx</code>), Puls en Geldstroom in <code>Dashboard.tsx</code>.</p><p class="done-when"><b>Klaar als</b> het dashboard op telefoon, tablet en desktop in beide thema's klopt.</p></div></li>
+        <li><span class="sr-n">4</span><div><h3>Modules</h3><p>Klant 360, projectbord, facturen met spiekpaneel, agenda en Gerrie, daarna module voor module de rest.</p><p class="done-when"><b>Klaar als</b> de huidige look uit kan en niemand iets mist.</p></div></li>
+        <li><span class="sr-n">5</span><div><h3>Mobiel en buitenkant</h3><p>Dock, onderbladen en spraak. Portaal, offertes en facturen houden de huisstijl van de klant, met dezelfde bouwstenen.</p><p class="done-when"><b>Klaar als</b> Zenit de standaard is.</p></div></li>
+      </ol>
+
+      <h3 class="sys-h" style="margin-top:56px">Vier keuzes voor jou</h3>
+      <div class="choices">
+        <div class="choice"><b>Heet het Zenit?</b><p>Als werknaam voor het ontwerp en de schakelaar <i>Probeer Zenit</i>.</p><span class="advice">Advies: ja</span></div>
+        <div class="choice"><b>Rail in Dag donker of licht?</b><p>Donker houdt het merkanker en de herkenning van nu; licht is rustiger.</p><span class="advice">Advies: donker</span></div>
+        <div class="choice"><b>Welk thema als standaard?</b><p>Nacht zoals nu, of Met de zon mee voor nieuwe gebruikers. Een eigen keuze blijft altijd staan.</p><span class="advice">Advies: met de zon mee</span></div>
+        <div class="choice"><b>Hoe uitrollen?</b><p>Eerst achter <i>Probeer Zenit</i> voor jullie team, dan voor iedereen.</p><span class="advice">Advies: twee weken proef</span></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <span class="brand"><span class="logo sm">R</span><b>ResoFly</b><span class="zen">Zenit</span></span>
+    <p>Designvoorstel van 22 oktober 2026. Voorbeeldgegevens uit de testomgeving van Studio Lopik; bedragen en namen zijn fictief.</p>
+  </div>
+</footer>

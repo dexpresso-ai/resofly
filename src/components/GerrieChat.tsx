@@ -106,6 +106,13 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
 
+/** Open Gerrie en stel meteen een vraag — vanuit de vraagbalk van Zenit, of
+ *  van waar dan ook in de app. Zonder tekst gaat alleen het gesprek open. */
+export const ASK_GERRIE_EVENT = 'resofly:ask-gerrie';
+export function askGerrie(text = ''): void {
+  window.dispatchEvent(new CustomEvent(ASK_GERRIE_EVENT, { detail: { text } }));
+}
+
 export function GerrieChat({ organizationId, ...handlers }: { organizationId: UUID } & GerrieActionHandlers) {
   // De losse handlers blijven met hun eigen naam in beeld (dat leest prettiger in de
   // kaarten hieronder), maar we houden ook de hele set bij de hand: "Openen" geeft een
@@ -245,6 +252,23 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
       setStatus(null);
     }
   }
+
+  // Een vraag van buiten (askGerrie). De luisteraar wordt één keer aangemeld en
+  // pakt via de ref altijd de `send` van de laatste render, met de actuele
+  // stand van `thinking`. Is Gerrie nog bezig, dan komt de vraag in het
+  // tekstveld te staan in plaats van verloren te gaan.
+  const askRef = useRef<(text: string) => void>(() => {});
+  askRef.current = (text: string) => {
+    setOpen(true);
+    if (!text) return;
+    if (thinking) setDraft(text);
+    else void send(text);
+  };
+  useEffect(() => {
+    const onAsk = (event: Event) => askRef.current((event as CustomEvent<{ text?: string }>).detail?.text?.trim() ?? '');
+    window.addEventListener(ASK_GERRIE_EVENT, onAsk);
+    return () => window.removeEventListener(ASK_GERRIE_EVENT, onAsk);
+  }, []);
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(draft); }

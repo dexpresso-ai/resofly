@@ -1,13 +1,14 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Sunrise, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, settingsTabRoleRule, type SettingsTab } from '../features/SimplePages';
 import { Select } from './Ui';
 import { FULL_PERMISSIONS, isAccountantRole, type Permissions } from '../lib/permissions';
 import { useTheme } from '../lib/theme';
+import { useLook } from '../lib/look';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+export type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 
 /**
  * Het menu in categorieën in plaats van dertien regels onder elkaar. Een groep
@@ -74,35 +75,22 @@ const projectPages: Page[] = ['projects', 'project', 'project-planning', 'weekpl
  */
 const contentPages: Page[] = ['content', 'notes', 'documents'];
 
-export function Sidebar({
-  page,
-  data,
-  organizations,
-  activeOrganizationId,
-  activeRole,
-  onOrganization,
-  onNewOrganization,
-  onNewEntity,
-  onPage,
-  onSearchNavigate,
-  userEmail = null,
-  onOpenSettings,
-  onSignOut,
-  messageUnread = 0,
-  inboxOpen = 0,
-  ticketUnread = 0,
-  chatUnread = 0,
-  decisionCount = 0,
-  purchaseInboxOpen = 0,
-  mobileOpen = false,
-  onCloseMobile,
-  pinned = false,
-  onTogglePin,
-  permissions = FULL_PERMISSIONS,
-  onRefresh,
-  refreshing = false,
-  readOnly = false,
-}: {
+/** De instellingen in het accountmenu. AI-gebruik en API-sleutels zijn alleen
+ *  zichtbaar voor owners/admins, en de agenda-instellingen alleen als de
+ *  agenda-module openstaat — zelfde regels als op de instellingenpagina zelf. */
+export function visibleSettingsTabs(activeRole: OrganizationRole | null, permissions: Permissions) {
+  const canAdmin = activeRole === 'owner' || activeRole === 'admin';
+  return SETTINGS_TABS.filter(tab => {
+    // Boekhouder: alleen de financiële tabbladen; Boekhouder-toegang: beheer.
+    const roleRule = settingsTabRoleRule(tab.id, activeRole);
+    if (roleRule !== null) return roleRule;
+    if (tab.id === 'ai' || tab.id === 'api') return canAdmin;
+    if (tab.id === 'agenda') return permissions.canRead('calendar');
+    return true;
+  });
+}
+
+export interface SidebarProps {
   page: Page;
   data: AppData;
   organizations: Organization[];
@@ -140,13 +128,44 @@ export function Sidebar({
   onRefresh?: () => void;
   refreshing?: boolean;
   readOnly?: boolean;
-}) {
+}
+
+export function Sidebar({
+  page,
+  data,
+  organizations,
+  activeOrganizationId,
+  activeRole,
+  onOrganization,
+  onNewOrganization,
+  onNewEntity,
+  onPage,
+  onSearchNavigate,
+  userEmail = null,
+  onOpenSettings,
+  onSignOut,
+  messageUnread = 0,
+  inboxOpen = 0,
+  ticketUnread = 0,
+  chatUnread = 0,
+  decisionCount = 0,
+  purchaseInboxOpen = 0,
+  mobileOpen = false,
+  onCloseMobile,
+  pinned = false,
+  onTogglePin,
+  permissions = FULL_PERMISSIONS,
+  onRefresh,
+  refreshing = false,
+  readOnly = false,
+}: SidebarProps) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
   const [calendarOpen, setCalendarOpen] = useState(() => calendarPages.includes(page));
   // Account-menu onderin: opent alle instellingen + uitloggen boven de avatar.
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [theme, setTheme] = useTheme();
+  const [, setLook] = useLook();
   const userRef = useRef<HTMLDivElement>(null);
   const userTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -170,18 +189,7 @@ export function Sidebar({
     return () => { document.removeEventListener('mousedown', onPointer); document.removeEventListener('keydown', onKey); };
   }, [userMenuOpen]);
 
-  // AI-gebruik en API-sleutels zijn alleen zichtbaar voor owners/admins, en de agenda-instellingen
-  // alleen als de agenda-module openstaat — zelfde regels als op de
-  // instellingenpagina zelf.
-  const canAdmin = activeRole === 'owner' || activeRole === 'admin';
-  const settingsTabs = SETTINGS_TABS.filter(tab => {
-    // Boekhouder: alleen de financiële tabbladen; Boekhouder-toegang: beheer.
-    const roleRule = settingsTabRoleRule(tab.id, activeRole);
-    if (roleRule !== null) return roleRule;
-    if (tab.id === 'ai' || tab.id === 'api') return canAdmin;
-    if (tab.id === 'agenda') return permissions.canRead('calendar');
-    return true;
-  });
+  const settingsTabs = visibleSettingsTabs(activeRole, permissions);
   // De rollen staan hier zoals ze in de database heten; de boekhouder in het Nederlands.
   const roleLabel = isAccountantRole(activeRole) ? 'boekhouder' : activeRole ?? 'geen rol';
   const purchaseInboxTitle = `${purchaseInboxOpen} per e-mail binnengekomen inkoopfactu${purchaseInboxOpen === 1 ? 'ur' : 'ren'} met aandacht nodig`;
@@ -404,6 +412,16 @@ export function Sidebar({
             <Sun size={14}/><span>Licht</span>
           </button>
         </div>
+        {/* De nieuwe voorkant (DESIGN_VOORSTEL_ZENIT_2026-10-22.md), per browser
+            aan te zetten. Terug kan altijd: Weergave → Zenit in de rail. */}
+        <button
+          type="button"
+          role="menuitem"
+          className="user-menu-item user-menu-zenit"
+          onClick={() => { setUserMenuOpen(false); setLook('zenit'); }}
+        >
+          <Sunrise size={15}/><span>Probeer Zenit</span><small>nieuw</small>
+        </button>
         <div className="user-menu-sep" aria-hidden="true" />
         <button
           type="button"

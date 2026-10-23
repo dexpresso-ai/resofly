@@ -15,6 +15,7 @@
  *
  * Opties:
  *   --theme=dark|light|both     standaard dark
+ *   --look=zenit                meet de nieuwe voorkant (Probeer Zenit) i.p.v. Cockpit
  *   --viewports=phone,tablet    standaard phone,tablet,landscape (ook: desktop)
  *   --pages=dashboard,clients   standaard alle pagina's
  *   --shots=<map>               schrijf per pagina een screenshot weg
@@ -152,6 +153,16 @@ const FIRST_ITEM = {
   'portal-settings': { selector: '.portal-toggle-row', maxTop: 320 },
 };
 
+/**
+ * Zenit (designvoorstel 2026-10-22) zet op Vandaag de dag zelf bovenaan: de
+ * Dagboog met Nu en Volgende. Daar is die boog het eerste échte item, niet de
+ * eerste taak. Gemeten 2026-10-23: de boog begint op 58px (Dag en Nacht); de
+ * grens ligt 20% hoger. De rest van de pagina's houdt de grenzen van Cockpit.
+ */
+const FIRST_ITEM_BY_LOOK = {
+  zenit: { dashboard: { selector: '.zarc', maxTop: 70 } },
+};
+
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));
 const themes = args.theme === 'both' ? ['dark', 'light'] : [args.theme === 'light' ? 'light' : 'dark'];
 // Liggend hoort in de standaardronde. De fix van 18 september op Berichten
@@ -161,6 +172,8 @@ const themes = args.theme === 'both' ? ['dark', 'light'] : [args.theme === 'ligh
 // zit: geen smal scherm maar een laag scherm, een heel ander probleem.
 const viewports = (args.viewports ?? 'phone,tablet,landscape').split(',').map(v => v.trim()).filter(v => VIEWPORTS[v]);
 const pages = args.pages ? args.pages.split(',').map(p => p.trim()).filter(p => PAGES[p]) : Object.keys(PAGES);
+const look = args.look === 'zenit' ? 'zenit' : null;
+const firstItem = { ...FIRST_ITEM, ...(look ? FIRST_ITEM_BY_LOOK[look] : {}) };
 const shotsDir = args.shots ? path.resolve(args.shots) : null;
 if (shotsDir) fs.mkdirSync(shotsDir, { recursive: true });
 
@@ -192,7 +205,7 @@ try {
         page.on('pageerror', e => errors.push(String(e.message)));
         const spec = PAGES[key];
         const isPublic = typeof spec === 'object' && spec.path;
-        await page.addInitScript(storageScript(spec, { 'resofly.theme': theme, ...(spec.storage ?? {}) }));
+        await page.addInitScript(storageScript(spec, { 'resofly.theme': theme, ...(look ? { 'resofly.look': look } : {}), ...(spec.storage ?? {}) }));
         await page.goto(isPublic ? new URL(spec.path, baseUrl).href : baseUrl, { waitUntil: 'networkidle' });
         // Werkruimte: de shell; publieke pagina: de eigen wortel.
         const shell = await page.waitForSelector(isPublic ? '.public-quote-page, .portal, .galv, .login, .pgal' : '.app', { timeout: 20000 }).catch(() => null);
@@ -243,10 +256,10 @@ try {
               return Math.round(Math.max(0, Math.min(bottom, window.innerHeight) - Math.max(top, 0)));
             })() : null,
           };
-        }, FIRST_ITEM[key]?.selector ?? null);
+        }, firstItem[key]?.selector ?? null);
         // Publieke pagina's hebben geen .content-wikkel: meet daar op het document.
         if (isPublic && m.firstTop == null) m.firstTop = m.firstTopDoc;
-        const label = `${theme}/${vpName}/${key}`;
+        const label = `${look ? `${look}/` : ''}${theme}/${vpName}/${key}`;
         const problems = [];
         if (!shell) problems.push(isPublic ? 'pagina niet gerenderd' : 'app-shell niet gerenderd');
         if (errors.length) problems.push(`js-fout: ${errors[0].slice(0, 90)}`);
@@ -255,17 +268,17 @@ try {
         // Bereikbaarheid geldt op élk formaat — juist liggend, waar de hoogte
         // schaars is, gaat dit mis. 12px is ruim onder een normale regel en
         // ruim boven het gerommel van een afrondingsfout.
-        if (FIRST_ITEM[key] && m.firstVisible != null && m.firstVisible < 12) {
-          problems.push(`eerste item (${FIRST_ITEM[key].selector}) is weggedrukt: ${m.firstVisible}px zichtbaar`);
+        if (firstItem[key] && m.firstVisible != null && m.firstVisible < 12) {
+          problems.push(`eerste item (${firstItem[key].selector}) is weggedrukt: ${m.firstVisible}px zichtbaar`);
         }
-        const rule = vpName === 'phone' ? FIRST_ITEM[key] : null;
+        const rule = vpName === 'phone' ? firstItem[key] : null;
         if (rule) {
           if (m.firstTop == null) problems.push(`eerste item (${rule.selector}) niet gevonden`);
           else if (m.firstTop > rule.maxTop) problems.push(`eerste item op ${m.firstTop}px > ${rule.maxTop}px`);
         }
         rows.push({ label, chrome: m.chrome, firstTop: m.firstTop, max: rule?.maxTop ?? null, problems });
         if (problems.length) failures.push({ label, problems });
-        if (shotsDir) await page.screenshot({ path: path.join(shotsDir, `${theme}-${vpName}-${key}.png`) });
+        if (shotsDir) await page.screenshot({ path: path.join(shotsDir, `${look ? `${look}-` : ''}${theme}-${vpName}-${key}.png`) });
         await page.close();
       }
       await context.close();
