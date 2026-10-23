@@ -971,7 +971,11 @@
 :root[data-look="zenit"] .app .fs-active-chip span{color:var(--ink-3)}
 @media (max-width:760px){
   /* Telefoon: zoeken + filterknop op één regel, de snelkeuzes als veegrij
-     eronder; de telling alleen zolang er iets gefilterd is. */
+     eronder; de telling alleen zolang er iets gefilterd is. Dezelfde marge
+     als het blok op de telefoon altijd had (10px), en geen extra lucht onder
+     de kop. */
+  :root[data-look="zenit"] .app .finance-search-card.fs-calm{gap:8px;margin-bottom:10px}
+  :root[data-look="zenit"] .app .fs-calm .finance-search-head{padding-bottom:0}
   :root[data-look="zenit"] .app .fs-bar{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
   :root[data-look="zenit"] .app .fs-bar.has-refine{grid-template-columns:minmax(0,1fr) auto}
   :root[data-look="zenit"] .app .fs-qsearch{grid-row:1;grid-column:1;max-width:none;height:40px}
