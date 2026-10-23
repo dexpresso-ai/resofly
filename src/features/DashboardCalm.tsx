@@ -308,8 +308,8 @@ export function ProjectGlance({ projects, tasks, clients, onOpen, onOpenPlanning
       if (list.length > 0 && open === 0) status = { text: 'klaar', tone: 'ok' };
       else if (daysLeft < 0) status = { text: `${pl(-daysLeft, 'dag', 'dagen')} te laat`, tone: 'danger' };
       else if (start > todayStart) status = { text: `start over ${pl(Math.round((start - todayStart) / DAY_MS), 'dag', 'dagen')}`, tone: 'quiet' };
-      else if (list.length > 0 && elapsed - progress > 0.25) status = { text: `achter · nog ${daysLeft} d`, tone: 'warn' };
-      else status = { text: `nog ${pl(daysLeft, 'dag', 'dagen')}`, tone: 'quiet' };
+      else if (list.length > 0 && elapsed - progress > 0.25) status = { text: daysLeft === 0 ? 'achter · laatste dag' : `achter · nog ${daysLeft} d`, tone: 'warn' };
+      else status = { text: daysLeft === 0 ? 'laatste dag' : `nog ${pl(daysLeft, 'dag', 'dagen')}`, tone: 'quiet' };
       return { project, clientName: project.client_id ? clientName.get(project.client_id) ?? null : null, start, end, total: list.length, done, elapsed, progress, status };
     })
     // Afgerond en ver weg doet er nu niet toe.
