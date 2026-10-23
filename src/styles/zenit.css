@@ -1,0 +1,724 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   ZENIT — de nieuwe voorkant (designvoorstel 2026-10-22)
+   ──────────────────────────────────────────────────────────────────────────
+   Het voorstel, met alle schermen en de redenering, staat in
+   DESIGN_VOORSTEL_ZENIT_2026-10-22.md en docs/design-voorstel-zenit/.
+
+   Aan en uit
+     Zenit staat achter de schakelaar "Probeer Zenit" in het accountmenu
+     (src/lib/look.ts). Die zet `data-look="zenit"` op <html>, en ÉLKE regel
+     hieronder hangt daaraan. Wie hem niet aanzet, ziet niets veranderen. De
+     enige uitzondering is het labeltje "nieuw" bij de schakelaar zelf.
+
+   Spelregels
+     • Eén donker anker: de nachtrail links, in Dag en Nacht. Verder volgt
+       alles het thema; het donkere commandovlak van Cockpit (de kop van het
+       dashboard, een project, een klant) wordt een gewoon vlak met de kleur
+       van het project of de klant als gloed.
+     • Grond → werkvlak → kaart. De tabrij en het contextpaneel liggen op de
+       grond, het werkvlak zweeft erboven met ronde hoeken.
+     • Goud is de hoofdactie, de focus en de plek waar je bent. Het poollicht
+       (--ai-1..3) is van Gerrie: de vraagbalk, het orbje, wat hij voorstelt.
+     • Rustiger letter: koppen in 600 in plaats van 800, kopjes in zinsvorm
+       in plaats van kapitalen met spatiëring.
+     • De telefoon houdt de gemeten opbouw van Cockpit (tests/mobile/run.mjs):
+       onder 761px wisselen kleur, vorm en het uitschuifmenu, niet de maten.
+     • Werkruimteregels hangen onder `.app` of `:has(.app)`: de publieke
+       pagina's en het klantportaal (met de huisstijl van de leverancier)
+       blijven zoals ze waren.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 0 · De schakelaar in het accountmenu van Cockpit ────────────────────── */
+.user-menu-zenit small{
+  margin-left:auto;padding:2px 7px;border-radius:999px;
+  background:rgba(247,197,72,.14);color:#F7C548;
+  font-size:10.5px;font-weight:600;letter-spacing:0;
+}
+
+/* ── 1 · Tokens ──────────────────────────────────────────────────────────────
+   Bovenop Belicht (globals.css) en Cockpit. Nacht: iets dieper en koeler
+   grafiet. Dag: de grond een tikje dieper (#EDEBE5), zodat het papieren
+   werkvlak erop ligt in plaats van erin opgaat; --ink-3 gaat mee omlaag om
+   ook op die grond AA (≥ 4,5:1) te halen. */
+:root[data-look="zenit"]:has(.app){
+  --bg:#0F0F12;--bg-rgb:15,15,18;
+  --bg-deep:#08080A;--bg-deep-rgb:8,8,10;
+  --surface:#15151A;--surface-rgb:21,21,26;
+  --surface-2:#1B1B21;--surface2-rgb:27,27,33;
+  --surface-3:#23232A;--surface3-rgb:35,35,42;
+  --raised:#26262D;--field:#0C0C0F;--well:#0B0B0E;--nav-active:#1B1B21;--sidebar-bg:#08080A;
+  --ground:#08080A;
+  --ai-line:rgba(163,146,255,.36);
+  --gold-glow:rgba(247,197,72,.42);
+  /* Vorm: werkvlak 20 · kaart 16 · bediening 10 */
+  --r-xl:16px;--r-2xl:20px;--r-canvas:20px;--r-card:16px;--r-ctl:10px;
+  /* Diepte: één glansrand van boven, schaduw alleen waar iets zweeft. */
+  --shadow-1:inset 0 1px 0 rgba(255,255,255,.04),0 1px 2px rgba(0,0,0,.35);
+  --shadow-2:inset 0 1px 0 rgba(255,255,255,.045),0 18px 40px -22px rgba(0,0,0,.85);
+  --shadow-pop:0 0 0 1px rgba(255,255,255,.08),0 30px 80px -20px rgba(0,0,0,.9);
+  --shadow-canvas:0 0 0 1px rgba(255,255,255,.065),0 30px 60px -30px rgba(0,0,0,.9);
+  --shadow-card:inset 0 1px 0 rgba(255,255,255,.04),0 1px 2px rgba(0,0,0,.3);
+  --shadow-card-hover:inset 0 1px 0 rgba(255,255,255,.05),0 18px 40px -22px rgba(0,0,0,.85);
+  /* De lucht van de Dagboog */
+  --sky-1:#16131F;--sky-2:#0F0F12;--sky-haze:rgba(163,146,255,.14);--star:rgba(255,255,255,.75);
+}
+:root[data-look="zenit"][data-theme="light"]:has(.app){
+  --bg:#FAF9F6;--bg-rgb:250,249,246;
+  --bg-deep:#EDEBE5;--bg-deep-rgb:237,235,229;
+  --surface:#FFFFFF;--surface-rgb:255,255,255;
+  --surface-2:#F6F5F1;--surface2-rgb:246,245,241;
+  --surface-3:#EEEDE8;--surface3-rgb:238,237,232;
+  --raised:#FFFFFF;--field:#FFFFFF;--well:#EEEDE8;--nav-active:#FFFFFF;--sidebar-bg:#EDEBE5;
+  --ground:#EDEBE5;
+  --ink-3:#67635B;
+  --ai-line:rgba(110,90,230,.30);
+  --gold-glow:rgba(244,188,46,.50);
+  --grid:#ECEAE5;
+  --shadow-1:0 1px 2px rgba(28,27,24,.05),0 1px 1px rgba(28,27,24,.03);
+  --shadow-2:0 1px 2px rgba(28,27,24,.05),0 16px 36px -20px rgba(28,27,24,.22);
+  --shadow-pop:0 0 0 1px rgba(28,27,24,.07),0 30px 70px -24px rgba(28,27,24,.35);
+  --shadow-canvas:0 0 0 1px rgba(28,27,24,.055),0 1px 2px rgba(28,27,24,.04),0 24px 60px -30px rgba(28,27,24,.28);
+  --shadow-card:0 1px 2px rgba(28,27,24,.05),0 1px 1px rgba(28,27,24,.03);
+  --shadow-card-hover:0 1px 2px rgba(28,27,24,.05),0 16px 36px -20px rgba(28,27,24,.22);
+  --sky-1:#FFF4D6;--sky-2:#FFFDF8;--sky-haze:rgba(244,188,46,.20);--star:rgba(28,27,24,0);
+}
+/* Cockpit zet het werkvlak op Dag op .app zelf (#F3F2EE); Zenit wil papier. */
+:root[data-look="zenit"][data-theme="light"] .app{--bg:#FAF9F6;--bg-rgb:250,249,246}
+
+/* De kop van een project of klant was in Cockpit een donker commandovlak, ook
+   op Dag (Nacht-tokens op het element). In Zenit volgt hij het thema: hier
+   staan de Dag-tokens weer, inclusief de afgeleide, want een custom property
+   wordt opgelost waar hij staat. */
+:root[data-look="zenit"][data-theme="light"] .app :is(.proj-dash-hero,.client-detail-hero){
+  --sheen-rgb:28,27,24;--shade-rgb:28,27,24;--ink-rgb:28,27,24;--sheen-k:.55;--shade-k:.30;
+  --bg-rgb:250,249,246;--bg-deep-rgb:237,235,229;--surface-rgb:255,255,255;--surface2-rgb:246,245,241;--surface3-rgb:238,237,232;
+  --accent-rgb:244,188,46;--two-rgb:74,90,52;--ok-rgb:11,107,78;--warn-rgb:163,71,10;--danger-rgb:189,31,49;--note-rgb:91,63,196;--info-rgb:26,95,186;--ai-rgb:110,90,230;
+  --accent:#F4BC2E;--accent-hover:#F7C94F;--accent-ink:#855800;--on-accent:#1C1405;--two:#4A5A34;--two-ink:#4A5A34;
+  --ok:#0B6B4E;--warn:#A3470A;--danger:#BD1F31;--note:#5B3FC4;--info:#1A5FBA;
+  --bg:#FAF9F6;--bg-deep:#EDEBE5;--surface:#FFFFFF;--surface-2:#F6F5F1;--surface-3:#EEEDE8;
+  --well:#EEEDE8;--raised:#FFFFFF;--field:#FFFFFF;--nav-active:#FFFFFF;
+  --line:#E7E5E0;--line-2:#DAD7D0;--line-3:#C7C3BA;--line-accent:rgba(133,88,0,.30);--hi:rgba(255,255,255,.9);
+  --ink:#1C1B18;--ink-2:#55524B;--ink-3:#67635B;--ink-4:#A8A49B;
+  --ai-1:#6E5AE6;--ai-2:#1F9BE0;--ai-3:#E0A11B;--ai-ink:#5E48D6;--ai-glow:rgba(110,90,230,.22);--ai-soft:rgba(110,90,230,.065);
+  --viz-1:#A36F00;--viz-2:#D4AA48;--grid:#ECEAE5;
+  --shadow-1:0 1px 2px rgba(28,27,24,.05),0 1px 1px rgba(28,27,24,.03);
+  --shadow-2:0 1px 2px rgba(28,27,24,.05),0 16px 36px -20px rgba(28,27,24,.22);
+  --shadow-pop:0 0 0 1px rgba(28,27,24,.07),0 30px 70px -24px rgba(28,27,24,.35);
+  --ring:0 0 0 3px rgba(244,188,46,.42);--scrim:rgba(28,27,24,.26);
+  --focus-line:#B07A00;--accent-edge:#B07A00;
+  --bg2:#FFFFFF;--bg3:rgba(28,27,24,.03);--bg4:rgba(28,27,24,.047);--bg5:rgba(28,27,24,.066);
+  --panel:#FFFFFF;--panel-strong:#F6F5F1;
+  --border:#E7E5E0;--border2:#DAD7D0;--border-strong:rgba(133,88,0,.30);
+  --text:#1C1B18;--muted:#67635B;--muted2:#55524B;
+  --load-fill:#A36F00;--load-track:rgba(28,27,24,.08);
+  --accent-soft:rgba(244,188,46,.12);--accent-glow:rgba(244,188,46,.26);
+  --accent-g:#0B6B4E;--accent-o:#A3470A;--accent-r:#BD1F31;--accent-v:#5B3FC4;--accent-b:#1A5FBA;
+  --shadow:0 1px 2px rgba(28,27,24,.05),0 16px 36px -20px rgba(28,27,24,.22);
+  --shadow-soft:0 1px 2px rgba(28,27,24,.05),0 1px 1px rgba(28,27,24,.03);
+  --shadow-card:0 1px 2px rgba(28,27,24,.05),0 1px 1px rgba(28,27,24,.03);
+  --shadow-card-hover:0 1px 2px rgba(28,27,24,.05),0 16px 36px -20px rgba(28,27,24,.22);
+  --ag-t-quiet:rgba(110,90,230,.12);--ag-t-quiet2:rgba(110,90,230,.07);--ag-t-bloom:rgba(255,255,255,.6);--ag-t-shade:rgba(110,90,230,.1);
+  color-scheme:light;
+}
+
+/* ── 2 · Grond, tabrij en werkvlak (vanaf 761px) ─────────────────────────────
+   Rail 68px (+ 8px grond) en paneel 244px: samen 320px. Los staat alleen de
+   rail, met 8px grond tot het werkvlak. De opvulling van .app (globals.css,
+   "Responsieve navigatie") rekent met deze twee maten. */
+@media (min-width:761px){
+  :root[data-look="zenit"] .app{--rail:84px;--sidebar:320px;--tabbar-h:46px;background:var(--bg-deep)}
+
+  /* .main draagt niets meer: de tabrij ligt op de grond, het werkvlak
+     (.content) zweeft eronder. */
+  :root[data-look="zenit"] .app .main{
+    margin:0;border:0;border-radius:0;background:none;box-shadow:none;overflow:visible;
+  }
+  :root[data-look="zenit"] .app .main>.content{
+    margin:6px 8px 8px 0;
+    border-radius:var(--r-canvas);
+    background:var(--bg);
+    box-shadow:var(--shadow-canvas);
+  }
+  :root[data-look="zenit"] .app .main>.tabbar,
+  :root[data-look="zenit"] .app .main.is-scrolled>.tabbar{
+    height:var(--tabbar-h);padding:8px 8px 0 2px;gap:4px;
+    background:transparent;border:0;box-shadow:none;
+    -webkit-backdrop-filter:none;backdrop-filter:none;
+  }
+  /* Pop-ups beginnen waar het werkvlak begint: tabrij + 6px grond. */
+  :root[data-look="zenit"] .app :is(.modal-bg,.tb-overlay,.chat-modal-bg,.bk-modal-backdrop,.event-detail-overlay){top:calc(var(--tabbar-h) + 6px)}
+
+  /* Werktabs: rustig op de grond; het gekozen tabblad ligt er als een kaart op. */
+  :root[data-look="zenit"] .app .tab{height:31px;padding:0 5px 0 10px;gap:7px;border:0;border-radius:10px;color:var(--ink-2);font-size:12.5px;font-weight:500}
+  :root[data-look="zenit"] .app .tab:hover{background:var(--surface-2);color:var(--ink)}
+  :root[data-look="zenit"] .app .tab.active{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:var(--shadow-1),0 0 0 1px var(--line)}
+  :root[data-look="zenit"] .app .tab.active::after{display:none}
+  :root[data-look="zenit"] .app .tab .tab-ico{color:var(--ink-3)}
+  :root[data-look="zenit"] .app .tab.active .tab-ico{color:var(--accent-ink)}
+  :root[data-look="zenit"] .app .tab .tab-ico svg{width:14px;height:14px}
+  :root[data-look="zenit"] .app .tab-close{opacity:0;color:var(--ink-3)}
+  :root[data-look="zenit"] .app :is(.tab:hover,.tab.active) .tab-close,
+  :root[data-look="zenit"] .app .tab-close:focus-visible{opacity:1}
+  :root[data-look="zenit"] .app .tab-close:hover{background:var(--surface-3);color:var(--ink)}
+  :root[data-look="zenit"] .app .tab-new{border:0;background:transparent;color:var(--ink-3);border-radius:10px}
+  :root[data-look="zenit"] .app .tab-new:hover{background:var(--surface-2);color:var(--ink)}
+}
+
+/* ── 3 · De vraagbalk: rechts in de tabrij ──────────────────────────────── */
+:root[data-look="zenit"] .tabbar-trailing{display:flex;align-items:center;gap:8px;flex:0 0 auto;margin-left:auto;padding-left:10px}
+:root[data-look="zenit"] .ztab-ro{
+  display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:999px;
+  background:var(--surface-2);border:1px solid var(--line);color:var(--ink-3);
+  font-size:11.5px;font-weight:500;white-space:nowrap;
+}
+:root[data-look="zenit"] .gs-ask-bar{width:clamp(220px,25vw,340px);margin:0}
+:root[data-look="zenit"] .gs-ask-bar .gs-field{
+  height:32px;min-height:32px;padding:0 6px 0 10px;gap:9px;border-radius:11px;
+  background:var(--surface);border:1px solid var(--line-2);box-shadow:var(--shadow-1);
+  transition:box-shadow var(--t-2) var(--ease),border-color var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .gs-ask-bar .gs-field:hover,
+:root[data-look="zenit"] .gs-ask-bar .gs-field:focus-within{
+  border-color:transparent;
+  background:linear-gradient(var(--surface),var(--surface)) padding-box,var(--aurora) border-box;
+  box-shadow:0 8px 26px -14px var(--ai-1);
+}
+:root[data-look="zenit"] .gs-ask-bar .gs-input{font-size:12.5px;font-weight:400;color:var(--ink)}
+:root[data-look="zenit"] .gs-ask-bar .gs-input::placeholder{color:var(--ink-3)}
+:root[data-look="zenit"] .gs-kbd{
+  display:inline-grid;place-items:center;min-width:20px;height:21px;padding:0 6px;flex:none;
+  border-radius:6px;border:1px solid var(--line-2);border-bottom-width:2px;
+  background:var(--surface-2);color:var(--ink-3);font:500 11px/1 var(--font-sans);
+}
+
+/* Het orbje van Gerrie: poollicht als een klein hemellichaam. */
+:root[data-look="zenit"] :is(.gs-orb,.zorb){
+  --s:16px;position:relative;display:inline-block;flex:none;
+  width:var(--s);height:var(--s);border-radius:50%;
+  background:
+    radial-gradient(circle at 32% 28%,rgba(255,255,255,.95),rgba(255,255,255,0) 32%),
+    conic-gradient(from 200deg,var(--ai-1),var(--ai-2),var(--ai-3),var(--ai-1));
+  box-shadow:0 0 0 1px rgba(255,255,255,.08),0 6px 18px -6px var(--ai-1);
+}
+:root[data-look="zenit"] .zorb.sm{--s:18px}
+:root[data-look="zenit"] .zorb.lg{--s:34px}
+@media (prefers-reduced-motion:no-preference){
+  :root[data-look="zenit"] .zorb.live{animation:zenit-orb 6s linear infinite}
+  @keyframes zenit-orb{to{filter:hue-rotate(40deg)}}
+}
+
+/* De resultaten als paneel onder de vraagbalk, niet naast de zijbalk. */
+@media (min-width:761px){
+  /* Onder de tabrij, zodat de vraagbalk zelf scherp en klikbaar blijft. */
+  :root[data-look="zenit"] .gs-backdrop.gs-backdrop-ask{
+    inset:52px 0 0 0;background:rgba(4,4,6,.42);
+    -webkit-backdrop-filter:none;backdrop-filter:none;
+  }
+  :root[data-look="zenit"][data-theme="light"] .gs-backdrop.gs-backdrop-ask{background:rgba(28,27,24,.16)}
+  :root[data-look="zenit"] .gs-panel.gs-panel-ask{
+    top:48px;bottom:auto;left:auto;right:8px;
+    width:min(580px,calc(100vw - 16px));max-width:none;max-height:min(72vh,640px);
+    border:1px solid var(--line-2);border-radius:16px;
+    background:var(--surface);box-shadow:var(--shadow-pop);
+    overflow:hidden;animation:zenit-pop .26s var(--spring) both;
+  }
+  :root[data-look="zenit"] .gs-panel-ask .gs-panel-head{padding:12px 14px 10px 16px}
+  :root[data-look="zenit"] .gs-panel-ask .gs-panel-title{font-size:13px;font-weight:600}
+  :root[data-look="zenit"] .gs-panel-ask .gs-panel-close{width:28px;height:28px;border-radius:8px}
+}
+:root[data-look="zenit"] .gs-panel .gs-result{border-radius:11px}
+:root[data-look="zenit"] .gs-panel :is(.gs-result:hover,.gs-result.active){background:var(--surface-2)}
+:root[data-look="zenit"] .gs-panel .gs-result.active{box-shadow:inset 0 0 0 1px var(--line-2)}
+:root[data-look="zenit"] .gs-panel .gs-group-head{text-transform:none;letter-spacing:0;font-size:11.5px;font-weight:600}
+:root[data-look="zenit"] .gs-panel .gs-result-badge{text-transform:none;letter-spacing:0;font-size:10.5px;font-weight:500}
+:root[data-look="zenit"] .gs-ask{margin-bottom:4px}
+:root[data-look="zenit"] .gs-ask .gs-result-icon{background:var(--ai-soft);border-color:var(--ai-line)}
+:root[data-look="zenit"] .gs-ask .gs-result-title{color:var(--ink)}
+:root[data-look="zenit"] .gs-ask .gs-result-badge{background:var(--ai-soft);border-color:var(--ai-line);color:var(--ai-ink)}
+:root[data-look="zenit"] .gs-ask:is(:hover,.active) .gs-result-chevron{color:var(--ai-ink)}
+@keyframes zenit-pop{from{opacity:0;transform:translateY(-6px) scale(.985)}}
+
+/* ── 4 · De nachtrail ────────────────────────────────────────────────────────
+   Altijd donker, ook op Dag: het merkanker. Hij draagt .cmd-scope, zodat
+   Cockpit er op Dag de Nacht-tokens op zet (tellers, focus, tooltips). */
+:root[data-look="zenit"] .znav{position:fixed;top:0;left:0;bottom:0;z-index:60;width:var(--rail);color:var(--ink)}
+:root[data-look="zenit"] .zrail{
+  position:absolute;left:8px;top:8px;bottom:8px;width:68px;z-index:2;
+  display:flex;flex-direction:column;align-items:center;gap:2px;padding:12px 0 10px;
+  border-radius:20px;color:#F4F3F0;
+  /* Zeven ringen rond het merkteken (de grote set van Cockpit loopt in een
+     smalle rail uit tot strepen dwars over de knoppen). */
+  --zrings:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 300 300'%3E%3Cg fill='none' stroke='%23fff' stroke-opacity='.07'%3E%3Ccircle cx='150' cy='150' r='24'/%3E%3Ccircle cx='150' cy='150' r='44'/%3E%3Ccircle cx='150' cy='150' r='64'/%3E%3Ccircle cx='150' cy='150' r='84'/%3E%3Ccircle cx='150' cy='150' r='104'/%3E%3Ccircle cx='150' cy='150' r='124'/%3E%3Ccircle cx='150' cy='150' r='144'/%3E%3C/g%3E%3C/svg%3E");
+  background:
+    radial-gradient(90px 90px at 50% 34px,rgba(247,197,72,.22),transparent 70%),
+    var(--zrings) 50% -116px/300px no-repeat,
+    linear-gradient(180deg,#131318 0%,#0C0C0F 60%,#0A0A0D 100%);
+  box-shadow:0 0 0 1px rgba(255,255,255,.07),inset 0 1px 0 rgba(255,255,255,.06),0 24px 48px -26px rgba(0,0,0,.75);
+}
+:root[data-look="zenit"][data-theme="light"] .zrail{box-shadow:0 0 0 1px rgba(0,0,0,.2),inset 0 1px 0 rgba(255,255,255,.06),0 24px 48px -24px rgba(28,27,24,.55)}
+:root[data-look="zenit"] .zrail-logo{
+  flex:none;display:grid;place-items:center;width:42px;height:42px;margin-bottom:12px;padding:0;border:0;border-radius:13px;cursor:pointer;
+  background:var(--gold-face);color:#1A1405;font:700 21px/1 var(--font-sans);letter-spacing:-.02em;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 1px rgba(0,0,0,.25),0 10px 26px -8px rgba(247,197,72,.65);
+  transition:transform var(--t-2) var(--spring);
+}
+:root[data-look="zenit"] .zrail-logo:hover{transform:scale(1.04)}
+:root[data-look="zenit"] .zrail-slot{display:flex;flex-direction:column;align-items:center}
+:root[data-look="zenit"] .zrail-sep{width:26px;height:1px;margin:7px 0;background:rgba(255,255,255,.09)}
+:root[data-look="zenit"] .zrail-btn{
+  position:relative;display:grid;place-items:center;width:46px;height:44px;padding:0;border:0;border-radius:13px;cursor:pointer;
+  background:transparent;color:#908E88;
+  transition:color var(--t-1) var(--ease),background-color var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .zrail-btn:hover,:root[data-look="zenit"] .zrail-btn.is-shown{color:#F4F3F0;background:rgba(255,255,255,.07)}
+:root[data-look="zenit"] .zrail-btn.is-on{color:#F7C548;background:radial-gradient(closest-side,rgba(247,197,72,.22),rgba(247,197,72,.07) 70%,transparent)}
+:root[data-look="zenit"] .zrail-btn.is-on::before{
+  content:'';position:absolute;left:-11px;top:11px;bottom:11px;width:3px;border-radius:0 3px 3px 0;
+  background:#F7C548;box-shadow:0 0 14px 1px rgba(247,197,72,.42);
+}
+:root[data-look="zenit"] .zrail-btn:focus-visible,:root[data-look="zenit"] .zrail-logo:focus-visible,:root[data-look="zenit"] .zrail-me:focus-visible{outline:2px solid #F7C548;outline-offset:2px}
+:root[data-look="zenit"] .zrail-btn.is-ai svg{color:#B8AAFF}
+:root[data-look="zenit"] .zrail-btn.is-ai.is-on svg{color:#B8AAFF;filter:drop-shadow(0 0 6px rgba(163,146,255,.6))}
+:root[data-look="zenit"] .zrail-btn.is-ai.is-on{background:radial-gradient(closest-side,rgba(163,146,255,.22),rgba(163,146,255,.06) 70%,transparent)}
+:root[data-look="zenit"] .zrail-btn.is-ai.is-on::before{background:linear-gradient(180deg,#A392FF,#6CC4FF);box-shadow:0 0 14px 1px rgba(163,146,255,.5)}
+:root[data-look="zenit"] .zrail-count{
+  position:absolute;top:3px;right:1px;display:inline-grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border-radius:999px;
+  background:#F7C548;color:#1A1405;font:600 10px/1 var(--font-sans);
+  box-shadow:0 0 0 2px #101014;
+}
+:root[data-look="zenit"] .zrail-btn.is-ai .zrail-count{background:linear-gradient(115deg,#A392FF,#6CC4FF 52%,#F7C548);color:#14121C}
+:root[data-look="zenit"] .zrail-foot{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:2px}
+:root[data-look="zenit"] .zrail-me{
+  display:grid;place-items:center;width:34px;height:34px;margin-top:8px;padding:0;border:0;border-radius:50%;cursor:pointer;
+  background:var(--gold-face);color:#1A1405;font:600 12.5px/1 var(--font-sans);letter-spacing:.01em;
+  box-shadow:0 0 0 2px #0C0C0F,0 0 0 3px rgba(255,255,255,.1);
+  transition:box-shadow var(--t-2) var(--ease);
+}
+:root[data-look="zenit"] .zrail-me:hover,:root[data-look="zenit"] .zrail-me.is-open{box-shadow:0 0 0 2px #0C0C0F,0 0 0 4px rgba(247,197,72,.55)}
+/* Naam van de module naast de rail, bij hover of toetsenbordfocus. */
+:root[data-look="zenit"] .ztip{
+  position:absolute;left:calc(100% + 12px);top:50%;z-index:40;
+  padding:6px 9px;border-radius:8px;background:#26262D;color:#F4F3F0;
+  font:500 12px/1 var(--font-sans);white-space:nowrap;pointer-events:none;
+  box-shadow:0 8px 24px -8px rgba(0,0,0,.6);
+  opacity:0;transform:translate(-4px,-50%);
+  transition:opacity var(--t-1) var(--ease),transform var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .zrail-btn:hover .ztip,:root[data-look="zenit"] .zrail-btn:focus-visible .ztip{opacity:1;transform:translate(0,-50%)}
+
+/* ── 5 · Het contextpaneel ──────────────────────────────────────────────── */
+:root[data-look="zenit"] .zpanel{
+  position:absolute;top:0;bottom:0;left:76px;width:244px;z-index:1;
+  display:flex;flex-direction:column;min-height:0;padding:8px 10px 10px 12px;
+  color:var(--ink);
+}
+:root[data-look="zenit"] .zpanel-top{display:flex;align-items:center;gap:4px;margin-bottom:2px}
+:root[data-look="zenit"] .zorg{flex:1;min-width:0;display:flex;align-items:center;gap:10px;height:50px;padding:0 6px 0 8px;border-radius:12px;transition:background-color var(--t-1) var(--ease)}
+:root[data-look="zenit"] .zorg:hover{background:var(--surface-2)}
+:root[data-look="zenit"] .zorg-tile{
+  flex:none;display:grid;place-items:center;width:30px;height:30px;border-radius:9px;
+  background:linear-gradient(150deg,#2B2B33,#16161B);color:#F7C548;font:700 11.5px/1 var(--font-sans);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 0 1px rgba(0,0,0,.25);
+}
+:root[data-look="zenit"] .zorg-n{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+:root[data-look="zenit"] .zorg .select-control{width:100%}
+:root[data-look="zenit"] .zorg .select-trigger{
+  width:100%;height:auto;min-height:0;padding:1px 20px 1px 0;border:0;border-radius:6px;
+  background:transparent;box-shadow:none;color:var(--ink);font:600 13.5px/1.25 var(--font-sans);
+}
+:root[data-look="zenit"] .zorg .select-trigger:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+:root[data-look="zenit"] .zorg .select-chevron{right:0;color:var(--ink-3)}
+:root[data-look="zenit"] .zorg-role{font-size:11.5px;line-height:1.2;color:var(--ink-3);text-transform:capitalize}
+:root[data-look="zenit"] .zpanel-close{display:none}
+:root[data-look="zenit"] .zmod-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 4px 8px 8px}
+:root[data-look="zenit"] .zmod-h h2{margin:0;font:600 19px/1.1 var(--font-sans);letter-spacing:-.025em;color:var(--ink)}
+:root[data-look="zenit"] .zmod-acts{display:flex;align-items:center;gap:2px}
+:root[data-look="zenit"] .zicon-btn{
+  display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:8px;cursor:pointer;
+  background:transparent;color:var(--ink-3);transition:background-color var(--t-1) var(--ease),color var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .zicon-btn:hover:not(:disabled){background:var(--surface-2);color:var(--ink)}
+:root[data-look="zenit"] .zicon-btn:disabled{cursor:default}
+@media (prefers-reduced-motion:no-preference){
+  :root[data-look="zenit"] .zicon-btn.is-busy svg{animation:zenit-spin .9s linear infinite}
+  @keyframes zenit-spin{to{transform:rotate(360deg)}}
+}
+:root[data-look="zenit"] .zreadonly{display:none}
+:root[data-look="zenit"] .zpanel-scroll{flex:1;min-height:0;overflow:auto;margin:0 -4px;padding:0 4px 8px;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
+:root[data-look="zenit"] .zpnav-h{padding:16px 10px 7px;font:600 11px/1 var(--font-sans);letter-spacing:.01em;color:var(--ink-3)}
+:root[data-look="zenit"] .zpnav-group:first-child .zpnav-h{padding-top:6px}
+:root[data-look="zenit"] .zpnav{display:flex;flex-direction:column;gap:1px}
+:root[data-look="zenit"] .zpnav-item{
+  display:flex;align-items:center;gap:10px;width:100%;height:32px;padding:0 10px;border:0;border-radius:9px;cursor:pointer;
+  background:transparent;color:var(--ink-2);font:500 13px/1 var(--font-sans);text-align:left;
+  transition:background-color var(--t-1) var(--ease),color var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .zpnav-item svg{flex:none;color:var(--ink-3)}
+:root[data-look="zenit"] .zpnav-item:hover{background:var(--surface-2);color:var(--ink)}
+:root[data-look="zenit"] .zpnav-item.is-on{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:var(--shadow-1),0 0 0 1px var(--line)}
+:root[data-look="zenit"] .zpnav-item.is-on svg{color:var(--accent-ink)}
+:root[data-look="zenit"] .zpnav-item:focus-visible{outline:2px solid var(--accent-ink);outline-offset:-2px}
+:root[data-look="zenit"] .zpnav-l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root[data-look="zenit"] .zpnav-n{
+  flex:none;display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;
+  background:var(--accent);color:var(--on-accent);font:600 10.5px/1 var(--font-sans);
+}
+:root[data-look="zenit"] .zpnav-dot{flex:none;width:9px;height:9px;margin:0 3px;border-radius:3px}
+:root[data-look="zenit"] .zpanel-foot{
+  flex:none;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:3px 10px;margin-top:10px;padding:11px 12px;
+  border:1px solid var(--ai-line);border-radius:14px;background:var(--ai-soft);color:var(--ink);text-align:left;cursor:pointer;
+  transition:background-color var(--t-1) var(--ease),box-shadow var(--t-2) var(--ease);
+}
+:root[data-look="zenit"] .zpanel-foot:hover{box-shadow:0 10px 26px -16px var(--ai-1)}
+:root[data-look="zenit"] .zpanel-foot .zorb{grid-row:span 2}
+:root[data-look="zenit"] .zpanel-foot b{font:600 12.5px/1.25 var(--font-sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root[data-look="zenit"] .zpanel-foot-t{grid-column:2;font-size:11.5px;line-height:1.3;color:var(--ink-3)}
+
+@media (min-width:761px){
+  /* Los: alleen de rail. Het paneel schuift bij hover of focus over het
+     werkvlak, als een eigen zwevend vlak. */
+  :root[data-look="zenit"] .app:not(.sidebar-pinned) .zpanel{
+    top:8px;bottom:8px;left:84px;padding:6px 10px 10px;
+    border-radius:18px;background:var(--bg-deep);box-shadow:var(--shadow-pop);
+    opacity:0;visibility:hidden;transform:translateX(-8px);
+    transition:opacity var(--t-2) var(--ease),transform var(--t-2) var(--ease),visibility 0s linear var(--t-2);
+  }
+  :root[data-look="zenit"] .app:not(.sidebar-pinned) .znav:is(:hover,:focus-within) .zpanel{
+    opacity:1;visibility:visible;transform:none;
+    transition:opacity var(--t-2) var(--ease) 60ms,transform var(--t-2) var(--ease) 60ms,visibility 0s linear 60ms;
+  }
+}
+/* Weinig hoogte (een laptop met een balk onderin): de rail schuift in. */
+@media (min-width:761px) and (max-height:700px){
+  :root[data-look="zenit"] .zrail{gap:0;padding-top:10px}
+  :root[data-look="zenit"] .zrail-logo{width:36px;height:36px;margin-bottom:6px;border-radius:11px;font-size:18px}
+  :root[data-look="zenit"] .zrail-btn{height:38px}
+  :root[data-look="zenit"] .zrail-sep{margin:4px 0}
+  :root[data-look="zenit"] .zrail-me{width:30px;height:30px;margin-top:4px}
+}
+
+/* ── 6 · Weergave en account: de vensters naast de rail ─────────────────── */
+:root[data-look="zenit"] .zpop{
+  position:absolute;left:84px;bottom:12px;z-index:5;width:300px;max-height:calc(100dvh - 24px);overflow:auto;
+  padding:8px;border:1px solid var(--line-2);border-radius:16px;
+  background:var(--surface);color:var(--ink);box-shadow:var(--shadow-pop);
+  animation:zenit-pop .24s var(--spring) both;
+}
+:root[data-look="zenit"] .zpop-h{padding:10px 10px 8px;font:600 11px/1 var(--font-sans);letter-spacing:.02em;color:var(--ink-3)}
+:root[data-look="zenit"] .zpop-themes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:0 4px 4px}
+:root[data-look="zenit"] .zth{
+  display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px;border:1px solid var(--line);border-radius:12px;cursor:pointer;
+  background:transparent;color:var(--ink-2);font:500 12px/1.2 var(--font-sans);text-align:left;
+  transition:border-color var(--t-1) var(--ease),background-color var(--t-1) var(--ease),box-shadow var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .zth:hover{background:var(--surface-2);color:var(--ink)}
+:root[data-look="zenit"] .zth[aria-pressed="true"]{border-color:var(--accent-ink);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.16);color:var(--ink)}
+:root[data-look="zenit"] .zth:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+:root[data-look="zenit"] .zth-l{display:flex;align-items:center;gap:6px;font-weight:600}
+:root[data-look="zenit"] .zth small{font-size:10.5px;font-weight:400;color:var(--ink-3)}
+:root[data-look="zenit"] .zth-sw{position:relative;height:40px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+:root[data-look="zenit"] .zth-sw.dag{background:linear-gradient(180deg,#FFF4D6,#FAF9F6)}
+:root[data-look="zenit"] .zth-sw.nacht{background:linear-gradient(180deg,#16131F,#0F0F12)}
+:root[data-look="zenit"] .zth-sw.zon{background:linear-gradient(90deg,#FFF4D6 0 50%,#16131F 50% 100%)}
+:root[data-look="zenit"] .zth-sw.sys{background:linear-gradient(135deg,#FAF9F6 0 50%,#0F0F12 50% 100%)}
+:root[data-look="zenit"] .zth-sw::after{content:'';position:absolute;left:50%;top:60%;width:14px;height:14px;margin:-7px;border-radius:50%;background:radial-gradient(circle at 36% 32%,#FFF7D6,#F2B42A)}
+:root[data-look="zenit"] .zth-sw.nacht::after{background:radial-gradient(circle at 62% 38%,transparent 0 3.5px,#E9E6DF 4px)}
+:root[data-look="zenit"] .zth-sw.sys::after{display:none}
+:root[data-look="zenit"] .zpop-note{margin:4px 10px 2px;font-size:11.5px;color:var(--ink-3)}
+:root[data-look="zenit"] .zpop-sep{height:1px;margin:6px 4px;background:var(--line)}
+:root[data-look="zenit"] .zpop-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px}
+:root[data-look="zenit"] .zpop-row-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+:root[data-look="zenit"] .zpop-row-t b{font:600 12.5px/1.2 var(--font-sans)}
+:root[data-look="zenit"] .zpop-row-t small{font-size:11px;line-height:1.35;color:var(--ink-3)}
+:root[data-look="zenit"] .zswitch{
+  position:relative;flex:none;width:38px;height:22px;padding:0;border:0;border-radius:999px;cursor:pointer;
+  background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--line-2);
+  transition:background-color var(--t-2) var(--ease);
+}
+:root[data-look="zenit"] .zswitch span{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform var(--t-2) var(--spring)}
+:root[data-look="zenit"] .zswitch[aria-checked="true"]{background:var(--accent);box-shadow:none}
+:root[data-look="zenit"] .zswitch[aria-checked="true"] span{transform:translateX(16px)}
+:root[data-look="zenit"] .zswitch:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+:root[data-look="zenit"] .zpop-who{display:flex;align-items:center;gap:10px;padding:8px 8px 10px;border-bottom:1px solid var(--line);margin-bottom:2px}
+:root[data-look="zenit"] .zav{
+  flex:none;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;
+  background:var(--gold-face);color:#1A1405;font:600 12.5px/1 var(--font-sans);
+}
+:root[data-look="zenit"] .zpop-who-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+:root[data-look="zenit"] .zpop-who-t b{font:600 13px/1.2 var(--font-sans);text-transform:capitalize}
+:root[data-look="zenit"] .zpop-who-t span{font-size:11.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root[data-look="zenit"] .zpop-list{max-height:min(46dvh,400px);overflow:auto}
+:root[data-look="zenit"] .zpop-item{
+  display:flex;align-items:center;gap:10px;width:100%;min-height:34px;padding:0 10px;border:0;border-radius:9px;cursor:pointer;
+  background:transparent;color:var(--ink-2);font:500 13px/1.2 var(--font-sans);text-align:left;
+}
+:root[data-look="zenit"] .zpop-item svg{flex:none;color:var(--ink-3)}
+:root[data-look="zenit"] .zpop-item:hover,:root[data-look="zenit"] .zpop-item:focus-visible{background:var(--surface-2);color:var(--ink);outline:none}
+:root[data-look="zenit"] .zpop-item.danger,:root[data-look="zenit"] .zpop-item.danger svg{color:var(--danger)}
+
+/* ── 7 · Telefoon: één uitschuifmenu met rail en paneel ─────────────────── */
+@media (max-width:760px){
+  :root[data-look="zenit"] .znav{
+    z-index:90;width:min(92vw,360px);display:flex;
+    background:var(--bg-deep);
+    transform:translateX(-102%);
+    transition:transform .28s cubic-bezier(.4,0,.2,1),box-shadow .28s ease;
+  }
+  :root[data-look="zenit"] .znav.is-open{transform:none;box-shadow:34px 0 90px rgba(0,0,0,.55)}
+  :root[data-look="zenit"] .zrail{position:relative;left:auto;top:auto;bottom:auto;flex:0 0 64px;width:64px;margin:8px 0 calc(8px + env(safe-area-inset-bottom)) 8px;border-radius:18px}
+  :root[data-look="zenit"] .zrail-btn{width:44px;height:42px}
+  :root[data-look="zenit"] .zrail-btn.is-on::before{left:-10px}
+  :root[data-look="zenit"] .zrail-btn.is-shown:not(.is-on){box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
+  :root[data-look="zenit"] .ztip{display:none}
+  :root[data-look="zenit"] .zpanel{position:relative;left:auto;top:auto;bottom:auto;flex:1;width:auto;min-width:0;padding:10px 10px calc(12px + env(safe-area-inset-bottom))}
+  :root[data-look="zenit"] .zpanel-close{display:grid;place-items:center;flex:none;width:40px;height:40px;padding:0;border:0;border-radius:11px;background:transparent;color:var(--ink-2);cursor:pointer}
+  :root[data-look="zenit"] .zpanel-close:hover{background:var(--surface-2);color:var(--ink)}
+  :root[data-look="zenit"] .zpin{display:none}
+  :root[data-look="zenit"] .zreadonly{display:flex;align-items:center;gap:6px;margin:0 8px 8px;font-size:12px;color:var(--ink-3)}
+  :root[data-look="zenit"] .zpnav-item{height:40px;font-size:14px}
+  :root[data-look="zenit"] .zpop{left:76px;bottom:calc(10px + env(safe-area-inset-bottom));width:min(300px,calc(100% - 84px))}
+  :root[data-look="zenit"] .zth-sw{height:32px}
+}
+
+/* ── 8 · Letter en koppen: rustiger dan Cockpit ─────────────────────────── */
+:root[data-look="zenit"] .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.finance-search-head,.ag-page-head,.mk-head,.ptl-head,.tt-hero) :is(h1,h2){font-weight:600;letter-spacing:-.032em}
+:root[data-look="zenit"] .app .eyebrow{color:var(--ink-3);font-size:12.5px;font-weight:500;letter-spacing:0;text-transform:none}
+:root[data-look="zenit"] .app .eyebrow::before{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.16)}
+:root[data-look="zenit"] .app :is(.topbar-eyebrow,.proj-dash-hero-kicker,.quote-detail-kicker,.event-detail-kicker,.cc-plan-eyebrow){font-weight:500;letter-spacing:0;text-transform:none}
+:root[data-look="zenit"] .app :is(.dash-card-head h2,.attention-card h2,.dash-reports-head h2,.settings-card h3,.activity-card h3,.onboarding-head h3){font-weight:600}
+:root[data-look="zenit"] .app :is(.quote-table,.clients-table,.projects-table,.bk-table,.rb-table,.tk-ctable) th{font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none}
+/* De paginategel: een rustige tegel in het thema in plaats van een donker blok. */
+:root[data-look="zenit"] .app .page-icon{
+  width:44px;height:44px;border-radius:14px;color:var(--accent-ink);
+  background:var(--surface);
+  box-shadow:var(--shadow-1),0 0 0 1px var(--line);
+}
+:root[data-look="zenit"] .app .page-icon svg{filter:none}
+
+/* ── 9 · Knoppen: vlak goud, geen verloop ───────────────────────────────── */
+:root[data-look="zenit"] .app .btn-primary{
+  background:var(--accent);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 1px 2px rgba(0,0,0,.18),0 8px 22px -10px var(--gold-glow);
+}
+:root[data-look="zenit"] .app .btn-primary:hover:not(:disabled){
+  background:var(--accent-hover);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.18),0 10px 28px -8px var(--gold-glow);
+}
+
+/* ── 10 · De kop van een project of klant: een vlak met hun eigen kleur ───── */
+:root[data-look="zenit"] .app :is(.proj-dash-hero,.client-detail-hero){
+  border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-1);color:var(--ink);
+}
+:root[data-look="zenit"][data-theme="light"] .app :is(.proj-dash-hero,.client-detail-hero)::before{filter:invert(1);opacity:.5}
+:root[data-look="zenit"][data-theme="light"] .app :is(.proj-dash-hero-accent,.client-detail-glow){opacity:.22}
+:root[data-look="zenit"] .app :is(.proj-dash-hero-name,.client-title-row h2){color:var(--ink);font-weight:600;letter-spacing:-.03em}
+:root[data-look="zenit"] .app .proj-dash-hero-kicker{color:var(--ink-3)}
+:root[data-look="zenit"] .app .proj-dash-stats{border-top-color:var(--line)}
+:root[data-look="zenit"] .app .proj-dash-stat{border-right-color:var(--line)}
+:root[data-look="zenit"] .app .proj-dash-stat-val{color:var(--ink)}
+:root[data-look="zenit"] .app .proj-dash-stat.is-accent .proj-dash-stat-val{color:var(--accent-ink)}
+:root[data-look="zenit"] .app .proj-dash-stat-btn:hover{background:var(--surface-2)}
+:root[data-look="zenit"] .app :is(.proj-dash-hero,.client-detail-hero) :where(.btn:not(.btn-primary):not(.btn-danger)){
+  border-color:var(--line-2);background:var(--surface);color:var(--ink);
+  box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.18 * var(--shade-k))),inset 0 1px 0 var(--hi);
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+}
+:root[data-look="zenit"] .app :is(.proj-dash-hero,.client-detail-hero) :where(.btn:not(.btn-primary):not(.btn-danger)):hover:not(:disabled){
+  border-color:var(--line-3);background:var(--surface-2);color:var(--ink);
+}
+:root[data-look="zenit"] .app .client-detail-hero .client-detail-title>.btn:first-child:hover:not(:disabled){color:var(--ink)}
+
+/* ── 11 · Vandaag: de groet, de Dagboog en de Puls ──────────────────────── */
+:root[data-look="zenit"] .app .zday{margin:0 0 18px}
+:root[data-look="zenit"] .app .zday-head{display:flex;align-items:flex-end;gap:16px;margin:2px 0 18px}
+:root[data-look="zenit"] .app .zday-intro{min-width:0}
+:root[data-look="zenit"] .app .zday-intro .eyebrow{margin:0}
+:root[data-look="zenit"] .app .zday-title{margin:9px 0 0;font:600 30px/1.12 var(--font-sans);letter-spacing:-.032em;color:var(--ink)}
+:root[data-look="zenit"] .app .zday-title em{font-style:normal;color:var(--accent-ink)}
+:root[data-look="zenit"] .app .zday-lead{margin:7px 0 0;max-width:720px;font-size:13.5px;line-height:1.5;color:var(--ink-2)}
+:root[data-look="zenit"] .app .zday-lead b{color:var(--ink);font-weight:600}
+:root[data-look="zenit"] .app .zday-acts{display:flex;align-items:center;gap:8px;flex:none;margin-left:auto}
+:root[data-look="zenit"] .app .zday-acts .btn{display:inline-flex;align-items:center;gap:7px}
+:root[data-look="zenit"] .app .zday-count{
+  display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:7px;
+  background:var(--accent);color:var(--on-accent);font-size:11.5px;font-weight:700;
+}
+:root[data-look="zenit"] .app .zday-ask{
+  border:1px solid transparent;color:var(--ai-ink);
+  background:linear-gradient(var(--surface),var(--surface)) padding-box,var(--aurora) border-box;
+}
+:root[data-look="zenit"] .app .zday-ask:hover:not(:disabled){
+  border-color:transparent;color:var(--ai-ink);
+  background:linear-gradient(var(--surface-2),var(--surface-2)) padding-box,var(--aurora) border-box;
+  box-shadow:0 8px 24px -12px var(--ai-1);
+}
+
+/* De Dagboog: je dag als horizon. Nacht = een paarsige lucht met sterren, Dag
+   = zacht ochtendlicht. De zon loopt mee met de klok (of met je vinger). */
+:root[data-look="zenit"] .zarc{
+  position:relative;margin:0 0 16px;overflow:hidden;color:var(--ink);
+  border:1px solid var(--line);border-radius:20px;
+  background:linear-gradient(180deg,var(--sky-1) 0%,var(--sky-2) 82%);
+  box-shadow:var(--shadow-1);
+}
+:root[data-look="zenit"] .zarc::before{content:'';position:absolute;inset:auto 0 0;height:120px;pointer-events:none;background:radial-gradient(60% 100% at 50% 100%,var(--sky-haze),transparent 70%)}
+:root[data-look="zenit"] .zarc-stars{position:absolute;inset:0;pointer-events:none;opacity:var(--night,0);transition:opacity 900ms var(--ease)}
+:root[data-look="zenit"] .zarc-stars i{position:absolute;width:2px;height:2px;border-radius:50%;background:var(--star)}
+:root[data-look="zenit"] .zarc-head{position:relative;z-index:2;display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:14px 18px 0}
+:root[data-look="zenit"] .zarc-t{display:flex;align-items:center;gap:8px;margin:0;font:600 14.5px/1.25 var(--font-sans);letter-spacing:-.012em;color:var(--ink)}
+:root[data-look="zenit"] .zarc-t svg{color:var(--accent-ink)}
+:root[data-look="zenit"] .zarc-meta{font-size:12px;color:var(--ink-3)}
+:root[data-look="zenit"] .zarc-allday{
+  display:inline-flex;align-items:center;max-width:260px;height:22px;padding:0 9px;border-radius:999px;
+  background:rgba(var(--info-rgb),.12);color:var(--info);font-size:11.5px;font-weight:500;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+:root[data-look="zenit"] .zarc-ctl{display:flex;align-items:center;gap:6px;margin-left:auto}
+:root[data-look="zenit"] .app .zarc-btn{
+  display:inline-flex;align-items:center;gap:6px;height:28px;min-height:28px;padding:0 10px;border-radius:8px;
+  border:1px solid var(--line-2);background:color-mix(in srgb,var(--surface) 72%,transparent);color:var(--ink);
+  font-size:12px;font-weight:600;text-decoration:none;box-shadow:none;
+}
+:root[data-look="zenit"] .app .zarc-btn:hover:not(:disabled){border-color:var(--line-3);background:var(--surface);color:var(--ink)}
+/* Horizontaal slepen is van de zon, verticaal vegen blijft scrollen: anders
+   zit er op de telefoon een strook waar de pagina niet meer beweegt. */
+:root[data-look="zenit"] .zarc-stage{position:relative;height:158px;margin:0 22px;cursor:grab;touch-action:pan-y;-webkit-user-select:none;user-select:none}
+:root[data-look="zenit"] .zarc-stage.is-drag{cursor:grabbing}
+:root[data-look="zenit"] .zarc-svg{position:absolute;left:0;top:38px;width:100%;height:120px;overflow:visible}
+:root[data-look="zenit"] .zarc-p{fill:none;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}
+:root[data-look="zenit"] .zarc-night{stroke:var(--line-3);stroke-width:1.5;stroke-dasharray:1 6}
+:root[data-look="zenit"] .zarc-day{stroke:var(--line-3);stroke-width:1.75;stroke-dasharray:5 6}
+:root[data-look="zenit"] .zarc-past{stroke:var(--accent);stroke-width:2.75;filter:drop-shadow(0 0 6px var(--gold-glow))}
+:root[data-look="zenit"] .zarc-ev{stroke-width:8;opacity:.95}
+:root[data-look="zenit"] .zarc-ev.is-focus{opacity:.42}
+:root[data-look="zenit"] .zarc-ev.is-past{opacity:.35}
+:root[data-look="zenit"] .zarc-ev.is-focus.is-past{opacity:.2}
+:root[data-look="zenit"] .zarc-hz{stroke:var(--line-2);stroke-width:1;vector-effect:non-scaling-stroke}
+:root[data-look="zenit"] .zarc-sun{
+  position:absolute;z-index:3;width:24px;height:24px;margin:-12px 0 0 -12px;padding:0;border:0;border-radius:50%;cursor:grab;touch-action:pan-y;
+  background:radial-gradient(circle at 36% 32%,#FFF7D6 0,#FBD46A 36%,#F2B42A 70%,#DE9710 100%);
+  box-shadow:0 0 0 6px rgba(247,197,72,.16),0 0 34px 10px var(--gold-glow);
+  transition:left 600ms var(--ease-out),top 600ms var(--ease-out),background 600ms var(--ease),box-shadow 600ms var(--ease);
+}
+:root[data-look="zenit"] .zarc-sun::before{
+  content:'';position:absolute;inset:-120px;border-radius:50%;pointer-events:none;
+  background:repeating-radial-gradient(circle,transparent 0 22px,rgba(247,197,72,.07) 22px 23px);
+  -webkit-mask:radial-gradient(closest-side,#000 30%,transparent);mask:radial-gradient(closest-side,#000 30%,transparent);
+}
+:root[data-look="zenit"] .zarc-stage:is(.is-drag,.is-playing) .zarc-sun{transition:none}
+:root[data-look="zenit"] .zarc-sun:focus-visible{outline:2px solid var(--accent-ink);outline-offset:4px}
+:root[data-look="zenit"] .zarc-sun-t{
+  position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);pointer-events:none;
+  height:22px;padding:0 8px;border-radius:99px;background:var(--ink);color:var(--bg);
+  font:600 11.5px/22px var(--font-sans);white-space:nowrap;box-shadow:0 6px 16px -6px rgba(0,0,0,.4);
+}
+:root[data-look="zenit"] .zarc.is-night .zarc-sun{
+  background:radial-gradient(circle at 62% 38%,transparent 0 6px,#E9E6DF 6.5px 100%);
+  box-shadow:0 0 0 6px rgba(184,170,255,.10),0 0 30px 8px rgba(163,146,255,.30);
+}
+:root[data-look="zenit"] .zarc.is-night .zarc-sun::before{opacity:0}
+:root[data-look="zenit"] .zarc-mk{position:absolute;z-index:2;transform:translateX(-50%);display:flex;align-items:center;gap:5px;font:500 11px/1 var(--font-sans);color:var(--ink-3);white-space:nowrap;pointer-events:none;transition:opacity var(--t-2) var(--ease)}
+:root[data-look="zenit"] .zarc-mk.is-zenit{flex-direction:column;gap:4px;color:var(--accent-ink);font-weight:600}
+:root[data-look="zenit"] .zarc-mk.is-zenit::after{content:'';width:1px;height:10px;background:var(--line-accent)}
+:root[data-look="zenit"] .zarc-mk.is-near{opacity:0}
+:root[data-look="zenit"] .zarc-ticks{position:relative;height:16px;margin:0 22px;font:500 10.5px/16px var(--font-sans);color:var(--ink-3)}
+:root[data-look="zenit"] .zarc-ticks span{position:absolute;transform:translateX(-50%)}
+:root[data-look="zenit"] .zarc-lane{position:relative;margin:8px 22px 0}
+:root[data-look="zenit"] .zarc-chip{
+  position:absolute;display:flex;align-items:center;gap:6px;height:26px;max-width:calc(var(--w) + 170px);padding:0 9px 0 4px;
+  border:0;border-radius:9px;background:transparent;color:var(--ink-2);font:500 11.5px/1 var(--font-sans);white-space:nowrap;cursor:pointer;
+  transition:background-color var(--t-1) var(--ease),opacity var(--t-2) var(--ease);
+}
+:root[data-look="zenit"] .zarc-chip:disabled{cursor:default}
+:root[data-look="zenit"] .zarc-chip:hover:not(:disabled){background:var(--surface-2);color:var(--ink)}
+:root[data-look="zenit"] .zarc-chip:focus-visible{outline:2px solid var(--accent-ink);outline-offset:1px}
+:root[data-look="zenit"] .zarc-chip i{flex:none;display:block;width:var(--w);height:7px;border-radius:99px;background:var(--c)}
+:root[data-look="zenit"] .zarc-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+:root[data-look="zenit"] .zarc-chip.is-focus i{opacity:.6;background:repeating-linear-gradient(90deg,var(--c) 0 5px,transparent 5px 8px)}
+:root[data-look="zenit"] .zarc-chip.is-past{opacity:.48}
+:root[data-look="zenit"] .zarc-chip.is-now{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1),0 0 0 1px var(--line-accent)}
+:root[data-look="zenit"] .zarc-chip.is-compact{padding:0 4px}
+:root[data-look="zenit"] .zarc-nn{
+  position:relative;z-index:2;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.3fr) auto;margin-top:10px;
+  border-top:1px solid var(--line);background:color-mix(in srgb,var(--surface) 72%,transparent);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+}
+:root[data-look="zenit"] .zarc-nn>div{display:flex;align-items:center;gap:12px;min-width:0;padding:12px 18px}
+:root[data-look="zenit"] .zarc-nn>div+div{border-left:1px solid var(--line)}
+:root[data-look="zenit"] .zarc-nn-l{flex:none;min-width:62px;font:600 10.5px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+:root[data-look="zenit"] .zarc-nn-l.is-now{color:var(--accent-ink)}
+:root[data-look="zenit"] .zarc-nn-b{display:flex;flex:1;flex-direction:column;gap:5px;min-width:0}
+:root[data-look="zenit"] .zarc-nn-t{font:600 13px/1.25 var(--font-sans);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root[data-look="zenit"] .zarc-nn-m{display:flex;align-items:center;gap:8px;min-width:0;font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden}
+:root[data-look="zenit"] .zarc-nn-m span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+:root[data-look="zenit"] .zarc-bar{position:relative;flex:none;width:90px;height:5px;border-radius:99px;background:var(--surface-3);overflow:hidden}
+:root[data-look="zenit"] .zarc-bar span{position:absolute;inset:0 auto 0 0;border-radius:inherit;background:var(--accent)}
+:root[data-look="zenit"] .zarc-nn-rest .zarc-nn-b{align-items:flex-end;text-align:right}
+@media (max-width:1100px){
+  :root[data-look="zenit"] .zarc-nn{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  :root[data-look="zenit"] .zarc-nn>.zarc-nn-rest{display:none}
+}
+
+/* De Puls: de kerncijfers in één kaart, gescheiden door haarlijnen. Een
+   lijn links en boven elke tegel; wat aan de rand valt, knipt de kaart weg.
+   Hoeveel tegels er zijn hangt af van je rechten (één tot zes). Op een raster
+   van 60 kolommen (deelbaar door 1 t/m 6) vult elke rij precies de breedte:
+   heel breed alles op één rij, anders hooguit drie per rij (twee bij vier
+   tegels op een smal werkvlak) en de rest eronder. */
+:root[data-look="zenit"] .app .zday{container:zday/inline-size}
+:root[data-look="zenit"] .app .zpuls{display:grid;grid-template-columns:repeat(60,minmax(0,1fr));overflow:hidden;border:1px solid var(--line);border-radius:var(--r-card);background:var(--surface);box-shadow:var(--shadow-1)}
+:root[data-look="zenit"] .app .zpuls.n0{display:none}
+:root[data-look="zenit"] .app .zpuls>*{grid-column:span 60}
+:root[data-look="zenit"] .app .zpuls.n2>*{grid-column:span 30}
+:root[data-look="zenit"] .app .zpuls.n3>*{grid-column:span 20}
+:root[data-look="zenit"] .app .zpuls.n4>*{grid-column:span 15}
+:root[data-look="zenit"] .app .zpuls.n5>*{grid-column:span 12}
+:root[data-look="zenit"] .app .zpuls.n6>*{grid-column:span 10}
+@container zday (max-width:1199px){
+  :root[data-look="zenit"] .app .zpuls:is(.n5,.n6)>*{grid-column:span 20}
+  :root[data-look="zenit"] .app .zpuls.n5>:nth-child(n+4){grid-column:span 30}
+}
+@container zday (max-width:760px){
+  :root[data-look="zenit"] .app .zpuls.n4>*{grid-column:span 30}
+}
+:root[data-look="zenit"] .app .zpuls .stat-card{
+  min-width:0;margin:0;padding:15px 18px 16px;
+  border:0;border-radius:0;background:transparent;
+  box-shadow:-1px 0 0 var(--line),0 -1px 0 var(--line);
+}
+:root[data-look="zenit"] .app .zpuls .stat-card-clickable:hover{transform:none;background:var(--surface-2);box-shadow:-1px 0 0 var(--line),0 -1px 0 var(--line)}
+:root[data-look="zenit"] .app .zpuls .sc-label{color:var(--ink-3);font-size:12px;font-weight:500}
+:root[data-look="zenit"] .app .zpuls .sc-val{font-weight:600;letter-spacing:-.035em}
+:root[data-look="zenit"] .app .zpuls .stat-card-danger .sc-val{color:var(--danger)}
+
+@media (max-width:760px){
+  /* Op de telefoon: geen groet (de werktab zegt waar je bent), een kleinere
+     boog zonder strook, en alleen Nu en Volgende. */
+  :root[data-look="zenit"] .app .zday{margin-bottom:12px}
+  :root[data-look="zenit"] .app .zday-head{display:none}
+  :root[data-look="zenit"] .zarc{margin-bottom:10px;border-radius:16px}
+  :root[data-look="zenit"] .zarc-head{padding:10px 12px 0}
+  :root[data-look="zenit"] .zarc-head :is(.zarc-meta,.zarc-allday){display:none}
+  :root[data-look="zenit"] .zarc.is-compact .zarc-stage{height:106px;margin:0 16px}
+  :root[data-look="zenit"] .zarc.is-compact .zarc-svg{top:26px;height:80px}
+  :root[data-look="zenit"] .zarc.is-compact .zarc-mk.is-zenit{display:none}
+  :root[data-look="zenit"] .zarc :is(.zarc-ticks,.zarc-lane){display:none}
+  :root[data-look="zenit"] .zarc-nn{grid-template-columns:minmax(0,1fr);margin-top:4px}
+  :root[data-look="zenit"] .zarc-nn>div{padding:10px 12px}
+  :root[data-look="zenit"] .zarc-nn>div+div{border-left:0;border-top:1px solid var(--line)}
+  :root[data-look="zenit"] .zarc-nn .zarc-btn{display:none}
+  :root[data-look="zenit"] .app .zpuls .stat-card{padding:9px 10px 8px}
+}
+
+/* ── 12 · Thema-overgang ─────────────────────────────────────────────────────
+   De nieuwe dag (of nacht) groeit als een cirkel vanuit de knop waarop je
+   klikte (ZenitNav: withThemeReveal). Zonder de standaard-overvloeier, anders
+   lopen die twee door elkaar. */
+:root[data-look="zenit"]::view-transition-old(root),
+:root[data-look="zenit"]::view-transition-new(root){animation:none;mix-blend-mode:normal}
+
+/* ── 13 · Minder beweging ───────────────────────────────────────────────── */
+@media (prefers-reduced-motion:reduce){
+  :root[data-look="zenit"] :is(.zpop,.gs-panel-ask){animation:none}
+  :root[data-look="zenit"] :is(.znav,.zpanel,.ztip,.zswitch span,.zarc-sun,.zarc-stars){transition:none}
+}

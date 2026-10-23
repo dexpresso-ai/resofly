@@ -146,10 +146,18 @@ Zenit komt eerst achter een schakelaar **Probeer Zenit** per gebruiker, naast de
 
 | vraag | advies | gekozen |
 |---|---|---|
-| Heet het Zenit (ontwerp en schakelaar)? | Ja | open |
-| Rail in Dag donker of licht? | Donker: merkanker en herkenning | open |
-| Welk thema als standaard voor nieuwe gebruikers? | Met de zon mee; een eigen keuze blijft staan | open |
-| Hoe uitrollen? | Twee weken *Probeer Zenit* voor het eigen team, dan voor iedereen | open |
+| Heet het Zenit (ontwerp en schakelaar)? | Ja | ja (2026-10-23: "geef me de look en feel") |
+| Rail in Dag donker of licht? | Donker: merkanker en herkenning | zo ingebouwd; nog te bevestigen |
+| Welk thema als standaard voor nieuwe gebruikers? | Met de zon mee; een eigen keuze blijft staan | open: de standaard is nog Nacht, Met de zon mee is te kiezen |
+| Hoe uitrollen? | Twee weken *Probeer Zenit* voor het eigen team, dan voor iedereen | de schakelaar staat erin; wie hem aanzet is aan jou |
+
+## Ingebouwd (2026-10-23)
+
+Stap 1 t/m 3 staan in de app, achter **Probeer Zenit** in het accountmenu: de tokens, de vier
+themastanden, de nachtrail met contextpaneel, de vraagbalk (zoeken + *Vraag Gerrie*), het
+zwevende werkvlak en Vandaag met de Dagboog en de Puls. Nog niet: het spiekpaneel, de
+Geldstroom, de vraagbalk die een opdracht ontleedt, de <kbd>G</kbd>-sneltoetsen en Ruim/Compact.
+Alles staat in `CHANGELOG_ZENIT_2026-10-23.md`.
 
 ## Hoe het gecontroleerd is
 
@@ -163,4 +171,5 @@ Zenit komt eerst achter een schakelaar **Probeer Zenit** per gebruiker, naast de
   een vraag.
 - De zonnetijden zijn berekend voor Lopik (51,97° N, 4,94° O) op 22 oktober 2026 (NOAA-benadering,
   zomertijd): op 08:15, zenit 13:25, onder 18:34.
-- Niet gedaan: het voorstel raakt `src/` niet aan; de app op staging is ongewijzigd.
+- Het voorstel zelf (`docs/design-voorstel-zenit/`) raakt `src/` niet aan. De inbouw in de app
+  kwam een dag later, met zijn eigen controles: zie `CHANGELOG_ZENIT_2026-10-23.md`.

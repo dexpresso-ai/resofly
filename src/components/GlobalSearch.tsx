@@ -64,11 +64,22 @@ function Highlight({ text, query }: { text: string; query: string }) {
   </>;
 }
 
-export function GlobalSearch({ data, onNavigate, canOpenPage }: {
+/** Klinkt dit als een vraag of een opdracht aan Gerrie, in plaats van een naam
+ *  die je zoekt? Dan staat "Vraag Gerrie" bovenaan voorgeselecteerd. */
+const ASKS_GERRIE = /^(wie|wat|waar|wanneer|welke?|hoe|hoeveel|waarom|kun|kan|kunt|wil|zet|maak|stuur|plan|schrijf|vat|geef|toon|laat|boek|herinner|zoek uit)\b/i;
+const looksLikeQuestion = (text: string) => /\?\s*$/.test(text) || ASKS_GERRIE.test(text);
+
+export function GlobalSearch({ data, onNavigate, canOpenPage, variant = 'field', onAsk }: {
   data: AppData;
   onNavigate: (result: SearchResult) => void;
   /** Modulerechten: alleen resultaten die het teamlid ook mag openen. Zonder: alles. */
   canOpenPage?: (page: string) => boolean;
+  /** 'ask' is de vraagbalk van Zenit: een orbje van Gerrie, ⌘K ernaast, en de
+   *  resultaten als een paneel onder de balk in plaats van naast de zijbalk. */
+  variant?: 'field' | 'ask';
+  /** Met deze functie staat "Vraag Gerrie" bovenaan de resultaten: wat je typt,
+   *  kan ook een vraag zijn in plaats van een zoekterm. */
+  onAsk?: (text: string) => void;
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -173,8 +184,19 @@ export function GlobalSearch({ data, onNavigate, canOpenPage }: {
       .filter(group => group.items.length > 0);
   }, [filter, results, visible]);
 
+  // "Vraag Gerrie" is de eerste regel (index 0) zodra er iets te vragen valt;
+  // de zoekresultaten schuiven dan één plek op.
+  const trimmedQuery = query.trim();
+  const askEnabled = Boolean(onAsk) && trimmedQuery.length >= 2;
+  const offset = askEnabled ? 1 : 0;
+  const itemCount = visible.length + offset;
+  // Klinkt het als een vraag, dan staat Gerrie voorgeselecteerd — tenzij er iets
+  // is dat zo héét ("Plan B Studio" begint ook met "plan").
+  const namedHit = visible.some(result => result.title.toLowerCase().startsWith(term));
+  const defaultIndex = askEnabled && (visible.length === 0 || (looksLikeQuestion(trimmedQuery) && !namedHit)) ? 0 : offset;
+
   // Reset de selectie/filter als de zoekterm verandert.
-  useEffect(() => { setActiveIndex(0); }, [term, filter]);
+  useEffect(() => { setActiveIndex(defaultIndex); }, [term, filter, defaultIndex]);
 
   // Valt het actieve filter weg (geen hits meer voor dat type), terug naar "alles".
   useEffect(() => {
@@ -211,38 +233,54 @@ export function GlobalSearch({ data, onNavigate, canOpenPage }: {
     close();
   }
 
-  function onInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Escape') { close(); return; }
-    if (visible.length === 0) return;
-    if (event.key === 'ArrowDown') { event.preventDefault(); setActiveIndex(i => (i + 1) % visible.length); }
-    else if (event.key === 'ArrowUp') { event.preventDefault(); setActiveIndex(i => (i - 1 + visible.length) % visible.length); }
-    else if (event.key === 'Enter') { event.preventDefault(); const pick = visible[activeIndex] ?? visible[0]; if (pick) choose(pick); }
+  function ask() {
+    if (!onAsk || !askEnabled) return;
+    onAsk(trimmedQuery);
+    close();
   }
 
-  const trimmed = query.trim();
+  function onInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Escape') { close(); return; }
+    if (itemCount === 0) return;
+    if (event.key === 'ArrowDown') { event.preventDefault(); setActiveIndex(i => (i + 1) % itemCount); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); setActiveIndex(i => (i - 1 + itemCount) % itemCount); }
+    else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (askEnabled && activeIndex === 0) { ask(); return; }
+      const pick = visible[activeIndex - offset] ?? visible[0];
+      if (pick) choose(pick);
+    }
+  }
+
+  const trimmed = trimmedQuery;
   const showPanel = open && trimmed.length >= 1;
   const tooShort = trimmed.length > 0 && trimmed.length < 2;
+  const isAsk = variant === 'ask';
+  const shortcut = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K';
 
-  return <div className="global-search">
+  return <div className={`global-search${isAsk ? ' gs-ask-bar' : ''}`}>
     <div className="gs-field">
-      <Search size={15} className="gs-field-icon" aria-hidden="true" />
+      {isAsk
+        ? <span className="gs-orb" aria-hidden="true" />
+        : <Search size={15} className="gs-field-icon" aria-hidden="true" />}
       <input
         ref={inputRef}
         type="text"
         className="gs-input"
-        placeholder="Zoeken…"
+        placeholder={isAsk ? (onAsk ? 'Vraag Gerrie, zoek of open…' : 'Zoek in je werkruimte…') : 'Zoeken…'}
         value={query}
         onChange={e => { setQuery(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
         onKeyDown={onInputKeyDown}
-        aria-label="Zoeken in werkruimte"
+        aria-label={onAsk ? 'Vraag Gerrie of zoek in werkruimte' : 'Zoeken in werkruimte'}
       />
+      {isAsk && !query && <kbd className="gs-kbd" aria-hidden="true">{shortcut}</kbd>}
       {query && <button type="button" className="gs-clear" onClick={close} aria-label="Zoeken sluiten"><X size={14} /></button>}
     </div>
 
     {showPanel && createPortal(<>
-      <div className="gs-backdrop" onClick={close} />
-      <div className="gs-panel" role="dialog" aria-label="Zoekresultaten">
+      <div className={`gs-backdrop${isAsk ? ' gs-backdrop-ask' : ''}`} onClick={close} />
+      <div className={`gs-panel${isAsk ? ' gs-panel-ask' : ''}`} role="dialog" aria-label="Zoekresultaten">
         <div className="gs-panel-head">
           <div className="gs-panel-titles">
             <div className="gs-panel-title">Zoekresultaten</div>
@@ -268,17 +306,31 @@ export function GlobalSearch({ data, onNavigate, canOpenPage }: {
         </div>}
 
         <div className="gs-body" ref={listRef}>
+          {askEnabled && <button
+            type="button"
+            className={`gs-result gs-ask${activeIndex === 0 ? ' active' : ''}`}
+            onClick={ask}
+            onMouseEnter={() => setActiveIndex(0)}
+          >
+            <span className="gs-result-icon"><span className="gs-orb" aria-hidden="true" /></span>
+            <span className="gs-result-text">
+              <span className="gs-result-title">Vraag Gerrie: “{trimmed}”</span>
+              <span className="gs-result-sub">Gerrie zoekt het uit of zet het klaar; jij beslist</span>
+            </span>
+            <span className="gs-result-badge">Gerrie</span>
+            <ChevronRight size={15} className="gs-result-chevron" aria-hidden="true" />
+          </button>}
           {tooShort
             ? <div className="gs-state"><Search size={30} /><div className="gs-state-title">Blijf typen</div><div className="gs-state-text">Voer minimaal 2 tekens in om te zoeken in je werkruimte.</div></div>
             : results.length === 0
-              ? <div className="gs-state"><SearchX size={30} /><div className="gs-state-title">Geen resultaten</div><div className="gs-state-text">Niets gevonden voor “{trimmed}”. Probeer een andere zoekterm of controleer de spelling.</div></div>
+              ? <div className="gs-state"><SearchX size={30} /><div className="gs-state-title">Geen resultaten</div><div className="gs-state-text">{askEnabled ? <>Niets gevonden voor “{trimmed}” in je werkruimte. Druk op Enter om het Gerrie te vragen.</> : <>Niets gevonden voor “{trimmed}”. Probeer een andere zoekterm of controleer de spelling.</>}</div></div>
               : <div className="gs-groups">
                   {groups.map(group => {
                     const Meta = kindMeta[group.kind];
                     return <div className="gs-group" key={group.kind}>
                       {filter === 'all' && <div className="gs-group-head"><Meta.icon size={13} /><span>{Meta.label}</span><span className="gs-group-count">{group.items.length}</span></div>}
                       {group.items.map(result => {
-                        const flatIndex = visible.indexOf(result);
+                        const flatIndex = visible.indexOf(result) + offset;
                         return <button
                           type="button"
                           key={`${result.kind}-${result.id}`}

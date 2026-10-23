@@ -20,10 +20,15 @@ npx playwright install chromium   # eenmalig
 npm run test:mobile
 npm run test:mobile -- --theme=both --shots=tests/mobile/shots
 npm run test:mobile -- --pages=dashboard,clients --viewports=phone
+npm run test:mobile -- --look=zenit --theme=both
 ```
 
 De test start zelf een Vite dev-server. Draait er al een, geef die mee met
 `--url=http://localhost:5173/`.
+
+Met `--look=zenit` meet hij de nieuwe voorkant (accountmenu → Probeer Zenit)
+in plaats van Cockpit. Dezelfde grenzen, behalve waar Zenit bewust iets
+anders bovenaan zet: dat staat in `FIRST_ITEM_BY_LOOK`.
 
 ## Hoe de mock werkt
 
