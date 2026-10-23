@@ -126,6 +126,15 @@ zoekblok. Onder Zenit is dat geen kaart meer maar één regel boven de tabel:
     en fasechips);
   - geen fouten in de console.
 - De functionele ronde van Zenit (44 controles) is nog steeds helemaal groen.
+- De mobiele lay-outtest in Dag en Nacht, op telefoon, tablet en liggend. Met Cockpit 288
+  metingen zonder problemen: voor wie Zenit niet aanzet, verandert er niets. Met
+  `--look=zenit` ook 288 metingen zonder problemen. Onder Zenit staat het eerste item op elke
+  lijstpagina hoger dan vóór Onbewolkt:
+  - de lijsten 3 à 5px;
+  - de planningstimeline 41px;
+  - de weekplanner 40px (telefoon, 390 × 844).
+
+  Nergens staat het lager.
 - Met Chromium bekeken op 1440 × 900, 820 × 1180 en 390 × 844:
   - het dashboard met Meer van vandaag dicht en open, in Dag en Nacht;
   - de timeline met Verfijnen open en dicht, in Dag en Nacht;
