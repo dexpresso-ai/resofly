@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Search, SlidersHorizontal, X } from 'lucide-react';
 import type { AppData, Project, Task } from '../types';
 import { Input, Select } from '../components/Ui';
+import { useLook } from '../lib/look';
 
 type ProjectPhase = 'planning' | 'active' | 'review' | 'overdue' | 'completed';
 type TimelineVariant = 'dashboard' | 'full';
@@ -54,6 +56,18 @@ const defaultPhaseFilters: Record<ProjectPhase, boolean> = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Onbewolkt (Zenit): drie lenzen in plaats van vijf fasefilters, een zoekveld
+ *  en een archief-knop naast elkaar. Wie fijner wil kijken, opent Verfijnen. */
+type Lens = 'lopend' | 'telaat' | 'alles';
+const LENS_PHASES: Record<Lens, Record<ProjectPhase, boolean>> = {
+  lopend: { ...defaultPhaseFilters },
+  telaat: { planning: false, active: false, review: false, overdue: true, completed: false },
+  alles: { planning: true, active: true, review: true, overdue: true, completed: true },
+};
+const samePhases = (a: Record<ProjectPhase, boolean>, b: Record<ProjectPhase, boolean>) =>
+  projectPhaseOptions.every(option => a[option.key] === b[option.key]);
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
 export function ProjectTimeline({
   data,
   openProject,
@@ -70,6 +84,9 @@ export function ProjectTimeline({
   /** `null` = schaal volgt de lengte van de planning; een keuze zet hem vast. */
   const [pickedScale, setPickedScale] = useState<Scale | null>(null);
   const isFull = variant === 'full';
+  const [look] = useLook();
+  const calm = look === 'zenit' && isFull;
+  const [refineOpen, setRefineOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const todayRef = useRef<HTMLDivElement>(null);
@@ -124,6 +141,34 @@ export function ProjectTimeline({
 
   const activePhaseKeys = projectPhaseOptions.filter(option => phaseFilters[option.key]).map(option => option.key);
   const filteredProjects = useMemo(() => baseProjects.filter(item => phaseFilters[item.phase]), [baseProjects, phaseFilters]);
+
+  // De lenzen tellen over alles wat de zoekterm en de klant overlaten, met én
+  // zonder archief: "hoeveel zijn er zo?", niet "hoeveel zie ik nu?".
+  const lensCounts = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const pool = timelineProjects.filter(item => {
+      if (clientId && item.project.client_id !== clientId) return false;
+      if (!normalizedQuery) return true;
+      return [item.project.name, item.project.description ?? '', item.clientName].join(' ').toLowerCase().includes(normalizedQuery)
+        || item.tasks.some(task => `${task.title} ${task.description ?? ''} ${task.tags?.join(' ') ?? ''}`.toLowerCase().includes(normalizedQuery));
+    });
+    return {
+      lopend: pool.filter(item => !item.project.archived && item.phase !== 'completed').length,
+      telaat: pool.filter(item => !item.project.archived && item.phase === 'overdue').length,
+      alles: pool.length,
+    };
+  }, [clientId, query, timelineProjects]);
+  const lens: Lens | null = samePhases(phaseFilters, LENS_PHASES.alles) && showArchived ? 'alles'
+    : showArchived ? null
+    : samePhases(phaseFilters, LENS_PHASES.lopend) ? 'lopend'
+    : samePhases(phaseFilters, LENS_PHASES.telaat) ? 'telaat'
+    : null;
+  function pickLens(next: Lens) {
+    setPhaseFilters({ ...LENS_PHASES[next] });
+    setShowArchived(next === 'alles');
+  }
+  const clientName = clientId ? data.clients.find(client => client.id === clientId)?.name ?? 'Klant' : null;
+  const refineCount = (clientId ? 1 : 0) + (lens === null ? 1 : 0);
 
   /** De ruwe periode: alles wat getoond wordt én vandaag, zodat de "nu"-lijn
    *  altijd in beeld te brengen is. */
@@ -192,85 +237,178 @@ export function ProjectTimeline({
     '--ptl-today': todayFraction,
   } as CSSProperties;
 
-  return <section className={`ptl ptl-${variant} ptl-scale-${scale}`}>
-    <header className="ptl-head">
-      <div className="ptl-heading">
-        <h2>Projectplanning</h2>
-        <p>{isFull
-          ? 'Alle projecten op één tijdbalk — sleep horizontaal om verder vooruit of terug te kijken.'
-          : 'Wie loopt er wanneer? De balken tonen looptijd en voortgang per project.'}</p>
-      </div>
-      {/* Elk cijfer draagt twee labels: het volledige voor een breed scherm en een
-          kort voor de telefoon, waar de vier cijfers op één regel staan. Alleen
-          het zichtbare label wordt voorgelezen — `display:none` haalt het andere
-          ook uit de toegankelijkheidsboom. */}
-      <div className="ptl-stats">
-        {[
-          { key: 'shown', label: 'Getoond', short: 'Getoond', value: filteredProjects.length },
-          { key: 'peak', label: 'Piek overlap', short: 'Piek', value: peakLoad },
-          { key: 'open', label: 'Open taken', short: 'Open', value: openTasks },
-          { key: 'unplanned', label: 'Zonder planning', short: 'Ongepland', value: missingExactPlanning },
-        ].map(stat => <div key={stat.key}>
-          <span>
-            <span className="ptl-stat-long">{stat.label}</span>
-            <span className="ptl-stat-short">{stat.short}</span>
-          </span>
-          <strong>{stat.value}</strong>
-        </div>)}
-      </div>
-    </header>
+  return <section className={`ptl ptl-${variant} ptl-scale-${scale}${calm ? ' ptl-calm' : ''}`}>
+    {calm
+      ? <>
+        <header className="ptl-head ptl-calm-head">
+          <div className="ptl-heading">
+            <h2>Projectplanning</h2>
+            {/* Eén zin in plaats van vier tegels: wat er loopt, wanneer het
+                druk is en wat er openstaat. */}
+            <p className="ptl-sentence">
+              {plural(filteredProjects.length, 'project', 'projecten')} in beeld
+              {peakLoad > 1 && <> · drukste {scale === 'week' ? 'week' : scale === 'month' ? 'maand' : 'kwartaal'}: <b>{columns[columnLoads.indexOf(peakLoad)]?.label}</b> met {peakLoad} tegelijk</>}
+              {openTasks > 0 && <> · {plural(openTasks, 'open taak', 'open taken')}</>}
+              {phaseCounts.overdue > 0 && phaseFilters.overdue && <> · <b className="is-late">{phaseCounts.overdue} te laat</b></>}
+              {missingExactPlanning > 0 && <> · {missingExactPlanning} zonder vaste datum</>}
+            </p>
+          </div>
+        </header>
 
-    <div className="ptl-toolbar">
-      {isFull && <div className="ptl-search">
-        <Input value={query} onChange={event => setQuery(event.target.value)} placeholder="Zoek op project, klant, taak of tag" />
-      </div>}
-      {isFull && <div className="ptl-client">
-        <Select value={clientId} onChange={event => setClientId(event.target.value)}>
-          <option value="">Alle klanten</option>
-          {data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
-        </Select>
-      </div>}
-      {isFull && <button
-        type="button"
-        className={`ptl-toggle ${showArchived ? 'is-on' : ''}`}
-        onClick={() => setShowArchived(value => !value)}
-        aria-pressed={showArchived}
-      >{showArchived ? 'Inclusief archief' : 'Alleen actief'}</button>}
-
-      <div className="ptl-toolbar-end">
-        <div className="ptl-scaleswitch" role="group" aria-label="Schaal van de tijdbalk">
-          {scaleOptions.map(option => <button
-            key={option.key}
+        <div className="ptl-toolbar ptl-calm-bar">
+          <div className="ptl-lens" role="group" aria-label="Welke projecten">
+            {([['lopend', 'Lopend'], ['telaat', 'Te laat'], ['alles', 'Alles']] as const).map(([key, label]) => <button
+              key={key}
+              type="button"
+              className={lens === key ? 'is-on' : ''}
+              aria-pressed={lens === key}
+              onClick={() => pickLens(key)}
+            >{label}<span className="ptl-lens-n">{lensCounts[key]}</span></button>)}
+          </div>
+          <label className="ptl-qsearch">
+            <Search size={15} aria-hidden="true" />
+            <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Zoek project, klant of taak" aria-label="Zoek in de planning" />
+            {query && <button type="button" onClick={() => setQuery('')} aria-label="Zoekterm wissen"><X size={13} /></button>}
+          </label>
+          <button
             type="button"
-            className={scale === option.key ? 'is-on' : ''}
-            onClick={() => setPickedScale(option.key)}
-            aria-pressed={scale === option.key}
-          >{option.label}</button>)}
+            className={`ptl-refine${refineOpen ? ' is-open' : ''}`}
+            aria-expanded={refineOpen}
+            aria-label={refineCount > 0 ? `Verfijnen, ${refineCount} actief` : undefined}
+            onClick={() => setRefineOpen(open => !open)}
+          >
+            <SlidersHorizontal size={14} aria-hidden="true" />Verfijnen
+            {refineCount > 0 && <span className="ptl-refine-n" aria-hidden="true">{refineCount}</span>}
+          </button>
+          <div className="ptl-toolbar-end">
+            <div className="ptl-scaleswitch" role="group" aria-label="Schaal van de tijdbalk">
+              {scaleOptions.map(option => <button
+                key={option.key}
+                type="button"
+                className={scale === option.key ? 'is-on' : ''}
+                onClick={() => setPickedScale(option.key)}
+                aria-pressed={scale === option.key}
+              >{option.label}</button>)}
+            </div>
+            <button type="button" className="ptl-toggle" onClick={scrollToToday} disabled={!todayInRange}>Vandaag</button>
+          </div>
         </div>
-        <button type="button" className="ptl-toggle" onClick={scrollToToday} disabled={!todayInRange}>Vandaag</button>
-      </div>
-    </div>
 
-    <div className="ptl-chips" role="group" aria-label="Projectfase filters">
-      <span className="ptl-chips-label">Fase</span>
-      {projectPhaseOptions.map(option => <button
-        key={option.key}
-        type="button"
-        className={`ptl-chip phase-${option.key} ${phaseFilters[option.key] ? 'is-on' : ''}`}
-        onClick={() => togglePhase(option.key)}
-        title={option.description}
-        aria-pressed={phaseFilters[option.key]}
-      >
-        <span className="ptl-chip-dot" aria-hidden="true" />
-        {option.label}
-        <span className="ptl-chip-count">{phaseCounts[option.key]}</span>
-      </button>)}
-      {activePhaseKeys.length === 0 && <button
-        type="button"
-        className="ptl-chip-reset"
-        onClick={() => setPhaseFilters({ planning: true, active: true, review: true, overdue: true, completed: true })}
-      >Alles tonen</button>}
-    </div>
+        {refineOpen && <div className="ptl-refine-row">
+          <div className="ptl-client">
+            <Select value={clientId} onChange={event => setClientId(event.target.value)} aria-label="Klant">
+              <option value="">Alle klanten</option>
+              {data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+            </Select>
+          </div>
+          <div className="ptl-chips" role="group" aria-label="Fases">
+            {projectPhaseOptions.map(option => <button
+              key={option.key}
+              type="button"
+              className={`ptl-chip phase-${option.key} ${phaseFilters[option.key] ? 'is-on' : ''}`}
+              onClick={() => togglePhase(option.key)}
+              title={option.description}
+              aria-pressed={phaseFilters[option.key]}
+            >
+              <span className="ptl-chip-dot" aria-hidden="true" />
+              {option.label}
+              <span className="ptl-chip-count">{phaseCounts[option.key]}</span>
+            </button>)}
+          </div>
+          <button
+            type="button"
+            className={`ptl-toggle ${showArchived ? 'is-on' : ''}`}
+            onClick={() => setShowArchived(value => !value)}
+            aria-pressed={showArchived}
+          >{showArchived ? 'Met archief' : 'Zonder archief'}</button>
+        </div>}
+
+        {!refineOpen && refineCount > 0 && <div className="ptl-active">
+          {clientName && <button type="button" className="ptl-active-chip" onClick={() => setClientId('')}>Klant: {clientName}<X size={12} aria-label="weg" /></button>}
+          {lens === null && <button type="button" className="ptl-active-chip" onClick={() => pickLens('lopend')}>Eigen keuze: {activePhaseKeys.map(key => phaseLabel(key)).join(', ') || 'geen fases'}{showArchived ? ' + archief' : ''}<X size={12} aria-label="weg" /></button>}
+        </div>}
+      </>
+      : <>
+      <header className="ptl-head">
+        <div className="ptl-heading">
+          <h2>Projectplanning</h2>
+          <p>{isFull
+            ? 'Alle projecten op één tijdbalk — sleep horizontaal om verder vooruit of terug te kijken.'
+            : 'Wie loopt er wanneer? De balken tonen looptijd en voortgang per project.'}</p>
+        </div>
+        {/* Elk cijfer draagt twee labels: het volledige voor een breed scherm en een
+            kort voor de telefoon, waar de vier cijfers op één regel staan. Alleen
+            het zichtbare label wordt voorgelezen — `display:none` haalt het andere
+            ook uit de toegankelijkheidsboom. */}
+        <div className="ptl-stats">
+          {[
+            { key: 'shown', label: 'Getoond', short: 'Getoond', value: filteredProjects.length },
+            { key: 'peak', label: 'Piek overlap', short: 'Piek', value: peakLoad },
+            { key: 'open', label: 'Open taken', short: 'Open', value: openTasks },
+            { key: 'unplanned', label: 'Zonder planning', short: 'Ongepland', value: missingExactPlanning },
+          ].map(stat => <div key={stat.key}>
+            <span>
+              <span className="ptl-stat-long">{stat.label}</span>
+              <span className="ptl-stat-short">{stat.short}</span>
+            </span>
+            <strong>{stat.value}</strong>
+          </div>)}
+        </div>
+      </header>
+
+      <div className="ptl-toolbar">
+        {isFull && <div className="ptl-search">
+          <Input value={query} onChange={event => setQuery(event.target.value)} placeholder="Zoek op project, klant, taak of tag" />
+        </div>}
+        {isFull && <div className="ptl-client">
+          <Select value={clientId} onChange={event => setClientId(event.target.value)}>
+            <option value="">Alle klanten</option>
+            {data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+          </Select>
+        </div>}
+        {isFull && <button
+          type="button"
+          className={`ptl-toggle ${showArchived ? 'is-on' : ''}`}
+          onClick={() => setShowArchived(value => !value)}
+          aria-pressed={showArchived}
+        >{showArchived ? 'Inclusief archief' : 'Alleen actief'}</button>}
+
+        <div className="ptl-toolbar-end">
+          <div className="ptl-scaleswitch" role="group" aria-label="Schaal van de tijdbalk">
+            {scaleOptions.map(option => <button
+              key={option.key}
+              type="button"
+              className={scale === option.key ? 'is-on' : ''}
+              onClick={() => setPickedScale(option.key)}
+              aria-pressed={scale === option.key}
+            >{option.label}</button>)}
+          </div>
+          <button type="button" className="ptl-toggle" onClick={scrollToToday} disabled={!todayInRange}>Vandaag</button>
+        </div>
+      </div>
+
+      <div className="ptl-chips" role="group" aria-label="Projectfase filters">
+        <span className="ptl-chips-label">Fase</span>
+        {projectPhaseOptions.map(option => <button
+          key={option.key}
+          type="button"
+          className={`ptl-chip phase-${option.key} ${phaseFilters[option.key] ? 'is-on' : ''}`}
+          onClick={() => togglePhase(option.key)}
+          title={option.description}
+          aria-pressed={phaseFilters[option.key]}
+        >
+          <span className="ptl-chip-dot" aria-hidden="true" />
+          {option.label}
+          <span className="ptl-chip-count">{phaseCounts[option.key]}</span>
+        </button>)}
+        {activePhaseKeys.length === 0 && <button
+          type="button"
+          className="ptl-chip-reset"
+          onClick={() => setPhaseFilters({ planning: true, active: true, review: true, overdue: true, completed: true })}
+        >Alles tonen</button>}
+      </div>
+
+      </>}
 
     {filteredProjects.length === 0
       ? <div className="ptl-empty">
