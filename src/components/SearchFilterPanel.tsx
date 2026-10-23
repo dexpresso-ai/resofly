@@ -1,8 +1,9 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Check, RotateCcw, Search, SlidersHorizontal } from 'lucide-react';
+import { Check, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { Select } from './Ui';
 import { PageIcon } from './PageIcon';
+import { useLook } from '../lib/look';
 
 /* ── Eén zoek- en filterblok voor élke tabel ───────────────────────────────
  * Tickets, klanten, offertes, facturen, projecten en campagnes hadden alle
@@ -21,6 +22,9 @@ import { PageIcon } from './PageIcon';
  *   2. snelfilters als aanvinkbare chips, mét het aantal dat ze zouden tonen
  *   3. dropdowns en datum-/bedragvelden (op een telefoon achter "Meer filters")
  *   4. een regel die zegt hoeveel filters er aanstaan, met één knop om te wissen
+ *
+ * Onder Zenit (Probeer Zenit) tekent het blok zich als één regel zonder kaart;
+ * zie "Onbewolkt" in de functie hieronder.
  */
 
 /** De paginakop mág in dit blok. Twee losse kaarten boven elkaar — een titelbalk
@@ -62,6 +66,20 @@ export type FilterField = {
   inputMode?: 'decimal';
   placeholder?: string;
 };
+
+/** De ruststand van een veld: de eerste optie ("Alle klanten", in de
+ *  weekplanner "Open taken") of leeg. Alleen een afwijking daarvan is een filter. */
+function restValue(field: FilterField) {
+  return field.options?.[0]?.value ?? '';
+}
+
+/** Wat een actief veld als chip zegt: de naam van de keuze, of een datum zoals
+ *  we die overal schrijven (23-10-2026) in plaats van 2026-10-23. */
+function fieldValueLabel(field: FilterField) {
+  if (field.options) return field.options.find(option => option.value === field.value)?.label ?? field.value;
+  const date = field.type === 'date' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(field.value) : null;
+  return date ? `${Number(date[3])}-${Number(date[2])}-${date[1]}` : field.value;
+}
 
 export function SearchFilterPanel({
   ariaLabel,
@@ -114,20 +132,119 @@ export function SearchFilterPanel({
   // onzichtbaar en het raster negeert `is-collapsed`).
   const [showFields, setShowFields] = useState(false);
   const fieldsId = useId();
+  const [look] = useLook();
 
   const activeFieldCount = fields.filter(field => field.value !== '').length;
   const activeFilterCount = (query.trim() === '' ? 0 : 1) + activeFieldCount + activeChips.length;
 
-  return <section className={`finance-search-card${header ? ' has-head' : ''} ${className}`.trim()} aria-label={ariaLabel}>
-    {header && <div className="finance-search-head">
-      <div className="fsh-text">
-        {header.page && <PageIcon page={header.page} />}
-        {header.eyebrow && <p className="eyebrow">{header.eyebrow}</p>}
-        <h2>{header.title}</h2>
-        {header.meta && <span>{header.meta}</span>}
+  const head = header && <div className="finance-search-head">
+    <div className="fsh-text">
+      {header.page && <PageIcon page={header.page} />}
+      {header.eyebrow && <p className="eyebrow">{header.eyebrow}</p>}
+      <h2>{header.title}</h2>
+      {header.meta && <span>{header.meta}</span>}
+    </div>
+    {header.actions && <div className="fsh-actions">{header.actions}</div>}
+  </div>;
+
+  const fieldInputs = fields.map(field => <label className="field finance-search-field" key={field.key}>
+    <span>{field.label}</span>
+    {field.options
+      ? <Select
+          className="form-select"
+          value={field.value}
+          searchable={field.searchable}
+          searchPlaceholder={field.searchPlaceholder}
+          onChange={event => onFieldChange?.(field.key, event.target.value)}
+        >
+          {field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </Select>
+      : <input
+          className="form-input"
+          type={field.type}
+          inputMode={field.inputMode}
+          value={field.value}
+          placeholder={field.placeholder}
+          onChange={event => onFieldChange?.(field.key, event.target.value)}
+        />}
+  </label>);
+
+  /* Onbewolkt (Zenit): geen kaart maar één regel boven de tabel — zoeken, de
+     snelkeuzes die iets opleveren, Verfijnen en een stille telling. De velden
+     slapen tot je op Verfijnen drukt; wat aanstaat blijft als chip met een
+     kruisje staan, zodat dicht nooit "vergeten" betekent. */
+  if (look === 'zenit') {
+    const setFields = fields.filter(field => field.value !== restValue(field));
+    const filterCount = (query.trim() === '' ? 0 : 1) + setFields.length + activeChips.length;
+    const narrowed = filterCount > 0 || visibleCount !== totalCount;
+    // "6 van 6" zegt niets en het totaal staat al in de kop: de telling
+    // verschijnt pas als je filtert, of als er een bedrag bij hoort. Verborgen
+    // blijft hij wel voorgelezen, zodat een schermlezer de nieuwe telling hoort.
+    const showCount = filterCount > 0 || Boolean(summary);
+    // Een snelkeuze die niets zou tonen is ruis; staat hij aan, dan blijft hij.
+    const quickChips = chips.filter(chip => chip.count > 0 || activeChips.includes(chip.key));
+
+    return <section className={`finance-search-card fs-calm${header ? ' has-head' : ''} ${className}`.trim()} aria-label={ariaLabel}>
+      {head}
+      <div className={`fs-bar${fields.length > 0 ? ' has-refine' : ''}`}>
+        <label className="fs-qsearch">
+          <Search size={15} aria-hidden="true"/>
+          {/* Kort in het veld; de lange uitleg (waarop je kunt zoeken) staat in de tooltip. */}
+          <input value={query} onChange={event => onQueryChange(event.target.value)} placeholder={`Zoek in ${noun}`} title={queryPlaceholder} aria-label="Snel zoeken" autoComplete="off"/>
+          {query && <button type="button" onClick={() => onQueryChange('')} aria-label="Zoekterm wissen"><X size={13}/></button>}
+        </label>
+
+        {quickChips.length > 0 && <div className="fs-quick" role="group" aria-label="Snelfilters">
+          {quickChips.map(chip => {
+            const isActive = activeChips.includes(chip.key);
+            return <label key={chip.key} className={`fs-quick-chip${isActive ? ' is-on' : ''}`} title={chip.title}>
+              <input type="checkbox" checked={isActive} onChange={() => onChipToggle?.(chip.key)} />
+              <Check size={12} strokeWidth={2.6} aria-hidden="true"/>
+              {chip.label}
+              <span className="fs-quick-n">{chip.count}</span>
+            </label>;
+          })}
+        </div>}
+
+        {fields.length > 0 && <button
+          type="button"
+          className={`fs-refine${showFields ? ' is-open' : ''}`}
+          onClick={() => setShowFields(value => !value)}
+          aria-expanded={showFields}
+          aria-controls={showFields ? fieldsId : undefined}
+          aria-label={setFields.length > 0 ? `Verfijnen, ${setFields.length} actief` : 'Verfijnen'}
+        >
+          <SlidersHorizontal size={14} aria-hidden="true"/><span className="fs-refine-label">Verfijnen</span>
+          {setFields.length > 0 && <span className="fs-refine-n" aria-hidden="true">{setFields.length}</span>}
+        </button>}
+
+        {/* Dicht betekent niet vergeten: wat in Verfijnen aanstaat, staat hier
+            als chip met een kruisje, in dezelfde regel. */}
+        {!showFields && setFields.length > 0 && <div className="fs-active" role="group" aria-label="Actieve filters">
+          {setFields.map(field => <button
+            key={field.key}
+            type="button"
+            className="fs-active-chip"
+            onClick={() => onFieldChange?.(field.key, restValue(field))}
+            aria-label={`${field.label}: ${fieldValueLabel(field)} — wissen`}
+          ><span>{field.label}:</span> {fieldValueLabel(field)}<X size={12} aria-hidden="true"/></button>)}
+        </div>}
+
+        <div className={`fs-tail${filterCount > 0 ? ' is-filtered' : ''}${showCount ? '' : ' is-silent'}`}>
+          <p className="fs-count" aria-live="polite">
+            {narrowed ? <><b>{visibleCount}</b> van {totalCount} {noun}</> : <>{totalCount} {noun}</>}
+            {summary && <span> · {summary}</span>}
+          </p>
+          {filterCount > 0 && <button type="button" className="fs-clear" onClick={onReset}><RotateCcw size={13} aria-hidden="true"/>Filters wissen</button>}
+        </div>
       </div>
-      {header.actions && <div className="fsh-actions">{header.actions}</div>}
-    </div>}
+
+      {showFields && <div id={fieldsId} className="finance-search-grid fs-fields is-open-calm">{fieldInputs}</div>}
+    </section>;
+  }
+
+  return <section className={`finance-search-card${header ? ' has-head' : ''} ${className}`.trim()} aria-label={ariaLabel}>
+    {head}
 
     <div className="finance-search-main">
       <label className="finance-search-query">
@@ -169,27 +286,7 @@ export function SearchFilterPanel({
       </button>
 
       <div id={fieldsId} className={`finance-search-grid${showFields ? '' : ' is-collapsed'}`}>
-        {fields.map(field => <label className="field finance-search-field" key={field.key}>
-          <span>{field.label}</span>
-          {field.options
-            ? <Select
-                className="form-select"
-                value={field.value}
-                searchable={field.searchable}
-                searchPlaceholder={field.searchPlaceholder}
-                onChange={event => onFieldChange?.(field.key, event.target.value)}
-              >
-                {field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </Select>
-            : <input
-                className="form-input"
-                type={field.type}
-                inputMode={field.inputMode}
-                value={field.value}
-                placeholder={field.placeholder}
-                onChange={event => onFieldChange?.(field.key, event.target.value)}
-              />}
-        </label>)}
+        {fieldInputs}
       </div>
     </>}
 

@@ -17,9 +17,10 @@ import { FULL_PERMISSIONS, isAccountantRole, type ModuleKey, type Permissions } 
 import { useLook } from '../lib/look';
 import { askGerrie } from '../components/GerrieChat';
 import { DayArc, type DayArcItem } from './DayArc';
+import { AttentionList, DayAgenda, MoreFold, ProjectGlance, WeekStrip } from './DashboardCalm';
 
 export type DashboardNavPage =
-  | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar' | 'gerrie';
+  | 'clients' | 'projects' | 'project-planning' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar' | 'gerrie';
 
 type StatTone = 'default' | 'accent' | 'danger';
 type AttentionItem = { key: string; tone: 'default' | 'danger'; icon: ReactNode; label: string; meta?: string; count: number; onClick: () => void };
@@ -355,6 +356,44 @@ export function Dashboard({
     : null;
 
   const taskRowProps = { data, todayKey, canWrite: canWriteTasks, openTask, onSetTaskStatus };
+  // Rapportages, de inrichting en de laatste activiteit: in Cockpit onderaan
+  // het dashboard, in Zenit achter "Meer van vandaag" (de inrichting niet:
+  // die hoort in beeld zolang hij niet af is).
+  const reportsBlock = permissions.canRead('stats') && pinnedReports.length > 0 && <div className="dash-reports">
+    <header className="dash-reports-head">
+      <h2><BarChart3 size={16} /> Mijn rapportages</h2>
+      <button type="button" onClick={() => openPage('stats')}>Rapportbouwer <ChevronRight size={14} /></button>
+    </header>
+    <div className="dash-reports-grid">
+      {pinnedReports.map(report => <PinnedReportCard key={report.id} report={report} data={data} onOpen={() => openReport(report.id)} />)}
+    </div>
+  </div>;
+  const onboardingBlock = showOnboarding && <div className="onboarding-card">
+    <div className="onboarding-head">
+      <div><h3>Workspace setup</h3><p>{onboardingDone}/{onboardingItems.length} stappen afgerond</p></div>
+      <strong>{onboardingPct}%</strong>
+    </div>
+    <div className="prog-bar setup"><div className="prog-fill" style={{ width: `${onboardingPct}%` }} /></div>
+    <div className="onboarding-list">
+      {onboardingItems.map(item => <div className={`onboarding-row ${item.done ? 'done' : ''}`} key={item.label}><span>{item.done ? '✓' : '•'}</span>{item.label}</div>)}
+    </div>
+    <Button onClick={openSettings}>Organisatie instellen</Button>
+  </div>;
+  const activityBlock = <div className="activity-card compact-activity">
+    <h3>Laatste activiteit</h3>
+    {organizationContext.auditLogs.slice(0, 5).map(log => <div className="activity-row" key={log.id}>
+      <div><strong>{auditLabel(log.action)}</strong><span>{log.entity_label || log.entity_type}</span></div>
+      <time>{formatRelativeTime(log.created_at)}</time>
+    </div>)}
+    {organizationContext.auditLogs.length === 0 && <p className="settings-help">Nog geen audit-events. Nieuwe wijzigingen worden hier zichtbaar zodra de database-migratie is uitgevoerd.</p>}
+  </div>;
+  // Dicht fluistert "Meer van vandaag" de cijfers die je het vaakst zoekt.
+  const monthName = now.toLocaleDateString('nl-NL', { month: 'long' });
+  const foldWhisper = [
+    showFinance ? `Omzet ${monthName} ${euro(revenueThisMonth)}` : '',
+    showFinance && outstandingTotal > 0 ? `${euro(outstandingTotal)} openstaand` : '',
+    showProjects ? pl(weekTasks.length, 'actie deze week', 'acties deze week') : '',
+  ].filter(Boolean);
 
   // De kerncijfers: in Cockpit glazen tegels in het donker, in Zenit één
   // kaart (de Puls) onder de Dagboog. De Puls verdeelt de rijen op het aantal.
@@ -382,7 +421,8 @@ export function Dashboard({
               <p className="zday-lead">{heroLead({
                 events: showCalendar ? todaysEvents.length : null,
                 tasks: showProjects ? todayOpenCount : null,
-                overdueInvoices: showFinance ? overdueInvoices.length : 0,
+                // Te laat betaald staat in Aandacht: één keer zeggen.
+                overdueInvoices: 0,
               })}</p>
             </div>
             <div className="zday-acts">
@@ -392,8 +432,7 @@ export function Dashboard({
               </Button>}
             </div>
           </header>
-          {showToday && <DayArc items={arcItems} allDay={allDayTitles} onOpenPlanner={showProjects ? () => openPage('weekplanner') : undefined} />}
-          <div className={`zpuls n${statCount}`}>{statTiles}</div>
+          {showToday && <DayArc items={arcItems} allDay={allDayTitles} onOpenPlanner={showProjects ? () => openPage('weekplanner') : undefined} showLane={false} quietStrip />}
         </section>
       /* De cockpit: de stand van zaken in één oogopslag — de groet, de
          kerncijfers en de week als spoor. Altijd donker, ook op Dag. Op de
@@ -449,137 +488,150 @@ export function Dashboard({
         teamMembers={organizationContext.teamMembers ?? []}
       />}
 
-      <section className={`dashboard-layout${showToday ? '' : ' dash-layout-single'}`}>
-        {showToday && <div className="today-card">
-          <header className="dash-card-head">
-            <div>
-              <h2><CalendarDays size={16} aria-hidden="true" /> Vandaag</h2>
-              <p>{capitalize(formatLongDay(startOfToday))}{showProjects ? ` · ${pl(todayOpenCount, 'actie', 'acties')}` : ''}</p>
+      {look === 'zenit'
+        ? <div className="zcalm">
+            {/* Onbewolkt: de woorden bij de Dagboog (Je dag), wat op je wacht
+                (Aandacht), en de rest achter één balk. Elk feit één keer. */}
+            <div className={`zcalm-grid${showToday ? '' : ' is-single'}`}>
+              {showToday && <DayAgenda
+                events={todaysEvents}
+                lingering={showProjects ? lingering.slice(0, 6) : []}
+                moreLingering={showProjects ? Math.max(0, lingering.length - 6) : 0}
+                tasks={showProjects ? todaysTasks : []}
+                todayKey={todayKey}
+                dayStartIso={dayStartIso}
+                renderTask={task => <TaskRow task={task} {...taskRowProps} />}
+                onOpenCalendar={showCalendar ? () => openPage('calendar') : undefined}
+                onOpenPlanner={() => openPage('weekplanner')}
+                tools={showProjects ? scopeToggle : null}
+              />}
+              <AttentionList items={attention} />
             </div>
-            {showProjects && scopeToggle}
-          </header>
+            {onboardingBlock}
+            <MoreFold whisper={foldWhisper}>
+              {showProjects && <div className="zcalm-grid">
+                <WeekStrip dayKeys={weekDayKeys} todayKey={todayKey} tasks={weekTasks} projects={data.projects} weekNumber={isoWeekNumber(weekStart)} onOpen={() => openPage('weekplanner')} />
+                <ProjectGlance
+                  projects={data.projects}
+                  tasks={data.tasks}
+                  clients={data.clients}
+                  onOpen={openProject}
+                  onOpenPlanning={permissions.canOpenPage('project-planning') ? () => openPage('project-planning') : undefined}
+                />
+              </div>}
+              <div className={`zpuls n${statCount}`}>{statTiles}</div>
+              {reportsBlock}
+              {activityBlock}
+            </MoreFold>
+          </div>
+        : <>
+          <section className={`dashboard-layout${showToday ? '' : ' dash-layout-single'}`}>
+            {showToday && <div className="today-card">
+              <header className="dash-card-head">
+                <div>
+                  <h2><CalendarDays size={16} aria-hidden="true" /> Vandaag</h2>
+                  <p>{capitalize(formatLongDay(startOfToday))}{showProjects ? ` · ${pl(todayOpenCount, 'actie', 'acties')}` : ''}</p>
+                </div>
+                {showProjects && scopeToggle}
+              </header>
 
-          {showProjects && <>
-            {lingering.length > 0 && <>
-              <div className="dash-group-label dash-group-late"><span>Blijft liggen</span></div>
-              {lingering.slice(0, 6).map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
-              {lingering.length > 6 && <button type="button" className="dash-more" onClick={() => openPage('weekplanner')}>
-                Nog {lingering.length - 6} in de weekplanner <ChevronRight size={13} />
-              </button>}
-            </>}
+              {showProjects && <>
+                {lingering.length > 0 && <>
+                  <div className="dash-group-label dash-group-late"><span>Blijft liggen</span></div>
+                  {lingering.slice(0, 6).map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
+                  {lingering.length > 6 && <button type="button" className="dash-more" onClick={() => openPage('weekplanner')}>
+                    Nog {lingering.length - 6} in de weekplanner <ChevronRight size={13} />
+                  </button>}
+                </>}
 
-            <div className="dash-group-label"><span>{lingering.length > 0 ? 'Gepland voor vandaag' : 'Vandaag'}</span></div>
-            {todaysTasks.length === 0
-              ? <p className="dash-empty">Niets gepland voor vandaag. Plan werk in de weekplanner of pak iets uit deze week op.</p>
-              : todaysTasks.map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
-          </>}
+                <div className="dash-group-label"><span>{lingering.length > 0 ? 'Gepland voor vandaag' : 'Vandaag'}</span></div>
+                {todaysTasks.length === 0
+                  ? <p className="dash-empty">Niets gepland voor vandaag. Plan werk in de weekplanner of pak iets uit deze week op.</p>
+                  : todaysTasks.map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
+              </>}
 
-          {todaysEvents.length > 0 && <div className="today-agenda">
-            {todaysEvents.slice(0, 6).map(event => <button
-              key={`${event.source_id}:${event.id}`}
-              type="button"
-              className="today-ag"
-              onClick={() => openPage('calendar')}
-              title={`${event.title}${event.location ? ` · ${event.location}` : ''}`}
-            >
-              <strong>{event.all_day ? 'Hele dag' : formatTime(event.starts_at)}</strong>
-              <span>{event.title || 'Afspraak'}</span>
-            </button>)}
-          </div>}
-        </div>}
-
-        <div className="attention-card">
-          <header>
-            <h2><BellRing size={16} aria-hidden="true" /> Vereist je aandacht</h2>
-            <p>Klik een regel om er direct heen te gaan</p>
-          </header>
-          {attention.length === 0
-            ? <div className="attention-empty">
-                <span className="attention-icon"><CheckCircle2 size={16} /></span>
-                <div><strong>Alles is bij</strong>Er staat op dit moment niets open dat je aandacht vraagt.</div>
-              </div>
-            : <div className="attention-list">
-                {attention.map(item => <button type="button" key={item.key} className={`attention-row attention-${item.tone}`} onClick={item.onClick}>
-                  <span className="attention-icon">{item.icon}</span>
-                  <span className="attention-text"><strong>{item.label}</strong>{item.meta && <span>{item.meta}</span>}</span>
-                  <span className="attention-count">{item.count}</span>
-                  <ChevronRight size={16} className="attention-chevron" />
+              {todaysEvents.length > 0 && <div className="today-agenda">
+                {todaysEvents.slice(0, 6).map(event => <button
+                  key={`${event.source_id}:${event.id}`}
+                  type="button"
+                  className="today-ag"
+                  onClick={() => openPage('calendar')}
+                  title={`${event.title}${event.location ? ` · ${event.location}` : ''}`}
+                >
+                  <strong>{event.all_day ? 'Hele dag' : formatTime(event.starts_at)}</strong>
+                  <span>{event.title || 'Afspraak'}</span>
                 </button>)}
               </div>}
-        </div>
-      </section>
+            </div>}
 
-      {showProjects && <div className="weekactions-card">
-        <header className="dash-card-head">
-          <div>
-            <h2><ListTodo size={16} aria-hidden="true" /> Weekacties</h2>
-            <p>Week {isoWeekNumber(weekStart)} · {formatDayShort(weekStart)} t/m {formatDayShort(addDays(weekStart, 6))} · {pl(weekTasks.length, 'actie', 'acties')}</p>
-          </div>
-          <div className="dash-head-tools">
-            {scopeToggle}
-            <button type="button" className="dash-link" onClick={() => openPage('weekplanner')}>Weekplanner <ChevronRight size={14} /></button>
-          </div>
-        </header>
-        <div className="weekactions-panes">
-          <WeekPane
-            title="Losse taken"
-            tone="loose"
-            icon={<ListTodo size={14} />}
-            tasks={looseWeekTasks}
-            dayKeys={weekDayKeys}
-            emptyText="Geen losse taken deze week."
-            {...taskRowProps}
-          />
-          <WeekPane
-            title="Projecttaken"
-            tone="project"
-            icon={<FolderOpen size={14} />}
-            tasks={projectWeekTasks}
-            dayKeys={weekDayKeys}
-            emptyText="Geen projecttaken deze week."
-            {...taskRowProps}
-          />
-        </div>
-      </div>}
+            <div className="attention-card">
+              <header>
+                <h2><BellRing size={16} aria-hidden="true" /> Vereist je aandacht</h2>
+                <p>Klik een regel om er direct heen te gaan</p>
+              </header>
+              {attention.length === 0
+                ? <div className="attention-empty">
+                    <span className="attention-icon"><CheckCircle2 size={16} /></span>
+                    <div><strong>Alles is bij</strong>Er staat op dit moment niets open dat je aandacht vraagt.</div>
+                  </div>
+                : <div className="attention-list">
+                    {attention.map(item => <button type="button" key={item.key} className={`attention-row attention-${item.tone}`} onClick={item.onClick}>
+                      <span className="attention-icon">{item.icon}</span>
+                      <span className="attention-text"><strong>{item.label}</strong>{item.meta && <span>{item.meta}</span>}</span>
+                      <span className="attention-count">{item.count}</span>
+                      <ChevronRight size={16} className="attention-chevron" />
+                    </button>)}
+                  </div>}
+            </div>
+          </section>
 
-      {showProjects && <ProjectTimeline data={data} openProject={openProject} />}
-
-      <section className="dashboard-layout dash-layout-tail">
-        <div className="dash-main">
-          {permissions.canRead('stats') && pinnedReports.length > 0 && <div className="dash-reports">
-            <header className="dash-reports-head">
-              <h2><BarChart3 size={16} /> Mijn rapportages</h2>
-              <button type="button" onClick={() => openPage('stats')}>Rapportbouwer <ChevronRight size={14} /></button>
+          {showProjects && <div className="weekactions-card">
+            <header className="dash-card-head">
+              <div>
+                <h2><ListTodo size={16} aria-hidden="true" /> Weekacties</h2>
+                <p>Week {isoWeekNumber(weekStart)} · {formatDayShort(weekStart)} t/m {formatDayShort(addDays(weekStart, 6))} · {pl(weekTasks.length, 'actie', 'acties')}</p>
+              </div>
+              <div className="dash-head-tools">
+                {scopeToggle}
+                <button type="button" className="dash-link" onClick={() => openPage('weekplanner')}>Weekplanner <ChevronRight size={14} /></button>
+              </div>
             </header>
-            <div className="dash-reports-grid">
-              {pinnedReports.map(report => <PinnedReportCard key={report.id} report={report} data={data} onOpen={() => openReport(report.id)} />)}
+            <div className="weekactions-panes">
+              <WeekPane
+                title="Losse taken"
+                tone="loose"
+                icon={<ListTodo size={14} />}
+                tasks={looseWeekTasks}
+                dayKeys={weekDayKeys}
+                emptyText="Geen losse taken deze week."
+                {...taskRowProps}
+              />
+              <WeekPane
+                title="Projecttaken"
+                tone="project"
+                icon={<FolderOpen size={14} />}
+                tasks={projectWeekTasks}
+                dayKeys={weekDayKeys}
+                emptyText="Geen projecttaken deze week."
+                {...taskRowProps}
+              />
             </div>
           </div>}
-        </div>
 
-        <aside className="dash-side">
-          {showOnboarding && <div className="onboarding-card">
-            <div className="onboarding-head">
-              <div><h3>Workspace setup</h3><p>{onboardingDone}/{onboardingItems.length} stappen afgerond</p></div>
-              <strong>{onboardingPct}%</strong>
-            </div>
-            <div className="prog-bar setup"><div className="prog-fill" style={{ width: `${onboardingPct}%` }} /></div>
-            <div className="onboarding-list">
-              {onboardingItems.map(item => <div className={`onboarding-row ${item.done ? 'done' : ''}`} key={item.label}><span>{item.done ? '✓' : '•'}</span>{item.label}</div>)}
-            </div>
-            <Button onClick={openSettings}>Organisatie instellen</Button>
-          </div>}
+          {showProjects && <ProjectTimeline data={data} openProject={openProject} />}
 
-          <div className="activity-card compact-activity">
-            <h3>Laatste activiteit</h3>
-            {organizationContext.auditLogs.slice(0, 5).map(log => <div className="activity-row" key={log.id}>
-              <div><strong>{auditLabel(log.action)}</strong><span>{log.entity_label || log.entity_type}</span></div>
-              <time>{formatRelativeTime(log.created_at)}</time>
-            </div>)}
-            {organizationContext.auditLogs.length === 0 && <p className="settings-help">Nog geen audit-events. Nieuwe wijzigingen worden hier zichtbaar zodra de database-migratie is uitgevoerd.</p>}
-          </div>
-        </aside>
-      </section>
+          <section className="dashboard-layout dash-layout-tail">
+            <div className="dash-main">
+              {reportsBlock}
+            </div>
+
+            <aside className="dash-side">
+              {onboardingBlock}
+
+              {activityBlock}
+            </aside>
+          </section>
+        </>}
     </div>
   </>;
 }

@@ -654,6 +654,13 @@
 :root[data-look="zenit"] .zarc-bar{position:relative;flex:none;width:90px;height:5px;border-radius:99px;background:var(--surface-3);overflow:hidden}
 :root[data-look="zenit"] .zarc-bar span{position:absolute;inset:0 auto 0 0;border-radius:inherit;background:var(--accent)}
 :root[data-look="zenit"] .zarc-nn-rest .zarc-nn-b{align-items:flex-end;text-align:right}
+/* Stil (Vandaag): zonder strook eindigt de kaart onder de uren, en Nu en
+   Volgende schuiven pas in beeld als je de zon pakt. */
+:root[data-look="zenit"] .zarc>.zarc-ticks:last-child{margin-bottom:14px}
+@media (prefers-reduced-motion:no-preference){
+  :root[data-look="zenit"] .zarc.is-quiet .zarc-nn{animation:zenit-rise .26s var(--ease-out) both}
+  @keyframes zenit-rise{from{opacity:0;transform:translateY(6px)}}
+}
 @media (max-width:1100px){
   :root[data-look="zenit"] .zarc-nn{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   :root[data-look="zenit"] .zarc-nn>.zarc-nn-rest{display:none}
@@ -664,7 +671,7 @@
    Hoeveel tegels er zijn hangt af van je rechten (één tot zes). Op een raster
    van 60 kolommen (deelbaar door 1 t/m 6) vult elke rij precies de breedte:
    heel breed alles op één rij, anders hooguit drie per rij (twee bij vier
-   tegels op een smal werkvlak) en de rest eronder. */
+   tegels op een smal werkvlak, twee op de telefoon) en de rest eronder. */
 :root[data-look="zenit"] .app .zday{container:zday/inline-size}
 :root[data-look="zenit"] .app .zpuls{display:grid;grid-template-columns:repeat(60,minmax(0,1fr));overflow:hidden;border:1px solid var(--line);border-radius:var(--r-card);background:var(--surface);box-shadow:var(--shadow-1)}
 :root[data-look="zenit"] .app .zpuls.n0{display:none}
@@ -674,12 +681,18 @@
 :root[data-look="zenit"] .app .zpuls.n4>*{grid-column:span 15}
 :root[data-look="zenit"] .app .zpuls.n5>*{grid-column:span 12}
 :root[data-look="zenit"] .app .zpuls.n6>*{grid-column:span 10}
-@container zday (max-width:1199px){
+/* De Puls staat sinds Onbewolkt in "Meer van vandaag", dus binnen .zcalm. */
+@container zcalm (max-width:1199px){
   :root[data-look="zenit"] .app .zpuls:is(.n5,.n6)>*{grid-column:span 20}
   :root[data-look="zenit"] .app .zpuls.n5>:nth-child(n+4){grid-column:span 30}
 }
-@container zday (max-width:760px){
+@container zcalm (max-width:760px){
   :root[data-look="zenit"] .app .zpuls.n4>*{grid-column:span 30}
+}
+@container zcalm (max-width:520px){
+  :root[data-look="zenit"] .app .zpuls:is(.n3,.n5,.n6)>*,
+  :root[data-look="zenit"] .app .zpuls.n5>:nth-child(n+4){grid-column:span 30}
+  :root[data-look="zenit"] .app .zpuls:is(.n3,.n5)>:last-child{grid-column:span 60}
 }
 :root[data-look="zenit"] .app .zpuls .stat-card{
   min-width:0;margin:0;padding:15px 18px 16px;
@@ -708,6 +721,273 @@
   :root[data-look="zenit"] .zarc-nn>div+div{border-left:0;border-top:1px solid var(--line)}
   :root[data-look="zenit"] .zarc-nn .zarc-btn{display:none}
   :root[data-look="zenit"] .app .zpuls .stat-card{padding:9px 10px 8px}
+}
+
+/* ── 11b · Onbewolkt: Vandaag zonder herhaling (2026-10-23) ───────────────
+   De Dagboog is het beeld van je dag; Je dag zijn de woorden erbij, Aandacht
+   is wat op je wacht. De week, de projecten, de cijfers en de rapportages
+   staan achter één balk. Elk feit één keer. */
+:root[data-look="zenit"] .app .zcalm{container:zcalm/inline-size;display:flex;flex-direction:column;gap:16px}
+:root[data-look="zenit"] .app .zcalm-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;align-items:start}
+:root[data-look="zenit"] .app .zcalm-grid.is-single{grid-template-columns:minmax(0,1fr)}
+@container zcalm (max-width:780px){
+  :root[data-look="zenit"] .app .zcalm-grid{grid-template-columns:minmax(0,1fr)}
+}
+:root[data-look="zenit"] .app .zcard{min-width:0;padding:2px 0 8px;border:1px solid var(--line);border-radius:var(--r-card);background:var(--surface);box-shadow:var(--shadow-1)}
+:root[data-look="zenit"] .app .zcard-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px 10px}
+:root[data-look="zenit"] .app .zcard-h h2{margin:0;font:600 15px/1.25 var(--font-sans);letter-spacing:-.012em;color:var(--ink)}
+:root[data-look="zenit"] .app .zcard-h p{margin:3px 0 0;font-size:12px;line-height:1.3;color:var(--ink-3)}
+:root[data-look="zenit"] .app .zlink{display:inline-flex;align-items:center;gap:4px;flex:none;padding:6px 8px;border:0;border-radius:8px;background:none;color:var(--ink-2);font:500 12.5px/1 var(--font-sans);cursor:pointer}
+:root[data-look="zenit"] .app .zlink:hover{background:var(--surface-2);color:var(--ink)}
+
+/* Je dag: de klok in de linkerkolom, de nu-lijn in goud. */
+:root[data-look="zenit"] .app .zag-group+.zag-group{margin-top:4px}
+:root[data-look="zenit"] .app .zag-label{padding:10px 16px 6px;font:600 11.5px/1 var(--font-sans);color:var(--ink-3)}
+:root[data-look="zenit"] .app .zag-group.is-late .zag-label{color:var(--danger)}
+:root[data-look="zenit"] .app .zag-row{display:flex;align-items:stretch;min-width:0;border-top:1px solid var(--line);transition:background-color var(--t-1) var(--ease),opacity var(--t-2) var(--ease)}
+:root[data-look="zenit"] .app .zag-row:hover{background:var(--surface-2)}
+:root[data-look="zenit"] .app .zag-row.is-past{opacity:.5}
+:root[data-look="zenit"] .app .zag-time{flex:0 0 60px;padding:13px 0 0 16px;font:600 12px/1 var(--font-sans);color:var(--ink-3);white-space:nowrap}
+:root[data-look="zenit"] .app .zag-row .dash-task{flex:1;min-width:0;margin:0;padding:10px 12px 10px 0;border-top:0;background:none}
+:root[data-look="zenit"] .app .zag-row .dash-task:hover{background:none}
+:root[data-look="zenit"] .app .zag-ev-main{display:flex;align-items:center;gap:10px;flex:1;min-width:0;padding:9px 12px 9px 0;border:0;background:none;color:var(--ink);text-align:left;cursor:pointer}
+:root[data-look="zenit"] .app .zag-ev-main:disabled{cursor:default}
+:root[data-look="zenit"] .app .zag-ev-ic{display:grid;place-items:center;flex:none;width:24px;height:24px;border-radius:7px;background:rgba(var(--info-rgb),.12);color:var(--info)}
+:root[data-look="zenit"] .app .zag-ev-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+:root[data-look="zenit"] .app .zag-ev-t strong{font:600 13px/1.3 var(--font-sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root[data-look="zenit"] .app .zag-ev-t>span{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root[data-look="zenit"] .app .zag-ev-t>span svg{margin-left:4px;flex:none}
+:root[data-look="zenit"] .app .zag-event.is-now{background:color-mix(in srgb,var(--accent) 7%,transparent);box-shadow:inset 3px 0 0 var(--accent)}
+:root[data-look="zenit"] .app .zag-join{align-self:center;flex:none;height:28px;min-height:28px;margin-right:12px;padding:0 10px;border-radius:8px;font-size:12px;text-decoration:none}
+:root[data-look="zenit"] .app .zag-now{display:flex;align-items:center;gap:8px;padding:6px 16px;color:var(--accent-ink);font:600 10.5px/1 var(--font-sans);letter-spacing:.06em;text-transform:uppercase}
+:root[data-look="zenit"] .app .zag-now::before{content:'';flex:none;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18),0 0 10px var(--gold-glow)}
+:root[data-look="zenit"] .app .zag-now::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--accent),transparent)}
+:root[data-look="zenit"] .app .zag-allday{display:flex;align-items:center;gap:8px;margin:4px 16px 2px;padding:8px 10px;border-radius:9px;background:rgba(var(--info-rgb),.08);color:var(--ink-2);font-size:12px}
+:root[data-look="zenit"] .app .zag-allday svg{flex:none;color:var(--info)}
+:root[data-look="zenit"] .app .zag-empty{margin:0;padding:8px 16px 14px;color:var(--ink-3);font-size:13px;line-height:1.5}
+:root[data-look="zenit"] .app .zag-more{display:inline-flex;align-items:center;gap:4px;margin:6px 12px 2px;padding:6px 8px;border:0;border-radius:8px;background:none;color:var(--ink-2);font:500 12px/1 var(--font-sans);cursor:pointer}
+:root[data-look="zenit"] .app .zag-more:hover{background:var(--surface-2);color:var(--ink)}
+
+/* Aandacht */
+:root[data-look="zenit"] .app .zsig-list{display:flex;flex-direction:column;gap:2px;padding:0 8px 2px}
+:root[data-look="zenit"] .app .zsig-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:11px;width:100%;padding:8px;border:0;border-radius:10px;background:none;color:var(--ink);text-align:left;cursor:pointer;transition:background-color var(--t-1) var(--ease)}
+:root[data-look="zenit"] .app .zsig-row:hover{background:var(--surface-2)}
+:root[data-look="zenit"] .app .zsig-ic{display:grid;place-items:center;flex:none;width:30px;height:30px;border-radius:9px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-2)}
+:root[data-look="zenit"] .app .zsig-row.is-danger .zsig-ic{border-color:transparent;background:rgba(var(--danger-rgb),.1);color:var(--danger)}
+:root[data-look="zenit"] .app .zsig-ic.is-ok{border-color:transparent;background:rgba(var(--ok-rgb),.12);color:var(--ok)}
+:root[data-look="zenit"] .app .zsig-t{min-width:0}
+:root[data-look="zenit"] .app .zsig-t b{display:block;font:600 13px/1.3 var(--font-sans)}
+:root[data-look="zenit"] .app .zsig-t span{display:block;margin-top:1px;font-size:11.5px;color:var(--ink-3)}
+:root[data-look="zenit"] .app .zsig-chev{color:var(--ink-4)}
+:root[data-look="zenit"] .app .zsig-row:hover .zsig-chev{color:var(--ink-2)}
+:root[data-look="zenit"] .app .zsig-empty{display:flex;align-items:flex-start;gap:11px;padding:2px 16px 12px;font-size:12.5px;line-height:1.45;color:var(--ink-3)}
+:root[data-look="zenit"] .app .zsig-empty b{display:block;color:var(--ink);font-weight:600}
+
+/* Meer van vandaag: een stille balk die de cijfers fluistert. */
+:root[data-look="zenit"] .app .zfold-bar{
+  display:flex;align-items:center;gap:14px;width:100%;padding:13px 16px;
+  border:1px dashed var(--line-3);border-radius:var(--r-card);background:transparent;
+  color:var(--ink-2);text-align:left;cursor:pointer;
+  transition:background-color var(--t-1) var(--ease),border-color var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .app .zfold-bar:hover{border-style:solid;border-color:var(--line-2);background:var(--surface)}
+:root[data-look="zenit"] .app .zfold-bar:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+:root[data-look="zenit"] .app .zfold-t{flex:none;font:600 13px/1 var(--font-sans);color:var(--ink)}
+:root[data-look="zenit"] .app .zfold-w{flex:1;min-width:0;font-size:12.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root[data-look="zenit"] .app .zfold-chev{flex:none;margin-left:auto;color:var(--ink-3);transition:transform var(--t-2) var(--ease)}
+:root[data-look="zenit"] .app .zfold.is-open .zfold-chev{transform:rotate(180deg)}
+:root[data-look="zenit"] .app .zfold-body{display:flex;flex-direction:column;gap:16px;margin-top:16px}
+:root[data-look="zenit"] .app .zfold-body[hidden]{display:none}
+:root[data-look="zenit"] .app .zfold-body>.dash-reports,:root[data-look="zenit"] .app .zfold-body>.activity-card{margin:0}
+
+/* Deze week: getallen, geen lijst. */
+:root[data-look="zenit"] .app .zweek-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin:0;padding:0 12px 6px;list-style:none}
+:root[data-look="zenit"] .app .zweek-day{
+  display:flex;flex-direction:column;align-items:center;gap:3px;width:100%;padding:10px 2px 9px;
+  border:1px solid transparent;border-radius:12px;background:var(--surface-2);color:var(--ink-2);cursor:pointer;
+  transition:border-color var(--t-1) var(--ease),background-color var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .app .zweek-day:hover{border-color:var(--line-2);background:var(--surface)}
+:root[data-look="zenit"] .app .zweek-name{font:500 11px/1 var(--font-sans);color:var(--ink-3)}
+:root[data-look="zenit"] .app .zweek-num{font:600 12.5px/1.2 var(--font-sans);color:var(--ink-2)}
+:root[data-look="zenit"] .app .zweek-count{margin-top:4px;font:600 20px/1 var(--font-sans);letter-spacing:-.03em;color:var(--ink)}
+:root[data-look="zenit"] .app .zweek-day:not(.has-items) .zweek-count{color:var(--ink-4)}
+:root[data-look="zenit"] .app .zweek-dots{display:flex;flex-wrap:wrap;justify-content:center;gap:3px;min-height:6px;margin-top:3px}
+:root[data-look="zenit"] .app .zweek-dots i{width:6px;height:6px;border-radius:50%}
+:root[data-look="zenit"] .app .zweek-day.is-today{border-color:var(--accent-ink);background:var(--surface);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.14)}
+:root[data-look="zenit"] .app .zweek-day.is-today .zweek-name{color:var(--accent-ink);font-weight:600}
+:root[data-look="zenit"] .app .zweek-day.is-past{opacity:.6}
+:root[data-look="zenit"] .app .zweek-day.is-late .zweek-count{color:var(--warn)}
+
+/* Projecten in één blik: de vulling is het werk, het streepje de tijd. */
+:root[data-look="zenit"] .app .zglance-list{margin:0;padding:0 8px 2px;list-style:none}
+:root[data-look="zenit"] .app .zglance-row{
+  display:grid;grid-template-columns:auto minmax(0,1.3fr) minmax(70px,1fr) auto;align-items:center;gap:12px;
+  width:100%;padding:9px 8px;border:0;border-radius:10px;background:none;color:var(--ink);text-align:left;cursor:pointer;
+  transition:background-color var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .app .zglance-row:hover{background:var(--surface-2)}
+:root[data-look="zenit"] .app .zglance-dot{width:9px;height:9px;border-radius:3px}
+:root[data-look="zenit"] .app .zglance-name{min-width:0}
+:root[data-look="zenit"] .app .zglance-name strong{display:block;font:600 13px/1.3 var(--font-sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root[data-look="zenit"] .app .zglance-name span{display:block;margin-top:1px;font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root[data-look="zenit"] .app .zglance-track{position:relative;height:8px;border-radius:99px;background:var(--surface-3)}
+:root[data-look="zenit"] .app .zglance-fill{position:absolute;left:0;top:0;bottom:0;min-width:2px;border-radius:inherit}
+:root[data-look="zenit"] .app .zglance-now{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;border-radius:2px;background:var(--ink);box-shadow:0 0 0 2px var(--surface)}
+:root[data-look="zenit"] .app .zglance-status{min-width:92px;font:500 11.5px/1.2 var(--font-sans);color:var(--ink-3);text-align:right;white-space:nowrap}
+:root[data-look="zenit"] .app .zglance-status.tone-danger{color:var(--danger);font-weight:600}
+:root[data-look="zenit"] .app .zglance-status.tone-warn{color:var(--warn);font-weight:600}
+:root[data-look="zenit"] .app .zweek-short{display:none}
+@container zcalm (max-width:520px){
+  :root[data-look="zenit"] .app .zglance-row{grid-template-columns:auto minmax(0,1fr) auto}
+  :root[data-look="zenit"] .app .zglance-track{grid-column:2/-1;grid-row:2}
+  :root[data-look="zenit"] .app .zweek-long{display:none}
+  :root[data-look="zenit"] .app .zweek-short{display:inline}
+}
+@media (max-width:760px){
+  :root[data-look="zenit"] .app .zag-time{flex-basis:50px;padding-left:12px}
+  :root[data-look="zenit"] .app .zcard-h{padding:12px 12px 8px}
+  :root[data-look="zenit"] .app .zweek-days{gap:4px;padding:0 8px 6px}
+  :root[data-look="zenit"] .app .zweek-count{font-size:17px}
+  :root[data-look="zenit"] .app .zfold-w{display:none}
+}
+
+/* ── 11c · Onbewolkt: de planningstimeline ──────────────────────────────────
+   Eén zin in plaats van vier tegels, één werkbalk in plaats van drie rijen:
+   drie lenzen, zoeken, Verfijnen (klant, fases, archief), zoom en Vandaag.
+   In de balk staan de data; de naam staat al in de kolom ernaast.
+   De timeline is een kaart zonder binnenmarge (cockpit.css §5), zodat de
+   tijdbalk tot de rand loopt; kop en werkbalk krijgen hier wél lucht. */
+:root[data-look="zenit"] .app .ptl-calm{gap:12px}
+:root[data-look="zenit"] .app .ptl-calm>:not(.ptl-scroll){margin-inline:20px}
+:root[data-look="zenit"] .app .ptl-calm>.ptl-head{padding-top:18px}
+:root[data-look="zenit"] .app .ptl-calm>.ptl-empty{margin-bottom:20px}
+:root[data-look="zenit"] .app .ptl-calm .ptl-heading h2{font-weight:600;letter-spacing:-.03em}
+:root[data-look="zenit"] .app .ptl-calm .ptl-sentence{max-width:none;margin-top:6px;color:var(--ink-2);font-size:13px;line-height:1.5}
+:root[data-look="zenit"] .app .ptl-calm .ptl-sentence b{color:var(--ink);font-weight:600}
+:root[data-look="zenit"] .app .ptl-calm .ptl-sentence b.is-late{color:var(--danger)}
+:root[data-look="zenit"] .app .ptl-calm-bar{gap:8px}
+:root[data-look="zenit"] .app .ptl-lens{display:inline-flex;gap:2px;padding:3px;border-radius:11px;background:var(--surface-3);border:1px solid var(--line)}
+:root[data-look="zenit"] .app .ptl-lens button{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;border:0;border-radius:8px;background:transparent;color:var(--ink-2);font:500 12.5px/1 var(--font-sans);cursor:pointer;transition:background-color var(--t-1) var(--ease),color var(--t-1) var(--ease)}
+:root[data-look="zenit"] .app .ptl-lens button:hover{color:var(--ink)}
+:root[data-look="zenit"] .app .ptl-lens button.is-on{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:var(--shadow-1)}
+:root[data-look="zenit"] .app .ptl-lens-n{font-size:11px;font-weight:500;color:var(--ink-3)}
+:root[data-look="zenit"] .app :is(.ptl-qsearch,.fs-qsearch){display:flex;align-items:center;gap:8px;flex:0 1 260px;min-width:150px;height:36px;padding:0 6px 0 11px;border:1px solid var(--line-2);border-radius:10px;background:var(--field);color:var(--ink-3)}
+:root[data-look="zenit"] .app :is(.ptl-qsearch,.fs-qsearch):focus-within{border-color:var(--focus-line);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.16)}
+:root[data-look="zenit"] .app :is(.ptl-qsearch,.fs-qsearch) input{flex:1;min-width:0;height:100%;border:0;outline:0;background:transparent;color:var(--ink);font:400 12.5px/1 var(--font-sans)}
+:root[data-look="zenit"] .app :is(.ptl-qsearch,.fs-qsearch) input::placeholder{color:var(--ink-3)}
+:root[data-look="zenit"] .app :is(.ptl-qsearch,.fs-qsearch) button{display:grid;place-items:center;width:22px;height:22px;border:0;border-radius:6px;background:none;color:var(--ink-3);cursor:pointer}
+:root[data-look="zenit"] .app :is(.ptl-qsearch,.fs-qsearch) button:hover{background:var(--surface-2);color:var(--ink)}
+:root[data-look="zenit"] .app :is(.ptl-refine,.fs-refine){
+  display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 12px;
+  border:1px solid var(--line-2);border-radius:10px;background:var(--surface);color:var(--ink-2);
+  font:500 12.5px/1 var(--font-sans);cursor:pointer;
+  transition:border-color var(--t-1) var(--ease),background-color var(--t-1) var(--ease),color var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .app :is(.ptl-refine,.fs-refine):hover,
+:root[data-look="zenit"] .app :is(.ptl-refine,.fs-refine).is-open{border-color:var(--line-3);color:var(--ink)}
+:root[data-look="zenit"] .app :is(.ptl-refine,.fs-refine).is-open{background:var(--surface-2)}
+:root[data-look="zenit"] .app :is(.ptl-refine-n,.fs-refine-n){display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--accent);color:var(--on-accent);font:600 10.5px/1 var(--font-sans)}
+:root[data-look="zenit"] .app .ptl-refine-row{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)}
+:root[data-look="zenit"] .app .ptl-refine-row .ptl-client{min-width:200px}
+:root[data-look="zenit"] .app .ptl-refine-row .ptl-chips{padding:0;margin:0}
+@media (prefers-reduced-motion:no-preference){
+  :root[data-look="zenit"] .app :is(.ptl-refine-row,.finance-search-grid.is-open-calm){animation:zenit-rise .22s var(--ease-out) both}
+}
+:root[data-look="zenit"] .app :is(.ptl-active,.fs-active){display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+:root[data-look="zenit"] .app :is(.ptl-active-chip,.fs-active-chip){
+  display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 6px 0 10px;
+  border:1px solid var(--line-2);border-radius:999px;background:var(--surface);color:var(--ink);
+  font:500 12px/1 var(--font-sans);cursor:pointer;
+}
+:root[data-look="zenit"] .app :is(.ptl-active-chip,.fs-active-chip) svg{color:var(--ink-3)}
+:root[data-look="zenit"] .app :is(.ptl-active-chip,.fs-active-chip):hover{border-color:var(--line-3)}
+:root[data-look="zenit"] .app :is(.ptl-active-chip,.fs-active-chip):hover svg{color:var(--danger)}
+/* Bezetting als een zachte hoogtekaart: de getallen staan in de tooltip. */
+:root[data-look="zenit"] .app .ptl-calm .ptl-load b{display:none}
+:root[data-look="zenit"] .app .ptl-calm .ptl-load-bar{background:rgba(var(--accent-rgb),.28)}
+/* De naam staat al links; in de balk alleen de data. */
+:root[data-look="zenit"] .app .ptl-calm .ptl-bar-text strong{display:none}
+:root[data-look="zenit"] .app .ptl-calm .ptl-bar-text span{color:var(--ink-2)}
+@media (max-width:760px){
+  :root[data-look="zenit"] .app .ptl-calm>:not(.ptl-scroll){margin-inline:12px}
+  :root[data-look="zenit"] .app .ptl-calm>.ptl-head{padding-top:12px}
+  :root[data-look="zenit"] .app .ptl-calm-bar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+  :root[data-look="zenit"] .app .ptl-calm-bar .ptl-lens{grid-column:1/-1;justify-self:start}
+  :root[data-look="zenit"] .app .ptl-calm-bar .ptl-qsearch{flex:none;min-width:0;width:100%}
+  :root[data-look="zenit"] .app .ptl-calm-bar .ptl-toolbar-end{grid-column:1/-1}
+}
+
+/* ── 11d · Onbewolkt: zoeken en filteren boven elke lijst ───────────────────
+   Klanten, tickets, projecten, offertes, facturen, campagnes en de
+   weekplanner delen één zoekblok (SearchFilterPanel). Onder Zenit is dat geen
+   kaart meer maar één regel boven de tabel: zoeken, de snelkeuzes die iets
+   opleveren, Verfijnen en een stille telling. De tabel is de kaart. */
+/* minmax(0,1fr): de knoppenrij van de kop is op de telefoon een veegrij en
+   mag de kolom niet breder duwen dan het scherm. */
+:root[data-look="zenit"] .app .finance-search-card.fs-calm{
+  display:grid;grid-template-columns:minmax(0,1fr);gap:10px;max-width:none;margin:0 0 14px;padding:0;
+  border:0;border-radius:0;background:none;box-shadow:none;overflow:visible;
+}
+:root[data-look="zenit"] .app .fs-calm .finance-search-head{padding-bottom:4px;border-bottom:0}
+:root[data-look="zenit"] .app .fs-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+:root[data-look="zenit"] .app .fs-qsearch{flex:1 1 280px;max-width:440px}
+:root[data-look="zenit"] .app .fs-quick{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+:root[data-look="zenit"] .app .fs-quick-chip{
+  position:relative;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;
+  border:1px solid var(--line-2);border-radius:999px;background:var(--surface);color:var(--ink-2);
+  font:500 12.5px/1 var(--font-sans);white-space:nowrap;cursor:pointer;user-select:none;
+  transition:border-color var(--t-1) var(--ease),background-color var(--t-1) var(--ease),color var(--t-1) var(--ease);
+}
+:root[data-look="zenit"] .app .fs-quick-chip:hover{border-color:var(--line-3);color:var(--ink)}
+:root[data-look="zenit"] .app .fs-quick-chip input{position:absolute;width:1px;height:1px;margin:0;opacity:0;pointer-events:none}
+:root[data-look="zenit"] .app .fs-quick-chip:has(input:focus-visible){outline:2px solid var(--focus-line);outline-offset:2px}
+:root[data-look="zenit"] .app .fs-quick-chip svg{display:none;flex:0 0 auto;margin-left:-2px;color:var(--accent-ink)}
+:root[data-look="zenit"] .app .fs-quick-chip.is-on{border-color:var(--line-accent);background:rgba(var(--accent-rgb),.12);color:var(--ink)}
+:root[data-look="zenit"] .app .fs-quick-chip.is-on svg{display:block}
+:root[data-look="zenit"] .app .fs-quick-n{color:var(--ink-3);font-size:11.5px;font-variant-numeric:tabular-nums}
+:root[data-look="zenit"] .app .fs-quick-chip.is-on .fs-quick-n{color:var(--accent-ink)}
+:root[data-look="zenit"] .app .fs-tail{display:flex;align-items:center;gap:6px;min-height:36px;margin-left:auto}
+/* Stil = uit beeld, maar nog wel voorgelezen (aria-live op de telling). */
+:root[data-look="zenit"] .app .fs-tail.is-silent{position:absolute;width:1px;height:1px;min-height:0;margin:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+:root[data-look="zenit"] .app .fs-count{margin:0;color:var(--ink-3);font-size:12.5px;white-space:nowrap;font-variant-numeric:tabular-nums}
+:root[data-look="zenit"] .app .fs-count b{color:var(--ink);font-weight:600}
+:root[data-look="zenit"] .app .fs-count span{color:var(--ink-2)}
+:root[data-look="zenit"] .app .fs-clear{
+  display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border:0;border-radius:8px;
+  background:none;color:var(--ink-2);font:500 12.5px/1 var(--font-sans);white-space:nowrap;cursor:pointer;
+}
+:root[data-look="zenit"] .app .fs-clear:hover{background:var(--surface-2);color:var(--ink)}
+/* Verfijnen open: de velden in een zachte la onder de regel, met hun naam
+   erboven — ook in de weekplanner, waar ze anders naamloze pillen zijn. */
+:root[data-look="zenit"] .app .fs-calm .fs-fields{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px 12px;
+  padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);
+}
+:root[data-look="zenit"] .app .fs-calm .fs-fields .finance-search-field{gap:5px;min-width:0}
+:root[data-look="zenit"] .app .fs-calm .fs-fields .finance-search-field>span{position:static;width:auto;height:auto;margin:0;overflow:visible;clip-path:none;white-space:normal;color:var(--ink-3);font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none}
+:root[data-look="zenit"] .app .fs-calm .fs-fields :is(.select-control,.select-trigger){width:100%;max-width:none}
+:root[data-look="zenit"] .app .fs-calm .fs-fields :is(.select-trigger,.form-input,.form-select){min-height:36px;border-radius:10px;background:var(--field)}
+:root[data-look="zenit"] .app .fs-active-chip span{color:var(--ink-3)}
+@media (max-width:760px){
+  /* Telefoon: zoeken + filterknop op één regel, de snelkeuzes als veegrij
+     eronder; de telling alleen zolang er iets gefilterd is. */
+  :root[data-look="zenit"] .app .fs-bar{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
+  :root[data-look="zenit"] .app .fs-bar.has-refine{grid-template-columns:minmax(0,1fr) auto}
+  :root[data-look="zenit"] .app .fs-qsearch{grid-row:1;grid-column:1;max-width:none;height:40px}
+  :root[data-look="zenit"] .app .fs-refine{position:relative;grid-row:1;grid-column:2;justify-content:center;width:40px;height:40px;padding:0}
+  :root[data-look="zenit"] .app .fs-refine-label{display:none}
+  :root[data-look="zenit"] .app .fs-refine-n{position:absolute;top:-5px;right:-5px}
+  :root[data-look="zenit"] .app .fs-quick{grid-column:1/-1;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}
+  :root[data-look="zenit"] .app .fs-quick::-webkit-scrollbar{display:none}
+  :root[data-look="zenit"] .app .fs-quick-chip{flex:0 0 auto}
+  :root[data-look="zenit"] .app .fs-bar .fs-active{grid-column:1/-1}
+  :root[data-look="zenit"] .app .fs-tail{grid-column:1/-1;justify-content:space-between;min-height:0;margin-left:0}
+  :root[data-look="zenit"] .app .fs-tail:not(.is-filtered){position:absolute;width:1px;height:1px;margin:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  :root[data-look="zenit"] .app .fs-calm .fs-fields{grid-template-columns:1fr 1fr;gap:8px;padding:10px}
+}
+@media (max-width:420px){
+  :root[data-look="zenit"] .app .fs-calm .fs-fields{grid-template-columns:1fr}
 }
 
 /* ── 12 · Thema-overgang ─────────────────────────────────────────────────────

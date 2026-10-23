@@ -60,11 +60,18 @@ function duration(minutes: number): string {
 
 const pl = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-export function DayArc({ items, allDay = [], onOpenPlanner }: {
+export function DayArc({ items, allDay = [], onOpenPlanner, showLane = true, quietStrip = false }: {
   items: DayArcItem[];
   /** Titels van afspraken die de hele dag duren; die passen niet op de boog. */
   allDay?: string[];
   onOpenPlanner?: () => void;
+  /** De strook met blokjes onder de boog. Staat er een lijst met dezelfde
+   *  afspraken en taken onder (Je dag op Vandaag), dan is hij dubbel: de boog
+   *  is het beeld, de lijst de woorden. */
+  showLane?: boolean;
+  /** Nu en Volgende alleen tonen terwijl je de zon versleept of de dag
+   *  afspeelt. In rust staat "nu" al in de lijst eronder. */
+  quietStrip?: boolean;
 }) {
   const compact = useNarrowViewport();
   const { top: TOP, scale: SCALE } = compact ? GEOMETRY.compact : GEOMETRY.wide;
@@ -182,7 +189,7 @@ export function DayArc({ items, allDay = [], onOpenPlanner }: {
     const observer = new ResizeObserver(entries => setLaneWidth(entries[0]?.contentRect.width ?? 0));
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [showLane]);
   const lane = useMemo(() => {
     const placed: { item: DayArcItem; left: number; row: number; compact: boolean }[] = [];
     const rowEnds: Record<DayArcItem['kind'], number[]> = { meeting: [], focus: [] };
@@ -237,7 +244,7 @@ export function DayArc({ items, allDay = [], onOpenPlanner }: {
 
   const arcLabel = `Dagboog: ${formatClock(t)}, ${night ? 'na zon onder of voor zon op' : 'overdag'}. ${nowTitle}.`;
 
-  return <section className={`zarc${night ? ' is-night' : ''}${compact ? ' is-compact' : ''}`} style={{ '--night': night ? 1 : 0 } as CSSProperties} aria-label="Dagboog">
+  return <section className={`zarc${night ? ' is-night' : ''}${compact ? ' is-compact' : ''}${quietStrip ? ' is-quiet' : ''}`} style={{ '--night': night ? 1 : 0 } as CSSProperties} aria-label="Dagboog">
     <div className="zarc-stars" aria-hidden="true">
       {STARS.map((star, index) => <i key={index} style={{ left: `${star.left.toFixed(1)}%`, top: `${star.top.toFixed(1)}%`, opacity: star.opacity }} />)}
     </div>
@@ -273,7 +280,7 @@ export function DayArc({ items, allDay = [], onOpenPlanner }: {
           className={`zarc-p zarc-ev${item.kind === 'focus' ? ' is-focus' : ''}${item.end <= t || item.done ? ' is-past' : ''}`}
           d={path(item.start, item.end, 2)}
           style={{ stroke: item.color }}
-        />)}
+        ><title>{`${formatClock(item.start)} – ${formatClock(item.end)} · ${item.title}`}</title></path>)}
       </svg>
       {sun.noon > t0 && sun.noon < t1 && <span className={`zarc-mk is-zenit${Math.abs(sunX - ax(sun.noon) / 10) < 7 ? ' is-near' : ''}`} style={{ left: `${(ax(sun.noon) / 10).toFixed(2)}%`, top: `${(TOP + ay(sun.noon) * SCALE - 34).toFixed(1)}px` }} aria-hidden="true">Zenit {formatClock(sun.noon)}</span>}
       {sun.rise > t0 && sun.rise < t1 && <span className="zarc-mk" style={{ left: `${(ax(sun.rise) / 10).toFixed(2)}%`, top: `${(TOP + HZ * SCALE + 8).toFixed(1)}px` }} aria-hidden="true"><Sunrise size={13} />{formatClock(sun.rise)}</span>}
@@ -299,7 +306,7 @@ export function DayArc({ items, allDay = [], onOpenPlanner }: {
         .map(tick => <span key={tick} style={{ left: `${(ax(tick) / 10).toFixed(2)}%` }}>{formatClock(tick)}</span>)}
     </div>
 
-    <div ref={laneRef} className="zarc-lane" style={{ height: `${Math.max(1, lane.rows) * LANE_ROW + 4}px` }}>
+    {showLane && <div ref={laneRef} className="zarc-lane" style={{ height: `${Math.max(1, lane.rows) * LANE_ROW + 4}px` }}>
       {laneWidth > 0 && lane.chips.map(({ item, left: x, top, compact }) => {
         const past = item.end <= t || item.done;
         const live = item.start <= t && t < item.end && !item.done;
@@ -316,9 +323,9 @@ export function DayArc({ items, allDay = [], onOpenPlanner }: {
           <i aria-hidden="true" />{!compact && <span>{item.title}</span>}
         </button>;
       })}
-    </div>
+    </div>}
 
-    <div className="zarc-nn" aria-live="polite">
+    {(!quietStrip || isPreview || playing) && <div className="zarc-nn" aria-live="polite">
       <div>
         <span className={`zarc-nn-l${isPreview ? '' : ' is-now'}`}>{nowLabel}</span>
         <div className="zarc-nn-b">
@@ -347,6 +354,6 @@ export function DayArc({ items, allDay = [], onOpenPlanner }: {
             : 'Morgen weer een dag'}</span></div>
         </div>
       </div>
-    </div>
+    </div>}
   </section>;
 }
