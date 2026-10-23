@@ -92,6 +92,10 @@ Op de telefoon is er geen vraagbalk; daar zoekt de huidige look ook niet.
 
 - `npm run typecheck`, `npm run build` en `npm test` (813 tests, waarvan 6 nieuw voor de zon).
 - `node scripts/check-csp-hash.mjs`: de nieuwe hash staat in beide CSP-regels.
+- De mobiele lay-outtest in Dag en Nacht, op telefoon, tablet en liggend: met Cockpit (de
+  standaard) 288 metingen zonder problemen, dus voor wie Zenit niet aanzet verandert er
+  niets; met `--look=zenit` ook 288 zonder problemen. Op Vandaag is onder Zenit de Dagboog
+  het eerste item (58px van de bovenrand op de telefoon) in plaats van de eerste taak.
 - Een functionele ronde in Chromium tegen de mock-backend, 44 controles, alle groen: Probeer
   Zenit aan en weer uit (en terug naar de Cockpit-grondkleur), het opstartscript zet Zenit vóór
   React, de vier themastanden (Systeem wisselt mee met het apparaat, de adresbalk volgt),

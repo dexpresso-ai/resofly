@@ -156,11 +156,11 @@ const FIRST_ITEM = {
 /**
  * Zenit (designvoorstel 2026-10-22) zet op Vandaag de dag zelf bovenaan: de
  * Dagboog met Nu en Volgende. Daar is die boog het eerste échte item, niet de
- * eerste taak. Gemeten 2026-10-23: de boog begint op 70px; de grens ligt ruim
- * 20% hoger. De rest van de pagina's houdt de grenzen van Cockpit.
+ * eerste taak. Gemeten 2026-10-23: de boog begint op 58px (Dag en Nacht); de
+ * grens ligt 20% hoger. De rest van de pagina's houdt de grenzen van Cockpit.
  */
 const FIRST_ITEM_BY_LOOK = {
-  zenit: { dashboard: { selector: '.zarc', maxTop: 100 } },
+  zenit: { dashboard: { selector: '.zarc', maxTop: 70 } },
 };
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));
