@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Banknote, Check, Landmark, Link2, Plus, RefreshCw, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import type {
-  AppData, BankAccount, BankInstitution, BankReconciliation, BankRequisition, BankRule, BankTransaction,
+  AppData, BankAccount, BankInstitution, BankPsuType, BankReconciliation, BankRequisition, BankRule, BankTransaction,
   Invoice, LedgerAccount, PurchaseInvoice,
 } from '../types';
 import { Modal } from '../components/Modal';
@@ -10,6 +10,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { SetupBanner } from './Bookkeeping';
 import { parseBankFile } from '../lib/bankImport';
+import { consentState, isCancelledBankReturn, isSandboxLink, readBankReturn } from '../lib/bankLink';
 import {
   bookBankTransaction, createBankRequisition, deleteRow, finalizeBankRequisition, importBankTransactions,
   insertRow, listBankInstitutions, matchBankTransactions, selectBankReconciliation, setBankTransactionStatus,
@@ -25,9 +26,9 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 export function BankPage({ data, organizationId, canWrite, onChanged }: PageProps) {
-  // Na de bank-redirect komen we terug met ?code=&state=… → meteen het tabblad
-  // "Rekeningen & koppeling" tonen zodat de afronding zichtbaar is.
-  const hasReturnCode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('code');
+  // Na de bank-redirect komen we terug met ?code=&state=… (of ?error=&state=…) →
+  // meteen het tabblad "Rekeningen & koppeling" tonen zodat de afronding zichtbaar is.
+  const hasReturnCode = typeof window !== 'undefined' && readBankReturn(window.location.search) !== null;
   const [tab, setTab] = useState<'reconcile' | 'accounts' | 'rules'>(hasReturnCode ? 'accounts' : 'reconcile');
 
   if (data.ledgerAccounts.length === 0) {
@@ -385,24 +386,49 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
     a.last_synced_at ? `Laatst gesynct ${dateNL(a.last_synced_at.slice(0, 10))}` : 'Nog niet gesynct';
   const reqFor = (a: BankAccount): BankRequisition | undefined =>
     data.bankRequisitions.find(r => r.id === a.bank_requisition_id);
+  const now = Date.now();
+  // De nieuwste koppelpoging zegt in welke omgeving de Enable Banking-app staat
+  // (de lijst is nieuwste-eerst). Een sandbox-app koppelt nooit een echte rekening.
+  const sandboxMode = isSandboxLink(data.bankRequisitions[0]?.link);
 
-  // Afronden van de bankkoppeling na de redirect (?code=&state=…). Eénmalig.
+  // Afronden van de bankkoppeling na de redirect (?code=&state=…, of ?error=&state=…
+  // als het bij de bank niet doorging). Eénmalig.
   const finalizedRef = useRef(false);
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    const state = params.get('state');
-    if (!code || !state || finalizedRef.current) return;
+    const ret = readBankReturn(window.location.search);
+    if (!ret || finalizedRef.current) return;
     finalizedRef.current = true;
     // Verwijder de querystring uit de URL zodat een refresh niet opnieuw afrondt.
     const clean = window.location.origin + window.location.pathname + window.location.hash;
     window.history.replaceState(null, '', clean);
-    setFinalizing(true); setBanner(null);
-    finalizeBankRequisition(organizationId, { code, state })
+    setBanner(null);
+    if (ret.kind === 'error') {
+      // Afgebroken of geweigerd. Voorheen kwam je dan zonder één woord op het
+      // dashboard terecht en bleef de koppeling voorgoed op "created" staan.
+      setBanner({
+        kind: 'err',
+        text: isCancelledBankReturn(ret.error)
+          ? 'Je hebt de koppeling bij je bank afgebroken. Er is niets gekoppeld; probeer het gerust opnieuw via "Koppel bank".'
+          : `De bank heeft de koppeling niet afgerond${ret.description ? ` (${ret.description})` : ''}. Probeer het opnieuw, of kies bij "Koppel bank" de andere rekeningsoort (zakelijk/privé).`,
+      });
+      // Vastleggen bij de koppeling is bijzaak: de melding staat er al.
+      finalizeBankRequisition(organizationId, { state: ret.state, error: ret.error, errorDescription: ret.description })
+        .then(() => onChanged())
+        .catch(() => undefined);
+      return;
+    }
+    setFinalizing(true);
+    finalizeBankRequisition(organizationId, { code: ret.code, state: ret.state })
       .then(res => {
-        if (res.status === 'linked') setBanner({ kind: 'ok', text: `Bank gekoppeld: ${res.linked} rekening(en), ${res.imported} transacties opgehaald.` });
-        else if (res.status === 'expired') setBanner({ kind: 'err', text: 'De toestemming is verlopen of geweigerd. Probeer de koppeling opnieuw.' });
-        else setBanner({ kind: 'err', text: 'De koppeling is nog niet voltooid. Rond de toestemming bij je bank af en probeer opnieuw.' });
+        if (res.status === 'linked' && res.alreadyLinked) setBanner({ kind: 'ok', text: 'Deze bankkoppeling was al afgerond.' });
+        else if (res.status === 'linked') {
+          const done = `Bank gekoppeld: ${res.linked} rekening(en), ${res.imported} transacties opgehaald.`;
+          // Gekoppeld maar niet opgehaald: niet als "0 transacties" laten lijken.
+          setBanner(res.syncErrors
+            ? { kind: 'err', text: `${done} Ophalen lukte nog niet voor ${res.syncErrors} rekening(en): ${res.syncError ?? 'onbekende fout'}` }
+            : { kind: 'ok', text: done });
+        }
+        else setBanner({ kind: 'err', text: res.error || 'De koppeling is nog niet voltooid. Rond de toestemming bij je bank af en probeer opnieuw.' });
         onChanged();
       })
       .catch(e => setBanner({ kind: 'err', text: e instanceof Error ? e.message : 'Afronden van de koppeling mislukt.' }))
@@ -435,6 +461,13 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
 
       {finalizing && <div className="bk-note">Koppeling afronden…</div>}
       {banner && <div className={banner.kind === 'ok' ? 'bk-note' : 'error'}>{banner.text}</div>}
+      {sandboxMode && (
+        <div className="bk-note">
+          <strong>Testomgeving.</strong> De bankkoppeling loopt nog via de sandbox van Enable Banking: je kunt alleen
+          testbanken met testgegevens koppelen, nog geen echte bankrekening. Rekeningen met het label "testdata" zijn zo
+          gekoppeld — verwijder ze voordat je er echt mee boekhoudt.
+        </div>
+      )}
 
       {data.bankAccounts.length === 0
         ? <div className="empty"><div className="e-big">Nog geen bankrekeningen</div></div>
@@ -444,17 +477,31 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
               const count = data.bankTransactions.filter(t => t.bank_account_id === a.id).length;
               const linked = a.source !== 'import';
               const req = reqFor(a);
-              const expired = req?.status === 'expired';
+              // Op de verloopdatum, niet alleen na een mislukte sync: zonder sync
+              // stond een verlopen koppeling anders maandenlang op "gekoppeld".
+              const consent = linked ? consentState(req, now) : { expired: false, daysLeft: null };
+              const soon = !consent.expired && consent.daysLeft !== null && consent.daysLeft <= 14;
               return (
                 <div key={a.id} className="bank-account-card">
                   <div className="bank-account-head">
                     <div>
-                      <strong>{a.name}{linked && <span className="bank-tag">gekoppeld</span>}</strong>
+                      <strong>
+                        {a.name}{linked && <span className="bank-tag">gekoppeld</span>}
+                        {isSandboxLink(req?.link) && <span className="bank-tag bank-tag-test">testdata</span>}
+                      </strong>
                       <small className="bk-muted">{a.iban || 'geen IBAN'}{ledger ? ` · ${ledger.code} ${ledger.name}` : ''}</small>
                     </div>
                     <button className="bk-cell-action" onClick={() => setEdit(a)} disabled={!canWrite}>Bewerk</button>
                   </div>
-                  {expired && <div className="bank-reconsent"><AlertTriangle size={14} /> Toestemming verlopen — koppel de bank opnieuw via "Koppel bank".</div>}
+                  {consent.expired && (
+                    <div className="bank-reconsent"><AlertTriangle size={14} /> Toestemming verlopen{req?.expires_at ? ` op ${dateNL(req.expires_at.slice(0, 10))}` : ''} — er komen geen nieuwe transacties meer binnen. Koppel de bank opnieuw.</div>
+                  )}
+                  {soon && (
+                    <div className="bank-reconsent"><AlertTriangle size={14} /> Toestemming verloopt over {consent.daysLeft} {consent.daysLeft === 1 ? 'dag' : 'dagen'} — koppel de bank dan opnieuw via "Koppel bank".</div>
+                  )}
+                  {linked && !consent.expired && a.last_sync_error && (
+                    <div className="bank-reconsent"><AlertTriangle size={14} /> Laatste synchronisatie mislukt: {a.last_sync_error}</div>
+                  )}
                   {(() => {
                     const rec = recon.find(r => r.bank_account_id === a.id);
                     return rec ? <ReconciliationPanel rec={rec} /> : null;
@@ -467,9 +514,9 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
                         MT940-afschrift is de saldo-aansluiting hierboven onmogelijk — terwijl
                         die er juist om vraagt. Dubbele transacties worden op inhoud ontdubbeld
                         en wat er tóch doorheen glipt zie je meteen in het aansluitpaneel. */}
-                    {linked && (
-                      <Button disabled={!canWrite || syncingId === a.id} onClick={() => sync(a)}><RefreshCw size={14} /> {syncingId === a.id ? 'Synchroniseren…' : 'Synchroniseer'}</Button>
-                    )}
+                    {linked && (consent.expired
+                      ? <Button disabled={!canWrite || finalizing} onClick={() => setConnect(true)}><Link2 size={14} /> Opnieuw koppelen</Button>
+                      : <Button disabled={!canWrite || syncingId === a.id} onClick={() => sync(a)}><RefreshCw size={14} /> {syncingId === a.id ? 'Synchroniseren…' : 'Synchroniseer'}</Button>)}
                     <ImportButton account={a} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
                   </div>
                 </div>
@@ -487,6 +534,7 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
 function BankConnectModal({ organizationId, onClose }: { organizationId: string; onClose: () => void }) {
   const [institutions, setInstitutions] = useState<BankInstitution[] | null>(null);
   const [query, setQuery] = useState('');
+  const [psuType, setPsuType] = useState<BankPsuType>('business');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -500,15 +548,18 @@ function BankConnectModal({ organizationId, onClose }: { organizationId: string;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return (institutions ?? []).filter(i => !q || i.name.toLowerCase().includes(q));
-  }, [institutions, query]);
+    // Een bank die deze rekeningsoort niet aankan, tonen we niet: kiezen zou pas
+    // bij de bank misgaan. Onbekend (of een oudere bank-sync) = gewoon tonen.
+    return (institutions ?? []).filter(i => (!q || i.name.toLowerCase().includes(q))
+      && (!i.psu_types?.length || i.psu_types.includes(psuType)));
+  }, [institutions, query, psuType]);
 
   async function pick(inst: BankInstitution) {
     setBusy(inst.id); setError(null);
     try {
       // De bank stuurt na toestemming terug naar deze URL met ?code=&state=… erachter.
       const redirectUrl = window.location.origin + window.location.pathname;
-      const { link } = await createBankRequisition(organizationId, { institutionId: inst.id, institutionName: inst.name, redirectUrl });
+      const { link } = await createBankRequisition(organizationId, { institutionId: inst.id, institutionName: inst.name, redirectUrl, psuType });
       window.location.assign(link);
     } catch (e) { setError(e instanceof Error ? e.message : 'Koppeling starten mislukt'); setBusy(null); }
   }
@@ -518,6 +569,15 @@ function BankConnectModal({ organizationId, onClose }: { organizationId: string;
       footer={<div className="bk-foot"><span className="bk-spacer" /><Button onClick={onClose}>Sluiten</Button></div>}>
       {error && <div className="error">{error}</div>}
       <p className="bk-muted">Kies je bank. Je wordt doorgestuurd naar de bank om toestemming te geven (PSD2); daarna komen je transacties automatisch binnen.</p>
+      {/* Zakelijk en privé zijn bij de bank een andere inlog en een andere
+          koppeling; met de verkeerde soort ziet de bank je rekening niet. */}
+      <div className="bank-psu">
+        <div className="bk-seg bk-seg-sm">
+          <button className={psuType === 'business' ? 'is-active' : ''} onClick={() => setPsuType('business')}>Zakelijke rekening</button>
+          <button className={psuType === 'personal' ? 'is-active' : ''} onClick={() => setPsuType('personal')}>Privérekening</button>
+        </div>
+        <small className="bk-muted">Eenmanszaak met een gewone betaalrekening? Kies Privérekening.</small>
+      </div>
       <div className="bank-inst-search"><Search size={15} /><Input value={query} placeholder="Zoek je bank…" onChange={e => setQuery(e.target.value)} /></div>
       {institutions === null && !error
         ? <div className="bk-report-loading bk-muted">Banken laden…</div>

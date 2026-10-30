@@ -117,6 +117,7 @@ import { useTeamChat, TeamChatPage, TeamChatDock, TeamChatToasts } from './compo
 import { usePushNotifications } from './components/usePushNotifications';
 import { McpConsent } from './components/McpConsent';
 import { readAuthorizeRequest } from './lib/mcp-api';
+import { readBankReturn } from './lib/bankLink';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
 import { TimeTracking, defaultBillableForProject, resolveRateCents } from './features/TimeTracking';
 import { Tickets } from './features/Tickets';
@@ -255,12 +256,11 @@ function freshTab(page: Page = 'dashboard'): WorkspaceTab {
   return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, galleryId: null, settingsNav: null, pendingReport: null, openAgentId: null, commFocus: null, pendingDraft: null, edit: null };
 }
 
-/** Terugkomst van de directe bankkoppeling (PSD2, ?code=&state=…): dan opent het
- *  eerste tabblad meteen de Bankpagina, die de koppeling afrondt. */
+/** Terugkomst van de directe bankkoppeling (PSD2, ?code=&state=… of, afgebroken,
+ *  ?error=&state=…): dan opent het eerste tabblad meteen de Bankpagina, die de
+ *  koppeling afrondt of zegt waarom het niet lukte. */
 function hasBankReturn(): boolean {
-  return typeof window !== 'undefined'
-    && new URLSearchParams(window.location.search).has('code')
-    && new URLSearchParams(window.location.search).has('state');
+  return typeof window !== 'undefined' && readBankReturn(window.location.search) !== null;
 }
 
 /** Een pushmelding van de teamchat opent /?chat=<gesprek>. Eén keer lezen en

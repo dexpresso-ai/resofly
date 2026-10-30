@@ -2816,6 +2816,10 @@ export interface BankAccount extends OrgScopedRow {
   external_account_id: string | null;
   bank_requisition_id: UUID | null;
   last_synced_at: string | null;
+  /** Laatste syncpoging, gelukt of niet (migratie 20261030000000; ontbreekt daarvóór). */
+  last_sync_attempt_at?: string | null;
+  /** Waarom de laatste syncpoging mislukte; leeg na een geslaagde sync. */
+  last_sync_error?: string | null;
   last_imported_at: string | null;
   is_active: boolean;
   created_at: string;
@@ -2839,13 +2843,17 @@ export interface BankRequisition extends OrgScopedRow {
   updated_at: string;
 }
 
+/** Zakelijke of privérekening: bij de bank een andere inlog en een andere koppeling. */
+export type BankPsuType = 'business' | 'personal';
+
 /** Bank (ASPSP) zoals de provider die teruggeeft bij de bankkiezer. */
 export interface BankInstitution {
   id: string;
   name: string;
   bic: string | null;
   logo: string | null;
-  transaction_total_days: number | null;
+  /** Welke rekeningsoorten deze bank via de koppeling aankan; leeg = onbekend. */
+  psu_types: BankPsuType[];
 }
 
 export interface BankStatement {
