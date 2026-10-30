@@ -20,6 +20,9 @@ import { RichTextEditor } from '../components/RichTextEditor';
 import { InboundInboxTab } from '../components/InboundInbox';
 import { ClientEmailMessageCard, formatEmailDateTime } from '../components/ClientEmailMessage';
 import { PageIcon } from '../components/PageIcon';
+import { ClientStream, ClientStreamBadge } from '../components/StreamRibbon';
+import { computeStream } from '../lib/stroom';
+import { useLook } from '../lib/look';
 import { createClientWithServerCode, deleteClientEmail, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadInboundOpenCount, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead } from '../lib/repository';
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
 import { supabase } from '../lib/supabase';
@@ -570,6 +573,12 @@ export function ClientDetailPage({
   /** Bellen vanuit het dossier; null als er geen bruikbaar nummer staat. */
   const clientTelHref = telHref(client.phone);
 
+  // Stroom: waar deze klant staat, van offerte tot betaald (lib/stroom.ts).
+  const [look] = useLook();
+  const clientStream = useMemo(() => look === 'stroom'
+    ? computeStream({ quotes: data.quotes.filter(q => q.client_id === client.id), invoices: data.invoices.filter(i => i.client_id === client.id), clients: [client], amount: lines => total(lines).total })
+    : null, [look, data.quotes, data.invoices, client]);
+
   return <div className="client-detail-page">
     <section className="client-detail-hero">
       {/* De kleur van de klant als gloed in de donkere kop (cockpit.css). */}
@@ -583,6 +592,7 @@ export function ClientDetailPage({
             <div className="client-hero-meta">
               <span className={`client-status-pill ${client.status}`}>{clientStatusLabels[client.status] ?? client.status}</span>
               {client.client_code && <span className="client-hero-code">{client.client_code}</span>}
+              {clientStream && <ClientStreamBadge stream={clientStream} clientId={client.id} color={client.color} />}
             </div>
           </div>
         </div>
@@ -595,6 +605,11 @@ export function ClientDetailPage({
         <Button variant="primary" onClick={onNewInvoice} disabled={!canWrite}>+ Factuur</Button>
       </div>
     </section>
+
+    {clientStream && <ClientStream stream={clientStream} clientId={client.id} color={client.color} onPick={item => {
+      if (item.kind === 'quote') { const quote = data.quotes.find(q => q.id === item.refId); if (quote) onEditQuote(quote); }
+      else { const invoice = data.invoices.find(i => i.id === item.refId); if (invoice) onEditInvoice(invoice); }
+    }} />}
 
     {(overdueInvoices.length > 0 || openInvoices.length > 0) && <section className={`client-billing-alert ${overdueInvoices.length > 0 ? 'danger' : 'warning'}`}>
       <strong>{overdueInvoices.length > 0 ? `${overdueInvoices.length} vervallen factuur${overdueInvoices.length === 1 ? '' : 'en'}` : `${openInvoices.length} openstaande factuur${openInvoices.length === 1 ? '' : 'en'}`}</strong>

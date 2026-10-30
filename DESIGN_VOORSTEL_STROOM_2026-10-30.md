@@ -6,8 +6,9 @@
 > De app dient maximaal modern te zijn, intuïtief en een wauwfactor creëren bij mensen zonder de
 > essentie van de app te verliezen.
 
-Dit is het voorstel, nog niet ingebouwd. Het bestaat uit een werkend prototype in een voorstelpagina,
-beelden en de bron. De invoering staat onderaan, met vijf keuzes die eerst gemaakt moeten worden.
+Dit is het voorstel. Het bestaat uit een werkend prototype in een voorstelpagina, beelden en de bron.
+De invoering staat onderaan, met de vijf keuzes. Die zijn gemaakt: Stroom staat in de app, achter
+*Probeer Stroom* (zie `CHANGELOG_STROOM_2026-10-30.md`).
 
 ## Bekijken
 
@@ -176,13 +177,16 @@ Zoals Zenit: eerst achter een schakelaar **Probeer Stroom** per gebruiker, naast
 
 ## Keuzes
 
+Op 30 oktober akkoord gegeven op alle vijf. Stroom staat sindsdien in de app; wat er is
+gebouwd en wat nog niet, staat in `CHANGELOG_STROOM_2026-10-30.md`.
+
 | vraag | advies | gekozen |
 |---|---|---|
-| Heet het Stroom, en komt het achter een schakelaar *Probeer Stroom*? | Ja, zoals Zenit | open |
-| Wordt de stroom het hart van Vandaag, in plaats van de Dagboog? | Ja; de zon zit in het licht en de dag staat als lijst naast de stapel | open |
-| Werktabs: in het eiland (*Recent*) of als rij bovenin? | In het eiland, met <kbd>⌃Tab</kbd> om te wisselen; de bovenregel blijft rustig | open |
-| Het lichtveld: WebGL voor iedereen, of CSS op zuinige apparaten? | WebGL waar het kan; CSS bij batterijbesparing en bij minder beweging | open |
-| Hoe rollen we uit? | Twee weken *Probeer Stroom* voor het eigen team, dan voor iedereen; Zenit blijft kiesbaar tot Stroom de standaard is | open |
+| Heet het Stroom, en komt het achter een schakelaar *Probeer Stroom*? | Ja, zoals Zenit | ja, gebouwd |
+| Wordt de stroom het hart van Vandaag, in plaats van de Dagboog? | Ja; de zon zit in het licht en de dag staat als lijst naast de stapel | ja, gebouwd |
+| Werktabs: in het eiland (*Recent*) of als rij bovenin? | In het eiland, met <kbd>⌃Tab</kbd> om te wisselen; de bovenregel blijft rustig | in het eiland, gebouwd |
+| Het lichtveld: WebGL voor iedereen, of CSS op zuinige apparaten? | WebGL waar het kan; CSS bij batterijbesparing en bij minder beweging | zo gebouwd |
+| Hoe rollen we uit? | Twee weken *Probeer Stroom* voor het eigen team, dan voor iedereen; Zenit blijft kiesbaar tot Stroom de standaard is | zo afgesproken; staat op staging |
 
 ## Nog niet in het voorstel
 

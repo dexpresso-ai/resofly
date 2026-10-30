@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Check, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { Select } from './Ui';
 import { PageIcon } from './PageIcon';
-import { useLook } from '../lib/look';
+import { isZenitFamily, useLook } from '../lib/look';
 
 /* ── Eén zoek- en filterblok voor élke tabel ───────────────────────────────
  * Tickets, klanten, offertes, facturen, projecten en campagnes hadden alle
@@ -173,7 +173,7 @@ export function SearchFilterPanel({
      snelkeuzes die iets opleveren, Verfijnen en een stille telling. De velden
      slapen tot je op Verfijnen drukt; wat aanstaat blijft als chip met een
      kruisje staan, zodat dicht nooit "vergeten" betekent. */
-  if (look === 'zenit') {
+  if (isZenitFamily(look)) {
     const setFields = fields.filter(field => field.value !== restValue(field));
     const filterCount = (query.trim() === '' ? 0 : 1) + setFields.length + activeChips.length;
     const narrowed = filterCount > 0 || visibleCount !== totalCount;

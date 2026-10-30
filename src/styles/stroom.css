@@ -1,0 +1,689 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   STROOM — de werkruimte als één levende stroom (designvoorstel 2026-10-30)
+   ──────────────────────────────────────────────────────────────────────────
+   Het voorstel, met alle schermen, het prototype en de contrastmetingen, staat
+   in DESIGN_VOORSTEL_STROOM_2026-10-30.md en docs/design-voorstel-stroom/.
+
+   Aan en uit
+     Stroom staat achter "Probeer Stroom" in het accountmenu (src/lib/look.ts).
+     Die zet `data-look="zenit"` én `data-stroom` op <html>: Stroom bouwt op
+     Zenit (de rail, het contextpaneel, de rustige onderdelen) en ÉLKE regel
+     hieronder hangt aan `data-stroom`. Wie hem niet aanzet, ziet niets.
+
+   Spelregels
+     • Lichtveld → glas → zwevend. Het licht (LightField.tsx) ligt onder alles;
+       de rail, het eiland, de panelen en de dock zijn glas erboven. Het
+       werkvlak van een gewone pagina is bijna dicht glas (--sl-glass-3), zodat
+       tabellen en formulieren lezen als altijd. Vandaag is open: daar staat de
+       groet los op het licht.
+     • Goud is de hoofdactie en de plek waar je bent; het poollicht (--sl-ai-*)
+       is van Gerrie. De stroom loopt van koel maanlicht naar zongoud.
+     • Contrast: tekst op glas haalt AA boven het felste licht dat eronder mag
+       komen; tekst los op het licht krijgt in Nacht een donkere gloed
+       (--sl-field-shadow). Gemeten in het voorstel: Nacht ≥ 5,32:1, Dag ≥ 6,78:1.
+     • De telefoon houdt de gemeten opbouw (tests/mobile/run.mjs): één bovenrij
+       van 46px (hier het eiland) en de onderbalk van 54px (hier de dock).
+     • Werkruimteregels hangen onder `.app` of `:has(.app)`: de publieke
+       pagina's en het klantportaal (met de huisstijl van de leverancier)
+       blijven zoals ze waren.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1 · Tokens ─────────────────────────────────────────────────────────────
+   Uit docs/design-voorstel-stroom/bron/tokens.mjs, met --sl- ervoor zodat ze
+   niet botsen met die van Belicht, Cockpit en Zenit. Nacht is de standaard. */
+@property --sl-spin{syntax:'<angle>';inherits:false;initial-value:0deg}
+
+:root[data-stroom]{
+  --sl-ground:#07070A;
+  --lf-base:#07070A;--lf-top:#100F1C;--lf-sun:#F7C548;--lf-a1:#4B3BC4;--lf-a2:#14609F;
+  --sl-grain:.055;
+  --sl-glass:rgba(18,18,24,.72);
+  --sl-glass-2:rgba(25,25,33,.82);
+  --sl-glass-3:rgba(12,12,17,.88);
+  --sl-glass-solid:#131318;
+  --sl-blur:blur(26px) saturate(150%);
+  --sl-well:rgba(255,255,255,.035);--sl-well-2:rgba(255,255,255,.065);
+  --sl-hover:rgba(255,255,255,.055);--sl-press:rgba(255,255,255,.085);
+  --sl-line:rgba(255,255,255,.075);--sl-line-2:rgba(255,255,255,.12);--sl-line-3:rgba(255,255,255,.2);
+  --sl-edge-hi:rgba(255,255,255,.13);--sl-edge-lo:rgba(255,255,255,.025);
+  --sl-focus:#F7C548;
+  --sl-ink:#F4F3F0;--sl-ink-2:#BAB8B2;--sl-ink-3:#97958F;--sl-ink-4:#5F5E5A;
+  --sl-gold:#F7C548;--sl-gold-ink:#F7C548;--sl-on-gold:#1A1405;
+  --sl-gold-soft:rgba(247,197,72,.13);--sl-gold-line:rgba(247,197,72,.42);--sl-gold-glow:rgba(247,197,72,.46);
+  --sl-gold-face:linear-gradient(160deg,#FFE38F 0%,#F7C548 46%,#E5A11F 100%);
+  --sl-ok:#4CD9A0;--sl-warn:#FFA24C;--sl-danger:#FF6B72;--sl-info:#6CB6FF;
+  --sl-ok-soft:rgba(76,217,160,.13);--sl-warn-soft:rgba(255,162,76,.14);--sl-danger-soft:rgba(255,107,114,.14);
+  --sl-ai-1:#A392FF;--sl-ai-2:#6CC4FF;--sl-ai-3:#F7C548;--sl-ai-ink:#B8AAFF;
+  --sl-ai-soft:rgba(163,146,255,.10);--sl-ai-line:rgba(163,146,255,.38);
+  --sl-aurora:linear-gradient(115deg,var(--sl-ai-1),var(--sl-ai-2) 52%,var(--sl-ai-3));
+  --sl-field-shadow:0 1px 18px rgba(7,7,10,.6),0 0 2px rgba(7,7,10,.35);
+  --sl-hello-fill:linear-gradient(170deg,#FFE79E 0%,#F7C548 48%,#E8A626 100%);
+  --flow-1:#AEB6D0;--flow-2:#F7C548;--flow-body:.16;--flow-edge:.55;
+  --sl-shadow-1:inset 0 1px 0 rgba(255,255,255,.05),0 1px 2px rgba(0,0,0,.4);
+  --sl-shadow-glass:inset 0 1px 0 rgba(255,255,255,.06),0 28px 56px -32px rgba(0,0,0,.92);
+  --sl-shadow-pop:0 0 0 1px rgba(255,255,255,.07),0 44px 100px -28px rgba(0,0,0,.95),0 12px 30px -12px rgba(0,0,0,.6);
+  --sl-scrim:rgba(5,5,8,.55);
+  --sl-r-sm:9px;--sl-r-md:12px;--sl-r-lg:16px;--sl-r-xl:20px;--sl-r-2xl:26px;
+  --sl-ease:cubic-bezier(.2,.8,.2,1);
+  --sl-ease-out:cubic-bezier(.16,1,.3,1);
+  /* Een echte veer (16% doorschieten, na 0,6 s rust), met een terugval hieronder. */
+  --sl-spring:linear(0, .009, .035 2.1%, .141, .281 6.7%, .723 12.9%, .938 16.7%, 1.017, 1.077, 1.121, 1.149 24.3%, 1.159, 1.163, 1.161, 1.154 29.9%, 1.129 32.8%, 1.051 39.6%, 1.017 43.1%, .991, .977 51%, .974 53.8%, .975 57.1%, .997 69.8%, 1.003 76.9%, 1);
+}
+@supports not (transition-timing-function:linear(0, 1)){
+  :root[data-stroom]{--sl-spring:cubic-bezier(.34,1.45,.64,1)}
+}
+:root[data-stroom][data-theme="light"]{
+  --sl-ground:#ECEAE4;
+  --lf-base:#EDEAE3;--lf-top:#F8F5EE;--lf-sun:#FFD670;--lf-a1:#D9CFFF;--lf-a2:#CBE4FF;
+  --sl-grain:.045;
+  --sl-glass:rgba(255,255,255,.64);
+  --sl-glass-2:rgba(255,255,255,.80);
+  --sl-glass-3:rgba(251,250,247,.90);
+  --sl-glass-solid:#FFFFFF;
+  --sl-blur:blur(26px) saturate(185%);
+  --sl-well:rgba(28,27,24,.035);--sl-well-2:rgba(28,27,24,.06);
+  --sl-hover:rgba(28,27,24,.045);--sl-press:rgba(28,27,24,.075);
+  --sl-line:rgba(28,27,24,.08);--sl-line-2:rgba(28,27,24,.13);--sl-line-3:rgba(28,27,24,.22);
+  --sl-edge-hi:rgba(255,255,255,1);--sl-edge-lo:rgba(255,255,255,.4);
+  --sl-focus:#855800;
+  --sl-ink:#1C1B18;--sl-ink-2:#4E4B44;--sl-ink-3:#615D55;--sl-ink-4:#A8A49B;
+  --sl-gold:#F4BC2E;--sl-gold-ink:#855800;--sl-on-gold:#1C1405;
+  --sl-gold-soft:rgba(244,188,46,.17);--sl-gold-line:rgba(133,88,0,.32);--sl-gold-glow:rgba(244,188,46,.55);
+  --sl-ok:#0B6B4E;--sl-warn:#A3470A;--sl-danger:#BD1F31;--sl-info:#1A5FBA;
+  --sl-ok-soft:rgba(11,107,78,.09);--sl-warn-soft:rgba(163,71,10,.09);--sl-danger-soft:rgba(189,31,49,.08);
+  --sl-ai-1:#6E5AE6;--sl-ai-2:#1F9BE0;--sl-ai-3:#E0A11B;--sl-ai-ink:#5E48D6;
+  --sl-ai-soft:rgba(110,90,230,.07);--sl-ai-line:rgba(110,90,230,.32);
+  --sl-field-shadow:none;
+  --sl-hello-fill:linear-gradient(#855800,#855800);
+  --flow-1:#7E859C;--flow-2:#D99A12;--flow-body:.20;
+  --sl-shadow-1:inset 0 1px 0 rgba(255,255,255,.9),0 1px 2px rgba(40,34,20,.06);
+  --sl-shadow-glass:inset 0 1px 0 rgba(255,255,255,.95),0 1px 2px rgba(40,34,20,.04),0 26px 50px -30px rgba(70,56,28,.30);
+  --sl-shadow-pop:0 0 0 1px rgba(28,27,24,.06),0 44px 90px -30px rgba(70,56,28,.42),0 10px 26px -14px rgba(70,56,28,.25);
+  --sl-scrim:rgba(236,234,228,.5);
+}
+
+/* De grond van Zenit wordt de grond van het licht (ook voor de adresbalk). */
+:root[data-stroom]:has(.app){--bg-deep:var(--sl-ground);--ground:var(--sl-ground)}
+
+/* Op Dag zet Cockpit de Nacht-tokens op de rail, de onderbalk en de menuknop
+   (het donkere merkanker). Stroom heeft daar glas dat het thema volgt: terug
+   naar de waarden van :root. */
+:root[data-stroom][data-theme="light"] .app :is(.cmd-scope,.bottomnav,.mobile-nav-toggle){
+  --sheen-rgb:inherit;--shade-rgb:inherit;--ink-rgb:inherit;--sheen-k:inherit;--shade-k:inherit;--bg-rgb:inherit;--bg-deep-rgb:inherit;--surface-rgb:inherit;--surface2-rgb:inherit;--surface3-rgb:inherit;--accent-rgb:inherit;--two-rgb:inherit;--ok-rgb:inherit;--warn-rgb:inherit;--danger-rgb:inherit;--note-rgb:inherit;--info-rgb:inherit;--ai-rgb:inherit;--accent:inherit;--accent-hover:inherit;--accent-ink:inherit;--on-accent:inherit;--two:inherit;--two-ink:inherit;--ok:inherit;--warn:inherit;--danger:inherit;--note:inherit;--info:inherit;--bg:inherit;--bg-deep:inherit;--surface:inherit;--surface-2:inherit;--surface-3:inherit;--well:inherit;--raised:inherit;--field:inherit;--nav-active:inherit;--line:inherit;--line-2:inherit;--line-3:inherit;--line-accent:inherit;--hi:inherit;--ink:inherit;--ink-2:inherit;--ink-3:inherit;--ink-4:inherit;--ai-1:inherit;--ai-2:inherit;--ai-3:inherit;--ai-ink:inherit;--ai-glow:inherit;--ai-soft:inherit;--viz-1:inherit;--viz-2:inherit;--grid:inherit;--shadow-1:inherit;--shadow-2:inherit;--shadow-pop:inherit;--ring:inherit;--scrim:inherit;--focus-line:inherit;--accent-edge:inherit;--bg2:inherit;--bg3:inherit;--bg4:inherit;--bg5:inherit;--panel:inherit;--panel-strong:inherit;--border:inherit;--border2:inherit;--border-strong:inherit;--text:inherit;--muted:inherit;--muted2:inherit;--load-fill:inherit;--load-track:inherit;--accent-soft:inherit;--accent-glow:inherit;--accent-g:inherit;--accent-o:inherit;--accent-r:inherit;--accent-v:inherit;--accent-b:inherit;--shadow:inherit;--shadow-soft:inherit;--shadow-card:inherit;--shadow-card-hover:inherit;--ag-t-quiet:inherit;--ag-t-quiet2:inherit;--ag-t-bloom:inherit;--ag-t-shade:inherit;
+}
+
+/* ── 2 · De grond: het lichtveld ────────────────────────────────────────────
+   Achter alles (z-index -1). Daarom is alles wat ertussen ligt doorzichtig:
+   body, .app en .main. */
+:root[data-stroom]:has(.app) body{background:transparent}
+:root[data-stroom] .app{background:transparent}
+:root[data-stroom] .sl-field{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden;background:var(--sl-ground)}
+:root[data-stroom] .sl-field canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+/* Zonder WebGL, bij minder beweging of databesparing: dezelfde kleuren in CSS. */
+:root[data-stroom] .sl-field.is-css canvas{display:none}
+:root[data-stroom] .sl-field.is-css{background:
+  radial-gradient(55% 48% at var(--sx,20%) var(--sy,14%),color-mix(in srgb,var(--lf-sun) calc(var(--sa,1) * 22%),transparent),transparent 72%),
+  radial-gradient(48% 42% at 86% 2%,color-mix(in srgb,var(--lf-a1) 62%,transparent),transparent 72%),
+  radial-gradient(40% 36% at 62% 8%,color-mix(in srgb,var(--lf-a2) 50%,transparent),transparent 72%),
+  radial-gradient(60% 60% at 86% 0%,color-mix(in srgb,var(--tc,transparent) calc(var(--ta,0) * 40%),transparent),transparent 72%),
+  linear-gradient(var(--lf-top),var(--lf-base))}
+:root[data-stroom] .sl-grain{position:absolute;inset:0;opacity:var(--sl-grain);mix-blend-mode:overlay;pointer-events:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .5  0 0 0 0 .5  0 0 0 0 .5  0 0 0 1 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}
+
+/* ── 3 · Glas ────────────────────────────────────────────────────────────────
+   Een vlak van glas op het licht: vervaging, een lichtrand van linksboven en
+   een zachte schaduw. Zonder backdrop-filter: dicht glas. */
+:root[data-stroom] :is(.sl-panel,.sl-now,.sl-isl-shell,.sl-pal,.sl-tip,.zrail,.ztip,.zpop){
+  -webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur);
+}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  :root[data-stroom] :is(.sl-panel,.sl-now,.sl-isl-shell,.sl-pal,.zrail,.zpop){background:var(--sl-glass-solid)!important}
+}
+:root[data-stroom] .sl-panel{
+  position:relative;min-width:0;padding:16px 18px 16px;border-radius:var(--sl-r-2xl);
+  background:var(--sl-glass);color:var(--sl-ink);
+  box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line),var(--sl-shadow-glass);
+}
+:root[data-stroom] .sl-panel-h{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;min-height:30px;flex-wrap:wrap}
+:root[data-stroom] .sl-panel-t{display:flex;align-items:center;gap:9px;min-width:0}
+:root[data-stroom] .sl-panel-t h2{margin:0;font:600 15px/1.2 var(--font-sans);letter-spacing:-.01em;color:var(--sl-ink);white-space:nowrap}
+:root[data-stroom] .sl-panel-m{font-size:12.5px;color:var(--sl-ink-3);margin:0}
+:root[data-stroom] .sl-count{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--sl-ai-soft);box-shadow:inset 0 0 0 1px var(--sl-ai-line);color:var(--sl-ai-ink);font:600 11px/1 var(--font-sans)}
+:root[data-stroom] .sl-link{display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--sl-ink-3);font:500 12.5px/1 var(--font-sans);cursor:pointer}
+:root[data-stroom] .sl-link:hover{background:var(--sl-hover);color:var(--sl-ink)}
+:root[data-stroom] .sl-amt small{font-size:62%;font-weight:inherit;letter-spacing:0;margin-left:1px;opacity:.8}
+:root[data-stroom] .sl-amt{white-space:nowrap;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+
+/* Knoppen van Stroom: glas, met goud voor de hoofdactie. */
+:root[data-stroom] .sl-btn{
+  --h:34px;display:inline-flex;align-items:center;justify-content:center;gap:7px;height:var(--h);padding:0 13px;border:0;border-radius:var(--sl-r-md);cursor:pointer;
+  font:500 13px/1 var(--font-sans);white-space:nowrap;color:var(--sl-ink);background:var(--sl-hover);box-shadow:inset 0 0 0 1px var(--sl-line);
+  transition:background-color 120ms var(--sl-ease),transform 220ms var(--sl-spring),box-shadow 220ms var(--sl-ease);
+}
+:root[data-stroom] .sl-btn:hover:not(:disabled){background:var(--sl-press)}
+:root[data-stroom] .sl-btn:active:not(:disabled){transform:scale(.97)}
+:root[data-stroom] .sl-btn:disabled{opacity:.5;cursor:default}
+:root[data-stroom] .sl-btn.is-ghost{background:transparent;box-shadow:none;color:var(--sl-ink-2)}
+:root[data-stroom] .sl-btn.is-ghost:hover:not(:disabled){background:var(--sl-hover);color:var(--sl-ink)}
+:root[data-stroom] .sl-btn.is-gold{color:var(--sl-on-gold);background:var(--sl-gold-face);font-weight:600;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.45),inset 0 -1px 0 rgba(120,70,0,.25),0 10px 26px -12px var(--sl-gold-glow)}
+:root[data-stroom] .sl-btn.is-gold:hover:not(:disabled){background:var(--sl-gold-face);filter:brightness(1.05) saturate(1.05)}
+:root[data-stroom] .sl-btn kbd{display:inline-grid;place-items:center;min-width:18px;height:18px;margin-left:2px;padding:0 4px;border-radius:5px;background:rgba(0,0,0,.12);color:inherit;font:500 10.5px/1 var(--font-sans);box-shadow:none}
+:root[data-stroom] .sl-btn.is-gold kbd{background:rgba(60,35,0,.16)}
+
+/* Focus: goud, ook op glas (in Dag goud-als-tekst, 3:1 op glas en papier). */
+:root[data-stroom] .app :is(.sl-btn,.sl-link,.sl-stn,.sl-bead,.sl-face,.sl-live,.sl-card,.sl-cs-i,.sl-attn-i,.sl-more,.sl-now-main,.bn-item):focus-visible{outline:2px solid var(--sl-focus);outline-offset:2px}
+
+/* Het orbje van Gerrie draait in Stroom: poollicht dat leeft. */
+@media (prefers-reduced-motion:no-preference){
+  :root[data-stroom] :is(.gs-orb,.zorb){
+    background:
+      radial-gradient(circle at 32% 28%,rgba(255,255,255,.95),rgba(255,255,255,0) 32%),
+      conic-gradient(from var(--sl-spin),var(--sl-ai-1),var(--sl-ai-2),var(--sl-ai-3),var(--sl-ai-1));
+    animation:sl-orb 14s linear infinite;
+  }
+  :root[data-stroom] .zorb.live{animation:sl-orb 3.2s linear infinite,sl-breathe 2.4s var(--sl-ease) infinite}
+  @keyframes sl-orb{to{--sl-spin:360deg}}
+  @keyframes sl-breathe{50%{box-shadow:0 0 0 1px rgba(255,255,255,.12),0 0 26px -2px var(--sl-ai-2)}}
+}
+
+/* ── 4 · De rail en het contextpaneel: glas dat het thema volgt ─────────── */
+:root[data-stroom] .zrail{
+  background:var(--sl-glass-2);color:var(--sl-ink);
+  box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line),var(--sl-shadow-glass);
+  border-radius:24px;
+}
+:root[data-stroom][data-theme="light"] .zrail{box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line),var(--sl-shadow-glass)}
+:root[data-stroom] .zrail-logo{background:var(--sl-gold-face);color:var(--sl-on-gold);box-shadow:inset 0 1px 0 rgba(255,255,255,.55),inset 0 -1px 0 rgba(120,70,0,.25),0 10px 24px -10px var(--sl-gold-glow)}
+:root[data-stroom] .zrail-sep{background:var(--sl-line-2)}
+:root[data-stroom] .zrail-btn{color:var(--sl-ink-3);border-radius:14px;transition:color 120ms var(--sl-ease),background-color 120ms var(--sl-ease),box-shadow 220ms var(--sl-ease),transform 220ms var(--sl-spring)}
+:root[data-stroom] .zrail-btn:active{transform:scale(.93)}
+:root[data-stroom] :is(.zrail-btn:hover,.zrail-btn.is-shown){color:var(--sl-ink);background:var(--sl-hover)}
+:root[data-stroom] .zrail-btn.is-on{color:var(--sl-gold-ink);background:var(--sl-gold-soft);box-shadow:inset 0 0 0 1px var(--sl-gold-line),0 0 26px -8px var(--sl-gold-glow)}
+:root[data-stroom] .zrail-btn.is-on::before{display:none}
+:root[data-stroom] .zrail-btn.is-ai svg,
+:root[data-stroom] .zrail-btn.is-ai.is-on svg{color:var(--sl-ai-ink);filter:none}
+:root[data-stroom] .zrail-btn.is-ai.is-on{background:var(--sl-ai-soft);box-shadow:inset 0 0 0 1px var(--sl-ai-line),0 0 26px -8px var(--sl-ai-1)}
+:root[data-stroom] .zrail-count{background:var(--sl-ai-ink);color:var(--sl-on-ai,#0B0A14);box-shadow:0 0 0 2px var(--sl-glass-solid)}
+:root[data-stroom][data-theme="light"] .zrail-count{color:#FFFFFF}
+:root[data-stroom] .zrail-btn.is-ai .zrail-count{background:var(--sl-aurora);color:#14121C}
+:root[data-stroom] :is(.zrail-btn,.zrail-logo,.zrail-me):focus-visible{outline-color:var(--sl-focus)}
+:root[data-stroom] .zrail-me{background:var(--sl-gold-face);color:var(--sl-on-gold);box-shadow:0 0 0 2px var(--sl-glass-solid),0 0 0 3px var(--sl-line-2)}
+:root[data-stroom] :is(.zrail-me:hover,.zrail-me.is-open){box-shadow:0 0 0 2px var(--sl-glass-solid),0 0 0 4px var(--sl-gold-line)}
+:root[data-stroom] .ztip{background:var(--sl-glass-3);color:var(--sl-ink);box-shadow:var(--sl-shadow-pop)}
+:root[data-stroom] .zorg-tile{background:var(--sl-gold-soft);color:var(--sl-gold-ink);box-shadow:inset 0 0 0 1px var(--sl-gold-line)}
+:root[data-stroom] .zpanel-foot{background:var(--sl-ai-soft);border-color:var(--sl-ai-line)}
+:root[data-stroom] .zpnav-item.is-on{background:var(--sl-glass-solid);box-shadow:var(--sl-shadow-1),0 0 0 1px var(--sl-line)}
+:root[data-stroom] .zpnav-item.is-on svg{color:var(--sl-gold-ink)}
+:root[data-stroom] .zpnav-item:hover{background:var(--sl-hover)}
+/* Weergave en account: glazen vensters. */
+:root[data-stroom] .zpop{background:var(--sl-glass-3);border-color:var(--sl-line-2);box-shadow:var(--sl-shadow-pop)}
+:root[data-stroom] .zlook:hover{background:var(--sl-hover)}
+:root[data-stroom] .zlook[aria-pressed="true"]{border-color:var(--sl-gold-line);background:var(--sl-gold-soft);box-shadow:none}
+:root[data-stroom] .zlook:focus-visible{outline-color:var(--sl-focus)}
+@media (min-width:761px){
+  /* Vastgezet: het paneel naast de rail is ook glas, anders staat de tekst los op het licht. */
+  :root[data-stroom] .app.sidebar-pinned .zpanel{
+    top:8px;bottom:8px;left:84px;width:236px;padding:6px 10px 10px;border-radius:22px;
+    background:var(--sl-glass-2);-webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur);
+    box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line),var(--sl-shadow-glass);
+  }
+  /* Los: het paneel vliegt uit als glas. */
+  :root[data-stroom] .app:not(.sidebar-pinned) .zpanel{
+    background:var(--sl-glass-3);-webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur);
+    box-shadow:var(--sl-shadow-pop);border-radius:22px;
+  }
+}
+
+/* ── 5 · De bovenregel en het werkvlak (vanaf 761px) ──────────────────────── */
+@media (min-width:761px){
+  :root[data-stroom] .app{--tabbar-h:58px}
+  :root[data-stroom] .app .main>.tabbar.sl-bar{
+    display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:12px;
+    height:var(--tabbar-h);padding:0 14px 0 8px;position:relative;z-index:30;
+    background:transparent;border:0;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none;
+  }
+  :root[data-stroom] .app .main>.tabbar.sl-bar:has(.sl-isl[data-state="open"]){z-index:80}
+  :root[data-stroom] .app .main>.content{
+    margin:0 10px 10px 0;border-radius:var(--sl-r-2xl);
+    background:var(--sl-glass-3);
+    box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line),var(--sl-shadow-glass);
+  }
+  /* Vandaag is open: de groet staat los op het licht, de panelen zijn glas. */
+  :root[data-stroom] .app .main>.content[data-page="dashboard"]{background:transparent;box-shadow:none;padding-top:10px}
+  :root[data-stroom] .app :is(.modal-bg,.tb-overlay,.chat-modal-bg,.bk-modal-backdrop,.event-detail-overlay){top:var(--tabbar-h)}
+}
+:root[data-stroom] .sl-bar-where{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font:500 13.5px/1.2 var(--font-sans);color:var(--sl-ink-2);text-shadow:var(--sl-field-shadow);padding-left:6px}
+:root[data-stroom] .sl-bar-end{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+:root[data-stroom] .sl-bar .ztab-ro{background:var(--sl-glass-2);border-color:var(--sl-line);color:var(--sl-ink-2)}
+
+/* ── 6 · Het eiland ───────────────────────────────────────────────────────
+   Rust: een pil met het orbje. Open: het palet (vragen, zoeken, maken, je
+   tabbladen). Melding: een regel met de klok en Terughalen. De vorm veert van
+   de ene naar de andere stand. */
+:root[data-stroom] .sl-isl{position:relative;justify-self:center;min-width:0;interpolate-size:allow-keywords}
+:root[data-stroom] .sl-isl-shell{
+  position:relative;display:flex;align-items:center;width:min(470px,44vw);height:44px;border-radius:22px;overflow:hidden;
+  background:var(--sl-glass-3);color:var(--sl-ink);
+  box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line-2),var(--sl-shadow-pop);
+  transition:width .6s var(--sl-spring),height .6s var(--sl-spring),border-radius .45s var(--sl-ease);
+}
+:root[data-stroom] .sl-isl[data-state="note"] .sl-isl-shell{width:min(580px,52vw);height:54px;border-radius:27px}
+:root[data-stroom] .sl-isl[data-state="open"] .sl-isl-shell{visibility:hidden}
+:root[data-stroom] .sl-isl-idle{display:flex;align-items:center;gap:4px;width:100%;height:100%;padding:0 6px 0 9px;white-space:nowrap;animation:sl-in .3s var(--sl-ease) both}
+:root[data-stroom] .sl-face{flex:1;min-width:0;display:flex;align-items:center;gap:10px;height:34px;padding:0 6px 0 1px;border:0;border-radius:17px;background:transparent;color:var(--sl-ink-3);font:400 13.5px/1 var(--font-sans);cursor:pointer;text-align:left}
+:root[data-stroom] .sl-face:hover{color:var(--sl-ink-2)}
+:root[data-stroom] .sl-face .zorb{transition:transform 220ms var(--sl-spring)}
+:root[data-stroom] .sl-face:hover .zorb{transform:scale(1.1)}
+:root[data-stroom] .sl-ph{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+:root[data-stroom] :is(.sl-k,.sl-pal kbd,.sl-pal-foot kbd){display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;border-radius:6px;font:500 11px/1 var(--font-sans);color:var(--sl-ink-3);background:var(--sl-well-2);box-shadow:inset 0 -1px 0 var(--sl-line-2),inset 0 0 0 1px var(--sl-line);border:0}
+:root[data-stroom] .sl-live{flex:none;display:flex;align-items:center;gap:7px;height:32px;padding:0 12px 0 9px;margin-left:4px;border:0;border-radius:16px;cursor:pointer;
+  font:400 12.5px/1 var(--font-sans);color:var(--sl-ink);background:var(--sl-gold-soft);box-shadow:inset 0 0 0 1px var(--sl-gold-line)}
+:root[data-stroom] .sl-live b{font-weight:600;font-variant-numeric:tabular-nums}
+:root[data-stroom] .sl-live-l{max-width:120px;overflow:hidden;text-overflow:ellipsis;color:var(--sl-ink-2)}
+:root[data-stroom] .sl-live-dot{width:7px;height:7px;border-radius:50%;background:var(--sl-gold)}
+@media (prefers-reduced-motion:no-preference){
+  :root[data-stroom] .sl-live-dot{animation:sl-pulse 2s var(--sl-ease) infinite}
+}
+@keyframes sl-pulse{0%{box-shadow:0 0 0 0 var(--sl-gold-glow)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+@keyframes sl-in{from{opacity:0}}
+
+/* Open: het palet. Op desktop groeit het uit de pil; op de telefoon een vel. */
+:root[data-stroom] .sl-scrim{position:fixed;inset:0;z-index:0;background:var(--sl-scrim);-webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px);animation:sl-in .35s var(--sl-ease) both}
+:root[data-stroom] .sl-pal{
+  position:absolute;top:-1px;left:50%;z-index:1;translate:-50% 0;
+  width:min(680px,calc(100vw - 140px));max-height:min(78vh,640px);display:flex;flex-direction:column;overflow:hidden;
+  border-radius:var(--sl-r-2xl);background:var(--sl-glass-3);color:var(--sl-ink);
+  box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line-2),var(--sl-shadow-pop);
+  transform-origin:50% 0;animation:sl-pal-in .5s var(--sl-spring) both;
+}
+@keyframes sl-pal-in{from{opacity:0;transform:scale(.72,.2)}}
+:root[data-stroom] .sl-pal-in{display:flex;align-items:center;gap:12px;height:60px;padding:0 12px 0 18px;border-bottom:1px solid var(--sl-line);flex:none}
+:root[data-stroom] .sl-pal-in input{flex:1;min-width:0;height:100%;border:0;outline:0;background:transparent;color:var(--sl-ink);font:400 16.5px/1 var(--font-sans);letter-spacing:-.01em}
+:root[data-stroom] .sl-pal-in input::placeholder{color:var(--sl-ink-3)}
+:root[data-stroom] .sl-pal-esc{display:grid;place-items:center;height:30px;min-width:30px;padding:0 4px;border:0;border-radius:8px;background:transparent;color:var(--sl-ink-3);cursor:pointer}
+:root[data-stroom] .sl-pal-esc:hover{background:var(--sl-hover);color:var(--sl-ink)}
+:root[data-stroom] .sl-chips{display:flex;flex-wrap:wrap;gap:6px;padding:12px 18px 2px;flex:none}
+:root[data-stroom] .sl-chip{display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:9px;font:500 12px/1 var(--font-sans);color:var(--sl-ink-3);background:var(--sl-well);box-shadow:inset 0 0 0 1px var(--sl-line)}
+:root[data-stroom] .sl-chip.is-kind{color:var(--sl-ai-ink);background:transparent;box-shadow:none;text-transform:capitalize;padding-left:2px}
+:root[data-stroom] .sl-chip.is-on{color:var(--sl-ink);background:var(--sl-ai-soft);box-shadow:inset 0 0 0 1px var(--sl-ai-line);animation:sl-chip .4s var(--sl-spring)}
+@keyframes sl-chip{from{transform:scale(.9)}}
+:root[data-stroom] .sl-list{flex:1;min-height:0;overflow:auto;padding:6px 8px 8px;scrollbar-width:thin}
+:root[data-stroom] .sl-g-h{padding:10px 10px 4px;font:500 11.5px/1 var(--font-sans);color:var(--sl-ink-3)}
+:root[data-stroom] .sl-o{display:grid;grid-template-columns:32px minmax(0,1fr) auto auto;align-items:center;gap:12px;min-height:48px;padding:6px 10px;border-radius:13px;cursor:pointer}
+:root[data-stroom] .sl-o[aria-selected="true"]{background:var(--sl-hover);box-shadow:inset 0 0 0 1px var(--sl-line)}
+:root[data-stroom] .sl-o.is-ai[aria-selected="true"]{background:var(--sl-ai-soft);box-shadow:inset 0 0 0 1px var(--sl-ai-line)}
+:root[data-stroom] .sl-o.is-make[aria-selected="true"]{background:var(--sl-gold-soft);box-shadow:inset 0 0 0 1px var(--sl-gold-line)}
+:root[data-stroom] .sl-o.is-dis{cursor:default;opacity:.75}
+:root[data-stroom] .sl-oi{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--sl-well-2);color:var(--sl-ink-2)}
+:root[data-stroom] .sl-o.is-ai .sl-oi{background:var(--sl-ai-soft);box-shadow:inset 0 0 0 1px var(--sl-ai-line)}
+:root[data-stroom] .sl-o.is-make .sl-oi{background:var(--sl-gold-face);color:var(--sl-on-gold)}
+:root[data-stroom] .sl-ot{display:grid;min-width:0}
+:root[data-stroom] .sl-ot b{font:500 13.5px/1.35 var(--font-sans);color:var(--sl-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root[data-stroom] .sl-ot span{font-size:12px;line-height:1.35;color:var(--sl-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root[data-stroom] .sl-ot i{font-style:normal;color:var(--sl-ink-2)}
+:root[data-stroom] .sl-ob{font:500 10.5px/1 var(--font-sans);padding:4px 7px;border-radius:999px;color:var(--sl-ink-3);background:var(--sl-well-2);white-space:nowrap}
+:root[data-stroom] .sl-o.is-ai .sl-ob{color:var(--sl-ai-ink);background:var(--sl-ai-soft)}
+:root[data-stroom] .sl-o.is-make .sl-ob{color:var(--sl-gold-ink);background:var(--sl-gold-soft)}
+:root[data-stroom] .sl-ox{display:grid;place-items:center;width:24px;height:24px;border:0;border-radius:7px;background:transparent;color:var(--sl-ink-3);cursor:pointer;opacity:0}
+:root[data-stroom] .sl-o:is(:hover,[aria-selected="true"]) .sl-ox,:root[data-stroom] .sl-ox:focus-visible{opacity:1}
+:root[data-stroom] .sl-ox:hover{background:var(--sl-press);color:var(--sl-ink)}
+:root[data-stroom] .sl-pal-foot{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;padding:10px 18px;border-top:1px solid var(--sl-line);font-size:11.5px;color:var(--sl-ink-3);flex:none}
+:root[data-stroom] .sl-pal-foot span{display:inline-flex;align-items:center;gap:4px}
+:root[data-stroom] .sl-pal-foot kbd{height:18px;min-width:18px;font-size:10.5px}
+:root[data-stroom] .sl-safe{margin-left:auto}
+
+/* Een melding, met tijd om terug te halen. */
+:root[data-stroom] .sl-note{display:flex;align-items:center;gap:12px;width:100%;height:100%;padding:0 8px 0 10px;white-space:nowrap;animation:sl-in .3s var(--sl-ease) both}
+:root[data-stroom] .sl-note.is-compact{height:auto;padding:10px 14px;border-top:1px solid var(--sl-line);flex:none}
+:root[data-stroom] .sl-ni{position:relative;flex:none;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;color:var(--sl-ok);background:var(--sl-ok-soft)}
+:root[data-stroom] .sl-ni.gold{color:var(--sl-on-gold);background:var(--sl-gold-face);box-shadow:0 0 22px -4px var(--sl-gold-glow)}
+:root[data-stroom] .sl-ni.ai{background:var(--sl-ai-soft)}
+:root[data-stroom] .sl-ni.muted{color:var(--sl-ink-2);background:var(--sl-well-2)}
+:root[data-stroom] .sl-cd{position:absolute;inset:-4px;width:42px;height:42px;transform:rotate(-90deg)}
+:root[data-stroom] .sl-cd circle{fill:none;stroke:var(--sl-line-2);stroke-width:1.6}
+:root[data-stroom] .sl-cd .pr{stroke:var(--sl-gold);stroke-dasharray:100;stroke-linecap:round;animation:sl-cd var(--secs) linear forwards}
+@keyframes sl-cd{from{stroke-dashoffset:0}to{stroke-dashoffset:100px}}
+:root[data-stroom] .sl-nt{flex:1;display:grid;min-width:0;text-align:left}
+:root[data-stroom] .sl-nt b{font:600 13.5px/1.3 var(--font-sans);color:var(--sl-ink);overflow:hidden;text-overflow:ellipsis}
+:root[data-stroom] .sl-nt span{font-size:12px;line-height:1.3;color:var(--sl-ink-3);overflow:hidden;text-overflow:ellipsis}
+:root[data-stroom] .sl-na{display:flex;gap:6px;flex:none}
+:root[data-stroom] .sl-na .sl-btn{--h:32px;padding:0 11px;font-size:12.5px}
+:root[data-stroom] .sl-nx{display:grid;place-items:center;flex:none;width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:var(--sl-ink-3);cursor:pointer}
+:root[data-stroom] .sl-nx:hover{background:var(--sl-hover);color:var(--sl-ink)}
+
+/* ── 7 · Vandaag ───────────────────────────────────────────────────────────
+   De groet los op het licht met de Nu-kaart ernaast, de stroom over de hele
+   breedte, en daaronder de stapel naast je dag. */
+:root[data-stroom] .app .content[data-page="dashboard"] .dash-stack{gap:16px;margin-top:16px}
+:root[data-stroom] .sl-today{display:grid;gap:16px;container:sl-today / inline-size}
+:root[data-stroom] .sl-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,404px);align-items:end;gap:20px 28px;padding:6px 4px 0}
+:root[data-stroom] .sl-hero-t{min-width:0;text-shadow:var(--sl-field-shadow)}
+:root[data-stroom] .sl-eyebrow{display:flex;align-items:center;gap:8px;margin-bottom:8px;font:500 12.5px/1.2 var(--font-sans);color:var(--sl-ink-2)}
+:root[data-stroom] .sl-eyebrow::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--sl-gold);box-shadow:0 0 0 3px var(--sl-gold-soft)}
+:root[data-stroom] .sl-hello{margin:0;font:600 clamp(32px,4.6cqi,56px)/1.03 var(--font-sans);letter-spacing:-.048em;color:var(--sl-ink);text-wrap:balance}
+:root[data-stroom] .sl-hello span{background:var(--sl-hello-fill);-webkit-background-clip:text;background-clip:text;color:transparent;padding-right:.04em;text-shadow:none}
+:root[data-stroom] .sl-brief{margin:10px 0 0;max-width:64ch;font-size:15px;line-height:1.55;color:var(--sl-ink-2)}
+:root[data-stroom] .sl-brief b{color:var(--sl-ink);font-weight:600}
+:root[data-stroom] .sl-hero-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;text-shadow:none}
+:root[data-stroom] .sl-hero-acts .btn{background:var(--sl-glass-2);border-color:var(--sl-line-2);color:var(--sl-ink);-webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur)}
+
+/* Nu: wat er nu loopt, met een balk die meeloopt. */
+:root[data-stroom] .sl-now{display:grid;gap:4px;padding:12px 16px 12px;border-radius:var(--sl-r-xl);background:var(--sl-glass);color:var(--sl-ink);
+  box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line),var(--sl-shadow-glass)}
+:root[data-stroom] .sl-now-k{display:flex;align-items:center;gap:8px;font:600 11.5px/1.2 var(--font-sans);letter-spacing:.05em;text-transform:uppercase;color:var(--sl-gold-ink)}
+:root[data-stroom] .sl-now.is-off .sl-now-k{color:var(--sl-ink-3)}
+:root[data-stroom] .sl-now-live{width:7px;height:7px;border-radius:50%;background:var(--sl-gold)}
+@media (prefers-reduced-motion:no-preference){:root[data-stroom] .sl-now-live{animation:sl-pulse 2s var(--sl-ease) infinite}}
+:root[data-stroom] .sl-now-main{display:grid;gap:2px;padding:0;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer;border-radius:8px}
+:root[data-stroom] .sl-now-main:disabled{cursor:default}
+:root[data-stroom] .sl-now-t{display:block;font:600 15px/1.3 var(--font-sans);color:var(--sl-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root[data-stroom] .sl-now-p{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--sl-ink-3);min-width:0}
+:root[data-stroom] .sl-now-p i{flex:none;width:8px;height:8px;border-radius:3px}
+:root[data-stroom] .sl-now-time{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px;margin-top:4px}
+:root[data-stroom] .sl-now-clock{font:600 26px/1 var(--font-sans);letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:var(--sl-ink)}
+:root[data-stroom] .sl-now-bar{height:5px;border-radius:5px;background:var(--sl-well-2);overflow:hidden}
+:root[data-stroom] .sl-now-bar i{display:block;height:100%;border-radius:inherit;background:var(--sl-gold-face);box-shadow:0 0 12px var(--sl-gold-glow);transition:width 1s linear}
+:root[data-stroom] .sl-now-end{font-size:12px;color:var(--sl-ink-3);white-space:nowrap}
+:root[data-stroom] .sl-now-join{justify-self:start;margin-top:6px}
+:root[data-stroom] .sl-now-next{display:flex;align-items:center;gap:10px;margin-top:4px;padding-top:8px;border-top:1px solid var(--sl-line);font-size:12.5px;color:var(--sl-ink-3)}
+:root[data-stroom] .sl-now-nx{display:grid;min-width:0}
+:root[data-stroom] .sl-now-nx b{font-weight:500;color:var(--sl-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root[data-stroom] .sl-now-nx em{font-style:normal;font-size:11.5px}
+
+/* De stroom in zijn paneel. */
+:root[data-stroom] .sl-flow{padding:14px 18px 4px;overflow:hidden}
+:root[data-stroom] .sl-flow .sl-panel-h{margin-bottom:0}
+:root[data-stroom] .sl-flow-sum{margin:0;font-size:13px;color:var(--sl-ink-2);text-align:right}
+:root[data-stroom] .sl-flow-sum b{color:var(--sl-ink);font-weight:600}
+:root[data-stroom] .sl-flow-sum b.sl-late{color:var(--sl-danger)}
+:root[data-stroom] .sl-flow-host{position:relative;height:184px;margin:0 -18px}
+:root[data-stroom] .sl-flow-empty{padding:18px 4px 18px}
+:root[data-stroom] .sl-flow-empty ol{display:flex;justify-content:space-between;gap:8px;margin:6px 0 12px;padding:0;list-style:none;font-size:12.5px;color:var(--sl-ink-3)}
+:root[data-stroom] .sl-flow-empty p{margin:0;font-size:13px;color:var(--sl-ink-3)}
+
+:root[data-stroom] .sl-stream{position:absolute;inset:0}
+:root[data-stroom] .sl-stream-cv{position:absolute;inset:0;width:100%;height:100%}
+:root[data-stroom] .sl-stns{position:absolute;inset:0;margin:0;padding:0;list-style:none;pointer-events:none}
+:root[data-stroom] .sl-stn-li{position:absolute;top:8px;left:var(--x,0);translate:-50% 0}
+:root[data-stroom] .sl-stn{pointer-events:auto;display:grid;justify-items:center;gap:1px;padding:6px 12px 7px;border:0;border-radius:14px;background:transparent;color:inherit;text-align:center;cursor:pointer;transition:background-color 120ms var(--sl-ease)}
+:root[data-stroom] .sl-stn:hover{background:var(--sl-hover)}
+:root[data-stroom] .sl-stn-l{display:flex;align-items:center;gap:6px;font:500 12px/1.2 var(--font-sans);color:var(--sl-ink-3)}
+:root[data-stroom] .sl-stn-d{width:6px;height:6px;border-radius:50%;background:var(--flow-1)}
+:root[data-stroom] .sl-stn-d.d1{background:color-mix(in srgb,var(--flow-1) 75%,var(--flow-2))}
+:root[data-stroom] .sl-stn-d.d2{background:color-mix(in srgb,var(--flow-1) 50%,var(--flow-2))}
+:root[data-stroom] .sl-stn-d.d3{background:color-mix(in srgb,var(--flow-1) 25%,var(--flow-2))}
+:root[data-stroom] .sl-stn-d.d4{background:var(--flow-2);box-shadow:0 0 8px var(--flow-2)}
+:root[data-stroom] .sl-stn-a{font:600 21px/1.25 var(--font-sans);letter-spacing:-.03em;color:var(--sl-ink)}
+:root[data-stroom] .sl-stn.is-end .sl-stn-a{color:var(--sl-gold-ink)}
+:root[data-stroom] .sl-stn-m{font-size:11.5px;color:var(--sl-ink-3);white-space:nowrap}
+/* Betaald staat in de gouden poel: daar een tint lichter (Nacht) of donkerder
+   (Dag), anders zakt "in oktober" onder de 4,5:1. In Nacht helpt de gloed. */
+:root[data-stroom] .sl-stn{text-shadow:var(--sl-field-shadow)}
+:root[data-stroom] .sl-stn.is-end :is(.sl-stn-l,.sl-stn-m){color:var(--sl-ink-2)}
+:root[data-stroom] .sl-stn-m b{font-weight:600}
+:root[data-stroom] .sl-stn-m b.late{color:var(--sl-danger)}
+:root[data-stroom] .sl-stn-m b.wait{color:var(--sl-warn)}
+:root[data-stroom] .sl-stn-m b.ok{color:var(--sl-ok)}
+:root[data-stroom] .sl-beads{position:absolute;inset:0;pointer-events:none}
+:root[data-stroom] .sl-bead{
+  position:absolute;left:0;top:0;width:14px;height:14px;padding:0;border:0;border-radius:50%;pointer-events:auto;cursor:pointer;
+  translate:calc(var(--x,0px) - 50%) calc(var(--y,0px) - 50%);
+  background:radial-gradient(circle at 34% 30%,rgba(255,255,255,.92),rgba(255,255,255,0) 44%),var(--c);
+  box-shadow:0 0 0 2px color-mix(in srgb,var(--c) 28%,transparent),0 0 18px 2px color-mix(in srgb,var(--c) 55%,transparent);
+  transition:scale .3s var(--sl-spring),box-shadow .3s var(--sl-ease);
+}
+@media (prefers-reduced-motion:no-preference){
+  :root[data-stroom] .sl-bead{animation:sl-bob 5.2s ease-in-out infinite;animation-delay:calc(var(--d,0s) * -1)}
+  :root[data-stroom] .sl-bead.knot:not(.sent)::after{animation:sl-knot 1.9s var(--sl-ease-out) infinite}
+}
+@keyframes sl-bob{50%{transform:translateY(-3px)}}
+@keyframes sl-knot{0%{transform:scale(.8);opacity:1}100%{transform:scale(1.9);opacity:0}}
+:root[data-stroom] .sl-bead:is(:hover,:focus-visible){animation-play-state:paused;scale:1.5;z-index:3;box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 35%,transparent),0 0 26px 4px color-mix(in srgb,var(--c) 70%,transparent)}
+:root[data-stroom] .sl-bead:focus-visible{outline-offset:4px;border-radius:50%}
+:root[data-stroom] .sl-bead.knot::after{content:'';position:absolute;inset:-6px;border-radius:50%;border:1.5px solid var(--sl-warn)}
+:root[data-stroom] .sl-bead.late::after{border-color:var(--sl-danger)}
+:root[data-stroom] .sl-bead.sent::after{inset:-5px;border-color:var(--sl-ok);opacity:.8}
+:root[data-stroom] .sl-spark.zorb{--s:11px;position:absolute;right:-10px;top:-10px;box-shadow:0 0 0 1.5px var(--sl-glass-solid),0 0 12px 1px var(--sl-ai-1)}
+:root[data-stroom] .sl-more{position:absolute;left:0;top:0;translate:calc(var(--x,0px) - 50%) calc(var(--y,0px) - 50%);pointer-events:auto;height:20px;padding:0 7px;border:0;border-radius:999px;background:var(--sl-well-2);color:var(--sl-ink-3);font:500 11px/1 var(--font-sans);cursor:pointer}
+:root[data-stroom] .sl-more:hover{color:var(--sl-ink);background:var(--sl-press)}
+:root[data-stroom] .sl-tip{position:absolute;z-index:6;width:max-content;max-width:270px;padding:10px 12px;border-radius:14px;display:grid;gap:2px;pointer-events:none;
+  background:var(--sl-glass-3);color:var(--sl-ink);font-size:12.5px;box-shadow:var(--sl-shadow-pop);animation:sl-tip .22s var(--sl-ease-out)}
+@keyframes sl-tip{from{opacity:0;transform:translateY(4px)}}
+:root[data-stroom] .sl-tip-h{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--sl-ink-3)}
+:root[data-stroom] .sl-tip-h i{width:8px;height:8px;border-radius:3px}
+:root[data-stroom] .sl-tip b{font-size:13.5px;font-weight:600}
+:root[data-stroom] .sl-tip span{color:var(--sl-ink-3)}
+:root[data-stroom] .sl-tip .sl-tip-a{color:var(--sl-ink);font-weight:600;font-size:15px}
+:root[data-stroom] .sl-tip :is(.sl-tip-ai,.sl-tip-ok){display:flex;gap:5px;align-items:center;margin-top:2px}
+:root[data-stroom] .sl-tip .sl-tip-ai{color:var(--sl-ai-ink)}
+:root[data-stroom] .sl-tip .sl-tip-ok{color:var(--sl-ok)}
+:root[data-stroom] .sl-stream.is-mini .sl-stn{padding:4px 4px 5px}
+:root[data-stroom] .sl-stream.is-mini .sl-stn-a{font-size:14.5px}
+:root[data-stroom] .sl-stream.is-mini .sl-stn-l{font-size:10.5px;gap:4px}
+:root[data-stroom] .sl-stream.is-mini .sl-bead{width:10px;height:10px}
+:root[data-stroom] .sl-stream.is-mini .sl-spark.zorb{--s:9px;right:-8px;top:-8px}
+
+/* De stapel naast je dag. */
+:root[data-stroom] .sl-two{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;align-items:start}
+:root[data-stroom] .sl-two.is-single{grid-template-columns:minmax(0,1fr)}
+:root[data-stroom] .sl-deck{position:relative;min-width:0}
+:root[data-stroom] .sl-deck>.sl-panel-h{padding:0 4px;text-shadow:var(--sl-field-shadow)}
+:root[data-stroom] .sl-stack{position:relative;padding-bottom:24px}
+:root[data-stroom] .sl-card{position:relative;display:grid;gap:10px;padding:16px 18px 14px;border-radius:var(--sl-r-xl);
+  background:var(--sl-glass-2);color:var(--sl-ink);-webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur);
+  box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line),var(--sl-shadow-glass);
+  transform-origin:50% 100%;transition:transform .55s var(--sl-spring),opacity .4s var(--sl-ease),box-shadow .3s var(--sl-ease);
+  touch-action:pan-y;user-select:none;-webkit-user-select:none;cursor:grab}
+:root[data-stroom] .sl-card.k0{z-index:3;animation:sl-card-in .5s var(--sl-spring) both}
+@keyframes sl-card-in{from{opacity:0;transform:translateY(14px) scale(.96)}}
+:root[data-stroom] .sl-card.k0::after{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;background:var(--sl-aurora);opacity:.5;
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+:root[data-stroom] .sl-card.k1,:root[data-stroom] .sl-card.k2{position:absolute;inset:0 0 24px;pointer-events:none;-webkit-backdrop-filter:none;backdrop-filter:none}
+:root[data-stroom] .sl-card.k1{z-index:2;transform:translateY(12px) scale(.955);opacity:.6}
+:root[data-stroom] .sl-card.k2{z-index:1;transform:translateY(24px) scale(.91);opacity:.3}
+:root[data-stroom] .sl-card.is-dragging{transition:none;cursor:grabbing}
+:root[data-stroom] .sl-card.is-linked{box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-ai-line),0 0 36px -8px var(--sl-ai-1)}
+:root[data-stroom] .sl-card.is-error{box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-danger),var(--sl-shadow-glass)}
+:root[data-stroom] .sl-card:focus-visible{outline:2px solid var(--sl-focus);outline-offset:3px}
+:root[data-stroom] .sl-card-h{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center}
+:root[data-stroom] .sl-card-ic{display:grid;place-items:center;width:40px;height:40px;border-radius:13px;color:var(--sl-ink-2);background:var(--sl-well-2);box-shadow:inset 0 0 0 1px var(--sl-line)}
+:root[data-stroom] .sl-card-ic.is-ai{color:var(--sl-ai-ink);background:var(--sl-ai-soft);box-shadow:inset 0 0 0 1px var(--sl-ai-line)}
+:root[data-stroom] .sl-card-t h3{margin:0;font:600 15px/1.3 var(--font-sans);letter-spacing:-.01em;color:var(--sl-ink)}
+:root[data-stroom] .sl-card-t p{margin:2px 0 0;font-size:12px;color:var(--sl-ink-3)}
+:root[data-stroom] .sl-card-n{align-self:start;font-size:11.5px;color:var(--sl-ink-3);white-space:nowrap}
+:root[data-stroom] .sl-card-why{margin:0;font-size:13px;line-height:1.5;color:var(--sl-ink-2)}
+:root[data-stroom] .sl-card-fx{display:grid;gap:4px;margin:0;padding:10px 12px 10px 28px;border-radius:14px;background:var(--sl-well);box-shadow:inset 0 0 0 1px var(--sl-line);font-size:12.5px;line-height:1.5;color:var(--sl-ink-2)}
+:root[data-stroom] .sl-card-f{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:2px}
+:root[data-stroom] .sl-sp{flex:1}
+:root[data-stroom] .sl-hint{position:absolute;top:16px;z-index:4;display:flex;align-items:center;gap:6px;padding:6px 11px;border-radius:10px;font:600 12.5px/1 var(--font-sans);opacity:0;transition:opacity .15s;pointer-events:none}
+:root[data-stroom] .sl-hint-a{right:16px;color:var(--sl-on-gold);background:var(--sl-gold)}
+:root[data-stroom] .sl-hint-l{left:16px;color:var(--sl-ink);background:var(--sl-glass-3);box-shadow:inset 0 0 0 1px var(--sl-line-2)}
+:root[data-stroom] .sl-card[data-hint="A"] .sl-hint-a,:root[data-stroom] .sl-card[data-hint="L"] .sl-hint-l{opacity:1}
+:root[data-stroom] .sl-deck-empty{display:grid;justify-items:center;gap:8px;padding:34px 20px 30px;border-radius:var(--sl-r-xl);text-align:center;
+  background:var(--sl-glass);-webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur);box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line)}
+:root[data-stroom] .sl-deck-empty b{font-size:16px;color:var(--sl-ink)}
+:root[data-stroom] .sl-deck-empty p{margin:0;max-width:46ch;font-size:13px;color:var(--sl-ink-3)}
+:root[data-stroom] .sl-deck-ok{display:grid;place-items:center;width:54px;height:54px;border-radius:50%;color:var(--sl-ok);background:var(--sl-ok-soft);animation:sl-ok .7s var(--sl-spring)}
+@keyframes sl-ok{from{transform:scale(.4);opacity:0}}
+:root[data-stroom] .sl-deck-dots{display:inline-flex;gap:4px}
+:root[data-stroom] .sl-deck-dots i{width:5px;height:5px;border-radius:50%;background:var(--sl-ai-ink);animation:sl-dot 1.1s ease-in-out infinite}
+:root[data-stroom] .sl-deck-dots i:nth-child(2){animation-delay:.15s}
+:root[data-stroom] .sl-deck-dots i:nth-child(3){animation-delay:.3s}
+@keyframes sl-dot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+
+/* Je dag, de kaarten en de balk "Meer van vandaag": glas op het licht. */
+:root[data-stroom] .app .content[data-page="dashboard"]{--ink:var(--sl-ink);--ink-2:var(--sl-ink-2);--ink-3:var(--sl-ink-3)}
+:root[data-stroom] .app .content[data-page="dashboard"] :is(.zcard,.zpuls,.zfold-bar,.ag-queue,.onboarding-card,.dash-reports,.activity-card){
+  background:var(--sl-glass);border-color:var(--sl-line);-webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur);
+  box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line),var(--sl-shadow-glass);
+}
+:root[data-stroom] .app .content[data-page="dashboard"] .zcard{border:0;border-radius:var(--sl-r-2xl)}
+:root[data-stroom] .app .content[data-page="dashboard"] .zfold-bar{border-style:solid;border-color:transparent;border-radius:var(--sl-r-lg)}
+:root[data-stroom] .app .content[data-page="dashboard"] .zag-now span{color:var(--sl-gold-ink)}
+:root[data-stroom] .app .content[data-page="dashboard"] .zag-row.is-now{background:var(--sl-gold-soft);box-shadow:inset 0 0 0 1px var(--sl-gold-line)}
+
+/* Wacht op je: wat de stroom niet laat zien. */
+:root[data-stroom] .sl-attn{padding:12px 14px}
+:root[data-stroom] .sl-attn .sl-panel-h{margin-bottom:6px;padding:0 4px}
+:root[data-stroom] .sl-attn-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px}
+:root[data-stroom] .sl-attn-i{display:grid;grid-template-columns:32px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:48px;padding:6px 10px;border:0;border-radius:13px;background:var(--sl-well);color:var(--sl-ink);text-align:left;cursor:pointer;box-shadow:inset 0 0 0 1px var(--sl-line)}
+:root[data-stroom] .sl-attn-i:hover{background:var(--sl-hover)}
+:root[data-stroom] .sl-attn-i>svg{color:var(--sl-ink-3)}
+:root[data-stroom] .sl-attn-ic{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--sl-well-2);color:var(--sl-ink-2)}
+:root[data-stroom] .sl-attn-i.is-danger .sl-attn-ic{background:var(--sl-danger-soft);color:var(--sl-danger)}
+:root[data-stroom] .sl-attn-t{display:grid;min-width:0}
+:root[data-stroom] .sl-attn-t b{font:500 13px/1.35 var(--font-sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root[data-stroom] .sl-attn-t em{font-style:normal;font-size:12px;color:var(--sl-ink-3)}
+
+@container sl-today (max-width:760px){
+  :root[data-stroom] .sl-hero{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:1100px){
+  :root[data-stroom] .sl-two{grid-template-columns:minmax(0,1fr)}
+}
+
+/* Het factuur- en offerteformulier zet zijn nummer en bedragen vast in wit
+   (globals.css); op Dag valt dat weg tegen het lichte vlak. In Stroom volgt
+   het de inkt van het thema. */
+:root[data-stroom] .app :is(.finance-editor-hero h3,.finance-total strong){color:var(--ink)}
+:root[data-stroom] .app .finance-total.strong strong{color:var(--accent-ink)}
+
+/* ── 8 · Klant 360: de stroomlijn ─────────────────────────────────────────── */
+:root[data-stroom] .sl-line{display:inline-flex;align-items:center;height:12px;flex:none}
+:root[data-stroom] .sl-line i{position:relative;width:8px;height:8px;margin-right:9px;border-radius:50%;background:var(--sl-well-2);box-shadow:inset 0 0 0 1px var(--sl-line-3)}
+:root[data-stroom] .sl-line i:last-child{margin-right:0}
+:root[data-stroom] .sl-line i:not(:last-child)::after{content:'';position:absolute;left:8px;top:3.5px;width:9px;height:1px;background:var(--sl-line-2)}
+:root[data-stroom] .sl-line i.past{background:color-mix(in srgb,var(--c) 70%,transparent);box-shadow:none}
+:root[data-stroom] .sl-line i.past::after{background:color-mix(in srgb,var(--c) 60%,transparent)}
+:root[data-stroom] .sl-line i.now{background:var(--c);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 22%,transparent),0 0 10px var(--c)}
+:root[data-stroom] .sl-line.knot-late i.now{box-shadow:0 0 0 2px var(--sl-glass-solid),0 0 0 3.5px var(--sl-danger)}
+:root[data-stroom] .sl-line.knot-wait i.now{box-shadow:0 0 0 2px var(--sl-glass-solid),0 0 0 3.5px var(--sl-warn)}
+:root[data-stroom] .sl-cstream{margin:14px 0 16px;background:var(--sl-glass-2)}
+:root[data-stroom] .sl-cs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}
+:root[data-stroom] .sl-cs-st{display:grid;align-content:start;gap:6px;min-width:0;padding:10px;border-radius:14px;background:var(--sl-well);box-shadow:inset 0 0 0 1px var(--sl-line)}
+:root[data-stroom] .sl-cs-st.is-now{background:var(--sl-gold-soft);box-shadow:inset 0 0 0 1px var(--sl-gold-line)}
+:root[data-stroom] .sl-cs-l{display:flex;align-items:center;gap:6px;font:500 12px/1.2 var(--font-sans);color:var(--sl-ink-3)}
+:root[data-stroom] .sl-cs-l i{width:6px;height:6px;border-radius:50%;background:var(--sl-line-3)}
+:root[data-stroom] .sl-cs-st.is-past .sl-cs-l i{background:var(--flow-1)}
+:root[data-stroom] .sl-cs-st.is-now .sl-cs-l{color:var(--sl-gold-ink)}
+:root[data-stroom] .sl-cs-st.is-now .sl-cs-l i{background:var(--sl-gold);box-shadow:0 0 8px var(--sl-gold)}
+:root[data-stroom] .sl-cs-i{display:grid;gap:1px;padding:8px 9px;border:0;border-radius:10px;background:var(--sl-glass-solid);color:var(--sl-ink);text-align:left;cursor:pointer;box-shadow:var(--sl-shadow-1),0 0 0 1px var(--sl-line)}
+:root[data-stroom] .sl-cs-i:hover{box-shadow:var(--sl-shadow-1),0 0 0 1px var(--sl-line-3)}
+:root[data-stroom] .sl-cs-i b{font:600 12.5px/1.3 var(--font-sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root[data-stroom] .sl-cs-i span{font-size:11.5px;line-height:1.3;color:var(--sl-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root[data-stroom] .sl-cs-i .sl-amt{font-size:13px;font-weight:600;color:var(--sl-ink)}
+:root[data-stroom] .sl-cs-i.knot-late{box-shadow:var(--sl-shadow-1),0 0 0 1px var(--sl-danger)}
+:root[data-stroom] .sl-cs-i.knot-wait{box-shadow:var(--sl-shadow-1),0 0 0 1px var(--sl-warn)}
+:root[data-stroom] .sl-cs-none{font-size:12px;color:var(--sl-ink-4)}
+
+/* De stroomlijn in de kop van een klant. */
+:root[data-stroom] .sl-cbadge{display:inline-flex;align-items:center;gap:8px;height:24px;padding:0 10px 0 9px;border-radius:999px;background:var(--sl-well-2);box-shadow:inset 0 0 0 1px var(--sl-line);font:500 11.5px/1 var(--font-sans);color:var(--sl-ink-2)}
+:root[data-stroom] .sl-cbadge.is-late{color:var(--sl-danger)}
+:root[data-stroom] .sl-cbadge.is-wait{color:var(--sl-warn)}
+:root[data-stroom] .sl-cbadge .sl-line i{width:6px;height:6px;margin-right:7px}
+:root[data-stroom] .sl-cbadge .sl-line i:not(:last-child)::after{left:6px;top:2.5px;width:7px}
+@media (min-width:761px){:root[data-stroom] .sl-cbadge{display:none}}
+
+/* ── 9 · Telefoon: het eiland bovenin, de dock onderin ────────────────────── */
+@media (max-width:760px){
+  :root[data-stroom] .app .main{background:transparent}
+  :root[data-stroom] .app .main>.content{background:var(--sl-glass-3)}
+  :root[data-stroom] .app .main>.content[data-page="dashboard"]{background:transparent}
+  /* De bovenrij: menuknop links, het eiland in het midden, de teamchat rechts. */
+  :root[data-stroom] .app .main>.tabbar.sl-bar{display:flex;align-items:center;gap:0;padding:0 8px 0 52px;background:transparent;border-bottom:0}
+  :root[data-stroom] .app:has(.team-chat-dock-root) .main>.tabbar.sl-bar{padding-right:50px}
+  :root[data-stroom] .sl-bar-where,:root[data-stroom] .sl-bar-end{display:none}
+  :root[data-stroom] .sl-isl{flex:1;width:100%}
+  :root[data-stroom] .sl-isl-shell,
+  :root[data-stroom] .sl-isl[data-state="note"] .sl-isl-shell{width:100%;height:36px;border-radius:18px}
+  :root[data-stroom] .sl-isl[data-state="note"] .sl-note{padding:0 4px 0 4px;gap:8px}
+  :root[data-stroom] .sl-isl[data-state="note"] .sl-ni{width:28px;height:28px}
+  :root[data-stroom] .sl-isl[data-state="note"] .sl-cd{inset:-3px;width:34px;height:34px}
+  :root[data-stroom] .sl-isl[data-state="note"] .sl-nt span{display:none}
+  :root[data-stroom] .sl-isl[data-state="note"] .sl-na .sl-btn{--h:28px;padding:0 9px}
+  :root[data-stroom] .sl-isl[data-state="note"] .sl-na .sl-btn:not(.is-gold){display:none}
+  :root[data-stroom] .sl-isl-idle{padding:0 4px 0 7px}
+  :root[data-stroom] .sl-face{height:30px;font-size:13px}
+  :root[data-stroom] .sl-live{height:28px;padding:0 9px 0 7px}
+  /* Open: een vel van boven, over alles heen. */
+  :root[data-stroom] .sl-scrim{z-index:120}
+  :root[data-stroom] .sl-pal{position:fixed;top:calc(6px + env(safe-area-inset-top));left:8px;right:8px;z-index:121;translate:none;width:auto;max-height:calc(100dvh - 24px)}
+  :root[data-stroom] .sl-pal-in{height:54px;padding:0 8px 0 14px}
+  :root[data-stroom] .sl-pal-in input{font-size:16px}
+  :root[data-stroom] .sl-pal-foot{display:none}
+  :root[data-stroom] .mobile-nav-toggle{background:var(--sl-glass-3);border-color:var(--sl-line-2);color:var(--sl-ink)}
+  :root[data-stroom] .team-chat-fab{background:var(--sl-glass-3);border-color:var(--sl-line-2);color:var(--sl-ink-2)}
+
+  /* De dock: glas, met het orbje van Gerrie in het midden. Zelfde hoogte als de
+     onderbalk (54px), dus dezelfde ruimte onderin de pagina. */
+  :root[data-stroom] .bottomnav.sl-dock{background:transparent;border-top:0;box-shadow:none;padding:0 10px calc(6px + env(safe-area-inset-bottom));-webkit-backdrop-filter:none;backdrop-filter:none}
+  :root[data-stroom] .bottomnav.sl-dock::before{content:'';position:absolute;left:10px;right:10px;top:0;bottom:calc(6px + env(safe-area-inset-bottom));z-index:-1;border-radius:22px;
+    background:var(--sl-glass-3);-webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur);
+    box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line-2),var(--sl-shadow-pop)}
+  :root[data-stroom] .bottomnav.sl-dock .bn-item{color:var(--sl-ink-3)}
+  :root[data-stroom] .bottomnav.sl-dock .bn-item.active{color:var(--sl-gold-ink)}
+  /* Cockpit kleurt het actieve icoon vlak goud; in Dag haalt dat geen 3:1. */
+  :root[data-stroom] .bottomnav.sl-dock .bn-item.active svg{color:var(--sl-gold-ink);filter:none}
+  :root[data-stroom] .bottomnav.sl-dock .bn-item.active::before,:root[data-stroom] .bottomnav.sl-dock .bn-item.active::after{display:none}
+  :root[data-stroom] .bottomnav.sl-dock .bn-label{font-weight:500}
+  :root[data-stroom] .bottomnav.sl-dock .bn-orb .zorb{--s:30px;margin-top:-6px;box-shadow:0 0 0 3px var(--sl-glass-solid),0 8px 22px -6px var(--sl-ai-1)}
+  :root[data-stroom] .bottomnav.sl-dock .bn-orb .bn-label{color:var(--sl-ai-ink)}
+  /* Gerrie zit in de dock: de zwevende knop rechtsonder is dan dubbel. */
+  :root[data-stroom] .app:has(.sl-dock .bn-orb) .gerrie-fab{display:none}
+
+  /* Vandaag op de telefoon: compacter, de stroom smal. */
+  :root[data-stroom] .sl-today{gap:12px}
+  :root[data-stroom] .sl-hero{padding:2px 2px 0;gap:12px}
+  :root[data-stroom] .sl-hello{font-size:30px}
+  :root[data-stroom] .sl-brief{font-size:14px;margin-top:6px}
+  :root[data-stroom] .sl-hero-acts{display:none}
+  :root[data-stroom] .sl-flow{padding:12px 14px 2px}
+  :root[data-stroom] .sl-flow .sl-panel-h{gap:4px}
+  :root[data-stroom] .sl-flow-sum{text-align:left;font-size:12.5px}
+  :root[data-stroom] .sl-flow-host{height:118px;margin:0 -14px}
+  /* Klant 360: op de telefoon staat de stroomlijn in de kop; de stukken
+     staan onder Offertes en Facturen. Zo blijven de tabbladen hoog. */
+  :root[data-stroom] .sl-cstream{display:none}
+  /* Vandaag: de groet, dan de stroom, dan pas Nu. */
+  :root[data-stroom] .sl-hero{display:contents}
+  :root[data-stroom] .sl-hero-t{order:0}
+  :root[data-stroom] .sl-flow{order:1}
+  :root[data-stroom] .sl-now{order:2}
+  :root[data-stroom] .bottomnav.sl-dock .bn-item.active{background:var(--sl-gold-soft)}
+  :root[data-stroom] .sl-card-f .sl-btn kbd{display:none}
+  :root[data-stroom] .sl-deck-empty{grid-template-columns:auto minmax(0,1fr);justify-items:start;text-align:left;gap:2px 12px;padding:14px 16px}
+  :root[data-stroom] .sl-deck-empty>:first-child{grid-row:span 2}
+  :root[data-stroom] .sl-deck-ok{width:40px;height:40px}
+  :root[data-stroom] .sl-deck-empty p{font-size:12.5px}
+}
+
+/* ── 10 · Inloggen: het licht, een glazen kaart en de stroom als verhaal ──
+   Cockpit zet het inloggen altijd donker; Stroom volgt het thema, net als de
+   werkruimte erachter. Het portaal (main.login.portal) blijft van de klant. */
+:root[data-stroom] main.login:not(.portal){background:transparent;color:var(--sl-ink)}
+:root[data-stroom] main.login:not(.portal)::before,:root[data-stroom] main.login:not(.portal)::after{display:none}
+:root[data-stroom] main.login:not(.portal) .login-card{
+  background:var(--sl-glass-3);color:var(--sl-ink);-webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur);
+  box-shadow:inset 0 1px 0 var(--sl-edge-hi),0 0 0 1px var(--sl-line-2),var(--sl-shadow-pop);
+}
+:root[data-stroom] main.login:not(.portal) .login-card h1{font-weight:600;letter-spacing:-.04em}
+:root[data-stroom] .login-story{color:var(--sl-ink);text-shadow:var(--sl-field-shadow)}
+:root[data-stroom] .login-story .app-brand>span{color:var(--sl-ink);font-weight:600}
+:root[data-stroom] .login-story .app-brand small{color:var(--sl-gold-ink)}
+:root[data-stroom] .login-story h2{color:var(--sl-ink);font-weight:600;letter-spacing:-.045em}
+:root[data-stroom] .login-story h2 span{background:var(--sl-hello-fill);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:none}
+:root[data-stroom] .login-story p{color:var(--sl-ink-2)}
+:root[data-stroom] .login-flow::before{top:16px;height:3px;border-radius:3px;background:linear-gradient(90deg,var(--flow-1),var(--flow-2));box-shadow:0 0 14px color-mix(in srgb,var(--flow-2) 60%,transparent)}
+:root[data-stroom] .login-flow li>span{background:var(--sl-glass-2);color:var(--sl-ink-3);box-shadow:inset 0 0 0 1px var(--sl-line-2);-webkit-backdrop-filter:var(--sl-blur);backdrop-filter:var(--sl-blur)}
+:root[data-stroom] .login-flow li.is-done>span{background:var(--sl-gold-soft);color:var(--sl-gold-ink);box-shadow:inset 0 0 0 1px var(--sl-gold-line)}
+:root[data-stroom] .login-flow li.is-now>span{background:var(--sl-gold-face);color:var(--sl-on-gold);box-shadow:0 0 22px var(--sl-gold-glow)}
+:root[data-stroom] .login-flow li>small{font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--sl-ink-3)}
+:root[data-stroom] .login-flow li.is-done>small{color:var(--sl-ink-2)}
+:root[data-stroom] .login-flow li.is-now>small{color:var(--sl-gold-ink)}
+
+/* ── 11 · Minder beweging: alles werkt, niets zweeft ─────────────────────── */
+@media (prefers-reduced-motion:reduce){
+  :root[data-stroom] :is(.sl-isl-shell,.sl-pal,.sl-card,.sl-bead,.sl-scrim,.sl-isl-idle,.sl-note,.sl-tip,.sl-chip,.sl-deck-ok){animation:none!important;transition:none!important}
+  :root[data-stroom] .sl-cd .pr{animation-duration:var(--secs)!important}
+}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Search, SlidersHorizontal, X } from 'lucide-react';
 import type { AppData, Project, Task } from '../types';
 import { Input, Select } from '../components/Ui';
-import { useLook } from '../lib/look';
+import { isZenitFamily, useLook } from '../lib/look';
 
 type ProjectPhase = 'planning' | 'active' | 'review' | 'overdue' | 'completed';
 type TimelineVariant = 'dashboard' | 'full';
@@ -85,7 +85,7 @@ export function ProjectTimeline({
   const [pickedScale, setPickedScale] = useState<Scale | null>(null);
   const isFull = variant === 'full';
   const [look] = useLook();
-  const calm = look === 'zenit' && isFull;
+  const calm = isZenitFamily(look) && isFull;
   const [refineOpen, setRefineOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);

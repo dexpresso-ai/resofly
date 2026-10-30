@@ -13,7 +13,11 @@ import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, no
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
 import { Modal } from './components/Modal';
 import { CheckCircle2, FileText, FolderOpen, Lock, Menu, Receipt, Users, X } from 'lucide-react';
-import { useLook } from './lib/look';
+import { isZenitFamily, useLook } from './lib/look';
+import { LightField } from './components/LightField';
+import { StroomIsland } from './components/StroomIsland';
+import type { Intent } from './lib/stroom';
+import { notify, tintLight } from './lib/stroomBus';
 import { useNarrowViewport } from './lib/useNarrowViewport';
 import { isSupabaseConfigured, supabase, supabaseAuth } from './lib/supabase';
 import { signOutOnThisDevice } from './lib/signOut';
@@ -193,6 +197,9 @@ import './styles/teamchat.css';
 // `data-look="zenit"` op <html> (accountmenu → Probeer Zenit), en dan moet hij
 // van Cockpit en de teamchat winnen.
 import './styles/zenit.css';
+// Stroom (designvoorstel 2026-10-30) bouwt op Zenit en legt er het licht en het
+// glas overheen: alleen actief met `data-stroom` op <html> (Probeer Stroom).
+import './styles/stroom.css';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
@@ -753,13 +760,23 @@ function App() {
     if (stored === '1' || stored === '0') return stored === '1';
     return typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1280px)').matches === true;
   });
-  // De look van de werkruimte: Cockpit (de standaard) of Zenit, de nieuwe
-  // voorkant achter "Probeer Zenit" in het accountmenu. Zenit heeft zijn eigen
-  // navigatie (nachtrail + contextpaneel) en een vraagbalk in de tabrij. Op de
-  // telefoon is er geen vraagbalk: daar zoekt ook Cockpit niet (globals.css
-  // verbergt .global-search onder 761px).
+  // De look van de werkruimte: Cockpit (de standaard), Zenit of Stroom, de
+  // nieuwe voorkanten achter "Probeer Zenit" en "Probeer Stroom" in het
+  // accountmenu. Zenit heeft zijn eigen navigatie (nachtrail + contextpaneel)
+  // en een vraagbalk in de tabrij. Op de telefoon is er geen vraagbalk: daar
+  // zoekt ook Cockpit niet (globals.css verbergt .global-search onder 761px).
+  // Stroom deelt de navigatie van Zenit, maar heeft bovenin het eiland: zoeken,
+  // vragen, maken en de werktabs, ook op de telefoon.
   const [look] = useLook();
+  const zenitFamily = isZenitFamily(look);
   const narrowViewport = useNarrowViewport();
+  // Stroom: bij een klant (of een project van een klant) kleurt het licht
+  // rechtsboven in de kleur van die klant.
+  const tintColor = look !== 'stroom' ? null
+    : page === 'client' ? data.clients.find(c => c.id === clientId)?.color ?? null
+    : page === 'project' ? (() => { const pr = data.projects.find(p => p.id === activeTab.projectId); return pr ? (data.clients.find(c => c.id === pr.client_id)?.color ?? pr.color) : null; })()
+    : null;
+  useEffect(() => { tintLight(tintColor); }, [tintColor]);
   // Het werkvlak. De bovenregel krijgt pas een haarlijn en schaduw als de inhoud
   // eronder schuift (`is-scrolled`), en een nieuwe pagina schuift zacht in.
   const [mainEl, setMainEl] = useState<HTMLElement | null>(null);
@@ -2727,6 +2744,39 @@ function App() {
   }
 
   /**
+   * Een opdracht uit het eiland van Stroom ("factuur bloem content oktober 650").
+   * Een factuur, offerte of taak opent vooringevuld in het gewone formulier: er
+   * wordt niets opgeslagen of verstuurd tot jij dat daar doet. Een afspraak en
+   * uren gaan naar Gerrie, die ze klaarzet met de agenda en de projecten erbij.
+   */
+  function createFromIntent(intent: Intent) {
+    if (intent.kind === 'afspraak' || intent.kind === 'uren') {
+      if (!permissions.canRead('gerrie')) return;
+      askGerrie(intent.raw);
+      return;
+    }
+    const kind = intent.kind === 'factuur' ? 'invoice' : intent.kind === 'offerte' ? 'quote' : 'task';
+    if (!canEditKind(kind)) {
+      setError(`Je hebt geen wijzigrechten om een ${intent.kind} te maken. Vraag een owner of admin om de module voor je open te zetten.`);
+      return;
+    }
+    if (kind === 'invoice' || kind === 'quote') {
+      const lines = [{ id: uid(), description: intent.description ?? '', quantity: 1, unit_price: intent.amount ?? 0, vat: 21 }];
+      setPage(kind === 'invoice' ? 'invoices' : 'quotes'); setProjectId(null); setClientId(null);
+      setEdit({ kind, defaults: { client_id: intent.clientId ?? '', lines } });
+      notify({ tone: 'ai', title: `${kind === 'invoice' ? 'Factuur' : 'Offerte'} klaargezet`, detail: 'Kijk hem na en sla op; er gaat nog niets de deur uit.' });
+      return;
+    }
+    const project = intent.projectId ? data.projects.find(p => p.id === intent.projectId) ?? null : null;
+    setPage(project ? 'project' : 'weekplanner'); setProjectId(project?.id ?? null); setClientId(null);
+    setEdit({ kind: 'task', projectId: project?.id ?? null, defaults: {
+      title: intent.description ?? '', planned_date: intent.date ?? null,
+      project_id: project?.id ?? null, client_id: intent.clientId ?? project?.client_id ?? null,
+    } });
+    notify({ tone: 'ai', title: 'Taak klaargezet', detail: 'Kijk hem na en sla op.' });
+  }
+
+  /**
    * Voert een concept-voorstel ECHT uit en geeft terug wat er gebeurd is.
    *
    * Alles wat een bewerkformulier kent, loopt via `persistEdit` — precies dezelfde weg
@@ -3171,15 +3221,38 @@ function App() {
       onClick={() => setMobileNavOpen(open => !open)}
     >{mobileNavOpen ? <X size={22}/> : <Menu size={22}/>}</button>
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
-    {look === 'zenit' ? <ZenitNav {...navProps}/> : <Sidebar {...navProps}/>}
+    {/* Stroom: het lichtveld onder alles. Het glas erboven laat het doorschijnen. */}
+    {look === 'stroom' && <LightField />}
+    {zenitFamily ? <ZenitNav {...navProps}/> : <Sidebar {...navProps}/>}
     <main className="main" ref={setMainEl}>
-      <TabBar
-        tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab}
-        trailing={look === 'zenit' && !narrowViewport ? <>
-          {pageReadOnly && <span className="ztab-ro" title="Je kunt hier kijken, niet wijzigen"><Lock size={12} aria-hidden="true"/>Alleen lezen</span>}
-          <GlobalSearch variant="ask" data={data} onNavigate={handleSearchNavigate} canOpenPage={permissions.canOpenPage} onAsk={permissions.canRead('gerrie') ? askGerrie : undefined} />
-        </> : undefined}
-      />
+      {look === 'stroom'
+        /* Stroom: geen tabrij maar het eiland. De werktabs wonen erin ("Open
+           tabbladen"); de bovenregel zegt waar je bent en blijft verder rustig. */
+        ? <div className="tabbar sl-bar">
+            <div className="sl-bar-where" aria-live="polite">{page === 'dashboard' ? 'Vandaag' : title}</div>
+            <StroomIsland
+              data={data}
+              canOpenPage={permissions.canOpenPage}
+              onNavigate={handleSearchNavigate}
+              onAsk={permissions.canRead('gerrie') ? askGerrie : undefined}
+              onCreate={orgCanWrite ? createFromIntent : undefined}
+              tabs={tabs.map(tab => ({ id: tab.id, label: tab.page === 'dashboard' ? 'Vandaag' : viewTitle(tab, data), page: tab.page, active: tab.id === activeTab.id }))}
+              onSwitchTab={switchTab}
+              onCloseTab={closeTab}
+              onNewTab={openTab}
+              timerKeys={[`resofly:timer:${activeOrg.id}:${currentUserId ?? 'anon'}`, 'resofly-timer']}
+              onOpenTimer={permissions.canOpenPage('time') ? () => { setPage('time'); setProjectId(null); setClientId(null); setStatsReportId(null); } : undefined}
+              narrow={narrowViewport}
+            />
+            <div className="sl-bar-end">{pageReadOnly && <span className="ztab-ro" title="Je kunt hier kijken, niet wijzigen"><Lock size={12} aria-hidden="true"/>Alleen lezen</span>}</div>
+          </div>
+        : <TabBar
+            tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab}
+            trailing={look === 'zenit' && !narrowViewport ? <>
+              {pageReadOnly && <span className="ztab-ro" title="Je kunt hier kijken, niet wijzigen"><Lock size={12} aria-hidden="true"/>Alleen lezen</span>}
+              <GlobalSearch variant="ask" data={data} onNavigate={handleSearchNavigate} canOpenPage={permissions.canOpenPage} onAsk={permissions.canRead('gerrie') ? askGerrie : undefined} />
+            </> : undefined}
+          />}
       {projectShift && <ProjectShiftDialog
         shift={projectShift}
         busy={projectShiftBusy}
@@ -3188,12 +3261,12 @@ function App() {
       />}
       {/* Zenit heeft geen titelbalk: de werktab draagt de naam, "Ververs" staat in
           het contextpaneel en "Alleen lezen" naast de vraagbalk. */}
-      {look !== 'zenit' && page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && page !== 'communication' && page !== 'chat' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{pageReadOnly && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
+      {!zenitFamily && page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && page !== 'communication' && page !== 'chat' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{pageReadOnly && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       {/* Alle open tabbladen blijven gemount (keep-alive); alleen het actieve is
           zichtbaar. Elk pane is z'n eigen scrollcontainer én bevat z'n eigen
           EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}
       {tabs.map(tab => (
-        <section key={tab.id} className="content" hidden={tab.id !== activeTab.id}>
+        <section key={tab.id} className="content" data-page={tab.page} hidden={tab.id !== activeTab.id}>
           {/* Het kruimelpad staat bóven de foutmelding: ook als een pagina stukloopt,
               blijft de weg terug zichtbaar. */}
           <Breadcrumbs view={tab} data={data} onNavigate={navigateCrumb} />
@@ -3240,7 +3313,7 @@ function App() {
     <TeamChatDock api={teamChat} hidden={page === 'chat' || !permissions.canRead('chat')} onExpand={(id) => openTeamChat(id)} />
     {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
         actieve tabblad naar een kerndestinatie; sluit onderweg het uitschuifmenu. */}
-    <BottomNav page={page} permissions={permissions} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
+    <BottomNav page={page} permissions={permissions} dock={look === 'stroom'} onAsk={look === 'stroom' && permissions.canRead('gerrie') ? () => askGerrie() : undefined} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
         <span className="send-spinner" aria-hidden="true" />
@@ -3302,7 +3375,7 @@ function App() {
     // 'projects'), maar op het niveau van 'finance'.
     const canReadContracts = permissions.canRead('finance');
     const canWriteContracts = orgCanWrite && permissions.canWrite('finance');
-    if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} organizationId={activeOrg.id} currentUserId={currentUserId} canWriteTasks={orgCanWrite && permissions.canWrite('projects')} permissions={permissions} gerrieActions={gerrieActions} canWriteGerrie={orgCanWrite && permissions.canWrite('gerrie')} orgCanWrite={orgCanWrite} onOpenDecisionTarget={openDecisionTarget} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} openTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} />;
+    if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} organizationId={activeOrg.id} currentUserId={currentUserId} canWriteTasks={orgCanWrite && permissions.canWrite('projects')} permissions={permissions} gerrieActions={gerrieActions} canWriteGerrie={orgCanWrite && permissions.canWrite('gerrie')} orgCanWrite={orgCanWrite} onOpenDecisionTarget={openDecisionTarget} openFinanceDoc={(kind, id) => { const item = kind === 'quote' ? data.quotes.find(q => q.id === id) : data.invoices.find(i => i.id === id); setPage(kind === 'quote' ? 'quotes' : 'invoices'); setProjectId(null); setClientId(null); if (item) setEdit(kind === 'quote' ? { kind: 'quote', item: item as Quote } : { kind: 'invoice', item: item as Invoice }); }} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} openTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} />;
     if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={workMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
     if (page === 'gallery') {
       // Het project leiden we uit de galerij zelf af: dat blijft kloppen ook als
@@ -3376,6 +3449,8 @@ function App() {
 }
 
 function Login() {
+  // Stroom: het licht ook achter het inloggen (de look is per browser onthouden).
+  const [look] = useLook();
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3395,7 +3470,7 @@ function Login() {
   }
   // Op een groot scherm staat links het verhaal (het merk en de weg van klant
   // tot betaling), rechts het formulier; op de telefoon alleen het formulier.
-  return <main className="login"><div className="login-shell">
+  return <main className="login">{look === 'stroom' && <LightField />}<div className="login-shell">
     <section className="login-story">
       <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly<small>Werkruimte</small></span></div>
       <h2>Van eerste mail<br /><span>tot betaalde factuur.</span></h2>

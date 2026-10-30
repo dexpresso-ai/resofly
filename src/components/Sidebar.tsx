@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Sunrise, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Sunrise, Ticket, TrendingUp, Truck, Users, X, Waves } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, settingsTabRoleRule, type SettingsTab } from '../features/SimplePages';
@@ -421,6 +421,16 @@ export function Sidebar({
           onClick={() => { setUserMenuOpen(false); setLook('zenit'); }}
         >
           <Sunrise size={15}/><span>Probeer Zenit</span><small>nieuw</small>
+        </button>
+        {/* Stroom (DESIGN_VOORSTEL_STROOM_2026-10-30.md): Zenit met het licht en
+            het glas erbij. Terug kan altijd: Weergave → Look in de rail. */}
+        <button
+          type="button"
+          role="menuitem"
+          className="user-menu-item user-menu-zenit user-menu-stroom"
+          onClick={() => { setUserMenuOpen(false); setLook('stroom'); }}
+        >
+          <Waves size={15}/><span>Probeer Stroom</span><small>nieuw</small>
         </button>
         <div className="user-menu-sep" aria-hidden="true" />
         <button
