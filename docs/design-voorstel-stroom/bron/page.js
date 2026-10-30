@@ -6,8 +6,10 @@ const QS = new URLSearchParams(location.search);
 const APPS = [];
 const LIGHTS = [];
 const STREAMS = [];
-let themeMode = 'dark';
-try { themeMode = localStorage.getItem(THEME_KEY) || 'dark'; } catch (e) { /* geen opslag: Nacht */ }
+// Volgorde: een eigen keuze op deze pagina, anders de keuze van de kijker (data-theme), anders het systeem
+const hostTheme = document.documentElement.dataset.theme;
+let themeMode = hostTheme === 'dark' || hostTheme === 'light' ? hostTheme : 'system';
+try { themeMode = localStorage.getItem(THEME_KEY) || themeMode; } catch (e) { /* geen opslag: zoals de kijker */ }
 if (QS.get('thema')) themeMode = QS.get('thema');
 
 const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
@@ -15,12 +17,12 @@ function resolveTheme(mode) {
   if (mode === 'sun') { const s = sunTimes(new Date()); const m = nowMin(); return m >= s.rise && m < s.set ? 'light' : 'dark'; }
   return mode === 'system' ? null : mode;
 }
-function applyTheme(mode, instant) {
+function applyTheme(mode, instant, keep = true) {
   themeMode = mode;
   const t = resolveTheme(mode);
   if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
   document.querySelectorAll('[data-set-theme]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.setTheme === mode)));
-  try { localStorage.setItem(THEME_KEY, mode); } catch (e) { /* niet bewaard, wel gewisseld */ }
+  if (keep) { try { localStorage.setItem(THEME_KEY, mode); } catch (e) { /* niet bewaard, wel gewisseld */ } }
   APPS.forEach(a => a.retheme(instant));
   LIGHTS.forEach(l => l.retheme(instant));
   STREAMS.forEach(s => s.retheme());
@@ -41,9 +43,9 @@ window.STROOM_SET_THEME = (mode, from) => {
     t.finished.finally(() => document.documentElement.classList.remove('vt-theme'));
   } else go();
 };
-applyTheme(themeMode);
+applyTheme(themeMode, true, false);
 // Systeem en Met de zon mee volgen ook terwijl de pagina open staat
-matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeMode === 'system') applyTheme('system'); });
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeMode === 'system') applyTheme('system', false, false); });
 setInterval(() => { if (themeMode === 'sun') { const t = resolveTheme('sun'); if (t !== document.documentElement.dataset.theme) applyTheme('sun'); } }, 60000);
 document.querySelectorAll('[data-set-theme]').forEach(b => b.addEventListener('click', () => window.STROOM_SET_THEME(b.dataset.setTheme, b)));
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
