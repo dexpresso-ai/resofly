@@ -536,8 +536,13 @@
 :root[data-stroom] .sl-attn-t b{font:500 13px/1.35 var(--font-sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 :root[data-stroom] .sl-attn-t em{font-style:normal;font-size:12px;color:var(--sl-ink-3)}
 
+/* Is Vandaag smal (telefoon, staande tablet), dan eerst de groet, dan de
+   stroom en dan pas Nu: de stroom is het hart, niet de agenda. */
 @container sl-today (max-width:760px){
-  :root[data-stroom] .sl-hero{grid-template-columns:minmax(0,1fr)}
+  :root[data-stroom] .sl-hero{display:contents}
+  :root[data-stroom] .sl-hero-t{order:0}
+  :root[data-stroom] .sl-flow{order:1}
+  :root[data-stroom] .sl-now{order:2}
 }
 @media (max-width:1100px){
   :root[data-stroom] .sl-two{grid-template-columns:minmax(0,1fr)}
@@ -645,11 +650,6 @@
   /* Klant 360: op de telefoon staat de stroomlijn in de kop; de stukken
      staan onder Offertes en Facturen. Zo blijven de tabbladen hoog. */
   :root[data-stroom] .sl-cstream{display:none}
-  /* Vandaag: de groet, dan de stroom, dan pas Nu. */
-  :root[data-stroom] .sl-hero{display:contents}
-  :root[data-stroom] .sl-hero-t{order:0}
-  :root[data-stroom] .sl-flow{order:1}
-  :root[data-stroom] .sl-now{order:2}
   :root[data-stroom] .bottomnav.sl-dock .bn-item.active{background:var(--sl-gold-soft)}
   :root[data-stroom] .sl-card-f .sl-btn kbd{display:none}
   :root[data-stroom] .sl-deck-empty{grid-template-columns:auto minmax(0,1fr);justify-items:start;text-align:left;gap:2px 12px;padding:14px 16px}

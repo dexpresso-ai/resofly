@@ -80,7 +80,7 @@ de stroomlijn klein in de kop, zodat de tabbladen hoog blijven.
 
 **Telefoon.** Bovenin het eiland (*Vraag of zoek…*), dat openklapt tot een vel. Onderin een
 glazen dock met Vandaag, Werk, Agenda en Geld, en het orbje van Gerrie in het midden. Op
-Vandaag eerst de groet, dan de stroom, dan pas Nu.
+Vandaag eerst de groet, dan de stroom, dan pas Nu (ook op een staande tablet).
 
 **Inloggen.** Met Stroom aan ligt het licht ook achter het inlogscherm. De kaart is glas en
 het verhaal links volgt het thema.
@@ -143,12 +143,20 @@ houden de opbouw van Zenit, met het glas en de kleuren van Stroom.
   dat nog zo.
 - `tests/mobile/run.mjs` kent `--look=stroom`. Op Vandaag is de stroom het eerste item:
   gemeten 152px op de telefoon in Dag en Nacht, de grens ligt op 185px.
+- Het keuzemenu Weergave → Look staat in `zenit.css`, met een klein voorbeeld per look,
+  zodat het in Zenit en Stroom hetzelfde werkt.
 
 ## Controle
 
 - `npm run typecheck`, `npm test` (826 tests) en `node scripts/check-csp-hash.mjs`: groen.
 - `npm run build`: gebouwd.
-- `npm run test:mobile -- --theme=both`: voor Cockpit, Zenit en Stroom, zie hieronder.
+- `npm run test:mobile -- --theme=both`, voor alle drie de looks (`--look=zenit` en
+  `--look=stroom` erbij): per look 288 pagina's (telefoon, tablet en liggend, Dag en Nacht),
+  0 met problemen.
+  - Cockpit en Zenit meten als voorheen; Vandaag staat op 276px en 58px.
+  - Stroom: Vandaag 152px op de telefoon en liggend, 221px op de tablet (de stroom vóór
+    Nu zodra de kolom smal is). Klant 360 456px (grens 516px). De chrome op de telefoon
+    is 100px (grens 112px).
 - Contrast in de echte app, op Vandaag, met het WebGL-licht, in Dag en Nacht, op desktop en
   telefoon. Werkwijze: alle tekst verborgen, en per tekstvak het slechtste contrast tegen
   de echte pixels eronder.
