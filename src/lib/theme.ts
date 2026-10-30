@@ -18,10 +18,11 @@ export const THEME_STORAGE_KEY = 'resofly.theme';
 
 /** De grondkleur per thema, voor de adresbalk op mobiel (`meta[name=theme-color]`).
  *  Gelijk houden aan --bg-deep in globals.css (Belicht) en zenit.css (Zenit),
- *  en aan het bootstrap-script in index.html. */
-const THEME_COLOR: Record<'cockpit' | 'zenit', Record<Theme, string>> = {
+ *  aan --ground in stroom.css (Stroom) en aan het bootstrap-script in index.html. */
+const THEME_COLOR: Record<'cockpit' | 'zenit' | 'stroom', Record<Theme, string>> = {
   cockpit: { dark: '#09090A', light: '#F1F0EC' },
   zenit: { dark: '#08080A', light: '#EDEBE5' },
+  stroom: { dark: '#07070A', light: '#ECEAE4' },
 };
 
 export function loadThemeMode(): ThemeMode {
@@ -59,7 +60,9 @@ export function applyTheme(theme: Theme): void {
   // stijl wint van elke stylesheetregel, dus ze moeten hier meebewegen — anders
   // blijft de grond in het oude thema staan en valt tekst weg tegen de
   // achtergrond (contrast 1:1). Eén functie zet alles, anders lopen ze uiteen.
-  const color = THEME_COLOR[root.getAttribute('data-look') === 'zenit' ? 'zenit' : 'cockpit'][theme];
+  // Stroom draagt `data-look="zenit"` én `data-stroom` (zie look.ts).
+  const look = root.hasAttribute('data-stroom') ? 'stroom' : root.getAttribute('data-look') === 'zenit' ? 'zenit' : 'cockpit';
+  const color = THEME_COLOR[look][theme];
   root.style.colorScheme = theme;
   root.style.background = color;
 
@@ -122,7 +125,7 @@ export function setThemeMode(next: ThemeMode): void {
   emit();
 }
 
-/** Na een wissel van look (Cockpit ↔ Zenit) hoort de grondkleur mee te gaan. */
+/** Na een wissel van look (Cockpit, Zenit, Stroom) hoort de grondkleur mee te gaan. */
 export function reapplyTheme(): void {
   applyTheme(resolved);
 }

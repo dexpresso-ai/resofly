@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, CalendarDays, CalendarRange, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Landmark, ListTodo, Percent, Pin, Ticket as TicketIcon } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, Invoice, OrganizationContext, SavedReport, Task, TaskStatus, UUID } from '../types';
 import { coversDay, isOverdue, scopeTasks, taskDayKey, taskLastDayKey } from '../lib/workweek';
@@ -11,13 +11,16 @@ import { REPORT_SOURCES, formatMeasure, runReport } from '../lib/reporting';
 import { ProjectTimeline } from './ProjectTimeline';
 import { AgentApprovals } from '../components/AgentApprovals';
 import { DecisionFeed } from '../components/DecisionFeed';
-import type { DecisionTarget } from '../lib/decisions-api';
+import type { AiDecision, DecisionTarget } from '../lib/decisions-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { FULL_PERMISSIONS, isAccountantRole, type ModuleKey, type Permissions } from '../lib/permissions';
-import { useLook } from '../lib/look';
+import { isZenitFamily, useLook } from '../lib/look';
+import { computeStream, type StationId, type StreamItem } from '../lib/stroom';
+import { useNarrowViewport } from '../lib/useNarrowViewport';
 import { askGerrie } from '../components/GerrieChat';
 import { DayArc, type DayArcItem } from './DayArc';
 import { AttentionList, DayAgenda, MoreFold, ProjectGlance, WeekStrip } from './DashboardCalm';
+import { StreamPanel, StroomAttention, StroomHero } from './StroomToday';
 
 export type DashboardNavPage =
   | 'clients' | 'projects' | 'project-planning' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar' | 'gerrie';
@@ -120,6 +123,7 @@ export function Dashboard({
   canWriteGerrie = false,
   orgCanWrite = false,
   onOpenDecisionTarget,
+  openFinanceDoc,
 }: {
   data: AppData;
   organizationContext: OrganizationContext;
@@ -133,6 +137,8 @@ export function Dashboard({
   orgCanWrite?: boolean;
   /** Opent het item waar een kaart van de beslislijst over gaat. */
   onOpenDecisionTarget?: (target: DecisionTarget) => void;
+  /** Stroom: een kraal in de stroom opent zijn offerte of factuur. */
+  openFinanceDoc?: (kind: 'quote' | 'invoice', id: string) => void;
   /** Ingelogde gebruiker; bepaalt wat "Mijn" in de acties-blokken betekent. */
   currentUserId?: string | null;
   /** Mag dit lid taken afvinken? (organisatiebreed schrijfrecht én module 'projects'). */
@@ -152,7 +158,11 @@ export function Dashboard({
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayKey = formatISODate(startOfToday);
   // Zenit (Probeer Zenit in het accountmenu): de Dagboog in plaats van de cockpit.
+  // Stroom (Probeer Stroom): de stroom en de stapel; de rest deelt hij met Zenit.
   const [look] = useLook();
+  const calm = isZenitFamily(look);
+  const stroom = look === 'stroom';
+  const narrow = useNarrowViewport();
 
   // ── Modulerechten van dit teamlid ───────────────────────────────────────
   const showFinance = permissions.canRead('finance');
@@ -191,6 +201,24 @@ export function Dashboard({
   const outstandingTotal = sumInvoices(outstandingInvoices);
   const overdueInvoices = data.invoices.filter(invoiceOverdue);
   const overdueTotal = sumInvoices(overdueInvoices);
+
+  // ── De stroom (Stroom) ──────────────────────────────────────────────────
+  // Dezelfde statussen en dezelfde bruto-totalen als hierboven: "Factuur" in de
+  // stroom is Openstaand, "Betaald" is Omzet deze maand (stroom.test.ts).
+  const stream = useMemo(
+    () => (stroom && showFinance ? computeStream({ quotes: data.quotes, invoices: data.invoices, clients: data.clients, amount: lines => total(lines).total }) : null),
+    [stroom, showFinance, data.quotes, data.invoices, data.clients],
+  );
+  // Kaarten op de stapel die over een stuk in de stroom gaan: dat stuk krijgt een vonk.
+  const [dueDecisions, setDueDecisions] = useState<AiDecision[]>([]);
+  const onDue = useCallback((due: AiDecision[]) => setDueDecisions(due), []);
+  const sparkIds = useMemo(() => new Set(dueDecisions.flatMap(d => (d.entity_id ? [d.entity_id] : []))), [dueDecisions]);
+  const [linked, setLinked] = useState<string | null>(null);
+  const pickStream = (item: StreamItem) => {
+    if (openFinanceDoc) openFinanceDoc(item.kind, item.refId);
+    else openPage(item.kind === 'quote' ? 'quotes' : 'invoices');
+  };
+  const openStation = (id: StationId) => openPage(id === 'gesprek' || id === 'offerte' ? 'quotes' : 'invoices');
 
   // ── Operationeel ────────────────────────────────────────────────────────
   const newTickets = data.tickets.filter(t => t.status === 'new').length;
@@ -409,8 +437,32 @@ export function Dashboard({
     {canSeeClients && <Stat label="Actieve klanten" value={activeClients} onClick={() => openPage('clients')} />}
   </>;
 
+  const showDeck = Boolean(gerrieActions) && permissions.canRead('gerrie');
+  // In Stroom staan te late facturen en open offertes al als knoop in de stroom.
+  const stroomAttention = stream ? attention.filter(item => item.key !== 'overdue-inv' && item.key !== 'quotes') : attention;
+
   return <>
-    {look === 'zenit'
+    {stroom
+      ? <section className="sl-today" aria-label="Vandaag">
+          <StroomHero
+            eyebrow={dateLine(now)}
+            greeting={greetingFor(now)}
+            name={activeOrganization?.name ?? 'ResoFly'}
+            brief={heroLead({
+              events: showCalendar ? todaysEvents.length : null,
+              tasks: showProjects ? todayOpenCount : null,
+              // Te laat betaald staat als rode knoop in de stroom: één keer zeggen.
+              overdueInvoices: stream ? 0 : showFinance ? overdueInvoices.length : 0,
+            })}
+            items={showToday ? arcItems : []}
+            allDay={allDayTitles}
+            actions={showProjects ? <Button onClick={() => openPage('weekplanner')}>
+              <CalendarRange size={15} aria-hidden="true" /> Weekplanner <span className="zday-count" aria-label={pl(weekTasks.length, 'open actie deze week', 'open acties deze week')}>{weekTasks.length}</span>
+            </Button> : undefined}
+          />
+          {stream && <StreamPanel stream={stream} monthLabel={monthName} mini={narrow} sparkIds={sparkIds} onPick={pickStream} onStation={openStation} onHover={item => setLinked(item?.refId ?? null)} />}
+        </section>
+      : look === 'zenit'
       ? <section className="zday" aria-label="Vandaag">
           {/* Zenit: geen donker commandovlak, maar de dag zelf. De groet, dan de
               Dagboog (je dag als horizon) en de kerncijfers in één kaart. */}
@@ -469,7 +521,7 @@ export function Dashboard({
           verbergt zichzelf zodra de wachtrij leeg is. */}
       {/* De beslislijst staat nog vóór de wachtrij: kaarten die Gerrie uit zichzelf
           klaarzette, mét de feiten erbij. Verbergt zichzelf als er niets wacht. */}
-      {gerrieActions && permissions.canRead('gerrie') && <DecisionFeed
+      {!stroom && gerrieActions && permissions.canRead('gerrie') && <DecisionFeed
         organizationId={organizationId}
         canWrite={(module) => orgCanWrite && permissions.canWrite(module as ModuleKey)}
         handlers={gerrieActions}
@@ -477,6 +529,31 @@ export function Dashboard({
         onOpenTarget={onOpenDecisionTarget}
         onOpenCommandCenter={() => openPage('gerrie')}
       />}
+      {stroom && (showDeck || showToday) && <div className={`sl-two${showDeck && showToday ? '' : ' is-single'}`}>
+        {showDeck && gerrieActions && <DecisionFeed
+          organizationId={organizationId}
+          canWrite={(module) => orgCanWrite && permissions.canWrite(module as ModuleKey)}
+          handlers={gerrieActions}
+          variant="deck"
+          onOpenTarget={onOpenDecisionTarget}
+          onOpenCommandCenter={() => openPage('gerrie')}
+          onDue={onDue}
+          linkedEntityId={linked}
+        />}
+        {showToday && <DayAgenda
+          events={todaysEvents}
+          lingering={showProjects ? lingering.slice(0, 6) : []}
+          moreLingering={showProjects ? Math.max(0, lingering.length - 6) : 0}
+          tasks={showProjects ? todaysTasks : []}
+          todayKey={todayKey}
+          dayStartIso={dayStartIso}
+          renderTask={task => <TaskRow task={task} {...taskRowProps} />}
+          onOpenCalendar={showCalendar ? () => openPage('calendar') : undefined}
+          onOpenPlanner={() => openPage('weekplanner')}
+          tools={showProjects ? scopeToggle : null}
+        />}
+      </div>}
+      {stroom && <StroomAttention items={stroomAttention} />}
       {gerrieActions && permissions.canRead('gerrie') && <AgentApprovals
         organizationId={organizationId}
         canWrite={canWriteGerrie}
@@ -488,11 +565,12 @@ export function Dashboard({
         teamMembers={organizationContext.teamMembers ?? []}
       />}
 
-      {look === 'zenit'
+      {calm
         ? <div className="zcalm">
             {/* Onbewolkt: de woorden bij de Dagboog (Je dag), wat op je wacht
-                (Aandacht), en de rest achter één balk. Elk feit één keer. */}
-            <div className={`zcalm-grid${showToday ? '' : ' is-single'}`}>
+                (Aandacht), en de rest achter één balk. Elk feit één keer.
+                Stroom zette Je dag al naast de stapel. */}
+            {!stroom && <div className={`zcalm-grid${showToday ? '' : ' is-single'}`}>
               {showToday && <DayAgenda
                 events={todaysEvents}
                 lingering={showProjects ? lingering.slice(0, 6) : []}
@@ -506,7 +584,7 @@ export function Dashboard({
                 tools={showProjects ? scopeToggle : null}
               />}
               <AttentionList items={attention} />
-            </div>
+            </div>}
             {onboardingBlock}
             <MoreFold whisper={foldWhisper}>
               {showProjects && <div className="zcalm-grid">

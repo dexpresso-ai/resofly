@@ -6,7 +6,7 @@ import { askGerrie } from './GerrieChat';
 import { visibleSettingsTabs, type Page, type SidebarProps } from './Sidebar';
 import { FULL_PERMISSIONS, isAccountantRole, type Permissions } from '../lib/permissions';
 import { useThemeMode, type ThemeMode } from '../lib/theme';
-import { useLook } from '../lib/look';
+import { useLook, type Look } from '../lib/look';
 import { formatClock, sunTimes } from '../lib/sun';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
 
@@ -226,6 +226,12 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string; Icon: LucideIcon; swatch:
   { mode: 'system', label: 'Systeem', Icon: Monitor, swatch: 'sys' },
 ];
 
+const LOOK_OPTIONS: { look: Look; label: string; hint: string }[] = [
+  { look: 'zenit', label: 'Zenit', hint: 'rustig, met de nachtrail' },
+  { look: 'stroom', label: 'Stroom', hint: 'licht, glas en de stroom' },
+  { look: 'cockpit', label: 'Uit', hint: 'de vertrouwde look' },
+];
+
 function initialsOf(text: string): string {
   const parts = text.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   if (parts.length === 0) return '?';
@@ -264,7 +270,7 @@ export function ZenitNav({
 }: SidebarProps) {
   const narrow = useNarrowViewport();
   const [themeMode, setThemeMode, theme] = useThemeMode();
-  const [, setLook] = useLook();
+  const [look, setLook] = useLook();
   const view = usePopover();
   const account = usePopover();
 
@@ -526,9 +532,20 @@ export function ZenitNav({
       </div>
       {(themeMode === 'sun' || themeMode === 'system') && <p className="zpop-note">Nu {theme === 'light' ? 'Dag' : 'Nacht'}{themeMode === 'sun' ? `, tot zon ${theme === 'light' ? 'onder' : 'op'}` : ''}.</p>}
       <div className="zpop-sep" aria-hidden="true"/>
-      <div className="zpop-row">
-        <span className="zpop-row-t"><b>Zenit</b><small>De nieuwe voorkant. Uit = de vertrouwde look.</small></span>
-        <button type="button" role="switch" aria-checked="true" className="zswitch" onClick={() => { view.setOpen(false); setLook('cockpit'); }} aria-label="Zenit uitzetten"><span aria-hidden="true"/></button>
+      {/* De look: Zenit, of Stroom (Zenit met het licht en het glas). Uit = de
+          vertrouwde look (Cockpit). Zenit blijft kiesbaar tot Stroom de standaard is. */}
+      <div className="zpop-h">Look</div>
+      <div className="zpop-looks" role="group" aria-label="Look">
+        {LOOK_OPTIONS.map(option => <button
+          type="button"
+          key={option.look}
+          aria-pressed={look === option.look}
+          className="zlook"
+          onClick={event => { if (look === option.look) return; const origin = event.currentTarget; view.setOpen(false); withThemeReveal(origin, () => setLook(option.look)); }}
+        >
+          <span className={`zlook-sw is-${option.look}`} aria-hidden="true"/>
+          <span className="zlook-t"><b>{option.label}</b><small>{option.hint}</small></span>
+        </button>)}
       </div>
     </div>}
 

@@ -18,7 +18,7 @@ export type SearchResult =
   | { kind: 'invoice'; id: string; title: string; subtitle: string; item: Invoice }
   | { kind: 'supplier'; id: string; title: string; subtitle: string; item: Supplier };
 
-const kindMeta: Record<SearchResultKind, { label: string; badge: string; icon: LucideIcon }> = {
+export const kindMeta: Record<SearchResultKind, { label: string; badge: string; icon: LucideIcon }> = {
   client: { label: 'Klanten', badge: 'Klant', icon: Users },
   project: { label: 'Projecten', badge: 'Project', icon: FolderOpen },
   task: { label: 'Taken', badge: 'Taak', icon: CheckSquare },
@@ -67,7 +67,82 @@ function Highlight({ text, query }: { text: string; query: string }) {
 /** Klinkt dit als een vraag of een opdracht aan Gerrie, in plaats van een naam
  *  die je zoekt? Dan staat "Vraag Gerrie" bovenaan voorgeselecteerd. */
 const ASKS_GERRIE = /^(wie|wat|waar|wanneer|welke?|hoe|hoeveel|waarom|kun|kan|kunt|wil|zet|maak|stuur|plan|schrijf|vat|geef|toon|laat|boek|herinner|zoek uit)\b/i;
-const looksLikeQuestion = (text: string) => /\?\s*$/.test(text) || ASKS_GERRIE.test(text);
+export const looksLikeQuestion = (text: string) => /\?\s*$/.test(text) || ASKS_GERRIE.test(text);
+
+/**
+ * Zoekt in de werkruimte: klanten (ook op hun vrije velden), projecten, taken,
+ * tickets, notities, documenten, offertes, facturen en leveranciers. Gedeeld
+ * door de zoekbalk en het eiland van Stroom, zodat ze precies hetzelfde vinden.
+ * `term` is al getrimd en in kleine letters; onder de twee tekens: niets.
+ */
+export function searchWorkspace(data: AppData, term: string, canOpenPage?: (page: string) => boolean): SearchResult[] {
+  if (term.length < 2) return [];
+  const clientById = new Map(data.clients.map(c => [c.id, c]));
+  const projectById = new Map(data.projects.map(p => [p.id, p]));
+  // Ook gearchiveerde velden blijven doorzoekbaar: de waarden staan er nog.
+  const searchableFields = data.clientFieldDefinitions;
+  const out: SearchResult[] = [];
+
+  for (const c of data.clients) {
+    // De vrije velden tellen mee: wie een klant op zijn pakket of dossiernummer
+    // zoekt, hoort hem te vinden zonder eerst de klantkaart te openen.
+    if (matches(term, c.name, c.client_code, c.contact_name, c.email, c.phone, plain(c.notes), c.tags?.join(' '), customFieldsSearchText(c.custom_fields, searchableFields))) {
+      out.push({ kind: 'client', id: c.id, title: c.name, subtitle: [c.client_code, c.email].filter(Boolean).join(' · ') || 'Klant', item: c });
+    }
+  }
+  for (const p of data.projects) {
+    if (matches(term, p.name, plain(p.description))) {
+      const client = p.client_id ? clientById.get(p.client_id) : null;
+      out.push({ kind: 'project', id: p.id, title: p.name, subtitle: client?.name ?? (p.archived ? 'Gearchiveerd' : 'Project'), item: p });
+    }
+  }
+  for (const t of data.tasks) {
+    if (matches(term, t.title, plain(t.description), t.tags?.join(' '))) {
+      const project = t.project_id ? projectById.get(t.project_id) : null;
+      const client = t.client_id ? clientById.get(t.client_id) : null;
+      out.push({ kind: 'task', id: t.id, title: t.title, subtitle: project?.name ?? client?.name ?? 'Taak', item: t });
+    }
+  }
+  for (const t of data.tickets) {
+    if (matches(term, t.title, plain(t.description), plain(t.notes))) {
+      const client = t.client_id ? clientById.get(t.client_id) : null;
+      out.push({ kind: 'ticket', id: t.id, title: t.title, subtitle: client?.name ?? 'Ticket', item: t });
+    }
+  }
+  for (const n of data.notes) {
+    if (matches(term, n.title, plain(n.content), n.tags?.join(' '))) {
+      const ctx = n.client_id ? clientById.get(n.client_id)?.name : n.project_id ? projectById.get(n.project_id)?.name : null;
+      out.push({ kind: 'note', id: n.id, title: n.title || 'Notitie', subtitle: ctx ?? 'Notitie', item: n });
+    }
+  }
+  for (const d of data.documents) {
+    if (matches(term, d.title, plain(d.content))) {
+      const ctx = d.client_id ? clientById.get(d.client_id)?.name : d.project_id ? projectById.get(d.project_id)?.name : null;
+      out.push({ kind: 'document', id: d.id, title: d.title || 'Document', subtitle: ctx ?? 'Document', item: d });
+    }
+  }
+  for (const q of data.quotes) {
+    if (matches(term, q.number, plain(q.notes))) {
+      const client = q.client_id ? clientById.get(q.client_id) : null;
+      out.push({ kind: 'quote', id: q.id, title: `Offerte ${q.number}`, subtitle: [client?.name, euro(total(q.lines).total)].filter(Boolean).join(' · '), item: q });
+    }
+  }
+  for (const inv of data.invoices) {
+    if (matches(term, inv.number, plain(inv.notes))) {
+      const client = inv.client_id ? clientById.get(inv.client_id) : null;
+      out.push({ kind: 'invoice', id: inv.id, title: `Factuur ${inv.number}`, subtitle: [client?.name, euro(total(inv.lines).total)].filter(Boolean).join(' · '), item: inv });
+    }
+  }
+  for (const s of data.suppliers) {
+    if (matches(term, s.name, s.supplier_code, s.contact_name, s.email, s.city, s.vat_number)) {
+      out.push({ kind: 'supplier', id: s.id, title: s.name, subtitle: [s.supplier_code, s.city].filter(Boolean).join(' · ') || 'Leverancier', item: s });
+    }
+  }
+
+  // Voorbeeld: bij de boekhouder staan de debiteuren van de facturen in
+  // data.clients, maar de klantenkaart is dicht.
+  return canOpenPage ? out.filter(result => canOpenPage(KIND_PAGE[result.kind])) : out;
+}
 
 export function GlobalSearch({ data, onNavigate, canOpenPage, variant = 'field', onAsk }: {
   data: AppData;
@@ -88,77 +163,10 @@ export function GlobalSearch({ data, onNavigate, canOpenPage, variant = 'field',
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const clientById = useMemo(() => new Map(data.clients.map(c => [c.id, c])), [data.clients]);
-  // Ook gearchiveerde velden blijven doorzoekbaar: de waarden staan er nog.
-  const searchableFields = data.clientFieldDefinitions;
-  const projectById = useMemo(() => new Map(data.projects.map(p => [p.id, p])), [data.projects]);
 
   const term = query.trim().toLowerCase();
 
-  const results = useMemo<SearchResult[]>(() => {
-    if (term.length < 2) return [];
-    const out: SearchResult[] = [];
-
-    for (const c of data.clients) {
-      // De vrije velden tellen mee: wie een klant op zijn pakket of dossiernummer
-      // zoekt, hoort hem te vinden zonder eerst de klantkaart te openen.
-      if (matches(term, c.name, c.client_code, c.contact_name, c.email, c.phone, plain(c.notes), c.tags?.join(' '), customFieldsSearchText(c.custom_fields, searchableFields))) {
-        out.push({ kind: 'client', id: c.id, title: c.name, subtitle: [c.client_code, c.email].filter(Boolean).join(' · ') || 'Klant', item: c });
-      }
-    }
-    for (const p of data.projects) {
-      if (matches(term, p.name, plain(p.description))) {
-        const client = p.client_id ? clientById.get(p.client_id) : null;
-        out.push({ kind: 'project', id: p.id, title: p.name, subtitle: client?.name ?? (p.archived ? 'Gearchiveerd' : 'Project'), item: p });
-      }
-    }
-    for (const t of data.tasks) {
-      if (matches(term, t.title, plain(t.description), t.tags?.join(' '))) {
-        const project = t.project_id ? projectById.get(t.project_id) : null;
-        const client = t.client_id ? clientById.get(t.client_id) : null;
-        out.push({ kind: 'task', id: t.id, title: t.title, subtitle: project?.name ?? client?.name ?? 'Taak', item: t });
-      }
-    }
-    for (const t of data.tickets) {
-      if (matches(term, t.title, plain(t.description), plain(t.notes))) {
-        const client = t.client_id ? clientById.get(t.client_id) : null;
-        out.push({ kind: 'ticket', id: t.id, title: t.title, subtitle: client?.name ?? 'Ticket', item: t });
-      }
-    }
-    for (const n of data.notes) {
-      if (matches(term, n.title, plain(n.content), n.tags?.join(' '))) {
-        const ctx = n.client_id ? clientById.get(n.client_id)?.name : n.project_id ? projectById.get(n.project_id)?.name : null;
-        out.push({ kind: 'note', id: n.id, title: n.title || 'Notitie', subtitle: ctx ?? 'Notitie', item: n });
-      }
-    }
-    for (const d of data.documents) {
-      if (matches(term, d.title, plain(d.content))) {
-        const ctx = d.client_id ? clientById.get(d.client_id)?.name : d.project_id ? projectById.get(d.project_id)?.name : null;
-        out.push({ kind: 'document', id: d.id, title: d.title || 'Document', subtitle: ctx ?? 'Document', item: d });
-      }
-    }
-    for (const q of data.quotes) {
-      if (matches(term, q.number, plain(q.notes))) {
-        const client = q.client_id ? clientById.get(q.client_id) : null;
-        out.push({ kind: 'quote', id: q.id, title: `Offerte ${q.number}`, subtitle: [client?.name, euro(total(q.lines).total)].filter(Boolean).join(' · '), item: q });
-      }
-    }
-    for (const inv of data.invoices) {
-      if (matches(term, inv.number, plain(inv.notes))) {
-        const client = inv.client_id ? clientById.get(inv.client_id) : null;
-        out.push({ kind: 'invoice', id: inv.id, title: `Factuur ${inv.number}`, subtitle: [client?.name, euro(total(inv.lines).total)].filter(Boolean).join(' · '), item: inv });
-      }
-    }
-    for (const s of data.suppliers) {
-      if (matches(term, s.name, s.supplier_code, s.contact_name, s.email, s.city, s.vat_number)) {
-        out.push({ kind: 'supplier', id: s.id, title: s.name, subtitle: [s.supplier_code, s.city].filter(Boolean).join(' · ') || 'Leverancier', item: s });
-      }
-    }
-
-    // Voorbeeld: bij de boekhouder staan de debiteuren van de facturen in
-    // data.clients, maar de klantenkaart is dicht.
-    return canOpenPage ? out.filter(result => canOpenPage(KIND_PAGE[result.kind])) : out;
-  }, [term, data, clientById, projectById, canOpenPage]);
+  const results = useMemo<SearchResult[]>(() => searchWorkspace(data, term, canOpenPage), [term, data, canOpenPage]);
 
   const countByKind = useMemo(() => {
     const counts = {} as Record<SearchResultKind, number>;
