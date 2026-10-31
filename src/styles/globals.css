@@ -3438,6 +3438,8 @@ body::before{
 .bank-inst-logo{width:28px;height:28px;border-radius:6px;object-fit:contain;background:#fff;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
 .bank-inst-logo-fallback{color:var(--muted)}
 .bank-inst-name{flex:1;font-weight:600}
+.bank-psu{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+.bank-tag-test{color:var(--accent-ink);background:rgba(var(--accent-rgb),.1);border-color:rgba(var(--accent-rgb),.28)}
 
 /* ── Rapportbouwer (Statistieken) ─────────────────────────────────────── */
 .rb-page{display:flex;flex-direction:column;gap:16px}

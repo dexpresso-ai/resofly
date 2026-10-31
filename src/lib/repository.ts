@@ -98,6 +98,7 @@ import type {
   BankRule,
   BankRequisition,
   BankInstitution,
+  BankPsuType,
   BankReconciliation,
   ParsedBankStatement,
   CalendarNoteLinkInput,
@@ -1929,12 +1930,13 @@ export async function listBankInstitutions(organizationId: UUID, country?: strin
 /** Start een koppeling: maakt een requisition en geeft de consent-link terug. */
 export async function createBankRequisition(
   organizationId: UUID,
-  input: { institutionId: string; institutionName?: string; redirectUrl: string },
+  input: { institutionId: string; institutionName?: string; redirectUrl: string; psuType?: BankPsuType },
 ): Promise<{ link: string; reference: string }> {
   return invokeBankSync('createRequisition', organizationId, {
     institutionId: input.institutionId,
     institutionName: input.institutionName ?? null,
     redirectUrl: input.redirectUrl,
+    psuType: input.psuType ?? null,
   });
 }
 
@@ -1942,9 +1944,19 @@ export async function createBankRequisition(
  * Rondt de koppeling af na de redirect: wisselt de autorisatiecode in, koppelt de
  * rekeningen en synchroniseert. `state` is onze referentie (de bank geeft hem samen
  * met `code` terug op de redirect); daaruit leidt de server de organisatie af.
+ * Kwam de klant terug met `error` (afgebroken of geweigerd), dan legt de server
+ * dat bij de koppeling vast en is `status` 'cancelled' of 'error'.
  */
-export async function finalizeBankRequisition(organizationId: UUID, input: { code: string; state: string }): Promise<{ status: string; linked: number; imported: number }> {
-  return invokeBankSync('finalizeRequisition', organizationId, { code: input.code, state: input.state });
+export async function finalizeBankRequisition(
+  organizationId: UUID,
+  input: { code?: string; state: string; error?: string; errorDescription?: string },
+): Promise<{
+  status: string; linked: number; imported: number; error?: string | null;
+  syncErrors?: number; syncError?: string | null; alreadyLinked?: boolean;
+}> {
+  return invokeBankSync('finalizeRequisition', organizationId, {
+    code: input.code ?? null, state: input.state, error: input.error ?? null, errorDescription: input.errorDescription ?? null,
+  });
 }
 
 /** Haalt nieuwe transacties op voor één of alle gekoppelde rekeningen. */
