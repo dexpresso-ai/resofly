@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import {
   HttpError, assertModuleAccess, assertWriteRole, createAdminClient, isUuid,
   makeCors, parseAllowedOrigins, requireOrganizationAccess, requireUser,
@@ -566,6 +567,10 @@ async function sendShareEmail(input: {
     content: input.content,
   });
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  if (!(await emailQuotaAllows(admin, input.share.organization_id, 1))) {
+    return { ok: false, error: 'Deze werkruimte heeft de grens voor e-mail bereikt. De deellink staat klaar; stuur hem later opnieuw.' };
+  }
   try {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',

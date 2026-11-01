@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { HttpError, createAdminClient, isUuid, makeCors, parseAllowedOrigins } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
@@ -278,6 +279,8 @@ async function requestCode(tokenHash: string) {
     accentColor: (company?.brand_accent_color as string | null) || (company?.invoice_accent_color as string | null) || null,
     validSeconds: TRANSFER_CODE_TTL_SECONDS,
   });
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(admin, opened.transfer.organization_id, 1, (message, status) => new HttpError(message, status));
   const sent = await sendViaResend({
     from: sender.from,
     to: [opened.recipient.email],

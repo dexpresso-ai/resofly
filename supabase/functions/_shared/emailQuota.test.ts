@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { quotaRefusal } from './emailQuota.ts';
 
 test('binnen de grens: geen weigering', () => {
@@ -18,4 +18,26 @@ test('de vrije klantmail en de agenda-uitnodigingen tellen mee', () => {
   const calendar = readFileSync(new URL('./calendarEventWrite.ts', import.meta.url), 'utf8');
   assert.match(mail, /await takeEmailQuota\(supabaseAdmin, organizationId, 1,/);
   assert.match(calendar, /await takeEmailQuota\(supabaseAdmin, organizationId, current\.length,/);
+});
+
+test('elke verzendroute via Resend telt mee in het quotum', () => {
+  // Wie een nieuwe route maakt die mail verstuurt, moet het quotum aanroepen
+  // (takeEmailQuota, of emailQuotaAllows waar het wachten moet in plaats van
+  // falen). Alleen de generieke helper zelf (resend.ts) hoeft dat niet.
+  const root = new URL('../', import.meta.url);
+  const files: string[] = [];
+  for (const dir of readdirSync(root)) {
+    const full = new URL(`${dir}/`, root);
+    if (!statSync(full).isDirectory()) continue;
+    for (const name of readdirSync(full)) {
+      if (name.endsWith('.ts') && !name.endsWith('.test.ts')) files.push(`${dir}/${name}`);
+    }
+  }
+  const missing = files.filter((file) => {
+    if (file === '_shared/resend.ts' || file === '_shared/emailQuota.ts') return false;
+    const source = readFileSync(new URL(file, root), 'utf8');
+    const sends = source.includes('api.resend.com/emails') || /\bsendViaResend\(/.test(source);
+    return sends && !/takeEmailQuota\(|emailQuotaAllows\(/.test(source);
+  });
+  assert.deepEqual(missing, [], 'Roep het mailquotum aan vlak voor het versturen (zie _shared/emailQuota.ts).');
 });

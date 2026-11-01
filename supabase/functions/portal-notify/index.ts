@@ -27,6 +27,7 @@
 // ============================================================
 
 import { createAdminClient, HttpError } from '../_shared/edgeAuth.ts';
+import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 import { PORTAL_TICKET_TEMPLATE_KEYS } from '../_shared/emailTemplates/portalTicketUpdate.ts';
@@ -272,6 +273,9 @@ async function processTicket(
     const input = emailInput(mail, ticket, client, org, notesById);
     const rendered = renderEmailTemplate('portal.ticketUpdate', input);
     try {
+      // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+      // Op = deze mail terug in de wachtrij (zie 'Afronden' hieronder).
+      if (!(await emailQuotaAllows(admin, organizationId, 1))) throw new Error('Mailquotum van de organisatie is op; later opnieuw.');
       await paceSend();
       await sendViaResend(
         RESEND_API_KEY,

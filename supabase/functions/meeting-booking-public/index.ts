@@ -13,6 +13,7 @@
 // ============================================================
 
 import { supabaseAdmin } from '../_shared/calendarCore.ts';
+import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { listEvents } from '../_shared/calendarAvailability.ts';
 import { createEvent } from '../_shared/calendarEventWrite.ts';
 import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
@@ -284,7 +285,7 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     inviteMessage: link.invite_message,
     content,
   });
-  await sendResend(sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text).catch(err => console.error('client confirm mail', err));
+  await sendResend(link.organization_id, sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text).catch(err => console.error('client confirm mail', err));
 
   // Notificatie naar de eigenaar van de link.
   const ownerEmail = link.user_id ? await ownerEmailFor(link.user_id) : null;
@@ -292,7 +293,7 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     const subject = `Nieuwe boeking: ${link.title}`;
     const lines = [`${name || email} heeft geboekt:`, ...whenLines.map(w => `- ${w}`), '', `E-mail: ${email}`].join('\n');
     const html = `<p>${escapeHtml(name || email)} heeft geboekt:</p><ul>${whenLines.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul><p>E-mail: ${escapeHtml(email)}</p>`;
-    await sendResend(sender.from, [ownerEmail], undefined, subject, html, lines).catch(err => console.error('owner notify mail', err));
+    await sendResend(link.organization_id, sender.from, [ownerEmail], undefined, subject, html, lines).catch(err => console.error('owner notify mail', err));
   }
 }
 
@@ -325,7 +326,10 @@ async function ownerEmailFor(userId: string): Promise<string | null> {
   } catch { return null; }
 }
 
-async function sendResend(from: string, to: string[], replyTo: string | undefined, subject: string, html: string, text: string): Promise<void> {
+async function sendResend(organizationId: string, from: string, to: string[], replyTo: string | undefined, subject: string, html: string, text: string): Promise<void> {
+  // Quotum per organisatie (20261101050000). De boeking staat al vast; is het
+  // quotum op, dan blijft alleen deze mail achterwege (de aanroeper logt het).
+  if (!(await emailQuotaAllows(supabaseAdmin, organizationId, to.length))) throw new Error('Mailquotum van de organisatie is op.');
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
