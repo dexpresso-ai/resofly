@@ -7,8 +7,9 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering (sessie 2).** 33 fixes staan op staging (de workers nog met de hand uitrollen). Wat open is, staat
+> **Status: in uitvoering (sessie 3).** 33 fixes staan op staging (de workers nog met de hand uitrollen). Wat open is, staat
 > onderaan: vooral lage punten, en acties die alleen de eigenaar kan doen.
+> **Alle actiepunten, stap voor stap:** `ACTIEPUNTEN_BEVEILIGING_SAAS_2026-11-01.md`.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
 ## Werkwijze
@@ -589,6 +590,29 @@ pogingen van alle bezoekers samen gaat hij een uur dicht. Met een pincode van
 noemt nu het echte aantal minuten.
 
 Migratie `20261101160000` en `gallery-public`. Droog getest op staging.
+
+### Controles in sessie 3
+
+- **Kwetsbare packages (`npm audit`).** De productie-packages van de app en de
+  vier workers hebben geen meldingen. In de bouwketen is `source-map-js`
+  bijgewerkt naar 1.2.2. Vite 5 en esbuild hebben nog meldingen voor de lokale
+  dev-server; de oplossing is een major-upgrade (actiepunt 18).
+- **Geheimen in de repo.** De werkboom en alle 637 commits zijn doorzocht op
+  sleutels van Supabase (service-role), Stripe, Mollie, Resend, Anthropic, AWS,
+  Google en GitHub, en op private keys. Niets gevonden. In `.env.example`
+  staan alleen voorbeeldwaarden.
+- **Security-headers.** De CSP staat alleen eigen scripts toe (met een hash,
+  zonder `unsafe-inline`). Verder: framing verboden, nosniff, HSTS en een
+  referrer-beleid. Deellinkpagina's staan op noindex. Het punt R (wildcards)
+  blijft staan.
+- **Secrets op staging (alleen de namen bekeken).** De testschakelaars
+  `MOLLIE_ALLOW_MOCK`, `INVOICE_DEBUG_ERRORS`, `MAIL_ALLOW_LOCAL_DEV` en
+  `QUOTE_ALLOW_LOCAL_DEV` staan aan, zoals bedoeld op staging.
+  `MAIL_INBOUND_REQUIRE_SIGNATURE` staat er nog niet (actiepunt 3), en het
+  kapotte Resend-secret ook nog wel (actiepunt 4).
+- **Productie** is vanuit deze sessie niet bereikbaar. Alleen het
+  staging-project hangt aan dit account. De checklist voor productie staat in
+  het actiepuntendocument (actiepunt 10).
 
 ## Gevonden en nog open (volgorde = prioriteit)
 
