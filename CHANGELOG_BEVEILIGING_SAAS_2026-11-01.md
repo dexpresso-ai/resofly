@@ -411,6 +411,20 @@ Nu boekt de inbox niet vanzelf als de leverancier alleen op e-mailadres is
 herkend, of als het IBAN op de factuur niet aantoonbaar dat van de leverancier
 is. Zo'n factuur gaat langs een mens, met de reden erbij.
 
+### 25. Privé-afspraken en ICS-adressen van collega's (laag, opgelost)
+
+- **Koppelingen aan afspraken:** `calendar_event_links` legt een afspraak vast
+  aan een klant, project of taak. Elk teamlid met Agenda kon die lezen, ook
+  voor afspraken in de privé-agenda van een collega: titel, tijden en
+  gekoppelde klant. Wijzigen en weghalen kon ook, en daarmee de uren die eruit
+  volgen. Nu alleen bij een agenda die je mag zien, of als je de koppeling zelf
+  maakte.
+- **ICS-adres:** `calendar_sources.feed_url` is het geheime ICS-adres van een
+  agenda. Elk teamlid kon het lezen zodra de agenda gedeeld was. Nu is het niet
+  meer leesbaar voor de app.
+
+Beide in migratie `20261101110000`.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -424,7 +438,7 @@ is. Zo'n factuur gaat langs een mens, met de reden erbij.
 | M | laag | AI-budget: gelijktijdige aanroepen passeren samen de controle (die telt pas na de aanroep), en mislukte aanroepen tellen niet. Het plafond zelf staat er (fix 21). | aiBudget.ts |
 | N | middel | De productie-config van de workers wijst naar het staging-project van Supabase. | workers/*/wrangler.toml |
 | O | middel | De oude `cloudflare-worker/` (zonder de bewaking van media-api) wordt nog in de docs genoemd. Controleer of hij nog draait, en verwijder hem. | cloudflare-worker, README |
-| P | laag | `calendar_event_links` toont titels van privé-afspraken van collega's; `calendar_sources.feed_url` is leesbaar. | RLS |
+| P | laag | Uren uit een koppeling aan een privé-afspraak nemen de titel over in `time_entries.description`. En `meeting_recordings` toont transcripties van vergaderingen uit privé-agenda's aan elk teamlid met Agenda. Is dat zo bedoeld? | RLS |
 | Q | laag | Interne foutteksten in publieke functies; ACAO `*` bij meeting-booking-public; contract-vraag zonder limiet; pin-blokkade per galerij. | publieke functies |
 | R | laag | CSP met wildcards (`*.supabase.co`, `*.workers.dev`, `img-src https:`), en afbeeldingen in inkomende mail laden vanzelf. | frontend |
 | T | laag | Chatdeelname blijft na vertrek staan; `p_created_by` in boekingsfuncties komt van de aanroeper. | RLS/RPC |
