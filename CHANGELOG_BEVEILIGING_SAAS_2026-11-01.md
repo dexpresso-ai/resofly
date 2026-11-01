@@ -425,6 +425,16 @@ is. Zo'n factuur gaat langs een mens, met de reden erbij.
 
 Beide in migratie `20261101110000`.
 
+### 26. Boekingen op naam van een collega, en chatleden toevoegen (laag, opgelost)
+
+- **Boekingen:** de boekingsfuncties namen `p_created_by` van de aanroeper over.
+  Wie mocht boeken, kon zo een boeking op naam van een collega zetten, ook in
+  het XAF-auditbestand. Nu zet een trigger de maker op de ingelogde gebruiker.
+- **Teamchat:** `chat_add_participants` vroeg alleen dat je deelnemer was. Nu
+  ook schrijfrecht op Teamchat, en daarmee een actief lidmaatschap.
+
+Beide in migratie `20261101120000`.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -441,7 +451,7 @@ Beide in migratie `20261101110000`.
 | P | laag | Uren uit een koppeling aan een privé-afspraak nemen de titel over in `time_entries.description`. En `meeting_recordings` toont transcripties van vergaderingen uit privé-agenda's aan elk teamlid met Agenda. Is dat zo bedoeld? | RLS |
 | Q | laag | Interne foutteksten in publieke functies; ACAO `*` bij meeting-booking-public; contract-vraag zonder limiet; pin-blokkade per galerij. | publieke functies |
 | R | laag | CSP met wildcards (`*.supabase.co`, `*.workers.dev`, `img-src https:`), en afbeeldingen in inkomende mail laden vanzelf. | frontend |
-| T | laag | Chatdeelname blijft na vertrek staan; `p_created_by` in boekingsfuncties komt van de aanroeper. | RLS/RPC |
+| T | laag | `chat_unread_counts()` geeft een oud-teamlid nog tellingen van zijn oude gesprekken (alleen aantallen; lezen is dicht). | RPC |
 | U | laag | De review van de 131 functies die elke ingelogde gebruiker kan aanroepen: de scan op ontbrekende controles is gedaan (fix 16). Nog doen: per functie nalopen of elk id-argument bij de organisatie hoort, en of de juiste module wordt gevraagd. De dumps maak je met de queries uit de commits van deze ronde. | db |
 
 ## Checklist voor productie
