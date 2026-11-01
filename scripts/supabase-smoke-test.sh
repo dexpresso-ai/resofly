@@ -99,6 +99,38 @@ SQL
     echo "FOUT   boekhouder-hek: geen module gate en geen hek op: $fence_gaps (zie apply_accountant_fence)"
     if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::Boekhouder-hek ontbreekt op: $fence_gaps"; fi
   fi
+
+  # De publieke sleutel (migratie 20261101000000): anon heeft in public geen
+  # rechten meer, behalve SELECT op billing_plans, en roept geen functie aan
+  # (op die van extensies als pg_trgm na). Een nieuwe tabel of functie die
+  # anon toch weer openzet, valt hier op.
+  anon_open="$(PGPASSWORD="$SUPABASE_DB_PASSWORD" PGSSLMODE="${PGSSLMODE:-require}" PGCONNECT_TIMEOUT=20 \
+    psql "$pooler" -X -q -t -A -v ON_ERROR_STOP=1 <<'SQL'
+select case when not exists (select 1 from supabase_migrations.schema_migrations where version = '20261101000000') then '-'
+       else coalesce((
+         select string_agg(x, ', ') from (
+           select distinct 'tabel ' || table_name as x
+             from information_schema.role_table_grants
+            where grantee = 'anon' and table_schema = 'public'
+              and not (table_name = 'billing_plans' and privilege_type = 'SELECT')
+           union all
+           select 'functie ' || p.oid::regprocedure::text
+             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'execute')
+              and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass
+                                and d.objid = p.oid and d.deptype = 'e')
+         ) open), '') end;
+SQL
+)"
+  if [ "$anon_open" = "-" ]; then
+    echo "-      publieke sleutel: overgeslagen (migratie 20261101000000 nog niet toegepast)"
+  elif [ -z "$anon_open" ]; then
+    echo "ok     publieke sleutel: anon heeft geen rechten in public (alleen de prijsplannen)"
+  else
+    problems=$((problems + 1))
+    echo "FOUT   publieke sleutel: anon heeft weer rechten op: $(echo "$anon_open" | head -c 600)"
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::anon heeft weer rechten in public"; fi
+  fi
 else
   echo "-      de bezorger met cron-secret: overgeslagen (geen SUPABASE_DB_PASSWORD of psql)"
 fi
