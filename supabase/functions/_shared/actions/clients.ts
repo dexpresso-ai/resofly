@@ -120,11 +120,21 @@ export const CLIENT_ACTIONS: ActionDef[] = [
         e_invoice_channel: patch.e_invoice_channel === 'mollie' ? 'e-factuur via Mollie' : 'e-factuur per e-mail',
         status: 'status', value_eur: 'klantwaarde', tags: 'labels', color: 'kleur', follow_up: 'opvolgdatum',
       };
+      // Waar facturen heen gaan, is een financiële keuze: alleen met schrijfrecht
+      // op Financiën, en altijd langs een mens. Anders kon een sleutel of een
+      // gekoppelde AI (ook na een geïnjecteerde mail) elke volgende factuur
+      // ongemerkt naar een ander adres laten gaan.
+      const touchesEInvoicing = ['e_invoicing_enabled', 'e_invoice_email', 'e_invoice_channel'].some((key) => key in patch);
+      if (touchesEInvoicing) assertFieldWritable(ctx, 'finance', 'e_invoice_email', 'Financiën');
       return {
         title: `Klantgegevens bijwerken: ${client.name}`,
         sub: joinShort(Object.keys(patch).map((k) => labels[k] ?? k)),
         kind: 'work',
         payload: { client_id: clientId, client_name: client.name, patch },
+        ...(touchesEInvoicing ? {
+          risk: 'high' as const,
+          warning: 'Hiermee verandert waar de facturen van deze klant heen gaan.',
+        } : {}),
       };
     },
   },
