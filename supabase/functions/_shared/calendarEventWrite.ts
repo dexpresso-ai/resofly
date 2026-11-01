@@ -38,6 +38,7 @@ import {
 } from './calendarCore.ts';
 import { nativeRowToBaseEvent } from './calendarAvailability.ts';
 import { cancelConflictingBookingSlots, cancelConflictingBookingSlotsForNativeEvent } from './meetingBookingSync.ts';
+import { takeEmailQuota } from './emailQuota.ts';
 
 // ── Nieuwe-event-invoer normaliseren ────────────────────────────────────────
 
@@ -389,6 +390,9 @@ export async function applyAttendees(organizationId: string, source: CalendarSou
   if (!ctx) return;
 
   if (current.length) {
+    // Elke uitnodiging is een mail via het gedeelde Resend-account: tel mee in
+    // het quotum van de organisatie (20261101050000).
+    await takeEmailQuota(supabaseAdmin, organizationId, current.length, (message) => new Error(message));
     const ics = buildEventIcs(eventRow, current, ctx, 'REQUEST');
     for (const att of current) {
       await sendInviteEmail(ctx.from, att.email, `Uitnodiging: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'REQUEST').catch(err => console.error('invite send', att.email, err));

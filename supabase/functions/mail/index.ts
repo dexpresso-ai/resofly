@@ -8,9 +8,10 @@ import { renderTransferBlockHtml, renderTransferBlockText } from '../_shared/ema
 import { issueRecipientLink, loadCompanyForMail, recordTransferEvent } from '../_shared/fileTransferServer.ts';
 import { domainParents, domainsOverlap, normalizeDomainName, senderDomain } from '../_shared/domainOverlap.ts';
 import { assertTeamTestRecipient } from '../_shared/testRecipient.ts';
+import { takeEmailQuota } from '../_shared/emailQuota.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
-type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
+type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -882,6 +883,10 @@ async function sendClientEmail(
     bodyHtml: (bodyHtmlInput || escapeHtml(bodyTextInput).replace(/\n/g, '<br/>')) + transferBlockHtml,
   });
   const text = (bodyTextInput || htmlToText(bodyHtmlInput)) + (transferBlockText ? `\n${transferBlockText}` : '');
+
+  // Het quotum per organisatie (20261101050000) vóór het versturen: één
+  // organisatie mag het gedeelde Resend-account niet voor iedereen opmaken.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new MailHttpError(message, status));
 
   // 4. Versturen via Resend; bij een providerfout de rij als 'failed' markeren.
   let providerEmailId = '';
