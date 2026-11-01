@@ -71,3 +71,42 @@ test('de controle herkent een functie zonder revoke', () => {
   const fixed = `${sql}\nrevoke all on function public.voorbeeld(uuid) from public, anon;`;
   assert.equal(revokesAnon(fixed, 'voorbeeld'), true);
 });
+
+/**
+ * Sinds 20261101000000 heeft de publieke sleutel (anon) in schema public
+ * nergens meer rechten, behalve SELECT op billing_plans. Een latere migratie die
+ * anon weer iets geeft, zet dat stil terug open — voor iedereen op internet.
+ */
+const ANON_ZERO_MIGRATION = '20261101000000';
+
+function grantsToAnon(sql: string): string[] {
+  const found: string[] = [];
+  const re = /grant\s+[^;]*?\bto\s+[^;]*\banon\b[^;]*;/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(sql))) found.push(match[0].replace(/\s+/g, ' ').trim());
+  return found;
+}
+
+test('de anon-migratie zelf staat er', () => {
+  const names = readdirSync(MIGRATIONS_DIR);
+  assert.ok(names.some((name) => name.startsWith(`${ANON_ZERO_MIGRATION}_`)), 'migratie 20261101000000 ontbreekt');
+});
+
+test('geen migratie na 20261101000000 geeft anon nog rechten', () => {
+  const offenders: string[] = [];
+  for (const file of readdirSync(MIGRATIONS_DIR).filter((name) => /^\d{14}_.+\.sql$/.test(name)).sort()) {
+    if (file.slice(0, 14) < ANON_ZERO_MIGRATION) continue;
+    const sql = readFileSync(new URL(file, MIGRATIONS_DIR), 'utf8')
+      .split('\n').filter((line) => !line.trim().startsWith('--')).join('\n');
+    for (const grant of grantsToAnon(sql)) {
+      if (/^grant select on (?:table )?public\.billing_plans to anon;$/i.test(grant)) continue;
+      offenders.push(`${file}: ${grant}`);
+    }
+  }
+  assert.deepEqual(offenders, [], 'anon hoort nergens rechten te krijgen; laat de pagina via een edge function lopen.');
+});
+
+test('de controle herkent een grant aan anon', () => {
+  assert.deepEqual(grantsToAnon('grant select on public.clients to anon, authenticated;'), ['grant select on public.clients to anon, authenticated;']);
+  assert.deepEqual(grantsToAnon('grant execute on function public.x() to authenticated;'), []);
+});

@@ -3465,8 +3465,10 @@ function Login() {
     // op precies deze pagina — anders is het verzoek na het inloggen verdwenen en
     // staat de gebruiker zonder uitleg op zijn dashboard.
     const redirectTo = readAuthorizeRequest() ? window.location.href : window.location.origin;
-    const { error } = await supabaseAuth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo, shouldCreateUser: false } });
-    if (error) setError(error.message); else setSent(true);
+    const { error } = await supabaseAuth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: redirectTo, shouldCreateUser: false } });
+    // "Signups not allowed" = onbekend adres. Dat zeggen we niet: anders is dit
+    // scherm een opzoekdienst voor wie er een account heeft (zoals in het portaal).
+    if (error && !/signup|not allowed|not found/i.test(error.message)) setError(error.message); else setSent(true);
   }
   // Op een groot scherm staat links het verhaal (het merk en de weg van klant
   // tot betaling), rechts het formulier; op de telefoon alleen het formulier.
@@ -3483,7 +3485,7 @@ function Login() {
         <li><span><CheckCircle2 /></span><small>Betaald</small></li>
       </ol>
     </section>
-    <div className="login-card"><div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Je <span className="serif">werkruimte</span></h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div>
+    <div className="login-card"><div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Je <span className="serif">werkruimte</span></h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Heeft dit adres een werkruimte, dan staat de link nu in je mailbox. Open hem in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div>
   </div></main>;
 }
 
