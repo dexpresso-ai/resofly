@@ -52,8 +52,9 @@ import { buildAnnualAccountsDocument, buildPublicationDocument } from '../_share
 
 const admin = createAdminClient();
 const cors = makeCors(
-  parseAllowedOrigins([Deno.env.get('BILLING_ALLOWED_RETURN_ORIGINS'), Deno.env.get('APP_ALLOWED_ORIGINS')]),
-  (Deno.env.get('ALLOW_LOCAL_DEV') ?? '1') === '1',
+  parseAllowedOrigins([Deno.env.get('BILLING_ALLOWED_RETURN_ORIGINS'), Deno.env.get('APP_ALLOWED_ORIGINS'), Deno.env.get('APP_PUBLIC_URL')]),
+  // localhost en verzoeken zonder Origin alleen als je dat lokaal aanzet (ALLOW_LOCAL_DEV=1).
+  (Deno.env.get('ALLOW_LOCAL_DEV') ?? '0') === '1',
 );
 
 // Dezelfde worker als de offerte- en contractsnapshots; alleen de route en het
