@@ -290,6 +290,23 @@ weggegooid.
 tekent, en zet dan `MAIL_INBOUND_REQUIRE_SIGNATURE=true`. Nu volstaat het
 gedeelde secret alleen, zonder controle op inhoud of tijd.
 
+### 19. Een rem op de portal-login (middel, opgelost)
+
+`portal-login` draait zonder login. Hij maakte zonder grens een auth-account
+voor elk adres dat bij een klant hoort. Een script kon zo onbeperkt adressen
+proberen, via de reactietijd raden welke bij een klant horen, en voor elk
+bekend adres een account en een inlogmail laten maken.
+
+Nu telt `portal-login` per afzender (gehasht IP, 20 per 10 minuten) en per
+e-mailadres (gehasht, 5 per uur). Boven de grens geeft hij hetzelfde antwoord,
+maar doet hij niets. De teller is eigen (migratie `20261101080000`), los van
+die van de openbare API.
+
+**Aanbevolen:** `rate_limit_email_sent` staat in Supabase Auth op 50 per uur
+voor het hele project. Voor een SaaS met veel gebruikers is dat krap: bij
+drukte, of bij misbruik, krijgt niemand nog een inloglink. Verhoog die waarde,
+samen met een captcha (zie **Aanbevolen**).
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -299,7 +316,6 @@ gedeelde secret alleen, zonder controle op inhoud of tijd.
 | E | middel | WOPI en office kunnen elk bestand van de eigen organisatie overschrijven, ook de vastgelegde factuur- en contract-PDF's. | workers/media-api |
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
 | G | middel | Inkomende mail: de afzender is niet geverifieerd, want DMARC wordt niet doorgegeven. De factuur-inbox boekt automatisch op het From-adres. De aliasroute vertrouwt de `.eml` nog. De reply-route is opgelost (fix 18). | workers/email-inbound, mail-inbound, invoiceInbox |
-| H | middel | portal-login: geen rate limit, en door de timing te raden welke adressen klant zijn. | portal-login |
 | I | laag | mcp-oauth: een fout-redirect naar een geregistreerd adres als `response_type` ontbreekt. Liever een foutpagina tonen. Registratie zelf is begrensd (fix 17). | mcp-oauth |
 | J | middel | De agenda-OAuth-callback is niet gekoppeld aan de sessie (open sinds 26 september). | calendar-integrations |
 | K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
