@@ -23,12 +23,14 @@ punt K) verwijzen daarheen.
 | 5 | JWT-secret van staging vernieuwen | Eigenaar | Nu |
 | 6 | CI-secrets alleen voor branch `staging` | Eigenaar | Deze week |
 | 7 | Oude media-worker opruimen | Eigenaar | Deze week |
+| 24 | Mail van het platformdomein beveiligen (SPF, DKIM, DMARC) | Eigenaar | Deze week |
 | 8 | Productie-config van de workers | Eigenaar + code | Vóór productie |
 | 9 | Eigen office-server voor productie | Eigenaar | Vóór productie |
 | 10 | Supabase-productieproject inrichten | Eigenaar | Vóór productie |
 | 11 | Captcha op inloggen | Eigenaar + code | Vóór productie |
 | 12 | Supabase Pro voor productie | Eigenaar | Vóór productie |
 | 13 | Buiten de code: AVG, back-ups, monitoring | Eigenaar | Vóór productie |
+| 25 | Tweestapsverificatie (MFA) aanbieden | Code + keuze | Vóór productie |
 | 14 | Privé-afspraken en opnames (punt P) | Keuze | Wanneer je wilt |
 | 15 | Deellink van een galerij (punt Q) | Keuze | Wanneer je wilt |
 | 16 | Campagne-HTML saneren (punt A) | Keuze | Wanneer je wilt |
@@ -40,7 +42,8 @@ punt K) verwijzen daarheen.
 | 22 | CSP per omgeving (punt R) | Code | Vóór productie |
 | 23 | Maker op de overige tabellen (punt U) | Code | Later |
 
-Na elke uitrol: de **rooktest** onderaan.
+Nummer 24 en 25 kwamen er later bij en staan op hun plek in de tabel. Na elke
+uitrol: de **rooktest** onderaan.
 
 ---
 
@@ -193,6 +196,29 @@ hij een tweede deur naar dezelfde bestanden.
 **Klaar als:** alleen `resofly-media-api` en `resofly-media-api-staging`
 over zijn.
 
+### 24. Mail van het platformdomein beveiligen (eigenaar)
+
+**Waarom:** alle organisaties versturen via het platformdomein. Zonder een
+strikte DMARC-record kan iedereen mail sturen die eruitziet alsof hij van
+ResoFly komt: phishing richting de klanten van je klanten, met jouw naam.
+Vanuit deze sessie kon ik de DNS niet opvragen.
+
+**Stappen:**
+1. Controleer de records, met `dig` of MXToolbox:
+   - `dig TXT mail.resofly.com` (SPF: de include van Resend);
+   - `dig TXT resend._domainkey.mail.resofly.com` (DKIM);
+   - `dig TXT _dmarc.resofly.com` (DMARC).
+
+   Doe dat voor elk domein waarvan je verstuurt.
+2. DMARC: begin met `v=DMARC1; p=none; rua=mailto:dmarc@resofly.com`, zodat
+   je rapporten krijgt. Ga na een paar weken zonder onbekende afzenders naar
+   `p=quarantine`, en daarna naar `p=reject`.
+3. Een domein dat geen mail verstuurt (bijvoorbeeld `resofly.nl`, als dat
+   klopt): `v=spf1 -all`, en DMARC met `p=reject`.
+
+**Klaar als:** DMARC op `p=quarantine` of `p=reject` staat, en de rapporten
+alleen Resend en je eigen mailserver tonen.
+
 ---
 
 ## Vóór productie
@@ -341,6 +367,26 @@ Hoort bij veilig als SaaS werken, maar staat buiten deze codereview:
 - **Back-ups:** PITR aan (actie 12), en één keer een terugzetting oefenen.
 - **Monitoring:** meldingen bij een stijging in 401/403/429/5xx van de edge
   functions en workers, en bij een ongewoon hoog AI-verbruik of mailvolume.
+
+### 25. Tweestapsverificatie (MFA) aanbieden (code + keuze)
+
+**Waarom:** inloggen gaat alleen met een magic link. Wie de mailbox van een
+teamlid heeft, heeft dus ook diens administratie: facturen, bankkoppeling,
+leden. TOTP staat in Supabase al aan, maar de app biedt het nergens aan.
+
+**Aanpak:**
+1. In de app: een tweede factor instellen met een QR-code
+   (`supabase.auth.mfa.enroll`), en bij het inloggen de code vragen
+   (`challenge` en `verify`).
+2. Keuze: verplicht voor eigenaren, beheerders en boekhouders, en vrijwillig
+   voor de rest.
+3. Afdwingen in de database. Gevoelige handelingen alleen met `aal2` in het
+   JWT: schrijven in Financiën, leden en rollen beheren, API-sleutels en
+   koppelingen. Dat kan in `can_write_module` en `can_admin_org`, voor wie
+   een factor heeft.
+
+**Klaar als:** een eigenaar zonder tweede factor wordt gevraagd die in te
+stellen, en met alleen een magic link geen facturen of leden kan wijzigen.
 
 ---
 

@@ -623,6 +623,21 @@ Buitenstaanders, gebruikers zonder login en andere kanaalnamen niet.
 - **De maker als recht (punt U).** Waar `created_by` toegang geeft, eist de
   database bij aanmaken al dat jij het bent, of schrijft alleen de server
   (Gerrie-gesprekken). U blijft dus laag.
+- **Auth-instellingen op staging.** Alles in orde:
+  - tokens 1 uur geldig, refresh-tokens roteren;
+  - een e-mailadres wijzigen vraagt bevestiging van beide adressen;
+  - inloglinks 1 uur geldig, met een code van 8 tekens;
+  - zelf registreren staat uit, anonieme gebruikers ook;
+  - het wachtwoordbeleid uit fix 2.
+
+  Open, al op de actielijst: captcha, Google als inlogmethode, de maillimiet,
+  en de sessieduur (Pro).
+- **MFA.** TOTP staat aan in Supabase, maar de app biedt het niet aan. Inloggen
+  leunt dus volledig op de mailbox (actiepunt 25).
+- **Uitnodigingen.** Alleen het bevestigde e-mailadres waarvoor de uitnodiging
+  is gemaakt kan hem aannemen, en niet na de vervaldatum.
+- **Mail-DNS.** SPF, DKIM en DMARC van het platformdomein kon ik niet opvragen.
+  De container heeft geen DNS (actiepunt 24).
 
 - **Kwetsbare packages (`npm audit`).** De productie-packages van de app en de
   vier workers hebben geen meldingen. In de bouwketen is `source-map-js`
@@ -684,17 +699,18 @@ En verder, voor productie:
 
 ## Verder in de volgende sessie
 
-1. Lees deze file en `git log --oneline staging -20`.
-2. **Voor de eigenaar:**
-   - rol de media-worker uit (fix 6, 22 en 32), en de office-server (fix 28);
-   - de punten K, N en O;
-   - de checklist voor productie.
-3. **Nog open in de code** (laag, of middel zonder spoed), in deze volgorde:
-   - L: een bytes-teller in de media-worker;
-   - M: het AI-budget reserveren vóór de aanroep;
-   - G: de DMARC-uitslag doorgeven aan `mail-inbound`;
-   - R: een CSP per omgeving;
-   - U: de maker op de overige tabellen.
+1. Lees deze file, `ACTIEPUNTEN_BEVEILIGING_SAAS_2026-11-01.md` en
+   `git log --oneline staging -20`.
+2. **Voor de eigenaar:** actiepunt 1 t/m 13 en 24 van de actielijst (workers
+   uitrollen, secrets, GitHub, Cloudflare, productie, DNS).
+3. **Nog open in de code**, in deze volgorde:
+   - 25: MFA (vraagt eerst een keuze);
+   - 22: CSP per omgeving, samen met de eigen domeinen;
+   - 19: bytes-teller in de media-worker;
+   - 20: AI-budget reserveren;
+   - 21: DMARC-uitslag;
+   - 23: maker op de overige tabellen;
+   - 18: Vite-upgrade.
 4. Elke databasefix eerst droog testen op staging: een transactie die eindigt
    met `raise exception`. Zie de commits van deze ronde.
 
