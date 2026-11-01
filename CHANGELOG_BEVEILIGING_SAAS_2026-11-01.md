@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering (sessie 2).** 32 fixes staan op staging (de workers nog met de hand uitrollen). Wat open is, staat
+> **Status: in uitvoering (sessie 2).** 33 fixes staan op staging (de workers nog met de hand uitrollen). Wat open is, staat
 > onderaan: vooral lage punten, en acties die alleen de eigenaar kan doen.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
@@ -574,6 +574,22 @@ die het team ziet. Dat staat bij punt U.
 
 **Actie:** `npm run deploy:staging` (en daarna productie) in `workers/media-api`.
 
+### 33. Pincode van een galerij: blokkeren per bezoeker (laag, opgelost)
+
+Na 8 foute pincodes ging de hele galerij een kwartier op slot, voor iedereen.
+Omdat de teller niet terugging, was daarna één foute poging genoeg. Wie de
+link had (een doorgestuurde mail is genoeg), kon zo de echte klant blijvend
+buitensluiten.
+
+Nu telt de database per bezoeker: een hash van het token en het IP-adres. Het
+adres zelf wordt niet opgeslagen. Na 8 foute pogingen gaat alleen die bezoeker
+een kwartier op slot. Voor de galerij als geheel blijft een rem: per 100 foute
+pogingen van alle bezoekers samen gaat hij een uur dicht. Met een pincode van
+6 tot 8 cijfers blijft raden vanaf veel adressen zo maanden werk. De melding
+noemt nu het echte aantal minuten.
+
+Migratie `20261101160000` en `gallery-public`. Droog getest op staging.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -587,7 +603,7 @@ die het team ziet. Dat staat bij punt U.
 | N | middel | De productie-config van de workers wijst naar het staging-project van Supabase. | workers/*/wrangler.toml |
 | O | middel | De oude `cloudflare-worker/` heeft niet de bewaking van media-api. README en `.env.example` wijzen er niet meer naar (sessie 2). **Actie voor de eigenaar:** controleer in Cloudflare of `resofly-media` of `resofly-media-staging` nog draait, verwijder die, en daarna de map. | cloudflare-worker |
 | P | laag | Uren uit een koppeling aan een privé-afspraak nemen de titel over in `time_entries.description`. En `meeting_recordings` toont transcripties van vergaderingen uit privé-agenda's aan elk teamlid met Agenda. Is dat zo bedoeld? | RLS |
-| Q | laag | Wie de link van een galerij heeft, kan met foute pincodes de echte klant buitensluiten, want de blokkade geldt per galerij en niet per bezoeker. `galleries.share_token` staat onversleuteld in de database. `meeting-booking-public` stuurt `Access-Control-Allow-Origin: *`; dat is ongevaarlijk, want de token zit in de body. | publieke functies |
+| Q | laag | `galleries.share_token` staat onversleuteld in de database, zodat het team de link later opnieuw kan kopiëren. Met dat token erbij is de pincode-hash snel terug te rekenen; de pincode beschermt dus tegen een doorgestuurde link, niet tegen wie de database kan lezen. `meeting-booking-public` stuurt `Access-Control-Allow-Origin: *`; dat is ongevaarlijk, want de token zit in de body. De blokkade per galerij is opgelost (fix 33). | publieke functies |
 | R | laag | CSP met wildcards: `*.supabase.co`, `*.workers.dev` en `img-src https:`. Zet per omgeving de exacte hosts (`<ref>.supabase.co`, de eigen worker-hosts); dat vraagt aparte `_headers` per omgeving of een build-stap. | public/_headers |
 | U | laag | De review van de functies die elke ingelogde gebruiker kan aanroepen is klaar (fix 16, 30 en 31). Rest: buiten de boekhouding vult de app `created_by` op zo'n 40 tabellen zelf in (taken, notities, projecten, mail). Daar hangt geen recht aan, alleen de naam die het team ziet. Wil je het dicht: dezelfde trigger `stamp_actor_columns` erop, per tabel nagaan of een import of Gerrie namens iemand anders aanmaakt. | db |
 

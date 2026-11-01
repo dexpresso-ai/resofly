@@ -45,7 +45,10 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 // Pin-pogingen en lockout worden in de database bewaakt (RPC
-// gallery_verify_share_pin: 8 pogingen, daarna 15 minuten op slot).
+// gallery_verify_share_pin): per bezoeker 8 pogingen en dan een kwartier op
+// slot, en per 100 foute pogingen van alle bezoekers samen een uur dicht. Zo
+// kan wie de link heeft de echte klant niet buitensluiten door expres fout te
+// raden, en blijft raden vanaf veel adressen traag.
 
 class PublicError extends Error {
   status: number;
@@ -88,12 +91,13 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const action = String(body.action || 'getGallery');
+    const visitor = clientAddress(req);
 
     switch (action) {
       case 'getGallery':
-        return json(req, await getGallery(body));
+        return json(req, await getGallery(body, visitor));
       case 'toggleFavorite':
-        return json(req, { ok: true, ...(await toggleFavorite(body)) });
+        return json(req, { ok: true, ...(await toggleFavorite(body, visitor)) });
       default:
         throw new PublicError(`Onbekende actie: ${action}`, 400);
     }
@@ -111,8 +115,8 @@ serve(async (req) => {
 
 // ── Acties ────────────────────────────────────────────────────────────
 
-async function getGallery(body: Record<string, unknown>) {
-  const { gallery, needsPin } = await resolveGallery(body);
+async function getGallery(body: Record<string, unknown>, visitor: string) {
+  const { gallery, needsPin } = await resolveGallery(body, visitor);
   if (needsPin) {
     // Nog geen (geldige) pincode: alleen de titel prijsgeven voor het pinscherm.
     return { ok: true, needsPin: true, gallery: { title: gallery.title } };
@@ -155,8 +159,8 @@ async function getGallery(body: Record<string, unknown>) {
   };
 }
 
-async function toggleFavorite(body: Record<string, unknown>) {
-  const { gallery, needsPin } = await resolveGallery(body);
+async function toggleFavorite(body: Record<string, unknown>, visitor: string) {
+  const { gallery, needsPin } = await resolveGallery(body, visitor);
   if (needsPin) throw new PublicError('Pincode vereist.', 401);
 
   const itemId = String(body.itemId || '').trim();
@@ -203,7 +207,7 @@ async function toggleFavorite(body: Record<string, unknown>) {
 
 // ── Token + pincode ───────────────────────────────────────────────────
 
-async function resolveGallery(body: Record<string, unknown>): Promise<{ gallery: GalleryRow; needsPin: boolean }> {
+async function resolveGallery(body: Record<string, unknown>, visitor: string): Promise<{ gallery: GalleryRow; needsPin: boolean }> {
   const token = String(body.token || '').trim();
   if (!token || token.length < 20 || token.length > 128 || !/^[A-Za-z0-9_-]+$/.test(token)) {
     throw new PublicError('Ongeldige galerijlink.', 404);
@@ -230,7 +234,7 @@ async function resolveGallery(body: Record<string, unknown>): Promise<{ gallery:
   // Lockout vóór elke pincontrole (definitief oordeel komt uit de RPC hieronder,
   // die de rij vergrendelt; dit voorkomt alleen onnodig werk).
   if (gallery.share_pin_locked_until && new Date(gallery.share_pin_locked_until) > new Date()) {
-    throw new PublicError('Te veel foute pincodes. Probeer het over een kwartier opnieuw.', 429);
+    throw new PublicError(lockedMessage(gallery.share_pin_locked_until), 429);
   }
 
   const pin = String(body.pin || '').trim();
@@ -239,14 +243,19 @@ async function resolveGallery(body: Record<string, unknown>): Promise<{ gallery:
   // Vergelijken + tellen gebeurt atomair in de database (SELECT ... FOR UPDATE),
   // anders kunnen parallelle pogingen de lockout omzeilen.
   const pinHash = await sha256Hex(`${token}:${pin}`);
+  // De bezoeker gehasht, met het token erbij: het adres zelf komt niet in de
+  // database, en een nieuwe link begint met een schone lei.
+  const visitorHash = await sha256Hex(`${tokenHash}:${visitor}`);
   const { data: pinResult, error: pinError } = await supabaseAdmin.rpc('gallery_verify_share_pin', {
     p_gallery_id: gallery.id,
     p_pin_hash: pinHash,
+    p_visitor_hash: visitorHash,
   });
   if (pinError) throw pinError;
-  const verdict = (Array.isArray(pinResult) ? pinResult[0] : pinResult) as { ok?: boolean; locked?: boolean } | null;
+  const verdict = (Array.isArray(pinResult) ? pinResult[0] : pinResult) as
+    { ok?: boolean; locked?: boolean; locked_until?: string | null } | null;
   if (verdict?.locked) {
-    throw new PublicError('Te veel foute pincodes. Probeer het over een kwartier opnieuw.', 429);
+    throw new PublicError(lockedMessage(verdict.locked_until ?? null), 429);
   }
   if (!verdict?.ok) {
     throw new PublicError('Onjuiste pincode.', 401);
@@ -344,6 +353,23 @@ function normalizeSessionKey(value: unknown): string | null {
   const key = String(value || '').trim();
   if (key.length < 16 || key.length > 64 || !/^[A-Za-z0-9_-]+$/.test(key)) return null;
   return key;
+}
+
+/**
+ * Het adres van de bezoeker: cf-connecting-ip zet de infrastructuur (niet te
+ * vervalsen), anders het eerste uit x-forwarded-for. Zonder adres delen alle
+ * bezoekers één teller; dat is dan weer de oude regel per galerij.
+ */
+function clientAddress(req: Request): string {
+  return (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
+    .trim()
+    .slice(0, 100);
+}
+
+function lockedMessage(lockedUntil: string | null): string {
+  const until = lockedUntil ? new Date(lockedUntil).getTime() : NaN;
+  const minutes = Number.isFinite(until) ? Math.max(1, Math.ceil((until - Date.now()) / 60000)) : 15;
+  return `Te veel foute pincodes. Probeer het over ${minutes} ${minutes === 1 ? 'minuut' : 'minuten'} opnieuw.`;
 }
 
 async function sha256Hex(value: string): Promise<string> {
