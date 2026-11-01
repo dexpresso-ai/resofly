@@ -6,6 +6,7 @@
 // zodat alle AI-kosten van een gebruiker onder één limiet vallen.
 // ============================================================
 
+import { checkAiBudget } from './aiBudget.ts';
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { HttpError } from './edgeAuth.ts';
 import {
@@ -20,8 +21,6 @@ const MODEL = claudeModelSpec(Deno.env.get('GERRIE_MODEL') || DEFAULT_CLAUDE_MOD
 // maar een lang gesprek levert lange notulen op: ruim genoeg voor allebei.
 const MAX_OUTPUT_TOKENS = 8192;
 
-const USD_TO_EUR = Number(Deno.env.get('GERRIE_USD_TO_EUR') || '0.92');
-const MONTHLY_USER_COST_EUR = Number(Deno.env.get('GERRIE_MONTHLY_USER_COST_EUR') || '0');
 
 /** Tokens, en wat ze kostten per model dat ze verbruikte (zie claudeModels.ts). */
 export type Usage = TokenUsage;
@@ -134,12 +133,13 @@ export async function recordAiUsage(admin: SupabaseClient, organizationId: strin
   });
 }
 
-/** True als de gebruiker nog AI-tegoed heeft deze maand (fail-open bij leesfout). */
-export async function userHasBudget(admin: SupabaseClient, userId: string): Promise<boolean> {
-  if (!(MONTHLY_USER_COST_EUR > 0)) return true;
-  const monthStart = `${new Date().toISOString().slice(0, 7)}-01T00:00:00Z`;
-  const { data, error } = await admin.from('ai_usage').select('cost_usd').eq('user_id', userId).gte('created_at', monthStart);
-  if (error) { console.warn('meeting summary budgetcheck mislukt, sta toe:', error.message); return true; }
-  const usd = (data ?? []).reduce((sum: number, r: Record<string, unknown>) => sum + Number(r.cost_usd || 0), 0);
-  return usd * USD_TO_EUR < MONTHLY_USER_COST_EUR;
+/**
+ * True als er nog AI-tegoed is: het eigen tegoed van de gebruiker en dat van de
+ * organisatie (_shared/aiBudget.ts). Zonder gebruiker (bijvoorbeeld de maker
+ * van een inbox-adres die is vertrokken) telt alleen de organisatie. Kan het
+ * verbruik niet worden gelezen, dan false.
+ */
+export async function userHasBudget(admin: SupabaseClient, userId: string | null, organizationId?: string | null): Promise<boolean> {
+  const budget = await checkAiBudget(admin, userId, organizationId ?? null);
+  return budget.allowed;
 }

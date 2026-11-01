@@ -288,7 +288,7 @@ async function executeAgentRun(
   // 4) Budget — FAIL-CLOSED op dit onbewaakte pad. Er is één grens: het maandtegoed
   //    van het account. Wat een agent verbruikt telt daar gewoon in mee, want het
   //    verbruik wordt geboekt op de gebruiker namens wie hij draait.
-  const userBudget = await checkUserBudget(runAsUserId);
+  const userBudget = await checkUserBudget(runAsUserId, orgId);
   if (!userBudget.allowed) {
     log.add('error', 'Het maandtegoed van dit account is op — run overgeslagen.', {});
     log.add('finish', 'Overgeslagen', { status: 'skipped_budget' });
@@ -486,7 +486,7 @@ async function previewAgent(ctx: GerrieContext, body: Record<string, unknown>): 
   const instruction = String(body.instruction || '').trim();
   if (!instruction) throw new HttpError('Geef een opdracht om te proefdraaien.', 400);
 
-  const budget = await checkUserBudget(ctx.userId);
+  const budget = await checkUserBudget(ctx.userId, ctx.organizationId);
   if (!budget.allowed) return { ok: false, budget: true, text: '', steps: [] };
 
   const fields = sanitizeAgentFields({ ...body, mode: 'report' });
@@ -887,7 +887,7 @@ async function replyToRun(ctx: GerrieContext, caps: AgentCapabilities, body: Rec
   const modelKind = resolveModelKind(agent.model_kind);
   const maxProposals = clampInt(agent.max_proposals_per_run, DEFAULT_MAX_PROPOSALS, 1, MAX_PROPOSALS_LIMIT);
 
-  const budget = await checkUserBudget(ctx.userId);
+  const budget = await checkUserBudget(ctx.userId, ctx.organizationId);
   if (!budget.allowed) throw new HttpError('Je AI-tegoed voor deze maand is op.', 429);
 
   const history = await loadHistory(convId, orgId);
