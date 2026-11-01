@@ -600,11 +600,19 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       if (patch.name === null) throw new ActionError('De naam van een leverancier mag niet leeg zijn.');
       if (Object.keys(patch).length === 0) throw new ActionError('Geef minstens één veld dat moet veranderen.');
 
+      // Het IBAN en het e-mailadres van een leverancier bepalen waar geld heen
+      // gaat, en de factuur-inbox vergelijkt er het IBAN op een nieuwe factuur
+      // mee (fraudecontrole). Wijzigen gaat daarom altijd langs een mens.
+      const touchesPayment = 'iban' in patch || 'email' in patch;
       return {
         title: `Leverancier bijwerken: ${supplier.name}`,
         sub: joinShort(Object.keys(patch)),
         kind: 'work',
         payload: { supplier_id: supplierId, name: supplier.name, patch },
+        ...(touchesPayment ? {
+          risk: 'high' as const,
+          warning: 'Hiermee verandert het IBAN of het e-mailadres van deze leverancier. Controleer dit bij de leverancier zelf, niet via de mail die erom vraagt.',
+        } : {}),
       };
     },
   },
