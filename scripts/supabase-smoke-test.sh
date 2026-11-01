@@ -135,6 +135,44 @@ else
   echo "-      de bezorger met cron-secret: overgeslagen (geen SUPABASE_DB_PASSWORD of psql)"
 fi
 
+# Supabase Auth: het klantportaal en de uitnodigingen vertrouwen op het
+# e-mailadres van de login. Dat is alleen veilig als niemand zelf een account
+# maakt, een adres eerst bevestigd moet zijn, en een adreswijziging op beide
+# adressen bevestigd wordt. Die schakelaars staan in het dashboard, niet in de
+# repo; hier valt op als iemand er een omzet.
+if [ -n "${SUPABASE_ACCESS_TOKEN:-}" ] && command -v python3 >/dev/null; then
+  auth_json="$(curl -s --max-time 30 -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+    "https://api.supabase.com/v1/projects/${ref}/config/auth" || true)"
+  auth_problems="$(printf '%s' "$auth_json" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("Auth-instellingen niet leesbaar"); sys.exit(0)
+if not isinstance(d, dict) or "disable_signup" not in d:
+    print("Auth-instellingen niet leesbaar"); sys.exit(0)
+eis = [
+    ("disable_signup", True, "zelf registreren moet uit"),
+    ("mailer_autoconfirm", False, "een e-mailadres moet bevestigd worden"),
+    ("mailer_secure_email_change_enabled", True, "een adreswijziging moet op beide adressen bevestigd worden"),
+    ("external_anonymous_users_enabled", False, "anonieme accounts moeten uit"),
+]
+fout = [uitleg for sleutel, moet, uitleg in eis if d.get(sleutel) is not moet]
+if (d.get("password_min_length") or 0) < 12:
+    fout.append("wachtwoorden minimaal 12 tekens")
+print("; ".join(fout))
+')"
+  if [ -z "$auth_problems" ]; then
+    echo "ok     Auth-instellingen: geen zelfregistratie, adressen bevestigd, sterke wachtwoorden"
+  else
+    problems=$((problems + 1))
+    echo "FOUT   Auth-instellingen: $auth_problems"
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::Auth-instellingen: $auth_problems"; fi
+  fi
+else
+  echo "-      Auth-instellingen: overgeslagen (geen SUPABASE_ACCESS_TOKEN of python3)"
+fi
+
 if [ "$problems" -gt 0 ]; then
   echo "$problems controle(s) mislukt. Kijk in Supabase onder Edge Functions → Logs." >&2
   exit 1

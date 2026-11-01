@@ -21,6 +21,11 @@ on:
       - staging
   workflow_dispatch: {}
 
+# Alleen lezen: deze workflow pusht niets en schrijft niets in GitHub. Zonder
+# deze regel krijgt het GITHUB_TOKEN de standaardrechten van de repository.
+permissions:
+  contents: read
+
 jobs:
   checks:
     runs-on: ubuntu-latest

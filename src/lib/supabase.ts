@@ -18,7 +18,20 @@ const onPortalRoute = typeof window !== 'undefined' && window.location.pathname.
 export const supabase = createClient(
   isSupabaseConfigured ? url! : 'https://example.supabase.co',
   isSupabaseConfigured ? anon! : 'placeholder-anon-key',
-  { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: !onPortalRoute } },
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: !onPortalRoute,
+      // PKCE: een inloglink werkt alleen in de browser die hem aanvroeg, en
+      // tokens in de URL (#access_token=…) worden geweigerd. Met de oude
+      // impliciete flow kon iemand met een eigen account een link met zijn
+      // tokens sturen, en dan werkte het slachtoffer ongemerkt in zíjn
+      // werkruimte (login-CSRF). Het inlogscherm zegt al: open de link in
+      // dezelfde browser.
+      flowType: 'pkce',
+    },
+  },
 );
 
 
