@@ -13,13 +13,31 @@
 import DOMPurify from 'dompurify';
 
 let hooksRegistered = false;
+// Alleen tijdens één (synchrone) sanitize-aanroep van sanitizeInboundEmailHtml.
+let blockRemoteImages = false;
+let blockedRemoteImages = 0;
+const REMOTE_IMAGE_ATTRS = ['src', 'srcset', 'background', 'poster'];
+
 function ensureHooks(): void {
   if (hooksRegistered) return;
   // Elke overgebleven link opent veilig: nieuw tabblad, geen opener/referrer.
+  // Ook <area href> (een klikbaar deel van een afbeelding), anders opende die
+  // in hetzelfde tabblad.
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-    if (node instanceof Element && node.tagName === 'A' && node.getAttribute('href')) {
+    if (node instanceof Element && (node.tagName === 'A' || node.tagName === 'AREA') && node.getAttribute('href')) {
       node.setAttribute('target', '_blank');
       node.setAttribute('rel', 'noopener noreferrer nofollow');
+    }
+    // Afbeeldingen van buiten pas na een klik: anders ziet elke afzender wanneer
+    // (en vanaf welk IP) zijn mail werd gelezen, met een onzichtbare pixel.
+    if (blockRemoteImages && node instanceof Element) {
+      for (const attr of REMOTE_IMAGE_ATTRS) {
+        const value = node.getAttribute(attr);
+        if (value && /(?:^|[\s,])(?:https?:)?\/\//i.test(value)) {
+          node.removeAttribute(attr);
+          blockedRemoteImages += 1;
+        }
+      }
     }
   });
   hooksRegistered = true;
@@ -37,6 +55,23 @@ export function sanitizeEmailHtml(html: string | null | undefined): string {
   // eigen CSS-klassen van de app hergebruiken (schermvullende overlay, een
   // nagemaakt inlogvenster) of met een id elementen van de app overschaduwen.
   return sanitize(html, ['style', 'class', 'id']);
+}
+
+/**
+ * Inkomende mail: zoals sanitizeEmailHtml, maar afbeeldingen van buiten laden
+ * pas als de lezer daarvoor kiest (loadRemoteImages). Geeft terug hoeveel er
+ * zijn tegengehouden, zodat de app een knop "Afbeeldingen laden" kan tonen.
+ */
+export function sanitizeInboundEmailHtml(html: string | null | undefined, loadRemoteImages: boolean): { html: string; blockedImages: number } {
+  blockRemoteImages = !loadRemoteImages;
+  blockedRemoteImages = 0;
+  try {
+    const clean = sanitize(html, ['style', 'class', 'id']);
+    return { html: clean, blockedImages: blockedRemoteImages };
+  } finally {
+    blockRemoteImages = false;
+    blockedRemoteImages = 0;
+  }
 }
 
 /**

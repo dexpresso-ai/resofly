@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import type { ClientEmail, ClientEmailStatus } from '../types';
-import { sanitizeEmailHtml } from '../lib/sanitizeHtml';
+import { sanitizeEmailHtml, sanitizeInboundEmailHtml } from '../lib/sanitizeHtml';
 
 /**
  * Eén e-mailbericht in een klantgesprek, plus de tekstjes eromheen. Gedeeld
@@ -68,6 +68,14 @@ export function ClientEmailMessageCard({ message: msg, isUnread, canWrite, onRem
   /** Onder de tekst, bv. de bestanden die met dit bericht meegingen. */
   footer?: ReactNode;
 }) {
+  // Inkomende mail: afbeeldingen van buiten pas na een klik (geen leesbevestiging
+  // voor de afzender). Eigen, uitgaande mail toont ze gewoon.
+  const [loadImages, setLoadImages] = useState(false);
+  const body = useMemo(() => {
+    if (!msg.body_html) return null;
+    if (msg.direction !== 'inbound') return { html: sanitizeEmailHtml(msg.body_html), blockedImages: 0 };
+    return sanitizeInboundEmailHtml(msg.body_html, loadImages);
+  }, [msg.body_html, msg.direction, loadImages]);
   return <div className={`client-comm-message ${msg.direction}${isUnread ? ' unread' : ''}`}>
     <div className="client-comm-message-meta">
       <span className="client-comm-dir">{msg.direction === 'outbound' ? 'Uitgaand' : 'Inkomend'}</span>
@@ -83,8 +91,12 @@ export function ClientEmailMessageCard({ message: msg, isUnread, canWrite, onRem
     {msg.direction === 'inbound' && inboundOriginLabel(msg) && (
       <div className="client-comm-origin">{inboundOriginLabel(msg)}</div>
     )}
-    {msg.body_html
-      ? <div className="client-comm-body" dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msg.body_html) }} />
+    {body && body.blockedImages > 0 && <div className="client-comm-origin">
+      Afbeeldingen van buiten zijn niet geladen, zodat de afzender niet ziet dat je de mail las.{' '}
+      <button type="button" className="client-comm-remove" onClick={() => setLoadImages(true)}>Afbeeldingen laden</button>
+    </div>}
+    {body
+      ? <div className="client-comm-body" dangerouslySetInnerHTML={{ __html: body.html }} />
       : <div className="client-comm-body client-comm-body-plain">{msg.body_text}</div>}
     {footer}
     {msg.error_message && <div className="client-comm-error">{msg.error_message}</div>}
