@@ -435,6 +435,16 @@ Beide in migratie `20261101110000`.
 
 Beide in migratie `20261101120000`.
 
+### 27. Publieke pagina's: foutteksten en contractvragen (laag, opgelost)
+
+- **Foutteksten:** `quote-public`, `invoice-public`, `client-portal` en
+  `meeting-booking-public` gaven bij een onverwachte fout de Postgres-melding
+  terug, met tabel-, kolom- en constraintnamen. Nu krijgt de bezoeker een
+  gewone zin, en staat de reden in de log.
+- **Vragen over een contract:** iedereen met de link kan ze stellen, en elke
+  vraag wordt een gesprek in het klantdossier. Nu maximaal 4000 tekens en 5
+  per contract per uur.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -449,7 +459,7 @@ Beide in migratie `20261101120000`.
 | N | middel | De productie-config van de workers wijst naar het staging-project van Supabase. | workers/*/wrangler.toml |
 | O | middel | De oude `cloudflare-worker/` (zonder de bewaking van media-api) wordt nog in de docs genoemd. Controleer of hij nog draait, en verwijder hem. | cloudflare-worker, README |
 | P | laag | Uren uit een koppeling aan een privé-afspraak nemen de titel over in `time_entries.description`. En `meeting_recordings` toont transcripties van vergaderingen uit privé-agenda's aan elk teamlid met Agenda. Is dat zo bedoeld? | RLS |
-| Q | laag | Interne foutteksten in publieke functies; ACAO `*` bij meeting-booking-public; contract-vraag zonder limiet; pin-blokkade per galerij. | publieke functies |
+| Q | laag | Wie de link van een galerij heeft, kan met foute pincodes de echte klant buitensluiten, want de blokkade geldt per galerij en niet per bezoeker. `galleries.share_token` staat onversleuteld in de database. `meeting-booking-public` stuurt `Access-Control-Allow-Origin: *`; dat is ongevaarlijk, want de token zit in de body. | publieke functies |
 | R | laag | CSP met wildcards (`*.supabase.co`, `*.workers.dev`, `img-src https:`), en afbeeldingen in inkomende mail laden vanzelf. | frontend |
 | T | laag | `chat_unread_counts()` geeft een oud-teamlid nog tellingen van zijn oude gesprekken (alleen aantallen; lezen is dicht). | RPC |
 | U | laag | De review van de 131 functies die elke ingelogde gebruiker kan aanroepen: de scan op ontbrekende controles is gedaan (fix 16). Nog doen: per functie nalopen of elk id-argument bij de organisatie hoort, en of de juiste module wordt gevraagd. De dumps maak je met de queries uit de commits van deze ronde. | db |

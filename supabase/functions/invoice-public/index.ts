@@ -93,11 +93,9 @@ serve(async (req) => {
     if (error instanceof PublicInvoiceError) {
       message = error.message;
     } else {
-      // Bewust de werkelijke foutreden teruggeven (afgekapt op 500 chars) zodat de
-      // publieke factuurpagina diagnostisch is zonder dat de Supabase functie-logs
-      // geopend hoeven worden. Supabase/Postgres-foutmeldingen bevatten doorgaans
-      // veldnamen en constraint-namen, geen secrets, dus dit is veilig.
-      message = `Publieke factuur kon niet worden geladen: ${describeError(error)}`.slice(0, 500);
+      // Een bezoeker zonder login krijgt geen interne foutteksten; de reden staat
+      // in de log hieronder.
+      message = 'Factuur kon niet worden geladen. Probeer het later opnieuw.';
     }
     if (status >= 500) {
       console.error('invoice-public error', describeError(error), error instanceof Error ? error.stack : undefined);

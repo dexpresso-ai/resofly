@@ -184,7 +184,8 @@ serve(async (req) => {
     const status = error instanceof PortalError ? error.status : 500;
     const message = error instanceof PortalError
       ? error.message
-      : `Klantportaal kon de aanvraag niet verwerken: ${describeError(error)}`.slice(0, 500);
+      // Geen interne foutteksten naar de klant; de reden staat in de log hieronder.
+      : 'Het klantportaal kon dit nu niet verwerken. Probeer het later opnieuw.';
     if (status >= 500) {
       console.error('client-portal error', describeError(error), error instanceof Error ? error.stack : undefined);
     }
