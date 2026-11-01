@@ -537,6 +537,7 @@ async function applyCandidate(
   const invoiceIban = normIban(proposal.supplier.iban);
   const knownIban = normIban(supplier.iban);
   const ibanMismatch = Boolean(invoiceIban && knownIban && invoiceIban !== knownIban);
+  const ibanVerified = Boolean(invoiceIban && knownIban && invoiceIban === knownIban);
   if (ibanMismatch) {
     warnings.push(`Let op: het IBAN op deze factuur (${invoiceIban}) wijkt af van het IBAN dat bij ${supplier.name} bekend is (${knownIban}). Controleer dit bij de leverancier voordat je betaalt.`);
   }
@@ -633,7 +634,7 @@ async function applyCandidate(
   let status: InboxStatus = 'ready';
   let autoBooked = false;
   if (settings.auto_book) {
-    const eligible = autoBookEligible({ supplierCreated, supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch });
+    const eligible = autoBookEligible({ supplierCreated, supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch, ibanVerified });
     if (eligible.ok) {
       const { error: bookError } = await admin.rpc('book_purchase_invoice', {
         p_organization_id: organizationId, p_purchase_invoice_id: purchaseInvoiceId, p_created_by: budgetUserId,

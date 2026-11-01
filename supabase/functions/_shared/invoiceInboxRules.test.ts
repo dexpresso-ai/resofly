@@ -50,7 +50,7 @@ test('dezelfde factuur twee keer bijgevoegd', () => {
 });
 
 test('automatisch boeken alleen als er niets te kiezen valt', () => {
-  const ok = { supplierCreated: false, supplierMatch: 'vat', confidence: 'high' as const, warnings: [], lines: [{ account_id: 'a', amount_cents: 100 }], totals: { total_cents: 121 } };
+  const ok = { supplierCreated: false, supplierMatch: 'vat', confidence: 'high' as const, warnings: [], lines: [{ account_id: 'a', amount_cents: 100 }], totals: { total_cents: 121 }, ibanVerified: true };
   assert.deepEqual(autoBookEligible(ok), { ok: true });
   assert.equal(autoBookEligible({ ...ok, supplierCreated: true }).ok, false);
   assert.equal(autoBookEligible({ ...ok, supplierMatch: 'name' }).ok, false);
@@ -63,7 +63,7 @@ test('automatisch boeken alleen als er niets te kiezen valt', () => {
 test('ander IBAN dan bekend bij de leverancier: nooit vanzelf boeken', () => {
   // Hét patroon van factuurfraude: een echte leverancier, een echt ogende
   // factuur, en alleen het rekeningnummer is anders.
-  const ok = { supplierCreated: false, supplierMatch: 'vat', confidence: 'high' as const, warnings: [], lines: [{ account_id: 'a', amount_cents: 100 }], totals: { total_cents: 121 } };
+  const ok = { supplierCreated: false, supplierMatch: 'vat', confidence: 'high' as const, warnings: [], lines: [{ account_id: 'a', amount_cents: 100 }], totals: { total_cents: 121 }, ibanVerified: true };
   assert.deepEqual(autoBookEligible({ ...ok, ibanMismatch: false }), { ok: true });
   const blocked = autoBookEligible({ ...ok, ibanMismatch: true });
   assert.equal(blocked.ok, false);
@@ -101,4 +101,17 @@ test('bijlagen van afgedane items gaan pas na een wachttijd weg, bewijsstukken n
   assert.equal(purgeEligible(row({ status: 'ready', updated_at: daysAgo(400) }), now), false);
   assert.equal(purgeEligible(row({ purged_at: daysAgo(1) }), now), false);
   assert.equal(purgeEligible(row({ attachments: [{ storage_key: null }] }), now), false);
+});
+
+test('alleen op e-mailadres herkend, of zonder vergelijkbaar IBAN: niet vanzelf boeken', () => {
+  // Het afzenderadres is niet geverifieerd: een vervalste "bekende leverancier"
+  // zonder IBAN op de factuur werd anders gewoon geboekt.
+  const ok = { supplierCreated: false, supplierMatch: 'vat', confidence: 'high' as const, warnings: [], lines: [{ account_id: 'a', amount_cents: 100 }], totals: { total_cents: 121 }, ibanVerified: true };
+  assert.deepEqual(autoBookEligible(ok), { ok: true });
+  const byEmail = autoBookEligible({ ...ok, supplierMatch: 'email' });
+  assert.equal(byEmail.ok, false);
+  assert.match(byEmail.ok ? '' : byEmail.why, /e-mailadres/);
+  const noIban = autoBookEligible({ ...ok, ibanVerified: false });
+  assert.equal(noIban.ok, false);
+  assert.match(noIban.ok ? '' : noIban.why, /IBAN/);
 });
