@@ -281,6 +281,10 @@ controleren de schrijfrol. Het recht op Financiën bewaakt de module-gate op
     koppeling hebben (migratie `20261101070000`).
 - **Verbruik:** het overzicht van AI-gebruik per teamlid telde zijn gebruik in
   al zijn organisaties op. Nu telt alleen het gebruik in deze organisatie.
+- **Doorsturen** (sessie 2): een kapot verzoek aan `/authorize` stuurde de
+  browser door naar het adres dat iemand zelf had geregistreerd. Zo werd het
+  OAuth-domein een doorstuurdienst. Nu krijgt een client die nog door niemand
+  is goedgekeurd een foutpagina.
 
 ### 18. Als de klant schrijven via het reply-adres (middel, opgelost)
 
@@ -471,7 +475,6 @@ Collabora-instantie draait voor beide omgevingen; aparte instanties zijn veilige
 | A | laag | Campagne- en flow-HTML bij het verzenden saneren, zoals klantmail al gebeurt. Het relay-risico is weg: testmails gaan alleen nog naar het team en alles telt mee in het quotum. | campaigns |
 | F | laag | Eén Collabora-instantie voor staging én productie. `localhost` staat nog in `FRAME_ANCESTORS`. De conversie-eindpunten zijn afgeschermd (fix 28). | workers/office-server |
 | G | laag | Inkomende mail: de email-worker geeft geen DMARC-uitslag door. De aliasroute vertrouwt de `.eml`; dat hoort bij doorsturen, maar wie het aliasadres kent, kan mail namens een klant in het dossier zetten. Reply-route en automatisch boeken zijn opgelost (fix 18 en 24). | workers/email-inbound, mail-inbound |
-| I | laag | mcp-oauth: een fout-redirect naar een geregistreerd adres als `response_type` ontbreekt. Liever een foutpagina tonen. Registratie zelf is begrensd (fix 17). | mcp-oauth |
 | K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
 | L | middel | Het opslagquotum telt alleen rijen. Een bestand waarvoor de browser nooit een rij maakt, telt niet mee en blijft staan; opruimen kan pas veilig als de wachtrij alle tabellen met opslagsleutels kent. Stream-kopieën kunnen onbeperkt, en de office-uploads hebben geen quotumcheck. Opgelost: `/upload` weegt het quotum ook op de echte grootte, niet alleen op de opgegeven Content-Length. | workers/media-api |
 | M | laag | AI-budget: gelijktijdige aanroepen passeren samen de controle (die telt pas na de aanroep), en mislukte aanroepen tellen niet. Het plafond zelf staat er (fix 21). | aiBudget.ts |
