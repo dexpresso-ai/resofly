@@ -399,13 +399,25 @@ onder de sessie van wie er is ingelogd. De server koppelt alleen als dat
 dezelfde gebruiker is als in de state, met schrijfrecht op Agenda in die
 organisatie.
 
+### 24. De factuur-inbox boekte op een onbevestigde afzender (middel, opgelost)
+
+Automatisch boeken mocht als de leverancier op het afzenderadres van de mail was
+herkend. De IBAN-controle telde alleen als er een IBAN op de factuur stond. Het
+afzenderadres is niet geverifieerd, want de email-worker geeft geen
+DMARC-uitslag door. Een mail "van" een bekende leverancier met een PDF zonder
+IBAN werd zo gewoon geboekt.
+
+Nu boekt de inbox niet vanzelf als de leverancier alleen op e-mailadres is
+herkend, of als het IBAN op de factuur niet aantoonbaar dat van de leverancier
+is. Zo'n factuur gaat langs een mens, met de reden erbij.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
 | --- | --- | --- | --- |
 | A | laag | Campagne- en flow-HTML bij het verzenden saneren, zoals klantmail al gebeurt. Het relay-risico is weg: testmails gaan alleen nog naar het team en alles telt mee in het quotum. | campaigns |
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
-| G | middel | Inkomende mail: de afzender is niet geverifieerd, want DMARC wordt niet doorgegeven. De factuur-inbox boekt automatisch op het From-adres. De aliasroute vertrouwt de `.eml` nog. De reply-route is opgelost (fix 18). | workers/email-inbound, mail-inbound, invoiceInbox |
+| G | laag | Inkomende mail: de email-worker geeft geen DMARC-uitslag door. De aliasroute vertrouwt de `.eml`; dat hoort bij doorsturen, maar wie het aliasadres kent, kan mail namens een klant in het dossier zetten. Reply-route en automatisch boeken zijn opgelost (fix 18 en 24). | workers/email-inbound, mail-inbound |
 | I | laag | mcp-oauth: een fout-redirect naar een geregistreerd adres als `response_type` ontbreekt. Liever een foutpagina tonen. Registratie zelf is begrensd (fix 17). | mcp-oauth |
 | K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
 | L | middel | Opslagquotum is alleen een advies: de opgegeven grootte telt, en het faalt open. Stream-kopieën onbeperkt. | workers/media-api |
