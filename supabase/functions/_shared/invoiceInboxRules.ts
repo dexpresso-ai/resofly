@@ -114,10 +114,20 @@ export function autoBookEligible(input: {
   lines: Array<{ account_id: string | null; amount_cents: number }>;
   totals: { total_cents: number };
   ibanMismatch?: boolean;
+  /** Het IBAN op de factuur is bekend én gelijk aan dat van de leverancier. */
+  ibanVerified?: boolean;
 }): { ok: true } | { ok: false; why: string } {
   if (input.supplierCreated) return { ok: false, why: 'de leverancier is nieuw aangemaakt' };
   if (input.ibanMismatch) return { ok: false, why: 'het IBAN op de factuur wijkt af van het IBAN van deze leverancier' };
   if (!input.supplierMatch || input.supplierMatch === 'name') return { ok: false, why: 'de leverancier is alleen op naam herkend' };
+  // Het afzenderadres van een mail is niet geverifieerd (geen DMARC-uitslag van
+  // de email-worker), en een e-mailadres in de factuur zet de afzender zelf
+  // neer. Daarop alleen boeken we niet vanzelf.
+  if (input.supplierMatch === 'email') return { ok: false, why: 'de leverancier is alleen op e-mailadres herkend' };
+  // "Het IBAN op de factuur is dat van de leverancier": dat moet dan ook te zien
+  // zijn. Een factuur zonder IBAN, of een leverancier zonder bekend IBAN, kan de
+  // fraudecontrole niet doorstaan en gaat langs een mens.
+  if (!input.ibanVerified) return { ok: false, why: 'het IBAN op de factuur kon niet worden vergeleken met dat van de leverancier' };
   if (input.confidence !== 'high') return { ok: false, why: 'de zekerheid van de uitlezing is niet hoog' };
   if (input.warnings.length) return { ok: false, why: 'er zijn waarschuwingen bij de uitlezing' };
   if (!input.lines.length || input.lines.some((l) => !l.account_id)) return { ok: false, why: 'niet elke regel heeft een grootboekrekening' };
