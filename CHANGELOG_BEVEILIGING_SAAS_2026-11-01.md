@@ -7,7 +7,8 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering.** Zes reviews zijn klaar, vijftien fixes staan op staging, het mailquotum werkt op de eerste routes, interne functies zijn dicht en AI-registraties begrensd.
+> **Status: in uitvoering (sessie 2).** 29 fixes staan op staging. Wat open is, staat
+> onderaan: vooral lage punten, en acties die alleen de eigenaar kan doen.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
 ## Werkwijze
@@ -436,6 +437,8 @@ Beide in migratie `20261101110000`.
   het XAF-auditbestand. Nu zet een trigger de maker op de ingelogde gebruiker.
 - **Teamchat:** `chat_add_participants` vroeg alleen dat je deelnemer was. Nu
   ook schrijfrecht op Teamchat, en daarmee een actief lidmaatschap.
+  `chat_unread_counts()` geeft tellingen alleen nog aan actieve teamleden met
+  Teamchat (migratie `20261101130000`).
 
 Beide in migratie `20261101120000`.
 
@@ -481,7 +484,7 @@ nu in een nieuw tabblad, zonder referrer.
 
 | # | Ernst | Wat | Waar |
 | --- | --- | --- | --- |
-| A | laag | Campagne- en flow-HTML bij het verzenden saneren, zoals klantmail al gebeurt. Het relay-risico is weg: testmails gaan alleen nog naar het team en alles telt mee in het quotum. | campaigns |
+| A | laag | Campagne- en flow-HTML wordt bij verzenden niet gesaneerd. Bewust zo gelaten: de server-sanitizer haalt `style` weg en breekt dan de ontwerpen. Het relay-risico is weg, want testmails gaan alleen naar het team en alles telt mee in het quotum. Wil je toch saneren, gebruik dan een e-mailvriendelijke sanitizer die inline styles bewaart. | campaigns |
 | F | laag | Eén Collabora-instantie voor staging én productie. `localhost` staat nog in `FRAME_ANCESTORS`. De conversie-eindpunten zijn afgeschermd (fix 28). | workers/office-server |
 | G | laag | Inkomende mail: de email-worker geeft geen DMARC-uitslag door. De aliasroute vertrouwt de `.eml`; dat hoort bij doorsturen, maar wie het aliasadres kent, kan mail namens een klant in het dossier zetten. Reply-route en automatisch boeken zijn opgelost (fix 18 en 24). | workers/email-inbound, mail-inbound |
 | K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
@@ -492,7 +495,6 @@ nu in een nieuw tabblad, zonder referrer.
 | P | laag | Uren uit een koppeling aan een privé-afspraak nemen de titel over in `time_entries.description`. En `meeting_recordings` toont transcripties van vergaderingen uit privé-agenda's aan elk teamlid met Agenda. Is dat zo bedoeld? | RLS |
 | Q | laag | Wie de link van een galerij heeft, kan met foute pincodes de echte klant buitensluiten, want de blokkade geldt per galerij en niet per bezoeker. `galleries.share_token` staat onversleuteld in de database. `meeting-booking-public` stuurt `Access-Control-Allow-Origin: *`; dat is ongevaarlijk, want de token zit in de body. | publieke functies |
 | R | laag | CSP met wildcards: `*.supabase.co`, `*.workers.dev` en `img-src https:`. Zet per omgeving de exacte hosts (`<ref>.supabase.co`, de eigen worker-hosts); dat vraagt aparte `_headers` per omgeving of een build-stap. | public/_headers |
-| T | laag | `chat_unread_counts()` geeft een oud-teamlid nog tellingen van zijn oude gesprekken (alleen aantallen; lezen is dicht). | RPC |
 | U | laag | De review van de 131 functies die elke ingelogde gebruiker kan aanroepen: de scan op ontbrekende controles is gedaan (fix 16). Nog doen: per functie nalopen of elk id-argument bij de organisatie hoort, en of de juiste module wordt gevraagd. De dumps maak je met de queries uit de commits van deze ronde. | db |
 
 ## Checklist voor productie
@@ -526,17 +528,20 @@ En verder, voor productie:
 | Onderdeel | Stand |
 | --- | --- |
 | Live controles staging | klaar |
-| Rechten van `anon` | klaar (migratie 20261101000000) |
+| Rechten van `anon` | klaar (20261101000000) |
 | Supabase Auth-instellingen | klaar op staging (productie: zie fix 2) |
 | Klantaccounts zonder werkruimte | klaar (20261101010000) |
 | Video's, domeinen, vertrek | klaar (20261101020000; worker nog uitrollen) |
 | Bank, rapporten, kleine sloten | klaar (20261101030000) |
 | PKCE, vangnetten, testmails | klaar |
 | Omleiden van facturen of geld, TRUNCATE | klaar (20261101040000) |
-| Mailquotum per organisatie | klaar op alle routes (20261101050000, sessie 2) |
+| Mailquotum per organisatie | klaar op alle routes (20261101050000) |
+| Interne functies, AI-registraties, portal-login | klaar (20261101060000 t/m 080000) |
+| Factuurvergrendeling, AI-budget, agenda-privacy, boekingen | klaar (20261101090000 t/m 120000) |
+| Editor-segmenten, office-server, opslagquotum | klaar in de code; **workers nog uitrollen** |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
-| Review security-definer-functies | scan klaar (20261101060000); diepe review is punt U |
-| Open bevindingen A–T | **nog doen** |
+| Review security-definer-functies | scan klaar; diepe review loopt (punt U) |
+| Open bevindingen | zie de tabel hieronder (vooral laag, plus acties voor de eigenaar) |
 
 ## Aanbevolen, vraagt een keuze of een account van de eigenaar
 
