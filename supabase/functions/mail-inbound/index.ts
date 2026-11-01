@@ -183,8 +183,19 @@ async function handleInbound(body: Record<string, unknown>): Promise<Record<stri
   // 8. Reply-token-route: het token is een permanente, overdraagbare
   // schrijfsleutel voor iedereen aan wie de mail ooit is doorgestuurd. Hoort de
   // afzender niet bij deze klant, dan parkeren we.
+  //
+  // Alleen de afzender uit de From-kop telt hier. Reply-To, de From van een
+  // bijgevoegde .eml en een "Van:"-blok in de tekst kiest de afzender zelf: wie
+  // de mail ooit doorgestuurd kreeg, schreef zo "als de klant" in diens dossier,
+  // met een melding aan het hele team (bijvoorbeeld "ons IBAN is gewijzigd").
+  // Een antwoord van een ander adres wordt geparkeerd, niet weggegooid.
+  const headerFromCandidate: SenderCandidate | null = headerFrom
+    ? (candidates.find((c) => c.address === headerFrom) ?? { address: headerFrom, name: String(body.headerFromName || ''), source: 'header_from', confidence: 'high' })
+    : null;
   if (!dropReason && !parkReason && origin) {
-    const belongs = await senderBelongsToClient(origin.organization_id, origin.client_id, candidates);
+    const belongs = headerFromCandidate
+      ? await senderBelongsToClient(origin.organization_id, origin.client_id, [headerFromCandidate])
+      : false;
     if (!belongs) parkReason = 'token_sender_mismatch';
   }
 
@@ -207,7 +218,8 @@ async function handleInbound(body: Record<string, unknown>): Promise<Record<stri
   const recipient = origin ? `reply+${replyToken}@` : to;
   const dedupKey = buildDedupKey(recipient || to || aliasLocalPart, messageId, rawHash);
 
-  const best = candidates[0] ?? null;
+  // Op de reply-route is de afzender de From-kop (zie stap 8); elders de beste kandidaat.
+  const best = origin ? headerFromCandidate : (candidates[0] ?? null);
 
   // 12. Vastleggen + dedupliceren + matchen in één transactie.
   const { data, error } = await supabaseAdmin.rpc('register_inbound_message', {
