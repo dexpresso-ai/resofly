@@ -85,6 +85,31 @@ Via de Auth-API zelf blijft het verschil zichtbaar. Dat dichten kan pas met
 een captcha (hCaptcha of Turnstile), en die vraagt sleutels van de eigenaar
 (zie **Aanbevolen**).
 
+### 4. Een klant uit het portaal kreeg een gratis werkruimte (middel, opgelost)
+
+Open punt uit de vorige ronde. Zelf registreren staat uit, maar wie als klant in
+het portaal inlogde en daarna de werkruimte opende, kreeg vanzelf een eigen
+organisatie als owner. `create_organization` kon hij ook rechtstreeks aanroepen,
+zo vaak als hij wilde. Elke klant van elke organisatie had zo een gratis
+werkruimte, met de platform-afzender voor mail, Gerrie en opslag erbij.
+
+Migratie `20261101010000_portal_accounts_no_workspace.sql`:
+- `is_portal_only_account()` herkent zo'n account. Het was nooit lid, heeft geen
+  uitnodiging, en is aangemaakt door de portal-login of hoort bij een klant of
+  portaalcontact.
+- `ensure_user_default_organization` maakt daarvoor niets aan, en
+  `create_organization` weigert het.
+- portal-login markeert nieuwe klantaccounts met `app_metadata.resofly_portal`.
+  Dat veld kan alleen de server zetten.
+- Het scherm "Geen organisatie gevonden" wijst naar het klantportaal.
+
+Droog getest op staging. Het ene klantaccount wordt geweigerd. Teamleden die
+ook klant zijn worden niet geraakt, en een owner kan nog steeds een
+organisatie maken.
+
+Moet een klant toch een eigen werkruimte krijgen, dan nodig je hem uit of maak
+je de organisatie als beheerder aan.
+
 ## Verder in de volgende sessie
 
 1. Lees deze file en `git log --oneline staging -20`.

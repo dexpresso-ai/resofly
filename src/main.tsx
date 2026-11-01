@@ -664,9 +664,12 @@ function NoOrganizationScreen({
     </div></div>;
   }
 
+  // Een klant uit het portaal krijgt geen eigen werkruimte (migratie
+  // 20261101010000); de knop "Organisatie maken" geeft dan een melding.
   return <div className="boot"><div className="login-card">
     <h1>Geen organisatie gevonden</h1>
     <p>Er kon geen organisatie voor je account worden geladen.</p>
+    <p>Ben je klant van een bedrijf dat ResoFly gebruikt? Dan vind je je offertes, facturen en tickets in het <a href="/portal">klantportaal</a>.</p>
     <Button variant="primary" onClick={onCreateOrganization}>Organisatie maken</Button>
   </div></div>;
 }
