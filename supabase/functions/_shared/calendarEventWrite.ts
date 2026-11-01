@@ -41,9 +41,17 @@ import { cancelConflictingBookingSlots, cancelConflictingBookingSlotsForNativeEv
 
 // ── Nieuwe-event-invoer normaliseren ────────────────────────────────────────
 
+/** Meer deelnemers per afspraak gaat niet: elke uitnodiging is een mail met de
+ *  afzender van het platform, en zonder grens was een afspraak met duizenden
+ *  adressen een verzendlijst. */
+export const MAX_EVENT_ATTENDEES = 50;
+
 export function parseAttendeesInput(input: Record<string, unknown>): Array<{ email: string; name: string | null; role: 'req' | 'opt' }> {
   const raw = input.attendees;
   if (!Array.isArray(raw)) return [];
+  if (raw.length > MAX_EVENT_ATTENDEES) {
+    throw new Error(`Een afspraak heeft maximaal ${MAX_EVENT_ATTENDEES} deelnemers.`);
+  }
   const out: Array<{ email: string; name: string | null; role: 'req' | 'opt' }> = [];
   const seen = new Set<string>();
   for (const a of raw) {
