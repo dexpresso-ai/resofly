@@ -384,6 +384,17 @@ async function handleUserUpload(request: Request, env: Env, context: RouteContex
     await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
     throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
   }
+  // Het quotum werd vooraf gewogen op de opgegeven grootte. Zonder (of met een
+  // te kleine) Content-Length telde de upload daar voor niets: weeg hem dan
+  // opnieuw met de echte grootte, en haal hem weg als hij niet meer past.
+  if (object.size > Math.max(declaredSize, 0)) {
+    try {
+      await assertStorageCapacity(env, organizationId, object.size);
+    } catch (error) {
+      await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
+      throw error;
+    }
+  }
 
   return jsonResponse({ ok: true, key }, 200, context);
 }
