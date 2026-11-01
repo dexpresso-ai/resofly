@@ -59,7 +59,7 @@ Deno.serve(async (req) => {
     // Resterend tegoed (fractie 0..1, of null als er geen limiet is) — voor de tegoed-balk
     // bij het openen van de chat, nog vóór het eerste bericht.
     if (String(body.action || '') === 'budget') {
-      const budget = await checkUserBudget(user.id);
+      const budget = await checkUserBudget(user.id, organizationId);
       return json(req, { remainingFraction: remainingFraction(budget, 0) });
     }
     // Commandocentrum — missieplan: splits een groot doel op in parallelle deeltaken (sterk model).
@@ -87,7 +87,7 @@ Deno.serve(async (req) => {
     }
     // Commandocentrum — kosteninschatting vooraf (fractie van het maandtegoed) voor een missie.
     if (String(body.action || '') === 'estimate') {
-      const budget = await checkUserBudget(user.id);
+      const budget = await checkUserBudget(user.id, organizationId);
       const subtaskCount = Math.max(1, Math.min(Number(body.subtaskCount) || 1, MISSION_MAX_SUBTASKS));
       return json(req, { ...estimateMission(budget, subtaskCount, Boolean(body.withPlanner)), budget: { remainingFraction: remainingFraction(budget, 0) } });
     }
@@ -117,7 +117,7 @@ Deno.serve(async (req) => {
       await insertMessage(convId, organizationId, user.id, 'user', message, []);
 
       // Kostenlimiet per gebruiker: blokkeer vóór de (betaalde) Claude-call.
-      const budget = await checkUserBudget(user.id);
+      const budget = await checkUserBudget(user.id, organizationId);
       if (!budget.allowed) {
         const text = 'Je hebt je AI-tegoed voor deze maand opgebruikt. Begin volgende maand kun je weer verder, of vraag een beheerder om meer ruimte.';
         const blockedId = await insertMessage(convId, organizationId, user.id, 'assistant', text, []);

@@ -24,7 +24,7 @@ export async function runSummaryForRecording(admin: SupabaseClient, recordingId:
   }
 
   // Budget van de eigenaar (zelfde maandplafond als Gerrie).
-  if (rec.created_by && !(await userHasBudget(admin, String(rec.created_by)))) {
+  if (!(await userHasBudget(admin, rec.created_by ? String(rec.created_by) : null, String(rec.organization_id)))) {
     await admin.from('meeting_recordings').update({
       status: 'transcribed',
       error_message: 'AI-tegoed voor deze maand is op — transcript is klaar, notulen overgeslagen.',

@@ -1,4 +1,5 @@
 import { tzOffsetMs } from './schedule.ts';
+import { checkAiBudget } from './aiBudget.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { listEvents } from '../_shared/calendarAvailability.ts';
 import {
@@ -80,7 +81,6 @@ const EST_TASK_INPUT = 14000, EST_TASK_OUTPUT = 1600;
 
 // Maandelijkse kostenlimiet per gebruiker (één vaste waarde). 0 of leeg = onbeperkt.
 // Verbruik wordt in USD gelogd; we rekenen om naar euro's voor de vergelijking.
-const MONTHLY_USER_COST_EUR = Number(Deno.env.get('GERRIE_MONTHLY_USER_COST_EUR') || '0');
 const USD_TO_EUR = Number(Deno.env.get('GERRIE_USD_TO_EUR') || '0.92');
 
 
@@ -952,7 +952,7 @@ interface MissionSubtask { title: string; role: string; instruction: string; kin
  * los gesprek en logt het tokenverbruik zodat het meetelt met het maandtegoed.
  */
 async function planMission(ctx: GerrieContext, userId: string, goal: string): Promise<{ subtasks: MissionSubtask[]; summary: string; budget: { remainingFraction: number | null }; estimatePct: number | null; conversationId: string }> {
-  const budget = await checkUserBudget(userId);
+  const budget = await checkUserBudget(userId, ctx.organizationId);
   if (!budget.allowed) {
     return { subtasks: [], summary: 'Je AI-tegoed voor deze maand is op. Begin volgende maand kun je weer verder, of vraag een beheerder om meer ruimte.', budget: { remainingFraction: 0 }, estimatePct: null, conversationId: '' };
   }
@@ -1030,7 +1030,7 @@ export async function designAgent(
   userId: string,
   messages: Array<{ role: string; content: string }>,
 ): Promise<{ kind: 'question'; question: string; suggestions: string[] } | { kind: 'agent'; summary: string; agent: AgentProposal } | { kind: 'budget' }> {
-  const budget = await checkUserBudget(userId);
+  const budget = await checkUserBudget(userId, ctx.organizationId);
   if (!budget.allowed) return { kind: 'budget' };
 
   // Alleen de tools die dit teamlid ook echt mág; anders bouwt de bouwer een
@@ -5388,19 +5388,14 @@ async function getUsageSummary(organizationId: string, role: OrganizationRole): 
 interface BudgetCheck { allowed: boolean; usedEur: number; limitEur: number }
 
 /**
- * Telt het AI-verbruik van de gebruiker in de huidige kalendermaand (over al zijn
- * organisaties) en vergelijkt dat met de vaste maandlimiet. Geen limiet ingesteld
- * (0/leeg) => altijd toegestaan. Bij een leesfout: fail-open (toestaan) i.p.v. de
- * gebruiker onterecht blokkeren.
+ * Het AI-budget van deze gebruiker in deze organisatie (_shared/aiBudget.ts):
+ * een plafond per gebruiker (over al zijn organisaties) en een per organisatie,
+ * met een standaard als de env-var ontbreekt, en "nee" als het verbruik niet te
+ * lezen is. Zonder organisatie telt alleen het eigen tegoed.
  */
-async function checkUserBudget(userId: string): Promise<BudgetCheck> {
-  if (!(MONTHLY_USER_COST_EUR > 0)) return { allowed: true, usedEur: 0, limitEur: 0 };
-  const monthStart = `${todayIso().slice(0, 7)}-01T00:00:00Z`;
-  const { data, error } = await supabaseAdmin.from('ai_usage').select('cost_usd').eq('user_id', userId).gte('created_at', monthStart);
-  if (error) { console.warn('gerrie-agent budgetcheck mislukt, sta toe:', error.message); return { allowed: true, usedEur: 0, limitEur: MONTHLY_USER_COST_EUR }; }
-  const usd = (data ?? []).reduce((sum: number, r: Record<string, unknown>) => sum + Number(r.cost_usd || 0), 0);
-  const usedEur = usd * USD_TO_EUR;
-  return { allowed: usedEur < MONTHLY_USER_COST_EUR, usedEur, limitEur: MONTHLY_USER_COST_EUR };
+async function checkUserBudget(userId: string, organizationId?: string | null): Promise<BudgetCheck> {
+  const budget = await checkAiBudget(supabaseAdmin, userId, organizationId ?? null);
+  return { allowed: budget.allowed, usedEur: budget.usedEur, limitEur: budget.limitEur };
 }
 
 /** Resterend tegoed als fractie 0..1, of null als er geen limiet is ingesteld. */

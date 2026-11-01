@@ -79,7 +79,7 @@ Deno.serve(async (req) => {
       throw new HttpError('Bestandstype wordt niet ondersteund. Gebruik PDF, JPG, PNG, WEBP, GIF of een UBL-e-factuur (XML).', 400);
     }
     if (!hasAnthropicKey()) throw new HttpError('AI is nog niet geconfigureerd (ANTHROPIC_API_KEY ontbreekt).', 500);
-    if (!(await userHasBudget(admin, user.id))) {
+    if (!(await userHasBudget(admin, user.id, organizationId))) {
       throw new HttpError('Je AI-tegoed voor deze maand is op. Probeer het volgende maand opnieuw.', 429);
     }
 

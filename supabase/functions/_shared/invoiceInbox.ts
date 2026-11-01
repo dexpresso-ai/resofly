@@ -377,7 +377,7 @@ async function runPipeline(admin: SupabaseClient, row: InboxRow, opts: ProcessOp
         if (!SUPPORTED_MIME_TYPES.includes(mime)) { skipped.push({ name: att.name, why: 'bestandstype niet ondersteund' }); continue; }
         if (!settings.ai_enabled) { aiBlocked = aiBlocked ?? 'ai_disabled'; continue; }
         if (!hasAnthropicKey()) { aiBlocked = aiBlocked ?? 'ai_unavailable'; continue; }
-        if (budgetUserId && !(await userHasBudget(admin, budgetUserId))) { aiBlocked = aiBlocked ?? 'budget_exhausted'; continue; }
+        if (!(await userHasBudget(admin, budgetUserId ?? null, organizationId))) { aiBlocked = aiBlocked ?? 'budget_exhausted'; continue; }
         result = await buildAiProposal(admin, organizationId, { fileName: att.name, mimeType: mime, dataBase64: bytesToBase64(bytes) }, ctx, { usageUserId: budgetUserId });
       }
     } catch (err) {
@@ -672,7 +672,7 @@ async function processBodyText(admin: SupabaseClient, row: InboxRow, env: Pipeli
   const { ctx, settings, budgetUserId } = env;
   if (!settings.ai_enabled) return await updateRow(admin, row.id, { status: 'needs_review', reason: 'ai_disabled', processed_at: now });
   if (!hasAnthropicKey()) return await updateRow(admin, row.id, { status: 'needs_review', reason: 'ai_unavailable', processed_at: now });
-  if (budgetUserId && !(await userHasBudget(admin, budgetUserId))) {
+  if (!(await userHasBudget(admin, budgetUserId ?? null, row.organization_id))) {
     return await updateRow(admin, row.id, { status: 'needs_review', reason: 'budget_exhausted', processed_at: now });
   }
 

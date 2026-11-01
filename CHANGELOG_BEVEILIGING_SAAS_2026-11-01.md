@@ -338,6 +338,29 @@ creditnota's erbij. Migratie `20261101090000`:
 
 Droog getest op staging als owner.
 
+### 21. AI-budget per gebruiker én per organisatie (middel, opgelost)
+
+Het AI-budget had drie gaten:
+- zonder `GERRIE_MONTHLY_USER_COST_EUR` gold geen enkel plafond;
+- het telde alleen per gebruiker, dus meer teamleden of agents gaven zonder
+  grens meer kosten;
+- kon het verbruik niet worden gelezen, dan ging de aanroep toch door.
+
+De factuur-inbox controleerde bovendien niets meer zodra de maker van het
+inbox-adres was vertrokken.
+
+Nu (`_shared/aiBudget.ts`, met tests):
+- standaard 25 euro per gebruiker en 250 euro per organisatie per maand, via
+  `GERRIE_MONTHLY_USER_COST_EUR` en `GERRIE_MONTHLY_ORG_COST_EUR`. Een
+  expliciete 0 betekent geen plafond;
+- het verbruik wordt in de database opgeteld (migratie `20261101100000`);
+- kan het verbruik niet worden gelezen, dan nee.
+
+Dit geldt voor Gerrie, agents, notulen, de factuurscan en de factuur-inbox.
+**Kies de bedragen** voor productie bij je prijsplannen. Wat nog open is: twee
+gelijktijdige aanroepen passeren allebei de controle, want die telt pas na de
+aanroep.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -350,7 +373,7 @@ Droog getest op staging als owner.
 | J | middel | De agenda-OAuth-callback is niet gekoppeld aan de sessie (open sinds 26 september). | calendar-integrations |
 | K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
 | L | middel | Opslagquotum is alleen een advies: de opgegeven grootte telt, en het faalt open. Stream-kopieën onbeperkt. | workers/media-api |
-| M | middel | AI-budget: staat uit zonder env-var, faalt open, telt pas na de aanroep, en mislukte aanroepen tellen niet. | claudeSummary.ts, gerrieCore.ts |
+| M | laag | AI-budget: gelijktijdige aanroepen passeren samen de controle (die telt pas na de aanroep), en mislukte aanroepen tellen niet. Het plafond zelf staat er (fix 21). | aiBudget.ts |
 | N | middel | De productie-config van de workers wijst naar het staging-project van Supabase. | workers/*/wrangler.toml |
 | O | middel | De oude `cloudflare-worker/` (zonder de bewaking van media-api) wordt nog in de docs genoemd. Controleer of hij nog draait, en verwijder hem. | cloudflare-worker, README |
 | P | laag | `calendar_event_links` toont titels van privé-afspraken van collega's; `calendar_sources.feed_url` is leesbaar. | RLS |
