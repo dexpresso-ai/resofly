@@ -198,7 +198,7 @@ Beide Supabase-clients gebruiken nu PKCE. Tokens in de URL worden geweigerd, en
 een inloglink werkt alleen in de browser die hem aanvroeg. Alle Auth-sjablonen
 gebruiken `ConfirmationURL`, dus de mails blijven werken.
 
-### 13. Mail als open relay, deels (hoog, deels opgelost)
+### 13. Mail als open relay (hoog, opgelost)
 
 - **Testmails:** "Stuur testmail" bij campagnes en het mailsjabloon ging naar
   elk adres, met de platform-afzender en zonder limiet. Nu alleen naar je eigen
@@ -209,7 +209,15 @@ gebruiken `ConfirmationURL`, dus de mails blijven werken.
   heeft, krijgt een rij in `organization_email_limits`; die zet alleen de
   platformbeheerder. Het quotum geldt nu voor vrije klantmail en voor
   agenda-uitnodigingen.
-- **Nog open:** het quotum op de overige routes (punt A).
+- **Alle verzendroutes** (sessie 2): ook campagnes, facturen, herinneringen,
+  aanmaningen, creditnota's, offertes, contracten, gespreksamenvattingen,
+  boekingslinks, deellinks, zendingen, klantmeldingen, agentrapporten en
+  uitnodigingen. Waar een mail niet mag mislukken, wacht hij: campagne-
+  ontvangers gaan terug in de rij, flows en klantmeldingen worden later opnieuw
+  geprobeerd. Een bevestiging na een handtekening of boeking blijft achterwege;
+  de handtekening of boeking zelf staat vast.
+- **Vangnet:** `emailQuota.test.ts` faalt als een bestand via Resend verstuurt
+  zonder het quotum aan te roepen.
 
 ### 14. Vangnetten (opgelost)
 
@@ -311,7 +319,7 @@ samen met een captcha (zie **Aanbevolen**).
 
 | # | Ernst | Wat | Waar |
 | --- | --- | --- | --- |
-| A | hoog | Het mailquotum (fix 13) ook aanroepen in de overige routes. Dat zijn campagnes (dispatch: niet weigeren maar uitstellen), document-mails (`invoice-workflow`, `quote-workflow`, `contract-workflow`, `contract-public`), `meeting-transcribe` `sendSummary`, `meeting-booking`, `meeting-booking-public`, `file-share` en `fileTransferServer`. Patroon: `await takeEmailQuota(supabaseAdmin, organizationId, n, …)` vlak voor het versturen. Campagne- en flow-HTML ook bij verzenden saneren. | zie lijst |
+| A | laag | Campagne- en flow-HTML bij het verzenden saneren, zoals klantmail al gebeurt. Het relay-risico is weg: testmails gaan alleen nog naar het team en alles telt mee in het quotum. | campaigns |
 | C | middel | Vergrendeling van facturen terug te draaien (status, `locked_at` en `journal_entry_id` vrij te schrijven); inkoopfacturen zonder bewaking; een geaccepteerde offerte is te verwijderen. | invoices, purchase_invoices, quotes |
 | E | middel | WOPI en office kunnen elk bestand van de eigen organisatie overschrijven, ook de vastgelegde factuur- en contract-PDF's. | workers/media-api |
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
@@ -367,7 +375,7 @@ En verder, voor productie:
 | Bank, rapporten, kleine sloten | klaar (20261101030000) |
 | PKCE, vangnetten, testmails | klaar |
 | Omleiden van facturen of geld, TRUNCATE | klaar (20261101040000) |
-| Mailquotum per organisatie | eerste routes klaar (20261101050000); rest is punt A |
+| Mailquotum per organisatie | klaar op alle routes (20261101050000, sessie 2) |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
 | Review security-definer-functies | scan klaar (20261101060000); diepe review is punt U |
 | Open bevindingen A–T | **nog doen** |
