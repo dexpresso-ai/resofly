@@ -630,10 +630,18 @@ En verder, voor productie:
 ## Verder in de volgende sessie
 
 1. Lees deze file en `git log --oneline staging -20`.
-2. Pak de tabel **Gevonden en nog open** van boven naar beneden aan.
-3. Elke databasefix eerst droog testen op staging: een transactie die eindigt
+2. **Voor de eigenaar:**
+   - rol de media-worker uit (fix 6, 22 en 32), en de office-server (fix 28);
+   - de punten K, N en O;
+   - de checklist voor productie.
+3. **Nog open in de code** (laag, of middel zonder spoed), in deze volgorde:
+   - L: een bytes-teller in de media-worker;
+   - M: het AI-budget reserveren vóór de aanroep;
+   - G: de DMARC-uitslag doorgeven aan `mail-inbound`;
+   - R: een CSP per omgeving;
+   - U: de maker op de overige tabellen.
+4. Elke databasefix eerst droog testen op staging: een transactie die eindigt
    met `raise exception`. Zie de commits van deze ronde.
-4. Rol de media-worker uit (fix 6, 22 en 32), en de office-server (fix 28).
 
 | Onderdeel | Stand |
 | --- | --- |
@@ -651,6 +659,7 @@ En verder, voor productie:
 | Editor-segmenten, office-server, opslagquotum | klaar in de code; **workers nog uitrollen** |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
 | Review security-definer-functies | klaar (20261101140000 en 150000); restpunt bij punt U |
+| Pincode van een galerij | klaar (20261101160000) |
 | Open bevindingen | zie de tabel hieronder (vooral laag, plus acties voor de eigenaar) |
 
 ## Aanbevolen, vraagt een keuze of een account van de eigenaar
