@@ -124,6 +124,41 @@ function secretMatches(provided: string, expected: string): boolean {
   return diff === 0;
 }
 
+/**
+ * Het pad zoals Collabora het leest: gedecodeerd (ook dubbel), kleine letters,
+ * zonder dubbele slashes. Zo komt "/cool/convert%2Dto" of "//cool/Convert-To"
+ * niet langs een controle op "/convert-to".
+ */
+function normalizedPath(pathname: string): string {
+  let path = pathname;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const decoded = decodeURIComponent(path);
+      if (decoded === path) break;
+      path = decoded;
+    } catch {
+      break;
+    }
+  }
+  return path.toLowerCase().replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+}
+
+/**
+ * Collabora's REST-eindpunten die een geüpload document verwerken. Ze delen de
+ * IP-controle van convert-to, en die liet proxyverkeer door: zonder deze lijst
+ * kon iedereen op internet onze container als conversiedienst gebruiken, of de
+ * LibreOffice-parser bestoken in het proces met de geopende documenten van
+ * alle klanten. Alleen de media-api (met het gedeelde geheim) mag ze gebruiken.
+ */
+const PROTECTED_PATH_PARTS = [
+  '/convert-to',
+  '/get-thumbnail',
+  '/extract-link-targets',
+  '/extract-document-structure',
+  '/transform-document-structure',
+  '/render-search-result',
+];
+
 // Route élk verzoek naar ÉÉN vaste instance. Een geopend document is in-memory vastgepind
 // aan één coolwsd-proces, en de bijbehorende co-editing-WebSocket moet op diezelfde instance
 // blijven — dus we load-balancen bewust NIET. (Later opschalen naar meerdere instances =
@@ -133,16 +168,18 @@ const INSTANCE_ID = 'collabora-1';
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
+    const path = normalizedPath(pathname);
     // Hardening: proxy Collabora's admin-console niet naar het internet — alleen editor-/WOPI-
     // verkeer. (We zetten geen admin-credentials, maar sluit het oppervlak expliciet af.)
-    if (pathname.endsWith('/admin.html') || pathname.includes('adminws') || pathname.includes('/dist/admin')) {
+    if (path.endsWith('/admin.html') || path.includes('adminws') || path.includes('/dist/admin')) {
       return new Response('Not found', { status: 404 });
     }
 
-    // Collabora's convert-to-REST-API (docx→pdf) staat standaard open voor
-    // iedereen die deze Worker kan bereiken. Alleen onze eigen media-api mag hem
-    // gebruiken; die stuurt het gedeelde geheim mee over de service binding.
-    if (pathname.includes('/convert-to')) {
+    // Collabora's conversie-REST-API (convert-to en verwanten) staat standaard
+    // open voor iedereen die deze Worker kan bereiken. Alleen onze eigen
+    // media-api mag hem gebruiken; die stuurt het gedeelde geheim mee over de
+    // service binding.
+    if (PROTECTED_PATH_PARTS.some((part) => path.includes(part))) {
       const provided = request.headers.get('x-resofly-convert') || '';
       if (!env.OFFICE_CONVERT_SECRET || !secretMatches(provided, env.OFFICE_CONVERT_SECRET)) {
         return new Response('Not found', { status: 404 });
