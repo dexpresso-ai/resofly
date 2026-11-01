@@ -3,6 +3,7 @@ import { CalendarClock, CheckCircle2, ChevronDown, ChevronRight, MapPin, Video }
 import type { CalendarExternalEvent, Client, Project, Task } from '../types';
 import { taskDayKey } from '../lib/workweek';
 import { formatClock } from '../lib/sun';
+import { safeHttpUrl } from '../lib/safeUrl';
 
 /**
  * Onbewolkt (2026-10-23): Vandaag in Zenit, zonder dat hetzelfde feit twee of
@@ -122,7 +123,7 @@ export function DayAgenda({ events, lingering, tasks, todayKey, dayStartIso, ren
                 <span>tot {formatClock(entry.end)}{where && <><MapPin size={11} aria-hidden="true" />{where}</>}</span>
               </span>
             </button>
-            {event.meeting_url && !past && <a className="btn zag-join" href={event.meeting_url} target="_blank" rel="noreferrer">Deelnemen</a>}
+            {safeHttpUrl(event.meeting_url) && !past && <a className="btn zag-join" href={safeHttpUrl(event.meeting_url) ?? undefined} target="_blank" rel="noreferrer">Deelnemen</a>}
           </div>);
         }
         if (index === timed.length - 1 && nowAt === timed.length) nodes.push(nowLine);
