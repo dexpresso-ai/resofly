@@ -385,6 +385,20 @@ bijlagen.
 
 **Actie:** de media-worker uitrollen (fix 6 en deze).
 
+### 23. Een agendakoppeling voor een ander afronden (middel, opgelost)
+
+Open punt van 26 september. De OAuth-callback van Google en Microsoft heeft
+geen sessie, en wisselde de code meteen in voor de gebruiker uit de
+ondertekende state. Wie zijn eigen koppellink naar een collega of klant
+stuurde, kreeg na diens "toestaan" diens agenda en contacten in zijn eigen
+account.
+
+Nu stuurt de callback de browser met code en state terug naar de app, en dan
+alleen naar een adres van de app zelf. De app rondt af met `oauthComplete`,
+onder de sessie van wie er is ingelogd. De server koppelt alleen als dat
+dezelfde gebruiker is als in de state, met schrijfrecht op Agenda in die
+organisatie.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -393,7 +407,6 @@ bijlagen.
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
 | G | middel | Inkomende mail: de afzender is niet geverifieerd, want DMARC wordt niet doorgegeven. De factuur-inbox boekt automatisch op het From-adres. De aliasroute vertrouwt de `.eml` nog. De reply-route is opgelost (fix 18). | workers/email-inbound, mail-inbound, invoiceInbox |
 | I | laag | mcp-oauth: een fout-redirect naar een geregistreerd adres als `response_type` ontbreekt. Liever een foutpagina tonen. Registratie zelf is begrensd (fix 17). | mcp-oauth |
-| J | middel | De agenda-OAuth-callback is niet gekoppeld aan de sessie (open sinds 26 september). | calendar-integrations |
 | K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
 | L | middel | Opslagquotum is alleen een advies: de opgegeven grootte telt, en het faalt open. Stream-kopieën onbeperkt. | workers/media-api |
 | M | laag | AI-budget: gelijktijdige aanroepen passeren samen de controle (die telt pas na de aanroep), en mislukte aanroepen tellen niet. Het plafond zelf staat er (fix 21). | aiBudget.ts |
