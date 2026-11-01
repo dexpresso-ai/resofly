@@ -7,6 +7,7 @@ import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/
 import { renderTransferBlockHtml, renderTransferBlockText } from '../_shared/emailTemplates/fileTransfer.ts';
 import { issueRecipientLink, loadCompanyForMail, recordTransferEvent } from '../_shared/fileTransferServer.ts';
 import { domainParents, domainsOverlap, normalizeDomainName, senderDomain } from '../_shared/domainOverlap.ts';
+import { assertTeamTestRecipient } from '../_shared/testRecipient.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
@@ -120,7 +121,7 @@ serve(async (req) => {
           );
         }
 
-        const result = await sendTestEmail(organizationId, body);
+        const result = await sendTestEmail(organizationId, body, user.email);
         return json(req, { ok: true, ...result });
       }
 
@@ -215,6 +216,7 @@ serve(async (req) => {
 async function sendTestEmail(
   organizationId: string,
   body: Record<string, unknown>,
+  callerEmail: string | undefined,
 ): Promise<{ providerEmailId: string; recipientEmail: string }> {
   if (!RESEND_API_KEY) {
     throw new MailHttpError(
@@ -242,6 +244,10 @@ async function sendTestEmail(
       422,
     );
   }
+  // Alleen naar het eigen team: anders is deze knop een open relay met de
+  // platform-afzender (zie _shared/testRecipient.ts).
+  await assertTeamTestRecipient(supabaseAdmin, organizationId, recipientEmail, callerEmail,
+    (message, status) => new MailHttpError(message, status));
 
   const organization = await loadOrganization(organizationId);
   const company = await loadCompanySettings(organizationId);

@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering.** Zes reviews zijn klaar en elf fixes staan op staging.
+> **Status: in uitvoering.** Zes reviews zijn klaar en veertien fixes staan op staging.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
 ## Werkwijze
@@ -187,12 +187,42 @@ leesrecht op Financiën (migratie `20261101030000`).
   `file-transfer` lieten standaard localhost en verzoeken zonder Origin toe. Nu
   standaard uit.
 
+### 12. Login-CSRF (middel, opgelost)
+
+Met de impliciete flow nam de app elk tokenpaar uit een link over. Iemand met
+een eigen account kon zo een link sturen, waarna het slachtoffer ongemerkt in
+zíjn werkruimte werkte. Wat het slachtoffer daar koppelde, zoals agenda, bank
+en documenten, kwam dan bij de aanvaller terecht.
+
+Beide Supabase-clients gebruiken nu PKCE. Tokens in de URL worden geweigerd, en
+een inloglink werkt alleen in de browser die hem aanvroeg. Alle Auth-sjablonen
+gebruiken `ConfirmationURL`, dus de mails blijven werken.
+
+### 13. Mail als open relay, deels (hoog, deels opgelost)
+
+- **Testmails:** "Stuur testmail" bij campagnes en het mailsjabloon ging naar
+  elk adres, met de platform-afzender en zonder limiet. Nu alleen naar je eigen
+  adres of dat van een actief teamlid (`_shared/testRecipient.ts`).
+- **Agenda-uitnodigingen:** een afspraak heeft nu maximaal 50 deelnemers.
+- **Nog open:** een quotum per organisatie op alle verzendroutes (punt A).
+
+### 14. Vangnetten (opgelost)
+
+- **Rooktest:** controleert na elke deploy de Auth-instellingen waar het portaal
+  en de uitnodigingen op leunen. Dat zijn: geen zelfregistratie, een adres
+  bevestigen, een adreswijziging dubbel bevestigen, geen anonieme accounts en
+  wachtwoorden van 12 tekens.
+- **Workflows:** het `GITHUB_TOKEN` mag alleen lezen.
+- **CSV-export:** een cel die met `= + - @` begint, wordt tekst (`csvSafeText`).
+- **Uitloggen:** wist ook onverstuurde chatberichten en de besluiten van Gerrie
+  die nog wachten.
+- **DOMPurify 3.4.17:** de productie-dependencies hebben weer 0 kwetsbaarheden.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
 | --- | --- | --- | --- |
-| A | hoog | Mail zonder quotum: testverzending van campagnes en mail naar elk adres, document-mails met vrije ontvanger, agenda-uitnodigingen zonder limiet op deelnemers. Phishing vanaf het platformdomein, en Resend kan het hele platform blokkeren. | campaigns, mail, invoice/quote/contract-workflow, calendarEventWrite |
-| B | middel | Login-CSRF: een link met tokens van een ander account logt je daarin in. Fix: `flowType: 'pkce'` in beide Supabase-clients. | src/lib/supabase.ts, supabasePortal.ts |
+| A | hoog | Mail zonder quotum per organisatie. Testmails en het aantal deelnemers zijn al begrensd (fix 13). Nog open: een teller per organisatie per uur en per dag op alle 12 verzendroutes (`grep -rln api.resend.com/emails supabase/functions`): klantmail, campagnes, document-mails met vrije ontvanger, samenvattingen van gesprekken, boekingslinks en deellinks. Campagne- en flow-HTML ook bij verzenden saneren. | mail, campaigns, invoice/quote/contract-workflow, meeting-*, file-share |
 | C | middel | Vergrendeling van facturen terug te draaien (status, `locked_at` en `journal_entry_id` vrij te schrijven); inkoopfacturen zonder bewaking; een geaccepteerde offerte is te verwijderen. | invoices, purchase_invoices, quotes |
 | D | middel | Gerrie, MCP en API mogen het e-factuuradres van een klant en het IBAN van een leverancier wijzigen zonder hoge risicostand, dus zonder goedkeuring. | _shared/actions/clients.ts, bookkeeping.ts |
 | E | middel | WOPI en office kunnen elk bestand van de eigen organisatie overschrijven, ook de vastgelegde factuur- en contract-PDF's. | workers/media-api |
@@ -201,14 +231,14 @@ leesrecht op Financiën (migratie `20261101030000`).
 | H | middel | portal-login: geen rate limit, en door de timing te raden welke adressen klant zijn. | portal-login |
 | I | middel | mcp-oauth `/register`: onbeperkt registreren, en een fout-redirect naar elk geregistreerd adres. | mcp-oauth |
 | J | middel | De agenda-OAuth-callback is niet gekoppeld aan de sessie (open sinds 26 september). | calendar-integrations |
-| K | middel | De CI-secrets zijn vanaf elke branch te gebruiken: geen `environment:` en geen `permissions:`. | .github/workflows |
+| K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
 | L | middel | Opslagquotum is alleen een advies: de opgegeven grootte telt, en het faalt open. Stream-kopieën onbeperkt. | workers/media-api |
 | M | middel | AI-budget: staat uit zonder env-var, faalt open, telt pas na de aanroep, en mislukte aanroepen tellen niet. | claudeSummary.ts, gerrieCore.ts |
 | N | middel | De productie-config van de workers wijst naar het staging-project van Supabase. | workers/*/wrangler.toml |
 | O | middel | De oude `cloudflare-worker/` (zonder de bewaking van media-api) wordt nog in de docs genoemd. Controleer of hij nog draait, en verwijder hem. | cloudflare-worker, README |
 | P | laag | `calendar_event_links` toont titels van privé-afspraken van collega's; `calendar_sources.feed_url` is leesbaar. | RLS |
 | Q | laag | Interne foutteksten in publieke functies; ACAO `*` bij meeting-booking-public; contract-vraag zonder limiet; pin-blokkade per galerij. | publieke functies |
-| R | laag | CSP met wildcards (`*.supabase.co`, `*.workers.dev`, `img-src https:`); afbeeldingen in inkomende mail laden vanzelf; CSV-formule-injectie; DOMPurify naar 3.4.17. | frontend |
+| R | laag | CSP met wildcards (`*.supabase.co`, `*.workers.dev`, `img-src https:`), en afbeeldingen in inkomende mail laden vanzelf. | frontend |
 | S | laag | Gebruik van AI per lid opgeteld over alle organisaties (`getUsageSummary` zonder organisatiefilter). | gerrieCore.ts |
 | T | laag | Chatdeelname blijft na vertrek staan; `p_created_by` in boekingsfuncties komt van de aanroeper. | RLS/RPC |
 | U | — | De controle van de 131 security-definer-functies die elke ingelogde gebruiker kan aanroepen, is nog niet volledig afgerond. Die review stopte zonder rapport. | db |
@@ -249,6 +279,7 @@ En verder, voor productie:
 | Klantaccounts zonder werkruimte | klaar (20261101010000) |
 | Video's, domeinen, vertrek | klaar (20261101020000; worker nog uitrollen) |
 | Bank, rapporten, kleine sloten | klaar (20261101030000) |
+| PKCE, vangnetten, testmails | klaar |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
 | Review security-definer-functies | **nog doen** (punt U) |
 | Open bevindingen A–T | **nog doen** |

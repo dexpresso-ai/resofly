@@ -13,6 +13,7 @@ import {
   htmlToText,
 } from '../_shared/resend.ts';
 import { makeUnsubscribeToken } from '../_shared/unsubscribe.ts';
+import { assertTeamTestRecipient } from '../_shared/testRecipient.ts';
 import {
   buildMergeTokens,
   buildMergeFallbacks,
@@ -147,7 +148,7 @@ serve(async (req) => {
       }
       case 'sendTestCampaign': {
         requireWrite(effectiveRole);
-        const result = await sendTestCampaign(organizationId, body);
+        const result = await sendTestCampaign(organizationId, body, user.email);
         return json(req, { ok: true, ...result });
       }
       case 'sendCampaign': {
@@ -536,12 +537,17 @@ async function loadCampaign(organizationId: string, campaignId: string): Promise
 async function sendTestCampaign(
   organizationId: string,
   body: Record<string, unknown>,
+  callerEmail: string | undefined,
 ): Promise<{ providerEmailId: string; recipientEmail: string; previewClientId: string | null }> {
   requireResendConfigured();
   requireUnsubscribeConfigured();
   const campaign = await loadCampaign(organizationId, String(body.campaignId || ''));
   const recipientEmail = normalizeEmail(body.testEmail);
   if (!isEmail(recipientEmail)) throw new CampaignHttpError('Vul een geldig test-e-mailadres in.', 422);
+  // Alleen naar het eigen team: met een eigen tekst en een lus was deze knop
+  // een open relay met de platform-afzender (zie _shared/testRecipient.ts).
+  await assertTeamTestRecipient(supabaseAdmin, organizationId, recipientEmail, callerEmail,
+    (message, status) => new CampaignHttpError(message, status));
   if (!campaign.subject.trim()) throw new CampaignHttpError('De campagne heeft nog geen onderwerp.', 422);
 
   const brandName = await loadOrgBrand(organizationId);
