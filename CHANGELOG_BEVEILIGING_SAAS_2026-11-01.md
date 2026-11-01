@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering (sessie 3).** 33 fixes staan op staging (de workers nog met de hand uitrollen). Wat open is, staat
+> **Status: in uitvoering (sessie 3).** 34 fixes staan op staging (de workers nog met de hand uitrollen). Wat open is, staat
 > onderaan: vooral lage punten, en acties die alleen de eigenaar kan doen.
 > **Alle actiepunten, stap voor stap:** `ACTIEPUNTEN_BEVEILIGING_SAAS_2026-11-01.md`.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
@@ -591,7 +591,38 @@ noemt nu het echte aantal minuten.
 
 Migratie `20261101160000` en `gallery-public`. Droog getest op staging.
 
+### 34. Teamchat: online-status en "typt" waren publieke kanalen (middel, opgelost)
+
+Teamchat gebruikt twee Realtime-kanalen buiten de database om:
+`chat:presence:<organisatie-id>` voor wie er online is, en
+`chat:typing:<gesprek-id>` voor wie er typt. Die waren publiek, en op het
+project staan publieke kanalen aan. Iedereen met de anon-sleutel kon ze dus
+openen, ook zonder in te loggen. De anon-sleutel staat in de frontendbundel.
+
+Met alleen het id van een organisatie zag je zo welke teamleden online waren
+en wanneer. Dat id staat bijvoorbeeld in de bestandsadressen van een gedeelde
+galerij. Je kon je ook als een collega online melden.
+
+Nu opent de app beide kanalen als privé, en bepalen regels op
+`realtime.messages` wie erin mag. Voor de online-status is dat elk teamlid met
+leesrecht op Teamchat in die organisatie, voor typen alleen de deelnemers aan
+het gesprek. De kanalen voor databasewijzigingen blijven zoals ze zijn; daar
+geldt de RLS van de tabellen al.
+
+Een test (`src/lib/realtimeChannels.test.ts`) laat de build falen als er een
+presence- of broadcastkanaal zonder `private: true` bijkomt. Migratie
+`20261101170000`, droog getest op staging. Teamleden mogen erin.
+Buitenstaanders, gebruikers zonder login en andere kanaalnamen niet.
+
 ### Controles in sessie 3
+
+- **Verzoeken naar adressen van klanten (SSRF).** Webhooks en ICS-feeds lossen
+  de host zelf op en weigeren privé-adressen (`webhookDelivery.ts`,
+  `icsSubscription.ts`, `pinnedGet.ts`). Alle verzoeken met een OAuth-token
+  gaan naar vaste hosts van Google en Microsoft. Geen gat gevonden.
+- **De maker als recht (punt U).** Waar `created_by` toegang geeft, eist de
+  database bij aanmaken al dat jij het bent, of schrijft alleen de server
+  (Gerrie-gesprekken). U blijft dus laag.
 
 - **Kwetsbare packages (`npm audit`).** De productie-packages van de app en de
   vier workers hebben geen meldingen. In de bouwketen is `source-map-js`

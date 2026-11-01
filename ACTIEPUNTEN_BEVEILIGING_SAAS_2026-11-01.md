@@ -288,6 +288,14 @@ Op staging staan nu `MOLLIE_ALLOW_MOCK`, `INVOICE_DEBUG_ERRORS`,
 `MAIL_ALLOW_LOCAL_DEV` en `QUOTE_ALLOW_LOCAL_DEV` aan. Dat is daar de
 bedoeling, maar kopieer de secrets dus niet blind over.
 
+**Realtime**
+- De Teamchat-kanalen zijn privé (fix 34). Publieke kanalen staan op het
+  project nog aan; de kanalen voor databasewijzigingen gebruiken die, met de
+  RLS van de tabellen als bescherming.
+- Wil je publieke kanalen helemaal uit (Realtime → Settings, "Allow public
+  access"), test dat dan eerst op staging. Mogelijk moeten die kanalen dan ook
+  privé.
+
 **Klaar als:** de lijst secrets op productie geen van de zes uit de tabel
 bevat, en de rooktest slaagt.
 
@@ -438,7 +446,9 @@ dit samen met de eigen domeinen uit actie 8.
 
 Op zo'n 40 tabellen buiten de boekhouding (taken, notities, projecten, mail)
 vult de app `created_by` zelf in. Daar hangt geen recht aan, alleen de naam die
-het team ziet.
+het team ziet. Waar de maker wél toegang geeft (Gerrie-gesprekken,
+agendakoppelingen, contractnotities), eist de database bij aanmaken al dat jij
+het bent, of schrijft alleen de server.
 
 **Aanpak:** de trigger `stamp_actor_columns` uit fix 31 erop zetten. Ga per
 tabel na of een import of Gerrie namens iemand anders aanmaakt; die draaien
@@ -459,6 +469,8 @@ met de service-role en blijven ongemoeid.
 6. Een factuur versturen, en de publieke factuurpagina openen.
 7. Een contract laten tekenen via de link.
 8. Inkomende mail: een mail naar het doorstuuradres komt in het dossier.
-9. Boekhouding: een memoriaalboeking maken. Een boeking in een afgesloten
-   periode wordt geweigerd.
-10. De smoke test in de GitHub-workflow is groen.
+9. Teamchat met twee teamleden: je ziet elkaar online, en "typt…" verschijnt
+   bij de ander (fix 34; de kanalen zijn nu privé).
+10. Boekhouding: een memoriaalboeking maken. Een boeking in een afgesloten
+    periode wordt geweigerd.
+11. De smoke test in de GitHub-workflow is groen.

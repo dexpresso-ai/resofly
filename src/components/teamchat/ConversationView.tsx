@@ -212,7 +212,8 @@ function useTyping(api: TeamChatApi, conversationId: string) {
       if (cancelled) return;
       const token = data.session?.access_token;
       if (token) supabase.realtime.setAuth(token);
-      channel = supabase.channel(`chat:typing:${conversationId}`, { config: { broadcast: { self: false } } });
+      // Privé: alleen deelnemers aan dit gesprek (migratie 20261101170000).
+      channel = supabase.channel(`chat:typing:${conversationId}`, { config: { private: true, broadcast: { self: false } } });
       channel.on('broadcast', { event: 'typing' }, (msg) => {
         const uid = (msg.payload as { user_id?: string })?.user_id;
         if (!uid || uid === me) return;
