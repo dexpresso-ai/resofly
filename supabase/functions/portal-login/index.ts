@@ -51,6 +51,12 @@ serve(async (req) => {
     const email = String(body.email || '').trim().toLowerCase();
     if (!isEmail(email)) throw new PortalLoginError('Vul een geldig e-mailadres in.', 400);
 
+    // Een rem (migratie 20261101080000): per afzender en per e-mailadres. Boven
+    // de grens hetzelfde antwoord als altijd, maar zonder opzoeken en zonder
+    // account: anders is dit een gratis accountfabriek, een mailbom en een
+    // opzoekdienst voor "is dit iemands klant?".
+    if (await portalLoginThrottled(req, email)) return json(req, { ok: true, known: true });
+
     // Toegang is afgeleid uit clients.email: alleen bekende klanten krijgen een
     // account. Onbekende adressen worden NIET aangemaakt (geen open registratie,
     // geen enumeratie van geldige adressen via side effects).
@@ -76,6 +82,32 @@ serve(async (req) => {
     return json(req, { ok: false, error: message }, status);
   }
 });
+
+/** Telt deze aanvraag; true als de afzender of het adres even moet wachten. */
+async function portalLoginThrottled(req: Request, email: string): Promise<boolean> {
+  const address = (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
+    .trim().slice(0, 64);
+  const [ipKey, emailKey] = await Promise.all([
+    sha256Hex(`portal-login:ip:${address}`),
+    sha256Hex(`portal-login:email:${email}`),
+  ]);
+  const hit = async (key: string, windowSeconds: number, max: number, blockSeconds: number): Promise<number> => {
+    const { data, error } = await supabaseAdmin.rpc('portal_login_hit', {
+      p_key: key, p_window_seconds: windowSeconds, p_max_attempts: max, p_block_seconds: blockSeconds,
+    });
+    // Een kapotte teller (migratie nog niet gedraaid) mag het inloggen niet blokkeren.
+    if (error) { console.warn('portal_login_hit mislukt', error.message); return 0; }
+    return Number(data) || 0;
+  };
+  // 20 per 10 minuten per afzender; 5 per uur per e-mailadres.
+  const [ipWait, emailWait] = await Promise.all([hit(ipKey, 600, 20, 900), hit(emailKey, 3600, 5, 3600)]);
+  return ipWait > 0 || emailWait > 0;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 /** Maakt het auth-account aan als het nog niet bestaat. Idempotent: een al
  *  bestaand account is geen fout. email_confirm = true zodat de magische link
