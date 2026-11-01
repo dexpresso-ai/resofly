@@ -206,6 +206,13 @@ async function handleRegister(req: Request): Promise<Response> {
  */
 const MAX_STATE_LENGTH = 2048;
 
+/** Heeft ooit iemand deze client goedgekeurd (een koppeling, ook een ingetrokken)? */
+async function clientHasGrant(clientId: string): Promise<boolean> {
+  const { data, error } = await admin.from('mcp_grants').select('id').eq('client_id', clientId).limit(1);
+  if (error) return false;
+  return Array.isArray(data) && data.length > 0;
+}
+
 async function handleAuthorize(url: URL): Promise<Response> {
   const clientId = url.searchParams.get('client_id') || '';
   const redirectUri = url.searchParams.get('redirect_uri') || '';
@@ -216,10 +223,16 @@ async function handleAuthorize(url: URL): Promise<Response> {
     return errorPage('Ongeldig terugkeeradres', 'Het adres waar deze AI-client naartoe wil, staat niet in zijn registratie. Om je gegevens te beschermen sturen we je daar niet heen.');
   }
 
-  // Vanaf hier is de redirect-URI vertrouwd, dus mogen fouten mee terug — dat is
-  // wat de client verwacht en waar hij een nette melding van kan maken.
+  // Vanaf hier staat de redirect-URI in de registratie, dus mogen fouten mee
+  // terug — dat is wat de client verwacht. Behalve bij een client die nog door
+  // niemand is goedgekeurd: registreren kan iedereen, met elk adres, en dan zou
+  // een kapot verzoek aan /authorize een doorstuurdienst vanaf ons OAuth-domein
+  // zijn (phishing, of het openen van een app-schema). Die krijgt een pagina.
   const state = url.searchParams.get('state') || '';
-  const fail = (code: string, description: string) => redirectBack(redirectUri, { error: code, error_description: description, state });
+  const approvedBefore = await clientHasGrant(client.client_id);
+  const fail = (code: string, description: string) => approvedBefore
+    ? redirectBack(redirectUri, { error: code, error_description: description, state })
+    : errorPage('Ongeldig koppelverzoek', description);
 
   // Het ondertekende verzoek mag bij het terugkomen hooguit 4096 tekens zijn
   // (AUTH_REQUEST_MAX_LENGTH in mcpAuth.ts). `state` gaat er ongewijzigd in, en
