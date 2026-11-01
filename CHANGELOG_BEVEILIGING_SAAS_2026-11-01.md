@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering (sessie 2).** 31 fixes staan op staging. Wat open is, staat
+> **Status: in uitvoering (sessie 2).** 32 fixes staan op staging (de workers nog met de hand uitrollen). Wat open is, staat
 > onderaan: vooral lage punten, en acties die alleen de eigenaar kan doen.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
@@ -556,6 +556,24 @@ Buiten de boekhouding vult de app de maker op zo'n 40 tabellen nog zelf in
 (taken, notities, projecten, mail). Daar hangt geen recht aan, alleen de naam
 die het team ziet. Dat staat bij punt U.
 
+### 32. Media-worker: één kijkkopie per video, quotum op de editor (middel, opgelost; nog uitrollen)
+
+- **Kijkkopieën bij Stream.** `/gallery/stream-copy` maakte bij elke aanroep
+  een nieuwe Stream-video van dezelfde master. Die betalen we per opgeslagen
+  minuut, en nergens werd bijgehouden dat ze bestonden. Eén teamlid kon zo met
+  één video eindeloos kosten maken. Nu onthoudt de worker per master welke
+  kopie erbij hoort (een leeg object onder `_stream-copies/`). Een herhaling
+  krijgt die kopie terug. Alleen een verdwenen of mislukte kopie wordt opnieuw
+  gemaakt.
+- **Opslagquotum in de office-editor.** De uploads van Word-documenten en
+  contracten, en nieuwe documenten uit een sjabloon, sloegen de quotumcheck
+  over. Opslaan vanuit de editor (WOPI PutFile) ook. Met honderden lege
+  documenten die je daarna elk tot 50 MB opblaast, kwam je zo ver over je
+  opslag. Nu vragen ze allemaal het quotum. Bij opslaan telt alleen de groei:
+  wat even groot blijft of kleiner wordt, gaat altijd door.
+
+**Actie:** `npm run deploy:staging` (en daarna productie) in `workers/media-api`.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -564,7 +582,7 @@ die het team ziet. Dat staat bij punt U.
 | F | laag | Eén Collabora-instantie voor staging én productie. `localhost` staat nog in `FRAME_ANCESTORS`. De conversie-eindpunten zijn afgeschermd (fix 28). | workers/office-server |
 | G | laag | Inkomende mail: de email-worker geeft geen DMARC-uitslag door. De aliasroute vertrouwt de `.eml`; dat hoort bij doorsturen, maar wie het aliasadres kent, kan mail namens een klant in het dossier zetten. Reply-route en automatisch boeken zijn opgelost (fix 18 en 24). | workers/email-inbound, mail-inbound |
 | K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
-| L | middel | Het opslagquotum telt alleen rijen. Een bestand waarvoor de browser nooit een rij maakt, telt niet mee en blijft staan; opruimen kan pas veilig als de wachtrij alle tabellen met opslagsleutels kent. Stream-kopieën kunnen onbeperkt, en de office-uploads hebben geen quotumcheck. Opgelost: `/upload` weegt het quotum ook op de echte grootte, niet alleen op de opgegeven Content-Length. | workers/media-api |
+| L | middel | Het opslagquotum telt alleen rijen. Een bestand waarvoor de browser nooit een rij maakt (ook een directe Stream-upload), telt niet mee en blijft staan; zo kan een klant met een account onbeperkt opslag vullen. Opruimen is riskant zolang de wachtrij niet alle tabellen met opslagsleutels kent. Aanbevolen: laat de worker per organisatie de bytes bijhouden die hij in R2 zet en weghaalt, en toets het quotum op het hoogste van die teller en de rijen. Dat kost geen data. Opgelost: `/upload` weegt de echte grootte (fix 22), de office-uploads en het opslaan in de editor vragen het quotum, en per video is er één kijkkopie (fix 32). | workers/media-api |
 | M | laag | AI-budget: gelijktijdige aanroepen passeren samen de controle (die telt pas na de aanroep), en mislukte aanroepen tellen niet. Het plafond zelf staat er (fix 21). | aiBudget.ts |
 | N | middel | De productie-config van de workers wijst naar het staging-project van Supabase. | workers/*/wrangler.toml |
 | O | middel | De oude `cloudflare-worker/` heeft niet de bewaking van media-api. README en `.env.example` wijzen er niet meer naar (sessie 2). **Actie voor de eigenaar:** controleer in Cloudflare of `resofly-media` of `resofly-media-staging` nog draait, verwijder die, en daarna de map. | cloudflare-worker |
@@ -599,7 +617,7 @@ En verder, voor productie:
 2. Pak de tabel **Gevonden en nog open** van boven naar beneden aan.
 3. Elke databasefix eerst droog testen op staging: een transactie die eindigt
    met `raise exception`. Zie de commits van deze ronde.
-4. Rol de media-worker uit (fix 6 en 22), en de office-server (fix 28).
+4. Rol de media-worker uit (fix 6, 22 en 32), en de office-server (fix 28).
 
 | Onderdeel | Stand |
 | --- | --- |

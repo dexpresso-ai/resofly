@@ -1215,6 +1215,25 @@ async function handleGalleryStreamCopy(request: Request, env: Env, context: Rout
   if (!head) throw new HttpError(404, 'Bestand niet gevonden.');
   if (head.size > GALLERY_MASTER_MAX_BYTES) throw new HttpError(413, tooLargeMessage(GALLERY_MASTER_MAX_BYTES));
 
+  // Eén kijkkopie per master. Elke herhaalde aanroep maakte anders een nieuwe
+  // Stream-video, die we per opgeslagen minuut betalen en nergens bijhielden.
+  // Een herhaling (bijvoorbeeld na een netwerkfout) krijgt de bestaande kopie
+  // terug; alleen een verdwenen of mislukte kopie wordt opnieuw gemaakt.
+  const markerKey = await streamCopyMarkerKey(organizationId, key);
+  const existingUid = (await env.MEDIA_BUCKET.head(markerKey))?.customMetadata?.uid;
+  if (existingUid && /^[a-f0-9]{32}$/i.test(existingUid)) {
+    const lookup = await streamApi(env, `/stream/${existingUid}`);
+    if (lookup.ok) {
+      const found = (await lookup.json().catch(() => ({}))) as { result?: { status?: { state?: string } } };
+      if (found.result?.status?.state !== 'error') {
+        return jsonResponse({ ok: true, mode: 'stream', uid: existingUid }, 200, context);
+      }
+      await streamApi(env, `/stream/${existingUid}`, { method: 'DELETE' }).catch(() => undefined);
+    } else if (lookup.status !== 404) {
+      throw new HttpError(502, 'Kon de bestaande kijkkopie niet controleren.');
+    }
+  }
+
   const exp = Date.now() + GALLERY_STREAM_COPY_TOKEN_TTL_MS;
   const token = await signGalleryToken(
     { t: 'gal', org: organizationId, gal: galleryId, exp, dl: true, q: 'original', k: key },
@@ -1238,7 +1257,21 @@ async function handleGalleryStreamCopy(request: Request, env: Env, context: Rout
   const json = (await res.json()) as { result?: { uid?: string } };
   if (!json.result?.uid) throw new HttpError(502, 'Onverwacht Stream-antwoord (copy).');
 
+  try {
+    await env.MEDIA_BUCKET.put(markerKey, '', {
+      customMetadata: { uid: json.result.uid, key, createdAt: new Date().toISOString() },
+    });
+  } catch (error) {
+    console.warn('stream-copy: markering niet opgeslagen', error instanceof Error ? error.message : error);
+  }
+
   return jsonResponse({ ok: true, mode: 'stream', uid: json.result.uid }, 200, context);
+}
+
+/** Waar we bijhouden welke Stream-kopie bij een master hoort (buiten de galerijmappen). */
+async function streamCopyMarkerKey(organizationId: string, key: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  return `_stream-copies/${organizationId}/${hexOf(digest)}`;
 }
 
 /** Vraag een directe upload-URL bij Cloudflare Stream aan (of meld R2-fallback). */
@@ -3196,6 +3229,7 @@ async function handleOfficeNew(request: Request, env: Env, context: RouteContext
   const templateKey = `_office-templates/blank.${docType}`;
   const template = await env.MEDIA_BUCKET.get(templateKey);
   if (!template) throw new HttpError(500, `Sjabloon ontbreekt (${templateKey}). Seed de blanco sjablonen — zie deploy-runbook.`);
+  await assertStorageCapacity(env, organizationId, template.size);
 
   const cleaned = sanitizeFileName(body.name || 'Nieuw document');
   const base = cleaned.toLowerCase().endsWith(`.${docType}`) ? cleaned.slice(0, -(docType.length + 1)) : cleaned;
@@ -3246,6 +3280,7 @@ async function handleOfficeDocumentUpload(request: Request, env: Env, context: R
   if (buf.byteLength > OFFICE_MAX_BYTES) {
     throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(OFFICE_MAX_BYTES / 1024 / 1024)} MB.`);
   }
+  await assertStorageCapacity(env, organizationId, buf.byteLength);
 
   const key = `${organizationId}/document/${crypto.randomUUID()}-${fileName}`;
   const object = await env.MEDIA_BUCKET.put(key, buf, {
@@ -3277,6 +3312,7 @@ async function handleOfficeDocumentNew(request: Request, env: Env, context: Rout
   const templateKey = `_office-templates/blank.${docType}`;
   const template = await env.MEDIA_BUCKET.get(templateKey);
   if (!template) throw new HttpError(500, `Sjabloon ontbreekt (${templateKey}). Seed de blanco sjablonen — zie deploy-runbook.`);
+  await assertStorageCapacity(env, organizationId, template.size);
 
   const cleaned = sanitizeFileName(body.name || 'Nieuw document');
   const base = cleaned.toLowerCase().endsWith(`.${docType}`) ? cleaned.slice(0, -(docType.length + 1)) : cleaned;
@@ -3320,6 +3356,7 @@ async function handleOfficeContractUpload(request: Request, env: Env, context: R
   if (buf.byteLength > OFFICE_MAX_BYTES) {
     throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(OFFICE_MAX_BYTES / 1024 / 1024)} MB.`);
   }
+  await assertStorageCapacity(env, organizationId, buf.byteLength);
 
   const key = `${organizationId}/contract/${crypto.randomUUID()}-${fileName}`;
   const object = await env.MEDIA_BUCKET.put(key, buf, {
@@ -3501,6 +3538,11 @@ async function handleWopiPutFile(request: Request, env: Env, context: RouteConte
   if (buf.byteLength > OFFICE_MAX_BYTES) {
     throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(OFFICE_MAX_BYTES / 1024 / 1024)} MB.`);
   }
+  // Alleen de groei telt: opslaan wat even groot of kleiner wordt, mag altijd.
+  // Zonder deze check vulde je de opslag met lege documenten (die kosten niets)
+  // die je daarna elk tot 50 MB opblaast.
+  const growth = buf.byteLength - Math.max(target.size_bytes || 0, 0);
+  if (growth > 0) await assertStorageCapacity(env, target.organization_id, growth);
 
   const object = await env.MEDIA_BUCKET.put(target.storage_key, buf, {
     // mime_type komt uit de database-rij; alleen een bekend office-type overnemen.
