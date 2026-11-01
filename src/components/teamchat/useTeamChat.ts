@@ -499,7 +499,10 @@ export function useTeamChat(params: {
       const token = data.session?.access_token;
       if (token) supabase.realtime.setAuth(token);
 
-      presence = supabase.channel(`chat:presence:${organizationId}`, { config: { presence: { key: currentUserId } } });
+      // Privé: Realtime laat alleen teamleden met Teamchat toe (de regels op
+      // realtime.messages, migratie 20261101170000). Een publiek kanaal kon
+      // iedereen met de anon-sleutel openen, ook zonder in te loggen.
+      presence = supabase.channel(`chat:presence:${organizationId}`, { config: { private: true, presence: { key: currentUserId } } });
       presenceRef.current = presence;
       presence
         .on('presence', { event: 'sync' }, syncPresence)
