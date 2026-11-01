@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering (sessie 2).** 30 fixes staan op staging. Wat open is, staat
+> **Status: in uitvoering (sessie 2).** 31 fixes staan op staging. Wat open is, staat
 > onderaan: vooral lage punten, en acties die alleen de eigenaar kan doen.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
@@ -507,16 +507,54 @@ Wat er mis was:
 - **Kleinere gaten:** `compute_icp_declaration` haalde de klant op zonder
   organisatiefilter. `book_bank_transaction` sloeg met twee factuur-ids het
   tweede ongecontroleerd op; nu weigert hij dat.
-- **Modulerechten.** Een teamlid zonder Financiën kon offertes omzetten in
-  facturen, het resultaat bestemmen, en het volgende factuurnummer en de
-  rekening voor de beginbalans opvragen. Zonder Klanten kon hij klanten
-  aanmaken, en zonder Teamchat een privégesprek beginnen, ook met iemand die
-  Teamchat niet mag zien. Die functies vragen nu de module.
+- **Modulerechten.** Een teamlid zonder Financiën kon het volgende
+  factuurnummer en de rekening voor de beginbalans opvragen, en je kon een
+  privégesprek beginnen met iemand die Teamchat niet mag zien. Dat is nu dicht.
+  Bij offerte-naar-factuur, resultaatbestemming, een nieuwe klant en een
+  privégesprek hield de module-gate op de tabellen een teamlid zonder de
+  module al tegen. Die functies controleren het nu ook zelf, met een duidelijke
+  melding.
 
 Migratie `20261101140000`. Droog getest op staging: de directe
 `dga_interest`-boeking en de klant van een andere organisatie worden
 geweigerd, gewone memoriaalboekingen en de boekingen van de drie functies
 werken.
+
+**Ook nagelopen en in orde:** `replace_flow_steps`,
+`submit_quote_for_internal_approval` en `void_contract` vragen zelf alleen
+schrijfrecht op de organisatie, maar de module-gate op hun tabellen vraagt
+Marketing of Financiën. De interne goedkeuring van offertes leunt niet op de
+maker: de workflowvelden zijn alleen door de server te zetten.
+`organization_billing_overview` laat een beheerder van een
+sub-werkruimte de facturering van de hoofdorganisatie zien; dat is zo
+ontworpen, en de Mollie-id's daarin zijn geen sleutels.
+
+### 31. Maker en uitvoerder in de boekhouding en de registers (laag, opgelost)
+
+Fix 26 zette de maker van journaalposten en bankafschriften op de ingelogde
+gebruiker. De andere financiële tabellen namen de maker en de uitvoerder nog
+over van de aanroeper: `p_created_by` in de functies, en `created_by`,
+`closed_by`, `filed_by` enzovoort bij een rechtstreekse insert. Wie in
+Financiën mocht schrijven, kon zo een btw-aangifte, een jaarafsluiting, een
+dividendbesluit of een mutatie in het aandeelhoudersregister op naam van een
+collega zetten.
+
+Nu zet één trigger op 22 tabellen (jaarrekening, btw, Vpb, boekjaren,
+dividend, resultaatbestemming, dga-rente, aandeelhoudersregister,
+factuur-, offerte- en contractversies, betalingen, aanmaningen, bankboekingen
+en afgesloten periodes):
+
+- de maker bij aanmaken op de ingelogde gebruiker, en daarna vast;
+- wie iets boekte, afsloot, indiende, goedkeurde of terugdraaide, op de
+  ingelogde gebruiker.
+
+Leegmaken mag, zodat het verwijderen van een gebruiker blijft werken. De
+service-role, pg_cron en de workers houden wat ze meegeven. Migratie
+`20261101150000`, droog getest op staging.
+
+Buiten de boekhouding vult de app de maker op zo'n 40 tabellen nog zelf in
+(taken, notities, projecten, mail). Daar hangt geen recht aan, alleen de naam
+die het team ziet. Dat staat bij punt U.
 
 ## Gevonden en nog open (volgorde = prioriteit)
 
@@ -533,7 +571,7 @@ werken.
 | P | laag | Uren uit een koppeling aan een privé-afspraak nemen de titel over in `time_entries.description`. En `meeting_recordings` toont transcripties van vergaderingen uit privé-agenda's aan elk teamlid met Agenda. Is dat zo bedoeld? | RLS |
 | Q | laag | Wie de link van een galerij heeft, kan met foute pincodes de echte klant buitensluiten, want de blokkade geldt per galerij en niet per bezoeker. `galleries.share_token` staat onversleuteld in de database. `meeting-booking-public` stuurt `Access-Control-Allow-Origin: *`; dat is ongevaarlijk, want de token zit in de body. | publieke functies |
 | R | laag | CSP met wildcards: `*.supabase.co`, `*.workers.dev` en `img-src https:`. Zet per omgeving de exacte hosts (`<ref>.supabase.co`, de eigen worker-hosts); dat vraagt aparte `_headers` per omgeving of een build-stap. | public/_headers |
-| U | laag | De review van de functies die elke ingelogde gebruiker kan aanroepen is gedaan (fix 16 en 30). Nog na te lopen: wie als maker of uitvoerder wordt vastgelegd (`p_created_by` en dergelijke kan de aanroeper zelf invullen), `organization_billing_overview`, en de modulecheck van `replace_flow_steps`, `submit_quote_for_internal_approval` en `void_contract`. | db |
+| U | laag | De review van de functies die elke ingelogde gebruiker kan aanroepen is klaar (fix 16, 30 en 31). Rest: buiten de boekhouding vult de app `created_by` op zo'n 40 tabellen zelf in (taken, notities, projecten, mail). Daar hangt geen recht aan, alleen de naam die het team ziet. Wil je het dicht: dezelfde trigger `stamp_actor_columns` erop, per tabel nagaan of een import of Gerrie namens iemand anders aanmaakt. | db |
 
 ## Checklist voor productie
 
@@ -578,7 +616,7 @@ En verder, voor productie:
 | Factuurvergrendeling, AI-budget, agenda-privacy, boekingen | klaar (20261101090000 t/m 120000) |
 | Editor-segmenten, office-server, opslagquotum | klaar in de code; **workers nog uitrollen** |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
-| Review security-definer-functies | klaar (20261101140000); restpunten bij punt U |
+| Review security-definer-functies | klaar (20261101140000 en 150000); restpunt bij punt U |
 | Open bevindingen | zie de tabel hieronder (vooral laag, plus acties voor de eigenaar) |
 
 ## Aanbevolen, vraagt een keuze of een account van de eigenaar
