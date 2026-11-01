@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering.** Zes reviews zijn klaar en veertien fixes staan op staging.
+> **Status: in uitvoering.** Zes reviews zijn klaar en vijftien fixes staan op staging.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
 ## Werkwijze
@@ -218,13 +218,31 @@ gebruiken `ConfirmationURL`, dus de mails blijven werken.
   die nog wachten.
 - **DOMPurify 3.4.17:** de productie-dependencies hebben weer 0 kwetsbaarheden.
 
+### 15. Facturen of geld omleiden zonder goedkeuring (middel, opgelost)
+
+Gerrie, MCP en de API konden deze gegevens wijzigen op normaal risico, dus met
+een sleutel op "execute" zonder goedkeuring:
+- het e-factuuradres en het kanaal van een klant;
+- het IBAN en het e-mailadres van een leverancier.
+
+Na een geïnjecteerde mail ("ons rekeningnummer is gewijzigd") ging zo elke
+volgende factuur naar een ander adres. Of de IBAN-controle van de factuur-inbox
+viel stil weg.
+
+Nu:
+- **Hoog risico:** deze wijzigingen krijgen een waarschuwing en gaan dus altijd
+  langs een mens. Het e-factuuradres vraagt bovendien schrijfrecht op Financiën.
+- **REST-API:** de e-factuurvelden vragen "execute_high", net als het
+  e-mailadres van een klant (migratie `20261101040000`).
+- **TRUNCATE:** ingelogde gebruikers hebben geen TRUNCATE meer op tabellen. RLS
+  geldt daar niet voor, en de app gebruikt het nergens.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
 | --- | --- | --- | --- |
 | A | hoog | Mail zonder quotum per organisatie. Testmails en het aantal deelnemers zijn al begrensd (fix 13). Nog open: een teller per organisatie per uur en per dag op alle 12 verzendroutes (`grep -rln api.resend.com/emails supabase/functions`): klantmail, campagnes, document-mails met vrije ontvanger, samenvattingen van gesprekken, boekingslinks en deellinks. Campagne- en flow-HTML ook bij verzenden saneren. | mail, campaigns, invoice/quote/contract-workflow, meeting-*, file-share |
 | C | middel | Vergrendeling van facturen terug te draaien (status, `locked_at` en `journal_entry_id` vrij te schrijven); inkoopfacturen zonder bewaking; een geaccepteerde offerte is te verwijderen. | invoices, purchase_invoices, quotes |
-| D | middel | Gerrie, MCP en API mogen het e-factuuradres van een klant en het IBAN van een leverancier wijzigen zonder hoge risicostand, dus zonder goedkeuring. | _shared/actions/clients.ts, bookkeeping.ts |
 | E | middel | WOPI en office kunnen elk bestand van de eigen organisatie overschrijven, ook de vastgelegde factuur- en contract-PDF's. | workers/media-api |
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
 | G | middel | Inkomende mail: de afzender is niet geverifieerd. Op de reply-route telt elk adres (Reply-To, bijgevoegde .eml), en de factuur-inbox boekt automatisch op het From-adres. | workers/email-inbound, mail-inbound |
@@ -280,6 +298,7 @@ En verder, voor productie:
 | Video's, domeinen, vertrek | klaar (20261101020000; worker nog uitrollen) |
 | Bank, rapporten, kleine sloten | klaar (20261101030000) |
 | PKCE, vangnetten, testmails | klaar |
+| Omleiden van facturen of geld, TRUNCATE | klaar (20261101040000) |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
 | Review security-definer-functies | **nog doen** (punt U) |
 | Open bevindingen A–T | **nog doen** |
