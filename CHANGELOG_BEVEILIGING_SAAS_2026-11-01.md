@@ -38,7 +38,52 @@ teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
 ## Bevindingen en fixes
 
-_(wordt per onderdeel aangevuld)_
+### 1. De publieke sleutel had alle rechten op elke tabel (hoog, opgelost)
+
+Supabase geeft `anon` standaard alle rechten op elke nieuwe tabel, reeks en
+functie. Op staging had `anon` 1305 tabelrechten, en alleen RLS hield het
+tegen. Van de 969 policies geldt het merendeel voor rol `public`, dus ook voor
+anon. Eén vergissing in één policy was zo meteen open voor iedereen met de
+publieke sleutel, en die staat in elke browser. Daarnaast toonde de API het
+volledige schema aan wie niet ingelogd was.
+
+Migratie `20261101000000_anon_zero_access.sql`:
+- `anon` heeft in public geen enkel recht meer, behalve SELECT op `billing_plans`
+  (de openbare prijsplannen).
+- `anon` kan geen functie meer aanroepen, ook niet via PUBLIC. Ingelogde
+  gebruikers en de service-role houden precies wat ze hadden: 416 en 582
+  functies, droog getest op staging.
+- Nieuwe tabellen, reeksen en functies krijgen `anon` niet meer vanzelf.
+- `migrationGrants.test.ts` faalt als een latere migratie `anon` weer iets geeft.
+  De rooktest controleert het na elke deploy.
+
+De app merkt er niets van. De pagina's achter een deellink en de portal-login
+lopen via edge functions op de service-role, en de workers gebruiken het JWT
+van de gebruiker.
+
+### 2. Supabase Auth: wachtwoordregels (middel, op staging gezet)
+
+Inloggen gaat alleen met een magic link, maar de Auth-API accepteert ook een
+wachtwoord. Wie een sessie buitmaakt, kon met `PUT /auth/v1/user` een
+wachtwoord van 6 tekens zetten en daarmee blijvend inloggen, ook na het
+verlopen van de sessie. Op staging gezet via de Management API:
+- minimaal 12 tekens, met kleine letter, hoofdletter en cijfer;
+- een wachtwoord wijzigen vraagt opnieuw bevestigen per mail als de sessie
+  ouder is dan 24 uur (`security_update_password_require_reauthentication`).
+
+Kan nog niet: bescherming tegen gelekte wachtwoorden (HaveIBeenPwned). Die
+vraagt het Pro-abonnement van Supabase.
+
+**Voor productie:** dezelfde instellingen zetten onder Authentication →
+Providers → Email en Authentication → Policies.
+
+### 3. Het inlogscherm verraadde wie een account heeft (laag, opgelost)
+
+"Signups not allowed for otp" verscheen letterlijk in beeld bij een onbekend
+adres. Het scherm geeft nu altijd dezelfde melding, net als het klantportaal.
+Via de Auth-API zelf blijft het verschil zichtbaar. Dat dichten kan pas met
+een captcha (hCaptcha of Turnstile), en die vraagt sleutels van de eigenaar
+(zie **Aanbevolen**).
 
 ## Verder in de volgende sessie
 
@@ -54,4 +99,20 @@ _(wordt per onderdeel aangevuld)_
 | Ingelogde edge functions en handelingen | bezig |
 | Cloudflare-workers | bezig |
 | Frontend en repo-configuratie | bezig |
-| Supabase Auth-instellingen | bezig |
+| Supabase Auth-instellingen | klaar op staging (productie: zie fix 2) |
+| Rechten van `anon` | klaar (migratie 20261101000000) |
+
+## Aanbevolen, vraagt een keuze of een account van de eigenaar
+
+- **Captcha op inloggen** (Supabase Auth → Attack Protection, hCaptcha of
+  Cloudflare Turnstile). Remt het raden van e-mailadressen en het bestoken van
+  mailboxen met magic links. Vraagt een site key in de frontend.
+- **Supabase Pro voor productie:** gelekte wachtwoorden weigeren, en sessies
+  laten verlopen na inactiviteit.
+- **De JWT-secret van staging vernieuwen**, of overstappen op de nieuwe
+  asymmetrische JWT-sleutels van Supabase. Tijdens deze ronde gaf de Management
+  API (de PostgREST-config) de JWT-secret van staging terug in de uitvoer van
+  de sessie. Hij is nergens opgeslagen of gecommit, maar wie hem heeft, kan
+  tokens met de service-role maken.
+- **Google als inlogmethode** staat aan in Supabase Auth, maar de app gebruikt
+  hem niet. Zet hem uit als hij niet gepland is: minder ingangen.
