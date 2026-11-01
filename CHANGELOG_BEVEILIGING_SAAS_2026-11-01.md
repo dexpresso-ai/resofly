@@ -315,12 +315,34 @@ voor het hele project. Voor een SaaS met veel gebruikers is dat krap: bij
 drukte, of bij misbruik, krijgt niemand nog een inloglink. Verhoog die waarde,
 samen met een captcha (zie **Aanbevolen**).
 
+### 20. Een uitgegeven factuur ligt vast (middel, opgelost)
+
+Open punt van 26 september, en ruimer dan toen gedacht. De bewaking van
+facturen keek naar de oude status, `locked_at` en `journal_entry_id`. Die drie
+kon iedereen met schrijfrecht op Financiën zelf wijzigen. In twee verzoeken was
+een verzonden, geboekte factuur weer een concept. Daarna kon iemand regels of
+nummer aanpassen, of de factuur verwijderen met betalingen, versies en
+creditnota's erbij. Migratie `20261101090000`:
+
+- **Facturen:** vergrendeling, boeking, deellink, verzending, versies, PDF,
+  terugbetaling, chargeback en herinneringen zet alleen de server.
+  - Een uitgegeven factuur gaat niet meer terug naar concept.
+  - "Terugbetaald" kan alleen via de server.
+  - Handmatig op verzonden, betaald, geannuleerd, ongeldig of afgeboekt zetten
+    blijft kunnen, net als nu.
+- **Inkoopfacturen:** status, boeking en betaling wijzigt alleen de server (Boeken,
+  bank), en een geboekte inkoopfactuur ligt vast.
+- **Offertes:** een verstuurde offerte, of een offerte waarover de klant heeft
+  beslist, is niet meer te verwijderen (bewaarplicht). De app controleert dat
+  nu ook vóór het wissen van de bijlagen.
+
+Droog getest op staging als owner.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
 | --- | --- | --- | --- |
 | A | laag | Campagne- en flow-HTML bij het verzenden saneren, zoals klantmail al gebeurt. Het relay-risico is weg: testmails gaan alleen nog naar het team en alles telt mee in het quotum. | campaigns |
-| C | middel | Vergrendeling van facturen terug te draaien (status, `locked_at` en `journal_entry_id` vrij te schrijven); inkoopfacturen zonder bewaking; een geaccepteerde offerte is te verwijderen. | invoices, purchase_invoices, quotes |
 | E | middel | WOPI en office kunnen elk bestand van de eigen organisatie overschrijven, ook de vastgelegde factuur- en contract-PDF's. | workers/media-api |
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
 | G | middel | Inkomende mail: de afzender is niet geverifieerd, want DMARC wordt niet doorgegeven. De factuur-inbox boekt automatisch op het From-adres. De aliasroute vertrouwt de `.eml` nog. De reply-route is opgelost (fix 18). | workers/email-inbound, mail-inbound, invoiceInbox |
