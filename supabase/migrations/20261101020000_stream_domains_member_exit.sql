@@ -134,9 +134,9 @@ create trigger organization_members_disable_integrations
 -- De bewaking van webhook_endpoints: ongewijzigd, op één uitzondering na (de
 -- reden bij vertrek van de maker blijft staan).
 create or replace function public.webhook_endpoints_guard_update()
- RETURNS trigger
- LANGUAGE plpgsql
-AS $function$
+returns trigger
+language plpgsql
+as $$
 begin
   -- Weer aanzetten is een nieuwe start: de foutreeks en de reden van het
   -- uitzetten horen er dan niet meer bij. Geldt voor elke weg.
@@ -179,7 +179,7 @@ begin
   end if;
   return new;
 end;
-$function$;
+$$;
 
 revoke all on function public.webhook_endpoints_guard_update() from public, anon;
 
