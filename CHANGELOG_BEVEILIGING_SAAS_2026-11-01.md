@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering.** Zes reviews zijn klaar, vijftien fixes staan op staging, en het mailquotum werkt op de eerste routes.
+> **Status: in uitvoering.** Zes reviews zijn klaar, vijftien fixes staan op staging, het mailquotum werkt op de eerste routes, en interne functies zijn dicht.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
 ## Werkwijze
@@ -242,6 +242,27 @@ Nu:
 - **TRUNCATE:** ingelogde gebruikers hebben geen TRUNCATE meer op tabellen. RLS
   geldt daar niet voor, en de app gebruikt het nergens.
 
+### 16. Interne functies die iedereen kon aanroepen (laag, opgelost)
+
+Een scan van de 131 security-definer-functies die elke ingelogde gebruiker via
+`/rest/v1/rpc` kan aanroepen. Acht daarvan controleerden niet wie er belde.
+Het zijn bouwstenen voor andere functies, en niemand roept ze rechtstreeks aan.
+
+- `book_invoice_payment` en `ensure_sales_invoice_booked` boekten in het
+  grootboek van elke organisatie waarvan je de ID's kende, met een zelfgekozen
+  `p_created_by`. De module-gate op de financiële tabellen hield een niet-lid
+  al tegen; dit is het tweede slot.
+- `expire_stale_organization_invitations` zette uitnodigingen van elke
+  organisatie op verlopen.
+- Verder: `first_open_booking_date`, `org_creative_in_grace`, de twee
+  rekenhulpen voor de bedrijfsgrootte en `rls_auto_enable`.
+
+Ingelogde gebruikers kunnen ze niet meer aanroepen (migratie `20261101060000`).
+
+**Ook gezien en in orde:** `close_vat_period` en `finalize_vat_return`
+controleren de schrijfrol. Het recht op Financiën bewaakt de module-gate op
+`vat_returns`, `closed_periods` en `journal_entries`.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -264,7 +285,7 @@ Nu:
 | R | laag | CSP met wildcards (`*.supabase.co`, `*.workers.dev`, `img-src https:`), en afbeeldingen in inkomende mail laden vanzelf. | frontend |
 | S | laag | Gebruik van AI per lid opgeteld over alle organisaties (`getUsageSummary` zonder organisatiefilter). | gerrieCore.ts |
 | T | laag | Chatdeelname blijft na vertrek staan; `p_created_by` in boekingsfuncties komt van de aanroeper. | RLS/RPC |
-| U | — | De controle van de 131 security-definer-functies die elke ingelogde gebruiker kan aanroepen, is nog niet volledig afgerond. Die review stopte zonder rapport. | db |
+| U | laag | De review van de 131 functies die elke ingelogde gebruiker kan aanroepen: de scan op ontbrekende controles is gedaan (fix 16). Nog doen: per functie nalopen of elk id-argument bij de organisatie hoort, en of de juiste module wordt gevraagd. De dumps maak je met de queries uit de commits van deze ronde. | db |
 
 ## Checklist voor productie
 
@@ -306,7 +327,7 @@ En verder, voor productie:
 | Omleiden van facturen of geld, TRUNCATE | klaar (20261101040000) |
 | Mailquotum per organisatie | eerste routes klaar (20261101050000); rest is punt A |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
-| Review security-definer-functies | **nog doen** (punt U) |
+| Review security-definer-functies | scan klaar (20261101060000); diepe review is punt U |
 | Open bevindingen A–T | **nog doen** |
 
 ## Aanbevolen, vraagt een keuze of een account van de eigenaar
