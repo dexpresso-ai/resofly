@@ -6,6 +6,7 @@ import { sanitizeEmailBodyHtml } from '../_shared/htmlSanitize.ts';
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 import { renderTransferBlockHtml, renderTransferBlockText } from '../_shared/emailTemplates/fileTransfer.ts';
 import { issueRecipientLink, loadCompanyForMail, recordTransferEvent } from '../_shared/fileTransferServer.ts';
+import { domainParents, domainsOverlap, normalizeDomainName, senderDomain } from '../_shared/domainOverlap.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
@@ -20,6 +21,9 @@ const RESEND_REPLY_TO = Deno.env.get('RESEND_REPLY_TO') || '';
 // Regio waarin nieuwe verzenddomeinen bij Resend worden aangemaakt. eu-west-1
 // (Ierland) is de standaard voor een Nederlandse SaaS i.v.m. dataresidentie.
 const RESEND_DEFAULT_REGION = Deno.env.get('RESEND_DEFAULT_REGION') || 'eu-west-1';
+
+// Hoeveel verzenddomeinen één organisatie mag koppelen (gedeeld Resend-account).
+const MAX_SENDING_DOMAINS_PER_ORG = 5;
 
 // Domein waarop antwoorden binnenkomen (fase C). Zolang dit leeg is, krijgen
 // klant-mails een gewone Reply-To (afzenderadres / RESEND_REPLY_TO). Zodra het
@@ -1130,16 +1134,41 @@ async function addSendingDomain(
   const fromName = String(body.fromName || '').trim() || null;
   const fromEmail = normalizeFromEmail(body.fromEmail, domain);
 
-  // Voorkom dubbele Resend-aanmaak als dit domein al gekoppeld is.
-  const { data: existing, error: existingError } = await supabaseAdmin
+  // Alle organisaties delen één Resend-account. Het domein van de platform-
+  // afzender is van niemand, en een domein (of een sub- of bovenliggend domein)
+  // hoort bij hooguit één organisatie: anders bezet de ene klant het domein van
+  // de andere, of verstuurt hij namens diens subdomein (zie domainOverlap.ts).
+  const platformDomain = senderDomain(RESEND_FROM_EMAIL);
+  if (platformDomain && domainsOverlap(domain, platformDomain)) {
+    throw new MailHttpError('Dit domein hoort bij ResoFly zelf en kan niet worden gekoppeld.', 422);
+  }
+  const candidates = [domain, ...domainParents(domain)];
+  const { data: clashes, error: clashError } = await supabaseAdmin
     .from('organization_email_domains')
-    .select('id')
-    .eq('organization_id', organizationId)
-    .eq('domain', domain)
-    .maybeSingle();
-  if (existingError) throw existingError;
-  if (existing) {
+    .select('id, organization_id, domain')
+    .or(`domain.in.(${candidates.join(',')}),domain.like.*.${domain}`)
+    .limit(10);
+  if (clashError) throw clashError;
+  const clashRows = (clashes || []) as Array<{ organization_id: string; domain: string }>;
+  if (clashRows.some((row) => row.organization_id === organizationId && normalizeDomainName(row.domain) === domain)) {
     throw new MailHttpError('Dit domein is al gekoppeld aan deze organisatie.', 409);
+  }
+  if (clashRows.some((row) => row.organization_id !== organizationId && domainsOverlap(row.domain, domain))) {
+    throw new MailHttpError(
+      'Dit domein, of een domein erboven of eronder, is al gekoppeld aan een andere werkruimte. Is het van jou? Neem dan contact op met ResoFly.',
+      409,
+    );
+  }
+
+  // Een handvol domeinen per organisatie is genoeg; zo kan niemand het
+  // gedeelde Resend-account volzetten.
+  const { count: domainCount, error: countError } = await supabaseAdmin
+    .from('organization_email_domains')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId);
+  if (countError) throw countError;
+  if ((domainCount ?? 0) >= MAX_SENDING_DOMAINS_PER_ORG) {
+    throw new MailHttpError(`Een organisatie kan maximaal ${MAX_SENDING_DOMAINS_PER_ORG} verzenddomeinen koppelen.`, 422);
   }
 
   const resendDomain = await createResendDomain(domain);

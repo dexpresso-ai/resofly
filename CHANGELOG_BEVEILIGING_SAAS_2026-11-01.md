@@ -7,8 +7,8 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering.** Onderaan staat wat nog openligt. Een volgende sessie
-> begint bij **Verder in de volgende sessie**.
+> **Status: in uitvoering.** Zes reviews zijn klaar en elf fixes staan op staging.
+> Een volgende sessie begint bij **Verder in de volgende sessie**.
 
 ## Werkwijze
 
@@ -110,22 +110,148 @@ organisatie maken.
 Moet een klant toch een eigen werkruimte krijgen, dan nodig je hem uit of maak
 je de organisatie als beheerder aan.
 
+### 5. Projectinstellingen van Supabase (middel, deels op staging gezet)
+
+- **SSL op de database werd niet afgedwongen.** Een directe verbinding met
+  Postgres mocht zonder TLS. Op staging staat afdwingen nu aan. CI en de CLI
+  verbinden al met TLS, en de edge functions en workers gaan via de API.
+  Let op: aanzetten herstart de database even. Daardoor mislukte één rooktest
+  midden in de deploy; die is opnieuw gedraaid.
+- **De database is vanaf elk IP-adres bereikbaar** (`0.0.0.0/0`). Dat is de
+  standaard. Beperken breekt de GitHub-workflow, want runners hebben wisselende
+  adressen. Voor productie: alleen de adressen die het echt nodig hebben, en
+  deployen via een vaste runner of vanaf de laptop.
+- **Een secret met een kapotte naam:** `RESEND_WEBHOOK_SIGNING_SECRET="jouw_resend_webhook_secret"`.
+  Daardoor bestaat de echte `RESEND_WEBHOOK_SIGNING_SECRET` op staging niet, en
+  weigert `resend-webhook` elk event. Dat is veilig, maar het bijhouden van
+  geopend, geklikt en gebounced werkt zo niet. **Actie:** zet het secret uit
+  het Resend-dashboard onder de juiste naam en verwijder het kapotte.
+
+### 6. Video's van een andere organisatie (hoog, opgelost; worker nog uitrollen)
+
+`gallery_items.stream_uid` schrijft de browser zelf, en de media-worker tekende
+voor elk id een token met de sleutel van het gedeelde Stream-account. Met het id
+van een video van een andere organisatie kreeg je zo een downloadtoken, ook
+nadat de link was ingetrokken of downloaden uit stond. Dat id staat in elke
+deellink van die galerij.
+- Migratie `20261101020000`: een trigger weigert een `stream_uid` dat al bij een
+  andere organisatie staat.
+- Migratie `20261101030000`: de afspeelhost moet een Cloudflare Stream-host zijn.
+- `workers/media-api`: tekent alleen als het id nergens anders voorkomt of de
+  Stream-meta het bevestigt.
+- **Actie:** de worker uitrollen met `npm run deploy:staging` in
+  `workers/media-api`. Dat doet CI niet.
+
+### 7. Bankrekeningen van een ander bedrijf (hoog, opgelost)
+
+Alle organisaties delen één Enable Banking-app, en het account-id van de bank is
+de enige sleutel tot de transacties. Dat id kon een teamlid zelf in
+`bank_accounts` zetten, waarna `bank-sync` de transacties van die rekening
+ophaalde. Wie ooit Financiën kon lezen bij bedrijf B, haalde zo vanuit een eigen
+organisatie de bankmutaties van B binnen.
+- Migratie `20261101030000`: de koppelvelden zet alleen de server.
+- `bank-sync` synct alleen een rekening die hoort bij een koppeling van
+  dezelfde organisatie die dat id van de bank kreeg.
+
+Op staging voldoen alle 8 gekoppelde rekeningen.
+
+### 8. Verzenddomeinen (middel, opgelost)
+
+Een domein was alleen per organisatie uniek, terwijl alle organisaties één
+Resend-account delen. Zo kon de ene klant het domein van de andere bezetten.
+- Nu is een domein uniek over alle organisaties heen (migratie `20261101020000`).
+- De mail-functie weigert sub- en bovenliggende domeinen van een andere
+  organisatie, het domein van de platform-afzender, en meer dan 5 domeinen per
+  organisatie (`_shared/domainOverlap.ts`, met tests).
+
+### 9. Vertrekkende teamleden (middel, opgelost)
+
+Webhooks die een vertrokken teamlid had gemaakt, bleven alle gebeurtenissen
+naar zijn adres sturen. Zijn gekoppelde agenda bleef met zijn token bruikbaar.
+Nu gaan bij vertrek zijn webhooks uit, met een reden erbij, en vervallen zijn
+agendakoppelingen en tokens (migratie `20261101020000`).
+
+### 10. Financiële rapporten zonder module (middel, opgelost)
+
+Open punt van 26 september. Deze functies controleerden alleen het
+lidmaatschap: proef- en saldibalans, grootboek, balans, winst-en-verlies,
+openstaande posten, bankaansluiting, btw, ICP en boekjaren. Ze vragen nu ook
+leesrecht op Financiën (migratie `20261101030000`).
+
+### 11. Kleinere sloten (laag, opgelost)
+
+- **Vergaderlinks:** alleen http(s), in de database en op de nieuwe dashboards.
+  Een `javascript:`-link achter "Deelnemen" kan niet meer.
+- **Uitnodigingen:** een uitnodiging aannemen vraagt een bevestigd e-mailadres.
+- **Localhost-uitzondering:** `annual-accounts`, `corporate-tax`, `file-share` en
+  `file-transfer` lieten standaard localhost en verzoeken zonder Origin toe. Nu
+  standaard uit.
+
+## Gevonden en nog open (volgorde = prioriteit)
+
+| # | Ernst | Wat | Waar |
+| --- | --- | --- | --- |
+| A | hoog | Mail zonder quotum: testverzending van campagnes en mail naar elk adres, document-mails met vrije ontvanger, agenda-uitnodigingen zonder limiet op deelnemers. Phishing vanaf het platformdomein, en Resend kan het hele platform blokkeren. | campaigns, mail, invoice/quote/contract-workflow, calendarEventWrite |
+| B | middel | Login-CSRF: een link met tokens van een ander account logt je daarin in. Fix: `flowType: 'pkce'` in beide Supabase-clients. | src/lib/supabase.ts, supabasePortal.ts |
+| C | middel | Vergrendeling van facturen terug te draaien (status, `locked_at` en `journal_entry_id` vrij te schrijven); inkoopfacturen zonder bewaking; een geaccepteerde offerte is te verwijderen. | invoices, purchase_invoices, quotes |
+| D | middel | Gerrie, MCP en API mogen het e-factuuradres van een klant en het IBAN van een leverancier wijzigen zonder hoge risicostand, dus zonder goedkeuring. | _shared/actions/clients.ts, bookkeeping.ts |
+| E | middel | WOPI en office kunnen elk bestand van de eigen organisatie overschrijven, ook de vastgelegde factuur- en contract-PDF's. | workers/media-api |
+| F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
+| G | middel | Inkomende mail: de afzender is niet geverifieerd. Op de reply-route telt elk adres (Reply-To, bijgevoegde .eml), en de factuur-inbox boekt automatisch op het From-adres. | workers/email-inbound, mail-inbound |
+| H | middel | portal-login: geen rate limit, en door de timing te raden welke adressen klant zijn. | portal-login |
+| I | middel | mcp-oauth `/register`: onbeperkt registreren, en een fout-redirect naar elk geregistreerd adres. | mcp-oauth |
+| J | middel | De agenda-OAuth-callback is niet gekoppeld aan de sessie (open sinds 26 september). | calendar-integrations |
+| K | middel | De CI-secrets zijn vanaf elke branch te gebruiken: geen `environment:` en geen `permissions:`. | .github/workflows |
+| L | middel | Opslagquotum is alleen een advies: de opgegeven grootte telt, en het faalt open. Stream-kopieën onbeperkt. | workers/media-api |
+| M | middel | AI-budget: staat uit zonder env-var, faalt open, telt pas na de aanroep, en mislukte aanroepen tellen niet. | claudeSummary.ts, gerrieCore.ts |
+| N | middel | De productie-config van de workers wijst naar het staging-project van Supabase. | workers/*/wrangler.toml |
+| O | middel | De oude `cloudflare-worker/` (zonder de bewaking van media-api) wordt nog in de docs genoemd. Controleer of hij nog draait, en verwijder hem. | cloudflare-worker, README |
+| P | laag | `calendar_event_links` toont titels van privé-afspraken van collega's; `calendar_sources.feed_url` is leesbaar. | RLS |
+| Q | laag | Interne foutteksten in publieke functies; ACAO `*` bij meeting-booking-public; contract-vraag zonder limiet; pin-blokkade per galerij. | publieke functies |
+| R | laag | CSP met wildcards (`*.supabase.co`, `*.workers.dev`, `img-src https:`); afbeeldingen in inkomende mail laden vanzelf; CSV-formule-injectie; DOMPurify naar 3.4.17. | frontend |
+| S | laag | Gebruik van AI per lid opgeteld over alle organisaties (`getUsageSummary` zonder organisatiefilter). | gerrieCore.ts |
+| T | laag | Chatdeelname blijft na vertrek staan; `p_created_by` in boekingsfuncties komt van de aanroeper. | RLS/RPC |
+| U | — | De controle van de 131 security-definer-functies die elke ingelogde gebruiker kan aanroepen, is nog niet volledig afgerond. Die review stopte zonder rapport. | db |
+
+## Checklist voor productie
+
+Deze schakelaars staan op staging aan om te testen. Op productie mogen ze
+**niet** bestaan, want elk ervan zet een slot open:
+
+| Secret | Wat het doet |
+| --- | --- |
+| `MOLLIE_ALLOW_MOCK` | Een abonnement afronden zonder te betalen; slaat de origin-controle over |
+| `INVOICE_MOLLIE_ALLOW_MOCK` | Nepbetaallinks die vanzelf op betaald gaan |
+| `INVOICE_DEBUG_ERRORS` | Interne foutteksten naar de browser |
+| `MAIL_ALLOW_LOCAL_DEV`, `QUOTE_ALLOW_LOCAL_DEV` | Verzoeken zonder Origin en vanaf localhost toegestaan |
+| `RESEND_WEBHOOK_ALLOW_UNSIGNED` | Resend-events zonder handtekening accepteren |
+
+En verder, voor productie:
+- de Auth-instellingen uit fix 2;
+- SSL afdwingen (fix 5);
+- `disable_signup` aan;
+- de redirect-URL's alleen het eigen domein;
+- de migraties van deze ronde draaien (`supabase db push`).
+
 ## Verder in de volgende sessie
 
 1. Lees deze file en `git log --oneline staging -20`.
-2. Ga verder met het eerste onderdeel hieronder dat nog niet af is.
+2. Pak de tabel **Gevonden en nog open** van boven naar beneden aan.
+3. Elke databasefix eerst droog testen op staging: een transactie die eindigt
+   met `raise exception`. Zie de commits van deze ronde.
+4. Rol de media-worker uit (fix 6).
 
 | Onderdeel | Stand |
 | --- | --- |
 | Live controles staging | klaar |
-| Security-definer-functies | bezig |
-| RLS-policies | bezig |
-| Publieke edge functions en webhooks | bezig |
-| Ingelogde edge functions en handelingen | bezig |
-| Cloudflare-workers | bezig |
-| Frontend en repo-configuratie | bezig |
-| Supabase Auth-instellingen | klaar op staging (productie: zie fix 2) |
 | Rechten van `anon` | klaar (migratie 20261101000000) |
+| Supabase Auth-instellingen | klaar op staging (productie: zie fix 2) |
+| Klantaccounts zonder werkruimte | klaar (20261101010000) |
+| Video's, domeinen, vertrek | klaar (20261101020000; worker nog uitrollen) |
+| Bank, rapporten, kleine sloten | klaar (20261101030000) |
+| Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
+| Review security-definer-functies | **nog doen** (punt U) |
+| Open bevindingen A–T | **nog doen** |
 
 ## Aanbevolen, vraagt een keuze of een account van de eigenaar
 

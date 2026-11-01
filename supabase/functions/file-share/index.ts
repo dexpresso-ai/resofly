@@ -52,7 +52,8 @@ const cors = makeCors(
     Deno.env.get('CLIENT_PORTAL_ALLOWED_ORIGINS'),
     Deno.env.get('MAIL_ALLOWED_ORIGINS'),
   ]),
-  (Deno.env.get('ALLOW_LOCAL_DEV') ?? '1') === '1',
+  // localhost en verzoeken zonder Origin alleen als je dat lokaal aanzet (ALLOW_LOCAL_DEV=1).
+  (Deno.env.get('ALLOW_LOCAL_DEV') ?? '0') === '1',
 );
 
 const ITEM_TYPES = new Set(['folder', 'attachment', 'note', 'document']);

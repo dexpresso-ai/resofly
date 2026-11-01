@@ -21,6 +21,7 @@ import { askGerrie } from '../components/GerrieChat';
 import { DayArc, type DayArcItem } from './DayArc';
 import { AttentionList, DayAgenda, MoreFold, ProjectGlance, WeekStrip } from './DashboardCalm';
 import { StreamPanel, StroomAttention, StroomHero } from './StroomToday';
+import { safeHttpUrl } from '../lib/safeUrl';
 
 export type DashboardNavPage =
   | 'clients' | 'projects' | 'project-planning' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar' | 'gerrie';
@@ -310,7 +311,8 @@ export function Dashboard({
         kind: 'meeting' as const,
         color: 'var(--info)',
         where: event.location || event.source_name || null,
-        meetingUrl: event.meeting_url ?? null,
+        // Alleen http(s): een meeting_url komt uit de database en kan elke tekst zijn.
+        meetingUrl: safeHttpUrl(event.meeting_url),
         onOpen: () => openPage('calendar'),
       }));
     const blocks: DayArcItem[] = showProjects

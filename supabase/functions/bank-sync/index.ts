@@ -344,7 +344,7 @@ async function finalizeRequisition(userId: string, body: Record<string, unknown>
 }
 
 type SyncResult = { bankAccountId: string; inserted: number; skipped: number; error?: string };
-type RequisitionState = { id: string; status: string; expires_at: string | null };
+type RequisitionState = { id: string; status: string; expires_at: string | null; organization_id: string; accounts: unknown };
 
 async function syncAccounts(organizationId: string, filter: { bankAccountId?: string | null; requisitionId?: string | null } = {}) {
   let query = supabaseAdmin.from('bank_accounts').select('*')
@@ -362,7 +362,7 @@ async function syncAccountRows(accounts: any[]): Promise<{ results: SyncResult[]
   const requisitionIds = [...new Set(accounts.map((a) => a.bank_requisition_id).filter(Boolean))];
   const requisitions = new Map<string, RequisitionState>();
   if (requisitionIds.length > 0) {
-    const { data, error } = await supabaseAdmin.from('bank_requisitions').select('id, status, expires_at').in('id', requisitionIds);
+    const { data, error } = await supabaseAdmin.from('bank_requisitions').select('id, status, expires_at, organization_id, accounts').in('id', requisitionIds);
     if (error) throw new HttpError(`Bankkoppelingen ophalen mislukt: ${error.message}`, 500);
     for (const r of data ?? []) requisitions.set(r.id, r);
   }
@@ -377,12 +377,27 @@ async function syncAccountRows(accounts: any[]): Promise<{ results: SyncResult[]
   return { results, needsReconsent: reconsentNeeded };
 }
 
+/** Hoort deze rekening bij deze koppeling: dezelfde organisatie, en het id in de lijst van de bank? */
+function requisitionCoversAccount(requisition: RequisitionState | null, acc: { organization_id?: string; external_account_id?: string | null }): boolean {
+  if (!requisition || !acc.external_account_id) return false;
+  if (requisition.organization_id !== acc.organization_id) return false;
+  return Array.isArray(requisition.accounts) && requisition.accounts.includes(acc.external_account_id);
+}
+
 async function syncOneAccount(acc: any, requisition: RequisitionState | null): Promise<{ result: SyncResult; reconsent: boolean }> {
   const fail = async (error: string, reconsent = false) => {
     await markSyncFailed(acc.id, error);
     return { result: { bankAccountId: acc.id, inserted: 0, skipped: 0, error }, reconsent };
   };
   if (!acc.external_account_id) return fail('geen extern account-id');
+  // Eén Enable Banking-app voor alle organisaties: het account-id is de enige
+  // sleutel tot de transacties. De rekening telt daarom alleen als hij bij een
+  // koppeling van dezelfde organisatie hoort die dit id van de bank kreeg.
+  // Zonder die controle kon een teamlid het id van de rekening van een ander
+  // bedrijf in een eigen rij zetten en diens transacties binnenhalen.
+  if (!requisitionCoversAccount(requisition, acc)) {
+    return fail('Deze rekening hoort niet bij een bankkoppeling van deze organisatie. Koppel de bank opnieuw.', true);
+  }
   // De verloopdatum staat vast vanaf het koppelen. Voorheen kwam "verlopen" pas
   // aan het licht als een opvraging mislukte — en zonder opvraging nooit: de
   // koppelingen op staging stonden maanden na het verlopen nog op "gekoppeld".

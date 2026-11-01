@@ -82,7 +82,8 @@ const cors = makeCors(
     Deno.env.get('APP_PUBLIC_URL'),
     Deno.env.get('MAIL_ALLOWED_ORIGINS'),
   ]),
-  (Deno.env.get('ALLOW_LOCAL_DEV') ?? '1') === '1',
+  // localhost en verzoeken zonder Origin alleen als je dat lokaal aanzet (ALLOW_LOCAL_DEV=1).
+  (Deno.env.get('ALLOW_LOCAL_DEV') ?? '0') === '1',
 );
 
 type Ctx = { user: { id: string; email?: string }; organizationId: string; role: string };

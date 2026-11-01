@@ -248,7 +248,12 @@ test('het adres van een webhook staat niet in het auditlog (dat leest elk teamli
 
 test('aan- of uitzetten in de app vult geen teller of reden in', () => {
   const guard = latest('create or replace function public.webhook_endpoints_guard_update()');
-  assert.match(guard, /if old\.active and not new\.active then\s*\n\s*new\.consecutive_failures := old\.consecutive_failures;\s*\n\s*new\.failing_since := old\.failing_since;\s*\n\s*new\.disabled_reason := old\.disabled_reason;/);
+  // De reden blijft van vóór het uitzetten, behalve bij het vertrek van de maker
+  // (disable_integrations_on_member_exit zet dan de vlag resofly.member_exit).
+  assert.match(guard, /if old\.active and not new\.active then\s*\n\s*new\.consecutive_failures := old\.consecutive_failures;\s*\n\s*new\.failing_since := old\.failing_since;\s*\n\s*if coalesce\(current_setting\('resofly\.member_exit', true\), ''\) <> 'on' then\s*\n\s*new\.disabled_reason := old\.disabled_reason;/);
+  const exit = latest('create or replace function public.disable_integrations_on_member_exit()');
+  assert.match(exit, /perform set_config\('resofly\.member_exit', 'on', true\);[\s\S]*perform set_config\('resofly\.member_exit', '', true\);/,
+    'de vlag staat alleen aan rond het uitzetten van de webhooks');
 });
 
 test('een test gaat niet in een lus de deur uit, en noemt niet wie er klikte', () => {
