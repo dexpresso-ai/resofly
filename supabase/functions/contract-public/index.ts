@@ -293,6 +293,20 @@ async function askQuestionPublic(tokenHash: string, body: Record<string, unknown
   const email = String(body.email || '').trim().toLowerCase();
   const message = String(body.message || '').trim();
   if (!message) throw new PublicHttpError('Schrijf eerst je vraag.', 422);
+  // Iedereen met de link kan een vraag stellen, en elke vraag wordt een gesprek
+  // in het klantdossier. Houd het daarom kort en beperkt in aantal.
+  if (name.length > 120 || email.length > 254 || message.length > 4000) {
+    throw new PublicHttpError('Je vraag is te lang. Houd het bij maximaal 4000 tekens.', 422);
+  }
+  const { data: contractRow } = await supabaseAdmin
+    .from('contracts').select('id').eq('public_token_hash', tokenHash).maybeSingle();
+  if (contractRow?.id) {
+    const since = new Date(Date.now() - 3_600_000).toISOString();
+    const { count } = await supabaseAdmin
+      .from('contract_events').select('id', { count: 'exact', head: true })
+      .eq('contract_id', contractRow.id).eq('event_type', 'question_asked').gte('created_at', since);
+    if ((count ?? 0) >= 5) throw new PublicHttpError('Je hebt net al een paar vragen gesteld. Probeer het over een uur opnieuw.', 409);
+  }
 
   const { error } = await supabaseAdmin.rpc('ask_contract_question_public', {
     p_token_hash: tokenHash,

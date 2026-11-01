@@ -88,13 +88,11 @@ serve(async (req) => {
     const status = error instanceof PublicHttpError ? error.status : 500;
     const internalMessage = describeError(error);
     if (status >= 500) console.error('quote-public error', internalMessage, error instanceof Error ? error.stack : undefined);
-    // Voor non-PublicHttpError fouten geven we de werkelijke reden mee (afgekapt op
-    // 500 chars). Postgres/Supabase-foutmeldingen bevatten doorgaans veldnamen en
-    // constraint-namen, geen secrets — diagnostisch te zien is veilig en cruciaal
-    // bij het opsporen van migratie- of configuratieproblemen op staging.
+    // Een bezoeker zonder login krijgt geen interne foutteksten (tabel-, kolom-
+    // en constraintnamen); de reden staat in de log hierboven.
     const publicMessage = error instanceof PublicHttpError
       ? error.message
-      : `Offerte kon niet worden geladen: ${internalMessage}`.slice(0, 500);
+      : 'Offerte kon niet worden geladen. Probeer het later opnieuw.';
     return json(req, { ok: false, error: publicMessage }, status);
   }
 });

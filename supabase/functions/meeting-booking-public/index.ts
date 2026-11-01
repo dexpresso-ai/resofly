@@ -68,7 +68,8 @@ Deno.serve(async (req) => {
   } catch (error) {
     const status = error instanceof HttpErr ? error.status : 500;
     if (status >= 500) console.error('meeting-booking-public error', error);
-    return json({ ok: false, error: error instanceof Error ? error.message : 'Onbekende fout.' }, status);
+    // Alleen onze eigen meldingen gaan naar de bezoeker; de rest staat in de log.
+    return json({ ok: false, error: error instanceof HttpErr ? error.message : 'Er ging iets mis. Probeer het later opnieuw.' }, status);
   }
 });
 
@@ -220,7 +221,8 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
       if (bookingId) {
         try { await supabaseAdmin.rpc('release_meeting_booking', { p_booking_id: bookingId, p_reason: err instanceof Error ? err.message : 'error' }); } catch { /* best-effort */ }
       }
-      failed.push({ slot_id: slotId, reason: err instanceof Error ? err.message : 'Dit moment is niet meer beschikbaar.' });
+      console.error('meeting-booking-public slot', slotId, err);
+      failed.push({ slot_id: slotId, reason: err instanceof HttpErr ? err.message : 'Dit moment kon niet worden geboekt. Kies een ander moment.' });
     }
   }
 
