@@ -126,9 +126,26 @@ Deno.serve(async (req) => {
 // het moment dat een klant de connector toevoegt, zonder dat wij hen kennen.
 // Een registratie is geen toegang — het is een naamplaatje. Toegang ontstaat pas
 // als een ingelogd mens op /approve akkoord geeft.
+// Registreren kan zonder login (zo werkt dynamische clientregistratie). Wat er
+// binnenkomt, gaat de gedeelde database in: houd het klein.
+const MAX_REGISTER_BODY_BYTES = 16 * 1024;
+const MAX_REDIRECT_URI_LENGTH = 512;
+
 async function handleRegister(req: Request): Promise<Response> {
-  const body = await readJson(req);
+  const declared = Number(req.headers.get('content-length') || 0);
+  if (declared > MAX_REGISTER_BODY_BYTES) {
+    return openJson({ error: 'invalid_client_metadata', error_description: 'De registratie is te groot.' }, 413);
+  }
+  const raw = await req.text().catch(() => '');
+  if (raw.length > MAX_REGISTER_BODY_BYTES) {
+    return openJson({ error: 'invalid_client_metadata', error_description: 'De registratie is te groot.' }, 413);
+  }
+  let body: Record<string, unknown> = {};
+  try { body = raw ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { body = {}; }
   const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map((u: unknown) => String(u)) : [];
+  if (redirectUris.some((uri) => uri.length > MAX_REDIRECT_URI_LENGTH)) {
+    return openJson({ error: 'invalid_redirect_uri', error_description: `Een redirect-URI mag maximaal ${MAX_REDIRECT_URI_LENGTH} tekens zijn.` }, 400);
+  }
 
   if (redirectUris.length === 0) {
     return openJson({ error: 'invalid_redirect_uri', error_description: 'Geef minstens één redirect_uri op.' }, 400);

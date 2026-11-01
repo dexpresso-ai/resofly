@@ -5366,6 +5366,9 @@ async function getUsageSummary(organizationId: string, role: OrganizationRole): 
   const monthStart = `${todayIso().slice(0, 7)}-01T00:00:00Z`;
   const { data, error } = await supabaseAdmin.from('ai_usage')
     .select('user_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd')
+    // Alleen het gebruik in DEZE organisatie: een teamlid kan ook elders lid zijn,
+    // en wat hij daar met Gerrie doet, gaat deze organisatie niet aan.
+    .eq('organization_id', organizationId)
     .in('user_id', userIds).gte('created_at', monthStart);
   if (error) throw new HttpError(`AI-gebruik ophalen mislukt: ${error.message}`, 500);
 
