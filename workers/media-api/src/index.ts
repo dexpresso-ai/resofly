@@ -2889,6 +2889,22 @@ type OfficeTarget = {
 const CONTRACT_EDITABLE_STATUSES = new Set(['draft']);
 
 /** Normaliseer een attachment-, document- of contractrij naar één office-doelvorm. */
+/**
+ * Welk opslagpad hoort bij welk Office-doel. Een Word-document mag alleen het
+ * bestand van zijn eigen soort openen en overschrijven: een rij in documents of
+ * attachments kon anders naar een vastgelegde factuur- of contract-PDF, een
+ * bestand van een zending of een origineel uit de factuur-inbox wijzen, en
+ * WOPI-PutFile schreef dat dan over (en invoice-public toonde de vervalsing aan
+ * de klant). Het tweede segment van de sleutel moet daarom bij de bron passen.
+ */
+function assertOfficeKeySegment(key: string, allowed: string[]): void {
+  const segment = keySegment(key);
+  const forbidden = IMMUTABLE_KEY_SEGMENTS.has(segment) || segment === 'transfer' || segment === 'purchase_invoice_inbox';
+  if (forbidden || !allowed.includes(segment)) {
+    throw new HttpError(403, 'Dit bestand kan niet in de online editor worden geopend.');
+  }
+}
+
 async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promise<OfficeTarget> {
   if (kind === 'c') {
     const query = new URLSearchParams({
@@ -2914,6 +2930,7 @@ async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promis
     const label = [row.number, row.title].map((v) => (v || '').trim()).filter(Boolean).join(' - ') || 'Contract';
     const safeLabel = label.replace(/[\\/]+/g, ' ').trim() || 'Contract';
     assertKeyInOrg(row.body_storage_key, row.organization_id);
+    assertOfficeKeySegment(row.body_storage_key, ['contract']);
     return {
       organization_id: row.organization_id,
       storage_key: row.body_storage_key,
@@ -2941,6 +2958,7 @@ async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promis
     const ext = OFFICE_MIME_EXT[mime] || 'docx';
     const title = (row.title || 'Document').replace(/[\\/]+/g, ' ').trim() || 'Document';
     assertKeyInOrg(row.storage_key, row.organization_id);
+    assertOfficeKeySegment(row.storage_key, ['document', 'folder']);
     return {
       organization_id: row.organization_id,
       storage_key: row.storage_key,
@@ -2953,6 +2971,7 @@ async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promis
   }
   const att = await fetchAttachment(env, id);
   assertKeyInOrg(att.storage_key, att.organization_id);
+  assertOfficeKeySegment(att.storage_key, [att.entity_type]);
   return {
     organization_id: att.organization_id,
     storage_key: att.storage_key,

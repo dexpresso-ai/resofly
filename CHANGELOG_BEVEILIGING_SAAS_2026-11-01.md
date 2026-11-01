@@ -361,12 +361,35 @@ Dit geldt voor Gerrie, agents, notulen, de factuurscan en de factuur-inbox.
 gelijktijdige aanroepen passeren allebei de controle, want die telt pas na de
 aanroep.
 
+### 22. De online editor overschreef vastgelegde PDF's (middel, opgelost; worker nog uitrollen)
+
+WOPI en de office-routes controleerden alleen of een opslagsleutel bij de
+organisatie hoorde. Een teamlid met schrijfrecht op Inhoud kon zo een factuur-
+of contract-PDF vervalsen, bijvoorbeeld met een ander IBAN, en de klant kreeg
+die vervalsing te zien:
+1. Een documents- of attachments-rij naar een vastgelegde factuur- of
+   contract-PDF laten wijzen.
+2. Een editorsessie openen.
+3. Met PutFile het bestand overschrijven.
+
+Op dezelfde manier kon hij de PDF lezen zonder recht op Financiën.
+
+Nu moet het tweede segment van de sleutel bij de bron passen:
+- `contract` voor een contract;
+- `document` of `folder` voor een document;
+- het eigen `entity_type` voor een bijlage.
+
+Vastgelegde bewijsstukken, zendingen en originelen uit de factuur-inbox zijn
+nooit een doel voor de editor. Op staging voldoen alle bestaande documenten en
+bijlagen.
+
+**Actie:** de media-worker uitrollen (fix 6 en deze).
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
 | --- | --- | --- | --- |
 | A | laag | Campagne- en flow-HTML bij het verzenden saneren, zoals klantmail al gebeurt. Het relay-risico is weg: testmails gaan alleen nog naar het team en alles telt mee in het quotum. | campaigns |
-| E | middel | WOPI en office kunnen elk bestand van de eigen organisatie overschrijven, ook de vastgelegde factuur- en contract-PDF's. | workers/media-api |
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
 | G | middel | Inkomende mail: de afzender is niet geverifieerd, want DMARC wordt niet doorgegeven. De factuur-inbox boekt automatisch op het From-adres. De aliasroute vertrouwt de `.eml` nog. De reply-route is opgelost (fix 18). | workers/email-inbound, mail-inbound, invoiceInbox |
 | I | laag | mcp-oauth: een fout-redirect naar een geregistreerd adres als `response_type` ontbreekt. Liever een foutpagina tonen. Registratie zelf is begrensd (fix 17). | mcp-oauth |
@@ -408,7 +431,7 @@ En verder, voor productie:
 2. Pak de tabel **Gevonden en nog open** van boven naar beneden aan.
 3. Elke databasefix eerst droog testen op staging: een transactie die eindigt
    met `raise exception`. Zie de commits van deze ronde.
-4. Rol de media-worker uit (fix 6).
+4. Rol de media-worker uit (fix 6 en 22).
 
 | Onderdeel | Stand |
 | --- | --- |
