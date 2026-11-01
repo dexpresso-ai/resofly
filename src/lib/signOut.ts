@@ -9,6 +9,8 @@ const USER_DATA_KEY_PREFIXES = [
   'resofly-checklist-',             // weekchecklist
   'resofly.pendingCall',            // net gebeld nummer met naam
   'brandcore.activeOrganizationId', // laatst gekozen organisatie
+  'resofly.chat.drafts.',           // nog niet verstuurde chatberichten
+  'resofly.gerrie.decision-outbox', // besluiten van Gerrie die nog op de server moeten komen
 ];
 
 /**

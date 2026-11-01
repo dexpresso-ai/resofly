@@ -1,3 +1,4 @@
+import { csvSafeText } from '../lib/csv';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, Download, ListChecks, Scale, TrendingUp } from 'lucide-react';
 import type { AppData, BalanceSheetRow, LedgerReportGroup, OpenItemsReport, ProfitAndLossRow } from '../types';
@@ -68,7 +69,7 @@ function downloadCsv(filename: string, header: string[], rows: (string | number)
     // als getal leest bij een ;-gescheiden bestand. Alleen exacte bedrag-cellen —
     // omschrijvingen, codes en datums bevatten dit patroon niet.
     if (/^-?\d+\.\d{2}$/.test(s)) s = s.replace('.', ',');
-    return `"${s.replace(/"/g, '""')}"`;
+    return `"${csvSafeText(s).replace(/"/g, '""')}"`;
   };
   const csv = [header, ...rows].map(r => r.map(escape).join(';')).join('\r\n');
   const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }));

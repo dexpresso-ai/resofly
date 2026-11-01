@@ -1,3 +1,4 @@
+import { csvSafeText } from '../lib/csv';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CalendarClock, Coins, Download, RotateCcw, Scale } from 'lucide-react';
 import type {
@@ -440,7 +441,7 @@ function DetailDialog({ row, lines, onClose }: {
   row: DividendDistributionRow; lines: DividendDistributionLine[]; onClose: () => void;
 }) {
   function exportCsv() {
-    const escape = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+    const escape = (v: string | number) => `"${csvSafeText(v).replace(/"/g, '""')}"`;
     const header = ['Aandeelhouder', 'Adres', 'Postcode', 'Plaats', 'Land', 'Aandelen', 'Bruto', 'Vrijgesteld', 'Ingehouden', 'Netto'];
     const body = lines.map(l => [
       l.name,

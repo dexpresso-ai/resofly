@@ -22,6 +22,9 @@ export const supabasePortal = createClient(
       autoRefreshToken: true,
       detectSessionInUrl: onPortalRoute,
       storageKey: 'resofly.portal.auth',
+      // PKCE, net als de medewerkers-client (zie src/lib/supabase.ts): geen
+      // tokens in de URL, en een link werkt alleen in de browser die hem aanvroeg.
+      flowType: 'pkce',
     },
   },
 );

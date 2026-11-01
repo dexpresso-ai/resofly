@@ -22,6 +22,11 @@ on:
         type: boolean
         default: false
 
+# Alleen lezen: deze workflow pusht niets en schrijft niets in GitHub. Zonder
+# deze regel krijgt het GITHUB_TOKEN de standaardrechten van de repository.
+permissions:
+  contents: read
+
 env:
   SUPABASE_PROJECT_ID: enzghpduqwaojcxgwarr
 
@@ -121,3 +126,4 @@ jobs:
           bash scripts/supabase-smoke-test.sh
         env:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
