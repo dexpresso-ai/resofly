@@ -10,6 +10,7 @@
 // via de service-role client (supabaseAdmin) na org-toegangscontrole.
 // ============================================================
 
+import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import {
   HttpError,
   requireUser,
@@ -450,6 +451,8 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
   const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL);
   if (!sender.from) throw new HttpError('Er is geen afzender-e-mailadres geconfigureerd (RESEND_FROM_EMAIL of eigen domein).', 500);
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new HttpError(message, status));
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },

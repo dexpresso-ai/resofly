@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
@@ -67,7 +68,7 @@ type CompanyRow = {
   invoice_accent_color?: string | null;
 };
 
-type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
+type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -292,6 +293,8 @@ async function sendContractForSignature(
     ],
   };
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new HttpError(message, status));
   const resendResponse = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {

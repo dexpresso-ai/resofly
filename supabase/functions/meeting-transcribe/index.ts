@@ -19,6 +19,7 @@
 // de service-role (RLS staat alleen lezen toe).
 // ============================================================
 
+import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import {
   HttpError, assertModuleAccess, assertWriteRole, createAdminClient, isUuid, makeCors,
   parseAllowedOrigins, requireOrganizationAccess, requireUser,
@@ -266,6 +267,8 @@ async function sendSummary(organizationId: string, role: Awaited<ReturnType<type
   const html = buildSummaryEmailHtml({ organizationName: company, title: rec.event_title_snapshot, bodyText, transcript });
   const text = buildSummaryEmailText({ organizationName: company, title: rec.event_title_snapshot, bodyText, transcript });
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(admin, organizationId, recipients.length, (message, status) => new HttpError(message, status));
   const nonce = crypto.randomUUID();
   const sent: { email: string; name: string | null }[] = [];
   const failed: { email: string; error: string }[] = [];

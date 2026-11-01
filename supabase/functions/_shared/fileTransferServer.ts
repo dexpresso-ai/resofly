@@ -8,6 +8,7 @@
 // ============================================================
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { takeEmailQuota } from './emailQuota.ts';
 import { renderEmailTemplate } from './emailTemplates/index.ts';
 import type { EmailTemplateContent } from './emailTemplates/types.ts';
 import { escapeHtml } from './emailTemplates/layout.ts';
@@ -490,6 +491,8 @@ export async function sendTransferNotice(admin: SupabaseClient, input: {
     ? `reply+${clientEmailId}@${inboundDomain}`
     : (input.sender.replyTo || fromEmail || undefined);
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(admin, input.transfer.organization_id, 1, (message) => new Error(message));
   const sent = await sendViaResend({
     from: input.sender.from,
     to: [recipient.email],

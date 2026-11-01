@@ -14,6 +14,7 @@ import {
 } from '../_shared/resend.ts';
 import { makeUnsubscribeToken } from '../_shared/unsubscribe.ts';
 import { assertTeamTestRecipient } from '../_shared/testRecipient.ts';
+import { emailQuotaAllows, takeEmailQuota } from '../_shared/emailQuota.ts';
 import {
   buildMergeTokens,
   buildMergeFallbacks,
@@ -43,7 +44,7 @@ import {
 // ============================================================================
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
-type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
+type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -572,6 +573,8 @@ async function sendTestCampaign(
   const html = buildCampaignHtml(personalized, brandName, unsubToken);
   const text = personalized.body_text || htmlToText(personalized.body_html);
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new CampaignHttpError(message, status));
   const payload = await sendViaResend(
     RESEND_API_KEY,
     {
@@ -793,7 +796,17 @@ async function dispatchCampaign(campaign: CampaignRow, limit: number): Promise<{
 
   let sent = 0;
   let failed = 0;
-  for (const recipient of recipients) {
+  for (let index = 0; index < recipients.length; index += 1) {
+    const recipient = recipients[index];
+    // Quotum per organisatie (20261101050000). Op = uitstellen, niet mislukken:
+    // de rest van deze batch gaat terug in de rij en de volgende ronde gaat verder.
+    if (!(await emailQuotaAllows(supabaseAdmin, campaign.organization_id, 1))) {
+      await supabaseAdmin
+        .from('email_campaign_recipients')
+        .update({ status: 'pending', updated_at: new Date().toISOString() })
+        .in('id', recipients.slice(index).map((r) => r.id));
+      break;
+    }
     try {
       await sendToRecipient(campaign, recipient, sender.from, sender.replyTo, fromEmailForRow, fromNameForRow, brandName, fallbacks);
       sent += 1;
@@ -1290,6 +1303,9 @@ async function handleFlowTick(): Promise<{ claimed: number; sent: number; stoppe
       const sender = senderByFlow.get(enrollment.flow_id);
       if (!sender || !sender.from) continue; // geen afzender geconfigureerd → overslaan (lease retryt later)
       const fallbacks = fallbacksByOrg.get(enrollment.organization_id) || {};
+      // Quotum per organisatie (20261101050000): op = later opnieuw (de lease
+      // pakt de inschrijving over 15 minuten weer op), niet mislukken.
+      if (!(await emailQuotaAllows(supabaseAdmin, enrollment.organization_id, 1))) continue;
       const threadId = await sendFlowStep(enrollment, flow, step, sender, brandName, fallbacks);
 
       const following = steps[nextIndex + 1];

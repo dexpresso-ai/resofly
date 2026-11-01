@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
@@ -40,7 +41,7 @@ type CompanySettingsRow = {
 type InvoicePdfAttachment = { fileName: string; mimeType: 'application/pdf'; bytes: Uint8Array; base64: string; sizeBytes: number; sha256: string };
 type UblAttachment = { fileName: string; mimeType: 'application/xml'; base64: string; sizeBytes: number; sha256: string; warnings: string[]; pdfEmbedded: boolean };
 type StoredInvoicePdfSnapshot = { provider: 'r2' | 'database'; key: string | null; shouldStoreBase64InDatabase: boolean };
-type WorkflowHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
+type WorkflowHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -362,6 +363,8 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     ],
   };
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
   let resendResponse: Response;
   let resendPayloadResponse: Record<string, unknown> = {};
 
@@ -589,6 +592,8 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
     ],
   };
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
   let resendResponse: Response;
   let resendPayloadResponse: Record<string, unknown> = {};
   try {
@@ -943,6 +948,8 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
     ],
   };
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
   let resendResponse: Response;
   let resendPayloadResponse: Record<string, unknown> = {};
   try {
@@ -1733,6 +1740,8 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
     ],
   };
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`credit-note-${String(input.creditNote.id)}-${recipientEmail}`) },

@@ -28,6 +28,7 @@
 // org-scoped in gerrieCore.
 // ============================================================
 
+import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import {
   supabaseAdmin, HttpError, ANTHROPIC_API_KEY, TOOL_DEFINITIONS, toolCatalog, AGENT_FORBIDDEN_TOOLS, MAX_AGENT_ITERATIONS,
   resolveModelKind, runAgent, buildContext, createConversation, insertMessage,
@@ -589,6 +590,8 @@ async function deliver(agent: Record<string, unknown>, runId: string, name: stri
       const extra = proposals > 0 ? ` (${proposals} voorstel${proposals === 1 ? '' : 'len'} klaargezet om goed te keuren)` : '';
       const safe = summary.slice(0, 4000);
       try {
+        // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+        if (!(await emailQuotaAllows(supabaseAdmin, String(agent.organization_id), 1))) throw new Error('mailquotum van de organisatie is op');
         await sendViaResend(apiKey, {
           from, to: [actorEmail],
           subject: `Je agent: ${name}${extra}`,

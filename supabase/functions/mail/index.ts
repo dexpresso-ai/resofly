@@ -265,6 +265,8 @@ async function sendTestEmail(
 
   const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new MailHttpError(message, status));
   const resendPayload = await sendViaResend(
     {
       from: sender.from,
@@ -338,6 +340,8 @@ async function sendClientPortalWelcome(
 
   const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new MailHttpError(message, status));
   const resendPayload = await sendViaResend(
     {
       from: sender.from,
@@ -517,6 +521,8 @@ async function sendTeamInvitation(
   // Idempotency op invitation-id + updated_at: een nieuwe/herhaalde uitnodiging
   // (RPC zet updated_at = now() bij re-invite) levert een verse verzending op,
   // terwijl een dubbele klik binnen dezelfde staat door Resend wordt ontdubbeld.
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new MailHttpError(message, status));
   const resendPayload = await sendViaResend(
     {
       from: sender.from,

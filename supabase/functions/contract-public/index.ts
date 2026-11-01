@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
@@ -331,6 +332,7 @@ async function sendConfirmationEmails(
     content,
   });
   await sendResend({
+    organizationId: contract.organization_id,
     from: senderIdentity.from,
     replyTo: senderIdentity.replyTo,
     to: signer.signerEmail,
@@ -355,6 +357,7 @@ async function sendConfirmationEmails(
       appUrl: APP_PUBLIC_URL || null,
     });
     await sendResend({
+      organizationId: contract.organization_id,
       from: senderIdentity.from,
       replyTo: senderIdentity.replyTo,
       to: internalTo,
@@ -367,6 +370,7 @@ async function sendConfirmationEmails(
 }
 
 async function sendResend(input: {
+  organizationId: string;
   from: string;
   replyTo?: string;
   to: string;
@@ -376,6 +380,9 @@ async function sendResend(input: {
   attachments?: Array<{ filename: string; content: string }>;
   tags: Array<{ name: string; value: string }>;
 }): Promise<void> {
+  // Quotum per organisatie (20261101050000). De handtekening staat al vast;
+  // is het quotum op, dan blijft alleen deze bevestiging achterwege.
+  if (!(await emailQuotaAllows(supabaseAdmin, input.organizationId, 1))) return;
   const payload: Record<string, unknown> = {
     from: input.from,
     to: [input.to],

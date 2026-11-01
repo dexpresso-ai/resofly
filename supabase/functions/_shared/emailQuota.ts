@@ -24,6 +24,24 @@ export function quotaRefusal(answer: QuotaAnswer | null): string | null {
     + 'Probeer het later opnieuw, of neem contact op met ResoFly als je structureel meer nodig hebt.';
 }
 
+/**
+ * Telt `count` mails als dat past; false als het quotum op is. Voor paden die
+ * niet mogen falen maar moeten wachten: de campagne-verzending (de ontvangers
+ * gaan terug in de rij), de flows (de lease pakt de stap later op), en
+ * bevestigingen na een handtekening of boeking (die gebeurt toch; alleen de
+ * mail blijft achterwege, met een regel in de log).
+ */
+export async function emailQuotaAllows(admin: SupabaseClient, organizationId: string, count: number): Promise<boolean> {
+  const { data, error } = await admin.rpc('email_quota_take', { p_organization_id: organizationId, p_count: Math.max(1, Math.floor(count)) });
+  if (error) {
+    console.warn('email_quota_take mislukt; de mail gaat door zonder telling', error.message);
+    return true;
+  }
+  const refusal = quotaRefusal(data as QuotaAnswer | null);
+  if (refusal) console.warn('mailquotum op', organizationId, refusal);
+  return !refusal;
+}
+
 /** Telt `count` mails voor deze organisatie, of gooit `makeError` (429) als dat niet meer past. */
 export async function takeEmailQuota(
   admin: SupabaseClient,
