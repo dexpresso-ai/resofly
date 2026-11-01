@@ -445,12 +445,31 @@ Beide in migratie `20261101120000`.
   vraag wordt een gesprek in het klantdossier. Nu maximaal 4000 tekens en 5
   per contract per uur.
 
+### 28. De office-server schermt alle conversie-eindpunten af (middel, opgelost; nog uitrollen)
+
+Alleen `/convert-to` vroeg het gedeelde geheim. De andere conversie-eindpunten
+van Collabora verwerken net zo goed geüploade documenten, en waren voor
+iedereen bereikbaar: `get-thumbnail`, `extract-link-targets`,
+`extract-document-structure`, `transform-document-structure` en
+`render-search-result`.
+
+Iedereen kon dus gratis conversies draaien op onze kosten. Ook kon iedereen de
+LibreOffice-parser bestoken in het proces met de geopende documenten van alle
+klanten. De controle zocht bovendien naar een stukje tekst in het pad, en was
+te omzeilen met `%2D`-codering of dubbele slashes.
+
+Nu vragen alle conversie-eindpunten het geheim, gecontroleerd op het
+gedecodeerde pad. Het verkeer van de editor en WOPI blijft ongemoeid.
+
+**Actie:** `wrangler deploy` in `workers/office-server`. Nog open: één
+Collabora-instantie draait voor beide omgevingen; aparte instanties zijn veiliger.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
 | --- | --- | --- | --- |
 | A | laag | Campagne- en flow-HTML bij het verzenden saneren, zoals klantmail al gebeurt. Het relay-risico is weg: testmails gaan alleen nog naar het team en alles telt mee in het quotum. | campaigns |
-| F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
+| F | laag | Eén Collabora-instantie voor staging én productie. `localhost` staat nog in `FRAME_ANCESTORS`. De conversie-eindpunten zijn afgeschermd (fix 28). | workers/office-server |
 | G | laag | Inkomende mail: de email-worker geeft geen DMARC-uitslag door. De aliasroute vertrouwt de `.eml`; dat hoort bij doorsturen, maar wie het aliasadres kent, kan mail namens een klant in het dossier zetten. Reply-route en automatisch boeken zijn opgelost (fix 18 en 24). | workers/email-inbound, mail-inbound |
 | I | laag | mcp-oauth: een fout-redirect naar een geregistreerd adres als `response_type` ontbreekt. Liever een foutpagina tonen. Registratie zelf is begrensd (fix 17). | mcp-oauth |
 | K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
@@ -490,7 +509,7 @@ En verder, voor productie:
 2. Pak de tabel **Gevonden en nog open** van boven naar beneden aan.
 3. Elke databasefix eerst droog testen op staging: een transactie die eindigt
    met `raise exception`. Zie de commits van deze ronde.
-4. Rol de media-worker uit (fix 6 en 22).
+4. Rol de media-worker uit (fix 6 en 22), en de office-server (fix 28).
 
 | Onderdeel | Stand |
 | --- | --- |
