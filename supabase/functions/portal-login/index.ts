@@ -79,9 +79,19 @@ serve(async (req) => {
 
 /** Maakt het auth-account aan als het nog niet bestaat. Idempotent: een al
  *  bestaand account is geen fout. email_confirm = true zodat de magische link
- *  direct werkt zonder aparte bevestigingsstap. */
+ *  direct werkt zonder aparte bevestigingsstap.
+ *
+ *  app_metadata.resofly_portal markeert het als klantaccount: zo'n account
+ *  krijgt in de werkruimte geen eigen organisatie (is_portal_only_account,
+ *  migratie 20261101010000). app_metadata kan alleen de server zetten, de
+ *  gebruiker zelf niet. Een bestaand account (bijvoorbeeld een teamlid dat ook
+ *  klant is) wordt niet aangeraakt. */
 async function ensureAuthUser(email: string): Promise<void> {
-  const { error } = await supabaseAdmin.auth.admin.createUser({ email, email_confirm: true });
+  const { error } = await supabaseAdmin.auth.admin.createUser({
+    email,
+    email_confirm: true,
+    app_metadata: { resofly_portal: true },
+  });
   if (!error) return;
   // Bestaat al → prima, dit is het gewenste eindresultaat.
   const message = (error.message || '').toLowerCase();
