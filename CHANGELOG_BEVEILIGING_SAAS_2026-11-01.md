@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering.** Zes reviews zijn klaar en vijftien fixes staan op staging.
+> **Status: in uitvoering.** Zes reviews zijn klaar, vijftien fixes staan op staging, en het mailquotum werkt op de eerste routes.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
 ## Werkwijze
@@ -204,7 +204,12 @@ gebruiken `ConfirmationURL`, dus de mails blijven werken.
   elk adres, met de platform-afzender en zonder limiet. Nu alleen naar je eigen
   adres of dat van een actief teamlid (`_shared/testRecipient.ts`).
 - **Agenda-uitnodigingen:** een afspraak heeft nu maximaal 50 deelnemers.
-- **Nog open:** een quotum per organisatie op alle verzendroutes (punt A).
+- **Quotum per organisatie** (migratie `20261101050000`, `_shared/emailQuota.ts`):
+  standaard 200 per uur en 1000 per 24 uur. Een organisatie die meer nodig
+  heeft, krijgt een rij in `organization_email_limits`; die zet alleen de
+  platformbeheerder. Het quotum geldt nu voor vrije klantmail en voor
+  agenda-uitnodigingen.
+- **Nog open:** het quotum op de overige routes (punt A).
 
 ### 14. Vangnetten (opgelost)
 
@@ -241,7 +246,7 @@ Nu:
 
 | # | Ernst | Wat | Waar |
 | --- | --- | --- | --- |
-| A | hoog | Mail zonder quotum per organisatie. Testmails en het aantal deelnemers zijn al begrensd (fix 13). Nog open: een teller per organisatie per uur en per dag op alle 12 verzendroutes (`grep -rln api.resend.com/emails supabase/functions`): klantmail, campagnes, document-mails met vrije ontvanger, samenvattingen van gesprekken, boekingslinks en deellinks. Campagne- en flow-HTML ook bij verzenden saneren. | mail, campaigns, invoice/quote/contract-workflow, meeting-*, file-share |
+| A | hoog | Het mailquotum (fix 13) ook aanroepen in de overige routes. Dat zijn campagnes (dispatch: niet weigeren maar uitstellen), document-mails (`invoice-workflow`, `quote-workflow`, `contract-workflow`, `contract-public`), `meeting-transcribe` `sendSummary`, `meeting-booking`, `meeting-booking-public`, `file-share` en `fileTransferServer`. Patroon: `await takeEmailQuota(supabaseAdmin, organizationId, n, …)` vlak voor het versturen. Campagne- en flow-HTML ook bij verzenden saneren. | zie lijst |
 | C | middel | Vergrendeling van facturen terug te draaien (status, `locked_at` en `journal_entry_id` vrij te schrijven); inkoopfacturen zonder bewaking; een geaccepteerde offerte is te verwijderen. | invoices, purchase_invoices, quotes |
 | E | middel | WOPI en office kunnen elk bestand van de eigen organisatie overschrijven, ook de vastgelegde factuur- en contract-PDF's. | workers/media-api |
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
@@ -299,6 +304,7 @@ En verder, voor productie:
 | Bank, rapporten, kleine sloten | klaar (20261101030000) |
 | PKCE, vangnetten, testmails | klaar |
 | Omleiden van facturen of geld, TRUNCATE | klaar (20261101040000) |
+| Mailquotum per organisatie | eerste routes klaar (20261101050000); rest is punt A |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
 | Review security-definer-functies | **nog doen** (punt U) |
 | Open bevindingen A–T | **nog doen** |
