@@ -1713,6 +1713,16 @@ function App() {
         return;
       }
     }
+    if (edit.kind === 'quote') {
+      // Een offerte die naar de klant ging (of waarover de klant besliste), valt
+      // onder de bewaarplicht; de database weigert het verwijderen sinds migratie
+      // 20261101090000. Hier vóór het wissen van de bijlagen, anders zijn die al weg.
+      const quote = edit.item as Quote;
+      if (quote.sent_at || quote.client_decision_at || ['sent', 'accepted', 'rejected', 'expired', 'paid', 'overdue'].includes(String(quote.status))) {
+        setError('Deze offerte is naar de klant gestuurd en valt onder de bewaarplicht. Trek hem in of laat hem verlopen in plaats van verwijderen.');
+        return;
+      }
+    }
     if (!confirm('Weet je zeker dat je dit item wilt verwijderen? Bijbehorende bijlagen worden ook verwijderd.')) return;
     setLoading(true); setError(null);
     try {
