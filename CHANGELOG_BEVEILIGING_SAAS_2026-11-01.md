@@ -110,6 +110,43 @@ organisatie maken.
 Moet een klant toch een eigen werkruimte krijgen, dan nodig je hem uit of maak
 je de organisatie als beheerder aan.
 
+### 5. Projectinstellingen van Supabase (middel, deels op staging gezet)
+
+- **SSL op de database werd niet afgedwongen.** Een directe verbinding met
+  Postgres mocht zonder TLS. Op staging staat afdwingen nu aan. CI en de CLI
+  verbinden al met TLS, en de edge functions en workers gaan via de API.
+  Let op: aanzetten herstart de database even. Daardoor mislukte één rooktest
+  midden in de deploy; die is opnieuw gedraaid.
+- **De database is vanaf elk IP-adres bereikbaar** (`0.0.0.0/0`). Dat is de
+  standaard. Beperken breekt de GitHub-workflow, want runners hebben wisselende
+  adressen. Voor productie: alleen de adressen die het echt nodig hebben, en
+  deployen via een vaste runner of vanaf de laptop.
+- **Een secret met een kapotte naam:** `RESEND_WEBHOOK_SIGNING_SECRET="jouw_resend_webhook_secret"`.
+  Daardoor bestaat de echte `RESEND_WEBHOOK_SIGNING_SECRET` op staging niet, en
+  weigert `resend-webhook` elk event. Dat is veilig, maar het bijhouden van
+  geopend, geklikt en gebounced werkt zo niet. **Actie:** zet het secret uit
+  het Resend-dashboard onder de juiste naam en verwijder het kapotte.
+
+## Checklist voor productie
+
+Deze schakelaars staan op staging aan om te testen. Op productie mogen ze
+**niet** bestaan, want elk ervan zet een slot open:
+
+| Secret | Wat het doet |
+| --- | --- |
+| `MOLLIE_ALLOW_MOCK` | Een abonnement afronden zonder te betalen; slaat de origin-controle over |
+| `INVOICE_MOLLIE_ALLOW_MOCK` | Nepbetaallinks die vanzelf op betaald gaan |
+| `INVOICE_DEBUG_ERRORS` | Interne foutteksten naar de browser |
+| `MAIL_ALLOW_LOCAL_DEV`, `QUOTE_ALLOW_LOCAL_DEV` | Verzoeken zonder Origin en vanaf localhost toegestaan |
+| `RESEND_WEBHOOK_ALLOW_UNSIGNED` | Resend-events zonder handtekening accepteren |
+
+En verder, voor productie:
+- de Auth-instellingen uit fix 2;
+- SSL afdwingen (fix 5);
+- `disable_signup` aan;
+- de redirect-URL's alleen het eigen domein;
+- de migraties van deze ronde draaien (`supabase db push`).
+
 ## Verder in de volgende sessie
 
 1. Lees deze file en `git log --oneline staging -20`.
