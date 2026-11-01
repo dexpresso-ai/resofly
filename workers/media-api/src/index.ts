@@ -721,18 +721,57 @@ async function masterWatchableInline(env: Env, key: string): Promise<boolean> {
   return allowed;
 }
 
-/** Eigendomscheck op een Stream-video via onze eigen DB (werkt ook als Stream-meta ontbreekt). */
+/**
+ * Eigendomscheck op een Stream-video via onze eigen DB (werkt ook als Stream-meta
+ * ontbreekt). gallery_items.stream_uid schrijft de browser zelf; een id telt
+ * daarom alleen als het bij deze organisatie staat EN bij geen enkele andere.
+ * Sinds migratie 20261101020000 kan een stream_uid niet meer bij twee
+ * organisaties staan; deze check vangt ook rijen van daarvoor.
+ */
 async function streamUidBelongsToOrg(env: Env, uid: string, organizationId: string): Promise<boolean> {
   const query = new URLSearchParams({
-    select: 'id',
+    select: 'organization_id',
     stream_uid: `eq.${uid}`,
-    organization_id: `eq.${organizationId}`,
-    limit: '1',
+    limit: '50',
   });
   const res = await fetch(`${supabaseBase(env)}/rest/v1/gallery_items?${query.toString()}`, { headers: serviceHeaders(env) });
   if (!res.ok) return false;
-  const rows = (await res.json()) as unknown[];
-  return Array.isArray(rows) && rows.length > 0;
+  const rows = (await res.json()) as Array<{ organization_id?: string }>;
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  return rows.every((row) => row.organization_id === organizationId);
+}
+
+/** Welke van deze stream_uids staan (ook) bij een andere organisatie? */
+async function streamUidsUsedElsewhere(env: Env, uids: string[], organizationId: string): Promise<Set<string>> {
+  const used = new Set<string>();
+  const valid = uids.filter((uid) => /^[a-f0-9]{32}$/i.test(uid));
+  for (let i = 0; i < valid.length; i += 100) {
+    const chunk = valid.slice(i, i + 100);
+    const query = new URLSearchParams({
+      select: 'stream_uid',
+      stream_uid: `in.(${chunk.join(',')})`,
+      organization_id: `neq.${organizationId}`,
+      limit: '1000',
+    });
+    const res = await fetch(`${supabaseBase(env)}/rest/v1/gallery_items?${query.toString()}`, { headers: serviceHeaders(env) });
+    // Een mislukte lookup telt als "elders gebruikt": dan beslist de Stream-meta.
+    if (!res.ok) { chunk.forEach((uid) => used.add(uid)); continue; }
+    const rows = (await res.json()) as Array<{ stream_uid?: string }>;
+    for (const row of Array.isArray(rows) ? rows : []) if (row.stream_uid) used.add(row.stream_uid);
+  }
+  return used;
+}
+
+/** Zegt de meta die wij bij het aanmaken zetten, dat deze video van deze organisatie is? */
+async function streamMetaOwnedBy(env: Env, uid: string, organizationId: string): Promise<boolean> {
+  try {
+    const res = await streamApi(env, `/stream/${uid}`);
+    if (!res.ok) return false;
+    const json = (await res.json()) as { result?: { meta?: Record<string, string> } };
+    return json.result?.meta?.organizationId === organizationId;
+  } catch {
+    return false;
+  }
 }
 
 // ── Accountbreed opslagquotum ───────────────────────────────────────────────
@@ -888,8 +927,14 @@ async function buildGalleryTokenBundle(
   const streamTokens: Record<string, string> = {};
   const items = await fetchGalleryItemRows(env, galleryId, organizationId, { onlyStream: true });
   const expSeconds = Math.floor(exp / 1000);
+  // Het Stream-account is gedeeld: een token voor een id is geldig voor elke
+  // video met dat id. Staat een id ook bij een andere organisatie, dan tekenen
+  // we alleen als de Stream-meta zegt dat de video van deze organisatie is.
+  const uids = [...new Set(items.map((item) => item.stream_uid).filter((uid): uid is string => Boolean(uid)))];
+  const contested = await streamUidsUsedElsewhere(env, uids, organizationId);
   for (const item of items) {
     if (!item.stream_uid) continue;
+    if (contested.has(item.stream_uid) && !(await streamMetaOwnedBy(env, item.stream_uid, organizationId))) continue;
     const token = await streamSignedToken(env, item.stream_uid, expSeconds, allowDownload);
     if (token) streamTokens[item.stream_uid] = token;
   }
