@@ -274,6 +274,22 @@ controleren de schrijfrol. Het recht op Financiën bewaakt de module-gate op
 - **Verbruik:** het overzicht van AI-gebruik per teamlid telde zijn gebruik in
   al zijn organisaties op. Nu telt alleen het gebruik in deze organisatie.
 
+### 18. Als de klant schrijven via het reply-adres (middel, opgelost)
+
+Het reply-adres van een klantmail (`reply+<id>@…`) verloopt nooit, en iedereen
+die de mail ooit doorgestuurd kreeg, kent het. De controle "hoort de afzender
+bij deze klant?" accepteerde elk kandidaat-adres: Reply-To, de From van een
+bijgevoegde `.eml`, en een "Van:"-blok in de tekst. Zo schreef iemand vanaf een
+eigen domein "als de klant" in diens dossier, met een melding aan het hele team.
+
+Nu telt op de reply-route alleen de From-kop, voor de controle én voor de
+opgeslagen afzender. Een antwoord van een ander adres wordt geparkeerd, niet
+weggegooid.
+
+**Actie:** controleer of de uitgerolde email-inbound-worker zijn verzoeken
+tekent, en zet dan `MAIL_INBOUND_REQUIRE_SIGNATURE=true`. Nu volstaat het
+gedeelde secret alleen, zonder controle op inhoud of tijd.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -282,7 +298,7 @@ controleren de schrijfrol. Het recht op Financiën bewaakt de module-gate op
 | C | middel | Vergrendeling van facturen terug te draaien (status, `locked_at` en `journal_entry_id` vrij te schrijven); inkoopfacturen zonder bewaking; een geaccepteerde offerte is te verwijderen. | invoices, purchase_invoices, quotes |
 | E | middel | WOPI en office kunnen elk bestand van de eigen organisatie overschrijven, ook de vastgelegde factuur- en contract-PDF's. | workers/media-api |
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
-| G | middel | Inkomende mail: de afzender is niet geverifieerd. Op de reply-route telt elk adres (Reply-To, bijgevoegde .eml), en de factuur-inbox boekt automatisch op het From-adres. | workers/email-inbound, mail-inbound |
+| G | middel | Inkomende mail: de afzender is niet geverifieerd, want DMARC wordt niet doorgegeven. De factuur-inbox boekt automatisch op het From-adres. De aliasroute vertrouwt de `.eml` nog. De reply-route is opgelost (fix 18). | workers/email-inbound, mail-inbound, invoiceInbox |
 | H | middel | portal-login: geen rate limit, en door de timing te raden welke adressen klant zijn. | portal-login |
 | I | laag | mcp-oauth: een fout-redirect naar een geregistreerd adres als `response_type` ontbreekt. Liever een foutpagina tonen. Registratie zelf is begrensd (fix 17). | mcp-oauth |
 | J | middel | De agenda-OAuth-callback is niet gekoppeld aan de sessie (open sinds 26 september). | calendar-integrations |
