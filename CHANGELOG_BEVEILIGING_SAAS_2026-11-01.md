@@ -7,7 +7,8 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering.** Zes reviews zijn klaar, vijftien fixes staan op staging, het mailquotum werkt op de eerste routes, interne functies zijn dicht en AI-registraties begrensd.
+> **Status: in uitvoering (sessie 2).** 29 fixes staan op staging. Wat open is, staat
+> onderaan: vooral lage punten, en acties die alleen de eigenaar kan doen.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
 ## Werkwijze
@@ -526,17 +527,20 @@ En verder, voor productie:
 | Onderdeel | Stand |
 | --- | --- |
 | Live controles staging | klaar |
-| Rechten van `anon` | klaar (migratie 20261101000000) |
+| Rechten van `anon` | klaar (20261101000000) |
 | Supabase Auth-instellingen | klaar op staging (productie: zie fix 2) |
 | Klantaccounts zonder werkruimte | klaar (20261101010000) |
 | Video's, domeinen, vertrek | klaar (20261101020000; worker nog uitrollen) |
 | Bank, rapporten, kleine sloten | klaar (20261101030000) |
 | PKCE, vangnetten, testmails | klaar |
 | Omleiden van facturen of geld, TRUNCATE | klaar (20261101040000) |
-| Mailquotum per organisatie | klaar op alle routes (20261101050000, sessie 2) |
+| Mailquotum per organisatie | klaar op alle routes (20261101050000) |
+| Interne functies, AI-registraties, portal-login | klaar (20261101060000 t/m 080000) |
+| Factuurvergrendeling, AI-budget, agenda-privacy, boekingen | klaar (20261101090000 t/m 120000) |
+| Editor-segmenten, office-server, opslagquotum | klaar in de code; **workers nog uitrollen** |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
-| Review security-definer-functies | scan klaar (20261101060000); diepe review is punt U |
-| Open bevindingen A–T | **nog doen** |
+| Review security-definer-functies | scan klaar; diepe review loopt (punt U) |
+| Open bevindingen | zie de tabel hieronder (vooral laag, plus acties voor de eigenaar) |
 
 ## Aanbevolen, vraagt een keuze of een account van de eigenaar
 
