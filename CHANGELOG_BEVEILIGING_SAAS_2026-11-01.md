@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering (sessie 2).** 29 fixes staan op staging. Wat open is, staat
+> **Status: in uitvoering (sessie 2).** 30 fixes staan op staging. Wat open is, staat
 > onderaan: vooral lage punten, en acties die alleen de eigenaar kan doen.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
@@ -480,6 +480,44 @@ Inkomende mail toont ze nu pas na "Afbeeldingen laden". Eigen, uitgaande mail
 en berichten van het team blijven zoals ze waren. Ook opent een `<area>`-link
 nu in een nieuw tabblad, zonder referrer.
 
+### 30. Databasefuncties: periodeslot, dividend en ontbrekende modulechecks (middel, opgelost)
+
+De diepe review van punt U: per security-definer-functie nagelopen of elk
+id-argument bij de organisatie hoort, en of de juiste module wordt gevraagd.
+Wat er mis was:
+
+- **Boeken in een afgesloten periode.** `post_journal_entry` liet de
+  jaarafsluiting, de Vpb-reservering en de dga-rente door het periodeslot,
+  op basis van de boeksoort die de aanroeper zelf meegaf. Iedereen met
+  schrijfrecht op Financiën kon met `p_source_type => 'dga_interest'` elke
+  regel boeken in een afgesloten btw-periode of boekjaar. Nu mogen alleen
+  `close_fiscal_year`, `save_corporate_tax_return` en `book_dga_interest` die
+  soorten boeken (ze zetten vlak ervoor een vlag die alleen binnen de
+  transactie geldt), en de service-role.
+- **Boekingsregels met een klant, leverancier of project van een ander.** Alleen
+  de grootboekrekening werd tegen de organisatie gecontroleerd. Nu controleert
+  een trigger op `journal_lines` alle vier, voor elke weg naar de tabel.
+- **Dividend over organisaties heen.** `declare_dividend` controleerde de
+  winstbestemming alleen bij een slotdividend. Een lid van organisatie A kon zo
+  een dividend aan de winstbestemming van B hangen. Omdat het terugdraaien en
+  het slotdividend van B naar geboekte dividenden zochten zonder
+  organisatiefilter, blokkeerde dat de boekhouding van B. Nu hoort de
+  winstbestemming altijd bij de eigen organisatie, en zoeken beide functies
+  alleen in de eigen organisatie.
+- **Kleinere gaten:** `compute_icp_declaration` haalde de klant op zonder
+  organisatiefilter. `book_bank_transaction` sloeg met twee factuur-ids het
+  tweede ongecontroleerd op; nu weigert hij dat.
+- **Modulerechten.** Een teamlid zonder Financiën kon offertes omzetten in
+  facturen, het resultaat bestemmen, en het volgende factuurnummer en de
+  rekening voor de beginbalans opvragen. Zonder Klanten kon hij klanten
+  aanmaken, en zonder Teamchat een privégesprek beginnen, ook met iemand die
+  Teamchat niet mag zien. Die functies vragen nu de module.
+
+Migratie `20261101140000`. Droog getest op staging: de directe
+`dga_interest`-boeking en de klant van een andere organisatie worden
+geweigerd, gewone memoriaalboekingen en de boekingen van de drie functies
+werken.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -495,7 +533,7 @@ nu in een nieuw tabblad, zonder referrer.
 | P | laag | Uren uit een koppeling aan een privé-afspraak nemen de titel over in `time_entries.description`. En `meeting_recordings` toont transcripties van vergaderingen uit privé-agenda's aan elk teamlid met Agenda. Is dat zo bedoeld? | RLS |
 | Q | laag | Wie de link van een galerij heeft, kan met foute pincodes de echte klant buitensluiten, want de blokkade geldt per galerij en niet per bezoeker. `galleries.share_token` staat onversleuteld in de database. `meeting-booking-public` stuurt `Access-Control-Allow-Origin: *`; dat is ongevaarlijk, want de token zit in de body. | publieke functies |
 | R | laag | CSP met wildcards: `*.supabase.co`, `*.workers.dev` en `img-src https:`. Zet per omgeving de exacte hosts (`<ref>.supabase.co`, de eigen worker-hosts); dat vraagt aparte `_headers` per omgeving of een build-stap. | public/_headers |
-| U | laag | De review van de 131 functies die elke ingelogde gebruiker kan aanroepen: de scan op ontbrekende controles is gedaan (fix 16). Nog doen: per functie nalopen of elk id-argument bij de organisatie hoort, en of de juiste module wordt gevraagd. De dumps maak je met de queries uit de commits van deze ronde. | db |
+| U | laag | De review van de functies die elke ingelogde gebruiker kan aanroepen is gedaan (fix 16 en 30). Nog na te lopen: wie als maker of uitvoerder wordt vastgelegd (`p_created_by` en dergelijke kan de aanroeper zelf invullen), `organization_billing_overview`, en de modulecheck van `replace_flow_steps`, `submit_quote_for_internal_approval` en `void_contract`. | db |
 
 ## Checklist voor productie
 
@@ -540,7 +578,7 @@ En verder, voor productie:
 | Factuurvergrendeling, AI-budget, agenda-privacy, boekingen | klaar (20261101090000 t/m 120000) |
 | Editor-segmenten, office-server, opslagquotum | klaar in de code; **workers nog uitrollen** |
 | Reviews | klaar: RLS, publieke functies, app-functies, AI en koppelingen, workers, frontend |
-| Review security-definer-functies | scan klaar; diepe review loopt (punt U) |
+| Review security-definer-functies | klaar (20261101140000); restpunten bij punt U |
 | Open bevindingen | zie de tabel hieronder (vooral laag, plus acties voor de eigenaar) |
 
 ## Aanbevolen, vraagt een keuze of een account van de eigenaar
