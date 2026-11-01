@@ -638,6 +638,13 @@ Buitenstaanders, gebruikers zonder login en andere kanaalnamen niet.
   is gemaakt kan hem aannemen, en niet na de vervaldatum.
 - **Mail-DNS.** SPF, DKIM en DMARC van het platformdomein kon ik niet opvragen.
   De container heeft geen DNS (actiepunt 24).
+- **API-sleutels en webhooks.** Alleen eigenaren en beheerders zien en beheren
+  ze, en boekhouders zijn uitgesloten. De geheimen staan in eigen tabellen
+  (`api_key_secrets`, `webhook_endpoint_secrets`).
+- **Rapporten.** Alle rapportfuncties (balans, winst-en-verlies, open posten,
+  bankaansluiting, grootboekkaart) vragen de organisatie én Financiën.
+- **Logs.** Geen edge function of worker schrijft tokens, geheimen,
+  wachtwoorden of pincodes naar de log.
 
 - **Kwetsbare packages (`npm audit`).** De productie-packages van de app en de
   vier workers hebben geen meldingen. In de bouwketen is `source-map-js`
