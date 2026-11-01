@@ -112,6 +112,7 @@ serve(async (req) => {
 
     switch (action) {
       case 'oauthStart': requireWrite(); return json({ ok: true, authUrl: await startOAuth(user.id, organizationId, body) });
+      case 'oauthComplete': return json({ ok: true, ...(await completeOAuth(user.id, body)) });
       case 'listIntegrations': return json({ ok: true, ...(await listIntegrations(organizationId, user.id)) });
       case 'refreshSources': requireWrite(); return json({ ok: true, ...(await refreshSources(organizationId, user.id, String(body.connectionId || ''))) });
       case 'updateSource': requireWrite(); return json({ ok: true, source: await updateSource(organizationId, user.id, String(body.sourceId || ''), body.patch || {}) });
@@ -237,20 +238,38 @@ async function handleOAuthCallback(req: Request): Promise<Response> {
   const code = url.searchParams.get('code');
   if (!code) return redirectWithStatus(state.returnTo, { calendar_error: 'OAuth code ontbreekt.' });
 
-  try {
-    const token = await exchangeCode(state.provider, code);
-    const accessToken = String(token.access_token || '');
-    if (!accessToken) throw new Error('Provider gaf geen access token terug.');
-    const account = await fetchAccountProfile(state.provider, accessToken);
-    await requireOrganizationAccess(state.userId, state.organizationId);
-    const connection = await upsertConnection(state.userId, state.organizationId, state.provider, account, token);
-    await upsertTokens(connection, token);
-    await syncSourcesForConnection(connection);
-    return redirectWithStatus(state.returnTo, { calendar_connected: state.provider });
-  } catch (err) {
-    console.error('oauth callback failed', err);
-    return redirectWithStatus(state.returnTo, { calendar_error: err instanceof Error ? err.message : 'OAuth callback mislukt.' });
+  // De code hier NIET zelf inwisselen. Deze callback heeft geen sessie: wie de
+  // toestemmingslink volgt, is niet per se wie de koppeling startte. Zo kon
+  // iemand zijn eigen koppellink naar een collega of klant sturen, en kwam na
+  // diens "toestaan" diens agenda (en contacten) in het account van de
+  // afzender terecht. De app rondt daarom af (oauthComplete), met het JWT van
+  // wie er is ingelogd; dat moet dezelfde gebruiker zijn als in de state.
+  // returnTo is een adres van de app zelf (sanitizeReturnTo).
+  return redirectWithStatus(state.returnTo, { calendar_code: code, calendar_state: stateRaw });
+}
+
+/** Rondt de koppeling af vanuit de app: alleen voor wie de koppeling startte. */
+async function completeOAuth(userId: string, body: Record<string, unknown>): Promise<{ provider: Provider }> {
+  const stateRaw = String(body.state || '');
+  const code = String(body.code || '');
+  if (!stateRaw || !code) throw new Error('OAuth code of state ontbreekt.');
+  const state = await verifyState(stateRaw);
+  if (state.userId !== userId) {
+    throw new Error('Deze agendakoppeling is gestart door een ander account. Start de koppeling opnieuw vanuit je eigen werkruimte.');
   }
+  const role = await requireOrganizationAccess(userId, state.organizationId);
+  requireRole(role, ['owner', 'admin', 'member'], 'Deze agenda-actie vereist schrijfrechten binnen de organisatie.');
+  if (await getModuleLevel(supabaseAdmin, userId, state.organizationId, 'calendar') !== 'write') {
+    throw new Error('Je mag niets wijzigen in de module Agenda van deze organisatie.');
+  }
+  const token = await exchangeCode(state.provider, code);
+  const accessToken = String(token.access_token || '');
+  if (!accessToken) throw new Error('Provider gaf geen access token terug.');
+  const account = await fetchAccountProfile(state.provider, accessToken);
+  const connection = await upsertConnection(userId, state.organizationId, state.provider, account, token);
+  await upsertTokens(connection, token);
+  await syncSourcesForConnection(connection);
+  return { provider: state.provider };
 }
 
 function redirectWithStatus(returnTo: string, params: Record<string, string>): Response {

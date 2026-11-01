@@ -100,7 +100,7 @@ import {
 } from './lib/repository';
 import { memberShortName, memberColor, memberInitials } from './lib/members';
 import { uploadToR2 } from './lib/r2';
-import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent } from './lib/calendar-api';
+import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn } from './lib/calendar-api';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
 import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, warmupOfficeEditor, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
 import { deleteR2Object } from './lib/r2-api';
@@ -926,6 +926,21 @@ function App() {
     if (permissions.canRead('chat')) openTeamChat(chatDeepLink);
     setChatDeepLink(null);
   }, [chatDeepLink, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Terug van Google of Microsoft na een agendakoppeling: hier afronden, met de
+  // sessie van wie er is ingelogd (de server koppelt alleen voor wie startte).
+  const [calendarOAuthReturn, setCalendarOAuthReturn] = useState(() => takeCalendarOAuthReturn());
+  useEffect(() => {
+    if (!calendarOAuthReturn || loading || !activeOrganization) return;
+    const pending = calendarOAuthReturn;
+    setCalendarOAuthReturn(null);
+    completeCalendarOAuth(activeOrganization.id, pending.code, pending.state)
+      .then((provider) => {
+        notify({ tone: 'ok', title: 'Agenda gekoppeld', detail: provider === 'google' ? 'Google Agenda staat nu in je werkruimte.' : 'Microsoft 365 staat nu in je werkruimte.' });
+        void refresh();
+      })
+      .catch((error) => notify({ tone: 'muted', title: 'Agenda koppelen lukte niet', detail: error instanceof Error ? error.message : 'Er ging iets mis.' }));
+  }, [calendarOAuthReturn, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Uit een pushmelding van een agent: naar het commandocentrum, met die agent open.
   const [agentDeepLink, setAgentDeepLink] = useState<string | null>(() => readAgentDeepLink());

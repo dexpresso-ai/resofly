@@ -228,3 +228,28 @@ export async function listCalendarAppPasswords(organizationId: UUID): Promise<Ca
 export async function revokeCalendarAppPassword(organizationId: UUID, appPasswordId: UUID): Promise<void> {
   await invokeCalendar<Record<string, never>>(organizationId, { action: 'revokeAppPassword', appPasswordId });
 }
+
+/** Rondt een agendakoppeling af na de terugkeer van Google of Microsoft
+ *  (?calendar_code=&calendar_state=…). De server koppelt alleen voor wie de
+ *  koppeling startte. */
+export async function completeCalendarOAuth(organizationId: UUID, code: string, state: string): Promise<CalendarProvider> {
+  const result = await invokeCalendar<{ provider: CalendarProvider }>(organizationId, { action: 'oauthComplete', code, state });
+  return result.provider;
+}
+
+/** Leest de terugkeer van de agenda-OAuth één keer uit de URL en haalt hem eruit. */
+export function takeCalendarOAuthReturn(): { code: string; state: string } | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const url = new URL(window.location.href);
+    const code = url.searchParams.get('calendar_code');
+    const state = url.searchParams.get('calendar_state');
+    if (!code || !state) return null;
+    url.searchParams.delete('calendar_code');
+    url.searchParams.delete('calendar_state');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    return { code, state };
+  } catch {
+    return null;
+  }
+}
