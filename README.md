@@ -111,17 +111,21 @@ npm run deploy
 
 De Worker gebruikt private R2 buckets via de binding `MEDIA_BUCKET` en leest toegestane origins uit `ALLOWED_ORIGINS`. Echte secrets zoals `SUPABASE_SERVICE_ROLE_KEY` en `MEDIA_SIGNING_SECRET` moeten via Cloudflare secrets worden gezet en mogen niet in GitHub staan.
 
-## Cloudflare R2 Worker
+## Cloudflare R2 Worker (verouderd: niet meer uitrollen)
 
-1. Maak een R2 bucket aan: `resofly-media-staging` (staging) of `resofly-media-production` (productie).
-2. `cd cloudflare-worker`
-3. `cp wrangler.toml.example wrangler.toml` en vul in:
-   - `ALLOWED_ORIGIN` — comma-separated lijst van expliciet toegestane origins, bijvoorbeeld `http://localhost:5173` voor dev
-   - `SUPABASE_URL`
-   - `SUPABASE_ANON_KEY`
-4. `wrangler deploy`
+De map `cloudflare-worker/` is de eerste versie van de bestandsworker. Hij mist
+de bewaking die `workers/media-api` wel heeft:
+- een verwijderd teamlid houdt toegang;
+- een viewer leest bestanden van elke module;
+- vastgelegde factuur- en contract-PDF's zijn te verwijderen;
+- bestanden worden inline geserveerd, zonder `nosniff` of CSP-sandbox.
 
-De Worker valideert iedere request tegen Supabase, vereist `x-organization-id` bij uploads, genereert storage keys server-side met organisatieprefix en controleert lees-/schrijfrechten via `organization_members`.
+**Gebruik alleen `workers/media-api`** (zie hierboven en
+`workers/media-api/README.md`). Draait er nog een Worker
+`resofly-media` of `resofly-media-staging` uit deze map? Verwijder die dan in
+Cloudflare, en laat `VITE_R2_WORKER_URL`, `MEDIA_WORKER_URL` en de
+`*_PDF_STORAGE_WORKER_URL`-secrets naar `resofly-media-api(-staging)` wijzen.
+Zie `CHANGELOG_BEVEILIGING_SAAS_2026-11-01.md`.
 
 ## Supabase Edge Function voor agenda-integraties
 
