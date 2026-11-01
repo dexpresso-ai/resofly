@@ -7,7 +7,7 @@ Dit is de tweede ronde na `CHANGELOG_BEVEILIGING_2026-09-26.md`. Sindsdien kwame
 de openbare API, webhooks, het boekhouder-gastaccount, bestanden versturen,
 teamchat-teams, klantmeldingen, e-facturatie en Jitsi erbij.
 
-> **Status: in uitvoering.** Zes reviews zijn klaar, vijftien fixes staan op staging, het mailquotum werkt op de eerste routes, en interne functies zijn dicht.
+> **Status: in uitvoering.** Zes reviews zijn klaar, vijftien fixes staan op staging, het mailquotum werkt op de eerste routes, interne functies zijn dicht en AI-registraties begrensd.
 > Een volgende sessie begint bij **Verder in de volgende sessie**.
 
 ## Werkwijze
@@ -263,6 +263,17 @@ Ingelogde gebruikers kunnen ze niet meer aanroepen (migratie `20261101060000`).
 controleren de schrijfrol. Het recht op Financiën bewaakt de module-gate op
 `vat_returns`, `closed_periods` en `journal_entries`.
 
+### 17. AI-koppelingen: registratie en verbruik (laag, opgelost)
+
+- **Registratie:** `mcp-oauth /register` kan zonder login, want zo werkt het
+  koppelen van Claude of ChatGPT. Hij nam elke grootte aan, en registraties
+  bleven voor altijd staan. Nu:
+  - maximaal 16 KB per registratie en 512 tekens per redirect-URI;
+  - een dagelijkse taak ruimt registraties op die na twee dagen nog geen
+    koppeling hebben (migratie `20261101070000`).
+- **Verbruik:** het overzicht van AI-gebruik per teamlid telde zijn gebruik in
+  al zijn organisaties op. Nu telt alleen het gebruik in deze organisatie.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -273,7 +284,7 @@ controleren de schrijfrol. Het recht op Financiën bewaakt de module-gate op
 | F | middel | Office-server bewaakt alleen `/convert-to`, en één Collabora-instantie draait voor alle klanten en beide omgevingen. | workers/office-server |
 | G | middel | Inkomende mail: de afzender is niet geverifieerd. Op de reply-route telt elk adres (Reply-To, bijgevoegde .eml), en de factuur-inbox boekt automatisch op het From-adres. | workers/email-inbound, mail-inbound |
 | H | middel | portal-login: geen rate limit, en door de timing te raden welke adressen klant zijn. | portal-login |
-| I | middel | mcp-oauth `/register`: onbeperkt registreren, en een fout-redirect naar elk geregistreerd adres. | mcp-oauth |
+| I | laag | mcp-oauth: een fout-redirect naar een geregistreerd adres als `response_type` ontbreekt. Liever een foutpagina tonen. Registratie zelf is begrensd (fix 17). | mcp-oauth |
 | J | middel | De agenda-OAuth-callback is niet gekoppeld aan de sessie (open sinds 26 september). | calendar-integrations |
 | K | middel | De CI-secrets zijn vanaf elke branch te gebruiken. `permissions: contents: read` staat er nu. Nog doen, door de eigenaar in GitHub: de secrets naar een Environment `staging` verplaatsen, alleen voor branch `staging` en met een reviewer, `environment: staging` op de job zetten, en `staging` beschermen. | .github/workflows |
 | L | middel | Opslagquotum is alleen een advies: de opgegeven grootte telt, en het faalt open. Stream-kopieën onbeperkt. | workers/media-api |
@@ -283,7 +294,6 @@ controleren de schrijfrol. Het recht op Financiën bewaakt de module-gate op
 | P | laag | `calendar_event_links` toont titels van privé-afspraken van collega's; `calendar_sources.feed_url` is leesbaar. | RLS |
 | Q | laag | Interne foutteksten in publieke functies; ACAO `*` bij meeting-booking-public; contract-vraag zonder limiet; pin-blokkade per galerij. | publieke functies |
 | R | laag | CSP met wildcards (`*.supabase.co`, `*.workers.dev`, `img-src https:`), en afbeeldingen in inkomende mail laden vanzelf. | frontend |
-| S | laag | Gebruik van AI per lid opgeteld over alle organisaties (`getUsageSummary` zonder organisatiefilter). | gerrieCore.ts |
 | T | laag | Chatdeelname blijft na vertrek staan; `p_created_by` in boekingsfuncties komt van de aanroeper. | RLS/RPC |
 | U | laag | De review van de 131 functies die elke ingelogde gebruiker kan aanroepen: de scan op ontbrekende controles is gedaan (fix 16). Nog doen: per functie nalopen of elk id-argument bij de organisatie hoort, en of de juiste module wordt gevraagd. De dumps maak je met de queries uit de commits van deze ronde. | db |
 
