@@ -468,6 +468,15 @@ gedecodeerde pad. Het verkeer van de editor en WOPI blijft ongemoeid.
 **Actie:** `wrangler deploy` in `workers/office-server`. Nog open: één
 Collabora-instantie draait voor beide omgevingen; aparte instanties zijn veiliger.
 
+### 29. Afbeeldingen in inkomende mail (laag, opgelost)
+
+De sanitizer liet afbeeldingen van buiten staan. Elke afzender zag zo met een
+onzichtbare pixel wanneer, en vanaf welk IP, zijn mail werd gelezen.
+
+Inkomende mail toont ze nu pas na "Afbeeldingen laden". Eigen, uitgaande mail
+en berichten van het team blijven zoals ze waren. Ook opent een `<area>`-link
+nu in een nieuw tabblad, zonder referrer.
+
 ## Gevonden en nog open (volgorde = prioriteit)
 
 | # | Ernst | Wat | Waar |
@@ -482,7 +491,7 @@ Collabora-instantie draait voor beide omgevingen; aparte instanties zijn veilige
 | O | middel | De oude `cloudflare-worker/` (zonder de bewaking van media-api) wordt nog in de docs genoemd. Controleer of hij nog draait, en verwijder hem. | cloudflare-worker, README |
 | P | laag | Uren uit een koppeling aan een privé-afspraak nemen de titel over in `time_entries.description`. En `meeting_recordings` toont transcripties van vergaderingen uit privé-agenda's aan elk teamlid met Agenda. Is dat zo bedoeld? | RLS |
 | Q | laag | Wie de link van een galerij heeft, kan met foute pincodes de echte klant buitensluiten, want de blokkade geldt per galerij en niet per bezoeker. `galleries.share_token` staat onversleuteld in de database. `meeting-booking-public` stuurt `Access-Control-Allow-Origin: *`; dat is ongevaarlijk, want de token zit in de body. | publieke functies |
-| R | laag | CSP met wildcards (`*.supabase.co`, `*.workers.dev`, `img-src https:`), en afbeeldingen in inkomende mail laden vanzelf. | frontend |
+| R | laag | CSP met wildcards: `*.supabase.co`, `*.workers.dev` en `img-src https:`. Zet per omgeving de exacte hosts (`<ref>.supabase.co`, de eigen worker-hosts); dat vraagt aparte `_headers` per omgeving of een build-stap. | public/_headers |
 | T | laag | `chat_unread_counts()` geeft een oud-teamlid nog tellingen van zijn oude gesprekken (alleen aantallen; lezen is dicht). | RPC |
 | U | laag | De review van de 131 functies die elke ingelogde gebruiker kan aanroepen: de scan op ontbrekende controles is gedaan (fix 16). Nog doen: per functie nalopen of elk id-argument bij de organisatie hoort, en of de juiste module wordt gevraagd. De dumps maak je met de queries uit de commits van deze ronde. | db |
 
