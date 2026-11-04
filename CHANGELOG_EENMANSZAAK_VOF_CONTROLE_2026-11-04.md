@@ -13,6 +13,13 @@ kent. Wat niet klopte of ontbrak, is meteen ingebouwd.
 > en een leeshandeling voor Gerrie, API en MCP. Alles is eerst droog
 > nagespeeld op staging.
 
+> **Uitgerold op staging op 4 november** (*Deploy Supabase (staging)* run 167).
+> De migratie is toegepast (231 in totaal), alle edge functions zijn uitgerold
+> en de rooktest is geslaagd. Daarna gaven dezelfde scenario's tegen de live
+> code dezelfde uitkomst. Beide bestaande IB-administraties hebben de
+> privérekeningen gekregen, de regressiecijfers zijn ongewijzigd en er is
+> niets van de tests blijven staan.
+
 ## Wat goed zat
 
 Dit is nagelopen en hoefde niet te veranderen:
