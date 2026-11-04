@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
+import { normalizeGalleryLayout } from '../_shared/galleryLayout.ts';
 import { createPortalInvoiceCheckout, calculateTotalCents, orgHasInvoiceMollie } from '../_shared/invoiceCheckout.ts';
 import {
   defaultPortalPrefs,
@@ -1224,6 +1225,9 @@ function sanitizeGallery(row: Record<string, unknown>) {
     cover_preview_key: row.cover_preview_key ?? null,
     cover_focus_x: clampFocus(row.cover_focus_x),
     cover_focus_y: clampFocus(row.cover_focus_y),
+    // De weergave van het album, opnieuw opgebouwd uit de vaste lijst sleutels
+    // en waarden: wat de database ook bevat, er gaat niets anders naar buiten.
+    layout: normalizeGalleryLayout(row.layout),
     expires_at: row.expires_at ?? null,
   };
 }
@@ -1255,6 +1259,8 @@ function sanitizeGalleryItem(row: Record<string, unknown>) {
     stream_uid: row.stream_uid ?? null,
     stream_status: row.stream_status ?? null,
     stream_playback_base: row.stream_playback_base ?? null,
+    // Groot tonen: alleen een ja/nee, voor de indeling.
+    featured: row.featured === true,
   };
 }
 

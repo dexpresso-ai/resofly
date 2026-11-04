@@ -3,6 +3,11 @@ import {
   optIsoDate, optNum, optStr, orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
+import {
+  GALLERY_LAYOUT_LIMITS, GALLERY_LAYOUT_PRESET_KEYS, GALLERY_LAYOUT_STYLES, GALLERY_LAYOUT_WIDTHS,
+  applyGalleryLayoutPreset, describeGalleryLayout, galleryLayoutIssues, normalizeGalleryLayout,
+  type GalleryLayout, type GalleryPlayfulness,
+} from '../galleryLayout.ts';
 
 /**
  * Handelingen rond MARKETING in de brede zin: e-mailcampagnes en follow-up-stromen,
@@ -46,6 +51,49 @@ const HERO_TEMPLATES = [
   'classic', 'collage', 'arch', 'stack',
   'cinematic', 'mosaic', 'slideshow', 'netflix',
 ] as const;
+
+const LAYOUT_INPUTS = ['layout_preset', 'layout_style', 'layout_columns', 'layout_gap', 'layout_playfulness', 'layout_width'];
+
+/**
+ * De nieuwe weergave van een galerij uit de layout_-velden, bovenop de huidige.
+ * `null` = er wordt niets aan de weergave veranderd. Eerst de stijl (die zet alles
+ * wat over de foto's gaat), daarna de losse velden — zo kan het model "Lichttafel,
+ * maar met drie kolommen" in één keer vragen.
+ *
+ * Alleen als er een layout_-veld is wordt de kolom gelezen: zo blijft deze
+ * handeling werken in een omgeving waar de migratie van `layout` nog niet heeft
+ * gedraaid, zolang niemand naar de weergave vraagt.
+ */
+async function plannedGalleryLayout(ctx: ActionCtx, galleryId: string, input: Record<string, unknown>): Promise<GalleryLayout | null> {
+  const given = (key: string) => input[key] !== undefined && input[key] !== null && input[key] !== '';
+  if (!LAYOUT_INPUTS.some(given)) return null;
+  const current = await row<{ layout: unknown }>(ctx, 'galleries', galleryId, 'layout', 'Galerij');
+  let next = normalizeGalleryLayout(current.layout);
+  const preset = optChoice(input, 'layout_preset', GALLERY_LAYOUT_PRESET_KEYS);
+  if (preset) next = applyGalleryLayoutPreset(next, preset);
+  const style = optChoice(input, 'layout_style', GALLERY_LAYOUT_STYLES);
+  if (style) next = { ...next, style };
+  const width = optChoice(input, 'layout_width', GALLERY_LAYOUT_WIDTHS);
+  if (width) next = { ...next, width };
+  const whole = (key: string, min: number, max: number): number | null => {
+    const value = optNum(input, key);
+    if (value === null) return null;
+    if (!Number.isInteger(value) || value < min || value > max) {
+      throw new ActionError(`"${key}" moet een heel getal van ${min} tot en met ${max} zijn.`);
+    }
+    return value;
+  };
+  const columns = whole('layout_columns', 0, GALLERY_LAYOUT_LIMITS.columns.max);
+  if (columns !== null) next = { ...next, columns: columns === 0 ? null : columns };
+  const gap = whole('layout_gap', GALLERY_LAYOUT_LIMITS.gap.min, GALLERY_LAYOUT_LIMITS.gap.max);
+  if (gap !== null) next = { ...next, gap };
+  const playfulness = whole('layout_playfulness', GALLERY_LAYOUT_LIMITS.playfulness.min, GALLERY_LAYOUT_LIMITS.playfulness.max);
+  if (playfulness !== null) next = { ...next, playfulness: playfulness as GalleryPlayfulness };
+  // Dezelfde regels als de databasetrigger; een fout hier is een fout in deze code.
+  const issues = galleryLayoutIssues(next);
+  if (issues.length > 0) throw new ActionError(issues.join(' '));
+  return next;
+}
 
 const STATUS_LABEL: Record<string, string> = {
   active: 'actief', prospect: 'prospect', inactive: 'inactief',
@@ -1413,8 +1461,12 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     kind: 'write',
     description:
       'Zet titel, omschrijving, formaat, de opening (het sjabloon van de kop), of de klant mag downloaden, in welke kwaliteit, en tot wanneer de galerij bereikbaar is. ' +
+      'Ook de WEERGAVE van het album, los van de opening: de indeling van de foto\'s (layout_style), het aantal kolommen, de witruimte en hoe speels het oogt — of in één keer een complete stijl (layout_preset). ' +
       'LET OP: downloads aanzetten of de vervaldatum verschuiven verandert direct wat de klant mag — bij een gepubliceerde galerij merkt hij dat meteen. Laat weg wat niet verandert.',
-    keywords: ['galerij instellingen', 'downloads', 'vervaldatum', 'kwaliteit', 'opening', 'hero', 'titel', 'omschrijving'],
+    keywords: [
+      'galerij instellingen', 'downloads', 'vervaldatum', 'kwaliteit', 'opening', 'hero', 'titel', 'omschrijving',
+      'weergave', 'indeling', 'kolommen', 'witruimte', 'tussenruimte', 'speels', 'raster', 'waterval', 'album', 'stijl',
+    ],
     input: {
       gallery_id: { type: 'string', description: 'Id van de galerij (exact, uit list_galleries).' },
       title: { type: 'string' },
@@ -1424,6 +1476,18 @@ export const MARKETING_ACTIONS: ActionDef[] = [
       allow_downloads: { type: 'boolean', description: 'Mag de klant de bestanden downloaden?' },
       download_quality: { type: 'string', enum: [...GALLERY_QUALITY], description: 'original = het volledige bestand, web = de webversie.' },
       expires_at: { type: 'string', description: 'Laatste dag dat de galerij bereikbaar is (JJJJ-MM-DD). Leeg = geen vervaldatum.' },
+      layout_preset: {
+        type: 'string', enum: [...GALLERY_LAYOUT_PRESET_KEYS],
+        description: 'Een complete weergave van het album in één keer: standard (rijen, de standaard), seamless (naadloos, beeld tegen beeld), gallery (strak raster met passe-partout en veel wit), magazine (een verhaal, als een tijdschrift), moodboard (verspringende kolommen), lighttable (afdrukken op een lichttafel), rhythm (raster met af en toe een groot beeld). De losse layout_-velden gaan daaroverheen.',
+      },
+      layout_style: {
+        type: 'string', enum: [...GALLERY_LAYOUT_STYLES],
+        description: 'Indeling van de foto\'s: rows (rijen die de breedte vullen, elke foto heel), masonry (waterval in kolommen), grid (gelijke tegels, bijgesneden), story (verhaal: groot, in paren), prints (afdrukken met een witte rand).',
+      },
+      layout_columns: { type: 'integer', description: `Kolommen op een breed scherm, 1–${GALLERY_LAYOUT_LIMITS.columns.max}; bij rows het aantal foto's per rij, ongeveer. 0 = automatisch.` },
+      layout_gap: { type: 'integer', description: `Witruimte tussen de beelden in pixels: 0 (naadloos) tot ${GALLERY_LAYOUT_LIMITS.gap.max}. De standaard is 6.` },
+      layout_playfulness: { type: 'integer', description: 'Speelsheid: 0 strak, 1 levendig, 2 speels, 3 uitbundig.' },
+      layout_width: { type: 'string', enum: [...GALLERY_LAYOUT_WIDTHS], description: 'Hoe breed het album hooguit wordt: full, wide (1680 px), medium (1240 px) of narrow (940 px). Smaller = meer wit eromheen.' },
     },
     required: ['gallery_id'],
     async plan(ctx, input) {
@@ -1457,6 +1521,11 @@ export const MARKETING_ACTIONS: ActionDef[] = [
         // galerij op een UTC-middernacht laten vervallen, dus twee uur te vroeg.
         patch.expires_date = expires;
         described.push(expires ? `bereikbaar t/m ${expires}` : 'geen vervaldatum meer');
+      }
+      const layout = await plannedGalleryLayout(ctx, galleryId, input);
+      if (layout) {
+        patch.layout = layout;
+        described.push(`weergave: ${describeGalleryLayout(layout)}`);
       }
       if (Object.keys(patch).length === 0) throw new ActionError('Geef minstens één instelling die moet veranderen.');
 
@@ -1777,6 +1846,49 @@ export const MARKETING_ACTIONS: ActionDef[] = [
   },
 
   {
+    id: 'gallery.set_featured',
+    label: 'Foto\'s groot tonen in het album',
+    module: 'projects',
+    kind: 'write',
+    description:
+      'Zet "groot tonen" aan of uit voor een reeks foto\'s. Een uitgelichte foto krijgt in elke weergave van het album een grote plek — een eigen rij, een tegel van 2×2, twee kolommen breed — ook als het album verder strak is. ' +
+      'Alleen voor foto\'s; video\'s staan in hun eigen rijen. Zoek de foto\'s met `gallery.list_items` (daar staat ook welke al groot getoond worden).',
+    keywords: ['groot tonen', 'uitlichten', 'uitgelicht', 'grote foto', 'in de spotlight', 'weergave', 'album'],
+    input: {
+      gallery_id: { type: 'string' },
+      item_ids: { type: 'array', items: { type: 'string' }, description: 'De foto\'s.' },
+      featured: { type: 'boolean', description: 'true = groot tonen (standaard), false = weer gewoon tonen.' },
+    },
+    required: ['gallery_id', 'item_ids'],
+    async plan(ctx, input) {
+      const galleryId = id(input, 'gallery_id');
+      const itemIds = ids(input, 'item_ids', 200);
+      const on = bool(input, 'featured', true);
+      const gallery = await row<{ title: string; status: string }>(ctx, 'galleries', galleryId, 'title, status', 'Galerij');
+
+      const { data, error } = await orgQuery(ctx, 'gallery_items', 'id, file_name, gallery_id, media_type').in('id', itemIds);
+      if (error) throw new ActionError(`Foto's ophalen mislukt: ${error.message}`);
+      const found: Array<Record<string, unknown>> = data ?? [];
+      if (found.length !== itemIds.length) throw new ActionError(`${itemIds.length - found.length} van de opgegeven bestanden bestaat niet.`);
+      const stranger = found.find((i) => String(i.gallery_id) !== galleryId);
+      if (stranger) throw new ActionError(`"${String(stranger.file_name)}" hoort bij een andere galerij.`);
+      const video = found.find((i) => i.media_type !== 'photo');
+      if (video) throw new ActionError(`"${String(video.file_name)}" is een video; groot tonen geldt alleen voor foto's.`);
+
+      const count = `${itemIds.length} foto${itemIds.length === 1 ? '' : '\'s'}`;
+      return {
+        title: on ? `${count} groot tonen in "${gallery.title}"` : `${count} weer gewoon tonen in "${gallery.title}"`,
+        sub: joinShort([
+          ...found.slice(0, 3).map((i) => String(i.file_name)),
+          gallery.status === 'published' ? 'de galerij staat GEPUBLICEERD — de klant ziet het meteen' : null,
+        ], 150),
+        kind: 'work',
+        payload: { gallery_id: galleryId, gallery_title: gallery.title, item_ids: itemIds, featured: on },
+      };
+    },
+  },
+
+  {
     id: 'gallery_category.create',
     label: 'Categorie in een galerij toevoegen',
     module: 'projects',
@@ -1950,8 +2062,8 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     module: 'projects',
     kind: 'read',
     description:
-      'Geeft de foto\'s en video\'s in één galerij: id, bestandsnaam, soort, categorie, volgorde, formaat en grootte, en bij video of de kijkkopie klaar is. ' +
-      'Dit is de lijst die je nodig hebt om een cover te kiezen, bestanden in te delen of de volgorde te zetten.',
+      'Geeft de foto\'s en video\'s in één galerij: id, bestandsnaam, soort, categorie, volgorde, of hij groot getoond wordt (featured), formaat en grootte, en bij video of de kijkkopie klaar is — plus de weergave van het album in woorden. ' +
+      'Dit is de lijst die je nodig hebt om een cover te kiezen, bestanden in te delen, de volgorde te zetten of foto\'s groot te tonen.',
     keywords: ['bestanden', 'foto\'s', 'video\'s', 'items', 'galerij-inhoud', 'wat zit erin'],
     input: {
       gallery_id: { type: 'string' },
@@ -1961,18 +2073,23 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     required: ['gallery_id'],
     async read(ctx, input) {
       const galleryId = id(input, 'gallery_id');
-      const gallery = await row<{ title: string; status: string; format: string; cover_item_id: string | null }>(
-        ctx, 'galleries', galleryId, 'title, status, format, cover_item_id', 'Galerij');
+      const gallery = await row<{ title: string; status: string; format: string; cover_item_id: string | null; layout: unknown }>(
+        ctx, 'galleries', galleryId, 'title, status, format, cover_item_id, layout', 'Galerij');
       const limit = Math.min(Math.max(Number(input.limit) || 100, 1), 500);
       let query = orgQuery(ctx, 'gallery_items',
-        'id, file_name, media_type, category_id, sort_order, size_bytes, width, height, duration_seconds, stream_status, created_at')
+        'id, file_name, media_type, category_id, sort_order, featured, size_bytes, width, height, duration_seconds, stream_status, created_at')
         .eq('gallery_id', galleryId).order('sort_order', { ascending: true }).limit(limit);
       const categoryId = optId(input, 'category_id');
       if (categoryId) query = query.eq('category_id', categoryId);
       const { data, error } = await query;
       if (error) throw new ActionError(`Bestanden ophalen mislukt: ${error.message}`);
       return {
-        gallery: { id: galleryId, title: gallery.title, status: gallery.status, format: gallery.format, cover_item_id: gallery.cover_item_id },
+        gallery: {
+          id: galleryId, title: gallery.title, status: gallery.status, format: gallery.format, cover_item_id: gallery.cover_item_id,
+          // Kort in woorden; wijzigen gaat met gallery.update_settings (layout_-velden).
+          layout: describeGalleryLayout(normalizeGalleryLayout(gallery.layout)),
+        },
+        // `featured` = groot getoond (gallery.set_featured).
         items: data ?? [],
       };
     },
