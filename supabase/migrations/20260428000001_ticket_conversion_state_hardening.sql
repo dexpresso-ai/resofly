@@ -1,35 +1,11 @@
--- Keep ticket status and converted_to_project_id consistent, including when a converted project is deleted.
-
-create or replace function public.normalize_ticket_conversion_state()
-returns trigger
-language plpgsql
-as $$
-begin
-  if new.converted_to_project_id is null and new.status = 'converted' then
-    if TG_OP = 'UPDATE' and old.status is not null and old.status <> 'converted' then
-      new.status = old.status;
-    else
-      new.status = 'new';
-    end if;
-  end if;
-
-  if new.converted_to_project_id is not null then
-    new.status = 'converted';
-  end if;
-
-  return new;
-end;
-$$;
-
-drop trigger if exists tickets_00_conversion_state on public.tickets;
-create trigger tickets_00_conversion_state
-before insert or update of status, converted_to_project_id on public.tickets
-for each row execute function public.normalize_ticket_conversion_state();
-
-update public.tickets
-set status = 'new'
-where status = 'converted' and converted_to_project_id is null;
-
-update public.tickets
-set status = 'converted'
-where converted_to_project_id is not null and status <> 'converted';
+-- ============================================================
+-- Opgenomen in de basis: 20260427000000_basis_v2_2_1.sql
+--
+-- Deze migratie hoort bij sprint 1/2 (april 2026) en zit al in het schema
+-- v2.2.1 dat de keten als basis heeft. Op een nieuwe database zou ze dubbel
+-- werk doen of botsen (de tabellen bestaan dan al). Op staging staat deze
+-- versie als toegepast; daar verandert niets.
+--
+-- Oorspronkelijke inhoud:
+--   git show 24da432:supabase/migrations/20260428000001_ticket_conversion_state_hardening.sql
+-- ============================================================

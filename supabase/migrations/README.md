@@ -1,163 +1,90 @@
-# BrandCore migraties — actuele volgorde
+# Migraties
 
-Gebruik voor een nieuwe/lege Supabase database bij voorkeur het complete installatieschema:
+Deze map is de enige bron van het databaseschema. Er is geen los
+installatiebestand meer: een nieuwe database bouw je door alle migraties op
+volgorde af te spelen, en dat levert precies het schema van staging op.
 
-```text
-supabase/BRANDCORE_DATABASE_SETUP.sql
+## Een nieuwe database
+
+**Een nieuw Supabase-project** (productie, een testomgeving):
+
+```bash
+supabase link --project-ref <project-ref>
+supabase db push
 ```
 
-Dit bestand is bijgewerkt met Sprint 1, organisatie-licenties, Sprint 2 billing/Mollie Connect en de production-ready afronding van Sprint 2.
+Daarna, eenmalig per project:
 
-## Upgrade vanaf bestaande Sprint 1 database
+1. In het dashboard: **Database → Extensions** → `pg_cron` en `pg_net` aan.
+   Die staan niet in de migraties; Supabase zet ze per project aan.
+2. `supabase functions deploy --use-api`
+3. De secrets uit `.env.example` (`supabase secrets set …`).
+4. `scripts/supabase-setup-webhooks.sh`: de geheimen en de pg_cron-taken van
+   de bezorger, de opruimtaak, de klantmeldingen en bestanden versturen.
 
-Voer de migraties in deze volgorde uit. Sla geen stappen over; latere hardening-migraties gaan ervan uit dat de basistabellen uit de eerdere stappen bestaan.
+**Lokaal** (Docker nodig):
 
-```text
-1. 20260430_sprint2_billing_mollie_licensing.sql
-2. 20260430_sprint2_mollie_connect_production_hardening.sql
-3. 20260430_sprint2_mollie_connect_final_hardening.sql
-4. 20260430_sprint2_completion_production_ready.sql
+```bash
+supabase db start      # lege database + alle migraties + seed.sql
+supabase db reset      # opnieuw vanaf nul
 ```
 
-## Upgrade vanaf eerdere Sprint 2 versie
+`seed.sql` is bewust leeg: alle gegevens horen bij een organisatie, en die
+ontstaat bij de eerste login.
 
-Als `20260430_sprint2_billing_mollie_licensing.sql` al is uitgevoerd, voer dan alleen de nog ontbrekende hardening-stappen uit, in oplopende volgorde:
+## Een nieuwe migratie
 
-```text
-20260430_sprint2_mollie_connect_production_hardening.sql
-20260430_sprint2_mollie_connect_final_hardening.sql
-20260430_sprint2_completion_production_ready.sql
+1. Naam: `<JJJJMMDDUUMMSS>_<onderwerp>.sql`, met een versie die **later** is
+   dan de laatste op staging. Een oudere versie weigert `supabase db push`
+   ("Found local migration files to be inserted before the last migration on
+   remote database").
+2. **Nooit iets met de hand in de SQL-editor** zonder dat het ook in een
+   migratie staat. Zo zijn staging en een verse database uit elkaar gelopen:
+   zie hieronder.
+3. Een migratie die al op staging staat, wijzig je niet meer. De CLI draait hem
+   daar nooit opnieuw, dus een wijziging komt alleen op nieuwe databases terecht.
+   Een fout herstel je met een nieuwe migratie.
+4. Schrijf hem zo dat hij veilig nog eens kan draaien (`if not exists`,
+   `create or replace`, `drop … if exists`).
+
+De CI-job `migrations` (`.github/workflows/frontend-checks.yml`) speelt bij
+elke pull request de hele keten af op een lege database met dezelfde images als
+staging (Postgres 17.6.1.111, versies uit `supabase/.temp`) en controleert dat
+elk bestand is toegepast.
+
+## Hoe de keten in november 2026 is rechtgezet
+
+Tot 4 november 2026 liep een lege database al bij de eerste migratie stuk
+(`function public.set_updated_at() does not exist`). De keten begon bovenop
+een schema dat ooit met de hand in de SQL-editor was gezet
+(`FRESH_INSTALL_COMPLETE_SCHEMA.sql`, v2.2.1), en een aantal migraties uit mei
+was in een andere volgorde gedraaid dan hun nummers. Opgelost zonder één
+versienummer te veranderen, zodat staging er niets van merkt (de CLI vergelijkt
+alleen versies):
+
+| Versie | Wat |
+| --- | --- |
+| `20260427000000_basis_v2_2_1` | Het complete schema v2.2.1 waarmee staging begon, zoals het op 1 mei in de repo stond (commit `757eea0`). De oude inhoud van deze versie zat daar al in. |
+| `20260428000000` t/m `20260430000006` | Leeg: zaten al in de basis. De oorspronkelijke inhoud staat in de kop van elk bestand (`git show 24da432:…`). |
+| `20260515000001` / `…000002` | Inhoud omgewisseld: `hardening` vóór `final_recheck`. `final_recheck` trekt rechten in op een functie die `hardening` aanmaakt; de gecombineerde migratie van 16 mei noemt dezelfde volgorde. |
+| `20260527000000` / `…000001` | Inhoud omgewisseld: `production_hardening` vóór `deep_review_fixes`. De review gebruikt de tabel `invoice_public_links` die de hardening aanmaakt. |
+| `20261101060000` | Maakt nu zelf `rls_auto_enable()` en de event-trigger `ensure_rls`. Die kwamen uit het dashboard ("RLS automatisch aan op nieuwe tabellen") en bestonden op een verse database niet. |
+| `20261104060500` | Nieuw: wat staging met de hand kreeg. `invoice_token_hash` met een vaste `search_path` (de oude versie faalde vanuit security-definer-functies), en de jaarprijzen van de abonnementen. |
+
+Dezelfde aanpak als eerder in commit `88ea8e6` (sprint 2.5 achteraan de
+20260430-groep).
+
+**Gecontroleerd op 4 november 2026:** een database vanaf nul is vergeleken met
+staging op tabellen, kolommen, constraints, indexen, functies (inhoud),
+triggers, policies, rechten, types, buckets en de referentiedata (plannen,
+tarieven, normen). Alles is gelijk, op twee bewuste verschillen na:
+
+- `public._migrations` staat alleen op staging: het logboek van de oude
+  handmatige migratieronde van 31 mei. Geen code gebruikt het.
+- `pg_cron` zet je per project aan in het dashboard (zie hierboven).
+
+Opnieuw vergelijken, na `supabase db start` en `supabase link`:
+
+```bash
+SUPABASE_DB_PASSWORD='…' bash scripts/schema-vergelijken.sh
 ```
-
-Als de eerste drie Sprint 2-migraties al zijn uitgevoerd, is alleen deze migratie nog nodig:
-
-```text
-20260430_sprint2_completion_production_ready.sql
-```
-
-## Wat zit in de Sprint 2-afronding?
-
-- `refresh_token_version` op `organization_mollie_connections` voor veilige compare-and-swap refresh-token rotation.
-- Prijsveilige reusable checkout-index inclusief `amount_cents` en `currency`.
-- Idempotente upgrade-SQL met `add column if not exists`, `create index if not exists` en veilige `drop index if exists` voor de verouderde checkout-index.
-- Billing event ledger blijft zonder generieke audit-trigger, zodat duplicate webhooks alleen `receive_count` en `last_seen_at` verhogen.
-
-## Nieuwe database versus losse migraties
-
-Voor een nieuwe database is `supabase/BRANDCORE_DATABASE_SETUP.sql` de snelste en minst foutgevoelige route. De losse migraties zijn vooral bedoeld voor bestaande databases die al op een oudere BrandCore-versie draaien.
-
-Voor een oude pre-v2/user-scoped database blijft een aparte datamigratie nodig waarin bestaande `user_id`-data naar `organizations` en `organization_members` wordt omgezet voordat je de organisatie-SaaS migraties toepast.
-
-
-## Handgeschreven notities (pen op tablet)
-
-Voor het handschrift bij notities (vectorlijnen per notitie, autosave, badges) is één migratie nodig:
-
-```text
-20260916010000_note_handwriting.sql
-```
-
-Zonder deze migratie blijft de app werken: de sectie "Handschrift" meldt dan bij het opslaan dat de migratie ontbreekt, en lijsten tonen simpelweg geen handschrift-badges.
-
-## Agenda-notities migratie
-
-Voor de agenda-item-notities feature is er nog maar één migratiebestand nodig:
-
-```text
-20260514_calendar_event_notes_complete.sql
-```
-
-Deze gecombineerde migratie bevat:
-- `note_calendar_links`
-- indexes
-- integrity trigger
-- RLS policies
-- audit trigger
-- `public.create_note_with_calendar_link(...)` RPC voor transactioneel aanmaken van een notitie + kalenderlink
-
-De eerdere losse migraties `20260512_note_calendar_links.sql` en `20260513_calendar_note_transaction_rpc.sql` zijn bewust samengevoegd en verwijderd uit deze codebase, zodat je deze feature met één query kunt toepassen.
-
-## Aanvinkbare takenlijsten in notities
-
-De aanvinkbare takenlijsten in rich-text notities vereisen geen extra databasekolom en dus geen nieuwe migratie. De status wordt veilig opgeslagen in het bestaande `notes.content` HTML-veld via `data-checked="true|false"` op checklist-items.
-
-Daarom blijft de laatst samengevoegde agenda-notities migratie ongewijzigd:
-
-```text
-20260514_calendar_event_notes_complete.sql
-```
-
-## Offerte-goedkeuringsflow + Resend
-
-Voor de nieuwe offerteflow zijn drie aanvullende migraties toegevoegd. De tweede hardent de eerste met browser-read-only workflowtabellen, transactionele Resend-send RPC's en immutability guards. De derde is de extra final-recheck hardening na de tweede review: directe workflowveld-mutaties vanuit de browser worden geblokkeerd, helper-RPC's zijn niet meer direct aanroepbaar door browserrollen, goedkeuring vereist eerst een pending-state en verlopen offertes kunnen niet meer publiek worden geaccepteerd:
-
-```text
-20260515_quote_approval_resend_flow.sql
-20260515_quote_approval_resend_flow_hardening.sql
-20260515_quote_approval_resend_flow_final_recheck.sql
-```
-
-De basismigratie bevat:
-- workflowvelden op `quotes`
-- extra offertestatussen
-- `quote_approval_events`
-- `quote_email_deliveries`
-- `quote_email_events`
-- RLS policies
-- audit-log acties
-- RPC's voor interne goedkeuring en publieke klantbeslissing
-- status-transition guard trigger
-
-De hardening-migratie bevat:
-- vergrendeling van offerte-inhoud na indienen/goedkeuren/versturen
-- read-only RLS voor timeline- en e-mailtabellen vanuit browserclients
-- transactionele RPC's voor Resend queued/sent/failed lifecycle
-- geharde helper-RPC's voor workflow/audit events
-
-De final-recheck migratie bevat:
-- server-only guard op workflow-, token-, klantbeslissing- en e-mailstatusvelden in `quotes`
-- intrekken van directe browserrechten op helper-RPC's en publieke klantbeslissing-RPC's
-- striktere interne goedkeuring: eerst indienen, daarna pas goedkeuren
-- geldigheidsdatumcontrole vóór publieke acceptatie en vóór Resend-verzending
-
-Voer deze migraties in deze volgorde uit na:
-
-```text
-20260514_calendar_event_notes_complete.sql
-```
-
-Daarna moeten de Edge Functions `quote-workflow`, `quote-public` en `resend-webhook` gedeployed worden en moeten de Resend/quote secrets in Supabase gezet worden.
-
-## Klant-deduplicatie binnen organisatie
-
-Voor bestaande databases is de volgende aanvullende migratie toegevoegd:
-
-```text
-20260520_clients_duplicate_guard.sql
-```
-
-Deze migratie voorkomt dat dezelfde klant dubbel wordt aangemaakt binnen dezelfde organisatie, terwijl dezelfde klantgegevens in een andere organisatie wel toegestaan blijven. De guard controleert:
-
-- dubbel klantnummer binnen dezelfde organisatie;
-- dubbel e-mailadres binnen dezelfde organisatie;
-- dezelfde klantnaam + hetzelfde telefoonnummer;
-- dezelfde klantnaam + dezelfde contactpersoon.
-
-De trigger gebruikt een transactionele advisory lock per organisatie, zodat twee gelijktijdige inserts niet langs dezelfde duplicate-check kunnen glippen. Alleen dezelfde naam zonder extra overeenkomst blijft toegestaan, maar de frontend toont daar wel een waarschuwing voor.
-
-## Server-side klantnummer-generator per organisatie
-
-Voor bestaande databases is deze aanvullende migratie toegevoegd:
-
-```text
-20260520_client_number_rpc_generator.sql
-```
-
-Deze migratie verplaatst het aanmaken van klantnummers naar Supabase/Postgres. Nieuwe klanten worden via `create_client_with_next_code(...)` aangemaakt en krijgen binnen dezelfde transactie een atomair gereserveerd klantnummer uit `organization_client_number_sequences`.
-
-Belangrijk:
-
-- de browser toont alleen nog een preview via `preview_next_client_code(...)`;
-- het definitieve klantnummer wordt pas bij opslaan server-side vastgelegd;
-- directe REST-inserts krijgen alsnog server-side een nummer via de `clients_duplicate_guard` trigger;
-- de volgorde is per organisatie geserialiseerd met dezelfde advisory lock als de duplicate-guard, zodat twee gelijktijdige gebruikers nooit hetzelfde klantnummer krijgen.

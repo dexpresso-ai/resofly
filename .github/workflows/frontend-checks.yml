@@ -14,6 +14,9 @@ name: Frontend checks
 # job rood zette. Die is op 18 september opgelost door het parametertype te
 # vernauwen naar `Uint8Array<ArrayBuffer>`, en de lijst is meteen verbreed naar
 # alle functies die schoon door `deno check` komen — zie de stap hieronder.
+#
+# En de job `migrations`: alle migraties op een lege Supabase-database, zodat
+# een nieuwe omgeving altijd met `supabase db push` op te bouwen blijft.
 on:
   pull_request:
   push:
@@ -122,3 +125,37 @@ jobs:
           deno check supabase/functions/mail-inbound/index.ts
           deno check supabase/functions/invoice-inbox/index.ts
           deno check supabase/functions/invoice-extract/index.ts
+
+  # De hele migratieketen op een lege database, met de echte Supabase-images in
+  # de versies uit supabase/.temp (Postgres 17.6.1.111, net als staging). Een
+  # nieuwe omgeving bouw je met `supabase db push`; deze job bewijst dat dat
+  # werkt. Tot november 2026 liep een lege database al bij de eerste migratie
+  # stuk, omdat de basis ooit met de hand in de SQL-editor was gezet; zie
+  # supabase/migrations/README.md.
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Dezelfde vaste versie als de deploy naar staging.
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.1
+
+      # Start alleen de database en speelt daarop alle migraties af, daarna
+      # supabase/seed.sql. Eén fout in één migratie maakt de job rood.
+      - name: Migraties vanaf nul op een lege database
+        run: supabase db start
+
+      # De CLI slaat een bestand met een verkeerde naam stil over ("file name
+      # must match pattern"). Dan klopt de keten hier wel en op staging niet.
+      - name: Elk migratiebestand is toegepast
+        run: |
+          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client; }
+          files=$(ls supabase/migrations/*.sql | wc -l)
+          applied=$(psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" -Atc "select count(*) from supabase_migrations.schema_migrations")
+          echo "Migratiebestanden: $files, toegepast: $applied"
+          if [ "$files" != "$applied" ]; then
+            echo "::error title=Migratie overgeslagen::$files bestanden, $applied toegepast. Een migratie heet <14 cijfers>_<naam>.sql."
+            exit 1
+          fi

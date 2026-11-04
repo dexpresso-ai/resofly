@@ -13,11 +13,11 @@ import { WEBHOOK_EVENTS } from './webhooks.ts';
  * (CHECK-constraints). Lopen die uiteen, dan weigert de API een waarde die de
  * app wel kent, of laat hij er een door die de database daarna afwijst met een
  * kale Postgres-melding. Deze test legt ze naast elkaar — tegen de laatste
- * definitie in de migraties, of anders die in het volledige schema.
+ * definitie in de migraties, of anders de `create table` waarmee de tabel
+ * ontstond (voor clients, tasks en tickets: de basis 20260427000000).
  */
 
 const MIGRATIONS_DIR = new URL('../../migrations/', import.meta.url);
-const FRESH = readFileSync(new URL('../../FRESH_INSTALL_COMPLETE_SCHEMA.sql', import.meta.url), 'utf8');
 const migrations = readdirSync(MIGRATIONS_DIR)
   .filter((name) => /^\d{14}_.+\.sql$/.test(name)).sort()
   .map((name) => readFileSync(new URL(name, MIGRATIONS_DIR), 'utf8'));
@@ -49,13 +49,15 @@ function namedCheckValues(name: string, column: string): string[] | null {
   return found;
 }
 
-/** Een inline check uit het volledige schema, tenzij een migratie hem later opnieuw definieerde. */
+/** Een inline check uit de `create table` van de tabel, tenzij een migratie hem later opnieuw definieerde. */
 function inlineCheckValues(table: string, column: string): string[] {
   const redefined = namedCheckValues(`${table}_${column}_check`, column);
   if (redefined) return redefined;
-  const start = FRESH.indexOf(`create table public.${table} (`);
-  assert.ok(start >= 0, `create table public.${table} niet gevonden`);
-  const block = FRESH.slice(start, FRESH.indexOf('\n);', start));
+  const marker = `create table public.${table} (`;
+  const sql = [...migrations].reverse().find((text) => text.includes(marker));
+  assert.ok(sql, `create table public.${table} niet gevonden`);
+  const start = sql.indexOf(marker);
+  const block = sql.slice(start, sql.indexOf('\n);', start));
   const match = block.match(new RegExp(`\\n\\s*${column}\\s+text[^\\n]*check \\(${column} in \\(([^)]*)\\)\\)`));
   assert.ok(match, `check op ${table}.${column} niet gevonden`);
   return quoted(match[1]);
