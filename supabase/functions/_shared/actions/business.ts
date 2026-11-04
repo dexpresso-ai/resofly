@@ -1022,6 +1022,36 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
   },
 
+  // ══ Eenmanszaak, vof, maatschap en cv: eigen vermogen en vennoten ══════════
+  {
+    id: 'owners.equity_overview',
+    label: 'Kapitaalvergelijking bekijken (eigen vermogen ondernemer of per vennoot)',
+    module: 'finance',
+    kind: 'read',
+    description:
+      'Alleen voor een eenmanszaak, vof, maatschap of cv: daar is de winst van de ondernemer of de vennoten zelf. Geeft voor één boekjaar de kapitaalvergelijking: beginvermogen, resultaat (bij een vof met vennoten het winstaandeel per vennoot volgens de winstverdeling, tot op de cent sluitend), privé-stortingen, privé-opnamen, overige mutaties en eindvermogen. ' +
+      'Dat is wat de aangifte inkomstenbelasting vraagt als ondernemingsvermogen aan het begin en het eind van het jaar; elke vennoot geeft zijn eigen winstaandeel aan. Bij een open boekjaar is het resultaat voorlopig. `unassigned` is vermogen dat op geen enkele vennoot staat (bijv. een beginbalans van vóór de vennoten). Ook de vennoten zelf met hun winstaandeel en rekeningen.',
+    keywords: ['eigen vermogen', 'kapitaal', 'privé', 'privé-opname', 'privé-storting', 'vennoot', 'vennoten', 'winstverdeling', 'winstaandeel', 'vof', 'eenmanszaak', 'kapitaalvergelijking'],
+    input: {
+      fiscal_year_id: { type: 'string', description: 'Id van het boekjaar (uit list_fiscal_years).' },
+    },
+    required: ['fiscal_year_id'],
+    async read(ctx, input) {
+      const fiscalYearId = id(input, 'fiscal_year_id');
+      await fiscalYear(ctx, fiscalYearId);
+      const { data, error } = await ctx.db.rpc('owners_equity_overview', {
+        p_organization_id: ctx.organizationId,
+        p_fiscal_year_id: fiscalYearId,
+      });
+      if (error) throw new ActionError(`Kapitaalvergelijking ophalen mislukt: ${error.message}`);
+      const { data: partners, error: partnersError } = await orgQuery(ctx, 'partnership_partners',
+        'id, partner_number, name, profit_share_basis_points, kind, is_active')
+        .order('partner_number', { ascending: true });
+      if (partnersError) throw new ActionError(`Vennoten ophalen mislukt: ${partnersError.message}`);
+      return { overview: data ?? null, partners: partners ?? [] };
+    },
+  },
+
   {
     id: 'dga.interest',
     label: 'Renteberekening over de rekening-courant DGA bekijken',

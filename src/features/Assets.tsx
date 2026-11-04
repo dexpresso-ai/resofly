@@ -284,6 +284,33 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
           </Select>
         </Field>
       </div>
+      {(() => {
+        // Fiscaal: per jaar ten hoogste 20% van de aanschafkosten afschrijven
+        // (goodwill 10%; gebouwen tot de bodemwaarde), en onder € 450 mag een
+        // bedrijfsmiddel in één keer als kosten. Bij een eenmanszaak of vof is de
+        // boekhouding meestal de fiscale; bij een BV wordt een snellere
+        // afschrijving in de Vpb gecorrigeerd.
+        const cost = Number(form.acquisition_cost_cents) || 0;
+        const residual = Number(form.residual_value_cents) || 0;
+        const months = Number(form.useful_life_months) || 0;
+        const annualPct = cost > 0 && months > 0 ? (((cost - residual) * 12) / months / cost) * 100 : 0;
+        const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
+        const isCorporate = ['bv', 'nv', 'cooperatie'].includes(legalForm);
+        return <>
+          {annualPct > 20.005 && (
+            <p className="bk-neg">
+              Met deze gebruiksduur schrijf je {annualPct.toLocaleString('nl-NL', { maximumFractionDigits: 1 })}% per jaar af. Fiscaal mag je per jaar ten hoogste 20% van de
+              aanschafkosten afschrijven (goodwill 10%, gebouwen tot de bodemwaarde): dat is een gebruiksduur van minimaal 5 jaar.
+              {isCorporate
+                ? ' Kies je toch korter, neem het verschil dan mee als fiscale correctie (afschrijvingsbeperking) in de vennootschapsbelasting.'
+                : ' In je aangifte inkomstenbelasting telt alleen de fiscale afschrijving; kies daarom een gebruiksduur van minstens 60 maanden.'}
+            </p>
+          )}
+          {cost > 0 && cost < 45000 && (
+            <p className="bk-muted">Kost een bedrijfsmiddel minder dan € 450, dan mag je het fiscaal in één keer als kosten nemen in plaats van af te schrijven.</p>
+          )}
+        </>;
+      })()}
       <Field label="Notities"><Textarea value={form.notes} onChange={e => set('notes', e.target.value)} disabled={!canWrite} rows={2} /></Field>
 
       {currentAsset && (

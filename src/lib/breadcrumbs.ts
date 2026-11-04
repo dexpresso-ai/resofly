@@ -48,7 +48,7 @@ const PAGE_SECTIONS: Record<string, string> = {
   quotes: 'Financiën', contracts: 'Financiën', invoices: 'Financiën',
   suppliers: 'Financiën', 'purchase-invoices': 'Financiën', ledger: 'Financiën',
   bank: 'Financiën', assets: 'Financiën', pnl: 'Financiën', 'vat-returns': 'Financiën',
-  'corporate-tax': 'Financiën', dga: 'Financiën', shareholders: 'Financiën',
+  'corporate-tax': 'Financiën', dga: 'Financiën', shareholders: 'Financiën', owners: 'Financiën',
   'fiscal-years': 'Financiën', 'annual-accounts': 'Financiën',
   communication: 'Communicatie', chat: 'Communicatie', marketing: 'Communicatie',
   content: 'Kennis & inzicht', notes: 'Kennis & inzicht', documents: 'Kennis & inzicht',
