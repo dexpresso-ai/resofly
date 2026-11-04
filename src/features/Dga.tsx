@@ -19,7 +19,9 @@ const pct = (bp: number | null | undefined) => `${((bp ?? 0) / 100).toFixed(2).r
  * Twee dingen die de wet aan een directeur-grootaandeelhouder hangt: hij moet
  * zichzelf een gebruikelijk loon betalen (art. 12a Wet LB), en leent hij van
  * zijn eigen BV, dan zit daar een grens aan (art. 4.14a Wet IB) én moet er
- * zakelijke rente over.
+ * zakelijke rente over. Behalve als de rekening-courant het hele kalenderjaar
+ * binnen ±€ 17.500 blijft: dat is een goedkeuring in het Besluit ROW 2026
+ * (onderdeel 3.9), geen wetsartikel, en hij geldt in beide richtingen.
  *
  * Wat dit scherm WEL doet: het laat de feiten uit de eigen administratie zien
  * met het wettelijke bedrag ernaast. Wat het NIET doet: oordelen. Of een schuld
@@ -135,7 +137,8 @@ export function DgaPage({ data, organizationId, canWrite, canAdmin, businessActi
             <div className="bk-report-bar">
               <div className="bk-report-kpis">
                 <div><span>Saldo op 31 december</span><strong className={signals.currentAccountYearEndCents > 0 ? 'bk-neg' : ''}>{euroCents(signals.currentAccountYearEndCents)}</strong></div>
-                <div><span>Hoogste stand dit jaar</span><strong>{euroCents(signals.currentAccountPeakCents)}</strong></div>
+                <div><span>Hoogste schuld aan de BV</span><strong className={signals.dgaDebtAboveInterestFreeLimit ? 'bk-neg' : ''}>{euroCents(Math.max(0, signals.currentAccountPeakCents))}</strong></div>
+                <div><span>Hoogste schuld van de BV aan jou</span><strong className={signals.dgaClaimAboveInterestFreeLimit ? 'bk-neg' : ''}>{euroCents(Math.max(0, -(signals.currentAccountLowestCents ?? 0)))}</strong></div>
               </div>
             </div>
             {!signals.hasCurrentAccount
@@ -147,10 +150,25 @@ export function DgaPage({ data, organizationId, canWrite, canAdmin, businessActi
                     : signal(`Onder de grens van ${euroCents(signals.excessiveLoanThresholdCents)} (art. 4.14a Wet IB 2001). Let op: die grens wordt op 31 december gemeten, dus aflossen vóór het jaareinde telt.`, 'ok')
                 )}
                 {signals.interestFreeLimitCents === null
-                  ? signal(`Voor ${year} is er geen renteloze grens vastgelegd.`)
+                  ? signal(`Voor ${year} is er geen renteloze bandbreedte vastgelegd.`)
                   : signals.aboveInterestFreeLimit
-                  ? signal(`De rekening-courant stond dit jaar boven ${euroCents(signals.interestFreeLimitCents)}. Dan moet er over het volle bedrag rente worden berekend, niet alleen over het meerdere.`, 'warn')
-                  : signal(`Het saldo bleef dit jaar onder ${euroCents(signals.interestFreeLimitCents)}; dan hoeft er geen rente te worden berekend. Die toets geldt voor het hele jaar, niet alleen voor de einddatum.`, 'ok')}
+                  ? <>
+                    {signals.dgaDebtAboveInterestFreeLimit && signal(
+                      `Je was de BV dit jaar op enig moment meer dan ${euroCents(signals.interestFreeLimitCents)} schuldig (hoogste stand ${euroCents(signals.currentAccountPeakCents)}). Dan geldt de goedkeuring niet: over het hele saldo hoort een zakelijke rente, het hele jaar, niet alleen over het deel boven ${euroCents(signals.interestFreeLimitCents)}.`,
+                      'warn')}
+                    {signals.dgaClaimAboveInterestFreeLimit && signal(
+                      `De BV was jou dit jaar op enig moment meer dan ${euroCents(signals.interestFreeLimitCents)} schuldig (hoogste stand ${euroCents(-(signals.currentAccountLowestCents ?? 0))}). Dan geldt de goedkeuring niet: over het hele saldo hoort een zakelijke rente, het hele jaar. Die rente is voor jou resultaat uit overige werkzaamheden (terbeschikkingstelling, art. 3.92 Wet IB 2001) en voor de BV een rentelast.`,
+                      'warn')}
+                  </>
+                  : signal(`Het saldo bleef het hele kalenderjaar ${year} tussen −${euroCents(signals.interestFreeLimitCents)} en +${euroCents(signals.interestFreeLimitCents)}. Dan hoeft er geen rente te worden berekend, niet bij jou en niet bij de BV. Die toets geldt voor elke dag van het jaar, niet alleen voor 31 december.`, 'ok')}
+                {signals.interestFreeLimitCents !== null && (
+                  <p className="bk-muted" title={signals.interestFreeLimitSourceNote ?? undefined}>
+                    Grondslag: {signals.interestFreeLimitBasis ?? 'goedkeuring Besluit ROW'}, een goedkeuring van de staatssecretaris van Financiën en geen wetsartikel.
+                    Voorwaarden: het saldo blijft het hele kalenderjaar tussen −{euroCents(signals.interestFreeLimitCents)} en +{euroCents(signals.interestFreeLimitCents)} (beide richtingen),
+                    er wordt ook bij de BV geen rente geboekt, en een rekening-courantschuld neem je niet op als schuld in box 3.
+                    Het geldt alleen voor een echte rekening-courant met kleine bedragen die heen en weer gaan; een aflossingsvrije lening van € 16.000 voor tien jaar is gewoon een lening, met rente.
+                  </p>
+                )}
               </>}
           </div>
 
@@ -225,6 +243,7 @@ export function DgaPage({ data, organizationId, canWrite, canAdmin, businessActi
               <p className="bk-muted">
                 Berekend over het dagsaldo: elke dag het saldo maal het percentage dat op die dag gold, gedeeld door {interest.daysInYear}.
                 Boeken zet de rente op de rekening-courant zelf, tegen 9000 Rentebaten of 9100 Rentelasten.
+                {signals.interestFreeLimitCents !== null && !signals.aboveInterestFreeLimit && ' Het saldo bleef dit jaar binnen de bandbreedte, dus rente boeken hoeft niet.'}
               </p>
               <div className="bk-fy-new-actions">
                 {canWrite && !posted && (

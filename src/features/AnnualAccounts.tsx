@@ -1130,6 +1130,12 @@ function FrozenFigures({ snapshot }: { snapshot: AnnualAccountSnapshot | null })
               <td className="bk-num">{euroCents(snap.corporateTax.taxCents)}</td>
             </tr>
           )}
+          {(snap.corporateTax?.computation?.carryBack?.refundCents ?? 0) > 0 && (
+            <tr className="bk-balance-sub">
+              <td>Teruggaaf door achterwaartse verliesverrekening met {snap.corporateTax?.computation?.carryBack?.year}</td>
+              <td className="bk-num">{euroCents(-(snap.corporateTax?.computation?.carryBack?.refundCents ?? 0))}</td>
+            </tr>
+          )}
         </tbody>
       </table></div>
     </div>

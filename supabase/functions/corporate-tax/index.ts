@@ -10,7 +10,9 @@
 //                 te slaan. Voor het scherm: de gebruiker ziet eerst wat eruit
 //                 komt voordat hij iets vastlegt.
 //   'save'      — legt de berekening vast als concept.
-//   'finalize'  — legt hem vast én boekt de reservering (9900 / 1540).
+//   'finalize'  — legt hem vast én boekt de reservering (9900 / 1540), of bij
+//                 een verlies dat achterwaarts is verrekend de teruggaaf over
+//                 het jaar ervoor (1540 / 9900).
 //
 // De autorisatie ligt NIET hier maar in de database: save_corporate_tax_return
 // controleert de module, de rechtsvorm, de rechten én rekent de belasting zelf
@@ -31,7 +33,9 @@ import {
   assertModuleAccess,
   isUuid,
 } from '../_shared/edgeAuth.ts';
-import { computeVpb, type LossCarryForward, type VpbCorrection, type VpbInput, type VpbYearRules } from '../_shared/vpb.ts';
+import {
+  computeVpb, type LossCarryForward, type VpbCarryBackBasis, type VpbCorrection, type VpbInput, type VpbYearRules,
+} from '../_shared/vpb.ts';
 
 const admin = createAdminClient();
 const cors = makeCors(
@@ -48,6 +52,10 @@ type Inputs = {
   prepaidCents: number;
   corrections: Array<VpbCorrection & { id: string }>;
   lossesCarriedForward: Array<LossCarryForward & { establishedByAssessment: boolean }>;
+  /** Het boekjaar direct hiervoor, als dat in de administratie staat. */
+  precedingFiscalYear: { id: string; label: string; year: number; hasFinalReturn: boolean } | null;
+  /** Zijn vastgestelde berekening: daarmee wordt een verlies eerst verrekend (art. 20 lid 2). */
+  carryBackBasis: (VpbCarryBackBasis & { fiscalYearId: string; label: string; returnId: string }) | null;
 };
 
 async function loadInputs(organizationId: string, fiscalYearId: string): Promise<Inputs> {
@@ -67,6 +75,7 @@ function compute(inputs: Inputs) {
     corrections: inputs.corrections.map(c => ({ code: c.code, label: c.label, amountCents: c.amountCents })),
     lossesCarriedForward: inputs.lossesCarriedForward.map(l => ({ year: l.year, remainingCents: l.remainingCents })),
     prepaidCents: inputs.prepaidCents,
+    carryBackBasis: inputs.carryBackBasis ?? null,
   };
   return computeVpb(payload);
 }

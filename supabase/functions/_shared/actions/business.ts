@@ -3,7 +3,7 @@ import {
   optId, optIsoDate, optNum, optStr, orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
-import { computeVpb, type LossCarryForward, type VpbCorrection, type VpbYearRules } from '../vpb.ts';
+import { computeVpb, type LossCarryForward, type VpbCarryBackBasis, type VpbCorrection, type VpbYearRules } from '../vpb.ts';
 
 /**
  * Handelingen rond de ZAKELIJKE MODULE: de BV, de NV en de coöperatie.
@@ -187,6 +187,8 @@ async function computeCorporateTax(ctx: ActionCtx, fiscalYearId: string) {
     prepaidCents: number;
     corrections: Array<VpbCorrection & { id: string }>;
     lossesCarriedForward: Array<LossCarryForward & { establishedByAssessment: boolean }>;
+    precedingFiscalYear: { id: string; label: string; year: number; hasFinalReturn: boolean } | null;
+    carryBackBasis: (VpbCarryBackBasis & { fiscalYearId: string; label: string; returnId: string }) | null;
   };
   const computation = computeVpb({
     rules: inputs.rules,
@@ -194,8 +196,29 @@ async function computeCorporateTax(ctx: ActionCtx, fiscalYearId: string) {
     corrections: inputs.corrections.map((c) => ({ code: c.code, label: c.label, amountCents: c.amountCents })),
     lossesCarriedForward: inputs.lossesCarriedForward.map((l) => ({ year: l.year, remainingCents: l.remainingCents })),
     prepaidCents: inputs.prepaidCents,
+    carryBackBasis: inputs.carryBackBasis ?? null,
   });
   return { inputs, computation };
+}
+
+/**
+ * Wat er met een verlies van dit jaar gebeurt, in één zin voor een
+ * goedkeuringskaart: achterwaarts verrekend met teruggaaf, of waarom niet.
+ */
+function carryBackSummary(
+  inputs: { precedingFiscalYear: { label: string; hasFinalReturn: boolean } | null; carryBackBasis: { label: string } | null },
+  computation: ReturnType<typeof computeVpb>,
+): string | null {
+  if (computation.fiscalProfitCents >= 0) return null;
+  const cb = computation.carryBack;
+  if (cb && cb.usedCents > 0) {
+    return `verlies ${euroCents(cb.usedCents)} achterwaarts verrekend met ${inputs.carryBackBasis?.label ?? cb.year} (art. 20 lid 2 Wet Vpb): teruggaaf ${euroCents(cb.refundCents)}, geboekt op 1540 tegen 9900`;
+  }
+  if (cb) return `geen ruimte in ${inputs.carryBackBasis?.label ?? cb.year} voor achterwaartse verrekening; het verlies schuift door`;
+  if (inputs.precedingFiscalYear && !inputs.precedingFiscalYear.hasFinalReturn) {
+    return `let op: ${inputs.precedingFiscalYear.label} heeft nog geen vastgestelde Vpb-berekening, dus het verlies gaat nu niet achterwaarts — stel ${inputs.precedingFiscalYear.label} eerst vast`;
+  }
+  return null;
 }
 
 /** De niet-teruggedraaide Vpb-berekening van een boekjaar, als die er is. */
@@ -984,9 +1007,10 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     module: 'finance',
     kind: 'read',
     description:
-      'De kale feiten uit de eigen administratie voor één jaar: het normbedrag gebruikelijk loon naast het geboekte brutoloon, het saldo van de rekening-courant DGA op 31 december (de peildatum voor excessief lenen) en de hoogste stand van het jaar (de toets voor de renteloze grens), met de grenzen ernaast. ' +
+      'De kale feiten uit de eigen administratie voor één jaar: het normbedrag gebruikelijk loon naast het geboekte brutoloon, het saldo van de rekening-courant DGA op 31 december (de peildatum voor excessief lenen, art. 4.14a Wet IB 2001) en de hoogste en laagste stand van het kalenderjaar, met de grenzen ernaast. ' +
+      'Positief saldo = de DGA is de BV schuldig, negatief = de BV is de DGA schuldig. De renteloze grens van € 17.500 is GEEN wetsartikel maar een goedkeuring in het Besluit ROW 2026 (onderdeel 3.9, Stcrt. 2026, 1724; daarvóór Verzamelbesluit ROW 2021 § 8.4): geen rente als het saldo het hele kalenderjaar tussen −€ 17.500 en +€ 17.500 blijft, in BEIDE richtingen, er ook bij de BV geen rente wordt geboekt en een rekening-courantschuld niet als box 3-schuld wordt opgenomen. Buiten die band: zakelijke rente over het hele saldo, het hele jaar (`aboveInterestFreeLimit`, met `dgaDebtAboveInterestFreeLimit` en `dgaClaimAboveInterestFreeLimit` voor de richting). Geldt alleen voor een echte rekening-courant, niet voor een lening. ' +
       'ResoFly trekt geen conclusies over de fiscale gevolgen; het toont wat er in de boeken staat.',
-    keywords: ['dga', 'gebruikelijk loon', 'rekening-courant', 'excessief lenen', 'renteloze grens', 'directeur-grootaandeelhouder'],
+    keywords: ['dga', 'gebruikelijk loon', 'rekening-courant', 'excessief lenen', 'renteloze grens', '17.500', 'besluit row', 'terbeschikkingstelling', 'directeur-grootaandeelhouder'],
     input: {
       year: { type: 'number', description: 'Kalenderjaar. Standaard het lopende jaar.' },
     },
@@ -1219,6 +1243,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     kind: 'read',
     description:
       'Rekent de Vpb van een boekjaar door zonder iets op te slaan of te boeken: van het commerciële resultaat via de fiscale correcties naar de fiscale winst, dan de verliesverrekening (art. 20 lid 2 Wet Vpb), het belastbare bedrag (naar beneden afgerond op € 5), de belasting volgens de cumulatieve tariefschijven van art. 22 Wet Vpb, de betaalde voorlopige aanslagen en het saldo. ' +
+      'Bij een VERLIES gaat het verlies eerst terug naar het direct voorafgaande boekjaar (achterwaartse verliesverrekening, art. 20 lid 2): `computation.carryBack` geeft de ruimte in dat jaar (€ 1 mln + 50% van de winst daarboven, min wat dat jaar al voorwaarts verrekende), het verrekende bedrag en de teruggaaf over dat jaar. Dat kan alleen als dat jaar een vastgestelde berekening heeft; zie `preceding_fiscal_year`. Wat niet terug past, schuift door. ' +
       'Geeft ook de nog te verrekenen verliezen mee, met de aantekening of ze bij beschikking zijn vastgesteld of alleen onze eigen berekening zijn. Dit is een hulpmiddel, geen aangifte en geen advies.',
     keywords: ['vpb', 'vennootschapsbelasting', 'berekenen', 'belastbaar bedrag', 'verliesverrekening', 'tarief', 'fiscale winst'],
     input: {
@@ -1236,7 +1261,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
         brackets: inputs.rules.brackets,
         corrections: inputs.corrections,
         losses_carried_forward: inputs.lossesCarriedForward,
+        preceding_fiscal_year: inputs.precedingFiscalYear,
         computation,
+        carry_back_summary: carryBackSummary(inputs, computation),
         stored_return: current,
       };
     },
@@ -1257,7 +1284,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     async read(ctx, input) {
       const fiscalYearId = optId(input, 'fiscal_year_id');
       let query = orgQuery(ctx, 'corporate_tax_returns',
-        'id, fiscal_year_id, year, commercial_result_cents, corrections_cents, fiscal_profit_cents, loss_used_cents, taxable_amount_cents, tax_cents, prepaid_cents, balance_due_cents, status, finalized_at, note')
+        'id, fiscal_year_id, year, commercial_result_cents, corrections_cents, fiscal_profit_cents, loss_used_cents, taxable_amount_cents, tax_cents, prepaid_cents, balance_due_cents, carry_back_cents, carry_back_refund_cents, carry_back_to_return_id, status, finalized_at, note')
         .order('year', { ascending: false });
       if (fiscalYearId) query = query.eq('fiscal_year_id', fiscalYearId);
       const { data: returns, error } = await query;
@@ -1339,7 +1366,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       const year = await fiscalYear(ctx, fiscalYearId);
       const current = await currentTaxReturn(ctx, fiscalYearId);
       if (current?.status === 'final') throw new ActionError(`De Vpb-berekening van ${year.label} is al vastgesteld.`);
-      const { computation } = await computeCorporateTax(ctx, fiscalYearId);
+      const { inputs, computation } = await computeCorporateTax(ctx, fiscalYearId);
 
       return {
         title: `Vpb-berekening ${year.label} opslaan als concept`,
@@ -1347,8 +1374,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
           `belastbaar bedrag ${euroCents(computation.taxableAmountCents)}`,
           `belasting ${euroCents(computation.taxCents)} (gemiddeld ${pct(computation.effectiveRateBasisPoints)})`,
           `${computation.balanceDueCents >= 0 ? 'nog te betalen' : 'terug te ontvangen'} ${euroCents(Math.abs(computation.balanceDueCents))}`,
+          carryBackSummary(inputs, computation),
           'er wordt nog niets geboekt',
-        ], 200),
+        ], 300),
         kind: 'money',
         payload: { fiscal_year_id: fiscalYearId, fiscal_year_label: year.label, note: optStr(input, 'note', 500) },
       };
@@ -1363,6 +1391,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     risk: 'high',
     description:
       'Stelt de Vpb-berekening van een boekjaar definitief vast en BOEKT de last op 9900 Vennootschapsbelasting tegen 1540 Te betalen vennootschapsbelasting, op de balansdatum van het boekjaar. De fiscale correcties gaan daarna op slot. ' +
+      'Bij een verlies dat achterwaarts is verrekend met het voorafgaande boekjaar (art. 20 lid 2 Wet Vpb) boekt hij in plaats daarvan de teruggaaf over dat jaar: 1540 (vordering) tegen 9900 (belastingbate). Alleen wat niet terug past, gaat de verliesadministratie in. ' +
       'Dit is de grondslag voor de aangifte vennootschapsbelasting — laat de gebruiker de uitkomst eerst bekijken met `corporate_tax.compute`. Indienen doet hij zelf of via zijn accountant; ResoFly doet geen aangifte.',
     keywords: ['vpb vaststellen', 'vennootschapsbelasting boeken', 'belastingschuld', 'reservering', '9900', '1540'],
     input: {
@@ -1383,7 +1412,10 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
         sub: joinShort([
           `belastbaar bedrag ${euroCents(computation.taxableAmountCents)}`,
           `${computation.balanceDueCents >= 0 ? 'nog te betalen' : 'terug te ontvangen'} ${euroCents(Math.abs(computation.balanceDueCents))}`,
-          `ONOMKEERBAAR: boekt de last op 9900 tegen 1540 op ${dateNL(year.period_end)} en zet de fiscale correcties op slot`,
+          carryBackSummary(inputs, computation),
+          computation.carryBack && computation.carryBack.refundCents > 0
+            ? `ONOMKEERBAAR: boekt de teruggaaf op 1540 tegen 9900 op ${dateNL(year.period_end)} en zet de fiscale correcties op slot`
+            : `ONOMKEERBAAR: boekt de last op 9900 tegen 1540 op ${dateNL(year.period_end)} en zet de fiscale correcties op slot`,
           unestablished > 0 ? `let op: ${unestablished} verliespost is nog niet bij beschikking vastgesteld — dat is onze eigen berekening` : null,
         ], 300),
         kind: 'money',
@@ -1399,7 +1431,8 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Draait een vastgestelde Vpb-berekening terug, waardoor de geboekte belastingschuld vervalt en de fiscale correcties weer aanpasbaar worden. Alleen een eigenaar of beheerder kan dit. Zoek de berekening op met `corporate_tax.list`.',
+      'Draait een vastgestelde Vpb-berekening terug, waardoor de geboekte belastingschuld (of bij een verliesjaar de geboekte teruggaaf) vervalt en de fiscale correcties weer aanpasbaar worden. Alleen een eigenaar of beheerder kan dit. ' +
+      'Is een later verlies achterwaarts verrekend met deze berekening, dan moet eerst die latere berekening worden teruggedraaid. Zoek de berekening op met `corporate_tax.list`.',
     keywords: ['vpb terugdraaien', 'reservering vervallen', 'belastingschuld ongedaan', 'corrigeren'],
     input: {
       return_id: { type: 'string', description: 'Id van de Vpb-berekening (uit corporate_tax.list).' },
