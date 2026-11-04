@@ -168,7 +168,11 @@ schermen vast.
     btw-vermeldingen app ↔ server, MT940, inbox-valuta);
   - `npm run build` ✓ en de CSP-hash ✓;
   - mobiele lay-outtest op de financiënpagina's, donker en licht: 42 metingen, 0
-    problemen.
+    problemen;
+  - de volledige mobiele lay-outtest, donker en licht: 288 pagina's gemeten, 0
+    met problemen. Dat gold lokaal en in CI (*Frontend checks* run 105 op
+    `staging`). Een eerdere lokale run brak één keer af op "Execution context
+    was destroyed" (een navigatie tijdens het meten); herhaald was hij groen.
 - **Deno-typecheck:**
   - alle 34 functies uit de CI-lijst zijn schoon;
   - `invoice-workflow` en `bank-sync` (niet in CI) hebben precies dezelfde, al
@@ -176,13 +180,51 @@ schermen vast.
 
 ## Uitrol
 
-1. Branch naar `staging`. Cloudflare Pages bouwt de app, en de workflow *Deploy
-   Supabase (staging)* draait de vijf migraties (`supabase db push`) en rolt alle
-   edge functions uit.
-2. Geen nieuwe secrets en geen nieuwe cron-taken.
-3. **Voor productie:** dezelfde migraties. De aanvulling van ontbrekende jaarsloten
-   (migratie `20261104000000`) en de bijgewerkte bronvermelding van de handelsrente
-   doen niets met bestaande boekingen.
+**Staging: uitgerold op 4 november 2026.** Cloudflare Pages bouwt de app vanzelf
+bij de push naar `staging`; dat is van hieruit niet te zien, want het netwerk
+blokkeert het domein.
+
+1. **Eerste poging mislukt, er is niets toegepast.** De workflow installeerde
+   Supabase CLI `latest`. Dat is sinds 2 november versie 3.0.0, en die richt
+   `supabase db push` standaard op een lokale database ("connect ECONNREFUSED
+   127.0.0.1:54322"). Er is geen enkele migratie toegepast.
+2. **Workflow hersteld.** De CLI staat nu vast op 2.122.1, en `db push` krijgt
+   `--linked` mee.
+   - 2.122.1 is volgens de release notes inhoudelijk gelijk aan 2.122.0, de
+     versie van de laatste geslaagde deploys, en is het officiële v2-kanaal.
+   - Overstappen naar 3.x is een aparte, bewuste stap: zie de opmerking in
+     `deploy-staging.yml`.
+   - De commando's in `SUPABASE_STAGING_LAPTOP.md` werken ook met 3.x
+     (`--linked` is daar alleen verouderd).
+3. **Tweede poging, *Deploy Supabase (staging)* run 165: geslaagd.**
+   - de vijf migraties zijn toegepast, 228 in totaal;
+   - alle 39 edge functions zijn uitgerold;
+   - de rooktest is geslaagd.
+4. **Nagecontroleerd op staging, na de uitrol:**
+   - nieuwe functies, triggers, index, kolommen en constraint staan er;
+   - de interne helpers zijn alleen voor `service_role` (geen `anon` of
+     `public`);
+   - de oude schrijfpolicy op deellinks is weg;
+   - er ontbreken geen jaarsloten;
+   - de zeven testscripts geven tegen de live code dezelfde uitkomsten als
+     droog (in een transactie die altijd wordt teruggedraaid);
+   - de regressiecijfers zijn gelijk aan vóór de uitrol: btw-saldo 2026
+     € 1.089,51 (rubrieken sluitend), balans sluitend, openstaande debiteuren
+     € 6.294,42 = grootboek;
+   - er is niets van de tests blijven staan.
+5. Geen nieuwe secrets en geen nieuwe cron-taken.
+6. **Voor productie:**
+   - dezelfde migraties, met de vastgezette CLI;
+   - de aanvulling van ontbrekende jaarsloten (migratie `20261104000000`) en de
+     bijgewerkte bronvermelding van de handelsrente doen niets met bestaande
+     boekingen;
+   - staging heeft geen BV-organisaties. De BV-functies zijn daar dus alleen
+     met testgegevens in teruggedraaide transacties nagelopen;
+   - kijk vooraf of er facturen zijn waarvan het opgeslagen totaal afwijkt van
+     de berekening per tarief (op staging: geen). Zo'n totaal gaat bij de
+     eerstvolgende wijziging naar het bedrag dat de pdf, Mollie en het
+     grootboek al gebruikten:
+     `select count(*) from invoices i cross join lateral invoice_calculated_totals(i.lines) c where c.total <> i.total_amount;`
 
 ## Bewust open, of te verifiëren
 
