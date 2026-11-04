@@ -7,6 +7,7 @@ import { isMissingColumn, isMissingRelation, NotMigratedError } from './postgres
 import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type InkDocument } from './ink';
 import type { ReportDefinition } from './reporting';
 import type { ModuleAccess } from './permissions';
+import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import type {
   AppData,
   AuditLog,
@@ -517,51 +518,30 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
   return (data ?? []) as OrganizationInvitation[];
 }
 
-export async function loadAppData(organizationId: UUID): Promise<AppData> {
+/**
+ * De kern van de werkruimte: wat bijna elke pagina en de vaste delen van het
+ * scherm gebruiken. De zware, groeiende tabellen zitten hier niet in; die laadt
+ * loadDataGroup pas als een pagina ze nodig heeft (zie src/lib/dataGroups.ts).
+ */
+export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
   const [
     clients,
     clientContacts,
-    clientCalls,
     clientFieldDefinitions,
     projects,
     tasks,
     tickets,
-    ticketNotes,
     notes,
     documents,
     noteCalendarLinks,
     noteHandwriting,
     calendarEventLinks,
-    timeEntries,
     quotes,
-    quoteApprovalEvents,
-    quoteEmailDeliveries,
-    quoteVersions,
     invoices,
-    invoiceWorkflowEvents,
-    invoiceEmailDeliveries,
-    invoicePaymentRecords,
-    invoiceVersions,
-    invoiceRefunds,
-    creditNotes,
-    invoiceChargebacks,
-    dunningNotices,
     ledgerAccounts,
     vatCodes,
-    journalEntries,
-    journalLines,
-    closedPeriods,
-    fiscalYears,
     suppliers,
     purchaseInvoices,
-    fixedAssets,
-    assetDepreciations,
-    vatReturns,
-    bankAccounts,
-    bankStatements,
-    bankTransactions,
-    bankRules,
-    bankRequisitions,
     attachments,
     driveShares,
     folders,
@@ -575,13 +555,12 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     projectTemplates,
     projectTemplateTasks,
     contractProjects,
+    bankTransactionsToReconcile,
+    vatReturnsToFile,
   ] = await Promise.all([
-    select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientCalls(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
-    selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
-    selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
-    selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId), selectDunningNotices(organizationId),
-    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectFiscalYears(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
-    selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
+    select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
+    select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), select<Invoice>('invoices', organizationId),
+    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId),
     select<Attachment>('attachments', organizationId),
     selectDriveShares(organizationId),
     selectFolders(organizationId),
@@ -595,8 +574,71 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectProjectTemplates(organizationId),
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
+    countOptional('bank_transactions', organizationId, { status: ['unmatched', 'suggested'] }),
+    countOptional('vat_returns', organizationId, { status: ['finalized'] }),
   ]);
-  return { clients, clientContacts, clientCalls, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, vatReturnsToFile };
+}
+
+/** Per groep: welke tabellen, in welke vorm. TypeScript bewaakt dat elke groep precies zijn eigen velden teruggeeft. */
+const GROUP_LOADERS: { [G in DataGroup]: (organizationId: UUID) => Promise<GroupData<G>> } = {
+  time: async (organizationId) => ({ timeEntries: await selectTimeEntries(organizationId) }),
+  communication: async (organizationId) => {
+    const [ticketNotes, clientCalls] = await Promise.all([selectTicketNotes(organizationId), selectClientCalls(organizationId)]);
+    return { ticketNotes, clientCalls };
+  },
+  financeHistory: async (organizationId) => {
+    const [
+      quoteApprovalEvents, quoteEmailDeliveries, quoteVersions,
+      invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions,
+      invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices,
+    ] = await Promise.all([
+      selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId),
+      selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
+      selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId), selectDunningNotices(organizationId),
+    ]);
+    return {
+      quoteApprovalEvents, quoteEmailDeliveries, quoteVersions,
+      invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions,
+      invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices,
+    };
+  },
+  bookkeeping: async (organizationId) => {
+    const [journalEntries, journalLines, closedPeriods, fiscalYears, fixedAssets, assetDepreciations, vatReturns] = await Promise.all([
+      selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectFiscalYears(organizationId),
+      selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
+    ]);
+    return { journalEntries, journalLines, closedPeriods, fiscalYears, fixedAssets, assetDepreciations, vatReturns };
+  },
+  bank: async (organizationId) => {
+    const [bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions] = await Promise.all([
+      selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
+    ]);
+    return { bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions };
+  },
+};
+
+/** Eén groep zware, groeiende tabellen (src/lib/dataGroups.ts). */
+export function loadDataGroup<G extends DataGroup>(organizationId: UUID, group: G): Promise<GroupData<G>> {
+  return GROUP_LOADERS[group](organizationId);
+}
+
+/**
+ * Een telling zonder de rijen zelf: het dashboard wil weten hoeveel
+ * banktransacties en btw-aangiftes er wachten, niet de hele bank en
+ * boekhouding laden. Een telling die mislukt (een tabel die er nog niet is,
+ * een HEAD-verzoek zonder foutmelding) geeft nul en een waarschuwing: een
+ * attentiepunt minder op het dashboard mag de werkruimte niet tegenhouden.
+ */
+async function countOptional(table: string, organizationId: UUID, inFilters: Record<string, string[]>): Promise<number> {
+  let query = supabase.from(table).select('id', { count: 'exact', head: true }).eq('organization_id', organizationId);
+  for (const [column, values] of Object.entries(inFilters)) query = query.in(column, values);
+  const { count, error } = await query;
+  if (error) {
+    console.warn(`Telling op ${table} mislukt; het dashboard toont hier nul.`, error);
+    return 0;
+  }
+  return count ?? 0;
 }
 
 const CONTRACT_PROJECTS_MIGRATION_HINT =

@@ -225,8 +225,10 @@ export function Dashboard({
   const newTickets = data.tickets.filter(t => t.status === 'new').length;
   const openTickets = data.tickets.filter(t => t.status === 'new' || t.status === 'review').length;
   const openQuotes = data.quotes.filter(q => q.status === 'sent').length;
-  const bankToReconcile = (data.bankTransactions ?? []).filter(t => t.status === 'unmatched' || t.status === 'suggested').length;
-  const vatToFile = (data.vatReturns ?? []).filter(v => v.status === 'finalized').length;
+  // Tellingen uit de kern: voor deze twee regels hoeven de bank en de
+  // boekhouding niet geladen te worden (src/lib/dataGroups.ts).
+  const bankToReconcile = data.bankTransactionsToReconcile;
+  const vatToFile = data.vatReturnsToFile;
 
   const openTaskCount = data.tasks.filter(t => t.status !== 'done').length;
   const overdueTaskCount = data.tasks.filter(t => t.status !== 'done' && isOverdue(t, todayKey)).length;
