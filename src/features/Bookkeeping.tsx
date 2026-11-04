@@ -25,6 +25,7 @@ import {
   INBOX_STATUS_LABELS, INBOX_SUPPLIER_MATCH_LABELS, describeAttachment, inboxActionsFor, inboxIsBusy, inboxItemSummary,
   inboxReasonLabel, splitInboxItems,
 } from '../lib/invoiceInbox';
+import { todayIso } from '../lib/dates';
 
 // Vaste kolommen voor de bulk CSV-import van leveranciers (crediteuren).
 const SUPPLIER_IMPORT_COLUMNS: ImportColumn[] = [
@@ -644,7 +645,7 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
       },
       form: {
         supplier_invoice_number: p.supplier_invoice_number ?? '',
-        date: p.date ?? new Date().toISOString().slice(0, 10),
+        date: p.date ?? todayIso(),
         due_date: p.due_date ?? '',
         notes: p.notes ?? '',
       },
@@ -755,7 +756,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
   // Vangnetrekening voor regels zonder gekozen grootboek (spiegelt de server-coalesce → 4500).
   const fallbackAccountId = useMemo(() => data.ledgerAccounts.find(a => a.code === '4500')?.id ?? null, [data.ledgerAccounts]);
   const defaultVat = data.vatCodes.find(v => v.code === 'HOOG') ?? data.vatCodes[0];
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const readOnly = !canWrite || (invoice != null && invoice.status !== 'draft');
 
   const [form, setForm] = useState<Record<string, any>>(() => invoice ? {
@@ -926,23 +927,36 @@ function ledgerFiscalYearBounds(startMonth: number, year: number): { start: stri
 
 export function LedgerPage({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [tab, setTab] = useState<'journal' | 'accounts' | 'trial' | 'vat' | 'opening'>('journal');
-  const [xafYear, setXafYear] = useState(new Date().getFullYear());
   const fiscalStartMonth = data.companySettings?.fiscal_year_start_month ?? 1;
 
-  // Jaren waarin daadwerkelijk geboekt is (+ huidig jaar), voor de XAF-keuzelijst.
-  const years = useMemo(() => {
-    const set = new Set<number>([new Date().getFullYear()]);
-    for (const e of data.journalEntries) set.add(Number(e.date.slice(0, 4)));
-    return [...set].sort((a, b) => b - a);
-  }, [data.journalEntries]);
+  // De keuzelijst volgt de boekjaren uit de boekjarentabel (ook een verlengd,
+  // kort of gebroken eerste boekjaar), aangevuld met kalenderjaren waarin
+  // geboekt is maar die nog in geen boekjaar vallen. Eerder alleen kalenderjaren
+  // met de startmaand: een boekjaar juli–juni dat begon vóór de eerste boeking
+  // was dan niet te exporteren.
+  const xafPeriods = useMemo(() => {
+    const periods: { key: string; start: string; end: string; label: string }[] = [];
+    for (const fy of data.fiscalYears) periods.push({ key: fy.id, start: fy.period_start, end: fy.period_end, label: fy.label });
+    const covered = (date: string) => periods.some(p => date >= p.start && date <= p.end);
+    const extraYears = new Set<number>();
+    for (const e of data.journalEntries) if (!covered(e.date)) extraYears.add(Number(e.date.slice(0, 4)));
+    if (periods.length === 0) extraYears.add(new Date().getFullYear());
+    for (const y of extraYears) {
+      const b = ledgerFiscalYearBounds(fiscalStartMonth, y);
+      if (!periods.some(p => p.start === b.start && p.end === b.end)) periods.push({ key: `y-${y}`, start: b.start, end: b.end, label: b.label });
+    }
+    return periods.sort((a, b) => b.start.localeCompare(a.start));
+  }, [data.fiscalYears, data.journalEntries, fiscalStartMonth]);
+  const [xafKey, setXafKey] = useState<string>('');
+  const xafPeriod = xafPeriods.find(p => p.key === xafKey) ?? xafPeriods[0];
 
   if (data.ledgerAccounts.length === 0) {
     return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} /></div>;
   }
 
   function exportXaf() {
-    const fy = ledgerFiscalYearBounds(fiscalStartMonth, xafYear);
-    downloadXaf({ data, fiscalYearLabel: fy.label, startDate: fy.start, endDate: fy.end });
+    if (!xafPeriod) return;
+    downloadXaf({ data, fiscalYearLabel: xafPeriod.label, startDate: xafPeriod.start, endDate: xafPeriod.end });
   }
 
   return (
@@ -950,8 +964,8 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged }: PagePr
       <div className="bk-head">
         <div><PageIcon page="ledger" /><h2>Grootboek</h2><p>Journaalposten en rekeningschema — de basis onder je W&amp;V en BTW-aangifte.</p></div>
         <div className="bk-head-actions">
-          <Select inline value={String(xafYear)} onChange={e => setXafYear(Number(e.target.value))}>
-            {years.map(y => <option key={y} value={y}>{ledgerFiscalYearBounds(fiscalStartMonth, y).label}</option>)}
+          <Select inline value={xafPeriod?.key ?? ''} onChange={e => setXafKey(e.target.value)}>
+            {xafPeriods.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
           </Select>
           <Button onClick={exportXaf} title="XML Auditfile Financieel 3.2 — voor je accountant of de Belastingdienst"><FileDown size={14} /> Auditfile (XAF)</Button>
         </div>
@@ -976,7 +990,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged }: PagePr
 
 /** Proef-/saldibalans per peildatum; elke rekening opent een klikbare grootboekkaart. */
 function TrialBalanceView({ organizationId }: PageProps) {
-  const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
+  const [asOf, setAsOf] = useState(() => todayIso());
   const [rows, setRows] = useState<TrialBalanceRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ledgerAccount, setLedgerAccount] = useState<{ id: UUID; code: string; name: string } | null>(null);
@@ -1031,7 +1045,7 @@ function AccountLedgerModal({ organizationId, account, onClose }: {
 }) {
   const year = new Date().getFullYear();
   const [from, setFrom] = useState(`${year}-01-01`);
-  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [to, setTo] = useState(() => todayIso());
   const [rows, setRows] = useState<AccountLedgerRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -1082,7 +1096,7 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [error, setError] = useState<string | null>(null);
   const [showMemorial, setShowMemorial] = useState(false);
   const [reversing, setReversing] = useState<JournalEntry | null>(null);
-  const [reverseDate, setReverseDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [reverseDate, setReverseDate] = useState(() => todayIso());
   const accountLabel = (id: string) => {
     const a = data.ledgerAccounts.find(x => x.id === id);
     return a ? `${a.code} · ${a.name}` : id;
@@ -1100,7 +1114,7 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
   function askReverse(entry: JournalEntry) {
     if (!canWrite) return;
     setError(null);
-    setReverseDate(new Date().toISOString().slice(0, 10));
+    setReverseDate(todayIso());
     setReversing(entry);
   }
 
@@ -1161,8 +1175,10 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
         // terugdraaien", zodat de bijbehorende administratie meebeweegt. Los
         // tegenboeken zou het boekjaar in een toestand achterlaten waar geen
         // van beide knoppen nog uit komt. De database weigert het ook.
-        const canReverse = canWrite && entry.status === 'posted' && !isReversedPair
-          && !['year_close', 'result_appropriation', 'corporate_tax', 'dga_interest', 'dividend'].includes(entry.source_type);
+        // Ook niet: de doorboeking van een btw-aangifte (corrigeren gaat via een
+        // suppletie) en een tegenboeking zelf (boek dan het origineel opnieuw).
+        const canReverse = canWrite && entry.status === 'posted' && !isReversedPair && !isReversalEntry
+          && !['year_close', 'result_appropriation', 'corporate_tax', 'dga_interest', 'dividend', 'vat_return'].includes(entry.source_type);
         return (
           <div key={entry.id} className={`bk-entry${entry.status === 'reversed' || isReversedPair ? ' is-reversed' : ''}`}>
             <div className="bk-entry-head">
@@ -1205,7 +1221,7 @@ const parseEuro = (v: string): number => Math.round((parseFloat(v.replace(',', '
 function MemorialModal({ data, organizationId, onClose, onSaved }: {
   data: AppData; organizationId: UUID; onClose: () => void; onSaved: () => void;
 }) {
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayIso());
   const [description, setDescription] = useState('');
   const emptyLine = (): MemorialLine => ({ key: uid(), account_id: '', description: '', debit: '', credit: '', vat_code: '', client_id: '', supplier_id: '', project_id: '' });
   const [lines, setLines] = useState<MemorialLine[]>([emptyLine(), emptyLine()]);
@@ -1341,7 +1357,8 @@ type OpeningLine = { key: string; account_id: string; debit: string; credit: str
 
 function OpeningBalanceView({ data, organizationId, canWrite, onChanged }: PageProps) {
   const existing = useMemo(
-    () => data.journalEntries.find(e => e.source_type === 'opening_balance' && e.status === 'posted' && !e.reversed_by_entry_id) ?? null,
+    // De tegenboeking van een beginbalans is zelf geen beginbalans.
+    () => data.journalEntries.find(e => e.source_type === 'opening_balance' && e.status === 'posted' && !e.reversed_by_entry_id && !e.reverses_entry_id) ?? null,
     [data.journalEntries],
   );
   const emptyLine = (): OpeningLine => ({ key: uid(), account_id: '', debit: '', credit: '' });
@@ -1421,6 +1438,8 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged }: PageP
         <p className="bk-muted">
           Stap je over van een ander pakket? Vul hier de eindbalans van je oude administratie in (banksaldo, openstaande debiteuren/crediteuren, activa).
           Het verschil tussen debet en credit wordt automatisch als eigen vermogen geboekt, zodat de balans sluit.
+          Btw die je in je oude pakket al hebt aangegeven maar nog moet betalen (of terugkrijgen), zet je op 1530 Te betalen omzetbelasting.
+          Op 1500, 1510 of 1520 telt hij mee in de eerstvolgende aangifte en betaal je hem twee keer.
         </p>
         <Button variant="primary" disabled={!canWrite || busy || filled.length === 0} onClick={save}>{busy ? 'Bezig…' : 'Beginbalans vastleggen'}</Button>
       </div>

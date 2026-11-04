@@ -1,5 +1,6 @@
 import type { ParsedBankStatement, ParsedBankTransaction } from '../../types';
 import { amountToCents } from './dedup';
+import { mt940Counterparty, mt940EntryDate, mt940Remittance } from './mt940Fields';
 
 /** yymmdd -> ISO. Eeuw heuristiek: 70-99 => 19xx, anders 20xx. */
 function isoFromYYMMDD(yymmdd: string): string | null {
@@ -71,9 +72,9 @@ export function parseMt940(raw: string, fileName: string): ParsedBankStatement {
       const valueDate = isoFromYYMMDD(m[1]);
       let bookingDate = valueDate;
       if (m[2]) {
-        // entrydate is mmdd; leen het jaar van de valutadatum.
-        const year = (valueDate ?? '').slice(0, 4) || String(new Date().getFullYear());
-        bookingDate = `${year}-${m[2].slice(0, 2)}-${m[2].slice(2, 4)}`;
+        // entrydate is mmdd; het jaar komt van de valutadatum, behalve rond de
+        // jaarwisseling (boeking 2 januari bij valuta 31 december).
+        bookingDate = mt940EntryDate(valueDate, m[2]);
       }
       const mark = m[3];
       const credit = mark === 'C' || mark === 'RD'; // RD = storno van een debet => bijschrijving
@@ -93,11 +94,15 @@ export function parseMt940(raw: string, fileName: string): ParsedBankStatement {
         bank_tx_id: bankRef,
       };
     } else if (tag === '86' && pending) {
-      const isSepa = body.includes('/NAME/') || body.includes('/IBAN/') || body.includes('/REMI/');
+      const isSepa = body.includes('/NAME/') || body.includes('/IBAN/') || body.includes('/REMI/') || body.includes('/CNTP/');
       if (isSepa) {
-        pending.counterparty_name = sepaField(body, 'NAME');
-        pending.counterparty_iban = sepaField(body, 'IBAN');
-        pending.description = sepaField(body, 'REMI') || body.replace(/\/[A-Z]+\//g, ' ').trim() || null;
+        // ING: /CNTP/IBAN/BIC/NAAM/PLAATS/ in plaats van losse /NAME/ en /IBAN/.
+        const cntp = mt940Counterparty(body);
+        pending.counterparty_name = sepaField(body, 'NAME') ?? cntp.name;
+        pending.counterparty_iban = sepaField(body, 'IBAN') ?? cntp.iban;
+        const remi = mt940Remittance(sepaField(body, 'REMI'));
+        pending.description = remi.description || body.replace(/\/[A-Z]+\//g, ' ').trim() || null;
+        if (remi.structuredReference) pending.structured_reference = remi.structuredReference;
         pending.end_to_end_id = sepaField(body, 'EREF');
       } else {
         pending.description = body.trim() || null;

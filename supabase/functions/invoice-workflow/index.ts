@@ -9,6 +9,8 @@ import { calculateDunningClaim, type DunningClaim, type InterestKind, type RateP
 import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
 import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
+import { splitRefundOverVatGroups } from '../_shared/creditNoteSplit.ts';
+import { invoiceVatNotes, type VatCodeInfo } from '../_shared/invoiceVatNotes.ts';
 import {
   amsterdamDate, buildMollieSalesInvoice, mollieAmountCents, mollieDate, mollieEmailBody, mollieFetchPolicy, molliePaymentStatus,
   mollieSalesInvoiceSettled, readMollieSalesInvoice, uuidFromHex, type MollieSalesInvoiceState,
@@ -22,6 +24,7 @@ type InvoiceRow = {
   number: string; date: string; due_date: string | null; lines: InvoiceLine[]; status: string; notes: string | null;
   public_token_hash?: string | null; public_token_expires_at?: string | null;
   reminder_level?: number | null; last_reminder_at?: string | null; reminders_paused?: boolean | null; currency?: string | null;
+  journal_entry_id?: string | null;
 };
 type ClientRow = {
   id: string; name: string; contact_name: string | null; email: string | null;
@@ -215,6 +218,7 @@ serve(async (req) => {
       case 'cancelDunningNotice': return json(req, { ok: true, ...(await cancelDunningNotice(user.id, organizationId, body)) });
       case 'createInvoicePaymentCheckout': return json(req, { ok: true, ...(await createInvoicePaymentCheckout(user.id, organizationId, invoiceId, body)) });
       case 'createInvoiceRefund': return json(req, { ok: true, ...(await createInvoiceRefund(user.id, organizationId, role, invoiceId, body)) });
+      case 'creditInvoice': return json(req, { ok: true, ...(await creditUnpaidInvoice(user.id, organizationId, invoiceId, body)) });
       case 'sendCreditNoteEmail': return json(req, { ok: true, ...(await sendCreditNoteEmail(user.id, organizationId, body)) });
       case 'markMockInvoicePaymentPaid': return json(req, { ok: true, payment: await markMockInvoicePaymentPaid(String(body.providerPaymentId || '')) });
       case 'saveInvoiceMollieKey': return json(req, { ok: true, status: await saveInvoiceMollieKey(user.id, organizationId, role, body) });
@@ -783,7 +787,12 @@ async function computeDunningClaim(organizationId: string, invoice: InvoiceRow, 
   ]);
   const interestKind: InterestKind = clientKind === 'consumer' ? 'consumer' : 'commercial';
   const costsVatBp = settings?.dunning_collection_costs_vat ? DUNNING_COSTS_VAT_BP : 0;
-  const principalCents = calculateTotals(invoice.lines).totalCents;
+  // De hoofdsom is wat er nog openstaat, niet het factuurtotaal: na een
+  // deelbetaling (bank of Mollie) of een creditnota rekende de aanmaning rente
+  // en incassokosten over geld dat de klant al had betaald.
+  const totalCents = calculateTotals(invoice.lines).totalCents;
+  const openCents = await loadInvoiceOpenCents(organizationId, invoice);
+  const principalCents = openCents === null ? totalCents : Math.max(0, Math.min(totalCents, openCents));
   const claim = calculateDunningClaim({
     principalCents,
     dueDate: invoice.due_date,
@@ -838,7 +847,8 @@ async function proposeDunningNotice(userId: string, organizationId: string, invo
   const invoice = await loadInvoice(organizationId, invoiceId);
   if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor een betaalde, geannuleerde of afgeboekte factuur kan geen aanmaning worden gemaakt.', 409);
   if (!invoice.due_date) throw new WorkflowHttpError('Deze factuur heeft geen vervaldatum.', 422);
-  const { data: existing } = await supabaseAdmin.from('invoice_dunning_notices').select('id,status').eq('organization_id', organizationId).eq('invoice_id', invoiceId).maybeSingle();
+  // Een geannuleerd voorstel telt niet mee: daarna mag er een nieuw komen.
+  const { data: existing } = await supabaseAdmin.from('invoice_dunning_notices').select('id,status').eq('organization_id', organizationId).eq('invoice_id', invoiceId).neq('status', 'cancelled').maybeSingle();
   if (existing) throw new WorkflowHttpError('Er bestaat al een aanmaning voor deze factuur.', 409);
   const calcDate = todayIsoDate();
   const { clientKind, interestKind, claim } = await computeDunningClaim(organizationId, invoice, calcDate);
@@ -1221,7 +1231,11 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
       const webhookUrl = MOLLIE_WEBHOOK_SECRET ? `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie&secret=${encodeURIComponent(MOLLIE_WEBHOOK_SECRET)}` : `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie`;
       const mollieResponse = await fetch('https://api.mollie.com/v2/payments', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${orgKey.apiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(idempotencyKey) },
+        // Per betaalrecord, niet per factuur: na een verlopen of mislukte betaling
+        // kreeg een nieuwe checkout bij Mollie anders binnen het idempotentie-
+        // venster de oude betaling (of een 422) terug. Dubbelklikken vangt
+        // begin_invoice_payment_checkout al af (dat geeft het actieve record terug).
+        headers: { Authorization: `Bearer ${orgKey.apiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`invoice-payment-${payment.id}`) },
         body: JSON.stringify({
           amount: { currency: 'EUR', value: (amountCents / 100).toFixed(2) },
           description: `Factuur ${invoice.number}`,
@@ -1310,6 +1324,64 @@ async function createInvoiceRefund(userId: string, organizationId: string, role:
 }
 
 // ------------------------------------------------------------
+// Crediteren van een verzonden, onbetaalde factuur
+// ------------------------------------------------------------
+// Een uitgegeven factuur annuleer je met een creditnota (art. 35a Wet OB): de
+// klant krijgt een creditfactuur en het grootboek boekt omzet en btw terug.
+// Op "geannuleerd" zetten zonder creditnota liet omzet en btw in de boeken en
+// in de aangifte staan; de database staat dat voor een geboekte factuur niet
+// meer toe. Voor een (deels) betaalde factuur loopt het via Terugbetalen.
+async function creditUnpaidInvoice(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>) {
+  if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  if (!['sent', 'overdue'].includes(invoice.status)) {
+    throw new WorkflowHttpError('Alleen een verzonden of achterstallige factuur kun je zo crediteren. Een betaalde factuur crediteer je via Terugbetaling.', 409);
+  }
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  const totals = calculateTotals(invoice.lines);
+  if (totals.totalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen positief bedrag om te crediteren.', 422);
+
+  // Alleen een factuur waarop nog niets is betaald of gecrediteerd: dan is de
+  // creditnota precies het spiegelbeeld en klopt het grootboek daarna exact.
+  const openCents = await loadInvoiceOpenCents(organizationId, invoice);
+  if (openCents !== null && openCents !== totals.totalCents) {
+    throw new WorkflowHttpError('Op deze factuur is al (deels) betaald of gecrediteerd. Verwerk het restant met een terugbetaling of een memoriaalpost.', 409);
+  }
+  const { data: activePayments, error: paymentError } = await supabaseAdmin
+    .from('invoice_payment_records').select('id,status')
+    .eq('organization_id', organizationId).eq('invoice_id', invoiceId)
+    .in('status', ['creating', 'open', 'pending', 'authorized', 'paid']);
+  if (paymentError) throwSupabaseError('betalingen laden', paymentError);
+  if ((activePayments ?? []).length > 0) {
+    throw new WorkflowHttpError('Voor deze factuur loopt een betaling via Mollie. Wacht die af (of laat hem verlopen) voordat je crediteert.', 409);
+  }
+
+  const reason = String(body.reason || '').trim() || 'Factuur gecrediteerd';
+  const [client, company] = await Promise.all([
+    loadClient(organizationId, invoice.client_id),
+    loadCompanySettings(organizationId),
+  ]);
+  const creditNote = await issueCreditNoteForRefund({
+    userId, organizationId, invoice, client, company, refund: null,
+    amountCents: totals.totalCents, invoiceTotalCents: totals.totalCents, totals, reason,
+  });
+
+  // De factuur is nu volledig gecrediteerd: status geannuleerd (alleen de server
+  // zet dit voor een geboekte factuur).
+  const { error: statusError } = await supabaseAdmin
+    .from('invoices')
+    .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+    .eq('id', invoiceId)
+    .eq('organization_id', organizationId);
+  if (statusError) throwSupabaseError('factuurstatus bijwerken', statusError);
+  await insertWorkflowEvent(organizationId, invoiceId, 'cancelled', 'Factuur gecrediteerd',
+    `Factuur ${invoice.number} is volledig gecrediteerd met creditfactuur ${String(creditNote.number ?? '')} en staat op geannuleerd.`,
+    { credit_note_id: creditNote.id ?? null, reason }, userId);
+
+  return { creditNote };
+}
+
+// ------------------------------------------------------------
 // Fase 2: Mollie-terugbetaling uitvoeren
 // ------------------------------------------------------------
 // Het geld loopt terug via de oorspronkelijke Mollie-betaling. De terugbetaling
@@ -1382,7 +1454,7 @@ async function createMollieInvoiceRefund(input: {
   return { refund: updated, creditNote };
 }
 
-async function issueCreditNoteForRefund(input: { userId: string | null; organizationId: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; refund: { id: string }; amountCents: number; invoiceTotalCents: number; totals: ReturnType<typeof calculateTotals>; reason: string | null }) {
+async function issueCreditNoteForRefund(input: { userId: string | null; organizationId: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; refund: { id: string } | null; amountCents: number; invoiceTotalCents: number; totals: ReturnType<typeof calculateTotals>; reason: string | null }) {
   const { userId, organizationId, invoice, client, company, refund, amountCents, invoiceTotalCents, totals, reason } = input;
   const currency = invoice.currency || 'EUR';
   const isFull = amountCents >= invoiceTotalCents;
@@ -1399,23 +1471,35 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
     total = totals.total;
     lines = Array.isArray(invoice.lines) ? invoice.lines : [];
   } else {
-    // Gedeeltelijk: één creditregel, btw pro-rata over het terugbetaalde brutobedrag.
+    // Gedeeltelijk: per btw-groep van de factuur (tarief + code) een creditregel,
+    // naar rato van het bruto bedrag. Eén regel met een "gemengd" tarief bestaat
+    // fiscaal niet: hij kwam geheel in één rubriek terecht, en een ICP-code viel
+    // weg zodat de ICP-opgaaf niet meecorrigeerde.
     total = amountCents / 100;
-    const ratio = amountCents / invoiceTotalCents;
-    subtotal = Math.round(totals.subtotal * ratio * 100) / 100;
-    vat = Math.round((total - subtotal) * 100) / 100;
-    const blendedRate = subtotal > 0 ? Math.round((vat / subtotal) * 10000) / 100 : 0;
-    // Btw-code overnemen als de factuur één categorie heeft: dan blijft de UBL-
-    // e-creditnota fiscaal juist (verlegd/ICP/vrijgesteld). Bij gemengde codes
-    // laten we hem weg — dan leidt de UBL-generator af uit het tarief.
     const invoiceLines = Array.isArray(invoice.lines) ? invoice.lines : [];
-    const distinctVatCodes = [...new Set(invoiceLines.map((l) => String(l.vat_code ?? '').trim()).filter(Boolean))];
-    const uniformVatCode = distinctVatCodes.length === 1 ? distinctVatCodes[0] : null;
-    lines = [{ description: `Gedeeltelijke terugbetaling factuur ${invoice.number}${reason ? ` – ${reason}` : ''}`, quantity: 1, unit_price: subtotal, vat: blendedRate, ...(uniformVatCode ? { vat_code: uniformVatCode } : {}) }];
+    const parts = splitRefundOverVatGroups(invoiceLines, amountCents);
+    if (parts.length > 0) {
+      subtotal = parts.reduce((sum, part) => sum + part.baseCents, 0) / 100;
+      vat = parts.reduce((sum, part) => sum + part.vatCents, 0) / 100;
+      lines = parts.map((part) => ({
+        description: `Gedeeltelijke terugbetaling factuur ${invoice.number}${parts.length > 1 ? ` (btw ${part.rate}%)` : ''}${reason ? ` – ${reason}` : ''}`,
+        quantity: 1,
+        unit_price: part.baseCents / 100,
+        vat: part.rate,
+        ...(part.vatCode ? { vat_code: part.vatCode } : {}),
+      }));
+    } else {
+      // Geen positieve groepen (bijv. alleen kortingsregels): het oude gedrag.
+      const ratio = amountCents / invoiceTotalCents;
+      subtotal = Math.round(totals.subtotal * ratio * 100) / 100;
+      vat = Math.round((total - subtotal) * 100) / 100;
+      const blendedRate = subtotal > 0 ? Math.round((vat / subtotal) * 10000) / 100 : 0;
+      lines = [{ description: `Gedeeltelijke terugbetaling factuur ${invoice.number}${reason ? ` – ${reason}` : ''}`, quantity: 1, unit_price: subtotal, vat: blendedRate }];
+    }
   }
 
   // 1. Creditfactuur server-side aanmaken (kent atomair het CN-nummer toe).
-  const created = await issueCreditNote({ organizationId, invoiceId: invoice.id, refundId: refund.id, userId, reason, currency, subtotal, vat, total, lines });
+  const created = await issueCreditNote({ organizationId, invoiceId: invoice.id, refundId: refund?.id ?? null, userId, reason, currency, subtotal, vat, total, lines });
   const creditNoteNumber = String(created.number || '');
 
   // 2. PDF renderen met het toegekende nummer. Bij geconfigureerde storage gaat de
@@ -1426,7 +1510,7 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
   let pdfBase64: string | null = null;
   try {
     const invoiceReference = await invoiceReferenceForClient(organizationId, invoice);
-    const attachment = await createCreditNotePdfAttachment({ creditNoteNumber, date: String(created.date || ''), invoice, client, company, currency, subtotal, vat, total, lines, reason, invoiceReference });
+    const attachment = await createCreditNotePdfAttachment({ creditNoteNumber, date: String(created.date || ''), invoice, client, company, currency, subtotal, vat, total, lines, reason, invoiceReference, refunded: refund !== null });
     validateInvoicePdfAttachment(attachment);
     const stored = await storeCreditNotePdfSnapshot(organizationId, invoice.id, String(created.id), attachment);
     pdfBase64 = attachment.base64;
@@ -1608,7 +1692,7 @@ async function ensureCreditNoteForRefund(refund: RefundRow): Promise<Record<stri
   });
 }
 
-async function issueCreditNote(input: { organizationId: string; invoiceId: string; refundId: string; userId: string | null; reason: string | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[] }): Promise<Record<string, unknown> & { id: string; number: string; date: string }> {
+async function issueCreditNote(input: { organizationId: string; invoiceId: string; refundId: string | null; userId: string | null; reason: string | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[] }): Promise<Record<string, unknown> & { id: string; number: string; date: string }> {
   const { data, error } = await supabaseAdmin.rpc('issue_credit_note', {
     p_organization_id: input.organizationId,
     p_invoice_id: input.invoiceId,
@@ -2170,6 +2254,20 @@ async function loadInvoice(organizationId: string, invoiceId: string): Promise<I
   if (error || !data) throw new WorkflowHttpError('Factuur niet gevonden.', 404);
   return data as InvoiceRow;
 }
+
+// Wat er volgens het grootboek nog openstaat (factuurboeking min bank-, Mollie-
+// en creditnotaboekingen). Null als de factuur niet in het grootboek staat; dan
+// valt er niets af te leiden en geldt het factuurtotaal.
+async function loadInvoiceOpenCents(organizationId: string, invoice: InvoiceRow): Promise<number | null> {
+  if (!invoice.journal_entry_id) return null;
+  const { data, error } = await supabaseAdmin.rpc('invoice_open_receivable_cents', {
+    p_organization_id: organizationId,
+    p_invoice_id: invoice.id,
+  });
+  if (error) throwRpcError('invoice_open_receivable_cents', error);
+  const cents = Number(data);
+  return Number.isFinite(cents) ? cents : null;
+}
 async function loadClient(organizationId: string, clientId: string): Promise<ClientRow> {
   const { data, error } = await supabaseAdmin.from('clients')
     .select('id,name,contact_name,email,client_code,client_kind,vat_number,kvk_number,address_line1,address_line2,postal_code,city,country,e_invoicing_enabled,e_invoice_email,e_invoice_channel')
@@ -2191,6 +2289,28 @@ async function loadVatKindsByCode(organizationId: string): Promise<Record<string
   }
   return byCode;
 }
+// Soort en rubriek per btw-code, voor de verplichte vermeldingen op de pdf.
+async function loadVatCodeInfo(organizationId: string): Promise<Record<string, VatCodeInfo>> {
+  const { data, error } = await supabaseAdmin.from('vat_codes')
+    .select('code,kind,sales_box')
+    .eq('organization_id', organizationId);
+  if (error) { console.warn('vat_codes lookup voor de pdf mislukte:', error.message); return {}; }
+  const byCode: Record<string, VatCodeInfo> = {};
+  for (const row of (data ?? []) as Array<{ code: string; kind: string; sales_box: string | null }>) {
+    byCode[String(row.code)] = { kind: String(row.kind), salesBox: row.sales_box ?? null };
+  }
+  return byCode;
+}
+
+/** Btw-vermeldingen onder de totalen; geeft de nieuwe y terug. */
+function drawVatNotes(page: PDFPage, notes: string[], y: number, regular: PDFFont, muted: RGB): number {
+  for (const note of notes) {
+    y = drawWrappedPdfText(page, note, 48, y, 500, regular, 8, 11, muted);
+    y -= 2;
+  }
+  return y;
+}
+
 async function loadProject(organizationId: string, projectId: string): Promise<ProjectRow | null> {
   const { data, error } = await supabaseAdmin.from('projects').select('id,name,description').eq('id', projectId).eq('organization_id', organizationId).maybeSingle();
   if (error) throwSupabaseError('projects lookup', error); return (data ?? null) as ProjectRow | null;
@@ -3446,6 +3566,12 @@ async function loadInvoicePdfSnapshot(organizationId: string, invoiceId: string)
 
 async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: ClientRow; project: ProjectRow | null; quote: QuoteRow | null; company: CompanySettingsRow | null; publicUrl: string; paymentUrl?: string | null }): Promise<InvoicePdfAttachment> {
   const { invoice, client, project, quote, company, publicUrl, paymentUrl } = input;
+  // Art. 35a Wet OB: bij verlegging of een ICP-levering de reden op de factuur
+  // én het btw-nummer van de afnemer. Zonder dat nummer geen factuur.
+  const vatNotes = invoiceVatNotes(Array.isArray(invoice.lines) ? invoice.lines : [], await loadVatCodeInfo(invoice.organization_id));
+  if (vatNotes.needsCustomerVatNumber && !String(client.vat_number ?? '').trim()) {
+    throw new WorkflowHttpError(`Op deze factuur staat ${vatNotes.reasons.join(' en ')}. Dan moet het btw-nummer van de klant op de factuur staan (art. 35a Wet OB); vul het in bij ${client.name}.`, 422);
+  }
   const pdfDoc = await PDFDocument.create();
   const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -3484,8 +3610,9 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   y -= 10;
   drawPdfText(page, 'Subtotaal', 365, y, regular, 10); drawPdfText(page, formatEuro(totals.subtotal), 547, y, regular, 10, { align: 'right' }); y -= 18;
   if (totals.vatBreakdown.length > 0) {
+    // Per tarief de grondslag én het btw-bedrag (art. 35a lid 1 Wet OB).
     for (const row of totals.vatBreakdown) {
-      drawPdfText(page, `BTW ${row.rate}%`, 365, y, regular, 10); drawPdfText(page, formatEuro(row.vat), 547, y, regular, 10, { align: 'right' }); y -= 18;
+      drawPdfText(page, `BTW ${row.rate}% over ${formatEuro(row.base)}`, 365, y, regular, 9); drawPdfText(page, formatEuro(row.vat), 547, y, regular, 10, { align: 'right' }); y -= 18;
     }
     y -= 4;
   } else {
@@ -3494,6 +3621,11 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   page.drawLine({ start: { x: 365, y: y + 12 }, end: { x: 547, y: y + 12 }, thickness: 0.8, color: accent });
   drawPdfText(page, 'Totaal', 365, y, bold, 13); drawPdfText(page, formatEuro(totals.total), 547, y, bold, 13, { align: 'right' });
   if (company?.iban) { y -= 30; drawPdfText(page, `Betalen op IBAN: ${company.iban}`, 365, y, regular, 9, { color: muted }); }
+  if (vatNotes.notes.length > 0) {
+    if (y < 150) { drawPdfFooter(page, regular, company); page = pdfDoc.addPage([595.28, 841.89]); y = 780; }
+    y -= 26;
+    y = drawVatNotes(page, vatNotes.notes, y, regular, muted);
+  }
   if (invoice.notes) { y -= 42; drawSectionTitle(page, 'Notities', 48, y, bold, accent, muted); y -= 24; y = drawWrappedPdfText(page, invoice.notes, 48, y, 310, regular, 9, 12, muted); }
   // Zonder publieke link (een e-factuur die vóór het versturen wordt
   // gedownload) is er niets online te bekijken: dan geen linkregel.
@@ -3510,8 +3642,9 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   return { fileName, mimeType: 'application/pdf', bytes, base64: bytesToBase64(bytes), sizeBytes: bytes.byteLength, sha256 };
 }
 
-async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; date: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[]; reason: string | null; invoiceReference?: string }): Promise<InvoicePdfAttachment> {
+async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; date: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[]; reason: string | null; invoiceReference?: string; refunded?: boolean }): Promise<InvoicePdfAttachment> {
   const { creditNoteNumber, date, invoice, client, company, subtotal, vat, total, lines, reason } = input;
+  const vatNotes = invoiceVatNotes(Array.isArray(lines) ? lines : [], await loadVatCodeInfo(invoice.organization_id));
   const pdfDoc = await PDFDocument.create();
   const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -3553,7 +3686,10 @@ async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; 
   page.drawLine({ start: { x: 365, y: y + 12 }, end: { x: 547, y: y + 12 }, thickness: 0.8, color: accent });
   drawPdfText(page, 'Totaal credit', 365, y, bold, 13); drawPdfText(page, `- ${formatEuro(total)}`, 547, y, bold, 13, { align: 'right' });
   y -= 28;
-  drawPdfText(page, 'Dit bedrag wordt aan u terugbetaald.', 365, y, regular, 9, { color: muted });
+  // Bij crediteren van een onbetaalde factuur wordt er niets terugbetaald: de
+  // factuur vervalt.
+  drawPdfText(page, input.refunded === false ? 'Hiermee vervalt de factuur; u hoeft niets meer te betalen.' : 'Dit bedrag wordt aan u terugbetaald.', 365, y, regular, 9, { color: muted });
+  if (vatNotes.notes.length > 0) { y -= 22; y = drawVatNotes(page, vatNotes.notes, y, regular, muted); }
   if (reason) { y -= 40; drawSectionTitle(page, 'Reden', 48, y, bold, accent, muted); y -= 24; y = drawWrappedPdfText(page, reason, 48, y, 310, regular, 9, 12, muted); }
   drawPdfFooter(page, regular, company);
 

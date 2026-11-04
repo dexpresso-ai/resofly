@@ -229,6 +229,12 @@ async function finalizeRequisition(userId: string, body: Record<string, unknown>
   if (!reqRow) throw new HttpError('Koppeling niet gevonden.', 404);
 
   const organizationId = reqRow.organization_id as string;
+  // Alleen wie de koppeling begon, rondt hem af (net als bij de agenda-OAuth).
+  // Anders kon een ander teamlid met de toestemmingslink in de hand de
+  // rekeningen van een ánder bedrijf in deze administratie laten koppelen.
+  if (reqRow.created_by && reqRow.created_by !== userId) {
+    throw new HttpError('Deze bankkoppeling is door een ander teamlid gestart. Laat diegene hem afronden, of start zelf een nieuwe koppeling.', 403);
+  }
   const role = await requireOrganizationAccess(userId, organizationId);
   if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten voor deze organisatie.', 403);
   // Service-role omzeilt RLS: bankkoppelingen vallen onder Financiën, dus die

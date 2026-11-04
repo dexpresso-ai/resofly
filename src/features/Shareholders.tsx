@@ -15,6 +15,7 @@ import {
   listShareholders, loadShareholderPositions, updateShareholder,
 } from '../lib/repository';
 import type { ShareholderInput } from '../lib/repository';
+import { todayIso } from '../lib/dates';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pct = (bp: number | null | undefined) => `${((bp ?? 0) / 100).toFixed(2).replace('.', ',')}%`;
@@ -47,7 +48,7 @@ export function ShareholdersPage({ data, organizationId, canWrite, canAdmin, bus
   data: AppData; organizationId: string; canWrite: boolean; canAdmin: boolean;
   businessActive: boolean; onChanged: () => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const [asOf, setAsOf] = useState(today);
   const [shareholders, setShareholders] = useState<Shareholder[]>([]);
   const [positions, setPositions] = useState<ShareholderPosition[]>([]);
@@ -451,12 +452,15 @@ function ShareholderDialog({ input, isNew, busy, onCancel, onSave }: {
   );
 }
 
+/** Keuzewaarde voor "ingekochte aandelen" bij een intrekking (wordt null in de database). */
+const TREASURY = '__treasury__';
+
 /** Een mutatie in het aandelenbezit. */
 function TransactionForm({ shareholders, busy, onSubmit }: {
   shareholders: Shareholder[]; busy: boolean;
   onSubmit: (input: Parameters<typeof addShareTransaction>[1]) => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const [kind, setKind] = useState<ShareTransactionKind>('issue');
   const [eventDate, setEventDate] = useState(today);
   const [acknowledgedOn, setAcknowledgedOn] = useState('');
@@ -498,6 +502,10 @@ function TransactionForm({ shareholders, busy, onSubmit }: {
           <label><span>Van</span>
             <Select value={from} onChange={e => setFrom(e.target.value)}>
               <option value="">Kies…</option>
+              {/* Intrekken van door de vennootschap ingekochte aandelen: die horen
+                  bij niemand meer; ze nog eens van een aandeelhouder afhalen gaf
+                  een negatieve positie en een verkeerde dividendverdeling. */}
+              {kind === 'cancellation' && <option value={TREASURY}>Ingekochte aandelen (de vennootschap zelf)</option>}
               {shareholders.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </Select>
           </label>
@@ -536,7 +544,7 @@ function TransactionForm({ shareholders, busy, onSubmit }: {
           kind, eventDate, acknowledgedOn: acknowledgedOn || null,
           shareClass, quantity: qty,
           nominalValueCents: nominalCents, paidUpCents,
-          fromShareholderId: needsFrom ? from : null,
+          fromShareholderId: needsFrom && from !== TREASURY ? from : null,
           toShareholderId: needsTo ? to : null,
           deedReference: deed || null,
         })}><Plus size={14} /> Mutatie vastleggen</Button>
@@ -550,7 +558,7 @@ function EncumbranceForm({ shareholders, busy, onSubmit }: {
   shareholders: Shareholder[]; busy: boolean;
   onSubmit: (input: Parameters<typeof addShareEncumbrance>[1]) => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const [shareholderId, setShareholderId] = useState('');
   const [kind, setKind] = useState<ShareEncumbranceKind>('pledge');
   const [holderName, setHolderName] = useState('');

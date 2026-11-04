@@ -42,7 +42,7 @@ const REPORT_GROUPS_BY_TYPE: Record<AccountType, string[]> = {
  * terugdraaien). Los tegenboeken laat het boekjaar in een toestand achter waar
  * geen van beide knoppen nog uit komt; de database weigert het ook.
  */
-const SYSTEM_ENTRY_SOURCES = ['year_close', 'result_appropriation', 'corporate_tax', 'dga_interest', 'dividend'];
+const SYSTEM_ENTRY_SOURCES = ['year_close', 'result_appropriation', 'corporate_tax', 'dga_interest', 'dividend', 'vat_return'];
 
 const SUPPLIER_STATUS = ['active', 'inactive'] as const;
 const PERIOD_TYPES = ['month', 'quarter'] as const;
@@ -447,10 +447,11 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     required: ['entry_id'],
     async plan(ctx, input) {
       const entryId = id(input, 'entry_id');
-      const entry = await row<{ entry_number: string | null; date: string; description: string | null; status: string; source_type: string; reversed_by_entry_id: string | null }>(
-        ctx, 'journal_entries', entryId, 'entry_number, date, description, status, source_type, reversed_by_entry_id', 'Boekstuk');
+      const entry = await row<{ entry_number: string | null; date: string; description: string | null; status: string; source_type: string; reversed_by_entry_id: string | null; reverses_entry_id: string | null }>(
+        ctx, 'journal_entries', entryId, 'entry_number, date, description, status, source_type, reversed_by_entry_id, reverses_entry_id', 'Boekstuk');
       if (entry.status !== 'posted') throw new ActionError(`Boekstuk ${entry.entry_number ?? ''} staat op "${entry.status}" en is niet geboekt; alleen een geboekt boekstuk kun je tegenboeken.`);
       if (entry.reversed_by_entry_id) throw new ActionError(`Boekstuk ${entry.entry_number ?? ''} is al tegengeboekt.`);
+      if (entry.reverses_entry_id) throw new ActionError(`Boekstuk ${entry.entry_number ?? ''} is zelf een tegenboeking; boek het oorspronkelijke boekstuk opnieuw.`);
       if (SYSTEM_ENTRY_SOURCES.includes(entry.source_type)) {
         throw new ActionError(`Boekstuk ${entry.entry_number ?? ''} hoort bij "${entry.source_type}" en draai je terug via de bijbehorende handeling (boekjaar heropenen of bestemming terugdraaien), niet met een losse tegenboeking.`);
       }
@@ -498,7 +499,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       const raw = rawLines(input);
 
       const { data: existing } = await orgQuery(ctx, 'journal_entries', 'id, entry_number, date')
-        .eq('source_type', 'opening_balance').eq('status', 'posted').is('reversed_by_entry_id', null).maybeSingle();
+        .eq('source_type', 'opening_balance').eq('status', 'posted').is('reversed_by_entry_id', null).is('reverses_entry_id', null).maybeSingle();
       if (existing) {
         const e = existing as { entry_number: string | null; date: string };
         throw new ActionError(`Er ligt al een beginbalans (boekstuk ${e.entry_number ?? ''} van ${e.date}). Boek die eerst tegen voordat je een nieuwe vastlegt.`);

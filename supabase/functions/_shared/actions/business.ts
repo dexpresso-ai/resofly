@@ -502,7 +502,10 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
         throw new ActionError('Er kan niet meer gestort zijn dan de nominale waarde; wat daarbovenop is betaald is agio en hoort op 0505.');
       }
 
-      const needsFrom = kind !== 'issue';
+      // Een intrekking zonder "van" gaat over aandelen die de vennootschap zelf
+      // heeft ingekocht (treasury); die mag de database, en het register telt ze
+      // dan niet nog eens bij een aandeelhouder weg.
+      const needsFrom = kind === 'transfer' || kind === 'repurchase';
       const needsTo = kind === 'issue' || kind === 'transfer';
       const fromId = optId(input, 'from_shareholder_id');
       const toId = optId(input, 'to_shareholder_id');
@@ -844,19 +847,23 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
         // Eén regel per aandeelhouder: het register kan meerdere soorten aandelen
         // per persoon kennen, maar een dividendbedrag krijgt hij één keer.
         const byHolder = new Map<string, number>();
-        for (const p of (positions ?? []) as Array<{ shareholder_id: string; share_basis_points: number }>) {
-          byHolder.set(p.shareholder_id, (byHolder.get(p.shareholder_id) ?? 0) + (p.share_basis_points ?? 0));
+        for (const p of (positions ?? []) as Array<{ shareholder_id: string; shares: number }>) {
+          byHolder.set(p.shareholder_id, (byHolder.get(p.shareholder_id) ?? 0) + Number(p.shares ?? 0));
         }
-        const withShares = [...byHolder.entries()].filter(([, bp]) => bp > 0);
+        const withShares = [...byHolder.entries()].filter(([, shares]) => shares > 0);
         if (withShares.length === 0) throw new ActionError(`Op ${dateNL(decisionDate)} staat er geen aandelenbezit in het register; er valt niets te verdelen.`);
-        let handed = 0;
-        lines = withShares.map(([shareholderId, bp], index) => {
-          // De laatste krijgt het afrondingsrestje, anders telt de verdeling niet
-          // op tot het besluit en weigert de database bij een final-dividend terecht.
-          const grossCents = index === withShares.length - 1 ? totalCents - handed : Math.round((totalCents * bp) / 10000);
-          handed += grossCents;
-          return { shareholderId, grossCents };
-        });
+        // Op het exacte aantal aandelen, niet op het afgeronde percentage; de
+        // afrondingscenten naar de grootste resten, zodat de verdeling exact
+        // optelt tot het besluit (anders weigert de database bij een final-dividend).
+        const totalShares = withShares.reduce((sum, [, shares]) => sum + shares, 0);
+        const exact = withShares.map(([, shares]) => (totalCents * shares) / totalShares);
+        const amounts = exact.map((value) => Math.floor(value));
+        let rest = totalCents - amounts.reduce((sum, value) => sum + value, 0);
+        const order = exact
+          .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+          .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+        for (let k = 0; rest > 0; k += 1, rest -= 1) amounts[order[k % order.length].index] += 1;
+        lines = withShares.map(([shareholderId], index) => ({ shareholderId, grossCents: amounts[index] }));
       } else {
         const raw = Array.isArray(input.lines) ? input.lines as Array<Record<string, unknown>> : [];
         if (raw.length === 0) throw new ActionError('Geef "lines" met een bedrag per aandeelhouder, of zet "distribute_pro_rata" aan met een "total_eur".');

@@ -384,7 +384,7 @@ function missingComparativesBlock(snapshot: Json): Block[] {
 }
 
 // ------------------------------------------------------------ afgeleiden
-type BalanceLine = {
+export type BalanceLine = {
   section: string;
   group: string;
   rank: number;
@@ -399,7 +399,7 @@ type BalanceLine = {
 };
 
 function balanceLines(snapshot: Json): BalanceLine[] {
-  return rows(obj(snapshot.balanceSheetAfterAppropriation).rows).map((row) => ({
+  return rows(obj(snapshot.balanceSheetAfterAppropriation).rows).map((row) => presentBalanceLine({
     section: str(row.section),
     group: str(row.reportGroup),
     rank: num(row.groupRank),
@@ -411,6 +411,28 @@ function balanceLines(snapshot: Json): BalanceLine[] {
     restricted: bool(row.isRestrictedReserve),
     subtype: str(row.subtype),
   }));
+}
+
+/**
+ * Een creditsaldo op een activarekening (rekening-courant DGA die de BV schuldig
+ * is, roodstand bij de bank) is een schuld, geen negatief activum; een debetsaldo
+ * op een schuldrekening is een vordering (art. 2:364 BW, geen saldering). De kant
+ * volgt het saldo op de balansdatum (bij nul: dat van vorig jaar). Alleen
+ * presentatie: de bevroren snapshot blijft zoals hij is.
+ */
+export function presentBalanceLine(line: BalanceLine): BalanceLine {
+  const basis = line.current !== 0 ? line.current : (line.previous ?? 0);
+  if (basis >= 0 || (line.section !== 'asset' && line.section !== 'liability')) return line;
+  const flipped = line.section === 'asset'
+    ? { section: 'liability', group: 'kortlopende_schulden', rank: 140 }
+    : { section: 'asset', group: 'vorderingen', rank: 50 };
+  return {
+    ...line,
+    ...flipped,
+    current: -line.current,
+    previous: line.previous === null ? null : -line.previous,
+    delta: -line.delta,
+  };
 }
 
 type PlLine = {

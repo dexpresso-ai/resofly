@@ -4931,6 +4931,25 @@ export async function createInvoiceRefund(
 }
 
 /**
+ * Crediteer een verzonden, nog onbetaalde factuur volledig: de server maakt een
+ * creditfactuur (die het grootboek terugboekt), mailt hem waar mogelijk en zet
+ * de factuur op geannuleerd. Een geboekte factuur kan alleen zo worden
+ * geannuleerd; een betaalde factuur loopt via createInvoiceRefund.
+ */
+export async function creditInvoice(
+  organizationId: UUID,
+  invoiceId: UUID,
+  reason?: string,
+): Promise<{ creditNote: CreditNote | null }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'creditInvoice', organizationId, invoiceId, reason },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Crediteren mislukt');
+  return data as { creditNote: CreditNote | null };
+}
+
+/**
  * Download the stored credit-note PDF (mirrors downloadInvoicePdfSnapshot). The
  * Edge Function returns base64, which we turn into a Blob and download.
  */

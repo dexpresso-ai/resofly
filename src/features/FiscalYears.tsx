@@ -9,11 +9,12 @@ import {
   appropriateResult, closeFiscalYear, ensureDefaultLedgerAccounts, listFiscalYears,
   listResultAppropriations, openFiscalYear, reopenFiscalYear, reverseResultAppropriation,
 } from '../lib/repository';
+import { formatISODate } from '../lib/dates';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const lastDay = (year: number, month: number) => new Date(year, month, 0).getDate();
-const todayIso = () => new Date().toISOString().slice(0, 10);
+const todayIso = () => formatISODate(new Date());
 
 /**
  * Rechtsvormen waarbij de winst niet automatisch van de ondernemer is, maar door
