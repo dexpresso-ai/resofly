@@ -11,7 +11,7 @@ ondertekend bericht naar een adres van de klant zodra er iets gebeurt — een
 factuur betaald, een nieuwe klant, een ticket van het portaal.
 
 Voor ontwikkelaars die ertegen bouwen staat de handleiding in
-[`docs/API.md`](docs/API.md). Dit document gaat over uitrollen en beheren.
+[`docs/API.md`](../API.md). Dit document gaat over uitrollen en beheren.
 
 ## Wat het is
 

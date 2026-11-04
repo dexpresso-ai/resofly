@@ -73,7 +73,7 @@ bewijsstuk. Boeken blijft één klik, of gaat vanzelf als je dat aanzet.
   terugval als de migratie nog niet gedraaid is, `downloadStoredFile` in `lib/r2.ts`.
 - **CI**: Deno-typecheck op `mail-inbound`, `invoice-inbox` en `invoice-extract`.
 
-Zie [INKOOPFACTUREN_INBOX_SETUP_2026-09-18.md](INKOOPFACTUREN_INBOX_SETUP_2026-09-18.md) voor
+Zie [INKOOPFACTUREN_INBOX_SETUP_2026-09-18.md](../setup/INKOOPFACTUREN_INBOX_SETUP_2026-09-18.md) voor
 de deploy (migratie, functions, beide workers, secrets) en de test.
 
 ## 4 · Vervolg (zelfde dag): badge, live, mailtekst, opruimronde, Gerrie

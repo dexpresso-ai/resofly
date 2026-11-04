@@ -30,7 +30,7 @@ Gebruikers bouwen binnen Gerrie zelf **terugkerende agents** ("Routines") zonder
 
 ## 2. Kernprincipe: de veiligheidsinvariant blijft intact
 
-Gerrie voert vandaag **nooit** server-side schrijfacties uit. Een `propose_*`-tool bouwt alleen een gevalideerd `Proposal`; de browser voert het uit met de **eigen RLS-sessie** van de gebruiker (`GerrieActionHandlers` in [gerrie-api.ts](src/lib/gerrie-api.ts)). Een geplande agent draait terwijl niemand kijkt — dus we breken dat principe niet, we respecteren het:
+Gerrie voert vandaag **nooit** server-side schrijfacties uit. Een `propose_*`-tool bouwt alleen een gevalideerd `Proposal`; de browser voert het uit met de **eigen RLS-sessie** van de gebruiker (`GerrieActionHandlers` in [gerrie-api.ts](../../src/lib/gerrie-api.ts)). Een geplande agent draait terwijl niemand kijkt — dus we breken dat principe niet, we respecteren het:
 
 ```
 report-agent   → alleen lees-tools → digest. Niets muteert → geen goedkeuring.
@@ -67,7 +67,7 @@ flowchart TD
   UI -->|Goedkeuren| CONFIRM["confirmGerrieAction → apply-laag met eigen sessie"]
 ```
 
-De runner is één **dual-path** edge function, exact de vorm van [web-push/index.ts](supabase/functions/web-push/index.ts): het `?cron=`-pad is server-to-server (cron-secret), het app-pad gebruikt de bestaande JWT-auth.
+De runner is één **dual-path** edge function, exact de vorm van [web-push/index.ts](../../supabase/functions/web-push/index.ts): het `?cron=`-pad is server-to-server (cron-secret), het app-pad gebruikt de bestaande JWT-auth.
 
 ---
 
@@ -75,17 +75,17 @@ De runner is één **dual-path** edge function, exact de vorm van [web-push/inde
 
 | Nodig | Hergebruik (bestaat al) |
 |---|---|
-| De agent-"hersenen" | `runAgent`, `TOOL_DEFINITIONS`, `runTool`, `orgTable`, `buildProposal` in [gerrie-agent/index.ts](supabase/functions/gerrie-agent/index.ts) |
+| De agent-"hersenen" | `runAgent`, `TOOL_DEFINITIONS`, `runTool`, `orgTable`, `buildProposal` in [gerrie-agent/index.ts](../../supabase/functions/gerrie-agent/index.ts) |
 | Niet-streamende Claude-call (geen browser) | `callAnthropicPlan` in dezelfde file (headless request-pad) |
 | Kostenplafond + verbruik | `checkUserBudget`, `recordUsage`, `costUsd`, `ai_usage` |
 | Goedkeuringswachtrij | `ai_action_audit` (`proposed→executed`) + `confirmAction` |
-| Due-time lease/claim | `claim_due_flow_enrollments` ([email_flows.sql:285](supabase/migrations/20260709000000_email_flows.sql)) → kopie `claim_due_agents` |
+| Due-time lease/claim | `claim_due_flow_enrollments` ([email_flows.sql:285](../../supabase/migrations/20260709000000_email_flows.sql)) → kopie `claim_due_agents` |
 | Hardening-scaffold | `prevent_organization_id_change`, draft-lock, partial due-index, status-state-machine uit email_flows |
 | Cron-secret + dual-path | `assertCronSecret`/`timingSafeEqual` + `?cron=`-handler uit web-push |
-| Edge-auth helpers | `createAdminClient`, `requireUser`, `requireOrganizationAccess`, `assertWriteRole`, `makeCors`, `HttpError` in [edgeAuth.ts](supabase/functions/_shared/edgeAuth.ts) |
-| E-mailbezorging | `sendViaResend` in [_shared/resend.ts](supabase/functions/_shared/resend.ts) |
-| UI-bouwstenen | `LaneCard`, `statusPill`, AI-tegoedmeter, `QUICK_MISSIONS`-chips, `proposalLabel`, `gerrieActions` in [GerrieCommandCenter.tsx](src/features/GerrieCommandCenter.tsx) |
-| Client apply-laag | `GerrieActionHandlers` + `confirmGerrieAction` in [gerrie-api.ts](src/lib/gerrie-api.ts) |
+| Edge-auth helpers | `createAdminClient`, `requireUser`, `requireOrganizationAccess`, `assertWriteRole`, `makeCors`, `HttpError` in [edgeAuth.ts](../../supabase/functions/_shared/edgeAuth.ts) |
+| E-mailbezorging | `sendViaResend` in [_shared/resend.ts](../../supabase/functions/_shared/resend.ts) |
+| UI-bouwstenen | `LaneCard`, `statusPill`, AI-tegoedmeter, `QUICK_MISSIONS`-chips, `proposalLabel`, `gerrieActions` in [GerrieCommandCenter.tsx](../../src/features/GerrieCommandCenter.tsx) |
+| Client apply-laag | `GerrieActionHandlers` + `confirmGerrieAction` in [gerrie-api.ts](../../src/lib/gerrie-api.ts) |
 
 **Conclusie:** ~80% is hergebruik. De echte nieuwbouw is (a) de brein-extractie, (b) de runner-veiligheidslogica, en (c) tijdzone/DST-correcte herplanning.
 
@@ -222,7 +222,7 @@ Dual-path, zoals web-push. Volgorde is bewust:
 
 ### 1d. Frontend — Routines-tab in het Commandocentrum
 
-Nieuwe tab naast het missiebord in [GerrieCommandCenter.tsx](src/features/GerrieCommandCenter.tsx), hergebruikt de bestaande `cc-root`/`cc-rail`-layout en componenten:
+Nieuwe tab naast het missiebord in [GerrieCommandCenter.tsx](../../src/features/GerrieCommandCenter.tsx), hergebruikt de bestaande `cc-root`/`cc-rail`-layout en componenten:
 
 - **Templates-strip:** chips zoals `QUICK_MISSIONS`, bv. "Wekelijks factuuroverzicht", "Wekelijkse herinneringen", "Maandelijkse omzet-samenvatting" → prefill de create-modal.
 - **Aanmaak-modal:** naam, opdracht (gewone taal), modus (`report`/`propose`), tool-allowlist (eenvoudige selectie), schema-preset (dagelijks/wekelijks/maandelijks + uur + tijdzone), bezorgkanaal, budget per run. Alleen zichtbaar voor owner/admin.

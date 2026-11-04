@@ -10,7 +10,7 @@ sinds dezelfde dag is het ook **ingebouwd in de app** — zie [Ingebouwd](#ingeb
 **Vervolg (2026-10-05):** bovenop Belicht ligt nu de Cockpit-laag — de opbouw en beeldtaal van
 Value Backlog (donker commandovlak, zwevend werkvlak, dashboard als cockpit) in dezelfde kleuren,
 en de werkruimte staat weer helemaal in Poppins. Zie
-[CHANGELOG_LOOK_AND_FEEL_COCKPIT_2026-10-05.md](CHANGELOG_LOOK_AND_FEEL_COCKPIT_2026-10-05.md).
+[CHANGELOG_LOOK_AND_FEEL_COCKPIT_2026-10-05.md](../changelog/CHANGELOG_LOOK_AND_FEEL_COCKPIT_2026-10-05.md).
 
 ## Bekijken
 
@@ -23,15 +23,15 @@ en de werkruimte staat weer helemaal in Poppins. Zie
 De schermen gebruiken de voorbeeldgegevens uit de testomgeving (`tests/mobile/mock/seed.mjs`):
 Studio Lopik, Bakkerij De Korenaar, Restaurant Bloem, factuur 2026-040, enzovoort.
 
-![Hetzelfde dashboard, links Nacht en rechts Dag](docs/design-voorstel-belicht/beelden/vergelijk-nacht-dag.jpg)
+![Hetzelfde dashboard, links Nacht en rechts Dag](../design-voorstel-belicht/beelden/vergelijk-nacht-dag.jpg)
 
 | Nacht | Dag |
 |---|---|
-| ![Dashboard in Nacht](docs/design-voorstel-belicht/beelden/dashboard-nacht.jpg) | ![Dashboard in Dag](docs/design-voorstel-belicht/beelden/dashboard-dag.jpg) |
-| ![Project met takenbord in Nacht](docs/design-voorstel-belicht/beelden/project-nacht.jpg) | ![Facturen met factuurvoorbeeld in Dag](docs/design-voorstel-belicht/beelden/facturen-dag.jpg) |
-| ![Gerrie met wachtrij in Nacht](docs/design-voorstel-belicht/beelden/gerrie-nacht.jpg) | ![Agenda, week 39, in Dag](docs/design-voorstel-belicht/beelden/agenda-dag.jpg) |
+| ![Dashboard in Nacht](../design-voorstel-belicht/beelden/dashboard-nacht.jpg) | ![Dashboard in Dag](../design-voorstel-belicht/beelden/dashboard-dag.jpg) |
+| ![Project met takenbord in Nacht](../design-voorstel-belicht/beelden/project-nacht.jpg) | ![Facturen met factuurvoorbeeld in Dag](../design-voorstel-belicht/beelden/facturen-dag.jpg) |
+| ![Gerrie met wachtrij in Nacht](../design-voorstel-belicht/beelden/gerrie-nacht.jpg) | ![Agenda, week 39, in Dag](../design-voorstel-belicht/beelden/agenda-dag.jpg) |
 
-![Mobiel: dashboard in Nacht en Dag, en Gerrie die een herinnering klaarzet](docs/design-voorstel-belicht/beelden/mobiel.jpg)
+![Mobiel: dashboard in Nacht en Dag, en Gerrie die een herinnering klaarzet](../design-voorstel-belicht/beelden/mobiel.jpg)
 
 ## Wat er verandert (gemeten aan de werkruimte nu, desktop 1440 × 900)
 

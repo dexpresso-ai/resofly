@@ -22,7 +22,7 @@ Het prototype speelt op dezelfde dag en met dezelfde gegevens als het Zenit-voor
 donderdag 22 oktober 2026 om 09:41, uit de testomgeving (`tests/mobile/mock/seed.mjs`). Zo leg je de
 twee naast elkaar.
 
-![De voorstelpagina in Nacht: Alles stroomt.](docs/design-voorstel-stroom/beelden/hero-nacht.jpg)
+![De voorstelpagina in Nacht: Alles stroomt.](../design-voorstel-stroom/beelden/hero-nacht.jpg)
 
 ## Het idee
 
@@ -75,14 +75,14 @@ materiaal: glas op een levend lichtveld.
 
 | Nacht | Dag |
 |---|---|
-| ![Vandaag in Nacht](docs/design-voorstel-stroom/beelden/vandaag-nacht.jpg) | ![Vandaag in Dag](docs/design-voorstel-stroom/beelden/vandaag-dag.jpg) |
-| ![Het eiland bouwt een factuur](docs/design-voorstel-stroom/beelden/eiland-nacht.jpg) | ![Gerrie antwoordt in het eiland](docs/design-voorstel-stroom/beelden/vraag-dag.jpg) |
-| ![Akkoord, met tien seconden om terug te halen](docs/design-voorstel-stroom/beelden/akkoord-nacht.jpg) | ![De beslismodus](docs/design-voorstel-stroom/beelden/beslissen-dag.jpg) |
-| ![Karim betaalt: de kraal reist naar Betaald](docs/design-voorstel-stroom/beelden/betaling-nacht.jpg) | ![Geld: de geldstroom en factuur 2026-041 als papier](docs/design-voorstel-stroom/beelden/geld-dag.jpg) |
-| ![Klant 360: Restaurant Bloem met de knoop in de stroomlijn](docs/design-voorstel-stroom/beelden/klant-nacht.jpg) | ![Agenda na Plan met Gerrie](docs/design-voorstel-stroom/beelden/agenda-nacht.jpg) |
-| ![Inloggen: de stroom onder het matglas door](docs/design-voorstel-stroom/beelden/inloggen-nacht.jpg) | ![De voorstelpagina in Dag](docs/design-voorstel-stroom/beelden/hero-dag.jpg) |
+| ![Vandaag in Nacht](../design-voorstel-stroom/beelden/vandaag-nacht.jpg) | ![Vandaag in Dag](../design-voorstel-stroom/beelden/vandaag-dag.jpg) |
+| ![Het eiland bouwt een factuur](../design-voorstel-stroom/beelden/eiland-nacht.jpg) | ![Gerrie antwoordt in het eiland](../design-voorstel-stroom/beelden/vraag-dag.jpg) |
+| ![Akkoord, met tien seconden om terug te halen](../design-voorstel-stroom/beelden/akkoord-nacht.jpg) | ![De beslismodus](../design-voorstel-stroom/beelden/beslissen-dag.jpg) |
+| ![Karim betaalt: de kraal reist naar Betaald](../design-voorstel-stroom/beelden/betaling-nacht.jpg) | ![Geld: de geldstroom en factuur 2026-041 als papier](../design-voorstel-stroom/beelden/geld-dag.jpg) |
+| ![Klant 360: Restaurant Bloem met de knoop in de stroomlijn](../design-voorstel-stroom/beelden/klant-nacht.jpg) | ![Agenda na Plan met Gerrie](../design-voorstel-stroom/beelden/agenda-nacht.jpg) |
+| ![Inloggen: de stroom onder het matglas door](../design-voorstel-stroom/beelden/inloggen-nacht.jpg) | ![De voorstelpagina in Dag](../design-voorstel-stroom/beelden/hero-dag.jpg) |
 
-![Mobiel: Vandaag in Nacht, beslissen in Dag, en Gerrie die een factuur bouwt](docs/design-voorstel-stroom/beelden/mobiel.jpg)
+![Mobiel: Vandaag in Nacht, beslissen in Dag, en Gerrie die een factuur bouwt](../design-voorstel-stroom/beelden/mobiel.jpg)
 
 Het prototype is één en hetzelfde op elk formaat: met container queries kiest het zelf zijn
 telefoonopbouw (het eiland bovenin, een dock met het orbje van Gerrie in het midden). De telefoons
@@ -122,7 +122,7 @@ Belicht en Zenit. Inkt 2 en 3 zijn een tikje steviger gemaakt voor glas. Nieuw z
 | `--focus` | `#F7C548` | `#855800` | de focusring (in Dag goud-als-tekst, zodat hij 3:1 haalt) |
 | `--on-ai` · `--hello-fill` · `--field-shadow` | | | tekst op poollicht · de naam in de groet · tekst los op het licht |
 
-![De kleuren in Nacht en Dag, en het nagerekende contrast](docs/design-voorstel-stroom/beelden/kleuren.jpg)
+![De kleuren in Nacht en Dag, en het nagerekende contrast](../design-voorstel-stroom/beelden/kleuren.jpg)
 
 **Contrast.** Elke tekstkleur haalt AA (≥ 4,5:1) op glas boven het felste licht dat onder een kaart
 mag komen: in Nacht 30% zon of het volle poollicht, in Dag 40% van de donkerste klantkleur. De

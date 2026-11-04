@@ -8,7 +8,7 @@ Antwoorden van klanten op een verzonden klant-mail komen nu terug onder de klant
 via een inbound-domein dat wij beheren, opgevangen door **Cloudflare Email
 Routing** (gratis) → een **Email Worker** → de Supabase-functie **`mail-inbound`**.
 
-Zie [CLOUDFLARE_EMAIL_INBOUND_SETUP_2026-06-19.md](CLOUDFLARE_EMAIL_INBOUND_SETUP_2026-06-19.md)
+Zie [CLOUDFLARE_EMAIL_INBOUND_SETUP_2026-06-19.md](../setup/CLOUDFLARE_EMAIL_INBOUND_SETUP_2026-06-19.md)
 voor de DNS/Cloudflare-stappen en de deploy.
 
 ## Bestanden

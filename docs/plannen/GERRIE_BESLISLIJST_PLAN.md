@@ -1,6 +1,6 @@
 # Gerrie signaleert — bouwplan (een beslislijst die Gerrie zelf vult)
 
-> **Status:** PO akkoord met alle voorstellen (2026-09-13). **Fase 0 GEBOUWD** (2026-09-13, [changelog](CHANGELOG_GERRIE_BESLISLIJST_FASE0_2026-09-13.md)). **Fase 1 GEBOUWD** (2026-09-14, [changelog](CHANGELOG_GERRIE_BESLISLIJST_FASE1_2026-09-14.md), operator-stappen in [GERRIE_BESLISLIJST_SETUP.md](GERRIE_BESLISLIJST_SETUP.md)). Fase 2 nog niet gestart. In de app heet het blok *Te beslissen* en de tab *Beslissingen*.
+> **Status:** PO akkoord met alle voorstellen (2026-09-13). **Fase 0 GEBOUWD** (2026-09-13, [changelog](../changelog/CHANGELOG_GERRIE_BESLISLIJST_FASE0_2026-09-13.md)). **Fase 1 GEBOUWD** (2026-09-14, [changelog](../changelog/CHANGELOG_GERRIE_BESLISLIJST_FASE1_2026-09-14.md), operator-stappen in [GERRIE_BESLISLIJST_SETUP.md](../setup/GERRIE_BESLISLIJST_SETUP.md)). Fase 2 nog niet gestart. In de app heet het blok *Te beslissen* en de tab *Beslissingen*.
 > **Wat dit is:** het dashboardblok "Vereist je aandacht" telt vandaag zes dingen en stuurt je naar een lijst. Dit plan vervangt dat "ga zelf kijken" door kaarten mét een klaargezet voorstel: *Offerte 2026-041 is drie keer geopend maar niet beantwoord — hier is de opvolgmail, wil je hem versturen?* Gerrie wacht niet meer tot je iets vraagt.
 > **Twee vaste vertrekpunten, overgenomen uit de routines:**
 > 1. **Er gebeurt niets zonder akkoord.** Elke kaart is een voorstel; uitvoeren doet de browser met de sessie van degene die klikt, exact zoals de goedkeurwachtrij nu werkt.
@@ -54,7 +54,7 @@ JIJ         →  Akkoord: executeProposal in de browser met JOUW sessie,
 
 Drie regels die het hele plan dragen:
 
-1. **Niets muteert zonder klik.** Identiek aan [AgentApprovals.tsx:91-105](src/components/AgentApprovals.tsx): voorstel → `executeProposal` → status flippen. De edge function schrijft nooit in klant-, offerte- of taaktabellen.
+1. **Niets muteert zonder klik.** Identiek aan [AgentApprovals.tsx:91-105](../../src/components/AgentApprovals.tsx): voorstel → `executeProposal` → status flippen. De edge function schrijft nooit in klant-, offerte- of taaktabellen.
 2. **Feiten komen uit de app, het oordeel van Gerrie.** De "waarom"-regels op een kaart (`evidence`) worden in trap 1 uit de database samengesteld en nooit door het model geschreven. Gerrie mag een mail formuleren; hij mag niet beweren dat een offerte drie keer is geopend.
 3. **Eerst regels, dan AI.** Een kaart gaat alleen door het model als er tekst of oordeel nodig is. Dat houdt het maandtegoed van een Starter-account (€ 2) buiten schot: een Gerrie-kaart kost op Haiku ≈ € 0,02–0,04, een regelkaart niets.
 
@@ -90,7 +90,7 @@ flowchart TD
   UI -->|Later / Niet meer| RES2["snoozed · dismissed (+ ai_decision_mutes)"]
 ```
 
-De edge function is dezelfde dual-path-vorm als [gerrie-agent-runner/index.ts:99-153](supabase/functions/gerrie-agent-runner/index.ts): het `?cron=`-pad is server-to-server, het app-pad (`sweep_now`, `evaluate_now`) gebruikt `requireUser` + `requireOrganizationAccess` uit gerrieCore — **niet** de gelijknamige helpers uit `edgeAuth.ts`, die een andere signatuur hebben.
+De edge function is dezelfde dual-path-vorm als [gerrie-agent-runner/index.ts:99-153](../../supabase/functions/gerrie-agent-runner/index.ts): het `?cron=`-pad is server-to-server, het app-pad (`sweep_now`, `evaluate_now`) gebruikt `requireUser` + `requireOrganizationAccess` uit gerrieCore — **niet** de gelijknamige helpers uit `edgeAuth.ts`, die een andere signatuur hebben.
 
 ---
 
@@ -98,22 +98,22 @@ De edge function is dezelfde dual-path-vorm als [gerrie-agent-runner/index.ts:99
 
 | Nodig | Hergebruik (bestaat al) |
 |---|---|
-| DB-gebeurtenis → duurzame rij, zonder de bron-insert te kunnen breken | het `push_on_*_insert`-patroon in [20260710000000_web_push.sql:211-247](supabase/migrations/20260710000000_web_push.sql): `security definer`, hele body in `begin … exception when others then raise warning … end`, `after insert`, `return null` |
-| Claim/lease op een wachtrij | `claim_due_agents` in [20260715000000_gerrie_scheduled_agents.sql:241-272](supabase/migrations/20260715000000_gerrie_scheduled_agents.sql) (`for update skip locked`, lease 10 min los van het schema, `p_limit` geklemd, alleen service-role) |
-| Cron-tik met geheim, dual-path | `assertCronSecret`/`timingSafeEqual` in [gerrie-agent-runner/index.ts:774-785](supabase/functions/gerrie-agent-runner/index.ts); cron-SQL als operator-stap in een `*_SETUP.md` (nooit in een migratie) |
-| Het brein, headless | `runAgent(ctx, history, instruction, emit, modelKind, allowedToolNames)` in [gerrieCore.ts:374-506](supabase/functions/_shared/gerrieCore.ts): breekt af op het eerste `propose_*`, geeft `steps` terug voor een logboek |
-| Context met modulerechten van de actor | `buildContext(organizationId, role, user)` [gerrieCore.ts:4835-4855](supabase/functions/_shared/gerrieCore.ts) |
-| Budget + verbruik | `checkUserBudget`, `recordUsage`, `remainingFraction` [gerrieCore.ts:4905-4985](supabase/functions/_shared/gerrieCore.ts); fail-closed zoals de runner op [:250-258](supabase/functions/gerrie-agent-runner/index.ts) |
-| Voorstel uit een registry-handeling, zonder schrijven | `buildActionProposal(ctx, action_id, input)` [gerrieCore.ts:2427-2451](supabase/functions/_shared/gerrieCore.ts) → `ActionProposal` met `risk` en `warning` |
-| Voorsteltabel / auditspoor | `ai_action_audit` ([20260623000002:60-72](supabase/migrations/20260623000002_gerrie_ai_assistant.sql)), status `proposed → executed/failed/cancelled` |
-| Kaart renderen en uitvoeren | `proposalLabel`, `openProposal`, `executeProposal` in [gerrie-proposals.ts](src/lib/gerrie-proposals.ts); `GerrieActionHandlers` + `gerrieActions` in [main.tsx:2498](src/main.tsx); afvinklijsten via `AgentBatchBoard` + `ApprovalChecklist` |
-| Kaart-UI | `.ag-queue-*` uit [AgentApprovals.tsx](src/components/AgentApprovals.tsx) en `.attention-*` uit [Dashboard.tsx:340-358](src/features/Dashboard.tsx); `KIND_ICON`-map |
-| Live bijwerken + toast | kanaalpatroon uit [ClientEmailNotifications.tsx:56-66](src/components/ClientEmailNotifications.tsx) (`setAuth` vóór `channel`, `filter: organization_id=eq.`), toast-CSS `.email-toast*` uit [TicketNotifications.tsx:114-135](src/components/TicketNotifications.tsx) |
-| Push-bezorging | `push_enqueue(p_org, p_event_type, p_recipients, p_payload)` + `push_org_member_ids` [20260710000000:167-206](supabase/migrations/20260710000000_web_push.sql) |
-| Rechten | `can_read_org`, `can_admin_org` (FRESH_INSTALL_COMPLETE_SCHEMA.sql:163-179), `can_read_module`/`can_write_module` [20260730100000:141-149](supabase/migrations/20260730100000_module_permissions.sql) |
-| Tijdzone/DST voor de veegronde | `localYmd`, `wallToUtc`, `computeNextRunAt` in [gerrie-agent-runner/index.ts:496-537](supabase/functions/gerrie-agent-runner/index.ts) — nu privé in de runner, verhuizen naar `_shared` (Fase 0) |
-| Actiepunten → taken | `summary_json.actiepunten` uit [claudeSummary.ts:32](supabase/functions/_shared/claudeSummary.ts) + bestaande handler `onCreateTask` |
-| Bestaande leeshandelingen | `meeting_recording.list` ([calendar.ts:1341](supabase/functions/_shared/actions/calendar.ts)), `client_email.list` ([clients.ts:421](supabase/functions/_shared/actions/clients.ts), per klant), `inbox.list`/`inbox.link` ([clients.ts:339](supabase/functions/_shared/actions/clients.ts)), `meeting_recording.send_summary`, `gallery.list_favorites`, `quote.history` |
+| DB-gebeurtenis → duurzame rij, zonder de bron-insert te kunnen breken | het `push_on_*_insert`-patroon in [20260710000000_web_push.sql:211-247](../../supabase/migrations/20260710000000_web_push.sql): `security definer`, hele body in `begin … exception when others then raise warning … end`, `after insert`, `return null` |
+| Claim/lease op een wachtrij | `claim_due_agents` in [20260715000000_gerrie_scheduled_agents.sql:241-272](../../supabase/migrations/20260715000000_gerrie_scheduled_agents.sql) (`for update skip locked`, lease 10 min los van het schema, `p_limit` geklemd, alleen service-role) |
+| Cron-tik met geheim, dual-path | `assertCronSecret`/`timingSafeEqual` in [gerrie-agent-runner/index.ts:774-785](../../supabase/functions/gerrie-agent-runner/index.ts); cron-SQL als operator-stap in een `*_SETUP.md` (nooit in een migratie) |
+| Het brein, headless | `runAgent(ctx, history, instruction, emit, modelKind, allowedToolNames)` in [gerrieCore.ts:374-506](../../supabase/functions/_shared/gerrieCore.ts): breekt af op het eerste `propose_*`, geeft `steps` terug voor een logboek |
+| Context met modulerechten van de actor | `buildContext(organizationId, role, user)` [gerrieCore.ts:4835-4855](../../supabase/functions/_shared/gerrieCore.ts) |
+| Budget + verbruik | `checkUserBudget`, `recordUsage`, `remainingFraction` [gerrieCore.ts:4905-4985](../../supabase/functions/_shared/gerrieCore.ts); fail-closed zoals de runner op [:250-258](../../supabase/functions/gerrie-agent-runner/index.ts) |
+| Voorstel uit een registry-handeling, zonder schrijven | `buildActionProposal(ctx, action_id, input)` [gerrieCore.ts:2427-2451](../../supabase/functions/_shared/gerrieCore.ts) → `ActionProposal` met `risk` en `warning` |
+| Voorsteltabel / auditspoor | `ai_action_audit` ([20260623000002:60-72](../../supabase/migrations/20260623000002_gerrie_ai_assistant.sql)), status `proposed → executed/failed/cancelled` |
+| Kaart renderen en uitvoeren | `proposalLabel`, `openProposal`, `executeProposal` in [gerrie-proposals.ts](../../src/lib/gerrie-proposals.ts); `GerrieActionHandlers` + `gerrieActions` in [main.tsx:2498](../../src/main.tsx); afvinklijsten via `AgentBatchBoard` + `ApprovalChecklist` |
+| Kaart-UI | `.ag-queue-*` uit [AgentApprovals.tsx](../../src/components/AgentApprovals.tsx) en `.attention-*` uit [Dashboard.tsx:340-358](../../src/features/Dashboard.tsx); `KIND_ICON`-map |
+| Live bijwerken + toast | kanaalpatroon uit [ClientEmailNotifications.tsx:56-66](../../src/components/ClientEmailNotifications.tsx) (`setAuth` vóór `channel`, `filter: organization_id=eq.`), toast-CSS `.email-toast*` uit [TicketNotifications.tsx:114-135](../../src/components/TicketNotifications.tsx) |
+| Push-bezorging | `push_enqueue(p_org, p_event_type, p_recipients, p_payload)` + `push_org_member_ids` [20260710000000:167-206](../../supabase/migrations/20260710000000_web_push.sql) |
+| Rechten | `can_read_org`, `can_admin_org` (FRESH_INSTALL_COMPLETE_SCHEMA.sql:163-179), `can_read_module`/`can_write_module` [20260730100000:141-149](../../supabase/migrations/20260730100000_module_permissions.sql) |
+| Tijdzone/DST voor de veegronde | `localYmd`, `wallToUtc`, `computeNextRunAt` in [gerrie-agent-runner/index.ts:496-537](../../supabase/functions/gerrie-agent-runner/index.ts) — nu privé in de runner, verhuizen naar `_shared` (Fase 0) |
+| Actiepunten → taken | `summary_json.actiepunten` uit [claudeSummary.ts:32](../../supabase/functions/_shared/claudeSummary.ts) + bestaande handler `onCreateTask` |
+| Bestaande leeshandelingen | `meeting_recording.list` ([calendar.ts:1341](../../supabase/functions/_shared/actions/calendar.ts)), `client_email.list` ([clients.ts:421](../../supabase/functions/_shared/actions/clients.ts), per klant), `inbox.list`/`inbox.link` ([clients.ts:339](../../supabase/functions/_shared/actions/clients.ts)), `meeting_recording.send_summary`, `gallery.list_favorites`, `quote.history` |
 
 **Conclusie:** ruim 70% is hergebruik. De echte nieuwbouw is (a) de signaaltabel met triggers en veegronde, (b) de regelset per kaartsoort, (c) de kaart met *Later/Niet meer* en de instellingen. Het brein, de wachtrij, de uitvoerlaag, de push en het cron-patroon liggen er.
 
@@ -140,13 +140,13 @@ Bij rijping controleert de regel altijd eerst of het signaal nog geldt (offerte 
 
 ## Fase 0 — Voorbereiding (voorwaarde, ~2-3 dagen)
 
-**Waarom eerst:** twee dingen moeten in de frontend liggen vóórdat de eerste kaart kan verschijnen (deploy-volgorde: frontend eerst, anders crasht de wachtrij op een onbekend voorsteltype — zie [CHANGELOG_GERRIE_HANDELINGENREGISTRY_2026-08-22.md](CHANGELOG_GERRIE_HANDELINGENREGISTRY_2026-08-22.md), "Nog te doen").
+**Waarom eerst:** twee dingen moeten in de frontend liggen vóórdat de eerste kaart kan verschijnen (deploy-volgorde: frontend eerst, anders crasht de wachtrij op een onbekend voorsteltype — zie [CHANGELOG_GERRIE_HANDELINGENREGISTRY_2026-08-22.md](../changelog/CHANGELOG_GERRIE_HANDELINGENREGISTRY_2026-08-22.md), "Nog te doen").
 
 **Scope:**
-1. **Batch-voorsteltype `create_tasks`** (server én browser): `{ type:'create_tasks', project_id, project_name, client_id, source:{kind:'meeting', recording_id, title, date}, items:[{title, description, priority?}] }`. Server: `CreateTasksProposal` in de `Proposal`-union + `buildCreateTasksProposal` (valideert, cap 25, titels ≤ 120 tekens). Browser: `describeProposal`-case in [gerrie-proposals.ts](src/lib/gerrie-proposals.ts), herkenning in `asBatchProposal` ([AgentBatchBoard.tsx:27-40](src/components/AgentBatchBoard.tsx)), per regel `h.onCreateTask` via de gedeelde `ApprovalChecklist` (knoplabel *Aanmaken*).
+1. **Batch-voorsteltype `create_tasks`** (server én browser): `{ type:'create_tasks', project_id, project_name, client_id, source:{kind:'meeting', recording_id, title, date}, items:[{title, description, priority?}] }`. Server: `CreateTasksProposal` in de `Proposal`-union + `buildCreateTasksProposal` (valideert, cap 25, titels ≤ 120 tekens). Browser: `describeProposal`-case in [gerrie-proposals.ts](../../src/lib/gerrie-proposals.ts), herkenning in `asBatchProposal` ([AgentBatchBoard.tsx:27-40](../../src/components/AgentBatchBoard.tsx)), per regel `h.onCreateTask` via de gedeelde `ApprovalChecklist` (knoplabel *Aanmaken*).
 2. **Twee leeshandelingen in de registry** (alleen lezen, dus geen browser-uitvoerder): `client_email.recent_inbound` (org-breed: `since`, `unread_only`, `limit`; onderwerp + afzender + eerste 300 tekens) en `meeting_recording.recent` (afgerond sinds `since`, met samenvatting). Eén regel in de systeemprompt: Gerrie kan meelezen in inkomende mail en notulen.
 3. **Schema-helpers delen:** `localYmd`/`wallToUtc` uit de runner naar `_shared/gerrieCore.ts` (of `_shared/schedule.ts`) zodat de veegronde dezelfde DST-correcte rekensom gebruikt. Gedragsneutraal.
-4. **`ai_action_audit.signal_id uuid null`** + partial index — in de Fase-1-migratie, maar hier al ontworpen: de filter in `listPendingAgentApprovals` ([gerrie-api.ts:881](src/lib/gerrie-api.ts)) blijft `agent_run_id is not null`, dus kaarten verschijnen **niet** dubbel in "Jouw akkoord".
+4. **`ai_action_audit.signal_id uuid null`** + partial index — in de Fase-1-migratie, maar hier al ontworpen: de filter in `listPendingAgentApprovals` ([gerrie-api.ts:881](../../src/lib/gerrie-api.ts)) blijft `agent_run_id is not null`, dus kaarten verschijnen **niet** dubbel in "Jouw akkoord".
 
 **Testplan:** `npm run test` (actionRegistry-test dekt de twee leeshandelingen automatisch), chat-regressie op één `create_tasks`-voorstel via "Nu uitvoeren".
 
@@ -225,7 +225,7 @@ Indexen: **partial unique** `(organization_id, signal_key) where status in ('que
 | `model_kind`, `cost_usd`, `trace` | text, numeric(10,4), jsonb | alleen bij `origin='gerrie'`: model, kosten, en de `steps` uit `runAgent` als logboek |
 | `created_at`, `updated_at` | | |
 
-Indexen: `(organization_id, status, created_at desc)`; `(organization_id, kind, entity_id) where status in ('open','snoozed')`. **Realtime:** `alter publication supabase_realtime add table public.ai_decisions` (patroon [20260701000001:88-98](supabase/migrations/20260701000001_client_email_reads.sql)).
+Indexen: `(organization_id, status, created_at desc)`; `(organization_id, kind, entity_id) where status in ('open','snoozed')`. **Realtime:** `alter publication supabase_realtime add table public.ai_decisions` (patroon [20260701000001:88-98](../../supabase/migrations/20260701000001_client_email_reads.sql)).
 
 RLS (handgeschreven, want de module staat per rij en `apply_module_gate` werkt per tabel): select `can_read_org(organization_id) and can_read_module(organization_id, module) and can_read_module(organization_id, 'gerrie')`. Geen insert/update/delete-policies: schrijven doet de service-role, afhandelen loopt via de RPC hieronder.
 
@@ -295,7 +295,7 @@ $$);
 
 ### 1e. Push-digest (vier plekken, één wijziging)
 
-Nieuw gebeurtenistype `decision_digest`. Per de les uit [GERRIE_ROUTINES_PLAN.md](GERRIE_ROUTINES_PLAN.md) (risico 6) en het geheugen over `attachments.entity_type`: in **één** migratie + **één** frontend-commit op alle vier de plekken — CHECK op `notification_outbox.event_type`, CHECK op `notification_preferences.event_type`, `PushEventType` en `PUSH_EVENTS` in [push-api.ts:14-29](src/lib/push-api.ts) (label *Dagelijkse beslislijst*, uitzetbaar per gebruiker in Instellingen → Meldingen). Enqueue gebeurt in de veegronde, hoogstens één per org per dag.
+Nieuw gebeurtenistype `decision_digest`. Per de les uit [GERRIE_ROUTINES_PLAN.md](GERRIE_ROUTINES_PLAN.md) (risico 6) en het geheugen over `attachments.entity_type`: in **één** migratie + **één** frontend-commit op alle vier de plekken — CHECK op `notification_outbox.event_type`, CHECK op `notification_preferences.event_type`, `PushEventType` en `PUSH_EVENTS` in [push-api.ts:14-29](../../src/lib/push-api.ts) (label *Dagelijkse beslislijst*, uitzetbaar per gebruiker in Instellingen → Meldingen). Enqueue gebeurt in de veegronde, hoogstens één per org per dag.
 
 ### 1f. Tests
 
@@ -320,7 +320,7 @@ Nieuw gebeurtenistype `decision_digest`. Per de les uit [GERRIE_ROUTINES_PLAN.md
 ## Fase 2 — Bereik & leren (~2-3 weken, na gebruik van v1)
 
 - **Bankkaart** `bank_match_suggested` (`bank_transactions.status → 'suggested'` met `matched_invoice_id`, voorstel `action:bank_transaction.book`) zodra matchen automatisch loopt na een sync; tot die tijd is het een kaart over iets wat je net zelf deed.
-- **Persoonlijke kaarten** (`assignee_user_id`): *vul mijn week* voor wie taken heeft laten liggen (`proposeTimeBlocks` uit [planning.ts:531](src/lib/planning.ts) draait in de browser bij *Openen*), "jouw vergadering morgen heeft geen klant/project".
+- **Persoonlijke kaarten** (`assignee_user_id`): *vul mijn week* voor wie taken heeft laten liggen (`proposeTimeBlocks` uit [planning.ts:531](../../src/lib/planning.ts) draait in de browser bij *Openen*), "jouw vergadering morgen heeft geen klant/project".
 - **Push per kaart** met `severity='high'` (optioneel per gebruiker), naast de digest.
 - **Leren van *Niet meer*:** drie keer dezelfde soort wegklikken → voorstel om die soort uit te zetten; per klant een stil profiel (nooit een opvolgmail naar klant X).
 - **Eén wachtrij:** de feed en "Jouw akkoord" in één lijst met een filter, zodra beide bewezen zijn.
