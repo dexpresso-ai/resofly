@@ -155,6 +155,15 @@ test('applyFetch: een mislukte groep onthoudt de melding en blijft verder zoals 
   assert.ok(next.loaded.has('time'));
 });
 
+test('applyFetch: mislukt verversen van een groep die al in beeld staat, maakt hem verouderd', () => {
+  // Hij blijft getoond (geladen), maar wat er staat is van vóór de wijziging; en
+  // omdat hij mislukte, haalt de app hem niet vanzelf steeds opnieuw op.
+  const next = applyFetch(state(['bank']), { loaded: [], failed: [['bank', 'netwerkfout']], outdated: false });
+  assert.ok(next.loaded.has('bank'));
+  assert.ok(next.stale.has('bank'));
+  assert.deepEqual(groupsToFetch(next, ['bank']), []);
+});
+
 test('applyFetch zonder resultaat (alles vervallen) geeft dezelfde toestand terug', () => {
   const current = state(['time']);
   assert.equal(applyFetch(current, { loaded: [], failed: [], outdated: false }), current);

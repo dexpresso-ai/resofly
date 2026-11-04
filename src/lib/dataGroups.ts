@@ -179,7 +179,11 @@ export function applyFetch(
     failed.delete(group);
     if (result.outdated) stale.add(group); else stale.delete(group);
   }
-  for (const [group, message] of result.failed) failed.set(group, message);
+  for (const [group, message] of result.failed) {
+    failed.set(group, message);
+    // Al in beeld, maar niet ververst: wat er staat, is van vóór de wijziging.
+    if (loaded.has(group)) stale.add(group);
+  }
   return { loaded, stale, failed };
 }
 

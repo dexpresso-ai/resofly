@@ -52,6 +52,7 @@ import {
   sendTeamInvitationEmail,
   loadCoreData,
   loadDataGroup,
+  loggedMinutesForTask,
   loadFinanceClientDirectory,
   loadOrganizationContext,
   previewNextClientCode,
@@ -608,6 +609,24 @@ function BootLoading({ message = 'ResoFly is aan het laden…' }: { message?: st
 
 type DataGroupStatus = 'ready' | 'loading' | 'failed';
 
+/**
+ * Hoe lang een ronde van loadWorkspace mag duren. Er loopt er één tegelijk, dus
+ * één verbinding die nooit antwoordt (na slaapstand of een wissel van netwerk)
+ * zou anders alle volgende verversingen tegenhouden. Daarna gaat de volgende
+ * ronde toch; een te laat antwoord van deze komt niet meer in beeld.
+ */
+const WORKSPACE_ROUND_TIMEOUT_MS = 120_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 /** Een pagina wacht op een groep gegevens die nog niet geladen is (src/lib/dataGroups.ts). */
 function PageDataLoading() {
   return <div className="empty" role="status" aria-live="polite"><span className="boot-spinner" aria-hidden="true" /><div>Gegevens laden…</div></div>;
@@ -722,12 +741,22 @@ function App() {
   const orgEpochRef = useRef(0);
   /** Telt op bij elke ververs: wat daarvóór begon te laden, is daarna verouderd. */
   const freshnessRef = useRef(0);
-  /** Per groep het nummer van de laatste aanvraag: een ouder antwoord dat later binnenkomt, overschrijft geen nieuwer. */
+  /** Per groep het nummer van de laatste aanvraag. */
   const groupSeqRef = useRef<Partial<Record<DataGroup, number>>>({});
+  /** Per groep het nummer van het antwoord dat nu in `data` staat: een ouder antwoord dat later binnenkomt, overschrijft geen nieuwer. */
+  const groupAppliedSeqRef = useRef<Partial<Record<DataGroup, number>>>({});
   /** Lopende aanvragen per groep, zodat twee vragers er één delen. */
   const groupInflightRef = useRef(new Map<DataGroup, Promise<void>>());
-  /** Het nummer van de laatste ronde van loadWorkspace. */
-  const coreSeqRef = useRef(0);
+  /**
+   * loadWorkspace draait één ronde tegelijk. Vragen die binnenkomen terwijl er een
+   * loopt, krijgen samen één ronde erachteraan; `target` is de organisatie waar
+   * een wissel om vroeg (undefined: de organisatie die dan actief is).
+   */
+  const workspaceRunRef = useRef<{ running: boolean; queued: { target: string | null | undefined; waiters: Array<() => void> } | null }>({ running: false, queued: null });
+  /** De organisatie die nu actief is, ook vlak na een wissel die nog niet gerenderd is. */
+  const activeOrgIdRef = useRef<string | null>(localStorage.getItem(activeOrgStorageKey));
+  /** Telt op bij uitloggen: wat de vorige sessie nog aan het laden was, vervalt. */
+  const sessionEpochRef = useRef(0);
   const [organizationContext, setOrganizationContext] = useState<OrganizationContext>(emptyOrganizationContext);
   const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(() => localStorage.getItem(activeOrgStorageKey));
   // Open tabbladen blijven allemaal gemount (keep-alive); alleen het actieve is
@@ -1024,30 +1053,62 @@ function App() {
   }
 
   /**
-   * Organisatie en kern laden. Bij dezelfde organisatie is dit een ververs na een
-   * wijziging: wat de open pagina gebruikt, komt tegelijk met de kern opnieuw
-   * binnen, en de andere geladen groepen worden verouderd (die verversen zodra ze
-   * weer nodig zijn). Bij een andere organisatie: alleen de kern, en de groepen
-   * beginnen leeg; de pagina vraagt daarna zelf wat hij nodig heeft.
+   * Organisatie en kern laden. `target` is de organisatie waar een wissel om
+   * vraagt; zonder target is het een ververs van de organisatie die actief is.
+   *
+   * Er loopt één ronde tegelijk. Wie vraagt terwijl er een loopt, krijgt één
+   * ronde erachteraan (die kan pas na zijn wijziging beginnen); alle vragers van
+   * intussen delen die ronde. Zo komt elke ronde ook echt in beeld: met rondes
+   * die elkaar inhalen en wegstrepen, kwam bij een stroom verversingen niets meer
+   * binnen.
    */
-  async function loadWorkspace(preferredOrganizationId = activeOrganizationId) {
-    const seq = ++coreSeqRef.current;
+  function loadWorkspace(target?: string | null): Promise<void> {
+    const run = workspaceRunRef.current;
+    if (!run.running) return runWorkspaceRound(target);
+    return new Promise(resolve => {
+      if (!run.queued) run.queued = { target, waiters: [resolve] };
+      else {
+        // Een wissel wint van een ververs; een latere wissel van een eerdere.
+        if (target !== undefined) run.queued.target = target;
+        run.queued.waiters.push(resolve);
+      }
+    });
+  }
+
+  /**
+   * Eén ronde. Bij dezelfde organisatie is het een ververs na een wijziging: wat
+   * de open pagina gebruikt, komt tegelijk met de kern opnieuw binnen, en de
+   * andere geladen groepen worden verouderd. Bij een andere organisatie: eerst
+   * alles van de vorige weg, dan de kern; de pagina vraagt daarna zelf zijn groepen.
+   */
+  async function runWorkspaceRound(target: string | null | undefined): Promise<void> {
+    const run = workspaceRunRef.current;
+    run.running = true;
+    const session = sessionEpochRef.current;
     setLoading(true); setError(null);
     try {
-      const orgContext = await loadOrganizationContext(preferredOrganizationId);
-      // Intussen begon een nieuwere ronde (twee keer snel verversen, een wissel
-      // van organisatie): die bepaalt het beeld, niet deze.
-      if (seq !== coreSeqRef.current) return;
+      const tooSlow = 'Het laden duurt te lang. Controleer je verbinding en kies Ververs.';
+      const orgContext = await withTimeout(loadOrganizationContext(target === undefined ? activeOrgIdRef.current : target), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
+      // Intussen uitgelogd: niets van deze ronde hoort nog in beeld.
+      if (session !== sessionEpochRef.current) return;
       setOrganizationContext(orgContext);
       const orgId = orgContext.activeOrganization?.id ?? null;
+      activeOrgIdRef.current = orgId;
       setActiveOrganizationId(orgId);
       if (orgId) {
         localStorage.setItem(activeOrgStorageKey, orgId);
         const sameOrganization = orgId === dataOrgRef.current;
-        const [loaded] = await Promise.all([
+        if (!sameOrganization) {
+          // Meteen niets meer van de vorige organisatie tonen, ook als de kern
+          // hieronder mislukt: tot de nieuwe kern er is, staat het laadscherm.
+          resetDataGroups(null);
+          dataRef.current = emptyData;
+          setData(emptyData);
+        }
+        const [loaded] = await withTimeout(Promise.all([
           loadCoreData(orgId),
           sameOrganization ? refreshOpenGroups(orgId) : Promise.resolve(),
-        ]);
+        ]), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
         // Financiën open maar Klanten dicht (de boekhouder, of een teamlid dat zo
         // is ingesteld): dan de debiteuren zoals ze op de stukken staan, zodat
         // facturen een naam hebben. De klantenkaart zelf blijft dicht.
@@ -1061,12 +1122,12 @@ function App() {
             console.warn('Debiteuren voor Financiën konden niet worden geladen.', directoryError);
           }
         }
-        if (seq !== coreSeqRef.current) return;
+        if (session !== sessionEpochRef.current) return;
         if (sameOrganization) {
           dataRef.current = { ...dataRef.current, ...loaded };
           setData(prev => ({ ...prev, ...loaded }));
         } else {
-          // Nooit de groepen van de vorige organisatie onder deze laten staan.
+          // De groepen beginnen leeg; de pagina vraagt zelf wat hij nodig heeft.
           resetDataGroups(orgId);
           const fresh: AppData = { ...loaded, ...emptyGroupData() };
           dataRef.current = fresh;
@@ -1085,14 +1146,21 @@ function App() {
         setData(emptyData);
       }
     } catch (e) {
-      if (seq === coreSeqRef.current) setError(e instanceof Error ? e.message : 'Onbekende fout');
+      if (session === sessionEpochRef.current) setError(e instanceof Error ? e.message : 'Onbekende fout');
     } finally {
-      if (seq === coreSeqRef.current) setLoading(false);
+      run.running = false;
+      const next = run.queued;
+      run.queued = null;
+      if (next) {
+        void runWorkspaceRound(next.target).finally(() => { for (const resolve of next.waiters) resolve(); });
+      } else {
+        setLoading(false);
+      }
     }
   }
 
   async function refresh() {
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
 
   // ── Laden per module (src/lib/dataGroups.ts) ────────────────────────────
@@ -1107,6 +1175,7 @@ function App() {
   function resetDataGroups(orgId: string | null) {
     orgEpochRef.current += 1;
     groupSeqRef.current = {};
+    groupAppliedSeqRef.current = {};
     groupInflightRef.current.clear();
     dataOrgRef.current = orgId;
     setDataOrgId(orgId);
@@ -1115,9 +1184,11 @@ function App() {
 
   /**
    * Haalt groepen op en zet ze in `data`. Een antwoord vervalt als er intussen
-   * van organisatie is gewisseld, of als er voor dezelfde groep een nieuwere
-   * aanvraag loopt. Mislukt een groep, dan onthoudt groupState dat met de
-   * melding; de pagina toont hem en een knop om het opnieuw te proberen.
+   * van organisatie is gewisseld, of als er al een nieuwer antwoord voor die
+   * groep in `data` staat. Een ouder antwoord dat éérder binnenkomt dan een
+   * nieuwer, wordt wel getoond (verouderd, als er intussen iets wijzigde): wie
+   * alleen het laatst gevraagde toont, toont bij een stroom verversingen niets.
+   * Mislukt een groep, dan onthoudt groupState dat met de melding.
    */
   function fetchGroups(orgId: string, groups: readonly DataGroup[]): Promise<void> {
     const epoch = orgEpochRef.current;
@@ -1130,11 +1201,14 @@ function App() {
       const failed: Array<[DataGroup, string]> = [];
       results.forEach((result, index) => {
         const group = groups[index];
-        if (groupSeqRef.current[group] !== seqs[index]) return;
+        const seq = seqs[index];
         if (result.status === 'fulfilled') {
+          if (seq <= (groupAppliedSeqRef.current[group] ?? 0)) return;
+          groupAppliedSeqRef.current[group] = seq;
           Object.assign(patch, result.value);
           loaded.push(group);
-        } else {
+        } else if (seq === groupSeqRef.current[group]) {
+          // Alleen de laatste aanvraag meldt een fout: een nieuwere kan nog lukken.
           const reason = result.reason as { message?: string } | null;
           failed.push([group, reason?.message || 'Onbekende fout']);
         }
@@ -1143,6 +1217,11 @@ function App() {
         dataRef.current = { ...dataRef.current, ...patch };
         setData(prev => ({ ...prev, ...patch }));
       }
+      // Een groep die al in beeld stond en nu niet ververst kon worden: de pagina
+      // toont de stand van daarvoor, en dat moet je zien (vroeger gaf een
+      // mislukte herlaadslag dezelfde balk).
+      const staleShown = failed.find(([group]) => groupStateRef.current.loaded.has(group));
+      if (staleShown) setError(`Bijwerken lukte niet: ${staleShown[1]}. Je ziet de stand van daarvoor; kies Ververs om het opnieuw te proberen.`);
       // Begon er tijdens het ophalen een ververs, dan is wat binnenkwam van
       // vóór die wijziging: geladen, maar verouderd.
       updateGroupState(prev => applyFetch(prev, { loaded, failed, outdated: freshness !== freshnessRef.current }));
@@ -1182,6 +1261,18 @@ function App() {
   function retryGroups(groups: readonly DataGroup[]) {
     updateGroupState(prev => clearFailed(prev, groups));
     void ensureGroups(groups);
+  }
+
+  /**
+   * Een eigen wijziging in een groep staat al lokaal in `data` (een gestopte
+   * timer). Een aanvraag voor die groep die nog onderweg is, begon daarvóór en
+   * zou hem wegvegen: dat antwoord vervalt, en er komt een nieuwe voor in de plaats.
+   */
+  function afterLocalWrite(group: DataGroup) {
+    const orgId = dataOrgRef.current;
+    if (!orgId) return;
+    groupAppliedSeqRef.current[group] = groupSeqRef.current[group] ?? 0;
+    if (groupInflightRef.current.has(group)) void fetchGroups(orgId, [group]);
   }
 
   function dataGroupStatus(group: DataGroup): DataGroupStatus {
@@ -1297,7 +1388,7 @@ function App() {
     } catch (error) {
       emailError = error instanceof Error ? error.message : 'Uitnodigingsmail verzenden mislukt.';
     }
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
     return { emailSent, emailError };
   }
 
@@ -1321,7 +1412,7 @@ function App() {
     if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen rollen wijzigen.');
     assertNotPeerOwner(memberId, 'degraderen');
     await updateOrganizationMemberRole(memberId, activeOrganizationId, role);
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
 
   /** Modulerechten van één teamlid opslaan. De RPC bewaakt zelf wie dit mag
@@ -1330,7 +1421,7 @@ function App() {
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
     if (!canAdmin) throw new Error('Alleen owners en admins kunnen modulerechten aanpassen.');
     await setMemberModuleAccess(memberId, moduleAccess);
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
 
   async function disableMember(memberId: string) {
@@ -1338,14 +1429,14 @@ function App() {
     if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen teamleden uitschakelen.');
     assertNotPeerOwner(memberId, 'uitschakelen');
     await disableOrganizationMember(memberId, activeOrganizationId);
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
 
   async function revokeInvitation(invitationId: string) {
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen uitnodigingen intrekken.');
     await revokeOrganizationInvitation(invitationId, activeOrganizationId);
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
 
   function ensureCanWrite(): boolean {
@@ -1399,7 +1490,13 @@ function App() {
       } else if (!userId) {
         loadedForRef.current = null;
         tabsLoadedForRef.current = null;
+        // Wat de vorige sessie nog aan het laden was, komt niet meer in beeld.
+        sessionEpochRef.current += 1;
+        const queued = workspaceRunRef.current.queued;
+        workspaceRunRef.current.queued = null;
+        for (const resolve of queued?.waiters ?? []) resolve();
         localStorage.removeItem(activeOrgStorageKey);
+        activeOrgIdRef.current = null;
         setActiveOrganizationId(null);
         setOrganizationContext(emptyOrganizationContext);
         resetDataGroups(null);
@@ -1508,6 +1605,8 @@ function App() {
   // is. Toon dan het laadscherm i.p.v. kort "Geen organisatie gevonden" te flitsen;
   // die melding is alléén terecht als het laden klaar is en er echt geen org is.
   if (!activeOrganization && loading) return <BootLoading />;
+  // Een wissel van organisatie: de vorige is al weg, de nieuwe kern nog niet binnen.
+  if (activeOrganization && loading && dataOrgId !== activeOrganization.id) return <BootLoading />;
   if (!activeOrganization) return <NoOrganizationScreen pendingInvitations={organizationContext.pendingInvitations} onAcceptInvitation={acceptInvitation} onCreateOrganization={createNewOrganization} />;
 
   // Toestemming geven voor een AI-koppeling. Staat bewust hier: pas voorbij de
@@ -2175,6 +2274,7 @@ function App() {
       hourly_rate_cents: resolveRateCents(data, projectId),
     });
     setData(prev => ({ ...prev, timeEntries: [...prev.timeEntries, created] }));
+    afterLocalWrite('time');
   }
 
   /** Zet of wist je persoonlijke dagstreep. Nul minuten = geen streep, en dan
@@ -2842,12 +2942,19 @@ function App() {
    *  zodra het concept verwerkt is. Duur = wat er van de schatting nog open staat. */
   async function reserveTimeForTask(task: Task) {
     if (!ensureCanWrite()) return;
-    // De al geboekte uren tellen mee in de duur; vanuit een taakvenster op een
-    // pagina zonder uren zijn die nog niet geladen. Lukt dat niet, dan geldt de
-    // hele schatting.
-    await ensureGroups(['time']);
+    const orgId = activeOrg.id;
+    // De al geboekte uren tellen mee in de duur. Zijn de uren niet geladen (een
+    // taakvenster op een pagina zonder uren), dan alleen die van deze taak; lukt
+    // ook dat niet, dan geldt de hele schatting.
+    let logged = 0;
+    if (groupStateRef.current.loaded.has('time')) {
+      logged = dataRef.current.timeEntries.filter(entry => entry.task_id === task.id).reduce((sum, entry) => sum + entry.minutes, 0);
+    } else {
+      try { logged = await loggedMinutesForTask(orgId, task.id); } catch { logged = 0; }
+      // Intussen van organisatie gewisseld: dan hoort dit concept nergens meer bij.
+      if (dataOrgRef.current !== orgId) return;
+    }
     const project = task.project_id ? dataRef.current.projects.find(p => p.id === task.project_id) ?? null : null;
-    const logged = dataRef.current.timeEntries.filter(entry => entry.task_id === task.id).reduce((sum, entry) => sum + entry.minutes, 0);
     const estimate = task.estimated_minutes != null && Number.isFinite(Number(task.estimated_minutes)) ? Number(task.estimated_minutes) : 0;
     const date = task.planned_date ?? formatISODate(new Date());
     setCalendarDraft({

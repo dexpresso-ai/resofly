@@ -620,6 +620,17 @@ const GROUP_LOADERS: { [G in DataGroup]: (organizationId: UUID) => Promise<Group
   },
 };
 
+/** De geboekte minuten op één taak: voor "tijd reserveren", zonder alle uren te laden. */
+export async function loggedMinutesForTask(organizationId: UUID, taskId: UUID): Promise<number> {
+  const rows = await fetchAllPages<{ minutes: number | null }>(() => supabase
+    .from('time_entries')
+    .select('minutes')
+    .eq('organization_id', organizationId)
+    .eq('task_id', taskId)
+    .order('id', { ascending: true }));
+  return rows.reduce((sum, row) => sum + (Number(row.minutes) || 0), 0);
+}
+
 /** Eén groep zware, groeiende tabellen (src/lib/dataGroups.ts). */
 export function loadDataGroup<G extends DataGroup>(organizationId: UUID, group: G): Promise<GroupData<G>> {
   return GROUP_LOADERS[group](organizationId);

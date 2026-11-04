@@ -17,6 +17,9 @@
  *   5. het ticketvenster laadt zelf de tijdlijn, ook vanaf een pagina zonder;
  *   6. mislukt een groep, dan zegt de pagina dat, en "Opnieuw proberen" laadt
  *      hem alsnog.
+ *   7. mislukt het verversen van een groep die al in beeld staat, dan blijft de
+ *      pagina staan en zegt een balk het;
+ *   8. bij een stroom verversingen lopen de rondes na elkaar, en komt alles binnen.
  *
  * Opties: --url=http://… gebruik een draaiende dev-server.
  */
@@ -116,8 +119,8 @@ async function idle(page) {
   await page.waitForTimeout(300);
 }
 
-/** De knop Ververs in de titelbalk (op desktop staat hij daar, niet in de zijbalk). */
-const refreshButton = (page) => page.locator('.topbar .topbar-actions button', { hasText: 'Ververs' });
+/** De knop Ververs in de titelbalk (op desktop staat hij daar, niet in de zijbalk). Tijdens het laden heet hij "Laden…". */
+const refreshButton = (page) => page.locator('.topbar .topbar-actions button').first();
 
 /** Navigeren zoals een gebruiker: via het menu. */
 async function nav(page, label) {
@@ -229,6 +232,59 @@ try {
     const retried = await screenState(page);
     check('Opnieuw proberen: de pagina staat er alsnog', attempts === 2 && !retried.failed && !retried.loading && retried.text.length > 40, `${attempts} pogingen, ${retried.failed ? 'nog steeds fout' : retried.loading ? 'laadt nog' : 'ok'}`);
     check('mislukte groep: geen JavaScript-fout', errors.length === 0, errors[0]);
+    await page.close();
+  }
+
+  // ── 7: verversen mislukt bij een groep die al in beeld staat ─────────────
+  {
+    const { page, errors } = await openPage(context, 'ledger');
+    await idle(page);
+    let failing = true;
+    await page.route(`${SUPABASE_URL}/rest/v1/journal_lines**`, async (route) => {
+      if (failing) await route.fulfill({ status: 500, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ message: 'Tijdelijke storing (test)' }) });
+      else await route.fallback();
+    });
+    await refreshButton(page).click();
+    await idle(page);
+    const banner = await page.evaluate(() => document.querySelector('.content:not([hidden]) .error')?.textContent ?? '');
+    const shown = await screenState(page);
+    check('verversen mislukt: de pagina blijft staan met wat er was', !shown.loading && !shown.failed && shown.text.length > 40);
+    check('verversen mislukt: een balk zegt het', banner.includes('Bijwerken lukte niet') && banner.includes('Tijdelijke storing (test)'), banner.slice(0, 90));
+    failing = false;
+    await refreshButton(page).click();
+    await idle(page);
+    const after = await page.evaluate(() => document.querySelector('.content:not([hidden]) .error')?.textContent ?? '');
+    check('daarna Ververs: gelukt, de balk is weg', after === '', after.slice(0, 90));
+    check('verversen mislukt: geen JavaScript-fout', errors.length === 0, errors[0]);
+    await page.close();
+  }
+
+  // ── 8: een stroom verversingen terwijl een groep traag is ─────────────────
+  // Rondes die elkaar inhalen en wegstrepen, lieten bij een stroom verversingen
+  // (meldingen, Gerrie, afvinklijsten) niets meer binnenkomen. Nu loopt er één
+  // ronde tegelijk, met hooguit één erachteraan.
+  {
+    const { page, errors, gets } = await openPage(context, 'ledger');
+    await idle(page);
+    await page.route(`${SUPABASE_URL}/rest/v1/journal_lines**`, async (route) => {
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      await route.fallback();
+    });
+    const before = gets('journal_lines').length;
+    const laadmeldingVoor = await page.evaluate(() => window.__laadmelding);
+    for (let i = 0; i < 20; i += 1) {
+      await refreshButton(page).click();
+      await page.waitForTimeout(250);
+    }
+    const during = gets('journal_lines').length - before;
+    await page.waitForTimeout(3000);
+    await idle(page);
+    const shown = await screenState(page);
+    const label = (await refreshButton(page).textContent()) ?? '';
+    check('twintig keer verversen in vijf seconden: rondes lopen na elkaar, niet door elkaar', during >= 2 && during <= 8, `${during} keer journaalregels opgehaald`);
+    check('twintig keer verversen: nooit een laadmelding (wat er was, blijft staan)', (await page.evaluate(() => window.__laadmelding)) === laadmeldingVoor);
+    check('twintig keer verversen: daarna is alles binnen', !shown.loading && !shown.failed && label.includes('Ververs'), `knop: "${label}"`);
+    check('twintig keer verversen: geen JavaScript-fout', errors.length === 0, errors[0]);
     await page.close();
   }
 

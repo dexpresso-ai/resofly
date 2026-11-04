@@ -51,6 +51,32 @@ Twee punten uit de doorlichting van de codebase:
 
   Ze pagineren nu, zoals het commentaar bij `fetchAllPages` al beloofde.
 
+**Na een onafhankelijke review aangescherpt.** Een tweede lezer, zonder de
+redenering van de bouwer, vond geen lek tussen organisaties en geen pagina die
+een groepsveld leest zonder hem te vragen. Wel deze vier punten, nu opgelost:
+
+- **Mislukt verversen van een groep die al in beeld staat, bleef stil.** De
+  pagina toonde de stand van vóór de wijziging, zonder melding. Nu zegt een balk
+  het ("Bijwerken lukte niet …; kies Ververs"), en de groep is verouderd. Vroeger
+  gaf een mislukte herlaadslag dezelfde balk.
+- **Een gestopte timer kon uit beeld vallen.** Liep er nog een aanvraag voor de
+  uren, dan veegde die de nieuwe post weg. Nu vervalt zo'n aanvraag na een eigen
+  wijziging, en komt er een nieuwe voor in de plaats.
+- **Bij een stroom verversingen kwam niets meer binnen.** Rondes haalden elkaar
+  in en streepten elkaar weg. Nu loopt `loadWorkspace` één ronde tegelijk, met
+  hooguit één ronde erachteraan voor alle vragers van intussen. Een groep toont
+  het nieuwste antwoord dat binnen is, in plaats van alleen het laatst gevraagde.
+- **"Tijd reserveren" wachtte op alle uren.** Nu haalt het alleen de geboekte
+  minuten van die ene taak op, en stopt het als je intussen van organisatie
+  wisselt.
+
+Plus twee kleinere punten:
+
+- Bij een wissel van organisatie staat er een laadscherm tot de nieuwe kern
+  binnen is. Er is dan niets van de vorige organisatie te zien, ook niet als de
+  nieuwe kern niet laadt.
+- Wat bij uitloggen nog onderweg was, komt niet meer in beeld.
+
 **Bewaakt door:**
 
 - `src/lib/dataGroups.test.ts`. Een struikeldraad faalt zodra een bestand buiten
@@ -63,7 +89,12 @@ Twee punten uit de doorlichting van de codebase:
   - bewaren;
   - verversen op de achtergrond;
   - het ticketvenster;
-  - een mislukte groep, en opnieuw proberen.
+  - een mislukte groep, en opnieuw proberen;
+  - een mislukte ververs van een groep die al in beeld staat (de balk);
+  - twintig keer verversen in vijf seconden terwijl een groep traag is.
+
+  Tegen de code van vóór de review faalden die laatste twee: geen balk, en
+  20 overlappende rondes voor 20 klikken.
 
 ## 2. Een nieuwe database vanaf nul
 
