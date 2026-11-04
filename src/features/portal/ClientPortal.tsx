@@ -903,6 +903,7 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         onDownloadItem={downloadItem}
         zipUrl={galleryZipUrl(gallery.id, detail.tokens.mediaToken)}
         downloadQuality={detail.gallery.download_quality}
+        layout={detail.gallery.layout}
         emptyText="Deze galerij bevat nog geen media."
       />
     )}

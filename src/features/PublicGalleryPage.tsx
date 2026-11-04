@@ -13,6 +13,7 @@ import { dateNL } from '../lib/format';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl, type GalleryTokenBundle } from '../lib/gallery';
 import { brandStyle, ensureBrandFontsLoaded, type BrandingPayload } from '../lib/branding';
 import { GalleryViewer, type GalleryViewerItem } from './GalleryViewer';
+import type { GalleryLayout } from '../lib/galleryLayout';
 
 async function extractFunctionError(error: unknown, fallback: string): Promise<string> {
   const context = (error as { context?: unknown })?.context;
@@ -44,6 +45,8 @@ type PublicGallery = {
   cover_preview_key: string | null;
   cover_focus_x: number;
   cover_focus_y: number;
+  /** Weergave van het album; ontbreekt bij een oudere edge function (dan de standaard). */
+  layout?: Partial<GalleryLayout> | null;
   expires_at: string | null;
 };
 
@@ -419,6 +422,7 @@ export function PublicGalleryPage({ token }: { token: string }) {
           onDownloadItem={downloadItem}
           zipUrl={galleryZipUrl(payload.gallery.id, payload.tokens.mediaToken)}
           downloadQuality={payload.gallery.download_quality}
+          layout={payload.gallery.layout}
           emptyText="Deze galerij bevat nog geen media."
         />
       </section>

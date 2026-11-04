@@ -727,6 +727,39 @@ export async function updateGalleryShare(galleryId: UUID, patch: Partial<Gallery
   }
 }
 
+/**
+ * De weergave kon (nog) niet worden bewaard, de rest van de instellingen wel.
+ * Een eigen soort fout, zodat het scherm open kan blijven met de weergave nog
+ * als "niet opgeslagen" — in plaats van te doen alsof alles gelukt is.
+ */
+export class GalleryLayoutNotMigratedError extends Error {
+  constructor() {
+    super('De overige instellingen zijn opgeslagen. De weergave kan nog niet worden bewaard: de database van deze omgeving wordt nog bijgewerkt. Probeer het over een paar minuten opnieuw.');
+    this.name = 'GalleryLayoutNotMigratedError';
+  }
+}
+
+/**
+ * Instellingen van een galerij opslaan, met de weergave (`layout`) erbij.
+ *
+ * Zelfde gaatje als bij `updateGalleryShare`: Cloudflare Pages rolt de app uit
+ * vóórdat de migratie van `layout` heeft gedraaid. Dan zou "Opslaan" in zijn
+ * geheel stuklopen — ook een nieuwe titel of vervaldatum. Daarom gaat de
+ * opdracht dan alsnog door zonder dat veld, en meldt hij eerlijk dat de weergave
+ * er nog niet bij zat.
+ */
+export async function updateGallerySettings(galleryId: UUID, patch: Partial<Gallery>, organizationId: UUID): Promise<Gallery> {
+  try {
+    return await updateRow<Gallery>('galleries', galleryId, patch, organizationId);
+  } catch (error) {
+    if (!('layout' in patch) || !isMissingColumn(error as { code?: string; message?: string }, 'layout')) throw error;
+    const withoutLayout = { ...patch };
+    delete withoutLayout.layout;
+    if (Object.keys(withoutLayout).length > 0) await updateRow<Gallery>('galleries', galleryId, withoutLayout, organizationId);
+    throw new GalleryLayoutNotMigratedError();
+  }
+}
+
 /** Galerijen (org-breed; filter client-side op project_id). */
 export async function selectGalleries(organizationId: UUID): Promise<Gallery[]> {
   return selectOptional<Gallery>('galleries', organizationId, {
@@ -827,6 +860,17 @@ export async function setGalleryItemsCategory(organizationId: UUID, itemIds: UUI
   const { error } = await supabase
     .from('gallery_items')
     .update({ category_id: categoryId, updated_at: new Date().toISOString() })
+    .eq('organization_id', organizationId)
+    .in('id', itemIds);
+  if (error) throw error;
+}
+
+/** Groot tonen aan of uit voor meerdere foto's in één keer. */
+export async function setGalleryItemsFeatured(organizationId: UUID, itemIds: UUID[], featured: boolean): Promise<void> {
+  if (itemIds.length === 0) return;
+  const { error } = await supabase
+    .from('gallery_items')
+    .update({ featured, updated_at: new Date().toISOString() })
     .eq('organization_id', organizationId)
     .in('id', itemIds);
   if (error) throw error;

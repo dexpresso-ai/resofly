@@ -1,7 +1,7 @@
 import {
   addContractProject, addSuppression, createFlow, insertRow, removeContractProject,
   removeSuppression, replaceFlowSteps, replaceGalleryCategoryPresets, setGalleryItemOrder,
-  setGalleryItemsCategory, updateCampaign, updateFlow, updateGalleryShare, updateRow,
+  setGalleryItemsCategory, setGalleryItemsFeatured, updateCampaign, updateFlow, updateGallerySettings, updateGalleryShare, updateRow,
 } from '../repository';
 import {
   activateFlow, cancelCampaign, cancelFlow, pauseCampaign, pauseFlow, previewCampaignAudience,
@@ -372,7 +372,11 @@ export const MARKETING_EXECUTORS: Record<string, ActionExecutor> = {
       delete patch.expires_date;
       patch.expires_at = typeof day === 'string' && day ? new Date(`${day}T23:59:59`).toISOString() : null;
     }
-    const updated = await updateRow<Gallery>('galleries', galleryId, patch, ctx.organizationId);
+    // Langs updateGallerySettings: zolang de migratie van de weergave nog niet
+    // heeft gedraaid, gaat de rest alsnog door en meldt hij dat eerlijk.
+    const updated = 'layout' in patch
+      ? await updateGallerySettings(galleryId, patch, ctx.organizationId)
+      : await updateRow<Gallery>('galleries', galleryId, patch, ctx.organizationId);
     return `Instellingen van galerij "${updated.title}" opgeslagen`;
   },
 
@@ -451,6 +455,14 @@ export const MARKETING_EXECUTORS: Record<string, ActionExecutor> = {
     const how = optText(payload, 'how');
     return `Volgorde van ${itemIds.length} bestand${itemIds.length === 1 ? '' : 'en'} in "${optText(payload, 'gallery_title') ?? 'de galerij'}" opgeslagen`
       + (how ? ` (${how})` : '');
+  },
+
+  'gallery.set_featured': async (payload, ctx) => {
+    const itemIds = list(payload, 'item_ids');
+    const on = payload.featured !== false;
+    await setGalleryItemsFeatured(ctx.organizationId, itemIds as UUID[], on);
+    const count = `${itemIds.length} foto${itemIds.length === 1 ? '' : '’s'}`;
+    return `${count} ${on ? 'nu groot getoond' : 'weer gewoon getoond'} in "${optText(payload, 'gallery_title') ?? 'de galerij'}"`;
   },
 
   'gallery.assign_category': async (payload, ctx) => {

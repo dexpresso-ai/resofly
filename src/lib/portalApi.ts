@@ -1,3 +1,4 @@
+import type { GalleryLayout } from './galleryLayout';
 import { supabasePortal } from './supabasePortal';
 import type { BrandingPayload } from './branding';
 import type { FinanceLine, InvoiceStatus, Priority, FinanceStatus } from '../types';
@@ -311,6 +312,8 @@ export interface PortalGallery {
   /** Focuspunt van de uitsnede in procenten (0–100). */
   cover_focus_x: number;
   cover_focus_y: number;
+  /** Weergave van het album (indeling, witruimte, kolommen, speelsheid); ontbreekt bij een oudere edge function. */
+  layout?: Partial<GalleryLayout> | null;
   expires_at: string | null;
 }
 
@@ -336,6 +339,8 @@ export interface PortalGalleryItem {
   stream_uid: string | null;
   stream_status: string | null;
   stream_playback_base: string | null;
+  /** Groot tonen; ontbreekt bij een oudere edge function. */
+  featured?: boolean;
 }
 
 export interface PortalGalleryTokens {
