@@ -230,6 +230,31 @@ alleen naar security-definer-functies, en een triggerfunctie is dat niet.
   ook triggerfuncties, op die revoke (in hetzelfde bestand of later). Zonder de
   vervolgmigratie faalt die test; zo valt het voortaan vóór de uitrol op.
 
+### Staging: uitgerold op 4 november 2026
+
+Staging staat op `703fcd9` (merge van `ccr-ba8bbf33-ayxhob`).
+
+1. **Run 168** (`452e779`): migratie `20261104075000` toegepast, alle 39 edge
+   functions uitgerold. De rooktest was rood op één punt: anon had EXECUTE op
+   `enforce_gallery_layout_guard()` (zie hierboven).
+2. **Run 169** (`703fcd9`): `20261104076000` toegepast (233 migraties in totaal),
+   functies opnieuw uitgerold, **rooktest groen**.
+3. **Nagecontroleerd op staging** (Management API):
+   - `galleries.layout` jsonb, standaard `'{}'`, niet leeg;
+   - `gallery_items.featured` boolean, standaard `false`, niet leeg;
+   - trigger `galleries_layout_guard` en check `galleries_layout_object_check` staan er;
+   - alle 7 galerijen op de standaardweergave, 0 foto's groot getoond;
+   - anon heeft nergens rechten in public (dezelfde vraag als de rooktest);
+   - `gallery-public`, `client-portal`, `gerrie-agent` en `mcp` actief.
+4. **Frontend checks run 113** (`452e779`, de hele wijziging): Deno-typecheck van
+   alle edge functions (ook `gallery-public`), typecheck, CSP-hash, unit tests en de
+   mobiele lay-outtest (donker en licht) groen.
+5. Cloudflare Pages bouwt de app bij de push naar `staging`. Van hieruit is dat niet
+   te zien: het netwerk blokkeert het domein.
+6. Geen nieuwe secrets, geen cron-taken.
+7. **Voor productie:** dezelfde twee migraties, in deze volgorde (`…075000`, dan
+   `…076000`). Bestaande galerijen houden hun weergave: `'{}'` is de standaard.
+
 ## Bewust niet gedaan
 
 - **Een weergave per categorie.** Eén album, één weergave; per hoofdstuk een andere
