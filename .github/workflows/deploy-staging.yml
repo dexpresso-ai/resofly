@@ -36,9 +36,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Vaste versie, niet `latest`. CLI 3.0.0 (2 november 2026) richt
+      # `supabase db push` standaard op een lokale database: de deploy van
+      # 4 november liep daardoor stuk op "connect ECONNREFUSED 127.0.0.1:54322",
+      # nog vóór er een migratie was toegepast. 2.122.1 is inhoudelijk gelijk aan
+      # 2.122.0, de versie van de laatste geslaagde deploys, en is het officiële
+      # v2-kanaal. Overstappen naar 3.x is een bewuste stap: lees eerst de
+      # migratiegids (o.a. `--remote` en het bijwerken van Vault-secrets bij
+      # db push) en draai dan één deploy met het oog erop.
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.122.1
 
       # Vóór de CLI, want die zegt alleen "Access token not provided" — en dan sta
       # je in de Supabase-documentatie te zoeken terwijl het probleem in GitHub
@@ -91,11 +99,14 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
 
+      # --linked: het gekoppelde project, met zoveel woorden. In 2.x is dat de
+      # standaard; in 3.x is het een verouderde schrijfwijze van --remote, en
+      # zonder vlag kiest 3.x de lokale database.
       # --yes: niet wachten op een bevestiging die in CI niemand geeft.
       # --include-all alleen met het vinkje: een overgeslagen oudere migratie
       # toepassen is een bewuste keuze (de melding noemt het bestand).
       - name: Push database migrations
-        run: supabase db push --yes ${{ inputs.include_all && '--include-all' || '' }}
+        run: supabase db push --linked --yes ${{ inputs.include_all && '--include-all' || '' }}
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
