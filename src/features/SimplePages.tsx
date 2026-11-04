@@ -10,6 +10,7 @@ import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonChec
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
 import { formatBytes } from '../lib/transfers';
+import { isDutchVatIdFormat, looksLikeTaxNumberWithoutCountry } from '../lib/vatId';
 import { invoiceInboxAddress } from '../lib/invoiceInbox';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
@@ -2452,6 +2453,20 @@ export function Settings({
         <Input value={form.vat_number ?? ''} onChange={e=>set('vat_number', e.target.value)} placeholder="BTW-nummer" />
         <Input value={form.iban ?? ''} onChange={e=>set('iban', e.target.value)} placeholder="IBAN" />
       </div>
+      {(() => {
+        // Factuurvermeldingen die per rechtsvorm misgaan: een eenmanszaak heeft
+        // sinds 2020 een apart btw-id voor klanten; het omzetbelastingnummer
+        // bevat het BSN. Met de KOR hoeft er geen btw-nummer op de factuur.
+        const vat = String(form.vat_number ?? '').trim();
+        const isSoleTrader = (form.legal_form ?? 'eenmanszaak') === 'eenmanszaak';
+        const notes: string[] = [];
+        if (isSoleTrader) notes.push('Vul bij BTW-nummer je btw-identificatienummer in (NL, 9 cijfers, B en 2 cijfers), niet je omzetbelastingnummer: dat bevat je BSN en is alleen voor de Belastingdienst. Op je facturen hoort het btw-id.');
+        if (vat && looksLikeTaxNumberWithoutCountry(vat)) notes.push('Het btw-nummer staat er zonder NL. Op facturen hoort het btw-id mét landcode, bijvoorbeeld NL123456789B01.');
+        else if (vat && /^nl/i.test(vat) && !isDutchVatIdFormat(vat)) notes.push('Dit is geen geldig Nederlands btw-id: dat is NL, 9 cijfers, B en 2 cijfers, bijvoorbeeld NL123456789B01.');
+        if (!String(form.kvk_number ?? '').trim()) notes.push('Het KvK-nummer hoort op je facturen, offertes en brieven.');
+        if (form.kor_enabled) notes.push('Met de kleineondernemersregeling (KOR) hoeft je btw-nummer niet op je facturen.');
+        return notes.length > 0 ? <div className="settings-help">{notes.map(n => <p key={n}>{n}</p>)}</div> : null;
+      })()}
     </section>
 
     <section className="settings-card">
@@ -2602,6 +2617,13 @@ export function Settings({
             <option value="0510">0510 · Onverdeeld resultaat</option>
             <option value="0500">0500 · Eigen vermogen</option>
           </select>
+          <small className="bk-muted">
+            {['vof', 'maatschap', 'cv'].includes(form.legal_form ?? 'eenmanszaak')
+              ? 'Bij een vof, maatschap of cv met vastgelegde vennoten gaat de winst bij de jaarafsluiting naar de kapitaalrekeningen van de vennoten, ongeacht deze keuze.'
+              : (form.legal_form ?? 'eenmanszaak') === 'eenmanszaak'
+                ? 'Bij een eenmanszaak is de winst van jou: 0500 Eigen vermogen ligt het meest voor de hand. Privé-opnamen en -stortingen gaan bij de jaarafsluiting ook naar 0500.'
+                : 'Bij een BV, NV of coöperatie blijft het resultaat op 0510 tot over de bestemming is besloten.'}
+          </small>
         </label>
         <label className="bk-setting-field"><span>Standaard uurtarief (€)</span>
           <Input type="number" min="0" step="0.01"

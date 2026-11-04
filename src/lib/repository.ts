@@ -145,6 +145,8 @@ import type {
   DgaInterestPosting,
   DgaInterestRate,
   DgaSignals,
+  OwnersEquityOverview,
+  PartnershipPartner,
   DividendDistributionLine,
   DividendDistributionRow,
   DividendKind,
@@ -2234,6 +2236,51 @@ export async function loadDgaSignals(organizationId: UUID, year: number): Promis
   const { data, error } = await supabase.rpc('dga_signals', { p_organization_id: organizationId, p_year: year });
   if (error) throw bookkeepingError(error);
   return data as DgaSignals;
+}
+
+// ── Eenmanszaak, vof, maatschap en cv: vennoten en kapitaal ────────────────
+
+/** De vennoten van een vof, maatschap of cv, op vennootnummer. */
+export async function listPartnershipPartners(organizationId: UUID): Promise<PartnershipPartner[]> {
+  const { data, error } = await supabase
+    .from('partnership_partners').select('*')
+    .eq('organization_id', organizationId)
+    .order('partner_number', { ascending: true });
+  if (error) {
+    if (isMissingRelation(error)) return [];
+    throw bookkeepingError(error);
+  }
+  return (data ?? []) as PartnershipPartner[];
+}
+
+/**
+ * Legt een vennoot vast of past hem aan. Een nieuwe vennoot krijgt van de server
+ * zijn eigen kapitaal- en privérekeningen (050n, 055n, 056n).
+ */
+export async function savePartnershipPartner(
+  organizationId: UUID,
+  input: { id?: UUID | null; name: string; profitShareBasisPoints: number; kind?: PartnershipPartner['kind']; isActive?: boolean },
+): Promise<PartnershipPartner> {
+  const { data, error } = await supabase.rpc('save_partnership_partner', {
+    p_organization_id: organizationId,
+    p_partner_id: input.id ?? null,
+    p_name: input.name,
+    p_profit_share_basis_points: input.profitShareBasisPoints,
+    p_kind: input.kind ?? 'beherend',
+    p_is_active: input.isActive ?? true,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as PartnershipPartner;
+}
+
+/** De kapitaalvergelijking van één boekjaar: begin, resultaat, stortingen, opnamen, eind. */
+export async function loadOwnersEquityOverview(organizationId: UUID, fiscalYearId: UUID): Promise<OwnersEquityOverview> {
+  const { data, error } = await supabase.rpc('owners_equity_overview', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+  });
+  if (error) throw bookkeepingError(error);
+  return data as OwnersEquityOverview;
 }
 
 export async function computeDgaInterest(organizationId: UUID, year: number): Promise<DgaInterestComputation> {

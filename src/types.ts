@@ -1916,6 +1916,58 @@ export interface DgaSignals {
   aboveExcessiveLoanThreshold: boolean;
 }
 
+// ── Eenmanszaak, vof, maatschap en cv: vennoten en kapitaal ────────────────
+
+/** Een vennoot van een vof, maatschap of cv (tabel partnership_partners). */
+export interface PartnershipPartner extends OrgScopedRow {
+  /** 1 t/m 9; bepaalt de rekeningen 050n (kapitaal), 055n (privé-opnamen) en 056n (privé-stortingen). */
+  partner_number: number;
+  name: string;
+  /** Winstaandeel in basispunten (5000 = 50%). */
+  profit_share_basis_points: number;
+  /** Bij een cv: beherend of commanditair (stil). */
+  kind: 'beherend' | 'commanditair';
+  is_active: boolean;
+  capital_account_id: UUID;
+  withdrawals_account_id: UUID;
+  contributions_account_id: UUID;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Eén regel van de kapitaalvergelijking: de ondernemer of één vennoot. */
+export interface OwnersEquityRow {
+  partnerId: UUID | null;
+  name: string;
+  partnerNumber: number | null;
+  kind: 'beherend' | 'commanditair' | null;
+  isActive: boolean;
+  shareBasisPoints: number;
+  beginCents: number;
+  /** Winst (positief) of verlies (negatief) dat bij deze ondernemer of vennoot hoort. */
+  resultShareCents: number;
+  contributionsCents: number;
+  withdrawalsCents: number;
+  /** Andere boekingen rechtstreeks op het kapitaal (bijv. een memoriaal tussen vennoten). */
+  otherMovementsCents: number;
+  endCents: number;
+}
+
+/** Uitkomst van owners_equity_overview: de kapitaalvergelijking van één boekjaar. */
+export interface OwnersEquityOverview {
+  fiscalYear: { id: UUID; label: string; periodStart: string; periodEnd: string; status: 'open' | 'closed' };
+  legalForm: LegalForm;
+  isPartnershipForm: boolean;
+  /** Vof, maatschap of cv mét actieve vennoten: dan wordt de winst verdeeld. */
+  isPartnership: boolean;
+  partnersDefined: boolean;
+  shareTotalBasisPoints: number | null;
+  resultCents: number;
+  owners: OwnersEquityRow[];
+  /** Vermogen dat op geen enkele vennoot staat (0500, 0510, 0550/0560). */
+  unassigned: { beginCents: number; movementsCents: number; endCents: number } | null;
+}
+
 export interface DgaInterestComputation {
   year: number;
   daysInYear: number;

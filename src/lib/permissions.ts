@@ -104,6 +104,8 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   'corporate-tax': 'finance',
   dga: 'finance',
   shareholders: 'finance',
+  // Eenmanszaak, vof, maatschap en cv: vennoten en kapitaalvergelijking.
+  owners: 'finance',
   'fiscal-years': 'finance',
   // VERPLICHT: canOpenPage laat een pagina zonder module voor iedereen open.
   // Zonder deze regel zou de jaarrekening zichtbaar zijn voor een teamlid met

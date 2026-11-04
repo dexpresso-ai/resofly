@@ -49,7 +49,7 @@ interface ModuleDef {
   badgeTitle?: string;
 }
 
-const FINANCE_PAGES: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'fiscal-years', 'annual-accounts'];
+const FINANCE_PAGES: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'];
 
 /** Bij welke module hoort een pagina? Ook pagina's zonder eigen menuregel
  *  (een klant, een project, een galerij) lichten zo de goede plek op. */
@@ -88,6 +88,10 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
   // Zelfde regels als de zijbalk: alleen wat bij deze rechtsvorm bestaat.
   const isCompany = ['bv', 'nv', 'cooperatie'].includes(legalForm);
   const hasShares = ['bv', 'nv'].includes(legalForm);
+  // Eenmanszaak, vof, maatschap en cv: de winst is van de ondernemer of de
+  // vennoten zelf. Daar horen het privé en de kapitaalvergelijking bij.
+  const isIb = ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm);
+  const isPartnership = ['vof', 'maatschap', 'cv'].includes(legalForm);
   const messageBadge = messageUnread + inboxOpen;
   const messageTitle = [
     messageUnread > 0 ? plural(messageUnread, 'ongelezen bericht', 'ongelezen berichten') : '',
@@ -142,6 +146,7 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
         isCompany && { page: 'corporate-tax', label: 'Vennootschapsbelasting', Icon: Landmark },
         hasShares && { page: 'dga', label: 'DGA', Icon: Users },
         hasShares && { page: 'shareholders', label: 'Aandeelhouders', Icon: BookUser },
+        isIb && { page: 'owners', label: isPartnership ? 'Vennoten' : 'Eigen vermogen', Icon: Wallet },
         isCompany && { page: 'annual-accounts', label: 'Jaarrekening', Icon: Scale },
       ]) },
     ] },
