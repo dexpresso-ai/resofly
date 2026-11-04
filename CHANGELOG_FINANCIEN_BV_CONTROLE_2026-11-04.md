@@ -230,6 +230,12 @@ blokkeert het domein.
 
 Twee punten die hieronder eerst als open stonden, zijn nu ingebouwd.
 
+> **Uitgerold op staging op 4 november** (*Deploy Supabase (staging)* run 166).
+> Beide migraties zijn toegepast (230 in totaal), alle 39 edge functions uitgerold,
+> en de rooktest is geslaagd. Daarna gaven dezelfde scenario's tegen de live code
+> dezelfde uitkomst. De regressiecijfers zijn ongewijzigd en er is niets blijven
+> staan.
+
 ### Achterwaartse verliesverrekening (migratie `20261104050000`)
 
 **Wettelijke basis.** Art. 20 lid 2 Wet Vpb 1969:
