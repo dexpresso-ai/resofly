@@ -142,6 +142,7 @@ import { VatReturnsPage } from './features/VatReturns';
 import { FiscalYearsPage } from './features/FiscalYears';
 import { CorporateTaxPage } from './features/CorporateTax';
 import { DgaPage } from './features/Dga';
+import { OwnersPage } from './features/Owners';
 import { ShareholdersPage } from './features/Shareholders';
 import { AnnualAccountsPage } from './features/AnnualAccounts';
 import { PublicQuotePage } from './features/PublicQuotePage';
@@ -203,7 +204,7 @@ import './styles/zenit.css';
 // glas overheen: alleen actief met `data-stroom` op <html> (Probeer Stroom).
 import './styles/stroom.css';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -3471,6 +3472,7 @@ function App() {
     if (page === 'vat-returns') return <VatReturnsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'dga') return <DgaPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'corporate-tax') return <CorporateTaxPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
+    if (page === 'owners') return <OwnersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;

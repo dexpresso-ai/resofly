@@ -11,7 +11,7 @@ export const PAGE_TITLES: Record<string, string> = {
   'project-planning': 'Projectplanning', tickets: 'Tickets', chat: 'Teamchat',
   marketing: 'Marketing', quotes: 'Offertes', contracts: 'Contracten', invoices: 'Facturen',
   suppliers: 'Leveranciers', 'purchase-invoices': 'Inkoopfacturen', ledger: 'Grootboek',
-  bank: 'Bank', assets: 'Activa', pnl: 'Winst & verlies', 'vat-returns': 'Omzetbelasting', 'corporate-tax': 'Vennootschapsbelasting', dga: 'DGA', shareholders: 'Aandeelhouders',
+  bank: 'Bank', assets: 'Activa', pnl: 'Winst & verlies', 'vat-returns': 'Omzetbelasting', 'corporate-tax': 'Vennootschapsbelasting', dga: 'DGA', shareholders: 'Aandeelhouders', owners: 'Eigen vermogen',
   'fiscal-years': 'Boekjaren', 'annual-accounts': 'Jaarrekening',
   archive: 'Archief', settings: 'Instellingen', project: 'Project',
   gallery: 'Galerij',
@@ -26,6 +26,9 @@ export function viewTitle(
   if (view.page === 'client') return data.clients.find(c => c.id === view.clientId)?.name ?? 'Klant';
   // De galerijtitel zegt méér dan "Galerij" zodra er twee openstaan.
   if (view.page === 'gallery') return data.galleries.find(g => g.id === view.galleryId)?.title ?? 'Galerij';
+  // Bij een vof, maatschap of cv heet deze pagina in het menu en in de kop
+  // "Vennoten"; het tabblad en het kruimelpad zeggen hetzelfde.
+  if (view.page === 'owners' && ['vof', 'maatschap', 'cv'].includes(data.companySettings?.legal_form ?? 'eenmanszaak')) return 'Vennoten';
   return PAGE_TITLES[view.page] ?? view.page;
 }
 

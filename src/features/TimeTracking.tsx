@@ -8,6 +8,8 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, formatMinutes, minutesToHours } from '../lib/format';
 import { addDays, formatISODate, parseISODate, startOfWeek } from '../lib/dates';
 import { createTimeEntry, deleteTimeEntry, updateTimeEntry } from '../lib/repository';
+// Urencriterium Belastingdienst: 1225 uur per kalenderjaar (incl. indirecte uren).
+import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
 import type { ReportRow } from '../lib/reporting';
 import type { AppData, IndirectHoursCategory, OrganizationMember, TimeEntry, TimeEntrySource, TimeEntryType, UUID } from '../types';
 
@@ -49,8 +51,6 @@ export const INDIRECT_CATEGORY_LABEL: Record<IndirectHoursCategory, string> = {
   admin: 'Administratie', acquisition: 'Acquisitie', travel: 'Reistijd', education: 'Scholing', other: 'Overig',
 };
 
-/** Urencriterium Belastingdienst: 1225 uur per kalenderjaar (incl. indirecte uren). */
-const HOUR_CRITERION_MINUTES = 1225 * 60;
 
 /* ── Gedeelde klant/project-keuze ─────────────────────────────────────── */
 
@@ -294,10 +294,12 @@ function HourCriterionCard({ data, currentUserId }: { data: AppData; currentUser
     const to = `${year}-12-31`;
     let direct = 0;
     let indirect = 0;
+    let firstEntryDate: string | null = null;
     const perCategory = new Map<IndirectHoursCategory, number>();
     for (const e of data.timeEntries) {
       if (!currentUserId || e.user_id !== currentUserId) continue;
       if (e.entry_date < from || e.entry_date > to) continue;
+      if (!firstEntryDate || e.entry_date < firstEntryDate) firstEntryDate = e.entry_date;
       if (e.entry_type === 'indirect') {
         indirect += e.minutes;
         if (e.indirect_category) perCategory.set(e.indirect_category, (perCategory.get(e.indirect_category) ?? 0) + e.minutes);
@@ -305,22 +307,23 @@ function HourCriterionCard({ data, currentUserId }: { data: AppData; currentUser
         direct += e.minutes;
       }
     }
-    return { direct, indirect, total: direct + indirect, perCategory };
+    return { direct, indirect, total: direct + indirect, perCategory, firstEntryDate };
   }, [data.timeEntries, currentUserId, year]);
 
   const reached = stats.total >= HOUR_CRITERION_MINUTES;
   const pct = Math.min(100, (stats.total / HOUR_CRITERION_MINUTES) * 100);
 
-  // Prognose alleen voor het lopende jaar: extrapoleer het tempo tot nu toe.
+  // Prognose alleen voor het lopende jaar: het tempo vanaf de eerste
+  // geregistreerde dag van het jaar (een starter per 1 juli heeft in het eerste
+  // halfjaar geen achterstand), doorgetrokken tot 31 december.
   const isCurrentYear = year === currentYear;
-  const now = new Date();
-  const yearStart = new Date(year, 0, 1);
-  const daysInYear = Math.round((new Date(year + 1, 0, 1).getTime() - yearStart.getTime()) / 86400000);
-  const dayOfYear = Math.min(daysInYear, Math.max(1, Math.floor((now.getTime() - yearStart.getTime()) / 86400000) + 1));
-  const projectedMinutes = Math.round(stats.total * (daysInYear / dayOfYear));
-  const remainingMinutes = Math.max(0, HOUR_CRITERION_MINUTES - stats.total);
-  const weeksLeft = Math.max(1, (new Date(year, 11, 31).getTime() - now.getTime()) / (7 * 86400000));
-  const neededPerWeek = Math.round(remainingMinutes / weeksLeft);
+  const projection = projectHourCriterion({
+    totalMinutes: stats.total, firstEntryDate: stats.firstEntryDate, today: formatISODate(new Date()), year,
+  });
+  const projectedMinutes = projection.projectedMinutes;
+  const remainingMinutes = projection.remainingMinutes;
+  const neededPerWeek = projection.neededPerWeekMinutes;
+  const isPartnershipMember = ['vof', 'maatschap', 'cv'].includes(legalForm);
 
   const categoryLine = [...stats.perCategory.entries()]
     .sort((a, b) => b[1] - a[1])
@@ -359,7 +362,16 @@ function HourCriterionCard({ data, currentUserId }: { data: AppData; currentUser
             ? <p className="tt-criterion-prognosis ok">Op koers: in dit tempo kom je uit op ± {Math.round(minutesToHours(projectedMinutes))} uur.</p>
             : <p className="tt-criterion-prognosis behind">Onder koers (prognose ± {Math.round(minutesToHours(projectedMinutes))} u): nog {formatMinutes(remainingMinutes)} nodig — gemiddeld {formatMinutes(neededPerWeek)} per week t/m december.</p>)
           : <p className="tt-criterion-prognosis behind">Niet gehaald: {formatMinutes(remainingMinutes)} tekort in {year}.</p>}
-      <p className="tt-criterion-note">Telt al jóuw geregistreerde uren in kalenderjaar {year}, inclusief indirecte uren (administratie, acquisitie, reistijd, scholing). Indicatieve teller — geen fiscaal advies.</p>
+      <p className="tt-criterion-note">
+        Telt al jóuw geregistreerde uren in kalenderjaar {year}, inclusief indirecte uren (administratie, acquisitie, reistijd, scholing).
+        {isPartnershipMember && ' Bij een vof, maatschap of cv geldt het urencriterium per vennoot: dit zijn alleen jouw uren.'}
+        {' '}Naast de 1225 uur moet je meer dan de helft van je werktijd aan je onderneming besteden, tenzij je in een of meer van de vijf voorgaande jaren geen ondernemer was.
+        Begin je dit jaar, dan geldt de volle 1225 uur voor het deel van het jaar dat je onderneemt; er wordt niet herrekend. Bij zwangerschap tellen 16 weken mee als gewerkte uren.
+        {year === 2026
+          ? ' Het urencriterium geeft recht op de zelfstandigenaftrek (2026: € 1.200) en, als starter, de startersaftrek (€ 2.123).'
+          : ' Het urencriterium geeft recht op de zelfstandigenaftrek en, als starter, de startersaftrek.'}
+        {' '}Indicatieve teller — geen fiscaal advies.
+      </p>
     </article>
   );
 }
