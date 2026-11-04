@@ -1,3 +1,4 @@
+import type { GalleryLayout } from './lib/galleryLayout';
 import type { ReportDefinition } from './lib/reporting';
 
 export type UUID = string;
@@ -791,6 +792,13 @@ export interface Gallery extends OrgScopedRow {
   /** Focuspunt van de uitsnede in procenten; wordt `object-position`. */
   cover_focus_x: number;
   cover_focus_y: number;
+  /**
+   * Weergave van het album, los van de opening: indeling, witruimte, kolommen,
+   * speelsheid, afwerking (zie src/lib/galleryLayout.ts). Altijd lezen via
+   * `normalizeGalleryLayout`: leeg = de standaardweergave, en de kolom
+   * ontbreekt vóór migratie 20261104065000.
+   */
+  layout?: Partial<GalleryLayout> | null;
   allow_downloads: boolean;
   download_quality: GalleryDownloadQuality;
   share_enabled: boolean;
@@ -828,6 +836,8 @@ export interface GalleryItem extends OrgScopedRow {
   stream_status: GalleryStreamStatus | null;
   stream_playback_base: string | null;
   sort_order: number;
+  /** Groot tonen in het album. Ontbreekt vóór migratie 20261104065000. */
+  featured?: boolean;
   created_at: string;
   updated_at: string;
 }

@@ -5420,6 +5420,102 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .gal-cover{grid-template-columns:1fr}
 }
 
+/* ── Instellingen → Weergave ─────────────────────────────────────────────────
+   Links de knoppen, rechts een levend voorbeeld dat blijft staan terwijl je
+   door de knoppen scrolt. Op een smal scherm onder elkaar, voorbeeld bovenaan:
+   wie aan een schuif trekt, moet zien wat er gebeurt. */
+.gal-look{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.08fr);gap:16px;align-items:start}
+.gal-look-controls{display:flex;flex-direction:column;gap:12px;min-width:0}
+.gal-look-title{display:flex;align-items:center;gap:8px}
+.gal-look-own{font-size:10.5px;font-weight:700;color:var(--accent-ink);background:rgba(var(--accent-rgb),.12);border-radius:999px;padding:2px 8px}
+.gal-look-hint{margin:0;font-size:12px;line-height:1.5;color:var(--muted2)}
+.gal-look-row{display:flex;flex-direction:column;gap:6px}
+.gal-look-label{font-size:12px;font-weight:600;color:var(--muted2)}
+.gal-look-presets{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px}
+.gal-look-styles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.gal-look-preset,.gal-look-style{align-items:stretch;text-align:center;gap:6px;padding:8px}
+.gal-look-preset .gal-format-label,.gal-look-style .gal-format-label{font-size:11.5px}
+
+/* Segmenten: één keuze uit een rij, als knoppen met aria-pressed. */
+.gal-seg{display:flex;flex-wrap:wrap;gap:4px}
+.gal-seg-opt{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--bg3);color:var(--muted2);border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;font-variant-numeric:tabular-nums;transition:border-color .15s,background .15s,color .15s}
+.gal-seg-opt:hover:not(:disabled){border-color:var(--border2);color:var(--text)}
+.gal-seg-opt.is-on{border-color:var(--accent);background:rgba(var(--accent-rgb),.12);color:var(--accent-ink)}
+.gal-seg-opt:disabled{opacity:.5;cursor:not-allowed}
+.gal-seg-opt:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.gal-seg-icons .gal-seg-opt{padding:5px 9px}
+
+/* Schuifregelaars in de merkkleur. */
+.gal-range{width:100%;margin:0;accent-color:var(--accent);cursor:pointer}
+.gal-look-gap{display:flex;align-items:center;gap:12px}
+.gal-look-gap .gal-range{flex:1;min-width:0}
+.gal-look-value{flex:0 0 auto;min-width:104px;text-align:right;font-size:12px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
+.gal-look-stops{display:flex;flex-wrap:wrap;gap:2px}
+.gal-look-stops .gal-linkbtn.is-on{background:rgba(var(--accent-rgb),.14)}
+.gal-look-play{display:flex;flex-direction:column;gap:4px}
+.gal-look-ticks{display:grid;grid-template-columns:repeat(4,1fr);font-size:11px;color:var(--muted)}
+.gal-look-ticks button{background:none;border:0;padding:2px 0;font:inherit;color:inherit;cursor:pointer;text-align:center}
+.gal-look-ticks button:first-child{text-align:left}
+.gal-look-ticks button:last-child{text-align:right}
+.gal-look-ticks button.is-on{color:var(--accent-ink);font-weight:700}
+.gal-look-featured{display:flex;align-items:flex-start;gap:6px}
+.gal-look-featured svg{flex:0 0 auto;margin-top:1px;color:var(--accent-ink)}
+.gal-look-toggle>span{display:flex;flex-direction:column;gap:2px;color:var(--text);font-weight:500}
+.gal-look-toggle small{font-size:11px;color:var(--muted);font-weight:400}
+.gal-look-reset{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 2px}
+.gal-look-reset .gal-linkbtn{display:inline-flex;align-items:center;gap:5px}
+.gal-look-reset .gal-linkbtn:disabled{opacity:.45;cursor:default;background:none}
+.gal-look-reset .gal-field-help{display:inline-flex;align-items:center;gap:4px;margin:0}
+/* Puntje op het tabblad: hier staat nog iets wat niet is opgeslagen. */
+.gal-tab-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);margin-left:2px}
+
+/* De miniaturen bij stijl en indeling: puur CSS, net als bij de openingen. */
+.gal-glyph{display:block;width:100%;height:38px;border-radius:6px;background:var(--bg4);padding:4px;overflow:hidden}
+.gal-glyph i{display:block;min-width:0;min-height:0;border-radius:2px;background:rgba(var(--sheen-rgb),calc(.34 * var(--sheen-k)))}
+.gal-format-card.is-active .gal-glyph i{background:rgba(var(--accent-rgb),.6)}
+.gal-glyph-rows{display:flex;flex-direction:column;gap:3px}
+.gal-glyph-rows b{display:flex;gap:3px;flex:1}
+.gal-glyph-rows b i{flex-basis:0}
+.gal-glyph-masonry{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
+.gal-glyph-masonry b{display:flex;flex-direction:column;gap:3px;min-height:0}
+.gal-glyph-v-moodboard b:nth-child(2){padding-top:6px}
+.gal-glyph-grid{display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);gap:3px}
+.gal-glyph-grid i.is-big{grid-column:span 2;grid-row:span 2}
+.gal-glyph-story{display:flex;flex-direction:column;align-items:center;gap:3px}
+.gal-glyph-story i.is-wide{width:100%;flex:1.3}
+.gal-glyph-story b{display:flex;gap:3px;width:60%;flex:1}
+.gal-glyph-story b i{flex:1}
+.gal-glyph-prints{display:flex;align-items:center;justify-content:center;gap:4px}
+.gal-glyph-prints i{width:27%;height:74%;border-radius:1px;box-shadow:inset 0 0 0 2px #f6f3ec,0 1px 2px rgba(0,0,0,.35)}
+.gal-glyph-v-seamless,.gal-glyph-v-seamless b{gap:0}
+.gal-glyph-v-seamless i{border-radius:0}
+.gal-glyph-v-gallery{gap:5px;padding:5px 9px}
+.gal-glyph-v-gallery i{border-radius:0;box-shadow:inset 0 0 0 2px #f6f3ec}
+
+/* Het voorbeeld: het album op ware grootte, verkleind in een kader. Op tablet
+   en telefoon als apparaat, zodat je ziet voor welk scherm hij rekent. */
+.gal-look-preview{position:sticky;top:0;display:flex;flex-direction:column;gap:8px;min-width:0}
+.gal-look-preview-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.gal-look-pane{max-height:min(66vh,640px);overflow-y:auto;overflow-x:hidden;border:1px solid var(--border);border-radius:14px;background:var(--bg2);overscroll-behavior:contain;scrollbar-width:thin}
+.gal-look-pane.is-tablet,.gal-look-pane.is-phone{display:flex;justify-content:center;align-items:flex-start;padding:12px}
+.gal-look-device{position:relative;flex:0 0 auto;overflow:hidden}
+.gal-look-pane.is-tablet .gal-look-device,.gal-look-pane.is-phone .gal-look-device{border-radius:16px;box-shadow:0 0 0 5px var(--bg4),0 12px 30px -12px rgba(0,0,0,.5)}
+.gal-look-canvas{transform-origin:0 0;background:var(--gal-bg,var(--bg));color:var(--gal-text,var(--text));font-family:var(--brand-body,inherit)}
+/* Vlakken zolang er nog geen beelden zijn: gedempte tinten, zodat ze als
+   foto's lezen en niet als knoppen. */
+.galv.is-preview .galv-tile-fallback{font-size:0;background:linear-gradient(140deg,#8a7f72,#4c463f)}
+.galv.is-preview .galv-lay>.galv-tile:nth-child(5n+2) .galv-tile-fallback{background:linear-gradient(140deg,#6f7c86,#3b444b)}
+.galv.is-preview .galv-lay>.galv-tile:nth-child(5n+3) .galv-tile-fallback{background:linear-gradient(140deg,#9a8a6a,#574a35)}
+.galv.is-preview .galv-lay>.galv-tile:nth-child(5n+4) .galv-tile-fallback{background:linear-gradient(140deg,#7d8a78,#454f42)}
+.galv.is-preview .galv-lay>.galv-tile:nth-child(5n) .galv-tile-fallback{background:linear-gradient(140deg,#8c7584,#4e3f49)}
+
+@media(max-width:900px){
+  .gal-look{grid-template-columns:1fr}
+  .gal-look-preview{position:static;order:-1}
+  .gal-look-styles{grid-template-columns:repeat(auto-fill,minmax(86px,1fr))}
+  .gal-look-pane{max-height:46vh}
+}
+
 /* Formaat-aanduiding in de lijst en de detailkop. */
 .gal-format-tag{display:inline-flex;align-items:center;border-radius:999px;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:.03em;background:var(--bg4);color:var(--muted2);white-space:nowrap}
 .gal-list-sub .gal-format-tag{margin-right:6px}
@@ -5575,27 +5671,9 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-hero-text h2,.galv-section-title,.pgal-hero h1{font-family:var(--brand-heading,inherit)}
 .pgal,.portal-gallery{font-family:var(--brand-body,inherit)}
 
-/* ── Achtergrond van de galerij ──────────────────────────────────────────────
-   De gebruiker kiest één kleur; --gal-text/-muted/-border/-surface worden in
-   src/lib/branding.ts uit de helderheid afgeleid, zodat een lichte achtergrond
-   automatisch donkere tekst krijgt. Zonder keuze vallen ze terug op het
-   bestaande donkere thema, dus er verandert dan niets. */
-.pgal{background:var(--gal-bg,var(--bg));color:var(--gal-text,var(--text))}
-.portal-gallery{background:var(--gal-bg,transparent);color:var(--gal-text,inherit)}
-.galv-empty{border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted))}
-.galv-section-title{color:var(--gal-muted,var(--muted2))}
-.galv-hero-text p{color:var(--gal-muted,var(--muted2))}
-.galv-chips{background:linear-gradient(180deg,var(--gal-bg,var(--bg)) 62%,transparent)}
-.galv-chip{background:var(--gal-surface,var(--bg3));border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted2))}
-.galv-chip:hover{color:var(--gal-text,var(--text))}
-.galv-tile,.galv-video-card{background:var(--gal-surface,var(--bg3))}
-.galv-video-card{border-color:var(--gal-border,var(--border))}
-.galv-hero-frame{background:var(--gal-surface,rgba(255,255,255,.02));border-color:var(--gal-border,var(--border))}
-.galv-hero-classic .galv-hero-text{border-color:var(--gal-border,var(--border))}
-.galv-hero-media{background:var(--gal-surface,var(--bg3))}
-.pgal-foot{border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted))}
-.pgal-foot-own,.pgal-meta{color:var(--gal-muted,var(--muted))}
-.pgal-desc{color:var(--gal-muted,var(--muted2))}
+/* De achtergrond van de galerij (--gal-bg en het palet dat erbij hoort) staat
+   verderop, ná de basisregels van de galerij: zie "Achtergrond van de galerij"
+   onder de publieke deellinkpagina. */
 
 /* ── Hero: de opening van de galerij (zestien templates) ── */
 .galv-hero{position:relative;border-radius:var(--radius-lg,18px);overflow:hidden}
@@ -5785,18 +5863,77 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-section{display:flex;flex-direction:column;gap:10px}
 .galv-section-title{display:flex;align-items:center;gap:7px;margin:0;font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted2)}
 
-/* ── Fotoraster: justified rows ──────────────────────────────────────────────
-   Rijen vullen exact de breedte en elke foto houdt haar eigen beeldverhouding:
-   geen bijgesneden randen en geen gaten. De rijhoogte komt uit de TSX (die
-   rekent met de werkelijke containerbreedte); hier alleen de opmaak. */
-.galv-just{display:flex;flex-direction:column;gap:6px}
-.galv-just-row{display:flex;gap:6px;min-width:0}
-.galv-just-row .galv-tile{min-width:0;height:100%}
-.galv-tile{position:relative;margin:0;border-radius:8px;overflow:hidden;background:var(--bg3);cursor:zoom-in}
+/* ── Het album en de foto's in de gekozen indeling ───────────────────────────
+   De plek en maat van elke tegel rekent galleryLayoutEngine.ts uit, absoluut en
+   op hele pixels — rijen, waterval, raster, verhaal of afdrukken. Hier alleen de
+   opmaak. De variabelen komen van de weergave-instellingen (GalleryViewer:
+   layoutStyle); de terugvalwaarden zijn de maten van vóór die instellingen. */
+.galv-album{display:flex;flex-direction:column;gap:18px;width:100%;max-width:var(--galv-max,none);margin-inline:auto;min-width:0}
+/* Ruimte tussen de hoofdstukken bovenop de vaste 18 px, zodat de afstand van de
+   chipbalk tot het eerste hoofdstuk niet meegroeit. */
+.galv-album>.galv-section+.galv-section{margin-top:calc(var(--galv-section-gap,18px) - 18px)}
+.galv-lay{position:relative;width:100%}
+.galv-lay>.galv-tile{position:absolute}
+.galv-tile{position:relative;margin:0;border-radius:var(--galv-radius,8px);overflow:hidden;background:var(--bg3);cursor:zoom-in}
 .galv-tile.is-draggable{cursor:grab}
 .galv-tile.is-draggable:active{cursor:grabbing}
-.galv-tile img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s ease}
-.galv-tile:hover img{transform:scale(1.04)}
+.galv-tile.is-inert{cursor:default}
+.galv-tile img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s ease,filter .25s ease}
+
+/* Onder de muis: inzoomen (de standaard), optillen, of niets. */
+.galv-hover-zoom .galv-tile:hover img{transform:scale(1.04)}
+.galv-hover-lift .galv-lay>.galv-tile{transition:transform .25s ease,box-shadow .25s ease}
+.galv-hover-lift .galv-lay>.galv-tile:hover{transform:translateY(-4px);box-shadow:0 18px 34px -16px rgba(0,0,0,.62);z-index:2}
+
+/* Lijst om elke foto. Passe-partout = een papieren rand, als een ingelijste
+   afdruk; fijne lijn = een haarlijn met een klein stukje lucht; zwevend = een
+   zachte schaduw. Binnen een lijst zou inzoomen over de rand heen lopen, dus
+   wordt het daar een lichte oplichting. */
+.galv-frame-mat .galv-lay:not(.galv-lay-prints)>.galv-tile{padding:var(--galv-mat,8px);background:var(--galv-paper-color,#f6f3ec);box-shadow:0 0 0 1px var(--gal-border,rgba(0,0,0,.08))}
+.galv-frame-line .galv-lay:not(.galv-lay-prints)>.galv-tile{padding:4px;background:transparent;border:1px solid var(--gal-border,var(--border))}
+.galv-frame-mat .galv-tile img,.galv-frame-line .galv-tile img{border-radius:max(0px,calc(var(--galv-radius,8px) - 5px))}
+.galv-frame-mat.galv-hover-zoom .galv-tile:hover img,.galv-frame-line.galv-hover-zoom .galv-tile:hover img{transform:none;filter:brightness(1.07)}
+.galv-frame-shadow .galv-lay:not(.galv-lay-prints)>.galv-tile{box-shadow:0 16px 30px -14px rgba(0,0,0,.66),0 2px 6px rgba(0,0,0,.22)}
+
+/* Afdrukken: een papieren rand (bij "Uitbundig" een polaroidrand onderaan),
+   licht gedraaid. Onder de muis komt de afdruk recht en iets naar voren, als
+   een foto die je van tafel oppakt. */
+.galv-lay-prints>.galv-tile{padding:var(--galv-paper,8px) var(--galv-paper,8px) var(--galv-paper-bottom,8px);background:var(--galv-paper-color,#fbfaf6);border-radius:min(var(--galv-radius,8px),4px);overflow:visible;transform:rotate(var(--galv-rot,0deg));box-shadow:0 0 0 1px rgba(0,0,0,.05),0 1px 2px rgba(0,0,0,.18),0 12px 26px -14px rgba(0,0,0,.6);transition:transform .32s cubic-bezier(.2,.7,.2,1),box-shadow .32s ease}
+.galv-lay-prints>.galv-tile img{border-radius:0}
+.galv-hover-zoom .galv-lay-prints>.galv-tile:hover img{transform:none}
+.galv-hover-zoom .galv-lay-prints>.galv-tile:hover,.galv-hover-lift .galv-lay-prints>.galv-tile:hover{transform:rotate(0deg) scale(1.035);z-index:3;box-shadow:0 0 0 1px rgba(0,0,0,.05),0 2px 4px rgba(0,0,0,.2),0 26px 44px -18px rgba(0,0,0,.66)}
+
+/* "Groot tonen": alleen in de beheerweergave een merkje, zodat de beeldmaker
+   ziet welke foto's hij heeft uitgelicht. De klant ziet het aan de maat. */
+.galv-feature-badge{position:absolute;left:7px;bottom:7px;z-index:2;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:7px;background:rgba(10,10,10,.72);color:var(--accent,#ffd966);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);pointer-events:none}
+
+/* Binnenkomen bij het scrollen. Een animatie en geen overgang: een overgang met
+   vertraging zou ook het optillen onder de muis vertragen. "backwards" houdt de
+   beginstand vast tijdens de vertraging en laat daarna los, zodat de tegel
+   gewoon weer kan bewegen. Wie om minder beweging vraagt, krijgt de foto's
+   meteen (en de globale reduced-motion-regel zet animaties sowieso uit). */
+@keyframes galvReveal{from{opacity:0;transform:translateY(18px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes galvRevealPrint{from{opacity:0;transform:translateY(26px) rotate(calc(var(--galv-rot,0deg) * 2.6))}to{opacity:1;transform:rotate(var(--galv-rot,0deg))}}
+@media (prefers-reduced-motion:no-preference){
+  .galv-reveal .galv-lay>.galv-tile:not([data-in]){opacity:0}
+  .galv-reveal .galv-lay>.galv-tile[data-in]{animation:galvReveal .75s cubic-bezier(.2,.7,.2,1) var(--galv-delay,0ms) backwards}
+  .galv-reveal .galv-lay-prints>.galv-tile[data-in]{animation-name:galvRevealPrint}
+}
+
+/* Hoofdstuktitels: een klein label (de standaard), een grote titel, of
+   genummerd als de hoofdstukken van een boek. */
+.galv-head-title .galv-section,.galv-head-numbered .galv-section{gap:14px}
+.galv-head-title .galv-section-title,.galv-head-numbered .galv-section-title{align-items:baseline;gap:12px;font-family:var(--brand-heading,inherit);font-size:clamp(19px,2.1vw,28px);font-weight:600;line-height:1.2;letter-spacing:-.015em;text-transform:none;color:var(--gal-text,var(--text))}
+.galv-section-num{font-size:.6em;font-weight:500;letter-spacing:.04em;font-variant-numeric:tabular-nums;color:var(--gal-accent-ink,var(--accent-ink))}
+/* Een opening van alleen tekst heeft geen beeld dat de volle breedte vraagt: die
+   lijnt uit met het album, anders staat de titel tegen de rand en het album
+   in het midden. */
+.galv>.galv-hero-minimal{width:100%;max-width:var(--galv-max,none);margin-inline:auto}
+
+/* Het voorbeeld in de instellingen: een plaatje van het album. De chipbalk
+   plakt daar niet (binnen een geschaalde laag zou hij verspringen). */
+.galv.is-preview .galv-chips{position:static}
+.galv.is-preview .galv-video-card:hover:not(.is-idle){transform:none}
 .galv-tile-fallback{display:flex;align-items:center;justify-content:center;height:100%;padding:10px;font-size:11px;color:var(--muted);word-break:break-all;text-align:center}
 .galv-tile-tools{position:absolute;top:6px;right:6px;display:flex;gap:4px;opacity:0;transition:opacity .15s}
 .galv-tile:hover .galv-tile-tools,.galv-video-card:hover .galv-tile-tools,
@@ -5908,7 +6045,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Geen `scroll-behavior:smooth` hier: de bladerknoppen vragen zelf om een
    vloeiende scroll, en als CSS-regel zou élke programmatische verplaatsing
    (ook scroll-herstel bij terugnavigatie) gaan animeren. */
-.galv-row-track{display:flex;gap:10px;overflow-x:auto;padding:14px 0;margin:-14px 0;scroll-snap-type:x proximity;scrollbar-width:thin}
+.galv-row-track{display:flex;gap:var(--galv-vgap-row,10px);overflow-x:auto;padding:14px 0;margin:-14px 0;scroll-snap-type:x proximity;scrollbar-width:thin}
 .galv-row-nav{position:absolute;top:0;bottom:0;z-index:2;display:flex;align-items:center;justify-content:center;width:46px;border:0;padding:0;background:rgba(8,8,8,.62);color:#fff;cursor:pointer;opacity:0;transition:opacity .18s ease,background .18s ease}
 .galv-row-prev{left:0;border-radius:12px 0 0 12px}
 .galv-row-next{right:0;border-radius:0 12px 12px 0}
@@ -5919,14 +6056,14 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 @media(hover:none){.galv-row-nav{display:none}}
 .galv-row-title{margin:0 0 10px;font-family:var(--brand-heading,inherit);font-size:clamp(15px,1.5vw,20px);font-weight:700;letter-spacing:-.01em;color:var(--gal-text,var(--text))}
 .galv-section-billboard{margin-bottom:26px}
-.galv-section-billboard .galv-video-card{flex-basis:clamp(240px,22vw,320px)}
+.galv-section-billboard .galv-video-card{flex-basis:var(--galv-vcard-bb,clamp(240px,22vw,320px))}
 .galv-section-billboard .galv-video-card:hover:not(.is-idle){transform:scale(1.08)}
 /* ── Videogalerij: filmisch raster met grote tegels i.p.v. één lange strook ── */
-.galv-video-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+.galv-video-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--galv-vgrid-min,360px)),1fr));gap:var(--galv-vgap-grid,14px)}
 .galv-video-grid .galv-video-card{flex:none;width:100%}
 .galv-video-grid .galv-video-name{font-size:14px}
 .galv-video-grid .galv-video-play{width:56px;height:56px}
-.galv-video-card{position:relative;flex:0 0 300px;aspect-ratio:16/9;border-radius:12px;overflow:hidden;border:1px solid var(--border);background:var(--bg3);padding:0;font:inherit;color:var(--text);scroll-snap-align:start;transition:transform .22s ease,border-color .22s ease}
+.galv-video-card{position:relative;flex:0 0 var(--galv-vcard,300px);aspect-ratio:16/9;border-radius:var(--galv-vradius,12px);overflow:hidden;border:1px solid var(--border);background:var(--bg3);padding:0;font:inherit;color:var(--text);scroll-snap-align:start;transition:transform .22s ease,border-color .22s ease}
 .galv-video-card:hover:not(.is-idle){transform:scale(1.03);border-color:var(--border2);z-index:1}
 /* De hele kaart is klikbaar via deze knop; de acties erboven blijven bereikbaar
    (ook bij een nog verwerkende of mislukte video, die geen afspeelknop heeft). */
@@ -6034,10 +6171,10 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-player-fallback .galv-bb-secondary{margin:0}
 
 @media(max-width:760px){
-  /* De rijhoogte schaalt al mee in de TSX; hier alleen de tussenruimte. */
-  .galv-just,.galv-just-row{gap:4px}
-  .galv-video-card{flex-basis:230px}
-  .galv-video-grid{grid-template-columns:1fr;gap:10px}
+  /* De foto's rekenen hun eigen tussenruimte uit (galleryLayoutEngine.ts);
+     hier alleen de video's, naar verhouding van de gekozen maat. */
+  .galv-video-card{flex-basis:calc(var(--galv-vcard,300px) * .77)}
+  .galv-video-grid{grid-template-columns:1fr;gap:calc(var(--galv-vgap-grid,14px) * .7)}
   .gal-format-options{grid-template-columns:1fr}
   .gal-format-options.is-compact{grid-template-columns:1fr}
   /* Kopvideo op een telefoon: staander, en alleen de poster — de bewegende
@@ -6050,7 +6187,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .galv-bb-title{font-size:clamp(24px,7vw,34px)}
   .galv-bb-actions{width:100%}
   .galv-bb-play,.galv-bb-secondary{flex:1;justify-content:center;padding:12px 16px}
-  .galv-section-billboard .galv-video-card{flex-basis:250px}
+  .galv-section-billboard .galv-video-card{flex-basis:calc(var(--galv-vcard,300px) * .83)}
   .galv-lightbox{padding:10px}
   .galv-lightbox-nav{width:38px;height:38px}
   .gal-detail-tools{gap:6px}
@@ -6126,6 +6263,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Leesbaar op drie meter: alleen de tekst die er dan toe doet. */
 .galv.is-tv .galv-chip{font-size:14px;padding:9px 15px}
 .galv.is-tv .galv-section-title,.galv.is-tv .galv-video-name{font-size:15px}
+.galv.is-tv.galv-head-title .galv-section-title,.galv.is-tv.galv-head-numbered .galv-section-title{font-size:clamp(24px,2.4vw,40px)}
 .galv.is-tv .galv-lightbox-name{font-size:15px}
 .galv.is-tv .galv-lightbox-count{font-size:14px}
 .galv.is-tv .galv-lightbox-close{width:48px;height:48px}
@@ -6141,8 +6279,13 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .portal-gallery-head h2{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .portal-gallery-sub{margin:-4px 0 12px}
 
-/* ── Publieke deellinkpagina (/gallerij/<token>) ── */
-.pgal{min-height:100dvh;background:var(--bg);color:var(--text);display:flex;flex-direction:column}
+/* ── Publieke deellinkpagina (/gallerij/<token>) ──
+   Achtergrond en tekst volgen de galerijkleur van de beeldmaker (--gal-bg,
+   --gal-text; zie "Achtergrond van de galerij" hieronder). Deze regel stond tot
+   4 november 2026 op var(--bg) en kwam later in dit bestand dan die regel: de
+   gekozen achtergrond kwam daardoor in het portaal wél aan en op de deellink
+   nooit. Zonder huisstijl (het pinscherm) blijft het thema van de app. */
+.pgal{min-height:100dvh;background:var(--gal-bg,var(--bg));color:var(--gal-text,var(--text));display:flex;flex-direction:column}
 .pgal-gate{align-items:center;justify-content:center;padding:20px}
 .pgal-pin-card{display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center;max-width:380px;width:100%;border:1px solid var(--border);border-radius:var(--radius-lg,18px);background:var(--bg2);padding:30px 26px}
 .pgal-pin-card h1{font-size:19px;margin:0}
@@ -6168,6 +6311,33 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Eigen logo van de beeldmaker boven de galerij. */
 .pgal-brand{display:flex;justify-content:center;padding:22px 18px 0}
 .pgal-brand img{max-height:56px;max-width:min(280px,60vw);object-fit:contain;display:block}
+
+/* ── Achtergrond van de galerij ──────────────────────────────────────────────
+   De gebruiker kiest één kleur; --gal-text/-muted/-border/-surface worden in
+   src/lib/branding.ts uit de helderheid afgeleid, zodat een lichte achtergrond
+   automatisch donkere tekst krijgt. Zonder keuze (de app zelf) vallen ze terug
+   op precies de waarden van de basisregels, dus daar verandert niets.
+
+   Dit blok MOET na de basisregels staan. Het stond tot 4 november 2026 ervóór,
+   en dan wint bij gelijke specificiteit de latere regel: chips, tegels, lege
+   meldingen en sectietitels hielden de kleuren van het donkere thema, ook bij
+   een lichte galerij — en op de deellink zelfs de hele achtergrond. */
+.portal-gallery{background:var(--gal-bg,transparent);color:var(--gal-text,inherit)}
+.galv-empty{border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted))}
+.galv-section-title{color:var(--gal-muted,var(--muted2))}
+.galv-hero-text p{color:var(--gal-muted,var(--muted2))}
+.galv-chips{background:linear-gradient(180deg,var(--gal-bg,var(--bg)) 62%,transparent)}
+.galv-chip{background:var(--gal-surface,var(--bg3));border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted2))}
+/* Niet bij de gekozen chip: die houdt zijn accentkleur, ook onder de muis. */
+.galv-chip:not(.is-active):hover{color:var(--gal-text,var(--text))}
+.galv-tile,.galv-video-card{background:var(--gal-surface,var(--bg3))}
+.galv-video-card{border-color:var(--gal-border,var(--border))}
+.galv-hero-frame{background:var(--gal-surface,rgba(255,255,255,.02));border-color:var(--gal-border,var(--border))}
+.galv-hero-classic .galv-hero-text{border-color:var(--gal-border,var(--border))}
+.galv-hero-media{background:var(--gal-surface,var(--bg3))}
+.pgal-foot{border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted))}
+.pgal-meta{color:var(--gal-muted,var(--muted))}
+.pgal-foot-own,.pgal-desc{color:var(--gal-muted,var(--muted2))}
 
 /* ── Instellingen · Huisstijl ── */
 .brand-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:12px}

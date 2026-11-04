@@ -1,10 +1,11 @@
-// Gedeelde galerij-weergave: hero, categoriechips, fotogrid, Netflix-achtige
-// videorijen en lightbox. Wordt gebruikt door de beheer-tab in het project
-// (app), de Galerijen-tab in het klantportaal en de publieke deellinkpagina.
+// Gedeelde galerij-weergave: hero, categoriechips, foto's in de gekozen
+// indeling, Netflix-achtige videorijen en lightbox. Wordt gebruikt door de
+// beheer-tab in het project (app), de Galerijen-tab in het klantportaal, de
+// publieke deellinkpagina en het voorbeeld in de instellingen (Weergave).
 // De component is puur presentationeel: media-URL's komen uit het meegegeven
 // tokenbundel, favorieten en downloads lopen via callbacks van de host.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Film, Heart, Maximize2, Menu, Minimize2, Pause, Play, Repeat, Shuffle, SlidersHorizontal, ThumbsUp, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { ChevronLeft, ChevronRight, Download, Expand, Film, Heart, Maximize2, Menu, Minimize2, Pause, Play, Repeat, Shuffle, SlidersHorizontal, ThumbsUp, X } from 'lucide-react';
 import {
   galleryFileUrl,
   streamIframeUrl,
@@ -25,6 +26,8 @@ import {
   type GalleryZipSummary,
 } from '../lib/galleryMedia';
 import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
+import { normalizeGalleryLayout, type GalleryLayout } from '../lib/galleryLayout';
+import { planPhotoLayout, type LayoutTile } from '../lib/galleryLayoutEngine';
 
 /** Minimale item-vorm — zowel de app (GalleryItem) als het portaal (gesanitiseerd) passen hierin. */
 export type GalleryViewerItem = {
@@ -45,6 +48,8 @@ export type GalleryViewerItem = {
   stream_uid: string | null;
   stream_status: string | null;
   stream_playback_base: string | null;
+  /** Groot tonen: de beeldmaker heeft deze foto uitgelicht. Oudere payloads missen dit. */
+  featured?: boolean | null;
 };
 
 export type GalleryViewerCategory = { id: string; name: string };
@@ -75,6 +80,52 @@ function coverPosition(hero: GalleryViewerHero): string {
   const clamp = (value: number | null | undefined) =>
     Math.min(100, Math.max(0, typeof value === 'number' && Number.isFinite(value) ? value : 50));
   return `${clamp(hero.focusX)}% ${clamp(hero.focusY)}%`;
+}
+
+// ── Weergave: van instellingen naar klassen en CSS-variabelen ───────────────
+//
+// De plek van elke foto rekent galleryLayoutEngine.ts uit; wat overblijft voor
+// CSS (hoeken, lijst, ruimte tussen hoofdstukken, video's) gaat als variabelen
+// op de buitenste laag. De standaardwaarden geven exact de maten van vóór de
+// weergave-instellingen: 8 px hoeken op foto's, 12 px op video's, 10 en 14 px
+// tussen video's, 18 px tussen de secties.
+
+const SECTION_SPACING_PX: Record<GalleryLayout['section_spacing'], number> = { tight: 10, normal: 18, airy: 44, grand: 84 };
+const ALBUM_MAX_WIDTH: Record<GalleryLayout['width'], string> = { full: 'none', wide: '1680px', medium: '1240px', narrow: '940px' };
+/** [foto, video] — een videokaart heeft een rand en oogt met dezelfde straal hoekiger. */
+const CORNER_PX: Record<GalleryLayout['corners'], [number, number]> = { square: [0, 0], subtle: [3, 4], soft: [8, 12], round: [18, 20] };
+const VIDEO_SIZE: Record<GalleryLayout['video_size'], { card: number; grid: number; billboard: string }> = {
+  small: { card: 230, grid: 260, billboard: 'clamp(200px,18vw,260px)' },
+  medium: { card: 300, grid: 360, billboard: 'clamp(240px,22vw,320px)' },
+  large: { card: 400, grid: 480, billboard: 'clamp(300px,28vw,420px)' },
+};
+
+function layoutClassNames(look: GalleryLayout): string {
+  return [
+    `galv-hover-${look.hover}`,
+    `galv-frame-${look.frame}`,
+    `galv-head-${look.headings}`,
+    look.reveal ? 'galv-reveal' : '',
+  ].filter(Boolean).join(' ');
+}
+
+function layoutStyle(look: GalleryLayout): CSSProperties {
+  const [photoRadius, videoRadius] = CORNER_PX[look.corners];
+  const video = VIDEO_SIZE[look.video_size];
+  return {
+    '--galv-section-gap': `${SECTION_SPACING_PX[look.section_spacing]}px`,
+    '--galv-max': ALBUM_MAX_WIDTH[look.width],
+    '--galv-radius': `${photoRadius}px`,
+    '--galv-vradius': `${videoRadius}px`,
+    '--galv-vcard': `${video.card}px`,
+    '--galv-vgrid-min': `${video.grid}px`,
+    '--galv-vcard-bb': video.billboard,
+    // Video's krijgen iets meer lucht dan foto's: een kaart heeft een rand en
+    // een titel, en zonder die extra ruimte plakken ze tegen elkaar. Bij
+    // "Naadloos" (0 px) gaan ook zij tegen elkaar aan.
+    '--galv-vgap-row': `${look.gap === 0 ? 0 : look.gap + 4}px`,
+    '--galv-vgap-grid': `${look.gap === 0 ? 0 : look.gap + 8}px`,
+  } as CSSProperties;
 }
 
 export function formatDuration(seconds: number | null): string {
@@ -272,12 +323,34 @@ export function GalleryViewer({
   downloadQuality = 'original',
   renderItemActions,
   emptyText = 'Nog geen media in deze galerij.',
+  layout,
+  preview = false,
+  markFeatured = false,
+  viewportHeight,
 }: {
   items: GalleryViewerItem[];
   bundle: GalleryTokenBundle | null;
   allowDownload: boolean;
   /** 'photo' = raster, 'video' = filmische tegels, 'hybrid' = video's boven de foto's. */
   format?: string;
+  /**
+   * De weergave van het album (galleries.layout): indeling, witruimte,
+   * kolommen, speelsheid. Afwezig of onvolledig = de standaardweergave.
+   */
+  layout?: Partial<GalleryLayout> | null;
+  /**
+   * Het voorbeeld in de instellingen: dezelfde weergave, maar niets is aan te
+   * klikken en de zwevende bediening blijft weg — het is een plaatje van het
+   * album, geen tweede galerij.
+   */
+  preview?: boolean;
+  /** Beheerweergave: een merkje op foto's die groot getoond worden. */
+  markFeatured?: boolean;
+  /**
+   * Hoogte van het scherm waarvoor gerekend wordt; standaard het eigen venster.
+   * Het voorbeeld rekent zo voor een telefoon terwijl het op een laptop staat.
+   */
+  viewportHeight?: number;
   /** Categorieën in weergavevolgorde; leeg/afwezig = één doorlopende reeks. */
   categories?: GalleryViewerCategory[];
   /** Opening van de galerij; afwezig = meteen de media. */
@@ -315,6 +388,9 @@ export function GalleryViewer({
   emptyText?: string;
 }) {
   const videoOnly = format === 'video';
+  // Altijd door de normalisatie: een payload van een oudere edge function, of
+  // een rij van vóór de migratie, moet gewoon de standaardweergave geven.
+  const look = useMemo(() => normalizeGalleryLayout(layout), [layout]);
   const [lightbox, setLightbox] = useState<{ index: number } | null>(null);
   const [playing, setPlaying] = useState<GalleryViewerItem | null>(null);
   const [activeChip, setActiveChip] = useState<string | null>(null);
@@ -793,9 +869,15 @@ export function GalleryViewer({
     </span>
   );
 
-  // Bij de filmische opening staat alles in rijen — ook een videogalerij, die
-  // anders een raster zou tonen: rijen zijn juist wat die opening aankondigt.
-  const videoLayout: 'row' | 'grid' = billboard ? 'row' : videoOnly ? 'grid' : 'row';
+  // Automatisch: bij de filmische opening staat alles in rijen — ook een
+  // videogalerij, die anders een raster zou tonen: rijen zijn juist wat die
+  // opening aankondigt. Kiest de beeldmaker zelf rijen of een raster, dan wint
+  // die keuze.
+  const videoLayout: 'row' | 'grid' = look.video_layout === 'rows'
+    ? 'row'
+    : look.video_layout === 'grid'
+      ? 'grid'
+      : billboard ? 'row' : videoOnly ? 'grid' : 'row';
 
   const renderVideoCards = (list: GalleryViewerItem[]) => (
     <>
@@ -836,8 +918,9 @@ export function GalleryViewer({
                 <button
                   type="button"
                   className="galv-video-hit"
-                  onClick={() => setPlaying(item)}
+                  onClick={() => { if (!preview) setPlaying(item); }}
                   aria-label={`${item.file_name} afspelen`}
+                  tabIndex={preview ? -1 : undefined}
                 >
                   <span className="galv-video-play"><Play size={22} fill="currentColor" /></span>
                 </button>
@@ -872,16 +955,42 @@ export function GalleryViewer({
   );
 
   const renderPhotos = (list: GalleryViewerItem[]) => (
-    <JustifiedPhotos
+    <PhotoLayout
       photos={list}
-      rowScale={bigScreen ? 1.35 : 1}
-      renderTile={(item, style, displayWidth) => {
+      look={look}
+      scale={bigScreen ? 1.35 : 1}
+      reveal={look.reveal}
+      viewportHeight={viewportHeight}
+      renderTile={(item, tile, index) => {
         const thumb = galleryItemThumbUrl(item, bundle);
         const isSelected = selected?.has(item.id) ?? false;
+        const print = look.style === 'prints';
+        const style = {
+          left: tile.x,
+          top: tile.y,
+          width: tile.w,
+          height: tile.h,
+          // Afdrukken: draaiing en papierrand per foto uit de rekenregels.
+          ...(print ? {
+            '--galv-rot': `${tile.rotate}deg`,
+            '--galv-paper': `${tile.paper}px`,
+            '--galv-paper-bottom': `${tile.paperBottom}px`,
+          } : {}),
+          // Binnenkomen bij het scrollen: buren komen kort na elkaar, niet tegelijk.
+          ...(look.reveal ? { '--galv-delay': `${(index % 6) * 55}ms` } : {}),
+        } as CSSProperties;
+        // De breedte waarop de browser de scherpste variant kiest: zonder papierrand.
+        const displayWidth = print ? tile.w - tile.paper * 2 : tile.w;
         return (
           <figure
             key={item.id}
-            className={`galv-tile${isSelected ? ' is-selected' : ''}${reorderable ? ' is-draggable' : ''}`}
+            className={[
+              'galv-tile',
+              tile.emphasis ? 'is-emphasis' : '',
+              isSelected ? 'is-selected' : '',
+              reorderable ? 'is-draggable' : '',
+              preview ? 'is-inert' : '',
+            ].filter(Boolean).join(' ')}
             style={style}
             draggable={reorderable}
             onDragStart={reorderable ? () => { dragItemId.current = item.id; } : undefined}
@@ -893,7 +1002,7 @@ export function GalleryViewer({
               if (from && from !== item.id) onReorder?.(from, item.id);
             } : undefined}
             onClick={() => {
-              if (reorderable) return;
+              if (reorderable || preview) return;
               if (selectable) onToggleSelect?.(item); else openPhoto(item);
             }}
           >
@@ -902,27 +1011,40 @@ export function GalleryViewer({
                 <img
                   src={thumb}
                   srcSet={photoSrcSet(item, bundle)}
-                  sizes={`${Math.round(displayWidth)}px`}
+                  sizes={`${Math.max(1, Math.round(displayWidth))}px`}
                   alt={item.file_name}
                   loading="lazy"
                 />
               )
               : <div className="galv-tile-fallback">{item.file_name}</div>}
+            {markFeatured && item.featured && (
+              <span className="galv-feature-badge" role="img" title="Wordt groot getoond" aria-label="Wordt groot getoond">
+                <Expand size={12} />
+              </span>
+            )}
             {selectable && <span className={`galv-check${isSelected ? ' is-on' : ''}`} aria-hidden="true" />}
-            {tools(item)}
+            {!preview && tools(item)}
           </figure>
         );
       }}
     />
   );
 
+  // Hoofdstukken nummeren (01, 02 …) telt alleen de categorieën met een naam.
+  let chapter = 0;
+
   return (
-    <div className={`galv${bigScreen ? ' is-tv' : ''}`} ref={rootRef}>
+    <div
+      className={['galv', layoutClassNames(look), bigScreen ? 'is-tv' : '', preview ? 'is-preview' : ''].filter(Boolean).join(' ')}
+      style={layoutStyle(look)}
+      ref={rootRef}
+    >
       {/* De zwevende bediening. De grootbeeldknop staat bewust búiten
           GalleryDownloadMenu: dat menu sluit zichzelf op elke muisklik erbuiten,
           dus een knop binnen zijn kader zou het menu blokkeren en een knop
-          erbuiten zou het bij elke klik dichtslaan. */}
-      <div className="galv-actions">
+          erbuiten zou het bij elke klik dichtslaan. In het voorbeeld van de
+          instellingen hoort hij er niet: daar valt niets af te spelen. */}
+      {!preview && <div className="galv-actions">
         {/* In de sleep- en selectiestand opent een tegelklik geen foto, dus
             heeft bladeren met de pijltjes daar geen betekenis. */}
         {!selectable && !reorderable && orderedPhotos.length > 1 && (
@@ -956,7 +1078,7 @@ export function GalleryViewer({
             webQuality={downloadQuality === 'web'}
           />
         )}
-      </div>
+      </div>}
       {billboard && heroItem && hero && (
         <GalleryBillboard
           hero={hero}
@@ -977,6 +1099,8 @@ export function GalleryViewer({
         </header>
       )}
 
+      {/* ── Het album: alles onder de opening, in de gekozen breedte ── */}
+      <div className={`galv-album galv-album-${look.style}`}>
       {/* ── Categoriechips: springen naar de sectie ── */}
       {chipSections.length > 1 && (
         <nav className="galv-chips" aria-label="Categorieën">
@@ -998,7 +1122,12 @@ export function GalleryViewer({
         </nav>
       )}
 
-      {sections.map(section => (
+      {sections.map(section => {
+        // "Overig" is de bak voor wat nergens is ingedeeld, geen hoofdstuk:
+        // die krijgt een titel maar geen nummer.
+        const numbered = look.headings === 'numbered' && Boolean(section.title) && section.key !== 'overig';
+        if (numbered) chapter += 1;
+        return (
         <section
           key={section.key}
           className={`galv-section${billboard ? ' galv-section-billboard' : ''}`}
@@ -1011,7 +1140,14 @@ export function GalleryViewer({
           {section.title && (
             billboard
               ? <h3 className="galv-row-title">{section.title}</h3>
-              : <h4 className="galv-section-title">{section.title}</h4>
+              : (
+                <h4 className="galv-section-title">
+                  {numbered && (
+                    <span className="galv-section-num" aria-hidden="true">{String(chapter).padStart(2, '0')}</span>
+                  )}
+                  {section.title}
+                </h4>
+              )
           )}
           {/* Zonder categorieën houden we de oude kopjes per mediasoort aan. */}
           {section.videos.length > 0 && (
@@ -1036,7 +1172,9 @@ export function GalleryViewer({
             </>
           )}
         </section>
-      ))}
+        );
+      })}
+      </div>
 
       {/* ── Lightbox (foto's) + diavoorstelling ── */}
       {lightbox && orderedPhotos[lightbox.index] && (
@@ -1662,121 +1800,93 @@ function VideoRow({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ── Justified rows: vullen zonder bijsnijden ────────────────────────────────
+// ── Foto's in de gekozen indeling ───────────────────────────────────────────
 //
-// Elke rij krijgt precies de containerbreedte: we tellen de beeldverhoudingen
-// van de foto's in de rij op en leiden daar de rijhoogte uit af. Zo houdt elke
-// foto haar eigen verhouding (geen crop) en blijft er geen loze ruimte over.
-// De laatste rij wordt óók volgemaakt; dreigt die onevenredig hoog te worden
-// (bijvoorbeeld één staande foto), dan schuiven we er foto's uit de rij erboven
-// bij tot het weer in verhouding is.
+// De plek en maat van elke foto komen uit galleryLayoutEngine.ts — rijen,
+// waterval, raster, verhaal of afdrukken. Deze component meet alleen de
+// breedte en zet de tegels absoluut neer: zo kan een raster een tegel van 2×2
+// hebben, een waterval een beeld over twee kolommen, en blijven de randen op
+// hele pixels (geen haarlijn bij 0 px tussenruimte).
+//
+// Binnenkomen bij het scrollen loopt via een data-attribuut dat buiten React om
+// wordt gezet: een className die React beheert zou bij elke herteken (een
+// selectie, een hartje) worden overschreven, en dan zou een foto die al in beeld
+// was weer verdwijnen.
 
-const PHOTO_GAP = 6;
-const FALLBACK_RATIO = 3 / 2;
-/** Boven deze factor maal de streefhoogte oogt een laatste rij als een uitvergroting. */
-const LAST_ROW_MAX_FACTOR = 1.45;
-
-function aspectRatio(item: GalleryViewerItem): number {
-  if (item.width && item.height && item.width > 0 && item.height > 0) {
-    // Extreme panorama's/stroken begrenzen, anders duwen ze een hele rij plat.
-    return Math.min(4, Math.max(0.35, item.width / item.height));
-  }
-  return FALLBACK_RATIO;
-}
-
-/** Streefhoogte schaalt mee met de breedte: op een telefoon kleinere rijen. */
-function targetRowHeight(width: number): number {
-  if (width < 520) return 150;
-  if (width < 900) return 200;
-  if (width < 1400) return 250;
-  return 290;
-}
-
-type PhotoRow = { items: GalleryViewerItem[]; height: number };
-
-function buildPhotoRows(photos: GalleryViewerItem[], width: number, scale = 1): PhotoRow[] {
-  if (photos.length === 0 || width <= 0) return [];
-  const target = targetRowHeight(width) * scale;
-  const heightOf = (list: GalleryViewerItem[]) => {
-    const sum = list.reduce((total, item) => total + aspectRatio(item), 0);
-    if (sum <= 0) return target;
-    return (width - PHOTO_GAP * (list.length - 1)) / sum;
-  };
-
-  const rows: PhotoRow[] = [];
-  let current: GalleryViewerItem[] = [];
-  for (const photo of photos) {
-    current.push(photo);
-    if (heightOf(current) <= target) {
-      rows.push({ items: current, height: heightOf(current) });
-      current = [];
-    }
-  }
-
-  if (current.length > 0) {
-    let height = heightOf(current);
-    // Laatste rij vult ook de volle breedte; te hoog = foto's uit de vorige rij
-    // erbij halen tot het klopt (maximaal een paar keer, nooit oneindig).
-    let guard = 0;
-    while (height > target * LAST_ROW_MAX_FACTOR && rows.length > 0 && guard < 20) {
-      const previous = rows[rows.length - 1];
-      if (previous.items.length <= 1) break;
-      const moved = previous.items.pop() as GalleryViewerItem;
-      previous.height = heightOf(previous.items);
-      current = [moved, ...current];
-      height = heightOf(current);
-      guard += 1;
-    }
-    rows.push({ items: current, height });
-  }
-
-  return rows;
-}
-
-function JustifiedPhotos({ photos, renderTile, rowScale = 1 }: {
+function PhotoLayout({ photos, look, scale = 1, reveal, viewportHeight: fixedViewportHeight, renderTile }: {
   photos: GalleryViewerItem[];
-  /** `displayWidth` is de werkelijke breedte in CSS-pixels, voor een kloppende `sizes`. */
-  renderTile: (item: GalleryViewerItem, style: React.CSSProperties, displayWidth: number) => React.ReactNode;
+  look: GalleryLayout;
+  /** Vaste vensterhoogte (het voorbeeld); anders die van het eigen venster. */
+  viewportHeight?: number;
   /**
-   * Vermenigvuldiger op de streefhoogte van een rij. Alleen grootbeeld gebruikt
-   * dit: de rijhoogte komt uit de code en niet uit CSS, dus zonder deze weg
-   * blijven de foto's op een tv net zo klein als op een laptop. Bewust géén
-   * extra breedtetrede in `targetRowHeight`, want dat zou ook elke brede
-   * monitor van indeling laten veranderen.
+   * Vermenigvuldiger voor grootbeeld: de rijhoogte (en bij automatische
+   * kolommen de kolombreedte) komt uit de code en niet uit CSS, dus zonder deze
+   * weg blijven de foto's op een tv net zo klein als op een laptop.
    */
-  rowScale?: number;
+  scale?: number;
+  reveal: boolean;
+  renderTile: (item: GalleryViewerItem, tile: LayoutTile, index: number) => React.ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Beginbreedte zodat de eerste paint al een zinnige indeling toont; de
-  // ResizeObserver corrigeert 'm meteen daarna (en bij elke venstermaat).
+  // ResizeObserver corrigeert hem meteen daarna (en bij elke venstermaat).
   const [width, setWidth] = useState(1200);
+  const [viewportHeight, setViewportHeight] = useState(() => (typeof window === 'undefined' ? 900 : window.innerHeight));
 
   useEffect(() => {
     const node = containerRef.current;
     if (!node) return;
     const apply = (value: number) => { if (value > 0) setWidth(value); };
     apply(node.clientWidth);
-    if (typeof ResizeObserver === 'undefined') return;
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    if (typeof ResizeObserver === 'undefined') return () => window.removeEventListener('resize', onResize);
     const observer = new ResizeObserver(entries => {
       for (const entry of entries) apply(entry.contentRect.width);
     });
     observer.observe(node);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
   }, []);
 
-  const rows = useMemo(() => buildPhotoRows(photos, width, rowScale), [photos, width, rowScale]);
+  const plan = useMemo(
+    () => planPhotoLayout(photos, look, { width, scale, viewportHeight: fixedViewportHeight ?? viewportHeight }),
+    [photos, look, width, scale, viewportHeight, fixedViewportHeight],
+  );
+  const byId = useMemo(() => new Map(photos.map(photo => [photo.id, photo])), [photos]);
+
+  // Na elke indeling opnieuw: nieuwe tegels (uploads, een ander filter) moeten
+  // ook binnenkomen. Wat al binnen is, houdt zijn data-attribuut.
+  useEffect(() => {
+    if (!reveal) return;
+    const node = containerRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      node?.querySelectorAll<HTMLElement>('.galv-tile').forEach(tile => { tile.dataset.in = '1'; });
+      return;
+    }
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        (entry.target as HTMLElement).dataset.in = '1';
+        observer.unobserve(entry.target);
+      }
+    }, { rootMargin: '0px 0px -4% 0px', threshold: 0.01 });
+    node.querySelectorAll<HTMLElement>('.galv-tile:not([data-in])').forEach(tile => observer.observe(tile));
+    return () => observer.disconnect();
+  }, [reveal, plan]);
 
   return (
-    <div className="galv-just" ref={containerRef}>
-      {rows.map((row, index) => (
-        <div className="galv-just-row" key={row.items[0]?.id ?? index} style={{ height: `${row.height}px` }}>
-          {row.items.map(item => renderTile(
-            item,
-            { flexGrow: aspectRatio(item), flexBasis: 0 },
-            aspectRatio(item) * row.height,
-          ))}
-        </div>
-      ))}
+    <div
+      ref={containerRef}
+      className={`galv-lay galv-lay-${look.style}`}
+      style={{ height: `${plan.height}px`, '--galv-mat': `${plan.mat}px` } as CSSProperties}
+    >
+      {plan.tiles.map((tile, index) => {
+        const item = byId.get(tile.id);
+        return item ? renderTile(item, tile, index) : null;
+      })}
     </div>
   );
 }

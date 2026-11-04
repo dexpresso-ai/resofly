@@ -6,8 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
-  ArrowUpDown, CheckSquare, ChevronDown, ChevronUp, Copy, Film, FolderTree, HardDrive, Heart,
-  ExternalLink, Image as ImageIcon, Layers, Link2, Loader2, Maximize2, Minimize2, Pencil, Plus, Settings2,
+  ArrowUpDown, CheckSquare, ChevronDown, ChevronUp, Copy, Expand, Film, FolderTree, HardDrive, Heart,
+  ExternalLink, Image as ImageIcon, Layers, LayoutDashboard, Link2, Loader2, Maximize2, Minimize2, Pencil, Plus, Settings2,
   Sparkles, SlidersHorizontal, Star,
   Trash2, Upload, UploadCloud, X,
 } from 'lucide-react';
@@ -21,8 +21,12 @@ import { supabase, supabaseAuth } from '../lib/supabase';
 import {
   deleteRow, fetchOrganizationStorageStatus, insertRow, replaceGalleryCategoryPresets,
   selectGalleryCategories, selectGalleryCategoryPresets, selectGalleryFavorites, selectGalleryItems,
-  setGalleryItemOrder, setGalleryItemsCategory, updateGalleryShare, updateRow,
+  setGalleryItemOrder, setGalleryItemsCategory, updateGallerySettings, updateGalleryShare, updateRow,
 } from '../lib/repository';
+import { isMissingColumn } from '../lib/postgrestErrors';
+import { normalizeGalleryLayout, sameGalleryLayout, type GalleryLayout } from '../lib/galleryLayout';
+import type { BrandingPayload } from '../lib/branding';
+import { GalleryLayoutSettings } from './GalleryLayoutSettings';
 import { deleteR2Object } from '../lib/r2-api';
 import {
   GALLERY_MASTER_MAX_BYTES, GALLERY_MULTIPART_THRESHOLD_BYTES, GALLERY_ORIGINAL_MAX_BYTES, GALLERY_PHOTO_TYPES,
@@ -260,6 +264,27 @@ export function GalleryTab({
   );
   const [openId, setOpenId] = useState<string | null>(initialGalleryId ?? null);
   const openGallery = galleries.find(g => g.id === openId) ?? null;
+  /**
+   * De huisstijl zoals de klant de galerij ziet (achtergrond, letters,
+   * merkkleur), voor het voorbeeld onder "Weergave". De app zelf toont de
+   * galerij in de kleuren van de werkruimte; het voorbeeld hoort de klantpagina
+   * te laten zien.
+   */
+  const previewBranding = useMemo<BrandingPayload | null>(() => {
+    const settings = data.companySettings;
+    if (!settings) return null;
+    return {
+      logoDataUrl: null,
+      accentColor: settings.brand_accent_color,
+      footerText: null,
+      hidePoweredBy: true,
+      companyName: null,
+      headingFont: settings.brand_heading_font,
+      bodyFont: settings.brand_body_font,
+      galleryBg: settings.brand_gallery_bg,
+      clientTheme: settings.brand_client_theme,
+    };
+  }, [data.companySettings]);
   // Presenteerstand: alleen de galerij, zonder zijbalk en tabbalk.
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -795,6 +820,24 @@ export function GalleryTab({
     }
   }
 
+  /**
+   * Groot tonen: de foto krijgt in elke indeling een grote plek. Meteen in beeld
+   * (de kaart springt direct), en bij een fout terug naar hoe het was.
+   */
+  async function toggleFeatured(item: GalleryItem) {
+    const next = !item.featured;
+    setItems(prev => prev.map(x => (x.id === item.id ? { ...x, featured: next } : x)));
+    try {
+      const updated = await updateRow<GalleryItem>('gallery_items', item.id, { featured: next }, organizationId);
+      if (openIdRef.current === item.gallery_id) setItems(prev => prev.map(x => (x.id === item.id ? updated : x)));
+    } catch (e) {
+      setItems(prev => prev.map(x => (x.id === item.id ? { ...x, featured: item.featured } : x)));
+      setError(isMissingColumn(e as { code?: string; message?: string }, 'featured')
+        ? 'Groot tonen kan zodra de database van deze omgeving is bijgewerkt. Probeer het over een paar minuten opnieuw.'
+        : e instanceof Error ? e.message : 'Groot tonen opslaan mislukt.');
+    }
+  }
+
   // ── Cover ──
   // Er zijn twee bronnen voor het coverbeeld en ze sluiten elkaar uit: een item
   // uit de galerij (`cover_item_id`) of een eigen beeld dat er niet in zit
@@ -1046,13 +1089,16 @@ export function GalleryTab({
     setBusy(true);
     setError(null);
     try {
-      // Deellink-velden gaan langs updateGalleryShare: die valt terug op een
-      // update zonder `share_token` zolang de migratie in deze omgeving nog
-      // niet gedraaid heeft.
+      // Deellink-velden gaan langs updateGalleryShare en de weergave langs
+      // updateGallerySettings: allebei vallen ze terug op een update zonder het
+      // nieuwe veld zolang de migratie in deze omgeving nog niet gedraaid heeft.
       if ('share_token' in patch) await updateGalleryShare(gallery.id, patch, organizationId);
+      else if ('layout' in patch) await updateGallerySettings(gallery.id, patch, organizationId);
       else await updateRow<Gallery>('galleries', gallery.id, patch, organizationId);
       await onChanged();
     } catch (e) {
+      // De rest kan dan al zijn opgeslagen; de lijst moet die waarheid tonen.
+      if ('layout' in patch) await Promise.resolve(onChanged()).catch(() => undefined);
       setError(e instanceof Error ? e.message : 'Opslaan mislukt.');
       throw e;
     } finally {
@@ -1415,6 +1461,8 @@ export function GalleryTab({
             onDownloadItem={downloadItem}
             zipUrl={bundle ? galleryZipUrl(openGallery.id, bundle.mediaToken) : undefined}
             downloadQuality={openGallery.download_quality}
+            layout={openGallery.layout}
+            markFeatured={writable}
             emptyText={onlyFavorites
               ? 'De klant heeft nog geen favorieten gemarkeerd.'
               : openGallery.format === 'video'
@@ -1424,6 +1472,18 @@ export function GalleryTab({
                   : 'Nog geen media. Upload foto’s of video’s om de galerij te vullen.'}
             renderItemActions={(viewerItem) => writable && (
               <>
+                {viewerItem.media_type === 'photo' && (
+                  <button
+                    type="button"
+                    className={`galv-tool${viewerItem.featured ? ' active' : ''}`}
+                    onClick={(e) => { e.stopPropagation(); const item = items.find(x => x.id === viewerItem.id); if (item) void toggleFeatured(item); }}
+                    title={viewerItem.featured ? 'Niet meer groot tonen' : 'Groot tonen — deze foto krijgt een grote plek in het album'}
+                    aria-label={viewerItem.featured ? 'Niet meer groot tonen' : 'Groot tonen'}
+                    aria-pressed={Boolean(viewerItem.featured)}
+                  >
+                    <Expand size={14} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className={`galv-tool${openGallery.cover_item_id === viewerItem.id ? ' active' : ''}`}
@@ -1487,6 +1547,7 @@ export function GalleryTab({
             onClearCover: clearCover,
             onFocus: setCoverFocus,
           }}
+          branding={previewBranding}
         />
       )}
       {showShare && (
@@ -1527,11 +1588,18 @@ function UploadQueue({ queue }: { queue: QueueEntry[] }) {
 
 // ── Instellingen ────────────────────────────────────────────────────────────
 
-export type GallerySettingsTab = 'general' | 'opening' | 'files';
+export type GallerySettingsTab = 'general' | 'opening' | 'display' | 'files';
 
+/**
+ * "Opening" is de kop van de pagina (sjabloon + coverbeeld); "Weergave" is
+ * alles daaronder — hoe de foto's en video's in het album staan. Twee tabbladen,
+ * omdat het twee verschillende vragen zijn: hoe begint de galerij, en hoe leest
+ * hij daarna.
+ */
 const gallerySettingsTabs: Array<{ key: GallerySettingsTab; label: string; Icon: typeof ImageIcon }> = [
   { key: 'general', label: 'Algemeen', Icon: SlidersHorizontal },
   { key: 'opening', label: 'Opening', Icon: Sparkles },
+  { key: 'display', label: 'Weergave', Icon: LayoutDashboard },
   { key: 'files', label: 'Bestanden', Icon: FolderTree },
 ];
 
@@ -1591,7 +1659,7 @@ type GalleryCoverActions = {
  * hero-keuze vandaan, zodat de indruk van "een hero per categorie" niet ontstaat.
  */
 function GallerySettingsModal({
-  gallery, tab, onTab, busy, items, categories, bundle, queue, onClose, onSave, onDelete, files, cover,
+  gallery, tab, onTab, busy, items, categories, bundle, queue, onClose, onSave, onDelete, files, cover, branding,
 }: {
   gallery: Gallery;
   tab: GallerySettingsTab;
@@ -1606,11 +1674,19 @@ function GallerySettingsModal({
   onDelete?: () => void;
   files: GalleryFileActions;
   cover: GalleryCoverActions;
+  /** Huisstijl van de klantpagina, voor het voorbeeld onder "Weergave". */
+  branding?: BrandingPayload | null;
 }) {
   const [title, setTitle] = useState(gallery.title);
   const [description, setDescription] = useState(gallery.description ?? '');
   const [format, setFormat] = useState<GalleryFormat>(gallery.format);
   const [heroTemplate, setHeroTemplate] = useState<GalleryHeroTemplate>(gallery.hero_template);
+  // De weergave is een concept tot "Opslaan", net als de rest van dit venster.
+  // Vergelijken gebeurt na normalisatie: een rij met '{}' en een rij met de
+  // standaard voluit zijn dezelfde weergave.
+  const savedLayout = useMemo(() => normalizeGalleryLayout(gallery.layout), [gallery.layout]);
+  const [layout, setLayout] = useState<GalleryLayout>(savedLayout);
+  const layoutDirty = !sameGalleryLayout(layout, savedLayout);
   const [allowDownloads, setAllowDownloads] = useState(gallery.allow_downloads);
   const [quality, setQuality] = useState(gallery.download_quality);
   const [expiresAt, setExpiresAt] = useState(gallery.expires_at ? gallery.expires_at.slice(0, 10) : '');
@@ -1642,12 +1718,13 @@ function GallerySettingsModal({
     || heroTemplate !== gallery.hero_template
     || allowDownloads !== gallery.allow_downloads
     || quality !== gallery.download_quality
-    || expiresAt !== (gallery.expires_at ? gallery.expires_at.slice(0, 10) : '');
+    || expiresAt !== (gallery.expires_at ? gallery.expires_at.slice(0, 10) : '')
+    || layoutDirty;
 
   return (
     <div className="bk-modal-backdrop gal-modal-shell" onClick={onClose} onDragOver={swallowFileDrag} onDrop={swallowFileDrag}>
       <div
-        className={`bk-modal gal-modal${tab === 'files' ? ' gal-modal-wide' : ''}`}
+        className={`bk-modal gal-modal${tab === 'files' || tab === 'display' ? ' gal-modal-wide' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label="Galerij-instellingen"
@@ -1673,6 +1750,7 @@ function GallerySettingsModal({
             >
               <Icon size={14} /> {label}
               {key === 'files' && uncategorized > 0 && <span className="gal-badge">{uncategorized}</span>}
+              {key === 'display' && layoutDirty && <span className="gal-tab-dot" role="img" aria-label="niet opgeslagen" />}
             </button>
           ))}
         </nav>
@@ -1780,6 +1858,21 @@ function GallerySettingsModal({
             </>
           )}
 
+          {tab === 'display' && (
+            <GalleryLayoutSettings
+              value={layout}
+              onChange={setLayout}
+              // Het formaat zoals het nu in het venster staat: wie onder
+              // "Algemeen" naar Fotogalerij wisselt, ziet de video-knoppen hier
+              // meteen verdwijnen.
+              format={format}
+              items={items}
+              categories={categories}
+              bundle={bundle}
+              branding={branding}
+            />
+          )}
+
           {tab === 'files' && (
             <GalleryFileSettings
               items={items}
@@ -1813,6 +1906,9 @@ function GallerySettingsModal({
               allow_downloads: allowDownloads,
               download_quality: quality,
               expires_at: expiresAt ? new Date(`${expiresAt}T23:59:59`).toISOString() : null,
+              // Alleen meesturen als hij veranderd is: zolang de migratie in deze
+              // omgeving nog niet gedraaid heeft, blijft opslaan zo gewoon werken.
+              ...(layoutDirty ? { layout } : {}),
             })}
           >
             {busy ? 'Bezig…' : 'Opslaan'}

@@ -17,6 +17,10 @@ accountbrede opslagbundels (GB per abonnement, bijkopen via Mollie).
 | App | projecttab Galerij + beheer + upload | `src/features/ProjectGallery.tsx` |
 | App | gedeelde viewer (app/portaal/deellink) | `src/features/GalleryViewer.tsx` |
 | App | publieke pagina `/gallerij/<token>` | `src/features/PublicGalleryPage.tsx` |
+| DB | weergave van het album (`galleries.layout`) + groot tonen (`gallery_items.featured`) | `supabase/migrations/20261104065000_gallery_layout.sql` |
+| App | weergave-instellingen: standaard, herstel, stijlen | `src/lib/galleryLayout.ts` (kopie: `supabase/functions/_shared/galleryLayout.ts`) |
+| App | rekenregels: rijen, waterval, raster, verhaal, afdrukken | `src/lib/galleryLayoutEngine.ts` |
+| App | Instellingen → Weergave, met live voorbeeld | `src/features/GalleryLayoutSettings.tsx` |
 
 ## Secrets & env
 
@@ -173,6 +177,24 @@ menu meldt dat.
 **Kosten:** Stream rekent per **minuut** speelduur (bestandsgrootte telt niet
 mee), R2 per **GB-maand**. Een master van 20 GB kost in Stream evenveel als een
 webversie van 300 MB van dezelfde lengte; de GB's betaal je in R2.
+
+## Weergave van het album (2026-11-04)
+
+Los van de opening (sjabloon + coverbeeld) kiest de beeldmaker onder Instellingen →
+**Weergave** hoe het album eronder staat: een stijl, de indeling (rijen, waterval,
+raster, verhaal, afdrukken), kolommen voor breed scherm en telefoon, de witruimte
+(tussen de beelden, breedte van het album, tussen de hoofdstukken), de speelsheid,
+de afwerking en de video's. Met **Groot tonen** wijst hij per foto aan wat een grote
+plek krijgt. Details en ontwerpkeuzes: `CHANGELOG_GALERIJ_WEERGAVE_2026-11-04.md`.
+
+- `galleries.layout = '{}'` is de standaardweergave, gelijk aan die van vóór deze
+  instellingen. De trigger `galleries_layout_guard` laat alleen bekende sleutels en
+  geldige waarden toe; de lijsten staan in de migratie tussen
+  `layout-keuzes:begin` en `layout-keuzes:eind`, en `src/lib/galleryLayout.test.ts`
+  vergelijkt ze met de app. Een nieuwe instelling = migratie, beide kopieën van
+  `galleryLayout.ts` en de test, in één wijziging.
+- `client-portal` en `gallery-public` geven de weergave alleen genormaliseerd mee.
+- Gerrie: `gallery.update_settings` (layout_-velden) en `gallery.set_featured`.
 
 ## Beveiliging in het kort
 
