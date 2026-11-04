@@ -186,3 +186,22 @@ Daarnaast, met de echte Supabase-images:
 
 De CI-rondes op de branch (`Frontend checks`, met de nieuwe jobs `migrations` en
 *Laden per module*) waren groen.
+
+## Uitrol op staging (4 november, 23:05)
+
+Merge `dcc3da6` naar `staging`:
+
+- **Deploy Supabase (staging), run 170: geslaagd.**
+  - `db push` had niets te doen; de versielijst was al gelijk.
+  - Alle 39 edge functions zijn uitgerold.
+  - De rooktest gaf 9 van 9 ok: API, de bezorger, klantmeldingen, het
+    boekhouder-hek, geen rechten voor anon, Auth-instellingen.
+- **Frontend checks op `staging`, run 118: geslaagd.** Daarin zitten typecheck,
+  unit-tests, de mobiele test in beide thema's, laden per module, de edge
+  functions en de migraties vanaf nul.
+- **Nacontrole op de database** (alleen lezen):
+  - nog steeds 233 migraties, de laatste `20261104076000`;
+  - `invoice_token_hash` is identiek aan vóór de uitrol.
+- **Cloudflare Pages** bouwt de app vanzelf bij de push. Vanuit de sessie was de
+  site niet te bereiken, dus die build is hier niet gezien. Dezelfde
+  `npm run build` slaagde lokaal en in CI.
