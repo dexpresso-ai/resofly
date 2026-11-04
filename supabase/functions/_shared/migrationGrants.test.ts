@@ -73,6 +73,55 @@ test('de controle herkent een functie zonder revoke', () => {
 });
 
 /**
+ * Niet alleen security-definer-functies. Postgres geeft élke nieuwe functie
+ * EXECUTE via PUBLIC, en daarmee kan anon hem aanroepen — ook een
+ * triggerfunctie. De default privileges uit 20261101000000 halen alleen de
+ * directe grant aan anon weg, niet die via PUBLIC. De rooktest na de uitrol
+ * (scripts/supabase-smoke-test.sh) ziet dat wel, maar dan staat het al op
+ * staging: zo ging het op 4 november 2026 met enforce_gallery_layout_guard().
+ * Vanaf die migratie moet daarom elke nieuwe functie voor anon worden
+ * dichtgezet — in hetzelfde bestand, of in een latere migratie.
+ */
+const ALL_FUNCTIONS_FROM = '20261104075000';
+
+function allFunctions(sql: string): string[] {
+  const names: string[] = [];
+  const code = sql.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n');
+  const re = /create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?([a-z0-9_]+)\s*\(/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(code))) names.push(match[1].toLowerCase());
+  return names;
+}
+
+test('elke nieuwe functie, ook een triggerfunctie, wordt voor anon dichtgezet', () => {
+  const files = readdirSync(MIGRATIONS_DIR).filter((name) => /^\d{14}_.+\.sql$/.test(name)).sort();
+  const missing: string[] = [];
+  files.forEach((file, index) => {
+    if (file.slice(0, 14) < ALL_FUNCTIONS_FROM) return;
+    const sql = readFileSync(new URL(file, MIGRATIONS_DIR), 'utf8');
+    const fromHere = files.slice(index).map((name) => readFileSync(new URL(name, MIGRATIONS_DIR), 'utf8')).join('\n');
+    for (const name of allFunctions(sql)) {
+      if (!revokesAnon(fromHere, name)) missing.push(`${file}: ${name}`);
+    }
+  });
+  assert.deepEqual(
+    missing,
+    [],
+    'Voeg per functie toe: revoke all on function public.<naam>(<args>) from public, anon '
+      + '(bij een triggerfunctie: from public, anon, authenticated — de trigger vuurt toch).',
+  );
+});
+
+test('de controle herkent ook een triggerfunctie zonder revoke', () => {
+  const sql = `create or replace function public.voorbeeld_guard()\nreturns trigger\nlanguage plpgsql\nas $$ begin return new; end; $$;`;
+  assert.deepEqual(allFunctions(sql), ['voorbeeld_guard']);
+  assert.deepEqual(definerFunctions(sql), [], 'de oude controle ziet hem niet');
+  assert.equal(revokesAnon(sql, 'voorbeeld_guard'), false);
+  assert.equal(revokesAnon(`${sql}\nrevoke all on function public.voorbeeld_guard() from public, anon, authenticated;`, 'voorbeeld_guard'), true);
+  assert.deepEqual(allFunctions('-- create function public.in_commentaar()\nselect 1;'), [], 'commentaar telt niet');
+});
+
+/**
  * Sinds 20261101000000 heeft de publieke sleutel (anon) in schema public
  * nergens meer rechten, behalve SELECT op billing_plans. Een latere migratie die
  * anon weer iets geeft, zet dat stil terug open — voor iedereen op internet.

@@ -212,7 +212,23 @@ over werken naast een andere sessie die dezelfde dag migraties uitrolt:
 
 Vóór de push is de lijst toegepaste migraties op staging opgevraagd (Management API:
 231, laatste `20261104070000`). Wie na deze uitrol een migratie maakt: kies een
-nummer na `20261104075000`.
+nummer na `20261104076000`.
+
+**De rooktest na de eerste uitrol (run 168) was rood.** Migratie en edge functions
+waren gelukt, maar de controle op de publieke sleutel vond: *"anon heeft weer
+rechten op: functie enforce_gallery_layout_guard()"*. Postgres geeft elke nieuwe
+functie EXECUTE via PUBLIC; de default privileges uit `20261101000000` halen alleen
+de directe grant aan anon weg. De bestaande test (`migrationGrants.test.ts`) keek
+alleen naar security-definer-functies, en een triggerfunctie is dat niet.
+
+- `20261104076000_gallery_layout_guard_grants.sql` zet de functie dicht voor
+  `public, anon, authenticated`, zoals de andere triggerfuncties
+  (`20261104030000`). Een trigger vuurt ongeacht EXECUTE-rechten; lokaal
+  nagelopen als `authenticated`: een geldige weergave wordt bewaard, een foute
+  geweigerd.
+- `migrationGrants.test.ts` controleert vanaf `20261104075000` élke nieuwe functie,
+  ook triggerfuncties, op die revoke (in hetzelfde bestand of later). Zonder de
+  vervolgmigratie faalt die test; zo valt het voortaan vóór de uitrol op.
 
 ## Bewust niet gedaan
 
