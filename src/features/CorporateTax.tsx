@@ -74,6 +74,11 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
     () => returns.find(r => r.fiscal_year_id === fiscalYearId && r.status !== 'reversed') ?? null,
     [returns, fiscalYearId],
   );
+  /** Een later verliesjaar dat zijn verlies met dít jaar heeft verrekend. */
+  const carriedBackInto = useMemo(
+    () => (current ? returns.find(r => r.status === 'final' && r.carry_back_to_return_id === current.id) ?? null : null),
+    [returns, current],
+  );
 
   const loadYears = useCallback(async () => {
     try {
@@ -130,6 +135,8 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
 
   const exportCsv = () => {
     if (!inputs || !computation) return;
+    const cbCsv = computation.carryBack ?? null;
+    const prevCsv = inputs.carryBackBasis?.label ?? String(cbCsv?.year ?? '');
     const rows: (string | number)[][] = [
       ['Commercieel resultaat', '', (computation.commercialResultCents / 100).toFixed(2)],
       ...corrections.map(c => [
@@ -137,6 +144,13 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
       ] as (string | number)[]),
       ['Totaal correcties', '', (computation.totalCorrectionsCents / 100).toFixed(2)],
       ['Fiscale winst', '', (computation.fiscalProfitCents / 100).toFixed(2)],
+      ...(cbCsv ? [
+        ['Achterwaarts verrekend verlies', `met ${prevCsv} (art. 20 lid 2 Wet Vpb)`, (-cbCsv.usedCents / 100).toFixed(2)],
+        ['Ruimte voor verrekening', `${prevCsv}: € 1 mln + 50% van de winst daarboven, min voorwaarts verrekend`, (cbCsv.roomCents / 100).toFixed(2)],
+        ['Belastbaar bedrag na verrekening', `${prevCsv} (was ${(cbCsv.taxableBeforeCents / 100).toFixed(2)})`, (cbCsv.taxableAfterCents / 100).toFixed(2)],
+        ['Vennootschapsbelasting na verrekening', `${prevCsv} (was ${(cbCsv.taxBeforeCents / 100).toFixed(2)})`, (cbCsv.taxAfterCents / 100).toFixed(2)],
+        ['Teruggaaf', `over ${prevCsv}`, (cbCsv.refundCents / 100).toFixed(2)],
+      ] as (string | number)[][] : []),
       ['Maximaal te verrekenen verlies', 'art. 20 lid 2 Wet Vpb', (computation.lossReliefCapCents / 100).toFixed(2)],
       ...computation.lossesUsed.map(l => [
         'Verliesverrekening', `verlies ${l.year}`, (-l.usedCents / 100).toFixed(2),
@@ -174,6 +188,16 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
     </tr>
   );
 
+  // Achterwaartse verliesverrekening (art. 20 lid 2 Wet Vpb): alleen bij een
+  // verlies, en alleen als het boekjaar ervoor een vastgestelde berekening heeft.
+  const cb = computation?.carryBack ?? null;
+  const prevLabel = inputs?.carryBackBasis?.label ?? inputs?.precedingFiscalYear?.label ?? (cb ? String(cb.year) : '');
+  const isLoss = (computation?.fiscalProfitCents ?? 0) < 0;
+  // Vastgesteld zonder terugwenteling, terwijl die er nu wel is: het jaar ervoor
+  // is pas later vastgesteld. Opnieuw vaststellen zet het recht.
+  const carryBackStale = !!current && current.status === 'final' && isLoss
+    && (cb?.usedCents ?? 0) !== (current.carry_back_cents ?? 0);
+
   return (
     <div className="bk-page">
       <div className="bk-head">
@@ -202,7 +226,9 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
               <div className="bk-report-kpis">
                 <div><span>Belastbaar bedrag {inputs.fiscalYear.label}</span><strong>{euroCents(computation.taxableAmountCents)}</strong></div>
                 <div><span>Vennootschapsbelasting</span><strong>{euroCents(computation.taxCents)}</strong></div>
-                <div><span>Gemiddeld tarief</span><strong>{pct(computation.effectiveRateBasisPoints)}</strong></div>
+                {cb && cb.refundCents > 0
+                  ? <div><span>Teruggaaf {prevLabel}</span><strong className="bk-pos">{euroCents(cb.refundCents)}</strong></div>
+                  : <div><span>Gemiddeld tarief</span><strong>{pct(computation.effectiveRateBasisPoints)}</strong></div>}
                 <div>
                   <span>{computation.balanceDueCents >= 0 ? 'Nog te betalen' : 'Terug te ontvangen'}</span>
                   <strong className={computation.balanceDueCents > 0 ? 'bk-neg' : 'bk-pos'}>{euroCents(Math.abs(computation.balanceDueCents))}</strong>
@@ -236,6 +262,18 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
                 ))}
                 {row('Fiscale winst', computation.fiscalProfitCents, 'bk-report-total')}
 
+                {cb && <>
+                  <tr className="bk-report-section"><td colSpan={2}>Achterwaartse verliesverrekening · art. 20 lid 2 Wet Vpb</td></tr>
+                  {row(`Verrekend met de winst van ${prevLabel}`, -cb.usedCents, 'bk-balance-sub')}
+                  {row(`Ruimte in ${prevLabel}`, cb.roomCents, 'bk-balance-sub', '€ 1 mln plus 50% van de winst daarboven, min wat dat jaar al voorwaarts verrekende')}
+                  {cb.usedCents > 0 && <>
+                    {row(`Belastbaar bedrag ${prevLabel}`, cb.taxableAfterCents, 'bk-balance-sub', `was ${euroCents(cb.taxableBeforeCents)}`)}
+                    {row(`Vennootschapsbelasting ${prevLabel}`, cb.taxAfterCents, 'bk-balance-sub', `was ${euroCents(cb.taxBeforeCents)}, tarief ${cb.year}`)}
+                  </>}
+                  {row(`Teruggaaf over ${prevLabel}`, cb.refundCents, 'bk-report-total')}
+                  {row('Schuift door naar volgende jaren', Math.max(0, -computation.fiscalProfitCents - cb.usedCents), 'bk-balance-sub')}
+                </>}
+
                 {computation.lossesUsed.length > 0 && <>
                   <tr className="bk-report-section"><td colSpan={2}>Verliesverrekening</td></tr>
                   {computation.lossesUsed.map(l => (
@@ -256,6 +294,37 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
                 <td className="bk-num">{euroCents(Math.abs(computation.balanceDueCents))}</td>
               </tr></tfoot>
             </table></div>
+
+            {isLoss && !cb && inputs.precedingFiscalYear && !inputs.precedingFiscalYear.hasFinalReturn && (
+              <p className="bk-neg">
+                Een verlies wordt eerst verrekend met de winst van het boekjaar ervoor (art. 20 lid 2 Wet Vpb), maar van {inputs.precedingFiscalYear.label} is
+                nog geen Vpb-berekening vastgesteld. Stel die eerst vast; anders schuift het hele verlies door en mis je de teruggaaf over {inputs.precedingFiscalYear.label}.
+              </p>
+            )}
+            {isLoss && !cb && !inputs.precedingFiscalYear && (
+              <p className="bk-muted">
+                Het boekjaar hiervoor staat niet in ResoFly. Had de BV toen winst, dan verrekent de Belastingdienst dit verlies eerst daarmee
+                (art. 20 lid 2 Wet Vpb); pas dan de verliesadministratie hieronder aan.
+              </p>
+            )}
+            {carryBackStale && (
+              <p className="bk-neg">
+                Deze berekening is vastgesteld zonder het verlies eerst met {prevLabel} te verrekenen; dat jaar is pas later vastgesteld.
+                Draai deze berekening terug en stel hem opnieuw vast, dan komen de teruggaaf en de juiste verliespositie erin.
+              </p>
+            )}
+            {carriedBackInto && (
+              <p className="bk-muted">
+                Het verlies van {carriedBackInto.year} is achterwaarts met dit jaar verrekend: {euroCents(carriedBackInto.carry_back_cents)},
+                teruggaaf {euroCents(carriedBackInto.carry_back_refund_cents)} (geboekt in {carriedBackInto.year}). De cijfers van dit jaar blijven zoals vastgesteld.
+              </p>
+            )}
+            {cb && cb.usedCents > 0 && (
+              <p className="bk-muted">
+                De Belastingdienst verrekent het verlies pas als het bij beschikking is vastgesteld. Wil je niet wachten, vraag dan bij het indienen van de aangifte
+                schriftelijk om een voorlopige verliesverrekening: die verrekent voorlopig tot 80% van het aangegeven verlies, als de aanslag over {prevLabel} vaststaat.
+              </p>
+            )}
 
             <p className="bk-muted">
               Tariefschijven {inputs.rules.year}: {inputs.rules.brackets.map((b, i) =>
@@ -295,7 +364,9 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
           <div className="bk-report">
             <div className="bk-subhead">
               <p className="bk-muted">
-                Vaststellen boekt de last op 9900 Vennootschapsbelasting tegen 1540 Te betalen vennootschapsbelasting, op de balansdatum van het boekjaar.
+                {cb && cb.refundCents > 0
+                  ? `Vaststellen boekt de teruggaaf over ${prevLabel} op 1540 (te vorderen vennootschapsbelasting) tegen 9900 (belastingbate), op de balansdatum van dit boekjaar. Alleen het deel van het verlies dat niet terug past, gaat de verliesadministratie in.`
+                  : 'Vaststellen boekt de last op 9900 Vennootschapsbelasting tegen 1540 Te betalen vennootschapsbelasting, op de balansdatum van het boekjaar.'}
                 {inputs.lossesCarriedForward.some(l => !l.establishedByAssessment) && ' Let op: een deel van de openstaande verliezen is nog niet door de Belastingdienst vastgesteld; dat is onze eigen berekening.'}
               </p>
             </div>
@@ -345,7 +416,10 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
                   <tr key={r.id} className={r.status === 'reversed' ? 'is-reversed' : ''}>
                     <td><strong>{r.year}</strong></td>
                     <td className="bk-num">{euroCents(r.taxable_amount_cents)}</td>
-                    <td className="bk-num">{euroCents(r.tax_cents)}</td>
+                    <td className="bk-num">
+                      {euroCents(r.tax_cents)}
+                      {(r.carry_back_refund_cents ?? 0) > 0 && <div className="bk-muted">teruggaaf {euroCents(r.carry_back_refund_cents)}</div>}
+                    </td>
                     <td>{r.status === 'final' ? 'Vastgesteld' : r.status === 'draft' ? 'Concept' : 'Teruggedraaid'}</td>
                     <td>{r.finalized_at ? dateNL(r.finalized_at.slice(0, 10)) : '—'}</td>
                   </tr>

@@ -1213,9 +1213,16 @@ function profitAndLossNotes(snapshot: Json, opts: { scope: 'volledig' | 'openbaa
       'is geen definitieve onderbouwing van een vast te stellen of te deponeren stuk.'
     : '';
 
+  // Achterwaartse verliesverrekening (art. 20 lid 2 Wet Vpb): bij een verliesjaar
+  // staat de teruggaaf over het jaar ervoor als bate in dit boekjaar (9900
+  // credit). Zonder deze regels sluit de toelichting niet aan op de W&V.
+  const carryBack = obj(obj(tax.computation).carryBack);
+  const refundCents = num(carryBack.refundCents);
+  const carryBackYear = str(carryBack.year);
+
   if (opts.scope === 'openbaar') {
     const result = num(tax.commercialResultCents);
-    const taxCents = num(tax.taxCents);
+    const taxCents = num(tax.taxCents) - refundCents;
     const effective = result !== 0 ? `${fmtNumberNl((taxCents / result) * 100, 1)}%` : 'niet te bepalen';
     return [
       { type: 'heading', level: 1, text: 'Toelichting op de winst-en-verliesrekening' },
@@ -1227,7 +1234,15 @@ function profitAndLossNotes(snapshot: Json, opts: { scope: 'volledig' | 'openbaa
           { key: 'amount', width: 150, align: 'right', header: 'Boekjaar' },
         ],
         rows: [
-          { kind: 'line', cells: { label: 'Last wegens vennootschapsbelasting over het resultaat', amount: fmtEuro(taxCents) } },
+          {
+            kind: 'line',
+            cells: {
+              label: refundCents > 0
+                ? `Bate wegens vennootschapsbelasting (teruggaaf ${carryBackYear} door achterwaartse verliesverrekening)`
+                : 'Last wegens vennootschapsbelasting over het resultaat',
+              amount: fmtEuro(taxCents),
+            },
+          },
           { kind: 'line', cells: { label: 'Effectieve belastingdruk over het commerciële resultaat', amount: effective } },
         ],
         note:
@@ -1254,7 +1269,20 @@ function profitAndLossNotes(snapshot: Json, opts: { scope: 'volledig' | 'openbaa
         { kind: 'sub', cells: { label: 'Fiscale winst', amount: fmtEuro(num(tax.fiscalProfitCents)) } },
         { kind: 'line', cells: { label: 'Verrekend verlies uit voorgaande jaren', amount: fmtEuro(-num(tax.lossUsedCents)) } },
         { kind: 'sub', cells: { label: 'Belastbaar bedrag', amount: fmtEuro(num(tax.taxableAmountCents)) } },
-        { kind: 'result', cells: { label: 'Verschuldigde vennootschapsbelasting', amount: fmtEuro(num(tax.taxCents)) } },
+        ...(refundCents > 0
+          ? [
+            { kind: 'line' as const, cells: { label: 'Verschuldigde vennootschapsbelasting', amount: fmtEuro(num(tax.taxCents)) } },
+            {
+              kind: 'line' as const,
+              cells: {
+                label: `Verlies achterwaarts verrekend met ${carryBackYear} (art. 20 lid 2 Wet Vpb)`,
+                amount: fmtEuro(num(carryBack.usedCents)),
+              },
+            },
+            { kind: 'line' as const, cells: { label: `Teruggaaf vennootschapsbelasting ${carryBackYear}`, amount: fmtEuro(-refundCents) } },
+            { kind: 'result' as const, cells: { label: 'Belastingen over het resultaat', amount: fmtEuro(num(tax.taxCents) - refundCents) } },
+          ]
+          : [{ kind: 'result' as const, cells: { label: 'Verschuldigde vennootschapsbelasting', amount: fmtEuro(num(tax.taxCents)) } }]),
       ],
       note:
         `Berekening volgens de aangifte met status "${status}" over ${str(tax.year)}.${draftNote} ` +

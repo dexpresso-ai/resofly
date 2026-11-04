@@ -226,17 +226,134 @@ blokkeert het domein.
      grootboek al gebruikten:
      `select count(*) from invoices i cross join lateral invoice_calculated_totals(i.lines) c where c.total <> i.total_amount;`
 
+## Vervolg: achterwaartse verliesverrekening en de grens van € 17.500
+
+Twee punten die hieronder eerst als open stonden, zijn nu ingebouwd.
+
+### Achterwaartse verliesverrekening (migratie `20261104050000`)
+
+**Wettelijke basis.** Art. 20 lid 2 Wet Vpb 1969:
+
+> "Het verlies van een jaar wordt verrekend met de belastbare winsten van het
+> voorafgaande jaar en de volgende jaren, mits het verlies door de inspecteur
+> is vastgesteld bij voor bezwaar vatbare beschikking."
+
+In een jaar wordt verrekend tot € 1.000.000 plus 50% van de winst daarboven.
+Eerst achterwaarts, dan voorwaarts: dat is de volgorde van de wet, en geen keuze.
+De eerdere notitie "een keuze in het scherm" was dus onjuist.
+
+**Hoe het nu werkt:**
+
+- **Verrekening:** een verlies wordt eerst verrekend met het direct voorafgaande
+  boekjaar, als daarvan een vastgestelde Vpb-berekening is.
+- **Ruimte:** de bovengrens over de winst van dat jaar, min wat dat jaar al
+  voorwaarts verrekende. Drempel en percentage komen uit het verliesjaar, want
+  het recht op verrekening volgt de wettekst van het verliesjaar
+  (KG:011:2023:14).
+- **Teruggaaf:** de belasting van dat jaar vóór en ná de verrekening, tegen het
+  tarief van dat jaar en met het belastbare bedrag weer op € 5 afgerond.
+- **Boeking:**
+  - Vaststellen boekt de teruggaaf in het verliesjaar: 1540 (te vorderen
+    vennootschapsbelasting) aan 9900 (belastingbate), op de balansdatum.
+  - De vastgestelde cijfers van het jaar ervoor blijven staan.
+  - Alleen wat niet terug past, gaat de verliesadministratie in.
+- **Controle:** de database rekent alles na en weigert een andere verrekening of
+  teruggaaf dan de wet geeft.
+- **Terugdraaien:** eerst het verliesjaar, dan het jaar ervoor.
+- **Scherm:**
+  - een eigen sectie, de teruggaaf als kerncijfer, en de teruggaaf in de
+    specificatie (CSV);
+  - een melding als het jaar ervoor nog niet is vastgesteld of niet in ResoFly
+    staat;
+  - uitleg over de voorlopige verliesverrekening (tot 80% van het aangegeven
+    verlies, als de aanslag over het jaar ervoor vaststaat).
+- **Jaarrekening:** de toelichting noemt de teruggaaf en sluit zo aan op de W&V.
+- **Gerrie, API en MCP:** doorrekenen, concept, vaststellen en terugdraaien noemen
+  de terugwenteling.
+- **Bestaande gegevens:** een verliesjaar dat al is vastgesteld toen het jaar
+  ervoor nog niet vaststond, krijgt een melding om terug te draaien en opnieuw
+  vast te stellen.
+
+**Getest:**
+
+- 7 nieuwe unittests, waaronder het voorbeeld van KG:011:2023:14: ruimte
+  € 1.200.000, teruggaaf € 300.000 tegen het tarief van 2021.
+- Op staging, in transacties die altijd worden teruggedraaid:
+  - verlies 2025 € 100.000 → teruggaaf over 2024 € 25.800, geboekt op
+    31-12-2025;
+  - zonder of met een verkeerde terugwenteling geweigerd;
+  - 2024 terugdraaien geweigerd zolang 2025 eraan hangt;
+  - verlies € 400.000 → € 300.000 terug (teruggaaf € 63.800) en € 100.000
+    vooruit;
+  - het verwijderen van boekjaren loopt nog steeds goed.
+
+### De grens van € 17.500 bij de rekening-courant DGA (migratie `20261104060000`)
+
+**Wettelijke basis.** Geen wetsartikel, maar een goedkeuring van de
+staatssecretaris van Financiën bij de terbeschikkingstellingsregeling (art. 3.92
+Wet IB 2001):
+
+- **nu:** Besluit ROW 2026, besluit van 15 januari 2026, nr. 2026-436
+  (Stcrt. 2026, 1724), onderdeel 3.9;
+- **daarvóór:** het Verzamelbesluit resultaat overige werkzaamheden van
+  29 november 2021, nr. 2021-15229 (Stcrt. 2021, 48048), § 8.4;
+- **oorsprong:** het besluit van 24 mei 2006, nr. CPP2006/76M, verhoogde de grens
+  van € 10.000 naar € 17.500.
+
+Voorwaarden (onderdeel 3.9):
+
+- het saldo is het hele kalenderjaar niet hoger dan € 17.500 positief en niet
+  lager dan € 17.500 negatief;
+- bij de vennootschap wordt geen rente in aanmerking genomen;
+- een rekening-courantschuld wordt niet als schuld in box 3 opgenomen.
+
+De Belastingdienst past dezelfde grens toe als de DGA geld leent van de BV.
+Daarboven is rente verschuldigd over het hele bedrag, en voor een echte lening
+geldt de grens niet.
+
+**Wat er mis was, en wat er nu is:**
+
+- **Bron:** er stond een webpagina, met een ingangsdatum 2023 die nergens op
+  berust. Nu staan de besluiten zelf erbij, elk met zijn ingangsdatum.
+- **Richting:**
+  - de toets keek alleen naar de schuld van de DGA aan de BV; nu is het een
+    bandbreedte in beide richtingen;
+  - als de DGA de BV te veel schuldig is: zakelijke rente over het hele saldo,
+    het hele jaar;
+  - als de BV de DGA te veel schuldig is: de rente is voor de DGA resultaat uit
+    overige werkzaamheden.
+- **Scherm en Gerrie:** beide tonen de grondslag en de voorwaarden.
+
+**Getest op staging (teruggedraaid):**
+
+- de BV is de DGA in februari € 25.000 schuldig → buiten de bandbreedte (dat werd
+  eerder niet gesignaleerd);
+- voor 2025 staat het Verzamelbesluit 2021 als bron, voor 2026 het Besluit
+  ROW 2026.
+
+**Bronnen:**
+
+- art. 20 Wet Vpb 1969;
+- Kennisgroep KG:011:2023:14 en KG:011:2022:3;
+- Belastingdienst, "Vpb: verrekenen van verliezen";
+- Besluit ROW 2026 (Stcrt. 2026, 1724) en het Verzamelbesluit ROW 2021
+  (Stcrt. 2021, 48048);
+- Belastingdienst, "Verschil tussen lening en rekening-courant" en "Ter
+  beschikking stellen van bezittingen".
+
+wetten.overheid.nl en belastingdienst.nl waren vanuit de werkomgeving niet
+rechtstreeks bereikbaar. De teksten zijn nagelezen via zoekresultaten die de
+officiële publicaties citeren.
+
 ## Bewust open, of te verifiëren
 
 | Punt | Waarom nog niet |
 |---|---|
 | Factuurnummers worden nog in de browser bepaald (max+1). Uniek is al afgedwongen, doorlopend nog niet. | Server-side nummeren bij uitgifte raakt de hele editor- en verzendflow. Apart oppakken. |
-| Achterwaartse verliesverrekening (art. 20 Wet Vpb, één jaar terug) zit niet in het rekenhart. | Vraagt een eigen boeking (teruggaaf over het vorige jaar) en een keuze in het scherm. |
 | `post_journal_entry` neemt elk boekstuktype aan van een directe aanroep. | Netjes oplossen vraagt een vlag in alle interne aanroepers. Het risico is laag: wie het kan, kan al memoriaal boeken. |
 | Het gearchiveerde jaarrekening-pdf is te vervangen door opnieuw te renderen. | Vraagt het vastleggen van de pdf per deponering. |
 | ICP-opgaaf voor suppleties, en afronden in het voordeel van de belastingplichtige. | Het eerste is een uitbreiding. Het tweede mag maar hoeft niet; nu wordt er rekenkundig afgerond. |
 | Een wissel van kwartaal- naar maandaangifte midden in het jaar maakt dat jaar niet af te sluiten. | Zeldzaam. Vraagt een andere btw-poort bij het afsluiten. |
 | Banktransacties met een datum in een afgesloten jaar zijn niet te boeken (geen doorschuiven naar de eerste open datum). | Stond al open sinds juli. Vraagt een keuze in het scherm. |
 | BV-details uit de review: termijnen coöperatie (6 + 4 maanden), de art. 2:210 lid 5-route bij vaststelling door de AvA, vrijgestelde dividenden zonder aangiftetermijn, correcties na finaliseren nog wijzigbaar, en de keten van de groottetoets die na een onderbreking niet vanzelf herstart. | Laag. Staan op de lijst voor de BV-e2e-ronde. |
-| De "renteloze grens" van € 17.500 bij de rekening-courant DGA. | Nalopen of daar een wettelijke basis voor is; het scherm verbindt er gevolgen aan. |
 | Securityronde: het eindrapport van de losse security-review kwam niet terug. | De ronde is zelf gedaan (directe schrijfrechten, organisatiegrenzen, edge functions, handelingen). Wat daaruit kwam staat hierboven (14, 20, 33, 38–41). |

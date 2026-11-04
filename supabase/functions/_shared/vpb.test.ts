@@ -220,3 +220,172 @@ test('afronding van het belastbaar bedrag werkt door in de belasting', () => {
   assert.equal(r.taxableAmountCents, EUR(10_000));
   assert.equal(r.taxCents, EUR(1_900));
 });
+
+// ── Achterwaartse verliesverrekening (art. 20 lid 2) ───────────────────────
+
+/** 2021: 15% tot € 245.000, daarboven € 36.750 + 25%; nog geen beperking van art. 20. */
+const RULES_2021: VpbYearRules = {
+  year: 2021,
+  brackets: [
+    { lowerBoundCents: 0, baseAmountCents: 0, rateBasisPoints: 1500 },
+    { lowerBoundCents: EUR(245_000), baseAmountCents: EUR(36_750), rateBasisPoints: 2500 },
+  ],
+  lossReliefThresholdCents: EUR(1_000_000_000_000),
+  lossReliefRateBasisPoints: 10000,
+};
+
+/** Een vastgestelde winstberekening over 2025, zoals die uit de database komt. */
+function basis2025(fiscalProfitCents: number, lossUsedCents = 0) {
+  const taxableAmountCents = roundTaxableAmount(fiscalProfitCents - lossUsedCents);
+  return {
+    year: 2025,
+    fiscalProfitCents,
+    lossUsedCents,
+    taxableAmountCents,
+    taxCents: taxForAmount(taxableAmountCents, RULES_2026.brackets),
+    brackets: RULES_2026.brackets,
+  };
+}
+
+test('carry back: het verlies gaat eerst terug naar het voorafgaande jaar', () => {
+  // 2025: winst € 300.000 → belasting € 63.800. 2026: verlies € 100.000.
+  // Na verrekening is 2025 € 200.000 → € 38.000. Teruggaaf € 25.800.
+  const r = computeVpb({
+    rules: RULES_2026,
+    commercialResultCents: -EUR(100_000),
+    corrections: [],
+    lossesCarriedForward: [],
+    carryBackBasis: basis2025(EUR(300_000)),
+  });
+  assert.ok(r.carryBack);
+  assert.equal(r.carryBack.year, 2025);
+  assert.equal(r.carryBack.usedCents, EUR(100_000));
+  assert.equal(r.carryBack.taxBeforeCents, EUR(63_800));
+  assert.equal(r.carryBack.taxableAfterCents, EUR(200_000));
+  assert.equal(r.carryBack.taxAfterCents, EUR(38_000));
+  assert.equal(r.carryBack.refundCents, EUR(25_800));
+  assert.deepEqual(r.lossesRemaining, [], 'het hele verlies is achterwaarts verrekend');
+  assert.equal(r.taxCents, 0);
+});
+
+test('carry back: wat niet past in het voorafgaande jaar schuift door', () => {
+  // 2025: winst € 50.000 (belasting € 9.500). 2026: verlies € 80.000.
+  const r = computeVpb({
+    rules: RULES_2026,
+    commercialResultCents: -EUR(80_000),
+    corrections: [],
+    lossesCarriedForward: [{ year: 2023, remainingCents: EUR(5_000) }],
+    carryBackBasis: basis2025(EUR(50_000)),
+  });
+  assert.ok(r.carryBack);
+  assert.equal(r.carryBack.usedCents, EUR(50_000));
+  assert.equal(r.carryBack.taxableAfterCents, 0);
+  assert.equal(r.carryBack.refundCents, EUR(9_500));
+  assert.deepEqual(r.lossesRemaining, [
+    { year: 2023, remainingCents: EUR(5_000) },
+    { year: 2026, remainingCents: EUR(30_000) },
+  ]);
+});
+
+test('carry back na voorwaartse verrekening — het voorbeeld van KG:011:2023:14', () => {
+  // 2021: winst € 4.000.000; daarin is een verlies uit 2020 van € 1.300.000
+  // voorwaarts verrekend (2021 kende nog geen beperking). 2022: verlies € 2.000.000.
+  // De ruimte in 2021 volgt de wettekst van het verliesjaar 2022:
+  // € 1.000.000 + 50% × € 3.000.000 = € 2.500.000, min de al verrekende
+  // € 1.300.000 = € 1.200.000.
+  const taxable2021 = roundTaxableAmount(EUR(4_000_000) - EUR(1_300_000));
+  const r = computeVpb({
+    rules: RULES_2022,
+    commercialResultCents: -EUR(2_000_000),
+    corrections: [],
+    lossesCarriedForward: [],
+    carryBackBasis: {
+      year: 2021,
+      fiscalProfitCents: EUR(4_000_000),
+      lossUsedCents: EUR(1_300_000),
+      taxableAmountCents: taxable2021,
+      taxCents: taxForAmount(taxable2021, RULES_2021.brackets),
+      brackets: RULES_2021.brackets,
+    },
+  });
+  assert.ok(r.carryBack);
+  assert.equal(r.carryBack.capCents, EUR(2_500_000));
+  assert.equal(r.carryBack.roomCents, EUR(1_200_000));
+  assert.equal(r.carryBack.usedCents, EUR(1_200_000));
+  // 2021-tarief: € 36.750 + 25% × (€ 2.700.000 − € 245.000) = € 650.500 vóór,
+  // € 36.750 + 25% × (€ 1.500.000 − € 245.000) = € 350.500 ná.
+  assert.equal(r.carryBack.taxBeforeCents, EUR(650_500));
+  assert.equal(r.carryBack.taxAfterCents, EUR(350_500));
+  assert.equal(r.carryBack.refundCents, EUR(300_000));
+  assert.deepEqual(r.lossesRemaining, [{ year: 2022, remainingCents: EUR(800_000) }]);
+});
+
+test('carry back: is de ruimte al op aan voorwaartse verrekening, dan schuift alles door', () => {
+  // 2025: winst € 3.000.000, bovengrens € 2.000.000, en die is al helemaal
+  // gebruikt voor oudere verliezen.
+  const r = computeVpb({
+    rules: RULES_2026,
+    commercialResultCents: -EUR(100_000),
+    corrections: [],
+    lossesCarriedForward: [],
+    carryBackBasis: basis2025(EUR(3_000_000), EUR(2_000_000)),
+  });
+  assert.ok(r.carryBack);
+  assert.equal(r.carryBack.roomCents, 0);
+  assert.equal(r.carryBack.usedCents, 0);
+  assert.equal(r.carryBack.refundCents, 0);
+  assert.equal(r.carryBack.taxAfterCents, r.carryBack.taxBeforeCents);
+  assert.deepEqual(r.lossesRemaining, [{ year: 2026, remainingCents: EUR(100_000) }]);
+});
+
+test('carry back: het nieuwe belastbare bedrag wordt ook op € 5 afgerond', () => {
+  // 2025: winst € 123.457,89 → belastbaar € 123.455 → belasting € 23.456,45.
+  // 2026: verlies € 10.001,23 → € 113.456,66 → € 113.455 → € 21.556,45.
+  const r = computeVpb({
+    rules: RULES_2026,
+    commercialResultCents: -EUR(10_001.23),
+    corrections: [],
+    lossesCarriedForward: [],
+    carryBackBasis: basis2025(EUR(123_457.89)),
+  });
+  assert.ok(r.carryBack);
+  assert.equal(r.carryBack.taxableBeforeCents, EUR(123_455));
+  assert.equal(r.carryBack.taxableAfterCents, EUR(113_455));
+  assert.equal(r.carryBack.taxBeforeCents, EUR(23_456.45));
+  assert.equal(r.carryBack.taxAfterCents, EUR(21_556.45));
+  assert.equal(r.carryBack.refundCents, EUR(1_900));
+});
+
+test('carry back alleen bij een verlies en alleen met een vastgesteld voorafgaand jaar', () => {
+  const winst = computeVpb({
+    rules: RULES_2026,
+    commercialResultCents: EUR(10_000),
+    corrections: [],
+    lossesCarriedForward: [],
+    carryBackBasis: basis2025(EUR(300_000)),
+  });
+  assert.equal(winst.carryBack, null, 'een winstjaar verrekent niets terug');
+
+  const zonder = computeVpb({
+    rules: RULES_2026,
+    commercialResultCents: -EUR(10_000),
+    corrections: [],
+    lossesCarriedForward: [],
+  });
+  assert.equal(zonder.carryBack, null);
+  assert.deepEqual(zonder.lossesRemaining, [{ year: 2026, remainingCents: EUR(10_000) }]);
+});
+
+test('carry back: een verliesjaar ervoor biedt geen ruimte', () => {
+  const r = computeVpb({
+    rules: RULES_2026,
+    commercialResultCents: -EUR(10_000),
+    corrections: [],
+    lossesCarriedForward: [],
+    carryBackBasis: { ...basis2025(-EUR(40_000)), taxableAmountCents: 0, taxCents: 0 },
+  });
+  assert.ok(r.carryBack);
+  assert.equal(r.carryBack.capCents, 0);
+  assert.equal(r.carryBack.usedCents, 0);
+  assert.equal(r.carryBack.refundCents, 0);
+});

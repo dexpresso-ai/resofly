@@ -22,6 +22,18 @@
  * 1-1-2022: één jaar achterwaarts, onbeperkt voorwaarts, maar per jaar hooguit
  * een drempelbedrag plus een percentage van de winst dáárboven.
  *
+ * Achterwaartse verliesverrekening (carry back) — art. 20 lid 2: "Het verlies
+ * van een jaar wordt verrekend met de belastbare winsten van het voorafgaande
+ * jaar en de volgende jaren". Eerst achterwaarts, dan pas voorwaarts; dat is de
+ * volgorde van de wet en geen keuze. De ruimte in het voorafgaande jaar is de
+ * bovengrens van dát jaar (€ 1.000.000 plus 50% van de winst daarboven), min
+ * wat dat jaar al aan oudere verliezen voorwaarts verrekende — Kennisgroep
+ * KG:011:2023:14. Het recht op verrekening volgt de wettekst van het
+ * VERLIESJAAR; daarom komen drempel en percentage uit de regels van het
+ * verliesjaar, ook als het voorafgaande jaar zelf (2021) nog geen beperking
+ * kende. De teruggaaf is het verschil tussen de belasting van het voorafgaande
+ * jaar vóór en ná de verrekening, tegen het tarief van dát jaar.
+ *
  * Afronding — het belastbare bedrag wordt naar beneden afgerond op hele
  * veelvouden van € 5. Voor de berekende belasting zelf is geen afrondingsregel
  * gevonden; die laten we op de cent staan.
@@ -75,6 +87,43 @@ export interface VpbCorrection {
   amountCents: number;
 }
 
+/**
+ * De vastgestelde berekening van het voorafgaande boekjaar: daarmee wordt een
+ * verlies van dit jaar als eerste verrekend (art. 20 lid 2 Wet Vpb).
+ */
+export interface VpbCarryBackBasis {
+  /** Jaar van het voorafgaande boekjaar (het aanvangsjaar). */
+  year: number;
+  /** Fiscale winst van dat jaar vóór verliesverrekening, in centen. */
+  fiscalProfitCents: number;
+  /** Wat dat jaar al aan oudere verliezen voorwaarts verrekende, in centen. */
+  lossUsedCents: number;
+  /** Het vastgestelde belastbare bedrag van dat jaar, in centen. */
+  taxableAmountCents: number;
+  /** De vastgestelde belasting van dat jaar, in centen. */
+  taxCents: number;
+  /** De tarieftabel (art. 22) van dát jaar. */
+  brackets: VpbBracket[];
+}
+
+/** Uitkomst van de achterwaartse verliesverrekening met het voorafgaande jaar. */
+export interface VpbCarryBack {
+  /** Het jaar waarmee is verrekend. */
+  year: number;
+  /** Bovengrens van art. 20 lid 2 over de winst van dat jaar, met de regels van het verliesjaar. */
+  capCents: number;
+  /** De bovengrens min wat dat jaar al voorwaarts verrekende. */
+  roomCents: number;
+  /** Verlies van dit jaar dat achterwaarts is verrekend. */
+  usedCents: number;
+  taxableBeforeCents: number;
+  taxableAfterCents: number;
+  taxBeforeCents: number;
+  taxAfterCents: number;
+  /** Terug te ontvangen vennootschapsbelasting over dat jaar. */
+  refundCents: number;
+}
+
 export interface VpbInput {
   rules: VpbYearRules;
   /** Commercieel resultaat vóór belasting, in centen. Verlies is negatief. */
@@ -84,6 +133,11 @@ export interface VpbInput {
   lossesCarriedForward: LossCarryForward[];
   /** Al betaalde voorlopige aanslagen over dit jaar, in centen. */
   prepaidCents?: number;
+  /**
+   * De vastgestelde berekening van het voorafgaande boekjaar. Alleen gebruikt
+   * bij een verlies; ontbreekt hij, dan schuift het hele verlies door.
+   */
+  carryBackBasis?: VpbCarryBackBasis | null;
 }
 
 export interface VpbLossUsage {
@@ -108,10 +162,18 @@ export interface VpbResult {
   prepaidCents: number;
   /** Positief = nog te betalen, negatief = terug te ontvangen. */
   balanceDueCents: number;
-  /** Wat er ná dit jaar nog aan verlies openstaat, inclusief een verlies van dit jaar zelf. */
+  /**
+   * Wat er ná dit jaar nog aan verlies openstaat, inclusief een verlies van dit
+   * jaar zelf — dat laatste ná de achterwaartse verrekening.
+   */
   lossesRemaining: LossCarryForward[];
   /** Gemiddeld tarief in basispunten over het belastbare bedrag; 0 bij een belastbaar bedrag van 0. */
   effectiveRateBasisPoints: number;
+  /**
+   * Achterwaartse verliesverrekening met het voorafgaande jaar. Alleen bij een
+   * verlies én een vastgestelde berekening van het voorafgaande jaar; anders null.
+   */
+  carryBack: VpbCarryBack | null;
 }
 
 /** Deelt af en rondt rekenkundig af, zodat er geen halve centen ontstaan. */
@@ -166,8 +228,52 @@ export function lossReliefCap(fiscalProfitCents: number, rules: VpbYearRules): n
 }
 
 /**
+ * Achterwaartse verliesverrekening (art. 20 lid 2 Wet Vpb): het verlies van
+ * dit jaar met de winst van het voorafgaande jaar.
+ *
+ * - De bovengrens is die van art. 20 lid 2 over de winst van het voorafgaande
+ *   jaar, met de drempel en het percentage van het VERLIESJAAR (het recht op
+ *   verrekening volgt de wettekst van het verliesjaar, KG:011:2023:14).
+ * - Wat dat jaar al voorwaarts verrekende gaat van die ruimte af
+ *   (KG:011:2023:14: de ruimte voor 2021 wordt beperkt door de eerdere
+ *   voorwaartse verrekening).
+ * - De teruggaaf rekent met de tarieftabel van het voorafgaande jaar en het
+ *   naar beneden op € 5 afgeronde nieuwe belastbare bedrag.
+ */
+export function computeCarryBack(
+  lossCents: number,
+  basis: VpbCarryBackBasis,
+  lossYearRules: VpbYearRules,
+): VpbCarryBack {
+  const capCents = lossReliefCap(basis.fiscalProfitCents, lossYearRules);
+  const roomCents = Math.max(0, capCents - Math.max(0, basis.lossUsedCents));
+  const usedCents = Math.max(0, Math.min(lossCents, roomCents));
+
+  const taxableBeforeCents = basis.taxableAmountCents;
+  const taxBeforeCents = basis.taxCents;
+  const taxableAfterCents = usedCents > 0
+    ? roundTaxableAmount(Math.max(0, basis.fiscalProfitCents - Math.max(0, basis.lossUsedCents) - usedCents))
+    : taxableBeforeCents;
+  const taxAfterCents = usedCents > 0 ? taxForAmount(taxableAfterCents, basis.brackets) : taxBeforeCents;
+
+  return {
+    year: basis.year,
+    capCents,
+    roomCents,
+    usedCents,
+    taxableBeforeCents,
+    taxableAfterCents,
+    taxBeforeCents,
+    taxAfterCents,
+    refundCents: Math.max(0, taxBeforeCents - taxAfterCents),
+  };
+}
+
+/**
  * De volledige som: commercieel resultaat → fiscale correcties →
  * verliesverrekening → belastbaar bedrag → belasting → nog te betalen.
+ * Bij een verlies eerst achterwaarts verrekenen met het voorafgaande jaar; wat
+ * overblijft schuift door.
  */
 export function computeVpb(input: VpbInput): VpbResult {
   const { rules } = input;
@@ -203,11 +309,16 @@ export function computeVpb(input: VpbInput): VpbResult {
   const taxableAmountCents = roundTaxableAmount(taxableBeforeRoundingCents);
   const taxCents = taxForAmount(taxableAmountCents, rules.brackets);
 
-  // Een verlies van dít jaar schuift door naar volgend jaar. Verliezen die nog
-  // openstonden en niet gebruikt zijn, blijven onbeperkt staan.
+  // Een verlies van dít jaar gaat eerst terug naar het voorafgaande jaar (art. 20
+  // lid 2); wat daar niet past schuift door naar volgende jaren. Verliezen die
+  // nog openstonden en niet gebruikt zijn, blijven onbeperkt staan.
+  const carryBack = fiscalProfitCents < 0 && input.carryBackBasis
+    ? computeCarryBack(-fiscalProfitCents, input.carryBackBasis, rules)
+    : null;
   const lossesRemaining = openLosses.filter((l) => l.remainingCents > 0);
   if (fiscalProfitCents < 0) {
-    lossesRemaining.push({ year: rules.year, remainingCents: -fiscalProfitCents });
+    const forward = -fiscalProfitCents - (carryBack?.usedCents ?? 0);
+    if (forward > 0) lossesRemaining.push({ year: rules.year, remainingCents: forward });
   }
   lossesRemaining.sort((a, b) => a.year - b.year);
 
@@ -226,5 +337,6 @@ export function computeVpb(input: VpbInput): VpbResult {
     lossesRemaining,
     effectiveRateBasisPoints:
       taxableAmountCents > 0 ? Math.round((taxCents * 10000) / taxableAmountCents) : 0,
+    carryBack,
   };
 }

@@ -1882,15 +1882,27 @@ export interface DgaSignals {
   comparableSalaryBasisPoints: number | null;
   /** Null vóór 2023: de regeling excessief lenen bestond toen nog niet. */
   excessiveLoanThresholdCents: number | null;
+  /** De bandbreedte zonder rente: ± dit bedrag, het hele kalenderjaar. */
   interestFreeLimitCents: number | null;
+  /** Korte bronvermelding, bijvoorbeeld "Besluit ROW 2026, onderdeel 3.9". */
+  interestFreeLimitBasis: string | null;
+  /** De volledige bronvermelding met voorwaarden. */
+  interestFreeLimitSourceNote: string | null;
   hasCurrentAccount: boolean;
-  /** Saldo op 31 december — de peildatum voor excessief lenen. */
+  /** Saldo op 31 december — de peildatum voor excessief lenen. Positief = de DGA is de BV schuldig. */
   currentAccountYearEndCents: number;
-  /** Hoogste stand van het jaar — de toets voor de renteloze grens. */
+  /** Hoogste stand van het jaar: de grootste schuld van de DGA aan de BV. */
   currentAccountPeakCents: number;
+  /** Laagste stand van het jaar: negatief = de BV was de DGA dit bedrag schuldig. */
+  currentAccountLowestCents: number;
   wagesBookedCents: number;
   noWagesBooked: boolean;
+  /** Buiten de bandbreedte, aan welke kant ook: de goedkeuring geldt niet. */
   aboveInterestFreeLimit: boolean;
+  /** De DGA was de BV ergens in het jaar meer dan de grens schuldig. */
+  dgaDebtAboveInterestFreeLimit: boolean;
+  /** De BV was de DGA ergens in het jaar meer dan de grens schuldig. */
+  dgaClaimAboveInterestFreeLimit: boolean;
   aboveExcessiveLoanThreshold: boolean;
 }
 
@@ -1950,6 +1962,36 @@ export interface CorporateTaxInputs {
   prepaidCents: number;
   corrections: Array<{ id: UUID; code: CorporateTaxCorrectionCode; label: string; amountCents: number }>;
   lossesCarriedForward: Array<{ year: number; remainingCents: number; establishedByAssessment: boolean }>;
+  /** Het boekjaar direct hiervoor, als dat in de administratie staat. */
+  precedingFiscalYear: { id: UUID; label: string; year: number; hasFinalReturn: boolean } | null;
+  /**
+   * De vastgestelde berekening van dat boekjaar: daarmee wordt een verlies
+   * eerst verrekend (art. 20 lid 2 Wet Vpb). Null zonder vastgestelde berekening.
+   */
+  carryBackBasis: {
+    year: number;
+    fiscalYearId: UUID;
+    label: string;
+    returnId: UUID;
+    fiscalProfitCents: number;
+    lossUsedCents: number;
+    taxableAmountCents: number;
+    taxCents: number;
+    brackets: Array<{ lowerBoundCents: number; baseAmountCents: number; rateBasisPoints: number }>;
+  } | null;
+}
+
+/** Achterwaartse verliesverrekening met het voorafgaande jaar (art. 20 lid 2 Wet Vpb). */
+export interface CorporateTaxCarryBack {
+  year: number;
+  capCents: number;
+  roomCents: number;
+  usedCents: number;
+  taxableBeforeCents: number;
+  taxableAfterCents: number;
+  taxBeforeCents: number;
+  taxAfterCents: number;
+  refundCents: number;
 }
 
 /** Uitkomst van computeVpb — één op één de vorm uit _shared/vpb.ts. */
@@ -1967,6 +2009,8 @@ export interface CorporateTaxComputation {
   balanceDueCents: number;
   lossesRemaining: Array<{ year: number; remainingCents: number }>;
   effectiveRateBasisPoints: number;
+  /** Alleen bij een verlies met een vastgesteld voorafgaand jaar; oudere berekeningen hebben hem niet. */
+  carryBack?: CorporateTaxCarryBack | null;
 }
 
 /** Rij uit corporate_tax_corrections. */
@@ -1993,6 +2037,12 @@ export interface CorporateTaxReturn extends OrgScopedRow {
   prepaid_cents: number;
   balance_due_cents: number;
   computation: CorporateTaxComputation;
+  /** Verlies van dit jaar dat achterwaarts is verrekend met het voorafgaande boekjaar. */
+  carry_back_cents: number;
+  /** Teruggaaf over het voorafgaande boekjaar; bij vaststellen geboekt op 1540/9900. */
+  carry_back_refund_cents: number;
+  /** De berekening van het voorafgaande boekjaar waarmee is verrekend. */
+  carry_back_to_return_id: UUID | null;
   status: 'draft' | 'final' | 'reversed';
   accrual_entry_id: UUID | null;
   finalized_at: string | null;
@@ -2525,6 +2575,8 @@ export interface AnnualAccountSnapshot {
   } | null;
   corporateTax: {
     id: UUID; year: number; status: string; taxableAmountCents: number; taxCents: number;
+    /** De bevroren berekening; bij een verliesjaar met terugwenteling staat daar carryBack in. */
+    computation?: { carryBack?: { year: number; usedCents: number; refundCents: number } | null } | null;
   } | null;
   reconciliation: {
     trialBalanceDifferenceCents: number;
