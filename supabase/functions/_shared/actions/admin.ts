@@ -59,7 +59,7 @@ export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   bank_rule: 'finance', company_settings: 'finance', contract: 'finance', contract_note: 'finance', contract_project: 'finance',
   contract_template: 'finance', corporate_tax_return: 'finance', credit_note: 'finance', dividend_distribution: 'finance',
   fiscal_year: 'finance', fiscal_year_size_input: 'finance', fixed_asset: 'finance', invoice: 'finance', journal_entry: 'finance',
-  ledger_account: 'finance', purchase_invoice: 'finance', quote: 'finance', result_appropriation: 'finance',
+  ledger_account: 'finance', partnership_partner: 'finance', purchase_invoice: 'finance', quote: 'finance', result_appropriation: 'finance',
   share_transaction: 'finance', shareholder: 'finance', supplier: 'finance', vat_return: 'finance',
   calendar_event: 'calendar', calendar_event_link: 'calendar', calendar_source: 'calendar', note_calendar_link: 'calendar',
   client: 'clients', client_call: 'clients', client_contact: 'clients',
