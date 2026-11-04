@@ -168,7 +168,11 @@ schermen vast.
     btw-vermeldingen app ↔ server, MT940, inbox-valuta);
   - `npm run build` ✓ en de CSP-hash ✓;
   - mobiele lay-outtest op de financiënpagina's, donker en licht: 42 metingen, 0
-    problemen.
+    problemen;
+  - de volledige mobiele lay-outtest, donker en licht: 288 pagina's gemeten, 0
+    met problemen. Dat gold lokaal en in CI (*Frontend checks* run 105 op
+    `staging`). Een eerdere lokale run brak één keer af op "Execution context
+    was destroyed" (een navigatie tijdens het meten); herhaald was hij groen.
 - **Deno-typecheck:**
   - alle 34 functies uit de CI-lijst zijn schoon;
   - `invoice-workflow` en `bank-sync` (niet in CI) hebben precies dezelfde, al
