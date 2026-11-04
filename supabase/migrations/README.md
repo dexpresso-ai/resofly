@@ -21,6 +21,10 @@ Daarna, eenmalig per project:
 3. De secrets uit `.env.example` (`supabase secrets set …`).
 4. `scripts/supabase-setup-webhooks.sh`: de geheimen en de pg_cron-taken van
    de bezorger, de opruimtaak, de klantmeldingen en bestanden versturen.
+5. Wil je jaarabonnementen aanbieden? Zet dan per plan `yearly_price_cents` en
+   `extra_seat_yearly_price_cents` in `billing_plans`. Staat er 0, dan biedt de
+   app geen jaar aan; zo is het ontworpen (20260626000002). Op staging staan ze
+   op twaalf keer de maandprijs.
 
 **Lokaal** (Docker nodig):
 
@@ -43,7 +47,10 @@ ontstaat bij de eerste login.
    zie hieronder.
 3. Een migratie die al op staging staat, wijzig je niet meer. De CLI draait hem
    daar nooit opnieuw, dus een wijziging komt alleen op nieuwe databases terecht.
-   Een fout herstel je met een nieuwe migratie.
+   Een fout herstel je met een nieuwe migratie. Er is één uitzondering: een
+   bestaande migratie aanpassen zodat een verse database krijgt wat staging al
+   heeft. Op staging verandert dan niets. Zo is de keten in november
+   rechtgezet; zie hieronder.
 4. Schrijf hem zo dat hij veilig nog eens kan draaien (`if not exists`,
    `create or replace`, `drop … if exists`).
 
@@ -69,7 +76,7 @@ alleen versies):
 | `20260515000001` / `…000002` | Inhoud omgewisseld: `hardening` vóór `final_recheck`. `final_recheck` trekt rechten in op een functie die `hardening` aanmaakt; de gecombineerde migratie van 16 mei noemt dezelfde volgorde. |
 | `20260527000000` / `…000001` | Inhoud omgewisseld: `production_hardening` vóór `deep_review_fixes`. De review gebruikt de tabel `invoice_public_links` die de hardening aanmaakt. |
 | `20261101060000` | Maakt nu zelf `rls_auto_enable()` en de event-trigger `ensure_rls`. Die kwamen uit het dashboard ("RLS automatisch aan op nieuwe tabellen") en bestonden op een verse database niet. |
-| `20261104060500` | Nieuw: wat staging met de hand kreeg. `invoice_token_hash` met een vaste `search_path` (de oude versie faalde vanuit security-definer-functies), en de jaarprijzen van de abonnementen. |
+| `20260526000000` | `invoice_token_hash` zoals hij op staging staat, met een vaste `search_path`. De eerste versie faalde vanuit security-definer-functies, en daarmee de publieke factuurlinks. Staging was in de SQL-editor gerepareerd. |
 
 Dezelfde aanpak als eerder in commit `88ea8e6` (sprint 2.5 achteraan de
 20260430-groep).
@@ -77,11 +84,13 @@ Dezelfde aanpak als eerder in commit `88ea8e6` (sprint 2.5 achteraan de
 **Gecontroleerd op 4 november 2026:** een database vanaf nul is vergeleken met
 staging op tabellen, kolommen, constraints, indexen, functies (inhoud),
 triggers, policies, rechten, types, buckets en de referentiedata (plannen,
-tarieven, normen). Alles is gelijk, op twee bewuste verschillen na:
+tarieven, normen). Alles is gelijk, op drie bewuste verschillen na:
 
 - `public._migrations` staat alleen op staging: het logboek van de oude
   handmatige migratieronde van 31 mei. Geen code gebruikt het.
 - `pg_cron` zet je per project aan in het dashboard (zie hierboven).
+- De jaarprijzen in `billing_plans` zijn instellingen per omgeving, geen schema
+  (zie stap 5 hierboven).
 
 Opnieuw vergelijken, na `supabase db start` en `supabase link`:
 

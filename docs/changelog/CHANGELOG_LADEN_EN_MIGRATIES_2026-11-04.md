@@ -82,23 +82,39 @@ dus niets van; de details staan in `supabase/migrations/README.md`.
 - De paren van 15 en 27 mei zijn omgewisseld naar de volgorde waarin ze echt
   draaiden.
 - `20261101060000` maakt zelf `rls_auto_enable()` en de trigger `ensure_rls`.
-- Nieuw: `20261104060500` legt de twee handmatige reparaties vast:
-  - `invoice_token_hash` met een vaste `search_path`. De oude versie faalde vanuit
-    security-definer-functies, en daarmee de publieke factuurlinks.
-  - de jaarprijzen van de abonnementen.
+- `20260526000000` definieert `invoice_token_hash` zoals hij op staging staat, met
+  een vaste `search_path`. De eerste versie faalde vanuit
+  security-definer-functies, en daarmee de publieke factuurlinks. Staging was
+  ooit in de SQL-editor gerepareerd.
+
+**Eerst een nieuwe migratie, toen niet.** De reparatie stond eerst in een nieuwe
+migratie (`…060500`, later `…070500`). Terwijl dit werk liep, rolden twee andere
+sessies er ook migraties uit (`20261104070000` en `20261104075000`). Elke keer
+was de nieuwe versie daardoor ouder dan de laatste op staging, en dat weigert
+`supabase db push`. De reparatie hoort bovendien bij de definitie zelf. Ze staat
+nu daar, en deze uitrol voegt geen migratie toe.
+
+De jaarprijzen van de abonnementen zijn op staging met de hand gezet. Ze staan
+bewust niet in een migratie: volgens 20260626000002 zijn ze een instelling per
+omgeving (0 = geen jaarabonnement). Een nieuwe omgeving zet ze zelf; zie stap 5
+in `supabase/migrations/README.md`.
 
 **Getest met de echte Supabase-images** (Postgres 17.6.1.111, net als staging):
 
-- alle 231 migraties lopen op een lege database;
-- vergeleken met staging zijn 8125 regels vingerafdruk gelijk:
+- alle 232 migraties lopen op een lege database, ook de twee van de andere
+  sessies;
+- de versielijst is gelijk aan die van staging, dus `db push` heeft niets te doen;
+- vergeleken met staging is de vingerafdruk gelijk:
   - tabellen en kolommen;
   - constraints en indexen;
   - functie-inhoud, triggers en policies;
   - rechten, types en buckets;
   - de referentiedata.
 
-  Er zijn twee bewuste verschillen: `public._migrations` (een oud logboek dat
-  niemand gebruikt) en `pg_cron` (dat zet je per project aan).
+  Er zijn drie bewuste verschillen:
+  - `public._migrations`, een oud logboek dat niemand gebruikt;
+  - `pg_cron`, dat zet je per project aan;
+  - de jaarprijzen, die zijn een instelling per omgeving.
 
 **Verder:**
 

@@ -43,7 +43,8 @@ bestanden waarnaar verwezen wordt.
    SQL-editor zonder migratie: zo liepen staging en een verse database uit
    elkaar. Een nieuwe migratie heet `<JJJJMMDDUUMMSS>_<naam>.sql`, met een
    versie na de laatste op staging, en mag veilig opnieuw draaien. Wijzig
-   nooit een migratie die al op staging staat. Zie
+   geen migratie die al op staging staat. De enige uitzondering is om een
+   verse database te geven wat staging al heeft. Zie
    `supabase/migrations/README.md`.
 5. **Laden per module.** De app laadt bij het opstarten de kern en pas daarna,
    per pagina, vijf groepen zware tabellen (`src/lib/dataGroups.ts`). Leest

@@ -449,13 +449,23 @@ begin
   end if;
 end $$;
 
+-- Zo staat hij op staging, en zo krijgt een nieuwe database hem. De eerste
+-- versie noemde digest() zonder schema en zonder eigen search_path; vanuit een
+-- security-definer-functie met `search_path = public` (resolve_invoice_public_link)
+-- vond hij pgcrypto in `extensions` dan niet: "function digest(text, unknown) does
+-- not exist ... during inlining". Staging is destijds in de SQL-editor
+-- gerepareerd; deze regel bracht die reparatie in november 2026 naar de keten.
 create or replace function public.invoice_token_hash(p_token text)
 returns text
 language sql
 immutable
-as $$
-  select encode(digest(coalesce(p_token, ''), 'sha256'), 'hex');
-$$;
+set search_path to 'public', 'extensions'
+as $function$
+  select encode(
+    extensions.digest(coalesce(p_token, '')::text, 'sha256'::text),
+    'hex'
+  );
+$function$;
 
 create or replace function public.insert_invoice_workflow_event(
   p_organization_id uuid,
