@@ -167,8 +167,22 @@ in `supabase/migrations/README.md`.
 
 ## Uitslag van de controles
 
-- `npm run typecheck`: schoon.
-- `npm test`: 900 tests, allemaal groen (15 nieuw).
-- `npm run test:loading`: 95 controles groen.
-- `npm run test:mobile`: 144 metingen in donker, geen problemen.
-- `supabase db start` met de vaste CLI-versie: 231 van 231 migraties toegepast.
+Op de stand die naar staging gaat, na het samenvoegen met het werk van de
+andere sessies van vandaag:
+
+| Controle | Uitslag |
+| --- | --- |
+| `npm run typecheck` | schoon |
+| `npm test` | 949 tests groen, waarvan 16 nieuw in `dataGroups.test.ts` |
+| `npm run test:loading` | 103 controles groen, twee keer na elkaar |
+| `npm run test:mobile -- --theme=both` | 288 metingen, geen problemen |
+| `npm run build` | geslaagd |
+
+Daarnaast, met de echte Supabase-images:
+
+- alle 233 migraties lopen op een lege database;
+- de vingerafdruk is gelijk aan staging, op de bewuste verschillen na;
+- de versielijst is gelijk aan die van staging.
+
+De CI-rondes op de branch (`Frontend checks`, met de nieuwe jobs `migrations` en
+*Laden per module*) waren groen.
