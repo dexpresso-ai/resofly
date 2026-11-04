@@ -346,11 +346,14 @@ function finishAiProposal(
  * fundamenteel). Levert ook het vat_rate voor de regel: bij verlegd/EU-verwerving
  * is dat het tarief van de org-code (zelf aangeven), niet de 0 uit het document.
  */
+const EU_COUNTRIES = new Set(['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'EL', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE']);
+
 export function resolveVatCodeForCategory(
   category: string,
   documentRate: number,
   vatCodes: VatRow[],
   warnings: string[],
+  supplierCountry?: string | null,
 ): { vat_code: string; vat_rate: number } {
   const byKind = (kinds: string[], preferRate?: number): VatRow | undefined => {
     const candidates = vatCodes.filter((v) => kinds.includes(v.kind));
@@ -382,7 +385,17 @@ export function resolveVatCodeForCategory(
       return { vat_code: hit?.code ?? 'VRIJ', vat_rate: 0 };
     }
     case 'AE': {
-      // Verlegde btw op een INKOOPfactuur = zelf aangeven én aftrekken (VERL_INK).
+      // Verlegde btw op een INKOOPfactuur = zelf aangeven én aftrekken. De rubriek
+      // hangt af van waar de leverancier zit: binnenland 2a (VERL_INK), een ander
+      // EU-land 4b (EU_VERW), buiten de EU 4a (IMPORT). Voorheen ging alles naar 2a.
+      const country = String(supplierCountry ?? '').trim().toUpperCase();
+      if (country && country !== 'NL') {
+        const foreign = EU_COUNTRIES.has(country) ? byKind(['eu_acquisition']) : byKind(['import_non_eu']);
+        if (foreign) return { vat_code: foreign.code, vat_rate: foreign.rate };
+        warnings.push(`De e-factuur bevat verlegde btw van een leverancier uit ${country}, maar deze organisatie heeft geen passende code (${EU_COUNTRIES.has(country) ? 'EU_VERW' : 'IMPORT'}). Controleer de btw-code vóór het boeken.`);
+      } else if (!country) {
+        warnings.push('De e-factuur bevat verlegde btw, maar het land van de leverancier ontbreekt. Binnenland is rubriek 2a, een ander EU-land 4b en buiten de EU 4a; controleer de btw-code.');
+      }
       const hit = byKind(['reverse_charge_purchase']);
       if (hit) return { vat_code: hit.code, vat_rate: hit.rate };
       warnings.push('De e-factuur bevat verlegde btw (categorie AE), maar deze organisatie heeft geen verlegd-inkoopcode (VERL_INK). De regel staat nu op 0% — corrigeer de btw-code vóór het boeken.');
@@ -442,7 +455,7 @@ export async function buildUblProposal(
     : null;
 
   const lines: ProposalLine[] = doc.lines.map((l) => {
-    const resolved = resolveVatCodeForCategory(l.category, l.vatRate, vatCodes, warnings);
+    const resolved = resolveVatCodeForCategory(l.category, l.vatRate, vatCodes, warnings, doc.supplier.countryCode);
     return {
       description: l.description,
       amount_cents: l.netCents,

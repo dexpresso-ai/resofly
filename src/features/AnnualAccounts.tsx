@@ -23,9 +23,10 @@ import {
   previewAnnualAccountsPdf, renderAnnualAccountsPdf, renderAnnualAccountsPublication,
   type AnnualAccountsPdfResult,
 } from '../services/annualAccountsService';
+import { formatISODate } from '../lib/dates';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => formatISODate(new Date());
 
 /** Euro-invoer naar centen; accepteert zowel komma als punt. */
 function parseEuro(value: string): number | null {

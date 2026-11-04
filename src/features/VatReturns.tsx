@@ -199,7 +199,7 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
         <div><PageIcon page="vat-returns" /><h2>Omzetbelasting</h2><p>BTW-aangifte per {view === 'monthly' ? 'maand' : 'kwartaal'}, berekend uit de geboekte journaalposten.</p></div>
       </div>
 
-      {kor && <div className="bk-note">Je organisatie valt onder de <strong>KOR</strong>: je brengt geen BTW in rekening en mag geen voorbelasting aftrekken. De aangifte is daarom nihil.</div>}
+      {kor && <div className="bk-note">Je organisatie valt onder de <strong>KOR</strong>: je brengt geen BTW in rekening en mag geen voorbelasting aftrekken. Is er btw naar je verlegd (een dienst uit de EU, invoer of binnenlands verlegd), dan geef je die wél aan en betaal je hem, zonder aftrek: die staat hieronder in rubriek 2a, 4a of 4b. Anders is de aangifte nihil.</div>}
 
       <div className="bk-report-controls">
         <div className="bk-seg">

@@ -458,6 +458,23 @@ function bookValuesAt(data: AppData, asOf: string): Map<string, number> {
 }
 
 /**
+ * Een creditsaldo op een activarekening (een rekening-courant die de BV de DGA
+ * schuldig is, een roodstand) is een schuld en geen negatief activum; een
+ * debetsaldo op een schuldrekening is een vordering. Zo staan ze aan de juiste
+ * kant van de balans, en blijft het balanstotaal de bruto waarde der activa.
+ * Alleen presentatie: de RPC en het grootboek blijven ongewijzigd.
+ */
+function presentBalanceRow(row: BalanceSheetRow): BalanceSheetRow {
+  if (row.section === 'asset' && row.amount_cents < 0) {
+    return { ...row, section: 'liability', report_group: 'kortlopende_schulden', group_rank: 140, amount_cents: -row.amount_cents };
+  }
+  if (row.section === 'liability' && row.amount_cents < 0) {
+    return { ...row, section: 'asset', report_group: 'vorderingen', group_rank: 50, amount_cents: -row.amount_cents };
+  }
+  return row;
+}
+
+/**
  * Balans ingedeeld volgens de hoofdindeling van art. 2:364 BW: per rubriek een
  * subtotaal, met de vergelijkende cijfers van de vorige periode ernaast
  * (art. 2:363 lid 5 BW).
@@ -466,9 +483,11 @@ function bookValuesAt(data: AppData, asOf: string): Map<string, number> {
  * verkeerd gerubriceerde rekening hooguit onder de verkeerde kop, maar nooit aan
  * de verkeerde kant — en blijft het balanstotaal kloppen.
  */
-function BalanceReport({ rows, previousRows, period, data }: {
+function BalanceReport({ rows: rawRows, previousRows: rawPreviousRows, period, data }: {
   rows: BalanceSheetRow[]; previousRows: BalanceSheetRow[]; period: { current: PeriodBounds; previous: PeriodBounds }; data: AppData;
 }) {
+  const rows = rawRows.map(presentBalanceRow);
+  const previousRows = rawPreviousRows.map(presentBalanceRow);
   const [assetsExpanded, setAssetsExpanded] = useState(false);
   const asOf = period.current.to;
   const prevAsOf = period.previous.to;

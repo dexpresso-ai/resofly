@@ -335,6 +335,15 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       if (invoice.status === status) {
         throw new ActionError(`Factuur ${invoice.number} staat al op "${INVOICE_STATUS_LABELS[status] ?? status}".`);
       }
+      if (status === 'draft' && invoice.status !== 'draft') {
+        throw new ActionError(`Factuur ${invoice.number} is uitgegeven en gaat niet terug naar concept. Crediteer hem en maak een nieuwe factuur.`);
+      }
+      if (invoice.journal_entry_id && ['cancelled', 'void', 'written_off'].includes(status)) {
+        const { data: openCents } = await ctx.db.rpc('invoice_open_receivable_cents', { p_organization_id: ctx.organizationId, p_invoice_id: invoiceId });
+        if (Number(openCents ?? 0) > 0) {
+          throw new ActionError(`Factuur ${invoice.number} staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur in ResoFly.`);
+        }
+      }
       const warnings: Record<string, string> = {
         paid: 'De factuur telt daarna niet meer mee als openstaande vordering en de automatische herinneringen stoppen. Boek je hem ten onrechte af, dan klopt je debiteurenstand niet meer.',
         void: 'Ongeldig gemaakt is een eindstation: de factuur verdwijnt uit de debiteurenstand en uit de herinneringsflow, en je kunt hem daarna niet meer versturen of innen.',

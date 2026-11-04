@@ -4,6 +4,7 @@ import { Button, Input, Select } from '../components/Ui';
 import { euro } from '../lib/format';
 import { parseCsv } from '../lib/csvImport';
 import { postPayrollJournal } from '../lib/repository';
+import { todayIso } from '../lib/dates';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 
@@ -42,7 +43,7 @@ export function PayrollImport({ organizationId, canWrite, onPosted }: {
   const [headers, setHeaders] = useState<string[]>([]);
   const [raw, setRaw] = useState<string[][]>([]);
   const [map, setMap] = useState({ account: '', description: '', debit: '', credit: '' });
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => todayIso());
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

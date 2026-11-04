@@ -116,6 +116,8 @@ export function autoBookEligible(input: {
   ibanMismatch?: boolean;
   /** Het IBAN op de factuur is bekend én gelijk aan dat van de leverancier. */
   ibanVerified?: boolean;
+  /** Valuta van de factuur. Het grootboek boekt in euro's zonder omrekening. */
+  currency?: string | null;
 }): { ok: true } | { ok: false; why: string } {
   if (input.supplierCreated) return { ok: false, why: 'de leverancier is nieuw aangemaakt' };
   if (input.ibanMismatch) return { ok: false, why: 'het IBAN op de factuur wijkt af van het IBAN van deze leverancier' };
@@ -132,6 +134,8 @@ export function autoBookEligible(input: {
   if (input.warnings.length) return { ok: false, why: 'er zijn waarschuwingen bij de uitlezing' };
   if (!input.lines.length || input.lines.some((l) => !l.account_id)) return { ok: false, why: 'niet elke regel heeft een grootboekrekening' };
   if (input.totals.total_cents <= 0) return { ok: false, why: 'het totaal is niet positief' };
+  // Een bedrag in vreemde valuta zou 1-op-1 als euro's in het grootboek komen.
+  if (input.currency && input.currency.trim().toUpperCase() !== 'EUR') return { ok: false, why: 'de factuur is niet in euro\'s' };
   return { ok: true };
 }
 

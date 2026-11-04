@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage, type RGB } from 'pdf-lib';
+import { invoiceVatNotes } from './invoiceVatNotes';
 import type { Client, CompanySettings, Invoice, Quote } from '../types';
 import { dateNL, total } from './format';
 import { lineGross as centExactLineGross } from './money';
@@ -29,6 +30,8 @@ interface PdfOptions {
   company?: CompanySettings | null;
   brandName?: string;
   brandTagline?: string;
+  /** Voor de verplichte btw-vermeldingen (verlegd, ICP, export, vrijgesteld). */
+  vatCodes?: Array<{ code: string; kind: string; sales_box: string | null }>;
 }
 
 interface PreparedTemplate {
@@ -377,7 +380,8 @@ export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' |
   // Wettelijk: btw per tarief uitsplitsen op de factuur. Bij één tarief tonen we
   // het percentage in het label; bij meerdere tarieven elk apart.
   for (const row of totals.vatBreakdown) {
-    drawText(page, `BTW ${row.rate}%`, totalX, cursorY, ctx, { size: sz(base, -1) });
+    // Per tarief de grondslag én het btw-bedrag (art. 35a lid 1 Wet OB).
+    drawText(page, `BTW ${row.rate}% over ${fmtMoney(row.base)}`, totalX, cursorY, ctx, { size: sz(base, -2) });
     drawText(page, fmtMoney(row.vat), page.getWidth() - 48, cursorY, ctx, { size: sz(base, -1), align: 'right' });
     cursorY -= 16;
   }
@@ -389,6 +393,21 @@ export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' |
   drawText(page, 'Totaal', totalX, cursorY, ctx, { size: sz(base, 2), bold: true });
   drawText(page, fmtMoney(totals.total), page.getWidth() - 48, cursorY, ctx, { size: sz(base, 2), bold: true, align: 'right' });
   cursorY -= 20;
+
+  // Verplichte vermeldingen bij 0% of geen btw (art. 35a Wet OB), gelijk aan de
+  // verzonden factuur uit invoice-workflow.
+  const vatCodeInfo = Object.fromEntries((opts.vatCodes ?? []).map(v => [v.code, { kind: v.kind, salesBox: v.sales_box }]));
+  const vatNotes = invoiceVatNotes(lines, vatCodeInfo);
+  for (const note of vatNotes.notes) {
+    cursorY -= 4;
+    drawWrappedText(page, note, 48, cursorY, 500, ctx, { size: sz(base, -2), lineHeight: 11, color: ctx.mutedColor });
+    cursorY -= 11;
+  }
+  if (kind === 'invoice' && vatNotes.needsCustomerVatNumber && !String(client?.vat_number ?? '').trim()) {
+    cursorY -= 4;
+    drawWrappedText(page, `Let op: bij ${vatNotes.reasons.join(' en ')} hoort het btw-nummer van de klant op de factuur. Vul het in bij de klant voordat je verstuurt.`, 48, cursorY, 500, ctx, { size: sz(base, -2), lineHeight: 11, color: ctx.mutedColor });
+    cursorY -= 11;
+  }
 
   if (doc.notes) {
     cursorY -= 8;

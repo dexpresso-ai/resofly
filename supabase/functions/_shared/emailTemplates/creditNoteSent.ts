@@ -5,7 +5,7 @@ import type { CreditNoteSentEmailInput, RenderedEmailTemplate } from './types.ts
 // Ingebouwde standaardteksten. Een organisatie kan deze per veld overschrijven via
 // email_templates (sleutel 'creditNote.sent'); lege velden vallen hierop terug.
 const DEFAULT_SUBJECT = 'Creditfactuur {{credit_note_number}} van {{company_name}}';
-const DEFAULT_INTRO = 'Beste {{recipient_name}},\nIn de bijlage vind je de creditfactuur die hoort bij een (gedeeltelijke) terugbetaling van factuur {{invoice_number}}.';
+const DEFAULT_INTRO = 'Beste {{recipient_name}},\nIn de bijlage vind je de creditfactuur bij factuur {{invoice_number}}.';
 // Vaste regel (geen aanpasbare tekst): legt uit wat het XML-bestand in de bijlage is.
 const E_INVOICE_NOTE = 'Deze creditfactuur zit ook als e-creditnota (UBL) in de bijlage, met de PDF erin — voor je boekhoudpakket.';
 
@@ -40,7 +40,7 @@ export function renderCreditNoteSentEmail(input: CreditNoteSentEmailInput): Rend
       brandName: companyName,
       eyebrow: companyName,
       title: `Creditfactuur ${input.creditNote.number}`,
-      preheader: `Je creditfactuur voor terugbetaling op factuur ${input.invoice.number}.`,
+      preheader: `Je creditfactuur bij factuur ${input.invoice.number}.`,
       accentColor: input.company?.invoice_accent_color,
       introHtml: `<p style="margin:0;">${introHtml}</p>`,
       bodyHtml: renderCreditNoteSummary({

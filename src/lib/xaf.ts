@@ -233,7 +233,7 @@ function transactionXml(
   entry: JournalEntry,
   lines: JournalLine[],
   ctx: {
-    accountById: Map<string, { code: string }>;
+    accountById: Map<string, { code: string; type?: string }>;
     clientCode: Map<string, string>;
     supplierCode: Map<string, string>;
     periodNumberOf: (date: string) => number;
@@ -249,12 +249,18 @@ function transactionXml(
       : line.supplier_id
         ? ctx.supplierCode.get(line.supplier_id)
         : undefined;
+    // De kant van de btw-boeking, niet het teken van het bedrag: op een
+    // omzetregel staat de btw credit (1510) en een negatief bedrag (creditnota,
+    // tegenboeking) is debet; op een kosten- of activaregel is het andersom.
+    const vatCents = line.vat_amount_cents ?? 0;
+    const onRevenue = ctx.accountById.get(line.account_id)?.type === 'revenue';
+    const vatTp: 'D' | 'C' = onRevenue ? (vatCents >= 0 ? 'C' : 'D') : (vatCents >= 0 ? 'D' : 'C');
     const vatXml = line.vat_code
       ? '<vat>'
         + tag('vatID', line.vat_code)
         + tag('vatPerc', String(line.vat_rate ?? 0))
-        + tag('vatAmnt', amt(line.vat_amount_cents ?? 0))
-        + tag('vatAmntTp', (line.vat_amount_cents ?? 0) >= 0 ? 'D' : 'C')
+        + tag('vatAmnt', amt(vatCents))
+        + tag('vatAmntTp', vatTp)
         + '</vat>'
       : '';
     return '<trLine>'

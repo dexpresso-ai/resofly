@@ -15,6 +15,16 @@ export function formatISODate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * Vandaag als JJJJ-MM-DD in de tijdzone van de gebruiker. Niet
+ * `new Date().toISOString().slice(0, 10)`: dat is de UTC-datum en geeft in
+ * Nederland tussen middernacht en 01:00/02:00 nog gisteren (op 1 januari: het
+ * vorige boekjaar).
+ */
+export function todayIso(): string {
+  return formatISODate(new Date());
+}
+
 /** Monday-aligned start of the week containing `d`. NL convention. */
 export function startOfWeek(d: Date): Date {
   const day = d.getDay(); // 0 = Sunday, 1 = Monday, ...

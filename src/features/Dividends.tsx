@@ -11,6 +11,7 @@ import {
   declareDividend, dividendTaxRateOn, listDividendDistributions, listResultAppropriations,
   loadDividendDistributionLines, reverseDividendDistribution,
 } from '../lib/repository';
+import { todayIso } from '../lib/dates';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pct = (bp: number | null | undefined) => `${((bp ?? 0) / 100).toFixed(2).replace('.', ',')}%`;
@@ -28,7 +29,7 @@ function centsToInput(cents: number): string {
 /** Eén maand na de terbeschikkingstelling — art. 19 lid 3 AWR. */
 function deadlineTone(deadline: string | null): 'warn' | 'muted' {
   if (!deadline) return 'muted';
-  return deadline < new Date().toISOString().slice(0, 10) ? 'warn' : 'muted';
+  return deadline < todayIso() ? 'warn' : 'muted';
 }
 
 /**
@@ -207,7 +208,7 @@ function DividendForm({ organizationId, positions, asOf, openAppropriations, bus
   onCancel: () => void;
   onDone: () => Promise<void>;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const [kind, setKind] = useState<DividendKind>(openAppropriations.length > 0 ? 'final' : 'interim');
   const [appropriationId, setAppropriationId] = useState(openAppropriations[0]?.id ?? '');
   const [decisionDate, setDecisionDate] = useState(today);
@@ -258,22 +259,25 @@ function DividendForm({ organizationId, positions, asOf, openAppropriations, bus
   }, [holders, amounts, rate]);
 
   /**
-   * Naar belang verdelen. De laatste aandeelhouder krijgt het afrondingsrestje,
-   * anders telt de verdeling niet op tot het besluit — en bij een dividend uit
-   * de vastgestelde winst weigert de RPC dan terecht.
+   * Naar belang verdelen, op het exacte aantal aandelen (niet op het afgeronde
+   * percentage: bij 1 en 2 aandelen en € 90.000 gaf dat € 29.997 / € 60.003).
+   * Afrondingscenten gaan naar de grootste resten, zodat de verdeling exact
+   * optelt tot het besluit — bij een dividend uit de vastgestelde winst weigert
+   * de RPC anders terecht.
    */
   function distributePro(totalCents: number) {
-    const withShares = holders.filter(h => h.basisPoints > 0);
-    if (withShares.length === 0) return;
+    const withShares = holders.filter(h => h.shares > 0);
+    const totalShares = withShares.reduce((sum, h) => sum + h.shares, 0);
+    if (withShares.length === 0 || totalShares <= 0) return;
+    const exact = withShares.map(h => (totalCents * h.shares) / totalShares);
+    const amounts = exact.map(value => Math.floor(value));
+    let rest = totalCents - amounts.reduce((sum, value) => sum + value, 0);
+    const order = exact
+      .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+      .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+    for (let k = 0; rest > 0; k += 1, rest -= 1) amounts[order[k % order.length].index] += 1;
     const next: Record<string, string> = {};
-    let handed = 0;
-    withShares.forEach((h, i) => {
-      const amount = i === withShares.length - 1
-        ? totalCents - handed
-        : Math.round((totalCents * h.basisPoints) / 10000);
-      handed += amount;
-      next[h.id] = centsToInput(amount);
-    });
+    withShares.forEach((h, i) => { next[h.id] = centsToInput(amounts[i]); });
     setAmounts(next);
   }
 

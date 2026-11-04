@@ -8,6 +8,7 @@ import { dateNL, euro, uid } from '../lib/format';
 import {
   bookAssetAcquisition, bookAssetDisposal, deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow,
 } from '../lib/repository';
+import { formatISODate, todayIso } from '../lib/dates';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const centsFromInput = (v: string) => Math.round((parseFloat(v) || 0) * 100);
@@ -117,7 +118,7 @@ export function AssetsPage({ data, organizationId, canWrite, onChanged }: PagePr
 
 function endOfCurrentMonth(): string {
   const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+  return formatISODate(new Date(now.getFullYear(), now.getMonth() + 1, 0));
 }
 
 function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }: {
@@ -127,7 +128,7 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
   const accountId = (code: string) => data.ledgerAccounts.find(a => a.code === code)?.id ?? '';
   const assetAccounts = data.ledgerAccounts.filter(a => a.type === 'asset');
   const expenseAccounts = data.ledgerAccounts.filter(a => a.type === 'expense');
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   // Tegenrekeningen voor de aanschafboeking: meestal Crediteuren of Bank, soms Eigen vermogen.
   const creditAccounts = data.ledgerAccounts.filter(a => a.is_active && (a.type === 'liability' || a.type === 'asset' || a.type === 'equity') && a.id !== (asset?.asset_account_id ?? ''));
 
@@ -241,13 +242,13 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
   return (
     <Modal className="bk-modal-wide" title={currentAsset ? `Activum ${currentAsset.asset_number ?? ''}` : 'Nieuw activum'} onClose={onClose}
       footer={<div className="bk-foot">
-        {currentAsset && canWrite && !hasPosted && <Button variant="danger" onClick={remove} disabled={busy}><Trash2 size={14} /> Verwijderen</Button>}
+        {currentAsset && canWrite && !hasPosted && !acquisitionBooked && !isDisposed && <Button variant="danger" onClick={remove} disabled={busy}><Trash2 size={14} /> Verwijderen</Button>}
         <span className="bk-spacer" />
         <Button onClick={onClose}>Sluiten</Button>
         {canWrite && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : currentAsset ? 'Opslaan' : 'Opslaan & doorgaan'}</Button>}
       </div>}>
       {error && <div className="error">{error}</div>}
-      {(hasPosted || acquisitionBooked) && !isDisposed && <div className="bk-note">De aanschaf staat in het grootboek{hasPosted ? ' en er is al afgeschreven' : ''}; de financiële velden zijn vergrendeld zodat het activum en de journaalposten gelijk blijven. Corrigeren kan via een tegenboeking in het grootboek.</div>}
+      {(hasPosted || acquisitionBooked) && !isDisposed && <div className="bk-note">De aanschaf staat in het grootboek{hasPosted ? ' en er is al afgeschreven' : ''}; de financiële velden zijn vergrendeld zodat het activum en de journaalposten gelijk blijven. Corrigeren kan via een tegenboeking in het grootboek; het register gaat dan mee terug. Draai eerst de afschrijvingen terug, dan de aanschaf.</div>}
 
       <div className="bk-grid2">
         <Field label="Naam"><Input value={form.name} onChange={e => set('name', e.target.value)} disabled={!canWrite} /></Field>
@@ -329,8 +330,8 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
           <div className="bk-schedule-head">
             <h4><Layers size={15} /> Afschrijvingsschema</h4>
             <div className="bk-schedule-actions">
-              {canWrite && <Button onClick={generate} disabled={busy}>{schedule.length ? 'Herbereken schema' : 'Genereer schema'}</Button>}
-              {canWrite && schedule.length > 0 && <span className="bk-post-inline">
+              {canWrite && !isDisposed && <Button onClick={generate} disabled={busy}>{schedule.length ? 'Herbereken schema' : 'Genereer schema'}</Button>}
+              {canWrite && !isDisposed && schedule.length > 0 && <span className="bk-post-inline">
                 <Input type="date" value={throughDate} onChange={e => setThroughDate(e.target.value)} />
                 <Button variant="primary" onClick={post} disabled={busy || dueCount === 0}><CalendarClock size={14} /> Boek t/m ({dueCount})</Button>
               </span>}

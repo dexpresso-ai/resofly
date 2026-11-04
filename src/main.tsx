@@ -80,6 +80,7 @@ import {
   syncMollieSalesInvoice,
   downloadCreditNoteUbl,
   createInvoiceRefund,
+  creditInvoice,
   postSalesInvoiceToLedger,
   bookAllUnbookedSalesInvoices,
   postCreditNoteToLedger,
@@ -2436,6 +2437,24 @@ function App() {
     }
   }
 
+  async function creditUnpaidInvoice(invoice: Invoice) {
+    if (!ensureCanWrite()) return;
+    const reason = prompt(
+      `Factuur ${invoice.number} crediteren?\n\nEr komt een creditfactuur voor het volledige bedrag (die gaat ook naar de klant), omzet en btw worden teruggeboekt en de factuur gaat op geannuleerd. Dit kan niet ongedaan worden gemaakt.\n\nReden (komt op de creditfactuur):`,
+      'Factuur vervalt',
+    );
+    if (reason === null) return;
+    setLoading(true); setError(null);
+    try {
+      await creditInvoice(activeOrg.id, invoice.id, reason.trim() || undefined);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Crediteren mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function bookAllUnbookedInvoices() {
     if (!ensureCanWrite()) return;
     setLoading(true); setError(null);
@@ -3439,7 +3458,7 @@ function App() {
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'contract' ? contractDraftFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onPostToLedger={postInvoiceToLedger} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onPostToLedger={postInvoiceToLedger} onCreditInvoice={creditUnpaidInvoice} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'supplier' ? (view.pendingDraft.payload as Partial<Supplier>) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
@@ -4195,11 +4214,15 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     return vc ? { ...l, vat: vc.rate, vat_code: vc.code } : l;
   }));
 
+  // Een geboekte factuur annuleer je met een creditnota (zie "Crediteren");
+  // de database weigert annuleren/afboeken zolang er iets openstaat.
+  const invoiceBooked = !isQuote && Boolean((item as Invoice | undefined)?.journal_entry_id);
+
   const handleDownloadPdf = () => {
     const client = data.clients.find(c => c.id === form.client_id) ?? null;
     // Build a doc-shaped object from the current form so the user can preview before saving.
     const docLike = buildFinanceDocLike(kind, form, item);
-    void exportFinancePDF(docLike, kind, client, { company: data.companySettings }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt'));
+    void exportFinancePDF(docLike, kind, client, { company: data.companySettings, vatCodes: data.vatCodes }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt'));
   };
 
   return <div className={`finance-editor ${isQuote ? 'quote-editor' : 'invoice-editor'}`}>
@@ -4232,15 +4255,15 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <option value="">Geen project</option>{projectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
-        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint="Status van de factuur.">
+        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt.' : 'Status van de factuur.'}>
           <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}>
             <option value="draft">Concept</option>
             <option value="sent">Verzonden</option>
             <option value="overdue">Te laat</option>
             <option value="paid">Betaald</option>
-            <option value="cancelled">Geannuleerd</option>
-            <option value="void">Ongeldig gemaakt</option>
-            <option value="written_off">Afgeboekt</option>
+            {(!invoiceBooked || form.status === 'cancelled') && <option value="cancelled">Geannuleerd</option>}
+            {(!invoiceBooked || form.status === 'void') && <option value="void">Ongeldig gemaakt</option>}
+            {(!invoiceBooked || form.status === 'written_off') && <option value="written_off">Afgeboekt</option>}
           </Select>
         </Field>}
       </div>

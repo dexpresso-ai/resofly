@@ -634,7 +634,7 @@ async function applyCandidate(
   let status: InboxStatus = 'ready';
   let autoBooked = false;
   if (settings.auto_book) {
-    const eligible = autoBookEligible({ supplierCreated, supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch, ibanVerified });
+    const eligible = autoBookEligible({ supplierCreated, supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch, ibanVerified, currency: proposal.currency });
     if (eligible.ok) {
       const { error: bookError } = await admin.rpc('book_purchase_invoice', {
         p_organization_id: organizationId, p_purchase_invoice_id: purchaseInvoiceId, p_created_by: budgetUserId,

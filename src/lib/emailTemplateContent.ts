@@ -143,11 +143,11 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
     key: 'creditNote.sent',
     label: 'Creditfactuur versturen',
     group: 'creditfactuur',
-    description: 'De e-mail bij een creditfactuur na een (gedeeltelijke) terugbetaling. Deze mail heeft geen knop.',
+    description: 'De e-mail bij een creditfactuur, na een (gedeeltelijke) terugbetaling of bij het crediteren van een factuur. Deze mail heeft geen knop.',
     fields: ['subject', 'intro', 'closing'],
     defaults: {
       subject: 'Creditfactuur {{credit_note_number}} van {{company_name}}',
-      intro: 'Beste {{recipient_name}},\nIn de bijlage vind je de creditfactuur die hoort bij een (gedeeltelijke) terugbetaling van factuur {{invoice_number}}.',
+      intro: 'Beste {{recipient_name}},\nIn de bijlage vind je de creditfactuur bij factuur {{invoice_number}}.',
       closing: '',
       cta_label: '',
     },

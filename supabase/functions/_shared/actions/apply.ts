@@ -364,7 +364,27 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
 
   'invoice.set_status': async (ctx, payload) => {
     const status = pText(payload, 'status');
-    await updateOne(ctx, 'invoices', pText(payload, 'invoice_id'), { status }, 'id', 'Factuur');
+    const invoiceId = pText(payload, 'invoice_id');
+    // Deze weg draait (via de API en MCP) op de service-role, langs de
+    // databasecontroles voor de app heen. Dus hier dezelfde regels, op het
+    // moment van uitvoeren: een uitgegeven factuur gaat niet terug naar concept,
+    // en een geboekte factuur annuleer je met een creditnota.
+    const { data: current, error: currentError } = await ctx.db.from('invoices')
+      .select('status, journal_entry_id')
+      .eq('organization_id', ctx.organizationId).eq('id', invoiceId).maybeSingle();
+    if (currentError) throw new ActionError(`Factuur laden mislukt: ${currentError.message}`);
+    const cur = current as { status: string; journal_entry_id: string | null } | null;
+    if (cur && status === 'draft' && cur.status !== 'draft') {
+      throw new ActionError('Een uitgegeven factuur gaat niet terug naar concept. Crediteer hem en maak een nieuwe factuur.');
+    }
+    if (cur && cur.journal_entry_id && ['cancelled', 'void', 'written_off'].includes(status)) {
+      const { data: openCents, error: openError } = await ctx.db.rpc('invoice_open_receivable_cents', { p_organization_id: ctx.organizationId, p_invoice_id: invoiceId });
+      if (openError) throw new ActionError(`Openstaand bedrag bepalen mislukt: ${openError.message}`);
+      if (Number(openCents ?? 0) > 0) {
+        throw new ActionError('Deze factuur staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur.');
+      }
+    }
+    await updateOne(ctx, 'invoices', invoiceId, { status }, 'id', 'Factuur');
     const labels: Record<string, string> = {
       draft: 'staat weer op concept', sent: 'staat op verzonden', overdue: 'staat op te laat',
       paid: 'is als betaald geboekt', cancelled: 'is geannuleerd', void: 'is ongeldig gemaakt',

@@ -58,6 +58,9 @@ test('automatisch boeken alleen als er niets te kiezen valt', () => {
   assert.equal(autoBookEligible({ ...ok, warnings: ['totalen wijken af'] }).ok, false);
   assert.equal(autoBookEligible({ ...ok, lines: [{ account_id: null, amount_cents: 100 }] }).ok, false);
   assert.equal(autoBookEligible({ ...ok, totals: { total_cents: 0 } }).ok, false);
+  // Vreemde valuta boekt het grootboek niet om: nooit vanzelf boeken.
+  assert.equal(autoBookEligible({ ...ok, currency: 'USD' }).ok, false);
+  assert.equal(autoBookEligible({ ...ok, currency: 'eur' }).ok, true);
 });
 
 test('ander IBAN dan bekend bij de leverancier: nooit vanzelf boeken', () => {
