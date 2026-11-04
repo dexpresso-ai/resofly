@@ -1,193 +1,117 @@
-# BrandCore Werkruimte — v2.1.3 Organization user licensing
+# ResoFly
 
-BrandCore v2.1.0 is een CRM/projectapp met React, TypeScript, Supabase en Cloudflare R2. Deze versie introduceert organisatie-accounts: data hangt niet langer direct aan één losse gebruiker, maar aan een organisatie/workspace waar meerdere gebruikers lid van kunnen zijn.
+ResoFly is een werkruimte voor kleine (creatieve) bedrijven: klanten, projecten,
+planning, agenda, tickets, offertes en facturen, boekhouding en btw, bank,
+marketing, een klantportaal en Gerrie, de ingebouwde AI-assistent. Er is ook een
+MCP-koppeling en een openbare API. Alles is per organisatie gescheiden (tenant)
+en per teamlid per module af te schermen.
 
 ## Stack
 
-- React 18 + Vite 5 + TypeScript
-- Supabase Auth + Postgres + Row-Level Security
-- Organisatie-tenancy via `organizations`, `organization_members` en `organization_invitations`
-- Tenant-safe relationele integriteit via Postgres triggers
-- Cloudflare R2 voor bijlagen via een Cloudflare Worker met Supabase JWT-validatie
-- PDF-export voor offertes en facturen met uploadbare template via `pdf-lib`
-- Google Calendar en Microsoft 365 agenda-integraties via Supabase Edge Functions
+- **App:** React 18, Vite 5, TypeScript. Draait op Cloudflare Pages.
+- **Database en backend:** Supabase. Auth, Postgres met Row-Level Security, en
+  39 edge functions (Deno) in `supabase/functions`.
+- **Cloudflare Workers** in `workers/`:
+  - `media-api`: bestanden op R2;
+  - `email-inbound`: inkomende mail;
+  - `caldav`: agenda op de telefoon;
+  - `office-server`: Word/Excel/PowerPoint in de browser.
+- **AI:** Gerrie, de agents en de factuurherkenning praten met de Claude
+  Messages API. Welk model: `supabase/functions/_shared/claudeModels.ts`.
 
-## Functionaliteit
-
-- Magic-link login via Supabase Auth
-- Organisatie-accounts met meerdere users per organisatie
-- Rollen: `owner`, `admin`, `member`, `viewer`
-- Organisatie-switcher in de sidebar
-- Teamleden uitnodigen via e-mailadres
-- Gebruikerslicenties per organisatie: actieve leden en geldige openstaande uitnodigingen verbruiken elk één seat
-- Openstaande uitnodigingen beheren en intrekken
-- Uitnodigingen accepteren na login met hetzelfde e-mailadres
-- Rollenbeheer voor owners: owner/admin/member/viewer
-- Server-side audit-log basis via `audit_logs` en Postgres triggers
-- Sprint 1 dashboard met onboarding-checklist en laatste activiteit
-- Klanten / Projecten / Taken / Tickets / Notities / Offertes / Facturen — CRUD
-- Kanban met snelle status-wissel per taak
-- Weekplanner met deadlines
-- Subtaken en comments op taken
-- Bijlagenbeheer per entity, inclusief download en delete
-- PDF-export voor offertes en facturen, inclusief bedrijfsinstellingen en eigen PDF/PNG/JPG-template
-- Google en Microsoft agenda-koppelingen binnen organisatiecontext
-- Ticket → project conversie via atomaire Postgres RPC
-- Projectarchief met hersteloptie
-- RLS per organisatie + extra tenant-safe relationele checks op gekoppelde records
-- Billing/service-role RPC om aangekochte seats na betaling te synchroniseren
-
-## Nieuwe Supabase database installeren
-
-Gebruik één bestand:
-
-```text
-supabase/FRESH_INSTALL_COMPLETE_SCHEMA.sql
-```
-
-Alternatief staat dezelfde setup ook in:
-
-```text
-supabase/BRANDCORE_DATABASE_SETUP.sql
-supabase/schema.sql
-```
-
-Stappen:
-
-1. Maak een nieuw Supabase project of gebruik een volledig lege database.
-2. Open **SQL Editor → New query**.
-3. Plak de volledige inhoud van `supabase/FRESH_INSTALL_COMPLETE_SCHEMA.sql`.
-4. Klik **Run**.
-5. Zet daarna Supabase Email/Magic Link auth aan.
-6. Vul je `.env.local` met de Supabase URL en anon key.
-
-Meer details staan in `DATABASE_SETUP.md`, `MULTI_TENANT_ORGANIZATIONS_REPORT.md`, `CALENDAR_INTEGRATION_SETUP.md` en `SPRINT1_FOUNDATION_REPORT_2026-04-29.md`.
-
-## Lokale installatie
+## Lokaal draaien
 
 ```bash
 npm ci
-cp .env.example .env.local
+cp .env.example .env.local     # VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, …
 npm run dev
 ```
 
-Vul in `.env.local`:
+Een eigen database (Docker nodig): `supabase db start` bouwt een lege database op
+uit alle migraties. Zie `supabase/migrations/README.md`.
 
-```env
-VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY
-VITE_R2_WORKER_URL=https://resofly-media.YOUR_SUBDOMAIN.workers.dev
-VITE_R2_PUBLIC_BASE_URL=
-```
+## Een nieuwe omgeving
 
-Laat `VITE_R2_PUBLIC_BASE_URL` leeg voor private CRM-documenten. Downloads gaan dan via de Worker met auth-check. Vul alleen een publieke URL in voor assets die echt publiek mogen zijn.
-
-## Supabase staging bijwerken
-
-De app op staging bouwt Cloudflare Pages vanzelf bij een push naar `staging`.
-De database en de edge functions zet je met `SUPABASE_STAGING_LAPTOP.md`
-vanaf je laptop bij, tot het GitHub-secret `SUPABASE_DB_PASSWORD` staat
-(daarna doet de workflow *Deploy Supabase (staging)* het).
-
-## Cloudflare deployment
-
-Deze codebase bevat nu een aparte Cloudflare Worker/R2 deployment foundation in `workers/media-api`. Deze nieuwe Worker is bedoeld als veilige basis voor toekomstige private R2 uploads, downloads en deletes, maar bevat bewust nog géén Sprint 3-klantportaalfunctionaliteit.
-
-Belangrijkste documentatie:
-
-- `DEPLOYMENT_CLOUDFLARE.md` — volledige deploymenthandleiding voor GitHub, Cloudflare Pages, Cloudflare Workers, R2, Supabase, secrets, CORS en livegang.
-- `workers/media-api/README.md` — Worker-specifieke setup, routes, scripts en benodigde secrets.
-
-Basisflow:
+De database bouw je op uit de migraties. Er is geen los installatiebestand meer.
 
 ```bash
-cd workers/media-api
-npm install
-cp .dev.vars.example .dev.vars
-npm run dev
-npm run deploy:staging
-npm run deploy
+supabase link --project-ref <project-ref>
+supabase db push
 ```
 
-De Worker gebruikt private R2 buckets via de binding `MEDIA_BUCKET` en leest toegestane origins uit `ALLOWED_ORIGINS`. Echte secrets zoals `SUPABASE_SERVICE_ROLE_KEY` en `MEDIA_SIGNING_SECRET` moeten via Cloudflare secrets worden gezet en mogen niet in GitHub staan.
+Daarna zet je per project eenmalig het volgende aan:
 
-## Cloudflare R2 Worker (verouderd: niet meer uitrollen)
+- `pg_cron` en `pg_net`;
+- de edge functions;
+- de secrets;
+- `scripts/supabase-setup-webhooks.sh`.
 
-De map `cloudflare-worker/` is de eerste versie van de bestandsworker. Hij mist
-de bewaking die `workers/media-api` wel heeft:
-- een verwijderd teamlid houdt toegang;
-- een viewer leest bestanden van elke module;
-- vastgelegde factuur- en contract-PDF's zijn te verwijderen;
-- bestanden worden inline geserveerd, zonder `nosniff` of CSP-sandbox.
+Stap voor stap: `supabase/migrations/README.md`.
 
-**Gebruik alleen `workers/media-api`** (zie hierboven en
-`workers/media-api/README.md`). Draait er nog een Worker
-`resofly-media` of `resofly-media-staging` uit deze map? Verwijder die dan in
-Cloudflare, en laat `VITE_R2_WORKER_URL`, `MEDIA_WORKER_URL` en de
-`*_PDF_STORAGE_WORKER_URL`-secrets naar `resofly-media-api(-staging)` wijzen.
-Zie `CHANGELOG_BEVEILIGING_SAAS_2026-11-01.md`.
+## Staging
 
-## Supabase Edge Function voor agenda-integraties
+- Een push naar `staging` bouwt de app op Cloudflare Pages.
+- De workflow **Deploy Supabase (staging)** zet dan de migraties en de edge
+  functions op het Supabase-project, en draait een rooktest.
+- Met de hand vanaf een laptop: `docs/setup/SUPABASE_STAGING_LAPTOP.md`.
+- Cloudflare (Pages, Workers, R2, secrets): `docs/setup/DEPLOYMENT_CLOUDFLARE.md`
+  en `workers/media-api/README.md`.
 
-Zie `CALENDAR_INTEGRATION_SETUP.md`. De calendar Edge Function is aangepast zodat OAuth-state, connections, tokens en sources organisatie-gescopeerd zijn.
+> **Niet meer uitrollen: `cloudflare-worker/`.** Dat is de eerste versie van de
+> bestandsworker, en hij mist de bewaking van `workers/media-api`:
+> - een verwijderd teamlid houdt toegang;
+> - een viewer leest bestanden van elke module;
+> - vastgelegde PDF's zijn te verwijderen;
+> - hij heeft geen `nosniff` en geen CSP-sandbox.
+>
+> Draait er nog een Worker `resofly-media` of `resofly-media-staging` uit die
+> map? Verwijder hem dan. Laat `VITE_R2_WORKER_URL`, `MEDIA_WORKER_URL` en de
+> `*_PDF_STORAGE_WORKER_URL`-secrets naar `resofly-media-api(-staging)` wijzen.
+> Zie `docs/changelog/CHANGELOG_BEVEILIGING_SAAS_2026-11-01.md`.
 
-## Scripts
+## Controles
 
-```bash
-npm run dev
-npm run build
-npm run preview
-```
+Dit draait CI (`.github/workflows/frontend-checks.yml`) op elke pull request en
+op `staging`:
 
-## Belangrijk voor productie
+| Opdracht | Wat |
+| --- | --- |
+| `npm run typecheck` | TypeScript van de app |
+| `npm test` | unit-tests van de app en de edge functions (`*.test.ts`) |
+| `npm run test:mobile -- --theme=both` | elke pagina op telefoon en tablet, tegen een nagebootste backend |
+| `npm run test:loading` | laden per module: per pagina de juiste gegevens, bewaren, verversen |
+| `deno check …` | de edge functions |
+| `supabase db start` | alle migraties op een lege database |
 
-Deze codebase is bedoeld als nieuwe Sprint 1 baseline voor een lege Supabase database. Bij een bestaande BrandCore v2 database kun je `supabase/migrations/20260429_sprint1_workspace_foundation.sql` uitvoeren. Voor migratie van bestaande productiedata moet je een aparte migratiestrategie maken die oude `user_id`-records naar nieuwe `organization_id`-records mapt.
+## Hoe de app zijn gegevens laadt
 
-## Bestaande v2.1.2 database bijwerken
+Bij het opstarten komt alleen de kern binnen: klanten, projecten, taken,
+offertes, facturen, en wat zoeken, de tabbladen en Gerrie gebruiken.
 
-Als je al de vorige v2.1.2 licensing-code hebt uitgevoerd, draai dan aanvullend:
+Vijf groepen tabellen die hard groeien, laden pas als een pagina ze nodig heeft:
 
-```text
-supabase/migrations/20260430_organization_user_licensing_recheck.sql
-```
+- uren;
+- communicatie;
+- het verloop van offertes en facturen;
+- boekhouding;
+- bank.
 
-Nieuwe/lege databases gebruiken gewoon het complete schema uit `supabase/FRESH_INSTALL_COMPLETE_SCHEMA.sql`.
+Na een wijziging ververst de app de kern plus wat de open pagina gebruikt. Zie
+`src/lib/dataGroups.ts`. Wie een nieuw scherm bouwt dat zo'n groep leest, zet
+het daar in. Een test bewaakt dat.
 
-## Sprint 2 — Billing, Mollie & licentiebeheer
+## Documentatie
 
-Deze codebase bevat Sprint 2 voor BrandCore: organisatiebilling, SaaS-plannen, extra-seat checkoutvoorbereiding, Mollie Connect-basis, idempotente webhookverwerking en een nieuwe Billing & licenties-sectie in organisatie-instellingen.
+| Waar | Wat |
+| --- | --- |
+| `supabase/migrations/README.md` | de database: een nieuwe omgeving, nieuwe migraties |
+| `docs/setup/` | inrichten per onderdeel (mail, betalen, bank, agenda, push, API, MCP, …) |
+| `docs/changelog/` | wat er per wijziging veranderde, met de afwegingen |
+| `docs/plannen/` | ontwerpvoorstellen, plannen en onderzoek |
+| `docs/rapporten/` | test- en controlerapporten |
+| `docs/API.md` | de openbare API, voor ontwikkelaars |
+| `CLAUDE.md` | afspraken voor wie hier code schrijft, mens of AI |
 
-Belangrijkste bestanden:
-
-- `supabase/migrations/20260430_sprint2_billing_mollie_licensing.sql`
-- `supabase/migrations/20260430_sprint2_mollie_connect_production_hardening.sql`
-- `supabase/migrations/20260430_sprint2_mollie_connect_final_hardening.sql`
-- `supabase/functions/billing/index.ts`
-- `src/services/billingService.ts`
-- `src/services/mollieService.ts`
-- `src/services/licenseService.ts`
-- `SPRINT2_BILLING_MOLLIE_LICENSING_REPORT_2026-04-30.md`
-- `SPRINT2_TEST_REPORT_2026-04-30.md`
-- `SPRINT2_MOLLIE_CONNECT_FINAL_HARDENING_REPORT_2026-04-30.md`
-
-Fresh install:
-
-1. Gebruik `supabase/FRESH_INSTALL_COMPLETE_SCHEMA.sql` op een lege Supabase database.
-2. Zet de Edge Function secrets uit `.env.example`.
-3. Deploy `supabase/functions/billing`.
-
-Bestaande database:
-
-1. Draai alle eerdere migraties tot en met Sprint 1/licensing.
-2. Draai daarna `20260430_sprint2_billing_mollie_licensing.sql`.
-3. Draai daarna `20260430_sprint2_mollie_connect_production_hardening.sql`.
-4. Draai daarna `20260430_sprint2_mollie_connect_final_hardening.sql`.
-5. Deploy de billing Edge Function.
-
-Lokale controle:
-
-```bash
-npm ci
-npm run typecheck
-npm run build
-```
+Documenten zijn in november 2026 uit de root naar `docs/` verhuisd. Ze heten nog
+precies hetzelfde, dus een verwijzing als "zie PUBLIC_API_SETUP.md" in de code
+vind je op naam terug.

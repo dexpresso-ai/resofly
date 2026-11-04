@@ -22,7 +22,7 @@ De schermen gebruiken de voorbeeldgegevens uit de testomgeving (`tests/mobile/mo
 Studio Lopik, Bakkerij De Korenaar, Restaurant Bloem, factuur 2026-040, enzovoort. De demo speelt
 op donderdag 22 oktober 2026 om 09:41.
 
-![Het voorstel in Nacht: de zon op haar zenit boven de kop](docs/design-voorstel-zenit/beelden/hero-nacht.jpg)
+![Het voorstel in Nacht: de zon op haar zenit boven de kop](../design-voorstel-zenit/beelden/hero-nacht.jpg)
 
 ## Het idee
 
@@ -56,12 +56,12 @@ precies zoals ze zijn. Wat verandert is de opbouw van de werkruimte en hoe je er
 
 | Nacht | Dag |
 |---|---|
-| ![Vandaag in Nacht](docs/design-voorstel-zenit/beelden/vandaag-nacht.jpg) | ![Vandaag in Dag](docs/design-voorstel-zenit/beelden/vandaag-dag.jpg) |
-| ![Klant 360 in Nacht](docs/design-voorstel-zenit/beelden/klant-nacht.jpg) | ![Facturen met spiekpaneel in Dag](docs/design-voorstel-zenit/beelden/facturen-dag.jpg) |
-| ![Gerrie: beslissen in Nacht](docs/design-voorstel-zenit/beelden/gerrie-nacht.jpg) | ![Projectbord in Dag](docs/design-voorstel-zenit/beelden/project-dag.jpg) |
-| ![Na zonsondergang: Met de zon mee wisselt naar Nacht](docs/design-voorstel-zenit/beelden/zonsondergang.jpg) | ![De vraagbalk ontleedt een opdracht](docs/design-voorstel-zenit/beelden/vraagbalk-dag.jpg) |
+| ![Vandaag in Nacht](../design-voorstel-zenit/beelden/vandaag-nacht.jpg) | ![Vandaag in Dag](../design-voorstel-zenit/beelden/vandaag-dag.jpg) |
+| ![Klant 360 in Nacht](../design-voorstel-zenit/beelden/klant-nacht.jpg) | ![Facturen met spiekpaneel in Dag](../design-voorstel-zenit/beelden/facturen-dag.jpg) |
+| ![Gerrie: beslissen in Nacht](../design-voorstel-zenit/beelden/gerrie-nacht.jpg) | ![Projectbord in Dag](../design-voorstel-zenit/beelden/project-dag.jpg) |
+| ![Na zonsondergang: Met de zon mee wisselt naar Nacht](../design-voorstel-zenit/beelden/zonsondergang.jpg) | ![De vraagbalk ontleedt een opdracht](../design-voorstel-zenit/beelden/vraagbalk-dag.jpg) |
 
-![Mobiel: Vandaag in Nacht, beslissen met je duim in Dag, en de vraagbalk die luistert](docs/design-voorstel-zenit/beelden/mobiel.jpg)
+![Mobiel: Vandaag in Nacht, beslissen met je duim in Dag, en de vraagbalk die luistert](../design-voorstel-zenit/beelden/mobiel.jpg)
 
 ## Wat er verandert, en wat blijft
 
@@ -98,7 +98,7 @@ diepere grond) en inkt 3 in Dag.
 | poollicht · als tekst | `#A392FF` → `#6CC4FF` → `#F7C548` · `#B8AAFF` | `#6E5AE6` → `#1F9BE0` → `#E0A11B` · `#5E48D6` | |
 | lucht van de Dagboog | `#16131F` → `#0F0F12`, met sterren | `#FFF4D6` → `#FFFDF8` | nieuw: `--sky-1`, `--sky-2`, `--sky-haze`, `--star` |
 
-![De kleuren in Nacht en Dag, met het nagerekende contrast](docs/design-voorstel-zenit/beelden/kleuren.jpg)
+![De kleuren in Nacht en Dag, met het nagerekende contrast](../design-voorstel-zenit/beelden/kleuren.jpg)
 
 **Vorm:** hoeken 6 · 8 · 10 · 14 · 16 · 20, binnen elkaar concentrisch. **Diepte:** grond →
 werkvlak → kaart → zwevend; in Nacht licht van boven (een glansrand), in Dag een zachte schaduw.

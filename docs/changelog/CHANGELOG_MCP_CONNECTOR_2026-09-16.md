@@ -1,6 +1,6 @@
 # Klanten koppelen hun eigen AI aan hun werkruimte
 
-**16 september 2026 · fase A (alleen lezen) · zie [MCP_CONNECTOR_SETUP.md](MCP_CONNECTOR_SETUP.md)**
+**16 september 2026 · fase A (alleen lezen) · zie [MCP_CONNECTOR_SETUP.md](../setup/MCP_CONNECTOR_SETUP.md)**
 
 Wie zelf al met Claude of ChatGPT werkt, kan die assistent vanaf nu op zijn eigen ResoFly-werkruimte laten meelezen. Hij plakt één URL in zijn AI-app, logt in, geeft akkoord — en stelt daarna vragen als "welke facturen staan er open?" of "wat heb ik deze week op Jansen geboekt?" aan de AI die hij toch al gebruikt. Het model draait op **zijn** abonnement; wij leveren alleen de gegevens. Het maandtegoed dat Gerrie begrenst, speelt hier dus geen rol.
 

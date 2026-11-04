@@ -7,6 +7,7 @@ import { isMissingColumn, isMissingRelation, NotMigratedError } from './postgres
 import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type InkDocument } from './ink';
 import type { ReportDefinition } from './reporting';
 import type { ModuleAccess } from './permissions';
+import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import type {
   AppData,
   AuditLog,
@@ -519,51 +520,30 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
   return (data ?? []) as OrganizationInvitation[];
 }
 
-export async function loadAppData(organizationId: UUID): Promise<AppData> {
+/**
+ * De kern van de werkruimte: wat bijna elke pagina en de vaste delen van het
+ * scherm gebruiken. De zware, groeiende tabellen zitten hier niet in; die laadt
+ * loadDataGroup pas als een pagina ze nodig heeft (zie src/lib/dataGroups.ts).
+ */
+export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
   const [
     clients,
     clientContacts,
-    clientCalls,
     clientFieldDefinitions,
     projects,
     tasks,
     tickets,
-    ticketNotes,
     notes,
     documents,
     noteCalendarLinks,
     noteHandwriting,
     calendarEventLinks,
-    timeEntries,
     quotes,
-    quoteApprovalEvents,
-    quoteEmailDeliveries,
-    quoteVersions,
     invoices,
-    invoiceWorkflowEvents,
-    invoiceEmailDeliveries,
-    invoicePaymentRecords,
-    invoiceVersions,
-    invoiceRefunds,
-    creditNotes,
-    invoiceChargebacks,
-    dunningNotices,
     ledgerAccounts,
     vatCodes,
-    journalEntries,
-    journalLines,
-    closedPeriods,
-    fiscalYears,
     suppliers,
     purchaseInvoices,
-    fixedAssets,
-    assetDepreciations,
-    vatReturns,
-    bankAccounts,
-    bankStatements,
-    bankTransactions,
-    bankRules,
-    bankRequisitions,
     attachments,
     driveShares,
     folders,
@@ -577,13 +557,12 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     projectTemplates,
     projectTemplateTasks,
     contractProjects,
+    bankTransactionsToReconcile,
+    vatReturnsToFile,
   ] = await Promise.all([
-    select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientCalls(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
-    selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
-    selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
-    selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId), selectDunningNotices(organizationId),
-    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectFiscalYears(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
-    selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
+    select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
+    select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), select<Invoice>('invoices', organizationId),
+    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId),
     select<Attachment>('attachments', organizationId),
     selectDriveShares(organizationId),
     selectFolders(organizationId),
@@ -597,8 +576,82 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectProjectTemplates(organizationId),
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
+    countOptional('bank_transactions', organizationId, { status: ['unmatched', 'suggested'] }),
+    countOptional('vat_returns', organizationId, { status: ['finalized'] }),
   ]);
-  return { clients, clientContacts, clientCalls, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, vatReturnsToFile };
+}
+
+/** Per groep: welke tabellen, in welke vorm. TypeScript bewaakt dat elke groep precies zijn eigen velden teruggeeft. */
+const GROUP_LOADERS: { [G in DataGroup]: (organizationId: UUID) => Promise<GroupData<G>> } = {
+  time: async (organizationId) => ({ timeEntries: await selectTimeEntries(organizationId) }),
+  communication: async (organizationId) => {
+    const [ticketNotes, clientCalls] = await Promise.all([selectTicketNotes(organizationId), selectClientCalls(organizationId)]);
+    return { ticketNotes, clientCalls };
+  },
+  financeHistory: async (organizationId) => {
+    const [
+      quoteApprovalEvents, quoteEmailDeliveries, quoteVersions,
+      invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions,
+      invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices,
+    ] = await Promise.all([
+      selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId),
+      selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
+      selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId), selectDunningNotices(organizationId),
+    ]);
+    return {
+      quoteApprovalEvents, quoteEmailDeliveries, quoteVersions,
+      invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions,
+      invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices,
+    };
+  },
+  bookkeeping: async (organizationId) => {
+    const [journalEntries, journalLines, closedPeriods, fiscalYears, fixedAssets, assetDepreciations, vatReturns] = await Promise.all([
+      selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectFiscalYears(organizationId),
+      selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
+    ]);
+    return { journalEntries, journalLines, closedPeriods, fiscalYears, fixedAssets, assetDepreciations, vatReturns };
+  },
+  bank: async (organizationId) => {
+    const [bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions] = await Promise.all([
+      selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
+    ]);
+    return { bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions };
+  },
+};
+
+/** De geboekte minuten op één taak: voor "tijd reserveren", zonder alle uren te laden. */
+export async function loggedMinutesForTask(organizationId: UUID, taskId: UUID): Promise<number> {
+  const rows = await fetchAllPages<{ minutes: number | null }>(() => supabase
+    .from('time_entries')
+    .select('minutes')
+    .eq('organization_id', organizationId)
+    .eq('task_id', taskId)
+    .order('id', { ascending: true }));
+  return rows.reduce((sum, row) => sum + (Number(row.minutes) || 0), 0);
+}
+
+/** Eén groep zware, groeiende tabellen (src/lib/dataGroups.ts). */
+export function loadDataGroup<G extends DataGroup>(organizationId: UUID, group: G): Promise<GroupData<G>> {
+  return GROUP_LOADERS[group](organizationId);
+}
+
+/**
+ * Een telling zonder de rijen zelf: het dashboard wil weten hoeveel
+ * banktransacties en btw-aangiftes er wachten, niet de hele bank en
+ * boekhouding laden. Een telling die mislukt (een tabel die er nog niet is,
+ * een HEAD-verzoek zonder foutmelding) geeft nul en een waarschuwing: een
+ * attentiepunt minder op het dashboard mag de werkruimte niet tegenhouden.
+ */
+async function countOptional(table: string, organizationId: UUID, inFilters: Record<string, string[]>): Promise<number> {
+  let query = supabase.from(table).select('id', { count: 'exact', head: true }).eq('organization_id', organizationId);
+  for (const [column, values] of Object.entries(inFilters)) query = query.in(column, values);
+  const { count, error } = await query;
+  if (error) {
+    console.warn(`Telling op ${table} mislukt; het dashboard toont hier nul.`, error);
+    return 0;
+  }
+  return count ?? 0;
 }
 
 const CONTRACT_PROJECTS_MIGRATION_HINT =
@@ -1142,201 +1195,84 @@ export async function deleteSavedReport(organizationId: UUID, id: UUID): Promise
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
-  const { data, error } = await supabase
-    .from('quote_approval_events')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/quote_approval_events|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('quote_approval_events is nog niet beschikbaar. Voer de migratie 20260515_quote_approval_resend_flow.sql uit om offerte-timeline te activeren.', error);
-      return [];
-    }
-    throw error;
-  }
-
-  return (data ?? []) as QuoteApprovalEvent[];
+  return selectOptional<QuoteApprovalEvent>('quote_approval_events', organizationId, {
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260515_quote_approval_resend_flow.sql uit om offerte-timeline te activeren.',
+  });
 }
 
 
 export async function selectQuoteVersions(organizationId: UUID): Promise<QuoteVersion[]> {
-  const { data, error } = await supabase
-    .from('quote_versions')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('version_number', { ascending: false });
-
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/quote_versions|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('quote_versions is nog niet beschikbaar. Voer de migraties t/m 20260519_quote_versions_audit_context_hardening.sql uit om offerteversies te activeren.', error);
-      return [];
-    }
-    throw error;
-  }
-
-  return (data ?? []) as QuoteVersion[];
+  return selectOptional<QuoteVersion>('quote_versions', organizationId, {
+    orderBy: 'version_number', ascending: false,
+    hint: 'Voer de migraties t/m 20260519_quote_versions_audit_context_hardening.sql uit om offerteversies te activeren.',
+  });
 }
 
 export async function selectQuoteEmailDeliveries(organizationId: UUID): Promise<QuoteEmailDelivery[]> {
-  const { data, error } = await supabase
-    .from('quote_email_deliveries')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/quote_email_deliveries|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('quote_email_deliveries is nog niet beschikbaar. Voer de migratie 20260515_quote_approval_resend_flow.sql uit om Resend e-mailstatus te activeren.', error);
-      return [];
-    }
-    throw error;
-  }
-
-  return (data ?? []) as QuoteEmailDelivery[];
+  return selectOptional<QuoteEmailDelivery>('quote_email_deliveries', organizationId, {
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260515_quote_approval_resend_flow.sql uit om Resend e-mailstatus te activeren.',
+  });
 }
 
 
 export async function selectInvoiceWorkflowEvents(organizationId: UUID): Promise<InvoiceWorkflowEvent[]> {
-  const { data, error } = await supabase
-    .from('invoice_workflow_events')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/invoice_workflow_events|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('invoice_workflow_events is nog niet beschikbaar. Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.', error);
-      return [];
-    }
-    throw error;
-  }
-  return (data ?? []) as InvoiceWorkflowEvent[];
+  return selectOptional<InvoiceWorkflowEvent>('invoice_workflow_events', organizationId, {
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.',
+  });
 }
 
 export async function selectInvoiceEmailDeliveries(organizationId: UUID): Promise<InvoiceEmailDelivery[]> {
-  const { data, error } = await supabase
-    .from('invoice_email_deliveries')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/invoice_email_deliveries|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('invoice_email_deliveries is nog niet beschikbaar. Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.', error);
-      return [];
-    }
-    throw error;
-  }
-  return (data ?? []) as InvoiceEmailDelivery[];
+  return selectOptional<InvoiceEmailDelivery>('invoice_email_deliveries', organizationId, {
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.',
+  });
 }
 
 export async function selectInvoicePaymentRecords(organizationId: UUID): Promise<InvoicePaymentRecord[]> {
-  const { data, error } = await supabase
-    .from('invoice_payment_records')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/invoice_payment_records|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('invoice_payment_records is nog niet beschikbaar. Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.', error);
-      return [];
-    }
-    throw error;
-  }
-  return (data ?? []) as InvoicePaymentRecord[];
+  return selectOptional<InvoicePaymentRecord>('invoice_payment_records', organizationId, {
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.',
+  });
 }
 
 export async function selectInvoiceRefunds(organizationId: UUID): Promise<InvoiceRefund[]> {
-  const { data, error } = await supabase
-    .from('invoice_refunds')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/invoice_refunds|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('invoice_refunds is nog niet beschikbaar. Voer de migratie 20260602_invoice_refunds_credit_notes.sql uit.', error);
-      return [];
-    }
-    throw error;
-  }
-  return (data ?? []) as InvoiceRefund[];
+  return selectOptional<InvoiceRefund>('invoice_refunds', organizationId, {
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260602_invoice_refunds_credit_notes.sql uit.',
+  });
 }
 
 export async function selectCreditNotes(organizationId: UUID): Promise<CreditNote[]> {
   // pdf_data_base64 bewust NIET meeladen: dat blob hoort alleen bij de download.
-  const { data, error } = await supabase
-    .from('credit_notes')
-    .select('id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,lines,status,journal_entry_id,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_storage_provider,pdf_storage_key,issued_by,created_at,updated_at')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/credit_notes|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('credit_notes is nog niet beschikbaar. Voer de migratie 20260602_invoice_refunds_credit_notes.sql uit.', error);
-      return [];
-    }
-    throw error;
-  }
-  return (data ?? []) as CreditNote[];
+  return selectOptional<CreditNote>('credit_notes', organizationId, {
+    columns: 'id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,lines,status,journal_entry_id,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_storage_provider,pdf_storage_key,issued_by,created_at,updated_at',
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260602_invoice_refunds_credit_notes.sql uit.',
+  });
 }
 
 export async function selectInvoiceChargebacks(organizationId: UUID): Promise<InvoiceChargeback[]> {
-  const { data, error } = await supabase
-    .from('invoice_chargebacks')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/invoice_chargebacks|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('invoice_chargebacks is nog niet beschikbaar. Voer de migratie 20260603_invoice_chargebacks_external_refunds.sql uit.', error);
-      return [];
-    }
-    throw error;
-  }
-  return (data ?? []) as InvoiceChargeback[];
+  return selectOptional<InvoiceChargeback>('invoice_chargebacks', organizationId, {
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260603_invoice_chargebacks_external_refunds.sql uit.',
+  });
 }
 
 export async function selectInvoiceVersions(organizationId: UUID): Promise<InvoiceVersion[]> {
-  const { data, error } = await supabase
-    .from('invoice_versions')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('version_number', { ascending: false });
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/invoice_versions|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('invoice_versions is nog niet beschikbaar. Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.', error);
-      return [];
-    }
-    throw error;
-  }
-  return (data ?? []) as InvoiceVersion[];
+  return selectOptional<InvoiceVersion>('invoice_versions', organizationId, {
+    orderBy: 'version_number', ascending: false,
+    hint: 'Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.',
+  });
 }
 
 export async function selectTicketNotes(organizationId: UUID): Promise<TicketNote[]> {
-  const { data, error } = await supabase
-    .from('ticket_notes')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: true });
-
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/ticket_notes|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('ticket_notes is nog niet beschikbaar. Voer de migratie 20260616000001_ticket_notes_timeline.sql uit om de tickettijdlijn te activeren.', error);
-      return [];
-    }
-    throw error;
-  }
-
-  return (data ?? []) as TicketNote[];
+  return selectOptional<TicketNote>('ticket_notes', organizationId, {
+    orderBy: 'created_at', ascending: true,
+    hint: 'Voer de migratie 20260616000001_ticket_notes_timeline.sql uit om de tickettijdlijn te activeren.',
+  });
 }
 
 /**
@@ -1418,42 +1354,17 @@ export async function markTicketRead(ticketId: UUID): Promise<void> {
 }
 
 export async function selectDocuments(organizationId: UUID): Promise<InternalDocument[]> {
-  const { data, error } = await supabase
-    .from('documents')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/documents|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('documents is nog niet beschikbaar. Voer de migratie 20260604000000_internal_documents.sql uit om interne documenten te activeren.', error);
-      return [];
-    }
-    throw error;
-  }
-
-  return (data ?? []) as InternalDocument[];
+  return selectOptional<InternalDocument>('documents', organizationId, {
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260604000000_internal_documents.sql uit om interne documenten te activeren.',
+  });
 }
 
 export async function selectFolders(organizationId: UUID): Promise<ContentFolder[]> {
-  const { data, error } = await supabase
-    .from('content_folders')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('position', { ascending: true })
-    .order('created_at', { ascending: true });
-
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/content_folders|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('content_folders is nog niet beschikbaar. Voer de migratie 20260616000002_content_folders.sql uit om mappen te activeren.', error);
-      return [];
-    }
-    throw error;
-  }
-
-  return (data ?? []) as ContentFolder[];
+  return selectOptional<ContentFolder>('content_folders', organizationId, {
+    orderBy: 'position', ascending: true, thenBy: 'created_at',
+    hint: 'Voer de migratie 20260616000002_content_folders.sql uit om mappen te activeren.',
+  });
 }
 
 /**
@@ -1474,41 +1385,17 @@ export async function deleteContentFolder(folderId: UUID, descendantFolderIds: U
 }
 
 export async function selectNoteCalendarLinks(organizationId: UUID): Promise<NoteCalendarLink[]> {
-  const { data, error } = await supabase
-    .from('note_calendar_links')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/note_calendar_links|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('note_calendar_links is nog niet beschikbaar. Voer de migratie 20260514_calendar_event_notes_complete.sql uit om agenda-notities te activeren.', error);
-      return [];
-    }
-    throw error;
-  }
-
-  return (data ?? []) as NoteCalendarLink[];
+  return selectOptional<NoteCalendarLink>('note_calendar_links', organizationId, {
+    orderBy: 'created_at', ascending: false,
+    hint: 'Voer de migratie 20260514_calendar_event_notes_complete.sql uit om agenda-notities te activeren.',
+  });
 }
 
 export async function selectCalendarEventLinks(organizationId: UUID): Promise<CalendarEventLink[]> {
-  const { data, error } = await supabase
-    .from('calendar_event_links')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('event_starts_at', { ascending: false });
-
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (/calendar_event_links|schema cache|does not exist|relation/i.test(message)) {
-      console.warn('calendar_event_links is nog niet beschikbaar. Voer de migratie 20260617000002_calendar_event_links.sql uit om agenda-koppelingen te activeren.', error);
-      return [];
-    }
-    throw error;
-  }
-
-  return (data ?? []) as CalendarEventLink[];
+  return selectOptional<CalendarEventLink>('calendar_event_links', organizationId, {
+    orderBy: 'event_starts_at', ascending: false,
+    hint: 'Voer de migratie 20260617000002_calendar_event_links.sql uit om agenda-koppelingen te activeren.',
+  });
 }
 
 /**
@@ -1770,23 +1657,24 @@ const CLIENT_FIELD_DEFINITIONS_MIGRATION_HINT =
 /**
  * Leest een nog-jonge tabel en degradeert gracieus: ontbreekt de tabel (migratie
  * nog niet uitgevoerd), dan een waarschuwing + lege lijst i.p.v. een harde fout.
- * Zelfde patroon als selectQuoteVersions/selectInvoiceVersions.
+ * `columns` voor een tabel met een blob die niet in de lijst hoort (creditnota's);
+ * `thenBy` sorteert oplopend na `orderBy` en vóór id (mappen: positie, dan datum).
  */
 async function selectOptional<T>(
   table: string,
   organizationId: UUID,
-  opts: { orderBy: string; ascending: boolean; hint: string; eq?: Record<string, string> },
+  opts: { orderBy: string; ascending: boolean; hint: string; eq?: Record<string, string>; columns?: string; thenBy?: string },
 ): Promise<T[]> {
   try {
     return await fetchAllPages<T>(() => {
       let query = supabase
         .from(table)
-        .select('*')
+        .select(opts.columns ?? '*')
         .eq('organization_id', organizationId);
       for (const [column, value] of Object.entries(opts.eq ?? {})) query = query.eq(column, value);
-      return query
-        .order(opts.orderBy, { ascending: opts.ascending })
-        .order('id', { ascending: true });
+      query = query.order(opts.orderBy, { ascending: opts.ascending });
+      if (opts.thenBy) query = query.order(opts.thenBy, { ascending: true });
+      return query.order('id', { ascending: true });
     });
   } catch (error) {
     const err = error as { message?: string; details?: string };
@@ -3610,19 +3498,20 @@ function isMissingNoteHandwritingTable(error: { message?: string; details?: stri
 
 /** Welke notities handschrift hebben — lichte samenvatting, de inkt zelf wordt pas geladen bij openen. */
 export async function selectNoteHandwritingSummaries(organizationId: UUID): Promise<NoteHandwritingSummary[]> {
-  const { data, error } = await supabase
-    .from('note_handwriting')
-    .select(NOTE_HANDWRITING_SUMMARY_COLUMNS)
-    .eq('organization_id', organizationId)
-    .order('updated_at', { ascending: false });
-  if (error) {
-    if (isMissingNoteHandwritingTable(error)) {
+  try {
+    return await fetchAllPages<NoteHandwritingSummary>(() => supabase
+      .from('note_handwriting')
+      .select(NOTE_HANDWRITING_SUMMARY_COLUMNS)
+      .eq('organization_id', organizationId)
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: true }));
+  } catch (error) {
+    if (isMissingNoteHandwritingTable(error as { message?: string; details?: string; code?: string })) {
       console.warn(`note_handwriting is nog niet beschikbaar. ${NOTE_HANDWRITING_MIGRATION_HINT}`, error);
       return [];
     }
     throw error;
   }
-  return (data ?? []) as unknown as NoteHandwritingSummary[];
 }
 
 /** Het volledige handschrift van één notitie, of null als er (nog) niets geschreven is. */

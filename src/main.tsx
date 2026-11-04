@@ -7,6 +7,7 @@ import { BottomNav } from './components/BottomNav';
 import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type PersistedTab } from './lib/workspaceTabs';
 import { Breadcrumbs } from './components/Breadcrumbs';
 import type { CrumbTarget } from './lib/breadcrumbs';
+import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type DataGroup, type GroupState } from './lib/dataGroups';
 import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey } from './lib/permissions';
 import { GlobalSearch, type SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
@@ -49,7 +50,9 @@ import {
   insertRow,
   inviteOrganizationMember,
   sendTeamInvitationEmail,
-  loadAppData,
+  loadCoreData,
+  loadDataGroup,
+  loggedMinutesForTask,
   loadFinanceClientDirectory,
   loadOrganizationContext,
   previewNextClientCode,
@@ -216,7 +219,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null };
+const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null, bankTransactionsToReconcile: 0, vatReturnsToFile: 0 };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 /** Volgnummer voor sprongen naar de pagina Berichten (zie openCommunication). */
@@ -604,6 +607,40 @@ function BootLoading({ message = 'ResoFly is aan het laden…' }: { message?: st
   return <div className="boot"><div className="boot-loading"><span className="boot-spinner" aria-hidden="true" /><span>{message}</span></div></div>;
 }
 
+type DataGroupStatus = 'ready' | 'loading' | 'failed';
+
+/**
+ * Hoe lang een ronde van loadWorkspace mag duren. Er loopt er één tegelijk, dus
+ * één verbinding die nooit antwoordt (na slaapstand of een wissel van netwerk)
+ * zou anders alle volgende verversingen tegenhouden. Daarna gaat de volgende
+ * ronde toch; een te laat antwoord van deze komt niet meer in beeld.
+ */
+const WORKSPACE_ROUND_TIMEOUT_MS = 120_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+/** Een pagina wacht op een groep gegevens die nog niet geladen is (src/lib/dataGroups.ts). */
+function PageDataLoading() {
+  return <div className="empty" role="status" aria-live="polite"><span className="boot-spinner" aria-hidden="true" /><div>Gegevens laden…</div></div>;
+}
+
+/** Laden mislukte. Niet vanzelf opnieuw (dat zou bij een storing blijven hameren), wel met één klik. */
+function PageDataFailed({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return <div className="empty" role="alert">
+    <div className="e-big">Deze gegevens konden niet worden geladen</div>
+    {message && <div>{message}</div>}
+    <Button onClick={onRetry}>Opnieuw proberen</Button>
+  </div>;
+}
+
 const ORG_ROLE_LABELS: Record<OrganizationRole, string> = {
   owner: 'Owner',
   admin: 'Admin',
@@ -689,6 +726,37 @@ function App() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [data, setData] = useState<AppData>(emptyData);
+  // Laden per module (src/lib/dataGroups.ts): `data` is de kern plus de groepen
+  // die al nodig waren. groupState zegt per groep wat er van is; de ref ernaast
+  // is de bron, zodat twee aanvragen in dezelfde tik niet langs elkaar heen kijken.
+  const [groupState, setGroupState] = useState<GroupState>(EMPTY_GROUP_STATE);
+  const groupStateRef = useRef<GroupState>(EMPTY_GROUP_STATE);
+  /** Voor welke organisatie `data` geldt (de kern is geladen). */
+  const [dataOrgId, setDataOrgId] = useState<string | null>(null);
+  const dataOrgRef = useRef<string | null>(null);
+  /** `data` zoals hij nu is, ook vlak na een groep die nog niet gerenderd is. */
+  const dataRef = useRef<AppData>(emptyData);
+  dataRef.current = data;
+  /** Telt op bij elke wissel van organisatie: een antwoord voor de vorige wordt weggegooid. */
+  const orgEpochRef = useRef(0);
+  /** Telt op bij elke ververs: wat daarvóór begon te laden, is daarna verouderd. */
+  const freshnessRef = useRef(0);
+  /** Per groep het nummer van de laatste aanvraag. */
+  const groupSeqRef = useRef<Partial<Record<DataGroup, number>>>({});
+  /** Per groep het nummer van het antwoord dat nu in `data` staat: een ouder antwoord dat later binnenkomt, overschrijft geen nieuwer. */
+  const groupAppliedSeqRef = useRef<Partial<Record<DataGroup, number>>>({});
+  /** Lopende aanvragen per groep, zodat twee vragers er één delen. */
+  const groupInflightRef = useRef(new Map<DataGroup, Promise<void>>());
+  /**
+   * loadWorkspace draait één ronde tegelijk. Vragen die binnenkomen terwijl er een
+   * loopt, krijgen samen één ronde erachteraan; `target` is de organisatie waar
+   * een wissel om vroeg (undefined: de organisatie die dan actief is).
+   */
+  const workspaceRunRef = useRef<{ running: boolean; queued: { target: string | null | undefined; waiters: Array<() => void> } | null }>({ running: false, queued: null });
+  /** De organisatie die nu actief is, ook vlak na een wissel die nog niet gerenderd is. */
+  const activeOrgIdRef = useRef<string | null>(localStorage.getItem(activeOrgStorageKey));
+  /** Telt op bij uitloggen: wat de vorige sessie nog aan het laden was, vervalt. */
+  const sessionEpochRef = useRef(0);
   const [organizationContext, setOrganizationContext] = useState<OrganizationContext>(emptyOrganizationContext);
   const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(() => localStorage.getItem(activeOrgStorageKey));
   // Open tabbladen blijven allemaal gemount (keep-alive); alleen het actieve is
@@ -984,16 +1052,63 @@ function App() {
     }
   }
 
-  async function loadWorkspace(preferredOrganizationId = activeOrganizationId) {
+  /**
+   * Organisatie en kern laden. `target` is de organisatie waar een wissel om
+   * vraagt; zonder target is het een ververs van de organisatie die actief is.
+   *
+   * Er loopt één ronde tegelijk. Wie vraagt terwijl er een loopt, krijgt één
+   * ronde erachteraan (die kan pas na zijn wijziging beginnen); alle vragers van
+   * intussen delen die ronde. Zo komt elke ronde ook echt in beeld: met rondes
+   * die elkaar inhalen en wegstrepen, kwam bij een stroom verversingen niets meer
+   * binnen.
+   */
+  function loadWorkspace(target?: string | null): Promise<void> {
+    const run = workspaceRunRef.current;
+    if (!run.running) return runWorkspaceRound(target);
+    return new Promise(resolve => {
+      if (!run.queued) run.queued = { target, waiters: [resolve] };
+      else {
+        // Een wissel wint van een ververs; een latere wissel van een eerdere.
+        if (target !== undefined) run.queued.target = target;
+        run.queued.waiters.push(resolve);
+      }
+    });
+  }
+
+  /**
+   * Eén ronde. Bij dezelfde organisatie is het een ververs na een wijziging: wat
+   * de open pagina gebruikt, komt tegelijk met de kern opnieuw binnen, en de
+   * andere geladen groepen worden verouderd. Bij een andere organisatie: eerst
+   * alles van de vorige weg, dan de kern; de pagina vraagt daarna zelf zijn groepen.
+   */
+  async function runWorkspaceRound(target: string | null | undefined): Promise<void> {
+    const run = workspaceRunRef.current;
+    run.running = true;
+    const session = sessionEpochRef.current;
     setLoading(true); setError(null);
     try {
-      const orgContext = await loadOrganizationContext(preferredOrganizationId);
+      const tooSlow = 'Het laden duurt te lang. Controleer je verbinding en kies Ververs.';
+      const orgContext = await withTimeout(loadOrganizationContext(target === undefined ? activeOrgIdRef.current : target), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
+      // Intussen uitgelogd: niets van deze ronde hoort nog in beeld.
+      if (session !== sessionEpochRef.current) return;
       setOrganizationContext(orgContext);
       const orgId = orgContext.activeOrganization?.id ?? null;
+      activeOrgIdRef.current = orgId;
       setActiveOrganizationId(orgId);
       if (orgId) {
         localStorage.setItem(activeOrgStorageKey, orgId);
-        const loaded = await loadAppData(orgId);
+        const sameOrganization = orgId === dataOrgRef.current;
+        if (!sameOrganization) {
+          // Meteen niets meer van de vorige organisatie tonen, ook als de kern
+          // hieronder mislukt: tot de nieuwe kern er is, staat het laadscherm.
+          resetDataGroups(null);
+          dataRef.current = emptyData;
+          setData(emptyData);
+        }
+        const [loaded] = await withTimeout(Promise.all([
+          loadCoreData(orgId),
+          sameOrganization ? refreshOpenGroups(orgId) : Promise.resolve(),
+        ]), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
         // Financiën open maar Klanten dicht (de boekhouder, of een teamlid dat zo
         // is ingesteld): dan de debiteuren zoals ze op de stukken staan, zodat
         // facturen een naam hebben. De klantenkaart zelf blijft dicht.
@@ -1007,27 +1122,178 @@ function App() {
             console.warn('Debiteuren voor Financiën konden niet worden geladen.', directoryError);
           }
         }
-        setData(loaded);
+        if (session !== sessionEpochRef.current) return;
+        if (sameOrganization) {
+          dataRef.current = { ...dataRef.current, ...loaded };
+          setData(prev => ({ ...prev, ...loaded }));
+        } else {
+          // De groepen beginnen leeg; de pagina vraagt zelf wat hij nodig heeft.
+          resetDataGroups(orgId);
+          const fresh: AppData = { ...loaded, ...emptyGroupData() };
+          dataRef.current = fresh;
+          setData(fresh);
+        }
         // Herstel de open tabbladen éénmalig per organisatie (eerste load of wissel);
         // een gewone ververs laat de tabbladen ongemoeid.
         if (orgId !== tabsLoadedForRef.current) {
           tabsLoadedForRef.current = orgId;
-          restoreTabsForOrganization(orgId, loaded);
+          restoreTabsForOrganization(orgId, dataRef.current);
         }
       } else {
         localStorage.removeItem(activeOrgStorageKey);
+        resetDataGroups(null);
+        dataRef.current = emptyData;
         setData(emptyData);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Onbekende fout');
+      if (session === sessionEpochRef.current) setError(e instanceof Error ? e.message : 'Onbekende fout');
     } finally {
-      setLoading(false);
+      run.running = false;
+      const next = run.queued;
+      run.queued = null;
+      if (next) {
+        void runWorkspaceRound(next.target).finally(() => { for (const resolve of next.waiters) resolve(); });
+      } else {
+        setLoading(false);
+      }
     }
   }
 
   async function refresh() {
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
+
+  // ── Laden per module (src/lib/dataGroups.ts) ────────────────────────────
+  function updateGroupState(change: (prev: GroupState) => GroupState) {
+    const next = change(groupStateRef.current);
+    if (next === groupStateRef.current) return;
+    groupStateRef.current = next;
+    setGroupState(next);
+  }
+
+  /** Een andere organisatie (of niemand): geen groep is nog geladen, lopende antwoorden vervallen. */
+  function resetDataGroups(orgId: string | null) {
+    orgEpochRef.current += 1;
+    groupSeqRef.current = {};
+    groupAppliedSeqRef.current = {};
+    groupInflightRef.current.clear();
+    dataOrgRef.current = orgId;
+    setDataOrgId(orgId);
+    updateGroupState(() => EMPTY_GROUP_STATE);
+  }
+
+  /**
+   * Haalt groepen op en zet ze in `data`. Een antwoord vervalt als er intussen
+   * van organisatie is gewisseld, of als er al een nieuwer antwoord voor die
+   * groep in `data` staat. Een ouder antwoord dat éérder binnenkomt dan een
+   * nieuwer, wordt wel getoond (verouderd, als er intussen iets wijzigde): wie
+   * alleen het laatst gevraagde toont, toont bij een stroom verversingen niets.
+   * Mislukt een groep, dan onthoudt groupState dat met de melding.
+   */
+  function fetchGroups(orgId: string, groups: readonly DataGroup[]): Promise<void> {
+    const epoch = orgEpochRef.current;
+    const freshness = freshnessRef.current;
+    const seqs = groups.map(group => (groupSeqRef.current[group] = (groupSeqRef.current[group] ?? 0) + 1));
+    const promise = Promise.allSettled(groups.map(group => loadDataGroup(orgId, group))).then(results => {
+      if (epoch !== orgEpochRef.current) return;
+      const patch: Partial<AppData> = {};
+      const loaded: DataGroup[] = [];
+      const failed: Array<[DataGroup, string]> = [];
+      results.forEach((result, index) => {
+        const group = groups[index];
+        const seq = seqs[index];
+        if (result.status === 'fulfilled') {
+          if (seq <= (groupAppliedSeqRef.current[group] ?? 0)) return;
+          groupAppliedSeqRef.current[group] = seq;
+          Object.assign(patch, result.value);
+          loaded.push(group);
+        } else if (seq === groupSeqRef.current[group]) {
+          // Alleen de laatste aanvraag meldt een fout: een nieuwere kan nog lukken.
+          const reason = result.reason as { message?: string } | null;
+          failed.push([group, reason?.message || 'Onbekende fout']);
+        }
+      });
+      if (loaded.length) {
+        dataRef.current = { ...dataRef.current, ...patch };
+        setData(prev => ({ ...prev, ...patch }));
+      }
+      // Een groep die al in beeld stond en nu niet ververst kon worden: de pagina
+      // toont de stand van daarvoor, en dat moet je zien (vroeger gaf een
+      // mislukte herlaadslag dezelfde balk).
+      const staleShown = failed.find(([group]) => groupStateRef.current.loaded.has(group));
+      if (staleShown) setError(`Bijwerken lukte niet: ${staleShown[1]}. Je ziet de stand van daarvoor; kies Ververs om het opnieuw te proberen.`);
+      // Begon er tijdens het ophalen een ververs, dan is wat binnenkwam van
+      // vóór die wijziging: geladen, maar verouderd.
+      updateGroupState(prev => applyFetch(prev, { loaded, failed, outdated: freshness !== freshnessRef.current }));
+    });
+    for (const group of groups) groupInflightRef.current.set(group, promise);
+    void promise.finally(() => {
+      for (const group of groups) if (groupInflightRef.current.get(group) === promise) groupInflightRef.current.delete(group);
+    });
+    return promise;
+  }
+
+  /**
+   * Zorgt dat deze groepen er zijn. Ontbrekende en verouderde worden opgehaald,
+   * een lopende aanvraag wordt gedeeld, een mislukte niet vanzelf herhaald. De
+   * belofte is klaar als alles binnen is (of mislukt).
+   */
+  function ensureGroups(groups: readonly DataGroup[]): Promise<void> {
+    const orgId = dataOrgRef.current;
+    if (!orgId || groups.length === 0) return Promise.resolve();
+    const todo = groupsToFetch(groupStateRef.current, groups).filter(group => !groupInflightRef.current.has(group));
+    if (todo.length) void fetchGroups(orgId, todo);
+    return Promise.all(groups.map(group => groupInflightRef.current.get(group))).then(() => undefined);
+  }
+
+  /**
+   * Bij een ververs: alles wat geladen is, is vanaf nu verouderd, behalve wat de
+   * open pagina gebruikt — dat komt nu meteen opnieuw binnen. Altijd een nieuwe
+   * aanvraag, ook als er al een liep: die kan van vóór de wijziging zijn.
+   */
+  function refreshOpenGroups(orgId: string): Promise<void> {
+    freshnessRef.current += 1;
+    const open = openGroupsRef.current;
+    updateGroupState(prev => markStale(prev, open));
+    return open.length ? fetchGroups(orgId, open) : Promise.resolve();
+  }
+
+  function retryGroups(groups: readonly DataGroup[]) {
+    updateGroupState(prev => clearFailed(prev, groups));
+    void ensureGroups(groups);
+  }
+
+  /**
+   * Een eigen wijziging in een groep staat al lokaal in `data` (een gestopte
+   * timer). Een aanvraag voor die groep die nog onderweg is, begon daarvóór en
+   * zou hem wegvegen: dat antwoord vervalt, en er komt een nieuwe voor in de plaats.
+   */
+  function afterLocalWrite(group: DataGroup) {
+    const orgId = dataOrgRef.current;
+    if (!orgId) return;
+    groupAppliedSeqRef.current[group] = groupSeqRef.current[group] ?? 0;
+    if (groupInflightRef.current.has(group)) void fetchGroups(orgId, [group]);
+  }
+
+  function dataGroupStatus(group: DataGroup): DataGroupStatus {
+    if (groupState.loaded.has(group)) return 'ready';
+    return groupState.failed.has(group) ? 'failed' : 'loading';
+  }
+
+  // Wat het actieve tabblad nu nodig heeft: zijn pagina (als die open mag) en
+  // een open bewerkvenster. Verborgen tabbladen vragen pas iets als ze actief worden.
+  const openGroups = useMemo(
+    () => groupsFor(permissions.canOpenPage(page) ? page : '', edit?.kind ?? null),
+    [permissions, page, edit?.kind],
+  );
+  const openGroupsRef = useRef<DataGroup[]>(openGroups);
+  openGroupsRef.current = openGroups;
+  // Laden zodra de kern er is, en opnieuw als een groep verouderd raakt terwijl
+  // de pagina openstaat. Een mislukte groep blijft staan tot Ververs of de knop.
+  useEffect(() => {
+    if (!dataOrgId) return;
+    void ensureGroups(openGroups);
+  }, [dataOrgId, openGroups, groupState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * Herlaadt de werkruimte, maar hoogstens één keer per reeks.
@@ -1122,7 +1388,7 @@ function App() {
     } catch (error) {
       emailError = error instanceof Error ? error.message : 'Uitnodigingsmail verzenden mislukt.';
     }
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
     return { emailSent, emailError };
   }
 
@@ -1146,7 +1412,7 @@ function App() {
     if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen rollen wijzigen.');
     assertNotPeerOwner(memberId, 'degraderen');
     await updateOrganizationMemberRole(memberId, activeOrganizationId, role);
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
 
   /** Modulerechten van één teamlid opslaan. De RPC bewaakt zelf wie dit mag
@@ -1155,7 +1421,7 @@ function App() {
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
     if (!canAdmin) throw new Error('Alleen owners en admins kunnen modulerechten aanpassen.');
     await setMemberModuleAccess(memberId, moduleAccess);
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
 
   async function disableMember(memberId: string) {
@@ -1163,14 +1429,14 @@ function App() {
     if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen teamleden uitschakelen.');
     assertNotPeerOwner(memberId, 'uitschakelen');
     await disableOrganizationMember(memberId, activeOrganizationId);
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
 
   async function revokeInvitation(invitationId: string) {
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen uitnodigingen intrekken.');
     await revokeOrganizationInvitation(invitationId, activeOrganizationId);
-    await loadWorkspace(activeOrganizationId);
+    await loadWorkspace();
   }
 
   function ensureCanWrite(): boolean {
@@ -1224,9 +1490,17 @@ function App() {
       } else if (!userId) {
         loadedForRef.current = null;
         tabsLoadedForRef.current = null;
+        // Wat de vorige sessie nog aan het laden was, komt niet meer in beeld.
+        sessionEpochRef.current += 1;
+        const queued = workspaceRunRef.current.queued;
+        workspaceRunRef.current.queued = null;
+        for (const resolve of queued?.waiters ?? []) resolve();
         localStorage.removeItem(activeOrgStorageKey);
+        activeOrgIdRef.current = null;
         setActiveOrganizationId(null);
         setOrganizationContext(emptyOrganizationContext);
+        resetDataGroups(null);
+        dataRef.current = emptyData;
         setData(emptyData);
         const fresh = freshTab('dashboard');
         setTabs([fresh]); setActiveTabId(fresh.id);
@@ -1331,6 +1605,8 @@ function App() {
   // is. Toon dan het laadscherm i.p.v. kort "Geen organisatie gevonden" te flitsen;
   // die melding is alléén terecht als het laden klaar is en er echt geen org is.
   if (!activeOrganization && loading) return <BootLoading />;
+  // Een wissel van organisatie: de vorige is al weg, de nieuwe kern nog niet binnen.
+  if (activeOrganization && loading && dataOrgId !== activeOrganization.id) return <BootLoading />;
   if (!activeOrganization) return <NoOrganizationScreen pendingInvitations={organizationContext.pendingInvitations} onAcceptInvitation={acceptInvitation} onCreateOrganization={createNewOrganization} />;
 
   // Toestemming geven voor een AI-koppeling. Staat bewust hier: pas voorbij de
@@ -1998,6 +2274,7 @@ function App() {
       hourly_rate_cents: resolveRateCents(data, projectId),
     });
     setData(prev => ({ ...prev, timeEntries: [...prev.timeEntries, created] }));
+    afterLocalWrite('time');
   }
 
   /** Zet of wist je persoonlijke dagstreep. Nul minuten = geen streep, en dan
@@ -2663,10 +2940,21 @@ function App() {
   /** Tijd reserveren: naar de agenda op de plandatum, met de taak als
    *  concept-afspraak. De agenda opent het aanmaakpaneel en meldt zich terug
    *  zodra het concept verwerkt is. Duur = wat er van de schatting nog open staat. */
-  function reserveTimeForTask(task: Task) {
+  async function reserveTimeForTask(task: Task) {
     if (!ensureCanWrite()) return;
-    const project = task.project_id ? data.projects.find(p => p.id === task.project_id) ?? null : null;
-    const logged = data.timeEntries.filter(entry => entry.task_id === task.id).reduce((sum, entry) => sum + entry.minutes, 0);
+    const orgId = activeOrg.id;
+    // De al geboekte uren tellen mee in de duur. Zijn de uren niet geladen (een
+    // taakvenster op een pagina zonder uren), dan alleen die van deze taak; lukt
+    // ook dat niet, dan geldt de hele schatting.
+    let logged = 0;
+    if (groupStateRef.current.loaded.has('time')) {
+      logged = dataRef.current.timeEntries.filter(entry => entry.task_id === task.id).reduce((sum, entry) => sum + entry.minutes, 0);
+    } else {
+      try { logged = await loggedMinutesForTask(orgId, task.id); } catch { logged = 0; }
+      // Intussen van organisatie gewisseld: dan hoort dit concept nergens meer bij.
+      if (dataOrgRef.current !== orgId) return;
+    }
+    const project = task.project_id ? dataRef.current.projects.find(p => p.id === task.project_id) ?? null : null;
     const estimate = task.estimated_minutes != null && Number.isFinite(Number(task.estimated_minutes)) ? Number(task.estimated_minutes) : 0;
     const date = task.planned_date ?? formatISODate(new Date());
     setCalendarDraft({
@@ -3320,7 +3608,7 @@ function App() {
           <Breadcrumbs view={tab} data={data} onNavigate={navigateCrumb} />
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
-          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} dataStatus={dataGroupStatus} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
         </section>
       ))}
     </main>
@@ -3411,6 +3699,18 @@ function App() {
         <p>Een owner of admin van deze organisatie heeft deze module voor jou dichtgezet. Vraag hen om toegang als je die nodig hebt voor je werk.</p>
         <Button onClick={() => { setPage(firstAllowedPage(permissions) as Page); setProjectId(null); setClientId(null); setStatsReportId(null); }}>Naar een pagina die wél open is</Button>
       </div>;
+    }
+
+    // Laden per module: een pagina rendert pas als al zijn groepen geladen zijn
+    // (verouderd mag; die ververst op de achtergrond). Zo ziet hij nooit een lege
+    // lijst die eigenlijk nog onderweg is. Verborgen tabbladen wachten hier tot
+    // ze actief worden.
+    const missing = missingGroups(groupState, PAGE_DATA_GROUPS[page] ?? []);
+    if (missing.length > 0) {
+      const failedGroup = missing.find(group => groupState.failed.has(group));
+      return failedGroup
+        ? <PageDataFailed message={groupState.failed.get(failedGroup) ?? ''} onRetry={() => retryGroups(missing)} />
+        : <PageDataLoading />;
     }
 
     // Binnen een open module bepaalt het niveau (lezen/volledig) of de
@@ -3649,7 +3949,7 @@ type TaskAgendaHandlers = {
   onOpenDay: (dateKey: string) => void;
 };
 
-function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, onNoteHandwritingChanged, taskAgenda }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; onNoteHandwritingChanged: (noteId: string, summary: NoteHandwritingSummary | null) => void; taskAgenda: TaskAgendaHandlers }) {
+function EditModal({ edit, data, dataStatus, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, onNoteHandwritingChanged, taskAgenda }: { edit: NonNullable<EditMode>; data: AppData; dataStatus: (group: DataGroup) => DataGroupStatus; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; onNoteHandwritingChanged: (noteId: string, summary: NoteHandwritingSummary | null) => void; taskAgenda: TaskAgendaHandlers }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
@@ -3916,7 +4216,7 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
     </FormGrid>}
     {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/>{!item && <ProjectTemplatePicker data={data} value={String(form._templateId ?? '')} startDate={String(form.start_date ?? '')} disabled={disabled} onChange={templateId=>set('_templateId',templateId)}/>}<Field label="Facturatie" hint="Urenbasis: geregistreerde uren zijn declarabel en vormen de factuurbasis. Aangenomen prijs: factureren via offerte/factuur; uren worden geregistreerd maar standaard niet-declarabel."><Select value={form.billing_type} onChange={e=>set('billing_type',e.target.value)} disabled={disabled}><option value="hourly">Urenbasis</option><option value="fixed_price">Aangenomen prijs (offerte)</option></Select></Field><Field label="Uurtarief (€)" hint="Voor de declarabele waarde van geregistreerde uren. Leeg = bedrijfsbreed standaardtarief."><Input type="number" min="0" step="0.01" value={form.hourly_rate_euro} onChange={e=>set('hourly_rate_euro',e.target.value)} placeholder="Standaardtarief" disabled={disabled}/></Field><Field label="Begrote uren" hint="Urenbudget voor dit project — op het projectdashboard zie je begroot vs. werkelijk geboekt en het effectieve uurtarief."><Input type="number" min="0" step="0.5" value={form.budgeted_hours} onChange={e=>set('budgeted_hours',e.target.value)} placeholder="Geen budget" disabled={disabled}/></Field><Field label="Projectkleur" hint="Bepaalt de kleur van het project in lijsten, kanban en de timeline."><ColorPicker value={form.color} onChange={color=>set('color',color)} disabled={disabled}/></Field><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
     {edit.kind === 'task' && <FormGrid><Field label="Taaktitel"><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel" disabled={disabled}/></Field><Field label="Status"><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select></Field><Field label="Prioriteit"><Select value={form.priority} onChange={e=>set('priority',e.target.value)} disabled={disabled}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select></Field><Field label="Klant" hint={taskClientFollowsProject ? 'Volgt automatisch uit het gekozen project.' : 'Optioneel — handig als je het project nog niet weet.'}><Select value={form.client_id} onChange={e=>setTaskClient(e.target.value)} disabled={disabled || taskClientFollowsProject}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field><Field label="Project" hint="Optioneel — een taak mag ook los in de weekplanner staan."><Select value={form.project_id} onChange={e=>setTaskProject(e.target.value)} disabled={disabled}><option value="">Geen project</option>{taskProjectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field><Field label="Tags" hint="Gebruik komma’s om meerdere tags toe te voegen."><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags" disabled={disabled}/></Field><Field label="Toegewezen aan" hint={form.project_id ? 'Kies teamleden uit het projectteam die aan deze taak werken.' : 'Zonder project kun je iedereen uit je organisatie toewijzen.'}><TaskAssigneePicker projectId={form.project_id || null} assigneeIds={(form._assigneeIds as string[]) ?? []} teamMembers={teamMembers} projectMembers={data.projectMembers} currentUserId={currentUserId} disabled={disabled} onChange={ids => set('_assigneeIds', ids)}/></Field><Field label="Beschrijving"><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving" disabled={disabled}/></Field><Field label="Startdatum"><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)} disabled={disabled}/></Field><Field label="Deadline" hint="Deze datum blijft de inhoudelijke deadline en wordt niet meer aangepast door de weekplanner."><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)} disabled={disabled}/></Field><Field label="Plandatum" hint="Deze datum bepaalt op welke dag de taak in de weekplanner staat."><Input type="date" value={form.planned_date} onChange={e=>set('planned_date',e.target.value)} disabled={disabled}/></Field><Field label="Loopt door tot" hint="Laat leeg voor werk van één dag. Vul je een latere dag in, dan wordt het een weekstrook over die dagen heen."><Input type="date" value={form.planned_end_date} min={form.planned_date || undefined} onChange={e=>set('planned_end_date',e.target.value)} disabled={disabled || !form.planned_date}/></Field><Field label="Tijd in het rooster" hint={form.planned_end_date ? 'Een weekstrook heeft geen tijdstip.' : 'Leeg = wel op de dag, nog niet op een tijd. Met een tijd staat de taak als blok in de weekplanner en de agenda, zo lang als de geschatte duur.'}><Input type="time" step="900" value={form.planned_start_time} onChange={e=>set('planned_start_time',e.target.value)} disabled={disabled || !form.planned_date || !!form.planned_end_date}/></Field><Field label="Geschatte duur" hint="In minuten. Laat leeg als je het nog niet weet — de taak telt dan nergens als tijd mee."><Input type="number" min="0" max="1440" step="15" placeholder="Nog geen schatting" value={form.estimated_minutes} onChange={e=>set('estimated_minutes',e.target.value)} disabled={disabled}/></Field><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{item && <TaskAgendaSection task={item as Task} data={data} organizationId={organizationId} canWrite={!disabled} onReserve={taskAgenda.onReserve} onLinkEvent={taskAgenda.onLinkEvent} onUnlink={taskAgenda.onUnlink} onOpenDay={taskAgenda.onOpenDay}/>}{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
-    {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Field label="Korte interne notitie" hint="Privé memo op het ticket. Voor een gesprek met de klant gebruik je de tijdlijn hieronder."><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities (privé, niet in de tijdlijn)"/></Field><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{item ? <TicketTimeline ticketId={item.id} organizationId={organizationId} currentUserId={currentUserId} notes={data.ticketNotes.filter(n => n.ticket_id === item.id)} canWrite={!disabled} onChanged={onAttachmentsChanged} clientId={(item as Ticket).client_id} data={data}/> : <div className="ticket-timeline-hint">Sla het ticket eerst op om de notitietijdlijn te gebruiken — daar kunnen jij en de klant berichten plaatsen.</div>}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Field label="Korte interne notitie" hint="Privé memo op het ticket. Voor een gesprek met de klant gebruik je de tijdlijn hieronder."><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities (privé, niet in de tijdlijn)"/></Field><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{item ? (dataStatus('communication') === 'ready' ? <TicketTimeline ticketId={item.id} organizationId={organizationId} currentUserId={currentUserId} notes={data.ticketNotes.filter(n => n.ticket_id === item.id)} canWrite={!disabled} onChanged={onAttachmentsChanged} clientId={(item as Ticket).client_id} data={data}/> : <div className="ticket-timeline-hint" role="status">{dataStatus('communication') === 'failed' ? 'De tijdlijn kon niet worden geladen. Ververs de pagina om het opnieuw te proberen.' : 'Tijdlijn laden…'}</div>) : <div className="ticket-timeline-hint">Sla het ticket eerst op om de notitietijdlijn te gebruiken — daar kunnen jij en de klant berichten plaatsen.</div>}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
     {edit.kind === 'note' && <FormGrid>
       <Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/>
       <Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>

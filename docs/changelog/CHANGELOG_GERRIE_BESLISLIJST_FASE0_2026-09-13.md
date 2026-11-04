@@ -1,6 +1,6 @@
 # Gerrie kan een takenlijst klaarzetten, en leest mee in mail en notulen
 
-**13 september 2026 · staging · Fase 0 van [GERRIE_BESLISLIJST_PLAN.md](GERRIE_BESLISLIJST_PLAN.md)**
+**13 september 2026 · staging · Fase 0 van [GERRIE_BESLISLIJST_PLAN.md](../plannen/GERRIE_BESLISLIJST_PLAN.md)**
 
 De PO ging akkoord met alle voorstellen uit het bouwplan voor de beslislijst en gaf groen licht voor Fase 0: de stukken die in de frontend moeten liggen vóórdat de eerste kaart kan verschijnen. Niets hiervan is de beslislijst zelf; het is het fundament waar Fase 1 op bouwt, en het is vandaag al bruikbaar in de chat.
 

@@ -10,18 +10,15 @@ import { readdirSync, readFileSync } from 'node:fs';
  * en quote.approve_internal maandenlang op `quotes.total_amount`, een kolom die
  * alleen op quote_versions bestaat: ze werkten nooit.
  *
- * Het schema komt uit FRESH_INSTALL_COMPLETE_SCHEMA.sql plus de migraties
- * (create table, add column, rename column). Een tabel die daar niet in te
+ * Het schema komt uit de migraties (create table, add column, rename column),
+ * te beginnen bij de basis 20260427000000. Een tabel die daar niet in te
  * vinden is, wordt overgeslagen: deze test zoekt fouten, geen volledigheid.
  */
 
 const root = new URL('../../', import.meta.url);
 const migrationsDir = new URL('migrations/', root);
-const sources = [
-  readFileSync(new URL('FRESH_INSTALL_COMPLETE_SCHEMA.sql', root), 'utf8'),
-  ...readdirSync(migrationsDir).filter((name) => name.endsWith('.sql')).sort()
-    .map((name) => readFileSync(new URL(name, migrationsDir), 'utf8')),
-];
+const sources = readdirSync(migrationsDir).filter((name) => name.endsWith('.sql')).sort()
+  .map((name) => readFileSync(new URL(name, migrationsDir), 'utf8'));
 
 const SKIP = new Set(['constraint', 'primary', 'unique', 'check', 'foreign', 'exclude', 'like']);
 const schema = new Map<string, Set<string>>();

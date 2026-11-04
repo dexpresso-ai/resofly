@@ -1,3 +1,10 @@
--- Run after logging in at least once. Replace YOUR_USER_ID with auth.users.id.
-insert into public.clients (user_id,name,client_code,contact_name,email,color,status,tags,value_eur)
-values ('YOUR_USER_ID','Acme BV','KL-001','Jan de Vries','jan@acme.nl','#FFD966','active',array['VIP','Klant'],45000);
+-- Geen voorbeelddata.
+--
+-- `supabase db start` en `supabase db reset` draaien dit bestand na de
+-- migraties. Er staat bewust niets in: alle gegevens horen bij een organisatie,
+-- en die ontstaat pas bij de eerste login (de app roept dan
+-- ensure_user_default_organization aan).
+--
+-- Het oude voorbeeld zette een klant op `clients.user_id`. Die kolom bestaat niet
+-- meer sinds de organisaties er zijn, en daardoor liep `db start` aan het eind
+-- alsnog stuk.

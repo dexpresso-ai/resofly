@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit --pretty false",
     "test": "node --test supabase/functions/_shared/*.test.ts src/lib/*.test.ts",
     "test:mobile": "node tests/mobile/run.mjs",
+    "test:loading": "node tests/laden/run.mjs",
     "lint:sql": "node -e \"console.log('SQL lint placeholder')\""
   },
   "dependencies": {

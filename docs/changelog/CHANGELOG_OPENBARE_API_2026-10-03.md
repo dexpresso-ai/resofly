@@ -1,6 +1,6 @@
 # Een API waarmee je alles kunt koppelen
 
-**3 oktober 2026 · zie [PUBLIC_API_SETUP.md](PUBLIC_API_SETUP.md) (uitrollen) en [docs/API.md](docs/API.md) (voor ontwikkelaars)**
+**3 oktober 2026 · zie [PUBLIC_API_SETUP.md](../setup/PUBLIC_API_SETUP.md) (uitrollen) en [docs/API.md](../API.md) (voor ontwikkelaars)**
 
 Tot nu toe had ResoFly één deur naar buiten: de MCP-connector, voor de eigen AI
 van een klant. Een webshop, een urenapp of een koppelplatform als Zapier, Make of

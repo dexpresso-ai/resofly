@@ -1,6 +1,6 @@
 # Gerrie wacht niet meer tot je iets vraagt: de beslislijst
 
-**14 september 2026 · staging · Fase 1 van [GERRIE_BESLISLIJST_PLAN.md](GERRIE_BESLISLIJST_PLAN.md)**
+**14 september 2026 · staging · Fase 1 van [GERRIE_BESLISLIJST_PLAN.md](../plannen/GERRIE_BESLISLIJST_PLAN.md)**
 
 Het dashboard telde dingen ("3 offertes open bij klanten") en stuurde je naar een lijst. Vanaf nu staat er bovenaan een blok **Te beslissen** met kaarten die Gerrie zelf klaarzette uit wat er in de app gebeurde: het voorstel, de feiten waarom, en de knoppen *Akkoord · Openen · Later · Niet meer*. Gerrie stelt voor, jij beslist; er wordt niets verstuurd of aangemaakt zonder een klik.
 
@@ -48,5 +48,5 @@ Commit `20f24f6` op `origin/staging`; de Pages-bundel bevat het blok *Te besliss
 1. Frontend: push naar `staging`, Cloudflare Pages bouwt.
 2. Migratie `20260914000000_gerrie_beslislijst.sql` via `npx supabase db push --linked`.
 3. Edge functions: `gerrie-signals` (nieuw), en `gerrie-agent` + `gerrie-agent-runner` opnieuw (gerrieCore exporteert nu `buildProposal` en `lineTotal`).
-4. Secret `SIGNALS_CRON_SECRET` en de pg_cron-job `gerrie-signals-tick`, zie [GERRIE_BESLISLIJST_SETUP.md](GERRIE_BESLISLIJST_SETUP.md).
+4. Secret `SIGNALS_CRON_SECRET` en de pg_cron-job `gerrie-signals-tick`, zie [GERRIE_BESLISLIJST_SETUP.md](../setup/GERRIE_BESLISLIJST_SETUP.md).
 5. In de app aanzetten: Gerrie → Beslissingen → Aan. De feature staat standaard uit.
