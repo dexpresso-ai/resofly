@@ -13,7 +13,7 @@
 // bestand voor de edge functions (die saneren wat er naar buiten gaat) en voor
 // Gerrie (die de instellingen kan zetten). src/lib/galleryLayout.test.ts houdt
 // de twee gelijk. De database bewaakt dezelfde regels met een trigger
-// (migratie 20261104065000).
+// (migratie 20261104075000).
 //
 // Geen imports: dit bestand draait ongewijzigd in de browser, in node (tests)
 // en in Deno.

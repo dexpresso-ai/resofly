@@ -6,7 +6,7 @@
 // (gallery.update_settings) controleert er invoer mee. Pas de twee altijd
 // samen aan; src/lib/galleryLayout.test.ts vergelijkt ze en faalt zodra ze uit
 // elkaar lopen. De database bewaakt dezelfde regels met een trigger
-// (migratie 20261104065000).
+// (migratie 20261104075000).
 //
 // Puur: geen database, geen Deno, geen imports.
 

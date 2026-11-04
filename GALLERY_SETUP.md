@@ -17,7 +17,7 @@ accountbrede opslagbundels (GB per abonnement, bijkopen via Mollie).
 | App | projecttab Galerij + beheer + upload | `src/features/ProjectGallery.tsx` |
 | App | gedeelde viewer (app/portaal/deellink) | `src/features/GalleryViewer.tsx` |
 | App | publieke pagina `/gallerij/<token>` | `src/features/PublicGalleryPage.tsx` |
-| DB | weergave van het album (`galleries.layout`) + groot tonen (`gallery_items.featured`) | `supabase/migrations/20261104065000_gallery_layout.sql` |
+| DB | weergave van het album (`galleries.layout`) + groot tonen (`gallery_items.featured`) | `supabase/migrations/20261104075000_gallery_layout.sql` |
 | App | weergave-instellingen: standaard, herstel, stijlen | `src/lib/galleryLayout.ts` (kopie: `supabase/functions/_shared/galleryLayout.ts`) |
 | App | rekenregels: rijen, waterval, raster, verhaal, afdrukken | `src/lib/galleryLayoutEngine.ts` |
 | App | Instellingen → Weergave, met live voorbeeld | `src/features/GalleryLayoutSettings.tsx` |

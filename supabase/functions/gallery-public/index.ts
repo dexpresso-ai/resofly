@@ -73,7 +73,7 @@ type GalleryRow = {
   cover_preview_key: string | null;
   cover_focus_x: number | null;
   cover_focus_y: number | null;
-  /** Ontbreekt vóór migratie 20261104065000. */
+  /** Ontbreekt vóór migratie 20261104075000. */
   layout?: unknown;
   allow_downloads: boolean;
   download_quality: string;

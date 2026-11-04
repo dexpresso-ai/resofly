@@ -796,7 +796,7 @@ export interface Gallery extends OrgScopedRow {
    * Weergave van het album, los van de opening: indeling, witruimte, kolommen,
    * speelsheid, afwerking (zie src/lib/galleryLayout.ts). Altijd lezen via
    * `normalizeGalleryLayout`: leeg = de standaardweergave, en de kolom
-   * ontbreekt vóór migratie 20261104065000.
+   * ontbreekt vóór migratie 20261104075000.
    */
   layout?: Partial<GalleryLayout> | null;
   allow_downloads: boolean;
@@ -836,7 +836,7 @@ export interface GalleryItem extends OrgScopedRow {
   stream_status: GalleryStreamStatus | null;
   stream_playback_base: string | null;
   sort_order: number;
-  /** Groot tonen in het album. Ontbreekt vóór migratie 20261104065000. */
+  /** Groot tonen in het album. Ontbreekt vóór migratie 20261104075000. */
   featured?: boolean;
   created_at: string;
   updated_at: string;

@@ -110,7 +110,7 @@ zelf aanwijst, en dat geldt ook bij een strak album.
 
 ### Database
 
-`supabase/migrations/20261104065000_gallery_layout.sql`
+`supabase/migrations/20261104075000_gallery_layout.sql`
 
 - **`galleries.layout`** (jsonb, standaard `{}` = de standaardweergave). Bestaande
   galerijen veranderen dus niet.
@@ -197,13 +197,22 @@ past de migratie toe en rolt de edge functions uit (`client-portal`, `gallery-pu
 en via `_shared/actions` ook Gerrie en de MCP-connector). Geen nieuwe secrets, geen
 cron-taken, geen wijziging aan de media-worker of de CSP.
 
-**Let op het versienummer.** De migratie heette eerst `20261104050000_…`. Een andere
-wijziging van dezelfde dag (`20261104050000_vpb_carry_back.sql`) had dat nummer al,
-en was op staging al toegepast. De CLI kijkt alleen naar het nummer: hij had deze
-migratie dan als "al gedaan" overgeslagen, en de kolommen hadden nooit bestaan —
-zonder foutmelding. Hij heet nu `20261104065000_gallery_layout.sql`: na de laatste op
-staging (`…060000`), en bewust níét `…070000`, het nummer dat de reeks van die
-andere wijziging als volgende zou kiezen. Zo kan die reeks gewoon doorlopen.
+**Let op het versienummer.** Deze migratie is twee keer verhuisd, en dat zegt iets
+over werken naast een andere sessie die dezelfde dag migraties uitrolt:
+
+1. Eerst `20261104050000_…`. Dat nummer had `20261104050000_vpb_carry_back.sql` al,
+   en die was op staging al toegepast. De CLI kijkt alleen naar het nummer: deze
+   migratie was dan als "al gedaan" overgeslagen, zonder foutmelding, en de kolommen
+   hadden nooit bestaan.
+2. Daarna `20261104070000_…` — en terwijl dit werk klaarstond, rolde die andere
+   sessie `20261104070000_ib_prive_vennoten.sql` uit. Precies hetzelfde gat.
+3. Nu `20261104075000_gallery_layout.sql`: na de laatste op staging (`…070000`), en
+   níét het volgende ronde nummer van die reeks (`…080000`), zodat die gewoon kan
+   doorlopen.
+
+Vóór de push is de lijst toegepaste migraties op staging opgevraagd (Management API:
+231, laatste `20261104070000`). Wie na deze uitrol een migratie maakt: kies een
+nummer na `20261104075000`.
 
 ## Bewust niet gedaan
 

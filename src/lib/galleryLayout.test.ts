@@ -137,7 +137,7 @@ test('de kopie voor de edge functions is gelijk aan die van de app', () => {
 });
 
 test('de databasetrigger kent dezelfde keuzes en grenzen', () => {
-  const sql = readFileSync(new URL('../../supabase/migrations/20261104065000_gallery_layout.sql', import.meta.url), 'utf8');
+  const sql = readFileSync(new URL('../../supabase/migrations/20261104075000_gallery_layout.sql', import.meta.url), 'utf8');
   const block = sql.slice(sql.indexOf('-- layout-keuzes:begin'), sql.indexOf('-- layout-keuzes:eind'));
   const literals = [...block.matchAll(/'(\{[\s\S]*?\})'::jsonb/g)].map(m => JSON.parse(m[1]));
   assert.equal(literals.length, 2, 'twee lijsten: keuzes en getallen');
