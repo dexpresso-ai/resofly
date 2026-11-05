@@ -117,6 +117,18 @@ test('de accenttekst van de galerij wordt tegen de galerij gemeten', () => {
   }
 });
 
+test('de galerij krijgt leesbare tekst op de merkkleur en een eigen hovertint', () => {
+  // Zonder deze tokens stond de knoptekst in de galerij op het donkere inkt van
+  // ResoFly-goud (#1A1405) en werd een knop bij hover goud, wat het merk ook was.
+  for (const accentColor of ACCENTS) {
+    const style = brandStyle({ ...branding(accentColor, null), galleryBg: '#0B0B0B' }) as Record<string, string>;
+    assert.ok(contrastRatio(style['--on-accent'], accentColor) >= 4.5, `${accentColor}: ${style['--on-accent']}`);
+    assert.match(style['--accent-hover'], /^#[0-9A-F]{6}$/);
+    assert.notEqual(style['--accent-hover'], '#FFD467');
+    assert.equal(style['--accent-rgb'], [1, 3, 5].map(i => parseInt(accentColor.slice(i, i + 2), 16)).join(','));
+  }
+});
+
 test('opgeslagen huisstijl van de schijf wordt opnieuw gekeurd', () => {
   const clean = sanitizeStoredBranding({
     accentColor: '#2457C5',

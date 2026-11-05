@@ -39,6 +39,10 @@ import {
 import { nativeRowToBaseEvent } from './calendarAvailability.ts';
 import { cancelConflictingBookingSlots, cancelConflictingBookingSlotsForNativeEvent } from './meetingBookingSync.ts';
 import { takeEmailQuota } from './emailQuota.ts';
+// emailBrand.ts heeft zelf alleen pure imports (de sjabloonmap), dus geen
+// tweede keten zoals sendingDomain.ts die de boot van deze functie brak.
+import { loadEmailBrand, withEmailBrand, type EmailBrand } from './emailBrand.ts';
+import { EMAIL_LOGO_SLOT_LIGHT } from './emailTemplates/layout.ts';
 
 // ── Nieuwe-event-invoer normaliseren ────────────────────────────────────────
 
@@ -395,14 +399,14 @@ export async function applyAttendees(organizationId: string, source: CalendarSou
     await takeEmailQuota(supabaseAdmin, organizationId, current.length, (message) => new Error(message));
     const ics = buildEventIcs(eventRow, current, ctx, 'REQUEST');
     for (const att of current) {
-      await sendInviteEmail(ctx.from, att.email, `Uitnodiging: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'REQUEST').catch(err => console.error('invite send', att.email, err));
+      await sendInviteEmail(ctx.from, att.email, `Uitnodiging: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'REQUEST', ctx.brand).catch(err => console.error('invite send', att.email, err));
       await supabaseAdmin.from('calendar_event_attendees').update({ invited_at: new Date().toISOString(), last_sequence_sent: eventRow.sequence ?? 0 }).eq('id', att.id);
     }
   }
   if (removed.length) {
     const ics = buildEventIcs(eventRow, removed, ctx, 'CANCEL');
     for (const att of removed) {
-      await sendInviteEmail(ctx.from, att.email, `Geannuleerd: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'CANCEL').catch(err => console.error('cancel send', att.email, err));
+      await sendInviteEmail(ctx.from, att.email, `Geannuleerd: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'CANCEL', ctx.brand).catch(err => console.error('cancel send', att.email, err));
     }
   }
 }
@@ -416,11 +420,17 @@ export async function sendEventCancellations(organizationId: string, _source: Ca
   if (!ctx) return;
   const ics = buildEventIcs(eventRow, attendees, ctx, 'CANCEL');
   for (const att of attendees) {
-    await sendInviteEmail(ctx.from, att.email, `Geannuleerd: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'CANCEL').catch(err => console.error('cancel send', att.email, err));
+    await sendInviteEmail(ctx.from, att.email, `Geannuleerd: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'CANCEL', ctx.brand).catch(err => console.error('cancel send', att.email, err));
   }
 }
 
-interface OrganizerContext { from: string; organizerName: string; organizerEmail: string }
+interface OrganizerContext {
+  from: string;
+  organizerName: string;
+  organizerEmail: string;
+  /** Naam en logo bovenaan de uitnodiging; één keer geladen voor alle genodigden. */
+  brand?: EmailBrand;
+}
 
 async function buildOrganizerContext(organizationId: string, organizerToken: string): Promise<OrganizerContext | null> {
   const sender = await resolveOrgSender(organizationId);
@@ -429,7 +439,7 @@ async function buildOrganizerContext(organizationId: string, organizerToken: str
   const organizerEmail = MAIL_INBOUND_DOMAIN
     ? `organizer+${organizerToken}@${MAIL_INBOUND_DOMAIN}`
     : (sender.fromEmail || extractEmailFromAddr(sender.from));
-  return { from: sender.from, organizerName, organizerEmail };
+  return { from: sender.from, organizerName, organizerEmail, brand: await loadEmailBrand(supabaseAdmin, organizationId) };
 }
 
 // Inline afzender-resolutie (kopie van _shared/sendingDomain.ts) om een tweede
@@ -490,7 +500,11 @@ export function buildEventIcs(ev: NativeEventRow, attendees: AttendeeRow[], ctx:
   return lines.map(foldIcsLine).join('\r\n') + '\r\n';
 }
 
-export async function sendInviteEmail(from: string, to: string, subject: string, ev: NativeEventRow, ics: string, method: 'REQUEST' | 'CANCEL'): Promise<void> {
+/**
+ * `brand`: het logo bovenaan de uitnodiging (ingesloten, zie emailBrand.ts). De
+ * .ics blijft een gewone bijlage ernaast; het logo verandert daar niets aan.
+ */
+export async function sendInviteEmail(from: string, to: string, subject: string, ev: NativeEventRow, ics: string, method: 'REQUEST' | 'CANCEL', brand?: EmailBrand): Promise<void> {
   const when = ev.all_day
     ? new Intl.DateTimeFormat('nl-NL', { dateStyle: 'full', timeZone: 'Europe/Amsterdam' }).format(new Date(ev.starts_at))
     : new Intl.DateTimeFormat('nl-NL', { dateStyle: 'full', timeStyle: 'short', timeZone: 'Europe/Amsterdam' }).format(new Date(ev.starts_at));
@@ -498,7 +512,7 @@ export async function sendInviteEmail(from: string, to: string, subject: string,
     ? `De afspraak "${ev.title || 'Afspraak'}" is geannuleerd.`
     : `Je bent uitgenodigd voor "${ev.title || 'Afspraak'}".`;
   const text = `${intro}\n\nWanneer: ${when}${ev.location ? `\nLocatie: ${ev.location}` : ''}${ev.meeting_url && method !== 'CANCEL' ? `\nVideocall: ${ev.meeting_url}` : ''}`;
-  const html = `<p>${escapeHtmlBasic(intro)}</p><p><strong>Wanneer:</strong> ${escapeHtmlBasic(when)}</p>${ev.location ? `<p><strong>Locatie:</strong> ${escapeHtmlBasic(ev.location)}</p>` : ''}${ev.meeting_url && method !== 'CANCEL' ? `<p><strong>Videocall:</strong> <a href="${escapeHtmlBasic(ev.meeting_url)}">${escapeHtmlBasic(ev.meeting_url)}</a></p>` : ''}`;
+  const html = `${EMAIL_LOGO_SLOT_LIGHT}<p>${escapeHtmlBasic(intro)}</p><p><strong>Wanneer:</strong> ${escapeHtmlBasic(when)}</p>${ev.location ? `<p><strong>Locatie:</strong> ${escapeHtmlBasic(ev.location)}</p>` : ''}${ev.meeting_url && method !== 'CANCEL' ? `<p><strong>Videocall:</strong> <a href="${escapeHtmlBasic(ev.meeting_url)}">${escapeHtmlBasic(ev.meeting_url)}</a></p>` : ''}`;
   const payload = {
     from, to: [to], subject, text, html,
     attachments: [{ filename: 'invite.ics', content: base64Utf8(ics), content_type: `text/calendar; method=${method}; charset=utf-8` }],
@@ -506,7 +520,7 @@ export async function sendInviteEmail(from: string, to: string, subject: string,
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withEmailBrand(payload, brand)),
   });
   if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
 }

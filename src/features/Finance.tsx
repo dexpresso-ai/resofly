@@ -8,7 +8,7 @@ import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import type { FilterField } from '../components/SearchFilterPanel';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, total, lineGross } from '../lib/format';
-import { exportFinancePDF } from '../lib/pdf';
+import { exportFinancePDF, financePdfOptions } from '../lib/pdf';
 import { safeCheckoutUrl } from '../lib/safeUrl';
 import { clientEInvoiceChannel, invoiceRecipientFor, latestEInvoiceDelivery, mollieNeedsSync, mollieStatusLabel, peppolStatusLabel } from '../lib/eInvoicing';
 import { loadInvoicePdfSnapshot, loadMollieInvoicePdf } from '../lib/repository';
@@ -513,7 +513,7 @@ function QuoteTable({
                   <button type="button" className="att-btn" onClick={() => setSelectedQuoteId(quote.id)} title="Bekijk details"><Eye size={14}/></button>
                   {quoteHasStoredPdf(quote)
                     ? <button type="button" className="att-btn" onClick={() => onDownloadPdf?.(quote)} title="Download verzonden PDF"><Download size={14}/></button>
-                    : <button type="button" className="att-btn" onClick={() => { void exportFinancePDF(quote, 'quote', client, { company: data.companySettings, vatCodes: data.vatCodes }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt')); }} title="Download concept-PDF"><Download size={14}/></button>}
+                    : <button type="button" className="att-btn" onClick={() => { void exportFinancePDF(quote, 'quote', client, financePdfOptions(data, quote)).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt')); }} title="Download concept-PDF"><Download size={14}/></button>}
                 </td>
               </tr>;
             })}
@@ -664,7 +664,7 @@ function InvoiceTable({
                   <button type="button" className="att-btn" onClick={() => setSelectedInvoiceId(invoice.id)} title="Bekijk details"><Eye size={14}/></button>
                   {invoiceHasStoredPdf(invoice) && onDownloadPdf
                     ? <button type="button" className="att-btn" onClick={() => onDownloadPdf(invoice)} title="Download verzonden PDF"><Download size={14}/></button>
-                    : <button type="button" className="att-btn" onClick={() => { void exportFinancePDF(invoice, 'invoice', client, { company: data.companySettings, vatCodes: data.vatCodes }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt')); }} title="Download concept-PDF"><Download size={14}/></button>}
+                    : <button type="button" className="att-btn" onClick={() => { void exportFinancePDF(invoice, 'invoice', client, financePdfOptions(data, invoice)).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt')); }} title="Download concept-PDF"><Download size={14}/></button>}
                 </td>
               </tr>;
             })}
@@ -775,7 +775,7 @@ function QuoteDetailModal({
       <section className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Tijdlijn</span><strong>Alle workflow-events</strong></div></div><QuoteTimeline events={events} emptyText="Nog geen workflow-events." /></section>
       </div>
       <div className="finance-preview-pane">
-        <FinanceDocPreview doc={quote} kind="quote" client={client} company={data.companySettings} title="Offerte-voorbeeld" />
+        <FinanceDocPreview doc={quote} kind="quote" client={client} company={data.companySettings} vatCodes={data.vatCodes} projectName={financePdfOptions(data, quote).projectName} title="Offerte-voorbeeld" />
       </div>
     </div>
   </Modal>;
@@ -959,7 +959,7 @@ function InvoiceDetailModal({
       <section className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Audit-timeline</span><strong>Alle factuur-events</strong></div></div><InvoiceTimeline events={events} emptyText="Nog geen factuur-events." /></section>
       </div>
       <div className="finance-preview-pane">
-        <FinanceDocPreview doc={invoice} kind="invoice" client={client} company={data.companySettings} title="Factuur-voorbeeld" sentPdf={sentPdf} />
+        <FinanceDocPreview doc={invoice} kind="invoice" client={client} company={data.companySettings} vatCodes={data.vatCodes} projectName={financePdfOptions(data, invoice).projectName} quoteNumber={financePdfOptions(data, invoice).quoteNumber} title="Factuur-voorbeeld" sentPdf={sentPdf} />
       </div>
     </div>
   </Modal>;

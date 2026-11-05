@@ -9,6 +9,8 @@ import { issueRecipientLink, loadCompanyForMail, recordTransferEvent } from '../
 import { domainParents, domainsOverlap, normalizeDomainName, senderDomain } from '../_shared/domainOverlap.ts';
 import { assertTeamTestRecipient } from '../_shared/testRecipient.ts';
 import { takeEmailQuota } from '../_shared/emailQuota.ts';
+import { accentOnDark, brandNameLine, EMAIL_CARD, EMAIL_LOGO_SLOT_DARK, EMAIL_LOGO_SLOT_SIGNATURE, sanitizeAccentColor, textOnAccent } from '../_shared/emailTemplates/layout.ts';
+import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
@@ -267,15 +269,16 @@ async function sendTestEmail(
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new MailHttpError(message, status));
+  // Ook de testmail met het logo: zo zie je meteen hoe het in je eigen inbox staat.
   const resendPayload = await sendViaResend(
-    {
+    withEmailBrand({
       from: sender.from,
       to: [recipientEmail],
       reply_to: sender.replyTo,
       subject,
       html,
       text,
-    },
+    }, await loadEmailBrand(supabaseAdmin, organizationId)),
     `mail-test-${sanitizeIdempotencyPart(organizationId)}-${crypto.randomUUID()}`,
   );
 
@@ -335,7 +338,9 @@ async function sendClientPortalWelcome(
   const recipientName = String(client.contact_name || client.name || '').trim();
 
   const subject = `Welkom bij ${organizationName} — je klantportaal staat klaar`;
-  const html = buildClientWelcomeHtml({ organizationName, recipientName, recipientEmail, portalUrl });
+  // De welkomstmail is het eerste wat een klant van het portaal ziet: in de
+  // merkkleur van de organisatie, niet in het goud van ResoFly.
+  const html = buildClientWelcomeHtml({ organizationName, recipientName, recipientEmail, portalUrl, accentColor: company?.brand_accent_color ?? null });
   const text = buildClientWelcomeText({ organizationName, recipientName, recipientEmail, portalUrl });
 
   const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
@@ -343,14 +348,14 @@ async function sendClientPortalWelcome(
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new MailHttpError(message, status));
   const resendPayload = await sendViaResend(
-    {
+    withEmailBrand({
       from: sender.from,
       to: [recipientEmail],
       reply_to: sender.replyTo,
       subject,
       html,
       text,
-    },
+    }, await loadEmailBrand(supabaseAdmin, organizationId)),
     `client-welcome-${sanitizeIdempotencyPart(organizationId)}-${sanitizeIdempotencyPart(clientId)}`,
   );
 
@@ -393,6 +398,7 @@ function resolvePortalBaseUrl(req: Request): string {
 }
 
 function buildClientWelcomeHtml(input: {
+  accentColor?: string | null;
   organizationName: string;
   recipientName: string;
   recipientEmail: string;
@@ -402,15 +408,16 @@ function buildClientWelcomeHtml(input: {
   const org = escapeHtml(input.organizationName);
   const email = escapeHtml(input.recipientEmail);
   const url = escapeHtml(input.portalUrl);
+  const accent = sanitizeAccentColor(input.accentColor);
 
   return `<!doctype html>
 <html>
   <body style="margin:0;background:#111111;font-family:Arial,sans-serif;color:#f5f5f5;">
     <div style="max-width:640px;margin:0 auto;padding:32px 20px;">
-      <div style="background:#1b1b1f;border:1px solid #303038;border-radius:24px;padding:28px;">
-        <p style="margin:0 0 8px;color:#FFD966;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
+      <div style="background:${EMAIL_CARD};border:1px solid #303038;border-radius:24px;padding:28px;">
+        ${EMAIL_LOGO_SLOT_DARK}${brandNameLine(`<p style="margin:0 0 8px;color:${accentOnDark(accent)};font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
           ${org}
-        </p>
+        </p>`)}
 
         <h1 style="margin:0 0 16px;font-size:26px;line-height:1.2;color:#ffffff;">
           Welkom in je klantportaal
@@ -427,7 +434,7 @@ function buildClientWelcomeHtml(input: {
           (<strong>${email}</strong>) in. Je ontvangt dan een veilige inloglink in je mailbox.
         </p>
 
-        <a href="${url}" style="display:inline-block;background:#FFD966;color:#1a1a1a;text-decoration:none;font-weight:bold;font-size:15px;padding:13px 22px;border-radius:10px;">
+        <a href="${url}" style="display:inline-block;background:${accent};color:${textOnAccent(accent)};text-decoration:none;font-weight:bold;font-size:15px;padding:13px 22px;border-radius:10px;">
           Open het klantportaal
         </a>
 
@@ -524,14 +531,14 @@ async function sendTeamInvitation(
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new MailHttpError(message, status));
   const resendPayload = await sendViaResend(
-    {
+    withEmailBrand({
       from: sender.from,
       to: [recipientEmail],
       reply_to: sender.replyTo,
       subject,
       html,
       text,
-    },
+    }, await loadEmailBrand(supabaseAdmin, organizationId)),
     `team-invite-${sanitizeIdempotencyPart(invitationId)}-${sanitizeIdempotencyPart(invitation.updated_at)}`,
   );
 
@@ -635,9 +642,9 @@ function buildTeamInvitationHtml(input: {
   <body style="margin:0;background:#111111;font-family:Arial,sans-serif;color:#f5f5f5;">
     <div style="max-width:640px;margin:0 auto;padding:32px 20px;">
       <div style="background:#1b1b1f;border:1px solid #303038;border-radius:24px;padding:28px;">
-        <p style="margin:0 0 8px;color:#FFD966;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
+        ${EMAIL_LOGO_SLOT_DARK}${brandNameLine(`<p style="margin:0 0 8px;color:#FFD966;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
           ${org}
-        </p>
+        </p>`)}
 
         <h1 style="margin:0 0 16px;font-size:26px;line-height:1.2;color:#ffffff;">
           ${heading}
@@ -898,7 +905,7 @@ async function sendClientEmail(
   let providerEmailId = '';
   try {
     const resendPayload = await sendViaResend(
-      {
+      withEmailBrand({
         from: sender.from,
         to: [recipientEmail],
         reply_to: replyTo,
@@ -916,7 +923,7 @@ async function sendClientEmail(
             ]
             : []),
         ],
-      },
+      }, await loadEmailBrand(supabaseAdmin, organizationId)),
       `client-email-${sanitizeIdempotencyPart(clientEmailId)}`,
     );
     providerEmailId = String(resendPayload.id || resendPayload.email_id || '').trim();
@@ -1045,6 +1052,10 @@ async function finishTransferAfterMail(input: {
 
 function buildClientEmailHtml(input: { organizationName: string; bodyHtml: string }): string {
   const org = escapeHtml(input.organizationName);
+  // Een persoonlijk bericht, geen nieuwsbrief: het logo staat onder de tekst,
+  // als een handtekening, in plaats van de naam (zie _shared/emailBrand.ts).
+  // De body is gesaneerd (geen HTML-commentaar), dus het merkteken hieronder is
+  // het enige in de mail.
   return `<!doctype html>
 <html>
   <body style="margin:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
@@ -1052,7 +1063,7 @@ function buildClientEmailHtml(input: { organizationName: string; bodyHtml: strin
       <div style="background:#ffffff;border:1px solid #e4e4e7;border-radius:14px;padding:28px;line-height:1.6;font-size:15px;">
         ${input.bodyHtml}
       </div>
-      <p style="margin:14px 4px 0;color:#8a8a92;font-size:12px;line-height:1.5;">${org}</p>
+      ${EMAIL_LOGO_SLOT_SIGNATURE}${brandNameLine(`<p style="margin:14px 4px 0;color:#8a8a92;font-size:12px;line-height:1.5;">${org}</p>`)}
     </div>
   </body>
 </html>`;
@@ -1484,10 +1495,10 @@ async function loadOrganization(
 
 async function loadCompanySettings(
   organizationId: string,
-): Promise<{ company_name: string; trade_name: string | null } | null> {
+): Promise<{ company_name: string; trade_name: string | null; brand_accent_color?: string | null } | null> {
   const { data, error } = await supabaseAdmin
     .from('company_settings')
-    .select('company_name,trade_name')
+    .select('company_name,trade_name,brand_accent_color')
     .eq('organization_id', organizationId)
     .maybeSingle();
 
@@ -1498,6 +1509,7 @@ async function loadCompanySettings(
   return (data ?? null) as {
     company_name: string;
     trade_name: string | null;
+    brand_accent_color?: string | null;
   } | null;
 }
 
@@ -1513,9 +1525,9 @@ function buildTestEmailHtml(input: {
   <body style="margin:0;background:#111111;font-family:Arial,sans-serif;color:#f5f5f5;">
     <div style="max-width:640px;margin:0 auto;padding:32px 20px;">
       <div style="background:#1b1b1f;border:1px solid #303038;border-radius:24px;padding:28px;">
-        <p style="margin:0 0 8px;color:#FFD966;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
+        ${EMAIL_LOGO_SLOT_DARK}${brandNameLine(`<p style="margin:0 0 8px;color:#FFD966;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
           ${organizationName}
-        </p>
+        </p>`)}
 
         <h1 style="margin:0 0 16px;font-size:28px;line-height:1.15;color:#ffffff;">
           Resend is gekoppeld 🚀

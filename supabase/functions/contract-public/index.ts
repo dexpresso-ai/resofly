@@ -3,6 +3,7 @@ import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
+import { loadEmailBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 import { renderContractPdf, appendSignaturePagesToPdf, bytesToBase64, sha256HexBytes, type PdfSignature } from '../_shared/contractPdf.ts';
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
 import { toPublicTimeline } from '../_shared/publicTimeline.ts';
@@ -347,6 +348,8 @@ async function sendConfirmationEmails(
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, contract.organization_id, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   const attachPdf = pdf !== null && pdf.sizeBytes <= CONTRACT_PDF_MAX_ATTACHMENT_BYTES;
   const portalUrl = APP_PUBLIC_URL ? `${APP_PUBLIC_URL}/portal` : null;
+  // Het logo van de organisatie van dit contract, voor beide mails.
+  const brand = await loadEmailBrand(supabaseAdmin, contract.organization_id);
 
   // Klantbevestiging (met getekend PDF als bijlage).
   const content = await loadContractEmailContent(contract.organization_id, 'contract.signed.client');
@@ -369,6 +372,7 @@ async function sendConfirmationEmails(
     text: clientEmail.text,
     attachments: attachPdf && pdf ? [{ filename: pdf.fileName, content: pdf.base64 }] : undefined,
     tags: contractTags(contract, 'contract_signed_client'),
+    brand,
   }).then(() => insertEvent(contract.organization_id, contract.id, 'email_sent', 'Bevestiging naar klant verstuurd'))
     .catch((e) => console.error('client confirmation send failed', describeError(e)));
 
@@ -393,6 +397,7 @@ async function sendConfirmationEmails(
       html: internalEmail.html,
       text: internalEmail.text,
       tags: contractTags(contract, 'contract_signed_internal'),
+      brand,
     }).catch((e) => console.error('internal notification send failed', describeError(e)));
   }
 }
@@ -407,6 +412,7 @@ async function sendResend(input: {
   text: string;
   attachments?: Array<{ filename: string; content: string }>;
   tags: Array<{ name: string; value: string }>;
+  brand: EmailBrand;
 }): Promise<void> {
   // Quotum per organisatie (20261101050000). De handtekening staat al vast;
   // is het quotum op, dan blijft alleen deze bevestiging achterwege.
@@ -424,7 +430,7 @@ async function sendResend(input: {
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withEmailBrand(payload, input.brand)),
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => response.statusText);

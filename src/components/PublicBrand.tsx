@@ -88,7 +88,8 @@ export function useLogoInk(src: string | null | undefined): { ink: string | null
 export function BrandMark({ branding, name, on, className = '' }: {
   branding: BrandingPayload | null | undefined;
   name: string;
-  on: 'header' | 'surface';
+  /** Waar het merk op staat: de kop, een kaart, of de achtergrond van de galerij. */
+  on: 'header' | 'surface' | 'gallery';
   className?: string;
 }) {
   const backgrounds = useMemo(() => {
@@ -96,6 +97,9 @@ export function BrandMark({ branding, name, on, className = '' }: {
       const header = headerTheme(branding);
       return [header.top, header.mid];
     }
+    // De galerij heeft een eigen achtergrond (standaard bijna zwart). Daar
+    // stond het logo los op, en een donker logo viel er helemaal weg.
+    if (on === 'gallery') return [/^#[0-9A-Fa-f]{6}$/.test(branding?.galleryBg ?? '') ? branding!.galleryBg! : '#0B0B0B'];
     return [brandThemeVars(branding)['--surface']];
   }, [branding, on]);
   const dark = isDarkSurface(backgrounds[backgrounds.length - 1]);
@@ -114,6 +118,22 @@ export function BrandMark({ branding, name, on, className = '' }: {
   >
     <img src={src} alt={branding?.companyName || name} />
   </span>;
+}
+
+/**
+ * De titel van het tabblad op een publieke pagina die geen volledig thema
+ * krijgt (galerij, gedeeld bestand, verstuurde bestanden). Daar stond
+ * "ResoFly Werkruimte" boven de pagina van een ander. Zet hem terug bij het
+ * verlaten.
+ */
+export function usePublicPageTitle(pageName: string, companyName: string | null | undefined): void {
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const before = document.title;
+    const name = String(companyName ?? '').trim();
+    document.title = name ? `${pageName} · ${name}` : pageName;
+    return () => { document.title = before; };
+  }, [pageName, companyName]);
 }
 
 /** Afsluiting van de leverancier, met "Geleverd via ResoFly" tenzij uitgezet. */

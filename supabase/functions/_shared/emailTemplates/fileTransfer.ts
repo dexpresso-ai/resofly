@@ -1,5 +1,5 @@
 import { fieldOr, optionalFieldOr, renderContentHtml, renderContentText, type TemplateVars } from './content.ts';
-import { escapeHtml, renderEmailLayout, sanitizeAccentColor, textLines } from './layout.ts';
+import { accentOnDark, escapeHtml, renderEmailLayout, sanitizeAccentColor, textLines, textOnAccent } from './layout.ts';
 import type {
   FileTransferCodeEmailInput,
   FileTransferEmailInput,
@@ -86,6 +86,7 @@ export function renderFileTransferEmail(input: FileTransferEmailInput): Rendered
       accentColor: input.company?.invoice_accent_color,
       introHtml: `<p style="margin:0;">${introHtml}</p>`,
       bodyHtml: renderSummary({
+        accent: input.company?.invoice_accent_color ?? null,
         countSentence,
         totalSize,
         expiry,
@@ -122,6 +123,7 @@ export function renderFileTransferEmail(input: FileTransferEmailInput): Rendered
 }
 
 function renderSummary(input: {
+  accent: string | null;
   countSentence: string;
   totalSize: string;
   expiry: string;
@@ -135,7 +137,8 @@ function renderSummary(input: {
   ].filter(Boolean).join('<br/>');
 
   const note = input.personalNote
-    ? `<div style="border-left:3px solid #FFD966;padding:2px 0 2px 14px;margin:18px 0 0;color:#d8d8df;line-height:1.6;"><span style="color:#9b9ba7;font-size:13px;">Bericht van ${escapeHtml(input.senderName)}</span><br/>${escapeHtml(input.personalNote).replace(/\r?\n/g, '<br/>')}</div>`
+    // De streep in de merkkleur van de afzender; dit stond vast op ResoFly-goud.
+    ? `<div style="border-left:3px solid ${accentOnDark(sanitizeAccentColor(input.accent), '#121215')};padding:2px 0 2px 14px;margin:18px 0 0;color:#d8d8df;line-height:1.6;"><span style="color:#9b9ba7;font-size:13px;">Bericht van ${escapeHtml(input.senderName)}</span><br/>${escapeHtml(input.personalNote).replace(/\r?\n/g, '<br/>')}</div>`
     : '';
 
   return `<div style="background:#121215;border:1px solid #2a2a31;border-radius:18px;padding:18px;margin:18px 0;">
@@ -165,7 +168,7 @@ export function renderFileTransferCodeEmail(input: FileTransferCodeEmailInput): 
       accentColor: input.accentColor,
       introHtml: '<p style="margin:0;">Vul deze code in op de pagina met de bestanden.</p>',
       bodyHtml: `<div style="background:#121215;border:1px solid #2a2a31;border-radius:18px;padding:22px;margin:18px 0;text-align:center;">
-        <p style="margin:0;font-size:34px;letter-spacing:.18em;font-weight:700;color:${accent};font-family:'Courier New',Courier,monospace;">${escapeHtml(spaced)}</p>
+        <p style="margin:0;font-size:34px;letter-spacing:.18em;font-weight:700;color:${accentOnDark(accent, '#121215')};font-family:'Courier New',Courier,monospace;">${escapeHtml(spaced)}</p>
         <p style="margin:10px 0 0;color:#9b9ba7;font-size:13px;">Geldig voor ${minutes} minuten, en maar één keer te gebruiken.</p>
       </div>`,
       footerHtml: 'Heb je dit niet zelf aangevraagd? Dan hoef je niets te doen: zonder deze code komt niemand bij de bestanden.',
@@ -200,7 +203,7 @@ export function renderTransferBlockHtml(input: {
   return `<div style="margin:22px 0 0;border:1px solid #e4e4e7;border-radius:12px;padding:16px 18px;background:#fafafa;">
   <p style="margin:0 0 4px;font-weight:700;color:#1a1a1a;">Bijgevoegde bestanden</p>
   <p style="margin:0 0 12px;color:#52525b;font-size:14px;">${escapeHtml(summary)}</p>
-  <p style="margin:0;"><a href="${escapeHtml(input.url)}" style="display:inline-block;background:${accent};color:#111111;text-decoration:none;font-weight:700;padding:10px 16px;border-radius:10px;">Bestanden bekijken</a></p>
+  <p style="margin:0;"><a href="${escapeHtml(input.url)}" style="display:inline-block;background:${accent};color:${textOnAccent(accent)};text-decoration:none;font-weight:700;padding:10px 16px;border-radius:10px;">Bestanden bekijken</a></p>
   <p style="margin:12px 0 0;color:#71717a;font-size:12px;line-height:1.5;">Je opent ze met een code die we naar dit e-mailadres sturen. De link is persoonlijk; stuur hem niet door. Werkt de knop niet? ${escapeHtml(input.url)}</p>
 </div>`;
 }

@@ -6,6 +6,7 @@ import {
 } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/types.ts';
+import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 
 // ============================================================
@@ -572,6 +573,8 @@ async function sendShareEmail(input: {
     return { ok: false, error: 'Deze werkruimte heeft de grens voor e-mail bereikt. De deellink staat klaar; stuur hem later opnieuw.' };
   }
   try {
+    // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
+    const brand = await loadEmailBrand(admin, input.share.organization_id);
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -579,7 +582,7 @@ async function sendShareEmail(input: {
         'Content-Type': 'application/json',
         'Idempotency-Key': sanitizeIdempotencyKey(`file-share-${input.share.id}-${input.share.updated_at ?? ''}`),
       },
-      body: JSON.stringify({
+      body: JSON.stringify(withEmailBrand({
         from: input.sender.from,
         to: [to],
         reply_to: input.sender.replyTo,
@@ -590,7 +593,7 @@ async function sendShareEmail(input: {
           { name: 'organization_id', value: sanitizeTagValue(input.share.organization_id) },
           { name: 'template_key', value: 'file_shared' },
         ],
-      }),
+      }, brand)),
     });
     if (!response.ok) {
       const text = await response.text();

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
+import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, LayoutTemplate, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BrandStudio } from './BrandStudio';
+import { DocumentLayoutEditor } from './DocumentLayoutEditor';
+import { parseDocumentLayouts, serializeDocumentLayouts } from '../lib/documentLayout';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
@@ -23,14 +25,6 @@ import { isAccountantRole, LEVEL_LABELS, MODULES, parseModuleAccess, type Module
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
-const TEMPLATE_FIELD_LABELS = [
-  'Bedrijfsnaam, adres, e-mail, telefoon, website',
-  'KvK, BTW-nummer en IBAN',
-  'Klantnaam, contactpersoon, e-mail en telefoon',
-  'Factuur-/offertenummer, datum en vervaldatum/geldig tot',
-  'Regels met omschrijving, aantal, prijs, BTW en totaal',
-  'Subtotaal, BTW, totaalbedrag, notities en betaaltekst',
-];
 
 const emptySettings: CompanySettingsInput = {
   company_name: '',
@@ -74,6 +68,7 @@ const emptySettings: CompanySettingsInput = {
   brand_client_theme: 'dark',
   brand_header_color: null,
   brand_logo_dark_data_url: null,
+  document_layouts: null,
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -84,7 +79,7 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   accountant: 'Boekhouder',
 };
 
-export type SettingsTab = 'organisatie' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
+export type SettingsTab = 'organisatie' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'documenten' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
 
 /** De boekhouder ziet alleen wat bij de financiën hoort, en dan alleen-lezen. */
 export const ACCOUNTANT_SETTINGS_TABS: SettingsTab[] = ['organisatie', 'facturatie', 'boekhouding'];
@@ -154,10 +149,11 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
   { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
   { id: 'klantvelden', label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
-  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en afsluiting op alles wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
+  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en lettertypen op wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s, je offerte- en factuur-PDF\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
+  { id: 'documenten', label: 'Documentopmaak', Icon: LayoutTemplate, description: 'Sleep de gegevens van je offertes en facturen naar de plek waar jij ze wilt hebben, of kies een kant-en-klaar sjabloon. Je klant krijgt precies de PDF die je hier ziet.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
   { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
-  { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
+  { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens en betaalteksten die op je facturen en offertes verschijnen. De opmaak en het briefpapier staan bij Documentopmaak.' },
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
   { id: 'boekhouder', label: 'Boekhouder', Icon: Calculator, description: 'Geef je boekhouder of accountant een gratis gastaccount dat alleen je financiën kan inzien — niets wijzigen, geen klantdossiers of projecten.' },
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
@@ -1098,8 +1094,11 @@ function formFromTemplate(meta: typeof EMAIL_TEMPLATES[number], row: EmailTempla
 /** Vraag om een bepaalde e-mail in de editor te openen (nonce: ook twee keer dezelfde). */
 type EmailTemplateFocus = { key: EmailTemplateKey; nonce: number };
 
+/** Het logo uit Huisstijl, voor het mailvoorbeeld (de mail zelf krijgt het via _shared/emailBrand.ts). */
+type MailLogoProps = { logo?: string | null; logoOnDark?: string | null };
+
 /** "Meldingen aan klanten" en de e-mailteksten, met een knop van het één naar het ander. */
-function ClientMailCards({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+function ClientMailCards({ organizationId, canAdmin, logo, logoOnDark }: { organizationId: string; canAdmin: boolean } & MailLogoProps) {
   const [focus, setFocus] = useState<EmailTemplateFocus | null>(null);
   return <>
     <PortalNotificationsCard
@@ -1107,11 +1106,27 @@ function ClientMailCards({ organizationId, canAdmin }: { organizationId: string;
       canAdmin={canAdmin}
       onEditTexts={() => setFocus(prev => ({ key: 'portal.ticket.reply', nonce: (prev?.nonce ?? 0) + 1 }))}
     />
-    <EmailTemplatesCard organizationId={organizationId} canAdmin={canAdmin} focus={focus} />
+    <EmailTemplatesCard organizationId={organizationId} canAdmin={canAdmin} focus={focus} logo={logo} logoOnDark={logoOnDark} />
   </>;
 }
 
-function EmailTemplatesCard({ organizationId, canAdmin, focus }: { organizationId: string; canAdmin: boolean; focus?: EmailTemplateFocus | null }) {
+/**
+ * Het logo bovenaan het voorbeeld, zoals in de mail: de mails hebben een
+ * donkere kaart, dus de lichte versie als die er is, anders het logo op een wit
+ * plaatje. WebP gaat niet mee in de mail (Outlook toont het niet), dus ook niet
+ * in het voorbeeld.
+ */
+function MailPreviewLogo({ logo, logoOnDark }: MailLogoProps) {
+  const usable = (value?: string | null) => (value && /^data:image\/(png|jpeg);base64,/.test(value) ? value : null);
+  const onDark = usable(logoOnDark);
+  const plain = usable(logo);
+  if (!onDark && !plain) {
+    return <p className="email-preview-structural">— Bovenaan staat je bedrijfsnaam. Zet een logo in Huisstijl, dan staat daar je logo.</p>;
+  }
+  return <div className={`email-preview-logo${onDark ? ' on-dark' : ''}`}><img src={onDark ?? plain ?? undefined} alt="Je logo" /></div>;
+}
+
+function EmailTemplatesCard({ organizationId, canAdmin, focus, logo, logoOnDark }: { organizationId: string; canAdmin: boolean; focus?: EmailTemplateFocus | null } & MailLogoProps) {
   const cardRef = useRef<HTMLElement>(null);
   const [rows, setRows] = useState<Record<string, EmailTemplate>>({});
   const [loaded, setLoaded] = useState(false);
@@ -1254,6 +1269,7 @@ function EmailTemplatesCard({ organizationId, canAdmin, focus }: { organizationI
         <div className="email-preview-box">
           <div className="email-preview-subject">{fillPlaceholders(form.subject || meta.defaults.subject) || '(geen onderwerp)'}</div>
           <div className="email-preview-body">
+            <MailPreviewLogo logo={logo} logoOnDark={logoOnDark} />
             {fillPlaceholders(form.intro || meta.defaults.intro).split('\n').map((line, i) => <p key={i}>{line || ' '}</p>)}
             <p className="email-preview-structural">— Hier vult ResoFly automatisch {meta.group === 'booking'
               ? 'de gekozen tijden, de videocall-link en je begeleidende tekst'
@@ -1722,8 +1738,10 @@ export function Settings({
     try {
       await onSave(cleanSettingsInput(form));
       setMessage(activeTab === 'huisstijl'
-        ? 'Huisstijl opgeslagen. Het klantportaal en je offerte-, factuur- en contractpagina\'s gebruiken hem direct.'
-        : 'Bedrijfsinstellingen opgeslagen. Nieuwe factuur-PDFs gebruiken deze gegevens direct.');
+        ? 'Huisstijl opgeslagen. Het klantportaal, je offerte-, factuur- en contractpagina\'s en je PDF\'s gebruiken hem direct.'
+        : activeTab === 'documenten'
+          ? 'Opmaak opgeslagen. Nieuwe offertes en facturen krijgen hem direct; wat al verstuurd is, blijft zoals het was.'
+          : 'Bedrijfsinstellingen opgeslagen. Nieuwe factuur-PDFs gebruiken deze gegevens direct.');
     } catch (error) {
       setTemplateError(error instanceof Error ? error.message : 'Bedrijfsinstellingen opslaan mislukt.');
     } finally {
@@ -2404,6 +2422,23 @@ export function Settings({
       <BrandStudio form={form} setForm={setForm} canWrite={canAdminOrganization} />
     </div>}
 
+    {activeTab === 'documenten' && <div className="settings-tab-panel">
+      <div className="settings-save-bar">
+        <p className="settings-help">Je offertes en facturen zoals je klant ze krijgt. Het blad verandert meteen mee; nieuwe documenten krijgen de opmaak pas na Opslaan.</p>
+        <Button variant="primary" onClick={save} disabled={isSaving || !canAdminOrganization}>{isSaving ? 'Opslaan…' : 'Opslaan'}</Button>
+      </div>
+      {message && <div className="success">{message}</div>}
+      {templateError && <div className="error">{templateError}</div>}
+      <DocumentLayoutEditor
+        form={form}
+        setForm={setForm}
+        canWrite={canAdminOrganization}
+        onLetterheadSelected={file => { void onTemplateSelected(file); }}
+        onLetterheadRemoved={removeTemplate}
+        onOpenBrand={() => setActiveTab('huisstijl')}
+      />
+    </div>}
+
     {activeTab === 'facturatie' && <div className="settings-tab-panel">
     <div className="settings-save-bar">
       <p className="settings-help">Wijzigingen aan bedrijfsgegevens, factuurtemplate en betaalteksten worden pas actief nadat je ze opslaat. Nieuwe factuur-PDFs gebruiken deze gegevens direct.</p>
@@ -2469,119 +2504,28 @@ export function Settings({
       })()}
     </section>
 
+    {/* De opmaak, het briefpapier en de stijl van de PDF staan sinds november
+        2026 bij Documentopmaak. Hier stond een nagebouwd HTML-voorbeeld dat
+        niet leek op de PDF die de klant kreeg. */}
     <section className="settings-card">
-      <h3>Factuurtemplate &amp; stijl</h3>
-      <p className="settings-help">Upload een eigen A4 afbeelding of PDF als achtergrond. Stel de tekstkleur, accentkleur en lettergrootte in — alle wijzigingen zijn direct zichtbaar in het voorbeeld hieronder.</p>
-      <div className="field-list">
-        {TEMPLATE_FIELD_LABELS.map(label => <span key={label}>{label}</span>)}
-      </div>
-      <div className="template-upload-row">
-        <input type="file" accept="application/pdf,image/png,image/jpeg" onChange={e => { void onTemplateSelected(e.target.files?.[0]); e.currentTarget.value = ''; }} />
-        {form.invoice_template_file_name && <Button variant="danger" onClick={removeTemplate}>Template verwijderen</Button>}
-      </div>
-      {form.invoice_template_file_name ? (
-        <div className="template-meta">
-          <div className="template-meta-row">
-            <div>
-              <strong>{form.invoice_template_file_name}</strong>
-              <span>{form.invoice_template_kind === 'pdf' ? 'PDF-template' : 'Afbeelding-template'} · {Math.round((form.invoice_template_file_size || 0) / 1024)} KB</span>
-            </div>
-            {form.invoice_template_kind === 'image' && form.invoice_template_data_url && (
-              <img src={form.invoice_template_data_url} alt="Template voorvertoning" className="template-thumb" />
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="template-meta muted">Nog geen template ingesteld. Zonder template gebruikt ResoFly een nette standaardfactuur.</div>
-      )}
-
-      <div className="invoice-style-grid">
-        <div className="invoice-style-controls">
-          <div className="color-setting">
-            <span className="style-label">Tekstkleur</span>
-            <div className="color-input-pair">
-              <input
-                type="color"
-                className="color-dot-input"
-                value={/^#[0-9a-f]{6}$/i.test(form.invoice_template_text_color ?? '') ? (form.invoice_template_text_color as string) : '#1a1a1a'}
-                onChange={e => set('invoice_template_text_color', e.target.value)}
-              />
-              <Input value={form.invoice_template_text_color ?? '#1a1a1a'} onChange={e => set('invoice_template_text_color', e.target.value)} placeholder="#1a1a1a" />
-            </div>
-          </div>
-          {/* De accentkleur is de merkkleur en heeft één bewerkplek: Huisstijl.
-              Hier alleen tonen wat je krijgt, zodat het voorbeeld klopt. */}
-          <div className="color-setting">
-            <span className="style-label">Merkkleur</span>
-            <div className="color-input-pair brand-locked">
-              <span className="brand-locked-dot" style={{ background: form.brand_accent_color || '#FFD966' }} aria-hidden="true" />
-              <span className="brand-locked-value">{form.brand_accent_color || '#FFD966'}</span>
-              <button type="button" className="gal-linkbtn" onClick={() => setActiveTab('huisstijl')}>
-                Wijzigen bij Huisstijl
-              </button>
-            </div>
-          </div>
-          <div className="font-size-setting">
-            <span className="style-label">Lettergrootte — {form.invoice_font_size ?? 10}pt</span>
-            <div className="font-size-row">
-              <span className="font-size-bound">8</span>
-              <input
-                type="range"
-                min="8"
-                max="14"
-                step="1"
-                value={form.invoice_font_size ?? 10}
-                onChange={e => set('invoice_font_size', Number(e.target.value))}
-                className="font-size-slider"
-              />
-              <span className="font-size-bound">14</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="invoice-preview-wrap">
-          <span className="style-label">Voorbeeld</span>
-          <div
-            className="invoice-preview-card"
-            style={{ color: form.invoice_template_text_color ?? '#1a1a1a', fontSize: `${form.invoice_font_size ?? 10}px` }}
-          >
-            <div className="invoice-preview-accent-bar" style={{ background: form.brand_accent_color ?? '#FFD966' }} />
-            <div className="invoice-preview-body">
-              <div className="invoice-preview-header-row">
-                <div>
-                  <div style={{ fontSize: `${(form.invoice_font_size ?? 10) + 6}px`, fontWeight: 700, marginBottom: 2 }}>
-                    {form.company_name || 'Uw Bedrijfsnaam'}
-                  </div>
-                  <div style={{ opacity: 0.5, fontSize: `${Math.max(7, (form.invoice_font_size ?? 10) - 1)}px` }}>
-                    Straatnaam 1 · 1234 AB Amsterdam
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: `${(form.invoice_font_size ?? 10) + 12}px`, fontWeight: 800, lineHeight: 1.1 }}>FACTUUR</div>
-                  <div style={{ opacity: 0.5, fontSize: `${Math.max(7, (form.invoice_font_size ?? 10) - 1)}px` }}>Nummer: 2025-001</div>
-                </div>
-              </div>
-              <div style={{ height: 1.5, background: form.brand_accent_color ?? '#FFD966', margin: '6px 0' }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>Werkzaamheden Q1 2025</span>
-                <span style={{ fontWeight: 600 }}>EUR 1.000,00</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.5, fontSize: `${Math.max(7, (form.invoice_font_size ?? 10) - 1)}px` }}>
-                <span>BTW 21%</span>
-                <span>EUR 210,00</span>
-              </div>
-              <div style={{ borderTop: `1.5px solid ${form.brand_accent_color ?? '#FFD966'}`, marginTop: 6, paddingTop: 6, display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: `${(form.invoice_font_size ?? 10) + 2}px` }}>
-                <span>Totaal</span>
-                <span>EUR 1.210,00</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <h3>Opmaak van je offertes en facturen</h3>
+      <p className="settings-help">
+        {(() => {
+          const layouts = parseDocumentLayouts(form.document_layouts);
+          const own = [layouts.invoice ? 'facturen' : '', layouts.quote ? 'offertes' : ''].filter(Boolean);
+          const paper = form.invoice_template_kind !== 'none' && form.invoice_template_data_url ? ' met je eigen briefpapier' : '';
+          return own.length > 0
+            ? `Je ${own.join(' en ')} hebben een eigen opmaak${paper}.`
+            : `Je offertes en facturen gebruiken de standaardopmaak van ResoFly${paper}, met je logo en merkkleur.`;
+        })()}{' '}
+        Sleep de velden zelf naar hun plek, kies een sjabloon of zet je briefpapier eronder.
+      </p>
+      <div><Button onClick={() => setActiveTab('documenten')}>Opmaak bewerken</Button></div>
     </section>
 
     <section className="settings-card">
       <h3>Betaling en footer</h3>
+      <p className="settings-help">De betaaltekst staat onder de totalen van je facturen; de footertekst onderaan je offertes, facturen en contracten.</p>
       <Textarea value={form.invoice_payment_terms ?? ''} onChange={e=>set('invoice_payment_terms', e.target.value)} placeholder="Betaalinstructies" />
       <Textarea value={form.invoice_footer ?? ''} onChange={e=>set('invoice_footer', e.target.value)} placeholder="Footertekst" />
     </section>
@@ -2962,7 +2906,7 @@ export function Settings({
     {activeOrganization && <InvoiceInboxCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <PersonalSenderCard organizationId={activeOrganization.id} />}
-    {activeOrganization && <ClientMailCards organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
+    {activeOrganization && <ClientMailCards organizationId={activeOrganization.id} canAdmin={canAdminOrganization} logo={form.brand_logo_data_url} logoOnDark={form.brand_logo_dark_data_url} />}
     <section className="settings-card organization-card">
       <div className="settings-card-head">
         <div>
@@ -3104,6 +3048,7 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     brand_client_theme: settings.brand_client_theme === 'light' ? 'light' : 'dark',
     brand_header_color: settings.brand_header_color ?? null,
     brand_logo_dark_data_url: settings.brand_logo_dark_data_url ?? null,
+    document_layouts: serializeDocumentLayouts(settings.document_layouts),
   };
 }
 
@@ -3150,6 +3095,8 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     // Leeg (of een half getypte code) = automatisch: de kop volgt de merkkleur.
     brand_header_color: /^#[0-9a-f]{6}$/i.test(input.brand_header_color ?? '') ? input.brand_header_color!.toUpperCase() : null,
     invoice_font_size: Math.max(8, Math.min(14, Number(input.invoice_font_size ?? 10))),
+    // De opmaak gaat gekeurd de deur uit; niets eigens = null (de standaard).
+    document_layouts: serializeDocumentLayouts(input.document_layouts),
   };
 }
 

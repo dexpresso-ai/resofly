@@ -13,6 +13,7 @@ import { dateNL } from '../lib/format';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl, type GalleryTokenBundle } from '../lib/gallery';
 import { brandStyle, ensureBrandFontsLoaded, type BrandingPayload } from '../lib/branding';
 import { GalleryViewer, type GalleryViewerItem } from './GalleryViewer';
+import { BrandMark, usePublicPageTitle } from '../components/PublicBrand';
 import type { GalleryLayout } from '../lib/galleryLayout';
 
 async function extractFunctionError(error: unknown, fallback: string): Promise<string> {
@@ -149,6 +150,7 @@ function VisitorNamePrompt({ reaction, onDone }: {
 
 export function PublicGalleryPage({ token }: { token: string }) {
   const [payload, setPayload] = useState<Payload | null>(null);
+  usePublicPageTitle('Galerij', payload?.branding?.companyName ?? null);
   const [needsPin, setNeedsPin] = useState(false);
   const [galleryTitle, setGalleryTitle] = useState('');
   const [pin, setPin] = useState('');
@@ -384,7 +386,8 @@ export function PublicGalleryPage({ token }: { token: string }) {
       )}
       {branding?.logoDataUrl && (
         <div className="pgal-brand">
-          <img src={branding.logoDataUrl} alt={branding.companyName ?? 'Logo'} />
+          {/* Met de lichte versie of op een plaatje als het logo wegvalt op de achtergrond van de galerij. */}
+          <BrandMark branding={branding} name={branding.companyName ?? ''} on="gallery" />
         </div>
       )}
       {/* De titel en omschrijving staan in de hero van de viewer; hier alleen

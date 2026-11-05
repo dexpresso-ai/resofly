@@ -31,6 +31,7 @@ import { getExternalWriteAccessToken, sendEventCancellations } from '../_shared/
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingLinkEmail } from '../_shared/emailTemplates/meetingBookingLinkSent.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
+import { loadSenderBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
@@ -395,11 +396,6 @@ async function removeSlot(organizationId: string, linkId: string, slotId: string
   if (error) throw new HttpError(error.message, 500);
 }
 
-async function orgBrandName(organizationId: string): Promise<string> {
-  const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).maybeSingle();
-  return (data?.name as string) || 'ResoFly';
-}
-
 /** Aangepaste e-mailtekst (email_templates) voor een booking-template; null = defaults. */
 async function loadBookingEmailContent(organizationId: string, templateKey: string): Promise<EmailTemplateContent | null> {
   const { data, error } = await supabaseAdmin.from('email_templates')
@@ -437,10 +433,14 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
   if (await sha256Hex(token) !== link.public_token_hash) throw new HttpError('Het meegestuurde token hoort niet bij deze link.', 422);
   const bookingUrl = buildBookingUrl(token);
 
-  const brandName = await orgBrandName(organizationId);
+  // Naam, merkkleur en logo in één query (_shared/emailBrand.ts): de merknaam
+  // of bedrijfsnaam, en pas daarna de naam van de werkruimte.
+  const brand = await loadSenderBrand(supabaseAdmin, organizationId);
+  const brandName = brand.name;
   const content = await loadBookingEmailContent(organizationId, 'meetingBooking.linkSent');
   const rendered = renderMeetingBookingLinkEmail({
     brandName,
+    accentColor: brand.accent,
     recipientName: recipientName || null,
     title: link.title,
     introText: link.intro_text,
@@ -456,14 +456,14 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withEmailBrand({
       from: sender.from,
       to: [recipientEmail],
       reply_to: sender.replyTo,
       subject: rendered.subject,
       html: rendered.html,
       text: rendered.text,
-    }),
+    }, brand.email)),
   });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
