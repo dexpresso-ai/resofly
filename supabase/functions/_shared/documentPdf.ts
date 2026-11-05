@@ -10,20 +10,28 @@
 // PDF wordt gemaakt, niet bij elke actie van de workflow.
 
 import * as PdfLib from 'https://esm.sh/pdf-lib@1.17.1';
+import fontkit from 'https://esm.sh/@pdf-lib/fontkit@1.1.1';
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import {
   buildDocumentData,
+  creditNoteDocument,
   documentAmounts,
   documentAssetsFromSettings,
+  dunningDocument,
+  layoutFonts,
   parseDocumentLayouts,
   renderDocumentPdf,
   resolveDocumentLayout,
   resolveDocumentStyle,
   type ClientRowLike,
   type CompanyRowLike,
+  type DocumentData,
   type DocumentKind,
+  type DunningLetterInput,
+  type PdfFontSource,
   type SalesLineLike,
 } from './documentLayout.ts';
+import { PDF_FONT_FILES } from './pdfFonts.ts';
 
 /** Huisstijl, briefpapier en opmaak: alles wat bepaalt hoe de PDF eruitziet. */
 export interface DocumentDesignRow {
@@ -77,6 +85,41 @@ export async function loadDocumentDesign(supabaseAdmin: SupabaseClient, organiza
   }
 }
 
+/**
+ * De letters van de huisstijl, uit de base64-module (geen lettertype-server
+ * nodig op het moment dat een factuur de deur uit gaat). Eén keer per
+ * instantie omgezet.
+ */
+const fontBytes = new Map<string, Uint8Array>();
+const FONT_SOURCE: PdfFontSource = {
+  fontkit,
+  load(name: string) {
+    const cached = fontBytes.get(name);
+    if (cached) return Promise.resolve(cached);
+    const base64 = PDF_FONT_FILES[name];
+    if (!base64) return Promise.resolve(null);
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    fontBytes.set(name, bytes);
+    return Promise.resolve(bytes);
+  },
+};
+
+/** Tekent een stuk met de opmaak, het logo, het briefpapier en de letters van de organisatie. */
+async function renderWithDesign(kind: DocumentKind, design: DocumentDesignRow | null, data: DocumentData): Promise<Uint8Array> {
+  const layouts = parseDocumentLayouts(design?.document_layouts);
+  const assets = documentAssetsFromSettings(design);
+  return renderDocumentPdf(PdfLib, {
+    layout: resolveDocumentLayout(layouts, kind, { letterhead: Boolean(assets.letterhead) }),
+    data,
+    style: resolveDocumentStyle(design, layoutFonts(layouts)),
+    assets,
+    fonts: FONT_SOURCE,
+    onWarning: (message, error) => console.warn(`documentpdf: ${message}`, error instanceof Error ? error.message : error),
+  });
+}
+
 /** Tekent een offerte of factuur met de opmaak, het logo en het briefpapier van de organisatie. */
 export async function renderSalesDocumentPdf(input: {
   kind: DocumentKind;
@@ -109,13 +152,41 @@ export async function renderSalesDocumentPdf(input: {
     quoteNumber: input.quoteNumber,
     onlineLink: input.onlineLink ?? null,
   });
-  const layouts = parseDocumentLayouts(input.design?.document_layouts);
-  const assets = documentAssetsFromSettings(input.design);
-  return renderDocumentPdf(PdfLib, {
-    layout: resolveDocumentLayout(layouts, input.kind, { letterhead: Boolean(assets.letterhead) }),
-    data,
-    style: resolveDocumentStyle(input.design, layouts.font),
-    assets,
-    onWarning: (message, error) => console.warn(`documentpdf: ${message}`, error instanceof Error ? error.message : error),
-  });
+  return renderWithDesign(input.kind, input.design, data);
+}
+
+/**
+ * Een creditfactuur in de opmaak van de factuur, met logo. De bedragen zijn
+ * die van de opgeslagen creditnota (positief aangeleverd, negatief op papier).
+ */
+export async function renderCreditNotePdf(input: {
+  design: DocumentDesignRow | null;
+  company: CompanyRowLike | null;
+  client: ClientRowLike | null;
+  number: string | null;
+  date: string | null;
+  invoiceReference: string | null;
+  invoiceDate: string | null;
+  lines: SalesLineLike[];
+  subtotal: number;
+  vat: number;
+  total: number;
+  vatNotes: string[];
+  reason: string | null;
+  refunded?: boolean;
+}): Promise<Uint8Array> {
+  const { design, ...rest } = input;
+  return renderWithDesign('credit_note', design, creditNoteDocument(rest));
+}
+
+/** Een aanmaning in de opmaak van de factuur: kop, voet en logo, met de brief ertussen. */
+export async function renderDunningLetterPdf(input: Omit<DunningLetterInput, 'signature' | 'accountHolder'> & {
+  design: DocumentDesignRow | null;
+  company: CompanyRowLike | null;
+  client: ClientRowLike | null;
+  letterDate: string | null;
+  invoiceDate: string | null;
+}): Promise<Uint8Array> {
+  const { design, ...rest } = input;
+  return renderWithDesign('dunning', design, dunningDocument(rest));
 }

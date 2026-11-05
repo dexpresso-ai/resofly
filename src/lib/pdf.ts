@@ -14,12 +14,14 @@ import {
   buildDocumentData,
   documentAssetsFromSettings,
   documentPdfFileName,
+  layoutFonts,
   parseDocumentLayouts,
   renderDocumentPdf,
   resolveDocumentLayout,
   resolveDocumentStyle,
   type DocumentLayouts,
 } from './documentLayout';
+import { appPdfFonts } from './pdfFonts';
 import type { AppData, Client, CompanySettings, Invoice, Quote } from '../types';
 
 function downloadBlob(blob: Blob, filename: string): void {
@@ -108,8 +110,9 @@ export async function createFinancePDFBytes(doc: Quote | Invoice, kind: 'quote' 
   return renderDocumentPdf(PdfLib, {
     layout: resolveDocumentLayout(layouts, kind, { letterhead: Boolean(assets.letterhead) }),
     data,
-    style: resolveDocumentStyle(company, layouts.font),
+    style: resolveDocumentStyle(company, layoutFonts(layouts)),
     assets,
+    fonts: await appPdfFonts(),
     onWarning: (message, error) => console.warn(message, error),
   });
 }

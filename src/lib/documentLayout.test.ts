@@ -9,18 +9,21 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import * as PdfLib from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import * as app from './documentLayout.ts';
 import * as server from '../../supabase/functions/_shared/documentLayout.ts';
 import { BRAND_FONTS } from './branding.ts';
 import { computeTotals, lineGross, lineNet } from './money.ts';
+import { PDF_FONT_FILES } from '../../supabase/functions/_shared/pdfFonts.ts';
 
 const {
-  DOCUMENT_FIELDS, FLOW_ITEMS, LAYOUT_LIMITS, LAYOUT_PRESETS, PAGE_HEIGHT, PAGE_WIDTH, SERIF_BRAND_FONTS,
-  buildDocumentData, builtInLayout, documentAssetsFromSettings, embedDocumentFonts, formatDocDate, formatDocMoney,
-  formatQuantity, layoutIssues, measureWith, newFieldBlock, normalizeDocumentLayout, parseDocumentLayouts, pdfSafeText,
-  planDocument, presetLayout, renderDocumentPdf, resolveDocumentLayout, resolveDocumentStyle, sampleDocumentData,
+  DOCUMENT_FIELDS, FLOW_ITEMS, LAYOUT_LIMITS, LAYOUT_PRESETS, PAGE_HEIGHT, PAGE_WIDTH, PDF_FONTS,
+  buildDocumentData, builtInLayout, creditNoteDocument, documentAssetsFromSettings, documentFontTools, dunningDocument,
+  embedDocumentFonts, formatDocDate, formatDocMoney, formatQuantity, layoutIssues, newFieldBlock, normalizeDocumentLayout,
+  parseDocumentLayouts, pdfSafeText, planDocument, presetLayout, renderDocumentPdf, resolveDocumentLayout,
+  resolveDocumentStyle, sampleDocumentData,
 } = app;
 
 const MARK = '// ---- Vanaf hier is dit bestand gelijk aan zijn spiegel (zie de test). ----';
@@ -44,10 +47,21 @@ const COMPANY = {
   brand_accent_color: '#2457C5',
 };
 
-/** Metingen met de echte Helvetica van pdf-lib, zoals de editor ze doet. */
-async function measurer(style = resolveDocumentStyle(COMPANY)) {
+/** De lettertypen zoals de app ze laadt (public/fonts/pdf), met de echte fontkit. */
+const FONT_SOURCE: app.PdfFontSource = {
+  fontkit,
+  load: async (name: string) => new Uint8Array(readFileSync(new URL(`../../public/fonts/pdf/${name}.woff`, import.meta.url))),
+};
+
+/** Meten, opschonen en basislijn met de echte letters, zoals de editor en de PDF het doen. */
+async function toolsFor(style = resolveDocumentStyle(COMPANY), source: app.PdfFontSource | null = FONT_SOURCE) {
   const doc = await PdfLib.PDFDocument.create();
-  return measureWith(await embedDocumentFonts(doc as unknown as app.PdfDocumentLike, style));
+  return documentFontTools(await embedDocumentFonts(doc as unknown as app.PdfDocumentLike, style, source));
+}
+
+/** Alleen de meting (de meeste plantests). */
+async function measurer(style = resolveDocumentStyle(COMPANY)) {
+  return (await toolsFor(style)).measure;
 }
 
 function texts(plan: app.DocumentPlan): string[] {
@@ -69,7 +83,8 @@ test('de spiegel voor de edge functions is teken voor teken gelijk', () => {
 test('zonder opmaak (of met rommel) geldt de standaard', () => {
   for (const raw of [undefined, null, 42, 'opmaak', [], {}, { invoice: 'x', quote: [] }, { version: 2, invoice: { version: 2 } }]) {
     const parsed = parseDocumentLayouts(raw);
-    assert.equal(parsed.font, 'auto');
+    assert.equal(parsed.headingFont, 'auto');
+    assert.equal(parsed.bodyFont, 'auto');
     assert.equal(parsed.invoice, null);
     assert.equal(parsed.quote, null);
     assert.deepEqual(resolveDocumentLayout(parsed, 'invoice'), builtInLayout('invoice'));
@@ -288,26 +303,148 @@ test('{{velden}} in een eigen tekst, met terugval', async () => {
   assert.match(fallback, /Beste Bakkerij De Korenaar,/);
 });
 
-test('stijl: merkkleur leesbaar als tekst, lettertype volgt de huisstijl', () => {
+test('stijl: merkkleur leesbaar als tekst, letters volgen de huisstijl', () => {
   const gold = resolveDocumentStyle({ brand_accent_color: '#FFD966' });
   assert.equal(gold.accent, '#FFD966');
   assert.ok(app.documentContrast(gold.accentInk, '#FFFFFF') >= 4.5, gold.accentInk);
   assert.equal(gold.onAccent, '#111111');
   assert.equal(resolveDocumentStyle({ brand_accent_color: '#00084D' }).onAccent, '#FFFFFF');
   assert.equal(resolveDocumentStyle({ invoice_font_size: 40 }).baseSize, LAYOUT_LIMITS.baseSize.max);
-  assert.equal(resolveDocumentStyle({ brand_heading_font: 'playfair', brand_body_font: 'inter' }).headingFamily, 'times');
-  assert.equal(resolveDocumentStyle({ brand_heading_font: 'playfair', brand_body_font: 'inter' }).bodyFamily, 'helvetica');
-  assert.equal(resolveDocumentStyle({ brand_heading_font: 'playfair' }, 'courier').headingFamily, 'courier');
-  // De lijst schreefletters hoort bij de lettertypen van de huisstijl.
-  const serif = BRAND_FONTS.filter(font => /\bserif\b/.test(font.stack.replace('sans-serif', ''))).map(font => font.key).sort();
-  assert.deepEqual([...SERIF_BRAND_FONTS].sort(), serif);
+  // Zoals je huisstijl: letterlijk de letters van de huisstijl, nu ook in de PDF.
+  const brand = resolveDocumentStyle({ brand_heading_font: 'playfair', brand_body_font: 'inter' });
+  assert.equal(brand.headingFont, 'playfair');
+  assert.equal(brand.bodyFont, 'inter');
+  assert.equal(resolveDocumentStyle(null).bodyFont, 'system');
+  // Een eigen keuze wint; Bebas Neue (alleen kapitalen) nooit als tekstletter.
+  assert.equal(resolveDocumentStyle({ brand_heading_font: 'playfair' }, { heading: 'courier' }).headingFont, 'courier');
+  assert.equal(resolveDocumentStyle({ brand_body_font: 'bebas' }).bodyFont, 'system');
+  assert.equal(resolveDocumentStyle(null, { body: 'bebas' }).bodyFont, 'system');
+  assert.equal(resolveDocumentStyle(null, { heading: 'bebas' }).headingFont, 'bebas');
+  // Een oude opmaak met één letter voor alles.
+  const legacy = parseDocumentLayouts({ font: 'times' });
+  assert.equal(legacy.headingFont, 'times');
+  assert.equal(legacy.bodyFont, 'times');
+});
+
+test('elke letter van de huisstijl kan ook in de PDF', () => {
+  for (const font of BRAND_FONTS) {
+    const pdf = PDF_FONTS.find(item => item.key === font.key);
+    assert.ok(pdf, `${font.key} ontbreekt in PDF_FONTS`);
+    assert.equal(Boolean(pdf!.headingOnly), Boolean(font.headingOnly), `${font.key}: alleen koppen`);
+    assert.equal(pdf!.serif, /\bserif\b/.test(font.stack.replace('sans-serif', '')), `${font.key}: schreef`);
+    assert.ok(!pdf!.standard && pdf!.file, `${font.key}: moet ingesloten worden`);
+  }
+});
+
+test('de lettertypebestanden van app en server zijn dezelfde bytes', () => {
+  const files = readdirSync(new URL('../../public/fonts/pdf/', import.meta.url)).filter(name => name.endsWith('.woff'));
+  const expected = PDF_FONTS.filter(font => font.file).flatMap(font => (font.bold ? [400, 700] : [400]).map(weight => `${font.file}-${weight}`));
+  assert.deepEqual(files.map(name => name.replace('.woff', '')).sort(), [...expected].sort());
+  assert.deepEqual(Object.keys(PDF_FONT_FILES).sort(), [...expected].sort());
+  for (const name of expected) {
+    const bytes = readFileSync(new URL(`../../public/fonts/pdf/${name}.woff`, import.meta.url));
+    assert.equal(PDF_FONT_FILES[name], bytes.toString('base64'), `${name} verschilt tussen public/fonts/pdf en pdfFonts.ts`);
+  }
+});
+
+test('de letters gaan mee in de PDF, en zonder letters wordt het Helvetica', async () => {
+  const data = sampleDocumentData('invoice', COMPANY);
+  for (const font of PDF_FONTS) {
+    const style = resolveDocumentStyle(COMPANY, { heading: font.key, body: font.headingOnly ? 'inter' : font.key });
+    const warnings: string[] = [];
+    const bytes = await renderDocumentPdf(lib, { layout: builtInLayout('invoice'), data, style, fonts: FONT_SOURCE, onWarning: message => warnings.push(message) });
+    assert.deepEqual(warnings, [], font.key);
+    const loaded = await PdfLib.PDFDocument.load(bytes);
+    assert.equal(loaded.getPageCount(), 1);
+    // Een ingesloten letter heeft een FontFile2/FontFile3 in de PDF; een standaardletter niet.
+    const embedded = loaded.context.enumerateIndirectObjects().some(([, object]) =>
+      object instanceof PdfLib.PDFDict && (object.has(PdfLib.PDFName.of('FontFile2')) || object.has(PdfLib.PDFName.of('FontFile3'))));
+    assert.equal(embedded, !font.standard, `${font.key}: ${font.standard ? 'niets' : 'wel'} ingesloten verwacht`);
+  }
+  const warnings: string[] = [];
+  const fallback = await renderDocumentPdf(lib, { layout: builtInLayout('invoice'), data, style: resolveDocumentStyle({ brand_body_font: 'lora' }), onWarning: message => warnings.push(message) });
+  assert.equal(new TextDecoder().decode(fallback.slice(0, 5)), '%PDF-');
+  assert.ok(warnings.some(message => /Lora/.test(message) && /Times/.test(message)), warnings.join(' | '));
+});
+
+test('een teken dat de ingesloten letter mist, valt terug op de letter zonder accent', async () => {
+  const poppins = await toolsFor(resolveDocumentStyle(null, { heading: 'system', body: 'system' }));
+  assert.equal(poppins.clean('Škoda Žižkov ƒ – € “ok” 😀', 'body'), 'Skoda Zizkov f – € “ok” ');
+  // Helvetica kent die tekens wel (WinAnsi): daar blijven ze staan.
+  const helvetica = await toolsFor(resolveDocumentStyle(null, { heading: 'helvetica', body: 'helvetica' }));
+  assert.equal(helvetica.clean('Škoda Žižkov', 'body'), 'Škoda Žižkov');
+  // De basislijn komt uit de letter zelf, binnen redelijke grenzen.
+  for (const tools of [poppins, helvetica]) {
+    for (const ref of ['body', 'bodyBold', 'heading', 'headingBold'] as const) {
+      assert.ok(tools.ascent(ref) >= 0.68 && tools.ascent(ref) <= 0.82, `${ref}: ${tools.ascent(ref)}`);
+    }
+  }
+  assert.equal(helvetica.ascent('body'), 0.718);
+});
+
+test('creditfactuur: opmaak van de factuur, negatieve bedragen, reden en wat er met het geld gebeurt', async () => {
+  const style = resolveDocumentStyle(COMPANY);
+  const tools = await toolsFor(style);
+  const layout = builtInLayout('invoice');
+  // Een eigen inleiding hoort bij de factuur, niet bij de creditfactuur.
+  layout.flow = layout.flow.map(item => (item.key === 'intro' ? { ...item, show: true, text: 'Hierbij ontvang je onze factuur.' } : item));
+  // Ook als de betaalregel op de factuur uit staat, zegt de creditfactuur wat er met het bedrag gebeurt.
+  layout.flow = layout.flow.map(item => (item.key === 'payment' ? { ...item, show: false } : item));
+  const data = creditNoteDocument({
+    number: 'CN-1', date: '2026-11-12', invoiceReference: 'F-1', invoiceDate: '2026-11-05', company: COMPANY,
+    client: { name: 'Klant B.V.', client_code: 'K-9' },
+    lines: [{ description: 'Werk', quantity: 2, unit_price: 50, vat: 21 }, { description: 'Boek', quantity: 1, unit_price: 20, vat: 9 }],
+    subtotal: 120, vat: 22.8, total: 142.8, reason: 'Dubbel gefactureerd', refunded: false,
+  });
+  const plan = planDocument(layout, data, style, { ...tools, logo: null });
+  const all = texts(plan);
+  for (const expected of ['CREDITFACTUUR', 'CN-1', 'F-1', 'Creditering van factuur', '€ -50,00', '€ -121,00', '€ -142,80', 'Totaal credit', 'REDEN', 'Dubbel gefactureerd', 'Hiermee vervalt de factuur; u hoeft niets meer te betalen.', 'Btw 21% over € -100,00']) {
+    assert.ok(all.some(text => text.includes(expected)), `"${expected}" ontbreekt`);
+  }
+  assert.ok(!all.some(text => text.includes('Hierbij ontvang je onze factuur')), 'geen factuurinleiding op een creditfactuur');
+  assert.ok(!all.some(text => text.includes('Bekijk en betaal')), 'geen betaallink');
+
+  // Komt de btw uit de regels niet precies uit op de geboekte btw, dan één regel, nooit een afwijking.
+  const blended = creditNoteDocument({
+    number: 'CN-2', date: '2026-11-12', invoiceReference: 'F-2', invoiceDate: null, company: COMPANY, client: null,
+    lines: [{ description: 'Deel', quantity: 1, unit_price: 82.64, vat: 20.99 }], subtotal: 82.64, vat: 17.36, total: 100, refunded: true,
+  });
+  assert.deepEqual(blended.totals, { subtotal: -82.64, vat: -17.36, total: -100, vatBreakdown: [] });
+  assert.deepEqual(blended.paymentLines, ['Dit bedrag wordt aan u terugbetaald.']);
+});
+
+test('aanmaning: de brief in de opmaak van de factuur, zonder regels', async () => {
+  const style = resolveDocumentStyle(COMPANY);
+  const tools = await toolsFor(style);
+  const base = {
+    company: COMPANY, client: { name: 'Klant B.V.', contact_name: 'Jan', client_code: 'K-9' },
+    letterDate: '2026-12-10', invoiceNumber: 'F-1', invoiceDate: '2026-11-05', invoiceDueDate: '2026-11-19',
+    principalCents: 121000, interestCents: 1500, interestDays: 21, interestRatePct: '10,15',
+    collectionCostsCents: 18150, collectionCostsVatCents: 3812, totalClaimCents: 144462, deadlineDate: '2026-12-24',
+    iban: 'NL91ABNA0417164300', publicUrl: 'https://example.test/invoice/x',
+  };
+  const business = planDocument(builtInLayout('invoice'), dunningDocument({ ...base, consumer: false }), style, { ...tools, logo: null });
+  const all = texts(business).join('\n');
+  for (const expected of ['AANMANING', 'Betreft: aanmaning factuur F-1', 'Uiterste betaaldatum', '24-12-2026', 'SPECIFICATIE', 'Hoofdsom (openstaand)', 'Totaal te voldoen', '€ 1.444,62', 'Met vriendelijke groet,', 'Studio Noord', 'Noord Holding B.V.', 'Uw onderneming is van rechtswege in verzuim']) {
+    assert.ok(all.includes(expected), `"${expected}" ontbreekt`);
+  }
+  // T.n.v. de juridische naam (de rekeninghouder), niet de merknaam.
+  assert.match(all.replace(/\n/g, ' '), /t\.n\.v\. Noord Holding B\.V\./);
+  assert.ok(!all.includes('Omschrijving'), 'geen regeltabel in een brief');
+  const consumer = texts(planDocument(builtInLayout('invoice'), dunningDocument({ ...base, consumer: true }), style, { ...tools, logo: null })).join(' ');
+  assert.ok(consumer.includes('Nu te voldoen (hoofdsom + rente)'));
+  assert.ok(consumer.includes('veertien dagen vanaf de dag nadat deze brief bij u is bezorgd'));
+  assert.ok(!consumer.includes('Uiterste betaaldatum'), 'een consument krijgt geen vaste datum (art. 6:96 lid 6 BW)');
+  // De voorbeelden van de editor gebruiken dezelfde bouwstenen.
+  assert.equal(sampleDocumentData('dunning', COMPANY).kind, 'dunning');
+  assert.equal(sampleDocumentData('credit_note', COMPANY).totalsLabel, 'Totaal credit');
 });
 
 test('de PDF: logo, briefpapier, en een kapot plaatje laat hem niet mislukken', async () => {
   const data = sampleDocumentData('invoice', COMPANY);
   const style = resolveDocumentStyle(COMPANY);
   const layout = builtInLayout('invoice');
-  const plain = await renderDocumentPdf(lib, { layout, data, style });
+  const plain = await renderDocumentPdf(lib, { layout, data, style, fonts: FONT_SOURCE });
   assert.equal(new TextDecoder().decode(plain.slice(0, 5)), '%PDF-');
 
   // Een echt (piepklein) PNG-logo, en een PDF als briefpapier.
@@ -319,13 +456,13 @@ test('de PDF: logo, briefpapier, en een kapot plaatje laat hem niet mislukken', 
   assert.equal(assets.logo?.type, 'png');
   assert.equal(assets.letterhead?.kind, 'pdf');
   const warnings: string[] = [];
-  const branded = await renderDocumentPdf(lib, { layout, data, style, assets, onWarning: message => warnings.push(message) });
+  const branded = await renderDocumentPdf(lib, { layout, data, style, assets, fonts: FONT_SOURCE, onWarning: message => warnings.push(message) });
   assert.deepEqual(warnings, []);
   const loaded = await PdfLib.PDFDocument.load(branded);
   assert.equal(loaded.getPageCount(), 1);
 
   const broken = await renderDocumentPdf(lib, {
-    layout, data, style,
+    layout, data, style, fonts: FONT_SOURCE,
     assets: { logo: { bytes: new Uint8Array([1, 2, 3]), type: 'png' }, letterhead: { kind: 'pdf', bytes: new Uint8Array([4, 5]) } },
     onWarning: message => warnings.push(message),
   });

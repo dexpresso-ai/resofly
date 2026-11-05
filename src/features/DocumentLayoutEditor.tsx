@@ -19,15 +19,17 @@ import {
 } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import {
-  DOCUMENT_FIELDS, FIELD_GROUPS, FLOW_ITEMS, FONT_CHOICES, LAYOUT_LIMITS, LAYOUT_PRESETS, PAGE_HEIGHT, PAGE_WIDTH,
+  DOCUMENT_FIELDS, FIELD_GROUPS, FLOW_ITEMS, LAYOUT_LIMITS, LAYOUT_PRESETS, PAGE_HEIGHT, PAGE_WIDTH, PDF_FONTS,
   TABLE_STYLES, TOTALS_STYLES, builtInLayout, clampBlock, documentAssetsFromSettings, documentPdfFileName,
-  embedDocumentFonts, fieldCaption, fieldDefinition, layoutIssues, measureWith, newFieldBlock, newShapeBlock,
+  documentFontTools, embedDocumentFonts, fieldCaption, fieldDefinition, layoutFonts, layoutIssues, layoutKind, newFieldBlock, newShapeBlock, pdfFont,
   normalizeDocumentLayout, parseDocumentLayouts, planDocument, presetLayout, renderDocumentPdf, resolveDocumentLayout,
   resolveDocumentStyle, sampleDocumentData, serializeDocumentLayouts, tokenList, uniqueBlockId,
   type DocumentKind, type DocumentLayout, type DocumentLayouts, type DocumentStyle, type FontRef, type LayoutAlign,
-  type LayoutBlock, type LayoutFlowKey, type LayoutFontChoice, type LayoutLabel, type LayoutPresetKey, type LayoutTone,
-  type Measure, type PdfFamily, type PlanBox, type PlanOp, type TableStyle, type TotalsStyle,
+  type LayoutBlock, type LayoutFlowKey, type LayoutKind, type LayoutLabel, type LayoutPresetKey, type LayoutTone,
+  type PdfFontChoice, type PlanBox, type PlanOp, type TableStyle, type TextTools, type TotalsStyle,
 } from '../lib/documentLayout';
+import { brandFont, ensureBrandFontsLoaded } from '../lib/branding';
+import { appPdfFonts } from '../lib/pdfFonts';
 import type { CompanySettingsInput } from '../types';
 
 type SetForm = Dispatch<SetStateAction<CompanySettingsInput>>;
@@ -61,13 +63,6 @@ const SHAPES: Array<{ shape: Shape; name: string; hint: string; Icon: typeof Typ
   { shape: 'box', name: 'Vlak', hint: 'Een vlak in je merkkleur, bijv. een balk.', Icon: Square },
 ];
 
-/** Wat de browser het dichtst bij de standaardletters van een PDF laat zien. */
-const SVG_FONTS: Record<PdfFamily, string> = {
-  helvetica: "Helvetica, Arial, 'Liberation Sans', sans-serif",
-  times: "'Times New Roman', Times, 'Liberation Serif', serif",
-  courier: "'Courier New', Courier, 'Liberation Mono', monospace",
-};
-
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const toMm = (pt: number) => Math.round((pt / PT_PER_MM) * 10) / 10;
 
@@ -86,25 +81,28 @@ function blockName(block: LayoutBlock, kind: DocumentKind): string {
 // ── Metingen en logo ────────────────────────────────────────────────────────
 
 /**
- * Meet tekst met de échte standaardletters van pdf-lib, zodat elke regelbreuk
- * in de editor dezelfde is als in de PDF. De vorige meting blijft staan tot de
- * nieuwe klaar is, dan flikkert het blad niet bij een ander lettertype.
+ * Meet tekst met precies de letters die in de PDF komen (ingesloten met
+ * fontkit, of de standaardletters), zodat elke regelbreuk in de editor
+ * dezelfde is als in de PDF. De vorige meting blijft staan tot de nieuwe klaar
+ * is, dan flikkert het blad niet bij een andere letter.
  */
-function useDocumentMeasure(style: DocumentStyle): Measure | null {
-  const key = `${style.headingFamily}|${style.bodyFamily}`;
-  const [state, setState] = useState<{ key: string; measure: Measure } | null>(null);
+function useDocumentTools(style: DocumentStyle): TextTools | null {
+  const key = `${style.headingFont}|${style.bodyFont}`;
+  const [state, setState] = useState<{ key: string; tools: TextTools } | null>(null);
   const styleRef = useRef(style);
   styleRef.current = style;
   useEffect(() => {
     let alive = true;
+    // De webletters voor het blad zelf (de SVG); de PDF sluit ze apart in.
+    ensureBrandFontsLoaded([styleRef.current.headingFont, styleRef.current.bodyFont].filter(font => brandFont(font).key === font));
     void (async () => {
       const doc = await PdfLib.PDFDocument.create();
-      const fonts = await embedDocumentFonts(doc, styleRef.current);
-      if (alive) setState({ key, measure: measureWith(fonts) });
+      const fonts = await embedDocumentFonts(doc, styleRef.current, await appPdfFonts(), message => console.warn(message));
+      if (alive) setState({ key, tools: documentFontTools(fonts) });
     })().catch(error => console.warn('Lettertypen voor de opmaakeditor laden mislukt', error));
     return () => { alive = false; };
   }, [key]);
-  return state?.measure ?? null;
+  return state?.tools ?? null;
 }
 
 /** De afmetingen van het logo; alleen PNG en JPEG, want alleen die kan een PDF aan. */
@@ -190,11 +188,11 @@ function snapTargets(layout: DocumentLayout, boxes: PlanBox[]): { xs: number[]; 
 function PlanSvg({ ops, style, measure, logoUrl, paperUrl }: {
   ops: PlanOp[];
   style: DocumentStyle;
-  measure: Measure;
+  measure: TextTools['measure'];
   logoUrl: string | null;
   paperUrl: string | null;
 }) {
-  const family = (font: FontRef) => SVG_FONTS[font === 'heading' || font === 'headingBold' ? style.headingFamily : style.bodyFamily];
+  const family = (font: FontRef) => pdfFont(font === 'heading' || font === 'headingBold' ? style.headingFont : style.bodyFont).css;
   return <svg className="dle-svg" viewBox={`0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}`} aria-hidden="true" focusable="false">
     <rect x={0} y={0} width={PAGE_WIDTH} height={PAGE_HEIGHT} fill="#FFFFFF" />
     {paperUrl && <image href={paperUrl} x={0} y={0} width={PAGE_WIDTH} height={PAGE_HEIGHT} preserveAspectRatio="xMidYMid slice" />}
@@ -257,11 +255,16 @@ export function DocumentLayoutEditor({ form, setForm, canWrite, onLetterheadSele
   const layouts = useMemo(() => parseDocumentLayouts(form.document_layouts), [form.document_layouts]);
   const hasPaper = form.invoice_template_kind !== 'none' && Boolean(form.invoice_template_data_url);
   const paperIsImage = hasPaper && form.invoice_template_kind === 'image';
-  const custom = kind === 'quote' ? layouts.quote : layouts.invoice;
-  const layout = useMemo(() => custom ?? builtInLayout(kind, { letterhead: hasPaper }), [custom, kind, hasPaper]);
-  const style = useMemo(() => resolveDocumentStyle(form, layouts.font), [form, layouts.font]);
+  // Een creditfactuur en een aanmaning laten zien hoe de FACTUURopmaak op
+  // die stukken uitkomt; wat je daar verandert, verandert dus de factuur.
+  const lk: LayoutKind = layoutKind(kind);
+  const custom = layouts[lk];
+  const layout = useMemo(() => custom ?? builtInLayout(lk, { letterhead: hasPaper }), [custom, lk, hasPaper]);
+  const fonts = layoutFonts(layouts);
+  const style = useMemo(() => resolveDocumentStyle(form, { heading: fonts.heading, body: fonts.body }), [form, fonts.heading, fonts.body]);
   const data = useMemo(() => sampleDocumentData(kind, form), [kind, form]);
-  const measure = useDocumentMeasure(style);
+  const tools = useDocumentTools(style);
+  const measure = tools?.measure ?? null;
   const logoSize = useLogoSize(form.brand_logo_data_url);
   const logoUrl = logoSize ? form.brand_logo_data_url ?? null : null;
 
@@ -272,8 +275,8 @@ export function DocumentLayoutEditor({ form, setForm, canWrite, onLetterheadSele
     const exists = layout.blocks.some(block => block.id === draft.block.id);
     return { ...layout, blocks: exists ? layout.blocks.map(block => (block.id === draft.block.id ? draft.block : block)) : [...layout.blocks, draft.block] };
   }, [layout, draft]);
-  const plan = useMemo(() => (measure ? planDocument(shown, data, style, { measure, logo: logoSize }) : null), [shown, data, style, measure, logoSize]);
-  const issues = useMemo(() => layoutIssues(layout, kind, { kor: form.kor_enabled, letterhead: hasPaper }), [layout, kind, form.kor_enabled, hasPaper]);
+  const plan = useMemo(() => (tools ? planDocument(shown, data, style, { ...tools, logo: logoSize }) : null), [shown, data, style, tools, logoSize]);
+  const issues = useMemo(() => layoutIssues(layout, lk, { kor: form.kor_enabled, letterhead: hasPaper }), [layout, lk, form.kor_enabled, hasPaper]);
 
   const fit = stageWidth > 0 ? Math.min(1.2, (stageWidth - 2) / PAGE_WIDTH) : 0.8;
   const scale = Math.max(0.3, fit * zoom);
@@ -311,13 +314,13 @@ export function DocumentLayoutEditor({ form, setForm, canWrite, onLetterheadSele
   /** Wijzigt de opmaak van het open document. De standaard wordt bij de eerste wijziging een eigen opmaak. */
   const updateLayout = useCallback((mutate: (current: DocumentLayout) => DocumentLayout, coalesce?: string) => {
     if (!canWrite) return;
-    const base: DocumentLayout = custom ?? { ...builtInLayout(kind, { letterhead: hasPaper }), preset: 'standaard' };
-    const next = normalizeDocumentLayout(mutate(base), kind);
+    const base: DocumentLayout = custom ?? { ...builtInLayout(lk, { letterhead: hasPaper }), preset: 'standaard' };
+    const next = normalizeDocumentLayout(mutate(base), lk);
     if (!next) return;
-    commitLayouts({ ...layouts, [kind]: next }, coalesce);
-  }, [canWrite, custom, kind, hasPaper, layouts, commitLayouts]);
+    commitLayouts({ ...layouts, [lk]: next }, coalesce);
+  }, [canWrite, custom, lk, hasPaper, layouts, commitLayouts]);
 
-  const setFont = (font: LayoutFontChoice) => { if (canWrite) commitLayouts({ ...layouts, font }); };
+  const setFonts = (patch: { headingFont?: PdfFontChoice; bodyFont?: PdfFontChoice }) => { if (canWrite) commitLayouts({ ...layouts, ...patch }); };
 
   const undo = useCallback(() => {
     if (!canWrite || past.length === 0) return;
@@ -562,6 +565,8 @@ export function DocumentLayoutEditor({ form, setForm, canWrite, onLetterheadSele
       <div className="brand-seg" role="group" aria-label="Welk document">
         <button type="button" aria-pressed={kind === 'invoice'} onClick={() => setKind('invoice')}>Factuur</button>
         <button type="button" aria-pressed={kind === 'quote'} onClick={() => setKind('quote')}>Offerte</button>
+        <button type="button" aria-pressed={kind === 'credit_note'} onClick={() => setKind('credit_note')}>Creditfactuur</button>
+        <button type="button" aria-pressed={kind === 'dunning'} onClick={() => setKind('dunning')}>Aanmaning</button>
       </div>
       <span className={`dle-state${custom ? ' is-custom' : ''}`}>
         {custom ? 'Eigen opmaak' : 'Standaardopmaak'}
@@ -575,6 +580,12 @@ export function DocumentLayoutEditor({ form, setForm, canWrite, onLetterheadSele
         </div>
       </div>
     </div>
+
+    {lk !== kind && <p className="dle-banner" role="note">
+      {kind === 'credit_note'
+        ? 'Een creditfactuur gebruikt de opmaak van je factuur, met negatieve bedragen en de reden. Wat je hier verandert, verandert ook je factuur.'
+        : 'Een aanmaning gebruikt de kop, de voet, het logo en de stijl van je factuur. De brief zelf ligt vast: die moet aan wettelijke eisen voldoen. Wat je hier verandert, verandert ook je factuur.'}
+    </p>}
 
     <div className="dle-grid">
       <aside className="dle-palette" aria-label="Velden">
@@ -736,7 +747,10 @@ export function DocumentLayoutEditor({ form, setForm, canWrite, onLetterheadSele
             issues={issues}
             onUpdate={updateLayout}
             onCommit={commitLayouts}
-            onFont={setFont}
+            onFonts={setFonts}
+            fontsChoice={{ heading: fonts.heading, body: fonts.body }}
+            style={style}
+            brandFonts={{ heading: form.brand_heading_font, body: form.brand_body_font }}
             onAdd={field => addFromPalette({ field })}
             onLetterheadSelected={onLetterheadSelected}
             onLetterheadRemoved={onLetterheadRemoved}
@@ -921,11 +935,36 @@ function TokenPicker({ kind, disabled, onPick }: { kind: DocumentKind; disabled:
   </Select>;
 }
 
+// ── Lettertype kiezen ───────────────────────────────────────────────────────
+
+function FontField({ label, hintPrefix, value, brandKey, used, headings = false, disabled, onChange }: {
+  label: string;
+  hintPrefix: string;
+  value: PdfFontChoice;
+  brandKey: string | null | undefined;
+  /** Wat er werkelijk in de PDF komt. */
+  used: string;
+  headings?: boolean;
+  disabled: boolean;
+  onChange: (value: PdfFontChoice) => void;
+}) {
+  const options = PDF_FONTS.filter(font => headings || !font.headingOnly);
+  const brand = pdfFont(brandFont(brandKey).key);
+  return <div className="dle-field">
+    <span className="dle-label">{label}</span>
+    <Select value={value} onChange={event => onChange(event.target.value as PdfFontChoice)} disabled={disabled}>
+      <option value="auto">Zoals je huisstijl ({headings || !brand.headingOnly ? brand.label : 'Poppins'})</option>
+      {options.map(font => <option key={font.key} value={font.key}>{font.label}{font.standard ? ' (standaard in PDF)' : ''}</option>)}
+    </Select>
+    <p className="settings-help" style={{ fontFamily: pdfFont(used).css }}>{hintPrefix} {pdfFont(used).hint}</p>
+  </div>;
+}
+
 // ── Het paneel van het document ─────────────────────────────────────────────
 
 function DocumentPanel({
   form, setForm, kind, layout, layouts, custom, canWrite, hasPaper, focusFlow, issues,
-  onUpdate, onCommit, onFont, onAdd, onLetterheadSelected, onLetterheadRemoved, onOpenBrand,
+  onUpdate, onCommit, onFonts, fontsChoice, style, brandFonts, onAdd, onLetterheadSelected, onLetterheadRemoved, onOpenBrand,
 }: {
   form: CompanySettingsInput;
   setForm: SetForm;
@@ -939,22 +978,27 @@ function DocumentPanel({
   issues: ReturnType<typeof layoutIssues>;
   onUpdate: (mutate: (current: DocumentLayout) => DocumentLayout, coalesce?: string) => void;
   onCommit: (next: DocumentLayouts, coalesce?: string) => void;
-  onFont: (font: LayoutFontChoice) => void;
+  onFonts: (patch: { headingFont?: PdfFontChoice; bodyFont?: PdfFontChoice }) => void;
+  fontsChoice: { heading: PdfFontChoice; body: PdfFontChoice };
+  /** De letters die er werkelijk in komen (na "Zoals je huisstijl"). */
+  style: DocumentStyle;
+  brandFonts: { heading: string | null | undefined; body: string | null | undefined };
   onAdd: (field: string) => void;
   onLetterheadSelected: (file: File | undefined) => void;
   onLetterheadRemoved: () => void;
   onOpenBrand: () => void;
 }) {
   const disabled = !canWrite;
-  const other: DocumentKind = kind === 'invoice' ? 'quote' : 'invoice';
+  const lk = layoutKind(kind);
+  const other: LayoutKind = lk === 'invoice' ? 'quote' : 'invoice';
   const flowRef = useRef<HTMLElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => { if (focusFlow) flowRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [focusFlow]);
 
-  const choosePreset = (key: LayoutPresetKey) => onCommit({ ...layouts, [kind]: presetLayout(key, kind) });
+  const choosePreset = (key: LayoutPresetKey) => onCommit({ ...layouts, [lk]: presetLayout(key, lk) });
   const reset = () => {
-    if (window.confirm(`De ${kind === 'invoice' ? 'factuur' : 'offerte'} terugzetten op de standaardopmaak van ResoFly? Je eigen opmaak verdwijnt (na Opslaan).`)) {
-      onCommit({ ...layouts, [kind]: null });
+    if (window.confirm(`De ${lk === 'invoice' ? 'factuur' : 'offerte'} terugzetten op de standaardopmaak van ResoFly? Je eigen opmaak verdwijnt (na Opslaan).`)) {
+      onCommit({ ...layouts, [lk]: null });
     }
   };
   const copyToOther = () => {
@@ -976,8 +1020,8 @@ function DocumentPanel({
       <h3>Sjabloon</h3>
       <p className="settings-help">
         {custom
-          ? `Je ${kind === 'invoice' ? 'facturen' : 'offertes'} gebruiken je eigen opmaak. Begin opnieuw met een sjabloon, of zet hem terug op de standaard.`
-          : `Je ${kind === 'invoice' ? 'facturen' : 'offertes'} gebruiken de standaardopmaak van ResoFly. Geen zin om zelf te schuiven? Dan is dit prima zo. Sleep een veld of kies een sjabloon om hem aan te passen.`}
+          ? `Je ${lk === 'invoice' ? 'facturen, creditfacturen en aanmaningen' : 'offertes'} gebruiken je eigen opmaak. Begin opnieuw met een sjabloon, of zet hem terug op de standaard.`
+          : `Je ${lk === 'invoice' ? 'facturen, creditfacturen en aanmaningen' : 'offertes'} gebruiken de standaardopmaak van ResoFly. Geen zin om zelf te schuiven? Dan is dit prima zo. Sleep een veld of kies een sjabloon om hem aan te passen.`}
       </p>
       <div className="dle-presets">
         {LAYOUT_PRESETS.map(preset => <button
@@ -1002,7 +1046,7 @@ function DocumentPanel({
     <section className="settings-card dle-card">
       <h3>Controle</h3>
       {issues.length === 0
-        ? <p className="dle-ok"><Check size={14} aria-hidden="true" /> Alles wat op een {kind === 'invoice' ? 'factuur' : 'offerte'} moet, staat erop.</p>
+        ? <p className="dle-ok"><Check size={14} aria-hidden="true" /> Alles wat op een {lk === 'invoice' ? 'factuur' : 'offerte'} moet, staat erop.</p>
         : <ul className="dle-issues">
           {issues.map(issue => <li key={issue.id}>
             <CircleAlert size={14} aria-hidden="true" />
@@ -1014,13 +1058,26 @@ function DocumentPanel({
 
     <section className="settings-card dle-card">
       <h3>Stijl</h3>
-      <div className="dle-field">
-        <span className="dle-label">Lettertype</span>
-        <Select value={layouts.font} onChange={event => onFont(event.target.value as LayoutFontChoice)} disabled={disabled}>
-          {FONT_CHOICES.map(font => <option key={font.value} value={font.value}>{font.label}</option>)}
-        </Select>
-        <p className="settings-help">{FONT_CHOICES.find(font => font.value === layouts.font)?.hint} Een PDF heeft alleen deze drie letters bij zich; je eigen huisstijlletter kan er niet in.</p>
-      </div>
+      <FontField
+        label="Letter voor koppen"
+        hintPrefix="Titel, je naam in plaats van het logo."
+        value={fontsChoice.heading}
+        brandKey={brandFonts.heading}
+        used={style.headingFont}
+        headings
+        disabled={disabled}
+        onChange={value => onFonts({ headingFont: value })}
+      />
+      <FontField
+        label="Letter voor tekst"
+        hintPrefix="Adressen, regels, totalen."
+        value={fontsChoice.body}
+        brandKey={brandFonts.body}
+        used={style.bodyFont}
+        disabled={disabled}
+        onChange={value => onFonts({ bodyFont: value })}
+      />
+      <p className="settings-help">Alle letters gaan mee in de PDF, dus je klant ziet ze ook zonder ze zelf te hebben. Helvetica, Times en Courier zitten al in elke PDF-lezer en geven de kleinste PDF.</p>
       <div className="dle-field">
         <span className="dle-label">Lettergrootte — {form.invoice_font_size ?? 10} pt</span>
         <input
@@ -1169,13 +1226,14 @@ function PdfPreview({ form, layouts, kind }: { form: CompanySettingsInput; layou
     setState('busy');
     const handle = window.setTimeout(() => {
       const assets = documentAssetsFromSettings(form);
-      renderDocumentPdf(PdfLib, {
+      appPdfFonts().then(fonts => renderDocumentPdf(PdfLib, {
         layout: resolveDocumentLayout(layouts, kind, { letterhead: Boolean(assets.letterhead) }),
         data: sampleDocumentData(kind, form),
-        style: resolveDocumentStyle(form, layouts.font),
+        style: resolveDocumentStyle(form, layoutFonts(layouts)),
         assets,
+        fonts,
         onWarning: (message, error) => console.warn(message, error),
-      }).then(bytes => {
+      })).then(bytes => {
         if (cancelled) return;
         bytesRef.current = bytes;
         const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -1195,7 +1253,7 @@ function PdfPreview({ form, layouts, kind }: { form: CompanySettingsInput; layou
   return <div className="dle-pdf">
     <div className="dle-pdf-bar">
       <span>{state === 'busy' ? 'PDF wordt bijgewerkt…' : state === 'error' ? 'Het voorbeeld lukte niet.' : 'Zo krijgt je klant hem, met een verzonnen klant.'}</span>
-      {url && <a className="btn btn-ghost" href={url} download={documentPdfFileName(kind, kind === 'quote' ? 'voorbeeld-offerte' : 'voorbeeld-factuur')}><Download size={14} aria-hidden="true" /> Download</a>}
+      {url && <a className="btn btn-ghost" href={url} download={documentPdfFileName(kind, 'voorbeeld')}><Download size={14} aria-hidden="true" /> Download</a>}
     </div>
     {url
       ? <iframe className="dle-pdf-frame" key={url} src={`${url}#toolbar=0&navpanes=0&view=FitH`} title="PDF-voorbeeld van de opmaak" />
