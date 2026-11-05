@@ -94,6 +94,12 @@ bleef dan staan voor een ticket dat niet meer op de werklijst staat.
 Veilig opnieuw te draaien (`drop … if exists`, `add column if not exists`,
 `create or replace`).
 
+**Versie.** Eerst heette hij `20261105000000`, maar vandaag zette een andere
+sessie `20261105000000_finance_werking_veiligheid` op staging. De CLI vergelijkt
+alleen versies: `db push` had deze migratie dan als "al gedaan" overgeslagen,
+zonder melding. Daarom `20261105020000`, na de laatste op staging
+(`20261105010000`).
+
 ## Bestanden
 
 | Bestand | Wat |
@@ -110,14 +116,26 @@ Veilig opnieuw te draaien (`drop … if exists`, `add column if not exists`,
 
 ## Uitslag van de controles
 
+Op de stand die naar staging gaat, na het samenvoegen met het werk van de
+andere sessie van vandaag (financiën):
+
 | Controle | Uitslag |
 | --- | --- |
 | `npm run typecheck` | schoon |
-| `npm test` | 955 tests groen, waarvan 5 nieuw in `src/lib/tickets.test.ts` en 1 in `portalNotify.test.ts` |
-| `npm run test:mobile -- --theme=both` | zie hieronder |
+| `npm test` | 969 tests groen, waarvan 5 nieuw in `src/lib/tickets.test.ts` en 1 in `portalNotify.test.ts` |
+| `npm run test:mobile -- --theme=both` | 312 metingen, geen problemen; de ticketpagina's ook met Zenit en Stroom (2 × 20 metingen) |
 | `npm run test:loading` | alle controles groen |
 | `npm run build` | geslaagd |
 | `deno check` (de lijst uit `frontend-checks.yml`) | schoon, zie de noot |
+| De twee databasecontroles uit de rooktest | schoon: boekhouder-hek dicht, `anon` heeft geen rechten (de twee nieuwe functies zijn alleen voor `postgres` en `service_role`) |
+| `supabase db reset` | alle 236 migraties lopen op een lege database, deze als laatste |
+
+Op die lege database een proef op de triggers, twaalf van twaalf goed: de datum
+komt en blijft (ook over transacties heen), een meegestuurde datum telt niet,
+een teamnotitie heropent niets, een klantreactie zet het ticket op review met
+de statusregel op naam van de klant, het telt dan weer als ongelezen, een
+omgezet ticket blijft omgezet, en een onbekende status wordt geweigerd. De
+migratie een tweede keer draaien gaat goed.
 
 Daarnaast een klikproef tegen de nagebootste backend: afhandelen, het archief,
 de volgorde, heropenen, een statuskaart terug naar de werklijst en de
