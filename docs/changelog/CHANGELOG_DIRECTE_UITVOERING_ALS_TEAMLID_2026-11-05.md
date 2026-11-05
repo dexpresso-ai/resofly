@@ -10,8 +10,10 @@ een koppeling meteen wordt uitgevoerd.
 
 > **Status:** één migratie (`20261105030000_directe_uitvoering_als_teamlid`),
 > een aanpassing in `supabase/functions/_shared/actions/apply.ts` en een
-> nieuwe test (`actionMemberWrite.test.ts`). Alles is eerst droog nagespeeld
-> op staging, in transacties die altijd worden teruggedraaid.
+> nieuwe test (`actionMemberWrite.test.ts`). De handleidingen
+> `docs/setup/MCP_CONNECTOR_SETUP.md` en `docs/setup/PUBLIC_API_SETUP.md`
+> beschrijven de nieuwe werking. Alles is eerst droog nagespeeld op staging,
+> in transacties die altijd worden teruggedraaid.
 
 ## Wat er misging
 
@@ -71,8 +73,10 @@ koppelt of negeert, staat als behandelaar vastgelegd.
 
 ## Getest
 
-**Droog op staging** (met de migratie, teruggedraaid; ook nadat de migratie
-van de tickets, `20261105020000_ticket_resolved_archive`, op staging stond):
+**Op staging**, in transacties die altijd worden teruggedraaid. Vóór de
+uitrol met de migratie als droogrun (ook nadat de migratie van de tickets,
+`20261105020000_ticket_resolved_archive`, op staging stond). Na de uitrol
+tegen de live functies:
 
 - **Twaalf tabellen buiten Financiën** (klanten, contactpersonen, klantvelden,
   mappen, notities, documenten, tickets, ticketnotities, projecten,
@@ -80,34 +84,67 @@ van de tickets, `20261105020000_ticket_resolved_archive`, op staging stond):
   eigenaar mag. Een lid zonder de module, een lid met alleen leesrecht en een
   buitenstaander mogen niet. Rapportages vallen onder Statistieken; daar is
   een lid met alleen leesrecht op Statistieken apart getest.
+- **Waar een bewaker op let:** een galerij publiceren, offline halen en de
+  deellink intrekken, portaaltoegang geven en klantvelden invullen lukken als
+  eigenaar. Portaaltoegang lukt niet als het e-mailadres intussen anders is
+  dan op de goedgekeurde kaart.
 - **Uren:**
   - de eigenaar en een lid met schrijfrecht mogen (zoals in de app);
   - zonder de module Uren of met alleen leesrecht lukt het niet;
   - een urenpost aanmaken gaat niet via deze weg;
   - de organisatie of de maker verzetten lukt niet.
-- **Klantveld aanmaken:** als eigenaar is het teamlid de maker. Met alleen
-  leesrecht volgt "Geen toegang tot de module clients".
+- **Aanmaken** van een klantveld, map, galerij, categorie en bankrekening,
+  met precies de waarden van de uitvoerders: als eigenaar lukt het, met de
+  eigenaar als maker. Met alleen leesrecht op de module volgt "Geen toegang
+  tot de module …". De grootboekrekening zat al in de test van Financiën.
 - **Weekplanner:** een actiepunt van een collega lukt niet, met en zonder
   voorwaarde. Een eigen actiepunt lukt.
-- **Postvak:**
+- **Postvak** (koppelen en negeren):
   - zonder Klanten lukt het niet;
-  - als eigenaar lukt het, met de eigenaar als behandelaar;
+  - als eigenaar lukt het: een gekoppeld bericht staat in het dossier van de
+    klant, met de eigenaar als behandelaar;
   - een andere organisatie in de argumenten telt niet ("Bericht niet
     gevonden").
 - **Buiten de lijst:** een andere functie of tabel wordt geweigerd. Een
   gewone gebruiker die de functies zelf aanroept, krijgt "permission denied".
-- **Financiën** (de test van vanochtend): dezelfde uitkomst als live. Alleen
-  een klant aanmaken langs deze weg wordt nu geweigerd.
+- **Financiën** (de test uit de controle van Financiën): dezelfde uitkomst
+  als daarvoor. Alleen een klant aanmaken langs deze weg wordt nu geweigerd.
 
 **Lokaal, op de samengevoegde stand van staging:**
 
 - typecheck ✓;
 - `npm test` 976/976, waarvan 7 nieuw (`actionMemberWrite.test.ts`);
-- `deno check`: de lijst uit CI (34 functies) is schoon.
+- `deno check`: de lijst uit CI (34 functies) is schoon;
+- de migratieketen vanaf nul (`supabase db start`): 237 van 237 toegepast.
+  De twee functies zijn alleen voor de server; `anon` en `authenticated`
+  kunnen ze niet aanroepen.
 
 De migratie heette eerst `20261105020000_…`. Een andere wijziging zette
 intussen een migratie met dat nummer op staging; deze kreeg daarom
 `20261105030000`.
+
+**Uitrol:**
+
+- **Deploy Supabase run 174:** de migratie is toegepast en alle edge
+  functions zijn uitgerold, ook `api` en `mcp`. De rooktest is helemaal
+  groen; `anon` heeft in public niets open.
+- **Frontend checks run 126:** helemaal groen. Dat zijn de keten vanaf nul,
+  `deno check`, de typecheck, CSP, de unit tests, de volledige mobiele
+  lay-outtest (donker en licht) en het laden per module.
+
+**Nacontrole tegen de live functies** (teruggedraaid):
+
+- De tests van vóór de uitrol geven tegen de live functies precies dezelfde
+  uitkomst als de droogruns.
+- Koppelen in het postvak, het aanmaken en de handelingen waar een bewaker op
+  let, zijn na de uitrol erbij getest. Die geven de uitkomst die hierboven
+  staat.
+- Op staging staan 237 migraties, de laatste is `20261105030000`.
+- Er is niets van de tests blijven staan: geen testleden, geen testrijen.
+
+**Niet gedaan:** een echte aanroep via een API-sleutel of MCP. Die zou
+gegevens in een bestaande werkruimte wijzigen. De weg tot en met de database
+is hierboven getest; de code van `api` en `mcp` zelf is niet veranderd.
 
 ## Bewust zo
 
