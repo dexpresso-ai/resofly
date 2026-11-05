@@ -10,7 +10,8 @@ import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } f
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
 import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
 import { splitRefundOverVatGroups } from '../_shared/creditNoteSplit.ts';
-import { invoiceVatNotes, type VatCodeInfo } from '../_shared/invoiceVatNotes.ts';
+import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
+import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderCreditNotePdf, renderDunningLetterPdf, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 import {
   amsterdamDate, buildMollieSalesInvoice, mollieAmountCents, mollieDate, mollieEmailBody, mollieFetchPolicy, molliePaymentStatus,
@@ -2274,18 +2275,6 @@ async function loadVatKindsByCode(organizationId: string): Promise<Record<string
   }
   return byCode;
 }
-// Soort en rubriek per btw-code, voor de verplichte vermeldingen op de pdf.
-async function loadVatCodeInfo(organizationId: string): Promise<Record<string, VatCodeInfo>> {
-  const { data, error } = await supabaseAdmin.from('vat_codes')
-    .select('code,kind,sales_box')
-    .eq('organization_id', organizationId);
-  if (error) { console.warn('vat_codes lookup voor de pdf mislukte:', error.message); return {}; }
-  const byCode: Record<string, VatCodeInfo> = {};
-  for (const row of (data ?? []) as Array<{ code: string; kind: string; sales_box: string | null }>) {
-    byCode[String(row.code)] = { kind: String(row.kind), salesBox: row.sales_box ?? null };
-  }
-  return byCode;
-}
 
 async function loadProject(organizationId: string, projectId: string): Promise<ProjectRow | null> {
   const { data, error } = await supabaseAdmin.from('projects').select('id,name,description').eq('id', projectId).eq('organization_id', organizationId).maybeSingle();
@@ -3550,7 +3539,7 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   // Art. 35a Wet OB: bij verlegging of een ICP-levering de reden op de factuur
   // én het btw-nummer van de afnemer. Zonder dat nummer geen factuur.
   const lines = Array.isArray(invoice.lines) ? invoice.lines : [];
-  const vatNotes = invoiceVatNotes(lines, await loadVatCodeInfo(invoice.organization_id));
+  const vatNotes = invoiceVatNotes(lines, await loadVatCodeInfo(supabaseAdmin, invoice.organization_id));
   if (vatNotes.needsCustomerVatNumber && !String(client.vat_number ?? '').trim()) {
     throw new WorkflowHttpError(`Op deze factuur staat ${vatNotes.reasons.join(' en ')}. Dan moet het btw-nummer van de klant op de factuur staan (art. 35a Wet OB); vul het in bij ${client.name}.`, 422);
   }
@@ -3588,7 +3577,7 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
 
 async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; date: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[]; reason: string | null; invoiceReference?: string; refunded?: boolean }): Promise<InvoicePdfAttachment> {
   const { creditNoteNumber, date, invoice, client, company, subtotal, vat, total, lines, reason } = input;
-  const vatNotes = invoiceVatNotes(Array.isArray(lines) ? lines : [], await loadVatCodeInfo(invoice.organization_id));
+  const vatNotes = invoiceVatNotes(Array.isArray(lines) ? lines : [], await loadVatCodeInfo(supabaseAdmin, invoice.organization_id));
   // In de opmaak van de factuur, met logo, letters en briefpapier
   // (_shared/documentPdf.ts). Bedragen komen uit de opgeslagen creditnota
   // (autoritatief) en staan negatief op het papier; de vorige opmaak had een

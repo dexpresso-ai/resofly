@@ -14,6 +14,9 @@ import {
   EMAIL_LOGO_MAX,
   emailBrandFromRow,
   emailLogoFromDataUrl,
+  loadEmailBrand,
+  loadSenderBrand,
+  loadSenderName,
   withEmailBrand,
   type EmailBrand,
 } from './emailBrand.ts';
@@ -212,6 +215,67 @@ test('elke route die mailt, neemt het logo mee', () => {
     return sends && !/\b(withEmailBrand|applyEmailBrand)\(/.test(source);
   });
   assert.deepEqual(missing, [], 'Haal de Resend-payload door withEmailBrand (zie _shared/emailBrand.ts).');
+});
+
+/** Een nagebootste Supabase-client die bijhoudt welke tabellen, kolommen en filters er gevraagd worden. */
+function fakeAdmin(rows: { company?: Record<string, unknown> | null; organization?: Record<string, unknown> | null; failColumn?: string }) {
+  const calls: Array<{ table: string; columns: string; filters: Record<string, string> }> = [];
+  const answer = (call: { table: string; columns: string }) => {
+    if (call.table === 'company_settings') {
+      if (rows.failColumn && call.columns.includes(rows.failColumn)) return { data: null, error: { message: `column ${rows.failColumn} does not exist` } };
+      const picked = rows.company ? Object.fromEntries(Object.entries(rows.company).filter(([key]) => call.columns.split(',').includes(key))) : null;
+      return { data: picked, error: null };
+    }
+    return { data: rows.organization ?? null, error: null };
+  };
+  return {
+    calls,
+    from(table: string) {
+      const call = { table, columns: '', filters: {} as Record<string, string> };
+      calls.push(call);
+      const chain = {
+        select(columns: string) { call.columns = columns; return chain; },
+        eq(column: string, value: string) { call.filters[column] = value; return chain; },
+        maybeSingle: () => Promise.resolve(answer(call)),
+      };
+      return chain;
+    },
+  };
+}
+
+test('afzender: naam, merkkleur en logo in één query, gefilterd op de organisatie', async () => {
+  const admin = fakeAdmin({ company: { trade_name: 'Studio Noord', company_name: 'Noord B.V.', brand_accent_color: '#2457C5', brand_logo_data_url: pngDataUrl(600, 150) } });
+  const sender = await loadSenderBrand(admin as never, 'org-1');
+  assert.equal(sender.name, 'Studio Noord');
+  assert.equal(sender.accent, '#2457C5');
+  assert.equal(sender.email.name, 'Studio Noord');
+  assert.ok(sender.email.logo);
+  // Eerst stond hier een query voor de naam en een tweede voor het logo.
+  assert.equal(admin.calls.length, 1);
+  assert.deepEqual(admin.calls[0].filters, { organization_id: 'org-1' });
+});
+
+test('afzender: zonder handels- en bedrijfsnaam de werkruimte, anders ResoFly; rommel is geen merkkleur', async () => {
+  const workspace = fakeAdmin({ company: { trade_name: '  ', company_name: '', brand_accent_color: 'url(x)' }, organization: { name: 'Lopik Foto' } });
+  const sender = await loadSenderBrand(workspace as never, 'org-2');
+  assert.equal(sender.name, 'Lopik Foto');
+  assert.equal(sender.accent, null);
+  assert.equal(sender.email.name, 'Lopik Foto', 'ook de alt-tekst van het logo');
+  assert.deepEqual(workspace.calls.map(call => [call.table, call.filters]), [['company_settings', { organization_id: 'org-2' }], ['organizations', { id: 'org-2' }]]);
+  assert.equal((await loadSenderBrand(fakeAdmin({}) as never, 'org-3')).name, 'ResoFly');
+  // Alleen de naam (de afmeldpagina): de logo's worden dan niet opgehaald.
+  const light = fakeAdmin({ company: { company_name: 'Noord B.V.' } });
+  assert.equal(await loadSenderName(light as never, 'org-4'), 'Noord B.V.');
+  assert.equal(light.calls[0].columns, 'company_name,trade_name');
+});
+
+test('afzender: bestaat de kolom van de lichte logoversie nog niet, dan zonder die kolom', async () => {
+  const admin = fakeAdmin({ company: { trade_name: 'Studio Noord', brand_logo_data_url: pngDataUrl(600, 150) }, failColumn: 'brand_logo_dark_data_url' });
+  const brand = await loadEmailBrand(admin as never, 'org-5');
+  assert.equal(brand.name, 'Studio Noord');
+  assert.ok(brand.logo);
+  assert.equal(admin.calls.length, 2);
+  assert.ok(!admin.calls[1].columns.includes('brand_logo_dark_data_url'));
 });
 
 test('naar een e-factuuradres gaat geen logo mee', () => {

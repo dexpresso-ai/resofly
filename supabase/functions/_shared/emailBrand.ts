@@ -137,48 +137,98 @@ function uint32(bytes: string, at: number): number {
   return ((bytes.charCodeAt(at) << 24) >>> 0) + (bytes.charCodeAt(at + 1) << 16) + (bytes.charCodeAt(at + 2) << 8) + bytes.charCodeAt(at + 3);
 }
 
+/** Handelsnaam, anders bedrijfsnaam; leeg als geen van beide is ingevuld. */
+function companyDisplayName(row: Record<string, unknown> | null | undefined): string {
+  return String(row?.trade_name || row?.company_name || '').trim();
+}
+
 /** De mailhuisstijl uit een company_settings-rij (alleen naam en logo's). */
 export function emailBrandFromRow(row: Record<string, unknown> | null | undefined): EmailBrand {
   if (!row) return { ...NO_EMAIL_BRAND };
-  const name = String(row.trade_name || row.company_name || '').trim();
   return {
-    name,
+    name: companyDisplayName(row),
     logo: emailLogoFromDataUrl(row.brand_logo_data_url),
     logoOnDark: emailLogoFromDataUrl(row.brand_logo_dark_data_url),
   };
 }
 
-const EMAIL_BRAND_COLUMNS = 'company_name,trade_name,brand_logo_data_url,brand_logo_dark_data_url';
+const SENDER_COLUMNS = 'company_name,trade_name,brand_accent_color,brand_logo_data_url,brand_logo_dark_data_url';
 
 /**
- * Haalt naam en logo's van één organisatie op, gefilterd op `organizationId`
- * (de service-role ziet alles; de route heeft de organisatie al uit de sessie,
- * het token of de eigen rij gehaald). Een eigen, kleine query: de logo's zijn
- * tot 300 kB en horen niet in de bedrijfsgegevens die bij elke actie meegaan.
+ * De company_settings-rij met naam, merkkleur en logo's, gefilterd op
+ * `organizationId` (de service-role ziet alles; de route heeft de organisatie
+ * al uit de sessie, het token of de eigen rij gehaald). Een eigen, kleine
+ * query: de logo's zijn tot 300 kB en horen niet in de bedrijfsgegevens die
+ * bij elke actie meegaan. Gooit nooit: null bij geen rij of een fout.
  */
-export async function loadEmailBrand(supabaseAdmin: SupabaseClient, organizationId: string | null | undefined): Promise<EmailBrand> {
-  if (!organizationId) return { ...NO_EMAIL_BRAND };
+async function loadSenderRow(supabaseAdmin: SupabaseClient, organizationId: string, columns: string): Promise<Record<string, unknown> | null> {
   try {
-    const query = (columns: string) => supabaseAdmin
+    const query = (select: string) => supabaseAdmin
       .from('company_settings')
-      .select(columns)
+      .select(select)
       .eq('organization_id', organizationId)
       .maybeSingle();
-    let { data, error } = await query(EMAIL_BRAND_COLUMNS);
-    if (error) {
+    let { data, error } = await query(columns);
+    if (error && columns.includes(',brand_logo_dark_data_url')) {
       // De lichte versie kwam later (20261015000000); zonder die kolom kan het
       // gewone logo nog steeds mee.
-      ({ data, error } = await query(EMAIL_BRAND_COLUMNS.replace(',brand_logo_dark_data_url', '')));
+      ({ data, error } = await query(columns.replace(',brand_logo_dark_data_url', '')));
     }
     if (error) {
-      console.warn('maillogo laden mislukt; de mail gaat zonder logo', error.message);
-      return { ...NO_EMAIL_BRAND };
+      console.warn('afzendergegevens laden mislukt; de mail gaat zonder logo', error.message);
+      return null;
     }
-    return emailBrandFromRow(data as Record<string, unknown> | null);
+    return (data ?? null) as Record<string, unknown> | null;
   } catch (error) {
-    console.warn('maillogo laden crashte; de mail gaat zonder logo', error instanceof Error ? error.message : error);
-    return { ...NO_EMAIL_BRAND };
+    console.warn('afzendergegevens laden crashte; de mail gaat zonder logo', error instanceof Error ? error.message : error);
+    return null;
   }
+}
+
+/** De naam van de werkruimte, als terugval wanneer handels- en bedrijfsnaam leeg zijn. */
+async function workspaceName(supabaseAdmin: SupabaseClient, organizationId: string): Promise<string> {
+  try {
+    const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).maybeSingle();
+    return String((data as { name?: unknown } | null)?.name ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+/** Haalt naam en logo's van één organisatie op, voor bovenaan de mail. */
+export async function loadEmailBrand(supabaseAdmin: SupabaseClient, organizationId: string | null | undefined): Promise<EmailBrand> {
+  if (!organizationId) return { ...NO_EMAIL_BRAND };
+  return emailBrandFromRow(await loadSenderRow(supabaseAdmin, organizationId, SENDER_COLUMNS));
+}
+
+/** Naam, merkkleur en logo's van de afzender: wat een mail van de organisatie nodig heeft. */
+export interface SenderBrand {
+  /** Handelsnaam, bedrijfsnaam of de naam van de werkruimte; nooit leeg. */
+  name: string;
+  /** De merkkleur uit Huisstijl ("#RRGGBB"), of null. */
+  accent: string | null;
+  /** Naam en logo's voor bovenaan de mail (`withEmailBrand`). */
+  email: EmailBrand;
+}
+
+/**
+ * Alles over de afzender in één query. Stond eerst los in de boekingsfuncties
+ * (`orgBrand`, twee keer letterlijk), de campagnes (`loadOrgBrand`) en de
+ * notulen (`loadCompanyName`), telkens met een tweede query voor het logo
+ * erachteraan. De naam valt terug op de werkruimte: een nieuw account heeft
+ * nog geen bedrijfsnaam, en dan liever "Studio Noord" dan niets.
+ */
+export async function loadSenderBrand(supabaseAdmin: SupabaseClient, organizationId: string): Promise<SenderBrand> {
+  const row = await loadSenderRow(supabaseAdmin, organizationId, SENDER_COLUMNS);
+  const name = companyDisplayName(row) || (await workspaceName(supabaseAdmin, organizationId)) || 'ResoFly';
+  const accent = typeof row?.brand_accent_color === 'string' && /^#[0-9a-f]{6}$/i.test(row.brand_accent_color) ? row.brand_accent_color : null;
+  return { name, accent, email: { ...emailBrandFromRow(row), name } };
+}
+
+/** Alleen de naam (de afmeldpagina mailt niet en heeft de logo's niet nodig). */
+export async function loadSenderName(supabaseAdmin: SupabaseClient, organizationId: string): Promise<string> {
+  const row = await loadSenderRow(supabaseAdmin, organizationId, 'company_name,trade_name');
+  return companyDisplayName(row) || (await workspaceName(supabaseAdmin, organizationId)) || 'ResoFly';
 }
 
 function logoImage(logo: EmailLogo, cid: string, alt: string): string {

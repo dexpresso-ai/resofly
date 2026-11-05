@@ -20,7 +20,7 @@ import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingConfirmedEmail } from '../_shared/emailTemplates/meetingBookingConfirmed.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
-import { loadEmailBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
+import { loadSenderBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
@@ -274,7 +274,9 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
   if (!RESEND_API_KEY) return;
   const sender = await resolveSenderIdentity(supabaseAdmin, link.organization_id, RESEND_FROM_EMAIL);
   if (!sender.from) return;
-  const brand = await orgBrand(link.organization_id);
+  // Naam, merkkleur en logo in één query (_shared/emailBrand.ts): de merknaam
+  // of bedrijfsnaam, en pas daarna de naam van de werkruimte.
+  const brand = await loadSenderBrand(supabaseAdmin, link.organization_id);
   const brandName = brand.name;
   const whenLines = confirmed.map(c => whenLine(c.starts_at, c.ends_at));
   const content = await loadBookingEmailContent(link.organization_id, 'meetingBooking.confirmed');
@@ -290,9 +292,7 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     inviteMessage: link.invite_message,
     content,
   });
-  // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
-  const emailBrand = await loadEmailBrand(supabaseAdmin, link.organization_id);
-  await sendResend(link.organization_id, sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text, emailBrand).catch(err => console.error('client confirm mail', err));
+  await sendResend(link.organization_id, sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text, brand.email).catch(err => console.error('client confirm mail', err));
 
   // Notificatie naar de eigenaar van de link.
   const ownerEmail = link.user_id ? await ownerEmailFor(link.user_id) : null;
@@ -302,24 +302,6 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     const html = `<p>${escapeHtml(name || email)} heeft geboekt:</p><ul>${whenLines.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul><p>E-mail: ${escapeHtml(email)}</p>`;
     await sendResend(link.organization_id, sender.from, [ownerEmail], undefined, subject, html, lines).catch(err => console.error('owner notify mail', err));
   }
-}
-
-/**
- * Naam en merkkleur voor de mail aan de klant: de merknaam (of de
- * bedrijfsnaam) uit Huisstijl, en pas als die er niet is de naam van de
- * werkruimte. Die werkruimtenaam is bij een nieuw account het eerste deel van
- * het e-mailadres van wie zich aanmeldde, en stond zo boven de mail, in het
- * goud van ResoFly in plaats van de eigen merkkleur.
- */
-async function orgBrand(organizationId: string): Promise<{ name: string; accent: string | null }> {
-  const { data: company } = await supabaseAdmin.from('company_settings')
-    .select('trade_name,company_name,brand_accent_color')
-    .eq('organization_id', organizationId).maybeSingle();
-  const accent = typeof company?.brand_accent_color === 'string' ? company.brand_accent_color : null;
-  const name = String(company?.trade_name || company?.company_name || '').trim();
-  if (name) return { name, accent };
-  const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).maybeSingle();
-  return { name: (data?.name as string) || 'ResoFly', accent };
 }
 
 /** De eigen Jitsi-server van de organisatie (Instellingen → Agenda); null = meet.jit.si. */

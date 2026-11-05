@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailLayout, escapeHtml } from '../_shared/emailTemplates/layout.ts';
-import { loadEmailBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
+import { loadSenderBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 import {
   sendViaResend,
   resendEmailId,
@@ -552,7 +552,9 @@ async function sendTestCampaign(
     (message, status) => new CampaignHttpError(message, status));
   if (!campaign.subject.trim()) throw new CampaignHttpError('De campagne heeft nog geen onderwerp.', 422);
 
-  const brandName = await loadOrgBrand(organizationId);
+  // Naam en logo van de afzender in één query (_shared/emailBrand.ts).
+  const senderBrand = await loadSenderBrand(supabaseAdmin, organizationId);
+  const brandName = senderBrand.name;
   const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO, campaign.created_by);
   if (!sender.from) throw new CampaignHttpError('Er is nog geen afzenderadres geconfigureerd (verzenddomein of RESEND_FROM_EMAIL).', 422);
 
@@ -585,7 +587,7 @@ async function sendTestCampaign(
       subject: `[TEST] ${personalized.subject}`,
       html,
       text,
-    }, await loadEmailBrand(supabaseAdmin, organizationId)),
+    }, senderBrand.email),
     `campaign-test-${sanitizeIdempotencyPart(campaign.id)}-${crypto.randomUUID()}`,
   );
   return { providerEmailId: resendEmailId(payload), recipientEmail, previewClientId: sample?.clientId ?? null };
@@ -787,9 +789,10 @@ async function dispatchCampaign(campaign: CampaignRow, limit: number): Promise<{
   }
   if (recipients.length === 0) return { sent: 0, failed: 0 };
 
-  const brandName = await loadOrgBrand(campaign.organization_id);
-  // Het logo bovenaan, één keer per batch geladen (niet per ontvanger).
-  const emailBrand = await loadEmailBrand(supabaseAdmin, campaign.organization_id);
+  // Naam en logo van de afzender, één keer per batch (niet per ontvanger).
+  const senderBrand = await loadSenderBrand(supabaseAdmin, campaign.organization_id);
+  const brandName = senderBrand.name;
+  const emailBrand = senderBrand.email;
   const fromEmailForRow = sender.fromEmail || extractEmailAddress(sender.from);
   const fromNameForRow = extractDisplayName(sender.from);
   // Standaardterugvalwaarden uit de velddefinities, eenmalig per batch. Ze staan
@@ -1256,8 +1259,9 @@ async function handleFlowTick(): Promise<{ claimed: number; sent: number; stoppe
   for (const orgId of orgIds) {
     const emails = enrollments.filter((e) => e.organization_id === orgId).map((e) => e.to_email);
     suppressedByOrg.set(orgId, await loadSuppressedFor(orgId, emails));
-    brandByOrg.set(orgId, await loadOrgBrand(orgId));
-    emailBrandByOrg.set(orgId, await loadEmailBrand(supabaseAdmin, orgId));
+    const senderBrand = await loadSenderBrand(supabaseAdmin, orgId);
+    brandByOrg.set(orgId, senderBrand.name);
+    emailBrandByOrg.set(orgId, senderBrand.email);
     fallbacksByOrg.set(orgId, buildMergeFallbacks(await loadFieldDefinitions(orgId)));
   }
   // Afzender per STROOM (niet per org): de persoonlijke afzender van de maker
@@ -1542,23 +1546,6 @@ async function sendFlowStep(
 }
 
 // ── Kleine helpers ──────────────────────────────────────────────────────────
-
-async function loadOrgBrand(organizationId: string): Promise<string> {
-  const { data: company } = await supabaseAdmin
-    .from('company_settings')
-    .select('company_name,trade_name')
-    .eq('organization_id', organizationId)
-    .maybeSingle();
-  if (company && (company.trade_name || company.company_name)) {
-    return String(company.trade_name || company.company_name);
-  }
-  const { data: org } = await supabaseAdmin
-    .from('organizations')
-    .select('name')
-    .eq('id', organizationId)
-    .maybeSingle();
-  return String(org?.name || 'ResoFly');
-}
 
 function requireResendConfigured(): void {
   if (!RESEND_API_KEY) throw new CampaignHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);

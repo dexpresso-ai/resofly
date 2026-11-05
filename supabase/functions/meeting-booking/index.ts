@@ -31,7 +31,7 @@ import { getExternalWriteAccessToken, sendEventCancellations } from '../_shared/
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingLinkEmail } from '../_shared/emailTemplates/meetingBookingLinkSent.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
-import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
+import { loadSenderBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
@@ -396,24 +396,6 @@ async function removeSlot(organizationId: string, linkId: string, slotId: string
   if (error) throw new HttpError(error.message, 500);
 }
 
-/**
- * Naam en merkkleur voor de mail aan de klant: de merknaam (of de
- * bedrijfsnaam) uit Huisstijl, en pas als die er niet is de naam van de
- * werkruimte. Die werkruimtenaam is bij een nieuw account het eerste deel van
- * het e-mailadres van wie zich aanmeldde, en stond zo boven de mail, in het
- * goud van ResoFly in plaats van de eigen merkkleur.
- */
-async function orgBrand(organizationId: string): Promise<{ name: string; accent: string | null }> {
-  const { data: company } = await supabaseAdmin.from('company_settings')
-    .select('trade_name,company_name,brand_accent_color')
-    .eq('organization_id', organizationId).maybeSingle();
-  const accent = typeof company?.brand_accent_color === 'string' ? company.brand_accent_color : null;
-  const name = String(company?.trade_name || company?.company_name || '').trim();
-  if (name) return { name, accent };
-  const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).maybeSingle();
-  return { name: (data?.name as string) || 'ResoFly', accent };
-}
-
 /** Aangepaste e-mailtekst (email_templates) voor een booking-template; null = defaults. */
 async function loadBookingEmailContent(organizationId: string, templateKey: string): Promise<EmailTemplateContent | null> {
   const { data, error } = await supabaseAdmin.from('email_templates')
@@ -451,7 +433,9 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
   if (await sha256Hex(token) !== link.public_token_hash) throw new HttpError('Het meegestuurde token hoort niet bij deze link.', 422);
   const bookingUrl = buildBookingUrl(token);
 
-  const brand = await orgBrand(organizationId);
+  // Naam, merkkleur en logo in één query (_shared/emailBrand.ts): de merknaam
+  // of bedrijfsnaam, en pas daarna de naam van de werkruimte.
+  const brand = await loadSenderBrand(supabaseAdmin, organizationId);
   const brandName = brand.name;
   const content = await loadBookingEmailContent(organizationId, 'meetingBooking.linkSent');
   const rendered = renderMeetingBookingLinkEmail({
@@ -469,8 +453,6 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new HttpError(message, status));
-  // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
-  const emailBrand = await loadEmailBrand(supabaseAdmin, organizationId);
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
@@ -481,7 +463,7 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
       subject: rendered.subject,
       html: rendered.html,
       text: rendered.text,
-    }, emailBrand)),
+    }, brand.email)),
   });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {

@@ -29,7 +29,7 @@ import { elevenlabsConfigured, requestTranscription } from '../_shared/elevenlab
 import { runSummaryForRecording } from '../_shared/meetingPipeline.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { EMAIL_LOGO_SLOT_LIGHT } from '../_shared/emailTemplates/layout.ts';
-import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
+import { loadSenderBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 
 const admin = createAdminClient();
 
@@ -262,7 +262,9 @@ async function sendSummary(organizationId: string, role: Awaited<ReturnType<type
   }
   if (recipients.length === 0) throw new HttpError('Geen geldige genodigden om naar te versturen.', 422);
 
-  const company = await loadCompanyName(organizationId);
+  // Naam en logo van de afzender in één query (_shared/emailBrand.ts).
+  const senderBrand = await loadSenderBrand(admin, organizationId);
+  const company = senderBrand.name;
   const sender = await resolveSenderIdentity(admin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   if (!sender.from) throw new HttpError('Er is geen afzenderadres geconfigureerd (koppel een verzenddomein of zet RESEND_FROM_EMAIL).', 422);
 
@@ -271,8 +273,6 @@ async function sendSummary(organizationId: string, role: Awaited<ReturnType<type
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(admin, organizationId, recipients.length, (message, status) => new HttpError(message, status));
-  // Het logo bovenaan de notulen (ingesloten, zie _shared/emailBrand.ts); één keer voor alle genodigden.
-  const brand = await loadEmailBrand(admin, organizationId);
   const nonce = crypto.randomUUID();
   const sent: { email: string; name: string | null }[] = [];
   const failed: { email: string; error: string }[] = [];
@@ -285,7 +285,7 @@ async function sendSummary(organizationId: string, role: Awaited<ReturnType<type
         subject,
         html,
         text,
-      }, brand), `meeting-summary-${recordingId}-${sanitizeKey(r.email)}-${nonce}`);
+      }, senderBrand.email), `meeting-summary-${recordingId}-${sanitizeKey(r.email)}-${nonce}`);
       sent.push(r);
     } catch (e) {
       failed.push({ email: r.email, error: e instanceof Error ? e.message : 'Versturen mislukt.' });
@@ -360,14 +360,6 @@ async function loadRecordingForMail(organizationId: string, recordingId: string)
     .eq('id', recordingId).eq('organization_id', organizationId).single();
   if (error || !data) throw new HttpError('Opname niet gevonden in deze organisatie.', 404);
   return data as { id: string; event_title_snapshot: string | null; transcript_text: string | null };
-}
-
-async function loadCompanyName(organizationId: string): Promise<string> {
-  const [{ data: company }, { data: org }] = await Promise.all([
-    admin.from('company_settings').select('company_name, trade_name').eq('organization_id', organizationId).maybeSingle(),
-    admin.from('organizations').select('name').eq('id', organizationId).maybeSingle(),
-  ]);
-  return String(company?.trade_name || company?.company_name || org?.name || 'ResoFly');
 }
 
 // ── E-mail (Resend) ────────────────────────────────────────────────────────────

@@ -76,8 +76,14 @@ test('de spiegel voor de edge functions is teken voor teken gelijk', () => {
     return source.slice(at);
   };
   assert.equal(body('../../supabase/functions/_shared/documentLayout.ts'), body('./documentLayout.ts'));
-  // En geen imports: het bestand moet ongewijzigd in Deno draaien.
+  // Het lijf importeert niets: het moet ongewijzigd in browser, node en Deno
+  // draaien. De kop van beide kopieën heeft precies één import, dezelfde: de
+  // kleurregel (brandColor.ts, zelf ook een pure spiegel met zijn eigen test).
   assert.doesNotMatch(body('./documentLayout.ts'), /^import /m);
+  const imports = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8').split('\n').filter(line => line.startsWith('import '));
+  const expected = [`import { blendColors, contrastRatio, hexChannels, readableShade, textOnColor } from './brandColor.ts';`];
+  assert.deepEqual(imports('./documentLayout.ts'), expected);
+  assert.deepEqual(imports('../../supabase/functions/_shared/documentLayout.ts'), expected);
 });
 
 test('zonder opmaak (of met rommel) geldt de standaard', () => {

@@ -8,9 +8,12 @@
 // lopen. Zo kan het voorbeeld in de app nooit meer iets anders laten zien dan
 // de verstuurde PDF.
 //
-// Puur: geen database, geen Deno-API's, geen imports. pdf-lib komt als
+// Puur: geen database, geen Deno-API's. Eén import: brandColor.ts, de
+// kleurregel (ook een spiegel, hetzelfde pad als in de app). pdf-lib komt als
 // parameter binnen (`renderDocumentPdf`).
 // ============================================================
+
+import { blendColors, contrastRatio, hexChannels, readableShade, textOnColor } from './brandColor.ts';
 
 // ---- Vanaf hier is dit bestand gelijk aan zijn spiegel (zie de test). ----
 
@@ -863,55 +866,8 @@ function hexOr(value: unknown, fallback: string): string {
   return HEX.test(text) ? text.toUpperCase() : fallback;
 }
 
-function channels(hex: string): [number, number, number] {
-  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
-}
-
-function toHex(r: number, g: number, b: number): string {
-  return `#${[r, g, b].map(c => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
-}
-
-function luminance(hex: string): number {
-  const lin = (c: number) => {
-    const v = c / 255;
-    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-  };
-  const [r, g, b] = channels(hex);
-  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-
-export function documentContrast(a: string, b: string): number {
-  const la = luminance(a);
-  const lb = luminance(b);
-  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
-}
-
-function blend(front: string, back: string, alpha: number): string {
-  const f = channels(front);
-  const k = channels(back);
-  return toHex(f[0] * alpha + k[0] * (1 - alpha), f[1] * alpha + k[1] * (1 - alpha), f[2] * alpha + k[2] * (1 - alpha));
-}
-
-function toHsl(hex: string): { h: number; s: number; l: number } {
-  const [r, g, b] = channels(hex).map(c => c / 255);
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  const d = max - min;
-  if (d === 0) return { h: 0, s: 0, l };
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  h *= 60;
-  return { h: h < 0 ? h + 360 : h, s, l };
-}
-
-function fromHsl(h: number, s: number, l: number): string {
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = l - c / 2;
-  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
-  return toHex((r + m) * 255, (g + m) * 255, (b + m) * 255);
-}
+/** De WCAG-contrastverhouding; dezelfde als contrastRatio in brandColor.ts (zo heette hij hier al). */
+export const documentContrast = contrastRatio;
 
 /**
  * De merkkleur als TEKST op wit papier. Merkgoud (#FFD966) haalt op wit maar
@@ -920,13 +876,7 @@ function fromHsl(h: number, s: number, l: number): string {
  * klantpagina's in src/lib/branding.ts).
  */
 function readableOnPaper(accent: string): string {
-  if (documentContrast(accent, '#FFFFFF') >= 4.5) return accent;
-  const { h, s, l } = toHsl(accent);
-  for (let next = l; next >= 0; next -= 0.02) {
-    const candidate = fromHsl(h, s, Math.max(0, next));
-    if (documentContrast(candidate, '#FFFFFF') >= 4.5) return candidate;
-  }
-  return '#000000';
+  return readableShade(accent, ['#FFFFFF'], { direction: 'darker' });
 }
 
 // ── Stijl ───────────────────────────────────────────────────────────────────
@@ -969,7 +919,10 @@ export function resolveDocumentStyle(
   const accent = hexOr(row?.brand_accent_color, hexOr(row?.invoice_accent_color, '#FFD966'));
   const size = Math.round(Number(row?.invoice_font_size ?? 10));
   const baseSize = Number.isFinite(size) ? Math.max(LAYOUT_LIMITS.baseSize.min, Math.min(LAYOUT_LIMITS.baseSize.max, size)) : 10;
-  const onAccent = documentContrast(accent, '#111111') >= documentContrast(accent, '#FFFFFF') ? '#111111' : '#FFFFFF';
+  // Zoals de mail en de klantpagina's: haalt bijna-zwart noch wit 4,5 : 1 (een
+  // grijs merk als #7A7A7A), dan puur zwart. Hier stond eerst geen terugval,
+  // en kwam de knoptekst op de PDF op 4,4 : 1.
+  const onAccent = textOnColor(accent);
   const heading = !fonts.heading || fonts.heading === 'auto' ? brandPdfFont(row?.brand_heading_font) : pdfFont(fonts.heading).key;
   let body = !fonts.body || fonts.body === 'auto' ? brandPdfFont(row?.brand_body_font) : pdfFont(fonts.body).key;
   // Bebas Neue heeft alleen kapitalen: niet voor lopende tekst.
@@ -978,7 +931,7 @@ export function resolveDocumentStyle(
     ink,
     // Gedempt: de tekstkleur, 30% naar wit. Bij de standaard #1A1A1A is dat
     // #5F5F5F, vrijwel het grijs van de oude PDF's, en 6,4 : 1 op wit.
-    muted: blend(ink, '#FFFFFF', 0.7),
+    muted: blendColors(ink, '#FFFFFF', 0.7),
     accent,
     accentInk: readableOnPaper(accent),
     onAccent,
@@ -2408,7 +2361,7 @@ function plainLayoutFontkit(fontkit: unknown): unknown {
 }
 
 function pdfColor(lib: PdfLibLike, hex: string): unknown {
-  const [r, g, b] = channels(HEX.test(hex) ? hex : '#000000');
+  const [r, g, b] = hexChannels(HEX.test(hex) ? hex : '#000000');
   return lib.rgb(r / 255, g / 255, b / 255);
 }
 

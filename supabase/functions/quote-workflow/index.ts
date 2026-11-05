@@ -6,7 +6,8 @@ import { getModuleLevel } from '../_shared/edgeAuth.ts';
 
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
 import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
-import { invoiceVatNotes, type VatCodeInfo } from '../_shared/invoiceVatNotes.ts';
+import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
+import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
@@ -852,7 +853,7 @@ async function createQuotePdfAttachment(input: {
   // KvK en btw-nummer die onderaan de afzender wegvielen.
   const [design, vatCodes] = await Promise.all([
     loadDocumentDesign(supabaseAdmin, quote.organization_id),
-    loadVatCodeInfo(quote.organization_id),
+    loadVatCodeInfo(supabaseAdmin, quote.organization_id),
   ]);
   // Bij btw verlegd of ICP hoort de reden er ook op de offerte bij: dan weet
   // de klant vooraf waarom er geen btw op staat.
@@ -883,24 +884,6 @@ async function createQuotePdfAttachment(input: {
     sizeBytes: bytes.byteLength,
     sha256,
   };
-}
-
-// Soort en rubriek per btw-code, voor de verplichte vermeldingen op de pdf.
-// Fail-open: zonder btw-codes geen vermeldingen, maar wel een offerte.
-async function loadVatCodeInfo(organizationId: string): Promise<Record<string, VatCodeInfo>> {
-  const { data, error } = await supabaseAdmin
-    .from('vat_codes')
-    .select('code,kind,sales_box')
-    .eq('organization_id', organizationId);
-  if (error) {
-    console.warn('vat_codes lookup voor de offerte-pdf mislukte:', error.message);
-    return {};
-  }
-  const byCode: Record<string, VatCodeInfo> = {};
-  for (const row of (data ?? []) as Array<{ code: string; kind: string; sales_box: string | null }>) {
-    byCode[String(row.code)] = { kind: String(row.kind), salesBox: row.sales_box ?? null };
-  }
-  return byCode;
 }
 
 function validateQuotePdfAttachment(attachment: QuotePdfAttachment): void {

@@ -127,9 +127,41 @@ Bewust niet overgenomen:
   start (de lettermodule zelf 6 ms), niet per verzoek. Een dynamische import is hier niet tegen de
   bundelaar van Supabase te testen; neemt die hem niet mee, dan vallen alle PDF's stil terug op
   Helvetica. Geen enkele edge function gebruikt nu een dynamische import.
-- **Dubbele code** (`loadVatCodeInfo` in twee workflows, `orgBrand` in de twee boekingsfuncties,
-  de contrastberekening in de mailmap): geen fout, wel onderhoud. De mailmap heeft bewust geen
-  imports; samenvoegen kan in een eigen stap.
+- ~~Dubbele code~~: opgeruimd, zie *Opruiming* hieronder.
+
+## Opruiming: dubbele code
+
+- **Eén kleurregel: `brandColor.ts`.** Helderheid, contrast, kleurtoon, "de merkkleur leesbaar
+  maken" en "tekst op een merkkleurig vlak" stonden op drie plekken, elk net anders: de
+  klantpagina's (`src/lib/branding.ts`), de PDF (`documentLayout.ts`) en de mails
+  (`emailTemplates/layout.ts`). Nu één pure module, gespiegeld zoals `documentLayout.ts`
+  (`src/lib/brandColor.ts` en `supabase/functions/_shared/brandColor.ts`; de test houdt ze gelijk).
+  - Vooraf en achteraf vergeleken over alle 4096 kleuren van een 12-bits raster plus 20.000
+    willekeurige: de mail, de merkkleur als tekst op papier en álle uitkomsten van de klantpagina's
+    (beide sferen, met en zonder eigen kopkleur) zijn exact gelijk gebleven.
+  - Eén bewust verschil, een fout die zo boven kwam: de tekst óp een merkkleurig vlak in de PDF
+    viel niet terug op puur zwart als bijna-zwart en wit allebei onder 4,5 : 1 bleven (de mail en
+    de klantpagina's deden dat wel). Op een raster van 636.000 kleuren gold dat voor 22.028
+    middentinten, zoals blauw #0077DD, met soms maar 4,35 : 1. Nu overal minstens 4,5 : 1.
+  - `documentLayout.ts` importeert daarvoor één bestand, `./brandColor.ts`, met hetzelfde pad in
+    app en server. De app mag daarom eigen bestanden met `.ts` importeren
+    (`allowImportingTsExtensions` in `tsconfig.json`): zonder die extensie vindt node (de tests)
+    het bestand niet, en met de extensie weigerde TypeScript.
+  - Een test zorgt dat de luminantieformule nergens anders opnieuw verschijnt.
+- **De afzender: `loadSenderBrand` en `loadSenderName`** (`_shared/emailBrand.ts`). Naam
+  (handelsnaam, bedrijfsnaam, anders de werkruimte), merkkleur en logo's in één query. Vervangt
+  `orgBrand` (letterlijk twee keer, in de boekingsfuncties), `loadOrgBrand` (campagnes én de
+  afmeldpagina) en `loadCompanyName` (notulen), en de tweede query voor het logo die er in deze
+  ronde naast was gekomen.
+- **`loadVatCodeInfo`** staat in `_shared/vatCodeInfo.ts` in plaats van letterlijk in
+  `invoice-workflow` en `quote-workflow`; zelfde gedrag (ook codes die uit staan, gefilterd op de
+  organisatie).
+- Getest: typecheck schoon; `npm test` 1034 groen (nieuw: `brandColor.test.ts`,
+  `vatCodeInfo.test.ts`, en tests op de afzender met een nagebootste database: één query, filter
+  op de organisatie, terugval op de werkruimte); `npm run build` lukt; `deno check` op de hele
+  CI-lijst en de gedeelde modules schoon, de twee workflows gelijk aan staging; de serverkant in
+  Deno gedraaid (PDF's en mail met logo); mobiele test op alle schermen met de huisstijl (portaal,
+  publieke pagina's, galerij, instellingen): 90 pagina's, 0 met problemen; editor 25/25.
 
 ## Niet gedaan (bewust, of voor later)
 

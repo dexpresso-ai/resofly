@@ -1,3 +1,7 @@
+// De sjablonen importeren alleen elkaar en de pure kleurregel (../brandColor.ts):
+// geen Deno-API's, geen npm, zodat ze ook in de node-tests draaien.
+import { contrastRatio, readableShade, textOnColor } from '../brandColor.ts';
+
 export type EmailLayoutInput = {
   brandName: string;
   preheader?: string;
@@ -89,72 +93,26 @@ export function sanitizeAccentColor(value?: string | null): string {
 }
 
 // ── Leesbare merkkleur ──────────────────────────────────────────────────────
-// Dezelfde regels als src/lib/branding.ts (klantpagina's) en de PDF-opmaak:
-// de tint van het merk blijft, alleen de helderheid schuift tot de tekst de
-// WCAG-norm van 4,5 : 1 haalt. Hier los, want deze map heeft geen imports.
+// De rekenregel zelf staat in ../brandColor.ts: dezelfde als de klantpagina's
+// (src/lib/branding.ts) en de PDF (documentLayout.ts). De tint van het merk
+// blijft, alleen de helderheid schuift tot de tekst 4,5 : 1 haalt. Eerst
+// stond hier een eigen kopie; de drie liepen al uit elkaar.
 
-function channels(hex: string): [number, number, number] {
-  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
-}
-
-function luminance(hex: string): number {
-  const lin = (c: number) => {
-    const v = c / 255;
-    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-  };
-  const [r, g, b] = channels(hex);
-  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-
-export function emailContrast(a: string, b: string): number {
-  const la = luminance(a);
-  const lb = luminance(b);
-  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
-}
-
-function toHsl(hex: string): { h: number; s: number; l: number } {
-  const [r, g, b] = channels(hex).map(c => c / 255);
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  const d = max - min;
-  if (d === 0) return { h: 0, s: 0, l };
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  h *= 60;
-  return { h: h < 0 ? h + 360 : h, s, l };
-}
-
-function fromHsl(h: number, s: number, l: number): string {
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = l - c / 2;
-  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
-  const hex = (v: number) => Math.max(0, Math.min(255, Math.round((v + m) * 255))).toString(16).padStart(2, '0');
-  return `#${hex(r)}${hex(g)}${hex(b)}`.toUpperCase();
-}
+/** De WCAG-contrastverhouding (zo heette hij hier al). */
+export const emailContrast = contrastRatio;
 
 /**
  * Tekst óp de merkkleur (een knop): bijna-zwart of wit, wat het best leest.
  * Een merkkleur midden in de grijstrap (#7A7A7A) haalt met geen van beide de
- * 4,5 : 1; dan puur zwart, net als op de klantpagina's (inkOnAccent).
+ * 4,5 : 1; dan puur zwart, net als op de klantpagina's en in de PDF.
  */
 export function textOnAccent(accent: string): string {
-  const color = sanitizeAccentColor(accent);
-  const best = emailContrast(color, '#111111') >= emailContrast(color, '#FFFFFF') ? '#111111' : '#FFFFFF';
-  return emailContrast(color, best) >= 4.5 ? best : '#000000';
+  return textOnColor(sanitizeAccentColor(accent));
 }
 
 /** De merkkleur als tekst of streep op een donker vlak, opgehelderd tot 4,5 : 1. */
 export function accentOnDark(accent: string, background: string = EMAIL_CARD): string {
-  const color = sanitizeAccentColor(accent);
-  if (emailContrast(color, background) >= 4.5) return color;
-  const { h, s, l } = toHsl(color);
-  for (let next = l; next <= 1; next += 0.02) {
-    const candidate = fromHsl(h, s, Math.min(1, next));
-    if (emailContrast(candidate, background) >= 4.5) return candidate;
-  }
-  return '#FFFFFF';
+  return readableShade(sanitizeAccentColor(accent), [background], { direction: 'lighter' });
 }
 
 export function textLines(lines: Array<string | null | undefined | false>): string {
