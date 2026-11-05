@@ -904,6 +904,26 @@ begin
     raise exception 'Offerte niet gevonden' using errcode = '02000';
   end if;
 
+  -- GEWIJZIGD (20261105230000): alleen over een offerte van de eigen klant.
+  -- Het portaal liet een klant ook offertes zien en accepteren via een project
+  -- dat later naar hem verhuisde (de offerte bleef van de vorige klant). De
+  -- edge function kijkt nu naar de klant van de offerte zelf; hier nog eens,
+  -- zodat geen enkele aanroeper namens een ander kan beslissen. Een offerte
+  -- zonder eigen klant telt via het project, zoals in het portaal.
+  if not exists (
+    select 1
+    from public.portal_clients_for_email(p_email) pc
+    where pc.organization_id = v_quote.organization_id
+      and (pc.id = v_quote.client_id
+           or (v_quote.client_id is null and v_quote.project_id is not null
+               and exists (select 1 from public.projects pr
+                           where pr.id = v_quote.project_id
+                             and pr.organization_id = v_quote.organization_id
+                             and pr.client_id = pc.id)))
+  ) then
+    raise exception 'Offerte niet gevonden' using errcode = '02000';
+  end if;
+
   if v_quote.status <> 'sent' then
     raise exception 'Deze offerte kan niet meer worden %',
       case when v_kind = 'accept' then 'geaccepteerd' else 'geweigerd' end
@@ -2521,6 +2541,60 @@ $function$;
 
 revoke all on function public.begin_invoice_payment_checkout(uuid, uuid, uuid, integer, text, timestamptz, text, text, timestamptz, jsonb) from public, anon, authenticated;
 grant execute on function public.begin_invoice_payment_checkout(uuid, uuid, uuid, integer, text, timestamptz, text, text, timestamptz, jsonb) to service_role;
+
+
+-- ── I5. Een betaling die eerder kwam dan de boeking van de factuur ─────────
+--
+-- Een concept met een betaallink (de link wordt vóór het versturen gemaakt) dat
+-- toch betaald werd: de betaling kwam binnen terwijl de factuur nog niet te
+-- boeken was (book_invoice_payment slaat hem dan over), daarna boekte de
+-- statuswissel naar 'paid' de factuur. Gevolg: factuur betaald, omzet en btw
+-- geboekt, maar 1300 Debiteuren bleef het volle bedrag tonen, zonder signaal en
+-- zonder knop om het recht te zetten. Nu boekt het boeken van de factuur ook de
+-- betalingen die al binnen waren.
+
+create or replace function public.trg_autobook_sales_invoice()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_payment record;
+begin
+  if new.journal_entry_id is null
+     and new.status in ('sent', 'accepted', 'paid', 'overdue') then
+    begin
+      perform public.ensure_sales_invoice_booked(new.organization_id, new.id, new.created_by);
+    exception when others then
+      raise warning 'Automatisch boeken van factuur % mislukt: %', new.id, sqlerrm;
+    end;
+    -- GEWIJZIGD (20261105230000): betalingen die al binnen waren, alsnog boeken.
+    -- book_invoice_payment is idempotent en boekt niets zolang de factuur zelf
+    -- niet geboekt is (vóór de startdatum: beginbalans).
+    for v_payment in
+      select p.id
+      from public.invoice_payment_records p
+      where p.organization_id = new.organization_id
+        and p.invoice_id = new.id
+        and p.status = 'paid'
+        and p.journal_entry_id is null
+        and coalesce(p.amount_cents, 0) > 0
+      order by p.paid_at nulls last, p.created_at
+    loop
+      begin
+        perform public.book_invoice_payment(new.organization_id, v_payment.id, new.created_by);
+      exception when others then
+        raise warning 'Automatisch boeken van betaling % mislukt: %', v_payment.id, sqlerrm;
+      end;
+    end loop;
+  end if;
+  return null;   -- AFTER-trigger
+end;
+$$;
+
+revoke all on function public.trg_autobook_sales_invoice() from public, anon;
+grant execute on function public.trg_autobook_sales_invoice() to authenticated, service_role;
 
 
 -- ── J1. Pushmelding "Factuur betaald" alleen voor wie Financiën ziet ───────
