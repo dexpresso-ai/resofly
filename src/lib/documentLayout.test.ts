@@ -472,6 +472,139 @@ test('de PDF: logo, briefpapier, en een kapot plaatje laat hem niet mislukken', 
   assert.equal(documentAssetsFromSettings({ brand_logo_data_url: 'data:image/webp;base64,UklGRg==' }).logo, undefined);
 });
 
+/** Een factuur met `count` regels, voor de tests op lange documenten. */
+function longInvoice(count: number, kind: app.DocumentKind = 'invoice') {
+  const amounts = app.documentAmounts(Array.from({ length: count }, (_, i) => ({ description: `Regel ${i + 1}: ontwerp, overleg en officiële afstemming`, quantity: 1 + (i % 3), unit_price: 10 + i, vat: 21 })));
+  return buildDocumentData({ kind, number: 'F-9', date: '2026-11-05', secondDate: '2026-11-19', company: COMPANY, client: { name: 'Klant B.V.', vat_number: 'NL009999999B01' }, lines: amounts.lines, totals: amounts.totals });
+}
+
+test('briefpapier: één keer in de PDF, altijd A4, en een lege pagina is geen fout', async () => {
+  const style = resolveDocumentStyle(COMPANY);
+  const paperDoc = await PdfLib.PDFDocument.create();
+  const sheet = paperDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  for (let i = 0; i < 3000; i++) sheet.drawRectangle({ x: (i * 7) % 590, y: (i * 13) % 840, width: 3, height: 3, color: PdfLib.rgb(0.8, 0.8, 0.9) });
+  const letterhead = { kind: 'pdf' as const, bytes: await paperDoc.save({ useObjectStreams: false }) };
+  const render = (data: app.DocumentData, paper: typeof letterhead | null = letterhead) => renderDocumentPdf(lib, { layout: builtInLayout('invoice', { letterhead: true }), data, style, assets: paper ? { letterhead: paper } : {}, fonts: FONT_SOURCE });
+  const many = await render(longInvoice(120));
+  const without = await render(longInvoice(120), null);
+  assert.ok((await PdfLib.PDFDocument.load(many)).getPageCount() >= 3);
+  // Per pagina gekopieerd kwam het hele briefpapier er per pagina bij (bij
+  // dit document ~6,6 keer); nu één keer, plus wat pdf-lib eromheen zet.
+  const extra = many.length - without.length;
+  assert.ok(extra < letterhead.bytes.length * 3, `briefpapier kost ${extra} bytes, het bestand zelf is ${letterhead.bytes.length}`);
+
+  // Briefpapier op Letter-formaat: toch een A4-pagina, anders viel de voet eraf.
+  const letterDoc = await PdfLib.PDFDocument.create();
+  letterDoc.addPage([612, 792]).drawText('Briefpapier', { x: 40, y: 750, size: 12 });
+  const onLetter = await PdfLib.PDFDocument.load(await render(longInvoice(3), { kind: 'pdf', bytes: await letterDoc.save() }));
+  const size = onLetter.getPage(0).getSize();
+  assert.deepEqual([Math.round(size.width * 100) / 100, Math.round(size.height * 100) / 100], [PAGE_WIDTH, PAGE_HEIGHT]);
+});
+
+test('meten en tekenen met ingesloten letters gaan niet langs de opmaakmachine van fontkit', async () => {
+  // Die rekende per regel ligaturen en kerning uit die pdf-lib weggooit. Een
+  // factuur van 100 regels in Inter kostte zo ~2 s rekentijd, 300 regels ~5 s;
+  // Supabase stopt een functie bij 2 s CPU.
+  let shaped = 0;
+  const kit = fontkit as unknown as { create: (...args: unknown[]) => { layout: (...args: unknown[]) => unknown } };
+  const spy = {
+    create: (...args: unknown[]) => {
+      const font = kit.create(...args);
+      const original = font.layout.bind(font);
+      font.layout = (...rest: unknown[]) => { shaped += 1; return original(...rest); };
+      return font;
+    },
+  };
+  const style = resolveDocumentStyle({ ...COMPANY, brand_heading_font: 'playfair', brand_body_font: 'inter' });
+  const warnings: string[] = [];
+  const pdf = await renderDocumentPdf(lib, { layout: builtInLayout('invoice'), data: longInvoice(120), style, fonts: { fontkit: spy, load: FONT_SOURCE.load }, onWarning: message => warnings.push(message) });
+  assert.deepEqual(warnings, [], 'de letters zijn echt ingesloten');
+  assert.equal(shaped, 0, 'pdf-lib riep de opmaakmachine van fontkit aan');
+  assert.ok((await PdfLib.PDFDocument.load(pdf)).getPageCount() >= 3);
+  // Meten blijft optellen: een regel is zo breed als zijn tekens samen.
+  const tools = await toolsFor(style);
+  const sum = [...'officiële'].reduce((total, char) => total + tools.measure(char, 10, 'body'), 0);
+  assert.ok(Math.abs(tools.measure('officiële', 10, 'body') - sum) < 1e-9);
+});
+
+test('"Pagina 2 van 3" klopt ook in de kop, en het vervolg zegt wat voor stuk het is', async () => {
+  const style = resolveDocumentStyle(COMPANY);
+  const tools = await toolsFor(style);
+  const layout = builtInLayout('invoice');
+  layout.repeatHeader = true;
+  layout.blocks.push({ id: 'kop-pagina', type: 'field', field: 'document.pagina', x: 427.28, y: 30, w: 120, h: 12 });
+  const plan = planDocument(layout, longInvoice(80), style, { ...tools, logo: null });
+  assert.ok(plan.pages.length >= 3);
+  plan.pages.forEach((page, index) => {
+    const numbers = page.ops.filter(op => op.t === 'text' && (op as { text: string }).text.startsWith('Pagina')).map(op => (op as { text: string }).text);
+    assert.deepEqual(numbers, [`Pagina ${index + 1} van ${plan.pages.length}`, `Pagina ${index + 1} van ${plan.pages.length}`], `pagina ${index + 1}`);
+  });
+
+  const credit = creditNoteDocument({ number: 'CN-7', date: '2026-11-12', invoiceReference: 'F-1', invoiceDate: '2026-11-05', company: COMPANY, client: { name: 'Klant B.V.' }, lines: longInvoice(60).lines.map(line => ({ description: line.description, quantity: line.quantity, unit_price: line.unitPrice, vat: line.vatRate })), subtotal: 0, vat: 0, total: 0, refunded: true });
+  const creditPlan = planDocument(builtInLayout('credit_note'), credit, style, { ...tools, logo: null });
+  assert.ok(texts(creditPlan).includes('Creditfactuur CN-7 (vervolg)'));
+  assert.ok(!texts(creditPlan).some(text => text.startsWith('Factuur CN-7')));
+});
+
+test('een eigen kopje met µ of ƒ laat de PDF niet mislukken', async () => {
+  const layout = builtInLayout('invoice');
+  const client = layout.blocks.find(block => block.field === 'klant.gegevens')!;
+  client.caption = 'Afnemer µ-services ƒ';
+  client.label = 'above';
+  const style = resolveDocumentStyle(COMPANY, { heading: 'helvetica', body: 'helvetica' });
+  const pdf = await renderDocumentPdf(lib, { layout, data: longInvoice(2), style, fonts: null });
+  assert.equal(new TextDecoder().decode(pdf.slice(0, 5)), '%PDF-');
+});
+
+test('creditfactuur met een eigen opmaak verwijst toch naar de factuur', async () => {
+  const style = resolveDocumentStyle(COMPANY);
+  const tools = await toolsFor(style);
+  const own = builtInLayout('invoice');
+  const at = own.blocks.findIndex(block => block.field === 'document.gegevens');
+  const meta = own.blocks[at];
+  own.blocks.splice(at, 1,
+    { id: 'nr', type: 'field', field: 'document.nummer', x: meta.x, y: meta.y, w: meta.w, h: 14, label: 'inline' },
+    { id: 'dt', type: 'field', field: 'document.datum', x: meta.x, y: meta.y + 18, w: meta.w, h: 14, label: 'inline' });
+  assert.deepEqual(layoutIssues(own, 'invoice'), []);
+  const credit = creditNoteDocument({ number: 'CN-1', date: '2026-11-12', invoiceReference: 'F-1', invoiceDate: '2026-11-05', company: COMPANY, client: { name: 'Klant B.V.' }, lines: [{ description: 'Werk', quantity: 1, unit_price: 100, vat: 21 }], subtotal: 100, vat: 21, total: 121, refunded: true });
+  assert.ok(texts(planDocument(own, credit, style, { ...tools, logo: null })).includes('Creditering van factuur F-1 van 5-11-2026.'));
+  // Met het blok Documentgegevens staat het daar, en niet nog eens in de inhoud.
+  const standard = texts(planDocument(builtInLayout('credit_note'), credit, style, { ...tools, logo: null }));
+  assert.ok(standard.some(text => text.includes('Creditering van factuur')));
+  assert.ok(!standard.includes('Creditering van factuur F-1 van 5-11-2026.'));
+});
+
+test('btw verlegd: het btw-nummer van de afnemer staat erop, ook bij een eigen opmaak', async () => {
+  const style = resolveDocumentStyle(COMPANY);
+  const tools = await toolsFor(style);
+  const own = builtInLayout('invoice');
+  const at = own.blocks.findIndex(block => block.field === 'klant.gegevens');
+  const block = own.blocks[at];
+  own.blocks.splice(at, 1,
+    { id: 'kn', type: 'field', field: 'klant.naam', x: block.x, y: block.y, w: block.w, h: 14 },
+    { id: 'ka', type: 'field', field: 'klant.adres', x: block.x, y: block.y + 16, w: block.w, h: 40 });
+  const reverse = { ...longInvoice(2), vatNotes: ['Btw verlegd.'], customerVatRequired: true };
+  const count = (layout: app.DocumentLayout, data: app.DocumentData) => texts(planDocument(layout, data, style, { ...tools, logo: null })).filter(text => text.includes('NL009999999B01')).length;
+  assert.equal(count(own, reverse), 1, 'eigen opmaak zonder klantgegevens: bij de btw-vermeldingen');
+  assert.equal(count(builtInLayout('invoice'), reverse), 1, 'standaardopmaak: in de klantgegevens, niet dubbel');
+  assert.equal(count(own, { ...reverse, customerVatRequired: false }), 0, 'zonder verlegging niet nodig');
+});
+
+test('aanmaning: een veld Totaalbedrag toont wat er nu betaald moet worden', async () => {
+  const style = resolveDocumentStyle(COMPANY);
+  const tools = await toolsFor(style);
+  const layout = builtInLayout('invoice');
+  layout.blocks.push({ id: 'tot', type: 'field', field: 'document.totaal', x: 330, y: 200, w: 220, h: 18, label: 'inline' });
+  const base = {
+    company: COMPANY, client: { name: 'Klant' }, letterDate: '2026-12-10', invoiceNumber: 'F-1', invoiceDate: '2026-11-05', invoiceDueDate: '2026-11-19',
+    principalCents: 200000, interestCents: 2288, interestDays: 65, interestRatePct: '6', collectionCostsCents: 37500, collectionCostsVatCents: 0,
+    totalClaimCents: 239788, deadlineDate: '2026-12-24', iban: 'NL91ABNA0417164300', publicUrl: 'https://example.test/invoice/x',
+  };
+  // Een consument: hoofdsom en rente; de incassokosten pas na veertien dagen (art. 6:96 lid 6 BW).
+  assert.ok(texts(planDocument(layout, dunningDocument({ ...base, consumer: true }), style, { ...tools, logo: null })).includes('Nu te voldoen: € 2.022,88'));
+  assert.ok(texts(planDocument(layout, dunningDocument({ ...base, consumer: false }), style, { ...tools, logo: null })).includes('Totaal te voldoen: € 2.397,88'));
+});
+
 test('app en server maken van dezelfde rijen hetzelfde document', async () => {
   const input = {
     kind: 'invoice' as const, number: 'F-1', date: '2026-11-05', secondDate: '2026-11-19',

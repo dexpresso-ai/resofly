@@ -45,9 +45,11 @@ Wat er was:
   bestandszending en de toegangscode, boekingslink en boekingsbevestiging, ticketmeldingen uit het
   portaal, welkomstmail van het portaal, teamuitnodiging, de Resend-testmail, de vrije klantmail,
   campagnes en reeksen (ook hun testmail), notulen, agenda-uitnodigingen en -annuleringen.
-- **E-factuur:** de factuur naar een e-factuuradres krijgt het logo ook. Boekhoudpakketten slaan
-  ingesloten afbeeldingen over (zoals onze eigen inbox, `mail-inbound`); het blijft bij de PDF en de
-  UBL.
+- **E-factuur:** de factuur en de creditfactuur naar een e-factuuradres gaan zónder logo in de
+  mail. Daar leest een boekhoudpakket de bijlagen in, en niet elk pakket slaat een ingesloten
+  afbeelding over (onze eigen inbox `mail-inbound` doet dat wel); dan kreeg de klant bij elke
+  factuur een "logo.png" als document in zijn administratie. Het logo staat ook in de PDF zelf.
+  Herinneringen en aanmaningen gaan naar het gewone adres en hebben het logo wel.
 - **Laden:** een eigen, kleine query per mail (`loadEmailBrand`), gefilterd op de organisatie uit de
   sessie, het token of de eigen rij. Waar de huisstijlrij al geladen is (`portal-notify`,
   `file-transfer-public`) zonder extra query; bij campagnes, reeksen, zendingen, notulen en
@@ -74,6 +76,8 @@ Wat er was:
   Latijnse tekens (fontsource 5.3.0, SIL Open Font License; zie `public/fonts/pdf/LICENTIES.md`):
   in `public/fonts/pdf` voor de app, als base64 in `_shared/pdfFonts.ts` voor de server.
   `scripts/pdf-lettertypen.mjs` maakt beide. Een factuur met twee ingesloten letters is ~18 kB.
+  Zonder ligaturen ("fi" blijft f + i), zie *Controle achteraf*: dat scheelt het grootste deel van
+  de rekentijd.
 - In de app laadt `@pdf-lib/fontkit` pas als er een PDF gemaakt wordt, als eigen stukje van de
   bundel. De server zet elk bestand één keer per instantie om.
 - **Tekens die een letter niet heeft** (Š, ž, ƒ in een letter zonder die tekens) worden vervangen
@@ -93,6 +97,39 @@ Wat er was:
   dagen, incassokosten, wettelijke rente). Kop, voet, logo en stijl komen van de factuur.
 - In Documentopmaak kun je beide bekijken (*Creditfactuur*, *Aanmaning*), met de melding dat ze de
   opmaak van de factuur volgen.
+
+## Controle achteraf: wat er nog mis was, en is hersteld
+
+Na de bouw is de hele branch (`origin/staging...HEAD`) nagelopen door een onafhankelijke review,
+elke bevinding daarna nagebootst tegen de echte code. Wat klopte, is hersteld en heeft een test.
+
+| Bevinding | Nagebootst | Nu |
+|---|---|---|
+| **Rekentijd met ingesloten letters.** fontkit rekende bij elke meting en elke regel ligaturen en kerning uit die pdf-lib weggooit. | Inter: 10 regels 0,8 s CPU, 100 regels 2,1 s, 300 regels 5,0 s. Supabase stopt een functie bij 2 s CPU: een lange factuur was niet te versturen. Ook de editor haperde bij het slepen. | Alleen de eerste stap van fontkit (tekens → glyphs): 300 regels 0,4 s in Node, 0,46 s in Deno met de letters zoals op de server. Meten en tekenen blijven gelijk; kopiëren uit de PDF werkt. Alleen ligaturen ("fi") vallen weg. |
+| **Briefpapier per pagina gekopieerd.** | Groei per pagina met het hele briefpapier: bij 800 kB briefpapier was 7 pagina's 5,6 MB (boven 8 MB weigert de verzending). | Eén keer ingesloten, op elke pagina getekend. De PDF groeit nu even hard als zonder briefpapier. |
+| **Briefpapier op Letter, A5 of liggend.** | De pagina kreeg die maat, de inhoud stond op A4: de voet (KvK, paginanummer) viel eraf. | Altijd een A4-pagina; het briefpapier wordt geschaald als omslag, zoals een afbeelding al werd. |
+| **Een briefpapier-pagina zonder inhoud** (gevonden bij het herstellen). | pdf-lib sluit pas in bij het opslaan, buiten de foutafhandeling: de hele PDF mislukte. | Eerst op proef ingesloten; een vreemd briefpapier geeft een waarschuwing, een lege pagina niets. |
+| **"Pagina 2 van 1" in de kop.** | De kop staat er voordat het aantal pagina's bekend is. | Dan een tweede ronde met het bekende aantal. |
+| **Een eigen kopje met µ of ƒ.** | Hoofdletters ná het opschonen: µ wordt Griekse Μ, die Helvetica niet kent. De hele PDF mislukte. | Eerst hoofdletters, dan opschonen. |
+| **"Factuur CN-… (vervolg)"** op pagina 2 van een creditfactuur. | Klopte. | "Creditfactuur … (vervolg)", "Aanmaning factuur … (vervolg)". |
+| **Creditfactuur zonder verwijzing naar de factuur** bij een eigen opmaak met losse velden (Nummer, Datum). | Klopte; de controle meldde niets. | Zonder het blok Documentgegevens staat "Creditering van factuur … van …" bovenaan de inhoud. |
+| **Btw-nummer van de afnemer ontbrak** bij btw verlegd of ICP en een eigen opmaak met Klantnaam + Adres klant. | Klopte. De server controleerde alleen dat het nummer bij de klant stond. | Toont de opmaak het nergens, dan bij de btw-vermeldingen ("Btw-nummer afnemer: …"); nooit dubbel. Ook in het voorbeeld in de app en op de creditfactuur. |
+| **Aanmaning aan een consument: "Totaal te voldoen" mét incassokosten** in een veld Totaalbedrag. | Klopte (€ 2.397,88 boven een brief die € 2.022,88 vraagt). Incassokosten zijn bij een consument pas na veertien dagen verschuldigd. | "Nu te voldoen: € 2.022,88" bij een consument; bij een onderneming "Totaal te voldoen". |
+| **Logo in de mail naar een e-factuuradres.** | Een aanname (zie hierboven). | Naar een e-factuuradres zonder logo. |
+
+Bewust niet overgenomen:
+
+- **De opmaak meekopiëren naar een nieuwe administratie** (`create_child_organization`). Die neemt
+  de `brand_*`-kolommen over, niet het briefpapier. Een opmaak kan vrije tekstblokken hebben met
+  bijvoorbeeld het IBAN of KvK-nummer van de moeder; die zouden dan op de facturen van de nieuwe
+  administratie staan. Die begint met de standaardopmaak, waarin alles staat wat moet.
+- **fontkit pas laden als er een PDF gemaakt wordt.** Gemeten: fontkit kost ~0,1 s bij een koude
+  start (de lettermodule zelf 6 ms), niet per verzoek. Een dynamische import is hier niet tegen de
+  bundelaar van Supabase te testen; neemt die hem niet mee, dan vallen alle PDF's stil terug op
+  Helvetica. Geen enkele edge function gebruikt nu een dynamische import.
+- **Dubbele code** (`loadVatCodeInfo` in twee workflows, `orgBrand` in de twee boekingsfuncties,
+  de contrastberekening in de mailmap): geen fout, wel onderhoud. De mailmap heeft bewust geen
+  imports; samenvoegen kan in een eigen stap.
 
 ## Niet gedaan (bewust, of voor later)
 
@@ -127,6 +164,15 @@ Wat er was:
 - Mobiele lay-outtest (`--theme=both`) op Instellingen, Huisstijl, Documentopmaak en de nieuwe
   pagina `settings-email`: 24 pagina's, 0 met problemen. `npm run test:loading`: alle controles
   geslaagd.
+- Na de controle achteraf: `npm test` 1016 groen (nieuw: briefpapier één keer en altijd A4,
+  geen opmaakmachine van fontkit, paginanummer in de kop, vervolglabel, µ in een kopje,
+  verwijzing op de creditfactuur, btw-nummer van de afnemer, totaal op de aanmaning, geen logo
+  naar een e-factuuradres); `npm run build` lukt (fontkit als eigen stuk); CSP-controle in orde;
+  `deno check` op de hele CI-lijst (34 functies) en de gedeelde modules schoon, de twee workflows
+  gelijk aan staging. De serverkant in Deno gedraaid met de letters uit `pdfFonts.ts`: factuur
+  (10/100/300 regels), offerte, creditfactuur en aanmaning bekeken; de Resend-payload met logo
+  nagekeken. Interactietest van de editor 25/25, op de telefoon 5/5; mobiele test op
+  Documentopmaak, E-mail, Facturen en Offertes: 24 pagina's, 0 met problemen.
 - Na het samenvoegen met de nieuwste staging (tickets afhandelen en archief): typecheck schoon,
   `npm test` 1008 groen, `deno check` schoon op portal-notify, mail, campaigns, gerrie-agent en
   calendar-integrations, de twee workflows nog steeds gelijk aan staging (12 en 9). Mobiele test

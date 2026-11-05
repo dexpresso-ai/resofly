@@ -352,9 +352,11 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   if (ublAttachment) await markDeliveryAsEInvoice(prepared.deliveryId, organizationId, userId, ublAttachment);
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
-  // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
-  // Een boekhoudpakket op het e-factuuradres slaat ingesloten afbeeldingen over,
-  // net als onze eigen inbox (mail-inbound): het blijft bij de PDF en de UBL.
+  // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts),
+  // behalve naar een e-factuuradres: daar leest een boekhoudpakket de bijlagen
+  // in, en niet elk pakket slaat een ingesloten afbeelding over (onze eigen
+  // inbox doet dat wel). Dan kreeg de klant bij elke factuur een "logo.png" als
+  // document in zijn administratie. Het logo staat ook in de PDF zelf.
   const resendPayload = withEmailBrand({
     from: senderIdentity.from,
     to: [recipientEmail],
@@ -374,7 +376,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
       { name: 'invoice_number', value: sanitizeTagValue(invoice.number) },
       { name: 'template_key', value: 'invoice_sent' },
     ],
-  }, await loadEmailBrand(supabaseAdmin, organizationId));
+  }, eInvoicing ? null : await loadEmailBrand(supabaseAdmin, organizationId));
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
@@ -1799,7 +1801,8 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
       { name: 'credit_note_number', value: sanitizeTagValue(creditNoteNumber) },
       { name: 'template_key', value: 'credit_note_sent' },
     ],
-  }, await loadEmailBrand(supabaseAdmin, input.organizationId));
+    // Naar een e-factuuradres zonder logo, zoals de factuur (zie sendInvoiceEmail).
+  }, creditUbl ? null : await loadEmailBrand(supabaseAdmin, input.organizationId));
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
@@ -3570,6 +3573,9 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
     secondDate: invoice.due_date,
     lines,
     vatNotes: vatNotes.notes,
+    // Toont een eigen opmaak het btw-nummer van de klant nergens, dan komt
+    // het bij de btw-vermeldingen; de controle hierboven zegt alleen dát het er is.
+    customerVatRequired: vatNotes.needsCustomerVatNumber,
     notes: invoice.notes,
     projectName: project?.name ?? null,
     quoteNumber: quote?.number ?? null,
@@ -3601,6 +3607,7 @@ async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; 
     vat,
     total,
     vatNotes: vatNotes.notes,
+    customerVatRequired: vatNotes.needsCustomerVatNumber,
     reason,
     refunded: input.refunded,
   });

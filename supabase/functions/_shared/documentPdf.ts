@@ -131,6 +131,8 @@ export async function renderSalesDocumentPdf(input: {
   secondDate: string | null;
   lines: SalesLineLike[];
   vatNotes: string[];
+  /** Btw verlegd of ICP: het btw-nummer van de afnemer moet op de factuur. */
+  customerVatRequired?: boolean;
   notes: string | null;
   projectName?: string | null;
   quoteNumber?: string | null;
@@ -147,6 +149,7 @@ export async function renderSalesDocumentPdf(input: {
     lines: amounts.lines,
     totals: amounts.totals,
     vatNotes: input.vatNotes,
+    customerVatRequired: input.customerVatRequired,
     notes: input.notes,
     projectName: input.projectName,
     quoteNumber: input.quoteNumber,
@@ -172,6 +175,7 @@ export async function renderCreditNotePdf(input: {
   vat: number;
   total: number;
   vatNotes: string[];
+  customerVatRequired?: boolean;
   reason: string | null;
   refunded?: boolean;
 }): Promise<Uint8Array> {

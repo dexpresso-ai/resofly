@@ -409,6 +409,17 @@ export interface DocumentData {
   paymentLines?: string[];
   /** Vervangt de hele inhoud door een brief (de aanmaning). */
   body?: DocumentBodyPart[];
+  /**
+   * Een verwijzing die op het stuk moet ("Creditering van factuur …"). Staat
+   * het blok Documentgegevens in de opmaak, dan staat hij daar al (metaRows);
+   * zo niet, dan bovenaan de inhoud.
+   */
+  reference?: string;
+  /**
+   * Btw verlegd of ICP: het btw-nummer van de afnemer moet op de factuur (art.
+   * 35a Wet OB). Toont de opmaak het nergens, dan bij de btw-vermeldingen.
+   */
+  customerVatRequired?: boolean;
 }
 
 /** Een stuk briefinhoud, voor een stuk dat geen regels en totalen heeft (de aanmaning). */
@@ -491,6 +502,8 @@ export function buildDocumentData(input: {
   notesCaption?: string;
   paymentLines?: string[];
   body?: DocumentBodyPart[];
+  reference?: string | null;
+  customerVatRequired?: boolean;
 }): DocumentData {
   const company = input.company ?? {};
   const legalName = str(company.company_name);
@@ -540,6 +553,8 @@ export function buildDocumentData(input: {
     ...(input.notesCaption ? { notesCaption: str(input.notesCaption) } : {}),
     ...(input.paymentLines ? { paymentLines: input.paymentLines.map(str).filter(Boolean) } : {}),
     ...(input.body ? { body: input.body } : {}),
+    ...(str(input.reference) ? { reference: str(input.reference) } : {}),
+    ...(input.customerVatRequired ? { customerVatRequired: true } : {}),
   };
 }
 
@@ -622,8 +637,11 @@ export function creditNoteDocument(input: {
   reason?: string | null;
   /** false = een onbetaalde factuur vervalt; er wordt niets terugbetaald. */
   refunded?: boolean;
+  /** Btw verlegd of ICP op de gecrediteerde factuur: ook hier het btw-nummer van de afnemer. */
+  customerVatRequired?: boolean;
 }): DocumentData {
   const amounts = documentAmounts(input.lines);
+  const invoiceReference = str(input.invoiceReference);
   const exact = cents(amounts.totals.subtotal) === cents(input.subtotal) && cents(amounts.totals.vat) === cents(input.vat);
   const neg = (n: number) => (n === 0 ? 0 : -n);
   return buildDocumentData({
@@ -648,10 +666,17 @@ export function creditNoteDocument(input: {
     metaRows: [
       { label: 'Creditfactuurnummer', value: str(input.number) || '-' },
       { label: 'Datum', value: input.date ? formatDocDate(input.date) : '' },
-      { label: 'Creditering van factuur', value: str(input.invoiceReference) },
+      { label: 'Creditering van factuur', value: invoiceReference },
       { label: 'Factuurdatum', value: input.invoiceDate ? formatDocDate(input.invoiceDate) : '' },
       { label: 'Klantnummer', value: str(input.client?.client_code) },
     ],
+    // Een creditfactuur moet naar de factuur verwijzen die hij crediteert. Een
+    // eigen opmaak met losse velden (Nummer, Datum) toont de rijen hierboven
+    // niet; dan staat deze zin bovenaan de inhoud.
+    reference: invoiceReference
+      ? `Creditering van factuur ${invoiceReference}${input.invoiceDate ? ` van ${formatDocDate(input.invoiceDate)}` : ''}.`
+      : null,
+    customerVatRequired: input.customerVatRequired,
     onlineLink: null,
   });
 }
@@ -667,6 +692,11 @@ export function dunningDocument(input: Omit<DunningLetterInput, 'signature' | 'a
   const company = input.company ?? {};
   const signature = str(company.trade_name) || str(company.company_name);
   const accountHolder = str(company.company_name) || signature;
+  // Wat er nú betaald moet worden, zoals de brief het zegt: een consument de
+  // hoofdsom en de rente; de incassokosten pas als hij niet binnen veertien
+  // dagen betaalt (art. 6:96 lid 6 BW). Een veld "Totaalbedrag" in de opmaak
+  // toonde eerst het totaal mét incassokosten, ook bij een consument.
+  const dueNowCents = input.consumer ? input.principalCents + input.interestCents : input.totalClaimCents;
   return buildDocumentData({
     kind: 'dunning',
     number: input.invoiceNumber,
@@ -677,7 +707,8 @@ export function dunningDocument(input: Omit<DunningLetterInput, 'signature' | 'a
     company: input.company,
     client: input.client,
     lines: [],
-    totals: { subtotal: input.totalClaimCents / 100, vat: 0, total: input.totalClaimCents / 100, vatBreakdown: [] },
+    totals: { subtotal: dueNowCents / 100, vat: 0, total: dueNowCents / 100, vatBreakdown: [] },
+    totalsLabel: input.consumer ? 'Nu te voldoen' : 'Totaal te voldoen',
     notes: null,
     onlineLink: null,
     metaRows: [
@@ -1690,7 +1721,10 @@ interface RenderedBlock { ops: PlanOp[]; height: number }
 function captionOps(caption: string, x: number, y: number, w: number, size: number, align: LayoutAlign, ctx: PlanContext): RenderedBlock {
   const capSize = Math.max(6, size - 2);
   const ops: PlanOp[] = [];
-  const op = textOp(ctx.clean(caption, 'bodyBold').toUpperCase(), x, y, w, capSize, 'bodyBold', ctx.style.muted, align, ctx);
+  // Eerst hoofdletters, dán opschonen: µ wordt Griekse Μ en ƒ wordt Ƒ, en die
+  // kent een standaardletter niet. Andersom liet één µ in een eigen kopje de
+  // hele PDF mislukken.
+  const op = textOp(ctx.clean(caption.toUpperCase(), 'bodyBold'), x, y, w, capSize, 'bodyBold', ctx.style.muted, align, ctx);
   if (op) ops.push(op);
   const ruleY = round2(y + lineHeight(capSize) + 1.5);
   const ruleW = Math.min(w, 180);
@@ -1714,7 +1748,10 @@ function renderFieldBlock(block: LayoutBlock, ctx: PlanContext): RenderedBlock {
   const font: FontRef = def.heading ? (bold ? 'headingBold' : 'heading') : bold ? 'bodyBold' : 'body';
   const color = toneColor(block.tone ?? def.defaults.tone, ctx.style);
   const align = block.align ?? def.defaults.align ?? 'left';
-  const caption = block.caption ?? fieldCaption(def.key, ctx.data.kind);
+  // Het totaal heet wat het document zegt dat het is ("Totaal credit", bij een
+  // consument "Nu te voldoen"); een eigen label gaat voor.
+  const caption = block.caption
+    ?? (def.key === 'document.totaal' && ctx.data.totalsLabel ? ctx.data.totalsLabel : fieldCaption(def.key, ctx.data.kind));
   const labelMode = block.label ?? def.defaults.label ?? 'none';
   const ops: PlanOp[] = [];
   let y = block.y;
@@ -1852,7 +1889,40 @@ export function planDocument(
   layout: DocumentLayout,
   data: DocumentData,
   style: DocumentStyle,
-  env: { measure: Measure; logo: { width: number; height: number } | null; ascent?: (font: FontRef) => number; clean?: (text: string, font: FontRef) => string },
+  env: PlanEnv,
+): DocumentPlan {
+  let plan = planPass(layout, data, style, env, 1);
+  // De kop staat op de pagina vóór het aantal pagina's bekend is; de voet pas
+  // erna. Staat "Pagina 1 van 3" in de kop (of in een eigen tekst), dan stond
+  // er "van 1". Dan nog een keer, nu met het aantal. Een langer getal kan een
+  // smal blok een regel laten groeien; daarom hooguit twee keer opnieuw.
+  if (plan.pages.length > 1 && usesPageCountOutsideFooter(layout)) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const next = planPass(layout, data, style, env, plan.pages.length);
+      const settled = next.pages.length === plan.pages.length;
+      plan = next;
+      if (settled) break;
+    }
+  }
+  return plan;
+}
+
+type PlanEnv = { measure: Measure; logo: { width: number; height: number } | null; ascent?: (font: FontRef) => number; clean?: (text: string, font: FontRef) => string };
+
+/** Noemt iets buiten de voet het paginanummer (het veld, of {{document.pagina}} in een tekst)? */
+function usesPageCountOutsideFooter(layout: DocumentLayout): boolean {
+  const mentions = (text: string | undefined) => /\{\{[^}]*pagina[^}]*\}\}/i.test(text ?? '');
+  return layout.blocks.some(block => block.y < layout.footerTop && (block.field === 'document.pagina' || mentions(block.text)))
+    || layout.flow.some(item => mentions(item.text));
+}
+
+function planPass(
+  layout: DocumentLayout,
+  data: DocumentData,
+  style: DocumentStyle,
+  env: PlanEnv,
+  /** Het aantal pagina's voor wat vóór de voet staat; de voet krijgt het echte aantal. */
+  pagesHint: number,
 ): DocumentPlan {
   const measure = env.measure;
   const standardAscent = (font: FontRef) => STANDARD_ASCENT[font === 'heading' || font === 'headingBold' ? style.headingFont : style.bodyFont] ?? 0.72;
@@ -1878,7 +1948,7 @@ export function planDocument(
     clean: env.clean ?? ((text: string) => pdfSafeText(text)),
     ascent: env.ascent ?? standardAscent,
     page: 1,
-    pages: 1,
+    pages: Math.max(1, pagesHint),
     legalNameBlock: needsLegal && legalBlock ? legalBlock.id : null,
   };
 
@@ -1898,7 +1968,9 @@ export function planDocument(
       page.flowTop = Math.max(layout.bodyTop, Math.min(pushed, flowBottom - 60));
     } else {
       const size = Math.max(6, base - 1);
-      const label = `${data.kind === 'quote' ? 'Offerte' : 'Factuur'} ${data.number} (vervolg)`;
+      // Bij een aanmaning is het nummer dat van de factuur.
+      const name = { invoice: 'Factuur', quote: 'Offerte', credit_note: 'Creditfactuur', dunning: 'Aanmaning factuur' }[data.kind];
+      const label = `${name} ${data.number} (vervolg)`;
       const top = Math.max(16, layout.continueTop - 26);
       const left = textOp(ctx.clean(label, 'bodyBold'), flowX, top, flowW / 2, size, 'bodyBold', style.muted, 'left', ctx);
       if (left) page.ops.push(left);
@@ -2110,6 +2182,11 @@ export function planDocument(
   startPage();
   if (data.body) planBody(data.body);
   let first = true;
+  const hasField = (...keys: string[]) => layout.blocks.some(block => block.type === 'field' && keys.includes(block.field ?? ''));
+  if (data.reference && !data.body && !hasField('document.gegevens')) {
+    flowLines(null, wrapText(data.reference, base, 'bodyBold', flowW, ctx), base, 'bodyBold', style.ink, { keep: 1 });
+    first = false;
+  }
   for (const item of data.body ? [] : layout.flow) {
     // Een creditfactuur zegt altijd wat er met het bedrag gebeurt, ook als de
     // betaalregel op de factuur uit staat. Een eigen inleiding of afsluiting is
@@ -2126,7 +2203,17 @@ export function planDocument(
     switch (item.key) {
       case 'lines': planLines(); break;
       case 'totals': planTotals(); break;
-      case 'vat_notes': flowLines('vat_notes', data.vatNotes.flatMap(note => wrapText(note, Math.max(6, base - 2), 'body', flowW, ctx)), Math.max(6, base - 2), 'body', style.muted); break;
+      case 'vat_notes': {
+        const notes = [...data.vatNotes];
+        // Bij btw verlegd en ICP hoort het btw-nummer van de afnemer op de
+        // factuur. Staan de klantgegevens of het losse veld niet in de opmaak
+        // (alleen Klantnaam en Adres klant), dan hier; anders ontbrak het.
+        if (data.customerVatRequired && data.client?.vat && !hasField('klant.gegevens', 'klant.btw')) {
+          notes.push(`Btw-nummer afnemer: ${data.client.vat}`);
+        }
+        flowLines('vat_notes', notes.flatMap(note => wrapText(note, Math.max(6, base - 2), 'body', flowW, ctx)), Math.max(6, base - 2), 'body', style.muted);
+        break;
+      }
       case 'payment': {
         const size = Math.max(6, base - 1);
         const lines = data.paymentLines
@@ -2199,6 +2286,13 @@ export interface PdfFontLike {
   getCharacterSet(): number[];
 }
 export interface PdfImageLike { width: number; height: number }
+/** Een pagina uit een andere PDF, ingesloten om op een pagina te tekenen (briefpapier). */
+export interface PdfEmbeddedPageLike {
+  width: number;
+  height: number;
+  /** pdf-lib sluit pas in bij `save()`; zo kan het meteen, binnen een try. */
+  embed?(): Promise<void>;
+}
 export interface PdfPageLike {
   getSize(): { width: number; height: number };
   // deno-lint-ignore no-explicit-any
@@ -2209,6 +2303,8 @@ export interface PdfPageLike {
   drawLine(options: any): void;
   // deno-lint-ignore no-explicit-any
   drawImage(image: any, options: any): void;
+  // deno-lint-ignore no-explicit-any
+  drawPage(page: any, options: any): void;
 }
 export interface PdfDocumentLike {
   // deno-lint-ignore no-explicit-any
@@ -2220,7 +2316,7 @@ export interface PdfDocumentLike {
   embedPng(bytes: Uint8Array): Promise<PdfImageLike>;
   embedJpg(bytes: Uint8Array): Promise<PdfImageLike>;
   // deno-lint-ignore no-explicit-any
-  copyPages(source: any, indices: number[]): Promise<PdfPageLike[]>;
+  embedPdf(source: any, indices?: number[]): Promise<PdfEmbeddedPageLike[]>;
   getPageCount(): number;
   save(): Promise<Uint8Array>;
 }
@@ -2299,6 +2395,35 @@ const STANDARD_FONT_NAMES: Record<string, [string, string]> = {
 
 const FONT_REFS: FontRef[] = ['body', 'bodyBold', 'heading', 'headingBold'];
 
+/**
+ * fontkit zonder opmaakmachine. pdf-lib vraagt bij elke meting en elke
+ * getekende regel `font.layout(tekst)` op en gebruikt daarvan alleen de glyphs
+ * met hun standaardbreedte. fontkit rekent daarvoor eerst alle ligaturen
+ * (GSUB) en de kerning (GPOS) uit, en dat kostte bij Inter ~1 ms per regel:
+ * een factuur van 100 regels ~2 s rekentijd, 300 regels ~5 s, terwijl Supabase
+ * een functie bij 2 s CPU stopt. Ook de editor haperde bij het slepen.
+ *
+ * Hier alleen de eerste stap die fontkit's layout() zelf ook zet: tekens naar
+ * glyphs via de cmap (`glyphsForString`). Meten en tekenen blijven gelijk aan
+ * elkaar, de glyphs houden hun tekens (kopiëren uit de PDF werkt), en kerning
+ * gebruikte pdf-lib toch al niet. Alleen ligaturen ("fi" als één teken) vallen
+ * weg, zoals bij Helvetica.
+ */
+function plainLayoutFontkit(fontkit: unknown): unknown {
+  const kit = fontkit as { create?: (...args: unknown[]) => unknown } | null;
+  if (!kit || typeof kit.create !== 'function') return fontkit;
+  return {
+    create(...args: unknown[]) {
+      // deno-lint-ignore no-explicit-any
+      const font = kit.create!(...args) as any;
+      if (font && typeof font.glyphsForString === 'function') {
+        font.layout = (text: string) => ({ glyphs: font.glyphsForString(String(text ?? '')), positions: [] });
+      }
+      return font;
+    },
+  };
+}
+
 function pdfColor(lib: PdfLibLike, hex: string): unknown {
   const [r, g, b] = channels(HEX.test(hex) ? hex : '#000000');
   return lib.rgb(r / 255, g / 255, b / 255);
@@ -2342,7 +2467,7 @@ export async function embedDocumentFonts(
         }
         try {
           if (!fontkitRegistered) {
-            doc.registerFontkit(source.fontkit);
+            doc.registerFontkit(plainLayoutFontkit(source.fontkit));
             fontkitRegistered = true;
           }
           const bytes = await source.load(name);
@@ -2432,21 +2557,39 @@ export async function renderDocumentPdf(lib: PdfLibLike, input: {
     }
   }
 
-  let paperPdf: PdfDocumentLike | null = null;
+  // Het briefpapier één keer insluiten en op elke pagina tekenen. Eerst werd de
+  // pagina per pagina gekopieerd, met zijn inhoud en afbeeldingen elke keer
+  // opnieuw: bij een briefpapier van 800 kB was een factuur van 7 pagina's
+  // 5,6 MB, en boven 8 MB weigert de verzending. En een briefpapier op
+  // Letter- of A5-formaat gaf die paginamaat, terwijl de inhoud op A4 staat:
+  // de voet viel van de pagina af.
+  let paperPage: PdfEmbeddedPageLike | null = null;
   let paperImage: PdfImageLike | null = null;
   const paper = input.assets?.letterhead;
   if (paper) {
     try {
       if (paper.kind === 'pdf') {
-        paperPdf = await lib.PDFDocument.load(paper.bytes, { ignoreEncryption: true });
-        if (paperPdf.getPageCount() < 1) paperPdf = null;
+        const source = await lib.PDFDocument.load(paper.bytes, { ignoreEncryption: true });
+        if (source.getPageCount() > 0) {
+          // Eerst op proef in een los document. pdf-lib sluit pas in bij
+          // save(), buiten deze try, en een pagina die dan mislukt, blijft
+          // aangemeld: een vreemd briefpapier liet zo de hele PDF mislukken.
+          const probe = await lib.PDFDocument.create();
+          const [trial] = await probe.embedPdf(source, [0]);
+          await trial?.embed?.();
+          [paperPage] = await doc.embedPdf(source, [0]);
+        }
       } else {
         paperImage = paper.type === 'jpg' ? await doc.embedJpg(paper.bytes) : await doc.embedPng(paper.bytes);
       }
     } catch (error) {
-      paperPdf = null;
+      paperPage = null;
       paperImage = null;
-      warn('Het briefpapier kon niet worden gebruikt; de PDF is zonder gemaakt.', error);
+      // Een lege pagina (zonder inhoud) is geen fout: er valt niets te tekenen.
+      // pdf-lib geeft zijn fouten geen eigen naam; de melding is vast (1.17.1).
+      if (!/missing Contents/i.test(String((error as { message?: string } | null)?.message ?? ''))) {
+        warn('Het briefpapier kon niet worden gebruikt; de PDF is zonder gemaakt.', error);
+      }
     }
   }
 
@@ -2456,22 +2599,19 @@ export async function renderDocumentPdf(lib: PdfLibLike, input: {
   });
 
   for (const planned of plan.pages) {
-    let page: PdfPageLike;
-    if (paperPdf) {
-      const [copied] = await doc.copyPages(paperPdf, [0]);
-      page = doc.addPage(copied);
-    } else {
-      page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-      if (paperImage) {
-        // Als omslag: de pagina helemaal vullen, zonder vervormen.
-        const ratio = paperImage.width / paperImage.height;
-        const pageRatio = PAGE_WIDTH / PAGE_HEIGHT;
-        const width = ratio > pageRatio ? PAGE_HEIGHT * ratio : PAGE_WIDTH;
-        const height = ratio > pageRatio ? PAGE_HEIGHT : PAGE_WIDTH / ratio;
-        page.drawImage(paperImage, { x: (PAGE_WIDTH - width) / 2, y: (PAGE_HEIGHT - height) / 2, width, height });
-      }
+    const page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    const background = paperPage ?? paperImage;
+    if (background && background.width > 0 && background.height > 0) {
+      // Als omslag: de A4-pagina helemaal vullen, zonder vervormen. Een A4-
+      // briefpapier past precies; een ander formaat wordt geschaald.
+      const scale = Math.max(PAGE_WIDTH / background.width, PAGE_HEIGHT / background.height);
+      const width = background.width * scale;
+      const height = background.height * scale;
+      const box = { x: (PAGE_WIDTH - width) / 2, y: (PAGE_HEIGHT - height) / 2, width, height };
+      if (paperPage) page.drawPage(paperPage, box);
+      else page.drawImage(background, box);
     }
-    const pageHeight = page.getSize().height;
+    const pageHeight = PAGE_HEIGHT;
     for (const op of planned.ops) {
       if (op.t === 'text') {
         page.drawText(op.text, { x: op.x, y: pageHeight - op.y, size: op.size, font: fonts[op.font], color: pdfColor(lib, op.color) });

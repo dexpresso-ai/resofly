@@ -214,6 +214,15 @@ test('elke route die mailt, neemt het logo mee', () => {
   assert.deepEqual(missing, [], 'Haal de Resend-payload door withEmailBrand (zie _shared/emailBrand.ts).');
 });
 
+test('naar een e-factuuradres gaat geen logo mee', () => {
+  // Een boekhoudpakket op dat adres leest de bijlagen in, en niet elk pakket
+  // slaat een ingesloten afbeelding over: dan kwam er bij elke factuur een
+  // "logo.png" als document in de administratie van de klant.
+  const source = readFileSync(new URL('../invoice-workflow/index.ts', import.meta.url), 'utf8');
+  assert.match(source, /\}, eInvoicing \? null : await loadEmailBrand\(supabaseAdmin, organizationId\)\);/);
+  assert.match(source, /\}, creditUbl \? null : await loadEmailBrand\(supabaseAdmin, input\.organizationId\)\);/);
+});
+
 test('de losse mails buiten de sjablonen hebben een plek voor het logo', () => {
   const root = new URL('../', import.meta.url);
   const read = (file: string) => readFileSync(new URL(file, root), 'utf8');

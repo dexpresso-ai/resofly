@@ -98,6 +98,9 @@ export async function createFinancePDFBytes(doc: Quote | Invoice, kind: 'quote' 
     })),
     totals: { subtotal: totals.subtotal, vat: totals.vat, total: totals.total, vatBreakdown: totals.vatBreakdown },
     vatNotes,
+    // Zoals de verstuurde factuur: toont de opmaak het btw-nummer van de klant
+    // nergens, dan komt het bij de btw-vermeldingen.
+    customerVatRequired: kind === 'invoice' && vat.needsCustomerVatNumber,
     notes: doc.notes,
     projectName: opts.projectName,
     quoteNumber: opts.quoteNumber,
