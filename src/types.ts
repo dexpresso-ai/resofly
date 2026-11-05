@@ -7,7 +7,7 @@ export type ClientStatus = 'active' | 'prospect' | 'inactive';
 export type ClientKind = 'business' | 'consumer';
 export type TaskStatus = 'todo' | 'doing' | 'review' | 'done';
 export type Priority = 'low' | 'med' | 'high';
-export type TicketStatus = 'new' | 'review' | 'approved' | 'rejected' | 'converted';
+export type TicketStatus = 'new' | 'review' | 'approved' | 'rejected' | 'converted' | 'resolved';
 export type FinanceStatus = 'draft' | 'pending_internal_approval' | 'internally_approved' | 'sent' | 'accepted' | 'rejected' | 'expired' | 'paid' | 'overdue' | 'cancelled';
 export type InvoiceStatus = 'draft' | 'sent' | 'overdue' | 'paid' | 'cancelled' | 'void' | 'written_off' | 'refunded';
 export type NoteType = 'general' | 'meeting' | 'action' | 'decision' | 'idea' | 'support';
@@ -694,6 +694,8 @@ export interface TaskAssignee extends OrgScopedRow {
 }
 export interface Ticket extends OrgScopedRow {
   client_id: UUID | null; title: string; description: string | null; priority: Priority; status: TicketStatus; notes: string | null; converted_to_project_id: UUID | null; created_at: string; updated_at: string;
+  /** Wanneer het ticket afgehandeld werd; zet de database zelf. Ontbreekt op een database van vóór 2026-11-05. */
+  resolved_at?: string | null;
 }
 export type TicketNoteAuthorType = 'user' | 'client';
 export interface TicketNote extends OrgScopedRow {

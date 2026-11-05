@@ -1384,11 +1384,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_tickets',
-    description: 'Toon tickets/supportverzoeken, te filteren op status, klant, prioriteit, periode en of er al door het team op gereageerd is.',
+    description: 'Toon tickets/supportverzoeken, te filteren op status, klant, prioriteit, periode en of er al door het team op gereageerd is. Afgehandelde tickets (status \'resolved\') staan in het archief en niet op de werklijst; vraagt iemand naar "openstaande" of "lopende" tickets, laat die dan weg.',
     input_schema: {
       type: 'object',
       properties: {
-        status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected', 'converted'] },
+        status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected', 'converted', 'resolved'], description: "'resolved' = afgehandeld: staat in het archief, niet meer op de werklijst." },
         client_id: { type: 'string' },
         priority: { type: 'string', enum: ['low', 'med', 'high'] },
         unanswered_only: { type: 'boolean', description: 'Alleen tickets waar nog niemand van het team op heeft gereageerd.' },
@@ -1916,7 +1916,7 @@ const TOOL_DEFINITIONS = [
         description: { type: 'string', description: 'Wat er aan de hand is.' },
         client_id: { type: 'string', description: 'Optioneel: het exacte id van de klant.' },
         priority: { type: 'string', enum: ['low', 'med', 'high'], description: "Prioriteit (standaard 'med')." },
-        status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected'], description: "Status (standaard 'new'). 'converted' kan niet: die zet de app zelf bij het omzetten naar een project." },
+        status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected', 'resolved'], description: "Status (standaard 'new'). 'resolved' = afgehandeld (gaat meteen naar het archief, bv. een vraag die al beantwoord is). 'converted' kan niet: die zet de app zelf bij het omzetten naar een project." },
       },
       required: ['title'],
     },
@@ -1930,7 +1930,7 @@ const TOOL_DEFINITIONS = [
         id: { type: 'string', description: 'Het exacte id van het ticket (uit list_tickets).' },
         title: { type: 'string' },
         description: { type: 'string' },
-        status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected'] },
+        status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected', 'resolved'], description: "'resolved' = afgehandeld: het ticket gaat van de werklijst naar het archief. Terug naar 'review' heropent het." },
         priority: { type: 'string', enum: ['low', 'med', 'high'] },
         notes: { type: 'string', description: 'Interne opmerking bij het ticket.' },
       },
@@ -2251,7 +2251,7 @@ const TOOL_DEFINITIONS = [
       '- clients (Klanten): groeperen op status|created · meten: count, of sum/avg van value · filter status∈[active,prospect,inactive]',
       '- projects (Projecten): groeperen op client|state|created · meten: alleen count · filter state∈[active,archived]',
       '- tasks (Taken): groeperen op status|priority|project|created|deadline · meten: count, of sum/avg van minutes · filter status∈[todo,doing,review,done], priority∈[low,med,high]',
-      '- tickets (Tickets): groeperen op status|priority|client|created · meten: alleen count · filter status∈[new,review,approved,rejected,converted], priority∈[low,med,high]',
+      '- tickets (Tickets): groeperen op status|priority|client|created · meten: alleen count · filter status∈[new,review,approved,rejected,converted,resolved], priority∈[low,med,high]',
       'Periode (date_preset): all|this_month|last_month|this_quarter|this_year|last_12m. Granulariteit (granularity) telt alleen bij een datum-dimensie (date/created/deadline). Laat dimension leeg voor één totaal (kerncijfer).',
       'Voorbeeld "omzet per klant dit jaar": source=invoices, measure_agg=sum, measure_field=amount, dimension=client, date_preset=this_year, filters=[{field:status,value:paid}], chart=bar.',
     ].join('\n'),
@@ -3253,7 +3253,7 @@ const REPORT_SCHEMA: Record<string, ReportSourceSchema> = {
   },
   tickets: {
     dimensions: ['status', 'priority', 'client', 'created'], measures: [],
-    enums: { status: ['new', 'review', 'approved', 'rejected', 'converted'], priority: ['low', 'med', 'high'] }, dateFields: ['created'],
+    enums: { status: ['new', 'review', 'approved', 'rejected', 'converted', 'resolved'], priority: ['low', 'med', 'high'] }, dateFields: ['created'],
   },
 };
 
@@ -4205,6 +4205,8 @@ async function listTickets(orgId: string, input: Record<string, unknown>, limit:
     tickets: rows.map((r) => ({
       id: r.id, title: r.title, status: r.status, priority: r.priority,
       client_id: r.client_id, created_at: r.created_at,
+      // Alleen bij een afgehandeld ticket gevuld; een database van vóór 2026-11-05 kent de kolom niet.
+      resolved_at: r.resolved_at ?? null,
     })),
   };
 }
@@ -5100,7 +5102,7 @@ async function buildTaskAssignProposal(ctx: GerrieContext, input: Record<string,
   };
 }
 
-const TICKET_STATUSES = ['new', 'review', 'approved', 'rejected'];
+const TICKET_STATUSES = ['new', 'review', 'approved', 'rejected', 'resolved'];
 const TICKET_PRIORITIES = ['low', 'med', 'high'];
 
 async function buildTicketProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
