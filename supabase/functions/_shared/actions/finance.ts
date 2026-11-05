@@ -48,7 +48,6 @@ const INVOICE_STATUS_LABELS: Record<string, string> = {
 const INVOICE_CLOSED = ['paid', 'cancelled', 'void', 'written_off', 'refunded'];
 
 /** Vanuit deze offertestatussen kan de interne goedkeuringsronde niets meer. */
-const QUOTE_LOCKED_STATUS = ['sent', 'accepted', 'rejected', 'expired', 'cancelled'];
 
 const QUOTE_STATUS_LABELS: Record<string, string> = {
   draft: 'Concept', pending_internal_approval: 'Wacht op interne goedkeuring',
@@ -161,6 +160,13 @@ function isReminderEligible(invoice: { status: string; due_date: string | null }
   return Boolean(invoice.due_date && invoice.due_date < today);
 }
 
+/** De startdatum van de boekhouding (Instellingen), of null. */
+async function bookkeepingStartDate(ctx: ActionCtx): Promise<string | null> {
+  const { data } = await orgQuery(ctx, 'company_settings', 'bookkeeping_start_date').maybeSingle();
+  const value = (data as { bookkeeping_start_date?: string | null } | null)?.bookkeeping_start_date;
+  return value ? String(value).slice(0, 10) : null;
+}
+
 export const FINANCE_ACTIONS: ActionDef[] = [
   // ── Offerte: de interne goedkeuringsronde ────────────────────────────────
   {
@@ -179,8 +185,9 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       // Een offerte heeft geen opgeslagen totaal (dat staat per versie); het bedrag komt uit de regels.
       const quote = await row<{ number: string; status: string; client_id: string | null; lines: unknown }>(
         ctx, 'quotes', quoteId, 'number, status, client_id, lines', 'Offerte');
-      if (QUOTE_LOCKED_STATUS.includes(quote.status)) {
-        throw new ActionError(`Offerte ${quote.number} staat op "${QUOTE_STATUS_LABELS[quote.status] ?? quote.status}" en kan niet meer intern worden ingediend.`);
+      // Zoals submit_quote_for_internal_approval: alleen een concept.
+      if (quote.status !== 'draft') {
+        throw new ActionError(`Offerte ${quote.number} staat op "${QUOTE_STATUS_LABELS[quote.status] ?? quote.status}"; alleen een concept kan ter interne goedkeuring worden ingediend.`);
       }
       if (!Array.isArray(quote.lines) || quote.lines.length === 0) {
         throw new ActionError(`Offerte ${quote.number} heeft geen regels; vul die eerst in met propose_edit_quote.`);
@@ -211,8 +218,9 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       // Een offerte heeft geen opgeslagen totaal (dat staat per versie); het bedrag komt uit de regels.
       const quote = await row<{ number: string; status: string; client_id: string | null; lines: unknown }>(
         ctx, 'quotes', quoteId, 'number, status, client_id, lines', 'Offerte');
-      if (!['pending_internal_approval', 'internally_approved', 'draft'].includes(quote.status)) {
-        throw new ActionError(`Offerte ${quote.number} staat op "${QUOTE_STATUS_LABELS[quote.status] ?? quote.status}" en kan niet intern worden goedgekeurd.`);
+      // Zoals approve_quote_internal: alleen een ingediende offerte.
+      if (quote.status !== 'pending_internal_approval') {
+        throw new ActionError(`Offerte ${quote.number} staat op "${QUOTE_STATUS_LABELS[quote.status] ?? quote.status}"; alleen een ingediende offerte (wacht op interne goedkeuring) kan worden goedgekeurd.`);
       }
       return {
         title: `Offerte ${quote.number} intern goedkeuren`,
@@ -243,8 +251,9 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       const note = str(input, 'note', 1000);
       const quote = await row<{ number: string; status: string; client_id: string | null }>(
         ctx, 'quotes', quoteId, 'number, status, client_id', 'Offerte');
-      if (QUOTE_LOCKED_STATUS.includes(quote.status)) {
-        throw new ActionError(`Offerte ${quote.number} staat op "${QUOTE_STATUS_LABELS[quote.status] ?? quote.status}" en kan niet meer intern worden afgewezen.`);
+      // Zoals reject_quote_internal: ingediend of intern goedgekeurd (nog niet verstuurd).
+      if (!['pending_internal_approval', 'internally_approved'].includes(quote.status)) {
+        throw new ActionError(`Offerte ${quote.number} staat op "${QUOTE_STATUS_LABELS[quote.status] ?? quote.status}"; afwijzen kan alleen bij een ingediende of intern goedgekeurde offerte die nog niet is verstuurd.`);
       }
       return {
         title: `Offerte ${quote.number} intern afwijzen`,
@@ -277,8 +286,16 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       const projectId = optId(input, 'project_id');
       const table = documentKind === 'quote' ? 'quotes' : 'invoices';
       const label = documentKind === 'quote' ? 'Offerte' : 'Factuur';
-      const doc = await row<{ number: string; client_id: string | null; project_id: string | null }>(
-        ctx, table, documentId, 'number, client_id, project_id', label);
+      const doc = await row<{ number: string; client_id: string | null; project_id: string | null; status: string; locked_at?: string | null }>(
+        ctx, table, documentId, documentKind === 'quote' ? 'number, client_id, project_id, status' : 'number, client_id, project_id, status, locked_at', label);
+      // De database zet het project vast zodra een offerte de goedkeuringsronde
+      // in gaat, en zodra een factuur is verstuurd of vergrendeld.
+      if (documentKind === 'quote' && doc.status !== 'draft') {
+        throw new ActionError(`Offerte ${doc.number} zit al in de goedkeuringsronde ("${QUOTE_STATUS_LABELS[doc.status] ?? doc.status}"); het project ligt dan vast.`);
+      }
+      if (documentKind === 'invoice' && (doc.locked_at || ['sent', 'overdue', 'paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(doc.status))) {
+        throw new ActionError(`Factuur ${doc.number} is verstuurd of vergrendeld; het project ligt dan vast.`);
+      }
       if ((doc.project_id ?? null) === projectId) {
         throw new ActionError(projectId ? `${label} ${doc.number} hangt al aan dat project.` : `${label} ${doc.number} hangt al aan geen enkel project.`);
       }
@@ -318,7 +335,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Zet de status van een factuur met de hand. Dit is ook de manier om een BETALING TE REGISTREREN die buiten Mollie om binnenkwam: zet hem op "paid" en de factuur verdwijnt uit de debiteurenstand en uit de herinneringsflow. ' +
+      'Zet de status van een factuur met de hand. Voor een factuur die NIET in het grootboek staat is "paid" de manier om een betaling buiten Mollie om te registreren. Staat de factuur wel in het grootboek, dan registreer je een betaling door de banktransactie te koppelen (`invoice.reconcile_bank_transaction`) of met een memoriaalpost op Debiteuren; daarna staat hij vanzelf op betaald. ' +
       'draft = concept, sent = verzonden, overdue = te laat, paid = betaald, cancelled = geannuleerd, void = ongeldig gemaakt, written_off = afgeboekt (oninbaar). ' +
       'Let op: "void" en "written_off" zijn feitelijk eindstations, en de bedragen zelf verander je hiermee niet. Zoek de factuur met `list_invoices`.',
     keywords: ['status', 'betaald', 'betaling registreren', 'markeren', 'voldaan', 'geannuleerd', 'afboeken', 'oninbaar', 'storneren', 'debiteuren'],
@@ -338,10 +355,15 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       if (status === 'draft' && invoice.status !== 'draft') {
         throw new ActionError(`Factuur ${invoice.number} is uitgegeven en gaat niet terug naar concept. Crediteer hem en maak een nieuwe factuur.`);
       }
-      if (invoice.journal_entry_id && ['cancelled', 'void', 'written_off'].includes(status)) {
-        const { data: openCents } = await ctx.db.rpc('invoice_open_receivable_cents', { p_organization_id: ctx.organizationId, p_invoice_id: invoiceId });
+      if (invoice.journal_entry_id && ['cancelled', 'void', 'written_off', 'paid'].includes(status)) {
+        const { data: openCents, error: openError } = await ctx.db.rpc('invoice_open_receivable_cents', { p_organization_id: ctx.organizationId, p_invoice_id: invoiceId });
+        if (openError) throw new ActionError(`Openstaand bedrag bepalen mislukt: ${openError.message}`);
         if (Number(openCents ?? 0) > 0) {
-          throw new ActionError(`Factuur ${invoice.number} staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur in ResoFly.`);
+          // Alleen de status op betaald zetten laat 1300 Debiteuren open staan
+          // (en de factuur in de openstaande posten): de betaling hoort geboekt.
+          throw new ActionError(status === 'paid'
+            ? `Factuur ${invoice.number} staat in het grootboek en er staat nog ${euro(Number(openCents) / 100)} open. Registreer de betaling door de banktransactie te koppelen (\`invoice.reconcile_bank_transaction\`) of met een memoriaalpost op Debiteuren; dan staat hij vanzelf op betaald.`
+            : `Factuur ${invoice.number} staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur in ResoFly.`);
         }
       }
       const warnings: Record<string, string> = {
@@ -349,6 +371,10 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         void: 'Ongeldig gemaakt is een eindstation: de factuur verdwijnt uit de debiteurenstand en uit de herinneringsflow, en je kunt hem daarna niet meer versturen of innen.',
         written_off: 'Afgeboekt betekent dat je deze vordering als oninbaar beschouwt. De factuur verdwijnt uit de debiteurenstand en uit de herinneringsflow.',
         cancelled: 'Een geannuleerde factuur wordt niet meer verstuurd of geïnd, en valt nog steeds onder de bewaarplicht — verwijderen kan niet.',
+        ...(invoice.status === 'draft' && !invoice.journal_entry_id ? {
+          sent: 'Op verzonden zetten boekt de omzet en btw in het grootboek en zet de factuur vast; daarna kun je hem alleen nog crediteren. Er gaat geen mail naar de klant — versturen doe je vanuit de factuur in ResoFly.',
+          overdue: 'Dit boekt de omzet en btw in het grootboek en zet de factuur vast; daarna kun je hem alleen nog crediteren.',
+        } : {}),
       };
       return {
         title: `Factuur ${invoice.number}: status "${INVOICE_STATUS_LABELS[invoice.status] ?? invoice.status}" → "${INVOICE_STATUS_LABELS[status] ?? status}"`,
@@ -466,10 +492,15 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         throw new ActionError(`Voor factuur ${invoice.number} ("${INVOICE_STATUS_LABELS[invoice.status] ?? invoice.status}") kan geen aanmaning worden gemaakt.`);
       }
       if (!invoice.due_date) throw new ActionError(`Factuur ${invoice.number} heeft geen vervaldatum; zonder vervaldatum is er geen rente te berekenen.`);
-      const { data: existing } = await orgQuery(ctx, 'invoice_dunning_notices', 'id, status').eq('invoice_id', invoiceId).maybeSingle();
+      // Een geannuleerde aanmaning telt niet: daarna mag er een nieuwe komen (de
+      // database staat dat ook toe). Meerdere rijen zijn dus normaal; vroeger
+      // gaf maybeSingle() dan een fout die werd genegeerd, en ging de controle stil voorbij.
+      const { data: existingRows, error: existingError } = await orgQuery(ctx, 'invoice_dunning_notices', 'id, status')
+        .eq('invoice_id', invoiceId).neq('status', 'cancelled').limit(1);
+      if (existingError) throw new ActionError(`Aanmaningen ophalen mislukt: ${existingError.message}`);
+      const existing = ((existingRows ?? []) as Array<{ status: string }>)[0];
       if (existing) {
-        const current = (existing as { status: string }).status;
-        throw new ActionError(`Er bestaat al een aanmaning voor factuur ${invoice.number} (status: ${current}). Annuleer die eerst met dunning.cancel.`);
+        throw new ActionError(`Er bestaat al een aanmaning voor factuur ${invoice.number} (status: ${existing.status}). Annuleer die eerst met dunning.cancel.`);
       }
       const recipient = await clientRecipient(ctx, invoice.client_id, `Factuur ${invoice.number}`);
       const overdue = daysBetween(invoice.due_date, ctx.today);
@@ -779,6 +810,12 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       if (['draft', 'cancelled', 'void'].includes(invoice.status)) {
         throw new ActionError(`Factuur ${invoice.number} staat op "${INVOICE_STATUS_LABELS[invoice.status] ?? invoice.status}" en hoort niet in het grootboek.`);
       }
+      // Van vóór de startdatum van de boekhouding staat de vordering al in de
+      // beginbalans; de database boekt zo'n factuur niet (opnieuw).
+      const startDate = await bookkeepingStartDate(ctx);
+      if (startDate && invoice.date && invoice.date < startDate) {
+        throw new ActionError(`Factuur ${invoice.number} (${dateShort(invoice.date)}) is van vóór de startdatum van de boekhouding (${dateShort(startDate)}); die vordering hoort in de beginbalans, niet als nieuwe boeking.`);
+      }
       return {
         title: `Factuur ${invoice.number} naar het grootboek boeken`,
         sub: joinShort([await clientNameOf(ctx, invoice.client_id), euro(docTotalEur(invoice)), dateShort(invoice.date)]),
@@ -804,7 +841,11 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       const { data, error } = await orgQuery(ctx, 'invoices', 'id, number, status, lines, total_amount, date')
         .is('journal_entry_id', null).in('status', BOOKABLE_STATUS).order('date', { ascending: true }).limit(500);
       if (error) throw new ActionError(`Ongeboekte facturen ophalen mislukt: ${error.message}`);
-      const invoices = (data ?? []) as Array<Record<string, unknown>>;
+      // Zoals book_all_unbooked_sales_invoices: wat van vóór de startdatum van
+      // de boekhouding is, slaat de database over (dat zit in de beginbalans).
+      const startDate = await bookkeepingStartDate(ctx);
+      const invoices = ((data ?? []) as Array<Record<string, unknown>>)
+        .filter((i) => !startDate || !i.date || String(i.date) >= startDate);
       if (invoices.length === 0) throw new ActionError('Er staan geen uitgegeven facturen open die nog geboekt moeten worden.');
       const sum = invoices.reduce((acc, i) => acc + docTotalEur(i), 0);
       return {
@@ -997,13 +1038,16 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         orgQuery(ctx, 'invoice_workflow_events', 'id, event_type, title, description, created_at')
           .eq('invoice_id', invoiceId).order('created_at', { ascending: false }).limit(100),
         orgQuery(ctx, 'invoice_dunning_notices', 'id, status, client_kind, principal_cents, interest_cents, collection_costs_cents, collection_costs_vat_cents, total_claim_cents, deadline_date, proposed_at, sent_at')
-          .eq('invoice_id', invoiceId).maybeSingle(),
+          .eq('invoice_id', invoiceId).order('proposed_at', { ascending: false }).limit(10),
       ]);
       if (deliveries.error) throw new ActionError(`Verzendhistorie ophalen mislukt: ${deliveries.error.message}`);
       if (payments.error) throw new ActionError(`Betalingen ophalen mislukt: ${payments.error.message}`);
       if (refunds.error) throw new ActionError(`Terugbetalingen ophalen mislukt: ${refunds.error.message}`);
       if (versions.error) throw new ActionError(`Factuurversies ophalen mislukt: ${versions.error.message}`);
       if (events.error) throw new ActionError(`Factuur-events ophalen mislukt: ${events.error.message}`);
+      if (creditNotes.error) throw new ActionError(`Creditnota's ophalen mislukt: ${creditNotes.error.message}`);
+      if (chargebacks.error) throw new ActionError(`Terugboekingen ophalen mislukt: ${chargebacks.error.message}`);
+      if (dunning.error) throw new ActionError(`Aanmaningen ophalen mislukt: ${dunning.error.message}`);
 
       return {
         invoice: {
@@ -1026,7 +1070,9 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         chargebacks: chargebacks.data ?? [],
         versions: versions.data ?? [],
         events: events.data ?? [],
-        dunning_notice: dunning.data ?? null,
+        // De nieuwste eerst; na een geannuleerde kan er een nieuwe zijn.
+        dunning_notice: ((dunning.data ?? []) as unknown[])[0] ?? null,
+        dunning_notices: dunning.data ?? [],
       };
     },
   },
@@ -1288,14 +1334,26 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         changed.push(label);
       }
       if (changed.length === 0) throw new ActionError('Geef minstens één veld dat moet veranderen.');
-      const { data } = await orgQuery(ctx, 'company_settings', 'company_name').maybeSingle();
+      const { data } = await orgQuery(ctx, 'company_settings', 'company_name, iban, email').maybeSingle();
       if (!data) {
         throw new ActionError('Er zijn nog geen bedrijfsgegevens vastgelegd. Vul ze eerst één keer in bij Instellingen → Bedrijf; daarna kan dit hier bijgewerkt worden.');
       }
+      const current = data as { company_name: string; iban: string | null; email: string | null };
+      // Het IBAN op de factuur is waar klanten naartoe betalen: een gewijzigd
+      // nummer gaat altijd langs een mens (ook met execute_high), met oud → nieuw
+      // op de kaart. Een verzoek daartoe "via de mail" is het klassieke
+      // betaalfraude-scenario.
+      const ibanChanged = 'iban' in patch && (patch.iban ?? null) !== (current.iban ?? null);
+      const shown = changed.map((label) => (label === 'IBAN' && ibanChanged ? `IBAN ${current.iban ?? '—'} → ${String(patch.iban ?? '—')}` : label));
       return {
-        title: `Bedrijfsgegevens op de factuur bijwerken: ${(data as { company_name: string }).company_name}`,
-        sub: joinShort(changed),
+        title: `Bedrijfsgegevens op de factuur bijwerken: ${current.company_name}`,
+        sub: joinShort(shown, 220),
         kind: 'money',
+        ...(ibanChanged ? {
+          risk: 'high' as const,
+          humanOnly: true,
+          warning: 'Klanten betalen voortaan naar dit nieuwe IBAN: het staat op elke nieuwe factuur en in de e-factuur. Controleer het nummer bij de bank zelf.',
+        } : {}),
         payload: { patch, changed },
       };
     },

@@ -3,7 +3,7 @@ import {
   createInvoiceRefund, postCreditNoteToLedger, postSalesInvoiceToLedger, proposeInvoiceDunningNotice,
   rejectQuoteInternal, resetEmailTemplate, saveInvoiceDunningSettings, saveInvoiceReminderSettings,
   sendCreditNoteEmail, sendInvoiceDunningNotice, sendInvoiceReminderEmail, setInvoiceRemindersPaused,
-  submitQuoteForInternalApproval, updateRow, upsertCompanySettings, upsertEmailTemplate,
+  setInvoiceStatusFromCard, submitQuoteForInternalApproval, updateRow, upsertCompanySettings, upsertEmailTemplate,
 } from '../repository';
 import { euro } from '../format';
 import { flag, optText, patchOf, text, type ActionExecutor, type ActionRunCtx } from './types';
@@ -80,7 +80,8 @@ export const FINANCE_EXECUTORS: Record<string, ActionExecutor> = {
   // ── Factuur: status en betaling ──────────────────────────────────────────
   'invoice.set_status': async (payload, ctx) => {
     const status = text(payload, 'status');
-    await updateRow('invoices', text(payload, 'invoice_id'), { status }, ctx.organizationId);
+    // Alleen als de status nog is wat er op de kaart stond (`was`).
+    await setInvoiceStatusFromCard(ctx.organizationId, text(payload, 'invoice_id'), status, optText(payload, 'was'));
     const number = optText(payload, 'number') ?? '';
     const labels: Record<string, string> = {
       draft: 'staat weer op concept', sent: 'staat op verzonden', overdue: 'staat op te laat',

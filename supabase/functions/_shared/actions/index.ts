@@ -1,4 +1,4 @@
-import type { ActionDef } from './types.ts';
+import { ActionError, type ActionDef } from './types.ts';
 import { CLIENT_ACTIONS } from './clients.ts';
 import { FINANCE_ACTIONS } from './finance.ts';
 import { BOOKKEEPING_ACTIONS } from './bookkeeping.ts';
@@ -33,4 +33,29 @@ export const ACTIONS: ActionDef[] = [
   ...ADMIN_ACTIONS,
   ...INSIGHT_ACTIONS,
   ...FILES_ACTIONS,
-];
+].map(withRequiredFields);
+
+/**
+ * `required` in het schema is een belofte aan het model; hier wordt hij ook
+ * gehouden. Zonder deze controle viel een ontbrekend veld in de helpers terug op
+ * een standaard (een getal 0, een vlag aan), en kreeg de goedkeurder een kaart
+ * die iets anders zei dan er gevraagd was. Eén plek, voor Gerrie, MCP en de API.
+ */
+function withRequiredFields(action: ActionDef): ActionDef {
+  const required = action.required ?? [];
+  if (required.length === 0) return action;
+  const check = (input: Record<string, unknown>) => {
+    const missing = required.filter((key) => {
+      const value = input?.[key];
+      return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+    });
+    if (missing.length > 0) {
+      throw new ActionError(`Verplicht en niet ingevuld: ${missing.map((key) => `"${key}"`).join(', ')}.`);
+    }
+  };
+  return {
+    ...action,
+    ...(action.plan ? { plan: async (ctx, input) => { check(input); return await action.plan!(ctx, input); } } : {}),
+    ...(action.read ? { read: async (ctx, input) => { check(input); return await action.read!(ctx, input); } } : {}),
+  };
+}

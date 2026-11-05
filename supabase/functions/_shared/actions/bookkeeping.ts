@@ -576,7 +576,8 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     required: ['supplier_id'],
     async plan(ctx, input) {
       const supplierId = id(input, 'supplier_id');
-      const supplier = await row<{ name: string }>(ctx, 'suppliers', supplierId, 'name', 'Leverancier');
+      const supplier = await row<{ name: string; iban: string | null; email: string | null; default_expense_account_id: string | null; default_vat_code: string | null }>(
+        ctx, 'suppliers', supplierId, 'name, iban, email, default_expense_account_id, default_vat_code', 'Leverancier');
       const patch: Record<string, unknown> = {};
       const textFields: Array<[string, number]> = [
         ['name', 200], ['supplier_code', 40], ['contact_name', 120], ['email', 200], ['phone', 40],
@@ -603,16 +604,31 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
 
       // Het IBAN en het e-mailadres van een leverancier bepalen waar geld heen
       // gaat, en de factuur-inbox vergelijkt er het IBAN op een nieuwe factuur
-      // mee (fraudecontrole). Wijzigen gaat daarom altijd langs een mens.
-      const touchesPayment = 'iban' in patch || 'email' in patch;
+      // mee (fraudecontrole). Wijzigen gaat daarom altijd langs een mens — ook
+      // voor een koppeling met execute_high (humanOnly) — en de kaart toont het
+      // oude en het nieuwe adres, zodat de goedkeurder ziet wat er verandert.
+      const changed = (key: 'iban' | 'email') => key in patch && (patch[key] ?? null) !== (supplier[key] ?? null);
+      const touchesPayment = changed('iban') || changed('email');
+      const shown: string[] = [];
+      if (changed('iban')) shown.push(`IBAN ${supplier.iban ?? '—'} → ${String(patch.iban ?? '—')}`);
+      if (changed('email')) shown.push(`e-mail ${supplier.email ?? '—'} → ${String(patch.email ?? '—')}`);
+      // De standaard kostenrekening en btw-code gebruikt de factuur-inbox bij
+      // het automatisch boeken van binnengekomen facturen.
+      const touchesBooking = ('default_expense_account_id' in patch && patch.default_expense_account_id !== supplier.default_expense_account_id)
+        || ('default_vat_code' in patch && patch.default_vat_code !== supplier.default_vat_code);
+      const rest = Object.keys(patch).filter((key) => !((key === 'iban' && changed('iban')) || (key === 'email' && changed('email'))));
       return {
         title: `Leverancier bijwerken: ${supplier.name}`,
-        sub: joinShort(Object.keys(patch)),
+        sub: joinShort([...shown, ...rest], 220),
         kind: 'work',
         payload: { supplier_id: supplierId, name: supplier.name, patch },
         ...(touchesPayment ? {
           risk: 'high' as const,
+          humanOnly: true,
           warning: 'Hiermee verandert het IBAN of het e-mailadres van deze leverancier. Controleer dit bij de leverancier zelf, niet via de mail die erom vraagt.',
+        } : touchesBooking ? {
+          risk: 'high' as const,
+          warning: 'De factuur-inbox boekt binnengekomen facturen van deze leverancier voortaan op de nieuwe kostenrekening of btw-code.',
         } : {}),
       };
     },
@@ -724,7 +740,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     description:
       'Boekt een concept-inkoopfactuur in het grootboek: de kosten op de gekozen rekeningen, de voorbelasting op 1500 en de crediteurenstand op 1600. Pas daarna telt de factuur mee in de btw-aangifte en is hij tegen een banktransactie af te letteren. ' +
       'Controleer eerst de regels en de grootboekrekeningen met `list_purchase_invoices`. ' +
-      'DIT IS DEFINITIEF: na het boeken is de factuur niet meer te wijzigen en kan alleen nog met een tegenboeking worden gecorrigeerd. In een afgesloten periode boeken lukt niet.',
+      'DIT IS DEFINITIEF: na het boeken is de factuur niet meer te wijzigen en kan alleen nog met een tegenboeking worden gecorrigeerd. Valt de factuurdatum in een afgesloten periode (boekjaar of btw-aangifte), dan boekt ResoFly op de eerste open datum daarna — mogelijk in het volgende boekjaar; de factuurdatum zelf blijft staan.',
     keywords: ['inkoopfactuur boeken', 'grootboek', 'voorbelasting', 'crediteuren', 'definitief', 'boeken'],
     input: { purchase_invoice_id: { type: 'string', description: 'Id van de inkoopfactuur (uit list_purchase_invoices).' } },
     required: ['purchase_invoice_id'],
@@ -736,13 +752,19 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       const supplier = invoice.supplier_id
         ? await row<{ name: string }>(ctx, 'suppliers', invoice.supplier_id, 'name', 'Leverancier')
         : null;
+      // Zoals book_purchase_invoice: in een afgesloten periode gaat de boeking
+      // naar de eerste open datum. Dat hoort op de kaart te staan.
+      const { data: openDate } = await ctx.db.rpc('first_open_booking_date', { p_organization_id: ctx.organizationId, p_date: invoice.date });
+      const bookDate = typeof openDate === 'string' ? openDate.slice(0, 10) : invoice.date;
       return {
         title: `Inkoopfactuur ${invoice.internal_number ?? invoice.supplier_invoice_number ?? ''} naar het grootboek boeken`,
         sub: joinShort([
           supplier?.name,
           `${euroCents(invoice.total_cents)} incl. btw (voorbelasting ${euroCents(invoice.vat_cents)})`,
-          `boekdatum ${invoice.date}`,
-        ], 160),
+          bookDate !== invoice.date
+            ? `factuurdatum ${invoice.date} valt in een afgesloten periode: geboekt op ${bookDate}`
+            : `boekdatum ${invoice.date}`,
+        ], 200),
         warning: 'Na het boeken kun je deze factuur niet meer wijzigen; corrigeren kan alleen met een tegenboeking.',
         kind: 'money',
         payload: { purchase_invoice_id: invoiceId, number: invoice.internal_number ?? invoice.supplier_invoice_number, supplier_name: supplier?.name ?? null },
@@ -1047,11 +1069,22 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       const currency = optStr(input, 'currency', 3);
       if (currency) patch.currency = currency.toUpperCase();
       const accountId = optId(input, 'ledger_account_id');
+      let ledgerChanged = false;
       if (accountId) {
         const account = await loadAccount(ctx, accountId);
         if (account.type !== 'asset') throw new ActionError(`${accountLabel(account)} is geen bezittingenrekening.`);
+        // Een bankrekening hoort op een liquide-middelenrekening, niet op
+        // debiteuren, btw, activa of afschrijvingen: daar vervuilen de
+        // bankboekingen de aansluiting (en de btw-aangifte).
+        if (account.subtype && !['bank', 'psp_clearing'].includes(account.subtype)) {
+          throw new ActionError(`${accountLabel(account)} is geen bank- of kasrekening; een bankrekening koppel je aan een rekening voor liquide middelen.`);
+        }
         patch.ledger_account_id = accountId;
+        ledgerChanged = true;
         notes.push(`grootboek wordt ${accountLabel(account)} — raakt de saldo-aansluiting van al geboekte transacties`);
+      }
+      if (input.iban !== undefined && patch.iban !== bankAccount.iban) {
+        notes.push(`IBAN ${bankAccount.iban ?? '—'} → ${String(patch.iban ?? '—')}`);
       }
       if (typeof input.is_active === 'boolean') {
         patch.is_active = input.is_active;
@@ -1062,6 +1095,12 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       return {
         title: `Bankrekening bijwerken: ${bankAccount.name}`,
         sub: joinShort([...Object.keys(patch), ...notes], 170),
+        // De grootboekkoppeling bepaalt waar elke bankboeking landt: dat hoort
+        // langs een mens.
+        risk: ledgerChanged ? 'high' : 'normal',
+        warning: ledgerChanged
+          ? 'Alle boekingen van deze bankrekening komen voortaan op de nieuwe grootboekrekening; de saldo-aansluiting van al geboekte transacties verandert mee.'
+          : undefined,
         kind: 'work',
         payload: { bank_account_id: bankAccountId, name: bankAccount.name, patch },
       };
@@ -1081,6 +1120,16 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     input: { bank_account_id: { type: 'string', description: 'Id van de bankrekening; weglaten synchroniseert alle gekoppelde rekeningen.' } },
     async plan(ctx, input) {
       const bankAccountId = optId(input, 'bank_account_id');
+      // Net als bank.rematch: met actieve regels die automatisch boeken ontstaan
+      // er bij het ophalen meteen definitieve boekingen.
+      const { data: autoRules } = await orgQuery(ctx, 'bank_rules', 'id, name').eq('auto_book', true).eq('is_active', true);
+      const auto: Array<{ name: string }> = (autoRules ?? []) as Array<{ name: string }>;
+      const autoRisk = auto.length > 0
+        ? {
+          risk: 'high' as const,
+          warning: `${auto.length} bankregel${auto.length === 1 ? '' : 's'} met automatisch boeken (${auto.map((r) => r.name).join(', ')}) boek${auto.length === 1 ? 't' : 'en'} binnengekomen transacties meteen definitief; terugdraaien kan alleen met een tegenboeking.`,
+        }
+        : {};
       if (bankAccountId) {
         const bankAccount = await row<{ name: string; source: string; last_synced_at: string | null }>(
           ctx, 'bank_accounts', bankAccountId, 'name, source, last_synced_at', 'Bankrekening');
@@ -1090,6 +1139,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
         return {
           title: `Transacties ophalen bij de bank: ${bankAccount.name}`,
           sub: joinShort([bankAccount.last_synced_at ? `laatst gesynct ${bankAccount.last_synced_at.slice(0, 10)}` : 'nog niet eerder gesynct', 'bankregels met automatisch boeken kunnen meteen boeken'], 140),
+          ...autoRisk,
           kind: 'money',
           payload: { bank_account_id: bankAccountId, name: bankAccount.name },
         };
@@ -1100,6 +1150,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       return {
         title: `Transacties ophalen bij ${linked.length} gekoppelde bankrekening${linked.length === 1 ? '' : 'en'}`,
         sub: joinShort([...linked.map((a) => a.name), 'bankregels met automatisch boeken kunnen meteen boeken'], 140),
+        ...autoRisk,
         kind: 'money',
         payload: { bank_account_id: null, name: null },
       };
@@ -1394,8 +1445,14 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     required: ['rule_id'],
     async plan(ctx, input) {
       const ruleId = id(input, 'rule_id');
-      const rule = await row<{ name: string; auto_book: boolean; is_active: boolean; target_account_id: string | null }>(
-        ctx, 'bank_rules', ruleId, 'name, auto_book, is_active, target_account_id', 'Bankregel');
+      const rule = await row<{
+        name: string; auto_book: boolean; is_active: boolean; target_account_id: string | null;
+        match_counterparty_iban: string | null; match_counterparty_name_contains: string | null;
+        match_description_contains: string | null; match_amount_cents: number | null;
+      }>(
+        ctx, 'bank_rules', ruleId,
+        'name, auto_book, is_active, target_account_id, match_counterparty_iban, match_counterparty_name_contains, match_description_contains, match_amount_cents',
+        'Bankregel');
       const patch: Record<string, unknown> = {};
       const notes: string[] = [];
 
@@ -1431,17 +1488,34 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
         notes.push(input.is_active ? 'staat weer aan' : 'staat uit');
       }
       const willAutoBook = typeof patch.auto_book === 'boolean' ? patch.auto_book : rule.auto_book;
+      const willBeActive = typeof patch.is_active === 'boolean' ? patch.is_active : rule.is_active;
       const willHaveTarget = patch.target_account_id !== undefined ? patch.target_account_id : rule.target_account_id;
       if (willAutoBook && !willHaveTarget) throw new ActionError('Automatisch boeken vereist een grootboekrekening.');
       if (Object.keys(patch).length === 0) throw new ActionError('Geef minstens één veld dat moet veranderen.');
 
-      const turnsOnAutoBook = patch.auto_book === true && !rule.auto_book;
+      // Dezelfde eis als bij aanmaken: zonder voorwaarden matcht een regel op
+      // élke transactie (en met automatisch boeken boekt hij ze allemaal).
+      const after = { ...rule, ...patch } as Record<string, unknown>;
+      const hasCondition = ['match_counterparty_iban', 'match_counterparty_name_contains', 'match_description_contains']
+        .some((key) => typeof after[key] === 'string' && String(after[key]).trim() !== '')
+        || (after.match_amount_cents !== null && after.match_amount_cents !== undefined);
+      if (!hasCondition) {
+        throw new ActionError('Een bankregel houdt minstens één voorwaarde (IBAN, naam bevat, omschrijving bevat of een exact bedrag); zonder voorwaarden matcht hij op alles.');
+      }
+
+      // Hoog risico zodra de regel na de wijziging automatisch boekt en er iets
+      // verandert aan wát hij boekt of wanneer: aanzetten, weer actief maken,
+      // andere voorwaarden, rekening of btw-code. Alleen naam of prioriteit, of
+      // iets uitzetten, is gewoon.
+      const touchesBooking = Object.keys(patch).some((key) => !['name', 'priority'].includes(key));
+      const autoBooksAfter = willAutoBook && willBeActive;
+      const risky = autoBooksAfter && touchesBooking;
       return {
         title: `Bankregel bijwerken: ${rule.name}`,
         sub: joinShort([...Object.keys(patch), ...notes], 220),
-        risk: turnsOnAutoBook ? 'high' : 'normal',
-        warning: turnsOnAutoBook
-          ? 'Vanaf nu worden transacties die aan deze regel voldoen zonder tussenkomst in het grootboek geboekt.'
+        risk: risky ? 'high' : 'normal',
+        warning: risky
+          ? 'Deze regel boekt automatisch: transacties die na de wijziging aan de regel voldoen, worden zonder tussenkomst in het grootboek geboekt. Terugdraaien kan alleen met een tegenboeking.'
           : undefined,
         kind: 'work',
         payload: { rule_id: ruleId, name: rule.name, patch },
@@ -1556,7 +1630,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
           `${euroCents(Math.abs(rounded))} ${direction}`,
           rounded === 0 ? 'nihilaangifte — er wordt niets doorgeboekt' : 'wordt doorgeboekt naar 1530 Te betalen omzetbelasting',
         ], 220),
-        warning: `Na het afsluiten kun je in ${period.label} niets meer boeken; die vergrendeling gaat er niet meer af. Je bevestigt hiermee dat de OB-aangifte al bij de Belastingdienst is ingediend.`,
+        warning: `Na het afsluiten kun je in ${period.label} niets meer boeken dat de btw-aangifte raakt (omzet en inkoop met btw); boekingen zonder btw, zoals afschrijvingen en lonen, kunnen nog wel. Die vergrendeling gaat er niet meer af. Je bevestigt hiermee dat de OB-aangifte al bij de Belastingdienst is ingediend.`,
         kind: 'money',
         payload: {
           period_type: periodType, year, period_index: index,
@@ -1723,7 +1797,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Sluit een boekjaar af: het resultaat wordt in één boekstuk naar de resultaatrekening geboekt (standaard 0510 Onverdeeld resultaat) en het HELE JAAR wordt vergrendeld — daarna kan er niets meer in worden geboekt. ' +
+      'Sluit een boekjaar af: het resultaat wordt in één boekstuk naar de resultaatrekening geboekt (standaard 0510 Onverdeeld resultaat; bij een eenmanszaak meestal 0500, en dan gaan ook de privé-opnamen en -stortingen naar 0500; bij een vof, maatschap of cv met vennoten naar rato naar hun kapitaalrekeningen) en het HELE JAAR wordt vergrendeld — daarna kan er niets meer in worden geboekt. ' +
       'Alle btw-aangiften van dat jaar moeten eerst zijn afgesloten. ' +
       'Een afgesloten boekjaar kan alleen nog door een eigenaar of beheerder worden heropend; doe dat alleen om een fout te herstellen. Bekijk het te bestemmen resultaat eerst met `list_fiscal_years`.',
     keywords: ['boekjaar afsluiten', 'jaarafsluiting', 'resultaat', '0510', 'vergrendelen', 'jaar dicht'],
@@ -1737,15 +1811,38 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
 
       const rows = await rpc<Array<{ id: string; computed_result_cents: number }>>(ctx, 'list_fiscal_years', {}, 'Boekjaren ophalen');
       const computed = (rows ?? []).find((r) => r.id === fiscalYearId)?.computed_result_cents ?? 0;
-      const settings = await orgQuery(ctx, 'company_settings', 'year_result_account_code').maybeSingle();
-      const resultCode = (settings.data as { year_result_account_code?: string } | null)?.year_result_account_code ?? '0510';
+      const settings = await orgQuery(ctx, 'company_settings', 'year_result_account_code, legal_form').maybeSingle();
+      const settingsRow = settings.data as { year_result_account_code?: string; legal_form?: string } | null;
+      const resultCode = settingsRow?.year_result_account_code ?? '0510';
+      const legalForm = String(settingsRow?.legal_form ?? 'eenmanszaak');
+
+      // Waar het resultaat heen gaat, zoals close_fiscal_year het doet: bij een
+      // vof, maatschap of cv met vennoten naar rato naar hun kapitaalrekeningen
+      // (en hun privé naar hun eigen kapitaal); bij een eenmanszaak gaat ook het
+      // privé naar 0500. Telt de verdeling niet op tot 100%, dan weigert de
+      // afsluiting — dat hoort vóór de kaart te blijken, niet erna.
+      let destination = `naar ${resultCode}`;
+      if (['vof', 'maatschap', 'cv'].includes(legalForm)) {
+        const { data: partners, error: partnersError } = await orgQuery(ctx, 'partnership_partners', 'name, profit_share_basis_points').eq('is_active', true);
+        if (partnersError) throw new ActionError(`Vennoten ophalen mislukt: ${partnersError.message}`);
+        const list = (partners ?? []) as Array<{ name: string; profit_share_basis_points: number }>;
+        if (list.length > 0) {
+          const total = list.reduce((sum, p) => sum + Number(p.profit_share_basis_points || 0), 0);
+          if (total !== 10000) {
+            throw new ActionError(`De winstverdeling van de vennoten telt op tot ${(total / 100).toLocaleString('nl-NL')}% in plaats van 100%. Pas de winstaandelen aan (Vennoten) voordat je het boekjaar afsluit.`);
+          }
+          destination = `naar de kapitaalrekeningen van ${list.length} vennoten (${list.map((p) => `${p.name} ${(p.profit_share_basis_points / 100).toLocaleString('nl-NL')}%`).join(', ')}); hun privé naar hun eigen kapitaal`;
+        }
+      } else if (legalForm === 'eenmanszaak') {
+        destination = `naar ${resultCode}; privé-opnamen en -stortingen naar 0500 Eigen vermogen`;
+      }
 
       return {
         title: `Boekjaar ${fiscalYear.label} definitief afsluiten`,
         sub: joinShort([
           `${fiscalYear.period_start} t/m ${fiscalYear.period_end}`,
-          `resultaat ${euroCents(computed)} (${computed >= 0 ? 'winst' : 'verlies'}) naar ${resultCode}`,
-        ], 220),
+          `resultaat ${euroCents(computed)} (${computed >= 0 ? 'winst' : 'verlies'}) ${destination}`,
+        ], 260),
         warning: `Na het afsluiten kun je in ${fiscalYear.label} niets meer boeken. Alleen een eigenaar of beheerder kan het jaar nog heropenen.`,
         kind: 'money',
         payload: { fiscal_year_id: fiscalYearId, label: fiscalYear.label, result_cents: computed },
@@ -2103,7 +2200,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     risk: 'high',
     description:
       'Boekt alle geplande afschrijvingstermijnen van een activum tot en met de gekozen datum: debet de afschrijvingskosten in de W&V, credit de cumulatieve afschrijving op de balans. Elke termijn wordt een journaalpost. ' +
-      'Bekijk eerst met `asset.schedule` welke termijnen er openstaan. DIT ZIJN DEFINITIEVE GROOTBOEKBOEKINGEN; corrigeren kan alleen met een tegenboeking, en in een afgesloten periode boeken lukt niet.',
+      'Bekijk eerst met `asset.schedule` welke termijnen er openstaan. DIT ZIJN DEFINITIEVE GROOTBOEKBOEKINGEN; corrigeren kan alleen met een tegenboeking. Valt een termijn in een afgesloten boekjaar, dan boekt ResoFly hem op de eerste open datum daarna (een afschrijving raakt de btw-aangifte niet, dus een afgesloten btw-periode houdt hem niet tegen).',
     keywords: ['afschrijven', 'afschrijving boeken', 'termijn', 'maandafschrijving', 'w&v', 'activum'],
     input: {
       asset_id: { type: 'string' },

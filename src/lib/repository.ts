@@ -2506,6 +2506,32 @@ export async function createShareholder(organizationId: UUID, input: Shareholder
   return data as Shareholder;
 }
 
+const SHAREHOLDER_COLUMNS: Record<keyof ShareholderInput, keyof ReturnType<typeof shareholderPayload>> = {
+  name: 'name', kind: 'kind', addressLine: 'address_line', postalCode: 'postal_code', city: 'city',
+  countryCode: 'country_code', email: 'email', isDga: 'is_dga', withholdingExempt: 'withholding_exempt',
+  withholdingExemptNote: 'withholding_exempt_note', note: 'note',
+};
+
+/**
+ * Alleen de opgegeven velden bijwerken — voor een goedgekeurde kaart. Een kaart
+ * is een momentopname: wie de hele rij van toen terugschrijft, zet stil terug
+ * wat een collega intussen veranderde (bijv. de inhoudingsvrijstelling voor
+ * dividendbelasting).
+ */
+export async function patchShareholder(organizationId: UUID, id: UUID, input: ShareholderInput, keys: string[]): Promise<void> {
+  const full = shareholderPayload(input);
+  const patch: Record<string, unknown> = {};
+  for (const key of keys) {
+    const column = SHAREHOLDER_COLUMNS[key as keyof ShareholderInput];
+    if (column) patch[column] = full[column];
+  }
+  if (Object.keys(patch).length === 0) return;
+  const { error } = await supabase
+    .from('shareholders').update(patch)
+    .eq('id', id).eq('organization_id', organizationId);
+  if (error) throw bookkeepingError(error);
+}
+
 export async function updateShareholder(organizationId: UUID, id: UUID, input: ShareholderInput): Promise<void> {
   const { error } = await supabase
     .from('shareholders').update(shareholderPayload(input))
@@ -3383,6 +3409,27 @@ export async function findContactsByPhone(organizationId: UUID, phone: string): 
   return (data ?? []) as PhoneMatch[];
 }
 
+
+/**
+ * Factuurstatus zetten vanaf een goedgekeurde kaart: alleen als de status nog is
+ * wat er op de kaart stond. Een kaart is een momentopname; is de factuur
+ * intussen betaald (bank, Mollie) of anders afgehandeld, dan gebeurt er niets.
+ */
+export async function setInvoiceStatusFromCard(organizationId: UUID, invoiceId: UUID, status: string, expected: string | null): Promise<void> {
+  let query = supabase
+    .from('invoices')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', invoiceId)
+    .eq('organization_id', organizationId);
+  if (expected) query = query.eq('status', expected);
+  const { data, error } = await query.select('id').maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    throw new Error(expected
+      ? `De factuur staat intussen niet meer op "${expected}"; deze kaart is verouderd. Bekijk de factuur en vraag zo nodig een nieuwe kaart aan.`
+      : 'Factuur niet gevonden in deze organisatie.');
+  }
+}
 
 export async function updateRow<T>(table: Table, id: UUID, values: Record<string, unknown>, organizationId?: UUID): Promise<T> {
   let query = supabase
