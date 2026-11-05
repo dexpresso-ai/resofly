@@ -10,7 +10,9 @@ const DEFAULT_INTRO = 'Beste {{recipient_name}},\nJe offerte staat klaar om te b
 const DEFAULT_CTA = 'Bekijk en keur offerte goed';
 
 export function renderQuoteSentEmail(input: QuoteSentEmailInput): RenderedEmailTemplate {
-  const companyName = input.company?.trade_name || input.company?.company_name || 'BrandCore';
+  // 'BrandCore' was de oude productnaam; zonder bedrijfsnaam stond die in de
+  // offertemail aan de klant. Nu dezelfde terugval als de andere mails.
+  const companyName = input.company?.trade_name || input.company?.company_name || 'ResoFly';
   const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || 'relatie';
   const expiry = formatDateNl(input.expiresAt);
   const quoteValidUntil = input.quote.valid_until ? formatDateNl(input.quote.valid_until) : expiry;

@@ -79,6 +79,8 @@ export interface PortalInvoicePaymentInfo {
   mollieAvailable: boolean;
   iban: string | null;
   companyName: string | null;
+  /** De naam op de rekening (juridische naam); ontbreekt bij een oudere client-portal. */
+  accountHolder?: string | null;
 }
 
 export interface PortalContract {

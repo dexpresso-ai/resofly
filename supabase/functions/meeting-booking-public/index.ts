@@ -20,6 +20,7 @@ import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingConfirmedEmail } from '../_shared/emailTemplates/meetingBookingConfirmed.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
+import { loadSenderBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
@@ -273,13 +274,17 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
   if (!RESEND_API_KEY) return;
   const sender = await resolveSenderIdentity(supabaseAdmin, link.organization_id, RESEND_FROM_EMAIL);
   if (!sender.from) return;
-  const brandName = await orgBrandName(link.organization_id);
+  // Naam, merkkleur en logo in één query (_shared/emailBrand.ts): de merknaam
+  // of bedrijfsnaam, en pas daarna de naam van de werkruimte.
+  const brand = await loadSenderBrand(supabaseAdmin, link.organization_id);
+  const brandName = brand.name;
   const whenLines = confirmed.map(c => whenLine(c.starts_at, c.ends_at));
   const content = await loadBookingEmailContent(link.organization_id, 'meetingBooking.confirmed');
 
   // Bevestiging naar de klant.
   const rendered = renderMeetingBookingConfirmedEmail({
     brandName,
+    accentColor: brand.accent,
     recipientName: name || null,
     title: link.title,
     whenLines,
@@ -287,7 +292,7 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     inviteMessage: link.invite_message,
     content,
   });
-  await sendResend(link.organization_id, sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text).catch(err => console.error('client confirm mail', err));
+  await sendResend(link.organization_id, sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text, brand.email).catch(err => console.error('client confirm mail', err));
 
   // Notificatie naar de eigenaar van de link.
   const ownerEmail = link.user_id ? await ownerEmailFor(link.user_id) : null;
@@ -297,11 +302,6 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     const html = `<p>${escapeHtml(name || email)} heeft geboekt:</p><ul>${whenLines.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul><p>E-mail: ${escapeHtml(email)}</p>`;
     await sendResend(link.organization_id, sender.from, [ownerEmail], undefined, subject, html, lines).catch(err => console.error('owner notify mail', err));
   }
-}
-
-async function orgBrandName(organizationId: string): Promise<string> {
-  const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).maybeSingle();
-  return (data?.name as string) || 'ResoFly';
 }
 
 /** De eigen Jitsi-server van de organisatie (Instellingen → Agenda); null = meet.jit.si. */
@@ -328,14 +328,18 @@ async function ownerEmailFor(userId: string): Promise<string | null> {
   } catch { return null; }
 }
 
-async function sendResend(organizationId: string, from: string, to: string[], replyTo: string | undefined, subject: string, html: string, text: string): Promise<void> {
+/**
+ * `brand`: naam en logo voor de plek bovenaan de klantmail. De melding aan de
+ * eigenaar is een kaal intern bericht zonder die plek; daar hoeft het niet.
+ */
+async function sendResend(organizationId: string, from: string, to: string[], replyTo: string | undefined, subject: string, html: string, text: string, brand?: EmailBrand): Promise<void> {
   // Quotum per organisatie (20261101050000). De boeking staat al vast; is het
   // quotum op, dan blijft alleen deze mail achterwege (de aanroeper logt het).
   if (!(await emailQuotaAllows(supabaseAdmin, organizationId, to.length))) throw new Error('Mailquotum van de organisatie is op.');
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from, to, reply_to: replyTo, subject, html, text }),
+    body: JSON.stringify(withEmailBrand({ from, to, reply_to: replyTo, subject, html, text }, brand)),
   });
   if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
 }

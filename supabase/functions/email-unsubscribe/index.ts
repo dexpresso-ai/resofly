@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { verifyUnsubscribeToken } from '../_shared/unsubscribe.ts';
+import { loadSenderName } from '../_shared/emailBrand.ts';
 
 // ============================================================================
 // ResoFly — Publieke afmeldpagina voor marketingmail (AVG opt-out).
@@ -34,7 +35,8 @@ serve(async (req) => {
     return htmlResponse(page('Ongeldige afmeldlink', 'Deze afmeldlink is ongeldig of verlopen. Neem contact op met de afzender om je af te melden.'), 400);
   }
 
-  const brandName = await loadOrgBrand(verified.organizationId);
+  // Handelsnaam, bedrijfsnaam of de werkruimte; dezelfde regel als de mail zelf.
+  const brandName = await loadSenderName(supabaseAdmin, verified.organizationId);
 
   if (req.method === 'POST') {
     try {
@@ -73,27 +75,6 @@ async function applyUnsubscribe(organizationId: string, email: string, source: s
     .eq('organization_id', organizationId)
     .eq('to_email', normalized)
     .in('status', ['pending', 'sending']);
-}
-
-async function loadOrgBrand(organizationId: string): Promise<string> {
-  try {
-    const { data: company } = await supabaseAdmin
-      .from('company_settings')
-      .select('company_name,trade_name')
-      .eq('organization_id', organizationId)
-      .maybeSingle();
-    if (company && (company.trade_name || company.company_name)) {
-      return String(company.trade_name || company.company_name);
-    }
-    const { data: org } = await supabaseAdmin
-      .from('organizations')
-      .select('name')
-      .eq('id', organizationId)
-      .maybeSingle();
-    return String(org?.name || 'ResoFly');
-  } catch {
-    return 'ResoFly';
-  }
 }
 
 function confirmPage(brandName: string, email: string, token: string): string {

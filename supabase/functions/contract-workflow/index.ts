@@ -4,6 +4,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
+import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 import { renderContractPdf, bytesToBase64, sha256HexBytes } from '../_shared/contractPdf.ts';
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
 import { buildContractTokens, fillContractTokens } from '../_shared/contractTokens.ts';
@@ -315,7 +316,8 @@ async function sendContractForSignature(
     snapshotId = ((Array.isArray(snapshotResult.data) ? snapshotResult.data[0] : snapshotResult.data) as { id?: string } | null)?.id ?? null;
 
     const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
-    const resendPayload = {
+    // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
+    const resendPayload = withEmailBrand({
       from: senderIdentity.from,
       to: [recipientEmail],
       reply_to: senderIdentity.replyTo,
@@ -329,7 +331,7 @@ async function sendContractForSignature(
         { name: 'contract_number', value: sanitizeTagValue(contract.number) },
         { name: 'template_key', value: 'contract_sent' },
       ],
-    };
+    }, await loadEmailBrand(supabaseAdmin, organizationId));
 
     const resendResponse = await fetch('https://api.resend.com/emails', {
       method: 'POST',

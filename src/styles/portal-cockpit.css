@@ -525,6 +525,8 @@
    galerij; zonder huisstijl blijft het de gewone accenttekst. */
 .galv-chip.is-active,
 .galv-ss-toggle.is-on,
+.galv-like.is-on,
+.galv-like[disabled],
 .pgal-pin-icon,
 .brand-preview-chip.is-active{color:var(--gal-accent-ink,var(--accent-ink))}
 

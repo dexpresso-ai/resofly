@@ -183,7 +183,7 @@ import type { GerrieActionHandlers, GerrieProposal } from './lib/gerrie-api';
 import { runRegistryAction } from './lib/actions';
 import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
 import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
-import { exportFinancePDF } from './lib/pdf';
+import { exportFinancePDF, financePdfOptions } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
   AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, NoteHandwritingSummary, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, Subtask, Comment as TaskComment,
@@ -198,6 +198,9 @@ import './styles/cockpit.css';
 // dezelfde opbouw, in het merk van de leverancier. Na cockpit.css: hergebruikt
 // zijn tokens (--shadow-card) en wint van de oudere portaalregels.
 import './styles/portal-cockpit.css';
+// Instellingen → Documentopmaak, de sleep-editor voor offertes en facturen.
+// Na portal-cockpit.css: gebruikt zijn segmentknoppen (.brand-seg).
+import './styles/document-layout.css';
 // De teamchat (de opbouw van Microsoft Teams) als laatste: eigen klassen, en de
 // paar gedeelde haken (.chat-shell, .team-chat-dock) moeten van eerdere regels winnen.
 import './styles/teamchat.css';
@@ -4495,6 +4498,8 @@ function FinanceEditorLayout({ kind, data, organizationId, form, set, item, read
     () => buildFinanceDocLike(kind, form, item),
     [kind, item, form.number, form.date, form.valid_until, form.due_date, form.lines, form.notes, form.status, form.client_id, form.project_id],
   );
+  // Projectnaam en offertenummer staan op de verstuurde PDF; dan ook in het voorbeeld.
+  const pdfOptions = financePdfOptions(data, { project_id: form.project_id, quote_id: (item as Invoice | undefined)?.quote_id ?? form.quote_id });
 
   return <div className="finance-editor-layout" data-view={view}>
     <div className="finance-editor-tabs" role="tablist" aria-label="Editor en voorbeeld">
@@ -4505,7 +4510,7 @@ function FinanceEditorLayout({ kind, data, organizationId, form, set, item, read
       <FinanceForm kind={kind} data={data} organizationId={organizationId} form={form} set={set} item={item} readOnly={readOnly} onUploaded={onUploaded} attachmentBlock={attachmentBlock}/>
     </div>
     <div className="finance-preview-pane">
-      <FinanceDocPreview doc={docLike} kind={kind} client={client} company={data.companySettings}/>
+      <FinanceDocPreview doc={docLike} kind={kind} client={client} company={data.companySettings} vatCodes={data.vatCodes} projectName={pdfOptions.projectName} quoteNumber={pdfOptions.quoteNumber}/>
     </div>
   </div>;
 }
@@ -4566,7 +4571,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     const client = data.clients.find(c => c.id === form.client_id) ?? null;
     // Build a doc-shaped object from the current form so the user can preview before saving.
     const docLike = buildFinanceDocLike(kind, form, item);
-    void exportFinancePDF(docLike, kind, client, { company: data.companySettings, vatCodes: data.vatCodes }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt'));
+    void exportFinancePDF(docLike, kind, client, financePdfOptions(data, { project_id: form.project_id, quote_id: (item as Invoice | undefined)?.quote_id ?? form.quote_id })).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt'));
   };
 
   return <div className={`finance-editor ${isQuote ? 'quote-editor' : 'invoice-editor'}`}>

@@ -28,6 +28,8 @@ import {
 import { elevenlabsConfigured, requestTranscription } from '../_shared/elevenlabs.ts';
 import { runSummaryForRecording } from '../_shared/meetingPipeline.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
+import { EMAIL_LOGO_SLOT_LIGHT } from '../_shared/emailTemplates/layout.ts';
+import { loadSenderBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 
 const admin = createAdminClient();
 
@@ -260,7 +262,9 @@ async function sendSummary(organizationId: string, role: Awaited<ReturnType<type
   }
   if (recipients.length === 0) throw new HttpError('Geen geldige genodigden om naar te versturen.', 422);
 
-  const company = await loadCompanyName(organizationId);
+  // Naam en logo van de afzender in één query (_shared/emailBrand.ts).
+  const senderBrand = await loadSenderBrand(admin, organizationId);
+  const company = senderBrand.name;
   const sender = await resolveSenderIdentity(admin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   if (!sender.from) throw new HttpError('Er is geen afzenderadres geconfigureerd (koppel een verzenddomein of zet RESEND_FROM_EMAIL).', 422);
 
@@ -274,14 +278,14 @@ async function sendSummary(organizationId: string, role: Awaited<ReturnType<type
   const failed: { email: string; error: string }[] = [];
   for (const r of recipients) {
     try {
-      await sendViaResend({
+      await sendViaResend(withEmailBrand({
         from: sender.from,
         to: [r.email],
         reply_to: sender.replyTo || sender.fromEmail || undefined,
         subject,
         html,
         text,
-      }, `meeting-summary-${recordingId}-${sanitizeKey(r.email)}-${nonce}`);
+      }, senderBrand.email), `meeting-summary-${recordingId}-${sanitizeKey(r.email)}-${nonce}`);
       sent.push(r);
     } catch (e) {
       failed.push({ email: r.email, error: e instanceof Error ? e.message : 'Versturen mislukt.' });
@@ -358,14 +362,6 @@ async function loadRecordingForMail(organizationId: string, recordingId: string)
   return data as { id: string; event_title_snapshot: string | null; transcript_text: string | null };
 }
 
-async function loadCompanyName(organizationId: string): Promise<string> {
-  const [{ data: company }, { data: org }] = await Promise.all([
-    admin.from('company_settings').select('company_name, trade_name').eq('organization_id', organizationId).maybeSingle(),
-    admin.from('organizations').select('name').eq('id', organizationId).maybeSingle(),
-  ]);
-  return String(company?.trade_name || company?.company_name || org?.name || 'ResoFly');
-}
-
 // ── E-mail (Resend) ────────────────────────────────────────────────────────────
 
 async function sendViaResend(payload: Record<string, unknown>, idempotencyKey: string): Promise<void> {
@@ -399,7 +395,7 @@ function buildSummaryEmailHtml(input: { organizationName: string; title: string 
   <body style="margin:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
     <div style="max-width:640px;margin:0 auto;padding:28px 20px;">
       <div style="background:#ffffff;border:1px solid #e4e4e7;border-radius:14px;padding:28px;line-height:1.6;font-size:15px;">
-        <h1 style="margin:0 0 16px;font-size:20px;line-height:1.3;color:#111827;">${heading}</h1>
+        ${EMAIL_LOGO_SLOT_LIGHT}<h1 style="margin:0 0 16px;font-size:20px;line-height:1.3;color:#111827;">${heading}</h1>
         <div>${bodyHtml}</div>
         ${transcriptBlock}
       </div>

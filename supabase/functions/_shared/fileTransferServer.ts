@@ -12,6 +12,7 @@ import { takeEmailQuota } from './emailQuota.ts';
 import { renderEmailTemplate } from './emailTemplates/index.ts';
 import type { EmailTemplateContent } from './emailTemplates/types.ts';
 import { escapeHtml } from './emailTemplates/layout.ts';
+import { loadEmailBrand, withEmailBrand, type EmailBrand } from './emailBrand.ts';
 import type { SenderIdentity } from './sendingDomain.ts';
 import {
   TRANSFER_DOWNLOAD_TTL_SECONDS,
@@ -403,6 +404,8 @@ export async function sendTransferNotice(admin: SupabaseClient, input: {
   /** Het gesprek waarin de mail komt; null = een nieuw gesprek (eenmalig per zending). */
   threadId: string | null;
   portalUser: boolean;
+  /** Naam en logo van de organisatie; leeg = hier opgehaald. Eén keer laden bij meer ontvangers. */
+  brand?: EmailBrand;
 }): Promise<NoticeOutcome> {
   const { transfer, recipient } = input;
   if (!input.sender.from) {
@@ -493,7 +496,9 @@ export async function sendTransferNotice(admin: SupabaseClient, input: {
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(admin, input.transfer.organization_id, 1, (message) => new Error(message));
-  const sent = await sendViaResend({
+  // Met het logo van de organisatie bovenaan (ingesloten, zie emailBrand.ts).
+  const brand = input.brand ?? await loadEmailBrand(admin, transfer.organization_id);
+  const sent = await sendViaResend(withEmailBrand({
     from: input.sender.from,
     to: [recipient.email],
     reply_to: replyTo,
@@ -507,7 +512,7 @@ export async function sendTransferNotice(admin: SupabaseClient, input: {
       { name: 'transfer_recipient_id', value: tagValue(recipient.id) },
       ...(clientEmailId ? [{ name: 'client_email_id', value: tagValue(clientEmailId) }] : []),
     ],
-  }, `file-transfer-${recipient.id}-${link.token.slice(0, 12)}`);
+  }, brand), `file-transfer-${recipient.id}-${link.token.slice(0, 12)}`);
 
   const now = new Date().toISOString();
   if (!sent.ok) {

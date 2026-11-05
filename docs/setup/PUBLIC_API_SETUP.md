@@ -342,10 +342,12 @@ organisatie"* en geen rij.
 
 **Rechtstreeks uitvoeren alleen met een server-uitvoerder.** Precies dezelfde
 lijst als bij de MCP (`_shared/actions/apply.ts`): enkelvoudige org-scoped
-inserts en updates, zonder mail, PDF of bestandsopslag. Al het andere wordt een
-voorstel — ook met de ruimste sleutel. Gerrie's kerntools (een factuur
-opstellen, een mail aan een klant, een nieuwe klant) hebben geen uitvoerder op
-de server en worden dus altijd klaargezet.
+inserts en updates, zonder mail, PDF of bestandsopslag. Die schrijven als het
+teamlid van de sleutel (`action_member_write` en `action_member_call`), dus met
+RLS, de modulepoort en de databasebewakers erbij, net als de vaste adressen
+hieronder. Al het andere wordt een voorstel — ook met de ruimste sleutel.
+Gerrie's kerntools (een factuur opstellen, een mail aan een klant, een nieuwe
+klant) hebben geen uitvoerder op de server en worden dus altijd klaargezet.
 
 **Het voorstel schrijven wij.** Wat er op de goedkeurkaart staat, komt uit
 `plan()` of `buildProposal`: echte rijen uit de eigen administratie. De

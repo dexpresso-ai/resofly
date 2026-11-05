@@ -230,7 +230,7 @@ function drawHeader(ctx: Ctx, contract: PdfContract, company: PdfCompany): void 
   ctx.y -= 28;
   drawText(page, companyName, LEFT, ctx.y, ctx.bold, 13);
   ctx.y -= 18;
-  for (const line of companyAddressLines(company).slice(0, 7)) {
+  for (const line of senderLines(company, companyName)) {
     drawText(page, line, LEFT, ctx.y, ctx.regular, 9, { color: muted });
     ctx.y -= 12;
   }
@@ -446,20 +446,26 @@ function splitLongWord(word: string, font: PDFFont, size: number, maxWidth: numb
   return chunks;
 }
 
-function companyAddressLines(company: PdfCompany): string[] {
-  if (!company) return ['ResoFly'];
+/**
+ * De afzender onder de vette naam bovenaan: de juridische naam als die anders
+ * is dan de getoonde naam, het adres, en contact en registratie elk op één
+ * regel. Vroeger herhaalde dit blok de naam (soms twee keer) en sneed
+ * `slice(0, 7)` daarna het KvK- en btw-nummer eraf, terwijl het KvK-nummer op
+ * elk zakelijk stuk hoort.
+ */
+function senderLines(company: PdfCompany, shownName: string): string[] {
+  if (!company) return [];
   const cityLine = [company.postal_code, company.city].filter(Boolean).join(' ');
+  const contact = [company.email, company.phone].filter(Boolean).join(' · ');
+  const registration = [company.kvk_number ? `KvK ${company.kvk_number}` : '', company.vat_number ? `BTW ${company.vat_number}` : ''].filter(Boolean).join(' · ');
   return [
-    company.company_name,
-    company.trade_name && company.trade_name !== company.company_name ? company.trade_name : '',
+    company.company_name && company.company_name !== shownName ? company.company_name : '',
     company.address_line1,
     company.address_line2,
     cityLine,
     company.country,
-    company.email ? `E-mail: ${company.email}` : '',
-    company.phone ? `Tel: ${company.phone}` : '',
-    company.kvk_number ? `KvK: ${company.kvk_number}` : '',
-    company.vat_number ? `BTW: ${company.vat_number}` : '',
+    contact,
+    registration,
   ].filter((value) => normalizePdfText(value).length > 0).map(normalizePdfText);
 }
 

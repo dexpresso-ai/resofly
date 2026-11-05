@@ -1583,6 +1583,8 @@ export async function saveJitsiServer(organizationId: UUID, jitsiBaseUrl: string
 
 /** Kolommen die de nieuwste huisstijlmigratie (20261015000000) toevoegt. */
 const NEWEST_BRANDING_COLUMNS = ['brand_header_color', 'brand_logo_dark_data_url'] as const;
+/** De eigen opmaak van offertes en facturen (migratie 20261105100000). */
+const DOCUMENT_LAYOUTS_COLUMN = 'document_layouts';
 
 export async function upsertCompanySettings(organizationId: UUID, values: CompanySettingsInput): Promise<CompanySettings> {
   const createdBy = await currentUserId();
@@ -1593,17 +1595,26 @@ export async function upsertCompanySettings(organizationId: UUID, values: Compan
     .single();
   const row = sanitizeMutationValues(values as unknown as Record<string, unknown>);
   let { data, error } = await write(row);
-  // Staat de migratie met de kopkleur en de lichte logoversie hier nog niet, dan
-  // mag dat het opslaan van al het andere niet tegenhouden. Alleen als iemand
-  // die nieuwe velden echt invulde, zeggen we dat ze nog niet kunnen.
-  const missing = NEWEST_BRANDING_COLUMNS.filter(column => isMissingColumn(error, column));
-  if (error && missing.length > 0) {
-    if (NEWEST_BRANDING_COLUMNS.some(column => row[column] != null && row[column] !== '')) {
+  // Staat een migratie met een nieuwe kolom hier nog niet (de app wordt soms
+  // eerder uitgerold dan de database), dan mag dat het opslaan van al het
+  // andere niet tegenhouden. Alleen als iemand die nieuwe velden echt invulde,
+  // zeggen we dat ze nog niet kunnen. Twee rondes: elke ronde kan PostgREST
+  // maar één ontbrekende kolom noemen.
+  for (let attempt = 0; error && attempt < 2; attempt++) {
+    const missingBranding = NEWEST_BRANDING_COLUMNS.filter(column => isMissingColumn(error, column));
+    const missingLayouts = isMissingColumn(error, DOCUMENT_LAYOUTS_COLUMN);
+    if (missingBranding.length === 0 && !missingLayouts) break;
+    if (missingBranding.length > 0 && NEWEST_BRANDING_COLUMNS.some(column => row[column] != null && row[column] !== '')) {
       throw new NotMigratedError('De kopkleur en de lichte versie van je logo kunnen in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de kopkleur op Automatisch en haal de lichte versie weg om de rest op te slaan.');
     }
-    const rest = { ...row };
-    for (const column of NEWEST_BRANDING_COLUMNS) delete rest[column];
-    ({ data, error } = await write(rest));
+    if (missingLayouts && row[DOCUMENT_LAYOUTS_COLUMN] != null) {
+      throw new NotMigratedError('Je eigen opmaak van offertes en facturen kan in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de opmaak terug op de standaard om de rest op te slaan.');
+    }
+    // Alleen weglaten wat echt ontbreekt: een ingevulde opmaak mag niet stil
+    // verdwijnen omdat de kopkleur-migratie nog moet.
+    if (missingBranding.length > 0) for (const column of NEWEST_BRANDING_COLUMNS) delete row[column];
+    if (missingLayouts) delete row[DOCUMENT_LAYOUTS_COLUMN];
+    ({ data, error } = await write(row));
   }
   if (error) throw error;
   return data as CompanySettings;

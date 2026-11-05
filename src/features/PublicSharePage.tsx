@@ -12,6 +12,7 @@ import { supabase } from '../lib/supabase';
 import { dateNL } from '../lib/format';
 import { brandStyle, ensureBrandFontsLoaded, type BrandingPayload } from '../lib/branding';
 import { ReadModal } from '../components/ReadModal';
+import { usePublicPageTitle } from '../components/PublicBrand';
 
 type ShareItem = {
   itemType: 'attachment' | 'note' | 'document';
@@ -112,6 +113,7 @@ export function PublicSharePage({ token }: { token: string }) {
 
   const companyName = payload?.company?.trade_name || payload?.company?.company_name || 'ResoFly';
   const style = payload?.branding ? brandStyle(payload.branding) : undefined;
+  usePublicPageTitle('Gedeeld met jou', payload ? companyName : null);
 
   if (loading) {
     return <main className="public-quote-page"><div className="public-quote-card"><h1>Gedeelde bestanden laden…</h1></div></main>;

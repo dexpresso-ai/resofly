@@ -53,7 +53,7 @@ eenmanszaak, de vof en de BV. Wat niet klopte, is meteen opgelost.
 | # | Ernst | Wat er misging | Nu |
 |---|---|---|---|
 | 1 | hoog | De grootboekkaart werkte voor niemand: "column reference entry_id is ambiguous", in de app en in Gerrie/API/MCP. | Hersteld. Een rekening van een andere organisatie geeft "niet gevonden". |
-| 2 | hoog | Directe uitvoering via API, MCP en Gerrie schreef als service-role, langs RLS en de bewakers heen. Een koppeling met gewone uitvoerrechten kon zonder menselijke goedkeuring de code of soort wijzigen van een rekening waarop al geboekt is; afgesloten jaren en btw-rubrieken veranderen dan mee. | `action_member_write`: voor de tabellen van Financiën wisselt de schrijfactie naar het teamlid, zoals de REST-koppeling al deed. RLS, de modulepoort en elke bewaker doen mee. |
+| 2 | hoog | Directe uitvoering via API en MCP schreef als service-role, langs RLS en de bewakers heen. Een koppeling met gewone uitvoerrechten kon zonder menselijke goedkeuring de code of soort wijzigen van een rekening waarop al geboekt is; afgesloten jaren en btw-rubrieken veranderen dan mee. | `action_member_write`: voor de tabellen van Financiën wisselt de schrijfactie naar het teamlid, zoals de REST-koppeling al deed. RLS, de modulepoort en elke bewaker doen mee. |
 | 3 | midden | 27 boekingsfuncties controleerden de rol, maar niet het schrijfrecht op Financiën. De module-trigger hield de schrijfactie tegen, maar de functie liep tot dat punt door. | Elke functie weigert nu zelf, vóór validatie. Dat geldt ook voor `close_vat_period`. |
 | 4 | midden | Een betaallink vroeg na een deelbetaling nog het hele factuurbedrag, en een open link werd hergebruikt, ook als die om een ander bedrag vroeg. | Begrensd op wat openstaat; een oude link met een ander bedrag vervalt. Betaalt de klant toch de oude link, dan wordt die betaling gewoon geboekt. |
 | 5 | midden | Een dubbelklik, een tweede tabblad of een herhaalde webhook kon twee genummerde creditnota's opleveren. | De factuur gaat op slot, er komt één creditnota per terugbetaling, en samen nooit meer dan het factuurbedrag. |
@@ -181,9 +181,12 @@ eenmanszaak, de vof en de BV. Wat niet klopte, is meteen opgelost.
 
 | Punt | Waarom nog niet |
 |---|---|
-| Directe uitvoering buiten Financiën (klanten, projecten, tickets, uren) schrijft nog als service-role | Dit liep buiten deze controle. `action_member_write` is zo gebouwd dat er tabellen bij kunnen. |
 | Een eigen rekening die een systeemcode al bezet (van vóór vandaag) | De Vpb-boeking weigert dan met uitleg. Automatisch overnemen kan pas als er niet op geboekt is, en vraagt een keuze per geval. |
 | Na versturen gewijzigde contracttekst | De klant tekent de verstuurde versie. Een wijziging zonder opnieuw versturen komt niet in het getekende stuk. Opnieuw versturen maakt een nieuwe versie. |
 | Betaallink bij een aanmaning | Vraagt de hoofdsom die openstaat, zonder rente en incassokosten (vroeger: het factuurbedrag). |
 | Verliesadministratie (`corporate_tax_losses`) blijft bewerkbaar | Dat is bedoeld voor wat de Belastingdienst vaststelt. Op slot zetten raakt dat. |
 | Mock-betalingen en `MAIL_INBOUND_REQUIRE_SIGNATURE` | Stonden al op de actielijst van 1 november. |
+
+Hier stond eerst ook de directe uitvoering buiten Financiën (klanten,
+projecten, tickets, uren), die nog als service-role schreef. Dat is dezelfde
+dag opgelost; zie `CHANGELOG_DIRECTE_UITVOERING_ALS_TEAMLID_2026-11-05.md`.

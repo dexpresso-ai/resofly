@@ -1,0 +1,161 @@
+/* ============================================================
+   Instellingen → Documentopmaak (src/features/DocumentLayoutEditor.tsx).
+
+   Drie kolommen als er ruimte is: de velden, het blad, de instellingen. Het
+   blad zelf is wit papier — ook in het donkere thema, want zo komt de PDF bij
+   de klant aan. Alles eromheen gebruikt de gewone tokens (--surface, --line,
+   --ink…), dus licht en donker werken vanzelf.
+
+   Container queries in plaats van media queries: het tabblad staat naast de
+   zijbalk, en die kan in- of uitgeklapt zijn.
+   ============================================================ */
+
+.dle{container-type:inline-size;display:flex;flex-direction:column;gap:12px;min-width:0}
+
+.dle-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.dle-toolbar-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-left:auto}
+.dle-toolbar-actions .btn{padding:6px 9px}
+.dle-state{font-size:12px;font-weight:600;color:var(--ink-3);padding:4px 10px;border-radius:999px;border:1px solid var(--line)}
+.dle-state.is-custom{color:var(--accent-ink);border-color:var(--line-accent);background:var(--accent-soft)}
+
+.dle-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start}
+.dle-palette{order:2}
+.dle-stage-wrap{order:1;min-width:0}
+.dle-panel{order:3;min-width:0}
+@container (min-width:760px){
+  .dle-grid{grid-template-columns:210px minmax(0,1fr)}
+  .dle-palette{order:1;position:sticky;top:8px;max-height:calc(100vh - 140px);overflow:auto}
+  .dle-stage-wrap{order:2}
+  .dle-panel{order:3;grid-column:1 / -1}
+}
+@container (min-width:1180px){
+  .dle-grid{grid-template-columns:200px minmax(0,1fr) 320px}
+  .dle-panel{grid-column:auto;position:sticky;top:8px;max-height:calc(100vh - 140px);overflow:auto}
+}
+
+.dle-help{margin:0;font-size:12px;line-height:1.5;color:var(--ink-3)}
+
+/* ── De velden ── */
+.dle-palette{display:flex;flex-direction:column;gap:12px;padding:12px;border:1px solid var(--line);border-radius:var(--r2);background:var(--surface)}
+.dle-palette-group h4{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.dle-palette-items{display:flex;flex-wrap:wrap;gap:5px}
+@container (min-width:760px){.dle-palette-items{flex-direction:column;align-items:stretch}}
+.dle-chip{display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--ink);font:inherit;font-size:12.5px;text-align:left;cursor:grab;user-select:none;-webkit-user-select:none}
+.dle-chip:hover:not(:disabled){border-color:var(--line-accent);background:var(--surface-3)}
+.dle-chip:active:not(:disabled){cursor:grabbing}
+.dle-chip:focus-visible{outline:2px solid var(--focus-line);outline-offset:2px}
+.dle-chip:disabled{opacity:.55;cursor:not-allowed}
+.dle-chip.is-placed{color:var(--ink-2)}
+.dle-chip.is-placed svg{color:var(--ok)}
+.dle-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── Het blad ── */
+.dle-stage-wrap{display:flex;flex-direction:column;gap:8px}
+.dle-zoom{display:flex;align-items:center;gap:4px;align-self:flex-end}
+.dle-zoom .btn{padding:4px 8px}
+.dle-zoom-fit{min-width:72px;padding:5px 8px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink-2);font:inherit;font-size:12px;cursor:pointer}
+.dle-stage{overflow:auto;padding:1px;max-width:100%}
+.dle-page{position:relative;margin:0 auto;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18),0 10px 30px rgba(0,0,0,.22);border-radius:2px;touch-action:pan-x pan-y;user-select:none;-webkit-user-select:none}
+.dle-svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+.dle-loading{display:flex;align-items:center;justify-content:center;min-height:220px;height:100%;color:#6b6b6b;font-size:13px}
+.dle-paper-note{position:absolute;right:8px;bottom:8px;max-width:60%;padding:4px 8px;border-radius:6px;background:rgba(17,17,17,.72);color:#fff;font-size:11px;line-height:1.35;pointer-events:none}
+
+/* De inhoudszone en de twee grenzen. */
+.dle-zone-body{position:absolute;left:0;right:0;border-top:1px dashed rgba(36,87,197,.35);border-bottom:1px dashed rgba(36,87,197,.35);background:rgba(36,87,197,.035);pointer-events:none}
+.dle-zone-body span{position:absolute;right:6px;bottom:4px;padding:1px 6px;border-radius:5px;background:rgba(36,87,197,.12);color:#1d4296;font-size:10px;font-weight:600;white-space:nowrap}
+.dle-divider{position:absolute;left:0;right:0;height:12px;margin-top:-6px;cursor:ns-resize;touch-action:none;z-index:3}
+.dle-divider::before{content:"";position:absolute;left:0;right:0;top:5px;height:2px;background:rgba(36,87,197,.0);transition:background .12s}
+.dle-divider:hover::before{background:rgba(36,87,197,.55)}
+.dle-divider span{position:absolute;right:4px;top:-9px;padding:1px 6px;border-radius:5px;background:#1d4296;color:#fff;font-size:10px;font-weight:600;white-space:nowrap;opacity:0;transition:opacity .12s;pointer-events:none}
+/* Alleen bij de grens zelf: over het hele blad viel het label over de tekst. */
+.dle-divider:hover span,.dle-divider:active span{opacity:.92}
+.is-readonly .dle-divider{cursor:default;pointer-events:none}
+
+/* Onderdelen van de inhoud: klikken opent hun instellingen. */
+.dle-flow{position:absolute;padding:0;border:1px solid transparent;border-radius:3px;background:transparent;cursor:pointer;z-index:1}
+.dle-flow:hover{border-color:rgba(36,87,197,.45);background:rgba(36,87,197,.04)}
+.dle-flow.is-selected{border-color:rgba(36,87,197,.8)}
+.dle-flow:focus-visible{outline:2px solid #2457c5;outline-offset:1px}
+
+/* Vrije blokken: onzichtbaar tot je erover beweegt of ze kiest. */
+.dle-block{position:absolute;border:1px dashed transparent;border-radius:2px;cursor:move;z-index:2;outline:none}
+.dle-block:hover{border-color:rgba(36,87,197,.55);background:rgba(36,87,197,.035)}
+.dle-block.is-selected{border:1.5px solid #2457c5;background:rgba(36,87,197,.05);touch-action:none}
+.dle-block:focus-visible{box-shadow:0 0 0 2px rgba(36,87,197,.35)}
+.is-readonly .dle-block{cursor:default}
+.dle-block.is-empty{border-color:rgba(0,0,0,.18)}
+.dle-block-empty{position:absolute;inset:0;display:flex;align-items:center;padding:0 4px;color:#7a7a7a;font-style:italic;line-height:1.1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;pointer-events:none}
+.dle-block-tag{position:absolute;left:-1px;bottom:100%;margin-bottom:3px;padding:1px 6px;border-radius:5px;background:#2457c5;color:#fff;font-size:10.5px;font-weight:600;white-space:nowrap;pointer-events:none}
+.dle-handle{position:absolute;background:#fff;border:1.5px solid #2457c5;border-radius:3px;touch-action:none}
+.dle-handle-e{top:50%;right:-6px;width:10px;height:18px;margin-top:-9px;cursor:ew-resize}
+.dle-handle-s{left:50%;bottom:-6px;width:18px;height:10px;margin-left:-9px;cursor:ns-resize}
+.dle-handle-se{right:-6px;bottom:-6px;width:11px;height:11px;cursor:nwse-resize}
+@media (pointer:coarse){
+  .dle-handle-e{width:16px;height:28px;margin-top:-14px;right:-9px}
+  .dle-handle-s{width:28px;height:16px;margin-left:-14px;bottom:-9px}
+  .dle-handle-se{width:18px;height:18px;right:-9px;bottom:-9px}
+}
+.dle-guide{position:absolute;pointer-events:none;z-index:4;background:#e2357b}
+.dle-guide-x{top:0;bottom:0;width:1px}
+.dle-guide-y{left:0;right:0;height:1px}
+.dle-ghost{position:fixed;z-index:9999;padding:5px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--line-accent);color:var(--ink);font-size:12.5px;font-weight:600;box-shadow:var(--shadow-pop, 0 8px 24px rgba(0,0,0,.25));pointer-events:none;white-space:nowrap}
+.dle-stage-foot{text-align:center}
+
+/* ── Het PDF-voorbeeld ── */
+.dle-pdf{display:flex;flex-direction:column;gap:8px}
+.dle-pdf-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-3)}
+.dle-pdf-frame{width:100%;height:min(84vh,1100px);min-height:420px;border:1px solid var(--line);border-radius:var(--r2);background:#fff}
+
+/* ── De instellingen ── */
+.dle-panel-stack{display:flex;flex-direction:column;gap:12px}
+@container (min-width:760px) and (max-width:1179px){
+  .dle-panel-stack{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+}
+.dle-card{gap:10px}
+.dle-card.is-focus{border-color:var(--line-accent)}
+.dle-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.dle-card-head h3{margin:0}
+.dle-card-head p{margin:4px 0 0}
+.dle-card-actions{display:flex;flex-wrap:wrap;gap:6px}
+.dle-card-actions .btn{display:inline-flex;align-items:center;gap:6px}
+.dle-field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.dle-label{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.dle-field input[type="range"]{width:100%;accent-color:var(--accent)}
+.dle-field .brand-seg{max-width:100%}
+.dle-size-row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2)}
+.dle-size-row input[type="range"]{flex:1;min-width:0}
+.dle-size-row span{white-space:nowrap;font-variant-numeric:tabular-nums}
+.dle-num-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.dle-num{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);font-size:12px;color:var(--ink-3)}
+.dle-num input{width:100%;min-width:0;border:0;background:transparent;color:var(--ink);font:inherit;font-size:13px;font-variant-numeric:tabular-nums;text-align:right;outline:none}
+.dle-num em{font-style:normal}
+.dle-num:focus-within{border-color:var(--accent-edge, var(--accent))}
+.dle-brand-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2)}
+.dle-presets{display:grid;grid-template-columns:minmax(0,1fr);gap:6px}
+.dle-preset{display:flex;flex-direction:column;gap:2px;padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.dle-preset strong{font-size:13px}
+.dle-preset small{font-size:11.5px;line-height:1.4;color:var(--ink-3)}
+.dle-preset:hover:not(:disabled){border-color:var(--line-accent)}
+.dle-preset.is-active{border-color:var(--accent-edge, var(--accent));box-shadow:var(--ring)}
+.dle-preset:disabled{opacity:.6;cursor:not-allowed}
+.dle-ok{display:flex;align-items:center;gap:6px;margin:0;font-size:12.5px;color:var(--ok-ink, var(--ok))}
+.dle-issues{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.dle-issues li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 9px;border:1px solid rgba(var(--warn-rgb),.35);border-radius:10px;background:rgba(var(--warn-rgb),.08);font-size:12.5px;color:var(--ink)}
+.dle-issues li svg{color:var(--warn-ink, var(--warn))}
+.dle-issues .btn{padding:4px 9px}
+.dle-flow-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.dle-flow-list li{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2)}
+.dle-flow-list li.is-focus{border-color:var(--accent-edge, var(--accent))}
+.dle-flow-list small{font-size:11.5px;line-height:1.4;color:var(--ink-3)}
+.dle-flow-list .check-row{padding:0;border:0;background:none}
+.dle-flow-list em{font-style:normal;font-weight:500;color:var(--ink-3)}
+.dle-flow-row{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.dle-flow-move{display:inline-flex;gap:2px}
+.dle-flow-move button{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--ink-2);cursor:pointer}
+.dle-flow-move button:disabled{opacity:.35;cursor:not-allowed}
+.dle-sub{display:flex;flex-direction:column;gap:8px}
+.dle-check-grid{display:flex;flex-wrap:wrap;gap:6px}
+.dle-check-grid .check-row{padding:5px 9px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+
+/* Creditfactuur en aanmaning gebruiken de factuuropmaak: dat staat erboven. */
+.dle-banner{margin:0;padding:9px 12px;border:1px solid var(--line-accent);border-radius:11px;background:var(--accent-soft);color:var(--ink);font-size:12.5px;line-height:1.5}

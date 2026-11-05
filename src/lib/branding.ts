@@ -7,6 +7,10 @@
 // waarden in CSS. Een onbekende sleutel valt terug op de standaard, dus er kan
 // nooit willekeurige CSS via een databasewaarde de pagina in.
 
+// De kleurwiskunde zelf (contrast, helderheid, kleurtoon) staat in brandColor.ts:
+// dezelfde regel als de PDF en de mails. Hier alleen wat de klantpagina's ermee doen.
+import { blendColors, contrastRatio, hexChannels, hexToHsl, hslToHex, readableShade, relativeLuminance, textOnColor } from './brandColor.ts';
+
 export type BrandingPayload = {
   logoDataUrl: string | null;
   accentColor: string;
@@ -34,21 +38,13 @@ export const GALLERY_BACKGROUNDS: Array<{ value: string; label: string }> = [
   { value: '#FFFFFF', label: 'Zuiver wit' },
 ];
 
-/** Waargenomen helderheid (0–1) volgens de sRGB-luminantieformule. */
-function luminance(hex: string): number {
-  const value = hex.replace('#', '');
-  const channel = (index: number) => parseInt(value.slice(index * 2, index * 2 + 2), 16) / 255;
-  const linear = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-  return 0.2126 * linear(channel(0)) + 0.7152 * linear(channel(1)) + 0.0722 * linear(channel(2));
-}
-
 /**
  * Leidt een leesbaar palet af uit één achtergrondkleur. De gebruiker kiest dus
  * alleen de achtergrond; tekst, randen en tegelvlakken volgen automatisch en
  * blijven contrastrijk — ook bij een lichte galerij.
  */
 function galleryPalette(background: string): Record<string, string> {
-  const light = luminance(background) > 0.5;
+  const light = relativeLuminance(background) > 0.5;
   return {
     '--gal-bg': background,
     '--gal-text': light ? '#141414' : '#f4f4f4',
@@ -177,6 +173,15 @@ export function brandStyle(branding: BrandingPayload | null | undefined): React.
   const style: Record<string, string> = {};
   if (/^#[0-9A-Fa-f]{6}$/.test(branding.accentColor || '')) {
     style['--accent'] = branding.accentColor;
+    // Wat óp de merkkleur staat (de knop "Opslaan", een vinkje, de diashow-
+    // knop) en de hovertint: die stonden alleen op :root, in de tinten van
+    // ResoFly-goud. Op een donkerblauw merk was de knoptekst dan bijna zwart
+    // op blauw, en de knop werd bij hover goud.
+    const accent = branding.accentColor.toUpperCase();
+    const hsl = hexToHsl(accent);
+    style['--accent-rgb'] = rgbTriplet(accent);
+    style['--on-accent'] = inkOnAccent(accent);
+    style['--accent-hover'] = hslToHex({ h: hsl.h, s: hsl.s, l: hsl.l > 0.85 ? hsl.l - 0.08 : hsl.l + 0.08 });
   }
   if (branding.headingFont && branding.headingFont !== DEFAULT_BRAND_FONT) {
     style['--brand-heading'] = brandFont(branding.headingFont).stack;
@@ -193,11 +198,11 @@ export function brandStyle(branding: BrandingPayload | null | undefined): React.
     // maar dan tegen de galerij zelf gemeten.
     const accent = /^#[0-9A-Fa-f]{6}$/.test(branding.accentColor || '') ? branding.accentColor : '#FFD966';
     const bg = branding.galleryBg;
-    const light = luminance(bg) > 0.5;
+    const light = relativeLuminance(bg) > 0.5;
     style['--gal-accent-ink'] = readableInk(accent, [
       bg,
-      blend(light ? '#141414' : '#FFFFFF', bg, 0.09),
-      blend(accent, bg, 0.12),
+      blendColors(light ? '#141414' : '#FFFFFF', bg, 0.09),
+      blendColors(accent, bg, 0.12),
     ], light);
   }
   return Object.keys(style).length > 0 ? (style as React.CSSProperties) : undefined;
@@ -219,65 +224,9 @@ export function brandStyle(branding: BrandingPayload | null | undefined): React.
 // niets meer. Daarom geeft `brandThemeVars()` de compat-laag óók kant-en-klaar
 // terug — dan werkt dezelfde set zowel op `:root` als op een los voorbeeldkaartje.
 
-type Hsl = { h: number; s: number; l: number };
-
-function hexToRgb(hex: string): [number, number, number] {
-  const value = hex.replace('#', '');
-  return [
-    parseInt(value.slice(0, 2), 16),
-    parseInt(value.slice(2, 4), 16),
-    parseInt(value.slice(4, 6), 16),
-  ];
-}
-
 /** "255,217,102" — het formaat waarin globals.css kleuren met alfa opbouwt. */
 function rgbTriplet(hex: string): string {
-  return hexToRgb(hex).join(',');
-}
-
-function hexToHsl(hex: string): Hsl {
-  const [r, g, b] = hexToRgb(hex).map(c => c / 255);
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  const d = max - min;
-  if (d === 0) return { h: 0, s: 0, l };
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h: number;
-  if (max === r) h = ((g - b) / d) % 6;
-  else if (max === g) h = (b - r) / d + 2;
-  else h = (r - g) / d + 4;
-  h *= 60;
-  return { h: h < 0 ? h + 360 : h, s, l };
-}
-
-function hslToHex({ h, s, l }: Hsl): string {
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = l - c / 2;
-  const [r, g, b] =
-    h < 60 ? [c, x, 0] :
-    h < 120 ? [x, c, 0] :
-    h < 180 ? [0, c, x] :
-    h < 240 ? [0, x, c] :
-    h < 300 ? [x, 0, c] : [c, 0, x];
-  const channel = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
-  return `#${channel(r)}${channel(g)}${channel(b)}`.toUpperCase();
-}
-
-/** Een halftransparante kleur plat op een ondergrond, zoals de browser hem tekent. */
-function blend(front: string, back: string, alpha: number): string {
-  const f = hexToRgb(front);
-  const b = hexToRgb(back);
-  const mix = (i: number) => Math.round(f[i] * alpha + b[i] * (1 - alpha));
-  return `#${[0, 1, 2].map(i => mix(i).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
-}
-
-/** WCAG-contrastverhouding (1–21) tussen twee hexkleuren. */
-function contrast(a: string, b: string): number {
-  const la = luminance(a);
-  const lb = luminance(b);
-  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  return hexChannels(hex).join(',');
 }
 
 /**
@@ -297,19 +246,10 @@ function contrast(a: string, b: string): number {
 const INK_TARGET = 4.75;
 
 function readableInk(accent: string, backgrounds: string[], darker: boolean, target = INK_TARGET): string {
-  const base = hexToHsl(accent);
   // Alleen de helderheid schuift; tint én verzadiging blijven staan. Anders
   // krijgt een ingetogen merk (denk aan taupe #8A7F70) opeens een oranje
-  // accenttekst — leesbaar, maar niet meer zijn kleur.
-  const step = darker ? -0.02 : 0.02;
-  let l = base.l;
-  for (let i = 0; i <= 50; i++) {
-    const candidate = hslToHex({ h: base.h, s: base.s, l });
-    if (backgrounds.every(bg => contrast(candidate, bg) >= target)) return candidate;
-    l += step;
-    if (l < 0 || l > 1) break;
-  }
-  return darker ? '#000000' : '#FFFFFF';
+  // accenttekst — leesbaar, maar niet meer zijn kleur. Zie readableShade().
+  return readableShade(accent, backgrounds, { direction: darker ? 'darker' : 'lighter', target });
 }
 
 /**
@@ -320,15 +260,7 @@ function readableInk(accent: string, backgrounds: string[], darker: boolean, tar
  */
 function inkOnAccent(accent: string): string {
   const { h, s } = hexToHsl(accent);
-  const candidates = [
-    hslToHex({ h, s: Math.min(s, 0.3), l: 0.08 }),
-    hslToHex({ h, s: Math.min(s, 0.12), l: 0.97 }),
-    '#000000',
-    '#FFFFFF',
-  ];
-  const tinted = candidates.slice(0, 2).sort((a, b) => contrast(b, accent) - contrast(a, accent))[0];
-  if (contrast(tinted, accent) >= 4.5) return tinted;
-  return candidates.sort((a, b) => contrast(b, accent) - contrast(a, accent))[0];
+  return textOnColor(accent, hslToHex({ h, s: Math.min(s, 0.3), l: 0.08 }), hslToHex({ h, s: Math.min(s, 0.12), l: 0.97 }));
 }
 
 // ── De kop ──────────────────────────────────────────────────────────────────
@@ -412,16 +344,16 @@ export function headerTheme(branding: BrandingPayload | null | undefined): Heade
     return [
       top, mid, bottom,
       // Een glazen tegel op de lichtste en de donkerste plek van het verloop.
-      blend(glass, top, glassAlpha),
-      blend(glass, bottom, glassAlpha),
+      blendColors(glass, top, glassAlpha),
+      blendColors(glass, bottom, glassAlpha),
       // De gloed van de merkkleur en de tegenlamp, waar de groet en de knoppen staan.
-      blend(accent, top, glowAlpha),
+      blendColors(accent, top, glowAlpha),
       dark
-        ? blend(HEADER_COUNTER.dark, top, HEADER_COUNTER.darkAlpha)
-        : blend(HEADER_COUNTER.light, top, HEADER_COUNTER.lightAlpha),
+        ? blendColors(HEADER_COUNTER.dark, top, HEADER_COUNTER.darkAlpha)
+        : blendColors(HEADER_COUNTER.light, top, HEADER_COUNTER.lightAlpha),
     ];
   };
-  const passes = (ink: string, surfaces: string[]) => surfaces.every(bg => contrast(ink, bg) >= INK_TARGET);
+  const passes = (ink: string, surfaces: string[]) => surfaces.every(bg => contrastRatio(ink, bg) >= INK_TARGET);
   const strongest = (dark: boolean) => (dark ? [lightInk, '#FFFFFF'] : [darkInk, '#000000']);
 
   // Licht of donker kiezen we niet op een drempel maar op wat het beste leest.
@@ -436,9 +368,9 @@ export function headerTheme(branding: BrandingPayload | null | undefined): Heade
   for (let step = 0; step <= 40; step++) {
     ({ top, mid, bottom } = stops(l, step === 0));
     const plain = [top, mid, bottom];
-    const worst = (ink: string) => Math.min(...plain.map(bg => contrast(ink, bg)));
+    const worst = (ink: string) => Math.min(...plain.map(bg => contrastRatio(ink, bg)));
     dark = worst('#FFFFFF') >= worst('#000000');
-    glowAlpha = contrast(accent, mid) < 1.8 ? 0.1 : dark ? 0.2 : 0.16;
+    glowAlpha = contrastRatio(accent, mid) < 1.8 ? 0.1 : dark ? 0.2 : 0.16;
     surfaces = surfacesOf(top, mid, bottom, dark, glowAlpha);
     if (!custom || strongest(dark).some(ink => passes(ink, surfaces))) break;
     l = clamp01(l + (dark ? -0.02 : 0.02));
@@ -449,7 +381,7 @@ export function headerTheme(branding: BrandingPayload | null | undefined): Heade
   // Gedempt: de inkt een stuk naar de kop toe gemengd, maar nooit onder de norm.
   let ink2 = ink;
   for (let w = 0.62; w <= 1.0001; w += 0.04) {
-    const candidate = blend(ink, mid, w);
+    const candidate = blendColors(ink, mid, w);
     if (passes(candidate, surfaces)) { ink2 = candidate; break; }
   }
   const headerAccent = readableInk(accent, surfaces, !dark);
@@ -474,7 +406,7 @@ export function accentFace(accentColor: string, onAccent: string): string {
   for (const spread of [0.07, 0.05, 0.03]) {
     const lighter = hslToHex({ h: a.h, s: a.s, l: clamp01(a.l + spread) });
     const darker = hslToHex({ h: a.h, s: a.s, l: clamp01(a.l - spread) });
-    if (contrast(onAccent, lighter) >= 4.5 && contrast(onAccent, darker) >= 4.5) {
+    if (contrastRatio(onAccent, lighter) >= 4.5 && contrastRatio(onAccent, darker) >= 4.5) {
       return `linear-gradient(150deg,${lighter} 0%,${accentColor} 50%,${darker} 100%)`;
     }
   }
@@ -501,7 +433,7 @@ function ringsImage(dark: boolean): string {
  */
 export function logoNeedsPlate(ink: string | null | undefined, backgrounds: string[]): boolean {
   if (!ink || !/^#[0-9A-Fa-f]{6}$/.test(ink)) return false;
-  return backgrounds.some(bg => contrast(ink, bg) < 2.6);
+  return backgrounds.some(bg => contrastRatio(ink, bg) < 2.6);
 }
 
 /**
@@ -510,7 +442,7 @@ export function logoNeedsPlate(ink: string | null | undefined, backgrounds: stri
  */
 export function logoPlate(ink: string | null | undefined, backgrounds: string[]): 'light' | 'dark' | null {
   if (!logoNeedsPlate(ink, backgrounds)) return null;
-  return contrast(ink!, '#FFFFFF') >= contrast(ink!, PLATE_DARK) ? 'light' : 'dark';
+  return contrastRatio(ink!, '#FFFFFF') >= contrastRatio(ink!, PLATE_DARK) ? 'light' : 'dark';
 }
 
 /** Het donkere plaatje: het grafiet van de cockpit. */
@@ -518,13 +450,11 @@ export const PLATE_DARK = '#17171A';
 
 /** Leest lichte tekst hier beter dan donkere? */
 export function isDarkSurface(hex: string): boolean {
-  return contrast('#FFFFFF', hex) >= contrast('#000000', hex);
+  return contrastRatio('#FFFFFF', hex) >= contrastRatio('#000000', hex);
 }
 
-/** Exporteren voor de instellingen en de tests; zelfde formule als de rest. */
-export function contrastRatio(a: string, b: string): number {
-  return contrast(a, b);
-}
+/** Voor de instellingen en de tests: dezelfde formule als de PDF en de mails (brandColor.ts). */
+export { contrastRatio };
 
 /**
  * Een eerste voorstel als iemand een eigen kopkleur kiest: de merkkleur, diep
@@ -539,7 +469,7 @@ export function suggestHeaderColor(accentColor: string): string {
 
 /** Is `color` lichter dan `reference`? Voor de uitleg bij een bijgestelde kleur. */
 export function isLighterThan(color: string, reference: string): boolean {
-  return luminance(color) > luminance(reference);
+  return relativeLuminance(color) > relativeLuminance(reference);
 }
 
 /**
@@ -692,14 +622,14 @@ export function brandThemeVars(branding: BrandingPayload | null | undefined): Re
   // doorzichtig vlak over --bg-deep. Op dat samenstel staat de eyebrow, en daar
   // zakte een verzadigd donker merk (bijv. #00084D) naar 4,2:1.
   const sheenHex = light ? '#1A1710' : '#FFFFFF';
-  const loginCard = blend(sheenHex, blend(surface, bgDeep, 0.9), 0.075 * sheenK);
+  const loginCard = blendColors(sheenHex, blendColors(surface, bgDeep, 0.9), 0.075 * sheenK);
   // Het merktegeltje legt een laag van 24% merkkleur over --surface en zet daar
   // de initiaal in accentinkt op.
-  const brandIcon = blend(accent, surface, 0.24);
+  const brandIcon = blendColors(accent, surface, 0.24);
   const accentInk = readableInk(accent, [
     bg, surface, surface2, surface3,
-    blend(accent, surface3, 0.16),
-    blend(accent, bg, 0.16),
+    blendColors(accent, surface3, 0.16),
+    blendColors(accent, bg, 0.16),
     loginCard,
     brandIcon,
   ], light);
@@ -708,7 +638,7 @@ export function brandThemeVars(branding: BrandingPayload | null | undefined): Re
   // een licht merk op een licht vlak haalt dat niet: #FFD966 op wit is 1,37.
   // Dan tekenen we de lijn in een bijgestelde tint; de vulling blijft de
   // merkkleur zelf, conform de conventie dat goud een vlak is en geen streep.
-  const accentEdge = contrast(accent, surface) >= 3 && contrast(accent, bg) >= 3
+  const accentEdge = contrastRatio(accent, surface) >= 3 && contrastRatio(accent, bg) >= 3
     ? accent
     : readableInk(accent, [surface, bg], light, 3);
   const accentEdgeRgb = rgbTriplet(accentEdge);
@@ -720,9 +650,9 @@ export function brandThemeVars(branding: BrandingPayload | null | undefined): Re
   // .065 is de glans op een portaalkaart; de publieke kaart legt er nog een
   // tweede verloopstop van .018 overheen. Model de dikste van de twee, anders
   // klopt de uitkomst voor het portaal wel en voor de factuurpagina net niet.
-  const panel = blend(light ? '#1A1710' : '#FFFFFF', surface, 0.09 * sheenK);
+  const panel = blendColors(light ? '#1A1710' : '#FFFFFF', surface, 0.09 * sheenK);
   const statusInk = (color: string) =>
-    readableInk(color, [panel, surface, blend(color, panel, 0.16)], light);
+    readableInk(color, [panel, surface, blendColors(color, panel, 0.16)], light);
   // `.btn-primary:hover` stond op een hardgecodeerde #ffe08f: merkgoud, acht
   // punten lichter. Diezelfde stap, maar dan vanuit de merkkleur zelf.
   const accentHi = hexToHsl(accent);

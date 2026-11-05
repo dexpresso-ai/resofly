@@ -177,7 +177,8 @@ export function PublicInvoicePage({ token }: { token: string }) {
           <Button variant="primary" disabled={isPaid || !checkoutHref} onClick={() => checkoutHref && window.open(checkoutHref, '_blank', 'noopener,noreferrer')}>{isPaid ? 'Betaald' : 'Betaal nu'}</Button>
         </div>
       </div>
-      {!checkoutHref && !isPaid && <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName}.</p>}
+      {/* Zonder bedrijfsnaam stond hier "Neem contact op met ." */}
+      {!checkoutHref && !isPaid && <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName || 'de afzender van deze factuur'}.</p>}
     </section>
 
     <section className="public-quote-card">

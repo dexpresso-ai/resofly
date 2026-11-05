@@ -1,5 +1,5 @@
 import { fieldOr, optionalFieldOr, renderContentHtml, renderContentText, type TemplateVars } from './content.ts';
-import { escapeHtml, renderEmailLayout, textLines } from './layout.ts';
+import { accentOnDark, escapeHtml, renderEmailLayout, sanitizeAccentColor, textLines } from './layout.ts';
 import type { FileSharedEmailInput, RenderedEmailTemplate } from './types.ts';
 
 // Ingebouwde standaardteksten. Een organisatie kan deze per veld overschrijven via
@@ -49,6 +49,7 @@ export function renderFileSharedEmail(input: FileSharedEmailInput): RenderedEmai
       accentColor: input.company?.invoice_accent_color,
       introHtml: `<p style="margin:0;">${introHtml}</p>`,
       bodyHtml: renderShareSummary({
+        accent: input.company?.invoice_accent_color ?? null,
         itemKind,
         itemName: input.itemName,
         clientName: input.clientName || null,
@@ -81,6 +82,7 @@ export function renderFileSharedEmail(input: FileSharedEmailInput): RenderedEmai
 }
 
 function renderShareSummary(input: {
+  accent: string | null;
   itemKind: string;
   itemName: string;
   clientName: string | null;
@@ -95,7 +97,8 @@ function renderShareSummary(input: {
   ].filter(Boolean).join('<br/>');
 
   const note = input.personalNote
-    ? `<div style="border-left:3px solid #FFD966;padding:2px 0 2px 14px;margin:18px 0 0;color:#d8d8df;line-height:1.6;">${escapeHtml(input.personalNote).replace(/\r?\n/g, '<br/>')}</div>`
+    // De streep in de merkkleur van de afzender; dit stond vast op ResoFly-goud.
+    ? `<div style="border-left:3px solid ${accentOnDark(sanitizeAccentColor(input.accent), '#121215')};padding:2px 0 2px 14px;margin:18px 0 0;color:#d8d8df;line-height:1.6;">${escapeHtml(input.personalNote).replace(/\r?\n/g, '<br/>')}</div>`
     : '';
 
   return `<div style="background:#121215;border:1px solid #2a2a31;border-radius:18px;padding:18px;margin:18px 0;">
