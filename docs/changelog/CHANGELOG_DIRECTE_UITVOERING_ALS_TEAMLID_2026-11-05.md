@@ -128,10 +128,9 @@ intussen een migratie met dat nummer op staging; deze kreeg daarom
 - **Deploy Supabase run 174:** de migratie is toegepast en alle edge
   functions zijn uitgerold, ook `api` en `mcp`. De rooktest is helemaal
   groen; `anon` heeft in public niets open.
-- **Frontend checks run 126:** de keten vanaf nul, `deno check`, de
-  typecheck, CSP en de unit tests zijn groen. De mobiele lay-outtest en het
-  laden per module liepen nog toen dit geschreven werd; deze wijziging raakt
-  geen scherm.
+- **Frontend checks run 126:** helemaal groen. Dat zijn de keten vanaf nul,
+  `deno check`, de typecheck, CSP, de unit tests, de volledige mobiele
+  lay-outtest (donker en licht) en het laden per module.
 
 **Nacontrole tegen de live functies** (teruggedraaid):
 
