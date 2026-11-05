@@ -31,7 +31,7 @@ eenmanszaak, de vof en de BV. Wat niet klopte, is meteen opgelost.
 
 ## Wat goed zat
 
-- **Tabellen:** geen enkele lek tussen rollen of organisaties over de 66
+- **Tabellen:** geen enkel lek tussen rollen of organisaties over de 66
   tabellen.
 - **Functieaanroepen:** alle 298 aanroepen in de code passen op de
   functies in de database.
@@ -61,7 +61,7 @@ eenmanszaak, de vof en de BV. Wat niet klopte, is meteen opgelost.
 | 7 | laag | Een late "betaald" van Mollie zette een geannuleerde of afgeboekte factuur terug op betaald. | De status blijft staan. De betaling zelf wordt geboekt, met een melding in de tijdlijn. |
 | 8 | laag | Elke herinnering of aanmaning overschreef het enige token op de factuur, waardoor de link in de vorige niet meer werkte. | Elke verzending krijgt een eigen publieke link. |
 | 9 | laag | Een terugbetaalde factuur kon opnieuw worden verstuurd, met betaallink. | Geweigerd. |
-| 10 | laag | Zes verwijzingen werden niet op dezelfde organisatie gecontroleerd: bankrekening → grootboek, bankregel → grootboek, leverancier en klant, Vpb-correctie → boekjaar, inkoopfactuur → leverancier en project, leverancier → kostenrekening, en contract → sjabloon. | Gecontroleerd. De bestaande gegevens zijn nagelopen: er waren geen overtredingen. |
+| 10 | laag | Negen verwijzingen in zes tabellen werden niet op dezelfde organisatie gecontroleerd: bankrekening → grootboek, bankregel → grootboek, leverancier en klant, Vpb-correctie → boekjaar, inkoopfactuur → leverancier en project, leverancier → kostenrekening, en contract → sjabloon. | Gecontroleerd. De bestaande gegevens zijn nagelopen: er waren geen overtredingen. |
 | 11 | laag | Vpb-correcties konden nog wijzigen nadat de berekening was vastgesteld en geboekt. | Eerst de berekening terugdraaien. |
 | 12 | laag | Aandeelhouders, aandelenmutaties, DGA-rente en Vpb-correcties konden ook bij een eenmanszaak of vof worden aangemaakt. De Vpb-invoer rekende daar ook. | Bij aanmaken geweigerd. Rijen van toen de organisatie een BV was, blijven bewerkbaar. |
 | 13 | laag | Een bankregel zonder voorwaarde matcht op élke transactie. Bij aanmaken eiste de handeling een voorwaarde, maar het scherm en bijwerken niet. En % of _ in "bevat" werkte als jokerteken. | Database en scherm eisen een voorwaarde (NOT VALID: bestaande regels blokkeren niets). De tekst wordt letterlijk vergeleken. |
@@ -132,7 +132,8 @@ eenmanszaak, de vof en de BV. Wat niet klopte, is meteen opgelost.
   - via `action_member_write` wordt geweigerd: de code van een geboekte
     rekening, een lezer, een niet-lid, een verouderde kaart, een andere
     tabel en een gereserveerde code;
-  - de IB-weigeringen en alle zes organisatiecontroles.
+  - de IB-weigeringen, en de organisatiecontrole bij bankregel,
+    leverancier, Vpb-correctie, bankrekening en inkoopfactuur.
 - **Matrix:** geen enkele schrijffunctie laat nog een lid met Financiën op
   "lezen" of "geen" door, en geen tabel lekt.
 - **Eind-tot-eindcyclus:** dezelfde cijfers als zonder de migratie, voor
@@ -152,13 +153,28 @@ eenmanszaak, de vof en de BV. Wat niet klopte, is meteen opgelost.
 - `deno check`: de lijst uit CI is schoon. Bij de vier functies buiten die
   lijst zijn de foutmeldingen dezelfde als vóór de wijziging.
 
-**Uitrol (Deploy Supabase run 171):**
+**Uitrol:**
 
-- De migratie is toegepast en alle edge functions zijn uitgerold.
-- De rooktest viel op twee hulpfuncties die `anon` mocht aanroepen.
-  Hersteld met `20261105010000`.
-- In Frontend checks run 120 waren de keten vanaf nul en `deno check`
+- **Deploy Supabase run 171:** de migratie is toegepast en alle edge
+  functions zijn uitgerold. De rooktest viel op twee hulpfuncties die
+  `anon` mocht aanroepen.
+- **Run 172:** `20261105010000` is toegepast en de rooktest is helemaal
   groen.
+- **Frontend checks run 121:** de keten vanaf nul, `deno check`, de
+  typecheck, CSP en de unit tests zijn groen.
+
+**Nacontrole tegen de live code** (teruggedraaid):
+
+- De migratietest, de eind-tot-eindcyclus per rechtsvorm en de matrix
+  geven dezelfde uitkomst als de droogruns. De matrix heeft 821 rijen,
+  zonder verschil.
+- `anon` heeft in public niets open.
+- De bankregel-matcher werkt met de letterlijke voorwaarde: "ZZ_9" matcht,
+  "ZZx9" niet.
+- Een gereserveerde code geeft de uitleg, niet "permission denied".
+- Alle 291 `.rpc()`-aanroepen met vaste argumentnamen passen op de live
+  functies, en elke functie bestaat één keer.
+- Er is niets van de tests blijven staan.
 
 ## Bewust open
 
