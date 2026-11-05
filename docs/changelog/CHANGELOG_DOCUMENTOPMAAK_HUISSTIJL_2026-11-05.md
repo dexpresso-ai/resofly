@@ -150,7 +150,7 @@ Wat er misging toen we gingen kijken:
 ## Getest
 
 - `npm run typecheck` schoon.
-- `npm test`: 969 groen. Nieuw: `src/lib/documentLayout.test.ts` (17 tests: spiegel teken voor
+- `npm test`: 969 groen op de eigen branch, 983 na het samenvoegen met staging. Nieuw: `src/lib/documentLayout.test.ts` (17 tests: spiegel teken voor
   teken gelijk en zonder imports, standaard bij rommel, sjablonen overleven de controle, controle
   laat niets van buiten de pagina of lijst door, wettelijke velden in de standaard, notatie,
   juridische naam niet dubbel, alles op de pagina en de inhoud tussen kop en voet, paginering met
@@ -161,12 +161,28 @@ Wat er misging toen we gingen kijken:
   `branding.test.ts`.
 - `deno check` schoon op de twee nieuwe gedeelde modules en op alle aangeraakte functies uit de
   CI-lijst. `invoice-workflow`, `quote-workflow` en `client-portal` staan buiten die lijst; ze
-  hebben dezelfde (bestaande) Deno-fouten als vóór deze wijziging. De twee gedeelde modules staan
-  nu wel in de CI-controle.
-- Mobiele lay-outtest: zie de uitslag hieronder; `settings-documenten` is erbij gekomen.
+  hebben dezelfde (bestaande) Deno-fouten als staging (12, 9 en 1), ook na het samenvoegen. De
+  twee gedeelde modules staan nu wel in de CI-controle. (Lokaal gecontroleerd met een import map
+  naar dezelfde npm-pakketten: esm.sh is vanuit de cloudsessie niet bereikbaar.)
+- Mobiele lay-outtest (`--theme=both`), met de nieuwe pagina `settings-documenten`: 294 pagina's,
+  0 met problemen. Na het samenvoegen met staging de geraakte pagina's opnieuw (publieke offerte,
+  factuur, contract en galerij, facturen, offertes, bank, instellingen, portaal): 66 pagina's, 0
+  met problemen. Eén eerdere ronde gaf één misser terwijl Docker tegelijk de database opbouwde; de
+  twee rondes daarna waren schoon.
+- `npm run test:loading`: alle controles geslaagd. `vite build` lukt.
+- Migratieketen vanaf nul (`supabase db start`, Docker): alle 236 migraties toegepast, ook
+  `20261105100000`. De CHECK geweigerd op een lijst en op een te groot object, een gewone opmaak
+  toegelaten. Op staging is de laatste migratie `20261105010000`; deze komt daarna.
 - Interactietest met Playwright tegen de nagebootste backend: slepen, hulplijnen, pijltjes,
   eigenschappen, ongedaan maken en opnieuw, sjabloon, offerte met inleiding, controle met
-  Toevoegen, PDF-voorbeeld en Opslaan (met de opgeslagen opmaak gecontroleerd): 24/24. Op
-  telefoonformaat met touch: 5/5.
+  Toevoegen, PDF-voorbeeld, klik naast een blok en Opslaan (met de opgeslagen opmaak
+  gecontroleerd): 25/25. Op telefoonformaat met touch: 5/5.
 - Voorbeeld-PDF's gerenderd en bekeken: drie sjablonen voor factuur en offerte, een factuur van drie
   pagina's, en de contract-PDF.
+
+## Uitrol
+
+Op de branch `ccr-f419f057-zisitq`, samengevoegd met de nieuwste staging. Nog niet op staging:
+samenvoegen naar `staging` en pushen rolt de app uit (Cloudflare Pages) en zet de migratie en de
+edge functions klaar (workflow *Deploy Supabase (staging)*). Migraties gaan daar vóór de functies;
+draait een functie toch eerder, dan valt hij terug op de standaardopmaak.
