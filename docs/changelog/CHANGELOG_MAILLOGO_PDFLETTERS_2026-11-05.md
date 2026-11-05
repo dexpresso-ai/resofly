@@ -236,3 +236,7 @@ migratie in deze ronde; die van de eerste ronde, `20261105100000`, kwam na de la
   `import * as fontkit` zou de typen tevredenstellen maar het draaien breken. Nagebootst met de
   typen uit het pakket zelf: zonder de regel dezelfde fout als in CI, met de regel schoon. Bij
   het draaien veranderde er niets: de uitgerolde functies gebruikten de default export al.
+- Met het herstel (`d422ed3`): *Frontend checks* run 129 helemaal groen, ook de Deno-typecheck van
+  de documentopmaak, de mobiele lay-outtest (donker en licht), het laden per module en de
+  migratieketen vanaf nul. *Deploy Supabase (staging)* run 176 zette de functies opnieuw neer,
+  rooktest groen. In run 128 was de rest ook al groen; alleen die ene typecheck viel om.
