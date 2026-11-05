@@ -160,8 +160,9 @@ eenmanszaak, de vof en de BV. Wat niet klopte, is meteen opgelost.
   `anon` mocht aanroepen.
 - **Run 172:** `20261105010000` is toegepast en de rooktest is helemaal
   groen.
-- **Frontend checks run 121:** de keten vanaf nul, `deno check`, de
-  typecheck, CSP en de unit tests zijn groen.
+- **Frontend checks run 121:** helemaal groen. Dat zijn de keten vanaf
+  nul, `deno check`, de typecheck, CSP, de unit tests, de volledige mobiele
+  lay-outtest (donker en licht) en het laden per module.
 
 **Nacontrole tegen de live code** (teruggedraaid):
 
