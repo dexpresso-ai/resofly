@@ -167,8 +167,22 @@ async function getInvoice(token: string, options: { mockPaymentId?: string; mark
 
   await logInvoiceViewed(invoiceRow.organization_id, invoiceRow.id, link.link_id);
 
+  // Wat er nog openstaat volgens het grootboek (na deelbetalingen en
+  // creditnota's), zoals de betaallink het ook vraagt. De pagina toonde het
+  // factuurtotaal: na een deelbetaling stond er "te betalen € 1.000" bij een
+  // link van € 710.
+  let openAmountCents: number | null = null;
+  if (invoiceRow.journal_entry_id) {
+    const { data: open, error: openError } = await supabaseAdmin.rpc('invoice_open_receivable_cents', {
+      p_organization_id: invoiceRow.organization_id,
+      p_invoice_id: invoiceRow.id,
+    });
+    if (openError) console.warn('invoice-public open amount lookup failed', openError.message);
+    else if (Number.isFinite(Number(open))) openAmountCents = Math.max(0, Math.round(Number(open)));
+  }
+
   return {
-    invoice: sanitizeInvoice(invoiceRow, link),
+    invoice: { ...sanitizeInvoice(invoiceRow, link), open_amount_cents: openAmountCents },
     client: sanitizeClient(clientRow),
     project: sanitizeProject(projectRow),
     quote: sanitizeQuote(quoteRow),

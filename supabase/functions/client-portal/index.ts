@@ -496,15 +496,29 @@ async function getInvoicePaymentInfo(user: { id: string; email: string }, body: 
 
   const { data: invoice, error } = await supabaseAdmin
     .from('invoices')
-    .select('id,organization_id,client_id,project_id,number,status,lines,paid_at')
+    .select('id,organization_id,client_id,project_id,number,status,lines,paid_at,journal_entry_id')
     .eq('id', invoiceId)
     .maybeSingle();
   if (error) throw error;
   if (!invoice || invoice.status === 'draft') throw new PortalError('Factuur niet gevonden.', 404);
   await assertEntityBelongsToClients(invoice, clients);
 
-  const amountCents = calculateTotalCents(Array.isArray(invoice.lines) ? invoice.lines : []);
-  const isPaid = invoice.status === 'paid' || Boolean(invoice.paid_at);
+  // Wat er nog openstaat, zoals de betaallink het ook vraagt (invoiceCheckout).
+  // Eerder stond hier het factuurtotaal: na een deelbetaling of creditnota zei
+  // het portaal "maak € 1.000 over" terwijl er € 710 openstond, en een volledig
+  // gecrediteerde factuur toonde nog betaalgegevens.
+  const totalCents = calculateTotalCents(Array.isArray(invoice.lines) ? invoice.lines : []);
+  let amountCents = totalCents;
+  if (invoice.journal_entry_id) {
+    const { data: open, error: openError } = await supabaseAdmin.rpc('invoice_open_receivable_cents', {
+      p_organization_id: invoice.organization_id,
+      p_invoice_id: invoice.id,
+    });
+    if (openError) throw openError;
+    const openCents = Number(open);
+    if (Number.isFinite(openCents)) amountCents = Math.max(0, Math.min(totalCents, openCents));
+  }
+  const isPaid = invoice.status === 'paid' || Boolean(invoice.paid_at) || amountCents <= 0;
   const payable = !isPaid && !['cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
 
   const [company, mollieAvailable] = await Promise.all([

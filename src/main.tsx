@@ -3134,7 +3134,7 @@ function App() {
       return;
     }
     if (kind === 'invoice' || kind === 'quote') {
-      const lines = [{ id: uid(), description: intent.description ?? '', quantity: 1, unit_price: intent.amount ?? 0, vat: 21 }];
+      const lines = [{ id: uid(), description: intent.description ?? '', quantity: 1, unit_price: intent.amount ?? 0, vat: defaultVatRate(data) }];
       setPage(kind === 'invoice' ? 'invoices' : 'quotes'); setProjectId(null); setClientId(null);
       setEdit({ kind, defaults: { client_id: intent.clientId ?? '', lines } });
       notify({ tone: 'ai', title: `${kind === 'invoice' ? 'Factuur' : 'Offerte'} klaargezet`, detail: 'Kijk hem na en sla op; er gaat nog niets de deur uit.' });
@@ -4530,7 +4530,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     const clamped = k === 'vat' ? Math.min(safe, 100) : safe;
     return { ...l, [k]: clamped };
   }));
-  const addLine = () => set('lines', [...lines, { id: uid(), description: '', quantity: 1, unit_price: 0, vat: 21 }]);
+  const addLine = () => set('lines', [...lines, { id: uid(), description: '', quantity: 1, unit_price: 0, vat: defaultVatRate(data) }]);
   const removeLine = (id: string) => set('lines', lines.length <= 1 ? lines : lines.filter(x => x.id !== id));
 
   // Verkooprelevante btw-codes van de organisatie: die bepalen naast het tarief
@@ -4556,6 +4556,11 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
   // Een geboekte factuur annuleer je met een creditnota (zie "Crediteren");
   // de database weigert annuleren/afboeken zolang er iets openstaat.
   const invoiceBooked = !isQuote && Boolean((item as Invoice | undefined)?.journal_entry_id);
+  // Spiegel van enforce_invoice_terminal_status: een terugbetaalde factuur, en
+  // een geboekte factuur die geannuleerd of ongeldig is (gecrediteerd), gaan
+  // niet terug naar verzonden of betaald.
+  const savedStatus = (item as Invoice | undefined)?.status;
+  const invoiceStatusFixed = !isQuote && (savedStatus === 'refunded' || (invoiceBooked && (savedStatus === 'cancelled' || savedStatus === 'void')));
 
   const handleDownloadPdf = () => {
     const client = data.clients.find(c => c.id === form.client_id) ?? null;
@@ -4594,8 +4599,9 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <option value="">Geen project</option>{projectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
-        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt.' : 'Status van de factuur.'}>
-          <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}>
+        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt.' : 'Status van de factuur.'}>
+          <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled || invoiceStatusFixed}>
+            {form.status === 'refunded' && <option value="refunded">Terugbetaald</option>}
             <option value="draft">Concept</option>
             <option value="sent">Verzonden</option>
             <option value="overdue">Te laat</option>
@@ -4843,6 +4849,15 @@ function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: 
   return sanitized;
 }
 
+/**
+ * Btw-tarief voor een nieuwe regel. Onder de kleineondernemersregeling (KOR)
+ * rekent een factuur geen btw; de database weigert dan het uitgeven van een
+ * factuur met btw. Eerder kreeg elke nieuwe regel 21%, ook bij de KOR.
+ */
+function defaultVatRate(data: AppData): number {
+  return data.companySettings?.kor_enabled ? 0 : 21;
+}
+
 function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
   if (edit.kind === "client") {
     const item = edit.item;
@@ -4871,10 +4886,10 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
   const today = new Date().toISOString().slice(0,10);
   if (edit.kind === "quote") {
     const item = edit.item;
-    return { number: item?.number ?? createNextFinanceNumber('quote', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? edit.defaults?.valid_until ?? "", status: item?.status ?? "draft", internal_approval_status: item?.internal_approval_status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
+    return { number: item?.number ?? createNextFinanceNumber('quote', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? edit.defaults?.valid_until ?? "", status: item?.status ?? "draft", internal_approval_status: item?.internal_approval_status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: defaultVatRate(data) }] };
   }
   const item = edit.item;
-  return { number: item?.number ?? createNextFinanceNumber('invoice', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? edit.defaults?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
+  return { number: item?.number ?? createNextFinanceNumber('invoice', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? edit.defaults?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: defaultVatRate(data) }] };
 }
 
 function cleanForm(kind: string, form: Record<string, any>, clientFieldDefinitions: ClientFieldDefinition[] = []) {

@@ -155,6 +155,9 @@ function requireAdmin(ctx: ActionCtx, what: string): void {
 
 /** True zodra een factuur onbetaald is én over de vervaldatum — spiegelt de cron-logica. */
 function isReminderEligible(invoice: { status: string; due_date: string | null }, today: string): boolean {
+  // Een concept is nooit verstuurd; daar hoort geen herinnering of aanmaning bij
+  // (de database weigert die ook, zie 20261105030000).
+  if (invoice.status === 'draft') return false;
   if (INVOICE_CLOSED.includes(invoice.status)) return false;
   if (invoice.status === 'overdue') return true;
   return Boolean(invoice.due_date && invoice.due_date < today);
@@ -450,6 +453,9 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       if (INVOICE_CLOSED.includes(invoice.status)) {
         throw new ActionError(`Factuur ${invoice.number} staat op "${INVOICE_STATUS_LABELS[invoice.status] ?? invoice.status}"; daarvoor stuur je geen herinnering.`);
       }
+      if (invoice.status === 'draft') {
+        throw new ActionError(`Factuur ${invoice.number} is nog een concept en is niet verstuurd; daar hoort geen herinnering bij.`);
+      }
       if (!isReminderEligible(invoice, ctx.today)) {
         throw new ActionError(`Factuur ${invoice.number} is nog niet vervallen${invoice.due_date ? ` (vervaldatum ${dateShort(invoice.due_date)})` : ' en heeft geen vervaldatum'}.`);
       }
@@ -491,7 +497,13 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       if (INVOICE_CLOSED.includes(invoice.status)) {
         throw new ActionError(`Voor factuur ${invoice.number} ("${INVOICE_STATUS_LABELS[invoice.status] ?? invoice.status}") kan geen aanmaning worden gemaakt.`);
       }
+      if (invoice.status === 'draft') {
+        throw new ActionError(`Factuur ${invoice.number} is nog een concept en is niet verstuurd; daar hoort geen aanmaning bij.`);
+      }
       if (!invoice.due_date) throw new ActionError(`Factuur ${invoice.number} heeft geen vervaldatum; zonder vervaldatum is er geen rente te berekenen.`);
+      if (invoice.due_date >= ctx.today) {
+        throw new ActionError(`Factuur ${invoice.number} is nog niet vervallen (vervaldatum ${dateShort(invoice.due_date)}); een aanmaning kan pas daarna.`);
+      }
       // Een geannuleerde aanmaning telt niet: daarna mag er een nieuwe komen (de
       // database staat dat ook toe). Meerdere rijen zijn dus normaal; vroeger
       // gaf maybeSingle() dan een fout die werd genegeerd, en ging de controle stil voorbij.

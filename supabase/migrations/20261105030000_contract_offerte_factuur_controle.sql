@@ -26,9 +26,22 @@ begin;
 -- Een weigering op het schema crasht niet. anon heeft in public niets meer
 -- nodig (20261101000000: geen tabellen, geen functies; de prijsplannen leest
 -- de app pas na het inloggen), dus anon verliest ook het gebruiksrecht op het
--- schema. Voor ingelogde gebruikers helpt alleen een nieuwere Postgres-versie;
--- dat is een actie voor de eigenaar (zie het rapport).
+-- schema. Dat recht kwam niet alleen uit een eigen grant maar ook via PUBLIC
+-- (=U op schema public); alleen "from anon" intrekken deed daarom niets. Elke
+-- bestaande rol behalve anon krijgt het recht nu expliciet (de interne rollen
+-- van Supabase leunden op PUBLIC), daarna gaat PUBLIC eraf. Voor ingelogde
+-- gebruikers helpt alleen een nieuwere Postgres-versie; dat is een actie voor
+-- de eigenaar (zie het rapport).
 
+do $$
+declare
+  r record;
+begin
+  for r in select rolname from pg_roles where rolname !~ '^pg_' and rolname <> 'anon' loop
+    execute format('grant usage on schema public to %I', r.rolname);
+  end loop;
+end $$;
+revoke usage on schema public from public;
 revoke usage on schema public from anon;
 
 -- ── C1. Contract: status en werkvelden alleen via de server ────────────────
@@ -1225,9 +1238,22 @@ begin
     from pg_constraint
    where conrelid = 'public.audit_logs'::regclass and conname = 'audit_logs_action_check';
   if v_def is null then return; end if;
-  select array_agg(m[1]) into v_actions from regexp_matches(v_def, '''([^'']+)''', 'g') as m;
-  if 'quote_cancelled' = any(v_actions) then return; end if;
-  v_actions := v_actions || array['quote_cancelled'];
+  -- Elke actie is een woord van kleine letters, cijfers en lage streepjes. Zo
+  -- werkt het voor beide vormen die Postgres teruggeeft (ARRAY['a'::text, …] en
+  -- '{a,b}'::text[]), dus ook als deze migratie nog eens draait.
+  select array_agg(distinct t[1] order by t[1]) into v_actions
+    from regexp_matches(v_def, '([a-z][a-z0-9_]*)', 'g') as t
+   where t[1] not in ('check', 'action', 'any', 'array', 'text');
+  if v_actions is null or array_length(v_actions, 1) < 10 then
+    raise exception 'audit_logs_action_check niet te lezen: %', left(v_def, 200);
+  end if;
+  if 'quote_cancelled' = any(v_actions)
+     and v_def ~ '^CHECK \(\(action = ANY \(''\{[a-z0-9_,]+\}''::text\[\]\)\)\)$' then
+    return;
+  end if;
+  if not ('quote_cancelled' = any(v_actions)) then
+    v_actions := v_actions || array['quote_cancelled'];
+  end if;
   alter table public.audit_logs drop constraint audit_logs_action_check;
   execute format('alter table public.audit_logs add constraint audit_logs_action_check check (action = any (%L::text[]))', v_actions);
 end $$;
@@ -1276,5 +1302,1224 @@ $$;
 
 revoke all on function public.withdraw_quote(uuid, uuid, text) from public, anon;
 grant execute on function public.withdraw_quote(uuid, uuid, text) to authenticated, service_role;
+
+
+-- ── H1. Grootboek: btw per tarief, regels gelezen zoals de factuur ─────────
+
+CREATE OR REPLACE FUNCTION public.post_sales_invoice_to_ledger(p_organization_id uuid, p_invoice_id uuid, p_created_by uuid DEFAULT auth.uid())
+ RETURNS journal_entries
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_inv public.invoices;
+  v_start date;
+  v_kor boolean;
+  v_lines jsonb := '[]'::jsonb;
+  v_output_vat bigint := 0;
+  v_receivable bigint := 0;
+  v_entry public.journal_entries;
+  v_book_date date;
+  v_desc text;
+  r record;
+begin
+  if auth.role() <> 'service_role' and not (public.can_write_org(p_organization_id) and public.can_write_module(p_organization_id, 'finance')) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  select * into v_inv from public.invoices
+  where id = p_invoice_id and organization_id = p_organization_id for update;
+  if not found then
+    raise exception 'Factuur niet gevonden.' using errcode = '02000';
+  end if;
+  if v_inv.journal_entry_id is not null then
+    raise exception 'Deze factuur is al naar het grootboek geboekt.' using errcode = '23514';
+  end if;
+  -- Statusguard: alleen een uitgegeven factuur boekt omzet. Concept/geannuleerd niet.
+  if v_inv.status in ('draft', 'cancelled') then
+    raise exception 'Een % factuur kan niet naar het grootboek worden geboekt.', v_inv.status using errcode = '23514';
+  end if;
+
+  select bookkeeping_start_date, coalesce(kor_enabled, false)
+    into v_start, v_kor
+  from public.company_settings where organization_id = p_organization_id;
+  v_kor := coalesce(v_kor, false);
+
+  if v_start is not null and v_inv.date < v_start then
+    raise exception 'Factuurdatum ligt vóór de boekhoud-startdatum (%); deze omzet zit al in de beginbalans.', v_start
+      using errcode = '23514';
+  end if;
+
+  perform public.ensure_default_ledger_accounts(p_organization_id);
+
+  -- Omzet per (btw-code, tarief); btw per groep afgerond. Het TARIEF komt van
+  -- de factuurregel (dat is wat gefactureerd is); de CODE bepaalt de rubriek
+  -- (via vat_codes.sales_box in de aangifte) en de omzetrekening: buitenland/
+  -- verlegd (3a/3b/3c of verlegd-verkoop) → 8030, anders op tarief.
+  -- GEWIJZIGD (20261105030000): (1) aantal, prijs en tarief worden gelezen zoals
+  -- invoice_calculated_totals ze leest (een onleesbare waarde telt als 0); een
+  -- harde ::numeric liet het boeken mislukken of boekte iets anders dan het
+  -- factuurtotaal ("1e3" gaf totaal € 0 en een vordering van € 121.000).
+  -- (2) De btw wordt per TARIEF afgerond, zoals op de factuur, de PDF, de UBL en
+  -- bij Mollie; per (code, tarief) afronden gaf bij twee regels van € 1,02 tegen
+  -- 21% (één zonder code, één met HOOG) een vordering van € 2,46 tegen een
+  -- factuur van € 2,47 — en daarna kon de factuur niet meer worden gecrediteerd.
+  -- Het afrondingsverschil binnen een tarief gaat naar de grootste groep.
+  for r in
+    with regels as (
+      select
+        nullif(btrim(coalesce(line->>'vat_code', '')), '') as vat_code,
+        case when coalesce(line->>'vat', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (line->>'vat')::numeric else 0 end as rate,
+        round(
+          (case when coalesce(line->>'quantity', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (line->>'quantity')::numeric else 0 end)
+          * (case when coalesce(line->>'unit_price', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (line->>'unit_price')::numeric else 0 end)
+          * 100) as base_cents
+      from jsonb_array_elements(v_inv.lines) as line
+    ),
+    groepen as (
+      select g.vat_code, (vc.id is not null) as has_code, vc.kind, vc.sales_box, g.rate, sum(g.base_cents) as base_cents
+        from regels g
+        left join public.vat_codes vc
+          on vc.organization_id = p_organization_id
+         and vc.code = g.vat_code
+       group by 1, 2, 3, 4, 5
+    ),
+    per_tarief as (
+      select rate, round(sum(base_cents) * rate / 100.0) as rate_vat_cents
+        from groepen
+       group by rate
+    ),
+    gerangschikt as (
+      select gr.*, round(gr.base_cents * gr.rate / 100.0) as group_vat_cents, pt.rate_vat_cents,
+             row_number() over (partition by gr.rate order by abs(gr.base_cents) desc, gr.vat_code nulls last) as rn
+        from groepen gr
+        join per_tarief pt on pt.rate = gr.rate
+    )
+    select x.vat_code, x.has_code, x.kind, x.sales_box, x.rate, x.base_cents,
+           x.group_vat_cents + case when x.rn = 1
+             then x.rate_vat_cents - sum(x.group_vat_cents) over (partition by x.rate)
+             else 0 end as vat_cents
+      from gerangschikt x
+  loop
+    declare
+      v_vat bigint := case when v_kor then 0 else r.vat_cents end;
+      v_revenue_account text := case
+        when r.has_code and (r.sales_box in ('3a','3b','3c') or r.kind = 'reverse_charge_sales') then '8030'
+        when r.rate >= 21 then '8000'
+        when r.rate > 0 then '8010'
+        else '8020'
+      end;
+    begin
+      -- GEWIJZIGD (20261104020000): een negatieve groep (korting, correctie)
+      -- komt aan de debetzijde; een negatieve credit bestaat niet en liet het
+      -- boeken stil mislukken. Grondslag en btw houden hun teken.
+      v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'account_id', public.bookkeeping_account_id(p_organization_id, v_revenue_account),
+        'description', 'Omzet',
+        'debit_cents', greatest(-r.base_cents, 0), 'credit_cents', greatest(r.base_cents, 0),
+        'vat_code', r.vat_code,
+        'vat_rate', r.rate, 'vat_base_cents', r.base_cents, 'vat_amount_cents', v_vat,
+        'client_id', v_inv.client_id, 'project_id', v_inv.project_id
+      ));
+      v_output_vat := v_output_vat + v_vat;
+      v_receivable := v_receivable + r.base_cents + v_vat;
+    end;
+  end loop;
+
+  if v_output_vat <> 0 then
+    v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+      'account_id', public.bookkeeping_account_id(p_organization_id, '1510'),
+      'description', 'Af te dragen BTW',
+      'debit_cents', greatest(-v_output_vat, 0), 'credit_cents', greatest(v_output_vat, 0),
+      'client_id', v_inv.client_id
+    ));
+  end if;
+
+  if v_receivable <> 0 then
+    v_lines := jsonb_build_array(jsonb_build_object(
+      'account_id', public.bookkeeping_account_id(p_organization_id, '1300'),
+      'description', 'Debiteuren',
+      'debit_cents', greatest(v_receivable, 0), 'credit_cents', greatest(-v_receivable, 0),
+      'client_id', v_inv.client_id
+    )) || v_lines;
+  end if;
+
+  -- Nagekomen factuur in een al ingediende periode: boek op de eerstvolgende
+  -- open datum (documentdatum blijft leidend op de factuur zelf). De btw komt
+  -- dan in de eerstvolgende aangifte (kleine correctie) of via een suppletie.
+  v_book_date := public.first_open_booking_date(p_organization_id, v_inv.date);
+  v_desc := 'Verkoopfactuur ' || coalesce(v_inv.number, '');
+  if v_book_date <> v_inv.date then
+    v_desc := v_desc || ' (factuurdatum ' || to_char(v_inv.date, 'DD-MM-YYYY') || ', geboekt in eerstvolgende open periode)';
+  end if;
+
+  v_entry := public.post_journal_entry(
+    p_organization_id, v_book_date, v_desc,
+    'sales_invoice', v_inv.id, v_lines, p_created_by
+  );
+
+  update public.invoices set journal_entry_id = v_entry.id where id = v_inv.id;
+  return v_entry;
+end;
+$function$;
+
+-- ── H2. KOR: geen factuur met btw ──────────────────────────────────────────
+--
+-- Met de kleineondernemersregeling boekt het grootboek geen btw, maar de editor
+-- zette een nieuwe regel op 21% en het versturen controleerde niets. De klant
+-- kreeg dan € 121 gefactureerd (PDF, UBL, Mollie), het grootboek boekte € 100
+-- omzet en geen btw, de betaallink vroeg € 100, en "Crediteren" weigerde omdat
+-- open en totaal niet gelijk waren. Btw die op een factuur staat is verschuldigd
+-- (art. 37 Wet OB). Nu: een factuur met btw kan onder de KOR niet worden
+-- uitgegeven; zet de regels op 0% (code KOR).
+
+create or replace function public.enforce_invoice_kor_no_vat()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_kor boolean;
+begin
+  if new.status in ('draft', 'cancelled', 'void') then return new; end if;
+  -- Alleen bij uitgeven (nieuw of vanuit concept); een uitgegeven factuur ligt al vast.
+  if tg_op = 'UPDATE' and old.status <> 'draft' then return new; end if;
+  select coalesce(kor_enabled, false) into v_kor
+    from public.company_settings where organization_id = new.organization_id;
+  if coalesce(v_kor, false) and exists (
+       select 1 from jsonb_array_elements(case when jsonb_typeof(new.lines) = 'array' then new.lines else '[]'::jsonb end) l
+        where case when coalesce(l->>'vat', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (l->>'vat')::numeric else 0 end <> 0) then
+    raise exception 'Je gebruikt de kleineondernemersregeling (KOR): een factuur rekent dan geen btw. Zet de btw van elke regel op 0%% (code KOR) en verstuur opnieuw.'
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists invoices_kor_no_vat on public.invoices;
+create trigger invoices_kor_no_vat
+  before insert or update of status, lines on public.invoices
+  for each row execute function public.enforce_invoice_kor_no_vat();
+
+-- ── H3. Herinnering en aanmaning: niet voor een concept ────────────────────
+--
+-- Een concept met een vervaldatum in het verleden toonde "Stuur herinnering"
+-- en "Stel aanmaning op", en de database liet het toe: de klant kreeg "Uw
+-- onderneming is van rechtswege in verzuim … incassokosten" voor een factuur
+-- die hij nooit had ontvangen. Een aanmaning kan nu ook pas na de vervaldatum.
+
+CREATE OR REPLACE FUNCTION public.begin_invoice_reminder_send(p_invoice_id uuid, p_organization_id uuid, p_actor_user_id uuid, p_level smallint, p_token_hash text, p_token_expires_at timestamp with time zone, p_recipient_email text, p_recipient_name text, p_subject text, p_public_url text, p_attachment_file_name text DEFAULT NULL::text, p_attachment_mime_type text DEFAULT 'application/pdf'::text, p_attachment_size_bytes integer DEFAULT NULL::integer, p_attachment_sha256 text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_invoice public.invoices;
+  v_delivery public.invoice_email_deliveries;
+begin
+  if auth.role() <> 'service_role' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  if p_level not between 1 and 3 then
+    raise exception 'Ongeldig herinneringsniveau.' using errcode = '22023';
+  end if;
+
+  select * into v_invoice
+  from public.invoices
+  where id = p_invoice_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Factuur niet gevonden.' using errcode = '02000'; end if;
+  -- GEWIJZIGD (20261105030000): een concept is nooit verstuurd; de klant kreeg
+  -- anders een herinnering voor een factuur die hij nooit ontving.
+  if v_invoice.status = 'draft' then
+    raise exception 'Deze factuur is nog een concept en is niet verstuurd: daar hoort geen herinnering bij.' using errcode = '23514';
+  end if;
+  if v_invoice.status in ('paid','cancelled','void','written_off','refunded') then
+    raise exception 'Voor een betaalde, geannuleerde of afgeboekte factuur kan geen herinnering worden verstuurd.' using errcode = '23514';
+  end if;
+
+  update public.invoices
+     set public_token_hash = p_token_hash,
+         public_token_created_at = now(),
+         public_token_expires_at = p_token_expires_at,
+         updated_at = now()
+   where id = v_invoice.id;
+
+  insert into public.invoice_email_deliveries(
+    organization_id, invoice_id, recipient_email, recipient_name, subject, status,
+    delivery_kind, reminder_level,
+    attachment_file_name, attachment_mime_type, attachment_size_bytes, attachment_sha256,
+    metadata
+  ) values (
+    p_organization_id, p_invoice_id, lower(btrim(p_recipient_email)), nullif(btrim(coalesce(p_recipient_name, '')), ''), p_subject, 'queued',
+    'reminder', p_level,
+    nullif(btrim(coalesce(p_attachment_file_name, '')), ''), coalesce(nullif(btrim(coalesce(p_attachment_mime_type, '')), ''), 'application/pdf'), p_attachment_size_bytes, nullif(btrim(coalesce(p_attachment_sha256, '')), ''),
+    jsonb_build_object('publicUrl', p_public_url, 'reminderLevel', p_level)
+  ) returning * into v_delivery;
+
+  insert into public.invoice_public_links(
+    organization_id, invoice_id, token_hash, purpose, status, delivery_id, expires_at, created_by, metadata
+  ) values (
+    p_organization_id, p_invoice_id, p_token_hash, 'email', 'active', v_delivery.id, p_token_expires_at, p_actor_user_id,
+    jsonb_build_object('publicUrl', p_public_url, 'kind', 'reminder', 'reminderLevel', p_level)
+  )
+  on conflict (token_hash) do nothing;
+
+  return jsonb_build_object('deliveryId', v_delivery.id, 'invoiceId', p_invoice_id);
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.begin_dunning_notice(p_organization_id uuid, p_invoice_id uuid, p_actor_user_id uuid, p_client_kind text, p_interest_kind text, p_principal_cents bigint, p_interest_cents bigint, p_interest_days integer, p_daily_interest_cents bigint, p_collection_costs_cents bigint, p_collection_costs_vat_cents bigint, p_total_claim_cents bigint, p_calculation_date date, p_due_date date, p_rate_snapshot jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_invoice public.invoices;
+  v_notice public.invoice_dunning_notices;
+begin
+  if auth.role() <> 'service_role' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  select * into v_invoice
+  from public.invoices
+  where id = p_invoice_id and organization_id = p_organization_id
+  for update;
+  if not found then raise exception 'Factuur niet gevonden.' using errcode = '02000'; end if;
+  -- GEWIJZIGD (20261105030000): een formele aanmaning ("van rechtswege in
+  -- verzuim", incassokosten) alleen voor een verstuurde factuur waarvan de
+  -- vervaldatum voorbij is. Eerder kon dat ook voor een concept.
+  if v_invoice.status = 'draft' then
+    raise exception 'Deze factuur is nog een concept en is niet verstuurd: daar hoort geen aanmaning bij.' using errcode = '23514';
+  end if;
+  if v_invoice.due_date is null or v_invoice.due_date >= (now() at time zone 'Europe/Amsterdam')::date then
+    raise exception 'Een aanmaning kan pas na de vervaldatum van de factuur.' using errcode = '23514';
+  end if;
+  if v_invoice.status in ('paid','cancelled','void','written_off','refunded') then
+    raise exception 'Voor een betaalde, geannuleerde of afgeboekte factuur kan geen aanmaning worden gemaakt.' using errcode = '23514';
+  end if;
+
+  insert into public.invoice_dunning_notices(
+    organization_id, invoice_id, client_kind, interest_kind,
+    principal_cents, interest_cents, interest_days, daily_interest_cents,
+    collection_costs_cents, collection_costs_vat_cents, total_claim_cents,
+    calculation_date, due_date, rate_snapshot, status, created_by
+  ) values (
+    p_organization_id, p_invoice_id, p_client_kind, p_interest_kind,
+    p_principal_cents, p_interest_cents, coalesce(p_interest_days, 0), coalesce(p_daily_interest_cents, 0),
+    p_collection_costs_cents, p_collection_costs_vat_cents, p_total_claim_cents,
+    p_calculation_date, p_due_date, coalesce(p_rate_snapshot, '{}'::jsonb), 'proposed', p_actor_user_id
+  )
+  returning * into v_notice;
+
+  perform public.insert_invoice_workflow_event(
+    p_organization_id, p_invoice_id, 'dunning_proposed',
+    'Aanmaning voorgesteld',
+    'Er is een aanmaning (WIK-14-dagenbrief) voorgesteld voor factuur ' || coalesce(v_invoice.number, '') ||
+      ': hoofdsom + rente + incassokosten = ' || to_char((p_total_claim_cents::numeric / 100), 'FM999G999G990D00') || ' EUR. Wacht op bevestiging.',
+    jsonb_build_object('notice_id', v_notice.id, 'total_claim_cents', p_total_claim_cents),
+    p_actor_user_id
+  );
+
+  return jsonb_build_object('noticeId', v_notice.id);
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.begin_dunning_send(p_notice_id uuid, p_organization_id uuid, p_actor_user_id uuid, p_interest_cents bigint, p_interest_days integer, p_daily_interest_cents bigint, p_collection_costs_cents bigint, p_collection_costs_vat_cents bigint, p_total_claim_cents bigint, p_calculation_date date, p_deadline_date date, p_rate_snapshot jsonb, p_token_hash text, p_token_expires_at timestamp with time zone, p_recipient_email text, p_recipient_name text, p_subject text, p_public_url text, p_attachment_file_name text DEFAULT NULL::text, p_attachment_mime_type text DEFAULT 'application/pdf'::text, p_attachment_size_bytes integer DEFAULT NULL::integer, p_attachment_sha256 text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_notice public.invoice_dunning_notices;
+  v_invoice public.invoices;
+  v_delivery public.invoice_email_deliveries;
+begin
+  if auth.role() <> 'service_role' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  select * into v_notice
+  from public.invoice_dunning_notices
+  where id = p_notice_id and organization_id = p_organization_id
+  for update;
+  if not found then raise exception 'Aanmaning niet gevonden.' using errcode = '02000'; end if;
+  if v_notice.status = 'sent' then
+    raise exception 'Deze aanmaning is al verstuurd.' using errcode = '23514';
+  end if;
+  if v_notice.status = 'cancelled' then
+    raise exception 'Deze aanmaning is geannuleerd.' using errcode = '23514';
+  end if;
+  -- Alleen een voorgestelde of eerder mislukte aanmaning mag (opnieuw) verstuurd worden.
+  -- Weiger o.a. de tussenstatus 'confirmed' (verzending al in gang), zodat een dubbelklik
+  -- of retry niet een TWEEDE formele aanmaning verstuurt (de FOR UPDATE-lock serialiseert
+  -- de twee verzoeken, maar zonder deze guard zou de tweede alsnog doorgaan).
+  if v_notice.status not in ('proposed', 'failed') then
+    raise exception 'Deze aanmaning wordt al verstuurd.' using errcode = '23514';
+  end if;
+
+  select * into v_invoice
+  from public.invoices
+  where id = v_notice.invoice_id and organization_id = p_organization_id
+  for update;
+  if not found then raise exception 'Factuur niet gevonden.' using errcode = '02000'; end if;
+  -- GEWIJZIGD (20261105030000): een formele aanmaning ("van rechtswege in
+  -- verzuim", incassokosten) alleen voor een verstuurde factuur waarvan de
+  -- vervaldatum voorbij is. Eerder kon dat ook voor een concept.
+  if v_invoice.status = 'draft' then
+    raise exception 'Deze factuur is nog een concept en is niet verstuurd: daar hoort geen aanmaning bij.' using errcode = '23514';
+  end if;
+  if v_invoice.due_date is null or v_invoice.due_date >= (now() at time zone 'Europe/Amsterdam')::date then
+    raise exception 'Een aanmaning kan pas na de vervaldatum van de factuur.' using errcode = '23514';
+  end if;
+  if v_invoice.status in ('paid','cancelled','void','written_off','refunded') then
+    raise exception 'Voor een betaalde, geannuleerde of afgeboekte factuur kan geen aanmaning worden verstuurd.' using errcode = '23514';
+  end if;
+
+  update public.invoices
+     set public_token_hash = p_token_hash,
+         public_token_created_at = now(),
+         public_token_expires_at = p_token_expires_at,
+         updated_at = now()
+   where id = v_invoice.id;
+
+  insert into public.invoice_email_deliveries(
+    organization_id, invoice_id, recipient_email, recipient_name, subject, status,
+    delivery_kind,
+    attachment_file_name, attachment_mime_type, attachment_size_bytes, attachment_sha256,
+    metadata
+  ) values (
+    p_organization_id, v_notice.invoice_id, lower(btrim(p_recipient_email)), nullif(btrim(coalesce(p_recipient_name, '')), ''), p_subject, 'queued',
+    'dunning',
+    nullif(btrim(coalesce(p_attachment_file_name, '')), ''), coalesce(nullif(btrim(coalesce(p_attachment_mime_type, '')), ''), 'application/pdf'), p_attachment_size_bytes, nullif(btrim(coalesce(p_attachment_sha256, '')), ''),
+    jsonb_build_object('publicUrl', p_public_url, 'dunningNoticeId', v_notice.id)
+  ) returning * into v_delivery;
+
+  insert into public.invoice_public_links(
+    organization_id, invoice_id, token_hash, purpose, status, delivery_id, expires_at, created_by, metadata
+  ) values (
+    p_organization_id, v_notice.invoice_id, p_token_hash, 'email', 'active', v_delivery.id, p_token_expires_at, p_actor_user_id,
+    jsonb_build_object('publicUrl', p_public_url, 'kind', 'dunning', 'dunningNoticeId', v_notice.id)
+  )
+  on conflict (token_hash) do nothing;
+
+  update public.invoice_dunning_notices
+     set status = 'confirmed',
+         interest_cents = p_interest_cents,
+         interest_days = coalesce(p_interest_days, 0),
+         daily_interest_cents = coalesce(p_daily_interest_cents, 0),
+         collection_costs_cents = p_collection_costs_cents,
+         collection_costs_vat_cents = p_collection_costs_vat_cents,
+         total_claim_cents = p_total_claim_cents,
+         calculation_date = p_calculation_date,
+         deadline_date = p_deadline_date,
+         rate_snapshot = coalesce(p_rate_snapshot, rate_snapshot),
+         public_url = p_public_url,
+         delivery_id = v_delivery.id,
+         confirmed_by = p_actor_user_id,
+         confirmed_at = now(),
+         updated_at = now()
+   where id = v_notice.id;
+
+  return jsonb_build_object('deliveryId', v_delivery.id, 'noticeId', v_notice.id);
+end;
+$function$;
+
+revoke all on function public.begin_invoice_reminder_send(uuid, uuid, uuid, smallint, text, timestamptz, text, text, text, text, text, text, integer, text) from public, anon, authenticated;
+grant execute on function public.begin_invoice_reminder_send(uuid, uuid, uuid, smallint, text, timestamptz, text, text, text, text, text, text, integer, text) to service_role;
+revoke all on function public.begin_dunning_notice(uuid, uuid, uuid, text, text, bigint, bigint, integer, bigint, bigint, bigint, bigint, date, date, jsonb) from public, anon, authenticated;
+grant execute on function public.begin_dunning_notice(uuid, uuid, uuid, text, text, bigint, bigint, integer, bigint, bigint, bigint, bigint, date, date, jsonb) to service_role;
+revoke all on function public.begin_dunning_send(uuid, uuid, uuid, bigint, integer, bigint, bigint, bigint, bigint, date, date, jsonb, text, timestamptz, text, text, text, text, text, text, integer, text) from public, anon, authenticated;
+grant execute on function public.begin_dunning_send(uuid, uuid, uuid, bigint, integer, bigint, bigint, bigint, bigint, date, date, jsonb, text, timestamptz, text, text, text, text, text, text, integer, text) to service_role;
+
+-- ── H4. Een gecrediteerde of terugbetaalde factuur blijft dat ──────────────
+--
+-- De statuskeuze in de editor liet een volledig gecrediteerde factuur
+-- ("geannuleerd") terug op "verzonden" zetten, en een terugbetaalde factuur
+-- ook. Die kon daarna opnieuw worden verstuurd, met betaallink, terwijl de
+-- creditnota bleef staan. Vanuit de browser kan dat nu niet meer: een
+-- terugbetaalde factuur verandert alleen via de terugbetaling, een geboekte of
+-- gecrediteerde geannuleerde factuur blijft geannuleerd. Een geannuleerde
+-- factuur die nooit geboekt of gecrediteerd is, mag terug (een vergissing).
+
+create or replace function public.enforce_invoice_terminal_status()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if current_user not in ('anon', 'authenticated', 'authenticator') then return new; end if;
+  if new.status is not distinct from old.status then return new; end if;
+  if old.status = 'refunded' then
+    raise exception 'Een terugbetaalde factuur verandert alleen via een terugbetaling of creditnota, niet via de status.'
+      using errcode = '23514';
+  end if;
+  if old.status in ('cancelled', 'void')
+     and (old.journal_entry_id is not null
+          or exists (select 1 from public.credit_notes c where c.invoice_id = old.id and c.status <> 'void')) then
+    raise exception 'Factuur % is geboekt of gecrediteerd en blijft %. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.',
+      old.number, case old.status when 'void' then 'ongeldig' else 'geannuleerd' end
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists invoices_terminal_status on public.invoices;
+create trigger invoices_terminal_status
+  before update of status on public.invoices
+  for each row execute function public.enforce_invoice_terminal_status();
+
+-- ── H5. Factuurregels: getallen zijn getallen ──────────────────────────────
+--
+-- invoice_calculated_totals las een onleesbare waarde als 0, het grootboek
+-- castte hard. Via REST kwam zo "quantity": "1e3" binnen: totaal € 0, maar een
+-- vordering van € 121.000; "1,5" liet het boeken mislukken (alleen een
+-- waarschuwing), waarna de factuur ongeboekt verstuurd bleef. De app schrijft
+-- altijd getallen; een nieuwe of gewijzigde regel met iets anders weigert nu.
+
+create or replace function public.enforce_invoice_lines_numeric()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_bad text;
+begin
+  if tg_op = 'UPDATE' and new.lines is not distinct from old.lines then return new; end if;
+  if new.lines is null then return new; end if;
+  if jsonb_typeof(new.lines) <> 'array' then
+    raise exception 'Factuurregels moeten een lijst zijn.' using errcode = '22023';
+  end if;
+  select coalesce(nullif(btrim(l->>'description'), ''), '(zonder omschrijving)') into v_bad
+    from jsonb_array_elements(new.lines) l
+   where exists (
+     select 1
+       from (values (l->'quantity'), (l->'unit_price'), (l->'vat')) as v(x)
+      where x is not null
+        and jsonb_typeof(x) not in ('null', 'number')
+        and not (jsonb_typeof(x) = 'string' and (x #>> '{}' = '' or x #>> '{}' ~ '^-?[0-9]+(\.[0-9]+)?$'))
+   )
+   limit 1;
+  if v_bad is not null then
+    raise exception 'Regel "%" heeft een aantal, prijs of btw-tarief dat geen getal is. Gebruik cijfers, met een punt als decimaalteken.', left(v_bad, 80)
+      using errcode = '22023';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists invoices_lines_numeric on public.invoices;
+create trigger invoices_lines_numeric
+  before insert or update of lines on public.invoices
+  for each row execute function public.enforce_invoice_lines_numeric();
+
+revoke all on function public.enforce_invoice_kor_no_vat() from public, anon;
+revoke all on function public.enforce_invoice_terminal_status() from public, anon;
+revoke all on function public.enforce_invoice_lines_numeric() from public, anon;
+grant execute on function public.enforce_invoice_kor_no_vat() to authenticated, service_role;
+grant execute on function public.enforce_invoice_terminal_status() to authenticated, service_role;
+grant execute on function public.enforce_invoice_lines_numeric() to authenticated, service_role;
+
+-- ── H6. Factuurversie: totalen per tarief ──────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.create_invoice_version_snapshot(p_invoice_id uuid, p_organization_id uuid, p_snapshot_reason text, p_actor_user_id uuid DEFAULT NULL::uuid, p_delivery_id uuid DEFAULT NULL::uuid, p_payment_record_id uuid DEFAULT NULL::uuid, p_pdf_file_name text DEFAULT NULL::text, p_pdf_mime_type text DEFAULT NULL::text, p_pdf_size_bytes integer DEFAULT NULL::integer, p_pdf_sha256 text DEFAULT NULL::text, p_invoice_version_pdf_url text DEFAULT NULL::text, p_metadata jsonb DEFAULT '{}'::jsonb)
+ RETURNS invoice_versions
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_invoice public.invoices;
+  v_version public.invoice_versions;
+  v_version_number integer;
+  v_line jsonb;
+  v_index integer := 0;
+  v_quantity numeric := 0;
+  v_unit_price numeric := 0;
+  v_vat_percentage numeric := 0;
+  v_line_subtotal numeric := 0;
+  v_line_vat numeric := 0;
+  v_line_total numeric := 0;
+  v_subtotal numeric := 0;
+  v_vat_total numeric := 0;
+  v_total numeric := 0;
+  v_pdf_mime_type text := coalesce(nullif(trim(coalesce(p_pdf_mime_type, '')), ''), 'application/pdf');
+begin
+  if p_snapshot_reason not in ('sent_to_client','payment_created','paid','manual') then
+    raise exception 'Ongeldige factuur snapshot reason: %', p_snapshot_reason using errcode = '23514';
+  end if;
+
+  if auth.role() = 'authenticated' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie' using errcode = '42501';
+  end if;
+
+  select * into v_invoice
+  from public.invoices
+  where id = p_invoice_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Factuur niet gevonden' using errcode = '02000'; end if;
+
+  for v_line in select * from jsonb_array_elements(coalesce(v_invoice.lines, '[]'::jsonb)) loop
+    v_quantity := coalesce(nullif(v_line->>'quantity', '')::numeric, 0);
+    v_unit_price := coalesce(nullif(v_line->>'unit_price', '')::numeric, 0);
+    v_vat_percentage := coalesce(nullif(v_line->>'vat', '')::numeric, 0);
+    v_line_subtotal := round(v_quantity * v_unit_price, 2);
+    v_line_vat := round(v_line_subtotal * (v_vat_percentage / 100), 2);
+    v_line_total := round(v_line_subtotal + v_line_vat, 2);
+    v_subtotal := v_subtotal + v_line_subtotal;
+    v_vat_total := v_vat_total + v_line_vat;
+    v_total := v_total + v_line_total;
+  end loop;
+
+  -- GEWIJZIGD (20261105030000): de totalen van de versie zoals de factuur ze
+  -- rekent (btw per tarief); per regel afronden gaf € 2,46 bij een factuur van
+  -- € 2,47. De versielijst, de publieke factuurpagina en invoice.history tonen
+  -- dit bedrag.
+  select t.subtotal, t.vat, t.total
+    into v_subtotal, v_vat_total, v_total
+    from public.invoice_calculated_totals(v_invoice.lines) t;
+
+  select coalesce(max(version_number), 0) + 1
+    into v_version_number
+  from public.invoice_versions
+  where organization_id = p_organization_id
+    and invoice_id = p_invoice_id;
+
+  insert into public.invoice_versions(
+    organization_id, invoice_id, delivery_id, payment_record_id, version_number, snapshot_reason,
+    status_at_snapshot, invoice_number, client_id, project_id, quote_id, invoice_date, due_date, notes,
+    subtotal_amount, vat_amount, total_amount, invoice_version_pdf_url, pdf_file_name, pdf_mime_type,
+    pdf_size_bytes, pdf_sha256, snapshot_data, created_by
+  ) values (
+    p_organization_id, p_invoice_id, p_delivery_id, p_payment_record_id, v_version_number, p_snapshot_reason,
+    v_invoice.status, v_invoice.number, v_invoice.client_id, v_invoice.project_id, v_invoice.quote_id, v_invoice.date, v_invoice.due_date, v_invoice.notes,
+    round(v_subtotal, 2), round(v_vat_total, 2), round(v_total, 2), nullif(trim(coalesce(p_invoice_version_pdf_url, '')), ''),
+    nullif(trim(coalesce(p_pdf_file_name, '')), ''), v_pdf_mime_type, p_pdf_size_bytes, nullif(trim(coalesce(p_pdf_sha256, '')), ''),
+    jsonb_build_object(
+      'invoice', to_jsonb(v_invoice) - 'public_token_hash',
+      'totals', jsonb_build_object('subtotal', round(v_subtotal, 2), 'vat', round(v_vat_total, 2), 'total', round(v_total, 2)),
+      'reason', p_snapshot_reason,
+      'deliveryId', p_delivery_id,
+      'paymentRecordId', p_payment_record_id,
+      'pdf', jsonb_build_object('fileName', nullif(trim(coalesce(p_pdf_file_name, '')), ''), 'mimeType', v_pdf_mime_type, 'sizeBytes', p_pdf_size_bytes, 'sha256', nullif(trim(coalesce(p_pdf_sha256, '')), ''), 'url', nullif(trim(coalesce(p_invoice_version_pdf_url, '')), '')),
+      'metadata', coalesce(p_metadata, '{}'::jsonb)
+    ),
+    p_actor_user_id
+  ) returning * into v_version;
+
+  v_index := 0;
+  for v_line in select * from jsonb_array_elements(coalesce(v_invoice.lines, '[]'::jsonb)) loop
+    v_quantity := coalesce(nullif(v_line->>'quantity', '')::numeric, 0);
+    v_unit_price := coalesce(nullif(v_line->>'unit_price', '')::numeric, 0);
+    v_vat_percentage := coalesce(nullif(v_line->>'vat', '')::numeric, 0);
+    v_line_subtotal := round(v_quantity * v_unit_price, 2);
+    v_line_vat := round(v_line_subtotal * (v_vat_percentage / 100), 2);
+    v_line_total := round(v_line_subtotal + v_line_vat, 2);
+
+    insert into public.invoice_version_items(
+      organization_id, invoice_id, invoice_version_id, source_line_id, line_index,
+      description, quantity, unit_price, vat_percentage, line_subtotal, line_vat, line_total
+    ) values (
+      p_organization_id, p_invoice_id, v_version.id, nullif(v_line->>'id', ''), v_index,
+      coalesce(nullif(btrim(v_line->>'description'), ''), 'Regel ' || (v_index + 1)::text),
+      v_quantity, v_unit_price, v_vat_percentage, v_line_subtotal, v_line_vat, v_line_total
+    );
+    v_index := v_index + 1;
+  end loop;
+
+  update public.invoices
+     set latest_version_id = v_version.id,
+         sent_version_id = case when p_snapshot_reason = 'sent_to_client' then v_version.id else sent_version_id end,
+         paid_version_id = case when p_snapshot_reason = 'paid' then v_version.id else paid_version_id end,
+         last_pdf_file_name = coalesce(nullif(trim(coalesce(p_pdf_file_name, '')), ''), last_pdf_file_name),
+         last_pdf_mime_type = coalesce(v_pdf_mime_type, last_pdf_mime_type),
+         last_pdf_size_bytes = coalesce(p_pdf_size_bytes, last_pdf_size_bytes),
+         last_pdf_sha256 = coalesce(nullif(trim(coalesce(p_pdf_sha256, '')), ''), last_pdf_sha256),
+         updated_at = now()
+   where id = p_invoice_id and organization_id = p_organization_id;
+
+  perform public.insert_invoice_workflow_event(
+    p_organization_id,
+    p_invoice_id,
+    'invoice_version_created',
+    'Factuurversie vastgelegd',
+    'Snapshot gemaakt: ' || p_snapshot_reason,
+    jsonb_build_object('version_id', v_version.id, 'version_number', v_version.version_number, 'reason', p_snapshot_reason),
+    p_actor_user_id
+  );
+
+  if p_pdf_file_name is not null then
+    perform public.insert_invoice_workflow_event(
+      p_organization_id,
+      p_invoice_id,
+      'invoice_pdf_attached',
+      'PDF-snapshot gekoppeld',
+      p_pdf_file_name,
+      jsonb_build_object('version_id', v_version.id, 'sha256', p_pdf_sha256, 'size_bytes', p_pdf_size_bytes),
+      p_actor_user_id
+    );
+  end if;
+
+  return v_version;
+end;
+$function$;
+
+revoke all on function public.create_invoice_version_snapshot(uuid, uuid, text, uuid, uuid, uuid, text, text, integer, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.create_invoice_version_snapshot(uuid, uuid, text, uuid, uuid, uuid, text, text, integer, text, text, jsonb) to service_role;
+revoke all on function public.post_sales_invoice_to_ledger(uuid, uuid, uuid) from public, anon;
+grant execute on function public.post_sales_invoice_to_ledger(uuid, uuid, uuid) to authenticated, service_role;
+
+
+-- ── I. Terugbetalingen ─────────────────────────────────────────────────────
+--
+-- (1) Het terug te betalen bedrag telde alleen Mollie-geld zodra er één
+--     Mollie-betaling was (gemengd betaald: bank + Mollie). Nu minstens het
+--     factuurbedrag.
+-- (2) Een terugbetaling in het Mollie-dashboard van te veel betaald geld gaf
+--     altijd een creditnota; nu alleen voor het deel boven het teveel.
+-- (3) Een terugbetaling die 'refunded' is, gaat niet meer terug naar
+--     'pending' door een late webhook.
+
+CREATE OR REPLACE FUNCTION public.begin_invoice_refund(p_invoice_id uuid, p_organization_id uuid, p_actor_user_id uuid, p_amount_cents integer, p_reason text DEFAULT NULL::text, p_kind text DEFAULT 'manual'::text, p_payment_record_id uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text, p_metadata jsonb DEFAULT '{}'::jsonb)
+ RETURNS invoice_refunds
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_invoice public.invoices;
+  v_paid_cents bigint;
+  v_already_cents bigint;
+  v_kind text := case when p_kind in ('manual','mollie') then p_kind else 'manual' end;
+  v_refund public.invoice_refunds;
+  v_amount_eur text;
+begin
+  if p_organization_id is null or p_invoice_id is null then
+    raise exception 'Organisatie en factuur zijn verplicht.' using errcode = '23514';
+  end if;
+  if coalesce(p_amount_cents, 0) <= 0 then
+    raise exception 'Het terugbetaalbedrag moet groter zijn dan 0.' using errcode = '23514';
+  end if;
+
+  select * into v_invoice
+  from public.invoices
+  where id = p_invoice_id and organization_id = p_organization_id
+  for update;
+  if not found then raise exception 'Factuur niet gevonden.' using errcode = '02000'; end if;
+
+  if v_invoice.status not in ('paid','refunded') then
+    raise exception 'Alleen betaalde facturen kunnen worden terugbetaald.' using errcode = '23514';
+  end if;
+
+  -- Idempotency: dezelfde sleutel mag nooit twee terugbetalingen maken.
+  if p_idempotency_key is not null then
+    select * into v_refund from public.invoice_refunds
+     where organization_id = p_organization_id
+       and invoice_id = p_invoice_id
+       and idempotency_key = p_idempotency_key;
+    if found then return v_refund; end if;
+  end if;
+
+  -- Betaald bedrag bepalen (zelfde logica als recompute).
+  -- GEWIJZIGD (20261105030000): een betaalde factuur is minstens het
+  -- factuurbedrag betaald, ook als een deel per bank kwam. Eerder telde zodra
+  -- er één Mollie-betaling was alleen het Mollie-deel: bij € 290 per bank en
+  -- € 710 via Mollie weigerde een terugbetaling van € 1.000, en na € 710 stond
+  -- de factuur op "terugbetaald" terwijl € 290 nooit terug was.
+  select greatest(
+           coalesce(sum(amount_cents) filter (where status in ('paid','refunded','charged_back')), 0),
+           public.invoice_total_cents(v_invoice)
+         )
+    into v_paid_cents
+  from public.invoice_payment_records
+  where invoice_id = p_invoice_id and organization_id = p_organization_id;
+
+  -- TOEGEVOEGD (20261104020000): geld dat via een chargeback al terug is bij
+  -- de klant, kan niet nog eens worden terugbetaald.
+  v_paid_cents := v_paid_cents - coalesce((
+    select sum(cb.amount_cents) from public.invoice_chargebacks cb
+    where cb.invoice_id = p_invoice_id and cb.organization_id = p_organization_id
+      and cb.status = 'charged_back'
+  ), 0);
+
+  -- Reeds terugbetaald of in behandeling (voorkomt dubbel/over-terugbetalen).
+  select coalesce(sum(amount_cents), 0) into v_already_cents
+  from public.invoice_refunds
+  where invoice_id = p_invoice_id and organization_id = p_organization_id
+    and status in ('queued','pending','processing','refunded');
+
+  if p_amount_cents::bigint + v_already_cents > v_paid_cents then
+    raise exception 'Terugbetaalbedrag (% cent) overschrijdt het resterende betaalde bedrag (% cent).',
+      p_amount_cents, greatest(v_paid_cents - v_already_cents, 0)
+      using errcode = '23514';
+  end if;
+
+  insert into public.invoice_refunds(
+    organization_id, invoice_id, payment_record_id, kind, provider, status,
+    amount_cents, currency, reason, idempotency_key, initiated_by, metadata, refunded_at
+  ) values (
+    p_organization_id, p_invoice_id, p_payment_record_id, v_kind, 'mollie',
+    case when v_kind = 'manual' then 'refunded' else 'queued' end,
+    p_amount_cents, coalesce(nullif(v_invoice.currency, ''), 'EUR'),
+    nullif(btrim(coalesce(p_reason, '')), ''), p_idempotency_key, p_actor_user_id,
+    coalesce(p_metadata, '{}'::jsonb),
+    case when v_kind = 'manual' then now() else null end
+  ) returning * into v_refund;
+
+  -- Voor een handmatige terugbetaling is het geld direct verwerkt.
+  if v_kind = 'manual' then
+    perform public.recompute_invoice_refund_state(p_invoice_id, p_organization_id);
+
+    v_amount_eur := to_char(p_amount_cents::numeric / 100, 'FM999999990.00');
+    perform public.insert_invoice_workflow_event(
+      p_organization_id,
+      p_invoice_id,
+      'payment_refunded',
+      'Terugbetaling geregistreerd',
+      'Handmatige terugbetaling van ' || coalesce(nullif(v_invoice.currency, ''), 'EUR') || ' ' || v_amount_eur,
+      jsonb_build_object('refund_id', v_refund.id, 'amount_cents', p_amount_cents, 'kind', v_kind),
+      p_actor_user_id
+    );
+
+    insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
+    values (p_organization_id, p_actor_user_id, 'invoice_refunded', 'invoice', p_invoice_id, v_invoice.number,
+            jsonb_build_object('refund_id', v_refund.id, 'amount_cents', p_amount_cents, 'kind', v_kind));
+  end if;
+
+  return v_refund;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.recompute_invoice_refund_state(p_invoice_id uuid, p_organization_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_invoice public.invoices;
+  v_refunded_cents bigint;
+  v_paid_cents bigint;
+  v_rf record;
+  v_lines jsonb;
+  v_entry public.journal_entries;
+begin
+  select * into v_invoice
+  from public.invoices
+  where id = p_invoice_id and organization_id = p_organization_id
+  for update;
+  if not found then return; end if;
+
+  -- Totaal daadwerkelijk terugbetaald (alleen settled refunds).
+  select coalesce(sum(amount_cents), 0) into v_refunded_cents
+  from public.invoice_refunds
+  where invoice_id = p_invoice_id and organization_id = p_organization_id
+    and status = 'refunded';
+
+  -- Per Mollie-betaalrecord het terugbetaalde deel bijwerken.
+  update public.invoice_payment_records p
+     set amount_refunded_cents = coalesce((
+           select sum(r.amount_cents) from public.invoice_refunds r
+           where r.payment_record_id = p.id and r.status = 'refunded'
+         ), 0),
+         updated_at = now()
+   where p.invoice_id = p_invoice_id and p.organization_id = p_organization_id;
+
+  -- Betaald bedrag: voorkeur voor de som van betaalde/terugbetaalde Mollie-records,
+  -- val terug op het factuurtotaal (offline betaald zonder Mollie-record).
+  -- GEWIJZIGD (20261105030000): een betaalde factuur is minstens het
+  -- factuurbedrag betaald, ook als een deel per bank kwam. Eerder telde zodra
+  -- er één Mollie-betaling was alleen het Mollie-deel: bij € 290 per bank en
+  -- € 710 via Mollie weigerde een terugbetaling van € 1.000, en na € 710 stond
+  -- de factuur op "terugbetaald" terwijl € 290 nooit terug was.
+  select greatest(
+           coalesce(sum(amount_cents) filter (where status in ('paid','refunded','charged_back')), 0),
+           public.invoice_total_cents(v_invoice)
+         )
+    into v_paid_cents
+  from public.invoice_payment_records
+  where invoice_id = p_invoice_id and organization_id = p_organization_id;
+
+  update public.invoices
+     set refunded_amount = round(v_refunded_cents::numeric / 100, 2),
+         refunded_at = case when v_refunded_cents > 0 then coalesce(refunded_at, now()) else null end,
+         status = case
+                    when v_refunded_cents > 0 and v_refunded_cents >= v_paid_cents then 'refunded'
+                    when status = 'refunded' and v_refunded_cents < v_paid_cents then 'paid'
+                    else status
+                  end,
+         locked_at = case when v_refunded_cents > 0 then coalesce(locked_at, now()) else locked_at end,
+         locked_reason = case when v_refunded_cents > 0 then coalesce(locked_reason, 'refunded') else locked_reason end,
+         updated_at = now()
+   where id = p_invoice_id and organization_id = p_organization_id;
+
+  -- Een volledig terugbetaald Mollie-record naar 'refunded' tillen.
+  update public.invoice_payment_records p
+     set status = 'refunded',
+         updated_at = now()
+   where p.invoice_id = p_invoice_id and p.organization_id = p_organization_id
+     and p.status = 'paid'
+     and p.amount_refunded_cents >= p.amount_cents
+     and p.amount_cents > 0;
+
+  -- TOEGEVOEGD (20261104020000): het geld van een Mollie-terugbetaling gaat van
+  -- het Mollie-saldo (1102) af, en de vordering die de creditnota wegboekte komt
+  -- terug: debet 1300, credit 1102. Zonder deze boeking bleef 1300 negatief en
+  -- 1102 te hoog. Alleen als de Mollie-betaling zelf geboekt is; een handmatige
+  -- terugbetaling loopt via de bank en boek je daar.
+  for v_rf in
+    select rf.id, rf.amount_cents, rf.refunded_at
+    from public.invoice_refunds rf
+    join public.invoice_payment_records pr
+      on pr.id = rf.payment_record_id and pr.organization_id = rf.organization_id and pr.journal_entry_id is not null
+    where rf.invoice_id = p_invoice_id and rf.organization_id = p_organization_id
+      and rf.kind = 'mollie' and rf.status = 'refunded'
+      and rf.journal_entry_id is null and rf.amount_cents > 0
+    order by rf.created_at
+  loop
+    perform public.ensure_default_ledger_accounts(p_organization_id);
+    v_lines := jsonb_build_array(
+      jsonb_build_object(
+        'account_id', public.bookkeeping_account_id(p_organization_id, '1300'),
+        'description', 'Terugbetaling via Mollie', 'debit_cents', v_rf.amount_cents, 'credit_cents', 0,
+        'client_id', v_invoice.client_id),
+      jsonb_build_object(
+        'account_id', public.bookkeeping_account_id(p_organization_id, '1102'),
+        'description', 'Terugbetaling via Mollie (van het Mollie-saldo)', 'debit_cents', 0, 'credit_cents', v_rf.amount_cents)
+    );
+    v_entry := public.post_journal_entry(
+      p_organization_id,
+      public.first_open_booking_date_for(p_organization_id, coalesce(v_rf.refunded_at::date, current_date), false),
+      'Terugbetaling factuur ' || coalesce(v_invoice.number, ''),
+      'payment', p_invoice_id, v_lines, null
+    );
+    update public.invoice_refunds set journal_entry_id = v_entry.id where id = v_rf.id;
+  end loop;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.complete_invoice_refund(p_refund_id uuid, p_organization_id uuid, p_provider_refund_id text DEFAULT NULL::text, p_status text DEFAULT 'refunded'::text, p_metadata jsonb DEFAULT '{}'::jsonb)
+ RETURNS invoice_refunds
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_refund public.invoice_refunds;
+  v_invoice public.invoices;
+  v_prev_status text;
+  v_status text := case when p_status in ('queued','pending','processing','refunded','failed','canceled') then p_status else 'refunded' end;
+  v_amount_eur text;
+begin
+  select * into v_refund
+  from public.invoice_refunds
+  where id = p_refund_id and organization_id = p_organization_id
+  for update;
+  if not found then raise exception 'Terugbetaling niet gevonden.' using errcode = '02000'; end if;
+
+  v_prev_status := v_refund.status;
+
+  -- GEWIJZIGD (20261105030000): een terugbetaling die bij Mollie 'refunded' is,
+  -- is definitief. Een late webhook met een oudere status zette hem terug op
+  -- 'pending': de factuur ging dan terug naar betaald met terugbetaald € 0,
+  -- terwijl de boeking en de creditnota bleven staan.
+  if v_prev_status = 'refunded' and v_status <> 'refunded' then
+    return v_refund;
+  end if;
+
+  update public.invoice_refunds
+     set provider_refund_id = coalesce(nullif(btrim(coalesce(p_provider_refund_id, '')), ''), provider_refund_id),
+         status = v_status,
+         refunded_at = case when v_status = 'refunded' then coalesce(refunded_at, now()) else refunded_at end,
+         failed_at = case when v_status in ('failed','canceled') then coalesce(failed_at, now()) else failed_at end,
+         metadata = coalesce(metadata, '{}'::jsonb) || coalesce(p_metadata, '{}'::jsonb),
+         updated_at = now()
+   where id = v_refund.id
+   returning * into v_refund;
+
+  perform public.recompute_invoice_refund_state(v_refund.invoice_id, v_refund.organization_id);
+
+  if v_status = 'refunded' and v_prev_status is distinct from 'refunded' then
+    select * into v_invoice from public.invoices
+     where id = v_refund.invoice_id and organization_id = v_refund.organization_id;
+
+    v_amount_eur := to_char(v_refund.amount_cents::numeric / 100, 'FM999999990.00');
+    perform public.insert_invoice_workflow_event(
+      v_refund.organization_id,
+      v_refund.invoice_id,
+      'payment_refunded',
+      'Terugbetaling verwerkt',
+      'Mollie-terugbetaling van ' || coalesce(nullif(v_refund.currency, ''), 'EUR') || ' ' || v_amount_eur,
+      jsonb_build_object('refund_id', v_refund.id, 'provider_refund_id', v_refund.provider_refund_id, 'amount_cents', v_refund.amount_cents),
+      null
+    );
+
+    insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
+    values (v_refund.organization_id, null, 'invoice_refunded', 'invoice', v_refund.invoice_id, coalesce(v_invoice.number, ''),
+            jsonb_build_object('refund_id', v_refund.id, 'provider_refund_id', v_refund.provider_refund_id, 'amount_cents', v_refund.amount_cents));
+  end if;
+
+  return v_refund;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.ingest_external_refund(p_organization_id uuid, p_invoice_id uuid, p_payment_record_id uuid, p_provider_refund_id text, p_amount_cents integer, p_status text DEFAULT 'pending'::text, p_currency text DEFAULT 'EUR'::text, p_reason text DEFAULT NULL::text, p_metadata jsonb DEFAULT '{}'::jsonb)
+ RETURNS invoice_refunds
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_refund public.invoice_refunds;
+  v_status text := case when p_status in ('queued','pending','processing','refunded','failed','canceled') then p_status else 'pending' end;
+  v_invoice public.invoices;
+  v_paid_cents bigint;
+  v_refunded_cents bigint;
+  v_overpaid_cents bigint;
+  v_credit_cents bigint;
+begin
+  if p_organization_id is null or p_invoice_id is null then
+    raise exception 'Organisatie en factuur zijn verplicht.' using errcode = '23514';
+  end if;
+  if p_provider_refund_id is null or btrim(p_provider_refund_id) = '' then
+    raise exception 'Refund-id is verplicht.' using errcode = '23514';
+  end if;
+  if coalesce(p_amount_cents, 0) <= 0 then
+    raise exception 'Het terugbetaalbedrag moet groter zijn dan 0.' using errcode = '23514';
+  end if;
+
+  -- Bestaat al (race/herhaalde webhook)? Geef de bestaande terug; de gewone
+  -- reconcile-flow (complete/fail_invoice_refund) werkt de status verder bij.
+  select * into v_refund from public.invoice_refunds
+   where organization_id = p_organization_id and provider_refund_id = p_provider_refund_id;
+  if found then return v_refund; end if;
+
+  -- GEWIJZIGD (20261105030000): een terugbetaling in het Mollie-dashboard van
+  -- wat de klant te veel betaalde (dubbel betaald, een oude link), is geen
+  -- correctie op de verkoop. Eerder kwam er altijd een creditnota (en een mail
+  -- naar de klant): omzet en btw gingen terug voor een verkoop die bleef staan,
+  -- en de vordering eindigde negatief. Nu alleen voor het deel boven wat er te
+  -- veel betaald was.
+  select * into v_invoice from public.invoices
+   where id = p_invoice_id and organization_id = p_organization_id;
+  select coalesce(sum(amount_cents) filter (where status in ('paid','refunded','charged_back')), 0)
+    into v_paid_cents
+    from public.invoice_payment_records
+   where invoice_id = p_invoice_id and organization_id = p_organization_id;
+  select coalesce(sum(amount_cents), 0) into v_refunded_cents
+    from public.invoice_refunds
+   where invoice_id = p_invoice_id and organization_id = p_organization_id
+     and status in ('queued','pending','processing','refunded');
+  v_overpaid_cents := greatest(v_paid_cents - coalesce(public.invoice_total_cents(v_invoice), 0) - v_refunded_cents, 0);
+  -- Staat de factuur in het grootboek, dan telt ook wat per bank binnenkwam:
+  -- een negatieve vordering is het teveel betaalde.
+  if v_invoice.journal_entry_id is not null then
+    v_overpaid_cents := greatest(v_overpaid_cents,
+      -coalesce(public.invoice_open_receivable_cents(p_organization_id, p_invoice_id), 0));
+  end if;
+  v_credit_cents := greatest(p_amount_cents - v_overpaid_cents, 0);
+
+  insert into public.invoice_refunds(
+    organization_id, invoice_id, payment_record_id, kind, provider, provider_refund_id,
+    status, amount_cents, currency, reason, idempotency_key, initiated_by, metadata, refunded_at
+  ) values (
+    p_organization_id, p_invoice_id, p_payment_record_id, 'mollie', 'mollie', p_provider_refund_id,
+    v_status, p_amount_cents, coalesce(nullif(p_currency, ''), 'EUR'),
+    nullif(btrim(coalesce(p_reason, '')), ''),
+    'external-' || p_provider_refund_id,
+    null,
+    coalesce(p_metadata, '{}'::jsonb) || jsonb_build_object('source', 'mollie_dashboard',
+      'create_credit_note', v_credit_cents > 0, 'credit_note_cents', v_credit_cents, 'overpaid_cents', v_overpaid_cents),
+    case when v_status = 'refunded' then now() else null end
+  ) returning * into v_refund;
+
+  perform public.recompute_invoice_refund_state(p_invoice_id, p_organization_id);
+
+  perform public.insert_invoice_workflow_event(
+    p_organization_id,
+    p_invoice_id,
+    'payment_refunded',
+    'Externe terugbetaling gedetecteerd',
+    'Een in Mollie aangemaakte terugbetaling is automatisch in de administratie opgenomen.',
+    jsonb_build_object('refund_id', v_refund.id, 'provider_refund_id', p_provider_refund_id, 'amount_cents', p_amount_cents, 'status', v_status, 'external', true),
+    null
+  );
+
+  insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
+  values (p_organization_id, null, 'invoice_refunded', 'invoice', p_invoice_id,
+          (select coalesce(number, '') from public.invoices where id = p_invoice_id and organization_id = p_organization_id),
+          jsonb_build_object('refund_id', v_refund.id, 'amount_cents', p_amount_cents, 'external', true));
+
+  return v_refund;
+end;
+$function$;
+
+revoke all on function public.begin_invoice_refund(uuid, uuid, uuid, integer, text, text, uuid, text, jsonb) from public, anon, authenticated;
+grant execute on function public.begin_invoice_refund(uuid, uuid, uuid, integer, text, text, uuid, text, jsonb) to service_role;
+revoke all on function public.recompute_invoice_refund_state(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.recompute_invoice_refund_state(uuid, uuid) to service_role;
+revoke all on function public.complete_invoice_refund(uuid, uuid, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.complete_invoice_refund(uuid, uuid, text, text, jsonb) to service_role;
+revoke all on function public.ingest_external_refund(uuid, uuid, uuid, text, integer, text, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.ingest_external_refund(uuid, uuid, uuid, text, integer, text, text, text, jsonb) to service_role;
+
+
+-- ── I4. De pagina na het betalen blijft werken ──────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.begin_invoice_payment_checkout(p_invoice_id uuid, p_organization_id uuid, p_actor_user_id uuid, p_amount_cents integer, p_public_token_hash text DEFAULT NULL::text, p_public_token_expires_at timestamp with time zone DEFAULT NULL::timestamp with time zone, p_currency text DEFAULT 'EUR'::text, p_idempotency_key text DEFAULT NULL::text, p_checkout_expires_at timestamp with time zone DEFAULT NULL::timestamp with time zone, p_metadata jsonb DEFAULT '{}'::jsonb)
+ RETURNS invoice_payment_records
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_invoice public.invoices;
+  v_open bigint;
+  v_amount integer := p_amount_cents;
+  v_existing public.invoice_payment_records;
+  v_payment public.invoice_payment_records;
+  v_key text := nullif(btrim(coalesce(p_idempotency_key, '')), '');
+  v_public_token text;
+  v_link public.invoice_public_links;
+begin
+  if p_actor_user_id is null then
+    raise exception 'Niet ingelogd.' using errcode = '42501';
+  end if;
+
+  if auth.role() <> 'service_role' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  select * into v_invoice
+  from public.invoices
+  where id = p_invoice_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Factuur niet gevonden.' using errcode = '02000'; end if;
+  if v_invoice.status in ('paid','cancelled','void','written_off','refunded') then
+    raise exception 'Voor deze factuur kan geen betaallink worden aangemaakt.' using errcode = '23514';
+  end if;
+  -- Nooit meer vragen dan er openstaat: na een deelbetaling (bank of Mollie) of
+  -- een creditnota betaalde de klant anders te veel. Staat de factuur niet in
+  -- het grootboek, dan geldt het gevraagde bedrag (het factuurtotaal).
+  if v_invoice.journal_entry_id is not null then
+    v_open := public.invoice_open_receivable_cents(p_organization_id, p_invoice_id);
+    if v_open is not null then
+      if v_open <= 0 then
+        raise exception 'Op deze factuur staat niets meer open.' using errcode = '23514';
+      end if;
+      v_amount := least(p_amount_cents::bigint, v_open)::integer;
+    end if;
+  end if;
+  if v_amount <= 0 then raise exception 'Factuurbedrag moet groter zijn dan 0.' using errcode = '23514'; end if;
+
+  select * into v_existing
+  from public.invoice_payment_records p
+  where p.organization_id = p_organization_id
+    and p.invoice_id = p_invoice_id
+    and p.provider = 'mollie'
+    and p.status in ('creating','open','pending','authorized')
+    and (p.checkout_expires_at is null or p.checkout_expires_at > now())
+  order by p.created_at desc
+  limit 1
+  for update;
+
+  if found then
+    -- Zelfde bedrag, of de klant is al aan het betalen (pending/authorized):
+    -- die betaling teruggeven, geen tweede ernaast.
+    if v_existing.amount_cents = v_amount or v_existing.status in ('pending','authorized') then
+      return v_existing;
+    end if;
+    -- De open link vraagt een ander bedrag (er is intussen deels betaald of
+    -- gecrediteerd): laat hem vervallen en maak er een voor het juiste bedrag.
+    -- Betaalt de klant de oude toch, dan komt die betaling via de webhook
+    -- gewoon binnen (expired → paid mag) en wordt hij geboekt.
+    update public.invoice_payment_records
+       set status = 'expired',
+           checkout_expires_at = least(coalesce(checkout_expires_at, now()), now()),
+           metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('superseded', 'open_amount_changed', 'superseded_at', now()),
+           updated_at = now()
+     where id = v_existing.id;
+  end if;
+
+  -- Een verlopen, nooit geopende link (creating/open, de webhook kwam niet)
+  -- houdt de unieke index op één actieve betaling bezet; die vervalt ook.
+  update public.invoice_payment_records p
+     set status = 'expired',
+         metadata = coalesce(p.metadata, '{}'::jsonb) || jsonb_build_object('superseded', 'checkout_expired', 'superseded_at', now()),
+         updated_at = now()
+   where p.organization_id = p_organization_id
+     and p.invoice_id = p_invoice_id
+     and p.provider = 'mollie'
+     and p.status in ('creating','open')
+     and p.checkout_expires_at is not null
+     and p.checkout_expires_at <= now();
+
+  insert into public.invoice_payment_records(
+    organization_id, invoice_id, created_by, amount_cents, currency, status,
+    idempotency_key, checkout_expires_at, metadata
+  ) values (
+    p_organization_id, p_invoice_id, p_actor_user_id, v_amount,
+    upper(coalesce(nullif(btrim(p_currency), ''), 'EUR')), 'creating', v_key,
+    p_checkout_expires_at, coalesce(p_metadata, '{}'::jsonb)
+  ) returning * into v_payment;
+
+  update public.invoices
+     set locked_at = coalesce(locked_at, now()),
+         locked_reason = coalesce(locked_reason, 'payment_checkout_created'),
+         updated_at = now()
+   where id = p_invoice_id and organization_id = p_organization_id;
+
+  v_public_token := substring(coalesce(p_metadata->>'publicUrl', '') from '/invoice/([^?/#]+)');
+  if v_public_token is not null and btrim(v_public_token) <> '' then
+    v_link := public.create_invoice_public_link(
+      p_invoice_id,
+      p_organization_id,
+      v_public_token,
+      'payment',
+      -- GEWIJZIGD (20261105030000): deze link is de pagina waar Mollie de klant
+      -- na het betalen naartoe stuurt. Hij verliep met de checkout (30 minuten):
+      -- wie later betaalde (een bankoverschrijving via Mollie, een open tabblad)
+      -- kwam uit op "deze link werkt niet meer". Nu zo lang als een factuurlink.
+      greatest(coalesce(p_public_token_expires_at, now() + interval '60 days'), coalesce(p_checkout_expires_at, now())),
+      null,
+      v_payment.id,
+      p_actor_user_id,
+      jsonb_build_object('publicUrl', p_metadata->>'publicUrl')
+    );
+  end if;
+
+  insert into public.finance_provider_jobs(organization_id, entity_type, entity_id, provider, job_type, status, idempotency_key, request_payload)
+  values (p_organization_id, 'payment', v_payment.id, 'mollie', 'create_invoice_payment', 'queued', coalesce(v_key, 'invoice-payment-' || v_payment.id::text), jsonb_build_object('invoice_id', p_invoice_id, 'amount_cents', v_amount))
+  on conflict (provider, job_type, idempotency_key) where idempotency_key is not null do update
+    set updated_at = now();
+
+  return v_payment;
+exception when unique_violation then
+  select * into v_payment
+  from public.invoice_payment_records
+  where organization_id = p_organization_id
+    and invoice_id = p_invoice_id
+    and provider = 'mollie'
+    and status in ('creating','open','pending','authorized')
+  order by created_at desc
+  limit 1;
+
+  if found then return v_payment; end if;
+  raise;
+end;
+$function$;
+
+revoke all on function public.begin_invoice_payment_checkout(uuid, uuid, uuid, integer, text, timestamptz, text, text, timestamptz, jsonb) from public, anon, authenticated;
+grant execute on function public.begin_invoice_payment_checkout(uuid, uuid, uuid, integer, text, timestamptz, text, text, timestamptz, jsonb) to service_role;
 
 commit;

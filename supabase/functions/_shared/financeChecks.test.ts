@@ -207,3 +207,15 @@ test('databasetekst gaat niet naar de browser; een eigen melding wel', () => {
   assert.equal(publicActionError('Databasefunctie x mislukt: relation "invoices" does not exist').message, 'Databasefunctie x mislukt.');
   assert.equal(publicActionError('Deze aanmaning is al verstuurd.').message, 'Deze aanmaning is al verstuurd.');
 });
+
+// ── Contract-, offerte- en factuurcontrole (5 november 2026) ─────────────
+
+test('geen herinnering of aanmaning voor een concept, en geen aanmaning vóór de vervaldatum', async () => {
+  const draft = { number: 'FAC-1', status: 'draft', client_id: null, due_date: '2026-10-01', reminder_level: 0, reminders_paused: false, lines: [], total_amount: 100 };
+  const remind = action(FINANCE_ACTIONS, 'invoice.send_reminder');
+  await assert.rejects(remind.plan!(ctx({ invoices: [draft] }), { invoice_id: ID }), /concept/);
+  const dunning = action(FINANCE_ACTIONS, 'invoice.propose_dunning');
+  await assert.rejects(dunning.plan!(ctx({ invoices: [draft] }), { invoice_id: ID }), /concept/);
+  const notYetDue = { ...draft, status: 'sent', due_date: '2026-11-20' };
+  await assert.rejects(dunning.plan!(ctx({ invoices: [notYetDue], invoice_dunning_notices: [] }), { invoice_id: ID }), /nog niet vervallen/);
+});

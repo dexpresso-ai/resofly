@@ -1113,7 +1113,11 @@ function InvoiceStatusStrip({ invoice, delivery, payment, eInvoiceDelivery = nul
 
 function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, eInvoice = false, mollieIssued = false, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger, onCredit }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; eInvoice?: boolean | 'mollie'; mollieIssued?: boolean; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void; onCredit?: (invoice: Invoice) => void }) {
   const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
-  const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off','refunded'].includes(invoice.status) || Boolean(payment);
+  // Alleen een lopende of afgeronde betaling vergrendelt, net als in de database
+  // (enforce_invoice_immutability). Een verlopen of mislukte betaallink niet:
+  // eerder bleef een concept met een verlopen link voorgoed onbewerkbaar.
+  const paymentBlocks = Boolean(payment && INVOICE_ACTIVE_PAYMENT_STATUSES.includes(payment.status));
+  const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off','refunded'].includes(invoice.status) || paymentBlocks;
   // Via Mollie uitgegeven: opnieuw versturen zou een tweede factuur bij Mollie worden.
   const canSend = canWrite && !invoiceClosed && !mollieIssued;
   const canDownloadStored = Boolean(onDownloadPdf) && invoiceHasStoredPdf(invoice);
@@ -1132,7 +1136,12 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, eInvoice
   const canPostToLedger = Boolean(canWrite && onPostToLedger) && !isPosted && !['draft', 'cancelled', 'void'].includes(invoice.status);
   // Een verzonden, onbetaalde factuur annuleer je met een creditnota: die boekt
   // omzet en btw terug. Een betaalde factuur loopt via Terugbetaling.
-  const canCredit = Boolean(canWrite && onCredit) && ['sent', 'overdue'].includes(invoice.status) && !payment;
+  // Een lopende Mollie-betaling houdt crediteren tegen (zoals op de server); een
+  // verlopen of mislukte link niet. Eerder verdween de knop na de eerste
+  // betaallink voorgoed (de link verloopt na 30 minuten), terwijl de server
+  // het gewoon toestond en er geen andere weg was.
+  const canCredit = Boolean(canWrite && onCredit) && ['sent', 'overdue'].includes(invoice.status)
+    && !(payment && ['creating', 'open', 'pending', 'authorized', 'paid'].includes(payment.status));
   // The Mollie payment link is created automatically while sending (when the
   // organisation has Mollie connected), so there is no separate "create link"
   // button — sending is the single action that produces invoice + betaallink.
@@ -1156,12 +1165,24 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, eInvoice
 // True zodra een factuur onbetaald is én de vervaldatum is verstreken (status
 // 'overdue', of berekend op basis van due_date < vandaag). Spiegelt de cron-logica.
 function invoiceIsReminderEligible(invoice: Invoice): boolean {
-  if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) return false;
+  // Een concept is nooit verstuurd: geen herinnering (de database weigert die
+  // ook). Eerder kreeg een vergeten concept met een oude vervaldatum de knop.
+  if (['draft', 'paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) return false;
   if (invoice.status === 'overdue') return true;
-  if (!invoice.due_date) return false;
-  const due = new Date(invoice.due_date);
-  return !Number.isNaN(due.getTime()) && due.getTime() < Date.now();
+  return invoiceIsPastDue(invoice);
 }
+
+/** De vervaldatum is voorbij: vergeleken met de datum van vandaag hier, niet met middernacht UTC. */
+function invoiceIsPastDue(invoice: Invoice): boolean {
+  const due = String(invoice.due_date ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return false;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return due < today;
+}
+
+/** Betaalstatussen die een factuur vergrendelen (spiegel van enforce_invoice_immutability). */
+const INVOICE_ACTIVE_PAYMENT_STATUSES = ['creating', 'open', 'pending', 'authorized', 'paid', 'refunded', 'charged_back'];
 
 /**
  * True when an invoice has (or should have) a stored PDF snapshot because it was
@@ -1293,7 +1314,7 @@ function InvoiceDunningPanel({ invoice, notice, canWrite, onPropose, onSend, onC
   if (!notice) {
     return <div className="invoice-reminder-panel">
       <div className="quote-timeline-empty">Nog geen aanmaning. Een formele aanmaning berekent de wettelijke (handels)rente en WIK-incassokosten en verstuurt na jouw bevestiging een 14-dagenbrief.</div>
-      {canWrite && onPropose && <Button onClick={() => onPropose(invoice)} title="Berekent de bedragen en maakt een aanmaningsvoorstel dat je daarna zelf bevestigt."><FileText size={14}/> Stel aanmaning op</Button>}
+      {canWrite && onPropose && invoice.status !== 'draft' && (invoice.status === 'overdue' || invoiceIsPastDue(invoice)) && <Button onClick={() => onPropose(invoice)} title="Berekent de bedragen en maakt een aanmaningsvoorstel dat je daarna zelf bevestigt."><FileText size={14}/> Stel aanmaning op</Button>}
     </div>;
   }
   const isConsumer = notice.client_kind === 'consumer';
