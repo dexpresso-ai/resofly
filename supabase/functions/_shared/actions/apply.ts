@@ -401,18 +401,30 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
     // met een zin die het model begrijpt: een uitgegeven factuur gaat niet
     // terug naar concept, en een geboekte factuur annuleer je met een creditnota.
     const { data: current, error: currentError } = await ctx.db.from('invoices')
-      .select('status, journal_entry_id')
+      .select('status, journal_entry_id, date')
       .eq('organization_id', ctx.organizationId).eq('id', invoiceId).maybeSingle();
     if (currentError) throw new ActionError(`Factuur laden mislukt: ${currentError.message}`);
-    const cur = current as { status: string; journal_entry_id: string | null } | null;
+    const cur = current as { status: string; journal_entry_id: string | null; date: string | null } | null;
     if (cur && status === 'draft' && cur.status !== 'draft') {
       throw new ActionError('Een uitgegeven factuur gaat niet terug naar concept. Crediteer hem en maak een nieuwe factuur.');
     }
-    if (cur && cur.journal_entry_id && ['cancelled', 'void', 'written_off'].includes(status)) {
+    // 'paid' hoort hier ook bij: alleen de status op betaald zetten liet 1300
+    // Debiteuren open staan (zie invoice.set_status in finance.ts).
+    if (cur && cur.journal_entry_id && ['cancelled', 'void', 'written_off', 'paid'].includes(status)) {
       const { data: openCents, error: openError } = await ctx.db.rpc('invoice_open_receivable_cents', { p_organization_id: ctx.organizationId, p_invoice_id: invoiceId });
       if (openError) throw new ActionError(`Openstaand bedrag bepalen mislukt: ${openError.message}`);
       if (Number(openCents ?? 0) > 0) {
-        throw new ActionError('Deze factuur staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur.');
+        throw new ActionError(status === 'paid'
+          ? 'Deze factuur staat in het grootboek en er staat nog een bedrag open. Registreer de betaling door de banktransactie te koppelen of met een memoriaalpost op Debiteuren; dan staat hij vanzelf op betaald.'
+          : 'Deze factuur staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur.');
+      }
+    }
+    if (cur && !cur.journal_entry_id && status === 'paid') {
+      const { data: settings } = await ctx.db.from('company_settings').select('bookkeeping_start_date')
+        .eq('organization_id', ctx.organizationId).maybeSingle();
+      const startDate = (settings as { bookkeeping_start_date?: string | null } | null)?.bookkeeping_start_date ?? null;
+      if (!(startDate && cur.date && cur.date < String(startDate).slice(0, 10))) {
+        throw new ActionError('Op betaald zetten boekt deze factuur in het grootboek, maar niet de betaling: de debiteurenstand bleef dan te hoog. Registreer de betaling door de banktransactie te koppelen of met een memoriaalpost op Debiteuren.');
       }
     }
     // Alleen als de status nog is wat er op de kaart stond: een kaart is een

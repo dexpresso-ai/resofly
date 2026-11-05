@@ -8,7 +8,7 @@ import { renderContractPdf, appendSignaturePagesToPdf, bytesToBase64, sha256HexB
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
 import { toPublicTimeline } from '../_shared/publicTimeline.ts';
 import { loadBranding } from '../_shared/branding.ts';
-import { buildContractTokens, fillContractTokens } from '../_shared/contractTokens.ts';
+import { buildContractTokens, CONTRACT_CONSENT_TEXT, fillContractTokens } from '../_shared/contractTokens.ts';
 import {
   convertContractDocxToPdf,
   isOfficeContract,
@@ -161,11 +161,26 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
 
   if (!signerName) throw new PublicHttpError('Vul je naam in om te ondertekenen.', 422);
   if (!isEmail(signerEmail)) throw new PublicHttpError('Vul een geldig e-mailadres in.', 422);
+  // Grenzen: alles hieronder komt als bewijs in de database en in het PDF. Een
+  // getekende handtekening is een paar tientallen kB; 2 MB laat ruim marge.
+  if (signerName.length > 200 || signerEmail.length > 254) {
+    throw new PublicHttpError('Je naam of e-mailadres is te lang.', 422);
+  }
+  if (signatureImage.length > 2_000_000) {
+    throw new PublicHttpError('De getekende handtekening is te groot. Teken hem opnieuw.', 422);
+  }
   if (method !== 'typed' && method !== 'drawn') throw new PublicHttpError('Kies een geldige ondertekenmethode.', 422);
   if (method === 'drawn' && !/^data:image\/(png|jpe?g);base64,/.test(signatureImage)) {
     throw new PublicHttpError('De getekende handtekening ontbreekt of is ongeldig.', 422);
   }
   if (!consentText) throw new PublicHttpError('Akkoordverklaring ontbreekt.', 422);
+  // De akkoordtekst is die van de pagina, niet wat de browser stuurt: eerder
+  // kwam elke tekst ("Ik ga niet akkoord met art. 5") als bewijs onder een
+  // geldige handtekening. Een andere tekst is een verouderde of aangepaste
+  // pagina; laat die opnieuw laden.
+  if (consentText !== CONTRACT_CONSENT_TEXT) {
+    throw new PublicHttpError('De akkoordverklaring op deze pagina is verouderd. Laad de pagina opnieuw en onderteken dan.', 409);
+  }
 
   const ip = clientIp(req);
   const userAgent = req.headers.get('user-agent');
@@ -287,6 +302,9 @@ async function declinePublicContract(tokenHash: string, body: Record<string, unk
   const email = String(body.email || '').trim().toLowerCase();
   const reason = String(body.reason || '').trim();
   if (!name) throw new PublicHttpError('Vul je naam in.', 422);
+  if (name.length > 200 || email.length > 254 || reason.length > 4000) {
+    throw new PublicHttpError('Je naam, e-mailadres of reden is te lang. Een reden mag maximaal 4000 tekens zijn.', 422);
+  }
 
   const { data, error } = await supabaseAdmin.rpc('decline_contract_public', {
     p_token_hash: tokenHash,

@@ -69,3 +69,13 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+/**
+ * De akkoordverklaring bij ondertekenen. Kopie van CONTRACT_CONSENT_TEXT in
+ * supabase/functions/_shared/contractTokens.ts; contractConsent.test.ts houdt
+ * de twee gelijk. De server legt zijn eigen tekst vast en weigert een andere:
+ * eerder nam hij over wat de browser stuurde, zodat iemand met een aangepast
+ * verzoek "Ik ga niet akkoord" onder een geldige handtekening kon zetten.
+ */
+export const CONTRACT_CONSENT_TEXT =
+  'Ik heb dit contract gelezen en ga ermee akkoord. Ik onderteken dit document rechtsgeldig met een elektronische handtekening.';

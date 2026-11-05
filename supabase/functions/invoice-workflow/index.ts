@@ -19,6 +19,7 @@ import {
 } from '../_shared/mollieSalesInvoice.ts';
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 import { publicActionError } from '../_shared/publicError.ts';
+import { invoiceMollieWebhookBase, invoiceMollieWebhookUrl } from '../_shared/mollieWebhookUrl.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type InvoiceLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number; vat_code?: string | null };
@@ -78,7 +79,12 @@ const INVOICE_ALLOWED_ORIGINS = parseAllowedOrigins([
 const INVOICE_ALLOW_LOCAL_DEV = (Deno.env.get('INVOICE_ALLOW_LOCAL_DEV') || Deno.env.get('QUOTE_ALLOW_LOCAL_DEV') || 'false').toLowerCase() === 'true';
 // Invoice payments use each organization's OWN Mollie key (resolveOrganizationMollieKey),
 // not a shared platform key — so the client's payment lands in the right account.
-const MOLLIE_WEBHOOK_URL = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_URL') || Deno.env.get('MOLLIE_WEBHOOK_URL') || '';
+// Nooit de billing-webhook (abonnementen) als terugval: zie _shared/mollieWebhookUrl.ts.
+const MOLLIE_WEBHOOK_URL = invoiceMollieWebhookBase({
+  invoiceWebhookUrl: Deno.env.get('INVOICE_MOLLIE_WEBHOOK_URL'),
+  sharedWebhookUrl: Deno.env.get('MOLLIE_WEBHOOK_URL'),
+  supabaseUrl: Deno.env.get('SUPABASE_URL'),
+});
 const MOLLIE_WEBHOOK_SECRET = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_SECRET') || Deno.env.get('MOLLIE_WEBHOOK_SECRET') || '';
 // Mock mode for INVOICE payments is deliberately independent of the platform
 // billing flag (MOLLIE_ALLOW_MOCK). On staging the billing function runs in mock
@@ -224,7 +230,7 @@ serve(async (req) => {
       case 'createInvoiceRefund': return json(req, { ok: true, ...(await createInvoiceRefund(user.id, organizationId, role, invoiceId, body)) });
       case 'creditInvoice': return json(req, { ok: true, ...(await creditUnpaidInvoice(user.id, organizationId, invoiceId, body)) });
       case 'sendCreditNoteEmail': return json(req, { ok: true, ...(await sendCreditNoteEmail(user.id, organizationId, body)) });
-      case 'markMockInvoicePaymentPaid': return json(req, { ok: true, payment: await markMockInvoicePaymentPaid(String(body.providerPaymentId || '')) });
+      case 'markMockInvoicePaymentPaid': return json(req, { ok: true, payment: await markMockInvoicePaymentPaid(organizationId, String(body.providerPaymentId || '')) });
       case 'saveInvoiceMollieKey': return json(req, { ok: true, status: await saveInvoiceMollieKey(user.id, organizationId, role, body) });
       case 'deleteInvoiceMollieKey': return json(req, { ok: true, ...(await deleteInvoiceMollieKey(organizationId, role)) });
       default: return json(req, { ok: false, error: `Onbekende invoice workflow action: ${action}` }, 400);
@@ -267,6 +273,14 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     loadEmailTemplateContent(organizationId, 'invoice.sent'),
   ]);
 
+  // KOR: een factuur rekent dan geen btw (de database weigert het uitgeven;
+  // enforce_invoice_kor_no_vat). Hier al controleren, vóór er een betaallink,
+  // Mollie-factuur of mail ontstaat: anders ging de mail de deur uit en liep pas
+  // het afronden vast.
+  if (company?.kor_enabled && (Array.isArray(invoice.lines) ? invoice.lines : []).some((line) => Number(line.vat || 0) !== 0)) {
+    throw new WorkflowHttpError('Je gebruikt de kleineondernemersregeling (KOR): een factuur rekent dan geen btw. Zet de btw van elke regel op 0% (code KOR) en verstuur opnieuw.', 422);
+  }
+
   // E-facturatie staat per klant aan of uit. Aan: de e-factuur (UBL met de PDF
   // erin) is verplicht en gaat naar het e-factuuradres van de klant. Uit: de
   // klant krijgt alleen de PDF, zonder XML-bijlage.
@@ -290,6 +304,13 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   // en zegt de fout wat er bij de klant of in de instellingen ontbreekt.
   const vatKinds = eInvoicing ? await loadVatKindsByCode(organizationId) : undefined;
   if (eInvoicing) await assertInvoiceUblPossible(organizationId, invoice, { client, company, vatKinds, endpointEmail: recipientEmail });
+
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  // Eerst het quotum, vóór de betaallink, de PDF-snapshot en de verzendregel:
+  // stond het quotum op, dan bleef de regel eerder op 'queued' (de
+  // 15-minutengrens weigerde elke nieuwe poging) en hing er een betaallink aan
+  // een concept dat daardoor op slot ging.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
 
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
@@ -329,6 +350,9 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   const ublAttachment = eInvoicing
     ? await createInvoiceUblAttachment(organizationId, invoice, { client, company, vatKinds, endpointEmail: recipientEmail, pdf: pdfAttachment })
     : null;
+
+  let resendResponse: Response;
+  let resendPayloadResponse: Record<string, unknown> = {};
 
   const storedPdf = await storeInvoicePdfSnapshot(organizationId, invoiceId, pdfAttachment);
 
@@ -378,11 +402,6 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
       { name: 'template_key', value: 'invoice_sent' },
     ],
   }, eInvoicing ? null : await loadEmailBrand(supabaseAdmin, organizationId));
-
-  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
-  let resendResponse: Response;
-  let resendPayloadResponse: Record<string, unknown> = {};
 
   try {
     resendResponse = await fetch('https://api.resend.com/emails', {
@@ -589,6 +608,11 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
     pdfFileName = attachment.fileName; pdfBase64 = attachment.base64; pdfMime = attachment.mimeType; pdfSize = attachment.sizeBytes; pdfSha = attachment.sha256;
   }
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  // Vóór de verzendregel: stond het quotum op, dan bleef die eerder op 'queued'
+  // staan (bij een aanmaning bleef het voorstel op 'confirmed' hangen).
+  await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
+  let resendResponse: Response;
   const prepared = await beginInvoiceReminderSend({
     invoiceId, organizationId, userId: actorUserId, level, tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl,
     attachmentFileName: pdfFileName, attachmentMimeType: pdfMime, attachmentSizeBytes: pdfSize ?? undefined, attachmentSha256: pdfSha ?? undefined,
@@ -612,9 +636,6 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
     ],
   }, await loadEmailBrand(supabaseAdmin, organizationId));
 
-  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-  await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
-  let resendResponse: Response;
   let resendPayloadResponse: Record<string, unknown> = {};
   try {
     resendResponse = await fetch('https://api.resend.com/emails', {
@@ -951,6 +972,11 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   });
   const subject = rendered.subject;
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  // Vóór de verzendregel: stond het quotum op, dan bleef die eerder op 'queued'
+  // staan (bij een aanmaning bleef het voorstel op 'confirmed' hangen).
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
+  let resendResponse: Response;
   const prepared = await beginDunningSend({
     noticeId, organizationId, userId, claim, deadlineDate, interestKind,
     tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl,
@@ -974,9 +1000,6 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
     ],
   }, await loadEmailBrand(supabaseAdmin, organizationId));
 
-  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
-  let resendResponse: Response;
   let resendPayloadResponse: Record<string, unknown> = {};
   try {
     resendResponse = await fetch('https://api.resend.com/emails', {
@@ -1183,7 +1206,9 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   // active Mollie payments for the same invoice.
   const idempotencyKey = `invoice-${invoice.id}-active-payment`;
 
-  const payment = await beginInvoicePaymentCheckout({ invoiceId, organizationId, userId, amountCents, publicTokenHash: null, publicTokenExpiresAt: null, idempotencyKey, checkoutExpiresAt, metadata: { publicUrl } });
+  // De link waar Mollie de klant na het betalen heen stuurt, leeft zo lang als een
+  // factuurlink (tokenExpiresAt); eerder verliep hij met de checkout (30 minuten).
+  const payment = await beginInvoicePaymentCheckout({ invoiceId, organizationId, userId, amountCents, publicTokenHash: null, publicTokenExpiresAt: tokenExpiresAt, idempotencyKey, checkoutExpiresAt, metadata: { publicUrl } });
   if (payment.provider_checkout_url) return { payment, checkoutUrl: payment.provider_checkout_url, providerPaymentId: payment.provider_payment_id, mock: payment.provider_payment_id?.startsWith('mock_') ?? false, reused: true };
 
   let providerPaymentId = '';
@@ -1199,10 +1224,10 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
     } else {
       const orgKey = await resolveOrganizationMollieKey(organizationId);
       if (!orgKey) throw new WorkflowHttpError('Koppel eerst het eigen Mollie-account van deze organisatie in de instellingen voordat je een betaallink aanmaakt.', 409);
-      if (!MOLLIE_WEBHOOK_URL) throw new WorkflowHttpError('INVOICE_MOLLIE_WEBHOOK_URL of MOLLIE_WEBHOOK_URL ontbreekt.', 500);
+      if (!MOLLIE_WEBHOOK_URL) throw new WorkflowHttpError('INVOICE_MOLLIE_WEBHOOK_URL ontbreekt.', 500);
       const requestedRedirectUrl = String(body.redirectUrl || '').trim();
       const redirectUrl = isValidInvoiceRedirectUrl(requestedRedirectUrl, publicUrl) ? requestedRedirectUrl : publicUrl;
-      const webhookUrl = MOLLIE_WEBHOOK_SECRET ? `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie&secret=${encodeURIComponent(MOLLIE_WEBHOOK_SECRET)}` : `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie`;
+      const webhookUrl = invoiceMollieWebhookUrl(MOLLIE_WEBHOOK_URL, MOLLIE_WEBHOOK_SECRET);
       const mollieResponse = await fetch('https://api.mollie.com/v2/payments', {
         method: 'POST',
         // Per betaalrecord, niet per factuur: na een verlopen of mislukte betaling
@@ -1410,8 +1435,16 @@ async function createMollieInvoiceRefund(input: {
       molliePayload = created.payload;
     }
   } catch (error) {
-    // Mollie heeft niets (of niet bevestigd iets) geboekt → de terugbetaling vrijgeven
-    // zodat het bedrag niet onterecht in de over-refund-guard blijft hangen.
+    // Geen antwoord van Mollie (netwerk, time-out): misschien is de terugbetaling
+    // daar wél aangemaakt. Dan niet vrijgeven: anders kon een tweede poging in een
+    // nieuw venster (nieuwe sleutel) dubbel terugbetalen. De rij blijft 'queued'
+    // en reserveert het bedrag; de webhook koppelt hem via metadata.refundId, en
+    // opnieuw proberen in hetzelfde venster gebruikt dezelfde Mollie-sleutel.
+    if (error instanceof MollieOutcomeUnknownError) {
+      throw new WorkflowHttpError('Mollie gaf geen antwoord. De terugbetaling is misschien wel aangemaakt: wacht een paar minuten tot hij hier verschijnt, of probeer het in dit venster opnieuw (dan maakt Mollie geen tweede aan).', 502);
+    }
+    // Mollie weigerde (of de koppeling ontbreekt): er is niets geboekt. De
+    // terugbetaling vrijgeven zodat het bedrag niet in de over-refund-guard blijft hangen.
     const message = error instanceof Error ? error.message : 'Onbekende Mollie-fout bij terugbetaling.';
     await failInvoiceRefund(refund.id, organizationId, message, 'failed', { stage: 'create_refund' })
       .catch((failError) => console.warn('fail_invoice_refund na Mollie-fout mislukte', failError instanceof Error ? failError.message : failError));
@@ -1612,6 +1645,11 @@ async function findRefundableMolliePayment(organizationId: string, invoiceId: st
 }
 
 // Maak een terugbetaling aan bij Mollie tegen de oorspronkelijke betaling.
+/** Geen (leesbaar) antwoord van Mollie: de uitkomst is onbekend. */
+class MollieOutcomeUnknownError extends Error {
+  constructor(message: string) { super(message); this.name = 'MollieOutcomeUnknownError'; }
+}
+
 async function createMollieRefund(apiKey: string, molliePaymentId: string, amountCents: number, invoice: InvoiceRow, refundId: string, organizationId: string): Promise<{ id: string; status: string; payload: Record<string, unknown> }> {
   const response = await fetch(`https://api.mollie.com/v2/payments/${encodeURIComponent(molliePaymentId)}/refunds`, {
     method: 'POST',
@@ -1626,7 +1664,10 @@ async function createMollieRefund(apiKey: string, molliePaymentId: string, amoun
       description: `Terugbetaling factuur ${invoice.number}`,
       metadata: { organizationId, invoiceId: invoice.id, invoiceNumber: invoice.number, refundId },
     }),
+  }).catch((networkError) => {
+    throw new MollieOutcomeUnknownError(networkError instanceof Error ? networkError.message : String(networkError));
   });
+  if (response.status >= 500) throw new MollieOutcomeUnknownError(`Mollie antwoordde ${response.status}`);
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
     const detail = String((payload as Record<string, unknown>).detail || (payload as Record<string, unknown>).title || response.statusText);
@@ -1658,6 +1699,13 @@ async function ensureCreditNoteForRefund(refund: RefundRow): Promise<Record<stri
   const wantsCreditNote = !(refund.metadata && (refund.metadata as Record<string, unknown>).create_credit_note === false);
   if (!wantsCreditNote) return null;
   if (refund.status !== 'refunded') return null;
+  // Een terugbetaling van te veel betaald geld is geen correctie op de verkoop:
+  // ingest_external_refund zet dan alleen het deel daarboven in credit_note_cents.
+  const metaCents = (refund.metadata as Record<string, unknown> | null)?.credit_note_cents;
+  const creditCents = typeof metaCents === 'number' && Number.isFinite(metaCents)
+    ? Math.min(refund.amount_cents, Math.max(0, Math.round(metaCents)))
+    : refund.amount_cents;
+  if (creditCents <= 0) return null;
 
   const invoice = await loadInvoice(refund.organization_id, refund.invoice_id);
   if (!invoice.client_id) { console.warn('Creditfactuur overgeslagen: factuur heeft geen klant.'); return null; }
@@ -1668,7 +1716,7 @@ async function ensureCreditNoteForRefund(refund: RefundRow): Promise<Record<stri
   ]);
   return await issueCreditNoteForRefund({
     userId: refund.initiated_by, organizationId: refund.organization_id, invoice, client, company,
-    refund: { id: refund.id }, amountCents: refund.amount_cents, invoiceTotalCents: totals.totalCents, totals, reason: refund.reason,
+    refund: { id: refund.id }, amountCents: creditCents, invoiceTotalCents: totals.totalCents, totals, reason: refund.reason,
   });
 }
 
@@ -1935,8 +1983,17 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
   }
   if (!record) { console.warn('invoice-workflow webhook: unknown Mollie id'); return json(req, { ok: true, ignored: true }); }
 
-  const orgKey = await resolveOrganizationMollieKey(record.organization_id);
-  if (!orgKey) { console.warn('invoice-workflow webhook: no Mollie key for organization; cannot verify payment'); return json(req, { ok: true, unverifiable: true }); }
+  // Kunnen we de betaling niet bij Mollie nakijken (sleutel weg, niet te
+  // ontsleutelen, databasestoring), dan géén 200: Mollie probeert alleen
+  // opnieuw bij een fout. Eerder gaf dit 200 en ging de betaalstatus voorgoed
+  // verloren: de factuur bleef open en de klant kreeg herinneringen en een
+  // aanmaning terwijl hij had betaald.
+  const keyLookup = await loadMollieKeyForWebhook(record.organization_id);
+  if (!keyLookup.key) {
+    console.error('invoice-workflow webhook: betaling niet te controleren', { reason: keyLookup.reason, organizationId: record.organization_id, invoiceId: record.invoice_id });
+    return json(req, { ok: false, error: 'Betaling kan nu niet worden gecontroleerd; probeer later opnieuw.' }, 503);
+  }
+  const orgKey = keyLookup.key;
 
   // embed=refunds,chargebacks: in één call de betaalstatus + alle refunds + chargebacks.
   const response = await fetch(`https://api.mollie.com/v2/payments/${encodeURIComponent(molliePaymentId)}?embed=refunds,chargebacks`, { headers: { Authorization: `Bearer ${orgKey.apiKey}` } });
@@ -2003,6 +2060,21 @@ async function reconcilePaymentRefunds(organizationId: string, paymentPayload: R
 
 async function reconcileOneRefund(organizationId: string, providerRefundId: string, status: 'queued' | 'pending' | 'processing' | 'refunded' | 'failed' | 'canceled', mollieRefund: Record<string, unknown>, context: PaymentContext): Promise<void> {
   let refund = await findRefundByProviderId(organizationId, providerRefundId);
+
+  // Onze eigen terugbetaling waarvan het antwoord van Mollie nooit aankwam: die
+  // draagt ons refundId in de metadata. Koppel hem, in plaats van hem als
+  // "externe" terugbetaling er nog eens bij te boeken.
+  if (!refund) {
+    const ownId = (mollieRefund.metadata && typeof mollieRefund.metadata === 'object')
+      ? String((mollieRefund.metadata as Record<string, unknown>).refundId || '') : '';
+    if (/^[0-9a-f-]{36}$/i.test(ownId)) {
+      const { data: own } = await supabaseAdmin.from('invoice_refunds').select('*')
+        .eq('organization_id', organizationId).eq('invoice_id', context.invoiceId).eq('id', ownId).is('provider_refund_id', null).maybeSingle();
+      if (own) {
+        refund = await completeInvoiceRefund(String((own as RefundRow).id), organizationId, providerRefundId, status === 'refunded' ? 'pending' : status, { mollie_refund: mollieRefund });
+      }
+    }
+  }
 
   // Externe refund (bijv. via het Mollie-dashboard): in de administratie opnemen (Fase 3).
   if (!refund) {
@@ -2114,8 +2186,14 @@ async function findPaymentRecordByRefundId(providerRefundId: string): Promise<{ 
   return (payment ?? null) as { id: string; organization_id: string; invoice_id: string; provider_payment_id: string | null } | null;
 }
 
-async function markMockInvoicePaymentPaid(providerPaymentId: string) {
+async function markMockInvoicePaymentPaid(organizationId: string, providerPaymentId: string) {
   if (!INVOICE_ALLOW_MOCK) throw new WorkflowHttpError('Mock payments zijn uitgeschakeld.', 403);
+  // Alleen een nepbetaling, en alleen van deze organisatie: eerder kon een
+  // schrijver in mock-modus elke betaling (ook een echte, ook van een andere
+  // organisatie) op betaald zetten.
+  if (!providerPaymentId.startsWith('mock_invoice_payment_')) throw new WorkflowHttpError('Alleen een mock-betaling kan zo worden afgerond.', 400);
+  const record = await findInvoicePaymentRecordByProviderId(providerPaymentId);
+  if (!record || record.organization_id !== organizationId) throw new WorkflowHttpError('Betaling niet gevonden.', 404);
   const { data, error } = await supabaseAdmin.rpc('update_invoice_payment_status', { p_provider_payment_id: providerPaymentId, p_status: 'paid', p_paid_at: new Date().toISOString(), p_metadata: { mock: true, manual: true } });
   if (error) throwRpcError('update_invoice_payment_status', error);
   return data;
@@ -2205,6 +2283,25 @@ async function deleteInvoiceMollieKey(organizationId: string, role: Organization
 // Resolve the organization's OWN decrypted Mollie key for creating/verifying
 // invoice payments. Returns null when Mollie is not connected — callers must
 // treat that as "no payment link" and never fall back to a shared key.
+/** Als resolveOrganizationMollieKey, maar met de reden als er geen sleutel is (voor de webhook). */
+async function loadMollieKeyForWebhook(organizationId: string): Promise<{ key: { apiKey: string; mode: 'test' | 'live' | null } | null; reason: string | null }> {
+  const { data, error } = await supabaseAdmin
+    .from('organization_invoice_mollie_settings')
+    .select('status,api_key_encrypted,mode')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) return { key: null, reason: `instellingen niet te laden: ${error.message}` };
+  const row = (data ?? null) as { status?: string; api_key_encrypted?: string | null; mode?: 'test' | 'live' | null } | null;
+  if (!row || row.status !== 'connected' || !row.api_key_encrypted) return { key: null, reason: 'geen gekoppelde Mollie-sleutel (meer)' };
+  try {
+    const apiKey = await decryptSecret(row.api_key_encrypted);
+    if (!apiKey) return { key: null, reason: 'sleutel leeg na ontsleutelen' };
+    return { key: { apiKey, mode: row.mode ?? null }, reason: null };
+  } catch (decryptError) {
+    return { key: null, reason: `ontsleutelen mislukt: ${describeError(decryptError)}` };
+  }
+}
+
 async function resolveOrganizationMollieKey(organizationId: string): Promise<{ apiKey: string; mode: 'test' | 'live' | null } | null> {
   const { data, error } = await supabaseAdmin
     .from('organization_invoice_mollie_settings')
@@ -2231,7 +2328,9 @@ async function findInvoicePaymentRecordByProviderId(providerPaymentId: string): 
     .eq('provider', 'mollie')
     .eq('provider_payment_id', providerPaymentId)
     .maybeSingle();
-  if (error) return null;
+  // Een storing is geen "onbekende betaling": gooi, zodat de webhook een 500
+  // geeft en Mollie het later opnieuw probeert.
+  if (error) throwSupabaseError('betaalrij zoeken', error);
   return (data ?? null) as { id: string; organization_id: string; invoice_id: string } | null;
 }
 
@@ -3328,6 +3427,11 @@ async function loadLatestOpenPayment(organizationId: string, invoiceId: string):
     .eq('organization_id', organizationId)
     .eq('invoice_id', invoiceId)
     .in('status', ['creating','open','pending','authorized'])
+    // Een verlopen link telt niet (zoals in begin_invoice_payment_checkout, dat hem
+    // opruimt). Eerder bleef een onderbroken 'creating' zonder URL hier staan en
+    // gaf elke nieuwe poging voorgoed "probeer het over enkele seconden opnieuw":
+    // geen betaallink meer in de app, de herinnering, de aanmaning of het portaal.
+    .or(`checkout_expires_at.is.null,checkout_expires_at.gt."${new Date().toISOString()}"`)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -3430,6 +3534,17 @@ function throwSupabaseError(context: string, error: unknown): never {
 }
 
 function throwRpcError(functionName: string, error: unknown): never {
+  // Een eigen melding uit een functie of trigger (raise … using errcode) is een
+  // Nederlandse zin over de invoer of de stand van de factuur ("nog een
+  // concept", "KOR", "al gecrediteerd"): die gaat als zin naar de gebruiker,
+  // met een 4xx. Eerder werd het een 500 met de functienaam ervoor.
+  const err = (error ?? {}) as { code?: unknown; message?: unknown };
+  const code = typeof err.code === 'string' ? err.code : '';
+  const message = typeof err.message === 'string' ? err.message.trim() : '';
+  const ownMessage = message && !/violates|relation "|column "|syntax error|does not exist|permission denied for|duplicate key|invalid input/i.test(message);
+  if (ownMessage && ['23514', '22023', '22001', 'P0001'].includes(code)) throw new WorkflowHttpError(message, code === '23514' ? 409 : 422);
+  if (ownMessage && code === '42501') throw new WorkflowHttpError(message, 403);
+  if (ownMessage && code === '02000') throw new WorkflowHttpError(message, 404);
   throw new WorkflowHttpError(`Databasefunctie ${functionName} mislukt: ${describeError(error)}`, 500);
 }
 

@@ -24,6 +24,7 @@ export function Quotes({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onDownloadPdf,
@@ -36,6 +37,7 @@ export function Quotes({
   onSubmitApproval: (q: Quote) => void;
   onApprove: (q: Quote) => void;
   onReject: (q: Quote) => void;
+  onWithdraw?: (q: Quote) => void;
   onSend: (q: Quote) => void;
   onConvertToInvoice?: (q: Quote) => void;
   onDownloadPdf?: (q: Quote) => void;
@@ -52,6 +54,7 @@ export function Quotes({
     onSubmitApproval={onSubmitApproval}
     onApprove={onApprove}
     onReject={onReject}
+    onWithdraw={onWithdraw}
     onSend={onSend}
     onConvertToInvoice={onConvertToInvoice}
     onDownloadPdf={onDownloadPdf}
@@ -74,6 +77,7 @@ function FinanceList<T extends Quote | Invoice>({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onSendInvoice,
@@ -107,6 +111,7 @@ function FinanceList<T extends Quote | Invoice>({
   onSubmitApproval?: (q: Quote) => void;
   onApprove?: (q: Quote) => void;
   onReject?: (q: Quote) => void;
+  onWithdraw?: (q: Quote) => void;
   onSend?: (q: Quote) => void;
   onConvertToInvoice?: (q: Quote) => void;
   onSendInvoice?: (i: Invoice) => void;
@@ -141,6 +146,7 @@ function FinanceList<T extends Quote | Invoice>({
       onSubmitApproval={onSubmitApproval}
       onApprove={onApprove}
       onReject={onReject}
+      onWithdraw={onWithdraw}
       onSend={onSend}
       onConvertToInvoice={onConvertToInvoice}
       onDownloadPdf={onDownloadPdf}
@@ -448,6 +454,7 @@ function QuoteTable({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onDownloadPdf,
@@ -462,6 +469,7 @@ function QuoteTable({
   onSubmitApproval?: (quote: Quote) => void;
   onApprove?: (quote: Quote) => void;
   onReject?: (quote: Quote) => void;
+  onWithdraw?: (quote: Quote) => void;
   onSend?: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
   onDownloadPdf?: (quote: Quote) => void;
@@ -534,6 +542,7 @@ function QuoteTable({
       onSubmitApproval={onSubmitApproval}
       onApprove={onApprove}
       onReject={onReject}
+      onWithdraw={onWithdraw}
       onSend={onSend}
       onConvertToInvoice={onConvertToInvoice}
       onDownloadPdf={onDownloadPdf}
@@ -713,6 +722,7 @@ function QuoteDetailModal({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onDownloadPdf,
@@ -726,6 +736,7 @@ function QuoteDetailModal({
   onSubmitApproval?: (quote: Quote) => void;
   onApprove?: (quote: Quote) => void;
   onReject?: (quote: Quote) => void;
+  onWithdraw?: (quote: Quote) => void;
   onSend?: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
   onDownloadPdf?: (quote: Quote) => void;
@@ -764,7 +775,7 @@ function QuoteDetailModal({
         <div className="quote-detail-section-head"><div><span>Workflow</span><strong>Goedkeuring, verzending, klantbeslissing en factuurconversie</strong></div></div>
         <QuoteProgress quote={quote} />
         <QuoteEmailStatus delivery={latestDelivery} quote={quote} />
-        <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEdit(quote)} />
+        <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onWithdraw={onWithdraw} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEdit(quote)} />
       </section>
 
       <section className="quote-detail-split">
@@ -991,6 +1002,7 @@ export function ProjectQuotesPanel({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onDownloadPdf,
@@ -1005,6 +1017,7 @@ export function ProjectQuotesPanel({
   onSubmitApproval: (quote: Quote) => void;
   onApprove: (quote: Quote) => void;
   onReject: (quote: Quote) => void;
+  onWithdraw?: (quote: Quote) => void;
   onSend: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
   onDownloadPdf?: (quote: Quote) => void;
@@ -1024,7 +1037,7 @@ export function ProjectQuotesPanel({
           <div className="project-quote-head" onClick={() => onEditQuote(quote)}><div><strong>{quote.number}</strong><span>{client?.name ?? 'Geen klant'} · {dateNL(quote.date)}</span></div><div><strong>{euro(total(quote.lines).total)}</strong><span>{quoteStatusLabel(quote)}</span></div></div>
           <QuoteProgress quote={quote} compact />
           <QuoteEmailStatus delivery={latestDelivery} quote={quote} />
-          <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEditQuote(quote)} compact />
+          <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onWithdraw={onWithdraw} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEditQuote(quote)} compact />
           <QuoteVersions versions={versions} compact />
           <QuoteTimeline events={events} emptyText="Nog geen events." compact />
         </article>;
@@ -1049,11 +1062,15 @@ function QuoteEmailStatus({ quote, delivery }: { quote: Quote; delivery: QuoteEm
   return <div className="quote-email-status"><Mail size={14}/><span>{status ? emailStatusLabel(status) : 'Nog niet verstuurd'}</span>{delivery?.recipient_email && <small>{delivery.recipient_email}</small>}{delivery?.attachment_file_name && <small>PDF: {delivery.attachment_file_name}</small>}{quote.public_token_expires_at && <small>Link tot {dateNL(quote.public_token_expires_at)}</small>}</div>;
 }
 
-function QuoteActions({ quote, canWrite, canAdmin, linkedInvoice, onSubmitApproval, onApprove, onReject, onSend, onConvertToInvoice, onDownloadPdf, onEdit, compact = false }: { quote: Quote; canWrite: boolean; canAdmin: boolean; linkedInvoice?: Invoice | null; onSubmitApproval?: (quote: Quote) => void; onApprove?: (quote: Quote) => void; onReject?: (quote: Quote) => void; onSend?: (quote: Quote) => void; onConvertToInvoice?: (quote: Quote) => void; onDownloadPdf?: (quote: Quote) => void; onEdit: () => void; compact?: boolean }) {
+function QuoteActions({ quote, canWrite, canAdmin, linkedInvoice, onSubmitApproval, onApprove, onReject, onWithdraw, onSend, onConvertToInvoice, onDownloadPdf, onEdit, compact = false }: { quote: Quote; canWrite: boolean; canAdmin: boolean; linkedInvoice?: Invoice | null; onSubmitApproval?: (quote: Quote) => void; onApprove?: (quote: Quote) => void; onReject?: (quote: Quote) => void; onWithdraw?: (quote: Quote) => void; onSend?: (quote: Quote) => void; onConvertToInvoice?: (quote: Quote) => void; onDownloadPdf?: (quote: Quote) => void; onEdit: () => void; compact?: boolean }) {
   const canSubmit = canWrite && ['draft'].includes(quote.status) && quote.internal_approval_status !== 'pending';
   const canApprove = canAdmin && quote.status === 'pending_internal_approval';
   const canSend = canWrite && quote.status === 'internally_approved' && quote.internal_approval_status === 'approved';
   const canConvert = canWrite && quote.status === 'accepted' && !linkedInvoice;
+  // Een verstuurde (of nog niet verstuurde, goedgekeurde) offerte intrekken: de
+  // klant kan dan niet meer akkoord geven. Eerder kon dat niet, en bleef een
+  // offerte met een fout tot "geldig tot" te accepteren.
+  const canWithdraw = canWrite && Boolean(onWithdraw) && ['sent', 'internally_approved', 'pending_internal_approval'].includes(quote.status);
   const canDownloadStored = Boolean(onDownloadPdf) && quoteHasStoredPdf(quote);
   return <div className={`quote-actions ${compact ? 'compact' : ''}`}>
     <Button onClick={onEdit}>Bewerken</Button>
@@ -1063,6 +1080,7 @@ function QuoteActions({ quote, canWrite, canAdmin, linkedInvoice, onSubmitApprov
     {canSend && <Button variant="primary" onClick={() => onSend?.(quote)}><Send size={14}/> Verstuur via Resend</Button>}
     {canDownloadStored && <Button onClick={() => onDownloadPdf?.(quote)}><Download size={14}/> Download verzonden PDF</Button>}
     {canConvert && <Button variant="primary" onClick={() => onConvertToInvoice?.(quote)}><FileText size={14}/> Maak factuur van offerte</Button>}
+    {canWithdraw && <Button variant="danger" onClick={() => onWithdraw?.(quote)}><XCircle size={14}/> Intrekken</Button>}
     {linkedInvoice && <span className="quote-converted-pill"><FileText size={14}/> Factuur {linkedInvoice.number}</span>}
   </div>;
 }
@@ -1095,7 +1113,11 @@ function InvoiceStatusStrip({ invoice, delivery, payment, eInvoiceDelivery = nul
 
 function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, eInvoice = false, mollieIssued = false, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger, onCredit }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; eInvoice?: boolean | 'mollie'; mollieIssued?: boolean; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void; onCredit?: (invoice: Invoice) => void }) {
   const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
-  const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off','refunded'].includes(invoice.status) || Boolean(payment);
+  // Alleen een lopende of afgeronde betaling vergrendelt, net als in de database
+  // (enforce_invoice_immutability). Een verlopen of mislukte betaallink niet:
+  // eerder bleef een concept met een verlopen link voorgoed onbewerkbaar.
+  const paymentBlocks = Boolean(payment && INVOICE_ACTIVE_PAYMENT_STATUSES.includes(payment.status));
+  const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off','refunded'].includes(invoice.status) || paymentBlocks;
   // Via Mollie uitgegeven: opnieuw versturen zou een tweede factuur bij Mollie worden.
   const canSend = canWrite && !invoiceClosed && !mollieIssued;
   const canDownloadStored = Boolean(onDownloadPdf) && invoiceHasStoredPdf(invoice);
@@ -1114,7 +1136,12 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, eInvoice
   const canPostToLedger = Boolean(canWrite && onPostToLedger) && !isPosted && !['draft', 'cancelled', 'void'].includes(invoice.status);
   // Een verzonden, onbetaalde factuur annuleer je met een creditnota: die boekt
   // omzet en btw terug. Een betaalde factuur loopt via Terugbetaling.
-  const canCredit = Boolean(canWrite && onCredit) && ['sent', 'overdue'].includes(invoice.status) && !payment;
+  // Een lopende Mollie-betaling houdt crediteren tegen (zoals op de server); een
+  // verlopen of mislukte link niet. Eerder verdween de knop na de eerste
+  // betaallink voorgoed (de link verloopt na 30 minuten), terwijl de server
+  // het gewoon toestond en er geen andere weg was.
+  const canCredit = Boolean(canWrite && onCredit) && ['sent', 'overdue'].includes(invoice.status)
+    && !(payment && ['creating', 'open', 'pending', 'authorized', 'paid'].includes(payment.status));
   // The Mollie payment link is created automatically while sending (when the
   // organisation has Mollie connected), so there is no separate "create link"
   // button — sending is the single action that produces invoice + betaallink.
@@ -1138,12 +1165,24 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, eInvoice
 // True zodra een factuur onbetaald is én de vervaldatum is verstreken (status
 // 'overdue', of berekend op basis van due_date < vandaag). Spiegelt de cron-logica.
 function invoiceIsReminderEligible(invoice: Invoice): boolean {
-  if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) return false;
+  // Een concept is nooit verstuurd: geen herinnering (de database weigert die
+  // ook). Eerder kreeg een vergeten concept met een oude vervaldatum de knop.
+  if (['draft', 'paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) return false;
   if (invoice.status === 'overdue') return true;
-  if (!invoice.due_date) return false;
-  const due = new Date(invoice.due_date);
-  return !Number.isNaN(due.getTime()) && due.getTime() < Date.now();
+  return invoiceIsPastDue(invoice);
 }
+
+/** De vervaldatum is voorbij: vergeleken met de datum van vandaag hier, niet met middernacht UTC. */
+function invoiceIsPastDue(invoice: Invoice): boolean {
+  const due = String(invoice.due_date ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return false;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return due < today;
+}
+
+/** Betaalstatussen die een factuur vergrendelen (spiegel van enforce_invoice_immutability). */
+const INVOICE_ACTIVE_PAYMENT_STATUSES = ['creating', 'open', 'pending', 'authorized', 'paid', 'refunded', 'charged_back'];
 
 /**
  * True when an invoice has (or should have) a stored PDF snapshot because it was
@@ -1275,7 +1314,7 @@ function InvoiceDunningPanel({ invoice, notice, canWrite, onPropose, onSend, onC
   if (!notice) {
     return <div className="invoice-reminder-panel">
       <div className="quote-timeline-empty">Nog geen aanmaning. Een formele aanmaning berekent de wettelijke (handels)rente en WIK-incassokosten en verstuurt na jouw bevestiging een 14-dagenbrief.</div>
-      {canWrite && onPropose && <Button onClick={() => onPropose(invoice)} title="Berekent de bedragen en maakt een aanmaningsvoorstel dat je daarna zelf bevestigt."><FileText size={14}/> Stel aanmaning op</Button>}
+      {canWrite && onPropose && invoice.status !== 'draft' && (invoice.status === 'overdue' || invoiceIsPastDue(invoice)) && <Button onClick={() => onPropose(invoice)} title="Berekent de bedragen en maakt een aanmaningsvoorstel dat je daarna zelf bevestigt."><FileText size={14}/> Stel aanmaning op</Button>}
     </div>;
   }
   const isConsumer = notice.client_kind === 'consumer';

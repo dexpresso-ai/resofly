@@ -69,6 +69,7 @@ import {
   submitQuoteForInternalApproval,
   approveQuoteInternal,
   rejectQuoteInternal,
+  withdrawQuote as withdrawQuoteRpc,
   sendInvoiceEmailViaResend,
   sendInvoiceReminderEmail,
   setInvoiceRemindersPaused,
@@ -2455,6 +2456,21 @@ function App() {
     }
   }
 
+  async function withdrawQuote(quote: Quote) {
+    if (!ensureCanWrite()) return;
+    const reason = prompt(`Offerte ${quote.number} intrekken? De klant kan dan niet meer akkoord geven. Reden (optioneel, de klant ziet die niet):`, '');
+    if (reason === null) return;
+    setLoading(true); setError(null);
+    try {
+      await withdrawQuoteRpc(activeOrg.id, quote.id, reason);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Offerte intrekken mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function sendQuote(quote: Quote) {
     if (!ensureCanWrite()) return;
     const client = data.clients.find(item => item.id === quote.client_id);
@@ -3121,7 +3137,7 @@ function App() {
       return;
     }
     if (kind === 'invoice' || kind === 'quote') {
-      const lines = [{ id: uid(), description: intent.description ?? '', quantity: 1, unit_price: intent.amount ?? 0, vat: 21 }];
+      const lines = [{ id: uid(), description: intent.description ?? '', quantity: 1, unit_price: intent.amount ?? 0, vat: defaultVatRate(data) }];
       setPage(kind === 'invoice' ? 'invoices' : 'quotes'); setProjectId(null); setClientId(null);
       setEdit({ kind, defaults: { client_id: intent.clientId ?? '', lines } });
       notify({ tone: 'ai', title: `${kind === 'invoice' ? 'Factuur' : 'Offerte'} klaargezet`, detail: 'Kijk hem na en sla op; er gaat nog niets de deur uit.' });
@@ -3748,7 +3764,7 @@ function App() {
     const canReadContracts = permissions.canRead('finance');
     const canWriteContracts = orgCanWrite && permissions.canWrite('finance');
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} organizationId={activeOrg.id} currentUserId={currentUserId} canWriteTasks={orgCanWrite && permissions.canWrite('projects')} permissions={permissions} gerrieActions={gerrieActions} canWriteGerrie={orgCanWrite && permissions.canWrite('gerrie')} orgCanWrite={orgCanWrite} onOpenDecisionTarget={openDecisionTarget} openFinanceDoc={(kind, id) => { const item = kind === 'quote' ? data.quotes.find(q => q.id === id) : data.invoices.find(i => i.id === id); setPage(kind === 'quote' ? 'quotes' : 'invoices'); setProjectId(null); setClientId(null); if (item) setEdit(kind === 'quote' ? { kind: 'quote', item: item as Quote } : { kind: 'invoice', item: item as Invoice }); }} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} openTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} />;
-    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={workMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={workMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onWithdrawQuote={withdrawQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
     if (page === 'gallery') {
       // Het project leiden we uit de galerij zelf af: dat blijft kloppen ook als
       // de projectverwijzing van het tabblad ooit achterloopt.
@@ -3780,7 +3796,7 @@ function App() {
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       openCampaignId={view.pendingDraft?.kind === 'campaign' ? String(view.pendingDraft.payload.id ?? '') : null} onCampaignOpened={() => setPendingDraft(null)}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument}/>;
-    if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
+    if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onWithdraw={withdrawQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'contract' ? contractDraftFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onPostToLedger={postInvoiceToLedger} onCreditInvoice={creditUnpaidInvoice} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
@@ -4519,7 +4535,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     const clamped = k === 'vat' ? Math.min(safe, 100) : safe;
     return { ...l, [k]: clamped };
   }));
-  const addLine = () => set('lines', [...lines, { id: uid(), description: '', quantity: 1, unit_price: 0, vat: 21 }]);
+  const addLine = () => set('lines', [...lines, { id: uid(), description: '', quantity: 1, unit_price: 0, vat: defaultVatRate(data) }]);
   const removeLine = (id: string) => set('lines', lines.length <= 1 ? lines : lines.filter(x => x.id !== id));
 
   // Verkooprelevante btw-codes van de organisatie: die bepalen naast het tarief
@@ -4545,6 +4561,11 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
   // Een geboekte factuur annuleer je met een creditnota (zie "Crediteren");
   // de database weigert annuleren/afboeken zolang er iets openstaat.
   const invoiceBooked = !isQuote && Boolean((item as Invoice | undefined)?.journal_entry_id);
+  // Spiegel van enforce_invoice_terminal_status: een terugbetaalde factuur, en
+  // een geboekte factuur die geannuleerd of ongeldig is (gecrediteerd), gaan
+  // niet terug naar verzonden of betaald.
+  const savedStatus = (item as Invoice | undefined)?.status;
+  const invoiceStatusFixed = !isQuote && (savedStatus === 'refunded' || (invoiceBooked && (savedStatus === 'cancelled' || savedStatus === 'void')));
 
   const handleDownloadPdf = () => {
     const client = data.clients.find(c => c.id === form.client_id) ?? null;
@@ -4583,8 +4604,9 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <option value="">Geen project</option>{projectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
-        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt.' : 'Status van de factuur.'}>
-          <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}>
+        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt.' : 'Status van de factuur.'}>
+          <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled || invoiceStatusFixed}>
+            {form.status === 'refunded' && <option value="refunded">Terugbetaald</option>}
             <option value="draft">Concept</option>
             <option value="sent">Verzonden</option>
             <option value="overdue">Te laat</option>
@@ -4802,7 +4824,7 @@ function quoteFormStatusLabel(status: string, approvalStatus?: string): string {
     accepted: 'Geaccepteerd',
     rejected: 'Afgewezen door klant',
     expired: 'Verlopen',
-    cancelled: 'Geannuleerd',
+    cancelled: 'Ingetrokken',
   };
   return labels[status] || status || 'Concept';
 }
@@ -4830,6 +4852,15 @@ function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: 
   }
 
   return sanitized;
+}
+
+/**
+ * Btw-tarief voor een nieuwe regel. Onder de kleineondernemersregeling (KOR)
+ * rekent een factuur geen btw; de database weigert dan het uitgeven van een
+ * factuur met btw. Eerder kreeg elke nieuwe regel 21%, ook bij de KOR.
+ */
+function defaultVatRate(data: AppData): number {
+  return data.companySettings?.kor_enabled ? 0 : 21;
 }
 
 function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
@@ -4860,10 +4891,10 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
   const today = new Date().toISOString().slice(0,10);
   if (edit.kind === "quote") {
     const item = edit.item;
-    return { number: item?.number ?? createNextFinanceNumber('quote', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? edit.defaults?.valid_until ?? "", status: item?.status ?? "draft", internal_approval_status: item?.internal_approval_status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
+    return { number: item?.number ?? createNextFinanceNumber('quote', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? edit.defaults?.valid_until ?? "", status: item?.status ?? "draft", internal_approval_status: item?.internal_approval_status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: defaultVatRate(data) }] };
   }
   const item = edit.item;
-  return { number: item?.number ?? createNextFinanceNumber('invoice', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? edit.defaults?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
+  return { number: item?.number ?? createNextFinanceNumber('invoice', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? edit.defaults?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: defaultVatRate(data) }] };
 }
 
 function cleanForm(kind: string, form: Record<string, any>, clientFieldDefinitions: ClientFieldDefinition[] = []) {

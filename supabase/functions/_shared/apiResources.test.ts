@@ -258,6 +258,19 @@ test('een veld uit een module waar je niet mag schrijven, kun je niet zetten', (
   assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a', rate: 1 }, () => true), []);
 });
 
+test('het e-factuuradres van een klant: lezen mag met Klanten, zetten vraagt Financiën', async () => {
+  const { RESOURCES } = await import('./apiResourceSpecs.ts');
+  const clients = RESOURCES.clients;
+  const noFinance = (module: string) => module !== 'finance';
+  for (const name of ['e_invoicing_enabled', 'e_invoice_email', 'e_invoice_channel']) {
+    assert.deepEqual(fieldsOutsideWrite(clients, { [name]: 'x' }, noFinance), [name], name);
+    assert.deepEqual(fieldsOutsideWrite(clients, { [name]: 'x' }, () => true), [], name);
+  }
+  assert.deepEqual(fieldsOutsideWrite(clients, { city: 'Zwolle' }, noFinance), []);
+  const row = { id: '1', name: 'Jansen BV', e_invoice_email: 'facturen@jansen.nl' };
+  assert.equal(presentRow(clients, row, noFinance).e_invoice_email, 'facturen@jansen.nl', 'lezen blijft zoals in de app');
+});
+
 // ── Uit de volledige controle ────────────────────────────────────────────────
 
 test('een id, adres, datum of keuze is tekst: een lijst of object wordt niet stil tekst', () => {

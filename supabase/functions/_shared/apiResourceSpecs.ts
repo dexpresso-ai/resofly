@@ -65,9 +65,11 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       postal_code: { type: 'text', description: 'Postcode.', nullable: true, maxLength: 20 },
       city: { type: 'text', description: 'Plaats.', nullable: true, maxLength: 100 },
       country: { type: 'text', description: 'Land.', nullable: true, maxLength: 100 },
-      e_invoicing_enabled: { type: 'boolean', description: 'Facturen aan deze klant gaan als e-factuur (UBL met de PDF erin); uit = alleen de PDF.', default: false },
-      e_invoice_email: { type: 'email', description: 'E-factuuradres, bijvoorbeeld het inkoopfacturenadres van het boekhoudpakket van de klant. Leeg = het gewone e-mailadres.', nullable: true },
-      e_invoice_channel: { type: 'enum', description: 'Hoe de e-factuur gaat: email = UBL met de PDF erin per mail; mollie = via Mollie over het Peppol-netwerk.', values: CLIENT_E_INVOICE_CHANNELS, default: 'email' },
+      // Waar de facturen heen gaan: zetten vraagt schrijfrecht in Financiën
+      // (zoals client.update_details) én "execute_high" (de database).
+      e_invoicing_enabled: { type: 'boolean', description: 'Facturen aan deze klant gaan als e-factuur (UBL met de PDF erin); uit = alleen de PDF. Zetten vraagt schrijfrecht in Financiën.', default: false, writeModule: 'finance' },
+      e_invoice_email: { type: 'email', description: 'E-factuuradres, bijvoorbeeld het inkoopfacturenadres van het boekhoudpakket van de klant. Leeg = het gewone e-mailadres. Zetten vraagt schrijfrecht in Financiën.', nullable: true, writeModule: 'finance' },
+      e_invoice_channel: { type: 'enum', description: 'Hoe de e-factuur gaat: email = UBL met de PDF erin per mail; mollie = via Mollie over het Peppol-netwerk. Zetten vraagt schrijfrecht in Financiën.', values: CLIENT_E_INVOICE_CHANNELS, default: 'email', writeModule: 'finance' },
       notes: { type: 'text', description: 'Notities.', nullable: true, maxLength: 10_000 },
       tags: { type: 'text_array', description: 'Labels (hooguit 30).', maxLength: 60, maxItems: 30 },
       color: { type: 'color', description: 'Kleur in de app, als #RRGGBB.', default: '#FFD966' },

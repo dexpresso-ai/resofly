@@ -77,3 +77,14 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+/**
+ * De akkoordverklaring die de ondertekenpagina toont en die als bewijs in
+ * contract_signers.consent_text en op de bewijspagina van het PDF komt. De
+ * server legt deze tekst vast en weigert een andere; eerder nam hij over wat
+ * de browser stuurde (alleen "niet leeg"), zodat een aangepast verzoek "Ik ga
+ * niet akkoord" onder een geldige handtekening kon zetten. Kopie in
+ * src/lib/contractTokens.ts; contractConsent.test.ts houdt ze gelijk.
+ */
+export const CONTRACT_CONSENT_TEXT =
+  'Ik heb dit contract gelezen en ga ermee akkoord. Ik onderteken dit document rechtsgeldig met een elektronische handtekening.';

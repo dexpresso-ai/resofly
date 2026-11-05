@@ -22,6 +22,7 @@ import {
   type PortalThreadSummary,
 } from '../_shared/portalMessages.ts';
 import { transferZipName } from '../_shared/fileTransfer.ts';
+import { portalDocumentDecision, portalDocumentScopeFilter } from '../_shared/portalAccess.ts';
 import {
   storageKeyBelongsOnlyTo,
   itemForRecipient,
@@ -455,12 +456,11 @@ async function decideQuote(user: { id: string; email: string }, body: Record<str
   await assertEntityBelongsToClients(quote, clients);
   if (quote.status !== 'sent') throw new PortalError('Deze offerte is al beoordeeld en kan niet meer worden gewijzigd.', 409);
 
-  // NOOIT terugvallen op clients[0]: assertEntityBelongsToClients hierboven kan
-  // deze offerte ook via het GEKOPPELDE PROJECT autoriseren (quote.client_id zelf
-  // hoeft dan niet in `clients` te zitten). Zonder deze || null-guard zou de
-  // contactnaam van een ander, ongerelateerd klantdossier (bv. dezelfde persoon
-  // is ook actief contact bij een andere klant) permanent in de beslissingshistorie
-  // van déze offerte terechtkomen.
+  // NOOIT terugvallen op clients[0]: een offerte zonder eigen klant wordt via het
+  // GEKOPPELDE PROJECT geautoriseerd (quote.client_id zit dan niet in `clients`).
+  // Zonder deze || null-guard zou de contactnaam van een ander, ongerelateerd
+  // klantdossier (bv. dezelfde persoon is ook actief contact bij een andere
+  // klant) permanent in de beslissingshistorie van déze offerte terechtkomen.
   const client = clients.find((row) => row.id === quote.client_id) || null;
   const contact = client ? await resolveActingContact(client, user.email) : null;
   const name = contact?.name || client?.contact_name || client?.name || user.email;
@@ -496,15 +496,29 @@ async function getInvoicePaymentInfo(user: { id: string; email: string }, body: 
 
   const { data: invoice, error } = await supabaseAdmin
     .from('invoices')
-    .select('id,organization_id,client_id,project_id,number,status,lines,paid_at')
+    .select('id,organization_id,client_id,project_id,number,status,lines,paid_at,journal_entry_id')
     .eq('id', invoiceId)
     .maybeSingle();
   if (error) throw error;
   if (!invoice || invoice.status === 'draft') throw new PortalError('Factuur niet gevonden.', 404);
   await assertEntityBelongsToClients(invoice, clients);
 
-  const amountCents = calculateTotalCents(Array.isArray(invoice.lines) ? invoice.lines : []);
-  const isPaid = invoice.status === 'paid' || Boolean(invoice.paid_at);
+  // Wat er nog openstaat, zoals de betaallink het ook vraagt (invoiceCheckout).
+  // Eerder stond hier het factuurtotaal: na een deelbetaling of creditnota zei
+  // het portaal "maak € 1.000 over" terwijl er € 710 openstond, en een volledig
+  // gecrediteerde factuur toonde nog betaalgegevens.
+  const totalCents = calculateTotalCents(Array.isArray(invoice.lines) ? invoice.lines : []);
+  let amountCents = totalCents;
+  if (invoice.journal_entry_id) {
+    const { data: open, error: openError } = await supabaseAdmin.rpc('invoice_open_receivable_cents', {
+      p_organization_id: invoice.organization_id,
+      p_invoice_id: invoice.id,
+    });
+    if (openError) throw openError;
+    const openCents = Number(open);
+    if (Number.isFinite(openCents)) amountCents = Math.max(0, Math.min(totalCents, openCents));
+  }
+  const isPaid = invoice.status === 'paid' || Boolean(invoice.paid_at) || amountCents <= 0;
   const payable = !isPaid && !['cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
 
   const [company, mollieAvailable] = await Promise.all([
@@ -1833,8 +1847,11 @@ function normalizeLookup(value: string | null | undefined): string | null {
 
 async function assertEntityBelongsToClients(entity: { client_id: string | null; project_id: string | null; organization_id: string }, clients: ClientRow[]) {
   const clientIds = new Set(clients.map((c) => c.id));
-  if (entity.client_id && clientIds.has(entity.client_id)) return;
-  if (entity.project_id) {
+  // Een document met een eigen klant hoort alleen bij die klant; het project
+  // telt alleen voor een document zonder klant (zie _shared/portalAccess.ts).
+  const decision = portalDocumentDecision(entity, clientIds);
+  if (decision === 'allow') return;
+  if (decision === 'check_project' && entity.project_id) {
     const { data, error } = await supabaseAdmin
       .from('projects')
       .select('client_id')
@@ -1856,12 +1873,11 @@ async function assertEntityBelongsToClients(entity: { client_id: string | null; 
 type QueryBuilder = any;
 
 function scopeToClient(query: QueryBuilder, clientId: string, projectIds: string[]): QueryBuilder {
-  // PostgREST: client_id OF (project_id in projecten van de klant). Zonder projecten
-  // alleen op client_id filteren. UUID's bevatten geen tekens die de or-filter breken.
-  if (projectIds.length > 0) {
-    return query.or(`client_id.eq.${clientId},project_id.in.(${projectIds.join(',')})`);
-  }
-  return query.eq('client_id', clientId);
+  // PostgREST: client_id OF (geen klant EN project_id in projecten van de klant).
+  // Een document voor een andere klant komt niet mee via het project; zie
+  // _shared/portalAccess.ts. Zonder projecten alleen op client_id filteren.
+  const filter = portalDocumentScopeFilter(clientId, projectIds);
+  return filter ? query.or(filter) : query.eq('client_id', clientId);
 }
 
 async function selectRows(table: string, build: (q: QueryBuilder) => QueryBuilder): Promise<Record<string, unknown>[]> {

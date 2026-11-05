@@ -204,7 +204,8 @@ function statusLabel(status: string): string {
     accepted: 'Geaccepteerd',
     rejected: 'Geweigerd',
     expired: 'Verlopen',
-    cancelled: 'Geannuleerd',
+    // Een offerte die de afzender heeft ingetrokken (withdraw_quote).
+    cancelled: 'Ingetrokken',
   };
   return labels[status] || status;
 }

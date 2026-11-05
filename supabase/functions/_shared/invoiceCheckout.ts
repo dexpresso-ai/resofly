@@ -14,6 +14,7 @@
 // ============================================================
 
 import { decryptSecret } from './mollieSecrets.ts';
+import { invoiceMollieWebhookBase, invoiceMollieWebhookUrl } from './mollieWebhookUrl.ts';
 
 // deno-lint-ignore no-explicit-any
 type SupabaseAdmin = any;
@@ -25,7 +26,12 @@ export type PortalCheckoutResult =
   | { ok: false; status: number; error: string };
 
 const ALLOW_MOCK = (Deno.env.get('INVOICE_MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
-const MOLLIE_WEBHOOK_URL = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_URL') || Deno.env.get('MOLLIE_WEBHOOK_URL') || '';
+// Nooit de billing-webhook (abonnementen) als terugval: zie mollieWebhookUrl.ts.
+const MOLLIE_WEBHOOK_URL = invoiceMollieWebhookBase({
+  invoiceWebhookUrl: Deno.env.get('INVOICE_MOLLIE_WEBHOOK_URL'),
+  sharedWebhookUrl: Deno.env.get('MOLLIE_WEBHOOK_URL'),
+  supabaseUrl: Deno.env.get('SUPABASE_URL'),
+});
 const MOLLIE_WEBHOOK_SECRET = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_SECRET') || Deno.env.get('MOLLIE_WEBHOOK_SECRET') || '';
 const CHECKOUT_TTL_MINUTES = parsePositiveInt(Deno.env.get('INVOICE_CHECKOUT_TTL_MINUTES'), 30);
 
@@ -164,11 +170,9 @@ export async function createPortalInvoiceCheckout(
     } else {
       const orgKey = await resolveOrganizationMollieKey(supabaseAdmin, organizationId);
       if (!orgKey) return await failAndReturn(supabaseAdmin, payment.id, organizationId, actorUserId, 409, 'Online betalen is voor deze factuur (nog) niet beschikbaar. Neem contact op met je leverancier of gebruik de overschrijvingsgegevens.');
-      if (!MOLLIE_WEBHOOK_URL) return await failAndReturn(supabaseAdmin, payment.id, organizationId, actorUserId, 500, 'INVOICE_MOLLIE_WEBHOOK_URL of MOLLIE_WEBHOOK_URL ontbreekt.');
+      if (!MOLLIE_WEBHOOK_URL) return await failAndReturn(supabaseAdmin, payment.id, organizationId, actorUserId, 500, 'INVOICE_MOLLIE_WEBHOOK_URL ontbreekt.');
 
-      const webhookUrl = MOLLIE_WEBHOOK_SECRET
-        ? `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie&secret=${encodeURIComponent(MOLLIE_WEBHOOK_SECRET)}`
-        : `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie`;
+      const webhookUrl = invoiceMollieWebhookUrl(MOLLIE_WEBHOOK_URL, MOLLIE_WEBHOOK_SECRET);
 
       const mollieResponse = await fetch('https://api.mollie.com/v2/payments', {
         method: 'POST',
@@ -293,6 +297,11 @@ async function loadLatestOpenPayment(
     .eq('organization_id', organizationId)
     .eq('invoice_id', invoiceId)
     .in('status', ['creating', 'open', 'pending', 'authorized'])
+    // Een verlopen link telt niet (zoals in begin_invoice_payment_checkout, dat hem
+    // opruimt). Eerder bleef een onderbroken 'creating' zonder URL hier staan en
+    // gaf elke nieuwe poging voorgoed "probeer het over enkele seconden opnieuw":
+    // geen betaallink meer in de app, de herinnering, de aanmaning of het portaal.
+    .or(`checkout_expires_at.is.null,checkout_expires_at.gt."${new Date().toISOString()}"`)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();

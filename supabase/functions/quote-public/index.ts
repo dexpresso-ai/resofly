@@ -80,8 +80,8 @@ serve(async (req) => {
 
     switch (action) {
       case 'getQuote': return json(req, { ok: true, ...(await getPublicQuote(tokenHash)) });
-      case 'acceptQuote': return json(req, { ok: true, ...(await decidePublicQuote('accept', tokenHash, body)) });
-      case 'rejectQuote': return json(req, { ok: true, ...(await decidePublicQuote('reject', tokenHash, body)) });
+      case 'acceptQuote': return json(req, { ok: true, ...(await decidePublicQuote('accept', tokenHash, body, req)) });
+      case 'rejectQuote': return json(req, { ok: true, ...(await decidePublicQuote('reject', tokenHash, body, req)) });
       default: return json(req, { ok: false, error: `Onbekende publieke offerte-actie: ${action}` }, 400);
     }
   } catch (error) {
@@ -110,12 +110,15 @@ async function getPublicQuote(tokenHash: string) {
   return { quote: publicQuotePayload(quote), client, project, company, branding, events: toPublicTimeline('quote', events) };
 }
 
-async function decidePublicQuote(kind: 'accept' | 'reject', tokenHash: string, body: Record<string, unknown>) {
+async function decidePublicQuote(kind: 'accept' | 'reject', tokenHash: string, body: Record<string, unknown>, req: Request) {
   const name = String(body.name || '').trim();
   const email = String(body.email || '').trim().toLowerCase();
   const note = String(body.note || '').trim();
   if (!name) throw new PublicHttpError('Vul je naam in om de offerte te bevestigen.', 422);
   if (!isEmail(email)) throw new PublicHttpError('Vul een geldig e-mailadres in.', 422);
+  if (name.length > 200 || email.length > 254 || note.length > 4000) {
+    throw new PublicHttpError('Je naam, e-mailadres of opmerking is te lang. Een opmerking mag maximaal 4000 tekens zijn.', 422);
+  }
 
   const rpcName = kind === 'accept' ? 'accept_quote_public' : 'reject_quote_public';
   const { data, error } = await supabaseAdmin.rpc(rpcName, {
@@ -123,9 +126,15 @@ async function decidePublicQuote(kind: 'accept' | 'reject', tokenHash: string, b
     p_name: name,
     p_email: email,
     p_note: note || null,
+    // Bewijs, zoals bij een contract: waarvandaan en met welke browser. Het
+    // ingetypte e-mailadres vergelijkt de database met het adres waar de
+    // offerte heen ging.
+    p_ip: clientIp(req),
+    p_user_agent: (req.headers.get('user-agent') || '').slice(0, 500) || null,
   });
   if (error) {
     if (/ongeldig|verlopen|niet meer/i.test(error.message)) throw new PublicHttpError(error.message, 409);
+    if (/te lang/i.test(error.message)) throw new PublicHttpError(error.message, 422);
     throw error;
   }
   const row = Array.isArray(data) ? data[0] : data;
@@ -301,6 +310,17 @@ function isLocalOrigin(origin: string): boolean {
 
 function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+// Zoals in contract-public: de door de infrastructuur gezette headers eerst
+// (niet door de bezoeker te vervalsen), X-Forwarded-For alleen als laatste
+// terugval.
+function clientIp(req: Request): string | null {
+  const trusted = req.headers.get('cf-connecting-ip') || req.headers.get('x-real-ip');
+  if (trusted) return trusted.trim().slice(0, 64);
+  const xff = req.headers.get('x-forwarded-for');
+  if (xff) return xff.split(',')[0].trim().slice(0, 64) || null;
+  return null;
 }
 
 function isDateBeforeToday(value: string | null): boolean {

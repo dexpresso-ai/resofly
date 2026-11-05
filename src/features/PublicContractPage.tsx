@@ -3,11 +3,12 @@ import { Button, Input, Textarea } from '../components/Ui';
 import { sanitizeRichText } from '../components/RichTextEditor';
 import { supabase } from '../lib/supabase';
 import { dateNL } from '../lib/format';
+import { CONTRACT_CONSENT_TEXT } from '../lib/contractTokens';
 import { PublicBrandFooter, PublicDocHero, PublicDocState, usePublicBrandTheme } from '../components/PublicBrand';
 import type { BrandingPayload } from '../lib/branding';
 
-const CONSENT_TEXT =
-  'Ik heb dit contract gelezen en ga ermee akkoord. Ik onderteken dit document rechtsgeldig met een elektronische handtekening.';
+// Dezelfde tekst als de server vastlegt (src/lib/contractTokens.ts).
+const CONSENT_TEXT = CONTRACT_CONSENT_TEXT;
 
 async function extractFunctionError(error: unknown, fallback: string): Promise<string> {
   const context = (error as { context?: unknown })?.context;

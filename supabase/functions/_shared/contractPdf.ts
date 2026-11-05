@@ -20,6 +20,7 @@ import {
   type PDFPage,
   type RGB,
 } from 'https://esm.sh/pdf-lib@1.17.1';
+import { htmlToPdfBlocks, normalizePdfText } from './pdfText.ts';
 
 export type PdfContract = {
   id?: string;
@@ -112,7 +113,7 @@ export async function renderContractPdf(params: {
     ctx.y -= 10;
   }
 
-  for (const block of htmlToBlocks(contract.body)) {
+  for (const block of htmlToPdfBlocks(contract.body)) {
     if (!block.text.trim()) continue;
     ensureSpace(ctx, 18);
     switch (block.type) {
@@ -130,10 +131,13 @@ export async function renderContractPdf(params: {
         ctx.y = drawWrapped(ctx, block.text, LEFT, ctx.y, CONTENT_W, ctx.bold, 11, 15);
         ctx.y -= 4;
         break;
-      case 'li':
-        ctx.y = drawWrapped(ctx, block.text, LEFT + 14, ctx.y, CONTENT_W - 14, ctx.regular, 10, 14);
+      case 'li': {
+        // Geneste lijsten springen per niveau verder in (hooguit vier niveaus).
+        const indent = 14 + 14 * Math.min(4, Math.max(0, block.depth ?? 0));
+        ctx.y = drawWrapped(ctx, block.text, LEFT + indent, ctx.y, CONTENT_W - indent, ctx.regular, 10, 14);
         ctx.y -= 3;
         break;
+      }
       case 'quote':
         ctx.y = drawWrapped(ctx, block.text, LEFT + 12, ctx.y, CONTENT_W - 12, ctx.italic, 10, 14, ctx.muted);
         ctx.y -= 5;
@@ -402,61 +406,7 @@ async function tryEmbedImage(doc: PDFDocument, dataUrl: string): Promise<PDFImag
 }
 
 // ------------------------------------------------------------ text utils
-type PdfBlock = { type: 'h2' | 'h3' | 'h4' | 'p' | 'li' | 'quote'; text: string };
-
-// Zet de (al gesanitizede) rich-text body om in blokken met behoud van structuur:
-// koppen, alinea's, lijst-items (genummerd/bullet) en citaten. Inline-opmaak
-// (vet/cursief) wordt platgeslagen — pdf-lib tekent per regel één lettertype.
-function htmlToBlocks(value: string): PdfBlock[] {
-  const src = String(value ?? '');
-  if (!src.trim()) return [];
-  if (!/<[a-z]/i.test(src)) {
-    return src.replace(/\r\n/g, '\n').split(/\n{2,}/).map((t) => ({ type: 'p' as const, text: t.trim() })).filter((b) => b.text);
-  }
-  const out: PdfBlock[] = [];
-  const re = /<(h2|h3|h4)\b[^>]*>([\s\S]*?)<\/\1>|<p\b[^>]*>([\s\S]*?)<\/p>|<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>|<(ul|ol)\b[^>]*>([\s\S]*?)<\/\5>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(src)) !== null) {
-    if (m[1]) {
-      const t = inlineToText(m[2]);
-      if (t) out.push({ type: m[1].toLowerCase() as PdfBlock['type'], text: t });
-    } else if (m[3] !== undefined) {
-      const t = inlineToText(m[3]);
-      if (t) out.push({ type: 'p', text: t });
-    } else if (m[4] !== undefined) {
-      const t = inlineToText(m[4]);
-      if (t) out.push({ type: 'quote', text: t });
-    } else if (m[5]) {
-      const ordered = m[5].toLowerCase() === 'ol';
-      let i = 0;
-      for (const li of m[6].matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)) {
-        const t = inlineToText(li[1]);
-        if (!t) continue;
-        i += 1;
-        out.push({ type: 'li', text: (ordered ? `${i}. ` : '•  ') + t });
-      }
-    }
-  }
-  if (out.length === 0) {
-    const t = inlineToText(src);
-    if (t) out.push({ type: 'p', text: t });
-  }
-  return out;
-}
-
-function inlineToText(html: string): string {
-  return String(html ?? '')
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+// Blokken en tekens: zie pdfText.ts (gedeeld met offerte, factuur en rapporten).
 
 function wrapPdfText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
   const source = normalizePdfText(text);
@@ -494,26 +444,6 @@ function splitLongWord(word: string, font: PDFFont, size: number, maxWidth: numb
   }
   if (current) chunks.push(current);
   return chunks;
-}
-
-function normalizePdfText(value: unknown): string {
-  return String(value ?? '')
-    .normalize('NFKC')
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[–—−]/g, '-')
-    .replace(/…/g, '...')
-    .replace(/•/g, '-')
-    .replace(/€/g, 'EUR')
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .split('')
-    .filter((char) => {
-      const code = char.charCodeAt(0);
-      return (code >= 32 && code <= 126) || (code >= 160 && code <= 255);
-    })
-    .join('')
-    .trim();
 }
 
 /**

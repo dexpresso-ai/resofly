@@ -78,7 +78,9 @@ export const CLIENT_ACTIONS: ActionDef[] = [
     required: ['client_id'],
     async plan(ctx, input) {
       const clientId = id(input, 'client_id');
-      const client = await row<{ name: string }>(ctx, 'clients', clientId, 'name', 'Klant');
+      const client = await row<{
+        name: string; e_invoicing_enabled: boolean | null; e_invoice_email: string | null; e_invoice_channel: string | null;
+      }>(ctx, 'clients', clientId, 'name, e_invoicing_enabled, e_invoice_email, e_invoice_channel', 'Klant');
       const patch: Record<string, unknown> = {};
       const put = (key: string, value: unknown) => { if (value !== null && value !== undefined) patch[key] = value; };
 
@@ -126,14 +128,32 @@ export const CLIENT_ACTIONS: ActionDef[] = [
       // ongemerkt naar een ander adres laten gaan.
       const touchesEInvoicing = ['e_invoicing_enabled', 'e_invoice_email', 'e_invoice_channel'].some((key) => key in patch);
       if (touchesEInvoicing) assertFieldWritable(ctx, 'finance', 'e_invoice_email', 'Financiën');
+      // "Altijd langs een mens" stond er al, maar alleen als risico 'high': een
+      // koppeling met execute_high voerde de wijziging dan toch rechtstreeks uit,
+      // precies het geval uit de zin hierboven. Nu humanOnly, zoals het IBAN, en
+      // met het oude en het nieuwe adres op de kaart: wie goedkeurt, ziet wat er
+      // verandert en kan de klant bellen.
+      const before = {
+        enabled: Boolean(client.e_invoicing_enabled),
+        email: String(client.e_invoice_email ?? '').trim().toLowerCase(),
+        channel: client.e_invoice_channel ?? 'email',
+      };
+      const destinationChanged = touchesEInvoicing && (
+        ('e_invoicing_enabled' in patch && Boolean(patch.e_invoicing_enabled) !== before.enabled)
+        || ('e_invoice_email' in patch && String(patch.e_invoice_email) !== before.email)
+        || ('e_invoice_channel' in patch && String(patch.e_invoice_channel) !== before.channel));
+      if ('e_invoice_email' in patch && String(patch.e_invoice_email) !== before.email) {
+        labels.e_invoice_email = `e-factuuradres ${before.email || '—'} → ${String(patch.e_invoice_email)}`;
+      }
       return {
         title: `Klantgegevens bijwerken: ${client.name}`,
-        sub: joinShort(Object.keys(patch).map((k) => labels[k] ?? k)),
+        sub: joinShort(Object.keys(patch).map((k) => labels[k] ?? k), 220),
         kind: 'work',
         payload: { client_id: clientId, client_name: client.name, patch },
         ...(touchesEInvoicing ? {
           risk: 'high' as const,
-          warning: 'Hiermee verandert waar de facturen van deze klant heen gaan.',
+          ...(destinationChanged ? { humanOnly: true } : {}),
+          warning: 'Hiermee verandert waar de facturen van deze klant heen gaan. Klopt het adres? Vraag het bij twijfel na bij de klant zelf.',
         } : {}),
       };
     },
