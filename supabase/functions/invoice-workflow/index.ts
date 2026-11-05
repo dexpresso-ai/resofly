@@ -304,6 +304,13 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   const vatKinds = eInvoicing ? await loadVatKindsByCode(organizationId) : undefined;
   if (eInvoicing) await assertInvoiceUblPossible(organizationId, invoice, { client, company, vatKinds, endpointEmail: recipientEmail });
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  // Eerst het quotum, vóór de betaallink, de PDF-snapshot en de verzendregel:
+  // stond het quotum op, dan bleef de regel eerder op 'queued' (de
+  // 15-minutengrens weigerde elke nieuwe poging) en hing er een betaallink aan
+  // een concept dat daardoor op slot ging.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
+
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
   const expiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
@@ -342,6 +349,9 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   const ublAttachment = eInvoicing
     ? await createInvoiceUblAttachment(organizationId, invoice, { client, company, vatKinds, endpointEmail: recipientEmail, pdf: pdfAttachment })
     : null;
+
+  let resendResponse: Response;
+  let resendPayloadResponse: Record<string, unknown> = {};
 
   const storedPdf = await storeInvoicePdfSnapshot(organizationId, invoiceId, pdfAttachment);
 
@@ -386,11 +396,6 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
       { name: 'template_key', value: 'invoice_sent' },
     ],
   };
-
-  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
-  let resendResponse: Response;
-  let resendPayloadResponse: Record<string, unknown> = {};
 
   try {
     resendResponse = await fetch('https://api.resend.com/emails', {
@@ -597,6 +602,11 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
     pdfFileName = attachment.fileName; pdfBase64 = attachment.base64; pdfMime = attachment.mimeType; pdfSize = attachment.sizeBytes; pdfSha = attachment.sha256;
   }
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  // Vóór de verzendregel: stond het quotum op, dan bleef die eerder op 'queued'
+  // staan (bij een aanmaning bleef het voorstel op 'confirmed' hangen).
+  await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
+  let resendResponse: Response;
   const prepared = await beginInvoiceReminderSend({
     invoiceId, organizationId, userId: actorUserId, level, tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl,
     attachmentFileName: pdfFileName, attachmentMimeType: pdfMime, attachmentSizeBytes: pdfSize ?? undefined, attachmentSha256: pdfSha ?? undefined,
@@ -620,9 +630,6 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
     ],
   };
 
-  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-  await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
-  let resendResponse: Response;
   let resendPayloadResponse: Record<string, unknown> = {};
   try {
     resendResponse = await fetch('https://api.resend.com/emails', {
@@ -959,6 +966,11 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   });
   const subject = rendered.subject;
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  // Vóór de verzendregel: stond het quotum op, dan bleef die eerder op 'queued'
+  // staan (bij een aanmaning bleef het voorstel op 'confirmed' hangen).
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
+  let resendResponse: Response;
   const prepared = await beginDunningSend({
     noticeId, organizationId, userId, claim, deadlineDate, interestKind,
     tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl,
@@ -982,9 +994,6 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
     ],
   };
 
-  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
-  let resendResponse: Response;
   let resendPayloadResponse: Record<string, unknown> = {};
   try {
     resendResponse = await fetch('https://api.resend.com/emails', {

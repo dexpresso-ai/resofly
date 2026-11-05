@@ -3,6 +3,7 @@ import {
   optStr, orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
+import { defaultInvoiceRecipient } from '../eInvoicing.ts';
 
 /**
  * Handelingen aan de VERKOOPKANT van het geld: offertes en facturen.
@@ -156,7 +157,7 @@ function requireAdmin(ctx: ActionCtx, what: string): void {
 /** True zodra een factuur onbetaald is én over de vervaldatum — spiegelt de cron-logica. */
 function isReminderEligible(invoice: { status: string; due_date: string | null }, today: string): boolean {
   // Een concept is nooit verstuurd; daar hoort geen herinnering of aanmaning bij
-  // (de database weigert die ook, zie 20261105030000).
+  // (de database weigert die ook, zie 20261105230000).
   if (invoice.status === 'draft') return false;
   if (INVOICE_CLOSED.includes(invoice.status)) return false;
   if (invoice.status === 'overdue') return true;
@@ -338,7 +339,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Zet de status van een factuur met de hand. Voor een factuur die NIET in het grootboek staat is "paid" de manier om een betaling buiten Mollie om te registreren. Staat de factuur wel in het grootboek, dan registreer je een betaling door de banktransactie te koppelen (`invoice.reconcile_bank_transaction`) of met een memoriaalpost op Debiteuren; daarna staat hij vanzelf op betaald. ' +
+      'Zet de status van een factuur met de hand. "paid" kan alleen voor een factuur van vóór de startdatum van de boekhouding (die vordering staat in de beginbalans). Voor elke andere factuur registreer je een betaling door de banktransactie te koppelen (`invoice.reconcile_bank_transaction`) of met een memoriaalpost op Debiteuren; daarna staat hij vanzelf op betaald. ' +
       'draft = concept, sent = verzonden, overdue = te laat, paid = betaald, cancelled = geannuleerd, void = ongeldig gemaakt, written_off = afgeboekt (oninbaar). ' +
       'Let op: "void" en "written_off" zijn feitelijk eindstations, en de bedragen zelf verander je hiermee niet. Zoek de factuur met `list_invoices`.',
     keywords: ['status', 'betaald', 'betaling registreren', 'markeren', 'voldaan', 'geannuleerd', 'afboeken', 'oninbaar', 'storneren', 'debiteuren'],
@@ -350,13 +351,25 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     async plan(ctx, input) {
       const invoiceId = id(input, 'invoice_id');
       const status = choice(input, 'status', INVOICE_STATUS);
-      const invoice = await row<{ number: string; status: string; client_id: string | null; due_date: string | null; lines: unknown; total_amount: number | null; journal_entry_id: string | null }>(
-        ctx, 'invoices', invoiceId, 'number, status, client_id, due_date, lines, total_amount, journal_entry_id', 'Factuur');
+      const invoice = await row<{ number: string; status: string; client_id: string | null; date: string | null; due_date: string | null; lines: unknown; total_amount: number | null; journal_entry_id: string | null }>(
+        ctx, 'invoices', invoiceId, 'number, status, client_id, date, due_date, lines, total_amount, journal_entry_id', 'Factuur');
       if (invoice.status === status) {
         throw new ActionError(`Factuur ${invoice.number} staat al op "${INVOICE_STATUS_LABELS[status] ?? status}".`);
       }
       if (status === 'draft' && invoice.status !== 'draft') {
         throw new ActionError(`Factuur ${invoice.number} is uitgegeven en gaat niet terug naar concept. Crediteer hem en maak een nieuwe factuur.`);
+      }
+      // Een ongeboekte factuur op betaald zetten boekt hem meteen (invoices_autobook:
+      // omzet en btw tegen 1300 Debiteuren), maar niet de betaling. De factuur heette
+      // dan betaald terwijl de debiteurenstand het volle bedrag bleef tonen. Alleen
+      // van vóór de startdatum van de boekhouding boekt de database niets (die
+      // vordering zit in de beginbalans); daar is "betaald" wél de juiste weg.
+      if (status === 'paid' && !invoice.journal_entry_id) {
+        const startDate = await bookkeepingStartDate(ctx);
+        const inOpeningBalance = Boolean(startDate && invoice.date && invoice.date < startDate);
+        if (!inOpeningBalance) {
+          throw new ActionError(`Op betaald zetten boekt factuur ${invoice.number} in het grootboek (omzet en btw op Debiteuren), maar niet de betaling: de debiteurenstand bleef dan ${euro(docTotalEur(invoice))} te hoog. Registreer de betaling door de banktransactie te koppelen (\`invoice.reconcile_bank_transaction\`) of met een memoriaalpost op Debiteuren; dan staat hij vanzelf op betaald.`);
+        }
       }
       if (invoice.journal_entry_id && ['cancelled', 'void', 'written_off', 'paid'].includes(status)) {
         const { data: openCents, error: openError } = await ctx.db.rpc('invoice_open_receivable_cents', { p_organization_id: ctx.organizationId, p_invoice_id: invoiceId });
@@ -737,10 +750,19 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         ctx, 'credit_notes', creditNoteId, 'number, invoice_id, total_amount, status, date, reason', 'Creditnota');
       if (creditNote.status === 'void') throw new ActionError(`Creditnota ${creditNote.number} is ongeldig gemaakt en wordt niet verstuurd.`);
       const invoice = await row<{ number: string; client_id: string | null }>(ctx, 'invoices', creditNote.invoice_id, 'number, client_id', 'Factuur');
-      const recipient = await clientRecipient(ctx, invoice.client_id, `Creditnota ${creditNote.number}`);
+      if (!invoice.client_id) throw new ActionError(`Creditnota ${creditNote.number} hoort bij een factuur zonder klant; koppel eerst een klant.`);
+      // Dezelfde keuze als de server (invoice-workflow): bij e-facturatie gaat de
+      // creditnota naar het e-factuuradres. De kaart toonde eerst het gewone adres;
+      // de server zag dan een ander adres dan het goedgekeurde en weigerde elke
+      // creditnota aan een klant met e-facturatie ("ontvanger veranderd").
+      const client = await row<{ name: string; email: string | null; e_invoicing_enabled: boolean | null; e_invoice_email: string | null; e_invoice_channel: string | null }>(
+        ctx, 'clients', invoice.client_id, 'name, email, e_invoicing_enabled, e_invoice_email, e_invoice_channel', 'Klant');
+      const to = defaultInvoiceRecipient(client);
+      if (!to) throw new ActionError(`${client.name} heeft geen e-mailadres; vul dat eerst in bij de klant.`);
+      const recipient = { name: client.name, email: to };
       return {
         title: `Creditnota ${creditNote.number} mailen naar ${recipient.name}`,
-        sub: joinShort([euro(toNumber(creditNote.total_amount)), `bij factuur ${invoice.number}`, recipient.email, creditNote.reason]),
+        sub: joinShort([recipient.email, euro(toNumber(creditNote.total_amount)), `bij factuur ${invoice.number}`, creditNote.reason], 160),
         kind: 'mail',
         warning: `De creditnota gaat als PDF echt naar ${recipient.email}. Verzonden post haal je niet terug.`,
         payload: { credit_note_id: creditNoteId, number: creditNote.number, invoice_number: invoice.number, client_name: recipient.name, email: recipient.email },

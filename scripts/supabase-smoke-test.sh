@@ -132,19 +132,19 @@ SQL
     if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::anon heeft weer rechten in public"; fi
   fi
 
-  # Migratie 20261105030000: anon komt het schema public niet meer in. Op
+  # Migratie 20261105230000: anon komt het schema public niet meer in. Op
   # supabase/postgres 17.6.1.111 liet elke geweigerde functieaanroep van anon de
   # hele database crashen (supautils); een weigering op het schema niet. Alleen
   # lezen: roep hier nooit een geweigerde functie aan om het te testen.
   anon_schema="$(PGPASSWORD="$SUPABASE_DB_PASSWORD" PGSSLMODE="${PGSSLMODE:-require}" PGCONNECT_TIMEOUT=20 \
     psql "$pooler" -X -q -t -A -v ON_ERROR_STOP=1 <<'SQL'
-select case when not exists (select 1 from supabase_migrations.schema_migrations where version = '20261105030000') then '-'
+select case when not exists (select 1 from supabase_migrations.schema_migrations where version = '20261105230000') then '-'
             when has_schema_privilege('anon', 'public', 'usage') then 'open'
             else 'dicht' end;
 SQL
 )"
   if [ "$anon_schema" = "-" ]; then
-    echo "-      schema public voor anon: overgeslagen (migratie 20261105030000 nog niet toegepast)"
+    echo "-      schema public voor anon: overgeslagen (migratie 20261105230000 nog niet toegepast)"
   elif [ "$anon_schema" = "dicht" ]; then
     echo "ok     schema public voor anon: geen gebruiksrecht"
   else

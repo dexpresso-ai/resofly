@@ -384,6 +384,12 @@ async function sendQuoteEmail(
   // Persist the exact PDF the client receives as an immutable snapshot. Uses
   // private R2 through the Cloudflare Worker when configured, otherwise a
   // base64 database fallback. Either way the quote PDF stays downloadable.
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  // Eerst het quotum, dan pas de PDF-opslag en de verzendregel: stond het quotum
+  // op, dan bleef de regel eerder op 'queued' (de 15-minutengrens weigerde elke
+  // nieuwe poging) en bleef er een PDF in R2 achter.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
+
   const storedPdf = await storeQuotePdfSnapshot(organizationId, quoteId, pdfAttachment);
 
   const prepared = await beginQuoteEmailSend({
@@ -405,7 +411,11 @@ async function sendQuoteEmail(
     attachmentStorageKey: storedPdf.key ?? undefined,
   });
 
-  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO)
+    .catch(async (identityError) => {
+      await failQuoteEmailSend(prepared.deliveryId, organizationId, userId, `Afzender bepalen mislukt: ${identityError instanceof Error ? identityError.message : String(identityError)}`).catch(() => undefined);
+      throw identityError;
+    });
   const resendPayload = {
     from: senderIdentity.from,
     to: [recipientEmail],
@@ -427,9 +437,9 @@ async function sendQuoteEmail(
     ],
   };
 
-  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
-  const resendResponse = await fetch('https://api.resend.com/emails', {
+  let resendResponse: Response;
+  try {
+    resendResponse = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${RESEND_API_KEY}`,
@@ -439,7 +449,14 @@ async function sendQuoteEmail(
       ),
     },
     body: JSON.stringify(resendPayload),
-  });
+    });
+  } catch (networkError) {
+    // Geen antwoord van Resend: de verzending niet op 'queued' laten staan (dan
+    // weigerde de 15-minutengrens elke nieuwe poging).
+    const message = networkError instanceof Error ? networkError.message : String(networkError);
+    await failQuoteEmailSend(prepared.deliveryId, organizationId, userId, `Resend niet bereikbaar: ${message}`).catch(() => undefined);
+    throw new WorkflowHttpError('Resend was niet bereikbaar; de offerte is niet verstuurd. Probeer het opnieuw.', 502);
+  }
 
   const resendResponsePayload = (await resendResponse.json().catch(() => ({}))) as Record<
     string,

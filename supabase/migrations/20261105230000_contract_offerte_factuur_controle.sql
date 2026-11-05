@@ -680,7 +680,7 @@ begin
     v_total := v_total + v_line_total;
   end loop;
 
-  -- GEWIJZIGD (20261105030000): de totalen van de versie zoals de factuur ze
+  -- GEWIJZIGD (20261105230000): de totalen van de versie zoals de factuur ze
   -- rekent, btw per tarief (invoice_calculated_totals). Per regel afronden gaf
   -- bij 2 × € 1,02 en 2 × 0,25 × € 95,50 tegen 21% € 60,24 in de versie en
   -- € 60,26 op de factuur die uit deze offerte kwam. De regels hieronder
@@ -1357,7 +1357,7 @@ begin
   -- de factuurregel (dat is wat gefactureerd is); de CODE bepaalt de rubriek
   -- (via vat_codes.sales_box in de aangifte) en de omzetrekening: buitenland/
   -- verlegd (3a/3b/3c of verlegd-verkoop) → 8030, anders op tarief.
-  -- GEWIJZIGD (20261105030000): (1) aantal, prijs en tarief worden gelezen zoals
+  -- GEWIJZIGD (20261105230000): (1) aantal, prijs en tarief worden gelezen zoals
   -- invoice_calculated_totals ze leest (een onleesbare waarde telt als 0); een
   -- harde ::numeric liet het boeken mislukken of boekte iets anders dan het
   -- factuurtotaal ("1e3" gaf totaal € 0 en een vordering van € 121.000).
@@ -1533,7 +1533,7 @@ begin
   for update;
 
   if not found then raise exception 'Factuur niet gevonden.' using errcode = '02000'; end if;
-  -- GEWIJZIGD (20261105030000): een concept is nooit verstuurd; de klant kreeg
+  -- GEWIJZIGD (20261105230000): een concept is nooit verstuurd; de klant kreeg
   -- anders een herinnering voor een factuur die hij nooit ontving.
   if v_invoice.status = 'draft' then
     raise exception 'Deze factuur is nog een concept en is niet verstuurd: daar hoort geen herinnering bij.' using errcode = '23514';
@@ -1592,7 +1592,7 @@ begin
   where id = p_invoice_id and organization_id = p_organization_id
   for update;
   if not found then raise exception 'Factuur niet gevonden.' using errcode = '02000'; end if;
-  -- GEWIJZIGD (20261105030000): een formele aanmaning ("van rechtswege in
+  -- GEWIJZIGD (20261105230000): een formele aanmaning ("van rechtswege in
   -- verzuim", incassokosten) alleen voor een verstuurde factuur waarvan de
   -- vervaldatum voorbij is. Eerder kon dat ook voor een concept.
   if v_invoice.status = 'draft' then
@@ -1670,7 +1670,7 @@ begin
   where id = v_notice.invoice_id and organization_id = p_organization_id
   for update;
   if not found then raise exception 'Factuur niet gevonden.' using errcode = '02000'; end if;
-  -- GEWIJZIGD (20261105030000): een formele aanmaning ("van rechtswege in
+  -- GEWIJZIGD (20261105230000): een formele aanmaning ("van rechtswege in
   -- verzuim", incassokosten) alleen voor een verstuurde factuur waarvan de
   -- vervaldatum voorbij is. Eerder kon dat ook voor een concept.
   if v_invoice.status = 'draft' then
@@ -1880,7 +1880,7 @@ begin
     v_total := v_total + v_line_total;
   end loop;
 
-  -- GEWIJZIGD (20261105030000): de totalen van de versie zoals de factuur ze
+  -- GEWIJZIGD (20261105230000): de totalen van de versie zoals de factuur ze
   -- rekent (btw per tarief); per regel afronden gaf € 2,46 bij een factuur van
   -- € 2,47. De versielijst, de publieke factuurpagina en invoice.history tonen
   -- dit bedrag.
@@ -2030,7 +2030,7 @@ begin
   end if;
 
   -- Betaald bedrag bepalen (zelfde logica als recompute).
-  -- GEWIJZIGD (20261105030000): een betaalde factuur is minstens het
+  -- GEWIJZIGD (20261105230000): een betaalde factuur is minstens het
   -- factuurbedrag betaald, ook als een deel per bank kwam. Eerder telde zodra
   -- er één Mollie-betaling was alleen het Mollie-deel: bij € 290 per bank en
   -- € 710 via Mollie weigerde een terugbetaling van € 1.000, en na € 710 stond
@@ -2136,7 +2136,7 @@ begin
 
   -- Betaald bedrag: voorkeur voor de som van betaalde/terugbetaalde Mollie-records,
   -- val terug op het factuurtotaal (offline betaald zonder Mollie-record).
-  -- GEWIJZIGD (20261105030000): een betaalde factuur is minstens het
+  -- GEWIJZIGD (20261105230000): een betaalde factuur is minstens het
   -- factuurbedrag betaald, ook als een deel per bank kwam. Eerder telde zodra
   -- er één Mollie-betaling was alleen het Mollie-deel: bij € 290 per bank en
   -- € 710 via Mollie weigerde een terugbetaling van € 1.000, en na € 710 stond
@@ -2228,7 +2228,7 @@ begin
 
   v_prev_status := v_refund.status;
 
-  -- GEWIJZIGD (20261105030000): een terugbetaling die bij Mollie 'refunded' is,
+  -- GEWIJZIGD (20261105230000): een terugbetaling die bij Mollie 'refunded' is,
   -- is definitief. Een late webhook met een oudere status zette hem terug op
   -- 'pending': de factuur ging dan terug naar betaald met terugbetaald € 0,
   -- terwijl de boeking en de creditnota bleven staan.
@@ -2303,7 +2303,7 @@ begin
    where organization_id = p_organization_id and provider_refund_id = p_provider_refund_id;
   if found then return v_refund; end if;
 
-  -- GEWIJZIGD (20261105030000): een terugbetaling in het Mollie-dashboard van
+  -- GEWIJZIGD (20261105230000): een terugbetaling in het Mollie-dashboard van
   -- wat de klant te veel betaalde (dubbel betaald, een oude link), is geen
   -- correctie op de verkoop. Eerder kwam er altijd een creditnota (en een mail
   -- naar de klant): omzet en btw gingen terug voor een verkoop die bleef staan,
@@ -2486,7 +2486,7 @@ begin
       p_organization_id,
       v_public_token,
       'payment',
-      -- GEWIJZIGD (20261105030000): deze link is de pagina waar Mollie de klant
+      -- GEWIJZIGD (20261105230000): deze link is de pagina waar Mollie de klant
       -- na het betalen naartoe stuurt. Hij verliep met de checkout (30 minuten):
       -- wie later betaalde (een bankoverschrijving via Mollie, een open tabblad)
       -- kwam uit op "deze link werkt niet meer". Nu zo lang als een factuurlink.
@@ -2521,5 +2521,362 @@ $function$;
 
 revoke all on function public.begin_invoice_payment_checkout(uuid, uuid, uuid, integer, text, timestamptz, text, text, timestamptz, jsonb) from public, anon, authenticated;
 grant execute on function public.begin_invoice_payment_checkout(uuid, uuid, uuid, integer, text, timestamptz, text, text, timestamptz, jsonb) to service_role;
+
+
+-- ── J1. Pushmelding "Factuur betaald" alleen voor wie Financiën ziet ───────
+
+CREATE OR REPLACE FUNCTION public.push_on_invoice_paid()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_client_name text;
+  v_body text;
+begin
+  begin
+    if new.status is distinct from 'paid' then return null; end if;
+    if old.status is not distinct from 'paid' then return null; end if;
+
+    select c.name into v_client_name from public.clients c where c.id = new.client_id;
+    v_body := 'Factuur ' || coalesce(nullif(btrim(new.number), ''), '')
+              || coalesce(' — ' || nullif(btrim(v_client_name), ''), '');
+
+    perform public.push_enqueue(
+      new.organization_id, 'invoice_paid',
+      -- GEWIJZIGD (20261105230000): alleen wie Financiën kan zien. Een lid met
+      -- Financiën op 'geen' kreeg factuurnummer, klantnaam en "betaald" op zijn
+      -- telefoon, terwijl het scherm hem 0 facturen toont.
+      public.push_module_member_ids(new.organization_id, 'finance'),
+      jsonb_build_object('title', 'Factuur betaald', 'body', btrim(v_body), 'url', '/', 'tag', 'invoice:' || new.id::text)
+    );
+  exception when others then
+    raise warning 'push_on_invoice_paid: %', sqlerrm;
+  end;
+  return null;
+end;
+$function$;
+
+revoke all on function public.push_on_invoice_paid() from public, anon;
+grant execute on function public.push_on_invoice_paid() to authenticated, service_role;
+
+-- ── J2. Herinnering- en aanmaningsinstellingen alleen voor beheerders ──────
+--
+-- Het scherm zegt "Alleen owners en admins", maar de policies vroegen alleen
+-- schrijfrecht: elk lid met Financiën op schrijven kon automatische
+-- herinneringen naar alle klanten met een vervallen factuur, en de
+-- aanmaningsvoorstellen, aan- of uitzetten.
+
+drop policy if exists "invoice reminder settings insert" on public.invoice_reminder_settings;
+create policy "invoice reminder settings insert" on public.invoice_reminder_settings
+  for insert with check (public.can_admin_org(organization_id));
+drop policy if exists "invoice reminder settings update" on public.invoice_reminder_settings;
+create policy "invoice reminder settings update" on public.invoice_reminder_settings
+  for update using (public.can_admin_org(organization_id)) with check (public.can_admin_org(organization_id));
+
+-- ── J3. Nummers: niet afkappen, niet laten vastlopen ───────────────────────
+--
+-- lpad(n, 4) kapt af: nummer 10000 werd FAC-2026-1000, een bestaand nummer.
+-- Dat geldt voor facturen, creditnota's (dezelfde functie) en contracten. En
+-- een concept met FAC-2026-2147483646 zette de reeks op het maximum van een
+-- integer; daarna liep elke nieuwe factuur uit een offerte vast.
+
+CREATE OR REPLACE FUNCTION public.format_invoice_number(p_prefix text, p_year integer, p_number integer, p_padding integer)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select upper(btrim(coalesce(p_prefix, 'FAC'))) || '-' || coalesce(p_year, extract(year from current_date)::integer)::text || '-' || case when length(greatest(coalesce(p_number, 1), 1)::text) >= greatest(coalesce(p_padding, 4), 1)
+         then greatest(coalesce(p_number, 1), 1)::text
+         else lpad(greatest(coalesce(p_number, 1), 1)::text, greatest(coalesce(p_padding, 4), 1), '0') end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.extract_invoice_sequence_number(p_invoice_number text, p_prefix text DEFAULT 'FAC'::text, p_year integer DEFAULT (EXTRACT(year FROM CURRENT_DATE))::integer)
+ RETURNS integer
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+declare
+  v_value text := upper(btrim(coalesce(p_invoice_number, '')));
+  v_prefix text := regexp_replace(upper(btrim(coalesce(p_prefix, 'FAC'))), '[^A-Z0-9]+', '', 'g');
+  v_match text[];
+begin
+  v_match := regexp_match(v_value, '^' || v_prefix || '-' || p_year::text || '-([0-9]+)$');
+  if v_match is null then
+    return null;
+  end if;
+  -- GEWIJZIGD (20261105230000): een absurd hoog nummer (een concept met
+  -- FAC-2026-2147483646) telt niet mee; anders sprong de reeks naar het maximum
+  -- van een integer en liep het uitgeven van nummers vast.
+  if length(v_match[1]) > 8 then
+    return null;
+  end if;
+  return v_match[1]::integer;
+exception when others then
+  return null;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.allocate_next_contract_number(p_organization_id uuid)
+ RETURNS text
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_seq public.organization_contract_number_sequences;
+  v_number integer;
+  v_code text;
+begin
+  if p_organization_id is null then
+    raise exception 'Organisatie ontbreekt voor contractnummerreeks.' using errcode = '23514';
+  end if;
+
+  insert into public.organization_contract_number_sequences(organization_id)
+  values (p_organization_id)
+  on conflict (organization_id) do nothing;
+
+  select * into v_seq
+  from public.organization_contract_number_sequences
+  where organization_id = p_organization_id
+  for update;
+
+  v_number := greatest(v_seq.next_number, 1);
+  v_code := v_seq.prefix || '-' || to_char(now(), 'YYYY') || '-' || case when length(v_number::text) >= v_seq.padding then v_number::text else lpad(v_number::text, v_seq.padding, '0') end;
+
+  while exists (
+    select 1 from public.contracts c
+    where c.organization_id = p_organization_id and c.number = v_code
+  ) loop
+    v_number := v_number + 1;
+    v_code := v_seq.prefix || '-' || to_char(now(), 'YYYY') || '-' || case when length(v_number::text) >= v_seq.padding then v_number::text else lpad(v_number::text, v_seq.padding, '0') end;
+  end loop;
+
+  update public.organization_contract_number_sequences
+    set next_number = v_number + 1, updated_at = now()
+  where organization_id = p_organization_id;
+
+  return v_code;
+end;
+$function$;
+
+revoke all on function public.format_invoice_number(text, integer, integer, integer) from public, anon;
+grant execute on function public.format_invoice_number(text, integer, integer, integer) to authenticated, service_role;
+revoke all on function public.extract_invoice_sequence_number(text, text, integer) from public, anon;
+grant execute on function public.extract_invoice_sequence_number(text, text, integer) to authenticated, service_role;
+revoke all on function public.allocate_next_contract_number(uuid) from public, anon, authenticated;
+grant execute on function public.allocate_next_contract_number(uuid) to service_role;
+
+-- ── J4. Offertenummers uniek, factuurnummers ook zonder hoofdletters/spaties ─
+--
+-- Offertes hadden geen unieke nummers: twee collega's (of een oud tabblad)
+-- maakten allebei OFF-2026-0008. En de unieke index op facturen is exact:
+-- ' fac-2026-0002' kon naast FAC-2026-0002 bestaan. Bestaande dubbelen
+-- blijven staan; een nieuw of gewijzigd nummer wordt nu gecontroleerd.
+
+create or replace function public.enforce_finance_number_unique()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_norm text := upper(btrim(coalesce(new.number, '')));
+  v_exists boolean;
+begin
+  if v_norm = '' then return new; end if;
+  if tg_op = 'UPDATE' and upper(btrim(coalesce(old.number, ''))) = v_norm then return new; end if;
+  -- Twee gelijktijdige inserts met hetzelfde nummer: na elkaar.
+  perform pg_advisory_xact_lock(hashtext(new.organization_id::text), hashtext(tg_table_name || ':' || v_norm));
+  if tg_table_name = 'quotes' then
+    select exists (select 1 from public.quotes q where q.organization_id = new.organization_id
+                    and upper(btrim(q.number)) = v_norm and q.id <> new.id) into v_exists;
+  else
+    select exists (select 1 from public.invoices i where i.organization_id = new.organization_id
+                    and upper(btrim(i.number)) = v_norm and i.id <> new.id) into v_exists;
+  end if;
+  if v_exists then
+    raise exception 'Nummer % is al in gebruik in deze organisatie. Kies het volgende nummer.', btrim(new.number)
+      using errcode = '23505';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists quotes_number_unique on public.quotes;
+create trigger quotes_number_unique
+  before insert or update of number on public.quotes
+  for each row execute function public.enforce_finance_number_unique();
+drop trigger if exists invoices_number_unique on public.invoices;
+create trigger invoices_number_unique
+  before insert or update of number on public.invoices
+  for each row execute function public.enforce_finance_number_unique();
+
+revoke all on function public.enforce_finance_number_unique() from public, anon;
+grant execute on function public.enforce_finance_number_unique() to authenticated, service_role;
+
+-- ── J5. Offerte → factuur: datum en nummerjaar in Nederland ────────────────
+
+CREATE OR REPLACE FUNCTION public.convert_accepted_quote_to_invoice(p_quote_id uuid, p_organization_id uuid)
+ RETURNS invoices
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_quote public.quotes;
+  v_quote_version public.quote_versions;
+  v_existing public.invoices;
+  v_invoice public.invoices;
+  v_user_id uuid := auth.uid();
+  v_invoice_number text;
+  -- GEWIJZIGD (20261105230000): de datum in Nederland. Om 00:30 op 1 januari
+  -- kreeg de factuur de datum en het nummer van het vorige jaar (UTC).
+  v_today date := (now() at time zone 'Europe/Amsterdam')::date;
+  v_due_date date := (now() at time zone 'Europe/Amsterdam')::date + 14;
+  v_lines jsonb;
+  v_notes text;
+  v_quote_date date;
+  v_valid_until date;
+begin
+  if v_user_id is null then
+    raise exception 'Niet ingelogd.' using errcode = '42501';
+  end if;
+
+  if not (public.can_write_org(p_organization_id) and public.can_write_module(p_organization_id, 'finance')) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext(p_organization_id::text), hashtext('quote_to_invoice'));
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then
+    raise exception 'Offerte niet gevonden.' using errcode = '02000';
+  end if;
+
+  if v_quote.status <> 'accepted' then
+    raise exception 'Alleen geaccepteerde offertes kunnen worden omgezet naar een factuur.' using errcode = '23514';
+  end if;
+
+  select * into v_existing
+  from public.invoices
+  where organization_id = p_organization_id
+    and quote_id = p_quote_id
+  order by created_at asc
+  limit 1
+  for update;
+
+  if found then
+    return v_existing;
+  end if;
+
+  select * into v_quote_version
+  from public.quote_versions qv
+  where qv.organization_id = p_organization_id
+    and qv.quote_id = p_quote_id
+    and qv.id = coalesce(v_quote.accepted_sent_version_id, v_quote.accepted_version_id, v_quote.sent_version_id)
+  limit 1;
+
+  if not found then
+    select * into v_quote_version
+    from public.quote_versions qv
+    where qv.organization_id = p_organization_id
+      and qv.quote_id = p_quote_id
+      and qv.snapshot_reason in ('client_accepted','sent_to_client')
+    order by case qv.snapshot_reason when 'client_accepted' then 0 else 1 end, qv.created_at desc
+    limit 1;
+  end if;
+
+  if not found or v_quote_version.id is null then
+    raise exception 'Deze offerte heeft geen geaccepteerde/verzonden versie-snapshot. Maak of herstel eerst een offerteversie voordat je factureert.' using errcode = '23514';
+  end if;
+
+  -- GEWIJZIGD (20261104020000): de regels komen uit de bevroren offerte zelf
+  -- (snapshot_data), mét btw-code en ongeronde prijs. quote_version_items kent
+  -- geen btw-code en rondt aantal en prijs af op twee decimalen; daardoor kwam
+  -- een ICP-, export- of verlegde regel als 0% binnenland op de factuur en werd
+  -- 1000 × € 0,125 gefactureerd als € 130.
+  select jsonb_agg(
+    jsonb_strip_nulls(jsonb_build_object(
+      'id', coalesce(nullif(l->>'id', ''), gen_random_uuid()::text),
+      'description', coalesce(l->>'description', ''),
+      'quantity', case when coalesce(l->>'quantity', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (l->>'quantity')::numeric else 0 end,
+      'unit_price', case when coalesce(l->>'unit_price', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (l->>'unit_price')::numeric else 0 end,
+      'vat', case when coalesce(l->>'vat', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (l->>'vat')::numeric else 0 end,
+      'vat_code', nullif(btrim(coalesce(l->>'vat_code', '')), '')
+    )) order by t.ord
+  ) into v_lines
+  from jsonb_array_elements(
+    case when jsonb_typeof(v_quote_version.snapshot_data #> '{quote,lines}') = 'array'
+      then v_quote_version.snapshot_data #> '{quote,lines}' else '[]'::jsonb end
+  ) with ordinality as t(l, ord);
+
+  if v_lines is null then
+    select jsonb_agg(
+      jsonb_build_object(
+        'id', coalesce(qvi.source_line_id, qvi.id::text),
+        'description', qvi.description,
+        'quantity', qvi.quantity,
+        'unit_price', qvi.unit_price,
+        'vat', qvi.vat_percentage
+      ) order by qvi.line_index
+    ) into v_lines
+    from public.quote_version_items qvi
+    where qvi.quote_version_id = v_quote_version.id
+      and qvi.organization_id = p_organization_id
+      and qvi.quote_id = p_quote_id;
+  end if;
+
+  v_lines := coalesce(v_lines, v_quote_version.snapshot_data #> '{quote,lines}');
+  v_notes := v_quote_version.notes;
+  v_quote_date := v_quote_version.quote_date;
+  v_valid_until := v_quote_version.valid_until;
+
+  if v_lines is null or jsonb_typeof(v_lines) <> 'array' or jsonb_array_length(v_lines) = 0 then
+    raise exception 'De geaccepteerde offerteversie bevat geen geldige regels.' using errcode = '23514';
+  end if;
+
+  v_invoice_number := public.allocate_next_invoice_number(p_organization_id, v_today);
+
+  insert into public.invoices(
+    organization_id, created_by, client_id, project_id, quote_id, source_quote_version_id,
+    number, date, due_date, lines, status, notes
+  ) values (
+    p_organization_id, v_user_id, v_quote_version.client_id, v_quote_version.project_id, v_quote.id, v_quote_version.id,
+    v_invoice_number, v_today, v_due_date, v_lines, 'draft', v_notes
+  ) returning * into v_invoice;
+
+  perform public.insert_invoice_workflow_event(
+    p_organization_id,
+    v_invoice.id,
+    'created_from_quote',
+    'Factuur aangemaakt uit offerte',
+    'Factuur ' || v_invoice.number || ' is server-side aangemaakt uit de geaccepteerde offerteversie van ' || v_quote.number || '.',
+    jsonb_build_object('quote_id', v_quote.id, 'quote_number', v_quote.number, 'quote_version_id', v_quote_version.id, 'quote_date', v_quote_date, 'quote_valid_until', v_valid_until),
+    v_user_id
+  );
+
+  insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
+  values (
+    p_organization_id,
+    v_user_id,
+    'invoice_created_from_quote',
+    'invoice',
+    v_invoice.id,
+    v_invoice.number,
+    jsonb_build_object('title', 'Factuur aangemaakt uit offerte', 'quote_id', v_quote.id, 'quote_number', v_quote.number, 'quote_version_id', v_quote_version.id)
+  );
+
+  return v_invoice;
+end;
+$function$;
+
+revoke all on function public.convert_accepted_quote_to_invoice(uuid, uuid) from public, anon;
+grant execute on function public.convert_accepted_quote_to_invoice(uuid, uuid) to authenticated, service_role;
 
 commit;

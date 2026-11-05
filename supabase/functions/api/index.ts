@@ -1122,7 +1122,10 @@ function assertMayWrite(caller: Caller, spec: ResourceSpec, level: ModuleLevel):
 function assertFieldsWritable(caller: Caller, spec: ResourceSpec, values: Record<string, unknown>): void {
   const blocked = fieldsOutsideWrite(spec, values, (module) => moduleLevel(caller, module) === 'write');
   if (blocked.length === 0) return;
-  const modules = [...new Set(blocked.map((name) => spec.fields[name].module!))]
+  // Een veld kan bij een module horen (lezen en schrijven) of alleen voor het
+  // zetten (writeModule, zoals het e-factuuradres): noem de module die ontbreekt.
+  const modules = [...new Set(blocked.flatMap((name) => [spec.fields[name].module, spec.fields[name].writeModule]
+    .filter((module): module is NonNullable<typeof module> => Boolean(module && moduleLevel(caller, module) !== 'write'))))]
     .map((module) => (isModuleKey(module) ? MODULE_LABEL[module] : module));
   throw new ApiError(403, 'forbidden',
     `${blocked.map((name) => `"${name}"`).join(', ')} hoort bij ${modules.join(', ')}, en daar mag deze sleutel niet schrijven. Laat het veld weg.`,

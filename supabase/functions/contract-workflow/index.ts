@@ -259,12 +259,23 @@ async function sendContractForSignature(
     : await buildConceptAttachment(contract, client, company, publicUrl, filledBody);
   validatePdf(pdf);
 
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde
+  // Resend-account niet voor iedereen op. Eerst het quotum, dan pas de PDF-opslag,
+  // de nieuwe link en de verzendregel: eerder ving het quotum pas ná het
+  // vervangen van de link, en werkte de link van de klant daarna niet meer.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new HttpError(message, status));
+
   // Leg de verstuurde PDF vast vóór de e-mail: dit is precies het document dat de
   // klant als bijlage krijgt én straks op de ondertekenpagina ziet.
   let sentPdfKey: string | null = null;
   if (office) {
     sentPdfKey = await storeContractPdf(organizationId, contractId, pdf.bytes, pdf.sha256, 'verstuurd');
   }
+
+  // De huidige link en ondertekenaar onthouden: mislukt het (opnieuw) versturen,
+  // dan krijgt de klant zijn werkende link terug. Eerder verving begin_ de link
+  // al vóór de mail, en gaf de oude link na een mislukte poging "ongeldig".
+  const previous = await loadCurrentSigningLink(organizationId, contractId);
 
   const deliveryId = await beginSignatureSend({
     contractId,
@@ -277,69 +288,82 @@ async function sendContractForSignature(
     subject,
   });
 
-  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
-  const resendPayload = {
-    from: senderIdentity.from,
-    to: [recipientEmail],
-    reply_to: senderIdentity.replyTo,
-    subject,
-    html: rendered.html,
-    text: rendered.text,
-    attachments: [{ filename: pdf.fileName, content: pdf.base64 }],
-    tags: [
-      { name: 'organization_id', value: sanitizeTagValue(organizationId) },
-      { name: 'contract_id', value: sanitizeTagValue(contractId) },
-      { name: 'contract_number', value: sanitizeTagValue(contract.number) },
-      { name: 'template_key', value: 'contract_sent' },
-    ],
-  };
+  let snapshotId: string | null = null;
+  let providerEmailId = '';
+  try {
+    // Bevries de verstuurde versie vóór de mail (onveranderlijk). Eerder gebeurde
+    // dat erna en mocht het mislukken: dan toonde de pagina de vorige tekst,
+    // terwijl de mail de nieuwe PDF had, en sloeg het tekenen de versiecontrole over.
+    const snapshotResult = await supabaseAdmin.rpc('snapshot_contract_version', {
+      p_contract_id: contractId,
+      p_organization_id: organizationId,
+      p_reason: 'sent_to_client',
+      p_title: contract.title,
+      p_body: filledBody,
+      p_amount_cents: contract.amount_cents,
+      p_currency: contract.currency,
+      p_created_by: userId,
+      // Bij Word-contracten is de PDF de momentopname — er is geen HTML om te bevriezen.
+      p_pdf_storage_key: sentPdfKey,
+      p_pdf_sha256: sentPdfKey ? pdf.sha256 : null,
+      p_pdf_size_bytes: sentPdfKey ? pdf.sizeBytes : null,
+    });
+    if (snapshotResult.error) {
+      console.error('contract version snapshot failed', snapshotResult.error.message);
+      throw new HttpError('De verstuurde versie kon niet worden vastgelegd; het contract is niet verstuurd. Probeer het opnieuw.', 500);
+    }
+    snapshotId = ((Array.isArray(snapshotResult.data) ? snapshotResult.data[0] : snapshotResult.data) as { id?: string } | null)?.id ?? null;
 
-  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new HttpError(message, status));
-  const resendResponse = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-      'Idempotency-Key': sanitizeIdempotencyKey(`contract-${contractId}-${deliveryId}`),
-    },
-    body: JSON.stringify(resendPayload),
-  });
-  const resendResponsePayload = (await resendResponse.json().catch(() => ({}))) as Record<string, unknown>;
+    const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+    const resendPayload = {
+      from: senderIdentity.from,
+      to: [recipientEmail],
+      reply_to: senderIdentity.replyTo,
+      subject,
+      html: rendered.html,
+      text: rendered.text,
+      attachments: [{ filename: pdf.fileName, content: pdf.base64 }],
+      tags: [
+        { name: 'organization_id', value: sanitizeTagValue(organizationId) },
+        { name: 'contract_id', value: sanitizeTagValue(contractId) },
+        { name: 'contract_number', value: sanitizeTagValue(contract.number) },
+        { name: 'template_key', value: 'contract_sent' },
+      ],
+    };
 
-  if (!resendResponse.ok) {
-    const errorMessage = String(
-      resendResponsePayload.message || resendResponsePayload.error || resendResponse.statusText || 'Resend send failed',
-    );
-    console.error('Resend contract send failed', resendResponsePayload);
-    await failSignatureSend(deliveryId, organizationId, userId, errorMessage);
-    throw new HttpError(`Resend kon de contract-e-mail niet versturen: ${errorMessage}`, 502);
-  }
+    const resendResponse = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': sanitizeIdempotencyKey(`contract-${contractId}-${deliveryId}`),
+      },
+      body: JSON.stringify(resendPayload),
+    });
+    const resendResponsePayload = (await resendResponse.json().catch(() => ({}))) as Record<string, unknown>;
 
-  const providerEmailId = String(resendResponsePayload.id || resendResponsePayload.email_id || '').trim();
-  if (!providerEmailId) {
-    await failSignatureSend(deliveryId, organizationId, userId, 'Resend gaf geen e-mail-ID terug.');
-    throw new HttpError('Resend nam de e-mail aan maar gaf geen e-mail-ID terug.', 502);
+    if (!resendResponse.ok) {
+      const errorMessage = String(
+        resendResponsePayload.message || resendResponsePayload.error || resendResponse.statusText || 'Resend send failed',
+      );
+      console.error('Resend contract send failed', resendResponsePayload);
+      throw new HttpError(`Resend kon de contract-e-mail niet versturen: ${errorMessage}`, 502);
+    }
+
+    providerEmailId = String(resendResponsePayload.id || resendResponsePayload.email_id || '').trim();
+    if (!providerEmailId) {
+      throw new HttpError('Resend nam de e-mail aan maar gaf geen e-mail-ID terug.', 502);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await failSignatureSend(deliveryId, organizationId, userId, message);
+    await undoFailedSignatureSend(organizationId, contractId, tokenHash, snapshotId, previous)
+      .catch((undoError) => console.error('contract: oude link terugzetten mislukt', undoError instanceof Error ? undoError.message : undoError));
+    if (error instanceof HttpError) throw error;
+    throw new HttpError('Het contract kon niet worden verstuurd. Probeer het opnieuw.', 502);
   }
 
   const contractAfter = await completeSignatureSend(deliveryId, organizationId, userId, providerEmailId);
-
-  // Bevries de verstuurde versie (onveranderlijk). Niet-fataal als dit faalt.
-  const snapshotResult = await supabaseAdmin.rpc('snapshot_contract_version', {
-    p_contract_id: contractId,
-    p_organization_id: organizationId,
-    p_reason: 'sent_to_client',
-    p_title: contract.title,
-    p_body: filledBody,
-    p_amount_cents: contract.amount_cents,
-    p_currency: contract.currency,
-    p_created_by: userId,
-    // Bij Word-contracten is de PDF de momentopname — er is geen HTML om te bevriezen.
-    p_pdf_storage_key: sentPdfKey,
-    p_pdf_sha256: sentPdfKey ? pdf.sha256 : null,
-    p_pdf_size_bytes: sentPdfKey ? pdf.sizeBytes : null,
-  });
-  if (snapshotResult.error) console.warn('contract version snapshot failed', snapshotResult.error.message);
 
   // Niet de ondertekenlink (met token) terug naar de browser van de verzender:
   // daarmee kon die zelf "als de klant" tekenen, met een bewijs dat er echt
@@ -512,6 +536,48 @@ async function beginSignatureSend(input: {
   const deliveryId = String(data || '');
   if (!deliveryId) throw new HttpError('Verzendpoging kon niet worden voorbereid.', 500);
   return deliveryId;
+}
+
+type CurrentSigningLink = {
+  public_token_hash: string | null;
+  public_token_created_at: string | null;
+  public_token_expires_at: string | null;
+  signer: { name: string; email: string } | null;
+};
+
+async function loadCurrentSigningLink(organizationId: string, contractId: string): Promise<CurrentSigningLink> {
+  const [{ data: row, error }, { data: signer }] = await Promise.all([
+    supabaseAdmin.from('contracts').select('public_token_hash,public_token_created_at,public_token_expires_at')
+      .eq('organization_id', organizationId).eq('id', contractId).maybeSingle(),
+    supabaseAdmin.from('contract_signers').select('name,email')
+      .eq('organization_id', organizationId).eq('contract_id', contractId).eq('role', 'client')
+      .order('signing_order', { ascending: true }).limit(1).maybeSingle(),
+  ]);
+  if (error) throw error;
+  const link = (row ?? {}) as Partial<CurrentSigningLink>;
+  return {
+    public_token_hash: link.public_token_hash ?? null,
+    public_token_created_at: link.public_token_created_at ?? null,
+    public_token_expires_at: link.public_token_expires_at ?? null,
+    signer: signer ? { name: String((signer as { name?: string }).name ?? ''), email: String((signer as { email?: string }).email ?? '') } : null,
+  };
+}
+
+/** Een mislukte (her)verzending terugdraaien: de vastgelegde versie weg, de oude link en ondertekenaar terug. */
+async function undoFailedSignatureSend(organizationId: string, contractId: string, newTokenHash: string, snapshotId: string | null, previous: CurrentSigningLink): Promise<void> {
+  if (snapshotId) {
+    await supabaseAdmin.from('contract_versions').delete().eq('organization_id', organizationId).eq('id', snapshotId);
+  }
+  // Alleen als de nieuwe link er nog staat (er is intussen niets anders gebeurd).
+  await supabaseAdmin.from('contracts').update({
+    public_token_hash: previous.public_token_hash,
+    public_token_created_at: previous.public_token_created_at,
+    public_token_expires_at: previous.public_token_expires_at,
+  }).eq('organization_id', organizationId).eq('id', contractId).eq('public_token_hash', newTokenHash);
+  if (previous.signer && previous.signer.email) {
+    await supabaseAdmin.from('contract_signers').update({ name: previous.signer.name, email: previous.signer.email })
+      .eq('organization_id', organizationId).eq('contract_id', contractId).eq('role', 'client').neq('status', 'signed');
+  }
 }
 
 async function completeSignatureSend(deliveryId: string, organizationId: string, userId: string, providerEmailId: string): Promise<unknown> {
