@@ -27,8 +27,10 @@ import { ActionCtx, ActionError } from './types.ts';
  * Daarom staan hier alleen de handelingen waarvan de uitvoerder AANTOONBAAR
  * dezelfde is: één org-scoped insert of update, zonder mail, zonder PDF, zonder
  * bestandsopslag, zonder afgeleide rijen. Voor die handelingen is de serverkant
- * geen kopie maar dezelfde query; voor de rest valt de connector netjes terug op
- * een voorstel in de goedkeurwachtrij, en hoort het model dat ook zo te zeggen.
+ * geen kopie maar dezelfde query, en sinds november 2026 ook met dezelfde
+ * rechten: hij schrijft als het teamlid (zie "De schrijfbewegingen"). Voor de
+ * rest valt de connector netjes terug op een voorstel in de goedkeurwachtrij,
+ * en hoort het model dat ook zo te zeggen.
  *
  * `mcpExecute.test.ts` legt beide kanten naast elkaar: elke id hieronder moet in
  * de registry bestaan, `kind: 'write'` zijn en een uitvoerder in de browser
@@ -97,21 +99,22 @@ function clean(values: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(values).filter(([key]) => !PROTECTED_FIELDS.has(key)));
 }
 
-// ── De twee schrijfbewegingen ────────────────────────────────────────────────
-
-/**
- * Tabellen van Financiën: hier schrijft de uitvoerder ALS HET TEAMLID, via
- * `action_member_write` (dezelfde wissel als `api_rest_write` voor de REST-
- * resources). Op de service-role golden de databasebewakers voor
- * "authenticated" niet: dat code en soort van een rekening waarop al geboekt is
- * vastliggen, dat een btw-aangifte alleen van ingediend naar betaald gaat, dat
- * een geboekte factuur of een activum met boekingen vastligt. Zo is de weg
- * langs de API en MCP voor deze tabellen aantoonbaar dezelfde als in de app:
- * RLS, de modulepoort en elke bewaker doen mee.
- */
-const MEMBER_WRITE_TABLES = new Set([
-  'invoices', 'quotes', 'ledger_accounts', 'suppliers', 'bank_accounts', 'bank_rules', 'vat_returns', 'fixed_assets',
-]);
+// ── De schrijfbewegingen: altijd als het teamlid ─────────────────────────────
+//
+// Elke uitvoerder hieronder schrijft ALS HET TEAMLID namens wie de koppeling
+// werkt: via `action_member_write` (een rij) en `action_member_call` (een
+// databasefunctie). Die wisselen binnen de transactie naar dat teamlid, net als
+// `api_rest_write` voor de REST-resources. Daarna gelden RLS, de modulepoort en
+// elke databasebewaker precies als bij de knop in het scherm.
+//
+// Tot november 2026 schreven deze hulpjes op de service-role, en die slaat dat
+// allemaal over. Wat er toen kon: de code of soort van een geboekte
+// grootboekrekening wijzigen, een btw-aangifte terugzetten, een bericht uit het
+// postvak koppelen zonder schrijfrecht in Klanten (en zonder vast te leggen wie
+// het deed). De modulepoort (die op auth.uid() leunt) en de bewakers op klanten,
+// contactpersonen en galerijen keken niet mee. Daarom schrijft hier niets meer
+// rechtstreeks naar een tabel op de service-role: mcpExecute.test.ts en
+// actionMemberWrite.test.ts bewaken dat.
 
 async function memberWrite<T>(
   ctx: ActionCtx, table: string, values: Record<string, unknown>, rowId: string | null,
@@ -134,26 +137,35 @@ async function memberWrite<T>(
 }
 
 /**
+ * Een databasefunctie aanroepen als het teamlid. Die functies controleren zelf
+ * de rechten van de aanroeper (en leggen vast wie het deed), maar slaan dat over
+ * voor de service-role. De organisatie zet de database er zelf in, uit de
+ * koppeling; wat hier in `args` staat aan organisatie telt niet.
+ */
+async function memberCall(ctx: ActionCtx, fn: string, args: Record<string, unknown>, failure: string): Promise<unknown> {
+  const { data, error } = await ctx.db.rpc('action_member_call', {
+    p_user_id: ctx.userId,
+    p_organization_id: ctx.organizationId,
+    p_function: fn,
+    p_args: args,
+  });
+  if (error) throw new ActionError(`${failure}: ${error.message}`);
+  return data;
+}
+
+/**
  * Eén rij bijwerken binnen de organisatie — de serverkant van `updateRow`.
- *
- * `maybeSingle()` en niet `single()`: raakt de update geen rij (een id uit een
- * andere organisatie, of een rij die er intussen niet meer is), dan hoort daar
- * een zin te staan die het model begrijpt, geen PostgREST-code.
+ * Raakt de update geen rij (een id uit een andere organisatie, of een rij die er
+ * intussen niet meer is), dan komt er een zin die het model begrijpt, geen
+ * databasecode. `_select` is er nog voor de aanroepers: de database geeft de
+ * hele rij terug.
  */
 async function updateOne<T = Record<string, unknown>>(
-  ctx: ActionCtx, table: string, rowId: string, values: Record<string, unknown>, select = '*', label = 'Rij',
+  ctx: ActionCtx, table: string, rowId: string, values: Record<string, unknown>, _select = '*', label = 'Rij',
   /** Kolommen die NOG zo moeten zijn, anders gebeurt er niets (bv. het e-mailadres op de goedgekeurde kaart). */
   unchanged: Record<string, string | null> = {},
 ): Promise<T> {
-  if (MEMBER_WRITE_TABLES.has(table)) return await memberWrite<T>(ctx, table, values, rowId, unchanged, label, 'bijwerken');
-  let query = ctx.db.from(table)
-    .update({ ...clean(values), updated_at: new Date().toISOString() })
-    .eq('organization_id', ctx.organizationId).eq('id', rowId);
-  for (const [column, value] of Object.entries(unchanged)) query = value === null ? query.is(column, null) : query.eq(column, value);
-  const { data, error } = await query.select(select).maybeSingle();
-  if (error) throw new ActionError(`${label} bijwerken mislukt: ${error.message}`);
-  if (!data) throw new ActionError(`${label} niet gevonden in deze organisatie.`);
-  return data as T;
+  return await memberWrite<T>(ctx, table, values, rowId, unchanged, label, 'bijwerken');
 }
 
 /**
@@ -165,35 +177,22 @@ async function updateOne<T = Record<string, unknown>>(
  * in de database een RLS-regel met `user_id = auth.uid()` — de weekplanner-
  * actiepunten zijn er zo een.
  *
- * Die regel deed vroeger zijn werk vanzelf: uitvoeren gebeurde in de browser,
- * onder de sessie van het teamlid. Hier niet. Dit draait op de service-role, die
- * RLS overslaat, dus is dit filter de enige plek waar "van jou" nog iets
- * betekent. `plan()` controleert het ook, en dat is geen reden om het hier over
- * te slaan: een uitvoerder die op zijn aanroeper vertrouwt, is een uitvoerder
- * die stilvalt zodra iemand hem ergens anders vandaan aanroept.
+ * Die regel geldt nu ook hier (we schrijven als het teamlid), en toch staat
+ * "van jou" er nog eens expliciet bij: als voorwaarde (`user_id` moet nog die
+ * van de gebruiker zijn). Een uitvoerder die op RLS of zijn aanroeper vertrouwt,
+ * is een uitvoerder die stilvalt zodra een van beide verandert.
  */
 async function updateOwn<T = Record<string, unknown>>(
-  ctx: ActionCtx, table: string, rowId: string, values: Record<string, unknown>, select = '*', label = 'Rij',
+  ctx: ActionCtx, table: string, rowId: string, values: Record<string, unknown>, _select = '*', label = 'Rij',
 ): Promise<T> {
-  const { data, error } = await ctx.db.from(table)
-    .update({ ...clean(values), updated_at: new Date().toISOString() })
-    .eq('organization_id', ctx.organizationId).eq('id', rowId).eq('user_id', ctx.userId)
-    .select(select).maybeSingle();
-  if (error) throw new ActionError(`${label} bijwerken mislukt: ${error.message}`);
-  if (!data) throw new ActionError(`${label} niet gevonden op jouw lijst.`);
-  return data as T;
+  return await memberWrite<T>(ctx, table, values, rowId, { user_id: ctx.userId }, label, 'bijwerken');
 }
 
 /** Eén rij aanmaken binnen de organisatie — de serverkant van `insertRow`. */
 async function insertOne<T = Record<string, unknown>>(
-  ctx: ActionCtx, table: string, values: Record<string, unknown>, select = '*', label = 'Rij',
+  ctx: ActionCtx, table: string, values: Record<string, unknown>, _select = '*', label = 'Rij',
 ): Promise<T> {
-  if (MEMBER_WRITE_TABLES.has(table)) return await memberWrite<T>(ctx, table, values, null, {}, label, 'aanmaken');
-  const { data, error } = await ctx.db.from(table)
-    .insert({ ...clean(values), organization_id: ctx.organizationId, created_by: ctx.userId })
-    .select(select).single();
-  if (error) throw new ActionError(`${label} aanmaken mislukt: ${error.message}`);
-  return data as T;
+  return await memberWrite<T>(ctx, table, values, null, {}, label, 'aanmaken');
 }
 
 /** "Leverancier  bijgewerkt" leest als een fout; dubbele spaties eruit. */
@@ -273,24 +272,20 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
 
   // ── Postvak ───────────────────────────────────────────────────────────────
   'inbox.link': async (ctx, payload) => {
-    const { error } = await ctx.db.rpc('link_inbound_message', {
-      p_organization_id: ctx.organizationId,
+    await memberCall(ctx, 'link_inbound_message', {
       p_inbound_message_id: pText(payload, 'message_id'),
       p_client_id: pText(payload, 'client_id'),
       p_remember_sender: pFlag(payload, 'remember_sender'),
-    });
-    if (error) throw new ActionError(`Het bericht koppelen mislukte: ${error.message}`);
+    }, 'Het bericht koppelen mislukte');
     return `Bericht staat nu in het dossier van ${pOptText(payload, 'client_name') ?? 'de klant'}`;
   },
 
   'inbox.ignore': async (ctx, payload) => {
     const status = pText(payload, 'status');
-    const { error } = await ctx.db.rpc('set_inbound_message_status', {
-      p_organization_id: ctx.organizationId,
+    await memberCall(ctx, 'set_inbound_message_status', {
       p_inbound_message_id: pText(payload, 'message_id'),
       p_status: status,
-    });
-    if (error) throw new ActionError(`De status van het bericht wijzigen mislukte: ${error.message}`);
+    }, 'De status van het bericht wijzigen mislukte');
     return status === 'dropped' ? 'Bericht genegeerd' : 'Bericht staat weer in de opvangbak';
   },
 
@@ -401,10 +396,10 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
   'invoice.set_status': async (ctx, payload) => {
     const status = pText(payload, 'status');
     const invoiceId = pText(payload, 'invoice_id');
-    // Deze weg draait (via de API en MCP) op de service-role, langs de
-    // databasecontroles voor de app heen. Dus hier dezelfde regels, op het
-    // moment van uitvoeren: een uitgegeven factuur gaat niet terug naar concept,
-    // en een geboekte factuur annuleer je met een creditnota.
+    // De database houdt dit ook tegen (we schrijven als het teamlid), maar dan
+    // met een kale melding. Hier dezelfde regels, op het moment van uitvoeren,
+    // met een zin die het model begrijpt: een uitgegeven factuur gaat niet
+    // terug naar concept, en een geboekte factuur annuleer je met een creditnota.
     const { data: current, error: currentError } = await ctx.db.from('invoices')
       .select('status, journal_entry_id')
       .eq('organization_id', ctx.organizationId).eq('id', invoiceId).maybeSingle();

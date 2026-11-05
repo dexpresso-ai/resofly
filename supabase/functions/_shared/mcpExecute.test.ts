@@ -156,16 +156,18 @@ test('een uitvoerder op een persoonlijke tabel filtert ook op de gebruiker', () 
   });
 
   assert.deepEqual(problems, [],
-    'Deze uitvoerders schrijven naar een persoonlijke tabel zonder op de gebruiker te filteren, ' +
-    `en draaien op de service-role die RLS overslaat. Gebruik updateOwn(). Persoonlijke tabellen: ${
+    'Deze uitvoerders schrijven naar een persoonlijke tabel zonder "van jou" als voorwaarde. RLS doet dat ook, ' +
+    `maar de uitvoerder hoort er niet op te leunen. Gebruik updateOwn(). Persoonlijke tabellen: ${
       Object.entries(OWNER_SCOPED_TABLES).map(([t, why]) => `${t} — ${why}`).join(' ')}`);
 });
 
 test('updateOwn filtert daadwerkelijk op de gebruiker uit de sessie', () => {
-  // Zonder deze regel is de test hierboven een controle op een naam.
+  // Zonder deze regel is de test hierboven een controle op een naam. De rij en
+  // de organisatie legt action_member_write zelf op (zie actionMemberWrite.test.ts);
+  // "van jou" staat er als voorwaarde bij: user_id moet die van de sessie zijn.
   const fn = applySource.slice(applySource.indexOf('async function updateOwn'));
-  assert.match(fn.slice(0, 600), /\.eq\('organization_id', ctx\.organizationId\)\.eq\('id', rowId\)\.eq\('user_id', ctx\.userId\)/,
-    'updateOwn hoort op organisatie, rij én gebruiker te filteren.');
+  assert.match(fn.slice(0, 400), /memberWrite<T>\(ctx, table, values, rowId, \{ user_id: ctx\.userId \}/,
+    'updateOwn hoort de rij alleen te schrijven als user_id die van de gebruiker uit de sessie is.');
 });
 
 // ── 2. Wat mag: de twee schakelaars ─────────────────────────────────────────

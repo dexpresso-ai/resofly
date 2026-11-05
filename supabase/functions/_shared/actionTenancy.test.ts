@@ -139,6 +139,11 @@ test('een update kan een rij niet naar een andere organisatie schrijven', () => 
   const updates = (source.match(/\.update\(/g) ?? []).length;
   const cleaned = (source.match(/\.update\(\{ \.\.\.clean\(/g) ?? []).length;
   assert.equal(cleaned, updates, 'elke .update() in apply.ts hoort door clean() te gaan.');
+  // Alle schrijfacties gaan als het teamlid via action_member_write: de waarden
+  // door clean(), de organisatie en de gebruiker uit de sessie.
+  const write = source.slice(source.indexOf('async function memberWrite'));
+  assert.match(write.slice(0, 700), /p_user_id: ctx\.userId,\s*p_organization_id: ctx\.organizationId,[\s\S]*p_values: clean\(values\)/,
+    'memberWrite hoort de organisatie en de gebruiker uit de sessie mee te geven, en de waarden door clean() te halen.');
 });
 
 test('de twee hulpfuncties die alle handelingen delen leggen de grens zelf op', () => {
