@@ -10,6 +10,13 @@
 // PDF wordt gemaakt, niet bij elke actie van de workflow.
 
 import * as PdfLib from 'https://esm.sh/pdf-lib@1.17.1';
+// De module die esm.sh serveert (de ES-build van @pdf-lib/fontkit) heeft alleen
+// een default export: `export default fontkit`. De typen die esm.sh meestuurt
+// (fontkit.d.ts) noemen die niet, en daar viel de Deno-typecheck in CI over
+// (TS1192), terwijl de import bij het draaien gewoon het fontkit-object geeft.
+// `import * as fontkit` zou de typen tevredenstellen, maar breekt het draaien:
+// dan is `create` leeg en valt elke PDF terug op Helvetica.
+// @ts-ignore: zie hierboven (TS1192, alleen in de typen)
 import fontkit from 'https://esm.sh/@pdf-lib/fontkit@1.1.1';
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import {
