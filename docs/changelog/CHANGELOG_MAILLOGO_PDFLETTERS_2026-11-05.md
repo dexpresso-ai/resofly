@@ -217,10 +217,22 @@ Bewust niet overgenomen:
 
 ## Uitrol
 
-Op de branch `ccr-f419f057-zisitq`, samengevoegd met de nieuwste staging; nog niet op staging.
-Geen nieuwe migratie in deze ronde (die van de eerste ronde, `20261105100000`, komt nog steeds na
-de laatste op staging, `20261105020000`). Samenvoegen naar `staging` en pushen rolt de app uit en
-zet alle edge functions opnieuw neer (`supabase functions deploy` zonder naam). De gedeelde code zit in
-`invoice-workflow`, `quote-workflow`, `contract-workflow`, `contract-public`, `file-share`,
-`file-transfer`, `file-transfer-public`, `meeting-booking`, `meeting-booking-public`,
-`portal-notify`, `mail`, `campaigns`, `meeting-transcribe` en `calendar-integrations`.
+Samengevoegd naar `staging` op 5 november (`e67aa69`), samen met de eerste ronde. Geen nieuwe
+migratie in deze ronde; die van de eerste ronde, `20261105100000`, kwam na de laatste op staging
+(`20261105030000`).
+
+- *Deploy Supabase (staging)* run 175: migratie toegepast, alle 39 edge functions opnieuw neergezet
+  (de 16 die deze branch raakt allemaal met een nieuwe versie), rooktest groen, ook
+  `portal-notify` met het secret uit de cron-taak.
+- Nagekeken op de staging-database (alleen lezen): `company_settings.document_layouts` (jsonb) en
+  de CHECK op type en grootte staan erop; de twee organisaties hebben nog geen eigen opmaak en
+  krijgen dus de standaardopmaak.
+- *Frontend checks* run 128 viel op de stap *Deno-typecheck documentopmaak*: TS1192, "has no default
+  export" bij `import fontkit from 'https://esm.sh/@pdf-lib/fontkit@1.1.1'`. De module die esm.sh
+  serveert heeft wél een default export (`export default fontkit` in de ES-build), maar de typen
+  die esm.sh meestuurt noemen hem niet. Lokaal was dat niet te zien: esm.sh is vanuit de
+  cloudsessie onbereikbaar, en de lokale controle gebruikte dezelfde versie uit npm, waarvan Deno
+  de typen soepeler leest. Hersteld met een `@ts-ignore` op precies die import, met uitleg;
+  `import * as fontkit` zou de typen tevredenstellen maar het draaien breken. Nagebootst met de
+  typen uit het pakket zelf: zonder de regel dezelfde fout als in CI, met de regel schoon. Bij
+  het draaien veranderde er niets: de uitgerolde functies gebruikten de default export al.
