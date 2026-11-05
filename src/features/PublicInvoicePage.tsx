@@ -41,7 +41,8 @@ type PublicInvoice = {
 };
 
 type PublicClient = { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null } | null;
-type PublicProject = { name?: string; description?: string | null; start_date?: string | null; end_date?: string | null } | null;
+/** Alleen de naam: de rest van een project is intern. */
+type PublicProject = { name?: string } | null;
 type PublicQuote = { id?: string; number?: string | null; status?: string | null; date?: string | null; total_amount?: number | null } | null;
 type PublicCompany = { company_name?: string; trade_name?: string | null; email?: string | null; phone?: string | null; website?: string | null; city?: string | null; country?: string | null; iban?: string | null; vat_number?: string | null; kvk_number?: string | null } | null;
 type PublicEvent = { event_type: string; title: string; description: string | null; created_at: string };

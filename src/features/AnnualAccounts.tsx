@@ -544,7 +544,9 @@ export function AnnualAccountsPage({ data, organizationId, canWrite, canAdmin, b
                   <Button disabled={busy} onClick={() => runPdf(() => previewAnnualAccountsPdf(organizationId, detail.id, 'annual'), 'Voorbeeld gemaakt.', true)}>
                     <Eye size={14} /> Voorbeeld
                   </Button>
-                  {canWrite && (
+                  {/* Na vaststellen of deponeren is het archief het stuk zelf: dat
+                      wordt niet meer vervangen (de server weigert het ook). */}
+                  {canWrite && !(isArchiveFinal(detail.status) && detail.pdfAttachmentId) && (
                     <Button disabled={busy} onClick={() => runPdf(() => renderAnnualAccountsPdf(organizationId, detail.id), 'Jaarrekening-PDF gemaakt en gearchiveerd.')}>
                       <FileSignature size={14} /> PDF vastleggen
                     </Button>
@@ -1212,7 +1214,7 @@ function PublicationSection({ account, canWrite, busy, onPreview, onRender, onDo
 
       <div className="bk-fy-new-actions">
         <Button disabled={busy} onClick={onPreview}><Eye size={14} /> Voorbeeld</Button>
-        {canWrite && <Button disabled={busy} onClick={onRender}><BookText size={14} /> Publicatiestuk vastleggen</Button>}
+        {canWrite && !(isArchiveFinal(account.status) && account.publicationAttachmentId) && <Button disabled={busy} onClick={onRender}><BookText size={14} /> Publicatiestuk vastleggen</Button>}
         <Button disabled={busy} onClick={onDownload}><Download size={14} /> Downloaden</Button>
       </div>
     </div>
@@ -1818,4 +1820,9 @@ function ReverseDialog({ account, busy, error, onCancel, onSubmit }: {
       </div>
     </div>
   );
+}
+
+/** Vastgesteld of gedeponeerd: het gearchiveerde exemplaar ligt dan vast. */
+function isArchiveFinal(status: string | null | undefined): boolean {
+  return status === 'adopted' || status === 'filed';
 }

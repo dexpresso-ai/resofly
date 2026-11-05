@@ -39,7 +39,8 @@ type PublicQuote = {
 };
 
 type PublicClient = { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null } | null;
-type PublicProject = { name?: string; description?: string | null; start_date?: string | null; end_date?: string | null } | null;
+/** Alleen de naam: de rest van een project is intern. */
+type PublicProject = { name?: string } | null;
 type PublicCompany = { company_name?: string; trade_name?: string | null; email?: string | null; phone?: string | null; website?: string | null; city?: string | null; country?: string | null } | null;
 type PublicEvent = { id: string; event_type: string; title: string; description: string | null; created_at: string };
 

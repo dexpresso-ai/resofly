@@ -87,6 +87,8 @@ Deno.serve(async (req) => {
           allowDuplicate: body.allowDuplicate === true || row.status === 'duplicate',
           supplierOverride,
           actorUserId: user.id,
+          // Klaarzetten is klaarzetten: boeken doet de gebruiker daarna zelf.
+          noAutoBook: true,
         });
         break;
       }

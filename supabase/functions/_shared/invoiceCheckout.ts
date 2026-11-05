@@ -57,7 +57,7 @@ export async function createPortalInvoiceCheckout(
 
   const { data: invoice, error: invoiceError } = await supabaseAdmin
     .from('invoices')
-    .select('id,number,status,client_id,lines')
+    .select('id,number,status,client_id,lines,journal_entry_id')
     .eq('id', invoiceId)
     .eq('organization_id', organizationId)
     .maybeSingle();
@@ -67,7 +67,22 @@ export async function createPortalInvoiceCheckout(
   if (UNPAYABLE_STATUSES.includes(invoice.status)) return { ok: false, status: 409, error: 'Voor deze factuur kan geen betaallink worden aangemaakt.' };
   if (!invoice.client_id) return { ok: false, status: 422, error: 'Deze factuur heeft geen klant gekoppeld.' };
 
-  const amountCents = calculateTotalCents(Array.isArray(invoice.lines) ? invoice.lines : []);
+  // Betalen wat er nog openstaat, niet het factuurtotaal: na een deelbetaling of
+  // creditnota betaalde de klant anders te veel. Niet in het grootboek → totaal.
+  const totalCents = calculateTotalCents(Array.isArray(invoice.lines) ? invoice.lines : []);
+  let amountCents = totalCents;
+  if (invoice.journal_entry_id) {
+    const { data: open, error: openError } = await supabaseAdmin.rpc('invoice_open_receivable_cents', {
+      p_organization_id: organizationId,
+      p_invoice_id: invoiceId,
+    });
+    if (openError) return { ok: false, status: 500, error: describeError(openError) };
+    const openCents = Number(open);
+    if (Number.isFinite(openCents)) {
+      amountCents = Math.max(0, Math.min(totalCents, openCents));
+      if (amountCents <= 0) return { ok: false, status: 409, error: 'Op deze factuur staat niets meer open.' };
+    }
+  }
   if (amountCents <= 0) return { ok: false, status: 422, error: 'Factuurbedrag moet groter zijn dan 0.' };
 
   // Via Mollie als e-factuur uitgegeven? Dan alleen de betaallink van Mollie —
@@ -83,7 +98,10 @@ export async function createPortalInvoiceCheckout(
   // Bestaande, herbruikbare open betaallink? Meteen teruggeven — nooit dubbel
   // aanmaken (zelfde gedrag als de medewerkers-app).
   const existing = await loadLatestOpenPayment(supabaseAdmin, organizationId, invoiceId);
-  if (existing?.provider_checkout_url && isReusableCheckoutUrl(existing.provider_checkout_url)) {
+  // Alleen hergebruiken als de open link nog om hetzelfde bedrag vraagt (na een
+  // deelbetaling laat begin_invoice_payment_checkout de oude link vervallen).
+  if (existing?.provider_checkout_url && isReusableCheckoutUrl(existing.provider_checkout_url)
+    && Number(existing.amount_cents) === amountCents) {
     // De metadata van de OORSPRONKELIJKE aanmaker blijft staan (wie de betaling
     // startte), maar als een ANDERE geautoriseerde contactpersoon dezelfde link
     // hergebruikt, leggen we dat apart vast i.p.v. dat stilzwijgend te negeren —
@@ -154,9 +172,14 @@ export async function createPortalInvoiceCheckout(
 
       const mollieResponse = await fetch('https://api.mollie.com/v2/payments', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${orgKey.apiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(idempotencyKey) },
+        // Per betaalrecord, net als invoice-workflow: met één sleutel per factuur
+        // gaf Mollie na een verlopen of mislukte betaling binnen het
+        // idempotentievenster de oude betaling (of een 422) terug.
+        headers: { Authorization: `Bearer ${orgKey.apiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`invoice-payment-${payment.id}`) },
         body: JSON.stringify({
-          amount: { currency: 'EUR', value: (amountCents / 100).toFixed(2) },
+          // Het bedrag van het betaalrecord: de database begrenst het op wat er
+          // nog openstaat (begin_invoice_payment_checkout).
+          amount: { currency: 'EUR', value: (Number(payment.amount_cents ?? amountCents) / 100).toFixed(2) },
           description: `Factuur ${invoice.number}`,
           redirectUrl,
           webhookUrl,
@@ -189,7 +212,7 @@ export async function createPortalInvoiceCheckout(
 async function beginPayment(
   supabaseAdmin: SupabaseAdmin,
   input: { invoiceId: string; organizationId: string; actorUserId: string; amountCents: number; idempotencyKey: string; checkoutExpiresAt: string; metadata: Record<string, unknown> },
-): Promise<{ ok: true; payment: { id: string; provider_checkout_url: string | null; provider_payment_id: string | null } } | { ok: false; status: number; error: string }> {
+): Promise<{ ok: true; payment: { id: string; amount_cents: number | null; provider_checkout_url: string | null; provider_payment_id: string | null } } | { ok: false; status: number; error: string }> {
   const { data, error } = await supabaseAdmin.rpc('begin_invoice_payment_checkout', {
     p_invoice_id: input.invoiceId,
     p_organization_id: input.organizationId,
@@ -203,7 +226,7 @@ async function beginPayment(
     p_metadata: input.metadata,
   });
   if (error) return { ok: false, status: 500, error: describeError(error) };
-  return { ok: true, payment: data as { id: string; provider_checkout_url: string | null; provider_payment_id: string | null } };
+  return { ok: true, payment: data as { id: string; amount_cents: number | null; provider_checkout_url: string | null; provider_payment_id: string | null } };
 }
 
 async function completePayment(
@@ -263,10 +286,10 @@ async function loadMollieSalesInvoiceCheckout(
 
 async function loadLatestOpenPayment(
   supabaseAdmin: SupabaseAdmin, organizationId: string, invoiceId: string,
-): Promise<{ id: string; provider_checkout_url: string | null; provider_payment_id: string | null; status: string } | null> {
+): Promise<{ id: string; amount_cents: number | null; provider_checkout_url: string | null; provider_payment_id: string | null; status: string } | null> {
   const { data, error } = await supabaseAdmin
     .from('invoice_payment_records')
-    .select('id,provider_checkout_url,provider_payment_id,status')
+    .select('id,amount_cents,provider_checkout_url,provider_payment_id,status')
     .eq('organization_id', organizationId)
     .eq('invoice_id', invoiceId)
     .in('status', ['creating', 'open', 'pending', 'authorized'])
@@ -274,7 +297,7 @@ async function loadLatestOpenPayment(
     .limit(1)
     .maybeSingle();
   if (error) return null;
-  return (data ?? null) as { id: string; provider_checkout_url: string | null; provider_payment_id: string | null; status: string } | null;
+  return (data ?? null) as { id: string; amount_cents: number | null; provider_checkout_url: string | null; provider_payment_id: string | null; status: string } | null;
 }
 
 /**

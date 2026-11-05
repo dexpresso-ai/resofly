@@ -684,6 +684,11 @@ async function executeWrite(action: ActionDef, core: boolean, input: Record<stri
 
   // Het risico van DIT geval, niet van de handeling in het algemeen: een plan()
   // mag het omhoog zetten voor de ene aanroep en niet voor de andere.
+  if (proposal.human_only) {
+    return await queueWrite(action, core, input, caller,
+      `"${action.label}" verandert waar geld heen gaat (een IBAN of e-mailadres). Dat gaat altijd langs een mens. Het staat klaar in de goedkeurwachtrij.`,
+      proposal);
+  }
   if (!directlyExecutable(caller, action.id, proposal.risk)) {
     return await queueWrite(action, core, input, caller,
       `"${action.label}" is onomkeerbaar of gaat naar buiten, en deze sleutel mag dat niet rechtstreeks doen. Het staat klaar in de goedkeurwachtrij.`,
@@ -750,6 +755,7 @@ async function buildRegistryProposal(action: ActionDef, input: Record<string, un
     sub: plan.warning ? `⚠️ ${plan.warning}${plan.sub ? ` — ${plan.sub}` : ''}` : plan.sub,
     kind: plan.kind,
     risk: plan.risk === 'high' || action.risk === 'high' ? 'high' : 'normal',
+    ...(plan.humanOnly ? { human_only: true } : {}),
     payload: plan.payload,
   };
 }

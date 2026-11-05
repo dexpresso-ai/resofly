@@ -175,10 +175,12 @@ async function loadClient(organizationId: string, clientId: string) {
   return data ?? null;
 }
 
+// Alleen de naam: omschrijving en planning van een project zijn intern en horen
+// niet op een pagina die iedereen met de link kan openen.
 async function loadProject(organizationId: string, projectId: string) {
   const { data, error } = await supabaseAdmin
     .from('projects')
-    .select('id,name,description,start_date,end_date')
+    .select('name')
     .eq('organization_id', organizationId)
     .eq('id', projectId)
     .maybeSingle();

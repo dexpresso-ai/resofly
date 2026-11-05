@@ -110,6 +110,12 @@ export type InvoiceReminderEmailInput = {
     due_date?: string | null;
     lines?: InvoiceEmailLine[] | null;
   };
+  /**
+   * Wat er nog openstaat volgens het grootboek (na deelbetalingen en
+   * creditnota's). Leeg = factuur staat niet in het grootboek; dan geldt het
+   * factuurbedrag.
+   */
+  openAmountCents?: number | null;
   client: {
     name: string;
     contact_name?: string | null;
