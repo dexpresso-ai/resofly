@@ -92,14 +92,19 @@ Klantgegevens, klantvelden, mappen, inhoud verplaatsen, tickets, uren,
 projectinstellingen, factuurstatus, grootboek- en bankstamgegevens, rapportages,
 galerijen.
 
-**Wat de browser-uitvoering afdwong en de serverkant zelf moet doen.** Uitvoeren
-in de browser gebeurde onder de sessie van het teamlid, dus met RLS erbovenop;
-`apply.ts` draait op de service-role en slaat RLS over. Van de 20 tabellen die de
-uitvoerders aanraken, trekt de RLS-regel bij 19 dezelfde grens die de code al
-trekt (dezelfde organisatie, plus de modulepoort die de MCP-server toetst). Alleen
-`planner_notes` is smaller — weekplanner-actiepunten zijn persoonlijk — en die
-uitvoerder gaat daarom langs `updateOwn()`, dat ook op `user_id` filtert.
-`mcpExecute.test.ts` bewaakt die lijst.
+**Met de rechten van het teamlid.** Uitvoeren in de browser gebeurt onder de
+sessie van het teamlid: RLS, de modulepoort en de databasebewakers doen mee.
+`apply.ts` doet sinds november 2026 hetzelfde. Elke schrijfactie gaat via
+`action_member_write` (een rij) of `action_member_call` (de twee functies van het
+postvak). Die wisselen binnen de transactie naar het teamlid namens wie de
+koppeling werkt. Daarvoor schreven de uitvoerders op de service-role, die RLS en
+de bewakers overslaat; de modulepoort in de database keek dan niet mee.
+
+Aanmaken kan alleen in de tabellen waar een uitvoerder ook echt aanmaakt.
+`planner_notes` is persoonlijk (weekplanner-actiepunten); die uitvoerder gaat
+langs `updateOwn()`, dat "van jou" ook als voorwaarde meegeeft.
+`mcpExecute.test.ts` en `actionMemberWrite.test.ts` bewaken dit, en ook dat er
+geen tabel of functie bij komt die de database niet kent.
 
 Alles daarbuiten valt terug op een voorstel — `execute_action` geeft dan
 `status: "klaargezet_voor_goedkeuring"` met een `reason` erbij, en de AI hoort dat
@@ -299,8 +304,10 @@ Die `organization_id` gaat als `ActionCtx.organizationId` de handeling in. Het
 model kan hem niet meesturen, niet overschrijven en niet raden — er is geen
 invoerveld voor.
 
-**2. Elke query in de registry filtert erop.** De 264 handelingen draaien op de
-service-role, die RLS overslaat; dat filter is daar dus de enige grens. Alle
+**2. Elke query in de registry filtert erop.** De 264 handelingen lezen op de
+service-role, die RLS overslaat; dat filter is daar dus de enige grens. (Schrijven
+via een directe uitvoerder gaat als het teamlid, met RLS erbij; zie "Wat
+rechtstreeks wél en niet kan".) Alle
 toegang loopt via `orgQuery()` of `row()`, of filtert zelf op
 `organization_id`, en elke RPC krijgt `p_organization_id` uit de sessie mee.
 Geeft het model een id van een andere organisatie mee, dan komt `row()` terug
