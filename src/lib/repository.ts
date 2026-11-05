@@ -3649,6 +3649,18 @@ export async function approveQuoteInternal(organizationId: UUID, quoteId: UUID):
   return row as Quote;
 }
 
+/** Een verstuurde of goedgekeurde offerte intrekken (withdraw_quote): de klant kan niet meer akkoord geven. */
+export async function withdrawQuote(organizationId: UUID, quoteId: UUID, reason?: string): Promise<Quote> {
+  const { data, error } = await supabase.rpc('withdraw_quote', {
+    p_quote_id: quoteId,
+    p_organization_id: organizationId,
+    p_reason: reason?.trim() || null,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Quote;
+}
+
 export async function rejectQuoteInternal(organizationId: UUID, quoteId: UUID, note?: string): Promise<Quote> {
   const { data, error } = await supabase.rpc('reject_quote_internal', {
     p_quote_id: quoteId,

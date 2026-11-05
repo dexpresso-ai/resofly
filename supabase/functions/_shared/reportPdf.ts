@@ -39,6 +39,7 @@ import {
   type PDFPage,
   type RGB,
 } from 'https://esm.sh/pdf-lib@1.17.1';
+import { normalizePdfText } from './pdfText.ts';
 
 // Byte-hulpjes staan al in contractPdf.ts en worden hier alleen doorgegeven —
 // twee implementaties van base64 en sha256 in één codebase is er één te veel.
@@ -761,50 +762,8 @@ function splitLongWord(word: string, font: PDFFont, size: number, maxWidth: numb
   return chunks;
 }
 
-/**
- * WinAnsi-filter. Alles buiten 32-126 en 160-255 kan Helvetica niet tekenen; wat
- * te vertalen is wordt vertaald, de rest verdwijnt. Let op de euro: die valt
- * buiten WinAnsi zoals pdf-lib hem codeert en wordt "EUR".
- */
-export function normalizePdfText(value: unknown): string {
-  return String(value ?? '')
-    .normalize('NFKC')
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[–—−]/g, '-')
-    .replace(/…/g, '...')
-    .replace(/[•·]/g, '-')
-    .replace(/€/g, 'EUR')
-    .replace(/≤/g, '<=')
-    .replace(/≥/g, '>=')
-    .replace(/[→⇒]/g, '->')
-    .replace(/[✓✔]/g, 'v')
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    // Letters buiten Latin-1 worden EERST ontdaan van hun diakriet (NFD splitst
-    // ě in e + combining caron, de tweede valt weg). Zonder deze stap zou het
-    // filter hieronder de hele letter wegknippen en werd "Vaněk" stil "Vank" —
-    // in een stuk waarin de namen van bestuurders juridisch meetellen.
-    .split('')
-    .map((char) => {
-      const code = char.charCodeAt(0);
-      if ((code >= 32 && code <= 126) || (code >= 160 && code <= 255)) return char;
-      const stripped = char.normalize('NFD').replace(/[̀-ͯ]/g, '');
-      if (stripped && /^[\x20-\x7e\xa0-\xff]+$/.test(stripped)) return stripped;
-      // Losse gevallen die NFD niet oplost maar wel een gangbare transliteratie
-      // hebben; Ł/ł zijn in Nederlandse aandeelhoudersregisters niet zeldzaam.
-      const map: Record<string, string> = {
-        'Ł': 'L', 'ł': 'l', 'Đ': 'D', 'đ': 'd', 'Ħ': 'H', 'ħ': 'h',
-        'Œ': 'OE', 'œ': 'oe', 'Ŋ': 'N', 'ŋ': 'n', 'Ŧ': 'T', 'ŧ': 't',
-      };
-      if (map[char]) return map[char];
-      // Wat er dan nog overblijft is niet te tekenen. Een vraagteken is beter
-      // dan een stille verdwijning: het valt op en is te corrigeren.
-      return '?';
-    })
-    .join('')
-    .trim();
-}
+// normalizePdfText staat nu in pdfText.ts (gedeeld met contract, offerte en factuur).
+export { normalizePdfText };
 
 function capitalize(value: string): string {
   const text = String(value ?? '').trim();

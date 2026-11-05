@@ -341,9 +341,12 @@ async function sendContractForSignature(
   });
   if (snapshotResult.error) console.warn('contract version snapshot failed', snapshotResult.error.message);
 
+  // Niet de ondertekenlink (met token) terug naar de browser van de verzender:
+  // daarmee kon die zelf "als de klant" tekenen, met een bewijs dat er echt
+  // uitzag (vooringevuld adres, e-mail "geverifieerd"). Het scherm gebruikte
+  // hem niet; de klant krijgt hem per mail.
   return {
     contract: contractAfter,
-    publicUrl,
     providerEmailId,
     attachment: { fileName: pdf.fileName, sizeBytes: pdf.sizeBytes, sha256: pdf.sha256 },
   };

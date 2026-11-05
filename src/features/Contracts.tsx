@@ -668,6 +668,26 @@ function ContractDetail({ data, organizationId, canWrite, contract, officeBusy, 
   const canSend = canWrite && ['draft', 'internally_approved', 'expired'].includes(contract.status);
   const canResend = canWrite && contract.status === 'sent';
   const canVoid = canWrite && !['signed', 'voided'].includes(contract.status);
+  // Een verstuurd, geweigerd of verlopen contract ligt vast. Terug naar concept
+  // maakt het weer bewerkbaar (de link vervalt); daarna opnieuw versturen. Zo
+  // kom je ook verder als de termijn verstreek: eerder kon je dan niet tekenen,
+  // niet opnieuw versturen en de datum niet aanpassen.
+  const canReopen = canWrite && ['sent', 'declined', 'expired'].includes(contract.status);
+  // Wat naar de klant ging, valt onder de bewaarplicht; de database weigert het
+  // verwijderen dan ook.
+  const canDelete = canWrite && contract.status === 'draft' && !contract.sent_at;
+
+  async function reopen() {
+    if (!confirm('Terug naar concept? De ondertekenlink werkt dan niet meer. Pas het contract aan en verstuur het opnieuw.')) return;
+    setBusy('reopen'); setError(null); setInfo(null);
+    try {
+      const { error } = await supabase.rpc('reopen_contract', { p_contract_id: contract.id, p_organization_id: organizationId });
+      if (error) throw error;
+      setInfo('Het contract is weer een concept. De oude link werkt niet meer.');
+      onChanged();
+    } catch (e) { setError(errMsg(e, 'Terug naar concept mislukt')); }
+    finally { setBusy(null); }
+  }
 
   async function send() {
     if (!isEmail(recipientEmail)) { setError('Vul een geldig e-mailadres in.'); return; }
@@ -723,7 +743,7 @@ function ContractDetail({ data, organizationId, canWrite, contract, officeBusy, 
   return (
     <Modal title={`Contract ${contract.number}`} onClose={onClose} className="contract-modal contract-detail"
       footer={<div className="bk-foot">
-        {contract.status === 'draft' && canWrite && <Button variant="danger" onClick={removeDraft} disabled={!!busy}><Trash2 size={14} /> Verwijderen</Button>}
+        {canDelete && <Button variant="danger" onClick={removeDraft} disabled={!!busy}><Trash2 size={14} /> Verwijderen</Button>}
         <span className="bk-spacer" />
         {contract.status === 'draft' && canWrite && <Button onClick={onEdit} disabled={!!busy}>Bewerken</Button>}
         <Button onClick={onClose}>Sluiten</Button>
@@ -747,6 +767,7 @@ function ContractDetail({ data, organizationId, canWrite, contract, officeBusy, 
         {canSend && <Button variant="primary" onClick={() => setShowSend(v => !v)} disabled={!!busy}><Send size={14} /> Verstuur ter ondertekening</Button>}
         {canResend && <Button onClick={() => setShowSend(v => !v)} disabled={!!busy}><Send size={14} /> Opnieuw versturen</Button>}
         {contract.status === 'signed' && <Button variant="primary" onClick={download} disabled={!!busy}><Download size={14} /> {busy === 'download' ? 'Bezig…' : 'Download getekend PDF'}</Button>}
+        {canReopen && <Button onClick={reopen} disabled={!!busy}><Pencil size={14} /> {busy === 'reopen' ? 'Bezig…' : 'Terug naar concept'}</Button>}
         {canVoid && <Button variant="danger" onClick={voidContract} disabled={!!busy}><X size={14} /> Intrekken</Button>}
       </div>
 

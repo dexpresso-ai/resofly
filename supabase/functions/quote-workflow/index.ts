@@ -15,6 +15,7 @@ import {
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
 import { financeLineGross, financeNumber, financeTotals } from '../_shared/financeTotals.ts';
 import { publicLinkExpiresAt } from '../_shared/publicLinkExpiry.ts';
+import { normalizePdfText as sharedNormalizePdfText } from '../_shared/pdfText.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 
@@ -493,10 +494,14 @@ async function sendQuoteEmail(
     providerEmailId,
   );
 
+  // Niet de link (met token) terug naar de browser van de verzender, en niet de
+  // hele verzendregel en versie (met de PDF-bytes): alleen wat het scherm nodig
+  // heeft. Met de link kon de verzender zelf "namens de klant" akkoord geven.
+  const delivery = (finalized.delivery ?? {}) as Record<string, unknown>;
+  const version = (finalized.version ?? {}) as Record<string, unknown>;
   return {
-    delivery: finalized.delivery,
-    version: finalized.version,
-    publicUrl,
+    delivery: { id: delivery.id ?? null, status: delivery.status ?? null, recipient_email: delivery.recipient_email ?? null },
+    version: { id: version.id ?? null, version_number: version.version_number ?? null },
     providerEmailId,
     attachment: {
       fileName: pdfAttachment.fileName,
@@ -717,23 +722,27 @@ async function storeQuotePdfSnapshot(
       'X-Storage-Key': key,
       'X-SHA256': attachment.sha256,
       'X-Size-Bytes': String(attachment.sizeBytes),
+      'X-Organization-Id': organizationId,
     },
     body: attachment.bytes,
+  }).catch((error) => {
+    console.error('quote-workflow R2 snapshot upload kon niet starten', error instanceof Error ? error.message : error);
+    return null;
   });
 
-  if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText);
-    console.error('quote-workflow R2 snapshot upload failed', {
-      status: response.status,
+  if (!response || !response.ok) {
+    const message = response ? await response.text().catch(() => response.statusText) : 'geen antwoord';
+    console.error('quote-workflow R2 snapshot upload failed; terugval op de database', {
+      status: response?.status ?? null,
       message,
       key,
       organizationId,
       quoteId,
     });
-    throw new WorkflowHttpError(
-      `Offerte-PDF kon niet in private R2 storage worden opgeslagen: ${message || response.statusText}`,
-      502,
-    );
+    // Terugval op de database, net als bij contracten: de PDF blijft zo te
+    // downloaden en de offerte gaat de deur uit. Eerder gaf dit een 502 en kon
+    // er niets worden verstuurd (de route ontbrak in de media-worker).
+    return { provider: 'database', key: null, shouldStoreBase64InDatabase: true };
   }
 
   return { provider: 'r2', key, shouldStoreBase64InDatabase: false };
@@ -834,7 +843,7 @@ async function createQuotePdfAttachment(input: {
   company: CompanySettingsRow | null;
   publicUrl: string;
 }): Promise<QuotePdfAttachment> {
-  const { quote, client, project, company, publicUrl } = input;
+  const { quote, client, project, company } = input;
 
   const pdfDoc = await PDFDocument.create();
   const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -996,13 +1005,12 @@ async function createQuotePdfAttachment(input: {
 
   y = Math.max(94, y - 28);
 
-  drawPdfText(page, 'Bekijk en keur deze offerte online goed:', 48, y, bold, 9, {
+  // Geen link (met token) in de PDF: die PDF wordt bewaard en is te downloaden
+  // voor elke lezer van Financiën, ook de boekhouder (gast). Met de link kon
+  // iemand anders "namens de klant" akkoord geven. De link staat in de mail.
+  drawPdfText(page, 'Bekijk en keur deze offerte online goed via de link in de e-mail.', 48, y, bold, 9, {
     color: muted,
   });
-
-  y -= 13;
-
-  drawWrappedPdfText(page, publicUrl, 48, y, 500, regular, 8, 11, muted);
 
   drawPdfFooter(page, regular, company);
 
@@ -1260,24 +1268,9 @@ function splitLongPdfWord(
   return chunks;
 }
 
+// Tekens buiten Latin-1 vertalen in plaats van weggooien; zie _shared/pdfText.ts.
 function normalizePdfText(value: unknown): string {
-  return String(value ?? '')
-    .normalize('NFKC')
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2013\u2014\u2212]/g, '-')
-    .replace(/\u2026/g, '...')
-    .replace(/\u2022/g, '-')
-    .replace(/€/g, 'EUR')
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .split('')
-    .filter((char) => {
-      const code = char.charCodeAt(0);
-      return (code >= 32 && code <= 126) || (code >= 160 && code <= 255);
-    })
-    .join('')
-    .trim();
+  return sharedNormalizePdfText(value);
 }
 
 function companyAddressLines(company: CompanySettingsRow | null): string[] {

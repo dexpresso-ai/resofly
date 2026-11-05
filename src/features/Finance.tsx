@@ -24,6 +24,7 @@ export function Quotes({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onDownloadPdf,
@@ -36,6 +37,7 @@ export function Quotes({
   onSubmitApproval: (q: Quote) => void;
   onApprove: (q: Quote) => void;
   onReject: (q: Quote) => void;
+  onWithdraw?: (q: Quote) => void;
   onSend: (q: Quote) => void;
   onConvertToInvoice?: (q: Quote) => void;
   onDownloadPdf?: (q: Quote) => void;
@@ -52,6 +54,7 @@ export function Quotes({
     onSubmitApproval={onSubmitApproval}
     onApprove={onApprove}
     onReject={onReject}
+    onWithdraw={onWithdraw}
     onSend={onSend}
     onConvertToInvoice={onConvertToInvoice}
     onDownloadPdf={onDownloadPdf}
@@ -74,6 +77,7 @@ function FinanceList<T extends Quote | Invoice>({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onSendInvoice,
@@ -107,6 +111,7 @@ function FinanceList<T extends Quote | Invoice>({
   onSubmitApproval?: (q: Quote) => void;
   onApprove?: (q: Quote) => void;
   onReject?: (q: Quote) => void;
+  onWithdraw?: (q: Quote) => void;
   onSend?: (q: Quote) => void;
   onConvertToInvoice?: (q: Quote) => void;
   onSendInvoice?: (i: Invoice) => void;
@@ -141,6 +146,7 @@ function FinanceList<T extends Quote | Invoice>({
       onSubmitApproval={onSubmitApproval}
       onApprove={onApprove}
       onReject={onReject}
+      onWithdraw={onWithdraw}
       onSend={onSend}
       onConvertToInvoice={onConvertToInvoice}
       onDownloadPdf={onDownloadPdf}
@@ -448,6 +454,7 @@ function QuoteTable({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onDownloadPdf,
@@ -462,6 +469,7 @@ function QuoteTable({
   onSubmitApproval?: (quote: Quote) => void;
   onApprove?: (quote: Quote) => void;
   onReject?: (quote: Quote) => void;
+  onWithdraw?: (quote: Quote) => void;
   onSend?: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
   onDownloadPdf?: (quote: Quote) => void;
@@ -534,6 +542,7 @@ function QuoteTable({
       onSubmitApproval={onSubmitApproval}
       onApprove={onApprove}
       onReject={onReject}
+      onWithdraw={onWithdraw}
       onSend={onSend}
       onConvertToInvoice={onConvertToInvoice}
       onDownloadPdf={onDownloadPdf}
@@ -713,6 +722,7 @@ function QuoteDetailModal({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onDownloadPdf,
@@ -726,6 +736,7 @@ function QuoteDetailModal({
   onSubmitApproval?: (quote: Quote) => void;
   onApprove?: (quote: Quote) => void;
   onReject?: (quote: Quote) => void;
+  onWithdraw?: (quote: Quote) => void;
   onSend?: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
   onDownloadPdf?: (quote: Quote) => void;
@@ -764,7 +775,7 @@ function QuoteDetailModal({
         <div className="quote-detail-section-head"><div><span>Workflow</span><strong>Goedkeuring, verzending, klantbeslissing en factuurconversie</strong></div></div>
         <QuoteProgress quote={quote} />
         <QuoteEmailStatus delivery={latestDelivery} quote={quote} />
-        <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEdit(quote)} />
+        <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onWithdraw={onWithdraw} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEdit(quote)} />
       </section>
 
       <section className="quote-detail-split">
@@ -991,6 +1002,7 @@ export function ProjectQuotesPanel({
   onSubmitApproval,
   onApprove,
   onReject,
+  onWithdraw,
   onSend,
   onConvertToInvoice,
   onDownloadPdf,
@@ -1005,6 +1017,7 @@ export function ProjectQuotesPanel({
   onSubmitApproval: (quote: Quote) => void;
   onApprove: (quote: Quote) => void;
   onReject: (quote: Quote) => void;
+  onWithdraw?: (quote: Quote) => void;
   onSend: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
   onDownloadPdf?: (quote: Quote) => void;
@@ -1024,7 +1037,7 @@ export function ProjectQuotesPanel({
           <div className="project-quote-head" onClick={() => onEditQuote(quote)}><div><strong>{quote.number}</strong><span>{client?.name ?? 'Geen klant'} · {dateNL(quote.date)}</span></div><div><strong>{euro(total(quote.lines).total)}</strong><span>{quoteStatusLabel(quote)}</span></div></div>
           <QuoteProgress quote={quote} compact />
           <QuoteEmailStatus delivery={latestDelivery} quote={quote} />
-          <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEditQuote(quote)} compact />
+          <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onWithdraw={onWithdraw} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEditQuote(quote)} compact />
           <QuoteVersions versions={versions} compact />
           <QuoteTimeline events={events} emptyText="Nog geen events." compact />
         </article>;
@@ -1049,11 +1062,15 @@ function QuoteEmailStatus({ quote, delivery }: { quote: Quote; delivery: QuoteEm
   return <div className="quote-email-status"><Mail size={14}/><span>{status ? emailStatusLabel(status) : 'Nog niet verstuurd'}</span>{delivery?.recipient_email && <small>{delivery.recipient_email}</small>}{delivery?.attachment_file_name && <small>PDF: {delivery.attachment_file_name}</small>}{quote.public_token_expires_at && <small>Link tot {dateNL(quote.public_token_expires_at)}</small>}</div>;
 }
 
-function QuoteActions({ quote, canWrite, canAdmin, linkedInvoice, onSubmitApproval, onApprove, onReject, onSend, onConvertToInvoice, onDownloadPdf, onEdit, compact = false }: { quote: Quote; canWrite: boolean; canAdmin: boolean; linkedInvoice?: Invoice | null; onSubmitApproval?: (quote: Quote) => void; onApprove?: (quote: Quote) => void; onReject?: (quote: Quote) => void; onSend?: (quote: Quote) => void; onConvertToInvoice?: (quote: Quote) => void; onDownloadPdf?: (quote: Quote) => void; onEdit: () => void; compact?: boolean }) {
+function QuoteActions({ quote, canWrite, canAdmin, linkedInvoice, onSubmitApproval, onApprove, onReject, onWithdraw, onSend, onConvertToInvoice, onDownloadPdf, onEdit, compact = false }: { quote: Quote; canWrite: boolean; canAdmin: boolean; linkedInvoice?: Invoice | null; onSubmitApproval?: (quote: Quote) => void; onApprove?: (quote: Quote) => void; onReject?: (quote: Quote) => void; onWithdraw?: (quote: Quote) => void; onSend?: (quote: Quote) => void; onConvertToInvoice?: (quote: Quote) => void; onDownloadPdf?: (quote: Quote) => void; onEdit: () => void; compact?: boolean }) {
   const canSubmit = canWrite && ['draft'].includes(quote.status) && quote.internal_approval_status !== 'pending';
   const canApprove = canAdmin && quote.status === 'pending_internal_approval';
   const canSend = canWrite && quote.status === 'internally_approved' && quote.internal_approval_status === 'approved';
   const canConvert = canWrite && quote.status === 'accepted' && !linkedInvoice;
+  // Een verstuurde (of nog niet verstuurde, goedgekeurde) offerte intrekken: de
+  // klant kan dan niet meer akkoord geven. Eerder kon dat niet, en bleef een
+  // offerte met een fout tot "geldig tot" te accepteren.
+  const canWithdraw = canWrite && Boolean(onWithdraw) && ['sent', 'internally_approved', 'pending_internal_approval'].includes(quote.status);
   const canDownloadStored = Boolean(onDownloadPdf) && quoteHasStoredPdf(quote);
   return <div className={`quote-actions ${compact ? 'compact' : ''}`}>
     <Button onClick={onEdit}>Bewerken</Button>
@@ -1063,6 +1080,7 @@ function QuoteActions({ quote, canWrite, canAdmin, linkedInvoice, onSubmitApprov
     {canSend && <Button variant="primary" onClick={() => onSend?.(quote)}><Send size={14}/> Verstuur via Resend</Button>}
     {canDownloadStored && <Button onClick={() => onDownloadPdf?.(quote)}><Download size={14}/> Download verzonden PDF</Button>}
     {canConvert && <Button variant="primary" onClick={() => onConvertToInvoice?.(quote)}><FileText size={14}/> Maak factuur van offerte</Button>}
+    {canWithdraw && <Button variant="danger" onClick={() => onWithdraw?.(quote)}><XCircle size={14}/> Intrekken</Button>}
     {linkedInvoice && <span className="quote-converted-pill"><FileText size={14}/> Factuur {linkedInvoice.number}</span>}
   </div>;
 }
