@@ -146,3 +146,28 @@ bereikbaar. De check draaide met een tijdelijke import map: de vijf
 `esm.sh`-pakketten via `npm:` (dezelfde versies), en `serve` uit std 0.224.0
 via een vervanger met dezelfde handtekening. Een bewust ingevoegde typefout werd
 gevonden. De echte check draait in CI bij de push naar staging.
+
+## Uitrol op staging (5 november, 11:48)
+
+Merge `ce2e941` naar `staging`:
+
+- **Deploy Supabase (staging), run 173: geslaagd.**
+  - `db push` paste `20261105020000_ticket_resolved_archive` toe.
+  - Alle 39 edge functions zijn uitgerold.
+  - De rooktest gaf 9 van 9 ok, ook "anon heeft geen rechten in public" en
+    het boekhouder-hek.
+- **Frontend checks op `staging`, run 124: geslaagd.** Daarin zitten de echte
+  `deno check` (met `deno.land` en `esm.sh`), de migraties vanaf nul,
+  typecheck, de CSP-hash, unit-tests, de mobiele test in beide thema's en
+  laden per module.
+- **Nacontrole op de database** (alleen lezen):
+  - 236 migraties, de laatste `20261105020000`;
+  - `tickets_status_check` kent `resolved`, de kolom `resolved_at` staat er;
+  - de vingerafdruk van het schema is regel voor regel gelijk aan die van een
+    database vanaf nul, op de bekende verschillen na (`pg_cron`,
+    `public._migrations`). Vóór de uitrol was het verschil precies deze
+    migratie.
+- **Cloudflare Pages** bouwt de app vanzelf bij de push. Vanuit de sessie was de
+  site niet te bereiken, dus die build is hier niet gezien. Dezelfde
+  `npm run build` slaagde lokaal op de samengevoegde stand (CI bouwt niet; de
+  typecheck daar wel).
