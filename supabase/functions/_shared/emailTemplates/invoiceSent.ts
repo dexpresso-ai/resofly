@@ -1,6 +1,7 @@
 import { fieldOr, optionalFieldOr, renderContentHtml, renderContentText, type TemplateVars } from './content.ts';
 import { escapeHtml, renderEmailLayout, textLines } from './layout.ts';
-import type { InvoiceEmailLine, InvoiceSentEmailInput, RenderedEmailTemplate } from './types.ts';
+import type { InvoiceSentEmailInput, RenderedEmailTemplate } from './types.ts';
+import { financeTotals } from '../financeTotals.ts';
 
 // Ingebouwde standaardteksten. Een organisatie kan deze per veld overschrijven via
 // email_templates (sleutel 'invoice.sent'); lege velden vallen hierop terug.
@@ -14,7 +15,9 @@ const DEFAULT_CTA_WITHOUT_PAYMENT = 'Bekijk factuur';
 export function renderInvoiceSentEmail(input: InvoiceSentEmailInput): RenderedEmailTemplate {
   const companyName = input.company?.trade_name || input.company?.company_name || 'ResoFly';
   const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || 'relatie';
-  const totalAmount = formatEuro(calculateTotal(input.invoice.lines || []));
+  // Hetzelfde bedrag als de PDF, de betaallink en het grootboek (financeTotals).
+  // Per regel zonder afronden noemde de mail bij twee tarieven een ander totaal.
+  const totalAmount = formatEuro(financeTotals(input.invoice.lines || []).total);
   const dueDate = input.invoice.due_date ? formatDateNl(input.invoice.due_date) : '-';
   const hasPayment = Boolean(input.paymentUrl);
   const defaultCta = hasPayment ? DEFAULT_CTA_WITH_PAYMENT : DEFAULT_CTA_WITHOUT_PAYMENT;
@@ -86,14 +89,6 @@ function renderInvoiceSummary(input: { projectName: string | null; quoteNumber: 
       Vervaldatum: ${escapeHtml(input.dueDate)}${input.eInvoice ? `<br/>${escapeHtml(E_INVOICE_NOTE)}` : ''}
     </p>
   </div>${input.closingHtml ? `<p style="margin:16px 0 0;color:#d8d8df;line-height:1.6;">${input.closingHtml}</p>` : ''}`;
-}
-
-function calculateTotal(lines: InvoiceEmailLine[]): number {
-  return lines.reduce((sum, line) => {
-    const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
-    const vat = subtotal * (Number(line.vat || 0) / 100);
-    return sum + subtotal + vat;
-  }, 0);
 }
 
 function formatEuro(value: number): string {

@@ -13,6 +13,8 @@ import {
 } from 'https://esm.sh/pdf-lib@1.17.1';
 
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
+import { financeLineGross, financeNumber, financeTotals } from '../_shared/financeTotals.ts';
+import { publicLinkExpiresAt } from '../_shared/publicLinkExpiry.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 
@@ -336,9 +338,9 @@ async function sendQuoteEmail(
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
 
-  const expiresAt = new Date(
-    Date.now() + Math.max(1, QUOTE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000,
-  ).toISOString();
+  // Minstens tot en met "geldig tot": de link verliep na 30 dagen, ook als de
+  // offerte langer geldig was, en een verstuurde offerte kan niet opnieuw.
+  const expiresAt = publicLinkExpiresAt(quote.valid_until, QUOTE_TOKEN_TTL_DAYS);
 
   const publicUrl = `${QUOTE_PUBLIC_BASE_URL.replace(/\/$/, '')}/quote/${encodeURIComponent(
     token,
@@ -935,9 +937,13 @@ async function createQuotePdfAttachment(input: {
     y -= rowHeight;
   }
 
-  const totals = calculateTotals(quote.lines);
+  // Dezelfde centen als de app, de publieke pagina en de factuur die uit deze
+  // offerte komt: regel afgerond op centen, btw per tarief. Eerder rekende de
+  // PDF per regel zonder afronden, en kreeg de klant bij twee tarieven een
+  // offerte van € 173,62 en een factuur van € 173,63.
+  const totals = financeTotals(Array.isArray(quote.lines) ? quote.lines : []);
 
-  if (y < 230) {
+  if (y < 230 + 18 * Math.max(0, totals.vatBreakdown.length - 1)) {
     drawPdfFooter(page, regular, company);
     page = pdfDoc.addPage([595.28, 841.89]);
     y = 760;
@@ -952,12 +958,22 @@ async function createQuotePdfAttachment(input: {
 
   y -= 18;
 
-  drawPdfText(page, 'BTW', 365, y, regular, 10);
-  drawPdfText(page, formatEuro(totals.vat), 547, y, regular, 10, {
-    align: 'right',
-  });
+  if (totals.vatBreakdown.length > 1) {
+    // Bij meer tarieven per tarief de grondslag en de btw, zoals op de factuur.
+    for (const row of totals.vatBreakdown) {
+      drawPdfText(page, `BTW ${row.rate}% over ${formatEuro(row.base)}`, 365, y, regular, 9);
+      drawPdfText(page, formatEuro(row.vat), 547, y, regular, 10, { align: 'right' });
+      y -= 18;
+    }
+    y -= 4;
+  } else {
+    drawPdfText(page, 'BTW', 365, y, regular, 10);
+    drawPdfText(page, formatEuro(totals.vat), 547, y, regular, 10, {
+      align: 'right',
+    });
 
-  y -= 22;
+    y -= 22;
+  }
 
   page.drawLine({
     start: { x: 365, y: y + 12 },
@@ -1049,12 +1065,11 @@ function drawQuoteLine(
 ): number {
   const descriptionLines = wrapPdfText(line.description || '-', regular, 9, 270);
 
-  const quantity = Number(line.quantity || 0);
-  const unitPrice = Number(line.unit_price || 0);
-  const vatPercentage = Number(line.vat || 0);
+  const quantity = financeNumber(line.quantity);
+  const unitPrice = financeNumber(line.unit_price);
+  const vatPercentage = financeNumber(line.vat);
 
-  const lineSubtotal = quantity * unitPrice;
-  const lineTotal = lineSubtotal * (1 + vatPercentage / 100);
+  const lineTotal = financeLineGross(line);
 
   page.drawLine({
     start: { x: 48, y: y + 8 },
@@ -1300,24 +1315,6 @@ function clientAddressLines(client: ClientRow): string[] {
   ]
     .filter((value) => normalizePdfText(value).length > 0)
     .map(normalizePdfText);
-}
-
-function calculateTotals(
-  lines: QuoteLine[] = [],
-): { subtotal: number; vat: number; total: number } {
-  return lines.reduce(
-    (acc, line) => {
-      const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
-      const vat = subtotal * (Number(line.vat || 0) / 100);
-
-      acc.subtotal += subtotal;
-      acc.vat += vat;
-      acc.total += subtotal + vat;
-
-      return acc;
-    },
-    { subtotal: 0, vat: 0, total: 0 },
-  );
 }
 
 function validateQuotePdfAttachment(attachment: QuotePdfAttachment): void {

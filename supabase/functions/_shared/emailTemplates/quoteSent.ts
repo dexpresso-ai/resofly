@@ -1,6 +1,7 @@
 import { fieldOr, optionalFieldOr, renderContentHtml, renderContentText, type TemplateVars } from './content.ts';
 import { escapeHtml, renderEmailLayout, textLines } from './layout.ts';
-import type { QuoteEmailLine, QuoteSentEmailInput, RenderedEmailTemplate } from './types.ts';
+import type { QuoteSentEmailInput, RenderedEmailTemplate } from './types.ts';
+import { financeTotals } from '../financeTotals.ts';
 
 // Ingebouwde standaardteksten. Een organisatie kan deze per veld overschrijven via
 // email_templates (sleutel 'quote.sent'); lege velden vallen hierop terug.
@@ -13,7 +14,10 @@ export function renderQuoteSentEmail(input: QuoteSentEmailInput): RenderedEmailT
   const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || 'relatie';
   const expiry = formatDateNl(input.expiresAt);
   const quoteValidUntil = input.quote.valid_until ? formatDateNl(input.quote.valid_until) : expiry;
-  const totalAmount = formatEuro(calculateTotal(input.quote.lines || []));
+  // Hetzelfde bedrag als de PDF, de publieke pagina en de factuur: regel op
+  // centen, btw per tarief (financeTotals). Per regel zonder afronden noemde de
+  // mail bij twee tarieven een cent te weinig of te veel.
+  const totalAmount = formatEuro(financeTotals(input.quote.lines || []).total);
 
   const vars: TemplateVars = {
     recipient_name: recipientName,
@@ -76,14 +80,6 @@ function renderQuoteSummary(input: { projectName: string | null; totalAmount: st
       Geldig tot: ${escapeHtml(input.validUntil)}
     </p>
   </div>${input.closingHtml ? `<p style="margin:16px 0 0;color:#d8d8df;line-height:1.6;">${input.closingHtml}</p>` : ''}`;
-}
-
-function calculateTotal(lines: QuoteEmailLine[]): number {
-  return lines.reduce((sum, line) => {
-    const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
-    const vat = subtotal * (Number(line.vat || 0) / 100);
-    return sum + subtotal + vat;
-  }, 0);
 }
 
 function formatEuro(value: number): string {
