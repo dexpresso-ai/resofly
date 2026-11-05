@@ -3,7 +3,7 @@ import {
   adoptAnnualAccounts, appropriateResult, bookDgaInterest, createShareholder, declareDividend,
   extendPreparationTerm, fileAnnualAccounts, postPayrollJournal, prepareAnnualAccounts,
   reverseAnnualAccounts, reverseCorporateTaxReturn, reverseDgaInterest, reverseDividendDistribution,
-  reverseResultAppropriation, saveFiscalYearSizeInputs, signAnnualAccounts, updateShareholder,
+  patchShareholder, reverseResultAppropriation, saveFiscalYearSizeInputs, signAnnualAccounts, updateShareholder,
   upsertCompanySettings,
   type ShareholderInput,
 } from '../repository';
@@ -69,7 +69,11 @@ export const BUSINESS_EXECUTORS: Record<string, ActionExecutor> = {
 
   'shareholder.update': async (payload, ctx) => {
     const shareholderId = text(payload, 'shareholder_id');
-    await updateShareholder(ctx.organizationId, shareholderId, argsOf<ShareholderInput>(payload));
+    // Alleen wat op de kaart veranderde (`changed_keys`); oudere kaarten zonder
+    // die lijst schrijven de hele rij, zoals vroeger.
+    const keys = Array.isArray(payload.changed_keys) ? (payload.changed_keys as unknown[]).map(String) : null;
+    if (keys) await patchShareholder(ctx.organizationId, shareholderId, argsOf<ShareholderInput>(payload), keys);
+    else await updateShareholder(ctx.organizationId, shareholderId, argsOf<ShareholderInput>(payload));
     return `Gegevens van aandeelhouder "${optText(payload, 'name') ?? 'de aandeelhouder'}" bijgewerkt`;
   },
 

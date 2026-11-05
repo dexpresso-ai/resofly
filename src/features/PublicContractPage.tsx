@@ -39,6 +39,12 @@ type PublicContract = {
   content_kind?: 'html' | 'pdf';
   /** De PDF zelf, base64. Null als de documentserver even niet bereikbaar was. */
   document_pdf_base64?: string | null;
+  /**
+   * De bij verzenden bevroren versie die hier getoond wordt. Gaat mee met het
+   * ondertekenen; is er intussen een nieuwere versie verstuurd, dan weigert de
+   * server en moet de pagina opnieuw geladen worden.
+   */
+  version_id?: string | null;
   date: string;
   valid_until: string | null;
   status: string;
@@ -124,6 +130,7 @@ export function PublicContractPage({ token }: { token: string }) {
           signatureMethod: method,
           signatureImage: method === 'drawn' ? drawnImage : '',
           consentText: CONSENT_TEXT,
+          versionId: payload?.contract.version_id ?? null,
         },
       });
       if (error) throw new Error(await extractFunctionError(error, 'Ondertekenen mislukt'));
@@ -183,7 +190,10 @@ export function PublicContractPage({ token }: { token: string }) {
   // Niemand tekent iets wat hij niet heeft kunnen lezen: zonder document geen
   // ondertekenmogelijkheid. Weigeren en een vraag stellen blijven wél gewoon werken.
   const documentUnavailable = Boolean(isPdfContract && (!contract?.document_pdf_base64 || documentBroken));
-  const canSign = !documentUnavailable && Boolean(name.trim()) && isValidEmail(email) && consent && (method === 'typed' ? Boolean(name.trim()) : Boolean(drawnImage));
+  // Na de uiterste datum kan er niet meer getekend worden (de server weigert dan
+  // ook); vragen stellen en weigeren blijven mogelijk.
+  const validityExpired = Boolean(contract?.valid_until && contract.valid_until < amsterdamToday());
+  const canSign = !documentUnavailable && !validityExpired && Boolean(name.trim()) && isValidEmail(email) && consent && (method === 'typed' ? Boolean(name.trim()) : Boolean(drawnImage));
 
   function downloadDocument() {
     if (!documentUrl || !contract) return;
@@ -237,7 +247,11 @@ export function PublicContractPage({ token }: { token: string }) {
             <Input value={email} onChange={e => setEmail(e.target.value)} placeholder="E-mailadres" />
           </div>
 
-          {documentUnavailable
+          {validityExpired
+            ? <p style={{ marginTop: 14, color: 'var(--muted2)' }}>
+                De termijn om dit contract te ondertekenen is verstreken (tot en met {dateNL(contract.valid_until as string)}). Vraag de afzender om een nieuwe versie; je kunt ons hieronder een vraag stellen.
+              </p>
+            : documentUnavailable
             ? <p style={{ marginTop: 14, color: 'var(--muted2)' }}>
                 Ondertekenen kan pas zodra het contractdocument weer geladen kan worden — je hoort eerst te kunnen lezen wat je tekent. Je kunt hierboven opnieuw proberen, of ons nu al een vraag stellen of het contract weigeren.
               </p>
@@ -263,9 +277,9 @@ export function PublicContractPage({ token }: { token: string }) {
           <div className="public-decision-actions" style={{ marginTop: 14 }}>
             <Button variant="ghost" onClick={() => { setPanel(panel === 'question' ? 'none' : 'question'); setQuestionSent(false); }} disabled={submitting}>Stel een vraag</Button>
             <Button variant="danger" onClick={() => setPanel(panel === 'decline' ? 'none' : 'decline')} disabled={submitting}>Weigeren</Button>
-            {!documentUnavailable && <Button variant="primary" onClick={sign} disabled={submitting || !canSign}>Onderteken contract</Button>}
+            {!documentUnavailable && !validityExpired && <Button variant="primary" onClick={sign} disabled={submitting || !canSign}>Onderteken contract</Button>}
           </div>
-          {!documentUnavailable && <p style={{ marginTop: 10, color: 'var(--muted)', fontSize: 13 }}>🔒 Beveiligde ondertekening. Tijdstip, IP-adres en je akkoord worden vastgelegd als bewijs (eenvoudige elektronische handtekening, eIDAS).</p>}
+          {!documentUnavailable && !validityExpired && <p style={{ marginTop: 10, color: 'var(--muted)', fontSize: 13 }}>🔒 Beveiligde ondertekening. Tijdstip, IP-adres en je akkoord worden vastgelegd als bewijs (eenvoudige elektronische handtekening, eIDAS).</p>}
         </div>
 
         {panel === 'decline' && <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
@@ -467,4 +481,9 @@ function statusLabel(status: string): string {
     voided: 'Ingetrokken',
   };
   return labels[status] || status;
+}
+
+/** Vandaag in Nederland als JJJJ-MM-DD (de uiterste datum is een kalenderdag hier). */
+function amsterdamToday(): string {
+  return new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
 }

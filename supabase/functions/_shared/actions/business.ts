@@ -125,6 +125,30 @@ interface FiscalYearRow {
  * resultaat. `list_fiscal_years` is zelf org-scoped op de parameter, en we
  * controleren daarna dat het gevraagde id er ook echt in zit.
  */
+/** BV en NV: aandeelhouders, aandelenregister en DGA (art. 2:194 BW; dezelfde grens als het scherm). */
+const SHARE_COMPANY_FORMS = ['bv', 'nv'];
+/** BV, NV en coöperatie: vennootschapsbelasting, resultaatbestemming en dividend (dezelfde grens als de schermen). */
+const VPB_FORMS = ['bv', 'nv', 'cooperatie'];
+
+async function legalFormOf(ctx: ActionCtx): Promise<string> {
+  const { data, error } = await orgQuery(ctx, 'company_settings', 'legal_form').maybeSingle();
+  if (error) throw new ActionError(`Rechtsvorm ophalen mislukt: ${error.message}`);
+  return String((data as { legal_form?: string } | null)?.legal_form ?? 'eenmanszaak');
+}
+
+/**
+ * Bij een eenmanszaak, vof, maatschap of cv bestaan aandeelhouders, DGA-rente en
+ * vennootschapsbelasting niet: dan geen kaart die de database daarna toch
+ * weigert (of erger: gegevens die er niet horen).
+ */
+async function requireLegalForm(ctx: ActionCtx, forms: string[], what: string): Promise<void> {
+  const form = await legalFormOf(ctx);
+  if (!forms.includes(form)) {
+    const allowed = forms.map((f) => LEGAL_FORM_LABELS[f] ?? f).join(', ').replace(/, ([^,]*)$/, ' of $1');
+    throw new ActionError(`${what} hoort bij een ${allowed}; deze administratie is een ${LEGAL_FORM_LABELS[form] ?? form}. Bij een IB-onderneming is de winst van de ondernemer of de vennoten zelf (zie owners.equity_overview).`);
+  }
+}
+
 async function fiscalYear(ctx: ActionCtx, fiscalYearId: string): Promise<FiscalYearRow> {
   const { data, error } = await ctx.db.rpc('list_fiscal_years', { p_organization_id: ctx.organizationId });
   if (error) throw new ActionError(`Boekjaren ophalen mislukt: ${error.message}`);
@@ -253,6 +277,10 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Rechtsvorm van de administratie vastleggen',
     module: 'finance',
     kind: 'write',
+    // Dezelfde grens als settings.set_legal_form: bedrijfsgegevens schrijft alleen
+    // een eigenaar of beheerder, en de rechtsvorm stuurt de hele fiscale kant.
+    adminOnly: true,
+    risk: 'high',
     description:
       'Zet de rechtsvorm van deze administratie (Instellingen → Facturatie). Dat is geen cosmetisch veld: de rechtsvorm stuurt het rekeningschema, bepaalt of het resultaat bij het afsluiten naar het ondernemingsvermogen of naar de overige reserves gaat, en ontsluit de schermen DGA, Aandeelhouders, Jaarrekening en Vennootschapsbelasting. ' +
       'BV, NV en coöperatie kunnen alleen als de betaalde zakelijke module aanstaat — de database weigert het anders. Controleer eerst `business.status`.',
@@ -278,6 +306,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
             ? 'vanaf nu vennootschapsbelasting: DGA, aandeelhouders, jaarrekening en Vpb komen erbij'
             : 'de Vpb-schermen verdwijnen; de app rekent weer met inkomstenbelasting',
         ], 200),
+        warning: 'De rechtsvorm stuurt je rekeningschema, de resultaatbestemming bij de jaarafsluiting en welke fiscale schermen je ziet. Al geboekte mutaties blijven staan, maar de fiscale kant van je administratie verandert hiermee wezenlijk.',
         kind: 'money',
         payload: { legal_form: form, label: LEGAL_FORM_LABELS[form], previous: current },
       };
@@ -356,6 +385,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['name', 'kind'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, SHARE_COMPANY_FORMS, 'Het aandeelhoudersregister');
       const name = str(input, 'name', 200);
       const kind = choice(input, 'kind', SHAREHOLDER_KINDS);
       const exempt = bool(input, 'withholding_exempt', false);
@@ -415,6 +445,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['shareholder_id'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, SHARE_COMPANY_FORMS, 'Het aandeelhoudersregister');
       const shareholderId = id(input, 'shareholder_id');
       const current = await row<{
         name: string; kind: string; address_line: string | null; postal_code: string | null;
@@ -450,12 +481,20 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       if (merged.withholdingExempt && !merged.withholdingExemptNote) {
         throw new ActionError('Leg vast waaróm er geen dividendbelasting hoeft te worden ingehouden; zonder onderbouwing wordt de vrijstelling niet vastgelegd.');
       }
+      // Alleen deze velden schrijft de uitvoerder; de rest blijft zoals hij dan is
+      // (een collega kan intussen iets anders hebben aangepast).
+      const previous: Record<string, unknown> = {
+        name: current.name, kind: current.kind, addressLine: current.address_line, postalCode: current.postal_code,
+        city: current.city, countryCode: current.country_code, email: current.email, isDga: current.is_dga,
+        withholdingExempt: current.withholding_exempt, withholdingExemptNote: current.withholding_exempt_note, note: current.note,
+      };
+      const changedKeys = Object.keys(merged).filter((key) => (merged as Record<string, unknown>)[key] !== previous[key]);
 
       return {
         title: `Aandeelhouder bijwerken: ${current.name}`,
         sub: joinShort(changed, 140),
         kind: 'work',
-        payload: { shareholder_id: shareholderId, name: merged.name, input: merged },
+        payload: { shareholder_id: shareholderId, name: merged.name, input: merged, changed_keys: changedKeys },
       };
     },
   },
@@ -515,6 +554,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['kind', 'event_date', 'quantity', 'nominal_value_eur', 'paid_up_eur'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, SHARE_COMPANY_FORMS, 'Het aandeelhoudersregister');
       const kind = choice(input, 'kind', SHARE_TX_KINDS);
       const eventDate = isoDate(input, 'event_date');
       const quantity = Math.trunc(num(input, 'quantity'));
@@ -619,6 +659,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['shareholder_id', 'kind', 'holder_name', 'quantity', 'established_on'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, SHARE_COMPANY_FORMS, 'Het aandeelhoudersregister');
       const shareholderId = id(input, 'shareholder_id');
       const shareholder = await row<{ name: string }>(ctx, 'shareholders', shareholderId, 'name', 'Aandeelhouder');
       const kind = choice(input, 'kind', ENCUMBRANCE_KINDS);
@@ -695,6 +736,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['fiscal_year_id', 'decision_date'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, VPB_FORMS, 'Resultaatbestemming door de algemene vergadering');
       const fiscalYearId = id(input, 'fiscal_year_id');
       const year = await fiscalYear(ctx, fiscalYearId);
       if (year.status !== 'closed') {
@@ -743,6 +785,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Resultaatbestemming terugdraaien',
     module: 'finance',
     kind: 'write',
+    // De database eist een eigenaar of beheerder; een voorstel van een lid
+    // zou anders worden uitgevoerd door wie het goedkeurt.
+    adminOnly: true,
     risk: 'high',
     description:
       'Zet een geboekte resultaatbestemming op "teruggedraaid", zodat zij nergens meer meetelt. Er komt geen spiegelpost — die zou op een datum vallen die inmiddels in een afgesloten aangifteperiode kan liggen; het boekstuk zelf gaat op reversed. ' +
@@ -852,6 +897,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['kind', 'decision_date', 'available_date'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, VPB_FORMS, 'Dividend');
       const kind = choice(input, 'kind', DIVIDEND_KINDS);
       const decisionDate = isoDate(input, 'decision_date');
       const availableDate = isoDate(input, 'available_date');
@@ -970,6 +1016,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Dividenduitkering terugdraaien',
     module: 'finance',
     kind: 'write',
+    // De database eist een eigenaar of beheerder; een voorstel van een lid
+    // zou anders worden uitgevoerd door wie het goedkeurt.
+    adminOnly: true,
     risk: 'high',
     description:
       'Draait een geboekte dividenduitkering terug: beide boekstukken (het besluit en de inhouding) gaan op "teruggedraaid". Alleen een eigenaar of beheerder kan dit. ' +
@@ -1094,6 +1143,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['valid_from', 'rate_percent'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, SHARE_COMPANY_FORMS, 'DGA-rente');
       const validFrom = isoDate(input, 'valid_from');
       const ratePercent = num(input, 'rate_percent');
       if (ratePercent <= 0) throw new ActionError('Vul een percentage groter dan nul in.');
@@ -1135,6 +1185,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['year'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, SHARE_COMPANY_FORMS, 'DGA-rente');
       const year = Math.trunc(num(input, 'year'));
       const { data, error } = await ctx.db.rpc('compute_dga_interest', { p_organization_id: ctx.organizationId, p_year: year });
       if (error) throw new ActionError(`Renteberekening ophalen mislukt: ${error.message}`);
@@ -1167,6 +1218,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Geboekte DGA-rente terugdraaien',
     module: 'finance',
     kind: 'write',
+    // De database eist een eigenaar of beheerder; een voorstel van een lid
+    // zou anders worden uitgevoerd door wie het goedkeurt.
+    adminOnly: true,
     risk: 'high',
     description:
       'Draait de geboekte rente over de rekening-courant DGA van een jaar terug; het boekstuk gaat op "teruggedraaid". Alleen een eigenaar of beheerder kan dit. Zoek de boeking eerst op met `dga.interest`.',
@@ -1281,6 +1335,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['fiscal_year_id'],
     async read(ctx, input) {
+      await requireLegalForm(ctx, VPB_FORMS, 'Vennootschapsbelasting');
       const fiscalYearId = id(input, 'fiscal_year_id');
       await fiscalYear(ctx, fiscalYearId);
       const { inputs, computation } = await computeCorporateTax(ctx, fiscalYearId);
@@ -1349,6 +1404,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['fiscal_year_id', 'code', 'label', 'amount_eur'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, VPB_FORMS, 'Vennootschapsbelasting');
       const fiscalYearId = id(input, 'fiscal_year_id');
       const year = await fiscalYear(ctx, fiscalYearId);
       const code = choice(input, 'code', CORRECTION_CODES);
@@ -1392,6 +1448,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['fiscal_year_id'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, VPB_FORMS, 'Vennootschapsbelasting');
       const fiscalYearId = id(input, 'fiscal_year_id');
       const year = await fiscalYear(ctx, fiscalYearId);
       const current = await currentTaxReturn(ctx, fiscalYearId);
@@ -1430,8 +1487,14 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     },
     required: ['fiscal_year_id'],
     async plan(ctx, input) {
+      await requireLegalForm(ctx, VPB_FORMS, 'Vennootschapsbelasting');
       const fiscalYearId = id(input, 'fiscal_year_id');
       const year = await fiscalYear(ctx, fiscalYearId);
+      // Vaststellen boekt op de balansdatum; in een afgesloten jaar kan dat niet
+      // (de database weigert het ook). Eerst vaststellen, dan afsluiten.
+      if (year.status === 'closed') {
+        throw new ActionError(`Boekjaar ${year.label} is afgesloten; de Vpb wordt geboekt op de balansdatum. Heropen het boekjaar (fiscal_year.reopen) of stel de Vpb vóór het afsluiten vast.`);
+      }
       const current = await currentTaxReturn(ctx, fiscalYearId);
       if (current?.status === 'final') throw new ActionError(`De Vpb-berekening van ${year.label} is al vastgesteld.`);
       const { inputs, computation } = await computeCorporateTax(ctx, fiscalYearId);
@@ -1459,6 +1522,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Vastgestelde Vpb-berekening terugdraaien',
     module: 'finance',
     kind: 'write',
+    // De database eist een eigenaar of beheerder; een voorstel van een lid
+    // zou anders worden uitgevoerd door wie het goedkeurt.
+    adminOnly: true,
     risk: 'high',
     description:
       'Draait een vastgestelde Vpb-berekening terug, waardoor de geboekte belastingschuld (of bij een verliesjaar de geboekte teruggaaf) vervalt en de fiscale correcties weer aanpasbaar worden. Alleen een eigenaar of beheerder kan dit. ' +
@@ -1470,10 +1536,16 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     required: ['return_id'],
     async plan(ctx, input) {
       const returnId = id(input, 'return_id');
-      const taxReturn = await row<{ year: number; tax_cents: number; taxable_amount_cents: number; status: string }>(
-        ctx, 'corporate_tax_returns', returnId, 'year, tax_cents, taxable_amount_cents, status', 'Vpb-berekening');
+      const taxReturn = await row<{ year: number; tax_cents: number; taxable_amount_cents: number; status: string; fiscal_year_id: string }>(
+        ctx, 'corporate_tax_returns', returnId, 'year, tax_cents, taxable_amount_cents, status, fiscal_year_id', 'Vpb-berekening');
       if (taxReturn.status === 'reversed') throw new ActionError('Deze Vpb-berekening is al teruggedraaid.');
       if (taxReturn.status !== 'final') throw new ActionError('Deze berekening staat nog als concept; er valt niets terug te draaien.');
+      // Terugdraaien boekt een tegenboeking in dat jaar; in een afgesloten jaar
+      // kan dat niet.
+      const year = await fiscalYear(ctx, taxReturn.fiscal_year_id);
+      if (year.status === 'closed') {
+        throw new ActionError(`Boekjaar ${year.label} is afgesloten; heropen het eerst (fiscal_year.reopen) om de Vpb-berekening terug te draaien.`);
+      }
 
       return {
         title: `Vpb-berekening ${taxReturn.year} terugdraaien: ${euroCents(taxReturn.tax_cents)}`,
@@ -2043,6 +2115,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Jaarrekening intrekken',
     module: 'finance',
     kind: 'write',
+    // De database eist een eigenaar of beheerder; een voorstel van een lid
+    // zou anders worden uitgevoerd door wie het goedkeurt.
+    adminOnly: true,
     risk: 'high',
     description:
       'Trekt een opgemaakte of vastgestelde jaarrekening in, met opgaaf van reden. Het bevroren stuk wordt ongeldig maar blijft als spoor staan en blokkeert daarna niets meer; pas ná het intrekken kan het boekjaar worden heropend en de resultaatbestemming worden teruggedraaid. ' +

@@ -100,6 +100,40 @@ function clean(values: Record<string, unknown>): Record<string, unknown> {
 // ── De twee schrijfbewegingen ────────────────────────────────────────────────
 
 /**
+ * Tabellen van Financiën: hier schrijft de uitvoerder ALS HET TEAMLID, via
+ * `action_member_write` (dezelfde wissel als `api_rest_write` voor de REST-
+ * resources). Op de service-role golden de databasebewakers voor
+ * "authenticated" niet: dat code en soort van een rekening waarop al geboekt is
+ * vastliggen, dat een btw-aangifte alleen van ingediend naar betaald gaat, dat
+ * een geboekte factuur of een activum met boekingen vastligt. Zo is de weg
+ * langs de API en MCP voor deze tabellen aantoonbaar dezelfde als in de app:
+ * RLS, de modulepoort en elke bewaker doen mee.
+ */
+const MEMBER_WRITE_TABLES = new Set([
+  'invoices', 'quotes', 'ledger_accounts', 'suppliers', 'bank_accounts', 'bank_rules', 'vat_returns', 'fixed_assets',
+]);
+
+async function memberWrite<T>(
+  ctx: ActionCtx, table: string, values: Record<string, unknown>, rowId: string | null,
+  unchanged: Record<string, string | null>, label: string, verb: string,
+): Promise<T> {
+  const { data, error } = await ctx.db.rpc('action_member_write', {
+    p_user_id: ctx.userId,
+    p_organization_id: ctx.organizationId,
+    p_table: table,
+    p_values: clean(values),
+    p_row_id: rowId,
+    p_unchanged: unchanged,
+  });
+  if (error) {
+    if (error.code === 'P0002') throw new ActionError(`${label} niet gevonden in deze organisatie.`);
+    throw new ActionError(`${label} ${verb} mislukt: ${error.message}`);
+  }
+  if (!data) throw new ActionError(`${label} niet gevonden in deze organisatie.`);
+  return data as T;
+}
+
+/**
  * Eén rij bijwerken binnen de organisatie — de serverkant van `updateRow`.
  *
  * `maybeSingle()` en niet `single()`: raakt de update geen rij (een id uit een
@@ -111,6 +145,7 @@ async function updateOne<T = Record<string, unknown>>(
   /** Kolommen die NOG zo moeten zijn, anders gebeurt er niets (bv. het e-mailadres op de goedgekeurde kaart). */
   unchanged: Record<string, string | null> = {},
 ): Promise<T> {
+  if (MEMBER_WRITE_TABLES.has(table)) return await memberWrite<T>(ctx, table, values, rowId, unchanged, label, 'bijwerken');
   let query = ctx.db.from(table)
     .update({ ...clean(values), updated_at: new Date().toISOString() })
     .eq('organization_id', ctx.organizationId).eq('id', rowId);
@@ -153,6 +188,7 @@ async function updateOwn<T = Record<string, unknown>>(
 async function insertOne<T = Record<string, unknown>>(
   ctx: ActionCtx, table: string, values: Record<string, unknown>, select = '*', label = 'Rij',
 ): Promise<T> {
+  if (MEMBER_WRITE_TABLES.has(table)) return await memberWrite<T>(ctx, table, values, null, {}, label, 'aanmaken');
   const { data, error } = await ctx.db.from(table)
     .insert({ ...clean(values), organization_id: ctx.organizationId, created_by: ctx.userId })
     .select(select).single();
@@ -384,7 +420,10 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
         throw new ActionError('Deze factuur staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur.');
       }
     }
-    await updateOne(ctx, 'invoices', invoiceId, { status }, 'id', 'Factuur');
+    // Alleen als de status nog is wat er op de kaart stond: een kaart is een
+    // momentopname, en een factuur die intussen betaald is gaat niet terug.
+    const was = pOptText(payload, 'was');
+    await updateOne(ctx, 'invoices', invoiceId, { status }, 'id', 'Factuur', was ? { status: was } : {});
     const labels: Record<string, string> = {
       draft: 'staat weer op concept', sent: 'staat op verzonden', overdue: 'staat op te laat',
       paid: 'is als betaald geboekt', cancelled: 'is geannuleerd', void: 'is ongeldig gemaakt',

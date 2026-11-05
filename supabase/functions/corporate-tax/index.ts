@@ -36,6 +36,7 @@ import {
 import {
   computeVpb, type LossCarryForward, type VpbCarryBackBasis, type VpbCorrection, type VpbInput, type VpbYearRules,
 } from '../_shared/vpb.ts';
+import { publicActionError } from '../_shared/publicError.ts';
 
 const admin = createAdminClient();
 const cors = makeCors(
@@ -133,6 +134,9 @@ serve(async (req) => {
   } catch (err) {
     const status = err instanceof HttpError ? err.status : 500;
     const message = err instanceof Error ? err.message : 'Onbekende fout';
-    return cors.json(req, { ok: false, error: message }, status);
+    if (status >= 500) console.error('corporate-tax error', message);
+    // Eigen meldingen gaan door; databasetekst (tabel-, kolom- en
+    // constraintnamen) niet naar de browser.
+    return cors.json(req, { ok: false, error: publicActionError(message).message }, status);
   }
 });

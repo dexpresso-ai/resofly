@@ -777,6 +777,11 @@ async function executeAction(args: Record<string, unknown>, session: Session): P
 
   // Het risico van DIT geval, niet van de handeling in het algemeen: een `plan()`
   // mag het omhoog zetten voor de ene aanroep en niet voor de andere.
+  if (proposal.human_only) {
+    return await fallbackToProposal(action, core, input, session,
+      `"${action.label}" verandert waar geld heen gaat (een IBAN of e-mailadres). Dat gaat altijd langs een mens, ook met deze koppeling.`,
+      proposal);
+  }
   if (!directlyExecutable(session, action.id, proposal.risk)) {
     return await fallbackToProposal(action, core, input, session,
       `"${action.label}" is onomkeerbaar of gaat naar buiten, en deze koppeling mag dat niet rechtstreeks doen.`,
@@ -972,6 +977,7 @@ async function buildRegistryProposal(
     sub: plan.warning ? `\u26A0\uFE0F ${plan.warning}${plan.sub ? ` — ${plan.sub}` : ''}` : plan.sub,
     kind: plan.kind,
     risk: plan.risk === 'high' || action.risk === 'high' ? 'high' : 'normal',
+    ...(plan.humanOnly ? { human_only: true } : {}),
     payload: plan.payload,
   };
 }
