@@ -31,6 +31,14 @@ Migratie: `supabase/migrations/20261105230000_contract_offerte_factuur_controle.
 | 5 | De oude `cloudflare-worker` uitzetten | Die laat elk lid met een JWT de bewaarplichtige PDF's (facturen, offertes, contracten) wissen. De media-worker heeft die controle wel. | In Cloudflare de oude worker verwijderen, of controleren dat hij niet meer draait. |
 | 6 | Twee keuzes maken | Zie *Open punten* 1 en 2: handmatig "Betaald" in het scherm, en Mollie-testsleutels. | — |
 
+**Let op bij de afscherming voor anon:** anon kan het schema `public` niet meer in, dus ook
+`billing_plans` niet meer lezen (de tabelrechten staan er nog, de rooktest verwacht ze). In deze
+repo leest alleen de abonnementspagina die tabel, en daar ben je ingelogd. Leest een site buiten
+deze repo (bijvoorbeeld een prijspagina) de plannen met de publieke sleutel, dan werkt dat na deze
+migratie niet meer; laat zo'n site ze dan via een edge function ophalen. Na de upgrade van actie 1
+kan anon het schema weer in als dat nodig blijkt (met een nieuwe migratie, en de controle in
+`scripts/supabase-smoke-test.sh` aangepast): de crash zit dan niet meer in de weg.
+
 ## Wat er mis was en hoe het nu zit
 
 Status: **opgelost**, **deels** (de kern is opgelost, een rand niet) of **open**.
@@ -198,7 +206,8 @@ Staging kreeg op dezelfde dag een nieuwe opmaakmodule voor offertes en facturen
   versies), facturen (grootboek, KOR, concept, status, versies), betalingen (gemengd terugbetalen,
   externe terugbetaling, teruglopen, terugkeerlink, betaald concept) en het portaal (beslissen
   over de offerte van een ander).
-- De mobiele schermtest (licht en donker) en de laadtest: zie de changelog.
+- `npm run test:mobile -- --theme=both`: 324 pagina's, 0 met problemen. `npm run test:loading`:
+  alle controles geslaagd.
 
 ### Wat ik niet kon controleren
 

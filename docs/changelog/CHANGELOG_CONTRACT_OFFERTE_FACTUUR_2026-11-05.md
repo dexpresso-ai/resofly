@@ -126,4 +126,6 @@ een andere migratie met die versie.
 - `supabase db reset`: de hele keten vanaf nul; de nieuwe migratie daarna nog een keer.
 - Alle reproducties uit de controle opnieuw gedraaid op de verse database, met de verwachte
   uitkomst (weigeren of het juiste bedrag).
-- `npm run test:mobile -- --theme=both` en `npm run test:loading`: zie hieronder.
+- `npm run test:mobile -- --theme=both`: 324 pagina's gemeten (licht en donker; telefoon, tablet en
+  liggend; ook de publieke offerte-, factuur- en contractpagina en het portaal), 0 met problemen.
+- `npm run test:loading`: alle controles geslaagd.
