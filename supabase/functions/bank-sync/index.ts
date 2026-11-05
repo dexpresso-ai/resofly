@@ -5,6 +5,7 @@ import {
   bankReturnError, choosePsuType, consentExpired, consentValidUntil, ebErrorCode, isBookedTransaction,
   mapAspsp, mapEbTransaction, needsReconsent, psuTypesOf, syncDateFrom, type PsuType,
 } from '../_shared/bankSync.ts';
+import { publicActionError } from '../_shared/publicError.ts';
 
 // ============================================================
 // bank-sync — directe PSD2-bankkoppeling via Enable Banking (EU/Fins AISP).
@@ -104,7 +105,7 @@ serve(async (req) => {
     const status = error instanceof HttpError ? error.status : 500;
     const internal = describeError(error);
     if (status >= 500) console.error('bank-sync error', internal); else console.warn('bank-sync warning', internal);
-    const publicMessage = error instanceof HttpError ? error.message
+    const publicMessage = error instanceof HttpError ? (BANK_DEBUG_ERRORS ? error.message : publicActionError(error.message).message)
       : BANK_DEBUG_ERRORS ? `Bank-sync mislukt: ${internal}` : 'Bankkoppeling mislukt door een server- of providerfout. Controleer de Edge Function logs.';
     return json(req, { ok: false, error: publicMessage }, status);
   }

@@ -49,6 +49,7 @@ import {
 } from '../_shared/edgeAuth.ts';
 import { bytesToBase64, renderReportDocument, sha256HexBytes } from '../_shared/reportPdf.ts';
 import { buildAnnualAccountsDocument, buildPublicationDocument } from '../_shared/annualAccountsLayout.ts';
+import { publicActionError } from '../_shared/publicError.ts';
 
 const admin = createAdminClient();
 const cors = makeCors(
@@ -326,6 +327,19 @@ serve(async (req) => {
 
     // ── Genereren én archiveren.
     if (writeActions.has(action)) {
+      // Na vaststellen of deponeren is het gearchiveerde exemplaar het stuk zelf:
+      // dat wordt niet meer vervangen (opnieuw renderen kan een ander stuk geven,
+      // bijv. door een andere huisstijlkleur). Ontbreekt het archief nog, dan mag
+      // het eerste exemplaar er alsnog komen.
+      const archivedId = variant === 'publication' ? account.publicationAttachmentId : account.pdfAttachmentId;
+      if (['adopted', 'filed'].includes(String(account.status ?? '')) && typeof archivedId === 'string' && archivedId) {
+        throw new HttpError(
+          account.status === 'filed'
+            ? 'Deze jaarrekening is gedeponeerd; het gearchiveerde exemplaar blijft zoals het is. Download het gearchiveerde stuk.'
+            : 'Deze jaarrekening is vastgesteld; het gearchiveerde exemplaar blijft zoals het is. Download het gearchiveerde stuk, of draai het vaststellen eerst terug.',
+          409,
+        );
+      }
       const pdf = await buildPdf(account, variant, accentColor);
       const archive = await archivePdf({
         organizationId,
@@ -390,6 +404,9 @@ serve(async (req) => {
   } catch (err) {
     const status = err instanceof HttpError ? err.status : 500;
     const message = err instanceof Error ? err.message : 'Onbekende fout';
-    return cors.json(req, { ok: false, error: message }, status);
+    if (status >= 500) console.error('annual-accounts error', message);
+    // Eigen meldingen gaan door; databasetekst (tabel-, kolom- en
+    // constraintnamen) niet naar de browser.
+    return cors.json(req, { ok: false, error: publicActionError(message).message }, status);
   }
 });

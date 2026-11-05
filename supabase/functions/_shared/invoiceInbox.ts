@@ -140,6 +140,12 @@ export interface ProcessOptions {
   supplierOverride?: { supplierId: string } | { createSupplier: true } | null;
   /** Wie de knop indrukte (null bij de automatische verwerking). */
   actorUserId?: string | null;
+  /**
+   * Alleen klaarzetten, nooit automatisch boeken ("Toch klaarzetten", de
+   * handeling purchase_invoice_inbox.prepare): wie een item met de hand
+   * doorzet, boekt het daarna zelf.
+   */
+  noAutoBook?: boolean;
 }
 
 /** Fout met een machineleesbare reden, zodat de rij een zinnige status krijgt. */
@@ -633,7 +639,14 @@ async function applyCandidate(
   // 4. Boeken? ─────────────────────────────────────────────────────────────────
   let status: InboxStatus = 'ready';
   let autoBooked = false;
-  if (settings.auto_book) {
+  // Nooit vanzelf boeken wat bewust ondanks een dubbelmelding is doorgezet, of
+  // wat met de hand is klaargezet: anders konden kosten en voorbelasting dubbel
+  // in het grootboek komen, met een kaart die zei dat er niets geboekt werd.
+  if (settings.auto_book && (opts.allowDuplicate || opts.noAutoBook)) {
+    warnings.push(opts.allowDuplicate
+      ? 'Niet automatisch geboekt: dit item is ondanks de dubbelmelding klaargezet. Controleer het en boek het zelf.'
+      : 'Niet automatisch geboekt: met de hand klaargezet. Controleer het concept en boek het zelf.');
+  } else if (settings.auto_book) {
     const eligible = autoBookEligible({ supplierCreated, supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch, ibanVerified, currency: proposal.currency });
     if (eligible.ok) {
       const { error: bookError } = await admin.rpc('book_purchase_invoice', {

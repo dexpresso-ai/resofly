@@ -364,6 +364,8 @@ interface ActionProposal {
   kind: 'money' | 'mail' | 'agenda' | 'work' | 'insight' | 'agent';
   /** 'high' = onomkeerbaar of naar buiten gericht; de knop heet dan anders. */
   risk: 'normal' | 'high';
+  /** Nooit rechtstreeks uitvoeren, ook niet met `execute_high` (zie ActionPlan.humanOnly). */
+  human_only?: boolean;
   payload: Record<string, unknown>;
 }
 

@@ -757,6 +757,11 @@ function BankRuleForm({ data, organizationId, canWrite, rule, onClose, onSaved }
   async function save() {
     if (!String(form.name || '').trim()) { setError('Naam is verplicht.'); return; }
     if (form.auto_book && !form.target_account_id) { setError('Automatisch boeken vereist een grootboekrekening.'); return; }
+    // Zonder voorwaarde matcht een regel op élke transactie (en met automatisch
+    // boeken boekt hij ze allemaal); de database weigert zo'n regel ook.
+    const hasCondition = [form.match_counterparty_iban, form.match_counterparty_name_contains, form.match_description_contains, form.match_amount]
+      .some(v => String(v ?? '').trim() !== '');
+    if (!hasCondition) { setError('Geef minstens één voorwaarde: IBAN, naam bevat, omschrijving bevat of een exact bedrag.'); return; }
     setBusy(true); setError(null);
     try {
       const amountStr = String(form.match_amount).trim();

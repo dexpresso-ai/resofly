@@ -102,6 +102,14 @@ export interface ActionPlan {
    * hem zichtbaar maken voor de klant is dat niet.
    */
   risk?: 'normal' | 'high';
+  /**
+   * Altijd langs een mens, ook voor een koppeling met `execute_high`: wijzigingen
+   * die bepalen waar geld heen gaat (het IBAN of e-mailadres van een leverancier,
+   * het IBAN op de eigen facturen). Een verzoek daartoe komt typisch binnen via
+   * een mail die zich voordoet als de leverancier; precies dan hoort er iemand
+   * naar te kijken die de leverancier zelf kan bellen.
+   */
+  humanOnly?: boolean;
 }
 
 /** Invoer klopt niet; de tekst gaat terug naar het model zodat het zichzelf corrigeert. */
@@ -161,23 +169,49 @@ export function optStr(input: Record<string, unknown>, key: string, max = 500): 
   return value ? value.slice(0, max) : null;
 }
 
-/** Verplicht getal. */
+/**
+ * Verplicht getal. `Number()` maakt van null, "" en false een 0 en van true een 1;
+ * een ontbrekend aantal medewerkers werd zo "0" (en de onderneming micro).
+ */
 export function num(input: Record<string, unknown>, key: string): number {
-  const value = Number(input[key]);
+  const raw = input[key];
+  if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
+    throw new ActionError(`"${key}" is verplicht.`);
+  }
+  if (typeof raw !== 'number' && typeof raw !== 'string') throw new ActionError(`"${key}" moet een getal zijn.`);
+  const value = Number(raw);
   if (!Number.isFinite(value)) throw new ActionError(`"${key}" moet een getal zijn.`);
   return value;
 }
 
-/** Optioneel getal; ontbrekend wordt null. */
+/** Optioneel getal; ontbrekend wordt null. Een boolean is geen getal. */
 export function optNum(input: Record<string, unknown>, key: string): number | null {
-  if (input[key] === undefined || input[key] === null || input[key] === '') return null;
-  const value = Number(input[key]);
+  const raw = input[key];
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw !== 'number' && typeof raw !== 'string') throw new ActionError(`"${key}" moet een getal zijn.`);
+  const value = Number(raw);
   if (!Number.isFinite(value)) throw new ActionError(`"${key}" moet een getal zijn.`);
   return value;
 }
 
+/**
+ * Ja/nee. Ontbreekt de waarde, dan de standaard; "true"/"false" (en "ja"/"nee")
+ * als tekst tellen ook. Iets anders is een fout: met een standaard van true werd
+ * `signed: "false"` anders stil een handtekening.
+ */
 export function bool(input: Record<string, unknown>, key: string, fallback = false): boolean {
-  return typeof input[key] === 'boolean' ? input[key] as boolean : fallback;
+  const raw = input[key];
+  if (raw === undefined || raw === null) return fallback;
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'string') {
+    const text = raw.trim().toLowerCase();
+    if (text === '') return fallback;
+    if (['true', 'ja', 'yes', '1'].includes(text)) return true;
+    if (['false', 'nee', 'no', '0'].includes(text)) return false;
+  }
+  if (raw === 1) return true;
+  if (raw === 0) return false;
+  throw new ActionError(`"${key}" moet true of false zijn.`);
 }
 
 /** Verplichte keuze uit een vaste lijst. */

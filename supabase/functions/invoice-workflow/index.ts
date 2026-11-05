@@ -16,6 +16,7 @@ import {
   mollieSalesInvoiceSettled, readMollieSalesInvoice, uuidFromHex, type MollieSalesInvoiceState,
 } from '../_shared/mollieSalesInvoice.ts';
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
+import { publicActionError } from '../_shared/publicError.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type InvoiceLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number; vat_code?: string | null };
@@ -189,8 +190,9 @@ serve(async (req) => {
     }
 
     // E-factuur via Mollie: de status bij Mollie ophalen (Peppol-aflevering,
-    // betaald) en de PDF van Mollie tonen. Dat neemt alleen Mollies waarheid over
-    // — de gebruiker wijzigt niets — dus elk actief lid mag het, ook een viewer.
+    // betaald) en de PDF van Mollie tonen. Elk actief lid mag kijken, ook een
+    // viewer; alleen een schrijver legt de stand vast (aflevering, betaling,
+    // boeking). Voor een lezer is het alleen-lezen.
     if (action === 'syncMollieSalesInvoice') {
       if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
       const canWrite = ['owner', 'admin', 'member'].includes(role) && financeLevel === 'write';
@@ -233,8 +235,11 @@ serve(async (req) => {
     } else {
       console.warn('invoice-workflow warning', internalMessage, serializeError(error));
     }
+    // Een eigen melding gaat door; wat de database er (bij een 5xx) aan
+    // toevoegde — tabel-, kolom- en constraintnamen — alleen met
+    // INVOICE_DEBUG_ERRORS. Het staat hierboven wel in de log.
     const publicMessage = error instanceof WorkflowHttpError
-      ? error.message
+      ? (INVOICE_DEBUG_ERRORS ? error.message : publicActionError(error.message).message)
       : INVOICE_DEBUG_ERRORS
         ? `Invoice workflow-actie mislukt: ${internalMessage}`
         : 'Invoice workflow-actie mislukt door een server- of providerfout. Controleer de Edge Function logs.';
@@ -249,7 +254,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
 
   const invoice = await loadInvoice(organizationId, invoiceId);
-  if (['paid','cancelled','void','written_off'].includes(invoice.status)) throw new WorkflowHttpError('Betaalde, geannuleerde of afgeboekte facturen kunnen niet worden verstuurd.', 409);
+  if (['paid','cancelled','void','written_off','refunded'].includes(invoice.status)) throw new WorkflowHttpError('Betaalde, terugbetaalde, geannuleerde of afgeboekte facturen kunnen niet worden verstuurd.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
 
   const [client, project, quote, company, content] = await Promise.all([
@@ -518,6 +523,10 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
   const invoice = await loadInvoice(organizationId, invoiceId);
   if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen herinnering worden verstuurd.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  // Wat er volgens het grootboek nog openstaat (na deelbetalingen en
+  // creditnota's); null als de factuur niet in het grootboek staat.
+  const openCents = await loadInvoiceOpenCents(organizationId, invoice);
+  if (openCents !== null && openCents <= 0) throw new WorkflowHttpError('Op deze factuur staat niets meer open; een herinnering is niet nodig.', 409);
 
   const [client, project, company, content] = await Promise.all([
     loadClient(organizationId, invoice.client_id),
@@ -552,7 +561,7 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
     }
   }
 
-  const rendered = renderEmailTemplate('invoice.reminder', { level, invoice, client, project, company, publicUrl, paymentUrl, recipientName, daysOverdue: input.daysOverdue ?? null, content });
+  const rendered = renderEmailTemplate('invoice.reminder', { level, invoice, openAmountCents: openCents, client, project, company, publicUrl, paymentUrl, recipientName, daysOverdue: input.daysOverdue ?? null, content });
   const subject = rendered.subject;
 
   // PDF: hergebruik de opgeslagen snapshot (exact wat de klant eerder kreeg). Is er
@@ -1171,9 +1180,15 @@ async function createDunningLetterPdfAttachment(input: {
 async function createInvoicePaymentCheckout(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>) {
   if (!INVOICE_PUBLIC_BASE_URL) throw new WorkflowHttpError('INVOICE_PUBLIC_BASE_URL of APP_PUBLIC_URL ontbreekt.', 500);
   const invoice = await loadInvoice(organizationId, invoiceId);
-  if (['paid','cancelled','void','written_off'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen betaallink worden aangemaakt.', 409);
+  if (['paid','cancelled','void','written_off','refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen betaallink worden aangemaakt.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
-  const amountCents = calculateTotals(invoice.lines).totalCents;
+  // De link vraagt wat er nog openstaat, niet het factuurtotaal: na een
+  // deelbetaling (bank of Mollie) of creditnota betaalde de klant anders te
+  // veel. Staat de factuur (nog) niet in het grootboek, dan het factuurtotaal.
+  const totalCents = calculateTotals(invoice.lines).totalCents;
+  const openCents = await loadInvoiceOpenCents(organizationId, invoice);
+  const amountCents = openCents === null ? totalCents : Math.max(0, Math.min(totalCents, openCents));
+  if (openCents !== null && amountCents <= 0) throw new WorkflowHttpError('Op deze factuur staat niets meer open.', 409);
   if (amountCents <= 0) throw new WorkflowHttpError('Factuurbedrag moet groter zijn dan 0.', 422);
 
   // Via Mollie als e-factuur uitgegeven: de klant betaalt via de link van Mollie,
@@ -1185,7 +1200,11 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   }
 
   const existingPayment = await loadLatestOpenPayment(organizationId, invoiceId);
-  if (existingPayment?.provider_checkout_url && isReusableCheckoutUrl(existingPayment.provider_checkout_url)) {
+  // Alleen hergebruiken als de open link nog om hetzelfde bedrag vraagt; is er
+  // intussen deels betaald, dan laat begin_invoice_payment_checkout de oude
+  // link vervallen en komt er een nieuwe voor het juiste bedrag.
+  if (existingPayment?.provider_checkout_url && isReusableCheckoutUrl(existingPayment.provider_checkout_url)
+    && Number(existingPayment.amount_cents) === amountCents) {
     return {
       payment: existingPayment,
       checkoutUrl: existingPayment.provider_checkout_url,
@@ -1237,7 +1256,9 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
         // begin_invoice_payment_checkout al af (dat geeft het actieve record terug).
         headers: { Authorization: `Bearer ${orgKey.apiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`invoice-payment-${payment.id}`) },
         body: JSON.stringify({
-          amount: { currency: 'EUR', value: (amountCents / 100).toFixed(2) },
+          // Het bedrag van het betaalrecord: de database begrenst het op wat er
+          // nog openstaat (begin_invoice_payment_checkout).
+          amount: { currency: 'EUR', value: (Number(payment.amount_cents ?? amountCents) / 100).toFixed(2) },
           description: `Factuur ${invoice.number}`,
           redirectUrl,
           webhookUrl,
@@ -1500,6 +1521,10 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
 
   // 1. Creditfactuur server-side aanmaken (kent atomair het CN-nummer toe).
   const created = await issueCreditNote({ organizationId, invoiceId: invoice.id, refundId: refund?.id ?? null, userId, reason, currency, subtotal, vat, total, lines });
+  // Bestond de creditnota al (dezelfde terugbetaling via een tweede webhook of
+  // een herhaalde poging; issue_credit_note geeft hem dan terug), dan niet
+  // opnieuw renderen of mailen.
+  if (created.pdf_sha256) return created;
   const creditNoteNumber = String(created.number || '');
 
   // 2. PDF renderen met het toegekende nummer. Bij geconfigureerde storage gaat de
@@ -1764,7 +1789,7 @@ async function downloadCreditNotePdf(organizationId: string, body: Record<string
 
 // Stuur de creditfactuur-PDF naar de klant via Resend. Gedeeld door de automatische
 // verzending (bij aanmaken) en de handmatige 'Mail creditfactuur'-actie.
-async function deliverCreditNoteEmail(input: { organizationId: string; userId: string | null; creditNote: Record<string, unknown>; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; recipientEmail: string; recipientName: string | null; pdfBase64?: string }): Promise<{ providerEmailId: string; recipientEmail: string; eInvoice: boolean }> {
+async function deliverCreditNoteEmail(input: { organizationId: string; userId: string | null; creditNote: Record<string, unknown>; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; recipientEmail: string; recipientName: string | null; pdfBase64?: string; manual?: boolean }): Promise<{ providerEmailId: string; recipientEmail: string; eInvoice: boolean }> {
   if (!RESEND_API_KEY) throw new WorkflowHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
   if (!RESEND_FROM_EMAIL) throw new WorkflowHttpError('RESEND_FROM_EMAIL ontbreekt in de Edge Function secrets.', 500);
   const recipientEmail = String(input.recipientEmail || '').trim().toLowerCase();
@@ -1828,7 +1853,12 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
   await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`credit-note-${String(input.creditNote.id)}-${recipientEmail}`) },
+    // Automatisch (na een terugbetaling): één sleutel per creditnota en adres,
+    // zodat een herhaalde webhook niet dubbel mailt. Handmatig: per minuut —
+    // een dubbelklik telt één keer, maar een bewuste herverzending gaat ook
+    // echt de deur uit (Resend ontdubbelt 24 uur op dezelfde sleutel; dan zei
+    // het logboek "verstuurd" terwijl er niets verstuurd was).
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`credit-note-${String(input.creditNote.id)}-${recipientEmail}${input.manual ? `-m${Math.floor(Date.now() / 60000)}` : ''}`) },
     body: JSON.stringify(resendPayload),
   });
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -1882,7 +1912,7 @@ async function sendCreditNoteEmail(userId: string, organizationId: string, body:
   const recipientEmail = defaultInvoiceRecipient(client, body.recipientEmail);
   const recipientName = String(body.recipientName || '').trim() || null;
   if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) throw new WorkflowHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
-  const result = await deliverCreditNoteEmail({ organizationId, userId, creditNote, invoice, client, company, recipientEmail, recipientName });
+  const result = await deliverCreditNoteEmail({ organizationId, userId, creditNote, invoice, client, company, recipientEmail, recipientName, manual: true });
   return { sent: true, ...result };
 }
 
@@ -3233,6 +3263,11 @@ async function syncMollieSalesInvoice(organizationId: string, invoiceId: string,
     deliveryStatus = 'sent';
   }
 
+  // Wie Financiën alleen mag lezen, ziet de stand bij Mollie maar zet niets in
+  // gang: het vastleggen van de aflevering, de betaling en de boeking doen een
+  // schrijver of de cron (die dezelfde stand ophaalt).
+  if (!options.canWrite) return { mollie: publicMollieState(state), recovered, pending: false, paymentApplied: false };
+
   await recordMollieDeliveryState(organizationId, { id: delivery.id, status: deliveryStatus, e_invoice_status: recovered ? null : delivery.e_invoice_status }, state, invoiceId);
 
   // Betaald bij Mollie -> betaald in ResoFly. Een factuur die in ResoFly al op een
@@ -3351,10 +3386,10 @@ async function loadEmailTemplateContent(organizationId: string, templateKey: Ema
   const row = data as { enabled: boolean; subject: string | null; intro: string | null; closing: string | null; cta_label: string | null };
   return { enabled: row.enabled, subject: row.subject, intro: row.intro, closing: row.closing, ctaLabel: row.cta_label };
 }
-async function loadLatestOpenPayment(organizationId: string, invoiceId: string): Promise<{ id: string; provider_checkout_url: string | null; provider_payment_id: string | null; status: string; checkout_expires_at?: string | null } | null> {
+async function loadLatestOpenPayment(organizationId: string, invoiceId: string): Promise<{ id: string; amount_cents: number | null; provider_checkout_url: string | null; provider_payment_id: string | null; status: string; checkout_expires_at?: string | null } | null> {
   const { data, error } = await supabaseAdmin
     .from('invoice_payment_records')
-    .select('id,provider_checkout_url,provider_payment_id,status,checkout_expires_at')
+    .select('id,amount_cents,provider_checkout_url,provider_payment_id,status,checkout_expires_at')
     .eq('organization_id', organizationId)
     .eq('invoice_id', invoiceId)
     .in('status', ['creating','open','pending','authorized'])
@@ -3362,7 +3397,7 @@ async function loadLatestOpenPayment(organizationId: string, invoiceId: string):
     .limit(1)
     .maybeSingle();
   if (error) return null;
-  return (data ?? null) as { id: string; provider_checkout_url: string | null; provider_payment_id: string | null; status: string; checkout_expires_at?: string | null } | null;
+  return (data ?? null) as { id: string; amount_cents: number | null; provider_checkout_url: string | null; provider_payment_id: string | null; status: string; checkout_expires_at?: string | null } | null;
 }
 
 async function beginInvoiceEmailSend(input: { invoiceId: string; organizationId: string; userId: string; tokenHash: string; expiresAt: string; recipientEmail: string; recipientName: string; subject: string; publicUrl: string; attachmentFileName?: string; attachmentMimeType?: string; attachmentSizeBytes?: number; attachmentSha256?: string; attachmentDataBase64?: string; attachmentStorageProvider?: string; attachmentStorageKey?: string }): Promise<{ deliveryId: string; invoiceId?: string }> {
@@ -3399,7 +3434,7 @@ async function failInvoiceEmailSend(deliveryId: string, organizationId: string, 
 }
 async function beginInvoicePaymentCheckout(input: { invoiceId: string; organizationId: string; userId: string; amountCents: number; publicTokenHash: string | null; publicTokenExpiresAt: string | null; idempotencyKey: string; checkoutExpiresAt: string; metadata: Record<string, unknown> }) {
   const { data, error } = await supabaseAdmin.rpc('begin_invoice_payment_checkout', { p_invoice_id: input.invoiceId, p_organization_id: input.organizationId, p_actor_user_id: input.userId, p_amount_cents: input.amountCents, p_public_token_hash: input.publicTokenHash, p_public_token_expires_at: input.publicTokenExpiresAt, p_currency: 'EUR', p_idempotency_key: input.idempotencyKey, p_checkout_expires_at: input.checkoutExpiresAt, p_metadata: input.metadata });
-  if (error) throwRpcError('begin_invoice_payment_checkout', error); return data as { id: string; provider_checkout_url: string | null; provider_payment_id: string | null };
+  if (error) throwRpcError('begin_invoice_payment_checkout', error); return data as { id: string; amount_cents: number | null; provider_checkout_url: string | null; provider_payment_id: string | null };
 }
 async function completeInvoicePaymentCheckout(paymentRecordId: string, organizationId: string, userId: string, providerPaymentId: string, checkoutUrl: string, status: string, metadata: Record<string, unknown>) {
   const { data, error } = await supabaseAdmin.rpc('complete_invoice_payment_checkout', { p_payment_record_id: paymentRecordId, p_organization_id: organizationId, p_actor_user_id: userId, p_provider_payment_id: providerPaymentId, p_provider_checkout_url: checkoutUrl, p_status: status, p_metadata: metadata });

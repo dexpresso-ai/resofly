@@ -26,6 +26,8 @@ import {
 // verstuurd (klant + intern). E-mailfouten blokkeren de ondertekening nooit.
 // ============================================================
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 type ContractRow = {
   id: string;
   organization_id: string;
@@ -152,6 +154,9 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
   const method = String(body.signatureMethod || '').trim();
   const signatureImage = typeof body.signatureImage === 'string' ? body.signatureImage : '';
   const consentText = String(body.consentText || '').trim();
+  // De versie die de klant op het scherm had (de bij verzenden bevroren kopie).
+  // De database weigert als er intussen een nieuwere versie is verstuurd.
+  const versionId = typeof body.versionId === 'string' && UUID_RE.test(body.versionId) ? body.versionId : null;
 
   if (!signerName) throw new PublicHttpError('Vul je naam in om te ondertekenen.', 422);
   if (!isEmail(signerEmail)) throw new PublicHttpError('Vul een geldig e-mailadres in.', 422);
@@ -174,18 +179,24 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
     p_consent_text: consentText,
     p_ip: ip,
     p_user_agent: userAgent,
+    p_version_id: versionId,
   });
   if (signError) {
-    if (/ongeldig|verlopen|niet meer/i.test(signError.message)) throw new PublicHttpError(signError.message, 409);
+    if (/ongeldig|verlopen|niet meer|gewijzigd/i.test(signError.message)) throw new PublicHttpError(signError.message, 409);
     throw signError;
   }
   const contract = (Array.isArray(signedData) ? signedData[0] : signedData) as ContractRow;
   const signedAt = contract.signed_at || new Date().toISOString();
 
-  const [client, company] = await Promise.all([
+  const [client, company, invitedSigner, sentVersion] = await Promise.all([
     contract.client_id ? loadClient(contract.organization_id, contract.client_id) : Promise.resolve(null),
     loadCompanySettings(contract.organization_id),
+    loadSigner(contract.organization_id, contract.id),
+    loadSentVersion(contract.organization_id, contract.id),
   ]);
+  // De bevestiging met het getekende PDF gaat naar het adres waarheen de
+  // uitnodiging ging; het ingetypte adres staat als verklaring in het bewijs.
+  const confirmationEmail = invitedSigner?.email || signerEmail;
 
   // 2+3. Genereer + koppel het onveranderlijke getekende PDF. Dit gebeurt ná de
   //       reeds vastgelegde ondertekening (handtekening + bewijs staan al in
@@ -211,7 +222,7 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
       client, company, projectName,
     });
     const pdfContract = {
-      id: contract.id, number: contract.number, title: contract.title,
+      id: contract.id, number: contract.number, title: sentVersion?.title || contract.title,
       body: '', date: contract.date, valid_until: contract.valid_until,
     };
     const pdfClient = client ?? { name: 'Klant', contact_name: null, email: signerEmail };
@@ -229,7 +240,10 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
           signature,
         })
       : await renderContractPdf({
-          contract: { ...pdfContract, body: sanitizeContractHtml(fillContractTokens(contract.body, tokens)) },
+          // Het getekende exemplaar is de versie die is verstuurd en die de klant
+          // zag (bevroren bij verzenden), niet de huidige tekst: die kan na het
+          // versturen nog zijn aangepast.
+          contract: { ...pdfContract, body: sanitizeContractHtml(sentVersion?.body ?? fillContractTokens(contract.body, tokens)) },
           client: pdfClient,
           company,
           signature,
@@ -257,7 +271,7 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
 
   // 4. Bevestigingsmails (best-effort: blokkeren de ondertekening nooit). Zonder
   //    gegenereerd PDF sturen we de mails zonder bijlage.
-  await sendConfirmationEmails(contract, client, company, { signerName, signerEmail, signedAt }, pdfForEmail).catch((e) => {
+  await sendConfirmationEmails(contract, client, company, { signerName, signerEmail: confirmationEmail, signedAt }, pdfForEmail).catch((e) => {
     console.error('contract confirmation emails failed', describeError(e));
   });
 
@@ -526,6 +540,21 @@ async function loadContractEmailContent(organizationId: string, templateKey: str
   return { enabled: row.enabled, subject: row.subject, intro: row.intro, closing: row.closing, ctaLabel: row.cta_label };
 }
 
+/** De laatst verstuurde, bevroren versie (snapshot_contract_version bij verzenden). */
+async function loadSentVersion(organizationId: string, contractId: string): Promise<{ id: string; title: string | null; body: string | null } | null> {
+  const { data, error } = await supabaseAdmin
+    .from('contract_versions')
+    .select('id,title,body')
+    .eq('organization_id', organizationId)
+    .eq('contract_id', contractId)
+    .eq('snapshot_reason', 'sent_to_client')
+    .order('version_number', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as { id: string; title: string | null; body: string | null } | null;
+}
+
 async function loadSigner(organizationId: string, contractId: string) {
   const { data, error } = await supabaseAdmin
     .from('contract_signers')
@@ -600,12 +629,13 @@ async function loadContractPdfForDisplay(contract: ContractRow): Promise<Uint8Ar
 }
 
 async function buildPayload(contract: ContractRow) {
-  const [client, company, signer, events, projectName] = await Promise.all([
+  const [client, company, signer, events, projectName, sentVersion] = await Promise.all([
     contract.client_id ? loadClient(contract.organization_id, contract.client_id) : Promise.resolve(null),
     loadCompanySettings(contract.organization_id),
     loadSigner(contract.organization_id, contract.id),
     loadEvents(contract.organization_id, contract.id),
     loadLinkedProjectName(contract.organization_id, contract.id),
+    loadSentVersion(contract.organization_id, contract.id),
   ]);
   // Vul variabelen in én sanitize server-side: de publieke pagina rendert deze
   // body via innerHTML, dus dit is de beslissende XSS-grens.
@@ -614,7 +644,10 @@ async function buildPayload(contract: ContractRow) {
     client, company, projectName,
   });
   const office = isOfficeContract(contract);
-  const renderedBody = office ? '' : sanitizeContractHtml(fillContractTokens(contract.body, tokens));
+  // De klant ziet de versie die is verstuurd (bevroren bij verzenden, met de
+  // variabelen al ingevuld), niet de huidige tekst; zo tekent hij precies wat
+  // hij kreeg. Zonder bevroren versie (oud contract) de huidige tekst.
+  const renderedBody = office ? '' : sanitizeContractHtml(sentVersion?.body ?? fillContractTokens(contract.body, tokens));
   // Word-contract: de klant krijgt de PDF zelf te zien in plaats van HTML. Dat is
   // exact het document dat hij ondertekent — geen benadering ervan.
   let documentPdfBase64: string | null = null;
@@ -631,8 +664,9 @@ async function buildPayload(contract: ContractRow) {
     contract: {
       id: contract.id,
       number: contract.number,
-      title: contract.title,
+      title: sentVersion?.title || contract.title,
       body: renderedBody,
+      version_id: sentVersion?.id ?? null,
       content_kind: office ? 'pdf' : 'html',
       document_pdf_base64: documentPdfBase64,
       date: contract.date,

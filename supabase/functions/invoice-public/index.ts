@@ -346,6 +346,19 @@ async function optionalList(name: string, loader: () => Promise<any[]>) {
 
 async function logInvoiceViewed(organizationId: string, invoiceId: string, publicLinkId: string | null) {
   try {
+    // Hooguit één "bekeken" per tien minuten, net als bij offertes en contracten:
+    // anders schreef elke herlaadbeurt (of een bot) een regel in de tijdlijn.
+    const since = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data: recent, error: recentError } = await supabaseAdmin
+      .from('invoice_workflow_events')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .eq('invoice_id', invoiceId)
+      .eq('event_type', 'client_viewed')
+      .gte('created_at', since)
+      .limit(1);
+    if (recentError) console.warn('invoice-public view throttle check failed', recentError.message);
+    if (recent && recent.length > 0) return;
     const { error } = await supabaseAdmin.rpc('insert_invoice_workflow_event', {
       p_organization_id: organizationId,
       p_invoice_id: invoiceId,
@@ -393,9 +406,11 @@ function sanitizeClient(row: any) {
   };
 }
 
+// Alleen de naam: omschrijving, status en planning van een project zijn intern
+// en horen niet op een pagina die iedereen met de link kan openen.
 function sanitizeProject(row: any) {
   if (!row) return null;
-  return { name: row.name, description: row.description, status: row.status, start_date: row.start_date, end_date: row.end_date };
+  return { name: row.name };
 }
 
 function sanitizeQuote(row: any) {
