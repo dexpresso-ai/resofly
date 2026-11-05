@@ -9,6 +9,7 @@ import { issueRecipientLink, loadCompanyForMail, recordTransferEvent } from '../
 import { domainParents, domainsOverlap, normalizeDomainName, senderDomain } from '../_shared/domainOverlap.ts';
 import { assertTeamTestRecipient } from '../_shared/testRecipient.ts';
 import { takeEmailQuota } from '../_shared/emailQuota.ts';
+import { accentOnDark, EMAIL_CARD, sanitizeAccentColor, textOnAccent } from '../_shared/emailTemplates/layout.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
@@ -335,7 +336,9 @@ async function sendClientPortalWelcome(
   const recipientName = String(client.contact_name || client.name || '').trim();
 
   const subject = `Welkom bij ${organizationName} — je klantportaal staat klaar`;
-  const html = buildClientWelcomeHtml({ organizationName, recipientName, recipientEmail, portalUrl });
+  // De welkomstmail is het eerste wat een klant van het portaal ziet: in de
+  // merkkleur van de organisatie, niet in het goud van ResoFly.
+  const html = buildClientWelcomeHtml({ organizationName, recipientName, recipientEmail, portalUrl, accentColor: company?.brand_accent_color ?? null });
   const text = buildClientWelcomeText({ organizationName, recipientName, recipientEmail, portalUrl });
 
   const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
@@ -393,6 +396,7 @@ function resolvePortalBaseUrl(req: Request): string {
 }
 
 function buildClientWelcomeHtml(input: {
+  accentColor?: string | null;
   organizationName: string;
   recipientName: string;
   recipientEmail: string;
@@ -402,13 +406,14 @@ function buildClientWelcomeHtml(input: {
   const org = escapeHtml(input.organizationName);
   const email = escapeHtml(input.recipientEmail);
   const url = escapeHtml(input.portalUrl);
+  const accent = sanitizeAccentColor(input.accentColor);
 
   return `<!doctype html>
 <html>
   <body style="margin:0;background:#111111;font-family:Arial,sans-serif;color:#f5f5f5;">
     <div style="max-width:640px;margin:0 auto;padding:32px 20px;">
-      <div style="background:#1b1b1f;border:1px solid #303038;border-radius:24px;padding:28px;">
-        <p style="margin:0 0 8px;color:#FFD966;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
+      <div style="background:${EMAIL_CARD};border:1px solid #303038;border-radius:24px;padding:28px;">
+        <p style="margin:0 0 8px;color:${accentOnDark(accent)};font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
           ${org}
         </p>
 
@@ -427,7 +432,7 @@ function buildClientWelcomeHtml(input: {
           (<strong>${email}</strong>) in. Je ontvangt dan een veilige inloglink in je mailbox.
         </p>
 
-        <a href="${url}" style="display:inline-block;background:#FFD966;color:#1a1a1a;text-decoration:none;font-weight:bold;font-size:15px;padding:13px 22px;border-radius:10px;">
+        <a href="${url}" style="display:inline-block;background:${accent};color:${textOnAccent(accent)};text-decoration:none;font-weight:bold;font-size:15px;padding:13px 22px;border-radius:10px;">
           Open het klantportaal
         </a>
 
@@ -1484,10 +1489,10 @@ async function loadOrganization(
 
 async function loadCompanySettings(
   organizationId: string,
-): Promise<{ company_name: string; trade_name: string | null } | null> {
+): Promise<{ company_name: string; trade_name: string | null; brand_accent_color?: string | null } | null> {
   const { data, error } = await supabaseAdmin
     .from('company_settings')
-    .select('company_name,trade_name')
+    .select('company_name,trade_name,brand_accent_color')
     .eq('organization_id', organizationId)
     .maybeSingle();
 
@@ -1498,6 +1503,7 @@ async function loadCompanySettings(
   return (data ?? null) as {
     company_name: string;
     trade_name: string | null;
+    brand_accent_color?: string | null;
   } | null;
 }
 

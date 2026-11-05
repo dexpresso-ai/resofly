@@ -149,7 +149,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
   { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
   { id: 'klantvelden', label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
-  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en lettertypen op alles wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s, je PDF\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
+  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en lettertypen op wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s, je offerte- en factuur-PDF\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
   { id: 'documenten', label: 'Documentopmaak', Icon: LayoutTemplate, description: 'Sleep de gegevens van je offertes en facturen naar de plek waar jij ze wilt hebben, of kies een kant-en-klaar sjabloon. Je klant krijgt precies de PDF die je hier ziet.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
   { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
@@ -2505,6 +2505,7 @@ export function Settings({
 
     <section className="settings-card">
       <h3>Betaling en footer</h3>
+      <p className="settings-help">De betaaltekst staat onder de totalen van je facturen; de footertekst onderaan je offertes, facturen en contracten.</p>
       <Textarea value={form.invoice_payment_terms ?? ''} onChange={e=>set('invoice_payment_terms', e.target.value)} placeholder="Betaalinstructies" />
       <Textarea value={form.invoice_footer ?? ''} onChange={e=>set('invoice_footer', e.target.value)} placeholder="Footertekst" />
     </section>

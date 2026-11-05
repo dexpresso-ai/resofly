@@ -524,6 +524,10 @@ async function getInvoicePaymentInfo(user: { id: string; email: string }, body: 
       mollieAvailable: payable ? mollieAvailable : false,
       iban: (company?.iban as string | null) ?? null,
       companyName: (company?.trade_name as string | null) || (company?.company_name as string | null) || null,
+      // Op naam van wie de rekening staat: de juridische naam. Sinds de
+      // EU-controle op de begunstigde (VoP) waarschuwt een bank bij een
+      // handelsnaam die niet op de rekening staat.
+      accountHolder: (company?.company_name as string | null) || (company?.trade_name as string | null) || null,
     },
   };
 }

@@ -1153,7 +1153,9 @@ async function createDunningLetterPdfAttachment(input: {
 
   const iban = company?.iban ? String(company.iban).trim() : '';
   const paymentLine = iban
-    ? `U kunt het bedrag overmaken op ${iban} t.n.v. ${companyName} onder vermelding van factuurnummer ${invoice.number}. Online betalen of de factuur bekijken kan via: ${publicUrl}`
+    // T.n.v. de rekeninghouder (juridische naam), niet de merknaam: de bank
+    // controleert sinds de EU-regels voor de begunstigde (VoP) die naam.
+    ? `U kunt het bedrag overmaken op ${iban} t.n.v. ${company?.company_name || companyName} onder vermelding van factuurnummer ${invoice.number}. Online betalen of de factuur bekijken kan via: ${publicUrl}`
     : `Bekijk of betaal de factuur online via: ${publicUrl}`;
   y = drawWrappedPdfText(page, paymentLine, 48, y, maxWidth, regular, 10, 15) - 10;
 

@@ -202,10 +202,14 @@ export function ClientPortal() {
   const [branding, setBranding] = useState<BrandingPayload | null>(rememberedBranding);
 
   // Alleen opnieuw toepassen als er echt iets aan het beeld verandert; `load()`
-  // levert bij elke "Ververs" een nieuw object met dezelfde inhoud.
+  // levert bij elke "Ververs" een nieuw object met dezelfde inhoud. De
+  // kopkleur hoort erbij: zonder bleef een terugkerende klant de hele sessie
+  // de kop zien die dit apparaat onthield, ook als de leverancier hem had
+  // veranderd (de rest van het merk werd wel bijgewerkt).
   const brandKey = branding
     ? [branding.accentColor, branding.clientTheme, branding.headingFont, branding.bodyFont,
-       branding.companyName, branding.footerText, branding.hidePoweredBy, branding.logoDataUrl].join('|')
+       branding.companyName, branding.footerText, branding.hidePoweredBy, branding.logoDataUrl,
+       branding.headerColor ?? '', branding.logoDarkDataUrl ?? ''].join('|')
     : '';
   useEffect(() => applyBrandTheme(branding), [brandKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -862,7 +866,8 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
   return <article className="portal-card portal-gallery" style={brandStyle(branding)}>
     {branding?.logoDataUrl && (
       <div className="portal-gallery-brand">
-        <img src={branding.logoDataUrl} alt={branding.companyName ?? 'Logo'} />
+        {/* Met de lichte versie of op een plaatje als het logo wegvalt op de achtergrond van de galerij. */}
+        <BrandMark branding={branding} name={branding.companyName ?? ''} on="gallery" />
       </div>
     )}
     <div className="portal-card-head">
@@ -1093,7 +1098,9 @@ function PortalInvoiceDetail({ invoice, account, onBack }: { invoice: PortalInvo
             <span>Bedrag</span><strong>{euro(amountEuro)}</strong>
             <span>IBAN</span><strong>{iban}</strong>
             <span>Kenmerk</span><strong>{invoice.number}</strong>
-            {companyName && <><span>T.n.v.</span><strong>{companyName}</strong></>}
+            {/* De rekeninghouder (juridische naam), niet de merknaam: de bank
+                controleert de naam bij de overschrijving. */}
+            {(info.accountHolder || account.company?.company_name || companyName) && <><span>T.n.v.</span><strong>{info.accountHolder || account.company?.company_name || companyName}</strong></>}
           </div>
         </div>}
         {!info.mollieAvailable && !iban && <p className="portal-muted">Neem contact op met {companyName || 'je leverancier'} voor de betaalgegevens.</p>}

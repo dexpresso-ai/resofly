@@ -395,9 +395,22 @@ async function removeSlot(organizationId: string, linkId: string, slotId: string
   if (error) throw new HttpError(error.message, 500);
 }
 
-async function orgBrandName(organizationId: string): Promise<string> {
+/**
+ * Naam en merkkleur voor de mail aan de klant: de merknaam (of de
+ * bedrijfsnaam) uit Huisstijl, en pas als die er niet is de naam van de
+ * werkruimte. Die werkruimtenaam is bij een nieuw account het eerste deel van
+ * het e-mailadres van wie zich aanmeldde, en stond zo boven de mail, in het
+ * goud van ResoFly in plaats van de eigen merkkleur.
+ */
+async function orgBrand(organizationId: string): Promise<{ name: string; accent: string | null }> {
+  const { data: company } = await supabaseAdmin.from('company_settings')
+    .select('trade_name,company_name,brand_accent_color')
+    .eq('organization_id', organizationId).maybeSingle();
+  const accent = typeof company?.brand_accent_color === 'string' ? company.brand_accent_color : null;
+  const name = String(company?.trade_name || company?.company_name || '').trim();
+  if (name) return { name, accent };
   const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).maybeSingle();
-  return (data?.name as string) || 'ResoFly';
+  return { name: (data?.name as string) || 'ResoFly', accent };
 }
 
 /** Aangepaste e-mailtekst (email_templates) voor een booking-template; null = defaults. */
@@ -437,10 +450,12 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
   if (await sha256Hex(token) !== link.public_token_hash) throw new HttpError('Het meegestuurde token hoort niet bij deze link.', 422);
   const bookingUrl = buildBookingUrl(token);
 
-  const brandName = await orgBrandName(organizationId);
+  const brand = await orgBrand(organizationId);
+  const brandName = brand.name;
   const content = await loadBookingEmailContent(organizationId, 'meetingBooking.linkSent');
   const rendered = renderMeetingBookingLinkEmail({
     brandName,
+    accentColor: brand.accent,
     recipientName: recipientName || null,
     title: link.title,
     introText: link.intro_text,

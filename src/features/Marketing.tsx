@@ -535,7 +535,9 @@ function CampaignEditor({ data, organizationId, canWrite, campaign, onBack, onSa
   const [subject, setSubject] = useState(campaign.subject);
   const [preheader, setPreheader] = useState(campaign.preheader ?? '');
   const [bodyHtml, setBodyHtml] = useState(campaign.body_html);
-  const [accent, setAccent] = useState(campaign.accent_color ?? '#FFD966');
+  // Een nieuwe campagne begint in de merkkleur van de organisatie, niet in het
+  // goud van ResoFly: de mail gaat naar klanten.
+  const [accent, setAccent] = useState(campaign.accent_color ?? data.companySettings?.brand_accent_color ?? '#FFD966');
   const [audience, setAudience] = useState<CampaignAudience>(campaign.audience ?? emptyAudience());
   const [testEmail, setTestEmail] = useState('');
   const [scheduleAt, setScheduleAt] = useState('');
@@ -1121,8 +1123,9 @@ function SuppressionsTab({ organizationId, canWrite, suppressions, onChanged, on
 
 // ── Stromen (follow-ups) ────────────────────────────────────────────────────
 
-function emptyStep(index: number): FlowStepInput {
-  return { step_index: index, delay_days: index === 0 ? 0 : 3, subject: '', preheader: null, body_html: '', body_text: null, accent_color: '#FFD966' };
+/** Een nieuwe stap, in de merkkleur van de organisatie (de mail gaat naar klanten). */
+function emptyStep(index: number, accent?: string | null): FlowStepInput {
+  return { step_index: index, delay_days: index === 0 ? 0 : 3, subject: '', preheader: null, body_html: '', body_text: null, accent_color: accent || '#FFD966' };
 }
 
 function FlowList({ flows, stats, canWrite, onOpen, onDelete }: {
@@ -1201,15 +1204,15 @@ function FlowEditor({ data, organizationId, canWrite, flow, onBack, onSaved, onA
       .then((rows: EmailFlowStep[]) => {
         if (cancelled) return;
         const mapped = rows.map(r => ({ step_index: r.step_index, delay_days: r.delay_days, subject: r.subject, preheader: r.preheader, body_html: r.body_html, body_text: r.body_text, accent_color: r.accent_color }));
-        setSteps(mapped.length ? mapped : [emptyStep(0)]);
+        setSteps(mapped.length ? mapped : [emptyStep(0, data.companySettings?.brand_accent_color)]);
         setStepsLoaded(true);
       })
-      .catch(() => { if (!cancelled) { setSteps([emptyStep(0)]); setStepsLoaded(true); } });
+      .catch(() => { if (!cancelled) { setSteps([emptyStep(0, data.companySettings?.brand_accent_color)]); setStepsLoaded(true); } });
     return () => { cancelled = true; };
   }, [organizationId, flow.id]);
 
   const updateStep = (i: number, patch: Partial<FlowStepInput>) => setSteps(prev => prev.map((s, idx) => idx === i ? { ...s, ...patch } : s));
-  const addStep = () => setSteps(prev => [...prev, emptyStep(prev.length)]);
+  const addStep = () => setSteps(prev => [...prev, emptyStep(prev.length, data.companySettings?.brand_accent_color)]);
   const removeStep = (i: number) => setSteps(prev => prev.filter((_, idx) => idx !== i));
 
   async function persist(): Promise<boolean> {

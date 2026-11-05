@@ -177,6 +177,15 @@ export function brandStyle(branding: BrandingPayload | null | undefined): React.
   const style: Record<string, string> = {};
   if (/^#[0-9A-Fa-f]{6}$/.test(branding.accentColor || '')) {
     style['--accent'] = branding.accentColor;
+    // Wat óp de merkkleur staat (de knop "Opslaan", een vinkje, de diashow-
+    // knop) en de hovertint: die stonden alleen op :root, in de tinten van
+    // ResoFly-goud. Op een donkerblauw merk was de knoptekst dan bijna zwart
+    // op blauw, en de knop werd bij hover goud.
+    const accent = branding.accentColor.toUpperCase();
+    const hsl = hexToHsl(accent);
+    style['--accent-rgb'] = rgbTriplet(accent);
+    style['--on-accent'] = inkOnAccent(accent);
+    style['--accent-hover'] = hslToHex({ h: hsl.h, s: hsl.s, l: hsl.l > 0.85 ? hsl.l - 0.08 : hsl.l + 0.08 });
   }
   if (branding.headingFont && branding.headingFont !== DEFAULT_BRAND_FONT) {
     style['--brand-heading'] = brandFont(branding.headingFont).stack;

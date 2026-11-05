@@ -207,7 +207,9 @@ function BrandingCard({ form, setForm, canWrite }: { form: CompanySettingsInput;
       <h3>Je merk</h3>
       <p className="settings-help">
         Naam, logo, kleuren en lettertypen: zo zien je klanten je in het klantportaal, op je offerte-, factuur- en
-        contractpagina's, in de galerij en in je e-mails. In het voorbeeld zie je het portaal meteen veranderen.
+        contractpagina's en in de galerij. Je offertes en facturen als PDF krijgen je logo, je merkkleur en een
+        lettertype dat bij je huisstijl past (Documentopmaak); je e-mails je naam en je merkkleur. In het voorbeeld
+        zie je het portaal meteen veranderen.
       </p>
 
       <div className="brand-grid">

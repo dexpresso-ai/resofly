@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, FileText, FolderOpen, Image as ImageIcon, KeyRound, Lock, Mail, StickyNote } from 'lucide-react';
 import { Button, Input } from '../components/Ui';
 import { ReadModal } from '../components/ReadModal';
+import { usePublicPageTitle } from '../components/PublicBrand';
 import { supabase } from '../lib/supabase';
 import { supabasePortalAuth } from '../lib/supabasePortal';
 import { dateNL } from '../lib/format';
@@ -193,6 +194,7 @@ export function PublicTransferPage({ token }: { token: string }) {
 
   const companyName = payload?.company?.name || 'ResoFly';
   const style = payload?.branding ? brandStyle(payload.branding) : undefined;
+  usePublicPageTitle('Bestanden', payload ? companyName : null);
   const groups = useMemo(() => groupByPath(payload?.items ?? []), [payload?.items]);
   const downloadable = (payload?.items ?? []).filter((item) => item.downloadable);
 

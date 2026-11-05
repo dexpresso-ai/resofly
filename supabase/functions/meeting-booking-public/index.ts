@@ -273,13 +273,15 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
   if (!RESEND_API_KEY) return;
   const sender = await resolveSenderIdentity(supabaseAdmin, link.organization_id, RESEND_FROM_EMAIL);
   if (!sender.from) return;
-  const brandName = await orgBrandName(link.organization_id);
+  const brand = await orgBrand(link.organization_id);
+  const brandName = brand.name;
   const whenLines = confirmed.map(c => whenLine(c.starts_at, c.ends_at));
   const content = await loadBookingEmailContent(link.organization_id, 'meetingBooking.confirmed');
 
   // Bevestiging naar de klant.
   const rendered = renderMeetingBookingConfirmedEmail({
     brandName,
+    accentColor: brand.accent,
     recipientName: name || null,
     title: link.title,
     whenLines,
@@ -299,9 +301,22 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
   }
 }
 
-async function orgBrandName(organizationId: string): Promise<string> {
+/**
+ * Naam en merkkleur voor de mail aan de klant: de merknaam (of de
+ * bedrijfsnaam) uit Huisstijl, en pas als die er niet is de naam van de
+ * werkruimte. Die werkruimtenaam is bij een nieuw account het eerste deel van
+ * het e-mailadres van wie zich aanmeldde, en stond zo boven de mail, in het
+ * goud van ResoFly in plaats van de eigen merkkleur.
+ */
+async function orgBrand(organizationId: string): Promise<{ name: string; accent: string | null }> {
+  const { data: company } = await supabaseAdmin.from('company_settings')
+    .select('trade_name,company_name,brand_accent_color')
+    .eq('organization_id', organizationId).maybeSingle();
+  const accent = typeof company?.brand_accent_color === 'string' ? company.brand_accent_color : null;
+  const name = String(company?.trade_name || company?.company_name || '').trim();
+  if (name) return { name, accent };
   const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).maybeSingle();
-  return (data?.name as string) || 'ResoFly';
+  return { name: (data?.name as string) || 'ResoFly', accent };
 }
 
 /** De eigen Jitsi-server van de organisatie (Instellingen → Agenda); null = meet.jit.si. */
