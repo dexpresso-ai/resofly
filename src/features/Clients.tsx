@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Phone, PhoneIncoming, PhoneOutgoing, Receipt, RotateCcw, Search, Send, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Phone, PhoneIncoming, PhoneOutgoing, Receipt, RotateCcw, Search, Send, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
 import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, FileTransferBundle, FileTransferRecipient, InternalDocument, Invoice, Note, Project, Quote, Ticket } from '../types';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, priorityLabel, total } from '../lib/format';
-import { TICKET_STATUS_LABELS, TICKET_STATUS_ORDER, groupNotesByTicket, ticketLastActivity, ticketMatchesStatus } from '../lib/tickets';
+import { TICKET_STATUS_LABELS, TICKET_WORKLIST_STATUSES, groupNotesByTicket, isTicketArchived, ticketLastActivity, ticketMatchesStatus, ticketResolvedAt } from '../lib/tickets';
 import { listTime } from '../lib/communication';
 import { callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, callSubject, formatPhone, telHref } from '../lib/calls';
 import { rememberCall } from '../lib/callBridge';
@@ -477,11 +477,21 @@ export function ClientDetailPage({
 }) {
   const projects = data.projects.filter(project => project.client_id === client.id);
   // Tickets van deze klant, laatste activiteit (ticket of notitie) bovenaan.
+  // Afgehandeld gaat naar het archief onderaan het tabblad, net als op de
+  // ticketpagina: anders bleef hier alles staan wat al lang klaar was.
   const notesByTicket = useMemo(() => groupNotesByTicket(data.ticketNotes), [data.ticketNotes]);
-  const clientTickets = useMemo(() => data.tickets
-    .filter(ticket => ticket.client_id === client.id)
-    .map(ticket => ({ ticket, lastAt: ticketLastActivity(ticket, notesByTicket.get(ticket.id) ?? []), noteCount: (notesByTicket.get(ticket.id) ?? []).length }))
-    .sort((a, b) => (Date.parse(b.lastAt) || 0) - (Date.parse(a.lastAt) || 0)), [data.tickets, notesByTicket, client.id]);
+  const { clientTickets, archivedClientTickets } = useMemo(() => {
+    const rows = data.tickets
+      .filter(ticket => ticket.client_id === client.id)
+      .map(ticket => ({ ticket, lastAt: ticketLastActivity(ticket, notesByTicket.get(ticket.id) ?? []), noteCount: (notesByTicket.get(ticket.id) ?? []).length }));
+    return {
+      clientTickets: rows.filter(row => !isTicketArchived(row.ticket))
+        .sort((a, b) => (Date.parse(b.lastAt) || 0) - (Date.parse(a.lastAt) || 0)),
+      // Het archief: laatst afgehandeld bovenaan.
+      archivedClientTickets: rows.filter(row => isTicketArchived(row.ticket))
+        .sort((a, b) => (Date.parse(ticketResolvedAt(b.ticket)) || 0) - (Date.parse(ticketResolvedAt(a.ticket)) || 0)),
+    };
+  }, [data.tickets, notesByTicket, client.id]);
   const unreadClientTickets = clientTickets.filter(row => unreadTicketIds.has(row.ticket.id)).length;
   const notes = getClientNotes(data, client.id);
   const documents = getClientDocuments(data, client.id);
@@ -548,6 +558,11 @@ export function ClientDetailPage({
     () => clientTickets.filter(row => ticketMatchesQuery(row.ticket, normalizedQuery) && ticketMatchesStatus(row.ticket, statusFilter)),
     [clientTickets, normalizedQuery, statusFilter],
   );
+  // Het statusfilter gaat over de werklijst; in het archief is alles afgehandeld.
+  const filteredArchivedTickets = useMemo(
+    () => archivedClientTickets.filter(row => ticketMatchesQuery(row.ticket, normalizedQuery)),
+    [archivedClientTickets, normalizedQuery],
+  );
   const switchTab = (tab: ClientTab) => {
     setActiveTab(tab);
     setQuery('');
@@ -560,8 +575,9 @@ export function ClientDetailPage({
   const tabs: DetailTab<ClientTab>[] = [
     { id: 'overview', label: 'Overzicht', icon: LayoutDashboard },
     { id: 'projects', label: 'Projecten', count: projects.length, icon: FolderOpen },
-    // De teller is het totaal; de stip zegt dat er een ticket met nieuwe
-    // klant-activiteit tussen zit (anders zou "Tickets 2" twee dingen betekenen).
+    // De teller is wat er op de werklijst staat (zonder het archief); de stip
+    // zegt dat er een ticket met nieuwe klant-activiteit tussen zit (anders zou
+    // "Tickets 2" twee dingen betekenen).
     ...(canReadTickets ? [{ id: 'tickets' as const, label: 'Tickets', count: clientTickets.length, icon: TicketIcon, dot: unreadClientTickets > 0 }] : []),
     { id: 'quotes', label: 'Offertes', count: quotes.length, icon: FileText },
     { id: 'contracts', label: 'Contracten', count: contracts.length, icon: FileSignature },
@@ -648,7 +664,7 @@ export function ClientDetailPage({
         <Select className="form-select client-tab-status-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter op ticketstatus">
           <option value="">Alle statussen</option>
           <option value="open">Openstaand</option>
-          {TICKET_STATUS_ORDER.map(status => <option key={status} value={status}>{TICKET_STATUS_LABELS[status]}</option>)}
+          {TICKET_WORKLIST_STATUSES.map(status => <option key={status} value={status}>{TICKET_STATUS_LABELS[status]}</option>)}
         </Select>
       )}
       {activeFilterCount > 0 && (
@@ -794,6 +810,9 @@ export function ClientDetailPage({
     {activeTab === 'tickets' && canReadTickets && <ClientTicketsPanel
       rows={filteredTickets}
       total={clientTickets.length}
+      archivedRows={filteredArchivedTickets}
+      archivedTotal={archivedClientTickets.length}
+      searching={Boolean(normalizedQuery)}
       unreadTicketIds={unreadTicketIds}
       canWrite={canWrite && canWriteTickets}
       onNew={onNewTicket}
@@ -1165,19 +1184,37 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
   </div>;
 }
 
+type ClientTicketRow = { ticket: Ticket; lastAt: string; noteCount: number };
+
 /**
- * Tabblad Tickets: de tickets van deze klant als dezelfde kaarten als op de
+ * Tabblad Tickets: de werklijst van deze klant als dezelfde kaarten als op de
  * ticketpagina, laatste activiteit bovenaan. Openen = het bewerkvenster met
  * de tijdlijn (en het ticket telt dan als gelezen, zoals op de ticketpagina).
+ *
+ * Afgehandelde tickets staan eronder in het archief: dicht, want dat is
+ * naslag en geen werk — hetzelfde patroon als het archief in de
+ * agentengalerij. De zoekterm geldt ook daar; de kop zegt hoeveel er passen,
+ * zodat je niet hoeft open te klappen om te zien of het zin heeft.
  */
-function ClientTicketsPanel({ rows, total, unreadTicketIds, canWrite, onNew, onOpen }: {
-  rows: Array<{ ticket: Ticket; lastAt: string; noteCount: number }>;
+function ClientTicketsPanel({ rows, total, archivedRows, archivedTotal, searching, unreadTicketIds, canWrite, onNew, onOpen }: {
+  rows: ClientTicketRow[];
   total: number;
+  archivedRows: ClientTicketRow[];
+  archivedTotal: number;
+  searching: boolean;
   unreadTicketIds: Set<string>;
   canWrite: boolean;
   onNew: () => void;
   onOpen: (ticket: Ticket) => void;
 }) {
+  const [showArchive, setShowArchive] = useState(false);
+  const noTicketsAtAll = total === 0 && archivedTotal === 0;
+  const archiveSummary = archivedTotal === 0
+    ? 'nog geen afgehandelde tickets'
+    : searching
+      ? `${archivedRows.length} van ${archivedTotal} passen bij je zoekopdracht`
+      : `${archivedTotal} afgehandeld${archivedTotal === 1 ? ' ticket' : 'e tickets'}`;
+
   return <article className="client-panel">
     <div className="client-panel-head">
       <h3>Tickets</h3>
@@ -1186,28 +1223,55 @@ function ClientTicketsPanel({ rows, total, unreadTicketIds, canWrite, onNew, onO
         {canWrite && <button type="button" className="client-overview-more-btn" onClick={onNew}>+ Nieuw ticket</button>}
       </div>
     </div>
-    {rows.length === 0 && <div className="client-empty-line">{total === 0 ? 'Nog geen tickets voor deze klant.' : 'Geen tickets voor deze zoekopdracht of filter.'}</div>}
-    {total === 0 && canWrite && <button type="button" className="client-overview-more-link" onClick={onNew}>+ Eerste ticket aanmaken</button>}
-    {rows.length > 0 && <div className="ticket-list client-ticket-list">
-      {rows.map(({ ticket, lastAt, noteCount }) => {
-        const isUnread = unreadTicketIds.has(ticket.id);
-        return <article key={ticket.id} className={`ticket-item pri-${ticket.priority}${isUnread ? ' is-unread' : ''}`} role="button" tabIndex={0}
-          onClick={() => onOpen(ticket)}
-          onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(ticket); } }}>
-          <div className="tk-body">
-            <div className="tk-title">{ticket.title}</div>
-            <div className="tk-meta">
-              <span className={`tk-pri-label ${ticket.priority}`}>{priorityLabel(ticket.priority)}</span>
-              {isUnread && <span className="tk-new-badge">Nieuw</span>}
-              <span className="tk-activity" title={`Laatste activiteit ${dateNL(lastAt)}`}>{noteCount > 0 ? `${noteCount} notitie${noteCount === 1 ? '' : 's'} · ` : ''}{listTime(lastAt)}</span>
-              {ticket.converted_to_project_id && <span>Project aangemaakt</span>}
-            </div>
-          </div>
-          <span className={`tk-status ${ticket.status}`}>{TICKET_STATUS_LABELS[ticket.status]}</span>
-        </article>;
-      })}
-    </div>}
+    {rows.length === 0 && <div className="client-empty-line">{noTicketsAtAll
+      ? 'Nog geen tickets voor deze klant.'
+      : total === 0 ? 'Niets op de werklijst: alles is afgehandeld. Afgehandelde tickets staan hieronder in het archief.' : 'Geen tickets voor deze zoekopdracht of filter.'}</div>}
+    {noTicketsAtAll && canWrite && <button type="button" className="client-overview-more-link" onClick={onNew}>+ Eerste ticket aanmaken</button>}
+    {rows.length > 0 && <ClientTicketCards rows={rows} unreadTicketIds={unreadTicketIds} onOpen={onOpen} />}
+
+    {!noTicketsAtAll && <section className="ticket-archive-section">
+      <button type="button" className="ticket-archive-head" aria-expanded={showArchive} onClick={() => setShowArchive(open => !open)}>
+        {showArchive ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+        <Archive size={14} aria-hidden="true" />
+        <strong>Archief</strong>
+        <span>{archiveSummary}</span>
+      </button>
+      {showArchive && (archivedRows.length > 0
+        ? <ClientTicketCards rows={archivedRows} unreadTicketIds={unreadTicketIds} onOpen={onOpen} archive />
+        : <div className="client-empty-line">{archivedTotal === 0
+          ? 'Zet een ticket op Afgehandeld, dan verdwijnt het van de werklijst en vind je het hier terug.'
+          : 'Geen afgehandelde tickets voor deze zoekopdracht.'}</div>)}
+    </section>}
   </article>;
+}
+
+function ClientTicketCards({ rows, unreadTicketIds, onOpen, archive = false }: {
+  rows: ClientTicketRow[];
+  unreadTicketIds: Set<string>;
+  onOpen: (ticket: Ticket) => void;
+  archive?: boolean;
+}) {
+  return <div className={`ticket-list client-ticket-list${archive ? ' is-archive' : ''}`}>
+    {rows.map(({ ticket, lastAt, noteCount }) => {
+      const isUnread = unreadTicketIds.has(ticket.id);
+      return <article key={ticket.id} className={`ticket-item pri-${ticket.priority}${isUnread ? ' is-unread' : ''}`} role="button" tabIndex={0}
+        onClick={() => onOpen(ticket)}
+        onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(ticket); } }}>
+        <div className="tk-body">
+          <div className="tk-title">{ticket.title}</div>
+          <div className="tk-meta">
+            <span className={`tk-pri-label ${ticket.priority}`}>{priorityLabel(ticket.priority)}</span>
+            {isUnread && <span className="tk-new-badge">Nieuw</span>}
+            {archive
+              ? <span className="tk-resolved-on">Afgehandeld {dateNL(ticketResolvedAt(ticket))}</span>
+              : <span className="tk-activity" title={`Laatste activiteit ${dateNL(lastAt)}`}>{noteCount > 0 ? `${noteCount} notitie${noteCount === 1 ? '' : 's'} · ` : ''}{listTime(lastAt)}</span>}
+            {ticket.converted_to_project_id && <span>Project aangemaakt</span>}
+          </div>
+        </div>
+        <span className={`tk-status ${ticket.status}`}>{TICKET_STATUS_LABELS[ticket.status]}</span>
+      </article>;
+    })}
+  </div>;
 }
 
 function ticketMatchesQuery(ticket: Ticket, query: string): boolean {

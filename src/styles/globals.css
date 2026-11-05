@@ -2560,6 +2560,15 @@ body::before{
 .portal-status.paid,.portal-status.ticket-approved{background:rgba(var(--ok-rgb),.16);color:var(--ok-ink,var(--accent-g))}
 .portal-status.overdue{background:rgba(var(--danger-rgb),.16);color:var(--danger-ink,var(--accent-r))}
 .portal-status.ticket-new{background:rgba(var(--accent-rgb),.16);color:var(--accent-ink)}
+/* Afgehandeld is klaar, niet goedgekeurd: rustiger groen dan "Goedgekeurd". */
+.portal-status.ticket-resolved{background:rgba(var(--ok-rgb),.1);color:var(--muted2)}
+/* Afgehandelde tickets onderaan het tabblad Tickets, dicht (zie TicketsTab). */
+.portal-resolved{margin-top:14px;border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:10px}
+.portal-resolved-head{all:unset;cursor:pointer;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted2)}
+.portal-resolved-head:hover{color:var(--text)}
+.portal-resolved-head:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:8px}
+.portal-resolved-head strong{font-weight:600}
+.portal-resolved-hint{margin:0 0 8px}
 .portal-row-actions{display:flex;align-items:center;gap:8px}
 .portal-row-error{font-size:11px;color:var(--accent-r)}
 .portal-ticket{align-items:flex-start}
@@ -3931,6 +3940,46 @@ body::before{
   .ticket-table td[data-label="Klant"] span{max-width:100%}
 }
 @media(max-width:760px){.ticket-toolbar{display:flex}.ticket-view-switch{width:100%}.ticket-view-switch button{flex:1;justify-content:center}}
+
+/* ── Tickets: werklijst en archief ─────────────────────────────────────────
+   Afgehandeld verdwijnt van de werklijst naar het archief. De schakelaar zit
+   naast Lijst/Tabel en niet in een eigen rij: op een telefoon kost elke rij
+   boven de lijst een ticket minder in beeld (tests/mobile meet dat). Hij
+   heeft dezelfde vorm als de weergavekeuze, zodat hij als bediening leest en
+   niet als nog een filterchip. */
+.ticket-toolbar-start{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.ticket-archive-toggle{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--muted2);font:inherit;font-size:12px;font-weight:700;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.ticket-archive-toggle:hover{color:var(--text);border-color:var(--border2)}
+.ticket-archive-toggle:focus-visible{outline:none;box-shadow:var(--ring)}
+.ticket-archive-toggle[aria-pressed="true"]{background:rgba(var(--accent-rgb),.1);border-color:rgba(var(--accent-rgb),.5);color:var(--accent-ink)}
+.ticket-archive-count{min-width:18px;padding:1px 6px;border-radius:999px;background:var(--bg4);color:var(--muted2);font-size:10.5px;line-height:16px;text-align:center}
+.ticket-archive-toggle[aria-pressed="true"] .ticket-archive-count{background:rgba(var(--accent-rgb),.18);color:var(--accent-ink)}
+/* De uitleg boven het archief: waar je bent en hoe je terugkomt. */
+.ticket-archive-note{display:flex;align-items:flex-start;gap:10px;margin:0 0 12px;padding:10px 14px;border:1px dashed var(--border2);border-radius:12px;color:var(--muted2);font-size:12.5px;line-height:1.5}
+.ticket-archive-note>svg{flex:none;margin-top:2px;color:var(--muted)}
+.ticket-archive-note p{margin:0;flex:1 1 auto;min-width:0}
+.ticket-archive-note strong{color:var(--text);font-weight:600}
+/* In de zin zelf, niet op een eigen regel: op de telefoon scheelde dat een regel. */
+.ticket-archive-back{display:inline;border:0;background:none;padding:0;margin-left:4px;color:var(--accent-ink);font:inherit;font-weight:700;cursor:pointer;white-space:nowrap}
+.ticket-archive-back:hover{text-decoration:underline}
+.ticket-archive-back:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+/* Een knop met icoon (Afhandelen) zakte een paar pixels uit de rij: inline
+   knoppen lijnen op hun basislijn uit, en een svg heeft er geen. */
+.tk-actions-btn .btn{vertical-align:middle}
+.tk-status.resolved{background:rgba(var(--ok-rgb),.1);color:var(--muted2)}
+.tk-resolved-on{color:var(--muted)}
+.tk-resolve-btn svg{flex:none}
+/* Het archief onderaan het tabblad Tickets in het klantdossier: dicht, want
+   dit is naslag — hetzelfde patroon als het archief in de agentengalerij. */
+.ticket-archive-section{margin-top:14px;border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:10px}
+.ticket-archive-head{all:unset;cursor:pointer;display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:13px;color:var(--muted2)}
+.ticket-archive-head:hover{color:var(--text)}
+.ticket-archive-head:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:8px}
+.ticket-archive-head strong{font-weight:600}
+.ticket-archive-head span{font-size:11.5px;color:var(--muted)}
+@media(max-width:760px){
+  .ticket-archive-note{gap:8px;padding:8px 12px;font-size:12px;margin-bottom:8px}
+}
 
 /* ── Financiën: de lijsten lopen tot de rand van het werkblad ──────────────
    Offertes, facturen, contracten en alle pagina's van de administratie
@@ -10336,6 +10385,11 @@ button.task-agenda-when:hover{text-decoration:underline}
   .ticket-view-switch{width:auto;flex:0 0 auto}
   .ticket-view-switch button{flex:0 0 auto;padding:7px 10px}
   .ticket-toolbar .btn-primary{flex:1 1 auto;min-height:38px}
+  /* Het archief deelt die rij: alleen het icoon en de teller, het woord staat
+     in aria-label en title. */
+  .ticket-toolbar-start{flex:0 0 auto;flex-wrap:nowrap;gap:6px}
+  .ticket-archive-toggle{min-height:38px;padding:0 10px}
+  .ticket-archive-label{display:none}
   .ticket-list{gap:6px}
   .ticket-item{padding:10px 12px}
 
@@ -10599,6 +10653,12 @@ button.task-agenda-when:hover{text-decoration:underline}
   /* Ticketkaart: de twee knoppen naast elkaar in plaats van onder elkaar. */
   .ticket-item .tk-actions-btn{display:flex;gap:6px}
   .ticket-item .tk-actions-btn .btn{flex:1 1 0;width:auto;min-height:36px;padding:6px 8px;white-space:nowrap}
+  /* Afhandelen kwam er als derde knop bij, en drie knoppen met tekst passen
+     op 390px niet naast elkaar (ze liepen de kaart uit). Naast "Op de
+     planning" en "Project maken" wordt hij een rond vinkje; de naam staat in
+     aria-label en title. Staat hij alleen, dan houdt hij zijn woord. */
+  .ticket-item .tk-actions-btn .tk-resolve-btn.is-compact{flex:0 0 40px;padding:0;border-radius:999px}
+  .ticket-item .tk-resolve-btn.is-compact .tk-btn-text{display:none}
 
   /* Weekplanner: "Mijn week" brak af in zijn eigen knop. */
   .wp-seg button,.wp-nav button,.wp-cap-btn{white-space:nowrap}

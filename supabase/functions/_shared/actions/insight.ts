@@ -91,7 +91,7 @@ const REPORT_SCHEMA: Record<string, ReportSourceSchema> = {
   },
   tickets: {
     label: 'Tickets', dimensions: ['status', 'priority', 'client', 'created'], measures: [],
-    enums: { status: ['new', 'review', 'approved', 'rejected', 'converted'], priority: ['low', 'med', 'high'] }, dateFields: ['created'],
+    enums: { status: ['new', 'review', 'approved', 'rejected', 'converted', 'resolved'], priority: ['low', 'med', 'high'] }, dateFields: ['created'],
   },
 };
 

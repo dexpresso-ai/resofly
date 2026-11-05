@@ -62,6 +62,15 @@ const PAGES = {
   'clients-table': { page: 'clients', storage: { 'resofly.clients.viewMode': 'table' } },
   'projects-table': { page: 'projects', storage: { 'resofly.projects.viewMode': 'table' } },
   'tickets-table': { page: 'tickets', storage: { 'resofly.tickets.view': 'table' } },
+  // 2026-11-05 — afgehandelde tickets staan in het archief: dezelfde pagina
+  // met de schakelaar Archief aan, in de lijst en in de (telefoon)tabel. Het
+  // tabblad Tickets in het klantdossier toont de werklijst met het archief
+  // eronder; clients[0] heeft er een van elk in de seed.
+  // De weergave expliciet: de opslag van tickets-table hierboven blijft anders
+  // in dezelfde browser staan, en dan meet "de lijst" stilletjes de tabel.
+  'tickets-archive': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: '.ticket-archive-toggle' },
+  'tickets-archive-table': { page: 'tickets', storage: { 'resofly.tickets.view': 'table' }, prepare: '.ticket-archive-toggle' },
+  'client-tickets': { page: 'client', clientId: seed.clients[0].id, prepare: '.client-tab-btn:has-text("Tickets")' },
   quotes: 'quotes', invoices: 'invoices', contracts: 'contracts', ledger: 'ledger', bank: 'bank', pnl: 'pnl',
   'vat-returns': 'vat-returns', suppliers: 'suppliers', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
   // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat
@@ -80,6 +89,9 @@ const PAGES = {
   'public-gallery': { path: '/gallerij/demo-token' },
   'portal-login': { path: '/portal' },
   portal: { path: '/portal', portal: true },
+  // Het tabblad Tickets, met een afgehandeld ticket in het blok "Afgehandeld"
+  // onderaan (2026-11-05).
+  'portal-tickets': { path: '/portal', portal: true, prepare: '.portal-tab:has-text("Tickets")' },
   // Via de deeplink uit de meldingsmail, zoals een klant er ook binnenkomt.
   'portal-messages': { path: '/portal?view=berichten', portal: true },
   'portal-settings': { path: '/portal?view=instellingen', portal: true },
@@ -121,6 +133,15 @@ const FIRST_ITEM = {
   // (de kolomkop van 34px zit erboven); de grens ligt 20% hoger. Op de tablet
   // staat de brede tabel en telt deze regel niet.
   'tickets-table': { selector: '.tk-ctable tbody tr', maxTop: 372 },
+  // 2026-11-05 — het archief van tickets, het tabblad Tickets in het
+  // klantdossier en dat in het portaal. Gemeten: 355px (de uitleg boven het
+  // archief kost op de telefoon drie regels), 391px, 670px (kop, kerncijfers,
+  // tabbladen en zoekbalk van het dossier gaan voor) en 170px. De grenzen
+  // liggen 20% hoger.
+  'tickets-archive': { selector: '.ticket-item', maxTop: 426 },
+  'tickets-archive-table': { selector: '.tk-ctable tbody tr', maxTop: 469 },
+  'client-tickets': { selector: '.client-ticket-list .ticket-item', maxTop: 804 },
+  'portal-tickets': { selector: '.portal-row', maxTop: 204 },
   invoices: { selector: '.quote-table tbody tr', maxTop: 496 },
   quotes: { selector: '.quote-table tbody tr', maxTop: 496 },
   weekplanner: { selector: '.wp-daystrip', maxTop: 600 },
