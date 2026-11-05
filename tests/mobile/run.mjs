@@ -70,6 +70,10 @@ const PAGES = {
   // Instellingen → Huisstijl: de instellingen met het klantportaal als
   // voorbeeld ernaast (op de telefoon eronder), in een iframe.
   'settings-huisstijl': { page: 'settings', prepare: '[data-settings-tab="huisstijl"]' },
+  // Instellingen → Documentopmaak: de sleep-editor met het A4-blad. Op de
+  // telefoon staat het blad bovenaan en schaalt het mee; de velden en de
+  // instellingen staan eronder.
+  'settings-documenten': { page: 'settings', prepare: '[data-settings-tab="documenten"]' },
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },

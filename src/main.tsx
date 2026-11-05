@@ -196,6 +196,9 @@ import './styles/cockpit.css';
 // dezelfde opbouw, in het merk van de leverancier. Na cockpit.css: hergebruikt
 // zijn tokens (--shadow-card) en wint van de oudere portaalregels.
 import './styles/portal-cockpit.css';
+// Instellingen → Documentopmaak, de sleep-editor voor offertes en facturen.
+// Na portal-cockpit.css: gebruikt zijn segmentknoppen (.brand-seg).
+import './styles/document-layout.css';
 // De teamchat (de opbouw van Microsoft Teams) als laatste: eigen klassen, en de
 // paar gedeelde haken (.chat-shell, .team-chat-dock) moeten van eerdere regels winnen.
 import './styles/teamchat.css';
