@@ -628,7 +628,12 @@ export function DocumentLayoutEditor({ form, setForm, canWrite, onLetterheadSele
                 ref={pageRef}
                 className={`dle-page${canWrite ? '' : ' is-readonly'}`}
                 style={{ width: sizePx(PAGE_WIDTH), height: sizePx(PAGE_HEIGHT) }}
-                onPointerDown={event => { if (event.target === event.currentTarget) setSelection(null); }}
+                onPointerDown={event => {
+                  // De SVG ligt over het hele blad, dus "klik op het blad zelf"
+                  // gebeurde nooit: een klik naast een blok, grens of inhoud
+                  // heft de keuze nu op.
+                  if (!(event.target as HTMLElement).closest('.dle-block, .dle-flow, .dle-divider')) setSelection(null);
+                }}
               >
                 {plan && measure && page
                   ? <PlanSvg ops={page.ops} style={style} measure={measure} logoUrl={logoUrl} paperUrl={paperIsImage ? form.invoice_template_data_url ?? null : null} />
