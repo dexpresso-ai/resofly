@@ -35,7 +35,7 @@ export const CLIENT_E_INVOICE_CHANNELS = ['email', 'mollie'] as const;
 export const PROJECT_BILLING_TYPES = ['hourly', 'fixed_price'] as const;
 export const TASK_STATUSES = ['todo', 'doing', 'review', 'done'] as const;
 export const PRIORITIES = ['low', 'med', 'high'] as const;
-export const TICKET_STATUSES = ['new', 'review', 'approved', 'rejected', 'converted'] as const;
+export const TICKET_STATUSES = ['new', 'review', 'approved', 'rejected', 'converted', 'resolved'] as const;
 export const TIME_ENTRY_TYPES = ['direct', 'indirect'] as const;
 export const INDIRECT_CATEGORIES = ['admin', 'acquisition', 'travel', 'education', 'other'] as const;
 
@@ -222,8 +222,8 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       title: { type: 'text', description: 'Onderwerp.', required: true, maxLength: 300 },
       description: { type: 'text', description: 'De vraag of melding.', nullable: true, maxLength: 20_000 },
       status: {
-        type: 'enum', description: 'Nieuw, in review, goedgekeurd, afgewezen of omgezet naar een project (dat laatste gebeurt in de app).',
-        values: TICKET_STATUSES, inputValues: ['new', 'review', 'approved', 'rejected'], default: 'new',
+        type: 'enum', description: 'Nieuw, in review, goedgekeurd, afgewezen, afgehandeld (resolved: het ticket staat dan in het archief, niet meer op de werklijst) of omgezet naar een project (dat laatste gebeurt in de app). Een reactie van de klant in het portaal zet een afgehandeld ticket terug op review.',
+        values: TICKET_STATUSES, inputValues: ['new', 'review', 'approved', 'rejected', 'resolved'], default: 'new',
       },
       priority: { type: 'enum', description: 'Prioriteit.', values: PRIORITIES, default: 'med' },
       client_id: { type: 'uuid', description: 'De klant.', nullable: true, references: 'clients' },

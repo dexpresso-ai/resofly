@@ -566,7 +566,7 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
   const overdueInvoices = account.invoices.filter(isInvoiceOverdue);
   const openTotal = openInvoices.reduce((sum, inv) => sum + total(inv.lines).total, 0);
   const overdueTotal = overdueInvoices.reduce((sum, inv) => sum + total(inv.lines).total, 0);
-  const openTickets = account.tickets.filter(t => !['approved', 'rejected', 'converted'].includes(t.status));
+  const openTickets = account.tickets.filter(t => !['approved', 'rejected', 'converted', 'resolved'].includes(t.status));
   const ongoingProjects = account.projects.filter(p => !p.archived);
 
   // `fresh` = iets nieuws van de leverancier dat je hier nog niet opende; dat
@@ -1435,10 +1435,17 @@ function TicketsTab({ account, supplierName, onTicketCreated, openTicketId, onOp
   const [createdId, setCreatedId] = useState<string | null>(null);
 
   // Laatste activiteit bovenaan: een ticket met een nieuw antwoord komt vanzelf naar boven.
-  const tickets = useMemo(
-    () => [...account.tickets].sort((a, b) => activityMs(b) - activityMs(a)),
-    [account.tickets],
-  );
+  // Afgehandelde tickets staan apart onderaan, dicht — net als het archief van
+  // het team; anders werd de lijst met de tijd een opsomming van wat al klaar
+  // was. Behalve als er een antwoord in staat dat je nog niet las: vaak schrijft
+  // het team het laatste antwoord en handelt het ticket meteen af, en dat
+  // antwoord hoort niet achter een klapje te verdwijnen.
+  const [showResolved, setShowResolved] = useState(false);
+  const { tickets, resolvedTickets } = useMemo(() => {
+    const sorted = [...account.tickets].sort((a, b) => activityMs(b) - activityMs(a));
+    const tucked = (t: PortalTicket) => t.status === 'resolved' && !isTicketUnread(t, seen);
+    return { tickets: sorted.filter(t => !tucked(t)), resolvedTickets: sorted.filter(tucked) };
+  }, [account.tickets, seen]);
 
   async function submit() {
     if (!title.trim()) { setError('Geef een korte titel op.'); return; }
@@ -1505,6 +1512,23 @@ function TicketsTab({ account, supplierName, onTicketCreated, openTicketId, onOp
         onOpen={() => onOpenTicket(t.id)}
       />)}
     </div>
+
+    {resolvedTickets.length > 0 && <section className="portal-resolved">
+      <button type="button" className="portal-resolved-head" aria-expanded={showResolved} onClick={() => setShowResolved(open => !open)}>
+        <span aria-hidden="true">{showResolved ? '▾' : '▸'}</span>
+        <strong>Afgehandeld</strong>
+        <span className="portal-muted">{resolvedTickets.length} ticket{resolvedTickets.length === 1 ? '' : 's'}</span>
+      </button>
+      {showResolved && <div className="portal-rows">
+        {resolvedTickets.map(t => <TicketRow
+          key={t.id}
+          ticket={t}
+          supplierName={supplierName}
+          unread={false}
+          onOpen={() => onOpenTicket(t.id)}
+        />)}
+      </div>}
+    </section>}
   </article>;
 }
 
@@ -1608,6 +1632,14 @@ function PortalTicketDetail({ ticketId, supplierName, backLabel, onBack, onChang
       const note = await addPortalTicketNote(ticketId, body);
       setThread(prev => prev ? { ...prev, notes: [...prev.notes, note] } : prev);
       setDraft('');
+      // Een bericht op een afgehandeld ticket heropent het (dat doet de
+      // database). Opnieuw ophalen, zodat je de nieuwe status en de regel
+      // "Status gewijzigd naar In behandeling" meteen ziet in plaats van
+      // "Afgehandeld" boven je eigen vraag. Lukt dat niet, dan staat je
+      // bericht er al; de status volgt bij de volgende keer openen.
+      if (thread?.ticket.status === 'resolved') {
+        fetchPortalTicketThread(ticketId).then(setThread).catch(() => {});
+      }
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Notitie plaatsen mislukt');
@@ -1649,6 +1681,9 @@ function PortalTicketDetail({ ticketId, supplierName, backLabel, onBack, onChang
       </div>
 
       <div className="portal-thread-composer">
+        {thread.ticket.status === 'resolved' && <p className="portal-hint portal-resolved-hint">
+          Dit ticket is afgehandeld. Heb je toch nog een vraag? Stuur hieronder een bericht: dan staat het ticket weer open bij {supplierName}.
+        </p>}
         <Textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={submitOnCtrlEnter(submit)} placeholder={`Typ een bericht aan ${supplierName}…`} rows={3} maxLength={5000} disabled={posting} />
         <div className="portal-thread-composer-actions">
           <span className="portal-composer-hint">
@@ -2207,6 +2242,7 @@ const ticketStatusLabels: Record<string, string> = {
   approved: 'Goedgekeurd',
   rejected: 'Afgewezen',
   converted: 'Omgezet naar project',
+  resolved: 'Afgehandeld',
 };
 
 const taskStatusLabels: Record<string, string> = {

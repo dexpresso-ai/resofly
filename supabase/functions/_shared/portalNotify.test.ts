@@ -182,6 +182,29 @@ test('status die per saldo terug is, is geen nieuws', () => {
   assert.deepEqual(net.mails[0].status, { from: 'new', to: 'approved' });
 });
 
+test('een reactie die een afgehandeld ticket heropent: geen statusmail voor wie reageerde, wel voor de anderen', () => {
+  // Anja reageert op haar afgehandelde ticket; de database zet het terug op
+  // review en schrijft die statusregel op haar naam (20261105020000).
+  const reply = activity({ kind: 'reply', note_id: 'n8', actor_type: 'client', actor_contact_id: CONTACT_ANJA });
+  const reopened = activity({ kind: 'status', old_status: 'resolved', new_status: 'review', actor_type: 'client', actor_contact_id: CONTACT_ANJA });
+  const result = plan({ activity: [reply, reopened], visibleNoteIds: new Set(['n8']) });
+  assert.deepEqual(recipients(result), ['joost@dekorenaar.nl'], 'Anja krijgt niets over wat ze zelf deed');
+  assert.deepEqual(result.mails[0].status, { from: 'resolved', to: 'review' });
+  assert.deepEqual([...result.mails[0].activityIds].sort(), [reply.id, reopened.id].sort());
+
+  // Handelt het team het daarna meteen weer af, dan is er per saldo niets veranderd.
+  const again = activity({ kind: 'status', old_status: 'review', new_status: 'resolved' });
+  const net = plan({ activity: [reopened, again] });
+  assert.deepEqual(net.mails, []);
+  assert.deepEqual(net.skipped.map((s) => s.id), [reopened.id, again.id]);
+
+  // Komt er wél iets van het team bij, dan hoort ook wie reageerde het.
+  const approved = activity({ kind: 'status', old_status: 'review', new_status: 'approved' });
+  const mixed = plan({ activity: [reopened, approved] });
+  assert.deepEqual(recipients(mixed), ['joost@dekorenaar.nl', 'anja@dekorenaar.nl']);
+  assert.deepEqual(mixed.mails[0].status, { from: 'resolved', to: 'approved' });
+});
+
 test('al bezorgd, onbestelbaar of verhuisd: overslaan', () => {
   const reply = activity({ kind: 'reply', note_id: 'n6', notified_emails: ['joost@dekorenaar.nl'] });
   const result = plan({ activity: [reply], visibleNoteIds: new Set(['n6']), suppressed: new Set(['anja@dekorenaar.nl']) });
@@ -206,6 +229,8 @@ test('labels en links', () => {
   assert.equal(portalTicketStatusLabel('review'), 'In behandeling');
   assert.equal(portalTicketStatusLabel('toString'), 'toString', 'geen prototype-lek');
   assert.equal(portalStatusSentence('converted'), 'omgezet naar een project');
+  assert.equal(portalTicketStatusLabel('resolved'), 'Afgehandeld');
+  assert.equal(portalStatusSentence('resolved'), 'afgehandeld');
   assert.equal(portalTicketUrl('https://app.resofly.nl/', CLIENT, TICKET), `https://app.resofly.nl/portal?dossier=${CLIENT}&ticket=${TICKET}`);
   assert.equal(portalSettingsUrl('https://app.resofly.nl', CLIENT), `https://app.resofly.nl/portal?dossier=${CLIENT}&view=instellingen`);
 });

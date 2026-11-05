@@ -9,10 +9,10 @@ import type { TicketConversation } from './communication';
  * staan. `format.ts` leent zijn priorityLabel hiervandaan.
  */
 
-export const TICKET_STATUS_ORDER: TicketStatus[] = ['new', 'review', 'approved', 'rejected', 'converted'];
+export const TICKET_STATUS_ORDER: TicketStatus[] = ['new', 'review', 'approved', 'rejected', 'converted', 'resolved'];
 
 export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
-  new: 'Nieuw', review: 'Review', approved: 'Goedgekeurd', rejected: 'Geweigerd', converted: 'Omgezet',
+  new: 'Nieuw', review: 'Review', approved: 'Goedgekeurd', rejected: 'Geweigerd', converted: 'Omgezet', resolved: 'Afgehandeld',
 };
 
 export const TICKET_PRIORITY_LABELS: Record<Priority, string> = { high: 'Hoog', med: 'Normaal', low: 'Laag' };
@@ -21,11 +21,64 @@ export function ticketPriorityLabel(priority: Priority | string): string {
   return TICKET_PRIORITY_LABELS[priority as Priority] ?? 'Laag';
 }
 
-/** "Openstaand" = nog actief te behandelen: niet geweigerd en niet omgezet. */
+/** "Openstaand" = nog actief te behandelen: niet geweigerd, niet omgezet en niet afgehandeld. */
 export const TICKET_OPEN_STATUSES: ReadonlySet<TicketStatus> = new Set<TicketStatus>(['new', 'review', 'approved']);
 
 export function ticketStatusLabel(status: TicketStatus | string): string {
   return TICKET_STATUS_LABELS[status as TicketStatus] ?? String(status);
+}
+
+/* ── Werklijst en archief ──────────────────────────────────────────────────
+ * Een afgehandeld ticket hoort niet meer tussen het werk. Zonder deze status
+ * bleef alles op de lijst staan, ook wat allang beantwoord was, en zocht je
+ * het werk ertussenuit. Afgehandeld gaat daarom naar het archief, op de
+ * ticketpagina en in het klantdossier; daar is het terug te lezen en met één
+ * klik te heropenen. De andere statussen blijven op de werklijst, ook
+ * geweigerd en omgezet: daar is niet om gevraagd, en ze tellen in de
+ * statuskaarten bovenaan mee.
+ *
+ * Reageert de klant in het portaal op een afgehandeld ticket, dan zet de
+ * database het terug op review (20261105020000_ticket_resolved_archive.sql).
+ * Dan staat het vanzelf weer op de werklijst en raakt zijn bericht niet zoek. */
+
+/** De statussen van de werklijst, in de volgorde van de statuskaarten en keuzelijsten. */
+export const TICKET_WORKLIST_STATUSES: TicketStatus[] = TICKET_STATUS_ORDER.filter(status => status !== 'resolved');
+
+/** Heropenen zet een ticket hierop: weer in behandeling, niet "nieuw" — het is al eens bekeken. */
+export const TICKET_REOPEN_STATUS: TicketStatus = 'review';
+
+export type TicketScope = 'worklist' | 'archive';
+
+/** Staat dit ticket in het archief? */
+export function isTicketArchived(ticket: Pick<Ticket, 'status'>): boolean {
+  return ticket.status === 'resolved';
+}
+
+export function ticketInScope(ticket: Pick<Ticket, 'status'>, scope: TicketScope): boolean {
+  return scope === 'archive' ? isTicketArchived(ticket) : !isTicketArchived(ticket);
+}
+
+/**
+ * Kan dit ticket met één klik op afgehandeld? Niet als het al afgehandeld is,
+ * en niet als het een project werd: dan zet de database de status toch terug
+ * op omgezet (normalize_ticket_conversion_state).
+ */
+export function canResolveTicket(ticket: Pick<Ticket, 'status' | 'converted_to_project_id'>): boolean {
+  return ticket.status !== 'resolved' && ticket.status !== 'converted' && !ticket.converted_to_project_id;
+}
+
+/**
+ * Wanneer het ticket afgehandeld werd, voor de volgorde en de datum in het
+ * archief. resolved_at zet de database; een rij van vóór die kolom (of uit een
+ * app die nog niet ververst is) valt terug op de laatste wijziging.
+ */
+export function ticketResolvedAt(ticket: Pick<Ticket, 'created_at' | 'updated_at'> & { resolved_at?: string | null }): string {
+  return ticket.resolved_at || ticket.updated_at || ticket.created_at;
+}
+
+/** Het archief: laatst afgehandeld bovenaan. */
+export function sortArchivedTickets<T extends Pick<Ticket, 'created_at' | 'updated_at'> & { resolved_at?: string | null }>(tickets: readonly T[]): T[] {
+  return [...tickets].sort((a, b) => (Date.parse(ticketResolvedAt(b)) || 0) - (Date.parse(ticketResolvedAt(a)) || 0));
 }
 
 /**

@@ -81,7 +81,12 @@ export const tickets = [
   ['Logo in hogere resolutie', 2, 'low', 'approved'],
   ['Menukaart: prijswijziging', 4, 'med', 'new'],
   ['Vraag over factuur 2026-014', 3, 'low', 'rejected'],
-].map(([title, ci, priority, status]) => ({ id: uid('k'), ...base(), client_id: clients[ci].id, title, description: 'Ingezonden via het klantportaal.', priority, status, notes: null, converted_to_project_id: null }));
+  // Afgehandeld (2026-11-05): staan in het archief, niet op de werklijst. De
+  // eerste hoort bij clients[0], zodat het archief in het klantdossier ook
+  // gemeten wordt (pagina client-tickets).
+  ['Contactformulier stuurde geen mail', 0, 'med', 'resolved'],
+  ['Openingstijden aangepast op de site', 2, 'low', 'resolved'],
+].map(([title, ci, priority, status], i) => ({ id: uid('k'), ...base(), client_id: clients[ci].id, title, description: 'Ingezonden via het klantportaal.', priority, status, notes: null, converted_to_project_id: null, resolved_at: status === 'resolved' ? iso(day(-2 - i)) : null }));
 
 export const notes = [
   ['Notulen kick-off huisstijl', 0, 'meeting', '<p>Besproken: kleuren, tone of voice. <strong>Actie:</strong> schetsen voor vrijdag.</p><ul><li>Joost stuurt oude logo\'s</li><li>Fotoshoot in oktober</li></ul>'],

@@ -286,6 +286,7 @@ const ENUMS = {
   ticketStatus: [
     { value: 'new', label: 'Nieuw' }, { value: 'review', label: 'In behandeling' },
     { value: 'approved', label: 'Goedgekeurd' }, { value: 'rejected', label: 'Afgewezen' }, { value: 'converted', label: 'Omgezet' },
+    { value: 'resolved', label: 'Afgehandeld' },
   ],
   priority: [
     { value: 'high', label: 'Hoog' }, { value: 'med', label: 'Normaal' }, { value: 'low', label: 'Laag' },

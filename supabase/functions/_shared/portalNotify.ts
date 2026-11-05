@@ -89,6 +89,7 @@ export const PORTAL_TICKET_STATUS_LABELS: Record<string, string> = {
   approved: 'Goedgekeurd',
   rejected: 'Afgewezen',
   converted: 'Omgezet naar project',
+  resolved: 'Afgehandeld',
 };
 
 export function portalTicketStatusLabel(status: string | null | undefined): string {
@@ -283,8 +284,13 @@ export function planTicketNotifications(input: PortalTicketPlanInput): PortalTic
     // Wie in deze mail het nieuwe ticket al te zien krijgt, ziet daar ook de
     // huidige status; een losse statusregel ernaast zou dubbel zijn.
     const coveredByCreated = confirmation || createdForPerson !== null;
+    // Een wijziging die je zelf veroorzaakte, is voor jou geen nieuws: een
+    // reactie op een afgehandeld ticket zet het terug op "in behandeling", en
+    // die regel staat op naam van de klant die reageerde
+    // (20261105020000_ticket_resolved_archive.sql). Zijn collega's krijgen
+    // hem wel. Een klant kan verder geen status wijzigen.
     const statusForPerson = status && !coveredByCreated && interested && prefs.ticketStatus
-      && statusEvents.some(notYet)
+      && statusEvents.some((event) => notYet(event) && !isPortalActor(person, event))
       ? status
       : null;
 
@@ -321,6 +327,7 @@ export function portalStatusSentence(status: string): string {
     case 'approved': return 'goedgekeurd';
     case 'rejected': return 'afgewezen';
     case 'converted': return 'omgezet naar een project';
+    case 'resolved': return 'afgehandeld';
     case 'new': return 'weer op nieuw gezet';
     default: return `nu ‘${portalTicketStatusLabel(status)}’`;
   }

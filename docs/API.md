@@ -326,7 +326,7 @@ maakt een veld leeg.
 | Een contactpersoon | Portaaltoegang staat uit; die geef je in de app. |
 | Nieuwe uren | Ze zijn van het teamlid achter de sleutel. Laat je `entry_date`, `billable` of `hourly_rate_cents` weg, dan kiest ResoFly wat de app ook kiest: vandaag (Nederlandse tijd); niet declarabel bij een project met een vaste prijs of bij indirecte uren; het tarief van het project, anders het standaardtarief. Uren uit de agenda volgen hun afspraak en zijn niet via de API te wijzigen. |
 | Een reactie op een ticket | Het teamlid achter de sleutel is de schrijver. Een reactie is **standaard intern**; met `"is_internal": false` ziet de klant hem in het portaal. Er gaat geen e-mail naar de klant. |
-| Een ticket | De status `converted` (omgezet naar een project) zet de app; via de API kies je uit `new`, `review`, `approved` en `rejected`. |
+| Een ticket | De status `converted` (omgezet naar een project) zet de app; via de API kies je uit `new`, `review`, `approved`, `rejected` en `resolved` (afgehandeld: het ticket gaat van de werklijst naar het archief). Een reactie van de klant in het portaal zet een afgehandeld ticket terug op `review`. |
 
 ### Voorbeeld: een urenapp
 

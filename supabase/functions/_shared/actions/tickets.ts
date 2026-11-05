@@ -16,14 +16,16 @@ import {
  *
  * Wat bewust ONTBREEKT: een ticket, een notitie of een bijlage weggooien. Dat is
  * definitief (het ticket sleept in de app zijn R2-bijlagen mee) en hoort niet bij
- * wat een agent mag. Een ticket dat niet doorgaat zet je op "geweigerd".
+ * wat een agent mag. Een ticket dat niet doorgaat zet je op "geweigerd"; een
+ * ticket dat klaar is op "afgehandeld" (`propose_edit_ticket`, status
+ * 'resolved'): dan gaat het van de werklijst naar het archief.
  */
 
 /** De statussen waaruit `convert_ticket_to_project` een project maakt; de rest weigert de database. */
 const CONVERTIBLE_STATUSES = ['new', 'review', 'approved'];
 
 const STATUS_LABELS: Record<string, string> = {
-  new: 'Nieuw', review: 'Review', approved: 'Goedgekeurd', rejected: 'Geweigerd', converted: 'Omgezet',
+  new: 'Nieuw', review: 'Review', approved: 'Goedgekeurd', rejected: 'Geweigerd', converted: 'Omgezet', resolved: 'Afgehandeld',
 };
 const PRIORITY_LABELS: Record<string, string> = { low: 'laag', med: 'normaal', high: 'hoog' };
 
@@ -122,7 +124,7 @@ export const TICKETS_ACTIONS: ActionDef[] = [
         throw new ActionError(`"${ticket.title}" is al eerder omgezet naar een project.`);
       }
       if (!CONVERTIBLE_STATUSES.includes(ticket.status)) {
-        throw new ActionError(`Een ticket met status "${STATUS_LABELS[ticket.status] ?? ticket.status}" kan niet worden omgezet. Alleen nieuw, review en goedgekeurd kunnen dat.`);
+        throw new ActionError(`Een ticket met status "${STATUS_LABELS[ticket.status] ?? ticket.status}" kan niet worden omgezet. Alleen nieuw, review en goedgekeurd kunnen dat${ticket.status === 'resolved' ? '; heropen het eerst (status review)' : ''}.`);
       }
       const clientName = await clientNameOf(ctx, ticket.client_id);
 
