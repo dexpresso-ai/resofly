@@ -125,7 +125,13 @@ Wat er was:
   lijst) hebben dezelfde 12 en 9 bestaande meldingen als staging. Lokaal met een import map naar
   dezelfde npm-pakketten; esm.sh is vanuit de cloudsessie niet bereikbaar.
 - Mobiele lay-outtest (`--theme=both`) op Instellingen, Huisstijl, Documentopmaak en de nieuwe
-  pagina `settings-email`: 24 pagina's, 0 met problemen.
+  pagina `settings-email`: 24 pagina's, 0 met problemen. `npm run test:loading`: alle controles
+  geslaagd.
+- Na het samenvoegen met de nieuwste staging (tickets afhandelen en archief): typecheck schoon,
+  `npm test` 1008 groen, `deno check` schoon op portal-notify, mail, campaigns, gerrie-agent en
+  calendar-integrations, de twee workflows nog steeds gelijk aan staging (12 en 9). Mobiele test
+  op de instellingenpagina's en de pagina's die staging raakte (ticketarchief, tickets bij een
+  klant, tickets in het portaal): 42 pagina's, 0 met problemen.
 - Bekeken: mails met een logo zoals de app het opslaat (canvas → PNG en JPEG), met de lichte versie,
   zonder logo, een herinnering, de vrije klantmail, en op telefoonbreedte; het voorbeeld in de app
   met en zonder logo en met de lichte versie (Playwright tegen de nagebootste backend, zonder
@@ -133,8 +139,10 @@ Wat er was:
 
 ## Uitrol
 
-Geen migratie in deze ronde. Samenvoegen naar `staging` en pushen rolt de app uit en zet alle edge
-functions opnieuw neer (`supabase functions deploy` zonder naam). De gedeelde code zit in
+Op de branch `ccr-f419f057-zisitq`, samengevoegd met de nieuwste staging; nog niet op staging.
+Geen nieuwe migratie in deze ronde (die van de eerste ronde, `20261105100000`, komt nog steeds na
+de laatste op staging, `20261105020000`). Samenvoegen naar `staging` en pushen rolt de app uit en
+zet alle edge functions opnieuw neer (`supabase functions deploy` zonder naam). De gedeelde code zit in
 `invoice-workflow`, `quote-workflow`, `contract-workflow`, `contract-public`, `file-share`,
 `file-transfer`, `file-transfer-public`, `meeting-booking`, `meeting-booking-public`,
 `portal-notify`, `mail`, `campaigns`, `meeting-transcribe` en `calendar-integrations`.
