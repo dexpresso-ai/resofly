@@ -7,6 +7,7 @@ import {
 } from '../_shared/edgeAuth.ts';
 import { resolveSenderIdentity, type SenderIdentity } from '../_shared/sendingDomain.ts';
 import { approvedRecipientChanged } from '../_shared/approvedRecipient.ts';
+import { loadEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 import {
   TRANSFER_MAX_FILE_BYTES,
   TRANSFER_MAX_ITEMS,
@@ -577,18 +578,21 @@ type MailContext = {
   company: CompanyForMail | null;
   content: Awaited<ReturnType<typeof loadTransferEmailContent>>;
   clientName: string | null;
+  /** Naam en logo voor bovenaan de mail; één keer geladen voor alle ontvangers. */
+  brand: EmailBrand;
 };
 
 async function mailContext(ctx: Ctx, transfer: TransferRow): Promise<MailContext> {
-  const [sender, company, content, client] = await Promise.all([
+  const [sender, company, content, client, brand] = await Promise.all([
     resolveSenderIdentity(admin, ctx.organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO, ctx.user.id),
     loadCompanyForMail(admin, ctx.organizationId),
     loadTransferEmailContent(admin, ctx.organizationId),
     transfer.client_id
       ? admin.from('clients').select('name').eq('id', transfer.client_id).maybeSingle().then((r) => (r.data as { name?: string } | null)?.name ?? null)
       : Promise.resolve(null),
+    loadEmailBrand(admin, ctx.organizationId),
   ]);
-  return { sender, senderName: senderNameFor(sender, ctx.user, company), company, content, clientName: client };
+  return { sender, senderName: senderNameFor(sender, ctx.user, company), company, content, clientName: client, brand };
 }
 
 /** Kan deze ontvanger ook op het klantportaal? Alleen dan noemt de mail het portaal. */
@@ -664,6 +668,7 @@ async function notifyAll(
       clientName: mail.clientName,
       threadId: thread,
       portalUser: await isPortalUser(transfer, result.recipient),
+      brand: mail.brand,
     });
     result.notified = outcome.notified;
     result.error = outcome.error;

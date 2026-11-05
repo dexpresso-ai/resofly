@@ -3,6 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailLayout, escapeHtml } from '../_shared/emailTemplates/layout.ts';
+import { loadEmailBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 import {
   sendViaResend,
   resendEmailId,
@@ -577,14 +578,14 @@ async function sendTestCampaign(
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new CampaignHttpError(message, status));
   const payload = await sendViaResend(
     RESEND_API_KEY,
-    {
+    withEmailBrand({
       from: sender.from,
       to: [recipientEmail],
       reply_to: sender.replyTo,
       subject: `[TEST] ${personalized.subject}`,
       html,
       text,
-    },
+    }, await loadEmailBrand(supabaseAdmin, organizationId)),
     `campaign-test-${sanitizeIdempotencyPart(campaign.id)}-${crypto.randomUUID()}`,
   );
   return { providerEmailId: resendEmailId(payload), recipientEmail, previewClientId: sample?.clientId ?? null };
@@ -787,6 +788,8 @@ async function dispatchCampaign(campaign: CampaignRow, limit: number): Promise<{
   if (recipients.length === 0) return { sent: 0, failed: 0 };
 
   const brandName = await loadOrgBrand(campaign.organization_id);
+  // Het logo bovenaan, één keer per batch geladen (niet per ontvanger).
+  const emailBrand = await loadEmailBrand(supabaseAdmin, campaign.organization_id);
   const fromEmailForRow = sender.fromEmail || extractEmailAddress(sender.from);
   const fromNameForRow = extractDisplayName(sender.from);
   // Standaardterugvalwaarden uit de velddefinities, eenmalig per batch. Ze staan
@@ -808,7 +811,7 @@ async function dispatchCampaign(campaign: CampaignRow, limit: number): Promise<{
       break;
     }
     try {
-      await sendToRecipient(campaign, recipient, sender.from, sender.replyTo, fromEmailForRow, fromNameForRow, brandName, fallbacks);
+      await sendToRecipient(campaign, recipient, sender.from, sender.replyTo, fromEmailForRow, fromNameForRow, brandName, emailBrand, fallbacks);
       sent += 1;
     } catch (sendError) {
       failed += 1;
@@ -833,6 +836,7 @@ async function sendToRecipient(
   fromEmailForRow: string,
   fromNameForRow: string | null,
   brandName: string,
+  emailBrand: EmailBrand,
   fallbacks: Record<string, string> = {},
 ): Promise<void> {
   const unsubToken = await makeUnsubscribeToken(UNSUBSCRIBE_SECRET, campaign.organization_id, recipient.to_email);
@@ -900,7 +904,7 @@ async function sendToRecipient(
   try {
     const payload = await sendViaResend(
       RESEND_API_KEY,
-      {
+      withEmailBrand({
         from,
         to: [recipient.to_email],
         reply_to: replyTo,
@@ -916,7 +920,7 @@ async function sendToRecipient(
           { name: 'campaign_id', value: sanitizeTagValue(campaign.id) },
           { name: 'campaign_recipient_id', value: sanitizeTagValue(recipient.id) },
         ],
-      },
+      }, emailBrand),
       `campaign-${sanitizeIdempotencyPart(recipient.id)}`,
     );
     providerEmailId = resendEmailId(payload);
@@ -1243,6 +1247,9 @@ async function handleFlowTick(): Promise<{ claimed: number; sent: number; stoppe
 
   const suppressedByOrg = new Map<string, Set<string>>();
   const brandByOrg = new Map<string, string>();
+  // Het logo per organisatie, één keer per tick: elke stap krijgt het van zijn
+  // eigen organisatie (de tick verwerkt er meerdere).
+  const emailBrandByOrg = new Map<string, EmailBrand>();
   // Standaardterugvalwaarden per organisatie; de tick kan stromen van meerdere
   // organisaties tegelijk verwerken.
   const fallbacksByOrg = new Map<string, Record<string, string>>();
@@ -1250,6 +1257,7 @@ async function handleFlowTick(): Promise<{ claimed: number; sent: number; stoppe
     const emails = enrollments.filter((e) => e.organization_id === orgId).map((e) => e.to_email);
     suppressedByOrg.set(orgId, await loadSuppressedFor(orgId, emails));
     brandByOrg.set(orgId, await loadOrgBrand(orgId));
+    emailBrandByOrg.set(orgId, await loadEmailBrand(supabaseAdmin, orgId));
     fallbacksByOrg.set(orgId, buildMergeFallbacks(await loadFieldDefinitions(orgId)));
   }
   // Afzender per STROOM (niet per org): de persoonlijke afzender van de maker
@@ -1306,7 +1314,7 @@ async function handleFlowTick(): Promise<{ claimed: number; sent: number; stoppe
       // Quotum per organisatie (20261101050000): op = later opnieuw (de lease
       // pakt de inschrijving over 15 minuten weer op), niet mislukken.
       if (!(await emailQuotaAllows(supabaseAdmin, enrollment.organization_id, 1))) continue;
-      const threadId = await sendFlowStep(enrollment, flow, step, sender, brandName, fallbacks);
+      const threadId = await sendFlowStep(enrollment, flow, step, sender, brandName, emailBrandByOrg.get(enrollment.organization_id) ?? null, fallbacks);
 
       const following = steps[nextIndex + 1];
       const advance = following
@@ -1365,6 +1373,7 @@ async function sendFlowStep(
   step: FlowStepRow,
   sender: { from: string; replyTo?: string; fromEmail: string | null },
   brandName: string,
+  emailBrand: EmailBrand | null,
   fallbacks: Record<string, string> = {},
 ): Promise<string | null> {
   // Variabelen invullen met de momentopname van deze inschrijving, zodat elke
@@ -1477,7 +1486,7 @@ async function sendFlowStep(
   try {
     const payload = await sendViaResend(
       RESEND_API_KEY,
-      {
+      withEmailBrand({
         from: sender.from,
         to: [enrollment.to_email],
         reply_to: replyTo,
@@ -1493,7 +1502,7 @@ async function sendFlowStep(
           { name: 'flow_id', value: sanitizeTagValue(flow.id) },
           { name: 'flow_send_id', value: sanitizeTagValue(flowSendId) },
         ],
-      },
+      }, emailBrand),
       `flow-${sanitizeIdempotencyPart(flowSendId)}`,
     );
     const providerEmailId = resendEmailId(payload);

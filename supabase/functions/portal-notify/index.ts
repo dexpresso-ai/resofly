@@ -29,6 +29,7 @@
 import { createAdminClient, HttpError } from '../_shared/edgeAuth.ts';
 import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
+import { emailBrandFromRow, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 import { PORTAL_TICKET_TEMPLATE_KEYS } from '../_shared/emailTemplates/portalTicketUpdate.ts';
 import type { EmailTemplateContent, PortalTicketTemplateKey, PortalTicketUpdateEmailInput } from '../_shared/emailTemplates/types.ts';
@@ -97,6 +98,8 @@ type OrgContext = {
   replyTo: string | undefined;
   /** Eigen teksten per soort melding (Instellingen → E-mail); ontbreekt = standaardtekst. */
   texts: Partial<Record<PortalTicketTemplateKey, EmailTemplateContent>>;
+  /** Naam en logo bovenaan de mail (_shared/emailBrand.ts); uit dezelfde rij als de huisstijl. */
+  emailBrand: EmailBrand;
 };
 
 Deno.serve(async (req) => {
@@ -279,7 +282,7 @@ async function processTicket(
       await paceSend();
       await sendViaResend(
         RESEND_API_KEY,
-        {
+        withEmailBrand({
           from: org.sender.from,
           to: [mail.person.email],
           reply_to: org.replyTo,
@@ -290,7 +293,7 @@ async function processTicket(
             { name: 'organization_id', value: sanitizeTagValue(organizationId) },
             { name: 'template_key', value: 'portal_ticket_update' },
           ],
-        },
+        }, org.emailBrand),
         // Zelfde mail aan dezelfde persoon = zelfde sleutel: een herhaalde
         // poging binnen 24 uur levert bij Resend geen tweede mail op.
         `portal-ticket-${await sha256Hex(`${mail.person.email}|${[...mail.activityIds].sort().join(',')}`)}`,
@@ -414,6 +417,7 @@ async function loadOrgContext(organizationId: string, cache: Map<string, OrgCont
     // Antwoordt de klant toch op de mail, dan komt dat bij het bedrijf uit.
     replyTo: normalizeEmail(company?.email) || sender.replyTo,
     texts,
+    emailBrand: { ...emailBrandFromRow(company), name: companyName },
   };
   cache.set(organizationId, context);
   return context;

@@ -5,6 +5,7 @@ import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
+import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 import { invoiceVatNotes, type VatCodeInfo } from '../_shared/invoiceVatNotes.ts';
 import { loadDocumentDesign, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 
@@ -411,7 +412,8 @@ async function sendQuoteEmail(
   });
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
-  const resendPayload = {
+  // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
+  const resendPayload = withEmailBrand({
     from: senderIdentity.from,
     to: [recipientEmail],
     reply_to: senderIdentity.replyTo,
@@ -430,7 +432,7 @@ async function sendQuoteEmail(
       { name: 'quote_number', value: sanitizeTagValue(quote.number) },
       { name: 'template_key', value: sanitizeTagValue(templateKey) },
     ],
-  };
+  }, await loadEmailBrand(supabaseAdmin, organizationId));
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));

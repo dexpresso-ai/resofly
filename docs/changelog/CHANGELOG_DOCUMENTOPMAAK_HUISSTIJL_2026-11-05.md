@@ -59,7 +59,7 @@ Wat er misging toen we gingen kijken:
   er al PNG of JPEG van).
 - Lettertype: een PDF heeft zonder ingesloten bestanden alleen Helvetica, Times en Courier. Bij
   *Zoals je huisstijl* krijgt een merk met een schreefletter (Playfair, Cormorant, Lora) Times,
-  de rest Helvetica.
+  de rest Helvetica. (Achterhaald door de tweede ronde: de PDF sluit nu de echte letters in.)
 - De merkkleur als tekst op wit papier wordt donkerder tot hij 4,5 : 1 haalt (merkgoud was als
   titel onleesbaar); vlakken en lijnen blijven de merkkleur zelf.
 
@@ -134,14 +134,10 @@ Wat er misging toen we gingen kijken:
 
 ## Niet gedaan (bewust, of voor later)
 
-- **Logo in e-mails.** Het logo staat als data-URL in de database; Gmail blokkeert die. Daarvoor
-  moet het logo eerst als bestand gehost worden. De tekst bij Huisstijl belooft het nu ook niet
-  meer.
-- **Creditfactuur en aanmaning in de nieuwe opmaak.** Die hebben nu het herstelde afzenderblok,
-  maar nog hun eigen vaste opmaak (zonder logo). De creditfactuur gebruikt bedragen uit de
-  opgeslagen creditnota, die precies moeten blijven; dat verdient een eigen stap.
-- **Eigen lettertypen in de PDF.** Kan alleen door lettertypebestanden in te sluiten
-  (`@pdf-lib/fontkit`), wat de PDF en de edge functions zwaarder maakt.
+- ~~Logo in e-mails~~, ~~creditfactuur en aanmaning in de nieuwe opmaak~~ en ~~eigen lettertypen
+  in de PDF~~: dezelfde dag gedaan in een tweede ronde, zie
+  `CHANGELOG_MAILLOGO_PDFLETTERS_2026-11-05.md`. Het logo gaat als ingesloten afbeelding (cid) mee,
+  dus hosten was niet nodig.
 - **PDF-briefpapier in de editor.** De editor toont een afbeelding als briefpapier op het blad; een
   PDF-briefpapier zie je in het PDF-voorbeeld (de browser kan een PDF niet als achtergrond tekenen
   zonder pdf.js).

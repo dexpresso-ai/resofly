@@ -3,6 +3,7 @@ import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { HttpError, createAdminClient, isUuid, makeCors, parseAllowedOrigins } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
+import { emailBrandFromRow, withEmailBrand } from '../_shared/emailBrand.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import {
   TRANSFER_CODE_TTL_SECONDS,
@@ -281,7 +282,8 @@ async function requestCode(tokenHash: string) {
   });
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(admin, opened.transfer.organization_id, 1, (message, status) => new HttpError(message, status));
-  const sent = await sendViaResend({
+  // De rij van loadCompany heeft de logo's al (BRANDING_COLUMNS): geen extra query.
+  const sent = await sendViaResend(withEmailBrand({
     from: sender.from,
     to: [opened.recipient.email],
     reply_to: sender.replyTo,
@@ -293,7 +295,7 @@ async function requestCode(tokenHash: string) {
       { name: 'template_key', value: 'file_transfer_code' },
       { name: 'transfer_id', value: tagValue(opened.transfer.id) },
     ],
-  }, `file-transfer-code-${opened.recipient.id}-${Date.now()}`);
+  }, emailBrandFromRow(company)), `file-transfer-code-${opened.recipient.id}-${Date.now()}`);
   if (!sent.ok) throw new PublicError('De code kon niet worden gemaild. Probeer het zo opnieuw.', 502);
   await recordTransferEvent(admin, { transferId: opened.transfer.id, recipientId: opened.recipient.id, kind: 'code_sent' });
   return { sentTo: maskEmail(opened.recipient.email), validSeconds: TRANSFER_CODE_TTL_SECONDS };

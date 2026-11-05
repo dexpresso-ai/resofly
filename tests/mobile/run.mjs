@@ -74,6 +74,9 @@ const PAGES = {
   // telefoon staat het blad bovenaan en schaalt het mee; de velden en de
   // instellingen staan eronder.
   'settings-documenten': { page: 'settings', prepare: '[data-settings-tab="documenten"]' },
+  // Instellingen → E-mail: de e-mailteksten met het voorbeeld, waarin sinds
+  // november 2026 ook het logo staat zoals bovenaan de mail.
+  'settings-email': { page: 'settings', prepare: '[data-settings-tab="email"]' },
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },

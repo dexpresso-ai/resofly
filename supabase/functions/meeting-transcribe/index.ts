@@ -28,6 +28,8 @@ import {
 import { elevenlabsConfigured, requestTranscription } from '../_shared/elevenlabs.ts';
 import { runSummaryForRecording } from '../_shared/meetingPipeline.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
+import { EMAIL_LOGO_SLOT_LIGHT } from '../_shared/emailTemplates/layout.ts';
+import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 
 const admin = createAdminClient();
 
@@ -269,19 +271,21 @@ async function sendSummary(organizationId: string, role: Awaited<ReturnType<type
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(admin, organizationId, recipients.length, (message, status) => new HttpError(message, status));
+  // Het logo bovenaan de notulen (ingesloten, zie _shared/emailBrand.ts); één keer voor alle genodigden.
+  const brand = await loadEmailBrand(admin, organizationId);
   const nonce = crypto.randomUUID();
   const sent: { email: string; name: string | null }[] = [];
   const failed: { email: string; error: string }[] = [];
   for (const r of recipients) {
     try {
-      await sendViaResend({
+      await sendViaResend(withEmailBrand({
         from: sender.from,
         to: [r.email],
         reply_to: sender.replyTo || sender.fromEmail || undefined,
         subject,
         html,
         text,
-      }, `meeting-summary-${recordingId}-${sanitizeKey(r.email)}-${nonce}`);
+      }, brand), `meeting-summary-${recordingId}-${sanitizeKey(r.email)}-${nonce}`);
       sent.push(r);
     } catch (e) {
       failed.push({ email: r.email, error: e instanceof Error ? e.message : 'Versturen mislukt.' });
@@ -399,7 +403,7 @@ function buildSummaryEmailHtml(input: { organizationName: string; title: string 
   <body style="margin:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
     <div style="max-width:640px;margin:0 auto;padding:28px 20px;">
       <div style="background:#ffffff;border:1px solid #e4e4e7;border-radius:14px;padding:28px;line-height:1.6;font-size:15px;">
-        <h1 style="margin:0 0 16px;font-size:20px;line-height:1.3;color:#111827;">${heading}</h1>
+        ${EMAIL_LOGO_SLOT_LIGHT}<h1 style="margin:0 0 16px;font-size:20px;line-height:1.3;color:#111827;">${heading}</h1>
         <div>${bodyHtml}</div>
         ${transcriptBlock}
       </div>

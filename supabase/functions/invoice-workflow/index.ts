@@ -4,6 +4,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateContentKey } from '../_shared/emailTemplates/index.ts';
+import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
 import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
@@ -351,7 +352,10 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   if (ublAttachment) await markDeliveryAsEInvoice(prepared.deliveryId, organizationId, userId, ublAttachment);
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
-  const resendPayload = {
+  // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
+  // Een boekhoudpakket op het e-factuuradres slaat ingesloten afbeeldingen over,
+  // net als onze eigen inbox (mail-inbound): het blijft bij de PDF en de UBL.
+  const resendPayload = withEmailBrand({
     from: senderIdentity.from,
     to: [recipientEmail],
     reply_to: senderIdentity.replyTo,
@@ -370,7 +374,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
       { name: 'invoice_number', value: sanitizeTagValue(invoice.number) },
       { name: 'template_key', value: 'invoice_sent' },
     ],
-  };
+  }, await loadEmailBrand(supabaseAdmin, organizationId));
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
@@ -588,7 +592,7 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
   });
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
-  const resendPayload = {
+  const resendPayload = withEmailBrand({
     from: senderIdentity.from,
     to: [recipientEmail],
     reply_to: senderIdentity.replyTo,
@@ -603,7 +607,7 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
       { name: 'template_key', value: 'invoice_reminder' },
       { name: 'reminder_level', value: sanitizeTagValue(`L${level}`) },
     ],
-  };
+  }, await loadEmailBrand(supabaseAdmin, organizationId));
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
@@ -951,7 +955,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   });
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
-  const resendPayload = {
+  const resendPayload = withEmailBrand({
     from: senderIdentity.from,
     to: [recipientEmail],
     reply_to: senderIdentity.replyTo,
@@ -965,7 +969,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
       { name: 'invoice_number', value: sanitizeTagValue(invoice.number) },
       { name: 'template_key', value: 'invoice_dunning_wik14' },
     ],
-  };
+  }, await loadEmailBrand(supabaseAdmin, organizationId));
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
@@ -1778,7 +1782,7 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
   });
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, input.organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
-  const resendPayload = {
+  const resendPayload = withEmailBrand({
     from: senderIdentity.from,
     to: [recipientEmail],
     reply_to: senderIdentity.replyTo,
@@ -1795,7 +1799,7 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
       { name: 'credit_note_number', value: sanitizeTagValue(creditNoteNumber) },
       { name: 'template_key', value: 'credit_note_sent' },
     ],
-  };
+  }, await loadEmailBrand(supabaseAdmin, input.organizationId));
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, input.organizationId, 1, (message, status) => new WorkflowHttpError(message, status));

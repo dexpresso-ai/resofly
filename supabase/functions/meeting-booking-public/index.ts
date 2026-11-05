@@ -20,6 +20,7 @@ import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingConfirmedEmail } from '../_shared/emailTemplates/meetingBookingConfirmed.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
+import { loadEmailBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
@@ -289,7 +290,9 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     inviteMessage: link.invite_message,
     content,
   });
-  await sendResend(link.organization_id, sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text).catch(err => console.error('client confirm mail', err));
+  // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
+  const emailBrand = await loadEmailBrand(supabaseAdmin, link.organization_id);
+  await sendResend(link.organization_id, sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text, emailBrand).catch(err => console.error('client confirm mail', err));
 
   // Notificatie naar de eigenaar van de link.
   const ownerEmail = link.user_id ? await ownerEmailFor(link.user_id) : null;
@@ -343,14 +346,18 @@ async function ownerEmailFor(userId: string): Promise<string | null> {
   } catch { return null; }
 }
 
-async function sendResend(organizationId: string, from: string, to: string[], replyTo: string | undefined, subject: string, html: string, text: string): Promise<void> {
+/**
+ * `brand`: naam en logo voor de plek bovenaan de klantmail. De melding aan de
+ * eigenaar is een kaal intern bericht zonder die plek; daar hoeft het niet.
+ */
+async function sendResend(organizationId: string, from: string, to: string[], replyTo: string | undefined, subject: string, html: string, text: string, brand?: EmailBrand): Promise<void> {
   // Quotum per organisatie (20261101050000). De boeking staat al vast; is het
   // quotum op, dan blijft alleen deze mail achterwege (de aanroeper logt het).
   if (!(await emailQuotaAllows(supabaseAdmin, organizationId, to.length))) throw new Error('Mailquotum van de organisatie is op.');
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from, to, reply_to: replyTo, subject, html, text }),
+    body: JSON.stringify(withEmailBrand({ from, to, reply_to: replyTo, subject, html, text }, brand)),
   });
   if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
 }

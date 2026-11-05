@@ -31,6 +31,7 @@ import { getExternalWriteAccessToken, sendEventCancellations } from '../_shared/
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingLinkEmail } from '../_shared/emailTemplates/meetingBookingLinkSent.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
+import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
@@ -468,17 +469,19 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new HttpError(message, status));
+  // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
+  const emailBrand = await loadEmailBrand(supabaseAdmin, organizationId);
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withEmailBrand({
       from: sender.from,
       to: [recipientEmail],
       reply_to: sender.replyTo,
       subject: rendered.subject,
       html: rendered.html,
       text: rendered.text,
-    }),
+    }, emailBrand)),
   });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {

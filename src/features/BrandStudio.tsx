@@ -207,9 +207,9 @@ function BrandingCard({ form, setForm, canWrite }: { form: CompanySettingsInput;
       <h3>Je merk</h3>
       <p className="settings-help">
         Naam, logo, kleuren en lettertypen: zo zien je klanten je in het klantportaal, op je offerte-, factuur- en
-        contractpagina's en in de galerij. Je offertes en facturen als PDF krijgen je logo, je merkkleur en een
-        lettertype dat bij je huisstijl past (Documentopmaak); je e-mails je naam en je merkkleur. In het voorbeeld
-        zie je het portaal meteen veranderen.
+        contractpagina's en in de galerij. Je offertes, facturen, creditfacturen en aanmaningen als PDF krijgen je
+        logo, je merkkleur en je lettertypen (Documentopmaak); je e-mails je logo, je naam en je merkkleur. In het
+        voorbeeld zie je het portaal meteen veranderen.
       </p>
 
       <div className="brand-grid">
@@ -242,7 +242,7 @@ function BrandingCard({ form, setForm, canWrite }: { form: CompanySettingsInput;
               onChange={(value) => set('brand_logo_dark_data_url', value)}
               canWrite={canWrite}
               dark
-              help="Valt je logo weg op een donkere kop, dan zetten we het op een licht plaatje. Met een lichte versie hoeft dat niet."
+              help="Valt je logo weg op een donkere kop, dan zetten we het op een licht plaatje. In je e-mails staat het altijd op een wit plaatje. Met een lichte versie hoeft dat allebei niet."
             />
           </div>
         </div>

@@ -1094,8 +1094,11 @@ function formFromTemplate(meta: typeof EMAIL_TEMPLATES[number], row: EmailTempla
 /** Vraag om een bepaalde e-mail in de editor te openen (nonce: ook twee keer dezelfde). */
 type EmailTemplateFocus = { key: EmailTemplateKey; nonce: number };
 
+/** Het logo uit Huisstijl, voor het mailvoorbeeld (de mail zelf krijgt het via _shared/emailBrand.ts). */
+type MailLogoProps = { logo?: string | null; logoOnDark?: string | null };
+
 /** "Meldingen aan klanten" en de e-mailteksten, met een knop van het één naar het ander. */
-function ClientMailCards({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+function ClientMailCards({ organizationId, canAdmin, logo, logoOnDark }: { organizationId: string; canAdmin: boolean } & MailLogoProps) {
   const [focus, setFocus] = useState<EmailTemplateFocus | null>(null);
   return <>
     <PortalNotificationsCard
@@ -1103,11 +1106,27 @@ function ClientMailCards({ organizationId, canAdmin }: { organizationId: string;
       canAdmin={canAdmin}
       onEditTexts={() => setFocus(prev => ({ key: 'portal.ticket.reply', nonce: (prev?.nonce ?? 0) + 1 }))}
     />
-    <EmailTemplatesCard organizationId={organizationId} canAdmin={canAdmin} focus={focus} />
+    <EmailTemplatesCard organizationId={organizationId} canAdmin={canAdmin} focus={focus} logo={logo} logoOnDark={logoOnDark} />
   </>;
 }
 
-function EmailTemplatesCard({ organizationId, canAdmin, focus }: { organizationId: string; canAdmin: boolean; focus?: EmailTemplateFocus | null }) {
+/**
+ * Het logo bovenaan het voorbeeld, zoals in de mail: de mails hebben een
+ * donkere kaart, dus de lichte versie als die er is, anders het logo op een wit
+ * plaatje. WebP gaat niet mee in de mail (Outlook toont het niet), dus ook niet
+ * in het voorbeeld.
+ */
+function MailPreviewLogo({ logo, logoOnDark }: MailLogoProps) {
+  const usable = (value?: string | null) => (value && /^data:image\/(png|jpeg);base64,/.test(value) ? value : null);
+  const onDark = usable(logoOnDark);
+  const plain = usable(logo);
+  if (!onDark && !plain) {
+    return <p className="email-preview-structural">— Bovenaan staat je bedrijfsnaam. Zet een logo in Huisstijl, dan staat daar je logo.</p>;
+  }
+  return <div className={`email-preview-logo${onDark ? ' on-dark' : ''}`}><img src={onDark ?? plain ?? undefined} alt="Je logo" /></div>;
+}
+
+function EmailTemplatesCard({ organizationId, canAdmin, focus, logo, logoOnDark }: { organizationId: string; canAdmin: boolean; focus?: EmailTemplateFocus | null } & MailLogoProps) {
   const cardRef = useRef<HTMLElement>(null);
   const [rows, setRows] = useState<Record<string, EmailTemplate>>({});
   const [loaded, setLoaded] = useState(false);
@@ -1250,6 +1269,7 @@ function EmailTemplatesCard({ organizationId, canAdmin, focus }: { organizationI
         <div className="email-preview-box">
           <div className="email-preview-subject">{fillPlaceholders(form.subject || meta.defaults.subject) || '(geen onderwerp)'}</div>
           <div className="email-preview-body">
+            <MailPreviewLogo logo={logo} logoOnDark={logoOnDark} />
             {fillPlaceholders(form.intro || meta.defaults.intro).split('\n').map((line, i) => <p key={i}>{line || ' '}</p>)}
             <p className="email-preview-structural">— Hier vult ResoFly automatisch {meta.group === 'booking'
               ? 'de gekozen tijden, de videocall-link en je begeleidende tekst'
@@ -2886,7 +2906,7 @@ export function Settings({
     {activeOrganization && <InvoiceInboxCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <PersonalSenderCard organizationId={activeOrganization.id} />}
-    {activeOrganization && <ClientMailCards organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
+    {activeOrganization && <ClientMailCards organizationId={activeOrganization.id} canAdmin={canAdminOrganization} logo={form.brand_logo_data_url} logoOnDark={form.brand_logo_dark_data_url} />}
     <section className="settings-card organization-card">
       <div className="settings-card-head">
         <div>

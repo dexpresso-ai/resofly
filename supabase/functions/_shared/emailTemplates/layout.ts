@@ -13,6 +13,31 @@ export type EmailLayoutInput = {
 /** Het vlak van de mailkaart; de merkkleur als tekst wordt hiertegen gemeten. */
 export const EMAIL_CARD = '#1b1b1f';
 
+// ── Plek voor het logo ──────────────────────────────────────────────────────
+// De sjablonen zetten alleen een merkteken waar het logo van de organisatie
+// hoort; _shared/emailBrand.ts vult het in vlak voor het versturen, met het
+// logo als ingesloten afbeelding (cid). Het zijn HTML-commentaren: vult een
+// route ze niet in, dan is de mail precies zoals vroeger, zonder logo.
+
+/** Bovenaan een donkere kaart: de lichte versie, of het logo op een wit plaatje. */
+export const EMAIL_LOGO_SLOT_DARK = '<!--merklogo:donker-->';
+/** Bovenaan een lichte kaart: het gewone logo. */
+export const EMAIL_LOGO_SLOT_LIGHT = '<!--merklogo:licht-->';
+/** Onder een lichte kaart, als een handtekening (een persoonlijk bericht): het gewone logo. */
+export const EMAIL_LOGO_SLOT_SIGNATURE = '<!--merklogo:onder-->';
+/**
+ * Om een bovenregel die alleen de naam van de organisatie is. Staat het logo
+ * erboven, dan vervalt die regel: het logo komt in de plaats van de naam, net
+ * als op de klantpagina's (BrandMark).
+ */
+export const EMAIL_BRAND_NAME_START = '<!--merknaam-->';
+export const EMAIL_BRAND_NAME_END = '<!--/merknaam-->';
+
+/** De naam als bovenregel, gemarkeerd zodat het logo hem kan vervangen. */
+export function brandNameLine(html: string): string {
+  return `${EMAIL_BRAND_NAME_START}${html}${EMAIL_BRAND_NAME_END}`;
+}
+
 export function renderEmailLayout(input: EmailLayoutInput): string {
   const accentColor = sanitizeAccentColor(input.accentColor);
   // De knop en de bovenregel in de merkkleur van de organisatie, maar wel
@@ -27,6 +52,8 @@ export function renderEmailLayout(input: EmailLayoutInput): string {
   const cta = input.cta
     ? `<p style="margin:28px 0 6px;"><a href="${escapeHtml(input.cta.url)}" style="display:inline-block;background:${accentColor};color:${onAccent};text-decoration:none;font-weight:700;padding:14px 20px;border-radius:14px;">${escapeHtml(input.cta.label)}</a></p>`
     : '';
+  const eyebrowText = input.eyebrow || brandName;
+  const eyebrow = `<p style="margin:0 0 8px;color:${eyebrowColor};font-size:13px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;">${escapeHtml(eyebrowText)}</p>`;
 
   return `<!doctype html>
 <html lang="nl">
@@ -39,7 +66,7 @@ export function renderEmailLayout(input: EmailLayoutInput): string {
     ${preheader}
     <div style="max-width:640px;margin:0 auto;padding:32px 20px;">
       <div style="background:#1b1b1f;border:1px solid #303038;border-radius:24px;padding:28px;">
-        <p style="margin:0 0 8px;color:${eyebrowColor};font-size:13px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;">${escapeHtml(input.eyebrow || brandName)}</p>
+        ${EMAIL_LOGO_SLOT_DARK}${eyebrowText === brandName ? brandNameLine(eyebrow) : eyebrow}
         <h1 style="margin:0 0 16px;font-size:28px;line-height:1.15;color:#ffffff;">${escapeHtml(input.title)}</h1>
         <div style="margin:0;color:#d8d8df;font-size:16px;line-height:1.6;">${input.introHtml}</div>
         ${input.bodyHtml || ''}
