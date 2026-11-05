@@ -3,16 +3,10 @@ import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
-import {
-  PDFDocument,
-  StandardFonts,
-  rgb,
-  type PDFFont,
-  type PDFPage,
-  type RGB,
-} from 'https://esm.sh/pdf-lib@1.17.1';
 
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
+import { invoiceVatNotes, type VatCodeInfo } from '../_shared/invoiceVatNotes.ts';
+import { loadDocumentDesign, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 
@@ -22,6 +16,9 @@ type QuoteLine = {
   quantity: number;
   unit_price: number;
   vat?: number;
+  // De btw-code van de regel (verlegd, ICP, vrijgesteld…); bepaalt de
+  // verplichte vermelding op de PDF.
+  vat_code?: string | null;
 };
 
 type QuoteRow = {
@@ -45,6 +42,17 @@ type ClientRow = {
   name: string;
   contact_name: string | null;
   email: string | null;
+  // Voor de PDF: het adres en de nummers van de klant. De offerte-PDF toonde
+  // tot november 2026 alleen naam, t.a.v. en e-mail.
+  phone?: string | null;
+  client_code?: string | null;
+  vat_number?: string | null;
+  kvk_number?: string | null;
+  address_line1?: string | null;
+  address_line2?: string | null;
+  postal_code?: string | null;
+  city?: string | null;
+  country?: string | null;
 };
 
 type ProjectRow = {
@@ -528,7 +536,7 @@ async function loadClient(
 ): Promise<ClientRow> {
   const { data, error } = await supabaseAdmin
     .from('clients')
-    .select('id,name,contact_name,email')
+    .select('id,name,contact_name,email,phone,client_code,vat_number,kvk_number,address_line1,address_line2,postal_code,city,country')
     .eq('id', clientId)
     .eq('organization_id', organizationId)
     .single();
@@ -833,164 +841,35 @@ async function createQuotePdfAttachment(input: {
   publicUrl: string;
 }): Promise<QuotePdfAttachment> {
   const { quote, client, project, company, publicUrl } = input;
-
-  const pdfDoc = await PDFDocument.create();
-  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-  const accent = hexToPdfRgb(company?.invoice_accent_color || '#FFD966');
-  const muted = rgb(0.38, 0.38, 0.38);
-
-  let page = pdfDoc.addPage([595.28, 841.89]);
-  let y = 780;
-
-  const companyName =
-    company?.trade_name || company?.company_name || 'ResoFly';
-
-  page.drawRectangle({
-    x: 0,
-    y: 824,
-    width: 595.28,
-    height: 18,
-    color: accent,
-    opacity: 0.85,
-  });
-
-  drawPdfText(page, 'OFFERTE', 48, y, bold, 26);
-  drawPdfText(page, quote.number || '-', 547, y + 6, bold, 12, {
-    align: 'right',
-  });
-
-  y -= 28;
-
-  drawPdfText(page, companyName, 48, y, bold, 13);
-
-  y -= 18;
-
-  for (const line of companyAddressLines(company).slice(0, 7)) {
-    drawPdfText(page, line, 48, y, regular, 9, { color: muted });
-    y -= 12;
-  }
-
-  let rightY = 742;
-
-  drawPdfText(page, `Datum: ${formatDateNl(quote.date)}`, 547, rightY, regular, 9, {
-    align: 'right',
-    color: muted,
-  });
-
-  rightY -= 14;
-
-  drawPdfText(
-    page,
-    `Geldig tot: ${formatDateNl(quote.valid_until)}`,
-    547,
-    rightY,
-    regular,
-    9,
-    {
-      align: 'right',
-      color: muted,
-    },
-  );
-
-  rightY -= 14;
-
-  if (project?.name) {
-    drawPdfText(page, `Project: ${project.name}`, 547, rightY, regular, 9, {
-      align: 'right',
-      color: muted,
-    });
-  }
-
-  y = 620;
-
-  drawSectionTitle(page, 'Klant', 48, y, bold, accent, muted);
-
-  y -= 24;
-
-  for (const line of clientAddressLines(client)) {
-    drawPdfText(page, line, 48, y, line === client.name ? bold : regular, 10);
-    y -= 14;
-  }
-
-  y = 500;
-
-  drawQuoteTableHeader(page, y, bold, accent, muted);
-
-  y -= 28;
-
   const lines = Array.isArray(quote.lines) ? quote.lines : [];
 
-  for (const line of lines) {
-    if (y < 155) {
-      drawPdfFooter(page, regular, company);
-      page = pdfDoc.addPage([595.28, 841.89]);
-      y = 780;
-      drawQuoteTableHeader(page, y, bold, accent, muted);
-      y -= 28;
-    }
+  // Getekend met de opmaak, het logo en het briefpapier van de organisatie,
+  // met dezelfde code als het voorbeeld in de app (_shared/documentLayout.ts).
+  // Tot november 2026 stond hier een eigen vaste opmaak: zonder logo, zonder
+  // klantadres, met de btw als één bedrag in plaats van per tarief, en met
+  // KvK en btw-nummer die onderaan de afzender wegvielen.
+  const [design, vatCodes] = await Promise.all([
+    loadDocumentDesign(supabaseAdmin, quote.organization_id),
+    loadVatCodeInfo(quote.organization_id),
+  ]);
+  // Bij btw verlegd of ICP hoort de reden er ook op de offerte bij: dan weet
+  // de klant vooraf waarom er geen btw op staat.
+  const vatNotes = invoiceVatNotes(lines, vatCodes);
 
-    const rowHeight = drawQuoteLine(page, line, y, regular, bold, muted);
-    y -= rowHeight;
-  }
-
-  const totals = calculateTotals(quote.lines);
-
-  if (y < 230) {
-    drawPdfFooter(page, regular, company);
-    page = pdfDoc.addPage([595.28, 841.89]);
-    y = 760;
-  }
-
-  y -= 10;
-
-  drawPdfText(page, 'Subtotaal', 365, y, regular, 10);
-  drawPdfText(page, formatEuro(totals.subtotal), 547, y, regular, 10, {
-    align: 'right',
+  const bytes = await renderSalesDocumentPdf({
+    kind: 'quote',
+    design,
+    company,
+    client,
+    number: quote.number || quote.id,
+    date: quote.date,
+    secondDate: quote.valid_until,
+    lines,
+    vatNotes: vatNotes.notes,
+    notes: quote.notes,
+    projectName: project?.name ?? null,
+    onlineLink: publicUrl ? { label: 'Bekijk en keur deze offerte online goed:', url: publicUrl } : null,
   });
-
-  y -= 18;
-
-  drawPdfText(page, 'BTW', 365, y, regular, 10);
-  drawPdfText(page, formatEuro(totals.vat), 547, y, regular, 10, {
-    align: 'right',
-  });
-
-  y -= 22;
-
-  page.drawLine({
-    start: { x: 365, y: y + 12 },
-    end: { x: 547, y: y + 12 },
-    thickness: 0.8,
-    color: accent,
-  });
-
-  drawPdfText(page, 'Totaal', 365, y, bold, 13);
-  drawPdfText(page, formatEuro(totals.total), 547, y, bold, 13, {
-    align: 'right',
-  });
-
-  if (quote.notes) {
-    y -= 46;
-    drawSectionTitle(page, 'Notities', 48, y, bold, accent, muted);
-    y -= 24;
-    y = drawWrappedPdfText(page, quote.notes, 48, y, 310, regular, 9, 12, muted);
-  }
-
-  y = Math.max(94, y - 28);
-
-  drawPdfText(page, 'Bekijk en keur deze offerte online goed:', 48, y, bold, 9, {
-    color: muted,
-  });
-
-  y -= 13;
-
-  drawWrappedPdfText(page, publicUrl, 48, y, 500, regular, 8, 11, muted);
-
-  drawPdfFooter(page, regular, company);
-
-  const bytes = await pdfDoc.save();
   const sha256 = await sha256HexBytes(bytes);
   const fileName = `offerte-${sanitizeFileName(quote.number || quote.id)}.pdf`;
 
@@ -1004,320 +883,22 @@ async function createQuotePdfAttachment(input: {
   };
 }
 
-function drawQuoteTableHeader(
-  page: PDFPage,
-  y: number,
-  bold: PDFFont,
-  accent: RGB,
-  muted: RGB,
-): void {
-  page.drawRectangle({
-    x: 48,
-    y: y - 8,
-    width: 499,
-    height: 24,
-    color: accent,
-    opacity: 0.18,
-  });
-
-  drawPdfText(page, 'Omschrijving', 56, y, bold, 8, { color: muted });
-  drawPdfText(page, 'Aantal', 356, y, bold, 8, {
-    align: 'right',
-    color: muted,
-  });
-  drawPdfText(page, 'Prijs', 424, y, bold, 8, {
-    align: 'right',
-    color: muted,
-  });
-  drawPdfText(page, 'BTW', 470, y, bold, 8, {
-    align: 'right',
-    color: muted,
-  });
-  drawPdfText(page, 'Totaal', 547, y, bold, 8, {
-    align: 'right',
-    color: muted,
-  });
-}
-
-function drawQuoteLine(
-  page: PDFPage,
-  line: QuoteLine,
-  y: number,
-  regular: PDFFont,
-  bold: PDFFont,
-  muted: RGB,
-): number {
-  const descriptionLines = wrapPdfText(line.description || '-', regular, 9, 270);
-
-  const quantity = Number(line.quantity || 0);
-  const unitPrice = Number(line.unit_price || 0);
-  const vatPercentage = Number(line.vat || 0);
-
-  const lineSubtotal = quantity * unitPrice;
-  const lineTotal = lineSubtotal * (1 + vatPercentage / 100);
-
-  page.drawLine({
-    start: { x: 48, y: y + 8 },
-    end: { x: 547, y: y + 8 },
-    thickness: 0.35,
-    color: muted,
-    opacity: 0.25,
-  });
-
-  let descY = y;
-
-  for (const desc of descriptionLines) {
-    drawPdfText(page, desc, 56, descY, regular, 9);
-    descY -= 12;
+// Soort en rubriek per btw-code, voor de verplichte vermeldingen op de pdf.
+// Fail-open: zonder btw-codes geen vermeldingen, maar wel een offerte.
+async function loadVatCodeInfo(organizationId: string): Promise<Record<string, VatCodeInfo>> {
+  const { data, error } = await supabaseAdmin
+    .from('vat_codes')
+    .select('code,kind,sales_box')
+    .eq('organization_id', organizationId);
+  if (error) {
+    console.warn('vat_codes lookup voor de offerte-pdf mislukte:', error.message);
+    return {};
   }
-
-  drawPdfText(page, String(quantity), 356, y, regular, 9, {
-    align: 'right',
-  });
-  drawPdfText(page, formatEuro(unitPrice), 424, y, regular, 9, {
-    align: 'right',
-  });
-  drawPdfText(page, `${vatPercentage}%`, 470, y, regular, 9, {
-    align: 'right',
-  });
-  drawPdfText(page, formatEuro(lineTotal), 547, y, bold, 9, {
-    align: 'right',
-  });
-
-  return Math.max(26, descriptionLines.length * 12 + 12);
-}
-
-function drawSectionTitle(
-  page: PDFPage,
-  title: string,
-  x: number,
-  y: number,
-  bold: PDFFont,
-  accent: RGB,
-  muted: RGB,
-): void {
-  drawPdfText(page, title.toUpperCase(), x, y, bold, 8, { color: muted });
-
-  page.drawLine({
-    start: { x, y: y - 5 },
-    end: { x: x + 180, y: y - 5 },
-    thickness: 0.6,
-    color: accent,
-  });
-}
-
-function drawPdfFooter(
-  page: PDFPage,
-  font: PDFFont,
-  company: CompanySettingsRow | null,
-): void {
-  const footer =
-    company?.invoice_footer ||
-    company?.invoice_payment_terms ||
-    'Bedankt voor het vertrouwen.';
-
-  page.drawLine({
-    start: { x: 48, y: 58 },
-    end: { x: 547, y: 58 },
-    thickness: 0.45,
-    color: rgb(0.38, 0.38, 0.38),
-    opacity: 0.35,
-  });
-
-  drawWrappedPdfText(page, footer, 48, 42, 499, font, 8, 10, rgb(0.38, 0.38, 0.38));
-}
-
-function drawPdfText(
-  page: PDFPage,
-  text: string,
-  x: number,
-  y: number,
-  font: PDFFont,
-  size: number,
-  opts: { align?: 'left' | 'right'; color?: RGB } = {},
-): void {
-  const safe = normalizePdfText(text);
-
-  if (!safe) {
-    return;
+  const byCode: Record<string, VatCodeInfo> = {};
+  for (const row of (data ?? []) as Array<{ code: string; kind: string; sales_box: string | null }>) {
+    byCode[String(row.code)] = { kind: String(row.kind), salesBox: row.sales_box ?? null };
   }
-
-  const width = font.widthOfTextAtSize(safe, size);
-
-  page.drawText(safe, {
-    x: opts.align === 'right' ? x - width : x,
-    y,
-    font,
-    size,
-    color: opts.color || rgb(0.1, 0.1, 0.1),
-  });
-}
-
-function drawWrappedPdfText(
-  page: PDFPage,
-  text: string,
-  x: number,
-  y: number,
-  maxWidth: number,
-  font: PDFFont,
-  size: number,
-  lineHeight: number,
-  color?: RGB,
-): number {
-  let cursorY = y;
-
-  for (const line of wrapPdfText(text, font, size, maxWidth)) {
-    drawPdfText(page, line, x, cursorY, font, size, { color });
-    cursorY -= lineHeight;
-  }
-
-  return cursorY;
-}
-
-function wrapPdfText(
-  text: string,
-  font: PDFFont,
-  size: number,
-  maxWidth: number,
-): string[] {
-  const source = normalizePdfText(text);
-
-  if (!source) {
-    return [];
-  }
-
-  const words = source.split(' ');
-  const lines: string[] = [];
-  let current = '';
-
-  for (const word of words) {
-    const wordChunks =
-      font.widthOfTextAtSize(word, size) > maxWidth
-        ? splitLongPdfWord(word, font, size, maxWidth)
-        : [word];
-
-    for (const chunk of wordChunks) {
-      const candidate = current ? `${current} ${chunk}` : chunk;
-
-      if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
-        current = candidate;
-      } else {
-        if (current) {
-          lines.push(current);
-        }
-
-        current = chunk;
-      }
-    }
-  }
-
-  if (current) {
-    lines.push(current);
-  }
-
-  return lines;
-}
-
-function splitLongPdfWord(
-  word: string,
-  font: PDFFont,
-  size: number,
-  maxWidth: number,
-): string[] {
-  const chunks: string[] = [];
-  let current = '';
-
-  for (const char of word) {
-    const candidate = current + char;
-
-    if (current && font.widthOfTextAtSize(candidate, size) > maxWidth) {
-      chunks.push(current);
-      current = char;
-    } else {
-      current = candidate;
-    }
-  }
-
-  if (current) {
-    chunks.push(current);
-  }
-
-  return chunks;
-}
-
-function normalizePdfText(value: unknown): string {
-  return String(value ?? '')
-    .normalize('NFKC')
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2013\u2014\u2212]/g, '-')
-    .replace(/\u2026/g, '...')
-    .replace(/\u2022/g, '-')
-    .replace(/€/g, 'EUR')
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .split('')
-    .filter((char) => {
-      const code = char.charCodeAt(0);
-      return (code >= 32 && code <= 126) || (code >= 160 && code <= 255);
-    })
-    .join('')
-    .trim();
-}
-
-function companyAddressLines(company: CompanySettingsRow | null): string[] {
-  if (!company) {
-    return ['ResoFly'];
-  }
-
-  const cityLine = [company.postal_code, company.city].filter(Boolean).join(' ');
-
-  return [
-    company.company_name,
-    company.trade_name && company.trade_name !== company.company_name
-      ? company.trade_name
-      : '',
-    company.address_line1,
-    company.address_line2,
-    cityLine,
-    company.country,
-    company.email ? `E-mail: ${company.email}` : '',
-    company.phone ? `Tel: ${company.phone}` : '',
-    company.website ? `Web: ${company.website}` : '',
-    company.kvk_number ? `KvK: ${company.kvk_number}` : '',
-    company.vat_number ? `BTW: ${company.vat_number}` : '',
-    company.iban ? `IBAN: ${company.iban}` : '',
-  ]
-    .filter((value) => normalizePdfText(value).length > 0)
-    .map(normalizePdfText);
-}
-
-function clientAddressLines(client: ClientRow): string[] {
-  return [
-    client.name,
-    client.contact_name ? `T.a.v. ${client.contact_name}` : '',
-    client.email ? `E-mail: ${client.email}` : '',
-  ]
-    .filter((value) => normalizePdfText(value).length > 0)
-    .map(normalizePdfText);
-}
-
-function calculateTotals(
-  lines: QuoteLine[] = [],
-): { subtotal: number; vat: number; total: number } {
-  return lines.reduce(
-    (acc, line) => {
-      const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
-      const vat = subtotal * (Number(line.vat || 0) / 100);
-
-      acc.subtotal += subtotal;
-      acc.vat += vat;
-      acc.total += subtotal + vat;
-
-      return acc;
-    },
-    { subtotal: 0, vat: 0, total: 0 },
-  );
+  return byCode;
 }
 
 function validateQuotePdfAttachment(attachment: QuotePdfAttachment): void {
@@ -1354,39 +935,6 @@ function validateQuotePdfAttachment(attachment: QuotePdfAttachment): void {
       500,
     );
   }
-}
-
-function formatDateNl(value: string | null): string {
-  if (!value) {
-    return '-';
-  }
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toLocaleDateString('nl-NL');
-}
-
-function formatEuro(value: number): string {
-  return new Intl.NumberFormat('nl-NL', {
-    style: 'currency',
-    currency: 'EUR',
-  }).format(value || 0);
-}
-
-function hexToPdfRgb(value: string): RGB {
-  const match = /^#?([0-9a-f]{6})$/i.exec(value.trim());
-  const hex = match ? match[1] : 'FFD966';
-  const int = Number.parseInt(hex, 16);
-
-  return rgb(
-    ((int >> 16) & 255) / 255,
-    ((int >> 8) & 255) / 255,
-    (int & 255) / 255,
-  );
 }
 
 function sanitizeFileName(value: string): string {

@@ -1,16 +1,26 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage, type RGB } from 'pdf-lib';
+// PDF van een offerte of factuur in de app: het live voorbeeld naast de editor,
+// de detailweergave en de knop "Download concept-PDF".
+//
+// Tekent met dezelfde module als de verstuurde PDF (src/lib/documentLayout.ts,
+// gespiegeld in supabase/functions/_shared/). Tot november 2026 had de app hier
+// een eigen tekenroutine: die gebruikte wel het briefpapier en de lettergrootte,
+// de verstuurde PDF niet, en geen van beide zette het logo erop. Het voorbeeld
+// beloofde dus iets wat de klant niet kreeg.
+import * as PdfLib from 'pdf-lib';
 import { invoiceVatNotes } from './invoiceVatNotes';
-import type { Client, CompanySettings, Invoice, Quote } from '../types';
-import { dateNL, total } from './format';
-import { lineGross as centExactLineGross } from './money';
-
-const A4: [number, number] = [595.28, 841.89];
-const DEFAULT_TEXT = '#1a1a1a';
-const DEFAULT_ACCENT = '#FFD966';
-
-function fmtMoney(amount: number): string {
-  return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(amount).replace('€', 'EUR');
-}
+import { total } from './format';
+import { lineGross, lineNet, toNumber } from './money';
+import {
+  buildDocumentData,
+  documentAssetsFromSettings,
+  documentPdfFileName,
+  parseDocumentLayouts,
+  renderDocumentPdf,
+  resolveDocumentLayout,
+  resolveDocumentStyle,
+  type DocumentLayouts,
+} from './documentLayout';
+import type { AppData, Client, CompanySettings, Invoice, Quote } from '../types';
 
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -26,397 +36,86 @@ function downloadBlob(blob: Blob, filename: string): void {
   }
 }
 
-interface PdfOptions {
+export interface PdfOptions {
   company?: CompanySettings | null;
-  brandName?: string;
-  brandTagline?: string;
   /** Voor de verplichte btw-vermeldingen (verlegd, ICP, export, vrijgesteld). */
   vatCodes?: Array<{ code: string; kind: string; sales_box: string | null }>;
+  /** "Project: …" in de documentgegevens, zoals op de verstuurde PDF. */
+  projectName?: string | null;
+  /** Bij een factuur: het nummer van de offerte waar hij uit komt. */
+  quoteNumber?: string | null;
+  /** Een opmaak die nog niet is opgeslagen (de editor); anders die uit de instellingen. */
+  layouts?: DocumentLayouts | null;
 }
 
-interface PreparedTemplate {
-  sourcePdf?: PDFDocument;
-  sourcePageIndex: number;
-  image?: PDFImage;
-  pageSize: [number, number];
+/**
+ * De opties die het voorbeeld gelijk houden aan de verstuurde PDF: btw-codes,
+ * projectnaam en offertenummer komen uit de kern van AppData (geen laadgroep).
+ */
+export function financePdfOptions(
+  data: Pick<AppData, 'companySettings' | 'vatCodes' | 'projects' | 'quotes'>,
+  doc: { project_id?: string | null; quote_id?: string | null },
+): PdfOptions {
+  return {
+    company: data.companySettings,
+    vatCodes: data.vatCodes,
+    projectName: doc.project_id ? data.projects.find(project => project.id === doc.project_id)?.name ?? null : null,
+    quoteNumber: doc.quote_id ? data.quotes.find(quote => quote.id === doc.quote_id)?.number ?? null : null,
+  };
 }
 
-interface DrawContext {
-  regular: PDFFont;
-  bold: PDFFont;
-  textColor: RGB;
-  mutedColor: RGB;
-  accentColor: RGB;
-  base: number;
-}
+export async function createFinancePDFBytes(doc: Quote | Invoice, kind: 'quote' | 'invoice', client: Client | null, opts: PdfOptions = {}): Promise<Uint8Array> {
+  const company = opts.company ?? null;
+  const lines = Array.isArray(doc.lines) ? doc.lines : [];
+  const totals = total(lines);
 
-function sz(base: number, delta: number): number {
-  return Math.max(6, base + delta);
-}
-
-function normalizePdfText(value: string): string {
-  // pdf-lib standard Helvetica uses WinAnsi encoding. Normalize common Unicode
-  // punctuation and drop unsupported glyphs so one emoji or smart symbol never
-  // breaks the complete PDF export.
-  const normalized = value
-    .normalize('NFKC')
-    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
-    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
-    .replace(/[\u2013\u2014\u2212]/g, '-')
-    .replace(/\u2026/g, '...')
-    .replace(/\u2022/g, '-')
-    .replace(/\u00A0/g, ' ')
-    .replace(/€/g, 'EUR');
-
-  return Array.from(normalized)
-    .filter((char) => {
-      const code = char.charCodeAt(0);
-      return code === 10 || code === 13 || code === 9 || (code >= 32 && code <= 126) || (code >= 160 && code <= 255);
-    })
-    .join('');
-}
-
-function clean(value: unknown): string {
-  return normalizePdfText(String(value ?? '')).replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-}
-
-function hasText(value: unknown): boolean {
-  return clean(value).length > 0;
-}
-
-function hexToRgb(value: string | null | undefined, fallback: string): RGB {
-  const source = (value || fallback).trim();
-  const match = /^#?([0-9a-f]{6})$/i.exec(source);
-  const hex = match ? match[1] : fallback.replace('#', '');
-  const int = Number.parseInt(hex, 16);
-  return rgb(((int >> 16) & 255) / 255, ((int >> 8) & 255) / 255, (int & 255) / 255);
-}
-
-function dataUrlToBytes(dataUrl: string): { bytes: Uint8Array; mimeType: string } {
-  const match = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(dataUrl);
-  if (!match) throw new Error('Factuurtemplate heeft geen geldig data-url formaat.');
-  const mimeType = match[1] || 'application/octet-stream';
-  const isBase64 = Boolean(match[2]);
-  const payload = match[3] || '';
-  const binary = isBase64 ? atob(payload) : decodeURIComponent(payload);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return { bytes, mimeType };
-}
-
-async function prepareTemplate(pdfDoc: PDFDocument, company?: CompanySettings | null): Promise<PreparedTemplate | null> {
-  if (!company?.invoice_template_data_url || company.invoice_template_kind === 'none') return null;
-
-  try {
-    const { bytes, mimeType } = dataUrlToBytes(company.invoice_template_data_url);
-    if (company.invoice_template_kind === 'pdf' || mimeType === 'application/pdf') {
-      const sourcePdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
-      const page = sourcePdf.getPage(0);
-      const size = page.getSize();
-      return { sourcePdf, sourcePageIndex: 0, pageSize: [size.width, size.height] };
-    }
-
-    const resolvedMime = company.invoice_template_mime_type || mimeType;
-    const image = /jpe?g/i.test(resolvedMime) ? await pdfDoc.embedJpg(bytes) : await pdfDoc.embedPng(bytes);
-    return { image, sourcePageIndex: 0, pageSize: A4 };
-  } catch (error) {
-    console.warn('Factuurtemplate kon niet worden gebruikt. Er wordt teruggevallen op de standaard layout.', error);
-    return null;
+  // Verplichte vermeldingen bij 0% of geen btw (art. 35a Wet OB), dezelfde als
+  // op de verstuurde factuur. Ontbreekt het btw-nummer van de klant, dan
+  // waarschuwt het concept; de server weigert dan te versturen.
+  const vatCodeInfo = Object.fromEntries((opts.vatCodes ?? []).map(v => [v.code, { kind: v.kind, salesBox: v.sales_box }]));
+  const vat = invoiceVatNotes(lines, vatCodeInfo);
+  const vatNotes = [...vat.notes];
+  if (kind === 'invoice' && vat.needsCustomerVatNumber && !String(client?.vat_number ?? '').trim()) {
+    vatNotes.push(`Let op: bij ${vat.reasons.join(' en ')} hoort het btw-nummer van de klant op de factuur. Vul het in bij de klant voordat je verstuurt.`);
   }
-}
 
-function drawImageCover(page: PDFPage, image: PDFImage): void {
-  const { width, height } = page.getSize();
-  const imageRatio = image.width / image.height;
-  const pageRatio = width / height;
-  const drawWidth = imageRatio > pageRatio ? height * imageRatio : width;
-  const drawHeight = imageRatio > pageRatio ? height : width / imageRatio;
-  page.drawImage(image, {
-    x: (width - drawWidth) / 2,
-    y: (height - drawHeight) / 2,
-    width: drawWidth,
-    height: drawHeight,
+  const data = buildDocumentData({
+    kind,
+    number: doc.number,
+    date: doc.date,
+    secondDate: kind === 'quote' ? (doc as Quote).valid_until : (doc as Invoice).due_date,
+    company,
+    client,
+    lines: lines.map(line => ({
+      description: line.description,
+      quantity: toNumber(line.quantity),
+      unitPrice: toNumber(line.unit_price),
+      vatRate: toNumber(line.vat),
+      net: lineNet(line),
+      gross: lineGross(line),
+    })),
+    totals: { subtotal: totals.subtotal, vat: totals.vat, total: totals.total, vatBreakdown: totals.vatBreakdown },
+    vatNotes,
+    notes: doc.notes,
+    projectName: opts.projectName,
+    quoteNumber: opts.quoteNumber,
+    // De link naar de online factuur bestaat pas bij versturen.
+    onlineLink: null,
+  });
+
+  const layouts = parseDocumentLayouts(opts.layouts !== undefined ? opts.layouts : company?.document_layouts);
+  const assets = documentAssetsFromSettings(company);
+  return renderDocumentPdf(PdfLib, {
+    layout: resolveDocumentLayout(layouts, kind, { letterhead: Boolean(assets.letterhead) }),
+    data,
+    style: resolveDocumentStyle(company, layouts.font),
+    assets,
+    onWarning: (message, error) => console.warn(message, error),
   });
 }
 
-async function addPage(pdfDoc: PDFDocument, template: PreparedTemplate | null): Promise<PDFPage> {
-  if (template?.sourcePdf) {
-    const [copied] = await pdfDoc.copyPages(template.sourcePdf, [template.sourcePageIndex]);
-    pdfDoc.addPage(copied);
-    return copied;
-  }
-
-  const page = pdfDoc.addPage(template?.pageSize ?? A4);
-  if (template?.image) drawImageCover(page, template.image);
-  return page;
-}
-
-function drawText(page: PDFPage, text: string, x: number, y: number, ctx: DrawContext, opts: { size?: number; bold?: boolean; color?: RGB; align?: 'left' | 'right' } = {}) {
-  const size = opts.size ?? 10;
-  const font = opts.bold ? ctx.bold : ctx.regular;
-  const safe = clean(text);
-  if (!safe) return;
-  const width = font.widthOfTextAtSize(safe, size);
-  const drawX = opts.align === 'right' ? x - width : x;
-  page.drawText(safe, { x: drawX, y, size, font, color: opts.color ?? ctx.textColor });
-}
-
-function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
-  const source = clean(text);
-  if (!source) return [''];
-
-  const lines: string[] = [];
-  let current = '';
-  for (const word of source.split(' ')) {
-    const candidate = current ? `${current} ${word}` : word;
-    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
-      current = candidate;
-      continue;
-    }
-    if (current) lines.push(current);
-
-    if (font.widthOfTextAtSize(word, size) <= maxWidth) {
-      current = word;
-      continue;
-    }
-
-    let chunk = '';
-    for (const char of word) {
-      const next = `${chunk}${char}`;
-      if (font.widthOfTextAtSize(next, size) <= maxWidth) chunk = next;
-      else {
-        if (chunk) lines.push(chunk);
-        chunk = char;
-      }
-    }
-    current = chunk;
-  }
-  if (current) lines.push(current);
-  return lines.length ? lines : [''];
-}
-
-function drawWrappedText(page: PDFPage, text: string, x: number, y: number, maxWidth: number, ctx: DrawContext, opts: { size?: number; bold?: boolean; lineHeight?: number; color?: RGB } = {}): number {
-  const size = opts.size ?? 10;
-  const font = opts.bold ? ctx.bold : ctx.regular;
-  const lineHeight = opts.lineHeight ?? size + 4;
-  const lines = wrapText(text, font, size, maxWidth);
-  let cursorY = y;
-  for (const line of lines) {
-    drawText(page, line, x, cursorY, ctx, { size, bold: opts.bold, color: opts.color });
-    cursorY -= lineHeight;
-  }
-  return cursorY;
-}
-
-function drawSectionLabel(page: PDFPage, label: string, x: number, y: number, ctx: DrawContext) {
-  drawText(page, label.toUpperCase(), x, y, ctx, { size: sz(ctx.base, -2), bold: true, color: ctx.mutedColor });
-  page.drawLine({ start: { x, y: y - 5 }, end: { x: x + 180, y: y - 5 }, thickness: 0.6, color: ctx.accentColor });
-}
-
-function companyDisplayName(company?: CompanySettings | null, opts?: PdfOptions): string {
-  return clean(company?.company_name) || clean(company?.trade_name) || opts?.brandName || 'ResoFly';
-}
-
-function companyLines(company?: CompanySettings | null, opts?: PdfOptions): string[] {
-  const fallbackName = opts?.brandName ?? 'ResoFly';
-  if (!company) return [fallbackName, opts?.brandTagline ?? 'Werkruimte'];
-
-  const cityLine = [company.postal_code, company.city].filter(hasText).map(clean).join(' ');
-  return [
-    companyDisplayName(company, opts),
-    company.trade_name && clean(company.trade_name) !== clean(company.company_name) ? company.trade_name : '',
-    company.address_line1,
-    company.address_line2,
-    cityLine,
-    company.country,
-    company.email ? `E-mail: ${company.email}` : '',
-    company.phone ? `Tel: ${company.phone}` : '',
-    company.website ? `Web: ${company.website}` : '',
-  ].filter(hasText).map(clean);
-}
-
-function companyLegalLines(company?: CompanySettings | null): string[] {
-  if (!company) return [];
-  return [
-    company.kvk_number ? `KvK: ${company.kvk_number}` : '',
-    company.vat_number ? `BTW: ${company.vat_number}` : '',
-    company.iban ? `IBAN: ${company.iban}` : '',
-  ].filter(hasText).map(clean);
-}
-
-function clientLines(client: Client | null): string[] {
-  return [
-    client?.name ?? 'Geen klant',
-    client?.contact_name ? `T.a.v. ${client.contact_name}` : '',
-    client?.email ? `E-mail: ${client.email}` : '',
-    client?.phone ? `Tel: ${client.phone}` : '',
-  ].filter(hasText).map(clean);
-}
-
-function drawDocumentHeader(page: PDFPage, doc: Quote | Invoice, kind: 'quote' | 'invoice', client: Client | null, ctx: DrawContext, opts: PdfOptions, hasTemplate: boolean) {
-  const { width, height } = page.getSize();
-  const marginX = 48;
-  const isQuote = kind === 'quote';
-  const title = isQuote ? 'OFFERTE' : 'FACTUUR';
-  const secondDateLabel = isQuote ? 'Geldig tot' : 'Vervaldatum';
-  const secondDateValue = isQuote ? (doc as Quote).valid_until : (doc as Invoice).due_date;
-
-  if (!hasTemplate) {
-    page.drawRectangle({ x: 0, y: height - 18, width, height: 18, color: ctx.accentColor, opacity: 0.9 });
-  }
-
-  const b = ctx.base;
-  drawWrappedText(page, companyDisplayName(opts.company, opts), marginX, height - 58, 260, ctx, { size: sz(b, 6), bold: true, lineHeight: sz(b, 8) });
-  let y = height - 86;
-  for (const line of companyLines(opts.company, opts).slice(1, 8)) {
-    drawText(page, line, marginX, y, ctx, { size: sz(b, -1), color: ctx.mutedColor });
-    y -= 12;
-  }
-
-  drawText(page, title, width - marginX, height - 62, ctx, { size: sz(b, 15), bold: true, align: 'right' });
-  drawText(page, `${isQuote ? 'Offertenummer' : 'Factuurnummer'}: ${doc.number || '-'}`, width - marginX, height - 94, ctx, { size: b, bold: true, align: 'right' });
-  drawText(page, `Datum: ${dateNL(doc.date)}`, width - marginX, height - 110, ctx, { size: sz(b, -1), align: 'right', color: ctx.mutedColor });
-  drawText(page, `${secondDateLabel}: ${dateNL(secondDateValue)}`, width - marginX, height - 124, ctx, { size: sz(b, -1), align: 'right', color: ctx.mutedColor });
-
-  const blockY = height - 190;
-  drawSectionLabel(page, 'Factuur aan', marginX, blockY, ctx);
-  y = blockY - 24;
-  for (const line of clientLines(client)) {
-    drawText(page, line, marginX, y, ctx, { size: b, bold: y === blockY - 24 });
-    y -= 14;
-  }
-
-  const legal = companyLegalLines(opts.company);
-  if (legal.length) {
-    drawSectionLabel(page, 'Bedrijfsgegevens', width - 235, blockY, ctx);
-    y = blockY - 24;
-    for (const line of legal) {
-      drawText(page, line, width - 235, y, ctx, { size: sz(b, -1), color: ctx.mutedColor });
-      y -= 13;
-    }
-  }
-}
-
-function drawTableHeader(page: PDFPage, y: number, ctx: DrawContext) {
-  const x = 48;
-  const lbl = sz(ctx.base, -2);
-  page.drawRectangle({ x, y: y - 8, width: 500, height: 24, color: ctx.accentColor, opacity: 0.18 });
-  drawText(page, 'Omschrijving', x + 8, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor });
-  drawText(page, 'Aantal', x + 302, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor });
-  drawText(page, 'Prijs', x + 362, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor });
-  drawText(page, 'BTW', x + 428, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor });
-  drawText(page, 'Totaal', x + 500, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor, align: 'right' });
-}
-
-function drawFooter(page: PDFPage, ctx: DrawContext, company?: CompanySettings | null) {
-  const { width } = page.getSize();
-  const footer = clean(company?.invoice_footer) || 'Bedankt voor het vertrouwen.';
-  const payment = clean(company?.invoice_payment_terms);
-  page.drawLine({ start: { x: 48, y: 58 }, end: { x: width - 48, y: 58 }, thickness: 0.5, color: ctx.mutedColor, opacity: 0.35 });
-  drawWrappedText(page, payment || footer, 48, 42, width - 96, ctx, { size: sz(ctx.base, -2), lineHeight: sz(ctx.base, 0), color: ctx.mutedColor });
-}
-
 export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' | 'invoice', client: Client | null, opts: PdfOptions = {}): Promise<Blob> {
-  const pdfDoc = await PDFDocument.create();
-  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const template = await prepareTemplate(pdfDoc, opts.company);
-  const base = Math.max(8, Math.min(14, Number(opts.company?.invoice_font_size ?? 10)));
-  const ctx: DrawContext = {
-    regular,
-    bold,
-    textColor: hexToRgb(opts.company?.invoice_template_text_color, DEFAULT_TEXT),
-    mutedColor: rgb(0.38, 0.38, 0.38),
-    accentColor: hexToRgb(opts.company?.invoice_accent_color, DEFAULT_ACCENT),
-    base,
-  };
-
-  let page = await addPage(pdfDoc, template);
-  drawDocumentHeader(page, doc, kind, client, ctx, opts, Boolean(template));
-
-  let cursorY = page.getHeight() - 300;
-  drawTableHeader(page, cursorY, ctx);
-  cursorY -= 28;
-
-  const lines = Array.isArray(doc.lines) ? doc.lines : [];
-  for (const line of lines) {
-    const descLines = wrapText(line.description || '-', regular, sz(base, -1), 270);
-    const rowHeight = Math.max(24, descLines.length * 12 + 10);
-    if (cursorY - rowHeight < 132) {
-      drawFooter(page, ctx, opts.company);
-      page = await addPage(pdfDoc, template);
-      cursorY = page.getHeight() - 76;
-      drawTableHeader(page, cursorY, ctx);
-      cursorY -= 28;
-    }
-
-    const lineGrossValue = centExactLineGross(line);
-    const x = 48;
-    page.drawLine({ start: { x, y: cursorY + 7 }, end: { x: x + 500, y: cursorY + 7 }, thickness: 0.4, color: ctx.mutedColor, opacity: 0.25 });
-    let descY = cursorY;
-    for (const descLine of descLines) {
-      drawText(page, descLine, x + 8, descY, ctx, { size: sz(base, -1) });
-      descY -= 12;
-    }
-    drawText(page, String(line.quantity ?? 0), x + 322, cursorY, ctx, { size: sz(base, -1), align: 'right' });
-    drawText(page, fmtMoney(Number(line.unit_price || 0)), x + 405, cursorY, ctx, { size: sz(base, -1), align: 'right' });
-    drawText(page, `${line.vat ?? 0}%`, x + 449, cursorY, ctx, { size: sz(base, -1), align: 'right' });
-    drawText(page, fmtMoney(lineGrossValue), x + 500, cursorY, ctx, { size: sz(base, -1), bold: true, align: 'right' });
-    cursorY -= rowHeight;
-  }
-
-  const totals = total(lines);
-  if (cursorY < 230) {
-    drawFooter(page, ctx, opts.company);
-    page = await addPage(pdfDoc, template);
-    cursorY = page.getHeight() - 86;
-  }
-
-  const totalX = page.getWidth() - 248;
-  page.drawLine({ start: { x: totalX, y: cursorY + 10 }, end: { x: page.getWidth() - 48, y: cursorY + 10 }, thickness: 0.8, color: ctx.accentColor });
-  drawText(page, 'Subtotaal', totalX, cursorY, ctx, { size: sz(base, -1) });
-  drawText(page, fmtMoney(totals.subtotal), page.getWidth() - 48, cursorY, ctx, { size: sz(base, -1), align: 'right' });
-  cursorY -= 16;
-  // Wettelijk: btw per tarief uitsplitsen op de factuur. Bij één tarief tonen we
-  // het percentage in het label; bij meerdere tarieven elk apart.
-  for (const row of totals.vatBreakdown) {
-    // Per tarief de grondslag én het btw-bedrag (art. 35a lid 1 Wet OB).
-    drawText(page, `BTW ${row.rate}% over ${fmtMoney(row.base)}`, totalX, cursorY, ctx, { size: sz(base, -2) });
-    drawText(page, fmtMoney(row.vat), page.getWidth() - 48, cursorY, ctx, { size: sz(base, -1), align: 'right' });
-    cursorY -= 16;
-  }
-  if (totals.vatBreakdown.length === 0) {
-    drawText(page, 'BTW', totalX, cursorY, ctx, { size: sz(base, -1) });
-    drawText(page, fmtMoney(totals.vat), page.getWidth() - 48, cursorY, ctx, { size: sz(base, -1), align: 'right' });
-    cursorY -= 16;
-  }
-  drawText(page, 'Totaal', totalX, cursorY, ctx, { size: sz(base, 2), bold: true });
-  drawText(page, fmtMoney(totals.total), page.getWidth() - 48, cursorY, ctx, { size: sz(base, 2), bold: true, align: 'right' });
-  cursorY -= 20;
-
-  // Verplichte vermeldingen bij 0% of geen btw (art. 35a Wet OB), gelijk aan de
-  // verzonden factuur uit invoice-workflow.
-  const vatCodeInfo = Object.fromEntries((opts.vatCodes ?? []).map(v => [v.code, { kind: v.kind, salesBox: v.sales_box }]));
-  const vatNotes = invoiceVatNotes(lines, vatCodeInfo);
-  for (const note of vatNotes.notes) {
-    cursorY -= 4;
-    drawWrappedText(page, note, 48, cursorY, 500, ctx, { size: sz(base, -2), lineHeight: 11, color: ctx.mutedColor });
-    cursorY -= 11;
-  }
-  if (kind === 'invoice' && vatNotes.needsCustomerVatNumber && !String(client?.vat_number ?? '').trim()) {
-    cursorY -= 4;
-    drawWrappedText(page, `Let op: bij ${vatNotes.reasons.join(' en ')} hoort het btw-nummer van de klant op de factuur. Vul het in bij de klant voordat je verstuurt.`, 48, cursorY, 500, ctx, { size: sz(base, -2), lineHeight: 11, color: ctx.mutedColor });
-    cursorY -= 11;
-  }
-
-  if (doc.notes) {
-    cursorY -= 8;
-    drawSectionLabel(page, 'Notities', 48, cursorY, ctx);
-    drawWrappedText(page, doc.notes, 48, cursorY - 24, 300, ctx, { size: sz(base, -1), lineHeight: 12, color: ctx.mutedColor });
-  }
-
-  drawFooter(page, ctx, opts.company);
-  const bytes = await pdfDoc.save();
+  const bytes = await createFinancePDFBytes(doc, kind, client, opts);
   const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   return new Blob([arrayBuffer], { type: 'application/pdf' });
 }
@@ -427,8 +126,6 @@ export async function exportFinancePDF(
   client: Client | null,
   opts: PdfOptions = {},
 ): Promise<void> {
-  const isQuote = kind === 'quote';
-  const filename = `${isQuote ? 'offerte' : 'factuur'}-${(doc.number || 'concept').replace(/[^a-z0-9_-]+/gi, '-')}.pdf`;
   const blob = await createFinancePDFBlob(doc, kind, client, opts);
-  downloadBlob(blob, filename);
+  downloadBlob(blob, documentPdfFileName(kind, doc.number));
 }

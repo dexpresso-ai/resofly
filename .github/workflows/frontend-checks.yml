@@ -132,6 +132,15 @@ jobs:
           deno check supabase/functions/invoice-inbox/index.ts
           deno check supabase/functions/invoice-extract/index.ts
 
+      # De opmaak van offertes en facturen. invoice-workflow en quote-workflow
+      # tekenen er de verstuurde PDF mee, maar staan zelf nog buiten de
+      # controle hierboven (zie de toelichting daar). Zo wordt in elk geval de
+      # gedeelde code bewaakt die ze voor de PDF gebruiken.
+      - name: Deno-typecheck documentopmaak
+        run: |
+          deno check supabase/functions/_shared/documentLayout.ts
+          deno check supabase/functions/_shared/documentPdf.ts
+
   # De hele migratieketen op een lege database, met de echte Supabase-images in
   # de versies uit supabase/.temp (Postgres 17.6.1.111, net als staging). Een
   # nieuwe omgeving bouw je met `supabase db push`; deze job bewijst dat dat

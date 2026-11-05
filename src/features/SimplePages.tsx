@@ -6,6 +6,7 @@ import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsIn
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BrandStudio } from './BrandStudio';
+import { serializeDocumentLayouts } from '../lib/documentLayout';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
@@ -74,6 +75,7 @@ const emptySettings: CompanySettingsInput = {
   brand_client_theme: 'dark',
   brand_header_color: null,
   brand_logo_dark_data_url: null,
+  document_layouts: null,
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -3104,6 +3106,7 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     brand_client_theme: settings.brand_client_theme === 'light' ? 'light' : 'dark',
     brand_header_color: settings.brand_header_color ?? null,
     brand_logo_dark_data_url: settings.brand_logo_dark_data_url ?? null,
+    document_layouts: serializeDocumentLayouts(settings.document_layouts),
   };
 }
 
@@ -3150,6 +3153,8 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     // Leeg (of een half getypte code) = automatisch: de kop volgt de merkkleur.
     brand_header_color: /^#[0-9a-f]{6}$/i.test(input.brand_header_color ?? '') ? input.brand_header_color!.toUpperCase() : null,
     invoice_font_size: Math.max(8, Math.min(14, Number(input.invoice_font_size ?? 10))),
+    // De opmaak gaat gekeurd de deur uit; niets eigens = null (de standaard).
+    document_layouts: serializeDocumentLayouts(input.document_layouts),
   };
 }
 

@@ -11,6 +11,7 @@ import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumen
 import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
 import { splitRefundOverVatGroups } from '../_shared/creditNoteSplit.ts';
 import { invoiceVatNotes, type VatCodeInfo } from '../_shared/invoiceVatNotes.ts';
+import { loadDocumentDesign, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 import {
   amsterdamDate, buildMollieSalesInvoice, mollieAmountCents, mollieDate, mollieEmailBody, mollieFetchPolicy, molliePaymentStatus,
   mollieSalesInvoiceSettled, readMollieSalesInvoice, uuidFromHex, type MollieSalesInvoiceState,
@@ -1111,7 +1112,7 @@ async function createDunningLetterPdfAttachment(input: {
   drawPdfText(page, invoice.number || '-', rightX, y + 6, bold, 12, { align: 'right' });
   y -= 30;
   drawPdfText(page, companyName, 48, y, bold, 13); y -= 16;
-  for (const line of companyAddressLines(company).slice(0, 8)) { drawPdfText(page, line, 48, y, regular, 9, { color: muted }); y -= 12; }
+  for (const line of senderLines(company, companyName)) { drawPdfText(page, line, 48, y, regular, 9, { color: muted }); y -= 12; }
   y -= 12;
 
   drawSectionTitle(page, 'Aan', 48, y, bold, accent, muted); y -= 20;
@@ -3568,75 +3569,35 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   const { invoice, client, project, quote, company, publicUrl, paymentUrl } = input;
   // Art. 35a Wet OB: bij verlegging of een ICP-levering de reden op de factuur
   // én het btw-nummer van de afnemer. Zonder dat nummer geen factuur.
-  const vatNotes = invoiceVatNotes(Array.isArray(invoice.lines) ? invoice.lines : [], await loadVatCodeInfo(invoice.organization_id));
+  const lines = Array.isArray(invoice.lines) ? invoice.lines : [];
+  const vatNotes = invoiceVatNotes(lines, await loadVatCodeInfo(invoice.organization_id));
   if (vatNotes.needsCustomerVatNumber && !String(client.vat_number ?? '').trim()) {
     throw new WorkflowHttpError(`Op deze factuur staat ${vatNotes.reasons.join(' en ')}. Dan moet het btw-nummer van de klant op de factuur staan (art. 35a Wet OB); vul het in bij ${client.name}.`, 422);
   }
-  const pdfDoc = await PDFDocument.create();
-  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const accent = hexToPdfRgb(company?.invoice_accent_color || '#FFD966');
-  const muted = rgb(0.38, 0.38, 0.38);
-  let page = pdfDoc.addPage([595.28, 841.89]);
-  let y = 780;
-  const companyName = company?.trade_name || company?.company_name || 'ResoFly';
-
-  page.drawRectangle({ x: 0, y: 824, width: 595.28, height: 18, color: accent, opacity: 0.85 });
-  drawPdfText(page, 'FACTUUR', 48, y, bold, 26);
-  drawPdfText(page, invoice.number || '-', 547, y + 6, bold, 12, { align: 'right' });
-  y -= 28;
-  drawPdfText(page, companyName, 48, y, bold, 13); y -= 18;
-  for (const line of companyAddressLines(company).slice(0, 8)) { drawPdfText(page, line, 48, y, regular, 9, { color: muted }); y -= 12; }
-  let rightY = 742;
-  drawPdfText(page, `Datum: ${formatDateNl(invoice.date)}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14;
-  drawPdfText(page, `Vervaldatum: ${formatDateNl(invoice.due_date)}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14;
-  if (project?.name) { drawPdfText(page, `Project: ${project.name}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14; }
-  if (quote?.number) drawPdfText(page, `Offerte: ${quote.number}`, 547, rightY, regular, 9, { align: 'right', color: muted });
-
-  y = 620;
-  drawSectionTitle(page, 'Klant', 48, y, bold, accent, muted); y -= 24;
-  for (const line of clientAddressLines(client)) { drawPdfText(page, line, 48, y, line === client.name ? bold : regular, 10); y -= 14; }
-  // Tabelstart dynamisch: een klant met volledig adres + btw-nummer telt tot 8
-  // regels, die anders over de vaste tabelkop (y=500) zouden lopen.
-  y = Math.min(500, y - 10);
-  drawTableHeader(page, y, bold, accent, muted); y -= 28;
-  const lines = Array.isArray(invoice.lines) ? invoice.lines : [];
-  for (const line of lines) {
-    if (y < 155) { drawPdfFooter(page, regular, company); page = pdfDoc.addPage([595.28, 841.89]); y = 780; drawTableHeader(page, y, bold, accent, muted); y -= 28; }
-    y -= drawLine(page, line, y, regular, bold, muted);
-  }
-  const totals = calculateTotals(invoice.lines);
-  if (y < 230) { drawPdfFooter(page, regular, company); page = pdfDoc.addPage([595.28, 841.89]); y = 760; }
-  y -= 10;
-  drawPdfText(page, 'Subtotaal', 365, y, regular, 10); drawPdfText(page, formatEuro(totals.subtotal), 547, y, regular, 10, { align: 'right' }); y -= 18;
-  if (totals.vatBreakdown.length > 0) {
-    // Per tarief de grondslag én het btw-bedrag (art. 35a lid 1 Wet OB).
-    for (const row of totals.vatBreakdown) {
-      drawPdfText(page, `BTW ${row.rate}% over ${formatEuro(row.base)}`, 365, y, regular, 9); drawPdfText(page, formatEuro(row.vat), 547, y, regular, 10, { align: 'right' }); y -= 18;
-    }
-    y -= 4;
-  } else {
-    drawPdfText(page, 'BTW', 365, y, regular, 10); drawPdfText(page, formatEuro(totals.vat), 547, y, regular, 10, { align: 'right' }); y -= 22;
-  }
-  page.drawLine({ start: { x: 365, y: y + 12 }, end: { x: 547, y: y + 12 }, thickness: 0.8, color: accent });
-  drawPdfText(page, 'Totaal', 365, y, bold, 13); drawPdfText(page, formatEuro(totals.total), 547, y, bold, 13, { align: 'right' });
-  if (company?.iban) { y -= 30; drawPdfText(page, `Betalen op IBAN: ${company.iban}`, 365, y, regular, 9, { color: muted }); }
-  if (vatNotes.notes.length > 0) {
-    if (y < 150) { drawPdfFooter(page, regular, company); page = pdfDoc.addPage([595.28, 841.89]); y = 780; }
-    y -= 26;
-    y = drawVatNotes(page, vatNotes.notes, y, regular, muted);
-  }
-  if (invoice.notes) { y -= 42; drawSectionTitle(page, 'Notities', 48, y, bold, accent, muted); y -= 24; y = drawWrappedPdfText(page, invoice.notes, 48, y, 310, regular, 9, 12, muted); }
+  // Getekend met de opmaak, het logo en het briefpapier van de organisatie,
+  // met dezelfde code als het voorbeeld in de app (_shared/documentLayout.ts).
+  // Tot november 2026 stond hier een eigen vaste opmaak: zonder logo en
+  // briefpapier, en bij een merknaam plus volledig adres vielen KvK en
+  // btw-nummer onderaan de afzender weg.
+  const design = await loadDocumentDesign(supabaseAdmin, invoice.organization_id);
   // Zonder publieke link (een e-factuur die vóór het versturen wordt
   // gedownload) is er niets online te bekijken: dan geen linkregel.
   const onlineUrl = paymentUrl || publicUrl;
-  if (onlineUrl) {
-    y = Math.max(94, y - 28);
-    drawPdfText(page, paymentUrl ? 'Bekijk en betaal deze factuur online:' : 'Bekijk deze factuur online:', 48, y, bold, 9, { color: muted }); y -= 13;
-    drawWrappedPdfText(page, onlineUrl, 48, y, 500, regular, 8, 11, muted);
-  }
-  drawPdfFooter(page, regular, company);
-  const bytes = await pdfDoc.save();
+  const bytes = await renderSalesDocumentPdf({
+    kind: 'invoice',
+    design,
+    company,
+    client,
+    number: invoice.number || invoice.id,
+    date: invoice.date,
+    secondDate: invoice.due_date,
+    lines,
+    vatNotes: vatNotes.notes,
+    notes: invoice.notes,
+    projectName: project?.name ?? null,
+    quoteNumber: quote?.number ?? null,
+    onlineLink: onlineUrl ? { label: paymentUrl ? 'Bekijk en betaal deze factuur online:' : 'Bekijk deze factuur online:', url: onlineUrl } : null,
+  });
   const sha256 = await sha256HexBytes(bytes);
   const fileName = `factuur-${sanitizeFileName(invoice.number || invoice.id)}.pdf`;
   return { fileName, mimeType: 'application/pdf', bytes, base64: bytesToBase64(bytes), sizeBytes: bytes.byteLength, sha256 };
@@ -3659,7 +3620,7 @@ async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; 
   drawPdfText(page, creditNoteNumber || '-', 547, y + 6, bold, 12, { align: 'right' });
   y -= 28;
   drawPdfText(page, companyName, 48, y, bold, 13); y -= 18;
-  for (const line of companyAddressLines(company).slice(0, 8)) { drawPdfText(page, line, 48, y, regular, 9, { color: muted }); y -= 12; }
+  for (const line of senderLines(company, companyName)) { drawPdfText(page, line, 48, y, regular, 9, { color: muted }); y -= 12; }
   let rightY = 742;
   drawPdfText(page, `Datum: ${formatDateNl(date)}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14;
   drawPdfText(page, `Creditering van factuur: ${input.invoiceReference || invoice.number}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14;
@@ -3708,7 +3669,22 @@ function drawWrappedPdfText(page: PDFPage, text: string, x: number, y: number, m
 function wrapPdfText(text: string, font: PDFFont, size: number, maxWidth: number): string[] { const source = normalizePdfText(text); if (!source) return []; const words = source.split(' '); const lines: string[] = []; let current = ''; for (const word of words) { const chunks = font.widthOfTextAtSize(word, size) > maxWidth ? splitLongPdfWord(word, font, size, maxWidth) : [word]; for (const chunk of chunks) { const candidate = current ? `${current} ${chunk}` : chunk; if (font.widthOfTextAtSize(candidate, size) <= maxWidth) current = candidate; else { if (current) lines.push(current); current = chunk; } } } if (current) lines.push(current); return lines; }
 function splitLongPdfWord(word: string, font: PDFFont, size: number, maxWidth: number): string[] { const chunks: string[] = []; let current = ''; for (const char of word) { const candidate = current + char; if (current && font.widthOfTextAtSize(candidate, size) > maxWidth) { chunks.push(current); current = char; } else current = candidate; } if (current) chunks.push(current); return chunks; }
 function normalizePdfText(value: unknown): string { return String(value ?? '').normalize('NFKC').replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/[\u2013\u2014\u2212]/g, '-').replace(/\u2026/g, '...').replace(/\u2022/g, '-').replace(/€/g, 'EUR').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').split('').filter((char) => { const code = char.charCodeAt(0); return (code >= 32 && code <= 126) || (code >= 160 && code <= 255); }).join('').trim(); }
-function companyAddressLines(company: CompanySettingsRow | null): string[] { if (!company) return ['ResoFly']; const cityLine = [company.postal_code, company.city].filter(Boolean).join(' '); return [company.company_name, company.trade_name && company.trade_name !== company.company_name ? company.trade_name : '', company.address_line1, company.address_line2, cityLine, company.country, company.email ? `E-mail: ${company.email}` : '', company.phone ? `Tel: ${company.phone}` : '', company.website ? `Web: ${company.website}` : '', company.kvk_number ? `KvK: ${company.kvk_number}` : '', company.vat_number ? `BTW: ${company.vat_number}` : '', company.iban ? `IBAN: ${company.iban}` : ''].filter((value) => normalizePdfText(value).length > 0).map(normalizePdfText); }
+/**
+ * De afzender onder de vette naam bovenaan de creditfactuur en de aanmaning:
+ * de juridische naam als die anders is dan de getoonde naam, het adres, en
+ * contact en registratie elk op één regel. Vroeger herhaalde dit blok de naam
+ * (soms twee keer) en sneed `slice(0, 8)` daarna KvK, btw-nummer en IBAN eraf,
+ * terwijl het KvK-nummer op elk zakelijk stuk hoort.
+ */
+function senderLines(company: CompanySettingsRow | null, shownName: string): string[] {
+  if (!company) return [];
+  const cityLine = [company.postal_code, company.city].filter(Boolean).join(' ');
+  const contact = [company.email, company.phone, company.website].filter(Boolean).join(' · ');
+  const registration = [company.kvk_number ? `KvK ${company.kvk_number}` : '', company.vat_number ? `BTW ${company.vat_number}` : '', company.iban ? `IBAN ${company.iban}` : ''].filter(Boolean).join(' · ');
+  return [company.company_name && company.company_name !== shownName ? company.company_name : '', company.address_line1 ?? '', company.address_line2 ?? '', cityLine, company.country ?? '', contact, registration]
+    .filter((value) => normalizePdfText(value).length > 0)
+    .map(normalizePdfText);
+}
 function clientAddressLines(client: ClientRow): string[] { const cityLine = [client.postal_code, client.city].filter(Boolean).join(' '); return [client.name, client.contact_name ? `T.a.v. ${client.contact_name}` : '', client.address_line1 ?? '', client.address_line2 ?? '', cityLine, client.country ?? '', client.vat_number ? `BTW: ${client.vat_number}` : '', client.email ? `E-mail: ${client.email}` : ''].filter((value) => normalizePdfText(value).length > 0).map(normalizePdfText); }
 function toCents(euros: number): number {
   if (!Number.isFinite(euros)) return 0;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Client, CompanySettings, Invoice, Quote } from '../types';
-import { createFinancePDFBlob } from '../lib/pdf';
+import { createFinancePDFBlob, type PdfOptions } from '../lib/pdf';
 
 /**
  * De PDF zoals hij verstuurd is — bij een factuur de opgeslagen snapshot, die
@@ -9,16 +9,22 @@ import { createFinancePDFBlob } from '../lib/pdf';
  */
 export type SentPdfSource = { key: string; label: string; load: () => Promise<Blob> };
 
-// Herbruikbare live PDF-voorbeeldweergave. Genereert (gedebounced) de echte PDF via de
-// gedeelde generator zodat het voorbeeld 1:1 gelijk is aan wat de klant ontvangt — inclusief
-// bedrijfstemplate/achtergrond, accentkleur en lettergrootte. Wordt gebruikt door zowel de
-// offerte-/factuur-editor als de detailweergave van verzonden documenten. Is het document al
-// verstuurd (`sentPdf`), dan toont hij standaard díe PDF, met een knop naar het voorbeeld.
+// Herbruikbare live PDF-voorbeeldweergave. Genereert (gedebounced) de echte PDF met
+// dezelfde opmaakmodule als de verstuurde PDF (src/lib/documentLayout.ts), dus met de
+// eigen opmaak, het logo, het briefpapier, de merkkleur en de lettergrootte. Daarvoor
+// krijgt hij ook de btw-codes, de projectnaam en het offertenummer mee: die staan op de
+// verstuurde PDF, en zonder liep het voorbeeld daarop achter. Wordt gebruikt door zowel
+// de offerte-/factuur-editor als de detailweergave van verzonden documenten. Is het
+// document al verstuurd (`sentPdf`), dan toont hij standaard díe PDF, met een knop naar
+// het voorbeeld.
 export function FinanceDocPreview({
   doc,
   kind,
   client,
   company,
+  vatCodes,
+  projectName,
+  quoteNumber,
   title,
   sentPdf,
 }: {
@@ -26,6 +32,9 @@ export function FinanceDocPreview({
   kind: 'quote' | 'invoice';
   client: Client | null;
   company: CompanySettings | null;
+  vatCodes?: PdfOptions['vatCodes'];
+  projectName?: string | null;
+  quoteNumber?: string | null;
   title?: string;
   sentPdf?: SentPdfSource | null;
 }) {
@@ -49,7 +58,7 @@ export function FinanceDocPreview({
     setStatus('rendering');
     // Korte debounce: bij snel typen in de editor wordt alleen het laatste resultaat getoond.
     const handle = setTimeout(() => {
-      createFinancePDFBlob(doc, kind, client, { company })
+      createFinancePDFBlob(doc, kind, client, { company, vatCodes, projectName, quoteNumber })
         .then(blob => {
           if (cancelled) return;
           setUrl(URL.createObjectURL(blob));
@@ -63,7 +72,7 @@ export function FinanceDocPreview({
         });
     }, 350);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [doc, kind, client, company, mode]);
+  }, [doc, kind, client, company, vatCodes, projectName, quoteNumber, mode]);
 
   // De verzonden PDF één keer per sleutel ophalen; terugschakelen haalt hem niet opnieuw op.
   useEffect(() => {

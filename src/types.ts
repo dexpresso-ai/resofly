@@ -1,3 +1,4 @@
+import type { DocumentLayouts } from './lib/documentLayout';
 import type { GalleryLayout } from './lib/galleryLayout';
 import type { ReportDefinition } from './lib/reporting';
 
@@ -3374,6 +3375,10 @@ export interface CompanySettings extends OrgScopedRow {
   /** Lichte versie van het logo voor op een donkere kop, als data-URL (zelfde
    *  eisen als het logo). Ontbreekt vóór migratie 20261015000000. */
   brand_logo_dark_data_url?: string | null;
+  /** Eigen opmaak van offertes en facturen (Instellingen → Documentopmaak);
+   *  null = de standaardopmaak. Altijd lezen via parseDocumentLayouts in
+   *  src/lib/documentLayout.ts. Ontbreekt vóór migratie 20261105100000. */
+  document_layouts?: DocumentLayouts | null;
   /** Eigen Jitsi-server (https://…) voor videovergaderingen; leeg = meet.jit.si.
    *  Optioneel: wordt los opgeslagen (Instellingen → Agenda), niet via het
    *  formulier met bedrijfsgegevens, en ontbreekt vóór migratie 20261014000000. */
