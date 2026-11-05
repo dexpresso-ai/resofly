@@ -129,3 +129,17 @@ een andere migratie met die versie.
 - `npm run test:mobile -- --theme=both`: 324 pagina's gemeten (licht en donker; telefoon, tablet en
   liggend; ook de publieke offerte-, factuur- en contractpagina en het portaal), 0 met problemen.
 - `npm run test:loading`: alle controles geslaagd.
+
+## Uitgerold op staging (2026-11-05)
+
+- Merge `8cef429` op `staging`. Een eerste push gaf bij GitHub "fatal error in commit_refs_rules"
+  (en een 500 op het aanmaken van een pull request); een paar minuten later ging dezelfde push
+  gewoon door.
+- *Deploy Supabase (staging)* run 177: migratie `20261105230000` toegepast, 39 edge functions
+  uitgerold, rooktest geslaagd. Daarin: "schema public voor anon: geen gebruiksrecht".
+- De rooktest meldt `supabase/.temp/postgres-version: 17.6.1.111`: de crash voor ingelogde
+  gebruikers (ook klanten met portaaltoegang, die hebben een gewone login) is er nog tot de
+  upgrade. Uitrolstap 2 hierboven blijft dus de eerste actie.
+- *Frontend checks* run 131 helemaal groen: `deno check` van de edge functions, migraties vanaf nul
+  op een lege database, typecheck, unittests, de mobiele lay-outtest en laden per module.
+- Nog open voor de eigenaar: uitrolstappen 2 tot en met 5.
