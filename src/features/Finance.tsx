@@ -10,8 +10,9 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF, financePdfOptions } from '../lib/pdf';
 import { safeCheckoutUrl } from '../lib/safeUrl';
-import { clientEInvoiceChannel, invoiceRecipientFor, latestEInvoiceDelivery, mollieNeedsSync, mollieStatusLabel, peppolStatusLabel } from '../lib/eInvoicing';
+import { clientEInvoiceChannel, invoiceRecipientFor, latestEInvoiceDelivery, mollieCollecting, mollieNeedsSync, molliePartialNote, mollieStatusLabel, peppolStatusLabel } from '../lib/eInvoicing';
 import { loadInvoicePdfSnapshot, loadMollieInvoicePdf } from '../lib/repository';
+import { parseDutchAmount, parseDutchAmountCents } from '../lib/money';
 
 export type RefundInput = { amountCents: number; reason: string; createCreditNote: boolean; idempotencyKey: string; kind: 'manual' | 'mollie' };
 
@@ -413,16 +414,8 @@ function getFinanceStatusLabel<T extends Quote | Invoice>(kind: FinanceKind, doc
 }
 
 function parseAmountFilter(value: string): number | null {
-  const compact = value.replace(/\s/g, '').replace(/[€]/g, '');
-  const normalized = compact.includes(',') && compact.includes('.')
-    ? compact.replace(/\./g, '').replace(',', '.')
-    : compact.includes(',')
-      ? compact.replace(',', '.')
-      : compact;
-  const safeValue = normalized.replace(/[^0-9.-]/g, '');
-  if (!safeValue) return null;
-  const parsed = Number(safeValue);
-  return Number.isFinite(parsed) ? parsed : null;
+  // "1.000" is duizend, niet 1 (zie parseDutchAmount).
+  return parseDutchAmount(value);
 }
 
 function normalizeDateInput(value: string | null | undefined): string {
@@ -932,7 +925,7 @@ function InvoiceDetailModal({
       <section className="quote-detail-section">
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} eInvoiceDelivery={eInvoiceDelivery} upcomingEInvoiceTo={eInvoiceClient && !invoiceHasStoredPdf(invoice) ? invoiceRecipientFor(client) : null} upcomingVia={eInvoiceChannel} />
-        {mollieDelivery && <MollieEInvoicePanel invoice={invoice} delivery={mollieDelivery} onSync={onSyncMollie} onDownloadPdf={onDownloadMolliePdf} />}
+        {mollieDelivery && <MollieEInvoicePanel invoice={invoice} delivery={mollieDelivery} partialNote={molliePartialNote(events)} onSync={onSyncMollie} onDownloadPdf={onDownloadMolliePdf} />}
         <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} onCredit={onCredit} />
         {showRefund && onRefund && <RefundModal invoice={invoice} mollieRefundable={mollieRefundable} inFlightCents={inFlightCents} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
       </section>
@@ -1209,9 +1202,12 @@ function EInvoicePill({ delivery, upcoming, upcomingVia = null }: { delivery: In
  * Een via Mollie verstuurde factuur: Mollies nummer, de Peppol-aflevering, de
  * betaallink van Mollie en wanneer ResoFly voor het laatst bij Mollie keek.
  */
-function MollieEInvoicePanel({ invoice, delivery, onSync, onDownloadPdf }: { invoice: Invoice; delivery: InvoiceEmailDelivery; onSync?: (invoice: Invoice, options?: { silent?: boolean }) => Promise<void>; onDownloadPdf?: (invoice: Invoice) => void }) {
+function MollieEInvoicePanel({ invoice, delivery, partialNote = null, onSync, onDownloadPdf }: { invoice: Invoice; delivery: InvoiceEmailDelivery; partialNote?: string | null; onSync?: (invoice: Invoice, options?: { silent?: boolean }) => Promise<void>; onDownloadPdf?: (invoice: Invoice) => void }) {
   const [syncing, setSyncing] = useState(false);
-  const paymentHref = safeCheckoutUrl(delivery.external_payment_url, window.location.origin);
+  // Alleen zolang Mollie hem int: daarna (betaald, geannuleerd) werkt de link niet
+  // meer, en na een deelbetaling vraagt hij te veel — dan geen knop ernaartoe.
+  const collecting = mollieCollecting(delivery.external_status) && !['paid', 'cancelled', 'void', 'refunded', 'written_off'].includes(invoice.status);
+  const paymentHref = collecting && !partialNote ? safeCheckoutUrl(delivery.external_payment_url, window.location.origin) : null;
   const pending = delivery.status === 'queued';
   async function sync() {
     if (!onSync) return;
@@ -1227,6 +1223,8 @@ function MollieEInvoicePanel({ invoice, delivery, onSync, onDownloadPdf }: { inv
     </dl>
     {delivery.e_invoice_status === 'failed' && <p className="mollie-einvoice-note">Mollie kon de e-factuur (nog) niet over Peppol afleveren en probeert het zelf opnieuw. Blijft het mislukken, controleer dan het KVK- of btw-nummer van de klant: daarmee moet hij op Peppol staan. De PDF-kopie per mail is wel verstuurd.</p>}
     {pending && <p className="mollie-einvoice-note">De verzending is niet helemaal afgerond. Ververs om te zien wat Mollie heeft gedaan; ResoFly maakt hem dan af of ruimt hem op.</p>}
+    {collecting && partialNote && <p className="mollie-einvoice-note" role="status">{partialNote}</p>}
+    {collecting && !partialNote && <p className="mollie-einvoice-note">Mollie kent geen deelbetalingen. Betaalt de klant een deel per bank, dan vraagt de link van Mollie nog het hele bedrag; ResoFly stuurt dan in herinneringen en het klantportaal een eigen link voor wat nog openstaat. Is alles binnen, dan zet ResoFly de factuur bij Mollie op betaald.</p>}
     <div className="mollie-einvoice-actions">
       {onSync && <Button onClick={() => void sync()} disabled={syncing}><RefreshCw size={14}/> {syncing ? 'Bezig…' : 'Ververs bij Mollie'}</Button>}
       {onDownloadPdf && !pending && <Button onClick={() => onDownloadPdf(invoice)}><Download size={14}/> PDF van Mollie</Button>}
@@ -1385,7 +1383,7 @@ function RefundModal({ invoice, mollieRefundable, inFlightCents = 0, onClose, on
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const amountCents = Math.round(Number(String(amountEuro).replace(',', '.')) * 100);
+  const amountCents = parseDutchAmountCents(String(amountEuro)) ?? NaN;
   const amountValid = Number.isFinite(amountCents) && amountCents > 0 && amountCents <= remainingCents;
   const isMollie = method === 'mollie';
 

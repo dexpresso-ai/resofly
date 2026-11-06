@@ -36,6 +36,7 @@ import { TransferMessageBlock } from '../components/TransfersPanel';
 import { loadTransfersForEmails } from '../lib/transfers-api';
 import { transferRecipientOptions } from '../lib/transfers';
 import { ContractStatusBadge } from './Contracts';
+import { portalLoginPath, usePortalLoginKey } from '../lib/portalAddress';
 
 // Vaste kolommen voor de bulk CSV-import van klanten. Het klantnummer ontbreekt
 // bewust: dat wordt server-side atomair toegekend (createClientWithServerCode).
@@ -476,6 +477,9 @@ export function ClientDetailPage({
   canWriteTickets: boolean;
 }) {
   const projects = data.projects.filter(project => project.client_id === client.id);
+  // Het eigen inlogadres van het portaal: daar staat het inlogscherm meteen in
+  // de huisstijl. Zonder (nog) dat adres het algemene, /portal.
+  const { key: portalLoginKey } = usePortalLoginKey(organizationId);
   // Tickets van deze klant, laatste activiteit (ticket of notitie) bovenaan.
   // Afgehandeld gaat naar het archief onderaan het tabblad, net als op de
   // ticketpagina: anders bleef hier alles staan wat al lang klaar was.
@@ -707,7 +711,7 @@ export function ClientDetailPage({
             <div><dt>Aangemaakt</dt><dd>{dateNL(client.created_at)}</dd></div>
             <div><dt>Bijgewerkt</dt><dd>{dateNL(client.updated_at)}</dd></div>
             <div><dt>Klantportaal</dt><dd>{client.email
-              ? <a className="client-portal-access-link" href="/portal" target="_blank" rel="noopener noreferrer">Inloggen via /portal</a>
+              ? <a className="client-portal-access-link" href={portalLoginPath(portalLoginKey)} target="_blank" rel="noopener noreferrer">Inloggen via {portalLoginPath(portalLoginKey)}</a>
               : <span className="client-portal-access-hint">E-mailadres nodig om in te loggen</span>}</dd></div>
           </dl>
           {client.notes && <p className="client-inline-notes">{client.notes}</p>}

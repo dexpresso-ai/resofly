@@ -355,6 +355,31 @@
 .portal.boot{color:var(--hdr-ink)}
 .portal.boot .portal-boot{color:var(--hdr-ink-2)}
 
+/* De kleuren die de leverancier voor het inlogscherm kiest (2026-11-05).
+   loginThemeVars() in src/lib/branding.ts zet ze inline op dit <main> en
+   rekent de tekst erop uit; hier alleen waar ze landen.
+   • De grond: het hele scherm in de achtergrondkleur. In het lichte werkvlak
+     won `:root[data-theme="light"] .login` (globals.css, bedoeld voor het
+     inlogscherm van de werkruimte) en werd de onderkant van het scherm licht,
+     onder een vlak dat naar onderen vervaagt. html:root weegt zwaarder.
+   • De kaart: de tekst in de kleur van de kaart, niet die van de pagina (een
+     kop erft anders de lichte tekst van een donker werkvlak), en het
+     invoerveld in het kleurschema van de kaart: anders tekent de browser een
+     donker invulveld op een lichte kaart.
+   • De knop krijgt alleen een rand als hij zelf te weinig afsteekt tegen de
+     kaart (--login-btn-edge, 3 : 1); verder blijft hij zoals hij was. */
+html:root .portal.login,
+html:root .portal.boot{background:var(--hdr-mid)}
+.portal.login .login-card{color:var(--ink);color-scheme:var(--login-card-scheme,normal)}
+.portal.login .login-card .form-input::placeholder{color:var(--login-placeholder,var(--ink-3));opacity:1}
+.portal.login .btn-primary,
+.portal.login .btn-primary:hover:not(:disabled){border-color:var(--login-btn-edge,transparent)}
+/* Dezelfde rand voor het tegeltje met de initiaal en het stipje voor de regel
+   boven de titel: ook die hebben de knopkleur, en een witte tegel op een witte
+   kaart was alleen nog een losse letter. */
+.portal.login .brand-tile{box-shadow:inset 0 0 0 1px var(--login-btn-edge,transparent),inset 0 1px 0 rgba(255,255,255,.45),0 8px 20px -8px rgba(var(--accent-rgb),.6)}
+.portal.login .login-eyebrow::before{background:var(--login-btn-edge,var(--accent))}
+
 /* ── 7 · Telefoon ────────────────────────────────────────────────────────── */
 @media (max-width:760px){
   .portal-hero{padding:10px 12px 0;gap:12px}
@@ -540,8 +565,21 @@
   .brand-studio-grid{grid-template-columns:minmax(340px,430px) minmax(0,1fr)}
   .brand-preview-panel{position:sticky;top:12px}
 }
+/* De instellingen in één kolom (je merk, het inlogscherm), zodat het voorbeeld
+   naast allebei blijft staan. */
+.brand-studio-settings{display:grid;gap:18px;min-width:0}
 .brand-card .brand-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
 .brand-card .brand-field{min-width:0}
+/* Het inlogadres: het veld rekt mee, de knoppen ernaast; smal eronder. */
+.brand-address-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.brand-address-row .form-input{flex:1 1 220px;min-width:0;font-size:12.5px}
+/* Een adres moet er letterlijk staan. Het lettertype maakt van een x tussen
+   twee cijfers anders een ×, en dan las "k7x2" als "k7×2": overgetypt is dat
+   een ander adres. */
+.brand-address-row .form-input,
+.brand-preview-chrome span,
+.client-portal-access-link{font-feature-settings:"calt" 0;font-variant-ligatures:none}
+.brand-address-row .btn{display:inline-flex;align-items:center;gap:6px;text-decoration:none}
 /* `.brand-field` staat later in globals.css dan `.check-row` en zette het
    vinkje boven de tekst; hier staat het er weer naast. */
 .brand-card .brand-field.check-row{flex-direction:row;align-items:center}

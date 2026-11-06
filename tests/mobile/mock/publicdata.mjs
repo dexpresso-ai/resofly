@@ -7,6 +7,11 @@ const company = { company_name: 'Studio Lopik B.V.', trade_name: 'Studio Lopik',
 const client = { name: seed.clients[0].name, contact_name: seed.clients[0].contact_name, email: seed.clients[0].email, phone: seed.clients[0].phone };
 const project = { name: seed.projects[0].name, description: seed.projects[0].description, start_date: seed.projects[0].start_date, end_date: seed.projects[0].end_date };
 const branding = { logoDataUrl: null, accentColor: '#FFD966', footerText: 'Studio Lopik · Kerkstraat 12, Lopik', hidePoweredBy: false, companyName: 'Studio Lopik', headingFont: null, bodyFont: null, galleryBg: '#0B0B0B', clientTheme: 'dark' };
+// Het inlogscherm op het eigen adres van de leverancier (/portal/<sleutel>):
+// eigen achtergrond, een witte kaart op een donker werkvlak en een eigen knop,
+// zodat de kleurregel van het inlogscherm (loginTheme) ook hier meetelt.
+export const PORTAL_LOGIN_KEY = 'studio-lopik-k7x2m6qp4r';
+export const portalLoginBranding = { ok: true, branding: { ...branding, loginBackground: '#0F2A4A', loginCard: '#FFFFFF', loginButton: '#E4572E', loginPlain: false } };
 const events = [
   { id: 'e1', event_type: 'sent_to_client', title: 'Verstuurd naar klant', description: 'Per e-mail aan joost@dekorenaar.nl', created_at: iso(day(-3)) },
   { id: 'e2', event_type: 'client_viewed', title: 'Bekeken door klant', description: null, created_at: iso(day(-2)) },

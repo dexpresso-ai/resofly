@@ -190,7 +190,13 @@ async function getInvoice(token: string, options: { mockPaymentId?: string; mark
     // Nul extra queries: optionalCompany() haalt de hele rij al op.
     branding: sanitizeBranding(companyRow),
     events: toPublicTimeline('invoice', events),
-    payments: payments.map(sanitizePayment),
+    // Een betaallink alleen als hij vraagt wat er nu openstaat. De link van een
+    // Mollie-e-factuur verloopt niet en vraagt altijd het hele bedrag (Mollie kent
+    // geen deelbetalingen): na een deelbetaling per bank stond hier "te betalen
+    // € 600" met een knop naar een link van € 1.000.
+    payments: payments.map(sanitizePayment).map((payment) => (
+      openAmountCents !== null && Number(payment.amount_cents) !== openAmountCents ? { ...payment, checkout_url: null } : payment
+    )),
     versions: versions.map(sanitizeVersion),
     mockPaymentWarning,
   };

@@ -7,6 +7,7 @@ import { isMissingColumn, isMissingRelation, NotMigratedError } from './postgres
 import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type InkDocument } from './ink';
 import type { ReportDefinition } from './reporting';
 import type { ModuleAccess } from './permissions';
+import { isPortalLoginKey } from './portalLoginKey';
 import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import type {
   AppData,
@@ -1581,10 +1582,57 @@ export async function saveJitsiServer(organizationId: UUID, jitsiBaseUrl: string
   if (insertError) throw fail(insertError);
 }
 
-/** Kolommen die de nieuwste huisstijlmigratie (20261015000000) toevoegt. */
-const NEWEST_BRANDING_COLUMNS = ['brand_header_color', 'brand_logo_dark_data_url'] as const;
-/** De eigen opmaak van offertes en facturen (migratie 20261105100000). */
-const DOCUMENT_LAYOUTS_COLUMN = 'document_layouts';
+/** Waarom er (nog) geen eigen inlogadres is: geen rechten, migratie, of iets anders. */
+export type PortalLoginKeyResult = { key: string | null; unavailable: 'rechten' | 'migratie' | 'fout' | null };
+
+/**
+ * Het eigen inlogadres van het klantportaal (/portal/<sleutel>, migratie
+ * 20261106080000). De database maakt het aan als het er nog niet is. Alleen
+ * wie Klanten mag lezen krijgt het. Zonder adres toont de app het algemene,
+ * /portal, en zegt hij waarom: "de database-update moet nog draaien" klopte
+ * niet voor een teamlid dat gewoon geen leesrecht op Klanten heeft.
+ */
+export async function fetchPortalLoginKey(organizationId: UUID): Promise<PortalLoginKeyResult> {
+  const { data, error } = await supabase.rpc('ensure_portal_login_key', { p_organization_id: organizationId });
+  if (error) {
+    // 42501: de functie zelf weigert (geen leesrecht op Klanten). PGRST202 of
+    // 42883: de functie bestaat hier nog niet.
+    if (error.code === '42501') return { key: null, unavailable: 'rechten' };
+    if (error.code === 'PGRST202' || error.code === '42883') return { key: null, unavailable: 'migratie' };
+    return { key: null, unavailable: 'fout' };
+  }
+  return isPortalLoginKey(data) ? { key: data, unavailable: null } : { key: null, unavailable: 'fout' };
+}
+
+/**
+ * Kolommen die later bij company_settings kwamen, per migratie. De app wordt
+ * soms eerder uitgerold dan de database; dan mag een ontbrekende kolom het
+ * opslaan van al het andere niet tegenhouden. Alleen als iemand die nieuwe
+ * velden echt invulde, zeggen we dat ze nog niet kunnen.
+ */
+const filled = (value: unknown) => value != null && value !== '';
+const LATE_SETTINGS_COLUMNS: Array<{ columns: readonly string[]; isSet: (row: Record<string, unknown>) => boolean; message: string }> = [
+  {
+    // Kopkleur en lichte logoversie (20261015000000).
+    columns: ['brand_header_color', 'brand_logo_dark_data_url'],
+    isSet: row => filled(row.brand_header_color) || filled(row.brand_logo_dark_data_url),
+    message: 'De kopkleur en de lichte versie van je logo kunnen in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de kopkleur op Automatisch en haal de lichte versie weg om de rest op te slaan.',
+  },
+  {
+    // De eigen opmaak van offertes en facturen (20261105100000).
+    columns: ['document_layouts'],
+    isSet: row => row.document_layouts != null,
+    message: 'Je eigen opmaak van offertes en facturen kan in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de opmaak terug op de standaard om de rest op te slaan.',
+  },
+  {
+    // De kleuren van het inlogscherm (20261106080000). "Effen" telt alleen als
+    // hij aan staat: uit is de standaard, en die stuurt het formulier altijd mee.
+    columns: ['brand_login_bg_color', 'brand_login_card_color', 'brand_login_button_color', 'brand_login_plain'],
+    isSet: row => filled(row.brand_login_bg_color) || filled(row.brand_login_card_color)
+      || filled(row.brand_login_button_color) || row.brand_login_plain === true,
+    message: 'De kleuren van je inlogscherm kunnen in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet achtergrond, kaart en knop op Automatisch en de achtergrond niet op effen om de rest op te slaan.',
+  },
+];
 
 export async function upsertCompanySettings(organizationId: UUID, values: CompanySettingsInput): Promise<CompanySettings> {
   const createdBy = await currentUserId();
@@ -1595,25 +1643,15 @@ export async function upsertCompanySettings(organizationId: UUID, values: Compan
     .single();
   const row = sanitizeMutationValues(values as unknown as Record<string, unknown>);
   let { data, error } = await write(row);
-  // Staat een migratie met een nieuwe kolom hier nog niet (de app wordt soms
-  // eerder uitgerold dan de database), dan mag dat het opslaan van al het
-  // andere niet tegenhouden. Alleen als iemand die nieuwe velden echt invulde,
-  // zeggen we dat ze nog niet kunnen. Twee rondes: elke ronde kan PostgREST
-  // maar één ontbrekende kolom noemen.
-  for (let attempt = 0; error && attempt < 2; attempt++) {
-    const missingBranding = NEWEST_BRANDING_COLUMNS.filter(column => isMissingColumn(error, column));
-    const missingLayouts = isMissingColumn(error, DOCUMENT_LAYOUTS_COLUMN);
-    if (missingBranding.length === 0 && !missingLayouts) break;
-    if (missingBranding.length > 0 && NEWEST_BRANDING_COLUMNS.some(column => row[column] != null && row[column] !== '')) {
-      throw new NotMigratedError('De kopkleur en de lichte versie van je logo kunnen in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de kopkleur op Automatisch en haal de lichte versie weg om de rest op te slaan.');
-    }
-    if (missingLayouts && row[DOCUMENT_LAYOUTS_COLUMN] != null) {
-      throw new NotMigratedError('Je eigen opmaak van offertes en facturen kan in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de opmaak terug op de standaard om de rest op te slaan.');
-    }
-    // Alleen weglaten wat echt ontbreekt: een ingevulde opmaak mag niet stil
-    // verdwijnen omdat de kopkleur-migratie nog moet.
-    if (missingBranding.length > 0) for (const column of NEWEST_BRANDING_COLUMNS) delete row[column];
-    if (missingLayouts) delete row[DOCUMENT_LAYOUTS_COLUMN];
+  // Elke ronde kan PostgREST maar één ontbrekende kolom noemen; per ronde valt
+  // dus hooguit één groep weg. Alleen weglaten wat echt ontbreekt: een
+  // ingevulde opmaak mag niet stil verdwijnen omdat de kopkleur-migratie nog moet.
+  for (let attempt = 0; error && attempt < LATE_SETTINGS_COLUMNS.length; attempt++) {
+    const missing = LATE_SETTINGS_COLUMNS.filter(group => group.columns.some(column => isMissingColumn(error, column)));
+    if (missing.length === 0) break;
+    const blocking = missing.find(group => group.isSet(row));
+    if (blocking) throw new NotMigratedError(blocking.message);
+    for (const group of missing) for (const column of group.columns) delete row[column];
     ({ data, error } = await write(row));
   }
   if (error) throw error;
@@ -2071,7 +2109,16 @@ export async function finalizeVatReturn(
  */
 export async function closeVatPeriod(
   organizationId: UUID,
-  input: { periodType: 'month' | 'quarter'; year: number; periodIndex: number; from: string; to: string },
+  input: {
+    periodType: 'month' | 'quarter'; year: number; periodIndex: number; from: string; to: string;
+    /**
+     * Het saldo (hele euro's, in centen) dat de gebruiker zag en bevestigde.
+     * Rekent de database bij het afsluiten iets anders uit (er kwam intussen
+     * een boeking bij), dan sluit er niets. Zonder dit ging de periode voorgoed
+     * dicht op een ander bedrag dan bevestigd.
+     */
+    expectedSaldoCents?: number | null;
+  },
 ): Promise<VatReturn> {
   const { data, error } = await supabase.rpc('close_vat_period', {
     p_organization_id: organizationId,
@@ -2080,6 +2127,7 @@ export async function closeVatPeriod(
     p_period_index: input.periodIndex,
     p_from: input.from,
     p_to: input.to,
+    p_expected_saldo_cents: input.expectedSaldoCents ?? null,
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as VatReturn;
@@ -3009,13 +3057,19 @@ export async function bookAssetAcquisition(organizationId: UUID, assetId: UUID, 
 
 /** Stoot een activum af: boekt boekwaarde af, verwerkt de opbrengst tegen de
  *  tegenrekening en boekt boekwinst/-verlies naar 4950. */
-export async function bookAssetDisposal(organizationId: UUID, assetId: UUID, counterAccountId: UUID, proceedsCents: number, date?: string): Promise<FixedAsset> {
+/**
+ * `vatCode`: btw over de opbrengst (die is exclusief btw). De verkoop van een
+ * bedrijfsmiddel is een belaste levering; zonder code boekte de app geen btw,
+ * en wie het brutobedrag invulde, boekte de btw als boekwinst.
+ */
+export async function bookAssetDisposal(organizationId: UUID, assetId: UUID, counterAccountId: UUID, proceedsCents: number, date?: string, vatCode?: string | null): Promise<FixedAsset> {
   const { data, error } = await supabase.rpc('book_asset_disposal', {
     p_organization_id: organizationId,
     p_asset_id: assetId,
     p_counter_account_id: counterAccountId,
     p_proceeds_cents: proceedsCents,
     p_disposal_date: date ?? null,
+    p_vat_code: vatCode ? vatCode : null,
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as FixedAsset;
@@ -3825,6 +3879,8 @@ export type MollieSalesInvoiceSync = {
   /** De verzending loopt nog; later opnieuw kijken. */
   pending: boolean;
   paymentApplied?: boolean;
+  /** In ResoFly stond niets meer open; ResoFly zette de factuur bij Mollie op betaald. */
+  markedPaidAtMollie?: boolean;
 };
 
 /**

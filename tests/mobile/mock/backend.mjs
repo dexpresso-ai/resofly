@@ -130,6 +130,8 @@ function chatWrite(table, method, url, body) {
 function rpc(fn) {
   switch (fn) {
     case 'ensure_user_default_organization': return null;
+    // Het eigen inlogadres van het portaal (Instellingen → Huisstijl, een klant).
+    case 'ensure_portal_login_key': return pub.PORTAL_LOGIN_KEY;
     case 'organization_license_usage': return [{ organization_id: seed.ids.ORG, licensed_seats: 3, active_members: 2, pending_invitations: 0, used_seats: 2, available_seats: 1, license_status: 'active', billing_exempt: false }];
     case 'organization_billing_overview': return [];
     case 'chat_unread_counts': return seed.chatUnread;
@@ -173,7 +175,7 @@ function edgeFunction(name, body) {
       default: return pub.portalData;
     }
   }
-  if (name === 'portal-login') return { ok: true, known: true };
+  if (name === 'portal-login') return body?.action === 'getBranding' ? (body.key === pub.PORTAL_LOGIN_KEY ? pub.portalLoginBranding : { ok: true, branding: null }) : { ok: true, known: true };
   if (name === 'gerrie-agent') return { ok: true, budget: { remaining_cents: 5000 }, remaining: 5000, tools: [], proposals: [], usage: [] };
   return { ok: true };
 }

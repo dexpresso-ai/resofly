@@ -24,16 +24,14 @@ import {
   type AnnualAccountsPdfResult,
 } from '../services/annualAccountsService';
 import { formatISODate } from '../lib/dates';
+import { parseDutchAmountCents } from '../lib/money';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const today = () => formatISODate(new Date());
 
-/** Euro-invoer naar centen; accepteert zowel komma als punt. */
+/** Euro-invoer naar centen, zoals je het typt: "7.500.000" en "450.000,00" (zie parseDutchAmount). */
 function parseEuro(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const n = Number(trimmed.replace(/\s/g, '').replace(',', '.'));
-  return Number.isFinite(n) ? Math.round(n * 100) : null;
+  return parseDutchAmountCents(value);
 }
 
 const STATUS_LABELS: Record<string, string> = {

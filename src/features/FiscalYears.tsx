@@ -448,7 +448,7 @@ function AppropriationDialog({ row, canDistribute, busy, error, resultLabel, onC
 
           <p className="bk-muted">
             Er komt één boekstuk op de besluitdatum: van {resultLabel} naar 0520 Overige reserves{dividendCents > 0 && ' en 1580 Te betalen dividend'}.
-            De balanstest van art. 2:216 lid 1 BW wordt bij het opslaan gecontroleerd op de balansdatum van dit boekjaar.
+            De balanstest van art. 2:216 lid 1 BW wordt bij het opslaan gecontroleerd op de besluitdatum én op vandaag; de laagste uitkomst telt.
           </p>
 
           {error && <div className="error bk-modal-error">{error}</div>}

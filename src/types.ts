@@ -17,7 +17,9 @@ export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled' | 'void' | 'written_off';
 export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
 export type InvoiceEmailDeliveryStatus = QuoteEmailDeliveryStatus;
-export type InvoiceWorkflowEventType = 'created_from_quote' | 'public_token_created' | 'public_link_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'payment_link_created' | 'payment_open' | 'payment_paid' | 'payment_failed' | 'payment_expired' | 'invoice_version_created' | 'invoice_pdf_attached' | 'locked' | 'expired' | 'cancelled' | 'void' | 'written_off' | 'payment_refunded' | 'credit_note_issued' | 'payment_charged_back' | 'chargeback_reversed' | 'credit_note_emailed' | 'e_invoice_sent' | 'e_invoice_delivered' | 'e_invoice_failed';
+export type InvoiceWorkflowEventType = 'created_from_quote' | 'public_token_created' | 'public_link_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'payment_link_created' | 'payment_open' | 'payment_paid' | 'payment_failed' | 'payment_expired' | 'invoice_version_created' | 'invoice_pdf_attached' | 'locked' | 'expired' | 'cancelled' | 'void' | 'written_off' | 'payment_refunded' | 'credit_note_issued' | 'payment_charged_back' | 'chargeback_reversed' | 'credit_note_emailed' | 'e_invoice_sent' | 'e_invoice_delivered' | 'e_invoice_failed'
+  // Mollie bij een deelbetaling (20261106100000).
+  | 'payment_partial' | 'payment_overpaid' | 'e_invoice_settled' | 'e_invoice_partial';
 export type InvoiceVersionReason = 'sent_to_client' | 'payment_created' | 'paid' | 'manual';
 export type InvoicePaymentStatus = 'creating' | 'open' | 'pending' | 'authorized' | 'paid' | 'failed' | 'expired' | 'canceled' | 'refunded' | 'charged_back';
 export type InvoiceRefundKind = 'manual' | 'mollie';
@@ -2674,6 +2676,11 @@ export interface Supplier extends OrgScopedRow {
   default_vat_code: string | null;
   notes: string | null;
   status: SupplierStatus;
+  /**
+   * Aangemaakt door de factuur-inbox en nog niet door een mens bevestigd. Zolang
+   * dit aan staat, boekt de inbox niets automatisch op deze leverancier.
+   */
+  inbox_unverified?: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -3377,6 +3384,14 @@ export interface CompanySettings extends OrgScopedRow {
   /** Lichte versie van het logo voor op een donkere kop, als data-URL (zelfde
    *  eisen als het logo). Ontbreekt vóór migratie 20261015000000. */
   brand_logo_dark_data_url?: string | null;
+  /** De kleuren van het inlogscherm van het portaal: achtergrond, inlogkaart en
+   *  knop. Leeg = automatisch (kopkleur, werkvlak, merkkleur); zie loginTheme in
+   *  lib/branding.ts. Ontbreken vóór migratie 20261106080000. */
+  brand_login_bg_color?: string | null;
+  brand_login_card_color?: string | null;
+  brand_login_button_color?: string | null;
+  /** Effen achtergrond op het inlogscherm, zonder verloop, gloed en ringen. */
+  brand_login_plain?: boolean;
   /** Eigen opmaak van offertes en facturen (Instellingen → Documentopmaak);
    *  null = de standaardopmaak. Altijd lezen via parseDocumentLayouts in
    *  src/lib/documentLayout.ts. Ontbreekt vóór migratie 20261105100000. */

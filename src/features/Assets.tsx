@@ -53,10 +53,16 @@ function nextAssetNumber(data: AppData, date = new Date()): string {
   return `${prefix}${String(max + 1).padStart(4, '0')}`;
 }
 
-/** Som van de geboekte afschrijving + huidige boekwaarde per activum. */
+/**
+ * Som van de geboekte afschrijving + huidige boekwaarde per activum. Een
+ * afgestoten activum staat niet meer op de balans: boekwaarde 0. De
+ * desinvestering laat de geboekte afschrijvingen staan en zet alleen de
+ * status; zonder deze regel telde de kaart "Huidige boekwaarde" verkochte
+ * activa nog mee (de W&V-pagina deed het al goed).
+ */
 function assetBookValue(asset: FixedAsset, deps: AssetDepreciation[]): { posted: number; bookValue: number } {
   const posted = deps.filter(d => d.status === 'posted').reduce((s, d) => s + d.amount_cents, 0);
-  return { posted, bookValue: asset.acquisition_cost_cents - posted };
+  return { posted, bookValue: asset.status === 'disposed' ? 0 : asset.acquisition_cost_cents - posted };
 }
 
 export function AssetsPage({ data, organizationId, canWrite, onChanged }: PageProps) {
@@ -70,7 +76,8 @@ export function AssetsPage({ data, organizationId, canWrite, onChanged }: PagePr
     return map;
   }, [data.assetDepreciations]);
 
-  const totals = useMemo(() => data.fixedAssets.reduce((acc, a) => {
+  // De kaarten gaan over wat er nu op de balans staat: afgestoten activa niet.
+  const totals = useMemo(() => data.fixedAssets.filter(a => a.status !== 'disposed').reduce((acc, a) => {
     const { posted, bookValue } = assetBookValue(a, depsByAsset.get(a.id) ?? []);
     acc.acquisition += a.acquisition_cost_cents; acc.depreciated += posted; acc.bookValue += bookValue;
     return acc;
@@ -155,6 +162,11 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
   const [counterAccountId, setCounterAccountId] = useState<string>(() => accountId('1100'));
   const [disposalDate, setDisposalDate] = useState<string>(today);
   const [disposalProceedsCents, setDisposalProceedsCents] = useState<number>(0);
+  // Btw over de opbrengst: bij een verkoop standaard 21%, met de KOR geen btw.
+  const [disposalVatCode, setDisposalVatCode] = useState<string>(data.companySettings?.kor_enabled ? '' : 'HOOG');
+  const disposalVatOptions = data.vatCodes.filter(v => v.is_active !== false && (['1a', '1b'].includes(String(v.sales_box ?? '')) || v.kind === 'exempt'));
+  const disposalVat = data.vatCodes.find(v => v.code === disposalVatCode);
+  const disposalVatCents = disposalVat && ['1a', '1b'].includes(String(disposalVat.sales_box ?? '')) ? Math.round(disposalProceedsCents * Number(disposalVat.rate ?? 0) / 100) : 0;
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
 
   const schedule = useMemo(
@@ -204,10 +216,11 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
 
   async function dispose() {
     if (!currentAsset || !counterAccountId) return;
-    if (!confirm(`Activum ${currentAsset.name} afstoten per ${dateNL(disposalDate)}? De boekwaarde wordt afgeboekt en het boekwinst/-verlies (opbrengst − boekwaarde) wordt geboekt op 4950. Dit kan niet ongedaan worden gemaakt (corrigeren via tegenboeking).`)) return;
+    const vatText = disposalVatCents ? ` Er komt ${euroCents(disposalVatCents)} btw op 1510 (de tegenrekening krijgt ${euroCents(disposalProceedsCents + disposalVatCents)}).` : '';
+    if (!confirm(`Activum ${currentAsset.name} afstoten per ${dateNL(disposalDate)}? De boekwaarde wordt afgeboekt en het boekwinst/-verlies (opbrengst − boekwaarde) wordt geboekt op 4950.${vatText} Dit kan niet ongedaan worden gemaakt (corrigeren via tegenboeking).`)) return;
     setBusy(true); setError(null);
     try {
-      const updated = await bookAssetDisposal(organizationId, currentAsset.id, counterAccountId, disposalProceedsCents, disposalDate);
+      const updated = await bookAssetDisposal(organizationId, currentAsset.id, counterAccountId, disposalProceedsCents, disposalDate, disposalProceedsCents > 0 ? disposalVatCode : null);
       setCurrentAsset(updated); onChanged();
     } catch (e) { setError(e instanceof Error ? e.message : 'Desinvestering boeken mislukt'); }
     finally { setBusy(false); }
@@ -335,11 +348,15 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
         <div className="bk-acq bk-dispose">
           <div className="bk-acq-text">
             <strong>Desinvestering / verkoop</strong>
-            <span className="bk-muted"> Boekt de boekwaarde af (credit activarekening, debet cumulatieve afschrijving), verwerkt de opbrengst tegen de tegenrekening, en boekt het verschil als boekwinst/-verlies op 4950.</span>
+            <span className="bk-muted"> Boekt de boekwaarde af (credit activarekening, debet cumulatieve afschrijving), verwerkt de opbrengst tegen de tegenrekening, en boekt het verschil als boekwinst/-verlies op 4950. De opbrengst is exclusief btw: een verkoop is een belaste levering, de btw gaat naar 1510 en in rubriek 1a. Geef je een zaak weg waarop je btw hebt afgetrokken, dan ben je over de waarde btw verschuldigd (art. 3 lid 3 Wet OB); boek dat met een memoriaalpost.</span>
           </div>
           <div className="bk-acq-actions">
             <Input type="date" value={disposalDate} onChange={e => setDisposalDate(e.target.value)} disabled={!canWrite} title="Datum van verkoop/afstoting" />
-            <Input type="number" step="0.01" value={(disposalProceedsCents / 100).toString()} onChange={e => setDisposalProceedsCents(centsFromInput(e.target.value))} disabled={!canWrite} title="Opbrengst (0 bij schenken/schroot)" />
+            <Input type="number" step="0.01" value={(disposalProceedsCents / 100).toString()} onChange={e => setDisposalProceedsCents(centsFromInput(e.target.value))} disabled={!canWrite} title="Opbrengst exclusief btw (0 bij schenken/schroot)" aria-label="Opbrengst exclusief btw" />
+            <Select value={disposalVatCode} onChange={e => setDisposalVatCode(e.target.value)} disabled={!canWrite || disposalProceedsCents <= 0} aria-label="Btw over de opbrengst">
+              <option value="">Geen btw (KOR, schenken)</option>
+              {disposalVatOptions.map(v => <option key={v.code} value={v.code}>{v.code} · {v.label}</option>)}
+            </Select>
             <Select value={counterAccountId} onChange={e => setCounterAccountId(e.target.value)} disabled={!canWrite}>
               <option value="">— tegenrekening opbrengst —</option>
               {creditAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}

@@ -720,6 +720,24 @@ function groupedAmount(cents: number): string {
   return `${grouped},${decimals}`;
 }
 
+/**
+ * Een prijs per stuk: twee decimalen, of drie of vier als de prijs die heeft.
+ * Met altijd twee stond er "1000 × € 0,13" naast een regel van € 125,00,
+ * terwijl de prijs € 0,125 was. De eenheidsprijs op de factuur hoort te kloppen
+ * met het regelbedrag (art. 35a lid 1 onder i Wet OB 1968).
+ */
+export function formatDocUnitPrice(euros: number): string {
+  const value = Number.isFinite(euros) ? euros : 0;
+  const tenThousandths = Math.round(Math.abs(value) * 10000);
+  if (tenThousandths % 100 === 0) return formatDocMoney(value);
+  const digits = tenThousandths % 10 === 0 ? 3 : 4;
+  const scaled = digits === 3 ? tenThousandths / 10 : tenThousandths;
+  const base = 10 ** digits;
+  const whole = Math.floor(scaled / base).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const fraction = (scaled % base).toString().padStart(digits, '0');
+  return `€ ${value < 0 ? '-' : ''}${whole},${fraction}`;
+}
+
 /** "€ 1.234,50", "€ -12,00". De bedragen zijn al afgerond door de aanroeper. */
 export function formatDocMoney(euros: number): string {
   const value = Number.isFinite(euros) ? euros : 0;
@@ -2032,7 +2050,7 @@ function planPass(
     header();
     const amountFor = (line: DocumentLine, key: 'quantity' | 'unitPrice' | 'vatRate' | 'total'): string => {
       if (key === 'quantity') return formatQuantity(line.quantity);
-      if (key === 'unitPrice') return formatDocMoney(line.unitPrice);
+      if (key === 'unitPrice') return formatDocUnitPrice(line.unitPrice);
       if (key === 'vatRate') return formatRate(line.vatRate);
       return formatDocMoney(layout.table.lineTotals === 'excl' ? line.net : line.gross);
     };

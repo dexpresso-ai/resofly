@@ -68,6 +68,10 @@ const emptySettings: CompanySettingsInput = {
   brand_client_theme: 'dark',
   brand_header_color: null,
   brand_logo_dark_data_url: null,
+  brand_login_bg_color: null,
+  brand_login_card_color: null,
+  brand_login_button_color: null,
+  brand_login_plain: false,
   document_layouts: null,
 };
 
@@ -2419,7 +2423,7 @@ export function Settings({
       </div>
       {message && <div className="success">{message}</div>}
       {templateError && <div className="error">{templateError}</div>}
-      <BrandStudio form={form} setForm={setForm} canWrite={canAdminOrganization} />
+      <BrandStudio form={form} setForm={setForm} canWrite={canAdminOrganization} organizationId={organizationId} />
     </div>}
 
     {activeTab === 'documenten' && <div className="settings-tab-panel">
@@ -3048,6 +3052,10 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     brand_client_theme: settings.brand_client_theme === 'light' ? 'light' : 'dark',
     brand_header_color: settings.brand_header_color ?? null,
     brand_logo_dark_data_url: settings.brand_logo_dark_data_url ?? null,
+    brand_login_bg_color: settings.brand_login_bg_color ?? null,
+    brand_login_card_color: settings.brand_login_card_color ?? null,
+    brand_login_button_color: settings.brand_login_button_color ?? null,
+    brand_login_plain: settings.brand_login_plain === true,
     document_layouts: serializeDocumentLayouts(settings.document_layouts),
   };
 }
@@ -3094,10 +3102,21 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     brand_client_theme: input.brand_client_theme === 'light' ? 'light' : 'dark',
     // Leeg (of een half getypte code) = automatisch: de kop volgt de merkkleur.
     brand_header_color: /^#[0-9a-f]{6}$/i.test(input.brand_header_color ?? '') ? input.brand_header_color!.toUpperCase() : null,
+    // Zo ook de kleuren van het inlogscherm; de CHECK laat alleen hex toe.
+    brand_login_bg_color: hexOrNull(input.brand_login_bg_color),
+    brand_login_card_color: hexOrNull(input.brand_login_card_color),
+    brand_login_button_color: hexOrNull(input.brand_login_button_color),
+    brand_login_plain: input.brand_login_plain === true,
     invoice_font_size: Math.max(8, Math.min(14, Number(input.invoice_font_size ?? 10))),
     // De opmaak gaat gekeurd de deur uit; niets eigens = null (de standaard).
     document_layouts: serializeDocumentLayouts(input.document_layouts),
   };
+}
+
+/** Een hexkleur in hoofdletters, of null (automatisch) bij leeg of half getypt. */
+function hexOrNull(value: string | null | undefined): string | null {
+  const trimmed = String(value ?? '').trim();
+  return /^#[0-9a-f]{6}$/i.test(trimmed) ? trimmed.toUpperCase() : null;
 }
 
 function normalizeHex(value: string | null | undefined, fallback: string): string {

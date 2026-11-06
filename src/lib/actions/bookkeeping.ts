@@ -247,14 +247,18 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
 
   // ── Omzetbelasting ────────────────────────────────────────────────────────
   'vat_return.close_period': async (payload, ctx) => {
-    await closeVatPeriod(ctx.organizationId, {
+    // De kaart noemt het saldo van het moment van voorstellen. Dat geven we mee:
+    // is het bij goedkeuren anders (een boeking erbij), dan sluit er niets. De
+    // melding komt uit wat de database echt doorboekte.
+    const closed = await closeVatPeriod(ctx.organizationId, {
       periodType: text(payload, 'period_type') as 'month' | 'quarter',
       year: amount(payload, 'year'),
       periodIndex: amount(payload, 'period_index'),
       from: text(payload, 'from'),
       to: text(payload, 'to'),
+      expectedSaldoCents: amount(payload, 'saldo_cents'),
     });
-    const saldo = amount(payload, 'saldo_cents');
+    const saldo = Number(closed?.rubrieken?.saldo_afgerond ?? amount(payload, 'saldo_cents'));
     return `Btw-periode ${text(payload, 'label')} afgesloten — ${saldo === 0 ? 'nihilaangifte' : `${euroCents(Math.abs(saldo))} ${saldo > 0 ? 'af te dragen' : 'terug te ontvangen'}`} doorgeboekt en de periode is vergrendeld`;
   },
 
@@ -348,6 +352,7 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
       text(payload, 'counter_account_id'),
       amount(payload, 'proceeds_cents'),
       optText(payload, 'date') ?? undefined,
+      optText(payload, 'vat_code'),
     );
     return `Activum "${asset.name}" afgestoten per ${asset.disposal_date ?? text(payload, 'date')} — opbrengst ${euroCents(asset.disposal_proceeds_cents ?? 0)}`;
   },

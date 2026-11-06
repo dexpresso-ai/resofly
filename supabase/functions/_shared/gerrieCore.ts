@@ -117,7 +117,14 @@ interface GerrieContext {
 }
 /** Tokens, en (na de eerste beurt) wat ze kostten per model dat ze verbruikte — zie claudeModels.ts. */
 type Usage = TokenUsage;
-interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number }
+/**
+ * `vat_code` is optioneel maar telt: die maakt een 0%-regel ondubbelzinnig
+ * (verlegd, ICP, export, vrijgesteld) en bepaalt de rubriek en de verplichte
+ * vermelding op de factuur. Zonder code werd een ICP-regel na een wijziging
+ * door Gerrie een kale 0%-regel: geen vermelding, geen btw-id-controle,
+ * rubriek 1e in plaats van 3b, en niet in de ICP-opgaaf.
+ */
+interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number; vat_code?: string }
 interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
 interface QuoteProposal { type: 'quote'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; valid_until: string | null; total_eur: number }
 interface ClientProposal { type: 'client'; name: string; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; status: string }
@@ -1479,6 +1486,7 @@ const TOOL_DEFINITIONS = [
               quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
               unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
               vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
+              vat_code: { type: 'string', description: 'Optioneel: de btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR). Bij 0% hoort er altijd een code bij die zegt waarom.' },
             },
             required: ['description', 'quantity', 'unit_price', 'vat'],
           },
@@ -1506,6 +1514,7 @@ const TOOL_DEFINITIONS = [
               quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
               unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
               vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
+              vat_code: { type: 'string', description: 'Optioneel: de btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR). Bij 0% hoort er altijd een code bij die zegt waarom.' },
             },
             required: ['description', 'quantity', 'unit_price', 'vat'],
           },
@@ -2066,7 +2075,7 @@ const TOOL_DEFINITIONS = [
         id: { type: 'string', description: 'Het exacte id van de factuur (uit list_invoices).' },
         lines: {
           type: 'array', description: 'Optioneel: de VOLLEDIGE nieuwe set factuurregels (vervangt de bestaande).',
-          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
+          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' }, vat_code: { type: 'string', description: 'De btw-code van de regel; neem die van de bestaande regel over.' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
         },
         due_date: { type: 'string', description: 'Optioneel: nieuwe vervaldatum YYYY-MM-DD.' },
         notes: { type: 'string', description: 'Optioneel: nieuwe opmerking.' },
@@ -2083,7 +2092,7 @@ const TOOL_DEFINITIONS = [
         id: { type: 'string', description: 'Het exacte id van de offerte (uit list_quotes).' },
         lines: {
           type: 'array', description: 'Optioneel: de VOLLEDIGE nieuwe set offerteregels (vervangt de bestaande).',
-          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
+          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' }, vat_code: { type: 'string', description: 'De btw-code van de regel; neem die van de bestaande regel over.' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
         },
         valid_until: { type: 'string', description: 'Optioneel: nieuwe geldig-tot-datum YYYY-MM-DD.' },
         notes: { type: 'string', description: 'Optioneel: nieuwe opmerking.' },
@@ -4001,7 +4010,11 @@ function parseProposalLines(input: Record<string, unknown>): { ok: true; lines: 
     if (!description) return { ok: false, error: 'Elke regel heeft een omschrijving nodig.' };
     const quantity = num(raw.quantity);
     if (!(quantity > 0)) return { ok: false, error: `Ongeldig aantal voor "${description}".` };
-    lines.push({ description: description.slice(0, 500), quantity, unit_price: num(raw.unit_price), vat: raw.vat == null ? 21 : num(raw.vat) });
+    const code = typeof raw.vat_code === 'string' ? raw.vat_code.trim().toUpperCase() : '';
+    lines.push({
+      description: description.slice(0, 500), quantity, unit_price: num(raw.unit_price), vat: raw.vat == null ? 21 : num(raw.vat),
+      ...(/^[A-Z0-9_]{1,32}$/.test(code) ? { vat_code: code } : {}),
+    });
   }
   return { ok: true, lines };
 }

@@ -179,7 +179,7 @@ import { GerrieChat, askGerrie } from './components/GerrieChat';
 import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
 import { watchForReturn, type FinishedCall } from './lib/callBridge';
 import { GerrieCommandCenter } from './features/GerrieCommandCenter';
-import type { GerrieActionHandlers, GerrieProposal } from './lib/gerrie-api';
+import type { GerrieActionHandlers, GerrieProposal, GerrieProposalLine } from './lib/gerrie-api';
 import { runRegistryAction } from './lib/actions';
 import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
 import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
@@ -397,17 +397,38 @@ type ProposalEditTarget = { edit: NonNullable<EditMode>; page: Page; projectId?:
  * inkoopfactuur, rapportage — die kennen hun eigen scherm), en een error-object als het
  * voorstel naar een rij verwijst die hier niet (meer) bestaat.
  */
+/**
+ * Regels uit een voorstel van Gerrie, met hun btw-code. Bij een wijziging kent
+ * Gerrie de regels van de factuur niet (hij ziet alleen totalen); een regel
+ * zonder code neemt dan de code over van de bestaande regel met dezelfde
+ * omschrijving, of anders op dezelfde plek, mits het tarief gelijk is. Zonder
+ * dat werd een ICP- of verleggingsregel een kale 0%-regel: geen vermelding op
+ * de factuur, geen controle op het btw-id en de verkeerde rubriek.
+ */
+function proposalLines(lines: GerrieProposalLine[], existing: FinanceLine[] = []): FinanceLine[] {
+  return lines.map((l, index) => {
+    let code = typeof l.vat_code === 'string' && l.vat_code.trim() ? l.vat_code.trim() : '';
+    if (!code) {
+      const sameRate = (x: FinanceLine | undefined) => Boolean(x && x.vat_code && Number(x.vat) === Number(l.vat));
+      const byText = existing.find((x) => sameRate(x) && x.description.trim().toLowerCase() === l.description.trim().toLowerCase());
+      const byPlace = sameRate(existing[index]) ? existing[index] : undefined;
+      code = String((byText ?? byPlace)?.vat_code ?? '');
+    }
+    return { id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat, ...(code ? { vat_code: code } : {}) };
+  });
+}
+
 function editModeForProposal(p: GerrieProposal, data: AppData): ProposalEditTarget | { error: string } | null {
   switch (p.type) {
     case 'invoice':
       return { page: 'invoices', edit: { kind: 'invoice', item: undefined, defaults: {
         client_id: p.client_id, notes: p.notes ?? undefined, due_date: p.due_date ?? undefined,
-        lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
+        lines: proposalLines(p.lines),
       } } };
     case 'quote':
       return { page: 'quotes', edit: { kind: 'quote', item: undefined, defaults: {
         client_id: p.client_id, notes: p.notes ?? undefined, valid_until: p.valid_until ?? undefined,
-        lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
+        lines: proposalLines(p.lines),
       } } };
     case 'client':
       return { page: 'clients', edit: { kind: 'client', item: undefined, defaults: {
@@ -418,7 +439,7 @@ function editModeForProposal(p: GerrieProposal, data: AppData): ProposalEditTarg
       const existing = data.invoices.find((i) => i.id === p.id);
       if (!existing) return { error: 'Factuur niet gevonden.' };
       const merged: Invoice = { ...existing };
-      if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
+      if (p.changes.lines) merged.lines = proposalLines(p.changes.lines, existing.lines);
       if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
       if (p.changes.due_date !== undefined) merged.due_date = p.changes.due_date;
       return { page: 'invoices', edit: { kind: 'invoice', item: merged } };
@@ -427,7 +448,7 @@ function editModeForProposal(p: GerrieProposal, data: AppData): ProposalEditTarg
       const existing = data.quotes.find((q) => q.id === p.id);
       if (!existing) return { error: 'Offerte niet gevonden.' };
       const merged: Quote = { ...existing };
-      if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
+      if (p.changes.lines) merged.lines = proposalLines(p.changes.lines, existing.lines);
       if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
       if (p.changes.valid_until !== undefined) merged.valid_until = p.changes.valid_until;
       return { page: 'quotes', edit: { kind: 'quote', item: merged } };
@@ -2541,6 +2562,7 @@ function App() {
       if (result.recovered === 'completed') alert(`De verzending via Mollie is afgerond${result.mollie?.invoiceNumber ? ` (${result.mollie.invoiceNumber})` : ''}.`);
       else if (result.recovered === 'abandoned') alert('Mollie had deze factuur nog niet uitgegeven; de afgebroken verzending is opgeruimd. Je kunt hem opnieuw versturen.');
       else if (result.pending) alert('De verzending via Mollie loopt nog. Probeer het over een paar minuten opnieuw.');
+      else if (result.markedPaidAtMollie) alert('In ResoFly staat niets meer open op deze factuur. Hij staat nu ook bij Mollie op betaald, zodat Mollie hem niet meer int.');
     } catch (e) {
       if (!options.silent) setError(e instanceof Error ? e.message : 'De stand bij Mollie ophalen mislukt');
       else console.warn('Mollie-stand verversen mislukte', e);
@@ -4604,7 +4626,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <option value="">Geen project</option>{projectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
-        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt.' : 'Status van de factuur.'}>
+        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt. "Betaald" kan pas als er niets meer openstaat: koppel de ontvangst bij de bank of boek een memoriaalpost op Debiteuren.' : 'Status van de factuur.'}>
           <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled || invoiceStatusFixed}>
             {form.status === 'refunded' && <option value="refunded">Terugbetaald</option>}
             <option value="draft">Concept</option>

@@ -7,6 +7,7 @@ import {
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/types.ts';
 import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
+import { loadPortalLoginKey, portalLoginUrl } from '../_shared/portalAddress.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 
 // ============================================================
@@ -262,7 +263,7 @@ async function shareWithOne(input: {
     share = data as ShareRow;
   }
 
-  const url = buildShareUrl(share, token);
+  const url = buildShareUrl(share, token, await portalLoginKeyFor(share));
   let notified = false;
   let notifyError: string | null = null;
   if (input.notify) {
@@ -320,7 +321,7 @@ async function resendNotice(
   }
 
   const context = await resolveItemContext(organizationId, share.item_type, share.item_id).catch(() => null);
-  const url = buildShareUrl(share, token);
+  const url = buildShareUrl(share, token, await portalLoginKeyFor(share));
   const outcome = await sendShareEmail({
     share, url,
     company: await loadCompany(organizationId),
@@ -386,18 +387,25 @@ async function findActiveShare(
   return (data as { id: string } | null) ?? null;
 }
 
+/** Het inlogadres van het portaal, alleen als de ontvanger daar inlogt. */
+async function portalLoginKeyFor(share: ShareRow): Promise<string | null> {
+  if (share.recipient_kind !== 'contact' && share.recipient_kind !== 'client') return null;
+  return loadPortalLoginKey(admin, share.organization_id);
+}
+
 /**
  * Waar de ontvanger het gedeelde item opent:
- *  - contactpersoon → het klantportaal (inloggen met de eigen e-maillink)
+ *  - contactpersoon → het klantportaal, op het eigen inlogadres van de
+ *    organisatie (inloggen met de eigen e-maillink, in de huisstijl)
  *  - collega        → de app zelf
  *  - deellink       → de publieke pagina met de token in de URL
  */
-function buildShareUrl(share: ShareRow, token: string | null): string {
+function buildShareUrl(share: ShareRow, token: string | null, portalLoginKey: string | null): string {
   const base = APP_PUBLIC_URL;
   if (share.recipient_kind === 'link') {
     return token ? `${base}/gedeeld/${encodeURIComponent(token)}` : `${base}/gedeeld`;
   }
-  if (share.recipient_kind === 'contact' || share.recipient_kind === 'client') return `${base}/portal`;
+  if (share.recipient_kind === 'contact' || share.recipient_kind === 'client') return portalLoginUrl(base, portalLoginKey);
   return `${base}/`;
 }
 

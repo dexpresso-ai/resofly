@@ -647,7 +647,7 @@ async function applyCandidate(
       ? 'Niet automatisch geboekt: dit item is ondanks de dubbelmelding klaargezet. Controleer het en boek het zelf.'
       : 'Niet automatisch geboekt: met de hand klaargezet. Controleer het concept en boek het zelf.');
   } else if (settings.auto_book) {
-    const eligible = autoBookEligible({ supplierCreated, supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch, ibanVerified, currency: proposal.currency });
+    const eligible = autoBookEligible({ supplierCreated, supplierUnverified: Boolean(supplier.inbox_unverified), supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch, ibanVerified, currency: proposal.currency });
     if (eligible.ok) {
       const { error: bookError } = await admin.rpc('book_purchase_invoice', {
         p_organization_id: organizationId, p_purchase_invoice_id: purchaseInvoiceId, p_created_by: budgetUserId,
@@ -873,9 +873,12 @@ async function createSupplier(
     iban: s.iban,
     default_expense_account_id: s.default_expense_account_id,
     default_vat_code: s.default_vat_code,
+    // Het IBAN en btw-nummer komen uit dit document; een mens heeft ze nog niet
+    // gezien. Tot die bevestigt, boekt de inbox niets vanzelf op deze leverancier.
+    inbox_unverified: true,
     status: 'active',
     notes: `Automatisch aangemaakt uit een per e-mail ontvangen factuur (${new Date(row.received_at).toLocaleDateString('nl-NL')}${row.sender_email ? `, afzender ${row.sender_email}` : ''}).`,
-  }).select('id, name, vat_number, iban, email, default_expense_account_id, default_vat_code').single();
+  }).select('id, name, vat_number, iban, email, default_expense_account_id, default_vat_code, inbox_unverified').single();
   if (error) throw new HttpError(`Leverancier aanmaken mislukt: ${error.message}`, 500);
   return data as SupplierRow;
 }

@@ -53,6 +53,10 @@ test('automatisch boeken alleen als er niets te kiezen valt', () => {
   const ok = { supplierCreated: false, supplierMatch: 'vat', confidence: 'high' as const, warnings: [], lines: [{ account_id: 'a', amount_cents: 100 }], totals: { total_cents: 121 }, ibanVerified: true };
   assert.deepEqual(autoBookEligible(ok), { ok: true });
   assert.equal(autoBookEligible({ ...ok, supplierCreated: true }).ok, false);
+  // Een leverancier die de inbox eerder aanmaakte, eerst laten bevestigen: anders
+  // vergelijkt "het IBAN klopt" het IBAN uit een ongecontroleerde mail met zichzelf.
+  assert.equal(autoBookEligible({ ...ok, supplierUnverified: true }).ok, false);
+  assert.equal(autoBookEligible({ ...ok, supplierUnverified: false }).ok, true);
   assert.equal(autoBookEligible({ ...ok, supplierMatch: 'name' }).ok, false);
   assert.equal(autoBookEligible({ ...ok, confidence: 'medium' }).ok, false);
   assert.equal(autoBookEligible({ ...ok, warnings: ['totalen wijken af'] }).ok, false);

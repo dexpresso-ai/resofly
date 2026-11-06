@@ -9,8 +9,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  amsterdamDate, buildMollieSalesInvoice, mollieAmountCents, mollieDate, mollieEmailBody, mollieFetchPolicy, molliePaymentStatus,
-  molliePaymentTerm, mollieSalesInvoiceSettled, readMollieSalesInvoice, uuidFromHex, type MollieSalesInvoiceSource,
+  amsterdamDate, buildMollieSalesInvoice, MOLLIE_MARK_PAID_BODY, mollieAmountCents, mollieCheckoutDecision, mollieDate, mollieEmailBody,
+  mollieFetchPolicy, molliePaymentStatus, molliePaymentTerm, mollieSalesInvoicePaidThroughMollie, mollieSalesInvoiceSettled,
+  mollieShouldMarkPaid, mollieStatusIsReversed, readMollieSalesInvoice, uuidFromHex, type MollieSalesInvoiceSource,
 } from './mollieSalesInvoice.ts';
 
 const VAT_KINDS = {
@@ -141,10 +142,69 @@ test('bedragen van Mollie terug naar centen, en zijn antwoord naar wat ResoFly b
   });
   assert.deepEqual(state, {
     id: 'invoice_4Y0eZitmBnQ6IDoMqZQKh', invoiceNumber: 'INV-0000001', status: 'issued', eInvoiceStatus: 'issuing', totalCents: 294488,
+    amountDueCents: null, paymentSources: [],
     issuedAt: '2026-10-11T09:12:44+00:00', dueAt: '2026-10-25', paidAt: null,
     pdfUrl: 'https://api.mollie.com/v2/sales-invoices/invoice_4Y0eZitmBnQ6IDoMqZQKh/pdf', paymentUrl: 'https://www.mollie.com/checkout/select-method/abc',
   });
   assert.equal(readMollieSalesInvoice({ id: 'x', eInvoiceStatus: 'vreemd', _links: { pdfLink: { href: 'http://onveilig' } } }).pdfUrl, null);
+});
+
+test('amountDue en paymentDetails van Mollie: wat nog open staat en hoe hij betaald is', () => {
+  const paid = readMollieSalesInvoice({
+    id: 'invoice_1', status: 'paid', totalAmount: { currency: 'EUR', value: '1000.00' }, amountDue: { currency: 'EUR', value: '0.00' },
+    paymentDetails: [{ source: 'payment', sourceReference: 'tr_abc' }],
+  });
+  assert.equal(paid.amountDueCents, 0);
+  assert.deepEqual(paid.paymentSources, [{ source: 'payment', reference: 'tr_abc' }]);
+  // Een los object (zoals in het verzoek) en een lege bron.
+  assert.deepEqual(readMollieSalesInvoice({ id: 'x', paymentDetails: { source: 'Manual', sourceReference: null } }).paymentSources, [{ source: 'manual', reference: null }]);
+  assert.deepEqual(readMollieSalesInvoice({ id: 'x', paymentDetails: [{ sourceReference: 'tr_1' }, 'onzin'] }).paymentSources, []);
+});
+
+test('alleen een betaling via Mollie telt als ontvangst via Mollie', () => {
+  assert.equal(mollieSalesInvoicePaidThroughMollie({ status: 'paid', paymentSources: [{ source: 'payment', reference: 'tr_1' }] }), true);
+  assert.equal(mollieSalesInvoicePaidThroughMollie({ status: 'paid', paymentSources: [{ source: 'payment-link', reference: 'pl_1' }] }), true);
+  // Buiten Mollie om op betaald gezet (door ResoFly na een bankbetaling, of in het dashboard): niet boeken.
+  assert.equal(mollieSalesInvoicePaidThroughMollie({ status: 'paid', paymentSources: [{ source: 'manual', reference: null }] }), false);
+  // Zegt Mollie niets over de bron, dan het oude gedrag: via Mollie.
+  assert.equal(mollieSalesInvoicePaidThroughMollie({ status: 'paid', paymentSources: [] }), true);
+  assert.equal(mollieSalesInvoicePaidThroughMollie({ status: 'issued', paymentSources: [{ source: 'payment', reference: 'tr_1' }] }), false);
+});
+
+test('de betaallink na een deelbetaling: nooit de link van Mollie voor het hele bedrag', () => {
+  const base = { paymentSources: [], paymentUrl: 'https://www.mollie.com/checkout/select-method/abc' };
+  // Niets betaald: de link van Mollie vraagt precies wat er openstaat.
+  assert.deepEqual(mollieCheckoutDecision({ ...base, status: 'issued', amountDueCents: 100000, openCents: 100000 }), { use: 'mollie', url: base.paymentUrl });
+  assert.deepEqual(mollieCheckoutDecision({ ...base, status: 'overdue', amountDueCents: 100000, openCents: 100000 }), { use: 'mollie', url: base.paymentUrl });
+  // € 400 per bank betaald: Mollie vraagt nog € 1.000, dus een eigen link voor € 600.
+  assert.deepEqual(mollieCheckoutDecision({ ...base, status: 'overdue', amountDueCents: 100000, openCents: 60000 }), { use: 'own', reason: 'partly_settled' });
+  // Bij Mollie loopt een betaling, of hij is daar al betaald: geen tweede link.
+  assert.deepEqual(mollieCheckoutDecision({ ...base, status: 'pending-payment', amountDueCents: 100000, openCents: 60000 }), { use: 'none', reason: 'payment_pending' });
+  assert.deepEqual(mollieCheckoutDecision({ ...base, status: 'paid', paymentSources: [{ source: 'payment', reference: 'tr_1' }], amountDueCents: 0, openCents: 100000 }), { use: 'none', reason: 'paid_at_mollie' });
+  // Buiten Mollie om op betaald gezet, maar in ResoFly staat weer iets open: eigen link.
+  assert.deepEqual(mollieCheckoutDecision({ ...base, status: 'paid', paymentSources: [{ source: 'manual', reference: null }], amountDueCents: 0, openCents: 25000 }), { use: 'own', reason: 'not_collecting' });
+  // Mollie int hem niet meer: eigen link.
+  for (const status of ['cancelled', 'expired', 'failed', 'payment-reversed']) {
+    assert.deepEqual(mollieCheckoutDecision({ ...base, status, amountDueCents: 100000, openCents: 100000 }), { use: 'own', reason: 'not_collecting' }, status);
+  }
+  // Nog niet uitgegeven, geen link, of een status die we niet kennen: niets aanmaken.
+  assert.deepEqual(mollieCheckoutDecision({ ...base, status: 'issuing', amountDueCents: 100000, openCents: 100000 }), { use: 'none', reason: 'not_issued' });
+  assert.deepEqual(mollieCheckoutDecision({ ...base, paymentUrl: null, status: 'issued', amountDueCents: 100000, openCents: 100000 }), { use: 'none', reason: 'not_issued' });
+  assert.deepEqual(mollieCheckoutDecision({ ...base, status: 'iets-nieuws', amountDueCents: 100000, openCents: 100000 }), { use: 'none', reason: 'not_issued' });
+});
+
+test('ResoFly zet de factuur bij Mollie op betaald zodra er niets meer openstaat', () => {
+  assert.equal(mollieShouldMarkPaid({ mollieStatus: 'issued', invoiceStatus: 'paid', openCents: 0 }), true);
+  assert.equal(mollieShouldMarkPaid({ mollieStatus: 'overdue', invoiceStatus: 'overdue', openCents: 0 }), true, 'helemaal gecrediteerd');
+  assert.equal(mollieShouldMarkPaid({ mollieStatus: 'issued', invoiceStatus: 'paid', openCents: -2500 }), true, 'te veel betaald');
+  assert.equal(mollieShouldMarkPaid({ mollieStatus: 'issued', invoiceStatus: 'overdue', openCents: 60000 }), false, 'deelbetaling: Mollie blijft innen');
+  assert.equal(mollieShouldMarkPaid({ mollieStatus: 'pending-payment', invoiceStatus: 'paid', openCents: 0 }), false, 'bij Mollie loopt een betaling');
+  assert.equal(mollieShouldMarkPaid({ mollieStatus: 'paid', invoiceStatus: 'paid', openCents: 0 }), false);
+  assert.equal(mollieShouldMarkPaid({ mollieStatus: 'issued', invoiceStatus: 'written_off', openCents: 0 }), false, 'afgeboekt: alsnog betalen mag');
+  // Niet in het grootboek: dan telt de status.
+  assert.equal(mollieShouldMarkPaid({ mollieStatus: 'issued', invoiceStatus: 'paid', openCents: null }), true);
+  assert.equal(mollieShouldMarkPaid({ mollieStatus: 'issued', invoiceStatus: 'sent', openCents: null }), false);
+  assert.deepEqual(MOLLIE_MARK_PAID_BODY, { status: 'paid', paymentDetails: { source: 'manual' } });
 });
 
 test('de Mollie-sleutel gaat alleen mee naar de API van Mollie zelf', () => {
@@ -171,9 +231,14 @@ test('de status bij Mollie bepaalt de betaalregel; alles daartussen laat hem sta
   assert.equal(molliePaymentStatus('expired'), 'expired');
   assert.equal(molliePaymentStatus('issued'), null);
   assert.equal(molliePaymentStatus('overdue'), null);
-  assert.equal(molliePaymentStatus('payment_reversed'), null);
+  assert.equal(molliePaymentStatus('payment-reversed'), null);
   assert.equal(mollieSalesInvoiceSettled('paid'), true);
   assert.equal(mollieSalesInvoiceSettled('pending-payment'), false);
+  // Mollie schrijft 'payment-reversed'; de statusronde blijft hem volgen.
+  assert.equal(mollieSalesInvoiceSettled('payment-reversed'), false);
+  assert.equal(mollieStatusIsReversed('payment-reversed'), true);
+  assert.equal(mollieStatusIsReversed('payment_reversed'), true);
+  assert.equal(mollieStatusIsReversed('paid'), false);
 });
 
 test('een vaste Idempotency-Key in UUID v4-vorm', () => {

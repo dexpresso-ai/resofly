@@ -44,6 +44,19 @@ const REPORT_GROUPS_BY_TYPE: Record<AccountType, string[]> = {
  */
 const SYSTEM_ENTRY_SOURCES = ['year_close', 'result_appropriation', 'corporate_tax', 'dga_interest', 'dividend', 'vat_return'];
 
+/**
+ * Uitgegeven stukken en betalingen hebben ook hun eigen terugweg, en de
+ * database weigert los tegenboeken (20261105233000). Een tegengeboekte
+ * verkoopfactuur bleef "verzonden" met de boeking eraan: crediteren,
+ * herinneren en de betaallink weigerden daarna, terwijl de btw verschuldigd
+ * bleef. Hier dezelfde regel, met een zin die het model kan doorgeven.
+ */
+const OWN_WAY_BACK: Record<string, string> = {
+  sales_invoice: 'Een verkoopfactuur corrigeer je met "Crediteren" bij de factuur (creditnota); dat boekt omzet en btw netjes terug.',
+  credit_note: 'Een creditnota is uitgegeven; maak zo nodig een nieuwe factuur.',
+  payment: 'Een bankbetaling draai je terug met "Boeking ongedaan maken" bij de transactie; een Mollie-betaling met een terugbetaling.',
+};
+
 const SUPPLIER_STATUS = ['active', 'inactive'] as const;
 const PERIOD_TYPES = ['month', 'quarter'] as const;
 
@@ -435,7 +448,8 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Maakt een spiegelboeking die een geboekt boekstuk neutraliseert. Dit is de enige manier om een boeking te corrigeren — het origineel blijft staan, het paar telt netto op tot nul. ' +
+      'Maakt een spiegelboeking die een geboekt boekstuk neutraliseert — het origineel blijft staan, het paar telt netto op tot nul. Een tegengeboekte inkoopfactuur gaat terug naar concept, zodat je hem kunt corrigeren en opnieuw boeken. ' +
+      'Een verkoopfactuur of creditnota boek je NIET zo tegen (corrigeren gaat met "Crediteren"), en een betaling evenmin (bank: "Boeking ongedaan maken"; Mollie: terugbetalen). ' +
       'Zoek het boekstuk met `list_journal_entries`. Kies de boekdatum van de tegenboeking (standaard vandaag); in een afgesloten periode boeken kan niet. ' +
       'Jaarafsluitingen, resultaatbestemmingen, vennootschapsbelasting, DGA-rente en dividend draai je NIET zo terug — die hebben hun eigen terugweg (boekjaar heropenen, bestemming terugdraaien). ' +
       'DE TEGENBOEKING IS ZELF OOK EEN DEFINITIEVE BOEKING en is niet ongedaan te maken.',
@@ -454,6 +468,9 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       if (entry.reverses_entry_id) throw new ActionError(`Boekstuk ${entry.entry_number ?? ''} is zelf een tegenboeking; boek het oorspronkelijke boekstuk opnieuw.`);
       if (SYSTEM_ENTRY_SOURCES.includes(entry.source_type)) {
         throw new ActionError(`Boekstuk ${entry.entry_number ?? ''} hoort bij "${entry.source_type}" en draai je terug via de bijbehorende handeling (boekjaar heropenen of bestemming terugdraaien), niet met een losse tegenboeking.`);
+      }
+      if (OWN_WAY_BACK[entry.source_type]) {
+        throw new ActionError(`Boekstuk ${entry.entry_number ?? ''} boek je niet los tegen. ${OWN_WAY_BACK[entry.source_type]}`);
       }
       const date = optIsoDate(input, 'date') ?? ctx.today;
       return {
@@ -2245,7 +2262,8 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     keywords: ['desinvestering', 'afstoten', 'verkopen', 'boekwinst', 'boekverlies', '4950', 'activum weg'],
     input: {
       asset_id: { type: 'string' },
-      proceeds_eur: { type: 'number', description: 'Opbrengst in euro; 0 bij schenken of schroot.' },
+      proceeds_eur: { type: 'number', description: 'Opbrengst in euro, EXCLUSIEF btw; 0 bij schenken of schroot.' },
+      vat_code: { type: 'string', description: 'Btw over de opbrengst: HOOG (21%, standaard bij een verkoop), LAAG, VRIJ, of leeg voor geen btw (KOR, schenken). Met de KOR standaard leeg.' },
       counter_account_id: { type: 'string', description: 'Tegenrekening voor de opbrengst; standaard 1100 Bank.' },
       date: { type: 'string', description: 'Datum van de afstoting JJJJ-MM-DD; standaard vandaag.' },
     },
@@ -2263,6 +2281,21 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       if (!counterAccount) throw new ActionError('Geen tegenrekening gekozen en 1100 Bank bestaat niet. Geef `counter_account_id` mee.');
       const date = optIsoDate(input, 'date') ?? ctx.today;
 
+      // Btw over de opbrengst: de verkoop van een bedrijfsmiddel is een belaste
+      // levering. Standaard HOOG, met de KOR geen btw; de kaart toont het bedrag.
+      const { data: settings } = await orgQuery(ctx, 'company_settings', 'kor_enabled').maybeSingle();
+      const kor = Boolean((settings as { kor_enabled?: boolean } | null)?.kor_enabled);
+      const rawCode = typeof input.vat_code === 'string' ? input.vat_code.trim().toUpperCase() : null;
+      const vatCode = proceeds > 0 ? (rawCode === null ? (kor ? '' : 'HOOG') : rawCode) : '';
+      let vatCents = 0;
+      if (vatCode) {
+        const { data: vc } = await orgQuery(ctx, 'vat_codes', 'code, rate, sales_box, kind').eq('code', vatCode).maybeSingle();
+        const code = vc as { rate: number | string; sales_box: string | null; kind: string } | null;
+        if (!code) throw new ActionError(`Btw-code ${vatCode} bestaat niet in deze administratie.`);
+        if (['1a', '1b', '1c', '1d'].includes(String(code.sales_box ?? ''))) vatCents = Math.round(proceeds * Number(code.rate) / 100);
+        else if (!['exempt', 'zero', 'kor'].includes(code.kind)) throw new ActionError(`Btw-code ${vatCode} is geen code voor een verkoop in Nederland; kies bijvoorbeeld HOOG, LAAG of VRIJ.`);
+      }
+
       const { data: deps } = await orgQuery(ctx, 'asset_depreciations', 'amount_cents, status').eq('asset_id', assetId).eq('status', 'posted');
       const depreciated = ((deps ?? []) as Array<{ amount_cents: number }>).reduce((sum, d) => sum + Number(d.amount_cents ?? 0), 0);
       const bookValue = asset.acquisition_cost_cents - depreciated;
@@ -2271,13 +2304,14 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       return {
         title: `Activum afstoten: ${asset.name} per ${date}`,
         sub: joinShort([
-          `boekwaarde ${euroCents(bookValue)} · opbrengst ${euroCents(proceeds)}`,
+          `boekwaarde ${euroCents(bookValue)} · opbrengst ${euroCents(proceeds)} excl. btw`,
+          vatCents ? `btw ${vatCode} ${euroCents(vatCents)} op 1510` : (proceeds > 0 ? 'geen btw' : ''),
           `${result >= 0 ? 'boekwinst' : 'boekverlies'} ${euroCents(Math.abs(result))} op 4950`,
           `opbrengst naar ${accountLabel(counterAccount)}`,
         ], 230),
         warning: 'Het activum krijgt de status "afgestoten" en de boekwaarde gaat van de balans. Je kunt dit niet ongedaan maken; corrigeren kan alleen met een tegenboeking.',
         kind: 'money',
-        payload: { asset_id: assetId, name: asset.name, counter_account_id: counterAccount.id, proceeds_cents: proceeds, date },
+        payload: { asset_id: assetId, name: asset.name, counter_account_id: counterAccount.id, proceeds_cents: proceeds, vat_code: vatCode || null, vat_cents: vatCents, date },
       };
     },
   },

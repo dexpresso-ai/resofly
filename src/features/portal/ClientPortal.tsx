@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { LifeBuoy, Mail, Settings } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../../components/Ui';
 import { isSupabaseConfigured } from '../../lib/supabase';
@@ -14,6 +14,7 @@ import {
   fetchPortalData,
   fetchPortalGalleryDetail,
   fetchPortalInvoicePaymentInfo,
+  fetchPortalLoginBranding,
   fetchPortalMessageThread,
   fetchPortalMessageThreads,
   fetchPortalNotificationSettings,
@@ -68,11 +69,13 @@ import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format'
 import type { FinanceLine, Priority } from '../../types';
 import { GalleryViewer, type GalleryViewerItem } from '../GalleryViewer';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl } from '../../lib/gallery';
-import { applyBrandTheme, brandStyle, ensureBrandFontsLoaded, sanitizeStoredBranding, type BrandingPayload } from '../../lib/branding';
+import { applyBrandTheme, brandStyle, ensureBrandFontsLoaded, loginThemeVars, sanitizeStoredBranding, type BrandingPayload } from '../../lib/branding';
 import { ReadModal } from '../../components/ReadModal';
 import { BrandMark } from '../../components/PublicBrand';
 import { dayGreeting, firstName, portalDateLabel, portalSummary } from '../../lib/portalGreeting';
+import { isPortalLoginKey, portalKeyFromPathname } from '../../lib/portalLoginKey';
 import { PORTAL_PREVIEW_READY, defaultPortalPreview, demoPortalBackend, readPortalPreviewMessage, type PortalPreviewState } from '../../lib/portalPreview';
+import { formatDocUnitPrice } from '../../lib/documentLayout';
 
 type PortalTab = 'overview' | 'messages' | 'tickets' | 'invoices' | 'quotes' | 'contracts' | 'files' | 'projects' | 'galleries' | 'settings';
 
@@ -172,6 +175,83 @@ function rememberedBranding(): BrandingPayload | null {
   }
 }
 
+/**
+ * Het eigen inlogadres van een leverancier: /portal/<sleutel> (migratie
+ * 20261106080000). Daarmee weet het inlogscherm vóór het inloggen wiens
+ * huisstijl het toont, zonder dat het iets naar de server stuurt dat van een
+ * e-mailadres verklapt bij wie het klant is: de sleutel staat al in het adres
+ * dat de leverancier zelf uitdeelt. De vorm staat in lib/portalLoginKey.ts;
+ * /portal/voorbeeld past er bewust nooit in.
+ */
+function portalKeyFromPath(): string | null {
+  if (typeof window === 'undefined') return null;
+  return portalKeyFromPathname(window.location.pathname);
+}
+
+/**
+ * De inloglink in de mail komt terug op /portal, niet op het eigen adres (dat
+ * is het adres dat Supabase als terugkeeradres kent). Dit apparaat onthoudt de
+ * sleutel daarom even, net als een deeplink: zo staat ook het laadscherm na de
+ * link in de huisstijl, en komt wie bij meer leveranciers klant is in het
+ * dossier van de leverancier via wiens adres hij inlogde. Na het inloggen,
+ * bij uitloggen of na twee uur gaat hij weer weg.
+ *
+ * Alleen bij de terugkeer van de inloglink zelf telt hij (zie
+ * returningFromLoginLink). Wie op een gedeelde computer een link aanvroeg en
+ * hem nooit opende, liet /portal anders twee uur lang in de huisstijl van zijn
+ * leverancier achter: dan ziet de volgende bezoeker bij wie hij klant is.
+ */
+const KEY_MEMORY_KEY = 'resofly.portal.key';
+
+/**
+ * Komt deze bezoeker net terug van de inloglink? Supabase zet dan ?code= in
+ * het adres (PKCE), of bij een verlopen of al gebruikte link ?error=… (of in
+ * het hekje). De supabase-client haalt dat pas na het inwisselen weg, dus bij
+ * de eerste render staat het er nog.
+ */
+function returningFromLoginLink(): boolean {
+  if (typeof window === 'undefined') return false;
+  const search = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  return ['code', 'error', 'error_description'].some(name => search.has(name))
+    || ['access_token', 'error', 'error_description'].some(name => hash.has(name));
+}
+
+function rememberPortalKey(key: string): void {
+  try {
+    window.localStorage.setItem(KEY_MEMORY_KEY, JSON.stringify({ key, at: Date.now() }));
+  } catch {
+    // Privémodus: dan gewoon het algemene laadscherm.
+  }
+}
+
+function peekPortalKey(): string | null {
+  try {
+    const raw = window.localStorage.getItem(KEY_MEMORY_KEY);
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as { key?: unknown; at?: unknown };
+    const key = stored.key;
+    if (typeof stored.at !== 'number' || Date.now() - stored.at > PORTAL_LINK_MAX_AGE_MS || !isPortalLoginKey(key)) {
+      window.localStorage.removeItem(KEY_MEMORY_KEY);
+      return null;
+    }
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+function forgetPortalKey(): void {
+  try {
+    window.localStorage.removeItem(KEY_MEMORY_KEY);
+  } catch {
+    // Niets aan te doen.
+  }
+}
+
+/** Hoe lang het inlogscherm op de huisstijl wacht; daarna toch, neutraal. */
+const KEY_BRANDING_WAIT_MS = 4000;
+
 /** Afsluiting van de leverancier onder elk portaalscherm. */
 function PortalFooter({ branding }: { branding: BrandingPayload | null | undefined }) {
   if (!branding) return null;
@@ -195,11 +275,52 @@ export function ClientPortal() {
   useState(() => { capturePortalLink(); return true; });
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
-  // Begint bij de huisstijl die dit apparaat onthield en gaat over op de echte
-  // zodra de dossiers binnen zijn. Bewust ÉÉN eigenaar van het thema: twee
-  // componenten die allebei :root beschrijven zouden elkaars momentopname
-  // terugzetten, en dan staat het portaal na uitloggen weer in ResoFly-goud.
-  const [branding, setBranding] = useState<BrandingPayload | null>(rememberedBranding);
+  // De sleutel uit het adres, of, net terug van de inloglink, die dit apparaat
+  // bij het aanvragen onthield.
+  const [keyInPath] = useState(() => portalKeyFromPath());
+  const [portalKey, setPortalKey] = useState<string | null>(() => keyInPath ?? (returningFromLoginLink() ? peekPortalKey() : null));
+  const [keyBranding, setKeyBranding] = useState<BrandingPayload | null>(null);
+  const [keyBrandingDone, setKeyBrandingDone] = useState(!portalKey);
+  // De huisstijl van het gekozen dossier (na het inloggen) gaat voor die van
+  // het adres. Staat er een sleutel, dan nooit terugvallen op wat dit apparaat
+  // van de vorige keer onthield: dat kan een ándere leverancier zijn, en dan
+  // stond diens inlogscherm op het adres van deze, zolang de huisstijl onderweg
+  // was of als hij niet kwam. Liever even neutraal.
+  // Bewust ÉÉN eigenaar van het thema: twee componenten die allebei :root
+  // beschrijven zouden elkaars momentopname terugzetten, en dan staat het
+  // portaal na uitloggen weer in ResoFly-goud.
+  const [accountBranding, setAccountBranding] = useState<BrandingPayload | null>(null);
+  const [remembered, setRemembered] = useState<BrandingPayload | null>(rememberedBranding);
+  const branding = accountBranding ?? (portalKey ? keyBranding : remembered);
+
+  // Uitloggen met de knop: ook in dit tabblad niets meer van de vorige klant
+  // laten staan. Wat er op schijf stond gaat weg, en ook wat er nog in het
+  // geheugen zat: zijn huisstijl, en een sleutel die niet uit het adres kwam.
+  // Een sessie die vanzelf verloopt, telt hier bewust niet als uitloggen: dan
+  // staat de huisstijl nog op schijf en zou het scherm na herladen weer in het
+  // merk staan.
+  const signOut = useCallback(() => {
+    forgetBranding();
+    forgetPortalLink();
+    forgetPortalKey();
+    setAccountBranding(null);
+    setRemembered(null);
+    if (!keyInPath) setPortalKey(null);
+    void supabasePortalAuth.signOut();
+  }, [keyInPath]);
+
+  useEffect(() => {
+    if (!portalKey) { setKeyBranding(null); setKeyBrandingDone(true); return; }
+    let alive = true;
+    // Een trage of onbereikbare server mag het inloggen niet tegenhouden.
+    const timer = window.setTimeout(() => { if (alive) setKeyBrandingDone(true); }, KEY_BRANDING_WAIT_MS);
+    void fetchPortalLoginBranding(portalKey).then(result => {
+      if (!alive) return;
+      setKeyBranding(result);
+      setKeyBrandingDone(true);
+    });
+    return () => { alive = false; window.clearTimeout(timer); };
+  }, [portalKey]);
 
   // Alleen opnieuw toepassen als er echt iets aan het beeld verandert; `load()`
   // levert bij elke "Ververs" een nieuw object met dezelfde inhoud. De
@@ -215,25 +336,29 @@ export function ClientPortal() {
 
   useEffect(() => {
     let active = true;
-    supabasePortalAuth.getSession().then(({ data }) => {
+    const apply = (signedIn: boolean) => {
       if (!active) return;
-      setLoggedIn(Boolean(data.session));
+      setLoggedIn(signedIn);
       setSessionReady(true);
-    });
-    const { data: sub } = supabasePortalAuth.onAuthStateChange((_event, session) => {
-      if (!active) return;
-      setLoggedIn(Boolean(session));
-      setSessionReady(true);
-    });
+    };
+    supabasePortalAuth.getSession().then(({ data }) => apply(Boolean(data.session)));
+    const { data: sub } = supabasePortalAuth.onAuthStateChange((_event, session) => apply(Boolean(session)));
     return () => { active = false; sub.subscription.unsubscribe(); };
   }, []);
+
+  // De kleuren van het inlogscherm, ook voor het laadscherm ervoor: anders
+  // springt het na het laden van de kopkleur naar de eigen achtergrond.
+  const loginStyle = useMemo(() => loginThemeVars(branding) as CSSProperties, [branding]);
 
   if (!isSupabaseConfigured) {
     return <main className="portal boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Het klantportaal is nog niet geconfigureerd. Neem contact op met je leverancier.</p></div></main>;
   }
-  if (!sessionReady) return <main className="portal boot"><div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Klantportaal laden…</span></div></main>;
-  if (!loggedIn) return <PortalLogin branding={branding} />;
-  return <PortalDashboard branding={branding} onBranding={setBranding} />;
+  const booting = <main className="portal boot" style={loginStyle}><div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Klantportaal laden…</span></div></main>;
+  if (!sessionReady) return booting;
+  // Niet eerst het neutrale inlogscherm laten flitsen terwijl de huisstijl van
+  // het adres onderweg is.
+  if (!loggedIn) return keyBrandingDone ? <PortalLogin branding={branding} portalKey={portalKey} /> : booting;
+  return <PortalDashboard branding={branding} onBranding={setAccountBranding} portalKey={portalKey} onSignOut={signOut} />;
 }
 
 /**
@@ -285,10 +410,12 @@ export function PortalPreview() {
   return <>{note}<PortalDashboard branding={branding} onBranding={noBranding} preview={{ screen, reloadKey }} /></>;
 }
 
-function PortalLogin({ branding, preview = false }: {
+function PortalLogin({ branding, preview = false, portalKey = null }: {
   branding: BrandingPayload | null;
   /** Het voorbeeld bij Instellingen → Huisstijl: er gaat geen inloglink weg. */
   preview?: boolean;
+  /** De sleutel van het eigen inlogadres waarop dit scherm staat (of null). */
+  portalKey?: string | null;
 }) {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
@@ -296,6 +423,8 @@ function PortalLogin({ branding, preview = false }: {
   const [error, setError] = useState<string | null>(null);
   const [previewNote, setPreviewNote] = useState(false);
   const [pendingLink] = useState(() => (preview ? null : peekPortalLink()));
+  // Bij elke toets rendert dit scherm opnieuw; de kleuren alleen bij een andere huisstijl.
+  const loginStyle = useMemo(() => loginThemeVars(branding) as CSSProperties, [branding]);
 
   async function signIn() {
     if (preview) { setPreviewNote(true); return; }
@@ -306,6 +435,10 @@ function PortalLogin({ branding, preview = false }: {
       // registratie staat uit). Onbekende e-mailadressen krijgen geen link — en
       // we zeggen niet welke dat zijn, anders is dit scherm een opzoekdienst.
       await requestPortalLogin(cleanEmail);
+      // De link komt terug op /portal: onthoud bij welke leverancier dit was.
+      // Zonder sleutel een oude vergeten, anders koos een eerdere aanvraag op
+      // dit apparaat de leverancier.
+      if (portalKey) rememberPortalKey(portalKey); else forgetPortalKey();
       const { error } = await supabasePortalAuth.signInWithOtp({
         email: cleanEmail,
         options: { emailRedirectTo: `${window.location.origin}/portal`, shouldCreateUser: false },
@@ -321,10 +454,10 @@ function PortalLogin({ branding, preview = false }: {
 
   // Met een logo staat de naam er al in; zonder logo de naam naast de initiaal.
   // Kent dit apparaat de leverancier nog niet, dan alleen "Klantportaal".
-  return <main className="portal login">
+  return <main className="portal login" style={loginStyle}>
     <div className="login-card">
       <div className="app-brand portal-login-brand">
-        <BrandMark branding={branding} name={branding?.companyName ?? ''} on="surface" />
+        <BrandMark branding={branding} name={branding?.companyName ?? ''} on="login" />
         {!branding?.logoDataUrl && <span>{branding?.companyName ?? 'Klantportaal'}</span>}
       </div>
       <p className="eyebrow login-eyebrow">Facturen • Offertes • Tickets • Projecten</p>
@@ -351,9 +484,13 @@ function PortalLogin({ branding, preview = false }: {
   </main>;
 }
 
-function PortalDashboard({ branding, onBranding, preview }: {
+function PortalDashboard({ branding, onBranding, preview, portalKey = null, onSignOut }: {
   branding: BrandingPayload | null;
   onBranding: (branding: BrandingPayload | null) => void;
+  /** Het eigen inlogadres waarlangs deze klant binnenkwam: dat dossier eerst. */
+  portalKey?: string | null;
+  /** Uitloggen (ClientPortal ruimt ook op wat dit tabblad nog van hem weet). */
+  onSignOut?: () => void;
   /** Het voorbeeld bij Instellingen → Huisstijl: verzonnen gegevens, en niets
    *  van het echte portaal op dit apparaat (deeplink, onthouden huisstijl)
    *  wordt gelezen of overschreven. `reloadKey` laadt de gegevens opnieuw als
@@ -384,9 +521,15 @@ function PortalDashboard({ branding, onBranding, preview }: {
       const wanted = linkRef.current?.dossier;
       // Een link naar een dossier dat (deze login) niet (meer) heeft: vergeten.
       if (wanted && !data.accounts.some(a => a.id === wanted)) linkUsed();
+      // Binnengekomen via het adres van een leverancier: diens dossier eerst
+      // (een deeplink uit een mail gaat nog altijd voor). Daarna is de sleutel
+      // op dit apparaat niet meer nodig.
+      const viaAddress = portalKey ? data.accounts.find(a => a.portalLoginKey === portalKey)?.id ?? null : null;
+      if (!isPreview) forgetPortalKey();
       setActiveAccountId(prev => {
         if (wanted && data.accounts.some(a => a.id === wanted)) return wanted;
-        return prev && data.accounts.some(a => a.id === prev) ? prev : (data.accounts[0]?.id ?? null);
+        if (prev && data.accounts.some(a => a.id === prev)) return prev;
+        return viaAddress ?? data.accounts[0]?.id ?? null;
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Portaalgegevens laden mislukt');
@@ -436,7 +579,7 @@ function PortalDashboard({ branding, onBranding, preview }: {
           <Settings size={15} aria-hidden="true" /><span className="portal-btn-label">Instellingen</span>
         </Button>}
         <Button onClick={load}>{loading ? 'Laden…' : 'Ververs'}</Button>
-        <Button onClick={() => { if (isPreview) return; forgetBranding(); forgetPortalLink(); void supabasePortalAuth.signOut(); }}>Uitloggen</Button>
+        <Button onClick={() => { if (!isPreview) onSignOut?.(); }}>Uitloggen</Button>
       </div>
     </div>;
 
@@ -960,7 +1103,7 @@ function PortalDocLines({ lines }: { lines: FinanceLine[] }) {
   return <>
     <div className="portal-doc-lines">
       {lines.map(line => <div className="portal-doc-line" key={line.id || line.description}>
-        <div><strong>{line.description}</strong><span>{line.quantity} × {euro(line.unit_price)} · btw {line.vat ?? 0}%</span></div>
+        <div><strong>{line.description}</strong><span>{line.quantity} × {formatDocUnitPrice(Number(line.unit_price) || 0)} · btw {line.vat ?? 0}%</span></div>
         <strong>{euro(lineGross(line))}</strong>
       </div>)}
     </div>

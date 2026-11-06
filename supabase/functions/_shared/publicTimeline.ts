@@ -26,6 +26,8 @@ const CUSTOMER_EVENT_TITLES: Record<PublicTimelineKind, Record<string, string>> 
     email_sent: 'Factuur per e-mail verstuurd',
     client_viewed: 'Factuur bekeken',
     payment_paid: 'Betaald',
+    // Een betaling die maar een deel dekte (20261106100000): niet "Betaald".
+    payment_partial: 'Deelbetaling ontvangen',
     payment_refunded: 'Bedrag terugbetaald',
     credit_note_issued: 'Creditnota opgemaakt',
     credit_note_emailed: 'Creditnota verstuurd',

@@ -10,6 +10,7 @@ import {
   brandThemeVars,
   headerTheme,
   isDarkSurface,
+  loginTheme,
   logoPlate,
   type BrandingPayload,
 } from '../lib/branding';
@@ -88,8 +89,9 @@ export function useLogoInk(src: string | null | undefined): { ink: string | null
 export function BrandMark({ branding, name, on, className = '' }: {
   branding: BrandingPayload | null | undefined;
   name: string;
-  /** Waar het merk op staat: de kop, een kaart, of de achtergrond van de galerij. */
-  on: 'header' | 'surface' | 'gallery';
+  /** Waar het merk op staat: de kop, een kaart, de inlogkaart (die een eigen
+   *  kleur kan hebben) of de achtergrond van de galerij. */
+  on: 'header' | 'surface' | 'login' | 'gallery';
   className?: string;
 }) {
   const backgrounds = useMemo(() => {
@@ -100,6 +102,9 @@ export function BrandMark({ branding, name, on, className = '' }: {
     // De galerij heeft een eigen achtergrond (standaard bijna zwart). Daar
     // stond het logo los op, en een donker logo viel er helemaal weg.
     if (on === 'gallery') return [/^#[0-9A-Fa-f]{6}$/.test(branding?.galleryBg ?? '') ? branding!.galleryBg! : '#0B0B0B'];
+    // De inlogkaart: zonder eigen kleur gewoon het werkvlak, met eigen kleur die
+    // (een wit logo op een witte kaart moet op een donker plaatje).
+    if (on === 'login') return [loginTheme(branding).card];
     return [brandThemeVars(branding)['--surface']];
   }, [branding, on]);
   const dark = isDarkSurface(backgrounds[backgrounds.length - 1]);

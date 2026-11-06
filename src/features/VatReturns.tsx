@@ -431,7 +431,9 @@ function ClosePeriodModal({ organizationId, periodLabel, period, saldoAfgerond, 
   async function submit() {
     if (!attested || busy) return;
     setBusy(true); setError(null);
-    try { await closeVatPeriod(organizationId, period); onClosed(); }
+    // Het bedrag in deze kaart is wat de gebruiker bevestigt; wijkt de database
+    // bij het afsluiten af, dan sluit er niets (en zie je dat in de melding).
+    try { await closeVatPeriod(organizationId, { ...period, expectedSaldoCents: saldoAfgerond }); onClosed(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Afsluiten mislukt'); }
     finally { setBusy(false); }
   }

@@ -6,6 +6,7 @@ import {
   brandThemeVars,
   contrastRatio,
   headerTheme,
+  loginTheme,
   logoNeedsPlate,
   sanitizeStoredBranding,
   type BrandingPayload,
@@ -159,4 +160,158 @@ test('kleuren uit een logo: doorzichtig telt niet, wit alleen voor de gemiddelde
   // Gemiddelde van de acht zichtbare pixels, wit meegeteld.
   assert.equal(summary.ink, '#806B70');
   assert.deepEqual(summarizeLogoPixels([0, 0, 0, 0]), { ink: null, colors: [] });
+});
+
+// ── Het inlogscherm (2026-11-05) ────────────────────────────────────────────
+
+// Kaartkleuren van wit tot zwart, met precies het midden van de grijstrap
+// (waar geen tekst de 4,75 haalt zonder de kaart op te schuiven), verzadigde
+// kleuren en de standaard (null = het werkvlak).
+const CARDS: Array<string | null> = [
+  null, '#FFFFFF', '#F5F0E6', '#000000', '#111111', '#777777', '#7A7A7A', '#808080', '#959595',
+  '#0F2A4A', '#E4572E', '#FFD966', '#14B8A6', '#2457C5', '#FF00AA', '#3B0A24', '#C2C2C2', '#4D4D4D',
+];
+const BUTTONS: Array<string | null> = [null, '#FFFFFF', '#000000', '#E4572E', '#FFD966', '#7A7A7A', '#2457C5', '#F5F0E6', '#0F2A4A'];
+
+function login(accent: string, card: string | null, button: string | null, clientTheme = 'dark', extra: Partial<BrandingPayload> = {}): BrandingPayload {
+  return { ...branding(accent, null, clientTheme), loginCard: card, loginButton: button, ...extra };
+}
+
+test('alles op de inlogkaart leest, voor elke kaart-, knop- en merkkleur', () => {
+  const failures: string[] = [];
+  const min = (ink: string, surfaces: string[]) => Math.min(...surfaces.map(bg => contrastRatio(ink, bg)));
+  for (const accent of ['#FFD966', '#2457C5', '#7A7A7A', '#00084D', '#FFFFFF']) {
+    for (const theme of ['dark', 'light']) {
+      for (const card of CARDS) {
+        for (const button of BUTTONS) {
+          const t = loginTheme(login(accent, card, button, theme));
+          const where = `${accent}/${theme} kaart ${card ?? 'auto'} knop ${button ?? 'auto'}`;
+          // Een eigen kaart rekent naar de marge van 4,75; het werkvlak is al
+          // afgewogen in de tokens (zie de tests hierboven) en blijft gelijk.
+          const target = card ? 4.75 : 4.5;
+          // De zachte tint telt alleen waar hij gebruikt wordt: bij een eigen
+          // kaart (--muted), en altijd als voorbeeldtekst in het invulveld.
+          const soft: Array<readonly [string, string, number]> = card ? [['zacht', t.ink3, 4.5]] : [];
+          for (const [name, ink, need] of [['tekst', t.ink, target], ['gedempt', t.ink2, target], ['voorbeeldtekst', t.placeholder, 4.5], ...soft] as const) {
+            const ratio = min(ink, t.cardSurfaces);
+            if (ratio < need - 1e-9) failures.push(`${where}: ${name} ${ink} = ${ratio.toFixed(2)}`);
+          }
+          const accentRatio = min(t.accentInk, t.cardSurfaces);
+          if ((card || button) && accentRatio < 4.75 - 1e-9) failures.push(`${where}: knopkleur als tekst ${t.accentInk} = ${accentRatio.toFixed(2)}`);
+          const onButton = contrastRatio(t.onButton, t.button);
+          if (onButton < 4.5) failures.push(`${where}: tekst op de knop = ${onButton.toFixed(2)}`);
+          // WCAG 1.4.11: de knop zelf, of anders zijn rand, 3 : 1 tegen de kaart.
+          const edge = contrastRatio(t.buttonEdge ?? t.button, t.card);
+          if (edge < 3 - 1e-9) failures.push(`${where}: knop op de kaart = ${edge.toFixed(2)}`);
+          if (card) {
+            for (const name of ['--accent-g', '--accent-r'] as const) {
+              const ink = t.vars[name];
+              const ratio = min(ink, [t.card]);
+              if (ratio < 4.75 - 1e-9) failures.push(`${where}: ${name} ${ink} = ${ratio.toFixed(2)}`);
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual(failures.slice(0, 12), [], `${failures.length} combinaties lezen niet`);
+});
+
+test('zonder eigen kleuren verandert er niets aan het inlogscherm', () => {
+  for (const theme of ['dark', 'light']) {
+    for (const accent of ['#FFD966', '#2457C5', '#7A7A7A']) {
+      for (const header of [null, '#0F2A4A', '#FFFFFF']) {
+        const b = { ...branding(accent, header, theme) };
+        const root = brandThemeVars(b);
+        const t = loginTheme(b);
+        // De achtergrond is precies de kop.
+        for (const name of ['--hdr-top', '--hdr-mid', '--hdr-bottom', '--hdr-ink', '--hdr-ink-2', '--hdr-glow', '--hdr-counter', '--hdr-rings', '--hdr-scheme'] as const) {
+          assert.equal(t.vars[name], root[name], `${accent}/${header}/${theme}: ${name}`);
+        }
+        // De kaart, de tekst en de knop komen van het werkvlak: geen eigen waarden.
+        for (const name of ['--surface', '--ink', '--ink-2', '--accent', '--accent-ink', '--on-accent', '--text', '--border']) {
+          assert.equal(t.vars[name], undefined, `${accent}/${header}/${theme}: ${name} hoort niet overschreven te worden`);
+        }
+        assert.equal(t.card, root['--surface']);
+        assert.equal(t.vars['--login-card-scheme'], theme);
+        assert.equal(t.cardCustom || t.buttonCustom || t.backgroundCustom || t.plain, false);
+      }
+    }
+  }
+});
+
+test('een eigen achtergrond staat er letterlijk, effen zonder gloed en ringen', () => {
+  const navy = loginTheme(login('#E4572E', null, null, 'dark', { loginBackground: '#0F2A4A' }));
+  assert.equal(navy.backgroundCustom, true);
+  assert.equal(navy.vars['--hdr-mid'], '#0F2A4A');
+  assert.notEqual(navy.vars['--hdr-rings'], 'none');
+  // De gloed linksboven is die van de knop (hier: de merkkleur).
+  assert.match(navy.vars['--hdr-glow'], /^rgba\(228,87,46,/);
+
+  const plain = loginTheme(login('#E4572E', null, '#14B8A6', 'dark', { loginBackground: '#0F2A4A', loginPlain: true }));
+  assert.equal(plain.vars['--hdr-top'], '#0F2A4A');
+  assert.equal(plain.vars['--hdr-bottom'], '#0F2A4A');
+  assert.equal(plain.vars['--hdr-glow'], 'transparent');
+  assert.equal(plain.vars['--hdr-counter'], 'transparent');
+  assert.equal(plain.vars['--hdr-rings'], 'none');
+
+  // Een achtergrond midden in de grijstrap schuift op, zoals de kop: er staat
+  // tekst op (het laadscherm). Dat meldt de instellingenpagina.
+  const grey = loginTheme(login('#FFD966', null, null, 'dark', { loginBackground: '#808080' }));
+  assert.equal(grey.background.headerAdjusted, true);
+});
+
+test('een kaart midden in de grijstrap schuift op tot de tekst leest', () => {
+  const t = loginTheme(login('#FFD966', '#777777', null));
+  assert.equal(t.cardAdjusted, true);
+  assert.notEqual(t.card, '#777777');
+  assert.ok(Math.min(...t.cardSurfaces.map(bg => contrastRatio(t.ink, bg))) >= 4.75);
+  // Een kaart waarop het gewoon leest, blijft precies de gekozen kleur.
+  const white = loginTheme(login('#FFD966', '#FFFFFF', null));
+  assert.equal(white.cardAdjusted, false);
+  assert.equal(white.card, '#FFFFFF');
+  assert.equal(white.vars['--surface'], '#FFFFFF');
+  assert.equal(white.vars['--login-card-scheme'], 'light');
+  assert.equal(white.cardDark, false);
+});
+
+test('een witte knop op een witte kaart krijgt een rand, een donkere niet', () => {
+  const white = loginTheme(login('#FFD966', '#FFFFFF', '#FFFFFF'));
+  assert.ok(white.buttonEdge, 'rand verwacht');
+  assert.ok(contrastRatio(white.buttonEdge!, '#FFFFFF') >= 3);
+  assert.equal(white.vars['--login-btn-edge'], white.buttonEdge);
+  const dark = loginTheme(login('#FFD966', '#FFFFFF', '#0F2A4A'));
+  assert.equal(dark.buttonEdge, null);
+  assert.equal(dark.vars['--login-btn-edge'], undefined);
+  // De knopkleur zelf blijft de gekozen kleur; alleen de tekst erop wordt uitgerekend.
+  assert.equal(dark.vars['--accent'], '#0F2A4A');
+  assert.equal(dark.button, '#0F2A4A');
+});
+
+test('een eigen kaart geeft ook de compat-laag mee, zodat het invulveld meekleurt', () => {
+  const t = loginTheme(login('#FFD966', '#FFFFFF', null, 'dark'));
+  for (const name of ['--bg2', '--bg3', '--panel', '--border', '--border2', '--text', '--muted', '--muted2', '--sheen-rgb', '--sheen-k', '--ink-rgb', '--surface-rgb', '--field', '--line-3', '--focus-line', '--hi']) {
+    assert.ok(t.vars[name], `${name} ontbreekt`);
+  }
+  assert.equal(t.vars['--text'], t.ink);
+  // Het invulveld hoort bij de kaart: wit op een witte kaart, niet het bijna-zwart van Donker.
+  assert.equal(t.vars['--field'], '#FFFFFF');
+  assert.deepEqual(t.cardSurfaces, ['#FFFFFF', '#FFFFFF']);
+  const navy = loginTheme(login('#FFD966', '#0F2A4A', null, 'light'));
+  assert.ok(navy.cardDark);
+  assert.ok(contrastRatio(navy.vars['--field'], '#0F2A4A') > 1, 'een dieper veld op een donkere kaart');
+  assert.equal(t.vars['--sheen-rgb'], '26,23,16', 'lichte kaart: glans van inkt, niet van wit');
+});
+
+test('de kleuren van het inlogscherm van de schijf worden opnieuw gekeurd', () => {
+  const kept = sanitizeStoredBranding({ accentColor: '#FFD966', loginBackground: '#0f2a4a', loginCard: '#FFFFFF', loginButton: '#E4572E', loginPlain: true });
+  assert.equal(kept?.loginBackground, '#0F2A4A');
+  assert.equal(kept?.loginCard, '#FFFFFF');
+  assert.equal(kept?.loginButton, '#E4572E');
+  assert.equal(kept?.loginPlain, true);
+  const dropped = sanitizeStoredBranding({ accentColor: '#FFD966', loginBackground: 'red', loginCard: 'url(https://x.test/a.png)', loginButton: '#12345', loginPlain: 'true' });
+  assert.equal(dropped?.loginBackground, null);
+  assert.equal(dropped?.loginCard, null);
+  assert.equal(dropped?.loginButton, null);
+  assert.equal(dropped?.loginPlain, false);
 });
