@@ -1183,16 +1183,41 @@ async function webhookEnCron(A, d) {
 async function zijdeurPortaal(A, d) {
   groep('Beveiliging: zijdeur via het klantportaal');
   const lid = A.zonderFinancien;
+  const priveAdres = `prive.${uniek('collega')}@prive.test`.toLowerCase();
 
-  // Weigert de database dit al (een mogelijke oplossing), dan is de deur dicht
-  // en hebben de stappen hierna geen zin.
-  const contact = await stap('teamlid zonder Financiën zet zijn eigen adres als portaalcontact bij klant A', async () => {
-    const res = await rest('client_contacts?select=id', { method: 'POST', token: lid.token, prefer: 'return=representation', body: {
-      organization_id: A.orgId, client_id: A.klantA.id, name: 'Collega als klant', email: lid.email, gives_portal_access: true, is_active: true,
-    } });
-    if (res.status >= 400 && res.status < 500) return null;
-    return gelukt(res, 'contactpersoon')[0];
+  // Slot 1 (sinds 6 november): portaaltoegang geven, of het hoofdadres van een
+  // klant met documenten omleggen, vraagt schrijfrecht in Financiën. Eerder kon
+  // dit teamlid zijn eigen adres, of een tweede privé-adres, als portaalcontact
+  // zetten en daarna alles van de klant lezen.
+  await stap('teamlid zonder Financiën geeft geen portaaltoegang, ook niet aan een privé-adres', async () => {
+    for (const email of [lid.email, priveAdres]) {
+      geweigerd(await rest('client_contacts?select=id', { method: 'POST', token: lid.token, prefer: 'return=representation', body: {
+        organization_id: A.orgId, client_id: A.klantA.id, name: 'Collega als klant', email, gives_portal_access: true, is_active: true,
+      } }), `portaalcontact ${email}`, [403]);
+    }
+    // Een gewone contactpersoon (zonder portaal) mag wel: dat is gewoon Klanten.
+    const gewoon = gelukt(await rest('client_contacts?select=id,gives_portal_access', { method: 'POST', token: lid.token, prefer: 'return=representation', body: {
+      organization_id: A.orgId, client_id: A.klantA.id, name: 'Gewone contactpersoon', email: `gewoon.${uniek('c')}@klant.test`.toLowerCase(), is_active: true,
+    } }), 'gewone contactpersoon')[0];
+    geweigerd(await rest(`client_contacts?id=eq.${gewoon.id}&select=id`, { method: 'PATCH', token: lid.token, prefer: 'return=representation', body: { gives_portal_access: true } }),
+      'portaaltoegang aanzetten bij een bestaande contactpersoon', [403]);
   });
+  await stap('teamlid zonder Financiën legt het hoofdadres van een klant met documenten niet om', async () => {
+    const voor = sqlRij(`select email from public.clients where id = ${q(A.klantA.id)}`).email;
+    geweigerd(await rest(`clients?id=eq.${A.klantA.id}&select=id,email`, { method: 'PATCH', token: lid.token, prefer: 'return=representation', body: { email: priveAdres } }),
+      'hoofdadres naar een privé-adres', [403]);
+    gelijk(sqlRij(`select email from public.clients where id = ${q(A.klantA.id)}`).email, voor, 'hoofdadres');
+    // Andere klantgegevens wijzigen mag gewoon.
+    gelukt(await rest(`clients?id=eq.${A.klantA.id}&select=id`, { method: 'PATCH', token: lid.token, prefer: 'return=representation', body: { phone: '020 765 4321' } }), 'telefoonnummer wijzigen');
+  });
+
+  // Slot 2: ook als iemand mét rechten het adres van een collega als
+  // portaalcontact zet, is die collega in het portaal geen klant van zijn
+  // eigen organisatie.
+  const contact = await stap('de eigenaar zet het adres van een collega als portaalcontact (mag: Financiën schrijven)', async () => gelukt(
+    await rest('client_contacts?select=id', { method: 'POST', token: A.eigenaar.token, prefer: 'return=representation', body: {
+      organization_id: A.orgId, client_id: A.klantA.id, name: 'Collega als klant', email: lid.email, gives_portal_access: true, is_active: true,
+    } }), 'contactpersoon')[0]);
   if (!contact) return;
 
   await stap('dat teamlid leest via het portaal geen facturen, offertes of contracten van A', async () => {
@@ -1279,13 +1304,13 @@ async function lekcontrole(A, B, d) {
   });
 
   // De publieke factuurlink is een sleutel naar de factuur, de klantgegevens en
-  // de betaalpagina, ook voor wie later uit de organisatie verdwijnt. Bij
-  // offertes staat hij daarom gemaskeerd in de verzendregel ("(verborgen)").
-  // Bij facturen staat hij voluit in de verzendregel, de linktabel, de
-  // betaalrij en de aanmaning. (De factuur-PDF zelf noemt de link ook, als
-  // "Bekijk deze factuur online"; dat is een bewuste keuze voor de klant. Vier
-  // leesbare kopieën in de database zijn dat niet.)
-  await stap('Financiën-lezers (boekhouder, kijker) lezen geen publieke factuurlink met token uit de database', () => {
+  // de betaalpagina. Hij staat in de verzendregel, de linktabel, de betaalrij en
+  // de aanmaning, en bewust ook op de factuur-PDF zelf ("Bekijk deze factuur
+  // online"): wie Financiën mag lezen, kan die PDF downloaden en ziet de link
+  // dus hoe dan ook. Dat is een ontwerpkeuze (vastgelegd in het rapport van
+  // 6 november). De grens die telt: wie Financiën niet mag lezen, en een andere
+  // organisatie, leest de link nergens.
+  await stap('zonder Financiën of uit een andere organisatie: geen publieke factuurlink uit de database', () => {
     const bronnen = [
       ['invoice_email_deliveries', 'metadata'],
       ['invoice_public_links', 'metadata'],
@@ -1293,12 +1318,19 @@ async function lekcontrole(A, B, d) {
       ['invoice_dunning_notices', 'public_url'],
       ['quote_email_deliveries', 'metadata'],
     ];
-    return allemaal(bronnen.flatMap(([tabel, kolom]) => [['boekhouder', A.boekhouder], ['kijker', A.kijker]].map(([n, g]) => [`${n}: ${tabel}.${kolom}`, async () => {
+    return allemaal(bronnen.flatMap(([tabel, kolom]) => [['zonder Financiën', A.zonderFinancien], ['eigenaar van B', B.eigenaar]].map(([n, g]) => [`${n}: ${tabel}.${kolom}`, async () => {
       const res = await rest(`${tabel}?organization_id=eq.${A.orgId}&select=${kolom}`, { token: g.token });
       if (res.status >= 400) return;
       const gevonden = JSON.stringify(res.json).match(/\/(invoice|quote|contract)\/[A-Za-z0-9_-]{20,}/g) ?? [];
       verwacht(gevonden.length === 0, `${gevonden.length} link(s) met token, bv. ${gevonden[0]}`);
     }])));
+  });
+
+  // Offertes maskeren de link al in de verzendregel; bij facturen is dat (nog)
+  // niet zo, en daarom staat hier vast wie hem wél kan lezen.
+  await stap('Financiën-lezers (boekhouder, kijker) kunnen de factuurlink lezen, zoals op de PDF (ontwerp)', async () => {
+    const res = await rest(`invoice_email_deliveries?organization_id=eq.${A.orgId}&select=metadata`, { token: A.boekhouder.token });
+    verwacht(res.status === 200, `boekhouder leest de verzendregels niet (${res.status}); klopt de test nog?`);
   });
 
   const tokens = [

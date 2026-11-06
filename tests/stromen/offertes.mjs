@@ -1398,8 +1398,29 @@ async function kleineondernemersregeling() {
   const kw = await stap('wereld met de KOR aan', () => maakWereld('offertes-kor', { kor: true }));
   if (!kw) return;
 
+  // Sinds 6 november weigert de database al het indienen van een offerte met
+  // btw onder de KOR (daarna liggen de regels vast). Zo'n offerte komt dus niet
+  // eens bij versturen. Hieronder ook de offerte die vóór het aanzetten van de
+  // KOR al was goedgekeurd: die mag niet de deur uit.
+  await stap('KOR: een offerte met btw kun je niet indienen; met 0% wel', async () => {
+    const o = await concept(kw);
+    const res = await rpc('submit_quote_for_internal_approval', { p_quote_id: o.id, p_organization_id: kw.orgId }, kw.medewerker.token);
+    geweigerd(res, 'indienen met btw onder de KOR');
+    verwacht(/kleineondernemersregeling/i.test(res.json?.message ?? ''), `melding noemt de KOR niet: ${res.tekst.slice(0, 200)}`);
+    gelijk(offerteRij(o.id).status, 'draft', 'status');
+    const zonderBtw = await goedgekeurd(kw, { regels: REGELS.map((r) => ({ ...r, vat: 0 })) });
+    gelijk(offerteRij(zonderBtw.id).status, 'internally_approved', 'offerte met 0% btw');
+  });
+
   await stap('KOR: een offerte met btw loopt niet vast na akkoord (niet versturen, of een factuur die wél te versturen is)', async () => {
-    const o = await goedgekeurd(kw);
+    // Goedgekeurd vóór de KOR aan ging; daarna zet de organisatie de KOR aan.
+    sql(`update public.company_settings set kor_enabled = false where organization_id = ${q(kw.orgId)}`);
+    let o;
+    try {
+      o = await goedgekeurd(kw);
+    } finally {
+      sql(`update public.company_settings set kor_enabled = true where organization_id = ${q(kw.orgId)}`);
+    }
     const res = await versturen(kw, o);
     if (res.status !== 200) {
       geweigerd(res, 'versturen van een offerte met btw onder de KOR');

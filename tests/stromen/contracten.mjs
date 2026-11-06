@@ -1418,9 +1418,13 @@ async function tegelijk(w) {
     const c = await nieuwContract(w, { title: 'Twee keer tegelijk versturen' });
     const verzendregels = () => sqlRijen(`select id from public.contract_email_deliveries
       where contract_id = ${q(c.id)} order by created_at, id`);
+    // Sinds 6 november weigert de database een tweede verzending zolang de
+    // eerste onderweg is; dan komt er geen tweede verzendregel. Daarom wacht de
+    // mail van de eerste op een tweede regel óf op het antwoord van de tweede.
+    let tweedeKlaar = false;
     const faalDeTweede = async (_url, verzoek) => {
-      const regels = await wachtOp(() => (verzendregels().length >= 2 ? verzendregels() : null), 'twee verzendregels');
-      if ((verzoek.headers.get('idempotency-key') || '').endsWith(regels[1].id)) throw new TypeError('fetch failed (tests/stromen: tweede verzending)');
+      const regels = await wachtOp(() => (verzendregels().length >= 2 || tweedeKlaar ? verzendregels() : null), 'twee verzendregels of het antwoord op de tweede');
+      if (regels.length >= 2 && (verzoek.headers.get('idempotency-key') || '').endsWith(regels[1].id)) throw new TypeError('fetch failed (tests/stromen: tweede verzending)');
     };
     const uitkomsten = await metOnderschepping(/^https:\/\/api\.resend\.com\//, faalDeTweede, async () => {
       const rij = await houdRijVast(c.id);
@@ -1428,7 +1432,7 @@ async function tegelijk(w) {
       try {
         onderweg.push(verstuur(w, c.id));
         await wachtOp(() => rij.wachtenden() >= 1, 'eerste verzending wacht op de rij');
-        onderweg.push(verstuur(w, c.id));
+        onderweg.push(verstuur(w, c.id).finally(() => { tweedeKlaar = true; }));
         await wachtOp(() => rij.wachtenden() >= 2, 'tweede verzending wacht op de rij');
         await rij.loslaten();
         return await Promise.all(onderweg);

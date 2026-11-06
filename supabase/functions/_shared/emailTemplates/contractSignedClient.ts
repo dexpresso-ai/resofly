@@ -71,5 +71,7 @@ function formatDateTimeNl(value: string | null): string {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('nl-NL', { dateStyle: 'long', timeStyle: 'short' });
+  // In Nederlandse tijd: de edge functions draaien in UTC, en zonder tijdzone
+  // stond er op het bewijs en in de mail een uur (zomer: twee) te vroeg.
+  return date.toLocaleString('nl-NL', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Amsterdam' });
 }

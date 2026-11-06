@@ -1,4 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { isBeforeAmsterdamToday } from '../_shared/nlDate.ts';
+import { dbErrorAnswer } from '../_shared/dbError.ts';
 import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
@@ -170,12 +172,23 @@ serve(async (req) => {
       console.error('contract-workflow office error', error.message);
       return json(req, { ok: false, error: error.message }, 502);
     }
-    const status = error instanceof HttpError ? error.status : 500;
-    const internalMessage = error instanceof Error ? error.message : 'Onbekende fout.';
+    // Een databasefout is een gewoon object, geen Error: eerder werd elke weigering
+    // van de database (bijvoorbeeld "dit contract is net getekend" terwijl je het
+    // opnieuw verstuurde) een 500 met "Onbekende fout." in de log. Een eigen
+    // melding wordt nu een 409/422 met die zin.
+    const answer = error instanceof HttpError ? null : dbErrorAnswer(error);
+    const status = error instanceof HttpError ? error.status : answer ? answer.status : 500;
+    const internalMessage = error instanceof Error
+      ? error.message
+      : (error && typeof error === 'object' && 'message' in error)
+        ? `${String((error as { code?: unknown }).code ?? '')} ${String((error as { message?: unknown }).message ?? '')}`.trim()
+        : 'Onbekende fout.';
     if (status >= 500) console.error('contract-workflow error', internalMessage);
     const publicMessage = error instanceof HttpError
       ? error.message
-      : 'Contract workflow-actie mislukt door een server- of providerfout. Controleer de Edge Function logs.';
+      : answer
+        ? answer.message
+        : 'Contract workflow-actie mislukt door een server- of providerfout. Controleer de Edge Function logs.';
     return json(req, { ok: false, error: publicMessage }, status);
   }
 });
@@ -206,7 +219,8 @@ async function sendContractForSignature(
   } else if (!String(contract.body || '').trim()) {
     throw new HttpError('Vul de inhoud in voordat je het contract verstuurt.', 422);
   }
-  if (isDateBeforeToday(contract.valid_until)) {
+  // Op de Nederlandse kalenderdag, zoals de ondertekenpagina en de database.
+  if (isBeforeAmsterdamToday(contract.valid_until)) {
     throw new HttpError('De ondertekendeadline ligt in het verleden. Pas de datum aan voordat je verstuurt.', 409);
   }
 
@@ -276,7 +290,12 @@ async function sendContractForSignature(
   // De huidige link en ondertekenaar onthouden: mislukt het (opnieuw) versturen,
   // dan krijgt de klant zijn werkende link terug. Eerder verving begin_ de link
   // al vóór de mail, en gaf de oude link na een mislukte poging "ongeldig".
-  const previous = await loadCurrentSigningLink(organizationId, contractId);
+  // Wat hier wordt gelezen is alleen een terugval: begin_contract_signature_send
+  // legt de link van vóór deze poging onder het slot vast in de verzendregel.
+  // Eerder las alleen deze regel hem, buiten het slot: verstuurden twee collega's
+  // tegelijk en mislukte de tweede, dan zette die de link van vóór béíde
+  // pogingen terug, en werkte de link in de mail van de eerste niet meer.
+  const previousOutsideLock = await loadCurrentSigningLink(organizationId, contractId);
 
   const deliveryId = await beginSignatureSend({
     contractId,
@@ -288,6 +307,8 @@ async function sendContractForSignature(
     recipientName,
     subject,
   });
+
+  const previous = (await loadPreviousSigningLink(organizationId, deliveryId)) ?? previousOutsideLock;
 
   let snapshotId: string | null = null;
   let providerEmailId = '';
@@ -565,6 +586,23 @@ async function loadCurrentSigningLink(organizationId: string, contractId: string
   };
 }
 
+/** De link en ondertekenaar van vóór deze poging, zoals begin_ ze onder het slot vastlegde (of null). */
+async function loadPreviousSigningLink(organizationId: string, deliveryId: string): Promise<CurrentSigningLink | null> {
+  const { data, error } = await supabaseAdmin.from('contract_email_deliveries').select('metadata')
+    .eq('organization_id', organizationId).eq('id', deliveryId).maybeSingle();
+  if (error || !data) return null;
+  const metadata = ((data as { metadata?: unknown }).metadata ?? {}) as Record<string, unknown>;
+  const link = metadata.previousLink as { tokenHash?: string | null; createdAt?: string | null; expiresAt?: string | null } | undefined;
+  if (!link || typeof link !== 'object') return null;
+  const signer = metadata.previousSigner as { name?: string | null; email?: string | null } | null | undefined;
+  return {
+    public_token_hash: link.tokenHash ?? null,
+    public_token_created_at: link.createdAt ?? null,
+    public_token_expires_at: link.expiresAt ?? null,
+    signer: signer && signer.email ? { name: String(signer.name ?? ''), email: String(signer.email) } : null,
+  };
+}
+
 /** Een mislukte (her)verzending terugdraaien: de vastgelegde versie weg, de oude link en ondertekenaar terug. */
 async function undoFailedSignatureSend(organizationId: string, contractId: string, newTokenHash: string, snapshotId: string | null, previous: CurrentSigningLink): Promise<void> {
   if (snapshotId) {
@@ -735,14 +773,6 @@ function isUuid(value: string): boolean {
 }
 function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-function isDateBeforeToday(value: string | null): boolean {
-  if (!value) return false;
-  const parsed = Date.parse(`${value}T23:59:59`);
-  if (!Number.isFinite(parsed)) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return parsed < today.getTime();
 }
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name);

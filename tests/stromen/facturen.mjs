@@ -1032,13 +1032,32 @@ export default async function facturen() {
       `het concept is niet meer te bewerken (${bewerk.status} ${bewerk.tekst.slice(0, 160)}); locked_reason ${rij.locked_reason}, betaalrijen ${betaalrijen(f.id).map((r) => r.status).join(',')}`);
   });
 
-  await stap('opnieuw versturen na de netwerkfout: lukt, en de betaallink wordt hergebruikt (geen tweede betaling)', async () => {
+  // Na de aanpassing vraagt de oude link het oude bedrag: die vervalt (sinds
+  // 6 november), en opnieuw versturen maakt één nieuwe link voor het nieuwe
+  // bedrag. Zonder aanpassing wordt de link hergebruikt (zie hieronder).
+  await stap('opnieuw versturen na de netwerkfout en de aanpassing: lukt, met één betaallink voor het nieuwe bedrag', async () => {
     const f = nodig(fR2, 'concept');
     const voor = mollieVan(sleutel.A).length;
     const uit = gelukt(await verstuur(w, f, { betaallink: true }), 'opnieuw versturen');
     gelijk(uit.paymentLinkIncluded, true, 'betaallink in de mail');
     gelijk(factuurRij(f.id).status, 'sent', 'status');
-    gelijk(betaalrijen(f.id).filter((r) => ['open', 'creating'].includes(r.status)).length, 1, 'actieve betaallinks');
+    const actief = betaalrijen(f.id).filter((r) => ['open', 'creating'].includes(r.status));
+    gelijk(actief.map((r) => Number(r.amount_cents)), [12403], 'actieve betaallinks (bedrag in centen)');
+    gelijk(mollieVan(sleutel.A).length, voor + 1, 'één nieuwe betaling bij Mollie');
+  });
+
+  await stap('opnieuw versturen na een netwerkfout zonder aanpassing: de betaallink wordt hergebruikt (geen tweede betaling)', async () => {
+    const concept = await nieuwConcept(w);
+    Object.assign(post.resendStoring, { aantal: 1, soort: 'netwerk' });
+    try {
+      geweigerd(await verstuur(w, concept, { betaallink: true }), 'versturen met een netwerkfout', [502]);
+    } finally {
+      post.resendStoring.aantal = 0;
+    }
+    const voor = mollieVan(sleutel.A).length;
+    const uit = gelukt(await verstuur(w, concept, { betaallink: true }), 'opnieuw versturen');
+    gelijk(uit.paymentLinkIncluded, true, 'betaallink in de mail');
+    gelijk(betaalrijen(concept.id).filter((r) => ['open', 'creating'].includes(r.status)).length, 1, 'actieve betaallinks');
     gelijk(mollieVan(sleutel.A).length, voor, 'geen nieuwe betaling bij Mollie');
   });
 

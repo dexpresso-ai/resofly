@@ -504,15 +504,16 @@ async function zonderMollie(z) {
   });
   if (!f) return;
 
-  // Lukt de betaallink niet, dan hoort de betaalrij op 'failed' te gaan
-  // (fail_invoice_payment_checkout). Blijft hij op 'creating', dan telt hij
-  // overal als lopende Mollie-betaling.
-  await stap('de mislukte betaallink laat geen betaling op "creating" achter', async () => {
-    const hangend = sqlRijen(`select status, checkout_expires_at from public.invoice_payment_records
-                               where invoice_id = '${f.id}' and status in ('creating', 'open', 'pending', 'authorized')`);
-    verwacht(hangend.length === 0, `${hangend.length} betaalrij(en) blijven staan als lopende betaling: ${hangend.map((r) => r.status).join(', ')}`);
-    const gebeurtenis = sqlRij(`select count(*)::int as n from public.invoice_workflow_events where invoice_id = '${f.id}' and event_type = 'payment_failed'`);
-    verwacht(gebeurtenis?.n > 0, 'de mislukte betaallink staat niet in de tijdlijn van de factuur');
+  // Eerder probeerde de herinnering ook zonder Mollie een betaallink. Dat liep
+  // vast op de ontbrekende sleutel en liet een betaalrij op 'creating' achter
+  // (fail_invoice_payment_checkout liep zelf stuk op het auditlog), die overal
+  // telde als lopende Mollie-betaling. Sinds 6 november wordt het zonder Mollie
+  // niet eens geprobeerd: geen betaalrij en geen melding over een mislukte link.
+  await stap('zonder Mollie geen betaallinkpoging: geen betaling op "creating", geen melding', async () => {
+    const rijen = sqlRijen(`select status from public.invoice_payment_records where invoice_id = '${f.id}'`);
+    verwacht(rijen.length === 0, `${rijen.length} betaalrij(en): ${rijen.map((r) => r.status).join(', ')}`);
+    const json = gelukt(await herinner(z.medewerker, z, f), 'nog een herinnering (ander niveau)');
+    gelijk([json.paymentLinkIncluded, json.paymentLinkError ?? null], [false, null], 'betaallink en melding');
   });
 
   // Een onbetaalde, verstuurde factuur annuleer je met een creditnota. Een
@@ -813,7 +814,8 @@ async function aanmaning(a) {
       gelijk(mails.length, 1, 'aanmaningsmails');
       const m = mails[0];
       gelijk(m.to, [a.klantA.email], 'ontvanger');
-      gelijk(m.subject, `Aanmaning factuur ${f.number} — reageer vóór ${datumNl(termijn)}`, 'onderwerp');
+      // "Betaal uiterlijk op" (sinds 6 nov.): de termijn loopt tot en met die dag.
+      gelijk(m.subject, `Aanmaning factuur ${f.number} — betaal uiterlijk op ${datumNl(termijn)}`, 'onderwerp');
       for (const regel of [`Hoofdsom: ${euro(hoofdsom)}`, `Wettelijke handelsrente: ${euro(rente.centen)}`, `Incassokosten: ${euro(wik)}`,
         `Totaal te voldoen: ${euro(totaal)}`, `Uiterste betaaldatum: ${datumNl(termijn)}`, 'van rechtswege in verzuim']) {
         verwacht(m.text.includes(regel), `"${regel}" ontbreekt in de aanmaning:\n${m.text}`);

@@ -7,6 +7,7 @@ import { loadEmailBrand, withEmailBrand, type EmailBrand } from '../_shared/emai
 import { renderContractPdf, appendSignaturePagesToPdf, bytesToBase64, sha256HexBytes, type PdfSignature } from '../_shared/contractPdf.ts';
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
 import { toPublicTimeline } from '../_shared/publicTimeline.ts';
+import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
 import { loadBranding } from '../_shared/branding.ts';
 import { loadPortalLoginKey, portalLoginUrl } from '../_shared/portalAddress.ts';
 import { buildContractTokens, CONTRACT_CONSENT_TEXT, fillContractTokens } from '../_shared/contractTokens.ts';
@@ -48,7 +49,7 @@ type ContractRow = {
   currency: string | null;
 };
 
-type PublicHttpErrorStatus = 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422 | 500;
+type PublicHttpErrorStatus = 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422 | 500 | 503;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -112,6 +113,8 @@ serve(async (req) => {
     if (req.method !== 'POST') return json(req, { ok: false, error: 'Method not allowed.' }, 405);
 
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    // Een NUL-teken kan Postgres niet opslaan; dat gaf een 500 voor de bezoeker.
+    if (containsNulCharacter(body)) throw new PublicHttpError(INVALID_CHARACTER_MESSAGE, 422);
     const action = String(body.action || 'getContract');
     const token = String(body.token || '').trim();
     if (!token || token.length < 24) throw new PublicHttpError('Ondertekenlink ontbreekt of is ongeldig.', 400);
@@ -130,7 +133,10 @@ serve(async (req) => {
         return json(req, { ok: false, error: `Onbekende publieke contract-actie: ${action}` }, 400);
     }
   } catch (error) {
-    const status = error instanceof PublicHttpError ? error.status : 500;
+    // Een eigen melding uit de database (Nederlands, zonder tabelnamen) of een
+    // dubbele klik is een 4xx met die zin; al het andere blijft een 500.
+    const answer = error instanceof PublicHttpError ? null : dbErrorAnswer(error);
+    const status = error instanceof PublicHttpError ? error.status : answer ? answer.status : 500;
     const internalMessage = describeError(error);
     if (status >= 500) console.error('contract-public error', internalMessage, error instanceof Error ? error.stack : undefined);
     // Nooit interne fout-/DB-details naar de ongeauthenticeerde beller lekken
@@ -138,7 +144,9 @@ serve(async (req) => {
     // al het overige krijgt een generieke 500. De details staan alleen in de log.
     const publicMessage = error instanceof PublicHttpError
       ? error.message
-      : 'Er ging iets mis bij het verwerken van dit contract. Probeer het later opnieuw.';
+      : answer
+        ? answer.message
+        : 'Er ging iets mis bij het verwerken van dit contract. Probeer het later opnieuw.';
     return json(req, { ok: false, error: publicMessage }, status);
   }
 });
@@ -185,6 +193,23 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
 
   const ip = clientIp(req);
   const userAgent = req.headers.get('user-agent');
+
+  // 0. Word-contract: eerst de PDF ophalen die bij het versturen is vastgelegd,
+  //    vóór de handtekening wordt gezet. Is die even niet bereikbaar, dan wordt
+  //    er niet getekend. Eerder zette de functie het huidige .docx dan opnieuw om
+  //    en legde die omzetting vast als getekend exemplaar: een document dat de
+  //    klant nooit kreeg (andere lettertypen of een nieuwere documentserver).
+  //    Een ongeldige of verlopen link meldt de database hieronder, zoals altijd.
+  const current = await loadContractByTokenHash(tokenHash).catch(() => null);
+  let officeBasePdf: Uint8Array | null = null;
+  if (current && current.status === 'sent' && isOfficeContract(current)) {
+    try {
+      officeBasePdf = await loadContractPdfForDisplay(current);
+    } catch (pdfError) {
+      console.error('verstuurde contract-PDF niet bereikbaar; ondertekenen uitgesteld', describeError(pdfError));
+      throw new PublicHttpError('Het contract is op dit moment even niet bereikbaar. Je handtekening is niet gezet; probeer het over een paar minuten opnieuw.', 503);
+    }
+  }
 
   // 1. Markeer ondertekend + leg het bewijs vast (atomair, met statuscontrole).
   const { data: signedData, error: signError } = await supabaseAdmin.rpc('sign_contract_public', {
@@ -250,7 +275,7 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
     // document kunnen opleveren dan waar de klant op akkoord ging.
     const pdfBytes = isOfficeContract(contract)
       ? await appendSignaturePagesToPdf({
-          basePdf: await loadContractPdfForDisplay(contract),
+          basePdf: officeBasePdf ?? await loadContractPdfForDisplay(contract),
           contract: pdfContract,
           client: pdfClient,
           company,
@@ -646,13 +671,32 @@ function loadLinkedProjectName(organizationId: string, contractId: string): Prom
  * versie-snapshot faalde ná het versturen), dan zetten we het .docx alsnog om —
  * liever een verse conversie dan een ondertekenpagina zonder inhoud.
  */
+/**
+ * De PDF van een Word-contract zoals die is verstuurd: de bron voor de pagina en
+ * voor het getekende exemplaar (zie _shared/contractOffice.ts).
+ *
+ * Alleen een contract zonder vastgelegde PDF (van vóór die vastlegging) wordt
+ * nog omgezet. Is de vastgelegde PDF er wel, maar even niet bereikbaar, dan nog
+ * twee pogingen en anders een fout. Eerder viel elke fout terug op een nieuwe
+ * omzetting van het huidige .docx; die kreeg de klant dan te lezen én als
+ * getekend exemplaar, terwijl het niet het verstuurde document was.
+ */
 async function loadContractPdfForDisplay(contract: ContractRow): Promise<Uint8Array> {
-  const stored = await loadSentContractPdf(supabaseAdmin, contract.organization_id, contract.id).catch((e) => {
-    console.warn('vastgelegde contract-PDF ophalen mislukt, val terug op conversie', describeError(e));
-    return null;
-  });
-  if (stored) return stored.bytes;
-  return convertContractDocxToPdf(contract.organization_id, contract.body_storage_key!);
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let stored: Awaited<ReturnType<typeof loadSentContractPdf>>;
+    try {
+      stored = await loadSentContractPdf(supabaseAdmin, contract.organization_id, contract.id);
+    } catch (error) {
+      lastError = error;
+      console.warn(`vastgelegde contract-PDF ophalen mislukt (poging ${attempt + 1})`, describeError(error));
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      continue;
+    }
+    if (stored) return stored.bytes;
+    return await convertContractDocxToPdf(contract.organization_id, contract.body_storage_key!);
+  }
+  throw new Error(`De verstuurde contract-PDF is niet bereikbaar: ${describeError(lastError)}`);
 }
 
 async function buildPayload(contract: ContractRow) {

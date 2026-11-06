@@ -371,6 +371,12 @@ export const FINANCE_ACTIONS: ActionDef[] = [
           throw new ActionError(`Op betaald zetten boekt factuur ${invoice.number} in het grootboek (omzet en btw op Debiteuren), maar niet de betaling: de debiteurenstand bleef dan ${euro(docTotalEur(invoice))} te hoog. Registreer de betaling door de banktransactie te koppelen (\`invoice.reconcile_bank_transaction\`) of met een memoriaalpost op Debiteuren; dan staat hij vanzelf op betaald.`);
         }
       }
+      // Een betaalde, geboekte factuur sluit je met een terugbetaling en
+      // creditnota; via de status bleven omzet en btw geboekt bij een factuur die
+      // "geannuleerd" heette (de database weigert het sinds 6 november ook).
+      if (invoice.journal_entry_id && ['cancelled', 'void', 'written_off'].includes(status) && ['paid', 'refunded'].includes(invoice.status)) {
+        throw new ActionError(`Factuur ${invoice.number} is betaald en staat in het grootboek. Een betaalde factuur annuleer je niet via de status: maak een terugbetaling met creditnota ("Terugbetaling" bij de factuur in ResoFly).`);
+      }
       if (invoice.journal_entry_id && ['cancelled', 'void', 'written_off', 'paid'].includes(status)) {
         const { data: openCents, error: openError } = await ctx.db.rpc('invoice_open_receivable_cents', { p_organization_id: ctx.organizationId, p_invoice_id: invoiceId });
         if (openError) throw new ActionError(`Openstaand bedrag bepalen mislukt: ${openError.message}`);
