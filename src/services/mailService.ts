@@ -39,9 +39,14 @@ export function resolveEffectiveSender(
       if (a.is_default !== b.is_default) return a.is_default ? -1 : 1;
       return (b.created_at ?? '').localeCompare(a.created_at ?? '');
     });
-  const primary = verified[0] ?? null;
+  // Zoals de server: het eerste domein met een afzenderadres op dat domein.
+  const usable = (d: SendingDomain) => {
+    const email = String(d.from_email || '').trim().toLowerCase();
+    return email.endsWith(`@${String(d.domain).toLowerCase()}`) ? email : null;
+  };
+  const primary = verified.find(d => usable(d)) ?? verified[0] ?? null;
 
-  let email = primary?.from_email ? String(primary.from_email) : null;
+  let email = primary ? usable(primary) : null;
   let name = String(primary?.from_name || '').trim() || null;
 
   const personalName = String(identity?.from_name || '').trim();
@@ -127,6 +132,23 @@ export async function verifySendingDomain(
     organizationId,
     { domainId },
     'Domeinverificatie mislukt.',
+  );
+}
+
+/**
+ * Haal alleen de stand bij Resend op, zonder een nieuwe controle te starten.
+ * Resend controleert de records na "Verifieer" op de achtergrond; het scherm
+ * vraagt zo even later of dat gelukt is.
+ */
+export async function refreshSendingDomain(
+  organizationId: UUID,
+  domainId: UUID,
+): Promise<SendingDomain> {
+  return invokeDomainAction(
+    'refreshSendingDomain',
+    organizationId,
+    { domainId },
+    'Status van het domein ophalen mislukt.',
   );
 }
 

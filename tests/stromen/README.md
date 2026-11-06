@@ -29,8 +29,11 @@ npm run test:stromen -- facturen
 
 Scenario's: `rook`, `offertes`, `facturen`, `herinneringen`, `contracten`, `beveiliging`,
 `automatisering`, `agenda` (Google en Microsoft koppelen, met nep-Google en nep-Microsoft uit
-`nep-agenda.mjs`) en `documenten` (maken, rechten per rol en module, andere organisaties,
-delen via portaal en link, opruimen). De uitkomst van de documenten staat in
+`nep-agenda.mjs`), `documenten` (maken, rechten per rol en module, andere organisaties,
+delen via portaal en link, opruimen) en `verzenddomein` (eigen domein koppelen, verifiëren,
+versturen vanaf het eigen adres, de domein-webhook, verwijderen, en wie een domein mag
+vasthouden; de nep-Resend kent daarvoor ook de Domains-API en verstuurt, net als Resend,
+alleen vanaf een geverifieerd domein). De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in
 `docs/rapporten/STROMENTEST_CONTRACT_OFFERTE_FACTUUR_2026-11-06.md`.
 Elk scenario maakt zijn eigen organisaties (`wereld.mjs`), dus ze raken elkaar niet en de

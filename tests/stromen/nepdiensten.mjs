@@ -13,6 +13,18 @@ export const post = {
   mails: [],
   /** Faal de volgende n verzendingen met een 500 (of 'netwerk': gooi). */
   resendStoring: { aantal: 0, soort: '500' },
+  /**
+   * Verzenddomeinen in het (gedeelde) Resend-account: id → domein zoals de
+   * Domains-API het teruggeeft, plus `controles` (zoveel GET's na "verify"
+   * blijft hij nog pending, zoals Resend dat op de achtergrond doet).
+   */
+  domeinen: new Map(),
+  /** Domeinnamen waarvan de klant de DNS-records geplaatst heeft. */
+  dns: new Set(),
+  /** Elke aanvraag aan de Domains-API: { methode, pad, body }. */
+  domeinVerzoeken: [],
+  /** Faal de volgende n Domains-aanroepen (eventueel alleen deze methode) met een 500. */
+  domeinStoring: { aantal: 0, methode: null },
   /** R2: sleutel → bytes. */
   r2: new Map(),
   r2Storing: { aantal: 0 },
@@ -51,13 +63,95 @@ async function nepPdf(tekst) {
   return new Uint8Array(await doc.save());
 }
 
+/** Het domein achter `Naam <adres>` of `adres`. */
+function afzenderDomein(from) {
+  const m = String(from ?? '').match(/@([a-z0-9.-]+)>?\s*$/i);
+  return m ? m[1].toLowerCase() : '';
+}
+
+/** Records zoals Resend ze voor een nieuw domein in eu-west-1 geeft. */
+function nieuweRecords() {
+  return [
+    { record: 'DKIM', name: 'resend._domainkey', type: 'TXT', ttl: 'Auto', status: 'not_started', value: `p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQ${randomUUID().replace(/-/g, '')}IDAQAB` },
+    { record: 'SPF', name: 'send', type: 'MX', ttl: 'Auto', status: 'not_started', value: 'feedback-smtp.eu-west-1.amazonses.com', priority: 10 },
+    { record: 'SPF', name: 'send', type: 'TXT', ttl: 'Auto', status: 'not_started', value: 'v=spf1 include:amazonses.com ~all' },
+  ];
+}
+
+/** Zet een domein (en zijn records) op een status, zoals Resend na een controle. */
+export function zetDomeinStatus(id, status, recordStatus = status) {
+  const domein = post.domeinen.get(id);
+  if (!domein) throw new Error(`nep-Resend: domein ${id} bestaat niet`);
+  domein.status = status;
+  for (const record of domein.records) record.status = recordStatus;
+  return domein;
+}
+
+function domeinJson(domein) {
+  const { controles: _controles, gestart: _gestart, ...zichtbaar } = domein;
+  return { object: 'domain', ...structuredClone(zichtbaar) };
+}
+
+async function resendDomeinen(request, url) {
+  const body = request.method === 'POST' ? await request.json().catch(() => ({})) : undefined;
+  post.domeinVerzoeken.push({ methode: request.method, pad: url.pathname, body });
+  const st = post.domeinStoring;
+  if (st.aantal > 0 && (!st.methode || st.methode === request.method)) {
+    st.aantal -= 1;
+    return json(500, { statusCode: 500, name: 'internal_server_error', message: 'Nep-storing bij Resend Domains' });
+  }
+  const [, , id, actie] = url.pathname.split('/');
+  if (!id && request.method === 'POST') {
+    const naam = String(body?.name ?? '').toLowerCase();
+    if ([...post.domeinen.values()].some((d) => d.name === naam)) {
+      return json(403, { statusCode: 403, name: 'validation_error', message: `The domain ${naam} has already been registered.` });
+    }
+    const domein = {
+      id: randomUUID(), name: naam, status: 'not_started', created_at: new Date().toISOString(),
+      region: body?.region ?? 'us-east-1', capabilities: { sending: 'enabled', receiving: 'disabled', ...(body?.capabilities ?? {}) },
+      records: nieuweRecords(), controles: 0, gestart: false,
+    };
+    post.domeinen.set(domein.id, domein);
+    return json(201, domeinJson(domein));
+  }
+  const domein = post.domeinen.get(id);
+  if (!domein) return json(404, { statusCode: 404, name: 'not_found', message: 'Domain not found' });
+  if (request.method === 'GET' && !actie) {
+    // Resend controleert op de achtergrond: pas na `controles` keer kijken is het klaar.
+    if (domein.gestart && domein.status === 'pending') {
+      if (domein.controles > 0) domein.controles -= 1;
+      else if (post.dns.has(domein.name)) zetDomeinStatus(id, 'verified');
+    }
+    return json(200, domeinJson(domein));
+  }
+  if (request.method === 'POST' && actie === 'verify') {
+    domein.gestart = true;
+    if (domein.status !== 'verified') zetDomeinStatus(id, 'pending');
+    return json(200, { object: 'domain', id });
+  }
+  if (request.method === 'DELETE' && !actie) {
+    post.domeinen.delete(id);
+    return json(200, { object: 'domain', id, deleted: true });
+  }
+  return json(405, { statusCode: 405, name: 'method_not_allowed', message: 'Nep-Resend kent deze aanroep niet' });
+}
+
 async function resend(request) {
+  const url = new URL(request.url);
+  if (url.pathname.startsWith('/domains')) return resendDomeinen(request, url);
   if (post.resendStoring.aantal > 0) {
     post.resendStoring.aantal -= 1;
     if (post.resendStoring.soort === 'netwerk') throw new TypeError('fetch failed (nep-netwerkfout Resend)');
     return json(500, { message: 'Nep-storing bij Resend' });
   }
   const body = await request.json();
+  // Zoals Resend: versturen kan alleen vanaf het platformdomein of een domein
+  // dat in het account geverifieerd is.
+  const vanaf = afzenderDomein(body.from);
+  const platform = afzenderDomein(process.env.RESEND_FROM_EMAIL);
+  if (vanaf !== platform && ![...post.domeinen.values()].some((d) => d.name === vanaf && d.status === 'verified')) {
+    return json(403, { statusCode: 403, name: 'validation_error', message: `The ${vanaf} domain is not verified.` });
+  }
   // Uniek over processen heen, zoals bij Resend: de database bewaart de id's
   // (met een unieke index), ook van eerdere runs en van scenario's die tegelijk draaien.
   const id = `re_${randomUUID()}`;

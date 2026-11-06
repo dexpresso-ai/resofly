@@ -6,7 +6,16 @@ import { sanitizeEmailBodyHtml } from '../_shared/htmlSanitize.ts';
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 import { renderTransferBlockHtml, renderTransferBlockText } from '../_shared/emailTemplates/fileTransfer.ts';
 import { issueRecipientLink, loadCompanyForMail, recordTransferEvent } from '../_shared/fileTransferServer.ts';
-import { domainParents, domainsOverlap, normalizeDomainName, senderDomain } from '../_shared/domainOverlap.ts';
+import { domainParents, domainsOverlap, senderDomain } from '../_shared/domainOverlap.ts';
+import {
+  checkSenderAddress,
+  cleanSenderName,
+  type DomainClaimRow,
+  isValidSendingDomain,
+  judgeDomainClaim,
+  normalizeSendingDomainInput,
+  sendingDomainStatus,
+} from '../_shared/resendDomains.ts';
 import { assertTeamTestRecipient } from '../_shared/testRecipient.ts';
 import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { accentOnDark, brandNameLine, EMAIL_CARD, EMAIL_LOGO_SLOT_DARK, EMAIL_LOGO_SLOT_SIGNATURE, sanitizeAccentColor, textOnAccent } from '../_shared/emailTemplates/layout.ts';
@@ -176,7 +185,16 @@ serve(async (req) => {
 
       case 'verifySendingDomain': {
         requireDomainAdmin(role);
-        const domain = await verifySendingDomain(organizationId, body);
+        const domain = await verifySendingDomain(organizationId, body, true);
+        return json(req, { ok: true, domain });
+      }
+
+      // Alleen de stand bij Resend ophalen, zonder een nieuwe controle te
+      // starten: het scherm vraagt dit even na "Verifieer", omdat Resend de
+      // records op de achtergrond controleert.
+      case 'refreshSendingDomain': {
+        requireDomainAdmin(role);
+        const domain = await verifySendingDomain(organizationId, body, false);
         return json(req, { ok: true, domain });
       }
 
@@ -1149,6 +1167,11 @@ async function assertClientModuleWrite(userId: string, organizationId: string): 
   }
 }
 
+type ClaimRow = DomainClaimRow & { id: string; resend_domain_id: string | null };
+
+const DOMAIN_TAKEN_MESSAGE =
+  'Dit domein, of een domein erboven of eronder, is al gekoppeld aan een andere werkruimte. Is het van jou? Neem dan contact op met ResoFly.';
+
 async function addSendingDomain(
   organizationId: string,
   body: Record<string, unknown>,
@@ -1157,18 +1180,24 @@ async function addSendingDomain(
     throw new MailHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
   }
 
-  const domain = normalizeDomain(String(body.domain || ''));
-  if (!isDomain(domain)) {
+  const domain = normalizeSendingDomainInput(body.domain);
+  if (!isValidSendingDomain(domain)) {
     throw new MailHttpError('Vul een geldig domein in, bijvoorbeeld eigendomeinnaam.nl.', 422);
   }
 
-  const fromName = String(body.fromName || '').trim() || null;
-  const fromEmail = normalizeFromEmail(body.fromEmail, domain);
+  // Het afzenderadres is verplicht. Zonder adres werd een geverifieerd domein
+  // stil overgeslagen (resolveSenderIdentity heeft een adres nodig), en het
+  // scherm kon het daarna niet meer invullen: alle mail bleef van het
+  // standaardadres komen.
+  const fromName = cleanSenderName(body.fromName);
+  const sender = checkSenderAddress(body.fromEmail, domain);
+  if ('error' in sender) throw new MailHttpError(sender.error, 422);
 
   // Alle organisaties delen één Resend-account. Het domein van de platform-
   // afzender is van niemand, en een domein (of een sub- of bovenliggend domein)
   // hoort bij hooguit één organisatie: anders bezet de ene klant het domein van
-  // de andere, of verstuurt hij namens diens subdomein (zie domainOverlap.ts).
+  // de andere, of verstuurt hij namens diens subdomein (zie domainOverlap.ts en
+  // judgeDomainClaim in resendDomains.ts).
   const platformDomain = senderDomain(RESEND_FROM_EMAIL);
   if (platformDomain && domainsOverlap(domain, platformDomain)) {
     throw new MailHttpError('Dit domein hoort bij ResoFly zelf en kan niet worden gekoppeld.', 422);
@@ -1176,17 +1205,21 @@ async function addSendingDomain(
   const candidates = [domain, ...domainParents(domain)];
   const { data: clashes, error: clashError } = await supabaseAdmin
     .from('organization_email_domains')
-    .select('id, organization_id, domain')
+    .select('id, organization_id, domain, status, verified_at, created_at, resend_domain_id')
     .or(`domain.in.(${candidates.join(',')}),domain.like.*.${domain}`)
-    .limit(10);
+    .limit(50);
   if (clashError) throw clashError;
-  const clashRows = (clashes || []) as Array<{ organization_id: string; domain: string }>;
-  if (clashRows.some((row) => row.organization_id === organizationId && normalizeDomainName(row.domain) === domain)) {
+  const overlapping = ((clashes || []) as ClaimRow[]).filter((row) => domainsOverlap(row.domain, domain));
+  const verdict = judgeDomainClaim(organizationId, domain, overlapping);
+  if (verdict.kind === 'own') {
     throw new MailHttpError('Dit domein is al gekoppeld aan deze organisatie.', 409);
   }
-  if (clashRows.some((row) => row.organization_id !== organizationId && domainsOverlap(row.domain, domain))) {
+  if (verdict.kind === 'taken') {
+    throw new MailHttpError(DOMAIN_TAKEN_MESSAGE, 409);
+  }
+  if (verdict.kind === 'claimed_until') {
     throw new MailHttpError(
-      'Dit domein, of een domein erboven of eronder, is al gekoppeld aan een andere werkruimte. Is het van jou? Neem dan contact op met ResoFly.',
+      `Een andere werkruimte is dit domein aan het koppelen. Is het daar op ${dutchDate(verdict.until)} nog niet geverifieerd, dan kun je het daarna zelf koppelen. Is het van jou? Neem dan contact op met ResoFly.`,
       409,
     );
   }
@@ -1202,8 +1235,14 @@ async function addSendingDomain(
     throw new MailHttpError(`Een organisatie kan maximaal ${MAX_SENDING_DOMAINS_PER_ORG} verzenddomeinen koppelen.`, 422);
   }
 
+  if (verdict.kind === 'take_over') {
+    const stale = overlapping.find((row) => row.organization_id !== organizationId && row.domain === domain);
+    if (stale) await releaseStaleClaim(stale);
+  }
+
   const resendDomain = await createResendDomain(domain);
-  const status = mapResendDomainStatus(String(resendDomain.status || 'pending'));
+  const resendDomainId = String(resendDomain.id || '') || null;
+  const status = sendingDomainStatus(resendDomain.status, resendDomain.records);
   const now = new Date().toISOString();
 
   const { data, error } = await supabaseAdmin
@@ -1212,9 +1251,9 @@ async function addSendingDomain(
       organization_id: organizationId,
       domain,
       provider: 'resend',
-      resend_domain_id: String(resendDomain.id || '') || null,
+      resend_domain_id: resendDomainId,
       region: String(resendDomain.region || RESEND_DEFAULT_REGION) || null,
-      from_email: fromEmail,
+      from_email: sender.email,
       from_name: fromName,
       status,
       dns_records: Array.isArray(resendDomain.records) ? resendDomain.records : [],
@@ -1223,13 +1262,78 @@ async function addSendingDomain(
     })
     .select(SENDING_DOMAIN_COLUMNS)
     .single();
-  if (error) throw error;
+  if (error) {
+    // Het domein staat al bij Resend. Zonder rij hoort het bij niemand, maar
+    // houdt het de naam in het gedeelde account bezet: eerst weer weghalen.
+    if (resendDomainId) {
+      await deleteResendDomain(resendDomainId).catch((cleanupError) =>
+        console.warn('Resend domain cleanup failed', cleanupError instanceof Error ? cleanupError.message : cleanupError));
+    }
+    if ((error as { code?: string }).code === '23505') {
+      throw new MailHttpError('Dit domein is net door een andere werkruimte gekoppeld.', 409);
+    }
+    throw error;
+  }
   return data as SendingDomainRow;
 }
 
+/**
+ * Een koppeling van een andere organisatie die na UNVERIFIED_CLAIM_DAYS nog
+ * nooit geverifieerd is, vrijgeven (judgeDomainClaim besliste dat al). Het
+ * domein is uniek over alle organisaties, dus zonder dit hield wie het domein
+ * van een ander als eerste invoerde, de echte eigenaar voorgoed buiten.
+ */
+async function releaseStaleClaim(row: ClaimRow): Promise<void> {
+  if (row.resend_domain_id) {
+    // Eerst bij Resend kijken: is het domein daar intussen wél geverifieerd,
+    // dan hoort het bij die organisatie. Dan werken we haar rij bij in plaats
+    // van het over te nemen.
+    const current = await getResendDomainOrNull(row.resend_domain_id);
+    if (current && sendingDomainStatus(current.status, current.records) === 'verified') {
+      const now = new Date().toISOString();
+      await supabaseAdmin
+        .from('organization_email_domains')
+        .update({
+          status: 'verified',
+          dns_records: Array.isArray(current.records) ? current.records : undefined,
+          last_checked_at: now,
+          verified_at: row.verified_at || now,
+        })
+        .eq('id', row.id)
+        .eq('organization_id', row.organization_id);
+      throw new MailHttpError(DOMAIN_TAKEN_MESSAGE, 409);
+    }
+    // Lukt het weghalen bij Resend niet, dan stoppen we hier: anders blijft het
+    // domein in het gedeelde account staan zonder rij die erbij hoort.
+    if (current) await deleteResendDomain(row.resend_domain_id);
+  }
+  // Alleen als hij nog steeds nooit geverifieerd is (ook niet net, tussendoor).
+  const { data: removed, error } = await supabaseAdmin
+    .from('organization_email_domains')
+    .delete()
+    .eq('id', row.id)
+    .eq('organization_id', row.organization_id)
+    .is('verified_at', null)
+    .neq('status', 'verified')
+    .select('id');
+  if (error) throw error;
+  if (!removed || removed.length === 0) throw new MailHttpError(DOMAIN_TAKEN_MESSAGE, 409);
+  console.info('Verzenddomein: verlopen koppeling vrijgegeven', JSON.stringify({
+    domain: row.domain,
+    previousOrganizationId: row.organization_id,
+    claimedAt: row.created_at,
+  }));
+}
+
+/**
+ * Status en DNS-records opnieuw bij Resend ophalen. Met `trigger` start Resend
+ * eerst een nieuwe controle ("Verifieer"); zonder alleen ophalen (het scherm
+ * vraagt dit even later nog eens, omdat Resend op de achtergrond controleert).
+ */
 async function verifySendingDomain(
   organizationId: string,
   body: Record<string, unknown>,
+  trigger: boolean,
 ): Promise<SendingDomainRow> {
   if (!RESEND_API_KEY) {
     throw new MailHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
@@ -1237,24 +1341,39 @@ async function verifySendingDomain(
   const row = await loadSendingDomainRow(organizationId, String(body.domainId || ''));
   if (!row.resend_domain_id) {
     throw new MailHttpError(
-      'Dit domein heeft geen Resend-koppeling meer; verwijder en voeg het opnieuw toe.',
+      'Dit domein heeft geen koppeling met Resend meer. Verwijder het en voeg het opnieuw toe.',
       422,
     );
   }
 
-  // Trigger de controle en lees daarna de bijgewerkte status + records.
-  await triggerResendDomainVerification(row.resend_domain_id);
-  const resendDomain = await getResendDomain(row.resend_domain_id);
-  const status = mapResendDomainStatus(String(resendDomain.status || row.status));
-  const now = new Date().toISOString();
+  if (trigger) await triggerResendDomainVerification(row.resend_domain_id);
+  const resendDomain = await getResendDomainOrNull(row.resend_domain_id);
+  if (!resendDomain) {
+    // Bij Resend weggehaald (bijvoorbeeld in hun dashboard). Zonder deze stap
+    // bleef de rij eeuwig "in afwachting" en gaf elke klik een providerfout.
+    await supabaseAdmin
+      .from('organization_email_domains')
+      .update({ status: 'failed', resend_domain_id: null, last_checked_at: new Date().toISOString() })
+      .eq('id', row.id)
+      .eq('organization_id', organizationId);
+    throw new MailHttpError(
+      'Dit domein bestaat niet meer bij Resend. Verwijder het hier en voeg het opnieuw toe; je krijgt dan nieuwe DNS-records.',
+      409,
+    );
+  }
 
+  const status = sendingDomainStatus(resendDomain.status, resendDomain.records);
+  const now = new Date().toISOString();
   const { data, error } = await supabaseAdmin
     .from('organization_email_domains')
     .update({
       status,
       dns_records: Array.isArray(resendDomain.records) ? resendDomain.records : row.dns_records,
       last_checked_at: now,
-      verified_at: status === 'verified' ? (row.verified_at || now) : null,
+      // verified_at blijft staan als het domein later hapert: het betekent
+      // "ooit bewezen van deze organisatie" (judgeDomainClaim). Of er nu vanaf
+      // verstuurd wordt, bepaalt alleen `status`.
+      verified_at: status === 'verified' ? (row.verified_at || now) : row.verified_at,
     })
     .eq('id', row.id)
     .eq('organization_id', organizationId)
@@ -1272,10 +1391,12 @@ async function updateSendingDomain(
   const patch: Record<string, unknown> = {};
 
   if (body.fromName !== undefined) {
-    patch.from_name = String(body.fromName || '').trim() || null;
+    patch.from_name = cleanSenderName(body.fromName);
   }
   if (body.fromEmail !== undefined) {
-    patch.from_email = normalizeFromEmail(body.fromEmail, row.domain);
+    const sender = checkSenderAddress(body.fromEmail, row.domain);
+    if ('error' in sender) throw new MailHttpError(sender.error, 422);
+    patch.from_email = sender.email;
   }
 
   if (body.isDefault === true) {
@@ -1317,7 +1438,21 @@ async function removeSendingDomain(
 ): Promise<void> {
   const row = await loadSendingDomainRow(organizationId, String(body.domainId || ''));
   if (row.resend_domain_id) {
-    await deleteResendDomain(row.resend_domain_id);
+    if (!RESEND_API_KEY) {
+      throw new MailHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
+    }
+    // Eerst bij Resend weg, pas dan hier. Andersom bleef het domein bij een
+    // storing geverifieerd in het gedeelde Resend-account staan, zonder rij die
+    // erbij hoort: niemand kon het daarna nog koppelen of opruimen.
+    try {
+      await deleteResendDomain(row.resend_domain_id);
+    } catch (error) {
+      console.error('Resend domain delete failed', error instanceof Error ? error.message : error);
+      throw new MailHttpError(
+        'Resend kon het domein niet verwijderen. Probeer het later opnieuw; tot dan blijft het gekoppeld.',
+        502,
+      );
+    }
   }
   const { error } = await supabaseAdmin
     .from('organization_email_domains')
@@ -1348,29 +1483,52 @@ async function loadSendingDomainRow(
 }
 
 async function createResendDomain(domain: string): Promise<Record<string, unknown>> {
-  return await resendDomainsRequest('POST', '', { name: domain, region: RESEND_DEFAULT_REGION });
+  return await resendDomainsRequest('POST', '', {
+    name: domain,
+    region: RESEND_DEFAULT_REGION,
+    // Alleen versturen. Met ontvangen aan vraagt Resend om een MX-record op het
+    // domein zelf; wie dat plaatst, stuurt al zijn gewone mail naar Resend.
+    capabilities: { sending: 'enabled', receiving: 'disabled' },
+  });
 }
 
-async function getResendDomain(resendDomainId: string): Promise<Record<string, unknown>> {
-  return await resendDomainsRequest('GET', `/${resendDomainId}`);
+/** Het domein bij Resend, of null als Resend het niet (meer) kent. */
+async function getResendDomainOrNull(resendDomainId: string): Promise<Record<string, unknown> | null> {
+  try {
+    return await resendDomainsRequest('GET', `/${encodeURIComponent(resendDomainId)}`);
+  } catch (error) {
+    if (error instanceof ResendDomainsError && error.providerStatus === 404) return null;
+    throw error;
+  }
 }
 
 async function triggerResendDomainVerification(resendDomainId: string): Promise<void> {
   // De verify-trigger geeft minimale data terug; de status lezen we apart via GET.
   // Een mislukte trigger mag die GET niet blokkeren, dus we loggen en gaan door.
   try {
-    await resendDomainsRequest('POST', `/${resendDomainId}/verify`);
+    await resendDomainsRequest('POST', `/${encodeURIComponent(resendDomainId)}/verify`);
   } catch (error) {
     console.warn('Resend domain verify trigger failed', error instanceof Error ? error.message : error);
   }
 }
 
+/** Weghalen bij Resend. Bestaat het daar al niet meer, dan is dat goed. */
 async function deleteResendDomain(resendDomainId: string): Promise<void> {
-  // Best-effort: lukt het verwijderen bij Resend niet, dan ruimen we lokaal toch op.
   try {
-    await resendDomainsRequest('DELETE', `/${resendDomainId}`);
+    await resendDomainsRequest('DELETE', `/${encodeURIComponent(resendDomainId)}`);
   } catch (error) {
-    console.warn('Resend domain delete failed', error instanceof Error ? error.message : error);
+    if (error instanceof ResendDomainsError && error.providerStatus === 404) return;
+    throw error;
+  }
+}
+
+class ResendDomainsError extends MailHttpError {
+  providerStatus: number;
+
+  constructor(message: string, providerStatus: number) {
+    super(message, 502);
+    this.name = 'ResendDomainsError';
+    this.providerStatus = providerStatus;
   }
 }
 
@@ -1391,51 +1549,26 @@ async function resendDomainsRequest(
   const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 
   if (!response.ok) {
-    console.error('Resend domains API failed', method, path, responsePayload);
+    console.error('Resend domains API failed', method, path, response.status, responsePayload);
     const providerMessage = String(
       responsePayload.message ||
         responsePayload.error ||
         response.statusText ||
         'Resend domains API failed',
     );
-    throw new MailHttpError(`Resend kon de domeinactie niet uitvoeren: ${providerMessage}`, 502);
+    throw new ResendDomainsError(`Resend kon de domeinactie niet uitvoeren: ${providerMessage}`, response.status);
   }
 
   return responsePayload;
 }
 
-function mapResendDomainStatus(status: string): string {
-  const normalized = status.toLowerCase();
-  if (normalized === 'verified') return 'verified';
-  if (normalized === 'failed') return 'failed';
-  if (normalized === 'temporary_failure') return 'temporary_failure';
-  // not_started, pending en onbekende statussen tonen we als "pending".
-  return 'pending';
-}
-
-function normalizeDomain(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, '')
-    .replace(/\/.*$/, '')
-    .replace(/^www\./, '');
-}
-
-function isDomain(value: string): boolean {
-  return /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(value);
-}
-
-function normalizeFromEmail(value: unknown, domain: string): string | null {
-  const email = String(value || '').trim().toLowerCase();
-  if (!email) return null;
-  if (!isEmail(email)) {
-    throw new MailHttpError('Het afzenderadres is geen geldig e-mailadres.', 422);
-  }
-  if (!email.endsWith(`@${domain}`)) {
-    throw new MailHttpError(`Het afzenderadres moet op @${domain} eindigen.`, 422);
-  }
-  return email;
+function dutchDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('nl-NL', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Europe/Amsterdam',
+  });
 }
 
 async function sendViaResend(
