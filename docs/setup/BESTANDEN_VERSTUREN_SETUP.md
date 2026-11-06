@@ -33,8 +33,10 @@ tabellen, en de opruimtaak roept een functie aan.
 4. **Opruimtaak** — `bash scripts/supabase-setup-webhooks.sh` (of het vinkje
    `setup_webhooks` in de workflow "Deploy Supabase (staging)"). Stap 5 van dat script
    zet een nieuw `FILE_TRANSFER_CRON_SECRET` en de pg_cron-taak `file-transfer-purge`
-   (elk kwartier → `https://<ref>.functions.supabase.co/file-transfer?cron=purge`).
-   Veilig om opnieuw te draaien.
+   (elke nacht om 02:00 UTC, 03:00 Nederlandse wintertijd →
+   `https://<ref>.functions.supabase.co/file-transfer?cron=purge`). Waarom 's nachts
+   en niet vaker: zie het commentaar bij stap 5 in het script. Veilig om opnieuw te
+   draaien: een taak die er al staat, blijft zoals hij is.
 5. **Frontend** — gewone deploy. `public/_headers` zet voor `/ontvang/*`
    `X-Robots-Tag: noindex, nofollow` en `Referrer-Policy: no-referrer`.
 
@@ -57,8 +59,8 @@ tabellen, en de opruimtaak roept een functie aan.
   de mail komt, de link vraagt een code, de code komt, downloaden werkt.
 - **Intrekken** (Gedeeld & verzonden → de zending): de items staan meteen op `purged_at`
   en de objecten zijn weg uit R2. Een vervaldatum in het verleden zetten kan niet (de
-  trigger weigert dat); het verlopen zelf test je met een zending van 1 dag — de taak
-  ruimt hem binnen een kwartier na de vervaldatum op.
+  trigger weigert dat); het verlopen zelf test je met een zending van 1 dag. De link
+  gaat op de vervaldatum dicht, de taak haalt de bestanden in de nacht daarna uit R2.
 - Instellingen → Abonnement: de opslagmeter noemt "waarvan … in verstuurde bestanden".
 - Klantportaal → Bestanden: de zending staat onder **Ontvangen**.
 

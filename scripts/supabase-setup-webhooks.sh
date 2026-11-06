@@ -15,7 +15,8 @@
 #      en de taak (elke minuut). Staat de migratie van 2026-10-04 nog niet op de
 #      database, dan slaat het script deze stap over.
 #   5. Bestanden versturen: staat de pg_cron-taak 'file-transfer-purge' er nog
-#      niet, dan een nieuw FILE_TRANSFER_CRON_SECRET en de taak (elk kwartier).
+#      niet, dan een nieuw FILE_TRANSFER_CRON_SECRET en de taak (elke nacht om
+#      02:00 UTC, 03:00 Nederlandse wintertijd).
 #      Die ruimt de bestanden van verlopen en ingetrokken zendingen op. Staat de
 #      migratie van 2026-10-13 nog niet op de database, dan slaat het script
 #      deze stap over.
@@ -131,7 +132,16 @@ SQL
   echo "PORTAL_NOTIFY_CRON_SECRET gezet en de taak 'portal-notify-drain' ingepland (elke minuut)."
 fi
 
-# ── 5. Bestanden versturen: opruimen na de vervaldatum, elk kwartier ──────
+# ── 5. Bestanden versturen: opruimen na de vervaldatum, elke nacht ────────
+#
+# Om 02:00 UTC: pg_cron rekent in UTC, dus dat is 03:00 Nederlandse wintertijd
+# en 04:00 zomertijd. Eerst stond hier elk kwartier. Maar een mislukte
+# verwijdering krijgt tien pogingen (storage_purge_queue.attempts), zonder
+# pauze ertussen. Bij elk kwartier waren die na ruim twee uur op: lag de
+# media-worker zo lang plat, dan bleef zo'n bestand voorgoed in R2 staan. Nu
+# zijn dat tien nachten. De keerzijde: per nacht gaan er hoogstens 500 sleutels
+# uit de wachtrij (drainPurgeQueue in file-transfer). De toegang hangt er niet
+# van af, want een zending gaat op zijn vervaldatum zelf dicht.
 if [ "$(sql -c "select to_regprocedure('public.file_transfer_purge_candidates(integer)') is not null")" != "t" ]; then
   echo "Bestanden versturen: de migratie 20261013100000 staat nog niet op deze database; overgeslagen."
 elif [ "$(sql -c "select count(*) from cron.job where jobname = 'file-transfer-purge'")" != "0" ]; then
@@ -143,12 +153,12 @@ else
   sql -v secret="$purge_secret" -v url="https://${ref}.functions.supabase.co/file-transfer?cron=purge" >/dev/null <<'SQL'
 select cron.schedule(
   'file-transfer-purge',
-  '*/15 * * * *',
+  '0 2 * * *',
   format(
     'select net.http_post(url := %L, headers := jsonb_build_object(''Content-Type'', ''application/json'', ''x-cron-secret'', %L), body := ''{}''::jsonb, timeout_milliseconds := 120000);',
     :'url', :'secret'));
 SQL
-  echo "FILE_TRANSFER_CRON_SECRET gezet en de taak 'file-transfer-purge' ingepland (elk kwartier)."
+  echo "FILE_TRANSFER_CRON_SECRET gezet en de taak 'file-transfer-purge' ingepland (elke nacht om 02:00 UTC)."
 fi
 
 echo "Klaar: de webhooks zijn ingericht op ${ref}."
