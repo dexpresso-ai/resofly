@@ -152,6 +152,23 @@ creditnota, datums in Nederlandse tijd en notities over meerdere pagina's.
 - de migratieketen vanaf nul (`supabase db start`): 240 van 240. Daarna de
   nieuwe migratie nog een keer: foutloos, met één versie van elke functie.
 
+## Uitrol
+
+- **Deploy Supabase run 178:** de migratie is toegepast, de edge functions
+  zijn uitgerold en de rooktest is geslaagd.
+- **Frontend checks run 133:** de migratieketen vanaf nul, `deno check` (ook de
+  documentopmaak), de typecheck, CSP en de unit tests zijn groen. De mobiele
+  lay-outtest en het laden per module liepen nog toen dit geschreven werd.
+
+**Nacontrole tegen de live functies** (teruggedraaid):
+
+- De migratietest geeft precies dezelfde uitkomst als de droogrun.
+- De eind-tot-eindcyclus is voor alle drie de rechtsvormen gelijk.
+- De matrix telt 827 combinaties, zonder verschil.
+- Op staging staan 240 migraties; de laatste is `20261105233000`, en er is van
+  `close_vat_period` en `book_asset_disposal` precies één versie.
+- `anon` heeft in public niets open, en er is niets van de tests blijven staan.
+
 ## Open punten
 
 | Punt | Waarom nog niet |
