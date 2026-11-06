@@ -36,6 +36,48 @@ geweigerde functieaanroep de database crashen, en het beveiligingsscenario doet 
 expres. Draai lokaal op 17.6.1.178 of nieuwer: zet `17.6.1.178` in
 `supabase/.temp/postgres-version` vóór `supabase start` (en commit die wijziging niet).
 
+## UI-test in de browser (`ui.mjs`)
+
+Dezelfde stromen zoals een gebruiker ze doorloopt: de app (Vite) in Chromium, met klikken op
+de echte knoppen en invullen van de echte formulieren. Waarom: hierboven worden de functies
+rechtstreeks aangeroepen. Of een knop ook díe functie aanroept, en of de gebruiker daarna de
+juiste uitkomst ziet, zie je pas als een browser klikt.
+
+De browser praat met `ui-server.mjs`: `/functions/v1/<naam>` gaat naar de echte edge function in
+het testproces (met de nepdiensten), al het andere ongewijzigd naar de gateway. De server houdt
+bij welke functie of RPC er werd aangeroepen; de stappen controleren dat. Een klant opent de link
+uit de vastgelegde mail in een eigen browser zonder sessie.
+
+```bash
+# stack en pakketten als hierboven; in een cloudsessie: RESOFLY_CHROMIUM=/opt/pw-browsers/chromium
+node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs
+node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs offerte contract --schermafdrukken=/tmp/ui
+```
+
+Scenario's: `offerte` (formulier, ter goedkeuring, goedkeuren, versturen, akkoord van de klant,
+factuur maken), `factuur` (versturen, publieke pagina, herinnering, crediteren), `intrekken`,
+`contract` (versturen, ondertekenen, terug naar concept) en `rollen` (kijker, lezer en boekhouder
+zien geen knoppen die iets veranderen; de medewerker en de beheerder bij dezelfde stukken wel).
+
+Elke stap controleert ook: geen JavaScript-fout, geen foutmelding of "laden…" die blijft staan,
+en geen mislukte aanroep die de stap niet verwachtte. Mislukt een stap, dan komt er een
+schermafdruk (standaard in `<tmp>/stromen-ui`). Een run duurt ruim twee minuten.
+
+Goed om te weten:
+
+- de app draait op een eigen poort (vanaf 5310). De test zet die herkomst bij de toegestane
+  origins van de functies en als adres in de mails; de gewone `ORIGIN` blijft geldig;
+- inloggen gaat met een magische link via de admin-API (`generate_link` + `verify`). Niet met
+  een nieuw wachtwoord: GoTrue trekt dan alle sessies van die gebruiker in;
+- het werkblad begint op Offertes. Het dashboard roept `calendar-integrations` aan, en die
+  functie laadt in deze harnas niet (`ical.js` van esm.sh staat niet in `loader.mjs`);
+- realtime draait niet in de lokale stack: die websocketfouten in de console tellen niet mee.
+  Ook de Word-editor (Collabora) en de media-worker van de browser zijn er niet, dus alleen
+  rich-text contracten. Die maakt de test aan zoals het contractformulier ze opslaat: het
+  formulier maakt zelf alleen nog Word-contracten;
+- Vite gebruikt een eigen cachemap (`node_modules/.vite-stromen-ui`) en geen HMR, zodat andere
+  Vite-servers of wijzigingen in `src/` de pagina niet midden in een stap herladen.
+
 ## Bestanden
 
 | Bestand | Wat |
@@ -48,3 +90,5 @@ expres. Draai lokaal op 17.6.1.178 of nieuwer: zet `17.6.1.178` in
 | `wereld.mjs` | een organisatie met alle rollen, bedrijfsgegevens en twee klanten met portaal |
 | `toets.mjs` | de testloper: stappen, controles, telling |
 | `run.mjs` | start de gekozen scenario's |
+| `ui.mjs` | de UI-test in Chromium (zie hierboven) |
+| `ui-server.mjs` | één adres voor de browser: functies in het testproces, de rest naar de gateway |
