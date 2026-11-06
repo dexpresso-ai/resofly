@@ -1,5 +1,5 @@
 import type { ParsedBankStatement, ParsedBankTransaction } from '../../types';
-import { amountToCents, normalizeDate } from './dedup';
+import { amountToCents, normalizeDate } from './dedup.ts';
 
 /** Splitst één CSV-regel met respect voor quotes. */
 function splitLine(line: string, delim: string): string[] {
@@ -99,12 +99,30 @@ export function parseCsv(raw: string, fileName: string): ParsedBankStatement {
   const debitCol = hasPair ? debitPair : -1;
   const creditCol = hasPair ? creditPair : -1;
   const amountCol = hasPair ? -1 : findCol(headers, ['transactiebedrag', 'bedrag', 'amount', 'mutatie'], [dateCol]);
-  const indicatorCol = hasPair ? -1 : findCol(
+  const namedIndicatorCol = hasPair ? -1 : findCol(
     headers,
     ['af bij', 'bij af', 'debet credit', 'credit debet', 'debit credit', 'credit debit',
       'mutatiesoort indicator', 'debet of credit', 'indicator', 'dc', 'type'],
     [dateCol, amountCol],
   );
+  // Een kolom telt pas als Af/Bij-kolom als de waarden er ook zo uitzien. Op
+  // naam alleen pakte "Type betaling" (Knab) de plaats van "CreditDebet": dan
+  // werden alle uitgaven ontvangsten, en bleef de waarschuwing daarover weg.
+  const looksLikeIndicator = (col: number): boolean => {
+    if (col < 0) return false;
+    let seen = 0;
+    let ok = 0;
+    for (let i = 1; i < lines.length && seen < 50; i += 1) {
+      const value = (splitLine(lines[i], delim)[col] ?? '').toLowerCase().trim();
+      if (!value) continue;
+      seen += 1;
+      if (IND_DEBIT.test(value) || IND_CREDIT.test(value)) ok += 1;
+    }
+    return seen > 0 && ok / seen >= 0.9;
+  };
+  const indicatorCol = hasPair ? -1
+    : looksLikeIndicator(namedIndicatorCol) ? namedIndicatorCol
+    : headers.findIndex((_, col) => col !== dateCol && col !== amountCol && looksLikeIndicator(col));
 
   const claimed = [dateCol, amountCol, debitCol, creditCol, indicatorCol];
   const ibanCol = findCol(headers, ['tegenrekening iban', 'iban tegenpartij', 'counterparty iban', 'tegenrekening', 'iban'], claimed);

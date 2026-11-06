@@ -7,6 +7,7 @@ import { PublicBrandFooter, PublicDocHero, PublicDocState, usePublicBrandTheme }
 import { formatISODate } from '../lib/dates';
 import type { BrandingPayload } from '../lib/branding';
 import { safeCheckoutUrl } from '../lib/safeUrl';
+import { formatDocUnitPrice } from '../lib/documentLayout';
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan
 // .message altijd de generieke "Edge Function returned a non-2xx status code" is.
@@ -186,7 +187,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
       <div className="public-lines">
         {(invoice.lines || []).map(line => {
           return <div className="public-line" key={line.id || line.description}>
-            <div><strong>{line.description}</strong><span>{line.quantity} × {euro(line.unit_price)} · btw {line.vat ?? 0}%</span></div>
+            <div><strong>{line.description}</strong><span>{line.quantity} × {formatDocUnitPrice(Number(line.unit_price) || 0)} · btw {line.vat ?? 0}%</span></div>
             <strong>{euro(lineGross(line))}</strong>
           </div>;
         })}

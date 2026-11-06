@@ -4,14 +4,14 @@ import {
   extendPreparationTerm, fileAnnualAccounts, postPayrollJournal, prepareAnnualAccounts,
   reverseAnnualAccounts, reverseCorporateTaxReturn, reverseDgaInterest, reverseDividendDistribution,
   patchShareholder, reverseResultAppropriation, saveFiscalYearSizeInputs, signAnnualAccounts, updateShareholder,
-  upsertCompanySettings,
+  updateRow,
   type ShareholderInput,
 } from '../repository';
 import { finalizeCorporateTax, saveCorporateTax } from '../../services/corporateTaxService';
 import { renderAnnualAccountsPdf, renderAnnualAccountsPublication } from '../../services/annualAccountsService';
 import { euro, dateNL } from '../format';
 import { optText, text, type ActionExecutor } from './types';
-import type { CompanySettingsInput, LegalForm } from '../../types';
+import type { LegalForm } from '../../types';
 
 /**
  * Uitvoerders voor de handelingen van de ZAKELIJKE MODULE (BV/Vpb). Elke functie
@@ -53,11 +53,10 @@ export const BUSINESS_EXECUTORS: Record<string, ActionExecutor> = {
     const legalForm = text(payload, 'legal_form') as LegalForm;
     const current = ctx.data.companySettings;
     if (!current) throw new Error('Er zijn nog geen bedrijfsgegevens vastgelegd; vul die eerst in bij Instellingen → Facturatie.');
-    // Het scherm slaat het hele formulier op; de kolommen die niet van dat
-    // formulier zijn (id, organisatie, sporen) horen niet in de upsert.
-    const settings: Record<string, unknown> = { ...current, legal_form: legalForm };
-    for (const key of ['id', 'organization_id', 'created_by', 'created_at', 'updated_at']) delete settings[key];
-    await upsertCompanySettings(ctx.organizationId, settings as unknown as CompanySettingsInput);
+    // Alleen de rechtsvorm. Eerder ging de hele kopie uit de browser terug in
+    // een upsert: wat een collega intussen wijzigde (IBAN, KOR, btw-periode),
+    // werd stil teruggezet naar de stand van toen dit scherm laadde.
+    await updateRow('company_settings', current.id, { legal_form: legalForm }, ctx.organizationId);
     return `Rechtsvorm vastgelegd op ${optText(payload, 'label') ?? legalForm}`;
   },
 

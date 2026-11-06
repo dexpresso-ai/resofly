@@ -303,6 +303,8 @@ const invoices = defineSource<AppData['invoices'][number]>({
     { key: 'status', label: 'Status', type: 'enum', role: 'dimension', enumValues: [...ENUMS.invoiceStatus], get: r => r.status },
     { key: 'date', label: 'Factuurdatum', type: 'date', role: 'dimension', get: r => r.date },
     { key: 'amount', label: 'Bedrag (incl. btw)', type: 'money', role: 'measure', get: r => total(r.lines).total },
+    // Omzet is exclusief btw; de sjablonen "Omzet per …" telden de btw mee.
+    { key: 'subtotal', label: 'Bedrag (excl. btw)', type: 'money', role: 'measure', get: r => total(r.lines).subtotal },
   ],
 });
 
@@ -421,13 +423,13 @@ export interface ReportTemplate { name: string; description: string; definition:
 export const REPORT_TEMPLATES: ReportTemplate[] = [
   {
     name: 'Omzet per klant',
-    description: 'Som van bedrag van betaalde facturen, per klant — dit jaar.',
-    definition: { source: 'invoices', measure: { field: 'amount', agg: 'sum' }, dimension: 'client', granularity: 'month', filters: [{ field: 'status', value: 'paid' }], datePreset: 'this_year', chart: 'bar' },
+    description: 'Som van het bedrag excl. btw van betaalde facturen, per klant — dit jaar.',
+    definition: { source: 'invoices', measure: { field: 'subtotal', agg: 'sum' }, dimension: 'client', granularity: 'month', filters: [{ field: 'status', value: 'paid' }], datePreset: 'this_year', chart: 'bar' },
   },
   {
     name: 'Omzet per maand',
-    description: 'Som van bedrag van betaalde facturen per maand — laatste 12 maanden.',
-    definition: { source: 'invoices', measure: { field: 'amount', agg: 'sum' }, dimension: 'date', granularity: 'month', filters: [{ field: 'status', value: 'paid' }], datePreset: 'last_12m', chart: 'line' },
+    description: 'Som van het bedrag excl. btw van betaalde facturen per maand — laatste 12 maanden.',
+    definition: { source: 'invoices', measure: { field: 'subtotal', agg: 'sum' }, dimension: 'date', granularity: 'month', filters: [{ field: 'status', value: 'paid' }], datePreset: 'last_12m', chart: 'line' },
   },
   {
     name: 'Facturen per status',

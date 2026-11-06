@@ -1,6 +1,6 @@
 import type { ParsedBankStatement, ParsedBankTransaction } from '../../types';
-import { amountToCents } from './dedup';
-import { mt940Counterparty, mt940EntryDate, mt940Remittance } from './mt940Fields';
+import { amountToCents } from './dedup.ts';
+import { mt940Counterparty, mt940EntryDate, mt940Remittance } from './mt940Fields.ts';
 
 /** yymmdd -> ISO. Eeuw heuristiek: 70-99 => 19xx, anders 20xx. */
 function isoFromYYMMDD(yymmdd: string): string | null {
@@ -58,7 +58,13 @@ export function parseMt940(raw: string, fileName: string): ParsedBankStatement {
       const iso = isoFromYYMMDD(/^[CD](\d{6})/.exec(body.trim())?.[1] ?? '');
       if (iso && !periodStart) periodStart = iso;
       if (opening === null) opening = balanceCents(body);
-    } else if (tag === '62F' || tag === '62M') {
+    } else if (tag === '62F' || tag === '62M' || tag === '64' || tag === '65') {
+      // Na het eindsaldo hoort niets meer bij de laatste transactie. SWIFT staat
+      // een :86: op afschriftniveau toe (ING zet daar /SUM/…); die overschreef de
+      // omschrijving van de laatste transactie van elke dag, en daarmee het
+      // factuurnummer waarop de matcher koppelt.
+      if (pending) { transactions.push(pending); pending = null; }
+      if (tag === '64' || tag === '65') continue;
       const iso = isoFromYYMMDD(/^[CD](\d{6})/.exec(body.trim())?.[1] ?? '');
       if (iso) periodEnd = iso;
       closing = balanceCents(body);

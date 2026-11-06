@@ -18,7 +18,7 @@ const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 export interface GerrieStatus { kind: 'thinking' | 'tool'; label: string }
 
 /** Door Gerrie voorgestelde acties — openen vooringevuld in het bestaande formulier. */
-export interface GerrieProposalLine { description: string; quantity: number; unit_price: number; vat: number }
+export interface GerrieProposalLine { description: string; quantity: number; unit_price: number; vat: number; vat_code?: string }
 export interface GerrieInvoiceProposal {
   type: 'invoice';
   client_id: UUID;

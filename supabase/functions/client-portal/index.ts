@@ -578,7 +578,15 @@ async function createInvoicePayment(user: { id: string; email: string }, body: R
     redirectUrl: `${resolvePortalBaseUrl(req)}/portal`,
     actorContact: contact ? { id: contact.id, name: contact.name, email: contact.email } : null,
   });
-  if (!result.ok) throw new PortalError(result.error, result.status as number);
+  if (!result.ok) {
+    // Een storing (5xx) bevat de tekst van de database of Mollie (tabel- en
+    // kolomnamen, codes). Die is voor het logboek, niet voor de klant.
+    if ((result.status as number) >= 500) {
+      console.error('client-portal checkout failure', result.error);
+      throw new PortalError('De betaling kon nu niet worden gestart. Probeer het later opnieuw.', result.status as number);
+    }
+    throw new PortalError(result.error, result.status as number);
+  }
   return { checkoutUrl: result.checkoutUrl, mock: result.mock, reused: result.reused };
 }
 

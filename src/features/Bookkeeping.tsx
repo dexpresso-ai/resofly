@@ -135,7 +135,7 @@ export function SuppliersPage({ data, organizationId, canWrite, onChanged, draft
             <thead><tr><th>Naam</th><th>Contact</th><th>BTW-nummer</th><th>IBAN</th><th></th></tr></thead>
             <tbody>{data.suppliers.map(s => (
               <tr key={s.id} className="bk-row" onClick={() => setEdit(s)}>
-                <td data-label="Naam"><strong>{s.name}</strong>{s.supplier_code && <small className="bk-muted"> · {s.supplier_code}</small>}</td>
+                <td data-label="Naam"><strong>{s.name}</strong>{s.supplier_code && <small className="bk-muted"> · {s.supplier_code}</small>}{s.inbox_unverified && <span className="status-pill bk-asset-active" title="Aangemaakt uit een binnengekomen factuur; controleer IBAN en btw-nummer"> Nog bevestigen</span>}</td>
                 <td data-label="Contact">{s.contact_name || s.email || '—'}</td>
                 <td data-label="btw">{s.vat_number || '—'}</td>
                 <td data-label="iban">{s.iban || '—'}</td>
@@ -157,6 +157,10 @@ function SupplierForm({ data, organizationId, canWrite, supplier, seed, expenseA
   const [form, setForm] = useState<Record<string, any>>(() => supplier ? { ...supplier } : { ...emptySupplier(), ...(seed ?? {}) });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Een leverancier uit de inbox heeft het IBAN en btw-nummer van het document
+  // zelf. Pas als iemand die bij de leverancier heeft nagegaan, boekt de inbox
+  // er automatisch op (anders kan wie het inboxadres kent zelf kosten boeken).
+  const [verified, setVerified] = useState(false);
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
 
   async function save() {
@@ -170,6 +174,7 @@ function SupplierForm({ data, organizationId, canWrite, supplier, seed, expenseA
         vat_number: form.vat_number || null, kvk_number: form.kvk_number || null, iban: form.iban || null,
         default_expense_account_id: form.default_expense_account_id || null, default_vat_code: form.default_vat_code || null,
         notes: form.notes || null, status: form.status || 'active',
+        ...(supplier?.inbox_unverified && verified ? { inbox_unverified: false } : {}),
       };
       supplier ? await updateRow<Supplier>('suppliers', supplier.id, values, organizationId)
                : await insertRow<Supplier>('suppliers', organizationId, values);
@@ -194,6 +199,15 @@ function SupplierForm({ data, organizationId, canWrite, supplier, seed, expenseA
         <Button variant="primary" onClick={save} disabled={!canWrite || busy}>{busy ? 'Bezig…' : 'Opslaan'}</Button>
       </div>}>
       {error && <div className="error">{error}</div>}
+      {supplier?.inbox_unverified && (
+        <label className="bk-setting-check">
+          <input type="checkbox" checked={verified} onChange={e => setVerified(e.target.checked)} disabled={!canWrite} />
+          <span>
+            Ik heb het IBAN en btw-nummer bij de leverancier zelf gecontroleerd
+            <small className="bk-muted"> · deze leverancier is aangemaakt uit een binnengekomen factuur. Tot je dit bevestigt, boekt de inbox niets automatisch op deze leverancier. Controleer de gegevens via een eerdere factuur, de website of een telefoontje, niet via de mail zelf.</small>
+          </span>
+        </label>
+      )}
       <div className="bk-grid2">
         <Field label="Naam"><Input value={form.name} onChange={e => set('name', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Leverancierscode"><Input value={form.supplier_code} onChange={e => set('supplier_code', e.target.value)} disabled={!canWrite} /></Field>
@@ -588,7 +602,7 @@ export interface InvoiceFormSeed {
   newSupplier: NewSupplierPayload | null;
   /** Herkomst van het concept: 'ai_scan' (Claude) of 'import' (UBL-e-factuur). */
   source: 'ai_scan' | 'import';
-  form: { supplier_invoice_number: string; date: string; due_date: string; notes: string };
+  form: { supplier_invoice_number: string; date: string; due_date: string; notes: string; currency?: string };
   lines: PurchaseInvoiceLine[];
   pendingFile: File | null;
   extractionMeta: Record<string, unknown>;
@@ -648,6 +662,9 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
         date: p.date ?? todayIso(),
         due_date: p.due_date ?? '',
         notes: p.notes ?? '',
+        // De valuta van het document. Eerder viel die hier weg en gold de
+        // standaard EUR: een factuur van $ 500 werd € 500, zonder waarschuwing.
+        currency: (p.currency || 'EUR').toUpperCase(),
       },
       lines,
       pendingFile: file,
@@ -762,14 +779,14 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
   const [form, setForm] = useState<Record<string, any>>(() => invoice ? {
     supplier_id: invoice.supplier_id ?? '', supplier_invoice_number: invoice.supplier_invoice_number ?? '',
     internal_number: invoice.internal_number ?? '', date: invoice.date, due_date: invoice.due_date ?? '',
-    project_id: invoice.project_id ?? '', notes: invoice.notes ?? '',
+    project_id: invoice.project_id ?? '', notes: invoice.notes ?? '', currency: invoice.currency || 'EUR',
   } : seed ? {
     supplier_id: seed.supplierId ?? (seed.newSupplier ? '__new__' : ''),
     supplier_invoice_number: seed.form.supplier_invoice_number,
     internal_number: nextPurchaseNumber(data), date: seed.form.date || today, due_date: seed.form.due_date,
-    project_id: '', notes: seed.form.notes,
+    project_id: '', notes: seed.form.notes, currency: seed.form.currency || 'EUR',
   } : {
-    supplier_id: '', supplier_invoice_number: '', internal_number: nextPurchaseNumber(data), date: today, due_date: '', project_id: '', notes: '',
+    supplier_id: '', supplier_invoice_number: '', internal_number: nextPurchaseNumber(data), date: today, due_date: '', project_id: '', notes: '', currency: 'EUR',
   });
   const [lines, setLines] = useState<PurchaseInvoiceLine[]>(() => invoice?.lines?.length
     ? invoice.lines
@@ -792,6 +809,17 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
     if (form.supplier_id === '__new__' && !seed?.newSupplier) { setError('Kies een leverancier.'); return; }
     const cleaned = lines.filter(l => String(l.description || '').trim() || Number(l.amount_cents));
     if (cleaned.length === 0) { setError('Voeg minimaal één regel toe.'); return; }
+    // Dubbel? De inbox houdt een dubbele factuur tegen, de scan en het handmatige
+    // formulier niet: een PDF die al via de inbox binnenkwam, werd zo twee keer
+    // geboekt (dubbele kosten en voorbelasting). Zelfde leverancier en hetzelfde
+    // factuurnummer (zonder spaties en hoofdletters) vraagt eerst om bevestiging.
+    const norm = (v: unknown) => String(v ?? '').replace(/[\s.\-_/]/g, '').toUpperCase();
+    const number = norm(form.supplier_invoice_number);
+    if (number && form.supplier_id !== '__new__') {
+      const twin = data.purchaseInvoices.find(pi => pi.id !== invoice?.id && pi.status !== 'cancelled'
+        && pi.supplier_id === form.supplier_id && norm(pi.supplier_invoice_number) === number);
+      if (twin && !confirm(`Er bestaat al een inkoopfactuur ${twin.supplier_invoice_number} van deze leverancier (${twin.internal_number ?? 'zonder intern nummer'}, ${twin.date}). Toch opslaan?`)) return;
+    }
     setBusy(true); setError(null);
     try {
       // Nieuwe leverancier uit de AI-scan? Maak hem aan en gebruik zijn id.
@@ -806,6 +834,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
         internal_number: form.internal_number || nextPurchaseNumber(data), date: form.date, due_date: form.due_date || null,
         project_id: form.project_id || null, notes: form.notes || null, lines: cleaned,
         subtotal_cents: t.subtotal_cents, vat_cents: t.vat_cents, total_cents: t.total_cents,
+        currency: String(form.currency || 'EUR').toUpperCase(),
       };
       if (invoice) {
         await updateRow<PurchaseInvoice>('purchase_invoices', invoice.id, values, organizationId);
@@ -833,6 +862,12 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
         {!readOnly && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Opslaan als concept'}</Button>}
       </div>}>
       {error && <div className="error">{error}</div>}
+      {String(form.currency || 'EUR').toUpperCase() !== 'EUR' && (
+        <div className="bk-note" role="alert">
+          Deze factuur is in {String(form.currency).toUpperCase()}. Het grootboek boekt in euro's: reken de bedragen om (koers van de factuurdatum), vul ze in euro's in en zet de valuta op EUR. Boeken in een andere valuta weigert ResoFly.
+          {!readOnly && <Button onClick={() => set('currency', 'EUR')}>Bedragen zijn omgerekend: valuta op EUR</Button>}
+        </div>
+      )}
       {seed && (
         <div className="bk-note bk-ai-note">
           <strong><Sparkles size={13} /> {seed.source === 'import' ? 'E-factuur (UBL)' : 'AI-voorstel'}</strong> — controleer leverancier, grootboekrekeningen, BTW en bedragen voordat je opslaat.{seed.source !== 'import' && <> Betrouwbaarheid: {CONFIDENCE_LABEL[seed.ai.confidence]}.</>}
@@ -1177,8 +1212,11 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
         // van beide knoppen nog uit komt. De database weigert het ook.
         // Ook niet: de doorboeking van een btw-aangifte (corrigeren gaat via een
         // suppletie) en een tegenboeking zelf (boek dan het origineel opnieuw).
+        // En niet een verkoopfactuur, creditnota of betaling: die hebben hun eigen
+        // terugweg (Crediteren, "Boeking ongedaan maken" bij de bank). Een
+        // tegengeboekte factuur bleef "verzonden" en liep daarna overal vast.
         const canReverse = canWrite && entry.status === 'posted' && !isReversedPair && !isReversalEntry
-          && !['year_close', 'result_appropriation', 'corporate_tax', 'dga_interest', 'dividend', 'vat_return'].includes(entry.source_type);
+          && !['year_close', 'result_appropriation', 'corporate_tax', 'dga_interest', 'dividend', 'vat_return', 'sales_invoice', 'credit_note', 'payment'].includes(entry.source_type);
         return (
           <div key={entry.id} className={`bk-entry${entry.status === 'reversed' || isReversedPair ? ' is-reversed' : ''}`}>
             <div className="bk-entry-head">
@@ -1294,7 +1332,10 @@ function MemorialModal({ data, organizationId, onClose, onSaved }: {
         <div className="bk-lines-head bk-lines-head-memorial"><span>Rekening</span><span>Omschrijving</span><span>Tegenpartij</span><span>Project</span><span>BTW</span><span className="bk-num">Debet</span><span className="bk-num">Credit</span><span /></div>
         {lines.map(l => {
           const acc = accountById.get(l.account_id);
-          const isReceivable = acc?.subtype === 'accounts_receivable';
+          // Een klant kan ook op een omzetregel: de ICP-opgaaf groepeert per klant
+          // van de omzetregel. Een ICP-correctie zonder klant kwam wel in rubriek
+          // 3b, maar nooit in de opgaaf; dan liepen die twee uiteen.
+          const isReceivable = acc?.subtype === 'accounts_receivable' || acc?.type === 'revenue';
           const isPayable = acc?.subtype === 'accounts_payable';
           return (
           <div className="bk-line bk-line-memorial" key={l.key}>

@@ -12,6 +12,7 @@ import { exportFinancePDF, financePdfOptions } from '../lib/pdf';
 import { safeCheckoutUrl } from '../lib/safeUrl';
 import { clientEInvoiceChannel, invoiceRecipientFor, latestEInvoiceDelivery, mollieNeedsSync, mollieStatusLabel, peppolStatusLabel } from '../lib/eInvoicing';
 import { loadInvoicePdfSnapshot, loadMollieInvoicePdf } from '../lib/repository';
+import { parseDutchAmount, parseDutchAmountCents } from '../lib/money';
 
 export type RefundInput = { amountCents: number; reason: string; createCreditNote: boolean; idempotencyKey: string; kind: 'manual' | 'mollie' };
 
@@ -413,16 +414,8 @@ function getFinanceStatusLabel<T extends Quote | Invoice>(kind: FinanceKind, doc
 }
 
 function parseAmountFilter(value: string): number | null {
-  const compact = value.replace(/\s/g, '').replace(/[€]/g, '');
-  const normalized = compact.includes(',') && compact.includes('.')
-    ? compact.replace(/\./g, '').replace(',', '.')
-    : compact.includes(',')
-      ? compact.replace(',', '.')
-      : compact;
-  const safeValue = normalized.replace(/[^0-9.-]/g, '');
-  if (!safeValue) return null;
-  const parsed = Number(safeValue);
-  return Number.isFinite(parsed) ? parsed : null;
+  // "1.000" is duizend, niet 1 (zie parseDutchAmount).
+  return parseDutchAmount(value);
 }
 
 function normalizeDateInput(value: string | null | undefined): string {
@@ -1385,7 +1378,7 @@ function RefundModal({ invoice, mollieRefundable, inFlightCents = 0, onClose, on
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const amountCents = Math.round(Number(String(amountEuro).replace(',', '.')) * 100);
+  const amountCents = parseDutchAmountCents(String(amountEuro)) ?? NaN;
   const amountValid = Number.isFinite(amountCents) && amountCents > 0 && amountCents <= remainingCents;
   const isMollie = method === 'mollie';
 

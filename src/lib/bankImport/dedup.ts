@@ -62,19 +62,41 @@ export function amountToCents(raw: string): number {
   return neg ? -value : value;
 }
 
-/** Normaliseert een datum naar ISO (YYYY-MM-DD). Accepteert ook DD-MM-YYYY en YYYYMMDD. */
+/** Een echte kalenderdatum als ISO, of null (31-2 bestaat niet). */
+function isoDate(y: number, m: number, d: number): string | null {
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/**
+ * Normaliseert een datum naar ISO (YYYY-MM-DD): JJJJ-MM-DD (ook met tijd),
+ * JJJJ/MM/DD, JJJJMMDD, en Nederlands D-M-JJJJ of DD-MM-JJ.
+ *
+ * Een Nederlandse datum is altijd dag-maand-jaar, ook zonder voorloopnullen
+ * (zo slaat Excel een Rabobank-CSV op). Eerder ging alles behalve DD-MM-JJJJ
+ * naar `new Date()`, dat maand-dag leest, en daarna naar UTC: "5-1-2026" werd
+ * 30 april (ander kwartaal), "13-1-2026" viel weg. Nu geen Date-gok en geen
+ * UTC voor een datum zonder tijd.
+ */
 export function normalizeDate(raw: string): string | null {
   const s = (raw || '').trim();
   if (!s) return null;
-  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-  m = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(s);
-  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-  m = /^(\d{8})$/.exec(s);
-  if (m) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
-  m = /^(\d{2})[-/.](\d{2})[-/.](\d{4})$/.exec(s);
-  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
-  const d = new Date(s);
-  if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ].*)?$/.exec(s);
+  if (m) return isoDate(Number(m[1]), Number(m[2]), Number(m[3]));
+  m = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/.exec(s);
+  if (m) return isoDate(Number(m[1]), Number(m[2]), Number(m[3]));
+  m = /^(\d{4})(\d{2})(\d{2})$/.exec(s);
+  if (m) return isoDate(Number(m[1]), Number(m[2]), Number(m[3]));
+  m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4}|\d{2})$/.exec(s);
+  if (m) {
+    const year = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+    return isoDate(year, Number(m[2]), Number(m[1]));
+  }
+  // Alleen nog een datum met een maandnaam ("5 jan 2026"): lokaal lezen, niet via UTC.
+  if (/[a-z]/i.test(s)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) return isoDate(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  }
   return null;
 }

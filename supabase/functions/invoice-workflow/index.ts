@@ -332,8 +332,11 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
       // error, a revoked key, …) must NEVER block sending the invoice itself.
       // We fall back to a PDF-only email and report the reason back so the user
       // can fix the configuration without losing the send.
-      paymentLinkError = error instanceof Error ? error.message : 'Mollie-betaallink kon niet worden aangemaakt.';
-      console.warn('Invoice payment link creation failed, sending PDF-only:', paymentLinkError);
+      const raw = error instanceof Error ? error.message : 'Mollie-betaallink kon niet worden aangemaakt.';
+      console.warn('Invoice payment link creation failed, sending PDF-only:', raw);
+      // Naar het scherm alleen een zin: de ruwe melding bevatte "Databasefunctie
+      // … mislukt: <tekst | details | code>" en ging zo langs publicActionError heen.
+      paymentLinkError = INVOICE_DEBUG_ERRORS ? raw : publicActionError(raw).message;
       paymentUrl = null;
     }
   }
@@ -581,8 +584,9 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
       const checkout = await createInvoicePaymentCheckout(actorUserId, organizationId, invoiceId, {});
       paymentUrl = checkout.checkoutUrl || null;
     } catch (error) {
-      paymentLinkError = error instanceof Error ? error.message : 'Mollie-betaallink kon niet worden aangemaakt.';
-      console.warn('Reminder payment link creation failed, sending without link:', paymentLinkError);
+      const raw = error instanceof Error ? error.message : 'Mollie-betaallink kon niet worden aangemaakt.';
+      console.warn('Reminder payment link creation failed, sending without link:', raw);
+      paymentLinkError = INVOICE_DEBUG_ERRORS ? raw : publicActionError(raw).message;
       paymentUrl = null;
     }
   }
@@ -762,8 +766,11 @@ type DunningNoticeRow = {
   calculation_date: string; due_date: string | null; deadline_date: string | null;
 };
 
+// De rekendatum van een aanmaning is de Nederlandse datum. In UTC kreeg een
+// aanmaning die om 00:30 uur werd verstuurd de datum van gisteren, en daarmee
+// een termijn van dertien dagen.
 function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return amsterdamDate(new Date());
 }
 
 async function loadStatutoryRatePeriods(): Promise<RatePeriod[]> {
