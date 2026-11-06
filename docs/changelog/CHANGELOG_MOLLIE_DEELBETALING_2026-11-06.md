@@ -153,3 +153,17 @@ eerder zag je de kale Engelse status.
   `client-portal` en `invoice-public` (staan nog buiten CI): evenveel fouten
   als vóór de wijziging, op precies dezelfde plekken (de bekende
   `Uint8Array`-strengheid).
+
+## Uitrol op staging
+
+- Deploy-run 180 (*Deploy Supabase (staging)*) geslaagd:
+  - migratie `20261106100000` doorgevoerd;
+  - de edge functions uitgerold;
+  - de rooktest groen.
+- Live sinds 11:18 uur: `invoice-workflow` versie 130, `client-portal` 110 en
+  `invoice-public` 119.
+- Nacontrole op de live database:
+  - `update_invoice_payment_status` kent deelbetaling en te veel betaald;
+  - de vier nieuwe soorten gebeurtenissen bestaan (43 in totaal);
+  - `anon` kan geen van de nieuwe of gewijzigde functies aanroepen;
+  - de scenario's T1–T7 geven live precies dezelfde uitkomst als in de proef.

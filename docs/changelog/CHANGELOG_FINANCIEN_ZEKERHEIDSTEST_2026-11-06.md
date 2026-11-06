@@ -102,6 +102,7 @@ anders vermeld.
 | Twee keer tegelijk "beginbalans vastleggen" | controleren en boeken zonder grendel: twee beginbalansen mogelijk | eerst een grendel per organisatie |
 | Twee boekjaren tegelijk openen | twee overlappende boekjaren mogelijk (dezelfde startdatum hield de database al tegen) | eerst een grendel per organisatie |
 | Datum uit een bankbestand | de soepele datumlezer van de browser maakte van rommel als `c)103(` het jaar 103 (gevonden door de fuzztest) | alleen jaren 1900–2100; maandnamen in het Nederlands en Engels ("5 mei 2026", "05-okt-2026") |
+| Lege factuur versturen | met "Versturen" ging een conceptfactuur zonder regels (of met alleen een lege regel) als factuur van € 0 naar de klant, en het nummer was op; via de API kon een lege factuur ook rechtstreeks op "verstuurd" | de server weigert vóór het mailen, en de database weigert het uitgeven (`20261106120000_factuur_zonder_inhoud.sql`). Een gratis regel mét omschrijving mag wel; een leeg concept bewaren of annuleren ook. |
 
 De grenzen raken geen bestaande gegevens op staging (btw 0, 9, 20,99 en 21;
 boekjaren van 12 maanden; geen boekingen vóór de start of ver vooruit).
@@ -116,9 +117,6 @@ boekjaren van 12 maanden; geen boekingen vóór de start of ver vooruit).
 - **Gesloten btw-periode**: een memoriaal zónder btw (bijvoorbeeld een
   afschrijving) mag op zijn eigen datum. Hij komt in geen rubriek, en de
   test laat zien dat de cijfers van de aangifte gelijk blijven.
-- **Lege factuur**: een factuur zonder regels die via de API op "verstuurd"
-  wordt gezet, kost een nummer maar komt niet in het grootboek. Niet mooi,
-  wel onschadelijk voor de boeken.
 
 ## Grenzen van deze test
 
@@ -147,6 +145,9 @@ boekjaren van 12 maanden; geen boekingen vóór de start of ver vooruit).
 - `src/lib/bankImport/camt053.ts`: import met `.ts`, zodat de tests hem
   kunnen laden.
 - `src/lib/financeFuzz.test.ts`: de fuzz- en eigenschapstests.
+- `supabase/migrations/20261106120000_factuur_zonder_inhoud.sql`:
+  `enforce_invoice_has_content` met trigger `invoices_lines_present`; en in
+  `invoice-workflow` dezelfde controle vóór het mailen (`invoiceHasContent`).
 
 ## Getest
 
@@ -157,8 +158,14 @@ boekjaren van 12 maanden; geen boekingen vóór de start of ver vooruit).
   - een handmatige post over 11 maanden mag, over 13 niet;
   - de startdag mag, de dag ervoor niet, maar de server mag wel;
   - een creditnota van een leverancier boekt nog steeds goed.
-- **Aanvalstest opnieuw**: van de 65 gevallen gaan alleen de vier bewuste
+- **Aanvalstest opnieuw**: van de 65 gevallen gaan alleen de drie bewuste
   hierboven door. De boeken sluiten (debet = credit).
+- **Lege factuur**:
+  - geen regels, of één lege regel: geweigerd;
+  - alleen een omschrijving (gratis) of alleen een bedrag: mag;
+  - rommel in het aantal geeft nog steeds de bestaande melding;
+  - een leeg concept bewaren en annuleren mag, versturen niet;
+  - een verstuurde factuur kan nog "te laat" worden.
 - **Btw-slot opnieuw**: de cijfers van de afgesloten periode blijven gelijk.
 - **Mollie-scenario's** van de vorige stap: ongewijzigd.
 - **Regressie**:
@@ -170,3 +177,23 @@ boekjaren van 12 maanden; geen boekingen vóór de start of ver vooruit).
   - `npm run typecheck`;
   - `npm test` (1103 tests, waarvan 7 nieuwe fuzz- en eigenschapstests);
   - `supabase db start` vanaf nul.
+
+## Uitrol op staging
+
+- Deploy-run 180: migratie `20261106110000` doorgevoerd, de rooktest groen.
+- Nacontrole op de live database:
+  - de check `vat_codes_rate_range` staat erop, en de trigger
+    `purchase_invoices_lines_valid`;
+  - de datumcontrole in `post_journal_entry` werkt;
+  - de grendels in `create_opening_balance` en `open_fiscal_year` staan erin;
+  - `anon` kan geen van deze functies aanroepen; `authenticated` alleen
+    `open_fiscal_year`, `post_journal_entry` en `create_opening_balance`,
+    zoals voorheen.
+- Live tests, zonder migratie in de testtransactie, met dezelfde uitkomst als
+  de proef:
+  - de grenzen;
+  - de aanvalstest (65 gevallen);
+  - het btw-slot;
+  - eind-tot-eind eenmanszaak, vof en BV;
+  - de rechtenmatrix (827 rijen, 0 verschillen).
+- `20261106120000_factuur_zonder_inhoud.sql` gaat met de volgende uitrol mee.

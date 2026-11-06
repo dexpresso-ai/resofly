@@ -104,6 +104,16 @@ class WorkflowHttpError extends Error {
   constructor(message: string, status: WorkflowHttpErrorStatus = 400) { super(message); this.name = 'WorkflowHttpError'; this.status = status; }
 }
 
+/** Heeft de factuur inhoud: minstens één regel met een omschrijving of een bedrag? Zelfde regel als de database. */
+function invoiceHasContent(lines: unknown): boolean {
+  if (!Array.isArray(lines)) return false;
+  return lines.some((line) => {
+    if (!line || typeof line !== 'object') return false;
+    const l = line as InvoiceLine;
+    return String(l.description ?? '').trim() !== '' || (Number(l.quantity) || 0) * (Number(l.unit_price) || 0) !== 0;
+  });
+}
+
 /**
  * De factuur is bij Mollie al betaald. Een herinnering of aanmaning stopt
  * hierop, in plaats van zonder betaallink toch te vertrekken (de betaallink is
@@ -274,6 +284,13 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   const invoice = await loadInvoice(organizationId, invoiceId);
   if (['paid','cancelled','void','written_off','refunded'].includes(invoice.status)) throw new WorkflowHttpError('Betaalde, terugbetaalde, geannuleerde of afgeboekte facturen kunnen niet worden verstuurd.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  // Geen regels, of alleen een lege regel: dan niet versturen. Eerder kreeg de
+  // klant een factuur van € 0 en was het nummer op. Hier al, vóór er een mail of
+  // Mollie-factuur ontstaat: de status gaat pas ná het mailen op verstuurd (en
+  // daar weigert de database hem ook, enforce_invoice_has_content).
+  if (!invoiceHasContent(invoice.lines)) {
+    throw new WorkflowHttpError(`Factuur ${invoice.number} heeft nog geen regels. Zet erin wat je factureert voordat je hem verstuurt.`, 422);
+  }
 
   const [client, project, quote, company, content] = await Promise.all([
     loadClient(organizationId, invoice.client_id),
