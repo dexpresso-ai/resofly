@@ -22,6 +22,8 @@
 //    statuswijziging), dan komt dat in één mail.
 // ============================================================
 
+import { portalLoginUrl } from './portalAddress.ts';
+
 export type PortalActivityKind = 'created' | 'status' | 'reply';
 export type PortalActorType = 'staff' | 'client' | 'system';
 export type PortalNotifyScope = 'all' | 'own';
@@ -333,13 +335,15 @@ export function portalStatusSentence(status: string): string {
   }
 }
 
-/** Deeplinks in de mail: het portaal opent het juiste dossier en ticket. */
-export function portalTicketUrl(baseUrl: string, clientId: string, ticketId: string): string {
-  const base = baseUrl.replace(/\/+$/, '');
-  return `${base}/portal?dossier=${encodeURIComponent(clientId)}&ticket=${encodeURIComponent(ticketId)}`;
+/**
+ * Deeplinks in de mail: het portaal opent het juiste dossier en ticket. Met
+ * het inlogadres van de leverancier (`loginKey`, _shared/portalAddress.ts)
+ * staat het inlogscherm meteen in zijn huisstijl; zonder het algemene adres.
+ */
+export function portalTicketUrl(baseUrl: string, clientId: string, ticketId: string, loginKey?: string | null): string {
+  return portalLoginUrl(baseUrl, loginKey, { dossier: clientId, ticket: ticketId });
 }
 
-export function portalSettingsUrl(baseUrl: string, clientId: string): string {
-  const base = baseUrl.replace(/\/+$/, '');
-  return `${base}/portal?dossier=${encodeURIComponent(clientId)}&view=instellingen`;
+export function portalSettingsUrl(baseUrl: string, clientId: string, loginKey?: string | null): string {
+  return portalLoginUrl(baseUrl, loginKey, { dossier: clientId, view: 'instellingen' });
 }

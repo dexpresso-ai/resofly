@@ -33,21 +33,33 @@ export interface Branding {
   /** Lichte versie van het logo voor op een donkere kop; null = het gewone logo
    *  (op een licht plaatje als het wegvalt). Sinds migratie 20261015000000. */
   logoDarkDataUrl: string | null;
+  /** De kleuren van het inlogscherm van het portaal; null = automatisch
+   *  (kopkleur, werkvlak, merkkleur). Sinds migratie 20261105110000. */
+  loginBackground: string | null;
+  loginCard: string | null;
+  loginButton: string | null;
+  /** Effen achtergrond op het inlogscherm, zonder verloop, gloed en ringen. */
+  loginPlain: boolean;
 }
 
 /** De huisstijlkolommen, plus de twee naamvelden waar `companyName` uit komt. */
 export const BRANDING_COLUMNS =
   'company_name,trade_name,brand_logo_data_url,brand_accent_color,brand_footer_text,' +
   'brand_hide_powered_by,brand_heading_font,brand_body_font,brand_gallery_bg,brand_client_theme,' +
-  'brand_header_color,brand_logo_dark_data_url';
+  'brand_header_color,brand_logo_dark_data_url,' +
+  'brand_login_bg_color,brand_login_card_color,brand_login_button_color,brand_login_plain';
 
 /**
- * De kolommen die de nieuwste huisstijlmigratie (20261015000000) toevoegt. Draait
- * een functie al terwijl `db push` nog moet, dan faalt een opvraag met deze
- * kolommen erin; vraag dan opnieuw zonder. De kop valt dan terug op automatisch
- * en het gewone logo, wat precies is wat de pagina vóór die migratie toonde.
+ * De kolommen die de nieuwste huisstijlmigratie (20261105110000) toevoegt: de
+ * kleuren van het inlogscherm. Draait een functie al terwijl `db push` nog
+ * moet, dan faalt een opvraag met deze kolommen erin; vraag dan opnieuw zonder.
+ * Het inlogscherm valt dan terug op automatisch, wat precies is wat het vóór
+ * die migratie toonde. De kolommen van 20261015000000 (kopkleur, lichte
+ * logoversie) staan inmiddels overal en blijven dus gewoon in de opvraag.
  */
-export const NEWEST_BRANDING_COLUMNS = ['brand_header_color', 'brand_logo_dark_data_url'];
+export const NEWEST_BRANDING_COLUMNS = [
+  'brand_login_bg_color', 'brand_login_card_color', 'brand_login_button_color', 'brand_login_plain',
+];
 
 /** Een kolomlijst zonder de kolommen van de nieuwste huisstijlmigratie. */
 export function withoutNewestBrandingColumns(columns: string): string {
@@ -69,6 +81,10 @@ export const DEFAULT_BRANDING: Branding = {
   clientTheme: 'dark',
   headerColor: null,
   logoDarkDataUrl: null,
+  loginBackground: null,
+  loginCard: null,
+  loginButton: null,
+  loginPlain: false,
 };
 
 const HEX = /^#[0-9A-Fa-f]{6}$/;
@@ -87,6 +103,7 @@ export function sanitizeBranding(row: Record<string, unknown> | null | undefined
   const galleryBg = String(row.brand_gallery_bg ?? '');
   const header = String(row.brand_header_color ?? '');
   const logoDark = typeof row.brand_logo_dark_data_url === 'string' ? row.brand_logo_dark_data_url : '';
+  const hex = (value: unknown) => (typeof value === 'string' && HEX.test(value) ? value.toUpperCase() : null);
   return {
     logoDataUrl: (row.brand_logo_data_url as string | null) ?? null,
     accentColor: HEX.test(accent) ? accent : DEFAULT_BRANDING.accentColor,
@@ -99,6 +116,10 @@ export function sanitizeBranding(row: Record<string, unknown> | null | undefined
     clientTheme: row.brand_client_theme === 'light' ? 'light' : 'dark',
     headerColor: HEX.test(header) ? header.toUpperCase() : null,
     logoDarkDataUrl: LOGO.test(logoDark) ? logoDark : null,
+    loginBackground: hex(row.brand_login_bg_color),
+    loginCard: hex(row.brand_login_card_color),
+    loginButton: hex(row.brand_login_button_color),
+    loginPlain: row.brand_login_plain === true,
   };
 }
 

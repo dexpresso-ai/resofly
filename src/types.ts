@@ -3377,6 +3377,14 @@ export interface CompanySettings extends OrgScopedRow {
   /** Lichte versie van het logo voor op een donkere kop, als data-URL (zelfde
    *  eisen als het logo). Ontbreekt vóór migratie 20261015000000. */
   brand_logo_dark_data_url?: string | null;
+  /** De kleuren van het inlogscherm van het portaal: achtergrond, inlogkaart en
+   *  knop. Leeg = automatisch (kopkleur, werkvlak, merkkleur); zie loginTheme in
+   *  lib/branding.ts. Ontbreken vóór migratie 20261105110000. */
+  brand_login_bg_color?: string | null;
+  brand_login_card_color?: string | null;
+  brand_login_button_color?: string | null;
+  /** Effen achtergrond op het inlogscherm, zonder verloop, gloed en ringen. */
+  brand_login_plain?: boolean;
   /** Eigen opmaak van offertes en facturen (Instellingen → Documentopmaak);
    *  null = de standaardopmaak. Altijd lezen via parseDocumentLayouts in
    *  src/lib/documentLayout.ts. Ontbreekt vóór migratie 20261105100000. */

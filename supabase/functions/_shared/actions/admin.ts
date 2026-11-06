@@ -284,6 +284,14 @@ function settingsPlan(
   return { title, sub: joinShort(described, 130), kind: 'work', payload: { patch }, ...extra };
 }
 
+/** De kleuren van het inlogscherm (migratie 20261105110000), met hun naam in een voorstel. */
+const LOGIN_COLOR_FIELDS: Array<[string, string]> = [
+  ['brand_login_bg_color', 'achtergrond inlogscherm'],
+  ['brand_login_card_color', 'inlogkaart'],
+  ['brand_login_button_color', 'knop inlogscherm'],
+];
+const LOGIN_COLUMNS = 'brand_login_bg_color, brand_login_card_color, brand_login_button_color, brand_login_plain';
+
 export const ADMIN_ACTIONS: ActionDef[] = [
   // ── Team ──────────────────────────────────────────────────────────────────
   {
@@ -615,15 +623,26 @@ export const ADMIN_ACTIONS: ActionDef[] = [
     module: 'clients',
     kind: 'read',
     description:
-      'Geeft de huidige huisstijl: merknaam, merkkleur, kopkleur (leeg = automatisch, afgeleid uit de merkkleur), sfeer (licht of donker), galerij-achtergrond, de lettertypen voor koppen en tekst, de afsluittekst en of "Geleverd via ResoFly" verborgen is. Ook staat er in welke lettertypen je kunt kiezen.',
-    keywords: ['huisstijl', 'merk', 'branding', 'logo', 'merkkleur', 'accentkleur', 'kopkleur', 'lettertype', 'font', 'sfeer', 'donker', 'licht'],
+      'Geeft de huidige huisstijl: merknaam, merkkleur, kopkleur (leeg = automatisch, afgeleid uit de merkkleur), sfeer (licht of donker), galerij-achtergrond, de lettertypen voor koppen en tekst, de afsluittekst en of "Geleverd via ResoFly" verborgen is. ' +
+      'Ook de kleuren van het inlogscherm van het klantportaal (achtergrond, inlogkaart, knop; leeg = automatisch) en het eigen inlogadres van het portaal (/portal/<sleutel>), dat je klanten kunt geven of op je website kunt zetten. En in welke lettertypen je kunt kiezen.',
+    keywords: ['huisstijl', 'merk', 'branding', 'logo', 'merkkleur', 'accentkleur', 'kopkleur', 'lettertype', 'font', 'sfeer', 'donker', 'licht', 'inlogscherm', 'klantlogin', 'inlogadres', 'portaaladres'],
     input: {},
     async read(ctx) {
       const columns =
         'trade_name, company_name, brand_accent_color, brand_client_theme, brand_gallery_bg, brand_heading_font, brand_body_font, brand_footer_text, brand_hide_powered_by, brand_logo_data_url';
-      // De kopkleur en de lichte logoversie bestaan pas na migratie 20261015000000.
-      const settings = await settingsRow(ctx, `${columns}, brand_header_color, brand_logo_dark_data_url`)
+      // De kopkleur en de lichte logoversie bestaan pas na migratie 20261015000000,
+      // de kleuren van het inlogscherm pas na 20261105110000.
+      const header = `${columns}, brand_header_color, brand_logo_dark_data_url`;
+      const settings = await settingsRow(ctx, `${header}, ${LOGIN_COLUMNS}`)
+        .catch(() => settingsRow(ctx, header))
         .catch(() => settingsRow(ctx, columns));
+      // Het inlogadres; zonder (migratie nog niet gedraaid) gewoon weglaten.
+      let loginKey: unknown = null;
+      try {
+        ({ data: loginKey } = await ctx.db.rpc('ensure_portal_login_key', { p_organization_id: ctx.organizationId }));
+      } catch {
+        loginKey = null;
+      }
       return {
         branding: settings
           ? {
@@ -639,8 +658,13 @@ export const ADMIN_ACTIONS: ActionDef[] = [
             brand_hide_powered_by: settings.brand_hide_powered_by,
             has_logo: Boolean(settings.brand_logo_data_url),
             has_dark_logo: Boolean(settings.brand_logo_dark_data_url),
+            brand_login_bg_color: settings.brand_login_bg_color ?? null,
+            brand_login_card_color: settings.brand_login_card_color ?? null,
+            brand_login_button_color: settings.brand_login_button_color ?? null,
+            brand_login_plain: settings.brand_login_plain === true,
           }
           : null,
+        portal_login_path: typeof loginKey === 'string' && loginKey ? `/portal/${loginKey}` : null,
         available_fonts: BRAND_FONTS.map((key) => ({ key, label: BRAND_FONT_LABELS[key], heading_only: HEADING_ONLY_FONTS.includes(key) })),
         note: settings ? undefined : 'Er zijn nog geen bedrijfsinstellingen; de standaardhuisstijl is actief.',
       };
@@ -667,6 +691,10 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       brand_body_font: { type: 'string', enum: [...BRAND_FONTS], description: 'Lettertype voor lopende tekst; "bebas" kan hier niet.' },
       brand_footer_text: { type: 'string', description: 'Afsluitzin onder de klantpagina\'s (hoogstens 160 tekens). Een lege waarde haalt hem weg.' },
       brand_hide_powered_by: { type: 'boolean', description: 'true verbergt "Geleverd via ResoFly" op de publieke galerijpagina.' },
+      brand_login_bg_color: { type: 'string', description: 'Achtergrond van het inlogscherm van het klantportaal, als hexcode. "automatisch" zet hem terug: dan is het de kopkleur.' },
+      brand_login_card_color: { type: 'string', description: 'Kleur van de inlogkaart, als hexcode. "automatisch" zet hem terug: dan volgt hij de sfeer (licht of donker). De tekst erop wordt vanzelf leesbaar gemaakt.' },
+      brand_login_button_color: { type: 'string', description: 'Kleur van de knop op het inlogscherm, als hexcode. "automatisch" zet hem terug: dan is het de merkkleur.' },
+      brand_login_plain: { type: 'boolean', description: 'true geeft het inlogscherm een effen achtergrond, zonder verloop, gloed en ringen.' },
     },
     async plan(ctx, input) {
       const patch: Record<string, unknown> = {};
@@ -718,9 +746,25 @@ export const ADMIN_ACTIONS: ActionDef[] = [
         patch.brand_hide_powered_by = input.brand_hide_powered_by;
         described.push(input.brand_hide_powered_by ? '"Geleverd via ResoFly" verborgen' : '"Geleverd via ResoFly" zichtbaar');
       }
+      for (const [key, label] of LOGIN_COLOR_FIELDS) {
+        if (input[key] === undefined) continue;
+        const raw = optStr(input, key, 20);
+        if (!raw || /^auto(matisch)?$/i.test(raw)) {
+          patch[key] = null;
+          described.push(`${label} automatisch`);
+        } else {
+          const color = optHex(input, key);
+          patch[key] = color;
+          described.push(`${label} ${color}`);
+        }
+      }
+      if (typeof input.brand_login_plain === 'boolean') {
+        patch.brand_login_plain = input.brand_login_plain;
+        described.push(input.brand_login_plain ? 'inlogscherm effen' : 'inlogscherm met gloed en ringen');
+      }
 
       return settingsPlan(patch, described, 'Huisstijl opslaan', {
-        warning: 'Dit staat meteen op alles wat je klanten zien: het klantportaal, de galerijen en de publieke offerte-, factuur- en contractpagina.',
+        warning: 'Dit staat meteen op alles wat je klanten zien: het klantportaal en het inlogscherm, de galerijen en de publieke offerte-, factuur- en contractpagina.',
       });
     },
   },

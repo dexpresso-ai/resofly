@@ -9,7 +9,7 @@
 // voorbeeldkaartjes deden.
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
-import { Check, Maximize2, Minimize2, Monitor, RefreshCcw, Smartphone } from 'lucide-react';
+import { Check, Copy, ExternalLink, Maximize2, Minimize2, Monitor, RefreshCcw, Smartphone } from 'lucide-react';
 import { Button, Input, Select } from '../components/Ui';
 import { useLogoInk } from '../components/PublicBrand';
 import {
@@ -25,11 +25,13 @@ import {
   headerTheme,
   isDarkSurface,
   isLighterThan,
+  loginTheme,
   logoPlate,
   suggestHeaderColor,
   type BrandingPayload,
 } from '../lib/branding';
 import { analyseLogo } from '../lib/logoColors';
+import { portalLoginPath, portalLoginUrl, usePortalLoginKey } from '../lib/portalAddress';
 import { PORTAL_PREVIEW_PATH, PORTAL_PREVIEW_READY, portalPreviewMessage, type PortalPreviewScreen } from '../lib/portalPreview';
 import type { CompanySettingsInput } from '../types';
 
@@ -91,11 +93,32 @@ function formBranding(form: CompanySettingsInput): BrandingPayload {
   return portalPreviewMessage(form, 'overview').branding;
 }
 
-export function BrandStudio({ form, setForm, canWrite }: { form: CompanySettingsInput; setForm: SetForm; canWrite: boolean }) {
+export function BrandStudio({ form, setForm, canWrite, organizationId }: {
+  form: CompanySettingsInput;
+  setForm: SetForm;
+  canWrite: boolean;
+  /** Voor het eigen inlogadres van het portaal. */
+  organizationId: string | null;
+}) {
+  // Het scherm van het voorbeeld staat hier: wie aan het inlogscherm werkt,
+  // krijgt het inlogscherm te zien.
+  const [screen, setScreen] = useState<PortalPreviewScreen>('overview');
+  const { key: loginKey, ready: loginKeyReady } = usePortalLoginKey(organizationId);
   return <div className="brand-studio">
     <div className="brand-studio-grid">
-      <BrandingCard form={form} setForm={setForm} canWrite={canWrite} />
-      <BrandPreviewPanel form={form} />
+      {/* Eén kolom met beide kaarten: zo blijft het voorbeeld naast allebei staan. */}
+      <div className="brand-studio-settings">
+        <BrandingCard form={form} setForm={setForm} canWrite={canWrite} />
+        <LoginBrandCard
+          form={form}
+          setForm={setForm}
+          canWrite={canWrite}
+          loginKey={loginKey}
+          loginKeyReady={loginKeyReady}
+          onShowLogin={() => setScreen('login')}
+        />
+      </div>
+      <BrandPreviewPanel form={form} screen={screen} onScreen={setScreen} loginKey={loginKey} />
     </div>
   </div>;
 }
@@ -430,6 +453,241 @@ function BrandingCard({ form, setForm, canWrite }: { form: CompanySettingsInput;
   );
 }
 
+// ── Het inlogscherm ─────────────────────────────────────────────────────────
+
+/** Automatisch of een eigen kleur, met de kleurkiezer eronder. */
+function LoginColorField({ id, label, value, automatic, suggestion, onChange, canWrite, fromLogo, help }: {
+  id: string;
+  label: string;
+  /** De eigen kleur, of null voor automatisch. */
+  value: string | null | undefined;
+  /** De kleur zoals hij automatisch wordt: die staat in het veld zolang het op Automatisch staat. */
+  automatic: string;
+  /** Waar Eigen kleur mee begint als er nog geen eerdere keuze is. */
+  suggestion: string;
+  onChange: (value: string | null) => void;
+  canWrite: boolean;
+  fromLogo: string[];
+  help: string;
+}) {
+  const own = HEX.test(value ?? '');
+  // Wie even op Automatisch zet en terug op Eigen kleur, krijgt zijn kleur terug.
+  const last = useRef<string | null>(value ?? null);
+  if (own) last.current = value!;
+  return <div className="brand-field brand-field-wide">
+    <label className="brand-label" htmlFor={id}>{label}</label>
+    <div className="brand-seg" role="group" aria-label={label}>
+      <button type="button" aria-pressed={!own} onClick={() => onChange(null)} disabled={!canWrite}>Automatisch</button>
+      <button type="button" aria-pressed={own} onClick={() => onChange(last.current ?? suggestion)} disabled={!canWrite}>Eigen kleur</button>
+    </div>
+    <ColorField
+      id={id}
+      label={label}
+      value={own ? value! : automatic}
+      onChange={next => onChange(next)}
+      disabled={!canWrite || !own}
+      fromLogo={own ? fromLogo : []}
+      fromLogoLabel={label.toLowerCase()}
+    />
+    <p className="settings-help">{help}</p>
+  </div>;
+}
+
+function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, onShowLogin }: {
+  form: CompanySettingsInput;
+  setForm: SetForm;
+  canWrite: boolean;
+  loginKey: string | null;
+  loginKeyReady: boolean;
+  onShowLogin: () => void;
+}) {
+  const branding = useMemo(() => formBranding(form), [form]);
+  const theme = useMemo(() => loginTheme(branding), [branding]);
+  // Automatisch, zoals het inlogscherm het nu zou tekenen.
+  const automatic = useMemo(() => loginTheme({ ...branding, loginBackground: null, loginCard: null, loginButton: null }), [branding]);
+  const logoColors = useLogoColors(form.brand_logo_data_url);
+  const [copied, setCopied] = useState(false);
+  const url = portalLoginUrl(loginKey);
+
+  const set = <K extends keyof CompanySettingsInput>(key: K, value: CompanySettingsInput[K]) => {
+    setForm(prev => ({ ...prev, [key]: value }));
+    onShowLogin();
+  };
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  // Een eigen achtergrond begint bij iets wat meteen zichtbaar anders is: de
+  // eigen kopkleur als die er is, anders de merkkleur diep en rustig (zoals
+  // bij de kopkleur). Kaart en knop beginnen bij wat er nu staat.
+  const backgroundSuggestion = HEX.test(form.brand_header_color ?? '')
+    ? form.brand_header_color!.toUpperCase()
+    : suggestHeaderColor(form.brand_accent_color);
+
+  return (
+    <section className="settings-card brand-card brand-login-card" onFocusCapture={onShowLogin}>
+      <h3>Inlogscherm van je klantportaal</h3>
+      <p className="settings-help">
+        Het eerste wat je klant van je portaal ziet. Naam, logo en lettertypen komen van hierboven; de kleuren kies je
+        hier. Tekst op die kleuren maken we vanzelf leesbaar.
+      </p>
+
+      <div className="brand-grid">
+        <div className="brand-field brand-field-wide">
+          <label className="brand-label" htmlFor="brand-login-address">Je inlogadres</label>
+          <div className="brand-address-row">
+            <Input id="brand-login-address" value={loginKeyReady ? url : 'Even ophalen…'} readOnly onFocus={e => e.currentTarget.select()} />
+            <Button onClick={() => { void copy(); }} disabled={!loginKey} aria-label="Inlogadres kopiëren">
+              {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+              <span>{copied ? 'Gekopieerd' : 'Kopiëren'}</span>
+            </Button>
+            {loginKey && <a className="btn" href={portalLoginPath(loginKey)} target="_blank" rel="noopener noreferrer" aria-label="Inlogscherm openen in een nieuw tabblad">
+              <ExternalLink size={14} aria-hidden="true" /><span>Openen</span>
+            </a>}
+          </div>
+          <p className="settings-help">
+            {loginKey
+              ? 'Op dit adres staat het inlogscherm meteen in jouw huisstijl, ook voor een klant die er nog nooit was. Je mails naar klanten gebruiken het al; zet het ook op je website. Op /portal zonder dit adres weet het portaal pas na het inloggen bij wie je klant hoort.'
+              : loginKeyReady
+                ? 'Je eigen inlogadres is hier nog niet beschikbaar: de database-update moet op deze omgeving nog draaien. Tot dan gebruiken je mails het algemene adres /portal.'
+                : 'Je eigen inlogadres wordt opgehaald.'}
+          </p>
+        </div>
+
+        <LoginColorField
+          id="brand-login-bg"
+          label="Achtergrond"
+          value={form.brand_login_bg_color}
+          automatic={automatic.background.mid}
+          suggestion={backgroundSuggestion}
+          onChange={value => set('brand_login_bg_color', value)}
+          canWrite={canWrite}
+          fromLogo={logoColors}
+          help="Het vlak achter de inlogkaart. Automatisch is je kopkleur."
+        />
+
+        <label className="brand-field brand-field-wide check-row">
+          <input
+            type="checkbox"
+            checked={form.brand_login_plain === true}
+            onChange={e => set('brand_login_plain', e.target.checked)}
+            disabled={!canWrite}
+          />
+          <span>Effen achtergrond, zonder verloop, gloed en ringen</span>
+        </label>
+
+        <LoginColorField
+          id="brand-login-card"
+          label="Inlogkaart"
+          value={form.brand_login_card_color}
+          automatic={automatic.card}
+          suggestion={automatic.card}
+          onChange={value => set('brand_login_card_color', value)}
+          canWrite={canWrite}
+          fromLogo={logoColors}
+          help="De kaart met het invulveld. Automatisch volgt je werkvlak (licht of donker)."
+        />
+
+        <LoginColorField
+          id="brand-login-button"
+          label="Knop"
+          value={form.brand_login_button_color}
+          automatic={automatic.button}
+          suggestion={automatic.button}
+          onChange={value => set('brand_login_button_color', value)}
+          canWrite={canWrite}
+          fromLogo={logoColors}
+          help={'De knop "Stuur inloglink", de focusrand en de regel boven "Inloggen". Automatisch is je merkkleur.'}
+        />
+
+        <div className="brand-field brand-field-wide">
+          <span className="brand-label">Leesbaarheid van het inlogscherm</span>
+          <LoginReadabilityChecks branding={branding} theme={theme} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function LoginReadabilityChecks({ branding, theme }: { branding: BrandingPayload; theme: ReturnType<typeof loginTheme> }) {
+  const worstOn = (ink: string, surfaces: string[]) => Math.min(...surfaces.map(bg => contrastRatio(ink, bg)));
+  const darkVersion = theme.cardDark && Boolean(branding.logoDarkDataUrl);
+  const { ink: logoInk, ready: logoReady } = useLogoInk(darkVersion ? null : branding.logoDataUrl);
+  const plate = branding.logoDataUrl && !darkVersion && logoReady ? logoPlate(logoInk, [theme.card]) : null;
+  const chosenCard = branding.loginCard ?? theme.card;
+  const chosenBackground = branding.loginBackground ?? theme.background.mid;
+
+  const rows: CheckRow[] = [
+    {
+      title: 'Tekst op de inlogkaart',
+      ratio: worstOn(theme.ink, theme.cardSurfaces),
+      adjusted: theme.cardAdjusted,
+      note: theme.cardAdjusted
+        ? `Op je kaartkleur las geen tekst goed genoeg; de kaart staat daarom ${isLighterThan(theme.card, chosenCard) ? 'iets lichter' : 'iets donkerder'} (${theme.card}).`
+        : theme.cardDark ? 'Lichte tekst op een donkere kaart.' : 'Donkere tekst op een lichte kaart.',
+    },
+    {
+      title: 'Tekst op de knop',
+      ratio: contrastRatio(theme.onButton, theme.button),
+      adjusted: false,
+      note: theme.onButton === '#000000' || theme.onButton === '#FFFFFF'
+        ? 'Puur zwart of wit: meer laat deze knopkleur niet toe.'
+        : isDarkSurface(theme.onButton) ? 'Bijna-wit op je knop.' : 'Bijna-zwart op je knop.',
+    },
+    {
+      title: 'De knop op de kaart',
+      ratio: contrastRatio(theme.button, theme.card),
+      adjusted: Boolean(theme.buttonEdge),
+      note: theme.buttonEdge
+        ? `De knop steekt weinig af tegen de kaart; hij krijgt een rand in ${theme.buttonEdge}.`
+        : 'De knop steekt genoeg af tegen de kaart.',
+    },
+    {
+      title: 'Knopkleur als tekst',
+      ratio: worstOn(theme.accentInk, theme.cardSurfaces),
+      adjusted: theme.accentAdjusted,
+      note: theme.accentAdjusted
+        ? `De regel boven "Inloggen" staat in ${theme.accentInk}: dezelfde tint, ${isLighterThan(theme.accentInk, theme.button) ? 'lichter' : 'donkerder'}.`
+        : 'De regel boven "Inloggen" staat in je knopkleur zelf.',
+    },
+    {
+      title: 'Achtergrond',
+      ratio: null,
+      adjusted: theme.backgroundCustom && theme.background.headerAdjusted,
+      note: theme.backgroundCustom && theme.background.headerAdjusted
+        ? `Op je achtergrondkleur las geen tekst goed genoeg (het laadscherm staat erop); hij staat daarom ${isLighterThan(theme.background.mid, chosenBackground) ? 'iets lichter' : 'iets donkerder'} (${theme.background.mid}).`
+        : theme.plain ? 'Effen, in één kleur.' : 'Met het verloop, de gloed van je knopkleur en de ringen.',
+    },
+    {
+      title: 'Logo op de kaart',
+      ratio: null,
+      adjusted: Boolean(plate),
+      note: !branding.logoDataUrl
+        ? 'Zonder logo staat je initiaal in een tegel van je knopkleur.'
+        : darkVersion ? 'Op de donkere kaart staat je lichte versie.'
+          : !logoReady ? 'Even meten…'
+            : plate === 'dark' ? 'Je logo valt weg op de kaart; het komt op een donker plaatje.'
+              : plate === 'light' ? 'Je logo valt weg op de kaart; het komt op een licht plaatje. Met een lichte versie hoeft dat niet.'
+                : 'Je logo steekt genoeg af tegen de kaart.',
+    },
+  ];
+
+  return <ul className="brand-checks" aria-live="polite">
+    {rows.map(row => <li key={row.title} className={`brand-check${row.adjusted ? ' is-adjusted' : ''}`}>
+      <span className="brand-check-icon" aria-hidden="true">{row.adjusted ? <RefreshCcw size={12} /> : <Check size={12} />}</span>
+      <span className="brand-check-text"><strong>{row.title}</strong><span>{row.note}</span></span>
+      {row.ratio !== null && <span className="brand-check-ratio">{ratioLabel(row.ratio)}</span>}
+    </li>)}
+  </ul>;
+}
+
 // ── Leesbaarheid ────────────────────────────────────────────────────────────
 
 type CheckRow = { title: string; ratio: number | null; adjusted: boolean; note: string };
@@ -526,8 +784,13 @@ const SCREENS: Array<{ id: PortalPreviewScreen; label: string }> = [
   { id: 'login', label: 'Inloggen' },
 ];
 
-function BrandPreviewPanel({ form }: { form: CompanySettingsInput }) {
-  const [screen, setScreen] = useState<PortalPreviewScreen>('overview');
+function BrandPreviewPanel({ form, screen, onScreen: setScreen, loginKey }: {
+  form: CompanySettingsInput;
+  screen: PortalPreviewScreen;
+  onScreen: (screen: PortalPreviewScreen) => void;
+  /** Voor het adres in de balk boven het voorbeeld van het inlogscherm. */
+  loginKey: string | null;
+}) {
   const [device, setDevice] = useState<'desktop' | 'phone'>('desktop');
   const [full, setFull] = useState(false);
   const [ready, setReady] = useState(false);
@@ -618,7 +881,7 @@ function BrandPreviewPanel({ form }: { form: CompanySettingsInput }) {
         className={`brand-preview-device is-${device}`}
         style={{ width: Math.round(size.width * scale) + (phone ? 20 : 0) }}
       >
-        {!phone && <div className="brand-preview-chrome" aria-hidden="true"><i /><i /><i /><span>{host}/portal</span></div>}
+        {!phone && <div className="brand-preview-chrome" aria-hidden="true"><i /><i /><i /><span>{host}{screen === 'login' ? portalLoginPath(loginKey) : '/portal'}</span></div>}
         <div className="brand-preview-viewport" style={{ width: Math.round(size.width * scale), height: Math.round(size.height * scale) }}>
           <iframe
             ref={frameRef}

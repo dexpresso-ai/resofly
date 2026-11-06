@@ -7,6 +7,7 @@ import { isMissingColumn, isMissingRelation, NotMigratedError } from './postgres
 import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type InkDocument } from './ink';
 import type { ReportDefinition } from './reporting';
 import type { ModuleAccess } from './permissions';
+import { isPortalLoginKey } from './portalLoginKey';
 import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import type {
   AppData,
@@ -1581,10 +1582,47 @@ export async function saveJitsiServer(organizationId: UUID, jitsiBaseUrl: string
   if (insertError) throw fail(insertError);
 }
 
-/** Kolommen die de nieuwste huisstijlmigratie (20261015000000) toevoegt. */
-const NEWEST_BRANDING_COLUMNS = ['brand_header_color', 'brand_logo_dark_data_url'] as const;
-/** De eigen opmaak van offertes en facturen (migratie 20261105100000). */
-const DOCUMENT_LAYOUTS_COLUMN = 'document_layouts';
+/**
+ * Het eigen inlogadres van het klantportaal (/portal/<sleutel>, migratie
+ * 20261105110000). De database maakt het aan als het er nog niet is. Alleen
+ * wie Klanten mag lezen krijgt het; anders, of zolang de migratie nog moet,
+ * null, en dan toont de app het algemene adres /portal.
+ */
+export async function fetchPortalLoginKey(organizationId: UUID): Promise<string | null> {
+  const { data, error } = await supabase.rpc('ensure_portal_login_key', { p_organization_id: organizationId });
+  if (error) return null;
+  return isPortalLoginKey(data) ? data : null;
+}
+
+/**
+ * Kolommen die later bij company_settings kwamen, per migratie. De app wordt
+ * soms eerder uitgerold dan de database; dan mag een ontbrekende kolom het
+ * opslaan van al het andere niet tegenhouden. Alleen als iemand die nieuwe
+ * velden echt invulde, zeggen we dat ze nog niet kunnen.
+ */
+const filled = (value: unknown) => value != null && value !== '';
+const LATE_SETTINGS_COLUMNS: Array<{ columns: readonly string[]; isSet: (row: Record<string, unknown>) => boolean; message: string }> = [
+  {
+    // Kopkleur en lichte logoversie (20261015000000).
+    columns: ['brand_header_color', 'brand_logo_dark_data_url'],
+    isSet: row => filled(row.brand_header_color) || filled(row.brand_logo_dark_data_url),
+    message: 'De kopkleur en de lichte versie van je logo kunnen in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de kopkleur op Automatisch en haal de lichte versie weg om de rest op te slaan.',
+  },
+  {
+    // De eigen opmaak van offertes en facturen (20261105100000).
+    columns: ['document_layouts'],
+    isSet: row => row.document_layouts != null,
+    message: 'Je eigen opmaak van offertes en facturen kan in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de opmaak terug op de standaard om de rest op te slaan.',
+  },
+  {
+    // De kleuren van het inlogscherm (20261105110000). "Effen" telt alleen als
+    // hij aan staat: uit is de standaard, en die stuurt het formulier altijd mee.
+    columns: ['brand_login_bg_color', 'brand_login_card_color', 'brand_login_button_color', 'brand_login_plain'],
+    isSet: row => filled(row.brand_login_bg_color) || filled(row.brand_login_card_color)
+      || filled(row.brand_login_button_color) || row.brand_login_plain === true,
+    message: 'De kleuren van je inlogscherm kunnen in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet achtergrond, kaart en knop op Automatisch en de achtergrond niet op effen om de rest op te slaan.',
+  },
+];
 
 export async function upsertCompanySettings(organizationId: UUID, values: CompanySettingsInput): Promise<CompanySettings> {
   const createdBy = await currentUserId();
@@ -1595,25 +1633,15 @@ export async function upsertCompanySettings(organizationId: UUID, values: Compan
     .single();
   const row = sanitizeMutationValues(values as unknown as Record<string, unknown>);
   let { data, error } = await write(row);
-  // Staat een migratie met een nieuwe kolom hier nog niet (de app wordt soms
-  // eerder uitgerold dan de database), dan mag dat het opslaan van al het
-  // andere niet tegenhouden. Alleen als iemand die nieuwe velden echt invulde,
-  // zeggen we dat ze nog niet kunnen. Twee rondes: elke ronde kan PostgREST
-  // maar één ontbrekende kolom noemen.
-  for (let attempt = 0; error && attempt < 2; attempt++) {
-    const missingBranding = NEWEST_BRANDING_COLUMNS.filter(column => isMissingColumn(error, column));
-    const missingLayouts = isMissingColumn(error, DOCUMENT_LAYOUTS_COLUMN);
-    if (missingBranding.length === 0 && !missingLayouts) break;
-    if (missingBranding.length > 0 && NEWEST_BRANDING_COLUMNS.some(column => row[column] != null && row[column] !== '')) {
-      throw new NotMigratedError('De kopkleur en de lichte versie van je logo kunnen in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de kopkleur op Automatisch en haal de lichte versie weg om de rest op te slaan.');
-    }
-    if (missingLayouts && row[DOCUMENT_LAYOUTS_COLUMN] != null) {
-      throw new NotMigratedError('Je eigen opmaak van offertes en facturen kan in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de opmaak terug op de standaard om de rest op te slaan.');
-    }
-    // Alleen weglaten wat echt ontbreekt: een ingevulde opmaak mag niet stil
-    // verdwijnen omdat de kopkleur-migratie nog moet.
-    if (missingBranding.length > 0) for (const column of NEWEST_BRANDING_COLUMNS) delete row[column];
-    if (missingLayouts) delete row[DOCUMENT_LAYOUTS_COLUMN];
+  // Elke ronde kan PostgREST maar één ontbrekende kolom noemen; per ronde valt
+  // dus hooguit één groep weg. Alleen weglaten wat echt ontbreekt: een
+  // ingevulde opmaak mag niet stil verdwijnen omdat de kopkleur-migratie nog moet.
+  for (let attempt = 0; error && attempt < LATE_SETTINGS_COLUMNS.length; attempt++) {
+    const missing = LATE_SETTINGS_COLUMNS.filter(group => group.columns.some(column => isMissingColumn(error, column)));
+    if (missing.length === 0) break;
+    const blocking = missing.find(group => group.isSet(row));
+    if (blocking) throw new NotMigratedError(blocking.message);
+    for (const group of missing) for (const column of group.columns) delete row[column];
     ({ data, error } = await write(row));
   }
   if (error) throw error;

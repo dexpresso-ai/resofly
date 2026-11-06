@@ -8,6 +8,7 @@ import { renderContractPdf, appendSignaturePagesToPdf, bytesToBase64, sha256HexB
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
 import { toPublicTimeline } from '../_shared/publicTimeline.ts';
 import { loadBranding } from '../_shared/branding.ts';
+import { loadPortalLoginKey, portalLoginUrl } from '../_shared/portalAddress.ts';
 import { buildContractTokens, fillContractTokens } from '../_shared/contractTokens.ts';
 import {
   convertContractDocxToPdf,
@@ -347,7 +348,9 @@ async function sendConfirmationEmails(
   if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) return;
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, contract.organization_id, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   const attachPdf = pdf !== null && pdf.sizeBytes <= CONTRACT_PDF_MAX_ATTACHMENT_BYTES;
-  const portalUrl = APP_PUBLIC_URL ? `${APP_PUBLIC_URL}/portal` : null;
+  const portalUrl = APP_PUBLIC_URL
+    ? portalLoginUrl(APP_PUBLIC_URL, await loadPortalLoginKey(supabaseAdmin, contract.organization_id))
+    : null;
   // Het logo van de organisatie van dit contract, voor beide mails.
   const brand = await loadEmailBrand(supabaseAdmin, contract.organization_id);
 

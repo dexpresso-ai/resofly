@@ -1,5 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { loadBranding, type Branding } from '../_shared/branding.ts';
+import { isPortalLoginKey } from '../_shared/portalAddress.ts';
 
 // ============================================================
 // ResoFly — Klantportaal login-provisioning (portal-login)
@@ -13,6 +15,10 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 // Daarna stuurt de frontend de magische link via signInWithOtp (de gebruiker
 // bestaat dan al, dus zonder zelf-registratie). Willekeurige e-mailadressen
 // krijgen geen account en geen link.
+//
+// Daarnaast `getBranding`: de huisstijl van het inlogscherm, voor wie het
+// portaal opent via het eigen adres van een leverancier (/portal/<sleutel>,
+// migratie 20261105110000). Alleen de huisstijl; nooit de organisatie zelf.
 // ============================================================
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
@@ -46,6 +52,7 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const action = String(body.action || 'requestLogin');
+    if (action === 'getBranding') return json(req, { ok: true, branding: await brandingForKey(req, body.key) });
     if (action !== 'requestLogin') throw new PortalLoginError(`Onbekende actie: ${action}`, 400);
 
     const email = String(body.email || '').trim().toLowerCase();
@@ -83,25 +90,59 @@ serve(async (req) => {
   }
 });
 
+function senderAddress(req: Request): string {
+  return (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
+    .trim().slice(0, 64);
+}
+
+/** Telt één aanvraag op deze sleutel; geeft het aantal seconden wachten (0 = door). */
+async function throttleHit(key: string, windowSeconds: number, max: number, blockSeconds: number): Promise<number> {
+  const { data, error } = await supabaseAdmin.rpc('portal_login_hit', {
+    p_key: key, p_window_seconds: windowSeconds, p_max_attempts: max, p_block_seconds: blockSeconds,
+  });
+  // Een kapotte teller (migratie nog niet gedraaid) mag het inloggen niet blokkeren.
+  if (error) { console.warn('portal_login_hit mislukt', error.message); return 0; }
+  return Number(data) || 0;
+}
+
 /** Telt deze aanvraag; true als de afzender of het adres even moet wachten. */
 async function portalLoginThrottled(req: Request, email: string): Promise<boolean> {
-  const address = (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
-    .trim().slice(0, 64);
   const [ipKey, emailKey] = await Promise.all([
-    sha256Hex(`portal-login:ip:${address}`),
+    sha256Hex(`portal-login:ip:${senderAddress(req)}`),
     sha256Hex(`portal-login:email:${email}`),
   ]);
-  const hit = async (key: string, windowSeconds: number, max: number, blockSeconds: number): Promise<number> => {
-    const { data, error } = await supabaseAdmin.rpc('portal_login_hit', {
-      p_key: key, p_window_seconds: windowSeconds, p_max_attempts: max, p_block_seconds: blockSeconds,
-    });
-    // Een kapotte teller (migratie nog niet gedraaid) mag het inloggen niet blokkeren.
-    if (error) { console.warn('portal_login_hit mislukt', error.message); return 0; }
-    return Number(data) || 0;
-  };
   // 20 per 10 minuten per afzender; 5 per uur per e-mailadres.
-  const [ipWait, emailWait] = await Promise.all([hit(ipKey, 600, 20, 900), hit(emailKey, 3600, 5, 3600)]);
+  const [ipWait, emailWait] = await Promise.all([throttleHit(ipKey, 600, 20, 900), throttleHit(emailKey, 3600, 5, 3600)]);
   return ipWait > 0 || emailWait > 0;
+}
+
+/**
+ * De huisstijl van het inlogscherm bij een sleutel uit het adres. Alleen wat
+ * `loadBranding` naar buiten laat (logo, naam, kleuren, letters, afsluiting),
+ * nooit het id of de gegevens van de organisatie. Een onbekende of ongeldige
+ * sleutel geeft null: dan is het inlogscherm neutraal, net als op /portal.
+ *
+ * Met een eigen rem per afzender: de sleutel is niet te raden (tien
+ * willekeurige tekens), maar een antwoord met twee logo's is een paar honderd
+ * kB, en dat hoort niemand eindeloos te kunnen opvragen.
+ */
+async function brandingForKey(req: Request, raw: unknown): Promise<Branding | null> {
+  if (!isPortalLoginKey(raw)) return null;
+  // 120 per 10 minuten per afzender: ruim voor een kantoor achter één adres.
+  if (await throttleHit(await sha256Hex(`portal-brand:ip:${senderAddress(req)}`), 600, 120, 600) > 0) return null;
+  const { data, error } = await supabaseAdmin
+    .from('portal_login_addresses')
+    .select('organization_id')
+    .eq('key', raw)
+    .maybeSingle();
+  if (error) {
+    // Ook: de migratie met de tabel staat er nog niet. Dan neutraal.
+    console.warn('portal-login inlogadres opzoeken mislukt', error.message);
+    return null;
+  }
+  const organizationId = (data as { organization_id?: unknown } | null)?.organization_id;
+  if (typeof organizationId !== 'string' || !organizationId) return null;
+  return loadBranding(supabaseAdmin, organizationId);
 }
 
 async function sha256Hex(value: string): Promise<string> {

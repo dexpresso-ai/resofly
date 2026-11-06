@@ -95,6 +95,9 @@ const PAGES = {
   'public-share': { path: '/gedeeld/demo-token' },
   'public-gallery': { path: '/gallerij/demo-token' },
   'portal-login': { path: '/portal' },
+  // 2026-11-05 — het inlogscherm op het eigen adres van de leverancier, met
+  // eigen kleuren voor achtergrond, kaart en knop (zie tests/mobile/mock).
+  'portal-login-brand': { path: '/portal/studio-lopik-k7x2m6qp4r' },
   portal: { path: '/portal', portal: true },
   // Het tabblad Tickets, met een afgehandeld ticket in het blok "Afgehandeld"
   // onderaan (2026-11-05).

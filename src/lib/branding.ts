@@ -27,6 +27,13 @@ export type BrandingPayload = {
   headerColor?: string | null;
   /** Lichte versie van het logo voor op een donkere kop. */
   logoDarkDataUrl?: string | null;
+  /** De kleuren van het inlogscherm; leeg = automatisch (zie `loginTheme()`):
+   *  de achtergrond volgt de kop, de kaart het werkvlak, de knop de merkkleur. */
+  loginBackground?: string | null;
+  loginCard?: string | null;
+  loginButton?: string | null;
+  /** Effen achtergrond op het inlogscherm, zonder verloop, gloed en ringen. */
+  loginPlain?: boolean;
 };
 
 /** Achtergronden die het vaakst gekozen worden; de kleurkiezer kan alles. */
@@ -571,7 +578,16 @@ export function sanitizeStoredBranding(raw: unknown): BrandingPayload | null {
         && row.logoDarkDataUrl.length <= 400_000
         ? row.logoDarkDataUrl
         : null,
+    // De CHECKs van 20261105110000: alleen hexkleuren, en een echte boolean.
+    loginBackground: storedHex(row.loginBackground),
+    loginCard: storedHex(row.loginCard),
+    loginButton: storedHex(row.loginButton),
+    loginPlain: row.loginPlain === true,
   };
+}
+
+function storedHex(value: unknown): string | null {
+  return typeof value === 'string' && /^#[0-9A-Fa-f]{6}$/.test(value) ? value.toUpperCase() : null;
 }
 
 /**
@@ -817,4 +833,289 @@ export function applyBrandTheme(
     document.title = before.title;
     delete root.dataset.brandTheme;
   };
+}
+
+// ── Het inlogscherm van het portaal ─────────────────────────────────────────
+//
+// De eerste indruk van het portaal: een vlak met één kaart erop. Zonder eigen
+// keuzes is dat het vlak in de kopkleur (met de gloed van de merkkleur en de
+// ringen) en een kaart in het werkvlak. De leverancier kan drie kleuren zelf
+// kiezen (achtergrond, kaart, knop) en de achtergrond effen maken. Tekst,
+// randen en de focusrand rekenen we hier uit, net als bij de kop: wat je ook
+// kiest, het leest.
+//
+// Waarom een eigen set variabelen op het inlogscherm en niet op :root: het
+// portaal daarna (de kop, het werkvlak, de kaarten) moet blijven zoals het is.
+// En omdat een aangepaste eigenschap wordt uitgerekend op het element waar hij
+// staat (zie de toelichting bij brandThemeVars), geeft loginTheme() bij een
+// eigen kaart ook de compat-laag opnieuw mee: anders bleef bijvoorbeeld de
+// rand van het invoerveld (--border) die van het werkvlak.
+
+export type LoginTheme = {
+  /** De achtergrond: hetzelfde verloop als de kop, rond de eigen kleur. */
+  background: HeaderTheme;
+  /** Eigen achtergrondkleur (true) of de kopkleur (false). */
+  backgroundCustom: boolean;
+  /** Effen: geen verloop, gloed en ringen. */
+  plain: boolean;
+  /** De kaart zoals hij getekend wordt. */
+  card: string;
+  /** Eigen kaartkleur (true) of het werkvlak (false). */
+  cardCustom: boolean;
+  /** Is de eigen kaartkleur in helderheid opgeschoven omdat er geen tekst op las? */
+  cardAdjusted: boolean;
+  /** Donkere kaart: lichte tekst. */
+  cardDark: boolean;
+  ink: string;
+  ink2: string;
+  ink3: string;
+  /** De voorbeeldtekst in het lege invulveld; 4,5 : 1 op het veld, ook met focus. */
+  placeholder: string;
+  /** De knop (en de focusrand, het stipje en de regel boven de titel). */
+  button: string;
+  buttonCustom: boolean;
+  onButton: string;
+  /** De knopkleur als tekst op de kaart (de regel boven de titel). */
+  accentInk: string;
+  accentAdjusted: boolean;
+  /** Een rand om de knop als die zelf te weinig afsteekt tegen de kaart; null = niet nodig. */
+  buttonEdge: string | null;
+  /** Alle vlakken op de kaart waar tekst op kan staan (voor het nameten). */
+  cardSurfaces: string[];
+  /** De CSS-variabelen voor `main.portal.login` (en het laadscherm ervoor). */
+  vars: Record<string, string>;
+};
+
+const HEX6 = /^#[0-9A-Fa-f]{6}$/;
+
+/** Glans op de kaart (verhoogde vlakken), zoals de thema's hem opbouwen. */
+function sheenOn(card: string, dark: boolean, alpha: number): string {
+  return blendColors(dark ? '#FFFFFF' : '#1A1710', card, alpha * (dark ? 1 : 0.55));
+}
+
+/**
+ * Het invulveld (`--field`, globals.css laag 4). Het werkvlak heeft er een vaste
+ * kleur voor: #0C0C0E in Donker, wit in Licht (een dieper vlak op een donkere
+ * kaart, een wit vlak op een lichte). Op een eigen kaart dezelfde verhouding.
+ */
+function fieldOn(card: string, dark: boolean): string {
+  return dark ? blendColors('#000000', card, 0.3) : blendColors('#FFFFFF', card, 0.7);
+}
+
+/** De tekstvlakken op een kaart: de kaart zelf en het invulveld. */
+function cardTextSurfaces(card: string, field: string): string[] {
+  return [card, field];
+}
+
+export function loginTheme(branding: BrandingPayload | null | undefined): LoginTheme {
+  const base = brandThemeVars(branding);
+  const light = clientTheme(branding?.clientTheme) === 'light';
+  const accent = base['--accent'];
+
+  const buttonCustom = HEX6.test(branding?.loginButton ?? '');
+  const button = buttonCustom ? branding!.loginButton!.toUpperCase() : accent;
+  const backgroundCustom = HEX6.test(branding?.loginBackground ?? '');
+  const plain = branding?.loginPlain === true;
+
+  // De achtergrond rekent precies als de kop: dezelfde gloed, ringen en
+  // tegenlamp, maar rond de eigen kleur en met de knopkleur als gloed. Ook
+  // hier kan er tekst op staan (het laadscherm), dus ook hier schuift een
+  // kleur waar niets op leest een stukje op, en dat zegt de instellingenpagina.
+  const background = headerTheme({
+    logoDataUrl: null,
+    footerText: null,
+    hidePoweredBy: false,
+    companyName: null,
+    ...branding,
+    accentColor: button,
+    headerColor: backgroundCustom ? branding!.loginBackground! : (branding?.headerColor ?? null),
+  });
+
+  // ── De kaart ──
+  const cardCustom = HEX6.test(branding?.loginCard ?? '');
+  let card = base['--surface'];
+  let cardDark = !light;
+  let ink = base['--ink'];
+  let ink2 = base['--ink-2'];
+  let ink3 = base['--ink-3'];
+  let cardAdjusted = false;
+  if (cardCustom) {
+    const chosen = branding!.loginCard!.toUpperCase();
+    const { h, s } = hexToHsl(chosen);
+    const tint = Math.min(1, s / 0.35);
+    let l = hexToHsl(chosen).l;
+    let candidates: string[] = [];
+    let surfaces: string[] = [];
+    // Licht of donker op wat het best leest. Een kaart midden in de grijstrap
+    // laat geen van beide tot de norm komen; dan schuift de kaart een stukje van
+    // het midden af, net als de kop. De tint blijft die van de gebruiker.
+    for (let step = 0; step <= 40; step++) {
+      card = step === 0 ? chosen : hslToHex({ h, s, l });
+      cardDark = isDarkSurface(card);
+      surfaces = cardTextSurfaces(card, fieldOn(card, cardDark));
+      candidates = cardDark
+        ? [hslToHex({ h, s: 0.25 * tint, l: 0.965 }), '#FFFFFF']
+        : [hslToHex({ h, s: 0.3 * tint, l: 0.08 }), '#000000'];
+      if (candidates.some(c => surfaces.every(bg => contrastRatio(c, bg) >= INK_TARGET))) break;
+      l = clamp01(l + (cardDark ? -0.02 : 0.02));
+    }
+    cardAdjusted = card.toUpperCase() !== chosen;
+    const passes = (c: string, target: number) => surfaces.every(bg => contrastRatio(c, bg) >= target);
+    ink = candidates.find(c => passes(c, INK_TARGET)) ?? candidates[candidates.length - 1];
+    // Gedempt: de inkt een stuk naar de kaart toe gemengd, nooit onder de norm.
+    // ink-2 (de uitleg onder de titel) haalt dezelfde marge als de inkt, ink-3
+    // (de tekst in het lege invoerveld, de afsluiting) de 4,5 van de norm.
+    const muted = (target: number, from: number) => {
+      for (let w = from; w <= 1.0001; w += 0.02) {
+        const candidate = blendColors(ink, card, w);
+        if (passes(candidate, target)) return candidate;
+      }
+      return ink;
+    };
+    ink2 = muted(INK_TARGET, 0.72);
+    ink3 = muted(4.5, 0.58);
+  }
+  // Het werkvlak heeft een vaste veldkleur (zie fieldOn); een eigen kaart een
+  // afgeleide, die hieronder als --field meegaat.
+  const field = cardCustom ? fieldOn(card, cardDark) : (light ? '#FFFFFF' : '#0C0C0E');
+  const cardSurfaces = cardTextSurfaces(card, field);
+  // De voorbeeldtekst in het invulveld (jij@bedrijf.nl). De zachtste tint van
+  // het werkvlak (--ink-3) haalt op het veld met focus niet bij elk merk 4,5
+  // (een diep marineblauw merk: 4,41). Dan een stap naar de inkt toe.
+  const placeholder = (() => {
+    const passes = (c: string) => cardSurfaces.every(bg => contrastRatio(c, bg) >= 4.5);
+    if (passes(ink3)) return ink3;
+    for (let w = 0.02; w <= 1.0001; w += 0.02) {
+      const candidate = blendColors(ink, ink3, w);
+      if (passes(candidate)) return candidate;
+    }
+    return ink;
+  })();
+
+  // ── De knop en zijn kleur als tekst en lijn op de kaart ──
+  const custom = cardCustom || buttonCustom;
+  const accentInk = custom
+    ? readableInk(button, [...cardSurfaces, blendColors(button, card, 0.16)], !cardDark)
+    : base['--accent-ink'];
+  const onButton = buttonCustom ? inkOnAccent(button) : base['--on-accent'];
+  // WCAG 1.4.11: een knop moet als knop te zien zijn, 3 : 1 tegen wat eromheen
+  // ligt. Een witte knop op een witte kaart is dat niet; dan krijgt hij een rand
+  // in dezelfde tint, ver genoeg opgeschoven. De vulling blijft de gekozen kleur.
+  const edgeOk = contrastRatio(button, card) >= 3;
+  const accentEdge = edgeOk ? button : readableInk(button, [card], !cardDark, 3);
+  const buttonEdge = edgeOk ? null : accentEdge;
+
+  // ── De variabelen ──
+  const counter = background.dark
+    ? `rgba(${rgbTriplet(HEADER_COUNTER.dark)},${HEADER_COUNTER.darkAlpha})`
+    : `rgba(${rgbTriplet(HEADER_COUNTER.light)},${HEADER_COUNTER.lightAlpha})`;
+  const vars: Record<string, string> = {
+    '--hdr-top': plain ? background.mid : background.top,
+    '--hdr-mid': background.mid,
+    '--hdr-bottom': plain ? background.mid : background.bottom,
+    '--hdr-ink': background.ink,
+    '--hdr-ink-2': background.ink2,
+    '--hdr-accent': background.accent,
+    '--hdr-scheme': background.dark ? 'dark' : 'light',
+    '--hdr-glow': plain ? 'transparent' : `rgba(${rgbTriplet(button)},${background.glowAlpha})`,
+    '--hdr-counter': plain ? 'transparent' : counter,
+    '--hdr-rings': plain ? 'none' : ringsImage(background.dark),
+    // Het invoerveld en de knop op de kaart horen bij de kaart, niet bij de
+    // achtergrond: anders tekent de browser een donker invulveld op een lichte kaart.
+    '--login-card-scheme': cardDark ? 'dark' : 'light',
+    '--login-placeholder': placeholder,
+  };
+  if (buttonEdge) vars['--login-btn-edge'] = buttonEdge;
+
+  if (custom) {
+    const buttonRgb = rgbTriplet(button);
+    const edgeRgb = rgbTriplet(accentEdge);
+    const b = hexToHsl(button);
+    Object.assign(vars, {
+      '--accent': button,
+      '--accent-rgb': buttonRgb,
+      '--accent-ink': accentInk,
+      '--accent-edge': accentEdge,
+      '--accent-hover': hslToHex({ h: b.h, s: b.s, l: b.l > 0.85 ? b.l - 0.08 : b.l + 0.08 }),
+      '--on-accent': onButton,
+      '--accent-face': accentFace(button, onButton),
+      '--line-accent': `rgba(${edgeRgb},.42)`,
+      '--border-strong': `rgba(${edgeRgb},.42)`,
+      // De rand van een veld met focus (globals.css laag 4).
+      '--focus-line': `rgba(${edgeRgb},.62)`,
+      '--ring': `0 0 0 3px rgba(${edgeRgb},.34)`,
+      '--accent-soft': `rgba(${buttonRgb},.14)`,
+      '--accent-glow': `rgba(${buttonRgb},.28)`,
+    });
+  }
+
+  if (cardCustom) {
+    const status = cardDark ? DARK_STATUS : LIGHT_STATUS;
+    // "We hebben je een link gestuurd" en een foutmelding: statuskleur als tekst
+    // op een vulling van 10% van die kleur, op de kaart.
+    const statusInk = (color: string) => readableInk(color, [card, blendColors(color, card, 0.1), blendColors(color, card, 0.16)], !cardDark);
+    const okInk = statusInk(status.ok);
+    const dangerInk = statusInk(status.danger);
+    const sheenRgb = cardDark ? '255,255,255' : '26,23,16';
+    const sheenK = cardDark ? 1 : 0.55;
+    const sheen = (alpha: number) => `rgba(${sheenRgb},${+(alpha * sheenK).toFixed(4)})`;
+    const surface2 = sheenOn(card, cardDark, 0.04);
+    const surface3 = sheenOn(card, cardDark, 0.07);
+    const line = blendColors(ink, card, 0.14);
+    const line2 = blendColors(ink, card, 0.24);
+    Object.assign(vars, {
+      '--sheen-rgb': sheenRgb,
+      '--shade-rgb': cardDark ? '0,0,0' : '26,23,16',
+      '--sheen-k': String(sheenK),
+      '--shade-k': String(cardDark ? 1 : 0.3),
+      '--ink-rgb': rgbTriplet(ink),
+      '--surface-rgb': rgbTriplet(card),
+      '--surface2-rgb': rgbTriplet(surface2),
+      '--surface3-rgb': rgbTriplet(surface3),
+      '--surface': card,
+      '--surface-2': surface2,
+      '--surface-3': surface3,
+      '--line': line,
+      '--line-2': line2,
+      '--line-3': blendColors(ink, card, 0.34),
+      // Het invulveld en het licht op de bovenrand van de kaart, uit de
+      // Cockpit-laag: die staan op :root per sfeer vast en kleuren anders niet mee.
+      '--field': field,
+      '--hi': cardDark ? 'rgba(255,255,255,.045)' : 'rgba(255,255,255,.7)',
+      '--ink': ink,
+      '--ink-2': ink2,
+      '--ink-3': ink3,
+      '--ok': status.ok,
+      '--ok-rgb': status.okRgb,
+      '--ok-ink': okInk,
+      '--danger': status.danger,
+      '--danger-rgb': status.dangerRgb,
+      '--danger-ink': dangerInk,
+      '--bg2': card,
+      '--bg3': sheen(0.055),
+      '--bg4': sheen(0.085),
+      '--bg5': sheen(0.12),
+      '--panel': card,
+      '--panel-strong': surface2,
+      '--border': line,
+      '--border2': line2,
+      '--text': ink,
+      '--muted': ink3,
+      '--muted2': ink2,
+      '--accent-g': okInk,
+      '--accent-r': dangerInk,
+    });
+  }
+
+  return {
+    background, backgroundCustom, plain,
+    card, cardCustom, cardAdjusted, cardDark, ink, ink2, ink3, placeholder,
+    button, buttonCustom, onButton,
+    accentInk, accentAdjusted: accentInk.toUpperCase() !== button.toUpperCase(),
+    buttonEdge, cardSurfaces, vars,
+  };
+}
+
+export function loginThemeVars(branding: BrandingPayload | null | undefined): Record<string, string> {
+  return loginTheme(branding).vars;
 }

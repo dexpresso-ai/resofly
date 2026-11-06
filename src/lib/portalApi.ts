@@ -1,6 +1,6 @@
 import type { GalleryLayout } from './galleryLayout';
 import { supabasePortal } from './supabasePortal';
-import type { BrandingPayload } from './branding';
+import { sanitizeStoredBranding, type BrandingPayload } from './branding';
 import type { FinanceLine, InvoiceStatus, Priority, FinanceStatus } from '../types';
 
 // Dunne wrappers rond de `client-portal` edge function, in de stijl van
@@ -249,6 +249,9 @@ export interface PortalAccount {
   company: PortalCompany | null;
   /** Huisstijl van de leverancier; stuurt de hele schil van het portaal. */
   branding: BrandingPayload | null;
+  /** Het eigen inlogadres van deze leverancier (/portal/<sleutel>); ontbreekt
+   *  bij een oudere server of als het (nog) niet bestaat. */
+  portalLoginKey?: string | null;
   client: PortalClient | null;
   /** Gezet als de ingelogde gebruiker een geregistreerde contactpersoon is
    *  (i.p.v. het hoofd-e-mailadres van de klant zelf) — voor een persoonlijke
@@ -389,6 +392,23 @@ export async function requestPortalLogin(email: string): Promise<void> {
   });
   if (error) throw new Error(await extractFunctionError(error, 'Inloggen voorbereiden mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Inloggen voorbereiden mislukt');
+}
+
+/**
+ * De huisstijl van het inlogscherm bij de sleutel uit het adres
+ * (/portal/<sleutel>), vóór het inloggen. Null bij een onbekende sleutel of
+ * een storing: dan is het inlogscherm neutraal, net als op /portal. Wat
+ * binnenkomt keuren we opnieuw (`sanitizeStoredBranding`), zoals alles wat de
+ * schil van het portaal kleurt.
+ */
+export async function fetchPortalLoginBranding(key: string): Promise<BrandingPayload | null> {
+  try {
+    const { data, error } = await portalInvoke('portal-login', { body: { action: 'getBranding', key } });
+    if (error || !data?.ok || !data.branding) return null;
+    return sanitizeStoredBranding(data.branding);
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchPortalData(): Promise<PortalData> {
