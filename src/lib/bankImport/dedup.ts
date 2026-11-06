@@ -62,8 +62,12 @@ export function amountToCents(raw: string): number {
   return neg ? -value : value;
 }
 
-/** Een echte kalenderdatum als ISO, of null (31-2 bestaat niet). */
+/**
+ * Een echte kalenderdatum als ISO, of null (31-2 bestaat niet). Alleen jaren
+ * van 1900 tot en met 2100: een bankafschrift uit het jaar 103 is rommel.
+ */
 function isoDate(y: number, m: number, d: number): string | null {
+  if (!Number.isInteger(y) || y < 1900 || y > 2100) return null;
   const dt = new Date(Date.UTC(y, m - 1, d));
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -93,10 +97,25 @@ export function normalizeDate(raw: string): string | null {
     const year = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
     return isoDate(year, Number(m[2]), Number(m[1]));
   }
-  // Alleen nog een datum met een maandnaam ("5 jan 2026"): lokaal lezen, niet via UTC.
-  if (/[a-z]/i.test(s)) {
+  // Een datum met een maandnaam, Nederlands of Engels: "5 mei 2026", "05-okt-2026".
+  m = /^(\d{1,2})[\s.-]+([a-zé]+)\.?[\s.-]+(\d{4})$/i.exec(s);
+  if (m) {
+    const month = MONTHS[m[2].toLowerCase().slice(0, 3)];
+    return month ? isoDate(Number(m[3]), month, Number(m[1])) : null;
+  }
+  // Verder alleen nog iets met een woord van minstens drie letters én een jaar
+  // van vier cijfers ("Jan 5, 2026"): lokaal lezen, niet via UTC. Eerder ging
+  // alles met een letter naar new Date(), en die maakte van rommel als "c)103("
+  // het jaar 103.
+  if (/[a-z]{3,}/i.test(s) && /(?:^|\D)(?:19|20)\d{2}(?:\D|$)/.test(s)) {
     const d = new Date(s);
     if (!Number.isNaN(d.getTime())) return isoDate(d.getFullYear(), d.getMonth() + 1, d.getDate());
   }
   return null;
 }
+
+/** Maandnamen (de eerste drie letters), Nederlands en Engels. */
+const MONTHS: Record<string, number> = {
+  jan: 1, feb: 2, mrt: 3, maa: 3, mar: 3, apr: 4, mei: 5, may: 5, jun: 6, jul: 7, aug: 8,
+  sep: 9, okt: 10, oct: 10, nov: 11, dec: 12,
+};

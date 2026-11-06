@@ -1,5 +1,5 @@
 import type { ParsedBankStatement, ParsedBankTransaction } from '../../types';
-import { normalizeDate } from './dedup';
+import { normalizeDate } from './dedup.ts';
 
 /**
  * CAMT.053-parser (ISO 20022 bankafschrift, het formaat dat élke NL-bank levert).
