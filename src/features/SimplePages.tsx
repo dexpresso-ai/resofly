@@ -2038,10 +2038,19 @@ export function Settings({
     setInvoiceMollieError(null);
     setInvoiceMollieMessage(null);
     try {
-      const status = await saveInvoiceMollieKey(activeOrganization.id, apiKey);
+      const { status, openPaymentsPreviousAccount } = await saveInvoiceMollieKey(activeOrganization.id, apiKey);
       setInvoiceMollie(status);
       setInvoiceMollieKey('');
-      setInvoiceMollieMessage(`Mollie gekoppeld (${status.mode === 'live' ? 'live' : 'test'}-modus). Bij het versturen van een factuur kun je nu een betaallink meesturen.`);
+      const account = status.profile?.name ? ` met het Mollie-profiel "${status.profile.name}"` : '';
+      const lines = [status.mode === 'live'
+        ? `Mollie gekoppeld${account}. Een factuur gaat nu met een betaallink naar je klant.`
+        : `Mollie gekoppeld${account}, in testmodus. Betalingen via de link zijn niet echt; koppel een live-key voordat je echte facturen verstuurt.`];
+      // Wie van account wisselt terwijl er nog links openstaan: die betalingen
+      // komen bij het vorige account binnen, en ResoFly kan ze niet meer nakijken.
+      if (openPaymentsPreviousAccount) {
+        lines.push('Let op: er stonden nog betaallinks open van de vorige koppeling. Wordt daar nog betaald, dan ziet ResoFly dat niet. Kijk in je vorige Mollie-account, en zet een betaling daar zo nodig zelf op de factuur.');
+      }
+      setInvoiceMollieMessage(lines.join(' '));
     } catch (error) {
       setInvoiceMollieError(error instanceof Error ? error.message : 'Mollie koppelen mislukt.');
     } finally {
@@ -2736,30 +2745,50 @@ export function Settings({
       <div className="settings-card-head">
         <div>
           <h3>Online betalen (Mollie)</h3>
-          <p className="settings-help">Koppel het eigen Mollie-account van deze organisatie. Daarna kun je bij het versturen van een factuur een betaallink meesturen zodat klanten direct online kunnen betalen. Mollie is optioneel — zonder koppeling verstuur je gewoon de factuur-PDF.</p>
+          <p className="settings-help">Koppel het eigen Mollie-account van deze organisatie. Daarna gaat er bij een factuur een betaallink mee, zodat je klant direct online kan betalen. Het geld komt binnen op dat Mollie-account. Mollie is niet verplicht: zonder koppeling verstuur je gewoon de factuur-PDF.</p>
         </div>
       </div>
 
       {invoiceMollieMessage && <div className="success">{invoiceMollieMessage}</div>}
       {invoiceMollieError && <div className="error">{invoiceMollieError}</div>}
 
-      {canAdminOrganization ? <>
+      {/* Zolang de status niet binnen is: niet "Niet gekoppeld" tonen. Eerder
+          stond dat er even, ook als er wel een account gekoppeld was. */}
+      {canAdminOrganization ? (!invoiceMollie ? (invoiceMollieError ? null : <p className="settings-help">Status laden…</p>) : <>
         <div className="billing-summary">
           <div>
             <span>Status</span>
-            <strong>{invoiceMollie?.status === 'connected' ? 'Gekoppeld' : 'Niet gekoppeld'}</strong>
-            <small>{invoiceMollie?.status === 'connected'
+            <strong>{invoiceMollie.status === 'connected' ? 'Gekoppeld' : 'Niet gekoppeld'}</strong>
+            <small>{invoiceMollie.status === 'connected'
               ? `${invoiceMollie.mode === 'live' ? 'Live' : 'Test'}-modus${invoiceMollie.key_suffix ? ' · key ••••' + invoiceMollie.key_suffix : ''}`
               : 'Facturen worden zonder betaallink verstuurd.'}</small>
           </div>
-          {invoiceMollie?.status === 'connected' && invoiceMollie.connected_at && <div>
+          {/* Welk account de betalingen ontvangt, zodat je ziet dat het het jouwe is. */}
+          {invoiceMollie.status === 'connected' && <div className="mollie-profile">
+            <span>Mollie-profiel</span>
+            <strong>{invoiceMollie.profile ? (invoiceMollie.profile.name || invoiceMollie.profile.id) : 'Onbekend'}</strong>
+            <small>{invoiceMollie.profile
+              ? (invoiceMollie.profile.website || invoiceMollie.profile.id)
+              : 'Vervang de key om te zien welk account het is.'}</small>
+          </div>}
+          {invoiceMollie.status === 'connected' && invoiceMollie.connected_at && <div>
             <span>Gekoppeld sinds</span>
             <strong>{formatDate(invoiceMollie.connected_at)}</strong>
             <small>{invoiceMollie.last_validated_at ? 'Laatst gevalideerd ' + formatDate(invoiceMollie.last_validated_at) : 'Nog niet opnieuw gevalideerd'}</small>
           </div>}
         </div>
 
-        {invoiceMollie?.status === 'connected' ? <>
+        {invoiceMollie.status === 'connected' && invoiceMollie.mode === 'test' && <div className="settings-warning">
+          Testmodus: een betaling via de betaallink is niet echt. In de testomgeving van Mollie kiest de betaler zelf &quot;betaald&quot;, en dan zet ResoFly de factuur op betaald en boekt hem. Gebruik dit alleen om te proberen, en koppel een live-key voordat je echte facturen verstuurt.
+        </div>}
+        {invoiceMollie.status === 'connected' && invoiceMollie.mode === 'live' && invoiceMollie.profile?.status === 'unverified' && <div className="settings-warning">
+          Mollie heeft dit profiel nog niet goedgekeurd. Tot dan lukken echte betalingen niet. Kijk in je Mollie-dashboard wat er nog nodig is.
+        </div>}
+        {invoiceMollie.status === 'connected' && invoiceMollie.profile?.status === 'blocked' && <div className="settings-warning">
+          Mollie heeft dit profiel geblokkeerd. Betalingen via de link lukken dan niet. Neem contact op met Mollie, of koppel een ander profiel.
+        </div>}
+
+        {invoiceMollie.status === 'connected' ? <>
           <div className="billing-control-row">
             <div>
               <strong>Key vervangen</strong>
@@ -2783,7 +2812,7 @@ export function Settings({
           </div>
           <Button variant="primary" onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Koppelen…' : 'Mollie koppelen'}</Button>
         </div>}
-      </> : <p className="settings-help">Alleen owners en admins kunnen de Mollie-koppeling beheren.</p>}
+      </>) : <p className="settings-help">Alleen owners en admins kunnen de Mollie-koppeling beheren.</p>}
     </section>
 
     {activeOrganization && <InvoiceReminderSettingsCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
@@ -3082,7 +3111,7 @@ function auditActionLabel(action: string) {
 }
 
 function entityLabel(entity: string) {
-  const labels: Record<string, string> = { organization: 'Organisatie', member: 'Teamlid', invitation: 'Uitnodiging', license_event: 'Licentie', client: 'Klant', project: 'Project', task: 'Taak', ticket: 'Ticket', note: 'Notitie', quote: 'Offerte', invoice: 'Factuur', attachment: 'Bijlage', company_settings: 'Bedrijfsinstellingen', calendar_connection: 'Agenda-koppeling', calendar_source: 'Agenda', billing_profile: 'Billingprofiel', subscription: 'Subscription', payment: 'Betaling', billing_event: 'Billing-event', license_change: 'Licentiewijziging' };
+  const labels: Record<string, string> = { organization: 'Organisatie', member: 'Teamlid', invitation: 'Uitnodiging', license_event: 'Licentie', client: 'Klant', project: 'Project', task: 'Taak', ticket: 'Ticket', note: 'Notitie', quote: 'Offerte', invoice: 'Factuur', attachment: 'Bijlage', company_settings: 'Bedrijfsinstellingen', calendar_connection: 'Agenda-koppeling', mollie_connection: 'Mollie-koppeling', calendar_source: 'Agenda', billing_profile: 'Billingprofiel', subscription: 'Subscription', payment: 'Betaling', billing_event: 'Billing-event', license_change: 'Licentiewijziging' };
   return labels[entity] ?? entity;
 }
 

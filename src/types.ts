@@ -3444,12 +3444,22 @@ export type EmailTemplateInput = {
 };
 
 export type InvoiceMollieConnectionStatus = 'not_connected' | 'connected' | 'revoked';
+/** Het Mollie-profiel (de website) waar de gekoppelde key bij hoort. Geen geheim. */
+export interface InvoiceMollieProfile {
+  id: string;
+  name: string | null;
+  website: string | null;
+  /** Zoals Mollie het zegt: 'verified', 'unverified' of 'blocked'. */
+  status: string | null;
+}
 export interface InvoiceMollieSettingsStatus {
   status: InvoiceMollieConnectionStatus;
   mode: 'test' | 'live' | null;
   key_suffix: string | null;
   connected_at: string | null;
   last_validated_at: string | null;
+  /** Null bij een koppeling van vóór 6 november 2026, of als Mollie het profiel niet gaf. */
+  profile?: InvoiceMollieProfile | null;
 }
 
 // Zelfbouw-rapportbouwer (fase 2): een opgeslagen rapport bewaart de pure

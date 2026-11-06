@@ -59,8 +59,10 @@ test('elke soort regel die ergens gelogd wordt, is bewust ingedeeld', () => {
     for (const match of sql.matchAll(/audit_row_change\('([a-z_]+)'/g)) logged.add(match[1]);
     for (const match of sql.matchAll(/log_billing_audit\(\s*[^,]+,\s*'[a-z_]+',\s*'([a-z_]+)'/g)) logged.add(match[1]);
   }
-  // Rechtstreeks vanuit een edge function (invoice-workflow: creditnota gemaild).
+  // Rechtstreeks vanuit een edge function (invoice-workflow: creditnota gemaild;
+  // Mollie gekoppeld, key vervangen of ontkoppeld).
   logged.add('credit_note');
+  logged.add('mollie_connection');
   assert.ok(logged.size >= 60, `te weinig gevonden (${logged.size}) — klopt de zoekopdracht nog?`);
   const missing = [...logged].filter((type) => !(type in AUDIT_ENTITY_MODULE));
   assert.deepEqual(missing, [], 'nieuw in het auditlog: kies een module in audit_entity_module() én AUDIT_ENTITY_MODULE');

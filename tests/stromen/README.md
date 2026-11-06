@@ -27,7 +27,9 @@ npm run test:stromen
 npm run test:stromen -- facturen
 ```
 
-Scenario's: `rook`, `offertes`, `facturen`, `herinneringen`, `contracten`, `beveiliging`,
+Scenario's: `rook`, `offertes`, `facturen`, `mollie` (de eigen Mollie-koppeling: koppelen met
+profiel, auditlog, een ander account met een open link, ontkoppelen, en een key die nog met de
+ingebouwde sleutel was opgeslagen), `herinneringen`, `contracten`, `beveiliging`,
 `automatisering`, `agenda` (Google en Microsoft koppelen, met nep-Google en nep-Microsoft uit
 `nep-agenda.mjs`), `documenten` (maken, rechten per rol en module, andere organisaties,
 delen via portaal en link, opruimen) en `verzenddomein` (eigen domein koppelen, verifiëren,
@@ -66,7 +68,9 @@ Scenario's: `offerte` (formulier, ter goedkeuring, goedkeuren, versturen, akkoor
 factuur maken), `factuur` (versturen, publieke pagina, herinnering, crediteren), `intrekken`,
 `contract` (versturen, ondertekenen, terug naar concept), `rollen` (kijker, lezer en boekhouder
 zien geen knoppen die iets veranderen; de medewerker en de beheerder bij dezelfde stukken wel),
-`agenda` (Google koppelen met de knop, terugkeer met fout, opnieuw koppelen, loskoppelen) en
+`agenda` (Google koppelen met de knop, terugkeer met fout, opnieuw koppelen, loskoppelen),
+`mollie` (Instellingen → Online betalen: een geweigerde key met de echte reden in beeld, koppelen
+met profiel en de waarschuwing voor de testmodus, ontkoppelen, wat een lid ziet) en
 `documenten` (maken en bewerken in Inhoud, kwaadaardige inhoud in de app en op de deelpagina,
 verwijderen, de kijker).
 
