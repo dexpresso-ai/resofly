@@ -143,3 +143,11 @@ een andere migratie met die versie.
 - *Frontend checks* run 131 helemaal groen: `deno check` van de edge functions, migraties vanaf nul
   op een lege database, typecheck, unittests, de mobiele lay-outtest en laden per module.
 - Nog open voor de eigenaar: uitrolstappen 2 tot en met 5.
+
+## Media-worker uitgerold (2026-11-06)
+
+- Uitrolstap 3 is gedaan: `resofly-media-api-staging`, versie `bf775db3`, met de route voor
+  offerte-PDF's. Zie `CHANGELOG_WORKERS_UITROL_2026-11-06.md`.
+- Uitrolstap 5 staat nog open: de oude worker `resofly-media-staging` draait nog.
+- Uitrolstap 2: Supabase biedt `17.11.0.018` aan. Dat is een van de twee versies waarop de crash
+  lokaal niet terugkwam. De controle van Supabase vindt niets dat in de weg zit.
