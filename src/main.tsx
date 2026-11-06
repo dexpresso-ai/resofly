@@ -1945,10 +1945,13 @@ function App() {
       };
       const blob = buildDocumentDocxBlob(meta);
       const up = await uploadDocumentDocx(activeOrg.id, doc.title || 'Document', blob);
-      await updateRow<InternalDocument>('documents', doc.id, { storage_key: up.key, mime_type: up.mime_type, size_bytes: up.size_bytes }, activeOrg.id);
+      // De tekst staat vanaf nu in het Word-bestand. De oude rich text bleef eerst
+      // in de rij staan, en lijst, zoeken en Gerrie lieten die blijven zien, ook
+      // nadat hij in Word allang was herschreven.
+      await updateRow<InternalDocument>('documents', doc.id, { storage_key: up.key, mime_type: up.mime_type, size_bytes: up.size_bytes, content: '' }, activeOrg.id);
       await refresh();
       setOfficeSession(await createOfficeSessionForDocument(doc.id));
-      setOfficeDoc({ ...doc, storage_key: up.key, mime_type: up.mime_type, size_bytes: up.size_bytes });
+      setOfficeDoc({ ...doc, storage_key: up.key, mime_type: up.mime_type, size_bytes: up.size_bytes, content: '' });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Omzetten naar Word mislukt');
     } finally {

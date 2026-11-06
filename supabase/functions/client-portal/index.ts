@@ -22,7 +22,7 @@ import {
   type PortalMessageRow,
   type PortalThreadSummary,
 } from '../_shared/portalMessages.ts';
-import { transferZipName } from '../_shared/fileTransfer.ts';
+import { officeDownloadName, transferZipName } from '../_shared/fileTransfer.ts';
 import { portalDocumentDecision, portalDocumentScopeFilter } from '../_shared/portalAccess.ts';
 import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
 import {
@@ -867,14 +867,16 @@ async function downloadSharedFile(user: { id: string; email: string }, body: Rec
   // de bytes niet door deze functie (geen base64, geen 25 MB-plafond, hervatten
   // werkt). Kent een nog niet bijgewerkte worker die route niet, dan zoals
   // vroeger: het bestand als base64 in het antwoord.
+  // Een Word-document heet in de lijst naar zijn titel; het bestand krijgt de extensie erbij.
+  const fileName = item.item_type === 'document' ? officeDownloadName(item.name, item.storage_key) : item.name;
   try {
     const signed = await signedDownloadUrls({
       organizationId: String(share.organization_id),
-      files: [{ key: item.storage_key, fileName: item.name }],
+      files: [{ key: item.storage_key, fileName }],
     });
     const url = signed.files[0]?.url;
     if (url) {
-      return { file: { fileName: item.name, mimeType: item.mime_type || 'application/octet-stream', sizeBytes: item.size_bytes, url } };
+      return { file: { fileName, mimeType: item.mime_type || 'application/octet-stream', sizeBytes: item.size_bytes, url } };
     }
   } catch (error) {
     console.warn('client-portal signed url niet beschikbaar, terugval op base64', error instanceof Error ? error.message : error);
@@ -890,7 +892,7 @@ async function downloadSharedFile(user: { id: string; email: string }, body: Rec
 
   return {
     file: {
-      fileName: item.name,
+      fileName,
       mimeType: item.mime_type || 'application/octet-stream',
       sizeBytes: item.size_bytes,
       base64: arrayBufferToBase64(await response.arrayBuffer()),

@@ -80,6 +80,19 @@ export function cleanFileName(name: unknown, fallback = 'bestand'): string {
   return (cleaned || fallback).slice(0, 300);
 }
 
+/**
+ * De bestandsnaam bij het downloaden van een Word-, Excel- of PowerPoint-
+ * document: de titel plus de extensie uit de opslagsleutel. Het document heet
+ * "Offerte", het bestand "Offerte.docx". Bij delen en in het klantportaal
+ * ontbrak die extensie: de klant kreeg een bestand "Offerte" dat zijn
+ * computer niet herkende.
+ */
+export function officeDownloadName(title: unknown, storageKey: string | null | undefined, fallback = 'Document'): string {
+  const name = cleanFileName(title, fallback);
+  const extension = (String(storageKey ?? '').match(/\.([A-Za-z0-9]{2,5})$/)?.[1] ?? 'docx').toLowerCase();
+  return name.toLowerCase().endsWith(`.${extension}`) ? name : `${name}.${extension}`;
+}
+
 // ── Vervaldatum ──────────────────────────────────────────────────────────────
 
 export type ExpiryResult = { ok: true; iso: string } | { ok: false; error: string };

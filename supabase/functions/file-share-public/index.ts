@@ -2,6 +2,7 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { signedDownloadUrls, storageKeyBelongsOnlyTo } from '../_shared/fileTransferServer.ts';
+import { officeDownloadName } from '../_shared/fileTransfer.ts';
 
 // ============================================================
 // ResoFly — Publieke deellink (file-share-public)
@@ -179,17 +180,20 @@ async function downloadItem(tokenHash: string, body: Record<string, unknown>) {
     throw new ShareError('Dit bestand kan niet via deze deellink worden geopend.', 403);
   }
 
+  // Een Word-document heet in de lijst naar zijn titel; het bestand krijgt de extensie erbij.
+  const fileName = item.item_type === 'document' ? officeDownloadName(item.name, item.storage_key) : item.name;
+
   // Bij voorkeur een kortlevende link van de media-worker: geen base64, geen
   // 25 MB-plafond, en een afgebroken download kan hervatten. Kent de worker
   // die route nog niet, dan zoals voorheen.
   try {
     const signed = await signedDownloadUrls({
       organizationId: share.organization_id,
-      files: [{ key: item.storage_key, fileName: item.name }],
+      files: [{ key: item.storage_key, fileName }],
     });
     const url = signed.files[0]?.url;
     if (url) {
-      return { file: { fileName: item.name, mimeType: item.mime_type || 'application/octet-stream', sizeBytes: item.size_bytes, url } };
+      return { file: { fileName, mimeType: item.mime_type || 'application/octet-stream', sizeBytes: item.size_bytes, url } };
     }
   } catch (error) {
     console.warn('file-share-public signed url niet beschikbaar, terugval op base64', error instanceof Error ? error.message : error);
@@ -197,7 +201,7 @@ async function downloadItem(tokenHash: string, body: Record<string, unknown>) {
 
   return {
     file: {
-      fileName: item.name,
+      fileName,
       mimeType: item.mime_type || 'application/octet-stream',
       sizeBytes: item.size_bytes,
       base64: await fetchStorageBase64(share.organization_id, item.storage_key, item.size_bytes),

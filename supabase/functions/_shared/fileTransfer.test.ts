@@ -18,6 +18,7 @@ import {
   randomToken,
   transferZipName,
   zipPath,
+  officeDownloadName,
 } from './fileTransfer.ts';
 import {
   FILE_TRANSFER_DEFAULTS,
@@ -242,4 +243,12 @@ test('de grens van 1 GB is overal dezelfde', () => {
   assert.match(frontend, /export const TRANSFER_MAX_FILE_BYTES = 1024 \* 1024 \* 1024;/);
   assert.match(migration, /size_bytes <= 1073741824/);
   assert.equal(TRANSFER_MAX_FILE_BYTES, 1073741824);
+});
+
+test('een Word-document downloadt met zijn extensie (delen en portaal gaven eerst "Offerte" zonder .docx)', () => {
+  assert.equal(officeDownloadName('Offerte', 'org/document/abc-Offerte.docx'), 'Offerte.docx');
+  assert.equal(officeDownloadName('Begroting', 'org/document/abc-Begroting.XLSX'), 'Begroting.xlsx');
+  assert.equal(officeDownloadName('Plan.pptx', 'org/document/abc-Plan.pptx'), 'Plan.pptx');
+  assert.equal(officeDownloadName('', 'org/document/abc'), 'Document.docx');
+  assert.equal(officeDownloadName('../../geheim', 'org/document/x.docx'), 'geheim.docx');
 });

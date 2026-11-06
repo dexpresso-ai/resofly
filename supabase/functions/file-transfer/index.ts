@@ -15,6 +15,7 @@ import {
   blockedExtension,
   blockedExtensionMessage,
   cleanFileName,
+  officeDownloadName,
   parseTransferExpiry,
   parseTransferRecipients,
   type TransferRecipientInput,
@@ -438,10 +439,7 @@ async function addLeaf(ctx: Ctx, transfer: TransferRow, leaf: Leaf, position: nu
       if (!(await storageKeyBelongsOnlyTo(admin, ctx.organizationId, doc.storage_key, { table: 'documents', id: doc.id }))) {
         return { added: false, skipped: { name: cleanFileName(doc.title, 'Document'), reason: 'Dit document kan niet worden meegestuurd.' } };
       }
-      const title = cleanFileName(doc.title, 'Document');
-      const extension = (doc.storage_key.match(/\.([A-Za-z0-9]{2,5})$/)?.[1] ?? 'docx').toLowerCase();
-      const name = title.toLowerCase().endsWith(`.${extension}`) ? title : `${title}.${extension}`;
-      return copyFile(ctx, transfer, leaf, position, name, doc.storage_key, doc.size_bytes);
+      return copyFile(ctx, transfer, leaf, position, officeDownloadName(doc.title, doc.storage_key), doc.storage_key, doc.size_bytes);
     }
     return snapshot(ctx, transfer, leaf, position, cleanFileName(doc.title, 'Document'), doc.content);
   }

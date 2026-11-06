@@ -29,7 +29,9 @@ npm run test:stromen -- facturen
 
 Scenario's: `rook`, `offertes`, `facturen`, `herinneringen`, `contracten`, `beveiliging`,
 `automatisering`, `agenda` (Google en Microsoft koppelen, met nep-Google en nep-Microsoft uit
-`nep-agenda.mjs`). De uitkomst van 6 november staat in
+`nep-agenda.mjs`) en `documenten` (maken, rechten per rol en module, andere organisaties,
+delen via portaal en link, opruimen). De uitkomst van de documenten staat in
+`docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in
 `docs/rapporten/STROMENTEST_CONTRACT_OFFERTE_FACTUUR_2026-11-06.md`.
 Elk scenario maakt zijn eigen organisaties (`wereld.mjs`), dus ze raken elkaar niet en de
 database hoeft niet leeg.
@@ -60,8 +62,10 @@ node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui
 Scenario's: `offerte` (formulier, ter goedkeuring, goedkeuren, versturen, akkoord van de klant,
 factuur maken), `factuur` (versturen, publieke pagina, herinnering, crediteren), `intrekken`,
 `contract` (versturen, ondertekenen, terug naar concept), `rollen` (kijker, lezer en boekhouder
-zien geen knoppen die iets veranderen; de medewerker en de beheerder bij dezelfde stukken wel) en
-`agenda` (Google koppelen met de knop, terugkeer met fout, opnieuw koppelen, loskoppelen).
+zien geen knoppen die iets veranderen; de medewerker en de beheerder bij dezelfde stukken wel),
+`agenda` (Google koppelen met de knop, terugkeer met fout, opnieuw koppelen, loskoppelen) en
+`documenten` (maken en bewerken in Inhoud, kwaadaardige inhoud in de app en op de deelpagina,
+verwijderen, de kijker).
 
 Elke stap controleert ook: geen JavaScript-fout, geen foutmelding of "laden…" die blijft staan,
 en geen mislukte aanroep die de stap niet verwachtte. Mislukt een stap, dan komt er een
@@ -82,6 +86,23 @@ Goed om te weten:
 - Vite gebruikt een eigen cachemap (`node_modules/.vite-stromen-ui`) en geen HMR, zodat andere
   Vite-servers of wijzigingen in `src/` de pagina niet midden in een stap herladen.
 
+## Werkertest: de media-worker voor Word-documenten (`werker-documenten.mjs`)
+
+De echte `workers/media-api` in workerd (wrangler dev, met een lokale R2) tegen dezelfde lokale
+stack: uploaden, downloaden per rol, een documentrij die naar een bestand van een andere module
+wijst, en de online editor (WOPI) met tokens die na het intrekken van rechten niet meer werken.
+Collabora draait niet; de WOPI-tokens maakt de test zelf met dezelfde sleutel als de worker.
+
+```bash
+# wrangler in een eigen map (niet in de repo), en een config die naar de lokale stack wijst:
+#   main = "<repo>/workers/media-api/src/index.ts", [[r2_buckets]] binding = "MEDIA_BUCKET",
+#   [vars] SUPABASE_URL = "http://127.0.0.1:54321", ALLOWED_ORIGINS = "http://localhost:5173",
+#   .dev.vars: SUPABASE_SERVICE_ROLE_KEY (uit `supabase status`), MEDIA_SIGNING_SECRET,
+#   INTERNAL_UPLOAD_SECRET, OFFICE_CONVERT_SECRET
+wrangler dev --local --port 8788
+node tests/stromen/werker-documenten.mjs   # MEDIA_DEV_URL / MEDIA_DEV_SIGNING_SECRET / MEDIA_DEV_INTERNAL_SECRET
+```
+
 ## Bestanden
 
 | Bestand | Wat |
@@ -90,6 +111,7 @@ Goed om te weten:
 | `omgeving.mjs` | de lokale stack en de secrets van de functies |
 | `nepdiensten.mjs` | Resend, Mollie en de media-worker, met storingen op bestelling; `registreerDienst` voor eigen nepdiensten |
 | `nep-agenda.mjs` | nep-Google en nep-Microsoft voor de agendakoppeling (codes, tokens, agendalijsten, afspraken, intrekken) |
+| `werker-documenten.mjs` | de werkertest hierboven (los te draaien, niet via `run.mjs`) |
 | `supabase.mjs` | PostgREST als gebruiker of als server, `psql` voor wat alleen de tijd doet |
 | `functies.mjs` | roept een functie aan met een `Request`, zoals de browser of Mollie |
 | `wereld.mjs` | een organisatie met alle rollen, bedrijfsgegevens en twee klanten met portaal |
