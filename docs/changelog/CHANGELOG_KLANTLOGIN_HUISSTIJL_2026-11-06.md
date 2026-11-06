@@ -158,8 +158,8 @@ geen gat ziet.
   - *Opslaan* stuurt precies de vier kolommen (geen sleutel);
   - terug op *Automatisch* wordt null;
   - op de telefoon geen zijwaartse overloop.
-- **Mobiele lay-outtest** (`--theme=both`) op het portaal, het inlogscherm (ook de nieuwe pagina
-  `portal-login-brand`: het eigen adres met eigen kleuren), het voorbeeld, Instellingen → Huisstijl
-  en een klant, op telefoon, tablet, liggend en desktop: 48 pagina's, 0 met problemen. **Laden per
-  module**: geslaagd.
+- **Mobiele lay-outtest**, de volledige ronde (`--theme=both`), met de nieuwe pagina
+  `portal-login-brand` (het eigen adres met eigen kleuren): 330 pagina's, 0 met problemen. Daarvoor
+  al apart het portaal, het inlogscherm, het voorbeeld, Instellingen → Huisstijl en een klant op
+  telefoon, tablet, liggend en desktop: 48 pagina's, 0 met problemen. **Laden per module**: geslaagd.
 - **Productiebuild** en de **CSP-hash**: in orde.
