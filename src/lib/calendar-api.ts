@@ -1,4 +1,6 @@
 import { supabase } from './supabase';
+import { parseCalendarOAuthReturn, type CalendarOAuthReturn } from './calendarConnection';
+import { throwFunctionError } from './functionErrors';
 import type { AttendeeInput, CalendarAppPassword, CalendarConnection, CalendarEventAttendee, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, EventRecurrence, UUID } from '../types';
 
 export interface CalendarIntegrationsPayload {
@@ -34,13 +36,20 @@ type CalendarActionResponse<T> = { ok: true } & T;
 
 async function invokeCalendar<T>(organizationId: UUID, body: Record<string, unknown>): Promise<CalendarActionResponse<T>> {
   const { data, error } = await supabase.functions.invoke('calendar-integrations', { body: { ...body, organizationId } });
-  if (error) throw new Error(error.message || 'Agenda-koppeling mislukt.');
+  // De uitleg van de server staat in de body. error.message is bij elke fout
+  // "Edge Function returned a non-2xx status code": dat zag de gebruiker eerst
+  // bij alles, van "geen toegang" tot "koppel opnieuw".
+  if (error) await throwFunctionError(error, 'Agenda-koppeling mislukt.');
   if (!data || data.ok !== true) throw new Error(data?.error ?? 'Agenda-koppeling gaf geen geldig antwoord terug.');
   return data as CalendarActionResponse<T>;
 }
 
-export async function getCalendarOAuthUrl(organizationId: UUID, provider: CalendarProvider, returnTo: string): Promise<string> {
-  const data = await invokeCalendar<{ authUrl: string }>(organizationId, { action: 'oauthStart', provider, returnTo });
+/**
+ * De toestemmingslink van Google of Microsoft. `loginHint` (het adres van een
+ * bestaande koppeling) zet bij opnieuw koppelen meteen het juiste account klaar.
+ */
+export async function getCalendarOAuthUrl(organizationId: UUID, provider: CalendarProvider, returnTo: string, loginHint?: string | null): Promise<string> {
+  const data = await invokeCalendar<{ authUrl: string }>(organizationId, { action: 'oauthStart', provider, returnTo, ...(loginHint ? { loginHint } : {}) });
   return data.authUrl;
 }
 
@@ -221,34 +230,39 @@ export async function createCalendarAppPassword(organizationId: UUID, label: str
 }
 
 export async function listCalendarAppPasswords(organizationId: UUID): Promise<CalendarAppPassword[]> {
-  const data = await invokeCalendar<{ appPasswords: CalendarAppPassword[] }>(organizationId, { action: 'listAppPasswords' });
-  return data.appPasswords;
+  const data = await invokeCalendar<{ appPasswords?: CalendarAppPassword[] }>(organizationId, { action: 'listAppPasswords' });
+  return data.appPasswords ?? [];
 }
 
 export async function revokeCalendarAppPassword(organizationId: UUID, appPasswordId: UUID): Promise<void> {
   await invokeCalendar<Record<string, never>>(organizationId, { action: 'revokeAppPassword', appPasswordId });
 }
 
+export interface CalendarOAuthCompletion {
+  provider: CalendarProvider;
+  /** De organisatie waarin de koppeling is gestart (en dus staat). */
+  organizationId: UUID;
+  /** Het gekoppelde account, als de provider het noemde. */
+  account: string | null;
+  /** Gekoppeld, maar met een kanttekening (bijv. de agendalijst kwam nog niet). */
+  warning?: string;
+}
+
 /** Rondt een agendakoppeling af na de terugkeer van Google of Microsoft
  *  (?calendar_code=&calendar_state=…). De server koppelt alleen voor wie de
  *  koppeling startte. */
-export async function completeCalendarOAuth(organizationId: UUID, code: string, state: string): Promise<CalendarProvider> {
-  const result = await invokeCalendar<{ provider: CalendarProvider }>(organizationId, { action: 'oauthComplete', code, state });
-  return result.provider;
+export async function completeCalendarOAuth(organizationId: UUID, code: string, state: string): Promise<CalendarOAuthCompletion> {
+  const result = await invokeCalendar<Omit<CalendarOAuthCompletion, 'account'> & { account?: string | null }>(organizationId, { action: 'oauthComplete', code, state });
+  return { provider: result.provider, organizationId: result.organizationId ?? organizationId, account: result.account ?? null, warning: result.warning };
 }
 
 /** Leest de terugkeer van de agenda-OAuth één keer uit de URL en haalt hem eruit. */
-export function takeCalendarOAuthReturn(): { code: string; state: string } | null {
+export function takeCalendarOAuthReturn(): CalendarOAuthReturn | null {
   if (typeof window === 'undefined') return null;
   try {
-    const url = new URL(window.location.href);
-    const code = url.searchParams.get('calendar_code');
-    const state = url.searchParams.get('calendar_state');
-    if (!code || !state) return null;
-    url.searchParams.delete('calendar_code');
-    url.searchParams.delete('calendar_state');
-    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
-    return { code, state };
+    const { result, cleaned } = parseCalendarOAuthReturn(window.location.href);
+    if (cleaned !== null) window.history.replaceState(window.history.state, '', cleaned);
+    return result;
   } catch {
     return null;
   }

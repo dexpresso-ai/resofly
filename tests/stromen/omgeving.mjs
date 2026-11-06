@@ -34,6 +34,7 @@ export const MEDIA = 'https://media.stromen.test';
 export const R2_GEHEIM = 'r2-geheim-stromen';
 export const CRON_SECRET = 'cron-geheim-stromen';
 export const WEBHOOK_SECRET = 'webhook-geheim-stromen';
+export const AGENDA_STATE_GEHEIM = 'agenda-state-geheim-stromen';
 
 Object.assign(process.env, {
   SUPABASE_URL: API_URL,
@@ -71,4 +72,14 @@ Object.assign(process.env, {
   INVOICE_REMINDER_CRON_SECRET: CRON_SECRET,
   // De API laadt via Gerrie ook de agendacode; die eist deze sleutel bij het laden.
   CALENDAR_TOKEN_ENCRYPTION_KEY: 'stromen-test-sleutel-voor-agenda-tokens',
+  // De agendakoppeling (agenda.mjs): Google en Microsoft zijn nep, de callback is de echte functie.
+  CALENDAR_REDIRECT_URL: `${API_URL}/functions/v1/calendar-integrations`,
+  CALENDAR_OAUTH_STATE_SECRET: AGENDA_STATE_GEHEIM,
+  CALENDAR_ALLOWED_RETURN_ORIGINS: ORIGIN,
+  CALENDAR_ICS_CRON_SECRET: CRON_SECRET,
+  GOOGLE_CALENDAR_CLIENT_ID: 'google-client-stromen',
+  GOOGLE_CALENDAR_CLIENT_SECRET: 'google-geheim-stromen',
+  MICROSOFT_CALENDAR_CLIENT_ID: 'microsoft-client-stromen',
+  MICROSOFT_CALENDAR_CLIENT_SECRET: 'microsoft-geheim-stromen',
+  MICROSOFT_CALENDAR_TENANT_ID: 'common',
 });

@@ -153,8 +153,9 @@ function rpc(fn) {
 function edgeFunction(name, body) {
   if (name === 'calendar-integrations') {
     const action = body?.action;
-    if (action === 'listIntegrations') return { ok: true, connections: [], sources: [seed.calendarSource] };
+    if (action === 'listIntegrations') return { ok: true, connections: seed.calendarConnections, sources: [seed.calendarSource, seed.googleCalendarSource] };
     if (action === 'listEvents') return { ok: true, events: seed.events };
+    if (action === 'listAppPasswords') return { ok: true, appPasswords: [] };
     return { ok: true, connections: [], sources: [seed.calendarSource], calendars: [seed.calendarSource], events: [], attendees: [], links: [], slots: [], ics: [] };
   }
   if (name === 'meeting-booking') return { ok: true, links: [], slots: [], bookings: [], link: null };

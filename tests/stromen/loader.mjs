@@ -20,6 +20,8 @@ const REMOTE = {
   'https://esm.sh/@pdf-lib/fontkit@1.1.1': '@pdf-lib/fontkit',
   'https://esm.sh/xss@1.0.15': 'xss',
   'https://esm.sh/fast-xml-parser@4.5.0': 'fast-xml-parser',
+  // calendar-integrations (agenda via een ICS-link); zonder deze regel laadde die functie hier niet.
+  'https://esm.sh/ical.js@2.1.0': 'ical.js',
 };
 
 const LOCAL = {

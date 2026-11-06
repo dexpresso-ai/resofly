@@ -94,6 +94,9 @@ const PAGES = {
   // instellingen schuiven: op een laptop lagen Dupliceren, Verwijderen en de
   // kleurknoppen eronder.
   'settings-documenten': { page: 'settings', prepare: '[data-settings-tab="documenten"]', apart: ['.dle-palette', '.dle-panel'] },
+  // Instellingen → Agenda: koppelingen met hun status, de uitleg eronder en de
+  // knop "Opnieuw koppelen" (november 2026), naast elkaar of onder elkaar.
+  'settings-agenda': { page: 'settings', prepare: '[data-settings-tab="agenda"]' },
   // Instellingen → E-mail: de e-mailteksten met het voorbeeld, waarin sinds
   // november 2026 ook het logo staat zoals bovenaan de mail.
   'settings-email': { page: 'settings', prepare: '[data-settings-tab="email"]' },

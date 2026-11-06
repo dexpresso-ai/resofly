@@ -1,168 +1,169 @@
-# BrandCore v1.6.0 — Google & Microsoft Agenda-koppeling
+# Google- en Microsoft-agenda koppelen: inrichten
 
-Deze versie bevat een volledige per-user agenda-koppeling voor Google Calendar en Microsoft Outlook/Microsoft 365 via Supabase Edge Functions.
+Elke gebruiker koppelt zijn eigen Google- of Microsoft-agenda, per organisatie.
+De koppeling loopt via de edge function `calendar-integrations`; tokens staan
+versleuteld in de database en komen nooit in de browser.
 
-## 1. Database installeren — lege database
+Bijgewerkt op 6 november 2026 (zie `docs/changelog/CHANGELOG_AGENDA_KOPPELEN_2026-11-06.md`).
 
-Je gaf aan dat er nog geen productiedata is. Gebruik daarom **één compleet schema**:
+## 1. Database en functie
 
-```sql
--- Supabase SQL Editor
--- Plak en run de volledige inhoud van:
-supabase/FRESH_INSTALL_COMPLETE_SCHEMA.sql of supabase/schema.sql
-```
+De tabellen en regels staan in de migraties (`supabase/migrations`); een push
+naar `staging` zet ze klaar, net als de edge function. Zie
+`supabase/migrations/README.md` voor een nieuwe omgeving.
 
-Alternatief: `supabase/BRANDCORE_DATABASE_SETUP.sql` bevat dezelfde fresh-install basis.
+`supabase/config.toml` zet `verify_jwt = false` voor `calendar-integrations`:
+Google en Microsoft sturen de browser na het toestaan terug naar deze functie,
+zonder Supabase-sessie. Alle acties van de app (POST) eisen wel een geldige
+sessie; de terugkeer zelf wisselt niets in (zie §6).
 
-Niet nodig bij een lege database:
-
-- losse migraties één voor één draaien
-- datamigratie
-- backfill
-
-## 2. Edge Function deployen
-
-```bash
-supabase functions deploy calendar-integrations --no-verify-jwt
-```
-
-Waarom `--no-verify-jwt` hier bewust nodig is: Google en Microsoft sturen na OAuth-autorisatie een browser-callback naar deze Edge Function zonder Supabase `Authorization` header. De function is daarom publiek bereikbaar voor de callback, maar alle normale app-acties via `POST` vereisen nog steeds een geldige Supabase bearer token. De callback wordt beveiligd via een HMAC-ondertekende, kort geldige OAuth `state`.
-
-De repo bevat hiervoor ook `supabase/config.toml`:
-
-```toml
-[functions.calendar-integrations]
-verify_jwt = false
-```
-
-De frontend roept deze functie aan via `supabase.functions.invoke('calendar-integrations', ...)`.
-
-## 3. Supabase secrets instellen
-
-Zet deze secrets in Supabase. Deze waarden mogen nooit in de frontend of in Vite env-vars staan.
+## 2. Secrets
 
 ```bash
 supabase secrets set \
-  CALENDAR_REDIRECT_URL="https://YOUR_PROJECT.supabase.co/functions/v1/calendar-integrations" \
-  CALENDAR_ALLOWED_RETURN_ORIGINS="http://localhost:5173,https://staging.resofly.com,https://resofly.com,https://www.resofly.com,https://staging.resofly.pages.dev" \
-  CALENDAR_OAUTH_STATE_SECRET="lange-random-string-minimaal-32-tekens" \
-  CALENDAR_TOKEN_ENCRYPTION_KEY="lange-random-string-minimaal-32-tekens" \
-  GOOGLE_CALENDAR_CLIENT_ID="..." \
-  GOOGLE_CALENDAR_CLIENT_SECRET="..." \
-  MICROSOFT_CALENDAR_CLIENT_ID="..." \
-  MICROSOFT_CALENDAR_CLIENT_SECRET="..." \
+  CALENDAR_REDIRECT_URL="https://<project>.supabase.co/functions/v1/calendar-integrations" \
+  CALENDAR_ALLOWED_RETURN_ORIGINS="https://app.resofly.nl,https://staging.resofly.pages.dev" \
+  CALENDAR_OAUTH_STATE_SECRET="<lange willekeurige tekst, minstens 32 tekens>" \
+  CALENDAR_TOKEN_ENCRYPTION_KEY="<lange willekeurige tekst, minstens 32 tekens>" \
+  GOOGLE_CALENDAR_CLIENT_ID="…" \
+  GOOGLE_CALENDAR_CLIENT_SECRET="…" \
+  MICROSOFT_CALENDAR_CLIENT_ID="…" \
+  MICROSOFT_CALENDAR_CLIENT_SECRET="…" \
   MICROSOFT_CALENDAR_TENANT_ID="common"
 ```
 
-Gebruik voor productie een andere `CALENDAR_TOKEN_ENCRYPTION_KEY` en `CALENDAR_OAUTH_STATE_SECRET` dan lokaal.
+- `CALENDAR_ALLOWED_RETURN_ORIGINS`: de adressen van de app, gescheiden door
+  komma's. De browser komt na het koppelen alleen op zo'n adres terug (plus de
+  Cloudflare-previews `*.resofly.pages.dev`). **Verplicht**: zonder deze
+  instelling mag alleen `localhost` (eerst mocht dan elk adres).
+- Gebruik per omgeving een eigen `CALENDAR_OAUTH_STATE_SECRET` en
+  `CALENDAR_TOKEN_ENCRYPTION_KEY`. Verander je de encryptiesleutel, dan moet
+  iedereen opnieuw koppelen.
+- `MICROSOFT_CALENDAR_TENANT_ID`: `common` (werk- én privé-accounts),
+  `organizations` (alleen werk/school) of één tenant-id. Dit moet passen bij
+  "Supported account types" van de app-registratie (§4).
 
-## 4. Google Cloud instellen
+## 3. Google Cloud
 
-1. Ga naar Google Cloud Console.
-2. Maak/selecteer een project.
-3. Enable **Google Calendar API**.
-4. Configureer OAuth consent screen.
-5. Maak OAuth Client ID aan van type **Web application**.
-6. Voeg deze Authorized redirect URI toe:
+1. Kies of maak een project in de Google Cloud Console.
+2. Zet aan: **Google Calendar API** en **People API** (de People API zoekt
+   contacten bij het uitnodigen van genodigden).
+3. OAuth-toestemmingsscherm:
+   - **Publishing status: In production.** In "Testing" laat Google een
+     vernieuwtoken na **zeven dagen** verlopen. Elke koppeling springt dan na een
+     week op "Verlopen" (in de logs: `invalid_grant`, "Bad Request"). Zo stond de
+     koppeling op staging vanaf 14 oktober 2026.
+   - De agenda- en contactscopes zijn "sensitive". Boven de honderd gebruikers
+     wil Google een verificatie; daarvoor zie je bij het koppelen het scherm
+     "Google heeft deze app niet geverifieerd" (doorgaan kan via "Geavanceerd").
+4. OAuth-client van het type **Web application**, met als redirect-URI exact:
 
-```text
-https://YOUR_PROJECT.supabase.co/functions/v1/calendar-integrations
-```
+   ```text
+   https://<project>.supabase.co/functions/v1/calendar-integrations
+   ```
 
-7. Zet Client ID en Client Secret in Supabase secrets.
+5. Scopes die de app vraagt:
 
-Gebruikte scopes:
+   ```text
+   openid email profile
+   https://www.googleapis.com/auth/calendar.calendarlist.readonly
+   https://www.googleapis.com/auth/calendar.events
+   https://www.googleapis.com/auth/contacts.readonly
+   https://www.googleapis.com/auth/contacts.other.readonly
+   ```
 
-```text
-openid
-email
-profile
-https://www.googleapis.com/auth/calendar.calendarlist.readonly
-https://www.googleapis.com/auth/calendar.events
-```
+   Google laat de gebruiker losse vinkjes uitzetten. Zonder de twee agendascopes
+   weigert ResoFly de koppeling met uitleg; zonder de contactscopes werkt alles
+   behalve contacten zoeken bij genodigden.
 
-## 5. Microsoft Entra instellen
+## 4. Microsoft Entra
 
-1. Ga naar Microsoft Entra Admin Center.
-2. App registrations → New registration.
-3. Supported account types: kies wat past:
-   - Single tenant voor interne organisatie
-   - Multitenant/common voor externe gebruikers
-4. Redirect URI type: **Web**.
-5. Redirect URI:
+1. Microsoft Entra admin center → App registrations → New registration.
+2. Supported account types: passend bij `MICROSOFT_CALENDAR_TENANT_ID` (§2).
+3. Redirect URI van het type **Web**: dezelfde URL als bij Google.
+4. Certificates & secrets → New client secret. **Let op de vervaldatum** (hooguit
+   24 maanden). Is hij verlopen, dan zien gebruikers "De koppeling met Microsoft
+   is niet goed ingesteld (invalid_client)". Zet dan een nieuwe in
+   `MICROSOFT_CALENDAR_CLIENT_SECRET`; koppelingen hoeven niet opnieuw.
+5. API permissions → Microsoft Graph → Delegated:
 
-```text
-https://YOUR_PROJECT.supabase.co/functions/v1/calendar-integrations
-```
+   ```text
+   openid profile email offline_access
+   User.Read
+   Calendars.ReadWrite
+   Contacts.Read
+   People.Read
+   ```
 
-6. Maak een Client Secret aan.
-7. API permissions → Microsoft Graph → Delegated permissions:
+6. In organisaties die gebruikers geen toestemming laten geven, moet een
+   beheerder "Grant admin consent" doen. Zonder dat ziet de gebruiker in ResoFly:
+   "Je organisatie laat deze koppeling alleen toe met toestemming van een beheerder".
 
-```text
-User.Read
-Calendars.ReadWrite
-offline_access
-openid
-profile
-email
-```
+## 5. Zo werkt het voor de gebruiker
 
-8. Zet Client ID, Client Secret en Tenant ID in Supabase secrets.
+Instellingen → Agenda → **Google koppelen** of **Microsoft koppelen**.
 
-## 6. Lokale frontend env
+1. Google/Microsoft vraagt welk account (accountkeuze staat altijd aan) en om
+   toestemming.
+2. De browser komt terug in ResoFly, op Instellingen → Agenda. Er staat
+   "Agenda koppelen…" en na een paar seconden de koppeling in de lijst.
+3. Beginstand: de hoofdagenda wordt getoond en is schrijfbaar; bij Google
+   worden de agenda's getoond die in Google Agenda zelf aangevinkt staan. Alles
+   is privé tot je "Delen" aanzet.
 
-`.env.local` blijft beperkt tot browser-veilige waarden:
+Statussen onder **Gekoppelde accounts**:
+
+| Status | Betekenis | Wat te doen |
+| --- | --- | --- |
+| Actief | werkt | — |
+| Verlopen | Google/Microsoft geeft geen toegang meer (ingetrokken, wachtwoord gewijzigd, of §3 "Testing") | **Opnieuw koppelen**: het juiste account staat klaar, alles blijft staan |
+| Fout | het ophalen lukte de laatste keer niet; de uitleg staat eronder | herstelt zich zodra het weer lukt; anders opnieuw koppelen |
+| Ingetrokken | het teamlid was uit de organisatie | opnieuw koppelen |
+
+**Loskoppelen** trekt bij Google de toestemming in (behalve als hetzelfde
+Google-account elders in ResoFly nog gekoppeld is) en haalt de agenda's weg.
+Koppelingen van afspraken aan klanten en projecten vervallen; geregistreerde
+uren blijven staan als gewone urenposten. Voor een haperende koppeling is
+"Opnieuw koppelen" de juiste knop, niet los- en weer aankoppelen.
+
+## 6. Beveiliging
+
+- Tokens staan AES-GCM-versleuteld in `calendar_connection_tokens`; die tabel
+  heeft RLS zonder policies: alleen de edge functions (service role) lezen hem.
+- De `state` is met HMAC ondertekend, bevat gebruiker, organisatie,
+  terugkeeradres en een nonce, en is 30 minuten geldig.
+- De terugkeer van Google/Microsoft wisselt de code **niet** in. De app rondt af
+  (`oauthComplete`) met de sessie van wie er is ingelogd, en dat moet degene
+  zijn die het koppelen startte. Een doorgestuurde toestemmingslink koppelt zo
+  nooit andermans agenda aan jouw account.
+- Het terugkeeradres is altijd een adres van de app (`CALENDAR_ALLOWED_RETURN_ORIGINS`).
+- Bij een fout gaat er alleen een vaste code naar de app (`geweigerd`,
+  `beheerder`, `verlopen`, `ongeldig`, `storing`, `mislukt`); de tekst die de
+  gebruiker leest komt uit de app, nooit uit het adres.
+- Een collega ziet van een privé-agenda alleen "Bezet", en van een gedeelde
+  agenda niet wat de eigenaar bij Google of Outlook zelf als privé markeerde.
+- Vertrekt een teamlid, dan worden zijn koppelingen ingetrokken en zijn tokens
+  gewist (migratie `20261101020000`).
+
+## 7. Testen
 
 ```bash
-VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY
-VITE_R2_WORKER_URL=https://resofly-media.YOUR_SUBDOMAIN.workers.dev
-VITE_R2_PUBLIC_BASE_URL=
+npm test                                   # o.a. calendarOAuth.test.ts, calendarConnection.test.ts
+npm run test:stromen -- agenda             # de hele rondgang tegen een lokale stack, met nep-Google/-Microsoft
+node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs agenda   # de knoppen in Chromium
 ```
 
-## 7. Testflow
+Zie `tests/stromen/README.md` voor het starten van de lokale stack.
 
-1. Run database schema.
-2. Deploy Edge Function.
-3. Zet secrets.
-4. Start frontend:
-
-```bash
-npm ci
-npm run dev
-```
-
-5. Log in als gebruiker.
-6. Ga naar **Kalender**.
-7. Klik **Google koppelen**.
-8. Controleer dat je terugkomt op de kalenderpagina.
-9. Klik eventueel **Agenda’s** om bronnen opnieuw op te halen.
-10. Zet per agenda **Tonen** aan.
-11. Zet bij één agenda **Schrijven** aan.
-12. Maak een extern event aan.
-13. Herhaal voor Microsoft.
-
-## 8. Security ontwerp
-
-- OAuth tokens worden niet opgeslagen in `localStorage`, React state of de browser.
-- Refresh tokens worden AES-GCM versleuteld opgeslagen in `calendar_connection_tokens`.
-- `calendar_connection_tokens` heeft RLS aan, maar bewust geen user policies.
-- Alleen de Edge Function met service-role key kan tokenrijen lezen/schrijven.
-- `calendar_connections` en `calendar_sources` zijn per gebruiker te lezen.
-- Tenant-integriteit wordt afgedwongen via triggers op `calendar_sources` en `calendar_connection_tokens`.
-- OAuth `state` is HMAC-ondertekend en verloopt na 10 minuten.
-- OAuth `state` bevat provider, user ID, organisatie ID, return URL, nonce, issued-at en expiration.
-- De callback accepteert alleen een geldige state-handtekening, geldige UUIDs, toegestane return-origin en een kort tijdvenster.
-- `CALENDAR_ALLOWED_RETURN_ORIGINS` voorkomt open redirect misbruik.
-
-## 9. Belangrijke bestanden
+## 8. Bestanden
 
 ```text
-src/features/CalendarPage.tsx
-src/lib/calendar-api.ts
-supabase/functions/calendar-integrations/index.ts
-supabase/config.toml
-supabase/schema.sql
-supabase/BRANDCORE_DATABASE_SETUP.sql
-supabase/migrations/20260428_calendar_integrations.sql
+supabase/functions/calendar-integrations/index.ts   de edge function (koppelen, agenda's, afspraken)
+supabase/functions/_shared/calendarOAuth.ts         regels van de rondgang (puur, getest)
+supabase/functions/_shared/calendarCore.ts          tokens, versleuteling, vernieuwen
+supabase/functions/_shared/calendarAvailability.ts  afspraken ophalen en afschermen
+src/lib/calendar-api.ts                             de aanroepen vanuit de app
+src/lib/calendarConnection.ts                       terugkeer, foutteksten, statussen (puur, getest)
+src/features/CalendarPage.tsx                       Instellingen → Agenda
+tests/stromen/agenda.mjs, nep-agenda.mjs            de end-to-end test met nep-Google/-Microsoft
 ```

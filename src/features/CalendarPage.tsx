@@ -48,6 +48,7 @@ import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
 import { calendarEventKey, calendarEventLinkMatchesEvent } from '../lib/calendar-links';
 import { safeHttpUrl } from '../lib/safeUrl';
+import { connectionStatusView } from '../lib/calendarConnection';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
@@ -3732,8 +3733,16 @@ export type CalendarDraft = {
   date: string | null;
 };
 
-export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null, onDraftConsumed, organizationId, currentUserId, data, canWrite, canAdmin = false, onChanged, onEditTask, onMoveTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
+/**
+ * De uitkomst van een agendakoppeling (terug van Google of Microsoft), door de
+ * app-shell doorgegeven. `key` verandert bij elke nieuwe uitkomst.
+ */
+export type CalendarLinkNotice = { tone: 'ok' | 'error'; text: string; key: number };
+
+export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, initialDraft = null, onDraftConsumed, organizationId, currentUserId, data, canWrite, canAdmin = false, onChanged, onEditTask, onMoveTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
   mode?: 'agenda' | 'settings';
+  /** Alleen in de instellingen: de uitkomst van een koppeling, die hier blijft staan. */
+  linkNotice?: CalendarLinkNotice | null;
   /** Een taakblok (taak met tijd uit de weekplanner) verschuiven of herschalen
    *  in het rooster. Zonder dit zijn taakblokken hier alleen te bekijken. */
   onMoveTask?: (task: Task, dayKey: string, startMin: number, endMin: number) => void | Promise<void>;
@@ -3921,6 +3930,18 @@ export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null
   }, []);
 
   useEffect(() => { void refreshAll(); }, [organizationId, mode]); // eslint-disable-line
+  // Na een koppeling: de lijst opnieuw laden (die stond al open en laadde vóór
+  // het afronden klaar was) en de uitkomst eronder laten staan, ook als de
+  // melding rechtsboven al weg is. Eén keer per uitkomst.
+  const shownNoticeRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!linkNotice || shownNoticeRef.current === linkNotice.key) return;
+    shownNoticeRef.current = linkNotice.key;
+    void refreshAll({ fresh: true }).then(() => {
+      if (linkNotice.tone === 'ok') setMessage(linkNotice.text);
+      else setError(linkNotice.text);
+    });
+  }, [linkNotice?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (mode === 'agenda') void refreshEventsOnly(); }, [rangeStart, rangeEnd, mode]); // eslint-disable-line
   // Vooruit inladen: staat de huidige periode er eenmaal, dan halen we stilletjes
   // de vorige en de volgende op. Daardoor is bladeren meteen gevuld — geen
@@ -4019,11 +4040,12 @@ export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null
     catch (err) { if (seq === eventsRequestRef.current) setError(err instanceof Error ? err.message : 'Agenda-events laden mislukt.'); }
     finally { if (seq === eventsRequestRef.current && !opts?.silent) setEventsLoading(false); }
   }, [organizationId]);
-  async function connect(provider: CalendarProvider) {
+  /** Naar Google of Microsoft. Met `loginHint` (opnieuw koppelen) staat het juiste account meteen klaar. */
+  async function connect(provider: CalendarProvider, loginHint?: string | null) {
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
     setLoading(true); setError(null); setMessage(null);
-    try { window.location.assign(await getCalendarOAuthUrl(organizationId, provider, window.location.href.split('?')[0])); }
-    catch (err) { setError(err instanceof Error ? err.message : 'OAuth starten mislukt.'); setLoading(false); }
+    try { window.location.assign(await getCalendarOAuthUrl(organizationId, provider, window.location.href.split('?')[0], loginHint)); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Koppelen starten mislukt.'); setLoading(false); }
   }
   async function refreshSources(connectionId: string) {
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
@@ -4034,7 +4056,12 @@ export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null
   }
   async function disconnect(connectionId: string) {
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
-    if (!confirm('Deze persoonlijke agenda-koppeling loskoppelen?')) return;
+    // Eerlijk over de gevolgen. Wie na een fout "even los- en weer aankoppelt",
+    // verliest de koppelingen van afspraken aan klanten en projecten; daarvoor
+    // is "Opnieuw koppelen" er (die houdt alles vast).
+    const conn = integrations.connections.find(c => c.id === connectionId);
+    const account = conn?.provider_account_email ? ` (${conn.provider_account_email})` : '';
+    if (!confirm(`Agenda-koppeling${account} loskoppelen?\n\nResoFly haalt dan geen afspraken meer op uit dit account. Afspraken die je hier aan een klant, project of taak koppelde, verliezen die koppeling. Geregistreerde uren blijven staan.\n\nWerkt de koppeling niet goed? Kies dan liever "Opnieuw koppelen": dan blijft alles staan.`)) return;
     setLoading(true); setError(null); setMessage(null);
     try { await disconnectCalendarConnection(organizationId, connectionId); setIntegrations(await loadCalendarIntegrations(organizationId)); setMessage('Agenda-koppeling losgekoppeld.'); if (mode === 'agenda') await refreshEventsOnly({ fresh: true }); }
     catch (err) { setError(err instanceof Error ? err.message : 'Loskoppelen mislukt.'); }
@@ -4571,6 +4598,7 @@ export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null
       {integrations.connections.map(conn => {
         const srcs = integrations.sources.filter(s => s.connection_id === conn.id);
         const owns = canManageConnection(conn.user_id);
+        const status = connectionStatusView(conn);
         return <article className="connection-card" key={conn.id}>
           <div className="connection-top">
             <div className={`provider-badge ${providerClass(conn.provider)}`}>{providerLabel(conn.provider)}</div>
@@ -4578,10 +4606,16 @@ export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null
               <strong>{owns ? (conn.display_name || conn.provider_account_email || 'Mijn account') : 'Gedeelde agenda'}</strong>
               <span>{owns ? (conn.provider_account_email || conn.provider_account_id) : 'Accountgegevens afgeschermd'}</span>
             </div>
-            <span className={`connection-status status-${conn.status}`}>{conn.status}</span>
-            <Button onClick={() => refreshSources(conn.id)} disabled={loading || !owns}><RefreshCcw size={14} /> Agenda's</Button>
+            <span className={`connection-status status-${conn.status} tone-${status.tone}`}>{status.label}</span>
+            {owns && status.needsReconnect && (
+              <Button variant="primary" onClick={() => connect(conn.provider, conn.provider_account_email)} disabled={loading} title="Opnieuw toestemming geven. Je agenda's, instellingen en koppelingen blijven staan.">
+                <RefreshCcw size={14} /> Opnieuw koppelen
+              </Button>
+            )}
+            <Button onClick={() => refreshSources(conn.id)} disabled={loading || !owns} title="De lijst met agenda's van dit account opnieuw ophalen"><RefreshCcw size={14} /> Agenda's</Button>
             <Button variant="danger" onClick={() => disconnect(conn.id)} disabled={loading || !owns}><Unplug size={14} /> Loskoppelen</Button>
           </div>
+          {owns && status.hint && <p className={`connection-hint tone-${status.tone}`} role="status">{status.hint}</p>}
           <div className="source-list">
             {srcs.map(src => {
               const ownsSrc = canManageSource(src);
@@ -4597,7 +4631,7 @@ export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null
                 <label className="toggle-row"><input type="checkbox" checked={src.write_enabled} disabled={!ownsSrc} onChange={() => toggleSource(src, 'write_enabled')} /> Schrijven</label>
               </div>;
             })}
-            {srcs.length === 0 && <div className="calendar-empty small">Klik "Agenda's" om beschikbare agenda's op te halen.</div>}
+            {srcs.length === 0 && <div className="calendar-empty small">{owns ? 'Nog geen agenda\u2019s van dit account. Klik op \u201cAgenda\u2019s\u201d om ze op te halen.' : 'Geen gedeelde agenda\u2019s van dit account.'}</div>}
           </div>
         </article>;
       })}

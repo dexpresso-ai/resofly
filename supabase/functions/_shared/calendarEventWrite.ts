@@ -112,19 +112,11 @@ export async function createEvent(organizationId: string, requesterUserId: strin
     // createNativeEvent regelt zelf de boekingsoptie-reconciliatie (incl. herhalingen).
     return await createNativeEvent(organizationId, requesterUserId, calendarSource, input);
   }
-  if (!calendarSource.write_enabled) {
-    throw new Error('Schrijfbare agenda-bron niet gevonden.');
-  }
-  if (!sourceCanWrite(calendarSource)) {
-    throw new Error('Deze externe agenda is niet schrijfbaar volgens de provider.');
-  }
-  if (!calendarSource.connection_id) throw new Error('Externe agenda-bron mist een koppeling.');
-  const connection = await getConnection(organizationId, calendarSource.connection_id);
-  if (connection.status !== 'active') {
-    throw new Error(`Agenda-koppeling is niet actief (status: ${connection.status}). Koppel het account opnieuw.`);
-  }
-  const token = await getToken(organizationId, connection.id);
-  const accessToken = await refreshAccessToken(token);
+  // Dezelfde controles als bewerken en verwijderen (schrijven aan, mag bij de
+  // provider, koppeling niet ingetrokken). Hier stond eerst een eigen kopie die
+  // alleen "active" doorliet: met "error" door één verdwenen agenda kon je dan
+  // geen enkele afspraak meer in je hoofdagenda zetten.
+  const accessToken = await getExternalWriteAccessToken(organizationId, requesterUserId, calendarSource);
   const event = normalizeNewEventInput(input);
   const result = calendarSource.provider === 'google'
     ? await createGoogleEvent(accessToken, calendarSource, event)
@@ -304,8 +296,13 @@ export async function getExternalWriteAccessToken(organizationId: string, reques
   if (!sourceCanWrite(source)) throw new Error('Deze externe agenda is niet schrijfbaar volgens de provider.');
   if (!source.connection_id) throw new Error('Externe agenda-bron mist een koppeling.');
   const connection = await getConnection(organizationId, source.connection_id);
-  if (connection.status !== 'active') {
-    throw new Error(`Agenda-koppeling is niet actief (status: ${connection.status}). Koppel het account opnieuw.`);
+  // Alleen "ingetrokken" houdt hier tegen: dan is er geen token meer. Eerst
+  // blokkeerde elke status behalve "active", ook "error" door één andere agenda
+  // die niet meer bestond. Zo kon je wekenlang geen afspraak in je hoofdagenda
+  // zetten. Bij "verlopen" probeert de vernieuwing het; lukt dat niet, dan
+  // zegt die in gewone woorden dat je opnieuw moet koppelen.
+  if (connection.status === 'revoked') {
+    throw new Error('Deze agenda-koppeling is ingetrokken. Koppel het account opnieuw in Instellingen → Agenda.');
   }
   const token = await getToken(organizationId, connection.id);
   return await refreshAccessToken(token);

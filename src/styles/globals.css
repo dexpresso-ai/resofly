@@ -281,6 +281,10 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .connection-info strong{font-size:13px}.connection-info span{font-size:11px;color:var(--muted)}
 .connection-status{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-radius:999px;padding:4px 8px;background:var(--bg4);color:var(--muted2)}
 .status-active{color:var(--accent-g);background:rgba(var(--ok-rgb),.12)}.status-error,.status-expired,.status-revoked{color:var(--accent-r);background:rgba(var(--danger-rgb),.12)}
+/* Verlopen is geen storing: opnieuw koppelen lost het op. Daarom oranje, niet rood. */
+.connection-status.tone-warn{color:var(--accent-o);background:rgba(var(--warn-rgb),.15)}
+.connection-hint{margin:0;padding:8px 12px 0;font-size:12px;line-height:1.45;color:var(--muted2)}
+.connection-hint.tone-warn{color:var(--accent-o)}.connection-hint.tone-danger{color:var(--accent-r)}
 .source-list{display:flex;flex-direction:column;gap:6px;padding:10px}
 .source-row{display:grid;grid-template-columns:auto minmax(180px,1fr) auto auto;align-items:center;gap:10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 10px}
 .source-dot{width:9px;height:9px;border-radius:50%;box-shadow:0 0 0 2px rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)))}

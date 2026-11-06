@@ -178,11 +178,26 @@ async function media(request, url) {
   return json(404, { error: `Nep-media-worker kent ${request.method} ${pad} niet` });
 }
 
+/**
+ * Nep-diensten die een scenario zelf meebrengt (bijv. Google en Microsoft voor
+ * de agenda): origin → handler(request, url). Zo hoeft dit bestand niet elke
+ * dienst te kennen, en blijft alles wat niet geregistreerd is geblokkeerd.
+ */
+const extern = new Map();
+export function registreerDienst(origin, handler) {
+  extern.set(new URL(origin).origin, handler);
+}
+
 /** Zet de nep-diensten aan. `functie(naam, request)` handelt aanroepen naar andere edge functions af. */
 export function installeer({ functie }) {
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? new Request(input, init) : new Request(String(input), init);
     const url = new URL(request.url);
+    const eigen = extern.get(url.origin);
+    if (eigen) {
+      post.log.push(`${url.hostname} ${request.method} ${url.pathname}`);
+      return eigen(request, url);
+    }
     if (url.origin === 'https://api.resend.com') {
       post.log.push(`resend ${request.method} ${url.pathname}`);
       return resend(request);
