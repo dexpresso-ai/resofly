@@ -16,8 +16,13 @@
 //
 // Elke aanval moet een nette weigering opleveren (4xx, of 0 rijen bij PostgREST)
 // en mag niets veranderen. Na de aanvallen vergelijken we de stand van A met
-// een foto van ervoor; pas daarna volgen de stappen die A bewust wél
-// veranderen (intrekken, terug naar concept) en de zijdeur via het portaal.
+// een foto van ervoor. Pas daarna volgen de stappen die A bewust wél
+// veranderen: intrekken en terug naar concept, de zijdeur via het portaal,
+// kwaadaardige HTML en dubbel klikken. Als laatste: lekt een antwoord aan de
+// browser een link, token, sleutel of interne fout?
+//
+//   npm run test:stromen -- beveiliging
+//   BEV_DEBUG=1 npm run test:stromen -- beveiliging   (elk antwoord met status)
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { roep } from './functies.mjs';
 import { ANON_KEY, CRON_SECRET, R2_GEHEIM, SERVICE_KEY, WEBHOOK_SECRET } from './omgeving.mjs';
@@ -635,7 +640,6 @@ async function rollenBinnenA(A, d) {
       ['RPC withdraw_quote', async () => geenRecht(await rpc('withdraw_quote', { p_quote_id: d.qVerstuurd.id, p_organization_id: A.orgId, p_reason: 'weg' }, oudLid.token), 'intrekken')],
     ]));
   }
-
 }
 
 // ── 3. Velden die alleen de server zet (eigenaar van A via PostgREST) ────────
@@ -685,7 +689,7 @@ async function serverVelden(A, d) {
     refunded_amount: 173.63, refunded_at: '2026-11-06T12:00:00Z', reminder_level: 3, status: 'refunded', number: 'ANDER-NUMMER',
     date: '2026-01-01', client_id: A.klantB.id,
   }, eig, { afgeleid: ['total_amount', 'subtotal_amount', 'vat_amount'] }));
-  await stap('verstuurde, geboekte factuur: terug naar concept, annuleren zonder creditnota of de regels wijzigen kan niet', () => veldenVast('invoices', d.fOpen.id, {
+  await stap('verstuurde, geboekte factuur: terug naar concept, regels, vervaldatum, link en boeking liggen vast', () => veldenVast('invoices', d.fOpen.id, {
     status: 'draft', lines: [], due_date: '2027-01-01', public_token_hash: nepHash, journal_entry_id: null,
   }, eig));
   await stap('verstuurde, geboekte factuur: annuleren zonder creditnota kan niet', () => veldenVast('invoices', d.fOpen.id, { status: 'cancelled' }, eig));
@@ -1046,7 +1050,7 @@ async function klantportaal(A, B, d) {
     const tekst = JSON.stringify(res);
     for (const id of [d.qGeaccepteerd.id, d.fBetaald.id, d.cGetekend.id]) verwacht(tekst.includes(id), `eigen document ${id} ontbreekt`);
     for (const id of [d.qConcept.id, d.qGoedgekeurd.id, d.qTerGoedkeuring.id, d.fConcept.id, d.cConcept.id]) verwacht(!tekst.includes(id), `concept ${id} staat in het portaal`);
-    verwacht(!INTERN.test(tekst.replace(/"organizationId"/g, '')), `intern veld in het portaal: ${tekst.match(INTERN)?.[0]}`);
+    verwacht(!INTERN.test(tekst), `intern veld in het portaal: ${tekst.match(INTERN)?.[0]}`);
     gelukt(await fn('client-portal', { token: A.portaalA.token, body: { action: 'getInvoicePdf', invoiceId: d.fBetaald.id } }), 'eigen factuur-PDF');
     gelukt(await fn('client-portal', { token: A.portaalA.token, body: { action: 'getContractPdf', contractId: d.cGetekend.id } }), 'eigen contract-PDF');
   });
@@ -1086,9 +1090,10 @@ async function klantportaal(A, B, d) {
 
 async function webhookEnCron(A, d) {
   groep('Beveiliging: Mollie-webhook en cron');
+  // Zoals Mollie hem aanroept: zonder Origin, form-encoded, alleen het id.
   const webhook = (query, id, headers = {}) => fn('invoice-workflow', {
     query: `${WEBHOOK}${query}`, origin: null, headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers }, ruw: true, body: `id=${encodeURIComponent(id)}`,
-  }, `webhook ${query || '(zonder secret)'}`);
+  }, `webhook ${query.includes(`secret=${WEBHOOK_SECRET}`) ? 'met het goede secret' : 'zonder (goed) secret'}`);
   const statusOpen = () => sqlRij(`select i.status, p.status as betaling from public.invoices i join public.invoice_payment_records p on p.invoice_id = i.id
     where i.id = ${q(d.fOpen.id)} and p.provider_payment_id = ${q(d.fOpen.mollieId)}`);
 
@@ -1333,7 +1338,8 @@ async function lekcontrole(A, B, d) {
   // BEV_DEBUG=1: elk antwoord met status, om na te gaan dat een weigering om de juiste reden weigert.
   if (process.env.BEV_DEBUG) for (const a of antwoorden) console.log(`  [debug] ${a.status} ${a.label} ${a.tekst.slice(0, 140)}`);
   await stap(`geen 5xx op een aanval (${antwoorden.length} antwoorden bekeken)`, () => {
-    const crashes = antwoorden.filter((a) => a.status >= 500 && !(a.status === 502 && a.label.startsWith('webhook')));
+    // Uitzondering: de 502 van de webhook als Mollie de betaling niet kent (zie de webhookstap).
+    const crashes = antwoorden.filter((a) => a.status >= 500 && !(a.status === 502 && a.label === 'webhook met het goede secret'));
     verwacht(crashes.length === 0, `serverfouten: ${crashes.map((a) => `${a.label}: ${a.status} ${a.tekst.slice(0, 160)}`).join(' | ')}`);
   });
 }
