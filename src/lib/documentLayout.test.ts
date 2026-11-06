@@ -190,6 +190,10 @@ test('notatie: euro, datum, aantal, en tekst die Helvetica kan tekenen', () => {
   assert.equal(formatQuantity(2), '2');
   assert.equal(pdfSafeText('Taart 🎂 – € 12 − 3 “ok” x'), 'Taart  – € 12 - 3 “ok” x');
   assert.equal(pdfSafeText('regel 1\r\nregel 2'), 'regel 1\nregel 2');
+  // Een naam buiten Latin-1 verdween deels ("ukasz Dvoák"); nu herkenbaar.
+  assert.equal(pdfSafeText('Łukasz Dvořák, Vaněk & Søren'), 'Lukasz Dvorák, Vanek & Søren');
+  assert.equal(pdfSafeText('Ελλάδα AE'), '? AE');
+  assert.equal(pdfSafeText('Wat?? Ja'), 'Wat?? Ja', 'eigen vraagtekens blijven staan');
 });
 
 test('de juridische naam staat erop, maar niet dubbel', async () => {

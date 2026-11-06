@@ -9,6 +9,7 @@ import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
 import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
+import { publicLinkExpiresAt } from '../_shared/publicLinkExpiry.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 
@@ -346,9 +347,9 @@ async function sendQuoteEmail(
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
 
-  const expiresAt = new Date(
-    Date.now() + Math.max(1, QUOTE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000,
-  ).toISOString();
+  // Minstens tot en met "geldig tot": de link verliep na 30 dagen, ook als de
+  // offerte langer geldig was, en een verstuurde offerte kan niet opnieuw.
+  const expiresAt = publicLinkExpiresAt(quote.valid_until, QUOTE_TOKEN_TTL_DAYS);
 
   const publicUrl = `${QUOTE_PUBLIC_BASE_URL.replace(/\/$/, '')}/quote/${encodeURIComponent(
     token,
@@ -391,6 +392,12 @@ async function sendQuoteEmail(
   // Persist the exact PDF the client receives as an immutable snapshot. Uses
   // private R2 through the Cloudflare Worker when configured, otherwise a
   // base64 database fallback. Either way the quote PDF stays downloadable.
+  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
+  // Eerst het quotum, dan pas de PDF-opslag en de verzendregel: stond het quotum
+  // op, dan bleef de regel eerder op 'queued' (de 15-minutengrens weigerde elke
+  // nieuwe poging) en bleef er een PDF in R2 achter.
+  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
+
   const storedPdf = await storeQuotePdfSnapshot(organizationId, quoteId, pdfAttachment);
 
   const prepared = await beginQuoteEmailSend({
@@ -412,7 +419,11 @@ async function sendQuoteEmail(
     attachmentStorageKey: storedPdf.key ?? undefined,
   });
 
-  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO)
+    .catch(async (identityError) => {
+      await failQuoteEmailSend(prepared.deliveryId, organizationId, userId, `Afzender bepalen mislukt: ${identityError instanceof Error ? identityError.message : String(identityError)}`).catch(() => undefined);
+      throw identityError;
+    });
   // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts).
   const resendPayload = withEmailBrand({
     from: senderIdentity.from,
@@ -435,9 +446,9 @@ async function sendQuoteEmail(
     ],
   }, await loadEmailBrand(supabaseAdmin, organizationId));
 
-  // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-  await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
-  const resendResponse = await fetch('https://api.resend.com/emails', {
+  let resendResponse: Response;
+  try {
+    resendResponse = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${RESEND_API_KEY}`,
@@ -447,7 +458,14 @@ async function sendQuoteEmail(
       ),
     },
     body: JSON.stringify(resendPayload),
-  });
+    });
+  } catch (networkError) {
+    // Geen antwoord van Resend: de verzending niet op 'queued' laten staan (dan
+    // weigerde de 15-minutengrens elke nieuwe poging).
+    const message = networkError instanceof Error ? networkError.message : String(networkError);
+    await failQuoteEmailSend(prepared.deliveryId, organizationId, userId, `Resend niet bereikbaar: ${message}`).catch(() => undefined);
+    throw new WorkflowHttpError('Resend was niet bereikbaar; de offerte is niet verstuurd. Probeer het opnieuw.', 502);
+  }
 
   const resendResponsePayload = (await resendResponse.json().catch(() => ({}))) as Record<
     string,
@@ -502,10 +520,14 @@ async function sendQuoteEmail(
     providerEmailId,
   );
 
+  // Niet de link (met token) terug naar de browser van de verzender, en niet de
+  // hele verzendregel en versie (met de PDF-bytes): alleen wat het scherm nodig
+  // heeft. Met de link kon de verzender zelf "namens de klant" akkoord geven.
+  const delivery = (finalized.delivery ?? {}) as Record<string, unknown>;
+  const version = (finalized.version ?? {}) as Record<string, unknown>;
   return {
-    delivery: finalized.delivery,
-    version: finalized.version,
-    publicUrl,
+    delivery: { id: delivery.id ?? null, status: delivery.status ?? null, recipient_email: delivery.recipient_email ?? null },
+    version: { id: version.id ?? null, version_number: version.version_number ?? null },
     providerEmailId,
     attachment: {
       fileName: pdfAttachment.fileName,
@@ -726,23 +748,27 @@ async function storeQuotePdfSnapshot(
       'X-Storage-Key': key,
       'X-SHA256': attachment.sha256,
       'X-Size-Bytes': String(attachment.sizeBytes),
+      'X-Organization-Id': organizationId,
     },
     body: attachment.bytes,
+  }).catch((error) => {
+    console.error('quote-workflow R2 snapshot upload kon niet starten', error instanceof Error ? error.message : error);
+    return null;
   });
 
-  if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText);
-    console.error('quote-workflow R2 snapshot upload failed', {
-      status: response.status,
+  if (!response || !response.ok) {
+    const message = response ? await response.text().catch(() => response.statusText) : 'geen antwoord';
+    console.error('quote-workflow R2 snapshot upload failed; terugval op de database', {
+      status: response?.status ?? null,
       message,
       key,
       organizationId,
       quoteId,
     });
-    throw new WorkflowHttpError(
-      `Offerte-PDF kon niet in private R2 storage worden opgeslagen: ${message || response.statusText}`,
-      502,
-    );
+    // Terugval op de database, net als bij contracten: de PDF blijft zo te
+    // downloaden en de offerte gaat de deur uit. Eerder gaf dit een 502 en kon
+    // er niets worden verstuurd (de route ontbrak in de media-worker).
+    return { provider: 'database', key: null, shouldStoreBase64InDatabase: true };
   }
 
   return { provider: 'r2', key, shouldStoreBase64InDatabase: false };
@@ -843,7 +869,7 @@ async function createQuotePdfAttachment(input: {
   company: CompanySettingsRow | null;
   publicUrl: string;
 }): Promise<QuotePdfAttachment> {
-  const { quote, client, project, company, publicUrl } = input;
+  const { quote, client, project, company } = input;
   const lines = Array.isArray(quote.lines) ? quote.lines : [];
 
   // Getekend met de opmaak, het logo en het briefpapier van de organisatie,
@@ -871,7 +897,11 @@ async function createQuotePdfAttachment(input: {
     vatNotes: vatNotes.notes,
     notes: quote.notes,
     projectName: project?.name ?? null,
-    onlineLink: publicUrl ? { label: 'Bekijk en keur deze offerte online goed:', url: publicUrl } : null,
+    // Geen akkoordlink (met token) in de PDF: die PDF wordt bewaard en is te
+    // downloaden voor elke lezer van Financiën, ook de boekhouder (gast), en
+    // wordt doorgestuurd. Met de link kon iemand anders "namens de klant"
+    // akkoord geven. De link staat in de mail aan de klant.
+    onlineLink: null,
   });
   const sha256 = await sha256HexBytes(bytes);
   const fileName = `offerte-${sanitizeFileName(quote.number || quote.id)}.pdf`;

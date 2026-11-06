@@ -738,6 +738,24 @@ function groupedAmount(cents: number): string {
   return `${grouped},${decimals}`;
 }
 
+/**
+ * Een prijs per stuk: twee decimalen, of drie of vier als de prijs die heeft.
+ * Met altijd twee stond er "1000 × € 0,13" naast een regel van € 125,00,
+ * terwijl de prijs € 0,125 was. De eenheidsprijs op de factuur hoort te kloppen
+ * met het regelbedrag (art. 35a lid 1 onder i Wet OB 1968).
+ */
+export function formatDocUnitPrice(euros: number): string {
+  const value = Number.isFinite(euros) ? euros : 0;
+  const tenThousandths = Math.round(Math.abs(value) * 10000);
+  if (tenThousandths % 100 === 0) return formatDocMoney(value);
+  const digits = tenThousandths % 10 === 0 ? 3 : 4;
+  const scaled = digits === 3 ? tenThousandths / 10 : tenThousandths;
+  const base = 10 ** digits;
+  const whole = Math.floor(scaled / base).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const fraction = (scaled % base).toString().padStart(digits, '0');
+  return `€ ${value < 0 ? '-' : ''}${whole},${fraction}`;
+}
+
 /** "€ 1.234,50", "€ -12,00". De bedragen zijn al afgerond door de aanroeper. */
 export function formatDocMoney(euros: number): string {
   const value = Number.isFinite(euros) ? euros : 0;
@@ -854,11 +872,35 @@ export function dunningLetterBody(input: DunningLetterInput): DocumentBodyPart[]
 // De standaardletters van pdf-lib coderen in WinAnsi: ASCII, Latin-1 en 27
 // tekens daarbuiten (€, ‘ ’ “ ”, – —, …). Eén emoji in een factuurregel liet
 // vroeger de hele PDF mislukken; nu valt alleen dat ene teken weg.
+//
+// Een LETTER daarbuiten valt niet weg: eerst de letter zonder accent ("ř" →
+// "r"), dan een vaste vertaling ("Ł" → "L"), en anders één vraagteken. Eerder
+// stond "Łukasz Dvořák" als "ukasz Dvoák" op de factuur, terwijl de naam van
+// de afnemer er herkenbaar op hoort; een vraagteken valt op en is te
+// verbeteren, een stil verdwenen letter niet.
 
 const WINANSI_EXTRA = new Set([
   0x152, 0x153, 0x160, 0x161, 0x178, 0x17d, 0x17e, 0x192, 0x2c6, 0x2dc, 0x2013, 0x2014, 0x2018, 0x2019,
   0x201a, 0x201c, 0x201d, 0x201e, 0x2020, 0x2021, 0x2022, 0x2026, 0x2030, 0x2039, 0x203a, 0x20ac, 0x2122,
 ]);
+
+/** Letters zonder ontleding in een accent en een basisletter. */
+const WINANSI_LETTER: Record<string, string> = {
+  'Ł': 'L', 'ł': 'l', 'Đ': 'D', 'đ': 'd', 'Ħ': 'H', 'ħ': 'h', 'ı': 'i',
+  'Ŀ': 'L', 'ŀ': 'l', 'Ŋ': 'N', 'ŋ': 'n', 'Ŧ': 'T', 'ŧ': 't',
+};
+
+function isWinAnsi(code: number): boolean {
+  return code === 10 || (code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff) || WINANSI_EXTRA.has(code);
+}
+
+/** Een letter buiten WinAnsi: zonder accent, vertaald, of '?'. Geen letter (een emoji): ''. */
+function winAnsiLetter(char: string): string {
+  if (!/\p{L}/u.test(char)) return '';
+  const base = char.normalize('NFD').replace(/\p{M}/gu, '');
+  if (base && [...base].every(part => isWinAnsi(part.codePointAt(0) ?? 0))) return base;
+  return WINANSI_LETTER[char] ?? '?';
+}
 
 export function pdfSafeText(value: unknown): string {
   const source = String(value ?? '')
@@ -868,9 +910,23 @@ export function pdfSafeText(value: unknown): string {
     .replace(/[‐‑−]/g, '-')
     .replace(/[​-‍⁠﻿]/g, '');
   let out = '';
+  let lastWasUnknown = false;
   for (const char of source) {
     const code = char.codePointAt(0) ?? 0;
-    if (code === 10 || (code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff) || WINANSI_EXTRA.has(code)) out += char;
+    if (isWinAnsi(code)) {
+      out += char;
+      lastWasUnknown = false;
+      continue;
+    }
+    const letter = winAnsiLetter(char);
+    if (letter === '?') {
+      // "Ελλάδα" wordt één vraagteken, geen zes.
+      if (!lastWasUnknown) out += letter;
+      lastWasUnknown = true;
+    } else if (letter) {
+      out += letter;
+      lastWasUnknown = false;
+    }
   }
   return out;
 }
@@ -2012,7 +2068,7 @@ function planPass(
     header();
     const amountFor = (line: DocumentLine, key: 'quantity' | 'unitPrice' | 'vatRate' | 'total'): string => {
       if (key === 'quantity') return formatQuantity(line.quantity);
-      if (key === 'unitPrice') return formatDocMoney(line.unitPrice);
+      if (key === 'unitPrice') return formatDocUnitPrice(line.unitPrice);
       if (key === 'vatRate') return formatRate(line.vatRate);
       return formatDocMoney(layout.table.lineTotals === 'excl' ? line.net : line.gross);
     };

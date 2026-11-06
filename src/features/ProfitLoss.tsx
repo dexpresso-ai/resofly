@@ -19,8 +19,13 @@ type PeriodBounds = { from: string; to: string; label: string };
 // Vrij datumbereik: de "vorige" periode is het even lange bereik direct ervóór,
 // zodat de W&V-vergelijking betekenisvol blijft.
 function customPeriod(from: string, to: string): { current: PeriodBounds; previous: PeriodBounds } {
-  const iso = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-  const f = new Date(`${from}T00:00:00`), t = new Date(`${to}T00:00:00`);
+  // Rekenen in hele kalenderdagen (UTC), niet in milliseconden vanaf lokale
+  // middernacht: rond de wissel naar zomer- of wintertijd is een dag 23 of 25
+  // uur, en dan schoof de vergelijkperiode een dag op (1-4 t/m 30-6-2026
+  // vergeleek met 30-12-2025 t/m 31-3: 92 dagen in plaats van 91).
+  const iso = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+  const utc = (value: string) => { const [y, m, d] = value.split('-').map(Number); return new Date(Date.UTC(y, (m || 1) - 1, d || 1)); };
+  const f = utc(from), t = utc(to);
   const days = Math.max(1, Math.round((t.getTime() - f.getTime()) / 86400000) + 1);
   const pt = new Date(f.getTime() - 86400000);
   const pf = new Date(pt.getTime() - (days - 1) * 86400000);

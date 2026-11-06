@@ -51,7 +51,9 @@ export function renderInvoiceDunningWik14Email(input: InvoiceDunningWik14EmailIn
     due_now_amount: dueNow,
   };
 
-  const defaultSubject = `Aanmaning factuur ${input.invoice.number} — reageer vóór ${deadline}`;
+  // "Uiterlijk op", zoals de brief zelf: de termijn van veertien dagen loopt tot
+  // en met die dag (art. 6:96 lid 6 BW). "Vóór" maakte er dertien van.
+  const defaultSubject = `Aanmaning factuur ${input.invoice.number} — betaal uiterlijk op ${deadline}`;
   const defaultIntro = isConsumer
     ? `Ondanks eerdere berichten staat factuur ${input.invoice.number} nog open. Met deze aanmaning verzoeken wij u dringend het openstaande bedrag — de hoofdsom plus de tot op heden verschenen wettelijke rente — te voldoen. Betaalt u niet binnen veertien dagen vanaf de dag nadat deze brief bij u is bezorgd, dan bent u daarnaast een vergoeding voor incassokosten van ${costsLabel} verschuldigd en blijft de wettelijke rente oplopen.`
     : `Ondanks eerdere berichten staat factuur ${input.invoice.number} nog open. Uw onderneming is van rechtswege in verzuim. Met deze aanmaning sommeren wij u het volledige openstaande bedrag — inclusief wettelijke handelsrente en buitengerechtelijke incassokosten — binnen veertien dagen te voldoen.`;
@@ -72,7 +74,7 @@ export function renderInvoiceDunningWik14Email(input: InvoiceDunningWik14EmailIn
       brandName: companyName,
       eyebrow: 'Aanmaning',
       title: `Aanmaning factuur ${input.invoice.number}`,
-      preheader: `Openstaand: ${dueNow}. Reageer vóór ${deadline}.`,
+      preheader: `Openstaand: ${dueNow}. Betaal uiterlijk op ${deadline}.`,
       accentColor: input.company?.invoice_accent_color,
       introHtml: `<p style="margin:0;">${introHtml}</p>`,
       bodyHtml: renderDunningSummary({ isConsumer, interestLabel, principal, interest, costsLabel, total, dueNow, deadline, closingHtml }),

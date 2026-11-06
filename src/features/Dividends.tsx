@@ -12,14 +12,14 @@ import {
   loadDividendDistributionLines, reverseDividendDistribution,
 } from '../lib/repository';
 import { todayIso } from '../lib/dates';
+import { parseDutchAmountCents } from '../lib/money';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pct = (bp: number | null | undefined) => `${((bp ?? 0) / 100).toFixed(2).replace('.', ',')}%`;
 
-/** Euro-invoer naar centen; accepteert zowel komma als punt. */
+/** Euro-invoer naar centen, zoals je het typt: "1.500" is vijftienhonderd (zie parseDutchAmount). */
 function parseEuro(value: string): number {
-  const n = Number(value.replace(/\s/g, '').replace(',', '.'));
-  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+  return parseDutchAmountCents(value) ?? 0;
 }
 
 function centsToInput(cents: number): string {
@@ -347,7 +347,7 @@ function DividendForm({ organizationId, positions, asOf, openAppropriations, bus
         <p className="bk-muted">
           Een tussentijdse uitkering gaat ten laste van de vrije reserves (0520) of de lopende winst.
           Een wettelijke of statutaire reserve kan niet: die moet worden aangehouden (art. 2:216 lid 1 BW).
-          De balanstest wordt bij het opslaan op de besluitdatum gecontroleerd.
+          De balanstest wordt bij het opslaan gecontroleerd op de besluitdatum én op vandaag; de laagste uitkomst telt.
         </p>
       )}
 

@@ -59,6 +59,14 @@ export interface FieldSpec {
    * niet mag schrijven, kan het niet zetten.
    */
   module?: ModuleKey;
+  /**
+   * Alleen ZETTEN vraagt schrijfrecht in deze module; lezen niet. Voor het
+   * e-factuuradres: dat zie je gewoon bij de klant (ook in de app), maar wie
+   * het verandert, bepaalt waar de facturen heen gaan. Een sleutel met alleen
+   * Klanten kon dat via dit adres, terwijl dezelfde wijziging via een handeling
+   * schrijfrecht in Financiën vroeg.
+   */
+  writeModule?: ModuleKey;
 }
 
 export interface FilterSpec {
@@ -457,8 +465,8 @@ export function fieldsOutsideWrite(
   spec: ResourceSpec, values: Record<string, unknown>, canWrite: (module: string) => boolean,
 ): string[] {
   return Object.keys(values).filter((name) => {
-    const module = spec.fields[name]?.module;
-    return Boolean(module && !canWrite(module));
+    const field = spec.fields[name];
+    return [field?.module, field?.writeModule].some((module) => Boolean(module && !canWrite(module)));
   });
 }
 

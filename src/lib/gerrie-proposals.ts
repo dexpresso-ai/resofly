@@ -112,9 +112,21 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
       sub: [p.client_name, p.role, p.gives_portal_access ? 'mét portaaltoegang' : ''].filter(Boolean).join(' · '),
       write: true, kind: 'work',
     };
+    // Een ander e-mailadres bij een contactpersoon of klant is een andere deur naar
+    // het portaal en een ander adres voor offertes en facturen. Die kaarten lieten
+    // alleen de naam zien; een adres uit een geïnjecteerde mail viel zo niet op.
+    // Daarom staat het nieuwe adres in de titel (het onderschrift wordt in de
+    // wachtrij op het startscherm al na een paar woorden afgekapt).
     case 'edit_client_contact': return {
-      title: `Contactpersoon wijzigen: ${p.name}`,
-      sub: [p.client_name, p.changes.gives_portal_access === true ? 'krijgt portaaltoegang' : p.changes.gives_portal_access === false ? 'verliest portaaltoegang' : ''].filter(Boolean).join(' · '),
+      title: 'email' in p.changes
+        ? `E-mailadres van ${p.name} → ${p.changes.email || '(leeg)'}`
+        : `Contactpersoon wijzigen: ${p.name}`,
+      sub: [
+        p.client_name,
+        'email' in p.changes && p.current_email !== undefined ? `was ${p.current_email || '(leeg)'}` : '',
+        'email' in p.changes && p.has_portal_access && p.changes.gives_portal_access !== false ? 'heeft portaaltoegang: het nieuwe adres kan inloggen' : '',
+        p.changes.gives_portal_access === true ? 'krijgt portaaltoegang' : p.changes.gives_portal_access === false ? 'verliest portaaltoegang' : '',
+      ].filter(Boolean).join(' · '),
       write: true, kind: 'work',
     };
     case 'project_team': return {
@@ -164,9 +176,26 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
     case 'client': return { title: 'Klant aanmaken', sub: [p.name, p.email].filter(Boolean).join(' · '), write: true, kind: 'work' };
     case 'edit_invoice': return { title: `Factuur ${p.number} bijwerken`, sub: p.client_name, write: true, kind: 'money' };
     case 'edit_quote': return { title: `Offerte ${p.number} bijwerken`, sub: p.client_name, write: true, kind: 'money' };
-    case 'edit_client': return { title: 'Klantgegevens bijwerken', sub: p.name, write: true, kind: 'work' };
+    case 'edit_client': return 'email' in p.changes
+      ? {
+        title: `E-mailadres van ${p.name} → ${p.changes.email || '(leeg)'}`,
+        sub: [p.current_email !== undefined ? `was ${p.current_email || '(leeg)'}` : '', 'portaal, offertes en facturen gaan naar het nieuwe adres'].filter(Boolean).join(' · '),
+        write: true, kind: 'work',
+      }
+      : { title: 'Klantgegevens bijwerken', sub: p.name, write: true, kind: 'work' };
     case 'project': return { title: 'Project aanmaken', sub: [p.name, p.client_name].filter(Boolean).join(' · '), write: true, kind: 'work' };
-    case 'edit_project': return { title: 'Project bijwerken', sub: p.name, write: true, kind: 'work' };
+    // Een project naar een andere klant verhuizen gaf via het portaal die klant
+    // inzage in de offertes en facturen van het project (dat portaal kijkt nu naar
+    // de klant van het document zelf). De kaart zei alleen "Project bijwerken".
+    case 'edit_project': return 'client_id' in p.changes
+      ? {
+        title: p.client_name !== undefined
+          ? `Project ${p.name} naar ${p.client_name || 'geen klant'}`
+          : `Project ${p.name} naar een andere klant`,
+        sub: p.current_client_name !== undefined ? `nu bij ${p.current_client_name || 'geen klant'}` : p.name,
+        write: true, kind: 'work',
+      }
+      : { title: 'Project bijwerken', sub: p.name, write: true, kind: 'work' };
     case 'task': return { title: 'Taak aanmaken', sub: `${p.title} · ${p.project_name}`, write: true, kind: 'work' };
     case 'create_tasks': return {
       title: p.total === 1 ? `Taak aanmaken in ${p.project_name}` : `${p.total} taken aanmaken in ${p.project_name}`,

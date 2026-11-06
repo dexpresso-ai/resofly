@@ -65,25 +65,31 @@ export function buildXaf({ data, fiscalYearLabel, startDate, endDate }: XafInput
   const beforeYear = posted.filter(e => e.date < startDate);
 
   // ---------------- Klanten & leveranciers ----------------
+  // Volgorde volgens de XSD van XAF 3.2: … taxRegIdent komt vóór custSupTp. In
+  // de omgekeerde volgorde keurde een validator elk bestand af met een btw-nummer
+  // bij een klant of leverancier. Een id zonder eigen code gebruikt de UUID
+  // zonder streepjes ("C-" + 32 tekens), binnen de veldlengte van 35.
+  const custSupId = (prefix: 'C' | 'S', code: string | null | undefined, id: string) =>
+    `${prefix}-${code || id.replace(/-/g, '')}`.slice(0, 35);
   const custSup: string[] = [];
   for (const c of data.clients) {
     custSup.push('<customerSupplier>'
-      + tag('custSupID', `C-${c.client_code || c.id}`)
+      + tag('custSupID', custSupId('C', c.client_code, c.id))
       + tag('custSupName', c.name || '—')
-      + tag('custSupTp', 'C')
       + (c.vat_number ? tag('taxRegIdent', c.vat_number) : '')
+      + tag('custSupTp', 'C')
       + '</customerSupplier>');
   }
   for (const s of data.suppliers) {
     custSup.push('<customerSupplier>'
-      + tag('custSupID', `S-${s.supplier_code || s.id}`)
+      + tag('custSupID', custSupId('S', s.supplier_code, s.id))
       + tag('custSupName', s.name || '—')
-      + tag('custSupTp', 'S')
       + (s.vat_number ? tag('taxRegIdent', s.vat_number) : '')
+      + tag('custSupTp', 'S')
       + '</customerSupplier>');
   }
-  const clientCode = new Map(data.clients.map(c => [c.id, `C-${c.client_code || c.id}`]));
-  const supplierCode = new Map(data.suppliers.map(s => [s.id, `S-${s.supplier_code || s.id}`]));
+  const clientCode = new Map(data.clients.map(c => [c.id, custSupId('C', c.client_code, c.id)]));
+  const supplierCode = new Map(data.suppliers.map(s => [s.id, custSupId('S', s.supplier_code, s.id)]));
 
   // ---------------- Rekeningschema ----------------
   // accTp: B = balansrekening, P = winst-en-verliesrekening.
@@ -107,18 +113,26 @@ export function buildXaf({ data, fiscalYearLabel, startDate, endDate }: XafInput
     return (y - sy) * 12 + (m - sm) + 1;
   };
   {
+    // Zolang er maanden in het boekjaar vallen, niet vast twaalf: een verlengd
+    // eerste boekjaar (bijv. 1-7-2025 t/m 31-12-2026) had anders maar twaalf
+    // perioden, terwijl een boeking in november 2026 periode 17 kreeg, die in
+    // het bestand niet bestond. En de eerste periode begint op de startdatum,
+    // niet op de eerste van die maand. Achttien maanden is het wettelijke
+    // maximum voor een verlengd boekjaar; 36 is een ruime vangrail.
     const [sy, sm] = startDate.split('-').map(Number);
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 36; i++) {
       const y = sy + Math.floor((sm - 1 + i) / 12);
       const m = ((sm - 1 + i) % 12) + 1;
-      const first = `${y}-${String(m).padStart(2, '0')}-01`;
-      const last = `${y}-${String(m).padStart(2, '0')}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+      const monthFirst = `${y}-${String(m).padStart(2, '0')}-01`;
+      const first = i === 0 && startDate > monthFirst ? startDate : monthFirst;
+      const monthLast = `${y}-${String(m).padStart(2, '0')}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
       if (first > endDate) break;
+      const last = monthLast > endDate ? endDate : monthLast;
       periods.push('<period>'
         + tag('periodNumber', i + 1)
         + tag('periodDesc', `Periode ${i + 1} (${first} t/m ${last})`)
         + tag('startDatePeriod', first)
-        + tag('endDatePeriod', last > endDate ? endDate : last)
+        + tag('endDatePeriod', last)
         + '</period>');
     }
   }

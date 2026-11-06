@@ -2674,6 +2674,11 @@ export interface Supplier extends OrgScopedRow {
   default_vat_code: string | null;
   notes: string | null;
   status: SupplierStatus;
+  /**
+   * Aangemaakt door de factuur-inbox en nog niet door een mens bevestigd. Zolang
+   * dit aan staat, boekt de inbox niets automatisch op deze leverancier.
+   */
+  inbox_unverified?: boolean | null;
   created_at: string;
   updated_at: string;
 }

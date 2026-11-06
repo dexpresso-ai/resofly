@@ -16,13 +16,19 @@ import {
 } from '../lib/repository';
 import type { ShareholderInput } from '../lib/repository';
 import { todayIso } from '../lib/dates';
+import { parseDutchAmount, parseDutchAmountCents } from '../lib/money';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pct = (bp: number | null | undefined) => `${((bp ?? 0) / 100).toFixed(2).replace('.', ',')}%`;
 
+/** Euro-invoer naar centen, zoals je het typt: "1.500" is vijftienhonderd (zie parseDutchAmount). */
 function parseEuro(value: string): number {
-  const n = Number(value.replace(/\s/g, '').replace(',', '.'));
-  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+  return parseDutchAmountCents(value) ?? 0;
+}
+
+/** Een aantal aandelen: "1.000" is duizend, niet 1. */
+function parseQuantity(value: string): number {
+  return Math.round(parseDutchAmount(value) ?? 0);
 }
 
 const EMPTY_SHAREHOLDER: ShareholderInput = {
@@ -474,7 +480,7 @@ function TransactionForm({ shareholders, busy, onSubmit }: {
 
   const needsFrom = kind !== 'issue';
   const needsTo = kind === 'issue' || kind === 'transfer';
-  const qty = Number(quantity) || 0;
+  const qty = parseQuantity(quantity);
   const nominalCents = parseEuro(nominal);
   const paidUpCents = parseEuro(paidUp);
   const paidTooHigh = paidUpCents > nominalCents;
@@ -569,7 +575,7 @@ function EncumbranceForm({ shareholders, busy, onSubmit }: {
   const [voting, setVoting] = useState(false);
   const [dividend, setDividend] = useState(false);
 
-  const qty = Number(quantity) || 0;
+  const qty = parseQuantity(quantity);
   const blocked = busy || !shareholderId || !holderName.trim() || qty <= 0;
 
   return (

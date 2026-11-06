@@ -16,6 +16,7 @@ import {
   insertRow, listBankInstitutions, matchBankTransactions, selectBankReconciliation, setBankTransactionStatus,
   syncBankAccount, unbookBankTransaction, updateRow,
 } from '../lib/repository';
+import { parseDutchAmountCents } from '../lib/money';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 
@@ -770,7 +771,8 @@ function BankRuleForm({ data, organizationId, canWrite, rule, onClose, onSaved }
         match_counterparty_iban: form.match_counterparty_iban || null,
         match_counterparty_name_contains: form.match_counterparty_name_contains || null,
         match_description_contains: form.match_description_contains || null,
-        match_amount_cents: amountStr ? Math.round(parseFloat(amountStr) * 100) : null,
+        // "12,50" is € 12,50; parseFloat las het als 12.
+        match_amount_cents: amountStr ? parseDutchAmountCents(amountStr) : null,
         target_account_id: form.target_account_id || null, target_vat_code: form.target_vat_code || null,
         auto_book: Boolean(form.auto_book), is_active: Boolean(form.is_active),
       };

@@ -1211,26 +1211,48 @@ export const MARKETING_ACTIONS: ActionDef[] = [
 
       const client = await row<{ name: string; email: string | null; contact_name: string | null }>(
         ctx, 'clients', contract.client_id, 'name, email, contact_name', 'Klant');
+      const resend = contract.status === 'sent';
+      // Bij een herinnering gaat de nieuwe link standaard naar wie hem de vorige
+      // keer kreeg. Eerst was dat altijd het algemene adres van de klant: een
+      // herinnering verving zo stil de ondertekenaar (de directeur) door info@.
+      const { data: signerRow } = resend
+        ? await orgQuery(ctx, 'contract_signers', 'name, email')
+          .eq('contract_id', contractId).eq('role', 'client')
+          .order('signing_order', { ascending: true }).limit(1).maybeSingle()
+        : { data: null };
+      const signer = (signerRow ?? null) as { name: string | null; email: string | null } | null;
+      const signerEmail = String(signer?.email ?? '').trim().toLowerCase();
+      const clientEmail = (client.email ?? '').trim().toLowerCase();
       const to = String(input.recipient_email ?? '').trim()
         ? email(input, 'recipient_email')
-        : (client.email ?? '').trim().toLowerCase();
+        : (signerEmail || clientEmail);
       if (!to) throw new ActionError(`${client.name} heeft geen e-mailadres; vul dat eerst in of geef recipient_email mee.`);
-      const name = optStr(input, 'recipient_name', 200) ?? (client.contact_name || client.name);
+      const name = optStr(input, 'recipient_name', 200)
+        ?? (to === signerEmail && signer?.name ? signer.name : (client.contact_name || client.name));
       const message = optStr(input, 'personal_message', 2000);
-      const resend = contract.status === 'sent';
+      // Wie de link krijgt, kan namens de klant tekenen. Het adres stond achter
+      // een lange contracttitel en viel dan weg in de afkapping op 160 tekens;
+      // een afwijkend adres (bijvoorbeeld uit een mail met "stuur het naar…")
+      // was op de kaart niet van het gewone te onderscheiden.
+      const otherAddress = to !== clientEmail && to !== signerEmail;
 
       return {
         title: resend
-          ? `Ondertekenlink OPNIEUW sturen: contract ${contract.number}`
-          : `Contract ${contract.number} ter ondertekening versturen`,
+          ? `Ondertekenlink OPNIEUW sturen naar ${to}: contract ${contract.number}`
+          : `Contract ${contract.number} ter ondertekening naar ${to}`,
         sub: joinShort([
+          `ondertekenaar ${name} <${to}>`,
           contract.title,
-          `naar ${name} <${to}>`,
           centsOrNull(contract.amount_cents),
           contract.valid_until ? `tekenen vóór ${contract.valid_until}` : null,
           'de ontvanger kan hiermee rechtsgeldig tekenen',
-        ], 160),
+        ], 220),
         kind: 'mail',
+        ...(otherAddress ? {
+          warning: clientEmail
+            ? `Dit is niet het adres van ${client.name} (${clientEmail}). Wie deze link krijgt, kan het contract tekenen: controleer het adres bij de klant zelf.`
+            : `${client.name} heeft geen eigen e-mailadres; controleer bij de klant of ${to} klopt. Wie deze link krijgt, kan het contract tekenen.`,
+        } : {}),
         payload: {
           contract_id: contractId, contract_number: contract.number, contract_title: contract.title,
           recipient_email: to, recipient_name: name, personal_message: message ?? '', resend,

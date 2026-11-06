@@ -13,8 +13,19 @@ export function csvSafeText(v: string | number): string {
   return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
 }
 
+/**
+ * Een bedrag als "-1234.56" wordt "-1234,56": met ; als scheidingsteken leest
+ * Nederlandse Excel een punt als tekst of als datum ("12.05" → 12 mei). De
+ * W&V-export deed dit al; de ICP-opgaaf en de rapportbouwer niet. Alleen
+ * cellen die precies een bedrag met twee decimalen zijn.
+ */
+export function csvAmountCell(v: string | number): string {
+  const text = typeof v === 'number' ? String(v) : v;
+  return /^-?\d+\.\d{2}$/.test(text) ? text.replace('.', ',') : text;
+}
+
 export function downloadCsv(filename: string, header: string[], rows: (string | number)[][]): void {
-  const escape = (v: string | number) => `"${csvSafeText(v).replace(/"/g, '""')}"`;
+  const escape = (v: string | number) => `"${csvSafeText(csvAmountCell(v)).replace(/"/g, '""')}"`;
   const csv = [header, ...rows].map(r => r.map(escape).join(';')).join('\r\n');
   const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');

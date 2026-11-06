@@ -90,6 +90,8 @@ export interface VatRow { code: string; label: string; rate: number; kind: strin
 export interface SupplierRow {
   id: string; name: string; vat_number: string | null; iban: string | null; email: string | null;
   default_expense_account_id: string | null; default_vat_code: string | null;
+  /** Aangemaakt door de inbox en nog niet door een mens bevestigd (20261105233000). */
+  inbox_unverified?: boolean | null;
 }
 
 export interface ProposalContext { accounts: AccountRow[]; vatCodes: VatRow[]; suppliers: SupplierRow[] }
@@ -114,7 +116,7 @@ export async function loadVatCodes(admin: SupabaseClient, organizationId: string
 
 export async function loadSuppliers(admin: SupabaseClient, organizationId: string): Promise<SupplierRow[]> {
   const { data, error } = await admin.from('suppliers')
-    .select('id, name, vat_number, iban, email, default_expense_account_id, default_vat_code')
+    .select('id, name, vat_number, iban, email, default_expense_account_id, default_vat_code, inbox_unverified')
     .eq('organization_id', organizationId);
   if (error) throw new HttpError(`Leveranciers laden mislukt: ${error.message}`, 500);
   return (data ?? []) as SupplierRow[];
@@ -366,6 +368,15 @@ export function resolveVatCodeForCategory(
 
   switch (category) {
     case 'S': {
+      // Btw van een buitenlandse leverancier is geen Nederlandse voorbelasting:
+      // aftrekken mag alleen voor Nederlandse btw (art. 15 Wet OB 1968); de rest
+      // vraag je terug bij dat land (teruggaafrichtlijn 2008/9/EG). Een Belgische
+      // e-factuur met 21% kwam als HOOG binnen, zonder waarschuwing, en kon zo
+      // automatisch geboekt worden. Een waarschuwing houdt hem bij een mens.
+      const supplierLand = String(supplierCountry ?? '').trim().toUpperCase();
+      if (supplierLand && supplierLand !== 'NL') {
+        warnings.push(`De leverancier komt uit ${supplierLand} en rekent ${documentRate}% btw. Buitenlandse btw is in Nederland niet als voorbelasting aftrekbaar; boek die bij de kosten en vraag hem eventueel terug bij ${supplierLand}. Controleer de btw-code vóór het boeken.`);
+      }
       const hit = byKind(['standard', 'reduced'], documentRate);
       if (hit && Math.abs(hit.rate - documentRate) < 0.005) return { vat_code: hit.code, vat_rate: hit.rate };
       if (hit) {

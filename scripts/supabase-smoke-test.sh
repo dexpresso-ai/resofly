@@ -131,6 +131,33 @@ SQL
     echo "FOUT   publieke sleutel: anon heeft weer rechten op: $(echo "$anon_open" | head -c 600)"
     if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::anon heeft weer rechten in public"; fi
   fi
+
+  # Migratie 20261105230000: anon komt het schema public niet meer in. Op
+  # supabase/postgres 17.6.1.111 liet elke geweigerde functieaanroep van anon de
+  # hele database crashen (supautils); een weigering op het schema niet. Alleen
+  # lezen: roep hier nooit een geweigerde functie aan om het te testen.
+  anon_schema="$(PGPASSWORD="$SUPABASE_DB_PASSWORD" PGSSLMODE="${PGSSLMODE:-require}" PGCONNECT_TIMEOUT=20 \
+    psql "$pooler" -X -q -t -A -v ON_ERROR_STOP=1 <<'SQL'
+select case when not exists (select 1 from supabase_migrations.schema_migrations where version = '20261105230000') then '-'
+            when has_schema_privilege('anon', 'public', 'usage') then 'open'
+            else 'dicht' end;
+SQL
+)"
+  if [ "$anon_schema" = "-" ]; then
+    echo "-      schema public voor anon: overgeslagen (migratie 20261105230000 nog niet toegepast)"
+  elif [ "$anon_schema" = "dicht" ]; then
+    echo "ok     schema public voor anon: geen gebruiksrecht"
+  else
+    problems=$((problems + 1))
+    echo "FOUT   schema public voor anon: anon heeft weer USAGE (een geweigerde functieaanroep kan de database laten crashen)"
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::anon heeft weer USAGE op schema public"; fi
+  fi
+
+  # De Postgres-versie: 17.6.1.111 crasht bij een geweigerde functieaanroep van
+  # een ingelogde gebruiker. Alleen een melding; upgraden doet de eigenaar.
+  pg_build="$(PGPASSWORD="$SUPABASE_DB_PASSWORD" PGSSLMODE="${PGSSLMODE:-require}" PGCONNECT_TIMEOUT=20 \
+    psql "$pooler" -X -q -t -A -c "select version()" 2>/dev/null | head -1)"
+  echo "info   postgres: ${pg_build:-onbekend} (supabase/.temp/postgres-version: $(cat supabase/.temp/postgres-version 2>/dev/null || echo onbekend))"
 else
   echo "-      de bezorger met cron-secret: overgeslagen (geen SUPABASE_DB_PASSWORD of psql)"
 fi

@@ -1,6 +1,7 @@
 import { fieldOr, renderContentHtml, renderContentText, type TemplateVars } from './content.ts';
 import { escapeHtml, renderEmailLayout, textLines } from './layout.ts';
-import type { InvoiceEmailLine, InvoiceReminderEmailInput, RenderedEmailTemplate } from './types.ts';
+import type { InvoiceReminderEmailInput, RenderedEmailTemplate } from './types.ts';
+import { financeTotals } from '../financeTotals.ts';
 
 type ReminderCopy = {
   eyebrow: string;
@@ -55,11 +56,15 @@ export function renderInvoiceReminderEmail(input: InvoiceReminderEmailInput): Re
   const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || 'relatie';
   // Een herinnering vraagt wat er nog openstaat, niet het factuurbedrag: na een
   // deelbetaling of creditnota vroeg de mail anders om geld dat al binnen was.
-  const invoiceTotal = calculateTotal(input.invoice.lines || []);
+  // In centen, zoals de factuur zelf (financeTotals): met kommagetallen kon het
+  // factuurbedrag een cent naast het openstaande bedrag liggen, en dan stond er
+  // ten onrechte "deels betaald" in de herinnering.
+  const invoiceTotals = financeTotals(input.invoice.lines || []);
+  const invoiceTotal = invoiceTotals.total;
   const openCents = typeof input.openAmountCents === 'number' && Number.isFinite(input.openAmountCents)
     ? Math.max(0, Math.round(input.openAmountCents))
     : null;
-  const partlyPaid = openCents !== null && openCents < Math.round(invoiceTotal * 100);
+  const partlyPaid = openCents !== null && openCents < invoiceTotals.totalCents;
   const totalAmount = formatEuro(openCents !== null ? openCents / 100 : invoiceTotal);
   const invoiceAmount = partlyPaid ? formatEuro(invoiceTotal) : null;
   const dueDate = input.invoice.due_date ? formatDateNl(input.invoice.due_date) : '-';
@@ -152,14 +157,6 @@ function resolveDaysOverdue(input: InvoiceReminderEmailInput): number | null {
   if (Number.isNaN(due.getTime())) return null;
   const diffMs = Date.now() - due.getTime();
   return Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
-}
-
-function calculateTotal(lines: InvoiceEmailLine[]): number {
-  return lines.reduce((sum, line) => {
-    const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
-    const vat = subtotal * (Number(line.vat || 0) / 100);
-    return sum + subtotal + vat;
-  }, 0);
 }
 
 function formatEuro(value: number): string {

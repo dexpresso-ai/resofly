@@ -7,6 +7,7 @@ import { PublicBrandFooter, PublicDocHero, PublicDocState, usePublicBrandTheme }
 import { formatISODate } from '../lib/dates';
 import type { BrandingPayload } from '../lib/branding';
 import { safeCheckoutUrl } from '../lib/safeUrl';
+import { formatDocUnitPrice } from '../lib/documentLayout';
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan
 // .message altijd de generieke "Edge Function returned a non-2xx status code" is.
@@ -38,6 +39,8 @@ type PublicInvoice = {
   sent_at: string | null;
   paid_at: string | null;
   public_token_expires_at: string | null;
+  /** Wat er nog openstaat volgens het grootboek; null als de factuur niet geboekt is. */
+  open_amount_cents?: number | null;
 };
 
 type PublicClient = { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null } | null;
@@ -100,11 +103,19 @@ export function PublicInvoicePage({ token }: { token: string }) {
   const companyName = branding?.companyName || payload?.company?.trade_name || payload?.company?.company_name || '';
   usePublicBrandTheme(branding, 'Factuur');
   const totals = useMemo(() => total(invoice?.lines || []), [invoice?.lines]);
+  // Alleen een link die nog werkt. Eerder viel de knop terug op elke oude link
+  // (verlopen, mislukt of vervangen door een link voor een ander bedrag).
   const payment = useMemo(() => {
     const records = payload?.payments || [];
-    return records.find(record => record.status === 'open' && record.checkout_url) || records.find(record => record.checkout_url) || null;
+    return records.find(record => ['open', 'pending'].includes(record.status) && record.checkout_url
+      && (!record.checkout_expires_at || Date.parse(record.checkout_expires_at) > Date.now())) || null;
   }, [payload?.payments]);
-  const isPaid = invoice?.status === 'paid' || Boolean(invoice?.paid_at);
+  // Wat er nog openstaat (na een deelbetaling of creditnota); zonder grootboek
+  // het factuurtotaal.
+  const openCents = typeof invoice?.open_amount_cents === 'number' ? Math.min(invoice.open_amount_cents, totals.totalCents) : null;
+  const toPay = openCents !== null ? openCents / 100 : totals.total;
+  const partlySettled = openCents !== null && openCents < totals.totalCents && openCents > 0;
+  const isPaid = invoice?.status === 'paid' || Boolean(invoice?.paid_at) || openCents === 0;
   // Alleen een echte Mollie-link (of in testmodus deze eigen site) wordt een knop.
   const checkoutHref = safeCheckoutUrl(payment?.checkout_url, window.location.origin);
 
@@ -144,7 +155,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
       intro={payload?.project?.name ? `Project: ${payload.project.name}` : 'Bekijk en betaal deze factuur veilig online.'}
       status={<div className={`public-quote-status st-${invoice.status}`}>{statusLabel(invoice.status, invoice.paid_at)}</div>}
       facts={[
-        { label: isPaid ? 'Betaald' : 'Te betalen', value: euro(totals.total), tone: isPaid ? undefined : 'accent' },
+        { label: isPaid ? 'Betaald' : 'Te betalen', value: euro(isPaid ? totals.total : toPay), tone: isPaid ? undefined : 'accent', sub: partlySettled ? `van ${euro(totals.total)}` : undefined },
         { label: 'Vervaldatum', value: dateNL(invoice.due_date), tone: overdue ? 'danger' : undefined, sub: overdue ? 'Vervallen' : undefined },
         { label: 'Factuurdatum', value: dateNL(invoice.date) },
         { label: 'Voor', value: payload?.client?.name || '—' },
@@ -159,7 +170,8 @@ export function PublicInvoicePage({ token }: { token: string }) {
       <div className="public-payment-row">
         <div>
           <h2>{isPaid ? 'Deze factuur is betaald' : 'Te betalen'}</h2>
-          <strong className="public-invoice-amount">{euro(totals.total)}</strong>
+          <strong className="public-invoice-amount">{euro(isPaid ? totals.total : toPay)}</strong>
+          {!isPaid && partlySettled && <p className="muted">Factuurbedrag {euro(totals.total)}; er is al {euro(totals.total - toPay)} betaald of gecrediteerd.</p>}
         </div>
         <div className="public-decision-actions public-invoice-actions">
           <Button onClick={downloadPdf} disabled={downloading}>{downloading ? 'PDF maken…' : 'PDF downloaden'}</Button>
@@ -175,7 +187,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
       <div className="public-lines">
         {(invoice.lines || []).map(line => {
           return <div className="public-line" key={line.id || line.description}>
-            <div><strong>{line.description}</strong><span>{line.quantity} × {euro(line.unit_price)} · btw {line.vat ?? 0}%</span></div>
+            <div><strong>{line.description}</strong><span>{line.quantity} × {formatDocUnitPrice(Number(line.unit_price) || 0)} · btw {line.vat ?? 0}%</span></div>
             <strong>{euro(lineGross(line))}</strong>
           </div>;
         })}

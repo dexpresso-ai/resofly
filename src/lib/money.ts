@@ -122,3 +122,35 @@ export function lineGross(line: MoneyLineInput): number {
 export function lineNet(line: MoneyLineInput): number {
   return fromCents(toCents(toNumber(line.quantity) * toNumber(line.unit_price)));
 }
+
+/**
+ * Een bedrag zoals iemand het in een Nederlands scherm typt, in euro's.
+ * "1.500" is vijftienhonderd (punt als duizendtal), "1.500,25" en "1500,25"
+ * hebben een komma als decimaalteken, "12.5" en "12.50" een punt. Een getal
+ * dat met "0." begint, is nooit een duizendtal ("0.125" blijft 0,125).
+ *
+ * Eerder las elk scherm dit zelf, met `replace(',', '.')`: "1.500" werd € 1,50,
+ * "8.000.000,00" werd niets (en dan gold stil de waarde uit het grootboek), en
+ * een bankregel van "12,50" werd € 12,00.
+ */
+export function parseDutchAmount(raw: string | number | null | undefined): number | null {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  let s = String(raw ?? '').replace(/[\s\u00a0€]/g, '');
+  if (!s) return null;
+  let sign = 1;
+  if (s.startsWith('-')) { sign = -1; s = s.slice(1); }
+  else if (s.endsWith('-')) { sign = -1; s = s.slice(0, -1); }
+  let normalised: string;
+  if (s.includes(',')) normalised = s.replace(/\./g, '').replace(',', '.');
+  else if (/^[1-9]\d{0,2}(\.\d{3})+$/.test(s)) normalised = s.replace(/\./g, '');
+  else normalised = s;
+  if (!/^\d+(\.\d+)?$/.test(normalised)) return null;
+  const n = Number(normalised);
+  return Number.isFinite(n) ? sign * n : null;
+}
+
+/** Als `parseDutchAmount`, in centen (cent-exact afgerond). */
+export function parseDutchAmountCents(raw: string | number | null | undefined): number | null {
+  const n = parseDutchAmount(raw);
+  return n === null ? null : toCents(n);
+}

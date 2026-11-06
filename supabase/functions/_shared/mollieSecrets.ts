@@ -9,14 +9,28 @@
 const ENCRYPTION_KEY_ENV = 'MOLLIE_TOKEN_ENCRYPTION_KEY';
 
 function allowDevFallback(): boolean {
-  return (Deno.env.get('MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
+  return (Deno.env.get('MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true'
+    || (Deno.env.get('INVOICE_MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
 }
 
+const DEV_FALLBACK_KEY = 'dev-only-token-key';
+
+async function keyFrom(secret: string): Promise<CryptoKey> {
+  const material = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
+  return await crypto.subtle.importKey('raw', material, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+/**
+ * Versleutelen gebeurt altijd met de echte sleutel. Eerder viel dit zonder
+ * MOLLIE_TOKEN_ENCRYPTION_KEY terug op een vaste sleutel uit deze code zodra
+ * MOLLIE_ALLOW_MOCK aan stond — en die vlag staat op staging aan voor de
+ * abonnementen. De Mollie-sleutels van organisaties waren dan in feite
+ * onversleuteld. Nu weigert opslaan met een duidelijke melding.
+ */
 async function encryptionKey(): Promise<CryptoKey> {
   const secret = Deno.env.get(ENCRYPTION_KEY_ENV) || '';
-  if (!secret && !allowDevFallback()) throw new Error(`${ENCRYPTION_KEY_ENV} ontbreekt in de Edge Function secrets.`);
-  const material = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret || 'dev-only-token-key'));
-  return await crypto.subtle.importKey('raw', material, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  if (!secret) throw new Error(`${ENCRYPTION_KEY_ENV} ontbreekt in de Edge Function secrets. Zet die eerst; daarna kan de Mollie-sleutel worden opgeslagen.`);
+  return await keyFrom(secret);
 }
 
 export async function encryptSecret(plainText: string): Promise<string> {
@@ -30,10 +44,22 @@ export async function encryptSecret(plainText: string): Promise<string> {
 export async function decryptSecret(value: string): Promise<string> {
   const [version, ivRaw, cipherRaw] = value.split('.');
   if (version !== 'v1' || !ivRaw || !cipherRaw) throw new Error('Mollie-sleutelopslag heeft een ongeldig formaat.');
-  const key = await encryptionKey();
   const iv = atobUrlBytes(ivRaw);
   const cipher = atobUrlBytes(cipherRaw);
-  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher);
+  const secret = Deno.env.get(ENCRYPTION_KEY_ENV) || '';
+  if (secret) {
+    try {
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, await keyFrom(secret), cipher);
+      return new TextDecoder().decode(plain);
+    } catch (error) {
+      if (!allowDevFallback()) throw error;
+    }
+  } else if (!allowDevFallback()) {
+    throw new Error(`${ENCRYPTION_KEY_ENV} ontbreekt in de Edge Function secrets.`);
+  }
+  // Alleen om een sleutel te lezen die eerder met de oude terugval is opgeslagen
+  // (staging zonder geheim): sla hem opnieuw op zodra het geheim er is.
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, await keyFrom(DEV_FALLBACK_KEY), cipher);
   return new TextDecoder().decode(plain);
 }
 

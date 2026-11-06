@@ -117,7 +117,14 @@ interface GerrieContext {
 }
 /** Tokens, en (na de eerste beurt) wat ze kostten per model dat ze verbruikte — zie claudeModels.ts. */
 type Usage = TokenUsage;
-interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number }
+/**
+ * `vat_code` is optioneel maar telt: die maakt een 0%-regel ondubbelzinnig
+ * (verlegd, ICP, export, vrijgesteld) en bepaalt de rubriek en de verplichte
+ * vermelding op de factuur. Zonder code werd een ICP-regel na een wijziging
+ * door Gerrie een kale 0%-regel: geen vermelding, geen btw-id-controle,
+ * rubriek 1e in plaats van 3b, en niet in de ICP-opgaaf.
+ */
+interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number; vat_code?: string }
 interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
 interface QuoteProposal { type: 'quote'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; valid_until: string | null; total_eur: number }
 interface ClientProposal { type: 'client'; name: string; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; status: string }
@@ -140,13 +147,24 @@ interface SendQuotesProposal { type: 'send_quotes'; items: SendDocumentItem[]; t
 interface ConvertQuoteProposal { type: 'convert_quote'; id: string; number: string; client_name: string; total_eur: number }
 interface EditInvoiceProposal { type: 'edit_invoice'; id: string; number: string; client_name: string; changes: { lines?: ProposalLine[]; notes?: string | null; due_date?: string | null } }
 interface EditQuoteProposal { type: 'edit_quote'; id: string; number: string; client_name: string; changes: { lines?: ProposalLine[]; notes?: string | null; valid_until?: string | null } }
-interface EditClientProposal { type: 'edit_client'; id: string; name: string; changes: { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; status?: string } }
+interface EditClientProposal {
+  type: 'edit_client'; id: string; name: string;
+  changes: { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; status?: string };
+  /** Het huidige adres, alleen als `changes.email` er is: de kaart toont oud → nieuw. */
+  current_email?: string | null;
+}
 // Herinneringen zijn óók een reeks die je regel voor regel afvinkt; bedrag en
 // dagen-te-laat staan erbij zodat je per factuur kunt besluiten, niet per stapel.
 interface SendRemindersProposal { type: 'send_reminders'; invoices: Array<{ id: string; number: string; client_name: string; level: number; total_eur: number; days_overdue: number; recipient_email: string | null }>; total: number }
 interface ProposalSubtask { label: string; done: boolean }
 interface ProjectProposal { type: 'project'; name: string; client_id: string | null; client_name: string; description: string | null; start_date: string | null; end_date: string | null }
-interface EditProjectProposal { type: 'edit_project'; id: string; name: string; changes: { name?: string; client_id?: string | null; description?: string | null; start_date?: string | null; end_date?: string | null; archived?: boolean } }
+interface EditProjectProposal {
+  type: 'edit_project'; id: string; name: string;
+  changes: { name?: string; client_id?: string | null; description?: string | null; start_date?: string | null; end_date?: string | null; archived?: boolean };
+  /** Bij een andere klant: van wie naar wie. Zonder namen las de kaart "Project bijwerken". */
+  current_client_name?: string | null;
+  client_name?: string | null;
+}
 interface TaskProposal { type: 'task'; project_id: string; project_name: string; title: string; description: string | null; status: string; priority: string; planned_date: string | null; start_date: string | null; end_date: string | null; estimated_minutes: number; tags: string[]; subtasks: ProposalSubtask[] }
 /**
  * MEERDERE nieuwe taken in ÉÉN project, af te vinken per regel.
@@ -203,6 +221,10 @@ interface EditClientContactProposal {
   name: string;
   client_name: string;
   changes: { name?: string; email?: string | null; phone?: string | null; role?: string | null; gives_portal_access?: boolean };
+  /** Het huidige adres, alleen als `changes.email` er is. */
+  current_email?: string | null;
+  /** Of deze persoon nu in het portaal kan: dan geeft een ander adres iemand anders die deur. */
+  has_portal_access?: boolean;
 }
 /** Wie er aan een project of taak gekoppeld wordt; namen zodat je ziet wie je toevoegt. */
 interface ProjectTeamProposal {
@@ -696,9 +718,13 @@ function describeProposal(p: Proposal): string {
     case 'client': return `nieuwe klant ${p.name}`;
     case 'edit_invoice': return `wijziging van factuur ${p.number}`;
     case 'edit_quote': return `wijziging van offerte ${p.number}`;
-    case 'edit_client': return `wijziging van klant ${p.name}`;
+    case 'edit_client': return 'email' in p.changes
+      ? `wijziging van klant ${p.name} (e-mailadres ${p.current_email || '—'} → ${p.changes.email || '—'})`
+      : `wijziging van klant ${p.name}`;
     case 'project': return `project ${p.name}`;
-    case 'edit_project': return `wijziging van project ${p.name}`;
+    case 'edit_project': return 'client_id' in p.changes
+      ? `wijziging van project ${p.name} (klant ${p.current_client_name || '—'} → ${p.client_name || '—'})`
+      : `wijziging van project ${p.name}`;
     case 'task': return `taak ${p.title}`;
     case 'create_tasks': return `${p.total} ta${p.total === 1 ? 'ak' : 'ken'} in project ${p.project_name}`;
     case 'edit_task': return `wijziging van taak ${p.title}`;
@@ -718,7 +744,9 @@ function describeProposal(p: Proposal): string {
     case 'edit_calendar_event': return `wijziging van agenda-item ${p.title}`;
     case 'cancel_calendar_event': return `afzegging van agenda-item ${p.title}`;
     case 'client_contact': return `contactpersoon ${p.name} bij ${p.client_name}`;
-    case 'edit_client_contact': return `wijziging van contactpersoon ${p.name}`;
+    case 'edit_client_contact': return 'email' in p.changes
+      ? `wijziging van contactpersoon ${p.name} (e-mailadres ${p.current_email || '—'} → ${p.changes.email || '—'}${p.has_portal_access ? ', heeft portaaltoegang' : ''})`
+      : `wijziging van contactpersoon ${p.name}`;
     case 'project_team': return `teamwijziging op project ${p.project_name}`;
     case 'task_assign': return `toewijzing van taak ${p.task_title}`;
     case 'ticket_note': return `${p.is_internal ? 'interne notitie' : 'reactie'} op ticket ${p.ticket_title}`;
@@ -1458,6 +1486,7 @@ const TOOL_DEFINITIONS = [
               quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
               unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
               vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
+              vat_code: { type: 'string', description: 'Optioneel: de btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR). Bij 0% hoort er altijd een code bij die zegt waarom.' },
             },
             required: ['description', 'quantity', 'unit_price', 'vat'],
           },
@@ -1485,6 +1514,7 @@ const TOOL_DEFINITIONS = [
               quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
               unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
               vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
+              vat_code: { type: 'string', description: 'Optioneel: de btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR). Bij 0% hoort er altijd een code bij die zegt waarom.' },
             },
             required: ['description', 'quantity', 'unit_price', 'vat'],
           },
@@ -2045,7 +2075,7 @@ const TOOL_DEFINITIONS = [
         id: { type: 'string', description: 'Het exacte id van de factuur (uit list_invoices).' },
         lines: {
           type: 'array', description: 'Optioneel: de VOLLEDIGE nieuwe set factuurregels (vervangt de bestaande).',
-          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
+          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' }, vat_code: { type: 'string', description: 'De btw-code van de regel; neem die van de bestaande regel over.' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
         },
         due_date: { type: 'string', description: 'Optioneel: nieuwe vervaldatum YYYY-MM-DD.' },
         notes: { type: 'string', description: 'Optioneel: nieuwe opmerking.' },
@@ -2062,7 +2092,7 @@ const TOOL_DEFINITIONS = [
         id: { type: 'string', description: 'Het exacte id van de offerte (uit list_quotes).' },
         lines: {
           type: 'array', description: 'Optioneel: de VOLLEDIGE nieuwe set offerteregels (vervangt de bestaande).',
-          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
+          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' }, vat_code: { type: 'string', description: 'De btw-code van de regel; neem die van de bestaande regel over.' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
         },
         valid_until: { type: 'string', description: 'Optioneel: nieuwe geldig-tot-datum YYYY-MM-DD.' },
         notes: { type: 'string', description: 'Optioneel: nieuwe opmerking.' },
@@ -3377,15 +3407,31 @@ async function buildEditProjectProposal(ctx: GerrieContext, input: Record<string
   if (!proj.ok) return proj;
   const changes: Record<string, unknown> = {};
   if (input.name !== undefined) { const n = String(input.name).trim(); if (!n) return { ok: false, error: 'De projectnaam mag niet leeg zijn.' }; changes.name = n.slice(0, 300); }
+  // Een project naar een andere klant verhuizen neemt zijn offertes en facturen
+  // mee in wat die klant ziet (portaal, rapportages). De kaart las alleen
+  // "Project bijwerken · <naam>"; nu staat er van welke klant naar welke.
+  let clientNames: { current_client_name: string | null; client_name: string | null } | null = null;
   if (input.client_id !== undefined) {
+    let newName: string | null = null;
     if (input.client_id === null || input.client_id === '') changes.client_id = null;
-    else { const c = await resolveClient(ctx, input.client_id); if (!c.ok) return c; changes.client_id = c.id; }
+    else { const c = await resolveClient(ctx, input.client_id); if (!c.ok) return c; changes.client_id = c.id; newName = c.name; }
+    const { data: current } = await supabaseAdmin.from('projects').select('client_id')
+      .eq('organization_id', ctx.organizationId).eq('id', proj.id).maybeSingle();
+    const currentClientId = (current as { client_id?: string | null } | null)?.client_id ?? null;
+    let currentName: string | null = null;
+    if (currentClientId) {
+      const { data: currentClient } = await supabaseAdmin.from('clients').select('name')
+        .eq('organization_id', ctx.organizationId).eq('id', currentClientId).maybeSingle();
+      currentName = currentClient ? String((currentClient as { name?: string }).name ?? '') : null;
+    }
+    if ((changes.client_id ?? null) === currentClientId) delete changes.client_id;
+    else clientNames = { current_client_name: currentName, client_name: newName };
   }
   if (input.description !== undefined) changes.description = input.description ? String(input.description).slice(0, 4000) : null;
   if (input.start_date !== undefined) changes.start_date = isoDate(input.start_date);
   if (input.end_date !== undefined) changes.end_date = isoDate(input.end_date);
   if (input.archived !== undefined) changes.archived = Boolean(input.archived);
-  return { ok: true, proposal: { type: 'edit_project', id: proj.id, name: proj.name, changes } };
+  return { ok: true, proposal: { type: 'edit_project', id: proj.id, name: proj.name, changes, ...(clientNames ?? {}) } };
 }
 
 async function buildTaskProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
@@ -3569,7 +3615,7 @@ async function buildEditClientProposal(ctx: GerrieContext, input: Record<string,
   const id = String(input.id || '').trim();
   if (!isUuid(id)) return { ok: false, error: 'Ongeldig id. Zoek de klant eerst met search_clients en gebruik het exacte id.' };
   const { data: client, error } = await supabaseAdmin.from('clients')
-    .select('id, name').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+    .select('id, name, email').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
   if (error) return { ok: false, error: `Klant ophalen mislukt: ${error.message}` };
   if (!client) return { ok: false, error: 'Klant niet gevonden in deze organisatie.' };
 
@@ -3582,7 +3628,17 @@ async function buildEditClientProposal(ctx: GerrieContext, input: Record<string,
   if (input.notes !== undefined) changes.notes = input.notes ? String(input.notes).slice(0, 2000) : null;
   if (input.status !== undefined && ['active', 'prospect', 'inactive'].includes(String(input.status))) changes.status = String(input.status);
 
-  return { ok: true, proposal: { type: 'edit_client', id: String(client.id), name: String(client.name), changes } };
+  // Het e-mailadres van een klant is de deur naar het portaal en het adres van
+  // elke offerte, factuur en herinnering. De kaart toonde alleen de klantnaam;
+  // nu oud → nieuw, zodat een adres uit een geïnjecteerde mail opvalt.
+  const currentEmail = (client as { email?: string | null }).email ?? null;
+  return {
+    ok: true,
+    proposal: {
+      type: 'edit_client', id: String(client.id), name: String(client.name), changes,
+      ...('email' in changes ? { current_email: currentEmail } : {}),
+    },
+  };
 }
 
 /** Bereidt het omzetten van een geaccepteerde offerte naar een factuur voor. */
@@ -3954,7 +4010,11 @@ function parseProposalLines(input: Record<string, unknown>): { ok: true; lines: 
     if (!description) return { ok: false, error: 'Elke regel heeft een omschrijving nodig.' };
     const quantity = num(raw.quantity);
     if (!(quantity > 0)) return { ok: false, error: `Ongeldig aantal voor "${description}".` };
-    lines.push({ description: description.slice(0, 500), quantity, unit_price: num(raw.unit_price), vat: raw.vat == null ? 21 : num(raw.vat) });
+    const code = typeof raw.vat_code === 'string' ? raw.vat_code.trim().toUpperCase() : '';
+    lines.push({
+      description: description.slice(0, 500), quantity, unit_price: num(raw.unit_price), vat: raw.vat == null ? 21 : num(raw.vat),
+      ...(/^[A-Z0-9_]{1,32}$/.test(code) ? { vat_code: code } : {}),
+    });
   }
   return { ok: true, lines };
 }
@@ -4992,7 +5052,7 @@ async function buildEditClientContactProposal(ctx: GerrieContext, input: Record<
   const id = String(input.id || '').trim();
   if (!isUuid(id)) return { ok: false, error: 'Ongeldig id. Zoek de contactpersoon eerst met list_client_contacts.' };
   const { data: contact, error } = await supabaseAdmin.from('client_contacts')
-    .select('id, name, client_id').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+    .select('id, name, client_id, email, gives_portal_access').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
   if (error) return { ok: false, error: `Contactpersoon ophalen mislukt: ${error.message}` };
   if (!contact) return { ok: false, error: 'Contactpersoon niet gevonden in deze organisatie.' };
 
@@ -5011,9 +5071,17 @@ async function buildEditClientContactProposal(ctx: GerrieContext, input: Record<
 
   const { data: client } = await supabaseAdmin.from('clients')
     .select('name').eq('organization_id', ctx.organizationId).eq('id', contact.client_id).maybeSingle();
+  // Een ander adres bij iemand met portaaltoegang geeft dat nieuwe adres de
+  // deur naar alle offertes, facturen en contracten van de klant. De kaart
+  // toonde alleen de naam; nu oud → nieuw en of er portaaltoegang is.
+  const current = contact as { email?: string | null; gives_portal_access?: boolean | null };
   return {
     ok: true,
-    proposal: { type: 'edit_client_contact', id: String(contact.id), name: String(contact.name), client_name: String(client?.name ?? ''), changes },
+    proposal: {
+      type: 'edit_client_contact', id: String(contact.id), name: String(contact.name), client_name: String(client?.name ?? ''), changes,
+      ...('email' in changes ? { current_email: current.email ?? null } : {}),
+      has_portal_access: current.gives_portal_access === true,
+    },
   };
 }
 

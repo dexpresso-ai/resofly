@@ -2109,7 +2109,16 @@ export async function finalizeVatReturn(
  */
 export async function closeVatPeriod(
   organizationId: UUID,
-  input: { periodType: 'month' | 'quarter'; year: number; periodIndex: number; from: string; to: string },
+  input: {
+    periodType: 'month' | 'quarter'; year: number; periodIndex: number; from: string; to: string;
+    /**
+     * Het saldo (hele euro's, in centen) dat de gebruiker zag en bevestigde.
+     * Rekent de database bij het afsluiten iets anders uit (er kwam intussen
+     * een boeking bij), dan sluit er niets. Zonder dit ging de periode voorgoed
+     * dicht op een ander bedrag dan bevestigd.
+     */
+    expectedSaldoCents?: number | null;
+  },
 ): Promise<VatReturn> {
   const { data, error } = await supabase.rpc('close_vat_period', {
     p_organization_id: organizationId,
@@ -2118,6 +2127,7 @@ export async function closeVatPeriod(
     p_period_index: input.periodIndex,
     p_from: input.from,
     p_to: input.to,
+    p_expected_saldo_cents: input.expectedSaldoCents ?? null,
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as VatReturn;
@@ -3047,13 +3057,19 @@ export async function bookAssetAcquisition(organizationId: UUID, assetId: UUID, 
 
 /** Stoot een activum af: boekt boekwaarde af, verwerkt de opbrengst tegen de
  *  tegenrekening en boekt boekwinst/-verlies naar 4950. */
-export async function bookAssetDisposal(organizationId: UUID, assetId: UUID, counterAccountId: UUID, proceedsCents: number, date?: string): Promise<FixedAsset> {
+/**
+ * `vatCode`: btw over de opbrengst (die is exclusief btw). De verkoop van een
+ * bedrijfsmiddel is een belaste levering; zonder code boekte de app geen btw,
+ * en wie het brutobedrag invulde, boekte de btw als boekwinst.
+ */
+export async function bookAssetDisposal(organizationId: UUID, assetId: UUID, counterAccountId: UUID, proceedsCents: number, date?: string, vatCode?: string | null): Promise<FixedAsset> {
   const { data, error } = await supabase.rpc('book_asset_disposal', {
     p_organization_id: organizationId,
     p_asset_id: assetId,
     p_counter_account_id: counterAccountId,
     p_proceeds_cents: proceedsCents,
     p_disposal_date: date ?? null,
+    p_vat_code: vatCode ? vatCode : null,
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as FixedAsset;
@@ -3692,6 +3708,18 @@ export async function approveQuoteInternal(organizationId: UUID, quoteId: UUID):
   const { data, error } = await supabase.rpc('approve_quote_internal', {
     p_quote_id: quoteId,
     p_organization_id: organizationId,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Quote;
+}
+
+/** Een verstuurde of goedgekeurde offerte intrekken (withdraw_quote): de klant kan niet meer akkoord geven. */
+export async function withdrawQuote(organizationId: UUID, quoteId: UUID, reason?: string): Promise<Quote> {
+  const { data, error } = await supabase.rpc('withdraw_quote', {
+    p_quote_id: quoteId,
+    p_organization_id: organizationId,
+    p_reason: reason?.trim() || null,
   });
   if (error) throw error;
   const row = Array.isArray(data) ? data[0] : data;

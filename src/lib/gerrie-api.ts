@@ -18,7 +18,7 @@ const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 export interface GerrieStatus { kind: 'thinking' | 'tool'; label: string }
 
 /** Door Gerrie voorgestelde acties — openen vooringevuld in het bestaande formulier. */
-export interface GerrieProposalLine { description: string; quantity: number; unit_price: number; vat: number }
+export interface GerrieProposalLine { description: string; quantity: number; unit_price: number; vat: number; vat_code?: string }
 export interface GerrieInvoiceProposal {
   type: 'invoice';
   client_id: UUID;
@@ -113,6 +113,8 @@ export interface GerrieEditClientProposal {
   id: UUID;
   name: string;
   changes: { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; status?: string };
+  /** Het huidige adres als het e-mailadres verandert (voorstellen van vóór 5-11-2026 hebben het niet). */
+  current_email?: string | null;
 }
 export interface GerrieSendRemindersProposal {
   type: 'send_reminders';
@@ -136,6 +138,9 @@ export interface GerrieEditProjectProposal {
   id: UUID;
   name: string;
   changes: { name?: string; client_id?: UUID | null; description?: string | null; start_date?: string | null; end_date?: string | null; archived?: boolean };
+  /** Bij een andere klant: van wie naar wie (voorstellen van vóór 5-11-2026 hebben het niet). */
+  current_client_name?: string | null;
+  client_name?: string | null;
 }
 export interface GerrieTaskProposal {
   type: 'task';
@@ -322,6 +327,10 @@ export interface GerrieEditClientContactProposal {
   name: string;
   client_name: string;
   changes: { name?: string; email?: string | null; phone?: string | null; role?: string | null; gives_portal_access?: boolean };
+  /** Het huidige adres als het e-mailadres verandert. */
+  current_email?: string | null;
+  /** Of deze persoon nu in het portaal kan. */
+  has_portal_access?: boolean;
 }
 export interface GerrieProjectTeamProposal {
   type: 'project_team';

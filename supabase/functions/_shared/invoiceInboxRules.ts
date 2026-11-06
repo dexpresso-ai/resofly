@@ -108,6 +108,13 @@ export function sameInvoice(a: ProposalLike, b: ProposalLike): boolean {
  */
 export function autoBookEligible(input: {
   supplierCreated: boolean;
+  /**
+   * De leverancier is eerder door de inbox aangemaakt en nog niet door een mens
+   * bevestigd. Dan is "het IBAN klopt" een vergelijking met zichzelf: het IBAN
+   * kwam uit een eerdere, ongecontroleerde mail. Wie het inboxadres kent, kon zo
+   * met een tweede factuur kosten en voorbelasting laten boeken.
+   */
+  supplierUnverified?: boolean;
   supplierMatch: string | null;
   confidence: 'high' | 'medium' | 'low';
   warnings: string[];
@@ -120,6 +127,7 @@ export function autoBookEligible(input: {
   currency?: string | null;
 }): { ok: true } | { ok: false; why: string } {
   if (input.supplierCreated) return { ok: false, why: 'de leverancier is nieuw aangemaakt' };
+  if (input.supplierUnverified) return { ok: false, why: 'de leverancier is door de inbox aangemaakt en nog niet door iemand bevestigd' };
   if (input.ibanMismatch) return { ok: false, why: 'het IBAN op de factuur wijkt af van het IBAN van deze leverancier' };
   if (!input.supplierMatch || input.supplierMatch === 'name') return { ok: false, why: 'de leverancier is alleen op naam herkend' };
   // Het afzenderadres van een mail is niet geverifieerd (geen DMARC-uitslag van

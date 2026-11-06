@@ -75,6 +75,7 @@ import { BrandMark } from '../../components/PublicBrand';
 import { dayGreeting, firstName, portalDateLabel, portalSummary } from '../../lib/portalGreeting';
 import { isPortalLoginKey, portalKeyFromPathname } from '../../lib/portalLoginKey';
 import { PORTAL_PREVIEW_READY, defaultPortalPreview, demoPortalBackend, readPortalPreviewMessage, type PortalPreviewState } from '../../lib/portalPreview';
+import { formatDocUnitPrice } from '../../lib/documentLayout';
 
 type PortalTab = 'overview' | 'messages' | 'tickets' | 'invoices' | 'quotes' | 'contracts' | 'files' | 'projects' | 'galleries' | 'settings';
 
@@ -1102,7 +1103,7 @@ function PortalDocLines({ lines }: { lines: FinanceLine[] }) {
   return <>
     <div className="portal-doc-lines">
       {lines.map(line => <div className="portal-doc-line" key={line.id || line.description}>
-        <div><strong>{line.description}</strong><span>{line.quantity} × {euro(line.unit_price)} · btw {line.vat ?? 0}%</span></div>
+        <div><strong>{line.description}</strong><span>{line.quantity} × {formatDocUnitPrice(Number(line.unit_price) || 0)} · btw {line.vat ?? 0}%</span></div>
         <strong>{euro(lineGross(line))}</strong>
       </div>)}
     </div>

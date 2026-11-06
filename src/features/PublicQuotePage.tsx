@@ -21,6 +21,7 @@ async function extractFunctionError(error: unknown, fallback: string): Promise<s
   return fallback;
 }
 import type { FinanceLine } from '../types';
+import { formatDocUnitPrice } from '../lib/documentLayout';
 
 type PublicQuote = {
   id: string;
@@ -143,7 +144,7 @@ export function PublicQuotePage({ token }: { token: string }) {
       <div className="public-lines">
         {(quote.lines || []).map(line => {
           return <div className="public-line" key={line.id || line.description}>
-            <div><strong>{line.description}</strong><span>{line.quantity} × {euro(line.unit_price)} · btw {line.vat ?? 0}%</span></div>
+            <div><strong>{line.description}</strong><span>{line.quantity} × {formatDocUnitPrice(Number(line.unit_price) || 0)} · btw {line.vat ?? 0}%</span></div>
             <strong>{euro(lineGross(line))}</strong>
           </div>;
         })}
@@ -204,7 +205,8 @@ function statusLabel(status: string): string {
     accepted: 'Geaccepteerd',
     rejected: 'Geweigerd',
     expired: 'Verlopen',
-    cancelled: 'Geannuleerd',
+    // Een offerte die de afzender heeft ingetrokken (withdraw_quote).
+    cancelled: 'Ingetrokken',
   };
   return labels[status] || status;
 }

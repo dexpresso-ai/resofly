@@ -4,6 +4,8 @@ import { ACTIONS } from './actions/index.ts';
 import { BOOKKEEPING_ACTIONS } from './actions/bookkeeping.ts';
 import { FINANCE_ACTIONS } from './actions/finance.ts';
 import { BUSINESS_ACTIONS } from './actions/business.ts';
+import { CLIENT_ACTIONS } from './actions/clients.ts';
+import { MARKETING_ACTIONS } from './actions/marketing.ts';
 import { ActionError, bool, num, optNum, type ActionCtx, type ActionDef } from './actions/types.ts';
 import { renderInvoiceReminderEmail } from './emailTemplates/invoiceReminder.ts';
 import { publicActionError } from './publicError.ts';
@@ -206,4 +208,84 @@ test('databasetekst gaat niet naar de browser; een eigen melding wel', () => {
     'Factuur ophalen mislukt: de invoer past niet bij de regels van ResoFly.');
   assert.equal(publicActionError('Databasefunctie x mislukt: relation "invoices" does not exist').message, 'Databasefunctie x mislukt.');
   assert.equal(publicActionError('Deze aanmaning is al verstuurd.').message, 'Deze aanmaning is al verstuurd.');
+});
+
+// ── Contract-, offerte- en factuurcontrole (5 november 2026) ─────────────
+
+test('geen herinnering of aanmaning voor een concept, en geen aanmaning vóór de vervaldatum', async () => {
+  const draft = { number: 'FAC-1', status: 'draft', client_id: null, due_date: '2026-10-01', reminder_level: 0, reminders_paused: false, lines: [], total_amount: 100 };
+  const remind = action(FINANCE_ACTIONS, 'invoice.send_reminder');
+  await assert.rejects(remind.plan!(ctx({ invoices: [draft] }), { invoice_id: ID }), /concept/);
+  const dunning = action(FINANCE_ACTIONS, 'invoice.propose_dunning');
+  await assert.rejects(dunning.plan!(ctx({ invoices: [draft] }), { invoice_id: ID }), /concept/);
+  const notYetDue = { ...draft, status: 'sent', due_date: '2026-11-20' };
+  await assert.rejects(dunning.plan!(ctx({ invoices: [notYetDue], invoice_dunning_notices: [] }), { invoice_id: ID }), /nog niet vervallen/);
+});
+
+test('"betaald" voor een ongeboekte factuur: alleen als hij in de beginbalans zit', async () => {
+  const setStatus = action(FINANCE_ACTIONS, 'invoice.set_status');
+  const invoice = { number: 'F-2', status: 'sent', client_id: null, date: '2026-10-01', due_date: null, lines: [{ quantity: 1, unit_price: 100, vat: 21 }], total_amount: 121, journal_entry_id: null };
+  // Zonder startdatum, of met een startdatum ervóór, boekt de database de
+  // factuur bij "betaald" meteen, maar de betaling niet.
+  await assert.rejects(setStatus.plan!(ctx({ invoices: [invoice] }), { invoice_id: ID, status: 'paid' }),
+    (error: unknown) => error instanceof ActionError && /invoice\.reconcile_bank_transaction/.test(error.message));
+  await assert.rejects(setStatus.plan!(ctx({ invoices: [invoice], company_settings: [{ bookkeeping_start_date: '2026-01-01' }] }), { invoice_id: ID, status: 'paid' }), ActionError);
+  const plan = await setStatus.plan!(ctx({ invoices: [invoice], company_settings: [{ bookkeeping_start_date: '2026-11-01' }] }), { invoice_id: ID, status: 'paid' });
+  assert.equal(plan.payload.status, 'paid');
+});
+
+test('een ander e-factuuradres gaat altijd langs een mens, met oud → nieuw', async () => {
+  const update = action(CLIENT_ACTIONS, 'client.update_details');
+  const rows = { clients: [{ name: 'Jansen BV', e_invoicing_enabled: true, e_invoice_email: 'facturen@jansen.nl', e_invoice_channel: 'email' }] };
+  const plan = await update.plan!(ctx(rows), { client_id: ID, e_invoice_email: 'Boekhouding@Elders.nl' });
+  assert.equal(plan.humanOnly, true);
+  assert.equal(plan.risk, 'high');
+  assert.match(plan.sub, /facturen@jansen\.nl → boekhouding@elders\.nl/);
+  // Hetzelfde adres opnieuw: de facturen gaan nergens anders heen.
+  const same = await update.plan!(ctx(rows), { client_id: ID, e_invoice_email: 'facturen@jansen.nl' });
+  assert.equal(same.humanOnly, undefined);
+  const channel = await update.plan!(ctx(rows), { client_id: ID, e_invoice_channel: 'mollie' });
+  assert.equal(channel.humanOnly, true);
+  const city = await update.plan!(ctx(rows), { client_id: ID, city: 'Zwolle' });
+  assert.equal(city.humanOnly, undefined);
+  assert.equal(city.risk, undefined);
+});
+
+test('een creditnota gaat naar het adres dat de server kiest: bij e-facturatie het e-factuuradres', async () => {
+  const send = action(FINANCE_ACTIONS, 'credit_note.send');
+  const client = { name: 'Jansen BV', email: 'info@jansen.nl', e_invoicing_enabled: true, e_invoice_email: 'facturen@jansen.nl', e_invoice_channel: 'email' };
+  const rows = {
+    credit_notes: [{ number: 'CN-1', invoice_id: ID, total_amount: -121, status: 'issued', date: '2026-11-01', reason: 'Fout' }],
+    invoices: [{ number: 'F-1', client_id: ID }],
+    clients: [client],
+  };
+  const eInvoice = await send.plan!(ctx(rows), { credit_note_id: ID });
+  assert.equal(eInvoice.payload.email, 'facturen@jansen.nl');
+  assert.match(eInvoice.sub, /facturen@jansen\.nl/);
+  const plain = await send.plan!(ctx({ ...rows, clients: [{ ...client, e_invoicing_enabled: false }] }), { credit_note_id: ID });
+  assert.equal(plain.payload.email, 'info@jansen.nl');
+});
+
+test('contract ter ondertekening: de ontvanger vooraan, een ander adres met waarschuwing', async () => {
+  const send = action(MARKETING_ACTIONS, 'contract.send_for_signature');
+  const contract = {
+    number: 'C-12', title: 'Onderhoudsovereenkomst '.repeat(8), status: 'draft', client_id: ID,
+    body: '<p>Inhoud</p>', editor_mode: 'rich', body_storage_key: null, valid_until: null, amount_cents: 100000,
+  };
+  const rows = { contracts: [contract], clients: [{ name: 'Jansen BV', email: 'info@jansen.nl', contact_name: 'Kees' }], contract_signers: [] };
+  const normal = await send.plan!(ctx(rows), { contract_id: ID });
+  assert.match(normal.title, /info@jansen\.nl/);
+  assert.equal(normal.warning, undefined);
+  const other = await send.plan!(ctx(rows), { contract_id: ID, recipient_email: 'ops@elders.example' });
+  assert.match(other.title, /ops@elders\.example/, 'het adres staat in de titel, niet achter een lange contracttitel');
+  assert.match(other.warning ?? '', /niet het adres van Jansen BV/);
+  // Een herinnering gaat naar wie de vorige link kreeg, niet stil naar info@.
+  const resend = await send.plan!(ctx({
+    ...rows,
+    contracts: [{ ...contract, status: 'sent' }],
+    contract_signers: [{ name: 'Directeur', email: 'directeur@jansen.nl' }],
+  }), { contract_id: ID });
+  assert.equal(resend.payload.recipient_email, 'directeur@jansen.nl');
+  assert.equal(resend.payload.recipient_name, 'Directeur');
+  assert.equal(resend.warning, undefined);
 });

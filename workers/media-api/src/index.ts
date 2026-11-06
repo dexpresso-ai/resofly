@@ -161,6 +161,20 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
     return errorResponse('Method not allowed', 405, context);
   }
 
+  // Offerte-PDF's (de bij versturen vastgelegde PDF). quote-workflow schreef
+  // hier al naartoe en .env.example wijst QUOTE_PDF_STORAGE_WORKER_URL naar
+  // deze worker, maar de route ontbrak (alleen de oude cloudflare-worker had
+  // hem): elke verzending liep op 404 en gaf de gebruiker een 502, en een
+  // eerder in R2 bewaarde offerte-PDF was niet meer op te halen.
+  if (method === 'POST' && pathname === '/internal/quote-snapshot') {
+    return handleInternalUpload(request, env, context);
+  }
+  const quoteSnapshotKey = matchInternalQuoteSnapshotRoute(pathname);
+  if (quoteSnapshotKey) {
+    if (method === 'GET') return handleInternalDownload(request, env, context, quoteSnapshotKey);
+    return errorResponse('Method not allowed', 405, context);
+  }
+
   // Docx → PDF via Collabora, server-side. Alleen intern: de edge-functions
   // maken hiermee de contract-PDF, de browser komt er niet bij.
   if (method === 'POST' && pathname === '/internal/office/convert-pdf') {
@@ -3887,6 +3901,14 @@ function matchInternalSnapshotRoute(pathname: string): string | null {
 /** `/internal/contract-snapshot/{key}` — contract-PDF's (getekend + verstuurd). */
 function matchInternalContractSnapshotRoute(pathname: string): string | null {
   const match = pathname.match(/^\/internal\/contract-snapshot\/(.+)$/);
+  if (!match?.[1]) return null;
+  const key = decodeURIComponent(match[1]);
+  return isSafeStorageKey(key) ? key : null;
+}
+
+/** `/internal/quote-snapshot/{key}` — de bij versturen vastgelegde offerte-PDF. */
+function matchInternalQuoteSnapshotRoute(pathname: string): string | null {
+  const match = pathname.match(/^\/internal\/quote-snapshot\/(.+)$/);
   if (!match?.[1]) return null;
   const key = decodeURIComponent(match[1]);
   return isSafeStorageKey(key) ? key : null;

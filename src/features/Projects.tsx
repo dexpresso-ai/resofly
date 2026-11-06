@@ -938,6 +938,7 @@ export function ProjectPage({
   onSubmitQuoteApproval,
   onApproveQuote,
   onRejectQuote,
+  onWithdrawQuote,
   onSendQuote,
   onConvertQuoteToInvoice,
   onDownloadQuotePdf,
@@ -974,6 +975,7 @@ export function ProjectPage({
   onSubmitQuoteApproval: (quote: Quote) => void;
   onApproveQuote: (quote: Quote) => void;
   onRejectQuote: (quote: Quote) => void;
+  onWithdrawQuote?: (quote: Quote) => void;
   onSendQuote: (quote: Quote) => void;
   onConvertQuoteToInvoice?: (quote: Quote) => void;
   onDownloadQuotePdf?: (quote: Quote) => void;
@@ -1400,6 +1402,7 @@ export function ProjectPage({
           onSubmitApproval={onSubmitQuoteApproval}
           onApprove={onApproveQuote}
           onReject={onRejectQuote}
+          onWithdraw={onWithdrawQuote}
           onSend={onSendQuote}
           onConvertToInvoice={onConvertQuoteToInvoice}
           onDownloadPdf={onDownloadQuotePdf}
