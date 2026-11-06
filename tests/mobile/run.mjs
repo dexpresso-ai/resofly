@@ -11,12 +11,14 @@
  *   4. het eerste échte item van een pagina (de eerste klant, taak, ticket…)
  *      lager begint dan de grens in FIRST_ITEM. Dat is de meting waar deze
  *      test om bestaat: koppen, knoppenbalken en filters mogen niet weer
- *      langzaam het scherm opeten.
+ *      langzaam het scherm opeten;
+ *   5. twee delen die naast elkaar horen (`apart` in PAGES) ergens tijdens
+ *      het scrollen over elkaar heen liggen.
  *
  * Opties:
  *   --theme=dark|light|both     standaard dark
  *   --look=zenit|stroom         meet een nieuwe voorkant (Probeer Zenit, Probeer Stroom) i.p.v. Cockpit
- *   --viewports=phone,tablet    standaard phone,tablet,landscape (ook: desktop)
+ *   --viewports=phone,tablet    standaard phone,tablet,landscape,laptop (ook: desktop)
  *   --pages=dashboard,clients   standaard alle pagina's
  *   --shots=<map>               schrijf per pagina een screenshot weg
  *   --url=http://…              gebruik een draaiende dev-server i.p.v. er zelf een te starten
@@ -40,6 +42,12 @@ const VIEWPORTS = {
   // eronder valt is niet te bereiken als de pagina zelf niet mag scrollen.
   landscape: { viewport: { width: 740, height: 360 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, maxChrome: 112 },
   desktop: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false, maxChrome: 130 },
+  // Een laptop, met de zijbalk ingeklapt. Documentopmaak heeft hier zijn
+  // middelste stand (de editor is 760-1179px breed): velden links, blad en
+  // instellingen rechts. De tablet krijgt één kolom en desktop drie, dus
+  // geen van beide zag dat de velden hier over de instellingen schoven
+  // (2026-11-06). Alleen de pagina's in `only`: de standaardronde blijft kort.
+  laptop: { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false, maxChrome: 130, only: ['settings-documenten'] },
 };
 
 /** Welke pagina's, en met welk tabblad ze openen. */
@@ -81,8 +89,11 @@ const PAGES = {
   'settings-huisstijl': { page: 'settings', prepare: '[data-settings-tab="huisstijl"]' },
   // Instellingen → Documentopmaak: de sleep-editor met het A4-blad. Op de
   // telefoon staat het blad bovenaan en schaalt het mee; de velden en de
-  // instellingen staan eronder.
-  'settings-documenten': { page: 'settings', prepare: '[data-settings-tab="documenten"]' },
+  // instellingen staan eronder. De lijst met velden blijft vanaf de
+  // tabletbreedte in beeld (sticky) en mag daarbij nooit over de
+  // instellingen schuiven: op een laptop lagen Dupliceren, Verwijderen en de
+  // kleurknoppen eronder.
+  'settings-documenten': { page: 'settings', prepare: '[data-settings-tab="documenten"]', apart: ['.dle-palette', '.dle-panel'] },
   // Instellingen → E-mail: de e-mailteksten met het voorbeeld, waarin sinds
   // november 2026 ook het logo staat zoals bovenaan de mail.
   'settings-email': { page: 'settings', prepare: '[data-settings-tab="email"]' },
@@ -205,7 +216,7 @@ const themes = args.theme === 'both' ? ['dark', 'light'] : [args.theme === 'ligh
 // standaardronde", maar deze regel bleef op 'phone,tablet' staan — dus werd de
 // band 761-900px nooit gemeten, en dat is precies waar een gekantelde telefoon
 // zit: geen smal scherm maar een laag scherm, een heel ander probleem.
-const viewports = (args.viewports ?? 'phone,tablet,landscape').split(',').map(v => v.trim()).filter(v => VIEWPORTS[v]);
+const viewports = (args.viewports ?? 'phone,tablet,landscape,laptop').split(',').map(v => v.trim()).filter(v => VIEWPORTS[v]);
 const pages = args.pages ? args.pages.split(',').map(p => p.trim()).filter(p => PAGES[p]) : Object.keys(PAGES);
 const look = args.look === 'zenit' || args.look === 'stroom' ? args.look : null;
 const firstItem = { ...FIRST_ITEM, ...(look ? FIRST_ITEM_BY_LOOK[look] : {}) };
@@ -235,6 +246,7 @@ try {
       const context = await browser.newContext({ viewport: vp.viewport, deviceScaleFactor: vp.deviceScaleFactor, isMobile: vp.isMobile, hasTouch: vp.hasTouch, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', colorScheme: theme, reducedMotion: 'reduce' });
       await installMock(context);
       for (const key of pages) {
+        if (vp.only && !vp.only.includes(key)) continue;
         const page = await context.newPage();
         const errors = [];
         page.on('pageerror', e => errors.push(String(e.message)));
@@ -294,12 +306,36 @@ try {
         }, firstItem[key]?.selector ?? null);
         // Publieke pagina's hebben geen .content-wikkel: meet daar op het document.
         if (isPublic && m.firstTop == null) m.firstTop = m.firstTopDoc;
+        // Twee delen die naast elkaar horen, gemeten over de hele scrollhoogte.
+        // Een plakkend (sticky) deel schuift pas ergens overheen als je naar
+        // beneden scrolt; bovenaan, waar de andere metingen kijken, is er dan
+        // niets aan de hand. Daarna terug naar waar de pagina stond, zodat een
+        // screenshot hetzelfde laat zien als zonder deze meting.
+        const overlap = spec.apart ? await page.evaluate(async ([a, b]) => {
+          const scroller = document.querySelector('.content:not([hidden])') ?? document.scrollingElement;
+          const start = scroller.scrollTop;
+          const max = scroller.scrollHeight - scroller.clientHeight;
+          let worst = 0;
+          for (let step = 0; step <= 10; step++) {
+            scroller.scrollTop = Math.round((max * step) / 10);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const ra = document.querySelector(a)?.getBoundingClientRect();
+            const rb = document.querySelector(b)?.getBoundingClientRect();
+            if (!ra || !rb) continue;
+            const w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
+            const h = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+            if (w > 1 && h > 1) worst = Math.max(worst, Math.round(w * h));
+          }
+          scroller.scrollTop = start;
+          return worst;
+        }, spec.apart) : 0;
         const label = `${look ? `${look}/` : ''}${theme}/${vpName}/${key}`;
         const problems = [];
         if (!shell) problems.push(isPublic ? 'pagina niet gerenderd' : 'app-shell niet gerenderd');
         if (errors.length) problems.push(`js-fout: ${errors[0].slice(0, 90)}`);
         if (m.pageOverflow > 1 || m.contentOverflow > 1) problems.push(`horizontale overloop (${Math.max(m.pageOverflow, m.contentOverflow)}px)`);
         if (m.chrome > vp.maxChrome) problems.push(`chrome ${m.chrome}px > ${vp.maxChrome}px`);
+        if (overlap) problems.push(`${spec.apart[0]} schuift over ${spec.apart[1]} (${overlap}px²)`);
         // Bereikbaarheid geldt op élk formaat — juist liggend, waar de hoogte
         // schaars is, gaat dit mis. 12px is ruim onder een normale regel en
         // ruim boven het gerommel van een afrondingsfout.

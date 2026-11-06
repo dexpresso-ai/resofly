@@ -1,8 +1,8 @@
 # Mobiele lay-outtest
 
 `npm run test:mobile` opent elke pagina van de werkruimte in Chromium op
-telefoon- (390×844) en tabletformaat (820×1180), tegen een nagebootste
-backend, en faalt op vier dingen:
+telefoon- (390×844), tablet- (820×1180) en liggend telefoonformaat
+(740×360), tegen een nagebootste backend, en faalt op vijf dingen:
 
 1. een JavaScript-fout bij het openen van de pagina;
 2. horizontale overloop (de pagina of het werkblad scrolt zijwaarts);
@@ -11,7 +11,15 @@ backend, en faalt op vier dingen:
 4. een eerste échte item (klant, taak, ticket, factuur…) dat lager begint
    dan de grens in `FIRST_ITEM` in `run.mjs`. Dit is de meting waar de test
    om bestaat: nieuwe koppen, knoppenbalken of filters boven de inhoud
-   trekken hem rood.
+   trekken hem rood;
+5. twee delen die naast elkaar horen (`apart` in `PAGES`) en ergens tijdens
+   het scrollen toch over elkaar heen liggen. Een plakkend (sticky) deel
+   schuift pas ergens overheen als je naar beneden scrolt, dus de test meet
+   over de hele scrollhoogte.
+
+Daarnaast meet hij een laptop (1280×800), alleen voor de pagina's die
+daar een eigen stand hebben (`only` bij dat formaat). Documentopmaak heeft
+daar twee kolommen; de tablet krijgt er één en desktop drie.
 
 ## Draaien
 
