@@ -219,3 +219,38 @@ Nagelopen en in orde bevonden:
 
   Daarna `npm test` 1052/1052, de typecheck, `deno check` en de mobiele lay-outtest op 72
   portaal- en instellingenpagina's: in orde.
+
+## Uitrol
+
+Samengevoegd naar `staging` op 6 november (`75c0a4d`).
+
+- **Een nieuw migratienummer.** Staging had intussen `20261105230000` (contract, offerte en
+  factuur) en `20261105233000` (tweede financiëncontrole). Met het eerste nummer,
+  `20261105110000`, viel de migratie daarvóór, en dan weigert `supabase db push`. Hij heet nu
+  `20261106080000_klantlogin_huisstijl.sql`; de inhoud is gelijk. Die twee migraties lezen
+  `company_settings` alleen en raken `create_child_organization` niet, dus de kopie daarvan zet
+  niets van hen terug. Vóór de uitrol: staging in de branch samengevoegd (één importconflict in
+  `contract-public`, beide kanten behouden). Daarna de keten vanaf nul in de nieuwe volgorde,
+  typecheck, `npm test` 1090/1090, `deno check` op de 34 functies uit de CI en de mobiele
+  lay-outtest op het portaal, de instellingen, de contractpagina en een klant.
+- *Deploy Supabase (staging)* run 179: migratie toegepast, alle 39 edge functions opnieuw
+  neergezet (ook `portal-login`, `portal-notify`, `mail`, `file-share`, `contract-public` en
+  `client-portal`), rooktest groen. Daarbij ook "boekhouder-hek: elke organisatietabel is
+  afgeschermd" en "publieke sleutel: anon heeft geen rechten in public".
+- Nagekeken op de staging-database (alleen lezen, via de Management API):
+  - `20261106080000` staat erop, als nieuwste;
+  - de vier kolommen en de drie CHECKs;
+  - `portal_login_addresses` met RLS en alleen het boekhouder-hek;
+  - alle zes organisaties hebben een geldig inlogadres;
+  - geen organisatietabel zonder gate of hek;
+  - de rechten:
+    - anon: niets;
+    - authenticated: `ensure_portal_login_key` en `portal_login_key`, niet de generator en niet
+      de tabel;
+    - service-role: alles;
+  - `create_child_organization` neemt de vier kolommen over.
+- `getBranding` op staging zelf aanroepen kon niet: vanuit de cloudsessie is
+  `<ref>.supabase.co` niet bereikbaar (netwerkbeleid). De functie staat in de lijst van wat er is
+  neergezet.
+- *Frontend checks* run 135: de Deno-typecheck (met de echte typen van esm.sh), de
+  migratieketen vanaf nul, de typecheck, de CSP-hash en de unit tests groen.
