@@ -450,8 +450,10 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       const connection = await row<{ provider: string; provider_account_email: string | null; user_id: string; status: string }>(
         ctx, 'calendar_connections', connectionId, 'provider, provider_account_email, user_id, status', 'Agendakoppeling');
       if (connection.user_id !== ctx.userId) throw new ActionError('Alleen degene die dit account gekoppeld heeft, kan het verversen.');
-      if (connection.status !== 'active') {
-        throw new ActionError(`Deze koppeling staat op "${connection.status}". Koppel het account eerst opnieuw in het agendascherm.`);
+      if (connection.status === 'revoked' || connection.status === 'expired') {
+        // In gewone woorden; eerst stond hier de ruwe status ("expired").
+        const why = connection.status === 'revoked' ? 'is ingetrokken' : 'is verlopen';
+        throw new ActionError(`Deze koppeling ${why}. Koppel het account eerst opnieuw in Instellingen → Agenda.`);
       }
       return {
         title: `Agenda's opnieuw ophalen bij ${connection.provider === 'google' ? 'Google' : 'Microsoft'}`,

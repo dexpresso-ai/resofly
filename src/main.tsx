@@ -18,7 +18,7 @@ import { isZenitFamily, useLook } from './lib/look';
 import { LightField } from './components/LightField';
 import { StroomIsland } from './components/StroomIsland';
 import type { Intent } from './lib/stroom';
-import { notify, tintLight } from './lib/stroomBus';
+import { dismiss, notify, tintLight } from './lib/stroomBus';
 import { useNarrowViewport } from './lib/useNarrowViewport';
 import { isSupabaseConfigured, supabase, supabaseAuth } from './lib/supabase';
 import { signOutOnThisDevice } from './lib/signOut';
@@ -106,7 +106,8 @@ import {
 } from './lib/repository';
 import { memberShortName, memberColor, memberInitials } from './lib/members';
 import { uploadToR2 } from './lib/r2';
-import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn } from './lib/calendar-api';
+import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn, invalidateCalendarEventsCache } from './lib/calendar-api';
+import { calendarOAuthErrorText } from './lib/calendarConnection';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
 import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, warmupOfficeEditor, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
 import { deleteR2Object } from './lib/r2-api';
@@ -166,7 +167,7 @@ import { Archive, Settings, type SettingsTab } from './features/SimplePages';
 import { ProjectTemplatePicker } from './features/ProjectTemplates';
 import { Statistics } from './features/Statistics';
 import type { ReportDefinition } from './lib/reporting';
-import { CalendarPage, type CalendarDraft } from './features/CalendarPage';
+import { CalendarPage, type CalendarDraft, type CalendarLinkNotice } from './features/CalendarPage';
 import { TaskAgendaSection } from './components/TaskAgenda';
 import { calendarEventLinkMatchesEvent } from './lib/calendar-links';
 import { MeetingBookingManager } from './features/MeetingBookingManager';
@@ -1027,16 +1028,41 @@ function App() {
   // Terug van Google of Microsoft na een agendakoppeling: hier afronden, met de
   // sessie van wie er is ingelogd (de server koppelt alleen voor wie startte).
   const [calendarOAuthReturn, setCalendarOAuthReturn] = useState(() => takeCalendarOAuthReturn());
+  // De uitkomst gaat ook naar Instellingen → Agenda (CalendarPage): daar stond
+  // de pagina al open met de oude lijst, want die laadde vóór het afronden klaar
+  // was. Dus "Agenda gekoppeld" in beeld, en eronder "Nog geen agenda gekoppeld".
+  const [calendarLinkNotice, setCalendarLinkNotice] = useState<CalendarLinkNotice | null>(null);
   useEffect(() => {
-    if (!calendarOAuthReturn || loading || !activeOrganization) return;
+    // Pas na het herstellen van de tabbladen: anders zet dat herstel de pagina
+    // die we hieronder openen meteen weer terug.
+    if (!calendarOAuthReturn || loading || !activeOrganization || tabsLoadedForRef.current !== activeOrganization.id) return;
     const pending = calendarOAuthReturn;
     setCalendarOAuthReturn(null);
-    completeCalendarOAuth(activeOrganization.id, pending.code, pending.state)
-      .then((provider) => {
-        notify({ tone: 'ok', title: 'Agenda gekoppeld', detail: provider === 'google' ? 'Google Agenda staat nu in je werkruimte.' : 'Microsoft 365 staat nu in je werkruimte.' });
+    if (permissions.canRead('calendar')) openSettings('agenda');
+    if (pending.kind === 'error') {
+      const text = calendarOAuthErrorText(pending.error, pending.provider);
+      setCalendarLinkNotice({ tone: 'error', text, key: Date.now() });
+      notify({ tone: 'muted', title: 'Agenda niet gekoppeld', detail: text, ttl: 9000 });
+      return;
+    }
+    const organizationId = activeOrganization.id;
+    const busy = notify({ tone: 'gold', title: 'Agenda koppelen…', detail: 'ResoFly haalt je agenda\u2019s op. Dat duurt een paar seconden.', ttl: 60_000 });
+    completeCalendarOAuth(organizationId, pending.code, pending.state)
+      .then((done) => {
+        const name = done.provider === 'google' ? 'Google Agenda' : 'Microsoft 365';
+        const where = done.organizationId !== organizationId ? ' Hij staat in de organisatie waarin je het koppelen begon.' : '';
+        const text = done.warning ?? `${name}${done.account ? ` (${done.account})` : ''} staat nu in je werkruimte.${where}`;
+        setCalendarLinkNotice({ tone: done.warning ? 'error' : 'ok', text, key: Date.now() });
+        notify({ tone: 'ok', title: 'Agenda gekoppeld', detail: text });
+        invalidateCalendarEventsCache();
         void refresh();
       })
-      .catch((error) => notify({ tone: 'muted', title: 'Agenda koppelen lukte niet', detail: error instanceof Error ? error.message : 'Er ging iets mis.' }));
+      .catch((error) => {
+        const text = error instanceof Error ? error.message : 'Er ging iets mis.';
+        setCalendarLinkNotice({ tone: 'error', text, key: Date.now() });
+        notify({ tone: 'muted', title: 'Agenda koppelen lukte niet', detail: text, ttl: 9000 });
+      })
+      .finally(() => dismiss(busy));
   }, [calendarOAuthReturn, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Uit een pushmelding van een agent: naar het commandocentrum, met die agent open.
@@ -3867,7 +3893,7 @@ function App() {
       // teamlid, dan geven we niets mee en verdwijnt het tabblad. Schrijfrecht
       // komt hier uit de agenda-module, niet uit de instellingenpagina.
       const calendarSettings = permissions.canRead('calendar')
-        ? <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={orgCanWrite && permissions.canWrite('calendar')} canAdmin={canAdmin} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>
+        ? <CalendarPage mode="settings" linkNotice={calendarLinkNotice} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={orgCanWrite && permissions.canWrite('calendar')} canAdmin={canAdmin} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>
         : null;
       return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
     }

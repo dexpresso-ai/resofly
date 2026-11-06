@@ -19,8 +19,8 @@ en of een klant of collega nergens bij kan waar hij niet bij hoort.
 # 1. De lokale stack (database, auth, REST, gateway)
 npx supabase start -x studio,imgproxy,mailpit,logflare,vector,supavisor,edge-runtime,postgres-meta,realtime,storage-api
 
-# 2. Twee pakketten die alleen de edge functions gebruiken (via esm.sh)
-npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0
+# 2. Drie pakketten die alleen de edge functions gebruiken (via esm.sh)
+npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0 ical.js@2.1.0
 
 # 3. Alles, of één scenario
 npm run test:stromen
@@ -28,7 +28,8 @@ npm run test:stromen -- facturen
 ```
 
 Scenario's: `rook`, `offertes`, `facturen`, `herinneringen`, `contracten`, `beveiliging`,
-`automatisering`. De uitkomst van 6 november staat in
+`automatisering`, `agenda` (Google en Microsoft koppelen, met nep-Google en nep-Microsoft uit
+`nep-agenda.mjs`). De uitkomst van 6 november staat in
 `docs/rapporten/STROMENTEST_CONTRACT_OFFERTE_FACTUUR_2026-11-06.md`.
 Elk scenario maakt zijn eigen organisaties (`wereld.mjs`), dus ze raken elkaar niet en de
 database hoeft niet leeg.
@@ -58,8 +59,9 @@ node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui
 
 Scenario's: `offerte` (formulier, ter goedkeuring, goedkeuren, versturen, akkoord van de klant,
 factuur maken), `factuur` (versturen, publieke pagina, herinnering, crediteren), `intrekken`,
-`contract` (versturen, ondertekenen, terug naar concept) en `rollen` (kijker, lezer en boekhouder
-zien geen knoppen die iets veranderen; de medewerker en de beheerder bij dezelfde stukken wel).
+`contract` (versturen, ondertekenen, terug naar concept), `rollen` (kijker, lezer en boekhouder
+zien geen knoppen die iets veranderen; de medewerker en de beheerder bij dezelfde stukken wel) en
+`agenda` (Google koppelen met de knop, terugkeer met fout, opnieuw koppelen, loskoppelen).
 
 Elke stap controleert ook: geen JavaScript-fout, geen foutmelding of "laden…" die blijft staan,
 en geen mislukte aanroep die de stap niet verwachtte. Mislukt een stap, dan komt er een
@@ -71,8 +73,8 @@ Goed om te weten:
   origins van de functies en als adres in de mails; de gewone `ORIGIN` blijft geldig;
 - inloggen gaat met een magische link via de admin-API (`generate_link` + `verify`). Niet met
   een nieuw wachtwoord: GoTrue trekt dan alle sessies van die gebruiker in;
-- het werkblad begint op Offertes. Het dashboard roept `calendar-integrations` aan, en die
-  functie laadt in deze harnas niet (`ical.js` van esm.sh staat niet in `loader.mjs`);
+- het werkblad begint op Offertes (dat scherm hoort bij deze stromen; `calendar-integrations`
+  laadt sinds 6 november wel, met `ical.js` uit `node_modules`);
 - realtime draait niet in de lokale stack: die websocketfouten in de console tellen niet mee.
   Ook de Word-editor (Collabora) en de media-worker van de browser zijn er niet, dus alleen
   rich-text contracten. Die maakt de test aan zoals het contractformulier ze opslaat: het
@@ -86,7 +88,8 @@ Goed om te weten:
 | --- | --- |
 | `register.mjs`, `loader.mjs`, `std-serve.mjs` | laden de Deno-code in Node: imports van esm.sh/deno.land naar `node_modules`, `serve()` naar de harnas |
 | `omgeving.mjs` | de lokale stack en de secrets van de functies |
-| `nepdiensten.mjs` | Resend, Mollie en de media-worker, met storingen op bestelling |
+| `nepdiensten.mjs` | Resend, Mollie en de media-worker, met storingen op bestelling; `registreerDienst` voor eigen nepdiensten |
+| `nep-agenda.mjs` | nep-Google en nep-Microsoft voor de agendakoppeling (codes, tokens, agendalijsten, afspraken, intrekken) |
 | `supabase.mjs` | PostgREST als gebruiker of als server, `psql` voor wat alleen de tijd doet |
 | `functies.mjs` | roept een functie aan met een `Request`, zoals de browser of Mollie |
 | `wereld.mjs` | een organisatie met alle rollen, bedrijfsgegevens en twee klanten met portaal |

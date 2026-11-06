@@ -9,12 +9,15 @@
 
 import {
   type CalendarSourceRow,
+  type ConnectionRow,
   type NativeEventRow,
   type Provider,
   supabaseAdmin,
   getConnection,
   getToken,
   refreshAccessToken,
+  CalendarTokenError,
+  ProviderHttpError,
   assertIso,
   mapGoogleAttendees,
   mapMicrosoftAttendees,
@@ -29,8 +32,7 @@ import {
 
 /**
  * Alle zichtbare agenda-items voor een gebruiker in [start, end). Bij een fout op
- * één bron wordt die bron overgeslagen (en de koppeling op 'error' gezet) zodat de
- * overige agenda's blijven werken.
+ * één bron wordt die bron overgeslagen zodat de overige agenda's blijven werken.
  */
 export async function listEvents(organizationId: string, requesterUserId: string, start: string, end: string) {
   const startIso = assertIso(start, 'start');
@@ -44,19 +46,42 @@ export async function listEvents(organizationId: string, requesterUserId: string
   // dubbele refresh-calls en een refresh-race waarbij gelijktijdige refreshes elkaars
   // roterende refresh-token overschrijven.
   const connectionIds = [...new Set(
-    visibleSources.filter(source => source.provider !== 'native' && source.connection_id).map(source => source.connection_id as string),
+    visibleSources.filter(source => source.provider !== 'native' && source.provider !== 'ics' && source.connection_id).map(source => source.connection_id as string),
   )];
   const tokenByConnection = new Map<string, string>();
+  const statusByConnection = new Map<string, ConnectionRow['status']>();
   await Promise.all(connectionIds.map(async (connectionId) => {
+    let connection: ConnectionRow;
     try {
-      const connection = await getConnection(organizationId, connectionId);
+      connection = await getConnection(organizationId, connectionId);
+    } catch {
+      return;
+    }
+    statusByConnection.set(connectionId, connection.status);
+    // Ingetrokken (het teamlid vertrok uit de organisatie): er is geen token
+    // meer, en de status mét de reden moet blijven staan. Eerst overschreef
+    // elke weergave van de agenda die met "error: Agenda-token niet gevonden".
+    if (connection.status === 'revoked') return;
+    try {
       const token = await getToken(organizationId, connection.id);
       tokenByConnection.set(connectionId, await refreshAccessToken(token));
     } catch (err) {
       console.warn('Token refresh failed for connection', connectionId, err);
-      await supabaseAdmin.from('calendar_connections').update({ status: 'error', last_error: err instanceof Error ? err.message : 'Token vernieuwen mislukt' }).eq('id', connectionId);
+      // refreshAccessToken zet zelf de status bij een blijvend probleem en laat
+      // de koppeling met rust bij een storing. Over blijft: het token ontbreekt
+      // of is niet te ontsleutelen. Dan helpt alleen opnieuw koppelen.
+      if (!(err instanceof CalendarTokenError)) {
+        await supabaseAdmin.from('calendar_connections')
+          .update({ status: 'error', last_error: 'ResoFly kan het toegangstoken van deze koppeling niet lezen. Koppel het account opnieuw.' })
+          .eq('id', connectionId).eq('organization_id', organizationId);
+      }
     }
   }));
+
+  // Welke koppelingen werkten (minstens één agenda opgehaald) en welke niet:
+  // zo kan een oude foutstatus weg zodra alles weer werkt.
+  const workingConnections = new Set<string>();
+  const failingConnections = new Set<string>();
 
   // Alle bronnen parallel ophalen; een fout op één bron laat de overige agenda's intact.
   const perSource = await Promise.all(visibleSources.map(async (source) => {
@@ -73,15 +98,48 @@ export async function listEvents(organizationId: string, requesterUserId: string
       const sourceEvents = source.provider === 'google'
         ? await fetchGoogleEvents(accessToken, source, startIso, endIso)
         : await fetchMicrosoftEvents(accessToken, source, startIso, endIso);
+      workingConnections.add(source.connection_id);
       return sourceEvents.map((event: Record<string, unknown>) => maskPrivateEventForRequester(event, source, requesterUserId));
     } catch (err) {
       console.warn('Event sync failed for source', source.id, err);
+      const status = err instanceof ProviderHttpError ? err.status : 0;
+      if (status === 404 || status === 410) {
+        // Deze agenda bestaat niet meer bij Google of Microsoft (opgezegd,
+        // verwijderd, of de toegang is ingetrokken). Eerst zette dat de hele
+        // koppeling op "error", en daarmee ook het schrijven in de hoofdagenda
+        // op slot. Nu gaat alleen deze agenda uit; bij de volgende keer
+        // "Agenda's ophalen" verdwijnt hij uit de lijst.
+        await supabaseAdmin.from('calendar_sources').update({ sync_enabled: false })
+          .eq('id', source.id).eq('organization_id', organizationId);
+        return [];
+      }
+      if (status === 401 && source.connection_id) {
+        // Het token werd geweigerd terwijl het volgens ons nog geldig was (net
+        // ingetrokken). Laat het de volgende keer vernieuwen: die vernieuwing
+        // ziet of de toegang echt weg is en zet dan "verlopen" met uitleg.
+        await supabaseAdmin.from('calendar_connection_tokens').update({ expires_at: new Date(0).toISOString() })
+          .eq('connection_id', source.connection_id).eq('organization_id', organizationId);
+      }
       if (source.connection_id) {
-        await supabaseAdmin.from('calendar_connections').update({ status: 'error', last_error: err instanceof Error ? err.message : 'Event sync mislukt' }).eq('id', source.connection_id);
+        failingConnections.add(source.connection_id);
+        const detail = err instanceof Error ? err.message : 'ophalen mislukt';
+        await supabaseAdmin.from('calendar_connections')
+          .update({ status: 'error', last_error: `Agenda "${source.name}": ${detail}` })
+          .eq('id', source.connection_id).eq('organization_id', organizationId)
+          .neq('status', 'revoked');
       }
       return [];
     }
   }));
+
+  // Herstel: stond een koppeling op "error" maar werkte nu alles, dan weg met
+  // de oude fout. Eerst bleef die staan tot het token toevallig vernieuwd
+  // werd, en zolang weigerde ResoFly afspraken in die agenda te zetten.
+  await Promise.all([...workingConnections]
+    .filter(connectionId => statusByConnection.get(connectionId) === 'error' && !failingConnections.has(connectionId))
+    .map(connectionId => supabaseAdmin.from('calendar_connections')
+      .update({ status: 'active', last_error: null })
+      .eq('id', connectionId).eq('organization_id', organizationId).eq('status', 'error')));
 
   return dedupeCalendarEvents(perSource.flat()).sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)));
 }
@@ -98,8 +156,16 @@ export function dedupeCalendarEvents(events: Record<string, unknown>[]): Record<
   return deduped;
 }
 
+/**
+ * Wat een collega van een afspraak ziet. Uit een privé-agenda: alleen "Bezet".
+ * Uit een gedeelde agenda: alles, behalve wat de eigenaar bij Google of
+ * Microsoft zelf als privé markeerde. Dat kwam eerst volledig door (titel,
+ * omschrijving, genodigden), terwijl Google en Outlook zulke afspraken voor
+ * wie meekijkt juist afschermen.
+ */
 export function maskPrivateEventForRequester(event: Record<string, unknown>, source: CalendarSourceRow, requesterUserId: string) {
-  if (source.visibility !== 'private' || source.user_id === requesterUserId) return event;
+  if (source.user_id === requesterUserId) return event;
+  if (source.visibility !== 'private' && !event.provider_private) return event;
   return {
     ...event,
     title: 'Bezet',
@@ -112,12 +178,34 @@ export function maskPrivateEventForRequester(event: Record<string, unknown>, sou
   };
 }
 
+/** Haalt pagina's op tot er geen volgende is (met een plafond). */
+async function fetchPaged<T>(first: string, accessToken: string, headers: Record<string, string>, read: (payload: Record<string, unknown>) => { items: T[]; next: string | null }, fallbackError: string): Promise<T[]> {
+  const out: T[] = [];
+  let url: string | null = first;
+  for (let page = 0; url && page < 8; page++) {
+    const res: Response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, ...headers } });
+    const payload = await res.json().catch(() => ({})) as Record<string, unknown>;
+    if (!res.ok) {
+      const message = (payload.error as Record<string, unknown> | undefined)?.message;
+      throw new ProviderHttpError(res.status, typeof message === 'string' && message ? message : fallbackError);
+    }
+    const { items, next } = read(payload);
+    out.push(...items);
+    url = next;
+  }
+  return out;
+}
+
 export async function fetchGoogleEvents(accessToken: string, source: CalendarSourceRow, start: string, end: string) {
   const params = new URLSearchParams({ timeMin: start, timeMax: end, singleEvents: 'true', orderBy: 'startTime', maxResults: '250' });
-  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events?${params}`, { headers: { Authorization: `Bearer ${accessToken}` } });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Google events ophalen mislukt.');
-  return (payload.items ?? []).filter((item: Record<string, unknown>) => item.status !== 'cancelled').map((item: Record<string, unknown>) => {
+  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events?${params}`;
+  // Meer dan 250 afspraken in beeld (een drukke maand, een gedeelde teamagenda)
+  // werd eerst stil afgekapt; nu volgen we nextPageToken.
+  const items = await fetchPaged<Record<string, unknown>>(base, accessToken, {}, (payload) => ({
+    items: (payload.items ?? []) as Record<string, unknown>[],
+    next: payload.nextPageToken ? `${base}&pageToken=${encodeURIComponent(String(payload.nextPageToken))}` : null,
+  }), 'Google events ophalen mislukt.');
+  return items.filter((item: Record<string, unknown>) => item.status !== 'cancelled').map((item: Record<string, unknown>) => {
     const startObj = (item.start ?? {}) as Record<string, string>;
     const endObj = (item.end ?? {}) as Record<string, string>;
     const allDay = Boolean(startObj.date && !startObj.dateTime);
@@ -141,18 +229,22 @@ export async function fetchGoogleEvents(accessToken: string, source: CalendarSou
       html_link: item.htmlLink ? String(item.htmlLink) : null,
       visibility: source.visibility,
       is_private_masked: false,
+      provider_private: item.visibility === 'private' || item.visibility === 'confidential',
     };
   });
 }
 
 export async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceRow, start: string, end: string) {
-  const params = new URLSearchParams({ startDateTime: start, endDateTime: end, '$top': '250', '$orderby': 'start/dateTime', '$select': 'id,subject,bodyPreview,location,start,end,isAllDay,webLink,isOnlineMeeting,onlineMeeting,attendees' });
-  const res = await fetch(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/calendarView?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.timezone="UTC"' },
-  });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Microsoft events ophalen mislukt.');
-  return (payload.value ?? []).map((item: Record<string, unknown>) => {
+  const params = new URLSearchParams({ startDateTime: start, endDateTime: end, '$top': '250', '$orderby': 'start/dateTime', '$select': 'id,subject,bodyPreview,location,start,end,isAllDay,webLink,isOnlineMeeting,onlineMeeting,attendees,sensitivity' });
+  const first = `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/calendarView?${params}`;
+  const items = await fetchPaged<Record<string, unknown>>(first, accessToken, { Prefer: 'outlook.timezone="UTC"' }, (payload) => {
+    // Alleen een vervolglink bij Microsoft Graph zelf volgen, met ons token erbij.
+    const next = typeof payload['@odata.nextLink'] === 'string' && payload['@odata.nextLink'].startsWith('https://graph.microsoft.com/')
+      ? payload['@odata.nextLink']
+      : null;
+    return { items: (payload.value ?? []) as Record<string, unknown>[], next };
+  }, 'Microsoft events ophalen mislukt.');
+  return items.map((item: Record<string, unknown>) => {
     const startObj = (item.start ?? {}) as Record<string, string>;
     const endObj = (item.end ?? {}) as Record<string, string>;
     const location = (item.location ?? {}) as Record<string, string>;
@@ -178,6 +270,7 @@ export async function fetchMicrosoftEvents(accessToken: string, source: Calendar
       html_link: item.webLink ? String(item.webLink) : null,
       visibility: source.visibility,
       is_private_masked: false,
+      provider_private: item.sensitivity === 'private' || item.sensitivity === 'confidential',
     };
   });
 }

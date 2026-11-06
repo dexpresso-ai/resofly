@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -34,6 +34,7 @@ import { rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
 import { gelijk, gelukt, groep, samenvatting, stap, verwacht } from './toets.mjs';
 import { maakWereld, REGELS } from './wereld.mjs';
 import { startUiServer } from './ui-server.mjs';
+import { GOOGLE_ALLES, account, geefCode } from './nep-agenda.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argumenten = process.argv.slice(2);
@@ -41,7 +42,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -135,6 +136,10 @@ for (const sleutel of ['QUOTE_ALLOWED_ORIGINS', 'QUOTE_PUBLIC_ALLOWED_ORIGINS', 
 for (const sleutel of ['APP_PUBLIC_URL', 'QUOTE_PUBLIC_BASE_URL', 'INVOICE_PUBLIC_BASE_URL', 'CONTRACT_PUBLIC_BASE_URL', 'CLIENT_PORTAL_BASE_URL']) {
   process.env[sleutel] = APP;
 }
+// De agendakoppeling: de app mag het terugkeeradres zijn, en (nep-)Google
+// stuurt de browser terug naar de callback op déze server, niet de gateway.
+process.env.CALENDAR_ALLOWED_RETURN_ORIGINS = [process.env.CALENDAR_ALLOWED_RETURN_ORIGINS, APP].filter(Boolean).join(',');
+process.env.CALENDAR_REDIRECT_URL = `${server.url}/functions/v1/calendar-integrations`;
 
 async function startChromium() {
   const pad = process.env.RESOFLY_CHROMIUM;
@@ -212,9 +217,8 @@ function volg(page, naam, context) {
 async function openWerkruimte(gebruiker, naam, organisatieId, { tijdelijk = false } = {}) {
   const sessie = await sessieVan(gebruiker);
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
-  // Het werkblad begint op Offertes, niet op het dashboard: het dashboard haalt
-  // de agenda op via calendar-integrations, en die functie laadt hier niet
-  // (ical.js van esm.sh staat niet in loader.mjs). Dat hoort niet bij deze test.
+  // Het werkblad begint op Offertes: daar beginnen de meeste stromen van deze
+  // test. (calendar-integrations laadt hier sinds 6 november ook; zie loader.mjs.)
   const items = {
     [SESSIESLEUTEL]: JSON.stringify(sessie),
     'brandcore.activeOrganizationId': organisatieId,
@@ -1241,6 +1245,129 @@ async function scenarioRollen() {
   return controle;
 }
 
+// ── Agenda: Google koppelen, opnieuw koppelen, loskoppelen ─────────────────
+
+/** Instellingen → Agenda, via het accountmenu zoals een gebruiker. */
+async function naarAgendaInstellingen(scherm) {
+  const page = scherm.page;
+  await sluitAlles(scherm);
+  await page.locator('.user-trigger').click();
+  await page.locator('.user-menu [role="menuitem"]').filter({ hasText: /^Agenda$/ }).click();
+  await inhoud(page).locator('#calendar-settings h3').filter({ hasText: "Agenda's en koppelingen" }).waitFor({ timeout: 15000 });
+  await rustig(scherm);
+}
+
+/**
+ * Speelt Google: elke stap naar accounts.google.com krijgt meteen "toestaan"
+ * (of `fout`) en gaat terug naar de callback, zoals de echte Google dat na een
+ * klik doet. Geeft de opgevangen toestemmingslinks terug.
+ */
+async function speelGoogle(scherm, sleutel, { fout = null } = {}) {
+  const gezien = [];
+  await scherm.context.unroute('https://accounts.google.com/**').catch(() => undefined);
+  await scherm.context.route('https://accounts.google.com/**', async (route) => {
+    const url = new URL(route.request().url());
+    gezien.push(url);
+    const terug = new URL(url.searchParams.get('redirect_uri'));
+    if (fout) terug.searchParams.set('error', fout);
+    else terug.searchParams.set('code', geefCode(sleutel, GOOGLE_ALLES));
+    terug.searchParams.set('state', url.searchParams.get('state'));
+    await route.fulfill({ status: 302, headers: { location: terug.toString() } });
+  });
+  return gezien;
+}
+
+async function scenarioAgenda() {
+  groep('UI: agenda koppelen');
+  const { w } = t;
+  const googleUi = account('google-ui', {
+    provider: 'google', id: `g-ui-${Date.now()}`, email: `ui.${Date.now()}@gmail.test`, naam: 'UI Medewerker',
+    agendas: [
+      { id: 'ui-primair', summary: 'Werk', primary: true, accessRole: 'owner', backgroundColor: '#9fe1e7', selected: true },
+      { id: 'ui-feestdagen', summary: 'Feestdagen in Nederland', accessRole: 'reader', selected: true },
+    ],
+  });
+
+  await uiStap('een geweigerde koppeling: terug in Instellingen → Agenda, met uitleg', async () => {
+    const lid = await medewerker();
+    await lid.page.goto(`${APP}/?calendar_error=geweigerd&calendar_provider=google`, { waitUntil: 'domcontentloaded' });
+    await inhoud(lid.page).locator('#calendar-settings').waitFor({ timeout: 30000 });
+    await rustig(lid);
+    const fout = inhoud(lid.page).locator('.calendar-settings-page .error');
+    await wachtTot(async () => /geen toestemming gegeven/.test(await fout.innerText().catch(() => '')), { melding: 'geen uitleg bij de geweigerde koppeling' });
+    verwacht(/Google/.test(await fout.innerText()), 'de uitleg noemt Google niet');
+    verwacht(!new URL(lid.page.url()).searchParams.has('calendar_error'), `het adres is niet schoon: ${lid.page.url()}`);
+  }, { foutmelding: /geen toestemming gegeven/ });
+
+  await uiStap('Google koppelen met de knop: terug in de app, en de koppeling staat meteen in beeld', async () => {
+    const lid = await medewerker();
+    await naarAgendaInstellingen(lid);
+    const gezien = await speelGoogle(lid, 'google-ui');
+    const sinds = server.verkeer.length;
+    await inhoud(lid.page).getByRole('button', { name: 'Google koppelen' }).click();
+    const kaart = inhoud(lid.page).locator('.connection-card').filter({ hasText: googleUi.email });
+    await wachtTot(async () => (await kaart.count()) > 0, { timeout: 45000, melding: 'de nieuwe koppeling staat niet in beeld' });
+    await rustig(lid);
+    gelijk(gezien.length, 1, 'naar Google');
+    gelijk(gezien[0].searchParams.get('prompt'), 'select_account consent', 'accountkeuze');
+    verwachtAanroep(sinds, { functie: 'calendar-integrations', actie: 'oauthComplete' }, 'afronden');
+    gelijk(tekst(await kaart.locator('.connection-status').textContent()), 'Actief', 'status');
+    verwacht(await kaart.locator('.source-row').filter({ hasText: 'Werk' }).count() === 1, 'de hoofdagenda staat er niet bij');
+    const succes = inhoud(lid.page).locator('.calendar-settings-page .success');
+    verwacht(/staat nu in je werkruimte/.test(await succes.innerText().catch(() => '')), 'geen bevestiging onder de instellingen');
+    verwacht(!new URL(lid.page.url()).searchParams.has('calendar_code'), `de code staat nog in het adres: ${lid.page.url()}`);
+    // De hoofdagenda is meteen schrijfbaar en getoond; feestdagen getoond maar niet schrijfbaar.
+    const werk = kaart.locator('.source-row').filter({ hasText: 'Werk' });
+    verwacht(await werk.getByLabel('Schrijven').isChecked(), 'hoofdagenda niet schrijfbaar');
+    verwacht(!(await kaart.locator('.source-row').filter({ hasText: 'Feestdagen' }).getByLabel('Schrijven').isChecked()), 'feestdagen schrijfbaar');
+  });
+
+  await uiStap('verlopen koppeling: uitleg en "Opnieuw koppelen" met het bekende account', async () => {
+    const lid = await medewerker();
+    sql(`update public.calendar_connections set status = 'expired', last_error = 'Google geeft ResoFly geen toegang meer tot deze agenda (ingetrokken of verlopen). Koppel het account opnieuw.'
+          where organization_id = ${q(w.orgId)} and provider_account_email = ${q(googleUi.email)}`);
+    await inhoud(lid.page).getByRole('button', { name: 'Ververs' }).first().click();
+    await rustig(lid);
+    const kaart = inhoud(lid.page).locator('.connection-card').filter({ hasText: googleUi.email });
+    await wachtTot(async () => tekst(await kaart.locator('.connection-status').textContent()) === 'Verlopen', { melding: 'status niet "Verlopen"' });
+    verwacht(/Koppel het account opnieuw/.test(await kaart.locator('.connection-hint').innerText()), 'geen uitleg onder de koppeling');
+    const gezien = await speelGoogle(lid, 'google-ui', { fout: 'access_denied' });
+    await kaart.getByRole('button', { name: 'Opnieuw koppelen' }).click();
+    const fout = inhoud(lid.page).locator('.calendar-settings-page .error');
+    await wachtTot(async () => /geen toestemming gegeven/.test(await fout.innerText().catch(() => '')), { timeout: 45000, melding: 'geen uitleg na annuleren' });
+    gelijk(gezien.length, 1, 'naar Google');
+    gelijk([gezien[0].searchParams.get('login_hint'), gezien[0].searchParams.get('prompt')], [googleUi.email, 'consent'], 'het bekende account');
+    // Annuleren verandert niets: de koppeling staat er nog, met dezelfde status.
+    gelijk(sqlRij(`select status from public.calendar_connections where organization_id = ${q(w.orgId)} and provider_account_email = ${q(googleUi.email)}`).status, 'expired', 'status na annuleren');
+  }, { foutmelding: /geen toestemming gegeven/ });
+
+  await uiStap('opnieuw koppelen gelukt: weer actief, met dezelfde agenda\'s', async () => {
+    const lid = await medewerker();
+    const kaart = inhoud(lid.page).locator('.connection-card').filter({ hasText: googleUi.email });
+    const voor = sqlRijen(`select s.id from public.calendar_sources s join public.calendar_connections c on c.id = s.connection_id
+                            where c.organization_id = ${q(w.orgId)} and c.provider_account_email = ${q(googleUi.email)} order by s.id`).map((r) => r.id);
+    await speelGoogle(lid, 'google-ui');
+    await kaart.getByRole('button', { name: 'Opnieuw koppelen' }).click();
+    await wachtTot(async () => tekst(await inhoud(lid.page).locator('.connection-card').filter({ hasText: googleUi.email }).locator('.connection-status').textContent().catch(() => '')) === 'Actief', { timeout: 45000, melding: 'niet weer actief' });
+    const na = sqlRijen(`select s.id from public.calendar_sources s join public.calendar_connections c on c.id = s.connection_id
+                          where c.organization_id = ${q(w.orgId)} and c.provider_account_email = ${q(googleUi.email)} order by s.id`).map((r) => r.id);
+    gelijk(na, voor, 'dezelfde agenda\'s');
+  });
+
+  await uiStap('loskoppelen vraagt eerst, en zegt wat er gebeurt (uren blijven)', async () => {
+    const lid = await medewerker();
+    const kaart = inhoud(lid.page).locator('.connection-card').filter({ hasText: googleUi.email });
+    lid.plan.push({ weiger: true });
+    const dialogen = lid.dialogen.length;
+    await kaart.getByRole('button', { name: 'Loskoppelen' }).click();
+    await wachtTot(async () => lid.dialogen.length > dialogen, { melding: 'geen bevestiging gevraagd' });
+    const vraag = lid.dialogen.at(-1).tekst;
+    verwacht(/Geregistreerde uren blijven staan/.test(vraag) && /Opnieuw koppelen/.test(vraag), `bevestiging zonder uitleg: ${vraag}`);
+    verwacht(vraag.includes(googleUi.email), 'het account staat niet in de vraag');
+    gelijk(sqlRij(`select count(*)::int as n from public.calendar_connections where organization_id = ${q(w.orgId)} and provider_account_email = ${q(googleUi.email)}`).n, 1, 'na "annuleren" toch losgekoppeld');
+  });
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -1256,7 +1383,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

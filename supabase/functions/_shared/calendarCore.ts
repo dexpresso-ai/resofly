@@ -14,6 +14,19 @@
 // ============================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import {
+  base64UrlDecode,
+  base64UrlEncode,
+  classifyTokenFailure,
+  googleScopes,
+  microsoftScopes,
+  tokenFailureMessage,
+  type TokenFailure,
+} from './calendarOAuth.ts';
+
+// De scopes en de base64url-helpers staan in calendarOAuth.ts (puur, los te
+// testen); hier doorgegeven zodat bestaande imports uit calendarCore werken.
+export { base64UrlDecode, base64UrlEncode, googleScopes, microsoftScopes };
 
 export type Provider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarVisibility = 'private' | 'organization';
@@ -136,24 +149,6 @@ export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KE
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-// ── OAuth-scopes ────────────────────────────────────────────────────────────
-
-export function googleScopes(): string[] {
-  return [
-    'openid', 'email', 'profile',
-    'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
-    'https://www.googleapis.com/auth/calendar.events',
-    // Contacten opzoeken bij het uitnodigen van genodigden.
-    'https://www.googleapis.com/auth/contacts.readonly',
-    'https://www.googleapis.com/auth/contacts.other.readonly',
-  ];
-}
-
-export function microsoftScopes(): string[] {
-  // People.Read = relevantie-gerangschikt adresboek (contacten + directory), Contacts.Read = opgeslagen contacten.
-  return ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Calendars.ReadWrite', 'Contacts.Read', 'People.Read'];
-}
-
 export function parseScope(scope: unknown, fallback: string[]): string[] {
   if (typeof scope !== 'string' || !scope.trim()) return fallback;
   return scope.split(/\s+/).filter(Boolean);
@@ -173,6 +168,30 @@ export async function getToken(organizationId: string, connectionId: string): Pr
   return data as TokenRow;
 }
 
+/**
+ * Een vernieuwing van het toegangstoken die niet lukte. `failure` zegt of de
+ * koppeling al op "verlopen" of "fout" is gezet (ingetrokken, instelling) of
+ * dat het een storing was waarbij de koppeling met rust is gelaten.
+ */
+export class CalendarTokenError extends Error {
+  failure: TokenFailure;
+  constructor(message: string, failure: TokenFailure) {
+    super(message);
+    this.name = 'CalendarTokenError';
+    this.failure = failure;
+  }
+}
+
+/** Een antwoord van Google of Microsoft dat geen 2xx was, mét de HTTP-status. */
+export class ProviderHttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ProviderHttpError';
+    this.status = status;
+  }
+}
+
 export async function refreshAccessToken(token: TokenRow): Promise<string> {
   const expires = token.expires_at ? new Date(token.expires_at).getTime() : 0;
   if (expires && expires - Date.now() > 120_000) return await decrypt(token.access_token_encrypted);
@@ -190,15 +209,33 @@ export async function refreshAccessToken(token: TokenRow): Promise<string> {
   });
   if (token.provider === 'microsoft') params.set('scope', microsoftScopes().join(' '));
 
-  const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    await supabaseAdmin.from('calendar_connections').update({ status: 'expired', last_error: payload.error_description || payload.error || 'Refresh token verlopen' }).eq('id', token.connection_id);
-    throw new Error(payload.error_description || payload.error || 'Agenda-token vernieuwen mislukt.');
+  let status = 0;
+  let payload: Record<string, unknown> = {};
+  try {
+    const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params });
+    status = res.status;
+    payload = await res.json().catch(() => ({}));
+  } catch (err) {
+    console.warn('calendar token refresh: netwerkfout', token.provider, err);
+  }
+  if (status < 200 || status >= 300) {
+    // Eerst kwam hier elke mislukking als "expired" in de koppeling, met de
+    // kale tekst van de provider. Bij Google is dat bij een ingetrokken token
+    // letterlijk "Bad Request": zo stond de koppeling op staging wekenlang op
+    // "error · Bad Request", zonder uitleg en zonder knop om opnieuw te koppelen.
+    const failure = classifyTokenFailure(status, payload);
+    const message = tokenFailureMessage(token.provider, failure, payload.error ? String(payload.error) : undefined);
+    console.warn('calendar token refresh mislukt', token.provider, status, payload.error, payload.error_description);
+    if (failure !== 'tijdelijk') {
+      await supabaseAdmin.from('calendar_connections')
+        .update({ status: failure === 'ingetrokken' ? 'expired' : 'error', last_error: message })
+        .eq('id', token.connection_id).eq('organization_id', token.organization_id);
+    }
+    throw new CalendarTokenError(message, failure);
   }
 
   const accessToken = String(payload.access_token || '');
-  if (!accessToken) throw new Error('Provider gaf geen access token terug.');
+  if (!accessToken) throw new CalendarTokenError(tokenFailureMessage(token.provider, 'tijdelijk'), 'tijdelijk');
   const nextRefreshToken = payload.refresh_token ? String(payload.refresh_token) : refreshToken;
   await supabaseAdmin.from('calendar_connection_tokens').update({
     access_token_encrypted: await encrypt(accessToken),
@@ -206,8 +243,9 @@ export async function refreshAccessToken(token: TokenRow): Promise<string> {
     token_type: payload.token_type ? String(payload.token_type) : token.token_type,
     scopes: parseScope(payload.scope, token.scopes),
     expires_at: payload.expires_in ? new Date(Date.now() + Number(payload.expires_in) * 1000).toISOString() : token.expires_at,
-  }).eq('connection_id', token.connection_id);
-  await supabaseAdmin.from('calendar_connections').update({ status: 'active', last_error: null }).eq('id', token.connection_id);
+  }).eq('connection_id', token.connection_id).eq('organization_id', token.organization_id);
+  await supabaseAdmin.from('calendar_connections').update({ status: 'active', last_error: null })
+    .eq('id', token.connection_id).eq('organization_id', token.organization_id);
   return accessToken;
 }
 
@@ -399,16 +437,4 @@ export async function decrypt(value: string): Promise<string> {
   const data = base64UrlDecode(dataRaw) as unknown as BufferSource;
   const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
   return new TextDecoder().decode(decrypted);
-}
-
-export function base64UrlEncode(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-export function base64UrlDecode(value: string): Uint8Array {
-  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
-  const binary = atob(padded);
-  return Uint8Array.from(binary, c => c.charCodeAt(0));
 }
