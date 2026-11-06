@@ -6,6 +6,8 @@ import { parseMt940 } from './bankImport/mt940.ts';
 import { parseCsv } from './bankImport/csv.ts';
 import { buildXaf } from './xaf.ts';
 import { formatDocUnitPrice } from './documentLayout.ts';
+import { amsterdamTodayIso } from './dates.ts';
+import { invoiceContentLocked, paymentBlocksCredit, paymentsBlockCredit, quoteDecision } from './financeRules.ts';
 
 /**
  * Tweede controle op Financiën (5 november 2026): de rekenregels die in de app
@@ -109,3 +111,73 @@ test('eenheidsprijs: geen afronding op centen die het regelbedrag tegenspreekt',
   assert.equal(formatDocUnitPrice(12.5), '€ 12,50');
   assert.equal(formatDocUnitPrice(85.5), '€ 85,50');
 });
+
+test('vandaag in Nederland, ook net na middernacht als het in UTC nog gisteren is', () => {
+  // Wintertijd (UTC+1) en zomertijd (UTC+2): de UTC-datum loopt dan een dag achter.
+  assert.equal(amsterdamTodayIso(new Date('2026-11-05T23:30:00Z')), '2026-11-06');
+  assert.equal(amsterdamTodayIso(new Date('2026-11-05T22:59:00Z')), '2026-11-05');
+  assert.equal(amsterdamTodayIso(new Date('2026-07-01T22:30:00Z')), '2026-07-02');
+  assert.equal(amsterdamTodayIso(new Date('2026-12-31T23:00:00Z')), '2027-01-01');
+});
+
+test('offerte: akkoord geven kan alleen als hij verstuurd en nog geldig is', () => {
+  // Eerder toonden de publieke pagina en het portaal ook bij een ingetrokken of
+  // verlopen offerte het akkoordformulier; de server weigerde daarna.
+  const today = '2026-11-06';
+  assert.equal(quoteDecision({ status: 'sent', valid_until: '2026-11-06' }, today), 'open', 'geldig tot en met vandaag');
+  assert.equal(quoteDecision({ status: 'sent', valid_until: null }, today), 'open', 'zonder einddatum blijft hij geldig');
+  assert.equal(quoteDecision({ status: 'sent', valid_until: '2026-11-05' }, today), 'expired', 'de status springt niet vanzelf op verlopen');
+  assert.equal(quoteDecision({ status: 'expired', valid_until: '2026-12-31' }, today), 'expired');
+  assert.equal(quoteDecision({ status: 'cancelled', valid_until: '2026-12-31' }, today), 'withdrawn');
+  assert.equal(quoteDecision({ status: 'accepted', valid_until: '2026-01-01' }, today), 'accepted', 'een beslissing blijft staan na de datum');
+  assert.equal(quoteDecision({ status: 'rejected', valid_until: '2026-01-01' }, today), 'rejected');
+  assert.equal(quoteDecision({ status: 'draft', valid_until: null }, today), 'unavailable');
+});
+
+test('crediteren: alleen een lopende of afgeronde betaling houdt het tegen', () => {
+  // Eerder hield elke 'creating' of 'open' het tegen, ook een allang verlopen
+  // checkout. Een herinnering zonder Mollie liet zo een 'creating' achter, en
+  // dan was de factuur nooit meer te crediteren.
+  const now = Date.parse('2026-11-06T12:00:00Z');
+  const past = '2026-11-06T11:00:00Z';
+  const future = '2026-11-06T12:30:00Z';
+  assert.equal(paymentBlocksCredit({ status: 'creating', checkout_expires_at: past }, now), false);
+  assert.equal(paymentBlocksCredit({ status: 'open', checkout_expires_at: past }, now), false);
+  assert.equal(paymentBlocksCredit({ status: 'open', checkout_expires_at: future }, now), true);
+  assert.equal(paymentBlocksCredit({ status: 'creating', checkout_expires_at: null }, now), true, 'zonder vervaltijd kan hij nog lopen');
+  for (const status of ['pending', 'authorized', 'paid']) {
+    assert.equal(paymentBlocksCredit({ status, checkout_expires_at: past }, now), true, status);
+  }
+  for (const status of ['failed', 'expired', 'canceled']) {
+    assert.equal(paymentBlocksCredit({ status, checkout_expires_at: null }, now), false, status);
+  }
+  // Een oudere link die nog loopt, telt ook als er een nieuwere (verlopen) bovenop ligt.
+  assert.equal(paymentsBlockCredit([
+    { status: 'expired', checkout_expires_at: past },
+    { status: 'open', checkout_expires_at: future },
+  ], now), true);
+  assert.equal(paymentsBlockCredit([
+    { status: 'creating', checkout_expires_at: past },
+    { status: 'failed', checkout_expires_at: null },
+  ], now), false);
+});
+
+test('bewerken: een concept met alleen een ongebruikte betaallink blijft bewerkbaar (zoals de database)', () => {
+  // Versturen mét betaallink maakt de link vóór de mail. Mislukte de mail, dan
+  // zat het concept eerder voorgoed op slot (locked_reason payment_checkout_created).
+  const concept = { status: 'draft', locked_at: '2026-11-06T10:00:00Z', locked_reason: 'payment_checkout_created' };
+  assert.equal(invoiceContentLocked(concept, [{ status: 'open' }]), false);
+  assert.equal(invoiceContentLocked(concept, [{ status: 'creating' }, { status: 'expired' }]), false);
+  assert.equal(invoiceContentLocked({ status: 'draft', locked_at: null }, []), false);
+  // Een betaling die loopt of rond is, vergrendelt wél, ook bij een concept.
+  for (const status of ['pending', 'authorized', 'paid', 'refunded', 'charged_back']) {
+    assert.equal(invoiceContentLocked(concept, [{ status }]), true, status);
+  }
+  // Een concept dat om een andere reden op slot zit, blijft op slot.
+  assert.equal(invoiceContentLocked({ status: 'draft', locked_at: '2026-11-06T10:00:00Z', locked_reason: 'sent' }, []), true);
+  // Verstuurd of afgesloten: altijd op slot.
+  for (const status of ['sent', 'overdue', 'paid', 'cancelled', 'void', 'written_off', 'refunded']) {
+    assert.equal(invoiceContentLocked({ status, locked_at: null }, []), true, status);
+  }
+});
+

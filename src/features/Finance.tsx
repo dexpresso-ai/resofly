@@ -13,6 +13,8 @@ import { safeCheckoutUrl } from '../lib/safeUrl';
 import { clientEInvoiceChannel, invoiceRecipientFor, latestEInvoiceDelivery, mollieCollecting, mollieNeedsSync, molliePartialNote, mollieStatusLabel, peppolStatusLabel } from '../lib/eInvoicing';
 import { loadInvoicePdfSnapshot, loadMollieInvoicePdf } from '../lib/repository';
 import { parseDutchAmount, parseDutchAmountCents } from '../lib/money';
+import { invoiceContentLocked, paymentsBlockCredit } from '../lib/financeRules';
+import { amsterdamTodayIso } from '../lib/dates';
 
 export type RefundInput = { amountCents: number; reason: string; createCreditNote: boolean; idempotencyKey: string; kind: 'manual' | 'mollie' };
 
@@ -193,23 +195,31 @@ type FinanceKind = 'quote' | 'invoice';
 type FinanceQuickKey = 'open' | 'overdue' | 'thisYear' | 'noProject';
 
 /** Nog niet afgerond: de deur uit, maar nog geen beslissing of betaling.
- *  Concepten tellen niet mee — die zijn nog van jou. */
-function isFinanceOutstanding(doc: Quote | Invoice): boolean {
+ *  Concepten tellen niet mee — die zijn nog van jou. Voor een offerte is dat
+ *  alleen 'sent': verstuurd, en nog geen akkoord of afwijzing. Eerder telde
+ *  alles behalve concept en ingetrokken mee, dus ook geaccepteerde en
+ *  afgewezen offertes, en heette een geaccepteerde offerte zelf "Openstaand". */
+function isFinanceOutstanding(doc: Quote | Invoice, kind: FinanceKind): boolean {
+  if (kind === 'quote') return doc.status === 'sent';
   return !['paid', 'cancelled', 'draft', 'void', 'written_off', 'refunded'].includes(doc.status);
 }
 
 /** Over de datum = nog openstaand én de uiterste datum is voorbij. Op de status
  *  alleen kun je niet afgaan: die springt pas op 'overdue'/'expired' als er iets
  *  langsgekomen is dat hem bijwerkt. Voor een factuur is dat de vervaldatum,
- *  voor een offerte de geldigheidsdatum. */
-function isFinanceOverdue(doc: Quote | Invoice): boolean {
-  if (!isFinanceOutstanding(doc)) return false;
+ *  voor een offerte de geldigheidsdatum. Een offerte op 'expired' kreeg nooit
+ *  een beslissing en hoort hier dus ook bij. */
+function isFinanceOverdue(doc: Quote | Invoice, kind: FinanceKind): boolean {
   if (doc.status === 'overdue' || doc.status === 'expired') return true;
-  const deadline = 'due_date' in doc ? doc.due_date : (doc as Quote).valid_until;
-  return Boolean(deadline) && (deadline as string) < new Date().toISOString().slice(0, 10);
+  if (!isFinanceOutstanding(doc, kind)) return false;
+  const deadline = kind === 'invoice' ? (doc as Invoice).due_date : (doc as Quote).valid_until;
+  // De Nederlandse kalenderdag, zoals de database en de herinneringen. Met de
+  // UTC-datum stond een factuur tussen middernacht en 01:00/02:00 hier nog niet
+  // "over de datum", terwijl de server hem al als te laat behandelde.
+  return Boolean(deadline) && (deadline as string).slice(0, 10) < amsterdamTodayIso();
 }
 
-const FINANCE_QUICK_FILTERS: Array<{ key: FinanceQuickKey; label: string; title: string; match: (doc: Quote | Invoice) => boolean }> = [
+const FINANCE_QUICK_FILTERS: Array<{ key: FinanceQuickKey; label: string; title: string; match: (doc: Quote | Invoice, kind: FinanceKind) => boolean }> = [
   { key: 'open', label: 'Openstaand', title: 'De deur uit, maar nog geen beslissing of betaling', match: isFinanceOutstanding },
   { key: 'overdue', label: 'Over de datum', title: 'Openstaand terwijl de uiterste datum al voorbij is', match: isFinanceOverdue },
   { key: 'thisYear', label: 'Dit jaar', title: 'Alleen stukken met een datum in het lopende kalenderjaar', match: doc => (doc.date ?? '').slice(0, 4) === String(new Date().getFullYear()) },
@@ -282,9 +292,9 @@ function FinanceSearchPanel<T extends Quote | Invoice>({
       key: def.key,
       label: def.label,
       title: def.title,
-      count: docs.filter(doc => def.match(doc)).length,
+      count: docs.filter(doc => def.match(doc, kind)).length,
     })),
-    [docs],
+    [docs, kind],
   );
 
   const updateFilters = (patch: Partial<FinanceSearchFilters>) => onChange({ ...filters, ...patch });
@@ -339,7 +349,7 @@ function filterFinanceDocs<T extends Quote | Invoice>(kind: FinanceKind, docs: T
   const quick = FINANCE_QUICK_FILTERS.filter(def => filters.quick.includes(def.key));
 
   return docs.filter(doc => {
-    for (const def of quick) if (!def.match(doc)) return false;
+    for (const def of quick) if (!def.match(doc, kind)) return false;
     if (filters.clientId && doc.client_id !== filters.clientId) return false;
     if (filters.projectId && doc.project_id !== filters.projectId) return false;
     if (filters.status && getFinanceStatusKey(kind, doc) !== filters.status) return false;
@@ -926,7 +936,7 @@ function InvoiceDetailModal({
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} eInvoiceDelivery={eInvoiceDelivery} upcomingEInvoiceTo={eInvoiceClient && !invoiceHasStoredPdf(invoice) ? invoiceRecipientFor(client) : null} upcomingVia={eInvoiceChannel} />
         {mollieDelivery && <MollieEInvoicePanel invoice={invoice} delivery={mollieDelivery} partialNote={molliePartialNote(events)} onSync={onSyncMollie} onDownloadPdf={onDownloadMolliePdf} />}
-        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} onCredit={onCredit} />
+        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} payments={payments} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} onCredit={onCredit} />
         {showRefund && onRefund && <RefundModal invoice={invoice} mollieRefundable={mollieRefundable} inFlightCents={inFlightCents} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
       </section>
 
@@ -1104,13 +1114,13 @@ function InvoiceStatusStrip({ invoice, delivery, payment, eInvoiceDelivery = nul
   </div>;
 }
 
-function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, eInvoice = false, mollieIssued = false, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger, onCredit }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; eInvoice?: boolean | 'mollie'; mollieIssued?: boolean; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void; onCredit?: (invoice: Invoice) => void }) {
+function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments, eInvoice = false, mollieIssued = false, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger, onCredit }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; /** Alle betalingen van deze factuur, nieuwste eerst. */ payments: InvoicePaymentRecord[]; eInvoice?: boolean | 'mollie'; mollieIssued?: boolean; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void; onCredit?: (invoice: Invoice) => void }) {
   const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
-  // Alleen een lopende of afgeronde betaling vergrendelt, net als in de database
-  // (enforce_invoice_immutability). Een verlopen of mislukte betaallink niet:
-  // eerder bleef een concept met een verlopen link voorgoed onbewerkbaar.
-  const paymentBlocks = Boolean(payment && INVOICE_ACTIVE_PAYMENT_STATUSES.includes(payment.status));
-  const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off','refunded'].includes(invoice.status) || paymentBlocks;
+  // Precies de regel van de database (enforce_invoice_immutability), over alle
+  // betalingen van de factuur: een verlopen of mislukte link vergrendelt niet,
+  // en een concept met alleen een ongebruikte betaallink (versturen mislukte)
+  // blijft bewerkbaar. Eerder bleef zo'n concept voorgoed onbewerkbaar.
+  const isLocked = invoiceContentLocked(invoice, payments);
   // Via Mollie uitgegeven: opnieuw versturen zou een tweede factuur bij Mollie worden.
   const canSend = canWrite && !invoiceClosed && !mollieIssued;
   const canDownloadStored = Boolean(onDownloadPdf) && invoiceHasStoredPdf(invoice);
@@ -1132,9 +1142,12 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, eInvoice
   // Een lopende Mollie-betaling houdt crediteren tegen (zoals op de server); een
   // verlopen of mislukte link niet. Eerder verdween de knop na de eerste
   // betaallink voorgoed (de link verloopt na 30 minuten), terwijl de server
-  // het gewoon toestond en er geen andere weg was.
+  // het gewoon toestond en er geen andere weg was. Daarna keek hij nog alleen
+  // naar de status: een 'creating' of 'open' waarvan de checkout allang
+  // verlopen was, hield hem tegen. Nu telt de vervaltijd mee, en kijken we naar
+  // álle betalingen: een oudere link die nog loopt, houdt het ook tegen.
   const canCredit = Boolean(canWrite && onCredit) && ['sent', 'overdue'].includes(invoice.status)
-    && !(payment && ['creating', 'open', 'pending', 'authorized', 'paid'].includes(payment.status));
+    && !paymentsBlockCredit(payments);
   // The Mollie payment link is created automatically while sending (when the
   // organisation has Mollie connected), so there is no separate "create link"
   // button — sending is the single action that produces invoice + betaallink.
@@ -1174,8 +1187,6 @@ function invoiceIsPastDue(invoice: Invoice): boolean {
   return due < today;
 }
 
-/** Betaalstatussen die een factuur vergrendelen (spiegel van enforce_invoice_immutability). */
-const INVOICE_ACTIVE_PAYMENT_STATUSES = ['creating', 'open', 'pending', 'authorized', 'paid', 'refunded', 'charged_back'];
 
 /**
  * True when an invoice has (or should have) a stored PDF snapshot because it was
@@ -1358,11 +1369,17 @@ function quoteStatusLabel(quote: Quote): string {
   if (quote.status === 'draft') return 'Concept';
   if (quote.status === 'pending_internal_approval') return 'Wacht op interne goedkeuring';
   if (quote.status === 'internally_approved') return 'Intern goedgekeurd';
+  // De knop heet "Intrekken" en de klant ziet "Ingetrokken"; hier stond
+  // "Geannuleerd", het woord van een gecrediteerde factuur.
+  if (quote.status === 'cancelled') return 'Ingetrokken';
   return statusLabel(quote.status);
 }
 
 function statusLabel(status: FinanceStatus | string): string {
-  const labels: Record<string, string> = { draft: 'Concept', pending_internal_approval: 'Wacht op interne goedkeuring', internally_approved: 'Intern goedgekeurd', sent: 'Verzonden', accepted: 'Openstaand', paid: 'Betaald', rejected: 'Afgewezen', expired: 'Verlopen', overdue: 'Te laat', cancelled: 'Geannuleerd', void: 'Ongeldig gemaakt', written_off: 'Afgeboekt', refunded: 'Terugbetaald' };
+  // 'accepted' komt alleen bij offertes voor (een factuur kent die status niet).
+  // Hier stond "Openstaand": een offerte waar de klant ja op zei, heette zo
+  // hetzelfde als het snelfilter voor offertes waar nog geen antwoord op is.
+  const labels: Record<string, string> = { draft: 'Concept', pending_internal_approval: 'Wacht op interne goedkeuring', internally_approved: 'Intern goedgekeurd', sent: 'Verzonden', accepted: 'Geaccepteerd', paid: 'Betaald', rejected: 'Afgewezen', expired: 'Verlopen', overdue: 'Te laat', cancelled: 'Geannuleerd', void: 'Ongeldig gemaakt', written_off: 'Afgeboekt', refunded: 'Terugbetaald' };
   return labels[status] || status;
 }
 

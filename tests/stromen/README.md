@@ -27,7 +27,9 @@ npm run test:stromen
 npm run test:stromen -- facturen
 ```
 
-Scenario's: `rook`, `offertes`, `facturen`, `herinneringen`, `contracten`, `beveiliging`.
+Scenario's: `rook`, `offertes`, `facturen`, `herinneringen`, `contracten`, `beveiliging`,
+`automatisering`. De uitkomst van 6 november staat in
+`docs/rapporten/STROMENTEST_CONTRACT_OFFERTE_FACTUUR_2026-11-06.md`.
 Elk scenario maakt zijn eigen organisaties (`wereld.mjs`), dus ze raken elkaar niet en de
 database hoeft niet leeg.
 

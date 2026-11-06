@@ -76,6 +76,7 @@ import { dayGreeting, firstName, portalDateLabel, portalSummary } from '../../li
 import { isPortalLoginKey, portalKeyFromPathname } from '../../lib/portalLoginKey';
 import { PORTAL_PREVIEW_READY, defaultPortalPreview, demoPortalBackend, readPortalPreviewMessage, type PortalPreviewState } from '../../lib/portalPreview';
 import { formatDocUnitPrice } from '../../lib/documentLayout';
+import { quoteDecision } from '../../lib/financeRules';
 
 type PortalTab = 'overview' | 'messages' | 'tickets' | 'invoices' | 'quotes' | 'contracts' | 'files' | 'projects' | 'galleries' | 'settings';
 
@@ -1085,15 +1086,25 @@ function InvoiceRow({ invoice, onOpen }: { invoice: PortalInvoice; onOpen: () =>
 
 function QuoteRow({ quote, onOpen }: { quote: PortalQuote; onOpen: () => void }) {
   const amount = total(quote.lines).total;
+  const status = portalQuoteStatus(quote);
   return <button type="button" className="portal-row portal-row-clickable" onClick={onOpen}>
     <div className="portal-row-main">
       <span className="portal-row-number">{quote.number}</span>
       <span className="portal-muted">{dateNL(quote.date)} · Geldig tot {dateNL(quote.valid_until)}</span>
     </div>
     <span className="portal-row-amount">{euro(amount)}</span>
-    <span className={`portal-status ${quote.status}`}>{quoteStatusLabels[quote.status] ?? quote.status}</span>
+    <span className={`portal-status ${status}`}>{quoteStatusLabels[status] ?? status}</span>
     <span className="portal-row-chevron" aria-hidden="true">›</span>
   </button>;
+}
+
+/**
+ * De status zoals de klant hem hoort te zien. Een verstuurde offerte springt
+ * niet vanzelf op 'expired' als "geldig tot" voorbij is; hier heette hij dan
+ * nog "Verzonden", met de knoppen Akkoord en Weigeren erbij.
+ */
+function portalQuoteStatus(quote: PortalQuote): string {
+  return quoteDecision(quote) === 'expired' ? 'expired' : quote.status;
 }
 
 // ── Offerte- & factuurdetail met acties (goedkeuren / betalen) ────────
@@ -1118,7 +1129,12 @@ function PortalQuoteDetail({ quote: initialQuote, onBack, onChanged }: { quote: 
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<null | 'accept' | 'reject'>(null);
   const [error, setError] = useState<string | null>(null);
-  const decided = quote.status === 'accepted' || quote.status === 'rejected';
+  // Knoppen alleen bij een verstuurde offerte die nog geldig is. Eerder kreeg
+  // een offerte op 'sent' ze ook als "geldig tot" al voorbij was; de server
+  // weigerde het akkoord daarna.
+  const decision = quoteDecision(quote);
+  const decided = decision === 'accepted' || decision === 'rejected';
+  const status = portalQuoteStatus(quote);
 
   async function decide(kind: 'accept' | 'reject') {
     setBusy(kind); setError(null);
@@ -1137,7 +1153,7 @@ function PortalQuoteDetail({ quote: initialQuote, onBack, onChanged }: { quote: 
     <div className="portal-detail-head"><button type="button" className="portal-back" onClick={onBack}>← Terug</button></div>
     <div className="portal-detail-title">
       <h2>Offerte {quote.number}</h2>
-      <span className={`portal-status ${quote.status}`}>{quoteStatusLabels[quote.status] ?? quote.status}</span>
+      <span className={`portal-status ${status}`}>{quoteStatusLabels[status] ?? status}</span>
     </div>
     <p className="portal-muted">{dateNL(quote.date)} · Geldig tot {dateNL(quote.valid_until)}</p>
     {quote.notes && <p className="portal-detail-desc">{quote.notes}</p>}
@@ -1151,7 +1167,7 @@ function PortalQuoteDetail({ quote: initialQuote, onBack, onChanged }: { quote: 
           {quote.client_decision_at && <span className="portal-muted"> · {dateNL(quote.client_decision_at)}</span>}
           {quote.client_decision_note && <p>{quote.client_decision_note}</p>}
         </div>
-      ) : quote.status === 'sent' ? (
+      ) : decision === 'open' ? (
         <>
           <label className="portal-field"><span>Opmerking (optioneel)</span>
             <Textarea value={note} onChange={e => setNote(e.target.value)} rows={2} maxLength={2000} placeholder="Eventuele opmerking bij je beslissing…" disabled={busy !== null} />
@@ -1162,6 +1178,16 @@ function PortalQuoteDetail({ quote: initialQuote, onBack, onChanged }: { quote: 
             <Button variant="primary" onClick={() => decide('accept')} disabled={busy !== null}>{busy === 'accept' ? 'Bezig…' : 'Akkoord geven'}</Button>
           </div>
         </>
+      ) : decision === 'expired' ? (
+        <div className="portal-decision-done">
+          <strong>Deze offerte is verlopen</strong>
+          <p>{quote.valid_until ? `Hij was geldig tot ${dateNL(quote.valid_until)}. ` : ''}Akkoord geven kan niet meer. Wil je toch verder? Neem dan gerust contact op.</p>
+        </div>
+      ) : decision === 'withdrawn' ? (
+        <div className="portal-decision-done">
+          <strong>Deze offerte is ingetrokken</strong>
+          <p>Akkoord geven kan niet meer. Heb je er een vraag over? Neem dan gerust contact op.</p>
+        </div>
       ) : (
         <p className="portal-muted">Deze offerte kan niet (meer) in het portaal worden beoordeeld.</p>
       )}
@@ -2376,7 +2402,8 @@ const quoteStatusLabels: Record<string, string> = {
   accepted: 'Geaccepteerd',
   rejected: 'Afgewezen',
   expired: 'Verlopen',
-  cancelled: 'Geannuleerd',
+  // Zo heet het ook op de publieke offertepagina en bij de afzender ("Intrekken").
+  cancelled: 'Ingetrokken',
 };
 
 const contractStatusLabels: Record<string, string> = {

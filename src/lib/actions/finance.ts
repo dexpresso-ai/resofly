@@ -2,7 +2,7 @@ import {
   approveQuoteInternal, bookAllUnbookedSalesInvoices, bookBankTransaction, cancelInvoiceDunningNotice,
   createInvoiceRefund, postCreditNoteToLedger, postSalesInvoiceToLedger, proposeInvoiceDunningNotice,
   rejectQuoteInternal, resetEmailTemplate, saveInvoiceDunningSettings, saveInvoiceReminderSettings,
-  sendCreditNoteEmail, sendInvoiceDunningNotice, sendInvoiceReminderEmail, setInvoiceRemindersPaused,
+  reminderPaymentLinkWanted, sendCreditNoteEmail, sendInvoiceDunningNotice, sendInvoiceReminderEmail, setInvoiceRemindersPaused,
   setInvoiceStatusFromCard, submitQuoteForInternalApproval, updateRow, upsertCompanySettings, upsertEmailTemplate,
 } from '../repository';
 import { euro } from '../format';
@@ -103,13 +103,18 @@ export const FINANCE_EXECUTORS: Record<string, ActionExecutor> = {
 
   'invoice.send_reminder': async (payload, ctx) => {
     const level = int(payload, 'level') as 1 | 2 | 3;
+    // Dezelfde keuze als de knop in het scherm: alleen een betaallink met een
+    // gekoppelde Mollie. Zonder die vlag vroeg de server er toch een, en bleef
+    // er een betaling op 'creating' staan die crediteren tegenhield.
+    const includePaymentLink = await reminderPaymentLinkWanted(ctx.organizationId);
     // Het adres op de goedgekeurde kaart: is dat sindsdien veranderd, dan verstuurt de server niets.
-    const result = await sendInvoiceReminderEmail(ctx.organizationId, text(payload, 'invoice_id'), { level, expectedRecipientEmail: optText(payload, 'email') ?? undefined });
+    const result = await sendInvoiceReminderEmail(ctx.organizationId, text(payload, 'invoice_id'), { level, expectedRecipientEmail: optText(payload, 'email') ?? undefined, includePaymentLink });
     const number = optText(payload, 'number') ?? '';
     const to = result.recipientEmail ?? optText(payload, 'email') ?? 'de klant';
     const sentLevel = result.level ?? level;
-    // De betaallink is bijzaak; als die niet lukte hoort de gebruiker dat wel te weten.
-    const linkNote = result.paymentLinkError ? ' (zonder betaallink — die kon niet worden aangemaakt)' : '';
+    // De betaallink is bijzaak; als die niet lukte hoort de gebruiker dat wel te
+    // weten. Alleen als er om een link gevraagd was.
+    const linkNote = includePaymentLink && result.paymentLinkError ? ' (zonder betaallink — die kon niet worden aangemaakt)' : '';
     return `Betalingsherinnering niveau ${sentLevel} voor factuur ${number} verstuurd naar ${to}${linkNote}`.replace('  ', ' ');
   },
 

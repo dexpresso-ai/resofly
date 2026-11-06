@@ -6,7 +6,7 @@ import { throwFunctionError } from './functionErrors';
 import { isMissingColumn, isMissingRelation, NotMigratedError } from './postgrestErrors';
 import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type InkDocument } from './ink';
 import type { ReportDefinition } from './reporting';
-import type { ModuleAccess } from './permissions';
+import { isAdminRole, type ModuleAccess } from './permissions';
 import { isPortalLoginKey } from './portalLoginKey';
 import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import type {
@@ -276,6 +276,10 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
   let creativeStatus: OrganizationCreativeStatus | null = null;
   let businessStatus: OrganizationBusinessStatus | null = null;
   if (activeOrganization) {
+    // Het abonnement is alleen voor owners en admins (public.can_admin_org).
+    // Voor de rest gaf deze aanroep bij elke start een 403, met een waarschuwing
+    // in de console die naar een ontbrekende migratie wees.
+    const canSeeBilling = isAdminRole(activeMembership?.role);
     const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }, { data: businessRows, error: businessError }] = await Promise.all([
       supabase
         .from('organization_members')
@@ -297,7 +301,9 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
         .order('created_at', { ascending: false })
         .limit(40),
       supabase.rpc('organization_license_usage', { p_organization_id: activeOrganization.id }),
-      supabase.rpc('organization_billing_overview', { p_organization_id: activeOrganization.id }),
+      canSeeBilling
+        ? supabase.rpc('organization_billing_overview', { p_organization_id: activeOrganization.id })
+        : Promise.resolve({ data: null, error: null }),
       supabase.rpc('organization_creative_status', { p_organization_id: activeOrganization.id }),
       supabase.rpc('organization_business_status', { p_organization_id: activeOrganization.id }),
     ]);
@@ -305,7 +311,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     if (orgInvitationError) throw orgInvitationError;
     if (licenseError) throw licenseError;
     if (billingError) {
-      console.warn('Billing-overview kon niet worden geladen. Controleer of de Sprint 2 database-migratie is uitgevoerd.', billingError);
+      console.warn('Het abonnementsoverzicht kon niet worden geladen.', billingError);
     }
     if (auditError) {
       console.warn('Audit-log kon niet worden geladen. Controleer of de Sprint 1 database-migratie is uitgevoerd.', auditError);
@@ -4005,6 +4011,31 @@ export async function sendInvoiceReminderEmail(
   if (error) await throwFunctionError(error, 'Herinnering verzenden mislukt.');
   if (!data?.ok) throw new Error(data?.error || 'Herinnering verzenden mislukt');
   return data as { level?: number; publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null; recipientEmail?: string };
+}
+
+/**
+ * Hoort er een Mollie-betaallink in een herinnering? Alleen als Mollie gekoppeld
+ * is én "Betaallink meesturen" aan staat (Instellingen, automatische
+ * herinneringen). Geef de uitkomst mee als `includePaymentLink`, net als bij
+ * versturen. Zonder die vlag kiest de server zelf, met alleen de instelling:
+ * zonder gekoppelde Mollie bleef er dan een betaling op 'creating' staan, en
+ * daarna was de factuur niet meer te crediteren.
+ *
+ * Voor de knop in het scherm, de reeks van Gerrie en de handeling
+ * `invoice.send_reminder`: alle drie dezelfde regel.
+ */
+export async function reminderPaymentLinkWanted(organizationId: UUID): Promise<boolean> {
+  try {
+    const [mollie, settings] = await Promise.all([
+      loadInvoiceMollieStatus(organizationId),
+      loadInvoiceReminderSettings(organizationId),
+    ]);
+    return mollie.status === 'connected' && settings.include_payment_link !== false;
+  } catch {
+    // Niet op te halen: dan alleen de PDF, zoals bij versturen. Een herinnering
+    // zonder link is beter dan geen herinnering.
+    return false;
+  }
 }
 
 /**

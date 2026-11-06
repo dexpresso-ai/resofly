@@ -166,6 +166,12 @@ export function isWriterRole(role: OrganizationRole | null | undefined): boolean
   return Boolean(role && WRITER_ROLES.includes(role));
 }
 
+/** Owners en admins: zij beheren de organisatie, zoals het abonnement. Spiegel
+ *  van `public.can_admin_org` in de database. */
+export function isAdminRole(role: OrganizationRole | null | undefined): boolean {
+  return role === 'owner' || role === 'admin';
+}
+
 /** De boekhouder: een gast die alleen Financiën mag lezen. */
 export function isAccountantRole(role: OrganizationRole | null | undefined): boolean {
   return role === 'accountant';
