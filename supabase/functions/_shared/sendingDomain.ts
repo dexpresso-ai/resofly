@@ -11,13 +11,20 @@
 // van dat teamlid (user_sender_identities) toegepast — de naam altijd, het adres
 // alleen wanneer het domein ervan op dit moment een GEVERIFIEERD verzenddomein
 // van de organisatie is (anti-spoofing; verificatie intrekken = terugvallen).
+//
+// Reply-To: vertrekt de mail vanaf het eigen domein, dan komen antwoorden op
+// dát adres terug. Eerst bleef de Reply-To ook dan het algemene ResoFly-adres
+// (RESEND_REPLY_TO): een klant die op een factuur van info@bedrijf.nl
+// antwoordde, mailde zonder het te zien naar ResoFly in plaats van naar het
+// bedrijf.
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { formatFromHeader, isPlainEmailAddress } from './resendDomains.ts';
 
 export interface SenderIdentity {
   /** Volledige From-waarde voor Resend ("Naam <adres>" of "adres"). */
   from: string;
-  /** Optionele Reply-To-fallback. */
+  /** Reply-To: het eigen afzenderadres, of bij terugvallen de globale Reply-To. */
   replyTo?: string;
   /** Id van het gebruikte verzenddomein, of null bij fallback. */
   domainId: string | null;
@@ -59,10 +66,19 @@ export async function resolveSenderIdentity(
 
     if (error) return fallback;
     const verified = (data || []) as VerifiedDomainRow[];
-    const primary = verified[0] ?? null;
 
-    // Basis-identiteit van de organisatie (bestaand gedrag).
-    let fromEmail = primary?.from_email ? String(primary.from_email) : null;
+    // Basis-identiteit van de organisatie: het standaarddomein, anders het meest
+    // recent gekoppelde, met een bruikbaar afzenderadres. Een adres dat niet kaal
+    // op het eigen domein staat, slaan we over: dan zou de From-header meer
+    // kunnen bevatten dan één afzender. Een domein zonder afzenderadres (kon tot
+    // november 2026) sloeg eerst alles over, ook een tweede domein dat er wél een
+    // had.
+    const usableEmail = (row: VerifiedDomainRow): string | null => {
+      const email = String(row.from_email || '').trim().toLowerCase();
+      return isPlainEmailAddress(email) && email.endsWith(`@${String(row.domain).toLowerCase()}`) ? email : null;
+    };
+    const primary = verified.find((row) => usableEmail(row)) ?? verified[0] ?? null;
+    let fromEmail = primary ? usableEmail(primary) : null;
     let fromName = String(primary?.from_name || '').trim() || null;
     let domainId = primary ? String(primary.id) : null;
 
@@ -79,7 +95,7 @@ export async function resolveSenderIdentity(
           const personalName = String(personal.from_name || '').trim();
           if (personalName) fromName = personalName;
           const personalEmail = String(personal.from_email || '').trim().toLowerCase();
-          if (personalEmail) {
+          if (personalEmail && isPlainEmailAddress(personalEmail)) {
             const atIndex = personalEmail.lastIndexOf('@');
             const personalDomain = atIndex > 0 ? personalEmail.slice(atIndex + 1) : '';
             const match = verified.find((row) => String(row.domain).toLowerCase() === personalDomain);
@@ -98,12 +114,10 @@ export async function resolveSenderIdentity(
     // dan het bestaande gedrag: de globale fallback ongewijzigd.
     if (!fromEmail) return fallback;
 
-    // De naam vult een teamlid zelf in: zonder aanhalingstekens, hoekhaken,
-    // komma's of regeleinden, en tussen quotes, zodat hij nooit een tweede adres
-    // in de From-header kan worden.
-    const safeName = fromName ? fromName.replace(/["<>,\\\r\n\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim() : '';
-    const from = safeName ? `"${safeName}" <${fromEmail}>` : fromEmail;
-    return { from, replyTo: fallbackReplyTo || undefined, domainId, fromEmail };
+    // De naam vult een teamlid zelf in: formatFromHeader haalt aanhalingstekens,
+    // hoekhaken, komma's en regeleinden weg en zet hem tussen quotes, zodat hij
+    // nooit een tweede adres in de From-header kan worden.
+    return { from: formatFromHeader(fromName, fromEmail), replyTo: fromEmail, domainId, fromEmail };
   } catch (_error) {
     return fallback;
   }

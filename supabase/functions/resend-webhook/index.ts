@@ -1,11 +1,14 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { sendingDomainStatus } from '../_shared/resendDomains.ts';
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
 const RESEND_WEBHOOK_SIGNING_SECRET = Deno.env.get('RESEND_WEBHOOK_SIGNING_SECRET') || '';
 const RESEND_WEBHOOK_ALLOW_UNSIGNED = (Deno.env.get('RESEND_WEBHOOK_ALLOW_UNSIGNED') || 'false').toLowerCase() === 'true';
 const RESEND_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = Number(Deno.env.get('RESEND_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS') || '300');
+// Alleen voor domein-events: de actuele stand van een verzenddomein ophalen.
+const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -33,6 +36,16 @@ async function handleResendEvent(req: Request, payload: Record<string, unknown>)
   const type = String(payload.type || payload.event || '');
   const createdAt = String(payload.created_at || payload.createdAt || new Date().toISOString());
   const data = (payload.data && typeof payload.data === 'object' ? payload.data : {}) as Record<string, unknown>;
+
+  // Een verzenddomein dat Resend (opnieuw) controleerde. Zonder dit bleef de
+  // status in ResoFly staan tot iemand weer op "Verifieer" klikte: een domein
+  // dat Resend al goedkeurde, bleef "in afwachting", en een domein waarvan de
+  // DNS-records verdwenen, bleef "geverifieerd" terwijl Resend weigerde.
+  if (type.startsWith('domain.')) {
+    await handleDomainEvent(type, data, parseDate(createdAt) || new Date().toISOString());
+    return;
+  }
+
   const providerEmailId = String(data.email_id || data.id || payload.email_id || '');
   const providerEventId = req.headers.get('svix-id') || String(payload.id || `${providerEmailId}:${type}:${createdAt}`);
   if (!type || !providerEmailId) throw new Error('Resend webhook mist type of email id.');
@@ -291,6 +304,83 @@ async function loadInvoiceEmailSummary(organizationId: string, invoiceId: string
     .maybeSingle();
   if (error) throw error;
   return data ?? null;
+}
+
+/**
+ * domain.created / domain.updated / domain.deleted op de rij van het
+ * verzenddomein. De rij vinden we op het Resend-id, dus het event raakt alleen
+ * de organisatie die dat domein koppelde. Het eigen domein van ResoFly heeft
+ * geen rij; dat event slaan we over.
+ *
+ * Het event is alleen het seintje: de stand halen we zelf bij Resend op. Zo
+ * maakt een event dat laat of dubbel binnenkomt (Resend probeert opnieuw) een
+ * nieuwere stand niet ongedaan, en kan een vals event (zonder handtekening,
+ * alleen lokaal toegestaan) een domein niet ontkoppelen of goedkeuren.
+ */
+async function handleDomainEvent(type: string, data: Record<string, unknown>, occurredAt: string): Promise<void> {
+  const resendDomainId = String(data.id || '').trim();
+  if (!resendDomainId) return;
+
+  const { data: rows, error } = await supabaseAdmin
+    .from('organization_email_domains')
+    .select('id, organization_id, domain, verified_at')
+    .eq('resend_domain_id', resendDomainId)
+    .limit(5);
+  if (error) throw error;
+  if (!rows || rows.length === 0) {
+    console.info('resend-webhook: domein-event zonder gekoppeld verzenddomein', type, resendDomainId);
+    return;
+  }
+
+  // Zonder API-sleutel (alleen denkbaar in een testomgeving) geldt wat het event zegt.
+  let current: Record<string, unknown> | null;
+  if (RESEND_API_KEY) {
+    current = await fetchResendDomain(resendDomainId);
+  } else {
+    current = type === 'domain.deleted' ? null : data;
+  }
+  const checkedAt = new Date().toISOString();
+
+  for (const row of rows) {
+    const name = String((current ?? data).name || '').trim().toLowerCase();
+    if (name && name !== String(row.domain).trim().toLowerCase()) {
+      console.warn('resend-webhook: domeinnaam wijkt af van de koppeling', resendDomainId);
+      continue;
+    }
+    if (!current) {
+      // Bij Resend weg: niet meer verifieerbaar, en zo valt de mail terug op
+      // het standaardadres in plaats van te mislukken.
+      const { error: updateError } = await supabaseAdmin
+        .from('organization_email_domains')
+        .update({ status: 'failed', resend_domain_id: null, last_checked_at: checkedAt })
+        .eq('id', row.id)
+        .eq('organization_id', row.organization_id);
+      if (updateError) throw updateError;
+      continue;
+    }
+    const status = sendingDomainStatus(current.status, current.records);
+    const patch: Record<string, unknown> = { status, last_checked_at: checkedAt };
+    if (Array.isArray(current.records)) patch.dns_records = current.records;
+    if (status === 'verified' && !row.verified_at) patch.verified_at = occurredAt;
+    const { error: updateError } = await supabaseAdmin
+      .from('organization_email_domains')
+      .update(patch)
+      .eq('id', row.id)
+      .eq('organization_id', row.organization_id);
+    if (updateError) throw updateError;
+  }
+}
+
+/** Het domein zoals Resend het nu kent, of null als het daar niet (meer) bestaat. */
+async function fetchResendDomain(resendDomainId: string): Promise<Record<string, unknown> | null> {
+  const response = await fetch(`https://api.resend.com/domains/${encodeURIComponent(resendDomainId)}`, {
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}` },
+  });
+  if (response.status === 404) return null;
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  // Gooien: dan geeft de functie 400 en probeert Resend het later opnieuw.
+  if (!response.ok) throw new Error(`Resend-domein ophalen mislukt (${response.status}).`);
+  return payload;
 }
 
 function normalizeEventType(type: string): string {
