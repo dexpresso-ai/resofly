@@ -29,6 +29,7 @@
 import { createAdminClient, HttpError } from '../_shared/edgeAuth.ts';
 import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
+import { loadPortalLoginKey } from '../_shared/portalAddress.ts';
 import { emailBrandFromRow, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 import { PORTAL_TICKET_TEMPLATE_KEYS } from '../_shared/emailTemplates/portalTicketUpdate.ts';
@@ -100,6 +101,8 @@ type OrgContext = {
   texts: Partial<Record<PortalTicketTemplateKey, EmailTemplateContent>>;
   /** Naam en logo bovenaan de mail (_shared/emailBrand.ts); uit dezelfde rij als de huisstijl. */
   emailBrand: EmailBrand;
+  /** Het eigen inlogadres van het portaal (_shared/portalAddress.ts); null = /portal. */
+  portalLoginKey: string | null;
 };
 
 Deno.serve(async (req) => {
@@ -376,8 +379,8 @@ function emailInput(
       }
       : null,
     replies,
-    ticketUrl: portalTicketUrl(PORTAL_BASE_URL, client.id, ticket.id),
-    settingsUrl: portalSettingsUrl(PORTAL_BASE_URL, client.id),
+    ticketUrl: portalTicketUrl(PORTAL_BASE_URL, client.id, ticket.id, org.portalLoginKey),
+    settingsUrl: portalSettingsUrl(PORTAL_BASE_URL, client.id, org.portalLoginKey),
     clientName: String(client.name ?? '').trim() || null,
     content: org.texts,
   };
@@ -408,6 +411,9 @@ async function loadOrgContext(organizationId: string, cache: Map<string, OrgCont
 
   const sender = await resolveSenderIdentity(admin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   const texts = await loadTicketEmailTexts(organizationId);
+  // De klant klikt door naar het portaal: dan meteen het inlogscherm in de
+  // huisstijl van deze organisatie, ook als hij er nog nooit was.
+  const portalLoginKey = await loadPortalLoginKey(admin, organizationId);
   const context: OrgContext = {
     enabled: setting?.ticket_emails_enabled !== false,
     companyName,
@@ -418,6 +424,7 @@ async function loadOrgContext(organizationId: string, cache: Map<string, OrgCont
     replyTo: normalizeEmail(company?.email) || sender.replyTo,
     texts,
     emailBrand: { ...emailBrandFromRow(company), name: companyName },
+    portalLoginKey,
   };
   cache.set(organizationId, context);
   return context;

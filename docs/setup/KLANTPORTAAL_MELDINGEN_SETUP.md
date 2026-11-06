@@ -116,11 +116,14 @@ select status, return_message, start_time
 ## 5. End-to-end testen
 
 1. Zorg dat een testklant een e-mailadres heeft waar je bij kunt, en log in op
-   `/portal` met dat adres.
+   het eigen inlogadres van de organisatie (Instellingen → Huisstijl → Je
+   inlogadres, `/portal/<sleutel>`) met dat adres. Daar staat het inlogscherm
+   meteen in de huisstijl; `/portal` werkt ook, maar is tot het inloggen neutraal.
 2. Dien in het portaal een ticket in → binnen ongeveer een minuut komt de mail
    "Ticket ontvangen".
 3. Zet in de app een zichtbare notitie op dat ticket en wijzig de status → één
    mail met het antwoord en de nieuwe status. De knop in de mail opent het ticket
-   direct in het portaal (ook als je eerst nog moet inloggen).
+   direct in het portaal (ook als je eerst nog moet inloggen), via het eigen
+   inlogadres.
 4. Zet in het portaal onder **Instellingen** "Nieuw antwoord" uit en plaats nog
    een notitie → geen mail; in het portaal staat het antwoord wel, met een stip.

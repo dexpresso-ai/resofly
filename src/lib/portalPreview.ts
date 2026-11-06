@@ -68,6 +68,10 @@ export function portalPreviewMessage(form: CompanySettingsInput, screen: PortalP
     clientTheme: form.brand_client_theme,
     headerColor: form.brand_header_color ?? null,
     logoDarkDataUrl: form.brand_logo_dark_data_url ?? null,
+    loginBackground: form.brand_login_bg_color ?? null,
+    loginCard: form.brand_login_card_color ?? null,
+    loginButton: form.brand_login_button_color ?? null,
+    loginPlain: form.brand_login_plain === true,
   };
   const company: PortalPreviewCompany = {
     name: name || 'Jouw bedrijf',

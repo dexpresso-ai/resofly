@@ -2590,7 +2590,7 @@ body::before{
 .portal-archived{color:var(--muted);font-style:normal;font-weight:600}
 .portal-contact p{line-height:1.7;font-size:13px}
 @media(max-width:760px){.portal-kpis{grid-template-columns:repeat(2,1fr)}.portal-row{flex-wrap:wrap}.portal-content{padding:16px}.portal-topbar-actions .select-trigger,.portal-topbar-actions .form-select{min-width:140px}}
-.client-portal-access-link{color:var(--accent-ink);font-weight:600;text-decoration:none}
+.client-portal-access-link{color:var(--accent-ink);font-weight:600;text-decoration:none;overflow-wrap:anywhere}
 .client-portal-access-link:hover{text-decoration:underline}
 
 /* ── Klantportaal: doorklik-detail (ticket & project) ─────────────────── */

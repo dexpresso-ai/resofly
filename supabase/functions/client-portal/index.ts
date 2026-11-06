@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
+import { loadPortalLoginKey } from '../_shared/portalAddress.ts';
 import { normalizeGalleryLayout } from '../_shared/galleryLayout.ts';
 import { createPortalInvoiceCheckout, calculateTotalCents, orgHasInvoiceMollie } from '../_shared/invoiceCheckout.ts';
 import {
@@ -1732,9 +1733,10 @@ async function buildAccount(client: ClientRow, email: string) {
   const orgId = client.organization_id;
   const actingContact = await resolveActingContact(client, email);
 
-  const [company, projects] = await Promise.all([
+  const [company, projects, portalLoginKey] = await Promise.all([
     optionalCompany(orgId),
     selectRows('projects', (q) => q.eq('organization_id', orgId).eq('client_id', client.id).order('created_at', { ascending: false })),
+    loadPortalLoginKey(supabaseAdmin, orgId),
   ]);
   const projectIds = projects.map((p: Record<string, unknown>) => String(p.id));
 
@@ -1783,6 +1785,10 @@ async function buildAccount(client: ClientRow, email: string) {
     // Nul extra queries: de huisstijlkolommen zitten al in de rij die we
     // hierboven voor sanitizeCompany hebben opgehaald.
     branding: sanitizeBranding(company),
+    // Het eigen inlogadres van deze leverancier. Wie via dat adres inlogde en
+    // bij meer leveranciers klant is, komt zo in het dossier van die ene
+    // terecht en niet in dat van een ander (zie ClientPortal.tsx).
+    portalLoginKey,
     client: sanitizeClient(client),
     actingContact: actingContact ? { name: actingContact.name, email: actingContact.email } : null,
     projects: projects.map(sanitizeProject),
