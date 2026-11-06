@@ -16,9 +16,9 @@ punt K) verwijzen daarheen.
 
 | # | Actie | Wie | Wanneer |
 | --- | --- | --- | --- |
-| 1 | Media-worker uitrollen | Eigenaar | Nu |
-| 2 | Office-server uitrollen | Eigenaar | Nu |
-| 3 | Handtekening op inkomende mail verplicht maken | Eigenaar | Nu |
+| 1 | Media-worker uitrollen | Eigenaar | Uitgerold op 6 november; de proef nog |
+| 2 | Office-server uitrollen | Eigenaar | Uitgerold op 6 november; de proef nog |
+| 3 | Handtekening op inkomende mail verplicht maken | Eigenaar | Nu (stap 1 gedaan) |
 | 4 | Webhook-secret van Resend repareren | Eigenaar | Nu |
 | 5 | JWT-secret van staging vernieuwen | Eigenaar | Nu |
 | 6 | CI-secrets alleen voor branch `staging` | Eigenaar | Deze week |
@@ -51,6 +51,10 @@ uitrol: de **rooktest** onderaan.
 
 ### 1. Media-worker uitrollen (eigenaar)
 
+**Stand op 6 november:** uitgerold naar staging (versie `bf775db3`, code van
+`staging` op `3a5afcc`). Zie `CHANGELOG_WORKERS_UITROL_2026-11-06.md`. Nog te
+doen: de proef bij *Klaar als*.
+
 **Waarom:** fix 6, 22 en 32 staan in de code, maar CI rolt de workers niet
 uit. Tot dan draait staging de oude worker, met onder meer het lek van
 video's van een andere organisatie (fix 6).
@@ -71,6 +75,9 @@ Productie (`npm run deploy`) pas na actie 8.
 
 ### 2. Office-server uitrollen (eigenaar)
 
+**Stand op 6 november:** uitgerold (versie `4f400a61`). `OFFICE_CONVERT_SECRET`
+staat op beide workers. Nog te doen: de proef bij *Klaar als*.
+
 **Waarom:** fix 28. Nu kan iedereen de conversie-eindpunten van Collabora
 gebruiken, op onze kosten en in het proces met de documenten van alle klanten.
 
@@ -87,6 +94,9 @@ gebruiken, op onze kosten en in het proces met de documenten van alle klanten.
 geeft 404: de worker doet dan alsof het pad niet bestaat.
 
 ### 3. Handtekening op inkomende mail verplicht maken (eigenaar)
+
+**Stand op 6 november:** stap 1 is gedaan (versie `e6ce8169`). De vorige
+versie tekende al. Stap 2 tot en met 4 zijn voor jou.
 
 **Waarom:** fix 18. `mail-inbound` accepteert nu ook verzoeken met alleen het
 gedeelde geheim, zonder handtekening en tijdstempel. Wie dat geheim één keer
@@ -180,6 +190,10 @@ Environments in een privé-repository vragen GitHub Team (of Pro).
 workflow op een andere branch de secrets niet ziet.
 
 ### 7. Oude media-worker opruimen (eigenaar, punt O)
+
+**Stand op 6 november:** `resofly-media-staging` draait nog. Hij staat aan op
+workers.dev en gebruikt dezelfde bucket als de media-worker. `resofly-media`
+bestaat niet meer.
 
 **Waarom:** de map `cloudflare-worker/` is de voorganger van
 `workers/media-api`, zonder de bewaking van deze ronde. Draait hij nog, dan is

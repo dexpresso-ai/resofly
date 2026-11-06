@@ -46,7 +46,8 @@ Het volledige verslag staat in `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06
   `file-transfer` (`officeDownloadName`).
 - **App** (via Cloudflare Pages): `src/main.tsx`.
 - **Media-worker: apart uitrollen.** `cd workers/media-api && npm run deploy:staging`.
-  Daarvoor zijn Cloudflare-rechten nodig.
+  Daarvoor zijn Cloudflare-rechten nodig. Uitgerold op 6 november, versie `bf775db3`
+  (zie `CHANGELOG_WORKERS_UITROL_2026-11-06.md`).
 - **Opruimtaak.** `file-transfer-purge` stond niet ingepland op staging. Plan hem
   eenmalig in: workflow "Deploy Supabase (staging)" met het vinkje voor de
   webhooks. Zonder die taak:
