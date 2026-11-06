@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [documenten]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -42,7 +42,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'documenten'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -1368,6 +1368,156 @@ async function scenarioAgenda() {
   });
 }
 
+// ── Documenten: maken, bewerken, veilig tonen, delen, verwijderen ───────────
+
+/** Kwaadaardige inhoud zoals iemand hem via de API of een plakactie kan opslaan. */
+const KWAAD = '<p>Gewone tekst</p><img src="x" onerror="window.__xss=(window.__xss||0)+1"><script>window.__xss=(window.__xss||0)+1</script>'
+  + '<a href="javascript:window.__xss=(window.__xss||0)+1">klik hier</a><svg onload="window.__xss=(window.__xss||0)+1"></svg>'
+  + '<iframe src="javascript:parent.__xss=(parent.__xss||0)+1"></iframe><p style="background:url(javascript:alert(1))" onclick="window.__xss=9">nog meer</p>';
+
+/** Naar Inhoud → het dossier van een klant, via het menu zoals een gebruiker. */
+async function naarKlantdossier(scherm, klantNaam) {
+  const page = scherm.page;
+  await sluitAlles(scherm);
+  await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Inhoud/ }).first().click();
+  await rustig(scherm);
+  // Stond Inhoud al open in dit dossier, dan blijft hij daar: niets te doen.
+  const huidig = inhoud(page).locator('.odrv-crumbs .odrv-crumb-current').first();
+  if (tekst(await huidig.innerText().catch(() => '')) === klantNaam) return;
+  // Anders terug naar de bovenste laag (de organisatie) en dan de klant openen.
+  const wortel = inhoud(page).locator('.odrv-crumbs button').first();
+  if (await wortel.isVisible().catch(() => false)) { await wortel.click(); await rustig(scherm); }
+  const rij = inhoud(page).locator('.odrv-row').filter({ hasText: klantNaam }).first();
+  await rij.waitFor({ timeout: 15000 });
+  await rij.click();
+  await rustig(scherm);
+  await wachtTot(async () => tekst(await huidig.innerText().catch(() => '')) === klantNaam, { melding: `dossier van ${klantNaam} niet open` });
+}
+
+/** Een open venster voor een document (nieuw of bewerken). */
+function documentVenster(page) {
+  return page.locator('section.modal').filter({ has: page.locator('.modal-head h3', { hasText: /^(Nieuw document|Document bewerken)$/ }) });
+}
+
+async function scenarioDocumenten() {
+  groep('UI: documenten');
+  const { w } = t;
+  const titel = `Projectplan ${Date.now().toString(36)}`;
+
+  const nieuw = await uiStap('nieuw document via Inhoud → klant A → Nieuw → Document, en het staat meteen in de lijst', async () => {
+    const lid = await medewerker();
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Document', exact: true }).click();
+    const venster = documentVenster(page);
+    await venster.waitFor({ timeout: 10000 });
+    await venster.getByPlaceholder('Documenttitel').fill(titel);
+    const editor = venster.locator('[contenteditable="true"]').first();
+    await editor.click();
+    await page.keyboard.type('Fase 1: ontwerp. Fase 2: bouw.');
+    gelijk(tekst(await veld(venster, 'Klant').locator('.select-value').innerText()), w.klantA.name, 'klant al ingevuld vanuit het dossier');
+    await venster.getByRole('button', { name: 'Opslaan' }).click();
+    await venster.waitFor({ state: 'detached', timeout: 15000 });
+    await rustig(lid);
+    const rij = sqlRij(`select id, client_id, created_by, content from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    verwacht(rij, 'document niet opgeslagen');
+    gelijk([rij.client_id, rij.created_by], [w.klantA.id, w.medewerker.id], 'klant en maker');
+    verwacht(rij.content.includes('Fase 1: ontwerp.'), `inhoud niet opgeslagen: ${rij.content}`);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: titel }).first().waitFor({ timeout: 10000 });
+    return rij;
+  });
+
+  await uiStap('openen, de titel aanpassen en opslaan', async () => {
+    if (!nieuw) throw new Error('geen document');
+    const lid = await medewerker();
+    const page = lid.page;
+    await inhoud(page).locator('.odrv-row').filter({ hasText: titel }).first().click();
+    const venster = documentVenster(page);
+    await venster.waitFor({ timeout: 10000 });
+    verwacht((await venster.locator('.rich-text-editor, [contenteditable="true"]').first().innerText()).includes('Fase 1'), 'inhoud niet in de editor');
+    await venster.getByPlaceholder('Documenttitel').fill(`${titel} v2`);
+    await venster.getByRole('button', { name: 'Opslaan' }).click();
+    await venster.waitFor({ state: 'detached', timeout: 15000 });
+    await rustig(lid);
+    gelijk(sqlRij(`select title from public.documents where id = ${q(nieuw.id)}`).title, `${titel} v2`, 'titel');
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `${titel} v2` }).first().waitFor({ timeout: 10000 });
+  });
+
+  const kwaad = await uiStap('kwaadaardige inhoud in een document wordt in de app niet uitgevoerd', async () => {
+    const res = await rest('documents?select=id', {
+      method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, created_by: w.medewerker.id, client_id: w.klantA.id, title: 'Lokaas in de app', content: KWAAD },
+    });
+    gelukt(res, 'document met kwaadaardige inhoud');
+    const lid = await medewerker();
+    const page = lid.page;
+    await ververs(lid);
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: 'Lokaas in de app' }).first().click();
+    const venster = documentVenster(page);
+    await venster.waitFor({ timeout: 10000 });
+    await slaap(800);
+    const uitgevoerd = await page.evaluate(() => window.__xss ?? 0);
+    gelijk(uitgevoerd, 0, 'scripts uitgevoerd in de app');
+    const html = await venster.locator('[contenteditable], .rich-text-viewer').first().innerHTML();
+    verwacht(!/onerror|onload|onclick|javascript:|<script|<iframe|<svg/i.test(html), `gevaarlijke inhoud staat nog in de editor: ${html.slice(0, 300)}`);
+    verwacht(html.includes('Gewone tekst'), 'de gewone tekst is weg');
+    await sluitModal(modal(page, 'Document bewerken'));
+    return res.json[0];
+  });
+
+  await uiStap('kwaadaardige inhoud op de openbare deelpagina wordt niet uitgevoerd', async () => {
+    const intern = gelukt(await rest('documents?select=id', {
+      method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, created_by: w.medewerker.id, title: 'Lokaas op de deelpagina', content: KWAAD },
+    }), 'intern document')[0];
+    const ontvanger = `deelpagina.${Date.now()}@elders.test`;
+    gelukt(await roep('file-share', {
+      token: w.medewerker.token, origin: APP,
+      body: { action: 'share', organizationId: w.orgId, itemType: 'document', itemId: intern.id, recipients: [{ kind: 'link', email: ontvanger }] },
+    }), 'delen');
+    const mail = mailsAan(ontvanger).at(-1);
+    const link = `${mail?.html} ${mail?.text}`.match(/https?:\/\/[^\s"'<>]+\/gedeeld\/[A-Za-z0-9_-]{20,}/)?.[0];
+    verwacht(link, 'geen deellink in de mail');
+    const klant = await openAlsKlant(link, 'ontvanger');
+    const page = klant.page;
+    await page.locator('.share-public-row').filter({ hasText: 'Lokaas op de deelpagina' }).getByRole('button', { name: 'Lezen' }).click();
+    await page.locator('.rich-text-viewer').first().waitFor({ timeout: 10000 });
+    await slaap(800);
+    gelijk(await page.evaluate(() => window.__xss ?? 0), 0, 'scripts uitgevoerd op de deelpagina');
+    const html = await page.locator('.rich-text-viewer').first().innerHTML();
+    verwacht(!/onerror|onload|onclick|javascript:|<script|<iframe|<svg/i.test(html), `gevaarlijke inhoud op de deelpagina: ${html.slice(0, 300)}`);
+    verwacht(html.includes('Gewone tekst'), 'de gewone tekst ontbreekt op de deelpagina');
+  });
+
+  await uiStap('verwijderen via het menu vraagt eerst, en haalt het document weg', async () => {
+    if (!kwaad) throw new Error('geen document om te verwijderen');
+    const lid = await medewerker();
+    const page = lid.page;
+    const rij = inhoud(page).locator('.odrv-row').filter({ hasText: 'Lokaas in de app' }).first();
+    await rij.locator('.odrv-td-act button').first().click();
+    const dialogen = lid.dialogen.length;
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Verwijderen', exact: true }).click();
+    await wachtTot(async () => lid.dialogen.length > dialogen, { melding: 'geen bevestiging gevraagd' });
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.documents where id = ${q(kwaad.id)}`).n === 0, { melding: 'document niet verwijderd' });
+    await rustig(lid);
+    await wachtTot(async () => (await inhoud(page).locator('.odrv-row').filter({ hasText: 'Lokaas in de app' }).count()) === 0, { melding: 'document staat nog in de lijst' });
+  });
+
+  await uiStap('de kijker ziet documenten, maar geen knop om te maken en geen opslaan', async () => {
+    const kijker = await openWerkruimte(w.kijker, 'kijker', w.orgId, { tijdelijk: true });
+    const page = kijker.page;
+    await naarKlantdossier(kijker, w.klantA.name);
+    gelijk(await inhoud(page).locator('.drive-new').count(), 0, 'knop Nieuw voor de kijker');
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `${titel} v2` }).first().click();
+    const venster = page.locator('section.modal').first();
+    await venster.waitFor({ timeout: 10000 });
+    gelijk(await venster.getByRole('button', { name: 'Opslaan' }).count(), 0, 'Opslaan voor de kijker');
+    gelijk(await venster.getByRole('button', { name: 'Verwijderen' }).count(), 0, 'Verwijderen voor de kijker');
+  });
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -1383,7 +1533,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, documenten: scenarioDocumenten };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

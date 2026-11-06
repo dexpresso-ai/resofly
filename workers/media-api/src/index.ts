@@ -1621,8 +1621,8 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
 function matchGalleryFileRoute(pathname: string): string | null {
   const match = pathname.match(/^\/gallery\/file\/(.+)$/);
   if (!match?.[1]) return null;
-  const key = decodeURIComponent(match[1]);
-  return isSafeStorageKey(key) ? key : null;
+  const key = safeDecode(match[1]);
+  return key !== null && isSafeStorageKey(key) ? key : null;
 }
 
 // ── Zip-download (streamend, store-only, zip64 waar nodig) ──────────────────
@@ -2511,8 +2511,8 @@ async function handleInternalSignedUrls(request: Request, env: Env, context: Rou
 function matchSignedFileRoute(pathname: string): string | null {
   const match = pathname.match(/^\/signed\/file\/(.+)$/);
   if (!match?.[1]) return null;
-  const key = decodeURIComponent(match[1]);
-  return isSafeStorageKey(key) ? key : null;
+  const key = safeDecode(match[1]);
+  return key !== null && isSafeStorageKey(key) ? key : null;
 }
 
 /**
@@ -3424,6 +3424,13 @@ async function handleInternalOfficeConvertPdf(request: Request, env: Env, contex
   if (organizationFromKey(storageKey) !== organizationId) {
     throw new HttpError(403, 'Opslagsleutel hoort niet bij deze organisatie.');
   }
+  // Alleen de Word-tekst van een contract. Eerst mocht elke sleutel van de
+  // organisatie: wie Financiën mocht schrijven maar Inhoud niet, zette de
+  // sleutel van een document of chatbijlage op een conceptcontract en las die
+  // via de contractvoorvertoning als PDF (zie de review van 6 november 2026).
+  if (keySegment(storageKey) !== 'contract') {
+    throw new HttpError(403, 'Alleen een contractbestand kan hier worden omgezet.');
+  }
 
   const object = await env.MEDIA_BUCKET.get(storageKey);
   if (!object) throw new HttpError(404, 'Bronbestand niet gevonden.');
@@ -3485,11 +3492,26 @@ async function handleOfficeDocumentDownload(request: Request, env: Env, context:
   return new Response(object.body, { status: 200, headers });
 }
 
+/**
+ * Mag de houder van dit token het bestand nu (nog) lezen, en nog schrijven?
+ * Het token leeft tien uur. Eerst controleerde alleen PutFile dat opnieuw:
+ * wie intussen uit het team was gehaald, of wiens modulerecht op "geen" was
+ * gezet, las met een bewaard token nog tot tien uur de actuele inhoud.
+ */
+async function currentOfficeAccess(env: Env, token: OfficeTokenPayload, target: OfficeTarget): Promise<{ canWrite: boolean }> {
+  const role = await membershipRole(env, token.org, token.uid);
+  if (!role) throw new HttpError(403, 'Geen toegang tot dit bestand.');
+  const level = target.module ? await moduleLevel(env, token.org, token.uid, target.module) : levelWithoutModule(role);
+  if (level === 'none') throw new HttpError(403, 'Geen toegang tot deze module.');
+  return { canWrite: token.w && isWriterRole(role) && level === 'write' && !target.locked };
+}
+
 /** WOPI CheckFileInfo — metadata voor Collabora. */
 async function handleWopiCheckFileInfo(request: Request, env: Env, context: RouteContext, id: string): Promise<Response> {
   const token = await requireOfficeToken(request, env, id);
   const target = await fetchOfficeTarget(env, token.k ?? 'a', id);
   if (target.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
+  const access = await currentOfficeAccess(env, token, target);
 
   const appOrigin = getAllowedOrigins(env).values().next().value || '';
   const info = {
@@ -3499,7 +3521,7 @@ async function handleWopiCheckFileInfo(request: Request, env: Env, context: Rout
     OwnerId: target.organization_id,
     UserId: token.uid,
     UserFriendlyName: token.nm || 'ResoFly-gebruiker',
-    UserCanWrite: token.w,
+    UserCanWrite: access.canWrite,
     UserCanNotWriteRelative: true,
     SupportsUpdate: true,
     SupportsLocks: false,
@@ -3513,6 +3535,7 @@ async function handleWopiGetFile(request: Request, env: Env, context: RouteConte
   const token = await requireOfficeToken(request, env, id);
   const target = await fetchOfficeTarget(env, token.k ?? 'a', id);
   if (target.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
+  await currentOfficeAccess(env, token, target);
 
   const object = await env.MEDIA_BUCKET.get(target.storage_key);
   if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
@@ -3882,42 +3905,51 @@ function normalizeEnvironment(value: string | undefined): 'local' | 'staging' | 
   return 'local';
 }
 
+/** decodeURIComponent zonder te gooien: een kapotte %-codering gaf eerst een 500 in plaats van "niet gevonden". */
+function safeDecode(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 /** `/file/{key}` — key may contain slashes (org/entity/id/file). */
 function matchFileRoute(pathname: string): string | null {
   const match = pathname.match(/^\/file\/(.+)$/);
   if (!match?.[1]) return null;
-  const key = decodeURIComponent(match[1]);
-  return isSafeStorageKey(key) ? key : null;
+  const key = safeDecode(match[1]);
+  return key !== null && isSafeStorageKey(key) ? key : null;
 }
 
 /** `/internal/invoice-snapshot/{key}` */
 function matchInternalSnapshotRoute(pathname: string): string | null {
   const match = pathname.match(/^\/internal\/invoice-snapshot\/(.+)$/);
   if (!match?.[1]) return null;
-  const key = decodeURIComponent(match[1]);
-  return isSafeStorageKey(key) ? key : null;
+  const key = safeDecode(match[1]);
+  return key !== null && isSafeStorageKey(key) ? key : null;
 }
 
 /** `/internal/contract-snapshot/{key}` — contract-PDF's (getekend + verstuurd). */
 function matchInternalContractSnapshotRoute(pathname: string): string | null {
   const match = pathname.match(/^\/internal\/contract-snapshot\/(.+)$/);
   if (!match?.[1]) return null;
-  const key = decodeURIComponent(match[1]);
-  return isSafeStorageKey(key) ? key : null;
+  const key = safeDecode(match[1]);
+  return key !== null && isSafeStorageKey(key) ? key : null;
 }
 
 /** `/internal/quote-snapshot/{key}` — de bij versturen vastgelegde offerte-PDF. */
 function matchInternalQuoteSnapshotRoute(pathname: string): string | null {
   const match = pathname.match(/^\/internal\/quote-snapshot\/(.+)$/);
   if (!match?.[1]) return null;
-  const key = decodeURIComponent(match[1]);
-  return isSafeStorageKey(key) ? key : null;
+  const key = safeDecode(match[1]);
+  return key !== null && isSafeStorageKey(key) ? key : null;
 }
 
 /** `/internal/media/{key}` — generieke, met intern secret beveiligde objectophaal. */
 function matchInternalMediaRoute(pathname: string): string | null {
   const match = pathname.match(/^\/internal\/media\/(.+)$/);
   if (!match?.[1]) return null;
-  const key = decodeURIComponent(match[1]);
-  return isSafeStorageKey(key) ? key : null;
+  const key = safeDecode(match[1]);
+  return key !== null && isSafeStorageKey(key) ? key : null;
 }
