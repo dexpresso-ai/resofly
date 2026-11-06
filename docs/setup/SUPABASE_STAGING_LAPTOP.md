@@ -216,6 +216,14 @@ supabase secrets list --project-ref enzghpduqwaojcxgwarr
 uitleg in `PUBLIC_API_SETUP.md` §3):
 `CALENDAR_TOKEN_ENCRYPTION_KEY` en `APP_PUBLIC_URL` of `GERRIE_ALLOWED_ORIGINS`.
 
+**Ook `MOLLIE_TOKEN_ENCRYPTION_KEY`**: daarmee wordt de eigen Mollie-key van
+elke organisatie versleuteld. Zonder kan niemand Mollie koppelen (Instellingen →
+Online betalen). Op staging ontbrak hij tot 6 november 2026; het script zet hem
+als hij ontbreekt, en de rooktest meldt het. Net als bij
+`WEBHOOK_SECRET_ENCRYPTION_KEY`: **nooit vervangen**, anders zijn de opgeslagen
+keys onleesbaar. Met de hand:
+`supabase secrets set --project-ref enzghpduqwaojcxgwarr MOLLIE_TOKEN_ENCRYPTION_KEY="$(openssl rand -base64 32)"`
+
 **Nieuw voor webhooks**: `WEBHOOK_SECRET_ENCRYPTION_KEY` en
 `WEBHOOK_CRON_SECRET`. Zonder deze twee werkt de API wel, maar kan niemand een
 webhook aanmaken.

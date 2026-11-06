@@ -15,6 +15,9 @@
 #     betekent dat RESEND_API_KEY/RESEND_FROM_EMAIL of APP_PUBLIC_URL er niet staat.
 #   - het boekhouder-hek: geen organisatietabel zonder module gate én zonder hek
 #     (public.accountant_fence_gaps() is leeg). Ook alleen met SUPABASE_DB_PASSWORD.
+#   - de secrets voor Mollie: MOLLIE_TOKEN_ENCRYPTION_KEY (de eigen Mollie-key
+#     van organisaties) en het webhook-secret. Alleen de namen, via de
+#     Management API; alleen met SUPABASE_ACCESS_TOKEN.
 #
 # Draait in de workflow "Deploy Supabase (staging)" na elke deploy, en kan ook
 # vanaf een laptop: SUPABASE_PROJECT_ID=enzghpduqwaojcxgwarr bash scripts/supabase-smoke-test.sh
@@ -198,6 +201,38 @@ print("; ".join(fout))
   fi
 else
   echo "-      Auth-instellingen: overgeslagen (geen SUPABASE_ACCESS_TOKEN of python3)"
+fi
+
+# Secrets die de functies nodig hebben. Alleen de namen: geen waarde komt in
+# beeld. Op staging ontbrak MOLLIE_TOKEN_ENCRYPTION_KEY tot 6 november 2026:
+# niemand kon zijn eigen Mollie-account koppelen, en geen controle zag het.
+if [ -n "${SUPABASE_ACCESS_TOKEN:-}" ] && command -v python3 >/dev/null; then
+  secrets_json="$(curl -s --max-time 30 -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+    "https://api.supabase.com/v1/projects/${ref}/secrets" || true)"
+  secret_problems="$(printf '%s' "$secrets_json" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("de lijst met secrets is niet te lezen"); sys.exit(0)
+names = {item.get("name") for item in d if isinstance(item, dict)} if isinstance(d, list) else set()
+if "SUPABASE_SERVICE_ROLE_KEY" not in names:
+    print("de lijst met secrets is niet te lezen"); sys.exit(0)
+eis = [
+    (["MOLLIE_TOKEN_ENCRYPTION_KEY"], "MOLLIE_TOKEN_ENCRYPTION_KEY (zonder kan niemand Mollie koppelen; zet hem met scripts/supabase-setup-webhooks.sh)"),
+    (["INVOICE_MOLLIE_WEBHOOK_SECRET", "MOLLIE_WEBHOOK_SECRET"], "INVOICE_MOLLIE_WEBHOOK_SECRET (zonder weigert de Mollie-webhook elke betaling)"),
+]
+print("; ".join(uitleg for opties, uitleg in eis if not any(o in names for o in opties)))
+')"
+  if [ -z "$secret_problems" ]; then
+    echo "ok     secrets: de sleutel voor de Mollie-keys en het secret van de Mollie-webhook staan er"
+  else
+    problems=$((problems + 1))
+    echo "FOUT   secrets: $secret_problems"
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::Secrets: $secret_problems"; fi
+  fi
+else
+  echo "-      secrets: overgeslagen (geen SUPABASE_ACCESS_TOKEN of python3)"
 fi
 
 if [ "$problems" -gt 0 ]; then

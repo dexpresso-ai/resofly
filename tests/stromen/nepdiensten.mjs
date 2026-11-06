@@ -2,7 +2,7 @@
 // Mollie en de media-worker (R2, Word → PDF). Alles wordt vastgelegd zodat een
 // test kan nagaan wat er de deur uit ging (aan wie, met welke bijlage) en wat
 // er bij Mollie gebeurde. Met `storing` kun je een dienst laten falen.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { API_URL, MEDIA } from './omgeving.mjs';
 
@@ -35,6 +35,8 @@ export const post = {
     betalingen: new Map(),
     /** Sleutels die Mollie weigert bij het valideren. */
     geweigerdeSleutels: new Set(),
+    /** Het profiel bij een sleutel (GET /v2/profiles/me): { id, name, website, status }. Zonder: één per sleutel. */
+    profielen: new Map(),
     storing: { pad: null, soort: '500', aantal: 0 },
   },
   /** Alles wat naar buiten ging, voor diagnose. */
@@ -178,6 +180,26 @@ function mollieSleutel(request) {
   return (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
 }
 
+/**
+ * Het profiel (de website) van een sleutel, zoals Mollie het op /v2/profiles/me
+ * geeft. Een test kan er een zetten (post.mollie.profielen), bijvoorbeeld om twee
+ * sleutels van hetzelfde account te hebben; anders heeft elke sleutel een eigen.
+ */
+function mollieProfiel(sleutel) {
+  const eigen = post.mollie.profielen.get(sleutel) ?? {};
+  const id = eigen.id ?? `pfl_${createHash('sha256').update(sleutel).digest('hex').slice(0, 10)}`;
+  return {
+    resource: 'profile', id, mode: sleutel.startsWith('test_') ? 'test' : 'live',
+    name: eigen.name ?? `Nep-profiel ${id.slice(4)}`, website: eigen.website ?? `https://${id.slice(4)}.mollie.test`,
+    status: eigen.status ?? 'verified',
+  };
+}
+
+/** Ziet deze sleutel wat met de andere is gemaakt? Ja bij hetzelfde profiel en dezelfde modus (een nieuwe key na rotatie). */
+function zelfdeAccount(a, b) {
+  return a === b || (mollieProfiel(a).id === mollieProfiel(b).id && a.slice(0, 5) === b.slice(0, 5));
+}
+
 function mollieBetalingJson(betaling, embed) {
   const data = {
     resource: 'payment', id: betaling.id, mode: betaling.mode, status: betaling.status,
@@ -209,6 +231,7 @@ async function mollie(request, url) {
   }
   const pad = url.pathname;
   if (request.method === 'GET' && pad === '/v2/methods') return json(200, { count: 1, _embedded: { methods: [{ id: 'ideal' }] } });
+  if (request.method === 'GET' && pad === '/v2/profiles/me') return json(200, mollieProfiel(sleutel));
   if (request.method === 'POST' && pad === '/v2/payments') {
     const body = await request.json();
     post.mollie.teller += 1;
@@ -227,8 +250,9 @@ async function mollie(request, url) {
   const m = pad.match(/^\/v2\/payments\/([^/]+)(\/refunds)?$/);
   if (m) {
     const betaling = post.mollie.betalingen.get(decodeURIComponent(m[1]));
-    // Een betaling bestaat alleen voor de sleutel waarmee hij is aangemaakt (per organisatie).
-    if (!betaling || betaling.sleutel !== sleutel) return json(404, { status: 404, title: 'Not Found', detail: 'No payment exists with token' });
+    // Een betaling bestaat alleen voor het account (profiel en modus) waarmee hij is
+    // aangemaakt. Zonder eigen profiel heeft elke sleutel er een: dan per sleutel.
+    if (!betaling || !zelfdeAccount(betaling.sleutel, sleutel)) return json(404, { status: 404, title: 'Not Found', detail: 'No payment exists with token' });
     if (!m[2] && request.method === 'GET') return json(200, mollieBetalingJson(betaling, url.searchParams.get('embed') || ''));
     if (m[2] && request.method === 'POST') {
       const body = await request.json();
