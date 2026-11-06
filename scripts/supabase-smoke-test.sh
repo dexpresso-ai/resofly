@@ -204,8 +204,8 @@ else
 fi
 
 # Secrets die de functies nodig hebben. Alleen de namen: geen waarde komt in
-# beeld. Op staging ontbrak MOLLIE_TOKEN_ENCRYPTION_KEY tot 6 november 2026:
-# niemand kon zijn eigen Mollie-account koppelen, en geen controle zag het.
+# beeld. Op staging ontbrak MOLLIE_TOKEN_ENCRYPTION_KEY (gezien op 6 november
+# 2026): niemand kon zijn eigen Mollie-account koppelen, en geen controle zag het.
 if [ -n "${SUPABASE_ACCESS_TOKEN:-}" ] && command -v python3 >/dev/null; then
   secrets_json="$(curl -s --max-time 30 -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
     "https://api.supabase.com/v1/projects/${ref}/secrets" || true)"

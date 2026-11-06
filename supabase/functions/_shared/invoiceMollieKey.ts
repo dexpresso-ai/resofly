@@ -50,10 +50,10 @@ export async function loadInvoiceMollieKey(supabaseAdmin: SupabaseAdmin, organiz
 
 /**
  * Een key die alleen met de oude ingebouwde sleutel te ontsleutelen was, stond in
- * feite leesbaar in de database: die sleutel staat in de code. Op staging gold
- * dat voor elke koppeling, want MOLLIE_TOKEN_ENCRYPTION_KEY ontbrak daar tot
- * 6 november 2026. Is de echte sleutel er nu, dan slaan we de key meteen opnieuw
- * op, zonder dat iemand hem opnieuw hoeft in te voeren.
+ * feite leesbaar in de database: die sleutel staat in de code. Dat kan alleen
+ * met MOLLIE_ALLOW_MOCK aan, dus op staging, waar MOLLIE_TOKEN_ENCRYPTION_KEY
+ * ontbrak (gezien op 6 november 2026). Is de echte sleutel er nu, dan slaan we de
+ * key meteen opnieuw op, zonder dat iemand hem opnieuw hoeft in te voeren.
  *
  * Alleen als de rij nog precies de oude waarde heeft: koppelt een beheerder op
  * hetzelfde moment een andere key, dan blijft die staan. Een fout hier is geen

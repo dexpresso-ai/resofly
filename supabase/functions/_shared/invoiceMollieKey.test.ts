@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 /**
  * De Mollie-key van een organisatie ophalen (invoiceMollieKey.ts): altijd per
  * organisatie, en een key die nog met de oude ingebouwde sleutel was opgeslagen
- * (staging tot 6 november 2026) wordt meteen opnieuw versleuteld, zonder een key
+ * (staging, waar MOLLIE_TOKEN_ENCRYPTION_KEY ontbrak) wordt meteen opnieuw versleuteld, zonder een key
  * te overschrijven die een beheerder intussen verving.
  */
 

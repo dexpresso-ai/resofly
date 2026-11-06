@@ -142,7 +142,7 @@ export default async function mollie() {
     gelijk(instelling(), null, 'koppeling');
   });
 
-  await stap('zonder MOLLIE_TOKEN_ENCRYPTION_KEY (staging tot 6 november): een duidelijke melding, Mollie niet gebeld, niets opgeslagen', async () => {
+  await stap('zonder MOLLIE_TOKEN_ENCRYPTION_KEY (zo stond staging op 6 november): een duidelijke melding, Mollie niet gebeld, niets opgeslagen', async () => {
     const voor = post.log.length;
     const res = await metOmgeving({ MOLLIE_TOKEN_ENCRYPTION_KEY: undefined },
       () => wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.een }));
@@ -271,7 +271,7 @@ export default async function mollie() {
 
   // ── 4. Een koppeling van vóór de fix ──────────────────────────────────
 
-  await stap('een key met de ingebouwde sleutel (staging tot 6 november) werkt, en staat na het eerste gebruik met de echte sleutel in de database', async () => {
+  await stap('een key met de ingebouwde sleutel (staging zonder geheim) werkt, en staat na het eerste gebruik met de echte sleutel in de database', async () => {
     const oud = await oudeOpslag(sleutel.twee);
     sql(`update public.organization_invoice_mollie_settings
             set status = 'connected', mode = 'test', key_suffix = ${q(sleutel.twee.slice(-4))}, api_key_encrypted = ${q(oud)}
