@@ -18,19 +18,23 @@
 .dle-state{font-size:12px;font-weight:600;color:var(--ink-3);padding:4px 10px;border-radius:999px;border:1px solid var(--line)}
 .dle-state.is-custom{color:var(--accent-ink);border-color:var(--line-accent);background:var(--accent-soft)}
 
-.dle-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start}
-.dle-palette{order:2}
-.dle-stage-wrap{order:1;min-width:0}
-.dle-panel{order:3;min-width:0}
+.dle-grid{display:grid;grid-template:"stage" "palette" "panel" / minmax(0,1fr);gap:14px;align-items:start}
+.dle-palette{grid-area:palette}
+.dle-stage-wrap{grid-area:stage;min-width:0}
+.dle-panel{grid-area:panel;min-width:0}
+/* De velden blijven links in beeld (sticky), naast het blad én naast de
+   instellingen eronder. Eerst liepen de instellingen over de volle breedte
+   onder het blad door, en schoven de plakkende velden eroverheen: de
+   kleurknoppen, Dupliceren en Verwijderen waren niet meer aan te klikken.
+   De tweede rij is 1fr: is de lijst langer dan blad en instellingen samen,
+   dan komt de ruimte onderaan en niet tussen het blad en de instellingen. */
 @container (min-width:760px){
-  .dle-grid{grid-template-columns:210px minmax(0,1fr)}
-  .dle-palette{order:1;position:sticky;top:8px;max-height:calc(100vh - 140px);overflow:auto}
-  .dle-stage-wrap{order:2}
-  .dle-panel{order:3;grid-column:1 / -1}
+  .dle-grid{grid-template:"palette stage" auto "palette panel" 1fr / 210px minmax(0,1fr)}
+  .dle-palette{position:sticky;top:8px;max-height:calc(100vh - 140px);overflow:auto}
 }
 @container (min-width:1180px){
-  .dle-grid{grid-template-columns:200px minmax(0,1fr) 320px}
-  .dle-panel{grid-column:auto;position:sticky;top:8px;max-height:calc(100vh - 140px);overflow:auto}
+  .dle-grid{grid-template:"palette stage panel" / 200px minmax(0,1fr) 320px}
+  .dle-panel{position:sticky;top:8px;max-height:calc(100vh - 140px);overflow:auto}
 }
 
 .dle-help{margin:0;font-size:12px;line-height:1.5;color:var(--ink-3)}
