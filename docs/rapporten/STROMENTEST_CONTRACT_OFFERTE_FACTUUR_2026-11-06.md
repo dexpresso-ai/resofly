@@ -142,13 +142,16 @@ gegevens worden vastgelegd; **laag** = foutmelding, randgeval of tekst.
 - **Lokale 502's van Kong** (4 van ~110 aanroepen op de vraag-route van een contract) waren niet
   aan de productcode toe te schrijven en kwamen in de latere runs niet terug.
 
-## Actie voor de eigenaar (kan deze sessie niet zelf)
+## Auth-instellingen van staging (gecontroleerd bij de uitrol)
 
-- **Staging, Authentication → Sign In / Providers: zet "Confirm email" aan, en bij E-mail
-  "Secure email change".** Het klantportaal vertrouwt het e-mailadres van de sessie. Staat
-  bevestigen uit, dan kan iemand een account aanmaken met het adres van een klant en direct in diens
-  portaal. Vanuit deze sessie is staging niet bereikbaar en gaf de Management API geen toegang, dus
-  dit is niet gecontroleerd.
+Het klantportaal vertrouwt het e-mailadres van de sessie. Dat is alleen veilig als niemand zelf
+een account kan aanmaken met het adres van een klant. Vanuit de testsessie was staging niet
+bereikbaar; de rooktest van de uitrol (`scripts/supabase-smoke-test.sh`, deploy-run 182) leest de
+instellingen wel en gaf groen: zelf registreren staat uit (`disable_signup`), een e-mailadres moet
+bevestigd worden (`mailer_autoconfirm` uit), een adreswijziging wordt op beide adressen bevestigd
+(`mailer_secure_email_change_enabled`) en een wachtwoord is minstens 12 tekens. Portaalaccounts
+ontstaan alleen via `portal-login`, voor adressen die bij een klant horen. De rooktest controleert
+dit bij elke uitrol opnieuw.
 
 ## Zelf draaien
 

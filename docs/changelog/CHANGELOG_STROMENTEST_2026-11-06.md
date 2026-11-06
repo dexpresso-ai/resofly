@@ -140,10 +140,12 @@ fouten; alle zijn opgelost. Het volledige verslag, per fout met oorzaak en oplos
 
 ## Uitrol
 
-Nog niet uitgerold: de merge naar `staging` wacht op een akkoord. Daarna zet de workflow
-*Deploy Supabase (staging)* de migratie `20261106130000` en de edge functions, en bouwt Cloudflare
-Pages de app.
+Op staging gezet met merge `ff15f1c` (6 november, 18:36 UTC).
 
-Te doen op staging (kan niet vanuit deze sessie): controleer bij **Authentication → Sign In /
-Providers** dat **Confirm email** aan staat, en bij E-mail **Secure email change**. Het
-klantportaal vertrouwt het e-mailadres van de sessie.
+- **Deploy Supabase (staging), run 182: geslaagd.** Migratie `20261106130000` toegepast, alle
+  edge functions uitgerold, rooktest groen. Daarin ook de auth-instellingen waarop het klantportaal
+  leunt: zelf registreren uit, e-mailadres bevestigen aan, adreswijziging op beide adressen
+  bevestigen aan, wachtwoorden van minstens 12 tekens.
+- **Frontend checks, run 140: helemaal groen.** `deno check` van de edge functions, de migratieketen
+  vanaf nul op Postgres 17.6.1.111 (zoals staging), typecheck, unittests, de mobiele lay-outtest
+  (donker en licht) en het laden per module.
