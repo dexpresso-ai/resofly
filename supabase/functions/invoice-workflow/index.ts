@@ -1,4 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { isBeforeAmsterdamToday } from '../_shared/nlDate.ts';
+import { ALREADY_HAPPENING_MESSAGE, INVALID_CHARACTER_MESSAGE, dbErrorAnswer } from '../_shared/dbError.ts';
 import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
@@ -256,6 +258,10 @@ serve(async (req) => {
       default: return json(req, { ok: false, error: `Onbekende invoice workflow action: ${action}` }, 400);
     }
   } catch (error) {
+    // Een databasefout die rechtstreeks werd doorgegooid (een gewoon object, geen
+    // Error) met een eigen melding of een dubbele klik: een 4xx met die zin.
+    const answer = error instanceof WorkflowHttpError ? null : dbErrorAnswer(error);
+    if (answer) error = new WorkflowHttpError(answer.message, answer.status);
     const status = error instanceof WorkflowHttpError ? error.status : 500;
     const internalMessage = describeError(error);
     if (status >= 500) {
@@ -352,7 +358,8 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   let paymentLinkError: string | null = null;
   if (includePaymentLink) {
     try {
-      const paymentCheckout = await createInvoicePaymentCheckout(userId, organizationId, invoiceId, body);
+      // Het concept wordt hier uitgegeven: de betaallink hoort daarbij.
+      const paymentCheckout = await createInvoicePaymentCheckout(userId, organizationId, invoiceId, body, { allowDraft: true });
       paymentUrl = paymentCheckout.checkoutUrl || null;
     } catch (error) {
       // A payment-link failure (missing Mollie/webhook config, a Mollie API
@@ -543,6 +550,7 @@ async function sendInvoiceReminderEmail(userId: string, organizationId: string, 
   if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
   const invoice = await loadInvoice(organizationId, invoiceId);
   if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor een betaalde, geannuleerde of afgeboekte factuur kan geen herinnering worden verstuurd.', 409);
+  if (invoice.status === 'draft') throw new WorkflowHttpError(DRAFT_REMINDER_MESSAGE, 409);
 
   const explicitLevel = Number(body.level);
   const level = Number.isFinite(explicitLevel) && explicitLevel >= 1 && explicitLevel <= 3
@@ -581,6 +589,15 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
   await refreshMollieBeforeChasing(organizationId, invoiceId, actorUserId);
   const invoice = await loadInvoice(organizationId, invoiceId);
   if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen herinnering worden verstuurd.', 409);
+  // Vóór de betaallink: eerder maakte de herinnering voor een concept eerst een
+  // betaallink (en daarmee zat het concept op slot), en weigerde de database
+  // daarna de herinnering. Het concept was dan niet meer te bewerken.
+  if (invoice.status === 'draft') throw new WorkflowHttpError(DRAFT_REMINDER_MESSAGE, 409);
+  // Pas na de vervaldatum, op de Nederlandse kalenderdag (de database weigert
+  // het ook). Eerder kreeg de klant een herinnering met "0 dagen verstreken".
+  if (invoice.status !== 'overdue' && !isBeforeAmsterdamToday(invoice.due_date)) {
+    throw new WorkflowHttpError('Deze factuur is nog niet vervallen. Een herinnering kan vanaf de dag na de vervaldatum.', 409);
+  }
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
   // Wat er volgens het grootboek nog openstaat (na deelbetalingen en
   // creditnota's); null als de factuur niet in het grootboek staat.
@@ -609,7 +626,11 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
   // een fout (geen Mollie, revoked key, …) mag de herinnering nooit blokkeren.
   let paymentUrl: string | null = null;
   let paymentLinkError: string | null = null;
-  if (includePaymentLink && actorUserId) {
+  // Alleen met een gekoppeld Mollie-account. De standaard (ook voor de cron) is
+  // "met betaallink"; zonder Mollie probeerde de herinnering het toch, liep vast
+  // op de ontbrekende sleutel en liet een betaling op 'creating' achter. Daarna
+  // gaf crediteren voorgoed "er loopt een betaling".
+  if (includePaymentLink && actorUserId && await paymentLinkPossible(organizationId)) {
     try {
       const checkout = await createInvoicePaymentCheckout(actorUserId, organizationId, invoiceId, {});
       paymentUrl = checkout.checkoutUrl || null;
@@ -979,7 +1000,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
 
   // Betaallink best-effort — een fout mag de aanmaning nooit blokkeren.
   let paymentUrl: string | null = null;
-  if (settings?.include_payment_link ?? true) {
+  if ((settings?.include_payment_link ?? true) && await paymentLinkPossible(organizationId)) {
     try {
       const checkout = await createInvoicePaymentCheckout(userId, organizationId, invoice.id, {});
       paymentUrl = checkout.checkoutUrl || null;
@@ -1021,7 +1042,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
   let resendResponse: Response;
   const prepared = await beginDunningSend({
-    noticeId, organizationId, userId, claim, deadlineDate, interestKind,
+    noticeId, organizationId, userId, claim, deadlineDate, interestKind, clientKind,
     tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl,
     attachmentFileName: attachment.fileName, attachmentMimeType: attachment.mimeType, attachmentSizeBytes: attachment.sizeBytes, attachmentSha256: attachment.sha256,
   });
@@ -1113,7 +1134,7 @@ async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId:
 }
 
 async function beginDunningSend(input: {
-  noticeId: string; organizationId: string; userId: string | null; claim: DunningClaim; deadlineDate: string; interestKind: InterestKind;
+  noticeId: string; organizationId: string; userId: string | null; claim: DunningClaim; deadlineDate: string; interestKind: InterestKind; clientKind: ClientKind;
   tokenHash: string; expiresAt: string; recipientEmail: string; recipientName: string; subject: string; publicUrl: string;
   attachmentFileName: string; attachmentMimeType: string; attachmentSizeBytes: number; attachmentSha256: string;
 }): Promise<{ deliveryId: string }> {
@@ -1122,6 +1143,12 @@ async function beginDunningSend(input: {
     p_notice_id: input.noticeId,
     p_organization_id: input.organizationId,
     p_actor_user_id: input.userId,
+    // De hoofdsom en het soort klant en rente van de brief, ook in de vastgelegde
+    // aanmaning: na een deelbetaling tussen voorstel en versturen bleef daar het
+    // oude bedrag staan, terwijl de brief het nieuwe noemde.
+    p_principal_cents: claim.principalCents,
+    p_client_kind: input.clientKind,
+    p_interest_kind: input.interestKind,
     p_interest_cents: claim.interestCents,
     p_interest_days: claim.interest.days,
     p_daily_interest_cents: claim.interest.dailyRateCentsAtEnd,
@@ -1198,11 +1225,24 @@ async function createDunningLetterPdfAttachment(input: {
   return { fileName, mimeType: 'application/pdf', bytes, base64: bytesToBase64(bytes), sizeBytes: bytes.byteLength, sha256 };
 }
 
-async function createInvoicePaymentCheckout(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>) {
+async function createInvoicePaymentCheckout(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>, options: { allowDraft?: boolean } = {}) {
   if (!INVOICE_PUBLIC_BASE_URL) throw new WorkflowHttpError('INVOICE_PUBLIC_BASE_URL of APP_PUBLIC_URL ontbreekt.', 500);
   const invoice = await loadInvoice(organizationId, invoiceId);
   if (['paid','cancelled','void','written_off','refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen betaallink worden aangemaakt.', 409);
+  // Een losse betaallink is er voor een uitgegeven factuur; alleen het versturen
+  // zelf maakt er een voor het concept dat het op dat moment uitgeeft. Eerder kon
+  // een concept een link krijgen (en zat het daarna op slot).
+  if (invoice.status === 'draft' && !options.allowDraft) {
+    throw new WorkflowHttpError('Deze factuur is nog een concept. Verstuur hem eerst; de betaallink gaat dan mee.', 409);
+  }
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  // KOR: een factuur rekent dan geen btw. Een link voor een factuur met btw liet
+  // de klant betalen, waarna de webhook bij elke poging een 500 gaf (de database
+  // weigert de factuur met btw uit te geven of op betaald te zetten).
+  const korCompany = await loadCompanySettings(organizationId);
+  if (korCompany?.kor_enabled && (Array.isArray(invoice.lines) ? invoice.lines : []).some((line) => Number(line.vat || 0) !== 0)) {
+    throw new WorkflowHttpError('Je gebruikt de kleineondernemersregeling (KOR): een factuur rekent dan geen btw. Zet de btw van elke regel op 0% (code KOR) voordat je een betaallink maakt.', 422);
+  }
   // De link vraagt wat er nog openstaat, niet het factuurtotaal: na een
   // deelbetaling (bank of Mollie) of creditnota betaalde de klant anders te
   // veel. Staat de factuur (nog) niet in het grootboek, dan het factuurtotaal.
@@ -1241,6 +1281,14 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
     throw new WorkflowHttpError('Er wordt al een betaallink voor deze factuur voorbereid. Probeer het over enkele seconden opnieuw.', 409);
   }
 
+  // Eerst de eigen Mollie-sleutel, dan pas een betaalrecord. Eerder ontstond het
+  // record ('creating') vóór deze controle; zonder gekoppelde Mollie bleef het
+  // dan staan en hield het crediteren tegen.
+  const orgKey = INVOICE_ALLOW_MOCK ? null : await resolveOrganizationMollieKey(organizationId);
+  if (!INVOICE_ALLOW_MOCK && !orgKey) {
+    throw new WorkflowHttpError('Koppel eerst het eigen Mollie-account van deze organisatie in de instellingen voordat je een betaallink aanmaakt.', 409);
+  }
+
   const client = await loadClient(organizationId, invoice.client_id);
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
@@ -1268,7 +1316,6 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
       checkoutUrl = `${publicUrl}?mock_payment=${encodeURIComponent(providerPaymentId)}`;
       metadata = { mock: true, publicUrl };
     } else {
-      const orgKey = await resolveOrganizationMollieKey(organizationId);
       if (!orgKey) throw new WorkflowHttpError('Koppel eerst het eigen Mollie-account van deze organisatie in de instellingen voordat je een betaallink aanmaakt.', 409);
       if (!MOLLIE_WEBHOOK_URL) throw new WorkflowHttpError('INVOICE_MOLLIE_WEBHOOK_URL ontbreekt.', 500);
       const requestedRedirectUrl = String(body.redirectUrl || '').trim();
@@ -1394,12 +1441,19 @@ async function creditUnpaidInvoice(userId: string, organizationId: string, invoi
   if (openCents !== null && openCents !== totals.totalCents) {
     throw new WorkflowHttpError('Op deze factuur is al (deels) betaald of gecrediteerd. Verwerk het restant met een terugbetaling of een memoriaalpost.', 409);
   }
-  const { data: activePayments, error: paymentError } = await supabaseAdmin
-    .from('invoice_payment_records').select('id,status')
+  const { data: paymentRows, error: paymentError } = await supabaseAdmin
+    .from('invoice_payment_records').select('id,status,checkout_expires_at')
     .eq('organization_id', organizationId).eq('invoice_id', invoiceId)
     .in('status', ['creating', 'open', 'pending', 'authorized', 'paid']);
   if (paymentError) throwSupabaseError('betalingen laden', paymentError);
-  if ((activePayments ?? []).length > 0) {
+  // Een link die verlopen is ('creating' of 'open' met een verstreken
+  // checkout_expires_at) loopt niet meer: daarmee kan de klant niet meer betalen.
+  // Eerder hield zo'n dode link (bijvoorbeeld van een herinnering zonder Mollie)
+  // het crediteren voorgoed tegen.
+  const now = Date.now();
+  const activePayments = ((paymentRows ?? []) as Array<{ status: string; checkout_expires_at: string | null }>).filter((row) =>
+    !(['creating', 'open'].includes(row.status) && row.checkout_expires_at && Date.parse(row.checkout_expires_at) <= now));
+  if (activePayments.length > 0) {
     throw new WorkflowHttpError('Voor deze factuur loopt een betaling via Mollie. Wacht die af (of laat hem verlopen) voordat je crediteert.', 409);
   }
 
@@ -2346,6 +2400,14 @@ async function loadMollieKeyForWebhook(organizationId: string): Promise<{ key: {
   } catch (decryptError) {
     return { key: null, reason: `ontsleutelen mislukt: ${describeError(decryptError)}` };
   }
+}
+
+const DRAFT_REMINDER_MESSAGE = 'Deze factuur is nog een concept en is niet verstuurd: daar hoort geen herinnering bij.';
+
+/** Kan deze organisatie een betaallink maken (eigen Mollie gekoppeld, of de testmodus)? */
+async function paymentLinkPossible(organizationId: string): Promise<boolean> {
+  if (INVOICE_ALLOW_MOCK) return true;
+  return Boolean(await resolveOrganizationMollieKey(organizationId));
 }
 
 async function resolveOrganizationMollieKey(organizationId: string): Promise<{ apiKey: string; mode: 'test' | 'live' | null } | null> {
@@ -3875,6 +3937,10 @@ function throwRpcError(functionName: string, error: unknown): never {
   const message = typeof err.message === 'string' ? err.message.trim() : '';
   const ownMessage = message && !/violates|relation "|column "|syntax error|does not exist|permission denied for|duplicate key|invalid input/i.test(message);
   if (ownMessage && ['23514', '22023', '22001', 'P0001'].includes(code)) throw new WorkflowHttpError(message, code === '23514' ? 409 : 422);
+  // Tegelijk of dubbel (unieke sleutel): drie collega's die tegelijk een
+  // aanmaning voorstelden, kregen er één en twee keer een 500.
+  if (code === '23505') throw new WorkflowHttpError(ownMessage ? message : ALREADY_HAPPENING_MESSAGE, 409);
+  if (code === '22P05' || code === '22021') throw new WorkflowHttpError(INVALID_CHARACTER_MESSAGE, 422);
   if (ownMessage && code === '42501') throw new WorkflowHttpError(message, 403);
   if (ownMessage && code === '02000') throw new WorkflowHttpError(message, 404);
   throw new WorkflowHttpError(`Databasefunctie ${functionName} mislukt: ${describeError(error)}`, 500);
@@ -4092,7 +4158,30 @@ function btoaUrlBytes(bytes: Uint8Array): string { let binary = ''; for (const b
 function parsePositiveInt(value: string | null, fallback: number): number { const parsed = Number.parseInt(String(value ?? ''), 10); return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback; }
 function parseAllowedOrigins(values: Array<string | null>): string[] { const origins = new Set<string>(); for (const value of values) { if (!value) continue; for (const rawPart of value.split(',')) { const part = rawPart.trim().replace(/\/$/, ''); if (!part) continue; if (part.startsWith('http://') || part.startsWith('https://')) { try { origins.add(new URL(part).origin); } catch { origins.add(part); } } else origins.add(part); } } return [...origins]; }
 function corsHeaders(req: Request): HeadersInit { const origin = req.headers.get('origin') || ''; const allowOrigin = INVOICE_ALLOWED_ORIGINS.includes(origin) || (INVOICE_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) ? origin : INVOICE_ALLOW_LOCAL_DEV && !origin ? '*' : ''; return { ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}), 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', Vary: 'Origin' }; }
-function json(req: Request, payload: unknown, status = 200): Response { return new Response(JSON.stringify(payload), { status, headers: { ...corsHeaders(req), 'Content-Type': 'application/json' } }); }
+// De publieke factuurlink (met token) gaat niet terug naar de browser: de app
+// gebruikt hem niet, en met de link opent iedereen de factuur, de klantgegevens
+// en de betaalpagina, ook wie later uit de organisatie verdwijnt. Hij zat in het
+// antwoord op versturen, herinneren, aanmanen en de betaallink (als publicUrl,
+// in de verzendregel en in de aanmaning). De klant krijgt hem per mail en op de PDF.
+// Ook waar hij als tekst in iets anders zit (Mollie bewaart hem als redirectUrl in
+// zijn antwoord, dat met de betaalrij meekwam). De betaallink zelf (checkoutUrl)
+// blijft staan: die is er om te openen.
+function withoutPublicLinks(value: unknown, depth = 0, key = ''): unknown {
+  if (typeof value === 'string') {
+    const prefix = INVOICE_PUBLIC_BASE_URL ? `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/` : '';
+    if (prefix && value.includes(prefix) && key !== 'checkoutUrl' && key !== 'provider_checkout_url') return '(verborgen)';
+    return value;
+  }
+  if (depth > 12 || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((item) => withoutPublicLinks(item, depth + 1, key));
+  const out: Record<string, unknown> = {};
+  for (const [itemKey, item] of Object.entries(value as Record<string, unknown>)) {
+    if (itemKey === 'publicUrl' || itemKey === 'public_url') continue;
+    out[itemKey] = withoutPublicLinks(item, depth + 1, itemKey);
+  }
+  return out;
+}
+function json(req: Request, payload: unknown, status = 200): Response { return new Response(JSON.stringify(withoutPublicLinks(payload)), { status, headers: { ...corsHeaders(req), 'Content-Type': 'application/json' } }); }
 function assertAllowedOrigin(req: Request): void { const origin = req.headers.get('origin') || ''; if (origin === 'null') throw new WorkflowHttpError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403); if (!origin && INVOICE_ALLOW_LOCAL_DEV) return; if (INVOICE_ALLOWED_ORIGINS.includes(origin)) return; if (INVOICE_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) return; if (INVOICE_ALLOWED_ORIGINS.length === 0 && INVOICE_ALLOW_LOCAL_DEV) return; if (INVOICE_ALLOWED_ORIGINS.length === 0) throw new WorkflowHttpError('INVOICE_ALLOWED_ORIGINS of APP_PUBLIC_URL is verplicht in productie.', 500); throw new WorkflowHttpError('Deze frontend-origin is niet toegestaan voor invoice workflow-acties.', 403); }
 function isLocalOrigin(origin: string): boolean { return ['http://localhost:5173', 'http://127.0.0.1:5173'].includes(origin); }
 async function requireUser(req: Request): Promise<{ id: string; email?: string }> { const auth = req.headers.get('Authorization') || ''; const token = auth.replace(/^Bearer\s+/i, ''); if (!token) throw new WorkflowHttpError('Niet ingelogd: Authorization header ontbreekt.', 401); const { data, error } = await supabaseAdmin.auth.getUser(token); if (error || !data.user) throw new WorkflowHttpError('Niet ingelogd of ongeldig sessietoken.', 401); return { id: data.user.id, email: data.user.email || undefined }; }

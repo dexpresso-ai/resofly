@@ -71,7 +71,8 @@ const quoteStatusLabels: Record<string, string> = {
   accepted: 'Geaccepteerd',
   rejected: 'Afgewezen',
   expired: 'Verlopen',
-  cancelled: 'Geannuleerd',
+  // Ingetrokken met de knop "Intrekken"; de klant ziet ook "Ingetrokken".
+  cancelled: 'Ingetrokken',
 };
 
 type ClientViewMode = 'cards' | 'table';

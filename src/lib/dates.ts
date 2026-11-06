@@ -25,6 +25,22 @@ export function todayIso(): string {
   return formatISODate(new Date());
 }
 
+/**
+ * Vandaag in Nederland als JJJJ-MM-DD, waar de bezoeker ook zit. Voor een
+ * datum die de afzender als kalenderdag hier bedoelt, zoals "geldig tot" op een
+ * offerte. Met de UTC-datum bleef een verlopen offerte tussen middernacht en
+ * 01:00/02:00 nog een uur of twee te accorderen; met de klok van de bezoeker
+ * hangt het af van waar die op vakantie is.
+ *
+ * Via formatToParts en niet via de standaardnotatie van een taal: die
+ * notatie (en-CA, sv-SE) is wel eens gewijzigd tussen browserversies.
+ */
+export function amsterdamTodayIso(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
 /** Monday-aligned start of the week containing `d`. NL convention. */
 export function startOfWeek(d: Date): Date {
   const day = d.getDay(); // 0 = Sunday, 1 = Monday, ...

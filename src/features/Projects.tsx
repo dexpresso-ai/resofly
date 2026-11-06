@@ -84,7 +84,8 @@ const projectQuoteStatusLabels: Record<string, string> = {
   accepted: 'Geaccepteerd',
   rejected: 'Afgewezen',
   expired: 'Verlopen',
-  cancelled: 'Geannuleerd',
+  // Ingetrokken met de knop "Intrekken"; de klant ziet ook "Ingetrokken".
+  cancelled: 'Ingetrokken',
 };
 
 const projectInvoiceStatusLabels: Record<string, string> = {
@@ -802,12 +803,14 @@ function contractLinkErrorText(err: unknown): string {
  * AppData: daarvoor volstaat `onChanged()`, maar de contracten zelf moeten we
  * na een wijziging opnieuw ophalen.
  */
-function ProjectContractsPanel({ project, data, organizationId, canWrite, onChanged }: {
+function ProjectContractsPanel({ project, data, organizationId, canWrite, onChanged, refreshKey = 0 }: {
   project: Project;
   data: AppData;
   organizationId: UUID;
   canWrite: boolean;
   onChanged: () => void | Promise<void>;
+  /** Gaat omhoog bij elke Ververs van de werkruimte. */
+  refreshKey?: number;
 }) {
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [loading, setLoading] = useState(true);
@@ -815,20 +818,27 @@ function ProjectContractsPanel({ project, data, organizationId, canWrite, onChan
   const [busy, setBusy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
+  // De contracten zelf staan buiten AppData (alleen de koppelrijen zitten
+  // erin). Ververs liet ze eerst staan: een contract dat de klant net had
+  // ondertekend, bleef hier "Wacht op ondertekening". De laadmelding alleen de
+  // eerste keer en bij een andere organisatie; bij Ververs blijft de lijst
+  // staan tot het nieuwe antwoord er is.
+  const loadedFor = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    if (loadedFor.current !== organizationId) { loadedFor.current = organizationId; setLoading(true); }
     void supabase.from('contracts').select('*')
       .eq('organization_id', organizationId)
       .order('created_at', { ascending: false })
       .then(({ data: rows, error: loadError }) => {
         if (cancelled) return;
         if (loadError) setError(loadError.message);
-        else setContracts((rows ?? []) as Contract[]);
+        // Gelukt na een eerdere mislukte poging (Ververs): de oude melding weg.
+        else { setContracts((rows ?? []) as Contract[]); setError(null); }
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [organizationId, reloadKey]);
+  }, [organizationId, reloadKey, refreshKey]);
 
   const client = data.clients.find(item => item.id === project.client_id);
   const linkedIds = useMemo(
@@ -926,6 +936,7 @@ export function ProjectPage({
   canAdmin,
   canReadContracts,
   canWriteContracts,
+  refreshKey = 0,
   creativeActive,
   creativeGraceUntil,
   onOpenGalleryTab,
@@ -960,6 +971,8 @@ export function ProjectPage({
   /** Contracten vallen onder Financiën, niet onder Projecten — vandaar eigen rechten. */
   canReadContracts: boolean;
   canWriteContracts: boolean;
+  /** Gaat omhoog bij elke Ververs; het tabblad Contracten haalt dan zijn lijst opnieuw op. */
+  refreshKey?: number;
   /** Creatieve module op het abonnement: bepaalt of de galerij bestaat. */
   creativeActive: boolean;
   /** Tot wanneer bestaande galerijen na het uitzetten nog bereikbaar zijn. */
@@ -1417,6 +1430,7 @@ export function ProjectPage({
         organizationId={organizationId}
         canWrite={canWriteContracts && !project.archived}
         onChanged={onChanged}
+        refreshKey={refreshKey}
       />}
 
       {/* ── Tab: Facturen ── */}

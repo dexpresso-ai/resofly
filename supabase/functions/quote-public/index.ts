@@ -2,6 +2,8 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { loadBranding } from '../_shared/branding.ts';
 import { toPublicTimeline } from '../_shared/publicTimeline.ts';
+import { isBeforeAmsterdamToday } from '../_shared/nlDate.ts';
+import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
 
 type QuoteLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number };
 type PublicQuote = {
@@ -73,6 +75,8 @@ serve(async (req) => {
     assertAllowedOrigin(req);
     if (req.method !== 'POST') return json(req, { ok: false, error: 'Method not allowed.' }, 405);
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    // Een NUL-teken kan Postgres niet opslaan; dat gaf een 500 voor de bezoeker.
+    if (containsNulCharacter(body)) throw new PublicHttpError(INVALID_CHARACTER_MESSAGE, 422);
     const action = String(body.action || 'getQuote');
     const token = String(body.token || '').trim();
     if (!token || token.length < 24) throw new PublicHttpError('Offertelink ontbreekt of is ongeldig.', 400);
@@ -85,14 +89,19 @@ serve(async (req) => {
       default: return json(req, { ok: false, error: `Onbekende publieke offerte-actie: ${action}` }, 400);
     }
   } catch (error) {
-    const status = error instanceof PublicHttpError ? error.status : 500;
+    // Een eigen melding uit de database (bijvoorbeeld "al beslist") of een
+    // dubbele klik is een 4xx met die zin; een technische fout blijft een 500.
+    const answer = error instanceof PublicHttpError ? null : dbErrorAnswer(error);
+    const status = error instanceof PublicHttpError ? error.status : answer ? answer.status : 500;
     const internalMessage = describeError(error);
     if (status >= 500) console.error('quote-public error', internalMessage, error instanceof Error ? error.stack : undefined);
     // Een bezoeker zonder login krijgt geen interne foutteksten (tabel-, kolom-
     // en constraintnamen); de reden staat in de log hierboven.
     const publicMessage = error instanceof PublicHttpError
       ? error.message
-      : 'Offerte kon niet worden geladen. Probeer het later opnieuw.';
+      : answer
+        ? answer.message
+        : 'Offerte kon niet worden geladen. Probeer het later opnieuw.';
     return json(req, { ok: false, error: publicMessage }, status);
   }
 });
@@ -164,7 +173,9 @@ async function loadQuoteByTokenHash(tokenHash: string): Promise<PublicQuote> {
   if (!quote.public_token_expires_at || new Date(quote.public_token_expires_at).getTime() < Date.now()) {
     throw new PublicHttpError('Deze offertelink is verlopen.', 410);
   }
-  if (quote.status === 'sent' && isDateBeforeToday(quote.valid_until)) {
+  // Op de Nederlandse kalenderdag, zoals de database: in UTC toonde de pagina tot
+  // 01:00/02:00 nog een akkoordknop die daarna een fout gaf.
+  if (quote.status === 'sent' && isBeforeAmsterdamToday(quote.valid_until)) {
     throw new PublicHttpError('Deze offerte is verlopen en kan niet meer publiek worden beoordeeld.', 410);
   }
   if (!['sent', 'accepted', 'rejected', 'expired', 'cancelled'].includes(quote.status)) {
@@ -323,14 +334,6 @@ function clientIp(req: Request): string | null {
   return null;
 }
 
-function isDateBeforeToday(value: string | null): boolean {
-  if (!value) return false;
-  const parsed = Date.parse(`${value}T23:59:59`);
-  if (!Number.isFinite(parsed)) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return parsed < today.getTime();
-}
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));

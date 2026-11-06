@@ -72,6 +72,7 @@ import {
   withdrawQuote as withdrawQuoteRpc,
   sendInvoiceEmailViaResend,
   sendInvoiceReminderEmail,
+  reminderPaymentLinkWanted,
   setInvoiceRemindersPaused,
   proposeInvoiceDunningNotice,
   sendInvoiceDunningNotice,
@@ -1185,7 +1186,14 @@ function App() {
     }
   }
 
+  // Telt elke ververs: de knop Ververs en elke herlaadslag na een wijziging.
+  // Pagina's met een eigen lijst buiten AppData (Contracten, het tabblad
+  // Contracten van een project) halen die opnieuw op als de teller verandert.
+  // Eerder liet Ververs die lijsten staan: een contract dat de klant net had
+  // ondertekend, bleef daar "Wacht op ondertekening".
+  const [refreshRound, setRefreshRound] = useState(0);
   async function refresh() {
+    setRefreshRound(round => round + 1);
     await loadWorkspace();
   }
 
@@ -2689,11 +2697,16 @@ function App() {
     if (!confirm(`Betalings${levelLabel} versturen voor factuur ${invoice.number} naar ${client.email}?`)) return;
 
     setSending('Herinnering wordt verstuurd via Resend…');
+    // Net als bij versturen: eerst kijken of Mollie gekoppeld is, en de keuze
+    // meegeven. Zonder die vlag vroeg de server ook zonder Mollie een betaallink;
+    // die liet een betaling op 'creating' achter, waarna crediteren niet meer kon.
+    const includePaymentLink = await reminderPaymentLinkWanted(activeOrg.id);
     setLoading(true); setError(null);
     try {
-      const result = await sendInvoiceReminderEmail(activeOrg.id, invoice.id);
+      const result = await sendInvoiceReminderEmail(activeOrg.id, invoice.id, { includePaymentLink });
       await refresh();
-      if (result.paymentLinkError) {
+      // Alleen melden als er om een link gevraagd was.
+      if (includePaymentLink && result.paymentLinkError) {
         setError(`Herinnering is verstuurd, maar de Mollie-betaallink kon niet worden aangemaakt (alleen de PDF is meegestuurd): ${result.paymentLinkError}`);
       }
     } catch (e) {
@@ -3356,11 +3369,14 @@ function App() {
     onEditClient: openProposalForm,
     onSendReminders: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      // Eén keer voor de hele reeks, net als bij de knop: zonder gekoppelde
+      // Mollie geen betaallink vragen (zie reminderPaymentLinkWanted).
+      const includePaymentLink = await reminderPaymentLinkWanted(activeOrg.id);
       let sent = 0;
       const failed: string[] = [];
       for (const inv of p.invoices) {
         // Het adres op de kaart (voorstellen van vóór die regel hebben er geen).
-        try { await sendInvoiceReminderEmail(activeOrg.id, inv.id, { expectedRecipientEmail: inv.recipient_email ?? undefined }); sent += 1; }
+        try { await sendInvoiceReminderEmail(activeOrg.id, inv.id, { expectedRecipientEmail: inv.recipient_email ?? undefined, includePaymentLink }); sent += 1; }
         catch { failed.push(inv.number); }
       }
       scheduleRefresh();
@@ -3786,7 +3802,7 @@ function App() {
     const canReadContracts = permissions.canRead('finance');
     const canWriteContracts = orgCanWrite && permissions.canWrite('finance');
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} organizationId={activeOrg.id} currentUserId={currentUserId} canWriteTasks={orgCanWrite && permissions.canWrite('projects')} permissions={permissions} gerrieActions={gerrieActions} canWriteGerrie={orgCanWrite && permissions.canWrite('gerrie')} orgCanWrite={orgCanWrite} onOpenDecisionTarget={openDecisionTarget} openFinanceDoc={(kind, id) => { const item = kind === 'quote' ? data.quotes.find(q => q.id === id) : data.invoices.find(i => i.id === id); setPage(kind === 'quote' ? 'quotes' : 'invoices'); setProjectId(null); setClientId(null); if (item) setEdit(kind === 'quote' ? { kind: 'quote', item: item as Quote } : { kind: 'invoice', item: item as Invoice }); }} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} openTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} />;
-    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={workMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onWithdrawQuote={withdrawQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={workMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} refreshKey={refreshRound} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onWithdrawQuote={withdrawQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
     if (page === 'gallery') {
       // Het project leiden we uit de galerij zelf af: dat blijft kloppen ook als
       // de projectverwijzing van het tabblad ooit achterloopt.
@@ -3819,7 +3835,7 @@ function App() {
       openCampaignId={view.pendingDraft?.kind === 'campaign' ? String(view.pendingDraft.payload.id ?? '') : null} onCampaignOpened={() => setPendingDraft(null)}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onWithdraw={withdrawQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
-    if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
+    if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} refreshKey={refreshRound}
       draft={view.pendingDraft?.kind === 'contract' ? contractDraftFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onPostToLedger={postInvoiceToLedger} onCreditInvoice={creditUnpaidInvoice} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}

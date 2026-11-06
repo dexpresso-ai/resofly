@@ -22,6 +22,7 @@ async function extractFunctionError(error: unknown, fallback: string): Promise<s
 }
 import type { FinanceLine } from '../types';
 import { formatDocUnitPrice } from '../lib/documentLayout';
+import { quoteDecision } from '../lib/financeRules';
 
 type PublicQuote = {
   id: string;
@@ -109,7 +110,14 @@ export function PublicQuotePage({ token }: { token: string }) {
   const companyName = branding?.companyName || payload?.company?.trade_name || payload?.company?.company_name || '';
   usePublicBrandTheme(branding, 'Offerte');
   const totals = useMemo(() => total(quote?.lines || []), [quote?.lines]);
-  const finalStatus = quote?.status === 'accepted' || quote?.status === 'rejected';
+  // Het formulier alleen bij een verstuurde offerte die nog geldig is. Eerder
+  // stond het er ook bij een ingetrokken of verlopen offerte: de klant vulde
+  // naam en e-mail in, en pas daarna weigerde de server het akkoord.
+  const decision = quote ? quoteDecision(quote) : 'unavailable';
+  const finalStatus = decision === 'accepted' || decision === 'rejected';
+  // Een verstuurde offerte waarvan "geldig tot" voorbij is, staat nog op
+  // 'sent'; de klant hoort dan "Verlopen" te zien, niet "Wacht op akkoord".
+  const shownStatus = decision === 'expired' ? 'expired' : quote?.status ?? '';
 
   if (loading) return <PublicDocState><h1>Offerte laden…</h1></PublicDocState>;
 
@@ -126,10 +134,10 @@ export function PublicQuotePage({ token }: { token: string }) {
       companyName={companyName}
       kind="Offerte"
       title={`Offerte ${quote.number}`}
-      intro={payload?.project?.name ? `Project: ${payload.project.name}` : 'Bekijk de offerte en geef digitaal akkoord.'}
-      status={<div className={`public-quote-status st-${quote.status}`}>{statusLabel(quote.status)}</div>}
+      intro={payload?.project?.name ? `Project: ${payload.project.name}` : decision === 'open' ? 'Bekijk de offerte en geef digitaal akkoord.' : 'Bekijk de offerte.'}
+      status={<div className={`public-quote-status st-${shownStatus}`}>{statusLabel(shownStatus)}</div>}
       facts={[
-        { label: 'Totaal incl. btw', value: euro(totals.total), tone: finalStatus ? undefined : 'accent' },
+        { label: 'Totaal incl. btw', value: euro(totals.total), tone: decision === 'open' ? 'accent' : undefined },
         { label: 'Geldig tot', value: dateNL(quote.valid_until) },
         { label: 'Datum', value: dateNL(quote.date) },
         { label: 'Voor', value: payload?.client?.name || '—' },
@@ -164,6 +172,15 @@ export function PublicQuotePage({ token }: { token: string }) {
         <h3>{quote.status === 'accepted' ? 'Offerte geaccepteerd' : 'Offerte geweigerd'}</h3>
         <p>Beslissing vastgelegd op {dateNL(quote.client_decision_at)} door {quote.client_decision_by_name || 'de klant'}.</p>
         {quote.client_decision_note && <p>Opmerking: {quote.client_decision_note}</p>}
+      </div> : decision === 'withdrawn' ? <div className="public-decision-done">
+        <h3>Deze offerte is ingetrokken</h3>
+        <p>{companyName || 'De afzender'} heeft deze offerte ingetrokken. Akkoord geven kan niet meer. Heb je er een vraag over? Neem dan gerust contact op.</p>
+      </div> : decision === 'expired' ? <div className="public-decision-done">
+        <h3>Deze offerte is verlopen</h3>
+        <p>{quote.valid_until ? `Hij was geldig tot ${dateNL(quote.valid_until)}. ` : ''}Akkoord geven kan niet meer. Wil je toch verder? Neem dan gerust contact op met {companyName || 'de afzender'}.</p>
+      </div> : decision !== 'open' ? <div className="public-decision-done">
+        <h3>Niet meer te beoordelen</h3>
+        <p>Deze offerte kan hier niet (meer) worden beoordeeld.</p>
       </div> : <div className="public-decision-form">
         <Input value={name} onChange={e => setName(e.target.value)} placeholder="Naam" />
         <Input value={email} onChange={e => setEmail(e.target.value)} placeholder="E-mailadres" />

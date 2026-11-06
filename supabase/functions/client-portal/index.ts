@@ -24,6 +24,7 @@ import {
 } from '../_shared/portalMessages.ts';
 import { transferZipName } from '../_shared/fileTransfer.ts';
 import { portalDocumentDecision, portalDocumentScopeFilter } from '../_shared/portalAccess.ts';
+import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
 import {
   storageKeyBelongsOnlyTo,
   itemForRecipient,
@@ -66,6 +67,16 @@ const INVOICE_PDF_STORAGE_SECRET =
   Deno.env.get('INVOICE_PDF_STORAGE_SECRET') ||
   Deno.env.get('QUOTE_PDF_STORAGE_SECRET') ||
   '';
+// Getekende contracten: dezelfde opslagkoppeling als contract-public, die ze
+// schrijft (CONTRACT_PDF_STORAGE_*, met de factuuropslag als terugval). Het
+// portaal las ze met alleen de factuurkoppeling; stonden die twee verschillend
+// ingesteld, dan faalde de download van een getekend contract.
+const CONTRACT_PDF_STORAGE_WORKER_URL = (
+  Deno.env.get('CONTRACT_PDF_STORAGE_WORKER_URL') ||
+  INVOICE_PDF_STORAGE_WORKER_URL
+).replace(/\/$/, '');
+const CONTRACT_PDF_STORAGE_SECRET =
+  Deno.env.get('CONTRACT_PDF_STORAGE_SECRET') || INVOICE_PDF_STORAGE_SECRET;
 
 // Galerij-weergave: de media-api worker munt kijk-/downloadtokens voor het
 // portaal via /internal/gallery/tokens (zelfde secret-keten als meeting-transcribe).
@@ -131,6 +142,8 @@ serve(async (req) => {
 
     const user = await requireUser(req);
     const body = await req.json().catch(() => ({}));
+    // Een NUL-teken kan Postgres niet opslaan; dat gaf een 500 in het portaal.
+    if (containsNulCharacter(body)) throw new PortalError(INVALID_CHARACTER_MESSAGE, 422);
     const action = String(body.action || 'getPortalData');
 
     switch (action) {
@@ -184,11 +197,16 @@ serve(async (req) => {
         throw new PortalError(`Onbekende actie: ${action}`, 400);
     }
   } catch (error) {
-    const status = error instanceof PortalError ? error.status : 500;
+    // Een eigen melding uit de database ("al beslist", een dubbele klik) is een
+    // 4xx met die zin; een technische fout blijft een 500 zonder details.
+    const answer = error instanceof PortalError ? null : dbErrorAnswer(error);
+    const status = error instanceof PortalError ? error.status : answer ? answer.status : 500;
     const message = error instanceof PortalError
       ? error.message
-      // Geen interne foutteksten naar de klant; de reden staat in de log hieronder.
-      : 'Het klantportaal kon dit nu niet verwerken. Probeer het later opnieuw.';
+      : answer
+        ? answer.message
+        // Geen interne foutteksten naar de klant; de reden staat in de log hieronder.
+        : 'Het klantportaal kon dit nu niet verwerken. Probeer het later opnieuw.';
     if (status >= 500) {
       console.error('client-portal error', describeError(error), error instanceof Error ? error.stack : undefined);
     }
@@ -199,7 +217,7 @@ serve(async (req) => {
 // ── Acties ────────────────────────────────────────────────────────────
 
 async function getPortalData(user: { id: string; email: string }) {
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   // Eén keer ophalen en per klant tellen: het aantal met jou gedeelde bestanden
   // voedt alleen het tabblad-badgetje, de inhoud komt pas als je erop klikt.
   const shares = await loadSharesForUser(user.email);
@@ -226,7 +244,7 @@ async function createTicket(user: { id: string; email: string }, body: Record<st
 
   // Het client_id NOOIT blind vertrouwen: opnieuw afleiden uit het geverifieerde
   // e-mailadres en controleren dat de klant in die set zit.
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   const client = clients.find((row) => row.id === clientId);
   if (!client) throw new PortalError('Geen toegang tot deze klant.', 403);
 
@@ -262,7 +280,7 @@ async function getTicketThread(user: { id: string; email: string }, body: Record
   const ticketId = String(body.ticketId || '').trim();
   if (!isUuid(ticketId)) throw new PortalError('Ongeldig ticket.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: ticket, error } = await supabaseAdmin
@@ -328,7 +346,7 @@ async function addTicketNote(user: { id: string; email: string }, body: Record<s
   if (!noteBody) throw new PortalError('Een notitie mag niet leeg zijn.', 400);
   if (noteBody.length > 5000) throw new PortalError('De notitie mag maximaal 5000 tekens zijn.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   const { data: ticket, error } = await supabaseAdmin
     .from('tickets')
     .select('id,organization_id,client_id')
@@ -404,7 +422,7 @@ async function getProjectDetail(user: { id: string; email: string }, body: Recor
   const projectId = String(body.projectId || '').trim();
   if (!isUuid(projectId)) throw new PortalError('Ongeldig project.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: project, error } = await supabaseAdmin
@@ -444,7 +462,7 @@ async function decideQuote(user: { id: string; email: string }, body: Record<str
   if (kind !== 'accept' && kind !== 'reject') throw new PortalError('Ongeldige beslissing.', 400);
   if (note.length > 2000) throw new PortalError('De opmerking mag maximaal 2000 tekens zijn.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: quote, error } = await supabaseAdmin
@@ -492,7 +510,7 @@ async function getInvoicePaymentInfo(user: { id: string; email: string }, body: 
   const invoiceId = String(body.invoiceId || '').trim();
   if (!isUuid(invoiceId)) throw new PortalError('Ongeldige factuur.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: invoice, error } = await supabaseAdmin
@@ -557,7 +575,7 @@ async function createInvoicePayment(user: { id: string; email: string }, body: R
   const invoiceId = String(body.invoiceId || '').trim();
   if (!isUuid(invoiceId)) throw new PortalError('Ongeldige factuur.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: invoice, error } = await supabaseAdmin
@@ -605,7 +623,7 @@ async function getInvoicePdf(user: { id: string; email: string }, body: Record<s
   const invoiceId = String(body.invoiceId || '').trim();
   if (!isUuid(invoiceId)) throw new PortalError('Ongeldige factuur.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: invoice, error } = await supabaseAdmin
@@ -664,7 +682,7 @@ async function getContractPdf(user: { id: string; email: string }, body: Record<
   const contractId = String(body.contractId || '').trim();
   if (!isUuid(contractId)) throw new PortalError('Ongeldig contract.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: contract, error } = await supabaseAdmin
@@ -679,11 +697,11 @@ async function getContractPdf(user: { id: string; email: string }, body: Record<
 
   let base64 = String(contract.signed_pdf_data_base64 || '').trim();
   if (!base64 && contract.signed_storage_provider === 'r2' && contract.signed_storage_key) {
-    if (!INVOICE_PDF_STORAGE_WORKER_URL || !INVOICE_PDF_STORAGE_SECRET) {
+    if (!CONTRACT_PDF_STORAGE_WORKER_URL || !CONTRACT_PDF_STORAGE_SECRET) {
       throw new PortalError('PDF is opgeslagen in private storage, maar de storage-koppeling ontbreekt.', 500);
     }
-    const response = await fetch(`${INVOICE_PDF_STORAGE_WORKER_URL}/internal/contract-snapshot/${encodeURIComponent(String(contract.signed_storage_key))}`, {
-      headers: { Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}` },
+    const response = await fetch(`${CONTRACT_PDF_STORAGE_WORKER_URL}/internal/contract-snapshot/${encodeURIComponent(String(contract.signed_storage_key))}`, {
+      headers: { Authorization: `Bearer ${CONTRACT_PDF_STORAGE_SECRET}` },
     });
     if (!response.ok) throw new PortalError('PDF kon niet uit private storage worden opgehaald.', 502);
     base64 = arrayBufferToBase64(await response.arrayBuffer());
@@ -942,7 +960,7 @@ async function getTransfers(user: { id: string; email: string }, body: Record<st
 }
 
 /** Mag deze portaalgebruiker bij deze zending? Als ontvanger, of via een ticket dat die persoon ziet. */
-async function requirePortalTransfer(user: { email: string }, transferIdRaw: unknown): Promise<{ transfer: TransferRow; recipientId: string | null }> {
+async function requirePortalTransfer(user: { id: string; email: string }, transferIdRaw: unknown): Promise<{ transfer: TransferRow; recipientId: string | null }> {
   const transferId = String(transferIdRaw || '').trim();
   if (!isUuid(transferId)) throw new PortalError('Ongeldige zending.', 400);
   const [transfer] = await loadTransfersByIds([transferId]);
@@ -968,7 +986,7 @@ async function requirePortalTransfer(user: { email: string }, transferIdRaw: unk
         .maybeSingle();
       if (ticketError) throw ticketError;
       if (ticket && ticket.organization_id === transfer.organization_id && ticket.client_id === transfer.client_id) {
-        const clients = await resolveAccountsForEmail(user.email);
+        const clients = await resolveAccountsForEmail(user.email, user.id);
         await assertEntityBelongsToClients({ client_id: ticket.client_id, project_id: null, organization_id: ticket.organization_id }, clients);
         return { transfer, recipientId: null };
       }
@@ -1094,9 +1112,9 @@ type GalleryRow = {
 };
 
 /** Haal de galerij op en dwing publicatie + geldigheid + klant-eigendom af. */
-async function requireAccessibleGallery(user: { email: string }, galleryId: string): Promise<{ gallery: GalleryRow; client: ClientRow; clients: ClientRow[] }> {
+async function requireAccessibleGallery(user: { id: string; email: string }, galleryId: string): Promise<{ gallery: GalleryRow; client: ClientRow; clients: ClientRow[] }> {
   if (!isUuid(galleryId)) throw new PortalError('Ongeldige galerij.', 400);
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
 
   const { data, error } = await supabaseAdmin.from('galleries').select('*').eq('id', galleryId).maybeSingle();
   if (error) throw error;
@@ -1305,10 +1323,10 @@ type PortalContext = {
 };
 
 /** Het dossier + wie de ingelogde gebruiker daarin is. Nooit een id uit de browser blind vertrouwen. */
-async function requirePortalPerson(user: { email: string }, clientIdRaw: unknown): Promise<PortalContext> {
+async function requirePortalPerson(user: { id: string; email: string }, clientIdRaw: unknown): Promise<PortalContext> {
   const clientId = String(clientIdRaw || '').trim();
   if (!isUuid(clientId)) throw new PortalError('Ongeldige klant.', 400);
-  const clients = await resolveAccountsForEmail(user.email);
+  const clients = await resolveAccountsForEmail(user.email, user.id);
   const client = clients.find((row) => row.id === clientId);
   if (!client) throw new PortalError('Geen toegang tot deze klant.', 403);
 
@@ -1723,10 +1741,24 @@ function sanitizePortalMessage(row: EmailBodyRow, me: PortalPerson, people: Port
 
 // ── Dataopbouw ────────────────────────────────────────────────────────
 
-async function resolveAccountsForEmail(email: string): Promise<ClientRow[]> {
+async function resolveAccountsForEmail(email: string, userId: string): Promise<ClientRow[]> {
   const { data, error } = await supabaseAdmin.rpc('portal_clients_for_email', { p_email: email });
   if (error) throw error;
-  return (Array.isArray(data) ? data : []) as ClientRow[];
+  const clients = (Array.isArray(data) ? data : []) as ClientRow[];
+  if (clients.length === 0) return clients;
+  // Een teamlid is in zijn eigen organisatie nooit klant. Eerder zette een
+  // collega zonder Financiën zijn eigen adres als portaalcontact bij een klant,
+  // en las hij hier alle facturen, offertes en contracten, met PDF's, en kon hij
+  // een offerte "als klant" accepteren. De database sluit leden al uit op
+  // e-mailadres (portal_clients_for_email); hier nog eens op gebruikers-id.
+  const { data: memberships, error: memberError } = await supabaseAdmin
+    .from('organization_members')
+    .select('organization_id')
+    .eq('user_id', userId)
+    .eq('status', 'active');
+  if (memberError) throw memberError;
+  const ownOrganizations = new Set((memberships ?? []).map((row) => String((row as { organization_id: string }).organization_id)));
+  return clients.filter((client) => !ownOrganizations.has(String(client.organization_id)));
 }
 
 async function buildAccount(client: ClientRow, email: string) {

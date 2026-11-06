@@ -10,6 +10,8 @@ import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
 import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 import { publicLinkExpiresAt } from '../_shared/publicLinkExpiry.ts';
+import { isBeforeAmsterdamToday } from '../_shared/nlDate.ts';
+import { dbErrorAnswer } from '../_shared/dbError.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 
@@ -81,6 +83,7 @@ type CompanySettingsRow = {
   invoice_payment_terms?: string | null;
   invoice_footer?: string | null;
   invoice_accent_color?: string | null;
+  kor_enabled?: boolean | null;
 };
 
 type QuotePdfAttachment = {
@@ -249,9 +252,17 @@ serve(async (req) => {
         );
     }
   } catch (error) {
-    const status = error instanceof WorkflowHttpError ? error.status : 500;
-    const internalMessage =
-      error instanceof Error ? error.message : 'Onbekende fout.';
+    // Een databasefout (een gewoon object, geen Error) met een eigen melding is
+    // een 4xx voor de gebruiker. Eerder werd elke databasefout een 500 met
+    // "Onbekende fout." in de log, ook "er loopt al een verzendpoging" bij een
+    // dubbelklik op Versturen.
+    const answer = error instanceof WorkflowHttpError ? null : dbErrorAnswer(error);
+    const status = error instanceof WorkflowHttpError ? error.status : answer ? answer.status : 500;
+    const internalMessage = error instanceof Error
+      ? error.message
+      : (error && typeof error === 'object' && 'message' in error)
+        ? `${String((error as { code?: unknown }).code ?? '')} ${String((error as { message?: unknown }).message ?? '')}`.trim()
+        : 'Onbekende fout.';
 
     if (status >= 500) {
       console.error('quote-workflow error', internalMessage);
@@ -260,7 +271,9 @@ serve(async (req) => {
     const publicMessage =
       error instanceof WorkflowHttpError
         ? error.message
-        : 'Quote workflow-actie mislukt door een server- of providerfout. Controleer de Edge Function logs.';
+        : answer
+          ? answer.message
+          : 'Quote workflow-actie mislukt door een server- of providerfout. Controleer de Edge Function logs.';
 
     return json(req, { ok: false, error: publicMessage }, status);
   }
@@ -313,7 +326,8 @@ async function sendQuoteEmail(
     throw new WorkflowHttpError('Deze offerte heeft geen klant gekoppeld.', 422);
   }
 
-  if (isDateBeforeToday(quote.valid_until)) {
+  // Op de Nederlandse kalenderdag, zoals de database en de klantpagina.
+  if (isBeforeAmsterdamToday(quote.valid_until)) {
     throw new WorkflowHttpError(
       'Deze offerte is verlopen. Pas de geldigheidsdatum aan en doorloop de goedkeuringsflow opnieuw voordat je verstuurt.',
       409,
@@ -328,6 +342,16 @@ async function sendQuoteEmail(
     loadCompanySettings(organizationId),
     loadQuoteEmailContent(organizationId),
   ]);
+
+  // KOR: de factuur die uit deze offerte komt, mag geen btw rekenen (de
+  // database weigert dan het versturen). Een offerte met btw kon wel worden
+  // verstuurd en geaccepteerd; daarna liep de factuur vast. Nu vóór de mail.
+  if (company?.kor_enabled && (Array.isArray(quote.lines) ? quote.lines : []).some((line) => Number((line as { vat?: unknown })?.vat || 0) !== 0)) {
+    throw new WorkflowHttpError(
+      'Je gebruikt de kleineondernemersregeling (KOR): een offerte rekent dan geen btw. Zet de btw van elke regel op 0% (code KOR); anders kun je de factuur die eruit komt niet versturen.',
+      422,
+    );
+  }
 
   const recipientEmail = String(body.recipientEmail || client.email || '')
     .trim()
@@ -597,7 +621,7 @@ async function loadCompanySettings(
   const { data, error } = await supabaseAdmin
     .from('company_settings')
     .select(
-      'company_name,trade_name,address_line1,address_line2,postal_code,city,country,email,phone,website,kvk_number,vat_number,iban,invoice_payment_terms,invoice_footer,invoice_accent_color',
+      'company_name,trade_name,address_line1,address_line2,postal_code,city,country,email,phone,website,kvk_number,vat_number,iban,invoice_payment_terms,invoice_footer,invoice_accent_color,kor_enabled',
     )
     .eq('organization_id', organizationId)
     .maybeSingle();
@@ -1194,23 +1218,6 @@ function isUuid(value: string): boolean {
 
 function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-function isDateBeforeToday(value: string | null): boolean {
-  if (!value) {
-    return false;
-  }
-
-  const parsed = Date.parse(`${value}T23:59:59`);
-
-  if (!Number.isFinite(parsed)) {
-    return false;
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  return parsed < today.getTime();
 }
 
 function requiredEnv(name: string): string {

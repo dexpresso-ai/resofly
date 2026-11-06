@@ -267,7 +267,8 @@ const ENUMS = {
     { value: 'internally_approved', label: 'Intern goedgekeurd' }, { value: 'sent', label: 'Verzonden' },
     { value: 'accepted', label: 'Geaccepteerd' }, { value: 'rejected', label: 'Afgewezen' },
     { value: 'expired', label: 'Verlopen' }, { value: 'paid', label: 'Betaald' },
-    { value: 'overdue', label: 'Te laat' }, { value: 'cancelled', label: 'Geannuleerd' },
+    // Een offerte trek je in (knop "Intrekken"); "Geannuleerd" is het woord van een factuur.
+    { value: 'overdue', label: 'Te laat' }, { value: 'cancelled', label: 'Ingetrokken' },
   ],
   purchaseStatus: [
     { value: 'draft', label: 'Concept' }, { value: 'booked', label: 'Geboekt' },

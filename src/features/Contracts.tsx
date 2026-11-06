@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, FileSignature, FileText, Link2, Pencil, Plus, Send, Trash2, X } from 'lucide-react';
 import type { AppData, Contract, ContractEvent, ContractInternalNote, ContractSigner, ContractStatus, ContractTemplate, ContractVersion, Project, UUID } from '../types';
 import { Modal } from '../components/Modal';
@@ -37,10 +37,12 @@ export function ContractStatusBadge({ status }: { status: ContractStatus }) {
   return <span style={{ background: meta.bg, color: meta.fg, padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>{meta.label}</span>;
 }
 
-export function Contracts({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed }: PageProps & {
+export function Contracts({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed, refreshKey = 0 }: PageProps & {
   /** Door een agent klaargezet concept-contract; opent hier vooringevuld. */
   draft?: Partial<Contract> | null;
   onDraftConsumed?: () => void;
+  /** Gaat omhoog bij elke Ververs van de werkruimte; dan halen we de lijst opnieuw op. */
+  refreshKey?: number;
 }) {
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [seed, setSeed] = useState<Partial<Contract> | null>(null);
@@ -52,14 +54,29 @@ export function Contracts({ data, organizationId, canWrite, onChanged, draft, on
   const [officeSession, setOfficeSession] = useState<{ session: OfficeSession; contract: Contract } | null>(null);
   const [officeBusy, setOfficeBusy] = useState(false);
 
+  // Alleen het laatst gevraagde antwoord telt. Nu Ververs de lijst ook ophaalt,
+  // kunnen er twee tegelijk lopen, en dan mag een trager, ouder antwoord (van
+  // vóór een wijziging of een wissel van organisatie) het nieuwere niet overschrijven.
+  const reloadSeq = useRef(0);
   async function reload() {
+    const seq = ++reloadSeq.current;
     setError(null);
     const { data: rows, error } = await supabase
       .from('contracts').select('*').eq('organization_id', organizationId).order('created_at', { ascending: false });
+    if (seq !== reloadSeq.current) return;
     if (error) setError(error.message); else setContracts((rows ?? []) as Contract[]);
     setLoading(false);
   }
-  useEffect(() => { setLoading(true); void reload(); /* eslint-disable-next-line */ }, [organizationId]);
+  // De lijst staat buiten AppData; Ververs liet hem eerst staan, zodat een
+  // contract dat de klant net had ondertekend "Wacht op ondertekening" bleef.
+  // Een andere organisatie toont eerst de laadmelding; bij Ververs blijft de
+  // lijst staan tot het nieuwe antwoord er is.
+  const loadedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (loadedFor.current !== organizationId) { loadedFor.current = organizationId; setLoading(true); }
+    void reload();
+    /* eslint-disable-next-line */
+  }, [organizationId, refreshKey]);
 
   // Wek de Collabora-container zodra iemand de contractpagina opent: een koude
   // containerstart duurt tientallen seconden en overlapt zo met het rondkijken
