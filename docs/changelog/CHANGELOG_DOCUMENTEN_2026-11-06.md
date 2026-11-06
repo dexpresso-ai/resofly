@@ -20,8 +20,9 @@ Het volledige verslag staat in `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06
 **Opslag**
 
 - Verwijder je een Word-document, een conceptcontract in Word of een klant of
-  project met mappen, dan gaan de bestanden ook uit de opslag. Er zit één dag
-  vangnet tussen, via de opruimwachtrij. Voorheen bleven ze voorgoed staan.
+  project met mappen, dan gaan de bestanden ook uit de opslag. Er zit minstens
+  een dag vangnet tussen: de sleutel gaat in de opruimwachtrij, en de opruimtaak
+  haalt hem in de nacht daarna weg. Voorheen bleven ze voorgoed staan.
 - Het opslagquotum is niet meer te omzeilen met een negatieve of absurde
   bestandsgrootte.
 
@@ -48,11 +49,12 @@ Het volledige verslag staat in `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06
 - **Media-worker: apart uitrollen.** `cd workers/media-api && npm run deploy:staging`.
   Daarvoor zijn Cloudflare-rechten nodig. Uitgerold op 6 november, versie `bf775db3`
   (zie `CHANGELOG_WORKERS_UITROL_2026-11-06.md`).
-- **Opruimtaak.** `file-transfer-purge` stond niet ingepland op staging. Plan hem
-  eenmalig in: workflow "Deploy Supabase (staging)" met het vinkje voor de
-  webhooks. Zonder die taak:
-  - blijft de opruimwachtrij staan;
-  - worden verlopen zendingen niet opgeruimd.
+- **Opruimtaak.** `file-transfer-purge` stond niet ingepland op staging. Zonder
+  die taak bleef de opruimwachtrij staan, en werden verlopen zendingen niet
+  opgeruimd. Ingepland op 6 november via de workflow "Deploy Supabase
+  (staging)" met het vinkje voor de webhooks. Hij draait elke nacht om 02:00 UTC,
+  dat is 03:00 Nederlandse wintertijd. Waarom niet elk kwartier: zie stap 5 in
+  `scripts/supabase-setup-webhooks.sh`.
 
 ## Getest
 

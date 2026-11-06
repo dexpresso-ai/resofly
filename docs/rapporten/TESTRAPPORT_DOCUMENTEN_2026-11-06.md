@@ -78,19 +78,20 @@ draaien.
 
 ## Wat nog openstaat
 
-**Moet nog gebeuren:**
+**Moest nog gebeuren, en is op 6 november gedaan:**
 
 1. **De media-worker uitrollen.** Herstel 10, 11 en 12 zitten in
-   `workers/media-api`. Die gaat niet mee met een push naar staging:
-   `cd workers/media-api && npm run deploy:staging`. Daarvoor zijn
-   Cloudflare-rechten nodig, die deze sessie niet heeft.
+   `workers/media-api`. Die gaat niet mee met een push naar staging. Uitgerold
+   als versie `bf775db3`, zie `CHANGELOG_WORKERS_UITROL_2026-11-06.md`.
 2. **De opruimtaak inplannen.** `file-transfer-purge` stond op staging niet in
    `cron.job`, en `FILE_TRANSFER_CRON_SECRET` ontbrak. Zonder die taak:
-   - worden verlopen zendingen van "Bestanden versturen" niet opgeruimd;
-   - blijft de opruimwachtrij van herstel 3 en 4 staan.
+   - werden verlopen zendingen van "Bestanden versturen" niet opgeruimd;
+   - bleef de opruimwachtrij van herstel 3 en 4 staan.
 
-   Eenmalig regelen: Actions → "Deploy Supabase (staging)" → Run workflow, met
-   het vinkje "Eenmalig: … inplannen". Dat zet alleen wat ontbreekt.
+   Ingepland via de workflow "Deploy Supabase (staging)" met het vinkje
+   "Eenmalig: … inplannen". Hij draait elke nacht om 02:00 UTC (03:00
+   Nederlandse wintertijd). Het script zette alleen het secret en deze taak;
+   de rest stond er al.
 
 **Bekend, niet aangepast (laag, of vraagt een keuze):**
 
