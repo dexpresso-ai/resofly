@@ -156,9 +156,10 @@ creditnota, datums in Nederlandse tijd en notities over meerdere pagina's.
 
 - **Deploy Supabase run 178:** de migratie is toegepast, de edge functions
   zijn uitgerold en de rooktest is geslaagd.
-- **Frontend checks run 133:** de migratieketen vanaf nul, `deno check` (ook de
-  documentopmaak), de typecheck, CSP en de unit tests zijn groen. De mobiele
-  lay-outtest en het laden per module liepen nog toen dit geschreven werd.
+- **Frontend checks run 133:** helemaal groen. Dat zijn de migratieketen
+  vanaf nul, `deno check` (ook de documentopmaak), de typecheck, CSP, de unit
+  tests, de volledige mobiele lay-outtest (donker en licht) en het laden per
+  module.
 
 **Nacontrole tegen de live functies** (teruggedraaid):
 
