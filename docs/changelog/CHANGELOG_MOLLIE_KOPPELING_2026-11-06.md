@@ -33,8 +33,12 @@ e-facturen via Mollie. Het geld komt dus binnen op het account van die key.
    en gaf daarna een algemene serverfout. Het rapport van 5 november
    (`REVIEW_CONTRACT_OFFERTE_FACTUUR_2026-11-05.md`, actie 3) vroeg al om het
    geheim te zetten. Dat was niet gebeurd, en geen controle zag het.
-2. **De key op staging was in feite onversleuteld.** De koppeling van 2 juni is
-   opgeslagen met de oude terugval: een vaste sleutel die in de code staat.
+2. **De key op staging is waarschijnlijk in feite onversleuteld.** De koppeling
+   van 2 juni (testmodus) staat er nog. Stond het geheim er toen ook niet, dan
+   gebruikte de oude terugval een vaste sleutel uit de code. Dat is
+   waarschijnlijk: het geheim staat er nu niet, en betalingen via die koppeling
+   werkten tot eind augustus. Om het zeker te weten, had iemand de key van een
+   klant moeten ontsleutelen. Dat is bewust niet gedaan.
 3. **Het scherm zei niet waarom.** Bij een geweigerde key toonde Instellingen
    "Edge Function returned a non-2xx status code". De reden van de server
    (begint niet met live_/test_, Mollie weigert de key, geen rechten) kwam niet
@@ -115,6 +119,14 @@ deze:
 Zet hem één keer en vervang hem nooit: met een nieuwe sleutel zijn de
 opgeslagen keys onleesbaar. Daarna wordt de key van de bestaande koppeling bij
 het eerstvolgende gebruik (betaallink of webhook) vanzelf opnieuw versleuteld.
+Werkt die koppeling daarna toch niet, dan was hij met een andere sleutel
+opgeslagen. Je ziet dat aan een betaallink die niet lukt, of aan "ontsleutelen
+mislukt" in de logs van `invoice-workflow`. Plak de key dan opnieuw in
+Instellingen → Online betalen.
+
+Tot het geheim er staat, eindigt de workflow *Deploy Supabase (staging)* rood
+op de rooktest. De migratie en de functies zijn dan wel uitgerold; alleen
+deze ene controle faalt, en dat is de bedoeling.
 
 Voor productie: zet dit geheim vóór de eerste koppeling, en laat
 `MOLLIE_ALLOW_MOCK` uit. Dan telt de ingebouwde sleutel nergens.

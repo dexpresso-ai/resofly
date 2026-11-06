@@ -87,8 +87,8 @@ fi
 
 # ── 0. De sleutel voor de Mollie-keys van organisaties ─────────────────────
 # Zonder deze sleutel kan niemand zijn eigen Mollie-account koppelen
-# (invoice-workflow weigert de key dan). Op staging ontbrak hij tot
-# 6 november 2026; de rooktest kijkt er nu na elke deploy naar. Nooit
+# (invoice-workflow weigert de key dan). Op staging ontbrak hij (gezien op
+# 6 november 2026); de rooktest kijkt er nu na elke deploy naar. Nooit
 # vervangen: een nieuwe sleutel maakt de opgeslagen keys onleesbaar, en dan
 # werken betaallinks en de webhook pas weer als elke organisatie haar key
 # opnieuw invoert.

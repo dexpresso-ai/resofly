@@ -63,7 +63,7 @@ test('oude opslag (ingebouwde sleutel): op staging leesbaar en gemarkeerd om opn
   // Staging nu: echte sleutel gezet, MOLLIE_ALLOW_MOCK aan voor de abonnementen.
   zetOmgeving({ MOLLIE_TOKEN_ENCRYPTION_KEY: ECHTE_SLEUTEL, MOLLIE_ALLOW_MOCK: 'true' });
   assert.deepEqual(await decryptSecretWithInfo(oud), { plain: KEY, legacyKey: true });
-  // Staging vóór 6 november: geen echte sleutel, wel MOLLIE_ALLOW_MOCK.
+  // Staging zoals op 6 november gezien: geen echte sleutel, wel MOLLIE_ALLOW_MOCK.
   zetOmgeving({ MOLLIE_ALLOW_MOCK: 'true' });
   assert.deepEqual(await decryptSecretWithInfo(oud), { plain: KEY, legacyKey: true });
 });

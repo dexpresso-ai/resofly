@@ -24,8 +24,9 @@ async function keyFrom(secret: string): Promise<CryptoKey> {
 
 /**
  * Staat de sleutel om Mollie-keys mee te versleutelen in de secrets? Zonder kan
- * er niets worden opgeslagen. Op staging ontbrak hij tot 6 november 2026: Mollie
- * keurde de key dan goed, en daarna liep opslaan stuk op een algemene serverfout.
+ * er niets worden opgeslagen. Op staging ontbrak hij (gezien op 6 november 2026):
+ * Mollie keurde de key dan goed, en daarna liep opslaan stuk op een algemene
+ * serverfout.
  */
 export function encryptionKeyConfigured(): boolean {
   return Boolean(Deno.env.get(ENCRYPTION_KEY_ENV));

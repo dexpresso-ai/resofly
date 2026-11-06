@@ -218,7 +218,7 @@ uitleg in `PUBLIC_API_SETUP.md` §3):
 
 **Ook `MOLLIE_TOKEN_ENCRYPTION_KEY`**: daarmee wordt de eigen Mollie-key van
 elke organisatie versleuteld. Zonder kan niemand Mollie koppelen (Instellingen →
-Online betalen). Op staging ontbrak hij tot 6 november 2026; het script zet hem
+Online betalen). Op staging ontbrak hij (gezien op 6 november 2026); het script zet hem
 als hij ontbreekt, en de rooktest meldt het. Net als bij
 `WEBHOOK_SECRET_ENCRYPTION_KEY`: **nooit vervangen**, anders zijn de opgeslagen
 keys onleesbaar. Met de hand:
