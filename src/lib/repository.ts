@@ -1587,7 +1587,7 @@ export type PortalLoginKeyResult = { key: string | null; unavailable: 'rechten' 
 
 /**
  * Het eigen inlogadres van het klantportaal (/portal/<sleutel>, migratie
- * 20261105110000). De database maakt het aan als het er nog niet is. Alleen
+ * 20261106080000). De database maakt het aan als het er nog niet is. Alleen
  * wie Klanten mag lezen krijgt het. Zonder adres toont de app het algemene,
  * /portal, en zegt hij waarom: "de database-update moet nog draaien" klopte
  * niet voor een teamlid dat gewoon geen leesrecht op Klanten heeft.
@@ -1625,7 +1625,7 @@ const LATE_SETTINGS_COLUMNS: Array<{ columns: readonly string[]; isSet: (row: Re
     message: 'Je eigen opmaak van offertes en facturen kan in deze omgeving nog niet worden opgeslagen: de database-update moet nog draaien. Zet de opmaak terug op de standaard om de rest op te slaan.',
   },
   {
-    // De kleuren van het inlogscherm (20261105110000). "Effen" telt alleen als
+    // De kleuren van het inlogscherm (20261106080000). "Effen" telt alleen als
     // hij aan staat: uit is de standaard, en die stuurt het formulier altijd mee.
     columns: ['brand_login_bg_color', 'brand_login_card_color', 'brand_login_button_color', 'brand_login_plain'],
     isSet: row => filled(row.brand_login_bg_color) || filled(row.brand_login_card_color)

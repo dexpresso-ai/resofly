@@ -578,7 +578,7 @@ export function sanitizeStoredBranding(raw: unknown): BrandingPayload | null {
         && row.logoDarkDataUrl.length <= 400_000
         ? row.logoDarkDataUrl
         : null,
-    // De CHECKs van 20261105110000: alleen hexkleuren, en een echte boolean.
+    // De CHECKs van 20261106080000: alleen hexkleuren, en een echte boolean.
     loginBackground: storedHex(row.loginBackground),
     loginCard: storedHex(row.loginCard),
     loginButton: storedHex(row.loginButton),

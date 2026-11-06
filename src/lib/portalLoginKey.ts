@@ -1,5 +1,5 @@
 // De sleutel van het eigen inlogadres van het klantportaal: /portal/<sleutel>
-// (migratie 20261105110000). De merknaam plus tien tekens uit het
+// (migratie 20261106080000). De merknaam plus tien tekens uit het
 // base32-alfabet, zoals studio-noord-ro2ystqucm.
 //
 // Eén regel voor de app: het portaal leest hem uit het adres, het opslaan en de

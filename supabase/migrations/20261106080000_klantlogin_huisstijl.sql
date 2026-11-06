@@ -1,6 +1,6 @@
 -- ============================================================
 -- ResoFly — De huisstijl op het inlogscherm van het klantportaal
--- Date: 2026-11-05
+-- Date: 2026-11-06
 --
 -- Aanleiding:
 -- - Het klantportaal heeft één inlogadres voor iedereen: /portal. Welke

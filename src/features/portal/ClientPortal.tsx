@@ -177,7 +177,7 @@ function rememberedBranding(): BrandingPayload | null {
 
 /**
  * Het eigen inlogadres van een leverancier: /portal/<sleutel> (migratie
- * 20261105110000). Daarmee weet het inlogscherm vóór het inloggen wiens
+ * 20261106080000). Daarmee weet het inlogscherm vóór het inloggen wiens
  * huisstijl het toont, zonder dat het iets naar de server stuurt dat van een
  * e-mailadres verklapt bij wie het klant is: de sleutel staat al in het adres
  * dat de leverancier zelf uitdeelt. De vorm staat in lib/portalLoginKey.ts;

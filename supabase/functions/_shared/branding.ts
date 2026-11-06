@@ -34,7 +34,7 @@ export interface Branding {
    *  (op een licht plaatje als het wegvalt). Sinds migratie 20261015000000. */
   logoDarkDataUrl: string | null;
   /** De kleuren van het inlogscherm van het portaal; null = automatisch
-   *  (kopkleur, werkvlak, merkkleur). Sinds migratie 20261105110000. */
+   *  (kopkleur, werkvlak, merkkleur). Sinds migratie 20261106080000. */
   loginBackground: string | null;
   loginCard: string | null;
   loginButton: string | null;
@@ -50,7 +50,7 @@ export const BRANDING_COLUMNS =
   'brand_login_bg_color,brand_login_card_color,brand_login_button_color,brand_login_plain';
 
 /**
- * De kolommen die de nieuwste huisstijlmigratie (20261105110000) toevoegt: de
+ * De kolommen die de nieuwste huisstijlmigratie (20261106080000) toevoegt: de
  * kleuren van het inlogscherm. Draait een functie al terwijl `db push` nog
  * moet, dan faalt een opvraag met deze kolommen erin; vraag dan opnieuw zonder.
  * Het inlogscherm valt dan terug op automatisch, wat precies is wat het vóór

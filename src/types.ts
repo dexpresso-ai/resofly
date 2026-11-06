@@ -3384,7 +3384,7 @@ export interface CompanySettings extends OrgScopedRow {
   brand_logo_dark_data_url?: string | null;
   /** De kleuren van het inlogscherm van het portaal: achtergrond, inlogkaart en
    *  knop. Leeg = automatisch (kopkleur, werkvlak, merkkleur); zie loginTheme in
-   *  lib/branding.ts. Ontbreken vóór migratie 20261105110000. */
+   *  lib/branding.ts. Ontbreken vóór migratie 20261106080000. */
   brand_login_bg_color?: string | null;
   brand_login_card_color?: string | null;
   brand_login_button_color?: string | null;

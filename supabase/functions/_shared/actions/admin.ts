@@ -284,7 +284,7 @@ function settingsPlan(
   return { title, sub: joinShort(described, 130), kind: 'work', payload: { patch }, ...extra };
 }
 
-/** De kleuren van het inlogscherm (migratie 20261105110000), met hun naam in een voorstel. */
+/** De kleuren van het inlogscherm (migratie 20261106080000), met hun naam in een voorstel. */
 const LOGIN_COLOR_FIELDS: Array<[string, string]> = [
   ['brand_login_bg_color', 'achtergrond inlogscherm'],
   ['brand_login_card_color', 'inlogkaart'],
@@ -631,7 +631,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       const columns =
         'trade_name, company_name, brand_accent_color, brand_client_theme, brand_gallery_bg, brand_heading_font, brand_body_font, brand_footer_text, brand_hide_powered_by, brand_logo_data_url';
       // De kopkleur en de lichte logoversie bestaan pas na migratie 20261015000000,
-      // de kleuren van het inlogscherm pas na 20261105110000.
+      // de kleuren van het inlogscherm pas na 20261106080000.
       const header = `${columns}, brand_header_color, brand_logo_dark_data_url`;
       const settings = await settingsRow(ctx, `${header}, ${LOGIN_COLUMNS}`)
         .catch(() => settingsRow(ctx, header))

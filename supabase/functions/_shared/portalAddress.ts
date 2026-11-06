@@ -8,7 +8,7 @@
 // verklapt. Elke mail met een link naar het portaal gebruikt daarom dit adres.
 //
 // De sleutel is de merknaam plus tien willekeurige tekens (migratie
-// 20261105110000). Alleen de server maakt hem aan.
+// 20261106080000). Alleen de server maakt hem aan.
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 

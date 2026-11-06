@@ -18,7 +18,7 @@ import { isPortalLoginKey } from '../_shared/portalAddress.ts';
 //
 // Daarnaast `getBranding`: de huisstijl van het inlogscherm, voor wie het
 // portaal opent via het eigen adres van een leverancier (/portal/<sleutel>,
-// migratie 20261105110000). Alleen de huisstijl; nooit de organisatie zelf.
+// migratie 20261106080000). Alleen de huisstijl; nooit de organisatie zelf.
 // ============================================================
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
