@@ -157,6 +157,22 @@ function publiek(body, opties = {}) {
 }
 const bekijk = (token) => publiek({ action: 'getContract', token });
 
+/**
+ * Een vraag via de publieke pagina. Op de lokale stack sloot de gateway (Kong)
+ * hier af en toe de verbinding met PostgREST voordat er antwoord was (502
+ * "upstream prematurely closed connection"; ± 1 op 30 via de edge function,
+ * 0 op 600 rechtstreekse aanroepen). De vraag is dan niet opgeslagen en de
+ * functie geeft een 500. Eén zichtbare herhaling houdt die ruis buiten de
+ * uitslag; een echte fout in deze route faalt ook de tweede keer.
+ */
+async function vraagStellen(token, velden) {
+  const body = { action: 'askQuestion', token, ...velden };
+  const res = await publiek(body);
+  if (res.status < 500) return res;
+  console.log(`  let op  vraag opnieuw gesteld na een ${res.status} (${res.json?.error ?? res.tekst.slice(0, 80)})`);
+  return publiek(body);
+}
+
 /** Tekenen zoals PublicContractPage.sign(): met UA en IP, getypt tenzij anders. */
 function teken(token, velden = {}) {
   const { headers = {}, ip = IP, ...rest } = velden;
@@ -916,7 +932,7 @@ async function vastNaVersturen(w, getekend) {
     geweigerd(await tekenZoalsDePagina(token, { signerEmail: w.klantA.email }), 'tekenen na intrekken');
     geweigerd(await teken(token, { signerEmail: w.klantA.email, versionId: versies(c.id)[0].id }), 'tekenen met versie na intrekken');
     geweigerd(await publiek({ action: 'declineContract', token, name: 'Contact' }), 'weigeren na intrekken');
-    geweigerd(await publiek({ action: 'askQuestion', token, name: 'Contact', message: 'Hallo?' }), 'vraag na intrekken');
+    geweigerd(await vraagStellen(token, { name: 'Contact', message: 'Hallo?' }), 'vraag na intrekken');
     gelijk(contractRij(c.id).status, 'voided', 'status');
   });
 
@@ -1029,7 +1045,7 @@ async function deadline(w) {
          update public.contracts set valid_until = ${q(datum(-1))} where id = ${q(c.id)}; commit;`);
     geweigerd(await tekenZoalsDePagina(token, { signerEmail: w.klantA.email }), 'tekenen na de deadline');
     wachtNogOpHandtekening(c.id, 'na tekenen na de deadline');
-    gelukt(await publiek({ action: 'askQuestion', token, name: 'Contact', email: w.klantA.email, message: 'Kan de termijn langer?' }), 'vraag na de deadline');
+    gelukt(await vraagStellen(token, { name: 'Contact', email: w.klantA.email, message: 'Kan de termijn langer?' }), 'vraag na de deadline');
   });
 }
 
@@ -1191,8 +1207,9 @@ async function publiekeRanden(w) {
     const onzin = randomBytes(32).toString('base64url');
     const velden = { signerName: 'X', signerEmail: 'x@klant.test', signatureMethod: 'typed', consentText: AKKOORD, name: 'X', message: 'Hallo', reason: 'Nee' };
     for (const action of ['getContract', 'signContract', 'declineContract', 'askQuestion']) {
-      geweigerd(await publiek({ action, token: onzin, ...velden }), `${action} met een onbekende link`);
-      geweigerd(await publiek({ action, token: 'te-kort', ...velden }), `${action} met een te korte link`, [400]);
+      const doe = (link) => (action === 'askQuestion' ? vraagStellen(link, velden) : publiek({ action, token: link, ...velden }));
+      geweigerd(await doe(onzin), `${action} met een onbekende link`);
+      geweigerd(await doe('te-kort'), `${action} met een te korte link`, [400]);
     }
     geweigerd(await publiek({ action: 'getContract' }), 'zonder link', [400]);
   });
@@ -1220,12 +1237,12 @@ async function publiekeRanden(w) {
 
   await stap('een vraag stellen komt in het klantdossier; te lang of te vaak wordt geweigerd', async () => {
     const vraag = `Wat betekent artikel 2? (${randomUUID()})`;
-    gelukt(await publiek({ action: 'askQuestion', token, name: 'Contact Klant A', email: w.klantA.email, message: vraag }), 'vraag stellen');
+    gelukt(await vraagStellen(token, { name: 'Contact Klant A', email: w.klantA.email, message: vraag }), 'vraag stellen');
     const mail = sqlRij(`select client_id, organization_id, direction, from_email from public.client_emails where body_text = ${q(vraag)}`);
     gelijk([mail?.client_id, mail?.organization_id, mail?.direction, mail?.from_email], [w.klantA.id, w.orgId, 'inbound', w.klantA.email], 'vraag in het klantdossier');
-    geweigerd(await publiek({ action: 'askQuestion', token, name: 'Contact', message: 'v'.repeat(4001) }), 'vraag van 4001 tekens', [422]);
-    for (let i = 0; i < 4; i += 1) gelukt(await publiek({ action: 'askQuestion', token, name: 'Contact', message: `Vraag ${i + 2}` }), `vraag ${i + 2}`);
-    geweigerd(await publiek({ action: 'askQuestion', token, name: 'Contact', message: 'Vraag 6' }), 'zesde vraag binnen het uur', [409]);
+    geweigerd(await vraagStellen(token, { name: 'Contact', message: 'v'.repeat(4001) }), 'vraag van 4001 tekens', [422]);
+    for (let i = 0; i < 4; i += 1) gelukt(await vraagStellen(token, { name: 'Contact', message: `Vraag ${i + 2}` }), `vraag ${i + 2}`);
+    geweigerd(await vraagStellen(token, { name: 'Contact', message: 'Vraag 6' }), 'zesde vraag binnen het uur', [409]);
     wachtNogOpHandtekening(c.id, 'na vragen');
   });
 
@@ -1250,7 +1267,7 @@ async function publiekeRanden(w) {
     geweigerd(await tekenZoalsDePagina(link, { signerEmail: w.klantA.email }), 'tekenen');
     geweigerd(await teken(link, { signerEmail: w.klantA.email, versionId: versies(contract.id)[0].id }), 'tekenen met versie');
     geweigerd(await publiek({ action: 'declineContract', token: link, name: 'Contact' }), 'weigeren');
-    geweigerd(await publiek({ action: 'askQuestion', token: link, name: 'Contact', message: 'Nog geldig?' }), 'vraag');
+    geweigerd(await vraagStellen(link, { name: 'Contact', message: 'Nog geldig?' }), 'vraag');
     wachtNogOpHandtekening(contract.id, 'na een verlopen link');
   });
 
