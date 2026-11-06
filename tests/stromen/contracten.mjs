@@ -370,13 +370,13 @@ export default async function contracten() {
   await weigerenEnOpnieuw(w);
   const word = await wordContract(w);
   await opslagEvenWeg(w);
-  await vastNaVersturen(w, getekend);
+  const ingetrokken = await vastNaVersturen(w, getekend);
   await mislukteHerverzending(w);
   await deadline(w);
-  await rollen(w);
+  const concept = await rollen(w);
   if (w2) await andereOrganisatie(w, w2, getekend, word);
   await publiekeRanden(w);
-  await portaal(w, w2, getekend, word);
+  await portaal(w, w2, getekend, word, [ingetrokken, concept].filter(Boolean));
   await tegelijk(w);
 }
 
@@ -772,19 +772,27 @@ async function wordContract(w) {
 async function opslagEvenWeg(w) {
   groep('Contracten · privé-opslag (R2) even onbereikbaar');
 
-  await stap('rich-text: getekend PDF valt terug op de database; downloaden in app en portaal lukt', async () => {
+  await stap('rich-text, met de hand getekend: PDF valt terug op de database; downloaden in app en portaal lukt', async () => {
     const c = await nieuwContract(w, { title: 'Opslag even weg' });
     const { token } = await verstuurEnLink(w, c.id);
     const p = gelukt(await bekijk(token), 'bekijken');
+    const handtekening = pngHandtekening(200, 60);
     post.r2Storing = { aantal: 1 };
     try {
-      gelukt(await teken(token, { signerName: 'Contact Klant A', signerEmail: w.klantA.email, versionId: p.contract.version_id }), 'tekenen');
+      gelukt(await teken(token, {
+        signerName: 'Contact Klant A', signerEmail: w.klantA.email, versionId: p.contract.version_id,
+        signatureMethod: 'drawn', signatureImage: handtekening,
+      }), 'tekenen');
     } finally {
       post.r2Storing = { aantal: 0 };
     }
     const rij = contractRij(c.id);
     gelijk([rij.status, rij.signed_storage_provider, rij.signed_storage_key], ['signed', 'database', null], 'opslag van het getekende PDF');
-    gelijk(sha256(uitBase64(rij.signed_pdf_data_base64)), rij.signed_document_sha256, 'sha256 van het PDF in de database');
+    const bytes = uitBase64(rij.signed_pdf_data_base64);
+    gelijk(sha256(bytes), rij.signed_document_sha256, 'sha256 van het PDF in de database');
+    verwacht(await heeftAfbeelding(bytes), 'de getekende handtekening staat niet als afbeelding in het PDF');
+    bevatAlles((await pdfPaginas(bytes)).join('\n'), ['HANDTEKENING', 'Digitaal ondertekend door Contact Klant A', 'Getekende handtekening'], 'getekend PDF');
+    gelijk(ondertekenaars(c.id)[0]?.signature_image, handtekening, 'handtekening in het bewijs');
     const app = gelukt(await workflow(w.medewerker, { action: 'downloadContractPdf', organizationId: w.orgId, contractId: c.id }), 'download in de app');
     const portaal = gelukt(await roep('client-portal', { token: w.portaalA.token, body: { action: 'getContractPdf', contractId: c.id } }), 'download in het portaal');
     gelijk([sha256(uitBase64(app.pdf.base64)), sha256(uitBase64(portaal.pdf.base64))], [rij.signed_document_sha256, rij.signed_document_sha256], 'gedownloade PDF\'s');
@@ -957,6 +965,7 @@ async function vastNaVersturen(w, getekend) {
     const na = contractRij(id);
     gelijk([na.status, na.title, na.client_id, na.signed_document_sha256, na.signed_storage_key], [vooraf.status, vooraf.title, vooraf.client_id, vooraf.signed_document_sha256, vooraf.signed_storage_key], 'getekend contract veranderde');
   });
+  return c;
 }
 
 // ── 5. Mislukte herverzending ──────────────────────────────────────────
@@ -1046,6 +1055,15 @@ async function deadline(w) {
     geweigerd(await tekenZoalsDePagina(token, { signerEmail: w.klantA.email }), 'tekenen na de deadline');
     wachtNogOpHandtekening(c.id, 'na tekenen na de deadline');
     gelukt(await vraagStellen(token, { name: 'Contact', email: w.klantA.email, message: 'Kan de termijn langer?' }), 'vraag na de deadline');
+
+    // Geen doodlopende weg: terug naar concept, nieuwe datum, opnieuw versturen, tekenen.
+    gelukt(await rpc('reopen_contract', { p_contract_id: c.id, p_organization_id: w.orgId }, w.medewerker.token), 'terug naar concept');
+    gelijk(gelukt(await rest(`contracts?id=eq.${c.id}&select=id`, {
+      method: 'PATCH', token: w.medewerker.token, prefer: 'return=representation', body: { valid_until: datum(14) },
+    }), 'nieuwe deadline').length, 1, 'aangepaste rijen');
+    const { token: nieuw } = await verstuurEnLink(w, c.id);
+    gelukt(await tekenZoalsDePagina(nieuw, { signerName: 'Contact Klant A', signerEmail: w.klantA.email }), 'tekenen met de nieuwe deadline');
+    gelijk(contractRij(c.id).status, 'signed', 'status');
   });
 }
 
@@ -1114,12 +1132,24 @@ async function rollen(w) {
     gelukt(await bekijk(verzonden.token), 'de link werkt nog');
   });
 
+  const opnieuw = await stap('opnieuw versturen door een lid: nieuwe link en versie, de oude link vervalt', async () => {
+    const { token } = await verstuurEnLink(w, concept.id);
+    verwacht(token !== verzonden.token, 'dezelfde link opnieuw');
+    geweigerd(await bekijk(verzonden.token), 'oude link');
+    const p = gelukt(await bekijk(token), 'nieuwe link');
+    const v = versies(concept.id);
+    gelijk([v.length, p.contract.version_id, v[1]?.body], [2, v[1]?.id, v[0]?.body], 'versies (zelfde inhoud, nieuwe versie)');
+    return token;
+  });
+
   await stap('terug naar concept vanuit "verstuurd" als lid: de link vervalt meteen', async () => {
+    verwacht(opnieuw, 'niet opnieuw verstuurd');
     gelukt(await rpc('reopen_contract', { p_contract_id: concept.id, p_organization_id: w.orgId }, w.medewerker.token), 'terug naar concept');
     gelijk(contractRij(concept.id).status, 'draft', 'status');
-    geweigerd(await bekijk(verzonden.token), 'bekijken met de oude link');
-    geweigerd(await teken(verzonden.token, { signerEmail: w.klantA.email, versionId: versies(concept.id)[0]?.id }), 'tekenen met de oude link');
+    geweigerd(await bekijk(opnieuw), 'bekijken met de oude link');
+    geweigerd(await teken(opnieuw, { signerEmail: w.klantA.email, versionId: versies(concept.id).at(-1)?.id }), 'tekenen met de oude link');
   });
+  return concept;
 }
 
 // ── 8. Andere organisatie ──────────────────────────────────────────────
@@ -1302,7 +1332,7 @@ async function publiekeRanden(w) {
 
 // ── 10. Klantportaal ───────────────────────────────────────────────────
 
-async function portaal(w, w2, getekend, word) {
+async function portaal(w, w2, getekend, word, nietInHetPortaal = []) {
   groep('Contracten · klantportaal');
   const vraag = (gebruiker, body) => roep('client-portal', { token: gebruiker.token, body });
   const getekendeIds = [getekend?.contract?.id, word?.contract?.id].filter(Boolean);
@@ -1339,6 +1369,8 @@ async function portaal(w, w2, getekend, word) {
     const idsB = vanB.map((x) => x.id);
     for (const id of getekendeIds) verwacht(idsA.includes(id) && !idsB.includes(id), `contract ${id} staat niet (alleen) bij klant A`);
     if (contractB) verwacht(idsB.includes(contractB.id) && !idsA.includes(contractB.id), 'het contract van B staat niet (alleen) bij B');
+    // Een concept (ook een teruggezet) en een ingetrokken contract horen niet bij de klant.
+    for (const c of nietInHetPortaal) verwacht(!idsA.includes(c.id), `contract "${c.title}" (${contractRij(c.id)?.status}) staat in het portaal`);
     const velden = new Set(['id', 'number', 'title', 'status', 'date', 'valid_until', 'signed_at']);
     const extra = [...vanA, ...vanB].flatMap((x) => Object.keys(x)).filter((k) => !velden.has(k));
     gelijk([...new Set(extra)], [], 'velden in de contractenlijst van het portaal');
@@ -1392,15 +1424,18 @@ async function tegelijk(w) {
     };
     const uitkomsten = await metOnderschepping(/^https:\/\/api\.resend\.com\//, faalDeTweede, async () => {
       const rij = await houdRijVast(c.id);
+      const onderweg = [];
       try {
-        const eerste = verstuur(w, c.id);
+        onderweg.push(verstuur(w, c.id));
         await wachtOp(() => rij.wachtenden() >= 1, 'eerste verzending wacht op de rij');
-        const tweede = verstuur(w, c.id);
+        onderweg.push(verstuur(w, c.id));
         await wachtOp(() => rij.wachtenden() >= 2, 'tweede verzending wacht op de rij');
         await rij.loslaten();
-        return await Promise.all([eerste, tweede]);
+        return await Promise.all(onderweg);
       } finally {
+        // Ook als wachten misging: de rij los, en niets laten doorlopen na deze stap.
         await rij.loslaten();
+        await Promise.allSettled(onderweg);
       }
     });
     gelijk(uitkomsten.map((r) => r.status === 200), [true, false], 'gelukt: eerste, tweede');
