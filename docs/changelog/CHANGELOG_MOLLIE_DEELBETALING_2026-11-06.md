@@ -167,3 +167,11 @@ eerder zag je de kale Engelse status.
   - de vier nieuwe soorten gebeurtenissen bestaan (43 in totaal);
   - `anon` kan geen van de nieuwe of gewijzigde functies aanroepen;
   - de scenario's T1–T7 geven live precies dezelfde uitkomst als in de proef.
+- Frontend checks-run 137 (op deze stand) helemaal groen:
+  - migraties vanaf nul;
+  - deno-controle;
+  - typecheck en unit tests;
+  - de mobiele lay-outtest in donker en licht;
+  - het laden per module.
+- Daarna ging run 181 eroverheen met de lege-factuurgrens
+  (`invoice-workflow` versie 131); zie `CHANGELOG_FINANCIEN_ZEKERHEIDSTEST_2026-11-06.md`.

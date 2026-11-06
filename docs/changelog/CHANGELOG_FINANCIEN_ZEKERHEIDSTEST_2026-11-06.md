@@ -196,4 +196,14 @@ boekjaren van 12 maanden; geen boekingen vóór de start of ver vooruit).
   - het btw-slot;
   - eind-tot-eind eenmanszaak, vof en BV;
   - de rechtenmatrix (827 rijen, 0 verschillen).
-- `20261106120000_factuur_zonder_inhoud.sql` gaat met de volgende uitrol mee.
+- Deploy-run 181:
+  - migratie `20261106120000_factuur_zonder_inhoud.sql` doorgevoerd;
+  - `invoice-workflow` versie 131 live;
+  - de rooktest groen;
+  - de lege-factuurtest geeft live dezelfde uitkomst als de proef (8 van 8).
+- Frontend checks-runs 137 en 138 helemaal groen:
+  - migraties vanaf nul;
+  - deno-controle;
+  - typecheck en unit tests;
+  - de mobiele lay-outtest in donker en licht;
+  - het laden per module.
