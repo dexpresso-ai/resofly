@@ -636,10 +636,12 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       const settings = await settingsRow(ctx, `${header}, ${LOGIN_COLUMNS}`)
         .catch(() => settingsRow(ctx, header))
         .catch(() => settingsRow(ctx, columns));
-      // Het inlogadres; zonder (migratie nog niet gedraaid) gewoon weglaten.
+      // Het inlogadres, alleen gelezen: een lees-handeling maakt niets aan,
+      // ook geen sleutel (portal_login_key, niet ensure_…). Zonder (nog geen
+      // adres, of de migratie moet nog) gewoon weglaten.
       let loginKey: unknown = null;
       try {
-        ({ data: loginKey } = await ctx.db.rpc('ensure_portal_login_key', { p_organization_id: ctx.organizationId }));
+        ({ data: loginKey } = await ctx.db.rpc('portal_login_key', { p_organization_id: ctx.organizationId }));
       } catch {
         loginKey = null;
       }

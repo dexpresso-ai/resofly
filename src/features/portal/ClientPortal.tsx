@@ -192,10 +192,29 @@ function portalKeyFromPath(): string | null {
  * is het adres dat Supabase als terugkeeradres kent). Dit apparaat onthoudt de
  * sleutel daarom even, net als een deeplink: zo staat ook het laadscherm na de
  * link in de huisstijl, en komt wie bij meer leveranciers klant is in het
- * dossier van de leverancier via wiens adres hij inlogde. Na het inloggen of
- * na twee uur gaat hij weer weg.
+ * dossier van de leverancier via wiens adres hij inlogde. Na het inloggen,
+ * bij uitloggen of na twee uur gaat hij weer weg.
+ *
+ * Alleen bij de terugkeer van de inloglink zelf telt hij (zie
+ * returningFromLoginLink). Wie op een gedeelde computer een link aanvroeg en
+ * hem nooit opende, liet /portal anders twee uur lang in de huisstijl van zijn
+ * leverancier achter: dan ziet de volgende bezoeker bij wie hij klant is.
  */
 const KEY_MEMORY_KEY = 'resofly.portal.key';
+
+/**
+ * Komt deze bezoeker net terug van de inloglink? Supabase zet dan ?code= in
+ * het adres (PKCE), of bij een verlopen of al gebruikte link ?error=… (of in
+ * het hekje). De supabase-client haalt dat pas na het inwisselen weg, dus bij
+ * de eerste render staat het er nog.
+ */
+function returningFromLoginLink(): boolean {
+  if (typeof window === 'undefined') return false;
+  const search = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  return ['code', 'error', 'error_description'].some(name => search.has(name))
+    || ['access_token', 'error', 'error_description'].some(name => hash.has(name));
+}
 
 function rememberPortalKey(key: string): void {
   try {
@@ -255,22 +274,42 @@ export function ClientPortal() {
   useState(() => { capturePortalLink(); return true; });
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
-  // De sleutel uit het adres, of die dit apparaat net voor een inloglink onthield.
-  const [portalKey] = useState(() => portalKeyFromPath() ?? peekPortalKey());
+  // De sleutel uit het adres, of, net terug van de inloglink, die dit apparaat
+  // bij het aanvragen onthield.
+  const [keyInPath] = useState(() => portalKeyFromPath());
+  const [portalKey, setPortalKey] = useState<string | null>(() => keyInPath ?? (returningFromLoginLink() ? peekPortalKey() : null));
   const [keyBranding, setKeyBranding] = useState<BrandingPayload | null>(null);
   const [keyBrandingDone, setKeyBrandingDone] = useState(!portalKey);
   // De huisstijl van het gekozen dossier (na het inloggen) gaat voor die van
-  // het adres, en die weer voor wat dit apparaat van de vorige keer onthield.
+  // het adres. Staat er een sleutel, dan nooit terugvallen op wat dit apparaat
+  // van de vorige keer onthield: dat kan een ándere leverancier zijn, en dan
+  // stond diens inlogscherm op het adres van deze, zolang de huisstijl onderweg
+  // was of als hij niet kwam. Liever even neutraal.
   // Bewust ÉÉN eigenaar van het thema: twee componenten die allebei :root
   // beschrijven zouden elkaars momentopname terugzetten, en dan staat het
   // portaal na uitloggen weer in ResoFly-goud.
   const [accountBranding, setAccountBranding] = useState<BrandingPayload | null>(null);
   const [remembered, setRemembered] = useState<BrandingPayload | null>(rememberedBranding);
-  const branding = accountBranding ?? keyBranding ?? remembered;
-  const wasLoggedIn = useRef(false);
+  const branding = accountBranding ?? (portalKey ? keyBranding : remembered);
+
+  // Uitloggen met de knop: ook in dit tabblad niets meer van de vorige klant
+  // laten staan. Wat er op schijf stond gaat weg, en ook wat er nog in het
+  // geheugen zat: zijn huisstijl, en een sleutel die niet uit het adres kwam.
+  // Een sessie die vanzelf verloopt, telt hier bewust niet als uitloggen: dan
+  // staat de huisstijl nog op schijf en zou het scherm na herladen weer in het
+  // merk staan.
+  const signOut = useCallback(() => {
+    forgetBranding();
+    forgetPortalLink();
+    forgetPortalKey();
+    setAccountBranding(null);
+    setRemembered(null);
+    if (!keyInPath) setPortalKey(null);
+    void supabasePortalAuth.signOut();
+  }, [keyInPath]);
 
   useEffect(() => {
-    if (!portalKey) return;
+    if (!portalKey) { setKeyBranding(null); setKeyBrandingDone(true); return; }
     let alive = true;
     // Een trage of onbereikbare server mag het inloggen niet tegenhouden.
     const timer = window.setTimeout(() => { if (alive) setKeyBrandingDone(true); }, KEY_BRANDING_WAIT_MS);
@@ -298,14 +337,6 @@ export function ClientPortal() {
     let active = true;
     const apply = (signedIn: boolean) => {
       if (!active) return;
-      // Net uitgelogd: ook in dit tabblad niets meer van de vorige klant laten
-      // staan. De herinnering op schijf is al weg (forgetBranding); dit is
-      // dezelfde regel voor wat er nog in het geheugen stond.
-      if (wasLoggedIn.current && !signedIn) {
-        setAccountBranding(null);
-        setRemembered(null);
-      }
-      wasLoggedIn.current = signedIn;
       setLoggedIn(signedIn);
       setSessionReady(true);
     };
@@ -326,7 +357,7 @@ export function ClientPortal() {
   // Niet eerst het neutrale inlogscherm laten flitsen terwijl de huisstijl van
   // het adres onderweg is.
   if (!loggedIn) return keyBrandingDone ? <PortalLogin branding={branding} portalKey={portalKey} /> : booting;
-  return <PortalDashboard branding={branding} onBranding={setAccountBranding} portalKey={portalKey} />;
+  return <PortalDashboard branding={branding} onBranding={setAccountBranding} portalKey={portalKey} onSignOut={signOut} />;
 }
 
 /**
@@ -404,7 +435,9 @@ function PortalLogin({ branding, preview = false, portalKey = null }: {
       // we zeggen niet welke dat zijn, anders is dit scherm een opzoekdienst.
       await requestPortalLogin(cleanEmail);
       // De link komt terug op /portal: onthoud bij welke leverancier dit was.
-      if (portalKey) rememberPortalKey(portalKey);
+      // Zonder sleutel een oude vergeten, anders koos een eerdere aanvraag op
+      // dit apparaat de leverancier.
+      if (portalKey) rememberPortalKey(portalKey); else forgetPortalKey();
       const { error } = await supabasePortalAuth.signInWithOtp({
         email: cleanEmail,
         options: { emailRedirectTo: `${window.location.origin}/portal`, shouldCreateUser: false },
@@ -450,11 +483,13 @@ function PortalLogin({ branding, preview = false, portalKey = null }: {
   </main>;
 }
 
-function PortalDashboard({ branding, onBranding, preview, portalKey = null }: {
+function PortalDashboard({ branding, onBranding, preview, portalKey = null, onSignOut }: {
   branding: BrandingPayload | null;
   onBranding: (branding: BrandingPayload | null) => void;
   /** Het eigen inlogadres waarlangs deze klant binnenkwam: dat dossier eerst. */
   portalKey?: string | null;
+  /** Uitloggen (ClientPortal ruimt ook op wat dit tabblad nog van hem weet). */
+  onSignOut?: () => void;
   /** Het voorbeeld bij Instellingen → Huisstijl: verzonnen gegevens, en niets
    *  van het echte portaal op dit apparaat (deeplink, onthouden huisstijl)
    *  wordt gelezen of overschreven. `reloadKey` laadt de gegevens opnieuw als
@@ -543,7 +578,7 @@ function PortalDashboard({ branding, onBranding, preview, portalKey = null }: {
           <Settings size={15} aria-hidden="true" /><span className="portal-btn-label">Instellingen</span>
         </Button>}
         <Button onClick={load}>{loading ? 'Laden…' : 'Ververs'}</Button>
-        <Button onClick={() => { if (isPreview) return; forgetBranding(); forgetPortalLink(); forgetPortalKey(); void supabasePortalAuth.signOut(); }}>Uitloggen</Button>
+        <Button onClick={() => { if (!isPreview) onSignOut?.(); }}>Uitloggen</Button>
       </div>
     </div>;
 

@@ -1582,16 +1582,26 @@ export async function saveJitsiServer(organizationId: UUID, jitsiBaseUrl: string
   if (insertError) throw fail(insertError);
 }
 
+/** Waarom er (nog) geen eigen inlogadres is: geen rechten, migratie, of iets anders. */
+export type PortalLoginKeyResult = { key: string | null; unavailable: 'rechten' | 'migratie' | 'fout' | null };
+
 /**
  * Het eigen inlogadres van het klantportaal (/portal/<sleutel>, migratie
  * 20261105110000). De database maakt het aan als het er nog niet is. Alleen
- * wie Klanten mag lezen krijgt het; anders, of zolang de migratie nog moet,
- * null, en dan toont de app het algemene adres /portal.
+ * wie Klanten mag lezen krijgt het. Zonder adres toont de app het algemene,
+ * /portal, en zegt hij waarom: "de database-update moet nog draaien" klopte
+ * niet voor een teamlid dat gewoon geen leesrecht op Klanten heeft.
  */
-export async function fetchPortalLoginKey(organizationId: UUID): Promise<string | null> {
+export async function fetchPortalLoginKey(organizationId: UUID): Promise<PortalLoginKeyResult> {
   const { data, error } = await supabase.rpc('ensure_portal_login_key', { p_organization_id: organizationId });
-  if (error) return null;
-  return isPortalLoginKey(data) ? data : null;
+  if (error) {
+    // 42501: de functie zelf weigert (geen leesrecht op Klanten). PGRST202 of
+    // 42883: de functie bestaat hier nog niet.
+    if (error.code === '42501') return { key: null, unavailable: 'rechten' };
+    if (error.code === 'PGRST202' || error.code === '42883') return { key: null, unavailable: 'migratie' };
+    return { key: null, unavailable: 'fout' };
+  }
+  return isPortalLoginKey(data) ? { key: data, unavailable: null } : { key: null, unavailable: 'fout' };
 }
 
 /**

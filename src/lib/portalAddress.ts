@@ -4,7 +4,7 @@
 // supabase/functions/_shared/portalAddress.ts voor de mails.
 
 import { useEffect, useState } from 'react';
-import { fetchPortalLoginKey } from './repository';
+import { fetchPortalLoginKey, type PortalLoginKeyResult } from './repository';
 import { portalLoginPath } from './portalLoginKey';
 
 export { portalLoginPath };
@@ -19,32 +19,34 @@ export function portalLoginUrl(key: string | null | undefined): string {
 
 /**
  * De sleutel van het inlogadres. `ready` is false zolang hij onderweg is; is
- * hij er daarna niet (geen rechten op Klanten, of de migratie moet nog), dan
- * `key: null` en toont de app het algemene adres /portal. Alleen een gevonden
- * sleutel wordt onthouden, zodat een later bezoek het opnieuw probeert.
+ * hij er daarna niet, dan `key: null` met de reden in `unavailable` (geen
+ * rechten op Klanten, de migratie moet nog, of iets anders), en toont de app
+ * het algemene adres /portal. Alleen een gevonden sleutel wordt onthouden,
+ * zodat een later bezoek het opnieuw probeert.
  */
-export function usePortalLoginKey(organizationId: string | null | undefined): { key: string | null; ready: boolean } {
+export function usePortalLoginKey(organizationId: string | null | undefined): PortalLoginKeyResult & { ready: boolean } {
   const cached = organizationId ? known.get(organizationId) ?? null : null;
-  const [state, setState] = useState<{ org: string | null; key: string | null; ready: boolean }>(() => ({
+  const [state, setState] = useState<{ org: string | null; ready: boolean } & PortalLoginKeyResult>(() => ({
     org: organizationId ?? null,
     key: cached,
+    unavailable: null,
     ready: !organizationId || cached !== null,
   }));
   useEffect(() => {
-    if (!organizationId) { setState({ org: null, key: null, ready: true }); return; }
+    if (!organizationId) { setState({ org: null, key: null, unavailable: null, ready: true }); return; }
     const hit = known.get(organizationId);
-    if (hit) { setState({ org: organizationId, key: hit, ready: true }); return; }
+    if (hit) { setState({ org: organizationId, key: hit, unavailable: null, ready: true }); return; }
     let alive = true;
-    setState({ org: organizationId, key: null, ready: false });
+    setState({ org: organizationId, key: null, unavailable: null, ready: false });
     fetchPortalLoginKey(organizationId)
-      .catch(() => null)
-      .then(key => {
-        if (key) known.set(organizationId, key);
-        if (alive) setState({ org: organizationId, key, ready: true });
+      .catch((): PortalLoginKeyResult => ({ key: null, unavailable: 'fout' }))
+      .then(result => {
+        if (result.key) known.set(organizationId, result.key);
+        if (alive) setState({ org: organizationId, ...result, ready: true });
       });
     return () => { alive = false; };
   }, [organizationId]);
   // Net van organisatie gewisseld: niet heel even het adres van de vorige tonen.
-  if (state.org !== (organizationId ?? null)) return { key: cached, ready: !organizationId || cached !== null };
-  return { key: state.key, ready: state.ready };
+  if (state.org !== (organizationId ?? null)) return { key: cached, unavailable: null, ready: !organizationId || cached !== null };
+  return { key: state.key, unavailable: state.unavailable, ready: state.ready };
 }

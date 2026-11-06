@@ -200,6 +200,31 @@ $$;
 revoke all on function public.ensure_portal_login_key(uuid) from public, anon;
 grant execute on function public.ensure_portal_login_key(uuid) to authenticated, service_role;
 
+-- Alleen lezen: het adres als het er al is, anders null. Voor de lees-handeling
+-- van Gerrie (branding.get): een lees-handeling maakt niets aan (harde regel 2
+-- in CLAUDE.md), ook geen sleutel. Dezelfde toegangsregel als hierboven.
+create or replace function public.portal_login_key(p_organization_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_organization_id is null then
+    return null;
+  end if;
+  if auth.role() is distinct from 'service_role'
+     and not public.can_read_module(p_organization_id, 'clients') then
+    raise exception 'Geen toegang tot het klantportaal van deze organisatie.' using errcode = '42501';
+  end if;
+  return (select a.key from public.portal_login_addresses a where a.organization_id = p_organization_id);
+end;
+$$;
+
+revoke all on function public.portal_login_key(uuid) from public, anon;
+grant execute on function public.portal_login_key(uuid) to authenticated, service_role;
+
 -- ------------------------------------------------------------
 -- 4. Elke bestaande organisatie meteen een adres
 -- ------------------------------------------------------------

@@ -103,7 +103,7 @@ export function BrandStudio({ form, setForm, canWrite, organizationId }: {
   // Het scherm van het voorbeeld staat hier: wie aan het inlogscherm werkt,
   // krijgt het inlogscherm te zien.
   const [screen, setScreen] = useState<PortalPreviewScreen>('overview');
-  const { key: loginKey, ready: loginKeyReady } = usePortalLoginKey(organizationId);
+  const { key: loginKey, ready: loginKeyReady, unavailable: loginKeyUnavailable } = usePortalLoginKey(organizationId);
   return <div className="brand-studio">
     <div className="brand-studio-grid">
       {/* Eén kolom met beide kaarten: zo blijft het voorbeeld naast allebei staan. */}
@@ -115,6 +115,7 @@ export function BrandStudio({ form, setForm, canWrite, organizationId }: {
           canWrite={canWrite}
           loginKey={loginKey}
           loginKeyReady={loginKeyReady}
+          loginKeyUnavailable={loginKeyUnavailable}
           onShowLogin={() => setScreen('login')}
         />
       </div>
@@ -173,23 +174,36 @@ function ColorField({ id, label, value, onChange, disabled, fromLogo, fromLogoLa
   fromLogo: string[];
   fromLogoLabel: string;
 }) {
+  // Wat er in het veld getypt staat. Alleen een volledige code gaat het
+  // formulier in. Ging elke toets er meteen in, dan was "#0F2A4" even geen
+  // kleur: de kop- en inlogkleuren sprongen dan op Automatisch en het veld ging
+  // dicht, en een half getypte merkkleur werd bij Opslaan stil het standaardgoud.
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  const type = (next: string) => {
+    setDraft(next);
+    if (HEX.test(next)) onChange(next);
+  };
   return <>
     <div className="brand-color-row">
       <input
         type="color"
         className="brand-color"
         value={HEX.test(value) ? value.toLowerCase() : '#000000'}
-        onChange={(e) => onChange(e.target.value.toUpperCase())}
+        onChange={(e) => type(e.target.value.toUpperCase())}
         disabled={disabled}
         aria-label={`${label} kiezen`}
       />
       <Input
         id={id}
-        value={value}
-        onChange={(e) => onChange(e.target.value.toUpperCase())}
+        value={draft}
+        onChange={(e) => type(e.target.value.toUpperCase())}
+        // Weggaan met een halve code: terug naar de kleur die geldt.
+        onBlur={() => { if (!HEX.test(draft)) setDraft(value); }}
         disabled={disabled}
         maxLength={7}
         aria-label={`${label} als hexcode`}
+        aria-invalid={draft !== value && !HEX.test(draft) ? true : undefined}
       />
     </div>
     {fromLogo.length > 0 && <div className="brand-from-logo">
@@ -493,12 +507,14 @@ function LoginColorField({ id, label, value, automatic, suggestion, onChange, ca
   </div>;
 }
 
-function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, onShowLogin }: {
+function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, loginKeyUnavailable, onShowLogin }: {
   form: CompanySettingsInput;
   setForm: SetForm;
   canWrite: boolean;
   loginKey: string | null;
   loginKeyReady: boolean;
+  /** Waarom er geen adres is, als het er niet is. */
+  loginKeyUnavailable: 'rechten' | 'migratie' | 'fout' | null;
   onShowLogin: () => void;
 }) {
   const branding = useMemo(() => formBranding(form), [form]);
@@ -555,9 +571,13 @@ function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, onSh
           <p className="settings-help">
             {loginKey
               ? 'Op dit adres staat het inlogscherm meteen in jouw huisstijl, ook voor een klant die er nog nooit was. Je mails naar klanten gebruiken het al; zet het ook op je website. Op /portal zonder dit adres weet het portaal pas na het inloggen bij wie je klant hoort.'
-              : loginKeyReady
-                ? 'Je eigen inlogadres is hier nog niet beschikbaar: de database-update moet op deze omgeving nog draaien. Tot dan gebruiken je mails het algemene adres /portal.'
-                : 'Je eigen inlogadres wordt opgehaald.'}
+              : !loginKeyReady
+                ? 'Je eigen inlogadres wordt opgehaald.'
+                : loginKeyUnavailable === 'rechten'
+                  ? 'Het inlogadres hoort bij Klanten: je ziet het als je Klanten mag openen. Vraag het anders aan een beheerder.'
+                  : loginKeyUnavailable === 'migratie'
+                    ? 'Je eigen inlogadres is hier nog niet beschikbaar: de database-update moet op deze omgeving nog draaien. Tot dan gebruiken je mails het algemene adres /portal.'
+                    : 'Je inlogadres kon niet worden opgehaald. Ververs de pagina om het opnieuw te proberen; je mails gebruiken het adres gewoon.'}
           </p>
         </div>
 
