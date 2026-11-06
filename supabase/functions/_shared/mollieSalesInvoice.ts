@@ -224,6 +224,14 @@ export function buildMollieSalesInvoice(source: MollieSalesInvoiceSource): { dra
   };
 }
 
+/** Hoe een Mollie-factuur op betaald kwam (paymentDetails van Mollie). */
+export interface MolliePaymentSource {
+  /** manual = buiten Mollie om op betaald gezet; payment-link en payment = via Mollie betaald. */
+  source: string;
+  /** Het id van de Mollie-betaling (tr_…) of betaallink (pl_…); leeg bij manual. */
+  reference: string | null;
+}
+
 /** Wat ResoFly van een Mollie-factuur bijhoudt. */
 export interface MollieSalesInvoiceState {
   id: string;
@@ -232,6 +240,13 @@ export interface MollieSalesInvoiceState {
   /** issuing | issued | failed — de Peppol-aflevering. */
   eInvoiceStatus: 'issuing' | 'issued' | 'failed' | null;
   totalCents: number | null;
+  /**
+   * Wat er volgens Mollie nog betaald moet worden (amountDue). Mollie kent geen
+   * deelbetalingen: dit is het hele bedrag zolang de factuur daar open staat.
+   */
+  amountDueCents: number | null;
+  /** Hoe hij op betaald kwam; leeg zolang hij niet betaald is (of als Mollie het niet zegt). */
+  paymentSources: MolliePaymentSource[];
   issuedAt: string | null;
   dueAt: string | null;
   paidAt: string | null;
@@ -245,6 +260,21 @@ function linkHref(links: unknown, key: string): string | null {
   return typeof href === 'string' && href.startsWith('https://') ? href : null;
 }
 
+/**
+ * paymentDetails van Mollie -> de bronnen. Mollie geeft een lijst; een los object
+ * (zoals in het verzoek) nemen we ook aan.
+ */
+function readPaymentSources(raw: unknown): MolliePaymentSource[] {
+  const list = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? [raw] : [];
+  return list.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const source = String((entry as { source?: unknown }).source ?? '').trim().toLowerCase();
+    if (!source) return [];
+    const ref = (entry as { sourceReference?: unknown }).sourceReference;
+    return [{ source, reference: typeof ref === 'string' && ref.trim() ? ref.trim() : null }];
+  });
+}
+
 /** Een antwoord van GET/POST/PATCH /v2/sales-invoices -> de velden die ResoFly bewaart. */
 export function readMollieSalesInvoice(payload: Record<string, unknown>): MollieSalesInvoiceState {
   const eInvoiceStatus = String(payload.eInvoiceStatus ?? '');
@@ -254,6 +284,8 @@ export function readMollieSalesInvoice(payload: Record<string, unknown>): Mollie
     status: typeof payload.status === 'string' ? payload.status : null,
     eInvoiceStatus: eInvoiceStatus === 'issuing' || eInvoiceStatus === 'issued' || eInvoiceStatus === 'failed' ? eInvoiceStatus : null,
     totalCents: mollieAmountCents(payload.totalAmount),
+    amountDueCents: mollieAmountCents(payload.amountDue),
+    paymentSources: readPaymentSources(payload.paymentDetails),
     issuedAt: typeof payload.issuedAt === 'string' && payload.issuedAt ? payload.issuedAt : null,
     dueAt: typeof payload.dueAt === 'string' && payload.dueAt ? payload.dueAt : null,
     paidAt: typeof payload.paidAt === 'string' && payload.paidAt ? payload.paidAt : null,
@@ -295,8 +327,9 @@ export function mollieDate(value: string | null | undefined): string | null {
 
 /**
  * Status van de Mollie-factuur -> status van de betaalregel in ResoFly, of null
- * als er niets verandert. Een teruggedraaide betaling (payment_reversed) neemt
- * ResoFly niet vanzelf over: die staat bij de factuur, de gebruiker beslist.
+ * als er niets verandert. 'paid' betekent nog niet dat er geld via Mollie kwam:
+ * zie mollieSalesInvoicePaidThroughMollie. Een teruggedraaide betaling heet bij
+ * Mollie 'payment-reversed' en loopt via een terugboeking (zie de sync).
  */
 export function molliePaymentStatus(status: string | null): 'paid' | 'canceled' | 'expired' | 'failed' | null {
   switch (status) {
@@ -313,6 +346,104 @@ export function molliePaymentStatus(status: string | null): 'paid' | 'canceled' 
 export function mollieSalesInvoiceSettled(status: string | null): boolean {
   return molliePaymentStatus(status) !== null;
 }
+
+/** Mollie schrijft 'payment-reversed'; een oudere schrijfwijze met een liggend streepje nemen we ook aan. */
+export function mollieStatusIsReversed(status: string | null): boolean {
+  return status === 'payment-reversed' || status === 'payment_reversed';
+}
+
+/**
+ * Kwam het geld via Mollie binnen? Alleen dan boekt ResoFly een ontvangst op
+ * het Mollie-saldo (1102).
+ *
+ * Een Mollie-factuur kan ook "buiten Mollie om" op betaald staan (source
+ * 'manual'): ResoFly zette hem zo nadat de klant per bank betaalde, of iemand
+ * deed het in het Mollie-dashboard. Eerder boekte ResoFly ook dan een ontvangst
+ * via Mollie: de factuur stond dubbel betaald en 1102 hield geld vast dat nooit
+ * kwam. Zegt Mollie niets over de bron, dan geldt het oude gedrag (via Mollie):
+ * handmatig op betaald zetten kan bij Mollie alleen mét paymentDetails.
+ */
+export function mollieSalesInvoicePaidThroughMollie(state: Pick<MollieSalesInvoiceState, 'status' | 'paymentSources'>): boolean {
+  if (state.status !== 'paid') return false;
+  if (state.paymentSources.length === 0) return true;
+  return state.paymentSources.some((entry) => entry.source === 'payment' || entry.source === 'payment-link');
+}
+
+/** Staat de factuur bij Mollie open en int Mollie hem nog (met zijn eigen betaallink)? */
+export function mollieSalesInvoiceCollecting(status: string | null): boolean {
+  return status === 'issued' || status === 'overdue';
+}
+
+/**
+ * Welke betaallink krijgt de klant voor een factuur die via Mollie is uitgegeven?
+ *
+ * Mollie kent geen deelbetalingen: zijn betaallink vraagt altijd het hele
+ * bedrag (amountDue), ook als de klant al een deel per bank betaalde of er een
+ * creditnota is. Eerder kreeg de klant die link in de herinnering, de aanmaning
+ * en het klantportaal, met daarboven het lagere openstaande bedrag: wie op de
+ * link klikte, betaalde te veel.
+ *
+ * - 'mollie': de link van Mollie, want die vraagt precies wat er openstaat.
+ * - 'own': een eigen betaallink (Payments API) voor wat er volgens ResoFly nog
+ *   openstaat — na een deelbetaling, of als Mollie de factuur niet meer int.
+ * - 'none': geen nieuwe link, met de reden: Mollie geeft hem nog uit, er loopt
+ *   bij Mollie al een betaling, of hij is daar al betaald (dan zou een tweede
+ *   link de klant twee keer laten betalen).
+ */
+export type MollieCheckoutDecision =
+  | { use: 'mollie'; url: string }
+  | { use: 'own'; reason: 'partly_settled' | 'not_collecting' }
+  | { use: 'none'; reason: 'not_issued' | 'payment_pending' | 'paid_at_mollie' };
+
+export function mollieCheckoutDecision(input: {
+  status: string | null;
+  paymentSources: MolliePaymentSource[];
+  /** Wat Mollie nog vraagt; zonder verse stand het totaal van de Mollie-factuur. */
+  amountDueCents: number | null;
+  paymentUrl: string | null;
+  /** Wat er volgens ResoFly nog openstaat (centen, > 0). */
+  openCents: number;
+}): MollieCheckoutDecision {
+  const { status } = input;
+  if (!status || status === 'draft' || status === 'issuing') return { use: 'none', reason: 'not_issued' };
+  if (status === 'pending-payment') return { use: 'none', reason: 'payment_pending' };
+  if (status === 'paid') {
+    return mollieSalesInvoicePaidThroughMollie({ status, paymentSources: input.paymentSources })
+      ? { use: 'none', reason: 'paid_at_mollie' }
+      : { use: 'own', reason: 'not_collecting' };
+  }
+  if (mollieSalesInvoiceCollecting(status)) {
+    if (input.amountDueCents !== null && input.amountDueCents !== input.openCents) return { use: 'own', reason: 'partly_settled' };
+    return input.paymentUrl ? { use: 'mollie', url: input.paymentUrl } : { use: 'none', reason: 'not_issued' };
+  }
+  // Geannuleerd, verlopen, mislukt of teruggedraaid: de link van Mollie werkt niet meer.
+  if (status === 'cancelled' || status === 'canceled' || status === 'expired' || status === 'failed' || mollieStatusIsReversed(status)) {
+    return { use: 'own', reason: 'not_collecting' };
+  }
+  // Een status die we niet kennen: niets aanmaken, dan kan er ook niet dubbel betaald worden.
+  return { use: 'none', reason: 'not_issued' };
+}
+
+/**
+ * Moet ResoFly de factuur bij Mollie op betaald zetten? Ja als Mollie hem nog
+ * int terwijl er in ResoFly niets meer openstaat (betaald per bank, met een
+ * eigen betaallink of gecrediteerd). Anders bleef Mollie hem innen en kon de
+ * klant via de link van Mollie nog eens betalen. Een afgeboekte factuur blijft
+ * bij Mollie open: betaalt de klant alsnog, dan is dat welkom.
+ */
+export function mollieShouldMarkPaid(input: { mollieStatus: string | null; invoiceStatus: string; openCents: number | null }): boolean {
+  if (!mollieSalesInvoiceCollecting(input.mollieStatus)) return false;
+  if (input.invoiceStatus === 'written_off' || input.invoiceStatus === 'draft') return false;
+  if (input.openCents !== null) return input.openCents <= 0;
+  return ['paid', 'cancelled', 'void', 'refunded'].includes(input.invoiceStatus);
+}
+
+/**
+ * Het verzoek om een factuur bij Mollie op betaald te zetten: "buiten Mollie om"
+ * (manual). Zonder sourceReference — die is alleen verplicht bij payment en
+ * payment-link.
+ */
+export const MOLLIE_MARK_PAID_BODY = { status: 'paid', paymentDetails: { source: 'manual' } } as const;
 
 /**
  * Een SHA-256 (hex) -> een UUID in v4-vorm. Mollie wil een UUID als

@@ -105,14 +105,17 @@ export function PublicInvoicePage({ token }: { token: string }) {
   const totals = useMemo(() => total(invoice?.lines || []), [invoice?.lines]);
   // Alleen een link die nog werkt. Eerder viel de knop terug op elke oude link
   // (verlopen, mislukt of vervangen door een link voor een ander bedrag).
-  const payment = useMemo(() => {
-    const records = payload?.payments || [];
-    return records.find(record => ['open', 'pending'].includes(record.status) && record.checkout_url
-      && (!record.checkout_expires_at || Date.parse(record.checkout_expires_at) > Date.now())) || null;
-  }, [payload?.payments]);
   // Wat er nog openstaat (na een deelbetaling of creditnota); zonder grootboek
   // het factuurtotaal.
   const openCents = typeof invoice?.open_amount_cents === 'number' ? Math.min(invoice.open_amount_cents, totals.totalCents) : null;
+  // En alleen een link voor precies dat bedrag: de link van een Mollie-e-factuur
+  // vraagt na een deelbetaling nog het hele bedrag (de server haalt hem dan al weg).
+  const payment = useMemo(() => {
+    const records = payload?.payments || [];
+    return records.find(record => ['open', 'pending'].includes(record.status) && record.checkout_url
+      && (!record.checkout_expires_at || Date.parse(record.checkout_expires_at) > Date.now())
+      && (openCents === null || Number(record.amount_cents) === openCents)) || null;
+  }, [payload?.payments, openCents]);
   const toPay = openCents !== null ? openCents / 100 : totals.total;
   const partlySettled = openCents !== null && openCents < totals.totalCents && openCents > 0;
   const isPaid = invoice?.status === 'paid' || Boolean(invoice?.paid_at) || openCents === 0;

@@ -2562,6 +2562,7 @@ function App() {
       if (result.recovered === 'completed') alert(`De verzending via Mollie is afgerond${result.mollie?.invoiceNumber ? ` (${result.mollie.invoiceNumber})` : ''}.`);
       else if (result.recovered === 'abandoned') alert('Mollie had deze factuur nog niet uitgegeven; de afgebroken verzending is opgeruimd. Je kunt hem opnieuw versturen.');
       else if (result.pending) alert('De verzending via Mollie loopt nog. Probeer het over een paar minuten opnieuw.');
+      else if (result.markedPaidAtMollie) alert('In ResoFly staat niets meer open op deze factuur. Hij staat nu ook bij Mollie op betaald, zodat Mollie hem niet meer int.');
     } catch (e) {
       if (!options.silent) setError(e instanceof Error ? e.message : 'De stand bij Mollie ophalen mislukt');
       else console.warn('Mollie-stand verversen mislukte', e);

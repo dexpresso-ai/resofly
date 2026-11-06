@@ -15,6 +15,7 @@
 
 import { decryptSecret } from './mollieSecrets.ts';
 import { invoiceMollieWebhookBase, invoiceMollieWebhookUrl } from './mollieWebhookUrl.ts';
+import { mollieCheckoutDecision, readMollieSalesInvoice, type MolliePaymentSource } from './mollieSalesInvoice.ts';
 
 // deno-lint-ignore no-explicit-any
 type SupabaseAdmin = any;
@@ -91,14 +92,37 @@ export async function createPortalInvoiceCheckout(
   }
   if (amountCents <= 0) return { ok: false, status: 422, error: 'Factuurbedrag moet groter zijn dan 0.' };
 
-  // Via Mollie als e-factuur uitgegeven? Dan alleen de betaallink van Mollie —
-  // een eigen betaling ernaast zou de klant twee keer laten betalen.
+  // Via Mollie als e-factuur uitgegeven? Dan de betaallink van Mollie, maar alleen
+  // als die vraagt wat er openstaat. Mollie kent geen deelbetalingen: na een
+  // deelbetaling per bank of een creditnota vraagt zijn link nog het hele bedrag,
+  // en wie erop klikte betaalde te veel. Dan een eigen link voor het restbedrag.
+  // Loopt er bij Mollie een betaling of is hij daar al betaald: geen tweede link.
   const mollieInvoice = await loadMollieSalesInvoiceCheckout(supabaseAdmin, organizationId, invoiceId);
+  // Niet weten of hij via Mollie loopt, is geen reden voor een tweede betaling ernaast.
+  if (mollieInvoice === 'lookup_failed') return { ok: false, status: 503, error: 'Online betalen lukt nu even niet. Probeer het over een paar minuten opnieuw.' };
   if (mollieInvoice) {
-    if (mollieInvoice.checkoutUrl) {
-      return { ok: true, checkoutUrl: mollieInvoice.checkoutUrl, providerPaymentId: mollieInvoice.salesInvoiceId ?? '', status: 'open', mock: false, reused: true };
+    const decision = mollieCheckoutDecision({
+      status: mollieInvoice.status,
+      paymentSources: mollieInvoice.paymentSources,
+      amountDueCents: mollieInvoice.amountDueCents ?? totalCents,
+      paymentUrl: mollieInvoice.checkoutUrl,
+      openCents: amountCents,
+    });
+    if (decision.use === 'mollie') {
+      return { ok: true, checkoutUrl: decision.url, providerPaymentId: mollieInvoice.salesInvoiceId ?? '', status: 'open', mock: false, reused: true };
     }
-    return { ok: false, status: 409, error: 'Deze factuur betaal je via de betaallink in de e-mail van Mollie.' };
+    if (decision.use === 'none') {
+      return {
+        ok: false, status: 409,
+        error: decision.reason === 'paid_at_mollie'
+          ? 'Deze factuur is al via Mollie betaald. Het kan even duren voordat je dat hier ziet.'
+          : decision.reason === 'payment_pending'
+            ? 'Er loopt al een betaling voor deze factuur. Wacht tot die is afgerond.'
+            : 'Deze factuur betaal je via de betaallink in de e-mail van Mollie.',
+      };
+    }
+    // Eigen link: de betaalregel van de Mollie-factuur mag die niet in de weg zitten.
+    if (mollieInvoice.salesInvoiceId) await retireMollieSalesInvoicePayment(supabaseAdmin, organizationId, invoiceId, mollieInvoice.salesInvoiceId, decision.reason);
   }
 
   // Bestaande, herbruikbare open betaallink? Meteen teruggeven — nooit dubbel
@@ -268,13 +292,24 @@ async function failAndReturn(
   return { ok: false, status, error: message };
 }
 
-/** De e-factuur via Mollie van deze factuur (niet mislukt), met de betaallink van Mollie. */
+type MollieSalesInvoiceCheckout = {
+  checkoutUrl: string | null; salesInvoiceId: string | null; status: string | null;
+  paymentSources: MolliePaymentSource[]; amountDueCents: number | null;
+};
+
+/**
+ * De e-factuur via Mollie van deze factuur (niet mislukt), met de stand bij
+ * Mollie: vers opgehaald, want de opgeslagen stand kan een uur oud zijn (de
+ * statusronde) en wie net via Mollie betaalde, mag geen tweede link krijgen.
+ * Is Mollie onbereikbaar, dan de opgeslagen stand. Lukt het opzoeken in de
+ * database niet, dan 'lookup_failed': geen eigen link ernaast op de gok.
+ */
 async function loadMollieSalesInvoiceCheckout(
   supabaseAdmin: SupabaseAdmin, organizationId: string, invoiceId: string,
-): Promise<{ checkoutUrl: string | null; salesInvoiceId: string | null } | null> {
+): Promise<MollieSalesInvoiceCheckout | 'lookup_failed' | null> {
   const { data, error } = await supabaseAdmin
     .from('invoice_email_deliveries')
-    .select('provider_email_id,external_payment_url')
+    .select('status,provider_email_id,external_payment_url,external_status')
     .eq('organization_id', organizationId)
     .eq('invoice_id', invoiceId)
     .eq('delivery_channel', 'e_invoice_mollie')
@@ -282,10 +317,76 @@ async function loadMollieSalesInvoiceCheckout(
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) { console.warn('client-portal: Mollie-factuur opzoeken mislukte', describeError(error)); return null; }
+  if (error) {
+    console.warn('client-portal: Mollie-factuur opzoeken mislukte', describeError(error));
+    return 'lookup_failed';
+  }
   if (!data) return null;
-  const row = data as { provider_email_id: string | null; external_payment_url: string | null };
-  return { checkoutUrl: isReusableCheckoutUrl(row.external_payment_url) ? row.external_payment_url : null, salesInvoiceId: row.provider_email_id };
+  const row = data as { status: string; provider_email_id: string | null; external_payment_url: string | null; external_status: string | null };
+  const stored: MollieSalesInvoiceCheckout = {
+    checkoutUrl: isReusableCheckoutUrl(row.external_payment_url) ? row.external_payment_url : null,
+    salesInvoiceId: row.provider_email_id,
+    // Een verzending die nog loopt, geeft Mollie nog uit.
+    status: row.status === 'queued' ? 'issuing' : row.external_status,
+    paymentSources: [],
+    amountDueCents: null,
+  };
+  if (!row.provider_email_id || row.status === 'queued' || ALLOW_MOCK) return stored;
+  const orgKey = await resolveOrganizationMollieKey(supabaseAdmin, organizationId);
+  if (!orgKey) return stored;
+  try {
+    const response = await fetch(`https://api.mollie.com/v2/sales-invoices/${encodeURIComponent(row.provider_email_id)}`, {
+      headers: { Authorization: `Bearer ${orgKey.apiKey}` },
+    });
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!response.ok) { console.warn('client-portal: Mollie-factuur ophalen mislukte; de opgeslagen stand telt', response.status); return stored; }
+    const state = readMollieSalesInvoice(payload);
+    return {
+      checkoutUrl: isReusableCheckoutUrl(state.paymentUrl) ? state.paymentUrl : stored.checkoutUrl,
+      salesInvoiceId: row.provider_email_id,
+      status: state.status ?? stored.status,
+      paymentSources: state.paymentSources,
+      amountDueCents: state.amountDueCents ?? state.totalCents,
+    };
+  } catch (fetchError) {
+    console.warn('client-portal: Mollie-factuur ophalen mislukte; de opgeslagen stand telt', describeError(fetchError));
+    return stored;
+  }
+}
+
+/**
+ * De betaalregel van de Mollie-factuur laten vervallen, zodat een eigen
+ * betaallink voor het restbedrag ernaast kan (er mag maar één actieve betaling
+ * per factuur zijn). Gelijk aan invoice-workflow; betaalt de klant toch via de
+ * link van Mollie, dan boekt de statusronde dat alsnog (verlopen → betaald mag).
+ */
+async function retireMollieSalesInvoicePayment(
+  supabaseAdmin: SupabaseAdmin, organizationId: string, invoiceId: string, salesInvoiceId: string, reason: string,
+): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .select('id,metadata')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .eq('provider', 'mollie')
+    .eq('provider_payment_id', salesInvoiceId)
+    .in('status', ['creating', 'open'])
+    .maybeSingle();
+  if (error || !data) { if (error) console.warn('client-portal: betaalregel van de Mollie-factuur opzoeken mislukte', describeError(error)); return; }
+  const row = data as { id: string; metadata: Record<string, unknown> | null };
+  const nowIso = new Date().toISOString();
+  const { error: updateError } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .update({
+      status: 'expired',
+      checkout_expires_at: nowIso,
+      metadata: { ...(row.metadata && typeof row.metadata === 'object' ? row.metadata : {}), superseded: reason, superseded_at: nowIso },
+      updated_at: nowIso,
+    })
+    .eq('id', row.id)
+    .eq('organization_id', organizationId)
+    .in('status', ['creating', 'open']);
+  if (updateError) console.warn('client-portal: betaalregel van de Mollie-factuur laten vervallen mislukte', describeError(updateError));
 }
 
 async function loadLatestOpenPayment(

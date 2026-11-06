@@ -136,6 +136,9 @@ export function mollieStatusLabel(status: string | null | undefined): string {
     case 'pending-payment': return 'betaling loopt';
     case 'paid': return 'betaald';
     case 'overdue': return 'te laat';
+    // Mollie schrijft 'payment-reversed'; eerder stond hier alleen de vorm met
+    // een liggend streepje, en zag je de kale Engelse status.
+    case 'payment-reversed':
     case 'payment_reversed': return 'betaling teruggedraaid';
     case 'cancelled':
     case 'canceled': return 'geannuleerd';
@@ -154,6 +157,25 @@ export function peppolStatusLabel(status: string | null | undefined): string {
 }
 
 const MOLLIE_SETTLED = new Set(['paid', 'cancelled', 'canceled', 'expired', 'failed']);
+
+/** Int Mollie de factuur nog (met zijn eigen betaallink)? Zelfde regel als in de edge function. */
+export function mollieCollecting(status: string | null | undefined): boolean {
+  return status === 'issued' || status === 'overdue';
+}
+
+/**
+ * De laatste melding "deelbetaling: Mollie vraagt nog het hele bedrag", als er
+ * daarna niets is veranderd (nog een betaling, of de factuur bij Mollie op
+ * betaald gezet). Null als er niets te melden is.
+ */
+export function molliePartialNote(events: ReadonlyArray<{ event_type: string; description?: string | null; created_at: string }>): string | null {
+  const relevant = events
+    .filter((event) => ['e_invoice_partial', 'e_invoice_settled', 'payment_paid', 'payment_partial', 'payment_overpaid'].includes(event.event_type))
+    .slice()
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  const latest = relevant[0];
+  return latest?.event_type === 'e_invoice_partial' && latest.description ? latest.description : null;
+}
 
 /**
  * Moet de stand bij Mollie (weer) opgehaald worden? Niet als er niets meer

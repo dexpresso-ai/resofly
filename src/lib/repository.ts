@@ -3879,6 +3879,8 @@ export type MollieSalesInvoiceSync = {
   /** De verzending loopt nog; later opnieuw kijken. */
   pending: boolean;
   paymentApplied?: boolean;
+  /** In ResoFly stond niets meer open; ResoFly zette de factuur bij Mollie op betaald. */
+  markedPaidAtMollie?: boolean;
 };
 
 /**

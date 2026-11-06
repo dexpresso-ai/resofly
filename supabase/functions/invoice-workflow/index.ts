@@ -14,8 +14,9 @@ import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
 import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderCreditNotePdf, renderDunningLetterPdf, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 import {
-  amsterdamDate, buildMollieSalesInvoice, mollieAmountCents, mollieDate, mollieEmailBody, mollieFetchPolicy, molliePaymentStatus,
-  mollieSalesInvoiceSettled, readMollieSalesInvoice, uuidFromHex, type MollieSalesInvoiceState,
+  amsterdamDate, buildMollieSalesInvoice, MOLLIE_MARK_PAID_BODY, mollieAmountCents, mollieCheckoutDecision, mollieDate, mollieEmailBody,
+  mollieFetchPolicy, molliePaymentStatus, mollieSalesInvoiceCollecting, mollieSalesInvoicePaidThroughMollie, mollieSalesInvoiceSettled,
+  mollieShouldMarkPaid, mollieStatusIsReversed, readMollieSalesInvoice, uuidFromHex, type MollieCheckoutDecision, type MollieSalesInvoiceState,
 } from '../_shared/mollieSalesInvoice.ts';
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 import { publicActionError } from '../_shared/publicError.ts';
@@ -101,6 +102,15 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { au
 class WorkflowHttpError extends Error {
   status: WorkflowHttpErrorStatus;
   constructor(message: string, status: WorkflowHttpErrorStatus = 400) { super(message); this.name = 'WorkflowHttpError'; this.status = status; }
+}
+
+/**
+ * De factuur is bij Mollie al betaald. Een herinnering of aanmaning stopt
+ * hierop, in plaats van zonder betaallink toch te vertrekken (de betaallink is
+ * daar "best-effort", een fout zou anders genegeerd worden).
+ */
+class MollieAlreadyPaidError extends WorkflowHttpError {
+  constructor() { super('Deze factuur is al via Mollie betaald; ResoFly legt de betaling nu vast.', 409); this.name = 'MollieAlreadyPaidError'; }
 }
 
 serve(async (req) => {
@@ -549,6 +559,9 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
   if (!INVOICE_PUBLIC_BASE_URL) throw new WorkflowHttpError('INVOICE_PUBLIC_BASE_URL of APP_PUBLIC_URL ontbreekt.', 500);
   if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
 
+  // Via Mollie uitgegeven: eerst de stand bij Mollie, want wie net via de link van
+  // Mollie betaalde, kreeg anders nog een herinnering (de statusronde draait eens per uur).
+  await refreshMollieBeforeChasing(organizationId, invoiceId, actorUserId);
   const invoice = await loadInvoice(organizationId, invoiceId);
   if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen herinnering worden verstuurd.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
@@ -584,6 +597,8 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
       const checkout = await createInvoicePaymentCheckout(actorUserId, organizationId, invoiceId, {});
       paymentUrl = checkout.checkoutUrl || null;
     } catch (error) {
+      // Bij Mollie al betaald: geen herinnering, ook niet zonder link.
+      if (error instanceof MollieAlreadyPaidError) throw error;
       const raw = error instanceof Error ? error.message : 'Mollie-betaallink kon niet worden aangemaakt.';
       console.warn('Reminder payment link creation failed, sending without link:', raw);
       paymentLinkError = INVOICE_DEBUG_ERRORS ? raw : publicActionError(raw).message;
@@ -914,6 +929,8 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   if (notice.status === 'cancelled') throw new WorkflowHttpError('Deze aanmaning is geannuleerd.', 409);
   if (notice.status === 'confirmed') throw new WorkflowHttpError('Deze aanmaning wordt al verstuurd.', 409);
 
+  // Via Mollie uitgegeven: eerst de stand bij Mollie (net betaald = geen aanmaning).
+  await refreshMollieBeforeChasing(organizationId, notice.invoice_id, userId);
   const invoice = await loadInvoice(organizationId, notice.invoice_id);
   if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen aanmaning worden verstuurd.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
@@ -950,6 +967,8 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
       const checkout = await createInvoicePaymentCheckout(userId, organizationId, invoice.id, {});
       paymentUrl = checkout.checkoutUrl || null;
     } catch (error) {
+      // Bij Mollie al betaald: geen aanmaning, ook niet zonder link.
+      if (error instanceof MollieAlreadyPaidError) throw error;
       console.warn('Aanmaning-betaallink mislukte (niet fataal):', error instanceof Error ? error.message : error);
       paymentUrl = null;
     }
@@ -1176,13 +1195,16 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   if (openCents !== null && amountCents <= 0) throw new WorkflowHttpError('Op deze factuur staat niets meer open.', 409);
   if (amountCents <= 0) throw new WorkflowHttpError('Factuurbedrag moet groter zijn dan 0.', 422);
 
-  // Via Mollie als e-factuur uitgegeven: de klant betaalt via de link van Mollie,
-  // nooit via een tweede betaling ernaast (dan kan hij twee keer betalen).
-  const mollieCheckout = await mollieSalesInvoiceCheckout(organizationId, invoiceId);
-  if (mollieCheckout) {
-    if (!mollieCheckout.checkoutUrl) throw new WorkflowHttpError('Deze factuur is via Mollie als e-factuur uitgegeven; de klant betaalt via de betaallink van Mollie. Die is er nog niet — klik bij de factuur op "Ververs bij Mollie".', 409);
-    return { payment: null, checkoutUrl: mollieCheckout.checkoutUrl, providerPaymentId: mollieCheckout.salesInvoiceId, mock: false, reused: true };
+  // Via Mollie als e-factuur uitgegeven: de link van Mollie, maar alleen als die
+  // vraagt wat er openstaat. Mollie kent geen deelbetalingen; na een betaling per
+  // bank of een creditnota vraagt zijn link nog het hele bedrag. Dan een eigen
+  // link voor het restbedrag (zie mollieCheckoutDecision).
+  const mollieCheckout = await mollieSalesInvoiceCheckout(organizationId, invoiceId, { openCents: amountCents, invoiceTotalCents: totalCents, actorUserId: userId });
+  if (mollieCheckout?.use === 'mollie') {
+    return { payment: null, checkoutUrl: mollieCheckout.url, providerPaymentId: mollieCheckout.salesInvoiceId, mock: false, reused: true };
   }
+  if (mollieCheckout?.use === 'none') throw mollieCheckoutRefusal(mollieCheckout.reason);
+  // 'own' (of geen Mollie-factuur): een eigen betaallink, hieronder.
 
   const existingPayment = await loadLatestOpenPayment(organizationId, invoiceId);
   // Alleen hergebruiken als de open link nog om hetzelfde bedrag vraagt; is er
@@ -2652,14 +2674,14 @@ const MOLLIE_API_BASE = 'https://api.mollie.com/v2';
 // Een poging die na zoveel tijd nog als concept bij Mollie staat, is afgebroken.
 const MOLLIE_STALE_ATTEMPT_MS = 10 * 60 * 1000;
 const MOLLIE_SYNC_BATCH_LIMIT = parsePositiveInt(Deno.env.get('MOLLIE_SALES_INVOICE_SYNC_LIMIT') ?? null, 50);
-const MOLLIE_DELIVERY_COLUMNS = 'id,status,provider_email_id,recipient_email,e_invoice_status,external_invoice_number,external_status,external_pdf_url,external_payment_url,external_synced_at,created_at,public_url:metadata->>publicUrl';
+const MOLLIE_DELIVERY_COLUMNS = 'id,status,provider_email_id,recipient_email,e_invoice_status,external_invoice_number,external_status,external_pdf_url,external_payment_url,external_synced_at,created_at,metadata,public_url:metadata->>publicUrl';
 
 type MollieApiResult = { ok: boolean; status: number; payload: Record<string, unknown> };
 type MollieDeliveryRow = {
   id: string; status: string; provider_email_id: string | null; recipient_email: string;
   e_invoice_status: string | null; external_invoice_number: string | null; external_status: string | null;
   external_pdf_url: string | null; external_payment_url: string | null; external_synced_at: string | null;
-  created_at: string; public_url: string | null;
+  created_at: string; metadata: Record<string, unknown> | null; public_url: string | null;
 };
 type MollieSendInput = {
   userId: string; organizationId: string; invoice: InvoiceRow; client: ClientRow; project: ProjectRow | null; quote: QuoteRow | null;
@@ -2733,17 +2755,127 @@ async function invoiceReferenceForClient(organizationId: string, invoice: Invoic
 }
 
 /**
- * Is deze factuur via Mollie uitgegeven (of wordt hij dat nu)? Dan betaalt de klant
- * via de link van Mollie en maakt ResoFly geen eigen betaling aan — anders kan hij
- * twee keer betalen.
+ * Is deze factuur via Mollie uitgegeven (of wordt hij dat nu)? Dan zegt
+ * mollieCheckoutDecision welke betaallink de klant krijgt: die van Mollie (als
+ * die precies vraagt wat er openstaat), een eigen link voor het restbedrag, of
+ * geen (Mollie geeft hem nog uit, er loopt daar een betaling, of hij is daar al
+ * betaald). Null: niet via Mollie, gewoon een eigen betaallink.
+ *
+ * De stand wordt vers bij Mollie opgehaald: de opgeslagen stand kan een uur
+ * oud zijn (de statusronde), en wie net via de link van Mollie betaalde, mag
+ * geen tweede link krijgen. Is Mollie onbereikbaar, dan de opgeslagen stand.
  */
-async function mollieSalesInvoiceCheckout(organizationId: string, invoiceId: string): Promise<{ checkoutUrl: string | null; salesInvoiceId: string | null } | null> {
+async function mollieSalesInvoiceCheckout(
+  organizationId: string, invoiceId: string, input: { openCents: number; invoiceTotalCents: number; actorUserId: string | null },
+): Promise<(MollieCheckoutDecision & { salesInvoiceId: string | null }) | null> {
   const delivery = activeMollieDelivery(await loadMollieDeliveries(organizationId, invoiceId));
   if (!delivery) return null;
-  return {
-    checkoutUrl: delivery.external_payment_url && isReusableCheckoutUrl(delivery.external_payment_url) ? delivery.external_payment_url : null,
-    salesInvoiceId: delivery.provider_email_id,
-  };
+  const salesInvoiceId = delivery.provider_email_id;
+  let state: MollieSalesInvoiceState | null = null;
+  if (salesInvoiceId && delivery.status !== 'queued') {
+    const orgKey = await resolveOrganizationMollieKey(organizationId);
+    if (orgKey) {
+      try {
+        const result = await mollieApi(orgKey.apiKey, 'GET', salesInvoicePath(salesInvoiceId));
+        if (result.ok) state = withMollieId(readMollieSalesInvoice(result.payload), salesInvoiceId);
+        else console.warn('Mollie-factuur ophalen voor de betaallink mislukte; de opgeslagen stand telt', salesInvoiceId, mollieErrorDetail(result));
+      } catch (error) {
+        console.warn('Mollie-factuur ophalen voor de betaallink mislukte; de opgeslagen stand telt', salesInvoiceId, describeError(error));
+      }
+    }
+  }
+  const storedUrl = delivery.external_payment_url && isReusableCheckoutUrl(delivery.external_payment_url) ? delivery.external_payment_url : null;
+  const freshUrl = state?.paymentUrl && isReusableCheckoutUrl(state.paymentUrl) ? state.paymentUrl : null;
+  const decision = mollieCheckoutDecision({
+    // Een verzending die nog loopt, geeft Mollie nog uit.
+    status: delivery.status === 'queued' ? 'issuing' : (state?.status ?? delivery.external_status),
+    paymentSources: state?.paymentSources ?? [],
+    // Zonder verse stand: het totaal, want zolang Mollie hem int vraagt hij dat helemaal.
+    amountDueCents: state ? (state.amountDueCents ?? state.totalCents ?? input.invoiceTotalCents) : input.invoiceTotalCents,
+    paymentUrl: freshUrl ?? storedUrl,
+    openCents: input.openCents,
+  });
+
+  if (decision.use === 'none' && decision.reason === 'paid_at_mollie') {
+    // Net betaald via de link van Mollie: nu meteen vastleggen, niet pas bij de statusronde.
+    await syncMollieSalesInvoice(organizationId, invoiceId, { actorUserId: input.actorUserId, canWrite: true })
+      .catch((error) => console.warn('Mollie-betaling meteen vastleggen mislukte; de statusronde doet het', describeError(error)));
+  }
+  if (decision.use === 'own' && salesInvoiceId) {
+    // De betaalregel van de Mollie-factuur (met de link van Mollie) houdt anders
+    // de plek van de ene actieve betaling bezet, en zou als "bestaande link"
+    // worden teruggegeven. Hij vervalt; betaalt de klant toch via Mollie, dan
+    // komt dat bij de statusronde alsnog binnen (verlopen → betaald mag).
+    await retireMollieSalesInvoicePayment(organizationId, invoiceId, salesInvoiceId, decision.reason);
+  }
+  return { ...decision, salesInvoiceId };
+}
+
+/** Waarom er (nu) geen betaallink komt voor een factuur die via Mollie loopt. */
+function mollieCheckoutRefusal(reason: 'not_issued' | 'payment_pending' | 'paid_at_mollie'): WorkflowHttpError {
+  if (reason === 'paid_at_mollie') return new MollieAlreadyPaidError();
+  if (reason === 'payment_pending') {
+    return new WorkflowHttpError('Bij Mollie loopt al een betaling voor deze factuur. Wacht tot die is afgerond; een tweede betaallink zou de klant twee keer laten betalen.', 409);
+  }
+  return new WorkflowHttpError('Deze factuur is via Mollie als e-factuur uitgegeven; de klant betaalt via de betaallink van Mollie. Die is er nog niet — klik bij de factuur op "Ververs bij Mollie".', 409);
+}
+
+/**
+ * De betaalregel van een Mollie-factuur laten vervallen (verlopen), als hij nog
+ * actief is. Hij blijft bestaan: komt er later toch een betaling via de link
+ * van Mollie, dan zet update_invoice_payment_status hem op betaald en boekt hem.
+ */
+async function retireMollieSalesInvoicePayment(organizationId: string, invoiceId: string, salesInvoiceId: string, reason: string): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .select('id,metadata')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .eq('provider', 'mollie')
+    .eq('provider_payment_id', salesInvoiceId)
+    .in('status', ['creating', 'open'])
+    .maybeSingle();
+  if (error) { console.warn('Betaalregel van de Mollie-factuur opzoeken mislukte', error.message); return; }
+  if (!data) return;
+  const row = data as { id: string; metadata: Record<string, unknown> | null };
+  const nowIso = new Date().toISOString();
+  const { error: updateError } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .update({
+      status: 'expired',
+      checkout_expires_at: nowIso,
+      metadata: { ...(row.metadata && typeof row.metadata === 'object' ? row.metadata : {}), superseded: reason, superseded_at: nowIso },
+      updated_at: nowIso,
+    })
+    .eq('id', row.id)
+    .eq('organization_id', organizationId)
+    .in('status', ['creating', 'open']);
+  if (updateError) console.warn('Betaalregel van de Mollie-factuur laten vervallen mislukte', updateError.message);
+}
+
+/**
+ * Voor een herinnering of aanmaning: loopt de factuur via Mollie, haal dan eerst
+ * de stand bij Mollie op. Lukt dat niet (Mollie onbereikbaar), dan gaat de
+ * herinnering gewoon door: dat is beter dan helemaal geen.
+ */
+async function refreshMollieBeforeChasing(organizationId: string, invoiceId: string, actorUserId: string | null): Promise<void> {
+  const deliveries = await loadMollieDeliveries(organizationId, invoiceId).catch(() => [] as MollieDeliveryRow[]);
+  const delivery = activeMollieDelivery(deliveries);
+  if (!delivery?.provider_email_id) return;
+  await syncMollieSalesInvoice(organizationId, invoiceId, { actorUserId, canWrite: true })
+    .catch((error) => console.warn('Stand bij Mollie ophalen vóór de herinnering mislukte; hij gaat door', describeError(error)));
+}
+
+/** Een paar velden aan de metadata van een verzending toevoegen (lezen, samenvoegen, schrijven). */
+async function mergeDeliveryMetadata(organizationId: string, deliveryId: string, patch: Record<string, unknown>): Promise<void> {
+  const { data, error } = await supabaseAdmin.from('invoice_email_deliveries').select('metadata')
+    .eq('id', deliveryId).eq('organization_id', organizationId).maybeSingle();
+  if (error || !data) { if (error) console.warn('Metadata van de verzending lezen mislukte', error.message); return; }
+  const current = (data as { metadata: Record<string, unknown> | null }).metadata;
+  const { error: updateError } = await supabaseAdmin.from('invoice_email_deliveries')
+    .update({ metadata: { ...(current && typeof current === 'object' ? current : {}), ...patch }, updated_at: new Date().toISOString() })
+    .eq('id', deliveryId).eq('organization_id', organizationId);
+  if (updateError) console.warn('Metadata van de verzending bijwerken mislukte', updateError.message);
 }
 
 async function sendInvoiceViaMollie(input: MollieSendInput) {
@@ -3026,7 +3158,8 @@ async function finalizeMollieIssue(input: MollieFinalizeInput) {
   // Betalen loopt via de link van Mollie. Mislukt dit, dan haalt de statusronde het in.
   await ensureMollieSalesInvoicePayment({ organizationId, invoiceId: invoice.id, userId, state, amountCents: input.totalCents, currency: input.currency })
     .catch((error) => console.warn('Betaalregel voor de Mollie-factuur aanmaken mislukte; de statusronde probeert het opnieuw.', describeError(error)));
-  if (molliePaymentStatus(state.status)) {
+  // 'paid' alleen als het geld via Mollie kwam (zie mollieSalesInvoicePaidThroughMollie).
+  if (molliePaymentStatus(state.status) && (state.status !== 'paid' || mollieSalesInvoicePaidThroughMollie(state))) {
     await applyMolliePaymentStatus(state).catch((error) => console.warn('Betaalstatus van Mollie overnemen mislukte', describeError(error)));
   }
 
@@ -3205,25 +3338,30 @@ async function fetchMolliePdfWithRetry(apiKey: string, pdfUrl: string | null, at
 
 /** De betaalregel voor de Mollie-factuur: de klant betaalt via de link van Mollie. */
 async function ensureMollieSalesInvoicePayment(input: { organizationId: string; invoiceId: string; userId: string | null; state: MollieSalesInvoiceState; amountCents: number; currency: string }): Promise<void> {
-  const { data: existing, error: lookupError } = await supabaseAdmin
-    .from('invoice_payment_records')
-    .select('id,provider_checkout_url')
-    .eq('provider', 'mollie')
-    .eq('provider_payment_id', input.state.id)
-    .maybeSingle();
-  if (lookupError) throw lookupError;
+  const findExisting = async () => {
+    const { data, error } = await supabaseAdmin
+      .from('invoice_payment_records')
+      .select('id,provider_checkout_url')
+      .eq('organization_id', input.organizationId)
+      .eq('provider', 'mollie')
+      .eq('provider_payment_id', input.state.id)
+      .maybeSingle();
+    if (error) throw error;
+    return data as { id: string; provider_checkout_url: string | null } | null;
+  };
+  const existing = await findExisting();
   if (existing) {
-    const row = existing as { id: string; provider_checkout_url: string | null };
-    if (!row.provider_checkout_url && input.state.paymentUrl) {
+    if (!existing.provider_checkout_url && input.state.paymentUrl) {
       const { error } = await supabaseAdmin
         .from('invoice_payment_records')
         .update({ provider_checkout_url: input.state.paymentUrl, updated_at: new Date().toISOString() })
-        .eq('id', row.id);
+        .eq('id', existing.id)
+        .eq('organization_id', input.organizationId);
       if (error) console.warn('Betaallink van Mollie bewaren mislukte', error.message);
     }
     return;
   }
-  const { error } = await supabaseAdmin.from('invoice_payment_records').insert({
+  const row = {
     organization_id: input.organizationId,
     invoice_id: input.invoiceId,
     provider: 'mollie',
@@ -3234,10 +3372,22 @@ async function ensureMollieSalesInvoicePayment(input: { organizationId: string; 
     amount_cents: input.amountCents,
     currency: input.currency,
     checkout_expires_at: null,
-    metadata: { source: 'mollie_sales_invoice', mollieInvoiceNumber: input.state.invoiceNumber },
+    metadata: { source: 'mollie_sales_invoice', mollieInvoiceNumber: input.state.invoiceNumber } as Record<string, unknown>,
     created_by: input.userId,
+  };
+  const { error } = await supabaseAdmin.from('invoice_payment_records').insert(row);
+  if (!error) return;
+  if ((error as { code?: string }).code !== '23505') throw error;
+  // Bezet. Of een gelijktijdige statusronde maakte hem net (dan is hij er nu), of
+  // er loopt een eigen betaallink voor het restbedrag: er mag maar één actieve
+  // betaling per factuur zijn. Eerder bleef de regel dan weg en ging een
+  // betaling via de link van Mollie nergens heen ("Payment record niet
+  // gevonden"). Nu komt hij er als niet-actief bij, zodat die betaling geboekt kan worden.
+  if (await findExisting()) return;
+  const { error: retryError } = await supabaseAdmin.from('invoice_payment_records').insert({
+    ...row, status: 'expired', metadata: { ...row.metadata, superseded: 'own_payment_active' },
   });
-  if (error && (error as { code?: string }).code !== '23505') throw error;
+  if (retryError && (retryError as { code?: string }).code !== '23505') throw retryError;
 }
 
 /** Betaald (of geannuleerd/verlopen) bij Mollie -> de betaalregel; 'paid' zet de factuur op betaald en boekt. */
@@ -3309,18 +3459,176 @@ async function syncMollieSalesInvoice(organizationId: string, invoiceId: string,
   // schrijver of de cron (die dezelfde stand ophaalt).
   if (!options.canWrite) return { mollie: publicMollieState(state), recovered, pending: false, paymentApplied: false };
 
+  // Eerst de betaling, dan pas de stand op de verzending. Andersom stond er al
+  // 'paid' op de verzending als het vastleggen van de betaling mislukte; de
+  // statusronde slaat een betaalde Mollie-factuur over, dus de betaling kwam
+  // dan nooit meer binnen.
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  const closedInResoFly = ['paid', 'refunded', 'cancelled', 'void', 'written_off'].includes(invoice.status);
+  const ensurePayment = () => ensureMollieSalesInvoicePayment({
+    organizationId, invoiceId, userId: options.actorUserId, state,
+    amountCents: state.totalCents ?? calculateTotals(invoice.lines).totalCents, currency: invoice.currency || 'EUR',
+  });
+  let paymentApplied = false;
+  if (mollieSalesInvoicePaidThroughMollie(state)) {
+    // Het geld kwam via Mollie binnen: altijd vastleggen, ook als de factuur in
+    // ResoFly al betaald of gecrediteerd is. Eerder bleef het dan liggen: het
+    // stond op het Mollie-saldo en nergens in de boeken. De database meldt nu
+    // bij de factuur hoeveel er te veel is betaald (update_invoice_payment_status).
+    await ensurePayment();
+    paymentApplied = await applyMolliePaymentStatus(state);
+    // Eerder teruggedraaid en nu weer betaald: de terugboeking vervalt.
+    await recordMollieSalesInvoiceReversal(organizationId, invoiceId, state.id, true);
+  } else if (state.status === 'paid') {
+    // Buiten Mollie om op betaald gezet (door ResoFly, of in het Mollie-dashboard):
+    // er kwam niets via Mollie binnen, dus niets boeken. Eerder boekte ResoFly
+    // ook dan een ontvangst via Mollie, naast de bankbetaling: dubbel betaald.
+    await retireMollieSalesInvoicePayment(organizationId, invoiceId, state.id, 'paid_outside_mollie');
+    if (delivery.external_status !== 'paid' && !delivery.metadata?.mollieMarkPaidRequestedAt) {
+      await insertWorkflowEvent(organizationId, invoiceId, 'e_invoice_settled', 'Bij Mollie handmatig op betaald gezet',
+        'Deze factuur staat bij Mollie op betaald zonder betaling via Mollie: iemand zette hem zo in het Mollie-dashboard. ResoFly boekt daarom geen ontvangst via Mollie. Boek de betaling zoals hij binnenkwam, bijvoorbeeld bij de bank.',
+        { delivery_id: delivery.id, mollie_sales_invoice_id: state.id }, options.actorUserId);
+    }
+  } else if (mollieStatusIsReversed(state.status)) {
+    // De betaling via Mollie is teruggedraaid (bijvoorbeeld een terugboeking van
+    // een kaartbetaling): het geld ging terug, de factuur staat weer open.
+    await recordMollieSalesInvoiceReversal(organizationId, invoiceId, state.id, false);
+  } else if (molliePaymentStatus(state.status)) {
+    // Geannuleerd, verlopen of mislukt bij Mollie: zijn betaallink werkt niet meer.
+    if (closedInResoFly) {
+      await retireMollieSalesInvoicePayment(organizationId, invoiceId, state.id, `mollie_${state.status}`);
+    } else {
+      await ensurePayment();
+      paymentApplied = await applyMolliePaymentStatus(state);
+    }
+  } else if (!closedInResoFly) {
+    // Nog open bij Mollie: de betaalregel met de link van Mollie hoort erbij.
+    await ensurePayment();
+  }
   await recordMollieDeliveryState(organizationId, { id: delivery.id, status: deliveryStatus, e_invoice_status: recovered ? null : delivery.e_invoice_status }, state, invoiceId);
 
-  // Betaald bij Mollie -> betaald in ResoFly. Een factuur die in ResoFly al op een
-  // andere manier is afgehandeld (handmatig betaald, geannuleerd) laten we staan:
-  // anders boekt ResoFly de betaling dubbel.
-  const invoice = await loadInvoice(organizationId, invoiceId);
-  let paymentApplied = false;
-  if (!['paid', 'refunded', 'cancelled', 'void', 'written_off'].includes(invoice.status)) {
-    await ensureMollieSalesInvoicePayment({ organizationId, invoiceId, userId: options.actorUserId, state, amountCents: state.totalCents ?? calculateTotals(invoice.lines).totalCents, currency: invoice.currency || 'EUR' });
-    paymentApplied = await applyMolliePaymentStatus(state);
+  // Staat er in ResoFly niets meer open (per bank betaald, met een eigen link of
+  // gecrediteerd) terwijl Mollie hem nog int? Dan bij Mollie op betaald zetten.
+  // Anders bleef Mollie hem innen en kon de klant via de link van Mollie nog eens
+  // betalen. Staat er nog een deel open, dan een melding: Mollie vraagt het hele bedrag.
+  const current = paymentApplied ? await loadInvoice(organizationId, invoiceId) : invoice;
+  let openCents: number | null = null;
+  try {
+    openCents = await loadInvoiceOpenCents(organizationId, current);
+  } catch (error) {
+    console.warn('Openstaand bedrag opzoeken mislukte; de status van de factuur telt', invoiceId, describeError(error));
   }
-  return { mollie: publicMollieState(state), recovered, pending: false, paymentApplied };
+  let markedPaidAtMollie = false;
+  if (mollieShouldMarkPaid({ mollieStatus: state.status, invoiceStatus: current.status, openCents })) {
+    markedPaidAtMollie = await markMollieSalesInvoicePaid({ organizationId, invoiceId, delivery, state, apiKey: orgKey.apiKey, actorUserId: options.actorUserId });
+  } else if (mollieSalesInvoiceCollecting(state.status) && openCents !== null && openCents > 0) {
+    const mollieDueCents = state.amountDueCents ?? state.totalCents;
+    if (mollieDueCents !== null && openCents < mollieDueCents) {
+      await noteMolliePartialPayment(organizationId, invoiceId, delivery, mollieDueCents, openCents, options.actorUserId);
+    }
+  }
+  const shown = markedPaidAtMollie ? { ...state, status: 'paid', paymentUrl: null } : state;
+  return { mollie: publicMollieState(shown), recovered, pending: false, paymentApplied, markedPaidAtMollie };
+}
+
+/**
+ * De factuur bij Mollie op betaald zetten, "buiten Mollie om" (manual): in
+ * ResoFly staat er niets meer open. Mollie int hem dan niet meer en zijn
+ * betaallink werkt niet meer. Geeft true als het lukte; anders probeert de
+ * volgende statusronde het opnieuw.
+ */
+async function markMollieSalesInvoicePaid(input: { organizationId: string; invoiceId: string; delivery: MollieDeliveryRow; state: MollieSalesInvoiceState; apiKey: string; actorUserId: string | null }): Promise<boolean> {
+  const { organizationId, invoiceId, delivery, state } = input;
+  // Vooraf vastleggen dat ResoFly dit vraagt: komt het antwoord niet aan, dan
+  // weet de volgende ronde dat dit "handmatig op betaald" van ResoFly zelf kwam.
+  const requestedAt = new Date().toISOString();
+  await mergeDeliveryMetadata(organizationId, delivery.id, { mollieMarkPaidRequestedAt: requestedAt });
+  // Eén sleutel per uur: een herhaald verzoek (scherm en statusronde tegelijk)
+  // krijgt hetzelfde antwoord, maar een geweigerd verzoek blijft niet de hele
+  // tijd in het idempotentievenster van Mollie hangen.
+  const idempotencyKey = await mollieIdempotencyKey(`mark-paid:${state.id}:${requestedAt.slice(0, 13)}`);
+  let result: MollieApiResult;
+  try {
+    result = await mollieApi(input.apiKey, 'PATCH', salesInvoicePath(state.id), {
+      status: MOLLIE_MARK_PAID_BODY.status, paymentDetails: { ...MOLLIE_MARK_PAID_BODY.paymentDetails },
+    }, idempotencyKey);
+  } catch (error) {
+    console.warn('Mollie-factuur op betaald zetten mislukte', state.id, describeError(error));
+    return false;
+  }
+  if (!result.ok) {
+    console.warn('Mollie-factuur op betaald zetten mislukte', state.id, mollieErrorDetail(result));
+    return false;
+  }
+  const updated = withMollieId(readMollieSalesInvoice(result.payload), state.id);
+  const nowIso = new Date().toISOString();
+  const { error } = await supabaseAdmin.from('invoice_email_deliveries')
+    .update({ external_status: updated.status ?? 'paid', external_synced_at: nowIso, updated_at: nowIso })
+    .eq('id', delivery.id).eq('organization_id', organizationId);
+  if (error) console.warn('Mollie-stand op de verzending zetten mislukte', delivery.id, error.message);
+  await retireMollieSalesInvoicePayment(organizationId, invoiceId, state.id, 'paid_outside_mollie');
+  await insertWorkflowEvent(organizationId, invoiceId, 'e_invoice_settled', 'Bij Mollie op betaald gezet',
+    'In ResoFly staat er niets meer open op deze factuur (betaald buiten Mollie om, of gecrediteerd). ResoFly heeft hem daarom bij Mollie op betaald gezet: Mollie int hem niet meer en de betaallink van Mollie werkt niet meer.',
+    { delivery_id: delivery.id, mollie_sales_invoice_id: state.id }, input.actorUserId);
+  return true;
+}
+
+/**
+ * Een deelbetaling op een factuur die via Mollie loopt: één melding per
+ * openstaand bedrag (niet bij elke statusronde), zodat de gebruiker weet dat
+ * de link van Mollie nog het hele bedrag vraagt.
+ */
+async function noteMolliePartialPayment(organizationId: string, invoiceId: string, delivery: MollieDeliveryRow, mollieDueCents: number, openCents: number, actorUserId: string | null): Promise<void> {
+  if (Number(delivery.metadata?.molliePartialNoticeOpenCents) === openCents) return;
+  await mergeDeliveryMetadata(organizationId, delivery.id, { molliePartialNoticeOpenCents: openCents });
+  await insertWorkflowEvent(organizationId, invoiceId, 'e_invoice_partial', 'Deelbetaling: Mollie vraagt nog het hele bedrag',
+    `Er is al ${formatEuro((mollieDueCents - openCents) / 100)} betaald of gecrediteerd; er staat nog ${formatEuro(openCents / 100)} open. `
+    + `Mollie kent geen deelbetalingen: de betaallink van Mollie vraagt nog ${formatEuro(mollieDueCents / 100)}. `
+    + `Herinneringen, aanmaningen en het klantportaal geven daarom een eigen betaallink voor ${formatEuro(openCents / 100)}. `
+    + 'Betaalt de klant toch via de link van Mollie, dan zie je hier dat er te veel is betaald. Is alles binnen, dan zet ResoFly de factuur bij Mollie op betaald.',
+    { delivery_id: delivery.id, mollie_sales_invoice_id: delivery.provider_email_id, open_cents: openCents, mollie_amount_due_cents: mollieDueCents }, actorUserId);
+}
+
+/**
+ * Een teruggedraaide betaling op een Mollie-factuur als terugboeking vastleggen
+ * (record_invoice_chargeback): debet 1300, credit 1102, de factuur weer open —
+ * zoals bij een gewone Mollie-betaling. Met undo=true vervalt die terugboeking
+ * weer (Mollie meldt de factuur opnieuw als betaald). Alleen voor een betaling
+ * die via Mollie binnenkwam; buiten Mollie om valt er niets terug te draaien.
+ */
+async function recordMollieSalesInvoiceReversal(organizationId: string, invoiceId: string, salesInvoiceId: string, undo: boolean): Promise<void> {
+  const { data: record, error } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .select('id,status,amount_cents,currency')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .eq('provider', 'mollie')
+    .eq('provider_payment_id', salesInvoiceId)
+    .maybeSingle();
+  if (error) throw error;
+  const row = record as { id: string; status: string; amount_cents: number; currency: string | null } | null;
+  if (!row || !(row.amount_cents > 0)) return;
+  const chargebackId = `${salesInvoiceId}:payment-reversed`;
+  if (undo) {
+    const { data: existing } = await supabaseAdmin.from('invoice_chargebacks').select('status')
+      .eq('organization_id', organizationId).eq('provider_chargeback_id', chargebackId).maybeSingle();
+    if ((existing as { status?: string } | null)?.status !== 'charged_back') return;
+  } else if (!['paid', 'refunded'].includes(row.status)) {
+    return;
+  }
+  const { error: rpcError } = await supabaseAdmin.rpc('record_invoice_chargeback', {
+    p_organization_id: organizationId,
+    p_invoice_id: invoiceId,
+    p_payment_record_id: row.id,
+    p_provider_chargeback_id: chargebackId,
+    p_amount_cents: row.amount_cents,
+    p_currency: row.currency || 'EUR',
+    p_reason: 'Mollie: de betaling van de e-factuur is teruggedraaid',
+    p_reversed: undo,
+    p_settlement_amount_cents: null,
+    p_metadata: { source: 'mollie_sales_invoice', mollie_sales_invoice_id: salesInvoiceId },
+  });
+  if (rpcError) throwRpcError('record_invoice_chargeback', rpcError);
 }
 
 /** Een onderbroken verzending afmaken: Mollie gaf de factuur uit, ResoFly legde dat nog niet vast. */

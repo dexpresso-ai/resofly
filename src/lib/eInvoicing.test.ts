@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, latestEInvoiceDelivery, mollieNeedsSync, mollieStatusLabel, peppolStatusLabel } from './eInvoicing.ts';
+import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, latestEInvoiceDelivery, mollieCollecting, mollieNeedsSync, molliePartialNote, mollieStatusLabel, peppolStatusLabel } from './eInvoicing.ts';
 import type { InvoiceEmailDelivery } from '../types.ts';
 
 /**
@@ -101,4 +101,22 @@ test('een verzending via Mollie telt als e-factuur, en de stand wordt niet te va
   assert.equal(mollieStatusLabel('pending-payment'), 'betaling loopt');
   assert.equal(peppolStatusLabel('failed'), 'mislukt');
   assert.equal(peppolStatusLabel(null), 'nog onbekend');
+});
+
+test('Mollie bij een deelbetaling: alleen een link zolang Mollie int, en de laatste melding', () => {
+  assert.equal(mollieCollecting('issued'), true);
+  assert.equal(mollieCollecting('overdue'), true);
+  assert.equal(mollieCollecting('paid'), false);
+  assert.equal(mollieCollecting('pending-payment'), false);
+  assert.equal(mollieCollecting(null), false);
+  // Mollie schrijft 'payment-reversed' (met een streepje).
+  assert.equal(mollieStatusLabel('payment-reversed'), 'betaling teruggedraaid');
+  const partial = { event_type: 'e_invoice_partial', description: 'Er staat nog € 600,00 open.', created_at: '2026-11-06T10:00:00Z' };
+  assert.equal(molliePartialNote([partial]), 'Er staat nog € 600,00 open.');
+  // Daarna bij Mollie op betaald gezet, of nog een betaling: de melding geldt niet meer.
+  assert.equal(molliePartialNote([partial, { event_type: 'e_invoice_settled', created_at: '2026-11-06T11:00:00Z' }]), null);
+  assert.equal(molliePartialNote([{ event_type: 'payment_paid', created_at: '2026-11-06T11:00:00Z' }, partial]), null);
+  // Andere gebeurtenissen tellen niet mee.
+  assert.equal(molliePartialNote([partial, { event_type: 'email_opened', created_at: '2026-11-06T12:00:00Z' }]), 'Er staat nog € 600,00 open.');
+  assert.equal(molliePartialNote([]), null);
 });
