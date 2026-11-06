@@ -252,5 +252,6 @@ Samengevoegd naar `staging` op 6 november (`75c0a4d`).
 - `getBranding` op staging zelf aanroepen kon niet: vanuit de cloudsessie is
   `<ref>.supabase.co` niet bereikbaar (netwerkbeleid). De functie staat in de lijst van wat er is
   neergezet.
-- *Frontend checks* run 135: de Deno-typecheck (met de echte typen van esm.sh), de
-  migratieketen vanaf nul, de typecheck, de CSP-hash en de unit tests groen.
+- *Frontend checks* run 135 helemaal groen: de Deno-typecheck (met de echte typen van esm.sh),
+  de migratieketen vanaf nul, de typecheck, de CSP-hash, de unit tests, de mobiele lay-outtest
+  (donker en licht, met `portal-login-brand`) en het laden per module.
