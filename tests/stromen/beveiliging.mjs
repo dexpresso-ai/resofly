@@ -531,13 +531,17 @@ async function rollenBinnenA(A, d) {
   const zwak = [['kijker', A.kijker], ['boekhouder', A.boekhouder], ['lezer (Financiën lezen)', A.lezer], ['zonder Financiën', A.zonderFinancien]];
   const leesActies = new Set(['downloadQuotePdf', 'downloadInvoicePdf', 'downloadCreditNotePdf', 'downloadInvoiceUbl', 'downloadCreditNoteUbl',
     'syncMollieSalesInvoice', 'downloadMollieInvoicePdf', 'getInvoiceMollieStatus', 'downloadContractPdf', 'previewContractPdf']);
-  // Alleen een eigenaar of beheerder: terugbetalen en de Mollie-koppeling.
+  // Alleen een eigenaar of beheerder: terugbetalen en Mollie ontkoppelen.
   const alleenBeheer = new Set(['createInvoiceRefund', 'saveInvoiceMollieKey', 'deleteInvoiceMollieKey']);
+  // Alleen de eigenaar: Mollie koppelen of de key vervangen. Daarmee bepaal je
+  // waar het geld van klanten binnenkomt (besloten op 7 november 2026).
+  const alleenEigenaar = new Set(['saveInvoiceMollieKey']);
 
   for (const [functie, actie, velden] of workflowActies(d)) {
     if (leesActies.has(actie)) continue;
     const body = { action: actie, organizationId: A.orgId, ...velden, ...(actie === 'saveInvoiceMollieKey' ? { apiKey: 'test_vanbinnenuit1234567890' } : {}) };
-    const wie = alleenBeheer.has(actie) ? [...zwak, ['lid (volledig schrijfrecht)', A.medewerker]] : zwak;
+    const wie = alleenEigenaar.has(actie) ? [...zwak, ['lid (volledig schrijfrecht)', A.medewerker], ['beheerder', A.beheerder]]
+      : alleenBeheer.has(actie) ? [...zwak, ['lid (volledig schrijfrecht)', A.medewerker]] : zwak;
     await stap(`${functie} ${actie}: ${wie.map(([naam]) => naam).join(', ')} → 403`, () => allemaal(
       wie.map(([naam, g]) => [naam, async () => geweigerd(await fn(functie, { token: g.token, body }), 'weigering', [403])]),
     ));

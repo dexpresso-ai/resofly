@@ -1717,6 +1717,10 @@ export function Settings({
   const [invoiceMollieBusy, setInvoiceMollieBusy] = useState<string | null>(null);
   const [invoiceMollieError, setInvoiceMollieError] = useState<string | null>(null);
   const [invoiceMollieMessage, setInvoiceMollieMessage] = useState<string | null>(null);
+  // Mollie koppelen of de key vervangen: alleen de eigenaar (de server weigert
+  // het ook). Daarmee bepaal je waar het geld van klanten binnenkomt. Een
+  // beheerder ziet de koppeling en kan ontkoppelen (7 november 2026).
+  const canConnectMollie = organizationContext.activeMembership?.role === 'owner';
 
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
@@ -2031,7 +2035,7 @@ export function Settings({
   }
 
   async function connectInvoiceMollie() {
-    if (!activeOrganization || !canAdminOrganization) return;
+    if (!activeOrganization || !canConnectMollie) return;
     const apiKey = invoiceMollieKey.trim();
     if (!apiKey) { setInvoiceMollieError('Vul je Mollie API-key in.'); return; }
     setInvoiceMollieBusy('connect');
@@ -2789,14 +2793,15 @@ export function Settings({
         </div>}
 
         {invoiceMollie.status === 'connected' ? <>
-          <div className="billing-control-row">
+          {canConnectMollie && <div className="billing-control-row">
             <div>
               <strong>Key vervangen</strong>
               <p className="settings-help">Plak een nieuwe API-key om de bestaande te vervangen, bijvoorbeeld na rotatie in je Mollie-dashboard.</p>
               <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="Nieuwe live_… of test_…" autoComplete="off" />
             </div>
             <Button onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Opslaan…' : 'Key vervangen'}</Button>
-          </div>
+          </div>}
+          {!canConnectMollie && <p className="settings-help mollie-alleen-eigenaar">Alleen de eigenaar van de organisatie kan de key vervangen of een ander Mollie-account koppelen. Ontkoppelen kun jij ook.</p>}
           <div className="billing-control-row">
             <div>
               <strong>Mollie ontkoppelen</strong>
@@ -2804,15 +2809,15 @@ export function Settings({
             </div>
             <Button variant="danger" onClick={disconnectInvoiceMollie} disabled={invoiceMollieBusy === 'disconnect'}>{invoiceMollieBusy === 'disconnect' ? 'Ontkoppelen…' : 'Mollie ontkoppelen'}</Button>
           </div>
-        </> : <div className="billing-control-row">
+        </> : canConnectMollie ? <div className="billing-control-row">
           <div>
             <strong>Mollie koppelen</strong>
             <p className="settings-help">Plak je Mollie API-key (begint met <code>live_</code> of <code>test_</code>). Te vinden in je Mollie-dashboard onder Developers → API-keys.</p>
             <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="live_… of test_…" autoComplete="off" />
           </div>
           <Button variant="primary" onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Koppelen…' : 'Mollie koppelen'}</Button>
-        </div>}
-      </>) : <p className="settings-help">Alleen owners en admins kunnen de Mollie-koppeling beheren.</p>}
+        </div> : <p className="settings-help mollie-alleen-eigenaar">Alleen de eigenaar van de organisatie kan Mollie koppelen. Daarmee bepaal je waar het geld van je klanten binnenkomt.</p>}
+      </>) : <p className="settings-help">Alleen de eigenaar van de organisatie kan Mollie koppelen. Een beheerder kan de koppeling bekijken en ontkoppelen.</p>}
     </section>
 
     {activeOrganization && <InvoiceReminderSettingsCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}

@@ -1396,18 +1396,31 @@ async function scenarioMollie() {
   const goed = `test_uigoed${Date.now()}abcdefghijklmnop`;
   post.mollie.geweigerdeSleutels.add(geweigerd);
   post.mollie.profielen.set(goed, { id: 'pfl_uistudio01', name: 'UI Studio Mollie', website: 'https://ui-studio.test', status: 'verified' });
+  let eigenaar = null;
   let beheer = null;
 
-  await uiStap('als beheerder: niet gekoppeld, met het formulier om te koppelen', async () => {
+  // Alleen de eigenaar koppelt of vervangt de key (7 november 2026); een
+  // beheerder ziet de koppeling en kan ontkoppelen.
+  await uiStap('als beheerder, nog niets gekoppeld: geen formulier, wel de uitleg dat alleen de eigenaar koppelt', async () => {
     beheer = await openWerkruimte(w.beheerder, 'beheerder-mollie', w.orgId);
     await naarOnlineBetalen(beheer);
     const kaart = mollieKaart(beheer.page);
+    await wachtTot(async () => /Niet gekoppeld/.test(await kaart.innerText()), { melding: 'geen status "Niet gekoppeld"' });
+    gelijk(await kaart.locator('input[type="password"]').count(), 0, 'invoerveld voor de key');
+    gelijk(await kaart.getByRole('button', { name: 'Mollie koppelen' }).count(), 0, 'knop "Mollie koppelen"');
+    verwacht(/Alleen de eigenaar van de organisatie kan Mollie koppelen/.test(await kaart.innerText()), 'geen uitleg voor de beheerder');
+  });
+
+  await uiStap('als eigenaar: niet gekoppeld, met het formulier om te koppelen', async () => {
+    eigenaar = await openWerkruimte(w.eigenaar, 'eigenaar-mollie', w.orgId);
+    await naarOnlineBetalen(eigenaar);
+    const kaart = mollieKaart(eigenaar.page);
     await wachtTot(async () => /Niet gekoppeld/.test(await kaart.innerText()), { melding: 'geen status "Niet gekoppeld"' });
     verwacht(await kaart.getByRole('button', { name: 'Mollie koppelen' }).isVisible(), 'geen knop "Mollie koppelen"');
   });
 
   await uiStap('een key die Mollie weigert: de reden staat in beeld, niet "non-2xx", en er is niets gekoppeld', async () => {
-    const kaart = mollieKaart(beheer.page);
+    const kaart = mollieKaart(eigenaar.page);
     const sinds = server.verkeer.length;
     await kaart.locator('input[type="password"]').fill(geweigerd);
     await kaart.getByRole('button', { name: 'Mollie koppelen' }).click();
@@ -1419,7 +1432,7 @@ async function scenarioMollie() {
   }, { toegestaan: [{ functie: 'invoice-workflow', actie: 'saveInvoiceMollieKey', status: 422 }], foutmelding: /Mollie weigerde deze API-key/ });
 
   await uiStap('een goede test-key: gekoppeld, met het Mollie-profiel en de waarschuwing voor de testmodus', async () => {
-    const kaart = mollieKaart(beheer.page);
+    const kaart = mollieKaart(eigenaar.page);
     const sinds = server.verkeer.length;
     await kaart.locator('input[type="password"]').fill(goed);
     await kaart.getByRole('button', { name: 'Mollie koppelen' }).click();
@@ -1430,21 +1443,30 @@ async function scenarioMollie() {
     verwacht(/Testmodus: een betaling via de betaallink is niet echt/.test(await kaart.locator('.settings-warning').innerText()), 'geen waarschuwing voor de testmodus');
     verwacht(/UI Studio Mollie/.test(await kaart.locator('.success').innerText()), 'de bevestiging noemt het profiel niet');
     gelijk(await kaart.locator('input[type="password"]').inputValue(), '', 'het veld met de key is leeg');
-    verwacht(!(await beheer.page.content()).includes(goed.slice(5)), 'de key staat nog in de pagina');
+    verwacht(await kaart.getByRole('button', { name: 'Key vervangen' }).isVisible(), 'de eigenaar ziet geen "Key vervangen"');
+    verwacht(!(await eigenaar.page.content()).includes(goed.slice(5)), 'de key staat nog in de pagina');
   });
 
   await uiStap('na herladen: dezelfde status, het profiel en de laatste vier tekens', async () => {
-    await beheer.page.reload({ waitUntil: 'domcontentloaded' });
-    await beheer.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });
-    await naarOnlineBetalen(beheer);
-    const kaart = mollieKaart(beheer.page);
+    await eigenaar.page.reload({ waitUntil: 'domcontentloaded' });
+    await eigenaar.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });
+    await naarOnlineBetalen(eigenaar);
+    const kaart = mollieKaart(eigenaar.page);
     await wachtTot(async () => /Gekoppeld/.test(await kaart.locator('.billing-summary').innerText().catch(() => '')), { melding: 'niet "Gekoppeld" na herladen' });
     const samenvatting = tekst(await kaart.locator('.billing-summary').innerText());
     verwacht(samenvatting.includes(`••••${goed.slice(-4)}`) && samenvatting.includes('UI Studio Mollie'), `samenvatting: ${samenvatting}`);
   });
 
-  await uiStap('ontkoppelen vraagt eerst; daarna niet gekoppeld, en alles staat in het auditlog', async () => {
+  await uiStap('de beheerder ziet de koppeling met het profiel, vervangt de key niet, en ontkoppelen vraagt eerst', async () => {
+    await beheer.page.reload({ waitUntil: 'domcontentloaded' });
+    await beheer.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });
+    await naarOnlineBetalen(beheer);
     const kaart = mollieKaart(beheer.page);
+    await wachtTot(async () => /Gekoppeld/.test(await kaart.locator('.billing-summary').innerText().catch(() => '')), { melding: 'de beheerder ziet niet "Gekoppeld"' });
+    verwacht(tekst(await kaart.locator('.mollie-profile').innerText()).includes('UI Studio Mollie'), 'de beheerder ziet het profiel niet');
+    gelijk(await kaart.locator('input[type="password"]').count(), 0, 'invoerveld voor de key');
+    gelijk(await kaart.getByRole('button', { name: 'Key vervangen' }).count(), 0, 'knop "Key vervangen"');
+    verwacht(/Alleen de eigenaar van de organisatie kan de key vervangen/.test(await kaart.innerText()), 'geen uitleg voor de beheerder');
     const dialogen = beheer.dialogen.length;
     beheer.plan.push({});
     await kaart.getByRole('button', { name: 'Mollie ontkoppelen' }).click();
@@ -1453,7 +1475,7 @@ async function scenarioMollie() {
     await wachtTot(async () => /Niet gekoppeld/.test(await kaart.locator('.billing-summary').innerText().catch(() => '')), { melding: 'niet "Niet gekoppeld" na ontkoppelen' });
     gelijk(sqlRij(`select status, api_key_encrypted from public.organization_invoice_mollie_settings where organization_id = ${q(w.orgId)}`), { status: 'revoked', api_key_encrypted: null }, 'database');
     gelijk(sqlRijen(`select action, actor_user_id from public.audit_logs where organization_id = ${q(w.orgId)} and entity_type = 'mollie_connection' order by created_at, id`),
-      [{ action: 'mollie_connected', actor_user_id: w.beheerder.id }, { action: 'revoked', actor_user_id: w.beheerder.id }], 'auditlog');
+      [{ action: 'mollie_connected', actor_user_id: w.eigenaar.id }, { action: 'revoked', actor_user_id: w.beheerder.id }], 'auditlog');
   });
 
   await uiStap('een lid ziet Online betalen zonder formulier en zonder status', async () => {
@@ -1461,12 +1483,13 @@ async function scenarioMollie() {
     const sinds = server.verkeer.length;
     await naarOnlineBetalen(lid);
     const kaart = mollieKaart(lid.page);
-    verwacht(/Alleen owners en admins kunnen de Mollie-koppeling beheren/.test(await kaart.innerText()), 'geen uitleg voor een lid');
+    verwacht(/Alleen de eigenaar van de organisatie kan Mollie koppelen/.test(await kaart.innerText()), 'geen uitleg voor een lid');
     gelijk(await kaart.locator('input[type="password"]').count(), 0, 'invoerveld voor de key');
     gelijk(aanroepen(sinds, { functie: 'invoice-workflow', actie: 'getInvoiceMollieStatus' }).length, 0, 'statusaanroepen');
   });
 
   await sluit(beheer);
+  await sluit(eigenaar);
 }
 
 // ── Documenten: maken, bewerken, veilig tonen, delen, verwijderen ───────────
