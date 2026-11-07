@@ -1220,39 +1220,62 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
 
   {
     id: 'bank_transaction.book',
-    label: 'Banktransactie boeken op een inkoopfactuur of grootboekrekening',
+    label: 'Banktransactie boeken op een factuur, creditnota, inkoopfactuur of grootboekrekening (ook verdeeld)',
     module: 'finance',
     kind: 'write',
     risk: 'high',
     description:
-      'Letter een banktransactie af en boek hem in het grootboek. Twee manieren: `purchase` tegen een geboekte inkoopfactuur, of `account` rechtstreeks op een grootboekrekening met optionele btw-code (bankkosten, btw-afdracht aan de Belastingdienst, rente). ' +
-      'Voor een BINNENGEKOMEN betaling op een verkoopfactuur gebruik je `invoice.reconcile_bank_transaction` — niet deze handeling. ' +
-      'Afletteren tegen een inkoopfactuur kan alleen als die factuur zélf al in het grootboek staat. Boek je op "Te betalen omzetbelasting" en herkent de app de Belastingdienst, dan wordt de bijbehorende btw-aangifte automatisch op betaald gezet. ' +
+      'Letter een banktransactie af en boek hem in het grootboek. Drie manieren: `purchase` tegen één geboekte inkoopfactuur, `account` rechtstreeks op één grootboekrekening met optionele btw-code (bankkosten, btw-afdracht, rente), of `split`: een VERDELING over meerdere regels die samen precies het bedrag dekken. ' +
+      'Een regel van een verdeling is een verkoopfactuur (`sales_invoice`, alleen bij geld dat binnenkomt), een creditnota die je aan de klant terugbetaalt (`sales_credit_note`, alleen bij geld dat weggaat), een inkoopfactuur (`purchase_invoice`; een creditnota van de leverancier telt negatief) of een grootboekrekening (`ledger`, met btw-code). ' +
+      'Bedragen in euro\'s in de richting van het geld: positief = mee met het geld (bij een betaling: wat je betaalt), negatief = de andere kant op (kosten die van een uitbetaling zijn afgehouden). Hoeveel er per stuk openstaat, zie je met `bank_transaction.candidates`; meer dan dat weigert de database. ' +
+      'Met `description` geef je de boeking een eigen omschrijving. Voor één BINNENGEKOMEN betaling op één verkoopfactuur kan ook `invoice.reconcile_bank_transaction`. ' +
       'Zoek de transactie met `list_bank_transactions`. DIT IS EEN DEFINITIEVE GROOTBOEKBOEKING; terugdraaien kan alleen met `bank_transaction.unbook`, dat een tegenboeking maakt.',
-    keywords: ['afletteren', 'banktransactie boeken', 'betaling koppelen', 'inkoopfactuur betaald', 'bankkosten', 'grootboekrekening', 'btw-afdracht'],
+    keywords: ['afletteren', 'banktransactie boeken', 'betaling koppelen', 'inkoopfactuur betaald', 'bankkosten', 'grootboekrekening', 'btw-afdracht',
+      'verdelen', 'splitsen', 'meerdere stukken', 'verzamelbetaling', 'terugbetaling', 'creditnota', 'uitbetaling', 'omschrijving'],
     input: {
       transaction_id: { type: 'string', description: 'Id van de banktransactie (uit list_bank_transactions).' },
-      mode: { type: 'string', enum: ['purchase', 'account'], description: 'purchase = inkoopfactuur, account = rechtstreeks op een grootboekrekening.' },
+      mode: { type: 'string', enum: ['purchase', 'account', 'split'], description: 'purchase = één inkoopfactuur, account = één grootboekrekening, split = een verdeling (allocations).' },
       purchase_invoice_id: { type: 'string', description: 'Bij mode purchase: de inkoopfactuur.' },
       account_id: { type: 'string', description: 'Bij mode account: de grootboekrekening.' },
       vat_code: { type: 'string', description: 'Bij mode account: btw-code, of weglaten voor geen btw.' },
+      allocations: {
+        type: 'array',
+        description: 'Bij mode split: de regels; samen precies het bedrag van de transactie.',
+        items: {
+          type: 'object',
+          properties: {
+            kind: { type: 'string', enum: ['sales_invoice', 'sales_credit_note', 'purchase_invoice', 'ledger'] },
+            document_id: { type: 'string', description: 'Het id van de factuur, creditnota of inkoopfactuur (niet bij ledger).' },
+            account_id: { type: 'string', description: 'Bij ledger: de grootboekrekening.' },
+            vat_code: { type: 'string', description: 'Bij ledger: btw-code (optioneel).' },
+            client_id: { type: 'string', description: 'Bij ledger op debiteuren: de klant (optioneel).' },
+            supplier_id: { type: 'string', description: 'Bij ledger op crediteuren: de leverancier (optioneel).' },
+            amount_eur: { type: 'number', description: 'Bedrag in euro\'s, in de richting van het geld (negatief = de andere kant op).' },
+            description: { type: 'string', description: 'Omschrijving van deze regel (optioneel).' },
+          },
+          required: ['kind', 'amount_eur'],
+        },
+      },
+      description: { type: 'string', description: 'Eigen omschrijving van de boeking (optioneel, hoogstens 300 tekens).' },
     },
     required: ['transaction_id', 'mode'],
     async plan(ctx, input) {
       const transactionId = id(input, 'transaction_id');
-      const mode = choice(input, 'mode', ['purchase', 'account'] as const);
-      const txn = await row<{ booking_date: string; amount_cents: number; counterparty_name: string | null; description: string | null; status: string }>(
-        ctx, 'bank_transactions', transactionId, 'booking_date, amount_cents, counterparty_name, description, status', 'Banktransactie');
+      const mode = choice(input, 'mode', ['purchase', 'account', 'split'] as const);
+      const txn = await row<{ booking_date: string; amount_cents: number; counterparty_name: string | null; description: string | null; status: string; is_manual: boolean | null }>(
+        ctx, 'bank_transactions', transactionId, 'booking_date, amount_cents, counterparty_name, description, status, is_manual', 'Banktransactie');
       if (txn.status === 'booked') throw new ActionError('Deze transactie is al geboekt. Draai hem eerst terug met `bank_transaction.unbook` als hij anders moet.');
+      if (txn.status === 'merged') throw new ActionError('Deze bankregel is samengevoegd met een handmatige mutatie; die draagt de boeking. Boek de handmatige mutatie (zie `list_bank_transactions`), of maak het samenvoegen los met `bank_transaction.unmerge`.');
       const incoming = txn.amount_cents > 0;
       const abs = Math.abs(txn.amount_cents);
       const label = txn.counterparty_name || txn.description || 'Banktransactie';
+      const description = optStr(input, 'description', 300);
 
-      const payload: Record<string, unknown> = { transaction_id: transactionId, mode, label, amount_cents: abs };
+      const payload: Record<string, unknown> = { transaction_id: transactionId, mode, label, amount_cents: abs, description };
       let target = '';
 
       if (mode === 'purchase') {
-        if (incoming) throw new ActionError('Een ontvangst letter je niet af tegen een inkoopfactuur; kies `account`, of `invoice.reconcile_bank_transaction` voor een verkoopfactuur.');
+        if (incoming) throw new ActionError('Een ontvangst letter je niet af tegen een inkoopfactuur; kies `account`, `split`, of `invoice.reconcile_bank_transaction` voor een verkoopfactuur.');
         const purchaseId = id(input, 'purchase_invoice_id');
         const purchase = await row<{ internal_number: string | null; supplier_invoice_number: string | null; status: string; total_cents: number; journal_entry_id: string | null }>(
           ctx, 'purchase_invoices', purchaseId, 'internal_number, supplier_invoice_number, status, total_cents, journal_entry_id', 'Inkoopfactuur');
@@ -1262,7 +1285,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
         payload.purchase_invoice_id = purchaseId;
         payload.target = `inkoopfactuur ${number}`;
         target = `inkoopfactuur ${number} (${euroCents(purchase.total_cents)})`;
-      } else {
+      } else if (mode === 'account') {
         const accountId = id(input, 'account_id');
         const account = await loadAccount(ctx, accountId);
         if (!account.is_active) throw new ActionError(`${accountLabel(account)} staat op inactief.`);
@@ -1271,14 +1294,308 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
         payload.line = { account_id: accountId, amount_cents: abs, vat_code: vatCode, description: label };
         payload.target = accountLabel(account);
         target = joinShort([accountLabel(account), vatCode ? `btw ${vatCode}` : 'geen btw'], 60);
+      } else {
+        // Een verdeling. De database rekent alles na (openstaand per stuk, de
+        // kant van het geld, btw); hier wat het model zelf kan verbeteren, en
+        // een kaart die zegt wát er per regel gebeurt.
+        const raw = Array.isArray(input.allocations) ? input.allocations as Array<Record<string, unknown>> : [];
+        if (raw.length === 0) throw new ActionError('Bij mode split hoort "allocations" met minstens één regel.');
+        if (raw.length > 100) throw new ActionError('Een verdeling heeft hoogstens 100 regels.');
+        const allocations: Array<Record<string, unknown>> = [];
+        const described: string[] = [];
+        let sum = 0;
+        for (const [index, line] of raw.entries()) {
+          const nr = `Regel ${index + 1}`;
+          const kind = choice(line, 'kind', ['sales_invoice', 'sales_credit_note', 'purchase_invoice', 'ledger'] as const);
+          const cents = Math.round(num(line, 'amount_eur') * 100);
+          if (cents === 0) throw new ActionError(`${nr}: een bedrag van € 0,00 kan niet.`);
+          sum += cents;
+          const lineDescription = optStr(line, 'description', 300);
+          const signed = cents * (incoming ? 1 : -1);  // bankrichting: + geld erbij
+          if (kind === 'sales_invoice') {
+            if (signed <= 0) throw new ActionError(`${nr}: een verkoopfactuur hoort bij geld dat binnenkomt. Een terugbetaling koppel je aan de creditnota (sales_credit_note).`);
+            const docId = id(line, 'document_id');
+            const invoice = await row<{ number: string; status: string; journal_entry_id: string | null }>(ctx, 'invoices', docId, 'number, status, journal_entry_id', 'Verkoopfactuur');
+            if (!invoice.journal_entry_id) throw new ActionError(`${nr}: factuur ${invoice.number} staat nog niet in het grootboek; boek hem eerst met \`invoice.post_to_ledger\`.`);
+            allocations.push({ kind, invoice_id: docId, amount_cents: cents, description: lineDescription });
+            described.push(`factuur ${invoice.number} ${euroCents(cents)}`);
+          } else if (kind === 'sales_credit_note') {
+            if (signed >= 0) throw new ActionError(`${nr}: een creditnota betaal je terug; dat hoort bij geld dat van je rekening gaat.`);
+            const docId = id(line, 'document_id');
+            const note = await row<{ number: string; status: string; journal_entry_id: string | null }>(ctx, 'credit_notes', docId, 'number, status, journal_entry_id', 'Creditnota');
+            if (note.status !== 'issued' || !note.journal_entry_id) throw new ActionError(`${nr}: creditnota ${note.number} is niet uitgegeven en geboekt.`);
+            allocations.push({ kind, credit_note_id: docId, amount_cents: cents, description: lineDescription });
+            described.push(`terugbetaling creditnota ${note.number} ${euroCents(cents)}`);
+          } else if (kind === 'purchase_invoice') {
+            const docId = id(line, 'document_id');
+            const purchase = await row<{ internal_number: string | null; supplier_invoice_number: string | null; status: string; journal_entry_id: string | null }>(
+              ctx, 'purchase_invoices', docId, 'internal_number, supplier_invoice_number, status, journal_entry_id', 'Inkoopfactuur');
+            if (!purchase.journal_entry_id) throw new ActionError(`${nr}: die inkoopfactuur staat nog niet in het grootboek. Boek hem eerst met \`purchase_invoice.book\`.`);
+            if (purchase.status === 'cancelled') throw new ActionError(`${nr}: die inkoopfactuur is geannuleerd.`);
+            allocations.push({ kind, purchase_invoice_id: docId, amount_cents: cents, description: lineDescription });
+            described.push(`inkoopfactuur ${purchase.internal_number ?? purchase.supplier_invoice_number ?? docId.slice(0, 8)} ${euroCents(cents)}`);
+          } else {
+            const accountId = id(line, 'account_id');
+            const account = await loadAccount(ctx, accountId);
+            if (!account.is_active) throw new ActionError(`${nr}: ${accountLabel(account)} staat op inactief.`);
+            const vatCode = optStr(line, 'vat_code', 40);
+            if (vatCode) await loadVatCode(ctx, vatCode);
+            const entry: Record<string, unknown> = { kind, account_id: accountId, vat_code: vatCode, amount_cents: cents, description: lineDescription };
+            const clientId = optId(line, 'client_id');
+            if (clientId) {
+              if (account.subtype !== 'accounts_receivable' && account.type !== 'revenue') throw new ActionError(`${nr}: een klant hoort op een debiteuren- of omzetrekening; ${accountLabel(account)} is dat niet.`);
+              await row<{ name: string }>(ctx, 'clients', clientId, 'name', 'Klant');
+              entry.client_id = clientId;
+            }
+            const supplierId = optId(line, 'supplier_id');
+            if (supplierId) {
+              if (account.subtype !== 'accounts_payable') throw new ActionError(`${nr}: een leverancier hoort op een crediteurenrekening; ${accountLabel(account)} is dat niet.`);
+              await row<{ name: string }>(ctx, 'suppliers', supplierId, 'name', 'Leverancier');
+              entry.supplier_id = supplierId;
+            }
+            allocations.push(entry);
+            described.push(`${accountLabel(account)}${vatCode ? ` (${vatCode})` : ''} ${euroCents(cents)}`);
+          }
+        }
+        if (sum !== abs) {
+          throw new ActionError(`De regels tellen op tot ${euroCents(sum)}, maar de transactie is ${euroCents(abs)}. Verdeel precies het hele bedrag (verschil ${euroCents(Math.abs(abs - sum))}).`);
+        }
+        payload.allocations = allocations;
+        payload.target = `${allocations.length} regels`;
+        target = described.join(', ');
       }
 
       return {
         title: `${incoming ? 'Ontvangst' : 'Betaling'} van ${euroCents(abs)} boeken: ${label}`,
-        sub: joinShort([`${txn.booking_date}`, `tegen ${target}`], 180),
+        sub: joinShort([`${txn.booking_date}`, `tegen ${target}`, description ? `"${description}"` : null], 220),
         warning: 'Dit is een definitieve grootboekboeking. Terugdraaien kan alleen met een tegenboeking.',
         kind: 'money',
         payload,
+      };
+    },
+  },
+
+  {
+    id: 'bank_transaction.candidates',
+    label: 'Waartegen kun je een bankmutatie afletteren',
+    module: 'finance',
+    kind: 'read',
+    description:
+      'Wat er openstaat om tegen af te letteren, met het bedrag dat de database ook rekent: verkoopfacturen (nog te ontvangen), creditnota\'s waarvan de klant nog geld terugkrijgt, en inkoopfacturen (nog te betalen; negatief = de leverancier moet nog terugbetalen). ' +
+      'Gebruik dit vóór `bank_transaction.book` met mode split, zodat de bedragen per regel kloppen.',
+    // Bewust zonder "openstaand" en "facturen": die vragen horen bij
+    // ledger.open_items (de openstaande posten), niet hier.
+    keywords: ['afletteren', 'tegen afletteren', 'verdelen', 'creditnota terugbetalen', 'verzamelbetaling', 'kandidaten', 'restbedrag'],
+    input: {},
+    async read(ctx) {
+      const result = await rpc<Record<string, unknown>>(ctx, 'bank_allocation_candidates', {}, 'Openstaande stukken ophalen');
+      const cents = (rows: unknown) => (Array.isArray(rows) ? rows : []).map((r) => {
+        const rowData = r as Record<string, unknown>;
+        return { ...rowData, open_eur: Number(rowData.open_cents ?? 0) / 100, total_eur: Number(rowData.total_cents ?? 0) / 100 };
+      });
+      return {
+        sales_invoices: cents(result.sales_invoices),
+        credit_notes: cents(result.credit_notes),
+        purchase_invoices: cents(result.purchase_invoices),
+      };
+    },
+  },
+
+  {
+    id: 'bank_transaction.create_manual',
+    label: 'Bankmutatie met de hand invoeren',
+    module: 'finance',
+    kind: 'write',
+    description:
+      'Voert een bankmutatie in die (nog) niet via een afschrift of de bankkoppeling binnenkwam: een contante storting, een rekening zonder export, of een betaling waar je niet op wilt wachten. Er wordt nog NIETS geboekt; daarna boek je hem met `bank_transaction.book`. ' +
+      'Komt dezelfde mutatie later van de bank, dan voegt de matcher hem vanzelf samen met deze (zelfde rekening en bedrag, binnen een week). ' +
+      'Staat er al een mutatie met hetzelfde bedrag binnen een week, dan weigert dit; vraag de gebruiker of het echt een andere is en zet dan `allow_duplicate` op true.',
+    keywords: ['handmatig', 'mutatie invoeren', 'bankmutatie', 'contant', 'storting', 'zelf invoeren', 'transactie toevoegen', 'kas'],
+    input: {
+      bank_account_id: { type: 'string', description: 'De bankrekening (uit bank_account.list).' },
+      date: { type: 'string', description: 'Datum van de mutatie, JJJJ-MM-DD.' },
+      direction: { type: 'string', enum: ['in', 'out'], description: 'in = geld erbij (ontvangst), out = geld eraf (betaling).' },
+      amount_eur: { type: 'number', description: 'Bedrag in euro\'s, positief.' },
+      counterparty_name: { type: 'string', description: 'Van of aan wie.' },
+      counterparty_iban: { type: 'string', description: 'IBAN van de tegenpartij (optioneel).' },
+      description: { type: 'string', description: 'Omschrijving; noem het factuurnummer, dan stelt ResoFly de factuur voor.' },
+      allow_duplicate: { type: 'boolean', description: 'Alleen als de gebruiker bevestigde dat een gelijke mutatie in dezelfde week echt een andere is.' },
+    },
+    required: ['bank_account_id', 'date', 'direction', 'amount_eur'],
+    async plan(ctx, input) {
+      const bankAccountId = id(input, 'bank_account_id');
+      const date = isoDate(input, 'date');
+      const direction = choice(input, 'direction', ['in', 'out'] as const);
+      const amount = cents(input, 'amount_eur');
+      if (amount <= 0) throw new ActionError('"amount_eur" moet positief zijn; de richting zit in "direction".');
+      const counterparty = optStr(input, 'counterparty_name', 200);
+      const description = optStr(input, 'description', 1000);
+      if (!counterparty && !description) throw new ActionError('Geef een tegenpartij of een omschrijving.');
+      const iban = optStr(input, 'counterparty_iban', 40)?.replace(/\s/g, '').toUpperCase() ?? null;
+      if (iban && !/^[A-Z]{2}[0-9]{2}[A-Z0-9]{8,30}$/.test(iban)) throw new ActionError(`IBAN ${iban} klopt niet; laat het weg als je het niet weet.`);
+      const allowDuplicate = bool(input, 'allow_duplicate');
+      const account = await row<{ name: string; is_active: boolean }>(ctx, 'bank_accounts', bankAccountId, 'name, is_active', 'Bankrekening');
+      if (!account.is_active) throw new ActionError(`Bankrekening ${account.name} staat op inactief.`);
+      const signed = direction === 'in' ? amount : -amount;
+
+      // Dezelfde vraag als het scherm: staat hij er al? Dan niet stil een tweede.
+      const from = new Date(Date.parse(`${date}T00:00:00Z`) - 7 * 86_400_000).toISOString().slice(0, 10);
+      const to = new Date(Date.parse(`${date}T00:00:00Z`) + 7 * 86_400_000).toISOString().slice(0, 10);
+      const { data: same } = await orgQuery(ctx, 'bank_transactions', 'booking_date, counterparty_name, description, status, is_manual')
+        .eq('bank_account_id', bankAccountId).eq('amount_cents', signed).neq('status', 'merged')
+        .gte('booking_date', from).lte('booking_date', to).limit(3);
+      const existing = (same ?? []) as Array<{ booking_date: string; counterparty_name: string | null; description: string | null; is_manual: boolean | null }>;
+      if (existing.length > 0 && !allowDuplicate) {
+        const first = existing[0];
+        throw new ActionError(`Lijkt dubbel: op ${first.booking_date} staat al ${euroCents(amount)} (${first.counterparty_name || first.description || 'zonder omschrijving'}, ${first.is_manual ? 'handmatig' : 'van de bank'}). Vraag de gebruiker of dit een andere mutatie is; zo ja, zet "allow_duplicate" op true.`);
+      }
+
+      return {
+        title: `Bankmutatie invoeren: ${direction === 'in' ? 'ontvangst' : 'betaling'} van ${euroCents(amount)}`,
+        sub: joinShort([account.name, date, counterparty, description], 200),
+        warning: existing.length > 0 ? `Op dezelfde rekening staat binnen een week al een mutatie van ${euroCents(amount)}; dit wordt een tweede.` : undefined,
+        kind: 'money',
+        payload: {
+          bank_account_id: bankAccountId, date, amount_cents: signed, counterparty_name: counterparty, counterparty_iban: iban,
+          description, allow_duplicate: existing.length > 0 && allowDuplicate, account_name: account.name,
+        },
+      };
+    },
+  },
+
+  {
+    id: 'bank_transaction.update_manual',
+    label: 'Handmatige bankmutatie aanpassen',
+    module: 'finance',
+    kind: 'write',
+    description:
+      'Past datum, bedrag, tegenpartij of omschrijving aan van een mutatie die met de hand is ingevoerd, zolang hij niet geboekt is en de bank hem niet bevestigde. Een geboekte mutatie draai je eerst terug (`bank_transaction.unbook`); wat van de bank komt, pas je niet aan.',
+    keywords: ['handmatige mutatie', 'aanpassen', 'bewerken', 'datum wijzigen', 'bedrag wijzigen', 'bankmutatie'],
+    input: {
+      transaction_id: { type: 'string' },
+      date: { type: 'string', description: 'Datum JJJJ-MM-DD (weglaten = blijft).' },
+      amount_eur: { type: 'number', description: 'Bedrag in euro\'s, positief (weglaten = blijft).' },
+      direction: { type: 'string', enum: ['in', 'out'], description: 'Weglaten = blijft.' },
+      counterparty_name: { type: 'string' },
+      counterparty_iban: { type: 'string' },
+      description: { type: 'string' },
+    },
+    required: ['transaction_id'],
+    async plan(ctx, input) {
+      const transactionId = id(input, 'transaction_id');
+      const txn = await row<{ booking_date: string; amount_cents: number; counterparty_name: string | null; counterparty_iban: string | null; description: string | null; status: string; is_manual: boolean | null }>(
+        ctx, 'bank_transactions', transactionId, 'booking_date, amount_cents, counterparty_name, counterparty_iban, description, status, is_manual', 'Banktransactie');
+      if (!txn.is_manual) throw new ActionError('Alleen een handmatige mutatie pas je aan; wat van de bank komt, blijft zoals de bank het gaf.');
+      if (txn.status === 'booked') throw new ActionError('Deze mutatie is geboekt; draai hem eerst terug met `bank_transaction.unbook`.');
+      const { data: partner } = await orgQuery(ctx, 'bank_transactions', 'id').eq('merged_into_id', transactionId).maybeSingle();
+      if (partner) throw new ActionError('Deze mutatie is al bevestigd door de bank; maak het samenvoegen eerst los met `bank_transaction.unmerge`.');
+      const date = optIsoDate(input, 'date') ?? txn.booking_date;
+      const amountInput = optNum(input, 'amount_eur');
+      const abs = amountInput === null ? Math.abs(txn.amount_cents) : Math.round(amountInput * 100);
+      if (abs <= 0) throw new ActionError('"amount_eur" moet positief zijn; de richting zit in "direction".');
+      const direction = optChoice(input, 'direction', ['in', 'out'] as const) ?? (txn.amount_cents < 0 ? 'out' : 'in');
+      const has = (key: string) => input[key] !== undefined;
+      const counterparty = has('counterparty_name') ? optStr(input, 'counterparty_name', 200) : txn.counterparty_name;
+      const iban = has('counterparty_iban') ? (optStr(input, 'counterparty_iban', 40)?.replace(/\s/g, '').toUpperCase() ?? null) : txn.counterparty_iban;
+      const description = has('description') ? optStr(input, 'description', 1000) : txn.description;
+      if (!counterparty && !description) throw new ActionError('Geef een tegenpartij of een omschrijving.');
+      const signed = direction === 'in' ? abs : -abs;
+      return {
+        title: `Handmatige mutatie aanpassen: ${counterparty || description || 'mutatie'}`,
+        sub: joinShort([`${txn.booking_date} → ${date}`, `${euroCents(txn.amount_cents)} → ${euroCents(signed)}`, description], 200),
+        kind: 'money',
+        payload: { transaction_id: transactionId, date, amount_cents: signed, counterparty_name: counterparty, counterparty_iban: iban, description },
+      };
+    },
+  },
+
+  {
+    id: 'bank_transaction.delete_manual',
+    label: 'Handmatige bankmutatie verwijderen',
+    module: 'finance',
+    kind: 'write',
+    description:
+      'Verwijdert een mutatie die met de hand is ingevoerd en nooit geboekt is (een tikfout, of dubbel ingevoerd). Is hij ooit geboekt en teruggedraaid, dan blijft hij bewaard; negeer hem dan met `bank_transaction.set_status`. Wat van de bank komt, verwijder je niet.',
+    keywords: ['handmatige mutatie', 'verwijderen', 'weghalen', 'dubbel ingevoerd', 'bankmutatie'],
+    input: { transaction_id: { type: 'string' } },
+    required: ['transaction_id'],
+    async plan(ctx, input) {
+      const transactionId = id(input, 'transaction_id');
+      const txn = await row<{ booking_date: string; amount_cents: number; counterparty_name: string | null; description: string | null; status: string; is_manual: boolean | null }>(
+        ctx, 'bank_transactions', transactionId, 'booking_date, amount_cents, counterparty_name, description, status, is_manual', 'Banktransactie');
+      if (!txn.is_manual) throw new ActionError('Alleen een handmatige mutatie kun je verwijderen. Wat van de bank komt, blijft staan; negeer hem als hij niet meetelt.');
+      if (txn.status === 'booked') throw new ActionError('Deze mutatie is geboekt. Draai hem eerst terug met `bank_transaction.unbook`.');
+      const label = txn.counterparty_name || txn.description || 'Handmatige mutatie';
+      return {
+        title: `Handmatige mutatie verwijderen: ${label}`,
+        sub: joinShort([txn.booking_date, euroCents(txn.amount_cents)], 120),
+        kind: 'money',
+        payload: { transaction_id: transactionId, label },
+      };
+    },
+  },
+
+  {
+    id: 'bank_transaction.merge',
+    label: 'Bankregel samenvoegen met een handmatige mutatie',
+    module: 'finance',
+    kind: 'write',
+    description:
+      'Een transactie van de bank (afschrift of koppeling) is dezelfde als een mutatie die met de hand is ingevoerd: voeg ze samen, zodat het geld er één keer staat. De handmatige mutatie houdt de boeking. Doet de matcher vanzelf bij één duidelijke kandidaat; dit is voor de twijfelgevallen (twee kandidaten, ander IBAN, verder uit elkaar). Rekening en bedrag moeten gelijk zijn.',
+    keywords: ['samenvoegen', 'dubbel', 'handmatige mutatie', 'bevestigen', 'bankregel', 'koppelen aan handmatig'],
+    input: {
+      transaction_id: { type: 'string', description: 'De transactie van de bank.' },
+      manual_transaction_id: { type: 'string', description: 'De handmatig ingevoerde mutatie.' },
+    },
+    required: ['transaction_id', 'manual_transaction_id'],
+    async plan(ctx, input) {
+      const bankId = id(input, 'transaction_id');
+      const manualId = id(input, 'manual_transaction_id');
+      type Txn = { bank_account_id: string; booking_date: string; amount_cents: number; counterparty_name: string | null; description: string | null; status: string; is_manual: boolean | null };
+      const cols = 'bank_account_id, booking_date, amount_cents, counterparty_name, description, status, is_manual';
+      const bank = await row<Txn>(ctx, 'bank_transactions', bankId, cols, 'Banktransactie');
+      const manual = await row<Txn>(ctx, 'bank_transactions', manualId, cols, 'Handmatige mutatie');
+      if (bank.is_manual) throw new ActionError('"transaction_id" is zelf een handmatige mutatie; geef de transactie van de bank.');
+      if (!manual.is_manual) throw new ActionError('"manual_transaction_id" komt van de bank; samenvoegen gaat met een mutatie die met de hand is ingevoerd.');
+      if (bank.status === 'booked') throw new ActionError('Die banktransactie is al geboekt. Draai hem eerst terug, of laat de handmatige mutatie vallen.');
+      if (bank.status === 'merged') throw new ActionError('Die banktransactie is al samengevoegd.');
+      if (bank.bank_account_id !== manual.bank_account_id) throw new ActionError('De twee staan op verschillende bankrekeningen.');
+      if (bank.amount_cents !== manual.amount_cents) throw new ActionError(`De bedragen verschillen (${euroCents(bank.amount_cents)} bij de bank, ${euroCents(manual.amount_cents)} handmatig). Pas de handmatige mutatie eerst aan.`);
+      return {
+        title: `Samenvoegen: ${euroCents(bank.amount_cents)} van de bank met je handmatige mutatie`,
+        sub: joinShort([`bank ${bank.booking_date}: ${bank.description || bank.counterparty_name || '—'}`, `handmatig ${manual.booking_date}: ${manual.counterparty_name || manual.description || '—'}`], 200),
+        kind: 'money',
+        payload: { transaction_id: bankId, manual_transaction_id: manualId },
+      };
+    },
+  },
+
+  {
+    id: 'bank_transaction.unmerge',
+    label: 'Samenvoegen met een handmatige mutatie ongedaan maken',
+    module: 'finance',
+    kind: 'write',
+    description:
+      'Maakt een bankregel los van de handmatige mutatie waarmee hij is samengevoegd. Daarna staat de bankregel apart open en voegt de matcher hem niet meer vanzelf samen. Is de handmatige mutatie al geboekt, boek de bankregel dan niet nog eens (dan staat het geld er twee keer).',
+    keywords: ['losmaken', 'samenvoegen ongedaan maken', 'loskoppelen', 'handmatige mutatie', 'bankregel'],
+    input: { transaction_id: { type: 'string', description: 'De bankregel of de handmatige mutatie.' } },
+    required: ['transaction_id'],
+    async plan(ctx, input) {
+      const transactionId = id(input, 'transaction_id');
+      const txn = await row<{ booking_date: string; amount_cents: number; counterparty_name: string | null; description: string | null; status: string; is_manual: boolean | null }>(
+        ctx, 'bank_transactions', transactionId, 'booking_date, amount_cents, counterparty_name, description, status, is_manual', 'Banktransactie');
+      if (txn.is_manual) {
+        const { data: partner } = await orgQuery(ctx, 'bank_transactions', 'id').eq('merged_into_id', transactionId).maybeSingle();
+        if (!partner) throw new ActionError('Deze handmatige mutatie is niet samengevoegd met een bankregel.');
+      } else if (txn.status !== 'merged') {
+        throw new ActionError('Deze banktransactie is niet samengevoegd.');
+      }
+      return {
+        title: `Samenvoegen ongedaan maken: ${txn.counterparty_name || txn.description || 'banktransactie'}`,
+        sub: joinShort([txn.booking_date, euroCents(txn.amount_cents), txn.is_manual && txn.status === 'booked' ? 'de handmatige mutatie is al geboekt' : null], 160),
+        warning: txn.is_manual && txn.status === 'booked' ? 'De bankregel komt apart open te staan; boek hem niet nog eens, anders staat het geld er twee keer.' : undefined,
+        kind: 'money',
+        payload: { transaction_id: transactionId },
       };
     },
   },
@@ -1303,6 +1620,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       const txn = await row<{ booking_date: string; amount_cents: number; counterparty_name: string | null; description: string | null; status: string }>(
         ctx, 'bank_transactions', transactionId, 'booking_date, amount_cents, counterparty_name, description, status', 'Banktransactie');
       if (txn.status === 'booked') throw new ActionError('Deze transactie is geboekt; draai hem eerst terug met `bank_transaction.unbook`.');
+      if (txn.status === 'merged') throw new ActionError('Deze bankregel is samengevoegd met een handmatige mutatie; maak dat eerst los met `bank_transaction.unmerge`.');
       if (txn.status === status) throw new ActionError(`Deze transactie staat al op "${status}".`);
       const label = txn.counterparty_name || txn.description || 'Banktransactie';
       return {

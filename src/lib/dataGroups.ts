@@ -43,7 +43,7 @@ export const GROUP_FIELDS = {
     'invoiceRefunds', 'creditNotes', 'invoiceChargebacks', 'dunningNotices',
   ],
   bookkeeping: ['journalEntries', 'journalLines', 'closedPeriods', 'fiscalYears', 'fixedAssets', 'assetDepreciations', 'vatReturns'],
-  bank: ['bankAccounts', 'bankStatements', 'bankTransactions', 'bankRules', 'bankRequisitions'],
+  bank: ['bankAccounts', 'bankStatements', 'bankTransactions', 'bankAllocations', 'bankRules', 'bankRequisitions'],
 } as const satisfies Record<DataGroup, readonly (keyof AppData)[]>;
 
 export type GroupField = (typeof GROUP_FIELDS)[DataGroup][number];

@@ -98,6 +98,8 @@ import type {
   BankAccount,
   BankStatement,
   BankTransaction,
+  BankAllocation,
+  BankAllocationCandidates,
   BankRule,
   BankRequisition,
   BankInstitution,
@@ -621,10 +623,11 @@ const GROUP_LOADERS: { [G in DataGroup]: (organizationId: UUID) => Promise<Group
     return { journalEntries, journalLines, closedPeriods, fiscalYears, fixedAssets, assetDepreciations, vatReturns };
   },
   bank: async (organizationId) => {
-    const [bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions] = await Promise.all([
-      selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
+    const [bankAccounts, bankStatements, bankTransactions, bankAllocations, bankRules, bankRequisitions] = await Promise.all([
+      selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId),
+      selectBankAllocations(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
     ]);
-    return { bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions };
+    return { bankAccounts, bankStatements, bankTransactions, bankAllocations, bankRules, bankRequisitions };
   },
 };
 
@@ -1918,6 +1921,16 @@ export const selectBankStatements = (organizationId: UUID) =>
   selectOptional<BankStatement>('bank_statements', organizationId, { orderBy: 'imported_at', ascending: false, hint: BANKFEED_MIGRATION_HINT });
 export const selectBankTransactions = (organizationId: UUID) =>
   selectOptional<BankTransaction>('bank_transactions', organizationId, { orderBy: 'booking_date', ascending: false, hint: BANKFEED_MIGRATION_HINT });
+/**
+ * De verdeling van bankboekingen, met het nummer van een creditnota erbij (de
+ * creditnota's zelf laadt de bankpagina niet). Tabel uit 20261107110000; ervóór
+ * een lege lijst.
+ */
+export const selectBankAllocations = (organizationId: UUID) =>
+  selectOptional<BankAllocation>('bank_transaction_allocations', organizationId, {
+    orderBy: 'created_at', ascending: true, thenBy: 'position', columns: '*, credit_note:credit_notes(number)',
+    hint: 'Voer de migratie 20261107110000_bank_handmatig_boeken.sql uit om banktransacties te kunnen verdelen.',
+  });
 export const selectBankRules = (organizationId: UUID) =>
   selectOptional<BankRule>('bank_rules', organizationId, { orderBy: 'priority', ascending: true, hint: BANKFEED_MIGRATION_HINT });
 export const selectBankRequisitions = (organizationId: UUID) =>
@@ -2046,20 +2059,43 @@ export async function selectBankReconciliation(organizationId: UUID): Promise<Ba
 export async function matchBankTransactions(
   organizationId: UUID,
   bankAccountId?: UUID | null,
-): Promise<{ suggested: number; auto_booked: number }> {
+): Promise<{ suggested: number; auto_booked: number; merged: number }> {
   const { data, error } = await supabase.rpc('match_bank_transactions', {
     p_organization_id: organizationId,
     p_bank_account_id: bankAccountId ?? null,
   });
   if (error) throw bookkeepingError(error);
-  const row = (data ?? {}) as { suggested?: number; auto_booked?: number };
-  return { suggested: row.suggested ?? 0, auto_booked: row.auto_booked ?? 0 };
+  // merged: bankregels die een handmatige mutatie bevestigen en daarmee zijn samengevoegd.
+  const row = (data ?? {}) as { suggested?: number; auto_booked?: number; merged?: number };
+  return { suggested: row.suggested ?? 0, auto_booked: row.auto_booked ?? 0, merged: row.merged ?? 0 };
+}
+
+/** Eén regel van een verdeling zoals book_bank_transaction hem aanneemt. */
+export interface BankAllocationInput {
+  kind: 'sales_invoice' | 'sales_credit_note' | 'purchase_invoice' | 'ledger';
+  /**
+   * In de richting van de transactie, in hele centen: positief = mee met het
+   * geld (bij een betaling: wat je betaalt), negatief = de andere kant op
+   * (bijvoorbeeld kosten die van een uitbetaling zijn afgehouden). De som is
+   * het bedrag van de transactie.
+   */
+  amount_cents: number;
+  invoice_id?: UUID;
+  credit_note_id?: UUID;
+  purchase_invoice_id?: UUID;
+  account_id?: UUID;
+  vat_code?: string | null;
+  client_id?: UUID | null;
+  supplier_id?: UUID | null;
+  description?: string | null;
 }
 
 /**
- * Boekt een banktransactie naar het grootboek. Geef óf een af te letteren factuur
- * (matchedInvoiceId / matchedPurchaseInvoiceId) óf vrije regels (lines: bruto
- * bedrag + BTW-code per grootboekrekening).
+ * Boekt een banktransactie naar het grootboek. Geef een verdeling (allocations:
+ * facturen, creditnota's, inkoopfacturen en grootboekrekeningen die samen het
+ * hele bedrag dekken), of zoals vroeger één af te letteren factuur
+ * (matchedInvoiceId / matchedPurchaseInvoiceId) of vrije regels (lines).
+ * `description` is de omschrijving van de boeking; leeg = "Bank …: tegenpartij".
  */
 export async function bookBankTransaction(
   organizationId: UUID,
@@ -2068,17 +2104,136 @@ export async function bookBankTransaction(
     lines?: Array<Record<string, unknown>>;
     matchedInvoiceId?: UUID | null;
     matchedPurchaseInvoiceId?: UUID | null;
+    allocations?: BankAllocationInput[];
+    description?: string | null;
   } = {},
 ): Promise<JournalEntry> {
-  const { data, error } = await supabase.rpc('book_bank_transaction', {
+  const params: Record<string, unknown> = {
     p_organization_id: organizationId,
     p_transaction_id: transactionId,
     p_lines: options.lines ?? null,
     p_matched_invoice_id: options.matchedInvoiceId ?? null,
     p_matched_purchase_invoice_id: options.matchedPurchaseInvoiceId ?? null,
-  });
+  };
+  // Alleen meesturen wat er is: een database van vóór 20261107110000 kent deze
+  // twee niet, en dan blijft de oude manier werken.
+  if (options.allocations?.length) params.p_allocations = options.allocations;
+  if (options.description?.trim()) params.p_description = options.description.trim();
+  const { data, error } = await supabase.rpc('book_bank_transaction', params);
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** De database denkt dat deze mutatie er al staat; de melding zegt welke. */
+export class PossibleDuplicateBankTransactionError extends Error {
+  constructor(message: string) { super(message); this.name = 'PossibleDuplicateBankTransactionError'; }
+}
+
+export interface ManualBankTransactionInput {
+  bankAccountId: UUID;
+  /** JJJJ-MM-DD */
+  bookingDate: string;
+  /** Positief = ontvangen, negatief = betaald, in hele centen. */
+  amountCents: number;
+  counterpartyName?: string | null;
+  counterpartyIban?: string | null;
+  description?: string | null;
+}
+
+/**
+ * Een bankmutatie met de hand invoeren. Lijkt hij op een mutatie die er al
+ * staat (zelfde rekening en bedrag, binnen een week), dan gooit dit
+ * PossibleDuplicateBankTransactionError; met allowDuplicate voer je hem toch in.
+ */
+export async function createManualBankTransaction(
+  organizationId: UUID,
+  input: ManualBankTransactionInput,
+  options: { allowDuplicate?: boolean } = {},
+): Promise<BankTransaction> {
+  const { data, error } = await supabase.rpc('create_manual_bank_transaction', {
+    p_organization_id: organizationId,
+    p_bank_account_id: input.bankAccountId,
+    p_booking_date: input.bookingDate,
+    p_amount_cents: input.amountCents,
+    p_counterparty_name: input.counterpartyName ?? null,
+    p_counterparty_iban: input.counterpartyIban ?? null,
+    p_description: input.description ?? null,
+    p_allow_duplicate: options.allowDuplicate ?? false,
+  });
+  if (error) {
+    if ((error as { hint?: string }).hint === 'mogelijk_dubbel') throw new PossibleDuplicateBankTransactionError(error.message);
+    throw bookkeepingError(error);
+  }
+  return (Array.isArray(data) ? data[0] : data) as BankTransaction;
+}
+
+/** Een handmatige mutatie aanpassen; alleen zolang hij niet geboekt of door de bank bevestigd is. */
+export async function updateManualBankTransaction(
+  organizationId: UUID,
+  transactionId: UUID,
+  input: Omit<ManualBankTransactionInput, 'bankAccountId'>,
+): Promise<BankTransaction> {
+  const { data, error } = await supabase.rpc('update_manual_bank_transaction', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+    p_booking_date: input.bookingDate,
+    p_amount_cents: input.amountCents,
+    p_counterparty_name: input.counterpartyName ?? null,
+    p_counterparty_iban: input.counterpartyIban ?? null,
+    p_description: input.description ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as BankTransaction;
+}
+
+/** Een handmatige mutatie verwijderen die nooit geboekt is. */
+export async function deleteManualBankTransaction(organizationId: UUID, transactionId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('delete_manual_bank_transaction', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/** Een bankregel samenvoegen met de handmatige mutatie die hij bevestigt. */
+export async function mergeBankTransactions(organizationId: UUID, bankTransactionId: UUID, manualTransactionId: UUID): Promise<BankTransaction> {
+  const { data, error } = await supabase.rpc('merge_bank_transactions', {
+    p_organization_id: organizationId,
+    p_bank_transaction_id: bankTransactionId,
+    p_manual_transaction_id: manualTransactionId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as BankTransaction;
+}
+
+/** Samenvoegen ongedaan maken (geef de bankregel of de handmatige mutatie). */
+export async function unmergeBankTransaction(organizationId: UUID, transactionId: UUID): Promise<BankTransaction> {
+  const { data, error } = await supabase.rpc('unmerge_bank_transaction', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as BankTransaction;
+}
+
+/**
+ * Wat er openstaat om tegen af te letteren: verkoopfacturen, creditnota's met
+ * nog terug te betalen tegoed en inkoopfacturen, met het openstaande bedrag dat
+ * de boekfunctie ook rekent. Null als de database de functie nog niet kent.
+ */
+export async function fetchBankAllocationCandidates(organizationId: UUID): Promise<BankAllocationCandidates | null> {
+  const { data, error } = await supabase.rpc('bank_allocation_candidates', { p_organization_id: organizationId });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/bank_allocation_candidates|schema cache|does not exist/i.test(message)) return null;
+    throw bookkeepingError(error);
+  }
+  const value = (data ?? {}) as Partial<BankAllocationCandidates>;
+  return {
+    sales_invoices: value.sales_invoices ?? [],
+    credit_notes: value.credit_notes ?? [],
+    purchase_invoices: value.purchase_invoices ?? [],
+  };
 }
 
 /** Draait een geboekte banktransactie terug (tegenboeking) en zet hem weer open. */

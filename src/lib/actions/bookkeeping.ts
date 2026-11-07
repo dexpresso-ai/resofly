@@ -1,10 +1,10 @@
 import {
   bookAssetAcquisition, bookAssetDisposal, bookBankTransaction, bookPurchaseInvoice,
-  closeFiscalYear, closeVatPeriod, createOpeningBalance, createVatSupplement,
-  ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, matchBankTransactions,
-  openFiscalYear, postAssetDepreciation, postManualJournalEntry, reopenFiscalYear,
-  reverseJournalEntry, setBankTransactionStatus, syncBankAccount, unbookBankTransaction,
-  updateRow,
+  closeFiscalYear, closeVatPeriod, createManualBankTransaction, createOpeningBalance, createVatSupplement,
+  deleteManualBankTransaction, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, matchBankTransactions,
+  mergeBankTransactions, openFiscalYear, postAssetDepreciation, postManualJournalEntry, reopenFiscalYear,
+  reverseJournalEntry, setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction,
+  updateManualBankTransaction, updateRow, type BankAllocationInput,
 } from '../repository';
 import { purchaseTotals } from '../../features/Bookkeeping';
 import { runInvoiceInboxAction } from '../invoice-inbox-api';
@@ -196,19 +196,64 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
     const bankAccountId = optText(payload, 'bank_account_id') as UUID | null;
     const result = await matchBankTransactions(ctx.organizationId, bankAccountId);
     const scope = optText(payload, 'scope');
-    return `${result.suggested} transacties kregen een voorstel en ${result.auto_booked} zijn automatisch geboekt${scope ? ` (${scope})` : ''}`;
+    const merged = result.merged > 0 ? `; ${result.merged} bankregel(s) samengevoegd met een handmatige mutatie` : '';
+    return `${result.suggested} transacties kregen een voorstel en ${result.auto_booked} zijn automatisch geboekt${merged}${scope ? ` (${scope})` : ''}`;
   },
 
   'bank_transaction.book': async (payload, ctx) => {
     const transactionId = text(payload, 'transaction_id');
     const mode = text(payload, 'mode');
+    const description = optText(payload, 'description');
+    // Dezelfde RPC als de knop Boeken op de Bankpagina; de database rekent de
+    // verdeling na (openstaand per stuk, de kant van het geld, de btw).
     const options = mode === 'purchase'
-      ? { matchedPurchaseInvoiceId: text(payload, 'purchase_invoice_id') as UUID }
-      : { lines: [payload.line as Record<string, unknown>] };
+      ? { matchedPurchaseInvoiceId: text(payload, 'purchase_invoice_id') as UUID, description }
+      : mode === 'split'
+        ? { allocations: linesOf(payload, 'allocations') as unknown as BankAllocationInput[], description }
+        : { lines: [payload.line as Record<string, unknown>], description };
     const entry = await bookBankTransaction(ctx.organizationId, transactionId, options);
     const label = optText(payload, 'label') ?? 'Banktransactie';
     const target = optText(payload, 'target');
     return `${label} van ${euroCents(amount(payload, 'amount_cents'))} geboekt${target ? ` tegen ${target}` : ''} (boekstuk ${entry.entry_number ?? '—'})`;
+  },
+
+  'bank_transaction.create_manual': async (payload, ctx) => {
+    const created = await createManualBankTransaction(ctx.organizationId, {
+      bankAccountId: text(payload, 'bank_account_id') as UUID,
+      bookingDate: text(payload, 'date'),
+      amountCents: amount(payload, 'amount_cents'),
+      counterpartyName: optText(payload, 'counterparty_name'),
+      counterpartyIban: optText(payload, 'counterparty_iban'),
+      description: optText(payload, 'description'),
+    }, { allowDuplicate: flag(payload, 'allow_duplicate') });
+    const account = optText(payload, 'account_name');
+    return `Mutatie van ${euroCents(created.amount_cents)} ingevoerd${account ? ` op ${account}` : ''}; boek hem op de Bankpagina of met bank_transaction.book`;
+  },
+
+  'bank_transaction.update_manual': async (payload, ctx) => {
+    const updated = await updateManualBankTransaction(ctx.organizationId, text(payload, 'transaction_id') as UUID, {
+      bookingDate: text(payload, 'date'),
+      amountCents: amount(payload, 'amount_cents'),
+      counterpartyName: optText(payload, 'counterparty_name'),
+      counterpartyIban: optText(payload, 'counterparty_iban'),
+      description: optText(payload, 'description'),
+    });
+    return `Handmatige mutatie aangepast: ${updated.booking_date}, ${euroCents(updated.amount_cents)}`;
+  },
+
+  'bank_transaction.delete_manual': async (payload, ctx) => {
+    await deleteManualBankTransaction(ctx.organizationId, text(payload, 'transaction_id') as UUID);
+    return `Handmatige mutatie verwijderd: ${optText(payload, 'label') ?? 'mutatie'}`;
+  },
+
+  'bank_transaction.merge': async (payload, ctx) => {
+    const manual = await mergeBankTransactions(ctx.organizationId, text(payload, 'transaction_id') as UUID, text(payload, 'manual_transaction_id') as UUID);
+    return `Samengevoegd: de bank bevestigt de mutatie van ${euroCents(manual.amount_cents)} (${manual.booking_date})`;
+  },
+
+  'bank_transaction.unmerge': async (payload, ctx) => {
+    const bank = await unmergeBankTransaction(ctx.organizationId, text(payload, 'transaction_id') as UUID);
+    return `Losgemaakt: de bankregel van ${euroCents(bank.amount_cents)} (${bank.booking_date}) staat weer apart open`;
   },
 
   'bank_transaction.set_status': async (payload, ctx) => {

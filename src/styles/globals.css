@@ -3481,6 +3481,57 @@ body::before{
 .bank-inst-name{flex:1;font-weight:600}
 .bank-psu{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
 .bank-tag-test{color:var(--accent-ink);background:rgba(var(--accent-rgb),.1);border-color:rgba(var(--accent-rgb),.28)}
+/* Handmatige mutaties en het verdelen van een banktransactie (20261107110000).
+   Een verdeling is een kolom regels; elke regel wrapt zelf, zodat een regel met
+   rekening, btw, klant, bedrag en omschrijving op een laptop op één lijn past
+   en op een telefoon onder elkaar valt. */
+.bank-tag-manual{color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));border-color:var(--border)}
+.bank-tx-info small.bank-tx-partner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;white-space:normal;overflow:visible;color:var(--muted2);margin-top:2px}
+.bank-link{background:none;border:0;padding:0;color:var(--accent-ink);font-weight:600;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.bank-link:disabled{opacity:.5;cursor:default}
+.bank-merge-hint{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;line-height:1.45;background:rgba(var(--accent-rgb),.08);border:1px solid rgba(var(--accent-rgb),.24);border-radius:8px;padding:7px 10px}
+.bank-merge-hint>span{flex:1 1 260px}
+.bank-merge-hint>.select-control{width:auto;flex:0 1 260px;min-width:0}
+/* Een kolom die nooit breder wordt dan de kaart. De telefoonregel
+   ".bank-tx-actions{flex-wrap:wrap}" staat verderop; met wrap werd de kolom
+   zo breed als de langste keuzelijst en stak hij 20px buiten beeld. */
+.bank-tx-actions.bank-alloc{flex-direction:column;align-items:stretch;flex-wrap:nowrap;min-width:0}
+.bank-alloc-lines{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bank-alloc-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.bank-alloc-line>.select-control{width:auto;flex:1 1 200px;min-width:0;max-width:340px}
+.bank-alloc-line>.select-control:first-child{flex:0 1 200px}
+.bank-alloc-line .bank-alloc-amount{width:112px;flex:none;text-align:right;font-variant-numeric:tabular-nums}
+.bank-alloc-line .bank-alloc-desc{flex:1 1 170px;min-width:0}
+.bank-alloc-line>small.bank-tx-hint{flex-basis:100%}
+.bank-alloc-del{flex:none;width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:none;color:var(--muted2);cursor:pointer;font-size:18px;line-height:1}
+.bank-alloc-del:hover:not(:disabled){color:var(--accent-ink);border-color:var(--accent)}
+.bank-alloc-foot{display:flex;align-items:center;gap:6px 16px;flex-wrap:wrap;font-size:12px}
+.bank-alloc-sum{display:inline-flex;align-items:center;gap:4px;color:var(--accent-ink);font-weight:600;font-variant-numeric:tabular-nums}
+.bank-alloc-sum.is-ok{color:var(--ok)}
+.bank-alloc-help{font-size:11.5px;line-height:1.45}
+.bank-tx-actions .bank-alloc-booking-desc{max-width:none}
+.bank-alloc-buttons{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bank-booked{align-items:flex-start}
+.bank-booked-summary{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 320px}
+.bank-booked-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}
+.bank-booked-head .status-pill{margin-top:0}
+.bank-booked-desc{font-weight:600;min-width:0;overflow-wrap:anywhere}
+.bank-booked-lines{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted2)}
+.bank-booked-lines li{display:flex;justify-content:space-between;gap:12px}
+.bank-booked-lines li>span:first-child{min-width:0;overflow-wrap:anywhere}
+.bank-booked-amount{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--text)}
+.bank-direction{margin:12px 0 6px}
+.bank-duplicate{display:flex;gap:8px;align-items:flex-start;color:var(--accent-ink)}
+.bank-duplicate svg{flex:none;margin-top:2px}
+@media(max-width:760px){
+  .bank-alloc-line>.select-control,.bank-alloc-line>.select-control:first-child{flex:1 1 100%;max-width:none}
+  /* Bedrag en weghalen naast elkaar, de omschrijving eronder: anders werd elke
+     regel vijf velden hoog. */
+  .bank-alloc-line .bank-alloc-amount{flex:1 1 0;width:auto;min-width:0;order:1}
+  .bank-alloc-del{width:44px;height:44px;order:2}
+  .bank-alloc-line .bank-alloc-desc{flex:1 1 100%;order:3}
+  .bank-merge-hint>.select-control{flex:1 1 100%}
+}
 
 /* ── Rapportbouwer (Statistieken) ─────────────────────────────────────── */
 .rb-page{display:flex;flex-direction:column;gap:16px}

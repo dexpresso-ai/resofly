@@ -1769,7 +1769,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_bank_transactions',
-    description: 'Bekijk banktransacties: datum, bedrag, tegenpartij, omschrijving en of ze al zijn afgeletterd. Gebruik `unreconciled_only` om te zien wat er nog open staat om te verwerken. Alleen lezen — afletteren en boeken doe jij.',
+    description: 'Bekijk banktransacties: datum, bedrag, tegenpartij, omschrijving en of ze al zijn afgeletterd. Gebruik `unreconciled_only` om te zien wat er nog open staat om te verwerken. `is_manual` = met de hand ingevoerd; status `merged` = een bankregel die een handmatige mutatie bevestigt (die mutatie, `merged_into_id`, draagt de boeking). Alleen lezen — boeken, verdelen en invoeren zet je klaar via `find_actions`.',
     input_schema: {
       type: 'object',
       properties: {
@@ -4844,7 +4844,10 @@ async function listBankTransactions(orgId: string, input: Record<string, unknown
   let rows = (data ?? []) as Array<Record<string, unknown>>;
   // "Nog niet verwerkt" = er hangt geen journaalpost aan; dat is de enige harde
   // maatstaf, los van hoe de statuswaarden in de tijd zijn gaan heten.
-  if (input.unreconciled_only === true) rows = rows.filter((r) => !r.journal_entry_id);
+  // GEWIJZIGD (20261107110000): een bankregel die met een handmatige mutatie is
+  // samengevoegd ('merged') is wél verwerkt: die mutatie draagt de boeking. Een
+  // genegeerde ook: daar valt niets te boeken.
+  if (input.unreconciled_only === true) rows = rows.filter((r) => !r.journal_entry_id && r.status !== 'merged' && r.status !== 'ignored');
   const needle = String(input.query ?? '').trim().toLowerCase();
   if (needle) {
     rows = rows.filter((r) =>
@@ -4860,6 +4863,10 @@ async function listBankTransactions(orgId: string, input: Record<string, unknown
       counterparty_name: r.counterparty_name, counterparty_iban: r.counterparty_iban,
       description: r.description, status: r.status,
       is_booked: Boolean(r.journal_entry_id),
+      // Met de hand ingevoerd, of een bankregel die zo'n mutatie bevestigt
+      // (dan boek je de handmatige, merged_into_id).
+      is_manual: Boolean(r.is_manual),
+      merged_into_id: r.merged_into_id ?? null,
     })),
   };
 }
