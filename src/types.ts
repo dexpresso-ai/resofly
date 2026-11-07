@@ -75,6 +75,12 @@ export interface Organization {
   license_provider: string | null;
   license_external_customer_id: string | null;
   license_external_subscription_id: string | null;
+  /** Wanneer de inrichtingsstappen zijn afgerond (migratie 20261107190000).
+   *  null = de app toont eerst de stappen (src/features/OrganizationSetup.tsx).
+   *  Ontbreekt de kolom (de migratie draaide nog niet), dan is hij undefined en
+   *  werkt de app zoals daarvoor. */
+  onboarding_completed_at?: string | null;
+  onboarding_completed_by?: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -1618,6 +1618,92 @@ export async function saveInvoiceSendMethod(organizationId: UUID, method: Invoic
   if (insertError) throw fail(insertError);
 }
 
+/**
+ * De velden die de inrichtingsstappen (src/features/OrganizationSetup.tsx)
+ * schrijven. Elke stap slaat alleen zijn eigen velden op, en niets anders:
+ * een volledige upsert vanuit een stap zou wat elders al is ingesteld (de
+ * huisstijl, de documentopmaak) met de standaardwaarden overschrijven.
+ */
+const ONBOARDING_SETTINGS_FIELDS = [
+  'company_name', 'trade_name', 'legal_form',
+  'address_line1', 'address_line2', 'postal_code', 'city', 'country',
+  'email', 'phone', 'website', 'kvk_number', 'vat_number', 'iban',
+  'kor_enabled', 'vat_return_period', 'fiscal_year_start_month', 'bookkeeping_start_date',
+  'year_result_account_code', 'default_hourly_rate_cents',
+  'invoice_payment_terms', 'invoice_footer',
+  'brand_logo_data_url', 'brand_accent_color',
+] as const;
+
+export type OnboardingSettingsPatch = Partial<Pick<CompanySettingsInput, typeof ONBOARDING_SETTINGS_FIELDS[number]>>;
+
+/**
+ * Slaat een deel van de bedrijfsgegevens op. Bestaat de rij nog niet (een
+ * nieuwe organisatie heeft er geen), dan maken we hem aan met alleen deze
+ * velden; de rest krijgt de standaard van de database. Alleen owners en
+ * admins (de policies op company_settings). Een BV, NV of coöperatie zonder
+ * zakelijke module weigert de database (enforce_company_legal_form).
+ */
+export async function saveOnboardingSettings(organizationId: UUID, patch: OnboardingSettingsPatch): Promise<CompanySettings> {
+  const row: Record<string, unknown> = {};
+  for (const key of ONBOARDING_SETTINGS_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) row[key] = (patch as Record<string, unknown>)[key];
+  }
+  if (Object.keys(row).length === 0) throw new Error('Er is niets om op te slaan.');
+  const update = () => supabase
+    .from('company_settings')
+    .update(row)
+    .eq('organization_id', organizationId)
+    .select('*');
+  let { data, error } = await update();
+  if (error) throw error;
+  if (data && data.length > 0) return data[0] as CompanySettings;
+  const createdBy = await currentUserId();
+  const { data: inserted, error: insertError } = await supabase
+    .from('company_settings')
+    .insert({ ...row, organization_id: organizationId, created_by: createdBy })
+    .select('*')
+    .single();
+  if (!insertError) return inserted as CompanySettings;
+  // Tegelijk in een ander tabblad aangemaakt: de rij bestaat nu wel.
+  if (insertError.code === '23505') {
+    ({ data, error } = await update());
+    if (error) throw error;
+    if (data && data.length > 0) return data[0] as CompanySettings;
+  }
+  throw insertError;
+}
+
+/**
+ * Rondt de inrichting af (migratie 20261107190000). De database controleert
+ * wie dit mag (owner of admin van deze organisatie) en dat er een bedrijfsnaam
+ * is, en geeft de organisatie de naam van het bedrijf.
+ */
+export async function completeOrganizationOnboarding(organizationId: UUID, displayName: string): Promise<Organization> {
+  const { data, error } = await supabase.rpc('complete_organization_onboarding', {
+    p_organization_id: organizationId,
+    p_display_name: displayName.trim() || null,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Organization;
+}
+
+/** De zakelijke module en de rechtsvorm, opnieuw opgehaald (na een wijziging in het abonnement). */
+export async function loadOrganizationBusinessStatus(organizationId: UUID): Promise<OrganizationBusinessStatus | null> {
+  const { data, error } = await supabase.rpc('organization_business_status', { p_organization_id: organizationId });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row ?? null) as OrganizationBusinessStatus | null;
+}
+
+/** De creatieve module, opnieuw opgehaald (na een wijziging in het abonnement). */
+export async function loadOrganizationCreativeStatus(organizationId: UUID): Promise<OrganizationCreativeStatus | null> {
+  const { data, error } = await supabase.rpc('organization_creative_status', { p_organization_id: organizationId });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row ?? null) as OrganizationCreativeStatus | null;
+}
+
 /** Waarom er (nog) geen eigen inlogadres is: geen rechten, migratie, of iets anders. */
 export type PortalLoginKeyResult = { key: string | null; unavailable: 'rechten' | 'migratie' | 'fout' | null };
 

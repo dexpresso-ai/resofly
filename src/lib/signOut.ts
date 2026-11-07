@@ -11,6 +11,7 @@ const USER_DATA_KEY_PREFIXES = [
   'brandcore.activeOrganizationId', // laatst gekozen organisatie
   'resofly.chat.drafts.',           // nog niet verstuurde chatberichten
   'resofly.gerrie.decision-outbox', // besluiten van Gerrie die nog op de server moeten komen
+  'resofly.onboarding.',            // waar je was in het inrichten van een organisatie
 ];
 
 /**

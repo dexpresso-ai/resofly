@@ -50,3 +50,11 @@ pagina moet openen.
 Een nieuwe pagina toevoegen: zet hem in `PAGES`, en als hij een lijst toont
 ook in `FIRST_ITEM` met de selector van het eerste item en de grens die
 ongeveer 20% boven de huidige meting ligt.
+
+Een pagina met een eigen backend krijgt `mock` (de opties van `installMock`)
+en `shell` (het element waar de pagina op wacht). Zo meet de test de
+inrichtingsstappen van een nieuwe organisatie (`inrichten-*`, sinds
+2026-11-07): `installMock(context, { onboarding: true })` speelt een
+organisatie na die nog moet worden ingericht, met bedrijfsgegevens, abonnement,
+modules, Mollie en afronden in het geheugen. `tests/inrichten/run.mjs`
+(`npm run test:inrichten`) klikt daarmee de hele weg door.

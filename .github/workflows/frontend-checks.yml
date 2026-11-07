@@ -66,6 +66,12 @@ jobs:
       - name: Laden per module
         run: npm run test:loading
 
+      # De inrichtingsstappen van een nieuwe organisatie (OrganizationSetup):
+      # de hele weg doorgeklikt, met een BV via abonnement en module, foute
+      # invoer, Mollie, afronden, herladen halverwege, en wie wat niet mag.
+      - name: Inrichtingsstappen
+        run: npm run test:inrichten
+
   edge-functions:
     runs-on: ubuntu-latest
     steps:
