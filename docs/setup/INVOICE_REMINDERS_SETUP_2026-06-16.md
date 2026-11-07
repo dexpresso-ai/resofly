@@ -121,9 +121,10 @@ Handmatig per factuur testen kan via de UI ("Stuur herinnering") of via de besta
 - Herinneringen gaan **nooit** uit voor facturen met status `paid`, `cancelled`, `void`,
   `written_off` of `refunded`.
 - Een factuur moet een klant met geldig e-mailadres hebben.
-- De **betaallink** wordt automatisch meegestuurd wanneer de organisatie Mollie gekoppeld heeft
-  én "betaallink meesturen" aanstaat. Lukt het aanmaken niet, dan gaat de herinnering gewoon uit
-  met alleen de PDF + publieke link (de fout wordt geregistreerd, niet fataal).
+- De **betaallink** wordt automatisch meegestuurd wanneer de organisatie Mollie gekoppeld heeft,
+  "betaallink meesturen" aanstaat, en de organisatie niet "per e-mail" verstuurt (Instellingen →
+  Online betalen → Facturen versturen, sinds 7 november 2026). Lukt het aanmaken niet, dan gaat de
+  herinnering gewoon uit met alleen de PDF + publieke link (de fout wordt geregistreerd, niet fataal).
 - Een **mislukte** verzending verhoogt het niveau niet; de volgende cron-run probeert hetzelfde
   niveau opnieuw (de dagelijkse cadans throttelt de retries).
 - De cadans is dagelijks: een factuur die meerdere niveaus "achterloopt" schuift elke run één

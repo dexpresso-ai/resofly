@@ -104,9 +104,10 @@ export const FINANCE_EXECUTORS: Record<string, ActionExecutor> = {
   'invoice.send_reminder': async (payload, ctx) => {
     const level = int(payload, 'level') as 1 | 2 | 3;
     // Dezelfde keuze als de knop in het scherm: alleen een betaallink met een
-    // gekoppelde Mollie. Zonder die vlag vroeg de server er toch een, en bleef
-    // er een betaling op 'creating' staan die crediteren tegenhield.
-    const includePaymentLink = await reminderPaymentLinkWanted(ctx.organizationId);
+    // gekoppelde Mollie, en niet als de organisatie per e-mail verstuurt. Zonder
+    // die vlag vroeg de server er toch een, en bleef er een betaling op
+    // 'creating' staan die crediteren tegenhield.
+    const includePaymentLink = await reminderPaymentLinkWanted(ctx.organizationId, ctx.data.companySettings?.invoice_send_method);
     // Het adres op de goedgekeurde kaart: is dat sindsdien veranderd, dan verstuurt de server niets.
     const result = await sendInvoiceReminderEmail(ctx.organizationId, text(payload, 'invoice_id'), { level, expectedRecipientEmail: optText(payload, 'email') ?? undefined, includePaymentLink });
     const number = optText(payload, 'number') ?? '';

@@ -29,7 +29,10 @@ npm run test:stromen -- facturen
 
 Scenario's: `rook`, `offertes`, `facturen`, `mollie` (de eigen Mollie-koppeling: koppelen met
 profiel, auditlog, een ander account met een open link, ontkoppelen, en een key die nog met de
-ingebouwde sleutel was opgeslagen), `herinneringen`, `contracten`, `beveiliging`,
+ingebouwde sleutel was opgeslagen), `verzendwijze` (Instellingen → Online betalen: per e-mail
+of via Mollie; wie kiest, en dat er per e-mail nergens een betaallink van Mollie of een
+Mollie-factuur ontstaat: versturen, losse link, herinnering, klantportaal, een klant op "via
+Mollie", en een factuur die Mollie al uitgaf), `herinneringen`, `contracten`, `beveiliging`,
 `automatisering`, `agenda` (Google en Microsoft koppelen, met nep-Google en nep-Microsoft uit
 `nep-agenda.mjs`), `documenten` (maken, rechten per rol en module, andere organisaties,
 delen via portaal en link, opruimen) en `verzenddomein` (eigen domein koppelen, verifiëren,
@@ -70,7 +73,8 @@ factuur maken), `factuur` (versturen, publieke pagina, herinnering, crediteren),
 zien geen knoppen die iets veranderen; de medewerker en de beheerder bij dezelfde stukken wel),
 `agenda` (Google koppelen met de knop, terugkeer met fout, opnieuw koppelen, loskoppelen),
 `mollie` (Instellingen → Online betalen: een geweigerde key met de echte reden in beeld, koppelen
-met profiel en de waarschuwing voor de testmodus, ontkoppelen, wat een lid ziet) en
+met profiel en de waarschuwing voor de testmodus, kiezen tussen per e-mail en via Mollie,
+ontkoppelen, wat een lid ziet) en
 `documenten` (maken en bewerken in Inhoud, kwaadaardige inhoud in de app en op de deelpagina,
 verwijderen, de kijker).
 

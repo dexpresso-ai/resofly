@@ -9,6 +9,7 @@ import {
 import { ACTIONS } from '../_shared/actions/index.ts';
 import { getAction, searchActions } from '../_shared/actions/registry.ts';
 import { defaultInvoiceRecipient, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
+import { loadMollieInvoicingAllowed } from '../_shared/invoiceSendMethod.ts';
 import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
 import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '../_shared/actions/types.ts';
 import { isOrganizationRole, memberModuleLevel, type OrganizationRole } from '../_shared/roles.ts';
@@ -1543,7 +1544,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_send_invoice',
-    description: 'Stel voor om een BESTAANDE factuur per e-mail naar de klant te versturen. Je verstuurt NIETS zelf: de gebruiker bevestigt de verzending met een knop in de chat. Zoek de factuur eerst met list_invoices en gebruik het exacte id. De factuur gaat naar het e-mailadres van de gekoppelde klant; staat bij die klant e-facturatie aan, dan als e-factuur (UBL met de PDF erin) naar het e-factuuradres, of — met "via Mollie" — via Mollie over Peppol.',
+    description: 'Stel voor om een BESTAANDE factuur per e-mail naar de klant te versturen. Je verstuurt NIETS zelf: de gebruiker bevestigt de verzending met een knop in de chat. Zoek de factuur eerst met list_invoices en gebruik het exacte id. De factuur gaat naar het e-mailadres van de gekoppelde klant; staat bij die klant e-facturatie aan, dan als e-factuur (UBL met de PDF erin) naar het e-factuuradres, of — met "via Mollie" — via Mollie over Peppol. Koos de organisatie in Instellingen → Online betalen voor "Per e-mail", dan gaat alles per e-mail en zonder betaallink van Mollie.',
     input_schema: {
       type: 'object',
       properties: { id: { type: 'string', description: 'Het exacte id van de factuur (uit list_invoices).' } },
@@ -3678,16 +3679,48 @@ function sendRecipient(kind: 'invoice' | 'quote', client: Record<string, unknown
   });
 }
 
-/** Gaat een factuur aan deze klant via Mollie (Peppol)? Zelfde regel als invoice-workflow. */
-function sendsViaMollie(client: Record<string, unknown> | null): boolean {
+/**
+ * Gaat een factuur aan deze klant via Mollie (Peppol)? Zelfde regel als
+ * invoice-workflow: verstuurt de organisatie per e-mail (Instellingen → Online
+ * betalen), dan nooit.
+ */
+function sendsViaMollie(client: Record<string, unknown> | null, mollieAllowed: boolean): boolean {
   return invoiceDeliveryChannel({
     email: client?.email ? String(client.email) : null,
     e_invoicing_enabled: client?.e_invoicing_enabled === true,
     e_invoice_channel: client?.e_invoice_channel ? String(client.e_invoice_channel) : null,
-  }) === 'e_invoice_mollie';
+  }, { mollieAllowed }) === 'e_invoice_mollie';
 }
 
-const MOLLIE_RESEND_REFUSAL = 'Deze factuur is al verstuurd. Bij deze klant gaan facturen via Mollie, en Mollie zou er een nieuwe factuur met een eigen nummer van maken — dat is dubbel. Opnieuw versturen kan per e-mail: zet bij de klant het e-factuurkanaal op "per e-mail".';
+/**
+ * Mag Mollie meedoen bij deze organisatie? Niet te lezen: dan rekenen we op
+ * Mollie. Dat is hier de voorzichtige kant: Gerrie zet dan een al verstuurde
+ * factuur van een klant op "via Mollie" niet opnieuw klaar.
+ */
+async function mollieAllowedForProposals(organizationId: string): Promise<boolean> {
+  return await loadMollieInvoicingAllowed(supabaseAdmin, organizationId).catch(() => true);
+}
+
+const MOLLIE_RESEND_REFUSAL = 'Deze factuur is al verstuurd. Bij deze klant gaan facturen via Mollie, en Mollie zou er een nieuwe factuur met een eigen nummer van maken — dat is dubbel. Opnieuw versturen kan per e-mail: zet bij de klant het e-factuurkanaal op "per e-mail", of kies in Instellingen → Online betalen voor "Per e-mail".';
+const MOLLIE_ISSUED_REFUSAL = 'Deze factuur is al via Mollie uitgegeven, met een eigen Mollie-nummer. Opnieuw versturen, ook per e-mail, geeft de klant een tweede factuur met een ander nummer. De PDF van Mollie staat bij de factuur.';
+
+/**
+ * Welke van deze facturen gaf Mollie al uit (of geeft hij nu uit)? Die gaan
+ * niet nog eens de deur uit, ook niet per e-mail: invoice-workflow weigert dat
+ * ook. Eerder keek Gerrie alleen naar het kanaal van de klant; met "per e-mail"
+ * in Instellingen zou hij zo'n factuur weer klaarzetten.
+ */
+async function invoicesIssuedAtMollie(organizationId: string, invoiceIds: string[]): Promise<Set<string>> {
+  if (invoiceIds.length === 0) return new Set();
+  const { data, error } = await supabaseAdmin.from('invoice_email_deliveries')
+    .select('invoice_id')
+    .eq('organization_id', organizationId)
+    .eq('delivery_channel', 'e_invoice_mollie')
+    .neq('status', 'failed')
+    .in('invoice_id', invoiceIds);
+  if (error) throw new Error(`Nagaan of de factuur al via Mollie ging, mislukte: ${error.message}`);
+  return new Set(((data ?? []) as Array<{ invoice_id: string }>).map((row) => String(row.invoice_id)));
+}
 
 /** Bereidt het versturen van een bestaande factuur/offerte voor (alleen vóórstellen). */
 async function buildSendProposal(ctx: GerrieContext, kind: 'invoice' | 'quote', input: Record<string, unknown>): Promise<ProposalResult> {
@@ -3716,7 +3749,13 @@ async function buildSendProposal(ctx: GerrieContext, kind: 'invoice' | 'quote', 
   // hetzelfde adres dat invoice-workflow kiest, zodat de kaart klopt.
   const email = sendRecipient(kind, client);
   if (!email) return { ok: false, error: `De klant heeft geen e-mailadres; vul dat eerst in voordat je de ${docLabel} verstuurt.` };
-  if (kind === 'invoice' && sendsViaMollie(client) && status !== 'draft') return { ok: false, error: MOLLIE_RESEND_REFUSAL };
+  if (kind === 'invoice') {
+    let issued: Set<string>;
+    try { issued = await invoicesIssuedAtMollie(ctx.organizationId, [String(doc.id)]); }
+    catch { return { ok: false, error: 'Kon niet nagaan of deze factuur al via Mollie ging. Probeer het zo opnieuw.' }; }
+    if (issued.has(String(doc.id))) return { ok: false, error: MOLLIE_ISSUED_REFUSAL };
+    if (status !== 'draft' && sendsViaMollie(client, await mollieAllowedForProposals(ctx.organizationId))) return { ok: false, error: MOLLIE_RESEND_REFUSAL };
+  }
 
   return {
     ok: true,
@@ -3776,6 +3815,13 @@ async function buildSendBatchProposal(ctx: GerrieContext, kind: 'invoice' | 'quo
   const blocked = kind === 'invoice' ? ['cancelled', 'void', 'written_off'] : ['cancelled'];
   const items: SendDocumentItem[] = [];
   const skipped: SkippedDocument[] = [];
+  // Eén keer voor de hele reeks: per e-mail of via Mollie geldt voor de hele organisatie.
+  const mollieAllowed = kind === 'invoice' ? await mollieAllowedForProposals(ctx.organizationId) : false;
+  let issuedAtMollie = new Set<string>();
+  if (kind === 'invoice') {
+    try { issuedAtMollie = await invoicesIssuedAtMollie(ctx.organizationId, rows.map((r) => String(r.id))); }
+    catch { return { ok: false, error: 'Kon niet nagaan welke facturen al via Mollie gingen. Probeer het zo opnieuw.' }; }
+  }
 
   // De volgorde van het model aanhouden: die matcht wat hij in zijn antwoord noemt.
   for (const id of ids) {
@@ -3788,7 +3834,8 @@ async function buildSendBatchProposal(ctx: GerrieContext, kind: 'invoice' | 'quo
     const client = clientById.get(String(doc.client_id));
     const email = sendRecipient(kind, client ?? null);
     if (!email) { skipped.push({ number, reason: `${String(client?.name ?? 'de klant')} heeft geen e-mailadres` }); continue; }
-    if (kind === 'invoice' && sendsViaMollie(client ?? null) && status !== 'draft') { skipped.push({ number, reason: 'al verstuurd; via Mollie zou het een tweede factuur worden' }); continue; }
+    if (kind === 'invoice' && issuedAtMollie.has(id)) { skipped.push({ number, reason: 'al via Mollie uitgegeven; opnieuw versturen zou een tweede factuur worden' }); continue; }
+    if (kind === 'invoice' && sendsViaMollie(client ?? null, mollieAllowed) && status !== 'draft') { skipped.push({ number, reason: 'al verstuurd; via Mollie zou het een tweede factuur worden' }); continue; }
 
     items.push({
       id, number, status,

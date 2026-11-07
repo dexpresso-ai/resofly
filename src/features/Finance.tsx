@@ -10,7 +10,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF, financePdfOptions } from '../lib/pdf';
 import { safeCheckoutUrl } from '../lib/safeUrl';
-import { clientEInvoiceChannel, invoiceRecipientFor, latestEInvoiceDelivery, mollieCollecting, mollieNeedsSync, molliePartialNote, mollieStatusLabel, peppolStatusLabel } from '../lib/eInvoicing';
+import { clientEInvoiceChannel, invoiceRecipientFor, latestEInvoiceDelivery, mollieCollecting, mollieInvoicingAllowed, mollieNeedsSync, molliePartialNote, mollieStatusLabel, peppolStatusLabel } from '../lib/eInvoicing';
 import { loadInvoicePdfSnapshot, loadMollieInvoicePdf } from '../lib/repository';
 import { parseDutchAmount, parseDutchAmountCents } from '../lib/money';
 import { invoiceContentLocked, paymentsBlockCredit } from '../lib/financeRules';
@@ -625,6 +625,9 @@ function InvoiceTable({
     }
     return byInvoice;
   }, [data.invoiceEmailDeliveries]);
+  // Per e-mail (Instellingen → Online betalen): dan gaat ook een klant op "via
+  // Mollie" per mail, en zegt het label "e-factuur" in plaats van "via Mollie".
+  const mollieForInvoices = mollieInvoicingAllowed(data.companySettings?.invoice_send_method);
 
   return <>
     <div className="fin-header quote-table-header">
@@ -662,7 +665,7 @@ function InvoiceTable({
                 if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedInvoiceId(invoice.id); }
               }}>
                 {/* Het e-factuurlabel onder het nummer: in de statuskolom maakte het de tabel breder. */}
-                <td data-label="Factuur"><strong>{invoice.number}</strong><EInvoicePill delivery={eInvoiceDeliveries.get(invoice.id) ?? null} upcoming={clientEInvoiceChannel(client) !== null && !invoiceHasStoredPdf(invoice)} upcomingVia={clientEInvoiceChannel(client)} /></td>
+                <td data-label="Factuur"><strong>{invoice.number}</strong><EInvoicePill delivery={eInvoiceDeliveries.get(invoice.id) ?? null} upcoming={clientEInvoiceChannel(client) !== null && !invoiceHasStoredPdf(invoice)} upcomingVia={clientEInvoiceChannel(client, mollieForInvoices)} /></td>
                 <td data-label="Klant"><span>{client?.name ?? 'Geen klant'}</span></td>
                 <td data-label="Project"><span>{project?.name ?? 'Geen project'}</span></td>
                 <td data-label="Offerte"><span>{quote?.number ?? '—'}</span></td>
@@ -857,7 +860,9 @@ function InvoiceDetailModal({
   const versions = data.invoiceVersions.filter(version => version.invoice_id === invoice.id);
   // E-facturatie: ging hij als e-factuur, of gaat hij er een worden?
   const eInvoiceDelivery = latestEInvoiceDelivery(deliveries, invoice.id);
-  const eInvoiceChannel = clientEInvoiceChannel(client);
+  // Het kanaal zoals het bij versturen echt gaat: verstuurt de organisatie per
+  // e-mail (Instellingen → Online betalen), dan ook een klant op "via Mollie".
+  const eInvoiceChannel = clientEInvoiceChannel(client, mollieInvoicingAllowed(data.companySettings?.invoice_send_method));
   const eInvoiceClient = eInvoiceChannel !== null;
   // Via Mollie: Mollie gaf hem uit (eigen nummer), over Peppol, en int de betaling.
   const mollieDelivery = eInvoiceDelivery?.delivery_channel === 'e_invoice_mollie' ? eInvoiceDelivery : null;
@@ -934,7 +939,7 @@ function InvoiceDetailModal({
 
       <section className="quote-detail-section">
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
-        <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} eInvoiceDelivery={eInvoiceDelivery} upcomingEInvoiceTo={eInvoiceClient && !invoiceHasStoredPdf(invoice) ? invoiceRecipientFor(client) : null} upcomingVia={eInvoiceChannel} />
+        <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} eInvoiceDelivery={eInvoiceDelivery} upcomingEInvoiceTo={eInvoiceClient && !invoiceHasStoredPdf(invoice) ? invoiceRecipientFor(client) : null} upcomingVia={eInvoiceChannel} paymentLinks={mollieInvoicingAllowed(data.companySettings?.invoice_send_method)} />
         {mollieDelivery && <MollieEInvoicePanel invoice={invoice} delivery={mollieDelivery} partialNote={molliePartialNote(events)} onSync={onSyncMollie} onDownloadPdf={onDownloadMolliePdf} />}
         <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} payments={payments} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} onCredit={onCredit} />
         {showRefund && onRefund && <RefundModal invoice={invoice} mollieRefundable={mollieRefundable} inFlightCents={inFlightCents} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
@@ -1097,7 +1102,7 @@ function quoteHasStoredPdf(quote: Quote): boolean {
   return ['sent', 'accepted', 'rejected', 'expired'].includes(quote.status) || Boolean(quote.sent_at);
 }
 
-function InvoiceStatusStrip({ invoice, delivery, payment, eInvoiceDelivery = null, upcomingEInvoiceTo = null, upcomingVia = null }: { invoice: Invoice; delivery: InvoiceEmailDelivery | null; payment: InvoicePaymentRecord | null; eInvoiceDelivery?: InvoiceEmailDelivery | null; upcomingEInvoiceTo?: string | null; upcomingVia?: 'email' | 'mollie' | null }) {
+function InvoiceStatusStrip({ invoice, delivery, payment, eInvoiceDelivery = null, upcomingEInvoiceTo = null, upcomingVia = null, paymentLinks = true }: { invoice: Invoice; delivery: InvoiceEmailDelivery | null; payment: InvoicePaymentRecord | null; eInvoiceDelivery?: InvoiceEmailDelivery | null; upcomingEInvoiceTo?: string | null; upcomingVia?: 'email' | 'mollie' | null; /** false: de organisatie verstuurt per e-mail, er komt geen betaallink. */ paymentLinks?: boolean }) {
   return <div className="quote-email-status invoice-status-strip">
     <Mail size={14}/><span>{delivery?.status ? deliveryStatusLabel(delivery) : 'Nog niet verstuurd'}</span>
     {delivery?.recipient_email && <small>{delivery.recipient_email}</small>}
@@ -1108,7 +1113,8 @@ function InvoiceStatusStrip({ invoice, delivery, payment, eInvoiceDelivery = nul
     {!eInvoiceDelivery && upcomingEInvoiceTo !== null && (upcomingVia === 'mollie'
       ? <small title="Bij deze klant gaan facturen via Mollie over Peppol">Gaat via Mollie (Peppol){upcomingEInvoiceTo ? `, kopie naar ${upcomingEInvoiceTo}` : ''}</small>
       : <small title="Bij deze klant staat e-facturatie aan">Gaat als e-factuur (UBL + PDF){upcomingEInvoiceTo ? ` naar ${upcomingEInvoiceTo}` : ''}</small>)}
-    <CreditCard size={14}/><span>{payment ? paymentStatusLabel(payment.status) : 'Nog geen betaallink'}</span>
+    {/* Per e-mail komt er geen link; "nog geen" zei dat er een onderweg was. */}
+    <CreditCard size={14}/><span>{payment ? paymentStatusLabel(payment.status) : paymentLinks ? 'Nog geen betaallink' : 'Betaling per overboeking'}</span>
     {safeCheckoutUrl(payment?.provider_checkout_url, window.location.origin) && <a href={safeCheckoutUrl(payment?.provider_checkout_url, window.location.origin)!} target="_blank" rel="noreferrer">Open betaallink</a>}
     {invoice.public_token_expires_at && <small>Publieke link tot {dateNL(invoice.public_token_expires_at)}</small>}
   </div>;
@@ -1149,8 +1155,9 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments
   const canCredit = Boolean(canWrite && onCredit) && ['sent', 'overdue'].includes(invoice.status)
     && !paymentsBlockCredit(payments);
   // The Mollie payment link is created automatically while sending (when the
-  // organisation has Mollie connected), so there is no separate "create link"
-  // button — sending is the single action that produces invoice + betaallink.
+  // organisation has Mollie connected and sends via Mollie, see Instellingen →
+  // Online betalen), so there is no separate "create link" button — sending is
+  // the single action that produces invoice + betaallink.
   return <div className="quote-actions invoice-actions">
     <Button onClick={onEdit} disabled={isLocked} title={isLocked ? 'Deze factuur is vergrendeld na verzending of betaallink.' : undefined}>Bewerken</Button>
     {canSend && (eInvoice === 'mollie'

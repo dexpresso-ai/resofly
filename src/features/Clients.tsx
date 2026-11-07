@@ -7,7 +7,7 @@ import { TICKET_STATUS_LABELS, TICKET_WORKLIST_STATUSES, groupNotesByTicket, isT
 import { listTime } from '../lib/communication';
 import { callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, callSubject, formatPhone, telHref } from '../lib/calls';
 import { rememberCall } from '../lib/callBridge';
-import { clientEInvoiceChannel, invoiceRecipientFor } from '../lib/eInvoicing';
+import { clientEInvoiceChannel, invoiceRecipientFor, mollieInvoicingAllowed } from '../lib/eInvoicing';
 import { CallLogDialog } from '../components/CallLogDialog';
 import { Button, Input, Select } from '../components/Ui';
 import { DetailTabs } from '../components/DetailTabs';
@@ -697,11 +697,15 @@ export function ClientDetailPage({
             <div><dt>Adres</dt><dd>{[client.address_line1, client.address_line2, [client.postal_code, client.city].filter(Boolean).join(' '), client.country].filter(Boolean).join(', ') || '—'}</dd></div>
             <div><dt>Btw-nummer</dt><dd>{client.vat_number || '—'}</dd></div>
             <div><dt>KVK</dt><dd>{client.kvk_number || '—'}</dd></div>
-            <div><dt>E-facturatie</dt><dd>{clientEInvoiceChannel(client) === 'mollie'
+            {/* Zoals het bij versturen echt gaat: verstuurt de organisatie per e-mail
+                (Instellingen → Online betalen), dan ook een klant op "via Mollie". */}
+            <div><dt>E-facturatie</dt><dd>{clientEInvoiceChannel(client, mollieInvoicingAllowed(data.companySettings?.invoice_send_method)) === 'mollie'
               ? <span title="Mollie geeft de facturen uit, verstuurt ze over Peppol en mailt een PDF-kopie; de klant betaalt via Mollie.">Aan — via Mollie (Peppol), kopie naar {invoiceRecipientFor(client) || 'nog geen adres'}</span>
-              : clientEInvoiceChannel(client) === 'email'
-                ? <span title="Facturen en creditfacturen gaan als e-factuur (UBL) met de PDF erin.">Aan — naar {invoiceRecipientFor(client) || 'nog geen adres'}</span>
-                : 'Uit — alleen de PDF'}</dd></div>
+              : clientEInvoiceChannel(client) === 'mollie'
+                ? <span title="Bij deze klant staat Mollie gekozen, maar je verstuurt facturen per e-mail (Instellingen → Online betalen). Dan gaat de e-factuur (UBL met de PDF erin) per mail.">Aan — per mail, naar {invoiceRecipientFor(client) || 'nog geen adres'} (Mollie staat uit)</span>
+                : clientEInvoiceChannel(client) === 'email'
+                  ? <span title="Facturen en creditfacturen gaan als e-factuur (UBL) met de PDF erin.">Aan — naar {invoiceRecipientFor(client) || 'nog geen adres'}</span>
+                  : 'Uit — alleen de PDF'}</dd></div>
             <div><dt>Waarde</dt><dd>{euro(client.value_eur)}</dd></div>
             {activeFieldDefinitions(data.clientFieldDefinitions).map(def => (
               <div key={def.id}>
