@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, LayoutTemplate, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceSendMethod, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BrandStudio } from './BrandStudio';
@@ -10,10 +10,11 @@ import { DocumentLayoutEditor } from './DocumentLayoutEditor';
 import { parseDocumentLayouts, serializeDocumentLayouts } from '../lib/documentLayout';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, refreshSendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, saveInvoiceSendMethod, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
 import { formatBytes } from '../lib/transfers';
 import { isDutchVatIdFormat, looksLikeTaxNumberWithoutCountry } from '../lib/vatId';
 import { invoiceInboxAddress } from '../lib/invoiceInbox';
+import { effectiveInvoiceSendMethod } from '../lib/eInvoicing';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 import { ProjectTemplatesManager } from './ProjectTemplates';
@@ -160,7 +161,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens en betaalteksten die op je facturen en offertes verschijnen. De opmaak en het briefpapier staan bij Documentopmaak.' },
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
   { id: 'boekhouder', label: 'Boekhouder', Icon: Calculator, description: 'Geef je boekhouder of accountant een gratis gastaccount dat alleen je financiën kan inzien — niets wijzigen, geen klantdossiers of projecten.' },
-  { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
+  { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Kies of je facturen per e-mail of via Mollie verstuurt, en koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
   { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Koppel je eigen AI (Claude, ChatGPT) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
   { id: 'api', label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
@@ -265,6 +266,106 @@ function DunningSettingsCard({ organizationId, canAdmin }: { organizationId: str
   </section>;
 }
 
+/**
+ * Facturen versturen: per e-mail of via Mollie (Instellingen → Online betalen).
+ *
+ * Tot 7 november 2026 was de Mollie-koppeling zelf de keuze: met een gekoppeld
+ * account ging er bij elke factuur, herinnering en aanmaning een betaallink van
+ * Mollie mee. Wie dat niet wilde, kon alleen ontkoppelen, en dan keek ResoFly
+ * ook lopende betalingen niet meer na. Nu kies je het hier; invoice-workflow,
+ * het klantportaal en Gerrie houden zich eraan (_shared/eInvoicing.ts). Nog
+ * niets gekozen is zoals het was: via Mollie zodra Mollie gekoppeld is.
+ */
+function InvoiceSendMethodCard({ organizationId, stored, mollieConnected, canAdmin, canConnectMollie, iban, onSaved }: {
+  organizationId: string;
+  /** De opgeslagen keuze; null = nog niets gekozen. */
+  stored: InvoiceSendMethod | null;
+  /** Is Mollie gekoppeld? null = (nog) niet bekend: de status laadt, of je mag hem niet zien. */
+  mollieConnected: boolean | null;
+  canAdmin: boolean;
+  canConnectMollie: boolean;
+  iban: string | null;
+  onSaved: () => void | Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  // De keuze die net is opgeslagen, tot de verversing binnen is. Anders sprong
+  // het vinkje even terug naar de oude keuze.
+  const [justChosen, setJustChosen] = useState<InvoiceSendMethod | null>(null);
+  useEffect(() => { setJustChosen(null); }, [stored, organizationId]);
+
+  const chosen = justChosen ?? stored;
+  // Nog niets gekozen: wat er nu gebeurt. Zolang de koppeling onbekend is, niets aangevinkt.
+  const selected: InvoiceSendMethod | null = chosen ?? (mollieConnected === null ? null : effectiveInvoiceSendMethod(null, mollieConnected));
+
+  async function choose(method: InvoiceSendMethod) {
+    if (!canAdmin || busy || method === chosen) return;
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await saveInvoiceSendMethod(organizationId, method);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Opslaan mislukt.');
+      setBusy(false);
+      return;
+    }
+    setJustChosen(method);
+    setMessage(method === 'email'
+      ? 'Opgeslagen. Je facturen gaan nu per e-mail, zonder betaallink van Mollie.'
+      : mollieConnected === false
+        ? 'Opgeslagen. Koppel hieronder nog je Mollie-account; tot dan gaan je facturen zonder betaallink.'
+        : 'Opgeslagen. Je facturen gaan nu via Mollie, met een betaallink.');
+    // De keuze staat; mislukt het verversen daarna, dan meldt de app dat zelf.
+    // Hier zou "opslaan mislukt" dan niet kloppen.
+    try { await onSaved(); } catch { /* zie hierboven */ }
+    setBusy(false);
+  }
+
+  const option = (method: InvoiceSendMethod, title: string, text: string) => <button
+    type="button"
+    role="radio"
+    aria-checked={selected === method}
+    className={selected === method ? 'is-active' : ''}
+    disabled={busy}
+    onClick={() => void choose(method)}
+  >
+    <strong>{title}</strong>
+    <small>{text}</small>
+  </button>;
+
+  return <section className="settings-card organization-card billing-card send-method-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>Facturen versturen</h3>
+        <p className="settings-help">Kies hoe je facturen de deur uit gaan. Dat geldt ook voor herinneringen, aanmaningen en het klantportaal.</p>
+      </div>
+    </div>
+    {message && <div className="success" role="status">{message}</div>}
+    {error && <div className="error">{error}</div>}
+    {canAdmin ? <>
+      <div className="send-method" role="radiogroup" aria-label="Facturen versturen">
+        {option('email', 'Per e-mail', 'ResoFly mailt de factuur als PDF. Je klant betaalt per overboeking: je IBAN en het factuurnummer staan op de factuur. Er gaat geen betaallink van Mollie mee. Een klant met e-facturatie krijgt de e-factuur per mail, ook als hij op "via Mollie" staat.')}
+        {option('mollie', 'Via Mollie', 'Je factuur gaat met een betaallink van Mollie, zodat je klant meteen online betaalt. Staat bij een klant e-facturatie via Mollie aan, dan geeft Mollie de factuur uit en verstuurt hij hem over Peppol. Hiervoor koppel je hieronder je eigen Mollie-account.')}
+      </div>
+      {selected === 'mollie' && mollieConnected === false && <div className="settings-warning">
+        Mollie is nog niet gekoppeld. Tot dat gebeurt, gaan je facturen zonder betaallink, en kan een factuur aan een klant met e-facturatie via Mollie niet weg.{canConnectMollie ? '' : ' Alleen de eigenaar van de organisatie kan Mollie koppelen.'}
+      </div>}
+      {selected === 'email' && !String(iban ?? '').trim() && <div className="settings-warning">
+        Je IBAN ontbreekt nog. Vul het in bij Instellingen → Facturatie: het staat op je factuur, zodat je klant weet waar hij het bedrag naartoe maakt.
+      </div>}
+      {selected === 'email' && mollieConnected === true && <p className="settings-help">
+        Mollie blijft gekoppeld. Wordt er nog betaald via een eerder verstuurde betaallink, of via een factuur die Mollie uitgaf, dan legt ResoFly dat gewoon vast.
+      </p>}
+    </> : <p className="settings-help">
+      {stored === 'email'
+        ? 'Je facturen gaan per e-mail, zonder betaallink van Mollie.'
+        : stored === 'mollie'
+          ? 'Je facturen gaan via Mollie, met een betaallink.'
+          : 'Er is nog niets gekozen: je facturen gaan via Mollie zodra Mollie gekoppeld is, en anders per e-mail.'} Alleen de eigenaar of een beheerder kan dit wijzigen.
+    </p>}
+  </section>;
+}
+
 function InvoiceReminderSettingsCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
   const [settings, setSettings] = useState<InvoiceReminderSettings | null>(null);
   const [busy, setBusy] = useState(false);
@@ -355,7 +456,7 @@ function InvoiceReminderSettingsCard({ organizationId, canAdmin }: { organizatio
         <div className="billing-control-row">
           <div>
             <strong>Betaallink meesturen</strong>
-            <p className="settings-help">Voegt een Mollie-betaallink toe als deze organisatie Mollie gekoppeld heeft.</p>
+            <p className="settings-help">Voegt een Mollie-betaallink toe als deze organisatie Mollie gekoppeld heeft en via Mollie verstuurt (zie Facturen versturen). Per e-mail gaat er nooit een link mee.</p>
           </div>
           <label className="settings-toggle"><input type="checkbox" checked={settings.include_payment_link} onChange={e => update('include_payment_link', e.target.checked)} /> {settings.include_payment_link ? 'Aan' : 'Uit'}</label>
         </div>
@@ -2046,9 +2147,14 @@ export function Settings({
       setInvoiceMollie(status);
       setInvoiceMollieKey('');
       const account = status.profile?.name ? ` met het Mollie-profiel "${status.profile.name}"` : '';
-      const lines = [status.mode === 'live'
-        ? `Mollie gekoppeld${account}. Een factuur gaat nu met een betaallink naar je klant.`
-        : `Mollie gekoppeld${account}, in testmodus. Betalingen via de link zijn niet echt; koppel een live-key voordat je echte facturen verstuurt.`];
+      // Koos de organisatie per e-mail, dan verandert koppelen daar niets aan;
+      // eerder beloofde deze melding dan toch een betaallink.
+      const viaEmail = settings?.invoice_send_method === 'email';
+      const lines = [viaEmail
+        ? `Mollie gekoppeld${account}${status.mode === 'live' ? '' : ', in testmodus'}. Je verstuurt facturen nog per e-mail, zonder betaallink; kies hierboven "Via Mollie" om er een mee te sturen.`
+        : status.mode === 'live'
+          ? `Mollie gekoppeld${account}. Een factuur gaat nu met een betaallink naar je klant.`
+          : `Mollie gekoppeld${account}, in testmodus. Betalingen via de link zijn niet echt; koppel een live-key voordat je echte facturen verstuurt.`];
       // Wie van account wisselt terwijl er nog links openstaan: die betalingen
       // komen bij het vorige account binnen, en ResoFly kan ze niet meer nakijken.
       if (openPaymentsPreviousAccount) {
@@ -2745,11 +2851,20 @@ export function Settings({
     </div>}
 
     {activeTab === 'betalen' && <div className="settings-tab-panel">
+    {activeOrganization && <InvoiceSendMethodCard
+      organizationId={activeOrganization.id}
+      stored={settings?.invoice_send_method ?? null}
+      mollieConnected={invoiceMollie ? invoiceMollie.status === 'connected' : null}
+      canAdmin={canAdminOrganization}
+      canConnectMollie={canConnectMollie}
+      iban={settings?.iban ?? null}
+      onSaved={onChanged}
+    />}
     <section className="settings-card organization-card billing-card">
       <div className="settings-card-head">
         <div>
           <h3>Online betalen (Mollie)</h3>
-          <p className="settings-help">Koppel het eigen Mollie-account van deze organisatie. Daarna gaat er bij een factuur een betaallink mee, zodat je klant direct online kan betalen. Het geld komt binnen op dat Mollie-account. Mollie is niet verplicht: zonder koppeling verstuur je gewoon de factuur-PDF.</p>
+          <p className="settings-help">Koppel het eigen Mollie-account van deze organisatie. Verstuur je via Mollie, dan gaat er bij een factuur een betaallink mee, zodat je klant direct online kan betalen. Het geld komt binnen op dat Mollie-account. Mollie is niet verplicht: per e-mail verstuur je gewoon de factuur-PDF.</p>
         </div>
       </div>
 

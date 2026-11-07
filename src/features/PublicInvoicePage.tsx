@@ -181,8 +181,12 @@ export function PublicInvoicePage({ token }: { token: string }) {
           <Button variant="primary" disabled={isPaid || !checkoutHref} onClick={() => checkoutHref && window.open(checkoutHref, '_blank', 'noopener,noreferrer')}>{isPaid ? 'Betaald' : 'Betaal nu'}</Button>
         </div>
       </div>
-      {/* Zonder bedrijfsnaam stond hier "Neem contact op met ." */}
-      {!checkoutHref && !isPaid && <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName || 'de afzender van deze factuur'}.</p>}
+      {/* Zonder bedrijfsnaam stond hier "Neem contact op met ." Zonder link (de
+          leverancier verstuurt per e-mail, of de link is verlopen) zei hij alleen
+          "neem contact op", terwijl overmaken gewoon kan: dan staat hier hoe. */}
+      {!checkoutHref && !isPaid && (payload?.company?.iban
+        ? <p className="muted">Maak het bedrag over naar {payload.company.iban} t.n.v. {payload.company.company_name || companyName || 'de afzender'}, onder vermelding van factuurnummer {invoice.number}.</p>
+        : <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName || 'de afzender van deze factuur'}.</p>)}
     </section>
 
     <section className="public-quote-card">

@@ -1457,6 +1457,54 @@ async function scenarioMollie() {
     verwacht(samenvatting.includes(`••••${goed.slice(-4)}`) && samenvatting.includes('UI Studio Mollie'), `samenvatting: ${samenvatting}`);
   });
 
+  // Facturen versturen: per e-mail of via Mollie (7 november 2026). Tot dan was
+  // de koppeling zelf de keuze; nu kiest de eigenaar of beheerder het hier, en
+  // blijft Mollie gekoppeld. Of de functies zich eraan houden, toetst run.mjs
+  // (scenario verzendwijze); hier wat er in beeld staat en wat er opgeslagen wordt.
+  const verzendKaart = (page) => inhoud(page).locator('section.send-method-card');
+  const keuze = (page, naam) => verzendKaart(page).getByRole('radio', { name: new RegExp(`^${naam}`) });
+
+  await uiStap('Facturen versturen: nog niets gekozen en Mollie gekoppeld, dus "Via Mollie" staat aan', async () => {
+    gelijk(sqlRij(`select invoice_send_method from public.company_settings where organization_id = ${q(w.orgId)}`)?.invoice_send_method ?? null, null, 'keuze in de database');
+    await wachtTot(async () => (await keuze(eigenaar.page, 'Via Mollie').getAttribute('aria-checked')) === 'true', { melding: '"Via Mollie" staat niet aan' });
+    gelijk(await keuze(eigenaar.page, 'Per e-mail').getAttribute('aria-checked'), 'false', '"Per e-mail"');
+  });
+
+  await uiStap('de eigenaar kiest "Per e-mail": opgeslagen, Mollie blijft gekoppeld, en na herladen staat het er nog', async () => {
+    await keuze(eigenaar.page, 'Per e-mail').click();
+    await wachtTot(async () => /per e-mail, zonder betaallink van Mollie/.test(await verzendKaart(eigenaar.page).locator('.success').innerText().catch(() => '')), { melding: 'geen bevestiging' });
+    gelijk(sqlRij(`select invoice_send_method from public.company_settings where organization_id = ${q(w.orgId)}`)?.invoice_send_method, 'email', 'keuze in de database');
+    gelijk(sqlRij(`select status from public.organization_invoice_mollie_settings where organization_id = ${q(w.orgId)}`)?.status, 'connected', 'Mollie-koppeling');
+    verwacht(/Mollie blijft gekoppeld/.test(await verzendKaart(eigenaar.page).innerText()), 'geen uitleg dat Mollie gekoppeld blijft');
+    // Na het opslaan ververst de app; eerst dat afwachten, anders breekt het
+    // herladen hem af ("Failed to fetch" in de console).
+    await rustig(eigenaar);
+    await eigenaar.page.reload({ waitUntil: 'domcontentloaded' });
+    await eigenaar.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });
+    await naarOnlineBetalen(eigenaar);
+    await wachtTot(async () => (await keuze(eigenaar.page, 'Per e-mail').getAttribute('aria-checked')) === 'true', { melding: '"Per e-mail" staat niet aan na herladen' });
+    gelijk(await keuze(eigenaar.page, 'Via Mollie').getAttribute('aria-checked'), 'false', '"Via Mollie" na herladen');
+  });
+
+  await uiStap('een lid ziet de keuze, maar kan hem niet wijzigen', async () => {
+    const lid = await medewerker();
+    // Het werkblad van het lid kan uit een eerder scenario komen: eerst verversen.
+    await lid.page.reload({ waitUntil: 'domcontentloaded' });
+    await lid.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });
+    await naarOnlineBetalen(lid);
+    const kaart = verzendKaart(lid.page);
+    await wachtTot(async () => /Je facturen gaan per e-mail/.test(await kaart.innerText().catch(() => '')), { melding: 'het lid ziet de keuze niet' });
+    verwacht(/Alleen de eigenaar of een beheerder kan dit wijzigen/.test(await kaart.innerText()), 'geen uitleg voor een lid');
+    gelijk(await kaart.getByRole('radio').count(), 0, 'keuzeknoppen voor een lid');
+  });
+
+  await uiStap('de eigenaar kiest weer "Via Mollie"', async () => {
+    await keuze(eigenaar.page, 'Via Mollie').click();
+    await wachtTot(async () => /via Mollie, met een betaallink/.test(await verzendKaart(eigenaar.page).locator('.success').innerText().catch(() => '')), { melding: 'geen bevestiging' });
+    gelijk(sqlRij(`select invoice_send_method from public.company_settings where organization_id = ${q(w.orgId)}`)?.invoice_send_method, 'mollie', 'keuze in de database');
+    await rustig(eigenaar);
+  });
+
   await uiStap('de beheerder ziet de koppeling met het profiel, vervangt de key niet, en ontkoppelen vraagt eerst', async () => {
     await beheer.page.reload({ waitUntil: 'domcontentloaded' });
     await beheer.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });

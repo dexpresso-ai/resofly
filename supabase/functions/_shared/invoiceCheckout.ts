@@ -16,6 +16,7 @@
 import { loadInvoiceMollieKey } from './invoiceMollieKey.ts';
 import { invoiceMollieWebhookBase, invoiceMollieWebhookUrl } from './mollieWebhookUrl.ts';
 import { mollieCheckoutDecision, readMollieSalesInvoice, type MolliePaymentSource } from './mollieSalesInvoice.ts';
+import { loadMollieInvoicingAllowed } from './invoiceSendMethod.ts';
 
 // deno-lint-ignore no-explicit-any
 type SupabaseAdmin = any;
@@ -61,6 +62,17 @@ export async function createPortalInvoiceCheckout(
   },
 ): Promise<PortalCheckoutResult> {
   const { organizationId, invoiceId, actorUserId, redirectUrl, actorContact } = input;
+
+  // Verstuurt de leverancier zijn facturen per e-mail (Instellingen → Online
+  // betalen), dan betaalt de klant per overboeking: geen betaallink van Mollie,
+  // ook niet hier. Zelfde regel als invoice-workflow. Kan de keuze niet worden
+  // gelezen, dan ook niet: liever geen link dan een die niet gewild was.
+  const mollieAllowed = await loadMollieInvoicingAllowed(supabaseAdmin, organizationId).catch((error) => {
+    console.warn('client-portal: verzendwijze lezen mislukte; geen betaallink', describeError(error));
+    return null;
+  });
+  if (mollieAllowed === null) return { ok: false, status: 503, error: 'Online betalen lukt nu even niet. Probeer het over een paar minuten opnieuw.' };
+  if (!mollieAllowed) return { ok: false, status: 409, error: 'Online betalen is voor deze factuur niet beschikbaar. Gebruik de overschrijvingsgegevens.' };
 
   const { data: invoice, error: invoiceError } = await supabaseAdmin
     .from('invoices')
@@ -411,12 +423,17 @@ async function loadLatestOpenPayment(
 }
 
 /**
- * Heeft deze organisatie een eigen Mollie-account gekoppeld zodat online betalen
- * mogelijk is? Gebruikt door de portaal-payload om vooraf te tonen of "Betaal nu"
- * of alleen de overschrijvingsgegevens verschijnen. In mock-modus (lokale dev)
- * is online betalen altijd "beschikbaar".
+ * Kan de klant deze facturen online betalen? Alleen als de organisatie een eigen
+ * Mollie-account gekoppeld heeft én niet "per e-mail" koos (Instellingen →
+ * Online betalen). Gebruikt door de portaal-payload om vooraf te tonen of "Betaal
+ * nu" of alleen de overschrijvingsgegevens verschijnen. In mock-modus (lokale
+ * dev) is online betalen "beschikbaar", behalve per e-mail.
  */
 export async function orgHasInvoiceMollie(supabaseAdmin: SupabaseAdmin, organizationId: string): Promise<boolean> {
+  // Eerder telde alleen de koppeling: een organisatie die per e-mail factureert,
+  // bood in het portaal toch "Betaal nu" aan. Niet te lezen: geen knop.
+  const allowed = await loadMollieInvoicingAllowed(supabaseAdmin, organizationId).catch(() => false);
+  if (!allowed) return false;
   if (ALLOW_MOCK) return true;
   const { data, error } = await supabaseAdmin
     .from('organization_invoice_mollie_settings')

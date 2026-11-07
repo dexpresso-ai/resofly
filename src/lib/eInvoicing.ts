@@ -1,4 +1,4 @@
-import type { Client, EInvoiceChannel, InvoiceEmailDelivery } from '../types';
+import type { Client, EInvoiceChannel, InvoiceEmailDelivery, InvoiceSendMethod } from '../types';
 
 /**
  * E-facturatie per klant, zoals het scherm hem nodig heeft.
@@ -12,15 +12,35 @@ import type { Client, EInvoiceChannel, InvoiceEmailDelivery } from '../types';
 
 type EInvoiceClient = Pick<Client, 'email'> & { e_invoicing_enabled?: boolean | null; e_invoice_email?: string | null; e_invoice_channel?: string | null };
 
+/**
+ * Mag Mollie meedoen (betaallink, e-factuur via Mollie)? Alleen als de
+ * organisatie in Instellingen → Online betalen "per e-mail" koos niet. Nog
+ * niets gekozen = zoals het altijd was: dan beslist de Mollie-koppeling.
+ * Zelfde regel als de server (mollieInvoicingAllowed in _shared/eInvoicing.ts).
+ */
+export function mollieInvoicingAllowed(stored: unknown): boolean {
+  return stored !== 'email';
+}
+
+/** Wat er nu geldt: de keuze, of (nog niets gekozen) via Mollie zodra Mollie gekoppeld is. */
+export function effectiveInvoiceSendMethod(stored: unknown, mollieConnected: boolean): InvoiceSendMethod {
+  if (stored === 'email' || stored === 'mollie') return stored;
+  return mollieConnected ? 'mollie' : 'email';
+}
+
 /** Gaan facturen aan deze klant als e-factuur? */
 export function clientWantsEInvoice(client: EInvoiceClient | null | undefined): boolean {
   return client?.e_invoicing_enabled === true;
 }
 
-/** Langs welke weg de e-factuur gaat, of null zonder e-facturatie. Onbekend = per mail, net als op de server. */
-export function clientEInvoiceChannel(client: EInvoiceClient | null | undefined): EInvoiceChannel | null {
+/**
+ * Langs welke weg de e-factuur gaat, of null zonder e-facturatie. Onbekend = per
+ * mail, net als op de server. Verstuurt de organisatie per e-mail
+ * (mollieAllowed false), dan gaat ook een klant op "via Mollie" per mail.
+ */
+export function clientEInvoiceChannel(client: EInvoiceClient | null | undefined, mollieAllowed = true): EInvoiceChannel | null {
   if (!clientWantsEInvoice(client)) return null;
-  return client?.e_invoice_channel === 'mollie' ? 'mollie' : 'email';
+  return mollieAllowed && client?.e_invoice_channel === 'mollie' ? 'mollie' : 'email';
 }
 
 /** Het adres waar een factuur heen gaat: bij e-facturatie het e-factuuradres, anders het gewone. */
