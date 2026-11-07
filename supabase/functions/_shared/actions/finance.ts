@@ -456,7 +456,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Stuurt de klant handmatig de eerstvolgende betalingsherinnering voor ÉÉN gekozen te late factuur, met de factuur-PDF en (als Mollie gekoppeld is) een betaallink. ' +
+      'Stuurt de klant handmatig de eerstvolgende betalingsherinnering voor ÉÉN gekozen te late factuur, met de factuur-PDF en (als Mollie gekoppeld is en de organisatie niet "per e-mail" verstuurt) een betaallink. ' +
       'Dit is iets anders dan `propose_send_reminders`: dat doet de hele batch die vandaag volgens de instellingen aan de beurt is. Hier kies je zelf de factuur, ook als de cron hem nog niet zou pakken. ' +
       'Zonder `level` gaat hij naar het volgende niveau (reminder_level + 1, hoogstens 3). Niveau 3 is de laatste aanmaning vóór de formele WIK-brief (`invoice.propose_dunning`). Kan niet bij een betaalde, geannuleerde of afgeboekte factuur.',
     keywords: ['herinnering', 'rappel', 'aanmanen', 'betalingsherinnering', 'te laat', 'openstaand', 'niveau', 'nabellen'],

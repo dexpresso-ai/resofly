@@ -291,6 +291,13 @@ export interface ContractVersion {
 
 export type EInvoiceChannel = 'email' | 'mollie';
 
+/**
+ * Hoe de organisatie haar facturen verstuurt (Instellingen → Online betalen):
+ * 'email' = ResoFly mailt ze, zonder Mollie; 'mollie' = met een betaallink van
+ * Mollie, en de e-factuur via Mollie bij een klant die daarop staat.
+ */
+export type InvoiceSendMethod = 'email' | 'mollie';
+
 export interface Client extends OrgScopedRow {
   name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; client_kind: ClientKind; tags: string[]; follow_up: string | null; value_eur: number; vat_number: string | null; kvk_number: string | null; address_line1: string | null; address_line2: string | null; postal_code: string | null; city: string | null; country: string | null;
   /** Facturen aan deze klant gaan als e-factuur (UBL met de PDF erin). Ontbreekt op rijen van vóór de migratie. */
@@ -3479,6 +3486,11 @@ export interface CompanySettings extends OrgScopedRow {
    *  Optioneel: wordt los opgeslagen (Instellingen → Agenda), niet via het
    *  formulier met bedrijfsgegevens, en ontbreekt vóór migratie 20261014000000. */
   jitsi_base_url?: string | null;
+  /** Hoe facturen de deur uit gaan; null = nog niet gekozen (via Mollie zodra
+   *  Mollie gekoppeld is). Lezen via mollieInvoicingAllowed in lib/eInvoicing.ts.
+   *  Wordt los opgeslagen (Instellingen → Online betalen), niet via het
+   *  formulier met bedrijfsgegevens, en ontbreekt vóór migratie 20261107100000. */
+  invoice_send_method?: InvoiceSendMethod | null;
   created_at: string;
   updated_at: string;
 }

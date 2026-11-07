@@ -1957,6 +1957,18 @@ body::before{
 .refund-method button.is-active { border-color:rgba(var(--accent-rgb),.45); background:rgba(var(--accent-rgb),.09); }
 .refund-method button.is-active strong { color:var(--accent-ink); }
 .refund-method button:disabled { opacity:.6; cursor:not-allowed; }
+/* Facturen versturen (Instellingen → Online betalen): per e-mail of via Mollie.
+   Zelfde knoppen als bij terugbetalen; de teksten zijn langer, dus op een
+   telefoon onder elkaar in plaats van twee smalle kolommen. */
+.send-method { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); gap:10px; }
+.send-method button { display:grid; gap:4px; align-content:start; min-width:0; text-align:left; padding:12px 14px; border:1px solid var(--border); border-radius:13px; background:rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k))); color:var(--muted2); font:inherit; cursor:pointer; transition:border-color .16s ease,background .16s ease; }
+.send-method button strong { color:var(--text); font-size:14px; font-weight:700; }
+.send-method button small { color:var(--muted); font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
+.send-method button.is-active { border-color:rgba(var(--accent-rgb),.45); background:rgba(var(--accent-rgb),.09); }
+.send-method button.is-active strong { color:var(--accent-ink); }
+.send-method button:disabled { opacity:.6; cursor:not-allowed; }
+.send-method button:focus-visible { outline:2px solid rgba(var(--accent-rgb),.6); outline-offset:2px; }
+.send-method-card .settings-warning { margin-top:12px; }
 .refund-summary > div { display:grid; gap:3px; padding:10px 12px; border:1px solid var(--border); border-radius:14px; background:rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k))); }
 .refund-summary span { color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
 .refund-summary strong { color:var(--text); font-size:15px; font-weight:700; }

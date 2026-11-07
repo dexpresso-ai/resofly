@@ -12,6 +12,7 @@ import { encryptionKeyConfigured, encryptSecret, mollieKeySuffix, readMollieProf
 import { loadInvoiceMollieKey, type InvoiceMollieKey } from '../_shared/invoiceMollieKey.ts';
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
 import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
+import { loadMollieInvoicingAllowed, SEND_METHOD_EMAIL_NO_PAYMENT_LINK } from '../_shared/invoiceSendMethod.ts';
 import { splitRefundOverVatGroups } from '../_shared/creditNoteSplit.ts';
 import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
 import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
@@ -299,12 +300,16 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     throw new WorkflowHttpError(`Factuur ${invoice.number} heeft nog geen regels. Zet erin wat je factureert voordat je hem verstuurt.`, 422);
   }
 
-  const [client, project, quote, company, content] = await Promise.all([
+  const [client, project, quote, company, content, mollieAllowed] = await Promise.all([
     loadClient(organizationId, invoice.client_id),
     invoice.project_id ? loadProject(organizationId, invoice.project_id) : Promise.resolve(null),
     invoice.quote_id ? loadQuote(organizationId, invoice.quote_id) : Promise.resolve(null),
     loadCompanySettings(organizationId),
     loadEmailTemplateContent(organizationId, 'invoice.sent'),
+    // Per e-mail of via Mollie (Instellingen → Online betalen). Hier, en niet in
+    // de browser: een oud tabblad of een andere route zou anders toch een
+    // betaallink of een Mollie-factuur kunnen vragen.
+    loadMollieInvoicingAllowed(supabaseAdmin, organizationId),
   ]);
 
   // KOR: een factuur rekent dan geen btw (de database weigert het uitgeven;
@@ -317,8 +322,10 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
 
   // E-facturatie staat per klant aan of uit. Aan: de e-factuur (UBL met de PDF
   // erin) is verplicht en gaat naar het e-factuuradres van de klant. Uit: de
-  // klant krijgt alleen de PDF, zonder XML-bijlage.
-  const deliveryChannel = invoiceDeliveryChannel(client);
+  // klant krijgt alleen de PDF, zonder XML-bijlage. Verstuurt de organisatie
+  // per e-mail, dan gaat een klant op "via Mollie" ook per mail: als e-factuur,
+  // zonder Mollie. Eerder ging zo'n factuur altijd via Mollie.
+  const deliveryChannel = invoiceDeliveryChannel(client, { mollieAllowed });
   const eInvoicing = deliveryChannel === 'e_invoice_email';
   const recipientEmail = defaultInvoiceRecipient(client, body.recipientEmail);
   const recipientName = String(body.recipientName || client.contact_name || client.name || '').trim();
@@ -331,6 +338,19 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   // PDF-kopie en int de betaling. ResoFly stuurt dan zelf geen mail.
   if (deliveryChannel === 'e_invoice_mollie') {
     return await sendInvoiceViaMollie({ userId, organizationId, invoice, client, project, quote, company, content, recipientEmail, recipientName, subject: typeof body.subject === 'string' ? body.subject : '' });
+  }
+
+  // Al via Mollie uitgegeven: niet nog eens per mail. De klant heeft hem dan al
+  // van Mollie, met Mollies nummer (en bij e-facturatie over Peppol); een tweede,
+  // met het ResoFly-nummer, boekt zijn administratie dubbel. Eerder hield alleen
+  // het Mollie-kanaal dit tegen. Met "per e-mail" in Instellingen (of de klant op
+  // "per e-mail") ging zo'n factuur er via Gerrie of de API langs.
+  const issuedAtMollie = activeMollieDelivery(await loadMollieDeliveries(organizationId, invoice.id));
+  if (issuedAtMollie?.status === 'queued') {
+    throw new WorkflowHttpError('Deze factuur wordt al via Mollie verstuurd, of een eerdere poging bleef halverwege steken. Klik bij de factuur op "Ververs bij Mollie" om de stand op te halen.', 409);
+  }
+  if (issuedAtMollie) {
+    throw new WorkflowHttpError(`Deze factuur is al via Mollie uitgegeven${issuedAtMollie.external_invoice_number ? ` als ${issuedAtMollie.external_invoice_number}` : ''}. Per e-mail opnieuw versturen geeft je klant een tweede factuur met een ander nummer. Download zo nodig de PDF van Mollie bij de factuur.`, 409);
   }
 
   // Kan de e-factuur gemaakt worden? Dat staat vast vóór er een betaallink,
@@ -354,7 +374,9 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   // Payment link is OPT-IN per send, and only possible when this organization has
   // connected its OWN Mollie account. There is deliberately no shared-key fallback:
   // that would route the client's payment into the platform account.
-  const includePaymentLink = body.includePaymentLink === true;
+  // Per e-mail: nooit een betaallink, ook niet als de browser erom vraagt. Tot
+  // de keuze er was, ging er met een gekoppeld Mollie-account altijd een mee.
+  const includePaymentLink = mollieAllowed && body.includePaymentLink === true;
   let paymentUrl: string | null = null;
   let paymentLinkError: string | null = null;
   if (includePaymentLink) {
@@ -469,6 +491,8 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   if (ublAttachment) await recordEInvoiceSent({ organizationId, invoiceId, userId, deliveryId: prepared.deliveryId, recipientEmail, ubl: ublAttachment });
   return {
     delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, recipientEmail, deliveryChannel,
+    // false: de organisatie verstuurt per e-mail, er ging bewust geen betaallink mee.
+    mollieAllowed,
     paymentLinkIncluded: Boolean(paymentUrl), paymentLinkError,
     attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key },
     // Zonder e-facturatie gaat er bewust geen UBL mee; dat is geen gebrek.
@@ -1228,6 +1252,11 @@ async function createDunningLetterPdfAttachment(input: {
 
 async function createInvoicePaymentCheckout(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>, options: { allowDraft?: boolean } = {}) {
   if (!INVOICE_PUBLIC_BASE_URL) throw new WorkflowHttpError('INVOICE_PUBLIC_BASE_URL of APP_PUBLIC_URL ontbreekt.', 500);
+  // Per e-mail: geen betaallink van Mollie, langs welke weg ook (de actie zelf,
+  // het versturen, een herinnering of een aanmaning). Ook niet de link van een
+  // factuur die eerder via Mollie ging: die blijft in de mail van Mollie staan,
+  // en ResoFly blijft hem nakijken (statusronde, webhook).
+  if (!(await loadMollieInvoicingAllowed(supabaseAdmin, organizationId))) throw new WorkflowHttpError(SEND_METHOD_EMAIL_NO_PAYMENT_LINK, 409);
   const invoice = await loadInvoice(organizationId, invoiceId);
   if (['paid','cancelled','void','written_off','refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen betaallink worden aangemaakt.', 409);
   // Een losse betaallink is er voor een uitgegeven factuur; alleen het versturen
@@ -2521,8 +2550,19 @@ async function loadMollieKeyForWebhook(organizationId: string): Promise<{ key: I
 
 const DRAFT_REMINDER_MESSAGE = 'Deze factuur is nog een concept en is niet verstuurd: daar hoort geen herinnering bij.';
 
-/** Kan deze organisatie een betaallink maken (eigen Mollie gekoppeld, of de testmodus)? */
+/**
+ * Kan en mag deze organisatie een betaallink maken? Eigen Mollie gekoppeld (of
+ * de testmodus), en in Instellingen niet "per e-mail" gekozen. Herinneringen en
+ * aanmaningen vragen dit eerst: per e-mail gaan ze zonder link, net als de factuur.
+ */
 async function paymentLinkPossible(organizationId: string): Promise<boolean> {
+  // Niet te lezen: dan zonder link. De link is bijzaak; een herinnering zonder
+  // link is beter dan een link die de organisatie misschien niet wilde.
+  const allowed = await loadMollieInvoicingAllowed(supabaseAdmin, organizationId).catch((error) => {
+    console.warn('Verzendwijze lezen mislukte; zonder betaallink', describeError(error));
+    return false;
+  });
+  if (!allowed) return false;
   if (INVOICE_ALLOW_MOCK) return true;
   return Boolean(await resolveOrganizationMollieKey(organizationId));
 }
@@ -3074,14 +3114,15 @@ async function sendInvoiceViaMollie(input: MollieSendInput) {
     throw new WorkflowHttpError(`Deze factuur is al via Mollie uitgegeven${active.external_invoice_number ? ` als ${active.external_invoice_number}` : ''}. Mollie verstuurt hem niet nog eens; download zo nodig de PDF bij de factuur.`, 409);
   }
   if (invoice.status !== 'draft') {
-    throw new WorkflowHttpError('Deze factuur is al eerder verstuurd. Via Mollie krijgt de klant een nieuwe factuur met een eigen nummer — dat zou dubbel zijn. Verstuur hem opnieuw per e-mail (zet e-facturatie bij de klant daarvoor op "per e-mail"), of maak een nieuwe factuur.', 409);
+    throw new WorkflowHttpError('Deze factuur is al eerder verstuurd. Via Mollie krijgt de klant een nieuwe factuur met een eigen nummer — dat zou dubbel zijn. Verstuur hem opnieuw per e-mail (zet e-facturatie bij de klant daarvoor op "per e-mail", of kies in Instellingen → Online betalen voor "Per e-mail"), of maak een nieuwe factuur.', 409);
   }
   const openPayment = await loadLatestOpenPayment(organizationId, invoice.id);
   if (openPayment && ['pending', 'authorized'].includes(openPayment.status)) {
     throw new WorkflowHttpError('Voor deze factuur loopt al een betaling. Wacht tot die is afgerond voordat je hem via Mollie verstuurt.', 409);
   }
   const orgKey = await resolveOrganizationMollieKey(organizationId);
-  if (!orgKey) throw new WorkflowHttpError('Koppel eerst je eigen Mollie-account (Instellingen → Facturatie) om e-facturen via Mollie te versturen, of kies bij deze klant "per e-mail".', 422);
+  // Het tabblad heet Online betalen; de melding noemde eerder "Facturatie".
+  if (!orgKey) throw new WorkflowHttpError('Koppel eerst je eigen Mollie-account (Instellingen → Online betalen) om e-facturen via Mollie te versturen. Of verstuur zonder Mollie: kies daar voor "Per e-mail", of zet bij deze klant de e-factuur op "per e-mail".', 422);
 
   const totals = calculateTotals(invoice.lines);
   if (totals.totalCents <= 0) throw new WorkflowHttpError('Een e-factuur via Mollie moet een bedrag hoger dan € 0 hebben.', 422);

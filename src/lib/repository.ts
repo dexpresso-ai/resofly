@@ -34,6 +34,7 @@ import type {
   InvoiceWorkflowEvent,
   InvoiceMollieSettingsStatus,
   InvoiceReminderSettings,
+  InvoiceSendMethod,
   OrganizationPortalSettings,
   DunningNotice,
   SendingDomain,
@@ -1588,6 +1589,32 @@ export async function saveJitsiServer(organizationId: UUID, jitsiBaseUrl: string
   const { error: insertError } = await supabase
     .from('company_settings')
     .insert({ organization_id: organizationId, created_by: createdBy, jitsi_base_url: jitsiBaseUrl });
+  if (insertError) throw fail(insertError);
+}
+
+/**
+ * Slaat alleen de verzendwijze van facturen op (Instellingen → Online betalen):
+ * per e-mail of via Mollie. Los van upsertCompanySettings, om dezelfde reden als
+ * saveJitsiServer: dat formulier kent dit veld niet, en een volledige upsert van
+ * hieruit kon de bedrijfsgegevens met een verouderde kopie overschrijven.
+ * Alleen owners/admins (policy op company_settings); invoice-workflow, het
+ * klantportaal en Gerrie lezen de keuze zelf.
+ */
+export async function saveInvoiceSendMethod(organizationId: UUID, method: InvoiceSendMethod): Promise<void> {
+  const fail = (error: { code?: string; message?: string }) => isMissingColumn(error, 'invoice_send_method')
+    ? new NotMigratedError('De keuze tussen per e-mail en via Mollie staat in deze omgeving nog niet aan: de database-update moet nog draaien.')
+    : new Error(error.message || 'Opslaan mislukt.');
+  const { data, error } = await supabase
+    .from('company_settings')
+    .update({ invoice_send_method: method })
+    .eq('organization_id', organizationId)
+    .select('id');
+  if (error) throw fail(error);
+  if (data && data.length > 0) return;
+  const createdBy = await currentUserId();
+  const { error: insertError } = await supabase
+    .from('company_settings')
+    .insert({ organization_id: organizationId, created_by: createdBy, invoice_send_method: method });
   if (insertError) throw fail(insertError);
 }
 
@@ -4125,6 +4152,8 @@ export type InvoiceSendResult = {
   recipientEmail?: string;
   /** 'e_invoice_email' = als e-factuur (UBL met de PDF erin) verstuurd; 'e_invoice_mollie' = via Mollie over Peppol. */
   deliveryChannel?: 'email' | 'e_invoice_email' | 'e_invoice_mollie';
+  /** false: de organisatie verstuurt per e-mail (Instellingen → Online betalen); er ging bewust geen betaallink mee. */
+  mollieAllowed?: boolean;
   paymentLinkIncluded?: boolean;
   paymentLinkError?: string | null;
   ubl?: { attached: boolean; fileName?: string; reason?: string | null; warnings?: string[]; pdfEmbedded?: boolean };
@@ -4179,7 +4208,10 @@ export async function sendInvoiceReminderEmail(
  * Voor de knop in het scherm, de reeks van Gerrie en de handeling
  * `invoice.send_reminder`: alle drie dezelfde regel.
  */
-export async function reminderPaymentLinkWanted(organizationId: UUID): Promise<boolean> {
+export async function reminderPaymentLinkWanted(organizationId: UUID, sendMethod?: InvoiceSendMethod | null): Promise<boolean> {
+  // Per e-mail (Instellingen → Online betalen): nooit een link, ook niet met
+  // "Betaallink meesturen" aan. De server houdt hem ook tegen.
+  if (sendMethod === 'email') return false;
   try {
     const [mollie, settings] = await Promise.all([
       loadInvoiceMollieStatus(organizationId),

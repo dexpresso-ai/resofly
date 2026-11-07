@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, latestEInvoiceDelivery, mollieCollecting, mollieNeedsSync, molliePartialNote, mollieStatusLabel, peppolStatusLabel } from './eInvoicing.ts';
+import { clientEInvoiceChannel, clientWantsEInvoice, effectiveInvoiceSendMethod, eInvoiceReadiness, invoiceRecipientFor, latestEInvoiceDelivery, mollieCollecting, mollieInvoicingAllowed, mollieNeedsSync, molliePartialNote, mollieStatusLabel, peppolStatusLabel } from './eInvoicing.ts';
+import { effectiveInvoiceSendMethod as serverEffectiveSendMethod, mollieInvoicingAllowed as serverMollieAllowed } from '../../supabase/functions/_shared/eInvoicing.ts';
 import type { InvoiceEmailDelivery } from '../types.ts';
 
 /**
@@ -71,6 +72,28 @@ test('het kanaal: via Mollie alleen met e-facturatie aan en Mollie gekozen', () 
   assert.equal(clientEInvoiceChannel({ email: 'a@b.nl', e_invoicing_enabled: false, e_invoice_channel: 'mollie' }), null);
   // Een onbekende waarde gaat per mail, net als op de server.
   assert.equal(clientEInvoiceChannel({ email: 'a@b.nl', e_invoicing_enabled: true, e_invoice_channel: 'peppol' }), 'email');
+});
+
+test('verstuurt de organisatie per e-mail, dan gaat ook een klant op "via Mollie" per mail', () => {
+  const viaMollie = { email: 'a@b.nl', e_invoicing_enabled: true, e_invoice_channel: 'mollie' };
+  assert.equal(clientEInvoiceChannel(viaMollie, mollieInvoicingAllowed('email')), 'email');
+  assert.equal(clientEInvoiceChannel(viaMollie, mollieInvoicingAllowed('mollie')), 'mollie');
+  assert.equal(clientEInvoiceChannel(viaMollie, mollieInvoicingAllowed(null)), 'mollie');
+  // Zonder e-facturatie blijft het geen e-factuur.
+  assert.equal(clientEInvoiceChannel({ email: 'a@b.nl' }, false), null);
+});
+
+test('de verzendwijze in de browser zegt hetzelfde als op de server', () => {
+  for (const stored of ['email', 'mollie', null, undefined, 'peppol', '']) {
+    assert.equal(mollieInvoicingAllowed(stored), serverMollieAllowed(stored), `mag Mollie meedoen bij ${String(stored)}`);
+    for (const connected of [true, false]) {
+      assert.equal(effectiveInvoiceSendMethod(stored, connected), serverEffectiveSendMethod(stored, connected), `geldt bij ${String(stored)}, gekoppeld ${connected}`);
+    }
+  }
+  // Nog niets gekozen: Mollie gekoppeld is via Mollie, anders per e-mail.
+  assert.equal(effectiveInvoiceSendMethod(null, true), 'mollie');
+  assert.equal(effectiveInvoiceSendMethod(null, false), 'email');
+  assert.equal(effectiveInvoiceSendMethod('email', true), 'email');
 });
 
 test('via Mollie: alleen bedrijven in NL, BE of DE, met adres en Peppol-nummer', () => {

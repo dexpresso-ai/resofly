@@ -9,6 +9,10 @@
 //            PDF als kopie per mail. Mollie geeft de factuur uit en int hem.
 // Staat e-facturatie uit, dan krijgt de klant alleen de PDF.
 //
+// Boven de klant staat de keuze van de organisatie (Instellingen → Online
+// betalen, company_settings.invoice_send_method): per e-mail of via Mollie.
+// Per e-mail doet Mollie nergens mee, ook niet bij een klant op "via Mollie".
+//
 // Pure functies (geen Deno, geen database): invoice-workflow gebruikt ze bij
 // het versturen, eInvoicing.test.ts legt ze vast.
 // ============================================================
@@ -25,6 +29,35 @@ export type InvoiceDeliveryChannel = 'email' | 'e_invoice_email' | 'e_invoice_mo
 /** Hoe een klant met e-facturatie zijn e-facturen krijgt. */
 export type EInvoiceChannel = 'email' | 'mollie';
 
+/**
+ * Hoe de organisatie haar facturen verstuurt:
+ *   email  = ResoFly mailt ze, zonder Mollie (de klant betaalt per overboeking);
+ *   mollie = met een betaallink van Mollie, en de e-factuur via Mollie bij een
+ *            klant die daarop staat.
+ */
+export type InvoiceSendMethod = 'email' | 'mollie';
+
+/** De opgeslagen keuze, of null: nog niets gekozen (of een waarde die we niet kennen). */
+export function storedInvoiceSendMethod(value: unknown): InvoiceSendMethod | null {
+  return value === 'email' || value === 'mollie' ? value : null;
+}
+
+/**
+ * Mag Mollie meedoen: een betaallink maken, een e-factuur via Mollie uitgeven?
+ * Alleen "per e-mail" zet hem uit. Nog niets gekozen is zoals het altijd was:
+ * dan beslist de koppeling, en die controleert de aanroeper zelf (zonder
+ * sleutel geen link). Voor deze keuze kon je Mollie alleen ontwijken door hem
+ * te ontkoppelen; daarmee verdween ook het nakijken van lopende betalingen.
+ */
+export function mollieInvoicingAllowed(stored: unknown): boolean {
+  return storedInvoiceSendMethod(stored) !== 'email';
+}
+
+/** Wat er nu geldt: de keuze, of (nog niets gekozen) via Mollie zodra Mollie gekoppeld is. */
+export function effectiveInvoiceSendMethod(stored: unknown, mollieConnected: boolean): InvoiceSendMethod {
+  return storedInvoiceSendMethod(stored) ?? (mollieConnected ? 'mollie' : 'email');
+}
+
 export interface EInvoiceClientSettings {
   email?: string | null;
   e_invoicing_enabled?: boolean | null;
@@ -37,8 +70,14 @@ export function clientWantsEInvoice(client: EInvoiceClientSettings): boolean {
   return client.e_invoicing_enabled === true;
 }
 
-export function invoiceDeliveryChannel(client: EInvoiceClientSettings): InvoiceDeliveryChannel {
+/**
+ * Langs welke weg een factuur aan deze klant gaat. Verstuurt de organisatie
+ * per e-mail (mollieAllowed false), dan gaat een klant op "via Mollie" als
+ * e-factuur per mail: hij wil een e-factuur, alleen Mollie doet niet mee.
+ */
+export function invoiceDeliveryChannel(client: EInvoiceClientSettings, options: { mollieAllowed?: boolean } = {}): InvoiceDeliveryChannel {
   if (!clientWantsEInvoice(client)) return 'email';
+  if (options.mollieAllowed === false) return 'e_invoice_email';
   return client.e_invoice_channel === 'mollie' ? 'e_invoice_mollie' : 'e_invoice_email';
 }
 

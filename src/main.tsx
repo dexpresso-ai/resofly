@@ -140,7 +140,7 @@ import { inkSizeIssue } from './lib/ink';
 import { documentTypeLabels } from './features/Documents';
 import { ContentLibrary } from './features/ContentLibrary';
 import { clientFolderOptions } from './lib/folders';
-import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail } from './lib/eInvoicing';
+import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail, mollieInvoicingAllowed } from './lib/eInvoicing';
 import { Invoices, Quotes, type RefundInput } from './features/Finance';
 import { LedgerPage, PurchaseInvoicesPage, SuppliersPage, nextPurchaseNumber, purchaseTotals } from './features/Bookkeeping';
 import type { InvoiceFormSeed } from './features/Bookkeeping';
@@ -2655,9 +2655,12 @@ function App() {
     const client = data.clients.find(item => item.id === invoice.client_id);
     // Staat e-facturatie aan bij de klant, dan gaat de factuur als e-factuur (UBL
     // met de PDF erin) naar het e-factuuradres, of via Mollie over Peppol; de
-    // server dwingt dat af.
+    // server dwingt dat af. Verstuurt de organisatie per e-mail (Instellingen →
+    // Online betalen), dan doet Mollie niet mee: ook een klant op "via Mollie"
+    // krijgt hem dan per mail, en er gaat geen betaallink mee.
+    const mollieAllowed = mollieInvoicingAllowed(data.companySettings?.invoice_send_method);
     const eInvoice = clientWantsEInvoice(client);
-    const viaMollie = clientEInvoiceChannel(client) === 'mollie';
+    const viaMollie = clientEInvoiceChannel(client, mollieAllowed) === 'mollie';
     const recipientEmail = prompt(
       viaMollie
         ? 'Deze factuur gaat via Mollie: Mollie geeft hem uit met een eigen nummer, verstuurt hem over Peppol en mailt een PDF-kopie. Naar welk adres gaat die kopie?'
@@ -2673,14 +2676,15 @@ function App() {
     // versturen zelf kunnen samen enkele seconden duren.
     setSending(viaMollie ? 'E-factuur wordt via Mollie uitgegeven…' : eInvoice ? 'E-factuur wordt verstuurd…' : 'Factuur wordt verstuurd via Resend…');
 
-    // A Mollie payment link is included automatically whenever this organization
-    // has its own Mollie account connected and the invoice is still payable. No
-    // per-send prompt: connecting Mollie is the opt-in, disconnecting is the
-    // opt-out. Organizations without a Mollie key simply send the PDF only.
+    // Een betaallink van Mollie gaat vanzelf mee als de organisatie via Mollie
+    // verstuurt (Instellingen → Online betalen), een eigen Mollie-account
+    // gekoppeld heeft, en de factuur nog te betalen is. Geen vraag per factuur:
+    // de keuze in Instellingen is het. Eerder was de koppeling zelf de keuze, en
+    // kon je zonder Mollie te ontkoppelen geen factuur zonder link versturen.
     let includePaymentLink = false;
     const invoiceIsPayable = !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status);
     // Via Mollie int Mollie zelf; dan geen eigen betaallink ernaast.
-    if (invoiceIsPayable && !viaMollie) {
+    if (invoiceIsPayable && !viaMollie && mollieAllowed) {
       try {
         const mollie = await loadInvoiceMollieStatus(activeOrg.id);
         includePaymentLink = mollie.status === 'connected';
@@ -2698,7 +2702,10 @@ function App() {
       // Een e-factuur die niet gemaakt kón worden, komt hier niet: dan weigert de
       // server en staat de reden in de foutmelding hieronder.
       const notes: string[] = [];
-      if (includePaymentLink && result.paymentLinkError) {
+      if (includePaymentLink && result.mollieAllowed === false) {
+        // Hier stond nog "via Mollie" (een ander tabblad koos intussen per e-mail): de server volgt de instelling.
+        notes.push('er ging geen betaallink mee, want je verstuurt facturen per e-mail (Instellingen → Online betalen)');
+      } else if (includePaymentLink && result.paymentLinkError) {
         notes.push(`de Mollie-betaallink kon niet worden aangemaakt: ${result.paymentLinkError}`);
       }
       if (result.ubl?.attached && result.ubl.warnings && result.ubl.warnings.length > 0) {
@@ -2732,10 +2739,11 @@ function App() {
     if (!confirm(`Betalings${levelLabel} versturen voor factuur ${invoice.number} naar ${client.email}?`)) return;
 
     setSending('Herinnering wordt verstuurd via Resend…');
-    // Net als bij versturen: eerst kijken of Mollie gekoppeld is, en de keuze
-    // meegeven. Zonder die vlag vroeg de server ook zonder Mollie een betaallink;
-    // die liet een betaling op 'creating' achter, waarna crediteren niet meer kon.
-    const includePaymentLink = await reminderPaymentLinkWanted(activeOrg.id);
+    // Net als bij versturen: eerst kijken of Mollie gekoppeld is (en of de
+    // organisatie niet per e-mail verstuurt), en de keuze meegeven. Zonder die
+    // vlag vroeg de server ook zonder Mollie een betaallink; die liet een
+    // betaling op 'creating' achter, waarna crediteren niet meer kon.
+    const includePaymentLink = await reminderPaymentLinkWanted(activeOrg.id, data.companySettings?.invoice_send_method);
     setLoading(true); setError(null);
     try {
       const result = await sendInvoiceReminderEmail(activeOrg.id, invoice.id, { includePaymentLink });
@@ -3379,7 +3387,8 @@ function App() {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
       const invoice = data.invoices.find((i) => i.id === p.id);
       let includePaymentLink = false;
-      if (invoice && !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status)) {
+      // Zoals de knop: per e-mail (Instellingen → Online betalen) nooit een betaallink.
+      if (invoice && mollieInvoicingAllowed(data.companySettings?.invoice_send_method) && !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status)) {
         // Kort gecachet: bij een afvinklijst van twintig facturen is de
         // Mollie-koppeling niet twintig keer opnieuw op te halen.
         try { includePaymentLink = await mollieConnected(activeOrg.id); } catch { /* PDF-only als de status niet op te halen is */ }
@@ -3405,8 +3414,8 @@ function App() {
     onSendReminders: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
       // Eén keer voor de hele reeks, net als bij de knop: zonder gekoppelde
-      // Mollie geen betaallink vragen (zie reminderPaymentLinkWanted).
-      const includePaymentLink = await reminderPaymentLinkWanted(activeOrg.id);
+      // Mollie, of per e-mail, geen betaallink vragen (zie reminderPaymentLinkWanted).
+      const includePaymentLink = await reminderPaymentLinkWanted(activeOrg.id, data.companySettings?.invoice_send_method);
       let sent = 0;
       const failed: string[] = [];
       for (const inv of p.invoices) {
@@ -4256,7 +4265,13 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
   // E-facturatie: een e-factuuradres moet een e-mailadres zijn (de database weigert
   // anders), en wat er voor een geldige e-factuur ontbreekt zie je hier al.
   const eInvoiceEmailInvalid = edit.kind === 'client' && String(form.e_invoice_email ?? '').trim() !== '' && !isValidEmail(form.e_invoice_email);
-  const eInvoiceCheck = edit.kind === 'client' && form.e_invoicing_enabled ? eInvoiceReadiness({ ...form, channel: form.e_invoice_channel === 'mollie' ? 'mollie' : 'email' }) : null;
+  // Verstuurt de organisatie per e-mail (Instellingen → Online betalen), dan gaat
+  // ook een klant op "via Mollie" per mail. De controle hieronder volgt wat er bij
+  // het versturen echt gebeurt, niet alleen wat er in de keuzelijst staat.
+  const mollieForInvoices = mollieInvoicingAllowed(data.companySettings?.invoice_send_method);
+  const clientChoosesMollie = form.e_invoice_channel === 'mollie';
+  const effectiveEInvoiceChannel = clientChoosesMollie && mollieForInvoices ? 'mollie' : 'email';
+  const eInvoiceCheck = edit.kind === 'client' && form.e_invoicing_enabled ? eInvoiceReadiness({ ...form, channel: effectiveEInvoiceChannel }) : null;
 
   const attachmentBlock = item ? <AttachmentList
     attachments={data.attachments}
@@ -4339,15 +4354,17 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
           <small>Facturen en creditfacturen aan deze klant gaan als e-factuur (UBL, Peppol BIS 3.0) met de PDF erin, zodat zijn boekhoudpakket ze inleest én de PDF toont. Uit: alleen de PDF.</small>
         </span>
       </label>
-      {form.e_invoicing_enabled && <Field label="Versturen via" hint={form.e_invoice_channel === 'mollie'
-        ? 'Mollie geeft de factuur uit met een eigen nummer (het ResoFly-nummer staat erop), verstuurt hem over Peppol en mailt een PDF-kopie; de klant betaalt via Mollie. Nodig: je eigen Mollie-account gekoppeld, met e-facturatie aan in het Mollie-dashboard. Alleen voor bedrijven in Nederland, België en Duitsland.'
-        : 'De e-factuur (UBL met de PDF erin) gaat als bijlage per mail mee, met de gewone PDF ernaast.'}>
+      {form.e_invoicing_enabled && <Field label="Versturen via" hint={clientChoosesMollie && !mollieForInvoices
+        ? 'Je verstuurt facturen per e-mail (Instellingen → Online betalen). Zolang dat zo is, gaat de e-factuur aan deze klant ook per mail: de UBL met de PDF erin. Kies je daar "Via Mollie", dan geeft Mollie hem uit en verstuurt hij hem over Peppol.'
+        : clientChoosesMollie
+          ? 'Mollie geeft de factuur uit met een eigen nummer (het ResoFly-nummer staat erop), verstuurt hem over Peppol en mailt een PDF-kopie; de klant betaalt via Mollie. Nodig: je eigen Mollie-account gekoppeld, met e-facturatie aan in het Mollie-dashboard. Alleen voor bedrijven in Nederland, België en Duitsland.'
+          : 'De e-factuur (UBL met de PDF erin) gaat als bijlage per mail mee, met de gewone PDF ernaast.'}>
         <Select value={form.e_invoice_channel === 'mollie' ? 'mollie' : 'email'} onChange={e=>set('e_invoice_channel', e.target.value)} disabled={disabled}>
           <option value="email">E-mail — UBL met de PDF erin</option>
           <option value="mollie">Mollie — via Peppol</option>
         </Select>
       </Field>}
-      {form.e_invoicing_enabled && <Field label="E-factuuradres" hint={form.e_invoice_channel === 'mollie'
+      {form.e_invoicing_enabled && <Field label="E-factuuradres" hint={effectiveEInvoiceChannel === 'mollie'
         ? 'Optioneel — hier stuurt Mollie de PDF-kopie heen. Leeg laten: het gewone e-mailadres.'
         : 'Optioneel — bijvoorbeeld het inkoopfacturenadres van het boekhoudpakket van de klant. Leeg laten: de e-factuur gaat naar het gewone e-mailadres.'}>
         <Input type="email" value={form.e_invoice_email} onChange={e=>set('e_invoice_email',e.target.value)} placeholder={String(form.email || '').trim() || 'facturen@bedrijf.nl'} disabled={disabled}/>
@@ -4357,7 +4374,7 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
         <span>Vul een geldig e-mailadres in, of laat het veld leeg om het gewone e-mailadres te gebruiken.</span>
       </div>}
       {eInvoiceCheck && !eInvoiceEmailInvalid && (eInvoiceCheck.missing.length > 0 || eInvoiceCheck.advice.length > 0) && <div className={`client-duplicate-notice ${eInvoiceCheck.missing.length > 0 ? 'block' : 'warning'} client-einvoice-notice`}>
-        <strong>{eInvoiceCheck.missing.length > 0 ? (form.e_invoice_channel === 'mollie' ? 'Voor een e-factuur via Mollie ontbreekt nog' : 'Voor een e-factuur ontbreekt nog') : 'De e-factuur kan weg, maar niet via Peppol'}</strong>
+        <strong>{eInvoiceCheck.missing.length > 0 ? (effectiveEInvoiceChannel === 'mollie' ? 'Voor een e-factuur via Mollie ontbreekt nog' : 'Voor een e-factuur ontbreekt nog') : 'De e-factuur kan weg, maar niet via Peppol'}</strong>
         {eInvoiceCheck.missing.length > 0 && <span>Nog nodig: {eInvoiceCheck.missing.join(', ')}. Zonder deze gegevens gaat een factuur aan deze klant niet de deur uit.</span>}
         {eInvoiceCheck.advice.length > 0 && <span>Ontbreekt: {eInvoiceCheck.advice.join('; ')}.</span>}
       </div>}
