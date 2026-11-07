@@ -8,6 +8,8 @@ import {
   applyGalleryLayoutPreset, describeGalleryLayout, galleryLayoutIssues, normalizeGalleryLayout,
   type GalleryLayout, type GalleryPlayfulness,
 } from '../galleryLayout.ts';
+import { suppressionLockedMessage, suppressionRemovableByTeam } from '../marketingRules.ts';
+import { htmlToText } from '../resend.ts';
 
 /**
  * Handelingen rond MARKETING in de brede zin: e-mailcampagnes en follow-up-stromen,
@@ -213,7 +215,8 @@ async function buildAudience(ctx: ActionCtx, input: Record<string, unknown>): Pr
     if (found.length !== manualClientIds.length) {
       throw new ActionError(`${manualClientIds.length - found.length} van de opgegeven klanten bestaat niet in deze organisatie.`);
     }
-    manualNames = found.map((r) => String(r.name));
+    // Namen op de kaart alleen voor wie Klanten mag lezen; anders het aantal.
+    manualNames = ctx.canRead?.('clients') === false ? [] : found.map((r) => String(r.name));
   } else if (Array.isArray(input.manual_client_ids) && (input.manual_client_ids as unknown[]).length > 0) {
     throw new ActionError('Handmatig gekozen klanten horen bij mode "manual". Zet mode op "manual" of laat manual_client_ids weg.');
   }
@@ -396,6 +399,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     risk: 'high',
     description:
       'Stuurt de campagne als testmail naar één opgegeven adres, zonder tracking en zonder iemand uit de doelgroep aan te raken. De campagne wordt eerst opgeslagen zoals hij nu is. ' +
+      'Een testmail gaat alleen naar het eigen adres van de gebruiker of naar een actief teamlid van de organisatie; een ander adres weigert de server. ' +
       'Dit is de veilige manier om te zien hoe de mail eruitziet vóór hij naar het hele segment gaat.',
     keywords: ['testmail', 'proefmail', 'test versturen', 'voorbeeld', 'controleren'],
     input: {
@@ -676,8 +680,11 @@ export const MARKETING_ACTIONS: ActionDef[] = [
       const { data: existing } = await orgQuery(ctx, 'email_suppressions', 'email, reason').eq('email', address).maybeSingle();
       if (existing) throw new ActionError(`${address} staat al op de blokkeerlijst (reden: ${(existing as { reason: string }).reason}).`);
       // Wie het adres is maakt de kaart begrijpelijk: "blokkeren" zonder naam is
-      // een e-mailadres, mét naam is een klant.
-      const { data: client } = await orgQuery(ctx, 'clients', 'name').eq('email', address).maybeSingle();
+      // een e-mailadres, mét naam is een klant. Maar alleen voor wie Klanten mag
+      // lezen; anders werd dit een manier om bij een adres de klantnaam op te vragen.
+      const { data: client } = ctx.canRead?.('clients') === false
+        ? { data: null }
+        : await orgQuery(ctx, 'clients', 'name').eq('email', address).limit(1).maybeSingle();
       return {
         title: `E-mailadres blokkeren: ${address}`,
         sub: joinShort([client ? String((client as { name: string }).name) : null, 'krijgt geen campagnes en vervolgmails meer']),
@@ -694,8 +701,9 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Haalt een adres van de blokkeerlijst; het mag daarna weer marketingmail ontvangen. ' +
-      'LET OP: stond de reden op "unsubscribed", dan heeft die persoon zich ZELF afgemeld. Hem weer aanschrijven zonder dat hij daar opnieuw om vroeg is in strijd met de AVG. Doe dit alleen als de gebruiker uitdrukkelijk zegt dat de toestemming er weer is.',
+      'Haalt een handmatige blokkade of een bounce van de blokkeerlijst; het adres mag daarna weer marketingmail ontvangen. ' +
+      'Een afmelding van de persoon zelf ("unsubscribed") of een spamklacht ("complained") kan NIET worden opgeheven: die persoon wil geen marketingmail, en hem weer aanschrijven is in strijd met de AVG. ' +
+      'Vraagt de gebruiker dat toch, leg dan uit dat alleen de ontvanger zelf opnieuw toestemming kan geven.',
     keywords: ['deblokkeren', 'blokkering opheffen', 'weer aanschrijven', 'terugzetten', 'toestemming'],
     input: { email: { type: 'string' } },
     required: ['email'],
@@ -704,13 +712,14 @@ export const MARKETING_ACTIONS: ActionDef[] = [
       const { data: existing } = await orgQuery(ctx, 'email_suppressions', 'email, reason, source, created_at').eq('email', address).maybeSingle();
       if (!existing) throw new ActionError(`${address} staat niet op de blokkeerlijst.`);
       const reason = String((existing as { reason: string }).reason);
-      const warning = reason === 'unsubscribed'
-        ? 'DEZE PERSOON MELDDE ZICH ZELF AF — alleen deblokkeren met nieuwe toestemming'
-        : reason === 'bounced'
-          ? 'het adres bouncede eerder; controleer of het klopt'
-          : reason === 'complained'
-            ? 'deze persoon markeerde de mail als spam'
-            : 'handmatig geblokkeerd';
+      // Dezelfde regel als de database (20261107140000) en het scherm: geen
+      // kaart klaarzetten die bij Uitvoeren toch geweigerd wordt.
+      if (!suppressionRemovableByTeam(reason)) {
+        throw new ActionError(`${address}: ${suppressionLockedMessage(reason)}`);
+      }
+      const warning = reason === 'bounced'
+        ? 'het adres bouncede eerder; controleer of het klopt'
+        : 'handmatig geblokkeerd';
       return {
         title: `Blokkering opheffen: ${address}`,
         sub: joinShort([warning, 'krijgt hierna weer marketingmail'], 130),
@@ -736,8 +745,8 @@ export const MARKETING_ACTIONS: ActionDef[] = [
       const flowId = id(input, 'flow_id');
       const flow = await row<Record<string, unknown>>(
         ctx, 'email_flows', flowId, 'id, name, status, stop_condition, audience, created_at', 'Stroom');
-      const [{ data: steps, error: stepError }, { data: stats }, { data: stepStats }] = await Promise.all([
-        orgQuery(ctx, 'email_flow_steps', 'step_index, delay_days, subject, preheader, body_text, accent_color')
+      const [{ data: rawSteps, error: stepError }, { data: stats }, { data: stepStats }] = await Promise.all([
+        orgQuery(ctx, 'email_flow_steps', 'step_index, delay_days, subject, preheader, body_text, body_html, accent_color')
           .eq('flow_id', flowId).order('step_index', { ascending: true }),
         orgQuery(ctx, 'email_flow_stats', 'enrollments, active, completed, stopped_reacted, stopped_unsubscribed, cancelled')
           .eq('flow_id', flowId).maybeSingle(),
@@ -745,7 +754,15 @@ export const MARKETING_ACTIONS: ActionDef[] = [
           .eq('flow_id', flowId).order('step_index', { ascending: true }),
       ]);
       if (stepError) throw new ActionError(`Stappen ophalen mislukt: ${stepError.message}`);
-      return { flow, steps: steps ?? [], totals: stats ?? null, per_step: stepStats ?? [] };
+      // Een stap uit het scherm heeft alleen HTML (body_text leeg). Zonder deze
+      // omzetting zag het model bij zo'n stap geen tekst, en moest het bij
+      // flow.set_steps (dat de héle reeks vervangt) de tekst van die stap raden.
+      const steps = (rawSteps ?? []).map((step: Record<string, unknown>) => {
+        const { body_html: html, ...rest } = step;
+        const text = String(step.body_text ?? '').trim();
+        return { ...rest, body_text: text || htmlToText(String(html ?? '')) };
+      });
+      return { flow, steps, totals: stats ?? null, per_step: stepStats ?? [] };
     },
   },
 

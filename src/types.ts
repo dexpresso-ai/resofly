@@ -582,7 +582,8 @@ export interface EmailCampaign extends OrgScopedRow {
   name: string; subject: string; preheader: string | null; body_html: string; body_text: string | null; accent_color: string | null; audience: CampaignAudience; status: CampaignStatus; scheduled_at: string | null; started_at: string | null; sent_at: string | null; created_at: string; updated_at: string;
 }
 export type CampaignRecipientStatus = 'pending' | 'sending' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained' | 'skipped' | 'unsubscribed';
-export interface EmailCampaignRecipient extends OrgScopedRow {
+// Geen created_by: de rijen maakt de campaigns-functie, en de tabel heeft die kolom niet.
+export interface EmailCampaignRecipient extends Omit<OrgScopedRow, 'created_by'> {
   campaign_id: UUID; client_id: UUID | null; contact_id: UUID | null; to_email: string; to_name: string | null; thread_id: UUID | null; client_email_id: UUID | null; status: CampaignRecipientStatus; sent_at: string | null; delivered_at: string | null; opened_at: string | null; clicked_at: string | null; bounced_at: string | null; failed_at: string | null; replied_at: string | null; unsubscribed_at: string | null; error_message: string | null; created_at: string; updated_at: string;
 }
 export interface EmailCampaignStats {

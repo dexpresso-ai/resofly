@@ -41,7 +41,13 @@ vasthouden; de nep-Resend kent daarvoor ook de Domains-API en verstuurt, net als
 alleen vanaf een geverifieerd domein) en `bank` (mutaties met de hand invoeren, verdelen over
 facturen, creditnota's, inkoopfacturen en grootboekrekeningen, terugdraaien, samenvoegen met wat de
 bank later levert, de aansluiting en wie wat mag; zie
-`docs/changelog/CHANGELOG_BANK_HANDMATIG_BOEKEN_2026-11-07.md`) en `inrichten` (de inrichting van een
+`docs/changelog/CHANGELOG_BANK_HANDMATIG_BOEKEN_2026-11-07.md`), `marketing` (een
+campagne versturen terwijl de verzendronde midden in het klaarzetten valt, de ontvangerslijst
+zoals het scherm hem laadt, tracking via de webhook, pauzeren en annuleren midden in een batch,
+herstel na een omgevallen verzending, afmelden via de link en met één klik, wat het team wel en
+niet van de afmeldlijst mag halen, wie welke klantgegevens ziet, en een follow-up-stroom; zie
+`docs/rapporten/CONTROLE_MARKETING_2026-11-07.md`; dat scenario verstuurt in batches van vijf,
+`CAMPAIGN_DISPATCH_BATCH` in `omgeving.mjs`) en `inrichten` (de inrichting van een
 nieuwe organisatie: afronden alleen door de eigenaar of een beheerder van díe organisatie en met een
 bedrijfsnaam, niet rechtstreeks, niet als teamlid, boekhouder, vreemde of anon, en geen eigen
 organisatie voor wie is uitgenodigd; zie `docs/changelog/CHANGELOG_ORGANISATIE_INRICHTEN_2026-11-07.md`).

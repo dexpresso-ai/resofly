@@ -4986,7 +4986,11 @@ export async function deleteClientEmail(organizationId: UUID, clientEmailId: UUI
 
 // ── E-mailmarketing / campagnes ─────────────────────────────────────────────
 const CAMPAIGN_COLUMNS = 'id,organization_id,created_by,name,subject,preheader,body_html,body_text,accent_color,audience,status,scheduled_at,started_at,sent_at,created_at,updated_at';
-const CAMPAIGN_RECIPIENT_COLUMNS = 'id,organization_id,created_by,campaign_id,client_id,contact_id,to_email,to_name,thread_id,client_email_id,status,sent_at,delivered_at,opened_at,clicked_at,bounced_at,failed_at,replied_at,unsubscribed_at,error_message,created_at,updated_at';
+// Zonder created_by: die kolom heeft email_campaign_recipients niet (de rijen
+// maakt de campaigns-functie). Tot november 2026 stond hij hier wel, en dan
+// weigerde PostgREST de hele vraag: de ontvangerslijst van een campagne laadde
+// nooit. marketingColumns.test.ts legt deze lijsten naast de migraties.
+const CAMPAIGN_RECIPIENT_COLUMNS = 'id,organization_id,campaign_id,client_id,contact_id,to_email,to_name,thread_id,client_email_id,status,sent_at,delivered_at,opened_at,clicked_at,bounced_at,failed_at,replied_at,unsubscribed_at,error_message,created_at,updated_at';
 
 export interface CampaignInput {
   name: string;
@@ -5108,14 +5112,25 @@ export async function addSuppression(organizationId: UUID, email: string, reason
   if (error) throw error;
 }
 
-/** Verwijder een adres van de suppressielijst (weer aanschrijfbaar maken). */
+/**
+ * Verwijder een adres van de suppressielijst (weer aanschrijfbaar maken).
+ *
+ * Alleen een handmatige blokkade of een bounce; een afmelding of spamklacht van
+ * de ontvanger zelf laat de database staan (20261107140000). Die weigert dat
+ * zonder foutmelding (nul rijen), dus tellen we hier wat er weg is: anders
+ * meldde het scherm "opgeheven" terwijl er niets veranderde.
+ */
 export async function removeSuppression(organizationId: UUID, email: string): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('email_suppressions')
     .delete()
     .eq('organization_id', organizationId)
-    .eq('email', email.trim().toLowerCase());
+    .eq('email', email.trim().toLowerCase())
+    .select('email');
   if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error('Deze blokkering is niet opgeheven. Het adres staat niet (meer) op de lijst, of de ontvanger heeft zich zelf afgemeld of de mail als spam gemeld. Die afmelding kun je niet opheffen.');
+  }
 }
 
 // ── Follow-up-stromen ───────────────────────────────────────────────────────

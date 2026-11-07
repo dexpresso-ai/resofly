@@ -4204,6 +4204,7 @@ body::before{
 .mk-icon:hover{background:var(--bg4);color:var(--text);border-color:var(--border2)}
 .mk-icon.danger:hover{background:rgba(var(--danger-rgb),.12);color:var(--danger);border-color:rgba(var(--danger-rgb),.3)}
 .mk-icon:disabled{opacity:.5;cursor:not-allowed}
+.mk-locked{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;color:var(--muted);cursor:help}
 
 /* Editor */
 .mk-editor,.mk-detail,.mk-suppressions{display:flex;flex-direction:column;gap:16px}

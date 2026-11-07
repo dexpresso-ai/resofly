@@ -9,7 +9,7 @@ import { API_URL, MEDIA } from './omgeving.mjs';
 const echteFetch = globalThis.fetch.bind(globalThis);
 
 export const post = {
-  /** Elke mail die naar Resend ging: { to, subject, html, text, from, replyTo, bijlagen, tags } */
+  /** Elke mail die naar Resend ging: { to, subject, html, text, from, replyTo, bijlagen, tags, headers } */
   mails: [],
   /** Faal de volgende n verzendingen met een 500 (of 'netwerk': gooi). */
   resendStoring: { aantal: 0, soort: '500' },
@@ -171,6 +171,8 @@ async function resend(request) {
       contentId: a.content_id ?? null,
     })),
     tags: body.tags ?? [],
+    /** Extra mailheaders, bijvoorbeeld List-Unsubscribe bij marketingmail. */
+    headers: body.headers ?? {},
     idempotencyKey: request.headers.get('idempotency-key'),
   });
   return json(200, { id });
