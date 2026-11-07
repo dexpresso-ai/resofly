@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, CalendarDays, CalendarRange, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Landmark, ListTodo, Percent, Pin, Ticket as TicketIcon } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeEuro, BarChart3, BellRing, CalendarDays, CalendarRange, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Hammer, Landmark, ListTodo, MessagesSquare, Percent, Pin, Receipt, Ticket as TicketIcon, type LucideIcon } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, Invoice, OrganizationContext, SavedReport, Task, TaskStatus, UUID } from '../types';
 import { coversDay, isOverdue, scopeTasks, taskDayKey, taskLastDayKey } from '../lib/workweek';
 import { euro, formatMinutes, total } from '../lib/format';
@@ -15,7 +15,7 @@ import type { AiDecision, DecisionTarget } from '../lib/decisions-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { FULL_PERMISSIONS, isAccountantRole, type ModuleKey, type Permissions } from '../lib/permissions';
 import { isZenitFamily, useLook } from '../lib/look';
-import { computeStream, type StationId, type StreamItem } from '../lib/stroom';
+import { computeStream, type StationId, type Stream, type StreamItem } from '../lib/stroom';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
 import { askGerrie } from '../components/GerrieChat';
 import { DayArc, type DayArcItem } from './DayArc';
@@ -32,6 +32,8 @@ type AttentionItem = { key: string; tone: 'default' | 'danger'; icon: ReactNode;
 type Scope = 'mine' | 'team';
 
 const SCOPE_STORAGE_KEY = 'resofly-dashboard-scope';
+/** Baken: het spoor onderin de cockpit, 'geld' of 'week'. */
+const RAIL_STORAGE_KEY = 'resofly.dashboard.rail';
 
 const pl = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -163,6 +165,9 @@ export function Dashboard({
   const [look] = useLook();
   const calm = isZenitFamily(look);
   const stroom = look === 'stroom';
+  // Baken (de standaardlook): de cockpit van Cockpit, met onderin het spoor
+  // van Value Backlog — de weg van het geld, of de week.
+  const baken = look === 'baken';
   const narrow = useNarrowViewport();
 
   // ── Modulerechten van dit teamlid ───────────────────────────────────────
@@ -206,10 +211,21 @@ export function Dashboard({
   // ── De stroom (Stroom) ──────────────────────────────────────────────────
   // Dezelfde statussen en dezelfde bruto-totalen als hierboven: "Factuur" in de
   // stroom is Openstaand, "Betaald" is Omzet deze maand (stroom.test.ts).
+  // Baken toont dezelfde stroom als spoor in de cockpit (FlowRail).
   const stream = useMemo(
-    () => (stroom && showFinance ? computeStream({ quotes: data.quotes, invoices: data.invoices, clients: data.clients, amount: lines => total(lines).total }) : null),
-    [stroom, showFinance, data.quotes, data.invoices, data.clients],
+    () => ((stroom || baken) && showFinance ? computeStream({ quotes: data.quotes, invoices: data.invoices, clients: data.clients, amount: lines => total(lines).total }) : null),
+    [stroom, baken, showFinance, data.quotes, data.invoices, data.clients],
   );
+  // Baken: welk spoor onderin de cockpit staat. Wie de financiën en de
+  // projecten mag zien, kiest zelf (onthouden per browser); wie maar één van
+  // de twee ziet, krijgt dat ene spoor.
+  const [railChoice, setRailChoice] = useState<'geld' | 'week'>(() => {
+    try { return window.localStorage.getItem(RAIL_STORAGE_KEY) === 'week' ? 'week' : 'geld'; } catch { return 'geld'; }
+  });
+  const chooseRail = (next: 'geld' | 'week') => {
+    setRailChoice(next);
+    try { window.localStorage.setItem(RAIL_STORAGE_KEY, next); } catch { /* privémodus: dan alleen voor nu */ }
+  };
   // Kaarten op de stapel die over een stuk in de stroom gaan: dat stuk krijgt een vonk.
   const [dueDecisions, setDueDecisions] = useState<AiDecision[]>([]);
   const onDue = useCallback((due: AiDecision[]) => setDueDecisions(due), []);
@@ -516,7 +532,16 @@ export function Dashboard({
 
           <div className="dash-stats dash-stats-rich">{statTiles}</div>
 
-          {showProjects && <WeekRail dayKeys={weekDayKeys} todayKey={todayKey} tasks={weekTasks} projects={data.projects} onOpen={() => openPage('weekplanner')} />}
+          {baken && stream
+            ? <BakenRail
+                choice={showProjects ? railChoice : 'geld'}
+                onChoose={showProjects ? chooseRail : undefined}
+                monthLabel={monthName}
+                flow={<FlowRail stream={stream} monthLabel={monthName} onStation={openStation} />}
+                week={showProjects ? <WeekRail dayKeys={weekDayKeys} todayKey={todayKey} tasks={weekTasks} projects={data.projects} onOpen={() => openPage('weekplanner')} /> : null}
+                stream={stream}
+              />
+            : showProjects && <WeekRail dayKeys={weekDayKeys} todayKey={todayKey} tasks={weekTasks} projects={data.projects} onOpen={() => openPage('weekplanner')} />}
         </section>}
 
     <div className="dash-stack">
@@ -769,6 +794,76 @@ function WeekRail({ dayKeys, todayKey, tasks, projects, onOpen }: {
       })}
     </ol>
   </div>;
+}
+
+/**
+ * Baken: het spoor onderin de cockpit — de tegenhanger van het fasespoor in
+ * de cockpit van Value Backlog. Bovenin de naam van het spoor met wat erin
+ * zit, en (voor wie allebei mag zien) de keuze tussen Geld en Week. Er
+ * verdwijnt niets: het weekspoor van Cockpit staat achter "Week".
+ */
+function BakenRail({ choice, onChoose, monthLabel, flow, week, stream }: {
+  choice: 'geld' | 'week';
+  onChoose?: (next: 'geld' | 'week') => void;
+  monthLabel: string;
+  flow: ReactNode;
+  week: ReactNode;
+  stream: Stream;
+}) {
+  const geld = choice === 'geld' || !week;
+  const open = stream.stations.find(station => station.id === 'factuur')?.amount ?? 0;
+  const paid = stream.stations.find(station => station.id === 'betaald')?.amount ?? 0;
+  return <div className={`bk-rail${geld ? ' is-geld' : ' is-week'}`}>
+    <div className="bk-rail-head">
+      <span className="bk-rail-title">{geld ? 'Van eerste mail tot betaalde factuur' : 'Je week'}</span>
+      {geld && <span className="bk-rail-sum">{withSmallCents(euro(open))} open · {withSmallCents(euro(paid))} binnen in {monthLabel}</span>}
+      {onChoose && week && <span className="bk-rail-switch" role="group" aria-label="Spoor in de cockpit">
+        <button type="button" className={geld ? 'is-on' : undefined} aria-pressed={geld} onClick={() => onChoose('geld')}>Geld</button>
+        <button type="button" className={geld ? undefined : 'is-on'} aria-pressed={!geld} onClick={() => onChoose('week')}>Week</button>
+      </span>}
+    </div>
+    {geld ? flow : week}
+  </div>;
+}
+
+const FLOW_ICON: Record<StationId, LucideIcon> = {
+  gesprek: MessagesSquare, offerte: FileText, werk: Hammer, factuur: Receipt, betaald: BadgeEuro,
+};
+
+/**
+ * De weg van het geld als spoor: vijf haltes, van koel naar het goud van
+ * Betaald. Per halte het bedrag en een stip per stuk in de kleur van de
+ * klant; een rode of oranje stip op de halte als er iets vastzit. De bedragen
+ * komen uit computeStream (stroom.test.ts): "Factuur" is precies Openstaand
+ * en "Betaald" precies Omzet deze maand, zoals in de tegels erboven.
+ */
+function FlowRail({ stream, monthLabel, onStation }: { stream: Stream; monthLabel: string; onStation: (id: StationId) => void }) {
+  return <ol className="bk-flow">
+    {stream.stations.map(station => {
+      const Icon = FLOW_ICON[station.id];
+      const count = station.items.length;
+      const knot = station.late > 0 ? 'late' : station.wait > 0 ? 'wait' : null;
+      const detail = station.id === 'gesprek' ? (count ? `${count} in de maak` : 'niets in de maak')
+        : station.id === 'offerte' ? [count ? `${count} bij de klant` : 'niets bij de klant', station.wait ? `${station.wait} wacht` : '', station.late ? `${station.late} verlopen` : ''].filter(Boolean).join(' · ')
+        : station.id === 'werk' ? (count ? `${count} te factureren` : 'niets te factureren')
+        : station.id === 'factuur' ? [count ? `${count} open` : 'niets open', station.late ? `${station.late} te laat` : ''].filter(Boolean).join(' · ')
+        : `in ${monthLabel}`;
+      const target = station.id === 'gesprek' || station.id === 'offerte' ? 'de offertes' : 'de facturen';
+      const className = ['bk-fl', `is-${station.id}`, count > 0 && 'has-items', knot && `has-${knot}`].filter(Boolean).join(' ');
+      return <li key={station.id}>
+        <button type="button" className={className} onClick={() => onStation(station.id)} aria-label={`${station.label}: ${euro(station.amount)}, ${detail}. Open ${target}`}>
+          <span className="bk-fl-node" aria-hidden="true"><Icon size={16} strokeWidth={2.2} />{knot && <i className={`bk-fl-knot is-${knot}`} />}</span>
+          <span className="bk-fl-name">{station.label}</span>
+          <span className="bk-fl-amount">{withSmallCents(euro(station.amount))}</span>
+          <span className={`bk-fl-detail${knot === 'late' ? ' is-late' : knot === 'wait' ? ' is-wait' : ''}`}>{detail}</span>
+          <span className="bk-fl-dots" aria-hidden="true">
+            {station.items.slice(0, 7).map(item => <i key={item.id} style={{ background: item.color }} title={`${item.title} · ${item.clientName}`} />)}
+            {count > 7 && <em>+{count - 7}</em>}
+          </span>
+        </button>
+      </li>;
+    })}
+  </ol>;
 }
 
 /** Eén kolom van het weekblok: taken per dag, met de dag als kopregel. */
