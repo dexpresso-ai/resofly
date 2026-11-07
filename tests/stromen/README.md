@@ -35,7 +35,10 @@ ingebouwde sleutel was opgeslagen), `herinneringen`, `contracten`, `beveiliging`
 delen via portaal en link, opruimen) en `verzenddomein` (eigen domein koppelen, verifiëren,
 versturen vanaf het eigen adres, de domein-webhook, verwijderen, en wie een domein mag
 vasthouden; de nep-Resend kent daarvoor ook de Domains-API en verstuurt, net als Resend,
-alleen vanaf een geverifieerd domein). De uitkomst van de documenten staat in
+alleen vanaf een geverifieerd domein) en `bank` (mutaties met de hand invoeren, verdelen over
+facturen, creditnota's, inkoopfacturen en grootboekrekeningen, terugdraaien, samenvoegen met wat de
+bank later levert, de aansluiting en wie wat mag; zie
+`docs/changelog/CHANGELOG_BANK_HANDMATIG_BOEKEN_2026-11-07.md`). De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in
 `docs/rapporten/STROMENTEST_CONTRACT_OFFERTE_FACTUUR_2026-11-06.md`.
 Elk scenario maakt zijn eigen organisaties (`wereld.mjs`), dus ze raken elkaar niet en de
@@ -72,7 +75,9 @@ zien geen knoppen die iets veranderen; de medewerker en de beheerder bij dezelfd
 `mollie` (Instellingen → Online betalen: een geweigerde key met de echte reden in beeld, koppelen
 met profiel en de waarschuwing voor de testmodus, ontkoppelen, wat een lid ziet) en
 `documenten` (maken en bewerken in Inhoud, kwaadaardige inhoud in de app en op de deelpagina,
-verwijderen, de kijker).
+verwijderen, de kijker) en `bank` (een mutatie invoeren in het venster, de voorgestelde verdeling over
+twee facturen aanvullen en boeken met een eigen omschrijving, terugdraaien, de vraag bij een dubbele
+mutatie, samenvoegen met de bank en weer losmaken, en de verdeling op telefoonbreedte).
 
 Elke stap controleert ook: geen JavaScript-fout, geen foutmelding of "laden…" die blijft staan,
 en geen mislukte aanroep die de stap niet verwachtte. Mislukt een stap, dan komt er een

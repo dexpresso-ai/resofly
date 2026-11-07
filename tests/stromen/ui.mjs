@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -42,7 +42,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -1642,6 +1642,193 @@ async function scenarioDocumenten() {
   });
 }
 
+// ── Bank: mutaties met de hand boeken ──────────────────────────────────────
+
+/** Een transactie in de lijst "Af te letteren", op een stuk tekst. */
+const bankRij = (page, patroon) => inhoud(page).locator('.bank-tx').filter({ hasText: patroon });
+
+async function bankTab(scherm, naam) {
+  await inhoud(scherm.page).locator('.bank-toolbar .bk-seg button').filter({ hasText: new RegExp(`^${naam}`) }).click();
+  await rustig(scherm);
+}
+
+/**
+ * Waarom in de browser: de database toetst run.mjs (scenario bank). Hier gaat
+ * het om wat de gebruiker doet: een mutatie invoeren in het venster, de
+ * voorgestelde verdeling over twee facturen aanvullen en boeken met een eigen
+ * omschrijving, terugdraaien, en wat hij ziet als de bank dezelfde mutatie
+ * later levert (samengevoegd, losmaken, weer samenvoegen).
+ */
+async function scenarioBank() {
+  groep('UI: bank — mutaties met de hand boeken');
+  const { w } = t;
+  const jaar = datum().slice(0, 4);
+  const nummers = [`FAC-${jaar}-0901`, `FAC-${jaar}-0902`];
+  const omschrijving = `Betaling ${nummers[0]} en ${nummers[1]} plus meerwerk`;
+
+  const b = await stap('rekeningschema, bankrekening en twee verzonden facturen', async () => {
+    gelukt(await rpc('ensure_default_ledger_accounts', { p_organization_id: w.orgId }, w.medewerker.token), 'rekeningschema');
+    const grootboek = gelukt(await rest(`ledger_accounts?select=id&organization_id=eq.${w.orgId}&code=eq.1100`, { token: w.medewerker.token }), 'rekening 1100')[0];
+    const rekening = gelukt(await rest('bank_accounts?select=*', {
+      method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, created_by: w.medewerker.id, name: 'Zakelijk UI', iban: 'NL91ABNA0417164300', currency: 'EUR', ledger_account_id: grootboek.id, is_active: true, source: 'import' },
+    }), 'bankrekening')[0];
+    const f1 = await factuurVerstuurd(w, nummers[0]);
+    const f2 = await factuurVerstuurd(w, nummers[1]);
+    return { rekening, f1, f2 };
+  });
+  if (!b) return;
+
+  await uiStap('mutatie invoeren met de knop: het venster, opslaan, en de mutatie staat open als "handmatig"', async () => {
+    const lid = await medewerker();
+    const page = lid.page;
+    // De app laadde vóór het rekeningschema en de bankrekening bestonden.
+    await ververs(lid);
+    await naarFinancien(lid, 'Bank');
+    const sinds = server.verkeer.length;
+    await inhoud(page).getByRole('button', { name: 'Mutatie invoeren' }).first().click();
+    const m = modal(page, 'Mutatie invoeren');
+    await m.waitFor({ timeout: 10000 });
+    await m.getByRole('button', { name: /^Ontvangst/ }).click();
+    await veld(m, 'Bedrag').locator('input').fill('397,26');
+    await veld(m, 'Tegenpartij').locator('input').fill(w.klantA.name);
+    await veld(m, 'Omschrijving').locator('input').fill(omschrijving);
+    await klik(m, 'Opslaan');
+    await m.waitFor({ state: 'detached', timeout: 10000 });
+    await rustig(lid);
+    verwachtAanroep(sinds, { rpc: 'create_manual_bank_transaction' }, 'invoeren');
+    const rij = bankRij(page, 'plus meerwerk').first();
+    await rij.waitFor({ timeout: 10000 });
+    verwacht(/handmatig/i.test(await rij.innerText()), 'geen label "handmatig"');
+  });
+
+  await uiStap('de verdeling staat klaar (twee facturen met hun openstaande bedrag, de rest op een grootboekregel) en boekt met een eigen omschrijving', async () => {
+    const lid = t.lid;
+    const page = lid.page;
+    const rij = bankRij(page, 'plus meerwerk').first();
+    const regels = rij.locator('.bank-alloc-line');
+    await wachtTot(async () => (await regels.count()) === 3, { melding: 'geen drie regels voorgesteld' });
+    const bedragen = await rij.locator('input.bank-alloc-amount').evaluateAll((els) => els.map((el) => el.value));
+    gelijk(bedragen, ['173,63', '173,63', '50,00'], 'voorgestelde bedragen');
+    const eerste = tekst(await regels.nth(0).locator('.select-control').nth(1).locator('.select-value').innerText());
+    verwacht(eerste.startsWith(nummers[0]), `eerste regel: ${eerste}`);
+    verwacht(!(await rij.getByRole('button', { name: 'Boeken' }).isEnabled()), 'Boeken kan al zonder grootboekrekening op de derde regel');
+    const derde = regels.nth(2);
+    await kies(derde.locator('.select-control').nth(1), '8000 · Omzet hoog (21%)');
+    await kies(derde.locator('.select-control').nth(2), 'BTW 21%');
+    await wachtTot(async () => /Precies verdeeld/.test(await rij.innerText()), { melding: 'niet "Precies verdeeld"' });
+    await rij.getByRole('button', { name: 'Eigen omschrijving' }).click();
+    await rij.locator('input.bank-alloc-booking-desc').fill('Verzamelbetaling klant A');
+    await schermafdruk('bank-verdeling-klaar', lid);
+    const sinds = server.verkeer.length;
+    await rij.getByRole('button', { name: 'Boeken' }).click();
+    await rustig(lid);
+    verwachtAanroep(sinds, { rpc: 'book_bank_transaction' }, 'boeken');
+    for (const f of [b.f1, b.f2]) gelijk(sqlRij(`select status from public.invoices where id = ${q(f.id)}`).status, 'paid', `factuur ${f.number}`);
+    const boeking = sqlRij(`select je.description from public.bank_transactions bt join public.journal_entries je on je.id = bt.journal_entry_id
+      where bt.organization_id = ${q(w.orgId)} and bt.is_manual and bt.description = ${q(omschrijving)}`);
+    gelijk(boeking?.description, 'Verzamelbetaling klant A', 'omschrijving van de boeking');
+  });
+
+  await uiStap('onder "Geboekt": de verdeling en de omschrijving; terugdraaien zet hem weer open', async () => {
+    const lid = t.lid;
+    const page = lid.page;
+    await bankTab(lid, 'Geboekt');
+    const rij = bankRij(page, 'plus meerwerk').first();
+    await rij.waitFor({ timeout: 10000 });
+    const inhoudRij = tekst(await rij.innerText());
+    for (const iets of ['Verzamelbetaling klant A', `Factuur ${nummers[0]}`, `Factuur ${nummers[1]}`, '8000 · Omzet hoog (21%)']) {
+      verwacht(inhoudRij.includes(iets), `"${iets}" staat niet bij de geboekte transactie: ${inhoudRij.slice(0, 300)}`);
+    }
+    await schermafdruk('bank-geboekt', lid);
+    const sinds = server.verkeer.length;
+    await rij.getByRole('button', { name: 'Terugdraaien' }).click();
+    // Eerst de vraag (confirm), dan pas de aanroep.
+    await rustig(lid);
+    verwachtAanroep(sinds, { rpc: 'unbook_bank_transaction' }, 'terugdraaien');
+    gelijk(sqlRij(`select status from public.invoices where id = ${q(b.f1.id)}`).status, 'sent', 'factuur weer open');
+    await bankTab(lid, 'Openstaand');
+    await bankRij(page, 'plus meerwerk').first().waitFor({ timeout: 10000 });
+  });
+
+  await uiStap('dezelfde mutatie nog eens invoeren: eerst de vraag "lijkt dubbel", met de knop "Toch invoeren"', async () => {
+    const lid = t.lid;
+    const page = lid.page;
+    await inhoud(page).getByRole('button', { name: 'Mutatie invoeren' }).first().click();
+    const m = modal(page, 'Mutatie invoeren');
+    await m.waitFor({ timeout: 10000 });
+    await veld(m, 'Bedrag').locator('input').fill('397,26');
+    await veld(m, 'Tegenpartij').locator('input').fill(w.klantA.name);
+    await klik(m, 'Opslaan');
+    await wachtTot(async () => /Lijkt dubbel/.test(await m.innerText()), { melding: 'geen vraag over een dubbele mutatie' });
+    verwacht(await heeftKnop(m, 'Toch invoeren'), 'geen knop "Toch invoeren"');
+    await klik(m, 'Annuleren');
+    await m.waitFor({ state: 'detached', timeout: 10000 });
+    gelijk(Number(sql(`select count(*) from public.bank_transactions where organization_id = ${q(w.orgId)} and is_manual`)), 1, 'niets ingevoerd');
+  }, { toegestaan: [{ rpc: 'create_manual_bank_transaction', status: 400 }] });
+
+  await uiStap('de bank levert dezelfde mutatie: samengevoegd en "bevestigd door bank"; losmaken en weer samenvoegen', async () => {
+    const lid = t.lid;
+    const page = lid.page;
+    gelukt(await rpc('import_bank_transactions', {
+      p_organization_id: w.orgId, p_bank_account_id: b.rekening.id, p_statement: { format: 'csv', file_name: 'ui-bank.csv' },
+      p_transactions: [{ booking_date: datum(), amount_cents: 2 * 17363 + 5000, counterparty_name: w.klantA.name, description: 'SEPA OVERBOEKING KLANT A' }],
+    }, w.medewerker.token), 'afschrift');
+    await ververs(lid);
+    const rij = bankRij(page, 'plus meerwerk').first();
+    await wachtTot(async () => /bevestigd door bank/i.test(await rij.innerText()), { melding: 'niet "bevestigd door bank"' });
+    gelijk(await bankRij(page, 'SEPA OVERBOEKING KLANT A').count(), 1, 'de bankregel staat alleen onder de handmatige mutatie');
+    let sinds = server.verkeer.length;
+    await rij.getByRole('button', { name: 'Losmaken' }).click();
+    await rustig(lid);
+    verwachtAanroep(sinds, { rpc: 'unmerge_bank_transaction' }, 'losmaken');
+    const bankregel = inhoud(page).locator('.bank-tx').filter({ has: page.locator('.bank-merge-hint') }).first();
+    await bankregel.waitFor({ timeout: 10000 });
+    verwacht(/Lijkt op je handmatige mutatie/.test(await bankregel.innerText()), 'geen hint bij de losse bankregel');
+    await schermafdruk('bank-samenvoegen', lid);
+    sinds = server.verkeer.length;
+    await bankregel.getByRole('button', { name: 'Samenvoegen' }).click();
+    await rustig(lid);
+    verwachtAanroep(sinds, { rpc: 'merge_bank_transactions' }, 'samenvoegen');
+    await wachtTot(async () => /bevestigd door bank/i.test(await bankRij(page, 'plus meerwerk').first().innerText()), { melding: 'niet weer samengevoegd' });
+  });
+
+  await uiStap('telefoon, liggende telefoon en tablet, licht en donker: de verdeling past zonder zijwaarts scrollen', async () => {
+    const lid = t.lid;
+    const page = lid.page;
+    const formaten = [['telefoon', 390, 844], ['liggend', 740, 360], ['tablet', 820, 1180]];
+    const themaVoor = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+    try {
+      for (const thema of ['light', 'dark']) {
+        await page.evaluate((waarde) => document.documentElement.setAttribute('data-theme', waarde), thema);
+        for (const [naam, breedte, hoogte] of formaten) {
+          await page.setViewportSize({ width: breedte, height: hoogte });
+          await rustig(lid);
+          const rij = bankRij(page, 'plus meerwerk').first();
+          await rij.scrollIntoViewIfNeeded();
+          if (naam === 'telefoon') await schermafdruk(`bank-${naam}-${thema}`, lid);
+          const breed = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, raam: window.innerWidth }));
+          verwacht(breed.doc <= breed.raam + 1, `${naam}/${thema}: de pagina is ${breed.doc}px breed op een scherm van ${breed.raam}px`);
+          const regels = await rij.locator('.bank-alloc-line').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().right));
+          if (!regels.every((rechts) => rechts <= breedte + 1)) {
+            // Welk element is te breed? Van de regel omhoog, en de kinderen van de regel.
+            const keten = await rij.locator('.bank-alloc-line').first().evaluate((el) => {
+              const uit = [];
+              for (let e = el; e && e !== document.body; e = e.parentElement) uit.push(`${e.tagName.toLowerCase()}.${[...e.classList].join('.')}=${Math.round(e.getBoundingClientRect().right)}`);
+              for (const k of el.children) uit.push(`kind ${k.tagName.toLowerCase()}.${[...k.classList].join('.')}=${Math.round(k.getBoundingClientRect().width)}`);
+              return uit.join(' | ');
+            });
+            throw new Error(`${naam}/${thema}: een regel steekt buiten beeld: ${regels.join(', ')} — ${keten}`);
+          }
+        }
+      }
+    } finally {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.evaluate((waarde) => { if (waarde) document.documentElement.setAttribute('data-theme', waarde); else document.documentElement.removeAttribute('data-theme'); }, themaVoor);
+    }
+  });
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -1657,7 +1844,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

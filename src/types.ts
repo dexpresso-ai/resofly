@@ -2925,7 +2925,12 @@ export interface VatReturn {
 // ---------------------------------------------------------------------------
 export type BankAccountSource = 'import' | 'gocardless' | 'enablebanking';
 export type BankStatementFormat = 'camt053' | 'mt940' | 'csv' | 'gocardless';
-export type BankTransactionStatus = 'unmatched' | 'suggested' | 'booked' | 'ignored';
+/**
+ * 'merged': een bankregel die een handmatig ingevoerde mutatie bevestigt. Hij
+ * verwijst met merged_into_id naar die mutatie, en die draagt de boeking; los
+ * boeken of negeren kan niet (migratie 20261107100000).
+ */
+export type BankTransactionStatus = 'unmatched' | 'suggested' | 'booked' | 'ignored' | 'merged';
 export type BankRuleDirection = 'in' | 'out' | 'both';
 
 export type BankRequisitionStatus = 'created' | 'linked' | 'expired' | 'error';
@@ -3027,6 +3032,72 @@ export interface BankTransaction {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  /** Met de hand ingevoerd in plaats van van de bank. Optioneel: vóór migratie 20261107100000 bestond het niet. */
+  is_manual?: boolean;
+  created_by?: UUID | null;
+  /** Bij een bankregel met status 'merged': de handmatige mutatie die hij bevestigt. */
+  merged_into_id?: UUID | null;
+  merged_at?: string | null;
+  merged_by?: UUID | null;
+  /** Losgemaakt: de matcher voegt deze bankregel niet meer vanzelf samen. */
+  auto_merge_blocked?: boolean;
+}
+
+/** Soort regel in de verdeling van een bankboeking. */
+export type BankAllocationKind = 'sales_invoice' | 'sales_credit_note' | 'purchase_invoice' | 'ledger';
+
+/**
+ * Eén regel uit de verdeling van een bankboeking (bank_transaction_allocations).
+ * amount_cents staat in BANKRICHTING: positief = geld erbij, negatief = geld eraf.
+ * Een verdeling hoort bij één boeking (journal_entry_id); na terugdraaien blijft
+ * hij bestaan, maar telt hij niet meer.
+ */
+export interface BankAllocation {
+  id: UUID;
+  organization_id: UUID;
+  bank_transaction_id: UUID;
+  journal_entry_id: UUID;
+  position: number;
+  kind: BankAllocationKind;
+  invoice_id: UUID | null;
+  credit_note_id: UUID | null;
+  purchase_invoice_id: UUID | null;
+  account_id: UUID | null;
+  vat_code: string | null;
+  client_id: UUID | null;
+  supplier_id: UUID | null;
+  project_id: UUID | null;
+  amount_cents: number;
+  description: string | null;
+  created_at: string;
+  /** Het nummer van de creditnota, meegehaald bij het laden. */
+  credit_note?: { number: string } | null;
+}
+
+/** Een stuk waartegen je kunt afletteren, met wat er volgens de database openstaat. */
+export interface BankOpenDocument {
+  id: UUID;
+  number: string;
+  date: string | null;
+  due_date?: string | null;
+  total_cents: number;
+  /**
+   * Verkoopfactuur: nog te ontvangen. Creditnota: nog terug te betalen.
+   * Inkoopfactuur: nog te betalen (positief) of nog terug te krijgen (negatief).
+   */
+  open_cents: number;
+  client_id?: UUID | null;
+  client_name?: string | null;
+  supplier_id?: UUID | null;
+  supplier_name?: string | null;
+  invoice_id?: UUID;
+  invoice_number?: string | null;
+}
+
+export interface BankAllocationCandidates {
+  sales_invoices: BankOpenDocument[];
+  credit_notes: BankOpenDocument[];
+  purchase_invoices: BankOpenDocument[];
 }
 
 export interface BankRule extends OrgScopedRow {
@@ -3102,6 +3173,14 @@ export interface BankReconciliation {
   /** Afschriftsaldo − (grootboekstand + nog niet geboekt). 0 = sluitend; null = geen afschriftsaldo bekend. */
   difference_cents: number | null;
   duplicate_suspects: number;
+  /** Handmatige mutaties op deze rekening (vanaf 20261107100000). */
+  manual_count?: number;
+  /** Samengevoegde paren met de handmatige boeking aan de andere kant van de peildatum. */
+  timing_count?: number;
+  timing_sum_cents?: number;
+  /** Geboekte handmatige mutaties vóór de peildatum die de bank (nog) niet bevestigde. */
+  manual_unconfirmed_count?: number;
+  manual_unconfirmed_sum_cents?: number;
   statement_issues: Array<{
     statement_id: UUID;
     file_name: string | null;
@@ -3473,7 +3552,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null;
+export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankAllocations: BankAllocation[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null;
   /** Tellingen voor het dashboard, zonder de bank en de boekhouding te laden (src/lib/dataGroups.ts). */
   bankTransactionsToReconcile: number; vatReturnsToFile: number; }
 
