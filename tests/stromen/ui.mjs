@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -30,7 +30,7 @@ import { chromium } from '@playwright/test';
 import { API_URL, ANON_KEY, SERVICE_KEY } from './omgeving.mjs';
 import { installeer, mailsAan, post } from './nepdiensten.mjs';
 import { roep, roepRequest } from './functies.mjs';
-import { rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
+import { maakGebruiker, rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
 import { gelijk, gelukt, groep, samenvatting, stap, verwacht } from './toets.mjs';
 import { maakWereld, REGELS } from './wereld.mjs';
 import { startUiServer } from './ui-server.mjs';
@@ -42,7 +42,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -1885,6 +1885,168 @@ async function scenarioBank() {
   });
 }
 
+// ── Inrichten: een nieuwe gebruiker richt zijn organisatie in ───────────────
+
+/**
+ * De app als iemand die net een account heeft: alleen een sessie, geen
+ * organisatie in de opslag. Wacht op `wachtOp` (de stappen, of het scherm met
+ * een uitnodiging), niet op de werkruimte.
+ */
+async function openAlsNieuw(gebruiker, naam, wachtOp) {
+  const sessie = await sessieVan(gebruiker);
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
+  const items = { [SESSIESLEUTEL]: JSON.stringify(sessie) };
+  await context.addInitScript(`(() => {
+    try {
+      if (window.top !== window || !window.localStorage) return;
+      if (localStorage.getItem('stromen.ui.gezet')) return;
+      const items = ${JSON.stringify(items)};
+      for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v);
+      localStorage.setItem('stromen.ui.gezet', '1');
+    } catch { /* geen opslag in dit venster */ }
+  })();`);
+  const page = await context.newPage();
+  const scherm = volg(page, naam, context);
+  await page.goto(APP, { waitUntil: 'domcontentloaded' });
+  await page.locator(wachtOp).first().waitFor({ timeout: 60000 });
+  await rustig(scherm);
+  return scherm;
+}
+
+/**
+ * Waarom in de browser: run.mjs (scenario inrichten) toetst de database: wie
+ * mag afronden, en dat het niet rechtstreeks kan. tests/inrichten klikt de
+ * stappen door tegen een nagebootste backend. Hier dezelfde weg tegen de
+ * échte: bij de eerste login ontstaat een organisatie, de stappen schrijven
+ * met RLS (de eerste maakt de bedrijfsgegevens aan, want die zijn er nog
+ * niet), en na afronden opent de werkruimte, ook na herladen.
+ */
+async function scenarioInrichten() {
+  groep('UI: een nieuwe organisatie inrichten');
+  const nieuw = await stap('een nieuwe gebruiker, nog zonder organisatie', () => maakGebruiker('ui-nieuw'));
+  if (!nieuw) return;
+  let scherm = null;
+  let orgId = null;
+  const kop = async () => tekst(await scherm.page.locator('.onb-title').innerText().catch(() => ''));
+  const naarStap = async (patroon) => {
+    await wachtTot(async () => patroon.test(await kop()), { timeout: 15000, melding: `de stap ${patroon} kwam niet in beeld (kop: "${await kop()}")` });
+    await rustig(scherm);
+  };
+  const volgende = async (patroon) => {
+    await scherm.page.locator('.onb-next').click();
+    await naarStap(patroon);
+    const fouten = await scherm.page.locator('.onb-notice.is-error').allInnerTexts();
+    verwacht(fouten.length === 0, `foutmelding in de stappen: ${fouten.join(' | ')}`);
+  };
+  const instellingen = () => sqlRij(`select * from public.company_settings where organization_id = ${q(orgId)}`);
+
+  await uiStap('de eerste login opent de inrichting, niet de werkruimte', async () => {
+    scherm = await openAlsNieuw(nieuw, 'nieuw', '.onb');
+    verwacht(await scherm.page.locator('.app').count() === 0, 'de werkruimte staat al open');
+    const rij = sqlRij(`select o.id, o.onboarding_completed_at from public.organization_members m join public.organizations o on o.id = m.organization_id where m.user_id = ${q(nieuw.id)} and m.role = 'owner'`);
+    verwacht(rij?.id, 'geen organisatie aangemaakt bij de eerste login');
+    gelijk(rij.onboarding_completed_at, null, 'onboarding_completed_at');
+    orgId = rij.id;
+    gelijk(instellingen(), null, 'bedrijfsgegevens (die zijn er nog niet)');
+  });
+  if (!scherm || !orgId) return;
+
+  await uiStap('rechtsvorm: VOF, en de bedrijfsgegevens ontstaan', async () => {
+    await volgende(/rechtsvorm/);
+    verwacht(await scherm.page.locator('.onb-choice.is-on').count() === 0, 'er stond al een rechtsvorm aangevinkt');
+    await scherm.page.locator('.onb-choice', { has: scherm.page.locator('strong', { hasText: /^VOF$/ }) }).click();
+    await volgende(/Kies je pakket/);
+    const rij = instellingen();
+    gelijk([rij?.legal_form, rij?.year_result_account_code, rij?.fiscal_year_start_month], ['vof', '0510', 1], 'rechtsvorm, resultaatrekening, boekjaar');
+  });
+
+  await uiStap('abonnement: later beslissen', async () => {
+    verwacht(await scherm.page.locator('.onb-choice.onb-plan').count() >= 1, 'geen pakketten in beeld');
+    await volgende(/bedrijfsgegevens/);
+  });
+
+  await uiStap('bedrijfsgegevens invullen; ze worden netjes opgeslagen', async () => {
+    const p = scherm.page;
+    await p.fill('#onb-f-company_name', 'Jansen & De Vries V.O.F.');
+    await p.fill('#onb-f-trade_name', 'Studio Jansen');
+    await p.fill('#onb-f-address_line1', 'Keizersgracht 1');
+    await p.fill('#onb-f-postal_code', '1015aa');
+    await p.fill('#onb-f-city', 'Amsterdam');
+    await p.fill('#onb-f-email', 'Info@StudioJansen.test');
+    await p.fill('#onb-f-kvk_number', '1234 5678');
+    await p.fill('#onb-f-vat_number', 'nl001234567b01');
+    await p.fill('#onb-f-iban', 'nl91abna0417164300');
+    await volgende(/Btw en boekhouding/);
+    const rij = instellingen();
+    gelijk([rij?.company_name, rij?.trade_name, rij?.postal_code, rij?.email, rij?.kvk_number, rij?.vat_number, rij?.iban],
+      ['Jansen & De Vries V.O.F.', 'Studio Jansen', '1015 AA', 'info@studiojansen.test', '12345678', 'NL001234567B01', 'NL91 ABNA 0417 1643 00'], 'bedrijfsgegevens');
+  });
+
+  await uiStap('btw: de kleineondernemersregeling', async () => {
+    await scherm.page.locator('.onb-choice', { has: scherm.page.locator('strong', { hasText: 'Nee, ik gebruik de KOR' }) }).click();
+    await volgende(/huisstijl/);
+    gelijk(instellingen()?.kor_enabled, true, 'KOR');
+  });
+
+  await uiStap('huisstijl: een merkkleur, ook op de facturen', async () => {
+    await scherm.page.getByRole('radio', { name: '#1C7ED6' }).click();
+    await volgende(/facturen/);
+    const rij = instellingen();
+    gelijk([rij?.brand_accent_color, rij?.invoice_accent_color], ['#1C7ED6', '#1C7ED6'], 'merkkleur en factuurkleur');
+  });
+
+  await uiStap('facturen: per e-mail', async () => {
+    await scherm.page.locator('.onb-choice', { has: scherm.page.locator('strong', { hasText: /^Per e-mail$/ }) }).click();
+    await volgende(/Mollie koppelen/);
+    const rij = instellingen();
+    gelijk(rij?.invoice_send_method, 'email', 'verzendwijze');
+    verwacht(/binnen 14 dagen/.test(rij?.invoice_payment_terms ?? ''), `betaaltekst: ${rij?.invoice_payment_terms}`);
+  });
+
+  await uiStap('Mollie: later koppelen; het overzicht klopt', async () => {
+    verwacht(await scherm.page.locator('#onb-f-mollie').count() === 1, 'de eigenaar ziet geen veld voor de key');
+    await volgende(/beginnen/);
+    const overzicht = tekst(await scherm.page.locator('.onb-summary').innerText());
+    for (const woord of ['VOF', 'Jansen & De Vries V.O.F.', 'KOR', 'Per e-mail', 'Niet gekoppeld']) verwacht(overzicht.includes(woord), `"${woord}" ontbreekt in het overzicht: ${overzicht.slice(0, 300)}`);
+  });
+
+  await uiStap('afronden: de werkruimte opent, met de naam van het bedrijf', async () => {
+    const sinds = server.verkeer.length;
+    await scherm.page.locator('.onb-next').click();
+    await scherm.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 30000 });
+    verwachtAanroep(sinds, { rpc: 'complete_organization_onboarding' }, 'afronden');
+    const rij = sqlRij(`select name, onboarding_completed_at, onboarding_completed_by from public.organizations where id = ${q(orgId)}`);
+    verwacht(rij?.onboarding_completed_at, 'niet afgerond in de database');
+    gelijk([rij?.name, rij?.onboarding_completed_by], ['Studio Jansen', nieuw.id], 'naam en wie afrondde');
+    verwacht(await scherm.page.locator('.onb').count() === 0, 'de stappen staan er nog');
+  });
+
+  await uiStap('na herladen: de werkruimte, niet de stappen', async () => {
+    await scherm.page.reload({ waitUntil: 'domcontentloaded' });
+    await scherm.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });
+    verwacht(await scherm.page.locator('.onb').count() === 0, 'de stappen kwamen terug');
+  });
+  await sluit(scherm);
+
+  // Een uitgenodigd teamlid: geen eigen organisatie, dus ook geen stappen.
+  const genodigde = await stap('de eigenaar van de wereld nodigt een nieuw teamlid uit', async () => {
+    const gebruiker = await maakGebruiker('ui-genodigde');
+    gelukt(await rpc('invite_organization_member', { p_organization_id: t.w.orgId, p_email: gebruiker.email, p_role: 'member', p_module_access: {} }, t.w.eigenaar.token), 'uitnodigen');
+    return gebruiker;
+  });
+  if (!genodigde) return;
+  await uiStap('het teamlid ziet zijn uitnodiging, geen inrichting, en komt na accepteren in de werkruimte', async () => {
+    const lid = await openAlsNieuw(genodigde, 'genodigde', '.login-card');
+    lid.tijdelijk = true;
+    verwacht(/uitgenodigd/i.test(tekst(await lid.page.locator('.login-card h1').innerText())), 'geen uitnodiging in beeld');
+    verwacht(await lid.page.locator('.onb').count() === 0, 'het teamlid kreeg de inrichtingsstappen');
+    gelijk(Number(sql(`select count(*) from public.organization_members where user_id = ${q(genodigde.id)}`)), 0, 'lidmaatschappen vóór accepteren');
+    await lid.page.getByRole('button', { name: 'Accepteren' }).click();
+    await lid.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 30000 });
+    gelijk(sql(`select organization_id from public.organization_members where user_id = ${q(genodigde.id)}`), t.w.orgId, 'lid van de organisatie die uitnodigde');
+  });
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -1900,7 +2062,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

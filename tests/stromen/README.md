@@ -41,7 +41,12 @@ vasthouden; de nep-Resend kent daarvoor ook de Domains-API en verstuurt, net als
 alleen vanaf een geverifieerd domein) en `bank` (mutaties met de hand invoeren, verdelen over
 facturen, creditnota's, inkoopfacturen en grootboekrekeningen, terugdraaien, samenvoegen met wat de
 bank later levert, de aansluiting en wie wat mag; zie
-`docs/changelog/CHANGELOG_BANK_HANDMATIG_BOEKEN_2026-11-07.md`). De uitkomst van de documenten staat in
+`docs/changelog/CHANGELOG_BANK_HANDMATIG_BOEKEN_2026-11-07.md`) en `inrichten` (de inrichting van een
+nieuwe organisatie: afronden alleen door de eigenaar of een beheerder van díe organisatie en met een
+bedrijfsnaam, niet rechtstreeks, niet als teamlid, boekhouder, vreemde of anon, en geen eigen
+organisatie voor wie is uitgenodigd; zie `docs/changelog/CHANGELOG_ORGANISATIE_INRICHTEN_2026-11-07.md`).
+`wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
+de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in
 `docs/rapporten/STROMENTEST_CONTRACT_OFFERTE_FACTUUR_2026-11-06.md`.
 Elk scenario maakt zijn eigen organisaties (`wereld.mjs`), dus ze raken elkaar niet en de

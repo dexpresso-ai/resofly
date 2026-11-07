@@ -51,6 +51,20 @@ const VIEWPORTS = {
   laptop: { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false, maxChrome: 130, only: ['settings-documenten'] },
 };
 
+/**
+ * Een stap van de inrichting van een nieuwe organisatie (OrganizationSetup,
+ * 2026-11-07). Een eigen backend: de organisatie is nieuw (mock met
+ * { onboarding: true }), en de voortgang in de opslag opent de stap meteen.
+ */
+const SETUP_ORDER = ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'btw', 'huisstijl', 'facturen', 'mollie', 'klaar'];
+function setupPage(step, { pendingLegalForm = null } = {}) {
+  const completed = SETUP_ORDER.slice(0, SETUP_ORDER.indexOf(step));
+  return {
+    page: 'dashboard', mock: { onboarding: true }, shell: '.onb',
+    storage: { [`resofly.onboarding.${seed.ids.ORG}`]: JSON.stringify({ step, completed, pendingLegalForm }) },
+  };
+}
+
 /** Welke pagina's, en met welk tabblad ze openen. */
 const PAGES = {
   dashboard: 'dashboard', gerrie: 'gerrie', weekplanner: 'weekplanner', calendar: 'calendar', time: 'time',
@@ -128,6 +142,19 @@ const PAGES = {
   // goed staan als het portaal zelf.
   'portal-preview': { path: '/portal/voorbeeld' },
   login: { path: '/', login: true },
+  // 2026-11-07 — de inrichtingsstappen, elk op elk formaat. Het abonnement met
+  // een gekozen BV: dat is de langste stand (de drie stappen, de pakketten,
+  // de modules). Het wachtscherm is wat een teamlid ziet.
+  'inrichten-welkom': setupPage('welkom'),
+  'inrichten-rechtsvorm': setupPage('rechtsvorm'),
+  'inrichten-abonnement': setupPage('abonnement', { pendingLegalForm: 'bv' }),
+  'inrichten-bedrijf': setupPage('bedrijf'),
+  'inrichten-btw': setupPage('btw'),
+  'inrichten-huisstijl': setupPage('huisstijl'),
+  'inrichten-facturen': setupPage('facturen'),
+  'inrichten-mollie': setupPage('mollie'),
+  'inrichten-klaar': setupPage('klaar'),
+  'inrichten-wachten': { page: 'dashboard', mock: { onboarding: true, role: 'member' }, shell: '.onb-pending' },
 };
 
 /**
@@ -200,6 +227,10 @@ const FIRST_ITEM = {
   // schakelaar 267px; de grenzen liggen zo'n 20% hoger.
   'portal-messages': { selector: '.portal-conv', maxTop: 245 },
   'portal-settings': { selector: '.portal-toggle-row', maxTop: 320 },
+  // 2026-11-07 — de inrichtingsstappen: de kop van de stap staat onder de
+  // stappenkop (merk met Uitloggen, voortgang, bolletjes). Gemeten: 215px bij
+  // elke stap, licht en donker; de grens ligt 20% hoger.
+  ...Object.fromEntries(SETUP_ORDER.map(step => [`inrichten-${step}`, { selector: '.onb-title', maxTop: 258 }])),
 };
 
 /**
@@ -256,15 +287,21 @@ try {
       await installMock(context);
       for (const key of pages) {
         if (vp.only && !vp.only.includes(key)) continue;
-        const page = await context.newPage();
+        const spec = PAGES[key];
+        // Een pagina met een eigen backend (de inrichting van een nieuwe
+        // organisatie) krijgt een eigen context; de rest deelt er een.
+        const ownContext = typeof spec === 'object' && spec.mock
+          ? await browser.newContext({ viewport: vp.viewport, deviceScaleFactor: vp.deviceScaleFactor, isMobile: vp.isMobile, hasTouch: vp.hasTouch, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', colorScheme: theme, reducedMotion: 'reduce' })
+          : null;
+        if (ownContext) await installMock(ownContext, spec.mock);
+        const page = await (ownContext ?? context).newPage();
         const errors = [];
         page.on('pageerror', e => errors.push(String(e.message)));
-        const spec = PAGES[key];
         const isPublic = typeof spec === 'object' && spec.path;
         await page.addInitScript(storageScript(spec, { 'resofly.theme': theme, ...(look ? { 'resofly.look': look } : {}), ...(spec.storage ?? {}) }));
         await page.goto(isPublic ? new URL(spec.path, baseUrl).href : baseUrl, { waitUntil: 'networkidle' });
-        // Werkruimte: de shell; publieke pagina: de eigen wortel.
-        const shell = await page.waitForSelector(isPublic ? '.public-quote-page, .portal, .galv, .login, .pgal' : '.app', { timeout: 20000 }).catch(() => null);
+        // Werkruimte: de shell; publieke pagina: de eigen wortel; de inrichting: zijn eigen scherm.
+        const shell = await page.waitForSelector(spec.shell ?? (isPublic ? '.public-quote-page, .portal, .galv, .login, .pgal' : '.app'), { timeout: 20000 }).catch(() => null);
         await page.waitForTimeout(isPublic ? 1200 : 700);
         // Een pagina die pas in een bepaalde stand krap wordt (een uitgeklapt
         // filterpaneel) zet die stand hier zelf aan. Staat de knop er niet op
@@ -313,8 +350,8 @@ try {
             })() : null,
           };
         }, firstItem[key]?.selector ?? null);
-        // Publieke pagina's hebben geen .content-wikkel: meet daar op het document.
-        if (isPublic && m.firstTop == null) m.firstTop = m.firstTopDoc;
+        // Publieke pagina's en de inrichting hebben geen .content-wikkel: meet daar op het document.
+        if ((isPublic || spec.shell) && m.firstTop == null) m.firstTop = m.firstTopDoc;
         // Twee delen die naast elkaar horen, gemeten over de hele scrollhoogte.
         // Een plakkend (sticky) deel schuift pas ergens overheen als je naar
         // beneden scrolt; bovenaan, waar de andere metingen kijken, is er dan
@@ -360,6 +397,7 @@ try {
         if (problems.length) failures.push({ label, problems });
         if (shotsDir) await page.screenshot({ path: path.join(shotsDir, `${look ? `${look}-` : ''}${theme}-${vpName}-${key}.png`) });
         await page.close();
+        if (ownContext) await ownContext.close();
       }
       await context.close();
     }

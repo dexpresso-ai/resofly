@@ -47,9 +47,11 @@ const BRAND_LOGO_MAX_BYTES = 300 * 1024;
  * Schaalt het logo terug en levert een data-URL op. Data-URL i.p.v. R2 omdat de
  * publieke galerijpagina geen sessie heeft en dus geen media-token kan gebruiken;
  * zo blijft het logo daar gewoon zichtbaar. PNG blijft PNG (transparantie),
- * de rest wordt JPEG.
+ * de rest wordt JPEG. Ook gebruikt door de inrichtingsstappen
+ * (OrganizationSetup.tsx): het opnieuw tekenen laat alleen pixels over, dus
+ * nooit een SVG met script erin.
  */
-async function logoToDataUrl(file: File): Promise<string> {
+export async function logoToDataUrl(file: File): Promise<string> {
   if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
     throw new Error('Kies een PNG-, JPEG- of WebP-bestand.');
   }

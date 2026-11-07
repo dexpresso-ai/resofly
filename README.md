@@ -80,6 +80,7 @@ op `staging`:
 | `npm test` | unit-tests van de app en de edge functions (`*.test.ts`) |
 | `npm run test:mobile -- --theme=both` | elke pagina op telefoon en tablet, tegen een nagebootste backend |
 | `npm run test:loading` | laden per module: per pagina de juiste gegevens, bewaren, verversen |
+| `npm run test:inrichten` | de inrichtingsstappen van een nieuwe organisatie, helemaal doorgeklikt |
 | `deno check …` | de edge functions |
 | `supabase db start` | alle migraties op een lege database |
 

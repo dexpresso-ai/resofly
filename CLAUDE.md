@@ -73,6 +73,7 @@ npm run typecheck
 npm test                                # app + edge functions
 npm run test:mobile -- --theme=both     # bij elke wijziging aan het scherm
 npm run test:loading                    # bij pagina's en het laden van gegevens
+npm run test:inrichten                  # bij de inrichtingsstappen (OrganizationSetup)
 supabase db start                       # bij een migratie: de keten vanaf nul
 ```
 

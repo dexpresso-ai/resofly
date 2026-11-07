@@ -190,7 +190,7 @@ import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { exportFinancePDF, financePdfOptions } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, NoteHandwritingSummary, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, NoteHandwritingSummary, Organization, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, Subtask, Comment as TaskComment,
 } from './types';
 import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
@@ -219,6 +219,11 @@ import './styles/stroom.css';
 // Backlog in het merk van ResoFly. Helemaal achteraan, want hij legt zich over
 // Cockpit en de teamchat heen; alleen actief met `data-look="baken"` op <html>.
 import './styles/baken.css';
+// De inrichtingsstappen van een nieuwe organisatie (2026-11-07). Eigen
+// klassen (.onb), buiten de werkruimte; na baken.css zodat de knoppen daar
+// niet de stijl van het inlogscherm overnemen.
+import './styles/onboarding.css';
+import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
@@ -716,8 +721,10 @@ function NoOrganizationScreen({
   }
 
   if (pendingInvitations.length > 0) {
-    // Een uitgenodigde boekhouder krijgt bij de eerste login geen eigen
-    // werkruimte (ensure_user_default_organization) en komt dus hier binnen.
+    // Wie is uitgenodigd (teamlid of boekhouder), krijgt bij de eerste login
+    // geen eigen werkruimte (ensure_user_default_organization, sinds
+    // 20261107190000 ook voor een teamlid) en komt dus hier binnen. Zo krijgt
+    // een teamlid niet de inrichtingsstappen voor een bedrijf dat hij niet heeft.
     const onlyAccountant = pendingInvitations.every(invitation => isAccountantRole(invitation.role));
     return <div className="boot"><div className="login-card">
       <h1>Je bent uitgenodigd</h1>
@@ -1395,6 +1402,29 @@ function App() {
     await loadWorkspace(organizationId);
   }
 
+  /**
+   * De inrichtingsstappen zijn afgerond (OrganizationSetup). De organisatie
+   * zoals de database hem teruggaf, gaat meteen in de context: zo gaat de
+   * werkruimte open, ook als het verversen daarna even niet lukt. Daarna de
+   * plek die de gebruiker koos.
+   */
+  async function finishOrganizationSetup(next: SetupNext, organization: Organization) {
+    setOrganizationContext(ctx => {
+      const merge = (org: Organization) => (org.id === organization.id ? { ...org, ...organization } : org);
+      return {
+        ...ctx,
+        organizations: ctx.organizations.map(merge),
+        activeOrganization: ctx.activeOrganization ? merge(ctx.activeOrganization) : ctx.activeOrganization,
+        activeMembership: ctx.activeMembership ? { ...ctx.activeMembership, organization: merge(ctx.activeMembership.organization) } : ctx.activeMembership,
+        memberships: ctx.memberships.map(membership => ({ ...membership, organization: merge(membership.organization) })),
+      };
+    });
+    await loadWorkspace();
+    if (next === 'team') openSettings('organisatie');
+    else if (next === 'agenda') openSettings('agenda');
+    else if (next === 'bank') { setPage('bank'); setProjectId(null); setClientId(null); setStatsReportId(null); }
+  }
+
   // Opent de instellingenpagina op een specifieke sectie (standaard 'organisatie').
   // De oplopende `key` zorgt dat óók herhaald op dezelfde sectie klikken de tab opent.
   // Gebruikt door zowel het account-menu (zijbalk) als de dashboard-onboarding.
@@ -1674,6 +1704,40 @@ function App() {
   // Een wissel van organisatie: de vorige is al weg, de nieuwe kern nog niet binnen.
   if (activeOrganization && loading && dataOrgId !== activeOrganization.id) return <BootLoading />;
   if (!activeOrganization) return <NoOrganizationScreen pendingInvitations={organizationContext.pendingInvitations} onAcceptInvitation={acceptInvitation} onCreateOrganization={createNewOrganization} />;
+
+  // Een nieuwe organisatie wordt eerst ingericht (migratie 20261107190000):
+  // rechtsvorm, bedrijfsgegevens, btw, facturen en Mollie. Alleen bij null:
+  // ontbreekt de kolom (undefined, de migratie draaide hier nog niet), dan
+  // werkt de app zoals daarvoor. De eigenaar of een beheerder doorloopt de
+  // stappen; een ander teamlid ziet dat de organisatie nog wordt ingericht.
+  if (activeOrganization.onboarding_completed_at === null) {
+    if (activeMembership && canAdmin) {
+      return <OrganizationSetup
+        key={activeOrganization.id}
+        organization={activeOrganization}
+        role={activeMembership.role}
+        organizations={organizationContext.organizations}
+        pendingInvitations={organizationContext.pendingInvitations}
+        initialSettings={data.companySettings}
+        initialBusinessStatus={organizationContext.businessStatus}
+        initialCreativeStatus={organizationContext.creativeStatus}
+        initialBillingOverview={organizationContext.billingOverview}
+        userEmail={currentUserEmail}
+        onSwitchOrganization={switchOrganization}
+        onAcceptInvitation={acceptInvitation}
+        onSignOut={() => void signOutOnThisDevice()}
+        onCompleted={finishOrganizationSetup}
+      />;
+    }
+    return <OrganizationSetupPending
+      organization={activeOrganization}
+      organizations={organizationContext.organizations}
+      userEmail={currentUserEmail}
+      onSwitchOrganization={switchOrganization}
+      onReload={() => loadWorkspace()}
+      onSignOut={() => void signOutOnThisDevice()}
+    />;
+  }
 
   // Toestemming geven voor een AI-koppeling. Staat bewust hier: pas voorbij de
   // controles hierboven is er een ingelogde gebruiker met een organisatie, en

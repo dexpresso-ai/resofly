@@ -39,6 +39,12 @@ export async function maakWereld(naam, { kor = false } = {}) {
     },
   });
   if (bedrijf.status !== 201 && bedrijf.status !== 200) throw new Error(`bedrijfsgegevens: ${bedrijf.status} ${bedrijf.tekst}`);
+  // Een nieuwe organisatie opent eerst de inrichtingsstappen (migratie
+  // 20261107190000). De bedrijfsgegevens staan er nu; de eigenaar rondt af,
+  // net als met de knop "Naar mijn werkruimte". Anders bleef de UI-test in de
+  // stappen staan.
+  const ingericht = await rpc('complete_organization_onboarding', { p_organization_id: orgId, p_display_name: orgNaam }, eigenaar.token);
+  if (ingericht.status !== 200) throw new Error(`complete_organization_onboarding: ${ingericht.status} ${ingericht.tekst}`);
 
   const beheerder = await lid(orgId, await maakGebruiker(`${naam}-beheerder`), 'admin');
   const medewerker = await lid(orgId, await maakGebruiker(`${naam}-lid`), 'member');

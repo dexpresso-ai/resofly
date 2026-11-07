@@ -1,0 +1,458 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   ORGANISATIE INRICHTEN (2026-11-07) — src/features/OrganizationSetup.tsx
+   ──────────────────────────────────────────────────────────────────────────
+   Links de stappen op het donkere commandovlak, met het goud van het merk
+   op de plek waar je bent (zoals het inlogscherm en de zijbalk van Baken).
+   Rechts de stap zelf op het werkvlak, met de tokens van het thema: licht of
+   donker, in elke look. Het commandovlak is in beide thema's donker; daar
+   staan dus vaste kleuren, geen tokens.
+
+   Op de telefoon (≤ 760px) wordt de stappenbalk een kop met de voortgang,
+   en blijven Terug en Volgende onderaan in beeld.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Dezelfde letter als de werkruimte en het inlogscherm (cockpit.css). */
+:root:has(.onb){
+  --font-sans:'Poppins',ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+
+.onb{
+  --onb-rail:316px;
+  --onb-gold:linear-gradient(155deg,#FFE496 0%,#F9CB55 42%,#F0B530 100%);
+  --onb-radius:18px;
+  --onb-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.05 * var(--shade-k))),0 18px 40px -26px rgba(var(--shade-rgb),calc(.55 * var(--shade-k)));
+  min-height:100vh;min-height:100dvh;
+  display:grid;grid-template-columns:var(--onb-rail) minmax(0,1fr);
+  background:var(--bg);color:var(--ink);
+  font-family:var(--font-sans);font-size:14px;line-height:1.5;
+}
+.onb *{box-sizing:border-box}
+.onb :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ── De stappenbalk ──────────────────────────────────────────────────────── */
+.onb-rail{
+  position:sticky;top:0;height:100vh;height:100dvh;overflow:auto;
+  display:flex;flex-direction:column;gap:18px;
+  padding:26px 20px 20px;
+  color:#F2F1EE;
+  background:
+    radial-gradient(520px 300px at 0% 0%,rgba(247,197,72,.20),transparent 62%),
+    radial-gradient(420px 320px at 100% 0%,rgba(132,118,255,.16),transparent 64%),
+    linear-gradient(160deg,#121217 0%,#1A1A21 55%,#24232F 100%);
+  border-right:1px solid rgba(255,255,255,.06);
+  scrollbar-width:thin;
+}
+.onb-brand{display:flex;align-items:center;gap:11px}
+.onb-brand-tile{
+  flex:none;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;
+  background:var(--onb-gold);color:#191307;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 6px rgba(247,197,72,.08),0 10px 28px -8px rgba(247,197,72,.6);
+}
+.onb-brand-tile.is-big{width:64px;height:64px;border-radius:18px}
+.onb-brand-name{display:flex;flex-direction:column;font-weight:700;font-size:16px;letter-spacing:-.01em;line-height:1.15}
+.onb-brand-name small{font-size:11px;font-weight:500;color:#B9B8C4;letter-spacing:.02em}
+.onb-rail-intro h2{font-size:19px;font-weight:700;letter-spacing:-.02em;margin:0}
+.onb-rail-intro p{margin:4px 0 0;color:#B9B8C4;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.onb-meter{height:6px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+.onb-meter span{display:block;height:100%;border-radius:inherit;background:var(--onb-gold);box-shadow:0 0 12px rgba(247,197,72,.55);transition:width .5s cubic-bezier(.16,1,.3,1)}
+.onb-meter-text{display:flex;justify-content:space-between;gap:10px;margin:-8px 0 0;font-size:11.5px;color:#A9A8B4;font-weight:500}
+.onb-meter-text span:last-child{display:none}
+
+.onb-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;position:relative}
+.onb-step{position:relative}
+/* De lijn tussen de bolletjes. */
+.onb-step:not(:last-child)::after{
+  content:'';position:absolute;left:25px;top:42px;bottom:-8px;width:2px;border-radius:2px;
+  background:rgba(255,255,255,.09);
+}
+.onb-step.is-done:not(:last-child)::after{background:linear-gradient(180deg,rgba(247,197,72,.75),rgba(247,197,72,.25))}
+.onb-step button{
+  width:100%;display:grid;grid-template-columns:32px minmax(0,1fr);gap:12px;align-items:center;
+  padding:9px 10px;border:0;border-radius:12px;background:transparent;color:inherit;
+  font:inherit;text-align:left;cursor:pointer;transition:background .15s ease;
+}
+.onb-step button:hover:not(:disabled){background:rgba(255,255,255,.05)}
+.onb-step button:disabled{cursor:default}
+.onb-step.is-current button{background:rgba(247,197,72,.10);box-shadow:inset 0 0 0 1px rgba(247,197,72,.24)}
+.onb-step-dot{
+  width:32px;height:32px;border-radius:50%;display:grid;place-items:center;
+  font-size:12px;font-weight:700;color:#C9C8D2;
+  border:1.5px solid rgba(255,255,255,.16);background:#1C1C24;position:relative;z-index:1;
+}
+.onb-step.is-done .onb-step-dot{background:rgba(247,197,72,.92);border-color:transparent;color:#1A1405}
+.onb-step.is-current .onb-step-dot{background:var(--onb-gold);border-color:transparent;color:#191307;animation:onb-breathe 2.8s ease-in-out infinite}
+.onb-step.is-locked:not(.is-current) .onb-step-dot{color:#7F7E8A}
+.onb-step-text{display:flex;flex-direction:column;min-width:0}
+.onb-step-text strong{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:7px;white-space:nowrap}
+.onb-step-text strong em{font-style:normal;font-size:10px;font-weight:600;letter-spacing:.04em;color:#9998A6;border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:0 6px;line-height:16px}
+.onb-step-text small{font-size:11.5px;color:#A3A2AE;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.onb-step.is-locked:not(.is-current) .onb-step-text{opacity:.62}
+@keyframes onb-breathe{
+  0%,100%{box-shadow:0 0 0 0 rgba(247,197,72,0),0 0 14px rgba(247,197,72,.45)}
+  50%{box-shadow:0 0 0 6px rgba(247,197,72,.14),0 0 22px rgba(247,197,72,.65)}
+}
+
+.onb-rail-foot{margin-top:auto;display:flex;flex-direction:column;gap:12px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
+.onb-switch{display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:#A9A8B4;font-weight:500}
+.onb-switch .select-trigger{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.12);color:#F2F1EE}
+.onb-account{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:#B9B8C4}
+.onb-account span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.onb-account button{
+  flex:none;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:9px;
+  border:1px solid rgba(255,255,255,.14);background:transparent;color:#E8E7EE;font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+}
+.onb-account button:hover{background:rgba(255,255,255,.07)}
+
+/* ── Het werkvlak ────────────────────────────────────────────────────────── */
+.onb-main{min-width:0;display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;
+  background:
+    radial-gradient(900px 420px at 100% 0%,rgba(var(--accent-rgb),.07),transparent 60%),
+    var(--bg);
+}
+.onb-head{width:100%;max-width:980px;margin:0 auto;padding:44px 48px 6px;animation:onb-rise .45s cubic-bezier(.16,1,.3,1) both}
+.onb-eyebrow{display:inline-flex;align-items:center;gap:7px;margin:0;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink)}
+.onb-title{margin:10px 0 0;font-size:clamp(24px,3.2vw,34px);line-height:1.15;font-weight:700;letter-spacing:-.025em;color:var(--ink);outline:none}
+.onb-gold{background:linear-gradient(92deg,#E9A51C 0%,#F2BD3A 45%,#D88E0F 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+:root:not([data-theme="light"]) .onb-gold{background:linear-gradient(92deg,#FFEBB0 0%,#F9CD5A 45%,#EAA924 100%);-webkit-background-clip:text;background-clip:text}
+.onb-lead{margin:12px 0 0;max-width:720px;color:var(--ink-2);font-size:15px;line-height:1.65}
+.onb-body{flex:1;width:100%;max-width:980px;margin:0 auto;padding:24px 48px 36px;display:flex;flex-direction:column;gap:18px;animation:onb-rise .5s .04s cubic-bezier(.16,1,.3,1) both}
+@keyframes onb-rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+.onb-foot{
+  position:sticky;bottom:0;z-index:5;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px max(48px,calc((100% - 980px) / 2 + 48px));
+  background:rgba(var(--bg-rgb),.86);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-top:1px solid var(--line);
+}
+.onb-foot-left,.onb-foot-right{display:flex;align-items:center;gap:10px}
+.onb .btn{padding:10px 16px;border-radius:12px;font-size:13px;font-weight:600;min-height:40px}
+.onb .btn-ghost{border-color:var(--line-2);color:var(--ink-2);background:transparent}
+.onb .btn-ghost:hover:not(:disabled){background:var(--surface-2);color:var(--ink)}
+.onb .btn-primary{background:var(--onb-gold);color:#191307;border-color:transparent;box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 8px 22px -10px rgba(247,197,72,.75)}
+.onb .btn-primary:hover:not(:disabled){filter:brightness(1.04);box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 10px 26px -10px rgba(247,197,72,.9)}
+.onb .btn:disabled{opacity:.5;cursor:not-allowed}
+.onb-next{min-width:150px}
+.onb-spin{animation:onb-spin 1s linear infinite}
+@keyframes onb-spin{to{transform:rotate(360deg)}}
+.onb-link{border:0;background:none;padding:0;font:inherit;font-weight:600;color:var(--accent-ink);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.onb-link:disabled{opacity:.5;cursor:not-allowed}
+.onb-small{margin:0;font-size:12.5px;line-height:1.55;color:var(--ink-3)}
+.onb-small svg{vertical-align:-2px;margin-right:4px}
+
+/* ── Kaarten, groepen en meldingen ───────────────────────────────────────── */
+.onb-card{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--onb-radius);
+  padding:20px;box-shadow:var(--onb-shadow);display:flex;flex-direction:column;gap:14px;min-width:0;
+}
+.onb-card-head{display:flex;align-items:center;gap:10px;color:var(--accent-ink)}
+.onb-card-head h3{margin:0;font-size:15px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+.onb-card-head.is-sub{margin-top:6px;padding-top:14px;border-top:1px solid var(--line)}
+.onb-card p{margin:0;color:var(--ink-2);line-height:1.6}
+
+.onb-notice{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:14px;font-size:13.5px;line-height:1.55;border:1px solid}
+.onb-notice svg{flex:none;margin-top:2px}
+.onb-notice.is-error{background:rgba(var(--danger-rgb),.09);border-color:rgba(var(--danger-rgb),.32);color:var(--danger)}
+.onb-notice.is-warn{background:rgba(var(--warn-rgb),.09);border-color:rgba(var(--warn-rgb),.32);color:var(--ink)}
+.onb-notice.is-warn svg{color:var(--warn)}
+.onb-notice.is-ok{background:rgba(var(--ok-rgb),.09);border-color:rgba(var(--ok-rgb),.32);color:var(--ink)}
+.onb-notice.is-ok svg{color:var(--ok)}
+.onb-notice.is-info{background:rgba(var(--accent-rgb),.09);border-color:rgba(var(--accent-rgb),.32);color:var(--ink)}
+.onb-notice.is-info svg{color:var(--accent-ink)}
+
+.onb-group{display:flex;flex-direction:column;gap:12px}
+.onb-group-head h3{margin:0;font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.onb-group-head p{margin:2px 0 0;font-size:13px;color:var(--ink-3)}
+
+/* Keuzekaarten: rechtsvorm, btw, verzendwijze, pakket. */
+.onb-choices{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.onb-choices.is-two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.onb-choices.is-plans{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.onb-choice{
+  position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0;
+  padding:16px 16px 15px;border-radius:16px;text-align:left;cursor:pointer;
+  border:1.5px solid var(--line-2);background:var(--surface);color:var(--ink);font:inherit;
+  box-shadow:var(--onb-shadow);
+  transition:border-color .15s ease,box-shadow .2s ease,transform .2s cubic-bezier(.16,1,.3,1);
+}
+.onb-choice:hover{border-color:var(--line-3);transform:translateY(-1px)}
+.onb-choice.is-on{border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.20),var(--onb-shadow);background:linear-gradient(180deg,rgba(var(--accent-rgb),.07),transparent 70%),var(--surface)}
+.onb-choice strong{font-size:15px;font-weight:700;letter-spacing:-.01em;padding-right:26px}
+.onb-choice-text{font-size:12.5px;line-height:1.5;color:var(--ink-2)}
+.onb-choice-check{
+  position:absolute;top:13px;right:13px;width:20px;height:20px;border-radius:50%;
+  display:grid;place-items:center;border:1.5px solid var(--line-3);color:#191307;
+}
+.onb-choice.is-on .onb-choice-check{background:var(--onb-gold);border-color:transparent}
+.onb-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto;padding-top:4px}
+.onb-tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;line-height:20px;padding:0 8px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);color:var(--ink-2);white-space:nowrap}
+.onb-tag.is-gold{background:rgba(var(--accent-rgb),.13);border-color:rgba(var(--accent-rgb),.38);color:var(--accent-ink)}
+.onb-tag.is-ok{background:rgba(var(--ok-rgb),.11);border-color:rgba(var(--ok-rgb),.34);color:var(--ok)}
+
+.onb-explain{border-color:rgba(var(--accent-rgb),.28)}
+.onb-bullets{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.onb-bullets li{position:relative;padding-left:22px;color:var(--ink-2);line-height:1.55}
+.onb-bullets li::before{content:'';position:absolute;left:4px;top:.55em;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18)}
+
+/* Segmentknoppen: per maand/jaar, aangifte, termijn. */
+.onb-seg{display:inline-flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:13px;background:var(--surface-2);border:1px solid var(--line);align-self:flex-start;max-width:100%}
+.onb-seg button{border:0;border-radius:10px;padding:8px 14px;background:transparent;color:var(--ink-2);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.onb-seg button.is-on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.1 * var(--shade-k))),0 0 0 1px var(--line-2)}
+.onb-row{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px}
+.onb-check{display:flex;align-items:flex-start;gap:10px;font-size:13px;color:var(--ink-2);cursor:pointer;line-height:1.5}
+.onb-check input{width:18px;height:18px;margin-top:1px;accent-color:#E9A51C;flex:none}
+.onb-total{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:14px;background:var(--surface-2);border:1px dashed var(--line-3)}
+.onb-total span{color:var(--ink-2)}
+.onb-total strong{color:var(--ink);font-size:16px}
+.onb-price{font-size:22px;font-weight:700;letter-spacing:-.02em;color:var(--ink)}
+.onb-price small{font-size:12px;font-weight:500;color:var(--ink-3);margin-left:2px}
+
+.onb-checklist ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:12px}
+.onb-checklist li{display:grid;grid-template-columns:28px minmax(0,1fr);gap:12px;align-items:start;opacity:.6}
+.onb-checklist li.is-now,.onb-checklist li.is-done{opacity:1}
+.onb-checklist li>span{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;border:1.5px solid var(--line-3);color:var(--ink-2)}
+.onb-checklist li.is-now>span{border-color:var(--accent);color:var(--accent-ink);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.15)}
+.onb-checklist li.is-done>span{background:var(--onb-gold);border-color:transparent;color:#191307}
+.onb-checklist strong{display:block;font-size:14px}
+.onb-checklist small{display:block;color:var(--ink-3);font-size:12.5px;line-height:1.5}
+
+.onb-modules{display:flex;flex-direction:column;gap:10px}
+.onb-module{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border-radius:14px;border:1px solid var(--line);background:var(--surface-2)}
+.onb-module.is-highlight{border-color:rgba(var(--accent-rgb),.5);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.12)}
+.onb-module strong{font-size:14px}
+.onb-module p{margin:2px 0 0;font-size:12.5px;color:var(--ink-2);line-height:1.5}
+.onb-module-act{display:flex;align-items:center;gap:8px;flex:none}
+.onb-module-act small{font-size:12px;color:var(--ink-3);white-space:nowrap}
+.onb-confirm-text{color:var(--ink)!important;font-weight:600}
+
+/* ── Formulieren ─────────────────────────────────────────────────────────── */
+.onb-fields{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px 16px}
+.onb-field{display:flex;flex-direction:column;gap:6px;min-width:0;grid-column:span 6}
+.onb-field.span-4{grid-column:span 4}
+.onb-field.span-3{grid-column:span 3}
+.onb-field.span-2{grid-column:span 2}
+.onb-field label{font-size:12.5px;font-weight:600;color:var(--ink)}
+.onb-req{color:var(--accent-ink)}
+.onb-field small{font-size:12px;line-height:1.45;color:var(--ink-3)}
+.onb .form-input,.onb .form-textarea,.onb .select-trigger{background:var(--field);border:1px solid var(--line-2);border-radius:11px;padding:10px 12px;font-size:14px;color:var(--ink);min-height:42px}
+.onb .form-textarea{min-height:64px;line-height:1.5}
+.onb .form-input:focus,.onb .form-textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18)}
+.onb .form-input::placeholder,.onb .form-textarea::placeholder{color:var(--ink-4)}
+.onb .form-input:disabled,.onb .select-trigger:disabled{opacity:.6}
+.onb-field.has-error .form-input{border-color:var(--danger);box-shadow:0 0 0 3px rgba(var(--danger-rgb),.12)}
+.onb-field-error{margin:0;font-size:12.5px;line-height:1.45;color:var(--danger);font-weight:500}
+.onb-hints{display:flex;flex-direction:column;gap:8px;padding:14px 16px;border-radius:14px;background:rgba(var(--accent-rgb),.06);border:1px solid rgba(var(--accent-rgb),.2)}
+.onb-hints p{margin:0;display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.55;color:var(--ink-2)}
+.onb-hints svg{flex:none;margin-top:3px;color:var(--accent-ink)}
+.onb-chips{display:flex;flex-wrap:wrap;gap:6px}
+.onb-chip{border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink-2);border-radius:99px;padding:4px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.onb-chip.is-on,.onb-chip:hover{border-color:var(--accent);color:var(--ink)}
+.onb-input-prefix{display:flex;align-items:center;gap:8px}
+.onb-input-prefix>span{font-weight:600;color:var(--ink-3)}
+
+/* ── Welkom ──────────────────────────────────────────────────────────────── */
+.onb-route{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.onb-route-card{
+  position:relative;overflow:hidden;padding:20px;border-radius:var(--onb-radius);
+  background:var(--surface);border:1px solid var(--line);box-shadow:var(--onb-shadow);
+  animation:onb-rise .55s cubic-bezier(.16,1,.3,1) both;
+}
+.onb-route-card::after{content:'';position:absolute;inset:auto -40px -60px auto;width:150px;height:150px;border-radius:50%;background:radial-gradient(circle,rgba(var(--accent-rgb),.16),transparent 70%)}
+.onb-route-icon{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:var(--onb-gold);color:#191307;box-shadow:0 8px 20px -10px rgba(247,197,72,.8)}
+.onb-route-num{position:absolute;top:14px;right:18px;font-size:40px;font-weight:800;line-height:1;color:var(--ink);opacity:.06}
+.onb-route-card h3{margin:14px 0 4px;font-size:16px;font-weight:700}
+.onb-route-card p{margin:0;color:var(--ink-2);font-size:13px;line-height:1.55}
+.onb-route-card small{display:block;margin-top:10px;font-size:11.5px;color:var(--ink-3)}
+.onb-facts{display:flex;flex-direction:column;gap:8px}
+.onb-facts span{display:flex;gap:10px;align-items:flex-start;font-size:13px;color:var(--ink-2)}
+.onb-facts svg{flex:none;margin-top:2px;color:var(--accent-ink)}
+.onb-invite{border-color:rgba(var(--accent-rgb),.4)}
+.onb-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.onb-list li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
+.onb-list li span{display:flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
+.onb-list li small{color:var(--ink-3);font-size:12px}
+
+/* ── Huisstijl ───────────────────────────────────────────────────────────── */
+.onb-brand-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start}
+.onb-logo{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.onb-logo-preview{width:150px;height:96px;flex:none;border-radius:14px;border:1px dashed var(--line-3);display:grid;place-items:center;padding:10px;
+  background:repeating-conic-gradient(rgba(var(--shade-rgb),calc(.05 * var(--shade-k))) 0% 25%,transparent 0% 50%) 50% / 14px 14px,var(--surface-2)}
+.onb-logo-preview img{max-width:100%;max-height:100%;object-fit:contain}
+.onb-logo-preview span{font-size:12px;color:var(--ink-3)}
+.onb-logo-actions{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0;flex:1}
+.onb-logo-actions small{font-size:12px;color:var(--ink-3)}
+.onb-swatches{display:flex;flex-wrap:wrap;gap:10px}
+.onb-swatch{width:34px;height:34px;border-radius:50%;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line-2);cursor:pointer;padding:0;position:relative}
+.onb-swatch.is-on{box-shadow:0 0 0 2px var(--ink),0 6px 14px -6px rgba(var(--shade-rgb),.5)}
+.onb-swatch.is-custom{display:grid;place-items:center;overflow:hidden;background:conic-gradient(#F7C548,#E8590C,#D6336C,#7048E8,#1C7ED6,#0CA678,#F7C548)}
+.onb-swatch.is-custom input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;padding:0}
+
+/* Het voorbeeld: een factuur op papier, ook in het donkere thema wit. */
+.onb-paper{
+  background:#FFFFFF;color:#1C1B18;border-radius:16px;padding:24px 24px 20px;
+  box-shadow:0 1px 2px rgba(0,0,0,.06),0 26px 54px -30px rgba(0,0,0,.45),0 0 0 1px rgba(0,0,0,.06);
+  display:flex;flex-direction:column;gap:16px;min-width:0;transform:rotate(-.4deg);
+}
+.onb-paper-top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:14px;border-bottom:3px solid}
+.onb-paper-top img{max-height:42px;max-width:60%;object-fit:contain}
+.onb-paper-top strong{font-size:17px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.onb-paper-kind{font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#6F6B63}
+.onb-paper-meta{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#55524B}
+.onb-paper-lines{display:flex;flex-direction:column;gap:2px;font-size:13px}
+.onb-paper-lines div{display:flex;justify-content:space-between;gap:10px;padding:8px 10px;border-bottom:1px solid #EEECE7}
+.onb-paper-lines .is-total{border:0;border-radius:10px;margin-top:6px;font-weight:700}
+.onb-paper-foot{display:flex;flex-direction:column;gap:2px;font-size:11px;color:#6F6B63;padding-top:10px;border-top:1px solid #EEECE7;overflow-wrap:anywhere}
+.onb-paper-foot strong{color:#1C1B18;font-size:12px}
+
+/* ── Facturen en Mollie ──────────────────────────────────────────────────── */
+.onb-method{padding:20px}
+.onb-method-icon{width:44px;height:44px;border-radius:13px;display:grid;place-items:center;background:var(--surface-2);border:1px solid var(--line);color:var(--accent-ink);margin-bottom:4px}
+.onb-choice.is-on .onb-method-icon{background:var(--onb-gold);border-color:transparent;color:#191307}
+.onb-method ul{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:5px}
+.onb-method li{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2)}
+.onb-method li svg{color:var(--ok);flex:none}
+
+.onb-guide{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.onb-guide li{display:grid;grid-template-columns:40px minmax(0,1fr);gap:12px;align-items:start;padding:16px;border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--onb-shadow)}
+.onb-guide-icon{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:rgba(var(--accent-rgb),.13);color:var(--accent-ink)}
+.onb-guide-title{display:flex;align-items:center;gap:8px;font-size:14px}
+.onb-guide-num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line-2);font-size:11px;font-weight:700;color:var(--ink-2)}
+.onb-guide p{margin:4px 0 0;font-size:13px;line-height:1.55;color:var(--ink-2)}
+.onb-guide a,.onb-card a{color:var(--accent-ink);font-weight:600;text-underline-offset:2px}
+.onb-guide a svg{vertical-align:-1px}
+.onb-key{display:flex;gap:8px;align-items:center}
+.onb-key .form-input{flex:1;min-width:0;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;letter-spacing:.02em}
+.onb-icon-btn{width:42px;padding:0!important;flex:none}
+.onb-connected{border-color:rgba(var(--ok-rgb),.4)}
+.onb-connected .onb-card-head{color:var(--ok)}
+
+/* ── Klaar ───────────────────────────────────────────────────────────────── */
+.onb-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.onb-summary-row{
+  display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:12px;align-items:center;
+  padding:13px 14px;border-radius:14px;border:1px solid var(--line);background:var(--surface);
+  color:var(--ink);font:inherit;text-align:left;cursor:pointer;box-shadow:var(--onb-shadow);
+  transition:border-color .15s ease,transform .2s cubic-bezier(.16,1,.3,1);
+}
+.onb-summary-row:hover{border-color:var(--line-3);transform:translateY(-1px)}
+.onb-summary-row.is-warn{border-color:rgba(var(--warn-rgb),.45)}
+.onb-summary-icon{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;background:rgba(var(--accent-rgb),.12);color:var(--accent-ink)}
+.onb-summary-row.is-warn .onb-summary-icon{background:rgba(var(--warn-rgb),.12);color:var(--warn)}
+.onb-summary-text{display:flex;flex-direction:column;min-width:0}
+.onb-summary-text small{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.onb-summary-text strong{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.onb-summary-text em{font-style:normal;font-size:12px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.onb-summary-edit{font-size:12px;font-weight:600;color:var(--accent-ink)}
+.onb-after h3{margin:6px 0 10px;font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.onb-after-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:8px}
+.onb-after-card{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:14px;border-radius:14px;border:1px dashed var(--line-3);background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.onb-after-card:hover:not(:disabled){border-style:solid;border-color:var(--accent);background:rgba(var(--accent-rgb),.05)}
+.onb-after-card>span{color:var(--accent-ink)}
+.onb-after-card strong{font-size:13.5px}
+.onb-after-card small{font-size:12px;color:var(--ink-3)}
+
+/* ── Een teamlid wacht op de inrichting ───────────────────────────────────── */
+.onb.onb-pending{display:grid;grid-template-columns:1fr;place-items:center;padding:24px 16px;
+  background:
+    radial-gradient(760px 460px at 0% 0%,rgba(247,197,72,.17),transparent 64%),
+    radial-gradient(680px 460px at 100% 0%,rgba(132,118,255,.20),transparent 66%),
+    linear-gradient(135deg,#111116 0%,#1A1A21 50%,#24232F 100%);
+}
+.onb-pending-card{width:min(520px,100%);display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:34px 28px;border-radius:26px;background:var(--surface);border:1px solid var(--line);box-shadow:0 30px 70px -30px rgba(0,0,0,.6)}
+.onb-pending-card h1{margin:4px 0 0;font-size:24px;letter-spacing:-.02em;color:var(--ink)}
+.onb-pending-card p{margin:0;color:var(--ink-2);line-height:1.6}
+.onb-pending-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:6px}
+
+/* ── Smaller ─────────────────────────────────────────────────────────────── */
+@media (max-width:1180px){
+  .onb{--onb-rail:268px}
+  .onb-head{padding:36px 32px 6px}
+  .onb-body{padding:22px 32px 32px}
+  .onb-foot{padding:12px 32px}
+  .onb-route{grid-template-columns:1fr}
+  .onb-brand-grid{grid-template-columns:1fr}
+  .onb-paper{transform:none}
+  /* Naast de stappenbalk is het werkvlak hier smal: drie velden naast elkaar
+     (KvK, btw-id, IBAN) kapten het IBAN af op een tablet. */
+  .onb-field.span-2{grid-column:span 3}
+  .onb-field.span-4{grid-column:span 6}
+}
+@media (max-width:980px){
+  .onb-guide{grid-template-columns:1fr}
+  .onb-summary{grid-template-columns:1fr}
+  .onb-after-grid{grid-template-columns:1fr}
+}
+
+/* Telefoon: de stappen als kop, Terug en Volgende onderaan in beeld. */
+@media (max-width:760px){
+  .onb{grid-template-columns:minmax(0,1fr)}
+  /* Eén kop: het merk met Uitloggen ernaast, dan de voortgang en de
+     bolletjes. De voet van de balk lost op in dit rooster (display:contents),
+     zodat Uitloggen geen eigen rij kost. */
+  .onb-rail{
+    position:static;height:auto;overflow:visible;padding:14px 16px 12px;gap:10px 12px;
+    border-right:0;border-bottom:1px solid rgba(255,255,255,.06);
+    display:grid;grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:"brand out" "meter meter" "text text" "steps steps" "switch switch";
+  }
+  .onb-brand{grid-area:brand}
+  .onb-brand-tile{width:34px;height:34px;border-radius:10px}
+  .onb-brand-tile svg{width:24px;height:24px}
+  .onb-rail-intro{display:none}
+  .onb-meter{grid-area:meter;height:5px}
+  .onb-meter-text{grid-area:text;margin:0}
+  .onb-steps{grid-area:steps}
+  .onb-meter-text span:last-child{display:inline;color:#F2F1EE;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* De stappen als rij bolletjes; de titel staat al boven de stap zelf. */
+  .onb-steps{flex-direction:row;gap:6px;overflow-x:auto;padding:2px 0 4px;scrollbar-width:none}
+  .onb-steps::-webkit-scrollbar{display:none}
+  .onb-step:not(:last-child)::after{display:none}
+  .onb-step button{grid-template-columns:28px;padding:2px;gap:0;border-radius:50%}
+  .onb-step.is-current button{background:transparent;box-shadow:none}
+  .onb-step-dot{width:28px;height:28px;font-size:11px}
+  .onb-step-text{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .onb-rail-foot{display:contents}
+  .onb-switch{grid-area:switch}
+  .onb-switch>span{display:none}
+  .onb-account{grid-area:out;justify-content:flex-end}
+  .onb-account>span{display:none}
+
+  .onb-main{min-height:0}
+  .onb-head{padding:22px 16px 4px}
+  .onb-title{font-size:23px}
+  .onb-lead{font-size:14px}
+  .onb-body{padding:16px 16px 22px;gap:14px}
+  .onb-foot{padding:10px 16px calc(10px + env(safe-area-inset-bottom));gap:8px}
+  .onb-foot-right{flex:1;justify-content:flex-end}
+  .onb-next{min-width:0;flex:1}
+  .onb .btn{padding:10px 13px}
+  .onb-card{padding:16px;border-radius:16px}
+  .onb-choices,.onb-choices.is-two,.onb-choices.is-plans{grid-template-columns:minmax(0,1fr)}
+  .onb-fields{grid-template-columns:minmax(0,1fr)}
+  .onb-field.span-2,.onb-field.span-3,.onb-field.span-4{grid-column:span 1}
+  .onb-field{grid-column:span 1}
+  .onb-module{flex-direction:column;align-items:stretch}
+  .onb-module-act{justify-content:flex-end;flex-wrap:wrap}
+  .onb-key{flex-wrap:wrap}
+  .onb-key .form-input{flex:1 1 100%}
+  .onb-key .btn-primary{flex:1}
+  .onb-total{flex-direction:column;align-items:stretch}
+  .onb-summary-edit{display:none}
+  .onb-summary-row{grid-template-columns:36px minmax(0,1fr)}
+  .onb-paper{padding:18px}
+}
+
+/* Liggend op de telefoon: weinig hoogte, dus de kop zo laag mogelijk. De
+   stappenkop scrolt mee weg; alleen Terug en Volgende blijven staan. */
+@media (max-width:900px) and (max-height:480px){
+  .onb-rail{padding-top:10px;padding-bottom:10px}
+  .onb-steps{display:none}
+  .onb-head{padding-top:14px}
+  .onb-title{font-size:21px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .onb-head,.onb-body,.onb-route-card,.onb-step.is-current .onb-step-dot{animation:none}
+  .onb-choice,.onb-summary-row{transition:none}
+}
