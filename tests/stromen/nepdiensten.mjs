@@ -2,7 +2,7 @@
 // Mollie en de media-worker (R2, Word → PDF). Alles wordt vastgelegd zodat een
 // test kan nagaan wat er de deur uit ging (aan wie, met welke bijlage) en wat
 // er bij Mollie gebeurde. Met `storing` kun je een dienst laten falen.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { API_URL, MEDIA } from './omgeving.mjs';
 
@@ -13,6 +13,18 @@ export const post = {
   mails: [],
   /** Faal de volgende n verzendingen met een 500 (of 'netwerk': gooi). */
   resendStoring: { aantal: 0, soort: '500' },
+  /**
+   * Verzenddomeinen in het (gedeelde) Resend-account: id → domein zoals de
+   * Domains-API het teruggeeft, plus `controles` (zoveel GET's na "verify"
+   * blijft hij nog pending, zoals Resend dat op de achtergrond doet).
+   */
+  domeinen: new Map(),
+  /** Domeinnamen waarvan de klant de DNS-records geplaatst heeft. */
+  dns: new Set(),
+  /** Elke aanvraag aan de Domains-API: { methode, pad, body }. */
+  domeinVerzoeken: [],
+  /** Faal de volgende n Domains-aanroepen (eventueel alleen deze methode) met een 500. */
+  domeinStoring: { aantal: 0, methode: null },
   /** R2: sleutel → bytes. */
   r2: new Map(),
   r2Storing: { aantal: 0 },
@@ -23,6 +35,8 @@ export const post = {
     betalingen: new Map(),
     /** Sleutels die Mollie weigert bij het valideren. */
     geweigerdeSleutels: new Set(),
+    /** Het profiel bij een sleutel (GET /v2/profiles/me): { id, name, website, status }. Zonder: één per sleutel. */
+    profielen: new Map(),
     storing: { pad: null, soort: '500', aantal: 0 },
   },
   /** Alles wat naar buiten ging, voor diagnose. */
@@ -51,13 +65,95 @@ async function nepPdf(tekst) {
   return new Uint8Array(await doc.save());
 }
 
+/** Het domein achter `Naam <adres>` of `adres`. */
+function afzenderDomein(from) {
+  const m = String(from ?? '').match(/@([a-z0-9.-]+)>?\s*$/i);
+  return m ? m[1].toLowerCase() : '';
+}
+
+/** Records zoals Resend ze voor een nieuw domein in eu-west-1 geeft. */
+function nieuweRecords() {
+  return [
+    { record: 'DKIM', name: 'resend._domainkey', type: 'TXT', ttl: 'Auto', status: 'not_started', value: `p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQ${randomUUID().replace(/-/g, '')}IDAQAB` },
+    { record: 'SPF', name: 'send', type: 'MX', ttl: 'Auto', status: 'not_started', value: 'feedback-smtp.eu-west-1.amazonses.com', priority: 10 },
+    { record: 'SPF', name: 'send', type: 'TXT', ttl: 'Auto', status: 'not_started', value: 'v=spf1 include:amazonses.com ~all' },
+  ];
+}
+
+/** Zet een domein (en zijn records) op een status, zoals Resend na een controle. */
+export function zetDomeinStatus(id, status, recordStatus = status) {
+  const domein = post.domeinen.get(id);
+  if (!domein) throw new Error(`nep-Resend: domein ${id} bestaat niet`);
+  domein.status = status;
+  for (const record of domein.records) record.status = recordStatus;
+  return domein;
+}
+
+function domeinJson(domein) {
+  const { controles: _controles, gestart: _gestart, ...zichtbaar } = domein;
+  return { object: 'domain', ...structuredClone(zichtbaar) };
+}
+
+async function resendDomeinen(request, url) {
+  const body = request.method === 'POST' ? await request.json().catch(() => ({})) : undefined;
+  post.domeinVerzoeken.push({ methode: request.method, pad: url.pathname, body });
+  const st = post.domeinStoring;
+  if (st.aantal > 0 && (!st.methode || st.methode === request.method)) {
+    st.aantal -= 1;
+    return json(500, { statusCode: 500, name: 'internal_server_error', message: 'Nep-storing bij Resend Domains' });
+  }
+  const [, , id, actie] = url.pathname.split('/');
+  if (!id && request.method === 'POST') {
+    const naam = String(body?.name ?? '').toLowerCase();
+    if ([...post.domeinen.values()].some((d) => d.name === naam)) {
+      return json(403, { statusCode: 403, name: 'validation_error', message: `The domain ${naam} has already been registered.` });
+    }
+    const domein = {
+      id: randomUUID(), name: naam, status: 'not_started', created_at: new Date().toISOString(),
+      region: body?.region ?? 'us-east-1', capabilities: { sending: 'enabled', receiving: 'disabled', ...(body?.capabilities ?? {}) },
+      records: nieuweRecords(), controles: 0, gestart: false,
+    };
+    post.domeinen.set(domein.id, domein);
+    return json(201, domeinJson(domein));
+  }
+  const domein = post.domeinen.get(id);
+  if (!domein) return json(404, { statusCode: 404, name: 'not_found', message: 'Domain not found' });
+  if (request.method === 'GET' && !actie) {
+    // Resend controleert op de achtergrond: pas na `controles` keer kijken is het klaar.
+    if (domein.gestart && domein.status === 'pending') {
+      if (domein.controles > 0) domein.controles -= 1;
+      else if (post.dns.has(domein.name)) zetDomeinStatus(id, 'verified');
+    }
+    return json(200, domeinJson(domein));
+  }
+  if (request.method === 'POST' && actie === 'verify') {
+    domein.gestart = true;
+    if (domein.status !== 'verified') zetDomeinStatus(id, 'pending');
+    return json(200, { object: 'domain', id });
+  }
+  if (request.method === 'DELETE' && !actie) {
+    post.domeinen.delete(id);
+    return json(200, { object: 'domain', id, deleted: true });
+  }
+  return json(405, { statusCode: 405, name: 'method_not_allowed', message: 'Nep-Resend kent deze aanroep niet' });
+}
+
 async function resend(request) {
+  const url = new URL(request.url);
+  if (url.pathname.startsWith('/domains')) return resendDomeinen(request, url);
   if (post.resendStoring.aantal > 0) {
     post.resendStoring.aantal -= 1;
     if (post.resendStoring.soort === 'netwerk') throw new TypeError('fetch failed (nep-netwerkfout Resend)');
     return json(500, { message: 'Nep-storing bij Resend' });
   }
   const body = await request.json();
+  // Zoals Resend: versturen kan alleen vanaf het platformdomein of een domein
+  // dat in het account geverifieerd is.
+  const vanaf = afzenderDomein(body.from);
+  const platform = afzenderDomein(process.env.RESEND_FROM_EMAIL);
+  if (vanaf !== platform && ![...post.domeinen.values()].some((d) => d.name === vanaf && d.status === 'verified')) {
+    return json(403, { statusCode: 403, name: 'validation_error', message: `The ${vanaf} domain is not verified.` });
+  }
   // Uniek over processen heen, zoals bij Resend: de database bewaart de id's
   // (met een unieke index), ook van eerdere runs en van scenario's die tegelijk draaien.
   const id = `re_${randomUUID()}`;
@@ -82,6 +178,26 @@ async function resend(request) {
 
 function mollieSleutel(request) {
   return (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
+}
+
+/**
+ * Het profiel (de website) van een sleutel, zoals Mollie het op /v2/profiles/me
+ * geeft. Een test kan er een zetten (post.mollie.profielen), bijvoorbeeld om twee
+ * sleutels van hetzelfde account te hebben; anders heeft elke sleutel een eigen.
+ */
+function mollieProfiel(sleutel) {
+  const eigen = post.mollie.profielen.get(sleutel) ?? {};
+  const id = eigen.id ?? `pfl_${createHash('sha256').update(sleutel).digest('hex').slice(0, 10)}`;
+  return {
+    resource: 'profile', id, mode: sleutel.startsWith('test_') ? 'test' : 'live',
+    name: eigen.name ?? `Nep-profiel ${id.slice(4)}`, website: eigen.website ?? `https://${id.slice(4)}.mollie.test`,
+    status: eigen.status ?? 'verified',
+  };
+}
+
+/** Ziet deze sleutel wat met de andere is gemaakt? Ja bij hetzelfde profiel en dezelfde modus (een nieuwe key na rotatie). */
+function zelfdeAccount(a, b) {
+  return a === b || (mollieProfiel(a).id === mollieProfiel(b).id && a.slice(0, 5) === b.slice(0, 5));
 }
 
 function mollieBetalingJson(betaling, embed) {
@@ -115,6 +231,7 @@ async function mollie(request, url) {
   }
   const pad = url.pathname;
   if (request.method === 'GET' && pad === '/v2/methods') return json(200, { count: 1, _embedded: { methods: [{ id: 'ideal' }] } });
+  if (request.method === 'GET' && pad === '/v2/profiles/me') return json(200, mollieProfiel(sleutel));
   if (request.method === 'POST' && pad === '/v2/payments') {
     const body = await request.json();
     post.mollie.teller += 1;
@@ -133,8 +250,9 @@ async function mollie(request, url) {
   const m = pad.match(/^\/v2\/payments\/([^/]+)(\/refunds)?$/);
   if (m) {
     const betaling = post.mollie.betalingen.get(decodeURIComponent(m[1]));
-    // Een betaling bestaat alleen voor de sleutel waarmee hij is aangemaakt (per organisatie).
-    if (!betaling || betaling.sleutel !== sleutel) return json(404, { status: 404, title: 'Not Found', detail: 'No payment exists with token' });
+    // Een betaling bestaat alleen voor het account (profiel en modus) waarmee hij is
+    // aangemaakt. Zonder eigen profiel heeft elke sleutel er een: dan per sleutel.
+    if (!betaling || !zelfdeAccount(betaling.sleutel, sleutel)) return json(404, { status: 404, title: 'Not Found', detail: 'No payment exists with token' });
     if (!m[2] && request.method === 'GET') return json(200, mollieBetalingJson(betaling, url.searchParams.get('embed') || ''));
     if (m[2] && request.method === 'POST') {
       const body = await request.json();

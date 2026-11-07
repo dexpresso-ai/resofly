@@ -35,6 +35,8 @@ export const R2_GEHEIM = 'r2-geheim-stromen';
 export const CRON_SECRET = 'cron-geheim-stromen';
 export const WEBHOOK_SECRET = 'webhook-geheim-stromen';
 export const AGENDA_STATE_GEHEIM = 'agenda-state-geheim-stromen';
+/** Zoals Resend het signing secret geeft (whsec_ + base64); de webhook controleert er de handtekening mee. */
+export const RESEND_WEBHOOK_GEHEIM = `whsec_${Buffer.from('stromen-resend-webhook-geheim-32b').toString('base64')}`;
 
 Object.assign(process.env, {
   SUPABASE_URL: API_URL,
@@ -43,6 +45,8 @@ Object.assign(process.env, {
   SUPABASE_DB_URL: DB_URL,
   RESEND_API_KEY: 're_stromen_test',
   RESEND_FROM_EMAIL: 'ResoFly <noreply@resofly.test>',
+  RESEND_REPLY_TO: 'hallo@resofly.test',
+  RESEND_WEBHOOK_SIGNING_SECRET: RESEND_WEBHOOK_GEHEIM,
   APP_PUBLIC_URL: PUBLIEK,
   QUOTE_ALLOWED_ORIGINS: ORIGIN,
   QUOTE_PUBLIC_ALLOWED_ORIGINS: ORIGIN,

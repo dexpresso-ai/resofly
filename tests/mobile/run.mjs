@@ -101,6 +101,9 @@ const PAGES = {
   // Instellingen → E-mail: de e-mailteksten met het voorbeeld, waarin sinds
   // november 2026 ook het logo staat zoals bovenaan de mail.
   'settings-email': { page: 'settings', prepare: '[data-settings-tab="email"]' },
+  // Instellingen → Betalen: de Mollie-koppeling met het profiel (een lange naam
+  // en website) en de waarschuwing voor de testmodus (november 2026).
+  'settings-betalen': { page: 'settings', prepare: '[data-settings-tab="betalen"]' },
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },

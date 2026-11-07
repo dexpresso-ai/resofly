@@ -3,6 +3,9 @@
 # Eenmalig: de webhooks van de openbare API inrichten op een Supabase-project.
 # Precies stap 7 van SUPABASE_STAGING_LAPTOP.md, maar zonder knippen en plakken.
 #
+#   0. MOLLIE_TOKEN_ENCRYPTION_KEY: de sleutel waarmee de eigen Mollie-key van
+#      elke organisatie versleuteld wordt. Alleen als hij er nog niet staat.
+#      Nooit vervangen, om dezelfde reden als bij stap 1.
 #   1. WEBHOOK_SECRET_ENCRYPTION_KEY: alleen als hij er nog niet staat. Nooit
 #      vervangen, want een nieuwe sleutel maakt de geheimen van bestaande
 #      webhooks onleesbaar.
@@ -75,6 +78,27 @@ fi
 
 listed="$("$supabase_cli" secrets list --project-ref "$ref")"
 has_secret() { grep -qE "(^|[^A-Za-z0-9_])$1([^A-Za-z0-9_]|\$)" <<<"$listed"; }
+# Een lijst zonder de vaste secrets van Supabase is niet gelezen (andere uitvoer
+# van de CLI, een fout op stderr). Dan zou "ontbreekt" hieronder een bestaande
+# versleutelsleutel vervangen, en zijn alle opgeslagen geheimen onleesbaar.
+if ! has_secret SUPABASE_SERVICE_ROLE_KEY; then
+  fail "De lijst met secrets van ${ref} is niet te lezen (SUPABASE_SERVICE_ROLE_KEY staat er niet in). Er is niets gezet."
+fi
+
+# ── 0. De sleutel voor de Mollie-keys van organisaties ─────────────────────
+# Zonder deze sleutel kan niemand zijn eigen Mollie-account koppelen
+# (invoice-workflow weigert de key dan). Op staging ontbrak hij (gezien op
+# 6 november 2026); de rooktest kijkt er nu na elke deploy naar. Nooit
+# vervangen: een nieuwe sleutel maakt de opgeslagen keys onleesbaar, en dan
+# werken betaallinks en de webhook pas weer als elke organisatie haar key
+# opnieuw invoert.
+if has_secret MOLLIE_TOKEN_ENCRYPTION_KEY; then
+  echo "MOLLIE_TOKEN_ENCRYPTION_KEY staat er al; die blijft zoals hij is."
+else
+  mollie_key="$(generate)"; mask "$mollie_key"
+  "$supabase_cli" secrets set --project-ref "$ref" "MOLLIE_TOKEN_ENCRYPTION_KEY=$mollie_key" >/dev/null
+  echo "MOLLIE_TOKEN_ENCRYPTION_KEY gezet."
+fi
 
 # ── 1. De sleutel voor de ondertekengeheimen ───────────────────────────────
 if has_secret WEBHOOK_SECRET_ENCRYPTION_KEY; then

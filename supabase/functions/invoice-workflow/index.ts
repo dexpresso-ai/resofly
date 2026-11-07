@@ -8,7 +8,8 @@ import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateContentKey } from '../_shared/emailTemplates/index.ts';
 import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
-import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
+import { encryptionKeyConfigured, encryptSecret, mollieKeySuffix, readMollieProfile, validateMollieApiKey, type MollieKeyMode, type MollieProfile } from '../_shared/mollieSecrets.ts';
+import { loadInvoiceMollieKey, type InvoiceMollieKey } from '../_shared/invoiceMollieKey.ts';
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
 import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
 import { splitRefundOverVatGroups } from '../_shared/creditNoteSplit.ts';
@@ -253,8 +254,8 @@ serve(async (req) => {
       case 'creditInvoice': return json(req, { ok: true, ...(await creditUnpaidInvoice(user.id, organizationId, invoiceId, body)) });
       case 'sendCreditNoteEmail': return json(req, { ok: true, ...(await sendCreditNoteEmail(user.id, organizationId, body)) });
       case 'markMockInvoicePaymentPaid': return json(req, { ok: true, payment: await markMockInvoicePaymentPaid(organizationId, String(body.providerPaymentId || '')) });
-      case 'saveInvoiceMollieKey': return json(req, { ok: true, status: await saveInvoiceMollieKey(user.id, organizationId, role, body) });
-      case 'deleteInvoiceMollieKey': return json(req, { ok: true, ...(await deleteInvoiceMollieKey(organizationId, role)) });
+      case 'saveInvoiceMollieKey': return json(req, { ok: true, ...(await saveInvoiceMollieKey(user.id, organizationId, role, body)) });
+      case 'deleteInvoiceMollieKey': return json(req, { ok: true, ...(await deleteInvoiceMollieKey(user.id, organizationId, role)) });
       default: return json(req, { ok: false, error: `Onbekende invoice workflow action: ${action}` }, 400);
     }
   } catch (error) {
@@ -2299,43 +2300,83 @@ async function markMockInvoicePaymentPaid(organizationId: string, providerPaymen
   return data;
 }
 
+type MollieConnectionStatus = 'not_connected' | 'connected' | 'revoked';
+
 type InvoiceMollieStatusPayload = {
-  status: 'not_connected' | 'connected' | 'revoked';
-  mode: 'test' | 'live' | null;
+  status: MollieConnectionStatus;
+  mode: MollieKeyMode | null;
   key_suffix: string | null;
   connected_at: string | null;
   last_validated_at: string | null;
+  /** Het Mollie-profiel (de website) van de key, zoals Mollie het bij het koppelen gaf. Geen geheim. */
+  profile: MollieProfile | null;
 };
 
-async function getInvoiceMollieStatus(organizationId: string): Promise<InvoiceMollieStatusPayload> {
+type InvoiceMollieSettingsRow = {
+  id: string; status: MollieConnectionStatus; mode: MollieKeyMode | null; key_suffix: string | null;
+  connected_at: string | null; last_validated_at: string | null; metadata: Record<string, unknown> | null;
+};
+
+// Nooit api_key_encrypted: deze kolommen gaan (deels) terug naar de browser.
+const MOLLIE_SETTINGS_COLUMNS = 'id,status,mode,key_suffix,connected_at,last_validated_at,metadata';
+
+async function loadInvoiceMollieSettings(organizationId: string): Promise<InvoiceMollieSettingsRow | null> {
   const { data, error } = await supabaseAdmin
     .from('organization_invoice_mollie_settings')
-    .select('status,mode,key_suffix,connected_at,last_validated_at')
+    .select(MOLLIE_SETTINGS_COLUMNS)
     .eq('organization_id', organizationId)
     .maybeSingle();
   if (error) throwSupabaseError('invoice Mollie status lookup', error);
-  const row = (data ?? null) as Partial<InvoiceMollieStatusPayload> | null;
+  return (data ?? null) as InvoiceMollieSettingsRow | null;
+}
+
+function mollieStatusPayload(row: InvoiceMollieSettingsRow | null): InvoiceMollieStatusPayload {
   return {
     status: row?.status ?? 'not_connected',
     mode: row?.mode ?? null,
     key_suffix: row?.key_suffix ?? null,
     connected_at: row?.connected_at ?? null,
     last_validated_at: row?.last_validated_at ?? null,
+    profile: row?.status === 'connected' ? readMollieProfile(row.metadata?.profile) : null,
   };
 }
 
-async function saveInvoiceMollieKey(userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<InvoiceMollieStatusPayload> {
-  if (!['owner', 'admin'].includes(role)) throw new WorkflowHttpError('Alleen owners en admins mogen de Mollie-koppeling beheren.', 403);
+async function getInvoiceMollieStatus(organizationId: string): Promise<InvoiceMollieStatusPayload> {
+  return mollieStatusPayload(await loadInvoiceMollieSettings(organizationId));
+}
+
+async function saveInvoiceMollieKey(userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<{ status: InvoiceMollieStatusPayload; openPaymentsPreviousAccount: boolean }> {
+  // Alleen de eigenaar (besloten op 7 november 2026). Met een key van een ander
+  // Mollie-account komt het geld van klanten daar binnen; eerder kon elke
+  // beheerder dat doen. Ontkoppelen mag een beheerder wel (deleteInvoiceMollieKey):
+  // daarmee gaat geen geld ergens anders heen, en bij een gelekte key moet het snel.
+  if (role !== 'owner') throw new WorkflowHttpError('Alleen de eigenaar van de organisatie kan Mollie koppelen of de key vervangen. Daarmee bepaal je waar het geld van je klanten binnenkomt.', 403);
   const apiKey = String(body.apiKey || '').trim();
   if (!apiKey) throw new WorkflowHttpError('Vul een Mollie API-key in.', 422);
+  // Eerst: kan de server de key straks veilig bewaren? Op staging ontbrak de
+  // sleutel daarvoor. Mollie keurde de key dan goed, en daarna kreeg de beheerder
+  // een algemene serverfout zonder reden.
+  if (!encryptionKeyConfigured()) {
+    console.error('invoice-workflow: MOLLIE_TOKEN_ENCRYPTION_KEY ontbreekt; Mollie koppelen kan niet');
+    throw new WorkflowHttpError('Mollie koppelen lukt nu niet: de server kan je key niet veilig opslaan. Je key is niet bewaard. Meld dit bij de beheerder van ResoFly.', 500);
+  }
 
   const validation = await validateMollieApiKey(apiKey);
-  if (!validation.valid || !validation.mode) throw new WorkflowHttpError(validation.error || 'Mollie API-key is ongeldig.', 422);
+  if (!validation.valid) throw new WorkflowHttpError(validation.error, 422);
+
+  const previous = await loadInvoiceMollieSettings(organizationId);
+  const wasConnected = previous?.status === 'connected';
+  const previousProfile = wasConnected ? readMollieProfile(previous?.metadata?.profile) : null;
+  // Een ander Mollie-account (ander profiel, of van test naar live): betalingen
+  // die nog via de vorige key lopen, kan ResoFly met deze key niet nakijken.
+  const accountChanged = wasConnected && (
+    previous?.mode !== validation.mode
+    || Boolean(previousProfile && validation.profile && previousProfile.id !== validation.profile.id));
 
   const encrypted = await encryptSecret(apiKey);
   const suffix = mollieKeySuffix(apiKey);
   const nowIso = new Date().toISOString();
-  const { error } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from('organization_invoice_mollie_settings')
     .upsert({
       organization_id: organizationId,
@@ -2348,58 +2389,134 @@ async function saveInvoiceMollieKey(userId: string, organizationId: string, role
       revoked_at: null,
       last_validated_at: nowIso,
       last_error: null,
-    }, { onConflict: 'organization_id' });
+      metadata: { ...withoutProfile(previous?.metadata), profile: validation.profile },
+    }, { onConflict: 'organization_id' })
+    .select(MOLLIE_SETTINGS_COLUMNS)
+    .single();
   if (error) throwSupabaseError('invoice Mollie key opslaan', error);
+  const saved = data as InvoiceMollieSettingsRow;
 
-  return { status: 'connected', mode: validation.mode, key_suffix: suffix, connected_at: nowIso, last_validated_at: nowIso };
+  const openPaymentsPreviousAccount = accountChanged ? await hasOpenInvoicePayments(organizationId) : false;
+
+  await logMollieAudit({
+    organizationId,
+    userId,
+    settingsId: saved.id,
+    action: wasConnected ? 'updated' : 'mollie_connected',
+    label: mollieAuditLabel(validation.mode, suffix, validation.profile),
+    metadata: {
+      mode: validation.mode,
+      key_suffix: suffix,
+      profile_id: validation.profile?.id ?? null,
+      profile_name: validation.profile?.name ?? null,
+      ...(wasConnected ? {
+        previous_mode: previous?.mode ?? null,
+        previous_key_suffix: previous?.key_suffix ?? null,
+        previous_profile_id: previousProfile?.id ?? null,
+        account_changed: accountChanged,
+        open_payments_previous_account: openPaymentsPreviousAccount,
+      } : {}),
+    },
+  });
+
+  return { status: mollieStatusPayload(saved), openPaymentsPreviousAccount };
 }
 
-async function deleteInvoiceMollieKey(organizationId: string, role: OrganizationRole): Promise<{ status: InvoiceMollieStatusPayload; hadOpenPayments: boolean }> {
-  if (!['owner', 'admin'].includes(role)) throw new WorkflowHttpError('Alleen owners en admins mogen de Mollie-koppeling beheren.', 403);
+async function deleteInvoiceMollieKey(userId: string, organizationId: string, role: OrganizationRole): Promise<{ status: InvoiceMollieStatusPayload; hadOpenPayments: boolean }> {
+  if (!['owner', 'admin'].includes(role)) throw new WorkflowHttpError('Alleen de eigenaar of een beheerder kan Mollie ontkoppelen.', 403);
+
+  const previous = await loadInvoiceMollieSettings(organizationId);
+  if (!previous) return { status: mollieStatusPayload(null), hadOpenPayments: false };
 
   // Open payment links still need the key for webhook verification. We surface
   // this so the UI can warn, but still revoke — the admin explicitly asked to.
-  const { data: openRows } = await supabaseAdmin
+  const hadOpenPayments = await hasOpenInvoicePayments(organizationId);
+
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from('organization_invoice_mollie_settings')
+    .update({
+      status: 'revoked', api_key_encrypted: null, key_suffix: null, mode: null, revoked_at: nowIso, last_error: null,
+      metadata: withoutProfile(previous.metadata),
+    })
+    .eq('organization_id', organizationId)
+    .select(MOLLIE_SETTINGS_COLUMNS)
+    .single();
+  if (error) throwSupabaseError('invoice Mollie key verwijderen', error);
+
+  if (previous.status === 'connected') {
+    const previousProfile = readMollieProfile(previous.metadata?.profile);
+    await logMollieAudit({
+      organizationId,
+      userId,
+      settingsId: previous.id,
+      action: 'revoked',
+      label: mollieAuditLabel(previous.mode, previous.key_suffix, previousProfile),
+      metadata: {
+        previous_mode: previous.mode,
+        previous_key_suffix: previous.key_suffix,
+        previous_profile_id: previousProfile?.id ?? null,
+        previous_profile_name: previousProfile?.name ?? null,
+        had_open_payments: hadOpenPayments,
+      },
+    });
+  }
+
+  return { status: mollieStatusPayload(data as InvoiceMollieSettingsRow), hadOpenPayments };
+}
+
+function withoutProfile(metadata: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const { profile: _profile, ...rest } = metadata && typeof metadata === 'object' ? metadata : {};
+  return rest;
+}
+
+/** Loopt er nog een betaallink (of een betaling bij Mollie) voor een factuur van deze organisatie? */
+async function hasOpenInvoicePayments(organizationId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
     .from('invoice_payment_records')
     .select('id')
     .eq('organization_id', organizationId)
     .in('status', ['creating', 'open', 'pending', 'authorized'])
     .limit(1);
-  const hadOpenPayments = Array.isArray(openRows) && openRows.length > 0;
+  if (error) console.warn('open betaallinks zoeken mislukte', error.message);
+  return Array.isArray(data) && data.length > 0;
+}
 
-  const nowIso = new Date().toISOString();
-  const { error } = await supabaseAdmin
-    .from('organization_invoice_mollie_settings')
-    .update({ status: 'revoked', api_key_encrypted: null, key_suffix: null, mode: null, revoked_at: nowIso, last_error: null })
-    .eq('organization_id', organizationId);
-  if (error) throwSupabaseError('invoice Mollie key verwijderen', error);
+function mollieAuditLabel(mode: MollieKeyMode | null, suffix: string | null, profile: MollieProfile | null): string {
+  return ['Mollie', mode, suffix ? `key ••••${suffix}` : null, profile?.name ?? null].filter(Boolean).join(' · ');
+}
 
-  return {
-    status: { status: 'revoked', mode: null, key_suffix: null, connected_at: null, last_validated_at: null },
-    hadOpenPayments,
-  };
+/**
+ * Wie Mollie koppelde, verving of ontkoppelde, en welk account. Dat bepaalt waar
+ * het geld van klanten terechtkomt. Eerder stond het nergens: een beheerder kon
+ * een key van een ander account plakken zonder dat iemand dat later kon zien.
+ * Alleen owners en admins lezen deze regels (audit_entity_module: 'admin').
+ * Lukt het wegschrijven niet, dan blijft de koppeling staan: die is dan al gemaakt,
+ * en "mislukt" melden zou niet kloppen. Het logboek van de functie zegt het wel.
+ */
+async function logMollieAudit(input: {
+  organizationId: string; userId: string; settingsId: string | null;
+  action: 'mollie_connected' | 'updated' | 'revoked'; label: string; metadata: Record<string, unknown>;
+}): Promise<void> {
+  const { error } = await supabaseAdmin.from('audit_logs').insert({
+    organization_id: input.organizationId,
+    actor_user_id: input.userId,
+    action: input.action,
+    entity_type: 'mollie_connection',
+    entity_id: input.settingsId,
+    entity_label: input.label,
+    metadata: input.metadata,
+  });
+  if (error) console.error('Mollie-koppeling: auditregel wegschrijven mislukte', { organizationId: input.organizationId, action: input.action, error: error.message });
 }
 
 // Resolve the organization's OWN decrypted Mollie key for creating/verifying
 // invoice payments. Returns null when Mollie is not connected — callers must
 // treat that as "no payment link" and never fall back to a shared key.
 /** Als resolveOrganizationMollieKey, maar met de reden als er geen sleutel is (voor de webhook). */
-async function loadMollieKeyForWebhook(organizationId: string): Promise<{ key: { apiKey: string; mode: 'test' | 'live' | null } | null; reason: string | null }> {
-  const { data, error } = await supabaseAdmin
-    .from('organization_invoice_mollie_settings')
-    .select('status,api_key_encrypted,mode')
-    .eq('organization_id', organizationId)
-    .maybeSingle();
-  if (error) return { key: null, reason: `instellingen niet te laden: ${error.message}` };
-  const row = (data ?? null) as { status?: string; api_key_encrypted?: string | null; mode?: 'test' | 'live' | null } | null;
-  if (!row || row.status !== 'connected' || !row.api_key_encrypted) return { key: null, reason: 'geen gekoppelde Mollie-sleutel (meer)' };
-  try {
-    const apiKey = await decryptSecret(row.api_key_encrypted);
-    if (!apiKey) return { key: null, reason: 'sleutel leeg na ontsleutelen' };
-    return { key: { apiKey, mode: row.mode ?? null }, reason: null };
-  } catch (decryptError) {
-    return { key: null, reason: `ontsleutelen mislukt: ${describeError(decryptError)}` };
-  }
+async function loadMollieKeyForWebhook(organizationId: string): Promise<{ key: InvoiceMollieKey | null; reason: string | null }> {
+  const lookup = await loadInvoiceMollieKey(supabaseAdmin, organizationId);
+  return { key: lookup.key, reason: lookup.reason };
 }
 
 const DRAFT_REMINDER_MESSAGE = 'Deze factuur is nog een concept en is niet verstuurd: daar hoort geen herinnering bij.';
@@ -2410,23 +2527,10 @@ async function paymentLinkPossible(organizationId: string): Promise<boolean> {
   return Boolean(await resolveOrganizationMollieKey(organizationId));
 }
 
-async function resolveOrganizationMollieKey(organizationId: string): Promise<{ apiKey: string; mode: 'test' | 'live' | null } | null> {
-  const { data, error } = await supabaseAdmin
-    .from('organization_invoice_mollie_settings')
-    .select('status,api_key_encrypted,mode')
-    .eq('organization_id', organizationId)
-    .maybeSingle();
-  if (error || !data) return null;
-  const row = data as { status?: string; api_key_encrypted?: string | null; mode?: 'test' | 'live' | null };
-  if (row.status !== 'connected' || !row.api_key_encrypted) return null;
-  try {
-    const apiKey = await decryptSecret(row.api_key_encrypted);
-    if (!apiKey) return null;
-    return { apiKey, mode: row.mode ?? null };
-  } catch (decryptError) {
-    console.error('invoice-workflow could not decrypt organization Mollie key', describeError(decryptError));
-    return null;
-  }
+async function resolveOrganizationMollieKey(organizationId: string): Promise<InvoiceMollieKey | null> {
+  const lookup = await loadInvoiceMollieKey(supabaseAdmin, organizationId);
+  if (!lookup.key && lookup.connected) console.error('invoice-workflow: Mollie-sleutel van de organisatie niet te gebruiken', { organizationId, reason: lookup.reason });
+  return lookup.key;
 }
 
 async function findInvoicePaymentRecordByProviderId(providerPaymentId: string): Promise<{ id: string; organization_id: string; invoice_id: string } | null> {

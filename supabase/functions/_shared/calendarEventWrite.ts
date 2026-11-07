@@ -42,6 +42,8 @@ import { takeEmailQuota } from './emailQuota.ts';
 // emailBrand.ts heeft zelf alleen pure imports (de sjabloonmap), dus geen
 // tweede keten zoals sendingDomain.ts die de boot van deze functie brak.
 import { loadEmailBrand, withEmailBrand, type EmailBrand } from './emailBrand.ts';
+// resendDomains.ts heeft helemaal geen imports.
+import { formatFromHeader, isPlainEmailAddress } from './resendDomains.ts';
 import { EMAIL_LOGO_SLOT_LIGHT } from './emailTemplates/layout.ts';
 
 // ── Nieuwe-event-invoer normaliseren ────────────────────────────────────────
@@ -447,17 +449,21 @@ async function resolveOrgSender(organizationId: string): Promise<{ from: string;
   try {
     const { data, error } = await supabaseAdmin
       .from('organization_email_domains')
-      .select('from_email,from_name,status,is_default,created_at')
+      .select('domain,from_email,from_name,status,is_default,created_at')
       .eq('organization_id', organizationId)
       .eq('status', 'verified')
       .order('is_default', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error || !data || !data.from_email) return fallback;
-    const fromEmail = String(data.from_email);
-    const fromName = String(data.from_name || '').trim();
-    return { from: fromName ? `${fromName} <${fromEmail}>` : fromEmail, fromEmail };
+      .order('created_at', { ascending: false });
+    if (error || !data) return fallback;
+    // Dezelfde keuze als resolveSenderIdentity: het eerste domein met een kaal
+    // adres op dat domein. De naam ging hier eerst ongefilterd de From-header
+    // in, zodat een naam met komma's of hoekhaken de uitnodiging liet weigeren.
+    for (const row of data as Array<{ domain: string; from_email: string | null; from_name: string | null }>) {
+      const fromEmail = String(row.from_email || '').trim().toLowerCase();
+      if (!isPlainEmailAddress(fromEmail) || !fromEmail.endsWith(`@${String(row.domain).toLowerCase()}`)) continue;
+      return { from: formatFromHeader(row.from_name, fromEmail), fromEmail };
+    }
+    return fallback;
   } catch {
     return fallback;
   }

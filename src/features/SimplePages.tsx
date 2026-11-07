@@ -9,7 +9,7 @@ import { BrandStudio } from './BrandStudio';
 import { DocumentLayoutEditor } from './DocumentLayoutEditor';
 import { parseDocumentLayouts, serializeDocumentLayouts } from '../lib/documentLayout';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
-import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
+import { sendResendTestEmail, addSendingDomain, verifySendingDomain, refreshSendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
 import { formatBytes } from '../lib/transfers';
 import { isDutchVatIdFormat, looksLikeTaxNumberWithoutCountry } from '../lib/vatId';
@@ -761,42 +761,73 @@ function InvoiceInboxCard({ organizationId, canAdmin }: { organizationId: string
   </section>;
 }
 
+/** Wat er in het domeinveld staat, als kaal domein: voor het voorgestelde afzenderadres. */
+function typedDomain(value: string): string {
+  let text = value.trim().toLowerCase();
+  if (!text.includes('://') && text.includes('@')) text = text.slice(text.lastIndexOf('@') + 1);
+  return text.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').replace(/[/?#:].*$/, '').replace(/\.+$/, '').replace(/^www\./, '');
+}
+
+// Resend controleert de records na "Verifieer" op de achtergrond. Zo vaak en
+// zo lang vraagt het scherm daarna nog na of het gelukt is.
+const DOMAIN_RECHECK_INTERVAL_MS = 10_000;
+const DOMAIN_RECHECK_TIMES = 6;
+
 function SendingDomainCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
   const [domains, setDomains] = useState<SendingDomain[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [newDomain, setNewDomain] = useState('');
   const [newFromName, setNewFromName] = useState('');
   const [newFromEmail, setNewFromEmail] = useState('');
+  const [fromEmailTouched, setFromEmailTouched] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; fromName: string; fromEmail: string } | null>(null);
+  // Hoort het lopende navragen nog bij dit scherm? Na wisselen van organisatie
+  // of wegklikken mag een oud antwoord niets meer bijwerken.
+  const recheckRun = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
+    recheckRun.current += 1;
     setLoaded(false);
     setError(null);
+    setCheckingId(null);
+    setEditing(null);
     loadSendingDomains(organizationId)
       .then(rows => { if (!cancelled) { setDomains(rows); setLoaded(true); } })
       .catch(err => { if (!cancelled) { setError(err instanceof Error ? err.message : 'Verzenddomeinen laden mislukt.'); setLoaded(true); } });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; recheckRun.current += 1; };
   }, [organizationId]);
 
   async function reload() {
     setDomains(await loadSendingDomains(organizationId));
   }
 
+  function changeNewDomain(value: string) {
+    setNewDomain(value);
+    setError(null); setMessage(null);
+    // Een voorstel, geen keuze: wie het adres zelf aanpast, houdt zijn eigen adres.
+    if (!fromEmailTouched) {
+      const domain = typedDomain(value);
+      setNewFromEmail(domain.includes('.') ? `info@${domain}` : '');
+    }
+  }
+
   async function add() {
-    if (!newDomain.trim()) return;
+    if (!newDomain.trim() || !newFromEmail.trim()) return;
     setBusy(true); setError(null); setMessage(null);
     try {
       await addSendingDomain(organizationId, {
         domain: newDomain.trim(),
         fromName: newFromName.trim() || undefined,
-        fromEmail: newFromEmail.trim() || undefined,
+        fromEmail: newFromEmail.trim(),
       });
-      setNewDomain(''); setNewFromName(''); setNewFromEmail('');
+      setNewDomain(''); setNewFromName(''); setNewFromEmail(''); setFromEmailTouched(false);
       await reload();
-      setMessage('Domein toegevoegd. Plaats de DNS-records hieronder bij je domeinprovider en klik daarna op “Verifieer”.');
+      setMessage('Domein toegevoegd. Zet de DNS-records hieronder bij je domeinprovider en klik daarna op “Verifieer”.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Domein toevoegen mislukt.');
     } finally {
@@ -804,19 +835,50 @@ function SendingDomainCard({ organizationId, canAdmin }: { organizationId: strin
     }
   }
 
+  function verifiedMessage(domain: SendingDomain): string {
+    const from = domain.from_email ? (domain.from_name ? `${domain.from_name} <${domain.from_email}>` : domain.from_email) : null;
+    return from
+      ? `${domain.domain} is geverifieerd. Mail van je organisatie gaat nu weg als ${from}.`
+      : `${domain.domain} is geverifieerd. Vul nog een afzenderadres in; tot dan gaat mail via het standaardadres.`;
+  }
+
   async function verify(domain: SendingDomain) {
+    const run = ++recheckRun.current;
     setBusy(true); setError(null); setMessage(null);
+    let latest: SendingDomain;
     try {
-      const updated = await verifySendingDomain(organizationId, domain.id);
+      latest = await verifySendingDomain(organizationId, domain.id);
       await reload();
-      setMessage(updated.status === 'verified'
-        ? `${updated.domain} is geverifieerd — je kunt nu vanaf dit domein mailen.`
-        : 'Nog niet geverifieerd. DNS-wijzigingen kunnen tot ~24 uur duren; probeer het daarna opnieuw.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Verifiëren mislukt.');
-    } finally {
+      await reload().catch(() => undefined);
       setBusy(false);
+      return;
     }
+    setBusy(false);
+    if (latest.status === 'verified') { setMessage(verifiedMessage(latest)); return; }
+
+    // Nog niet klaar: Resend is nu aan het kijken. Even blijven navragen, zodat
+    // goed geplaatste records zonder opnieuw klikken op "geverifieerd" springen.
+    setCheckingId(domain.id);
+    setMessage('Resend controleert de records. Dat duurt meestal een minuut; je kunt dit scherm open laten.');
+    for (let attempt = 0; attempt < DOMAIN_RECHECK_TIMES; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, DOMAIN_RECHECK_INTERVAL_MS));
+      if (recheckRun.current !== run) return;
+      try {
+        latest = await refreshSendingDomain(organizationId, domain.id);
+      } catch {
+        break;
+      }
+      if (recheckRun.current !== run) return;
+      setDomains(rows => rows.map(row => row.id === latest.id ? latest : row));
+      if (latest.status === 'verified') break;
+    }
+    if (recheckRun.current !== run) return;
+    setCheckingId(null);
+    if (latest.status === 'verified') setMessage(verifiedMessage(latest));
+    else if (latest.status === 'failed') setMessage('Resend vond niet alle records. Kijk hieronder welke nog ontbreken, neem Naam en Waarde precies over en klik daarna opnieuw op “Verifieer”.');
+    else setMessage('Nog niet alle records gevonden. Staan ze er net, wacht dan even: een DNS-wijziging is soms pas na een paar uur overal zichtbaar. Klik daarna opnieuw op “Verifieer”.');
   }
 
   async function makeDefault(domain: SendingDomain) {
@@ -832,8 +894,25 @@ function SendingDomainCard({ organizationId, canAdmin }: { organizationId: strin
     }
   }
 
+  async function saveSender() {
+    if (!editing) return;
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await updateSendingDomain(organizationId, editing.id, { fromName: editing.fromName.trim(), fromEmail: editing.fromEmail.trim() });
+      setEditing(null);
+      await reload();
+      setMessage('Afzender opgeslagen.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Afzender opslaan mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove(domain: SendingDomain) {
-    if (!window.confirm(`Domein ${domain.domain} ontkoppelen? E-mails vallen daarna terug op het standaard afzenderadres.`)) return;
+    if (!window.confirm(`Domein ${domain.domain} ontkoppelen? E-mails vallen daarna terug op het standaard afzenderadres. Koppel je het later opnieuw, dan krijg je nieuwe DNS-records.`)) return;
+    recheckRun.current += 1;
+    setCheckingId(null);
     setBusy(true); setError(null); setMessage(null);
     try {
       await removeSendingDomain(organizationId, domain.id);
@@ -862,55 +941,105 @@ function SendingDomainCard({ organizationId, canAdmin }: { organizationId: strin
       : <>
         <div className="settings-grid compact">
           <label>Domein
-            <Input value={newDomain} onChange={e => { setNewDomain(e.target.value); setError(null); setMessage(null); }} placeholder="eigendomeinnaam.nl" />
+            <Input value={newDomain} onChange={e => changeNewDomain(e.target.value)} placeholder="eigendomeinnaam.nl" />
           </label>
           <label>Afzendernaam (optioneel)
             <Input value={newFromName} onChange={e => setNewFromName(e.target.value)} placeholder="Jouw bedrijf" />
           </label>
-          <label>Afzenderadres (optioneel)
-            <Input type="email" value={newFromEmail} onChange={e => setNewFromEmail(e.target.value)} placeholder="info@eigendomeinnaam.nl" />
+          <label>Afzenderadres
+            <Input type="email" value={newFromEmail} onChange={e => { setNewFromEmail(e.target.value); setFromEmailTouched(true); setError(null); }} placeholder="info@eigendomeinnaam.nl" />
           </label>
         </div>
-        <Button variant="primary" onClick={add} disabled={busy || !newDomain.trim()}>{busy ? 'Bezig…' : '+ Domein toevoegen'}</Button>
+        <p className="settings-help">Antwoorden van klanten komen op het afzenderadres binnen. Kies dus een adres dat je leest.</p>
+        <Button variant="primary" onClick={add} disabled={busy || !newDomain.trim() || !newFromEmail.trim()}>{busy ? 'Bezig…' : '+ Domein toevoegen'}</Button>
 
         <div className="sending-domain-list">
           {domains.length === 0 && <p className="settings-help">Nog geen domein gekoppeld. Voeg er een toe om vanaf je eigen adres te mailen.</p>}
-          {domains.map(domain => (
-            <div className="sending-domain-row" key={domain.id}>
+          {domains.map(domain => {
+            const checking = checkingId === domain.id;
+            const isEditing = editing?.id === domain.id;
+            return <div className="sending-domain-row" key={domain.id}>
               <div className="sending-domain-head-row">
                 <div className="sending-domain-title">
                   <strong>{domain.domain}</strong>
                   {domain.is_default && <span className="sending-domain-default">Standaard</span>}
-                  <span className={`sending-domain-status ${domain.status}`}>{SENDING_DOMAIN_STATUS_LABELS[domain.status]}</span>
+                  <span className={`sending-domain-status ${domain.status}`}>{checking ? 'Wordt gecontroleerd…' : SENDING_DOMAIN_STATUS_LABELS[domain.status] ?? domain.status}</span>
                 </div>
                 <div className="sending-domain-actions">
-                  <Button onClick={() => verify(domain)} disabled={busy}>Verifieer</Button>
+                  <Button onClick={() => verify(domain)} disabled={busy || checking}>{domain.status === 'verified' ? 'Controleer opnieuw' : 'Verifieer'}</Button>
                   {domain.status === 'verified' && !domain.is_default && <Button onClick={() => makeDefault(domain)} disabled={busy}>Maak standaard</Button>}
                   <Button variant="danger" onClick={() => remove(domain)} disabled={busy}>Verwijderen</Button>
                 </div>
               </div>
-              {domain.from_email && <p className="settings-help">Afzender: {domain.from_name ? `${domain.from_name} <${domain.from_email}>` : domain.from_email}</p>}
-              {domain.status !== 'verified' && domain.dns_records.length > 0 && <DnsRecordsTable records={domain.dns_records} />}
-            </div>
-          ))}
+              {isEditing ? <div className="sending-domain-edit">
+                <div className="settings-grid compact">
+                  <label>Afzendernaam (optioneel)
+                    <Input value={editing.fromName} onChange={e => setEditing({ ...editing, fromName: e.target.value })} placeholder="Jouw bedrijf" />
+                  </label>
+                  <label>Afzenderadres
+                    <Input type="email" value={editing.fromEmail} onChange={e => setEditing({ ...editing, fromEmail: e.target.value })} placeholder={`info@${domain.domain}`} />
+                  </label>
+                </div>
+                <div className="sending-domain-actions">
+                  <Button variant="primary" onClick={saveSender} disabled={busy || !editing.fromEmail.trim()}>{busy ? 'Bezig…' : 'Afzender opslaan'}</Button>
+                  <Button onClick={() => setEditing(null)} disabled={busy}>Annuleren</Button>
+                </div>
+              </div> : <div className="sending-domain-sender">
+                {domain.from_email
+                  ? <p className="settings-help">Afzender: <strong>{domain.from_name ? `${domain.from_name} <${domain.from_email}>` : domain.from_email}</strong>. Antwoorden komen binnen op {domain.from_email}.</p>
+                  : <p className="settings-help sending-domain-warning">Nog geen afzenderadres: mail gaat via het standaardadres tot je er een invult.</p>}
+                <Button onClick={() => setEditing({ id: domain.id, fromName: domain.from_name ?? '', fromEmail: domain.from_email ?? `info@${domain.domain}` })} disabled={busy}>{domain.from_email ? 'Afzender wijzigen' : 'Afzenderadres invullen'}</Button>
+              </div>}
+              {domain.status !== 'verified' && domain.dns_records.length > 0 && <DnsRecordsTable domain={domain.domain} records={domain.dns_records} />}
+              {domain.last_checked_at && <p className="settings-help sending-domain-checked">Laatst gecontroleerd: {new Date(domain.last_checked_at).toLocaleString('nl-NL', { dateStyle: 'medium', timeStyle: 'short' })}</p>}
+            </div>;
+          })}
         </div>
       </>}
   </section>;
 }
 
-function DnsRecordsTable({ records }: { records: SendingDomainDnsRecord[] }) {
+const DNS_RECORD_STATUS_LABELS: Record<string, string> = {
+  verified: 'Gevonden',
+  pending: 'Wordt gecontroleerd',
+  not_started: 'Nog niet gecontroleerd',
+  failed: 'Niet gevonden',
+  temporary_failure: 'Even niet gevonden',
+};
+
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Geen klembord (geweigerd of geen https): de waarde is ook te selecteren.
+    }
+  }
+  return <button type="button" className="dns-record-copy" onClick={() => void copy()} aria-label={label}>{copied ? 'Gekopieerd' : 'Kopieer'}</button>;
+}
+
+function DnsRecordsTable({ domain, records }: { domain: string; records: SendingDomainDnsRecord[] }) {
+  const dkim = records.find(rec => /_domainkey$/i.test(rec.name));
+  const mxNames = Array.from(new Set(records.filter(rec => String(rec.type).toUpperCase() === 'MX').map(rec => rec.name)));
   return <div className="dns-records">
-    <p className="settings-help">Voeg deze records toe bij je DNS-provider. Na het plaatsen kan verificatie tot ~24 uur duren.</p>
+    <p className="settings-help">Zet deze records bij de DNS van <strong>{domain}</strong>, bij je domeinprovider. Neem Naam en Waarde precies over. Vraagt je provider om de volledige naam, gebruik dan bijvoorbeeld <code>{dkim ? `${dkim.name}.${domain}` : `send.${domain}`}</code>.</p>
+    {mxNames.length > 0 && <p className="settings-help">Je bestaande MX-records voor je gewone mail laat je staan: de MX hieronder hoort alleen bij <code>{mxNames.map(name => `${name}.${domain}`).join(', ')}</code>.</p>}
     <div className="dns-records-list">
-      {records.map((rec, i) => (
-        <div className="dns-record" key={`${rec.type}-${rec.name}-${i}`}>
+      {records.map((rec, i) => {
+        const status = String(rec.status || '').toLowerCase();
+        return <div className="dns-record" key={`${rec.type}-${rec.name}-${i}`}>
           <div className="dns-record-field"><span className="dns-record-label">Type</span><code>{rec.type}</code></div>
-          <div className="dns-record-field"><span className="dns-record-label">Naam</span><code>{rec.name}</code></div>
-          <div className="dns-record-field grow"><span className="dns-record-label">Waarde</span><code className="dns-record-value">{rec.value}</code></div>
+          <div className="dns-record-field"><span className="dns-record-label">Naam</span><code>{rec.name}</code><CopyButton value={rec.name} label={`Kopieer de naam ${rec.name}`} /></div>
+          <div className="dns-record-field grow"><span className="dns-record-label">Waarde</span><code className="dns-record-value">{rec.value}</code><CopyButton value={rec.value} label={`Kopieer de waarde van ${rec.name}`} /></div>
           {rec.priority != null && <div className="dns-record-field"><span className="dns-record-label">Prioriteit</span><code>{rec.priority}</code></div>}
-        </div>
-      ))}
+          {status && <div className="dns-record-field"><span className="dns-record-label">Status</span><span className={`dns-record-status ${status}`}>{DNS_RECORD_STATUS_LABELS[status] ?? status}</span></div>}
+        </div>;
+      })}
     </div>
+    <p className="settings-help">Tip voor de bezorging: Gmail en Outlook verwachten een DMARC-record. Heeft {domain} er nog geen, voeg dan ook een TXT-record toe: naam <code>_dmarc</code>, waarde <code>v=DMARC1; p=none</code>. Heb je er al een, laat die dan staan.</p>
   </div>;
 }
 
@@ -1588,6 +1717,10 @@ export function Settings({
   const [invoiceMollieBusy, setInvoiceMollieBusy] = useState<string | null>(null);
   const [invoiceMollieError, setInvoiceMollieError] = useState<string | null>(null);
   const [invoiceMollieMessage, setInvoiceMollieMessage] = useState<string | null>(null);
+  // Mollie koppelen of de key vervangen: alleen de eigenaar (de server weigert
+  // het ook). Daarmee bepaal je waar het geld van klanten binnenkomt. Een
+  // beheerder ziet de koppeling en kan ontkoppelen (7 november 2026).
+  const canConnectMollie = organizationContext.activeMembership?.role === 'owner';
 
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
@@ -1902,17 +2035,26 @@ export function Settings({
   }
 
   async function connectInvoiceMollie() {
-    if (!activeOrganization || !canAdminOrganization) return;
+    if (!activeOrganization || !canConnectMollie) return;
     const apiKey = invoiceMollieKey.trim();
     if (!apiKey) { setInvoiceMollieError('Vul je Mollie API-key in.'); return; }
     setInvoiceMollieBusy('connect');
     setInvoiceMollieError(null);
     setInvoiceMollieMessage(null);
     try {
-      const status = await saveInvoiceMollieKey(activeOrganization.id, apiKey);
+      const { status, openPaymentsPreviousAccount } = await saveInvoiceMollieKey(activeOrganization.id, apiKey);
       setInvoiceMollie(status);
       setInvoiceMollieKey('');
-      setInvoiceMollieMessage(`Mollie gekoppeld (${status.mode === 'live' ? 'live' : 'test'}-modus). Bij het versturen van een factuur kun je nu een betaallink meesturen.`);
+      const account = status.profile?.name ? ` met het Mollie-profiel "${status.profile.name}"` : '';
+      const lines = [status.mode === 'live'
+        ? `Mollie gekoppeld${account}. Een factuur gaat nu met een betaallink naar je klant.`
+        : `Mollie gekoppeld${account}, in testmodus. Betalingen via de link zijn niet echt; koppel een live-key voordat je echte facturen verstuurt.`];
+      // Wie van account wisselt terwijl er nog links openstaan: die betalingen
+      // komen bij het vorige account binnen, en ResoFly kan ze niet meer nakijken.
+      if (openPaymentsPreviousAccount) {
+        lines.push('Let op: er stonden nog betaallinks open van de vorige koppeling. Wordt daar nog betaald, dan ziet ResoFly dat niet. Kijk in je vorige Mollie-account, en zet een betaling daar zo nodig zelf op de factuur.');
+      }
+      setInvoiceMollieMessage(lines.join(' '));
     } catch (error) {
       setInvoiceMollieError(error instanceof Error ? error.message : 'Mollie koppelen mislukt.');
     } finally {
@@ -2607,38 +2749,59 @@ export function Settings({
       <div className="settings-card-head">
         <div>
           <h3>Online betalen (Mollie)</h3>
-          <p className="settings-help">Koppel het eigen Mollie-account van deze organisatie. Daarna kun je bij het versturen van een factuur een betaallink meesturen zodat klanten direct online kunnen betalen. Mollie is optioneel — zonder koppeling verstuur je gewoon de factuur-PDF.</p>
+          <p className="settings-help">Koppel het eigen Mollie-account van deze organisatie. Daarna gaat er bij een factuur een betaallink mee, zodat je klant direct online kan betalen. Het geld komt binnen op dat Mollie-account. Mollie is niet verplicht: zonder koppeling verstuur je gewoon de factuur-PDF.</p>
         </div>
       </div>
 
       {invoiceMollieMessage && <div className="success">{invoiceMollieMessage}</div>}
       {invoiceMollieError && <div className="error">{invoiceMollieError}</div>}
 
-      {canAdminOrganization ? <>
+      {/* Zolang de status niet binnen is: niet "Niet gekoppeld" tonen. Eerder
+          stond dat er even, ook als er wel een account gekoppeld was. */}
+      {canAdminOrganization ? (!invoiceMollie ? (invoiceMollieError ? null : <p className="settings-help">Status laden…</p>) : <>
         <div className="billing-summary">
           <div>
             <span>Status</span>
-            <strong>{invoiceMollie?.status === 'connected' ? 'Gekoppeld' : 'Niet gekoppeld'}</strong>
-            <small>{invoiceMollie?.status === 'connected'
+            <strong>{invoiceMollie.status === 'connected' ? 'Gekoppeld' : 'Niet gekoppeld'}</strong>
+            <small>{invoiceMollie.status === 'connected'
               ? `${invoiceMollie.mode === 'live' ? 'Live' : 'Test'}-modus${invoiceMollie.key_suffix ? ' · key ••••' + invoiceMollie.key_suffix : ''}`
               : 'Facturen worden zonder betaallink verstuurd.'}</small>
           </div>
-          {invoiceMollie?.status === 'connected' && invoiceMollie.connected_at && <div>
+          {/* Welk account de betalingen ontvangt, zodat je ziet dat het het jouwe is. */}
+          {invoiceMollie.status === 'connected' && <div className="mollie-profile">
+            <span>Mollie-profiel</span>
+            <strong>{invoiceMollie.profile ? (invoiceMollie.profile.name || invoiceMollie.profile.id) : 'Onbekend'}</strong>
+            <small>{invoiceMollie.profile
+              ? (invoiceMollie.profile.website || invoiceMollie.profile.id)
+              : 'Vervang de key om te zien welk account het is.'}</small>
+          </div>}
+          {invoiceMollie.status === 'connected' && invoiceMollie.connected_at && <div>
             <span>Gekoppeld sinds</span>
             <strong>{formatDate(invoiceMollie.connected_at)}</strong>
             <small>{invoiceMollie.last_validated_at ? 'Laatst gevalideerd ' + formatDate(invoiceMollie.last_validated_at) : 'Nog niet opnieuw gevalideerd'}</small>
           </div>}
         </div>
 
-        {invoiceMollie?.status === 'connected' ? <>
-          <div className="billing-control-row">
+        {invoiceMollie.status === 'connected' && invoiceMollie.mode === 'test' && <div className="settings-warning">
+          Testmodus: een betaling via de betaallink is niet echt. In de testomgeving van Mollie kiest de betaler zelf &quot;betaald&quot;, en dan zet ResoFly de factuur op betaald en boekt hem. Gebruik dit alleen om te proberen, en koppel een live-key voordat je echte facturen verstuurt.
+        </div>}
+        {invoiceMollie.status === 'connected' && invoiceMollie.mode === 'live' && invoiceMollie.profile?.status === 'unverified' && <div className="settings-warning">
+          Mollie heeft dit profiel nog niet goedgekeurd. Tot dan lukken echte betalingen niet. Kijk in je Mollie-dashboard wat er nog nodig is.
+        </div>}
+        {invoiceMollie.status === 'connected' && invoiceMollie.profile?.status === 'blocked' && <div className="settings-warning">
+          Mollie heeft dit profiel geblokkeerd. Betalingen via de link lukken dan niet. Neem contact op met Mollie, of koppel een ander profiel.
+        </div>}
+
+        {invoiceMollie.status === 'connected' ? <>
+          {canConnectMollie && <div className="billing-control-row">
             <div>
               <strong>Key vervangen</strong>
               <p className="settings-help">Plak een nieuwe API-key om de bestaande te vervangen, bijvoorbeeld na rotatie in je Mollie-dashboard.</p>
               <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="Nieuwe live_… of test_…" autoComplete="off" />
             </div>
             <Button onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Opslaan…' : 'Key vervangen'}</Button>
-          </div>
+          </div>}
+          {!canConnectMollie && <p className="settings-help mollie-alleen-eigenaar">Alleen de eigenaar van de organisatie kan de key vervangen of een ander Mollie-account koppelen. Ontkoppelen kun jij ook.</p>}
           <div className="billing-control-row">
             <div>
               <strong>Mollie ontkoppelen</strong>
@@ -2646,15 +2809,15 @@ export function Settings({
             </div>
             <Button variant="danger" onClick={disconnectInvoiceMollie} disabled={invoiceMollieBusy === 'disconnect'}>{invoiceMollieBusy === 'disconnect' ? 'Ontkoppelen…' : 'Mollie ontkoppelen'}</Button>
           </div>
-        </> : <div className="billing-control-row">
+        </> : canConnectMollie ? <div className="billing-control-row">
           <div>
             <strong>Mollie koppelen</strong>
             <p className="settings-help">Plak je Mollie API-key (begint met <code>live_</code> of <code>test_</code>). Te vinden in je Mollie-dashboard onder Developers → API-keys.</p>
             <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="live_… of test_…" autoComplete="off" />
           </div>
           <Button variant="primary" onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Koppelen…' : 'Mollie koppelen'}</Button>
-        </div>}
-      </> : <p className="settings-help">Alleen owners en admins kunnen de Mollie-koppeling beheren.</p>}
+        </div> : <p className="settings-help mollie-alleen-eigenaar">Alleen de eigenaar van de organisatie kan Mollie koppelen. Daarmee bepaal je waar het geld van je klanten binnenkomt.</p>}
+      </>) : <p className="settings-help">Alleen de eigenaar van de organisatie kan Mollie koppelen. Een beheerder kan de koppeling bekijken en ontkoppelen.</p>}
     </section>
 
     {activeOrganization && <InvoiceReminderSettingsCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
@@ -2953,7 +3116,7 @@ function auditActionLabel(action: string) {
 }
 
 function entityLabel(entity: string) {
-  const labels: Record<string, string> = { organization: 'Organisatie', member: 'Teamlid', invitation: 'Uitnodiging', license_event: 'Licentie', client: 'Klant', project: 'Project', task: 'Taak', ticket: 'Ticket', note: 'Notitie', quote: 'Offerte', invoice: 'Factuur', attachment: 'Bijlage', company_settings: 'Bedrijfsinstellingen', calendar_connection: 'Agenda-koppeling', calendar_source: 'Agenda', billing_profile: 'Billingprofiel', subscription: 'Subscription', payment: 'Betaling', billing_event: 'Billing-event', license_change: 'Licentiewijziging' };
+  const labels: Record<string, string> = { organization: 'Organisatie', member: 'Teamlid', invitation: 'Uitnodiging', license_event: 'Licentie', client: 'Klant', project: 'Project', task: 'Taak', ticket: 'Ticket', note: 'Notitie', quote: 'Offerte', invoice: 'Factuur', attachment: 'Bijlage', company_settings: 'Bedrijfsinstellingen', calendar_connection: 'Agenda-koppeling', mollie_connection: 'Mollie-koppeling', calendar_source: 'Agenda', billing_profile: 'Billingprofiel', subscription: 'Subscription', payment: 'Betaling', billing_event: 'Billing-event', license_change: 'Licentiewijziging' };
   return labels[entity] ?? entity;
 }
 

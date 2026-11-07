@@ -178,6 +178,18 @@ function edgeFunction(name, body) {
   }
   if (name === 'portal-login') return body?.action === 'getBranding' ? (body.key === pub.PORTAL_LOGIN_KEY ? pub.portalLoginBranding : { ok: true, branding: null }) : { ok: true, known: true };
   if (name === 'gerrie-agent') return { ok: true, budget: { remaining_cents: 5000 }, remaining: 5000, tools: [], proposals: [], usage: [] };
+  // Instellingen → Betalen: gekoppeld in testmodus, met een lang profiel. Dat
+  // is de langste stand van de kaart (profiel, waarschuwing, twee rijen knoppen).
+  if (name === 'invoice-workflow' && body?.action === 'getInvoiceMollieStatus') {
+    return {
+      ok: true,
+      status: {
+        status: 'connected', mode: 'test', key_suffix: 'a1B2',
+        connected_at: '2026-11-01T09:00:00Z', last_validated_at: '2026-11-01T09:00:00Z',
+        profile: { id: 'pfl_QkEhN94Ba', name: 'Studio Lopik Fotografie en Vormgeving', website: 'https://www.studio-lopik-fotografie-en-vormgeving.nl', status: 'verified' },
+      },
+    };
+  }
   return { ok: true };
 }
 

@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [documenten]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
 import { API_URL, ANON_KEY, SERVICE_KEY } from './omgeving.mjs';
-import { installeer, mailsAan } from './nepdiensten.mjs';
+import { installeer, mailsAan, post } from './nepdiensten.mjs';
 import { roep, roepRequest } from './functies.mjs';
 import { rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
 import { gelijk, gelukt, groep, samenvatting, stap, verwacht } from './toets.mjs';
@@ -42,7 +42,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'documenten'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -1368,6 +1368,130 @@ async function scenarioAgenda() {
   });
 }
 
+// ── Mollie koppelen: Instellingen → Online betalen ─────────────────────────
+
+/** Naar Instellingen → Online betalen, via het accountmenu zoals een gebruiker. */
+async function naarOnlineBetalen(scherm) {
+  const page = scherm.page;
+  await sluitAlles(scherm);
+  await page.locator('.user-trigger').click();
+  await page.locator('.user-menu [role="menuitem"]').filter({ hasText: /^Online betalen$/ }).click();
+  await inhoud(page).locator('h3').filter({ hasText: 'Online betalen (Mollie)' }).waitFor({ timeout: 15000 });
+  await rustig(scherm);
+}
+
+/** De Mollie-kaart in Instellingen. */
+const mollieKaart = (page) => inhoud(page).locator('section.settings-card').filter({ has: page.locator('h3', { hasText: 'Online betalen (Mollie)' }) });
+
+/**
+ * Waarom in de browser: de functie zelf toetst run.mjs (scenario mollie). Hier
+ * gaat het om wat de beheerder ziet. Tot 6 november 2026 stond bij een
+ * geweigerde key alleen "Edge Function returned a non-2xx status code" in
+ * beeld, en zag je niet welk Mollie-account gekoppeld was.
+ */
+async function scenarioMollie() {
+  groep('UI: Mollie koppelen (Instellingen → Online betalen)');
+  const { w } = t;
+  const geweigerd = `test_uigeweigerd${Date.now()}abcdefghij`;
+  const goed = `test_uigoed${Date.now()}abcdefghijklmnop`;
+  post.mollie.geweigerdeSleutels.add(geweigerd);
+  post.mollie.profielen.set(goed, { id: 'pfl_uistudio01', name: 'UI Studio Mollie', website: 'https://ui-studio.test', status: 'verified' });
+  let eigenaar = null;
+  let beheer = null;
+
+  // Alleen de eigenaar koppelt of vervangt de key (7 november 2026); een
+  // beheerder ziet de koppeling en kan ontkoppelen.
+  await uiStap('als beheerder, nog niets gekoppeld: geen formulier, wel de uitleg dat alleen de eigenaar koppelt', async () => {
+    beheer = await openWerkruimte(w.beheerder, 'beheerder-mollie', w.orgId);
+    await naarOnlineBetalen(beheer);
+    const kaart = mollieKaart(beheer.page);
+    await wachtTot(async () => /Niet gekoppeld/.test(await kaart.innerText()), { melding: 'geen status "Niet gekoppeld"' });
+    gelijk(await kaart.locator('input[type="password"]').count(), 0, 'invoerveld voor de key');
+    gelijk(await kaart.getByRole('button', { name: 'Mollie koppelen' }).count(), 0, 'knop "Mollie koppelen"');
+    verwacht(/Alleen de eigenaar van de organisatie kan Mollie koppelen/.test(await kaart.innerText()), 'geen uitleg voor de beheerder');
+  });
+
+  await uiStap('als eigenaar: niet gekoppeld, met het formulier om te koppelen', async () => {
+    eigenaar = await openWerkruimte(w.eigenaar, 'eigenaar-mollie', w.orgId);
+    await naarOnlineBetalen(eigenaar);
+    const kaart = mollieKaart(eigenaar.page);
+    await wachtTot(async () => /Niet gekoppeld/.test(await kaart.innerText()), { melding: 'geen status "Niet gekoppeld"' });
+    verwacht(await kaart.getByRole('button', { name: 'Mollie koppelen' }).isVisible(), 'geen knop "Mollie koppelen"');
+  });
+
+  await uiStap('een key die Mollie weigert: de reden staat in beeld, niet "non-2xx", en er is niets gekoppeld', async () => {
+    const kaart = mollieKaart(eigenaar.page);
+    const sinds = server.verkeer.length;
+    await kaart.locator('input[type="password"]').fill(geweigerd);
+    await kaart.getByRole('button', { name: 'Mollie koppelen' }).click();
+    const fout = kaart.locator('.error');
+    await wachtTot(async () => /Mollie weigerde deze API-key/.test(await fout.innerText().catch(() => '')), { melding: 'de reden van de weigering staat niet in beeld' });
+    verwacht(!/non-2xx/i.test(await fout.innerText()), `kale functiefout in beeld: ${await fout.innerText()}`);
+    gelijk(aanroepen(sinds, { functie: 'invoice-workflow', actie: 'saveInvoiceMollieKey' }).map((r) => r.status), [422], 'antwoord van de functie');
+    gelijk(sqlRij(`select count(*)::int as n from public.organization_invoice_mollie_settings where organization_id = ${q(w.orgId)} and status = 'connected'`).n, 0, 'gekoppeld');
+  }, { toegestaan: [{ functie: 'invoice-workflow', actie: 'saveInvoiceMollieKey', status: 422 }], foutmelding: /Mollie weigerde deze API-key/ });
+
+  await uiStap('een goede test-key: gekoppeld, met het Mollie-profiel en de waarschuwing voor de testmodus', async () => {
+    const kaart = mollieKaart(eigenaar.page);
+    const sinds = server.verkeer.length;
+    await kaart.locator('input[type="password"]').fill(goed);
+    await kaart.getByRole('button', { name: 'Mollie koppelen' }).click();
+    await wachtTot(async () => /Gekoppeld/.test(await kaart.locator('.billing-summary').innerText().catch(() => '')), { melding: 'niet "Gekoppeld"' });
+    verwachtAanroep(sinds, { functie: 'invoice-workflow', actie: 'saveInvoiceMollieKey' }, 'koppelen');
+    const profiel = tekst(await kaart.locator('.mollie-profile').innerText());
+    verwacht(profiel.includes('UI Studio Mollie') && profiel.includes('https://ui-studio.test'), `profiel: ${profiel}`);
+    verwacht(/Testmodus: een betaling via de betaallink is niet echt/.test(await kaart.locator('.settings-warning').innerText()), 'geen waarschuwing voor de testmodus');
+    verwacht(/UI Studio Mollie/.test(await kaart.locator('.success').innerText()), 'de bevestiging noemt het profiel niet');
+    gelijk(await kaart.locator('input[type="password"]').inputValue(), '', 'het veld met de key is leeg');
+    verwacht(await kaart.getByRole('button', { name: 'Key vervangen' }).isVisible(), 'de eigenaar ziet geen "Key vervangen"');
+    verwacht(!(await eigenaar.page.content()).includes(goed.slice(5)), 'de key staat nog in de pagina');
+  });
+
+  await uiStap('na herladen: dezelfde status, het profiel en de laatste vier tekens', async () => {
+    await eigenaar.page.reload({ waitUntil: 'domcontentloaded' });
+    await eigenaar.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });
+    await naarOnlineBetalen(eigenaar);
+    const kaart = mollieKaart(eigenaar.page);
+    await wachtTot(async () => /Gekoppeld/.test(await kaart.locator('.billing-summary').innerText().catch(() => '')), { melding: 'niet "Gekoppeld" na herladen' });
+    const samenvatting = tekst(await kaart.locator('.billing-summary').innerText());
+    verwacht(samenvatting.includes(`••••${goed.slice(-4)}`) && samenvatting.includes('UI Studio Mollie'), `samenvatting: ${samenvatting}`);
+  });
+
+  await uiStap('de beheerder ziet de koppeling met het profiel, vervangt de key niet, en ontkoppelen vraagt eerst', async () => {
+    await beheer.page.reload({ waitUntil: 'domcontentloaded' });
+    await beheer.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });
+    await naarOnlineBetalen(beheer);
+    const kaart = mollieKaart(beheer.page);
+    await wachtTot(async () => /Gekoppeld/.test(await kaart.locator('.billing-summary').innerText().catch(() => '')), { melding: 'de beheerder ziet niet "Gekoppeld"' });
+    verwacht(tekst(await kaart.locator('.mollie-profile').innerText()).includes('UI Studio Mollie'), 'de beheerder ziet het profiel niet');
+    gelijk(await kaart.locator('input[type="password"]').count(), 0, 'invoerveld voor de key');
+    gelijk(await kaart.getByRole('button', { name: 'Key vervangen' }).count(), 0, 'knop "Key vervangen"');
+    verwacht(/Alleen de eigenaar van de organisatie kan de key vervangen/.test(await kaart.innerText()), 'geen uitleg voor de beheerder');
+    const dialogen = beheer.dialogen.length;
+    beheer.plan.push({});
+    await kaart.getByRole('button', { name: 'Mollie ontkoppelen' }).click();
+    await wachtTot(async () => beheer.dialogen.length > dialogen, { melding: 'geen bevestiging gevraagd' });
+    verwacht(/Mollie ontkoppelen voor facturen\?/.test(beheer.dialogen.at(-1).tekst), `vraag: ${beheer.dialogen.at(-1).tekst}`);
+    await wachtTot(async () => /Niet gekoppeld/.test(await kaart.locator('.billing-summary').innerText().catch(() => '')), { melding: 'niet "Niet gekoppeld" na ontkoppelen' });
+    gelijk(sqlRij(`select status, api_key_encrypted from public.organization_invoice_mollie_settings where organization_id = ${q(w.orgId)}`), { status: 'revoked', api_key_encrypted: null }, 'database');
+    gelijk(sqlRijen(`select action, actor_user_id from public.audit_logs where organization_id = ${q(w.orgId)} and entity_type = 'mollie_connection' order by created_at, id`),
+      [{ action: 'mollie_connected', actor_user_id: w.eigenaar.id }, { action: 'revoked', actor_user_id: w.beheerder.id }], 'auditlog');
+  });
+
+  await uiStap('een lid ziet Online betalen zonder formulier en zonder status', async () => {
+    const lid = await medewerker();
+    const sinds = server.verkeer.length;
+    await naarOnlineBetalen(lid);
+    const kaart = mollieKaart(lid.page);
+    verwacht(/Alleen de eigenaar van de organisatie kan Mollie koppelen/.test(await kaart.innerText()), 'geen uitleg voor een lid');
+    gelijk(await kaart.locator('input[type="password"]').count(), 0, 'invoerveld voor de key');
+    gelijk(aanroepen(sinds, { functie: 'invoice-workflow', actie: 'getInvoiceMollieStatus' }).length, 0, 'statusaanroepen');
+  });
+
+  await sluit(beheer);
+  await sluit(eigenaar);
+}
+
 // ── Documenten: maken, bewerken, veilig tonen, delen, verwijderen ───────────
 
 /** Kwaadaardige inhoud zoals iemand hem via de API of een plakactie kan opslaan. */
@@ -1533,7 +1657,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, documenten: scenarioDocumenten };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

@@ -13,7 +13,7 @@
 // factuureigendom gebeurt door de aanroeper (client-portal) vóór deze helper.
 // ============================================================
 
-import { decryptSecret } from './mollieSecrets.ts';
+import { loadInvoiceMollieKey } from './invoiceMollieKey.ts';
 import { invoiceMollieWebhookBase, invoiceMollieWebhookUrl } from './mollieWebhookUrl.ts';
 import { mollieCheckoutDecision, readMollieSalesInvoice, type MolliePaymentSource } from './mollieSalesInvoice.ts';
 
@@ -428,22 +428,9 @@ export async function orgHasInvoiceMollie(supabaseAdmin: SupabaseAdmin, organiza
 }
 
 async function resolveOrganizationMollieKey(supabaseAdmin: SupabaseAdmin, organizationId: string): Promise<{ apiKey: string } | null> {
-  const { data, error } = await supabaseAdmin
-    .from('organization_invoice_mollie_settings')
-    .select('status,api_key_encrypted')
-    .eq('organization_id', organizationId)
-    .maybeSingle();
-  if (error || !data) return null;
-  const row = data as { status?: string; api_key_encrypted?: string | null };
-  if (row.status !== 'connected' || !row.api_key_encrypted) return null;
-  try {
-    const apiKey = await decryptSecret(row.api_key_encrypted);
-    if (!apiKey) return null;
-    return { apiKey };
-  } catch (decryptError) {
-    console.error('client-portal could not decrypt organization Mollie key', describeError(decryptError));
-    return null;
-  }
+  const lookup = await loadInvoiceMollieKey(supabaseAdmin, organizationId);
+  if (!lookup.key && lookup.connected) console.error('client-portal: Mollie-sleutel van de organisatie niet te gebruiken', { organizationId, reason: lookup.reason });
+  return lookup.key;
 }
 
 // ── Money-math (verbatim uit invoice-workflow, één-op-één identiek) ──────────

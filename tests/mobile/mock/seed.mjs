@@ -303,6 +303,17 @@ export const clientEmailThreadOverview = clientEmailThreads.map(t => {
     last_status: last.status, last_email_at: last.created_at, last_preview: last.body_text.slice(0, 200),
   };
 });
+// Instellingen → E-mail → Eigen verzenddomein: één geverifieerd domein met
+// afzender, en één dat nog wacht, met de lange DKIM-waarde en een status per
+// record. Die waarde moet op een telefoon binnen de kaart blijven.
+export const sendingDomains = [
+  { id: uid('d'), ...base(), domain: 'studiolopik.nl', provider: 'resend', resend_domain_id: 'b9c1d2e3-0000-4000-8000-000000000001', region: 'eu-west-1', from_email: 'info@studiolopik.nl', from_name: 'Studio Lopik', status: 'verified', dns_records: [], is_default: true, last_checked_at: iso(day(-2)), verified_at: iso(day(-20)) },
+  { id: uid('d'), ...base(), domain: 'nieuwsbrief-studiolopik.nl', provider: 'resend', resend_domain_id: 'b9c1d2e3-0000-4000-8000-000000000002', region: 'eu-west-1', from_email: 'nieuws@nieuwsbrief-studiolopik.nl', from_name: null, status: 'pending', is_default: false, last_checked_at: iso(day(0)), verified_at: null, dns_records: [
+    { record: 'DKIM', name: 'resend._domainkey', type: 'TXT', ttl: 'Auto', status: 'verified', value: 'p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC8bxM4dWpRJl0/yOUAqu3pXut87WdZObaU1BiIEJOYzILHjL+7vbR7zxeIoFczeZapJ7vfTBiBvXstLcmIL7XZorU4CZnlLAj4df63gbqTo6VIXUtqhxV3eQp0fX+CSMXAwZsHaw0k/vBYIfxLjaVD5xZPNbynctBFRqZrd/fP7QIDAQAB' },
+    { record: 'SPF', name: 'send', type: 'MX', ttl: 'Auto', status: 'pending', value: 'feedback-smtp.eu-west-1.amazonses.com', priority: 10 },
+    { record: 'SPF', name: 'send', type: 'TXT', ttl: 'Auto', status: 'failed', value: 'v=spf1 include:amazonses.com ~all' },
+  ] },
+];
 export const inboundAlias = { id: uid('a'), ...base(), local_part: 'studio-lopik-abcdefghijklmnop', label: 'Doorstuuradres', forward_from_email: 'info@studiolopik.nl', status: 'active', retires_at: null, blocked_senders: [], last_received_at: at(0, 8, 2), received_total: 14, rate_window_started_at: null, rate_window_count: 0, pending_confirmation_code: null, pending_confirmation_at: null };
 const inbound = (sender_name, sender_email, subject, body_text, received_at, reason, candidates = [], suggested = null) => ({
   id: uid('u'), ...base(), alias_id: inboundAlias.id, origin_client_email_id: null, route: 'alias', dedup_key: uid('k'), recipient: `${inboundAlias.local_part}@inbound.resofly.com`,
@@ -372,7 +383,7 @@ export const tables = {
   ],
   notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: [], contracts: [],
   client_email_threads: clientEmailThreads, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
-  inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias],
+  inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias], organization_email_domains: sendingDomains,
   // Het eerste ticket heeft een klantreactie die nog niet gelezen is (view
   // ticket_unread): zo meet de test de "Nieuw"-markering in Berichten en op
   // het tabblad Tickets van het klantdossier.

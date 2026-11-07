@@ -53,7 +53,7 @@ const MODULE_LABELS: Record<string, string> = {
  */
 export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   member: null, organization: null,
-  api_key: 'admin', webhook_endpoint: 'admin', invitation: 'admin', calendar_connection: 'admin', subscription: 'admin',
+  api_key: 'admin', webhook_endpoint: 'admin', invitation: 'admin', calendar_connection: 'admin', mollie_connection: 'admin', subscription: 'admin',
   billing_profile: 'admin', billing_event: 'admin', payment: 'admin', license_change: 'admin', license_event: 'admin',
   annual_account: 'finance', annual_account_filing: 'finance', annual_account_signature: 'finance', bank_account: 'finance',
   bank_rule: 'finance', company_settings: 'finance', contract: 'finance', contract_note: 'finance', contract_project: 'finance',
