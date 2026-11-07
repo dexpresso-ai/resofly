@@ -169,3 +169,24 @@ Mollie bij de factuur.
   "Verstuur via Resend" het concept niet: het werkblad van het lid laadde vóór
   het concept in de database kwam. Dat lag er al; het hoort niet bij deze
   wijziging.
+
+## Uitrol op staging (7 november 2026)
+
+- Gemerged naar `staging` (`3d5ee17`).
+- *Deploy Supabase (staging)*, run 191: geslaagd. Migratie `20261107100000`
+  doorgevoerd, de edge functions uitgerold (`invoice-workflow` versie 143,
+  10:32 UTC), rooktest groen.
+- Nacontrole op de live database (alleen lezen): de kolom en de check staan
+  er; beide organisaties staan op "nog niets gekozen", dus er verandert niets
+  tot iemand in Instellingen kiest.
+- Cloudflare Pages: `3d5ee17` gebouwd en live.
+- *Frontend checks*, run 153: helemaal groen. Migraties vanaf nul (elk
+  bestand toegepast), deno-controle, typecheck, CSP-hash, unit tests, de
+  mobiele lay-outtest in donker en licht, en het laden per module.
+
+## Wat jij kunt doen
+
+Kies in Instellingen → Online betalen → Facturen versturen voor "Per e-mail"
+als je facturen zonder Mollie wilt versturen. Mollie hoef je daarvoor niet te
+ontkoppelen. Kijk dan ook of je IBAN bij Instellingen → Facturatie staat: de
+kaart wijst je erop als hij ontbreekt.
