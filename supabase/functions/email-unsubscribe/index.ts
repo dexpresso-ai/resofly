@@ -58,23 +58,44 @@ serve(async (req) => {
   return htmlResponse(confirmPage(brandName, verified.email, token), 200);
 });
 
+// Elke stap controleert zijn fout. supabase-js gooit niet bij een databasefout,
+// het geeft { error } terug. Tot november 2026 werd die genegeerd: mislukte het
+// wegschrijven, dan las de ontvanger toch "Je bent afgemeld" en bleef hij mail
+// krijgen. Nu ziet hij "Er ging iets mis" en kan hij het opnieuw proberen.
 async function applyUnsubscribe(organizationId: string, email: string, source: string): Promise<void> {
   const normalized = email.trim().toLowerCase();
 
-  await supabaseAdmin
+  // 1. Op de lijst. De insert-trigger stopt meteen lopende campagnes en stromen.
+  const { error: insertError } = await supabaseAdmin
     .from('email_suppressions')
     .upsert(
       { organization_id: organizationId, email: normalized, reason: 'unsubscribed', source },
       { onConflict: 'organization_id,email', ignoreDuplicates: true },
     );
+  if (insertError) throw insertError;
 
-  // Lopende campagne-sends naar dit adres stoppen.
-  await supabaseAdmin
+  // 2. Stond het adres er al op als handmatige blokkade of bounce, dan wordt
+  //    het nu een afmelding van de ontvanger zelf. Die kan het team niet meer
+  //    opheffen (migratie 20261107140000); een handmatige blokkade wel. Zonder
+  //    deze stap kon het team de blokkade weghalen en de persoon die zich net
+  //    had afgemeld weer mailen.
+  const { error: upgradeError } = await supabaseAdmin
+    .from('email_suppressions')
+    .update({ reason: 'unsubscribed', source })
+    .eq('organization_id', organizationId)
+    .eq('email', normalized)
+    .in('reason', ['manual', 'bounced']);
+  if (upgradeError) throw upgradeError;
+
+  // 3. Lopende campagne-sends naar dit adres stoppen (ook als stap 1 niets
+  //    invoegde omdat het adres er al op stond).
+  const { error: stopError } = await supabaseAdmin
     .from('email_campaign_recipients')
     .update({ status: 'unsubscribed', unsubscribed_at: new Date().toISOString() })
     .eq('organization_id', organizationId)
     .eq('to_email', normalized)
     .in('status', ['pending', 'sending']);
+  if (stopError) throw stopError;
 }
 
 function confirmPage(brandName: string, email: string, token: string): string {
