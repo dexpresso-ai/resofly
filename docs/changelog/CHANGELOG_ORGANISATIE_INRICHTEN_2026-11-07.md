@@ -193,3 +193,31 @@ handelsnaam, anders de bedrijfsnaam), niet meer naar het e-mailadres.
   knop naar de plek waar dat al kan.
 - Het kaartje "Workspace setup" op het dashboard is gebleven (eerste klant,
   eerste project).
+
+## Uitrol op staging (7 november, 19:51)
+
+Staging had intussen de marketingcontrole gekregen (migratie
+`20261107140000`). Die is eerst in de branch samengevoegd; conflicten alleen in
+de lijst met stromen-scenario's (`marketing` en `inrichten` staan er allebei
+in). Op de samengevoegde stand opnieuw getest: `npm test` 1253 van 1253, de
+keten vanaf nul 254 van 254, stromentest `rook` en `inrichten` 26 van 26,
+`test:inrichten`, `test:loading` en een deel van `test:mobile` groen. Daarna
+naar staging gepusht (`6ec3de6`).
+
+- **Deploy Supabase (staging)**: geslaagd, met de rooktest. De migratie staat
+  erop.
+- **Nagekeken op de database** (alleen lezen, via de Management API): alle 6
+  organisaties staan op ingericht, dus geen bestaande gebruiker krijgt de
+  stappen; geen nieuwe regels in het auditlog; `complete_organization_onboarding`
+  en `ensure_user_default_organization` zijn dicht voor anon; een gebruiker mag
+  op `organizations` nog steeds alleen `name` bijwerken; de nieuwe kolom heeft
+  geen standaardwaarde, dus een nieuwe organisatie begint leeg.
+- **Cloudflare Pages**: de build van `6ec3de6` staat op staging.
+- **Frontend checks** op staging: geslaagd. De migratieketen vanaf nul (Postgres
+  17.6.1.111, zoals staging), de edge functions, typecheck, unit tests, de
+  mobiele lay-outtest, laden per module en de nieuwe stap Inrichtingsstappen.
+
+De stappen zelf zien: log in met een nieuw account zonder uitnodiging, of kies
+bij een bestaand account Instellingen → Organisatie → Nieuwe organisatie. Voor
+een BV loopt het abonnement op staging via de betaalpagina van Mollie (de
+platformsleutel staat er), zoals bij Instellingen → Abonnement.
