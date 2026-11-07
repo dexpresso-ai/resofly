@@ -35,6 +35,8 @@ export const R2_GEHEIM = 'r2-geheim-stromen';
 export const CRON_SECRET = 'cron-geheim-stromen';
 export const WEBHOOK_SECRET = 'webhook-geheim-stromen';
 export const AGENDA_STATE_GEHEIM = 'agenda-state-geheim-stromen';
+/** Waarmee de afmeldlinks in marketingmail worden ondertekend (UNSUBSCRIBE_SECRET). */
+export const AFMELD_GEHEIM = 'afmeld-geheim-stromen';
 /** Zoals Resend het signing secret geeft (whsec_ + base64); de webhook controleert er de handtekening mee. */
 export const RESEND_WEBHOOK_GEHEIM = `whsec_${Buffer.from('stromen-resend-webhook-geheim-32b').toString('base64')}`;
 
@@ -86,4 +88,10 @@ Object.assign(process.env, {
   MICROSOFT_CALENDAR_CLIENT_ID: 'microsoft-client-stromen',
   MICROSOFT_CALENDAR_CLIENT_SECRET: 'microsoft-geheim-stromen',
   MICROSOFT_CALENDAR_TENANT_ID: 'common',
+  // Marketing (marketing.mjs): de verzendronde en de afmeldlink. Een batch van
+  // vijf in plaats van honderd: dan is met twaalf klanten al te zien wat er
+  // gebeurt als een campagne over meerdere rondes loopt.
+  CAMPAIGN_CRON_SECRET: CRON_SECRET,
+  UNSUBSCRIBE_SECRET: AFMELD_GEHEIM,
+  CAMPAIGN_DISPATCH_BATCH: '5',
 });

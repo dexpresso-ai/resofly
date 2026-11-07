@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Ban, CheckCircle2, Clock, Copy, Mail, MailWarning, Megaphone, Pause, Play, Plus, Send, Trash2, Users, Workflow, X } from 'lucide-react';
+import { Ban, CheckCircle2, Clock, Copy, Lock, Mail, MailWarning, Megaphone, Pause, Play, Plus, Send, Trash2, Users, Workflow, X } from 'lucide-react';
 import type {
   AppData, CampaignAudience, CampaignCustomFilter, CampaignCustomFilterOperator, CampaignAudiencePreview,
   ClientFieldDefinition, EmailCampaign, EmailCampaignRecipient, EmailCampaignStats, EmailSuppression, UUID,
@@ -9,6 +9,7 @@ import { Button, Input, Select, ColorPicker } from '../components/Ui';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import type { FilterField } from '../components/SearchFilterPanel';
 import { STANDARD_MERGE_TOKENS, customFieldToken, unknownMergeTokens, type MergeFieldDefinition } from '../lib/mergeTokens';
+import { suppressionLockedMessage, suppressionRemovableByTeam } from '../lib/marketingRules';
 import { activeFieldDefinitions, distinctFieldValues } from '../components/CustomFields';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { PageIcon } from '../components/PageIcon';
@@ -550,6 +551,12 @@ function CampaignEditor({ data, organizationId, canWrite, campaign, onBack, onSa
     subject: subject.trim(),
     preheader: preheader.trim() || null,
     body_html: bodyHtml,
+    // De editor bewerkt alleen de HTML; de platte tekst maakt de verzending daar
+    // zelf van. Een campagne die Gerrie opstelde had wél een eigen platte
+    // tekst, en die bleef tot november 2026 staan na het bewerken: wie de
+    // tekstversie las (of een spamfilter dat beide vergelijkt) kreeg Gerries
+    // eerste versie.
+    body_text: null,
     accent_color: accent,
     audience,
   }), [name, subject, preheader, bodyHtml, accent, audience]);
@@ -1087,7 +1094,7 @@ function SuppressionsTab({ organizationId, canWrite, suppressions, onChanged, on
     <div className="mk-suppressions">
       <div className="settings-card mk-card">
         <div className="mk-card-title">Afmeldingen & blokkeringen</div>
-        <p className="mk-muted">Deze adressen ontvangen geen marketingmail meer. Adressen komen hier via de afmeldlink, een bounce/klacht, of handmatig.</p>
+        <p className="mk-muted">Deze adressen ontvangen geen marketingmail meer. Adressen komen hier via de afmeldlink, een bounce/klacht, of handmatig. Een handmatige blokkade of een bounce kun je opheffen; heeft iemand zich zelf afgemeld of je mail als spam gemeld, dan blijft dat staan.</p>
         {canWrite && (
           <div className="mk-inline">
             <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="adres@voorbeeld.nl" />
@@ -1109,7 +1116,9 @@ function SuppressionsTab({ organizationId, canWrite, suppressions, onChanged, on
                   <td data-label="Reden"><span className="mk-status paused">{SUPPRESSION_REASON_LABEL[s.reason] ?? s.reason}</span></td>
                   <td data-label="Sinds">{fmtDate(s.created_at)}</td>
                   <td data-label="" className="mk-actions">
-                    {canWrite && <button className="mk-icon" title="Weer toestaan" onClick={() => remove(s.email)} disabled={busy}><Trash2 size={15} /></button>}
+                    {canWrite && (suppressionRemovableByTeam(s.reason)
+                      ? <button className="mk-icon" title="Weer toestaan" onClick={() => remove(s.email)} disabled={busy}><Trash2 size={15} /></button>
+                      : <span className="mk-locked" title={suppressionLockedMessage(s.reason)} aria-label={suppressionLockedMessage(s.reason)}><Lock size={15} /></span>)}
                   </td>
                 </tr>
               ))}
@@ -1221,7 +1230,10 @@ function FlowEditor({ data, organizationId, canWrite, flow, onBack, onSaved, onA
     try {
       const updated = await updateFlow(organizationId, flow.id, { name: name.trim() || 'Naamloze stroom', audience, stop_condition: stopCondition });
       onSaved(updated);
-      const clean = steps.map((s, i) => ({ ...s, step_index: i, delay_days: i === 0 ? 0 : Math.max(0, Math.round(s.delay_days || 0)) }));
+      // body_text leeg: de verzending maakt de platte tekst uit de HTML die hier
+      // bewerkt is (zie CampaignEditor). Een stap van Gerrie hield anders zijn
+      // oude platte tekst naast de nieuwe HTML.
+      const clean = steps.map((s, i) => ({ ...s, step_index: i, delay_days: i === 0 ? 0 : Math.max(0, Math.round(s.delay_days || 0)), body_text: null }));
       await replaceFlowSteps(organizationId, flow.id, clean);
       return true;
     } catch (e) {

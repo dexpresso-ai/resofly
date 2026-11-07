@@ -16,6 +16,7 @@ import {
 import { makeUnsubscribeToken } from '../_shared/unsubscribe.ts';
 import { assertTeamTestRecipient } from '../_shared/testRecipient.ts';
 import { emailQuotaAllows, takeEmailQuota } from '../_shared/emailQuota.ts';
+import { MATERIALIZE_GRACE_MINUTES, releasedRecipientStatus, singleLine } from '../_shared/marketingRules.ts';
 import {
   buildMergeTokens,
   buildMergeFallbacks,
@@ -141,16 +142,23 @@ serve(async (req) => {
     // zodat elke bestaande requireWrite-controle meteen klopt.
     const effectiveRole: OrganizationRole = marketingLevel === 'write' ? role : 'viewer';
 
+    // De doelgroep bestaat uit klanten. Een telling hoort bij Marketing, maar de
+    // adressen, namen en klantgegevens zelf horen bij Klanten. Tot november 2026
+    // gaf de telling ook twintig adressen met naam terug, en vulde de testmail
+    // een echte klant in, ook voor een teamlid dat Klanten niet mag zien.
+    const canReadClients = async () =>
+      (await getModuleLevel(supabaseAdmin, user.id, organizationId, 'clients')) !== 'none';
+
     switch (action) {
       case 'previewAudience': {
         // Alleen lezen — elk lid mag een telling opvragen.
         const audience = (body.audience || {}) as Record<string, unknown>;
-        const preview = await previewAudience(organizationId, audience);
+        const preview = await previewAudience(organizationId, audience, await canReadClients());
         return json(req, { ok: true, ...preview });
       }
       case 'sendTestCampaign': {
         requireWrite(effectiveRole);
-        const result = await sendTestCampaign(organizationId, body, user.email);
+        const result = await sendTestCampaign(organizationId, body, user.email, await canReadClients());
         return json(req, { ok: true, ...result });
       }
       case 'sendCampaign': {
@@ -175,8 +183,10 @@ serve(async (req) => {
       }
       case 'cancelCampaign': {
         requireWrite(effectiveRole);
-        const result = await setCampaignStatus(organizationId, String(body.campaignId || ''), 'cancelled', ['draft', 'scheduled', 'sending', 'paused']);
-        return json(req, { ok: true, ...result });
+        const campaignId = String(body.campaignId || '');
+        const result = await setCampaignStatus(organizationId, campaignId, 'cancelled', ['draft', 'scheduled', 'sending', 'paused']);
+        const skipped = await skipUnsentRecipients(organizationId, campaignId);
+        return json(req, { ok: true, ...result, skipped });
       }
       case 'activateFlow': {
         requireWrite(effectiveRole);
@@ -490,6 +500,7 @@ async function loadCompanyForTokens(organizationId: string): Promise<MergeCompan
 async function previewAudience(
   organizationId: string,
   audienceRaw: Record<string, unknown>,
+  canReadClients: boolean,
 ): Promise<{ total: number; sendable: number; suppressed: number; withoutEmail: number; matchedClients: number; sample: { email: string; name: string | null }[] }> {
   const { candidates, matchedClients, clientsWithoutEmail, suppressed } = await resolveAudience(organizationId, audienceRaw);
   const sendable = candidates.filter((c) => !suppressed.has(c.email));
@@ -499,7 +510,8 @@ async function previewAudience(
     suppressed: candidates.length - sendable.length,
     withoutEmail: clientsWithoutEmail,
     matchedClients,
-    sample: sendable.slice(0, 20).map((c) => ({ email: c.email, name: c.name })),
+    // Adressen en namen alleen voor wie Klanten mag lezen; de aantallen voor iedereen.
+    sample: canReadClients ? sendable.slice(0, 20).map((c) => ({ email: c.email, name: c.name })) : [],
   };
 }
 
@@ -540,6 +552,7 @@ async function sendTestCampaign(
   organizationId: string,
   body: Record<string, unknown>,
   callerEmail: string | undefined,
+  canReadClients: boolean,
 ): Promise<{ providerEmailId: string; recipientEmail: string; previewClientId: string | null }> {
   requireResendConfigured();
   requireUnsubscribeConfigured();
@@ -561,10 +574,14 @@ async function sendTestCampaign(
   // Een testmail met lege variabelen zegt niets. We vullen daarom met een ECHTE
   // ontvanger uit de doelgroep — standaard de eerste, of een zelfgekozen klant.
   // Bestaat die niet (lege doelgroep), dan vullen we zichtbare voorbeeldwaarden
-  // in plaats van niets, zodat je meteen ziet waar een variabele landt.
+  // in plaats van niets, zodat je meteen ziet waar een variabele landt. Wie
+  // Klanten niet mag lezen, krijgt altijd de voorbeeldwaarden: anders las hij
+  // naam, adres en vrije velden van elke klant in zijn eigen inbox.
   const definitions = await loadFieldDefinitions(organizationId);
   const previewClientId = String(body.previewClientId || '');
-  const { candidates } = await resolveAudience(organizationId, campaign.audience || {}, true);
+  const { candidates } = canReadClients
+    ? await resolveAudience(organizationId, campaign.audience || {}, true)
+    : { candidates: [] as Candidate[] };
   const sample = previewClientId
     ? candidates.find((c) => c.clientId === previewClientId) ?? candidates[0]
     : candidates[0];
@@ -674,9 +691,14 @@ async function sendCampaign(
   }
 
   // Atomair de verzending claimen: alleen als de status intussen niet gewijzigd is.
+  // started_at blijft leeg tot de ontvangerslijst klaarstaat; zolang slaat de
+  // verzendronde (cron, elke minuut) deze campagne over. Tot november 2026 kwam
+  // started_at hier meteen. Liep de ronde terwijl de doelgroep nog werd
+  // berekend, dan zag hij een campagne zonder ontvangers, zette hem op
+  // 'verzonden', en kreeg alleen de eerste batch van honderd de mail.
   const { data: flipped, error: flipError } = await supabaseAdmin
     .from('email_campaigns')
-    .update({ status: 'sending', started_at: new Date().toISOString(), scheduled_at: null })
+    .update({ status: 'sending', started_at: null, scheduled_at: null })
     .eq('id', campaignId)
     .eq('organization_id', organizationId)
     .in('status', ['draft', 'scheduled'])
@@ -686,7 +708,10 @@ async function sendCampaign(
     throw new CampaignHttpError('De campagne is inmiddels gewijzigd; herlaad en probeer opnieuw.', 409);
   }
 
+  // Valt de functie hierna om, dan staat de campagne op 'verzenden' zonder
+  // started_at; de verzendronde zet de lijst dan zelf klaar (handleCampaignDispatch).
   const materialized = await materializeRecipients(campaign);
+  await markMaterialized(campaignId);
 
   // Eerste batch meteen versturen voor directe feedback; de rest volgt via cron.
   const { sent, failed } = await dispatchCampaign({ ...campaign, status: 'sending' }, DISPATCH_BATCH);
@@ -729,6 +754,59 @@ async function materializeRecipients(campaign: CampaignRow): Promise<number> {
     inserted += (data || []).length;
   }
   return inserted;
+}
+
+/** De ontvangerslijst staat klaar: vanaf nu mag de verzendronde deze campagne oppakken. */
+async function markMaterialized(campaignId: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('email_campaigns')
+    .update({ started_at: new Date().toISOString() })
+    .eq('id', campaignId)
+    .is('started_at', null);
+  if (error) throw error;
+}
+
+/** De status zoals hij NU in de database staat (null = campagne bestaat niet meer). */
+async function currentCampaignStatus(campaignId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from('email_campaigns')
+    .select('status')
+    .eq('id', campaignId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? String((data as { status: string }).status) : null;
+}
+
+/**
+ * Geeft opgepakte ontvangers (status 'sending') die nog geen mail kregen terug:
+ * naar de wachtrij of naar 'overgeslagen'. Alleen rijen die nog op 'sending'
+ * staan; een afmelding of annulering die er intussen overheen ging, blijft staan.
+ */
+async function releaseRecipients(recipients: RecipientRow[], status: 'pending' | 'skipped'): Promise<void> {
+  if (recipients.length === 0) return;
+  const { error } = await supabaseAdmin
+    .from('email_campaign_recipients')
+    .update({ status })
+    .in('id', recipients.map((r) => r.id))
+    .eq('status', 'sending');
+  if (error) throw error;
+}
+
+/**
+ * Bij annuleren: wat nog wacht (of door een omgevallen ronde op 'sending' bleef
+ * hangen) gaat nooit meer uit. Eerst bleven die rijen op 'In wachtrij' staan,
+ * ook in de tellingen, terwijl er nooit meer iets zou gebeuren.
+ */
+async function skipUnsentRecipients(organizationId: string, campaignId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin
+    .from('email_campaign_recipients')
+    .update({ status: 'skipped' })
+    .eq('organization_id', organizationId)
+    .eq('campaign_id', campaignId)
+    .in('status', ['pending', 'sending'])
+    .select('id');
+  if (error) throw error;
+  return (data || []).length;
 }
 
 async function countPending(campaignId: string): Promise<number> {
@@ -804,13 +882,18 @@ async function dispatchCampaign(campaign: CampaignRow, limit: number): Promise<{
   let failed = 0;
   for (let index = 0; index < recipients.length; index += 1) {
     const recipient = recipients[index];
+    // Pauzeren en annuleren gelden ook voor de batch die al loopt. Tot november
+    // 2026 ging de rest van de batch (tot honderd mails) gewoon de deur uit
+    // nadat iemand op Pauzeer of Annuleer had gedrukt.
+    const status = await currentCampaignStatus(campaign.id);
+    if (status !== 'sending') {
+      await releaseRecipients(recipients.slice(index), releasedRecipientStatus(status));
+      break;
+    }
     // Quotum per organisatie (20261101050000). Op = uitstellen, niet mislukken:
     // de rest van deze batch gaat terug in de rij en de volgende ronde gaat verder.
     if (!(await emailQuotaAllows(supabaseAdmin, campaign.organization_id, 1))) {
-      await supabaseAdmin
-        .from('email_campaign_recipients')
-        .update({ status: 'pending', updated_at: new Date().toISOString() })
-        .in('id', recipients.slice(index).map((r) => r.id));
+      await releaseRecipients(recipients.slice(index), 'pending');
       break;
     }
     try {
@@ -975,8 +1058,8 @@ function personalizeContent(
 ): PersonalizedContent {
   const plain = { escape: false, fallbacks };
   return {
-    subject: fillMergeTokens(content.subject, tokens, plain),
-    preheader: content.preheader ? fillMergeTokens(content.preheader, tokens, plain) : content.preheader,
+    subject: singleLine(fillMergeTokens(content.subject, tokens, plain)),
+    preheader: content.preheader ? singleLine(fillMergeTokens(content.preheader, tokens, plain)) : content.preheader,
     body_html: fillMergeTokens(content.body_html, tokens, { escape: true, fallbacks }),
     body_text: content.body_text ? fillMergeTokens(content.body_text, tokens, plain) : content.body_text,
     accent_color: content.accent_color,
@@ -1021,7 +1104,7 @@ function buildEmailHtml(content: EmailContent, brandName: string, unsubToken: st
 
 // ── Cron: dispatch ──────────────────────────────────────────────────────────
 
-async function handleCampaignDispatch(): Promise<{ promoted: number; campaigns: number; sent: number; failed: number }> {
+async function handleCampaignDispatch(): Promise<{ promoted: number; recovered: number; campaigns: number; sent: number; failed: number }> {
   const nowIso = new Date().toISOString();
 
   // 1. Ingeplande campagnes die nu 'due' zijn: materialiseren + op 'sending'.
@@ -1048,11 +1131,39 @@ async function handleCampaignDispatch(): Promise<{ promoted: number; campaigns: 
     }
   }
 
-  // 2. Verzendende campagnes: batch versturen.
+  // 1b. Campagnes op 'verzenden' waarvan de ontvangerslijst nooit klaarkwam: de
+  //     functie viel om tijdens sendCampaign (of iemand zette de status via de
+  //     API). Na een ruime wachttijd zet de ronde de lijst zelf klaar. Het
+  //     klaarzetten is idempotent (unieke ontvanger per campagne en adres).
+  const graceStart = new Date(Date.now() - MATERIALIZE_GRACE_MINUTES * 60_000).toISOString();
+  const { data: stuck, error: stuckError } = await supabaseAdmin
+    .from('email_campaigns')
+    .select(CAMPAIGN_COLUMNS)
+    .eq('status', 'sending')
+    .is('started_at', null)
+    .lt('updated_at', graceStart)
+    .limit(10);
+  if (stuckError) throw stuckError;
+
+  let recovered = 0;
+  for (const campaign of (stuck || []) as CampaignRow[]) {
+    try {
+      await materializeRecipients(campaign);
+      await markMaterialized(campaign.id);
+      recovered += 1;
+    } catch (error) {
+      console.error('campaign materialize recovery failed', campaign.id, error instanceof Error ? error.message : error);
+    }
+  }
+
+  // 2. Verzendende campagnes waarvan de ontvangerslijst klaarstaat: batch versturen.
+  //    Zonder started_at wordt de lijst nog klaargezet (sendCampaign); zo'n
+  //    campagne heeft nog geen ontvangers en zou hier meteen 'verzonden' worden.
   const { data: sending, error: sendingError } = await supabaseAdmin
     .from('email_campaigns')
     .select(CAMPAIGN_COLUMNS)
     .eq('status', 'sending')
+    .not('started_at', 'is', null)
     .limit(20);
   if (sendingError) throw sendingError;
 
@@ -1078,7 +1189,7 @@ async function handleCampaignDispatch(): Promise<{ promoted: number; campaigns: 
     }
   }
 
-  return { promoted, campaigns: campaignsProcessed, sent, failed };
+  return { promoted, recovered, campaigns: campaignsProcessed, sent, failed };
 }
 
 // ── Follow-up-stromen ───────────────────────────────────────────────────────
