@@ -131,7 +131,7 @@ export default async function mollie() {
   await stap('een key met een regeleinde: geweigerd zonder Mollie te bellen, en de key staat niet in het antwoord of het logboek', async () => {
     const voor = post.log.length;
     const kapot = `${sleutel.een.slice(0, 18)}\n${sleutel.een.slice(18)}`;
-    const { uit: res, regels } = await metLogboek(() => wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: kapot }));
+    const { uit: res, regels } = await metLogboek(() => wf(w, w.eigenaar, 'saveInvoiceMollieKey', { apiKey: kapot }));
     const uit = geweigerd(res, 'key met regeleinde', [422]);
     verwacht(/alleen letters en cijfers/.test(uit.error), `melding: ${uit.error}`);
     for (const deel of [sleutel.een.slice(5, 18), sleutel.een.slice(18)]) {
@@ -145,7 +145,7 @@ export default async function mollie() {
   await stap('zonder MOLLIE_TOKEN_ENCRYPTION_KEY (zo stond staging op 6 november): een duidelijke melding, Mollie niet gebeld, niets opgeslagen', async () => {
     const voor = post.log.length;
     const res = await metOmgeving({ MOLLIE_TOKEN_ENCRYPTION_KEY: undefined },
-      () => wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.een }));
+      () => wf(w, w.eigenaar, 'saveInvoiceMollieKey', { apiKey: sleutel.een }));
     const uit = geweigerd(res, 'koppelen zonder versleutelsleutel', [500]);
     verwacht(/kan je key niet veilig opslaan/.test(uit.error), `melding: ${uit.error}`);
     gelijk(mollieAanroepen(voor), [], 'aanroepen bij Mollie');
@@ -153,9 +153,19 @@ export default async function mollie() {
     gelijk(mollieRegels(), [], 'auditregels');
   });
 
-  await stap('beheerder koppelt: Mollie geeft het profiel; status, database en logboek zonder de key', async () => {
+  // Alleen de eigenaar koppelt (besloten op 7 november 2026): met een andere key
+  // komt het geld van klanten op een ander account binnen.
+  await stap('een beheerder koppelt niet: alleen de eigenaar (403), Mollie niet gebeld, niets opgeslagen', async () => {
     const voor = post.log.length;
-    const { uit: res, regels } = await metLogboek(() => wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.een }));
+    const uit = geweigerd(await wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.een }), 'koppelen als beheerder', [403]);
+    verwacht(/Alleen de eigenaar/.test(uit.error), `melding: ${uit.error}`);
+    gelijk(mollieAanroepen(voor), [], 'aanroepen bij Mollie');
+    gelijk(instelling(), null, 'koppeling');
+  });
+
+  await stap('eigenaar koppelt: Mollie geeft het profiel; status, database en logboek zonder de key', async () => {
+    const voor = post.log.length;
+    const { uit: res, regels } = await metLogboek(() => wf(w, w.eigenaar, 'saveInvoiceMollieKey', { apiKey: sleutel.een }));
     const uit = gelukt(res, 'koppelen');
     gelijk([uit.status.status, uit.status.mode, uit.status.key_suffix, uit.openPaymentsPreviousAccount],
       ['connected', 'test', sleutel.een.slice(-4), false], 'status');
@@ -172,11 +182,11 @@ export default async function mollie() {
     gelijk({ id: p.id, name: p.name, website: p.website, status: p.status }, STUDIO, 'profiel in de database');
   });
 
-  await stap('auditlog: "Mollie gekoppeld" door de beheerder, met profiel en de laatste vier tekens, zonder de key', async () => {
+  await stap('auditlog: "Mollie gekoppeld" door de eigenaar, met profiel en de laatste vier tekens, zonder de key', async () => {
     const regels = mollieRegels();
     gelijk(regels.map((r) => r.action), ['mollie_connected'], 'regels');
     const [r] = regels;
-    gelijk([r.actor_user_id, r.entity_id], [w.beheerder.id, instelling().id], 'wie en welke koppeling');
+    gelijk([r.actor_user_id, r.entity_id], [w.eigenaar.id, instelling().id], 'wie en welke koppeling');
     gelijk([r.metadata.mode, r.metadata.key_suffix, r.metadata.profile_id, r.metadata.profile_name],
       ['test', sleutel.een.slice(-4), STUDIO.id, STUDIO.name], 'metadata');
     verwacht(r.entity_label.includes(STUDIO.name) && r.entity_label.includes(sleutel.een.slice(-4)), `label: ${r.entity_label}`);
@@ -220,11 +230,11 @@ export default async function mollie() {
   });
 
   await stap('key van een ander Mollie-account terwijl er een link openstaat: gewaarschuwd en vastgelegd', async () => {
-    const uit = gelukt(await wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.twee }), 'ander account koppelen');
+    const uit = gelukt(await wf(w, w.eigenaar, 'saveInvoiceMollieKey', { apiKey: sleutel.twee }), 'ander account koppelen');
     gelijk([uit.status.status, uit.status.profile?.id, uit.openPaymentsPreviousAccount], ['connected', ANDER.id, true], 'status');
     const r = mollieRegels().at(-1);
     gelijk([r.action, r.actor_user_id, r.metadata.profile_id, r.metadata.previous_profile_id, r.metadata.account_changed, r.metadata.open_payments_previous_account],
-      ['updated', w.beheerder.id, ANDER.id, STUDIO.id, true, true], 'auditregel');
+      ['updated', w.eigenaar.id, ANDER.id, STUDIO.id, true, true], 'auditregel');
     // Zoals de waarschuwing zegt: de nieuwe key ziet die betaling niet. De
     // webhook geeft dan geen 200, zodat Mollie het later opnieuw probeert.
     const res = await mollieBetaal(tweedeOpen.betalingId, { status: 'paid' });
@@ -232,8 +242,10 @@ export default async function mollie() {
     gelijk(sqlRij(`select status from public.invoices where id = ${q(tweedeOpen.factuur.id)}`)?.status, 'sent', 'factuur blijft open');
   });
 
-  await stap('een lid, lezer, kijker of boekhouder vervangt of ontkoppelt niets, en ziet geen key', async () => {
+  await stap('een beheerder vervangt de key niet; een lid, lezer, kijker of boekhouder vervangt of ontkoppelt niets', async () => {
     const voor = instelling();
+    const beheer = geweigerd(await wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.een }), 'vervangen als beheerder', [403]);
+    verwacht(/Alleen de eigenaar/.test(beheer.error), `melding: ${beheer.error}`);
     for (const [wie, gebruiker] of [['lid', w.medewerker], ['lezer', w.lezer], ['kijker', w.kijker], ['boekhouder', w.boekhouder]]) {
       geweigerd(await wf(w, gebruiker, 'saveInvoiceMollieKey', { apiKey: sleutel.een }), `vervangen als ${wie}`, [403]);
       geweigerd(await wf(w, gebruiker, 'deleteInvoiceMollieKey'), `ontkoppelen als ${wie}`, [403]);
@@ -243,7 +255,7 @@ export default async function mollie() {
 
   // ── 3. Ontkoppelen ────────────────────────────────────────────────────
 
-  await stap('ontkoppelen: key en profiel weg, de open link genoemd, en vastgelegd', async () => {
+  await stap('een beheerder mag wel ontkoppelen: key en profiel weg, de open link genoemd, en vastgelegd', async () => {
     const uit = gelukt(await wf(w, w.beheerder, 'deleteInvoiceMollieKey'), 'ontkoppelen');
     gelijk([uit.status.status, uit.status.mode, uit.status.key_suffix, uit.status.profile, uit.hadOpenPayments],
       ['revoked', null, null, null, true], 'status');

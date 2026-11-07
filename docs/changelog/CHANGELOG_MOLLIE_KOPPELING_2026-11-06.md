@@ -106,6 +106,9 @@ e-facturen via Mollie. Het geld komt dus binnen op het account van die key.
 
 ## Wat jij moet doen
 
+> **Gedaan op 7 november 2026**: het geheim staat op staging en de rooktest is groen.
+> Zie `CHANGELOG_MOLLIE_ALLEEN_EIGENAAR_2026-11-07.md`.
+
 **`MOLLIE_TOKEN_ENCRYPTION_KEY` op staging zetten.** Tot dan kan niemand op
 staging Mollie koppelen of een key vervangen. Het scherm zegt dat nu netjes. De
 bestaande koppeling blijft werken. De rooktest meldt het als fout. Kies één van
@@ -137,7 +140,9 @@ Voor productie: zet dit geheim vóór de eerste koppeling, en laat
    waarschuwt nu, maar een testbetaling zet de factuur nog steeds op betaald.
    Voorstel blijft: testsleutels alleen toestaan waar dat bedoeld is (staging),
    of testbetalingen niet boeken. *Jouw keuze.*
-2. **Melding aan de eigenaar.** Het auditlog legt vast wie de koppeling
+2. **Besloten op 7 november 2026: alleen de eigenaar koppelt Mollie of vervangt de key**
+   (`CHANGELOG_MOLLIE_ALLEEN_EIGENAAR_2026-11-07.md`). Het oorspronkelijke voorstel:
+   **Melding aan de eigenaar.** Het auditlog legt vast wie de koppeling
    wijzigde. Een mail aan de eigenaar(s) bij een ander Mollie-account zou het
    ook meteen zichtbaar maken. Of: koppelen en vervangen alleen voor
    eigenaren.

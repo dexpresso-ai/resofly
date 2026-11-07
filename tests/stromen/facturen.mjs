@@ -444,7 +444,9 @@ export default async function facturen() {
 
   // ── 3. Mollie koppelen, betaallink, webhook ───────────────────────────
 
-  await stap('Mollie koppelen: lid, lezer, kijker, boekhouder en zonder Financiën geweigerd; anoniem 401', async () => {
+  await stap('Mollie koppelen: beheerder, lid, lezer, kijker, boekhouder en zonder Financiën geweigerd (alleen de eigenaar); anoniem 401', async () => {
+    // Alleen de eigenaar koppelt (7 november 2026); ontkoppelen mag een beheerder wel.
+    geweigerd(await wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.A }), 'koppelen als beheerder', [403]);
     for (const [wie, gebruiker] of [['lid', w.medewerker], ['lezer', w.lezer], ['kijker', w.kijker], ['boekhouder', w.boekhouder], ['zonder Financiën', w.zonderFinancien]]) {
       geweigerd(await wf(w, gebruiker, 'saveInvoiceMollieKey', { apiKey: sleutel.A }), `koppelen als ${wie}`, [403]);
       geweigerd(await wf(w, gebruiker, 'deleteInvoiceMollieKey'), `ontkoppelen als ${wie}`, [403]);
@@ -455,14 +457,14 @@ export default async function facturen() {
   });
 
   await stap('Mollie koppelen: een sleutel die niet met test_/live_ begint of die Mollie weigert, wordt niet opgeslagen', async () => {
-    geweigerd(await wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: 'sk_geen_mollie_sleutel' }), 'vreemde sleutel', [422]);
+    geweigerd(await wf(w, w.eigenaar, 'saveInvoiceMollieKey', { apiKey: 'sk_geen_mollie_sleutel' }), 'vreemde sleutel', [422]);
     const ingetrokken = mollieSleutel('ingetrokken');
     post.mollie.geweigerdeSleutels.add(ingetrokken);
-    geweigerd(await wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: ingetrokken }), 'geweigerde sleutel', [422]);
+    geweigerd(await wf(w, w.eigenaar, 'saveInvoiceMollieKey', { apiKey: ingetrokken }), 'geweigerde sleutel', [422]);
   });
 
-  await stap('beheerder koppelt een test_-sleutel: opgeslagen en versleuteld', async () => {
-    const uit = gelukt(await wf(w, w.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.A }), 'koppelen');
+  await stap('eigenaar koppelt een test_-sleutel: opgeslagen en versleuteld', async () => {
+    const uit = gelukt(await wf(w, w.eigenaar, 'saveInvoiceMollieKey', { apiKey: sleutel.A }), 'koppelen');
     gelijk([uit.status.status, uit.status.mode, uit.status.key_suffix], ['connected', 'test', sleutel.A.slice(-4)], 'status');
     const rij = sqlRij(`select status, api_key_encrypted from public.organization_invoice_mollie_settings where organization_id = ${q(w.orgId)}`);
     verwacht(rij?.status === 'connected' && rij.api_key_encrypted, 'niet opgeslagen');
@@ -570,7 +572,7 @@ export default async function facturen() {
   });
 
   await stap('webhook met het betaal-id van een andere organisatie raakt deze organisatie niet', async () => {
-    gelukt(await wf(w2, w2.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.B }), 'tweede organisatie koppelt Mollie');
+    gelukt(await wf(w2, w2.eigenaar, 'saveInvoiceMollieKey', { apiKey: sleutel.B }), 'tweede organisatie koppelt Mollie');
     const concept = await nieuwConcept(w2);
     gelukt(await verstuur(w2, concept, { gebruiker: w2.medewerker, klant: w2.klantA }), 'versturen in de tweede organisatie');
     const link = gelukt(await wf(w2, w2.medewerker, 'createInvoicePaymentCheckout', { invoiceId: concept.id }), 'betaallink');
@@ -917,7 +919,7 @@ export default async function facturen() {
   // ── 8. KOR ───────────────────────────────────────────────────────────
 
   const kor = await stap('KOR: factuur met btw versturen geeft een nette 4xx; geen mail, geen betaallink, blijft concept', async () => {
-    gelukt(await wf(wk, wk.beheerder, 'saveInvoiceMollieKey', { apiKey: sleutel.K }), 'Mollie koppelen');
+    gelukt(await wf(wk, wk.eigenaar, 'saveInvoiceMollieKey', { apiKey: sleutel.K }), 'Mollie koppelen');
     const concept = await nieuwConcept(wk);
     const res = await verstuur(wk, concept, { gebruiker: wk.medewerker, klant: wk.klantA, betaallink: true });
     geweigerd(res, 'versturen', [422]);

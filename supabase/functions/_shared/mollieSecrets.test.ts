@@ -192,15 +192,20 @@ function functieBody(bron: string, naam: string): string {
   return bron.slice(start, einde);
 }
 
-test('koppelen: eerst de rol en de versleutelsleutel, dan pas Mollie; daarna een regel in het auditlog', () => {
+test('koppelen: eerst de rol (alleen de eigenaar) en de versleutelsleutel, dan pas Mollie; daarna een regel in het auditlog', () => {
   const opslaan = functieBody(workflow, 'saveInvoiceMollieKey');
-  const rol = opslaan.indexOf("['owner', 'admin'].includes(role)");
+  // Alleen de eigenaar koppelt of vervangt de key (besloten op 7 november 2026).
+  const rol = opslaan.indexOf("if (role !== 'owner') throw new WorkflowHttpError(");
   const sleutel = opslaan.indexOf('encryptionKeyConfigured()');
   const mollie = opslaan.indexOf('validateMollieApiKey(');
   const versleutel = opslaan.indexOf('encryptSecret(');
   const log = opslaan.indexOf('logMollieAudit(');
   assert.ok(rol >= 0 && rol < sleutel && sleutel < mollie && mollie < versleutel && versleutel < log, 'volgorde: rol, sleutel, Mollie, versleutelen, auditlog');
-  assert.match(functieBody(workflow, 'deleteInvoiceMollieKey'), /logMollieAudit\(\{[\s\S]*action: 'revoked'/);
+  assert.doesNotMatch(opslaan, /'admin'/, 'een beheerder mag niet koppelen');
+  // Ontkoppelen mag een beheerder wel: daarmee gaat geen geld ergens anders heen.
+  const ontkoppelen = functieBody(workflow, 'deleteInvoiceMollieKey');
+  assert.match(ontkoppelen, /if \(!\['owner', 'admin'\]\.includes\(role\)\) throw new WorkflowHttpError\(/);
+  assert.match(ontkoppelen, /logMollieAudit\(\{[\s\S]*action: 'revoked'/);
   assert.match(functieBody(workflow, 'logMollieAudit'), /entity_type: 'mollie_connection'/);
 });
 

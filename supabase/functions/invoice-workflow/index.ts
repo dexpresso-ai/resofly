@@ -2346,7 +2346,11 @@ async function getInvoiceMollieStatus(organizationId: string): Promise<InvoiceMo
 }
 
 async function saveInvoiceMollieKey(userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<{ status: InvoiceMollieStatusPayload; openPaymentsPreviousAccount: boolean }> {
-  if (!['owner', 'admin'].includes(role)) throw new WorkflowHttpError('Alleen owners en admins mogen de Mollie-koppeling beheren.', 403);
+  // Alleen de eigenaar (besloten op 7 november 2026). Met een key van een ander
+  // Mollie-account komt het geld van klanten daar binnen; eerder kon elke
+  // beheerder dat doen. Ontkoppelen mag een beheerder wel (deleteInvoiceMollieKey):
+  // daarmee gaat geen geld ergens anders heen, en bij een gelekte key moet het snel.
+  if (role !== 'owner') throw new WorkflowHttpError('Alleen de eigenaar van de organisatie kan Mollie koppelen of de key vervangen. Daarmee bepaal je waar het geld van je klanten binnenkomt.', 403);
   const apiKey = String(body.apiKey || '').trim();
   if (!apiKey) throw new WorkflowHttpError('Vul een Mollie API-key in.', 422);
   // Eerst: kan de server de key straks veilig bewaren? Op staging ontbrak de
@@ -2419,7 +2423,7 @@ async function saveInvoiceMollieKey(userId: string, organizationId: string, role
 }
 
 async function deleteInvoiceMollieKey(userId: string, organizationId: string, role: OrganizationRole): Promise<{ status: InvoiceMollieStatusPayload; hadOpenPayments: boolean }> {
-  if (!['owner', 'admin'].includes(role)) throw new WorkflowHttpError('Alleen owners en admins mogen de Mollie-koppeling beheren.', 403);
+  if (!['owner', 'admin'].includes(role)) throw new WorkflowHttpError('Alleen de eigenaar of een beheerder kan Mollie ontkoppelen.', 403);
 
   const previous = await loadInvoiceMollieSettings(organizationId);
   if (!previous) return { status: mollieStatusPayload(null), hadOpenPayments: false };
