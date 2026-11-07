@@ -778,6 +778,14 @@ async function scenarioFactuur() {
   if (!t.factuur) {
     t.factuur = await stap('conceptfactuur klaarzetten (offertescenario niet gedraaid)', async () => {
       const f = await factuurConcept(w, 'FAC-UI-0001');
+      // Het werkblad van het lid laadde al bij het begin van de run, vóór dit
+      // concept in de database stond, en ververst niet vanzelf (de lokale stack
+      // heeft geen realtime). Zonder herladen vond "Verstuur via Resend" het
+      // concept niet ("Nog geen facturen"), en faalde ook de herinneringsstap.
+      const lid = await medewerker();
+      await rustig(lid);
+      await lid.page.reload({ waitUntil: 'domcontentloaded' });
+      await lid.page.locator('.app .sidebar-nav').first().waitFor({ timeout: 60000 });
       return { id: f.id, nummer: f.number };
     });
     if (!t.factuur) return;

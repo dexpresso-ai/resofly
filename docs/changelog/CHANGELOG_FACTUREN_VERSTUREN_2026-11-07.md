@@ -137,7 +137,8 @@ Mollie bij de factuur.
   staging): 251 van 251 migraties. De nieuwe migratie draait daarna nog eens
   zonder fout.
 - Stromentest, nieuw scenario `verzendwijze` (`tests/stromen/verzendwijze.mjs`),
-  met de echte functies tegen de lokale stack en nep-Mollie: 14 van 14.
+  met de echte functies tegen de lokale stack en nep-Mollie: 16 van 16 (eerst
+  14; de twee Gerrie-stappen kwamen later, zie *Rechtgezet* hieronder).
   - nog niets gekozen: met betaallink, zoals het was;
   - lid, lezer, boekhouder en kijker kunnen niet kiezen; een onbekende waarde
     weigert de database; de beheerder kiest, het auditlog weet wie;
@@ -147,7 +148,11 @@ Mollie bij de factuur.
     en een factuur die Mollie al uitgaf gaat niet nog eens. Mollie wordt in al
     die stappen niet gebeld;
   - terug naar via Mollie: de link gaat weer mee, en een klant op "via Mollie"
-    gaat weer naar de Sales Invoices API.
+    gaat weer naar de Sales Invoices API;
+  - Gerrie: per e-mail zet hij een factuur die Mollie al uitgaf niet klaar, en
+    een verstuurde factuur van een klant op "via Mollie" wel (die gaat per mail);
+    via Mollie zet hij geen van beide klaar, elk met de eigen reden. Los en in
+    een reeks.
 - Stromentest `rook`, `facturen`, `mollie`, `herinneringen` en `beveiliging`:
   334 stappen, 0 fout (Postgres 17.6.1.178, zoals de README van de test
   aanraadt: op 17.6.1.111 crasht de database bij een expres geweigerde
@@ -165,10 +170,44 @@ Mollie bij de factuur.
   - een lid ziet de keuze zonder knoppen;
   - terug naar "Via Mollie".
 
-  Draai je `factuur` zonder `offerte` erna of ervoor, dan vindt de stap
-  "Verstuur via Resend" het concept niet: het werkblad van het lid laadde vóór
-  het concept in de database kwam. Dat lag er al; het hoort niet bij deze
-  wijziging.
+  Het scenario `factuur` zonder `offerte` faalde op twee stappen; dat is
+  rechtgezet, zie hieronder.
+
+## Rechtgezet (later op 7 november)
+
+Twee dingen stonden eerder te stellig in deze changelog en in de samenvatting.
+
+**1. De weigering door Gerrie was niet getest.** Er stond dat Gerrie een
+factuur die Mollie al uitgaf niet meer klaarzet. De code deed dat wel, maar
+alleen de typecontrole had hem gezien; geen test riep hem aan. Nu wel:
+`verzendwijze` roept Gerrie's voorstel aan met dezelfde code als de chat
+(`buildProposal` in `_shared/gerrieCore.ts`), zonder taalmodel, voor één factuur
+en voor een reeks, per e-mail en via Mollie (zie *Getest*).
+
+Of de test de fout ook echt vangt, is nagegaan: met de nieuwe controle tijdelijk
+uitgezet (Gerrie ziet dan geen factuur als door Mollie uitgegeven) falen
+precies de twee Gerrie-stappen, om de juiste reden; de andere veertien blijven
+groen. Met de controle aan: 16 van 16, ook als het scenario nog eens op
+dezelfde database draait. Dat herhalen bracht nog een fout in de test zelf
+boven: hij gebruikte een vaste Mollie-id, en die botst bij de tweede keer met
+de unieke index op (`provider`, `provider_email_id`). Nu krijgt elke run een
+eigen id.
+
+**2. "Dat lag er al" was niet nagegaan.** Bij de UI-test faalde `factuur`
+zonder `offerte` op "Verstuur via Resend" (het concept stond niet in de lijst)
+en daardoor ook op de herinneringsstap. Er stond dat dat al zo was en dat het
+werkblad van het lid te vroeg laadde, maar dat was een vermoeden. Nu nagegaan:
+
+- op de code van vóór deze wijziging (`02fad3a`) falen precies dezelfde twee
+  stappen, met dezelfde meldingen. Het lag er dus al;
+- de oorzaak klopt: het werkblad van het lid laadt bij het begin van de run,
+  vóór het concept in de database staat, en ververst niet vanzelf (de lokale
+  stack heeft geen realtime). De test herlaadt het werkblad nu na het
+  klaarzetten van het concept. Daarna: `factuur` alleen 11 van 11,
+  `mollie factuur` (de volgorde die eerst faalde) 22 van 22, en de keten
+  `offerte factuur intrekken rollen mollie` 40 van 40. Eén eerdere run van
+  `mollie factuur` viel om op een 502 van de lokale gateway bij de teamchat
+  (`chat_last_messages`), buiten deze stromen; de herhaling was groen.
 
 ## Uitrol op staging (7 november 2026)
 
