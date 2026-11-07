@@ -17,7 +17,8 @@
  *
  * Opties:
  *   --theme=dark|light|both     standaard dark
- *   --look=zenit|stroom         meet een nieuwe voorkant (Probeer Zenit, Probeer Stroom) i.p.v. Cockpit
+ *   --look=cockpit|zenit|stroom meet een andere look dan Baken, de standaard sinds 2026-11-06
+ *                               (zonder deze optie meet de test Baken)
  *   --viewports=phone,tablet    standaard phone,tablet,landscape,laptop (ook: desktop)
  *   --pages=dashboard,clients   standaard alle pagina's
  *   --shots=<map>               schrijf per pagina een screenshot weg
@@ -221,7 +222,9 @@ const themes = args.theme === 'both' ? ['dark', 'light'] : [args.theme === 'ligh
 // zit: geen smal scherm maar een laag scherm, een heel ander probleem.
 const viewports = (args.viewports ?? 'phone,tablet,landscape,laptop').split(',').map(v => v.trim()).filter(v => VIEWPORTS[v]);
 const pages = args.pages ? args.pages.split(',').map(p => p.trim()).filter(p => PAGES[p]) : Object.keys(PAGES);
-const look = args.look === 'zenit' || args.look === 'stroom' ? args.look : null;
+// Zonder --look meet de test de standaardlook (Baken, niets in de opslag);
+// Cockpit, Zenit en Stroom staan als keuze in de opslag (src/lib/look.ts).
+const look = args.look === 'cockpit' || args.look === 'zenit' || args.look === 'stroom' ? args.look : null;
 const firstItem = { ...FIRST_ITEM, ...(look ? FIRST_ITEM_BY_LOOK[look] : {}) };
 const shotsDir = args.shots ? path.resolve(args.shots) : null;
 if (shotsDir) fs.mkdirSync(shotsDir, { recursive: true });

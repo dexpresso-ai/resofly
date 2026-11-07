@@ -234,7 +234,9 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string; Icon: LucideIcon; swatch:
 const LOOK_OPTIONS: { look: Look; label: string; hint: string }[] = [
   { look: 'zenit', label: 'Zenit', hint: 'rustig, met de nachtrail' },
   { look: 'stroom', label: 'Stroom', hint: 'licht, glas en de stroom' },
-  { look: 'cockpit', label: 'Uit', hint: 'de vertrouwde look' },
+  // Baken is sinds 2026-11-06 de standaard; Cockpit de look daarvoor.
+  { look: 'baken', label: 'Baken', hint: 'de standaard, met de zijbalk' },
+  { look: 'cockpit', label: 'Cockpit', hint: 'de vorige look' },
 ];
 
 function initialsOf(text: string): string {

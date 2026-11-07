@@ -1,8 +1,10 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { isDaylight, nextSunChange } from './sun';
 
-/** Donker of licht: wat er op het scherm staat. Donker is de ResoFly-identiteit
- *  en blijft de standaard; licht is een bewuste keuze van de gebruiker. */
+/** Donker of licht: wat er op het scherm staat. In Baken (de standaardlook
+ *  sinds 2026-11-06) is Dag de standaard: een licht werkvlak met het donker in
+ *  de zijbalk en de koppen, zoals Value Backlog. In de andere looks blijft
+ *  Nacht de standaard. Een eigen keuze blijft altijd staan. */
 export type Theme = 'dark' | 'light';
 
 /** Wat de gebruiker kiest. Naast Nacht ('dark') en Dag ('light') twee standen
@@ -18,17 +20,31 @@ export const THEME_STORAGE_KEY = 'resofly.theme';
 
 /** De grondkleur per thema, voor de adresbalk op mobiel (`meta[name=theme-color]`).
  *  Gelijk houden aan --bg-deep in globals.css (Belicht) en zenit.css (Zenit),
- *  aan --ground in stroom.css (Stroom) en aan het bootstrap-script in index.html. */
-const THEME_COLOR: Record<'cockpit' | 'zenit' | 'stroom', Record<Theme, string>> = {
+ *  aan --ground in stroom.css (Stroom), aan --bk-ground en --bg in baken.css
+ *  (Baken) en aan het bootstrap-script in index.html. */
+const THEME_COLOR: Record<'baken' | 'cockpit' | 'zenit' | 'stroom', Record<Theme, string>> = {
+  baken: { dark: '#0E0E12', light: '#F2F2F5' },
   cockpit: { dark: '#09090A', light: '#F1F0EC' },
   zenit: { dark: '#08080A', light: '#EDEBE5' },
   stroom: { dark: '#07070A', light: '#ECEAE4' },
 };
 
+/** De sleutel van de look (look.ts). Hier los gelezen en niet geïmporteerd:
+ *  look.ts importeert deze module al, en een kring van imports laat bij het
+ *  laden een van de twee half gevuld achter. */
+const LOOK_KEY = 'resofly.look';
+
+/** Zonder eigen keuze: Dag in Baken, Nacht in de andere looks. Baken is de
+ *  look van Value Backlog, en daar hoort het lichte werkvlak bij. */
+export function defaultThemeMode(storedLook: string | null): Theme {
+  return storedLook === 'cockpit' || storedLook === 'zenit' || storedLook === 'stroom' ? 'dark' : 'light';
+}
+
 export function loadThemeMode(): ThemeMode {
   try {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    return stored === 'light' || stored === 'sun' || stored === 'system' ? stored : 'dark';
+    if (stored === 'dark' || stored === 'light' || stored === 'sun' || stored === 'system') return stored;
+    return defaultThemeMode(localStorage.getItem(LOOK_KEY));
   } catch {
     // Privémodus of geblokkeerde opslag: dan gewoon donker.
     return 'dark';
@@ -61,7 +77,8 @@ export function applyTheme(theme: Theme): void {
   // blijft de grond in het oude thema staan en valt tekst weg tegen de
   // achtergrond (contrast 1:1). Eén functie zet alles, anders lopen ze uiteen.
   // Stroom draagt `data-look="zenit"` én `data-stroom` (zie look.ts).
-  const look = root.hasAttribute('data-stroom') ? 'stroom' : root.getAttribute('data-look') === 'zenit' ? 'zenit' : 'cockpit';
+  const lookAttr = root.getAttribute('data-look');
+  const look = root.hasAttribute('data-stroom') ? 'stroom' : lookAttr === 'zenit' ? 'zenit' : lookAttr === 'baken' ? 'baken' : 'cockpit';
   const color = THEME_COLOR[look][theme];
   root.style.colorScheme = theme;
   root.style.background = color;
@@ -125,9 +142,16 @@ export function setThemeMode(next: ThemeMode): void {
   emit();
 }
 
-/** Na een wissel van look (Cockpit, Zenit, Stroom) hoort de grondkleur mee te gaan. */
+/** Na een wissel van look (Baken, Cockpit, Zenit, Stroom) hoort de grondkleur
+ *  mee te gaan. Wie nooit een thema koos, krijgt ook het standaardthema van de
+ *  nieuwe look: Dag in Baken, Nacht in de rest. Zonder dit opnieuw lezen bleef
+ *  Cockpit na een wissel vanuit Baken in Dag staan, terwijl niemand dat koos. */
 export function reapplyTheme(): void {
+  mode = loadThemeMode();
+  resolved = resolveTheme(mode);
   applyTheme(resolved);
+  if (typeof window !== 'undefined' && listeners.size > 0) sync();
+  emit();
 }
 
 /** De gekozen stand, een setter, en het thema dat er nu op het scherm staat. */

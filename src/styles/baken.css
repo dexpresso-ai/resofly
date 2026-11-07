@@ -1,0 +1,914 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   BAKEN — de opbouw en de contrasten van Value Backlog, in het merk van
+   ResoFly (2026-11-06). De standaardlook; zie CHANGELOG_BAKEN_2026-11-06.md.
+   ──────────────────────────────────────────────────────────────────────────
+   Value Backlog werkt met twee lagen: een diep donker commandovlak (de
+   zijbalk, de cockpit, de koppen) en een licht werkvlak met witte kaarten
+   dat daarop zweeft. Eén felle kleur is het signaal: "hier gebeurt het".
+   Baken doet precies dat, met wat van ResoFly is:
+
+     • Grafiet geeft diepte en rust. Niet het platte zwart van Cockpit, maar
+       nachtgrafiet: grafiet met een vleug nacht-violet. Daardoor heeft het
+       donker diepte, zoals het navy van Value Backlog, zonder blauw te worden.
+     • Zongoud is het baken. Het staat waar Value Backlog zijn mint zet: de
+       hoofdknop, de plek waar je bent, wat op je wacht, vandaag. Nooit als
+       tekst op wit; daar is het diep amber (--accent-ink, 6,2:1).
+     • Het licht heeft een richting: één gouden lamp linksboven, en rechts het
+       poollicht van Gerrie als tegenlicht. Vanuit het merk waaieren fijne
+       stralen uit (de textuur; bij Value Backlog de honingraat, bij Cockpit
+       de ringen), en in de cockpit zweven lichtstofjes in de lamp.
+     • Het R-merkteken uit het app-icoon (BrandMark.tsx) in plaats van een
+       letter, en alles in Poppins.
+
+   Spelregels
+     • Elke regel hangt aan :root[data-look="baken"]; zonder dat attribuut
+       (Cockpit, Zenit, Stroom) verandert er niets. Deze laag ligt over
+       Cockpit heen: wat hier niet staat, blijft van Cockpit.
+     • Werkruimteregels staan onder `.app`; het inlogscherm onder
+       `main.login:not(.portal)`. De publieke pagina's en het klantportaal
+       dragen de huisstijl van de leverancier en blijven zoals ze waren.
+     • De telefoon houdt zijn gemeten opbouw (tests/mobile/run.mjs): hoogtes
+       en marges veranderen alleen vanaf 761px, de hoge bovenbalk pas vanaf
+       1025px (de tablet mag maar 100px chrome hebben). Daaronder wisselen
+       alleen kleur en vorm.
+     • Dag is in Baken de standaard (theme.ts): dat zijn de contrasten van
+       Value Backlog. Nacht is net zo ontworpen.
+     • Elke teksttoken haalt WCAG AA (≥ 4,5:1) op kaart en werkvlak.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 0 · Gedeeld: de keuze van de look in het accountmenu ────────────────── */
+/* Deze regels gelden in élke look: ook vanuit Cockpit kies je Baken terug. */
+.look-switch{display:flex;flex-direction:column;gap:2px;margin:2px 4px 2px}
+.look-option{
+  display:flex;align-items:center;gap:10px;width:100%;padding:7px 8px;
+  border:0;border-radius:10px;background:transparent;color:var(--ink-2);
+  font:inherit;text-align:left;cursor:pointer;
+  transition:background var(--t-1) var(--ease),color var(--t-1) var(--ease);
+}
+.look-option:hover{background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));color:var(--ink)}
+.look-option.is-on{background:rgba(var(--accent-rgb),.12);color:var(--ink);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.28)}
+.look-t{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.look-t b{font-size:12.5px;font-weight:600}
+.look-t small{font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.look-sw{position:relative;flex:none;width:34px;height:24px;border-radius:7px;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+.look-sw.is-baken{background:linear-gradient(90deg,#1A1A21 0 34%,#F2F2F5 34% 100%)}
+.look-sw.is-baken::after{content:'';position:absolute;left:15px;top:5px;width:14px;height:6px;border-radius:2px;background:linear-gradient(135deg,#1E1E26,#2E2D3B);box-shadow:0 8px 0 -1px #fff,0 0 0 0 #F7C548}
+.look-sw.is-baken::before{content:'';position:absolute;left:4px;top:5px;width:6px;height:6px;border-radius:2px;background:#F7C548;box-shadow:0 0 6px rgba(247,197,72,.8)}
+.look-sw.is-cockpit{background:linear-gradient(135deg,#0A0A0C,#1A1A1F)}
+.look-sw.is-cockpit::after{content:'';position:absolute;inset:6px 16px 6px 5px;border-radius:2px;background:repeating-linear-gradient(180deg,rgba(255,255,255,.28) 0 2px,transparent 2px 5px)}
+.look-sw.is-zenit{background:linear-gradient(90deg,#0C0C0F 0 30%,#16131F 30% 100%)}
+.look-sw.is-zenit::after{content:'';position:absolute;left:5px;top:5px;width:4px;height:4px;border-radius:50%;background:#F7C548;box-shadow:0 7px 0 rgba(255,255,255,.3),0 14px 0 rgba(255,255,255,.3)}
+.look-sw.is-stroom{background:radial-gradient(70% 90% at 20% 30%,rgba(247,197,72,.45),transparent 70%),radial-gradient(60% 80% at 90% 0%,rgba(75,59,196,.9),transparent 75%),#07070A}
+.look-sw.is-stroom::after{content:'';position:absolute;left:4px;right:4px;top:13px;height:3px;border-radius:3px;background:linear-gradient(90deg,#AEB6D0,#F7C548);box-shadow:0 0 6px rgba(247,197,72,.7)}
+/* Hetzelfde staaltje in de lookkeuze van Zenit en Stroom (ZenitNav). */
+:root[data-look="zenit"] .zlook-sw.is-baken{background:linear-gradient(90deg,#1A1A21 0 34%,#F2F2F5 34% 100%)}
+:root[data-look="zenit"] .zlook-sw.is-baken::after{content:'';position:absolute;left:5px;top:6px;width:6px;height:6px;border-radius:2px;background:#F7C548;box-shadow:0 0 6px rgba(247,197,72,.8)}
+
+/* ── 1 · Tokens ──────────────────────────────────────────────────────────── */
+:root[data-look="baken"]{
+  /* De grond onder zijbalk en werkvlak, in beide thema's donker. */
+  --ground:#0E0E12;
+  /* Nachtgrafiet, van diep naar licht. */
+  --bk-900:#111116;
+  --bk-850:#16161C;
+  --bk-800:#1B1B22;
+  --bk-750:#20202A;
+  --bk-700:#262630;
+  --bk-600:#32323E;
+  /* Het commandovlak: de gouden lamp linksboven, het poollicht van Gerrie als
+     tegenlicht rechtsboven, en grafiet dat naar rechtsonder lichter wordt —
+     zoals de cockpit van Value Backlog lichter is dan zijn zijbalk. */
+  --bk-cmd:
+    radial-gradient(680px 320px at 0% 0%,rgba(247,197,72,.19),transparent 62%),
+    radial-gradient(560px 340px at 100% 0%,rgba(132,118,255,.20),transparent 64%),
+    radial-gradient(480px 300px at 100% 100%,rgba(108,196,255,.07),transparent 70%),
+    linear-gradient(135deg,#15151B 0%,#1F1F28 46%,#2C2B39 100%);
+  --bk-cmd-edge:inset 0 0 0 1px rgba(255,255,255,.07),inset 0 1px 0 rgba(255,255,255,.07);
+  --bk-cmd-shadow:0 28px 60px -32px rgba(14,14,20,.75);
+  /* Stralen vanuit (0,0): de textuur van het commandovlak. Met
+     background-position leg je de bron waar het licht vandaan komt. */
+  --bk-rays:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='1200' viewBox='0 0 1200 1200'%3E%3Cg fill='none' stroke='%23fff' stroke-opacity='.09' stroke-width='1'%3E%3Cpath d='M0 0L1698 89'/%3E%3Cpath d='M0 0L1687 207'/%3E%3Cpath d='M0 0L1669 324'/%3E%3Cpath d='M0 0L1642 440'/%3E%3Cpath d='M0 0L1607 553'/%3E%3Cpath d='M0 0L1565 664'/%3E%3Cpath d='M0 0L1515 772'/%3E%3Cpath d='M0 0L1457 876'/%3E%3Cpath d='M0 0L1393 975'/%3E%3Cpath d='M0 0L1321 1070'/%3E%3Cpath d='M0 0L1243 1159'/%3E%3Cpath d='M0 0L1159 1243'/%3E%3Cpath d='M0 0L1070 1321'/%3E%3Cpath d='M0 0L975 1393'/%3E%3Cpath d='M0 0L876 1457'/%3E%3Cpath d='M0 0L772 1515'/%3E%3Cpath d='M0 0L664 1565'/%3E%3Cpath d='M0 0L553 1607'/%3E%3Cpath d='M0 0L440 1642'/%3E%3Cpath d='M0 0L324 1669'/%3E%3Cpath d='M0 0L207 1687'/%3E%3Cpath d='M0 0L89 1698'/%3E%3C/g%3E%3C/svg%3E");
+  /* Het zongoud als vlak: het app-icoon, met licht van boven. */
+  --bk-gold-face:linear-gradient(155deg,#FFE496 0%,#F9CB55 42%,#F0B530 100%);
+  --bk-gold-glow:0 0 0 1px rgba(247,197,72,.42),0 10px 30px -8px rgba(247,197,72,.62);
+
+  /* Vorm, zoals Value Backlog: werkvlak 24 · cockpit 24 · kaart 18 · bediening 12 */
+  --r-canvas:24px;
+  --r-card:18px;
+  --r-ctl:12px;
+  --ease-out:cubic-bezier(.16,1,.3,1);
+}
+
+/* Nacht: de werkruimte in nachtgrafiet. Lagen als bij Value Backlog: de
+   zijbalk het diepst, het werkvlak erboven, de kaarten daar weer boven, en
+   de cockpit het lichtst, zodat hij als commandovlak boven alles uitkomt. */
+:root[data-look="baken"]:not([data-theme="light"]){
+  --bg-rgb:21,21,27;
+  --bg-deep-rgb:14,14,18;
+  --surface-rgb:27,27,34;
+  --surface2-rgb:33,33,41;
+  --surface3-rgb:40,40,49;
+  --bg:#15151B;
+  --bg-deep:#0E0E12;
+  --surface:#1B1B22;
+  --surface-2:#212129;
+  --surface-3:#282831;
+  --sidebar-bg:#111116;
+  --well:#121218;
+  --raised:#2C2C36;
+  --field:#14141A;
+  --nav-active:#212129;
+  --line:#2A2A33;
+  --line-2:#363640;
+  --line-3:#474752;
+  --ink:#F3F3F6;             /* 15,5:1 op een kaart                        */
+  --ink-2:#B9B9C4;           /*  8,8:1                                     */
+  --ink-3:#9494A1;           /*  5,7:1 (6,1 op het werkvlak)               */
+  --ink-4:#5F5F6B;
+  --hi:rgba(255,255,255,.05);
+  --shadow-1:inset 0 1px 0 var(--hi),0 1px 2px rgba(0,0,0,.35);
+  --shadow-2:inset 0 1px 0 var(--hi),0 14px 36px -14px rgba(0,0,0,.7);
+  --shadow-pop:0 0 0 1px rgba(255,255,255,.08),0 28px 70px -18px rgba(0,0,0,.85);
+  --shadow-card:0 1px 2px rgba(0,0,0,.25),0 12px 28px -18px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.045);
+  --shadow-card-hover:0 2px 6px rgba(0,0,0,.3),0 24px 48px -24px rgba(0,0,0,1),inset 0 1px 0 rgba(255,255,255,.06);
+}
+
+/* Dag: het werkvlak van Value Backlog — koel licht, witte kaarten, inkt in
+   grafiet. Zelfde contrasten: grafiet-inkt op een canvas van 95,6 L*.
+   Ingemeten (WCAG): inkt 16,1 · inkt 2 7,8 · inkt 3 5,7 op het werkvlak;
+   op wit 18,0 · 8,7 · 6,4. Goud als tekst (#855800) 5,5 op het werkvlak. */
+:root[data-look="baken"][data-theme="light"]{
+  --sheen-rgb:22,22,28;
+  --shade-rgb:22,22,28;
+  --ink-rgb:22,22,28;
+  --bg-rgb:242,242,245;
+  --bg-deep-rgb:233,233,238;
+  --surface-rgb:255,255,255;
+  --surface2-rgb:246,246,249;
+  --surface3-rgb:237,237,242;
+  --sheen-k:.55;
+  --shade-k:.32;
+  --bg:#F2F2F5;
+  --bg-deep:#E9E9EE;
+  --surface:#FFFFFF;
+  --surface-2:#F6F6F9;
+  --surface-3:#EDEDF2;
+  --sidebar-bg:#E9E9EE;
+  --well:#ECECF1;
+  --raised:#FFFFFF;
+  --field:#FFFFFF;
+  --nav-active:#FFFFFF;
+  --line:#E3E3EA;
+  --line-2:#D5D5DE;
+  --line-3:#BFBFCA;
+  --ink:#16161C;
+  --ink-2:#4A4A57;
+  --ink-3:#5E5E6B;
+  --ink-4:#A1A1AD;
+  --hi:rgba(255,255,255,.9);
+  --grid:#ECECF1;
+  --shadow-1:0 1px 2px rgba(22,22,28,.05),0 1px 1px rgba(22,22,28,.03);
+  --shadow-2:0 1px 2px rgba(22,22,28,.05),0 14px 32px -16px rgba(22,22,28,.2);
+  --shadow-pop:0 0 0 1px rgba(22,22,28,.07),0 2px 8px rgba(22,22,28,.08),0 28px 64px -24px rgba(22,22,28,.5);
+  --scrim:rgba(17,17,22,.42);
+  /* De kaarten van Value Backlog: zacht, gelaagd, met een grafiettint in
+     plaats van grijs. */
+  --shadow-card:0 1px 2px rgba(22,22,28,.05),0 8px 24px -16px rgba(22,22,28,.24);
+  --shadow-card-hover:0 2px 4px rgba(22,22,28,.06),0 22px 44px -22px rgba(22,22,28,.4);
+}
+
+/* Cockpit zet op Dag een warm papieren canvas op `.app` (#F3F2EE). Die regel
+   wint binnen de werkruimte van :root, dus Baken zet hier zijn koele canvas
+   terug: met het warme papier oogde het werkvlak beige in plaats van het koele
+   licht van Value Backlog. */
+:root[data-look="baken"][data-theme="light"] .app{
+  --bg:#F2F2F5;
+  --bg-rgb:242,242,245;
+}
+
+/* Het commandovlak draagt in beide thema's nachtgrafiet. Op Dag zet Cockpit
+   hier al de Nacht-inkt en -accenten neer; Baken legt er zijn eigen vlakken
+   onder. De afgeleide tokens (--panel, --border, …) worden opnieuw gezet: een
+   custom property wordt opgelost waar hij staat, dus --panel op :root bleef
+   anders naar het lichte --surface wijzen. */
+:root[data-look="baken"] :is(.sidebar,.cockpit,.proj-dash-hero,.client-detail-hero,.bottomnav,.mobile-nav-toggle,.cmd-scope){
+  --bg-rgb:21,21,27;
+  --bg-deep-rgb:14,14,18;
+  --surface-rgb:27,27,34;
+  --surface2-rgb:33,33,41;
+  --surface3-rgb:40,40,49;
+  --bg:#15151B;
+  --bg-deep:#0E0E12;
+  --surface:#1B1B22;
+  --surface-2:#212129;
+  --surface-3:#282831;
+  --well:#121218;
+  --raised:#2C2C36;
+  --field:#14141A;
+  --nav-active:#212129;
+  --line:#2A2A33;
+  --line-2:#363640;
+  --line-3:#474752;
+  --ink:#F3F3F6;
+  /* Lichter dan in de werkruimte: op het commandovlak staat tekst ook op
+     glas onder het poollicht, het lichtste stuk (#3B3A47). Daar haalt inkt 3
+     4,8:1 en inkt 2 6,6:1; met #9494A1 was dat 3,9. */
+  --ink-2:#C6C6D0;
+  --ink-3:#A9A9B6;
+  --ink-4:#5F5F6B;
+  --bg2:#1B1B22;
+  --panel:#1B1B22;
+  --panel-strong:#212129;
+  --border:#2A2A33;
+  --border2:#363640;
+  --text:#F3F3F6;
+  --muted:#A9A9B6;
+  --muted2:#C6C6D0;
+}
+
+/* ── 2 · Grond en werkvlak ───────────────────────────────────────────────── */
+@media (min-width:761px){
+  :root[data-look="baken"] .app{background:var(--ground)}
+  /* Het werkvlak zweeft met 8px marge en hoeken van 24px op de grond, zoals
+     het canvas van Value Backlog: licht dat van boven valt, een flauwe gloed
+     van de lamp linksboven en van het poollicht rechtsboven. */
+  :root[data-look="baken"] .app .main{
+    border-radius:var(--r-canvas);
+    background:
+      radial-gradient(1100px 420px at 8% -12%,rgba(247,197,72,.06),transparent 62%),
+      radial-gradient(900px 420px at 96% -16%,rgba(132,118,255,.07),transparent 64%),
+      var(--bg);
+    box-shadow:0 0 0 1px rgba(255,255,255,.06),0 30px 80px -40px rgba(0,0,0,.9);
+  }
+  :root[data-look="baken"][data-theme="light"] .app .main{
+    background:
+      radial-gradient(1100px 420px at 8% -10%,rgba(247,197,72,.075),transparent 62%),
+      radial-gradient(900px 400px at 96% -14%,rgba(132,118,255,.075),transparent 64%),
+      var(--bg);
+    box-shadow:0 0 0 1px rgba(255,255,255,.06);
+  }
+  /* Het tabblad "+" hoort direct achter de tabs, niet halverwege de balk: de
+     strook neemt alleen de ruimte die hij nodig heeft (en krimpt en scrolt bij
+     veel tabs), zoeken en de knop schuiven naar rechts. */
+  :root[data-look="baken"] .app .tabbar-strip{flex:0 1 auto}
+
+  /* De bovenregel: doorzichtig, en glas zodra de inhoud eronder schuift. */
+  :root[data-look="baken"] .app .main.is-scrolled>.tabbar,
+  :root[data-look="baken"] .app .main.is-scrolled>.topbar{
+    border-bottom-color:rgba(var(--shade-rgb),calc(.22 * var(--shade-k)));
+    background:color-mix(in srgb,var(--bg) 74%,transparent);
+    -webkit-backdrop-filter:blur(18px) saturate(1.5);backdrop-filter:blur(18px) saturate(1.5);
+    box-shadow:0 10px 30px -24px rgba(var(--shade-rgb),calc(1.8 * var(--shade-k)));
+  }
+
+  /* Werktabs: rustig. Het gekozen tabblad ligt er als een kaartje op, met het
+     icoon in het baken. */
+  :root[data-look="baken"] .app .tab{border-radius:11px;color:var(--ink-3);font-weight:500}
+  :root[data-look="baken"] .app .tab:hover{background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));color:var(--ink)}
+  :root[data-look="baken"] .app .tab.active{
+    background:var(--surface);color:var(--ink);font-weight:600;
+    box-shadow:inset 0 0 0 1px var(--line),0 1px 2px rgba(var(--shade-rgb),calc(.3 * var(--shade-k))),0 8px 18px -10px rgba(var(--shade-rgb),calc(1.1 * var(--shade-k)));
+  }
+  :root[data-look="baken"] .app .tab.active .tab-ico{color:var(--accent-ink)}
+  :root[data-look="baken"] .app .tab-close{opacity:0}
+  :root[data-look="baken"] .app :is(.tab:hover,.tab.active) .tab-close,
+  :root[data-look="baken"] .app .tab-close:focus-visible{opacity:1}
+  :root[data-look="baken"] .app .tab-new{border-radius:10px;color:var(--ink-3)}
+  :root[data-look="baken"] .app .tab-new:hover{background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));color:var(--ink)}
+
+  /* Rechts in de tabrij: zoeken en de gouden knop, zoals de bovenbalk van
+     Value Backlog. */
+  :root[data-look="baken"] .app .tabbar-trailing{display:flex;align-items:center;gap:8px;flex:0 0 auto;margin-left:auto;padding-left:12px}
+  :root[data-look="baken"] .app .gs-ask-bar{width:clamp(200px,24vw,380px);margin:0}
+  :root[data-look="baken"] .app .gs-ask-bar .gs-field{
+    height:34px;min-height:34px;padding:0 6px 0 11px;gap:10px;border-radius:var(--r-ctl);
+    background:color-mix(in srgb,var(--surface) 82%,transparent);
+    border:1px solid rgba(var(--shade-rgb),calc(.3 * var(--shade-k)));
+    box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.16 * var(--shade-k)));
+    -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+    transition:border-color var(--t-1) var(--ease),background-color var(--t-1) var(--ease),box-shadow var(--t-2) var(--ease);
+    cursor:text;
+  }
+  :root[data-look="baken"]:not([data-theme="light"]) .app .gs-ask-bar .gs-field{border-color:var(--line-2)}
+  :root[data-look="baken"] .app .gs-ask-bar .gs-field:hover{background:var(--surface);border-color:var(--line-3)}
+  /* Typ je, dan krijgt het veld de rand van Gerrie: het poollicht. */
+  :root[data-look="baken"] .app .gs-ask-bar .gs-field:focus-within{
+    border-color:transparent;
+    background:linear-gradient(var(--surface),var(--surface)) padding-box,var(--aurora) border-box;
+    box-shadow:0 0 0 4px rgba(var(--ai-rgb),.12),0 10px 28px -16px var(--ai-1);
+  }
+  :root[data-look="baken"] .app .gs-ask-bar .gs-input{font-size:13px;font-weight:400;color:var(--ink)}
+  :root[data-look="baken"] .app .gs-ask-bar .gs-input::placeholder{color:var(--ink-3)}
+  :root[data-look="baken"] .app .gs-kbd{
+    display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;flex:none;
+    border-radius:7px;border:1px solid var(--line-2);
+    background:var(--surface);color:var(--ink-3);
+    box-shadow:0 1px 0 rgba(var(--shade-rgb),calc(.4 * var(--shade-k)));
+    font:600 10.5px/1 var(--font-sans);letter-spacing:.02em;
+  }
+  /* Het orbje van Gerrie vooraan in het zoekveld: zoeken en vragen is één veld. */
+  :root[data-look="baken"] .gs-orb{
+    --s:18px;position:relative;display:inline-block;flex:none;
+    width:var(--s);height:var(--s);border-radius:50%;
+    background:
+      radial-gradient(circle at 32% 28%,rgba(255,255,255,.95),rgba(255,255,255,0) 32%),
+      conic-gradient(from 200deg,var(--ai-1),var(--ai-2),var(--ai-3),var(--ai-1));
+    box-shadow:0 0 0 1px rgba(255,255,255,.1),0 6px 16px -6px var(--ai-1);
+  }
+
+  /* De resultaten als paneel onder het zoekveld. Paneel en achtergrond worden
+     naar <body> geportald, buiten `.app`, waar --tabbar-h niet bestaat: met
+     die maat belandde het paneel onder de rand van het scherm. Daarom een
+     eigen maat op :root (--bk-bar-h, de hoogte van de tabrij). */
+  :root[data-look="baken"]{--bk-bar-h:48px}
+  :root[data-look="baken"] .gs-backdrop.gs-backdrop-ask{
+    inset:calc(var(--bk-bar-h) + 8px) 0 0 0;
+    background:rgba(8,8,12,.38);
+    -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);
+  }
+  :root[data-look="baken"][data-theme="light"] .gs-backdrop.gs-backdrop-ask{background:rgba(17,17,22,.16)}
+  :root[data-look="baken"] .gs-panel.gs-panel-ask{
+    top:calc(var(--bk-bar-h) + 10px);bottom:auto;left:auto;right:16px;
+    width:min(600px,calc(100vw - 32px));max-width:none;max-height:min(72vh,640px);
+    border:1px solid var(--line-2);border-radius:18px;
+    background:var(--surface);box-shadow:var(--shadow-pop);
+    overflow:hidden;animation:bk-pop .24s var(--ease-out) both;
+  }
+  :root[data-look="baken"] .gs-panel-ask .gs-panel-head{padding:12px 14px 10px 16px}
+  :root[data-look="baken"] .gs-panel-ask .gs-panel-title{font-size:13px;font-weight:700}
+  :root[data-look="baken"] .gs-panel-ask .gs-panel-close{width:28px;height:28px;border-radius:8px}
+}
+:root[data-look="baken"] .gs-panel .gs-result{border-radius:12px}
+:root[data-look="baken"] .gs-panel :is(.gs-result:hover,.gs-result.active){background:var(--surface-2)}
+:root[data-look="baken"] .gs-panel .gs-result.active{box-shadow:inset 3px 0 0 var(--accent),inset 0 0 0 1px var(--line-2)}
+:root[data-look="baken"] .gs-panel .gs-group-head{font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+:root[data-look="baken"] .gs-panel .gs-result-badge{text-transform:none;letter-spacing:0;font-size:10.5px;font-weight:600}
+:root[data-look="baken"] .gs-ask{margin-bottom:4px}
+:root[data-look="baken"] .gs-ask .gs-result-icon{background:var(--ai-soft);border-color:var(--ai-line,rgba(var(--ai-rgb),.3))}
+
+/* Vanaf 1025px de bovenbalk van Value Backlog: 60px hoog, zoeken en de knop
+   op volle maat. Daaronder (tablet) blijft hij 48px: de tablet mag maar 100px
+   chrome hebben (tests/mobile/run.mjs). */
+@media (min-width:1025px){
+  :root[data-look="baken"]{--bk-bar-h:60px}
+  :root[data-look="baken"] .app{--tabbar-h:60px}
+  :root[data-look="baken"] .app .tabbar{padding:0 10px 0 14px;gap:4px}
+  :root[data-look="baken"] .app .tab{height:36px;padding:0 6px 0 12px;font-size:13.5px}
+  :root[data-look="baken"] .app .tab-new{width:34px;height:34px}
+  :root[data-look="baken"] .app .gs-ask-bar .gs-field{height:40px;min-height:40px;padding:0 8px 0 13px}
+  :root[data-look="baken"] .app .topbar{padding:0 14px 0 2px}
+  :root[data-look="baken"] .app .topbar-actions .btn{height:40px;min-height:40px;padding:0 14px;font-size:13px;border-radius:var(--r-ctl)}
+}
+
+/* De gouden knop "+ Nieuw" en zijn menu. */
+:root[data-look="baken"] .bk-create{position:relative;flex:none}
+:root[data-look="baken"] .app .bk-create-btn{
+  height:34px;min-height:34px;padding:0 10px 0 10px;gap:6px;border-radius:var(--r-ctl);
+  font-size:13px;font-weight:700;letter-spacing:-.005em;
+}
+@media (min-width:1025px){
+  :root[data-look="baken"] .app .bk-create-btn{height:40px;min-height:40px;padding:0 12px 0 13px;font-size:13.5px}
+}
+:root[data-look="baken"] .bk-create-caret{margin-left:-1px;opacity:.7;transition:transform var(--t-2) var(--ease)}
+:root[data-look="baken"] .bk-create-btn[aria-expanded="true"] .bk-create-caret{transform:rotate(180deg)}
+:root[data-look="baken"] .bk-create-menu{
+  position:absolute;right:0;top:calc(100% + 8px);z-index:120;
+  width:276px;padding:6px;
+  border:1px solid var(--line-2);border-radius:18px;
+  background:var(--surface);box-shadow:var(--shadow-pop);
+  transform-origin:top right;animation:bk-pop .22s var(--ease-out) both;
+}
+:root[data-look="baken"] .bk-create-item{
+  display:flex;align-items:center;gap:11px;width:100%;padding:7px 8px;
+  border:0;border-radius:12px;background:transparent;color:var(--ink);
+  font:inherit;text-align:left;cursor:pointer;
+  transition:background var(--t-1) var(--ease);
+}
+:root[data-look="baken"] .bk-create-item:hover,
+:root[data-look="baken"] .bk-create-item:focus-visible{background:var(--surface-2);outline:none}
+:root[data-look="baken"] .bk-create-item:focus-visible{box-shadow:inset 0 0 0 2px rgba(var(--accent-rgb),.55)}
+/* Het icoon in een tegel van het commandovlak, met het baken erin: dezelfde
+   taal als de paginakoppen. */
+:root[data-look="baken"] .bk-create-ico{
+  display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:11px;
+  color:#F7C548;
+  background:radial-gradient(40px 26px at 20% 0%,rgba(247,197,72,.24),transparent 70%),linear-gradient(150deg,#2E2D3A 0%,#1C1C24 55%,#131318 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 6px 14px -8px rgba(14,14,20,.7);
+}
+:root[data-look="baken"] .bk-create-ico svg{filter:drop-shadow(0 0 5px rgba(247,197,72,.45))}
+:root[data-look="baken"] .bk-create-t{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+:root[data-look="baken"] .bk-create-t b{font-size:13.5px;font-weight:600}
+:root[data-look="baken"] .bk-create-t small{font-size:11.5px;color:var(--ink-3)}
+@keyframes bk-pop{
+  from{opacity:0;transform:translateY(-4px) scale(.97)}
+  to{opacity:1;transform:none}
+}
+
+/* ── 3 · De zijbalk: het donkere commandovlak ────────────────────────────── */
+/* Nachtgrafiet met de gouden lamp linksboven, en vanuit het merk de stralen
+   die naar onderen wegvloeien — zoals de honingraat in de zijbalk van Value
+   Backlog. */
+:root[data-look="baken"] .app .sidebar,
+:root[data-look="baken"][data-theme="light"] .app .sidebar{
+  background:
+    radial-gradient(300px 250px at 0 0,rgba(247,197,72,.16),transparent 70%),
+    radial-gradient(240px 260px at 100% 0,rgba(132,118,255,.06),transparent 70%),
+    linear-gradient(180deg,#1A1A21 0%,#141419 52%,#111116 100%);
+}
+:root[data-look="baken"] .app .sidebar::before{
+  background:var(--bk-rays) no-repeat;
+  background-position:34px 34px;
+  -webkit-mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.4) 20%,transparent 42%);
+          mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.4) 20%,transparent 42%);
+}
+
+/* Het merk: de gouden tegel met het R-merkteken en een halo, de naam in wit,
+   eronder de organisatie in goud — daar wissel je ook van organisatie. */
+:root[data-look="baken"] .app .bk-brand{display:flex;align-items:center;gap:11px;min-height:44px}
+:root[data-look="baken"] .app .bk-brand .brand-icon{
+  position:relative;display:grid;place-items:center;flex:none;
+  width:40px;height:40px;border-radius:13px;
+  background:var(--bk-gold-face);color:#191307;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 -1px 0 rgba(110,70,0,.25),0 0 0 4px rgba(247,197,72,.08),0 10px 26px -6px rgba(247,197,72,.6);
+}
+:root[data-look="baken"] .bk-brand-halo{
+  position:absolute;inset:-10px;z-index:-1;border-radius:20px;
+  background:radial-gradient(closest-side,rgba(247,197,72,.35),transparent);
+  filter:blur(6px);pointer-events:none;
+}
+/* Het merkteken vult de hele tegel, net als in het app-icoon. */
+:root[data-look="baken"] .bk-mark{display:block;flex:none;width:100%;height:100%}
+:root[data-look="baken"] .bk-brand-text{display:flex;flex-direction:column;min-width:0;line-height:1.15}
+:root[data-look="baken"] .bk-brand-name{font-size:15.5px;font-weight:800;letter-spacing:-.02em;color:#fff}
+:root[data-look="baken"] .bk-org{min-width:0;margin-top:1px}
+:root[data-look="baken"] .bk-org .select-control{width:auto}
+:root[data-look="baken"] .bk-org .select-trigger.bk-org-select{
+  display:inline-flex;align-items:center;gap:5px;max-width:100%;
+  min-height:0;height:auto;padding:1px 4px 1px 0;margin:0;
+  border:0;border-radius:6px;background:none;box-shadow:none;
+  color:#F7C548;font-size:11.5px;font-weight:600;letter-spacing:0;cursor:pointer;
+}
+:root[data-look="baken"] .bk-org .select-trigger.bk-org-select:hover{color:#FFD467;background:rgba(255,255,255,.05)}
+:root[data-look="baken"] .bk-org .select-trigger.bk-org-select:focus-visible{outline:2px solid #F7C548;outline-offset:2px}
+:root[data-look="baken"] .bk-org .select-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+:root[data-look="baken"] .bk-org .select-chevron{display:inline-flex;flex:none;color:rgba(247,197,72,.75)}
+:root[data-look="baken"] .bk-org .select-chevron svg{width:10px;height:7px}
+:root[data-look="baken"] .app .sidebar .sidebar-readonly{margin-top:10px}
+
+/* Groepskopjes en menuregels zoals in Value Backlog: kleine kapitalen met
+   lucht, regels van 38px in 14px, en wat actief is gloeit. */
+:root[data-look="baken"] .app .sidebar .nav-section,
+:root[data-look="baken"] .app .sidebar .nav-group{color:#9C9CA8}
+:root[data-look="baken"] .app .sidebar .nav-item{color:rgba(243,243,246,.74)}
+:root[data-look="baken"] .app .sidebar .nav-item svg{color:rgba(243,243,246,.5)}
+:root[data-look="baken"] .app .sidebar .nav-item:hover{background:rgba(255,255,255,.07);color:#fff}
+:root[data-look="baken"] .app .sidebar .nav-item.active{
+  color:#fff;
+  background:linear-gradient(90deg,rgba(247,197,72,.17) 0%,rgba(255,255,255,.06) 60%,rgba(255,255,255,.03) 100%);
+  box-shadow:inset 0 0 0 1px rgba(247,197,72,.18);
+}
+:root[data-look="baken"] .app .sidebar .nav-item.active svg{color:#F7C548;filter:drop-shadow(0 0 6px rgba(247,197,72,.75))}
+:root[data-look="baken"] .app .sidebar .nav-item>svg.lucide-sparkles{color:var(--ai-ink)}
+:root[data-look="baken"] .app .sidebar .nav-item.active>svg.lucide-sparkles{color:var(--ai-ink);filter:drop-shadow(0 0 7px var(--ai-glow))}
+@media (min-width:761px){
+  :root[data-look="baken"] .app .sidebar-head{padding:16px 12px 8px 16px}
+  :root[data-look="baken"] .app .sidebar .sidebar-pin{top:20px}
+  :root[data-look="baken"] .app .sidebar-nav{padding:8px 12px 14px}
+  :root[data-look="baken"] .app .sidebar .nav-section,
+  :root[data-look="baken"] .app .sidebar .nav-group{padding:16px 10px 7px 12px;font-size:10px;letter-spacing:.16em}
+  :root[data-look="baken"] .app .sidebar .nav-item{height:38px;min-height:38px;margin:1px 0;padding:0 9px 0 12px;gap:12px;border-radius:12px;font-size:14px}
+  :root[data-look="baken"] .app .sidebar .nav-item svg{width:18px;height:18px}
+  :root[data-look="baken"] .app .sidebar{--nav-row-mid:20px;--nav-bar-x:-12px}
+  :root[data-look="baken"] .app .sidebar .nav-submenu{margin:4px 0 8px 22px;padding-left:12px}
+  :root[data-look="baken"] .app .sidebar .nav-submenu button{min-height:32px;border-radius:10px;font-size:13px}
+  /* De smalle balk: het merk blijft, de organisatie verschijnt pas als je het
+     menu vastzet (zoals de organisatiekeuze in Cockpit). */
+  :root[data-look="baken"] .app:not(.sidebar-pinned) .sidebar .bk-org{visibility:hidden}
+  :root[data-look="baken"] .app:not(.sidebar-pinned) .sidebar-head{padding-left:12px}
+}
+/* Op een tablet staat de vastzetknop altijd in beeld (globals.css: de rail
+   opent daar niet bij hover). In de smalle balk viel hij over de R-tegel;
+   hier staat hij eronder, tot de balk openklapt. */
+@media (min-width:761px) and (max-width:1024px){
+  :root[data-look="baken"] .app:not(.sidebar-pinned) .sidebar-head{padding-bottom:44px}
+  :root[data-look="baken"] .app:not(.sidebar-pinned) .sidebar:not(:hover):not(:focus-within) .sidebar-pin{top:66px;left:18px;right:auto}
+}
+/* De gouden streep langs de rand van de actieve regel, met gloed. */
+:root[data-look="baken"] .app .sidebar .nav-item-wrap:has(>.nav-item.active)::before{
+  width:4px;height:22px;background:#F7C548;box-shadow:0 0 14px rgba(247,197,72,.95);
+}
+:root[data-look="baken"] .app .sidebar .nav-submenu{border-left-color:rgba(255,255,255,.08)}
+:root[data-look="baken"] .app .sidebar .nav-submenu button.active{background:rgba(255,255,255,.08);color:#fff}
+:root[data-look="baken"] .app .sidebar .nav-submenu button.active svg{color:#F7C548}
+/* Tellers: wat op je wacht, is een gouden pil met gloed. */
+:root[data-look="baken"] .app .sidebar .nav-badge{
+  min-width:20px;height:20px;padding:0 6px;border-radius:999px;
+  background:#F7C548;color:#191307;font-size:10.5px;font-weight:700;
+  box-shadow:0 0 12px rgba(247,197,72,.55);
+}
+
+/* Onderin: wie je bent, en het accountmenu in hetzelfde donker. */
+:root[data-look="baken"] .app .sidebar .sidebar-user{border-top:1px solid rgba(255,255,255,.08)}
+:root[data-look="baken"] .app .sidebar .user-avatar{background:var(--bk-gold-face);color:#191307;font-weight:700}
+:root[data-look="baken"] .app .sidebar .user-menu{
+  background:#1B1B22;border:1px solid rgba(255,255,255,.09);border-radius:18px;
+  box-shadow:0 0 0 1px rgba(0,0,0,.4),0 28px 70px -18px rgba(0,0,0,.9);
+}
+:root[data-look="baken"] .app .sidebar .look-option{color:rgba(243,243,246,.72)}
+:root[data-look="baken"] .app .sidebar .look-option:hover{background:rgba(255,255,255,.07);color:#fff}
+:root[data-look="baken"] .app .sidebar .look-option.is-on{color:#fff;background:linear-gradient(90deg,rgba(247,197,72,.16),rgba(255,255,255,.04));box-shadow:inset 0 0 0 1px rgba(247,197,72,.24)}
+:root[data-look="baken"] .app .sidebar .look-t small{color:rgba(243,243,246,.5)}
+:root[data-look="baken"] .app .sidebar .theme-switch{background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.08)}
+:root[data-look="baken"] .app .sidebar .theme-switch button.is-on{background:#2C2C36;color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.4),inset 0 0 0 1px rgba(255,255,255,.08)}
+
+/* ── 4 · Paginakoppen: groot en stevig, met de tegel van het commandovlak ── */
+:root[data-look="baken"] .app .eyebrow{color:var(--accent-ink);font-size:11px;font-weight:700;letter-spacing:.16em}
+:root[data-look="baken"] .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.finance-search-head,.ag-page-head,.mk-head,.ptl-head,.tt-hero) :is(h1,h2){
+  font-weight:800;letter-spacing:-.025em;color:var(--ink);
+}
+@media (min-width:1025px){
+  :root[data-look="baken"] .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.finance-search-head,.ag-page-head,.mk-head,.ptl-head,.tt-hero) :is(h1,h2){font-size:28px;line-height:1.15}
+}
+/* De tegel: nachtgrafiet met het icoon in het baken, en licht van boven. */
+:root[data-look="baken"] .page-icon{
+  width:48px;height:48px;border-radius:16px;color:#F7C548;
+  background:
+    radial-gradient(64px 40px at 20% 0%,rgba(247,197,72,.24),transparent 70%),
+    linear-gradient(150deg,#34333F 0%,#20202A 52%,#121217 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 0 1px rgba(255,255,255,.05),0 10px 22px -10px rgba(14,14,20,.7);
+}
+:root[data-look="baken"] .page-icon svg{width:22px;height:22px;filter:drop-shadow(0 0 7px rgba(247,197,72,.5))}
+:root[data-look="baken"] .app .crumbs-item.is-current .crumbs-plain{color:var(--ink);font-weight:600}
+
+/* ── 5 · Kaarten: wit, zacht gelaagd; klikbaar komt een tikje omhoog ─────── */
+:root[data-look="baken"] .app :where(.stat-card,.proj-card,.client-card,.stats-card,.proj-fin-panel,.ticket-stat,.cd-metric,.fin-stat,.kan-col,.ticket-item,.fin-item,.notes-layout,.note-card,.related-notes-panel,.settings-card,.calendar-main-card,.connections-panel,.onboarding-card,.activity-card,.project-quote-card,.client-panel,.quote-table-card,.clients-table-card,.projects-table-card,.tk-ctable-card,.today-card,.weekactions-card,.attention-card,.finance-search-card,.project-list-card,.dash-reports,.client-kpi,.dash-report-card,.ptl){
+  border-color:rgba(var(--shade-rgb),calc(.22 * var(--shade-k)));
+}
+:root[data-look="baken"]:not([data-theme="light"]) .app :where(.stat-card,.proj-card,.client-card,.stats-card,.proj-fin-panel,.ticket-stat,.cd-metric,.fin-stat,.kan-col,.ticket-item,.fin-item,.notes-layout,.note-card,.related-notes-panel,.settings-card,.calendar-main-card,.connections-panel,.onboarding-card,.activity-card,.project-quote-card,.client-panel,.quote-table-card,.clients-table-card,.projects-table-card,.tk-ctable-card,.today-card,.weekactions-card,.attention-card,.finance-search-card,.project-list-card,.dash-reports,.client-kpi,.dash-report-card,.ptl){
+  border-color:var(--line);
+}
+:root[data-look="baken"] .app :where(.proj-card,.client-card,.ticket-item,.fin-item,.note-card,.project-quote-card,.project-list-card,.stat-card-clickable,.client-kpi,.dash-report-card):hover{
+  border-color:rgba(var(--shade-rgb),calc(.4 * var(--shade-k)));
+}
+:root[data-look="baken"]:not([data-theme="light"]) .app :where(.proj-card,.client-card,.ticket-item,.fin-item,.note-card,.project-quote-card,.project-list-card,.stat-card-clickable,.client-kpi,.dash-report-card):hover{border-color:var(--line-2)}
+:root[data-look="baken"] .app :is(.dash-card-head h2,.attention-card h2,.dash-reports-head h2,.settings-card h3,.activity-card h3,.onboarding-head h3){font-weight:700;letter-spacing:-.015em}
+:root[data-look="baken"] .app :is(.dash-card-head h2,.attention-card h2,.dash-reports-head h2)>svg{color:var(--accent-ink)}
+:root[data-look="baken"][data-theme="light"] .app .kan-col{background:rgba(255,255,255,.66)}
+
+/* ── 6 · Knoppen ─────────────────────────────────────────────────────────── */
+/* De hoofdknop is goud met licht van boven en een gloed, zoals de mint knop
+   van Value Backlog; bij hover gloeit de rand. */
+:root[data-look="baken"] .app .btn-primary,
+:root[data-look="baken"] main.login:not(.portal) .btn-primary{
+  border-color:transparent;
+  background:linear-gradient(180deg,#FFDA76 0%,#F7C548 100%);
+  color:#191307;font-weight:700;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),inset 0 -1px 0 rgba(110,70,0,.16),0 1px 2px rgba(110,70,0,.22),0 8px 20px -10px rgba(247,197,72,.95);
+}
+:root[data-look="baken"] .app .btn-primary:hover:not(:disabled),
+:root[data-look="baken"] main.login:not(.portal) .btn-primary:hover:not(:disabled){
+  background:linear-gradient(180deg,#FFE496 0%,#FFD467 100%);color:#191307;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 -1px 0 rgba(110,70,0,.14),var(--bk-gold-glow);
+}
+:root[data-look="baken"] .app .btn-primary:focus-visible{box-shadow:0 0 0 4px rgba(247,197,72,.35),inset 0 1px 0 rgba(255,255,255,.55)}
+/* Gewone knoppen: wit met een haarlijn (op Nacht grafiet). */
+:root[data-look="baken"] .app :where(.btn:not(.btn-primary):not(.btn-danger)){
+  border-color:rgba(var(--shade-rgb),calc(.36 * var(--shade-k)));
+  box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.16 * var(--shade-k)));
+}
+:root[data-look="baken"]:not([data-theme="light"]) .app :where(.btn:not(.btn-primary):not(.btn-danger)){border-color:var(--line-2);box-shadow:0 1px 2px rgba(0,0,0,.3),inset 0 1px 0 var(--hi)}
+:root[data-look="baken"] .app :where(.btn:not(.btn-primary):not(.btn-danger)):hover:not(:disabled){border-color:rgba(var(--shade-rgb),calc(.6 * var(--shade-k)))}
+:root[data-look="baken"]:not([data-theme="light"]) .app :where(.btn:not(.btn-primary):not(.btn-danger)):hover:not(:disabled){border-color:var(--line-3)}
+/* Op het commandovlak: glas. */
+:root[data-look="baken"] .app :is(.cockpit,.proj-dash-hero,.client-detail-hero,.cmd-scope) :where(.btn:not(.btn-primary):not(.btn-danger)){
+  border-color:rgba(255,255,255,.14);background:rgba(255,255,255,.08);color:#fff;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.07);
+}
+:root[data-look="baken"] .app :is(.cockpit,.proj-dash-hero,.client-detail-hero,.cmd-scope) :where(.btn:not(.btn-primary):not(.btn-danger)):hover:not(:disabled){
+  border-color:rgba(255,255,255,.22);background:rgba(255,255,255,.14);color:#fff;
+}
+
+/* ── 7 · Velden ──────────────────────────────────────────────────────────── */
+/* Zoals Value Backlog: wit, een haarlijn, en bij focus een zachte ring van het
+   baken. */
+:root[data-look="baken"][data-theme="light"] .app :where(.form-input,.form-textarea,.form-select){
+  border-color:rgba(22,22,28,.13);
+  box-shadow:inset 0 1px 2px rgba(22,22,28,.04);
+}
+:root[data-look="baken"][data-theme="light"] .app :where(.form-input,.form-textarea,.form-select):hover:not(:disabled):not(:focus){border-color:#BFBFCA}
+:root[data-look="baken"] .app :where(.form-input,.form-textarea,.form-select):focus,
+:root[data-look="baken"] .app .select-trigger.is-open{
+  border-color:rgba(var(--accent-rgb),.75);
+  box-shadow:0 0 0 4px rgba(247,197,72,.24);
+}
+:root[data-look="baken"][data-theme="light"] .app :where(.form-input,.form-textarea,.form-select):focus,
+:root[data-look="baken"][data-theme="light"] .app .select-trigger.is-open{border-color:#A36F00;box-shadow:0 0 0 4px rgba(247,197,72,.3)}
+:root[data-look="baken"] .select-menu{border-radius:14px;box-shadow:var(--shadow-pop)}
+:root[data-look="baken"] .select-option.is-selected{font-weight:600}
+/* De organisatiekeuze opent in het donker van de zijbalk. */
+:root[data-look="baken"] ::selection{background:rgba(247,197,72,.35);color:#16161C}
+
+/* Keuzestroken (Mijn/Team, Kaarten/Tabel …): een verzonken spoor, de gekozen
+   stand ligt er wit bovenop. */
+:root[data-look="baken"][data-theme="light"] .app :is(.dash-scope,.wp-seg,.bk-seg,.client-view-toggle,.project-view-toggle,.finance-editor-tabs,.wp-quick-add-modes,.tt-period-tabs,.tt-scope-tog){
+  background:rgba(22,22,28,.055);
+  box-shadow:inset 0 0 0 1px rgba(22,22,28,.04);
+}
+:root[data-look="baken"][data-theme="light"] .app :is(.dash-scope button.is-on,.wp-seg button.is-on,.bk-seg button.is-active,.client-view-toggle button.active,.project-view-toggle button.active,.finance-editor-tabs button.is-active,.wp-quick-add-modes button.is-on,.tt-period-tab.active,.tt-scope-tog button.active){
+  background:#fff;color:var(--ink);
+  box-shadow:0 1px 2px rgba(22,22,28,.12),0 4px 10px -6px rgba(22,22,28,.3),inset 0 0 0 1px rgba(22,22,28,.06);
+}
+
+/* Tabstroken van klant en project: de streep onder het gekozen tabblad is
+   het baken, met gloed. */
+@media (min-width:761px){
+  :root[data-look="baken"] .app .client-tab-btn.active::after{background:#F7C548;box-shadow:0 0 12px rgba(247,197,72,.7)}
+}
+
+/* ── 8 · Tabellen, vensters en meldingen ─────────────────────────────────── */
+:root[data-look="baken"] .app :is(.quote-table,.clients-table,.projects-table,.bk-table,.rb-table,.tk-ctable) th{
+  font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);
+}
+:root[data-look="baken"] .app .modal-bg{background:rgba(14,14,20,.45);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+:root[data-look="baken"] .app .modal{border-radius:22px;box-shadow:var(--shadow-pop);animation:bk-modal .24s var(--ease-out) both}
+@keyframes bk-modal{
+  from{opacity:0;transform:translateY(8px) scale(.985)}
+  to{opacity:1;transform:none}
+}
+@media (max-width:760px){
+  :root[data-look="baken"] .app .modal{border-radius:22px 22px 0 0}
+}
+
+/* ── 9 · De cockpit van het dashboard ────────────────────────────────────── */
+/* Het commandovlak: nachtgrafiet, de lamp linksboven, het poollicht van
+   Gerrie rechtsboven, de stralen vanuit de hoek en lichtstofjes in de lamp. */
+:root[data-look="baken"] .app .cockpit{
+  background:var(--bk-cmd);
+  box-shadow:var(--bk-cmd-edge),var(--bk-cmd-shadow);
+}
+/* De hoeken van Value Backlog vanaf de tablet; op de telefoon houdt de
+   cockpit de maten van Cockpit (16 en 11px), zodat de tegels met hun rand van
+   6px concentrisch in het vlak liggen. */
+@media (min-width:761px){
+  :root[data-look="baken"] .app .cockpit{border-radius:24px}
+  :root[data-look="baken"] .app .cockpit .stat-card{border-radius:18px}
+}
+:root[data-look="baken"] .app .cockpit::before{
+  background:var(--bk-rays) no-repeat;
+  background-size:1200px 1200px;background-position:-18px -18px;
+  -webkit-mask-image:radial-gradient(110% 130% at 0% 0%,#000 0%,rgba(0,0,0,.45) 38%,transparent 72%);
+          mask-image:radial-gradient(110% 130% at 0% 0%,#000 0%,rgba(0,0,0,.45) 38%,transparent 72%);
+}
+/* Lichtstofjes: een tegel van 560×280 met kleine gouden puntjes die heel
+   langzaam opstijgen. Hij schuift precies één tegel per ronde op, dus er is
+   geen naad; alleen transform beweegt, dat kost de browser niets. */
+:root[data-look="baken"] .app .cockpit::after,
+:root[data-look="baken"] .bk-motes{
+  content:'';position:absolute;left:0;right:0;top:0;height:calc(100% + 280px);z-index:-1;pointer-events:none;
+  background-image:
+    radial-gradient(1.6px 1.6px at 8% 22%,rgba(255,224,138,.95),transparent 70%),
+    radial-gradient(1.2px 1.2px at 19% 71%,rgba(255,224,138,.8),transparent 70%),
+    radial-gradient(2px 2px at 31% 38%,rgba(255,224,138,.7),transparent 70%),
+    radial-gradient(1.2px 1.2px at 44% 12%,rgba(255,224,138,.75),transparent 70%),
+    radial-gradient(1.6px 1.6px at 57% 84%,rgba(255,224,138,.6),transparent 70%),
+    radial-gradient(1.2px 1.2px at 71% 46%,rgba(200,190,255,.75),transparent 70%),
+    radial-gradient(1.8px 1.8px at 86% 18%,rgba(200,190,255,.7),transparent 70%),
+    radial-gradient(1.2px 1.2px at 93% 63%,rgba(255,224,138,.55),transparent 70%);
+  background-size:560px 280px;
+  -webkit-mask-image:radial-gradient(90% 100% at 12% 0%,#000 0%,rgba(0,0,0,.5) 45%,transparent 80%);
+          mask-image:radial-gradient(90% 100% at 12% 0%,#000 0%,rgba(0,0,0,.5) 45%,transparent 80%);
+  opacity:.75;
+  animation:bk-motes 26s linear infinite;
+}
+@keyframes bk-motes{
+  from{transform:translate3d(0,0,0)}
+  to{transform:translate3d(0,-280px,0)}
+}
+:root[data-look="baken"] .app .cockpit-glow{background:rgba(132,118,255,.16);right:-90px;top:-150px;width:400px;height:400px;filter:blur(70px)}
+:root[data-look="baken"] .app .cockpit .workspace-hero .eyebrow{color:#F7C548}
+:root[data-look="baken"] .app .cockpit .workspace-hero h1{color:#fff;font-weight:800;letter-spacing:-.03em}
+:root[data-look="baken"] .app .cockpit .workspace-hero h1 .serif{
+  background:linear-gradient(92deg,#FFEBB0 0%,#F9CD5A 45%,#EAA924 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+:root[data-look="baken"] .app .cockpit .workspace-hero p{color:#C3C3CE}
+:root[data-look="baken"] .app .cockpit .workspace-hero p b{color:#fff}
+:root[data-look="baken"] .app .cockpit-count{background:#F7C548;color:#191307;box-shadow:0 0 10px rgba(247,197,72,.5)}
+:root[data-look="baken"] .app .cockpit-meta{color:#BDBDC8}
+/* Op de telefoon en de tablet is de cockpit smal: met de maten van desktop
+   kleurde het poollicht hem helemaal violet. Hier is het licht kleiner, zodat
+   het grafiet en de lamp blijven. */
+@media (max-width:1024px){
+  :root[data-look="baken"] .app .cockpit{
+    background:
+      radial-gradient(320px 200px at 0% 0%,rgba(247,197,72,.18),transparent 64%),
+      radial-gradient(260px 180px at 100% 0%,rgba(132,118,255,.16),transparent 66%),
+      linear-gradient(135deg,#15151B 0%,#1F1F28 50%,#2A2936 100%);
+  }
+  :root[data-look="baken"] .app .cockpit-glow{opacity:.5}
+}
+@media (min-width:1025px){
+  :root[data-look="baken"] .app .cockpit{padding:28px 30px 26px}
+  :root[data-look="baken"] .app .cockpit .workspace-hero h1{font-size:38px;line-height:1.05}
+}
+
+/* Kerncijfers: glazen tegels op het donker, met een dun lijntje bovenaan als
+   een tegel iets te melden heeft. */
+:root[data-look="baken"] .app .cockpit .stat-card{
+  border:0;
+  background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.04));
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.1),inset 0 1px 0 rgba(255,255,255,.08);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+}
+:root[data-look="baken"] .app .cockpit .stat-card-clickable:hover{
+  background:linear-gradient(180deg,rgba(255,255,255,.11),rgba(255,255,255,.06));
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.17),inset 0 1px 0 rgba(255,255,255,.1),0 18px 36px -22px rgba(0,0,0,.9);
+}
+:root[data-look="baken"] .app .cockpit .stat-card .sc-label{color:#C3C3CE}
+:root[data-look="baken"] .app .cockpit .stat-card-accent::after{background:linear-gradient(90deg,#F7C548,rgba(247,197,72,0) 85%)}
+
+/* Het weekspoor: de dagen als R-tegels, vandaag in het goud en ademend. */
+:root[data-look="baken"] .cr-track{color:#F7C548}
+:root[data-look="baken"] .cr-track::after{background:rgba(247,197,72,.32)}
+:root[data-look="baken"] .cr-node{background:#2A2A34;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+:root[data-look="baken"] .cr-day.has-items .cr-node{background:#383845;color:#fff}
+:root[data-look="baken"] .cr-day.is-today .cr-node{background:var(--bk-gold-face);color:#191307}
+
+/* Het spoor onderin de cockpit: de tegenhanger van het fasespoor van Value
+   Backlog. Bovenin de naam van het spoor, een lijn, wat erin zit en de keuze
+   tussen Geld en Week. */
+:root[data-look="baken"] .app .bk-rail{margin-top:24px}
+:root[data-look="baken"] .bk-rail-head{display:flex;align-items:center;gap:14px;margin:0 0 16px;min-width:0}
+:root[data-look="baken"] .bk-rail-head::after{
+  content:'';order:1;flex:1 1 auto;min-width:24px;height:1px;
+  background:linear-gradient(90deg,rgba(247,197,72,.4),rgba(255,255,255,.1) 70%,rgba(255,255,255,.04));
+}
+:root[data-look="baken"] .bk-rail-title{order:0;flex:none;font-size:10.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#F7C548;white-space:nowrap}
+:root[data-look="baken"] .bk-rail-sum{order:2;flex:none;font-size:12px;font-weight:500;color:#C6C6D0;white-space:nowrap}
+:root[data-look="baken"] .bk-rail-sum .sc-cents{font-size:.8em;color:#A9A9B6}
+:root[data-look="baken"] .bk-rail-switch{
+  order:3;flex:none;display:inline-flex;gap:2px;padding:3px;border-radius:10px;
+  background:rgba(0,0,0,.22);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+}
+:root[data-look="baken"] .bk-rail-switch button{
+  height:24px;padding:0 11px;border:0;border-radius:7px;background:transparent;
+  color:#C6C6D0;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;
+  transition:background var(--t-1) var(--ease),color var(--t-1) var(--ease);
+}
+:root[data-look="baken"] .bk-rail-switch button:hover{color:#fff}
+:root[data-look="baken"] .bk-rail-switch button.is-on{background:rgba(255,255,255,.13);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 2px 6px -2px rgba(0,0,0,.6)}
+:root[data-look="baken"] .bk-rail-switch button:focus-visible{outline:2px solid #F7C548;outline-offset:1px}
+:root[data-look="baken"] .bk-rail .cockpit-rail{margin-top:0}
+
+/* De haltes: R-tegels op één lijn die van koel maanlicht naar zongoud loopt.
+   Betaald is goud en ademt, zoals vandaag in het weekspoor. */
+:root[data-look="baken"] .bk-flow{position:relative;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}
+:root[data-look="baken"] .bk-flow::before{
+  content:'';position:absolute;left:10%;right:10%;top:18px;height:2px;border-radius:2px;pointer-events:none;
+  background:linear-gradient(90deg,rgba(174,182,208,.28) 0%,rgba(174,182,208,.45) 30%,rgba(247,197,72,.55) 72%,#F7C548 100%);
+  box-shadow:0 0 14px rgba(247,197,72,.22);
+}
+:root[data-look="baken"] .bk-fl{
+  position:relative;display:flex;flex-direction:column;align-items:center;
+  width:100%;padding:0 4px 10px;border:0;border-radius:16px;
+  background:transparent;color:#A9A9B6;font:inherit;text-align:center;cursor:pointer;
+  transition:background var(--t-1) var(--ease);
+}
+:root[data-look="baken"] .bk-fl:hover{background:rgba(255,255,255,.05)}
+:root[data-look="baken"] .bk-fl:focus-visible{outline:2px solid #F7C548;outline-offset:2px}
+:root[data-look="baken"] .bk-fl-node{
+  position:relative;z-index:1;display:grid;place-items:center;
+  width:40px;height:36px;border-radius:12px;
+  background:#2A2A34;color:#A9A9B6;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+  transition:transform var(--t-2) var(--spring);
+}
+:root[data-look="baken"] .bk-fl:hover .bk-fl-node{transform:scale(1.08)}
+:root[data-look="baken"] .bk-fl.has-items .bk-fl-node{background:#3A3A47;color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12),inset 0 1px 0 rgba(255,255,255,.12)}
+:root[data-look="baken"] .bk-fl.is-betaald .bk-fl-node{
+  background:var(--bk-gold-face);color:#191307;
+  animation:bk-breathe 2.8s ease-in-out infinite;
+}
+/* Iets zit vast: een stip op de tegel, rood voor te laat, oranje voor wacht. */
+:root[data-look="baken"] .bk-fl-knot{
+  position:absolute;top:-4px;right:-4px;width:12px;height:12px;border-radius:50%;
+  border:2px solid #1F1F28;background:#FF6B72;box-shadow:0 0 10px rgba(255,107,114,.85);
+}
+:root[data-look="baken"] .bk-fl-knot.is-wait{background:#FFA24C;box-shadow:0 0 10px rgba(255,162,76,.85)}
+:root[data-look="baken"] .bk-fl-name{margin-top:9px;font-size:12px;font-weight:600;color:#A9A9B6}
+:root[data-look="baken"] .bk-fl.has-items .bk-fl-name,
+:root[data-look="baken"] .bk-fl.is-betaald .bk-fl-name{color:#fff}
+:root[data-look="baken"] .bk-fl-amount{margin-top:4px;font-size:19px;font-weight:700;line-height:1.1;letter-spacing:-.02em;color:#A9A9B6;white-space:nowrap}
+:root[data-look="baken"] .bk-fl.has-items .bk-fl-amount{color:#fff}
+:root[data-look="baken"] .bk-fl-amount .sc-cents{font-size:.62em;font-weight:600;color:inherit;opacity:.7}
+:root[data-look="baken"] .bk-fl:not(.has-items) .bk-fl-amount .sc-cents{opacity:1}
+:root[data-look="baken"] .bk-fl.is-betaald.has-items .bk-fl-amount{
+  background:linear-gradient(92deg,#FFEBB0 0%,#F9CD5A 45%,#EAA924 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+:root[data-look="baken"] .bk-fl-detail{max-width:100%;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:#A9A9B6}
+:root[data-look="baken"] .bk-fl-detail.is-late{color:#FF8A90}
+:root[data-look="baken"] .bk-fl-detail.is-wait{color:#FFB46E}
+:root[data-look="baken"] .bk-fl-dots{display:flex;flex-wrap:wrap;justify-content:center;gap:4px;min-height:8px;margin-top:8px}
+:root[data-look="baken"] .bk-fl-dots i{width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 1px rgba(255,255,255,.35)}
+:root[data-look="baken"] .bk-fl-dots em{font-size:10px;font-style:normal;font-weight:600;line-height:8px;color:#C6C6D0}
+/* Net als het weekspoor alleen op een breed scherm: op de tablet en de
+   telefoon staan in de cockpit alleen de tegels (de gemeten opbouw blijft). */
+@media (max-width:1024px){
+  :root[data-look="baken"] .app .bk-rail{display:none}
+}
+@media (min-width:1025px) and (max-width:1279px){
+  :root[data-look="baken"] .bk-rail-sum{display:none}
+  :root[data-look="baken"] .bk-fl-amount{font-size:16px}
+}
+
+/* ── 10 · De kop van een project en een klant ────────────────────────────── */
+/* Zoals de projectkop van Value Backlog: donker, de kleur van het project of
+   de klant als gloed linksboven, de stralen erachter, knoppen in glas. */
+:root[data-look="baken"] .app :is(.proj-dash-hero,.client-detail-hero){
+  border-radius:24px;
+  background:
+    radial-gradient(560px 320px at 100% 0%,rgba(132,118,255,.16),transparent 64%),
+    linear-gradient(135deg,#15151B 0%,#1F1F28 46%,#2C2B39 100%);
+  box-shadow:var(--bk-cmd-edge),var(--bk-cmd-shadow);
+}
+:root[data-look="baken"] .app :is(.proj-dash-hero,.client-detail-hero)::before{
+  background:var(--bk-rays) no-repeat;
+  background-size:1200px 1200px;background-position:-18px -18px;
+  -webkit-mask-image:radial-gradient(90% 120% at 0% 0%,#000 0%,rgba(0,0,0,.4) 42%,transparent 74%);
+          mask-image:radial-gradient(90% 120% at 0% 0%,#000 0%,rgba(0,0,0,.4) 42%,transparent 74%);
+}
+:root[data-look="baken"] .app :is(.proj-dash-hero-accent,.client-detail-glow){opacity:.42}
+:root[data-look="baken"] .app :is(.proj-dash-hero-name,.client-title-row h2){font-weight:800;letter-spacing:-.028em}
+:root[data-look="baken"] .app .proj-dash-hero-kicker{color:#F7C548}
+
+/* ── 11 · Telefoon: de dock en de menuknop ───────────────────────────────── */
+@media (max-width:760px){
+  :root[data-look="baken"] .app .bottomnav{
+    background:rgba(22,22,28,.93);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.09),0 18px 40px -12px rgba(14,14,20,.7);
+  }
+  :root[data-look="baken"] .app .bn-item{color:rgba(243,243,246,.64)}
+  :root[data-look="baken"] .app .bn-item.active{background:rgba(255,255,255,.09);color:#fff}
+  :root[data-look="baken"] .app .bn-item.active svg{color:#F7C548;filter:drop-shadow(0 0 8px rgba(247,197,72,.75))}
+  :root[data-look="baken"] .app .bn-item.active::before{background:#F7C548;box-shadow:0 0 10px rgba(247,197,72,.9)}
+  :root[data-look="baken"] .app .mobile-nav-toggle{
+    color:#F7C548;
+    background:radial-gradient(40px 26px at 20% 0%,rgba(247,197,72,.22),transparent 70%),linear-gradient(150deg,#2E2D3A 0%,#1C1C24 55%,#131318 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.12),inset 0 0 0 1px rgba(255,255,255,.06),0 6px 14px -6px rgba(14,14,20,.7);
+  }
+  /* Het uitschuifmenu: de stralen komen uit het merk. */
+  :root[data-look="baken"] .app .sidebar::before{background-position:30px 30px}
+  /* In het uitschuifmenu staat de organisatie onder het merk; ruimte voor de
+     sluitknop rechts. */
+  :root[data-look="baken"] .app .bk-brand{padding-right:84px}
+}
+
+/* ── 12 · Inloggen en laden: het commandovlak over het hele scherm ──────── */
+:root[data-look="baken"] main.login:not(.portal),
+:root[data-look="baken"] div.boot,
+:root[data-look="baken"][data-theme="light"] main.login:not(.portal),
+:root[data-look="baken"][data-theme="light"] div.boot{
+  background:
+    radial-gradient(760px 460px at 0% 0%,rgba(247,197,72,.17),transparent 64%),
+    radial-gradient(680px 460px at 100% 0%,rgba(132,118,255,.20),transparent 66%),
+    radial-gradient(600px 420px at 100% 100%,rgba(108,196,255,.08),transparent 70%),
+    linear-gradient(135deg,#111116 0%,#1A1A21 50%,#24232F 100%);
+}
+:root[data-look="baken"] main.login:not(.portal)::before,
+:root[data-look="baken"] div.boot::before{
+  background:var(--bk-rays) no-repeat;background-size:1600px 1600px;background-position:-24px -24px;
+  -webkit-mask-image:radial-gradient(80% 90% at 0% 0%,#000 0%,transparent 72%);
+          mask-image:radial-gradient(80% 90% at 0% 0%,#000 0%,transparent 72%);
+}
+:root[data-look="baken"] main.login:not(.portal)::after{background:rgba(247,197,72,.10)}
+:root[data-look="baken"] .bk-motes{position:fixed;inset:0 0 auto 0;height:calc(100vh + 280px);z-index:-1;opacity:.6}
+:root[data-look="baken"] main.login:not(.portal) .brand-icon,
+:root[data-look="baken"] .login-story .brand-icon{
+  display:grid;place-items:center;
+  background:var(--bk-gold-face);color:#191307;
+}
+:root[data-look="baken"] .login-story .brand-icon{width:48px;height:48px;border-radius:15px;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),0 0 0 7px rgba(247,197,72,.08),0 12px 34px -6px rgba(247,197,72,.62)}
+:root[data-look="baken"] .login-story h2 span{background:linear-gradient(92deg,#FFEBB0 0%,#F9CD5A 45%,#EAA924 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+:root[data-look="baken"] .login-story p{color:#B9B9C4}
+:root[data-look="baken"] .login-flow li>span{background:#2A2A34}
+:root[data-look="baken"] .login-flow li.is-done>span{background:rgba(247,197,72,.9)}
+:root[data-look="baken"] .login-flow li.is-now>span{background:var(--bk-gold-face);animation:bk-breathe 2.8s ease-in-out infinite}
+@keyframes bk-breathe{
+  0%,100%{box-shadow:0 0 0 0 rgba(247,197,72,0),0 0 16px rgba(247,197,72,.5)}
+  50%{box-shadow:0 0 0 6px rgba(247,197,72,.16),0 0 24px rgba(247,197,72,.7)}
+}
+/* De inlogkaart: een wit vlak op Dag, nachtgrafiet op Nacht — zoals de
+   kaarten in de werkruimte. */
+:root[data-look="baken"] main.login:not(.portal) .login-card{border-radius:26px}
+
+/* ── 13 · Beweging ───────────────────────────────────────────────────────── */
+/* Wie minder beweging wil, krijgt die: geen opstijgende stofjes, geen
+   ademend goud, geen opspringende menu's. */
+@media (prefers-reduced-motion:reduce){
+  :root[data-look="baken"] .app .cockpit::after,
+  :root[data-look="baken"] .bk-motes,
+  :root[data-look="baken"] .login-flow li.is-now>span,
+  :root[data-look="baken"] .bk-fl.is-betaald .bk-fl-node,
+  :root[data-look="baken"] :is(.bk-create-menu,.gs-panel-ask,.app .modal){animation:none}
+}

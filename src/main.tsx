@@ -17,6 +17,8 @@ import { CheckCircle2, FileText, FolderOpen, Lock, Menu, Receipt, Users, X } fro
 import { isZenitFamily, useLook } from './lib/look';
 import { LightField } from './components/LightField';
 import { StroomIsland } from './components/StroomIsland';
+import { CreateMenu, CREATE_ORDER, type CreateKind } from './components/CreateMenu';
+import { BrandMark } from './components/BrandMark';
 import type { Intent } from './lib/stroom';
 import { dismiss, notify, tintLight } from './lib/stroomBus';
 import { useNarrowViewport } from './lib/useNarrowViewport';
@@ -213,6 +215,10 @@ import './styles/zenit.css';
 // Stroom (designvoorstel 2026-10-30) bouwt op Zenit en legt er het licht en het
 // glas overheen: alleen actief met `data-stroom` op <html> (Probeer Stroom).
 import './styles/stroom.css';
+// Baken (2026-11-06), de standaardlook: de opbouw en de contrasten van Value
+// Backlog in het merk van ResoFly. Helemaal achteraan, want hij legt zich over
+// Cockpit en de teamchat heen; alleen actief met `data-look="baken"` op <html>.
+import './styles/baken.css';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
@@ -3623,6 +3629,52 @@ function App() {
   };
 
   const pageReadOnly = !(orgCanWrite && permissions.canWritePage(page));
+  // Baken: de gouden knop "+ Nieuw" rechtsboven, zoals "Nieuwe taak" in Value
+  // Backlog. Alleen wat dit teamlid mag maken: de module moet open staan en
+  // schrijfbaar zijn, net als bij de knop op de pagina zelf. De rechten gaan per
+  // soort record (canEditKind), niet per pagina: een taak maken vanaf Facturen
+  // hangt aan de module Projecten, niet aan Financiën.
+  const createKinds: CreateKind[] = look !== 'baken' ? [] : CREATE_ORDER.filter(kind => {
+    const target = kind === 'task' ? 'projects' : kind === 'note' ? 'content' : kind === 'quote' ? 'quotes' : kind === 'invoice' ? 'invoices' : kind === 'client' ? 'clients' : kind === 'project' ? 'projects' : 'tickets';
+    return permissions.canOpenPage(target) && canEditKind(kind);
+  });
+  /** Opent het lege bewerkvenster van dit soort, op de pagina waar je bent. Sta
+   *  je bij een klant of project, dan vult het venster die alvast in — zoals de
+   *  knoppen op de klant- en projectpagina dat ook doen. */
+  function createFromBar(kind: CreateKind) {
+    if (!canEditKind(kind)) { setError('Je hebt hier geen wijzigrechten voor. Vraag een owner of admin om deze module voor je open te zetten.'); return; }
+    // Dezelfde vooraf ingevulde velden als de knoppen op de project- en
+    // klantpagina (zie renderPage); elders een leeg venster, zoals op de
+    // overzichtspagina van dat soort.
+    const project = page === 'project' ? data.projects.find(item => item.id === projectId) ?? null : null;
+    const client = page === 'client' ? data.clients.find(item => item.id === clientId) ?? null : null;
+    switch (kind) {
+      case 'task':
+        setEdit(project ? { kind: 'task', projectId: project.id } : client ? { kind: 'task', defaults: { client_id: client.id } } : { kind: 'task' });
+        break;
+      case 'client':
+        setEdit({ kind: 'client' });
+        break;
+      case 'project':
+        setEdit(client ? { kind: 'project', defaults: { client_id: client.id } } : { kind: 'project' });
+        break;
+      case 'ticket':
+        setEdit(client ? { kind: 'ticket', defaults: { client_id: client.id } } : project?.client_id ? { kind: 'ticket', defaults: { client_id: project.client_id } } : { kind: 'ticket' });
+        break;
+      case 'note':
+        setEdit(project ? { kind: 'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' } }
+          : client ? { kind: 'note', item: undefined, defaults: { client_id: client.id } }
+          : { kind: 'note', item: undefined });
+        break;
+      case 'quote':
+      case 'invoice':
+        setEdit(project ? { kind, defaults: { project_id: project.id, client_id: project.client_id ?? '' } }
+          : client ? { kind, defaults: { client_id: client.id } }
+          : { kind });
+        break;
+    }
+  }
+
   // Dezelfde gegevens voor beide navigaties: de zijbalk van Cockpit en de
   // nachtrail met contextpaneel van Zenit.
   const navProps: SidebarProps = {
@@ -3694,6 +3746,14 @@ function App() {
             trailing={look === 'zenit' && !narrowViewport ? <>
               {pageReadOnly && <span className="ztab-ro" title="Je kunt hier kijken, niet wijzigen"><Lock size={12} aria-hidden="true"/>Alleen lezen</span>}
               <GlobalSearch variant="ask" data={data} onNavigate={handleSearchNavigate} canOpenPage={permissions.canOpenPage} onAsk={permissions.canRead('gerrie') ? askGerrie : undefined} />
+            </>
+            /* Baken: rechts in de tabrij wat Value Backlog in zijn bovenbalk
+               heeft: zoeken (met Gerrie) en de gouden knop om iets te maken.
+               Op de telefoon niet: daar is de tabrij al vol, en zoeken staat
+               daar ook in Cockpit niet (globals.css, onder 761px). */
+            : look === 'baken' && !narrowViewport ? <>
+              <GlobalSearch variant="ask" data={data} onNavigate={handleSearchNavigate} canOpenPage={permissions.canOpenPage} onAsk={permissions.canRead('gerrie') ? askGerrie : undefined} />
+              <CreateMenu kinds={createKinds} onCreate={createFromBar} busy={Boolean(edit)} />
             </> : undefined}
           />}
       {projectShift && <ProjectShiftDialog
@@ -3928,9 +3988,12 @@ function Login() {
   }
   // Op een groot scherm staat links het verhaal (het merk en de weg van klant
   // tot betaling), rechts het formulier; op de telefoon alleen het formulier.
-  return <main className="login">{look === 'stroom' && <LightField />}<div className="login-shell">
+  // Baken tekent het echte R-merkteken in de tegel (BrandMark), de andere looks
+  // houden hun letter.
+  const mark = look === 'baken' ? <BrandMark size={48} className="bk-mark" /> : 'R';
+  return <main className="login">{look === 'stroom' && <LightField />}{look === 'baken' && <span className="bk-motes" aria-hidden="true" />}<div className="login-shell">
     <section className="login-story">
-      <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly<small>Werkruimte</small></span></div>
+      <div className="app-brand"><div className="brand-icon">{mark}</div><span>ResoFly<small>Werkruimte</small></span></div>
       <h2>Van eerste mail<br /><span>tot betaalde factuur.</span></h2>
       <p>Klanten, projecten, agenda, uren, offertes en facturen in één werkruimte — met Gerrie, die meedenkt en klaarzet.</p>
       <ol className="login-flow" aria-hidden="true">
@@ -3941,7 +4004,7 @@ function Login() {
         <li><span><CheckCircle2 /></span><small>Betaald</small></li>
       </ol>
     </section>
-    <div className="login-card"><div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Je <span className="serif">werkruimte</span></h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Heeft dit adres een werkruimte, dan staat de link nu in je mailbox. Open hem in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div>
+    <div className="login-card"><div className="app-brand"><div className="brand-icon">{look === 'baken' ? <BrandMark className="bk-mark" /> : 'R'}</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Je <span className="serif">werkruimte</span></h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Heeft dit adres een werkruimte, dan staat de link nu in je mailbox. Open hem in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div>
   </div></main>;
 }
 
