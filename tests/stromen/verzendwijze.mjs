@@ -73,6 +73,19 @@ function tijdVerstrijkt(factuurId, dagen) {
        commit;`);
 }
 
+/**
+ * Een verzendvoorstel van Gerrie, met dezelfde code als in de chat
+ * (buildProposal in _shared/gerrieCore.ts), maar zonder taalmodel ertussen:
+ * de test kiest de tool en de invoer zelf. Als het lid, met schrijfrecht in
+ * Financiën, zoals de chat het voor hem zou doen.
+ */
+let gerrieKern = null;
+async function gerrieVoorstel(w, tool, input) {
+  gerrieKern ??= await import(new URL('../../supabase/functions/_shared/gerrieCore.ts', import.meta.url).href);
+  const ctx = await gerrieKern.buildContext(w.orgId, 'member', { id: w.medewerker.id, email: w.medewerker.email });
+  return gerrieKern.buildProposal(ctx, tool, input);
+}
+
 /** Verstuurt een concept zoals de knop: met includePaymentLink zoals de app die meegeeft. */
 async function verstuur(w, concept, { includePaymentLink = true, klant = w.klantA } = {}) {
   return wf(w, w.medewerker, 'sendInvoiceEmail', {
@@ -188,9 +201,11 @@ export default async function verzendwijze() {
     gelijk(gelukt(res, 'klant bijwerken').map((r) => [r.e_invoicing_enabled, r.e_invoice_channel]), [[true, 'mollie']], 'klant');
   });
 
+  let perMailB = null;
   await stap('per e-mail: een klant op "via Mollie" krijgt de e-factuur per mail (UBL met de PDF erin); Mollie niet gebeld', async () => {
     const voor = post.log.length;
     const concept = await nieuwConcept(w, w.klantB);
+    perMailB = concept;
     const uit = gelukt(await verstuur(w, concept, { klant: w.klantB, includePaymentLink: false }), 'versturen');
     gelijk([uit.deliveryChannel, uit.ubl?.attached, uit.mollieAllowed], ['e_invoice_email', true, false], 'antwoord');
     gelijk(mollieAanroepen(voor), [], 'aanroepen bij Mollie');
@@ -203,12 +218,17 @@ export default async function verzendwijze() {
   // Een factuur die Mollie al uitgaf (van vóór de keuze): niet nog eens per
   // mail, want dan heeft de klant twee facturen met een ander nummer. Eerder
   // hield alleen het Mollie-kanaal dat tegen; per e-mail ging hij erlangs.
+  let mollieUitgegeven = null;
   await stap('per e-mail: een factuur die Mollie al uitgaf, gaat niet nog eens per mail', async () => {
     const concept = await nieuwConcept(w, w.klantB);
+    mollieUitgegeven = concept;
+    // Mollies id per run uniek: (provider, provider_email_id) is uniek over de
+    // hele database, en een scenario moet vaker op dezelfde database kunnen draaien.
+    const mollieId = `invoice_nep${randomUUID().replace(/-/g, '').slice(0, 12)}`;
     sql(`begin; set local session_replication_role = replica;
          update public.invoices set status = 'sent', sent_at = now() where id = ${q(concept.id)};
          insert into public.invoice_email_deliveries (organization_id, invoice_id, provider, provider_email_id, recipient_email, subject, status, delivery_channel, external_invoice_number, external_status)
-         values (${q(w.orgId)}, ${q(concept.id)}, 'mollie', 'invoice_nepvzw01', ${q(w.klantB.email)}, 'Factuur', 'sent', 'e_invoice_mollie', 'INV-0000042', 'issued');
+         values (${q(w.orgId)}, ${q(concept.id)}, 'mollie', ${q(mollieId)}, ${q(w.klantB.email)}, 'Factuur', 'sent', 'e_invoice_mollie', 'INV-0000042', 'issued');
          commit;`);
     const voor = post.log.length;
     const mailsVoor = mailsAan(w.klantB.email).length;
@@ -216,6 +236,24 @@ export default async function verzendwijze() {
     verwacht(/al via Mollie uitgegeven als INV-0000042/.test(uit.error), `melding: ${uit.error}`);
     gelijk(mailsAan(w.klantB.email).length, mailsVoor, 'mails naar de klant');
     gelijk(mollieAanroepen(voor).filter((regel) => regel.includes('/sales-invoices')), [], 'een tweede factuur bij Mollie');
+  });
+
+  // Gerrie zet versturen klaar; de mens keurt goed in de chat. Eerder keek hij
+  // alleen naar het kanaal van de klant: per e-mail zou hij een factuur die
+  // Mollie al uitgaf weer klaarzetten, en de klant kreeg een tweede factuur.
+  await stap('Gerrie, per e-mail: een factuur die Mollie al uitgaf zet hij niet klaar; een verstuurde factuur van een klant op "via Mollie" wel (die gaat per mail)', async () => {
+    verwacht(perMailB && mollieUitgegeven, 'de facturen van de vorige stappen ontbreken');
+    const uitgegeven = await gerrieVoorstel(w, 'propose_send_invoice', { id: mollieUitgegeven.id });
+    gelijk(uitgegeven.ok, false, 'voorstel voor de factuur die Mollie uitgaf');
+    verwacht(/al via Mollie uitgegeven/.test(uitgegeven.error), `melding: ${uitgegeven.error}`);
+    const perMail = await gerrieVoorstel(w, 'propose_send_invoice', { id: perMailB.id });
+    gelijk([perMail.ok, perMail.proposal?.type, perMail.proposal?.id, perMail.proposal?.recipient_email],
+      [true, 'send_invoice', perMailB.id, w.klantB.email], 'voorstel voor de per mail verstuurde factuur');
+    const reeks = await gerrieVoorstel(w, 'propose_send_invoices', { ids: [perMailB.id, mollieUitgegeven.id] });
+    gelijk([reeks.ok, reeks.proposal?.type], [true, 'send_invoices'], 'reeks');
+    gelijk(reeks.proposal.items.map((item) => item.id), [perMailB.id], 'klaargezet');
+    gelijk(reeks.proposal.skipped.map((s) => s.number), [mollieUitgegeven.number], 'overgeslagen');
+    verwacht(/al via Mollie uitgegeven/.test(reeks.proposal.skipped[0].reason), `reden: ${reeks.proposal.skipped[0].reason}`);
   });
 
   // ── 4. Terug naar via Mollie ────────────────────────────────────────────
@@ -240,5 +278,21 @@ export default async function verzendwijze() {
     // maar het verzoek moet er wel heen. Per e-mail kwam het er niet.
     await verstuur(w, concept, { klant: w.klantB, includePaymentLink: false });
     verwacht(mollieAanroepen(voor).some((regel) => regel.startsWith('mollie POST /v2/sales-invoices')), `niet naar Mollie: ${mollieAanroepen(voor).join(', ')}`);
+  });
+
+  // Via Mollie zou de verstuurde factuur van klant B nu naar Mollie gaan, en
+  // Mollie maakt er een nieuwe factuur met een eigen nummer van: dubbel.
+  await stap('Gerrie, via Mollie: beide facturen van klant B zet hij niet (opnieuw) klaar, elk met de eigen reden', async () => {
+    verwacht(perMailB && mollieUitgegeven, 'de facturen van de vorige stappen ontbreken');
+    const perMail = await gerrieVoorstel(w, 'propose_send_invoice', { id: perMailB.id });
+    gelijk(perMail.ok, false, 'voorstel voor de per mail verstuurde factuur');
+    verwacht(/Mollie zou er een nieuwe factuur met een eigen nummer van maken/.test(perMail.error), `melding: ${perMail.error}`);
+    const uitgegeven = await gerrieVoorstel(w, 'propose_send_invoice', { id: mollieUitgegeven.id });
+    gelijk(uitgegeven.ok, false, 'voorstel voor de factuur die Mollie uitgaf');
+    verwacht(/al via Mollie uitgegeven/.test(uitgegeven.error), `melding: ${uitgegeven.error}`);
+    const reeks = await gerrieVoorstel(w, 'propose_send_invoices', { ids: [perMailB.id, mollieUitgegeven.id] });
+    gelijk(reeks.ok, false, 'reeks');
+    verwacht(reeks.error.includes(`${perMailB.number} (al verstuurd; via Mollie zou het een tweede factuur worden)`), `reden voor ${perMailB.number}: ${reeks.error}`);
+    verwacht(reeks.error.includes(`${mollieUitgegeven.number} (al via Mollie uitgegeven`), `reden voor ${mollieUitgegeven.number}: ${reeks.error}`);
   });
 }
