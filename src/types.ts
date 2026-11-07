@@ -2928,7 +2928,7 @@ export type BankStatementFormat = 'camt053' | 'mt940' | 'csv' | 'gocardless';
 /**
  * 'merged': een bankregel die een handmatig ingevoerde mutatie bevestigt. Hij
  * verwijst met merged_into_id naar die mutatie, en die draagt de boeking; los
- * boeken of negeren kan niet (migratie 20261107100000).
+ * boeken of negeren kan niet (migratie 20261107110000).
  */
 export type BankTransactionStatus = 'unmatched' | 'suggested' | 'booked' | 'ignored' | 'merged';
 export type BankRuleDirection = 'in' | 'out' | 'both';
@@ -3032,7 +3032,7 @@ export interface BankTransaction {
   notes: string | null;
   created_at: string;
   updated_at: string;
-  /** Met de hand ingevoerd in plaats van van de bank. Optioneel: vóór migratie 20261107100000 bestond het niet. */
+  /** Met de hand ingevoerd in plaats van van de bank. Optioneel: vóór migratie 20261107110000 bestond het niet. */
   is_manual?: boolean;
   created_by?: UUID | null;
   /** Bij een bankregel met status 'merged': de handmatige mutatie die hij bevestigt. */
@@ -3173,7 +3173,7 @@ export interface BankReconciliation {
   /** Afschriftsaldo − (grootboekstand + nog niet geboekt). 0 = sluitend; null = geen afschriftsaldo bekend. */
   difference_cents: number | null;
   duplicate_suspects: number;
-  /** Handmatige mutaties op deze rekening (vanaf 20261107100000). */
+  /** Handmatige mutaties op deze rekening (vanaf 20261107110000). */
   manual_count?: number;
   /** Samengevoegde paren met de handmatige boeking aan de andere kant van de peildatum. */
   timing_count?: number;

@@ -244,7 +244,7 @@ $$;
 
 -- ── 4. Wat staat er open: uit de verdeling ──────────────────────────────────
 
--- GEWIJZIGD (20261107100000): de bankontvangsten en -terugbetalingen komen uit
+-- GEWIJZIGD (20261107110000): de bankontvangsten en -terugbetalingen komen uit
 -- de verdeling. Eerder telde hier élke debiteurenregel van de bankboeking met
 -- matched_invoice_id = deze factuur; een betaling over drie facturen telde dan
 -- drie keer het hele bedrag af.
@@ -304,7 +304,7 @@ as $$
   select (select cents from booked) - (select cents from bank) - (select cents from psp) - (select cents from credits);
 $$;
 
--- GEWIJZIGD (20261107100000): betalingen uit de verdeling (zie hierboven).
+-- GEWIJZIGD (20261107110000): betalingen uit de verdeling (zie hierboven).
 create or replace function public.purchase_invoice_open_payable_cents(p_organization_id uuid, p_purchase_invoice_id uuid)
 returns bigint
 language sql
@@ -329,7 +329,7 @@ as $$
   ), 0)::bigint;
 $$;
 
--- GEWIJZIGD (20261107100000): betaaldatum uit de verdeling, en een creditnota
+-- GEWIJZIGD (20261107110000): betaaldatum uit de verdeling, en een creditnota
 -- van de leverancier (negatief totaal) staat op betaald zodra hij het geld
 -- terugstortte. Die bleef eerder voorgoed op 'unpaid'.
 create or replace function public.refresh_purchase_invoice_payment_status(p_organization_id uuid, p_purchase_invoice_id uuid)
@@ -513,7 +513,7 @@ end;
 $$;
 
 -- ── 6. Matchen ──────────────────────────────────────────────────────────────
--- GEWIJZIGD (20261107100000): eerst samenvoegen, dan pas matchen. Anders boekte
+-- GEWIJZIGD (20261107110000): eerst samenvoegen, dan pas matchen. Anders boekte
 -- een bankregel met "automatisch boeken" de bankregel die bij een al geboekte
 -- handmatige mutatie hoorde: hetzelfde geld twee keer in de boeken.
 -- Nieuw: p_transaction_id (alleen die ene) en p_auto_book (false = alleen
@@ -869,7 +869,7 @@ begin
   -- houden ze het statement_id van de eerste import. Tellen op statement_id zou
   -- dan alleen februari zien tegen een begin-/eindsaldo over jan+feb — structureel
   -- vals alarm, precies de ruis die deze controle onbruikbaar zou maken.
-  -- GEWIJZIGD (20261107100000): handmatige mutaties staan op geen enkel
+  -- GEWIJZIGD (20261107110000): handmatige mutaties staan op geen enkel
   -- afschrift; die tellen hier niet mee (anders klopte geen afschrift meer).
   if v_stmt_id is not null and v_opening is not null and v_closing is not null
      and v_period_start is not null and v_period_end is not null then
@@ -906,7 +906,7 @@ end;
 $function$;
 
 -- ── 8. Boeken: een verdeling over facturen, creditnota's en rekeningen ──────
--- GEWIJZIGD (20261107100000): nieuwe parameters p_allocations en p_description.
+-- GEWIJZIGD (20261107110000): nieuwe parameters p_allocations en p_description.
 -- De oude manieren (p_matched_invoice_id, p_matched_purchase_invoice_id,
 -- p_lines) werken zoals voorheen: ze worden omgezet naar een verdeling van één
 -- of meer regels. Nieuw is dat de regels precies op het bedrag van de
@@ -1539,7 +1539,7 @@ end;
 $$;
 
 -- ── 9. Terugdraaien ─────────────────────────────────────────────────────────
--- GEWIJZIGD (20261107100000): alle facturen uit de verdeling gaan mee terug
+-- GEWIJZIGD (20261107110000): alle facturen uit de verdeling gaan mee terug
 -- (eerder alleen matched_invoice_id), en inkoopfacturen krijgen hun betaalstatus
 -- opnieuw. De verdeling blijft bewaard: ze hoort bij de tegengeboekte boeking.
 create or replace function public.unbook_bank_transaction(p_organization_id uuid, p_transaction_id uuid, p_created_by uuid default auth.uid())
@@ -1597,7 +1597,7 @@ begin
 
   -- TOEGEVOEGD (20261104010000): zette deze betaling de factuur op betaald en
   -- staat er nu weer iets open, dan gaat de factuur terug naar verzonden of
-  -- achterstallig. GEWIJZIGD (20261107100000): elke factuur uit de verdeling.
+  -- achterstallig. GEWIJZIGD (20261107110000): elke factuur uit de verdeling.
   update public.invoices
   set status = case when due_date is not null and due_date < current_date then 'overdue' else 'sent' end,
       paid_at = null,
@@ -1639,7 +1639,7 @@ begin
   if v_txn.status = 'booked' then
     raise exception 'Een geboekte transactie moet eerst worden teruggedraaid.' using errcode = '23514';
   end if;
-  -- TOEGEVOEGD (20261107100000)
+  -- TOEGEVOEGD (20261107110000)
   if v_txn.status = 'merged' then
     raise exception 'Deze banktransactie is samengevoegd met een handmatige mutatie. Maak dat eerst los als hij apart moet.' using errcode = '23514';
   end if;
@@ -2160,7 +2160,7 @@ end;
 $$;
 
 -- ── 13. Saldo-aansluiting ───────────────────────────────────────────────────
--- GEWIJZIGD (20261107100000):
+-- GEWIJZIGD (20261107110000):
 --   * een handmatige mutatie staat op geen afschrift: niet bij "nog te boeken"
 --     of "genegeerd", niet bij de vermoedelijke dubbelen en niet in de
 --     afschriftcontrole;
@@ -2359,7 +2359,7 @@ end;
 $$;
 
 -- ── 14. Openstaande posten ──────────────────────────────────────────────────
--- GEWIJZIGD (20261107100000): wat per factuur betaald is komt uit de verdeling,
+-- GEWIJZIGD (20261107110000): wat per factuur betaald is komt uit de verdeling,
 -- met de datum van de boeking en van een eventuele tegenboeking (zoals de
 -- grootboekregels op die peildatum). Eerder: alle debiteurenregels van een
 -- boeking bij matched_invoice_id.
@@ -2530,7 +2530,7 @@ end;
 $function$;
 
 -- ── 15. Tegenboeken: een betaalde inkoopfactuur ─────────────────────────────
--- GEWIJZIGD (20261107100000): "er is al op betaald" kijkt naar de verdeling, zodat
+-- GEWIJZIGD (20261107110000): "er is al op betaald" kijkt naar de verdeling, zodat
 -- ook een verzamelbetaling over meerdere inkoopfacturen telt. Verder gelijk aan
 -- 20261105233000.
 CREATE OR REPLACE FUNCTION public.reverse_journal_entry(p_entry_id uuid, p_date date DEFAULT NULL::date, p_created_by uuid DEFAULT auth.uid())
@@ -2634,7 +2634,7 @@ begin
   -- opnieuw boeken kon nooit meer. Nu gaat hij mee terug naar concept
   -- (onderaan). Is er al op betaald, dan eerst die betaling: anders blijft de
   -- betaling op 1600 staan zonder factuur ertegenover.
-  -- GEWIJZIGD (20261107100000): uit de verdeling, zodat een betaling over
+  -- GEWIJZIGD (20261107110000): uit de verdeling, zodat een betaling over
   -- meerdere inkoopfacturen ook telt; de oude kolom blijft als vangnet.
   if v_src.source_type = 'purchase_invoice' and (exists (
     select 1 from public.bank_transaction_allocations a

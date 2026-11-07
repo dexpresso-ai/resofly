@@ -1,6 +1,6 @@
 /**
  * Een banktransactie verdelen over facturen, creditnota's, inkoopfacturen en
- * grootboekrekeningen (migratie 20261107100000).
+ * grootboekrekeningen (migratie 20261107110000).
  *
  * Puur rekenwerk en voorstellen, zonder React of database, zodat de regels
  * unit-tests hebben. Het scherm (src/features/Bank.tsx) bouwt hierop; de

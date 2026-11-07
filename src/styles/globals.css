@@ -3469,7 +3469,7 @@ body::before{
 .bank-inst-name{flex:1;font-weight:600}
 .bank-psu{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
 .bank-tag-test{color:var(--accent-ink);background:rgba(var(--accent-rgb),.1);border-color:rgba(var(--accent-rgb),.28)}
-/* Handmatige mutaties en het verdelen van een banktransactie (20261107100000).
+/* Handmatige mutaties en het verdelen van een banktransactie (20261107110000).
    Een verdeling is een kolom regels; elke regel wrapt zelf, zodat een regel met
    rekening, btw, klant, bedrag en omschrijving op een laptop op één lijn past
    en op een telefoon onder elkaar valt. */

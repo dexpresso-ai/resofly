@@ -4797,7 +4797,7 @@ async function listBankTransactions(orgId: string, input: Record<string, unknown
   let rows = (data ?? []) as Array<Record<string, unknown>>;
   // "Nog niet verwerkt" = er hangt geen journaalpost aan; dat is de enige harde
   // maatstaf, los van hoe de statuswaarden in de tijd zijn gaan heten.
-  // GEWIJZIGD (20261107100000): een bankregel die met een handmatige mutatie is
+  // GEWIJZIGD (20261107110000): een bankregel die met een handmatige mutatie is
   // samengevoegd ('merged') is wél verwerkt: die mutatie draagt de boeking. Een
   // genegeerde ook: daar valt niets te boeken.
   if (input.unreconciled_only === true) rows = rows.filter((r) => !r.journal_entry_id && r.status !== 'merged' && r.status !== 'ignored');

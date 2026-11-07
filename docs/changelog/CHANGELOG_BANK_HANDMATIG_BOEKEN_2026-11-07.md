@@ -111,7 +111,7 @@ weg als de knop.
   `unreconciled_only` tellen samengevoegde en genegeerde regels niet meer als
   "nog te verwerken".
 
-## Database: `20261107100000_bank_handmatig_boeken.sql`
+## Database: `20261107110000_bank_handmatig_boeken.sql`
 
 - `bank_transactions`: `is_manual`, `created_by`, `merged_into_id`,
   `merged_at`, `merged_by`, `auto_merge_blocked`, status `merged`. Een
@@ -215,7 +215,10 @@ Veilig om meermaals te draaien.
   gelegd: alleen de bedoelde verschillen. Dezelfde controle als de rooktest:
   anon heeft in public nergens rechten. Staging stond op 20261106173000, met
   3.620 open en geen geboekte banktransacties: de overzetting van bestaande
-  boekingen doet daar niets.
+  boekingen doet daar niets. Bij het samenvoegen met staging bleek dat een
+  andere wijziging (facturen versturen) intussen versie 20261107100000 had
+  gekregen; deze migratie heet daarom 20261107110000. Met dezelfde versie had
+  `supabase db push` hem als al toegepast overgeslagen.
 - `npm run test:mobile -- --theme=both`: 344 pagina's gemeten, 0 met
   problemen. De nagebootste backend van die test heeft geen rekeningschema, dus
   de Bankpagina toont daar de lege stand; het verdeelscherm zelf zit in de

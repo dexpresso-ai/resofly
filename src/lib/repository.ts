@@ -1896,13 +1896,13 @@ export const selectBankTransactions = (organizationId: UUID) =>
   selectOptional<BankTransaction>('bank_transactions', organizationId, { orderBy: 'booking_date', ascending: false, hint: BANKFEED_MIGRATION_HINT });
 /**
  * De verdeling van bankboekingen, met het nummer van een creditnota erbij (de
- * creditnota's zelf laadt de bankpagina niet). Tabel uit 20261107100000; ervóór
+ * creditnota's zelf laadt de bankpagina niet). Tabel uit 20261107110000; ervóór
  * een lege lijst.
  */
 export const selectBankAllocations = (organizationId: UUID) =>
   selectOptional<BankAllocation>('bank_transaction_allocations', organizationId, {
     orderBy: 'created_at', ascending: true, thenBy: 'position', columns: '*, credit_note:credit_notes(number)',
-    hint: 'Voer de migratie 20261107100000_bank_handmatig_boeken.sql uit om banktransacties te kunnen verdelen.',
+    hint: 'Voer de migratie 20261107110000_bank_handmatig_boeken.sql uit om banktransacties te kunnen verdelen.',
   });
 export const selectBankRules = (organizationId: UUID) =>
   selectOptional<BankRule>('bank_rules', organizationId, { orderBy: 'priority', ascending: true, hint: BANKFEED_MIGRATION_HINT });
@@ -2088,7 +2088,7 @@ export async function bookBankTransaction(
     p_matched_invoice_id: options.matchedInvoiceId ?? null,
     p_matched_purchase_invoice_id: options.matchedPurchaseInvoiceId ?? null,
   };
-  // Alleen meesturen wat er is: een database van vóór 20261107100000 kent deze
+  // Alleen meesturen wat er is: een database van vóór 20261107110000 kent deze
   // twee niet, en dan blijft de oude manier werken.
   if (options.allocations?.length) params.p_allocations = options.allocations;
   if (options.description?.trim()) params.p_description = options.description.trim();
