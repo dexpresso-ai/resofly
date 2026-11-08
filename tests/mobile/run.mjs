@@ -99,6 +99,9 @@ const PAGES = {
   // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat
   // op de telefoon onder elkaar.
   'settings-boekhouder': { page: 'settings', prepare: '[data-settings-tab="boekhouder"]' },
+  // Instellingen → Logboek (november 2026): de tijdlijn per dag met de
+  // filters erboven; op de telefoon de velden achter één knop.
+  'settings-logboek': { page: 'settings', prepare: '[data-settings-tab="logboek"]' },
   // Instellingen → Huisstijl: de instellingen met het klantportaal als
   // voorbeeld ernaast (op de telefoon eronder), in een iframe.
   'settings-huisstijl': { page: 'settings', prepare: '[data-settings-tab="huisstijl"]' },

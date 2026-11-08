@@ -1,5 +1,5 @@
 import {
-  ActionError, bool, choice, id, isoDate, joinShort, num, optChoice, optIsoDate,
+  ActionError, bool, choice, id, isoDate, joinShort, num, optChoice, optId, optIsoDate,
   optNum, optStr, orgQuery, row,
   type ActionCtx, type ActionDef, type ActionPlan,
 } from './types.ts';
@@ -54,7 +54,7 @@ const MODULE_LABELS: Record<string, string> = {
 export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   member: null, organization: null,
   api_key: 'admin', webhook_endpoint: 'admin', invitation: 'admin', calendar_connection: 'admin', mollie_connection: 'admin', subscription: 'admin',
-  billing_profile: 'admin', billing_event: 'admin', payment: 'admin', license_change: 'admin', license_event: 'admin',
+  billing_profile: 'admin', billing_event: 'admin', payment: 'admin', license_change: 'admin', license_event: 'admin', email_template: 'admin',
   annual_account: 'finance', annual_account_filing: 'finance', annual_account_signature: 'finance', bank_account: 'finance',
   bank_rule: 'finance', bank_transaction: 'finance', company_settings: 'finance', contract: 'finance', contract_note: 'finance', contract_project: 'finance',
   contract_template: 'finance', corporate_tax_return: 'finance', credit_note: 'finance', dividend_distribution: 'finance',
@@ -62,14 +62,15 @@ export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   ledger_account: 'finance', partnership_partner: 'finance', purchase_invoice: 'finance', quote: 'finance', result_appropriation: 'finance',
   share_transaction: 'finance', shareholder: 'finance', supplier: 'finance', vat_return: 'finance',
   calendar_event: 'calendar', calendar_event_link: 'calendar', calendar_source: 'calendar', note_calendar_link: 'calendar',
-  client: 'clients', client_call: 'clients', client_contact: 'clients',
+  client: 'clients', client_call: 'clients', client_contact: 'clients', client_field: 'clients',
   project: 'projects', project_member: 'projects', project_template: 'projects', project_template_task: 'projects',
-  task: 'projects', task_assignee: 'projects',
+  task: 'projects', task_assignee: 'projects', gallery: 'projects',
   ticket: 'tickets', ticket_note: 'tickets',
   time_entry: 'time',
   attachment: 'content', content_folder: 'content', document: 'content', drive_share: 'content', file_transfer: 'content',
   note: 'content', note_handwriting: 'content',
   saved_report: 'stats',
+  email_campaign: 'marketing', email_flow: 'marketing',
 };
 
 /**
@@ -379,18 +380,21 @@ export const ADMIN_ACTIONS: ActionDef[] = [
     module: 'stats',
     kind: 'read',
     description:
-      'Geeft de server-side gelogde wijzigingen binnen deze organisatie: wat er is aangemaakt, bijgewerkt of verwijderd, wie er is uitgenodigd, welke rol is gewijzigd, en gebeurtenissen rond plan en betaling. De log is alleen-lezen en wordt door database-triggers gevuld — hij is de enige plek waar je terugziet wie wat wanneer deed. ' +
+      'Geeft de server-side gelogde wijzigingen binnen deze organisatie (het logboek onder Instellingen): wat er is aangemaakt, bijgewerkt of verwijderd, wie er is uitgenodigd, welke rol is gewijzigd, facturen en offertes die verstuurd, betaald of geaccepteerd zijn, en gebeurtenissen rond plan en betaling. De log is alleen-lezen en wordt door database-triggers gevuld — hij is de enige plek waar je terugziet wie wat wanneer deed. ' +
+      'Per regel: actor_label (wie), via (app = in de app, koppeling = via Gerrie, een agent of de API namens dat teamlid, systeem = zonder gebruiker), client_id en project_id (waar), en in metadata.changes per veld old → new; van teksten alleen dat ze veranderden. event_count > 1 = een reeks wijzigingen kort na elkaar, tot last_at. ' +
       'Je ziet alleen regels over modules die je mag lezen; sleutels, webhooks, uitnodigingen en betalingen alleen als owner of admin.',
     keywords: ['audit', 'log', 'logboek', 'historie', 'geschiedenis', 'wie deed wat', 'wijzigingen', 'activiteit'],
     input: {
       entity_type: { type: 'string', description: 'Alleen dit soort rijen, bijvoorbeeld "invoice", "client" of "member".' },
       action: { type: 'string', description: 'Alleen deze soort gebeurtenis: created, updated, deleted, invited, accepted, revoked, role_changed, disabled.' },
       since: { type: 'string', description: 'Alleen vanaf deze datum (JJJJ-MM-DD).' },
+      client_id: { type: 'string', description: 'Alleen regels bij deze klant (id).' },
+      project_id: { type: 'string', description: 'Alleen regels bij dit project (id).' },
       limit: { type: 'number', description: 'Maximaal aantal regels (standaard 25, hoogstens 100).' },
     },
     async read(ctx, input) {
       const limit = Math.min(Math.max(Number(input.limit) || 25, 1), 100);
-      let query = orgQuery(ctx, 'audit_logs', 'id, actor_user_id, action, entity_type, entity_id, entity_label, metadata, created_at')
+      let query = orgQuery(ctx, 'audit_logs', 'id, actor_user_id, actor_label, via, action, entity_type, entity_id, entity_label, client_id, project_id, event_count, metadata, created_at, last_at')
         .order('created_at', { ascending: false }).limit(limit);
       const visible = visibleAuditEntityTypes(ctx);
       const entityType = optStr(input, 'entity_type', 60);
@@ -403,6 +407,11 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       if (action) query = query.eq('action', action);
       const since = optIsoDate(input, 'since');
       if (since) query = query.gte('created_at', `${since}T00:00:00Z`);
+      // Een filter, geen grens: orgQuery houdt het al binnen deze organisatie.
+      const clientId = optId(input, 'client_id');
+      if (clientId) query = query.eq('client_id', clientId);
+      const projectId = optId(input, 'project_id');
+      if (projectId) query = query.eq('project_id', projectId);
       const { data, error } = await query;
       if (error) throw new ActionError(`Audit-log ophalen mislukt: ${error.message}`);
       return { count: data?.length ?? 0, entries: data ?? [] };
