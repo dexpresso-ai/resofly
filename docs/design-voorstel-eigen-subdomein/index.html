@@ -1,0 +1,646 @@
+<title>Eigen subdomein in ResoFly</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Voorstel: elke organisatie zet albums, offertes, facturen en het klantportaal op een eigen adres, zoals portaal.fotostudiojansen.nl.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&family=Instrument+Serif:ital@0;1&display=swap">
+<style>
+/* Opbouw: zoals de werkruimte (Baken). Bovenin een donker commandovlak met de
+   kern van het voorstel en wat de klant ziet; daaronder het werkvlak met het
+   instellingenscherm (werkend), het verkeer, de afspraken, de fasering en de
+   beslispunten. Kleuren en vorm komen uit de Baken-tokens van ResoFly; donker
+   is de standaard, Dag volgt het systeem. */
+:root{
+  --ground:#0E0E12;
+  --bg:#15151B;
+  --surface:#1B1B22;
+  --surface-2:#212129;
+  --surface-3:#282831;
+  --line:#2A2A33;
+  --line-2:#363640;
+  --ink:#F3F3F6;
+  --ink-2:#B9B9C4;
+  --ink-3:#9494A1;
+  --gold:#F7C548;
+  --gold-ink:#F7C548;
+  --on-gold:#1A1405;
+  --gold-soft:rgba(247,197,72,.14);
+  --aurora:#9C91FF;
+  --ok:#5BD69A;
+  --on-ok:#062417;
+  --ok-soft:rgba(91,214,154,.14);
+  --warn:#F5A54A;
+  --busy-soft:rgba(247,197,72,.12);
+  --shadow-card:0 1px 2px rgba(0,0,0,.25),0 12px 28px -18px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.045);
+  --focus:0 0 0 3px rgba(247,197,72,.45);
+
+  /* Het commandovlak is in beide thema's donker, zoals in de app. */
+  --cmd-ink:#F3F3F6;
+  --cmd-ink-2:#B9B9C4;
+  --cmd-line:rgba(255,255,255,.09);
+  --cmd-bg:
+    radial-gradient(680px 320px at 0% 0%,rgba(247,197,72,.19),transparent 62%),
+    radial-gradient(560px 340px at 100% 0%,rgba(132,118,255,.20),transparent 64%),
+    linear-gradient(135deg,#15151B 0%,#1F1F28 46%,#2C2B39 100%);
+
+  --font-sans:'Geist',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+  --font-mono:'Geist Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --font-display:'Instrument Serif','Iowan Old Style',Georgia,serif;
+
+  --r-canvas:24px;
+  --r-card:18px;
+  --r-ctl:12px;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --ground:#E9E9EE; --bg:#F2F2F5; --surface:#FFFFFF; --surface-2:#F6F6F9; --surface-3:#EDEDF2;
+    --line:#E3E3EA; --line-2:#D5D5DE; --ink:#16161C; --ink-2:#4A4A57; --ink-3:#5E5E6B;
+    --gold-ink:#855800; --gold-soft:rgba(247,197,72,.22); --aurora:#5B4BE0;
+    --ok:#0F6344; --on-ok:#FFFFFF; --ok-soft:rgba(15,99,68,.10); --warn:#8A4B00; --busy-soft:rgba(247,197,72,.20);
+    --shadow-card:0 1px 2px rgba(22,22,28,.05),0 8px 24px -16px rgba(22,22,28,.24);
+    color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --ground:#E9E9EE; --bg:#F2F2F5; --surface:#FFFFFF; --surface-2:#F6F6F9; --surface-3:#EDEDF2;
+  --line:#E3E3EA; --line-2:#D5D5DE; --ink:#16161C; --ink-2:#4A4A57; --ink-3:#5E5E6B;
+  --gold-ink:#855800; --gold-soft:rgba(247,197,72,.22); --aurora:#5B4BE0;
+  --ok:#0F6344; --on-ok:#FFFFFF; --ok-soft:rgba(15,99,68,.10); --warn:#8A4B00; --busy-soft:rgba(247,197,72,.20);
+  --shadow-card:0 1px 2px rgba(22,22,28,.05),0 8px 24px -16px rgba(22,22,28,.24);
+  color-scheme:light;
+}
+
+*{box-sizing:border-box}
+/* Grids met één kolom: zonder dit duwt een brede tabel de hele pagina breder
+   dan de telefoon (de kolom groeit mee met de inhoud). */
+main > *,.cmd .wrap > *,.scene > *,.set-main > *,.steps > *,.step-body > *,.flow > *,.lane > *{min-width:0}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{margin:0;text-wrap:balance;letter-spacing:-.02em}
+p{margin:0}
+code,.mono{font-family:var(--font-mono);font-size:.88em}
+a{color:var(--gold-ink)}
+:focus-visible{outline:none;box-shadow:var(--focus);border-radius:8px}
+
+.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.eyebrow{font-size:11.5px;font-weight:650;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+
+/* ── Commandovlak ─────────────────────────────────────────── */
+.cmd{background:var(--cmd-bg);color:var(--cmd-ink);border-bottom:1px solid var(--cmd-line)}
+.cmd .wrap{padding-block:44px 52px;display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.3fr);gap:40px;align-items:center}
+.cmd .eyebrow{color:#F7C548}
+.cmd h1{font-family:var(--font-display);font-weight:400;font-size:clamp(38px,5.2vw,62px);line-height:1.02;letter-spacing:-.01em;margin-top:14px}
+.cmd h1 em{color:#F7C548}
+.cmd .lede{color:var(--cmd-ink-2);font-size:16.5px;max-width:52ch;margin-top:18px}
+.cmd .facts{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+.fact{border:1px solid var(--cmd-line);background:rgba(255,255,255,.04);border-radius:999px;padding:6px 12px;font-size:13px;color:var(--cmd-ink-2)}
+.fact b{color:var(--cmd-ink);font-weight:600}
+
+/* Wat de klant ziet: mail + browser */
+.scene{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:16px;align-items:end}
+.mail{background:#FBFBFC;color:#1A1A20;border-radius:var(--r-card);padding:18px;box-shadow:0 30px 60px -30px rgba(0,0,0,.8);font-size:13.5px;display:grid;gap:10px}
+.mail-head{display:flex;gap:10px;align-items:center;padding-bottom:10px;border-bottom:1px solid #E6E6EC}
+.avatar{width:34px;height:34px;border-radius:50%;background:#0F2F2A;color:#EAF5F2;display:grid;place-items:center;font-weight:700;font-size:12px;flex:none}
+.mail-from{min-width:0;line-height:1.35}
+.mail-from b{font-weight:650}
+.mail-from .addr{color:#5A5A66;font-family:var(--font-mono);font-size:11.5px;overflow-wrap:anywhere}
+.mail h4{font-size:16px}
+.mail p{color:#3D3D48}
+.mail-btn{justify-self:start;background:#24735F;color:#fff;font-weight:600;border-radius:10px;padding:9px 14px;font-size:13px}
+.mail-link{font-family:var(--font-mono);font-size:11px;color:#1F6F60;overflow-wrap:anywhere}
+
+.browser{border-radius:16px;overflow:hidden;background:#0B1513;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 40px 80px -36px rgba(0,0,0,.9)}
+.browser-bar{display:flex;align-items:center;gap:10px;padding:9px 12px;background:#202028;border-bottom:1px solid rgba(255,255,255,.06)}
+.dots{display:flex;gap:5px;flex:none}
+.dots i{width:9px;height:9px;border-radius:50%;background:#3A3A46}
+.url{flex:1;min-width:0;display:flex;align-items:center;gap:6px;background:#15151B;border-radius:8px;padding:5px 10px;font-family:var(--font-mono);font-size:11.5px;color:#9494A1;white-space:nowrap;overflow:hidden}
+.url svg{flex:none}
+.url-host{color:#F3F3F6}
+.url-path{overflow:hidden;text-overflow:ellipsis}
+.t-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;background:#0F2F2A;color:#EAF5F2}
+.t-brand{display:flex;align-items:center;gap:8px;font-weight:650;font-size:13px}
+.t-mark{width:24px;height:24px;border-radius:7px;background:#3FA48C;color:#06201B;display:grid;place-items:center;font-size:10.5px;font-weight:800}
+.t-nav{display:flex;gap:12px;font-size:11.5px;color:#A9C9C1}
+.t-nav span:first-child{color:#EAF5F2;border-bottom:2px solid #3FA48C;padding-bottom:2px}
+.t-hero{padding:14px 14px 10px;color:#EAF5F2}
+.t-hero small{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:#7FB5A8}
+.t-hero h3{font-family:var(--font-display);font-weight:400;font-size:26px;line-height:1.05;margin-top:4px}
+.t-hero p{font-size:11.5px;color:#A9C9C1;margin-top:3px}
+.t-grid{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:46px;gap:4px;padding:4px 14px 14px}
+.t-grid i{border-radius:4px;display:block}
+.t-grid i:nth-child(1){grid-row:span 2;grid-column:span 2;background:linear-gradient(160deg,#E8B07A,#B5654A 55%,#3B2A2E)}
+.t-grid i:nth-child(2){background:linear-gradient(200deg,#9DB8A0,#4F7461)}
+.t-grid i:nth-child(3){grid-row:span 2;background:linear-gradient(180deg,#F1D7B0,#C98F62 60%,#6B4234)}
+.t-grid i:nth-child(4){background:linear-gradient(140deg,#5B7C8F,#22343F)}
+.t-grid i:nth-child(5){background:linear-gradient(120deg,#D9C6A5,#8C7155)}
+.t-grid i:nth-child(6){grid-column:span 2;background:linear-gradient(100deg,#2E4B3F,#7FA38C 60%,#E4D3A8)}
+.t-grid i:nth-child(7){background:linear-gradient(170deg,#C7A2B5,#6F4C63)}
+.t-grid i:nth-child(8){background:linear-gradient(210deg,#F0C98A,#A0603D)}
+.t-foot{padding:8px 14px 12px;font-size:10.5px;color:#6E9A90}
+
+/* ── Werkvlak ─────────────────────────────────────────────── */
+main{display:grid;gap:64px;padding-block:56px 72px}
+.sec-head{display:grid;gap:8px;max-width:68ch;margin-bottom:22px}
+.sec-head h2{font-size:clamp(24px,3vw,30px);font-weight:650}
+.sec-head p{color:var(--ink-2)}
+
+/* Wat er via het adres loopt */
+.routes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.route{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-ctl);padding:14px 16px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-items:center}
+.route b{font-weight:600}
+.route code{grid-column:1;color:var(--ink-3);font-size:12.5px;overflow-wrap:anywhere}
+.chip{grid-row:1 / span 2;grid-column:2;font-size:11.5px;font-weight:600;border-radius:999px;padding:3px 9px;white-space:nowrap;background:var(--surface-3);color:var(--ink-2)}
+.chip.f1{background:var(--gold-soft);color:var(--gold-ink)}
+
+/* Instellingen → Domein */
+.settings{display:grid;grid-template-columns:220px minmax(0,1fr);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-canvas);box-shadow:var(--shadow-card);overflow:hidden}
+.set-side{background:var(--surface-2);border-right:1px solid var(--line);padding:18px 12px;display:grid;align-content:start;gap:2px}
+.set-side .eyebrow{padding:0 10px 8px}
+.set-tab{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:10px;color:var(--ink-2);font-size:13.5px}
+.set-tab.is-active{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:inset 3px 0 0 var(--gold)}
+.set-tab .new{margin-left:auto;font-size:10.5px;font-weight:700;color:var(--on-gold);background:var(--gold);border-radius:6px;padding:1px 6px}
+.set-main{padding:26px 28px 28px;display:grid;gap:22px;min-width:0}
+.set-title{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.set-title h3{font-size:21px;font-weight:650}
+.set-main > p{color:var(--ink-2);max-width:64ch}
+.pill{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:5px 11px;font-size:12.5px;font-weight:600;background:var(--surface-3);color:var(--ink-2)}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill[data-state="active"]{background:var(--ok-soft);color:var(--ok)}
+.pill[data-state="busy"]{background:var(--busy-soft);color:var(--gold-ink)}
+
+.steps{list-style:none;margin:0;padding:0;display:grid;gap:14px;counter-reset:step}
+.step{counter-increment:step;display:grid;grid-template-columns:30px minmax(0,1fr);gap:14px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-card);padding:16px 18px}
+.step::before{content:counter(step);width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--gold);color:var(--on-gold);font-weight:700;font-size:13px}
+.step-body{display:grid;gap:12px;min-width:0}
+.step-body h4{font-size:15.5px;font-weight:650}
+.step-body > p{color:var(--ink-2);font-size:14px}
+
+.addr{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.field{display:grid;gap:4px}
+.field label{font-size:12px;color:var(--ink-3);font-weight:550}
+.field input{font:500 14px var(--font-mono);color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:9px 11px;width:100%}
+.field input:focus{outline:none;border-color:var(--gold);box-shadow:var(--focus)}
+#sub{width:140px}
+#dom{width:240px}
+.addr .dot{font:600 18px var(--font-mono);color:var(--ink-3);padding-top:18px}
+.hint{font-size:13px;color:var(--ink-2)}
+.hint b{font-family:var(--font-mono);font-weight:600;color:var(--ink)}
+.hint.is-warn{color:var(--warn)}
+
+.dns-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}
+.dns{width:100%;border-collapse:collapse;font-size:13.5px;min-width:470px}
+.dns th{font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+.dns td{padding:11px 12px;font-family:var(--font-mono);font-size:13px;vertical-align:middle}
+.copy{font:600 12.5px var(--font-sans);color:var(--ink);background:var(--surface-3);border:1px solid var(--line-2);border-radius:9px;padding:6px 11px;cursor:pointer}
+.copy:hover{border-color:var(--gold)}
+
+.prov-tabs{display:flex;flex-wrap:wrap;gap:6px}
+.prov-tabs button{font:500 13px var(--font-sans);color:var(--ink-2);background:transparent;border:1px solid var(--line-2);border-radius:999px;padding:5px 12px;cursor:pointer}
+.prov-tabs button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.prov-panel{font-size:14px;color:var(--ink-2);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-ctl);padding:12px 14px}
+.prov-panel code{color:var(--ink)}
+
+.checks{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.check{display:grid;grid-template-columns:22px minmax(0,1fr);gap:10px;align-items:start;font-size:14px}
+.check .mark{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line-2);display:grid;place-items:center;color:var(--on-ok);transition:background .25s,border-color .25s}
+.check .mark svg{opacity:0;transition:opacity .2s}
+.check[data-state="done"] .mark{background:var(--ok);border-color:var(--ok)}
+.check[data-state="done"] .mark svg{opacity:1}
+.check[data-state="busy"] .mark{border-color:var(--gold);border-top-color:transparent;animation:spin .9s linear infinite}
+.check[data-state="todo"]{color:var(--ink-3)}
+.check small{display:block;color:var(--ink-3);font-size:12.5px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.replay{justify-self:start;font:600 13px var(--font-sans);color:var(--ink);background:transparent;border:1px solid var(--line-2);border-radius:10px;padding:7px 12px;cursor:pointer}
+.replay:hover{border-color:var(--gold)}
+
+.callout{display:grid;gap:4px;border:1px solid var(--line);background:var(--surface-2);border-radius:var(--r-ctl);padding:12px 14px;font-size:14px;color:var(--ink-2)}
+.callout b{color:var(--ink)}
+
+/* Het verkeer */
+.flow{display:grid;gap:14px}
+.lane{display:grid;gap:10px}
+.lane-label{font-size:13px;font-weight:600;color:var(--ink-2)}
+.stations{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:26px}
+.station{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-ctl);padding:13px 14px;display:grid;gap:4px;align-content:start;min-width:0}
+.station b{font-size:14px;font-weight:650}
+.station span{font-size:13px;color:var(--ink-2)}
+.station code{font-size:12px;color:var(--ink-3);overflow-wrap:anywhere}
+.station.is-new{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-soft)}
+.station:not(:last-child)::after{content:"";position:absolute;top:50%;right:-21px;width:16px;height:2px;background:var(--line-2)}
+.station:not(:last-child)::before{content:"";position:absolute;top:calc(50% - 4px);right:-22px;border:5px solid transparent;border-left-color:var(--line-2);border-right:0}
+.flow-note{font-size:13.5px;color:var(--ink-2);max-width:80ch}
+.legend{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:12px;height:12px;border-radius:4px;border:1px solid var(--gold);box-shadow:0 0 0 2px var(--gold-soft)}
+
+/* Drie afspraken */
+.rules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.rule{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);padding:18px;display:grid;gap:10px;align-content:start}
+.rule h3{font-size:17px;font-weight:650}
+.rule p{color:var(--ink-2);font-size:14px}
+.compare{display:grid;gap:6px;margin-top:4px}
+.mini{border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12.5px;display:grid;gap:2px;background:var(--surface-2)}
+.mini .tag{font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+.mini .from{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-2);overflow-wrap:anywhere}
+.mini .subj{font-weight:600}
+.mini.is-new{border-color:var(--ok);background:var(--ok-soft)}
+.mini.is-new .tag{color:var(--ok)}
+
+/* Fasering */
+.phases{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.phase{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);padding:16px;display:grid;gap:8px;align-content:start}
+.phase .no{font-family:var(--font-mono);font-size:12px;color:var(--gold-ink);font-weight:600}
+.phase h3{font-size:15.5px;font-weight:650}
+.phase p{font-size:13.5px;color:var(--ink-2)}
+.phase.is-core{border-color:var(--gold)}
+.phase .done{font-size:12.5px;color:var(--ink);border-top:1px solid var(--line);padding-top:8px}
+
+/* Beslispunten */
+.table-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r-card);background:var(--surface)}
+.decisions{width:100%;border-collapse:collapse;font-size:14px;min-width:640px}
+.decisions th{text-align:left;font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);padding:12px 16px;border-bottom:1px solid var(--line)}
+.decisions td{padding:12px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+.decisions tr:last-child td{border-bottom:0}
+.decisions td:nth-child(2){font-weight:600}
+.decisions td:nth-child(3){color:var(--ink-2)}
+
+.foot{border-top:1px solid var(--line);padding-block:24px 36px;color:var(--ink-3);font-size:13px}
+.foot .wrap{display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between}
+.foot .mono{overflow-wrap:anywhere}
+
+@media (max-width:980px){
+  .cmd .wrap{grid-template-columns:minmax(0,1fr)}
+  .phases{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .phase.is-core{grid-column:span 2}
+  .rules{grid-template-columns:minmax(0,1fr)}
+  .stations{grid-auto-flow:row;grid-auto-columns:auto;gap:22px}
+  .station:not(:last-child)::after{top:auto;bottom:-17px;right:auto;left:22px;width:2px;height:12px}
+  .station:not(:last-child)::before{top:auto;bottom:-22px;right:auto;left:18px;border:5px solid transparent;border-top-color:var(--line-2);border-bottom:0}
+}
+@media (max-width:760px){
+  .routes{grid-template-columns:minmax(0,1fr)}
+  .settings{grid-template-columns:minmax(0,1fr)}
+  .set-side{display:flex;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:10px}
+  .set-side .eyebrow{display:none}
+  .set-tab{white-space:nowrap}
+  .set-tab.is-active{box-shadow:inset 0 -2px 0 var(--gold)}
+  .set-main{padding:20px 16px}
+  .scene{grid-template-columns:minmax(0,1fr)}
+  .phases{grid-template-columns:minmax(0,1fr)}
+  .phase.is-core{grid-column:auto}
+  #sub,#dom{width:100%}
+  .addr{display:grid;grid-template-columns:minmax(0,1fr)}
+  .addr .dot{display:none}
+}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+
+<header class="cmd">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">Voorstel · 8 november 2026</p>
+      <h1>Alles wat je klant ziet, op <em>je eigen adres</em></h1>
+      <p class="lede">Albums, offertes, facturen met betalen, contracten, afspraken, bestanden en het klantportaal: op <span class="mono">portaal.fotostudiojansen.nl</span>, in je eigen huisstijl, met mail van je eigen adres. De ondernemer zet één DNS-record; Cloudflare regelt het certificaat en ResoFly de rest.</p>
+      <div class="facts">
+        <span class="fact"><b>1</b> CNAME-record</span>
+        <span class="fact"><b>100</b> adressen gratis, daarna $0,10 per adres per maand</span>
+        <span class="fact"><b>0</b> extra servers</span>
+      </div>
+    </div>
+    <div class="scene" aria-label="Voorbeeld: de mail en het album zoals de klant ze ziet">
+      <div class="mail">
+        <div class="mail-head">
+          <span class="avatar">FJ</span>
+          <div class="mail-from"><b>Fotostudio Jansen</b><br><span class="addr">info@fotostudiojansen.nl</span></div>
+        </div>
+        <h4>Je album staat klaar</h4>
+        <p>Hoi Sanne, de foto's van jullie bruiloft staan online. Kies je favorieten of download alles in één keer.</p>
+        <span class="mail-btn">Bekijk je album</span>
+        <p class="mail-link"><span class="js-host">portaal.fotostudiojansen.nl</span>/gallerij/…</p>
+      </div>
+      <div class="browser">
+        <div class="browser-bar">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="url">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#5BD69A" stroke-width="2.4" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <span class="url-host js-host">portaal.fotostudiojansen.nl</span><span class="url-path">/gallerij/bruiloft-sanne-en-tim</span>
+          </div>
+        </div>
+        <div class="t-head">
+          <span class="t-brand"><span class="t-mark">FJ</span>Fotostudio Jansen</span>
+          <span class="t-nav"><span>Album</span><span>Favorieten</span><span>Portaal</span></span>
+        </div>
+        <div class="t-hero">
+          <small>Album · 214 foto's</small>
+          <h3>Bruiloft Sanne &amp; Tim</h3>
+          <p>Kasteel Doorwerth · 14 september 2026</p>
+        </div>
+        <div class="t-grid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <p class="t-foot">Fotostudio Jansen · Arnhem</p>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="wrap" aria-labelledby="routes-title">
+    <div class="sec-head">
+      <p class="eyebrow">Op het eigen adres</p>
+      <h2 id="routes-title">Wat er via dat adres loopt</h2>
+      <p>De klantpagina's bestaan al in de app. Het eigen adres zet ze onder de naam van de ondernemer; de werkruimte zelf komt er nooit op.</p>
+    </div>
+    <div class="routes">
+      <div class="route"><b>Albums</b><code>/gallerij/…</code><span class="chip f1">fase 1</span></div>
+      <div class="route"><b>Offertes</b><code>/quote/…</code><span class="chip f1">fase 1</span></div>
+      <div class="route"><b>Facturen en betalen</b><code>/invoice/…</code><span class="chip f1">fase 1</span></div>
+      <div class="route"><b>Contracten</b><code>/contract/…</code><span class="chip f1">fase 1</span></div>
+      <div class="route"><b>Afspraak inplannen</b><code>/booking/…</code><span class="chip f1">fase 1</span></div>
+      <div class="route"><b>Gedeelde bestanden en zendingen</b><code>/gedeeld/… · /ontvang/…</code><span class="chip f1">fase 1</span></div>
+      <div class="route"><b>Klantportaal</b><code>/ en /portal</code><span class="chip">fase 2</span></div>
+      <div class="route"><b>Downloads en zip</b><code>/m/…</code><span class="chip">fase 3</span></div>
+      <div class="route"><b>Afmelden voor nieuwsbrieven</b><code>/afmelden</code><span class="chip">fase 3</span></div>
+    </div>
+  </section>
+
+  <section class="wrap" aria-labelledby="settings-title">
+    <div class="sec-head">
+      <p class="eyebrow">Voor de ondernemer</p>
+      <h2 id="settings-title">Instellingen → Domein</h2>
+      <p>Een nieuw tabblad. Het verzenddomein verhuist mee, zodat web en mail op één plek staan. Probeer het: vul een eigen adres in.</p>
+    </div>
+    <div class="settings">
+      <nav class="set-side" aria-label="Instellingen (voorbeeld)">
+        <p class="eyebrow">Instellingen</p>
+        <span class="set-tab">Organisatie &amp; team</span>
+        <span class="set-tab">Huisstijl</span>
+        <span class="set-tab">E-mail</span>
+        <span class="set-tab is-active">Domein <span class="new">nieuw</span></span>
+        <span class="set-tab">Online betalen</span>
+        <span class="set-tab">Abonnement</span>
+      </nav>
+      <div class="set-main">
+        <div class="set-title">
+          <h3>Je eigen webadres</h3>
+          <span class="pill" id="statusPill" data-state="active" role="status">Actief</span>
+        </div>
+        <p>Je klanten openen je albums, offertes, facturen en het klantportaal op je eigen adres. Nergens staat ResoFly in beeld, tenzij je dat zelf aanzet.</p>
+        <ol class="steps">
+          <li class="step"><div class="step-body">
+            <h4>Kies je adres</h4>
+            <div class="addr">
+              <div class="field"><label for="sub">Subdomein</label><input id="sub" value="portaal" autocomplete="off" spellcheck="false"></div>
+              <span class="dot" aria-hidden="true">.</span>
+              <div class="field"><label for="dom">Je domein</label><input id="dom" value="fotostudiojansen.nl" autocomplete="off" spellcheck="false"></div>
+            </div>
+            <p class="hint" id="addrHint" aria-live="polite">Je klanten gaan naar <b class="js-host">portaal.fotostudiojansen.nl</b>. Je website op het hoofddomein blijft gewoon staan.</p>
+          </div></li>
+          <li class="step"><div class="step-body">
+            <h4>Zet één record bij je domeinbeheerder</h4>
+            <div class="dns-scroll">
+              <table class="dns">
+                <thead><tr><th>Type</th><th>Naam</th><th>Waarde</th><th><span class="sr">Kopiëren</span></th></tr></thead>
+                <tbody><tr>
+                  <td>CNAME</td>
+                  <td id="cnameName">portaal</td>
+                  <td id="cnameValue">klant.resofly.site</td>
+                  <td style="text-align:right"><button class="copy" id="copyBtn" type="button">Kopieer</button></td>
+                </tr></tbody>
+              </table>
+            </div>
+            <div class="prov-tabs" role="group" aria-label="Je domeinbeheerder">
+              <button type="button" aria-pressed="true" aria-controls="provPanel" data-p="transip">TransIP</button>
+              <button type="button" aria-pressed="false" aria-controls="provPanel" data-p="versio">Versio</button>
+              <button type="button" aria-pressed="false" aria-controls="provPanel" data-p="mijndomein">Mijndomein</button>
+              <button type="button" aria-pressed="false" aria-controls="provPanel" data-p="cloudflare">Cloudflare</button>
+              <button type="button" aria-pressed="false" aria-controls="provPanel" data-p="overig">Anders</button>
+            </div>
+            <p class="prov-panel" id="provPanel" aria-live="polite"></p>
+          </div></li>
+          <li class="step"><div class="step-body">
+            <h4>Wij doen de rest</h4>
+            <p>Het scherm kijkt zelf mee. Je krijgt ook een mail zodra het adres actief is, en als het later stuk gaat.</p>
+            <ul class="checks" id="checks">
+              <li class="check" data-state="done"><span class="mark"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span>Record gevonden<small>portaal wijst naar klant.resofly.site</small></span></li>
+              <li class="check" data-state="done"><span class="mark"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span>Beveiligd certificaat klaar<small>Cloudflare maakt en vernieuwt het zelf</small></span></li>
+              <li class="check" data-state="done"><span class="mark"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span>Actief<small>Nieuwe mails linken vanaf nu naar je eigen adres</small></span></li>
+            </ul>
+            <button class="replay" id="replay" type="button">Controle opnieuw afspelen</button>
+          </div></li>
+        </ol>
+        <div class="callout"><b>Mail en web niet op dezelfde naam</b><p>Naast een CNAME mag geen MX staan, dus op <span class="mono js-host">portaal.fotostudiojansen.nl</span> kun je geen mail ontvangen. Daarom stelt het scherm <span class="mono" id="mailSuggest">info@fotostudiojansen.nl</span> voor als afzender.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap" aria-labelledby="flow-title">
+    <div class="sec-head">
+      <p class="eyebrow">Techniek</p>
+      <h2 id="flow-title">Het verkeer</h2>
+      <p>Cloudflare for SaaS neemt certificaten en verkeer voor zijn rekening. Nieuw zijn alleen de Worker en de linkbouwer; de app blijft één build.</p>
+    </div>
+    <div class="flow">
+      <div class="lane">
+        <p class="lane-label">Een bezoek</p>
+        <div class="stations">
+          <div class="station"><b>Klant van de studio</b><span>opent de link in de mail</span><code class="js-host">portaal.fotostudiojansen.nl</code></div>
+          <div class="station"><b>DNS van de studio</b><span>één record</span><code>CNAME → klant.resofly.site</code></div>
+          <div class="station"><b>Cloudflare for SaaS</b><span>controleert het record, maakt het certificaat</span></div>
+          <div class="station is-new"><b>Worker client-domains</b><span>adres → huisstijl; alleen klantroutes</span></div>
+          <div class="station"><b>De app</b><span>dezelfde build als de werkruimte; praat rechtstreeks met Supabase</span></div>
+        </div>
+      </div>
+      <div class="lane">
+        <p class="lane-label">Een mail</p>
+        <div class="stations">
+          <div class="station"><b>Album, factuur, offerte</b><span>een edge function maakt de mail</span></div>
+          <div class="station is-new"><b>clientBaseUrl</b><span>het actieve adres van díé organisatie</span><code>nooit uit het verzoek</code></div>
+          <div class="station"><b>Resend</b><span>vanaf het eigen verzenddomein</span><code>info@fotostudiojansen.nl</code></div>
+          <div class="station"><b>In de mail</b><span>de knop wijst naar</span><code><span class="js-host">portaal.fotostudiojansen.nl</span>/…</code></div>
+        </div>
+      </div>
+      <p class="flow-note"><span class="legend"><i></i> nieuw</span> · Auth en de functies blijven rechtstreeks: via de Worker zou elk verzoek van hetzelfde IP komen, en dan gaan de remmen per IP voor alle klanten tegelijk dicht.</p>
+    </div>
+  </section>
+
+  <section class="wrap" aria-labelledby="rules-title">
+    <div class="sec-head">
+      <p class="eyebrow">Veilig</p>
+      <h2 id="rules-title">Drie afspraken</h2>
+    </div>
+    <div class="rules">
+      <article class="rule">
+        <h3>Links komen uit de organisatie</h3>
+        <p>Elke link in een mail bouwt de server uit <code>organization_id</code>, nooit uit het adres waar een verzoek vandaan kwam. Wie anders een inloglink naar een domein laat wijzen dat hij later zelf beheert, onderschept het token.</p>
+        <p>Een token van organisatie A via het adres van B geeft een 404.</p>
+      </article>
+      <article class="rule">
+        <h3>Een eigen inlogmail voor het portaal</h3>
+        <p>Supabase kent alleen zijn eigen terugkeeradressen. ResoFly stuurt de inlogmail daarom zelf, vanaf het verzenddomein van de organisatie. De link werkt alleen in de browser die hem aanvroeg.</p>
+        <div class="compare">
+          <div class="mini"><span class="tag">Nu</span><span class="from">Gerjan van Lopik &lt;ne-reply@resofly.com&gt;</span><span class="subj">Your Magic Link</span></div>
+          <div class="mini is-new"><span class="tag">Straks</span><span class="from">Fotostudio Jansen &lt;info@fotostudiojansen.nl&gt;</span><span class="subj">Inloggen bij Fotostudio Jansen</span></div>
+        </div>
+      </article>
+      <article class="rule">
+        <h3>Geen werkruimte op een klantdomein</h3>
+        <p>De Worker laat alleen klantroutes door. Het inlogscherm voor teamleden, <code>/mcp</code> en het voorbeeld van het portaal geven 404. Zo ziet een klantdomein nooit het wachtwoord of de sessie van een teamlid.</p>
+        <p>Het klantverkeer krijgt ook een eigen domein (werknaam <code>resofly.site</code>), los van <code>resofly.com</code>.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="wrap" aria-labelledby="phases-title">
+    <div class="sec-head">
+      <p class="eyebrow">Volgorde</p>
+      <h2 id="phases-title">Fasering</h2>
+    </div>
+    <ol class="phases">
+      <li class="phase"><span class="no">Fase 0</span><h3>Inrichten en bewijzen</h3><p>Klantdomein, zone, Cloudflare for SaaS, de route en een kale Worker. Met de hand één adres erbij.</p><p class="done">Klaar als een album laadt op portaal.gerjanvanlopik.nl.</p></li>
+      <li class="phase is-core"><span class="no">Fase 1</span><h3>Albums, offertes, facturen en mails</h3><p>De tabel, het tabblad Domein, de Worker, de linkbouwer in alle functies, CORS en de fix van het linkfilter.</p><p class="done">Alles behalve het portaal op het eigen adres; nieuwe mails linken erheen.</p></li>
+      <li class="phase"><span class="no">Fase 2</span><h3>Het klantportaal</h3><p>De eigen inlogmail, meldingen, de welkomstmail en terug van Mollie naar het eigen adres.</p><p class="done">"Your Magic Link" is overal weg.</p></li>
+      <li class="phase"><span class="no">Fase 3</span><h3>Alles onder één adres</h3><p>Downloads en zip via /m/, afmelden, een voorbeeld in WhatsApp, verhuizen met doorsturen.</p><p class="done">Nergens meer gerjan.workers.dev of supabase.co.</p></li>
+      <li class="phase"><span class="no">Fase 4</span><h3>Als het gevraagd wordt</h3><p>Een gratis adres bij ResoFly voor wie geen domein heeft, één wizard voor web en mail.</p><p class="done">Alleen als bewuste keuze: zo'n adres is te raden.</p></li>
+    </ol>
+  </section>
+
+  <section class="wrap" aria-labelledby="decisions-title">
+    <div class="sec-head">
+      <p class="eyebrow">Aan jou</p>
+      <h2 id="decisions-title">Beslispunten</h2>
+      <p>Met mijn voorstel erbij. De onderbouwing staat in het plan.</p>
+    </div>
+    <div class="table-scroll">
+      <table class="decisions">
+        <thead><tr><th>Vraag</th><th>Voorstel</th><th>Waarom</th></tr></thead>
+        <tbody>
+          <tr><td>Welk domein wordt het klantdomein van ResoFly?</td><td>Een nieuw, apart domein, één zone per omgeving</td><td>De route */* vangt alles in een zone, en zo deelt niets wat een klant ziet een domein met de werkruimte.</td></tr>
+          <tr><td>Alleen een subdomein op het eigen domein, of ook een gratis adres bij ResoFly?</td><td>Eerst alleen het eigen subdomein</td><td>Daar gaat de vraag om. Een adres bij ResoFly is te raden.</td></tr>
+          <tr><td>Ook het hoofddomein (jansen.nl)?</td><td>Nee</td><td>Daar mag geen CNAME en staat meestal de website.</td></tr>
+          <tr><td>Hoeveel adressen per organisatie?</td><td>Eén hoofdadres, oude adressen sturen door</td><td>Eén adres in alle mails. Een tweede merk is een tweede administratie.</td></tr>
+          <tr><td>In welk abonnement?</td><td>Vanaf Pro, of als betaalde optie</td><td>Het beperkt misbruik, en mail op een eigen domein kost Resend-capaciteit.</td></tr>
+          <tr><td>De inlogmail ook op het adres van ResoFly vervangen?</td><td>Ja</td><td>Weg met de Engelse mail en de grens van 50 per uur; één flow om te testen.</td></tr>
+          <tr><td>Een code in de inlogmail naast de link?</td><td>Ja</td><td>Mail op de telefoon en het portaal op de laptop werkt nu niet.</td></tr>
+          <tr><td>Media onder het klantdomein?</td><td>Ja, in fase 3</td><td>Dan tonen downloads en zip het eigen adres.</td></tr>
+          <tr><td>Hoe lang sturen verhuisde adressen door?</td><td>Twaalf maanden</td><td>Een factuurlink is maanden later nog nodig.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <span>Het volledige plan: <span class="mono">docs/plannen/EIGEN_SUBDOMEIN_PLAN_2026-11-08.md</span></span>
+    <span><span class="mono">klant.resofly.site</span> is een werknaam; het klantdomein moet nog gekozen worden.</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var sub = document.getElementById('sub');
+  var dom = document.getElementById('dom');
+  var hint = document.getElementById('addrHint');
+  var CNAME = 'klant.resofly.site';
+
+  // Wat mensen plakken: een URL, een e-mailadres of een naam met punt erachter.
+  function clean(value) {
+    return String(value || '').trim().toLowerCase()
+      .replace(/^[a-z]+:\/\//, '').replace(/^[^@]*@/, '')
+      .replace(/[\/?#].*$/, '').replace(/\.+$/, '').replace(/^www\./, '');
+  }
+
+  function render() {
+    var s = clean(sub.value).split('.')[0];
+    var d = clean(dom.value);
+    var okDomain = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d);
+    var okSub = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(s);
+    var host = (okSub ? s : 'portaal') + '.' + (okDomain ? d : 'fotostudiojansen.nl');
+    document.querySelectorAll('.js-host').forEach(function (el) { el.textContent = host; });
+    document.getElementById('cnameName').textContent = okSub ? s : 'portaal';
+    document.getElementById('mailSuggest').textContent = 'info@' + (okDomain ? d : 'fotostudiojansen.nl');
+    hint.classList.remove('is-warn');
+    if (!s) {
+      hint.classList.add('is-warn');
+      hint.textContent = 'Kies een subdomein, zoals portaal of klanten. Op je hoofddomein mag geen CNAME staan, en daar staat meestal je website.';
+    } else if (!okSub) {
+      hint.classList.add('is-warn');
+      hint.textContent = 'Een subdomein bestaat uit letters, cijfers en streepjes, zonder streepje aan het begin of eind.';
+    } else if (!okDomain) {
+      hint.classList.add('is-warn');
+      hint.textContent = 'Vul je domein in zoals fotostudiojansen.nl, zonder https:// ervoor.';
+    } else {
+      hint.innerHTML = 'Je klanten gaan naar <b></b>. Je website op het hoofddomein blijft gewoon staan.';
+      hint.querySelector('b').textContent = host;
+    }
+    renderProvider();
+  }
+
+  var providers = {
+    transip: 'Log in bij TransIP en open het DNS-beheer van je domein. Voeg een record toe: naam {n}, type CNAME, waarde {v}. Sommige schermen willen een punt achter de waarde: {v}.',
+    versio: 'Log in bij Versio en open de DNS-records van je domein. Kies een nieuw record: type CNAME, naam {n}, inhoud {v}.',
+    mijndomein: 'Log in bij Mijndomein en open de DNS-instellingen van je domein. Maak een nieuw record: type CNAME, naam {n}, waarde {v}.',
+    cloudflare: 'Open je domein in Cloudflare en ga naar DNS. Voeg een record toe: type CNAME, naam {n}, doel {v}. Zet het wolkje op grijs (alleen DNS).',
+    overig: 'Zoek in het beheer van je domein naar DNS of de zone-editor. Maak een CNAME-record met naam {n} en waarde {v}. Vraagt het scherm de volledige naam, vul dan {h} in.'
+  };
+  var current = 'transip';
+  var panel = document.getElementById('provPanel');
+  function renderProvider() {
+    var n = document.getElementById('cnameName').textContent;
+    var h = document.querySelector('.js-host').textContent;
+    var text = providers[current];
+    panel.innerHTML = '';
+    text.split(/(\{[nvh]\})/).forEach(function (part) {
+      var map = { '{n}': n, '{v}': CNAME, '{h}': h };
+      if (map[part]) { var c = document.createElement('code'); c.textContent = map[part]; panel.appendChild(c); }
+      else panel.appendChild(document.createTextNode(part));
+    });
+  }
+  document.querySelectorAll('.prov-tabs button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      current = btn.getAttribute('data-p');
+      document.querySelectorAll('.prov-tabs button').forEach(function (b) { b.setAttribute('aria-pressed', String(b === btn)); });
+      renderProvider();
+    });
+  });
+
+  sub.addEventListener('input', render);
+  dom.addEventListener('input', render);
+
+  var copyBtn = document.getElementById('copyBtn');
+  copyBtn.addEventListener('click', function () {
+    var done = function (label) { copyBtn.textContent = label; setTimeout(function () { copyBtn.textContent = 'Kopieer'; }, 1600); };
+    var selectValue = function () {
+      var range = document.createRange();
+      range.selectNodeContents(document.getElementById('cnameValue'));
+      var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      done('Geselecteerd');
+    };
+    try {
+      navigator.clipboard.writeText(CNAME).then(function () { done('Gekopieerd'); }, selectValue);
+    } catch (e) { selectValue(); }
+  });
+
+  // De controle: wacht op het record → certificaat → actief.
+  var checks = Array.prototype.slice.call(document.querySelectorAll('#checks .check'));
+  var pill = document.getElementById('statusPill');
+  var labels = ['Wacht op record', 'Certificaat wordt gemaakt', 'Bijna klaar', 'Actief'];
+  var timers = [];
+  function stage(n) {
+    checks.forEach(function (el, i) { el.setAttribute('data-state', i < n ? 'done' : (i === n ? 'busy' : 'todo')); });
+    pill.textContent = labels[Math.min(n, 3)];
+    pill.setAttribute('data-state', n >= 3 ? 'active' : (n === 0 ? 'wait' : 'busy'));
+  }
+  document.getElementById('replay').addEventListener('click', function () {
+    timers.forEach(clearTimeout); timers = [];
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { stage(3); return; }
+    stage(0);
+    timers.push(setTimeout(function () { stage(1); }, 1500));
+    timers.push(setTimeout(function () { stage(2); }, 3000));
+    timers.push(setTimeout(function () { stage(3); }, 4300));
+  });
+
+  render();
+})();
+</script>
