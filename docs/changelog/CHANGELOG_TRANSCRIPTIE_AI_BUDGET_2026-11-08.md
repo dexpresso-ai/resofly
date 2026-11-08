@@ -146,10 +146,11 @@ elk bestand van de organisatie naar ElevenLabs, op kosten van het tegoed.
 
 ## Na de uitrol
 
-- **Lange opnames:** staging transcribeert synchroon. Bij een opname van een uur kan de edge
-  function tegen zijn tijdslimiet lopen; dan blijft de opname op "Transcriberen…" staan. Voor
-  lange meetings is de webhook-route de veilige keuze:
-  - een webhook in het ElevenLabs-dashboard naar `…/functions/v1/meeting-transcribe-webhook`;
-  - hetzelfde geheim als `ELEVENLABS_WEBHOOK_SECRET`.
+- **Lange opnames:** synchroon kan een opname van een uur tegen de tijdslimiet van de edge
+  function lopen; dan blijft hij op "Transcriberen…" staan. Besloten op 8 november:
+  - productie gaat via de webhook van ElevenLabs;
+  - staging blijft synchroon, voor korte proefopnames.
+
+  De stappen staan in `docs/setup/OPNAMES_TRANSCRIPTIE_SETUP.md`.
 - Oude opnames worden niet met terugwerkende kracht afgerekend. Dat gaat om de drie
   opnames op staging (samen ruim anderhalve minuut).
