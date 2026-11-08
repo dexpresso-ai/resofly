@@ -37,3 +37,6 @@ desktop.ini
 
 # Claude Code local settings (persoonlijk, niet delen)
 .claude/settings.local.json
+
+# De Supabase CLI onthoudt hier lokaal welke databasebranch actief is (supabase db start).
+supabase/.branches/
