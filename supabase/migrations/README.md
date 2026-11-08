@@ -25,6 +25,9 @@ Daarna, eenmalig per project:
    `extra_seat_yearly_price_cents` in `billing_plans`. Staat er 0, dan biedt de
    app geen jaar aan; zo is het ontworpen (20260626000002). Op staging staan ze
    op twaalf keer de maandprijs.
+6. Alleen in productie: opnames uitschrijven via de webhook van ElevenLabs,
+   zodat lange meetings niet tegen de tijdslimiet van de functie lopen. Zie
+   `docs/setup/OPNAMES_TRANSCRIPTIE_SETUP.md`. Staging blijft bewust synchroon.
 
 **Lokaal** (Docker nodig):
 
