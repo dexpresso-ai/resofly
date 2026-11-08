@@ -1561,7 +1561,7 @@ function AiUsagePanel({ organizationId, members }: { organizationId: string; mem
       <div className="settings-card-head">
         <div>
           <h3>AI-gebruik deze maand</h3>
-          <p className="settings-help">Verbruik van Gerrie per gebruiker in de huidige kalendermaand, geteld over al hun organisaties heen (zelfde telling als het tegoed/de limiet). Bedragen zijn schattingen op basis van het Claude-tarief, omgerekend naar euro's.</p>
+          <p className="settings-help">AI-verbruik per gebruiker in deze organisatie, in de huidige kalendermaand: Gerrie en de agents, notulen, het uitlezen van facturen en het uitschrijven van opnames. Bedragen zijn schattingen op basis van de tarieven van Claude en ElevenLabs, omgerekend naar euro's. Het tegoed per gebruiker telt het verbruik in alle organisaties samen.</p>
         </div>
       </div>
       {error && <div className="error">{error}</div>}
@@ -1570,7 +1570,7 @@ function AiUsagePanel({ organizationId, members }: { organizationId: string; mem
       {list.length > 0 && (
         <table className="ai-usage-table">
           <thead>
-            <tr><th>Gebruiker</th><th>Berichten</th><th>Tokens</th><th>Kosten</th></tr>
+            <tr><th>Gebruiker</th><th>Aantal keer</th><th>Tokens</th><th>Kosten</th></tr>
           </thead>
           <tbody>
             {list.map(row => (

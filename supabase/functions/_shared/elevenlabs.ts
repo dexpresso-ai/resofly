@@ -6,24 +6,30 @@
 //   resultaat later naar de in het dashboard ingestelde webhook). Anders -> synchroon
 //   (parset het transcript direct; handig voor korte opnames / lokaal testen).
 // - normalizeTranscript(): zet de Scribe-respons om naar { text, segments, language }
-//   met sprekerlabels, voor opslag in meeting_recordings.
+//   met sprekerlabels, voor opslag in meeting_recordings (scribeTranscript.ts).
 // ============================================================
 
 import { HttpError } from './edgeAuth.ts';
+import { normalizeTranscript, type NormalizedTranscript } from './scribeTranscript.ts';
+
+export { normalizeTranscript, type NormalizedTranscript, type TranscriptSegment } from './scribeTranscript.ts';
 
 const ELEVENLABS_API_KEY = Deno.env.get('ELEVENLABS_API_KEY') || '';
 const ELEVENLABS_STT_MODEL = Deno.env.get('ELEVENLABS_STT_MODEL') || 'scribe_v1';
 const ELEVENLABS_LANGUAGE = Deno.env.get('ELEVENLABS_LANGUAGE') ?? 'nl'; // 'auto' of leeg = autodetectie
-const ELEVENLABS_WEBHOOK_SECRET = Deno.env.get('ELEVENLABS_WEBHOOK_SECRET') || '';
 
-export interface TranscriptSegment { speaker: string | null; text: string; start: number | null; end: number | null }
-export interface NormalizedTranscript { text: string; segments: TranscriptSegment[]; language: string | null }
+// Bij elke aanroep gelezen, niet bij het laden: het geheim bepaalt welke route
+// een opname neemt (synchroon of via de webhook), en zo kan de stromentest
+// (tests/stromen/notulen.mjs) beide routes in één proces doorlopen.
+function webhookSecret(): string {
+  return Deno.env.get('ELEVENLABS_WEBHOOK_SECRET') || '';
+}
 
 export function elevenlabsConfigured(): boolean {
   return Boolean(ELEVENLABS_API_KEY);
 }
 export function elevenlabsUsesWebhook(): boolean {
-  return Boolean(ELEVENLABS_WEBHOOK_SECRET);
+  return Boolean(webhookSecret());
 }
 
 /**
@@ -72,59 +78,6 @@ export async function requestTranscription(
   return { requestId: null, transcript: normalizeTranscript(data) };
 }
 
-/**
- * Zet een Scribe-respons (synchroon óf uit de webhook) om naar onze vorm.
- * Accepteert zowel het kale transcript-object als een { data: {...} }-envelop.
- */
-export function normalizeTranscript(payload: Record<string, unknown>): NormalizedTranscript {
-  const body = (payload.data && typeof payload.data === 'object' ? payload.data : payload) as Record<string, unknown>;
-  const language = (body.language_code ?? body.language ?? null) as string | null;
-  const fullText = typeof body.text === 'string' ? body.text : '';
-
-  const words = Array.isArray(body.words) ? body.words as Array<Record<string, unknown>> : [];
-  const segments: TranscriptSegment[] = [];
-
-  for (const w of words) {
-    const type = String(w.type ?? 'word');
-    if (type === 'spacing') continue; // pure spaties slaan we over voor de segmentopbouw
-    const speakerRaw = w.speaker_id ?? w.speaker ?? null;
-    const speaker = speakerRaw == null ? null : speakerLabel(String(speakerRaw));
-    const token = String(w.text ?? '');
-    const start = numOrNull(w.start);
-    const end = numOrNull(w.end);
-
-    const last = segments[segments.length - 1];
-    if (last && last.speaker === speaker) {
-      last.text += (token.startsWith(' ') || last.text.endsWith(' ') ? '' : ' ') + token.trim();
-      last.end = end ?? last.end;
-    } else {
-      segments.push({ speaker, text: token.trim(), start, end });
-    }
-  }
-
-  for (const s of segments) s.text = s.text.replace(/\s+/g, ' ').trim();
-  const cleaned = segments.filter((s) => s.text.length > 0);
-
-  // Tekstweergave: met sprekerlabels indien beschikbaar, anders de kale Scribe-tekst.
-  const text = cleaned.length > 0 && cleaned.some((s) => s.speaker)
-    ? cleaned.map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text)).join('\n')
-    : (fullText || cleaned.map((s) => s.text).join(' '));
-
-  return { text: text.trim(), segments: cleaned, language };
-}
-
-/** "speaker_0" / "0" -> "Spreker 1" (1-gebaseerd, leesbaar in het Nederlands). */
-function speakerLabel(raw: string): string {
-  const m = raw.match(/(\d+)/);
-  if (m) return `Spreker ${Number(m[1]) + 1}`;
-  return raw;
-}
-
-function numOrNull(v: unknown): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
 // Venster rond de ondertekende tijd (`t`, unix-seconden): ouder dan 30 minuten
 // (de tolerantie van ElevenLabs zelf) of meer dan 5 minuten in de toekomst →
 // afwijzen, zodat een onderschepte webhook niet later opnieuw af te spelen is.
@@ -137,7 +90,8 @@ const WEBHOOK_MAX_FUTURE_SECONDS = 5 * 60;
  * binnen het tijdvenster.
  */
 export async function verifyWebhookSignature(rawBody: string, signatureHeader: string | null): Promise<boolean> {
-  if (!ELEVENLABS_WEBHOOK_SECRET) return false;
+  const secret = webhookSecret();
+  if (!secret) return false;
   if (!signatureHeader) return false;
 
   const parts = Object.fromEntries(signatureHeader.split(',').map((p) => {
@@ -152,7 +106,7 @@ export async function verifyWebhookSignature(rawBody: string, signatureHeader: s
   if (ageSeconds > WEBHOOK_MAX_AGE_SECONDS || ageSeconds < -WEBHOOK_MAX_FUTURE_SECONDS) return false;
 
   const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(ELEVENLABS_WEBHOOK_SECRET),
+    'raw', new TextEncoder().encode(secret),
     { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
   );
   const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}.${rawBody}`));

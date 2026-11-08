@@ -1,15 +1,46 @@
 // ============================================================
 // Gedeelde notulen-pijplijn voor een meeting_recordings-rij.
 //
-// Laadt het transcript, controleert het AI-budget van de eigenaar, vraagt Claude
-// om gestructureerde notulen, slaat die op en logt het tokenverbruik in ai_usage.
+// completeTranscription(): slaat een binnengekomen transcript op, rekent de
+// transcriptie af in ai_usage (transcriptionUsage.ts) en maakt de notulen.
+// runSummaryForRecording(): laadt het transcript, controleert het AI-budget van
+// de eigenaar, vraagt Claude om gestructureerde notulen, slaat die op en logt
+// het tokenverbruik in ai_usage.
 // Hergebruikt door meeting-transcribe (synchroon + 'summarize') en de webhook.
 // ============================================================
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { recordAiUsage, summarizeTranscript, userHasBudget } from './claudeSummary.ts';
+import type { NormalizedTranscript } from './scribeTranscript.ts';
+import { recordTranscriptionUsage, type RecordingForUsage } from './transcriptionUsage.ts';
 
 export interface SummaryOutcome { summarized: boolean; reason?: 'no_transcript' | 'budget' | 'error'; message?: string }
+
+export interface TranscriptionOutcome { stored: boolean; summary?: SummaryOutcome }
+
+/**
+ * Een transcript is binnen (synchroon of via de webhook): opslaan, afrekenen,
+ * notulen maken. Alleen als de opname nog op haar transcript wacht (status
+ * 'transcribing'): bij twee gelijktijdige leveringen wint er één, en een
+ * nagekomen webhook overschrijft geen transcript dat al verwerkt (en misschien
+ * al gecorrigeerd) is. De kosten gaan vóór de notulen in ai_usage, zodat de
+ * budgetcontrole van de notulen ze al meetelt.
+ */
+export async function completeTranscription(admin: SupabaseClient, recordingId: string, transcript: NormalizedTranscript): Promise<TranscriptionOutcome> {
+  const { data: claimed, error } = await admin.from('meeting_recordings').update({
+    transcript_text: transcript.text,
+    transcript_json: transcript.segments,
+    language: transcript.language,
+    status: 'transcribed',
+    error_message: null,
+  }).eq('id', recordingId).eq('status', 'transcribing').select('id, organization_id, created_by, duration_seconds');
+  if (error) throw new Error(`Transcript opslaan mislukt: ${error.message}`);
+  const rec = (claimed ?? [])[0] as RecordingForUsage | undefined;
+  if (!rec) return { stored: false };
+
+  await recordTranscriptionUsage(admin, rec, transcript.segments);
+  return { stored: true, summary: await runSummaryForRecording(admin, recordingId) };
+}
 
 export async function runSummaryForRecording(admin: SupabaseClient, recordingId: string): Promise<SummaryOutcome> {
   const { data: rec, error } = await admin.from('meeting_recordings')

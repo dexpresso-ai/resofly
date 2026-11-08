@@ -3,9 +3,10 @@ import { AlertTriangle, Check, FileText, Loader2, Mail, Mic, Pause, Pencil, Play
 import { Button, Input, Textarea } from './Ui';
 import { getAccessToken, getWorkerBase } from '../lib/r2-api';
 import {
-  createRecording, deleteRecording as apiDeleteRecording, getRecording,
-  isTerminalStatus, listRecordingsForCall, listRecordingsForEvent, sendSummaryToAttendees,
+  canStartTranscription, createRecording, deleteRecording as apiDeleteRecording, getRecording,
+  isTerminalStatus, listRecordingsForCall, listRecordingsForEvent, loadTranscriptionBudget, sendSummaryToAttendees,
   startTranscription, summarizeRecording, updateRecordingText, uploadMeetingAudio,
+  type TranscriptionBudget,
 } from '../lib/meeting-api';
 import type { CalendarProvider, MeetingRecording, UUID } from '../types';
 
@@ -55,14 +56,35 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
   const [recordings, setRecordings] = useState<MeetingRecording[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<UUID | null>(null);
+  // Het AI-tegoed, gevraagd bij "Opname starten" (null = niet bekend).
+  const [budget, setBudget] = useState<TranscriptionBudget | null>(null);
 
   const mediaRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const mimeRef = useRef<string>('');
   const timerRef = useRef<number | null>(null);
+  // De duur komt uit tijdstempels, niet uit een teller in de state. finishRecording
+  // draait vanuit de onstop van de recorder, met de state van toen de opname
+  // begon: er ging 0 mee, of de duur van de vorige opname. En een teller met
+  // setInterval loopt achter als de browser het tabblad op de achtergrond afremt.
+  const startedAtRef = useRef(0);
+  const pausedAtRef = useRef<number | null>(null);
+  const pausedMsRef = useRef(0);
 
   const recordingSupported = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== 'undefined';
+  // Een opname hangt aan een afspraak of aan een telefoongesprek. Tot 8 november
+  // keek deze component alleen naar de afspraak: bij een gesprek verscheen nooit
+  // een knop om op te nemen.
+  const canAttach = Boolean(event.eventRef || event.callId);
+
+  /** Opgenomen seconden, zonder de pauzes. */
+  function recordedSeconds(): number {
+    if (!startedAtRef.current) return 0;
+    const now = Date.now();
+    const paused = pausedMsRef.current + (pausedAtRef.current ? now - pausedAtRef.current : 0);
+    return Math.max(0, Math.round((now - startedAtRef.current - paused) / 1000));
+  }
 
   const reload = useCallback(async () => {
     if (!event.callId && !event.eventRef) { setRecordings([]); return; }
@@ -77,13 +99,20 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
 
   useEffect(() => { void reload(); }, [reload]);
 
-  // Timer tijdens opname.
+  // De klok tijdens de opname; elke tik rekent opnieuw vanaf de tijdstempels.
   useEffect(() => {
     if (phase === 'recording') {
-      timerRef.current = window.setInterval(() => setElapsed((s) => s + 1), 1000);
+      timerRef.current = window.setInterval(() => setElapsed(recordedSeconds()), 1000);
       return () => { if (timerRef.current) window.clearInterval(timerRef.current); };
     }
   }, [phase]);
+
+  /** Naar de toestemmingsvraag, en alvast nagaan of er AI-tegoed is. */
+  function askConsent() {
+    setPhase('consent');
+    setBudget(null);
+    void loadTranscriptionBudget(organizationId, event.callId ?? null).then(setBudget);
+  }
 
   // Opruimen bij unmount.
   useEffect(() => () => { stopTracks(); if (timerRef.current) window.clearInterval(timerRef.current); }, []);
@@ -108,6 +137,9 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
       recorder.onstop = () => { void finishRecording(); };
       mediaRef.current = recorder;
       recorder.start(1000); // chunk elke seconde, robuust bij lange opnames
+      startedAtRef.current = Date.now();
+      pausedAtRef.current = null;
+      pausedMsRef.current = 0;
       setElapsed(0);
       setPhase('recording');
     } catch (e) {
@@ -120,8 +152,17 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
   function togglePause() {
     const r = mediaRef.current;
     if (!r) return;
-    if (r.state === 'recording') { r.pause(); setPhase('paused'); if (timerRef.current) window.clearInterval(timerRef.current); }
-    else if (r.state === 'paused') { r.resume(); setPhase('recording'); }
+    if (r.state === 'recording') {
+      r.pause();
+      pausedAtRef.current = Date.now();
+      setPhase('paused');
+      if (timerRef.current) window.clearInterval(timerRef.current);
+    } else if (r.state === 'paused') {
+      r.resume();
+      if (pausedAtRef.current) pausedMsRef.current += Date.now() - pausedAtRef.current;
+      pausedAtRef.current = null;
+      setPhase('recording');
+    }
   }
 
   function stopRecording() {
@@ -133,7 +174,9 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
   async function finishRecording() {
     setPhase('processing');
     stopTracks();
-    const duration = elapsed;
+    const duration = recordedSeconds();
+    setElapsed(duration);
+    let recordingId: UUID | null = null;
     try {
       const mime = mimeRef.current || 'audio/webm';
       const blob = new Blob(chunksRef.current, { type: mime });
@@ -142,7 +185,7 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
       const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
       const file = new File([blob], `meeting-${Date.now()}.${ext}`, { type: mime });
 
-      const recordingId = await createRecording(organizationId, {
+      recordingId = await createRecording(organizationId, {
         provider: event.provider, sourceId: event.sourceId, eventRef: event.eventRef,
         eventTitle: event.eventTitle, clientId: event.clientId, projectId: event.projectId,
         callId: event.callId ?? null,
@@ -154,8 +197,14 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
       setPhase('idle');
       await pollUntilReady(recordingId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Verwerken van de opname mislukt.');
       setPhase('idle');
+      // Is de opname bewaard (het AI-tegoed is op), dan legt de kaart het uit,
+      // met de knop om hem later uit te schrijven. Daarboven nog eens dezelfde
+      // melding stond dubbel in beeld.
+      const kept = recordingId ? await getRecording(recordingId).catch(() => null) : null;
+      if (!(kept && canStartTranscription(kept) && kept.error_message)) {
+        setError(e instanceof Error ? e.message : 'Verwerken van de opname mislukt.');
+      }
       await reload();
     }
   }
@@ -189,24 +238,47 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
     finally { setBusyId(null); }
   }
 
+  /** Een bewaarde opname (het tegoed was op) alsnog laten uitschrijven. */
+  async function onStartTranscription(rec: MeetingRecording) {
+    if (!rec.storage_key) return;
+    setBusyId(rec.id);
+    setError(null);
+    try {
+      await startTranscription(organizationId, {
+        recordingId: rec.id, storageKey: rec.storage_key, mimeType: rec.mime_type || 'audio/webm',
+        sizeBytes: rec.size_bytes ?? 0, durationSeconds: rec.duration_seconds ?? 0,
+      });
+      await pollUntilReady(rec.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Uitschrijven mislukt.');
+      await reload();
+    } finally { setBusyId(null); }
+  }
+
   const recording = phase === 'recording' || phase === 'paused';
 
   return (
     <section className="mr-section">
       <div className="mr-head"><Mic size={15} /><h4>Opname &amp; notulen</h4></div>
 
-      {!event.eventRef && <p className="event-detail-empty">Opnemen kan zodra de afspraak is opgeslagen.</p>}
-      {event.eventRef && !recordingSupported && <p className="event-detail-empty">Opnemen wordt niet ondersteund in deze browser.</p>}
+      {!canAttach && <p className="event-detail-empty">Opnemen kan zodra de afspraak is opgeslagen.</p>}
+      {canAttach && !recordingSupported && <p className="event-detail-empty">Opnemen wordt niet ondersteund in deze browser.</p>}
 
-      {event.eventRef && recordingSupported && canWrite && (
+      {canAttach && recordingSupported && canWrite && (
         <div className="mr-controls">
           {phase === 'idle' && (
-            <Button variant="primary" onClick={() => setPhase('consent')}><Mic size={15} /> Opname starten</Button>
+            <Button variant="primary" onClick={askConsent}><Mic size={15} /> Opname starten</Button>
           )}
 
           {phase === 'consent' && (
             <div className="mr-consent">
-              <p><AlertTriangle size={15} /><span>Deze meeting wordt opgenomen om er een samenvatting van te maken. Zorg dat de aanwezigen hiermee akkoord zijn.</span></p>
+              <p><AlertTriangle size={15} /><span>{event.callId ? 'Dit gesprek' : 'Deze meeting'} wordt opgenomen om er een samenvatting van te maken. Zorg dat {event.callId ? 'de ander' : 'de aanwezigen'} hiermee akkoord {event.callId ? 'is' : 'zijn'}.</span></p>
+              {budget && !budget.allowed && (
+                <p className="mr-budget-note" role="status">
+                  <AlertTriangle size={15} />
+                  <span>{budget.message ?? 'Je AI-tegoed is op.'} Opnemen kan wel: de opname wordt bewaard, en je kunt hem laten uitschrijven zodra er weer tegoed is.</span>
+                </p>
+              )}
               <div className="mr-consent-actions">
                 <Button variant="primary" onClick={() => void beginRecording()}><Check size={15} /> Akkoord, start opname</Button>
                 <Button onClick={() => setPhase('idle')}>Annuleren</Button>
@@ -236,7 +308,8 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
           <RecordingCard key={rec.id} rec={rec} busy={busyId === rec.id} canWrite={canWrite}
             organizationId={organizationId} attendees={event.attendees}
             onPatch={(patch) => setRecordings((prev) => prev.map((p) => (p.id === rec.id ? { ...p, ...patch } : p)))}
-            onDelete={() => void onDelete(rec)} onRetrySummary={() => void onRetrySummary(rec)} onSaveAsNote={onSaveAsNote} />
+            onDelete={() => void onDelete(rec)} onRetrySummary={() => void onRetrySummary(rec)}
+            onStartTranscription={() => void onStartTranscription(rec)} onSaveAsNote={onSaveAsNote} />
         ))}
       </div>
     </section>
@@ -248,13 +321,16 @@ interface StatusView {
   /** 'listening' = spraak wordt uitgelezen, 'thinking' = de AI schrijft de notulen. */
   working?: 'listening' | 'thinking';
   error?: boolean;
+  /** Er is iets van jou nodig (zoals: het tegoed is op); geen vinkje. */
+  waiting?: boolean;
   /** Uitleg onder de badge zolang het op de achtergrond doorloopt. */
   hint?: string;
 }
 
-function statusLabel(status: MeetingRecording['status']): StatusView {
+function statusLabel(status: MeetingRecording['status'], errorMessage: string | null): StatusView {
   switch (status) {
-    case 'uploaded': return { text: 'Geüpload' };
+    // Met een melding wacht de opname op AI-tegoed (zie meeting-transcribe 'start').
+    case 'uploaded': return errorMessage ? { text: 'Wacht op uitschrijven', waiting: true } : { text: 'Geüpload' };
     case 'transcribing': return { text: 'Transcriberen…', working: 'listening', hint: 'De AI luistert de opname uit. Dit loopt op de achtergrond door — je kunt rustig verder werken, het transcript verschijnt vanzelf bij deze afspraak.' };
     case 'transcribed': return { text: 'Transcript klaar' };
     case 'summarizing': return { text: 'Notulen maken…', working: 'thinking', hint: 'De AI schrijft de notulen. Dit loopt op de achtergrond door — je kunt rustig verder werken.' };
@@ -295,11 +371,12 @@ function AiWorkingIcon({ mode }: { mode: 'listening' | 'thinking' }) {
   );
 }
 
-function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch, onDelete, onRetrySummary, onSaveAsNote }: {
+function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch, onDelete, onRetrySummary, onStartTranscription, onSaveAsNote }: {
   rec: MeetingRecording; busy: boolean; canWrite: boolean;
   organizationId: UUID; attendees: { email: string; name: string }[];
   onPatch: (patch: Partial<MeetingRecording>) => void;
-  onDelete: () => void; onRetrySummary: () => void; onSaveAsNote?: (text: string) => Promise<void>;
+  onDelete: () => void; onRetrySummary: () => void; onStartTranscription: () => void;
+  onSaveAsNote?: (text: string) => Promise<void>;
 }) {
   const [showTranscript, setShowTranscript] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -310,7 +387,7 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
   const [savingTranscript, setSavingTranscript] = useState(false);
   // Notulen naar genodigden mailen.
   const [composing, setComposing] = useState(false);
-  const label = statusLabel(rec.status);
+  const label = statusLabel(rec.status, rec.error_message);
   const summary = rec.summary_json;
 
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
@@ -356,8 +433,8 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
   return (
     <div className="mr-card">
       <div className="mr-card-head">
-        <span className={`mr-status${label.error ? ' err' : label.working ? ' is-working' : ' ok'}`} role="status">
-          {label.working ? <AiWorkingIcon mode={label.working} /> : label.error ? <AlertTriangle size={14} /> : <Check size={14} />}
+        <span className={`mr-status${label.error ? ' err' : label.working ? ' is-working' : label.waiting ? ' wait' : ' ok'}`} role="status">
+          {label.working ? <AiWorkingIcon mode={label.working} /> : label.error || label.waiting ? <AlertTriangle size={14} /> : <Check size={14} />}
           {label.text}
         </span>
         <span className="mr-meta">· {created}{rec.duration_seconds ? ` · ${fmtClock(rec.duration_seconds)}` : ''}</span>
@@ -412,6 +489,12 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
             />
           )}
         </div>
+      )}
+
+      {canStartTranscription(rec) && canWrite && (
+        <Button className="mr-retry" disabled={busy} onClick={onStartTranscription}>
+          {busy ? <><Loader2 size={13} className="spin" /> Bezig…</> : 'Opname uitschrijven'}
+        </Button>
       )}
 
       {rec.status === 'transcribed' && !summary && canWrite && (

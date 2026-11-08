@@ -50,7 +50,17 @@ niet van de afmeldlijst mag halen, wie welke klantgegevens ziet, en een follow-u
 `CAMPAIGN_DISPATCH_BATCH` in `omgeving.mjs`) en `inrichten` (de inrichting van een
 nieuwe organisatie: afronden alleen door de eigenaar of een beheerder van díe organisatie en met een
 bedrijfsnaam, niet rechtstreeks, niet als teamlid, boekhouder, vreemde of anon, en geen eigen
-organisatie voor wie is uitgenodigd; zie `docs/changelog/CHANGELOG_ORGANISATIE_INRICHTEN_2026-11-07.md`).
+organisatie voor wie is uitgenodigd; zie `docs/changelog/CHANGELOG_ORGANISATIE_INRICHTEN_2026-11-07.md`)
+en `notulen`. Dat laatste gaat over opnames:
+- uitschrijven en samenvatten, met nep-ElevenLabs en nep-Claude uit `nep-ai.mjs`;
+- de synchrone route en de webhook-route, met echte en vervalste handtekeningen, een herhaalde
+  webhook, een foutmelding en een webhook die eerder komt dan het `request_id`;
+- het AI-budget: de transcriptie in `ai_usage`, tegoed op voor gebruiker of organisatie, een
+  bewaarde opname die later alsnog gaat, en notulen die wachten;
+- telefoongesprekken en wie wat mag.
+
+Zie `docs/changelog/CHANGELOG_TRANSCRIPTIE_AI_BUDGET_2026-11-08.md`.
+
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in
@@ -93,6 +103,14 @@ ontkoppelen, wat een lid ziet) en
 verwijderen, de kijker) en `bank` (een mutatie invoeren in het venster, de voorgestelde verdeling over
 twee facturen aanvullen en boeken met een eigen omschrijving, terugdraaien, de vraag bij een dubbele
 mutatie, samenvoegen met de bank en weer losmaken, en de verdeling op telefoonbreedte).
+
+En `opname`: een telefoongesprek loggen en opnemen met de nep-microfoon van Chromium.
+- de knop "Opname starten" bij een gesprek;
+- transcript en notulen in beeld, de duur die de browser meet;
+- de waarschuwing als het AI-tegoed op is, de echte reden in beeld, en "Opname uitschrijven" zodra
+  er weer tegoed is.
+
+De UI-test vangt daarvoor de upload naar de media-worker zelf op en legt de audio in nep-R2.
 
 Elke stap controleert ook: geen JavaScript-fout, geen foutmelding of "laden…" die blijft staan,
 en geen mislukte aanroep die de stap niet verwachtte. Mislukt een stap, dan komt er een
@@ -138,6 +156,7 @@ node tests/stromen/werker-documenten.mjs   # MEDIA_DEV_URL / MEDIA_DEV_SIGNING_S
 | `omgeving.mjs` | de lokale stack en de secrets van de functies |
 | `nepdiensten.mjs` | Resend, Mollie en de media-worker, met storingen op bestelling; `registreerDienst` voor eigen nepdiensten |
 | `nep-agenda.mjs` | nep-Google en nep-Microsoft voor de agendakoppeling (codes, tokens, agendalijsten, afspraken, intrekken) |
+| `nep-ai.mjs` | nep-ElevenLabs (Scribe, synchroon en met webhook, ondertekend zoals ElevenLabs) en nep-Claude (de notulen) |
 | `werker-documenten.mjs` | de werkertest hierboven (los te draaien, niet via `run.mjs`) |
 | `supabase.mjs` | PostgREST als gebruiker of als server, `psql` voor wat alleen de tijd doet |
 | `functies.mjs` | roept een functie aan met een `Request`, zoals de browser of Mollie |

@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { throwFunctionError } from './functionErrors';
 import { deleteR2Object, getAccessToken, getWorkerBase } from './r2-api';
 import type { CalendarProvider, MeetingRecording, UUID } from '../types';
 
@@ -24,9 +25,32 @@ export interface CreateRecordingInput {
 
 async function invoke<T>(organizationId: UUID, body: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.functions.invoke('meeting-transcribe', { body: { ...body, organizationId } });
-  if (error) throw new Error(error.message || 'Opname-actie mislukt.');
+  // De reden van een weigering (AI-tegoed op, geen toestemming, …) staat in de
+  // body van het antwoord. Zonder deze stap zag je alleen "Edge Function returned
+  // a non-2xx status code".
+  if (error) await throwFunctionError(error, 'Opname-actie mislukt.');
   if (!data || data.ok !== true) throw new Error(data?.error ?? 'Opname-actie gaf geen geldig antwoord terug.');
   return data as T;
+}
+
+export interface TranscriptionBudget {
+  allowed: boolean;
+  /** Waarom niet, als het tegoed op is. */
+  message: string | null;
+}
+
+/**
+ * Is er AI-tegoed om een nieuwe opname te laten uitschrijven? De recorder vraagt
+ * het vóór het opnemen. Lukt de vraag niet, dan null: de server controleert het
+ * bij het uitschrijven hoe dan ook.
+ */
+export async function loadTranscriptionBudget(organizationId: UUID, callId?: UUID | null): Promise<TranscriptionBudget | null> {
+  try {
+    const data = await invoke<{ allowed?: boolean; message?: string | null }>(organizationId, { action: 'budget', ...(callId ? { callId } : {}) });
+    return { allowed: data.allowed !== false, message: data.message ?? null };
+  } catch {
+    return null;
+  }
 }
 
 /** Maakt de opname-rij aan (legt AVG-toestemming vast). Geeft de recording-id terug. */
@@ -141,10 +165,16 @@ export async function listRecordingsForEvent(organizationId: UUID, provider: str
 /**
  * True zodra er geen verdere statuswijziging meer komt. 'transcribed' is alleen
  * eindstatus als er een foutmelding bij staat (bv. AI-tegoed op) — anders volgt
- * de samenvatting nog (summarizing -> done).
+ * de samenvatting nog (summarizing -> done). Hetzelfde voor 'uploaded': met een
+ * melding is het tegoed op en wacht de opname tot iemand hem laat uitschrijven.
  */
 export function isTerminalStatus(rec: Pick<MeetingRecording, 'status' | 'error_message'>): boolean {
   if (rec.status === 'done' || rec.status === 'error') return true;
-  if (rec.status === 'transcribed' && rec.error_message) return true;
+  if ((rec.status === 'transcribed' || rec.status === 'uploaded') && rec.error_message) return true;
   return false;
+}
+
+/** Een bewaarde opname die nog niet is uitgeschreven (tegoed was op): die kan alsnog. */
+export function canStartTranscription(rec: Pick<MeetingRecording, 'status' | 'storage_key'>): boolean {
+  return rec.status === 'uploaded' && Boolean(rec.storage_key);
 }
