@@ -29,6 +29,7 @@ import {
   parseSimpleRrule,
   advanceRecurrence,
 } from './calendarCore.ts';
+import { googleEventConference, microsoftEventConference } from './conference.ts';
 
 /**
  * Alle zichtbare agenda-items voor een gebruiker in [start, end). Bij een fout op
@@ -172,6 +173,7 @@ export function maskPrivateEventForRequester(event: Record<string, unknown>, sou
     description: null,
     location: null,
     meeting_url: null,
+    conference: null,
     attendees: [],
     html_link: null,
     is_private_masked: true,
@@ -222,6 +224,9 @@ export async function fetchGoogleEvents(accessToken: string, source: CalendarSou
       description: stripMeetingLine(rawDescription),
       location,
       meeting_url: readMeetingUrl(googleConferenceUrl(item), rawDescription, location),
+      // De Meet die Google zelf op de afspraak zette: de app toont die als
+      // "Google Meet" en schrijft hem bij bewerken niet in de omschrijving.
+      conference: googleEventConference(item),
       attendees: mapGoogleAttendees(item),
       starts_at: allDayRange ? allDayRange.starts_at : String(startObj.dateTime),
       ends_at: allDayRange ? allDayRange.ends_at : String(endObj.dateTime),
@@ -235,7 +240,7 @@ export async function fetchGoogleEvents(accessToken: string, source: CalendarSou
 }
 
 export async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceRow, start: string, end: string) {
-  const params = new URLSearchParams({ startDateTime: start, endDateTime: end, '$top': '250', '$orderby': 'start/dateTime', '$select': 'id,subject,bodyPreview,location,start,end,isAllDay,webLink,isOnlineMeeting,onlineMeeting,attendees,sensitivity' });
+  const params = new URLSearchParams({ startDateTime: start, endDateTime: end, '$top': '250', '$orderby': 'start/dateTime', '$select': 'id,subject,bodyPreview,location,start,end,isAllDay,webLink,isOnlineMeeting,onlineMeetingProvider,onlineMeeting,attendees,sensitivity' });
   const first = `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/calendarView?${params}`;
   const items = await fetchPaged<Record<string, unknown>>(first, accessToken, { Prefer: 'outlook.timezone="UTC"' }, (payload) => {
     // Alleen een vervolglink bij Microsoft Graph zelf volgen, met ons token erbij.
@@ -263,6 +268,7 @@ export async function fetchMicrosoftEvents(accessToken: string, source: Calendar
       description: stripMeetingLine(rawDescription),
       location: locationName,
       meeting_url: readMeetingUrl(onlineMeeting.joinUrl ? String(onlineMeeting.joinUrl) : null, rawDescription, locationName),
+      conference: microsoftEventConference(item),
       attendees: mapMicrosoftAttendees(item),
       starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(startObj.dateTime),
       ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(endObj.dateTime),

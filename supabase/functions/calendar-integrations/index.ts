@@ -25,7 +25,6 @@ import {
   encrypt,
   decrypt,
   sourceCanWrite,
-  normalizeRrule,
   ProviderHttpError,
   CalendarTokenError,
 } from '../_shared/calendarCore.ts';
@@ -36,6 +35,7 @@ import {
   checkOAuthState,
   classifyProviderError,
   fallbackReturnTo,
+  hasMeetingScope,
   missingCalendarCapabilities,
   parseReturnOrigins,
   providerLabel,
@@ -44,22 +44,20 @@ import {
   timingSafeEqual,
   withReturnParams,
 } from '../_shared/calendarOAuth.ts';
-import { listEvents, nativeRowToBaseEvent } from '../_shared/calendarAvailability.ts';
+import { listEvents } from '../_shared/calendarAvailability.ts';
 import { syncIcsSource, syncDueIcsSubscriptions, assertSafeFeedUrl } from '../_shared/icsSubscription.ts';
 import {
   createEvent,
   getEventAttendees,
-  normalizeNewEventInput,
   getExternalWriteAccessToken,
-  buildGoogleEventBody,
-  googleWriteQuery,
-  googleEventToBaseEvent,
-  buildMicrosoftEventBody,
-  microsoftEventToBaseEvent,
-  applyAttendees,
+  getWritableNativeSource,
   sendEventCancellations,
+  updateExternalEvent,
+  updateNativeEvent,
 } from '../_shared/calendarEventWrite.ts';
-import { cancelConflictingBookingSlots, cancelConflictingBookingSlotsForNativeEvent } from '../_shared/meetingBookingSync.ts';
+import { VideoUnavailableError, googleCalendarConferenceTypes, isVideoService, microsoftCalendarConferenceTypes } from '../_shared/conference.ts';
+import { createStandaloneMeeting, videoServiceStatus } from '../_shared/onlineMeetings.ts';
+import { cancelConflictingBookingSlots } from '../_shared/meetingBookingSync.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 
 const corsHeaders = {
@@ -133,6 +131,9 @@ serve(async (req) => {
       case 'revokeAppPassword': await revokeAppPassword(organizationId, user.id, String(body.appPasswordId || '')); return json({ ok: true });
       case 'getEventAttendees': return json({ ok: true, attendees: await getEventAttendees(organizationId, user.id, String(body.eventId || '')) });
       case 'searchContacts': return json({ ok: true, ...(await searchContacts(organizationId, user.id, String(body.sourceId || ''), String(body.query || ''))) });
+      // Kan ik hier een losse Meet/Teams maken? Alleen over de eigen koppelingen.
+      case 'videoServices': return json({ ok: true, videoServices: await videoServiceStatus(organizationId, user.id) });
+      case 'createMeeting': requireWrite(); return json({ ok: true, ...(await createMeeting(organizationId, user.id, body)) });
       default: return json({ ok: false, error: `Onbekende calendar action: ${action}` }, 400);
     }
   } catch (error) {
@@ -161,6 +162,7 @@ class CalendarHttpError extends Error {
  */
 function errorStatus(error: unknown): number {
   if (error instanceof CalendarHttpError) return error.status;
+  if (error instanceof VideoUnavailableError) return error.status;
   if (error instanceof CalendarTokenError) return error.failure === 'tijdelijk' ? 503 : 409;
   if (error instanceof ProviderHttpError) return 502;
   // Onze eigen, Nederlandse meldingen: de vraag klopt niet of mag niet.
@@ -209,6 +211,10 @@ async function startOAuth(userId: string, organizationId: string, body: Record<s
   const provider = parseProvider(body.provider);
   assertProviderConfigured(provider);
   const returnTo = sanitizeReturnTo(body.returnTo, ALLOWED_RETURN_ORIGINS);
+  // "Google Meet / Teams aanzetten" vraagt het extra recht. Ook bij gewoon
+  // opnieuw koppelen van een account dat het al had: Microsoft geeft in het
+  // nieuwe token alleen wat gevraagd is, en dan stond Teams daarna stil uit.
+  const meetings = body.meetings === true || await accountHasMeetingScope(userId, organizationId, provider, body.loginHint);
   const now = Math.floor(Date.now() / 1000);
   const state = await signOAuthState({
     provider,
@@ -218,6 +224,7 @@ async function startOAuth(userId: string, organizationId: string, body: Record<s
     nonce: crypto.randomUUID(),
     iat: now,
     exp: now + OAUTH_STATE_TTL_SECONDS,
+    ...(meetings ? { meetings: true } : {}),
   }, STATE_SECRET);
   return buildAuthorizeUrl({
     provider,
@@ -227,7 +234,18 @@ async function startOAuth(userId: string, organizationId: string, body: Record<s
     microsoftTenant: MICROSOFT_TENANT_ID,
     // Bij "opnieuw koppelen" het bekende adres, zodat het juiste account klaarstaat.
     loginHint: body.loginHint,
+    meetings,
   });
+}
+
+/** Had de eigen koppeling met dit adres het Meet/Teams-recht al? */
+async function accountHasMeetingScope(userId: string, organizationId: string, provider: CalendarOAuthProvider, loginHint: unknown): Promise<boolean> {
+  const email = typeof loginHint === 'string' ? loginHint.trim().toLowerCase() : '';
+  if (!email || email.length > 254) return false;
+  const { data } = await supabaseAdmin.from('calendar_connections').select('provider_account_email, scopes')
+    .eq('organization_id', organizationId).eq('user_id', userId).eq('provider', provider);
+  return ((data ?? []) as Array<{ provider_account_email: string | null; scopes: string[] | null }>)
+    .some(c => String(c.provider_account_email ?? '').toLowerCase() === email && hasMeetingScope(provider, c.scopes));
 }
 
 async function handleOAuthCallback(req: Request): Promise<Response> {
@@ -273,7 +291,7 @@ async function handleOAuthCallback(req: Request): Promise<Response> {
 }
 
 /** Rondt de koppeling af vanuit de app: alleen voor wie de koppeling startte. */
-async function completeOAuth(userId: string, body: Record<string, unknown>): Promise<{ provider: Provider; organizationId: string; account: string | null; warning?: string }> {
+async function completeOAuth(userId: string, body: Record<string, unknown>): Promise<{ provider: Provider; organizationId: string; account: string | null; warning?: string; meetings?: boolean }> {
   const code = String(body.code || '');
   if (!code || code.length > 4096) throw new Error('De code van Google of Microsoft ontbreekt. Start het koppelen opnieuw.');
   const check = await checkOAuthState(body.state, STATE_SECRET, ALLOWED_RETURN_ORIGINS);
@@ -308,6 +326,15 @@ async function completeOAuth(userId: string, body: Record<string, unknown>): Pro
   const account = await fetchAccountProfile(state.provider, accessToken);
   const connection = await upsertConnection(userId, state.organizationId, state.provider, account, token);
   await upsertTokens(connection, token);
+  // Gevraagd om Meet/Teams, maar dat vinkje stond bij Google uit (of Microsoft
+  // gaf het recht niet): de koppeling staat, en dat zeggen we erbij.
+  const meetingWarning = state.meetings && !hasMeetingScope(state.provider, connection.scopes)
+    ? (state.provider === 'google'
+      ? 'Gekoppeld, maar zonder Google Meet: dat vinkje stond bij Google uit. Zet het opnieuw aan als je Meet ook buiten je Google-agenda wilt gebruiken.'
+      : 'Gekoppeld, maar Microsoft gaf geen toestemming voor Teams-vergaderingen. Dat kan alleen met een werk- of schoolaccount van Microsoft 365; soms moet je beheerder het eerst goedkeuren.')
+    : undefined;
+  // Meet/Teams kan nu ook buiten de agenda om (de app zegt het erbij).
+  const meetingsOn = state.meetings === true && hasMeetingScope(state.provider, connection.scopes) ? { meetings: true } : {};
   try {
     await syncSourcesForConnection(connection);
   } catch (err) {
@@ -318,9 +345,9 @@ async function completeOAuth(userId: string, body: Record<string, unknown>): Pro
     const warning = `Gekoppeld, maar de lijst met agenda's ophalen lukte nog niet (${detail}). Probeer het straks met "Agenda's ophalen".`;
     await supabaseAdmin.from('calendar_connections').update({ status: 'error', last_error: warning })
       .eq('id', connection.id).eq('organization_id', connection.organization_id);
-    return { provider: state.provider, organizationId: state.organizationId, account: account.email, warning };
+    return { provider: state.provider, organizationId: state.organizationId, account: account.email, warning: meetingWarning ? `${warning} ${meetingWarning}` : warning, ...meetingsOn };
   }
-  return { provider: state.provider, organizationId: state.organizationId, account: account.email };
+  return { provider: state.provider, organizationId: state.organizationId, account: account.email, ...(meetingWarning ? { warning: meetingWarning } : {}), ...meetingsOn };
 }
 
 function redirectTo(location: string): Response {
@@ -415,10 +442,12 @@ async function upsertTokens(connection: ConnectionRow, token: Record<string, str
   if (error) throw error;
 }
 
-async function listIntegrations(organizationId: string, requesterUserId: string): Promise<{ connections: ConnectionRow[]; sources: CalendarSourceRow[] }> {
-  const [{ data: connections, error: cError }, { data: sources, error: sError }] = await Promise.all([
+async function listIntegrations(organizationId: string, requesterUserId: string): Promise<{ connections: ConnectionRow[]; sources: CalendarSourceRow[]; videoServices: Awaited<ReturnType<typeof videoServiceStatus>> }> {
+  const [{ data: connections, error: cError }, { data: sources, error: sError }, videoServices] = await Promise.all([
     supabaseAdmin.from('calendar_connections').select('*').eq('organization_id', organizationId).order('created_at', { ascending: false }),
     supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).order('name', { ascending: true }),
+    // Of de aanvrager zelf een losse Meet/Teams kan maken: alleen zijn eigen koppelingen.
+    videoServiceStatus(organizationId, requesterUserId),
   ]);
   if (cError) throw cError;
   if (sError) throw sError;
@@ -435,7 +464,21 @@ async function listIntegrations(organizationId: string, requesterUserId: string)
     .filter(connection => connection.user_id === requesterUserId || visibleConnectionIds.has(connection.id))
     .map(connection => sanitizeConnectionForRequester(connection, requesterUserId));
 
-  return { connections: visibleConnections, sources: visibleSources };
+  return { connections: visibleConnections, sources: visibleSources, videoServices };
+}
+
+/**
+ * Een losse Meet- of Teams-vergadering, nu (de teamchat: "Nu vergaderen"). Met
+ * de eigen koppeling van de aanvrager; zie onlineMeetings.ts.
+ */
+async function createMeeting(organizationId: string, requesterUserId: string, body: Record<string, unknown>): Promise<{ url: string; service: string; account: string | null }> {
+  const service = body.service;
+  if (!isVideoService(service)) throw new Error('Kies Google Meet of Teams.');
+  const title = typeof body.title === 'string' ? body.title.slice(0, 255) : null;
+  const startsAt = typeof body.startsAt === 'string' ? body.startsAt : null;
+  const endsAt = typeof body.endsAt === 'string' ? body.endsAt : null;
+  const meeting = await createStandaloneMeeting(organizationId, requesterUserId, service, { title, startsAt, endsAt });
+  return { url: meeting.url, service, account: meeting.account };
 }
 
 function sanitizeConnectionForRequester(connection: ConnectionRow, requesterUserId: string): ConnectionRow {
@@ -468,6 +511,8 @@ type ProviderCalendar = {
   access_role: string | null;
   /** Staat hij bij de provider zelf "aan"? Bepaalt alleen of een nieuwe agenda hier meteen getoond wordt. */
   shown: boolean;
+  /** Welke videovergadering de agenda zelf maakt (conference.ts); null = de provider zei er niets over. */
+  conference_types: string[] | null;
 };
 
 /**
@@ -507,6 +552,7 @@ async function syncSourcesForConnection(connection: ConnectionRow) {
       timezone: calendar.timezone,
       is_primary: calendar.is_primary,
       access_role: calendar.access_role,
+      conference_types: calendar.conference_types,
     };
     const writable = sourceCanWrite({ provider: connection.provider, access_role: calendar.access_role } as CalendarSourceRow);
     const current = existing.get(calendar.provider_calendar_id);
@@ -570,6 +616,7 @@ async function fetchGoogleSources(accessToken: string): Promise<{ calendars: Pro
         is_primary: Boolean(item.primary),
         access_role: item.accessRole ? String(item.accessRole) : null,
         shown: Boolean(item.selected) && !item.hidden,
+        conference_types: googleCalendarConferenceTypes(item),
       });
     }
     pageToken = payload.nextPageToken ? String(payload.nextPageToken) : '';
@@ -582,7 +629,7 @@ async function fetchMicrosoftSources(accessToken: string): Promise<{ calendars: 
   const calendars: ProviderCalendar[] = [];
   // Zonder $top gaf Graph er tien per keer, en volgden we geen tweede pagina:
   // de elfde agenda kwam nooit in de lijst.
-  let url: string | null = 'https://graph.microsoft.com/v1.0/me/calendars?$top=100&$select=id,name,color,hexColor,canEdit,isDefaultCalendar,owner';
+  let url: string | null = 'https://graph.microsoft.com/v1.0/me/calendars?$top=100&$select=id,name,color,hexColor,canEdit,isDefaultCalendar,owner,allowedOnlineMeetingProviders';
   for (let page = 0; url && page < MAX_LIST_PAGES; page++) {
     const res: Response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
     const payload = await res.json().catch(() => ({}));
@@ -598,6 +645,7 @@ async function fetchMicrosoftSources(accessToken: string): Promise<{ calendars: 
         is_primary: Boolean(item.isDefaultCalendar),
         access_role: item.canEdit ? 'writer' : 'reader',
         shown: true,
+        conference_types: microsoftCalendarConferenceTypes(item),
       });
     }
     const next = payload['@odata.nextLink'];
@@ -774,16 +822,6 @@ async function microsoftSearchContacts(accessToken: string, query: string): Prom
 
 /* ── Bewerken/verwijderen van externe (Google/Microsoft) agenda-items ──── */
 
-async function updateExternalEvent(organizationId: string, requesterUserId: string, source: CalendarSourceRow, input: Record<string, unknown>) {
-  const providerEventId = String(input.providerEventId || input.eventId || '');
-  if (!providerEventId) throw new Error('Onbekend agenda-item.');
-  const accessToken = await getExternalWriteAccessToken(organizationId, requesterUserId, source);
-  const event = normalizeNewEventInput(input);
-  return source.provider === 'google'
-    ? await updateGoogleEvent(accessToken, source, providerEventId, event)
-    : await updateMicrosoftEvent(accessToken, source, providerEventId, event);
-}
-
 async function deleteExternalEvent(organizationId: string, requesterUserId: string, source: CalendarSourceRow, providerEventId: string): Promise<void> {
   if (!providerEventId) throw new Error('Onbekend agenda-item.');
   const accessToken = await getExternalWriteAccessToken(organizationId, requesterUserId, source);
@@ -797,31 +835,6 @@ async function deleteExternalEvent(organizationId: string, requesterUserId: stri
     const payload = await res.json().catch(() => ({}));
     throw new Error(payload.error?.message || 'Agenda-item verwijderen mislukt.');
   }
-}
-
-async function updateGoogleEvent(accessToken: string, source: CalendarSourceRow, eventId: string, event: ReturnType<typeof normalizeNewEventInput>) {
-  const body = buildGoogleEventBody(source, event);
-  const query = googleWriteQuery(event);
-  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(eventId)}${query}`, {
-    method: 'PATCH',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Google event bijwerken mislukt.');
-  return googleEventToBaseEvent(payload, source, event);
-}
-
-async function updateMicrosoftEvent(accessToken: string, source: CalendarSourceRow, eventId: string, event: ReturnType<typeof normalizeNewEventInput>) {
-  const body = buildMicrosoftEventBody(event);
-  const res = await fetch(`https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(eventId)}`, {
-    method: 'PATCH',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Microsoft event bijwerken mislukt.');
-  return microsoftEventToBaseEvent(payload, source, event);
 }
 
 // ============================================================
@@ -967,17 +980,6 @@ async function getOwnedIcsSource(organizationId: string, requesterUserId: string
   return source;
 }
 
-async function getWritableNativeSource(organizationId: string, requesterUserId: string, sourceId: string): Promise<CalendarSourceRow> {
-  const { data, error } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).single();
-  if (error || !data) throw new Error('Agenda-bron niet gevonden.');
-  const source = data as CalendarSourceRow;
-  if (source.provider !== 'native') throw new Error('Alleen items in een ResoFly-agenda kunnen hier bewerkt worden.');
-  if (source.user_id !== requesterUserId && source.visibility !== 'organization') {
-    throw new Error('Deze privé-agenda is niet met de organisatie gedeeld.');
-  }
-  return source;
-}
-
 /** Routeert een bewerk-actie naar de juiste provider op basis van de agenda-bron. */
 async function updateEvent(organizationId: string, requesterUserId: string, input: Record<string, unknown>) {
   const sourceId = String(input.sourceId || '');
@@ -1006,40 +1008,6 @@ async function deleteEvent(organizationId: string, requesterUserId: string, body
     }
   }
   await deleteNativeEvent(organizationId, requesterUserId, String(body.eventId || ''));
-}
-
-async function updateNativeEvent(organizationId: string, requesterUserId: string, input: Record<string, unknown>) {
-  const eventId = String(input.eventId || input.id || '');
-  if (!UUID_RE.test(eventId)) throw new Error('Ongeldig agenda-item.');
-  const { data: row, error } = await supabaseAdmin.from('calendar_events').select('*').eq('organization_id', organizationId).eq('id', eventId).is('deleted_at', null).single();
-  if (error || !row) throw new Error('Agenda-item niet gevonden.');
-  const current = row as NativeEventRow;
-  const source = await getWritableNativeSource(organizationId, requesterUserId, current.source_id);
-  const event = normalizeNewEventInput(input);
-  const rrule = normalizeRrule(input);
-  const { data: updated, error: updateError } = await supabaseAdmin.from('calendar_events').update({
-    title: event.title,
-    description: event.description,
-    location: event.location,
-    meeting_url: event.meetingUrl,
-    starts_at: event.startsAt,
-    ends_at: event.endsAt,
-    all_day: event.allDay,
-    rrule,
-    recurs: rrule !== null,
-    exdate: null,
-    // Wis de canonieke iCalendar-tekst: een wijziging vanuit de app moet door de
-    // CalDAV-Worker opnieuw gegenereerd worden uit de bijgewerkte velden.
-    icalendar_raw: null,
-    sequence: (current.sequence ?? 0) + 1,
-  }).eq('id', current.id).select('*').single();
-  if (updateError || !updated) throw new Error('Agenda-item kon niet worden bijgewerkt.');
-  const updatedRow = updated as NativeEventRow;
-  await applyAttendees(organizationId, source, updatedRow, input).catch(err => console.error('invite (update) failed', err));
-  // Verplaatsen/herschalen (slepen, tijd bewerken) kan een (mogelijk herhalende)
-  // afspraak alsnog over een openstaande boekingsoptie leggen.
-  await cancelConflictingBookingSlotsForNativeEvent(organizationId, source, updatedRow);
-  return nativeRowToBaseEvent(updatedRow, source);
 }
 
 async function deleteNativeEvent(organizationId: string, requesterUserId: string, eventId: string): Promise<void> {

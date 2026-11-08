@@ -108,7 +108,7 @@ import {
 } from './lib/repository';
 import { memberShortName, memberColor, memberInitials } from './lib/members';
 import { uploadToR2 } from './lib/r2';
-import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn, invalidateCalendarEventsCache } from './lib/calendar-api';
+import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn, invalidateCalendarEventsCache, type CalendarEventInput } from './lib/calendar-api';
 import { calendarOAuthErrorText } from './lib/calendarConnection';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
 import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, warmupOfficeEditor, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
@@ -1065,7 +1065,10 @@ function App() {
       .then((done) => {
         const name = done.provider === 'google' ? 'Google Agenda' : 'Microsoft 365';
         const where = done.organizationId !== organizationId ? ' Hij staat in de organisatie waarin je het koppelen begon.' : '';
-        const text = done.warning ?? `${name}${done.account ? ` (${done.account})` : ''} staat nu in je werkruimte.${where}`;
+        const meetings = done.meetings
+          ? ` ${done.provider === 'google' ? 'Google Meet' : 'Teams'} kan nu ook in je ResoFly-agenda, bij boekingslinks en in de teamchat.`
+          : '';
+        const text = done.warning ?? `${name}${done.account ? ` (${done.account})` : ''} staat nu in je werkruimte.${where}${meetings}`;
         setCalendarLinkNotice({ tone: done.warning ? 'error' : 'ok', text, key: Date.now() });
         notify({ tone: 'ok', title: 'Agenda gekoppeld', detail: text });
         invalidateCalendarEventsCache();
@@ -3563,7 +3566,18 @@ function App() {
       // Lokale tijd (browser = Europe/Amsterdam) -> UTC ISO voor de agenda-API.
       const startsAt = new Date(`${p.date}T${p.start_time}:00`).toISOString();
       const endsAt = new Date(`${p.date}T${p.end_time}:00`).toISOString();
-      await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined, meetingUrl: p.meeting_url ?? undefined });
+      // Een Google Meet of Teams maakt de agenda-functie nu, langs dezelfde weg als
+      // de knop in de agenda en met jouw koppeling; een Jitsi-link staat al op de kaart.
+      const video = p.video_service === 'google_meet' || p.video_service === 'teams'
+        ? { videoService: p.video_service }
+        : { meetingUrl: p.meeting_url ?? undefined };
+      const created = await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined, ...video });
+      invalidateCalendarEventsCache(activeOrg.id);
+      if (created.video_warning) {
+        notify({ tone: 'muted', title: 'Afspraak aangemaakt, met een kanttekening', detail: created.video_warning, ttl: 12000 });
+        return `Agenda-item aangemaakt: ${p.title}. ${created.video_warning}`;
+      }
+      return created.meeting_url && video.videoService ? `Agenda-item aangemaakt: ${p.title}, met ${p.video_service === 'teams' ? 'Teams' : 'Google Meet'}` : undefined;
     },
     onCreateWeekAction: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
@@ -3590,19 +3604,31 @@ function App() {
       const date = p.changes.date ?? p.current.date;
       const startTime = p.changes.start_time ?? p.current.start_time;
       const endTime = p.changes.end_time ?? p.current.end_time;
-      await updateCalendarEvent(
+      // Veranderen de tijden niet, dan gaan ze mee zoals ze waren (ook bij een
+      // hele dag). Alleen wat Gerrie wijzigt, gaat mee: de agenda-functie laat de
+      // rest staan. Eerst gingen een lege omschrijving en locatie altijd mee, en
+      // wiste een verplaatsing via Gerrie die van de afspraak.
+      const timesChanged = Boolean(p.changes.date || p.changes.start_time || p.changes.end_time);
+      const startsAt = !timesChanged && p.current.starts_at ? p.current.starts_at : new Date(`${date}T${startTime}:00`).toISOString();
+      const endsAt = !timesChanged && p.current.ends_at ? p.current.ends_at : new Date(`${date}T${endTime}:00`).toISOString();
+      const input: CalendarEventInput = { sourceId: p.ref.source_id, title: p.changes.title ?? p.title, startsAt, endsAt, allDay: p.current.all_day ?? false };
+      if ('description' in p.changes) input.description = p.changes.description ?? null;
+      if ('location' in p.changes) input.location = p.changes.location ?? null;
+      const service = p.changes.video_service;
+      if (service === 'google_meet' || service === 'teams') input.videoService = service;
+      else if (service) input.meetingUrl = p.changes.meeting_url ?? null;
+      if (service && p.changes.remove_conference) input.removeConference = true;
+      const updated = await updateCalendarEvent(
         activeOrg.id,
         { eventId: p.ref.event_id ?? undefined, sourceId: p.ref.source_id, providerEventId: p.ref.provider_event_id ?? undefined },
-        {
-          sourceId: p.ref.source_id,
-          title: p.changes.title ?? p.title,
-          startsAt: new Date(`${date}T${startTime}:00`).toISOString(),
-          endsAt: new Date(`${date}T${endTime}:00`).toISOString(),
-          description: p.changes.description ?? undefined,
-          location: p.changes.location ?? undefined,
-        },
+        input,
       );
       scheduleRefresh();
+      if (updated.video_warning) {
+        notify({ tone: 'muted', title: 'Afspraak aangepast, met een kanttekening', detail: updated.video_warning, ttl: 12000 });
+        return `"${p.title}" aangepast. ${updated.video_warning}`;
+      }
+      return undefined;
     },
     onCancelCalendarEvent: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');

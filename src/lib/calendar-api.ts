@@ -1,11 +1,13 @@
 import { supabase } from './supabase';
 import { parseCalendarOAuthReturn, type CalendarOAuthReturn } from './calendarConnection';
 import { throwFunctionError } from './functionErrors';
-import type { AttendeeInput, CalendarAppPassword, CalendarConnection, CalendarEventAttendee, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, EventRecurrence, UUID } from '../types';
+import type { AttendeeInput, CalendarAppPassword, CalendarConnection, CalendarEventAttendee, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, EventRecurrence, UUID, VideoService, VideoServices } from '../types';
 
 export interface CalendarIntegrationsPayload {
   connections: CalendarConnection[];
   sources: CalendarSource[];
+  /** Kan ik een losse Meet/Teams maken? Ontbreekt bij een oudere server. */
+  videoServices?: VideoServices;
 }
 
 export interface CalendarEventInput {
@@ -20,10 +22,18 @@ export interface CalendarEventInput {
   recurrence?: EventRecurrence | null;
   /** Alleen voor native ResoFly-agenda's: genodigden (krijgen een uitnodiging per e-mail). */
   attendees?: AttendeeInput[];
-  /** Videocall-link die de gebruiker zelf plakt (Google Meet / Teams / Zoom / overig). */
+  /** Een videocall-link: Jitsi, een geplakte link, of een eerder gemaakte Meet/Teams-link. */
   meetingUrl?: string | null;
-  /** Genereer automatisch een videovergadering bij de provider (Google Meet op Google, Teams op Microsoft). */
+  /** Oude vorm: de videovergadering van de agenda zelf (Google Meet op Google, Teams op Microsoft). */
   addConference?: boolean;
+  /**
+   * Maak een Google Meet- of Teams-vergadering: van de agenda zelf als die dat
+   * kan, anders los met je eigen koppeling. Een vergadering die er al op staat,
+   * blijft (de server maakt geen tweede).
+   */
+  videoService?: VideoService | null;
+  /** Haal de Meet die Google zelf op de afspraak zette eraf (bij overstappen of "Geen"). */
+  removeConference?: boolean;
 }
 
 export interface NativeCalendarInput {
@@ -48,19 +58,33 @@ async function invokeCalendar<T>(organizationId: UUID, body: Record<string, unkn
  * De toestemmingslink van Google of Microsoft. `loginHint` (het adres van een
  * bestaande koppeling) zet bij opnieuw koppelen meteen het juiste account klaar.
  */
-export async function getCalendarOAuthUrl(organizationId: UUID, provider: CalendarProvider, returnTo: string, loginHint?: string | null): Promise<string> {
-  const data = await invokeCalendar<{ authUrl: string }>(organizationId, { action: 'oauthStart', provider, returnTo, ...(loginHint ? { loginHint } : {}) });
+export async function getCalendarOAuthUrl(organizationId: UUID, provider: CalendarProvider, returnTo: string, loginHint?: string | null, options?: { meetings?: boolean }): Promise<string> {
+  const data = await invokeCalendar<{ authUrl: string }>(organizationId, {
+    action: 'oauthStart', provider, returnTo, ...(loginHint ? { loginHint } : {}), ...(options?.meetings ? { meetings: true } : {}),
+  });
   return data.authUrl;
 }
 
 export async function loadCalendarIntegrations(organizationId: UUID): Promise<CalendarIntegrationsPayload> {
   const data = await invokeCalendar<CalendarIntegrationsPayload>(organizationId, { action: 'listIntegrations' });
-  return { connections: data.connections, sources: data.sources };
+  return { connections: data.connections, sources: data.sources, videoServices: data.videoServices };
 }
 
 export async function refreshCalendarSources(organizationId: UUID, connectionId: UUID): Promise<CalendarIntegrationsPayload> {
   const data = await invokeCalendar<CalendarIntegrationsPayload>(organizationId, { action: 'refreshSources', connectionId });
-  return { connections: data.connections, sources: data.sources };
+  return { connections: data.connections, sources: data.sources, videoServices: data.videoServices };
+}
+
+/** Kan ik een losse Meet/Teams maken (teamchat, boekingslinks)? Alleen over je eigen koppelingen. */
+export async function loadVideoServices(organizationId: UUID): Promise<VideoServices> {
+  const data = await invokeCalendar<{ videoServices: VideoServices }>(organizationId, { action: 'videoServices' });
+  return data.videoServices;
+}
+
+/** Een losse Google Meet- of Teams-vergadering, nu, met je eigen koppeling (teamchat: "Nu vergaderen"). */
+export async function createOnlineMeeting(organizationId: UUID, service: VideoService, details: { title?: string; startsAt?: string; endsAt?: string } = {}): Promise<{ url: string; account: string | null }> {
+  const data = await invokeCalendar<{ url: string; account: string | null }>(organizationId, { action: 'createMeeting', service, ...details });
+  return { url: data.url, account: data.account ?? null };
 }
 
 export async function updateCalendarSource(organizationId: UUID, sourceId: UUID, patch: Pick<Partial<CalendarSource>, 'sync_enabled' | 'write_enabled' | 'visibility'>): Promise<CalendarSource> {
@@ -246,6 +270,8 @@ export interface CalendarOAuthCompletion {
   account: string | null;
   /** Gekoppeld, maar met een kanttekening (bijv. de agendalijst kwam nog niet). */
   warning?: string;
+  /** Google Meet / Teams kan nu ook buiten de agenda om (ResoFly-agenda, boekingslinks, teamchat). */
+  meetings?: boolean;
 }
 
 /** Rondt een agendakoppeling af na de terugkeer van Google of Microsoft
@@ -253,7 +279,7 @@ export interface CalendarOAuthCompletion {
  *  koppeling startte. */
 export async function completeCalendarOAuth(organizationId: UUID, code: string, state: string): Promise<CalendarOAuthCompletion> {
   const result = await invokeCalendar<Omit<CalendarOAuthCompletion, 'account'> & { account?: string | null }>(organizationId, { action: 'oauthComplete', code, state });
-  return { provider: result.provider, organizationId: result.organizationId ?? organizationId, account: result.account ?? null, warning: result.warning };
+  return { provider: result.provider, organizationId: result.organizationId ?? organizationId, account: result.account ?? null, warning: result.warning, meetings: result.meetings === true };
 }
 
 /** Leest de terugkeer van de agenda-OAuth één keer uit de URL en haalt hem eruit. */

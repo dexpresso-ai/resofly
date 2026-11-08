@@ -24,6 +24,12 @@ export type OAuthState = {
   nonce: string;
   iat: number;
   exp: number;
+  /**
+   * Vroeg deze rondgang ook het recht om losse Google Meet- of
+   * Teams-vergaderingen te maken (zie meetingScopes)? Dan zegt het afronden het
+   * eerlijk als dat recht niet gegeven is. Ontbreekt bij een gewone koppeling.
+   */
+  meetings?: boolean;
 };
 
 /**
@@ -71,6 +77,50 @@ export function microsoftScopes(): string[] {
   return ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Calendars.ReadWrite', 'Contacts.Read', 'People.Read'];
 }
 
+/** Losse Meet-vergaderingen maken (Google Meet REST API, spaces.create). */
+export const GOOGLE_MEET_SCOPE = 'https://www.googleapis.com/auth/meetings.space.created';
+/** Losse Teams-vergaderingen maken (Graph /me/onlineMeetings; alleen werk- of schoolaccounts). */
+export const MICROSOFT_MEETING_SCOPE = 'OnlineMeetings.ReadWrite';
+
+/**
+ * Het extra recht om een Meet- of Teams-vergadering te maken buiten de agenda
+ * om: voor een afspraak in de ResoFly-agenda, een boeking of de teamchat. Een
+ * vergadering óp een Google- of Microsoft-afspraak heeft dit niet nodig; daar
+ * maakt de agenda hem zelf, met de agendarechten.
+ *
+ * Bewust niet in de gewone koppeling, maar apart aan te zetten: een
+ * Workspace-beheerder die Meet voor apps blokkeert, of een Microsoft-tenant
+ * waar alleen de beheerder rechten goedkeurt, liet anders de hele
+ * agendakoppeling weigeren, ook voor wie Meet of Teams nooit wilde.
+ */
+export function meetingScopes(provider: CalendarOAuthProvider): string[] {
+  return provider === 'google' ? [GOOGLE_MEET_SCOPE] : [MICROSOFT_MEETING_SCOPE];
+}
+
+/** Een scope zoals de provider hem teruggeeft, in één vorm: Microsoft geeft soms de volledige URI. */
+function scopeKey(provider: CalendarOAuthProvider, scope: string): string {
+  const trimmed = scope.trim();
+  return provider === 'google' ? trimmed : trimmed.split('/').pop()!.toLowerCase();
+}
+
+/** Gaf de gebruiker het recht om losse Meet- of Teams-vergaderingen te maken? */
+export function hasMeetingScope(provider: CalendarOAuthProvider, granted: string[] | null | undefined): boolean {
+  const have = new Set((granted ?? []).map(s => scopeKey(provider, String(s))));
+  return meetingScopes(provider).every(s => have.has(scopeKey(provider, s)));
+}
+
+/**
+ * De scopes bij het vernieuwen van een Microsoft-token: de gewone, plus het
+ * Teams-recht alleen als dat ooit is gegeven. Microsoft weigert een vernieuwing
+ * die om een recht vraagt dat de gebruiker nooit gaf (invalid_grant), en dat
+ * telde hier als "ingetrokken": stond het Teams-recht vast in de lijst, dan
+ * sprong na de uitrol elke bestaande Microsoft-koppeling op "Verlopen".
+ */
+export function microsoftRefreshScopes(granted: string[] | null | undefined): string[] {
+  const base = microsoftScopes();
+  return hasMeetingScope('microsoft', granted) ? [...base, MICROSOFT_MEETING_SCOPE] : base;
+}
+
 export type CalendarCapability = 'agendalijst' | 'afspraken';
 
 const GOOGLE = 'https://www.googleapis.com/auth/';
@@ -108,6 +158,10 @@ export function missingCalendarCapabilities(provider: CalendarOAuthProvider, gra
  * adres mee (`loginHint`), dan staat het juiste account meteen klaar.
  * Google geeft alleen met `consent` een vernieuwtoken; zonder dat token
  * verloopt de koppeling na een uur.
+ *
+ * `meetings`: vraag ook het recht om losse Meet- of Teams-vergaderingen te
+ * maken (meetingScopes). Bij Google houdt `include_granted_scopes` de eerder
+ * gegeven rechten erbij, zodat het nieuwe token alles samen draagt.
  */
 export function buildAuthorizeUrl(input: {
   provider: CalendarOAuthProvider;
@@ -116,10 +170,12 @@ export function buildAuthorizeUrl(input: {
   state: string;
   microsoftTenant: string;
   loginHint?: unknown;
+  meetings?: boolean;
 }): string {
   const hint = typeof input.loginHint === 'string' && input.loginHint.length <= 254 && EMAIL_RE.test(input.loginHint.trim())
     ? input.loginHint.trim()
     : null;
+  const extra = input.meetings ? meetingScopes(input.provider) : [];
   if (input.provider === 'google') {
     const params = new URLSearchParams({
       client_id: input.clientId,
@@ -128,7 +184,7 @@ export function buildAuthorizeUrl(input: {
       access_type: 'offline',
       prompt: hint ? 'consent' : 'select_account consent',
       include_granted_scopes: 'true',
-      scope: googleScopes().join(' '),
+      scope: [...googleScopes(), ...extra].join(' '),
       state: input.state,
     });
     if (hint) params.set('login_hint', hint);
@@ -139,7 +195,7 @@ export function buildAuthorizeUrl(input: {
     redirect_uri: input.redirectUri,
     response_type: 'code',
     response_mode: 'query',
-    scope: microsoftScopes().join(' '),
+    scope: [...microsoftScopes(), ...extra].join(' '),
     state: input.state,
   });
   if (hint) params.set('login_hint', hint);
@@ -338,9 +394,11 @@ export async function checkOAuthState(
   const { iat, exp } = candidate;
   if (iat > now + OAUTH_STATE_CLOCK_SKEW_SECONDS) return invalid;
   if (exp <= iat || exp - iat > OAUTH_STATE_TTL_SECONDS + OAUTH_STATE_CLOCK_SKEW_SECONDS) return invalid;
+  if (candidate.meetings !== undefined && typeof candidate.meetings !== 'boolean') return invalid;
 
   const state: OAuthState = {
     provider, userId: candidate.userId, organizationId: candidate.organizationId, returnTo, nonce: candidate.nonce, iat, exp,
+    ...(candidate.meetings ? { meetings: true } : {}),
   };
   if (exp < now) return { ok: false, reason: 'verlopen', state };
   return { ok: true, state };

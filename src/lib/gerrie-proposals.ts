@@ -85,7 +85,7 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
     };
     case 'convert_quote': return { title: `Offerte ${p.number} omzetten naar factuur`, sub: p.client_name, write: true, kind: 'money' };
     case 'send_reminders': return { title: `${p.total} herinnering${p.total === 1 ? '' : 'en'} versturen`, sub: p.invoices.map((i) => i.number).join(', ').slice(0, 80) || '1e / 2e / 3e niveau', write: true, kind: 'mail' };
-    case 'calendar_event': return { title: `Agenda-item: ${p.title}`, sub: `${p.date} ${p.start_time}–${p.end_time}${p.meeting_url ? ' · videocall' : ''}`, write: true, kind: 'agenda' };
+    case 'calendar_event': return { title: `Agenda-item: ${p.title}`, sub: `${p.date} ${p.start_time}–${p.end_time}${proposalVideoLabel(p.video_service, p.meeting_url)}`, write: true, kind: 'agenda' };
     case 'week_action': return { title: `${p.total} actiepunt${p.total === 1 ? '' : 'en'} toevoegen`, sub: p.items.map((i) => i.title).join(' · ').slice(0, 80), write: true, kind: 'work' };
     case 'time_entry': return { title: `${formatMinutes(p.minutes)} registreren`, sub: [p.client_name, p.project_name].filter(Boolean).join(' · ') || 'geen koppeling', write: true, kind: 'work' };
     case 'edit_time_entry': return {
@@ -99,7 +99,7 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
     };
     case 'edit_calendar_event': return {
       title: `Agenda-item aanpassen: ${p.title}`,
-      sub: `${p.current.date} ${p.current.start_time}–${p.current.end_time} · ${p.source_name}`,
+      sub: `${p.current.date} ${p.current.start_time}–${p.current.end_time} · ${p.source_name}${editVideoLabel(p.changes.video_service)}`,
       write: true, kind: 'agenda',
     };
     case 'cancel_calendar_event': return {
@@ -267,6 +267,20 @@ export function openProposal(p: GerrieProposal, h: GerrieActionHandlers): void {
   }
 }
 
+/** " · met Google Meet" e.d. achter een voorgestelde afspraak; oudere voorstellen hebben alleen een Jitsi-link. */
+export function proposalVideoLabel(service: string | null | undefined, meetingUrl?: string | null): string {
+  if (service === 'google_meet') return ' · met Google Meet';
+  if (service === 'teams') return ' · met Teams';
+  if (service === 'jitsi' || meetingUrl) return ' · met Jitsi-videocall';
+  return '';
+}
+
+/** Wat een voorgestelde wijziging met de videovergadering doet. */
+export function editVideoLabel(service: string | null | undefined): string {
+  if (service === 'none') return ' · videovergadering eraf';
+  return service ? proposalVideoLabel(service).replace(' · met ', ' · ') + ' erbij' : '';
+}
+
 /**
  * Voert een goedgekeurd voorstel uit via de gedeelde handlers (zelfde als de chat-dock).
  *
@@ -276,7 +290,8 @@ export function openProposal(p: GerrieProposal, h: GerrieActionHandlers): void {
  * er nog steeds niets stiekem.
  */
 export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers): Promise<void> {
-  const need = (fn: (() => Promise<void>) | undefined) => fn ? fn() : Promise.reject(new Error('Deze actie is hier niet beschikbaar.'));
+  // Een handler mag een kanttekening teruggeven (de chat toont die); hier telt alleen of het lukte.
+  const need = (fn: (() => Promise<unknown>) | undefined) => fn ? fn() : Promise.reject(new Error('Deze actie is hier niet beschikbaar.'));
   if (FORM_BACKED_TYPES.has(p.type)) {
     if (h.onApplyProposal) { await h.onApplyProposal(p); return; }
     openProposal(p, h);

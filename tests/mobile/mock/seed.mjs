@@ -163,7 +163,15 @@ export const calendarConnections = [
   { id: googleConnectionId, organization_id: ORG, user_id: USER, provider: 'google', provider_account_id: 'g-1', provider_account_email: 'gerjan.studiolopik@gmail.com', display_name: 'Gerjan van Lopik', status: 'active', scopes: [], last_error: null, created_at: iso(day(-40)), updated_at: iso(day(-1)) },
   { id: uid('k'), organization_id: ORG, user_id: USER, provider: 'microsoft', provider_account_id: 'm-1', provider_account_email: 'gerjan@studiolopik.onmicrosoft.com', display_name: 'Gerjan (werk)', status: 'expired', scopes: [], last_error: 'Microsoft geeft ResoFly geen toegang meer tot deze agenda (ingetrokken of verlopen). Koppel het account opnieuw.', created_at: iso(day(-90)), updated_at: iso(day(-3)) },
 ];
-export const googleCalendarSource = { id: uid('v'), organization_id: ORG, user_id: USER, connection_id: googleConnectionId, provider: 'google', provider_calendar_id: 'primary', name: 'Gerjan van Lopik', description: null, color: '#9fe1e7', timezone: 'Europe/Amsterdam', is_primary: true, access_role: 'owner', sync_enabled: false, write_enabled: false, visibility: 'private', created_at: iso(day(-40)), updated_at: iso(day(-1)) };
+export const googleCalendarSource = { id: uid('v'), organization_id: ORG, user_id: USER, connection_id: googleConnectionId, provider: 'google', provider_calendar_id: 'primary', name: 'Gerjan van Lopik', description: null, color: '#9fe1e7', timezone: 'Europe/Amsterdam', is_primary: true, access_role: 'owner', sync_enabled: false, write_enabled: false, visibility: 'private', conference_types: ['hangoutsMeet'], created_at: iso(day(-40)), updated_at: iso(day(-1)) };
+// Google Meet en Teams buiten de agenda (calendar-integrations: videoServices):
+// Meet nog aan te zetten, de Microsoft-koppeling verlopen. Zo staan in
+// Instellingen → Agenda de knoppen "Google Meet aanzetten" en "Teams
+// aanzetten" in beeld, de langste stand van die kaarten.
+export const videoServices = {
+  google_meet: { state: 'toestemming', account: 'gerjan.studiolopik@gmail.com', connectionId: googleConnectionId },
+  teams: { state: 'verlopen', account: 'gerjan@studiolopik.onmicrosoft.com', connectionId: null },
+};
 const ev = (dayOff, sh, sm, eh, em, title, location) => {
   const s = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + dayOff, sh, sm);
   const e = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + dayOff, eh, em);

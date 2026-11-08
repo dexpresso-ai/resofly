@@ -10,7 +10,12 @@ import { ACTIONS } from '../_shared/actions/index.ts';
 import { getAction, searchActions } from '../_shared/actions/registry.ts';
 import { defaultInvoiceRecipient, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
 import { loadMollieInvoicingAllowed } from '../_shared/invoiceSendMethod.ts';
-import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
+import { isJitsiMeetingUrl, jitsiMeetingUrl } from '../_shared/jitsi.ts';
+import {
+  calendarConferenceBlockedReason, calendarConferenceService, defaultVideoService, isVideoService, serviceLabel,
+  serviceOfUrl, serviceProvider, videoServiceStateMessage, type VideoService,
+} from '../_shared/conference.ts';
+import { videoServiceStatus } from '../_shared/onlineMeetings.ts';
 import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '../_shared/actions/types.ts';
 import { isOrganizationRole, memberModuleLevel, type OrganizationRole } from '../_shared/roles.ts';
 import {
@@ -179,8 +184,14 @@ interface CreateTasksItem { title: string; description: string | null; priority:
 interface CreateTasksSource { kind: 'meeting' | 'chat'; recording_id: string | null; title: string | null; date: string | null }
 interface CreateTasksProposal { type: 'create_tasks'; project_id: string; project_name: string; source: CreateTasksSource; items: CreateTasksItem[]; total: number }
 interface EditTaskProposal { type: 'edit_task'; id: string; title: string; project_id: string | null; changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: ProposalSubtask[] } }
-/** `meeting_url`: een Jitsi Meet-link, al gemaakt bij het voorstellen (video_call), zodat de kaart toont wat erop komt. */
-interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null; meeting_url: string | null }
+/**
+ * `video_service`: welke videovergadering er komt (null = geen). `meeting_url`:
+ * de Jitsi-link, al gemaakt bij het voorstellen, zodat de kaart toont wat erop
+ * komt. Een Google Meet of Teams ontstaat pas bij het akkoord, langs dezelfde weg
+ * als de knop in de agenda.
+ */
+type ProposalVideoService = VideoService | 'jitsi';
+interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null; meeting_url: string | null; video_service?: ProposalVideoService | null }
 /**
  * Verwijzing naar een BESTAAND agenda-item. De agenda is multi-provider, dus een
  * item is niet met één id te vinden: native items hebben een eigen rij-id, externe
@@ -193,8 +204,23 @@ interface EditCalendarEventProposal {
   ref: CalendarEventRef;
   title: string;
   source_name: string;
-  current: { date: string; start_time: string; end_time: string; location: string | null };
-  changes: { title?: string; date?: string; start_time?: string; end_time?: string; description?: string | null; location?: string | null };
+  /**
+   * `starts_at`/`ends_at`/`all_day`: de tijden zoals ze nu zijn, precies zoals de
+   * agenda-functie ze wil (zie buildEditCalendarEventProposal voor een hele dag).
+   * Veranderen de tijden niet, dan gaan deze mee in plaats van een omrekening
+   * uit datum en uur; die gaf bij een hele dag begin = einde, en dan weigerde de
+   * agenda-functie de wijziging ("Eindtijd moet na starttijd liggen").
+   */
+  current: { date: string; start_time: string; end_time: string; location: string | null; starts_at?: string; ends_at?: string; all_day?: boolean; video_service?: string | null };
+  changes: {
+    title?: string; date?: string; start_time?: string; end_time?: string; description?: string | null; location?: string | null;
+    /** 'none' = de videovergadering eraf. */
+    video_service?: ProposalVideoService | 'none';
+    /** De nieuwe Jitsi-link (bij 'jitsi'), of null (bij 'none'). */
+    meeting_url?: string | null;
+    /** De Meet of Teams die de agenda zelf op de afspraak zette, gaat eraf (bij overstappen of 'none'). */
+    remove_conference?: boolean;
+  };
 }
 interface CancelCalendarEventProposal {
   type: 'cancel_calendar_event';
@@ -729,7 +755,7 @@ function describeProposal(p: Proposal): string {
     case 'task': return `taak ${p.title}`;
     case 'create_tasks': return `${p.total} ta${p.total === 1 ? 'ak' : 'ken'} in project ${p.project_name}`;
     case 'edit_task': return `wijziging van taak ${p.title}`;
-    case 'calendar_event': return `agenda-item ${p.title} op ${p.date}`;
+    case 'calendar_event': return `agenda-item ${p.title} op ${p.date}${p.video_service ? ` met ${p.video_service === 'jitsi' ? 'Jitsi Meet' : serviceLabel(p.video_service)}` : ''}`;
     case 'week_action': return `${p.total} actiepunt${p.total === 1 ? '' : 'en'}`;
     case 'time_entry': return `${p.minutes} minuten urenregistratie`;
     case 'report': return `rapportage ${p.name}`;
@@ -1809,7 +1835,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_edit_calendar_event',
-    description: 'Wijzig een BESTAAND agenda-item: titel, datum, tijden, locatie of omschrijving. Zoek het item eerst met `list_calendar_events` en geef `event_id`, `source_id` en `provider_event_id` exact door zoals je ze daar kreeg. Geef alleen de velden die veranderen. Tijden zijn lokaal (Europe/Amsterdam). Je wijzigt niets zelf: de gebruiker bevestigt.',
+    description: 'Wijzig een BESTAAND agenda-item: titel, datum, tijden, locatie, omschrijving of de videovergadering (Google Meet, Teams of Jitsi erbij, of eraf). Zoek het item eerst met `list_calendar_events` en geef `event_id`, `source_id` en `provider_event_id` exact door zoals je ze daar kreeg. Geef alleen de velden die veranderen. Tijden zijn lokaal (Europe/Amsterdam). Je wijzigt niets zelf: de gebruiker bevestigt.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1822,6 +1848,7 @@ const TOOL_DEFINITIONS = [
         end_time: { type: 'string', description: 'Nieuwe eindtijd HH:MM.' },
         description: { type: 'string' },
         location: { type: 'string' },
+        video_service: { type: 'string', enum: ['google_meet', 'teams', 'jitsi', 'none'], description: "Een videovergadering erbij of eraf: 'google_meet', 'teams', 'jitsi', of 'none' om hem weg te halen. Alleen als de gebruiker daar om vraagt." },
       },
       required: ['source_id'],
     },
@@ -2214,7 +2241,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_calendar_event',
-    description: "Stel voor om een agenda-item aan te maken in een agenda (de eigen ResoFly-agenda of een gekoppelde Google-/Microsoft-agenda). Je maakt niets zelf aan: de gebruiker bevestigt met een knop in de chat. Tijden zijn in lokale tijd (Europe/Amsterdam). Is er één schrijfbare agenda, dan wordt die gebruikt; bij meerdere vraag je welke (of gebruik list_calendars). Reken relatieve datums ('morgen', 'volgende week vrijdag') om naar YYYY-MM-DD op basis van de datum van vandaag. Gaat het om een videocall of online afspraak, zet dan video_call: er komt een Jitsi Meet-link bij.",
+    description: "Stel voor om een agenda-item aan te maken in een agenda (de eigen ResoFly-agenda of een gekoppelde Google-/Microsoft-agenda). Je maakt niets zelf aan: de gebruiker bevestigt met een knop in de chat. Tijden zijn in lokale tijd (Europe/Amsterdam). Is er één schrijfbare agenda, dan wordt die gebruikt; bij meerdere vraag je welke (of gebruik list_calendars). Reken relatieve datums ('morgen', 'volgende week vrijdag') om naar YYYY-MM-DD op basis van de datum van vandaag. Gaat het om een videocall of online afspraak, zet dan video_call. Zonder video_service kiest ResoFly wat de agenda zelf kan: Google Meet in een Google-agenda, Teams in een Microsoft-agenda, en anders Jitsi Meet. Noemt de gebruiker een dienst (Google Meet, Teams, Jitsi), zet die dan in video_service.",
     input_schema: {
       type: 'object',
       properties: {
@@ -2226,7 +2253,8 @@ const TOOL_DEFINITIONS = [
         description: { type: 'string' },
         location: { type: 'string' },
         source_id: { type: 'string', description: 'Optioneel: id van de agenda (uit list_calendars).' },
-        video_call: { type: 'boolean', description: "true = er komt een Jitsi Meet-videovergadering bij: een eigen vergaderlink, zonder account en zonder Google of Microsoft (op de eigen Jitsi-server van de organisatie, anders meet.jit.si). Zet dit als de gebruiker om een videocall, online afspraak, videovergadering of Jitsi vraagt." },
+        video_call: { type: 'boolean', description: "true = er komt een videovergadering bij. Zet dit als de gebruiker om een videocall, online afspraak of videovergadering vraagt." },
+        video_service: { type: 'string', enum: ['google_meet', 'teams', 'jitsi'], description: "Welke videovergadering, als de gebruiker er een noemt: 'google_meet' (Google Meet), 'teams' (Microsoft Teams) of 'jitsi' (Jitsi Meet: een eigen vergaderlink zonder account, op de Jitsi-server van de organisatie of anders meet.jit.si). Laat weg om de agenda te laten kiezen." },
       },
       required: ['title', 'date', 'start_time'],
     },
@@ -3130,22 +3158,28 @@ function addMinutes(t: string, mins: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
+type WritableSource = { ok: true; id: string; name: string; provider: string; conference_types: string[] | null };
+
 /** Kiest de schrijfbare agenda van de gebruiker (expliciet, of de enige/primaire). */
-async function resolveWritableSource(ctx: GerrieContext, rawId: unknown): Promise<{ ok: true; id: string; name: string } | { ok: false; error: string }> {
+async function resolveWritableSource(ctx: GerrieContext, rawId: unknown): Promise<WritableSource | { ok: false; error: string }> {
   const { data, error } = await supabaseAdmin.from('calendar_sources')
-    .select('id, name, is_primary').eq('organization_id', ctx.organizationId).eq('user_id', ctx.userId).eq('write_enabled', true);
+    .select('id, name, is_primary, provider, conference_types').eq('organization_id', ctx.organizationId).eq('user_id', ctx.userId).eq('write_enabled', true);
   if (error) return { ok: false, error: `Agenda's ophalen mislukt: ${error.message}` };
   const sources = (data ?? []) as Record<string, unknown>[];
   if (sources.length === 0) return { ok: false, error: 'Er is geen schrijfbare gekoppelde agenda. Koppel eerst een agenda met schrijfrechten via Agenda-instellingen.' };
+  const pick = (s: Record<string, unknown>): WritableSource => ({
+    ok: true, id: String(s.id), name: String(s.name), provider: String(s.provider ?? ''),
+    conference_types: Array.isArray(s.conference_types) ? s.conference_types.map(String) : null,
+  });
   const id = String(rawId || '').trim();
   if (id) {
     const match = sources.find((s) => String(s.id) === id);
     if (!match) return { ok: false, error: 'Die agenda is niet gevonden of heeft geen schrijfrechten.' };
-    return { ok: true, id, name: String(match.name) };
+    return pick(match);
   }
-  if (sources.length === 1) return { ok: true, id: String(sources[0].id), name: String(sources[0].name) };
+  if (sources.length === 1) return pick(sources[0]);
   const primaries = sources.filter((s) => s.is_primary);
-  if (primaries.length === 1) return { ok: true, id: String(primaries[0].id), name: String(primaries[0].name) };
+  if (primaries.length === 1) return pick(primaries[0]);
   return { ok: false, error: `Er zijn meerdere schrijfbare agenda's (${sources.map((s) => String(s.name)).join(', ')}). Vraag de gebruiker in welke agenda het item moet en gebruik source_id.` };
 }
 
@@ -3163,12 +3197,8 @@ async function buildCalendarEventProposal(ctx: GerrieContext, input: Record<stri
   const source = await resolveWritableSource(ctx, input.source_id);
   if (!source.ok) return source;
 
-  let meetingUrl: string | null = null;
-  if (input.video_call === true) {
-    const { data: cs } = await supabaseAdmin.from('company_settings').select('jitsi_base_url')
-      .eq('organization_id', ctx.organizationId).maybeSingle();
-    meetingUrl = jitsiMeetingUrl(cs?.jitsi_base_url ?? null);
-  }
+  const video = await proposalVideo(ctx, input, source);
+  if (!video.ok) return video;
 
   return {
     ok: true,
@@ -3177,9 +3207,64 @@ async function buildCalendarEventProposal(ctx: GerrieContext, input: Record<stri
       date, start_time: startTime, end_time: endTime,
       description: input.description ? String(input.description).slice(0, 2000) : null,
       location: input.location ? String(input.location).slice(0, 300) : null,
-      meeting_url: meetingUrl,
+      meeting_url: video.meetingUrl,
+      video_service: video.service,
     },
   };
+}
+
+function parseProposalVideoService(raw: unknown, allowNone: boolean): { ok: true; value: ProposalVideoService | 'none' | null } | { ok: false; error: string } {
+  if (raw === undefined || raw === null || raw === '') return { ok: true, value: null };
+  if (raw === 'jitsi' || isVideoService(raw) || (allowNone && raw === 'none')) return { ok: true, value: raw };
+  return { ok: false, error: `video_service moet 'google_meet', 'teams' of 'jitsi' zijn${allowNone ? ", of 'none'" : ''}.` };
+}
+
+/** De Jitsi-server van de organisatie (Instellingen → Agenda); null = meet.jit.si. */
+async function jitsiBaseFor(ctx: GerrieContext): Promise<string | null> {
+  const { data: cs } = await supabaseAdmin.from('company_settings').select('jitsi_base_url')
+    .eq('organization_id', ctx.organizationId).maybeSingle();
+  return (cs?.jitsi_base_url as string | null | undefined) ?? null;
+}
+
+async function newJitsiLink(ctx: GerrieContext): Promise<string> {
+  return jitsiMeetingUrl(await jitsiBaseFor(ctx));
+}
+
+/**
+ * Kan deze dienst bij deze agenda, voor deze gebruiker? Null = ja; anders de
+ * uitleg, die Gerrie aan de gebruiker doorgeeft (bijv. "geef eerst toestemming
+ * bij Instellingen → Agenda"). Meet op een Google-agenda en Teams op een
+ * Microsoft-agenda maakt de agenda zelf; elders komt de vergadering van de
+ * eigen koppeling van de gebruiker.
+ */
+async function videoServiceProblem(ctx: GerrieContext, service: VideoService, source: { provider: string; conference_types: string[] | null }): Promise<string | null> {
+  if (serviceProvider(service) === source.provider) {
+    return calendarConferenceService(source.provider, source.conference_types) === service ? null : calendarConferenceBlockedReason(source.provider);
+  }
+  const status = (await videoServiceStatus(ctx.organizationId, ctx.userId))[service];
+  return status.state === 'klaar' ? null : videoServiceStateMessage(service, status.state);
+}
+
+/**
+ * De videovergadering bij een nieuwe afspraak. Zonder dienst: wat de agenda zelf
+ * kan (Meet bij Google, Teams bij Microsoft), en anders Jitsi; dezelfde regel als
+ * bij een nieuwe boekingslink. Een Jitsi-link maken we nu al, zodat de kaart
+ * precies toont wat erop komt. Een Meet of Teams ontstaat pas bij het akkoord,
+ * langs de knop in de agenda, met de rechten van wie akkoord geeft: Gerrie maakt
+ * zelf niets aan.
+ */
+async function proposalVideo(
+  ctx: GerrieContext, input: Record<string, unknown>, source: { provider: string; conference_types: string[] | null },
+): Promise<{ ok: true; service: ProposalVideoService | null; meetingUrl: string | null } | { ok: false; error: string }> {
+  const parsed = parseProposalVideoService(input.video_service, false);
+  if (!parsed.ok) return parsed;
+  const asked = parsed.value as ProposalVideoService | null;
+  if (input.video_call !== true && !asked) return { ok: true, service: null, meetingUrl: null };
+  const service = asked ?? defaultVideoService(source.provider, source.conference_types);
+  if (service === 'jitsi') return { ok: true, service, meetingUrl: await newJitsiLink(ctx) };
+  const problem = await videoServiceProblem(ctx, service, source);
+  if (problem) return { ok: false, error: `${serviceLabel(service)} kan hier nu niet: ${problem} Wil de gebruiker toch een videocall, dan kan Jitsi Meet altijd (video_service 'jitsi').` };
+  return { ok: true, service, meetingUrl: null };
 }
 
 // ── Urenregistratie (gewerkte uren op project/klant, alleen vóórstellen) ─────
@@ -4954,11 +5039,11 @@ async function listCalendarEvents(ctx: GerrieContext, input: Record<string, unkn
 }
 
 /** De verwijzing uit de tool-invoer, met de controle dat de bron bestaat in deze org. */
-async function resolveEventRef(ctx: GerrieContext, input: Record<string, unknown>): Promise<{ ok: true; ref: CalendarEventRef; sourceName: string } | { ok: false; error: string }> {
+async function resolveEventRef(ctx: GerrieContext, input: Record<string, unknown>): Promise<{ ok: true; ref: CalendarEventRef; sourceName: string; sourceProvider: string; conferenceTypes: string[] | null } | { ok: false; error: string }> {
   const sourceId = String(input.source_id || '').trim();
   if (!isUuid(sourceId)) return { ok: false, error: 'Ongeldig source_id. Zoek het item eerst met list_calendar_events.' };
   const { data: source, error } = await supabaseAdmin.from('calendar_sources')
-    .select('id, name, provider, user_id, visibility').eq('organization_id', ctx.organizationId).eq('id', sourceId).maybeSingle();
+    .select('id, name, provider, user_id, visibility, conference_types').eq('organization_id', ctx.organizationId).eq('id', sourceId).maybeSingle();
   if (error) return { ok: false, error: `Agenda ophalen mislukt: ${error.message}` };
   // Andermans privé-agenda bestaat hier niet (zoals de RLS): geen naam in een melding.
   if (!source || (String(source.user_id) !== ctx.userId && source.visibility !== 'organization')) {
@@ -4973,6 +5058,8 @@ async function resolveEventRef(ctx: GerrieContext, input: Record<string, unknown
     ok: true,
     ref: { event_id: eventId && isUuid(eventId) ? eventId : null, source_id: sourceId, provider_event_id: providerEventId || null },
     sourceName: String(source.name ?? ''),
+    sourceProvider: String(source.provider ?? ''),
+    conferenceTypes: Array.isArray(source.conference_types) ? (source.conference_types as unknown[]).map(String) : null,
   };
 }
 
@@ -5015,12 +5102,60 @@ async function buildEditCalendarEventProposal(ctx: GerrieContext, input: Record<
   }
   if (input.description !== undefined) changes.description = input.description ? String(input.description).slice(0, 4000) : null;
   if (input.location !== undefined) changes.location = input.location ? String(input.location).slice(0, 300) : null;
+  const videoAsked = parseProposalVideoService(input.video_service, true);
+  if (!videoAsked.ok) return videoAsked;
+  if (videoAsked.value) changes.video_service = videoAsked.value;
   if (Object.keys(changes).length === 0) return { ok: false, error: 'Geef minstens één veld dat moet veranderen.' };
 
   const found = await findEvent(ctx, resolved.ref);
   if (!found) return { ok: false, error: 'Ik kan dit agenda-item niet meer terugvinden. Zoek het opnieuw met list_calendar_events.' };
+  // Een herhalende ResoFly-afspraak staat hier als één voorkomen; die wijzigen
+  // verschoof de hele reeks naar dat voorkomen. Dat gaat in het agendascherm.
+  if (found.recurs === true) {
+    return { ok: false, error: `"${String(found.title ?? 'Deze afspraak')}" is een herhalende afspraak; die pas je aan in het agendascherm, anders gaat de reeks mis.` };
+  }
+  const allDay = found.all_day === true;
+  if (allDay && (changes.date || changes.start_time || changes.end_time)) {
+    return { ok: false, error: `"${String(found.title ?? 'Deze afspraak')}" duurt de hele dag; die verplaats je in het agendascherm.` };
+  }
   const start = localDateTime(String(found.starts_at));
   const end = localDateTime(String(found.ends_at));
+
+  const conference = (found.conference ?? null) as { service?: string } | null;
+  const ownConference = conference?.service === 'google_meet' || conference?.service === 'teams' ? conference.service : null;
+  const currentVideo: string | null = !found.meeting_url ? null
+    : serviceOfUrl(found.meeting_url)
+      ?? (isJitsiMeetingUrl(found.meeting_url, await jitsiBaseFor(ctx)) ? 'jitsi' : (ownConference ?? 'link'));
+  if (changes.video_service) {
+    const wanted = changes.video_service as ProposalVideoService | 'none';
+    const title = String(found.title ?? 'deze afspraak');
+    if (wanted === 'none') {
+      if (!found.meeting_url) return { ok: false, error: `Er staat geen videovergadering op "${title}".` };
+      changes.meeting_url = null;
+    } else if (wanted === currentVideo) {
+      return { ok: false, error: `Er staat al een ${wanted === 'jitsi' ? 'Jitsi Meet' : serviceLabel(wanted)}-vergadering op "${title}".` };
+    } else if (wanted === 'jitsi') {
+      changes.meeting_url = await newJitsiLink(ctx);
+    } else {
+      const problem = await videoServiceProblem(ctx, wanted, { provider: resolved.sourceProvider, conference_types: resolved.conferenceTypes });
+      if (problem) return { ok: false, error: `${serviceLabel(wanted)} kan hier nu niet: ${problem}` };
+    }
+    // De Meet of Teams die de agenda zelf op de afspraak zette, gaat eraf als er
+    // iets anders voor in de plaats komt (Teams kan Microsoft niet weghalen; dat
+    // meldt de agenda-functie dan).
+    if (ownConference && ownConference !== wanted) changes.remove_conference = true;
+  }
+
+  // De tijden zoals ze nu zijn, in de vorm die de agenda-functie wil. Bij een
+  // hele dag verschilt dat per agenda: Google en Microsoft willen de laatste dag
+  // zelf (de functie telt er een dag bij op), een ResoFly-agenda bewaart het
+  // einde zoals het staat (de dag ná de laatste). Met de laatste dag ook bij
+  // ResoFly werd een meerdaagse afspraak bij elke wijziging een dag korter.
+  const startsAtIso = new Date(String(found.starts_at)).toISOString();
+  const endsAtExclusive = new Date(String(found.ends_at)).getTime();
+  const endsAtIso = allDay && resolved.sourceProvider !== 'native'
+    ? new Date(Math.max(new Date(startsAtIso).getTime(), endsAtExclusive - 86_400_000)).toISOString()
+    : new Date(endsAtExclusive).toISOString();
 
   // De agenda-functie wil altijd een volledige set tijden; vul aan met wat er stond.
   if (changes.date || changes.start_time || changes.end_time) {
@@ -5036,7 +5171,10 @@ async function buildEditCalendarEventProposal(ctx: GerrieContext, input: Record<
       ref: resolved.ref,
       title: String(found.title ?? '(geen titel)'),
       source_name: resolved.sourceName,
-      current: { date: start.date, start_time: start.time, end_time: end.time, location: found.location ? String(found.location) : null },
+      current: {
+        date: start.date, start_time: start.time, end_time: end.time, location: found.location ? String(found.location) : null,
+        starts_at: startsAtIso, ends_at: endsAtIso, all_day: allDay, video_service: currentVideo,
+      },
       changes,
     },
   };

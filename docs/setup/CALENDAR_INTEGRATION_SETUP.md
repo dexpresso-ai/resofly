@@ -4,7 +4,9 @@ Elke gebruiker koppelt zijn eigen Google- of Microsoft-agenda, per organisatie.
 De koppeling loopt via de edge function `calendar-integrations`; tokens staan
 versleuteld in de database en komen nooit in de browser.
 
-Bijgewerkt op 6 november 2026 (zie `docs/changelog/CHANGELOG_AGENDA_KOPPELEN_2026-11-06.md`).
+Bijgewerkt op 6 november 2026 (zie `docs/changelog/CHANGELOG_AGENDA_KOPPELEN_2026-11-06.md`)
+en 8 november 2026: Google Meet en Teams (zie
+`docs/changelog/CHANGELOG_GOOGLE_MEET_TEAMS_2026-11-08.md` en §5a).
 
 ## 1. Database en functie
 
@@ -46,8 +48,9 @@ supabase secrets set \
 ## 3. Google Cloud
 
 1. Kies of maak een project in de Google Cloud Console.
-2. Zet aan: **Google Calendar API** en **People API** (de People API zoekt
-   contacten bij het uitnodigen van genodigden).
+2. Zet aan: **Google Calendar API**, **People API** (de People API zoekt
+   contacten bij het uitnodigen van genodigden) en **Google Meet REST API**
+   (losse Meet-vergaderingen buiten de Google-agenda, §5a).
 3. OAuth-toestemmingsscherm:
    - **Publishing status: In production.** In "Testing" laat Google een
      vernieuwtoken na **zeven dagen** verlopen. Elke koppeling springt dan na een
@@ -76,6 +79,15 @@ supabase secrets set \
    weigert ResoFly de koppeling met uitleg; zonder de contactscopes werkt alles
    behalve contacten zoeken bij genodigden.
 
+   Apart, alleen als iemand **Google Meet aanzetten** kiest (§5a):
+
+   ```text
+   https://www.googleapis.com/auth/meetings.space.created
+   ```
+
+   Zet die scope ook bij Google Auth Platform → Data access. Hij is
+   "sensitive", net als de agendascopes.
+
 ## 4. Microsoft Entra
 
 1. Microsoft Entra admin center → App registrations → New registration.
@@ -93,7 +105,12 @@ supabase secrets set \
    Calendars.ReadWrite
    Contacts.Read
    People.Read
+   OnlineMeetings.ReadWrite   (alleen gevraagd bij "Teams aanzetten", §5a)
    ```
+
+   Bij het vernieuwen van een token vraagt ResoFly alleen de rechten die de
+   gebruiker echt gaf. Het Teams-recht zit dus niet vast in de lijst: anders
+   weigerde Microsoft de vernieuwing van elke koppeling zonder dat recht.
 
 6. In organisaties die gebruikers geen toestemming laten geven, moet een
    beheerder "Grant admin consent" doen. Zonder dat ziet de gebruiker in ResoFly:
@@ -110,6 +127,23 @@ Instellingen → Agenda → **Google koppelen** of **Microsoft koppelen**.
 3. Beginstand: de hoofdagenda wordt getoond en is schrijfbaar; bij Google
    worden de agenda's getoond die in Google Agenda zelf aangevinkt staan. Alles
    is privé tot je "Delen" aanzet.
+
+## 5a. Google Meet en Teams
+
+- **In de eigen Google- of Microsoft-agenda**: kies bij een afspraak of
+  boekingslink "Google Meet" of "Teams". De agenda maakt de vergadering zelf;
+  daar is niets extra's voor nodig. Of een agenda het kan, haalt ResoFly op bij
+  "Agenda's ophalen" (`calendar_sources.conference_types`): een
+  Workspace-beheerder kan Meet uitzetten, en een privé-Microsoftaccount maakt
+  geen Teams-vergaderingen.
+- **Elders** (de ResoFly-agenda, boekingslinks daarop, Teams bij een
+  Google-afspraak, de teamchat): bij Gekoppelde accounts → **Google Meet
+  aanzetten** of **Teams aanzetten**. Dat is één keer extra toestemming
+  (§3/§4). ResoFly maakt de vergadering dan los, met de koppeling van wie erom
+  vraagt (nooit met die van een collega): Meet via de Meet REST API, Teams via
+  Graph `/me/onlineMeetings` (alleen werk- of schoolaccounts).
+- Staat de Meet REST API in Google Cloud nog niet aan, dan zegt ResoFly: "Google
+  Meet staat voor deze ResoFly-omgeving nog niet aan."
 
 Statussen onder **Gekoppelde accounts**:
 
@@ -148,8 +182,9 @@ uren blijven staan als gewone urenposten. Voor een haperende koppeling is
 ## 7. Testen
 
 ```bash
-npm test                                   # o.a. calendarOAuth.test.ts, calendarConnection.test.ts
+npm test                                   # o.a. calendarOAuth.test.ts, calendarConnection.test.ts, conference.test.ts
 npm run test:stromen -- agenda             # de hele rondgang tegen een lokale stack, met nep-Google/-Microsoft
+npm run test:stromen -- videovergadering   # Google Meet en Teams: van de agenda, los, boekingen, Gerrie via MCP
 node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs agenda   # de knoppen in Chromium
 ```
 
@@ -162,6 +197,9 @@ supabase/functions/calendar-integrations/index.ts   de edge function (koppelen, 
 supabase/functions/_shared/calendarOAuth.ts         regels van de rondgang (puur, getest)
 supabase/functions/_shared/calendarCore.ts          tokens, versleuteling, vernieuwen
 supabase/functions/_shared/calendarAvailability.ts  afspraken ophalen en afschermen
+supabase/functions/_shared/calendarEventWrite.ts    afspraken aanmaken en bewerken
+supabase/functions/_shared/conference.ts            regels voor Google Meet en Teams (puur, getest)
+supabase/functions/_shared/onlineMeetings.ts        losse Meet- en Teams-vergaderingen
 src/lib/calendar-api.ts                             de aanroepen vanuit de app
 src/lib/calendarConnection.ts                       terugkeer, foutteksten, statussen (puur, getest)
 src/features/CalendarPage.tsx                       Instellingen → Agenda
