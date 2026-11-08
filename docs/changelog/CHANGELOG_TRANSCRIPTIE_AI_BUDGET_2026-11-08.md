@@ -114,6 +114,7 @@ elk bestand van de organisatie naar ElevenLabs, op kosten van het tegoed.
 
   Tegenproef: met de oude voorwaarde ontbreekt de knop bij een gesprek en faalt de test.
 - `npm run test:loading`: alle controles geslaagd. `node scripts/check-csp-hash.mjs`: in orde.
+- `npm run test:mobile -- --theme=both`: 410 pagina's gemeten, 0 met problemen.
 - Op staging alleen gelezen (geen gespreksinhoud): vier opnames, alle via de synchrone route,
   de laatste op 1 juli; drie met notulen. Staging heeft geen `ELEVENLABS_WEBHOOK_SECRET`.
 
