@@ -121,6 +121,7 @@ import { CommunicationPage, type CommunicationFocus } from './features/Communica
 import { useDecisionAlerts, DecisionToasts } from './components/DecisionNotifications';
 import { usePurchaseInvoiceInbox } from './components/PurchaseInvoiceInboxAlerts';
 import type { DecisionTarget } from './lib/decisions-api';
+import type { AuditTarget } from './lib/auditLog';
 import { useTicketUnread, TicketToasts } from './components/TicketNotifications';
 import { useTeamChat, TeamChatPage, TeamChatDock, TeamChatToasts } from './components/TeamChat';
 import { usePushNotifications } from './components/usePushNotifications';
@@ -3420,6 +3421,20 @@ function App() {
     }
   }
 
+  /** "Openen" op een regel uit het logboek (Instellingen → Logboek, het dashboard). */
+  function openAuditTarget(target: AuditTarget) {
+    if (target.kind === 'task') {
+      const task = data.tasks.find(t => t.id === target.id);
+      if (task) setEdit({ kind: 'task', item: task, projectId: task.project_id });
+      return;
+    }
+    if (target.kind === 'project') { setProjectId(target.id); setClientId(null); setStatsReportId(null); setPage('project'); return; }
+    if (target.kind === 'client') { setClientId(target.id); setProjectId(null); setStatsReportId(null); setPage('client'); return; }
+    if (!permissions.canOpenPage(target.page)) return;
+    setProjectId(null); setClientId(null); setStatsReportId(null);
+    setPage(target.page);
+  }
+
   const gerrieActions: GerrieActionHandlers = {
     // Akkoord op een concept-voorstel schrijft het ECHT weg, langs dezelfde weg als
     // het formulier. Het formulier blijft ernaast bestaan (onCreate*Draft hieronder)
@@ -3963,7 +3978,7 @@ function App() {
     // 'projects'), maar op het niveau van 'finance'.
     const canReadContracts = permissions.canRead('finance');
     const canWriteContracts = orgCanWrite && permissions.canWrite('finance');
-    if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} organizationId={activeOrg.id} currentUserId={currentUserId} canWriteTasks={orgCanWrite && permissions.canWrite('projects')} permissions={permissions} gerrieActions={gerrieActions} canWriteGerrie={orgCanWrite && permissions.canWrite('gerrie')} orgCanWrite={orgCanWrite} onOpenDecisionTarget={openDecisionTarget} openFinanceDoc={(kind, id) => { const item = kind === 'quote' ? data.quotes.find(q => q.id === id) : data.invoices.find(i => i.id === id); setPage(kind === 'quote' ? 'quotes' : 'invoices'); setProjectId(null); setClientId(null); if (item) setEdit(kind === 'quote' ? { kind: 'quote', item: item as Quote } : { kind: 'invoice', item: item as Invoice }); }} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} openTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} />;
+    if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} organizationId={activeOrg.id} currentUserId={currentUserId} canWriteTasks={orgCanWrite && permissions.canWrite('projects')} permissions={permissions} gerrieActions={gerrieActions} canWriteGerrie={orgCanWrite && permissions.canWrite('gerrie')} orgCanWrite={orgCanWrite} onOpenDecisionTarget={openDecisionTarget} openFinanceDoc={(kind, id) => { const item = kind === 'quote' ? data.quotes.find(q => q.id === id) : data.invoices.find(i => i.id === id); setPage(kind === 'quote' ? 'quotes' : 'invoices'); setProjectId(null); setClientId(null); if (item) setEdit(kind === 'quote' ? { kind: 'quote', item: item as Quote } : { kind: 'invoice', item: item as Invoice }); }} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openLogbook={() => openSettings('logboek')} onOpenAuditTarget={openAuditTarget} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} openTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} />;
     if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={workMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} refreshKey={refreshRound} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onWithdrawQuote={withdrawQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
     if (page === 'gallery') {
       // Het project leiden we uit de galerij zelf af: dat blijft kloppen ook als
@@ -4031,7 +4046,7 @@ function App() {
       const calendarSettings = permissions.canRead('calendar')
         ? <CalendarPage mode="settings" linkNotice={calendarLinkNotice} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={orgCanWrite && permissions.canWrite('calendar')} canAdmin={canAdmin} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>
         : null;
-      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
+      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings} permissions={permissions} onOpenAuditTarget={openAuditTarget}/>;
     }
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
   }

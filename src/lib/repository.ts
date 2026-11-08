@@ -8,6 +8,7 @@ import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type In
 import type { ReportDefinition } from './reporting';
 import { isAdminRole, type ModuleAccess } from './permissions';
 import { isPortalLoginKey } from './portalLoginKey';
+import { cleanQuery, entityTypesFor, periodStart, type AuditFilters } from './auditLog';
 import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import type {
   AppData,
@@ -224,6 +225,55 @@ function sanitizeMutationValues(values: Record<string, unknown>): Record<string,
   return Object.fromEntries(
     Object.entries(values).filter(([key]) => !protectedMutationFields.has(key)),
   );
+}
+
+// ── Het logboek (Instellingen → Logboek) ────────────────────────────────────
+
+/** Hoeveel regels het logboek per keer laadt ("Meer laden" haalt de volgende). */
+export const AUDIT_PAGE_SIZE = 50;
+
+/**
+ * Eén pagina uit het logboek, nieuwste eerst, met de filters van de pagina.
+ * Wat je ziet, beslist de database (RLS op audit_logs, per module): hier
+ * staat geen eigen rechtencontrole, en dus ook geen tweede die kan afwijken.
+ * `total` = hoeveel regels er bij deze filters zijn (alle pagina's samen).
+ */
+export async function loadAuditLogPage(organizationId: UUID, filters: AuditFilters, offset = 0): Promise<{ rows: AuditLog[]; total: number | null }> {
+  let query = supabase
+    .from('audit_logs')
+    .select('*', { count: 'exact' })
+    .eq('organization_id', organizationId);
+  const from = periodStart(filters.period);
+  if (from) query = query.gte('created_at', from.toISOString());
+  if (filters.actor === 'systeem') query = query.eq('via', 'systeem');
+  else if (filters.actor) query = query.eq('actor_user_id', filters.actor);
+  if (filters.clientId) query = query.eq('client_id', filters.clientId);
+  if (filters.projectId) query = query.eq('project_id', filters.projectId);
+  if (filters.category) query = query.in('entity_type', entityTypesFor(filters.category));
+  const q = cleanQuery(filters.q);
+  if (q) query = query.or(`entity_label.ilike.*${q}*,actor_label.ilike.*${q}*`);
+  const { data, error, count } = await query
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .range(offset, offset + AUDIT_PAGE_SIZE - 1);
+  if (error) {
+    if (['via', 'client_id', 'project_id', 'actor_label'].some(column => isMissingColumn(error, column))) {
+      throw new NotMigratedError('Het logboek heeft migratie 20261108100000_logboek.sql nodig.');
+    }
+    throw error;
+  }
+  return { rows: (data ?? []) as AuditLog[], total: count ?? null };
+}
+
+/** Hoeveel regels er bij zijn gekomen sinds `sinceIso` (voor "3 nieuwe wijzigingen"). */
+export async function countAuditLogSince(organizationId: UUID, sinceIso: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('audit_logs')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .gt('created_at', sinceIso);
+  if (error) return 0;
+  return count ?? 0;
 }
 
 export async function loadOrganizationContext(activeOrganizationId?: UUID | null): Promise<OrganizationContext> {

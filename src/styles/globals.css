@@ -12358,3 +12358,90 @@ body::before{display:none}
 .rb-bar-fill{background:var(--viz-1)}
 /* Rolnamen ("owner", "member") met een hoofdletter, zoals overal in de app. */
 .org-meta span,.workspace-meta-card strong{text-transform:capitalize}
+
+/* ── 18 · Logboek (Instellingen → Logboek en het dashboard) ──────────────── */
+/* Een tijdlijn per dag. Elke regel: een tegel in de kleur van zijn soort, de
+   zin, waar het was en de tijd; uitklappen geeft de wijzigingen per veld. De
+   kleuren zijn de vaste kanalen (ok, info, note, warn …), dus Dag en Nacht en
+   elke look krijgen ze vanzelf. */
+.alog{display:flex;flex-direction:column;gap:12px;min-width:0}
+.alog-privacy{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-md);padding:0}
+.alog-privacy-head{display:flex;align-items:center;gap:9px;width:100%;padding:10px 12px;background:transparent;border:0;color:var(--muted2);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.alog-privacy-head strong{color:var(--text);font-weight:600}
+.alog-privacy-head>span{flex:1;min-width:0}
+.alog-privacy-head svg:first-child{flex:none;color:var(--muted)}
+.alog-privacy ul{margin:0;padding:0 14px 12px 38px;display:flex;flex-direction:column;gap:5px;font-size:12.5px;line-height:1.5;color:var(--muted2)}
+.alog-chevron{flex:none;color:var(--muted);transition:transform var(--t-2) var(--ease)}
+.alog-chevron.is-open{transform:rotate(180deg)}
+.alog-fresh{position:sticky;top:8px;z-index:5;display:flex;justify-content:center}
+.alog-fresh .btn{border-radius:var(--r-pill);box-shadow:var(--shadow-2)}
+.alog-days{display:flex;flex-direction:column;gap:16px}
+.alog-day-head{margin:0 0 6px;padding:0 2px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted2)}
+.alog-day-head::first-letter{text-transform:uppercase}
+.alog-day-head span{color:var(--muted);font-weight:600}
+.alog-list{list-style:none;margin:0;padding:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden}
+.alog-row+.alog-row{border-top:1px solid var(--border)}
+.alog-row-main{display:flex;align-items:flex-start;gap:11px;width:100%;padding:11px 13px;background:transparent;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background var(--t-1) var(--ease)}
+.alog-row-main:hover{background:var(--bg3)}
+.alog-row-main:focus-visible{outline:none;box-shadow:inset var(--ring)}
+.alog-icon{position:relative;flex:none;display:grid;place-items:center;width:32px;height:32px;border-radius:var(--r-sm);background:rgba(var(--cat-rgb,var(--info-rgb)),.13);color:rgb(var(--cat-rgb,var(--info-rgb)))}
+.alog-icon.is-added::after,.alog-icon.is-removed::after{content:"";position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px var(--bg2)}
+.alog-icon.is-removed::after{background:var(--danger)}
+.cat-finance{--cat-rgb:var(--accent-rgb)}
+.cat-clients{--cat-rgb:var(--ok-rgb)}
+.cat-projects{--cat-rgb:var(--info-rgb)}
+.cat-content{--cat-rgb:var(--warn-rgb)}
+.cat-tickets{--cat-rgb:var(--danger-rgb)}
+.cat-time{--cat-rgb:var(--two-rgb)}
+.cat-calendar{--cat-rgb:var(--info-rgb)}
+.cat-marketing{--cat-rgb:var(--note-rgb)}
+.cat-stats{--cat-rgb:var(--two-rgb)}
+.cat-team{--cat-rgb:var(--ai-rgb)}
+.cat-admin{--cat-rgb:var(--ink-rgb)}
+.alog-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.alog-sentence{font-size:13.5px;line-height:1.45;color:var(--muted2);overflow-wrap:anywhere}
+.alog-sentence b{color:var(--text);font-weight:600}
+.alog-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:11.5px;color:var(--muted)}
+.alog-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alog-chip svg{flex:none;color:var(--muted)}
+.alog-chip.is-count,.alog-chip.is-via{padding:0 6px;border-radius:var(--r-xs);background:var(--bg4);font-weight:600;font-variant-numeric:tabular-nums}
+.alog-chip.is-via{background:var(--ai-soft);color:var(--ai-ink)}
+.alog-summary{flex-basis:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alog-time{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:11.5px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--muted2)}
+.alog-details{padding:0 13px 12px 56px;display:flex;flex-direction:column;gap:9px}
+.alog-changes{margin:0;border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;font-size:12.5px}
+.alog-changes>div{display:grid;grid-template-columns:minmax(120px,190px) minmax(0,1fr);gap:4px 12px;padding:7px 11px}
+.alog-changes>div+div{border-top:1px solid var(--border)}
+.alog-changes dt{font-weight:600;color:var(--muted2)}
+.alog-changes dd{margin:0;min-width:0;color:var(--text);overflow-wrap:anywhere}
+.alog-changes s{color:var(--muted);text-decoration-color:rgba(var(--danger-rgb),.6)}
+.alog-changes b{font-weight:600}
+.alog-arrow{margin:0 7px;color:var(--muted)}
+.alog-muted{color:var(--muted2)}
+.alog-muted small{color:var(--muted);font-size:11.5px}
+.alog-facts{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px;font-size:11.5px;color:var(--muted)}
+.alog-open{display:inline-flex;align-items:center;gap:3px;padding:0;background:transparent;border:0;color:var(--accent-ink);font:inherit;font-weight:600;cursor:pointer}
+.alog-open:hover{text-decoration:underline}
+.alog-more{display:flex;justify-content:center}
+.alog-empty{display:flex;flex-direction:column;align-items:center;gap:6px;padding:36px 16px;background:var(--bg2);border:1px dashed var(--border2);border-radius:var(--r-lg);text-align:center;color:var(--muted)}
+.alog-empty strong{color:var(--text);font-size:14px}
+.alog-empty p{margin:0;font-size:12.5px;color:var(--muted2)}
+.alog-skeleton{padding:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-lg)}
+/* Het blok op het dashboard: dezelfde regels, compacter, de tijd relatief. */
+.alog-feed-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.alog-feed-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.alog-feed-row{display:flex;align-items:flex-start;gap:9px;width:100%;padding:7px 6px;margin:0 -6px;width:calc(100% + 12px);background:transparent;border:0;border-radius:var(--r-sm);color:inherit;font:inherit;text-align:left}
+button.alog-feed-row{cursor:pointer;transition:background var(--t-1) var(--ease)}
+button.alog-feed-row:hover{background:var(--bg3)}
+.alog-feed-row .alog-icon{width:26px;height:26px;border-radius:7px}
+.alog-feed-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.alog-feed-text .alog-sentence{font-size:12.5px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.alog-feed-meta{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alog-feed-row time{flex:none;padding-top:2px;font-size:10.5px;color:var(--muted);white-space:nowrap}
+@media (max-width:760px){
+  .alog-row-main{padding:10px 11px;gap:9px}
+  .alog-icon{width:28px;height:28px}
+  .alog-details{padding:0 11px 11px 11px}
+  .alog-changes>div{grid-template-columns:minmax(0,1fr)}
+  .alog-sentence{font-size:13px}
+}

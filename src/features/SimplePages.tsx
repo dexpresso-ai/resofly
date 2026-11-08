@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, LayoutTemplate, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
+import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, History, LayoutTemplate, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceSendMethod, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
+import type { AppData, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceSendMethod, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BrandStudio } from './BrandStudio';
@@ -22,7 +22,9 @@ import { ClientFieldsManager } from './ClientFields';
 import { McpConnections } from '../components/McpConnections';
 import { ApiIntegrations } from '../components/ApiIntegrations';
 import { PageIcon } from '../components/PageIcon';
-import { isAccountantRole, LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel } from '../lib/permissions';
+import { FULL_PERMISSIONS, isAccountantRole, LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel, type Permissions } from '../lib/permissions';
+import { AuditLogPanel } from './AuditLog';
+import type { AuditTarget } from '../lib/auditLog';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -84,10 +86,12 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   accountant: 'Boekhouder',
 };
 
-export type SettingsTab = 'organisatie' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'documenten' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
+export type SettingsTab = 'organisatie' | 'logboek' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'documenten' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
 
 /** De boekhouder ziet alleen wat bij de financiën hoort, en dan alleen-lezen. */
-export const ACCOUNTANT_SETTINGS_TABS: SettingsTab[] = ['organisatie', 'facturatie', 'boekhouding'];
+// Het logboek ook: de boekhouder ziet daar alleen de regels over Financiën
+// (de database houdt de rest dicht), en wie wat boekte hoort bij zijn werk.
+export const ACCOUNTANT_SETTINGS_TABS: SettingsTab[] = ['organisatie', 'logboek', 'facturatie', 'boekhouding'];
 
 /**
  * De regels per rol voor de instellingen-tabbladen, gedeeld door de pagina en
@@ -151,7 +155,8 @@ function moduleAccessSummary(role: OrganizationRole, raw: unknown): string {
 }
 
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
-  { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
+  { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen.' },
+  { id: 'logboek', label: 'Logboek', Icon: History, description: 'Wie wat wanneer en waar heeft aangepast: facturen verstuurd, documenten gewijzigd, taken afgerond, rechten aangepast. Per regel zie je wat er veranderde, van oud naar nieuw.' },
   { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
   { id: 'klantvelden', label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
   { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en lettertypen op wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s, je offerte- en factuur-PDF\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
@@ -1750,6 +1755,8 @@ export function Settings({
   onDisableMember,
   onRevokeInvitation,
   onSave,
+  permissions = FULL_PERMISSIONS,
+  onOpenAuditTarget,
 }: {
   settings: CompanySettings | null;
   data: AppData;
@@ -1774,6 +1781,10 @@ export function Settings({
   onDisableMember: (memberId: string) => Promise<void>;
   onRevokeInvitation: (invitationId: string) => Promise<void>;
   onSave: (settings: CompanySettingsInput) => Promise<void>;
+  /** Modulerechten van wie kijkt: het logboek biedt alleen de soorten aan die hij mag lezen. */
+  permissions?: Permissions;
+  /** Een regel in het logboek openen (de taak, het project, de pagina). */
+  onOpenAuditTarget?: (target: AuditTarget) => void;
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(settingsNav?.tab ?? 'organisatie');
   // Elke keer dat het account-menu naar een instellingen-sectie navigeert (nieuwe
@@ -2634,18 +2645,21 @@ export function Settings({
       </div>}
     </section>}
 
-    <section className="settings-card activity-card">
-      <div className="settings-card-head">
-        <div>
-          <h3>Audit-log basis</h3>
-          <p className="settings-help">Laatste wijzigingen binnen deze organisatie. De log is alleen-lezen en wordt server-side gevuld door database-triggers.</p>
-        </div>
-      </div>
-      <div className="activity-list">
-        {organizationContext.auditLogs.map(log => <AuditLogRow key={log.id} log={log} />)}
-        {organizationContext.auditLogs.length === 0 && <p className="settings-help">Nog geen audit-events. Voer de Sprint 1 SQL-migratie uit en maak daarna een wijziging om dit te vullen.</p>}
-      </div>
-    </section>
+    </div>}
+
+    {/* Het logboek verving hier de kaart "Audit-log basis": die toonde de
+        laatste 40 regels als "Bijgewerkt · task · status, due_date", zonder wie
+        of van wat naar wat. */}
+    {activeTab === 'logboek' && <div className="settings-tab-panel">
+      <AuditLogPanel
+        organizationId={organizationId}
+        data={data}
+        members={organizationContext.teamMembers}
+        currentUserId={currentUserId}
+        permissions={permissions}
+        isAdmin={canAdminOrganization}
+        onOpenTarget={onOpenAuditTarget}
+      />
     </div>}
 
     {activeTab === 'sjablonen' && <div className="settings-tab-panel">
@@ -3213,28 +3227,6 @@ export function Settings({
   </div>;
 }
 
-function AuditLogRow({ log }: { log: AuditLog }) {
-  const changed = log.metadata?.changed_columns;
-  const changedColumns = Array.isArray(changed) ? changed.join(', ') : '';
-  return <div className="activity-row">
-    <div>
-      <strong>{auditActionLabel(log.action)} · {entityLabel(log.entity_type)}</strong>
-      <span>{log.entity_label || log.entity_id || 'Onbekend record'}{changedColumns ? ` · ${changedColumns}` : ''}</span>
-    </div>
-    <time>{formatDateTime(log.created_at)}</time>
-  </div>;
-}
-
-function auditActionLabel(action: string) {
-  const labels: Record<string, string> = { created: 'Aangemaakt', updated: 'Bijgewerkt', deleted: 'Verwijderd', invited: 'Uitgenodigd', accepted: 'Geaccepteerd', revoked: 'Ingetrokken', role_changed: 'Rol gewijzigd', disabled: 'Uitgeschakeld', expired: 'Verlopen', mollie_connected: 'Mollie gekoppeld', plan_changed: 'Plan gewijzigd', seat_purchased: 'Seat gekocht', seat_downgrade_requested: 'Downgrade aangevraagd', payment_succeeded: 'Betaling geslaagd', payment_failed: 'Betaling mislukt', payment_expired: 'Betaling verlopen', subscription_cancelled: 'Subscription geannuleerd', licensed_seats_changed: 'Licenties gewijzigd', invitation_blocked_insufficient_seats: 'Uitnodiging geblokkeerd', billing_synced: 'Billing gesynchroniseerd' };
-  return labels[action] ?? action;
-}
-
-function entityLabel(entity: string) {
-  const labels: Record<string, string> = { organization: 'Organisatie', member: 'Teamlid', invitation: 'Uitnodiging', license_event: 'Licentie', client: 'Klant', project: 'Project', task: 'Taak', ticket: 'Ticket', note: 'Notitie', quote: 'Offerte', invoice: 'Factuur', attachment: 'Bijlage', company_settings: 'Bedrijfsinstellingen', calendar_connection: 'Agenda-koppeling', mollie_connection: 'Mollie-koppeling', calendar_source: 'Agenda', billing_profile: 'Billingprofiel', subscription: 'Subscription', payment: 'Betaling', billing_event: 'Billing-event', license_change: 'Licentiewijziging' };
-  return labels[entity] ?? entity;
-}
-
 function formatEur(cents: number, currency = 'EUR') {
   return new Intl.NumberFormat('nl-NL', { style: 'currency', currency }).format((cents ?? 0) / 100);
 }
@@ -3278,12 +3270,6 @@ function formatDate(value: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'onbekend';
   return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short', year: 'numeric' }).format(date);
-}
-
-function formatDateTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
 function settingsToForm(settings: CompanySettings | null): CompanySettingsInput {

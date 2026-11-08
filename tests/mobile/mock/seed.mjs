@@ -349,6 +349,34 @@ export const emailCampaignStats = [
   { organization_id: ORG, campaign_id: CAMPAIGN_SENT, total: 120, sent: 120, delivered: 118, opened: 42, clicked: 11, replied: 3, bounced: 2, failed: 0, unsubscribed: 1, pending: 0 },
 ];
 
+// Het logboek (Instellingen → Logboek en het blok op het dashboard): een
+// dag of drie aan regels, van factuur versturen tot een reeks taakwijzigingen.
+const audit = (minutesAgo, action, entity_type, entity, label, actor, extra = {}) => {
+  const created = new Date(NOW.getTime() - minutesAgo * 60000);
+  return {
+    id: uid('u'), organization_id: ORG, actor_user_id: actor, actor_label: actor === USER ? 'gerjan@studiolopik.nl' : actor === USER2 ? 'sanne@studiolopik.nl' : actor === USER3 ? 'daan.bakker@studiolopik.nl' : null,
+    via: actor ? 'app' : 'systeem', action, entity_type, entity_id: entity?.id ?? null, entity_label: label,
+    client_id: entity?.client_id ?? null, project_id: entity?.project_id ?? null, event_count: 1,
+    created_at: iso(created), last_at: iso(created), metadata: {}, ...extra,
+  };
+};
+export const auditLogs = [
+  audit(4, 'invoice_sent_to_client', 'invoice', invoices[0], invoices[0].number, USER2),
+  audit(18, 'updated', 'task', tasks[0], tasks[0].title, USER, { event_count: 4, last_at: iso(new Date(NOW.getTime() - 6 * 60000)),
+    metadata: { changes: { status: { old: 'todo', new: 'doing' }, description: { changed: true }, planned_date: { old: null, new: dkey(day(1)) } } } }),
+  audit(42, 'updated', 'document', { ...documents[0], client_id: documents[0].client_id ?? null, project_id: documents[0].project_id ?? null }, documents[0].title, USER3,
+    { metadata: { online: true, changes: { last_edited_at: { changed: true }, size_bytes: { old: 18233, new: 19410 } } } }),
+  audit(65, 'updated', 'task', tasks[1], tasks[1].title, USER, { via: 'koppeling', metadata: { changes: { priority: { old: 'med', new: 'high' } } } }),
+  audit(120, 'invoice_paid', 'invoice', invoices[2], invoices[2].number, null),
+  audit(60 * 26, 'quote_client_accepted', 'quote', quotes[2], quotes[2].number, null),
+  audit(60 * 27, 'created', 'client', { id: clients[1].id, client_id: clients[1].id }, clients[1].name, USER2,
+    { metadata: { changes: { name: { old: null, new: clients[1].name }, status: { old: null, new: 'prospect' } } } }),
+  audit(60 * 28, 'role_changed', 'member', { id: members[2].id }, 'daan.bakker@studiolopik.nl', USER, { metadata: { changes: { role: { old: 'viewer', new: 'member' } } } }),
+  audit(60 * 50, 'updated', 'client', { id: clients[0].id, client_id: clients[0].id }, clients[0].name, USER2,
+    { metadata: { changes: { email: { changed: true }, status: { old: 'prospect', new: 'active' } } } }),
+  audit(60 * 51, 'created', 'attachment', { id: attachments[0].id }, 'moodboard-winter-2026-definitief-versie-3-met-opmerkingen.pdf', USER3),
+];
+
 export const ids = { ORG, USER, USER2 };
 export const tables = {
   clients, client_contacts: [
@@ -381,7 +409,7 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
-  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: [], contracts: [],
+  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: auditLogs, contracts: [],
   client_email_threads: clientEmailThreads, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
   inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias], organization_email_domains: sendingDomains,
   // Het eerste ticket heeft een klantreactie die nog niet gelezen is (view

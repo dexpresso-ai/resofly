@@ -111,6 +111,13 @@ export interface AuditLog {
   entity_label: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
+  /** Sinds het logboek (migratie 20261108100000); ouder = afwezig. */
+  actor_label?: string | null;
+  via?: 'app' | 'koppeling' | 'systeem' | null;
+  client_id?: UUID | null;
+  project_id?: UUID | null;
+  event_count?: number | null;
+  last_at?: string | null;
 }
 
 export interface OrganizationInvitation {

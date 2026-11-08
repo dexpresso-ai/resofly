@@ -22,6 +22,8 @@ import { DayArc, type DayArcItem } from './DayArc';
 import { AttentionList, DayAgenda, MoreFold, ProjectGlance, WeekStrip } from './DashboardCalm';
 import { StreamPanel, StroomAttention, StroomHero } from './StroomToday';
 import { safeHttpUrl } from '../lib/safeUrl';
+import { AuditFeed } from './AuditLog';
+import type { AuditTarget } from '../lib/auditLog';
 
 export type DashboardNavPage =
   | 'clients' | 'projects' | 'project-planning' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar' | 'gerrie';
@@ -127,6 +129,8 @@ export function Dashboard({
   orgCanWrite = false,
   onOpenDecisionTarget,
   openFinanceDoc,
+  openLogbook,
+  onOpenAuditTarget,
 }: {
   data: AppData;
   organizationContext: OrganizationContext;
@@ -148,6 +152,10 @@ export function Dashboard({
   canWriteTasks?: boolean;
   openProject: (id: string) => void;
   openSettings: () => void;
+  /** Instellingen → Logboek; zonder deze prop opent "Alles bekijken" de instellingen. */
+  openLogbook?: () => void;
+  /** Een regel uit het logboek openen (de taak, het project, de pagina). */
+  onOpenAuditTarget?: (target: AuditTarget) => void;
   /** Modulerechten: kaarten van een dichtgezette module tonen we niet — anders
    *  suggereert "€ 0 omzet" dat er niets is, terwijl je het alleen niet mág zien. */
   permissions?: Permissions;
@@ -427,14 +435,18 @@ export function Dashboard({
     </div>
     <Button onClick={openSettings}>Organisatie instellen</Button>
   </div>;
-  const activityBlock = <div className="activity-card compact-activity">
-    <h3>Laatste activiteit</h3>
-    {organizationContext.auditLogs.slice(0, 5).map(log => <div className="activity-row" key={log.id}>
-      <div><strong>{auditLabel(log.action)}</strong><span>{log.entity_label || log.entity_type}</span></div>
-      <time>{formatRelativeTime(log.created_at)}</time>
-    </div>)}
-    {organizationContext.auditLogs.length === 0 && <p className="settings-help">Nog geen audit-events. Nieuwe wijzigingen worden hier zichtbaar zodra de database-migratie is uitgevoerd.</p>}
-  </div>;
+  // Het logboek (Instellingen → Logboek) in het klein. Tot november 2026 stond
+  // hier "Laatste activiteit": vijf regels als "Bijgewerkt · task", zonder wie
+  // of wat er veranderde.
+  const activityBlock = <AuditFeed
+    logs={organizationContext.auditLogs}
+    data={data}
+    members={organizationContext.teamMembers}
+    currentUserId={currentUserId}
+    permissions={permissions}
+    onOpenTarget={onOpenAuditTarget}
+    onOpenLog={openLogbook ?? openSettings}
+  />;
   // Dicht fluistert "Meer van vandaag" de cijfers die je het vaakst zoekt.
   const monthName = now.toLocaleDateString('nl-NL', { month: 'long' });
   const foldWhisper = [
@@ -1094,15 +1106,4 @@ function formatTime(value: string) {
 
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function auditLabel(action: string) {
-  const labels: Record<string, string> = { created: 'Aangemaakt', updated: 'Bijgewerkt', deleted: 'Verwijderd', invited: 'Uitgenodigd', accepted: 'Geaccepteerd', revoked: 'Ingetrokken', role_changed: 'Rol gewijzigd', disabled: 'Uitgeschakeld' };
-  return labels[action] ?? action;
-}
-
-function formatRelativeTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
 }
