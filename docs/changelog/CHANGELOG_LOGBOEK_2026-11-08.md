@@ -151,5 +151,18 @@ Veilig opnieuw te draaien.
   factuurregels; een project verwijderen (met zijn taken) gaf drie regels die
   hun klant en project houden; de tekst uit de omschrijving stond nergens in
   `audit_logs`.
-- Niet gedraaid: `deno check` van de edge functions. deno.land en esm.sh zijn
-  vanuit de cloudsessie niet bereikbaar; de workflow draait het na de push.
+- `deno check` van de edge functions kon in de cloudsessie niet (deno.land en
+  esm.sh zijn daar niet bereikbaar); in CI slaagde het na de push, zie hieronder.
+
+## Uitrol op staging (8 november, 08:43)
+
+- *Deploy Supabase (staging)*: migraties, edge functions en rooktest geslaagd.
+- *Frontend checks*: de migraties vanaf nul, `deno check` van alle edge
+  functions (ook factuur-inbox en documentopmaak), typecheck, CSP-hash en de
+  unittests geslaagd.
+- Nacontrole op de staging-database (alleen lezen): `20261108100000` staat in
+  `schema_migrations`; van de 2.901 bestaande regels staan er 2.221 op
+  "systeem" en 680 op "app", geen regel met een gebruiker zonder naam, 800
+  regels kregen een klant of project, één chatbijlage kreeg een neutrale naam;
+  de zes nieuwe triggers en de nieuwe indeling (galerij, campagnes, mailteksten,
+  klantvelden) staan erop.
