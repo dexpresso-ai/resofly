@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -23,6 +23,7 @@
  */
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
@@ -35,6 +36,7 @@ import { gelijk, gelukt, groep, samenvatting, stap, verwacht } from './toets.mjs
 import { maakWereld, REGELS } from './wereld.mjs';
 import { startUiServer } from './ui-server.mjs';
 import { GOOGLE_ALLES, account, geefCode } from './nep-agenda.mjs';
+import { ai, gesprek, NOTULEN } from './nep-ai.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argumenten = process.argv.slice(2);
@@ -42,7 +44,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -143,7 +145,9 @@ process.env.CALENDAR_REDIRECT_URL = `${server.url}/functions/v1/calendar-integra
 
 async function startChromium() {
   const pad = process.env.RESOFLY_CHROMIUM;
-  const basis = { headless: !opties.zichtbaar };
+  // Een nep-microfoon (een pieptoon), zonder toestemmingsvraag: zo kan het
+  // scenario opname echt opnemen met MediaRecorder.
+  const basis = { headless: !opties.zichtbaar, args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] };
   try {
     return await chromium.launch({ ...basis, executablePath: pad || undefined });
   } catch (error) {
@@ -2047,6 +2051,147 @@ async function scenarioInrichten() {
   });
 }
 
+// ── Opname: een telefoongesprek opnemen, uitschrijven en samenvatten ─────────
+
+/** Naar Klanten → een klant → Communicatie, via het menu zoals een gebruiker. */
+async function naarKlantCommunicatie(scherm, klantNaam) {
+  const page = scherm.page;
+  await sluitAlles(scherm);
+  await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Klanten/ }).first().click();
+  await rustig(scherm);
+  const klant = inhoud(page).locator('.client-card, .clients-table-row').filter({ hasText: klantNaam }).first();
+  await klant.waitFor({ timeout: 15000 });
+  await klant.click();
+  await rustig(scherm);
+  await inhoud(page).getByRole('tab', { name: /^Communicatie/ }).click();
+  await rustig(scherm);
+}
+
+/**
+ * De media-worker van de browser voor opnames. In de UI-test is er geen echte
+ * worker (ui-server.mjs geeft 404); hier komt de audio in nep-R2 onder
+ * dezelfde sleutel als bij de echte worker (<organisatie>/<soort>/<id>/…),
+ * zodat meeting-transcribe hem daar ophaalt.
+ */
+async function ontvangOpnames(scherm) {
+  const geupload = [];
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST, OPTIONS' };
+  await scherm.context.grantPermissions(['microphone'], { origin: APP });
+  await scherm.page.route(/\/__media\/upload$/, async (route) => {
+    const verzoek = route.request();
+    if (verzoek.method() === 'OPTIONS') { await route.fulfill({ status: 204, headers: cors }); return; }
+    const kop = verzoek.headers();
+    const naam = decodeURIComponent(kop['x-file-name'] ?? 'opname.webm');
+    const sleutel = `${kop['x-organization-id']}/${kop['x-entity-type']}/${kop['x-entity-id']}/${randomUUID()}-${naam}`;
+    const bytes = verzoek.postDataBuffer() ?? Buffer.alloc(0);
+    post.r2.set(sleutel, new Uint8Array(bytes));
+    geupload.push({ sleutel, grootte: bytes.length, type: kop['x-file-type'] });
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ ok: true, key: sleutel }) });
+  });
+  return geupload;
+}
+
+/** Het open logvenster met de recorder. */
+function gespreksvenster(page) {
+  return page.locator('section.modal').filter({ has: page.locator('.call-recording') });
+}
+
+async function scenarioOpname() {
+  groep('UI: een telefoongesprek opnemen en samenvatten');
+  const { w } = t;
+  const bewaard = { webhook: process.env.ELEVENLABS_WEBHOOK_SECRET, tegoed: process.env.GERRIE_MONTHLY_USER_COST_EUR };
+  delete process.env.ELEVENLABS_WEBHOOK_SECRET; // synchroon, zoals op staging
+  process.env.GERRIE_MONTHLY_USER_COST_EUR = '1';
+  // Een kort transcript (tot 1,5 s): dan telt de duur die de browser meet.
+  ai.woorden = gesprek(1.5);
+  let geupload = [];
+
+  try {
+    await uiStap('Klanten → klant A → Communicatie → Gesprek loggen → Opname voorbereiden: de knop "Opname starten" staat er', async () => {
+      const lid = await medewerker();
+      geupload = await ontvangOpnames(lid);
+      await naarKlantCommunicatie(lid, w.klantA.name);
+      await inhoud(lid.page).getByRole('button', { name: 'Gesprek loggen' }).click();
+      const venster = gespreksvenster(lid.page);
+      await venster.waitFor({ timeout: 10000 });
+      await venster.getByRole('button', { name: 'Opname voorbereiden' }).click();
+      // Tot 8 november stond hier "Opnemen kan zodra de afspraak is opgeslagen", zonder knop.
+      await venster.getByRole('button', { name: 'Opname starten' }).waitFor({ timeout: 15000 });
+      verwacht(!(await venster.getByText('Opnemen kan zodra de afspraak is opgeslagen.').isVisible().catch(() => false)), 'de oude melding staat er nog');
+    });
+
+    const opnameId = await uiStap('opnemen met de microfoon en stoppen: transcript en notulen verschijnen, de duur van de browser klopt', async () => {
+      const lid = await medewerker();
+      const venster = gespreksvenster(lid.page);
+      await venster.getByRole('button', { name: 'Opname starten' }).click();
+      await venster.getByRole('button', { name: 'Akkoord, start opname' }).waitFor();
+      await rustig(lid);
+      verwacht(!(await venster.locator('.mr-budget-note').isVisible().catch(() => false)), 'een waarschuwing over het tegoed terwijl er tegoed is');
+      gelijk(tekst(await venster.locator('.mr-consent p').first().innerText()),
+        'Dit gesprek wordt opgenomen om er een samenvatting van te maken. Zorg dat de ander hiermee akkoord is.', 'toestemmingsvraag bij een gesprek');
+      await venster.getByRole('button', { name: 'Akkoord, start opname' }).click();
+      const stop = venster.getByRole('button', { name: /Stop & verwerk/ });
+      await stop.waitFor();
+      await slaap(3300);
+      await stop.click();
+      const kaart = venster.locator('.mr-card').first();
+      await wachtTot(async () => /Klaar/.test(await kaart.locator('.mr-status').innerText().catch(() => '')), { timeout: 30000, melding: 'de opname werd niet klaar' });
+      await kaart.getByText(NOTULEN.samenvatting).waitFor({ timeout: 5000 });
+      const rij = sqlRij(`select id, status, duration_seconds, created_by, call_id from public.meeting_recordings
+                            where organization_id = ${q(w.orgId)} and call_id is not null order by created_at desc limit 1`);
+      gelijk([rij.status, rij.created_by], ['done', w.medewerker.id], 'opname');
+      // Het transcript eindigt op 1,5 s; de browser nam ruim 3 s op. Tot 8 november stuurde hij 0 mee.
+      verwacht(rij.duration_seconds >= 3 && rij.duration_seconds <= 6, `duur volgens de browser: ${rij.duration_seconds} s`);
+      gelijk(geupload.length, 1, 'uploads');
+      verwacht(geupload[0].grootte > 1000 && /^audio\//.test(geupload[0].type), `audio: ${JSON.stringify(geupload[0])}`);
+      verwacht(geupload[0].sleutel.startsWith(`${w.orgId}/meeting_recording/${rij.id}/`), `sleutel: ${geupload[0].sleutel}`);
+      const kosten = sqlRijen(`select user_id, model from public.ai_usage where transcribed_recording_id = ${q(rij.id)}`);
+      gelijk(kosten, [{ user_id: w.medewerker.id, model: 'elevenlabs/scribe_v1' }], 'transcriptie in ai_usage');
+      return rij.id;
+    });
+
+    if (opnameId) {
+      await uiStap('tegoed op: de recorder waarschuwt, bewaart de opname, en "Opname uitschrijven" werkt zodra er weer tegoed is', async () => {
+        sql(`insert into public.ai_usage (organization_id, user_id, model, cost_usd) values (${q(w.orgId)}, ${q(w.medewerker.id)}, 'claude-sonnet-5-5', 2)`);
+        const lid = await medewerker();
+        const venster = gespreksvenster(lid.page);
+        await venster.getByRole('button', { name: 'Opname starten' }).click();
+        const noot = venster.locator('.mr-budget-note');
+        await noot.waitFor({ timeout: 10000 });
+        verwacht(/AI-tegoed/.test(await noot.innerText()) && /Opnemen kan wel/.test(await noot.innerText()), `waarschuwing: ${await noot.innerText()}`);
+        await venster.getByRole('button', { name: 'Akkoord, start opname' }).click();
+        const stop = venster.getByRole('button', { name: /Stop & verwerk/ });
+        await stop.waitFor();
+        await slaap(2200);
+        await stop.click();
+        // De reden staat één keer in beeld: op de kaart van de bewaarde opname.
+        const kaart = venster.locator('.mr-card').first();
+        await kaart.getByText('Wacht op uitschrijven').waitFor({ timeout: 20000 });
+        await kaart.locator('.mr-card-note').filter({ hasText: /AI-tegoed.*De opname is bewaard/ }).waitFor();
+        verwacht(!(await venster.locator('.mr-error').isVisible().catch(() => false)), 'dezelfde melding staat ook nog bovenaan');
+        const knop = kaart.getByRole('button', { name: 'Opname uitschrijven' });
+        await knop.waitFor();
+        // Nog steeds geen tegoed: de knop zegt waarom, met de echte reden van de
+        // server en niet "Edge Function returned a non-2xx status code".
+        await knop.click();
+        await venster.locator('.mr-error').filter({ hasText: /AI-tegoed.*De opname is bewaard/ }).waitFor({ timeout: 20000 });
+        verwacht(!/non-2xx/.test(await venster.locator('.mr-error').innerText()), 'de algemene melding van supabase-js in beeld');
+        // Een beheerder geeft meer ruimte; dan kan het alsnog.
+        process.env.GERRIE_MONTHLY_USER_COST_EUR = '25';
+        await knop.click();
+        await wachtTot(async () => /Klaar/.test(await kaart.locator('.mr-status').innerText().catch(() => '')), { timeout: 30000, melding: 'de bewaarde opname werd niet klaar' });
+        verwacht(!(await venster.locator('.mr-error').isVisible().catch(() => false)), 'de oude foutmelding bleef staan');
+        gelijk(geupload.length, 2, 'uploads');
+      }, { toegestaan: [{ functie: 'meeting-transcribe', actie: 'start', status: 429 }] });
+    }
+  } finally {
+    if (bewaard.webhook === undefined) delete process.env.ELEVENLABS_WEBHOOK_SECRET; else process.env.ELEVENLABS_WEBHOOK_SECRET = bewaard.webhook;
+    if (bewaard.tegoed === undefined) delete process.env.GERRIE_MONTHLY_USER_COST_EUR; else process.env.GERRIE_MONTHLY_USER_COST_EUR = bewaard.tegoed;
+    ai.woorden = null;
+    if (t.lid) await sluitAlles(t.lid).catch(() => undefined);
+  }
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -2062,7 +2207,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

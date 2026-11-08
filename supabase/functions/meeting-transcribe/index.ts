@@ -7,18 +7,25 @@
 // Klanten, een afspraakopname onder Agenda. Zie resolveModuleKey().
 //
 // Acties (alle POST, Supabase JWT + org-toegang):
+//  - budget    : is er AI-tegoed om een opname te laten uitschrijven? (alleen lezen)
 //  - create    : maak een opname-rij aan (AVG-toestemming verplicht) -> { id }
-//  - start     : koppel de R2-audio, stuur naar Scribe. Webhook-modus -> status
-//                'transcribing' (transcript volgt async); synchrone modus ->
-//                transcript + notulen meteen -> status 'done'.
+//  - start     : koppel de R2-audio, controleer het AI-budget, stuur naar Scribe.
+//                Webhook-modus -> status 'transcribing' (transcript volgt async);
+//                synchrone modus -> transcript + notulen meteen -> status 'done'.
+//                Is het tegoed op, dan blijft de opname bewaard op 'uploaded'.
 //  - summarize : (her)genereer de notulen uit het opgeslagen transcript.
 //  - delete    : verwijder de opname-rij (de R2-audio wist de frontend zelf).
+//
+// AI-budget: transcriptie en notulen vallen onder hetzelfde maandtegoed als
+// Gerrie (_shared/aiBudget.ts). De transcriptie wordt afgerekend in ai_usage
+// zodra het transcript binnen is (_shared/transcriptionUsage.ts).
 //
 // Beveiliging: organization_id komt uit de body maar wordt altijd tegen het
 // lidmaatschap van de geverifieerde gebruiker gecontroleerd. Schrijven loopt via
 // de service-role (RLS staat alleen lezen toe).
 // ============================================================
 
+import { aiBudgetMessage } from '../_shared/aiBudget.ts';
 import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import {
   HttpError, assertModuleAccess, assertWriteRole, createAdminClient, isUuid, makeCors,
@@ -26,7 +33,8 @@ import {
   type HttpStatus, type OrganizationRole,
 } from '../_shared/edgeAuth.ts';
 import { elevenlabsConfigured, requestTranscription } from '../_shared/elevenlabs.ts';
-import { runSummaryForRecording } from '../_shared/meetingPipeline.ts';
+import { completeTranscription, runSummaryForRecording } from '../_shared/meetingPipeline.ts';
+import { transcriptionBudget, transcriptionCostUsd, transcriptionRefusal } from '../_shared/transcriptionUsage.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { EMAIL_LOGO_SLOT_LIGHT } from '../_shared/emailTemplates/layout.ts';
 import { loadSenderBrand, withEmailBrand } from '../_shared/emailBrand.ts';
@@ -46,9 +54,6 @@ const ALLOWED_ORIGINS = parseAllowedOrigins([
 ]);
 const ALLOW_LOCAL_DEV = (Deno.env.get('MEETING_ALLOW_LOCAL_DEV') || Deno.env.get('GERRIE_ALLOW_LOCAL_DEV') || 'false').toLowerCase() === 'true';
 const cors = makeCors(ALLOWED_ORIGINS, ALLOW_LOCAL_DEV);
-
-// ElevenLabs ~$0.40/uur audio — aparte meter, los van het AI-tokenbudget.
-const ELEVENLABS_USD_PER_HOUR = Number(Deno.env.get('ELEVENLABS_USD_PER_HOUR') || '0.40');
 
 // Grootste audiobestand dat we uit R2 in het geheugen laden en naar Scribe sturen.
 const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
@@ -78,6 +83,7 @@ Deno.serve(async (req) => {
     await assertModuleAccess(admin, user.id, organizationId, moduleKey, WRITE_ACTIONS.has(action) ? 'write' : 'read');
 
     switch (action) {
+      case 'budget': return cors.json(req, await budgetStatus(organizationId, user.id));
       case 'create': return cors.json(req, await createRecording(organizationId, user.id, role, body));
       case 'start': return cors.json(req, await startTranscription(organizationId, role, body));
       case 'summarize': return cors.json(req, await summarize(organizationId, role, body));
@@ -95,6 +101,17 @@ Deno.serve(async (req) => {
 });
 
 // ── Acties ───────────────────────────────────────────────────────────────────
+
+/**
+ * Is er AI-tegoed voor een nieuwe opname? De recorder vraagt het vóór het
+ * opnemen, zodat je niet pas na een uur vergaderen hoort dat het uitschrijven
+ * moet wachten. Het is het eigen tegoed (en dat van de organisatie): de opname
+ * komt op jouw naam.
+ */
+async function budgetStatus(organizationId: string, userId: string) {
+  const budget = await transcriptionBudget(admin, userId, organizationId);
+  return { ok: true, allowed: budget.allowed, message: budget.allowed ? null : aiBudgetMessage(budget) };
+}
 
 async function createRecording(organizationId: string, userId: string, role: OrganizationRole, body: Record<string, unknown>) {
   assertWriteRole(role);
@@ -151,7 +168,10 @@ async function startTranscription(organizationId: string, role: Awaited<ReturnTy
   const recordingId = String(body.recordingId || '');
   const storageKey = String(body.storageKey || '');
   if (!isUuid(recordingId)) throw new HttpError('Ongeldige recordingId.', 400);
-  if (!storageKey || !storageKey.startsWith(`${organizationId}/`)) throw new HttpError('Ongeldige storageKey.', 400);
+  // Alleen audio die bij déze opname is geüpload (de media-worker bewaart hem onder
+  // <organisatie>/meeting_recording/<opname>/). Met alleen de organisatie als
+  // voorvoegsel kon elk bestand van de organisatie naar Scribe, op kosten van het tegoed.
+  if (!storageKey.startsWith(`${organizationId}/meeting_recording/${recordingId}/`)) throw new HttpError('Ongeldige storageKey.', 400);
 
   const rec = await loadRecording(organizationId, recordingId); // org-check (gooit bij onbekende opname)
   // Alleen een verse opname gaat naar Scribe: een tweede 'start' op een opname die
@@ -160,12 +180,25 @@ async function startTranscription(organizationId: string, role: Awaited<ReturnTy
   const durationSeconds = numOrNull(body.durationSeconds);
   const sizeBytes = numOrNull(body.sizeBytes);
   const mimeType = body.mimeType ? String(body.mimeType) : 'audio/webm';
+  const audio = { storage_key: storageKey, mime_type: mimeType, size_bytes: sizeBytes, duration_seconds: durationSeconds };
+
+  // Het AI-budget vóór het geld uitgegeven wordt: transcriptie valt onder hetzelfde
+  // maandtegoed als Gerrie en de notulen, op naam van wie de opname maakte (die
+  // krijgt ook de kosten). Is het op, dan blijft de opname bewaard: de audio staat
+  // al in R2, en met de knop op de kaart kan hij later alsnog.
+  const budget = await transcriptionBudget(admin, rec.created_by, organizationId);
+  if (!budget.allowed) {
+    const message = transcriptionRefusal(budget);
+    await admin.from('meeting_recordings').update({ ...audio, error_message: message })
+      .eq('id', recordingId).eq('organization_id', organizationId).eq('status', 'uploaded');
+    throw new HttpError(message, 429);
+  }
 
   // Voorwaardelijk op 'uploaded', zodat twee gelijktijdige starts er maar één laten winnen.
+  // De kosten hier zijn een eerste schatting; de echte volgen uit het transcript.
   const { data: claimed, error: claimError } = await admin.from('meeting_recordings').update({
-    storage_key: storageKey, mime_type: mimeType, size_bytes: sizeBytes, duration_seconds: durationSeconds,
-    status: 'transcribing', error_message: null,
-    transcription_cost_usd: durationSeconds ? round4((durationSeconds / 3600) * ELEVENLABS_USD_PER_HOUR) : 0,
+    ...audio, status: 'transcribing', error_message: null,
+    transcription_cost_usd: transcriptionCostUsd(durationSeconds ?? 0),
   }).eq('id', recordingId).eq('organization_id', organizationId).eq('status', 'uploaded').select('id');
   if (claimError) throw new HttpError('Opname bijwerken mislukt.', 500);
   if (!claimed?.length) throw new HttpError('Deze opname wordt al verwerkt of is al verwerkt.', 409);
@@ -176,18 +209,17 @@ async function startTranscription(organizationId: string, role: Awaited<ReturnTy
     const { requestId, transcript } = await requestTranscription(bytes, mimeType, filename);
 
     if (requestId) {
-      // Async: het transcript volgt via de webhook.
+      // Async: het transcript (en het afrekenen) volgt via de webhook.
       await admin.from('meeting_recordings').update({ elevenlabs_request_id: requestId }).eq('id', recordingId);
       return { ok: true, status: 'transcribing' };
     }
 
-    // Synchroon: transcript meteen opslaan en daarna samenvatten.
-    await admin.from('meeting_recordings').update({
-      transcript_text: transcript!.text, transcript_json: transcript!.segments,
-      language: transcript!.language, status: 'transcribed',
-    }).eq('id', recordingId);
-    const outcome = await runSummaryForRecording(admin, recordingId);
-    return { ok: true, status: outcome.summarized ? 'done' : 'transcribed', summary: outcome };
+    // Synchroon: transcript opslaan, afrekenen in ai_usage en samenvatten. Niet
+    // opgeslagen betekent: de opname wachtte niet meer (al verwerkt of gewist);
+    // dan niets overschrijven, ook niet met een foutstatus.
+    const outcome = await completeTranscription(admin, recordingId, transcript!);
+    const summary = outcome.summary;
+    return { ok: true, status: summary?.summarized ? 'done' : 'transcribed', summary };
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Transcriptie mislukt.';
     await admin.from('meeting_recordings').update({ status: 'error', error_message: message }).eq('id', recordingId);
@@ -336,16 +368,17 @@ async function resolveModuleKey(organizationId: string, action: string, body: Re
     return data?.call_id ? 'clients' : 'calendar';
   }
   // Geen bestaande opname: alleen dan telt wat de body zegt, en alleen bij
-  // 'create' — de enige actie die zonder recordingId hoort te werken.
-  if (action === 'create' && body.callId) return 'clients';
+  // 'create' — de enige actie die zonder recordingId hoort te werken — en bij
+  // 'budget', dat vóór 'create' komt en alleen het eigen tegoed laat zien.
+  if ((action === 'create' || action === 'budget') && body.callId) return 'clients';
   return 'calendar';
 }
 
 async function loadRecording(organizationId: string, recordingId: string) {
   const { data, error } = await admin.from('meeting_recordings')
-    .select('id, organization_id, status').eq('id', recordingId).eq('organization_id', organizationId).single();
+    .select('id, organization_id, status, created_by').eq('id', recordingId).eq('organization_id', organizationId).single();
   if (error || !data) throw new HttpError('Opname niet gevonden in deze organisatie.', 404);
-  return data;
+  return data as { id: string; organization_id: string; status: string; created_by: string | null };
 }
 
 /** Gooit een 404 als de klant/het project/de agenda niet bij deze organisatie hoort. */
@@ -476,4 +509,3 @@ function numOrNull(v: unknown): number | null {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
 }
-function round4(n: number): number { return Math.round(n * 10000) / 10000; }

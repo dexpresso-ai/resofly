@@ -94,4 +94,11 @@ Object.assign(process.env, {
   CAMPAIGN_CRON_SECRET: CRON_SECRET,
   UNSUBSCRIBE_SECRET: AFMELD_GEHEIM,
   CAMPAIGN_DISPATCH_BATCH: '5',
+  // Opnames en notulen (notulen.mjs): ElevenLabs en Claude zijn nep (nep-ai.mjs).
+  // Hier en niet in het scenario: elevenlabs.ts en claudeSummary.ts lezen hun
+  // sleutel bij het laden, en een ander scenario kan die code al eerder laden.
+  // Zonder ELEVENLABS_WEBHOOK_SECRET de synchrone route, zoals op staging; het
+  // scenario zet het geheim zelf voor de webhook-route.
+  ELEVENLABS_API_KEY: 'xi-stromen-test',
+  ANTHROPIC_API_KEY: 'sk-ant-stromen-test',
 });
