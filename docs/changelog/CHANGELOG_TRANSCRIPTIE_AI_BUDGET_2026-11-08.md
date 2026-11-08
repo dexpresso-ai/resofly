@@ -118,6 +118,32 @@ elk bestand van de organisatie naar ElevenLabs, op kosten van het tegoed.
 - Op staging alleen gelezen (geen gespreksinhoud): vier opnames, alle via de synchrone route,
   de laatste op 1 juli; drie met notulen. Staging heeft geen `ELEVENLABS_WEBHOOK_SECRET`.
 
+## Uitrol op staging (8 november, 22:21 UTC)
+
+- Gemerged als `8b81350`. De Frontend checks op die commit waren groen.
+- De deploy faalde vier keer bij `supabase db push`: de pooler kreeg geen verbinding met de
+  database (`Connection terminated unexpectedly`, later `FATAL: Failed to connect to database:
+  :timeout`). Er was niets van toegepast.
+- Oorzaak: de database liep vast op schijf-IO. De CPU stond op 96 à 99%, bijna alles IOwait, op
+  de kleinste instance (geen compute-upgrade). De database was 860 MB, waarvan 807 MB logboek:
+  `net._http_response` (527 MB, de antwoorden van pg_net) en `cron.job_run_details` (280 MB, de
+  geschiedenis van pg_cron). Geen van beide wordt door de app gelezen.
+- In overleg zijn beide tabellen geleegd met `TRUNCATE`, via de Management API, met schrijfrecht
+  voor alleen die ene transactie. De database ging van 860 naar 54 MB, en binnen een minuut stonden
+  database, REST, Auth en Storage weer op gezond.
+- Daarna slaagde de deploy:
+  - migratie `20261108171500` is toegepast (256 migraties op staging), met kolom en index;
+  - `meeting-transcribe` en `meeting-transcribe-webhook` zijn bijgewerkt (22:20:58 UTC);
+  - de rooktest is groen.
+- **Valkuil bij het meten:** een query met `read_only: true` draait als
+  `supabase_read_only_user`, en die rol heeft `default_transaction_read_only=on`. Daar geeft
+  `current_setting('default_transaction_read_only')` dus altijd `on`, ook als de database gewoon
+  schrijfbaar is. Dat gaf eerst ten onrechte de indruk dat staging in alleen-lezen stond. Meet het
+  zonder `read_only` (als `postgres`) met een query die niets schrijft.
+- **Nog open:** de twee logtabellen groeien weer bij elke cron-run. Er is nog geen dagelijkse
+  opruimtaak. Die hoort in een migratie, in dezelfde stijl als
+  `20261101070000_mcp_clients_purge.sql`.
+
 ## Na de uitrol
 
 - **Lange opnames:** staging transcribeert synchroon. Bij een opname van een uur kan de edge
