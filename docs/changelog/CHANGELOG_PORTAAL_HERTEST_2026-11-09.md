@@ -186,3 +186,8 @@ goed en veilig werkt."*
   - uitzetten gooit de sleutel meteen weg, en weer aanzetten maakt hem niet weer geldig;
   - een haperend domein en het herstel daarvan.
 - De browsertest `klantdomein`: 17 stappen, 0 fout.
+- `npm run test:stromen`: 900 stappen, 0 fout.
+- `npm run test:mobile -- --theme=both`: 422 pagina's, 0 met problemen.
+- `npm run build` (zoals Cloudflare Pages) en `scripts/check-csp-hash.mjs`.
+- Migraties vanaf nul (`supabase db reset`, Postgres 17.11): 260 van 260. De nieuwe migratie
+  ook twee keer achter elkaar.
