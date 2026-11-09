@@ -31,7 +31,11 @@ permissions:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    # Vast op 24.04: sinds 9 november is ubuntu-latest Ubuntu 26.04, en
+    # Playwright 1.56 installeert daar geen Chromium ("does not support chromium
+    # on ubuntu26.04-x64"); de lay-outtests draaiden dan niet. Terug naar
+    # ubuntu-latest zodra een Playwright-versie 26.04 ondersteunt.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
