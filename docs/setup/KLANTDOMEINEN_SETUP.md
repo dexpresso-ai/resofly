@@ -42,6 +42,15 @@ de stap *Je webadres*, het tabblad Domein, de controle of een naam bestaat, en d
 inlogmail van het portaal (met link naar het adres van de app). Een eigen domein koppelen
 meldt *"Eigen domeinen zijn op deze omgeving nog niet ingericht"* tot stap 3 klaar is.
 
+Sinds 9 november staat ook de Worker van stap 2 (`resofly-client-domains-staging`), met
+`CLIENT_DOMAINS_WORKER_SECRET` in de Worker en in Supabase (dezelfde waarde). Er hangen nog
+**geen routes** aan: die komen samen met het DNS-record van stap 1, want zonder dat record
+vangt `*.resofly.com/*` alleen de adressen van ResoFly zelf. Controle zonder route: open
+`https://resofly-client-domains-staging.gerjan.workers.dev/`. Dan hoort de neutrale pagina
+*"Dit adres is niet in gebruik"* (404) te verschijnen: de Worker kreeg antwoord van
+`client-domains`. *"Even niet bereikbaar"* (503) betekent dat de opzoeking mislukt,
+bijvoorbeeld omdat het geheim niet overeenkomt.
+
 ## 1. DNS: de namen bij ResoFly
 
 In Cloudflare, zone `resofly.com`, onder DNS → Records:
