@@ -88,10 +88,10 @@ Raakt je wijziging een edge function, draai dan ook de `deno check`-lijst uit
   (`SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io`); public.ecr.aws en GHCR zijn
   niet bereikbaar. Daarna werkt `npx supabase db start`.
 - **Postgres-versie:** `supabase/.temp/postgres-version` volgt staging
-  (17.6.1.111). Die versie, en 17.6.1.106, crasht lokaal zodra een ingelogde
-  gebruiker een functie aanroept waar hij geen recht op heeft (supautils); de
-  stromen falen dan in offertes en beveiliging. Zet voor `supabase start`
-  tijdelijk `17.6.1.178` in dat bestand en zet het daarna terug.
+  (17.11.0.018 sinds 9 november). Verander het mee als staging een andere
+  versie krijgt. Oudere versies (17.6.1.106 en 17.6.1.111) crashten zodra een
+  ingelogde gebruiker een functie aanriep waar hij geen recht op had
+  (supautils); de stromen faalden dan in offertes en beveiliging.
 - **Staging zonder databasewachtwoord:** is Supabase als koppeling verbonden,
   dan kun je de Management API via de proxy gebruiken. Lees alleen, met `POST
   https://api.supabase.com/v1/projects/<ref>/database/query` en `read_only:

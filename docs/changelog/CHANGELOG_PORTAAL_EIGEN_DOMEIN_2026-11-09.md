@@ -163,10 +163,10 @@ portaal.
 
 ## Ook gevonden, los van deze wijziging
 
-Lokaal crashte Postgres 17.6.1.111, de versie waarop staging draait (en 17.6.1.106), telkens
+Lokaal crashte Postgres 17.6.1.111, de versie waarop staging draaide (en 17.6.1.106), telkens
 als een ingelogde gebruiker een functie aanriep waar hij geen recht op heeft: in plaats van
 *"permission denied"* stopte het databaseproces (de uitbreiding supautils), en de hele database
 herstartte even. Met 17.6.1.178 gebeurt dat niet. Dat staat los van deze wijziging (het gebeurt
 ook zonder de nieuwe migratie), maar op staging zou zo'n aanroep hetzelfde kunnen doen. Getest
-op staging is dat bewust niet. Advies: staging bijwerken naar de nieuwste Postgres
-(Supabase → Settings → Infrastructure). Zie ook `CLAUDE.md`.
+op staging is dat bewust niet. Opgelost: staging draait sinds 9 november op 17.11.0.018
+(`CHANGELOG_POSTGRES_17_11_2026-11-09.md`).
