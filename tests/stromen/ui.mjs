@@ -1987,10 +1987,27 @@ async function scenarioInrichten() {
     await p.fill('#onb-f-kvk_number', '1234 5678');
     await p.fill('#onb-f-vat_number', 'nl001234567b01');
     await p.fill('#onb-f-iban', 'nl91abna0417164300');
-    await volgende(/Btw en boekhouding/);
+    await volgende(/webadres/);
     const rij = instellingen();
     gelijk([rij?.company_name, rij?.trade_name, rij?.postal_code, rij?.email, rij?.kvk_number, rij?.vat_number, rij?.iban],
       ['Jansen & De Vries V.O.F.', 'Studio Jansen', '1015 AA', 'info@studiojansen.test', '12345678', 'NL001234567B01', 'NL91 ABNA 0417 1643 00'], 'bedrijfsgegevens');
+  });
+
+  // Het webadres voor klanten (migratie 20261108230000): verplicht, en de
+  // stap zegt terwijl je typt of de naam vrij is. Een eigen naam per run: de
+  // voorgestelde naam (uit de handelsnaam) is na een eerdere run al bezet.
+  // Tot 9 november ontbrak deze stap hier; toen bleef de test bij
+  // "Btw en boekhouding" staan.
+  const webadres = `studio-jansen-${Date.now().toString(36)}`;
+  await uiStap('je webadres: een vrije naam, en die wordt het adres voor klanten', async () => {
+    const p = scherm.page;
+    const kaart = p.locator('.onb-address');
+    await kaart.waitFor({ timeout: 15000 });
+    verwacht(/studio-jansen/.test(await p.locator('#onb-f-address').inputValue()), 'geen naam voorgesteld uit de handelsnaam');
+    await p.locator('#onb-f-address').fill(webadres);
+    await wachtTot(async () => (await kaart.innerText()).includes(`${webadres}.resofly.com is beschikbaar`), { melding: 'de naam werd niet als vrij gemeld' });
+    await volgende(/Btw en boekhouding/);
+    gelijk(sqlRij(`select name, status from public.client_subdomains where organization_id = ${q(orgId)}`), { name: webadres, status: 'active' }, 'het webadres');
   });
 
   await uiStap('btw: de kleineondernemersregeling', async () => {
@@ -2018,7 +2035,7 @@ async function scenarioInrichten() {
     verwacht(await scherm.page.locator('#onb-f-mollie').count() === 1, 'de eigenaar ziet geen veld voor de key');
     await volgende(/beginnen/);
     const overzicht = tekst(await scherm.page.locator('.onb-summary').innerText());
-    for (const woord of ['VOF', 'Jansen & De Vries V.O.F.', 'KOR', 'Per e-mail', 'Niet gekoppeld']) verwacht(overzicht.includes(woord), `"${woord}" ontbreekt in het overzicht: ${overzicht.slice(0, 300)}`);
+    for (const woord of ['VOF', 'Jansen & De Vries V.O.F.', `${webadres}.resofly.com`, 'KOR', 'Per e-mail', 'Niet gekoppeld']) verwacht(overzicht.includes(woord), `"${woord}" ontbreekt in het overzicht: ${overzicht.slice(0, 300)}`);
   });
 
   await uiStap('afronden: de werkruimte opent, met de naam van het bedrijf', async () => {
