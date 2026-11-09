@@ -146,8 +146,9 @@ van 8 november):
   een uitgezet adres).
 - `npm run test:inrichten` (de nieuwe stap: voorstel, bestaat al, gereserveerd, te kort,
   vastleggen; niet afronden zonder; verder gaan na een update) en `npm run test:loading`.
-- `npm run test:mobile -- --theme=both`, met de nieuwe pagina's *settings-domein* en
-  *inrichten-webadres*. Daarbij gevonden: op de telefoon rekte de kop van een korte stap op.
+- `npm run test:mobile -- --theme=both`: 422 pagina's, 0 met problemen, met de nieuwe pagina's
+  *settings-domein* en *inrichten-webadres*. Daarbij gevonden: op de telefoon rekte de kop van
+  een korte stap op.
 - De Worker in workerd (Miniflare, `workers/client-domains/test/worker.mjs`), zonder netwerk.
 
 ## Wat er nog moet
