@@ -201,7 +201,7 @@ misging:
   (rekendatum 8 vs. 9 november): de run viel rond middernacht in Amsterdam,
   terwijl het in UTC nog de 8e was. Na middernacht UTC opnieuw
   `npm run test:stromen -- herinneringen`: 66 stappen, 0 fout. Daarna de hele
-  suite nog eens: zie de uitrol hieronder.
+  suite nog eens: **785 stappen, 0 fout**.
 - `npm run test:mobile -- --theme=both` — 410 pagina's gemeten, 0 met problemen;
   plus schermafdrukken van het videoblok (vijf keuzes: drie en twee),
   Instellingen → Agenda en de videokaart, op telefoon en desktop, licht en
