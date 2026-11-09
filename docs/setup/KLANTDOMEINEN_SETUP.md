@@ -4,11 +4,14 @@ Elke organisatie kiest bij het inrichten een webadres: `<naam>.resofly.com`. Daa
 een klant zijn portaal, albums, offertes, facturen, contracten en gedeelde bestanden. Met een
 betaald abonnement kan een organisatie ook een eigen domein koppelen, zoals
 `albums.fotostudiojansen.nl`, voor de documenten met een link (album, factuur, offerte,
-contract, deellink, boeking). Het klantportaal blijft op `<naam>.resofly.com`: de sessie van
-een klant geldt bij al zijn leveranciers, en de DNS van een eigen domein beheert de
-organisatie zelf. De Worker stuurt `/portal` op een eigen domein door. Het plan staat in
+contract, deellink, boeking). Met een schakelaar in Instellingen → Domein staat ook het
+klantportaal op dat domein. De klant logt daar in met een code van ResoFly en krijgt een
+sleutel voor alleen dat portaal, nooit een inlog bij Supabase: de DNS van een eigen domein
+beheert de organisatie zelf. Staat de schakelaar uit, dan stuurt de Worker `/portal` op een
+eigen domein door naar `<naam>.resofly.com`. Het plan staat in
 `docs/plannen/EIGEN_SUBDOMEIN_PLAN_2026-11-08.md`, de wijzigingen in
-`docs/changelog/CHANGELOG_KLANTDOMEINEN_2026-11-09.md`.
+`docs/changelog/CHANGELOG_KLANTDOMEINEN_2026-11-09.md` en
+`docs/changelog/CHANGELOG_PORTAAL_EIGEN_DOMEIN_2026-11-09.md`.
 
 Wat de code al levert:
 
@@ -16,6 +19,9 @@ Wat de code al levert:
   domeinen (`client_domains`), de inlogaanvragen van het portaal (`portal_login_requests`),
   de RPC's `client_subdomain_check` en `client_subdomain_claim`, en de eis dat een
   organisatie een webadres heeft voordat de inrichting afrondt;
+- migratie `20261109020000_portaal_eigen_domein.sql`: het portaal op het eigen domein
+  (`client_domains.portal_enabled`), de vastgelegde inloggen (`portal_sessions`) en de
+  sleutels van een eigen domein (`portal_tokens`);
 - de edge function `client-domains` (`verify_jwt = false`, zie `supabase/config.toml`):
   het overzicht voor Instellingen → Domein, eigen domeinen via Cloudflare for SaaS, de
   opzoeking voor de Worker en de nachtelijke ronde;
@@ -145,8 +151,20 @@ links naar het adres van de app blijven werken. Terug: dezelfde regel met `false
 ## 6. Supabase Auth
 
 Niets nieuws. De inlogmail komt van ResoFly zelf (`portal-login`), en de browser logt in met
-het token uit die mail (`verifyOtp` met `token_hash`); daar is geen redirect-URL voor nodig.
-Een klantadres hoeft dus niet in de lijst *Redirect URLs*.
+het token uit die mail (`/auth/v1/verify` met `token_hash` of de code); daar is geen
+redirect-URL voor nodig. Een klantadres hoeft dus niet in de lijst *Redirect URLs*.
+
+Na het inloggen legt `portal-login` de inlog vast (`portal_sessions`); `client-portal` neemt
+alleen een vastgelegde inlog aan. Op een eigen domein met het portaal aan maakt Supabase Auth
+geen inlog: daar is de code van ResoFly zelf, en krijgt de browser een sleutel
+(`portal_tokens`). Bij de eerste uitrol van die wijziging logt elke klant één keer opnieuw in.
+
+## 7. Het portaal op een eigen domein
+
+Niets in te stellen buiten de app. Het werkt zodra de klantadressen live zijn (stap 5) en het
+domein actief is: de eigenaar of een beheerder zet in Instellingen → Domein *"Ook het
+klantportaal op `<domein>`"* aan. De Worker onthoudt een opzoeking een minuut; zo lang kan het
+duren voor het portaal op het domein verschijnt of weer doorstuurt.
 
 ## Wat je ziet als iets niet klopt
 
@@ -157,3 +175,6 @@ Een klantadres hoeft dus niet in de lijst *Redirect URLs*.
 | Een eigen domein blijft op *Wacht op het record* | Het CNAME-record wijst niet naar `CLIENT_DOMAIN_CNAME_TARGET` (het scherm zegt waarheen wel), het staat bij Cloudflare met een oranje wolkje, of het TXT-record van deze koppeling ontbreekt. Zonder dat TXT-record wordt een domein nooit actief, ook als Cloudflare het al goedkeurde: zo kan niemand een vergeten record van een ander overnemen. |
 | *Certificaat wordt gemaakt* duurt uren | Een CAA-record bij de klant: het scherm geeft de tekst van Cloudflare. |
 | Links gaan nog naar het adres van de app | `CLIENT_DOMAINS_LIVE` staat niet aan, of de organisatie heeft (nog) geen webadres: organisaties van vóór deze functie kiezen het in Instellingen → Domein. |
+| Een klant ziet *"Je bent uitgelogd. Log opnieuw in."* | De server kent zijn inlog niet (meer): een inlog van vóór 9 november, het portaal is op dat eigen domein uitgezet, of het adres is niet meer van die organisatie. Opnieuw inloggen lost het op. |
+| Op het eigen domein stuurt `/portal` door naar `<naam>.resofly.com` | De schakelaar *"Ook het klantportaal"* staat uit, of het domein is niet actief. Na omzetten kan het een minuut duren (de Worker onthoudt een opzoeking). |
+| De inlogmail van een klant bevat geen code | Hij is ook teamlid (of uitgenodigd) bij een organisatie: dan alleen de link, die werkt in de browser waarin hij de inlog aanvroeg. |

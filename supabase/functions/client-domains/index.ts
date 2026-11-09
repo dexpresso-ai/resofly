@@ -28,10 +28,12 @@ import { takeEmailQuota } from '../_shared/emailQuota.ts';
 //   refreshDomain de stand bij Cloudflare opnieuw ophalen;
 //   removeDomain  ontkoppelen. Was het actief, dan stuurt het nog twaalf
 //                 maanden door (links in verstuurde mails blijven werken);
+//   setPortal     het klantportaal ook op het eigen domein, of niet (owner/
+//                 admin, migratie 20261109020000);
 //   lookup        voor de Worker: wat hoort er bij deze hostnaam (alleen met
 //                 CLIENT_DOMAINS_WORKER_SECRET, en alleen openbare gegevens);
 //   ?cron=recheck voor pg_cron: wachtende en actieve domeinen nalopen, oude
-//                 namen en inlogaanvragen opruimen.
+//                 namen, inlogaanvragen en inloggen in het portaal opruimen.
 //
 // De organisatie komt uit de aanroep, maar alleen na de controle op het
 // lidmaatschap van de ingelogde gebruiker (harde regel 1). Alles wat hier
@@ -73,9 +75,10 @@ type DomainRow = {
   last_checked_at: string | null;
   redirect_until: string | null;
   created_at: string;
+  portal_enabled: boolean;
 };
 
-const DOMAIN_COLUMNS = 'id,organization_id,hostname,status,cf_custom_hostname_id,cf_state,verified_at,last_checked_at,redirect_until,created_at';
+const DOMAIN_COLUMNS = 'id,organization_id,hostname,status,cf_custom_hostname_id,cf_state,verified_at,last_checked_at,redirect_until,created_at,portal_enabled';
 const LIVE_STATUSES: ClientDomainStatus[] = ['pending_dns', 'pending_certificate', 'active', 'failing', 'blocked'];
 
 serve(async (req) => {
@@ -108,6 +111,10 @@ serve(async (req) => {
       case 'removeDomain':
         assertAdmin(role);
         return cors.json(req, { ok: true, ...(await removeDomain(organizationId, user.id, String(body.domainId ?? ''), config)) });
+      case 'setPortal':
+        assertAdmin(role);
+        if (typeof body.enabled !== 'boolean') throw new HttpError('Kies aan of uit.', 400);
+        return cors.json(req, { ok: true, ...(await setPortal(organizationId, user.id, String(body.domainId ?? ''), body.enabled, config)) });
       default:
         throw new HttpError(`Onbekende actie: ${action}`, 400);
     }
@@ -181,7 +188,7 @@ async function overview(organizationId: string, config: ClientDomainsConfig) {
     // Net als portalLinkBase: wijkt het adres af van dat van de app, dan is het
     // het klantadres. De app laat het inlogadres met sleutel dan weg.
     onClientHost: Boolean(clientUrl) && clientUrl !== APP_PUBLIC_URL,
-    // Het portaal: altijd op de naam bij ResoFly, nooit op een eigen domein.
+    // Het portaal: op het eigen domein als het daar aan staat, anders op de naam bij ResoFly.
     portalUrl,
     portalOnClientHost: Boolean(portalUrl) && portalUrl !== APP_PUBLIC_URL,
   };
@@ -200,6 +207,7 @@ function domainView(row: DomainRow, config: ClientDomainsConfig) {
     verifiedAt: row.verified_at,
     lastCheckedAt: row.last_checked_at,
     createdAt: row.created_at,
+    portalEnabled: row.portal_enabled === true,
   };
 }
 
@@ -475,7 +483,7 @@ async function checkDomain(row: DomainRow, config: ClientDomainsConfig): Promise
   const next = data as DomainRow;
   if (row.status !== next.status && (next.status === 'active' || next.status === 'failing')) {
     await audit(row.organization_id, null, next.status === 'active' ? 'active' : 'failing', row.id, row.hostname, { problem });
-    await notifyAdmins(row.organization_id, row.hostname, next.status, problem);
+    await notifyAdmins(row.organization_id, row.hostname, next.status, problem, next.portal_enabled === true);
   }
   return next;
 }
@@ -513,6 +521,25 @@ async function removeDomain(organizationId: string, userId: string, domainId: st
   if (error) throw error;
   await audit(organizationId, userId, 'removed', row.id, row.hostname, {});
   return { removed: true, clientUrl: await clientBaseUrl(admin, organizationId, APP_PUBLIC_URL, config) };
+}
+
+/**
+ * Het klantportaal ook op het eigen domein, of niet. Een inlog daar geldt
+ * alleen voor deze organisatie (portal_sessions), dus de DNS van het domein
+ * geeft geen toegang tot wat een klant bij een ander heeft. Gaat het uit, dan
+ * geven de inloggen van dat domein niets meer (portal_session_scope kijkt bij
+ * elke aanroep of het portaal er nog aan staat).
+ */
+async function setPortal(organizationId: string, userId: string, domainId: string, enabled: boolean, config: ClientDomainsConfig) {
+  const row = await loadDomain(organizationId, domainId);
+  if (row.status === 'blocked') throw new HttpError('Dit domein is door ResoFly uitgezet. Neem contact op met ResoFly.', 409);
+  if (!LIVE_STATUSES.includes(row.status)) throw new HttpError('Dit domein is verwijderd.', 409);
+  if (row.portal_enabled === enabled) return { domain: domainView(row, config) };
+  const { data, error } = await admin.from('client_domains').update({ portal_enabled: enabled })
+    .eq('id', row.id).eq('organization_id', organizationId).select(DOMAIN_COLUMNS).single();
+  if (error) throw error;
+  await audit(organizationId, userId, enabled ? 'portal_enabled' : 'portal_disabled', row.id, row.hostname, {});
+  return { domain: domainView(data as DomainRow, config) };
 }
 
 // ── Voor de Worker: wat hoort er bij deze hostnaam? ─────────────────────────
@@ -583,7 +610,7 @@ async function lookupHost(host: string, config: ClientDomainsConfig) {
     }
     return { status: 'active' as const, kind: 'subdomain' as const, host, ...(await brandFor(String(data.organization_id))) };
   }
-  const { data, error } = await admin.from('client_domains').select('organization_id,status,redirect_until')
+  const { data, error } = await admin.from('client_domains').select('organization_id,status,redirect_until,portal_enabled')
     .eq('hostname', parsed.hostname).neq('status', 'removed').limit(1).maybeSingle();
   if (error) throw error;
   if (!data) return { status: 'unknown' as const };
@@ -594,12 +621,15 @@ async function lookupHost(host: string, config: ClientDomainsConfig) {
     const target = await currentHost(String(data.organization_id), config);
     return target && target !== host ? { status: 'redirect' as const, redirectHost: target } : { status: 'unknown' as const };
   }
-  // Het portaal woont niet op een eigen domein (_shared/clientLinks.ts,
-  // clientPortalBaseUrl): de Worker stuurt het door naar de naam bij ResoFly.
+  // Het portaal staat hier als de organisatie het aanzette (setPortal). Anders
+  // stuurt de Worker het door naar de naam bij ResoFly.
+  if (data.portal_enabled === true) {
+    return { status: 'active' as const, kind: 'custom' as const, host, portalEnabled: true, portalHost: null, ...(await brandFor(String(data.organization_id))) };
+  }
   const { data: sub } = await admin.from('client_subdomains').select('name')
     .eq('organization_id', String(data.organization_id)).eq('status', 'active').maybeSingle();
   const portalHost = sub?.name ? subdomainHost(String(sub.name), config.base) : null;
-  return { status: 'active' as const, kind: 'custom' as const, host, portalHost, ...(await brandFor(String(data.organization_id))) };
+  return { status: 'active' as const, kind: 'custom' as const, host, portalEnabled: false, portalHost, ...(await brandFor(String(data.organization_id))) };
 }
 
 // ── pg_cron: nalopen en opruimen ─────────────────────────────────────────────
@@ -613,7 +643,7 @@ async function handleCron(req: Request): Promise<Response> {
   try {
     const config = clientDomainsConfig();
     const started = Date.now();
-    const result = { checked: 0, removed: 0, failed: 0, names: 0, logins: 0 };
+    const result = { checked: 0, removed: 0, failed: 0, names: 0, logins: 0, sessions: 0 };
     const nowIso = new Date().toISOString();
 
     // Oude namen waarvan de doorstuurtijd voorbij is: weer vrij.
@@ -627,6 +657,11 @@ async function handleCron(req: Request): Promise<Response> {
       .lt('expires_at', new Date(Date.now() - 86_400_000).toISOString()).select('id');
     if (loginError) throw loginError;
     result.logins = logins?.length ?? 0;
+
+    // Inloggen in het portaal die Supabase Auth niet meer kent (uitgelogd, verlopen).
+    const { data: sessions, error: sessionError } = await admin.rpc('portal_sessions_cleanup');
+    if (sessionError) throw sessionError;
+    result.sessions = Number(sessions) || 0;
 
     if (cloudflare()) {
       // Verhuisde domeinen waarvan de doorstuurtijd voorbij is: ook bij Cloudflare weg.
@@ -677,7 +712,7 @@ async function handleCron(req: Request): Promise<Response> {
 // ── Logboek en meldingen ────────────────────────────────────────────────────
 
 /** Wat er met een eigen domein gebeurde. De zin in het Logboek: src/lib/auditLog.ts. */
-type DomainEvent = 'added' | 'active' | 'failing' | 'moved' | 'removed' | 'taken_over';
+type DomainEvent = 'added' | 'active' | 'failing' | 'moved' | 'removed' | 'taken_over' | 'portal_enabled' | 'portal_disabled';
 
 // audit_logs.action kent een vaste lijst (audit_logs_action_check). De
 // gebeurtenis gaat daarom in de metadata, bij de handeling die erbij past.
@@ -685,6 +720,7 @@ type DomainEvent = 'added' | 'active' | 'failing' | 'moved' | 'removed' | 'taken
 // weigerde de database, en dan stond er niets in het Logboek.
 const EVENT_ACTION: Record<DomainEvent, 'created' | 'updated' | 'deleted'> = {
   added: 'created', active: 'updated', failing: 'updated', moved: 'updated', removed: 'deleted', taken_over: 'deleted',
+  portal_enabled: 'updated', portal_disabled: 'updated',
 };
 
 async function audit(organizationId: string, userId: string | null, event: DomainEvent, entityId: string, label: string, metadata: Record<string, unknown>) {
@@ -701,7 +737,7 @@ async function audit(organizationId: string, userId: string | null, event: Domai
 }
 
 /** Een mail aan de eigenaar en de beheerders als een eigen domein actief wordt of hapert. */
-async function notifyAdmins(organizationId: string, hostname: string, status: 'active' | 'failing', problem: string | null) {
+async function notifyAdmins(organizationId: string, hostname: string, status: 'active' | 'failing', problem: string | null, portalEnabled: boolean) {
   if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) return;
   try {
     const { data: members } = await admin.from('organization_members').select('email,role')
@@ -712,7 +748,9 @@ async function notifyAdmins(organizationId: string, hostname: string, status: 'a
     const active = status === 'active';
     const title = active ? `${hostname} is actief` : `${hostname} werkt niet meer`;
     const intro = active
-      ? `<p>Je eigen domein <strong>${escapeHtml(hostname)}</strong> is klaar. Je klanten openen je albums, offertes, facturen en contracten vanaf nu op dat adres. Het klantportaal blijft op je adres bij ResoFly.</p>`
+      ? `<p>Je eigen domein <strong>${escapeHtml(hostname)}</strong> is klaar. Je klanten openen je albums, offertes, facturen en contracten vanaf nu op dat adres.${portalEnabled
+        ? ' Het klantportaal ook.'
+        : ' Het klantportaal staat op je adres bij ResoFly. Wil je het ook op dit domein? Zet het aan bij Instellingen → Domein.'}</p>`
       : `<p>Je eigen domein <strong>${escapeHtml(hostname)}</strong> werkt niet meer.${problem ? ` ${escapeHtml(problem)}` : ''}</p><p>Nieuwe mails linken zolang naar je adres bij ResoFly. Kijk in ResoFly bij Instellingen → Domein wat er moet gebeuren.</p>`;
     const html = renderEmailLayout({ brandName: branding.companyName || 'ResoFly', title, introHtml: intro, accentColor: branding.accentColor });
     // Telt mee in het mailquotum van de organisatie, en met haar logo, net als elke andere mail.

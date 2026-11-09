@@ -54,9 +54,10 @@ export interface SupabaseAuthAdapter {
     data: { subscription: { unsubscribe(): void } };
   };
   signInWithOtp(args: { email: string; options?: { emailRedirectTo?: string; shouldCreateUser?: boolean } }): Promise<{ error: Error | null }>;
-  /** De link of de code uit de inlogmail van het klantportaal (src/lib/portalLoginFlow.ts). */
-  verifyOtp(args: { token_hash: string; type: 'magiclink' | 'email' } | { email: string; token: string; type: 'magiclink' | 'email' }): Promise<{ data: { session: SupabaseSession | null }; error: Error | null }>;
-  signOut(): Promise<{ error: Error | null }>;
+  /** Een inlog van het klantportaal opslaan, nadat portal-login hem vastlegde (src/lib/supabasePortal.ts). */
+  setSession(tokens: { access_token: string; refresh_token: string }): Promise<{ data: { session: SupabaseSession | null }; error: Error | null }>;
+  /** scope 'local': alleen deze inlog, niet die op andere apparaten of adressen. */
+  signOut(options?: { scope?: 'global' | 'local' | 'others' }): Promise<{ error: Error | null }>;
 }
 
 // Supabase-js v2 keeps these auth methods at runtime, but some package typings

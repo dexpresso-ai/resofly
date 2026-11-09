@@ -15,25 +15,37 @@ export interface ClientHostInfo {
   /** Het eigen inlogadres van de organisatie (/portal/<sleutel>), als de Worker het meegaf. */
   portalKey: string | null;
   /**
-   * Op een eigen domein: de naam bij ResoFly (jansen.resofly.com), waar het
-   * portaal woont. De DNS van een eigen domein beheert de organisatie zelf;
-   * een sessie van een klant hoort daar niet (zie clientPortalBaseUrl in
-   * supabase/functions/_shared/clientLinks.ts).
+   * Op een eigen domein zonder portaal: de naam bij ResoFly
+   * (jansen.resofly.com), waar het portaal woont.
    */
   portalHost: string | null;
+  /**
+   * Het portaal op een eigen domein (migratie 20261109020000): inloggen met
+   * een code van ResoFly, met een sleutel voor alleen deze organisatie. Nooit
+   * een inlog bij Supabase: die geldt voor het hele account van de klant, en
+   * wat hier in de browser staat, kan de beheerder van het domein uitlezen.
+   */
+  tokenLogin: boolean;
 }
 
 /** Leest de meta, alleen als die bij dit adres hoort. Puur, voor de test. */
 export function parseClientHostMeta(content: string | null | undefined, currentHost: string): ClientHostInfo | null {
   if (!content) return null;
   try {
-    const parsed = JSON.parse(content) as { host?: unknown; portalKey?: unknown; portalHost?: unknown };
+    const parsed = JSON.parse(content) as { host?: unknown; portalKey?: unknown; portalHost?: unknown; portalMode?: unknown };
     const host = typeof parsed.host === 'string' ? parsed.host.toLowerCase() : '';
     if (!host || host !== String(currentHost || '').toLowerCase()) return null;
     const portalHost = typeof parsed.portalHost === 'string' && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(parsed.portalHost)
       ? parsed.portalHost.toLowerCase()
       : null;
-    return { host, portalKey: isPortalLoginKey(parsed.portalKey) ? parsed.portalKey : null, portalHost: portalHost === host ? null : portalHost };
+    const tokenLogin = parsed.portalMode === 'token';
+    return {
+      host,
+      portalKey: isPortalLoginKey(parsed.portalKey) ? parsed.portalKey : null,
+      // Met het portaal hier stuurt de app nergens heen.
+      portalHost: portalHost === host || tokenLogin ? null : portalHost,
+      tokenLogin,
+    };
   } catch {
     return null;
   }

@@ -5,10 +5,11 @@
 // gekozen bij het inrichten; daar woont ook het klantportaal. "Eigen domein"
 // koppelt een subdomein van je eigen domein (albums.jouwbedrijf.nl) voor de
 // documenten met een link, met een CNAME- en een TXT-record; Cloudflare for
-// SaaS maakt het certificaat. Het portaal blijft op de naam bij ResoFly: de
-// DNS van een eigen domein beheert de organisatie zelf, en de inlog van een
-// klant geldt bij al zijn leveranciers. Het verzenddomein voor mail staat
-// eronder, in SimplePages (SendingDomainCard).
+// SaaS maakt het certificaat. Het klantportaal kan er ook op, met een
+// schakelaar (migratie 20261109020000). Standaard uit: een inlog daar geldt
+// alleen voor deze organisatie, en klanten die al op het webadres ingelogd
+// zijn, loggen op het nieuwe adres opnieuw in. Het verzenddomein voor mail
+// staat eronder, in SimplePages (SendingDomainCard).
 //
 // Wijzigen mag alleen een owner of admin. De database (client_subdomain_claim)
 // en de edge function client-domains controleren dat zelf; dit scherm verbergt
@@ -20,7 +21,7 @@ import { Button, Input, Select } from '../components/Ui';
 import { ClientAddressPicker, type AddressPickerState } from '../components/ClientAddressPicker';
 import { canClaim, dnsRecordShortName, suggestCustomDomain, suggestSubdomain } from '../lib/clientDomains';
 import {
-  addClientDomain, claimClientSubdomain, loadClientDomainsOverview, refreshClientDomain, removeClientDomain,
+  addClientDomain, claimClientSubdomain, loadClientDomainsOverview, refreshClientDomain, removeClientDomain, setClientDomainPortal,
   type ClientDomain, type ClientDomainStatus, type ClientDomainsOverview,
 } from '../services/domainService';
 
@@ -293,7 +294,9 @@ function AddressCard({ organizationId, overview, canAdmin, companyName, onChange
       {!overview.config.live
         ? <>Nog niet in gebruik{appHost ? <>: links in je mails gaan nu naar <strong>{appHost}</strong></> : null}. Zodra ResoFly de klantadressen aanzet, gaan je links vanzelf naar dit adres.</>
         : domainActive
-          ? <>Je eigen domein <strong>{overview.domain?.hostname}</strong> gaat voor bij albums, offertes, facturen en contracten. Het klantportaal blijft op dit adres.</>
+          ? overview.domain?.portalEnabled
+            ? <>Je eigen domein <strong>{overview.domain?.hostname}</strong> gaat voor bij albums, offertes, facturen, contracten en het klantportaal.</>
+            : <>Je eigen domein <strong>{overview.domain?.hostname}</strong> gaat voor bij albums, offertes, facturen en contracten. Het klantportaal blijft op dit adres.</>
           : <>Links in je mails en op je pagina's gaan naar dit adres.</>}
     </p>}
 
@@ -450,6 +453,24 @@ function CustomDomainCard({ organizationId, overview, canAdmin, website, onChang
     }
   }
 
+  async function changePortal(item: ClientDomain, enabled: boolean) {
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      const next = await setClientDomainPortal(organizationId, item.id, enabled);
+      if (!next?.id) throw new Error('Het klantportaal kon niet worden omgezet.');
+      onDomain(next);
+      const home = overview.subdomain?.host ?? 'je webadres';
+      setMessage(enabled
+        ? `Het klantportaal staat nu ook op ${item.hostname}.${item.status === 'active' ? '' : ' Het werkt zodra het domein actief is.'} Klanten die op ${home} ingelogd zijn, loggen daar één keer opnieuw in.`
+        : `Het klantportaal staat weer alleen op ${home}. Klanten die op ${item.hostname} ingelogd waren, loggen opnieuw in.`);
+      await onChanged();
+    } catch (err) {
+      setError(errorText(err, 'Het klantportaal kon niet worden omgezet.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function stopRedirect(item: { id: string; hostname: string }) {
     if (!window.confirm(`Doorsturen vanaf ${item.hostname} stoppen? Oude links in verstuurde mails werken daarna niet meer.`)) return;
     setBusy(true); setError(null); setMessage(null);
@@ -472,7 +493,7 @@ function CustomDomainCard({ organizationId, overview, canAdmin, website, onChang
     <div className="settings-card-head">
       <div>
         <h3>Eigen domein</h3>
-        <p className="settings-help">Wil je dat je klanten je albums, offertes, facturen en contracten op je eigen domein openen, zoals <code>albums.jouwbedrijf.nl</code>? Koppel het hier met twee records bij je domeinbeheerder. Je website op je hoofddomein blijft gewoon werken. Het klantportaal blijft op je webadres hierboven: daar staat de inlog van je klanten veilig.</p>
+        <p className="settings-help">Wil je dat je klanten je albums, offertes, facturen en contracten op je eigen domein openen, zoals <code>albums.jouwbedrijf.nl</code>? Koppel het hier met twee records bij je domeinbeheerder. Je website op je hoofddomein blijft gewoon werken. Ook het klantportaal kan daar staan.</p>
       </div>
     </div>
 
@@ -492,6 +513,28 @@ function CustomDomainCard({ organizationId, overview, canAdmin, website, onChang
         <Button variant="danger" onClick={() => void remove(domain)} disabled={busy}>{domain.verifiedAt ? 'Ontkoppelen' : 'Koppeling stoppen'}</Button>
       </div> : null}
     />}
+
+    {domain && domain.status !== 'blocked' && <div className="billing-control-row client-domain-portal" data-testid="custom-domain-portal">
+      <div>
+        <strong>Ook het klantportaal op {domain.hostname}</strong>
+        <p className="settings-help">{domain.portalEnabled
+          ? <>Je klanten loggen in op <code>{domain.hostname}</code>.{domain.status === 'active' ? null : ' Dat werkt zodra het domein actief is.'}</>
+          : <>Je klanten loggen nu in op <code>{fallbackHost ?? 'je webadres'}</code>. Zet je dit aan, dan op <code>{domain.hostname}</code>.</>}
+          {' '}Een inlog op je eigen domein geldt alleen voor jouw portaal: wat je klanten bij anderen hebben, is daar nooit te zien.</p>
+      </div>
+      {canAdmin
+        ? <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={domain.portalEnabled === true}
+            disabled={busy}
+            onChange={e => void changePortal(domain, e.target.checked)}
+            aria-label={`Klantportaal ook op ${domain.hostname}`}
+          />
+          {domain.portalEnabled ? 'Aan' : 'Uit'}
+        </label>
+        : <span className="settings-toggle">{domain.portalEnabled ? 'Aan' : 'Uit'}</span>}
+    </div>}
 
     {!domain && !canAdmin && <p className="settings-help">Er is geen eigen domein gekoppeld. De eigenaar of een beheerder kan dat hier doen.</p>}
     {!domain && canAdmin && !available && <p className="settings-help">Een eigen domein koppelen kan op deze omgeving nog niet. Je webadres hierboven werkt wel.</p>}
@@ -567,7 +610,9 @@ function DomainStatus({ domain, target, live, fallbackHost, watching, provider, 
       text = domain.problem || 'Record gevonden. We maken nu een beveiligd certificaat; dat duurt meestal een paar minuten.';
       break;
     case 'active':
-      text = `Actief. Je klanten openen albums, offertes, facturen en contracten op ${domain.hostname}.`;
+      text = domain.portalEnabled
+        ? `Actief. Je klanten openen hun portaal, albums, offertes, facturen en contracten op ${domain.hostname}.`
+        : `Actief. Je klanten openen albums, offertes, facturen en contracten op ${domain.hostname}.`;
       break;
     case 'failing':
       text = `${domain.hostname} werkt niet meer: het record is weg of gewijzigd.${fallbackHost ? ` Nieuwe mails linken zolang naar ${fallbackHost}.` : ''}${domain.problem ? ` ${domain.problem}` : ''}`;

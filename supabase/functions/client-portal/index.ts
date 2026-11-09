@@ -2,7 +2,10 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { loadPortalLoginKey } from '../_shared/portalAddress.ts';
-import { clientPortalBaseUrl, portalOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
+import { clientDomainsConfig, portalOriginMismatch, portalOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
+import {
+  PORTAL_TOKEN_HEADER, SESSION_UNBOUND_CODE, isPortalSecret, portalSessionScope, portalTokenScope, sessionIdFromToken,
+} from '../_shared/portalSession.ts';
 import { normalizeGalleryLayout } from '../_shared/galleryLayout.ts';
 import { createPortalInvoiceCheckout, calculateTotalCents, orgHasInvoiceMollie } from '../_shared/invoiceCheckout.ts';
 import {
@@ -46,10 +49,18 @@ import {
 //
 // Beveiliging:
 // - Authenticatie: Bearer-JWT van de portaalsessie wordt geverifieerd
-//   (supabaseAdmin.auth.getUser). De function draait ook met verify_jwt = true.
+//   (supabaseAdmin.auth.getUser), of op een eigen domein de sleutel van het
+//   portaal (kop x-portal-token, portal_tokens). Daarom staat verify_jwt uit
+//   (supabase/config.toml): een sleutel is geen JWT. requireUser laat zonder
+//   een van beide niemand door.
 // - Autorisatie: de toegestane klantdossiers worden UITSLUITEND afgeleid uit het
 //   geverifieerde e-mailadres (RPC portal_clients_for_email, service-role only).
 //   Een client_id uit de request wordt altijd opnieuw tegen die set gevalideerd.
+// - Bereik (migratie 20261109020000): elke inlog staat in portal_sessions. Een
+//   inlog op het adres van één leverancier ziet alleen die leverancier; een
+//   inlog die er niet staat, krijgt niets (_shared/portalSession.ts). Een
+//   sleutel van een eigen domein ziet alleen die leverancier, en alleen vanaf
+//   dat domein.
 // - Saneren: alleen klantveilige velden gaan terug (geen interne notities,
 //   geen interne offerte-goedkeuringsvelden, geen andere klanten).
 // ============================================================
@@ -116,11 +127,17 @@ const MESSAGE_RATE_WINDOW_MINUTES = 10;
 
 class PortalError extends Error {
   status: number;
-  constructor(message: string, status = 400) {
+  /** Voor de app: session_unbound = uitloggen en opnieuw inloggen. */
+  code?: string;
+  constructor(message: string, status = 400, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
+
+/** De ingelogde klant, en wat zijn inlog mag zien: één organisatie, of alles (null). */
+type PortalUser = { id: string; email: string; scope: string | null };
 
 type ClientRow = {
   id: string;
@@ -215,18 +232,19 @@ serve(async (req) => {
     if (status >= 500) {
       console.error('client-portal error', describeError(error), error instanceof Error ? error.stack : undefined);
     }
-    return json(req, { ok: false, error: message }, status);
+    const code = error instanceof PortalError && error.code ? { code: error.code } : {};
+    return json(req, { ok: false, error: message, ...code }, status);
   }
 });
 
 // ── Acties ────────────────────────────────────────────────────────────
 
-async function getPortalData(user: { id: string; email: string }) {
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+async function getPortalData(user: PortalUser) {
+  const clients = await resolveAccounts(user);
   // Eén keer ophalen en per klant tellen: het aantal met jou gedeelde bestanden
   // voedt alleen het tabblad-badgetje, de inhoud komt pas als je erop klikt.
-  const shares = await loadSharesForUser(user.email);
-  const transfers = await loadTransferAccessForUser(user.email);
+  const shares = await loadSharesForUser(user);
+  const transfers = await loadTransferAccessForUser(user);
   const accounts = [];
   for (const client of clients) {
     const sharedFileCount = shares.filter((share) => share.client_id === client.id).length;
@@ -236,7 +254,7 @@ async function getPortalData(user: { id: string; email: string }) {
   return { email: user.email, accounts };
 }
 
-async function createTicket(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function createTicket(user: PortalUser, body: Record<string, unknown>) {
   const clientId = String(body.clientId || '').trim();
   const title = String(body.title || '').trim();
   const description = String(body.description || '').trim();
@@ -249,7 +267,7 @@ async function createTicket(user: { id: string; email: string }, body: Record<st
 
   // Het client_id NOOIT blind vertrouwen: opnieuw afleiden uit het geverifieerde
   // e-mailadres en controleren dat de klant in die set zit.
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   const client = clients.find((row) => row.id === clientId);
   if (!client) throw new PortalError('Geen toegang tot deze klant.', 403);
 
@@ -281,11 +299,11 @@ async function createTicket(user: { id: string; email: string }, body: Record<st
  * Haalt één ticket op met zijn klantzichtbare tijdlijn. Interne notities
  * (is_internal = true) worden hier NOOIT teruggegeven: ze verlaten de server niet.
  */
-async function getTicketThread(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getTicketThread(user: PortalUser, body: Record<string, unknown>) {
   const ticketId = String(body.ticketId || '').trim();
   if (!isUuid(ticketId)) throw new PortalError('Ongeldig ticket.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: ticket, error } = await supabaseAdmin
@@ -344,14 +362,14 @@ async function getTicketThread(user: { id: string; email: string }, body: Record
  * Laat de ingelogde klant een notitie aan de tickettijdlijn toevoegen. Altijd
  * zichtbaar (is_internal = false) en gemarkeerd als afkomstig van de klant.
  */
-async function addTicketNote(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function addTicketNote(user: PortalUser, body: Record<string, unknown>) {
   const ticketId = String(body.ticketId || '').trim();
   const noteBody = String(body.body || '').trim();
   if (!isUuid(ticketId)) throw new PortalError('Ongeldig ticket.', 400);
   if (!noteBody) throw new PortalError('Een notitie mag niet leeg zijn.', 400);
   if (noteBody.length > 5000) throw new PortalError('De notitie mag maximaal 5000 tekens zijn.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   const { data: ticket, error } = await supabaseAdmin
     .from('tickets')
     .select('id,organization_id,client_id')
@@ -423,11 +441,11 @@ async function assertPortalWriteRate(
  * meekijken". Alleen klantveilige taakvelden (titel, status, planning) gaan mee —
  * geen interne omschrijvingen, schattingen, tags of comments.
  */
-async function getProjectDetail(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getProjectDetail(user: PortalUser, body: Record<string, unknown>) {
   const projectId = String(body.projectId || '').trim();
   if (!isUuid(projectId)) throw new PortalError('Ongeldig project.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: project, error } = await supabaseAdmin
@@ -459,7 +477,7 @@ async function getProjectDetail(user: { id: string; email: string }, body: Recor
  * vullen. De state-overgang + events/audit lopen via decide_quote_portal, dat exact
  * de publieke accept/reject-RPC's spiegelt.
  */
-async function decideQuote(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function decideQuote(user: PortalUser, body: Record<string, unknown>) {
   const quoteId = String(body.quoteId || '').trim();
   const kind = String(body.kind || '').trim().toLowerCase();
   const note = String(body.note || '').trim();
@@ -467,7 +485,7 @@ async function decideQuote(user: { id: string; email: string }, body: Record<str
   if (kind !== 'accept' && kind !== 'reject') throw new PortalError('Ongeldige beslissing.', 400);
   if (note.length > 2000) throw new PortalError('De opmerking mag maximaal 2000 tekens zijn.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: quote, error } = await supabaseAdmin
@@ -511,11 +529,11 @@ async function decideQuote(user: { id: string; email: string }, body: Record<str
  * of online betalen via Mollie beschikbaar is, en de overschrijvingsgegevens (IBAN).
  * Voedt de betaalknop/-fallback in het portaal.
  */
-async function getInvoicePaymentInfo(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getInvoicePaymentInfo(user: PortalUser, body: Record<string, unknown>) {
   const invoiceId = String(body.invoiceId || '').trim();
   if (!isUuid(invoiceId)) throw new PortalError('Ongeldige factuur.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: invoice, error } = await supabaseAdmin
@@ -576,11 +594,11 @@ async function getInvoicePaymentInfo(user: { id: string; email: string }, body: 
  * opnieuw afgeleid uit het geverifieerde e-mailadres; daarna doet de gedeelde
  * checkout-helper de rest via dezelfde service-role betaal-RPC's.
  */
-async function createInvoicePayment(user: { id: string; email: string }, body: Record<string, unknown>, req: Request) {
+async function createInvoicePayment(user: PortalUser, body: Record<string, unknown>, req: Request) {
   const invoiceId = String(body.invoiceId || '').trim();
   if (!isUuid(invoiceId)) throw new PortalError('Ongeldige factuur.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: invoice, error } = await supabaseAdmin
@@ -599,8 +617,8 @@ async function createInvoicePayment(user: { id: string; email: string }, body: R
     organizationId: invoice.organization_id,
     invoiceId: invoice.id,
     actorUserId: user.id,
-    // Terug naar het portaal: op de naam bij ResoFly, nooit op een eigen domein (clientPortalBaseUrl).
-    redirectUrl: `${await clientPortalBaseUrl(supabaseAdmin, invoice.organization_id, resolvePortalBaseUrl(req))}/portal`,
+    // Terug naar het portaal waar de klant betaalde: daar staat zijn inlog.
+    redirectUrl: `${portalReturnBase(req, invoice.organization_id)}/portal`,
     actorContact: contact ? { id: contact.id, name: contact.name, email: contact.email } : null,
   });
   if (!result.ok) {
@@ -616,22 +634,29 @@ async function createInvoicePayment(user: { id: string; email: string }, body: R
 }
 
 /**
- * Basis-URL waar Mollie de klant na betalen naar terugstuurt. Bij voorkeur de
- * geconfigureerde publieke app-URL; anders de (al gevalideerde) request-origin.
+ * Waar Mollie de klant na betalen naar terugstuurt: het portaal waar hij
+ * betaalde, want daar staat zijn inlog (een inlog geldt per adres). Op het
+ * adres van een leverancier dat adres, maar alleen als de factuur van die
+ * leverancier is (opgezocht in de database, nooit tekst uit het verzoek).
+ * Anders het algemene portaal. Eerst ging de klant terug naar het adres van
+ * de leverancier, ook als hij op het algemene portaal betaalde: daar was hij
+ * niet ingelogd.
  */
-function resolvePortalBaseUrl(req: Request): string {
-  const envBase = (Deno.env.get('APP_PUBLIC_URL') || Deno.env.get('INVOICE_PUBLIC_BASE_URL') || '').replace(/\/$/, '');
+function portalReturnBase(req: Request, organizationId: string): string {
+  const origin = portalOriginOf(req);
+  if (origin && origin.organizationId === organizationId) return `https://${origin.host}`;
+  const envBase = (Deno.env.get('CLIENT_PORTAL_BASE_URL') || Deno.env.get('APP_PUBLIC_URL') || Deno.env.get('INVOICE_PUBLIC_BASE_URL') || '')
+    .replace(/\/+$/, '');
   if (envBase) return envBase;
   // Alleen zonder ingesteld adres (lokaal): de origin is hierboven al gekeurd.
-  // Een klantadres komt via clientPortalBaseUrl uit de organisatie, nooit van hier.
   return (req.headers.get('origin') || '').replace(/\/$/, '');
 }
 
-async function getInvoicePdf(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getInvoicePdf(user: PortalUser, body: Record<string, unknown>) {
   const invoiceId = String(body.invoiceId || '').trim();
   if (!isUuid(invoiceId)) throw new PortalError('Ongeldige factuur.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: invoice, error } = await supabaseAdmin
@@ -686,11 +711,11 @@ async function getInvoicePdf(user: { id: string; email: string }, body: Record<s
   };
 }
 
-async function getContractPdf(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getContractPdf(user: PortalUser, body: Record<string, unknown>) {
   const contractId = String(body.contractId || '').trim();
   if (!isUuid(contractId)) throw new PortalError('Ongeldig contract.', 400);
 
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
 
   const { data: contract, error } = await supabaseAdmin
@@ -757,8 +782,9 @@ type SharedItemRow = {
   path: string | null;
 };
 
-async function loadSharesForUser(email: string): Promise<SharedShareRow[]> {
-  const { data, error } = await supabaseAdmin.rpc('portal_drive_shares_for_email', { p_email: email });
+/** De delingen aan dit adres, binnen het bereik van de inlog. */
+async function loadSharesForUser(user: PortalUser): Promise<SharedShareRow[]> {
+  const { data, error } = await supabaseAdmin.rpc('portal_drive_shares_for_email', { p_email: user.email });
   if (error) {
     // Het portaal mag nooit omvallen op een module die nog niet is uitgerold.
     if (/does not exist|schema cache/i.test(`${error.message} ${error.details ?? ''}`)) {
@@ -767,7 +793,7 @@ async function loadSharesForUser(email: string): Promise<SharedShareRow[]> {
     }
     throw error;
   }
-  return (data || []) as SharedShareRow[];
+  return ((data || []) as SharedShareRow[]).filter((share) => inScope(user, share.organization_id));
 }
 
 async function loadShareItems(shareId: string): Promise<SharedItemRow[]> {
@@ -778,9 +804,9 @@ async function loadShareItems(shareId: string): Promise<SharedItemRow[]> {
     || a.name.localeCompare(b.name, 'nl', { numeric: true }));
 }
 
-async function getSharedFiles(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getSharedFiles(user: PortalUser, body: Record<string, unknown>) {
   const clientId = String(body.clientId || '').trim();
-  const shares = await loadSharesForUser(user.email);
+  const shares = await loadSharesForUser(user);
   const scoped = isUuid(clientId) ? shares.filter((s) => s.client_id === clientId) : shares;
 
   const out = [];
@@ -811,7 +837,7 @@ async function getSharedFiles(user: { id: string; email: string }, body: Record<
   return { shares: out };
 }
 
-async function downloadSharedFile(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function downloadSharedFile(user: PortalUser, body: Record<string, unknown>) {
   const shareId = String(body.shareId || '').trim();
   const itemId = String(body.itemId || '').trim();
   const itemType = String(body.itemType || '').trim();
@@ -819,7 +845,7 @@ async function downloadSharedFile(user: { id: string; email: string }, body: Rec
 
   // Opnieuw afleiden uit het geverifieerde e-mailadres: een shareId uit de
   // request wordt nooit blind vertrouwd.
-  const shares = await loadSharesForUser(user.email);
+  const shares = await loadSharesForUser(user);
   const share = shares.find((candidate) => candidate.id === shareId);
   if (!share) throw new PortalError('Deze deling is niet (meer) met je gedeeld.', 403);
 
@@ -920,13 +946,14 @@ async function downloadSharedFile(user: { id: string; email: string }, body: Rec
 
 type TransferAccessRow = { transfer_id: string; recipient_id: string; organization_id: string; client_id: string };
 
-async function loadTransferAccessForUser(email: string): Promise<TransferAccessRow[]> {
-  const { data, error } = await supabaseAdmin.rpc('portal_file_transfers_for_email', { p_email: email });
+/** De zendingen aan dit adres, binnen het bereik van de inlog. */
+async function loadTransferAccessForUser(user: PortalUser): Promise<TransferAccessRow[]> {
+  const { data, error } = await supabaseAdmin.rpc('portal_file_transfers_for_email', { p_email: user.email });
   if (error) {
     if (isMissingRelationError(error)) return [];
     throw error;
   }
-  return (data || []) as TransferAccessRow[];
+  return ((data || []) as TransferAccessRow[]).filter((row) => inScope(user, row.organization_id));
 }
 
 async function loadTransfersByIds(ids: string[]): Promise<TransferRow[]> {
@@ -957,9 +984,9 @@ function portalTransfer(transfer: TransferRow, items: TransferItemRow[]) {
   };
 }
 
-async function getTransfers(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getTransfers(user: PortalUser, body: Record<string, unknown>) {
   const clientId = String(body.clientId || '').trim();
-  const access = await loadTransferAccessForUser(user.email);
+  const access = await loadTransferAccessForUser(user);
   const scoped = isUuid(clientId) ? access.filter((row) => row.client_id === clientId) : access;
   const transfers = (await loadTransfersByIds([...new Set(scoped.map((row) => row.transfer_id))]))
     .filter((transfer) => transferIsOpen(transfer))
@@ -970,13 +997,13 @@ async function getTransfers(user: { id: string; email: string }, body: Record<st
 }
 
 /** Mag deze portaalgebruiker bij deze zending? Als ontvanger, of via een ticket dat die persoon ziet. */
-async function requirePortalTransfer(user: { id: string; email: string }, transferIdRaw: unknown): Promise<{ transfer: TransferRow; recipientId: string | null }> {
+async function requirePortalTransfer(user: PortalUser, transferIdRaw: unknown): Promise<{ transfer: TransferRow; recipientId: string | null }> {
   const transferId = String(transferIdRaw || '').trim();
   if (!isUuid(transferId)) throw new PortalError('Ongeldige zending.', 400);
   const [transfer] = await loadTransfersByIds([transferId]);
   if (!transfer || !transferIsOpen(transfer)) throw new PortalError('Deze bestanden zijn niet meer beschikbaar.', 410);
 
-  const access = await loadTransferAccessForUser(user.email);
+  const access = await loadTransferAccessForUser(user);
   const mine = access.find((row) => row.transfer_id === transferId);
   if (mine) return { transfer, recipientId: mine.recipient_id };
 
@@ -996,7 +1023,7 @@ async function requirePortalTransfer(user: { id: string; email: string }, transf
         .maybeSingle();
       if (ticketError) throw ticketError;
       if (ticket && ticket.organization_id === transfer.organization_id && ticket.client_id === transfer.client_id) {
-        const clients = await resolveAccountsForEmail(user.email, user.id);
+        const clients = await resolveAccounts(user);
         await assertEntityBelongsToClients({ client_id: ticket.client_id, project_id: null, organization_id: ticket.organization_id }, clients);
         return { transfer, recipientId: null };
       }
@@ -1014,7 +1041,7 @@ async function requirePortalTransferItem(transfer: TransferRow, itemIdRaw: unkno
   return item;
 }
 
-async function transferDownload(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function transferDownload(user: PortalUser, body: Record<string, unknown>) {
   const { transfer, recipientId } = await requirePortalTransfer(user, body.transferId);
   if (!transfer.can_download) throw new PortalError('De afzender heeft downloaden voor deze bestanden uitgezet.', 403);
   const item = await requirePortalTransferItem(transfer, body.itemId);
@@ -1030,7 +1057,7 @@ async function transferDownload(user: { id: string; email: string }, body: Recor
   return { url, fileName: item.name };
 }
 
-async function transferRead(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function transferRead(user: PortalUser, body: Record<string, unknown>) {
   const { transfer, recipientId } = await requirePortalTransfer(user, body.transferId);
   const item = await requirePortalTransferItem(transfer, body.itemId, true);
   if (item.storage_key || item.html_snapshot == null) throw new PortalError('Dit is een bestand om te downloaden.', 400);
@@ -1038,7 +1065,7 @@ async function transferRead(user: { id: string; email: string }, body: Record<st
   return { text: { title: item.name, html: item.html_snapshot } };
 }
 
-async function transferZip(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function transferZip(user: PortalUser, body: Record<string, unknown>) {
   const { transfer, recipientId } = await requirePortalTransfer(user, body.transferId);
   if (!transfer.can_download) throw new PortalError('De afzender heeft downloaden voor deze bestanden uitgezet.', 403);
   const signed = await signedDownloadUrls({
@@ -1122,9 +1149,9 @@ type GalleryRow = {
 };
 
 /** Haal de galerij op en dwing publicatie + geldigheid + klant-eigendom af. */
-async function requireAccessibleGallery(user: { id: string; email: string }, galleryId: string): Promise<{ gallery: GalleryRow; client: ClientRow; clients: ClientRow[] }> {
+async function requireAccessibleGallery(user: PortalUser, galleryId: string): Promise<{ gallery: GalleryRow; client: ClientRow; clients: ClientRow[] }> {
   if (!isUuid(galleryId)) throw new PortalError('Ongeldige galerij.', 400);
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
 
   const { data, error } = await supabaseAdmin.from('galleries').select('*').eq('id', galleryId).maybeSingle();
   if (error) throw error;
@@ -1181,7 +1208,7 @@ async function fetchGalleryTokens(organizationId: string, galleryId: string, all
   return (await res.json()) as { mediaToken: string; streamTokens: Record<string, string>; exp: number };
 }
 
-async function getGalleryDetail(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getGalleryDetail(user: PortalUser, body: Record<string, unknown>) {
   const galleryId = String(body.galleryId || '').trim();
   const { gallery, client } = await requireAccessibleGallery(user, galleryId);
 
@@ -1219,7 +1246,7 @@ async function getGalleryDetail(user: { id: string; email: string }, body: Recor
   };
 }
 
-async function toggleGalleryFavorite(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function toggleGalleryFavorite(user: PortalUser, body: Record<string, unknown>) {
   const galleryId = String(body.galleryId || '').trim();
   const itemId = String(body.itemId || '').trim();
   const on = body.on === true;
@@ -1333,10 +1360,10 @@ type PortalContext = {
 };
 
 /** Het dossier + wie de ingelogde gebruiker daarin is. Nooit een id uit de browser blind vertrouwen. */
-async function requirePortalPerson(user: { id: string; email: string }, clientIdRaw: unknown): Promise<PortalContext> {
+async function requirePortalPerson(user: PortalUser, clientIdRaw: unknown): Promise<PortalContext> {
   const clientId = String(clientIdRaw || '').trim();
   if (!isUuid(clientId)) throw new PortalError('Ongeldige klant.', 400);
-  const clients = await resolveAccountsForEmail(user.email, user.id);
+  const clients = await resolveAccounts(user);
   const client = clients.find((row) => row.id === clientId);
   if (!client) throw new PortalError('Geen toegang tot deze klant.', 403);
 
@@ -1360,7 +1387,7 @@ async function loadPortalContacts(client: ClientRow): Promise<Array<{ id: string
   return (data || []) as Array<{ id: string; name: string; email: string }>;
 }
 
-async function getNotificationSettings(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getNotificationSettings(user: PortalUser, body: Record<string, unknown>) {
   const { client, person, people } = await requirePortalPerson(user, body.clientId);
   const [saved, orgEnabled] = await Promise.all([
     loadSavedPrefs(client.id, person.email),
@@ -1378,7 +1405,7 @@ async function getNotificationSettings(user: { id: string; email: string }, body
   };
 }
 
-async function updateNotificationSettings(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function updateNotificationSettings(user: PortalUser, body: Record<string, unknown>) {
   const { client, person } = await requirePortalPerson(user, body.clientId);
   const input = (body.settings && typeof body.settings === 'object' ? body.settings : {}) as Record<string, unknown>;
   const current = portalPrefsFor(person, (await loadSavedPrefs(client.id, person.email).then((row) => (row ? [row] : []))));
@@ -1515,7 +1542,7 @@ function threadForPortal(thread: PortalThreadSummary, reads: Map<string, string>
   };
 }
 
-async function getMessageThreads(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getMessageThreads(user: PortalUser, body: Record<string, unknown>) {
   const { client, person, people } = await requirePortalPerson(user, body.clientId);
   const [rows, reads] = await Promise.all([loadMessageRows(client, people), loadPortalReads(client.id, person.email)]);
   return { threads: threadsFor(rows, person, people).map((thread) => threadForPortal(thread, reads)) };
@@ -1534,7 +1561,7 @@ type EmailBodyRow = {
   link_source: string | null;
 };
 
-async function getMessageThread(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function getMessageThread(user: PortalUser, body: Record<string, unknown>) {
   const threadId = String(body.threadId || '').trim();
   if (!isUuid(threadId)) throw new PortalError('Ongeldig gesprek.', 400);
 
@@ -1592,7 +1619,7 @@ async function getMessageThread(user: { id: string; email: string }, body: Recor
   };
 }
 
-async function sendMessage(user: { id: string; email: string }, body: Record<string, unknown>) {
+async function sendMessage(user: PortalUser, body: Record<string, unknown>) {
   const text = String(body.body || '').trim();
   if (!text) throw new PortalError('Een bericht mag niet leeg zijn.', 400);
   if (text.length > 5000) throw new PortalError('Een bericht mag maximaal 5000 tekens zijn.', 400);
@@ -1751,10 +1778,17 @@ function sanitizePortalMessage(row: EmailBodyRow, me: PortalPerson, people: Port
 
 // ── Dataopbouw ────────────────────────────────────────────────────────
 
-async function resolveAccountsForEmail(email: string, userId: string): Promise<ClientRow[]> {
-  const { data, error } = await supabaseAdmin.rpc('portal_clients_for_email', { p_email: email });
+/**
+ * De klantdossiers van deze klant, binnen het bereik van zijn inlog. Elke actie
+ * begint hier (of bij loadSharesForUser / loadTransferAccessForUser, met
+ * hetzelfde bereik).
+ */
+async function resolveAccounts(user: PortalUser): Promise<ClientRow[]> {
+  const { data, error } = await supabaseAdmin.rpc('portal_clients_for_email', { p_email: user.email });
   if (error) throw error;
-  const clients = (Array.isArray(data) ? data : []) as ClientRow[];
+  // Ingelogd op het adres van één leverancier: alleen diens dossiers.
+  const clients = ((Array.isArray(data) ? data : []) as ClientRow[])
+    .filter((client) => inScope(user, client.organization_id));
   if (clients.length === 0) return clients;
   // Een teamlid is in zijn eigen organisatie nooit klant. Eerder zette een
   // collega zonder Financiën zijn eigen adres als portaalcontact bij een klant,
@@ -1764,11 +1798,16 @@ async function resolveAccountsForEmail(email: string, userId: string): Promise<C
   const { data: memberships, error: memberError } = await supabaseAdmin
     .from('organization_members')
     .select('organization_id')
-    .eq('user_id', userId)
+    .eq('user_id', user.id)
     .eq('status', 'active');
   if (memberError) throw memberError;
   const ownOrganizations = new Set((memberships ?? []).map((row) => String((row as { organization_id: string }).organization_id)));
   return clients.filter((client) => !ownOrganizations.has(String(client.organization_id)));
+}
+
+/** Valt deze organisatie binnen het bereik van de inlog? */
+function inScope(user: PortalUser, organizationId: unknown): boolean {
+  return user.scope === null || String(organizationId ?? '') === user.scope;
 }
 
 async function buildAccount(client: ClientRow, email: string) {
@@ -2147,7 +2186,9 @@ function sanitizeTask(row: Record<string, unknown>) {
 
 // ── Generieke helpers ─────────────────────────────────────────────────
 
-async function requireUser(req: Request): Promise<{ id: string; email: string }> {
+async function requireUser(req: Request): Promise<PortalUser> {
+  const portalToken = req.headers.get(PORTAL_TOKEN_HEADER);
+  if (portalToken !== null) return requireTokenUser(req, portalToken);
   const auth = req.headers.get('Authorization') || '';
   const token = auth.replace(/^Bearer\s+/i, '');
   if (!token) throw new PortalError('Niet ingelogd: Authorization header ontbreekt.', 401);
@@ -2155,7 +2196,58 @@ async function requireUser(req: Request): Promise<{ id: string; email: string }>
   if (error || !data.user) throw new PortalError('Niet ingelogd of ongeldige sessie.', 401);
   const email = (data.user.email || '').trim();
   if (!email) throw new PortalError('Aan deze login is geen e-mailadres gekoppeld.', 403);
-  return { id: data.user.id, email };
+
+  // Alleen een inlog die via de inlogmail is vastgelegd (portal-login,
+  // bindSession), met wat hij mag zien. Een sessie met een wachtwoord, of een
+  // die iemand met een uitgelekt token zelf bij Supabase maakte, staat er niet.
+  const scope = await portalSessionScope(supabaseAdmin, sessionIdFromToken(token), data.user.id, clientDomainsConfig().base);
+  if (!scope.ok) {
+    // Het adres waar deze inlog ontstond, is niet meer van die leverancier
+    // (of het portaal staat er niet meer aan): ook bij Supabase weg ermee.
+    if (scope.reason === 'host') {
+      const { error: signOutError } = await supabaseAdmin.auth.admin.signOut(token, 'local');
+      if (signOutError) console.warn('client-portal: inlog ongeldig maken mislukt', signOutError.message);
+    }
+    throw new PortalError('Je bent uitgelogd. Log opnieuw in.', 401, SESSION_UNBOUND_CODE);
+  }
+  // Op het adres van een leverancier alleen een inlog voor díe leverancier.
+  // Voor een gewone browser kan het niet anders (de inlog staat bij het adres).
+  if (portalOriginMismatch(req, scope.organizationId)) {
+    throw new PortalError('Je bent uitgelogd. Log opnieuw in.', 401, SESSION_UNBOUND_CODE);
+  }
+  // Op een eigen domein hoort geen inlog bij Supabase (daar is het een sleutel,
+  // requireTokenUser): wat daar in een browser staat, kan de beheerder van het
+  // domein uitlezen. Komt er toch een, dan is hij daar blootgesteld: weg ermee.
+  if (portalOriginOf(req)?.kind === 'custom') {
+    const { error: signOutError } = await supabaseAdmin.auth.admin.signOut(token, 'local');
+    if (signOutError) console.warn('client-portal: inlog op een eigen domein ongeldig maken mislukt', signOutError.message);
+    throw new PortalError('Je bent uitgelogd. Log opnieuw in.', 401, SESSION_UNBOUND_CODE);
+  }
+  return { id: data.user.id, email, scope: scope.organizationId };
+}
+
+/**
+ * Op een eigen domein: de sleutel van het portaal (portal-login, na de code van
+ * ResoFly). Alleen de organisatie van de sleutel, en alleen vanaf het domein
+ * waar hij ontstond. Wie de sleutel daar uitleest, beheert dat domein en ziet
+ * dus alleen wat zijn eigen klanten bij hem hebben.
+ */
+async function requireTokenUser(req: Request, token: string): Promise<PortalUser> {
+  const lost = new PortalError('Je bent uitgelogd. Log opnieuw in.', 401, SESSION_UNBOUND_CODE);
+  if (!isPortalSecret(token)) throw lost;
+  const scope = await portalTokenScope(supabaseAdmin, await sha256Hex(token));
+  if (!scope.ok) throw lost;
+  // Een browser stuurt altijd zijn adres mee; een ander adres dan dat van de sleutel is niet de klant.
+  if (req.headers.get('origin') !== null && portalOriginOf(req)?.host !== scope.host) throw lost;
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(scope.userId);
+  const email = (data?.user?.email || '').trim();
+  if (error || !email) throw lost;
+  return { id: scope.userId, email, scope: scope.organizationId };
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function normalizePriority(value: unknown): 'low' | 'med' | 'high' {
@@ -2220,7 +2312,7 @@ function corsHeaders(req: Request): HeadersInit {
   const allowOrigin = portalOriginOf(req) || allowedOrigins.includes(origin) ? origin : allowedOrigins.length === 0 ? '*' : '';
   return {
     ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Headers': `authorization, x-client-info, apikey, content-type, ${PORTAL_TOKEN_HEADER}`,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     Vary: 'Origin',
   };

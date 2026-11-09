@@ -92,6 +92,7 @@ const WORKSPACE_DOMAIN = {
   verifiedAt: null,
   lastCheckedAt: '2026-11-08T09:00:00Z',
   createdAt: '2026-11-08T08:55:00Z',
+  portalEnabled: false,
 };
 const WORKSPACE_OVERVIEW = clientDomainsOverview({
   subdomain: 'studio-lopik',
@@ -397,6 +398,7 @@ function edgeFunction(name, body) {
       case 'refreshDomain': return { ok: true, domain: WORKSPACE_DOMAIN };
       case 'addDomain': return { ok: true, domain: { ...WORKSPACE_DOMAIN, hostname: String(body.hostname ?? '') } };
       case 'removeDomain': return { ok: true, removed: true };
+      case 'setPortal': return { ok: true, domain: { ...WORKSPACE_DOMAIN, portalEnabled: body.enabled === true } };
       default: return { ok: false, error: `Onbekende actie: ${body?.action}` };
     }
   }

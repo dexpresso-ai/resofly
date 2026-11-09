@@ -42,6 +42,7 @@ test('het antwoord van client-domains keuren', () => {
     assert.equal(active.host, 'portaal.jansen.nl');
     assert.equal(active.portalKey, KEY);
     assert.equal(active.portalHost, 'jansen.resofly.com');
+    assert.equal(active.portalEnabled, false, 'een eigen domein zonder portaal');
     assert.equal(active.brand.accentColor, '#2E8B76');
     assert.equal(active.brand.headerColor, null, 'alleen hexkleuren');
   }
@@ -91,7 +92,20 @@ test('de lijst met adressen die niet van ons zijn', () => {
   assert.equal(parseHostList(undefined).size, 0);
 });
 
-test('het portaal op een eigen domein: door naar de naam bij ResoFly', () => {
+test('het portaal staat op een naam bij ResoFly, en op een eigen domein alleen als het daar aan staat', () => {
+  const naam = parseLookup({ ok: true, status: 'active', kind: 'subdomain', host: 'jansen.resofly.com', portalKey: KEY });
+  const aan = parseLookup({ ok: true, status: 'active', kind: 'custom', host: 'portaal.jansen.nl', portalEnabled: true, portalHost: null });
+  const uit = parseLookup({ ok: true, status: 'active', kind: 'custom', host: 'portaal.jansen.nl', portalEnabled: false, portalHost: 'jansen.resofly.com' });
+  const oud = parseLookup({ ok: true, status: 'active', kind: 'custom', host: 'portaal.jansen.nl', portalHost: 'jansen.resofly.com' });
+  const raar = parseLookup({ ok: true, status: 'active', kind: 'custom', host: 'portaal.jansen.nl', portalEnabled: 'ja' });
+  assert.equal(naam.status === 'active' && naam.portalEnabled, true);
+  assert.equal(aan.status === 'active' && aan.portalEnabled, true);
+  assert.equal(uit.status === 'active' && uit.portalEnabled, false);
+  assert.equal(oud.status === 'active' && oud.portalEnabled, false, 'een oudere edge function: geen portaal op het eigen domein');
+  assert.equal(raar.status === 'active' && raar.portalEnabled, false, 'alleen true telt');
+});
+
+test('het portaal op een eigen domein zonder portaal: door naar de naam bij ResoFly', () => {
   for (const pad of ['/', '/portal', '/portal/', '/portal/inloggen', `/portal/${KEY}`]) assert.equal(isPortalPath(pad), true, pad);
   for (const pad of ['/invoice/abc', '/gallerij/abc', '/afmelden', '/assets/x.js', '/portaal', '/portalx']) assert.equal(isPortalPath(pad), false, pad);
   assert.equal(portalRedirectUrl('/', '', 'jansen.resofly.com'), 'https://jansen.resofly.com/portal');
@@ -101,6 +115,9 @@ test('het portaal op een eigen domein: door naar de naam bij ResoFly', () => {
   assert.equal((parseLookup({ ok: true, status: 'active', host: 'x.nl', portalHost: 'evil.com/pad' }) as { portalHost: string | null }).portalHost, null);
   assert.ok(clientHostMeta('portaal.jansen.nl', KEY, 'jansen.resofly.com').includes('&quot;portalHost&quot;:&quot;jansen.resofly.com&quot;'));
   assert.ok(!clientHostMeta('jansen.resofly.com', KEY).includes('portalHost'));
+  // Het portaal aan op een eigen domein: inloggen met een sleutel, en dat zegt de meta.
+  assert.ok(clientHostMeta('portaal.jansen.nl', KEY, null, true).includes('&quot;portalMode&quot;:&quot;token&quot;'));
+  assert.ok(!clientHostMeta('jansen.resofly.com', KEY).includes('portalMode'));
 });
 
 test('doorsturen houdt het domein vast, ook bij een pad dat met // begint', () => {

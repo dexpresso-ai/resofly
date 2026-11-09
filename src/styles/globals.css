@@ -12515,6 +12515,12 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .client-domain-provider{margin-top:12px}
 .client-domain-row .inbound-steps code{font-size:12px;color:var(--text);overflow-wrap:anywhere}
 .client-domain-note{margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)}
+/* Het klantportaal ook op het eigen domein (migratie 20261109020000). */
+.client-domain-portal{margin-top:12px}
+.client-domain-portal .settings-help{margin:4px 0 0}
+.client-domain-portal code{overflow-wrap:anywhere}
+/* .organization-card label zet een label in een kolom met kapitalen; deze schakelaar hoort naast zijn tekst, links. */
+.client-domain-portal .settings-toggle{flex-direction:row;align-items:center;gap:8px;justify-self:start;font-size:13px;font-weight:600;text-transform:none;letter-spacing:0;color:rgba(var(--sheen-rgb),calc(.86 * var(--sheen-k)))}
 .client-domain-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media(max-width:520px){
   .client-domain-add{flex-direction:column}

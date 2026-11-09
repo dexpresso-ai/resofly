@@ -410,8 +410,9 @@ async function buildShareUrl(share: ShareRow, token: string | null, portalLoginK
     const base = await clientBaseUrl(admin, share.organization_id, APP_PUBLIC_URL);
     return token ? `${base}/gedeeld/${encodeURIComponent(token)}` : `${base}/gedeeld`;
   }
-  // Het portaal op de naam bij ResoFly (nooit een eigen domein); daar is het
-  // eigen inlogadres overbodig.
+  // Het portaal op het adres van de organisatie (de naam bij ResoFly, of haar
+  // eigen domein als het portaal daar aan staat); daar is het eigen
+  // inlogadres overbodig.
   const { base, onClientHost } = await portalLinkBase(admin, share.organization_id, APP_PUBLIC_URL);
   return portalLoginUrl(base, onClientHost ? null : portalLoginKey);
 }

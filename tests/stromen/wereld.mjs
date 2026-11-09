@@ -1,7 +1,7 @@
 // Een complete organisatie zoals in het echt: alle rollen, bedrijfsgegevens,
 // twee klanten met elk een portaalgebruiker. Elke scenario maakt zijn eigen
 // wereld, zodat ze elkaar niet raken (ook niet als ze tegelijk draaien).
-import { maakGebruiker, rest, rpc, sql, uniek } from './supabase.mjs';
+import { koppelPortaalSessie, maakGebruiker, rest, rpc, sql, uniek } from './supabase.mjs';
 
 function q(waarde) {
   return `'${String(waarde).replace(/'/g, "''")}'`;
@@ -84,9 +84,10 @@ export async function maakWereld(naam, { kor = false } = {}) {
   };
   const klantA = await nieuweKlant(`Klant A ${naam}`, klantAEmail);
   const klantB = await nieuweKlant(`Klant B ${naam}`, klantBEmail);
-  // De portaalgebruikers loggen in met het adres van hun klant.
-  const portaalA = await maakGebruiker('portaal-a', klantAEmail);
-  const portaalB = await maakGebruiker('portaal-b', klantBEmail);
+  // De portaalgebruikers loggen in met het adres van hun klant, op het
+  // algemene portaal (een inlog die alles ziet, zoals na de inlogmail daar).
+  const portaalA = koppelPortaalSessie(await maakGebruiker('portaal-a', klantAEmail));
+  const portaalB = koppelPortaalSessie(await maakGebruiker('portaal-b', klantBEmail));
 
   return { naam, orgId, orgNaam, subdomein, eigenaar, beheerder, medewerker, lezer, zonderFinancien, kijker, boekhouder, klantA, klantB, portaalA, portaalB };
 }

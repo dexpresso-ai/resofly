@@ -13,7 +13,8 @@
 //      id van de organisatie: alleen de status, het inlogadres en het merk.
 //   3. Onbekend, nog niet klaar of uitgezet: een neutrale pagina.
 //      Hernoemd of verhuisd: 301 naar hetzelfde pad op het nieuwe adres.
-//   4. Op een eigen domein: het portaal door naar de naam bij ResoFly.
+//   4. Op een eigen domein zonder portaal: het portaal door naar de naam bij
+//      ResoFly. Met het portaal aan (Instellingen → Domein) blijft het hier.
 //   5. Alleen de paden van een klant (logic.ts: routeFor). De HTML komt uit
 //      dezelfde Pages-build als de werkruimte, met de naam van de organisatie
 //      in de titel, haar icoon, en een meta die de app vertelt dat hij op een
@@ -71,9 +72,10 @@ export default {
     if (lookup.status === 'blocked') return html(neutralPage('Niet beschikbaar', 'Dit adres is niet beschikbaar.'), 410);
     if (lookup.status !== 'active') return html(neutralPage('Dit adres is niet in gebruik', 'Er staat hier (nog) niets. Controleer het adres, of neem contact op met wie je de link stuurde.'), 404);
 
-    // 4. Het portaal woont nooit op een eigen domein (logic.ts: isPortalPath):
-    //    door naar de naam bij ResoFly. Documenten met een token blijven hier.
-    if (lookup.kind === 'custom' && isPortalPath(url.pathname)) {
+    // 4. Het portaal op een eigen domein alleen als de organisatie het aanzette
+    //    (logic.ts: isPortalPath). Anders door naar de naam bij ResoFly.
+    //    Documenten met een token blijven hier.
+    if (lookup.kind === 'custom' && !lookup.portalEnabled && isPortalPath(url.pathname)) {
       const target = portalRedirectUrl(url.pathname, url.search, lookup.portalHost);
       if (!target) return html(neutralPage('Pagina niet gevonden', 'Het klantportaal staat niet op dit adres.'), 404);
       return new Response(null, { status: 302, headers: { location: target, 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer' } });
@@ -137,7 +139,8 @@ async function page(request: Request, env: Env, lookup: Extract<HostLookup, { st
     .on('link[rel="apple-touch-icon"]', { element(el) { el.remove(); } })
     .on('head', {
       element(el) {
-        el.append(clientHostMeta(lookup.host, lookup.portalKey, lookup.kind === 'custom' ? lookup.portalHost : null), { html: true });
+        const customPortal = lookup.kind === 'custom' && lookup.portalEnabled;
+        el.append(clientHostMeta(lookup.host, lookup.portalKey, lookup.kind === 'custom' && !lookup.portalEnabled ? lookup.portalHost : null, customPortal), { html: true });
         el.append('<meta name="robots" content="noindex,nofollow">', { html: true });
         if (lookup.brand.name) {
           const name = lookup.brand.name.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));

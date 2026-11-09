@@ -1,5 +1,6 @@
 import type { GalleryLayout } from './galleryLayout';
 import { supabasePortal } from './supabasePortal';
+import { PORTAL_TOKEN_HEADER, portalTokenMode, storedPortalToken } from './portalToken';
 import { sanitizeStoredBranding, type BrandingPayload } from './branding';
 import type { FinanceLine, InvoiceStatus, Priority, FinanceStatus } from '../types';
 
@@ -380,40 +381,72 @@ export interface CreatePortalTicketInput {
 }
 
 /**
- * Bereidt de login voor: maakt server-side een account aan voor bekende klanten
- * (clients.email) zodat de magische link werkt ook al staat zelf-registratie uit.
- * Geeft `known: false` als het e-mailadres niet als klant bekend is.
- */
-/**
- * Zet (alleen voor bekende klantadressen) het account klaar. Het antwoord zegt
- * bewust niet óf een adres bekend is.
- *
- * Met `verifierHash` verstuurt de server de inlogmail zelf (flow 'mail',
- * src/lib/portalLoginFlow.ts). Een server van vóór die wijziging kent dat niet
- * en zegt niets over de flow: dan stuurt de app de link van Supabase, zoals
- * voorheen ('otp').
+ * Vraagt de inlogmail aan. De server zet (alleen voor bekende klantadressen)
+ * het account klaar en verstuurt de mail met link en code; het antwoord zegt
+ * bewust niet óf een adres bekend is. `verifierHash` is de hash van het geheim
+ * van deze browser (src/lib/portalLoginFlow.ts): zonder werkt de link niet.
  */
 export async function requestPortalLogin(
   email: string,
-  options: { verifierHash?: string; key?: string | null } = {},
-): Promise<{ flow: 'mail' | 'otp' }> {
+  options: { verifierHash: string; key?: string | null },
+): Promise<void> {
   const { data, error } = await portalInvoke('portal-login', {
-    body: { action: 'requestLogin', email, ...(options.verifierHash ? { verifierHash: options.verifierHash } : {}), ...(options.key ? { key: options.key } : {}) },
+    body: { action: 'requestLogin', email, verifierHash: options.verifierHash, ...(options.key ? { key: options.key } : {}) },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Inloggen voorbereiden mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Inloggen voorbereiden mislukt');
-  return { flow: data.flow === 'mail' ? 'mail' : 'otp' };
 }
 
 /**
  * De link uit de inlogmail inwisselen: het aanvraagnummer en de geheimen van
- * deze browser. Geeft het inlogtoken, dat de app zelf bij Supabase inwisselt.
+ * deze browser. Geeft het inlogtoken, dat de app zelf bij Supabase inwisselt,
+ * of op een eigen domein de sleutel van het portaal (src/lib/portalToken.ts).
  */
-export async function redeemPortalLogin(request: string, verifiers: string[]): Promise<{ tokenHash: string; email: string; portalKey: string | null }> {
+export async function redeemPortalLogin(request: string, verifiers: string[]): Promise<{
+  tokenHash: string | null; portalToken: string | null; email: string; portalKey: string | null;
+}> {
   const { data, error } = await portalInvoke('portal-login', { body: { action: 'redeemLogin', request, verifiers } });
   if (error) throw new Error(await extractFunctionError(error, 'Inloggen is niet gelukt'));
-  if (!data?.ok || typeof data.tokenHash !== 'string') throw new Error(data?.error || 'Inloggen is niet gelukt');
-  return { tokenHash: data.tokenHash, email: String(data.email ?? ''), portalKey: typeof data.portalKey === 'string' ? data.portalKey : null };
+  const tokenHash = typeof data?.tokenHash === 'string' ? data.tokenHash : null;
+  const portalToken = typeof data?.portalToken === 'string' ? data.portalToken : null;
+  if (!data?.ok || (!tokenHash && !portalToken)) throw new Error(data?.error || 'Inloggen is niet gelukt');
+  return { tokenHash, portalToken, email: String(data.email ?? ''), portalKey: typeof data.portalKey === 'string' ? data.portalKey : null };
+}
+
+/**
+ * De code uit de mail, op een eigen domein: geeft de sleutel van het portaal.
+ * Daar maakt Supabase Auth geen inlog (src/lib/portalToken.ts).
+ */
+export async function redeemPortalCode(email: string, code: string): Promise<{ portalToken: string; portalKey: string | null }> {
+  const { data, error } = await portalInvoke('portal-login', { body: { action: 'redeemCode', email, code } });
+  if (error) throw new Error(await extractFunctionError(error, 'Inloggen is niet gelukt'));
+  if (!data?.ok || typeof data.portalToken !== 'string') throw new Error(data?.error || 'Inloggen is niet gelukt');
+  return { portalToken: data.portalToken, portalKey: typeof data.portalKey === 'string' ? data.portalKey : null };
+}
+
+/** Uitloggen op een eigen domein: de server gooit de sleutel weg. Lukt dat niet, dan is hij in deze browser toch al weg. */
+export async function endPortalToken(token: string): Promise<void> {
+  try {
+    await portalInvoke('portal-login', { body: { action: 'endPortalToken' }, headers: { [PORTAL_TOKEN_HEADER]: token } });
+  } catch {
+    // Niets aan te doen: hij verloopt vanzelf.
+  }
+}
+
+/**
+ * Een verse inlog vastleggen (portal-login, bindSession; migratie
+ * 20261109020000). Pas daarna slaat de app hem op: client-portal weigert een
+ * inlog die nergens vastligt. Met het nieuwe token, de geheimen van deze
+ * browser en, bij de link uit de mail, het aanvraagnummer. Lukt het niet, dan
+ * maakt de server de inlog ook ongeldig; de melding is voor de klant.
+ */
+export async function bindPortalSession(accessToken: string, options: { request?: string | null; verifiers: string[] }): Promise<void> {
+  const { data, error } = await portalInvoke('portal-login', {
+    body: { action: 'bindSession', verifiers: options.verifiers, ...(options.request ? { request: options.request } : {}) },
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Inloggen is niet gelukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Inloggen is niet gelukt');
 }
 
 /**
@@ -733,8 +766,37 @@ export function setPortalBackend(backend: PortalBackend | null): void {
   portalBackend = backend;
 }
 
-function portalInvoke(name: string, options: { body: Record<string, unknown> }) {
-  return portalBackend ? portalBackend(name, options.body) : supabasePortal.functions.invoke(name, options);
+let sessionLost: (() => void) | null = null;
+
+/**
+ * Wat er gebeurt als client-portal de inlog niet (meer) kent: de app logt uit
+ * en vraagt opnieuw in te loggen. Bijvoorbeeld een inlog van vóór migratie
+ * 20261109020000, of een eigen domein waar het portaal net is uitgezet.
+ */
+export function onPortalSessionLost(handler: (() => void) | null): void {
+  sessionLost = handler;
+}
+
+async function portalInvoke(name: string, options: { body: Record<string, unknown>; headers?: Record<string, string> }) {
+  if (portalBackend) return portalBackend(name, options.body);
+  // Op een eigen domein gaat de sleutel van het portaal mee (er is daar geen inlog bij Supabase).
+  const token = portalTokenMode() ? storedPortalToken() : null;
+  const headers = { ...(token ? { [PORTAL_TOKEN_HEADER]: token } : {}), ...(options.headers ?? {}) };
+  const result = await supabasePortal.functions.invoke(name, { body: options.body, ...(Object.keys(headers).length ? { headers } : {}) });
+  if (name === 'client-portal' && result.error && sessionLost && (await isSessionUnbound(result.error))) sessionLost();
+  return result;
+}
+
+/** Een 401 met code session_unbound (client-portal, _shared/portalSession.ts). */
+async function isSessionUnbound(error: unknown): Promise<boolean> {
+  const context = (error as { context?: unknown })?.context;
+  if (!(context instanceof Response) || context.status !== 401) return false;
+  try {
+    const payload = await context.clone().json() as { code?: unknown } | null;
+    return payload?.code === 'session_unbound';
+  } catch {
+    return false;
+  }
 }
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan

@@ -11,7 +11,9 @@ export type HostLookup =
     kind: 'subdomain' | 'custom';
     host: string;
     portalKey: string | null;
-    /** Bij een eigen domein: de naam bij ResoFly, waar het portaal woont. */
+    /** Staat het klantportaal hier? Op een naam bij ResoFly altijd; op een eigen domein als de organisatie het aanzette. */
+    portalEnabled: boolean;
+    /** Bij een eigen domein zonder portaal: de naam bij ResoFly, waar het portaal woont. */
     portalHost: string | null;
     brand: { name: string | null; accentColor: string | null; headerColor: string | null; clientTheme?: string | null; hidePoweredBy?: boolean };
   }
@@ -27,10 +29,13 @@ export function parseLookup(value: unknown): HostLookup {
   if (v.status === 'active' && typeof v.host === 'string') {
     const brand = (v.brand ?? {}) as Record<string, unknown>;
     const str = (x: unknown) => (typeof x === 'string' && x.trim() ? x : null);
+    const kind = v.kind === 'custom' ? 'custom' : 'subdomain';
     return {
       status: 'active',
-      kind: v.kind === 'custom' ? 'custom' : 'subdomain',
+      kind,
       host: v.host.toLowerCase(),
+      // Een oudere edge function zegt niets: dan geen portaal op een eigen domein.
+      portalEnabled: kind === 'subdomain' || v.portalEnabled === true,
       portalKey: typeof v.portalKey === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*-[a-z2-7]{10}$/.test(v.portalKey) ? v.portalKey : null,
       portalHost: typeof v.portalHost === 'string' && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(v.portalHost) ? v.portalHost.toLowerCase() : null,
       brand: {
@@ -93,17 +98,24 @@ export function escapeAttr(value: string): string {
   return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 }
 
-/** De meta die de app leest (src/lib/clientHost.ts). */
-export function clientHostMeta(host: string, portalKey: string | null, portalHost: string | null = null): string {
-  return `<meta name="resofly-client-host" content="${escapeAttr(JSON.stringify({ host, portalKey, ...(portalHost ? { portalHost } : {}) }))}">`;
+/**
+ * De meta die de app leest (src/lib/clientHost.ts). `tokenLogin`: het portaal
+ * op een eigen domein, waar de klant inlogt met een code van ResoFly en een
+ * sleutel krijgt, nooit een inlog bij Supabase (migratie 20261109020000).
+ */
+export function clientHostMeta(host: string, portalKey: string | null, portalHost: string | null = null, tokenLogin = false): string {
+  return `<meta name="resofly-client-host" content="${escapeAttr(JSON.stringify({
+    host, portalKey, ...(portalHost ? { portalHost } : {}), ...(tokenLogin ? { portalMode: 'token' } : {}),
+  }))}">`;
 }
 
 /**
  * Een pad van het klantportaal: de voordeur, inloggen en de sessie. Op een
- * eigen domein woont het portaal niet. De DNS daarvan beheert de organisatie
- * zelf: wijst ze het adres later naar een eigen server, dan leest een pagina
- * daar de sessie van de klant uit, en die geldt ook bij andere leveranciers.
- * Zie clientPortalBaseUrl in supabase/functions/_shared/clientLinks.ts.
+ * eigen domein alleen als de organisatie het portaal daar aanzette
+ * (Instellingen → Domein, migratie 20261109020000). De DNS van een eigen
+ * domein beheert de organisatie zelf; daarom logt een klant daar in met een
+ * code van ResoFly en krijgt hij een sleutel voor alleen het portaal van die
+ * organisatie, nooit een inlog bij Supabase (die geldt voor zijn hele account).
  */
 export function isPortalPath(pathname: string): boolean {
   return pathname === '/' || pathname === '/portal' || pathname.startsWith('/portal/');

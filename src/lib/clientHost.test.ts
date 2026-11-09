@@ -6,7 +6,7 @@ const KEY = 'jansen-ab3kzxq2mp';
 
 test('de meta van de Worker: alleen als hij bij dit adres hoort', () => {
   const meta = JSON.stringify({ host: 'jansen.resofly.com', portalKey: KEY });
-  assert.deepEqual(parseClientHostMeta(meta, 'Jansen.ResoFly.com'), { host: 'jansen.resofly.com', portalKey: KEY, portalHost: null });
+  assert.deepEqual(parseClientHostMeta(meta, 'Jansen.ResoFly.com'), { host: 'jansen.resofly.com', portalKey: KEY, portalHost: null, tokenLogin: false });
   assert.equal(parseClientHostMeta(meta, 'pietersen.resofly.com'), null, 'een meta van een ander adres telt niet');
   assert.equal(parseClientHostMeta('{kapot', 'jansen.resofly.com'), null);
   assert.equal(parseClientHostMeta(null, 'jansen.resofly.com'), null);
@@ -26,4 +26,16 @@ test('het portaal op een eigen domein gaat naar de naam bij ResoFly', () => {
   // Een verkeerd gevormde naam telt niet.
   assert.equal(parseClientHostMeta(JSON.stringify({ host: 'portaal.jansen.nl', portalHost: 'evil.com/x' }), 'portaal.jansen.nl')?.portalHost, null);
   assert.equal(portalRedirectTarget(null, { pathname: '/portal', search: '' }), null);
+});
+
+test('het portaal op een eigen domein: inloggen met een sleutel, en nergens heen sturen', () => {
+  const eigen = parseClientHostMeta(JSON.stringify({ host: 'portaal.jansen.nl', portalKey: KEY, portalMode: 'token' }), 'portaal.jansen.nl');
+  assert.deepEqual(eigen, { host: 'portaal.jansen.nl', portalKey: KEY, portalHost: null, tokenLogin: true });
+  assert.equal(portalRedirectTarget(eigen, { pathname: '/portal', search: '' }), null);
+  // Ook als er (per ongeluk) een doorstuuradres bij staat: het portaal staat hier.
+  const beide = parseClientHostMeta(JSON.stringify({ host: 'portaal.jansen.nl', portalHost: 'jansen.resofly.com', portalMode: 'token' }), 'portaal.jansen.nl');
+  assert.equal(beide?.portalHost, null);
+  // Alleen precies 'token' telt.
+  assert.equal(parseClientHostMeta(JSON.stringify({ host: 'portaal.jansen.nl', portalMode: 'TOKEN' }), 'portaal.jansen.nl')?.tokenLogin, false);
+  assert.equal(parseClientHostMeta(JSON.stringify({ host: 'portaal.jansen.nl', portalMode: true }), 'portaal.jansen.nl')?.tokenLogin, false);
 });

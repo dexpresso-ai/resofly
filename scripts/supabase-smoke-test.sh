@@ -57,6 +57,13 @@ check "webhooks weigert de bezorger zonder cron-secret" 401 'cron-secret' -X POS
 check "client-domains weigert de opzoeking zonder het geheim van de Worker" 401 'Geen toegang' \
   -X POST "$base/client-domains" -H 'x-client-domains-secret: rooktest' -H 'Content-Type: application/json' --data '{"host":"rooktest.resofly.com"}'
 check "client-domains weigert de nachtelijke ronde zonder cron-secret" 401 'cron-secret' -X POST "$base/client-domains?cron=recheck"
+# Het klantportaal (migratie 20261109020000): het platform controleert daar geen
+# JWT meer (een sleutel van een eigen domein is er geen), dus de functie zelf
+# moet zonder inlog en met een verzonnen sleutel weigeren.
+check "client-portal weigert zonder inlog" 401 'Niet ingelogd' \
+  -X POST "$base/client-portal" -H 'Content-Type: application/json' --data '{"action":"getPortalData"}'
+check "client-portal weigert een verzonnen sleutel" 401 'session_unbound' \
+  -X POST "$base/client-portal" -H 'x-portal-token: rooktest-rooktest-rooktest-rooktest-01' -H 'Content-Type: application/json' --data '{"action":"getPortalData"}'
 
 if [ -n "${SUPABASE_DB_PASSWORD:-}" ] && command -v psql >/dev/null; then
   pooler="${SUPABASE_POOLER_URL:-$(cat supabase/.temp/pooler-url)}"

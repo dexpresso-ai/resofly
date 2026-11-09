@@ -5,10 +5,12 @@
 >
 > - **Elke organisatie kiest bij het inrichten een webadres** `<naam>.resofly.com` (de vraag
 >   bij de bouw). Dat was fase 4; het is nu de basis, met een live controle of de naam bestaat.
-> - **Het klantportaal komt niet op het eigen domein** (anders dan fase 2). De sessie van een
->   klant geldt bij al zijn leveranciers, en de DNS van een eigen domein beheert de organisatie
->   zelf: met een andere server erachter kon ze die sessie uitlezen. Het portaal woont op de naam
->   bij ResoFly; het eigen domein is voor documenten met een link.
+> - **Het klantportaal op het eigen domein kan, met een schakelaar** (anders dan fase 2, en
+>   sinds de tweede ronde van 9 november: `docs/changelog/CHANGELOG_PORTAAL_EIGEN_DOMEIN_2026-11-09.md`).
+>   De DNS van een eigen domein beheert de organisatie zelf: wat daar in de browser staat, kan
+>   ze uitlezen. Daarom logt een klant daar in met een code van ResoFly en krijgt hij een
+>   sleutel voor alleen dat portaal, nooit een inlog bij Supabase (die geldt voor zijn hele
+>   account). Op de naam bij ResoFly geldt een inlog alleen voor die organisatie.
 > - **Een eigen domein vraagt twee records**: naast het CNAME-record het TXT-record van díe
 >   koppeling. Zonder kon een andere organisatie een vergeten record overnemen (§6 punt 6).
 > - Het CNAME-doel is instelbaar (`CLIENT_DOMAIN_CNAME_TARGET`); de setup raadt een aparte zone

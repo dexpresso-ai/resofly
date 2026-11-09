@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
-import { clientOriginMismatch, clientOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
+import { clientDomainsConfig, clientOriginMismatch, clientOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
+import { portalSessionScope, sessionIdFromToken } from '../_shared/portalSession.ts';
 import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { HttpError, createAdminClient, isUuid, makeCors, parseAllowedOrigins } from '../_shared/edgeAuth.ts';
@@ -111,7 +112,7 @@ serve(async (req) => {
       case 'get': return cors.json(req, { ok: true, ...(await getTransfer(tokenHash, body)) });
       case 'requestCode': return cors.json(req, { ok: true, ...(await requestCode(tokenHash)) });
       case 'verifyCode': return cors.json(req, { ok: true, ...(await verifyCode(tokenHash, body)) });
-      case 'portalSession': return cors.json(req, { ok: true, ...(await portalSession(tokenHash, body)) });
+      case 'portalSession': return cors.json(req, { ok: true, ...(await portalSession(req, tokenHash, body)) });
       case 'download': return cors.json(req, { ok: true, ...(await download(tokenHash, body)) });
       case 'read': return cors.json(req, { ok: true, ...(await readItem(tokenHash, body)) });
       case 'zip': return cors.json(req, { ok: true, ...(await zip(tokenHash, body)) });
@@ -352,14 +353,25 @@ async function verifyCode(tokenHash: string, body: Record<string, unknown>) {
  * Al ingelogd op het klantportaal met hetzelfde adres? Dan is dat het bewijs:
  * geen code nodig. De portaalsessie wordt hier zelf geverifieerd, en het adres
  * moet exact dat van de ontvanger zijn.
+ *
+ * Alleen een inlog die via de inlogmail is vastgelegd, en die deze
+ * organisatie mag zien (migratie 20261109020000), net als in client-portal.
+ * Eerst telde elke sessie bij Supabase Auth, ook een met een wachtwoord dat
+ * iemand met een uitgelekt token had ingesteld.
  */
-async function portalSession(tokenHash: string, body: Record<string, unknown>) {
+async function portalSession(req: Request, tokenHash: string, body: Record<string, unknown>) {
   const opened = await openLink(tokenHash);
   if (opened.recipient.kind === 'email') throw new PublicError('Open de bestanden met een code.', 400);
+  // Op een eigen domein bestaat geen inlog bij Supabase (daar heeft het portaal een eigen sleutel).
+  if (clientOriginOf(req)?.kind === 'custom') throw new PublicError('Geen geldige portaalsessie.', 401);
   const accessToken = String(body.accessToken || '');
   if (!accessToken || accessToken.length > 4096) throw new PublicError('Geen portaalsessie.', 401);
   const { data, error } = await admin.auth.getUser(accessToken);
   if (error || !data.user?.email) throw new PublicError('Geen geldige portaalsessie.', 401);
+  const scope = await portalSessionScope(admin, sessionIdFromToken(accessToken), data.user.id, clientDomainsConfig().base);
+  if (!scope.ok || (scope.organizationId !== null && scope.organizationId !== opened.transfer.organization_id)) {
+    throw new PublicError('Geen geldige portaalsessie.', 401);
+  }
   if (data.user.email.trim().toLowerCase() !== opened.recipient.email) {
     throw new PublicError('Je bent op het portaal ingelogd met een ander adres. Open de bestanden met een code.', 403);
   }

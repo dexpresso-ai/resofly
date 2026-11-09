@@ -39,6 +39,7 @@ const lookups = new Map([
   ['jansen.resofly.com', { ok: true, status: 'active', kind: 'subdomain', host: 'jansen.resofly.com', portalKey: KEY, brand: { name: 'Fotostudio "Jansen"', accentColor: '#2E8B76', headerColor: null, clientTheme: 'dark', hidePoweredBy: false } }],
   ['portaal.jansen.nl', { ok: true, status: 'active', kind: 'custom', host: 'portaal.jansen.nl', portalKey: KEY, portalHost: 'jansen.resofly.com', brand: { name: 'Fotostudio Jansen', accentColor: '#2E8B76', headerColor: null } }],
   ['portaal.zonder-naam.nl', { ok: true, status: 'active', kind: 'custom', host: 'portaal.zonder-naam.nl', portalKey: null, portalHost: null, brand: { name: 'Zonder naam', accentColor: null, headerColor: null } }],
+  ['portaal.pietersen.nl', { ok: true, status: 'active', kind: 'custom', host: 'portaal.pietersen.nl', portalKey: null, portalEnabled: true, portalHost: null, brand: { name: 'Drukkerij Pietersen', accentColor: '#AA3355', headerColor: null } }],
   ['oud-jansen.resofly.com', { ok: true, status: 'redirect', redirectHost: 'jansen.resofly.com' }],
   ['wacht.jansen.nl', { ok: true, status: 'pending' }],
   ['fout.resofly.com', { ok: true, status: 'blocked' }],
@@ -121,6 +122,7 @@ try {
   const album = await res.text();
   check('een album op een eigen domein', res.status === 200 && album.includes('&quot;host&quot;:&quot;portaal.jansen.nl&quot;'));
   check('met de naam bij ResoFly in de meta', album.includes('&quot;portalHost&quot;:&quot;jansen.resofly.com&quot;'));
+  check('zonder sleutelmodus (daar staat het portaal niet)', !album.includes('portalMode'));
   for (const [pad, doel] of [['/', 'https://jansen.resofly.com/portal'], ['/portal', 'https://jansen.resofly.com/portal'], ['/portal/inloggen?aanvraag=abc', 'https://jansen.resofly.com/portal/inloggen?aanvraag=abc'], [`/portal/${KEY}`, `https://jansen.resofly.com/portal/${KEY}`]]) {
     res = await get(`https://portaal.jansen.nl${pad}`);
     check(`het portaal op een eigen domein (${pad}) gaat door naar de naam bij ResoFly`, res.status === 302 && res.headers.get('location') === doel, `${res.status} ${res.headers.get('location')}`);
@@ -128,6 +130,23 @@ try {
   res = await get('https://portaal.zonder-naam.nl/portal');
   check('een eigen domein zonder naam bij ResoFly: geen portaal', res.status === 404);
   await res.text();
+
+  // Het portaal aangezet op het eigen domein (Instellingen → Domein): het blijft hier.
+  for (const pad of ['/', '/portal', '/portal/inloggen?aanvraag=abc']) {
+    res = await get(`https://portaal.pietersen.nl${pad}`);
+    const tekst = await res.text();
+    check(`het portaal aan op een eigen domein (${pad}): de app, hier`, res.status === 200 && tekst.includes('&quot;host&quot;:&quot;portaal.pietersen.nl&quot;'), `${res.status} ${res.headers.get('location')}`);
+    check(`zonder doorstuuradres in de meta (${pad})`, !tekst.includes('portalHost'));
+    check(`met inloggen via een sleutel in de meta (${pad})`, tekst.includes('&quot;portalMode&quot;:&quot;token&quot;'));
+  }
+  res = await get('https://portaal.pietersen.nl/portal/inloggen?aanvraag=abc');
+  check('de inloglink op een eigen domein: geen Referer naar buiten', res.headers.get('referrer-policy') === 'no-referrer');
+  await res.text();
+  for (const p of ['/portal/voorbeeld', '/dashboard']) {
+    res = await get(`https://portaal.pietersen.nl${p}`);
+    check(`${p} op een eigen domein met portaal: 404`, res.status === 404, `${res.status}`);
+    await res.text();
+  }
 
   // Niet de werkruimte, niet /mcp, niet het voorbeeld, niet de sleutel van een ander.
   for (const p of ['/dashboard', '/mcp/authorize', '/portal/voorbeeld', '/portal/andere-org-ab3kzxq2mp', '/sw.js']) {
