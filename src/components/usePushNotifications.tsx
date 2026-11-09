@@ -14,6 +14,7 @@ import {
   setNotificationPreference,
   type PushEventType,
 } from '../lib/push-api';
+import { isClientHost } from '../lib/clientHost';
 
 export interface PushApi {
   supported: boolean;
@@ -43,7 +44,11 @@ export function usePushNotifications(params: {
   currentUserId: string | null;
 }): PushApi {
   const { organizationId, currentUserId } = params;
-  const [supported] = useState(isPushSupported);
+  // Pushmeldingen zijn voor teamleden. Op een klantadres (jansen.resofly.com,
+  // portaal.jansen.nl) draait alleen het portaal, en daar geeft de Worker geen
+  // /sw.js: de registratie mislukte bij elke klant, met een fout in de console.
+  // Een service worker van ResoFly hoort op het domein van een klant ook niet.
+  const [supported] = useState(() => isPushSupported() && !isClientHost());
   const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(currentPermission);
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);

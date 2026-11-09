@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  clientHostMeta, escapeAttr, faviconSvg, isPortalPath, pageTitle, parseHostList, parseLookup, portalRedirectUrl, routeFor, sameUrlOn, securityHeaders, textOn,
+  clientHostMeta, escapeAttr, faviconSvg, isHtmlType, isPortalPath, pageTitle, parseHostList, parseLookup, portalRedirectUrl, routeFor, sameUrlOn,
+  securityHeaders, textOn, withoutTrailingDot,
 } from './logic.ts';
 
 const KEY = 'jansen-ab3kzxq2mp';
@@ -125,4 +126,20 @@ test('doorsturen houdt het domein vast, ook bij een pad dat met // begint', () =
   const listig = sameUrlOn('jansen.resofly.com', '//evil.example/x', '');
   assert.equal(new URL(listig).hostname, 'jansen.resofly.com');
   assert.equal(new URL(portalRedirectUrl('//evil.example/x', '', 'jansen.resofly.com') ?? 'https://x/').hostname, 'jansen.resofly.com');
+});
+
+test('een adres met een punt aan het eind: hetzelfde adres zonder', () => {
+  assert.equal(withoutTrailingDot('portaal.jansen.nl.'), 'portaal.jansen.nl');
+  assert.equal(withoutTrailingDot('Jansen.ResoFly.com..'), 'jansen.resofly.com');
+  assert.equal(withoutTrailingDot('.'), null);
+  assert.equal(withoutTrailingDot('localhost.'), null);
+  assert.equal(withoutTrailingDot('evil.example/x.'), null);
+});
+
+test('HTML herkennen: een ontbrekend bestand geeft Pages als de app zelf', () => {
+  assert.equal(isHtmlType('text/html; charset=utf-8'), true);
+  assert.equal(isHtmlType('TEXT/HTML'), true);
+  assert.equal(isHtmlType('text/javascript'), false);
+  assert.equal(isHtmlType('application/xhtml+xml'), false);
+  assert.equal(isHtmlType(null), false);
 });

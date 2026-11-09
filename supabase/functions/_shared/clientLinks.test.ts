@@ -151,18 +151,21 @@ test('het portaal: op de naam bij ResoFly, of op het eigen domein als het daar a
   assert.equal(await clientPortalBaseUrl(aan, ORG_B, 'https://staging.resofly.com', NOT_LIVE), 'https://staging.resofly.com');
 });
 
-test('voor het portaal telt een naam bij ResoFly, en een eigen domein alleen met het portaal aan', async () => {
+test('voor het portaal telt een naam bij ResoFly, en een eigen domein alleen met het portaal aan en actief', async () => {
   clearClientOriginCache();
   const admin = fakeAdmin({ ...tables, client_domains: [
     { organization_id: ORG_B, hostname: 'portaal.pietersen.nl', status: 'active' },
-    { organization_id: ORG_A, hostname: 'portaal.jansen.nl', status: 'failing', portal_enabled: true },
+    { organization_id: ORG_A, hostname: 'portaal.jansen.nl', status: 'active', portal_enabled: true },
+    { organization_id: ORG_A, hostname: 'klanten.jansen.nl', status: 'failing', portal_enabled: true },
   ] });
   const naam = new Request('https://x.test/f', { headers: { origin: 'https://pietersen.resofly.com' } });
   const eigen = new Request('https://x.test/f', { headers: { origin: 'https://portaal.pietersen.nl' } });
   const eigenMetPortaal = new Request('https://x.test/f', { headers: { origin: 'https://portaal.jansen.nl' } });
+  const hapert = new Request('https://x.test/f', { headers: { origin: 'https://klanten.jansen.nl' } });
   await rememberClientOrigin(admin, naam, LIVE);
   await rememberClientOrigin(admin, eigen, LIVE);
   await rememberClientOrigin(admin, eigenMetPortaal, LIVE);
+  await rememberClientOrigin(admin, hapert, LIVE);
   assert.equal(clientOriginOf(eigen)?.kind, 'custom', 'voor documenten is het eigen domein een klantadres');
   assert.equal(clientOriginOf(eigen)?.portalEnabled, false);
   assert.equal(portalOriginOf(eigen), null, 'zonder portaal: voor het portaal niet');
@@ -171,11 +174,17 @@ test('voor het portaal telt een naam bij ResoFly, en een eigen domein alleen met
   assert.equal(portalOriginMismatch(naam, ORG_B), false);
   assert.equal(portalOriginMismatch(naam, null), true, 'een inlog voor alles hoort niet op het adres van één organisatie');
   assert.equal(portalOriginMismatch(eigen, ORG_A), false, 'geen portaaladres: dan geldt het algemene adres');
-  // Het portaal aan (ook als het domein even hapert): wel.
+  // Het portaal aan op een actief domein: wel.
   assert.deepEqual(portalOriginOf(eigenMetPortaal), {
     origin: 'https://portaal.jansen.nl', host: 'portaal.jansen.nl', organizationId: ORG_A, kind: 'custom', portalEnabled: true,
   });
   assert.equal(portalOriginMismatch(eigenMetPortaal, ORG_A), false);
   assert.equal(portalOriginMismatch(eigenMetPortaal, ORG_B), true);
+  // Het portaal aan, maar het domein hapert (het record wijst misschien al
+  // naar een ander): voor het portaal niet meer, voor documenten nog wel.
+  // Eerst wel; dan kon iedereen vanaf zo'n domein inlogmails laten sturen.
+  assert.equal(clientOriginOf(hapert)?.kind, 'custom');
+  assert.equal(clientOriginOf(hapert)?.portalEnabled, false);
+  assert.equal(portalOriginOf(hapert), null);
   clearClientOriginCache();
 });

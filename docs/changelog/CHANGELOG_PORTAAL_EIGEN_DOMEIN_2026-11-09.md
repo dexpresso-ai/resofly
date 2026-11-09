@@ -170,3 +170,14 @@ herstartte even. Met 17.6.1.178 gebeurt dat niet. Dat staat los van deze wijzigi
 ook zonder de nieuwe migratie), maar op staging zou zo'n aanroep hetzelfde kunnen doen. Getest
 op staging is dat bewust niet. Opgelost: staging draait sinds 9 november op 17.11.0.018
 (`CHANGELOG_POSTGRES_17_11_2026-11-09.md`).
+
+## Bijgewerkt na de hertest (later op 9 november)
+
+Bij de hertest (`CHANGELOG_PORTAAL_HERTEST_2026-11-09.md`) bleek een code van Supabase in de
+inlogmail via een eigen domein te ontfutselen. Daarom, anders dan hierboven:
+
+- op de naam bij ResoFly en het algemene portaal staat er nooit meer een code in de mail, voor
+  niemand (niet alleen voor teamleden). Supabase Auth maakt het token pas als de link opengaat
+  in de browser die hem aanvroeg;
+- een haperend eigen domein telt niet meer voor het portaal, en de sleutels van een domein
+  verdwijnen zodra het portaal er uitgaat of het domein niet meer actief is.

@@ -41,22 +41,24 @@ export interface PortalLoginTokens {
 }
 
 /**
- * De link of de code uit de inlogmail inwisselen bij Supabase Auth, zonder de
- * inlog op te slaan. Eerst ging dat met supabasePortal.auth.verifyOtp: dan
- * stond de inlog meteen in de browser, en vroeg het portaal al gegevens op
- * terwijl hij nog niet was vastgelegd (portal-login, bindSession). Dat
- * weigert client-portal sinds migratie 20261109020000. Nu legt de app hem
- * eerst vast en slaat hem dan op (setSession).
+ * Het token van de inloglink inwisselen bij Supabase Auth, zonder de inlog op
+ * te slaan. Eerst ging dat met supabasePortal.auth.verifyOtp: dan stond de
+ * inlog meteen in de browser, en vroeg het portaal al gegevens op terwijl hij
+ * nog niet was vastgelegd (portal-login, bindSession). Dat weigert
+ * client-portal sinds migratie 20261109020000. Nu legt de app hem eerst vast
+ * en slaat hem dan op (setSession).
+ *
+ * Alleen het token dat portal-login na de link teruggeeft: een code van
+ * Supabase staat sinds migratie 20261109150000 niet meer in de mail (die kon
+ * een andere website de klant ontfutselen).
  *
  * Rechtstreeks vanuit de browser, niet via de server: de remmen van Supabase
  * Auth tellen per IP-adres, en via de server zouden alle klanten samen tellen.
- * Null als de code of link niet (meer) klopt.
+ * Null als de link niet (meer) klopt.
  */
-export async function verifyPortalLogin(params: { email: string; code: string } | { tokenHash: string }): Promise<PortalLoginTokens | null> {
+export async function verifyPortalLogin(params: { tokenHash: string }): Promise<PortalLoginTokens | null> {
   if (!isSupabaseConfigured) return null;
-  const body = 'tokenHash' in params
-    ? { type: 'magiclink', token_hash: params.tokenHash }
-    : { type: 'email', email: params.email, token: params.code };
+  const body = { type: 'magiclink', token_hash: params.tokenHash };
   try {
     const res = await fetch(`${url!.replace(/\/+$/, '')}/auth/v1/verify`, {
       method: 'POST',

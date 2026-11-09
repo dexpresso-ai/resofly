@@ -9,7 +9,6 @@ import {
 } from '../_shared/portalSession.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { loadEmailBrand, NO_EMAIL_BRAND, withEmailBrand } from '../_shared/emailBrand.ts';
-import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { sanitizeTagValue, sendViaResend } from '../_shared/resend.ts';
 import { renderPortalLoginEmail } from '../_shared/emailTemplates/portalLogin.ts';
 
@@ -55,6 +54,21 @@ import { renderPortalLoginEmail } from '../_shared/emailTemplates/portalLogin.ts
 // Een oude app zonder verifierHash kan niet meer inloggen: zijn inlog (via de
 // link van Supabase) zou nergens vastliggen.
 //
+// Sinds migratie 20261109150000 (de hertest van 9 november) staat er nooit
+// meer een code van Supabase in de mail, en maakt Supabase Auth het token pas
+// als de link in de browser van de aanvraag wordt geopend (redeemLogin). Een
+// leverancier met een eigen domein vraagt daar om "de code uit de mail"; vanaf
+// zijn server kon hij een inlog op het algemene portaal aanvragen (of op het
+// adres van een ander: de herkomst is na te maken), de klant liet zich de code
+// ontfutselen, en dan had de leverancier een inlog bij Supabase die alles
+// opende wat de klant bij iedereen heeft. Ook zonder dat iemand iets invulde
+// bestond het token vanaf het aanvragen, een uur lang, klaar om te raden (de
+// lengte van de code is een instelling bij Supabase; op staging acht cijfers).
+// Nu is er na het aanvragen niets om te raden of te ontfutselen. Daarom ook het account pas bij het inwisselen: aanvragen laat
+// bij Supabase geen spoor na (anders verraadde Supabase zelf of een adres
+// ergens klant is). Op een eigen domein blijft de code van ResoFly: die geeft
+// alleen een sleutel voor het portaal van die ene leverancier.
+//
 // Daarnaast `getBranding`: de huisstijl van het inlogscherm, voor wie het
 // portaal opent via het eigen adres van een leverancier (/portal/<sleutel>,
 // migratie 20261106080000). Alleen de huisstijl; nooit de organisatie zelf.
@@ -83,6 +97,8 @@ const PORTAL_BASE_URL = (Deno.env.get('CLIENT_PORTAL_BASE_URL') || Deno.env.get(
 const LOGIN_REQUEST_MINUTES = 15;
 /** Na zoveel verkeerde browsers is de link op. */
 const LOGIN_REQUEST_MAX_ATTEMPTS = 5;
+/** Zoveel inlogmails per uur per leverancier (los van zijn mailquotum; zie sendLoginMail). */
+const LOGIN_MAILS_PER_ORGANIZATION_HOUR = 300;
 
 class PortalLoginError extends Error {
   status: number;
@@ -159,12 +175,11 @@ serve(async (req) => {
         ? { scope, host: portalOrigin.host, base: `https://${portalOrigin.host}`, ownCode: portalOrigin.kind === 'custom' }
         : { scope: null, host: generalHost(req), base: PORTAL_BASE_URL, ownCode: false };
       // Na het antwoord: anders duurde het antwoord voor een bekend adres
-      // merkbaar langer (account, inlogtoken, mail), en las je aan de tijd af
-      // of iemand klant is. Een fout komt in de log, nooit in het antwoord.
-      await afterResponse((async () => {
-        await ensureAuthUser(email);
-        await sendLoginMail(email, organizationId, login, verifierHash);
-      })().catch((error) => console.error('portal-login: inlogmail versturen mislukt', describeError(error))));
+      // merkbaar langer (aanvraag, mail), en las je aan de tijd af of iemand
+      // klant is. Een fout komt in de log, nooit in het antwoord. Het account
+      // bij Supabase komt pas bij het inwisselen (zie boven).
+      await afterResponse(sendLoginMail(email, organizationId, login, verifierHash)
+        .catch((error) => console.error('portal-login: inlogmail versturen mislukt', describeError(error))));
     }
     // Het antwoord is voor elk adres hetzelfde: anders is deze functie een
     // opzoekdienst voor "is dit iemands klant?". Een onbekend adres krijgt
@@ -220,51 +235,44 @@ async function keyOrganization(rawKey: unknown): Promise<string | null> {
 }
 
 /**
- * Maakt een inlogtoken (Supabase verstuurt daarbij niets), bewaart het bij een
- * willekeurig aanvraagnummer, en mailt de link met dat nummer en de code.
- * `organizationId` kiest de naam en de afzender van de mail, `login` het bereik
- * en het adres van de link.
+ * Bewaart de aanvraag bij een willekeurig aanvraagnummer en mailt de link met
+ * dat nummer; op een eigen domein ook een code van ResoFly. Een token van
+ * Supabase maakt pas redeemLogin. `organizationId` kiest de naam en de afzender
+ * van de mail, `login` het bereik en het adres van de link.
  */
 async function sendLoginMail(email: string, organizationId: string | null, login: LoginTarget, verifierHash: string): Promise<void> {
   if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) throw new Error('RESEND_API_KEY of RESEND_FROM_EMAIL ontbreekt.');
   const base = login.base.replace(/\/+$/, '');
   if (!base) throw new Error('APP_PUBLIC_URL (of CLIENT_PORTAL_BASE_URL) ontbreekt: zonder kan de mail niet naar het portaal linken.');
-  if (organizationId) {
-    await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new PortalLoginError(message, status));
+  // Een eigen rem op inlogmails per leverancier, los van zijn mailquotum.
+  // Eerst telden ze mee in dat quotum: met de herkomst van zijn adres (na te
+  // maken) en veertig bekende klantadressen kon iedereen het in een uur
+  // opmaken, en dan gingen ook de facturen van die leverancier niet meer weg.
+  if (organizationId && await throttleHit(await sha256Hex(`portal-login:org:${organizationId}`), 3600, LOGIN_MAILS_PER_ORGANIZATION_HOUR, 3600) > 0) {
+    console.warn('portal-login: te veel inlogmails voor deze organisatie dit uur; deze gaat niet weg', organizationId);
+    return;
   }
 
   const requestId = randomToken();
   const requestHash = await sha256Hex(requestId);
-  let tokenHash: string | null = null;
   let codeHash: string | null = null;
-  let code: string | null;
+  let code: string | null = null;
   if (login.ownCode) {
     // Een eigen domein: Supabase Auth maakt geen token (en dus nooit een inlog
     // die de beheerder van dat domein kan uitlezen). De code is van ons.
     code = randomPortalCode();
     codeHash = await sha256Hex(`${requestHash}:${code}`);
-  } else {
-    const { data: link, error: linkError } = await supabaseAdmin.auth.admin.generateLink({ type: 'magiclink', email });
-    if (linkError) throw linkError;
-    tokenHash = String(link?.properties?.hashed_token ?? '') || null;
-    code = String(link?.properties?.email_otp ?? '') || null;
-    if (!tokenHash) throw new Error('Supabase gaf geen inlogtoken terug.');
-    // Ook teamlid ergens (of uitgenodigd)? Dan alleen de link, zonder code:
-    // die werkt alleen in de browser die hem aanvroeg. Een code kan elke
-    // website vragen, en een inlog bij Supabase opent voor hem ook de
-    // werkruimte. Lukt de vraag niet, dan ook geen code.
-    const { data: hasWorkspace, error: workspaceError } = await supabaseAdmin.rpc('portal_email_has_workspace', { p_email: email });
-    if (workspaceError || hasWorkspace !== false) code = null;
   }
 
-  // token_sent_at vult de database zelf (migratie 20261109020000).
+  // Geen token_hash: dat maakt redeemLogin, en token_sent_at vult de database
+  // dan zelf (migraties 20261109020000 en 20261109150000).
   const { error: insertError } = await supabaseAdmin.from('portal_login_requests').insert({
     request_hash: requestHash,
     organization_id: organizationId,
     scope_organization_id: login.scope,
     host: login.host,
     email,
-    token_hash: tokenHash,
+    token_hash: null,
     code_hash: codeHash,
     verifier_hash: verifierHash,
     expires_at: new Date(Date.now() + LOGIN_REQUEST_MINUTES * 60_000).toISOString(),
@@ -301,10 +309,10 @@ async function sendLoginMail(email: string, organizationId: string | null, login
 /**
  * De link uit de inlogmail inwisselen. De browser stuurt het aanvraagnummer
  * en zijn eigen geheimen mee (hooguit vijf: wie twee keer aanvroeg, heeft er
- * twee); past er één bij de aanvraag, dan krijgt hij het inlogtoken en wisselt
- * hij dat zelf in bij Supabase. Op een eigen domein krijgt hij in plaats
- * daarvan de sleutel van het portaal. Eén keer te gebruiken, een kwartier
- * geldig.
+ * twee); past er één bij de aanvraag, dan maakt Supabase Auth nu pas het
+ * inlogtoken, en wisselt de browser dat meteen zelf in. Op een eigen domein
+ * krijgt hij in plaats daarvan de sleutel van het portaal. Eén keer te
+ * gebruiken, een kwartier geldig.
  */
 async function redeemLogin(req: Request, body: Record<string, unknown>) {
   const requestId = String(body.request ?? '');
@@ -320,7 +328,7 @@ async function redeemLogin(req: Request, body: Record<string, unknown>) {
   }
 
   const { data, error } = await supabaseAdmin.from('portal_login_requests')
-    .select('id,organization_id,scope_organization_id,host,email,token_hash,verifier_hash,attempts,expires_at,used_at')
+    .select('id,organization_id,scope_organization_id,host,email,code_hash,verifier_hash,attempts,expires_at,used_at')
     .eq('request_hash', await sha256Hex(requestId))
     .maybeSingle();
   if (error) throw error;
@@ -330,12 +338,14 @@ async function redeemLogin(req: Request, body: Record<string, unknown>) {
   }
   // Aangevraagd op een ander adres (een andere leverancier, of het algemene
   // portaal): alsof hij niet bestaat. De link gaat altijd naar het adres van
-  // de aanvraag, dus een gewone klik komt hier niet. Een token van Supabase
-  // nooit op een eigen domein, een sleutel alleen op het domein van de aanvraag.
+  // de aanvraag, dus een gewone klik komt hier niet. Een aanvraag met een code
+  // hoort bij een eigen domein (een sleutel, alleen op het domein van de
+  // aanvraag); een token van Supabase nooit op een eigen domein.
   const origin = portalOriginOf(req);
   const onCustomDomain = origin?.kind === 'custom';
+  const ownCode = Boolean(row.code_hash);
   if ((row.scope_organization_id ?? null) !== (origin?.organizationId ?? null)
-    || (row.token_hash ? onCustomDomain : !onCustomDomain || origin?.host !== row.host)) {
+    || (ownCode ? !onCustomDomain || origin?.host !== row.host : onCustomDomain)) {
     throw new PortalLoginError('Deze inloglink is verlopen of al gebruikt. Vraag een nieuwe aan.', 410);
   }
 
@@ -345,7 +355,9 @@ async function redeemLogin(req: Request, body: Record<string, unknown>) {
     await supabaseAdmin.from('portal_login_requests')
       .update({ attempts, ...(attempts >= LOGIN_REQUEST_MAX_ATTEMPTS ? { used_at: new Date().toISOString() } : {}) })
       .eq('id', row.id);
-    throw new PortalLoginError('Deze inloglink hoort bij een andere browser. Open hem in de browser waarin je de link aanvroeg, of vul daar de code uit de mail in.', 403);
+    throw new PortalLoginError(ownCode
+      ? 'Deze inloglink hoort bij een andere browser. Open hem in de browser waarin je de link aanvroeg, of vul daar de code uit de mail in.'
+      : 'Deze inloglink hoort bij een andere browser. Open hem in de browser waarin je de link aanvroeg, of vraag hier een nieuwe aan.', 403);
   }
 
   // Eén keer: wie tegelijk twee keer klikt, krijgt het token maar één keer.
@@ -357,14 +369,31 @@ async function redeemLogin(req: Request, body: Record<string, unknown>) {
   if (!claimed || claimed.length === 0) throw new PortalLoginError('Deze inloglink is verlopen of al gebruikt. Vraag een nieuwe aan.', 410);
 
   const portalKey = row.organization_id ? await portalKeyFor(row.organization_id) : null;
-  if (!row.token_hash) return { portalToken: await issuePortalToken(row), email: row.email, portalKey };
-  return { tokenHash: row.token_hash, email: row.email, portalKey };
+  if (ownCode) return { portalToken: await issuePortalToken(row), email: row.email, portalKey };
+  return { tokenHash: await issueSupabaseToken(row), email: row.email, portalKey };
 }
 
 type LoginRequestRow = {
   id: string; organization_id: string | null; scope_organization_id: string | null; host: string | null; email: string;
-  token_hash: string | null; verifier_hash: string; attempts: number; expires_at: string; used_at: string | null;
+  code_hash: string | null; verifier_hash: string; attempts: number; expires_at: string; used_at: string | null;
 };
+
+/**
+ * Het inlogtoken van Supabase voor een ingewisselde aanvraag. Nu pas, en bij
+ * de aanvraag bewaard: de database zet daarbij token_sent_at (het moment in
+ * auth.users), waar portal_session_bind straks op controleert. Supabase kent
+ * per account één token, dus een oudere link werkt daarna niet meer.
+ */
+async function issueSupabaseToken(row: Pick<LoginRequestRow, 'id' | 'email'>): Promise<string> {
+  await ensureAuthUser(row.email);
+  const { data: link, error: linkError } = await supabaseAdmin.auth.admin.generateLink({ type: 'magiclink', email: row.email });
+  if (linkError) throw linkError;
+  const tokenHash = String(link?.properties?.hashed_token ?? '');
+  if (!tokenHash) throw new Error('Supabase gaf geen inlogtoken terug.');
+  const { error } = await supabaseAdmin.from('portal_login_requests').update({ token_hash: tokenHash }).eq('id', row.id);
+  if (error) throw error;
+  return tokenHash;
+}
 
 /**
  * De sleutel van het portaal op een eigen domein, na de link of de code uit de
@@ -373,6 +402,8 @@ type LoginRequestRow = {
  */
 async function issuePortalToken(row: Pick<LoginRequestRow, 'email' | 'scope_organization_id' | 'host'>): Promise<string> {
   if (!row.scope_organization_id || !row.host) throw new Error('Een aanvraag met een code hoort bij een eigen domein.');
+  // Het account pas nu (zie de toelichting bovenaan): de sleutel hoort bij een gebruiker.
+  await ensureAuthUser(row.email);
   const { data: userId, error: userError } = await supabaseAdmin.rpc('portal_user_id', { p_email: row.email });
   if (userError) throw userError;
   if (typeof userId !== 'string' || !userId) throw new Error('Geen account bij dit e-mailadres.');
@@ -432,10 +463,11 @@ async function endPortalToken(req: Request) {
 }
 
 /**
- * Een verse inlog vastleggen (migratie 20261109020000, portal_session_bind).
- * De browser wisselde de link of de code zelf in bij Supabase en stuurt het
- * nieuwe token (Authorization), zijn geheimen en, bij de link, het
- * aanvraagnummer. Pas daarna slaat de app de inlog op: tot dan staat hij
+ * Een verse inlog vastleggen (migraties 20261109020000 en 20261109150000,
+ * portal_session_bind). De browser wisselde het token van de link zelf in bij
+ * Supabase en stuurt de nieuwe inlog (Authorization), zijn geheimen en het
+ * aanvraagnummer. Zonder aanvraagnummer geen inlog: er is geen code van
+ * Supabase meer. Pas daarna slaat de app de inlog op: tot dan staat hij
  * nergens, en laat client-portal hem niet toe.
  *
  * Lukt het niet, dan maken we de verse inlog ook bij Supabase ongeldig: hij
@@ -449,7 +481,7 @@ async function bindSession(req: Request, body: Record<string, unknown>) {
   const { data, error } = token ? await supabaseAdmin.auth.getUser(token) : { data: { user: null }, error: null };
   const user = data?.user ?? null;
   const sessionId = user && !error ? sessionIdFromToken(token) : null;
-  if (!user || !sessionId) throw new PortalLoginError('Inloggen is niet gelukt. Vraag een nieuwe code aan.', 401);
+  if (!user || !sessionId) throw new PortalLoginError('Inloggen is niet gelukt. Vraag een nieuwe inloglink aan.', 401);
 
   // Een inlog bij Supabase hoort nooit op een eigen domein: daar is hij voor de
   // beheerder van dat domein uit te lezen. Komt er toch een, dan weg ermee.

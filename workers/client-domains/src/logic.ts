@@ -130,6 +130,27 @@ export function sameUrlOn(host: string, pathname: string, search: string): strin
   return `https://${host}${pathname.startsWith('/') ? pathname : `/${pathname}`}${search}`;
 }
 
+/**
+ * Het adres zonder punt aan het eind. Voor DNS is portaal.jansen.nl. hetzelfde
+ * adres als portaal.jansen.nl, maar niet voor de app: de meta van de Worker
+ * hoort bij het adres zonder punt, de app keurde hem af, en draaide dan als
+ * werkruimte (met het inlogscherm voor teamleden) op het adres van een klant.
+ * Null als er geen geldig adres overblijft.
+ */
+export function withoutTrailingDot(host: string): string | null {
+  const bare = String(host ?? '').toLowerCase().replace(/\.+$/, '');
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(bare) ? bare : null;
+}
+
+/**
+ * Is dit antwoord HTML? Pages geeft voor een bestand dat niet bestaat de app
+ * zelf terug (index.html, 200). Onder /assets, /fonts en /icons hoort dat niet:
+ * zonder de meta van de Worker draaide de app daar als werkruimte.
+ */
+export function isHtmlType(contentType: string | null | undefined): boolean {
+  return /^\s*text\/html\b/i.test(String(contentType ?? ''));
+}
+
 /** Waar een portaalpad op een eigen domein heen gaat (de naam bij ResoFly), of null. */
 export function portalRedirectUrl(pathname: string, search: string, portalHost: string | null): string | null {
   if (!portalHost) return null;

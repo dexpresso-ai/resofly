@@ -38,9 +38,13 @@ test('de inlogmail zegt waar de code hoort: het adres van de link', () => {
   assert.ok(!/alleen in op/.test(zonder.text));
 });
 
-test('de inlogmail van het algemene portaal, zonder code', () => {
+test('de inlogmail zonder code (de naam bij ResoFly en het algemene portaal): alleen de link', () => {
+  // Sinds migratie 20261109150000 staat er alleen op een eigen domein een
+  // code in de mail. Wie op een ander apparaat leest, vraagt daar een nieuwe aan.
   const mail = renderPortalLoginEmail({ supplierName: null, loginUrl: 'https://staging.resofly.com/portal/inloggen?aanvraag=x', code: null, minutes: 15 });
   assert.equal(mail.subject, 'Inloggen op je klantportaal');
-  assert.ok(!/ander apparaat/.test(mail.html), 'zonder code geen zin over een code');
-  assert.ok(!/Vul deze code in/.test(mail.text));
+  assert.ok(!/code/i.test(mail.html + mail.text), 'zonder code geen woord over een code');
+  assert.match(mail.html, /Lees je deze mail op een ander apparaat\? Vraag dan daar een nieuwe inloglink aan, op <strong[^>]*>staging\.resofly\.com<\/strong>\./);
+  assert.match(mail.text, /Op een ander apparaat\? Vraag daar een nieuwe inloglink aan, op staging\.resofly\.com\./);
+  assert.match(mail.text, /Zonder de link komt niemand binnen\./);
 });

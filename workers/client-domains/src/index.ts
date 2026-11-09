@@ -25,8 +25,8 @@
 // komen, en dan gaan de remmen per IP voor alle klanten tegelijk dicht.
 
 import {
-  clientHostMeta, faviconSvg, isPortalPath, neutralPage, pageTitle, parseHostList, parseLookup, portalRedirectUrl, ROBOTS_TXT,
-  routeFor, sameUrlOn, securityHeaders, type HostLookup,
+  clientHostMeta, faviconSvg, isHtmlType, isPortalPath, neutralPage, pageTitle, parseHostList, parseLookup, portalRedirectUrl, ROBOTS_TXT,
+  routeFor, sameUrlOn, securityHeaders, withoutTrailingDot, type HostLookup,
 } from './logic';
 
 export interface Env {
@@ -47,6 +47,13 @@ const LOOKUP_TTL_SECONDS = 60;
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    // 0. Een adres met een punt aan het eind: naar hetzelfde adres zonder
+    //    (logic.ts: withoutTrailingDot). Ook vóór de adressen van ResoFly zelf.
+    if (url.hostname.endsWith('.')) {
+      const bare = withoutTrailingDot(url.hostname);
+      if (!bare) return html(neutralPage('Dit adres is niet in gebruik', 'Er staat hier (nog) niets. Controleer het adres, of neem contact op met wie je de link stuurde.'), 404);
+      return new Response(null, { status: 301, headers: { location: sameUrlOn(bare, url.pathname, url.search), 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' } });
+    }
     const host = url.hostname.toLowerCase();
 
     // 1. De werkruimte, de agenda, het basisdomein zelf: niet van ons.
@@ -155,6 +162,11 @@ async function page(request: Request, env: Env, lookup: Extract<HostLookup, { st
 /** Een bestand van de app (scripts, stijlen, lettertypen, iconen), ongewijzigd uit Pages. */
 async function asset(request: Request, url: URL, env: Env): Promise<Response> {
   const upstream = await fetch(`${env.APP_ORIGIN.replace(/\/+$/, '')}${url.pathname}${url.search}`, { method: request.method });
+  // Een bestand dat niet bestaat, geeft Pages als de app zelf (logic.ts: isHtmlType).
+  if (isHtmlType(upstream.headers.get('content-type'))) {
+    await upstream.body?.cancel();
+    return html(neutralPage('Pagina niet gevonden', 'Deze pagina bestaat niet. Controleer de link uit je mail.'), 404);
+  }
   const headers = new Headers(upstream.headers);
   headers.set('x-robots-tag', 'noindex, nofollow');
   headers.delete('set-cookie');

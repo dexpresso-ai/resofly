@@ -524,11 +524,12 @@ async function removeDomain(organizationId: string, userId: string, domainId: st
 }
 
 /**
- * Het klantportaal ook op het eigen domein, of niet. Een inlog daar geldt
- * alleen voor deze organisatie (portal_sessions), dus de DNS van het domein
- * geeft geen toegang tot wat een klant bij een ander heeft. Gaat het uit, dan
- * geven de inloggen van dat domein niets meer (portal_session_scope kijkt bij
- * elke aanroep of het portaal er nog aan staat).
+ * Het klantportaal ook op het eigen domein, of niet. Een inlog daar is een
+ * sleutel voor alleen deze organisatie (portal_tokens), dus de DNS van het
+ * domein geeft geen toegang tot wat een klant bij een ander heeft. Gaat het
+ * uit, dan gooit de database de sleutels van dat domein meteen weg (migratie
+ * 20261109150000); eerst bleven ze staan, en werkten ze weer als het portaal
+ * later weer aanging.
  */
 async function setPortal(organizationId: string, userId: string, domainId: string, enabled: boolean, config: ClientDomainsConfig) {
   const row = await loadDomain(organizationId, domainId);
@@ -621,9 +622,11 @@ async function lookupHost(host: string, config: ClientDomainsConfig) {
     const target = await currentHost(String(data.organization_id), config);
     return target && target !== host ? { status: 'redirect' as const, redirectHost: target } : { status: 'unknown' as const };
   }
-  // Het portaal staat hier als de organisatie het aanzette (setPortal). Anders
-  // stuurt de Worker het door naar de naam bij ResoFly.
-  if (data.portal_enabled === true) {
+  // Het portaal staat hier als de organisatie het aanzette (setPortal), en
+  // alleen zolang het domein actief is: de functies nemen het portaal op een
+  // haperend domein niet aan (_shared/clientLinks.ts). Anders stuurt de Worker
+  // het door naar de naam bij ResoFly; documenten met een token blijven hier.
+  if (data.portal_enabled === true && data.status === 'active') {
     return { status: 'active' as const, kind: 'custom' as const, host, portalEnabled: true, portalHost: null, ...(await brandFor(String(data.organization_id))) };
   }
   const { data: sub } = await admin.from('client_subdomains').select('name')
@@ -681,7 +684,12 @@ async function handleCron(req: Request): Promise<Response> {
       }
 
       // Wachtende domeinen elke ronde (de eerste twee weken, daarna dagelijks),
-      // actieve en haperende elke zes uur.
+      // een domein met het portaal ook elke ronde, de rest elke zes uur. Met
+      // het portaal staan er sleutels in de browsers op dat domein: wijst het
+      // record naar een ander, dan moet dat er binnen het kwartier af zijn
+      // (failing; de database gooit de sleutels dan weg, migratie
+      // 20261109150000). En is het weer in orde, dan kunnen klanten daar ook
+      // binnen het kwartier weer inloggen. Eerst was het allebei pas na zes uur.
       const { data: due, error: dueError } = await admin.from('client_domains').select(DOMAIN_COLUMNS)
         .in('status', ['pending_dns', 'pending_certificate', 'active', 'failing'])
         .order('last_checked_at', { ascending: true, nullsFirst: true }).limit(200);
@@ -691,7 +699,8 @@ async function handleCron(req: Request): Promise<Response> {
         const age = Date.now() - Date.parse(row.created_at);
         const since = row.last_checked_at ? Date.now() - Date.parse(row.last_checked_at) : Infinity;
         const pending = row.status === 'pending_dns' || row.status === 'pending_certificate';
-        const interval = pending ? (age < 14 * 86_400_000 ? 0 : 86_400_000) : 6 * 3_600_000;
+        const portal = row.portal_enabled === true && (row.status === 'active' || row.status === 'failing');
+        const interval = pending ? (age < 14 * 86_400_000 ? 0 : 86_400_000) : portal ? 0 : 6 * 3_600_000;
         if (since < interval) continue;
         try {
           await checkDomain(row, config);

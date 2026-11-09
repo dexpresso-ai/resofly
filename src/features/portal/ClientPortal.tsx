@@ -326,6 +326,9 @@ export function ClientPortal() {
     forgetBranding();
     forgetPortalLink();
     forgetPortalKey();
+    // Ook de geheimen van een inlogaanvraag die nog openstond: wie na deze
+    // klant op dit apparaat komt, hoort zijn link niet meer te kunnen gebruiken.
+    forgetVerifiers();
     setAccountBranding(null);
     setRemembered(null);
     if (!keyInPath) setPortalKey(null);
@@ -495,9 +498,14 @@ function PortalLogin({ branding, preview = false, portalKey = null, notice = nul
 }) {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
-  // De inlogmail kwam van ResoFly zelf (met een code erin), niet van Supabase.
+  // Aan wie de inlogmail ging (voor de code op een eigen domein).
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [code, setCode] = useState('');
+  // Alleen op een eigen domein staat er een code in de mail: een code van
+  // ResoFly, die alleen een sleutel voor dit ene portaal geeft. Elders alleen
+  // de link (migratie 20261109150000): een code van Supabase kon een andere
+  // website de klant ontfutselen, en gaf dan een inlog voor alles.
+  const [codeLogin] = useState(() => !preview && portalTokenMode());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewNote, setPreviewNote] = useState(false);
@@ -532,33 +540,20 @@ function PortalLogin({ branding, preview = false, portalKey = null, notice = nul
   }
 
   /**
-   * De code uit de mail, voor wie de mail op een ander apparaat leest. Eerst
-   * inwisselen, dan vastleggen bij de aanvraag uit deze browser, dan pas
-   * opslaan: een inlog die nergens vastligt, weigert het portaal.
+   * De code uit de mail, op een eigen domein, voor wie de mail op een ander
+   * apparaat leest: hij geeft de sleutel van dit portaal.
    */
   async function signInWithCode() {
     const token = normalizeLoginCode(code);
+    if (!codeLogin) return;
     if (!sentTo || !token) { setError('Vul de code uit de mail in: alleen de cijfers.'); return; }
     setError(null); setBusy(true);
     try {
-      if (portalTokenMode()) {
-        // Een eigen domein: de code geeft de sleutel van het portaal.
-        const { portalToken } = await redeemPortalCode(sentTo, token);
-        storePortalToken(portalToken);
-        forgetVerifiers();
-        return;
-      }
-      const tokens = await verifyPortalLogin({ email: sentTo, code: token });
-      if (!tokens) {
-        setError('Deze code klopt niet of is verlopen. Controleer de cijfers, of vraag een nieuwe inloglink aan.');
-        return;
-      }
-      await bindPortalSession(tokens.access_token, { verifiers: pendingVerifiers() });
-      const { error } = await supabasePortalAuth.setSession(tokens);
-      if (error) throw new Error('Inloggen is niet gelukt. Vraag een nieuwe code aan.');
+      const { portalToken } = await redeemPortalCode(sentTo, token);
+      storePortalToken(portalToken);
       forgetVerifiers();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Inloggen is niet gelukt. Vraag een nieuwe code aan.');
+      setError(e instanceof Error ? e.message : 'Inloggen is niet gelukt. Vraag een nieuwe inloglink aan.');
     } finally {
       setBusy(false);
     }
@@ -590,8 +585,10 @@ function PortalLogin({ branding, preview = false, portalKey = null, notice = nul
       />
       <Button variant="primary" onClick={signIn} disabled={!email.trim() || busy}>{busy && !sentTo ? 'Versturen…' : sent ? 'Stuur opnieuw' : 'Stuur inloglink'}</Button>
       {previewNote && <p className="portal-login-next">Dit is een voorbeeld: er wordt geen inloglink verstuurd.</p>}
-      {sent && <p className="success">Als dit adres bij ons bekend is, ontvang je zo een inloglink. Open die in dezelfde browser als waar je deze pagina hebt geopend. Geen mail? Neem contact op met je leverancier.</p>}
-      {sentTo && <div className="portal-login-code">
+      {sent && <p className="success">{codeLogin
+        ? 'Als dit adres bij ons bekend is, ontvang je zo een inloglink met een code. Open de link in deze browser, of vul hieronder de code in. Geen mail? Neem contact op met je leverancier.'
+        : 'Als dit adres bij ons bekend is, ontvang je zo een inloglink. Open die in deze browser: op een ander apparaat werkt hij niet. Geen mail? Neem contact op met je leverancier.'}</p>}
+      {sentTo && codeLogin && <div className="portal-login-code">
         <label htmlFor="portal-login-code">Lees je de mail op een ander apparaat? Vul hier de code uit de mail in.</label>
         <Input
           id="portal-login-code"
@@ -640,6 +637,11 @@ function PortalLoginLanding({ requestId, branding, portalKey, onSignedIn, onAban
         onSignedIn(result.portalKey ?? portalKey);
         return;
       }
+      // Op een eigen domein nooit een inlog bij Supabase, ook niet als de
+      // server er onverhoopt een gaf: wat hier in de browser staat, kan de
+      // beheerder van het domein uitlezen. De server weigert het al; dit is de
+      // tweede laag.
+      if (portalTokenMode()) throw new Error('Deze inloglink hoort niet bij dit adres. Vraag hier een nieuwe aan.');
       if (!result.tokenHash) throw new Error('Deze inloglink is verlopen of al gebruikt. Vraag een nieuwe aan.');
       const tokens = await verifyPortalLogin({ tokenHash: result.tokenHash });
       if (!tokens) throw new Error('Deze inloglink is verlopen of al gebruikt. Vraag een nieuwe aan.');

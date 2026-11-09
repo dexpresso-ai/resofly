@@ -434,15 +434,16 @@ export async function endPortalToken(token: string): Promise<void> {
 }
 
 /**
- * Een verse inlog vastleggen (portal-login, bindSession; migratie
- * 20261109020000). Pas daarna slaat de app hem op: client-portal weigert een
- * inlog die nergens vastligt. Met het nieuwe token, de geheimen van deze
- * browser en, bij de link uit de mail, het aanvraagnummer. Lukt het niet, dan
- * maakt de server de inlog ook ongeldig; de melding is voor de klant.
+ * Een verse inlog vastleggen (portal-login, bindSession; migraties
+ * 20261109020000 en 20261109150000). Pas daarna slaat de app hem op:
+ * client-portal weigert een inlog die nergens vastligt. Met het nieuwe token,
+ * de geheimen van deze browser en het aanvraagnummer uit de link (zonder kan
+ * het niet meer: een code van Supabase staat niet meer in de mail). Lukt het
+ * niet, dan maakt de server de inlog ook ongeldig; de melding is voor de klant.
  */
-export async function bindPortalSession(accessToken: string, options: { request?: string | null; verifiers: string[] }): Promise<void> {
+export async function bindPortalSession(accessToken: string, options: { request: string; verifiers: string[] }): Promise<void> {
   const { data, error } = await portalInvoke('portal-login', {
-    body: { action: 'bindSession', verifiers: options.verifiers, ...(options.request ? { request: options.request } : {}) },
+    body: { action: 'bindSession', verifiers: options.verifiers, request: options.request },
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Inloggen is niet gelukt'));

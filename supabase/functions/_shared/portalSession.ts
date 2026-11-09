@@ -162,17 +162,21 @@ export function bindFailureEndsSession(reason: BindFailure): boolean {
   return reason !== 'bound';
 }
 
-/** De zin voor de klant. Gewone woorden; nooit wat er technisch mis is. */
+/**
+ * De zin voor de klant. Gewone woorden; nooit wat er technisch mis is.
+ * Vastleggen gebeurt alleen na de link (migratie 20261109150000): een code van
+ * Supabase staat niet meer in de mail.
+ */
 export function bindFailureMessage(reason: BindFailure): string {
   switch (reason) {
     case 'expired':
-      return 'Deze code of link is verlopen. Vraag een nieuwe aan.';
+      return 'Deze inloglink is verlopen. Vraag een nieuwe aan.';
     case 'request':
     case 'verifier':
     case 'origin':
-      return 'Deze code of link hoort bij een andere aanvraag. Gebruik de nieuwste mail, in de browser waar je hem aanvroeg.';
+      return 'Deze inloglink hoort bij een andere aanvraag. Gebruik de nieuwste mail, in de browser waar je hem aanvroeg.';
     default:
-      return 'Inloggen is niet gelukt. Vraag een nieuwe code aan.';
+      return 'Inloggen is niet gelukt. Vraag een nieuwe inloglink aan.';
   }
 }
 
