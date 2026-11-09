@@ -42,14 +42,24 @@ de stap *Je webadres*, het tabblad Domein, de controle of een naam bestaat, en d
 inlogmail van het portaal (met link naar het adres van de app). Een eigen domein koppelen
 meldt *"Eigen domeinen zijn op deze omgeving nog niet ingericht"* tot stap 3 klaar is.
 
-Sinds 9 november staat ook de Worker van stap 2 (`resofly-client-domains-staging`), met
-`CLIENT_DOMAINS_WORKER_SECRET` in de Worker en in Supabase (dezelfde waarde). Er hangen nog
-**geen routes** aan: die komen samen met het DNS-record van stap 1, want zonder dat record
-vangt `*.resofly.com/*` alleen de adressen van ResoFly zelf. Controle zonder route: open
-`https://resofly-client-domains-staging.gerjan.workers.dev/`. Dan hoort de neutrale pagina
-*"Dit adres is niet in gebruik"* (404) te verschijnen: de Worker kreeg antwoord van
-`client-domains`. *"Even niet bereikbaar"* (503) betekent dat de opzoeking mislukt,
-bijvoorbeeld omdat het geheim niet overeenkomt.
+Sinds 9 november staan ook stap 1 en 2 op staging:
+
+- het DNS-record `*` (`AAAA 100::`, proxied) in de zone `resofly.com`;
+- de Worker `resofly-client-domains-staging`, met `CLIENT_DOMAINS_WORKER_SECRET` in de Worker
+  en in Supabase (dezelfde waarde);
+- de routes: `*.resofly.com/*` naar de Worker, en zonder Worker `www.resofly.com/*`,
+  `staging.resofly.com/*`, `ftp.resofly.com/*` en `mail.resofly.com/*`. Dat zijn de adressen
+  van ResoFly die ook door Cloudflare lopen (proxied). `ftp` en `mail` (webmail bij de
+  hoster) staan sindsdien ook in `PASSTHROUGH_HOSTS`. Zonder die twee kregen ze met de route
+  de neutrale pagina in plaats van hun eigen site.
+
+Komt er een nieuw adres van ResoFly bij dat door Cloudflare loopt, geef het dan een route
+zonder Worker en zet het in `PASSTHROUGH_HOSTS`.
+
+Controle zonder route: open `https://resofly-client-domains-staging.gerjan.workers.dev/`. Dan
+hoort de neutrale pagina *"Dit adres is niet in gebruik"* (404) te verschijnen: de Worker
+kreeg antwoord van `client-domains`. *"Even niet bereikbaar"* (503) betekent dat de opzoeking
+mislukt, bijvoorbeeld omdat het geheim niet overeenkomt.
 
 ## 1. DNS: de namen bij ResoFly
 
@@ -88,9 +98,11 @@ Routes, in het dashboard onder Workers → `resofly-client-domains-staging` → 
 Domains & Routes (of zet ze in `wrangler.toml` en deploy opnieuw):
 
 1. `*.resofly.com/*` → deze Worker;
-2. voor elk eigen adres van ResoFly een route **zonder** Worker (*None*), bijvoorbeeld
-   `staging.resofly.com/*`, `caldav.resofly.com/*`, `inbound.resofly.com/*`. Een preciezere
-   route gaat voor, zo kost de werkruimte geen Worker-aanroepen.
+2. voor elk eigen adres van ResoFly dat door Cloudflare loopt (proxied in de DNS) een
+   route **zonder** Worker (*None*). Op `resofly.com` zijn dat `www`, `staging`, `ftp` en
+   `mail`. Een preciezere route gaat voor, zo kost de werkruimte geen Worker-aanroepen. Een
+   adres dat alleen in de DNS staat (grijs wolkje, zoals `smtp`, `pop`, `inbound`), komt
+   nooit bij een Worker.
 
 Testen:
 
