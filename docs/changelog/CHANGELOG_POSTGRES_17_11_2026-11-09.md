@@ -32,4 +32,6 @@ is de crash zelf bewust niet uitgeprobeerd.
 - Staging heeft geen back-ups die je zelf kunt terugzetten (het overzicht bij Supabase is
   leeg). Een eigen kopie maken vraagt het databasewachtwoord. Voor productie: zet daar
   back-ups aan voordat je zo'n upgrade doet.
-- Met de push van deze changelog draait de rooktest opnieuw, nu op 17.11.
+- Na de upgrade draaide de rooktest opnieuw: *Deploy Supabase (staging)* met de hand gestart
+  (run 201, zonder vinkjes), want een push zonder migraties of functies start die workflow
+  niet. Alles in orde op 17.11, ook de controles op het klantportaal.
