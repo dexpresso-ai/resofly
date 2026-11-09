@@ -257,6 +257,10 @@ misging:
     alles zoals eerst: ResoFly vraagt de vergadering aan, en zet Google of
     Microsoft er geen bij, dan staat dat als kanttekening bij de afspraak.
 - Cloudflare Pages: de build van `staging` (`6d3a990`) is geslaagd.
+- *Frontend checks*, run 165 op `staging`: geslaagd (typecheck, CSP-hash,
+  unit-tests, mobiele lay-outtest licht en donker, laden per module,
+  inrichtingsstappen, `deno check` van de edge functions, en de migraties vanaf
+  nul op een lege database).
 
 ### Wat de beheerder van ResoFly zelf moet doen
 
