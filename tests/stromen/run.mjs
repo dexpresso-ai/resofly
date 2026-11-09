@@ -5,7 +5,7 @@
  *
  *   npx supabase start -x studio,imgproxy,mailpit,logflare,vector,supavisor,edge-runtime,postgres-meta,realtime,storage-api
  *   npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0
- *   npm run test:stromen -- [rook] [offertes] [facturen] [mollie] [verzendwijze] [herinneringen] [contracten] [beveiliging] [automatisering] [agenda] [videovergadering] [bank] [marketing] [inrichten] [notulen]
+ *   npm run test:stromen -- [rook] [offertes] [facturen] [mollie] [verzendwijze] [herinneringen] [contracten] [beveiliging] [automatisering] [agenda] [videovergadering] [bank] [marketing] [inrichten] [klantdomein] [notulen]
  *
  * Resend, Mollie en de media-worker zijn nep (nepdiensten.mjs): er gaat niets
  * de deur uit, maar elke mail, betaling en PDF wordt vastgelegd en gecontroleerd.
@@ -18,7 +18,7 @@ import { samenvatting } from './toets.mjs';
 
 installeer({ functie: roepRequest });
 
-const ALLE = ['rook', 'offertes', 'facturen', 'mollie', 'verzendwijze', 'herinneringen', 'contracten', 'beveiliging', 'automatisering', 'agenda', 'videovergadering', 'documenten', 'verzenddomein', 'bank', 'marketing', 'inrichten', 'notulen']
+const ALLE = ['rook', 'offertes', 'facturen', 'mollie', 'verzendwijze', 'herinneringen', 'contracten', 'beveiliging', 'automatisering', 'agenda', 'videovergadering', 'documenten', 'verzenddomein', 'bank', 'marketing', 'inrichten', 'klantdomein', 'notulen']
   .filter((naam) => existsSync(new URL(`./${naam}.mjs`, import.meta.url)));
 const gekozen = process.argv.slice(2).filter((arg) => !arg.startsWith('-'));
 for (const naam of gekozen.length ? gekozen : ALLE) {

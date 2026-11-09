@@ -31,6 +31,7 @@ import { getExternalWriteAccessToken, sendEventCancellations } from '../_shared/
 import { calendarConferenceBlockedReason, calendarConferenceService, isVideoService, serviceProvider, videoServiceStateMessage } from '../_shared/conference.ts';
 import { videoServiceStatus } from '../_shared/onlineMeetings.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
+import { clientBaseUrl } from '../_shared/clientLinks.ts';
 import { renderMeetingBookingLinkEmail } from '../_shared/emailTemplates/meetingBookingLinkSent.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
 import { loadSenderBrand, withEmailBrand } from '../_shared/emailBrand.ts';
@@ -321,7 +322,7 @@ async function createLink(organizationId: string, userId: string, body: Record<s
   };
   const { data, error } = await supabaseAdmin.from('meeting_booking_links').insert(insert).select('*').single();
   if (error) throw new HttpError(error.message, 500);
-  return { link: data as LinkRow, token, booking_url: buildBookingUrl(token) };
+  return { link: data as LinkRow, token, booking_url: await buildBookingUrl(organizationId, token) };
 }
 
 async function updateLink(organizationId: string, requesterUserId: string, linkId: string, patchBody: Record<string, unknown>): Promise<LinkRow> {
@@ -386,12 +387,14 @@ async function regenerateToken(organizationId: string, linkId: string, ttlDays: 
     public_token_expires_at: expiresAt,
   }).eq('id', linkId).eq('organization_id', organizationId).select('*').single();
   if (error || !data) throw new HttpError('Token kon niet worden vernieuwd.', 500);
-  return { link: data as LinkRow, token, booking_url: buildBookingUrl(token) };
+  return { link: data as LinkRow, token, booking_url: await buildBookingUrl(organizationId, token) };
 }
 
-function buildBookingUrl(token: string): string {
-  if (!BOOKING_PUBLIC_BASE_URL) return `/booking/${token}`;
-  return `${BOOKING_PUBLIC_BASE_URL}/booking/${encodeURIComponent(token)}`;
+/** De publieke boekingspagina, op het klantadres van díe organisatie als dat er is (_shared/clientLinks.ts). */
+async function buildBookingUrl(organizationId: string, token: string): Promise<string> {
+  const base = await clientBaseUrl(supabaseAdmin, organizationId, BOOKING_PUBLIC_BASE_URL);
+  if (!base) return `/booking/${token}`;
+  return `${base}/booking/${encodeURIComponent(token)}`;
 }
 
 async function addSlots(organizationId: string, userId: string, linkId: string, rawSlots: unknown) {
@@ -484,7 +487,7 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
   const token = String(body.token || '').trim();
   if (!token) throw new HttpError('De boekingslink (token) ontbreekt. Vernieuw de link en probeer opnieuw.', 422);
   if (await sha256Hex(token) !== link.public_token_hash) throw new HttpError('Het meegestuurde token hoort niet bij deze link.', 422);
-  const bookingUrl = buildBookingUrl(token);
+  const bookingUrl = await buildBookingUrl(organizationId, token);
 
   // Naam, merkkleur en logo in één query (_shared/emailBrand.ts): de merknaam
   // of bedrijfsnaam, en pas daarna de naam van de werkruimte.

@@ -25,6 +25,7 @@ import {
   portalTransferDownload,
   portalTransferRead,
   portalTransferZip,
+  redeemPortalLogin,
   requestPortalLogin,
   sendPortalMessage,
   setPortalBackend,
@@ -73,6 +74,11 @@ import { applyBrandTheme, brandStyle, ensureBrandFontsLoaded, loginThemeVars, sa
 import { ReadModal } from '../../components/ReadModal';
 import { BrandMark } from '../../components/PublicBrand';
 import { dayGreeting, firstName, portalDateLabel, portalSummary } from '../../lib/portalGreeting';
+import { clientHostInfo, isClientHost } from '../../lib/clientHost';
+import {
+  createVerifier, forgetVerifiers, loginRequestFromLocation, normalizeLoginCode, pendingVerifiers, rememberVerifier, sha256Hex,
+} from '../../lib/portalLoginFlow';
+import { portalLoginPath } from '../../lib/portalLoginKey';
 import { isPortalLoginKey, portalKeyFromPathname } from '../../lib/portalLoginKey';
 import { PORTAL_PREVIEW_READY, defaultPortalPreview, demoPortalBackend, readPortalPreviewMessage, type PortalPreviewState } from '../../lib/portalPreview';
 import { formatDocUnitPrice } from '../../lib/documentLayout';
@@ -276,12 +282,17 @@ export function ClientPortal() {
   useState(() => { capturePortalLink(); return true; });
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
-  // De sleutel uit het adres, of, net terug van de inloglink, die dit apparaat
-  // bij het aanvragen onthield.
-  const [keyInPath] = useState(() => portalKeyFromPath());
+  // De sleutel uit het adres, op een klantadres die van dat adres, of, net
+  // terug van de inloglink, die dit apparaat bij het aanvragen onthield.
+  const [keyInPath] = useState(() => portalKeyFromPath() ?? clientHostInfo()?.portalKey ?? null);
   const [portalKey, setPortalKey] = useState<string | null>(() => keyInPath ?? (returningFromLoginLink() ? peekPortalKey() : null));
+  // Op een klantadres zegt het adres zelf van wie het portaal is: ook zonder
+  // sleutel de huisstijl van die leverancier, nooit die van een vorige keer.
+  const onClientHost = isClientHost();
   const [keyBranding, setKeyBranding] = useState<BrandingPayload | null>(null);
-  const [keyBrandingDone, setKeyBrandingDone] = useState(!portalKey);
+  const [keyBrandingDone, setKeyBrandingDone] = useState(!portalKey && !onClientHost);
+  // De link uit de inlogmail (/portal/inloggen?aanvraag=…).
+  const [loginRequest, setLoginRequest] = useState<string | null>(() => (typeof window === 'undefined' ? null : loginRequestFromLocation(window.location)));
   // De huisstijl van het gekozen dossier (na het inloggen) gaat voor die van
   // het adres. Staat er een sleutel, dan nooit terugvallen op wat dit apparaat
   // van de vorige keer onthield: dat kan een ándere leverancier zijn, en dan
@@ -292,7 +303,7 @@ export function ClientPortal() {
   // portaal na uitloggen weer in ResoFly-goud.
   const [accountBranding, setAccountBranding] = useState<BrandingPayload | null>(null);
   const [remembered, setRemembered] = useState<BrandingPayload | null>(rememberedBranding);
-  const branding = accountBranding ?? (portalKey ? keyBranding : remembered);
+  const branding = accountBranding ?? (portalKey || onClientHost ? keyBranding : remembered);
 
   // Uitloggen met de knop: ook in dit tabblad niets meer van de vorige klant
   // laten staan. Wat er op schijf stond gaat weg, en ook wat er nog in het
@@ -311,7 +322,7 @@ export function ClientPortal() {
   }, [keyInPath]);
 
   useEffect(() => {
-    if (!portalKey) { setKeyBranding(null); setKeyBrandingDone(true); return; }
+    if (!portalKey && !onClientHost) { setKeyBranding(null); setKeyBrandingDone(true); return; }
     let alive = true;
     // Een trage of onbereikbare server mag het inloggen niet tegenhouden.
     const timer = window.setTimeout(() => { if (alive) setKeyBrandingDone(true); }, KEY_BRANDING_WAIT_MS);
@@ -321,7 +332,7 @@ export function ClientPortal() {
       setKeyBrandingDone(true);
     });
     return () => { alive = false; window.clearTimeout(timer); };
-  }, [portalKey]);
+  }, [portalKey, onClientHost]);
 
   // Alleen opnieuw toepassen als er echt iets aan het beeld verandert; `load()`
   // levert bij elke "Ververs" een nieuw object met dezelfde inhoud. De
@@ -356,6 +367,32 @@ export function ClientPortal() {
   }
   const booting = <main className="portal boot" style={loginStyle}><div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Klantportaal laden…</span></div></main>;
   if (!sessionReady) return booting;
+  // De link uit de inlogmail: eerst een knop, dan pas inloggen. Een
+  // linkscanner (zoals Microsoft Safe Links) opent de pagina wel, maar klikt
+  // niet, en verbruikt de link dus ook niet.
+  if (loginRequest && !loggedIn) {
+    return <PortalLoginLanding
+      requestId={loginRequest}
+      branding={branding}
+      portalKey={portalKey}
+      onSignedIn={(key) => {
+        // Bij welke leverancier je inlogde: diens dossier eerst, en het adres
+        // in de balk zonder het aanvraagnummer.
+        const effective = keyInPath ?? key;
+        if (effective && !keyInPath) setPortalKey(effective);
+        try {
+          window.history.replaceState(window.history.state, '', onClientHost ? '/portal' : portalLoginPath(effective));
+        } catch { /* niets aan te doen */ }
+        setLoginRequest(null);
+      }}
+      onAbandon={() => {
+        try {
+          window.history.replaceState(window.history.state, '', onClientHost ? '/portal' : portalLoginPath(portalKey));
+        } catch { /* niets aan te doen */ }
+        setLoginRequest(null);
+      }}
+    />;
+  }
   // Niet eerst het neutrale inlogscherm laten flitsen terwijl de huisstijl van
   // het adres onderweg is.
   if (!loggedIn) return keyBrandingDone ? <PortalLogin branding={branding} portalKey={portalKey} /> : booting;
@@ -420,6 +457,9 @@ function PortalLogin({ branding, preview = false, portalKey = null }: {
 }) {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
+  // De inlogmail kwam van ResoFly zelf (met een code erin), niet van Supabase.
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewNote, setPreviewNote] = useState(false);
@@ -435,11 +475,21 @@ function PortalLogin({ branding, preview = false, portalKey = null }: {
       // Eerst server-side het account klaarzetten voor bekende klanten (zelf-
       // registratie staat uit). Onbekende e-mailadressen krijgen geen link — en
       // we zeggen niet welke dat zijn, anders is dit scherm een opzoekdienst.
-      await requestPortalLogin(cleanEmail);
-      // De link komt terug op /portal: onthoud bij welke leverancier dit was.
-      // Zonder sleutel een oude vergeten, anders koos een eerdere aanvraag op
-      // dit apparaat de leverancier.
+      // Het geheim blijft in deze browser; alleen de hash gaat mee
+      // (src/lib/portalLoginFlow.ts). Zo werkt de link uit de mail alleen hier.
+      const verifier = createVerifier();
+      const { flow } = await requestPortalLogin(cleanEmail, { verifierHash: await sha256Hex(verifier), key: portalKey });
+      // Bij welke leverancier dit was, voor als de link op het algemene adres
+      // terugkomt. Zonder sleutel een oude vergeten, anders koos een eerdere
+      // aanvraag op dit apparaat de leverancier.
       if (portalKey) rememberPortalKey(portalKey); else forgetPortalKey();
+      if (flow === 'mail') {
+        rememberVerifier(verifier);
+        setSentTo(cleanEmail);
+        setSent(true);
+        return;
+      }
+      // Een server van vóór de eigen inlogmail: de link van Supabase, zoals voorheen.
       const { error } = await supabasePortalAuth.signInWithOtp({
         email: cleanEmail,
         options: { emailRedirectTo: `${window.location.origin}/portal`, shouldCreateUser: false },
@@ -448,6 +498,22 @@ function PortalLogin({ branding, preview = false, portalKey = null }: {
       if (error && !/signup|not allowed|not found/i.test(error.message)) setError(error.message); else setSent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Inloggen mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** De code uit de mail, voor wie de mail op een ander apparaat leest. */
+  async function signInWithCode() {
+    const token = normalizeLoginCode(code);
+    if (!sentTo || !token) { setError('Vul de code uit de mail in: alleen de cijfers.'); return; }
+    setError(null); setBusy(true);
+    try {
+      const { error } = await supabasePortalAuth.verifyOtp({ email: sentTo, token, type: 'email' });
+      if (error) throw error;
+      forgetVerifiers();
+    } catch {
+      setError('Deze code klopt niet of is verlopen. Controleer de cijfers, of vraag een nieuwe inloglink aan.');
     } finally {
       setBusy(false);
     }
@@ -476,10 +542,72 @@ function PortalLogin({ branding, preview = false, portalKey = null }: {
         placeholder="jij@bedrijf.nl"
         onKeyDown={e => { if (e.key === 'Enter' && email.trim()) void signIn(); }}
       />
-      <Button variant="primary" onClick={signIn} disabled={!email.trim() || busy}>{busy ? 'Versturen…' : 'Stuur inloglink'}</Button>
+      <Button variant="primary" onClick={signIn} disabled={!email.trim() || busy}>{busy && !sentTo ? 'Versturen…' : sent ? 'Stuur opnieuw' : 'Stuur inloglink'}</Button>
       {previewNote && <p className="portal-login-next">Dit is een voorbeeld: er wordt geen inloglink verstuurd.</p>}
       {sent && <p className="success">Als dit adres bij ons bekend is, ontvang je zo een inloglink. Open die in dezelfde browser als waar je deze pagina hebt geopend. Geen mail? Neem contact op met je leverancier.</p>}
+      {sentTo && <div className="portal-login-code">
+        <label htmlFor="portal-login-code">Lees je de mail op een ander apparaat? Vul hier de code uit de mail in.</label>
+        <Input
+          id="portal-login-code"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          value={code}
+          onChange={e => setCode(e.target.value)}
+          placeholder="12345678"
+          onKeyDown={e => { if (e.key === 'Enter' && code.trim()) void signInWithCode(); }}
+        />
+        <Button onClick={signInWithCode} disabled={!code.trim() || busy}>{busy ? 'Inloggen…' : 'Inloggen met code'}</Button>
+      </div>}
       {error && <p className="error">{error}</p>}
+      <PortalFooter branding={branding} />
+    </div>
+  </main>;
+}
+
+/**
+ * De link uit de inlogmail (/portal/inloggen?aanvraag=…). Eerst een knop: een
+ * linkscanner die de link vooraf opent, verbruikt hem zo niet. De knop stuurt
+ * het aanvraagnummer en de geheimen van deze browser naar de server; past er
+ * één, dan krijgt de browser het inlogtoken en wisselt hij het zelf in.
+ */
+function PortalLoginLanding({ requestId, branding, portalKey, onSignedIn, onAbandon }: {
+  requestId: string;
+  branding: BrandingPayload | null;
+  portalKey: string | null;
+  onSignedIn: (portalKey: string | null) => void;
+  onAbandon: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const loginStyle = useMemo(() => loginThemeVars(branding) as CSSProperties, [branding]);
+  const supplier = branding?.companyName ?? null;
+
+  async function signIn() {
+    setBusy(true); setError(null);
+    try {
+      const result = await redeemPortalLogin(requestId, pendingVerifiers());
+      const { error } = await supabasePortalAuth.verifyOtp({ token_hash: result.tokenHash, type: 'magiclink' });
+      if (error) throw new Error('Deze inloglink is verlopen of al gebruikt. Vraag een nieuwe aan.');
+      forgetVerifiers();
+      onSignedIn(result.portalKey ?? portalKey);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Inloggen is niet gelukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="portal login" style={loginStyle}>
+    <div className="login-card">
+      <div className="app-brand portal-login-brand">
+        <BrandMark branding={branding} name={supplier ?? ''} on="login" />
+        {!branding?.logoDataUrl && <span>{supplier ?? 'Klantportaal'}</span>}
+      </div>
+      <h1>Inloggen</h1>
+      <p>{supplier ? `Klik op Inloggen om verder te gaan naar het klantportaal van ${supplier}.` : 'Klik op Inloggen om verder te gaan naar je klantportaal.'}</p>
+      <Button variant="primary" onClick={signIn} disabled={busy}>{busy ? 'Inloggen…' : 'Inloggen'}</Button>
+      {error && <p className="error">{error}</p>}
+      {error && <Button onClick={onAbandon}>Nieuwe inloglink aanvragen</Button>}
       <PortalFooter branding={branding} />
     </div>
   </main>;

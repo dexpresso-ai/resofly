@@ -10,6 +10,7 @@ import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
 import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 import { publicLinkExpiresAt } from '../_shared/publicLinkExpiry.ts';
+import { clientBaseUrl } from '../_shared/clientLinks.ts';
 import { isBeforeAmsterdamToday } from '../_shared/nlDate.ts';
 import { dbErrorAnswer } from '../_shared/dbError.ts';
 
@@ -375,9 +376,9 @@ async function sendQuoteEmail(
   // offerte langer geldig was, en een verstuurde offerte kan niet opnieuw.
   const expiresAt = publicLinkExpiresAt(quote.valid_until, QUOTE_TOKEN_TTL_DAYS);
 
-  const publicUrl = `${QUOTE_PUBLIC_BASE_URL.replace(/\/$/, '')}/quote/${encodeURIComponent(
-    token,
-  )}`;
+  // Op het klantadres van díe organisatie als dat er is (_shared/clientLinks.ts),
+  // anders QUOTE_PUBLIC_BASE_URL. Nooit uit het verzoek.
+  const publicUrl = `${await clientBaseUrl(supabaseAdmin, organizationId, QUOTE_PUBLIC_BASE_URL)}/quote/${encodeURIComponent(token)}`;
 
   const renderedEmail = renderEmailTemplate('quote.sent', {
     quote,

@@ -11,6 +11,7 @@ import { renderContractPdf, bytesToBase64, sha256HexBytes } from '../_shared/con
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
 import { buildContractTokens, fillContractTokens } from '../_shared/contractTokens.ts';
 import { publicLinkExpiresAt } from '../_shared/publicLinkExpiry.ts';
+import { clientBaseUrl } from '../_shared/clientLinks.ts';
 import {
   convertContractDocxToPdf,
   isOfficeContract,
@@ -243,7 +244,8 @@ async function sendContractForSignature(
   // Minstens tot en met de ondertekendeadline: de link verliep na 30 dagen, ook
   // als de mail een latere "teken uiterlijk" noemde.
   const expiresAt = publicLinkExpiresAt(contract.valid_until, CONTRACT_TOKEN_TTL_DAYS);
-  const publicUrl = `${CONTRACT_PUBLIC_BASE_URL.replace(/\/$/, '')}/contract/${encodeURIComponent(token)}`;
+  // Op het klantadres van díe organisatie als dat er is (_shared/clientLinks.ts).
+  const publicUrl = `${await clientBaseUrl(supabaseAdmin, organizationId, CONTRACT_PUBLIC_BASE_URL)}/contract/${encodeURIComponent(token)}`;
 
   const rendered = renderEmailTemplate('contract.sent', {
     contract: { number: contract.number, title: contract.title, valid_until: contract.valid_until },

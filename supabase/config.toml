@@ -238,3 +238,14 @@ verify_jwt = false
 # cron-secret doet hij niets.
 [functions.webhooks]
 verify_jwt = false
+
+# client-domains: het webadres van een organisatie (migratie 20261108230000).
+# Handelt CORS-preflight en auth zelf af: elke actie uit de app verifieert
+# requireUser() + requireOrganizationAccess(), en wijzigen mag alleen owner of
+# admin. Daarnaast twee aanroepers zonder gebruikers-JWT: de Worker op de
+# klantadressen (lookup, met CLIENT_DOMAINS_WORKER_SECRET in de header
+# x-client-domains-secret) en pg_cron (?cron=recheck, met
+# CLIENT_DOMAINS_CRON_SECRET in x-cron-secret). Zonder geldig geheim doet hij
+# voor die twee niets.
+[functions.client-domains]
+verify_jwt = false

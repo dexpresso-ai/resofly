@@ -25,6 +25,7 @@ import {
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 import { publicActionError } from '../_shared/publicError.ts';
 import { invoiceMollieWebhookBase, invoiceMollieWebhookUrl } from '../_shared/mollieWebhookUrl.ts';
+import { clientBaseUrl, containsPublicLink, isAllowedReturnUrl } from '../_shared/clientLinks.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type InvoiceLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number; vat_code?: string | null };
@@ -65,6 +66,16 @@ const RESEND_REPLY_TO = Deno.env.get('RESEND_REPLY_TO') || '';
 const INVOICE_REMINDER_CRON_SECRET = Deno.env.get('INVOICE_REMINDER_CRON_SECRET') || '';
 const INVOICE_REMINDER_BATCH_LIMIT = parsePositiveInt(Deno.env.get('INVOICE_REMINDER_BATCH_LIMIT'), 200);
 const INVOICE_PUBLIC_BASE_URL = Deno.env.get('INVOICE_PUBLIC_BASE_URL') || Deno.env.get('APP_PUBLIC_URL') || '';
+
+/**
+ * De publieke factuurpagina, op het klantadres van díe organisatie als dat er
+ * is (_shared/clientLinks.ts), anders op INVOICE_PUBLIC_BASE_URL. Nooit uit
+ * het verzoek: wie de link in een mail kan sturen, kan het token onderscheppen.
+ */
+async function invoicePublicUrl(organizationId: string, token: string): Promise<string> {
+  const base = await clientBaseUrl(supabaseAdmin, organizationId, INVOICE_PUBLIC_BASE_URL);
+  return `${base}/invoice/${encodeURIComponent(token)}`;
+}
 const INVOICE_TOKEN_TTL_DAYS = parsePositiveInt(Deno.env.get('INVOICE_TOKEN_TTL_DAYS'), 60);
 const INVOICE_PDF_MAX_ATTACHMENT_BYTES = parsePositiveInt(Deno.env.get('INVOICE_PDF_MAX_ATTACHMENT_BYTES'), 8 * 1024 * 1024);
 // Falls back to the shared quote storage config so a single Worker + secret
@@ -369,7 +380,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
   const expiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
-  const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
+  const publicUrl = await invoicePublicUrl(organizationId, token);
 
   // Payment link is OPT-IN per send, and only possible when this organization has
   // connected its OWN Mollie account. There is deliberately no shared-key fallback:
@@ -645,7 +656,7 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
   const expiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
-  const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
+  const publicUrl = await invoicePublicUrl(organizationId, token);
 
   // Betaallink is best-effort: de Mollie-checkout vereist een echte actor-user, en
   // een fout (geen Mollie, revoked key, …) mag de herinnering nooit blokkeren.
@@ -1021,7 +1032,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
   const expiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
-  const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
+  const publicUrl = await invoicePublicUrl(organizationId, token);
 
   // Betaallink best-effort — een fout mag de aanmaning nooit blokkeren.
   let paymentUrl: string | null = null;
@@ -1323,7 +1334,7 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
   const tokenExpiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
-  const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
+  const publicUrl = await invoicePublicUrl(organizationId, token);
   const checkoutExpiresAt = new Date(Date.now() + CHECKOUT_TTL_MINUTES * 60 * 1000).toISOString();
   // Use a server-side stable idempotency key. Do not trust a frontend-supplied
   // timestamp/random key here, because a double click must not create multiple
@@ -1349,7 +1360,7 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
       if (!orgKey) throw new WorkflowHttpError('Koppel eerst het eigen Mollie-account van deze organisatie in de instellingen voordat je een betaallink aanmaakt.', 409);
       if (!MOLLIE_WEBHOOK_URL) throw new WorkflowHttpError('INVOICE_MOLLIE_WEBHOOK_URL ontbreekt.', 500);
       const requestedRedirectUrl = String(body.redirectUrl || '').trim();
-      const redirectUrl = isValidInvoiceRedirectUrl(requestedRedirectUrl, publicUrl) ? requestedRedirectUrl : publicUrl;
+      const redirectUrl = isAllowedReturnUrl(requestedRedirectUrl, new URL(publicUrl).pathname, [publicUrl, INVOICE_PUBLIC_BASE_URL]) ? requestedRedirectUrl : publicUrl;
       const webhookUrl = invoiceMollieWebhookUrl(MOLLIE_WEBHOOK_URL, MOLLIE_WEBHOOK_SECRET);
       const mollieResponse = await fetch('https://api.mollie.com/v2/payments', {
         method: 'POST',
@@ -3145,7 +3156,7 @@ async function sendInvoiceViaMollie(input: MollieSendInput) {
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
   const expiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
-  const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
+  const publicUrl = await invoicePublicUrl(organizationId, token);
   const rendered = renderEmailTemplate('invoice.sent', { invoice, client, project, quote, company, publicUrl, paymentUrl: null, recipientName, expiresAt, content, eInvoice: true });
   const subject = (input.subject.trim() || rendered.subject || `Factuur ${invoice.number}`).slice(0, 200);
   const placeholderPdf = await createInvoicePdfAttachment({ invoice, client, project, quote, company, publicUrl });
@@ -4313,8 +4324,10 @@ function corsHeaders(req: Request): HeadersInit { const origin = req.headers.get
 // blijft staan: die is er om te openen.
 function withoutPublicLinks(value: unknown, depth = 0, key = ''): unknown {
   if (typeof value === 'string') {
-    const prefix = INVOICE_PUBLIC_BASE_URL ? `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/` : '';
-    if (prefix && value.includes(prefix) && key !== 'checkoutUrl' && key !== 'provider_checkout_url') return '(verborgen)';
+    // Op elk adres: sinds de klantadressen (migratie 20261108230000) staat de
+    // link niet meer altijd op INVOICE_PUBLIC_BASE_URL. Eerst zocht dit filter
+    // alleen op dat voorvoegsel, en dan glipte een link op een klantadres erdoor.
+    if (containsPublicLink(value, ['invoice']) && key !== 'checkoutUrl' && key !== 'provider_checkout_url') return '(verborgen)';
     return value;
   }
   if (depth > 12 || value === null || typeof value !== 'object') return value;
@@ -4350,18 +4363,10 @@ function isReusableCheckoutUrl(value: string | null | undefined): boolean {
 }
 
 
-function isValidInvoiceRedirectUrl(candidate: string, expectedPublicUrl: string): boolean {
-  if (!candidate) return false;
-  try {
-    const candidateUrl = new URL(candidate);
-    const expectedUrl = new URL(expectedPublicUrl);
-    if (candidateUrl.origin !== expectedUrl.origin) return false;
-    // Mollie should always return to the exact public invoice route, never the app root/dashboard.
-    return candidateUrl.pathname === expectedUrl.pathname;
-  } catch {
-    return false;
-  }
-}
+// Mollie keert alleen terug naar precies de publieke factuurpagina, nooit naar
+// de app of het dashboard: isAllowedReturnUrl in _shared/clientLinks.ts. Op het
+// klantadres van de organisatie of op het algemene adres: een klant die een
+// oude link (van vóór het klantadres) opende, komt daar ook weer uit.
 
 function normalizeMollieStatus(status: string): string { if (status === 'paid') return 'paid'; if (status === 'expired') return 'expired'; if (status === 'canceled' || status === 'failed') return status; if (status === 'authorized') return 'authorized'; if (status === 'pending') return 'pending'; return 'open'; }
 function timingSafeEqual(a: string, b: string): boolean { const enc = new TextEncoder(); const left = enc.encode(a); const right = enc.encode(b); if (left.length !== right.length) return false; let out = 0; for (let i = 0; i < left.length; i++) out |= left[i] ^ right[i]; return out === 0; }

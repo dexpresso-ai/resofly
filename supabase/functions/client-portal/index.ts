@@ -2,6 +2,7 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { loadPortalLoginKey } from '../_shared/portalAddress.ts';
+import { clientPortalBaseUrl, portalOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
 import { normalizeGalleryLayout } from '../_shared/galleryLayout.ts';
 import { createPortalInvoiceCheckout, calculateTotalCents, orgHasInvoiceMollie } from '../_shared/invoiceCheckout.ts';
 import {
@@ -134,6 +135,10 @@ type ClientRow = {
 type ActingContact = { id: string; name: string; email: string };
 
 serve(async (req) => {
+  // Van een klantadres (jansen.resofly.com, portaal.jansen.nl)? Eén keer
+  // opzoeken; CORS en de controle of de link bij dat adres hoort, lezen het
+  // daarna (_shared/clientLinks.ts).
+  await rememberClientOrigin(supabaseAdmin, req);
   if (req.method === 'OPTIONS') return json(req, { ok: true });
 
   try {
@@ -594,7 +599,8 @@ async function createInvoicePayment(user: { id: string; email: string }, body: R
     organizationId: invoice.organization_id,
     invoiceId: invoice.id,
     actorUserId: user.id,
-    redirectUrl: `${resolvePortalBaseUrl(req)}/portal`,
+    // Terug naar het portaal: op de naam bij ResoFly, nooit op een eigen domein (clientPortalBaseUrl).
+    redirectUrl: `${await clientPortalBaseUrl(supabaseAdmin, invoice.organization_id, resolvePortalBaseUrl(req))}/portal`,
     actorContact: contact ? { id: contact.id, name: contact.name, email: contact.email } : null,
   });
   if (!result.ok) {
@@ -616,6 +622,8 @@ async function createInvoicePayment(user: { id: string; email: string }, body: R
 function resolvePortalBaseUrl(req: Request): string {
   const envBase = (Deno.env.get('APP_PUBLIC_URL') || Deno.env.get('INVOICE_PUBLIC_BASE_URL') || '').replace(/\/$/, '');
   if (envBase) return envBase;
+  // Alleen zonder ingesteld adres (lokaal): de origin is hierboven al gekeurd.
+  // Een klantadres komt via clientPortalBaseUrl uit de organisatie, nooit van hier.
   return (req.headers.get('origin') || '').replace(/\/$/, '');
 }
 
@@ -2202,13 +2210,14 @@ function assertAllowedOrigin(req: Request) {
   // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
   if (origin === 'null') throw new PortalError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin) return;
+  if (portalOriginOf(req)) return;
   if (allowedOrigins.includes(origin)) return;
   throw new PortalError('Deze frontend-origin is niet toegestaan voor het klantportaal.', 403);
 }
 
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
-  const allowOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins.length === 0 ? '*' : '';
+  const allowOrigin = portalOriginOf(req) || allowedOrigins.includes(origin) ? origin : allowedOrigins.length === 0 ? '*' : '';
   return {
     ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',

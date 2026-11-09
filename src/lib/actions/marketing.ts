@@ -8,6 +8,7 @@ import {
   resumeCampaign, resumeFlow, scheduleCampaign, sendCampaign, sendTestCampaign,
 } from '../marketing-api';
 import { plainTextToEmailHtml } from '../../services/mailService';
+import { clientBaseUrlFor } from '../../services/domainService';
 import { throwFunctionError } from '../functionErrors';
 import { deleteR2Object } from '../r2-api';
 import { supabase } from '../supabase';
@@ -408,7 +409,10 @@ export const MARKETING_EXECUTORS: Record<string, ActionExecutor> = {
       share_pin_failed_count: 0,
       share_pin_locked_until: null,
     }, ctx.organizationId);
-    const url = `${window.location.origin}/gallerij/${token}`;
+    // Dezelfde link als in de mail aan de klant: op het klantadres als dat er
+    // is (jansen.resofly.com), anders het adres van de app.
+    const base = await clientBaseUrlFor(ctx.organizationId);
+    const url = `${base}/gallerij/${token}`;
     return `Deellink voor "${updated.title}" aangemaakt: ${url}`
       + (pin ? ` (pincode ${pin}) — de link blijft ook terug te vinden bij Delen in de galerij` : ' — de link blijft ook terug te vinden bij Delen in de galerij');
   },

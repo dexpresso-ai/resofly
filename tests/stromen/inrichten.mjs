@@ -10,6 +10,7 @@
 // eerste login geen eigen organisatie meer (en dus ook geen stappen).
 import { maakGebruiker, rest, rpc, sql, sqlRij, uniek } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, nietsVeranderd, stap, verwacht } from './toets.mjs';
+import { webadresNaam } from './wereld.mjs';
 
 function q(waarde) {
   return `'${String(waarde).replace(/'/g, "''")}'`;
@@ -112,6 +113,19 @@ export default async function inrichten() {
   });
 
   groep('Inrichten: afronden');
+  await stap('afronden zonder webadres wordt geweigerd (migratie 20261108230000)', async () => {
+    const res = geweigerd(await rpc('complete_organization_onboarding', { p_organization_id: orgId, p_display_name: 'Inrichten Studio' }, eigenaar.token), 'zonder webadres');
+    verwacht(/webadres/i.test(JSON.stringify(res)), `melding noemt het webadres niet: ${JSON.stringify(res)}`);
+    gelijk(organisatie(orgId)?.onboarding_completed_at, null, 'nog niet afgerond');
+  });
+
+  await stap('de eigenaar kiest het webadres, zoals de stap Je webadres', async () => {
+    const naam = webadresNaam('inrichten');
+    const res = gelukt(await rpc('client_subdomain_claim', { p_organization_id: orgId, p_name: naam }, eigenaar.token), 'webadres');
+    // jsonb zet de sleutels in zijn eigen volgorde: per veld vergelijken.
+    gelijk([res?.name, res?.previous, res?.changed], [naam, null, true], 'antwoord');
+  });
+
   await stap('de eigenaar rondt af; de organisatie krijgt de naam van het bedrijf', async () => {
     const res = gelukt(await rpc('complete_organization_onboarding', { p_organization_id: orgId, p_display_name: '  Inrichten\nStudio  ' }, eigenaar.token), 'afronden');
     const rij = Array.isArray(res) ? res[0] : res;
@@ -140,6 +154,7 @@ export default async function inrichten() {
     }), 'bedrijfsgegevens als beheerder');
     // De beheerder van de tweede organisatie kan de eerste niet raken.
     geweigerd(await rpc('complete_organization_onboarding', { p_organization_id: orgId }, beheerder.token), 'andere organisatie');
+    gelukt(await rpc('client_subdomain_claim', { p_organization_id: id, p_name: webadresNaam('inrichten-2') }, beheerder.token), 'webadres als beheerder');
     gelukt(await rpc('complete_organization_onboarding', { p_organization_id: id }, beheerder.token), 'afronden als beheerder');
     verwacht(organisatie(id)?.onboarding_completed_at, 'niet afgerond');
     gelijk(organisatie(id)?.name, 'Tweede B.V.', 'naam uit de bedrijfsgegevens');

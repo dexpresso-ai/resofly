@@ -10,6 +10,7 @@ import { toPublicTimeline } from '../_shared/publicTimeline.ts';
 import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
 import { loadBranding } from '../_shared/branding.ts';
 import { loadPortalLoginKey, portalLoginUrl } from '../_shared/portalAddress.ts';
+import { clientOriginMismatch, clientOriginOf, portalLinkBase, rememberClientOrigin } from '../_shared/clientLinks.ts';
 import { buildContractTokens, CONTRACT_CONSENT_TEXT, fillContractTokens } from '../_shared/contractTokens.ts';
 import {
   convertContractDocxToPdf,
@@ -107,6 +108,10 @@ function describeError(error: unknown): string {
 }
 
 serve(async (req) => {
+  // Van een klantadres (jansen.resofly.com, portaal.jansen.nl)? Eén keer
+  // opzoeken; CORS en de controle of de link bij dat adres hoort, lezen het
+  // daarna (_shared/clientLinks.ts).
+  await rememberClientOrigin(supabaseAdmin, req);
   if (req.method === 'OPTIONS') return json(req, { ok: true });
   try {
     assertAllowedOrigin(req);
@@ -119,6 +124,12 @@ serve(async (req) => {
     const token = String(body.token || '').trim();
     if (!token || token.length < 24) throw new PublicHttpError('Ondertekenlink ontbreekt of is ongeldig.', 400);
     const tokenHash = await sha256Hex(token);
+    // Een contract van een andere organisatie opent niet op dit klantadres:
+    // zelfde antwoord als een onbekende link.
+    if (clientOriginOf(req)) {
+      const { data: owner } = await supabaseAdmin.from('contracts').select('organization_id').eq('public_token_hash', tokenHash).maybeSingle();
+      if (clientOriginMismatch(req, owner?.organization_id as string | undefined)) throw new PublicHttpError('Ondertekenlink is ongeldig of verlopen.', 404);
+    }
 
     switch (action) {
       case 'getContract':
@@ -391,8 +402,10 @@ async function sendConfirmationEmails(
   if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) return;
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, contract.organization_id, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   const attachPdf = pdf !== null && pdf.sizeBytes <= CONTRACT_PDF_MAX_ATTACHMENT_BYTES;
-  const portalUrl = APP_PUBLIC_URL
-    ? portalLoginUrl(APP_PUBLIC_URL, await loadPortalLoginKey(supabaseAdmin, contract.organization_id))
+  // Op het klantadres van de organisatie als dat er is (_shared/clientLinks.ts).
+  const portal = await portalLinkBase(supabaseAdmin, contract.organization_id, APP_PUBLIC_URL);
+  const portalUrl = portal.base
+    ? portalLoginUrl(portal.base, portal.onClientHost ? null : await loadPortalLoginKey(supabaseAdmin, contract.organization_id))
     : null;
   // Het logo van de organisatie van dit contract, voor beide mails.
   const brand = await loadEmailBrand(supabaseAdmin, contract.organization_id);
@@ -802,7 +815,7 @@ function requiredEnv(name: string): string {
 }
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
-  const allowOrigin = CONTRACT_PUBLIC_ALLOWED_ORIGINS.includes(origin) || (CONTRACT_ALLOW_LOCAL_DEV && isLocalOrigin(origin))
+  const allowOrigin = clientOriginOf(req) || CONTRACT_PUBLIC_ALLOWED_ORIGINS.includes(origin) || (CONTRACT_ALLOW_LOCAL_DEV && isLocalOrigin(origin))
     ? origin
     : (CONTRACT_ALLOW_LOCAL_DEV && !origin ? '*' : '');
   return {
@@ -819,6 +832,7 @@ function assertAllowedOrigin(req: Request): void {
   const origin = req.headers.get('origin') || '';
   // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
   if (origin === 'null') throw new PublicHttpError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
+  if (clientOriginOf(req)) return;
   if (!origin && CONTRACT_ALLOW_LOCAL_DEV) return;
   if (CONTRACT_PUBLIC_ALLOWED_ORIGINS.includes(origin)) return;
   if (CONTRACT_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) return;

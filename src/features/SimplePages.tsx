@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, History, LayoutTemplate, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
+import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, Globe, History, LayoutTemplate, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceSendMethod, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
@@ -24,6 +24,7 @@ import { ApiIntegrations } from '../components/ApiIntegrations';
 import { PageIcon } from '../components/PageIcon';
 import { FULL_PERMISSIONS, isAccountantRole, LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel, type Permissions } from '../lib/permissions';
 import { AuditLogPanel } from './AuditLog';
+import { ClientDomainSettings } from './ClientDomainSettings';
 import type { AuditTarget } from '../lib/auditLog';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
@@ -86,7 +87,7 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   accountant: 'Boekhouder',
 };
 
-export type SettingsTab = 'organisatie' | 'logboek' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'documenten' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
+export type SettingsTab = 'organisatie' | 'logboek' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'domein' | 'documenten' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
 
 /** De boekhouder ziet alleen wat bij de financiën hoort, en dan alleen-lezen. */
 // Het logboek ook: de boekhouder ziet daar alleen de regels over Financiën
@@ -160,6 +161,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
   { id: 'klantvelden', label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
   { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en lettertypen op wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s, je offerte- en factuur-PDF\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
+  { id: 'domein', label: 'Domein', Icon: Globe, description: 'Het adres waarop je klanten hun portaal, albums, offertes, facturen en contracten openen: je webadres bij ResoFly of je eigen domein. En het domein waarvan je mail verstuurt.' },
   { id: 'documenten', label: 'Documentopmaak', Icon: LayoutTemplate, description: 'Sleep de gegevens van je offertes en facturen naar de plek waar jij ze wilt hebben, of kies een kant-en-klaar sjabloon. Je klant krijgt precies de PDF die je hier ziet.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
   { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
@@ -3197,10 +3199,35 @@ export function Settings({
         : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>}
     </div>}
 
+    {activeTab === 'domein' && <div className="settings-tab-panel">
+      {activeOrganization
+        ? <>
+          <ClientDomainSettings
+            organizationId={activeOrganization.id}
+            canAdmin={canAdminOrganization}
+            companyName={form.trade_name || form.company_name || activeOrganization.name || null}
+            website={form.website || null}
+          />
+          {/* Het verzenddomein staat hier sinds november 2026, naast het
+              webadres: wie een eigen domein koppelt, regelt beide op één plek
+              (plan eigen subdomein, §4.2). E-mail houdt een verwijzing. */}
+          <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />
+        </>
+        : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>}
+    </div>}
+
     {activeTab === 'email' && <div className="settings-tab-panel">
     {activeOrganization && <InboundForwardingCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <InvoiceInboxCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
-    {activeOrganization && <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
+    <section className="settings-card organization-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>Eigen verzenddomein</h3>
+          <p className="settings-help">Mailen vanaf je eigen adres, zoals <code>info@jouwbedrijf.nl</code>, stel je in bij Instellingen → Domein. Daar staat ook het adres waarop je klanten je pagina's openen.</p>
+        </div>
+        <Button onClick={() => setActiveTab('domein')}>Naar Domein</Button>
+      </div>
+    </section>
     {activeOrganization && <PersonalSenderCard organizationId={activeOrganization.id} />}
     {activeOrganization && <ClientMailCards organizationId={activeOrganization.id} canAdmin={canAdminOrganization} logo={form.brand_logo_data_url} logoOnDark={form.brand_logo_dark_data_url} />}
     <section className="settings-card organization-card">

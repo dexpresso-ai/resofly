@@ -14,6 +14,16 @@ async function lid(orgId, gebruiker, rol, modules) {
   return gebruiker;
 }
 
+/**
+ * Een webadres zoals de stap "Je webadres" het vastlegt (migratie
+ * 20261108230000): kleine letters, cijfers en streepjes, uniek per run.
+ */
+export function webadresNaam(naam) {
+  return uniek(`w-${naam}`).toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+/, '')
+    .slice(0, 40).replace(/-+$/, '');
+}
+
 export async function maakWereld(naam, { kor = false } = {}) {
   const eigenaar = await maakGebruiker(`${naam}-eigenaar`);
   const orgNaam = uniek(`Org ${naam}`);
@@ -39,6 +49,11 @@ export async function maakWereld(naam, { kor = false } = {}) {
     },
   });
   if (bedrijf.status !== 201 && bedrijf.status !== 200) throw new Error(`bedrijfsgegevens: ${bedrijf.status} ${bedrijf.tekst}`);
+  // Het webadres voor klanten, zoals de stap "Je webadres": zonder rondt de
+  // database de inrichting niet af (migratie 20261108230000).
+  const subdomein = webadresNaam(naam);
+  const adres = await rpc('client_subdomain_claim', { p_organization_id: orgId, p_name: subdomein }, eigenaar.token);
+  if (adres.status !== 200) throw new Error(`client_subdomain_claim: ${adres.status} ${adres.tekst}`);
   // Een nieuwe organisatie opent eerst de inrichtingsstappen (migratie
   // 20261107190000). De bedrijfsgegevens staan er nu; de eigenaar rondt af,
   // net als met de knop "Naar mijn werkruimte". Anders bleef de UI-test in de
@@ -73,7 +88,7 @@ export async function maakWereld(naam, { kor = false } = {}) {
   const portaalA = await maakGebruiker('portaal-a', klantAEmail);
   const portaalB = await maakGebruiker('portaal-b', klantBEmail);
 
-  return { naam, orgId, orgNaam, eigenaar, beheerder, medewerker, lezer, zonderFinancien, kijker, boekhouder, klantA, klantB, portaalA, portaalB };
+  return { naam, orgId, orgNaam, subdomein, eigenaar, beheerder, medewerker, lezer, zonderFinancien, kijker, boekhouder, klantA, klantB, portaalA, portaalB };
 }
 
 /** Standaardregels: twee tarieven, met de bekende afrondingsval (€ 173,63). */

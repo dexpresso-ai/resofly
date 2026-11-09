@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { clientOriginMismatch, clientOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { signedDownloadUrls, storageKeyBelongsOnlyTo } from '../_shared/fileTransferServer.ts';
@@ -86,6 +87,10 @@ type ShareItem = {
 };
 
 serve(async (req) => {
+  // Van een klantadres (jansen.resofly.com, portaal.jansen.nl)? Eén keer
+  // opzoeken; CORS en de controle of de link bij dat adres hoort, lezen het
+  // daarna (_shared/clientLinks.ts).
+  await rememberClientOrigin(supabaseAdmin, req);
   if (req.method === 'OPTIONS') return json(req, { ok: true });
 
   try {
@@ -97,6 +102,13 @@ serve(async (req) => {
     const token = String(body.token || '').trim();
     if (!isPlausibleToken(token)) throw new ShareError('Deze deellink is ongeldig.', 400);
     const tokenHash = await sha256Hex(token);
+    // Een deling van een andere organisatie opent niet op dit klantadres:
+    // zelfde antwoord als een onbekende link. Zonder p_touch: dit is geen bezoek.
+    if (clientOriginOf(req)) {
+      const { data: owner } = await supabaseAdmin.rpc('resolve_drive_share_link', { p_token_hash: tokenHash, p_touch: false });
+      const row = (Array.isArray(owner) ? owner[0] : owner) as { organization_id?: string } | null;
+      if (clientOriginMismatch(req, row?.organization_id)) throw new ShareError('Deze deellink bestaat niet meer, is ingetrokken of is verlopen.', 404);
+    }
 
     switch (action) {
       case 'get':
@@ -350,6 +362,7 @@ function assertAllowedOrigin(req: Request) {
   // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
   if (origin === 'null') throw new ShareError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin) return; // server-to-server / curl: geen browser-origin om te toetsen
+  if (clientOriginOf(req)) return;
   if (allowedOrigins.length === 0) return;
   if (allowedOrigins.includes(origin)) return;
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return;
@@ -358,7 +371,7 @@ function assertAllowedOrigin(req: Request) {
 
 function corsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get('origin') || '';
-  const allow = !origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)
+  const allow = !origin || clientOriginOf(req) || allowedOrigins.length === 0 || allowedOrigins.includes(origin)
     || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
     ? (origin || '*')
     : '';

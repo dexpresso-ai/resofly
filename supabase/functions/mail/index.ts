@@ -21,6 +21,7 @@ import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { accentOnDark, brandNameLine, EMAIL_CARD, EMAIL_LOGO_SLOT_DARK, EMAIL_LOGO_SLOT_SIGNATURE, sanitizeAccentColor, textOnAccent } from '../_shared/emailTemplates/layout.ts';
 import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 import { loadPortalLoginKey, portalLoginUrl } from '../_shared/portalAddress.ts';
+import { portalLinkBase } from '../_shared/clientLinks.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
@@ -355,7 +356,10 @@ async function sendClientPortalWelcome(
 
   // Het eigen inlogadres: de klant ziet bij zijn eerste bezoek al het merk van
   // de leverancier, niet de standaardstijl van ResoFly.
-  const portalUrl = portalLoginUrl(resolvePortalBaseUrl(req), await loadPortalLoginKey(supabaseAdmin, organizationId));
+  // Op het klantadres van de organisatie als dat er is (_shared/clientLinks.ts);
+  // daar is het eigen inlogadres overbodig.
+  const portal = await portalLinkBase(supabaseAdmin, organizationId, resolvePortalBaseUrl(req));
+  const portalUrl = portalLoginUrl(portal.base, portal.onClientHost ? null : await loadPortalLoginKey(supabaseAdmin, organizationId));
   const recipientName = String(client.contact_name || client.name || '').trim();
 
   const subject = `Welkom bij ${organizationName} — je klantportaal staat klaar`;
@@ -893,7 +897,7 @@ async function sendClientEmail(
       if (recipientError) throw recipientError;
       if (String(recipientRow.email) !== recipientEmail) throw new MailHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
       transferRecipientId = String(recipientRow.id);
-      const link = await issueRecipientLink(supabaseAdmin, transferRecipientId);
+      const link = await issueRecipientLink(supabaseAdmin, transferRecipientId, organizationId);
       const blockInput = {
         url: link.url,
         fileCount: transfer.item_count,

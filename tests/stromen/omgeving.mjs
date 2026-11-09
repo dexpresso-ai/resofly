@@ -37,6 +37,11 @@ export const WEBHOOK_SECRET = 'webhook-geheim-stromen';
 export const AGENDA_STATE_GEHEIM = 'agenda-state-geheim-stromen';
 /** Waarmee de afmeldlinks in marketingmail worden ondertekend (UNSUBSCRIBE_SECRET). */
 export const AFMELD_GEHEIM = 'afmeld-geheim-stromen';
+/** Klantadressen (klantdomein.mjs): Cloudflare for SaaS en de DNS zijn nep, in het scenario zelf. */
+export const CLOUDFLARE_TOKEN = 'cf-token-stromen';
+export const CLOUDFLARE_ZONE = 'zone-stromen';
+export const CLIENT_DOMAINS_WERKER_GEHEIM = 'werker-geheim-stromen-klantdomeinen';
+export const CLIENT_DOMAINS_CRON_GEHEIM = 'cron-geheim-stromen-klantdomeinen';
 /** Zoals Resend het signing secret geeft (whsec_ + base64); de webhook controleert er de handtekening mee. */
 export const RESEND_WEBHOOK_GEHEIM = `whsec_${Buffer.from('stromen-resend-webhook-geheim-32b').toString('base64')}`;
 
@@ -94,6 +99,12 @@ Object.assign(process.env, {
   CAMPAIGN_CRON_SECRET: CRON_SECRET,
   UNSUBSCRIBE_SECRET: AFMELD_GEHEIM,
   CAMPAIGN_DISPATCH_BATCH: '5',
+  // Klantadressen (klantdomein.mjs). CLIENT_DOMAINS_LIVE zet het scenario zelf
+  // aan en weer uit: de andere scenario's verwachten links op PUBLIEK.
+  CLOUDFLARE_SAAS_API_TOKEN: CLOUDFLARE_TOKEN,
+  CLOUDFLARE_SAAS_ZONE_ID: CLOUDFLARE_ZONE,
+  CLIENT_DOMAINS_WORKER_SECRET: CLIENT_DOMAINS_WERKER_GEHEIM,
+  CLIENT_DOMAINS_CRON_SECRET: CLIENT_DOMAINS_CRON_GEHEIM,
   // Opnames en notulen (notulen.mjs): ElevenLabs en Claude zijn nep (nep-ai.mjs).
   // Hier en niet in het scenario: elevenlabs.ts en claudeSummary.ts lezen hun
   // sleutel bij het laden, en een ander scenario kan die code al eerder laden.

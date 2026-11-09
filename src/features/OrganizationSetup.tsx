@@ -15,10 +15,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import {
   AlertTriangle, ArrowLeft, ArrowRight, BadgeCheck, Building2, Calculator, CalendarDays, Check, CheckCircle2,
-  CreditCard, ExternalLink, Eye, EyeOff, KeyRound, Landmark, Layers, Loader2, Lock, LogOut, Mail, Palette,
+  CreditCard, ExternalLink, Eye, EyeOff, Globe, KeyRound, Landmark, Layers, Loader2, Lock, LogOut, Mail, Palette,
   Receipt, RefreshCw, Rocket, Scale, ShieldCheck, Sparkles, Trash2, Upload, UserPlus,
 } from 'lucide-react';
 import { BrandMark } from '../components/BrandMark';
+import { ClientAddressPicker, type AddressPickerState } from '../components/ClientAddressPicker';
+import { canClaim, suggestSubdomain } from '../lib/clientDomains';
+import { claimClientSubdomain, loadClientDomainsOverview, type ClientDomainsOverview } from '../services/domainService';
 import { Input, Select, Textarea } from '../components/Ui';
 import { logoToDataUrl } from './BrandStudio';
 import { textOnColor } from '../lib/brandColor';
@@ -26,7 +29,7 @@ import {
   bookkeepingStartSuggestions, checkCompanyDraft, defaultYearResultAccount, finishCheck, fiscalYearMustBeCalendarYear,
   isDutchCountry, isIsoDate, LEGAL_FORM_GROUPS, LEGAL_FORM_INFO, mollieKeyMode, mollieKeyProblem, MONTH_NAMES,
   needsBusinessModule, normalizeCompanyDraft, onboardingProgressKey, onboardingSteps, organizationDisplayName,
-  parseHourlyRateCents, parseOnboardingProgress, PAYMENT_TERM_DAYS, paymentTermsText, reachableSteps,
+  parseHourlyRateCents, parseOnboardingProgress, PAYMENT_TERM_DAYS, paymentTermsText, reachableSteps, resumeStep,
   serializeOnboardingProgress, VAT_PERIOD_LABELS,
   type CompanyDraft, type CompanyField, type OnboardingProgress, type OnboardingStep, type OnboardingStepKey,
 } from '../lib/onboarding';
@@ -201,14 +204,16 @@ export function OrganizationSetup(props: OrganizationSetupProps) {
   const [billing, setBilling] = useState<OrganizationBillingOverview | null>(props.initialBillingOverview);
   const [mollie, setMollie] = useState<InvoiceMollieSettingsStatus | null>(null);
   const [mollieLoadError, setMollieLoadError] = useState<string | null>(null);
+  // Het webadres (jansen.resofly.com): het basisdomein en de naam die al vastligt.
+  const [address, setAddress] = useState<ClientDomainsOverview | null>(null);
+  const [addressLoadError, setAddressLoadError] = useState<string | null>(null);
 
   const [progress, setProgress] = useState<OnboardingProgress>(() => {
     const saved = readProgress(organizationId);
     const known = new Set(steps.map(step => step.key));
     if (!saved) return { step: 'welkom', completed: [], pendingLegalForm: null };
     const completed = saved.completed.filter(key => known.has(key));
-    const reach = reachableSteps(steps, new Set(completed));
-    const step = known.has(saved.step) && reach.has(saved.step) ? saved.step : 'welkom';
+    const step = resumeStep(steps, new Set(completed), saved.step);
     return { step, completed, pendingLegalForm: saved.pendingLegalForm };
   });
   useEffect(() => { writeProgress(organizationId, progress); }, [organizationId, progress]);
@@ -267,6 +272,16 @@ export function OrganizationSetup(props: OrganizationSetupProps) {
   }, [organizationId]);
 
   useEffect(() => { void refreshBilling(); void refreshMollie(); }, [refreshBilling, refreshMollie]);
+
+  const refreshAddress = useCallback(async () => {
+    try {
+      setAddress(await loadClientDomainsOverview(organizationId));
+      setAddressLoadError(null);
+    } catch (error) {
+      setAddressLoadError(errorText(error, 'Het webadres kon niet worden geladen.'));
+    }
+  }, [organizationId]);
+  useEffect(() => { void refreshAddress(); }, [refreshAddress]);
 
   const savedLegalForm: LegalForm = settings?.legal_form ?? 'eenmanszaak';
   const businessActive = Boolean(businessStatus?.active);
@@ -400,6 +415,15 @@ export function OrganizationSetup(props: OrganizationSetupProps) {
           next();
         }} />;
       break;
+    case 'webadres':
+      content = <AddressStep {...common}
+        organizationId={organizationId}
+        overview={address}
+        loadError={addressLoadError}
+        onRetry={refreshAddress}
+        suggestion={suggestSubdomain(companyDraft.trade_name.trim() || companyDraft.company_name.trim() || settings?.trade_name || settings?.company_name)}
+        onSaved={async () => { await refreshAddress(); next(); }} />;
+      break;
     case 'btw':
       content = <VatStep {...common}
         draft={vatDraft}
@@ -459,6 +483,7 @@ export function OrganizationSetup(props: OrganizationSetupProps) {
         billing={billing}
         businessStatus={businessStatus}
         mollie={mollie}
+        address={address}
         onGoTo={goTo}
         onFinish={async target => {
           const displayName = organizationDisplayName(settings?.company_name, settings?.trade_name);
@@ -1125,6 +1150,74 @@ function CompanyStep({ draft, onChange, legalForm, korEnabled, onSave, ...common
   </StepFrame>;
 }
 
+// ── Je webadres ─────────────────────────────────────────────────────────────
+
+/**
+ * Het adres voor je klanten: <naam>.resofly.com (migratie 20261108230000).
+ * Verplicht: elke mail aan een klant linkt ernaar, en de database rondt de
+ * inrichting niet af zonder (complete_organization_onboarding). Terwijl je
+ * typt, zegt het scherm of de naam al bestaat.
+ */
+function AddressStep({ organizationId, overview, loadError, onRetry, suggestion, onSaved, ...common }: StepCommon & {
+  organizationId: string;
+  overview: ClientDomainsOverview | null;
+  loadError: string | null;
+  onRetry: () => Promise<void>;
+  suggestion: string;
+  onSaved: () => Promise<void>;
+}) {
+  const { busy, error, setError, run } = useAction();
+  const current = overview?.subdomain?.name ?? null;
+  const [name, setName] = useState<string>(() => current ?? suggestion);
+  const [picker, setPicker] = useState<AddressPickerState | null>(null);
+  // Komt het overzicht later binnen (een eerder gekozen naam), dan die tonen
+  // zolang er nog niets getypt is.
+  const touched = useRef(false);
+  useEffect(() => { if (!touched.current && current) setName(current); }, [current]);
+
+  const base = overview?.config.base ?? null;
+  const isCurrent = Boolean(current && picker?.name === current && picker.check?.status === 'own');
+  const ready = Boolean(picker && !picker.checking && (isCurrent || canClaim(picker.check)));
+
+  async function save() {
+    if (!picker) return;
+    if (isCurrent) { await onSaved(); return; }
+    if (!canClaim(picker.check)) throw new Error('Kies een naam die nog vrij is.');
+    await claimClientSubdomain(organizationId, picker.name);
+    await onSaved();
+  }
+
+  return <StepFrame {...common}
+    icon={<Globe size={14} aria-hidden="true" />}
+    title="Je webadres"
+    lead="Op dit adres openen je klanten hun albums, offertes, facturen, contracten en het klantportaal. Elke mail aan een klant linkt ernaar, dus kies een naam die bij je bedrijf past. Je kunt hem later nog wijzigen."
+    footer={<Footer onBack={common.onBack} busy={busy} primaryLabel="Opslaan en verder" disabled={!ready}
+      primary={() => void run(save, 'Het webadres kon niet worden vastgelegd.')} />}>
+    {error && <Notice tone="error">{error}</Notice>}
+    {loadError && !overview && <Notice tone="error">
+      {loadError} <button type="button" className="onb-link" onClick={() => { setError(null); void onRetry(); }}>Opnieuw proberen</button>
+    </Notice>}
+    {!overview && !loadError && <p className="onb-small"><Loader2 size={14} className="onb-spin" aria-hidden="true" /> Even laden…</p>}
+    {overview && base && <section className="onb-card onb-address">
+      <div className="onb-card-head"><Globe size={18} aria-hidden="true" /><h3>Kies je naam</h3></div>
+      <label className="onb-address-label" htmlFor="onb-f-address">Je adres</label>
+      <ClientAddressPicker
+        id="onb-f-address"
+        organizationId={organizationId}
+        base={base}
+        value={name}
+        disabled={busy}
+        onChange={state => { touched.current = true; setName(state.name); setPicker(state); setError(null); }}
+      />
+      <div className="onb-address-preview" aria-label="Zo ziet je klant het">
+        <span className="onb-address-lock" aria-hidden="true"><Lock size={12} /></span>
+        <span className="onb-address-url"><strong>{(picker?.name || name || 'jouwnaam')}.{base}</strong>/portal</span>
+      </div>
+      <p className="onb-small">Een eigen domein voor je albums en facturen, zoals albums.jouwbedrijf.nl, kun je later koppelen bij Instellingen → Domein.</p>
+    </section>}
+  </StepFrame>;
+}
+
 // ── 5 · Btw en boekhouding ──────────────────────────────────────────────────
 
 function VatStep({ draft, onChange, legalForm, onSave, ...common }: StepCommon & {
@@ -1444,7 +1537,7 @@ function MollieStep({ organizationId, isOwner, sendMethod, status, loadError, on
 
 // ── 9 · Klaar ───────────────────────────────────────────────────────────────
 
-function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLegalForm, billing, businessStatus, mollie, onGoTo, onFinish, ...common }: StepCommon & {
+function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLegalForm, billing, businessStatus, mollie, address, onGoTo, onFinish, ...common }: StepCommon & {
   organization: Organization;
   isChild: boolean;
   settings: CompanySettings | null;
@@ -1453,11 +1546,17 @@ function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLega
   billing: OrganizationBillingOverview | null;
   businessStatus: OrganizationBusinessStatus | null;
   mollie: InvoiceMollieSettingsStatus | null;
+  /** Het webadres; null zolang het overzicht er niet is. */
+  address: ClientDomainsOverview | null;
   onGoTo: (key: OnboardingStepKey) => void;
   onFinish: (next: SetupNext) => Promise<void>;
 }) {
   const { busy, error, run } = useAction();
-  const check = finishCheck({ companyName: settings?.company_name, addressLine1: settings?.address_line1, savedLegalForm, pendingLegalForm });
+  const check = finishCheck({
+    companyName: settings?.company_name, addressLine1: settings?.address_line1, savedLegalForm, pendingLegalForm,
+    // Pas tegenhouden als bekend is dat er geen naam is; de database controleert het bij het afronden ook.
+    clientSubdomain: address ? (address.subdomain?.name ?? null) : undefined,
+  });
   const ready = check.blocking.length === 0;
   const s = settings;
   const name = organizationDisplayName(s?.company_name, s?.trade_name) || organization.name;
@@ -1466,6 +1565,7 @@ function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLega
     { step: 'rechtsvorm', icon: <Scale size={16} />, label: 'Rechtsvorm', value: LEGAL_FORM_LABELS[savedLegalForm], detail: pendingLegalForm ? `Gekozen: ${LEGAL_FORM_LABELS[pendingLegalForm]}, nog niet vastgelegd` : LEGAL_FORM_INFO[savedLegalForm].tax, warn: Boolean(pendingLegalForm) },
     { step: 'bedrijf', icon: <Building2 size={16} />, label: 'Bedrijf', value: s?.company_name?.trim() || 'Nog niet ingevuld', detail: [s?.address_line1, [s?.postal_code, s?.city].filter(Boolean).join(' ')].filter(v => v && String(v).trim()).join(', ') || undefined, warn: !s?.company_name?.trim() },
     { step: 'bedrijf', icon: <BadgeCheck size={16} />, label: 'Registratie', value: [s?.kvk_number ? `KvK ${s.kvk_number}` : 'Geen KvK-nummer', s?.vat_number || 'geen btw-id'].join(' · '), detail: s?.iban ? `IBAN ${s.iban}` : 'Nog geen IBAN', warn: !s?.iban },
+    { step: 'webadres', icon: <Globe size={16} />, label: 'Webadres', value: address?.subdomain?.host ?? (address ? 'Nog niet gekozen' : '…'), detail: address?.subdomain ? 'Hier openen je klanten albums, offertes, facturen en het portaal' : undefined, warn: Boolean(address && !address.subdomain) },
     { step: 'btw', icon: <Calculator size={16} />, label: 'Btw', value: s?.kor_enabled ? 'KOR: geen btw' : `Aangifte ${s?.vat_return_period === 'monthly' ? 'per maand' : 'per kwartaal'}`, detail: `Boekjaar vanaf ${MONTH_NAMES[Math.max(0, Math.min(11, (s?.fiscal_year_start_month ?? 1) - 1))]}` },
     { step: 'facturen', icon: <Mail size={16} />, label: 'Facturen', value: method === 'mollie' ? 'Via Mollie, met betaallink' : method === 'email' ? 'Per e-mail' : 'Nog niet gekozen', warn: !method },
     { step: 'mollie', icon: <CreditCard size={16} />, label: 'Mollie', value: mollie?.status === 'connected' ? `Gekoppeld${mollie.mode === 'test' ? ', testmodus' : ''}` : 'Niet gekoppeld', warn: method === 'mollie' && mollie?.status !== 'connected' },

@@ -37,6 +37,7 @@ import {
 } from '../lib/gallery';
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
 import { formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
+import { useClientBaseUrl } from '../services/domainService';
 
 const galleryStatusLabels: Record<Gallery['status'], string> = {
   draft: 'Concept',
@@ -2647,7 +2648,11 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
   const [pin, setPin] = useState('');
   // Alleen nodig in het gaatje tussen opslaan en het opnieuw inlezen van de
   // galerij; daarna komt de link uit de galerij zelf.
-  const [freshUrl, setFreshUrl] = useState<string | null>(null);
+  const [freshToken, setFreshToken] = useState<string | null>(null);
+  // Het webadres voor klanten (jansen.resofly.com of een eigen domein); tot
+  // de server het weet, en als het niet lukt, het adres van de app. Zo staat
+  // hier dezelfde link als in de mail aan de klant.
+  const clientBase = useClientBaseUrl(gallery.organization_id);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2662,18 +2667,17 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
   // database, zodat een link die een collega intussen heeft vernieuwd of
   // ingetrokken hier ook klopt.
   useEffect(() => {
-    if (gallery.share_token || !gallery.share_enabled) setFreshUrl(null);
+    if (gallery.share_token || !gallery.share_enabled) setFreshToken(null);
   }, [gallery.share_token, gallery.share_enabled]);
 
   // De link staat bij de galerij en blijft dus staan: na publiceren, na het
   // sluiten van dit venster en na het herladen van de pagina. Hij verdwijnt
   // alleen als je hem intrekt.
-  const savedUrl = gallery.share_enabled && gallery.share_token
-    ? `${window.location.origin}/gallerij/${gallery.share_token}`
-    : null;
+  const savedToken = gallery.share_enabled && gallery.share_token ? gallery.share_token : null;
   // Net gegenereerd wint: die link is de nieuwste, ook als de galerij nog de
   // vorige teruggeeft.
-  const shareUrl = freshUrl ?? savedUrl;
+  const shareToken = freshToken ?? savedToken;
+  const shareUrl = shareToken ? `${clientBase}/gallerij/${shareToken}` : null;
   // Wel een actieve deellink, maar geen token om te tonen: een link van vóór
   // deze versie, of een omgeving waar de migratie nog moet draaien. Uit een
   // SHA-256 is het token niet terug te rekenen, dus resteert: nieuwe maken.
@@ -2707,7 +2711,7 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
       setError(e instanceof Error ? e.message : 'Deellink opslaan mislukt. Probeer het opnieuw.');
       return;
     }
-    setFreshUrl(`${window.location.origin}/gallerij/${token}`);
+    setFreshToken(token);
     setCopied(false);
   }
 
@@ -2715,7 +2719,7 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
     setError(null);
     try {
       await onPatch({ share_enabled: false, share_token: null, share_token_hash: null, share_pin_hash: null });
-      setFreshUrl(null);
+      setFreshToken(null);
       setCopied(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Deellink intrekken mislukt. Probeer het opnieuw.');

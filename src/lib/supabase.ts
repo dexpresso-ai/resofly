@@ -54,6 +54,8 @@ export interface SupabaseAuthAdapter {
     data: { subscription: { unsubscribe(): void } };
   };
   signInWithOtp(args: { email: string; options?: { emailRedirectTo?: string; shouldCreateUser?: boolean } }): Promise<{ error: Error | null }>;
+  /** De link of de code uit de inlogmail van het klantportaal (src/lib/portalLoginFlow.ts). */
+  verifyOtp(args: { token_hash: string; type: 'magiclink' | 'email' } | { email: string; token: string; type: 'magiclink' | 'email' }): Promise<{ data: { session: SupabaseSession | null }; error: Error | null }>;
   signOut(): Promise<{ error: Error | null }>;
 }
 

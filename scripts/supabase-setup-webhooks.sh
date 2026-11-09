@@ -23,6 +23,12 @@
 #      Die ruimt de bestanden van verlopen en ingetrokken zendingen op. Staat de
 #      migratie van 2026-10-13 nog niet op de database, dan slaat het script
 #      deze stap over.
+#   6. Klantadressen (migratie 20261108230000): staat de pg_cron-taak
+#      'client-domains-recheck' er nog niet, dan een nieuw
+#      CLIENT_DOMAINS_CRON_SECRET en de taak (elk kwartier). Die loopt de eigen
+#      domeinen na bij Cloudflare en ruimt oude namen en inlogaanvragen op.
+#      CLIENT_DOMAINS_WORKER_SECRET zet dit script NIET: dezelfde waarde moet
+#      ook in de Worker staan, dus die kies je zelf (docs/setup/KLANTDOMEINEN_SETUP.md).
 #
 # Veilig om opnieuw te draaien: het zet alleen wat ontbreekt, en geen enkele
 # waarde komt in beeld. Draait in de workflow "Deploy Supabase (staging)"
@@ -183,6 +189,31 @@ select cron.schedule(
     :'url', :'secret'));
 SQL
   echo "FILE_TRANSFER_CRON_SECRET gezet en de taak 'file-transfer-purge' ingepland (elke nacht om 02:00 UTC)."
+fi
+
+# ── 6. Klantadressen: eigen domeinen nalopen en opruimen, elk kwartier ────
+#
+# Een wachtend domein wordt zo binnen een kwartier actief zonder dat iemand op
+# "Controleer nu" klikt, en een record dat verdwijnt valt binnen zes uur op.
+# Zonder de Cloudflare-secrets ruimt de taak alleen op (oude namen, verlopen
+# inlogaanvragen van het portaal).
+if [ "$(sql -c "select to_regclass('public.client_domains') is not null")" != "t" ]; then
+  echo "Klantadressen: de migratie 20261108230000 staat nog niet op deze database; overgeslagen."
+elif [ "$(sql -c "select count(*) from cron.job where jobname = 'client-domains-recheck'")" != "0" ]; then
+  echo "De taak 'client-domains-recheck' staat al ingepland; taak en CLIENT_DOMAINS_CRON_SECRET blijven zoals ze zijn."
+else
+  # Zelfde volgorde als hierboven: eerst het secret, dan de taak.
+  domains_secret="$(generate)"; mask "$domains_secret"
+  "$supabase_cli" secrets set --project-ref "$ref" "CLIENT_DOMAINS_CRON_SECRET=$domains_secret" >/dev/null
+  sql -v secret="$domains_secret" -v url="https://${ref}.functions.supabase.co/client-domains?cron=recheck" >/dev/null <<'SQL'
+select cron.schedule(
+  'client-domains-recheck',
+  '*/15 * * * *',
+  format(
+    'select net.http_post(url := %L, headers := jsonb_build_object(''Content-Type'', ''application/json'', ''x-cron-secret'', %L), body := ''{}''::jsonb, timeout_milliseconds := 120000);',
+    :'url', :'secret'));
+SQL
+  echo "CLIENT_DOMAINS_CRON_SECRET gezet en de taak 'client-domains-recheck' ingepland (elk kwartier)."
 fi
 
 echo "Klaar: de webhooks zijn ingericht op ${ref}."

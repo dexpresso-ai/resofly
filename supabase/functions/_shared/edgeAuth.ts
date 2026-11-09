@@ -11,6 +11,7 @@
 
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { corsAllowOrigin, originRefusal } from './origins.ts';
+import { clientOriginOf } from './clientLinks.ts';
 import { isOrganizationRole, isWriterRole, memberModuleLevel, type ModuleKey, type ModuleLevel, type OrganizationRole } from './roles.ts';
 
 // De regels voor toegestane origins staan in origins.ts (los te testen).
@@ -143,13 +144,18 @@ export function makeCors(allowedOrigins: string[], allowLocalDev: boolean): Cors
     };
     // Alleen een toegestane origin krijgt hem terug; geen match = geen header
     // (nooit "null", zie origins.ts).
+    // Een klantadres telt alleen als de functie het eerst heeft opgezocht
+    // (rememberClientOrigin in _shared/clientLinks.ts): de publieke functies
+    // doen dat, de functies van de werkruimte niet.
     const allowOrigin = corsAllowOrigin(req.headers.get('origin') || '', allowedOrigins, allowLocalDev);
-    if (allowOrigin) result['Access-Control-Allow-Origin'] = allowOrigin;
+    const clientOrigin = clientOriginOf(req)?.origin ?? null;
+    if (clientOrigin || allowOrigin) result['Access-Control-Allow-Origin'] = clientOrigin ?? allowOrigin!;
     return result;
   };
   return {
     headers,
     assert(req: Request) {
+      if (clientOriginOf(req)) return;
       const refusal = originRefusal(req.headers.get('origin') || '', allowedOrigins, allowLocalDev);
       if (refusal) throw new HttpError(refusal.message, refusal.status);
     },
