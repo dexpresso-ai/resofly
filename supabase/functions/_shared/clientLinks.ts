@@ -205,7 +205,10 @@ export interface ClientOrigin {
   host: string;
   organizationId: string;
   kind: 'subdomain' | 'custom';
-  /** Staat het klantportaal op dit adres? Op een naam bij ResoFly altijd; op een eigen domein als de organisatie het aanzette. */
+  /**
+   * Staat het klantportaal op dit adres? Op een naam bij ResoFly altijd; op
+   * een eigen domein als de organisatie het aanzette én het domein actief is.
+   */
   portalEnabled: boolean;
 }
 
@@ -252,7 +255,16 @@ async function lookupClientOrigin(admin: SupabaseClient, origin: string, config:
       .eq('hostname', parsed.hostname).in('status', ['active', 'failing']).limit(1).maybeSingle();
     if (error) throw error;
     if (data) {
-      value = { origin, host: url.hostname, organizationId: String(data.organization_id), kind: 'custom', portalEnabled: data.portal_enabled === true };
+      // Het portaal alleen op een actief domein. Bij 'failing' wijst het record
+      // misschien al naar een ander, en dan zijn de pagina's daar niet meer van
+      // ons: eerst kon iedereen vanaf zo'n domein een inlogmail laten sturen
+      // (in de huisstijl van de organisatie, met een link naar dat domein).
+      // Documenten met een token blijven er wel werken: de link uit een mail
+      // gaat daar toch al heen.
+      value = {
+        origin, host: url.hostname, organizationId: String(data.organization_id), kind: 'custom',
+        portalEnabled: data.portal_enabled === true && data.status === 'active',
+      };
     }
   }
   if (cache.size >= CACHE_MAX) cache.clear();

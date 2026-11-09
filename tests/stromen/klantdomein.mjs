@@ -15,7 +15,9 @@
 //   5. de publieke functies vanaf een klantadres: CORS, en een token van een
 //      andere organisatie op dat adres bestaat niet;
 //   6. inloggen op het portaal met de eigen inlogmail: link met het geheim van
-//      de browser, de code, verlopen, hergebruik, en GoTrue zelf;
+//      de browser, verlopen, hergebruik, en GoTrue zelf. Sinds migratie
+//      20261109150000 nooit een code van Supabase in de mail, en het token van
+//      Supabase pas bij het inwisselen;
 //   7. de inlog per gebruiker (migratie 20261109020000): vastleggen bij de
 //      aanvraag, het bereik (één organisatie of alles), een wachtwoord geeft
 //      niets, en een inlog hoort bij de nieuwste aanvraag;
@@ -290,10 +292,41 @@ async function inloggenOpDomein(email, { origin, ipAanvraag, ipInwisselen }) {
   return { sleutel: nodig(uit.portalToken, 'sleutel'), mail, aanvraag, code: codeUitMail(mail) };
 }
 
-/** Een account bij een klantadres: zoals na een inlogaanvraag (die maakt het account aan). */
+/**
+ * Een account bij een klantadres: zoals na het inwisselen van de link. Sinds
+ * migratie 20261109150000 maakt pas het inwisselen het account aan; aanvragen
+ * laat bij Supabase geen spoor na.
+ */
 async function accountVoor(email, origin, adres) {
-  gelukt(await roep('portal-login', { origin, ip: adres, body: { action: 'requestLogin', email, verifierHash: sha256(verifier()) } }), 'aanvragen');
+  const geheim = verifier();
+  const voor = mailsAan(email).length;
+  gelukt(await roep('portal-login', { origin, ip: adres, body: { action: 'requestLogin', email, verifierHash: sha256(geheim) } }), 'aanvragen');
+  const aanvraag = nodig(aanvraagUitMail(mailsAan(email).slice(voor)[0]), 'aanvraagnummer');
+  gelukt(await roep('portal-login', { origin, ip: adres, body: { action: 'redeemLogin', request: aanvraag, verifiers: [geheim] } }), 'inwisselen');
   return sqlRij(`select id from auth.users where email = ${q(email)}`)?.id ?? null;
+}
+
+/**
+ * Een inlog bij Supabase buiten de link om: zoals iemand die een code van
+ * Supabase raadde, of een klant liet invullen op zijn eigen pagina (de code
+ * staat sinds migratie 20261109150000 niet meer in de mail; hier vraagt de
+ * test hem met de service-sleutel op).
+ */
+async function inlogBuitenDeLinkOm(email) {
+  const res = await fetch(`${API_URL}/auth/v1/admin/generate_link`, {
+    method: 'POST',
+    headers: { apikey: SERVICE_KEY, authorization: `Bearer ${SERVICE_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'magiclink', email }),
+  });
+  const json = await res.json();
+  const login = await gotrueVerify({ type: 'email', email, token: nodig(json.email_otp, 'code van Supabase') });
+  gelijk(login.status, 200, `GoTrue: ${login.tekst.slice(0, 200)}`);
+  return { token: login.json.access_token, userId: login.json.user.id };
+}
+
+/** recovery_sent_at van een account: het moment van het laatste token van Supabase. */
+function laatsteToken(email) {
+  return sqlRij(`select recovery_sent_at from auth.users where email = ${q(email)}`)?.recovery_sent_at ?? null;
 }
 
 /** Zoals supabase.auth.verifyOtp in de browser. */
@@ -759,8 +792,9 @@ export default async function klantdomein() {
     const browser1 = verifier();
     let aanvraag1 = null;
 
-    await stap('een klant vraagt op het klantadres een inlogmail aan', async () => {
+    await stap('een klant vraagt op het klantadres een inlogmail aan: alleen een link, en Supabase maakt nog geen token', async () => {
       const voor = mailsAan(w.klantA.email).length;
+      const tokenVoor = laatsteToken(w.klantA.email);
       const uit = gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(11), body: { action: 'requestLogin', email: w.klantA.email, verifierHash: sha256(browser1) } }), 'aanvragen');
       gelijk(uit, { ok: true, known: true, flow: 'mail' }, 'antwoord');
       const mail = mailsAan(w.klantA.email).slice(voor)[0];
@@ -769,16 +803,18 @@ export default async function klantdomein() {
       verwacht(`${mail.html} ${mail.text}`.includes(`${herkomstA()}/portal/inloggen?aanvraag=${aanvraag1}`), `link: ${mail.text}`);
       verwacht(!`${mail.html} ${mail.text}`.includes(domein), 'de inlogmail noemt het eigen domein');
       verwacht(/^Inloggen bij /.test(mail.subject), `onderwerp: ${mail.subject}`);
-      verwacht(codeUitMail(mail), 'geen code in de mail');
-      verwacht(mail.text.includes(`Vul de code alleen in op ${adresA()}.`), `de mail zegt niet waar de code hoort: ${mail.text}`);
+      // Geen code van Supabase: die kon een andere website de klant ontfutselen.
+      gelijk(codeUitMail(mail), null, 'een code in de mail');
+      verwacht(!/code/i.test(`${mail.html} ${mail.text}`), 'de mail noemt een code');
+      verwacht(mail.text.includes(`Vraag daar een nieuwe inloglink aan, op ${adresA()}.`), `de mail zegt niet wat te doen op een ander apparaat: ${mail.text}`);
       verwacht(!`${mail.html} ${mail.text}`.includes(browser1), 'het geheim van de browser staat in de mail');
       const rij = sqlRij(`select organization_id, scope_organization_id, host, email, verifier_hash, used_at, bound_session_id from public.portal_login_requests where request_hash = ${q(sha256(aanvraag1))}`);
       gelijk([rij?.organization_id, rij?.scope_organization_id, rij?.host, rij?.email, rij?.verifier_hash, rij?.used_at, rij?.bound_session_id],
         [w.orgId, w.orgId, adresA(), w.klantA.email, sha256(browser1), null, null], 'aanvraag: bereik en adres van het klantadres');
-      // Het moment van het token van Supabase, precies zoals in auth.users (voor het vastleggen).
-      const tijden = sqlRij(`select r.token_sent_at = u.recovery_sent_at as gelijk, r.token_sent_at is not null as gevuld
-        from public.portal_login_requests r join auth.users u on lower(u.email) = r.email where r.request_hash = ${q(sha256(aanvraag1))}`);
-      gelijk([tijden?.gevuld, tijden?.gelijk], [true, true], 'token_sent_at');
+      // Nog geen token van Supabase: dat komt pas als de link in deze browser opengaat.
+      const token = sqlRij(`select token_hash, code_hash, token_sent_at from public.portal_login_requests where request_hash = ${q(sha256(aanvraag1))}`);
+      gelijk([token?.token_hash, token?.code_hash, token?.token_sent_at], [null, null, null], 'token bij de aanvraag');
+      gelijk(laatsteToken(w.klantA.email), tokenVoor, 'Supabase gaf bij het aanvragen een token uit');
     });
 
     await stap('een onbekend adres en een klant van een ander: hetzelfde antwoord, geen mail', async () => {
@@ -804,9 +840,13 @@ export default async function klantdomein() {
     });
 
     let sessie1 = null;
-    await stap('in de eigen browser: het inlogtoken, en GoTrue logt de klant in', async () => {
+    await stap('in de eigen browser: nu pas het inlogtoken, en GoTrue logt de klant in', async () => {
       const uit = gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(13), body: { action: 'redeemLogin', request: aanvraag1, verifiers: [verifier(), browser1] } }), 'inwisselen');
       gelijk(uit.email, w.klantA.email, 'e-mailadres');
+      // Het moment van het token, precies zoals in auth.users (voor het vastleggen).
+      const tijden = sqlRij(`select r.token_hash = ${q(nodig(uit.tokenHash, 'inlogtoken'))} as token, r.token_sent_at = u.recovery_sent_at as gelijk
+        from public.portal_login_requests r join auth.users u on lower(u.email) = r.email where r.request_hash = ${q(sha256(aanvraag1))}`);
+      gelijk([tijden?.token, tijden?.gelijk], [true, true], 'token en token_sent_at bij de aanvraag');
       gelijk(uit.portalKey, sqlRij(`select key from public.portal_login_addresses where organization_id = ${q(w.orgId)}`)?.key, 'inlogsleutel');
       const login = await gotrueVerify({ type: 'magiclink', token_hash: nodig(uit.tokenHash, 'inlogtoken') });
       gelijk(login.status, 200, `GoTrue: ${login.tekst.slice(0, 200)}`);
@@ -865,7 +905,7 @@ export default async function klantdomein() {
     await stap('inloggen op het algemene portaal: een inlog die alles ziet', async () => {
       algemeen = await inloggenMetLink(gedeeldA.email, { origin: ORIGIN, ipAanvraag: ip(21), ipInwisselen: ip(22) });
       verwacht(algemeen.mail.text.includes(`${PUBLIEK}/portal/inloggen?aanvraag=`), `de link gaat niet naar het algemene adres: ${algemeen.mail.text}`);
-      verwacht(algemeen.mail.text.includes(`Vul de code alleen in op ${new URL(PUBLIEK).hostname}.`), 'de mail zegt niet waar de code hoort');
+      gelijk(codeUitMail(algemeen.mail), null, 'een code in de mail');
       // Twee leveranciers: geen naam van één van beiden in de mail.
       verwacht(!/^Inloggen bij /.test(algemeen.mail.subject), `onderwerp: ${algemeen.mail.subject}`);
       const rij = sqlRij(`select organization_id, host from public.portal_sessions where user_id = ${q(algemeen.userId)} order by created_at desc limit 1`);
@@ -873,100 +913,119 @@ export default async function klantdomein() {
       gelijk(await dossiers(algemeen.token, ORIGIN), [gedeeldA.id, gedeeldB.id].sort(), 'beide dossiers');
     });
 
-    await stap('de code uit de mail werkt op een ander apparaat, met het geheim van de browser die hem aanvroeg', async () => {
-      const goed = verifier();
-      const voor = mailsAan(w.klantB.email).length;
-      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(14), body: { action: 'requestLogin', email: w.klantB.email, verifierHash: sha256(goed) } }), 'aanvragen');
-      const mail = mailsAan(w.klantB.email).slice(voor)[0];
-      const code = nodig(codeUitMail(mail), 'code');
-      const fout = await gotrueVerify({ type: 'email', email: w.klantB.email, token: code === '000000' ? '111111' : '000000' });
-      verwacht(fout.status >= 400, `een verkeerde code werd aangenomen: ${fout.status}`);
-      const login = await gotrueVerify({ type: 'email', email: w.klantB.email, token: code });
-      gelijk(login.status, 200, `GoTrue: ${login.tekst.slice(0, 200)}`);
-      gelijk(login.json?.user?.email, w.klantB.email, 'ingelogd als');
-      gelukt(await vastleggen(login.json.access_token, { origin: herkomstA(), ip: ip(14), verifiers: [verifier(), goed] }), 'vastleggen met de code');
-      const ids = await dossiers(login.json.access_token, herkomstA());
-      gelijk(ids, [w.klantB.id], 'het eigen dossier');
+    await stap('aanvragen laat bij Supabase geen spoor na: geen account, geen token, geen code', async () => {
+      // Eerst maakte aanvragen het account en het token meteen aan. Dan
+      // verraadde Supabase zelf of een adres ergens klant is, en lag er een
+      // code van zes cijfers klaar om te raden. Nu pas bij het inwisselen.
+      const nieuw = await nieuweKlant(w, 'zonder-spoor');
+      const voor = mailsAan(nieuw.email).length;
+      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(14), body: { action: 'requestLogin', email: nieuw.email, verifierHash: sha256(verifier()) } }), 'aanvragen');
+      verwacht(aanvraagUitMail(mailsAan(nieuw.email).slice(voor)[0]), 'geen inlogmail');
+      gelijk(sqlRij(`select count(*)::int as n from auth.users where email = ${q(nieuw.email)}`)?.n, 0, 'accounts na het aanvragen');
+      // Een klant met een account: Supabase gaf geen nieuw token uit.
+      const tokenVoor = laatsteToken(w.klantB.email);
+      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(14), body: { action: 'requestLogin', email: w.klantB.email, verifierHash: sha256(verifier()) } }), 'aanvragen met account');
+      gelijk(laatsteToken(w.klantB.email), tokenVoor, 'token van Supabase na het aanvragen');
     });
 
-    await stap('de code met het geheim van een andere browser: geweigerd, en de inlog is weg', async () => {
-      const goed = verifier();
-      const voor = mailsAan(w.klantB.email).length;
-      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(14), body: { action: 'requestLogin', email: w.klantB.email, verifierHash: sha256(goed) } }), 'aanvragen');
-      const code = nodig(codeUitMail(mailsAan(w.klantB.email).slice(voor)[0]), 'code');
-      const login = await gotrueVerify({ type: 'email', email: w.klantB.email, token: code });
-      gelijk(login.status, 200, `GoTrue: ${login.tekst.slice(0, 200)}`);
-      const res = geweigerd(await vastleggen(login.json.access_token, { origin: herkomstA(), ip: ip(14), verifiers: [verifier()] }), 'ander geheim', [403]);
-      verwacht(/andere aanvraag/.test(res?.error ?? ''), `melding: ${res?.error}`);
-      verwacht(!(await sessieLeeft(login.json.access_token)), 'de inlog leeft nog');
-      geweigerd(await roep('client-portal', { origin: herkomstA(), token: login.json.access_token, body: { action: 'getPortalData' } }), 'portaal', [401]);
-    });
-
-    await stap('een inlog hoort bij de nieuwste aanvraag: een oudere aanvraag op het algemene portaal helpt niet', async () => {
-      // Een leverancier die de pagina op zijn eigen adres beheert, zet eerst
-      // (vanaf zijn server) een aanvraag op het algemene portaal klaar, met
-      // een eigen geheim. Daarna vraagt de klant zelf in, op het adres van A.
+    await stap('de aanval uit de controle: een leverancier vraagt vanaf zijn server een inlog op het algemene portaal aan, en krijgt er niets mee', async () => {
+      // Een leverancier met een eigen domein vraagt daar om "de code uit de
+      // mail". Vanaf zijn server vraagt hij voor de klant een inlog aan, zonder
+      // herkomst (het algemene portaal), met een eigen geheim. Eerst kreeg de
+      // klant dan een code van Supabase, vulde hij die op de pagina van de
+      // leverancier in, en legde de leverancier de inlog vast: een inlog voor
+      // alles wat de klant bij iedereen heeft.
       const doelwit = await nieuweKlant(w, 'doelwit');
+      await nieuweKlant(w2, 'doelwit-b', doelwit.email);
+      // Een klant die al eens inlogde (dan heeft hij een account bij Supabase).
+      nodig(await accountVoor(doelwit.email, herkomstA(), ip(29)), 'account');
       const aanvaller = verifier();
       const voor = mailsAan(doelwit.email).length;
-      gelukt(await roep('portal-login', { origin: ORIGIN, ip: ip(30), body: { action: 'requestLogin', email: doelwit.email, verifierHash: sha256(aanvaller) } }), 'aanvraag van de aanvaller');
-      const aanvraagAanvaller = nodig(aanvraagUitMail(mailsAan(doelwit.email).slice(voor)[0]), 'aanvraagnummer');
-      const klant = verifier();
-      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(31), body: { action: 'requestLogin', email: doelwit.email, verifierHash: sha256(klant) } }), 'aanvraag van de klant');
-      const code = nodig(codeUitMail(mailsAan(doelwit.email).slice(voor)[1]), 'code van de klant');
-      // De link van de oudere aanvraag werkt niet meer: Supabase kent per account één inlogtoken.
-      const oud = gelukt(await roep('portal-login', { origin: ORIGIN, ip: ip(30), body: { action: 'redeemLogin', request: aanvraagAanvaller, verifiers: [aanvaller] } }), 'oude link inwisselen');
-      verwacht((await gotrueVerify({ type: 'magiclink', token_hash: oud.tokenHash })).status >= 400, 'de oude link logt nog in');
-      // De klant vult zijn code in op de pagina van de leverancier; die wisselt hem in ...
-      const login = await gotrueVerify({ type: 'email', email: doelwit.email, token: code });
+      gelukt(await roep('portal-login', { origin: null, ip: ip(30), body: { action: 'requestLogin', email: doelwit.email, verifierHash: sha256(aanvaller) } }), 'aanvraag van de aanvaller');
+      const mail = mailsAan(doelwit.email).slice(voor)[0];
+      verwacht(mail, 'geen inlogmail');
+      gelijk(codeUitMail(mail), null, 'een code in de mail');
+      verwacht(!/code/i.test(`${mail.html} ${mail.text}`), 'de mail noemt een code');
+      const aanvraag = nodig(aanvraagUitMail(mail), 'aanvraagnummer');
+      // De klant opent de link in zijn eigen browser: die heeft het geheim van de aanvaller niet.
+      geweigerd(await roep('portal-login', { origin: ORIGIN, ip: ip(31), body: { action: 'redeemLogin', request: aanvraag, verifiers: [verifier()] } }), 'de link bij de klant', [403]);
+      // Ook met een inlog bij Supabase die hij buiten de link om kreeg (geraden,
+      // of de klant liet zich iets ontfutselen), komt de aanvaller er niet in:
+      // vastleggen kan alleen na de link, en die heeft hij niet.
+      const buitenom = await inlogBuitenDeLinkOm(doelwit.email);
+      const res = geweigerd(await vastleggen(buitenom.token, { origin: null, ip: ip(30), verifiers: [aanvaller] }), 'vastleggen zonder link', [403]);
+      verwacht(/andere aanvraag/.test(res?.error ?? ''), `melding: ${res?.error}`);
+      verwacht(!(await sessieLeeft(buitenom.token)), 'de inlog leeft nog');
+      // Met het aanvraagnummer (stel dat hij ook de link in handen kreeg), maar zonder
+      // dat de link werd ingewisseld: er is geen token, dus ook geen inlog.
+      const tweede = await inlogBuitenDeLinkOm(doelwit.email);
+      geweigerd(await vastleggen(tweede.token, { origin: null, ip: ip(30), request: aanvraag, verifiers: [aanvaller] }), 'vastleggen met het nummer', [403]);
+      verwacht(!(await sessieLeeft(tweede.token)), 'de tweede inlog leeft nog');
+      gelijk(sqlRij(`select count(*)::int as n from public.portal_sessions where user_id = ${q(buitenom.userId)}`)?.n, 0, 'vastgelegde inloggen');
+    });
+
+    await stap('een inlog hoort bij de nieuwste aanvraag: de link van een oudere aanvraag legt niets vast', async () => {
+      const klant = await nieuweKlant(w, 'twee-aanvragen');
+      const geheim = verifier();
+      const voor = mailsAan(klant.email).length;
+      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(41), body: { action: 'requestLogin', email: klant.email, verifierHash: sha256(geheim) } }), 'eerste aanvraag');
+      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(41), body: { action: 'requestLogin', email: klant.email, verifierHash: sha256(geheim) } }), 'tweede aanvraag');
+      const [eerste, laatste] = mailsAan(klant.email).slice(voor).map((m) => nodig(aanvraagUitMail(m), 'aanvraagnummer'));
+      const oud = gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(41), body: { action: 'redeemLogin', request: eerste, verifiers: [geheim] } }), 'de oudere link');
+      const login = await gotrueVerify({ type: 'magiclink', token_hash: nodig(oud.tokenHash, 'inlogtoken') });
       gelijk(login.status, 200, `GoTrue: ${login.tekst.slice(0, 200)}`);
-      // ... en hangt de inlog aan zijn eigen aanvraag op het algemene portaal: geweigerd.
-      const res = geweigerd(await vastleggen(login.json.access_token, { origin: ORIGIN, ip: ip(30), verifiers: [aanvaller] }), 'aan de oudere aanvraag', [403]);
+      const res = geweigerd(await vastleggen(login.json.access_token, { origin: herkomstA(), ip: ip(41), request: eerste, verifiers: [geheim] }), 'aan de oudere aanvraag', [403]);
       verwacht(/andere aanvraag/.test(res?.error ?? ''), `melding: ${res?.error}`);
       verwacht(!(await sessieLeeft(login.json.access_token)), 'de inlog leeft nog');
-      gelijk(sqlRij(`select count(*)::int as n from public.portal_sessions where user_id = ${q(login.json.user.id)}`)?.n, 0, 'vastgelegde inloggen');
+      // De nieuwste werkt wel.
+      const nieuw = gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(42), body: { action: 'redeemLogin', request: laatste, verifiers: [geheim] } }), 'de nieuwste link');
+      const goed = await gotrueVerify({ type: 'magiclink', token_hash: nodig(nieuw.tokenHash, 'inlogtoken') });
+      gelukt(await vastleggen(goed.json.access_token, { origin: herkomstA(), ip: ip(42), request: laatste, verifiers: [geheim] }), 'vastleggen');
+      gelijk(await dossiers(goed.json.access_token, herkomstA()), [klant.id], 'het dossier');
     });
 
-    await stap('een onderschepte inlog hangt niet aan een aanvraag die daarna kwam', async () => {
-      // De klant logt in op het adres van A. Wie die verse inlog onderschept,
-      // vraagt meteen daarna zelf een inlog aan op het algemene portaal, met
-      // een eigen geheim, en hangt de inlog van de klant daaraan. Met een
-      // minuut speling op de tijden lukte dat.
+    await stap('een onderschepte verse inlog hangt niet aan een eigen, latere aanvraag', async () => {
+      // De klant opent zijn link; wie die verse inlog onderschept vóór de app
+      // hem vastlegt, vraagt zelf een inlog aan (met een eigen geheim) en wil
+      // hem daaraan hangen. Zijn aanvraag is nooit ingewisseld (het nummer
+      // staat in de mail van de klant): geen token, geen inlog. En zelfs na
+      // inwisselen is de inlog ouder dan dat nieuwe token.
       const klant = await nieuweKlant(w, 'onderschept');
-      const voor = mailsAan(klant.email).length;
-      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(41), body: { action: 'requestLogin', email: klant.email, verifierHash: sha256(verifier()) } }), 'aanvraag van de klant');
-      const code = nodig(codeUitMail(mailsAan(klant.email).slice(voor)[0]), 'code');
-      const login = await gotrueVerify({ type: 'email', email: klant.email, token: code });
+      const login = await (async () => {
+        const geheim = verifier();
+        const voor = mailsAan(klant.email).length;
+        gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(43), body: { action: 'requestLogin', email: klant.email, verifierHash: sha256(geheim) } }), 'aanvraag van de klant');
+        const aanvraag = nodig(aanvraagUitMail(mailsAan(klant.email).slice(voor)[0]), 'aanvraagnummer');
+        const uit = gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(43), body: { action: 'redeemLogin', request: aanvraag, verifiers: [geheim] } }), 'inwisselen');
+        return gotrueVerify({ type: 'magiclink', token_hash: nodig(uit.tokenHash, 'inlogtoken') });
+      })();
       gelijk(login.status, 200, `GoTrue: ${login.tekst.slice(0, 200)}`);
       const aanvaller = verifier();
-      gelukt(await roep('portal-login', { origin: ORIGIN, ip: ip(42), body: { action: 'requestLogin', email: klant.email, verifierHash: sha256(aanvaller) } }), 'aanvraag van de aanvaller');
-      // Geweigerd omdat de inlog ouder is dan het token van die aanvraag (de rest klopt: nieuwste aanvraag, geheim, adres).
-      const res = geweigerd(await vastleggen(login.json.access_token, { origin: ORIGIN, ip: ip(42), verifiers: [aanvaller] }), 'aan de latere aanvraag', [403]);
-      verwacht(/Inloggen is niet gelukt/.test(res?.error ?? ''), `melding: ${res?.error}`);
+      const voor = mailsAan(klant.email).length;
+      gelukt(await roep('portal-login', { origin: ORIGIN, ip: ip(44), body: { action: 'requestLogin', email: klant.email, verifierHash: sha256(aanvaller) } }), 'aanvraag van de aanvaller');
+      const aanvraagAanvaller = nodig(aanvraagUitMail(mailsAan(klant.email).slice(voor)[0]), 'aanvraagnummer');
+      geweigerd(await vastleggen(login.json.access_token, { origin: ORIGIN, ip: ip(44), request: aanvraagAanvaller, verifiers: [aanvaller] }), 'aan de latere aanvraag', [403]);
       verwacht(!(await sessieLeeft(login.json.access_token)), 'de inlog leeft nog');
       gelijk(sqlRij(`select count(*)::int as n from public.portal_sessions where user_id = ${q(login.json.user.id)}`)?.n, 0, 'vastgelegde inloggen');
     });
 
-    await stap('wie ook een werkruimte heeft, krijgt alleen de link, geen code van Supabase', async () => {
-      // Een teamlid van de tweede organisatie is klant bij de eerste. Een inlog
-      // bij Supabase opent voor hem ook de werkruimte: geen code die een
-      // andere website kan vragen.
+    await stap('ook een teamlid krijgt alleen de link: niemand krijgt nog een code van Supabase', async () => {
       const teamlid = w2.medewerker;
       await nieuweKlant(w, 'teamlid', teamlid.email);
       const voor = mailsAan(teamlid.email).length;
-      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(44), body: { action: 'requestLogin', email: teamlid.email, verifierHash: sha256(verifier()) } }), 'aanvragen');
+      gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(45), body: { action: 'requestLogin', email: teamlid.email, verifierHash: sha256(verifier()) } }), 'aanvragen');
       const mail = mailsAan(teamlid.email).slice(voor)[0];
       verwacht(mail && aanvraagUitMail(mail), 'geen inlogmail met link');
       gelijk(codeUitMail(mail), null, 'een code in de mail');
-      verwacht(!/ander apparaat/.test(`${mail.html} ${mail.text}`), 'de mail noemt een code');
+      verwacht(!/code/i.test(`${mail.html} ${mail.text}`), 'de mail noemt een code');
     });
 
     await stap('een wachtwoord geeft geen portaalinlog, ook niet met een geldige aanvraag', async () => {
       // Zoals iemand die met een uitgelekt token een wachtwoord instelde.
       const klant = await nieuweKlant(w, 'wachtwoord');
+      const userId = nodig(await accountVoor(klant.email, herkomstA(), ip(32)), 'account');
       const geheim = verifier();
       gelukt(await roep('portal-login', { origin: herkomstA(), ip: ip(32), body: { action: 'requestLogin', email: klant.email, verifierHash: sha256(geheim) } }), 'aanvragen');
-      const userId = nodig(sqlRij(`select id from auth.users where email = ${q(klant.email)}`)?.id, 'account');
       const token = await wachtwoordSessie(userId, klant.email);
       const res = geweigerd(await roep('client-portal', { origin: herkomstA(), token, body: { action: 'getPortalData' } }), 'met een wachtwoord', [401]);
       gelijk(res?.code, 'session_unbound', 'code');
@@ -1191,9 +1250,13 @@ export default async function klantdomein() {
       geweigerd(await roep('portal-login', { origin: herkomstA(), ip: ip(40), body: { action: 'redeemLogin', request: aanvraag2, verifiers: [geheim2] } }), 'op de naam bij ResoFly', [410]);
     });
 
-    await stap('uitzetten: de sleutel geeft niets meer en is weg', async () => {
+    await stap('uitzetten: de sleutel is meteen weg en geeft niets meer', async () => {
       const uit = gelukt(await domeinen(w.eigenaar, w.orgId, 'setPortal', { domainId: domeinId, enabled: false }), 'uitzetten');
       gelijk(uit.domain?.portalEnabled, false, 'uit');
+      // Meteen, nog voor iemand hem gebruikt (migratie 20261109150000). Eerst
+      // ging hij pas weg bij het volgende gebruik, en werkte hij weer als het
+      // portaal later weer aanging.
+      gelijk(sqlRij(`select count(*)::int as n from public.portal_tokens where host = ${q(domein)}`)?.n, 0, 'sleutels van het domein na uitzetten');
       verwacht(auditActies(w.orgId, 'client_domain').includes('portal_disabled'), 'geen logboekregel');
       clearClientOriginCache();
       // Een browser op het domein krijgt nu geen CORS meer; zonder Origin (niet uit een browser) komt hij bij de sleutel.
@@ -1208,14 +1271,46 @@ export default async function klantdomein() {
       gelukt(await roep('client-portal', { origin: ORIGIN, token: algemeen.token, body: { action: 'getPortalData' } }), 'algemeen');
     });
 
-    await stap('weer aan, opnieuw inloggen, en uitloggen gooit de sleutel weg', async () => {
+    await stap('weer aan: de oude sleutel blijft ongeldig; opnieuw inloggen, en uitloggen gooit de sleutel weg', async () => {
       gelukt(await domeinen(w.eigenaar, w.orgId, 'setPortal', { domainId: domeinId, enabled: true }), 'aanzetten');
       clearClientOriginCache();
+      geweigerd(await metSleutel(sleutelDomein, herkomstDomein, { action: 'getPortalData' }), 'de sleutel van vóór het uitzetten', [401]);
       const eerst = (await inloggenOpDomein(gedeeldA.email, { origin: herkomstDomein, ipAanvraag: ip(25), ipInwisselen: ip(26) })).sleutel;
       gelijk(await dossiersMetSleutel(eerst, herkomstDomein), [gedeeldA.id], 'het dossier');
       gelukt(await roep('portal-login', { origin: herkomstDomein, ip: ip(26), headers: { 'x-portal-token': eerst }, body: { action: 'endPortalToken' } }), 'uitloggen');
       geweigerd(await metSleutel(eerst, herkomstDomein, { action: 'getPortalData' }), 'na uitloggen', [401]);
       sleutelDomein = (await inloggenOpDomein(gedeeldA.email, { origin: herkomstDomein, ipAanvraag: ip(27), ipInwisselen: ip(28) })).sleutel;
+    });
+
+    await stap('het domein hapert: geen portaal en geen inlogmails meer daar, de sleutels zijn weg; weer in orde: opnieuw inloggen', async () => {
+      // Het record wijst niet meer naar ons (Cloudflare: moved), bijvoorbeeld
+      // omdat het domein nu van een ander is. Met het portaal aan loopt de
+      // ronde het domein elk kwartier na, ook als het net was nagelopen;
+      // eerst pas na zes uur. En 'failing' telde eerst nog voor het portaal.
+      sql(`update public.client_domains set last_checked_at = now() where id = ${q(domeinId)}`);
+      zetCf(domein, { status: 'moved' });
+      gelukt(await nalopen(), 'de ronde');
+      gelijk(domeinRij(domein)?.status, 'failing', 'status na de ronde');
+      gelijk(sqlRij(`select count(*)::int as n from public.portal_tokens where host = ${q(domein)}`)?.n, 0, 'sleutels van het domein');
+      clearClientOriginCache();
+      const voor = post.mails.length;
+      const aanvraag = await roep('portal-login', { origin: herkomstDomein, ip: ip(48), body: { action: 'requestLogin', email: gedeeldA.email, verifierHash: sha256(verifier()) } });
+      geweigerd(aanvraag, 'inloggen vanaf het haperende domein', [403]);
+      verwacht(aanvraag.headers.get('access-control-allow-origin') !== herkomstDomein, 'CORS voor het haperende domein');
+      gelijk(post.mails.length, voor, 'inlogmails');
+      geweigerd(await metSleutel(sleutelDomein, null, { action: 'getPortalData' }), 'de sleutel van vóór het haperen', [401]);
+      const opgezocht = gelukt(await opzoeken(domein), 'opzoeken');
+      gelijk([opgezocht.portalEnabled, opgezocht.portalHost], [false, adresA()], 'de Worker stuurt het portaal door naar de naam bij ResoFly');
+      // Documenten met een token blijven er werken: de link uit een mail gaat daar toch al heen.
+      gelukt(await roep('invoice-public', { origin: herkomstDomein, body: { action: 'getInvoice', token: factuur.token } }), 'factuur op het haperende domein');
+      // Weer in orde: het portaal is er weer, met een nieuwe inlog.
+      zetCf(domein, { status: 'active', ssl: 'active' });
+      gelukt(await nalopen(), 'de ronde');
+      gelijk(domeinRij(domein)?.status, 'active', 'status');
+      clearClientOriginCache();
+      const klant = await nieuweKlant(w, 'na-haperen');
+      sleutelDomein = (await inloggenOpDomein(klant.email, { origin: herkomstDomein, ipAanvraag: ip(49), ipInwisselen: ip(50) })).sleutel;
+      gelijk(await dossiersMetSleutel(sleutelDomein, herkomstDomein), [klant.id], 'het dossier');
     });
 
     // ── Ontkoppelen en overnemen ────────────────────────────────────────────

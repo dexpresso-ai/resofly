@@ -106,6 +106,23 @@ verwijderen, de kijker) en `bank` (een mutatie invoeren in het venster, de voorg
 twee facturen aanvullen en boeken met een eigen omschrijving, terugdraaien, de vraag bij een dubbele
 mutatie, samenvoegen met de bank en weer losmaken, en de verdeling op telefoonbreedte).
 
+En `klantdomein`: het klantportaal op een eigen domein en op `<naam>.resofly.com`, zoals een klant
+en de eigenaar het doen. Een eigen domein bestaat hier niet echt: Chromium vraagt
+`https://portaal.<ronde>.nl/…` op, en de test antwoordt zoals de Worker van de klantadressen,
+met diens eigen beslisregels (`workers/client-domains/src/logic.ts`) en de echte opzoeking in
+`client-domains`. Getoetst:
+- de schakelaar in Instellingen → Domein (eigenaar wel, medewerker niet);
+- op het eigen domein inloggen met de code van ResoFly en met de link: een sleutel in de
+  browser, nooit een inlog bij Supabase, alleen het dossier van die organisatie, de sleutel in
+  elke aanroep, herladen, uitloggen, de link in een andere browser;
+- het portaal uitzetten terwijl een klant binnen is, en daarna doorsturen naar de naam bij ResoFly;
+- op de naam bij ResoFly en het algemene portaal alleen een link (geen code), vastgelegd met het
+  juiste bereik.
+
+Goed om te weten: Chromium volgt een redirect uit `route.fulfill` buiten de route om (naar het
+echte netwerk); de nagebootste Worker stuurt daarom door met een pagina die meteen doorverwijst,
+en legt vast wat de echte Worker zou doen (301 of 302).
+
 En `opname`: een telefoongesprek loggen en opnemen met de nep-microfoon van Chromium.
 - de knop "Opname starten" bij een gesprek;
 - transcript en notulen in beeld, de duur die de browser meet;

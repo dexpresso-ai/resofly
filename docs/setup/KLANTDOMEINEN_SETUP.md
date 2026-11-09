@@ -150,9 +150,12 @@ links naar het adres van de app blijven werken. Terug: dezelfde regel met `false
 
 ## 6. Supabase Auth
 
-Niets nieuws. De inlogmail komt van ResoFly zelf (`portal-login`), en de browser logt in met
-het token uit die mail (`/auth/v1/verify` met `token_hash` of de code); daar is geen
-redirect-URL voor nodig. Een klantadres hoeft dus niet in de lijst *Redirect URLs*.
+Niets nieuws. De inlogmail komt van ResoFly zelf (`portal-login`). Op de naam bij ResoFly en
+het algemene portaal bevat hij alleen een link; pas als die opengaat in de browser die de
+inlog aanvroeg, maakt Supabase Auth het token, en wisselt de browser het meteen in
+(`/auth/v1/verify` met `token_hash`). Daar is geen redirect-URL voor nodig: een klantadres
+hoeft niet in de lijst *Redirect URLs*. Er staat nooit een code van Supabase in de mail (sinds
+9 november, `CHANGELOG_PORTAAL_HERTEST_2026-11-09.md`).
 
 Na het inloggen legt `portal-login` de inlog vast (`portal_sessions`); `client-portal` neemt
 alleen een vastgelegde inlog aan. Op een eigen domein met het portaal aan maakt Supabase Auth
@@ -176,5 +179,6 @@ duren voor het portaal op het domein verschijnt of weer doorstuurt.
 | *Certificaat wordt gemaakt* duurt uren | Een CAA-record bij de klant: het scherm geeft de tekst van Cloudflare. |
 | Links gaan nog naar het adres van de app | `CLIENT_DOMAINS_LIVE` staat niet aan, of de organisatie heeft (nog) geen webadres: organisaties van vóór deze functie kiezen het in Instellingen → Domein. |
 | Een klant ziet *"Je bent uitgelogd. Log opnieuw in."* | De server kent zijn inlog niet (meer): een inlog van vóór 9 november, het portaal is op dat eigen domein uitgezet, of het adres is niet meer van die organisatie. Opnieuw inloggen lost het op. |
-| Op het eigen domein stuurt `/portal` door naar `<naam>.resofly.com` | De schakelaar *"Ook het klantportaal"* staat uit, of het domein is niet actief. Na omzetten kan het een minuut duren (de Worker onthoudt een opzoeking). |
-| De inlogmail van een klant bevat geen code | Hij is ook teamlid (of uitgenodigd) bij een organisatie: dan alleen de link, die werkt in de browser waarin hij de inlog aanvroeg. |
+| Op het eigen domein stuurt `/portal` door naar `<naam>.resofly.com` | De schakelaar *"Ook het klantportaal"* staat uit, of het domein is niet actief (ook *Werkt niet* telt niet: dan wijst het record misschien naar een ander). Na omzetten kan het een minuut duren (de Worker onthoudt een opzoeking). |
+| Klanten op een eigen domein zijn ineens uitgelogd | Het portaal ging daar uit, of het domein hapert of is ontkoppeld: dan gooit de database de sleutels van dat domein meteen weg. Opnieuw inloggen kan zodra het domein weer actief is (de ronde loopt een domein met portaal elk kwartier na). |
+| De inlogmail van een klant bevat geen code | Zo hoort het, behalve op een eigen domein met het portaal aan (daar een code van ResoFly). Op een ander apparaat vraagt de klant daar een nieuwe link aan. |

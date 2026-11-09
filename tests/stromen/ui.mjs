@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -28,7 +28,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
-import { API_URL, ANON_KEY, SERVICE_KEY } from './omgeving.mjs';
+import { API_URL, ANON_KEY, CLIENT_DOMAINS_WERKER_GEHEIM, ORIGIN, SERVICE_KEY } from './omgeving.mjs';
 import { installeer, mailsAan, post } from './nepdiensten.mjs';
 import { roep, roepRequest } from './functies.mjs';
 import { maakGebruiker, rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
@@ -37,6 +37,10 @@ import { maakWereld, REGELS } from './wereld.mjs';
 import { startUiServer } from './ui-server.mjs';
 import { GOOGLE_ALLES, account, geefCode } from './nep-agenda.mjs';
 import { ai, gesprek, NOTULEN } from './nep-ai.mjs';
+import { clearClientOriginCache } from '../../supabase/functions/_shared/clientLinks.ts';
+import {
+  clientHostMeta, escapeAttr, faviconSvg, isPortalPath, neutralPage, pageTitle, parseLookup, portalRedirectUrl, routeFor, sameUrlOn,
+} from '../../workers/client-domains/src/logic.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argumenten = process.argv.slice(2);
@@ -44,7 +48,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -100,6 +104,9 @@ function linkUit(mail, soort) {
 
 // ── De omgeving: server, Vite, Chromium ─────────────────────────────────────
 
+// De echte fetch, voor wat de test zelf bij Vite ophaalt (de nagebootste Worker
+// van scenario klantdomein). installeer() blokkeert daarna elk onbekend adres.
+const testFetch = globalThis.fetch;
 installeer({ functie: roepRequest });
 const server = await startUiServer();
 
@@ -1980,10 +1987,27 @@ async function scenarioInrichten() {
     await p.fill('#onb-f-kvk_number', '1234 5678');
     await p.fill('#onb-f-vat_number', 'nl001234567b01');
     await p.fill('#onb-f-iban', 'nl91abna0417164300');
-    await volgende(/Btw en boekhouding/);
+    await volgende(/webadres/);
     const rij = instellingen();
     gelijk([rij?.company_name, rij?.trade_name, rij?.postal_code, rij?.email, rij?.kvk_number, rij?.vat_number, rij?.iban],
       ['Jansen & De Vries V.O.F.', 'Studio Jansen', '1015 AA', 'info@studiojansen.test', '12345678', 'NL001234567B01', 'NL91 ABNA 0417 1643 00'], 'bedrijfsgegevens');
+  });
+
+  // Het webadres voor klanten (migratie 20261108230000): verplicht, en de
+  // stap zegt terwijl je typt of de naam vrij is. Een eigen naam per run: de
+  // voorgestelde naam (uit de handelsnaam) is na een eerdere run al bezet.
+  // Tot 9 november ontbrak deze stap hier; toen bleef de test bij
+  // "Btw en boekhouding" staan.
+  const webadres = `studio-jansen-${Date.now().toString(36)}`;
+  await uiStap('je webadres: een vrije naam, en die wordt het adres voor klanten', async () => {
+    const p = scherm.page;
+    const kaart = p.locator('.onb-address');
+    await kaart.waitFor({ timeout: 15000 });
+    verwacht(/studio-jansen/.test(await p.locator('#onb-f-address').inputValue()), 'geen naam voorgesteld uit de handelsnaam');
+    await p.locator('#onb-f-address').fill(webadres);
+    await wachtTot(async () => (await kaart.innerText()).includes(`${webadres}.resofly.com is beschikbaar`), { melding: 'de naam werd niet als vrij gemeld' });
+    await volgende(/Btw en boekhouding/);
+    gelijk(sqlRij(`select name, status from public.client_subdomains where organization_id = ${q(orgId)}`), { name: webadres, status: 'active' }, 'het webadres');
   });
 
   await uiStap('btw: de kleineondernemersregeling', async () => {
@@ -2011,7 +2035,7 @@ async function scenarioInrichten() {
     verwacht(await scherm.page.locator('#onb-f-mollie').count() === 1, 'de eigenaar ziet geen veld voor de key');
     await volgende(/beginnen/);
     const overzicht = tekst(await scherm.page.locator('.onb-summary').innerText());
-    for (const woord of ['VOF', 'Jansen & De Vries V.O.F.', 'KOR', 'Per e-mail', 'Niet gekoppeld']) verwacht(overzicht.includes(woord), `"${woord}" ontbreekt in het overzicht: ${overzicht.slice(0, 300)}`);
+    for (const woord of ['VOF', 'Jansen & De Vries V.O.F.', `${webadres}.resofly.com`, 'KOR', 'Per e-mail', 'Niet gekoppeld']) verwacht(overzicht.includes(woord), `"${woord}" ontbreekt in het overzicht: ${overzicht.slice(0, 300)}`);
   });
 
   await uiStap('afronden: de werkruimte opent, met de naam van het bedrijf', async () => {
@@ -2192,6 +2216,476 @@ async function scenarioOpname() {
   }
 }
 
+// ── Klantdomein: het portaal op een eigen domein en op <naam>.resofly.com ───
+//
+// Waarom in de browser: run.mjs (scenario klantdomein) toetst de functies en
+// de database. Hier gaat het om wat de eigenaar en een klant doen en zien: de
+// schakelaar, inloggen met de code en met de link, wat de browser bewaart (op
+// een eigen domein een sleutel en nooit een inlog bij Supabase), welke dossiers
+// in beeld komen, uitloggen, en wat er gebeurt als het portaal uitgaat.
+//
+// Een eigen domein bestaat hier niet echt. Chromium vraagt
+// https://portaal.<ronde>.nl/… op, en de test antwoordt zoals de Worker van de
+// klantadressen (workers/client-domains): met zijn eigen beslisregels
+// (src/logic.ts) en de echte opzoeking in de functie client-domains. De app
+// zelf komt van Vite. Verzoeken naar de backend gaan via de test door, met een
+// eigen IP-adres per browser (de remmen van portal-login tellen per adres), en
+// de test houdt bij welke kopregels de app meestuurde.
+
+const KLANTADRES_BASIS = 'resofly.com';
+// De ontwikkelpaden van Vite: modules (ook de gedeelde code uit
+// supabase/functions/_shared die de app importeert) en de client. Op staging
+// staat alles gebundeld onder /assets, en dat laat routeFor van de Worker zelf door.
+const VITE_PADEN = /^\/(?:@vite\/|@react-refresh|@id\/|@fs\/|src\/|supabase\/|node_modules\/)/;
+// src/lib/portalToken.ts
+const PORTAAL_SLEUTEL = 'resofly.portal.token';
+const IP_BLOK = 1 + Math.floor(Math.random() * 250);
+let ipTeller = 0;
+
+async function vanVite(route, pad) {
+  const res = await testFetch(`${APP}${pad}`);
+  const headers = {};
+  res.headers.forEach((waarde, sleutel) => {
+    if (!['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'keep-alive'].includes(sleutel)) headers[sleutel] = waarde;
+  });
+  await route.fulfill({ status: res.status, headers, body: Buffer.from(await res.arrayBuffer()) });
+}
+
+/** De HTML zoals de Worker hem met HTMLRewriter aanpast (src/index.ts, page()). */
+function werkerHtml(html, lookup) {
+  const eigenPortaal = lookup.kind === 'custom' && lookup.portalEnabled;
+  const meta = clientHostMeta(lookup.host, lookup.portalKey, lookup.kind === 'custom' && !lookup.portalEnabled ? lookup.portalHost : null, eigenPortaal);
+  return html
+    .replace(/<title>[^<]*<\/title>/, `<title>${escapeAttr(pageTitle(lookup.brand.name))}</title>`)
+    .replace(/<link rel="manifest"[^>]*>/, '')
+    .replace(/<link rel="apple-touch-icon"[^>]*>/, '')
+    .replace(/<link rel="icon"[^>]*>/, '<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>')
+    .replace('</head>', `${meta}<meta name="robots" content="noindex,nofollow"></head>`);
+}
+
+/** Een verzoek aan een klantadres, beantwoord zoals de Worker (src/index.ts, fetch()). */
+async function alsWerker(route, scherm) {
+  const request = route.request();
+  const url = new URL(request.url());
+  const opzoeking = await roep('client-domains', { origin: null, headers: { 'x-client-domains-secret': CLIENT_DOMAINS_WERKER_GEHEIM }, body: { host: url.hostname } });
+  const lookup = parseLookup(opzoeking.json);
+  const pagina = (status, titel, uitleg) => route.fulfill({ status, contentType: 'text/html; charset=utf-8', body: neutralPage(titel, uitleg) });
+  // Doorsturen: de Worker antwoordt met een 301 of 302. Chromium volgt een
+  // redirect uit route.fulfill alleen buiten de route om (rechtstreeks naar het
+  // netwerk), dus hier een pagina die meteen doorverwijst. Wat de Worker
+  // besliste, staat in scherm.doorgestuurd.
+  const doorsturen = (status, doel) => {
+    scherm.doorgestuurd.push({ status, van: `${url.hostname}${url.pathname}`, naar: doel });
+    return route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: `<!doctype html><script>location.replace(${JSON.stringify(doel)})</script>` });
+  };
+  if (lookup.status === 'redirect') return doorsturen(301, sameUrlOn(lookup.redirectHost, url.pathname, url.search));
+  if (lookup.status !== 'active') return pagina(404, 'Dit adres is niet in gebruik', 'Er staat hier (nog) niets.');
+  if (lookup.kind === 'custom' && !lookup.portalEnabled && isPortalPath(url.pathname)) {
+    const doel = portalRedirectUrl(url.pathname, url.search, lookup.portalHost);
+    return doel ? doorsturen(302, doel) : pagina(404, 'Pagina niet gevonden', 'Het klantportaal staat niet op dit adres.');
+  }
+  if (VITE_PADEN.test(url.pathname)) return vanVite(route, `${url.pathname}${url.search}`);
+  const pad = routeFor(url.pathname, request.method(), lookup.portalKey);
+  if (pad.kind === 'asset') return vanVite(route, `${url.pathname}${url.search}`);
+  if (pad.kind === 'favicon') return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: faviconSvg(lookup.brand.name, lookup.brand.accentColor) });
+  if (pad.kind !== 'page') return pagina(404, 'Pagina niet gevonden', 'Deze pagina bestaat niet.');
+  const html = await (await testFetch(`${APP}/`, { headers: { accept: 'text/html' } })).text();
+  return route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: werkerHtml(html, lookup) });
+}
+
+/**
+ * Een verzoek van een klantadres naar de backend (ui-server): met het IP-adres
+ * van deze browser, en bijgehouden met de kopregels en (bij client-portal) het
+ * antwoord, zodat een stap kan nagaan wat de app meestuurde en wat hij terugkreeg.
+ */
+async function naarBackend(route, scherm) {
+  const request = route.request();
+  const kop = request.headers();
+  let actie = null;
+  try { actie = JSON.parse(request.postData() ?? 'null')?.action ?? null; } catch { /* geen json */ }
+  const regel = { pad: new URL(request.url()).pathname, methode: request.method(), actie, kop, status: 0, antwoord: null };
+  scherm.api.push(regel);
+  try {
+    const response = await route.fetch({ headers: { ...kop, 'x-forwarded-for': scherm.ip } });
+    regel.status = response.status();
+    if (regel.pad === '/functions/v1/client-portal') {
+      try { regel.antwoord = JSON.parse((await response.body()).toString('utf8')); } catch { /* geen json */ }
+    }
+    await route.fulfill({ response });
+  } catch {
+    await route.abort().catch(() => undefined);
+  }
+}
+
+/**
+ * Een klantadres in een eigen browser zonder sessie: de pagina's zoals de
+ * Worker ze geeft, de backend via naarBackend.
+ */
+async function openOpKlantadres(adres, naam, { tijdelijk = false } = {}) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
+  const page = await context.newPage();
+  const scherm = volg(page, naam, context);
+  ipTeller += 1;
+  Object.assign(scherm, { tijdelijk, ip: `203.0.${IP_BLOK}.${ipTeller}`, api: [], doorgestuurd: [] });
+  // Lettertypen van Google laten we gaan zoals in de andere schermen; elk ander https-adres is een klantadres.
+  await context.route((url) => url.protocol === 'https:' && !/(^|\.)(googleapis|gstatic)\.com$/.test(url.hostname),
+    (route) => alsWerker(route, scherm).catch(async (error) => {
+      // Ook in de uitvoer: een pagina die niet laadt, faalt anders als "net::ERR_FAILED" zonder reden.
+      console.error(`        nagebootste Worker bij ${route.request().url()}: ${String(error?.stack || error).split('\n').slice(0, 4).join(' | ')}`);
+      scherm.fouten.push(`nagebootste Worker: ${String(error?.stack || error)}`);
+      await route.abort().catch(() => undefined);
+    }));
+  await context.route((url) => url.origin === server.url, (route) => naarBackend(route, scherm));
+  // De client van Vite zoekt zijn websocket op het adres van de pagina (en
+  // valt terug op wss://127.0.0.1); op een klantadres bestaat die niet. Zonder
+  // HMR heeft hij niets te zeggen: een stille, open verbinding is genoeg.
+  await context.routeWebSocket((url) => url.searchParams.has('token') && !url.pathname.startsWith('/realtime/'), () => undefined);
+  await page.goto(adres, { waitUntil: 'domcontentloaded' });
+  await rustig(scherm);
+  return scherm;
+}
+
+/** Waar staat het portaal: het inlogscherm, de knop van de inloglink, of een dossier? */
+async function portaalStand(page) {
+  if (await page.locator('main.portal-app .portal-topbar').first().isVisible().catch(() => false)) return 'dossier';
+  if (await page.locator('main.portal.login input[type="email"]').isVisible().catch(() => false)) return 'inloggen';
+  if (await page.locator('main.portal.login').getByRole('button', { name: /^Inloggen$/ }).isVisible().catch(() => false)) return 'link';
+  return null;
+}
+
+async function wachtOpPortaal(scherm, stand) {
+  try {
+    await wachtTot(async () => (await portaalStand(scherm.page)) === stand, { timeout: 20000, melding: `het portaal van ${scherm.naam} kwam niet op "${stand}"` });
+  } catch (error) {
+    // Een lege pagina zegt niets; de fouten van de browser wel.
+    const fouten = [...scherm.fouten, ...scherm.console.map((c) => `${c.tekst} (${c.url})`)].slice(-6).map((f) => String(f).split('\n')[0]);
+    error.message = `${error.message} (wel: ${await portaalStand(scherm.page)}; adres ${scherm.page.url()})${fouten.length ? `\n        browser: ${fouten.join('\n        browser: ')}` : ''}`;
+    throw error;
+  }
+  if (stand === 'dossier') {
+    await wachtTot(async () => !(await scherm.page.getByText(/Gegevens laden…/).first().isVisible().catch(() => false)), { melding: 'het dossier bleef laden' });
+  }
+  await rustig(scherm);
+}
+
+/** Alles wat de app in deze browser bewaart (localStorage van dit adres). */
+function opslag(page) {
+  return page.evaluate(() => Object.fromEntries(Object.keys(localStorage).map((k) => [k, localStorage.getItem(k)])));
+}
+
+// Waar supabase-js een inlog bewaart: het portaal onder zijn eigen sleutel
+// (src/lib/supabasePortal.ts), de werkruimte onder sb-<host>-auth-token.
+const PORTAAL_INLOG = 'resofly.portal.auth';
+const supabaseInlog = (bewaard) => Object.keys(bewaard).filter((k) => k === PORTAAL_INLOG || /^sb-.*-auth-token$/.test(k));
+
+function inlogLinkUit(mail) {
+  const m = `${mail?.text ?? ''} ${mail?.html ?? ''}`.match(/https?:\/\/[^\s"'<>]+\/portal\/inloggen\?aanvraag=[A-Za-z0-9_-]{30,100}/);
+  return m ? m[0] : null;
+}
+
+function inlogCodeUit(mail) {
+  const m = String(mail?.text ?? '').match(/Vul deze code in op het inlogscherm(?: van [^\s:]+(?::\d+)?)?: (\d{6,10})/);
+  return m ? m[1] : null;
+}
+
+/** Op het inlogscherm van het portaal een inlogmail aanvragen, zoals de klant. Geeft de mail. */
+async function vraagInlogAan(scherm, email) {
+  const page = scherm.page;
+  const voor = mailsAan(email).length;
+  await page.locator('main.portal.login input[type="email"]').fill(email);
+  await page.locator('main.portal.login').getByRole('button', { name: /^(Stuur inloglink|Stuur opnieuw)$/ }).click();
+  await page.locator('main.portal.login .success').waitFor({ timeout: 15000 });
+  return wachtTot(() => mailsAan(email).slice(voor)[0], { melding: `geen inlogmail aan ${email}` });
+}
+
+async function vulCodeIn(scherm, code) {
+  const page = scherm.page;
+  await page.locator('#portal-login-code').fill(code);
+  await page.getByRole('button', { name: /^Inloggen met code$/ }).click();
+}
+
+/** De dossiers in het laatste antwoord van getPortalData dat deze browser kreeg (organisatie-id's). */
+function dossierOrganisaties(scherm) {
+  const regel = [...scherm.api].reverse().find((r) => r.actie === 'getPortalData' && r.antwoord);
+  verwacht(regel, `${scherm.naam}: geen antwoord van getPortalData`);
+  return (regel.antwoord.accounts ?? []).map((a) => a.organizationId).sort();
+}
+
+function nodig(waarde, wat) {
+  if (waarde === undefined || waarde === null || waarde === '') throw new Error(`${wat} ontbreekt`);
+  return waarde;
+}
+
+const aantalSessies = (userId) => sqlRij(`select count(*)::int as n from auth.sessions where user_id = ${q(userId)}`).n;
+const auditDomein = (orgId) => sqlRijen(`select coalesce(metadata->>'event', action) as wat from public.audit_logs where organization_id = ${q(orgId)} and entity_type = 'client_domain' order by created_at`).map((r) => r.wat);
+
+/** Naar Instellingen → Domein, via het accountmenu zoals een gebruiker. */
+async function naarDomein(scherm) {
+  const page = scherm.page;
+  await sluitAlles(scherm);
+  await page.locator('.user-trigger').click();
+  await page.locator('.user-menu [role="menuitem"]').filter({ hasText: /^Domein$/ }).click();
+  await inhoud(page).locator('[data-testid="custom-domain-portal"]').waitFor({ timeout: 15000 });
+  await rustig(scherm);
+}
+
+async function scenarioKlantdomein() {
+  groep('UI: het klantportaal op een eigen domein en op <naam>.resofly.com');
+  const { w } = t;
+  const ronde = Date.now().toString(36);
+  const domein = `portaal.ui${ronde}.nl`;
+  const naamHost = `${w.subdomein}.${KLANTADRES_BASIS}`;
+  const klantA = w.portaalA;
+  const emailC = `klant-c.${ronde}@klant.test`;
+  const factuurNummer = `FAC-UI-KD-${ronde}`;
+  let tweede = null;
+  let eigenaar = null;
+  let opDomein = null;
+  let opNaam = null;
+  let sessiesA = 0;
+  const klaar = await stap('klaarzetten: een actief eigen domein (portaal uit), een factuur, en klant A en C ook bij een andere organisatie', async () => {
+    // Het koppelen zelf (Cloudflare, DNS, het TXT-bewijs) toetst run.mjs; hier staat het domein meteen actief.
+    sql(`insert into public.client_domains (organization_id, hostname, status, verified_at, last_checked_at, created_by)
+         values (${q(w.orgId)}, ${q(domein)}, 'active', now(), now(), ${q(w.eigenaar.id)})`);
+    await factuurVerstuurd(w, factuurNummer);
+    const klant = async (wereld, naam, email) => gelukt(await rest('clients?select=id', {
+      method: 'POST', token: wereld.medewerker.token, prefer: 'return=representation',
+      body: { organization_id: wereld.orgId, name: naam, email, contact_name: `Contact ${naam}`, client_kind: 'business' },
+    }), `klant ${naam}`)[0];
+    await klant(w, `Klant C ${ronde}`, emailC);
+    tweede = await maakWereld('ui-tweede');
+    await klant(tweede, `Klant A bij de tweede ${ronde}`, klantA.email);
+    await klant(tweede, `Klant C bij de tweede ${ronde}`, emailC);
+    // De tegenproef: met een inlog voor alles (het algemene portaal) heeft
+    // klant A twee dossiers. Anders bewijst "maar één dossier" hieronder niets.
+    const alles = gelukt(await roep('client-portal', { token: klantA.token, origin: ORIGIN, body: { action: 'getPortalData' } }), 'portaal voor alles');
+    gelijk((alles.accounts ?? []).map((a) => a.organizationId).sort(), [w.orgId, tweede.orgId].sort(), 'dossiers van klant A bij een inlog voor alles');
+    return true;
+  });
+  if (!klaar) return;
+
+  await uiStap('Instellingen → Domein: de eigenaar zet het klantportaal op het eigen domein aan', async () => {
+    eigenaar = await openWerkruimte(w.eigenaar, 'eigenaar-domein', w.orgId);
+    await naarDomein(eigenaar);
+    const rij = inhoud(eigenaar.page).locator('[data-testid="custom-domain-portal"]');
+    verwacht(tekst(await rij.innerText()).includes(`Ook het klantportaal op ${domein}`), `andere tekst bij de schakelaar: ${tekst(await rij.innerText())}`);
+    const vink = rij.locator('input[type="checkbox"]');
+    verwacht(!(await vink.isChecked()), 'het portaal stond al aan');
+    const sinds = server.verkeer.length;
+    // Geen check(): het vinkje volgt de server (een gecontroleerde invoer), pas na het antwoord staat het aan.
+    await vink.click();
+    await wachtTot(async () => /Het klantportaal staat nu ook op/.test(await inhoud(eigenaar.page).locator('.success').first().innerText().catch(() => '')), { melding: 'geen bevestiging in beeld' });
+    verwachtAanroep(sinds, { functie: 'client-domains', actie: 'setPortal' }, 'de schakelaar');
+    await wachtTot(() => vink.isChecked(), { timeout: 5000, melding: 'het vinkje staat niet aan' });
+    gelijk(sqlRij(`select portal_enabled from public.client_domains where hostname = ${q(domein)}`).portal_enabled, true, 'portal_enabled in de database');
+    verwacht(auditDomein(w.orgId).includes('portal_enabled'), `geen regel in het logboek: ${auditDomein(w.orgId)}`);
+  });
+
+  await uiStap('een medewerker ziet bij Domein dat het portaal aan staat, maar heeft geen schakelaar', async () => {
+    const lid = await medewerker();
+    await naarDomein(lid);
+    const rij = inhoud(lid.page).locator('[data-testid="custom-domain-portal"]');
+    gelijk(await rij.locator('input[type="checkbox"]').count(), 0, 'schakelaars voor een medewerker');
+    verwacht(/\bAan\b/.test(await rij.innerText()), `de stand staat er niet: ${tekst(await rij.innerText())}`);
+    // Terug naar het werkblad, voor de scenario's hierna.
+    await naarFinancien(lid, 'Offertes');
+  });
+
+  await uiStap('eigen domein: de klant vraagt een inlog aan, de mail heeft een code van ResoFly en een link naar het eigen domein', async () => {
+    opDomein = await openOpKlantadres(`https://${domein}/portal`, 'klant-eigen-domein');
+    await wachtOpPortaal(opDomein, 'inloggen');
+    const meta = await opDomein.page.locator('meta[name="resofly-client-host"]').getAttribute('content');
+    gelijk(JSON.parse(meta).portalMode, 'token', 'de meta van de Worker');
+    sessiesA = aantalSessies(klantA.id);
+    const sinds = server.verkeer.length;
+    const mail = await vraagInlogAan(opDomein, klantA.email);
+    verwachtAanroep(sinds, { functie: 'portal-login', actie: 'requestLogin' }, 'aanvragen');
+    verwacht(inlogLinkUit(mail)?.startsWith(`https://${domein}/portal/inloggen?aanvraag=`), `de link gaat niet naar het eigen domein: ${inlogLinkUit(mail)}`);
+    verwacht(/^\d{8}$/.test(inlogCodeUit(mail) ?? ''), 'geen code van acht cijfers in de mail');
+    verwacht(mailtekst(mail).includes(`Vul de code alleen in op ${domein}.`), 'de mail zegt niet waar de code hoort');
+    const aanvraag = sqlRij(`select scope_organization_id, host, code_hash is not null as eigen_code, token_hash is null as zonder_supabase
+                               from public.portal_login_requests where lower(email) = ${q(klantA.email)} order by created_at desc limit 1`);
+    gelijk(aanvraag, { scope_organization_id: w.orgId, host: domein, eigen_code: true, zonder_supabase: true }, 'de aanvraag');
+    opDomein.mail = mail;
+  });
+
+  await uiStap('eigen domein: met de code komt de klant in alleen dit portaal, met een sleutel en zonder inlog bij Supabase', async () => {
+    const sinds = server.verkeer.length;
+    await vulCodeIn(opDomein, inlogCodeUit(opDomein.mail));
+    await wachtOpPortaal(opDomein, 'dossier');
+    verwachtAanroep(sinds, { functie: 'portal-login', actie: 'redeemCode' }, 'de code');
+    verwachtAanroep(sinds, { functie: 'client-portal', actie: 'getPortalData' }, 'het dossier laden');
+    const bewaard = await opslag(opDomein.page);
+    verwacht(/^[A-Za-z0-9_-]{30,100}$/.test(bewaard[PORTAAL_SLEUTEL] ?? ''), 'geen sleutel in de browser');
+    gelijk(supabaseInlog(bewaard), [], 'een inlog bij Supabase in de browser op het eigen domein');
+    gelijk(aantalSessies(klantA.id), sessiesA, 'sessies bij Supabase (er hoort er geen bij te komen)');
+    gelijk(sqlRij(`select count(*)::int as n from public.portal_tokens where user_id = ${q(klantA.id)} and organization_id = ${q(w.orgId)} and host = ${q(domein)}`).n, 1, 'sleutels in de database');
+    // Wat de app meestuurde: de sleutel, en geen inlog van een gebruiker.
+    const laden = opDomein.api.filter((r) => r.actie === 'getPortalData');
+    verwacht(laden.length > 0, 'de app laadde het dossier niet via deze browser');
+    for (const r of laden) {
+      gelijk(r.kop['x-portal-token'], bewaard[PORTAAL_SLEUTEL], 'kop x-portal-token');
+      verwacht(!r.kop.authorization || r.kop.authorization === `Bearer ${ANON_KEY}`, `de app stuurde een inlog mee: ${String(r.kop.authorization).slice(0, 40)}…`);
+      gelijk(r.kop.origin, `https://${domein}`, 'herkomst van het verzoek');
+    }
+    // Klant A is ook klant bij de tweede organisatie; hier bestaat die niet.
+    gelijk(dossierOrganisaties(opDomein), [w.orgId], 'dossiers op het eigen domein');
+    gelijk(await opDomein.page.locator('.portal-topbar-actions .select-trigger').count(), 0, 'een keuzelijst met dossiers');
+    await opDomein.page.locator('.portal-tabs [role="tab"]').filter({ hasText: /^Facturen/ }).click();
+    await opDomein.page.getByText(factuurNummer).first().waitFor({ timeout: 10000 });
+  });
+
+  await uiStap('eigen domein: na herladen is de klant nog binnen (de sleutel), zonder nieuwe inlog', async () => {
+    await opDomein.page.reload({ waitUntil: 'domcontentloaded' });
+    await wachtOpPortaal(opDomein, 'dossier');
+    gelijk(aantalSessies(klantA.id), sessiesA, 'sessies bij Supabase');
+    gelijk(dossierOrganisaties(opDomein), [w.orgId], 'dossiers na herladen');
+  });
+
+  await uiStap('eigen domein: uitloggen gooit de sleutel weg, in de browser en bij de server', async () => {
+    const sinds = server.verkeer.length;
+    await opDomein.page.locator('.portal-topbar-actions').getByRole('button', { name: /^Uitloggen$/ }).click();
+    await wachtOpPortaal(opDomein, 'inloggen');
+    await wachtTot(() => aanroepen(sinds, { functie: 'portal-login', actie: 'endPortalToken' }).length > 0, { melding: 'geen endPortalToken' });
+    verwachtAanroep(sinds, { functie: 'portal-login', actie: 'endPortalToken' }, 'uitloggen');
+    gelijk((await opslag(opDomein.page))[PORTAAL_SLEUTEL], undefined, 'sleutel in de browser na uitloggen');
+    await wachtTot(() => sqlRij(`select count(*)::int as n from public.portal_tokens where user_id = ${q(klantA.id)} and host = ${q(domein)}`).n === 0, { timeout: 5000, melding: 'de sleutel staat nog in de database' });
+  });
+
+  await uiStap('eigen domein: de link uit de mail logt in dezelfde browser in, ook met een sleutel', async () => {
+    const mail = await vraagInlogAan(opDomein, klantA.email);
+    const link = inlogLinkUit(mail);
+    verwacht(link?.startsWith(`https://${domein}/portal/inloggen?aanvraag=`), `link: ${link}`);
+    await opDomein.page.goto(link, { waitUntil: 'domcontentloaded' });
+    await wachtOpPortaal(opDomein, 'link');
+    const sinds = server.verkeer.length;
+    await opDomein.page.locator('main.portal.login').getByRole('button', { name: /^Inloggen$/ }).click();
+    await wachtOpPortaal(opDomein, 'dossier');
+    verwachtAanroep(sinds, { functie: 'portal-login', actie: 'redeemLogin' }, 'de link');
+    gelijk(new URL(opDomein.page.url()).pathname, '/portal', 'het adres na inloggen (zonder aanvraagnummer)');
+    const bewaard = await opslag(opDomein.page);
+    verwacht(bewaard[PORTAAL_SLEUTEL], 'geen sleutel na de link');
+    gelijk(supabaseInlog(bewaard), [], 'een inlog bij Supabase na de link');
+    gelijk(aantalSessies(klantA.id), sessiesA, 'sessies bij Supabase');
+    gelijk(dossierOrganisaties(opDomein), [w.orgId], 'dossiers na de link');
+  });
+
+  await uiStap('eigen domein: dezelfde soort link in een andere browser werkt niet, en zegt waarom', async () => {
+    const aanvrager = await openOpKlantadres(`https://${domein}/portal`, 'aanvrager', { tijdelijk: true });
+    await wachtOpPortaal(aanvrager, 'inloggen');
+    const link = inlogLinkUit(await vraagInlogAan(aanvrager, klantA.email));
+    const ander = await openOpKlantadres(link, 'ander-apparaat', { tijdelijk: true });
+    await wachtOpPortaal(ander, 'link');
+    await ander.page.locator('main.portal.login').getByRole('button', { name: /^Inloggen$/ }).click();
+    await wachtTot(async () => /hoort bij een andere browser/.test(await ander.page.locator('main.portal.login .error').innerText().catch(() => '')), { melding: 'geen uitleg in beeld' });
+    verwacht(!(await opslag(ander.page))[PORTAAL_SLEUTEL], 'een sleutel in de andere browser');
+  }, { toegestaan: [{ functie: 'portal-login', actie: 'redeemLogin', status: 403 }], foutmelding: /hoort bij een andere browser/ });
+
+  await uiStap('Instellingen → Domein: de eigenaar zet het portaal uit, en de klant op het eigen domein is meteen uitgelogd', async () => {
+    const vink = inhoud(eigenaar.page).locator('[data-testid="custom-domain-portal"] input[type="checkbox"]');
+    const sinds = server.verkeer.length;
+    await vink.click();
+    await wachtTot(async () => /Het klantportaal staat weer alleen op/.test(await inhoud(eigenaar.page).locator('.success').first().innerText().catch(() => '')), { melding: 'geen bevestiging in beeld' });
+    verwachtAanroep(sinds, { functie: 'client-domains', actie: 'setPortal' }, 'de schakelaar');
+    gelijk(sqlRij(`select portal_enabled from public.client_domains where hostname = ${q(domein)}`).portal_enabled, false, 'portal_enabled in de database');
+    verwacht(auditDomein(w.orgId).includes('portal_disabled'), `geen regel in het logboek: ${auditDomein(w.orgId)}`);
+    // De klant had het portaal nog open (ingelogd met de link). Binnen de minuut
+    // dat de functie het adres onthoudt, krijgt hij een nette 401 en logt de app hem uit.
+    await opDomein.page.locator('.portal-topbar-actions').getByRole('button', { name: /^Ververs$/ }).click();
+    await wachtOpPortaal(opDomein, 'inloggen');
+    await opDomein.page.getByText('Je bent uitgelogd. Log opnieuw in.').waitFor({ timeout: 10000 });
+    gelijk((await opslag(opDomein.page))[PORTAAL_SLEUTEL], undefined, 'sleutel in de browser');
+    gelijk(sqlRij(`select count(*)::int as n from public.portal_tokens where user_id = ${q(klantA.id)} and host = ${q(domein)}`).n, 0, 'sleutels in de database');
+  }, { toegestaan: [{ functie: 'client-portal', status: 401 }] });
+
+  await uiStap('met het portaal uit stuurt het eigen domein /portal door naar <naam>.resofly.com', async () => {
+    // Na die minuut: de functie zoekt het adres opnieuw op.
+    clearClientOriginCache();
+    await opDomein.page.goto(`https://${domein}/portal`, { waitUntil: 'domcontentloaded' });
+    await wachtOpPortaal(opDomein, 'inloggen');
+    gelijk(new URL(opDomein.page.url()).host, naamHost, 'het adres na het doorsturen');
+    gelijk(opDomein.doorgestuurd.at(-1), { status: 302, van: `${domein}/portal`, naar: `https://${naamHost}/portal` }, 'wat de Worker deed');
+    const meta = JSON.parse(await opDomein.page.locator('meta[name="resofly-client-host"]').getAttribute('content'));
+    gelijk(meta.portalMode, undefined, 'de meta op de naam bij ResoFly (geen sleutelmodus)');
+  });
+
+  await uiStap('<naam>.resofly.com: alleen een inloglink (geen code), en de app legt de inlog vast voor alleen deze organisatie', async () => {
+    opNaam = await openOpKlantadres(`https://${naamHost}/portal`, 'klant-naam');
+    await wachtOpPortaal(opNaam, 'inloggen');
+    const mail = await vraagInlogAan(opNaam, emailC);
+    // Geen code van Supabase (migratie 20261109150000), en dus ook geen veld om hem in te vullen.
+    gelijk(inlogCodeUit(mail), null, 'een code in de mail');
+    verwacht(mailtekst(mail).includes(`Vraag daar een nieuwe inloglink aan, op ${naamHost}.`), 'de mail zegt niet wat te doen op een ander apparaat');
+    gelijk(await opNaam.page.locator('#portal-login-code').count(), 0, 'een veld voor een code');
+    verwacht(/op een ander apparaat werkt hij niet/.test(await opNaam.page.locator('main.portal.login .success').innerText()), 'de uitleg na het versturen');
+    const link = inlogLinkUit(mail);
+    verwacht(link?.startsWith(`https://${naamHost}/portal/inloggen?aanvraag=`), `de link gaat niet naar de naam bij ResoFly: ${link}`);
+    await opNaam.page.goto(link, { waitUntil: 'domcontentloaded' });
+    await wachtOpPortaal(opNaam, 'link');
+    const sinds = server.verkeer.length;
+    await opNaam.page.locator('main.portal.login').getByRole('button', { name: /^Inloggen$/ }).click();
+    await wachtOpPortaal(opNaam, 'dossier');
+    verwachtAanroep(sinds, { functie: 'portal-login', actie: 'redeemLogin' }, 'de link');
+    verwachtAanroep(sinds, { functie: 'portal-login', actie: 'bindSession' }, 'vastleggen');
+    const bewaard = await opslag(opNaam.page);
+    gelijk(supabaseInlog(bewaard), [PORTAAL_INLOG], 'de inlog bij Supabase op de naam bij ResoFly');
+    gelijk(bewaard[PORTAAL_SLEUTEL], undefined, 'een sleutel van een eigen domein');
+    const sessie = JSON.parse(bewaard[PORTAAL_INLOG]);
+    const claims = JSON.parse(Buffer.from(sessie.access_token.split('.')[1], 'base64url').toString());
+    gelijk(sqlRij(`select organization_id, host from public.portal_sessions where session_id = ${q(claims.session_id)}`), { organization_id: w.orgId, host: naamHost }, 'de vastgelegde inlog');
+    gelijk(sqlRij(`select (bound_session_id = ${q(claims.session_id)}::uuid) as gebonden from public.portal_login_requests
+                    where request_hash = encode(sha256(convert_to(${q(new URL(link).searchParams.get('aanvraag'))}, 'UTF8')), 'hex')`).gebonden, true, 'de inlog hoort bij de aanvraag van de link');
+    opNaam.sessieId = claims.session_id;
+    const laden = opNaam.api.filter((r) => r.actie === 'getPortalData');
+    verwacht(laden.length > 0 && laden.every((r) => r.kop.authorization === `Bearer ${sessie.access_token}` && !r.kop['x-portal-token']), 'de app stuurde niet de inlog (of wel een sleutel)');
+    // Klant C is ook klant bij de tweede organisatie; hier bestaat die niet.
+    gelijk(dossierOrganisaties(opNaam), [w.orgId], 'dossiers op de naam bij ResoFly');
+  });
+
+  await uiStap('<naam>.resofly.com: uitloggen beëindigt deze inlog bij Supabase', async () => {
+    await opNaam.page.locator('.portal-topbar-actions').getByRole('button', { name: /^Uitloggen$/ }).click();
+    await wachtOpPortaal(opNaam, 'inloggen');
+    gelijk(supabaseInlog(await opslag(opNaam.page)), [], 'inlog in de browser na uitloggen');
+    await wachtTot(() => sqlRij(`select count(*)::int as n from auth.sessions where id = ${q(opNaam.sessieId)}`).n === 0, { timeout: 5000, melding: 'Supabase kent de sessie nog' });
+  });
+
+  await uiStap('<naam>.resofly.com: de link in een andere browser werkt niet, en zegt wat je dan doet', async () => {
+    const link = inlogLinkUit(await vraagInlogAan(opNaam, emailC));
+    const ander = await openOpKlantadres(link, 'ander-apparaat-naam', { tijdelijk: true });
+    await wachtOpPortaal(ander, 'link');
+    await ander.page.locator('main.portal.login').getByRole('button', { name: /^Inloggen$/ }).click();
+    const fout = ander.page.locator('main.portal.login .error');
+    await wachtTot(async () => /hoort bij een andere browser/.test(await fout.innerText().catch(() => '')), { melding: 'geen uitleg in beeld' });
+    verwacht(/vraag hier een nieuwe aan/.test(await fout.innerText()), `geen uitweg in de melding: ${await fout.innerText()}`);
+    verwacht(!/code/.test(await fout.innerText()), 'de melding noemt een code');
+    gelijk(supabaseInlog(await opslag(ander.page)), [], 'een inlog in de andere browser');
+  }, { toegestaan: [{ functie: 'portal-login', actie: 'redeemLogin', status: 403 }], foutmelding: /hoort bij een andere browser/ });
+
+  await uiStap('het algemene portaal: met de link een inlog voor alles, met de dossiers van beide organisaties', async () => {
+    const algemeen = await openAlsKlant(`${APP}/portal`, 'klant-algemeen');
+    await wachtOpPortaal(algemeen, 'inloggen');
+    const mail = await vraagInlogAan(algemeen, klantA.email);
+    gelijk(inlogCodeUit(mail), null, 'een code in de mail');
+    gelijk(await algemeen.page.locator('#portal-login-code').count(), 0, 'een veld voor een code');
+    const link = inlogLinkUit(mail);
+    verwacht(link?.startsWith(`${APP}/portal/inloggen?aanvraag=`), `link: ${link}`);
+    await algemeen.page.goto(link, { waitUntil: 'domcontentloaded' });
+    await wachtOpPortaal(algemeen, 'link');
+    await algemeen.page.locator('main.portal.login').getByRole('button', { name: /^Inloggen$/ }).click();
+    await wachtOpPortaal(algemeen, 'dossier');
+    const sessie = JSON.parse((await opslag(algemeen.page))[PORTAAL_INLOG]);
+    const claims = JSON.parse(Buffer.from(sessie.access_token.split('.')[1], 'base64url').toString());
+    gelijk(sqlRij(`select organization_id, host from public.portal_sessions where session_id = ${q(claims.session_id)}`).organization_id, null, 'het bereik van de inlog');
+    // Twee dossiers: de keuzelijst staat er, met beide organisaties.
+    await algemeen.page.locator('.portal-topbar-actions .select-trigger').click();
+    const opties = (await algemeen.page.locator('.select-menu [role="option"]').allInnerTexts()).map(tekst);
+    gelijk(opties.length, 2, `dossiers in de keuzelijst: ${opties.join(', ')}`);
+    await algemeen.page.keyboard.press('Escape');
+  });
+
+  for (const s of [opDomein, opNaam, eigenaar]) await sluit(s);
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -2207,7 +2701,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

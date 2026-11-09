@@ -15,6 +15,10 @@
 // leverancier is, geeft die site toegang. Het adres in de mail is het adres
 // waar de klant de inlog aanvroeg (de link gaat daar ook heen).
 //
+// Sinds migratie 20261109150000 staat er alleen nog een code in de mail op een
+// eigen domein (een code van ResoFly, voor alleen dat portaal). Elders alleen
+// de link; wie de mail op een ander apparaat leest, vraagt daar een nieuwe aan.
+//
 // Puur: geen Deno, geen netwerk (portalLogin.test.ts).
 import { escapeHtml, renderEmailLayout } from './layout.ts';
 
@@ -54,8 +58,10 @@ export function renderPortalLoginEmail(input: PortalLoginEmailInput): { subject:
       ? `<p style="margin:24px 0 6px;color:#d8d8df;font-size:15px;">Lees je deze mail op een ander apparaat? Vul dan deze code in op het inlogscherm${host ? ` van <strong style="color:#ffffff;">${escapeHtml(host)}</strong>` : ''}:</p>
 <p style="margin:0;font-size:28px;letter-spacing:.18em;font-weight:700;color:#ffffff;font-family:Menlo,Consolas,monospace;">${escapeHtml(code)}</p>
 ${host ? `<p style="margin:12px 0 0;color:#d8d8df;font-size:14px;">Vul de code alleen in op ${escapeHtml(host)}. Vraagt een andere website erom, vul hem dan niet in.</p>` : ''}`
-      : '',
-    footerHtml: 'Heb je niet geprobeerd in te loggen? Dan kun je deze mail negeren. Zonder de link of de code komt niemand binnen.',
+      : `<p style="margin:24px 0 0;color:#d8d8df;font-size:15px;">Lees je deze mail op een ander apparaat? Vraag dan daar een nieuwe inloglink aan${host ? `, op <strong style="color:#ffffff;">${escapeHtml(host)}</strong>` : ''}.</p>`,
+    footerHtml: code
+      ? 'Heb je niet geprobeerd in te loggen? Dan kun je deze mail negeren. Zonder de link of de code komt niemand binnen.'
+      : 'Heb je niet geprobeerd in te loggen? Dan kun je deze mail negeren. Zonder de link komt niemand binnen.',
     accentColor: input.accentColor,
   });
   const text = [
@@ -69,9 +75,11 @@ ${host ? `<p style="margin:12px 0 0;color:#d8d8df;font-size:14px;">Vul de code a
         `Op een ander apparaat? Vul deze code in op het inlogscherm${host ? ` van ${host}` : ''}: ${code}`,
         ...(host ? [`Vul de code alleen in op ${host}. Vraagt een andere website erom, vul hem dan niet in.`] : []),
       ]
-      : []),
+      : ['', `Op een ander apparaat? Vraag daar een nieuwe inloglink aan${host ? `, op ${host}` : ''}.`]),
     '',
-    'Heb je niet geprobeerd in te loggen? Dan kun je deze mail negeren. Zonder de link of de code komt niemand binnen.',
+    code
+      ? 'Heb je niet geprobeerd in te loggen? Dan kun je deze mail negeren. Zonder de link of de code komt niemand binnen.'
+      : 'Heb je niet geprobeerd in te loggen? Dan kun je deze mail negeren. Zonder de link komt niemand binnen.',
   ].join('\n');
   return { subject, html, text };
 }

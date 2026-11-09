@@ -2210,17 +2210,19 @@ async function requireUser(req: Request): Promise<PortalUser> {
     }
     throw new PortalError('Je bent uitgelogd. Log opnieuw in.', 401, SESSION_UNBOUND_CODE);
   }
-  // Op het adres van een leverancier alleen een inlog voor díe leverancier.
-  // Voor een gewone browser kan het niet anders (de inlog staat bij het adres).
-  if (portalOriginMismatch(req, scope.organizationId)) {
-    throw new PortalError('Je bent uitgelogd. Log opnieuw in.', 401, SESSION_UNBOUND_CODE);
-  }
   // Op een eigen domein hoort geen inlog bij Supabase (daar is het een sleutel,
   // requireTokenUser): wat daar in een browser staat, kan de beheerder van het
   // domein uitlezen. Komt er toch een, dan is hij daar blootgesteld: weg ermee.
+  // Vóór de controle hieronder: eerst ging alleen een inlog van díe
+  // leverancier weg, en bleef een inlog voor alles of voor een ander geldig.
   if (portalOriginOf(req)?.kind === 'custom') {
     const { error: signOutError } = await supabaseAdmin.auth.admin.signOut(token, 'local');
     if (signOutError) console.warn('client-portal: inlog op een eigen domein ongeldig maken mislukt', signOutError.message);
+    throw new PortalError('Je bent uitgelogd. Log opnieuw in.', 401, SESSION_UNBOUND_CODE);
+  }
+  // Op het adres van een leverancier alleen een inlog voor díe leverancier.
+  // Voor een gewone browser kan het niet anders (de inlog staat bij het adres).
+  if (portalOriginMismatch(req, scope.organizationId)) {
     throw new PortalError('Je bent uitgelogd. Log opnieuw in.', 401, SESSION_UNBOUND_CODE);
   }
   return { id: data.user.id, email, scope: scope.organizationId };

@@ -35,9 +35,21 @@ test('elke verzendroute via Resend telt mee in het quotum', () => {
   }
   const missing = files.filter((file) => {
     if (file === '_shared/resend.ts' || file === '_shared/emailQuota.ts') return false;
+    // De inlogmail van het portaal vraagt niet de organisatie, maar iedereen
+    // die een klantadres kent (met de herkomst van haar adres, na te maken).
+    // In het quotum kon zo iedereen het mailquotum van een leverancier
+    // opmaken, en dan gingen ook haar facturen niet meer weg. Daarom een eigen
+    // rem per organisatie (en per adres en afzender); zie de test hieronder.
+    if (file === 'portal-login/index.ts') return false;
     const source = readFileSync(new URL(file, root), 'utf8');
     const sends = source.includes('api.resend.com/emails') || /\bsendViaResend\(/.test(source);
     return sends && !/takeEmailQuota\(|emailQuotaAllows\(/.test(source);
   });
   assert.deepEqual(missing, [], 'Roep het mailquotum aan vlak voor het versturen (zie _shared/emailQuota.ts).');
+});
+
+test('de inlogmail van het portaal heeft een eigen rem per organisatie, los van het mailquotum', () => {
+  const source = readFileSync(new URL('../portal-login/index.ts', import.meta.url), 'utf8');
+  assert.match(source, /throttleHit\(await sha256Hex\(`portal-login:org:\$\{organizationId\}`\), 3600, LOGIN_MAILS_PER_ORGANIZATION_HOUR, 3600\)/);
+  assert.ok(!/takeEmailQuota\(/.test(source), 'inlogmails tellen niet mee in het mailquotum van de organisatie');
 });

@@ -12,7 +12,9 @@
  * HTML krijgt de naam, het icoon en de meta voor de app, zonder manifest; de
  * headers (geen zoekmachine, geen Referer op een tokenpagina, de CSP uit de
  * build); afmelden gaat door naar email-unsubscribe (ook de one-click POST);
- * de Worker stuurt zijn geheim mee en onthoudt een antwoord een minuut.
+ * de Worker stuurt zijn geheim mee en onthoudt een antwoord een minuut; een
+ * ontbrekend bestand is een 404 en geen app; een adres met een punt aan het
+ * eind stuurt door naar het adres zonder.
  */
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
@@ -62,6 +64,10 @@ async function outboundService(request) {
   }
   if (url.origin === APP && url.pathname === '/assets/index-abc.js') {
     return new Response('console.log(1)', { headers: { 'content-type': 'text/javascript', 'cache-control': 'public, max-age=31536000, immutable' } });
+  }
+  // Zoals Pages: een bestand dat niet bestaat, geeft de app zelf (index.html, 200).
+  if (url.origin === APP && /^\/(assets|fonts|icons)\//.test(url.pathname)) {
+    return new Response(INDEX_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } });
   }
   if (url.hostname === 'staging.resofly.com') return new Response('werkruimte', { headers: { 'content-type': 'text/plain' } });
   return new Response('niet nagebootst', { status: 599 });
@@ -164,6 +170,19 @@ try {
   // Bestanden van de app: ongewijzigd uit de build.
   res = await get('https://jansen.resofly.com/assets/index-abc.js');
   check('scripts komen uit de build, met hun cache', res.status === 200 && (await res.text()) === 'console.log(1)' && res.headers.get('cache-control')?.includes('immutable'));
+
+  // Een bestand dat niet bestaat: geen app (en dus geen inlogscherm van de werkruimte) op het klantadres.
+  for (const p of ['/assets/bestaat-niet.js', '/fonts/x', '/icons/x/../../dashboard']) {
+    res = await get(`https://portaal.pietersen.nl${p}`);
+    const tekst = await res.text();
+    check(`${p}: 404, niet de app`, res.status === 404 && !tekst.includes('<div id="root">'), `${res.status} ${tekst.slice(0, 80)}`);
+  }
+
+  // Een punt aan het eind van het adres: hetzelfde adres zonder (anders keurde de app de meta af).
+  res = await get('https://portaal.pietersen.nl./portal?x=1');
+  check('een adres met een punt aan het eind stuurt door naar het adres zonder', res.status === 301 && res.headers.get('location') === 'https://portaal.pietersen.nl/portal?x=1', `${res.status} ${res.headers.get('location')}`);
+  res = await get('https://staging.resofly.com./dashboard');
+  check('ook bij een adres van ResoFly zelf', res.status === 301 && res.headers.get('location') === 'https://staging.resofly.com/dashboard', `${res.status} ${res.headers.get('location')}`);
 
   // Hernoemd: 301 naar hetzelfde pad op het nieuwe adres.
   res = await get('https://oud-jansen.resofly.com/invoice/abc?x=1');
