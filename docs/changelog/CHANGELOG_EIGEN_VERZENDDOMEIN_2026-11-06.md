@@ -132,14 +132,15 @@ Geen migratie: de tabel heeft alles al.
 
 ## Nog te doen (buiten de code)
 
-1. Staging: zet het secret `RESEND_WEBHOOK_SIGNING_SECRET` met de echte
-   `whsec_…`-waarde uit Resend (Webhooks → het eindpunt → Signing secret) en
-   verwijder het secret met de verkeerde naam.
-2. Resend: zet bij dat webhook-eindpunt ook `domain.created`,
-   `domain.updated` en `domain.deleted` aan.
-3. Controleer dat `RESEND_API_KEY` "Full access" heeft (anders kan de functie
-   geen domeinen beheren).
-4. Let op het aantal domeinen in het Resend-abonnement: alle organisaties
-   delen het (Pro: 10).
-5. `gerjanvanlopik.nl`: zet de vier records uit het scherm bij de DNS en klik
-   op "Verifieer". Het afzenderadres staat al goed.
+Bewust uitgesteld tot de overstap naar productie (besloten op 9 november). De
+stappen, in volgorde, staan op één plek:
+`docs/plannen/ACTIEPUNTEN_BEVEILIGING_SAAS_2026-11-01.md`, punt 26. Daar staat
+ook wat hier nog ontbrak: dat een domein maar in één Resend-account tegelijk
+geverifieerd kan zijn (één account per omgeving, en wat dat betekent voor het
+afzenderdomein van staging), en dat domeinen die nooit geverifieerd worden
+blijven meetellen.
+
+Tot dan op staging: het webhook-secret heeft nog de verkeerde naam (punt 4),
+dus afleverstatussen en domeinstatus komen niet via de webhook binnen. Een
+domein verifieer je met de knop "Verifieer"; het scherm vraagt daarna een
+minuut lang zelf de stand op.
