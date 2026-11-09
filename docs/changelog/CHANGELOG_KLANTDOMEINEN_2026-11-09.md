@@ -127,18 +127,23 @@ Advies voor de eigenaar: zet in Supabase → Authentication → Email de *Email 
 
 ## Getest
 
-- `npm test`: 1329 tests (nieuw: namen, hostnamen, de stand bij Cloudflare, het TXT-bewijs,
+Op de stand die naar staging gaat (samengevoegd met `staging`, inclusief de videovergaderingen
+van 8 november):
+
+- `npm test`: 1359 tests (nieuw: namen, hostnamen, de stand bij Cloudflare, het TXT-bewijs,
   `clientBaseUrl` en `clientPortalBaseUrl`, de origin-controle, het filter op links, de
   inlogmail, de inlogstroom in de browser, de Worker-logica, het Logboek, het hervatten van de
   inrichting).
 - `npm run typecheck`; `deno check` op de lijst uit `frontend-checks.yml` zonder fouten. In
   `invoice-workflow`, `quote-workflow` en `invoice-public` (niet in die lijst) dezelfde fouten
   als vóór deze wijziging, geen nieuwe.
-- `npm run test:stromen`: alle scenario's tegen een lokale stack die vanaf nul is opgebouwd
-  (`supabase db reset`), met het nieuwe scenario `klantdomein` (79 stappen: kiezen, wijzigen,
-  rechten, een eigen domein bij een nagebootste Cloudflare en DNS, de overname van een vergeten
-  record, de Worker-opzoeking, links in mails, CORS en tokens per adres, inloggen met de link en
-  de code tegen GoTrue, de nachtelijke ronde, een uitgezet adres).
+- `npm run build` (zoals Cloudflare Pages) en `scripts/check-csp-hash.mjs`.
+- Migraties vanaf nul: 258 van 258 toegepast (`supabase db reset`).
+- `npm run test:stromen`: 872 stappen, 0 fout, op die verse database, met het nieuwe scenario
+  `klantdomein` (79 stappen: kiezen, wijzigen, rechten, een eigen domein bij een nagebootste
+  Cloudflare en DNS, de overname van een vergeten record, de Worker-opzoeking, links in mails,
+  CORS en tokens per adres, inloggen met de link en de code tegen GoTrue, de nachtelijke ronde,
+  een uitgezet adres).
 - `npm run test:inrichten` (de nieuwe stap: voorstel, bestaat al, gereserveerd, te kort,
   vastleggen; niet afronden zonder; verder gaan na een update) en `npm run test:loading`.
 - `npm run test:mobile -- --theme=both`, met de nieuwe pagina's *settings-domein* en
