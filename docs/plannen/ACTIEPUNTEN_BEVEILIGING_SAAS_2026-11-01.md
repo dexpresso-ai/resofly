@@ -19,7 +19,7 @@ punt K) verwijzen daarheen.
 | 1 | Media-worker uitrollen | Eigenaar | Uitgerold op 6 november; de proef nog |
 | 2 | Office-server uitrollen | Eigenaar | Uitgerold op 6 november; de proef nog |
 | 3 | Handtekening op inkomende mail verplicht maken | Eigenaar | Nu (stap 1 gedaan) |
-| 4 | Webhook-secret van Resend repareren | Eigenaar | Nu |
+| 4 | Webhook-secret van Resend repareren | Eigenaar | Uitgesteld tot productie (zie 26) |
 | 5 | JWT-secret van staging vernieuwen | Eigenaar | Nu |
 | 6 | CI-secrets alleen voor branch `staging` | Eigenaar | Deze week |
 | 7 | Oude media-worker opruimen | Eigenaar | Deze week |
@@ -31,6 +31,7 @@ punt K) verwijzen daarheen.
 | 12 | Supabase Pro voor productie | Eigenaar | Vóór productie |
 | 13 | Buiten de code: AVG, back-ups, monitoring | Eigenaar | Vóór productie |
 | 25 | Tweestapsverificatie (MFA) aanbieden | Code + keuze | Vóór productie |
+| 26 | Resend en eigen verzenddomeinen op productie | Eigenaar + keuze | Vóór productie |
 | 14 | Privé-afspraken en opnames (punt P) | Keuze | Wanneer je wilt |
 | 15 | Deellink van een galerij (punt Q) | Keuze | Wanneer je wilt |
 | 16 | Campagne-HTML saneren (punt A) | Keuze | Wanneer je wilt |
@@ -42,7 +43,7 @@ punt K) verwijzen daarheen.
 | 22 | CSP per omgeving (punt R) | Code | Vóór productie |
 | 23 | Maker op de overige tabellen (punt U) | Code | Later |
 
-Nummer 24 en 25 kwamen er later bij en staan op hun plek in de tabel. Na elke
+Nummer 24, 25 en 26 kwamen er later bij en staan op hun plek in de tabel. Na elke
 uitrol: de **rooktest** onderaan.
 
 ---
@@ -117,6 +118,12 @@ secret dan weer weg, en controleer of `MAIL_INBOUND_SECRET` in de worker
 gelijk is aan `MAIL_INBOUND_WEBHOOK_SECRET` in Supabase.
 
 ### 4. Webhook-secret van Resend repareren (eigenaar)
+
+**Stand op 9 november:** bewust uitgesteld tot de overstap naar productie;
+daar gebeurt het als stap 5 van punt 26. Tot dan komen op staging geen
+afleverstatussen (afgeleverd, geopend, gebounced) en geen domeinstatus via de
+webhook binnen. Een eigen verzenddomein verifieer je op staging met de knop
+"Verifieer"; het scherm vraagt daarna een minuut lang zelf de stand op.
 
 **Waarom:** fix 5. Op staging heet het secret letterlijk
 `RESEND_WEBHOOK_SIGNING_SECRET="jouw_resend_webhook_secret"`, met naam en
@@ -320,7 +327,8 @@ elk ervan zet een slot open:
 
 Wel zetten:
 - `MAIL_INBOUND_REQUIRE_SIGNATURE` = `true`;
-- `RESEND_WEBHOOK_SIGNING_SECRET`, onder de juiste naam;
+- `RESEND_WEBHOOK_SIGNING_SECRET`, onder de juiste naam (de rest van Resend:
+  punt 26);
 - alle `*_ALLOWED_ORIGINS` en `*_ALLOWED_RETURN_ORIGINS` met alleen het
   productiedomein.
 
@@ -401,6 +409,121 @@ leden. TOTP staat in Supabase al aan, maar de app biedt het nergens aan.
 
 **Klaar als:** een eigenaar zonder tweede factor wordt gevraagd die in te
 stellen, en met alleen een magic link geen facturen of leden kan wijzigen.
+
+### 26. Resend en eigen verzenddomeinen op productie (eigenaar + keuze)
+
+**Waarom:** sinds 6 november kan een organisatie haar eigen domein koppelen,
+zodat haar mail van bijvoorbeeld `info@bakkerij.nl` komt
+(`CHANGELOG_EIGEN_VERZENDDOMEIN_2026-11-06.md`; de werking staat in
+`docs/setup/RESEND_SETUP.md`, hoofdstuk 8). Op staging is Resend daar bewust
+nog niet helemaal voor ingericht (punt 4): dat gebeurt bij de overstap naar
+productie. Drie feiten bepalen de volgorde:
+
+- **Een domein kan maar in één Resend-account tegelijk geverifieerd zijn.**
+  Elk account gebruikt dezelfde DKIM-naam (`resend._domainkey`) met een eigen
+  sleutel, en in de DNS past maar één waarde. Resend kan een domein overzetten
+  ("domain claims"), maar ResoFly gebruikt dat nog niet.
+- **Alle organisaties delen het Resend-account.** Elk gekoppeld domein telt
+  mee voor het maximum van het abonnement, ook een dat nooit geverifieerd
+  wordt. Zo'n domein blijft staan tot de organisatie het verwijdert, of tot een
+  andere organisatie het na zeven dagen overneemt. Vanzelf opruimen gebeurt
+  niet.
+- **Het afzenderdomein van het platform** (`RESEND_FROM_EMAIL`) moet in
+  hetzelfde account geverifieerd zijn als de klantdomeinen: één API-sleutel
+  verstuurt alles.
+
+**Keuze vooraf: één Resend-account voor staging en productie, of twee?**
+Aanbevolen: twee (bijvoorbeeld twee teams in Resend). Met één gedeeld account:
+
+- staat een domein dat je op staging koppelt, op productie in de weg;
+- tellen de testdomeinen van staging mee voor het maximum van productie;
+- kan wie de sleutel van staging heeft, mailen namens elk klantdomein op
+  productie;
+- krijgen beide webhooks elkaars events. Dat is onschuldig (ze vinden de mail
+  of het domein niet terug), maar het vult de logs.
+
+Met twee accounts heeft staging een eigen afzenderdomein nodig, want hetzelfde
+domein kan niet in beide geverifieerd zijn. Bijvoorbeeld
+`staging.mail.resofly.com` voor staging en `mail.resofly.com` voor productie.
+Gebruikt staging nu het domein dat productie moet krijgen (kijk naar
+`RESEND_FROM_EMAIL` op staging), zet staging dan eerst over op het nieuwe
+subdomein. Haal daarna het oude domein uit het staging-account. Let ook op het
+domeinmaximum van het abonnement van staging: het afzenderdomein telt daar
+ook mee.
+
+**Stappen:**
+1. Resend: het account voor productie, met een abonnement dat genoeg domeinen
+   heeft. Reken met 1 (het platform) plus het aantal organisaties met een
+   eigen domein, plus wat speling voor pogingen die blijven hangen. Een
+   organisatie kan er zelf maximaal 5 koppelen (`MAX_SENDING_DOMAINS_PER_ORG`
+   in `supabase/functions/mail/index.ts`). In november 2026 had Pro 10
+   domeinen en Scale 1.000, met een uitbreiding van 100 domeinen; controleer
+   de actuele prijzen op resend.com/pricing.
+2. Resend → Domains: voeg het afzenderdomein van het platform toe in regio
+   `eu-west-1`, plaats de records en verifieer. Zet SPF, DKIM en DMARC goed
+   (punt 24).
+3. Resend → API Keys: maak een sleutel met **Full access**. Met
+   "Sending access" kan de mail-functie wel versturen, maar geen domeinen
+   aanmaken, controleren of verwijderen: "Domein toevoegen" geeft dan een fout
+   van Resend.
+4. Resend → Webhooks: maak een endpoint
+   `https://<productie-ref>.supabase.co/functions/v1/resend-webhook` met deze
+   events:
+   - `email.sent`, `email.delivered`, `email.opened`, `email.clicked`,
+     `email.bounced`, `email.failed`, `email.complained`;
+   - `domain.created`, `domain.updated`, `domain.deleted`.
+
+   Kopieer het **Signing secret** (begint met `whsec_`).
+5. Supabase (productie) → Edge Functions → Secrets:
+
+   | Secret | Waarde |
+   | --- | --- |
+   | `RESEND_API_KEY` | de sleutel uit stap 3 |
+   | `RESEND_FROM_EMAIL` | bijvoorbeeld `ResoFly <noreply@mail.resofly.com>`, op het domein uit stap 2 |
+   | `RESEND_REPLY_TO` | waar antwoorden op mail vanaf het platformdomein heen gaan. Mail vanaf een eigen domein krijgt het eigen adres als Reply-To |
+   | `RESEND_WEBHOOK_SIGNING_SECRET` | het secret uit stap 4 |
+   | `MAIL_ALLOWED_ORIGINS` | alleen het productiedomein (punt 10) |
+
+   `RESEND_DEFAULT_REGION` hoeft niet: zonder dat secret is het `eu-west-1`.
+   `RESEND_WEBHOOK_ALLOW_UNSIGNED` mag niet bestaan (punt 10). Controleer de
+   namen daarna met `supabase secrets list --project-ref <productie-ref>`. Op
+   staging stond het webhook-secret als
+   `RESEND_WEBHOOK_SIGNING_SECRET="jouw_resend_webhook_secret"` (punt 4): naam
+   en voorbeeldwaarde samen in het naamveld. Dan bestaat het echte secret niet
+   en weigert de webhook elk event.
+6. Tracking (keuze): ResoFly geeft bij het aanmaken van een klantdomein geen
+   open- of kliktracking mee, dus geldt de standaard van Resend. Kijk bij het
+   eerste klantdomein in Resend (Domains → het domein) wat er staat. Staat het
+   uit, dan komen "geopend" en "geklikt" voor mail vanaf een eigen domein niet
+   binnen. Aanzetten is een afweging tussen inzicht en de privacy van de
+   ontvanger; daarna is het een kleine wijziging in de code (de aanroep van
+   `POST /domains` in `mail/index.ts`).
+7. Je eigen domein (`gerjanvanlopik.nl`): verwijder het eerst op staging
+   (Instellingen → E-mail → Verwijderen; dan verdwijnt het ook uit dat
+   Resend-account) en koppel het daarna op productie. Je krijgt daar nieuwe
+   records met een nieuwe DKIM-sleutel: vervang de oude waarde van
+   `resend._domainkey` bij je DNS door de nieuwe.
+
+**Nog niet in de code:**
+- Een klant die zijn domein al in een eigen Resend-account geverifieerd heeft,
+  kan het niet koppelen: Resend weigert het. Hij haalt het daar eerst weg, of
+  ResoFly bouwt het overzetten via domain claims in.
+- Een domein dat nooit geverifieerd wordt, blijft in het account staan en telt
+  mee. Kijk af en toe in Resend → Domains, of laat een opruimtaak bouwen
+  (bijvoorbeeld: na dertig dagen nog niet geverifieerd, dan weg bij Resend en
+  in ResoFly).
+
+**Klaar als:**
+- op productie een testdomein koppelen de DNS-records toont, met per record
+  een status;
+- na het plaatsen en "Verifieer" de status binnen een minuut op
+  "Geverifieerd" springt, zonder opnieuw te klikken;
+- een testmail (Instellingen → E-mail) aankomt vanaf het eigen adres, en
+  "Beantwoorden" in je mailprogramma dat eigen adres invult, niet het
+  ResoFly-adres;
+- Resend → Webhooks → het endpoint de events met status 200 toont, en geen 400
+  ("Webhook signature ongeldig" of "RESEND_WEBHOOK_SIGNING_SECRET ontbreekt");
+- een verwijderd testdomein ook in Resend → Domains weg is.
 
 ---
 

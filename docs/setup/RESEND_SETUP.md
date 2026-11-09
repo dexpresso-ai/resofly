@@ -210,6 +210,11 @@ Wat nodig is:
   account: elk gekoppeld domein (ook een dat nooit geverifieerd wordt) telt
   mee. Pro heeft er 10, Scale 1.000; daarboven is er een uitbreiding. Een
   organisatie kan er zelf maximaal vijf koppelen.
+- Bij voorkeur één Resend-account per omgeving. Een domein kan maar in één
+  account tegelijk geverifieerd zijn; met twee accounts hebben staging en
+  productie dus elk een eigen afzenderdomein. De keuze en de stappen voor
+  productie, in volgorde, staan in
+  `docs/plannen/ACTIEPUNTEN_BEVEILIGING_SAAS_2026-11-01.md`, punt 26.
 
 Wie mag een domein koppelen? Een domein hoort bij hooguit één organisatie
 (`_shared/resendDomains.ts`, `judgeDomainClaim`). Is het ooit geverifieerd,
