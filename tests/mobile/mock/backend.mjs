@@ -40,6 +40,67 @@ const PLANS = [
   { plan_key: 'custom', name: 'Custom', description: 'Handmatig afgestemd contract.', included_seats: null, monthly_price_cents: 0, yearly_price_cents: 0, extra_seat_price_cents: 0, extra_seat_yearly_price_cents: 0, currency: 'EUR', is_custom: true, is_active: true, sort_order: 90, limits: { business_included: true, creative_included: true } },
 ];
 
+// ── Het webadres (migratie 20261108230000) ─────────────────────────────────
+//
+// client_subdomain_check zegt of een naam vrij is; de vorm controleert de app
+// zelf al (src/lib/clientDomains.ts), dus hier komen alleen goedgevormde
+// namen. "bestaat-al" en "jansen" zijn van een ander, "www" en alles met
+// "resofly" gereserveerd. Het overzicht is dat van client-domains.
+const CLIENT_BASE = 'resofly.com';
+const TAKEN_SUBDOMAINS = new Set(['bestaat-al', 'jansen', 'fotostudio']);
+const RESERVED_SUBDOMAINS = new Set(['www', 'app', 'api', 'admin', 'mail', 'portal', 'portaal', 'support', 'klant', 'domeinen']);
+
+function subdomainCheck(own, body) {
+  const name = String(body?.p_name ?? '');
+  if (own && name === own) return { name, status: 'own', reason: null, message: null };
+  if (RESERVED_SUBDOMAINS.has(name) || /resofly|rabobank|paypal/.test(name)) return { name, status: 'reserved', reason: 'gereserveerd', message: 'Deze naam is niet beschikbaar. Kies een andere.' };
+  if (TAKEN_SUBDOMAINS.has(name)) return { name, status: 'taken', reason: 'bestaat', message: 'Dit adres bestaat al. Kies een andere naam.' };
+  return { name, status: 'available', reason: null, message: null };
+}
+
+function clientDomainsOverview({ subdomain, allowed, domain = null, previous = [], moved = [] }) {
+  return {
+    ok: true,
+    config: { base: CLIENT_BASE, live: false, cnameTarget: `domeinen.${CLIENT_BASE}`, customDomainsAvailable: true },
+    customDomainAllowed: allowed,
+    subdomain: subdomain ? { name: subdomain, host: `${subdomain}.${CLIENT_BASE}` } : null,
+    blocked: false,
+    previous,
+    domain,
+    moved,
+    // Leeg: de app valt terug op zijn eigen adres, zoals voorheen in deze test.
+    clientUrl: '',
+    onClientHost: false,
+    portalUrl: '',
+    portalOnClientHost: false,
+  };
+}
+
+// Instellingen → Domein in zijn langste stand: een adres, een eerder adres,
+// een eigen domein dat nog op het record wacht (met de melding waar het nu
+// naar wijst, het CNAME- en het TXT-record) en een verhuisd domein.
+const WORKSPACE_DOMAIN = {
+  id: 'd0d0d0d0-0000-4000-8000-000000000001',
+  hostname: 'albums.studio-lopik-fotografie.nl',
+  status: 'pending_dns',
+  problem: 'albums.studio-lopik-fotografie.nl wijst nu naar studio-lopik-fotografie.nl. Verander het CNAME-record in domeinen.resofly.com.',
+  cnameFound: ['studio-lopik-fotografie.nl'],
+  records: [
+    { type: 'CNAME', name: 'albums.studio-lopik-fotografie.nl', value: 'domeinen.resofly.com' },
+    { type: 'TXT', name: '_cf-custom-hostname.albums.studio-lopik-fotografie.nl', value: '0f6a1e2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b' },
+  ],
+  verifiedAt: null,
+  lastCheckedAt: '2026-11-08T09:00:00Z',
+  createdAt: '2026-11-08T08:55:00Z',
+};
+const WORKSPACE_OVERVIEW = clientDomainsOverview({
+  subdomain: 'studio-lopik',
+  allowed: true,
+  domain: WORKSPACE_DOMAIN,
+  previous: [{ name: 'lopik', host: `lopik.${CLIENT_BASE}`, redirectUntil: '2027-11-08T09:00:00Z' }],
+  moved: [{ id: 'd0d0d0d0-0000-4000-8000-000000000002', hostname: 'klanten.studio-lopik.nl', redirectUntil: '2027-10-01T00:00:00Z' }],
+});
+
 function createSetup(options) {
   if (!options?.onboarding) return null;
   const settings = options.emptySettings ? null : {
@@ -57,6 +118,8 @@ function createSetup(options) {
     business: false,
     creative: false,
     mollie: null,
+    /** Het gekozen webadres (client_subdomain_claim); null = nog niet gekozen. */
+    subdomain: options.subdomain ?? null,
     /** Elke schrijfactie: { table, method, query, body }. */
     writes: [],
   };
@@ -105,11 +168,25 @@ function setupRpc(setup, fn, body) {
       return [{ active: setup.business, enabled: setup.business, included_in_plan: false, in_grace: false, grace_until: null, legal_form: setup.settings?.legal_form ?? 'eenmanszaak', fiscal_regime: BUSINESS_FORMS.includes(setup.settings?.legal_form) ? 'vpb' : 'ib', is_corporate: ['bv', 'nv'].includes(setup.settings?.legal_form), is_child: false, root_organization_id: seed.ids.ORG, entity_count: 1, entity_allowance: 1, addon_price_cents: 1900, addon_yearly_price_cents: 19000, entity_addon_price_cents: 900, entity_addon_yearly_price_cents: 9000, billing_interval: 'month' }];
     case 'organization_creative_status':
       return [{ active: setup.creative, enabled: setup.creative, included_in_plan: false, in_grace: false, grace_until: null, addon_price_cents: 900, addon_yearly_price_cents: 9000, billing_interval: 'month' }];
+    case 'client_subdomain_check':
+      return subdomainCheck(setup.subdomain, body);
+    case 'client_subdomain_claim': {
+      setup.writes.push({ table: 'rpc/client_subdomain_claim', method: 'POST', query: '', body });
+      if (!owner || body?.p_organization_id !== seed.ids.ORG) return fail(403, '42501', 'Alleen de eigenaar of een beheerder kan het webadres kiezen.');
+      const check = subdomainCheck(setup.subdomain, { p_name: body?.p_name });
+      if (check.status === 'own') return { name: check.name, previous: null, changed: false };
+      if (check.status === 'taken') return fail(409, '23505', `Het adres ${check.name} bestaat al. Kies een andere naam.`);
+      if (check.status !== 'available') return fail(400, '22023', check.message ?? 'Deze naam kan niet.');
+      const previous = setup.subdomain;
+      setup.subdomain = check.name;
+      return { name: check.name, previous, changed: true };
+    }
     case 'complete_organization_onboarding': {
       setup.writes.push({ table: 'rpc/complete_organization_onboarding', method: 'POST', query: '', body });
       if (!owner) return fail(403, '42501', 'Alleen de eigenaar of een beheerder kan de organisatie inrichten.');
       if (body?.p_organization_id !== seed.ids.ORG) return fail(403, '42501', 'Alleen de eigenaar of een beheerder kan de organisatie inrichten.');
       if (!String(setup.settings?.company_name ?? '').trim()) return fail(400, '23514', 'Vul eerst de naam van je bedrijf in.');
+      if (!setup.subdomain) return fail(400, '23514', 'Kies eerst het webadres voor je klanten.');
       if (!setup.completedAt) {
         setup.completedAt = new Date().toISOString();
         setup.orgName = String(body?.p_display_name || setup.settings.trade_name || setup.settings.company_name).slice(0, 120);
@@ -122,6 +199,10 @@ function setupRpc(setup, fn, body) {
 }
 
 function setupEdgeFunction(setup, name, body) {
+  if (name === 'client-domains' && body?.action === 'overview') {
+    if (body.organizationId !== seed.ids.ORG) return { __status: 403, body: { ok: false, error: 'Je hebt geen toegang tot deze organisatie.' } };
+    return clientDomainsOverview({ subdomain: setup.subdomain, allowed: setup.subscription });
+  }
   if (name === 'invoice-workflow' && body?.action === 'getInvoiceMollieStatus') {
     return { ok: true, status: setup.mollie ?? { status: 'not_connected', mode: null, key_suffix: null, connected_at: null, last_validated_at: null, profile: null } };
   }
@@ -274,9 +355,12 @@ function chatWrite(table, method, url, body) {
   return [];
 }
 
-function rpc(fn) {
+function rpc(fn, body = null) {
   switch (fn) {
     case 'ensure_user_default_organization': return null;
+    // Instellingen → Domein: de werkruimte heeft al een adres.
+    case 'client_subdomain_check': return subdomainCheck(WORKSPACE_OVERVIEW.subdomain.name, body);
+    case 'client_subdomain_claim': return { name: String(body?.p_name ?? ''), previous: WORKSPACE_OVERVIEW.subdomain.name, changed: true };
     // Het eigen inlogadres van het portaal (Instellingen → Huisstijl, een klant).
     case 'ensure_portal_login_key': return pub.PORTAL_LOGIN_KEY;
     case 'organization_license_usage': return [{ organization_id: seed.ids.ORG, licensed_seats: 3, active_members: 2, pending_invitations: 0, used_seats: 2, available_seats: 1, license_status: 'active', billing_exempt: false }];
@@ -306,6 +390,15 @@ function edgeFunction(name, body) {
     return { ok: true, connections: [], sources: [seed.calendarSource], calendars: [seed.calendarSource], events: [], attendees: [], links: [], slots: [], ics: [] };
   }
   if (name === 'meeting-booking') return { ok: true, links: [], slots: [], bookings: [], link: null };
+  if (name === 'client-domains') {
+    switch (body?.action) {
+      case 'overview': return WORKSPACE_OVERVIEW;
+      case 'refreshDomain': return { ok: true, domain: WORKSPACE_DOMAIN };
+      case 'addDomain': return { ok: true, domain: { ...WORKSPACE_DOMAIN, hostname: String(body.hostname ?? '') } };
+      case 'removeDomain': return { ok: true, removed: true };
+      default: return { ok: false, error: `Onbekende actie: ${body?.action}` };
+    }
+  }
   // Publieke klantpagina's en het portaal.
   if (name === 'quote-public') return pub.quotePublic;
   if (name === 'invoice-public') return pub.invoicePublic;
@@ -368,7 +461,8 @@ export async function installMock(context, options = {}) {
         const result = setupRpc(setup, fn, body);
         if (result !== undefined) return reply(route, result);
       }
-      return json(route, rpc(fn));
+      let rpcBody = null; try { rpcBody = req.postDataJSON(); } catch { /* geen json-body */ }
+      return json(route, rpc(fn, rpcBody));
     }
     if (p.startsWith('/rest/v1/')) {
       const table = p.slice('/rest/v1/'.length);

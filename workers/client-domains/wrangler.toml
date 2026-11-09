@@ -1,0 +1,50 @@
+name = "resofly-client-domains"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+# De klantadressen: jansen.resofly.com en eigen domeinen als portaal.jansen.nl
+# (migratie 20261108230000). Inrichten: docs/setup/KLANTDOMEINEN_SETUP.md.
+#
+# Secret (via `wrangler secret put CLIENT_DOMAINS_WORKER_SECRET --env staging`,
+# NIET hier): moet gelijk zijn aan het Supabase-secret met dezelfde naam. Daarmee
+# vraagt de Worker aan de edge function client-domains wat er bij een hostnaam
+# hoort.
+#
+# Routes (pas na de DNS, zie de setup):
+#   *.resofly.com/*  → deze Worker, plus een route ZONDER Worker voor elk adres
+#                      van ResoFly zelf (staging.resofly.com/* enzovoort). Wat
+#                      hier toch binnenkomt staat in PASSTHROUGH_HOSTS en gaat
+#                      ongewijzigd door.
+#   */*              → alleen als Cloudflare for SaaS (eigen domeinen) aanstaat.
+
+[vars]
+APP_ORIGIN = "https://resofly.pages.dev"
+SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
+CLIENT_DOMAIN_BASE = "resofly.com"
+PASSTHROUGH_HOSTS = "resofly.com,www.resofly.com,app.resofly.com,caldav.resofly.com,inbound.resofly.com,media.resofly.com"
+
+# ---- staging ----
+[env.staging]
+name = "resofly-client-domains-staging"
+
+[env.staging.vars]
+# De staging-build van Pages (branch staging).
+APP_ORIGIN = "https://staging.resofly.pages.dev"
+SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
+CLIENT_DOMAIN_BASE = "resofly.com"
+PASSTHROUGH_HOSTS = "resofly.com,www.resofly.com,staging.resofly.com,caldav.resofly.com,caldav.staging.resofly.com,inbound.resofly.com,media.resofly.com"
+
+# Na de DNS (een proxied wildcard-record *.resofly.com):
+# [[env.staging.routes]]
+# pattern = "*.resofly.com/*"
+# zone_name = "resofly.com"
+
+# ---- production ----
+[env.production]
+name = "resofly-client-domains"
+
+[env.production.vars]
+APP_ORIGIN = "https://resofly.pages.dev"
+SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
+CLIENT_DOMAIN_BASE = "resofly.com"
+PASSTHROUGH_HOSTS = "resofly.com,www.resofly.com,app.resofly.com,caldav.resofly.com,inbound.resofly.com,media.resofly.com"

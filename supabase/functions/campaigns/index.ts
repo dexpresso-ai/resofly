@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
+import { clientBaseUrl } from '../_shared/clientLinks.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailLayout, escapeHtml } from '../_shared/emailTemplates/layout.ts';
 import { loadSenderBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
@@ -590,7 +591,7 @@ async function sendTestCampaign(
   const personalized = personalizeCampaign(campaign, tokens, buildMergeFallbacks(definitions));
 
   const unsubToken = await makeUnsubscribeToken(UNSUBSCRIBE_SECRET, organizationId, recipientEmail);
-  const html = buildCampaignHtml(personalized, brandName, unsubToken);
+  const html = buildCampaignHtml(personalized, brandName, await unsubscribeLink(organizationId, unsubToken));
   const text = personalized.body_text || htmlToText(personalized.body_html);
 
   // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
@@ -926,14 +927,14 @@ async function sendToRecipient(
   fallbacks: Record<string, string> = {},
 ): Promise<void> {
   const unsubToken = await makeUnsubscribeToken(UNSUBSCRIBE_SECRET, campaign.organization_id, recipient.to_email);
-  const unsubscribeUrl = `${UNSUBSCRIBE_BASE_URL}?token=${encodeURIComponent(unsubToken)}`;
+  const unsubscribeUrl = await unsubscribeLink(campaign.organization_id, unsubToken);
 
   // Variabelen invullen voor DEZE ontvanger. Het onderwerp en de preheader gaan
   // mee: personalisatie in de onderwerpregel is waar de meeste winst zit. Body =
   // HTML dus escapen; onderwerp/preheader/platte tekst zijn geen HTML.
   const personalized = personalizeCampaign(campaign, recipient.merge_data ?? {}, fallbacks);
 
-  const html = buildCampaignHtml(personalized, brandName, unsubToken);
+  const html = buildCampaignHtml(personalized, brandName, unsubscribeUrl);
   const text = `${personalized.body_text || htmlToText(personalized.body_html)}\n\nAfmelden: ${unsubscribeUrl}`;
 
   let threadId: string | null = null;
@@ -1084,12 +1085,24 @@ function personalizeCampaign(
   );
 }
 
-function buildCampaignHtml(content: EmailContent, brandName: string, unsubToken: string): string {
-  return buildEmailHtml(content, brandName, unsubToken);
+function buildCampaignHtml(content: EmailContent, brandName: string, unsubscribeUrl: string): string {
+  return buildEmailHtml(content, brandName, unsubscribeUrl);
 }
 
-function buildEmailHtml(content: EmailContent, brandName: string, unsubToken: string): string {
-  const unsubscribeUrl = `${UNSUBSCRIBE_BASE_URL}?token=${encodeURIComponent(unsubToken)}`;
+/**
+ * De afmeldlink. Op het klantadres van de organisatie (_shared/clientLinks.ts)
+ * als dat er is: de Worker geeft /afmelden door aan email-unsubscribe, ook de
+ * one-click POST. Anders rechtstreeks naar de functie, zoals voorheen. Zo staat
+ * in een nieuwsbrief van info@jansen.nl geen adres van supabase.co.
+ */
+async function unsubscribeLink(organizationId: string, unsubToken: string): Promise<string> {
+  const base = await clientBaseUrl(supabaseAdmin, organizationId, '');
+  return base
+    ? `${base}/afmelden?token=${encodeURIComponent(unsubToken)}`
+    : `${UNSUBSCRIBE_BASE_URL}?token=${encodeURIComponent(unsubToken)}`;
+}
+
+function buildEmailHtml(content: EmailContent, brandName: string, unsubscribeUrl: string): string {
   const footerHtml = `Je ontvangt deze e-mail omdat je klant bent bij ${escapeHtml(brandName)}. <a href="${escapeHtml(unsubscribeUrl)}" style="color:#9b9ba7;text-decoration:underline;">Afmelden voor deze mails</a>.`;
   return renderEmailLayout({
     brandName,
@@ -1591,8 +1604,8 @@ async function sendFlowStep(
   }
 
   const unsubToken = await makeUnsubscribeToken(UNSUBSCRIBE_SECRET, enrollment.organization_id, enrollment.to_email);
-  const unsubscribeUrl = `${UNSUBSCRIBE_BASE_URL}?token=${encodeURIComponent(unsubToken)}`;
-  const html = buildEmailHtml(personalized, brandName, unsubToken);
+  const unsubscribeUrl = await unsubscribeLink(enrollment.organization_id, unsubToken);
+  const html = buildEmailHtml(personalized, brandName, unsubscribeUrl);
   const text = `${personalized.body_text || htmlToText(personalized.body_html)}\n\nAfmelden: ${unsubscribeUrl}`;
   const replyTo = MAIL_INBOUND_DOMAIN && clientEmailId
     ? `reply+${clientEmailId}@${MAIL_INBOUND_DOMAIN}`

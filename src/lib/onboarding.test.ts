@@ -7,37 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  bookkeepingStartSuggestions,
-  checkCompanyDraft,
-  defaultYearResultAccount,
-  finishCheck,
-  fiscalYearMustBeCalendarYear,
-  formatIban,
-  isDutchPostcode,
-  isEmailAddress,
-  isIsoDate,
-  isKvkNumber,
-  isPhoneNumber,
-  isValidIban,
-  LEGAL_FORM_GROUPS,
-  LEGAL_FORM_INFO,
-  mollieKeyMode,
-  mollieKeyProblem,
-  needsBusinessModule,
-  normalizeCompanyDraft,
-  normalizeDutchPostcode,
-  normalizeWebsite,
-  onboardingProgressKey,
-  onboardingSteps,
-  ONBOARDING_PROGRESS_PREFIX,
-  ONBOARDING_STEPS,
-  organizationDisplayName,
-  parseHourlyRateCents,
-  parseOnboardingProgress,
-  paymentTermsText,
-  reachableSteps,
-  serializeOnboardingProgress,
-  type CompanyDraft,
+  bookkeepingStartSuggestions, checkCompanyDraft, defaultYearResultAccount, finishCheck, fiscalYearMustBeCalendarYear, formatIban, isDutchPostcode, isEmailAddress, isIsoDate, isKvkNumber, isPhoneNumber, isValidIban, LEGAL_FORM_GROUPS, LEGAL_FORM_INFO, mollieKeyMode, mollieKeyProblem, needsBusinessModule, normalizeCompanyDraft, normalizeDutchPostcode, normalizeWebsite, onboardingProgressKey, onboardingSteps, ONBOARDING_PROGRESS_PREFIX, ONBOARDING_STEPS, organizationDisplayName, parseHourlyRateCents, parseOnboardingProgress, paymentTermsText, reachableSteps, resumeStep, serializeOnboardingProgress, type CompanyDraft, type OnboardingStepKey,
 } from './onboarding.ts';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS, type LegalForm } from '../types.ts';
 
@@ -338,4 +308,25 @@ test('afronden kan pas met een naam, een adres en een vastgelegde rechtsvorm', (
   assert.equal(pending.blocking[0].step, 'rechtsvorm');
   const empty = finishCheck({ companyName: '', addressLine1: null, savedLegalForm: 'eenmanszaak', pendingLegalForm: null });
   assert.deepEqual(empty.blocking.map(item => item.step), ['bedrijf', 'bedrijf']);
+});
+
+test('afronden kan pas met een webadres, als bekend is dat het er niet is', () => {
+  const base = { companyName: 'Studio', addressLine1: 'Kerkstraat 1', savedLegalForm: 'eenmanszaak' as const, pendingLegalForm: null };
+  assert.deepEqual(finishCheck({ ...base, clientSubdomain: 'studio' }).blocking, []);
+  assert.deepEqual(finishCheck({ ...base, clientSubdomain: null }).blocking.map(item => item.step), ['webadres']);
+  // Nog niet geladen (undefined): niet tegenhouden; de database controleert het bij het afronden.
+  assert.deepEqual(finishCheck(base).blocking, []);
+  // De stap staat direct na de bedrijfsgegevens.
+  const keys = ONBOARDING_STEPS.map(step => step.key);
+  assert.equal(keys.indexOf('webadres'), keys.indexOf('bedrijf') + 1);
+});
+
+test('een nieuwe stap staat vanzelf voor wie al verder was', () => {
+  const steps = onboardingSteps({ isChild: false });
+  const before = new Set<OnboardingStepKey>(['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'btw', 'huisstijl', 'facturen']);
+  assert.equal(resumeStep(steps, before, 'mollie'), 'webadres', 'wie bij Mollie zat, kiest eerst het webadres');
+  assert.equal(resumeStep(steps, new Set<OnboardingStepKey>([...before, 'webadres']), 'mollie'), 'mollie');
+  assert.equal(resumeStep(steps, new Set<OnboardingStepKey>(), 'mollie'), 'welkom');
+  assert.equal(resumeStep(steps, new Set<OnboardingStepKey>(['welkom']), 'klaar'), 'rechtsvorm');
+  assert.equal(resumeStep(steps, new Set<OnboardingStepKey>(['welkom']), 'rechtsvorm'), 'rechtsvorm');
 });

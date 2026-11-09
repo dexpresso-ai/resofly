@@ -12,6 +12,9 @@
  *      module vanzelf vastgelegd;
  *   3. verkeerde bedrijfsgegevens (KvK, postcode, IBAN, e-mail) houden de stap
  *      tegen zonder iets op te slaan; goede worden netjes opgeslagen;
+ *   3b. het webadres (2026-11-08): een voorstel uit de handelsnaam, de app zegt
+ *      of een naam al bestaat of gereserveerd is, en houdt de stap dan tegen;
+ *      typen wordt een geldige naam; de naam ligt vast voor de eigen organisatie;
  *   4. btw, huisstijl (overslaan), facturen via Mollie, en Mollie: een access
  *      token wordt geweigerd vóór hij de deur uit gaat, een test-key gekoppeld,
  *      en de key staat daarna nergens in de opslag van de browser;
@@ -21,7 +24,8 @@
  *   8. zonder bedrijfsgegevens (een verse organisatie) maakt de eerste stap ze
  *      aan, met de juiste resultaatrekening;
  *   9. een teamlid ziet het wachtscherm, een beheerder kan Mollie niet koppelen;
- *  10. een database zonder de nieuwe kolom opent gewoon de werkruimte.
+ *  10. een database zonder de nieuwe kolom opent gewoon de werkruimte;
+ *  11. zonder webadres kun je niet afronden, en "Aanpassen" brengt je erheen.
  *
  * Opties: --url=http://… (een draaiende dev-server), --shots=<map>.
  */
@@ -158,13 +162,40 @@ try {
     check(L('een script-adres als website wordt geweigerd'), await page.locator('#onb-f-website[aria-invalid="true"]').count() === 1);
     await page.fill('#onb-f-website', 'studiolopik.nl');
     await next(page).click();
-    await waitForTitle(page, /Btw en boekhouding/, L('naar btw en boekhouding'));
+    await waitForTitle(page, /Je webadres/, L('naar het webadres'));
     const company = settingsWrites(setup).at(-1)?.body ?? {};
     check(L('de bedrijfsgegevens zijn netjes opgeslagen'),
       company.postal_code === '3411 AB' && company.iban === 'NL91 ABNA 0417 1643 00' && company.kvk_number === '12345678'
       && company.vat_number === 'NL123456789B01' && company.email === 'info@studiolopik.nl' && company.website === 'https://studiolopik.nl',
       JSON.stringify(company));
     check(L('alleen de velden van deze stap'), !('legal_form' in company) && !('brand_accent_color' in company) && !('organization_id' in company));
+
+    // Het webadres: een voorstel, en meteen de vraag of het nog vrij is.
+    const address = page.locator('#onb-f-address');
+    const addressStatus = page.locator('.client-address-status');
+    const statusSays = (pattern) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('.client-address-status')?.textContent ?? ''), pattern.source, { timeout: 8000 }).then(() => true, () => false);
+    check(L('een voorstel uit de handelsnaam'), await address.inputValue() === 'studio-lopik', await address.inputValue());
+    check(L('de app zegt dat het voorstel vrij is'), await statusSays(/studio-lopik\.resofly\.com is beschikbaar/), await addressStatus.innerText());
+    await address.fill('bestaat-al');
+    check(L('een naam die al bestaat, wordt gemeld'), await statusSays(/bestaat al/), await addressStatus.innerText());
+    check(L('in het rood'), await page.locator('.client-address-field.has-error').count() === 1);
+    check(L('en dan kun je niet verder'), await next(page).isDisabled());
+    await shot(page, `${vp}-webadres-bestaat`);
+    await address.fill('www');
+    check(L('een gereserveerde naam kan niet'), await statusSays(/niet beschikbaar/), await addressStatus.innerText());
+    check(L('ook dan niet verder'), await next(page).isDisabled());
+    await address.fill('ab');
+    check(L('te kort zegt het veld meteen'), await statusSays(/minstens 3 tekens/), await addressStatus.innerText());
+    await address.fill('Studio Lopik!');
+    check(L('hoofdletters, spaties en tekens worden een geldige naam'), await address.inputValue() === 'studio-lopik', await address.inputValue());
+    check(L('en die is vrij'), await statusSays(/is beschikbaar/), await addressStatus.innerText());
+    check(L('nu kun je verder'), !(await next(page).isDisabled()));
+    check(L('nog niets vastgelegd'), !setup.writes.some(w => w.table === 'rpc/client_subdomain_claim'));
+    await shot(page, `${vp}-webadres`);
+    await next(page).click();
+    await waitForTitle(page, /Btw en boekhouding/, L('naar btw en boekhouding'));
+    const claim = setup.writes.find(w => w.table === 'rpc/client_subdomain_claim');
+    check(L('het webadres ligt vast voor de eigen organisatie'), setup.subdomain === 'studio-lopik' && claim?.body?.p_organization_id === ORG && claim?.body?.p_name === 'studio-lopik', JSON.stringify(claim?.body));
 
     await page.getByRole('button', { name: /^1 januari/ }).click();
     await page.fill('#onb-f-rate', '85,50');
@@ -203,7 +234,7 @@ try {
 
     await waitForTitle(page, /beginnen/, L('naar klaar'));
     const summary = await page.locator('.onb-summary').innerText();
-    check(L('het overzicht klopt'), /BV/.test(summary) && /Studio Lopik B\.V\./.test(summary) && /Via Mollie/.test(summary) && /Gekoppeld/.test(summary), summary.replace(/\s+/g, ' ').slice(0, 200));
+    check(L('het overzicht klopt'), /BV/.test(summary) && /Studio Lopik B\.V\./.test(summary) && /studio-lopik\.resofly\.com/.test(summary) && /Via Mollie/.test(summary) && /Gekoppeld/.test(summary), summary.replace(/\s+/g, ' ').slice(0, 260));
     await shot(page, `${vp}-klaar`);
     await next(page).click();
     await page.waitForSelector('.app', { timeout: 15000 }).catch(() => null);
@@ -267,14 +298,40 @@ try {
     await context.close();
   }
   {
-    const progress = JSON.stringify({ step: 'mollie', completed: ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'btw', 'huisstijl', 'facturen'], pendingLegalForm: null });
-    const { context, page, setup, errors } = await open(browser, { mock: { onboarding: true, role: 'admin' }, storage: { [PROGRESS_KEY]: progress } });
+    const progress = JSON.stringify({ step: 'mollie', completed: ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen'], pendingLegalForm: null });
+    const { context, page, setup, errors } = await open(browser, { mock: { onboarding: true, role: 'admin', subdomain: 'studio-lopik' }, storage: { [PROGRESS_KEY]: progress } });
     await page.waitForSelector('.onb', { timeout: 20000 });
     await waitForTitle(page, /Mollie koppelen/, 'beheerder: opent bij Mollie');
     check('beheerder: geen veld voor de key', await page.locator('#onb-f-mollie').count() === 0);
     check('beheerder: uitleg dat alleen de eigenaar koppelt', /Alleen de eigenaar/.test(await page.locator('.onb-body').innerText()));
     check('beheerder: niets naar de server', !setup.writes.some(w => w.table === 'fn/saveInvoiceMollieKey'));
     check('beheerder: geen JavaScript-fouten', errors.length === 0, errors[0]);
+    await context.close();
+  }
+
+  // ── 11: zonder webadres niet afronden ─────────────────────────────────────
+  {
+    // Halverwege van vóór de stap Webadres: verder bij die stap, niet bij Welkom.
+    const before = JSON.stringify({ step: 'mollie', completed: ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'btw', 'huisstijl', 'facturen'], pendingLegalForm: null });
+    const { context, page, errors } = await open(browser, { storage: { [PROGRESS_KEY]: before } });
+    await page.waitForSelector('.onb', { timeout: 20000 });
+    await waitForTitle(page, /Je webadres/, 'halverwege van vóór de nieuwe stap: verder bij Je webadres');
+    check('halverwege: geen JavaScript-fouten', errors.length === 0, errors[0]);
+    await context.close();
+  }
+  {
+    // De browser denkt dat de stap gedaan is, maar er ligt geen naam vast.
+    const progress = JSON.stringify({ step: 'klaar', completed: ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen', 'mollie'], pendingLegalForm: null });
+    const { context, page, setup, errors } = await open(browser, { storage: { [PROGRESS_KEY]: progress } });
+    await page.waitForSelector('.onb', { timeout: 20000 });
+    await waitForTitle(page, /Nog even dit/, 'geen webadres: het laatste scherm houdt tegen');
+    check('geen webadres: dat staat er', /Kies nog het webadres/.test(await page.locator('.onb-body').innerText()));
+    check('geen webadres: afronden kan niet', await next(page).isDisabled());
+    check('geen webadres: niets afgerond', !setup.writes.some(w => w.table === 'rpc/complete_organization_onboarding'));
+    await shot(page, 'geen-webadres');
+    await page.locator('.onb-notice', { hasText: 'Kies nog het webadres' }).getByRole('button', { name: 'Aanpassen' }).click();
+    await waitForTitle(page, /Je webadres/, 'geen webadres: Aanpassen opent de stap');
+    check('geen webadres: geen JavaScript-fouten', errors.length === 0, errors[0]);
     await context.close();
   }
 

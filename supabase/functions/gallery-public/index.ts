@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { clientOriginMismatch, clientOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { loadBranding } from '../_shared/branding.ts';
 import { normalizeGalleryLayout } from '../_shared/galleryLayout.ts';
@@ -86,6 +87,10 @@ type GalleryRow = {
 };
 
 serve(async (req) => {
+  // Van een klantadres (jansen.resofly.com, portaal.jansen.nl)? Eén keer
+  // opzoeken; CORS en de controle of de link bij dat adres hoort, lezen het
+  // daarna (_shared/clientLinks.ts).
+  await rememberClientOrigin(supabaseAdmin, req);
   if (req.method === 'OPTIONS') return json(req, { ok: true });
 
   try {
@@ -94,6 +99,15 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const action = String(body.action || 'getGallery');
+    // Een album van een andere organisatie opent niet op dit klantadres:
+    // zelfde antwoord als een onbekende link.
+    if (clientOriginOf(req)) {
+      const token = String(body.token || '').trim();
+      const { data: owner } = token
+        ? await supabaseAdmin.from('galleries').select('organization_id').eq('share_token_hash', await sha256Hex(token)).maybeSingle()
+        : { data: null };
+      if (clientOriginMismatch(req, owner?.organization_id as string | undefined)) throw new PublicError('Ongeldige galerijlink.', 404);
+    }
     const visitor = clientAddress(req);
 
     switch (action) {
@@ -416,13 +430,14 @@ function assertAllowedOrigin(req: Request) {
   // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
   if (origin === 'null') throw new PublicError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin) return;
+  if (clientOriginOf(req)) return;
   if (allowedOrigins.includes(origin)) return;
   throw new PublicError('Deze frontend-origin is niet toegestaan voor de galerij.', 403);
 }
 
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
-  const allowOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins.length === 0 ? '*' : '';
+  const allowOrigin = clientOriginOf(req) || allowedOrigins.includes(origin) ? origin : allowedOrigins.length === 0 ? '*' : '';
   return {
     ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',

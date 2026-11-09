@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { clientOriginMismatch, clientOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { loadBranding } from '../_shared/branding.ts';
 import { toPublicTimeline } from '../_shared/publicTimeline.ts';
@@ -70,6 +71,10 @@ function describeError(error: unknown): string {
 }
 
 serve(async (req) => {
+  // Van een klantadres (jansen.resofly.com, portaal.jansen.nl)? Eén keer
+  // opzoeken; CORS en de controle of de link bij dat adres hoort, lezen het
+  // daarna (_shared/clientLinks.ts).
+  await rememberClientOrigin(supabaseAdmin, req);
   if (req.method === 'OPTIONS') return json(req, { ok: true });
   try {
     assertAllowedOrigin(req);
@@ -81,6 +86,12 @@ serve(async (req) => {
     const token = String(body.token || '').trim();
     if (!token || token.length < 24) throw new PublicHttpError('Offertelink ontbreekt of is ongeldig.', 400);
     const tokenHash = await sha256Hex(token);
+    // Een offerte van een andere organisatie opent niet op dit klantadres:
+    // zelfde antwoord als een onbekende link.
+    if (clientOriginOf(req)) {
+      const { data: owner } = await supabaseAdmin.from('quotes').select('organization_id').eq('public_token_hash', tokenHash).maybeSingle();
+      if (clientOriginMismatch(req, owner?.organization_id as string | undefined)) throw new PublicHttpError('Offertelink is ongeldig of verlopen.', 404);
+    }
 
     switch (action) {
       case 'getQuote': return json(req, { ok: true, ...(await getPublicQuote(tokenHash)) });
@@ -285,7 +296,7 @@ function requiredEnv(name: string): string {
 
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
-  const allowOrigin = QUOTE_PUBLIC_ALLOWED_ORIGINS.includes(origin) || (QUOTE_ALLOW_LOCAL_DEV && isLocalOrigin(origin))
+  const allowOrigin = clientOriginOf(req) || QUOTE_PUBLIC_ALLOWED_ORIGINS.includes(origin) || (QUOTE_ALLOW_LOCAL_DEV && isLocalOrigin(origin))
     ? origin
     : (QUOTE_ALLOW_LOCAL_DEV && !origin ? '*' : '');
   return {
@@ -307,6 +318,7 @@ function assertAllowedOrigin(req: Request): void {
   const origin = req.headers.get('origin') || '';
   // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
   if (origin === 'null') throw new PublicHttpError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
+  if (clientOriginOf(req)) return;
   if (!origin && QUOTE_ALLOW_LOCAL_DEV) return;
   if (QUOTE_PUBLIC_ALLOWED_ORIGINS.includes(origin)) return;
   if (QUOTE_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) return;

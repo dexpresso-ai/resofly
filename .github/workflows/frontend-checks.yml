@@ -100,6 +100,7 @@ jobs:
             supabase/functions/billing/index.ts \
             supabase/functions/calendar-integrations/index.ts \
             supabase/functions/campaigns/index.ts \
+            supabase/functions/client-domains/index.ts \
             supabase/functions/contract-public/index.ts \
             supabase/functions/contract-workflow/index.ts \
             supabase/functions/corporate-tax/index.ts \

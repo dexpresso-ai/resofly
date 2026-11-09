@@ -13,6 +13,7 @@
 // ============================================================
 
 import { supabaseAdmin } from '../_shared/calendarCore.ts';
+import { clientOriginMismatch, clientOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
 import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { listEvents } from '../_shared/calendarAvailability.ts';
 import { createEvent } from '../_shared/calendarEventWrite.ts';
@@ -52,6 +53,10 @@ type LinkRow = {
 };
 
 Deno.serve(async (req) => {
+  // Van een klantadres (jansen.resofly.com, portaal.jansen.nl)? Eén keer
+  // opzoeken; CORS en de controle of de link bij dat adres hoort, lezen het
+  // daarna (_shared/clientLinks.ts).
+  await rememberClientOrigin(supabaseAdmin, req);
   if (req.method === 'OPTIONS') return json({ ok: true });
   try {
     if (req.method !== 'POST') return json({ ok: false, error: 'Method not allowed' }, 405);
@@ -60,6 +65,12 @@ Deno.serve(async (req) => {
     const token = String(body.token || '').trim();
     if (!token || token.length < 16) return json({ ok: false, error: 'Boekingslink ontbreekt of is ongeldig.' }, 400);
     const tokenHash = await sha256Hex(token);
+    // Een boekingslink van een andere organisatie opent niet op dit klantadres:
+    // zelfde antwoord als een onbekende link.
+    if (clientOriginOf(req)) {
+      const { data: owner } = await supabaseAdmin.from('meeting_booking_links').select('organization_id').eq('public_token_hash', tokenHash).maybeSingle();
+      if (clientOriginMismatch(req, owner?.organization_id as string | undefined)) return json({ ok: false, error: 'Deze boekingslink is niet (meer) geldig.' }, 404);
+    }
 
     switch (action) {
       case 'getLink': return json({ ok: true, ...(await getPublicLink(tokenHash)) });

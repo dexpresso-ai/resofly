@@ -30,6 +30,7 @@ import { createAdminClient, HttpError } from '../_shared/edgeAuth.ts';
 import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
 import { loadPortalLoginKey } from '../_shared/portalAddress.ts';
+import { portalLinkBase } from '../_shared/clientLinks.ts';
 import { emailBrandFromRow, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 import { PORTAL_TICKET_TEMPLATE_KEYS } from '../_shared/emailTemplates/portalTicketUpdate.ts';
@@ -92,6 +93,8 @@ type NoteRow = {
 
 type OrgContext = {
   enabled: boolean;
+  /** Waar de links naar het portaal heen gaan: het klantadres van de organisatie, of PORTAL_BASE_URL. */
+  portalBase: string;
   companyName: string;
   accentColor: string;
   footerText: string | null;
@@ -379,8 +382,8 @@ function emailInput(
       }
       : null,
     replies,
-    ticketUrl: portalTicketUrl(PORTAL_BASE_URL, client.id, ticket.id, org.portalLoginKey),
-    settingsUrl: portalSettingsUrl(PORTAL_BASE_URL, client.id, org.portalLoginKey),
+    ticketUrl: portalTicketUrl(org.portalBase, client.id, ticket.id, org.portalLoginKey),
+    settingsUrl: portalSettingsUrl(org.portalBase, client.id, org.portalLoginKey),
     clientName: String(client.name ?? '').trim() || null,
     content: org.texts,
   };
@@ -413,9 +416,13 @@ async function loadOrgContext(organizationId: string, cache: Map<string, OrgCont
   const texts = await loadTicketEmailTexts(organizationId);
   // De klant klikt door naar het portaal: dan meteen het inlogscherm in de
   // huisstijl van deze organisatie, ook als hij er nog nooit was.
-  const portalLoginKey = await loadPortalLoginKey(admin, organizationId);
+  // Op het klantadres van de organisatie (_shared/clientLinks.ts) is het eigen
+  // inlogadres overbodig: het adres zegt al van wie het portaal is.
+  const portal = await portalLinkBase(admin, organizationId, PORTAL_BASE_URL);
+  const portalLoginKey = portal.onClientHost ? null : await loadPortalLoginKey(admin, organizationId);
   const context: OrgContext = {
     enabled: setting?.ticket_emails_enabled !== false,
+    portalBase: portal.base,
     companyName,
     accentColor: branding.accentColor,
     footerText: branding.footerText ? String(branding.footerText).slice(0, 300) : null,

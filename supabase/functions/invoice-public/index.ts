@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { clientOriginMismatch, clientOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { sanitizeBranding } from '../_shared/branding.ts';
 import { toPublicTimeline } from '../_shared/publicTimeline.ts';
@@ -62,6 +63,10 @@ function describeError(error: unknown): string {
 }
 
 serve(async (req) => {
+  // Van een klantadres (jansen.resofly.com, portaal.jansen.nl)? Eén keer
+  // opzoeken; CORS en de controle of de link bij dat adres hoort, lezen het
+  // daarna (_shared/clientLinks.ts).
+  await rememberClientOrigin(supabaseAdmin, req);
   if (req.method === 'OPTIONS') return json(req, { ok: true });
 
   try {
@@ -74,6 +79,13 @@ serve(async (req) => {
     const mockPaymentId = String(body.mockPaymentId || body.mock_payment || '').trim();
 
     if (!token) throw new PublicInvoiceError('Factuurlink ontbreekt.', 400);
+    // Een factuur van een andere organisatie opent niet op dit klantadres:
+    // zelfde antwoord als een onbekende link. Zonder p_touch: dit is geen bezoek.
+    if (clientOriginOf(req)) {
+      const { data: owner } = await supabaseAdmin.rpc('resolve_invoice_public_link', { p_token: token, p_touch: false });
+      const row = (Array.isArray(owner) ? owner[0] : owner) as { organization_id?: string } | null;
+      if (clientOriginMismatch(req, row?.organization_id)) throw new PublicInvoiceError('Deze factuurlink is ongeldig of verlopen.', 404);
+    }
     if (action === 'getInvoicePdf') {
       return json(req, { ok: true, ...(await getInvoicePdf(token)) });
     }
@@ -511,6 +523,7 @@ function assertAllowedOrigin(req: Request) {
   // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
   if (origin === 'null') throw new PublicInvoiceError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin) return;
+  if (clientOriginOf(req)) return;
   if (allowedOrigins.includes(origin)) return;
   throw new PublicInvoiceError('Deze frontend-origin is niet toegestaan voor publieke factuurpagina.', 403);
 }
@@ -519,7 +532,7 @@ function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
   // Alleen een toegestane webherkomst krijgt de header. Een andere site leest
   // dan niets mee — ook de foutmelding niet (voorheen viel dit terug op *).
-  const allowOrigin = /^https?:\/\//.test(origin) && allowedOrigins.includes(origin) ? origin : '';
+  const allowOrigin = clientOriginOf(req) || (/^https?:\/\//.test(origin) && allowedOrigins.includes(origin)) ? origin : '';
   return {
     ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',

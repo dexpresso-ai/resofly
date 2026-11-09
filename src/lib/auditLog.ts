@@ -90,6 +90,7 @@ export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   member: null, organization: null,
   api_key: 'admin', webhook_endpoint: 'admin', invitation: 'admin', calendar_connection: 'admin', mollie_connection: 'admin', subscription: 'admin',
   billing_profile: 'admin', billing_event: 'admin', payment: 'admin', license_change: 'admin', license_event: 'admin', email_template: 'admin',
+  client_subdomain: 'admin', client_domain: 'admin',
   annual_account: 'finance', annual_account_filing: 'finance', annual_account_signature: 'finance', bank_account: 'finance',
   bank_rule: 'finance', bank_transaction: 'finance', company_settings: 'finance', contract: 'finance', contract_note: 'finance', contract_project: 'finance',
   contract_template: 'finance', corporate_tax_return: 'finance', credit_note: 'finance', dividend_distribution: 'finance',
@@ -468,6 +469,7 @@ const NOUN: Record<string, string> = {
   member: 'teamlid', invitation: 'uitnodiging voor', api_key: 'API-sleutel', webhook_endpoint: 'webhook',
   mollie_connection: 'Mollie-koppeling', subscription: 'abonnement', billing_profile: 'abonnement', payment: 'betaling',
   billing_event: 'abonnementsgebeurtenis', license_change: 'licentiewijziging', license_event: 'licentie',
+  client_subdomain: 'webadres', client_domain: 'eigen domein',
 };
 
 const EMAIL_TEMPLATE_LABEL: Record<string, string> = {
@@ -582,6 +584,27 @@ export function sentence(e: AuditEntry, lookup: AuditLookup = {}): { parts: Sent
     case 'business_module_enabled': return { parts: [t('zette de zakelijke module aan')] };
     case 'business_module_disabled': return { parts: [t('zette de zakelijke module uit')] };
     case 'entity_created': return { parts: [t('maakte administratie '), b(name), t(' aan')] };
+  }
+
+  // Een eigen domein (client-domains): de gebeurtenis staat in de metadata,
+  // want audit_logs.action kent alleen een vaste lijst.
+  if (e.entityType === 'client_domain') {
+    switch (metaText('event')) {
+      case 'added': return { parts: [t('koppelde eigen domein '), b(name)] };
+      case 'active': return { parts: [t('Eigen domein '), b(name), t(' is actief')], subjectless: true };
+      case 'failing': return { parts: [t('Eigen domein '), b(name), t(' werkt niet meer')], subjectless: true };
+      case 'moved': return { parts: [t('ontkoppelde eigen domein '), b(name), t('; oude links sturen nog een jaar door')] };
+      case 'removed': return { parts: [t('haalde eigen domein '), b(name), t(' weg')] };
+      case 'taken_over': return { parts: [t('Eigen domein '), b(name), t(' werd nooit actief en is door een andere organisatie gekoppeld')], subjectless: true };
+    }
+  }
+  // Het webadres (client_subdomains, via de trigger). De trigger bewaart alleen
+  // welke kolom veranderde, niet de waarde: een wijziging blijft dus
+  // "wijzigde webadres …" (wisselen of terugnemen).
+  if (e.entityType === 'client_subdomain') {
+    if (e.action === 'created') return { parts: [t('koos webadres '), b(name)] };
+    // Weggehaald na de doorstuurtijd (de nachtelijke ronde, of wie de naam daarna kiest).
+    if (e.action === 'deleted') return { parts: [t('Het oude webadres '), b(name), t(' is weer vrij')], subjectless: true };
   }
 
   // Wat de tabel zelf zegt (aangemaakt, gewijzigd, verwijderd).

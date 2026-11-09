@@ -8,6 +8,7 @@ import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/types.ts';
 import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
 import { loadPortalLoginKey, portalLoginUrl } from '../_shared/portalAddress.ts';
+import { clientBaseUrl, portalLinkBase } from '../_shared/clientLinks.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 
 // ============================================================
@@ -263,7 +264,7 @@ async function shareWithOne(input: {
     share = data as ShareRow;
   }
 
-  const url = buildShareUrl(share, token, await portalLoginKeyFor(share));
+  const url = await buildShareUrl(share, token, await portalLoginKeyFor(share));
   let notified = false;
   let notifyError: string | null = null;
   if (input.notify) {
@@ -321,7 +322,7 @@ async function resendNotice(
   }
 
   const context = await resolveItemContext(organizationId, share.item_type, share.item_id).catch(() => null);
-  const url = buildShareUrl(share, token, await portalLoginKeyFor(share));
+  const url = await buildShareUrl(share, token, await portalLoginKeyFor(share));
   const outcome = await sendShareEmail({
     share, url,
     company: await loadCompany(organizationId),
@@ -400,13 +401,19 @@ async function portalLoginKeyFor(share: ShareRow): Promise<string | null> {
  *  - collega        → de app zelf
  *  - deellink       → de publieke pagina met de token in de URL
  */
-function buildShareUrl(share: ShareRow, token: string | null, portalLoginKey: string | null): string {
-  const base = APP_PUBLIC_URL;
+async function buildShareUrl(share: ShareRow, token: string | null, portalLoginKey: string | null): Promise<string> {
+  // Een collega gaat naar de werkruimte, nooit naar een klantadres.
+  if (share.recipient_kind !== 'link' && share.recipient_kind !== 'contact' && share.recipient_kind !== 'client') return `${APP_PUBLIC_URL}/`;
+  // Een deellink naar het klantadres van de organisatie als dat er is, ook een
+  // eigen domein (_shared/clientLinks.ts): het token hoort bij deze organisatie.
   if (share.recipient_kind === 'link') {
+    const base = await clientBaseUrl(admin, share.organization_id, APP_PUBLIC_URL);
     return token ? `${base}/gedeeld/${encodeURIComponent(token)}` : `${base}/gedeeld`;
   }
-  if (share.recipient_kind === 'contact' || share.recipient_kind === 'client') return portalLoginUrl(base, portalLoginKey);
-  return `${base}/`;
+  // Het portaal op de naam bij ResoFly (nooit een eigen domein); daar is het
+  // eigen inlogadres overbodig.
+  const { base, onClientHost } = await portalLinkBase(admin, share.organization_id, APP_PUBLIC_URL);
+  return portalLoginUrl(base, onClientHost ? null : portalLoginKey);
 }
 
 function parseRecipients(raw: unknown): Recipient[] {

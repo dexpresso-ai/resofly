@@ -165,6 +165,7 @@ import { PublicTransferPage } from './features/PublicTransferPage';
 import { GalleryTab } from './features/ProjectGallery';
 import { Contracts } from './features/Contracts';
 import { ClientPortal, PortalPreview } from './features/portal/ClientPortal';
+import { clientHostInfo, portalRedirectTarget } from './lib/clientHost';
 import { PORTAL_PREVIEW_PATH } from './lib/portalPreview';
 import { Archive, Settings, type SettingsTab } from './features/SimplePages';
 import { ProjectTemplatePicker } from './features/ProjectTemplates';
@@ -635,6 +636,11 @@ function isClientPortalRoute(): boolean {
   return window.location.pathname === '/portal' || window.location.pathname.startsWith('/portal/');
 }
 
+// Op een klantadres (jansen.resofly.com, portaal.jansen.nl) is de voordeur het
+// portaal: een klant die het adres intypt, hoort niet op het inlogscherm van de
+// werkruimte te landen. De Worker laat daar alleen klantpaden door; dit is de
+// tweede laag, voor een pad dat de app zelf kiest (history.pushState).
+
 /** Het voorbeeld van het portaal bij Instellingen → Huisstijl (in een iframe). */
 function isPortalPreviewRoute(): boolean {
   return window.location.pathname.replace(/\/+$/, '') === PORTAL_PREVIEW_PATH;
@@ -934,7 +940,13 @@ function App() {
   const publicGalleryToken = getPublicGalleryTokenFromLocation();
   const publicShareToken = getPublicShareTokenFromLocation();
   const publicTransferToken = getPublicTransferTokenFromLocation();
-  const portalRoute = isClientPortalRoute();
+  const clientHost = clientHostInfo();
+  const onClientHost = clientHost !== null;
+  const portalRoute = isClientPortalRoute() || (onClientHost && window.location.pathname === '/');
+  // Op een eigen domein woont het portaal niet: daar hoort geen sessie van een
+  // klant (lib/clientHost.ts). De Worker stuurt al door; dit is de tweede laag.
+  const portalElsewhere = portalRedirectTarget(clientHost, window.location);
+  useEffect(() => { if (portalElsewhere) window.location.replace(portalElsewhere); }, [portalElsewhere]);
   // Koppelverzoek van een externe AI (/mcp/authorize?request=…). Anders dan de
   // publieke routes hierboven vereist deze juist een INGELOGDE gebruiker: hij
   // geeft namens zichzelf toestemming. De afhandeling staat daarom verderop,
@@ -1569,8 +1581,9 @@ function App() {
   useEffect(() => {
     // Op /portal draait de medewerkers-auth niet: het klantportaal heeft een eigen
     // Supabase-client en sessie. Zo blijft de medewerkers-sessie ongemoeid en wordt
-    // er geen werkruimte voor een klant-account geladen.
-    if (portalRoute) { setSessionReady(true); return; }
+    // er geen werkruimte voor een klant-account geladen. Op een klantadres ook
+    // niet op de klantpagina's: daar is nooit een werkruimte.
+    if (portalRoute || onClientHost) { setSessionReady(true); return; }
     let active = true;
 
     async function applySession(session: { user: { id: string } } | null) {
@@ -1687,7 +1700,8 @@ function App() {
     }
   }
 
-  if (portalRoute) return isPortalPreviewRoute() ? <PortalPreview /> : <ClientPortal />;
+  if (portalElsewhere) return <BootLoading message="Even doorsturen…" />;
+  if (portalRoute) return !onClientHost && isPortalPreviewRoute() ? <PortalPreview /> : <ClientPortal />;
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
   if (publicQuoteToken) return <PublicQuotePage token={publicQuoteToken} />;
   if (publicInvoiceToken) return <PublicInvoicePage token={publicInvoiceToken} />;
@@ -1696,6 +1710,8 @@ function App() {
   if (publicGalleryToken) return <PublicGalleryPage token={publicGalleryToken} />;
   if (publicShareToken) return <PublicSharePage token={publicShareToken} />;
   if (publicTransferToken) return <PublicTransferPage token={publicTransferToken} />;
+  // Nooit de werkruimte of het inlogscherm van een teamlid op een klantadres.
+  if (onClientHost) return <ClientPortal />;
   if (!sessionReady) return <BootLoading />;
   if (!loggedIn) return <Login />;
   // Zolang de werkruimte nog wordt geladen weten we nog niet of er een organisatie

@@ -1,5 +1,21 @@
 # Plan: eigen subdomein voor alles wat je klant ziet (2026-11-08)
 
+> **Stand op 9 november 2026: gebouwd.** Zie `docs/changelog/CHANGELOG_KLANTDOMEINEN_2026-11-09.md`
+> en, voor het inrichten, `docs/setup/KLANTDOMEINEN_SETUP.md`. Afwijkingen van dit plan:
+>
+> - **Elke organisatie kiest bij het inrichten een webadres** `<naam>.resofly.com` (de vraag
+>   bij de bouw). Dat was fase 4; het is nu de basis, met een live controle of de naam bestaat.
+> - **Het klantportaal komt niet op het eigen domein** (anders dan fase 2). De sessie van een
+>   klant geldt bij al zijn leveranciers, en de DNS van een eigen domein beheert de organisatie
+>   zelf: met een andere server erachter kon ze die sessie uitlezen. Het portaal woont op de naam
+>   bij ResoFly; het eigen domein is voor documenten met een link.
+> - **Een eigen domein vraagt twee records**: naast het CNAME-record het TXT-record van díe
+>   koppeling. Zonder kon een andere organisatie een vergeten record overnemen (§6 punt 6).
+> - Het CNAME-doel is instelbaar (`CLIENT_DOMAIN_CNAME_TARGET`); de setup raadt een aparte zone
+>   aan, zoals hier in §4.3. Het tabblad heet *Domein*; de code staat in
+>   `src/features/ClientDomainSettings.tsx` en `src/services/domainService.ts`.
+> - Niet gebouwd: media onder `/m/` op het klantadres en het voorbeeld met albumcover (fase 3).
+
 Vraag: *Gebruikers (klanten van ResoFly) moeten gebruik kunnen maken van een eigen subdomein
 om te communiceren naar klanten, opleveren albums, mails, klantportalen, etc. Kun je hier een
 mooi idee voor maken hoe we dit dienen te realiseren.*

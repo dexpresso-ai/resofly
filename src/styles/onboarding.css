@@ -386,7 +386,10 @@
 
 /* Telefoon: de stappen als kop, Terug en Volgende onderaan in beeld. */
 @media (max-width:760px){
-  .onb{grid-template-columns:minmax(0,1fr)}
+  /* De kop zo hoog als hij is, de stap neemt de rest. Zonder rijen verdeelde
+     het raster de lege ruimte van een korte stap (Je webadres) over beide, en
+     rekte de kop 60px op. */
+  .onb{grid-template-columns:minmax(0,1fr);grid-template-rows:auto 1fr}
   /* Eén kop: het merk met Uitloggen ernaast, dan de voortgang en de
      bolletjes. De voet van de balk lost op in dit rooster (display:contents),
      zodat Uitloggen geen eigen rij kost. */
@@ -456,3 +459,13 @@
   .onb-head,.onb-body,.onb-route-card,.onb-step.is-current .onb-step-dot{animation:none}
   .onb-choice,.onb-summary-row{transition:none}
 }
+
+/* ── Je webadres ──────────────────────────────────────────────────────────
+ * De stap na de bedrijfsgegevens: de naam, en eronder hoe je klant het adres
+ * in de adresbalk ziet. */
+.onb-address{gap:12px}
+.onb-address-label{font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.onb-address-preview{display:flex;align-items:center;gap:8px;min-width:0;padding:9px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface-2,var(--bg3));font-family:var(--font-mono);font-size:12.5px;color:var(--ink-3)}
+.onb-address-lock{display:flex;color:var(--ok)}
+.onb-address-url{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.onb-address-url strong{color:var(--ink);font-weight:600}

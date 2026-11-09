@@ -13,6 +13,9 @@
 #   - portal-notify (klantmeldingen) op dezelfde manier: zonder secret 401, met
 #     het secret uit de taak 'portal-notify-drain' 200. Een 500 met "ontbreekt"
 #     betekent dat RESEND_API_KEY/RESEND_FROM_EMAIL of APP_PUBLIC_URL er niet staat.
+#   - client-domains (klantadressen): de opzoeking voor de Worker zonder het
+#     goede geheim (401) en de nachtelijke ronde zonder cron-secret (401); met
+#     het secret uit de taak 'client-domains-recheck' 200;
 #   - het boekhouder-hek: geen organisatietabel zonder module gate én zonder hek
 #     (public.accountant_fence_gaps() is leeg). Ook alleen met SUPABASE_DB_PASSWORD.
 #   - de secrets voor Mollie: MOLLIE_TOKEN_ENCRYPTION_KEY (de eigen Mollie-key
@@ -49,6 +52,11 @@ check() {
 check "api antwoordt met zijn beschrijving" 200 '"name":"ResoFly API"' "$base/api/v1"
 check "api weigert /v1/me zonder sleutel" 401 '"unauthorized"' "$base/api/v1/me"
 check "webhooks weigert de bezorger zonder cron-secret" 401 'cron-secret' -X POST "$base/webhooks?cron=dispatch"
+# Klantadressen (migratie 20261108230000): zonder het geheim van de Worker
+# geeft de opzoeking niets prijs, en de nachtelijke ronde draait niet.
+check "client-domains weigert de opzoeking zonder het geheim van de Worker" 401 'Geen toegang' \
+  -X POST "$base/client-domains" -H 'x-client-domains-secret: rooktest' -H 'Content-Type: application/json' --data '{"host":"rooktest.resofly.com"}'
+check "client-domains weigert de nachtelijke ronde zonder cron-secret" 401 'cron-secret' -X POST "$base/client-domains?cron=recheck"
 
 if [ -n "${SUPABASE_DB_PASSWORD:-}" ] && command -v psql >/dev/null; then
   pooler="${SUPABASE_POOLER_URL:-$(cat supabase/.temp/pooler-url)}"
@@ -82,6 +90,22 @@ SQL
       -X POST "$base/portal-notify?cron=drain" -H "x-cron-secret: $notify_secret" -H 'Content-Type: application/json' --data '{}'
   else
     echo "-      klantmeldingen (portal-notify): overgeslagen (nog geen cron-taak 'portal-notify-drain')"
+  fi
+
+  # Klantadressen: de nachtelijke ronde met het secret uit de taak.
+  domains_secret="$(PGPASSWORD="$SUPABASE_DB_PASSWORD" PGSSLMODE="${PGSSLMODE:-require}" PGCONNECT_TIMEOUT=20 \
+    psql "$pooler" -X -q -t -A -v ON_ERROR_STOP=1 <<'SQL'
+select case when to_regclass('cron.job') is null then ''
+            else coalesce((select substring(command from 'x-cron-secret'', ''([^'']*)''')
+                             from cron.job where jobname = 'client-domains-recheck'), '') end;
+SQL
+)"
+  if [ -n "$domains_secret" ]; then
+    mask "$domains_secret"
+    check "client-domains draait de nachtelijke ronde met het secret uit de cron-taak" 200 '"ok":true' \
+      -X POST "$base/client-domains?cron=recheck" -H "x-cron-secret: $domains_secret" -H 'Content-Type: application/json' --data '{}'
+  else
+    echo "-      klantadressen (client-domains): nachtelijke ronde overgeslagen (nog geen cron-taak 'client-domains-recheck')"
   fi
 
   # Boekhouder-hek (migratie 20261011000000): elke organisatietabel heeft een

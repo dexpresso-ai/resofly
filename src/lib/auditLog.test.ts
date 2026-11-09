@@ -234,3 +234,25 @@ test('de trigger houdt een wijziging nooit tegen, en schrijft als laatste defini
   // Een bijlage in de teamchat geeft geen naam prijs.
   assert.match(body, /entity_type' = 'chat_message' then\s+v_label := 'Bijlage in de teamchat'/);
 });
+
+test('zinnen: het webadres en een eigen domein (migratie 20261108230000)', () => {
+  const domein = (event: string, actor: string | null = ANNE) => sentenceText(entry({
+    action: event === 'added' ? 'created' : event === 'removed' || event === 'taken_over' ? 'deleted' : 'updated',
+    entity_type: 'client_domain', entity_label: 'portaal.jansen.nl', actor_user_id: actor, metadata: { event },
+  }), lookup);
+  assert.equal(domein('added'), 'anne koppelde eigen domein portaal.jansen.nl');
+  assert.equal(domein('active', null), 'Eigen domein portaal.jansen.nl is actief');
+  assert.equal(domein('failing', null), 'Eigen domein portaal.jansen.nl werkt niet meer');
+  assert.equal(domein('moved', ME), 'Jij ontkoppelde eigen domein portaal.jansen.nl; oude links sturen nog een jaar door');
+  assert.equal(domein('removed'), 'anne haalde eigen domein portaal.jansen.nl weg');
+  assert.equal(domein('taken_over', null), 'Eigen domein portaal.jansen.nl werd nooit actief en is door een andere organisatie gekoppeld');
+
+  // Zoals de trigger het schrijft: welke kolommen, geen waarden.
+  const naam = (action: string, changes: Record<string, unknown> = {}, actor: string | null = ME) => sentenceText(entry({
+    action, entity_type: 'client_subdomain', entity_label: 'jansen', actor_user_id: actor,
+    metadata: { table: 'client_subdomains', changes, changed_columns: Object.keys(changes) },
+  }), lookup);
+  assert.equal(naam('created'), 'Jij koos webadres jansen');
+  assert.equal(naam('updated', { status: { changed: true }, redirect_until: { changed: true } }), 'Jij wijzigde webadres jansen');
+  assert.equal(naam('deleted', {}, null), 'Het oude webadres jansen is weer vrij');
+});

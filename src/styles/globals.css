@@ -2696,6 +2696,11 @@ body::before{
  * meldingsinstellingen. Alles op de tokens: licht/donker en de merkkleur van
  * de leverancier gaan vanzelf mee. */
 .portal-login-next{font-size:13px;color:var(--accent-ink);font-weight:600}
+/* De code uit de inlogmail, voor wie de mail op een ander apparaat leest
+   (src/lib/portalLoginFlow.ts). Onder de melding dat de mail onderweg is. */
+.portal-login-code{display:grid;gap:8px;margin-top:4px;padding-top:12px;border-top:1px solid var(--border)}
+.portal-login-code label{font-size:13px;color:var(--muted2);line-height:1.45}
+.portal-login-code input{letter-spacing:.14em;font-variant-numeric:tabular-nums}
 .portal-settings-btn svg{flex-shrink:0}
 /* Met drie knoppen in de kopbalk mag de naam inschuiven, het logo niet. */
 .portal-brand .brand-icon,.portal-brand .portal-mark{flex-shrink:0}
@@ -12447,4 +12452,60 @@ button.alog-feed-row:hover{background:var(--bg3)}
   .alog-details{padding:0 11px 11px 11px}
   .alog-changes>div{grid-template-columns:minmax(0,1fr)}
   .alog-sentence{font-size:13px}
+}
+
+/* ── Het webadres (jansen.resofly.com) ─────────────────────────────────────
+ * Het veld met de naam en het basisdomein erachter, en de regel eronder die
+ * zegt of de naam nog vrij is (src/components/ClientAddressPicker.tsx). Bij
+ * het inrichten en in Instellingen → Domein. Alles op de tokens: licht en
+ * donker gaan vanzelf mee. */
+.client-address{display:grid;gap:6px;min-width:0}
+.client-address-field{display:flex;align-items:stretch;min-width:0;border:1px solid var(--border);border-radius:7px;background:var(--bg3);overflow:hidden}
+.client-address-field:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18)}
+.client-address-field.has-error{border-color:rgba(var(--danger-rgb),.55)}
+.client-address-field .client-address-input{flex:1;min-width:0;border:0;border-radius:0;background:transparent;font-family:var(--font-mono);font-size:14px;box-shadow:none}
+.client-address-field .client-address-input:focus{outline:none;box-shadow:none}
+.client-address-suffix{display:flex;align-items:center;padding:0 11px;color:var(--muted2);font-family:var(--font-mono);font-size:13px;background:var(--bg4);border-left:1px solid var(--border);white-space:nowrap}
+.client-address-status{display:flex;align-items:center;gap:6px;margin:0;min-height:20px;font-size:12.5px;line-height:1.45;color:var(--muted2)}
+.client-address-status svg{flex-shrink:0}
+.client-address-status.is-ok{color:var(--accent-g)}
+.client-address-status.is-bad{color:var(--accent-r)}
+@media(max-width:520px){.client-address-suffix{padding:0 8px;font-size:12px}}
+
+/* ── Instellingen → Domein (src/features/ClientDomainSettings.tsx) ─────────
+ * Je webadres, een eigen domein met de voortgang (record, certificaat,
+ * actief) en de stappen per domeinbeheerder. De DNS-regels en de stappen
+ * hergebruiken .dns-record en .inbound-steps van het tabblad E-mail. */
+.client-domain-current{display:flex;align-items:center;gap:9px;flex-wrap:wrap;min-width:0;margin:2px 0 10px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;color:var(--muted2)}
+.client-domain-current svg{flex-shrink:0}
+.client-domain-host{flex:1 1 auto;min-width:0;font-family:var(--font-mono);font-size:14px;color:var(--text);word-break:break-all}
+.client-domain-edit{display:grid;gap:8px;margin-top:6px;min-width:0}
+.client-domain-label{font-size:12.5px;font-weight:600;color:var(--text)}
+.client-domain-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.client-domain-add{display:flex;gap:8px;align-items:stretch;min-width:0}
+.client-domain-add .form-input{flex:1;min-width:0;font-family:var(--font-mono)}
+.client-domain-link{font:inherit;font-size:inherit;color:var(--accent-ink);background:none;border:0;padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.client-domain-link:disabled{opacity:.55;cursor:default}
+.client-domain-warning{color:var(--accent-r)}
+.client-domain-previous{margin-top:14px;display:grid;gap:6px}
+.client-domain-previous ul{margin:0;padding:0;list-style:none;display:grid;gap:6px}
+.client-domain-previous li{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted2);line-height:1.5}
+.client-domain-previous code{font-size:12.5px;color:var(--text);word-break:break-all}
+.client-domain-row{margin-top:4px}
+.client-domain-status{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;border-radius:999px;padding:3px 10px;border:1px solid var(--border);white-space:nowrap}
+.client-domain-status.is-ok{color:var(--accent-g);background:rgba(var(--ok-rgb),.12);border-color:rgba(var(--ok-rgb),.28)}
+.client-domain-status.is-wait{color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}
+.client-domain-status.is-bad{color:var(--accent-r);background:rgba(var(--danger-rgb),.12);border-color:rgba(var(--danger-rgb),.28)}
+.client-domain-steps{display:flex;flex-wrap:wrap;gap:6px 16px;margin:12px 0 4px;padding:0;list-style:none}
+.client-domain-steps li{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+.client-domain-steps li svg{flex-shrink:0}
+.client-domain-steps li.is-done{color:var(--accent-g)}
+.client-domain-provider{margin-top:12px}
+.client-domain-row .inbound-steps code{font-size:12px;color:var(--text);overflow-wrap:anywhere}
+.client-domain-note{margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)}
+.client-domain-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media(max-width:520px){
+  .client-domain-add{flex-direction:column}
+  .client-domain-current{padding:9px 10px}
+  .client-domain-host{font-size:13px}
 }

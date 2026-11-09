@@ -17,7 +17,7 @@ import { isDutchVatIdFormat, looksLikeTaxNumberWithoutCountry, normalizeVatId } 
 // ── De stappen ───────────────────────────────────────────────────────────────
 
 export type OnboardingStepKey =
-  | 'welkom' | 'rechtsvorm' | 'abonnement' | 'bedrijf' | 'btw'
+  | 'welkom' | 'rechtsvorm' | 'abonnement' | 'bedrijf' | 'webadres' | 'btw'
   | 'huisstijl' | 'facturen' | 'mollie' | 'klaar';
 
 export interface OnboardingStep {
@@ -34,13 +34,16 @@ export interface OnboardingStep {
  * De volgorde is bewust. Het abonnement staat direct na de rechtsvorm: een BV
  * heeft de zakelijke module nodig, en die hoort bij een lopend abonnement. Zo
  * ligt de rechtsvorm vast voordat de bedrijfsgegevens en de btw-instellingen
- * erop voortbouwen.
+ * erop voortbouwen. Het webadres (jansen.resofly.com, migratie
+ * 20261108230000) komt direct na de bedrijfsgegevens: dan staat de naam er
+ * al om een voorstel uit te maken, en elke mail aan een klant linkt ernaar.
  */
 export const ONBOARDING_STEPS: readonly OnboardingStep[] = [
   { key: 'welkom', title: 'Welkom', hint: 'Wat we samen inrichten' },
   { key: 'rechtsvorm', title: 'Rechtsvorm', hint: 'Eenmanszaak, vof, bv …' },
   { key: 'abonnement', title: 'Abonnement', hint: 'Pakket en modules', optional: true },
   { key: 'bedrijf', title: 'Bedrijfsgegevens', hint: 'Naam, adres, KvK, btw, IBAN' },
+  { key: 'webadres', title: 'Je webadres', hint: 'Het adres voor je klanten' },
   { key: 'btw', title: 'Btw en boekhouding', hint: 'KOR, aangifte, boekjaar' },
   { key: 'huisstijl', title: 'Huisstijl', hint: 'Logo en merkkleur', optional: true },
   { key: 'facturen', title: 'Facturen versturen', hint: 'Per e-mail of via Mollie' },
@@ -73,6 +76,17 @@ export function reachableSteps(steps: readonly OnboardingStep[], completed: Read
   }
   for (const key of completed) reachable.add(key);
   return reachable;
+}
+
+/**
+ * Bij welke stap je verdergaat. De opgeslagen stap als die nog bereikbaar is;
+ * anders de eerste stap die nog open staat. Zo staat een nieuwe stap vanzelf
+ * voor wie al verder was: na de stap Webadres (november 2026) viel iemand die
+ * bij Mollie zat anders terug naar Welkom, en moest hij alles opnieuw langs.
+ */
+export function resumeStep(steps: readonly OnboardingStep[], completed: ReadonlySet<OnboardingStepKey>, saved: OnboardingStepKey | null): OnboardingStepKey {
+  if (saved && steps.some(step => step.key === saved) && reachableSteps(steps, completed).has(saved)) return saved;
+  return steps.find(step => !completed.has(step.key))?.key ?? steps[steps.length - 1]?.key ?? 'welkom';
 }
 
 // ── Waar je bent: per organisatie, in deze browser ──────────────────────────
@@ -636,6 +650,8 @@ export function finishCheck(input: {
   addressLine1: string | null | undefined;
   savedLegalForm: LegalForm;
   pendingLegalForm: LegalForm | null;
+  /** Het gekozen webadres (de naam), of null. Undefined = niet bekend, niet tegenhouden. */
+  clientSubdomain?: string | null;
 }): FinishCheck {
   const blocking: FinishCheck['blocking'] = [];
   if (input.pendingLegalForm && input.pendingLegalForm !== input.savedLegalForm) {
@@ -646,5 +662,7 @@ export function finishCheck(input: {
   }
   if (!String(input.companyName ?? '').trim()) blocking.push({ step: 'bedrijf', text: 'De naam van je bedrijf ontbreekt nog.' });
   if (!String(input.addressLine1 ?? '').trim()) blocking.push({ step: 'bedrijf', text: 'Je adres ontbreekt nog; dat hoort op elke factuur.' });
+  // De database eist het ook (complete_organization_onboarding).
+  if (input.clientSubdomain === null) blocking.push({ step: 'webadres', text: 'Kies nog het webadres voor je klanten.' });
   return { blocking };
 }

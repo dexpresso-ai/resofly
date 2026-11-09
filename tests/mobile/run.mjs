@@ -56,11 +56,13 @@ const VIEWPORTS = {
  * 2026-11-07). Een eigen backend: de organisatie is nieuw (mock met
  * { onboarding: true }), en de voortgang in de opslag opent de stap meteen.
  */
-const SETUP_ORDER = ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'btw', 'huisstijl', 'facturen', 'mollie', 'klaar'];
+const SETUP_ORDER = ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen', 'mollie', 'klaar'];
 function setupPage(step, { pendingLegalForm = null } = {}) {
   const completed = SETUP_ORDER.slice(0, SETUP_ORDER.indexOf(step));
+  // Na de stap Webadres is er een adres gekozen (2026-11-08).
+  const subdomain = SETUP_ORDER.indexOf(step) > SETUP_ORDER.indexOf('webadres') ? 'studio-lopik' : null;
   return {
-    page: 'dashboard', mock: { onboarding: true }, shell: '.onb',
+    page: 'dashboard', mock: { onboarding: true, subdomain }, shell: '.onb',
     storage: { [`resofly.onboarding.${seed.ids.ORG}`]: JSON.stringify({ step, completed, pendingLegalForm }) },
   };
 }
@@ -121,6 +123,10 @@ const PAGES = {
   // Instellingen → Betalen: de Mollie-koppeling met het profiel (een lange naam
   // en website) en de waarschuwing voor de testmodus (november 2026).
   'settings-betalen': { page: 'settings', prepare: '[data-settings-tab="betalen"]' },
+  // Instellingen → Domein (november 2026): het webadres, een eigen domein dat
+  // nog op het record wacht (lange hostnaam, CNAME en TXT met kopieerknoppen,
+  // de stappen per provider) en een verhuisd domein. De langste stand.
+  'settings-domein': { page: 'settings', prepare: '[data-settings-tab="domein"]' },
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },
@@ -152,6 +158,8 @@ const PAGES = {
   'inrichten-rechtsvorm': setupPage('rechtsvorm'),
   'inrichten-abonnement': setupPage('abonnement', { pendingLegalForm: 'bv' }),
   'inrichten-bedrijf': setupPage('bedrijf'),
+  // Het webadres kiezen, met de controle of de naam nog vrij is (2026-11-08).
+  'inrichten-webadres': setupPage('webadres'),
   'inrichten-btw': setupPage('btw'),
   'inrichten-huisstijl': setupPage('huisstijl'),
   'inrichten-facturen': setupPage('facturen'),

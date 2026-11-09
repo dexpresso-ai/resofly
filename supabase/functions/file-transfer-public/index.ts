@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import { clientOriginMismatch, clientOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
 import { takeEmailQuota } from '../_shared/emailQuota.ts';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { HttpError, createAdminClient, isUuid, makeCors, parseAllowedOrigins } from '../_shared/edgeAuth.ts';
@@ -86,6 +87,10 @@ class PublicError extends Error {
 }
 
 serve(async (req) => {
+  // Van een klantadres (jansen.resofly.com, portaal.jansen.nl)? Eén keer
+  // opzoeken; CORS en de controle of de link bij dat adres hoort, lezen het
+  // daarna (_shared/clientLinks.ts).
+  await rememberClientOrigin(admin, req);
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors.headers(req) });
   try {
     cors.assert(req);
@@ -95,6 +100,12 @@ serve(async (req) => {
     const token = body.token;
     if (!isPlausibleToken(token)) throw new PublicError('Deze link is ongeldig.', 400);
     const tokenHash = await sha256Hex(token);
+    // Een zending van een andere organisatie opent niet op dit klantadres:
+    // zelfde antwoord als een onbekende link.
+    if (clientOriginOf(req)) {
+      const link = await resolveTransferLink(admin, tokenHash);
+      if (clientOriginMismatch(req, link?.organizationId)) throw new PublicError(transferStateMessage('unknown'), 404);
+    }
 
     switch (action) {
       case 'get': return cors.json(req, { ok: true, ...(await getTransfer(tokenHash, body)) });

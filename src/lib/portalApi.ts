@@ -384,14 +384,36 @@ export interface CreatePortalTicketInput {
  * (clients.email) zodat de magische link werkt ook al staat zelf-registratie uit.
  * Geeft `known: false` als het e-mailadres niet als klant bekend is.
  */
-/** Zet (alleen voor bekende klantadressen) het account klaar. Het antwoord zegt
- *  bewust niet óf een adres bekend is. */
-export async function requestPortalLogin(email: string): Promise<void> {
+/**
+ * Zet (alleen voor bekende klantadressen) het account klaar. Het antwoord zegt
+ * bewust niet óf een adres bekend is.
+ *
+ * Met `verifierHash` verstuurt de server de inlogmail zelf (flow 'mail',
+ * src/lib/portalLoginFlow.ts). Een server van vóór die wijziging kent dat niet
+ * en zegt niets over de flow: dan stuurt de app de link van Supabase, zoals
+ * voorheen ('otp').
+ */
+export async function requestPortalLogin(
+  email: string,
+  options: { verifierHash?: string; key?: string | null } = {},
+): Promise<{ flow: 'mail' | 'otp' }> {
   const { data, error } = await portalInvoke('portal-login', {
-    body: { action: 'requestLogin', email },
+    body: { action: 'requestLogin', email, ...(options.verifierHash ? { verifierHash: options.verifierHash } : {}), ...(options.key ? { key: options.key } : {}) },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Inloggen voorbereiden mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Inloggen voorbereiden mislukt');
+  return { flow: data.flow === 'mail' ? 'mail' : 'otp' };
+}
+
+/**
+ * De link uit de inlogmail inwisselen: het aanvraagnummer en de geheimen van
+ * deze browser. Geeft het inlogtoken, dat de app zelf bij Supabase inwisselt.
+ */
+export async function redeemPortalLogin(request: string, verifiers: string[]): Promise<{ tokenHash: string; email: string; portalKey: string | null }> {
+  const { data, error } = await portalInvoke('portal-login', { body: { action: 'redeemLogin', request, verifiers } });
+  if (error) throw new Error(await extractFunctionError(error, 'Inloggen is niet gelukt'));
+  if (!data?.ok || typeof data.tokenHash !== 'string') throw new Error(data?.error || 'Inloggen is niet gelukt');
+  return { tokenHash: data.tokenHash, email: String(data.email ?? ''), portalKey: typeof data.portalKey === 'string' ? data.portalKey : null };
 }
 
 /**
@@ -401,9 +423,10 @@ export async function requestPortalLogin(email: string): Promise<void> {
  * binnenkomt keuren we opnieuw (`sanitizeStoredBranding`), zoals alles wat de
  * schil van het portaal kleurt.
  */
-export async function fetchPortalLoginBranding(key: string): Promise<BrandingPayload | null> {
+export async function fetchPortalLoginBranding(key: string | null): Promise<BrandingPayload | null> {
   try {
-    const { data, error } = await portalInvoke('portal-login', { body: { action: 'getBranding', key } });
+    // Op een klantadres zegt het adres zelf van wie het portaal is; de sleutel mag dan ontbreken.
+    const { data, error } = await portalInvoke('portal-login', { body: { action: 'getBranding', ...(key ? { key } : {}) } });
     if (error || !data?.ok || !data.branding) return null;
     return sanitizeStoredBranding(data.branding);
   } catch {

@@ -32,6 +32,7 @@ import {
 } from '../lib/branding';
 import { analyseLogo } from '../lib/logoColors';
 import { portalLoginPath, portalLoginUrl, usePortalLoginKey } from '../lib/portalAddress';
+import { useClientAddress, type ClientAddress } from '../services/domainService';
 import { PORTAL_PREVIEW_PATH, PORTAL_PREVIEW_READY, portalPreviewMessage, type PortalPreviewScreen } from '../lib/portalPreview';
 import type { CompanySettingsInput } from '../types';
 
@@ -106,6 +107,7 @@ export function BrandStudio({ form, setForm, canWrite, organizationId }: {
   // krijgt het inlogscherm te zien.
   const [screen, setScreen] = useState<PortalPreviewScreen>('overview');
   const { key: loginKey, ready: loginKeyReady, unavailable: loginKeyUnavailable } = usePortalLoginKey(organizationId);
+  const clientAddress = useClientAddress(organizationId);
   return <div className="brand-studio">
     <div className="brand-studio-grid">
       {/* Eén kolom met beide kaarten: zo blijft het voorbeeld naast allebei staan. */}
@@ -118,6 +120,7 @@ export function BrandStudio({ form, setForm, canWrite, organizationId }: {
           loginKey={loginKey}
           loginKeyReady={loginKeyReady}
           loginKeyUnavailable={loginKeyUnavailable}
+          clientAddress={clientAddress}
           onShowLogin={() => setScreen('login')}
         />
       </div>
@@ -509,7 +512,7 @@ function LoginColorField({ id, label, value, automatic, suggestion, onChange, ca
   </div>;
 }
 
-function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, loginKeyUnavailable, onShowLogin }: {
+function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, loginKeyUnavailable, clientAddress, onShowLogin }: {
   form: CompanySettingsInput;
   setForm: SetForm;
   canWrite: boolean;
@@ -517,6 +520,8 @@ function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, logi
   loginKeyReady: boolean;
   /** Waarom er geen adres is, als het er niet is. */
   loginKeyUnavailable: 'rechten' | 'migratie' | 'fout' | null;
+  /** Het webadres voor klanten: daar is de sleutel in het adres overbodig. */
+  clientAddress: ClientAddress;
   onShowLogin: () => void;
 }) {
   const branding = useMemo(() => formBranding(form), [form]);
@@ -525,7 +530,8 @@ function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, logi
   const automatic = useMemo(() => loginTheme({ ...branding, loginBackground: null, loginCard: null, loginButton: null }), [branding]);
   const logoColors = useLogoColors(form.brand_logo_data_url);
   const [copied, setCopied] = useState(false);
-  const url = portalLoginUrl(loginKey);
+  // Het portaal: op de naam bij ResoFly, nooit op een eigen domein.
+  const url = portalLoginUrl(loginKey, clientAddress.portal);
 
   const set = <K extends keyof CompanySettingsInput>(key: K, value: CompanySettingsInput[K]) => {
     setForm(prev => ({ ...prev, [key]: value }));

@@ -12,7 +12,13 @@ export { portalLoginPath };
 /** Per organisatie één keer opgehaald; een sleutel verandert niet. */
 const known = new Map<string, string>();
 
-export function portalLoginUrl(key: string | null | undefined): string {
+/**
+ * Op het klantadres (https://jansen.resofly.com/portal) is de sleutel
+ * overbodig: het adres zegt al van wie het portaal is. Dezelfde regel als in
+ * de mails (portalLinkBase in supabase/functions/_shared/clientLinks.ts).
+ */
+export function portalLoginUrl(key: string | null | undefined, address?: { baseUrl: string; onClientHost: boolean } | null): string {
+  if (address?.onClientHost && address.baseUrl) return `${address.baseUrl}/portal`;
   const origin = typeof window === 'undefined' ? '' : window.location.origin;
   return `${origin}${portalLoginPath(key)}`;
 }

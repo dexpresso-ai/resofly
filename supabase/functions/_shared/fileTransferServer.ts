@@ -14,6 +14,7 @@ import type { EmailTemplateContent } from './emailTemplates/types.ts';
 import { escapeHtml } from './emailTemplates/layout.ts';
 import { loadEmailBrand, withEmailBrand, type EmailBrand } from './emailBrand.ts';
 import type { SenderIdentity } from './sendingDomain.ts';
+import { clientBaseUrl } from './clientLinks.ts';
 import {
   TRANSFER_DOWNLOAD_TTL_SECONDS,
   fileCountSentence,
@@ -105,8 +106,10 @@ export function appPublicUrl(): string {
   ).replace(/\/$/, '');
 }
 
-export function transferLinkUrl(token: string): string {
-  return `${appPublicUrl()}/ontvang/${encodeURIComponent(token)}`;
+/** De persoonlijke link, op het klantadres van de organisatie als dat er is (_shared/clientLinks.ts). */
+export async function transferLinkUrl(admin: SupabaseClient, organizationId: string | null | undefined, token: string): Promise<string> {
+  const base = await clientBaseUrl(admin, organizationId, appPublicUrl());
+  return `${base}/ontvang/${encodeURIComponent(token)}`;
 }
 
 function mediaWorker(): { url: string; secret: string } {
@@ -260,7 +263,7 @@ export async function recordTransferEvent(
  * database in; de platte token bestaat alleen in de mail. Een eerdere link van
  * dezelfde ontvanger werkt daarna niet meer.
  */
-export async function issueRecipientLink(admin: SupabaseClient, recipientId: string): Promise<{ token: string; url: string }> {
+export async function issueRecipientLink(admin: SupabaseClient, recipientId: string, organizationId?: string | null): Promise<{ token: string; url: string }> {
   const token = randomToken();
   const { error } = await admin
     .from('file_transfer_recipients')
@@ -273,7 +276,7 @@ export async function issueRecipientLink(admin: SupabaseClient, recipientId: str
   // de oude link (de afzender verstuurt bewust opnieuw).
   await admin.from('file_transfer_sessions').delete().eq('recipient_id', recipientId);
   await admin.from('file_transfer_codes').delete().eq('recipient_id', recipientId);
-  return { token, url: transferLinkUrl(token) };
+  return { token, url: await transferLinkUrl(admin, organizationId, token) };
 }
 
 // ── Afzender en huisstijl ────────────────────────────────────────────────────
@@ -417,7 +420,7 @@ export async function sendTransferNotice(admin: SupabaseClient, input: {
 
   let link: { token: string; url: string };
   try {
-    link = await issueRecipientLink(admin, recipient.id);
+    link = await issueRecipientLink(admin, recipient.id, transfer.organization_id);
   } catch (error) {
     return { notified: false, error: error instanceof Error ? error.message : 'De link kon niet worden aangemaakt.', clientEmailId: null, threadId: input.threadId };
   }
