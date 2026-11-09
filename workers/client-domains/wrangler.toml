@@ -21,23 +21,30 @@ compatibility_date = "2026-11-01"
 APP_ORIGIN = "https://resofly.pages.dev"
 SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
 CLIENT_DOMAIN_BASE = "resofly.com"
-PASSTHROUGH_HOSTS = "resofly.com,www.resofly.com,app.resofly.com,caldav.resofly.com,inbound.resofly.com,media.resofly.com"
+PASSTHROUGH_HOSTS = "resofly.com,www.resofly.com,app.resofly.com,caldav.resofly.com,inbound.resofly.com,media.resofly.com,ftp.resofly.com,mail.resofly.com"
 
 # ---- staging ----
 [env.staging]
 name = "resofly-client-domains-staging"
+# Het adres op workers.dev blijft: daarmee controleer je de Worker zonder route.
+workers_dev = true
 
 [env.staging.vars]
 # De staging-build van Pages (branch staging).
 APP_ORIGIN = "https://staging.resofly.pages.dev"
 SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
 CLIENT_DOMAIN_BASE = "resofly.com"
-PASSTHROUGH_HOSTS = "resofly.com,www.resofly.com,staging.resofly.com,caldav.resofly.com,caldav.staging.resofly.com,inbound.resofly.com,media.resofly.com"
+PASSTHROUGH_HOSTS = "resofly.com,www.resofly.com,staging.resofly.com,caldav.resofly.com,caldav.staging.resofly.com,inbound.resofly.com,media.resofly.com,ftp.resofly.com,mail.resofly.com"
 
-# Na de DNS (een proxied wildcard-record *.resofly.com):
-# [[env.staging.routes]]
-# pattern = "*.resofly.com/*"
-# zone_name = "resofly.com"
+# Sinds 9 november, met het proxied wildcard-record *.resofly.com (AAAA 100::).
+# De eigen adressen die ook door Cloudflare lopen (www, staging, ftp, mail)
+# hebben in Cloudflare een route ZONDER Worker; die gaat voor deze. Zie
+# docs/setup/KLANTDOMEINEN_SETUP.md, stap 2. ftp en mail (webmail bij de hoster)
+# ontbraken eerst in PASSTHROUGH_HOSTS: met deze route kregen ze anders de
+# neutrale pagina in plaats van hun eigen site.
+[[env.staging.routes]]
+pattern = "*.resofly.com/*"
+zone_name = "resofly.com"
 
 # ---- production ----
 [env.production]
@@ -47,4 +54,4 @@ name = "resofly-client-domains"
 APP_ORIGIN = "https://resofly.pages.dev"
 SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
 CLIENT_DOMAIN_BASE = "resofly.com"
-PASSTHROUGH_HOSTS = "resofly.com,www.resofly.com,app.resofly.com,caldav.resofly.com,inbound.resofly.com,media.resofly.com"
+PASSTHROUGH_HOSTS = "resofly.com,www.resofly.com,app.resofly.com,caldav.resofly.com,inbound.resofly.com,media.resofly.com,ftp.resofly.com,mail.resofly.com"
