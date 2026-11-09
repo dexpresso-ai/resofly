@@ -234,6 +234,34 @@ misging:
   `videoServices` toont de app alleen wat de agenda zelf kan).
 - **Geen nieuwe secrets.**
 
+### Uitrol op staging (9 november 2026, 00:22 UTC)
+
+- Merge `6d3a990` naar `staging`. Staging had sinds de afsplitsing alleen
+  documentatie erbij (opnames, migrations/README), geen overlap.
+- *Deploy Supabase (staging)*, run 198: geslaagd. `db push` paste alleen
+  `20261108190000` toe (de laatste op staging was `20261108171500`), daarna
+  alle 39 functies, en de rooktest is groen (o.a. `api` antwoordt, en laadt
+  daarbij de handelingenregistry met deze wijziging).
+- Nacontrole op staging, alleen lezen (Management API, `read_only`):
+  - `calendar_sources.conference_types` bestaat (`text[]`); de app mag hem
+    lezen, `feed_url` nog steeds niet;
+  - de check op `meeting_booking_links.conference_provider` laat `calendar`,
+    `jitsi`, `google_meet` en `teams` toe;
+  - `audit_field_spec` is dicht voor `anon` en `authenticated`, en telt
+    `conference_types` niet als wijziging;
+  - de functies `calendar-integrations`, `meeting-booking(-public)`, `api`,
+    `mcp` en `gerrie-agent(-runner)` staan op de nieuwe versie (ACTIVE);
+  - 0 van de 8 Google-/Microsoft-agenda's hebben al `conference_types`. Dat
+    vult zich zodra iemand zijn account (opnieuw) koppelt, Meet of Teams
+    aanzet, of bij Instellingen → Agenda op **Agenda's** klikt. Tot dan werkt
+    alles zoals eerst: ResoFly vraagt de vergadering aan, en zet Google of
+    Microsoft er geen bij, dan staat dat als kanttekening bij de afspraak.
+- Cloudflare Pages: de build van `staging` (`6d3a990`) is geslaagd.
+- *Frontend checks*, run 165 op `staging`: geslaagd (typecheck, CSP-hash,
+  unit-tests, mobiele lay-outtest licht en donker, laden per module,
+  inrichtingsstappen, `deno check` van de edge functions, en de migraties vanaf
+  nul op een lege database).
+
 ### Wat de beheerder van ResoFly zelf moet doen
 
 Voor Meet en Teams **in de eigen Google- of Microsoft-agenda** is niets nodig.
