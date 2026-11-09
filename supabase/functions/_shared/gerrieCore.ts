@@ -5063,6 +5063,8 @@ async function resolveEventRef(ctx: GerrieContext, input: Record<string, unknown
   };
 }
 
+const PRIVATE_EVENT_ERROR = 'Dit is een privé-afspraak van een collega (je ziet alleen "Bezet"). Die kan alleen die collega zelf aanpassen of afzeggen.';
+
 /** Het item terugvinden in een ruime periode rond nu, zodat we het "was" kunnen tonen. */
 async function findEvent(ctx: GerrieContext, ref: CalendarEventRef): Promise<Record<string, unknown> | null> {
   const now = new Date();
@@ -5109,6 +5111,9 @@ async function buildEditCalendarEventProposal(ctx: GerrieContext, input: Record<
 
   const found = await findEvent(ctx, resolved.ref);
   if (!found) return { ok: false, error: 'Ik kan dit agenda-item niet meer terugvinden. Zoek het opnieuw met list_calendar_events.' };
+  // Een privé-afspraak van een collega ("Bezet"): de agenda-functie weigert die
+  // ook, maar dan pas bij het akkoord. Eerst zette de app er de titel "Bezet" op.
+  if (found.is_private_masked === true) return { ok: false, error: PRIVATE_EVENT_ERROR };
   // Een herhalende ResoFly-afspraak staat hier als één voorkomen; die wijzigen
   // verschoof de hele reeks naar dat voorkomen. Dat gaat in het agendascherm.
   if (found.recurs === true) {
@@ -5185,6 +5190,7 @@ async function buildCancelCalendarEventProposal(ctx: GerrieContext, input: Recor
   if (!resolved.ok) return resolved;
   const found = await findEvent(ctx, resolved.ref);
   if (!found) return { ok: false, error: 'Ik kan dit agenda-item niet meer terugvinden. Zoek het opnieuw met list_calendar_events.' };
+  if (found.is_private_masked === true) return { ok: false, error: PRIVATE_EVENT_ERROR };
 
   // Genodigden krijgen een afzegging; dat hoort de gebruiker te weten vóór hij ja zegt.
   let hasAttendees = false;

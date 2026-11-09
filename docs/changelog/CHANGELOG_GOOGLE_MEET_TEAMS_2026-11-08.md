@@ -135,6 +135,17 @@ misging:
   een uitnodiging aan een klant.
 - **Modulerechten**: een losse vergadering maken vraagt schrijfrechten op de
   agenda, zoals een afspraak maken. Een kijker kan het niet.
+- **Privé-afspraken van een collega blijven van die collega.** In een gedeelde
+  agenda ziet een collega een privé-afspraak als "Bezet", en het scherm laat
+  hem die niet bewerken. De server liet het wel toe. Met "niet genoemd = blijft
+  staan" gaf een bewerking zonder omschrijving via de API of Gerrie dan zelfs
+  de afgeschermde omschrijving terug (gevonden in een onafhankelijke
+  beveiligingsreview van deze wijziging). Nu weigert de server bewerken én
+  verwijderen van andermans privé-afspraak vóórdat er iets verandert (403), en
+  zet Gerrie geen wijziging of afzegging meer klaar. Eerst kreeg zo'n afspraak
+  bij het akkoord de titel "Bezet". Bij Microsoft vraagt ResoFly de afspraak op
+  via de gedeelde agenda zelf, zodat een afspraak uit een andere agenda van de
+  eigenaar niet meetelt.
 - De tekst van Google of Microsoft bij een fout blijft in het log; de gebruiker
   leest een eigen, Nederlandse uitleg.
 
@@ -185,7 +196,7 @@ misging:
   migratie nog eens: veilig herhaalbaar; `zoom` als `conference_provider` wordt
   geweigerd; de app leest `conference_types` wel en `feed_url` nog steeds niet;
   `audit_field_spec` is voor anon dicht en geeft verder hetzelfde als eerst.
-- `npm run test:stromen -- videovergadering` — **45 stappen, 0 fout**: de echte
+- `npm run test:stromen -- videovergadering` — **51 stappen, 0 fout**: de echte
   edge functions tegen de lokale database, met nep-Google en nep-Microsoft. O.a.
   Meet en Teams van de agenda, "pending", geen tweede Meet bij opnieuw opslaan,
   geen regel in de omschrijving, een bewerking zoals Gerrie die niets wist,
@@ -195,13 +206,18 @@ misging:
   (ook als de Meet niet lukt), en Gerrie via een echte MCP-koppeling: klaarzetten
   en dan het akkoord zoals de app het doet (Meet erbij, Meet eraf, een hele dag
   in Google en een meerdaagse hele dag in de ResoFly-agenda hernoemen zonder dat
-  de dagen verschuiven). Die laatste stap faalt zonder de reparatie.
+  de dagen verschuiven). Die laatste stap faalt zonder de reparatie. En
+  privé-afspraken van een collega (Google en Microsoft): niet bewerken, niet
+  verwijderen, geen omschrijving in het antwoord, niets klaargezet door Gerrie;
+  een gewone gedeelde afspraak en de eigen privé-afspraak wel. Zonder de nieuwe
+  controles falen die stappen.
 - `npm run test:stromen -- agenda` — 36 stappen, 0 fout (ongewijzigd gedrag).
 - De hele stromen-suite: 778 stappen. Vijf fouten in de herinneringen
   (rekendatum 8 vs. 9 november): de run viel rond middernacht in Amsterdam,
   terwijl het in UTC nog de 8e was. Na middernacht UTC opnieuw
   `npm run test:stromen -- herinneringen`: 66 stappen, 0 fout. Daarna de hele
-  suite nog eens: **785 stappen, 0 fout**.
+  suite nog eens: 785 stappen, 0 fout; en na de afscherming van
+  privé-afspraken: **791 stappen, 0 fout**.
 - `npm run test:mobile -- --theme=both` — 410 pagina's gemeten, 0 met problemen;
   plus schermafdrukken van het videoblok (vijf keuzes: drie en twee),
   Instellingen → Agenda en de videokaart, op telefoon en desktop, licht en

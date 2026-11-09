@@ -322,6 +322,13 @@ registreerDienst('https://graph.microsoft.com', async (request, url) => {
     (acc.afspraken[agendaId] ??= []).push(nieuw);
     return json(201, graphUit(nieuw));
   }
+  // Eén afspraak via de agenda zelf: alleen als hij ook in díe agenda staat.
+  const inAgenda = url.pathname.match(/^\/v1\.0\/me\/calendars\/([^/]+)\/events\/([^/]+)$/);
+  if (inAgenda && request.method === 'GET') {
+    const evt = (acc.afspraken[decodeURIComponent(inAgenda[1])] ?? []).find((e) => e.id === decodeURIComponent(inAgenda[2]));
+    if (!evt) return json(404, { error: { code: 'ErrorItemNotFound', message: 'The specified object was not found in the store.' } });
+    return json(200, graphUit(evt));
+  }
   const een = url.pathname.match(/^\/v1\.0\/me\/events\/([^/]+)$/);
   if (een) {
     const id = decodeURIComponent(een[1]);

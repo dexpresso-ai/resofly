@@ -456,11 +456,50 @@ async function fetchExternalDescription(accessToken: string, source: CalendarSou
   return typeof content === 'string' && content.trim() ? content.trim() : null;
 }
 
+/** Een privé-afspraak van een collega: alleen die collega zelf mag eraan komen. */
+export class PrivateEventError extends Error {
+  readonly status = 403;
+  constructor() {
+    super('Dit is een privé-afspraak van je collega (je ziet alleen "Bezet"). Alleen je collega kan hem aanpassen of verwijderen.');
+    this.name = 'PrivateEventError';
+  }
+}
+
+/**
+ * Mag de aanvrager aan deze afspraak in een gedeelde agenda komen? Een
+ * privé-afspraak is van de eigenaar van de agenda: een collega ziet er "Bezet"
+ * van (maskPrivateEventForRequester) en kan hem in het scherm niet bewerken of
+ * verwijderen. De server liet het wel toe, en met "niet genoemd = blijft staan"
+ * gaf een bewerking zonder omschrijving (via de API of Gerrie) dan zelfs de
+ * afgeschermde omschrijving terug. Nu weigert de server het, vóórdat er iets
+ * verandert of een vergadering wordt gemaakt.
+ *
+ * Bij Microsoft via de agenda zelf (/me/calendars/{agenda}/events/{id}), zodat
+ * de vraag over déze gedeelde agenda gaat en niet over een andere agenda van de
+ * eigenaar. 'weg' = de afspraak staat niet (meer) in deze agenda.
+ */
+export async function checkNotOthersPrivateEvent(source: CalendarSourceRow, requesterUserId: string, accessToken: string, eventId: string): Promise<'ok' | 'weg'> {
+  if (source.user_id === requesterUserId) return 'ok';
+  const url = source.provider === 'google'
+    ? `${googleEventUrl(source, eventId)}?fields=visibility`
+    : `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(eventId)}?$select=sensitivity`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const payload = await googleJson(res);
+  if (res.status === 404 || res.status === 410) return 'weg';
+  if (!res.ok) throw new ProviderHttpError(res.status, providerErrorMessage(payload, 'Afspraak ophalen mislukt.'));
+  const level = source.provider === 'google' ? payload.visibility : payload.sensitivity;
+  if (level === 'private' || level === 'confidential') throw new PrivateEventError();
+  return 'ok';
+}
+
 /** Bewerkt een Google- of Microsoft-afspraak; alleen wat genoemd is verandert. */
 export async function updateExternalEvent(organizationId: string, requesterUserId: string, source: CalendarSourceRow, input: Record<string, unknown>) {
   const providerEventId = String(input.providerEventId || input.eventId || '');
   if (!providerEventId) throw new Error('Onbekend agenda-item.');
   const accessToken = await getExternalWriteAccessToken(organizationId, requesterUserId, source);
+  if (await checkNotOthersPrivateEvent(source, requesterUserId, accessToken, providerEventId) === 'weg') {
+    throw new Error('Dit agenda-item staat niet (meer) in deze agenda. Ververs de agenda en probeer het opnieuw.');
+  }
   const update = normalizeEventUpdate(input);
   // Bij Google en Microsoft weten we zonder extra vraag niet of het een hele dag
   // was; elke aanroeper (het scherm, Gerrie) stuurt het daarom mee. Zo niet,

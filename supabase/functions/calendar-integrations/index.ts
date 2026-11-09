@@ -47,6 +47,8 @@ import {
 import { listEvents } from '../_shared/calendarAvailability.ts';
 import { syncIcsSource, syncDueIcsSubscriptions, assertSafeFeedUrl } from '../_shared/icsSubscription.ts';
 import {
+  PrivateEventError,
+  checkNotOthersPrivateEvent,
   createEvent,
   getEventAttendees,
   getExternalWriteAccessToken,
@@ -163,6 +165,7 @@ class CalendarHttpError extends Error {
 function errorStatus(error: unknown): number {
   if (error instanceof CalendarHttpError) return error.status;
   if (error instanceof VideoUnavailableError) return error.status;
+  if (error instanceof PrivateEventError) return error.status;
   if (error instanceof CalendarTokenError) return error.failure === 'tijdelijk' ? 503 : 409;
   if (error instanceof ProviderHttpError) return 502;
   // Onze eigen, Nederlandse meldingen: de vraag klopt niet of mag niet.
@@ -825,6 +828,9 @@ async function microsoftSearchContacts(accessToken: string, query: string): Prom
 async function deleteExternalEvent(organizationId: string, requesterUserId: string, source: CalendarSourceRow, providerEventId: string): Promise<void> {
   if (!providerEventId) throw new Error('Onbekend agenda-item.');
   const accessToken = await getExternalWriteAccessToken(organizationId, requesterUserId, source);
+  // Een privé-afspraak van een collega verwijder je niet (calendarEventWrite.ts).
+  // Al weg: dan is er niets te doen, net als bij een 404 hieronder.
+  if (await checkNotOthersPrivateEvent(source, requesterUserId, accessToken, providerEventId) === 'weg') return;
   const url = source.provider === 'google'
     // sendUpdates=all zodat Google een afzegging naar de genodigden mailt.
     ? `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(providerEventId)}?sendUpdates=all`

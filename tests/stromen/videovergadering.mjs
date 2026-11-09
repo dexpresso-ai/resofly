@@ -572,6 +572,76 @@ export default async function videovergaderingScenario() {
     gelijk([opGoogle.conferenceData, opGoogle.hangoutLink, na.meeting_url, na.video_warning], [undefined, undefined, null, undefined], 'geen Meet meer');
   });
 
+  // Met "niet genoemd = blijft staan" gaf een bewerking zonder omschrijving de
+  // afgeschermde omschrijving van andermans privé-afspraak terug. Dat mag nooit.
+  groep('Privé-afspraken van een collega: afgeschermd, ook via de API en Gerrie');
+  const prive = await stap('een gedeelde Google-agenda met een privé-afspraak: de collega ziet "Bezet"', async () => {
+    gelukt(await agenda(w.medewerker.token, w.orgId, 'updateSource', { sourceId: gekoppeld.primair.id, patch: { visibility: 'organization' } }), 'delen');
+    const { startsAt, endsAt } = moment(80);
+    const evt = { id: `evt-prive-${randomUUID()}`, status: 'confirmed', summary: 'Tandarts', description: 'Wortelkanaal, niet doorvertellen', visibility: 'private', start: { dateTime: startsAt }, end: { dateTime: endsAt } };
+    (jan.afspraken['jan-primair'] ??= []).push(evt);
+    const lijst = gelukt(await agenda(w.beheerder.token, w.orgId, 'listEvents', { start: moment(79).startsAt, end: moment(82).endsAt }), 'afspraken van de collega').events;
+    const gezien = lijst.find((e) => e.provider_event_id === evt.id);
+    gelijk([gezien?.title, gezien?.description, gezien?.is_private_masked], ['Bezet', null, true], 'afgeschermd');
+    return { evt, startsAt, endsAt };
+  });
+
+  await stap('de collega past de privé-afspraak niet aan via de API, en krijgt de omschrijving ook niet terug', async () => {
+    if (!prive) throw new Error('geen privé-afspraak');
+    const res = await agenda(w.beheerder.token, w.orgId, 'updateEvent', {
+      event: { sourceId: gekoppeld.primair.id, providerEventId: prive.evt.id, title: 'Overgenomen', startsAt: prive.startsAt, endsAt: prive.endsAt, allDay: false },
+    });
+    geweigerd(res, 'privé-afspraak van een ander', [403]);
+    verwacht(!res.tekst.includes('Wortelkanaal'), 'de afgeschermde omschrijving staat in het antwoord');
+    const opGoogle = googleAfspraak(jan, 'jan-primair', prive.evt.id);
+    gelijk([opGoogle.summary, opGoogle.description], ['Tandarts', 'Wortelkanaal, niet doorvertellen'], 'ongewijzigd');
+  });
+
+  await stap('en verwijdert hem ook niet', async () => {
+    const res = await agenda(w.beheerder.token, w.orgId, 'deleteEvent', { sourceId: gekoppeld.primair.id, providerEventId: prive.evt.id });
+    geweigerd(res, 'verwijderen', [403]);
+    verwacht(googleAfspraak(jan, 'jan-primair', prive.evt.id), 'toch verwijderd');
+  });
+
+  await stap('Gerrie zet geen wijziging of afzegging klaar voor een privé-afspraak van een collega', async () => {
+    const kern = await import(new URL('../../supabase/functions/_shared/gerrieCore.ts', import.meta.url).href);
+    const ctx = await kern.buildContext(w.orgId, 'admin', { id: w.beheerder.id, email: w.beheerder.email });
+    const wijzig = await kern.buildProposal(ctx, 'propose_edit_calendar_event', { source_id: gekoppeld.primair.id, provider_event_id: prive.evt.id, title: 'Iets anders' });
+    verwacht(wijzig.ok === false && /privé-afspraak van een collega/.test(wijzig.error ?? ''), `wijzigen: ${JSON.stringify(wijzig)}`);
+    const afzeg = await kern.buildProposal(ctx, 'propose_cancel_calendar_event', { source_id: gekoppeld.primair.id, provider_event_id: prive.evt.id });
+    verwacht(afzeg.ok === false && /privé-afspraak van een collega/.test(afzeg.error ?? ''), `afzeggen: ${JSON.stringify(afzeg)}`);
+  });
+
+  await stap('een gewone afspraak in de gedeelde agenda past de collega wel aan, en de eigenaar zijn eigen privé-afspraak ook', async () => {
+    const gewoon = gelukt(await agenda(w.medewerker.token, w.orgId, 'createEvent', { event: { sourceId: gekoppeld.primair.id, title: 'Teamoverleg', ...moment(84) } }), 'gewone afspraak').event;
+    gelukt(await agenda(w.beheerder.token, w.orgId, 'updateEvent', { event: { sourceId: gekoppeld.primair.id, providerEventId: gewoon.provider_event_id, title: 'Teamoverleg (verzet)', ...moment(85), allDay: false } }), 'collega');
+    gelijk(googleAfspraak(jan, 'jan-primair', gewoon.provider_event_id).summary, 'Teamoverleg (verzet)', 'aangepast door de collega');
+    gelukt(await agenda(w.medewerker.token, w.orgId, 'updateEvent', { event: { sourceId: gekoppeld.primair.id, providerEventId: prive.evt.id, title: 'Tandarts (verzet)', startsAt: prive.startsAt, endsAt: prive.endsAt, allDay: false } }), 'eigenaar');
+    const opGoogle = googleAfspraak(jan, 'jan-primair', prive.evt.id);
+    gelijk([opGoogle.summary, opGoogle.description], ['Tandarts (verzet)', 'Wortelkanaal, niet doorvertellen'], 'de eigenaar mag het wel, en de omschrijving blijft');
+  });
+
+  await stap('Microsoft: een collega past geen privé-afspraak aan, en ook geen afspraak uit een andere agenda van de eigenaar', async () => {
+    if (!werkBron) throw new Error('geen werkaccount');
+    gelukt(await agenda(w.eigenaar.token, w.orgId, 'updateSource', { sourceId: werkBron.src.id, patch: { visibility: 'organization' } }), 'delen');
+    const { startsAt, endsAt } = moment(90);
+    const graphTijd = (iso) => ({ dateTime: iso.replace('Z', ''), timeZone: 'UTC' });
+    const geheim = { id: `ms-prive-${randomUUID()}`, subject: 'Sollicitatie', body: { contentType: 'text', content: 'Vertrouwelijk gesprek' }, bodyPreview: 'Vertrouwelijk gesprek', sensitivity: 'private', isAllDay: false, start: graphTijd(startsAt), end: graphTijd(endsAt) };
+    (werk.afspraken['werk-agenda'] ??= []).push(geheim);
+    const res = await agenda(w.beheerder.token, w.orgId, 'updateEvent', { event: { sourceId: werkBron.src.id, providerEventId: geheim.id, title: 'Overgenomen', startsAt, endsAt, allDay: false } });
+    geweigerd(res, 'privé bij Microsoft', [403]);
+    verwacht(!res.tekst.includes('Vertrouwelijk'), 'de omschrijving staat in het antwoord');
+    gelijk(geheim.subject, 'Sollicitatie', 'ongewijzigd');
+    // Microsoft kent een afspraak aan zijn id in de hele mailbox; ResoFly vraagt
+    // hem op via de gedeelde agenda, dus een andere agenda van de eigenaar telt niet.
+    const elders = { id: `ms-elders-${randomUUID()}`, subject: 'Andere agenda', sensitivity: 'normal', isAllDay: false, start: graphTijd(startsAt), end: graphTijd(endsAt) };
+    (werk.afspraken['andere-agenda'] ??= []).push(elders);
+    const via = await agenda(w.beheerder.token, w.orgId, 'updateEvent', { event: { sourceId: werkBron.src.id, providerEventId: elders.id, title: 'Overgenomen', startsAt, endsAt, allDay: false } });
+    geweigerd(via, 'afspraak uit een andere agenda', [400]);
+    verwacht(/staat niet \(meer\) in deze agenda/.test(via.json?.error ?? ''), `uitleg: ${via.tekst}`);
+    gelijk(elders.subject, 'Andere agenda', 'ongewijzigd');
+  });
+
   groep('Videovergadering: andere organisaties');
   await stap('iemand van een andere organisatie maakt niets met deze koppelingen', async () => {
     const w2 = await maakWereld('video-b');
