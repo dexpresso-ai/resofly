@@ -187,6 +187,10 @@ goed en veilig werkt."*
   - een haperend domein en het herstel daarvan.
 - De browsertest `klantdomein`: 17 stappen, 0 fout.
 - `npm run test:stromen`: 900 stappen, 0 fout.
+- De hele browsertest (`tests/stromen/ui.mjs`, alle scenario's): 96 stappen, 0 fout. Bij de
+  eerste run liep het scenario `inrichten` vast. Sinds de klantadressen is *Je webadres* een
+  verplichte stap in de inrichting, en het scenario kende die stap nog niet. De app zelf was in
+  orde; het scenario kiest nu een naam en controleert die.
 - `npm run test:mobile -- --theme=both`: 422 pagina's, 0 met problemen.
 - `npm run build` (zoals Cloudflare Pages) en `scripts/check-csp-hash.mjs`.
 - Migraties vanaf nul (`supabase db reset`, Postgres 17.11): 260 van 260. De nieuwe migratie
