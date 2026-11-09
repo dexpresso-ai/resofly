@@ -197,8 +197,13 @@ export interface GerrieCalendarEventProposal {
   end_time: string;
   description: string | null;
   location: string | null;
-  /** Jitsi Meet-link als Gerrie een videocall voorstelt; ontbreekt bij oudere voorstellen. */
+  /** Jitsi Meet-link als Gerrie een Jitsi-videocall voorstelt; ontbreekt bij oudere voorstellen. */
   meeting_url?: string | null;
+  /**
+   * Welke videovergadering (null = geen). Een Google Meet of Teams maakt de
+   * agenda-functie pas bij "Aanmaken", met de rechten van wie dat doet.
+   */
+  video_service?: 'google_meet' | 'teams' | 'jitsi' | null;
 }
 export interface GerrieWeekActionProposal {
   type: 'week_action';
@@ -298,8 +303,21 @@ export interface GerrieEditCalendarEventProposal {
   ref: GerrieCalendarEventRef;
   title: string;
   source_name: string;
-  current: { date: string; start_time: string; end_time: string; location: string | null };
-  changes: { title?: string; date?: string; start_time?: string; end_time?: string; description?: string | null; location?: string | null };
+  /**
+   * `starts_at`/`ends_at`/`all_day`: de tijden zoals ze nu zijn, in de vorm die
+   * de agenda-functie wil. Veranderen de tijden niet, dan gaan deze mee
+   * (ontbreken bij oudere voorstellen; dan geldt datum + tijd).
+   */
+  current: { date: string; start_time: string; end_time: string; location: string | null; starts_at?: string; ends_at?: string; all_day?: boolean; video_service?: string | null };
+  changes: {
+    title?: string; date?: string; start_time?: string; end_time?: string; description?: string | null; location?: string | null;
+    /** Een videovergadering erbij ('google_meet', 'teams', 'jitsi') of eraf ('none'). */
+    video_service?: 'google_meet' | 'teams' | 'jitsi' | 'none';
+    /** De nieuwe Jitsi-link (bij 'jitsi'), of null (bij 'none'). */
+    meeting_url?: string | null;
+    /** De Meet of Teams die de agenda zelf op de afspraak zette, gaat eraf. */
+    remove_conference?: boolean;
+  };
 }
 export interface GerrieCancelCalendarEventProposal {
   type: 'cancel_calendar_event';
@@ -481,9 +499,10 @@ export interface GerrieActionHandlers {
   onEditProject?: (proposal: GerrieEditProjectProposal) => void;
   onCreateTask?: (proposal: GerrieTaskProposal) => void;
   onEditTask?: (proposal: GerrieEditTaskProposal) => void;
-  onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void>;
+  /** Een tekst terug = een kanttekening voor in de chat (bijv. Microsoft zette er geen Teams bij). */
+  onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void | string>;
   /** Wijzigt een bestaand agenda-item (native of Google/Microsoft). */
-  onEditCalendarEvent?: (proposal: GerrieEditCalendarEventProposal) => Promise<void>;
+  onEditCalendarEvent?: (proposal: GerrieEditCalendarEventProposal) => Promise<void | string>;
   /** Zegt een agenda-item af; genodigden krijgen bericht. */
   onCancelCalendarEvent?: (proposal: GerrieCancelCalendarEventProposal) => Promise<void>;
   /** Voegt een contactpersoon toe bij een klant. */

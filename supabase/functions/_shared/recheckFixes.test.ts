@@ -293,7 +293,8 @@ test('Gerrie: een agenda-id van andermans privé-agenda noemt geen naam', () => 
   const visibility = resolver.indexOf("source.visibility !== 'organization'");
   const named = resolver.indexOf('is een abonnement via een link');
   assert.ok(visibility > 0 && named > visibility, 'eerst de zichtbaarheid, dan pas een melding met de naam');
-  assert.match(resolver, /select\('id, name, provider, user_id, visibility'\)/);
+  // conference_types kwam erbij voor Meet/Teams (welke videovergadering de agenda zelf maakt).
+  assert.match(resolver, /select\('id, name, provider, user_id, visibility(, conference_types)?'\)/);
 });
 
 // ── Goedkeuren in de browser: de uitkomst hoort bij wie besliste ─────────────

@@ -28,6 +28,8 @@ import {
 } from '../_shared/calendarCore.ts';
 import { listEvents } from '../_shared/calendarAvailability.ts';
 import { getExternalWriteAccessToken, sendEventCancellations } from '../_shared/calendarEventWrite.ts';
+import { calendarConferenceBlockedReason, calendarConferenceService, isVideoService, serviceProvider, videoServiceStateMessage } from '../_shared/conference.ts';
+import { videoServiceStatus } from '../_shared/onlineMeetings.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { clientBaseUrl } from '../_shared/clientLinks.ts';
 import { renderMeetingBookingLinkEmail } from '../_shared/emailTemplates/meetingBookingLinkSent.ts';
@@ -58,8 +60,12 @@ type LinkRow = {
   max_total_bookings: number;
   max_per_week: number;
   auto_conference: boolean;
-  /** Bij auto_conference: Meet/Teams van de agenda, of een eigen Jitsi-kamer per boeking. */
-  conference_provider?: 'calendar' | 'jitsi';
+  /**
+   * Bij auto_conference: Meet/Teams van de agenda ('calendar'), een eigen
+   * Jitsi-kamer per boeking, of per boeking een Google Meet of Teams via de
+   * koppeling van de maker van de link.
+   */
+  conference_provider?: 'calendar' | 'jitsi' | 'google_meet' | 'teams';
   status: 'active' | 'closed';
   public_token_hash: string | null;
   public_token_expires_at: string | null;
@@ -85,7 +91,7 @@ Deno.serve(async (req) => {
       case 'listSlotsInRange': return json({ ok: true, slots: await listSlotsInRange(organizationId, String(body.start || ''), String(body.end || '')) });
       case 'getLink': return json({ ok: true, ...(await getLink(organizationId, String(body.linkId || ''))) });
       case 'createLink': return json({ ok: true, ...(await createLink(organizationId, user.id, body)) });
-      case 'updateLink': return json({ ok: true, link: await updateLink(organizationId, String(body.linkId || ''), body.patch || {}) });
+      case 'updateLink': return json({ ok: true, link: await updateLink(organizationId, user.id, String(body.linkId || ''), body.patch || {}) });
       case 'deleteLink': await deleteLink(organizationId, String(body.linkId || '')); return json({ ok: true });
       case 'regenerateToken': return json({ ok: true, ...(await regenerateToken(organizationId, String(body.linkId || ''), Number(body.ttlDays) || DEFAULT_TOKEN_TTL_DAYS)) });
       case 'addSlots': return json({ ok: true, ...(await addSlots(organizationId, user.id, String(body.linkId || ''), body.slots || [])) });
@@ -251,14 +257,51 @@ function normalizeLinkInput(body: Record<string, unknown>): Record<string, unkno
   }
   if (body.status === 'active' || body.status === 'closed') patch.status = body.status;
   if (typeof body.autoConference === 'boolean') patch.auto_conference = body.autoConference;
-  if (body.conferenceProvider === 'calendar' || body.conferenceProvider === 'jitsi') patch.conference_provider = body.conferenceProvider;
+  if (body.conferenceProvider === 'calendar' || body.conferenceProvider === 'jitsi' || isVideoService(body.conferenceProvider)) {
+    patch.conference_provider = body.conferenceProvider;
+  }
   return patch;
+}
+
+/**
+ * Kan de gekozen videovergadering bij deze agenda?
+ *
+ * - Meet op een Google-agenda, Teams op een Microsoft-agenda: de agenda maakt
+ *   hem zelf, als die agenda dat kan.
+ * - Elders (de ResoFly-agenda, Teams bij een Google-agenda) maakt
+ *   meeting-booking-public bij elke boeking een losse vergadering met de
+ *   koppeling van de maker van de link. Dus kiest alleen die maker dit zelf,
+ *   en alleen als hij er het recht voor gaf: een collega zet zo nooit
+ *   vergaderingen in andermans Google- of Microsoft-account.
+ */
+async function assertBookingVideo(
+  organizationId: string,
+  requesterUserId: string,
+  ownerUserId: string | null,
+  conferenceProvider: unknown,
+  source: Pick<CalendarSourceRow, 'provider' | 'conference_types'>,
+): Promise<void> {
+  if (!isVideoService(conferenceProvider)) return;
+  if (serviceProvider(conferenceProvider) === source.provider) {
+    if (calendarConferenceService(source.provider, source.conference_types) !== conferenceProvider) {
+      throw new HttpError(calendarConferenceBlockedReason(source.provider), 409);
+    }
+    return;
+  }
+  if (!ownerUserId || ownerUserId !== requesterUserId) {
+    throw new HttpError('Alleen wie de boekingslink maakte, kan Google Meet of Teams van zijn eigen account kiezen.', 403);
+  }
+  const status = (await videoServiceStatus(organizationId, requesterUserId))[conferenceProvider];
+  if (status.state !== 'klaar') throw new HttpError(videoServiceStateMessage(conferenceProvider, status.state), 409);
 }
 
 async function createLink(organizationId: string, userId: string, body: Record<string, unknown>) {
   const source = await assertUsableSource(organizationId, userId, String(body.sourceId || ''));
   const clientId = body.clientId ? String(body.clientId) : null;
   if (clientId) await assertOrgClient(organizationId, clientId);
+
+  const fields = normalizeLinkInput(body);
+  if (fields.auto_conference !== false) await assertBookingVideo(organizationId, userId, userId, fields.conference_provider, source);
 
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
@@ -272,7 +315,7 @@ async function createLink(organizationId: string, userId: string, body: Record<s
     source_id: source.id,
     max_total_bookings: 1,
     max_per_week: 1,
-    ...normalizeLinkInput(body),
+    ...fields,
     public_token_hash: tokenHash,
     public_token_created_at: new Date().toISOString(),
     public_token_expires_at: expiresAt,
@@ -282,12 +325,22 @@ async function createLink(organizationId: string, userId: string, body: Record<s
   return { link: data as LinkRow, token, booking_url: await buildBookingUrl(organizationId, token) };
 }
 
-async function updateLink(organizationId: string, linkId: string, patchBody: Record<string, unknown>): Promise<LinkRow> {
+async function updateLink(organizationId: string, requesterUserId: string, linkId: string, patchBody: Record<string, unknown>): Promise<LinkRow> {
   const link = await loadLink(organizationId, linkId);
   const patch = normalizeLinkInput(patchBody);
+  let newSource: CalendarSourceRow | null = null;
   if (patchBody.sourceId !== undefined) {
-    const source = await assertUsableSource(organizationId, link.user_id || '', String(patchBody.sourceId || ''));
-    patch.source_id = source.id;
+    newSource = await assertUsableSource(organizationId, link.user_id || '', String(patchBody.sourceId || ''));
+    patch.source_id = newSource.id;
+  }
+  // De videokeuze opnieuw toetsen als die, de agenda of het aanzetten verandert.
+  const videoTouched = patch.conference_provider !== undefined || newSource !== null || patch.auto_conference === true;
+  const autoConference = patch.auto_conference !== undefined ? patch.auto_conference : link.auto_conference;
+  if (videoTouched && autoConference !== false) {
+    const source = newSource ?? (link.source_id
+      ? (await supabaseAdmin.from('calendar_sources').select('provider, conference_types').eq('organization_id', organizationId).eq('id', link.source_id).maybeSingle()).data as Pick<CalendarSourceRow, 'provider' | 'conference_types'> | null
+      : null);
+    if (source) await assertBookingVideo(organizationId, requesterUserId, link.user_id, patch.conference_provider ?? link.conference_provider, source);
   }
   if (patchBody.clientId !== undefined) {
     const clientId = patchBody.clientId ? String(patchBody.clientId) : null;

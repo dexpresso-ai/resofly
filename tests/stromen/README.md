@@ -34,7 +34,9 @@ of via Mollie; wie kiest, en dat er per e-mail nergens een betaallink van Mollie
 Mollie-factuur ontstaat: versturen, losse link, herinnering, klantportaal, een klant op "via
 Mollie", en een factuur die Mollie al uitgaf), `herinneringen`, `contracten`, `beveiliging`,
 `automatisering`, `agenda` (Google en Microsoft koppelen, met nep-Google en nep-Microsoft uit
-`nep-agenda.mjs`), `documenten` (maken, rechten per rol en module, andere organisaties,
+`nep-agenda.mjs`), `videovergadering` (Google Meet en Teams: van de agenda en los met de eigen
+koppeling, het aparte recht aan en uit, boekingen met Meet, en Gerrie via een echte MCP-koppeling; zie
+`docs/changelog/CHANGELOG_GOOGLE_MEET_TEAMS_2026-11-08.md`), `documenten` (maken, rechten per rol en module, andere organisaties,
 delen via portaal en link, opruimen) en `verzenddomein` (eigen domein koppelen, verifiëren,
 versturen vanaf het eigen adres, de domein-webhook, verwijderen, en wie een domein mag
 vasthouden; de nep-Resend kent daarvoor ook de Domains-API en verstuurt, net als Resend,

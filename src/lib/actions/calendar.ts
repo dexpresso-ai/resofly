@@ -131,9 +131,16 @@ export const CALENDAR_EXECUTORS: Record<string, ActionExecutor> = {
   'calendar_event.set_meeting_url': async (payload, ctx) => {
     const eventId = text(payload, 'native_event_id') as UUID;
     const input = eventInput(payload);
-    await updateCalendarEvent(ctx.organizationId, { eventId }, input);
+    // Bij een Google Meet of Teams maakt de agenda-functie de vergadering nu,
+    // met de koppeling van wie hier op Uitvoeren klikt.
+    const updated = await updateCalendarEvent(ctx.organizationId, { eventId }, input);
     invalidateCalendarEventsCache(ctx.organizationId);
     const title = optText(payload, 'event_title') ?? 'de afspraak';
+    const service = optText(payload, 'video_service');
+    if (service) {
+      const label = service === 'teams' ? 'Teams' : 'Google Meet';
+      return `${label}-vergadering op "${title}" gezet${updated.meeting_url ? `: ${updated.meeting_url}` : ''}`;
+    }
     return input.meetingUrl
       ? `Videocall-link op "${title}" gezet`
       : `Videocall-link van "${title}" weggehaald`;
@@ -183,7 +190,9 @@ export const CALENDAR_EXECUTORS: Record<string, ActionExecutor> = {
       maxPerWeek: Number(payload.maxPerWeek) || 1,
       autoConference: flag(payload, 'autoConference'),
       // Voorstellen van vóór de Jitsi-keuze hebben dit veld niet; dan beslist de server ('calendar').
-      conferenceProvider: payload.conferenceProvider === 'jitsi' || payload.conferenceProvider === 'calendar' ? payload.conferenceProvider : undefined,
+      conferenceProvider: payload.conferenceProvider === 'jitsi' || payload.conferenceProvider === 'calendar'
+        || payload.conferenceProvider === 'google_meet' || payload.conferenceProvider === 'teams'
+        ? payload.conferenceProvider : undefined,
     };
     const result = await createBookingLink(ctx.organizationId, input);
     // De URL staat maar één keer in beeld: hij is alleen als hash opgeslagen.

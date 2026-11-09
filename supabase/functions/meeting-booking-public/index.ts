@@ -18,6 +18,7 @@ import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { listEvents } from '../_shared/calendarAvailability.ts';
 import { createEvent } from '../_shared/calendarEventWrite.ts';
 import { jitsiMeetingUrl } from '../_shared/jitsi.ts';
+import { VideoUnavailableError, isVideoService, serviceLabel, type VideoService } from '../_shared/conference.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingConfirmedEmail } from '../_shared/emailTemplates/meetingBookingConfirmed.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
@@ -46,7 +47,7 @@ type LinkRow = {
   max_per_week: number;
   auto_conference: boolean;
   /** Ontbreekt zolang migratie 20261014000000 er niet op staat; dan geldt 'calendar'. */
-  conference_provider?: 'calendar' | 'jitsi';
+  conference_provider?: 'calendar' | 'jitsi' | 'google_meet' | 'teams';
   status: 'active' | 'closed';
   public_token_hash: string | null;
   public_token_expires_at: string | null;
@@ -172,17 +173,24 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
 
   // Welke videovergadering de boeking krijgt. Een zelf geplakte vaste videolink
   // heeft altijd voorrang. Anders, met auto_conference aan:
-  //   jitsi    — per geboekt blok een eigen Jitsi-kamer op de server van de
-  //              organisatie; werkt op elke agenda, ook de eigen ResoFly-agenda;
-  //   calendar — Google Meet / Teams van de gekoppelde agenda (native: geen).
+  //   jitsi       — per geboekt blok een eigen Jitsi-kamer op de server van de
+  //                 organisatie; werkt op elke agenda, ook de eigen ResoFly-agenda;
+  //   calendar    — Google Meet / Teams van de gekoppelde agenda (native: geen);
+  //   google_meet — per geboekt blok een Google Meet, en teams een Teams-
+  //   / teams       vergadering: van de agenda zelf als die dat kan, anders los
+  //                 met de koppeling van de maker van de link (createEvent).
   const { data: srcRow } = await supabaseAdmin.from('calendar_sources').select('provider').eq('id', link.source_id).maybeSingle();
   const provider = srcRow ? String(srcRow.provider) : 'native';
+  const service: VideoService | null = isVideoService(link.conference_provider) ? link.conference_provider : null;
   const useJitsi = link.auto_conference && link.conference_provider === 'jitsi' && !link.meeting_url;
-  const addConference = link.auto_conference && !useJitsi && provider !== 'native' && !link.meeting_url;
+  const useService = link.auto_conference && service !== null && !link.meeting_url;
+  const addConference = link.auto_conference && !useJitsi && !useService && provider !== 'native' && !link.meeting_url;
   const jitsiBase = useJitsi ? await loadJitsiBaseUrl(link.organization_id) : null;
 
   const confirmed: Array<{ slot_id: string; starts_at: string; ends_at: string; meeting_url: string | null }> = [];
   const failed: Array<{ slot_id: string; reason: string }> = [];
+  // Wat er met de videovergadering misging; de eigenaar leest het in zijn melding.
+  const videoNotes = new Set<string>();
 
   for (const slotId of slotIds) {
     let bookingId: string | null = null;
@@ -203,7 +211,7 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
 
       // Fase B: agenda-item aanmaken bij de provider (klant als genodigde).
       const slotMeetingUrl = useJitsi ? jitsiMeetingUrl(jitsiBase) : link.meeting_url;
-      const ev = await createEvent(link.organization_id, link.user_id, {
+      const eventInput = {
         sourceId: link.source_id,
         title: name ? `${link.title} — ${name}` : link.title,
         description: link.invite_message,
@@ -211,8 +219,22 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
         endsAt: ends,
         meetingUrl: slotMeetingUrl,
         addConference,
+        ...(useService ? { videoService: service } : {}),
         attendees: [{ email, name: name || undefined }],
-      }) as Record<string, unknown>;
+      };
+      let ev: Record<string, unknown>;
+      try {
+        ev = await createEvent(link.organization_id, link.user_id, eventInput) as Record<string, unknown>;
+      } catch (err) {
+        // Lukt alleen de videovergadering niet (de koppeling van de eigenaar
+        // mist het recht, de Meet API staat uit, geen Teams op dit account),
+        // dan gaat de boeking toch door: de klant heeft zijn moment, en de
+        // eigenaar hoort dat hij zelf een link moet sturen.
+        if (!(err instanceof VideoUnavailableError)) throw err;
+        videoNotes.add(err.message);
+        ev = await createEvent(link.organization_id, link.user_id, { ...eventInput, meetingUrl: null, addConference: false, videoService: null }) as Record<string, unknown>;
+      }
+      if (typeof ev.video_warning === 'string' && ev.video_warning) videoNotes.add(ev.video_warning);
 
       const provider = String(ev.provider);
       const nativeEventId = provider === 'native' ? String(ev.native_event_id ?? '') : null;
@@ -245,7 +267,10 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
   const displayMeetingUrl = link.meeting_url || (confirmed.length === 1 ? confirmed[0].meeting_url : null);
 
   if (confirmed.length > 0) {
-    await sendConfirmationEmails(link, name, email, confirmed, displayMeetingUrl).catch(err => console.error('confirmation mail failed', err));
+    const videoNote = videoNotes.size
+      ? `${service ? serviceLabel(service) : 'De videovergadering'}: ${[...videoNotes].join(' ')} Stuur de klant zelf een videolink als dat nodig is.`
+      : null;
+    await sendConfirmationEmails(link, name, email, confirmed, displayMeetingUrl, videoNote).catch(err => console.error('confirmation mail failed', err));
   }
 
   return {
@@ -281,7 +306,7 @@ function whenLine(starts: string, ends: string): string {
   return `${d} – ${t}`;
 }
 
-async function sendConfirmationEmails(link: LinkRow, name: string, email: string, confirmed: Array<{ starts_at: string; ends_at: string }>, meetingUrl: string | null): Promise<void> {
+async function sendConfirmationEmails(link: LinkRow, name: string, email: string, confirmed: Array<{ starts_at: string; ends_at: string }>, meetingUrl: string | null, videoNote: string | null = null): Promise<void> {
   if (!RESEND_API_KEY) return;
   const sender = await resolveSenderIdentity(supabaseAdmin, link.organization_id, RESEND_FROM_EMAIL);
   if (!sender.from) return;
@@ -309,8 +334,8 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
   const ownerEmail = link.user_id ? await ownerEmailFor(link.user_id) : null;
   if (ownerEmail) {
     const subject = `Nieuwe boeking: ${link.title}`;
-    const lines = [`${name || email} heeft geboekt:`, ...whenLines.map(w => `- ${w}`), '', `E-mail: ${email}`].join('\n');
-    const html = `<p>${escapeHtml(name || email)} heeft geboekt:</p><ul>${whenLines.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul><p>E-mail: ${escapeHtml(email)}</p>`;
+    const lines = [`${name || email} heeft geboekt:`, ...whenLines.map(w => `- ${w}`), '', `E-mail: ${email}`, ...(videoNote ? ['', `Let op — ${videoNote}`] : [])].join('\n');
+    const html = `<p>${escapeHtml(name || email)} heeft geboekt:</p><ul>${whenLines.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul><p>E-mail: ${escapeHtml(email)}</p>${videoNote ? `<p><strong>Let op</strong> — ${escapeHtml(videoNote)}</p>` : ''}`;
     await sendResend(link.organization_id, sender.from, [ownerEmail], undefined, subject, html, lines).catch(err => console.error('owner notify mail', err));
   }
 }

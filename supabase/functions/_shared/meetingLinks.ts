@@ -52,7 +52,7 @@ export function stripMeetingLine(description: string | null): string | null {
 }
 
 /** De link uit de "Videocall:"-regel die ResoFly zelf schreef, als die er staat. */
-function markedMeetingUrl(description: string | null): string | null {
+export function markedMeetingUrl(description: string | null): string | null {
   if (!description) return null;
   return description.match(MEETING_LINE_END_RE)?.[1] ?? description.match(MEETING_LINE_START_RE)?.[1] ?? null;
 }

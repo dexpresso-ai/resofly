@@ -11,7 +11,11 @@ import { inkSizeIssue } from '../lib/ink';
 import { createNoteWithCalendarLink, saveJitsiServer, saveNoteHandwriting } from '../lib/repository';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { dateNL, formatMinutes } from '../lib/format';
-import { DEFAULT_JITSI_BASE_URL, bookingVideoFields, defaultBookingVideo, detectMeetingKind, isValidMeetingUrl, jitsiMeetingUrl, jitsiServerLabel, normalizeJitsiBaseUrl, usesPublicJitsi, type BookingVideo } from '../lib/meeting';
+import {
+  DEFAULT_JITSI_BASE_URL, bookingVideoFields, defaultBookingVideo, detectMeetingKind, isValidMeetingUrl, jitsiMeetingUrl, jitsiServerLabel,
+  connectionMeetingState, meetingModeOf, meetingUrlToKeep, normalizeJitsiBaseUrl, usesPublicJitsi, videoFieldsForSave, videoServiceOptions,
+  type BookingVideo, type MeetingMode,
+} from '../lib/meeting';
 import { BookingVideoSelect } from '../components/BookingVideoSelect';
 import {
   createCalendarAppPassword,
@@ -42,7 +46,7 @@ import {
 import { addBookingSlots, createBookingLink, listBookingLinks, listBookingSlotsInRange, sendBookingLinkMail } from '../lib/meetingBookingApi';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabase';
-import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, ConferenceProvider, EventRecurrence, MeetingBookingLinkListItem, RecurrenceFrequency } from '../types';
+import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, ConferenceProvider, EventRecurrence, MeetingBookingLinkListItem, RecurrenceFrequency, VideoService, VideoServices } from '../types';
 import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Supplier, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
@@ -158,7 +162,8 @@ type NewEventState = {
   trackTime: boolean;
   recurrenceFreq: '' | RecurrenceFrequency; recurrenceUntil: string; editingEventId: string;
   attendees: { email: string; name: string }[];
-  meetingUrl: string; addConference: boolean;
+  /** De videolink (Jitsi, geplakt, of een Meet/Teams die er al staat) en de gekozen Meet/Teams. */
+  meetingUrl: string; videoService: '' | VideoService;
 };
 
 const ATTENDEE_STATUS_LABELS: Record<AttendeeStatus, string> = {
@@ -2402,25 +2407,38 @@ function LocationField({ value, onChange, placeholder }: {
 
 /* ── Floating creation panel ─────────────────────────────────────────── */
 
-// Videovergadering bij een afspraak — vier keuzes:
-//   Geen · Jitsi Meet · Google Meet / Teams (alleen op een Google-/Microsoft-agenda) · Eigen link.
-// Jitsi werkt op élke agenda, ook de eigen ResoFly-agenda: het is gewoon een link
-// naar een eigen vergaderruimte (op meet.jit.si, of de eigen Jitsi-server uit
-// Instellingen → Agenda), zonder Google of Microsoft ertussen. De link wordt hier
-// al gemaakt, zodat je hem kunt kopiëren vóór het opslaan; opgeslagen gaat hij
-// als gewone videocall-link (meetingUrl), net als een geplakte link.
-type MeetingMode = 'none' | 'jitsi' | 'auto' | 'link';
+// Videovergadering bij een afspraak — vijf keuzes:
+//   Geen · Jitsi Meet · Google Meet · Teams · Eigen link.
+// Jitsi werkt op élke agenda: een link naar een eigen vergaderruimte (op
+// meet.jit.si, of de eigen Jitsi-server uit Instellingen → Agenda). Google Meet
+// en Teams maakt een Google- of Microsoft-agenda zelf; in de ResoFly-agenda (of
+// Teams bij een Google-agenda) maakt ResoFly ze los, met je eigen koppeling, als
+// je daar bij Instellingen → Agenda toestemming voor gaf. Een Jitsi-link staat er
+// meteen (je kunt hem vóór het opslaan kopiëren); een Meet of Teams ontstaat bij
+// het opslaan. De regels staan in src/lib/meeting.ts en de server.
 
-function MeetingFields({ provider, meetingUrl, addConference, jitsiBaseUrl, onChange }: {
-  provider: CalendarProvider | null;
+/** De videokeuze van een formulier bij het opslaan; Jitsi en een eigen link gaan allebei als link mee. */
+function meetingModeForSave(form: { meetingUrl: string; videoService: '' | VideoService }): MeetingMode {
+  return form.videoService || (form.meetingUrl.trim() ? 'link' : 'none');
+}
+
+function MeetingFields({ sourceProvider, sourceConferenceTypes, videoServices, conference, meetingUrl, videoService, jitsiBaseUrl, onChange }: {
+  sourceProvider: CalendarProvider | null;
+  /** Wat de agenda zelf kan (calendar_sources.conference_types). */
+  sourceConferenceTypes?: string[] | null;
+  /** Kan ik een losse Meet/Teams maken? Van de server, alleen over je eigen koppelingen. */
+  videoServices?: VideoServices | null;
+  /** Bij bewerken: de vergadering die Google of Outlook zelf op de afspraak zette. */
+  conference?: CalendarExternalEvent['conference'];
   meetingUrl: string;
-  addConference: boolean;
+  /** Gekozen Google Meet of Teams ('' = geen van beide). */
+  videoService: '' | VideoService;
   /** Eigen Jitsi-server van de organisatie (company_settings); leeg = meet.jit.si. */
   jitsiBaseUrl: string | null | undefined;
-  onChange: (patch: Partial<Pick<NewEventState, 'meetingUrl' | 'addConference'>>) => void;
+  onChange: (patch: Partial<Pick<NewEventState, 'meetingUrl' | 'videoService'>>) => void;
 }) {
-  const canAuto = provider === 'google' || provider === 'microsoft';
-  const autoName = provider === 'microsoft' ? 'Teams' : 'Google Meet';
+  const options = videoServiceOptions(sourceProvider, sourceConferenceTypes, videoServices);
+  const available = { google_meet: options.google_meet.available, teams: options.teams.available };
   const trimmed = meetingUrl.trim();
   const invalid = trimmed.length > 0 && !isValidMeetingUrl(trimmed);
   const detected = trimmed && !invalid ? detectMeetingKind(trimmed, jitsiBaseUrl) : null;
@@ -2433,9 +2451,16 @@ function MeetingFields({ provider, meetingUrl, addConference, jitsiBaseUrl, onCh
   // maakt bewust een nieuwe.
   const lastJitsiRef = useRef<string | null>(null);
   if (detected?.kind === 'jitsi') lastJitsiRef.current = trimmed;
-  // Auto-genereren kan alleen bij Google/Microsoft; op een native agenda vervalt
-  // het altijd (ook als addConference nog van een eerdere bron aanstond).
-  const mode: MeetingMode = canAuto && addConference ? 'auto'
+  // Hetzelfde voor een Meet- of Teams-link die er bij het openen al stond.
+  const [originalLinks] = useState<Partial<Record<VideoService, string>>>(() => (videoService && trimmed ? { [videoService]: trimmed } : {}));
+
+  // Kan de gekozen dienst hier niet meer (een andere agenda gekozen, of de
+  // toestemming ingetrokken), dan geldt hij ook niet meer bij het opslaan.
+  useEffect(() => {
+    if (videoService && !available[videoService]) onChange({ videoService: '' });
+  }, [videoService, available.google_meet, available.teams]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const mode: MeetingMode = videoService && available[videoService] ? videoService
     : pasting ? 'link'
     : detected?.kind === 'jitsi' ? 'jitsi'
     : trimmed ? 'link' : 'none';
@@ -2443,11 +2468,15 @@ function MeetingFields({ provider, meetingUrl, addConference, jitsiBaseUrl, onCh
   function choose(next: MeetingMode) {
     setPasting(next === 'link');
     setCopied(false);
-    if (next === 'none') onChange({ addConference: false, meetingUrl: '' });
-    else if (next === 'auto') onChange({ addConference: true, meetingUrl: '' });
+    if (next === 'none') onChange({ videoService: '', meetingUrl: '' });
+    else if (next === 'google_meet' || next === 'teams') {
+      // Een vergadering die er al stond, komt terug; anders maakt opslaan er een.
+      const existing = originalLinks[next] ?? (conference?.service === next ? conference.url ?? '' : '');
+      onChange({ videoService: next, meetingUrl: existing });
+    }
     // Een bestaande Jitsi-link blijft staan: genodigden hebben hem misschien al.
-    else if (next === 'jitsi') onChange({ addConference: false, meetingUrl: detected?.kind === 'jitsi' ? trimmed : (lastJitsiRef.current ?? jitsiMeetingUrl(jitsiBaseUrl)) });
-    else onChange({ addConference: false, meetingUrl: mode === 'link' ? meetingUrl : '' });
+    else if (next === 'jitsi') onChange({ videoService: '', meetingUrl: detected?.kind === 'jitsi' ? trimmed : (lastJitsiRef.current ?? jitsiMeetingUrl(jitsiBaseUrl)) });
+    else onChange({ videoService: '', meetingUrl: mode === 'link' ? meetingUrl : '' });
   }
 
   async function copyLink() {
@@ -2455,50 +2484,86 @@ function MeetingFields({ provider, meetingUrl, addConference, jitsiBaseUrl, onCh
     catch { /* geen klembord (http, oude browser): de link is selecteerbaar */ }
   }
 
-  const options: { id: MeetingMode; label: string }[] = [
+  const list: { id: MeetingMode; label: string }[] = [
     { id: 'none', label: 'Geen' },
     { id: 'jitsi', label: 'Jitsi Meet' },
-    ...(canAuto ? [{ id: 'auto' as const, label: autoName }] : []),
+    ...(available.google_meet ? [{ id: 'google_meet' as const, label: 'Google Meet' }] : []),
+    ...(available.teams ? [{ id: 'teams' as const, label: 'Teams' }] : []),
     { id: 'link', label: 'Eigen link' },
   ];
+  // Waarom Meet of Teams hier niet staat, als dat iets is om te weten.
+  const hints = (['google_meet', 'teams'] as const).map(svc => (!available[svc] ? options[svc].hint : null)).filter((h): h is string => Boolean(h));
+  // Kies je iets anders dan de vergadering die de agenda er zelf op zette: wat er met die vergadering gebeurt.
+  const ownService = conference?.service === 'google_meet' || conference?.service === 'teams' ? conference.service : null;
+  const leavingOwn = ownService && mode !== ownService
+    ? (ownService === 'google_meet'
+      ? 'De Google Meet-vergadering gaat bij het opslaan van de afspraak af.'
+      : 'De Teams-vergadering zelf blijft in Outlook staan: Microsoft laat die niet via een koppeling weghalen.')
+    : null;
+
+  const linkBox = (title: string) => (
+    <div className="event-meeting-jitsi">
+      {/* Als tekst, niet als veld: zo is de hele link te lezen (ook op de
+          telefoon, waar hij afbreekt) en kun je de ruimte meteen openen. */}
+      <a className="event-meeting-link" href={safeHttpUrl(trimmed) ?? undefined} target="_blank" rel="noreferrer" title={title}>{trimmed}</a>
+      <div className="event-meeting-jitsi-actions">
+        <Button type="button" onClick={() => void copyLink()}>{copied ? <><Check size={13} /> Gekopieerd</> : 'Kopieer'}</Button>
+        {mode === 'jitsi' && (
+          <Button type="button" title="Andere vergaderruimte maken" aria-label="Nieuwe Jitsi-link"
+            onClick={() => { setCopied(false); onChange({ meetingUrl: jitsiMeetingUrl(jitsiBaseUrl) }); }}><RefreshCcw size={13} /></Button>
+        )}
+      </div>
+    </div>
+  );
+
+  const serviceLabel = mode === 'teams' ? 'Teams' : 'Google Meet';
+  const serviceHelp = (() => {
+    if (mode !== 'google_meet' && mode !== 'teams') return null;
+    if (trimmed) return `Deze ${serviceLabel}-vergadering blijft staan; de genodigden hebben de link al.`;
+    if (conference?.service === mode && conference.status === 'pending') return 'Google maakt de Meet-link nog aan; hij staat zo bij de afspraak.';
+    const account = videoServices?.[mode]?.account;
+    if (options[mode].how === 'calendar') {
+      return mode === 'teams'
+        ? 'Bij het opslaan maakt Outlook er een Teams-vergadering bij; de link gaat mee in de uitnodiging.'
+        : 'Bij het opslaan maakt Google Agenda er een Google Meet-vergadering bij; de link gaat mee in de uitnodiging.';
+    }
+    return `Bij het opslaan maakt ResoFly een ${serviceLabel}-vergadering met je ${mode === 'teams' ? 'Microsoft' : 'Google'}-account${account ? ` (${account})` : ''}; de link komt bij de afspraak en in de uitnodiging.`;
+  })();
+
   return (
     <div className="event-meeting-field">
       <div className="tb-panel-section-label"><Video size={13} /> Videovergadering</div>
       <div className="bk-seg bk-seg-sm event-meeting-modes" role="radiogroup" aria-label="Videovergadering">
-        {options.map(o => (
+        {list.map(o => (
           <button key={o.id} type="button" role="radio" aria-checked={mode === o.id} className={mode === o.id ? 'is-active' : ''} onClick={() => choose(o.id)}>{o.label}</button>
         ))}
       </div>
       {mode === 'jitsi' && (
         <>
-          <div className="event-meeting-jitsi">
-            {/* Als tekst, niet als veld: zo is de hele link te lezen (ook op de
-                telefoon, waar hij afbreekt) en kun je de ruimte meteen openen. */}
-            <a className="event-meeting-link" href={safeHttpUrl(trimmed) ?? undefined} target="_blank" rel="noreferrer" title="Open de vergaderruimte">{trimmed}</a>
-            <div className="event-meeting-jitsi-actions">
-              <Button type="button" onClick={() => void copyLink()}>{copied ? <><Check size={13} /> Gekopieerd</> : 'Kopieer'}</Button>
-              <Button type="button" title="Andere vergaderruimte maken" aria-label="Nieuwe Jitsi-link"
-                onClick={() => { setCopied(false); onChange({ meetingUrl: jitsiMeetingUrl(jitsiBaseUrl) }); }}><RefreshCcw size={13} /></Button>
-            </div>
-          </div>
+          {linkBox('Open de vergaderruimte')}
           <p className="calendar-help">
             Eigen vergaderruimte op {jitsiServerLabel(jitsiBaseUrl)}, zonder Google of Microsoft. Gasten hebben geen account nodig; de link gaat mee in de uitnodiging.
             {usesPublicJitsi(jitsiBaseUrl) ? ' Wie de vergadering start, logt op meet.jit.si één keer kort in (Google, GitHub of Facebook).' : ''}
           </p>
         </>
       )}
-      {mode === 'auto' && (
-        <p className="calendar-help">Er wordt automatisch een {provider === 'microsoft' ? 'Teams-vergadering' : 'Google Meet-link'} aangemaakt en meegestuurd met de uitnodiging.</p>
+      {(mode === 'google_meet' || mode === 'teams') && (
+        <>
+          {trimmed && linkBox(`Open de ${serviceLabel}-vergadering`)}
+          <p className="calendar-help">{serviceHelp}</p>
+        </>
       )}
       {mode === 'link' && (
         <>
           <Input type="url" value={meetingUrl} placeholder="Plak een Google Meet-, Teams-, Zoom- of Jitsi-link…" aria-label="Videocall-link"
-            onChange={e => onChange({ meetingUrl: e.target.value })} />
+            onChange={e => onChange({ meetingUrl: e.target.value, videoService: '' })} />
           {invalid
             ? <p className="calendar-help calendar-help-warn">Voer een geldige http(s)-link in.</p>
             : detected && <p className="calendar-help"><Video size={12} /> {detected.label}-link herkend</p>}
         </>
       )}
+      {leavingOwn && <p className="calendar-help calendar-help-note">{leavingOwn}</p>}
+      {hints.map(h => <p key={h} className="calendar-help">{h}</p>)}
     </div>
   );
 }
@@ -2649,7 +2714,7 @@ function AttendeePicker({ organizationId, sourceId, sourceProvider, clients, sup
   );
 }
 
-function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, suppliers, projects, tasks, loading, canWrite, selectedSourceIsNative, selectedSourceProvider, organizationId, jitsiBaseUrl, onSubmit, onClose }: {
+function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, suppliers, projects, tasks, loading, canWrite, selectedSourceIsNative, selectedSourceProvider, organizationId, jitsiBaseUrl, videoServices, conference, onSubmit, onClose }: {
   newEvent: NewEventState;
   setNewEvent: (fn: (prev: NewEventState) => NewEventState) => void;
   writeableSources: CalendarSource[];
@@ -2664,10 +2729,15 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
   organizationId: UUID;
   /** Eigen Jitsi-server van de organisatie; leeg = meet.jit.si. */
   jitsiBaseUrl: string | null;
+  /** Kan ik een losse Meet/Teams maken (van de server)? */
+  videoServices?: VideoServices | null;
+  /** Bij bewerken: de vergadering die Google of Outlook zelf op de afspraak zette. */
+  conference?: CalendarExternalEvent['conference'];
   onSubmit: (e: FormEvent) => void;
   onClose: () => void;
 }) {
   const editing = Boolean(newEvent.editingEventId);
+  const selectedSource = writeableSources.find(s => s.id === newEvent.sourceId);
   return (
     <div className="tb-overlay" onClick={onClose}>
       <form className="tb-panel" onClick={e => e.stopPropagation()} onSubmit={onSubmit}>
@@ -2688,7 +2758,8 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
         </div>
         <label>Omschrijving<Textarea value={newEvent.description} onChange={e => setNewEvent(p => ({ ...p, description: e.target.value }))} placeholder="Optioneel" /></label>
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
-        <MeetingFields provider={selectedSourceProvider} meetingUrl={newEvent.meetingUrl} addConference={newEvent.addConference} jitsiBaseUrl={jitsiBaseUrl}
+        <MeetingFields sourceProvider={selectedSourceProvider} sourceConferenceTypes={selectedSource?.conference_types} videoServices={videoServices}
+          conference={editing ? conference : null} meetingUrl={newEvent.meetingUrl} videoService={newEvent.videoService} jitsiBaseUrl={jitsiBaseUrl}
           onChange={patch => setNewEvent(p => ({ ...p, ...patch }))} />
         {selectedSourceIsNative ? (
           <div className="settings-grid compact">
@@ -2726,12 +2797,18 @@ export type EventDetailForm = {
   title: string; location: string; description: string;
   startLocal: string; endLocal: string; allDay: boolean;
   recurrenceFreq: '' | RecurrenceFrequency; recurrenceUntil: string;
-  meetingUrl: string; addConference: boolean;
+  meetingUrl: string; videoService: '' | VideoService;
   attendees: { email: string; name: string }[];
 };
 
-function detailFormFromEvent(event: CalendarExternalEvent): EventDetailForm {
+/**
+ * `available`: kan Meet/Teams bij deze afspraak (videoServiceOptions)? Zo staat
+ * een bestaande Meet meteen als "Google Meet" in het formulier, en is het
+ * formulier bij openen gelijk aan de afspraak (anders stond er al "Opslaan").
+ */
+function detailFormFromEvent(event: CalendarExternalEvent, available: Record<VideoService, boolean>): EventDetailForm {
   const rec = parseRruleToForm(event.rrule ?? null);
+  const mode = meetingModeOf(event.meeting_url, available, null, event.conference);
   return {
     title: event.title === '(Geen titel)' ? '' : (event.title ?? ''),
     location: event.location ?? '',
@@ -2742,15 +2819,19 @@ function detailFormFromEvent(event: CalendarExternalEvent): EventDetailForm {
     recurrenceFreq: rec.freq,
     recurrenceUntil: rec.until,
     meetingUrl: event.meeting_url ?? '',
-    addConference: false,
+    videoService: mode === 'google_meet' || mode === 'teams' ? mode : '',
     attendees: (event.attendees ?? []).map(a => ({ email: a.email, name: a.name ?? '' })),
   };
 }
 
-function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onEditTask, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onNotesChanged, onSaveEvent, onDeleteEvent, onClose }: {
+function CalendarEventDetailPanel({ event, organizationId, data, sources, videoServices, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onEditTask, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onNotesChanged, onSaveEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
   organizationId: UUID;
   data: AppData;
+  /** De agenda's (voor wat de agenda van deze afspraak zelf kan: Meet/Teams). */
+  sources: CalendarSource[];
+  /** Kan ik een losse Meet/Teams maken (van de server)? */
+  videoServices?: VideoServices | null;
   sourceColors: Map<string, string>;
   canWrite: boolean;
   editable: boolean;
@@ -2806,10 +2887,13 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
     // die bij de vorige afspraak achterbleef, hoort niet de tekening van deze
     // te krijgen.
     pendingInkNoteRef.current = null;
-    const f = event ? detailFormFromEvent(event) : null;
+    const opts = event ? videoServiceOptions(event.provider, sources.find(s => s.id === event.source_id)?.conference_types, videoServices) : null;
+    const f = event && opts ? detailFormFromEvent(event, { google_meet: opts.google_meet.available, teams: opts.teams.available }) : null;
     setForm(f);
     setBaseline(f);
-  }, [event]);
+    // Alleen opnieuw bij een andere afspraak: een formulier dat je aan het
+    // invullen bent, mag niet terugspringen als de agenda's ververst worden.
+  }, [event]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const nativeEventId = event?.provider === 'native' ? event.native_event_id : undefined;
   useEffect(() => {
@@ -3076,7 +3160,9 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
 
         {editing && (
           <div className="event-detail-meeting-edit">
-            <MeetingFields key={event.id} provider={event.provider} meetingUrl={form!.meetingUrl} addConference={form!.addConference} jitsiBaseUrl={data.companySettings?.jitsi_base_url}
+            <MeetingFields key={event.id} sourceProvider={event.provider} sourceConferenceTypes={sources.find(s => s.id === event.source_id)?.conference_types}
+              videoServices={videoServices} conference={event.conference} meetingUrl={form!.meetingUrl} videoService={form!.videoService}
+              jitsiBaseUrl={data.companySettings?.jitsi_base_url}
               onChange={patch => setForm(p => p ? { ...p, ...patch } : p)} />
           </div>
         )}
@@ -3337,8 +3423,9 @@ function VideoMeetingCard({ organizationId, jitsiBaseUrl, canAdmin, onSaved }: {
     <section className="calendar-section connections-panel" id="calendar-video">
       <div className="calendar-section-head">
         <div>
-          <h3>Videovergaderen met Jitsi Meet</h3>
-          <p>Geef een afspraak of boekingslink met één klik een eigen vergaderruimte, zonder Google of Microsoft: kies <strong>Jitsi Meet</strong> bij de videovergadering. Gasten hebben geen account nodig.</p>
+          <h3>Videovergaderen</h3>
+          <p>Geef een afspraak of boekingslink met één klik een videovergadering. <strong>Google Meet</strong> en <strong>Teams</strong> maakt je gekoppelde Google- of Microsoft-agenda zelf; wil je ze ook in je ResoFly-agenda, bij boekingslinks en in de teamchat, zet ze dan aan bij <em>Gekoppelde accounts</em>.</p>
+          <p><strong>Jitsi Meet</strong> werkt overal, zonder Google of Microsoft: een eigen vergaderruimte, en gasten hebben geen account nodig.</p>
         </div>
       </div>
 
@@ -3366,6 +3453,43 @@ function VideoMeetingCard({ organizationId, jitsiBaseUrl, canAdmin, onSaved }: {
         {!canAdmin && <p>Alleen een owner of admin kan dit aanpassen.</p>}
       </div>
     </section>
+  );
+}
+
+/**
+ * Google Meet of Teams buiten de agenda om, per gekoppeld account. In de eigen
+ * Google- of Microsoft-agenda maakt de agenda de vergadering zelf; voor de
+ * ResoFly-agenda, boekingslinks en de teamchat geeft iemand één keer apart
+ * toestemming. Apart, en niet bij het koppelen: een Workspace-beheerder die Meet
+ * voor apps blokkeert, liet anders de hele agendakoppeling weigeren.
+ */
+function ConnectionMeetingRow({ provider, state, disabled, onEnable }: {
+  provider: CalendarProvider;
+  state: 'aan' | 'uit' | 'kan_niet' | null;
+  disabled: boolean;
+  onEnable: () => void;
+}) {
+  if (!state) return null;
+  const google = provider === 'google';
+  const label = google ? 'Google Meet' : 'Teams';
+  const text = state === 'aan'
+    ? `${label} kan ook in je ResoFly-agenda, bij boekingslinks en in de teamchat.`
+    : state === 'kan_niet'
+      ? (google
+        ? 'Op dit account staat Google Meet uit; dat doet meestal de beheerder van een Google Workspace.'
+        : 'Dit account maakt geen Teams-vergaderingen; dat kan alleen met een werk- of schoolaccount van Microsoft 365.')
+      : `${label} maakt je ${google ? 'Google' : 'Microsoft'}-agenda zelf. Ook in je ResoFly-agenda, bij boekingslinks en in de teamchat? Dan geef je ${google ? 'Google' : 'Microsoft'} één keer toestemming.`;
+  return (
+    <div className={`connection-meeting is-${state}`}>
+      {state === 'aan' ? <Check size={14} aria-hidden="true" /> : <Video size={14} aria-hidden="true" />}
+      <span>{text}</span>
+      {state === 'uit' && (
+        <Button onClick={onEnable} disabled={disabled}
+          title={`Je gaat naar ${google ? 'Google' : 'Microsoft'} om ResoFly toestemming te geven ${label}-vergaderingen te maken. Je agenda's en instellingen blijven staan.`}>
+          {label} aanzetten
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -3462,9 +3586,11 @@ function PhoneCalendarCard({ organizationId }: { organizationId: UUID }) {
 
 /** Dialoog om getekende concept-blokken door te sturen: kies klant/agenda + opties,
  *  maak de boekingslink aan en koppel de blokken. */
-function BookingSendDialog({ sources, clients, draftCount, onCancel, onSubmit }: {
+function BookingSendDialog({ sources, clients, draftCount, videoServices, onCancel, onSubmit }: {
   sources: CalendarSource[];
   clients: Client[];
+  /** Kan ik een losse Meet/Teams per boeking laten maken (van de server)? */
+  videoServices?: VideoServices | null;
   draftCount: number;
   onCancel: () => void;
   onSubmit: (p: { sourceId: string; clientId: string; title: string; maxTotalBookings: number; maxPerWeek: number; introText: string; inviteMessage: string; meetingUrl: string; autoConference: boolean; conferenceProvider: ConferenceProvider }) => void;
@@ -3507,7 +3633,7 @@ function BookingSendDialog({ sources, clients, draftCount, onCancel, onSubmit }:
         </div>
         <label>Intro-tekst op de boekingspagina (optioneel)<Textarea rows={2} value={introText} onChange={e => setIntroText(e.target.value)} /></label>
         <label>Begeleidende tekst bij de uitnodiging (optioneel)<Textarea rows={2} value={inviteMessage} onChange={e => setInviteMessage(e.target.value)} /></label>
-        <BookingVideoSelect value={video} sourceProvider={provider} onChange={setVideo} />
+        <BookingVideoSelect value={video} sourceProvider={provider} videoServices={videoServices} onChange={setVideo} />
         <label>Vaste videocall-link (optioneel)<Input value={meetingUrl} onChange={e => setMeetingUrl(e.target.value)} placeholder="https://… — gaat vóór de keuze hierboven" /></label>
       </div>
     </Modal>
@@ -3770,6 +3896,8 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   const [eventsLoading, setEventsLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Opgeslagen, maar met een kanttekening (bijv. Microsoft zette er geen Teams bij). */
+  const [notice, setNotice] = useState<string | null>(null);
   const isMobile = useIsMobile();
   // Op een telefoon is een 7-koloms weekraster onwerkbaar (horizontaal scrollen).
   // Start daarom in dagweergave — één kolom die het scherm vult, zoals Google/Apple.
@@ -3781,10 +3909,10 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   const [createdCount, setCreatedCount] = useState(0);
   const [selectedEvent, setSelectedEvent] = useState<CalendarExternalEvent | null>(null);
   const [showConnections, setShowConnections] = useState(() => mode === 'settings' || window.location.hash === '#calendar-connections');
-  const [newEvent, setNewEvent] = useState(() => {
+  const [newEvent, setNewEvent] = useState<NewEventState>(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
     const e = new Date(s); e.setHours(e.getHours() + 1);
-    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '', attendees: [] as { email: string; name: string }[], meetingUrl: '', addConference: false };
+    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '', attendees: [] as { email: string; name: string }[], meetingUrl: '', videoService: '' };
   });
   // Bij het bewerken van een native afspraak bewaren we het originele event, zodat
   // we bij een gewijzigde starttijd de oude koppeling (en afgeleide urenpost) kunnen opruimen.
@@ -3999,7 +4127,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       ...p, title: initialDraft.title, description: '', location: '', allDay: false,
       startsAt: toInputDateTime(start), endsAt: toInputDateTime(end),
       clientId: initialDraft.clientId, projectId: initialDraft.projectId, taskId: initialDraft.taskId, trackTime: true,
-      recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false,
+      recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', videoService: '',
     }));
     setShowCreatePanel(true);
     onDraftConsumed?.();
@@ -4040,11 +4168,15 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     catch (err) { if (seq === eventsRequestRef.current) setError(err instanceof Error ? err.message : 'Agenda-events laden mislukt.'); }
     finally { if (seq === eventsRequestRef.current && !opts?.silent) setEventsLoading(false); }
   }, [organizationId]);
-  /** Naar Google of Microsoft. Met `loginHint` (opnieuw koppelen) staat het juiste account meteen klaar. */
-  async function connect(provider: CalendarProvider, loginHint?: string | null) {
+  /**
+   * Naar Google of Microsoft. Met `loginHint` (opnieuw koppelen) staat het juiste
+   * account meteen klaar; met `meetings` vraagt het ook het recht om losse Meet-
+   * of Teams-vergaderingen te maken.
+   */
+  async function connect(provider: CalendarProvider, loginHint?: string | null, options?: { meetings?: boolean }) {
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
     setLoading(true); setError(null); setMessage(null);
-    try { window.location.assign(await getCalendarOAuthUrl(organizationId, provider, window.location.href.split('?')[0], loginHint)); }
+    try { window.location.assign(await getCalendarOAuthUrl(organizationId, provider, window.location.href.split('?')[0], loginHint, options)); }
     catch (err) { setError(err instanceof Error ? err.message : 'Koppelen starten mislukt.'); setLoading(false); }
   }
   async function refreshSources(connectionId: string) {
@@ -4130,7 +4262,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       return;
     }
     setEditingOriginal(null);
-    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', taskId: '', trackTime: true, editingEventId: '', meetingUrl: '', addConference: false }));
+    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', taskId: '', trackTime: true, editingEventId: '', meetingUrl: '', videoService: '' }));
     setShowCreatePanel(true);
   }, [bookingMode]);
 
@@ -4144,7 +4276,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     else { start.setHours(9, 0, 0, 0); }
     const end = new Date(start); end.setHours(start.getHours() + 1);
     setEditingOriginal(null);
-    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(start), endsAt: toInputDateTime(end), clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
+    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(start), endsAt: toInputDateTime(end), clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', videoService: '' }));
     setShowCreatePanel(true);
   }, []);
 
@@ -4188,11 +4320,11 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       startsAt: sIso, endsAt: eIso, allDay: newEvent.allDay, recurrence,
       // Genodigden op elke agenda: native via iMIP-mail, Google/Microsoft via de provider.
       attendees: newEvent.attendees.map(a => ({ email: a.email, name: a.name || null })),
-      // Automatisch genereren kan alleen bij Google/Microsoft; native accepteert alleen een geplakte link.
-      meetingUrl: newEvent.addConference && !isNative ? null : (newEvent.meetingUrl.trim() || null),
-      addConference: !isNative && newEvent.addConference,
+      // Meet/Teams maakt de agenda zelf of de server los (src/lib/meeting.ts);
+      // bij bewerken blijft een vergadering die er al staat.
+      ...videoFieldsForSave(meetingModeForSave(newEvent), newEvent.meetingUrl, newEvent.editingEventId ? editingOriginal?.conference : null),
     };
-    setLoading(true); setError(null); setMessage(null);
+    setLoading(true); setError(null); setMessage(null); setNotice(null);
     try {
       if (newEvent.editingEventId) {
         const ref = editingOriginal ? eventRef(editingOriginal) : { eventId: newEvent.editingEventId, sourceId: newEvent.sourceId };
@@ -4205,14 +4337,16 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
         // (Her)koppel op de huidige identiteit — leeg = ontkoppelen.
         await onSetEventLink(updated, newEvent.clientId || null, newEvent.projectId || null, newEvent.trackTime, newEvent.taskId || null);
         setMessage('Afspraak bijgewerkt.');
+        setNotice(updated.video_warning ?? null);
       } else {
         const created = await createExternalCalendarEvent(organizationId, input);
         if (newEvent.clientId || newEvent.projectId || newEvent.taskId) await onSetEventLink(created, newEvent.clientId || null, newEvent.projectId || null, newEvent.trackTime, newEvent.taskId || null);
         setMessage(isNative ? 'Afspraak aangemaakt in je ResoFly-agenda.' : 'Event aangemaakt en zichtbaar in je externe agenda.');
+        setNotice(created.video_warning ?? null);
       }
       setEditingOriginal(null);
       const d = makeDefaultTimes();
-      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
+      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', videoService: '' }));
       setShowCreatePanel(false);
       setCreatedCount(n => n + 1);
       refreshEventsOnly({ fresh: true }).catch(() => {});
@@ -4243,9 +4377,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       startsAt: sIso, endsAt: eIso, allDay: form.allDay,
       recurrence,
       attendees: form.attendees.map(a => ({ email: a.email, name: a.name || null })),
-      // Automatisch genereren kan alleen bij Google/Microsoft; native accepteert alleen een geplakte link.
-      meetingUrl: form.addConference && !isNative ? null : (form.meetingUrl.trim() || null),
-      addConference: !isNative && form.addConference,
+      ...videoFieldsForSave(meetingModeForSave(form), form.meetingUrl, event.conference),
     };
     const updated = await updateCalendarEvent(organizationId, eventRef(event), input);
     const startChanged = new Date(event.starts_at).getTime() !== new Date(updated.starts_at).getTime();
@@ -4264,6 +4396,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     setEvents(prev => prev.map(e => eventIdentityKey(e) === previousKey ? updated : e));
     setSelectedEvent(null);
     setMessage('Afspraak bijgewerkt.');
+    setNotice(updated.video_warning ?? null);
     refreshEventsOnly({ fresh: true, silent: true }).catch(() => {});
   }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink, refreshEventsOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -4315,8 +4448,10 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       location: event.location ?? null,
       startsAt: startIso, endsAt: endIso, allDay: event.all_day,
       recurrence, attendees,
-      // Videocall-link behouden bij verplaatsen/herschalen.
-      meetingUrl: event.meeting_url ?? null,
+      // Videocall-link behouden bij verplaatsen/herschalen. De vergadering die
+      // Google of Outlook zelf op de afspraak zette, blijft vanzelf; die hoort
+      // niet als regel in de omschrijving (dat gebeurde eerst bij elke sleep).
+      meetingUrl: meetingUrlToKeep(event.meeting_url, event.conference),
     };
     try {
       const updated = await updateCalendarEvent(organizationId, eventRef(event), input);
@@ -4616,6 +4751,9 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
             <Button variant="danger" onClick={() => disconnect(conn.id)} disabled={loading || !owns}><Unplug size={14} /> Loskoppelen</Button>
           </div>
           {owns && status.hint && <p className={`connection-hint tone-${status.tone}`} role="status">{status.hint}</p>}
+          {/* Bij een koppeling die opnieuw moet, eerst alleen die knop: daarna pas Meet/Teams. */}
+          {owns && !status.needsReconnect && <ConnectionMeetingRow provider={conn.provider} state={connectionMeetingState(conn.provider, conn.scopes, srcs.map(s => s.conference_types))}
+            disabled={loading || !canWrite} onEnable={() => connect(conn.provider, conn.provider_account_email, { meetings: true })} />}
           <div className="source-list">
             {srcs.map(src => {
               const ownsSrc = canManageSource(src);
@@ -4749,6 +4887,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
 
       {error && <div className="error">{error}</div>}
       {message && <div className="success">{message}</div>}
+      {notice && <div className="calendar-notice" role="status">{notice}</div>}
 
       <section className="calendar-section calendar-settings-overview">
         <div className="calendar-settings-metric">
@@ -4779,6 +4918,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   return <div className="calendar-page calendar-agenda-page">
     {error && <div className="error">{error}</div>}
     {message && <div className="success">{message}</div>}
+    {notice && <div className="calendar-notice" role="status">{notice}</div>}
 
     {/* Calendar view */}
     <div className={`calendar-main-card calendar-main-card-${view}`} id="calendar-agenda" ref={mainCardRef}>
@@ -4916,7 +5056,9 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
         </div>
         <label>Omschrijving<Textarea value={newEvent.description} onChange={e => setNewEvent(p => ({ ...p, description: e.target.value }))} placeholder="Optioneel" /></label>
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
-        <MeetingFields key={createdCount} provider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null} meetingUrl={newEvent.meetingUrl} addConference={newEvent.addConference} jitsiBaseUrl={data.companySettings?.jitsi_base_url}
+        <MeetingFields key={createdCount} sourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
+          sourceConferenceTypes={integrations.sources.find(s => s.id === newEvent.sourceId)?.conference_types} videoServices={integrations.videoServices}
+          meetingUrl={newEvent.meetingUrl} videoService={newEvent.videoService} jitsiBaseUrl={data.companySettings?.jitsi_base_url}
           onChange={patch => setNewEvent(p => ({ ...p, ...patch }))} />
         <AttendeePicker organizationId={organizationId} sourceId={newEvent.sourceId}
           sourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
@@ -4938,7 +5080,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
 
     {/* FAB for time-grid views */}
     {isTimeGridView(view) && canWrite && writeableSources.length > 0 && !showCreatePanel && (
-      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
+      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', videoService: '' })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
         <Plus size={22} />
       </button>
     )}
@@ -4949,12 +5091,13 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
       selectedSourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
       jitsiBaseUrl={data.companySettings?.jitsi_base_url ?? null}
+      videoServices={integrations.videoServices} conference={editingOriginal?.conference ?? null}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditTask={onEditTask} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onNotesChanged={onChanged} onSaveEvent={saveEventEdits} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sources={integrations.sources} videoServices={integrations.videoServices} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditTask={onEditTask} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onNotesChanged={onChanged} onSaveEvent={saveEventEdits} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
 
     {showBookingSend && (
-      <BookingSendDialog sources={writeableSources} clients={data.clients} draftCount={draftSlots.length}
+      <BookingSendDialog sources={writeableSources} clients={data.clients} draftCount={draftSlots.length} videoServices={integrations.videoServices}
         onCancel={() => setShowBookingSend(false)} onSubmit={submitBookingSend} />
     )}
 

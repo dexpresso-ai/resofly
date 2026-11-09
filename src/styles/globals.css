@@ -3786,6 +3786,8 @@ body::before{
    op een smal paneel netjes naar een tweede regel in plaats van eruit te lopen. */
 .event-meeting-modes{display:flex;flex-wrap:wrap;width:100%}
 .event-meeting-modes button{flex:1 1 auto;justify-content:center;white-space:nowrap}
+/* Vijf keuzes (met Google Meet en Teams) passen niet op één regel: dan drie en twee, in plaats van "Eigen link" alleen op de tweede regel. */
+.event-meeting-modes:has(> button:nth-child(5))>button{flex:1 1 30%}
 .event-meeting-jitsi{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .event-meeting-link{flex:1 1 220px;min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--well);color:var(--text);font-family:var(--font-mono);font-size:12px;line-height:1.4;word-break:break-all;text-decoration:none}
 .event-meeting-link:hover{border-color:var(--info)}
@@ -4681,7 +4683,17 @@ body::before{
 .content:has(.calendar-main-card-3day),
 .content:has(.calendar-main-card-week){padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
 .calendar-agenda-page{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:0}
-.calendar-agenda-page>.error,.calendar-agenda-page>.success{margin:10px 14px 0}
+.calendar-agenda-page>.error,.calendar-agenda-page>.success,.calendar-agenda-page>.calendar-notice{margin:10px 14px 0}
+/* Opgeslagen, met een kanttekening (geen Teams/Meet gekregen): geen fout, ook geen gewoon "gelukt". */
+.calendar-notice{border:1px solid rgba(var(--warn-rgb),.32);border-radius:18px;background:rgba(var(--warn-rgb),.12);color:var(--accent-o);padding:12px 14px;margin-bottom:14px;line-height:1.5}
+.calendar-help-note{color:var(--accent-o)}
+/* Instellingen → Agenda: Meet/Teams buiten de agenda, per gekoppeld account. */
+.connection-meeting{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;margin:8px 0 4px;font-size:13px;line-height:1.5;color:var(--muted2)}
+.connection-meeting>svg{flex:0 0 auto;margin-top:3px}
+.connection-meeting>button{align-self:center}
+.connection-meeting>span{flex:1 1 220px;min-width:0}
+.connection-meeting.is-aan{color:var(--accent-g)}
+.connection-meeting.is-kan_niet{color:var(--muted)}
 .calendar-agenda-page .calendar-main-card-day,
 .calendar-agenda-page .calendar-main-card-3day,
 .calendar-agenda-page .calendar-main-card-week{flex:1 1 auto;min-height:0;height:auto;max-height:none;border:0;border-radius:0;padding:0;overflow:hidden;display:flex;flex-direction:column}

@@ -6,7 +6,7 @@ import {
 import { euro, formatMinutes } from '../lib/format';
 import { supabase } from '../lib/supabase';
 import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
-import { isFormBackedProposal, openProposal, proposalLabel, proposalVerb, type ProposalKind } from '../lib/gerrie-proposals';
+import { editVideoLabel, isFormBackedProposal, openProposal, proposalLabel, proposalVerb, proposalVideoLabel, type ProposalKind } from '../lib/gerrie-proposals';
 import { scheduleLabel } from '../lib/agents';
 import type { UUID } from '../types';
 
@@ -380,7 +380,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
     if (p.type === 'send_quote') return <ConfirmActionCard icon={<MailIcon />} title={`Offerte ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Offerte ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => runConfirmed(auditId, () => onSendQuote ? onSendQuote(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.')))} />;
     if (p.type === 'convert_quote') return <ConfirmActionCard icon={<DocIcon />} title={`Offerte ${p.number} omzetten naar factuur?`} sub={`${p.client_name} · ${euro(p.total_eur)}`} confirmLabel="Omzetten" pendingLabel="Omzetten…" doneLabel={`Factuur gemaakt van offerte ${p.number}`} onConfirm={() => runConfirmed(auditId, () => onConvertQuote ? onConvertQuote(p) : Promise.reject(new Error('Omzetten is hier niet beschikbaar.')))} />;
     if (p.type === 'week_action') return <ConfirmActionCard icon={<CalendarIcon />} title={`${p.total} actiepunt${p.total === 1 ? '' : 'en'} toevoegen?`} sub={p.items.map((i) => i.title).join(' · ')} confirmLabel="Toevoegen" pendingLabel="Toevoegen…" doneLabel={`${p.total} actiepunt${p.total === 1 ? '' : 'en'} toegevoegd`} onConfirm={() => runConfirmed(auditId, () => onCreateWeekAction ? onCreateWeekAction(p) : Promise.reject(new Error('Toevoegen is hier niet beschikbaar.')))} />;
-    if (p.type === 'calendar_event') return <ConfirmActionCard icon={<CalendarIcon />} title="Agenda-item aanmaken?" sub={`${p.title} · ${p.date} ${p.start_time}–${p.end_time} · ${p.source_name}${p.meeting_url ? ' · met Jitsi-videocall' : ''}`} confirmLabel="Aanmaken" pendingLabel="Aanmaken…" doneLabel={`Agenda-item aangemaakt: ${p.title}`} onConfirm={() => runConfirmed(auditId, () => onCreateCalendarEvent ? onCreateCalendarEvent(p) : Promise.reject(new Error('Aanmaken is hier niet beschikbaar.')))} />;
+    if (p.type === 'calendar_event') return <ConfirmActionCard icon={<CalendarIcon />} title="Agenda-item aanmaken?" sub={`${p.title} · ${p.date} ${p.start_time}–${p.end_time} · ${p.source_name}${proposalVideoLabel(p.video_service, p.meeting_url)}`} confirmLabel="Aanmaken" pendingLabel="Aanmaken…" doneLabel={`Agenda-item aangemaakt: ${p.title}`} onConfirm={() => runConfirmed(auditId, () => onCreateCalendarEvent ? onCreateCalendarEvent(p) : Promise.reject(new Error('Aanmaken is hier niet beschikbaar.')))} />;
     if (p.type === 'time_entry') {
       const target = [p.client_name, p.project_name].filter(Boolean).join(' · ') || 'geen koppeling';
       return <ConfirmActionCard icon={<ClockIcon />} title={`${formatMinutes(p.minutes)} registreren?`} sub={`${target} · ${p.date} · ${p.billable ? 'declarabel' : 'niet-declarabel'}`} confirmLabel="Registreren" pendingLabel="Registreren…" doneLabel={`${formatMinutes(p.minutes)} geregistreerd${p.project_name ? ` op ${p.project_name}` : ''}`} onConfirm={() => runConfirmed(auditId, () => onLogTimeEntry ? onLogTimeEntry(p) : Promise.reject(new Error('Registreren is hier niet beschikbaar.')))} />;
@@ -388,7 +388,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
     if (p.type === 'edit_calendar_event') {
       const wordt = `${p.changes.date ?? p.current.date} ${p.changes.start_time ?? p.current.start_time}–${p.changes.end_time ?? p.current.end_time}`;
       return <ConfirmActionCard icon={<CalendarIcon />} title={`Agenda-item "${p.title}" aanpassen?`}
-        sub={`${p.current.date} ${p.current.start_time}–${p.current.end_time}  →  ${wordt} · ${p.source_name}`}
+        sub={`${p.current.date} ${p.current.start_time}–${p.current.end_time}  →  ${wordt} · ${p.source_name}${editVideoLabel(p.changes.video_service)}`}
         confirmLabel="Aanpassen" pendingLabel="Aanpassen…" doneLabel={`"${p.title}" aangepast`}
         onConfirm={() => runConfirmed(auditId, () => onEditCalendarEvent ? onEditCalendarEvent(p) : Promise.reject(new Error('Aanpassen is hier niet beschikbaar.')))} />;
     }
