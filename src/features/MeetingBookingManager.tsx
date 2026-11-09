@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Maximize2, Minimize2 } from 'lucide-react';
-import type { AppData, CalendarExternalEvent, CalendarSource, ConferenceProvider, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID } from '../types';
+import type { AppData, CalendarExternalEvent, CalendarSource, ConferenceProvider, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID, VideoServices } from '../types';
 import { Button, Input, Textarea, Select, normalizeColor } from '../components/Ui';
 import { listExternalCalendarEvents, loadCalendarIntegrations } from '../lib/calendar-api';
 import { addDays, startOfWeek } from '../lib/dates';
@@ -38,6 +38,8 @@ const PROVIDER_LABEL: Record<string, string> = { native: 'ResoFly-agenda', googl
 export function MeetingBookingManager({ organizationId, data, canWrite }: { organizationId: UUID; currentUserId: UUID; data: AppData; canWrite: boolean }) {
   const [links, setLinks] = useState<MeetingBookingLinkListItem[]>([]);
   const [sources, setSources] = useState<CalendarSource[]>([]);
+  // Kan ik per boeking een losse Meet/Teams laten maken (alleen mijn eigen koppelingen)?
+  const [videoServices, setVideoServices] = useState<VideoServices | null>(null);
   const [selectedId, setSelectedId] = useState<UUID | null>(null);
   const [detail, setDetail] = useState<BookingLinkDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,6 +75,7 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
         if (!alive) return;
         setLinks(rows);
         setSources(integrations.sources);
+        setVideoServices(integrations.videoServices ?? null);
         if (rows.length && !selectedId) setSelectedId(rows[0].id);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : 'Laden mislukt.');
@@ -138,6 +141,7 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
           <LinkForm
             mode="create"
             sources={writableSources}
+            videoServices={videoServices}
             clients={data.clients.map(c => ({ id: c.id, label: c.name }))}
             busy={busy}
             onCancel={() => setCreating(false)}
@@ -168,6 +172,7 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
             detail={detail}
             organizationId={organizationId}
             sources={writableSources}
+            videoServices={videoServices}
             clients={data.clients.map(c => ({ id: c.id, label: c.name }))}
             clientEmail={detail.link.client_id ? (clientsById.get(detail.link.client_id)?.email ?? null) : null}
             token={tokenByLink[detail.link.id] ?? null}
@@ -234,9 +239,10 @@ interface LinkFormPayload {
   conferenceProvider: ConferenceProvider;
 }
 
-function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }: {
+function LinkForm({ mode, sources, videoServices, clients, busy, onSubmit, onCancel, initial }: {
   mode: 'create' | 'edit';
   sources: CalendarSource[];
+  videoServices?: VideoServices | null;
   clients: Array<{ id: UUID; label: string }>;
   busy: boolean;
   onSubmit: (p: LinkFormPayload) => void;
@@ -297,7 +303,7 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
       </div>
       <label>Intro-tekst op de boekingspagina<Textarea value={introText} onChange={e => setIntroText(e.target.value)} rows={2} placeholder="Kies hieronder een moment dat jou uitkomt." /></label>
       <label>Begeleidende tekst bij de uitnodiging<Textarea value={inviteMessage} onChange={e => setInviteMessage(e.target.value)} rows={2} placeholder="Fijn dat we een moment inplannen. Tot dan!" /></label>
-      <BookingVideoSelect value={video} sourceProvider={selectedProvider} onChange={setVideo} />
+      <BookingVideoSelect value={video} sourceProvider={selectedProvider} videoServices={videoServices} onChange={setVideo} />
       <label>Vaste videocall-link (optioneel)<Input value={meetingUrl} onChange={e => setMeetingUrl(e.target.value)} placeholder="https://… — gaat vóór de keuze hierboven" /></label>
       {sources.length === 0 && <p className="muted">Er is nog geen schrijfbare agenda beschikbaar. Koppel of maak eerst een agenda.</p>}
       <div className="mbk-form-actions">
@@ -308,10 +314,11 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
   );
 }
 
-function LinkDetail({ detail, organizationId, sources, clients, clientEmail, token, busy, canWrite, onSavedPatch, onRegenerate, onSendMail, onAddSlots, onRemoveSlot, onCancelBooking, onDelete }: {
+function LinkDetail({ detail, organizationId, sources, videoServices, clients, clientEmail, token, busy, canWrite, onSavedPatch, onRegenerate, onSendMail, onAddSlots, onRemoveSlot, onCancelBooking, onDelete }: {
   detail: BookingLinkDetail;
   organizationId: UUID;
   sources: CalendarSource[];
+  videoServices?: VideoServices | null;
   clients: Array<{ id: UUID; label: string }>;
   clientEmail: string | null;
   token: { token: string; url: string } | null;
@@ -426,6 +433,7 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
       <LinkForm
         mode="edit"
         sources={sources}
+        videoServices={videoServices}
         clients={clients}
         busy={busy}
         initial={{

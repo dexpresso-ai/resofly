@@ -4,7 +4,8 @@ import {
   addParticipants, createChannel, createGroup, joinChannel, loadPublicChannels, sendMessage, updateConversation,
 } from '../../lib/chat';
 import { detectMeetingKind, isValidMeetingUrl, jitsiMeetingUrl, usesPublicJitsi } from '../../lib/meeting';
-import type { ChatMessage, ChatPublicChannel } from '../../types';
+import { createOnlineMeeting, loadVideoServices } from '../../lib/calendar-api';
+import type { ChatMessage, ChatPublicChannel, VideoService, VideoServices } from '../../types';
 import {
   formatListTime, memberDisplay, plainSnippet, PRESENCE_LABEL, type ConversationVM,
 } from './model';
@@ -284,6 +285,15 @@ export function MeetingDialog({ api, vm, audio, onClose }: { api: TeamChatApi; v
   const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Google Meet of Teams naast Jitsi, als je die bij Instellingen → Agenda
+  // aanzette. Zonder rechten op de agenda (of een oudere server) blijft het Jitsi.
+  const [services, setServices] = useState<VideoServices | null>(null);
+  useEffect(() => {
+    if (!api.organizationId) return;
+    let alive = true;
+    loadVideoServices(api.organizationId).then((v) => { if (alive) setServices(v); }).catch(() => { /* alleen Jitsi */ });
+    return () => { alive = false; };
+  }, [api.organizationId]);
   const normalized = /^www\./i.test(link.trim()) ? `https://${link.trim()}` : link.trim();
   const linkOk = isValidMeetingUrl(normalized) && normalized.toLowerCase().startsWith('https://');
 
@@ -308,6 +318,27 @@ export function MeetingDialog({ api, vm, audio, onClose }: { api: TeamChatApi; v
     catch (e) { setError(e instanceof Error ? e.message : 'Delen mislukt'); setBusy(false); }
   }
 
+  /** Een losse Google Meet of Teams, met je eigen koppeling; daarna de link hier delen. */
+  async function startService(service: VideoService) {
+    if (busy || !api.organizationId) return;
+    // Het venster nu al openen, leeg: na een await ziet de browser het niet meer
+    // als een klik van jou. De vergaderlink komt erin zodra hij er is.
+    const win = window.open('', '_blank');
+    if (win) win.opener = null;
+    setBusy(true); setError(null);
+    try {
+      const meeting = await createOnlineMeeting(api.organizationId, service, { title: audio ? 'Gesprek via ResoFly' : 'Vergadering via ResoFly' });
+      if (win) win.location.href = meeting.url;
+      else window.open(meeting.url, '_blank', 'noopener,noreferrer');
+      await post(meeting.url, service);
+      onClose();
+    } catch (e) {
+      win?.close();
+      setError(e instanceof Error ? e.message : 'Vergadering maken mislukt');
+      setBusy(false);
+    }
+  }
+
   async function shareLink() {
     if (!linkOk || busy) return;
     setBusy(true); setError(null);
@@ -325,6 +356,18 @@ export function MeetingDialog({ api, vm, audio, onClose }: { api: TeamChatApi; v
           <small>Start een {audio ? 'gesprek (alleen geluid)' : 'videovergadering'} in Jitsi Meet en deel de link hier. Je collega’s hebben geen account nodig.</small>
         </span>
       </button>
+      {(['google_meet', 'teams'] as const).filter((service) => services?.[service]?.state === 'klaar').map((service) => {
+        const label = service === 'google_meet' ? 'Google Meet' : 'Teams';
+        return (
+          <button key={service} type="button" className="tmc-meet-start tmc-meet-start-alt" onClick={() => void startService(service)} disabled={busy || !api.canWrite}>
+            <span className="tmc-meet-start-icon">{audio ? <Phone size={22} /> : <Video size={22} />}</span>
+            <span>
+              <strong>{audio ? 'Nu bellen' : 'Nu vergaderen'} met {label}</strong>
+              <small>Start een {label}-vergadering met je {service === 'google_meet' ? 'Google' : 'Microsoft'}-account{services?.[service]?.account ? ` (${services[service].account})` : ''} en deel de link hier.</small>
+            </span>
+          </button>
+        );
+      })}
       <div className="tmc-or"><span>of deel een bestaande link</span></div>
       <form className="tmc-meet-link" onSubmit={(e) => { e.preventDefault(); void shareLink(); }}>
         <Link2 size={16} aria-hidden="true" />

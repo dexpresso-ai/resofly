@@ -19,10 +19,12 @@ import {
   base64UrlEncode,
   classifyTokenFailure,
   googleScopes,
+  microsoftRefreshScopes,
   microsoftScopes,
   tokenFailureMessage,
   type TokenFailure,
 } from './calendarOAuth.ts';
+import { nextDay, toMicrosoftDateTime } from './calendarEventBody.ts';
 
 // De scopes en de base64url-helpers staan in calendarOAuth.ts (puur, los te
 // testen); hier doorgegeven zodat bestaande imports uit calendarCore werken.
@@ -48,6 +50,12 @@ export type CalendarSourceRow = {
   sync_enabled: boolean;
   write_enabled: boolean;
   visibility: CalendarVisibility;
+  /**
+   * Welke videovergadering de agenda zelf maakt, zoals Google/Microsoft het
+   * opgeeft (hangoutsMeet, teamsForBusiness). Null = nog niet opgehaald.
+   * Optioneel: ontbreekt zolang migratie 20261108190000 er niet op staat.
+   */
+  conference_types?: string[] | null;
   // Alleen gevuld voor provider='ics' (agenda via iCal/ICS-link).
   feed_url: string | null;
   feed_etag: string | null;
@@ -207,7 +215,10 @@ export async function refreshAccessToken(token: TokenRow): Promise<string> {
     client_id: token.provider === 'google' ? GOOGLE_CLIENT_ID : MICROSOFT_CLIENT_ID,
     client_secret: token.provider === 'google' ? GOOGLE_CLIENT_SECRET : MICROSOFT_CLIENT_SECRET,
   });
-  if (token.provider === 'microsoft') params.set('scope', microsoftScopes().join(' '));
+  // Microsoft: alleen de rechten die deze koppeling echt kreeg. Vraagt de
+  // vernieuwing om een recht dat nooit gegeven is (het Teams-recht, dat iemand
+  // apart aanzet), dan weigert Microsoft hem, en dat telt als "ingetrokken".
+  if (token.provider === 'microsoft') params.set('scope', microsoftRefreshScopes(token.scopes).join(' '));
 
   let status = 0;
   let payload: Record<string, unknown> = {};
@@ -291,12 +302,9 @@ export {
 
 // ── Datum-/tijd-helpers ─────────────────────────────────────────────────────
 
-/** Given a date string "YYYY-MM-DD", return the next day as "YYYY-MM-DD". */
-export function nextDay(dateStr: string): string {
-  const d = new Date(dateStr + 'T12:00:00Z'); // noon UTC avoids DST edge cases
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
-}
+// nextDay en toMicrosoftDateTime staan in calendarEventBody.ts (puur, getest);
+// hier doorgegeven zodat bestaande imports uit calendarCore werken.
+export { nextDay, toMicrosoftDateTime };
 
 export function providerDateKey(value?: string | null): string | null {
   if (!value) return null;
@@ -317,10 +325,6 @@ export function normalizeAllDayEventRange(startValue?: string | null, endExclusi
 export function normalizeMicrosoftDateTime(value: string): string {
   if (!value) return new Date().toISOString();
   return value.endsWith('Z') ? value : `${value}Z`;
-}
-
-export function toMicrosoftDateTime(value: string): string {
-  return new Date(value).toISOString().replace(/\.\d{3}Z$/, '');
 }
 
 // ── Genodigden-mappers (Google/Microsoft → onze vorm) ───────────────────────

@@ -674,6 +674,9 @@
 .tmc-meet-start>span:last-child{display:flex;flex-direction:column;gap:3px}
 .tmc-meet-start strong{font-size:15px}
 .tmc-meet-start small{font-size:12.5px;color:var(--ink-3);line-height:1.45}
+/* Google Meet / Teams naast Jitsi: zelfde knop, een tikje rustiger. */
+.tmc-meet-start-alt{margin-top:8px;border-color:var(--tc-line-2);background:transparent}
+.tmc-meet-start small{overflow-wrap:anywhere}
 .tmc-meet-start-icon{flex:none;width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--tc-brand);color:var(--tc-on-brand)}
 .tmc-or{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--ink-3)}
 .tmc-or::before,.tmc-or::after{content:"";flex:1;height:1px;background:var(--tc-line)}

@@ -8,6 +8,16 @@
 // Jitsi-server opgeven (company_settings.jitsi_base_url). De edge-functies
 // hebben dezelfde regels in supabase/functions/_shared/jitsi.ts.
 
+import {
+  accountSupportsService,
+  calendarConferenceService,
+  calendarConferenceBlockedReason,
+  serviceOfUrl,
+  serviceProvider,
+} from '../../supabase/functions/_shared/conference.ts';
+import { hasMeetingScope } from '../../supabase/functions/_shared/calendarOAuth.ts';
+import type { VideoService, VideoServices } from '../types';
+
 export type MeetingKind = 'google_meet' | 'teams' | 'zoom' | 'jitsi' | 'other';
 
 const HOSTS: { kind: MeetingKind; label: string; match: RegExp }[] = [
@@ -120,12 +130,124 @@ export function jitsiMeetingUrl(configured?: unknown): string {
   return `${jitsiBaseUrl(configured)}/${jitsiRoomName()}`;
 }
 
+// ── Google Meet en Teams bij een afspraak ────────────────────────────────────
+// De regels staan in supabase/functions/_shared/conference.ts (de server
+// gebruikt dezelfde): Meet op een Google-agenda en Teams op een
+// Microsoft-agenda maakt de agenda zelf; elders komt de vergadering los van je
+// eigen koppeling, als je daar bij Instellingen → Agenda toestemming voor gaf.
+
+/** De keuze in het blok "Videovergadering" bij een afspraak. */
+export type MeetingMode = 'none' | 'jitsi' | 'google_meet' | 'teams' | 'link';
+
+export type VideoServiceOption = {
+  /** Kan het hier? */
+  available: boolean;
+  /** 'calendar' = de agenda maakt hem zelf; 'standalone' = los, met je eigen koppeling. */
+  how: 'calendar' | 'standalone' | null;
+  /** Waarom niet, als dat de moeite van het zeggen waard is (anders null). */
+  hint: string | null;
+};
+
+/**
+ * Welke Meet/Teams-keuzes er zijn bij een afspraak in deze agenda.
+ * `videoServices` komt van de server (alleen over je eigen koppelingen); zonder
+ * die gegevens (oudere server) alleen wat de agenda zelf kan, zoals eerst.
+ */
+export function videoServiceOptions(
+  sourceProvider: string | null | undefined,
+  sourceConferenceTypes: string[] | null | undefined,
+  videoServices?: VideoServices | null,
+): Record<VideoService, VideoServiceOption> {
+  const option = (service: VideoService): VideoServiceOption => {
+    if (calendarConferenceService(sourceProvider, sourceConferenceTypes) === service) return { available: true, how: 'calendar', hint: null };
+    // Een agenda van dezelfde aanbieder die het niet kan (privé-Microsoft,
+    // Workspace zonder Meet): dan ook niet los; dat zegt de server ook.
+    if (sourceProvider === serviceProvider(service)) return { available: false, how: null, hint: calendarConferenceBlockedReason(sourceProvider) };
+    const state = videoServices?.[service]?.state;
+    if (state === 'klaar') return { available: true, how: 'standalone', hint: null };
+    if (state === 'toestemming') {
+      return {
+        available: false, how: null,
+        hint: `${service === 'google_meet' ? 'Google Meet' : 'Teams'} ook hier? Zet het aan bij Instellingen → Agenda, bij je ${service === 'google_meet' ? 'Google' : 'Microsoft'}-account.`,
+      };
+    }
+    return { available: false, how: null, hint: null };
+  };
+  return { google_meet: option('google_meet'), teams: option('teams') };
+}
+
+/**
+ * Meet/Teams buiten de agenda om, voor één gekoppeld account:
+ * 'aan' · 'uit' (aan te zetten) · 'kan_niet' (een privé-Microsoftaccount, een
+ * Workspace zonder Meet). Null bij een agenda die geen Google of Microsoft is.
+ */
+export function connectionMeetingState(provider: string, scopes: string[] | null | undefined, calendarTypes: Array<string[] | null | undefined>): 'aan' | 'uit' | 'kan_niet' | null {
+  if (provider !== 'google' && provider !== 'microsoft') return null;
+  if (!accountSupportsService(provider === 'google' ? 'google_meet' : 'teams', calendarTypes)) return 'kan_niet';
+  return hasMeetingScope(provider, scopes) ? 'aan' : 'uit';
+}
+
+type ExistingConference = { service: VideoService | 'other'; url: string | null } | null | undefined;
+
+/**
+ * De keuze die bij een bestaande afspraak hoort. Meet/Teams alleen als die
+ * keuze hier kan; anders "Eigen link". Een Meet die Google nog aan het maken is
+ * (nog zonder link) telt al als Meet.
+ */
+export function meetingModeOf(meetingUrl: string | null | undefined, available: Record<VideoService, boolean>, jitsiBaseUrl?: string | null, conference?: ExistingConference): MeetingMode {
+  const url = (meetingUrl ?? '').trim();
+  if (!url) {
+    const own = conference?.service;
+    return (own === 'google_meet' || own === 'teams') && available[own] ? own : 'none';
+  }
+  const service = serviceOfUrl(url);
+  if (service && available[service]) return service;
+  if (detectMeetingKind(url, jitsiBaseUrl).kind === 'jitsi') return 'jitsi';
+  return 'link';
+}
+
+/**
+ * Wat er bij opslaan over de video meegaat.
+ *
+ * - De vergadering die Google of Outlook zelf op de afspraak zette, en die je
+ *   laat staan: niets (geen link in de omschrijving, geen nieuwe vergadering).
+ *   Eerst kwam de Meet-link bij elke bewerking als regel in de omschrijving.
+ * - Een Meet- of Teams-link die er al staat: die blijft (de genodigden hebben hem).
+ * - Nieuw gekozen Meet/Teams: `videoService`; de server maakt hem.
+ * - Kies je iets anders dan de vergadering van de agenda, dan gaat die eraf
+ *   (`removeConference`; Teams kan Microsoft niet weghalen, dat meldt de server).
+ */
+export function videoFieldsForSave(
+  mode: MeetingMode,
+  meetingUrl: string,
+  conference?: ExistingConference,
+): { meetingUrl: string | null; videoService?: VideoService; removeConference?: true } {
+  const url = meetingUrl.trim();
+  if (conference && (mode === conference.service || (mode === 'link' && conference.url && url === conference.url))) return { meetingUrl: null };
+  const remove = conference ? { removeConference: true as const } : {};
+  if (mode === 'google_meet' || mode === 'teams') {
+    if (url && serviceOfUrl(url) === mode) return { meetingUrl: url, ...remove };
+    return { meetingUrl: null, videoService: mode, ...remove };
+  }
+  if (mode === 'none') return { meetingUrl: null, ...remove };
+  return { meetingUrl: url || null, ...remove };
+}
+
+/**
+ * Bij verplaatsen of herschalen: alleen de link die in de omschrijving staat
+ * gaat mee. De vergadering van de agenda zelf blijft gewoon staan.
+ */
+export function meetingUrlToKeep(meetingUrl: string | null | undefined, conference?: ExistingConference): string | null {
+  if (!meetingUrl) return null;
+  return conference?.url && conference.url === meetingUrl ? null : meetingUrl;
+}
+
 // ── Videovergadering bij een boekingslink ────────────────────────────────────
 // meeting_booking_links bewaart twee velden (auto_conference, conference_provider);
 // in een formulier is dat één keuze. Een vaste meeting_url gaat altijd voor.
 
 /** De videokeuze van een boekingslink, als één waarde voor in een keuzelijst. */
-export type BookingVideo = 'jitsi' | 'calendar' | 'none';
+export type BookingVideo = 'jitsi' | 'calendar' | 'google_meet' | 'teams' | 'none';
 
 /** Maakt de agenda zelf een videovergadering (Google Meet / Teams)? */
 export function calendarMakesConference(sourceProvider: string | null | undefined): boolean {
@@ -139,6 +261,7 @@ export function calendarMakesConference(sourceProvider: string | null | undefine
 export function bookingVideoFromLink(autoConference: boolean | undefined, conferenceProvider: string | null | undefined, sourceProvider: string | null | undefined): BookingVideo {
   if (autoConference === false) return 'none';
   if (conferenceProvider === 'jitsi') return 'jitsi';
+  if (conferenceProvider === 'google_meet' || conferenceProvider === 'teams') return effectiveBookingVideo(conferenceProvider, sourceProvider);
   return calendarMakesConference(sourceProvider) ? 'calendar' : 'none';
 }
 
@@ -148,16 +271,23 @@ export function defaultBookingVideo(sourceProvider: string | null | undefined): 
 }
 
 /**
- * De keuze die echt geldt bij deze agenda: 'calendar' op een agenda die zelf
- * niets maakt (je wisselde naar een ResoFly-agenda) wordt Jitsi — de enige
- * automatische videovergadering die daar kan.
+ * De keuze die echt geldt bij deze agenda:
+ * - 'calendar' op een agenda die zelf niets maakt (je wisselde naar een
+ *   ResoFly-agenda) wordt Jitsi;
+ * - Meet op een Google-agenda of Teams op een Microsoft-agenda is gewoon "van
+ *   de agenda" ('calendar').
  */
 export function effectiveBookingVideo(choice: BookingVideo, sourceProvider: string | null | undefined): BookingVideo {
-  return choice === 'calendar' && !calendarMakesConference(sourceProvider) ? 'jitsi' : choice;
+  if (choice === 'calendar' && !calendarMakesConference(sourceProvider)) return 'jitsi';
+  if ((choice === 'google_meet' || choice === 'teams') && serviceProvider(choice) === sourceProvider) return 'calendar';
+  return choice;
 }
 
 /** Terug naar de velden van meeting_booking_links. */
-export function bookingVideoFields(choice: BookingVideo, sourceProvider: string | null | undefined): { autoConference: boolean; conferenceProvider: 'calendar' | 'jitsi' } {
+export function bookingVideoFields(choice: BookingVideo, sourceProvider: string | null | undefined): { autoConference: boolean; conferenceProvider: 'calendar' | 'jitsi' | VideoService } {
   const effective = effectiveBookingVideo(choice, sourceProvider);
-  return { autoConference: effective !== 'none', conferenceProvider: effective === 'jitsi' ? 'jitsi' : 'calendar' };
+  return {
+    autoConference: effective !== 'none',
+    conferenceProvider: effective === 'jitsi' || effective === 'google_meet' || effective === 'teams' ? effective : 'calendar',
+  };
 }

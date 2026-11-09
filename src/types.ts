@@ -3661,6 +3661,11 @@ export interface CalendarSource {
   sync_enabled: boolean;
   write_enabled: boolean;
   visibility: CalendarVisibility;
+  /**
+   * Welke videovergadering de agenda zelf maakt, zoals Google/Microsoft het
+   * opgeeft (hangoutsMeet, teamsForBusiness). Null/ontbrekend = onbekend.
+   */
+  conference_types?: string[] | null;
   /** Alleen voor provider='ics' (agenda via iCal/ICS-link): de feed + sync-status. */
   feed_url?: string | null;
   feed_last_synced_at?: string | null;
@@ -3684,6 +3689,14 @@ export interface CalendarExternalEvent {
   html_link: string | null;
   /** Videocall-link (Google Meet / Teams / Zoom / overig), indien aan dit item gekoppeld. */
   meeting_url?: string | null;
+  /**
+   * De vergadering die Google of Outlook zelf op de afspraak zette (Meet, Teams,
+   * of 'other' zoals een Zoom-add-on). Staat niet in de omschrijving; bij
+   * bewerken blijft hij staan tenzij je iets anders kiest.
+   */
+  conference?: { service: VideoService | 'other'; url: string | null; status: 'ready' | 'pending' | 'failed' } | null;
+  /** Na aanmaken/bewerken: wat er met de gevraagde videovergadering misging. */
+  video_warning?: string;
   /** Genodigden zoals bekend bij de provider (alleen extern Google/Microsoft; native via getCalendarEventAttendees). */
   attendees?: EventAttendeeLite[] | null;
   visibility: CalendarVisibility;
@@ -3870,7 +3883,27 @@ export type MeetingBookingLinkStatus = 'active' | 'closed';
 export type MeetingBookingSlotStatus = 'open' | 'pending' | 'booked' | 'cancelled';
 export type MeetingBookingStatus = 'pending' | 'confirmed' | 'cancelled' | 'failed';
 
-export type ConferenceProvider = 'calendar' | 'jitsi';
+/**
+ * Bij een boekingslink: 'calendar' = Meet/Teams van de agenda zelf, 'jitsi' =
+ * een eigen Jitsi-kamer, 'google_meet'/'teams' = per boeking een Meet- of
+ * Teams-vergadering, ook op een agenda die die zelf niet maakt.
+ */
+export type ConferenceProvider = 'calendar' | 'jitsi' | 'google_meet' | 'teams';
+
+/** Google Meet of Microsoft Teams (supabase/functions/_shared/conference.ts). */
+export type VideoService = 'google_meet' | 'teams';
+
+/**
+ * Kan de gebruiker een losse Meet/Teams maken (ResoFly-agenda, boekingslink,
+ * teamchat)? klaar · toestemming (nog aanzetten) · account (kan dit account
+ * niet) · verlopen (opnieuw koppelen) · geen_koppeling.
+ */
+export interface VideoServiceStatus {
+  state: 'klaar' | 'toestemming' | 'account' | 'verlopen' | 'geen_koppeling';
+  account: string | null;
+  connectionId: UUID | null;
+}
+export type VideoServices = Record<VideoService, VideoServiceStatus>;
 
 export interface MeetingBookingLink {
   id: UUID;

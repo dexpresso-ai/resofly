@@ -11,12 +11,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CALENDAR_OAUTH_ERROR_CODES,
+  GOOGLE_MEET_SCOPE,
+  MICROSOFT_MEETING_SCOPE,
   OAUTH_STATE_TTL_SECONDS,
   buildAuthorizeUrl,
   checkOAuthState,
   classifyProviderError,
   classifyTokenFailure,
   fallbackReturnTo,
+  hasMeetingScope,
+  meetingScopes,
+  microsoftRefreshScopes,
+  microsoftScopes,
   missingCalendarCapabilities,
   parseReturnOrigins,
   sanitizeReturnTo,
@@ -169,6 +175,51 @@ test('Microsoft: accountkiezer, tenant uit de instelling, en geen rommel als hin
   const rommel = new URL(buildAuthorizeUrl({ provider: 'microsoft', clientId: 'cid', redirectUri: 'https://fn.test/cb', state: 's', microsoftTenant: 'common', loginHint: 'geen adres' }));
   assert.equal(rommel.searchParams.get('login_hint'), null);
   assert.equal(rommel.searchParams.get('prompt'), 'select_account');
+});
+
+test('Meet/Teams aanzetten: het extra recht alleen als erom gevraagd wordt', () => {
+  const gewoon = new URL(buildAuthorizeUrl({ provider: 'google', clientId: 'cid', redirectUri: 'https://fn.test/cb', state: 's', microsoftTenant: 'common' }));
+  assert.doesNotMatch(gewoon.searchParams.get('scope') ?? '', /meetings/, 'de gewone koppeling vraagt geen Meet-recht');
+  const meet = new URL(buildAuthorizeUrl({ provider: 'google', clientId: 'cid', redirectUri: 'https://fn.test/cb', state: 's', microsoftTenant: 'common', loginHint: 'jan@bedrijf.nl', meetings: true }));
+  const scopes = (meet.searchParams.get('scope') ?? '').split(' ');
+  assert.ok(scopes.includes(GOOGLE_MEET_SCOPE), 'Meet-recht gevraagd');
+  assert.ok(scopes.includes('https://www.googleapis.com/auth/calendar.events'), 'de agendarechten blijven erbij');
+  assert.equal(meet.searchParams.get('include_granted_scopes'), 'true');
+  assert.equal(meet.searchParams.get('login_hint'), 'jan@bedrijf.nl');
+
+  const msGewoon = new URL(buildAuthorizeUrl({ provider: 'microsoft', clientId: 'cid', redirectUri: 'https://fn.test/cb', state: 's', microsoftTenant: 'common' }));
+  assert.doesNotMatch(msGewoon.searchParams.get('scope') ?? '', /OnlineMeetings/);
+  const teams = new URL(buildAuthorizeUrl({ provider: 'microsoft', clientId: 'cid', redirectUri: 'https://fn.test/cb', state: 's', microsoftTenant: 'common', meetings: true }));
+  assert.ok((teams.searchParams.get('scope') ?? '').split(' ').includes(MICROSOFT_MEETING_SCOPE));
+  assert.deepEqual(meetingScopes('google'), [GOOGLE_MEET_SCOPE]);
+});
+
+test('Meet/Teams-recht herkennen, ook als volledige URI van Microsoft', () => {
+  assert.equal(hasMeetingScope('google', ['openid', GOOGLE_MEET_SCOPE]), true);
+  assert.equal(hasMeetingScope('google', ['openid', 'https://www.googleapis.com/auth/calendar.events']), false);
+  assert.equal(hasMeetingScope('microsoft', ['https://graph.microsoft.com/OnlineMeetings.ReadWrite']), true);
+  assert.equal(hasMeetingScope('microsoft', ['onlinemeetings.readwrite']), true);
+  assert.equal(hasMeetingScope('microsoft', ['OnlineMeetings.Read']), false);
+  assert.equal(hasMeetingScope('microsoft', null), false);
+});
+
+test('Microsoft vernieuwen: nooit om een recht vragen dat niet gegeven is', () => {
+  // Anders weigert Microsoft (invalid_grant) en springt elke bestaande
+  // koppeling na de uitrol op "Verlopen".
+  assert.deepEqual(microsoftRefreshScopes(['https://graph.microsoft.com/Calendars.ReadWrite']), microsoftScopes());
+  assert.deepEqual(microsoftRefreshScopes([]), microsoftScopes());
+  assert.deepEqual(microsoftRefreshScopes(['https://graph.microsoft.com/OnlineMeetings.ReadWrite']), [...microsoftScopes(), MICROSOFT_MEETING_SCOPE]);
+  assert.ok(!microsoftScopes().includes(MICROSOFT_MEETING_SCOPE), 'het Teams-recht zit niet in de gewone koppeling');
+});
+
+test('state: het Meet/Teams-vlagje gaat ondertekend heen en terug, en alleen als echte ja/nee', async () => {
+  const signed = await signOAuthState(state({ meetings: true }), SECRET);
+  const check = await checkOAuthState(signed, SECRET, ORIGINS, NOW);
+  assert.equal(check.ok && check.state.meetings, true);
+  const gewoon = await checkOAuthState(await signOAuthState(state(), SECRET), SECRET, ORIGINS, NOW);
+  assert.equal(gewoon.ok && gewoon.state.meetings, undefined);
+  const rommel = await checkOAuthState(await signOAuthState({ ...state(), meetings: 'ja' } as unknown as OAuthState, SECRET), SECRET, ORIGINS, NOW);
+  assert.equal(rommel.ok, false);
 });
 
 // ── Rechten ─────────────────────────────────────────────────────────────────
