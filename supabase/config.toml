@@ -12,12 +12,15 @@ verify_jwt = false
 [functions.invoice-workflow]
 verify_jwt = false
 
-# client-portal serves the customer portal at /portal. Every request must come
-# from a logged-in client (magic-link session), so the platform verifies the JWT
-# and the function re-verifies it via requireUser(). Access to data is derived
-# solely from the verified email (RPC portal_clients_for_email).
+# client-portal serves the customer portal at /portal. Elke aanroep komt van een
+# ingelogde klant: een vastgelegde inlog bij Supabase (Authorization), of op een
+# eigen domein de sleutel van het portaal (x-portal-token, migratie
+# 20261109020000). Die sleutel is geen JWT; daarom controleert het platform hier
+# geen JWT, en doet requireUser() dat zelf: zonder een van beide komt niemand
+# binnen. De toegang volgt uit het geverifieerde e-mailadres (RPC
+# portal_clients_for_email), binnen het bereik van de inlog.
 [functions.client-portal]
-verify_jwt = true
+verify_jwt = false
 
 # portal-login runs BEFORE the client is logged in (to provision the auth user for
 # known client emails when self-signup is disabled), so it cannot require a JWT.

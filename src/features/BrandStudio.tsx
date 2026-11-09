@@ -530,7 +530,7 @@ function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, logi
   const automatic = useMemo(() => loginTheme({ ...branding, loginBackground: null, loginCard: null, loginButton: null }), [branding]);
   const logoColors = useLogoColors(form.brand_logo_data_url);
   const [copied, setCopied] = useState(false);
-  // Het portaal: op de naam bij ResoFly, nooit op een eigen domein.
+  // Het portaal: op de naam bij ResoFly, of op het eigen domein als het daar aan staat (Instellingen → Domein).
   const url = portalLoginUrl(loginKey, clientAddress.portal);
 
   const set = <K extends keyof CompanySettingsInput>(key: K, value: CompanySettingsInput[K]) => {

@@ -25,6 +25,8 @@ export interface ClientDomain {
   verifiedAt: string | null;
   lastCheckedAt: string | null;
   createdAt: string;
+  /** Staat het klantportaal ook op dit domein (migratie 20261109020000)? */
+  portalEnabled: boolean;
 }
 
 export interface ClientDomainsOverview {
@@ -49,7 +51,7 @@ export interface ClientDomainsOverview {
   clientUrl: string;
   /** Is clientUrl het klantadres (en niet het adres van de app)? */
   onClientHost: boolean;
-  /** Waar het portaal woont: de naam bij ResoFly, nooit een eigen domein. */
+  /** Waar het portaal woont: het eigen domein als het daar aan staat, anders de naam bij ResoFly. */
   portalUrl: string;
   /** Is portalUrl het klantadres (en niet het adres van de app)? */
   portalOnClientHost: boolean;
@@ -117,12 +119,18 @@ export async function removeClientDomain(organizationId: UUID, domainId: string)
   return invoke('removeDomain', organizationId, { domainId }, 'Het domein kon niet worden verwijderd.');
 }
 
+/** Het klantportaal ook op het eigen domein, of niet (alleen owner of admin; de server controleert het). */
+export async function setClientDomainPortal(organizationId: UUID, domainId: string, enabled: boolean): Promise<ClientDomain> {
+  overviews.delete(organizationId);
+  return (await invoke<{ domain: ClientDomain }>('setPortal', organizationId, { domainId, enabled }, 'Het klantportaal kon niet worden omgezet.')).domain;
+}
+
 export interface ClientAddress {
   /** Voor documenten (album, factuur): zonder schuine streep aan het eind. */
   baseUrl: string;
   /** Het klantadres (jansen.resofly.com, een eigen domein), niet dat van de app. */
   onClientHost: boolean;
-  /** Voor het portaal: de naam bij ResoFly, nooit een eigen domein. */
+  /** Voor het portaal: het eigen domein als het daar aan staat, anders de naam bij ResoFly. */
   portal: { baseUrl: string; onClientHost: boolean };
 }
 

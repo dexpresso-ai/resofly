@@ -68,6 +68,22 @@ export async function maakGebruiker(naam, email) {
   return { id: gebruiker.id, email: adres, token: sessie.access_token };
 }
 
+/**
+ * Een portaalinlog zoals na de inlogmail (migratie 20261109020000): de sessie
+ * vastgelegd in portal_sessions. client-portal weigert een sessie die daar niet
+ * staat, en de portaalgebruikers van de stromen loggen voor het gemak met een
+ * wachtwoord in. Zonder organisatie: het algemene portaal, dat alles ziet.
+ * Het echte vastleggen (portal-login, bindSession) staat in klantdomein.mjs.
+ */
+export function koppelPortaalSessie(gebruiker, organisatieId = null, host = null) {
+  const claims = JSON.parse(Buffer.from(String(gebruiker.token).split('.')[1], 'base64url').toString());
+  const waarde = (v) => (v === null || v === undefined ? 'null' : `'${String(v).replace(/'/g, "''")}'`);
+  sql(`insert into public.portal_sessions (session_id, user_id, organization_id, host)
+       values (${waarde(claims.session_id)}, ${waarde(gebruiker.id)}, ${waarde(organisatieId)}, ${waarde(host)})
+       on conflict (session_id) do nothing`);
+  return gebruiker;
+}
+
 export function uniek(prefix) {
   return `${prefix}-${RUN}-${++teller}`;
 }

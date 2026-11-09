@@ -2,9 +2,10 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSPrope
 import { LifeBuoy, Mail, Settings } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../../components/Ui';
 import { isSupabaseConfigured } from '../../lib/supabase';
-import { supabasePortalAuth } from '../../lib/supabasePortal';
+import { supabasePortalAuth, verifyPortalLogin } from '../../lib/supabasePortal';
 import {
   addPortalTicketNote,
+  bindPortalSession,
   createPortalTicket,
   createPortalInvoicePayment,
   decidePortalQuote,
@@ -22,9 +23,12 @@ import {
   fetchPortalSharedFiles,
   fetchPortalTicketThread,
   fetchPortalTransfers,
+  endPortalToken,
+  onPortalSessionLost,
   portalTransferDownload,
   portalTransferRead,
   portalTransferZip,
+  redeemPortalCode,
   redeemPortalLogin,
   requestPortalLogin,
   sendPortalMessage,
@@ -79,6 +83,7 @@ import {
   createVerifier, forgetVerifiers, loginRequestFromLocation, normalizeLoginCode, pendingVerifiers, rememberVerifier, sha256Hex,
 } from '../../lib/portalLoginFlow';
 import { portalLoginPath } from '../../lib/portalLoginKey';
+import { onPortalTokenChange, portalTokenMode, storePortalToken, storedPortalToken } from '../../lib/portalToken';
 import { isPortalLoginKey, portalKeyFromPathname } from '../../lib/portalLoginKey';
 import { PORTAL_PREVIEW_READY, defaultPortalPreview, demoPortalBackend, readPortalPreviewMessage, type PortalPreviewState } from '../../lib/portalPreview';
 import { formatDocUnitPrice } from '../../lib/documentLayout';
@@ -304,6 +309,12 @@ export function ClientPortal() {
   const [accountBranding, setAccountBranding] = useState<BrandingPayload | null>(null);
   const [remembered, setRemembered] = useState<BrandingPayload | null>(rememberedBranding);
   const branding = accountBranding ?? (portalKey || onClientHost ? keyBranding : remembered);
+  // De server kent de inlog niet (meer): een inlog van vóór het vastleggen per
+  // adres, of het portaal is op dit adres uitgezet. Dan opnieuw inloggen.
+  const [loginNotice, setLoginNotice] = useState<string | null>(null);
+  // Op een eigen domein: een sleutel van ResoFly in plaats van een inlog bij
+  // Supabase (src/lib/portalToken.ts). Hetzelfde voor de hele pagina.
+  const [tokenMode] = useState(portalTokenMode);
 
   // Uitloggen met de knop: ook in dit tabblad niets meer van de vorige klant
   // laten staan. Wat er op schijf stond gaat weg, en ook wat er nog in het
@@ -318,8 +329,28 @@ export function ClientPortal() {
     setAccountBranding(null);
     setRemembered(null);
     if (!keyInPath) setPortalKey(null);
-    void supabasePortalAuth.signOut();
-  }, [keyInPath]);
+    if (tokenMode) {
+      // Een eigen domein: de sleutel weg, hier en bij de server.
+      const token = storedPortalToken();
+      storePortalToken(null);
+      if (token) void endPortalToken(token);
+      return;
+    }
+    // Alleen deze inlog: een inlog op een ander adres of apparaat (bij een
+    // andere leverancier) blijft staan.
+    void supabasePortalAuth.signOut({ scope: 'local' });
+  }, [keyInPath, tokenMode]);
+
+  // Zoals een verlopen sessie: niet als uitloggen met de knop, dus de huisstijl
+  // op schijf blijft staan.
+  useEffect(() => {
+    onPortalSessionLost(() => {
+      setLoginNotice('Je bent uitgelogd. Log opnieuw in.');
+      if (tokenMode) storePortalToken(null);
+      else void supabasePortalAuth.signOut({ scope: 'local' });
+    });
+    return () => onPortalSessionLost(null);
+  }, [tokenMode]);
 
   useEffect(() => {
     if (!portalKey && !onClientHost) { setKeyBranding(null); setKeyBrandingDone(true); return; }
@@ -353,10 +384,15 @@ export function ClientPortal() {
       setLoggedIn(signedIn);
       setSessionReady(true);
     };
+    if (tokenMode) {
+      apply(Boolean(storedPortalToken()));
+      const stop = onPortalTokenChange(() => apply(Boolean(storedPortalToken())));
+      return () => { active = false; stop(); };
+    }
     supabasePortalAuth.getSession().then(({ data }) => apply(Boolean(data.session)));
     const { data: sub } = supabasePortalAuth.onAuthStateChange((_event, session) => apply(Boolean(session)));
     return () => { active = false; sub.subscription.unsubscribe(); };
-  }, []);
+  }, [tokenMode]);
 
   // De kleuren van het inlogscherm, ook voor het laadscherm ervoor: anders
   // springt het na het laden van de kopkleur naar de eigen achtergrond.
@@ -395,7 +431,7 @@ export function ClientPortal() {
   }
   // Niet eerst het neutrale inlogscherm laten flitsen terwijl de huisstijl van
   // het adres onderweg is.
-  if (!loggedIn) return keyBrandingDone ? <PortalLogin branding={branding} portalKey={portalKey} /> : booting;
+  if (!loggedIn) return keyBrandingDone ? <PortalLogin branding={branding} portalKey={portalKey} notice={loginNotice} /> : booting;
   return <PortalDashboard branding={branding} onBranding={setAccountBranding} portalKey={portalKey} onSignOut={signOut} />;
 }
 
@@ -448,12 +484,14 @@ export function PortalPreview() {
   return <>{note}<PortalDashboard branding={branding} onBranding={noBranding} preview={{ screen, reloadKey }} /></>;
 }
 
-function PortalLogin({ branding, preview = false, portalKey = null }: {
+function PortalLogin({ branding, preview = false, portalKey = null, notice = null }: {
   branding: BrandingPayload | null;
   /** Het voorbeeld bij Instellingen → Huisstijl: er gaat geen inloglink weg. */
   preview?: boolean;
   /** De sleutel van het eigen inlogadres waarop dit scherm staat (of null). */
   portalKey?: string | null;
+  /** Waarom de klant (weer) moet inloggen, of null. */
+  notice?: string | null;
 }) {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
@@ -478,24 +516,14 @@ function PortalLogin({ branding, preview = false, portalKey = null }: {
       // Het geheim blijft in deze browser; alleen de hash gaat mee
       // (src/lib/portalLoginFlow.ts). Zo werkt de link uit de mail alleen hier.
       const verifier = createVerifier();
-      const { flow } = await requestPortalLogin(cleanEmail, { verifierHash: await sha256Hex(verifier), key: portalKey });
+      await requestPortalLogin(cleanEmail, { verifierHash: await sha256Hex(verifier), key: portalKey });
       // Bij welke leverancier dit was, voor als de link op het algemene adres
       // terugkomt. Zonder sleutel een oude vergeten, anders koos een eerdere
       // aanvraag op dit apparaat de leverancier.
       if (portalKey) rememberPortalKey(portalKey); else forgetPortalKey();
-      if (flow === 'mail') {
-        rememberVerifier(verifier);
-        setSentTo(cleanEmail);
-        setSent(true);
-        return;
-      }
-      // Een server van vóór de eigen inlogmail: de link van Supabase, zoals voorheen.
-      const { error } = await supabasePortalAuth.signInWithOtp({
-        email: cleanEmail,
-        options: { emailRedirectTo: `${window.location.origin}/portal`, shouldCreateUser: false },
-      });
-      // "Signups not allowed" = onbekend adres: zelfde melding als bij een bekend adres.
-      if (error && !/signup|not allowed|not found/i.test(error.message)) setError(error.message); else setSent(true);
+      rememberVerifier(verifier);
+      setSentTo(cleanEmail);
+      setSent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Inloggen mislukt');
     } finally {
@@ -503,17 +531,34 @@ function PortalLogin({ branding, preview = false, portalKey = null }: {
     }
   }
 
-  /** De code uit de mail, voor wie de mail op een ander apparaat leest. */
+  /**
+   * De code uit de mail, voor wie de mail op een ander apparaat leest. Eerst
+   * inwisselen, dan vastleggen bij de aanvraag uit deze browser, dan pas
+   * opslaan: een inlog die nergens vastligt, weigert het portaal.
+   */
   async function signInWithCode() {
     const token = normalizeLoginCode(code);
     if (!sentTo || !token) { setError('Vul de code uit de mail in: alleen de cijfers.'); return; }
     setError(null); setBusy(true);
     try {
-      const { error } = await supabasePortalAuth.verifyOtp({ email: sentTo, token, type: 'email' });
-      if (error) throw error;
+      if (portalTokenMode()) {
+        // Een eigen domein: de code geeft de sleutel van het portaal.
+        const { portalToken } = await redeemPortalCode(sentTo, token);
+        storePortalToken(portalToken);
+        forgetVerifiers();
+        return;
+      }
+      const tokens = await verifyPortalLogin({ email: sentTo, code: token });
+      if (!tokens) {
+        setError('Deze code klopt niet of is verlopen. Controleer de cijfers, of vraag een nieuwe inloglink aan.');
+        return;
+      }
+      await bindPortalSession(tokens.access_token, { verifiers: pendingVerifiers() });
+      const { error } = await supabasePortalAuth.setSession(tokens);
+      if (error) throw new Error('Inloggen is niet gelukt. Vraag een nieuwe code aan.');
       forgetVerifiers();
-    } catch {
-      setError('Deze code klopt niet of is verlopen. Controleer de cijfers, of vraag een nieuwe inloglink aan.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Inloggen is niet gelukt. Vraag een nieuwe code aan.');
     } finally {
       setBusy(false);
     }
@@ -530,6 +575,7 @@ function PortalLogin({ branding, preview = false, portalKey = null }: {
       <p className="eyebrow login-eyebrow">Facturen • Offertes • Tickets • Projecten</p>
       <h1>Inloggen</h1>
       <p>Vul je e-mailadres in. Je ontvangt een veilige inloglink in je mailbox — geen wachtwoord nodig.</p>
+      {notice && !sent && <p className="portal-login-next" role="status">{notice}</p>}
       {pendingLink && <p className="portal-login-next">
         {pendingLink.ticket ? 'Na het inloggen openen we meteen het ticket uit je e-mail.'
           : pendingLink.view === 'settings' ? 'Na het inloggen kom je meteen bij je meldingsinstellingen.'
@@ -585,9 +631,22 @@ function PortalLoginLanding({ requestId, branding, portalKey, onSignedIn, onAban
   async function signIn() {
     setBusy(true); setError(null);
     try {
-      const result = await redeemPortalLogin(requestId, pendingVerifiers());
-      const { error } = await supabasePortalAuth.verifyOtp({ token_hash: result.tokenHash, type: 'magiclink' });
-      if (error) throw new Error('Deze inloglink is verlopen of al gebruikt. Vraag een nieuwe aan.');
+      const verifiers = pendingVerifiers();
+      const result = await redeemPortalLogin(requestId, verifiers);
+      if (result.portalToken) {
+        // Een eigen domein: de sleutel van het portaal, geen inlog bij Supabase.
+        storePortalToken(result.portalToken);
+        forgetVerifiers();
+        onSignedIn(result.portalKey ?? portalKey);
+        return;
+      }
+      if (!result.tokenHash) throw new Error('Deze inloglink is verlopen of al gebruikt. Vraag een nieuwe aan.');
+      const tokens = await verifyPortalLogin({ tokenHash: result.tokenHash });
+      if (!tokens) throw new Error('Deze inloglink is verlopen of al gebruikt. Vraag een nieuwe aan.');
+      // Eerst vastleggen bij deze aanvraag, dan pas opslaan (zie signInWithCode).
+      await bindPortalSession(tokens.access_token, { request: requestId, verifiers });
+      const { error } = await supabasePortalAuth.setSession(tokens);
+      if (error) throw new Error('Inloggen is niet gelukt. Vraag een nieuwe inloglink aan.');
       forgetVerifiers();
       onSignedIn(result.portalKey ?? portalKey);
     } catch (e) {

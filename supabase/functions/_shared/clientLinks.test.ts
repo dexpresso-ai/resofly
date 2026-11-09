@@ -104,7 +104,7 @@ test('een verzoek van een klantadres: herkend, en een token van een ander geeft 
   const admin = fakeAdmin(tables);
   const fromA = new Request('https://x.supabase.co/functions/v1/invoice-public', { headers: { origin: 'https://jansen.resofly.com' } });
   const client = await rememberClientOrigin(admin, fromA, LIVE);
-  assert.deepEqual(client, { origin: 'https://jansen.resofly.com', host: 'jansen.resofly.com', organizationId: ORG_A, kind: 'subdomain' });
+  assert.deepEqual(client, { origin: 'https://jansen.resofly.com', host: 'jansen.resofly.com', organizationId: ORG_A, kind: 'subdomain', portalEnabled: true });
   assert.equal(clientOriginOf(fromA)?.organizationId, ORG_A);
   assert.equal(clientOriginMismatch(fromA, ORG_A), false);
   assert.equal(clientOriginMismatch(fromA, ORG_B), true, 'de factuur van B op het adres van A');
@@ -124,9 +124,9 @@ test('een verzoek van een klantadres: herkend, en een token van een ander geeft 
   assert.equal(await rememberClientOrigin(fakeAdmin(tables, { fail: true }), broken, LIVE), null);
 });
 
-test('het portaal woont op de naam bij ResoFly, nooit op een eigen domein', async () => {
+test('het portaal: op de naam bij ResoFly, of op het eigen domein als het daar aan staat', async () => {
   const admin = fakeAdmin(tables);
-  // ORG_B heeft een actief eigen domein: documenten gaan daarheen, het portaal niet.
+  // ORG_B heeft een actief eigen domein zonder portaal: documenten gaan daarheen, het portaal niet.
   assert.equal(await clientBaseUrl(admin, ORG_B, 'https://staging.resofly.com', LIVE), 'https://portaal.pietersen.nl');
   assert.equal(await clientPortalBaseUrl(admin, ORG_B, 'https://staging.resofly.com', LIVE), 'https://pietersen.resofly.com');
   assert.deepEqual(await portalLinkBase(admin, ORG_B, 'https://staging.resofly.com/', LIVE), { base: 'https://pietersen.resofly.com', onClientHost: true });
@@ -136,20 +136,46 @@ test('het portaal woont op de naam bij ResoFly, nooit op een eigen domein', asyn
   assert.equal(await clientPortalBaseUrl(fakeAdmin(tables, { fail: true }), ORG_A, 'https://staging.resofly.com', LIVE), 'https://staging.resofly.com');
   // Elke vraag filtert op de organisatie.
   assert.ok(admin.calls.every(call => call.filters.some(([op, col, value]) => op === 'eq' && col === 'organization_id' && (value === ORG_A || value === ORG_B))));
+
+  // Met het portaal aan op het eigen domein: daar. Een domein dat nog wacht, telt niet.
+  const aan = fakeAdmin({
+    ...tables,
+    client_domains: [
+      { organization_id: ORG_B, hostname: 'portaal.pietersen.nl', status: 'active', portal_enabled: true },
+      { organization_id: ORG_A, hostname: 'portaal.jansen.nl', status: 'pending_dns', portal_enabled: true },
+    ],
+  });
+  assert.equal(await clientPortalBaseUrl(aan, ORG_B, 'https://staging.resofly.com', LIVE), 'https://portaal.pietersen.nl');
+  assert.deepEqual(await portalLinkBase(aan, ORG_B, 'https://staging.resofly.com', LIVE), { base: 'https://portaal.pietersen.nl', onClientHost: true });
+  assert.equal(await clientPortalBaseUrl(aan, ORG_A, 'https://staging.resofly.com', LIVE), 'https://jansen.resofly.com');
+  assert.equal(await clientPortalBaseUrl(aan, ORG_B, 'https://staging.resofly.com', NOT_LIVE), 'https://staging.resofly.com');
 });
 
-test('voor het portaal telt alleen een naam bij ResoFly als klantadres', async () => {
+test('voor het portaal telt een naam bij ResoFly, en een eigen domein alleen met het portaal aan', async () => {
   clearClientOriginCache();
-  const admin = fakeAdmin({ ...tables, client_domains: [{ organization_id: ORG_B, hostname: 'portaal.pietersen.nl', status: 'active' }] });
+  const admin = fakeAdmin({ ...tables, client_domains: [
+    { organization_id: ORG_B, hostname: 'portaal.pietersen.nl', status: 'active' },
+    { organization_id: ORG_A, hostname: 'portaal.jansen.nl', status: 'failing', portal_enabled: true },
+  ] });
   const naam = new Request('https://x.test/f', { headers: { origin: 'https://pietersen.resofly.com' } });
   const eigen = new Request('https://x.test/f', { headers: { origin: 'https://portaal.pietersen.nl' } });
+  const eigenMetPortaal = new Request('https://x.test/f', { headers: { origin: 'https://portaal.jansen.nl' } });
   await rememberClientOrigin(admin, naam, LIVE);
   await rememberClientOrigin(admin, eigen, LIVE);
+  await rememberClientOrigin(admin, eigenMetPortaal, LIVE);
   assert.equal(clientOriginOf(eigen)?.kind, 'custom', 'voor documenten is het eigen domein een klantadres');
-  assert.equal(portalOriginOf(eigen), null, 'voor het portaal niet');
+  assert.equal(clientOriginOf(eigen)?.portalEnabled, false);
+  assert.equal(portalOriginOf(eigen), null, 'zonder portaal: voor het portaal niet');
   assert.equal(portalOriginOf(naam)?.organizationId, ORG_B);
   assert.equal(portalOriginMismatch(naam, ORG_A), true);
   assert.equal(portalOriginMismatch(naam, ORG_B), false);
-  assert.equal(portalOriginMismatch(eigen, ORG_A), false, 'geen klantadres voor het portaal: dan geldt het algemene adres');
+  assert.equal(portalOriginMismatch(naam, null), true, 'een inlog voor alles hoort niet op het adres van één organisatie');
+  assert.equal(portalOriginMismatch(eigen, ORG_A), false, 'geen portaaladres: dan geldt het algemene adres');
+  // Het portaal aan (ook als het domein even hapert): wel.
+  assert.deepEqual(portalOriginOf(eigenMetPortaal), {
+    origin: 'https://portaal.jansen.nl', host: 'portaal.jansen.nl', organizationId: ORG_A, kind: 'custom', portalEnabled: true,
+  });
+  assert.equal(portalOriginMismatch(eigenMetPortaal, ORG_A), false);
+  assert.equal(portalOriginMismatch(eigenMetPortaal, ORG_B), true);
   clearClientOriginCache();
 });

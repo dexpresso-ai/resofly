@@ -33,3 +33,43 @@ export const supabasePortal = createClient(
 // auth-methodes op runtime, maar sommige package-typings exposen ze via een
 // smallere class. De cast houdt de aanroepen type-veilig.
 export const supabasePortalAuth = supabasePortal.auth as unknown as SupabaseAuthAdapter;
+
+/** De tokens van een verse inlog, nog niet opgeslagen. */
+export interface PortalLoginTokens {
+  access_token: string;
+  refresh_token: string;
+}
+
+/**
+ * De link of de code uit de inlogmail inwisselen bij Supabase Auth, zonder de
+ * inlog op te slaan. Eerst ging dat met supabasePortal.auth.verifyOtp: dan
+ * stond de inlog meteen in de browser, en vroeg het portaal al gegevens op
+ * terwijl hij nog niet was vastgelegd (portal-login, bindSession). Dat
+ * weigert client-portal sinds migratie 20261109020000. Nu legt de app hem
+ * eerst vast en slaat hem dan op (setSession).
+ *
+ * Rechtstreeks vanuit de browser, niet via de server: de remmen van Supabase
+ * Auth tellen per IP-adres, en via de server zouden alle klanten samen tellen.
+ * Null als de code of link niet (meer) klopt.
+ */
+export async function verifyPortalLogin(params: { email: string; code: string } | { tokenHash: string }): Promise<PortalLoginTokens | null> {
+  if (!isSupabaseConfigured) return null;
+  const body = 'tokenHash' in params
+    ? { type: 'magiclink', token_hash: params.tokenHash }
+    : { type: 'email', email: params.email, token: params.code };
+  try {
+    const res = await fetch(`${url!.replace(/\/+$/, '')}/auth/v1/verify`, {
+      method: 'POST',
+      // Zoals supabase-js zelf: de publieke sleutel in beide headers.
+      headers: { apikey: anon!, Authorization: `Bearer ${anon!}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    const json = await res.json().catch(() => null) as { access_token?: unknown; refresh_token?: unknown } | null;
+    return typeof json?.access_token === 'string' && typeof json?.refresh_token === 'string'
+      ? { access_token: json.access_token, refresh_token: json.refresh_token }
+      : null;
+  } catch {
+    return null;
+  }
+}

@@ -596,6 +596,9 @@ export function sentence(e: AuditEntry, lookup: AuditLookup = {}): { parts: Sent
       case 'moved': return { parts: [t('ontkoppelde eigen domein '), b(name), t('; oude links sturen nog een jaar door')] };
       case 'removed': return { parts: [t('haalde eigen domein '), b(name), t(' weg')] };
       case 'taken_over': return { parts: [t('Eigen domein '), b(name), t(' werd nooit actief en is door een andere organisatie gekoppeld')], subjectless: true };
+      // Migratie 20261109020000: het klantportaal ook op het eigen domein.
+      case 'portal_enabled': return { parts: [t('zette het klantportaal aan op '), b(name)] };
+      case 'portal_disabled': return { parts: [t('zette het klantportaal uit op '), b(name)] };
     }
   }
   // Het webadres (client_subdomains, via de trigger). De trigger bewaart alleen

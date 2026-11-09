@@ -100,17 +100,17 @@ export async function clientBaseUrl(
 }
 
 /**
- * Waar het klantportaal van een organisatie woont: altijd de naam bij ResoFly
- * (jansen.resofly.com), nooit een eigen domein.
+ * Waar het klantportaal van een organisatie woont: het eigen domein als de
+ * organisatie het portaal daar heeft aangezet (Instellingen → Domein), anders
+ * de naam bij ResoFly (jansen.resofly.com).
  *
- * Waarom: de inlogsessie van een klant staat in de browser, bij het adres
- * waarop hij inlogde, en geldt voor al zijn leveranciers. De DNS van een
- * eigen domein beheert de organisatie zelf. Wijst ze portaal.jansen.nl later
- * naar een eigen server, dan leest een pagina daar die sessie uit, en ziet ze
- * wat de klant bij een andere organisatie heeft (harde regel 1). De DNS van
- * <naam>.resofly.com beheert alleen ResoFly. Documenten met een token
- * (factuur, album) mogen wel op het eigen domein: die horen bij de
- * organisatie zelf.
+ * Tot migratie 20261109020000 nooit een eigen domein. De inlog van een klant
+ * staat in de browser, bij het adres waarop hij inlogde, en gold bij al zijn
+ * leveranciers. De DNS van een eigen domein beheert de organisatie zelf: wees
+ * portaal.jansen.nl later naar een eigen server, dan las een pagina daar die
+ * inlog uit, en zag Jansen wat de klant bij een ander heeft (harde regel 1).
+ * Nu geldt een inlog op het adres van een organisatie alleen voor die
+ * organisatie (_shared/portalSession.ts, portal_sessions).
  */
 export async function clientPortalBaseUrl(
   admin: SupabaseClient,
@@ -121,6 +121,17 @@ export async function clientPortalBaseUrl(
   const fallbackUrl = String(fallback || '').replace(/\/+$/, '');
   if (!organizationId || !config.live) return fallbackUrl;
   try {
+    const { data: domain, error: domainError } = await admin
+      .from('client_domains')
+      .select('hostname')
+      .eq('organization_id', organizationId)
+      .eq('status', 'active')
+      .eq('portal_enabled', true)
+      .order('verified_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (domainError) throw domainError;
+    if (domain?.hostname) return `https://${normalizeHost(String(domain.hostname))}`;
     const { data, error } = await admin
       .from('client_subdomains')
       .select('name')
@@ -194,6 +205,8 @@ export interface ClientOrigin {
   host: string;
   organizationId: string;
   kind: 'subdomain' | 'custom';
+  /** Staat het klantportaal op dit adres? Op een naam bij ResoFly altijd; op een eigen domein als de organisatie het aanzette. */
+  portalEnabled: boolean;
 }
 
 const verdicts = new WeakMap<Request, ClientOrigin | null>();
@@ -231,12 +244,16 @@ async function lookupClientOrigin(admin: SupabaseClient, origin: string, config:
   if (parsed.kind === 'subdomain') {
     const { data, error } = await admin.from('client_subdomains').select('organization_id,status').eq('name', parsed.name).maybeSingle();
     if (error) throw error;
-    if (data?.status === 'active') value = { origin, host: url.hostname, organizationId: String(data.organization_id), kind: 'subdomain' };
+    if (data?.status === 'active') {
+      value = { origin, host: url.hostname, organizationId: String(data.organization_id), kind: 'subdomain', portalEnabled: true };
+    }
   } else {
-    const { data, error } = await admin.from('client_domains').select('organization_id,status')
+    const { data, error } = await admin.from('client_domains').select('organization_id,status,portal_enabled')
       .eq('hostname', parsed.hostname).in('status', ['active', 'failing']).limit(1).maybeSingle();
     if (error) throw error;
-    if (data) value = { origin, host: url.hostname, organizationId: String(data.organization_id), kind: 'custom' };
+    if (data) {
+      value = { origin, host: url.hostname, organizationId: String(data.organization_id), kind: 'custom', portalEnabled: data.portal_enabled === true };
+    }
   }
   if (cache.size >= CACHE_MAX) cache.clear();
   cache.set(origin, { value, until: Date.now() + CACHE_MS });
@@ -272,16 +289,21 @@ export function clientOriginOf(req: Request): ClientOrigin | null {
 }
 
 /**
- * Hetzelfde, maar alleen een naam bij ResoFly: voor het klantportaal en het
- * inloggen daarop. Een eigen domein telt daar niet als klantadres (zie
- * clientPortalBaseUrl): vandaar geen CORS, en dus geen sessie.
+ * Hetzelfde, maar alleen een adres waar het klantportaal staat: een naam bij
+ * ResoFly, of een eigen domein waar de organisatie het portaal aanzette. Een
+ * eigen domein zonder portaal krijgt voor het portaal en het inloggen geen
+ * CORS, en dus nooit een inlog.
  */
 export function portalOriginOf(req: Request): ClientOrigin | null {
   const origin = clientOriginOf(req);
-  return origin?.kind === 'subdomain' ? origin : null;
+  return origin?.portalEnabled ? origin : null;
 }
 
-/** clientOriginMismatch voor het portaal: alleen een naam bij ResoFly telt. */
+/**
+ * clientOriginMismatch voor het portaal: alleen een adres met het portaal
+ * telt. Ook "anders" als er geen organisatie is (een inlog voor alles op het
+ * adres van één organisatie).
+ */
 export function portalOriginMismatch(req: Request, organizationId: string | null | undefined): boolean {
   const origin = portalOriginOf(req);
   if (!origin) return false;

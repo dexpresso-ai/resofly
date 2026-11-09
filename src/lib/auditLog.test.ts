@@ -246,6 +246,8 @@ test('zinnen: het webadres en een eigen domein (migratie 20261108230000)', () =>
   assert.equal(domein('moved', ME), 'Jij ontkoppelde eigen domein portaal.jansen.nl; oude links sturen nog een jaar door');
   assert.equal(domein('removed'), 'anne haalde eigen domein portaal.jansen.nl weg');
   assert.equal(domein('taken_over', null), 'Eigen domein portaal.jansen.nl werd nooit actief en is door een andere organisatie gekoppeld');
+  assert.equal(domein('portal_enabled'), 'anne zette het klantportaal aan op portaal.jansen.nl');
+  assert.equal(domein('portal_disabled', ME), 'Jij zette het klantportaal uit op portaal.jansen.nl');
 
   // Zoals de trigger het schrijft: welke kolommen, geen waarden.
   const naam = (action: string, changes: Record<string, unknown> = {}, actor: string | null = ME) => sentenceText(entry({

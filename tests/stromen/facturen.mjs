@@ -16,7 +16,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { roep } from './functies.mjs';
 import { mailsAan, mollieBetaal, mollieTerugbetalingKlaar, mollieWebhook, post } from './nepdiensten.mjs';
 import { WEBHOOK_SECRET } from './omgeving.mjs';
-import { maakGebruiker, rest, rpc, sql, sqlRij, sqlRijen, uniek } from './supabase.mjs';
+import { koppelPortaalSessie, maakGebruiker, rest, rpc, sql, sqlRij, sqlRijen, uniek } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, nietsVeranderd, stap, verwacht } from './toets.mjs';
 import { maakWereld, REGELS, TOTAAL_REGELS } from './wereld.mjs';
 
@@ -1116,7 +1116,7 @@ export default async function facturen() {
     // e-mail versturen (met betaallink, zoals de app); de klant betaalt in het portaal.
     gelukt(await rest(`clients?id=eq.${klant.id}&select=id`, { method: 'PATCH', token: w.medewerker.token, prefer: 'return=representation', body: { e_invoicing_enabled: false } }), 'e-facturatie uitzetten');
     const perMail = gelukt(await verstuur(w, concept, { klant, betaallink: true }), 'per e-mail versturen');
-    const betalen = await portaal(await maakGebruiker('portaal-peppol', klant.email), 'createInvoicePayment', { invoiceId: concept.id });
+    const betalen = await portaal(koppelPortaalSessie(await maakGebruiker('portaal-peppol', klant.email)), 'createInvoicePayment', { invoiceId: concept.id });
     gelijk({
       poging,
       opnieuwVersturen: blokkade(tweede, /wordt al via Mollie verstuurd|halverwege/i),

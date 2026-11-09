@@ -27,7 +27,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { roep } from './functies.mjs';
 import { ANON_KEY, CRON_SECRET, R2_GEHEIM, SERVICE_KEY, WEBHOOK_SECRET } from './omgeving.mjs';
 import { mollieBetaal, post } from './nepdiensten.mjs';
-import { maakGebruiker, rest, rpc, sql, sqlRij, sqlRijen, uniek } from './supabase.mjs';
+import { koppelPortaalSessie, maakGebruiker, rest, rpc, sql, sqlRij, sqlRijen, uniek } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, stap, verwacht } from './toets.mjs';
 import { maakWereld, REGELS } from './wereld.mjs';
 
@@ -1223,6 +1223,15 @@ async function zijdeurPortaal(A, d) {
       organization_id: A.orgId, client_id: A.klantA.id, name: 'Collega als klant', email: lid.email, gives_portal_access: true, is_active: true,
     } }), 'contactpersoon')[0]);
   if (!contact) return;
+
+  // Met zijn sessie van de werkruimte komt hij niet in het portaal: client-portal
+  // kent alleen inloggen via de inlogmail (migratie 20261109020000).
+  await stap('een sessie van de werkruimte is geen portaalinlog: client-portal geeft niets', async () => {
+    const res = geweigerd(await fn('client-portal', { token: lid.token, body: { action: 'getPortalData' } }), 'weigering', [401]);
+    gelijk(res?.code, 'session_unbound', 'code');
+  });
+  // Maar hij kan zelf de inlogmail aanvragen, op zijn eigen adres. Hier zoals na die mail.
+  koppelPortaalSessie(lid);
 
   await stap('dat teamlid leest via het portaal geen facturen, offertes of contracten van A', async () => {
     const res = await fn('client-portal', { token: lid.token, body: { action: 'getPortalData' } });
