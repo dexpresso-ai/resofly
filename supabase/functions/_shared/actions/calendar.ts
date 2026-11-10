@@ -4,6 +4,7 @@ import {
   type ActionCtx, type ActionDef,
 } from './types.ts';
 import { isJitsiMeetingUrl, jitsiMeetingUrl } from '../jitsi.ts';
+import { isWriterRole, memberModuleLevel } from '../roles.ts';
 import {
   accountSupportsService, calendarConferenceBlockedReason, calendarConferenceService, isVideoService, pickMeetingConnection,
   serviceLabel, serviceOfUrl, serviceProvider, videoServiceStateMessage, type VideoService,
@@ -1394,6 +1395,16 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       const linkId = id(input, 'link_id');
       const link = await bookingLink(ctx, linkId);
       if (link.status !== 'active') throw new ActionError(`"${link.title}" staat op gesloten; zet hem eerst weer open met \`booking_link.update\`.`);
+      // Een link die de klant niet meer kan gebruiken, mailen we niet: de maker
+      // moet nog in de Agenda mogen schrijven (dezelfde regel als de database).
+      if (link.user_id) {
+        const { data: owner } = await ctx.db.from('organization_members').select('role, module_access')
+          .eq('organization_id', ctx.organizationId).eq('user_id', link.user_id).eq('status', 'active').maybeSingle();
+        const member = owner as { role?: string; module_access?: Record<string, unknown> | null } | null;
+        if (!member?.role || !isWriterRole(member.role) || memberModuleLevel(member.role, member.module_access, 'calendar') !== 'write') {
+          throw new ActionError(`Wie "${link.title}" maakte, mag niet meer in de Agenda schrijven (of is geen teamlid meer); via die link kan niemand boeken. Maak een nieuwe link.`);
+        }
+      }
 
       let email = optStr(input, 'email', 200);
       let name = optStr(input, 'name', 120);
@@ -1407,10 +1418,12 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
         throw new ActionError('Geef een e-mailadres, of koppel eerst een klant met een e-mailadres aan de boekingslink.');
       }
 
+      // Alleen momenten die nog moeten beginnen: een blok dat al begonnen is,
+      // kan de klant niet meer kiezen (meeting-booking-public, 20261110030000).
       const { count: openSlots } = await ctx.db.from('meeting_booking_slots')
         .select('id', { count: 'exact', head: true })
         .eq('organization_id', ctx.organizationId).eq('booking_link_id', linkId).eq('status', 'open')
-        .gte('ends_at', new Date().toISOString());
+        .gt('starts_at', new Date().toISOString());
       if (!openSlots) throw new ActionError(`"${link.title}" heeft geen open tijdblokken meer. Voeg er eerst een paar toe met \`booking_slot.add\`.`);
 
       return {
@@ -1465,6 +1478,14 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
         const endsAt = amsWallToUtcIso(date, hhmm(record, 'end_time'));
         if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
           throw new ActionError(`Op ${date} ligt de eindtijd niet na de begintijd.`);
+        }
+        // Zoals meeting-booking bij het uitvoeren: een moment in het verleden
+        // kan niemand boeken, en een blok van meer dan twaalf uur is een vergissing.
+        if (new Date(startsAt).getTime() <= Date.now()) {
+          throw new ActionError(`${nlMoment(startsAt)} ligt in het verleden; dat moment kan de klant niet meer kiezen.`);
+        }
+        if (new Date(endsAt).getTime() - new Date(startsAt).getTime() > 12 * 60 * 60 * 1000) {
+          throw new ActionError(`Op ${date} duurt het blok langer dan twaalf uur; dat is vast niet de bedoeling.`);
         }
         slots.push({ startsAt, endsAt });
       }

@@ -391,7 +391,12 @@ function edgeFunction(name, body) {
     if (action === 'listAppPasswords') return { ok: true, appPasswords: [] };
     return { ok: true, connections: [], sources: [seed.calendarSource], calendars: [seed.calendarSource], events: [], attendees: [], links: [], slots: [], ics: [] };
   }
-  if (name === 'meeting-booking') return { ok: true, links: [], slots: [], bookings: [], link: null };
+  if (name === 'meeting-booking') {
+    // De boekingslinks van de eerste klant; een andere klant heeft er geen.
+    if (body?.action === 'listLinks') return { ok: true, links: body.clientId && body.clientId !== seed.clients[0].id ? [] : pub.bookingAdminLinks };
+    if (body?.action === 'getLink') return pub.bookingAdminDetail(String(body.linkId ?? ''));
+    return { ok: true, links: [], slots: [], bookings: [], link: null };
+  }
   if (name === 'client-domains') {
     switch (body?.action) {
       case 'overview': return WORKSPACE_OVERVIEW;

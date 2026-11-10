@@ -158,11 +158,13 @@ export type PublicHeroFact = { label: string; value: ReactNode; sub?: ReactNode;
  * als het klantportaal, in de kopkleur van de leverancier, met het merk, wat
  * voor stuk het is, de titel, de status en de kern in glazen tegels.
  */
-export function PublicDocHero({ branding, companyName, kind, title, intro, status, facts }: {
+export function PublicDocHero({ branding, companyName, kind, eyebrow, title, intro, status, facts }: {
   branding: BrandingPayload | null | undefined;
   companyName: string;
   /** "Offerte", "Factuur", "Contract". */
   kind: string;
+  /** Eigen bovenregel, als "<soort> van <bedrijf>" niet past ("Afspraak met …"). */
+  eyebrow?: string;
   title: ReactNode;
   intro?: ReactNode;
   /** De statuspil, bv. "Wacht op akkoord". */
@@ -178,7 +180,7 @@ export function PublicDocHero({ branding, companyName, kind, title, intro, statu
       {status}
     </div>
     <div className="public-hero-title">
-      <p className="public-hero-eyebrow">{companyName ? `${kind} van ${companyName}` : kind}</p>
+      <p className="public-hero-eyebrow">{eyebrow ?? (companyName ? `${kind} van ${companyName}` : kind)}</p>
       <h1>{title}</h1>
       {intro && <p className="public-hero-intro">{intro}</p>}
     </div>

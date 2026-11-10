@@ -176,7 +176,7 @@ import type { ReportDefinition } from './lib/reporting';
 import { CalendarPage, type CalendarDraft, type CalendarLinkNotice } from './features/CalendarPage';
 import { TaskAgendaSection } from './components/TaskAgenda';
 import { calendarEventLinkMatchesEvent } from './lib/calendar-links';
-import { MeetingBookingManager } from './features/MeetingBookingManager';
+import { MeetingBookingManager, type BookingFocus } from './features/MeetingBookingManager';
 import { WeekPlanner } from './features/WeekPlanner';
 import { ProjectShiftDialog } from './components/ProjectShiftDialog';
 import type { ProjectShift } from './components/ProjectShiftDialog';
@@ -248,6 +248,8 @@ const emptyOrganizationContext: OrganizationContext = { memberships: [], organiz
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 /** Volgnummer voor sprongen naar de pagina Berichten (zie openCommunication). */
 let commFocusSeq = 0;
+/** Volgnummer voor sprongen naar Boekingslinks (zie openBookingLinks). */
+let bookingFocusSeq = 0;
 
 // === Actieve tabbladen =====================================================
 // De view-state (welke pagina, welk project/klant, welke editor open staat) leeft
@@ -268,6 +270,12 @@ type ViewState = {
   /** Sprong naar de pagina Berichten: welk gesprek of tabblad er open moet
    *  (melding "nieuw bericht", kaart op de beslislijst). */
   commFocus: CommunicationFocus | null;
+  /**
+   * Sprong naar Agenda → Boekingslinks vanaf de klantpagina: welke link er open
+   * moet, of een nieuwe link voor die klant. Optioneel, zodat de bestaande
+   * tabbladen (ook die uit de opslag) gewoon blijven werken.
+   */
+  bookingFocus?: BookingFocus | null;
   /**
    * Door een agent klaargezet concept dat in het formulier van een ándere pagina
    * moet openen (leverancier, inkoopfactuur, contract, campagne). Eén veld voor
@@ -854,6 +862,7 @@ function App() {
   const setPendingReport = (v: React.SetStateAction<{ key: string; name: string; definition: ReportDefinition } | null>) => patchActiveTab(t => ({ pendingReport: applyUpdater(v, t.pendingReport) }));
   const setOpenAgentId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ openAgentId: applyUpdater(v, t.openAgentId) }));
   const setCommFocus = (v: CommunicationFocus | null) => patchActiveTab(() => ({ commFocus: v }));
+  const setBookingFocus = (v: BookingFocus | null) => patchActiveTab(() => ({ bookingFocus: v }));
   const setPendingDraft = (v: ViewState['pendingDraft']) => patchActiveTab(() => ({ pendingDraft: v }));
   const setEdit = (v: React.SetStateAction<EditMode>) => patchActiveTab(t => ({ edit: applyUpdater(v, t.edit) }));
   // Word-modus voor interne Documents: de Collabora-editor leeft op app-niveau, zodat een
@@ -3438,6 +3447,18 @@ function App() {
     setPage('communication');
   }
 
+  /**
+   * Naar Agenda → Boekingslinks, met een link open of meteen een nieuwe link
+   * voor een klant (de kaart Afspraken op de klantpagina). Net als
+   * openCommunication: de teller maakt elke sprong uniek.
+   */
+  function openBookingLinks(target: Omit<BookingFocus, 'key'> = {}) {
+    bookingFocusSeq += 1;
+    setBookingFocus({ key: bookingFocusSeq, ...target });
+    setProjectId(null); setClientId(null); setStatsReportId(null);
+    setPage('meeting-booking');
+  }
+
   /** "Openen" op een kaart van de beslislijst: naar het item waar hij over gaat. */
   function openDecisionTarget(target: DecisionTarget) {
     switch (target.kind) {
@@ -4063,7 +4084,7 @@ function App() {
     }
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
-    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewProject={() => ensureCanWrite() && setEdit({kind:'project', defaults: { client_id: client.id }})} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread} onNewTicket={() => { if (!canEditKind('ticket')) { setError('Je hebt geen wijzigrechten voor Tickets. Vraag een owner of admin om deze module voor je open te zetten.'); return; } setEdit({kind:'ticket', defaults: { client_id: client.id }}); }} onEditTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} unreadTicketIds={ticketUnreadIds} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')}/>;
+    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewProject={() => ensureCanWrite() && setEdit({kind:'project', defaults: { client_id: client.id }})} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread} onNewTicket={() => { if (!canEditKind('ticket')) { setError('Je hebt geen wijzigrechten voor Tickets. Vraag een owner of admin om deze module voor je open te zetten.'); return; } setEdit({kind:'ticket', defaults: { client_id: client.id }}); }} onEditTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} unreadTicketIds={ticketUnreadIds} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} canReadCalendar={permissions.canRead('calendar')} canWriteCalendar={orgCanWrite && permissions.canWrite('calendar')} onOpenBookingLink={(linkId) => openBookingLinks({ linkId })} onNewBookingLink={() => openBookingLinks({ create: true, clientId: client.id })}/>;
     if (page === 'communication') return <CommunicationPage data={data} organizationId={activeOrg.id} canWrite={canWrite} inboxCount={inboxCount} activity={communicationActivity} focus={view.commFocus} ticketUnreadIds={ticketUnreadIds} currentUserId={currentUserId} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} onUnreadChanged={refreshClientEmailUnread} onInboxChanged={refreshInbox} onTicketUnreadChanged={refreshTicketUnread} onOpenClient={(id) => { setClientId(id); setProjectId(null); setPage('client'); }} onOpenTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} onChanged={refresh} />;
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} onResolve={(item) => void setTicketStatus(item, 'resolved')} onReopen={(item) => void setTicketStatus(item, TICKET_REOPEN_STATUS)} unreadTicketIds={ticketUnreadIds}/>;
@@ -4094,7 +4115,7 @@ function App() {
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={workMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onPlanTaskTime={planTaskAtTime} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) setEdit({ kind: 'ticket', item: ticket }); }} onLinkTaskToEvent={linkTaskToEvent} onUnlinkTaskEvent={unlinkTaskEvent} onReserveTime={reserveTimeForTask}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} initialDraft={calendarDraft} onDraftConsumed={() => setCalendarDraft(null)} onMoveTask={(task, dayKey, startMin, endMin) => planTaskAtTime(task.id, dayKey, startMin, Math.max(15, endMin - startMin))} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
-    if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite}/>;
+    if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite} focus={view.bookingFocus ?? null} onFocusHandled={() => setBookingFocus(null)}/>;
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
     if (page === 'stats') return <Reports data={data} organizationId={activeOrg.id} canWrite={canWrite} canChat={permissions.canRead('gerrie')} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}
       onOpenReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('report'); }}

@@ -23,7 +23,9 @@ export const invoicePublic = { ok: true, invoice: { number: inv.number, date: in
 export const contractPublic = { ok: true, contract: { id: 'c1', number: 'C-2026-007', title: 'Onderhoudscontract website', body: '<h2>1. Opdracht</h2><p>Studio Lopik verzorgt het technisch onderhoud van de website van Fysio Centrum Zuid: updates, back-ups en beveiliging.</p><h2>2. Looptijd</h2><p>Dit contract gaat in op 1 oktober 2026 en loopt twaalf maanden, met stilzwijgende verlenging.</p><h2>3. Vergoeding</h2><p>€ 95,00 per maand exclusief btw, maandelijks vooraf gefactureerd.</p><h2>4. Opzegging</h2><p>Opzeggen kan schriftelijk met een opzegtermijn van één maand.</p>', content_kind: 'html', date: dkey(day(-2)), valid_until: dkey(day(28)), status: 'sent', signed_at: null, public_token_expires_at: iso(day(28)) }, client: { name: 'Fysio Centrum Zuid', contact_name: 'Maria Jansen', email: 'maria@fysio.nl' }, company, branding, signer: { name: 'Maria Jansen', email: 'maria@fysio.nl', status: 'pending', signed_at: null, signature_method: null }, events };
 const slots = []; let sid = 0;
 for (const d of [1, 2, 3, 4]) for (const h of [9, 10, 11, 14, 15]) { const s = day(d, h); const e = day(d, h); e.setMinutes(30); slots.push({ id: `s${++sid}`, starts_at: iso(s), ends_at: iso(e) }); }
-export const bookingPublic = { ok: true, link: { title: 'Kennismakingsgesprek (30 min)', intro_text: 'Kies een moment dat jou uitkomt; je krijgt direct een bevestiging met videolink.', max_total_bookings: 1, max_per_week: 1 }, slots, taken_slot_starts: [slots[2].starts_at], prefill: { name: 'Els de Boer', email: 'els@zonnetje.nl' } };
+// Sinds november 2026 een klantpagina in de huisstijl (stand, kop met
+// bedrijfsnaam, contact) zoals meeting-booking-public hem teruggeeft.
+export const bookingPublic = { ok: true, state: 'open', link: { title: 'Kennismakingsgesprek', intro_text: 'Kies een moment dat jou uitkomt; je krijgt direct een bevestiging met videolink.', max_total_bookings: 1, max_per_week: 1, expires_at: iso(day(60)), video: 'Videogesprek via Jitsi Meet' }, slots, taken_slot_starts: [], booked: [], prefill: { name: 'Els de Boer', email: 'els@zonnetje.nl' }, branding, company: { name: company.trade_name, email: company.email, phone: company.phone, website: company.website } };
 export const sharePublic = { ok: true, share: { itemType: 'folder', itemName: 'Concepten huisstijl', recipientName: 'Joost Vermeer', message: 'Hierbij de eerste concepten. Kijk vooral naar variant 2 — daar zijn we zelf het meest enthousiast over.', canDownload: true, expiresAt: iso(day(14)) }, items: [
   { itemType: 'attachment', itemId: 'a1', name: 'huisstijl-schets-v2.pdf', mimeType: 'application/pdf', sizeBytes: 1240000, modified: iso(day(-1)), path: 'Concepten', downloadable: true, readable: false },
   { itemType: 'attachment', itemId: 'a2', name: 'moodboard.jpg', mimeType: 'image/jpeg', sizeBytes: 2400000, modified: iso(day(-1)), path: 'Concepten', downloadable: true, readable: false },
@@ -73,3 +75,41 @@ export const portalTicketThread = { ok: true, ticket: t0, notes: [
 export const portalSettings = { ok: true, email: c0.email, isPrimary: true, otherPortalUsers: 1, orgEnabled: true,
   settings: { ticketCreated: true, ticketStatus: true, ticketReply: true, scope: 'all' },
   defaults: { ticketCreated: true, ticketStatus: true, ticketReply: true, scope: 'all' } };
+
+// Agenda → Boekingslinks en de kaart Afspraken op de klantpagina (november
+// 2026): een open link met een geboekte afspraak en vrije momenten, en een
+// verlopen link. Zo meet de test de standen, de knoppen en de rijen, niet
+// alleen een lege lijst.
+const atBooking = (days, h, m = 0) => { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(h, m, 0, 0); return iso(d); };
+const bookingLinkOpen = {
+  id: 'b1000000-0000-4000-8000-000000000001', organization_id: seed.ids.ORG, user_id: seed.ids.USER, client_id: seed.clients[0].id, source_id: seed.calendarSource.id,
+  title: 'Kennismakingsgesprek', intro_text: 'Kies een moment dat jou uitkomt.', invite_message: 'Fijn dat we elkaar spreken. Tot dan!', meeting_url: null,
+  max_total_bookings: 2, max_per_week: 1, auto_conference: true, conference_provider: 'jitsi', status: 'active', has_token: true,
+  public_token_expires_at: atBooking(9, 12), created_at: atBooking(-5, 9), updated_at: atBooking(-1, 9),
+};
+const bookingLinkExpired = {
+  ...bookingLinkOpen, id: 'b1000000-0000-4000-8000-000000000002', title: 'Opvolging van de offerte voor de nieuwe huisstijl', max_total_bookings: 1,
+  public_token_expires_at: atBooking(-3, 12), created_at: atBooking(-130, 9),
+};
+const bookingSlots = [
+  { id: 'b2000000-0000-4000-8000-000000000001', booking_link_id: bookingLinkOpen.id, organization_id: seed.ids.ORG, starts_at: atBooking(2, 10), ends_at: atBooking(2, 10, 30), status: 'booked', pending_at: null, created_at: atBooking(-5, 9) },
+  { id: 'b2000000-0000-4000-8000-000000000002', booking_link_id: bookingLinkOpen.id, organization_id: seed.ids.ORG, starts_at: atBooking(9, 10), ends_at: atBooking(9, 10, 30), status: 'open', pending_at: null, created_at: atBooking(-5, 9) },
+  { id: 'b2000000-0000-4000-8000-000000000003', booking_link_id: bookingLinkOpen.id, organization_id: seed.ids.ORG, starts_at: atBooking(9, 14), ends_at: atBooking(9, 14, 30), status: 'open', pending_at: null, created_at: atBooking(-5, 9) },
+  { id: 'b2000000-0000-4000-8000-000000000004', booking_link_id: bookingLinkOpen.id, organization_id: seed.ids.ORG, starts_at: atBooking(-2, 11), ends_at: atBooking(-2, 11, 30), status: 'open', pending_at: null, created_at: atBooking(-5, 9) },
+];
+const bookingRows = [
+  { id: 'b3000000-0000-4000-8000-000000000001', booking_link_id: bookingLinkOpen.id, slot_id: bookingSlots[0].id, organization_id: seed.ids.ORG, client_id: seed.clients[0].id, booked_name: 'Els de Boer', booked_email: 'els@zonnetje.nl', native_event_id: null, external_event_id: null, external_provider: null, status: 'confirmed', created_at: atBooking(-1, 15), confirmed_at: atBooking(-1, 15), cancelled_at: null },
+];
+export const bookingAdminLinks = [
+  { ...bookingLinkOpen, client_name: seed.clients[0].name, source_name: seed.calendarSource.name, source_provider: 'native', booking_count: 1, needs_reconnect: false, state: 'open', open_slot_count: 2, next_open_slot_at: bookingSlots[1].starts_at, owner_can_book: true,
+    upcoming_bookings: [{ id: bookingRows[0].id, name: 'Els de Boer', email: 'els@zonnetje.nl', starts_at: bookingSlots[0].starts_at, ends_at: bookingSlots[0].ends_at }] },
+  { ...bookingLinkExpired, client_name: seed.clients[0].name, source_name: seed.calendarSource.name, source_provider: 'native', booking_count: 0, needs_reconnect: false, state: 'expired', open_slot_count: 0, next_open_slot_at: null, owner_can_book: true, upcoming_bookings: [] },
+];
+export function bookingAdminDetail(linkId) {
+  const expired = linkId === bookingLinkExpired.id;
+  return {
+    ok: true, link: expired ? bookingLinkExpired : bookingLinkOpen, slots: expired ? [] : bookingSlots, bookings: expired ? [] : bookingRows,
+    source_name: seed.calendarSource.name, source_provider: 'native', needs_reconnect: false, owner_can_book: true,
+    open_slot_count: expired ? 0 : 2, state: expired ? 'expired' : 'open',
+  };
+}
