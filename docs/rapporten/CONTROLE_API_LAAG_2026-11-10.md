@@ -262,6 +262,7 @@ database.
 
 - **Database:** migratie `20261110140000_api_laag_controle.sql`, veilig om nog eens te draaien.
 - **Edge functions:**
+  - `email-unsubscribe`
   - `mcp-oauth`
   - `file-share`
   - `mail-inbound`
@@ -270,11 +271,15 @@ database.
   - `gerrie-signals`
   - de openbare functies uit punt 18
   - `_shared/fileTransferServer.ts` en `_shared/meetingPipeline.ts`
+- **App (Cloudflare Pages):** de nieuwe pagina `/afmelden`.
 - **Workers op staging (10 november):**
   - `resofly-media-api-staging`, versie `9896b7a9`;
-  - `resofly-caldav-staging`, versie `bf5ff3e8`.
+  - `resofly-caldav-staging`, versie `bf5ff3e8`;
+  - `resofly-client-domains-staging`, versie `ef5b3841`.
 
   Bindings en secrets zijn ongewijzigd.
+- **Rooktest na de uitrol:** groen, met de nieuwe controles op de API-laag. Een browser die de
+  afmeldlink opent, gaat op staging nu door naar `/afmelden`.
 
 ## Open punten
 
