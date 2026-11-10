@@ -29,11 +29,29 @@ const STATUS_LABELS: Record<string, string> = {
 };
 const PRIORITY_LABELS: Record<string, string> = { low: 'laag', med: 'normaal', high: 'hoog' };
 
-/** Naam van een klant, of null als er geen (meer) is — bewust zacht, dit is versiering. */
+/**
+ * Naam van een klant, of null als er geen (meer) is — bewust zacht, dit is
+ * versiering. Ook null voor wie Klanten niet mag lezen: de service-role las de
+ * naam anders gewoon voor hem uit (modulerechten gelden overal).
+ */
 async function clientNameOf(ctx: ActionCtx, clientId: string | null): Promise<string | null> {
-  if (!clientId) return null;
+  if (!clientId || ctx.canRead?.('clients') === false) return null;
   const { data } = await orgQuery(ctx, 'clients', 'name').eq('id', clientId).maybeSingle();
   return data ? String((data as { name: string }).name) : null;
+}
+
+/**
+ * `.in()` met honderden id's wordt een te lange URL voor de gateway. In stukken
+ * van honderd, en de rijen samen terug.
+ */
+async function inChunks<T>(ids: string[], load: (chunk: string[]) => PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<{ data: T[]; error: { message: string } | null }> {
+  const rows: T[] = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await load(ids.slice(i, i + 100));
+    if (error) return { data: [], error };
+    rows.push(...((data ?? []) as T[]));
+  }
+  return { data: rows, error: null };
 }
 
 /** Knipt een notitie af tot iets wat op een goedkeurkaart past. */
@@ -81,10 +99,20 @@ export const TICKETS_ACTIONS: ActionDef[] = [
       // want die hoeft alleen het onderschrift leesbaar te maken.
       let newName: string | null = null;
       if (clientId) {
+        // Net als bij de API en de inhoud: een klant koppelen kan alleen wie
+        // Klanten mag lezen. Anders hing een lid zonder Klanten een ticket aan
+        // een klant-id uit een ander ticket, en zag die klant het in zijn portaal.
+        if (ctx.canRead?.('clients') === false) throw new ActionError('Een ticket aan een klant koppelen kan alleen als je Klanten mag lezen.');
         const client = await row<{ name: string }>(ctx, 'clients', clientId, 'name', 'Klant');
         newName = client.name;
       }
       const oldName = await clientNameOf(ctx, ticket.client_id);
+      // Wat de nieuwe klant meteen te zien krijgt: de omschrijving en alles wat
+      // al zichtbaar op de tijdlijn staat, ook wat de vorige klant schreef.
+      const { count: visibleNotes } = clientId
+        ? await ctx.db.from('ticket_notes').select('id', { count: 'exact', head: true })
+          .eq('organization_id', ctx.organizationId).eq('ticket_id', ticketId).eq('is_internal', false)
+        : { count: 0 };
 
       return {
         title: clientId ? `Ticket koppelen aan ${newName}: ${ticket.title}` : `Ticket losmaken van de klant: ${ticket.title}`,
@@ -94,6 +122,9 @@ export const TICKETS_ACTIONS: ActionDef[] = [
           STATUS_LABELS[ticket.status] ? `status ${STATUS_LABELS[ticket.status]}` : null,
           clientId ? 'de klant ziet dit ticket daarna in zijn portaal' : (oldName ? `${oldName} ziet het ticket daarna niet meer in het portaal` : null),
         ], 160),
+        warning: clientId && (visibleNotes ?? 0) > 0
+          ? `${newName} ziet daarna ook de omschrijving en de ${visibleNotes} zichtbare bericht${visibleNotes === 1 ? '' : 'en'} op de tijdlijn${ticket.client_id ? ', ook wat de vorige klant schreef' : ''}. Hoort dat gesprek niet bij ${newName}, maak dan een nieuw ticket.`
+          : undefined,
         kind: 'work',
         // Aan een klant hangen = die klant ziet het ticket (en zijn reacties) in
         // het portaal: dat is naar buiten. Losmaken verbergt alleen.
@@ -305,11 +336,13 @@ export const TICKETS_ACTIONS: ActionDef[] = [
       if (candidateRows.length === 0) return { count: 0, only_unread: onlyUnread, tickets: [] };
       const ticketIds = candidateRows.map((r) => String(r.id));
 
+      // In stukken: met de service-role is elk ticket met klantactiviteit een
+      // kandidaat, en honderden id's in één `.in()` maakten de URL te lang.
       const [ticketRes, noteRes, readRes] = await Promise.all([
-        orgQuery(ctx, 'tickets', 'id, created_at, status, priority').in('id', ticketIds),
-        orgQuery(ctx, 'ticket_notes', 'ticket_id, created_at, author_name')
-          .eq('author_type', 'client').in('ticket_id', ticketIds),
-        orgQuery(ctx, 'ticket_reads', 'ticket_id, read_at').eq('user_id', ctx.userId).in('ticket_id', ticketIds),
+        inChunks<Record<string, unknown>>(ticketIds, (chunk) => orgQuery(ctx, 'tickets', 'id, created_at, status, priority').in('id', chunk)),
+        inChunks<Record<string, unknown>>(ticketIds, (chunk) => orgQuery(ctx, 'ticket_notes', 'ticket_id, created_at, author_name')
+          .eq('author_type', 'client').in('ticket_id', chunk)),
+        inChunks<Record<string, unknown>>(ticketIds, (chunk) => orgQuery(ctx, 'ticket_reads', 'ticket_id, read_at').eq('user_id', ctx.userId).in('ticket_id', chunk)),
       ]);
       if (ticketRes.error) throw new ActionError(`Tickets ophalen mislukt: ${ticketRes.error.message}`);
       if (noteRes.error) throw new ActionError(`Klantreacties ophalen mislukt: ${noteRes.error.message}`);
@@ -333,9 +366,10 @@ export const TICKETS_ACTIONS: ActionDef[] = [
 
       const clientIds = [...new Set(candidateRows.map((r) => r.client_id).filter((c): c is string => Boolean(c)))];
       const names = new Map<string, string>();
-      if (clientIds.length) {
-        const { data: clients } = await orgQuery(ctx, 'clients', 'id, name').in('id', clientIds);
-        for (const c of (clients ?? []) as Array<Record<string, unknown>>) names.set(String(c.id), String(c.name));
+      // Klantnamen alleen voor wie Klanten mag lezen (zie clientNameOf).
+      if (clientIds.length && ctx.canRead?.('clients') !== false) {
+        const { data: clients } = await inChunks<Record<string, unknown>>(clientIds, (chunk) => orgQuery(ctx, 'clients', 'id, name').in('id', chunk));
+        for (const c of clients) names.set(String(c.id), String(c.name));
       }
 
       const tickets = candidateRows.map((r) => {

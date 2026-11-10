@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -28,7 +28,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
-import { API_URL, ANON_KEY, CLIENT_DOMAINS_WERKER_GEHEIM, ORIGIN, SERVICE_KEY } from './omgeving.mjs';
+import { API_URL, ANON_KEY, CLIENT_DOMAINS_WERKER_GEHEIM, CRON_SECRET, ORIGIN, SERVICE_KEY } from './omgeving.mjs';
 import { installeer, mailsAan, post } from './nepdiensten.mjs';
 import { roep, roepRequest } from './functies.mjs';
 import { maakGebruiker, rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
@@ -49,7 +49,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -2779,6 +2779,204 @@ async function scenarioRapportage() {
   await sluit(lid);
 }
 
+// ── Tickets: van het team via de mail naar de klant en terug ────────────────
+// Een medewerker maakt een ticket in het venster, antwoordt in de tijdlijn (één
+// interne notitie, één zichtbare) en zet de status. De mailronde (portal-notify,
+// zoals pg_cron hem elke minuut aanroept) mailt de klant. De klant opent de knop
+// uit die mail in een eigen browser, logt in en komt meteen bij het ticket. Zijn
+// reactie staat bij het team als nieuw; afhandelen haalt het ticket van de
+// werklijst. Aanleiding: de controle van het ticketsysteem op 10 november 2026.
+async function ticketMailronde() {
+  return gelukt(await roep('portal-notify', {
+    query: 'cron=drain', origin: null, body: {}, headers: { 'x-cron-secret': CRON_SECRET },
+  }), 'mailronde');
+}
+
+async function naarTickets(scherm) {
+  await sluitAlles(scherm);
+  await scherm.page.locator('.sidebar-nav .nav-item', { hasText: /^Tickets/ }).first().click();
+  await inhoud(scherm.page).locator('.ticket-toolbar').waitFor({ timeout: 15000 });
+  await rustig(scherm);
+}
+
+function ticketKaart(page, titel) {
+  return inhoud(page).locator('article.ticket-item').filter({ has: page.locator('.tk-title', { hasText: regexVan(titel) }) });
+}
+
+async function scenarioTickets() {
+  groep('UI: tickets — van het team via de mail naar de klant en terug');
+  const w = await stap('wereld maken', () => maakWereld('uitickets'));
+  if (!w) return;
+  const titel = 'Inloggen lukt niet';
+  const geheim = `Intern: wachtwoord ${randomUUID().slice(0, 8)}`;
+  const antwoord = 'We hebben je account hersteld. Probeer het nog eens?';
+  let lid = null;
+  let klant = null;
+  let ticketId = null;
+  let link = null;
+
+  await uiStap('een medewerker maakt een ticket voor klant A in het venster', async () => {
+    lid = await openWerkruimte(w.medewerker, 'ticketlid', w.orgId);
+    await naarTickets(lid);
+    const sinds = server.verkeer.length;
+    await inhoud(lid.page).getByRole('button', { name: '+ Nieuw ticket', exact: true }).click();
+    const m = modal(lid.page, 'Nieuw ticket');
+    await m.waitFor();
+    await m.getByPlaceholder('Ticket titel').fill(titel);
+    const keuzes = m.locator('.select-trigger');
+    await keuzes.nth(0).click();
+    await lid.page.locator('.select-menu [role="option"]').filter({ hasText: regexVan(w.klantA.name) }).first().click();
+    await m.getByPlaceholder('Beschrijving').fill('De klant komt niet binnen in het portaal.');
+    await m.locator('.modal-foot').getByRole('button', { name: 'Opslaan', exact: true }).click();
+    await m.waitFor({ state: 'detached', timeout: 15000 });
+    verwachtAanroep(sinds, { soort: 'rest', tabel: 'tickets', methode: 'POST' }, 'Opslaan schreef het ticket niet weg');
+    await ticketKaart(lid.page, titel).waitFor({ timeout: 15000 });
+    const rijDb = sqlRij(`select id, client_id, status, created_by from public.tickets where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    gelijk([rijDb.client_id, rijDb.status, rijDb.created_by], [w.klantA.id, 'new', w.medewerker.id], 'het ticket in de database');
+    ticketId = rijDb.id;
+  });
+
+  await uiStap('in de tijdlijn: een interne notitie, een zichtbaar antwoord, en de status op Review', async () => {
+    nodig(ticketId, 'het ticket');
+    await ticketKaart(lid.page, titel).click();
+    const m = modal(lid.page, 'Ticket bewerken');
+    await m.waitFor();
+    const schrijfvak = m.getByPlaceholder('Schrijf een update voor de klant of een interne notitie…');
+    await schrijfvak.waitFor({ timeout: 15000 });
+    // Intern: het vinkje aan, dan "Plaats interne notitie".
+    await schrijfvak.fill(geheim);
+    await m.locator('.ticket-visibility-toggle input').check();
+    await m.getByRole('button', { name: 'Plaats interne notitie', exact: true }).click();
+    await m.locator('.ticket-timeline-item.is-internal .ttl-text', { hasText: geheim }).waitFor({ timeout: 15000 });
+    // Zichtbaar: het vinkje uit, dan "Plaats notitie".
+    await schrijfvak.fill(antwoord);
+    await m.locator('.ticket-visibility-toggle input').uncheck();
+    verwacht(/krijgt er ook een e-mail van/.test(await m.locator('.ticket-timeline-mailhint').first().innerText()), 'de hint zegt niet dat de klant een mail krijgt');
+    await m.getByRole('button', { name: 'Plaats notitie', exact: true }).click();
+    await m.locator('.ticket-timeline-item:not(.is-internal) .ttl-text', { hasText: antwoord }).waitFor({ timeout: 15000 });
+    // De status: de vierde keuzelijst in het venster (klant, prioriteit, status).
+    const keuzes = m.locator('.select-trigger');
+    await keuzes.nth(2).click();
+    await lid.page.locator('.select-menu [role="option"]').filter({ hasText: /^Review$/ }).first().click();
+    await m.locator('.modal-foot').getByRole('button', { name: 'Opslaan', exact: true }).click();
+    await m.waitFor({ state: 'detached', timeout: 15000 });
+    gelijk(sqlRij(`select status from public.tickets where id = ${q(ticketId)}`).status, 'review', 'status in de database');
+    const notities = sqlRijen(`select body, is_internal from public.ticket_notes where ticket_id = ${q(ticketId)} order by created_at`);
+    gelijk(notities.map((n) => n.is_internal), [true, false], 'intern en zichtbaar');
+  });
+
+  await uiStap('de mailronde mailt klant A één keer: het antwoord en de nieuwe status, niets intern', async () => {
+    const voor = mailsAan(w.klantA.email).length;
+    await ticketMailronde();
+    const mails = mailsAan(w.klantA.email).slice(voor);
+    gelijk(mails.length, 1, 'mails aan klant A');
+    const mail = mails[0];
+    verwacht(mail.text.includes(antwoord), 'het antwoord staat niet in de mail');
+    verwacht(mail.text.includes('In behandeling'), 'de nieuwe status staat niet in de mail');
+    verwacht(!mail.text.includes(geheim) && !mail.html.includes(geheim), 'de interne notitie staat in de mail');
+    link = (mail.text.match(/https?:\/\/\S+\/portal\S*ticket=[0-9a-f-]{36}/) ?? [])[0] ?? null;
+    verwacht(link && link.startsWith(APP) && link.includes(`ticket=${ticketId}`), `de knop wijst niet naar het ticket in deze app: ${link}`);
+  });
+
+  await uiStap('de klant opent de knop uit de mail, logt in en komt meteen bij het ticket', async () => {
+    klant = await openAlsKlant(nodig(link, 'de link uit de mail'), 'klant-ticket');
+    klant.tijdelijk = false;
+    await wachtOpPortaal(klant, 'inloggen');
+    const inlog = inlogLinkUit(await vraagInlogAan(klant, w.klantA.email));
+    await klant.page.goto(nodig(inlog, 'de inloglink'), { waitUntil: 'domcontentloaded' });
+    await wachtOpPortaal(klant, 'link');
+    await klant.page.locator('main.portal.login').getByRole('button', { name: /^Inloggen$/ }).click();
+    await wachtOpPortaal(klant, 'dossier');
+    const detail = klant.page.locator('.portal-detail');
+    await detail.locator('h2', { hasText: regexVan(titel) }).waitFor({ timeout: 20000 });
+    await detail.locator('.portal-thread', { hasText: antwoord }).waitFor({ timeout: 15000 });
+    const gesprek = tekst(await detail.locator('.portal-thread').innerText());
+    verwacht(!gesprek.includes(geheim), 'de interne notitie staat in het portaal');
+    verwacht(/In behandeling/.test(tekst(await detail.innerText())), 'de status In behandeling staat er niet');
+  });
+
+  await uiStap('de klant reageert; bij het team staat het ticket als nieuw, met de reactie in de tijdlijn', async () => {
+    nodig(klant, 'de klant in het portaal');
+    const detail = klant.page.locator('.portal-detail');
+    await detail.getByPlaceholder(/^Typ een bericht aan /).fill('Het werkt weer, dank je!');
+    await detail.getByRole('button', { name: 'Bericht versturen', exact: true }).click();
+    await detail.locator('.portal-thread', { hasText: 'Het werkt weer, dank je!' }).waitFor({ timeout: 15000 });
+    gelijk(sqlRij(`select author_type, is_internal from public.ticket_notes where ticket_id = ${q(ticketId)} order by created_at desc limit 1`), { author_type: 'client', is_internal: false }, 'de reactie in de database');
+    await ververs(lid);
+    await naarTickets(lid);
+    await ticketKaart(lid.page, titel).locator('.tk-new-badge').waitFor({ timeout: 15000 });
+    await ticketKaart(lid.page, titel).click();
+    const m = modal(lid.page, 'Ticket bewerken');
+    await m.locator('.ticket-timeline-item.from-client .ttl-text', { hasText: 'Het werkt weer, dank je!' }).waitFor({ timeout: 15000 });
+    await sluitModal(m);
+    await wachtTot(async () => (await ticketKaart(lid.page, titel).locator('.tk-new-badge').count()) === 0, { melding: 'na openen staat het ticket nog als nieuw' });
+  });
+
+  await uiStap('afhandelen met de knop: van de werklijst naar het archief, en de klant ziet Afgehandeld', async () => {
+    await ticketKaart(lid.page, titel).getByRole('button', { name: 'Afhandelen' }).click();
+    await wachtTot(async () => (await ticketKaart(lid.page, titel).count()) === 0, { melding: 'het ticket bleef op de werklijst' });
+    gelijk(sqlRij(`select status from public.tickets where id = ${q(ticketId)}`).status, 'resolved', 'status in de database');
+    await inhoud(lid.page).locator('.ticket-toolbar button[aria-label^="Archief"]').click();
+    await ticketKaart(lid.page, titel).waitFor({ timeout: 15000 });
+    const voor = mailsAan(w.klantA.email).length;
+    await ticketMailronde();
+    const mails = mailsAan(w.klantA.email).slice(voor);
+    gelijk(mails.length, 1, 'mails aan klant A');
+    verwacht(mails[0].subject.startsWith(`Ticket afgehandeld: ${titel}`), `onderwerp: ${mails[0].subject}`);
+    // De klant: na herladen op het overzicht (de link uit de mail is gebruikt).
+    // Onder Tickets staat het in het dichte blok Afgehandeld, niet meer bij open.
+    await klant.page.reload({ waitUntil: 'domcontentloaded' });
+    await wachtOpPortaal(klant, 'dossier');
+    await klant.page.locator('.portal-tabs [role="tab"]', { hasText: /^Tickets/ }).click();
+    const blok = klant.page.locator('section.portal-resolved');
+    await blok.locator('.portal-resolved-head').click();
+    await blok.locator('.portal-ticket', { hasText: titel }).click();
+    await klant.page.locator('.portal-detail .portal-status', { hasText: 'Afgehandeld' }).waitFor({ timeout: 20000 });
+    await klant.page.locator('.portal-resolved-hint').waitFor({ timeout: 15000 });
+  });
+
+  await uiStap('een open venster zet een heropend ticket niet terug op Afgehandeld', async () => {
+    // Het venster staat open op het afgehandelde ticket; intussen reageert de
+    // klant (de database zet het op Review). Opslaan met alleen een memo mag de
+    // status niet terugzetten, en de klant krijgt geen mail "afgehandeld".
+    await ticketKaart(lid.page, titel).click();
+    const m = modal(lid.page, 'Ticket bewerken');
+    await m.waitFor();
+    gelukt(await roep('client-portal', { token: w.portaalA.token, body: { action: 'addTicketNote', ticketId, body: 'Toch nog een vraag.' } }), 'reactie van de klant');
+    gelijk(sqlRij(`select status from public.tickets where id = ${q(ticketId)}`).status, 'review', 'heropend door de reactie');
+    await m.getByPlaceholder('Interne notities (privé, niet in de tijdlijn)').fill('Klant belt morgen terug.');
+    await m.locator('.modal-foot').getByRole('button', { name: 'Opslaan', exact: true }).click();
+    await m.waitFor({ state: 'detached', timeout: 15000 });
+    gelijk(sqlRij(`select status, notes from public.tickets where id = ${q(ticketId)}`), { status: 'review', notes: 'Klant belt morgen terug.' }, 'status en memo in de database');
+    const voor = mailsAan(w.klantA.email).length;
+    await ticketMailronde();
+    verwacht(mailsAan(w.klantA.email).slice(voor).every((mail) => !/afgehandeld/i.test(mail.subject)), 'de klant kreeg toch een mail "afgehandeld"');
+  });
+
+  await uiStap('een ticket aan een andere klant hangen: eerst de vraag, en weigeren laat alles staan', async () => {
+    await naarTickets(lid);
+    // Het ticket staat weer op de werklijst; de pagina stond nog op het archief.
+    const terug = inhoud(lid.page).locator('.ticket-archive-back');
+    if (await terug.isVisible().catch(() => false)) await terug.click();
+    await ticketKaart(lid.page, titel).click();
+    const m = modal(lid.page, 'Ticket bewerken');
+    await m.waitFor();
+    await m.locator('.select-trigger').nth(0).click();
+    await lid.page.locator('.select-menu [role="option"]').filter({ hasText: regexVan(w.klantB.name) }).first().click();
+    lid.plan.push({ weiger: true });
+    const dialogen = lid.dialogen.length;
+    await m.locator('.modal-foot').getByRole('button', { name: 'Opslaan', exact: true }).click();
+    await wachtTot(() => lid.dialogen.length > dialogen, { melding: 'geen vraag vóór het koppelen aan een andere klant' });
+    const vraag = lid.dialogen.at(-1).tekst;
+    verwacht(vraag.startsWith(`${w.klantB.name} ziet dit ticket daarna in het klantportaal`) && vraag.includes(`ook wat ${w.klantA.name} schreef`), `de vraag: ${vraag}`);
+    await m.waitFor({ timeout: 5000 });
+    gelijk(sqlRij(`select client_id from public.tickets where id = ${q(ticketId)}`).client_id, w.klantA.id, 'de klant is niet veranderd');
+    await sluitModal(m);
+  });
+
+  for (const s of [klant, lid]) await sluit(s);
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -2794,7 +2992,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

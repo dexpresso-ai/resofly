@@ -1997,14 +1997,13 @@ function PortalTicketDetail({ ticketId, supplierName, backLabel, onBack, onChang
       const note = await addPortalTicketNote(ticketId, body);
       setThread(prev => prev ? { ...prev, notes: [...prev.notes, note] } : prev);
       setDraft('');
-      // Een bericht op een afgehandeld ticket heropent het (dat doet de
-      // database). Opnieuw ophalen, zodat je de nieuwe status en de regel
-      // "Status gewijzigd naar In behandeling" meteen ziet in plaats van
-      // "Afgehandeld" boven je eigen vraag. Lukt dat niet, dan staat je
-      // bericht er al; de status volgt bij de volgende keer openen.
-      if (thread?.ticket.status === 'resolved') {
-        fetchPortalTicketThread(ticketId).then(setThread).catch(() => {});
-      }
+      // Altijd opnieuw ophalen. Reageren telt op de server als gelezen: een
+      // antwoord van het team dat binnenkwam terwijl je typte, kreeg dan nooit
+      // een stip en stond pas in beeld als je het ticket opnieuw opende. En een
+      // bericht op een afgehandeld ticket heropent het (dat doet de database):
+      // zo zie je meteen de nieuwe status. Lukt het niet, dan staat je bericht
+      // er al; de rest volgt bij de volgende keer openen.
+      fetchPortalTicketThread(ticketId).then(setThread).catch(() => {});
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Notitie plaatsen mislukt');
@@ -2214,6 +2213,9 @@ function PortalMessageThreadView({ threadId, supplierName, onBack, onOpened, onS
       const result = await sendPortalMessage({ clientId: data.thread.clientId, threadId: data.thread.id, body });
       setData(prev => prev ? { ...prev, messages: [...prev.messages, result.message] } : prev);
       setDraft('');
+      // Opnieuw ophalen: versturen telt op de server als gelezen, dus een mail
+      // van het team die binnenkwam terwijl je typte, zag je anders nooit.
+      fetchPortalMessageThread(data.thread.id).then(setData).catch(() => {});
       onSent();
       window.requestAnimationFrame(() => composerRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
     } catch (e) {
