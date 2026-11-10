@@ -419,6 +419,15 @@ export default async function apiScenario() {
     }
   });
 
+  await stap('openbare functies: een body die geen JSON-object is, geeft een 4xx en geen 500', async () => {
+    for (const naam of ['invoice-public', 'quote-public', 'contract-public', 'file-share-public', 'file-transfer-public', 'gallery-public', 'meeting-booking-public', 'portal-login']) {
+      for (const inhoud of ['null', '[1,2]', '42']) {
+        const res = await roep(naam, { body: inhoud, ruw: true, headers: { 'content-type': 'application/json' } });
+        verwacht(res.status >= 400 && res.status < 500, `${naam} met ${inhoud}: ${res.status} ${res.tekst.slice(0, 160)}`);
+      }
+    }
+  });
+
   groep('Inkomende mail: een rem op een golf antwoorden');
   await stap('na de grens per gesprek wordt een antwoord geparkeerd, zonder melding aan het team', async () => {
     const thread = sql(`insert into public.client_email_threads (organization_id, client_id) values (${q(a.orgId)}, ${q(a.klantA.id)}) returning id`);

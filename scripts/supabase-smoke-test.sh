@@ -64,6 +64,29 @@ check "client-portal weigert zonder inlog" 401 'Niet ingelogd' \
   -X POST "$base/client-portal" -H 'Content-Type: application/json' --data '{"action":"getPortalData"}'
 check "client-portal weigert een verzonnen sleutel" 401 'session_unbound' \
   -X POST "$base/client-portal" -H 'x-portal-token: rooktest-rooktest-rooktest-rooktest-01' -H 'Content-Type: application/json' --data '{"action":"getPortalData"}'
+# De API-laag (docs/rapporten/CONTROLE_API_LAAG_2026-11-10.md): het
+# OpenAPI-document, de MCP-server en de autorisatieserver antwoorden in de echte
+# runtime, en de deuren zonder login weigeren zonder bewijs.
+check "api geeft zijn OpenAPI-document" 200 '"openapi":"3.1' "$base/api/v1/openapi.json"
+check "mcp weigert zonder token" 401 '"unauthorized"' \
+  -X POST "$base/mcp" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+check "mcp-oauth publiceert zijn metadata (alleen S256)" 200 '"code_challenge_methods_supported":["S256"]' \
+  "$base/mcp-oauth/.well-known/oauth-authorization-server"
+check "mcp-oauth stuurt een onbekende client nergens heen" 400 'Onbekende AI-client' \
+  "$base/mcp-oauth/authorize?client_id=rooktest&redirect_uri=https%3A%2F%2Frooktest.invalid%2Fcb&response_type=code"
+check "mail-inbound weigert zonder geheim" 401 'Niet geautoriseerd' \
+  -X POST "$base/mail-inbound" -H 'Content-Type: application/json' --data '{}'
+# Open punt O4 van die controle: Supabase serveert een GET met text/html op
+# *.supabase.co als platte tekst. Dan ziet een ontvanger die op "Afmelden" klikt
+# HTML-code in plaats van een knop. Geen fout in deze test (afmelden met één klik
+# vanuit het mailprogramma werkt wel), wel een waarschuwing tot het is opgelost.
+unsub_type="$(curl -s -o "$body" -w '%{content_type}' --max-time 60 "$base/email-unsubscribe?token=rooktest" || true)"
+if grep -qi '<html\|<!doctype' "$body" && ! printf '%s' "$unsub_type" | grep -qi 'text/html'; then
+  echo "LET OP afmeldpagina komt aan als ${unsub_type:-onbekend}, niet als HTML: de ontvanger ziet code (O4)"
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::warning title=Rooktest::De afmeldpagina komt aan als ${unsub_type:-onbekend} in plaats van text/html (open punt O4)"; fi
+else
+  echo "info   afmeldpagina: ${unsub_type:-geen Content-Type}"
+fi
 
 if [ -n "${SUPABASE_DB_PASSWORD:-}" ] && command -v psql >/dev/null; then
   pooler="${SUPABASE_POOLER_URL:-$(cat supabase/.temp/pooler-url)}"
