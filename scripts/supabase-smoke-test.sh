@@ -21,6 +21,9 @@
 #   - de secrets voor Mollie: MOLLIE_TOKEN_ENCRYPTION_KEY (de eigen Mollie-key
 #     van organisaties) en het webhook-secret. Alleen de namen, via de
 #     Management API; alleen met SUPABASE_ACCESS_TOKEN.
+#   - de API-laag (controle van 10 november): het OpenAPI-document, mcp en
+#     mcp-oauth zonder bewijs, mail-inbound zonder geheim, en de afmeldlink
+#     uit een campagne (een browser gaat door naar /afmelden in de app).
 #
 # Draait in de workflow "Deploy Supabase (staging)" na elke deploy, en kan ook
 # vanaf een laptop: SUPABASE_PROJECT_ID=enzghpduqwaojcxgwarr bash scripts/supabase-smoke-test.sh
@@ -76,17 +79,19 @@ check "mcp-oauth stuurt een onbekende client nergens heen" 400 'Onbekende AI-cli
   "$base/mcp-oauth/authorize?client_id=rooktest&redirect_uri=https%3A%2F%2Frooktest.invalid%2Fcb&response_type=code"
 check "mail-inbound weigert zonder geheim" 401 'Niet geautoriseerd' \
   -X POST "$base/mail-inbound" -H 'Content-Type: application/json' --data '{}'
-# Open punt O4 van die controle: Supabase serveert een GET met text/html op
-# *.supabase.co als platte tekst. Dan ziet een ontvanger die op "Afmelden" klikt
-# HTML-code in plaats van een knop. Geen fout in deze test (afmelden met één klik
-# vanuit het mailprogramma werkt wel), wel een waarschuwing tot het is opgelost.
-unsub_type="$(curl -s -o "$body" -w '%{content_type}' --max-time 60 "$base/email-unsubscribe?token=rooktest" || true)"
-if grep -qi '<html\|<!doctype' "$body" && ! printf '%s' "$unsub_type" | grep -qi 'text/html'; then
-  echo "LET OP afmeldpagina komt aan als ${unsub_type:-onbekend}, niet als HTML: de ontvanger ziet code (O4)"
-  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::warning title=Rooktest::De afmeldpagina komt aan als ${unsub_type:-onbekend} in plaats van text/html (open punt O4)"; fi
-else
-  echo "info   afmeldpagina: ${unsub_type:-geen Content-Type}"
-fi
+# De afmeldlink uit een campagnemail. Supabase serveert een GET met text/html op
+# *.supabase.co als platte tekst: de ontvanger zag code in plaats van een knop
+# (bevinding 19 van die controle). Een browser hoort daarom door te gaan naar
+# /afmelden in de app.
+unsub="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 60 -H 'Accept: text/html' "$base/email-unsubscribe?token=rooktest" || true)"
+case "$unsub" in
+  "303 "*"/afmelden?token=rooktest")
+    echo "ok     email-unsubscribe stuurt een browser naar de afmeldpagina van de app (303)" ;;
+  *)
+    problems=$((problems + 1))
+    echo "FOUT   email-unsubscribe stuurt een browser niet naar /afmelden in de app: ${unsub:-geen antwoord} (staat APP_PUBLIC_URL er?)"
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::email-unsubscribe stuurt een browser niet naar /afmelden in de app"; fi ;;
+esac
 
 if [ -n "${SUPABASE_DB_PASSWORD:-}" ] && command -v psql >/dev/null; then
   pooler="${SUPABASE_POOLER_URL:-$(cat supabase/.temp/pooler-url)}"

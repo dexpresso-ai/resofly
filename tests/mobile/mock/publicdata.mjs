@@ -119,3 +119,6 @@ export function bookingAdminDetail(linkId) {
     open_slot_count: expired ? 0 : 2, state: expired ? 'expired' : 'open',
   };
 }
+
+// Afmelden voor marketingmail (2026-11-10): een lange naam en een lang adres, de zwaarste stand voor de opmaak.
+export const unsubscribeInfo = { brandName: 'Studio Lopik Creatieve Communicatie & Merkstrategie', email: 'joost.vermeer-van-den-berg@de-korenaar-bakkerijen.nl', unsubscribed: false };

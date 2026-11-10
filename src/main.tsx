@@ -161,6 +161,7 @@ import { PublicContractPage } from './features/PublicContractPage';
 import { PublicBookingPage } from './features/PublicBookingPage';
 import { PublicGalleryPage } from './features/PublicGalleryPage';
 import { PublicSharePage } from './features/PublicSharePage';
+import { PublicUnsubscribePage } from './features/PublicUnsubscribePage';
 import { PublicTransferPage } from './features/PublicTransferPage';
 import { GalleryTab } from './features/ProjectGallery';
 import { Contracts } from './features/Contracts';
@@ -595,6 +596,9 @@ const editKindToEntity: Record<NonNullable<EditMode>['kind'], EntityType> = {
 
 function getPublicQuoteTokenFromLocation(): string | null {
   const url = new URL(window.location.href);
+  // Een oude offertelink is `?token=…` op elk pad. De afmeldlink is
+  // `/afmelden?token=…`: zonder deze regel opende die de offertepagina.
+  if (/^\/afmelden\/?$/.test(url.pathname)) return null;
   const queryToken = url.searchParams.get('quote_token') || url.searchParams.get('token');
   if (queryToken) return queryToken;
   const match = url.pathname.match(/^\/quote\/([^/]+)\/?$/);
@@ -632,6 +636,13 @@ function getPublicShareTokenFromLocation(): string | null {
   if (queryToken) return queryToken;
   const match = url.pathname.match(/^\/gedeeld\/([^/]+)\/?$/);
   return match ? decodeURIComponent(match[1]) : null;
+}
+
+/** Afmelden voor marketingmail: /afmelden?token=<token> (zie PublicUnsubscribePage). */
+function getPublicUnsubscribeTokenFromLocation(): string | null {
+  const url = new URL(window.location.href);
+  if (!/^\/afmelden\/?$/.test(url.pathname)) return null;
+  return url.searchParams.get('token') || null;
 }
 
 /** Persoonlijke link naar een zending (bestanden versturen): /ontvang/<token>. */
@@ -961,6 +972,7 @@ function App() {
   const publicGalleryToken = getPublicGalleryTokenFromLocation();
   const publicShareToken = getPublicShareTokenFromLocation();
   const publicTransferToken = getPublicTransferTokenFromLocation();
+  const publicUnsubscribeToken = getPublicUnsubscribeTokenFromLocation();
   const clientHost = clientHostInfo();
   const onClientHost = clientHost !== null;
   const portalRoute = isClientPortalRoute() || (onClientHost && window.location.pathname === '/');
@@ -1743,6 +1755,7 @@ function App() {
   if (portalElsewhere) return <BootLoading message="Even doorsturen…" />;
   if (portalRoute) return !onClientHost && isPortalPreviewRoute() ? <PortalPreview /> : <ClientPortal />;
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
+  if (publicUnsubscribeToken) return <PublicUnsubscribePage token={publicUnsubscribeToken} />;
   if (publicQuoteToken) return <PublicQuotePage token={publicQuoteToken} />;
   if (publicInvoiceToken) return <PublicInvoicePage token={publicInvoiceToken} />;
   if (publicContractToken) return <PublicContractPage token={publicContractToken} />;

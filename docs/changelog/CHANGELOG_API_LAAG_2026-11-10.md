@@ -46,6 +46,17 @@ Migratie `20261110140000_api_laag_controle.sql`, veilig om meermaals te draaien:
 | `gerrie-signals` | De budgetcontrole telt ook het tegoed van de organisatie. |
 | `invoice-public`, `quote-public`, `contract-public`, `file-share-public`, `file-transfer-public`, `gallery-public`, `meeting-booking-public`, `portal-login` | Een body die geen JSON-object is, geeft 400 in plaats van 500. `gallery-public` noemt geen namen van secrets meer. |
 | `_shared/fileTransferServer.ts` | `deleteStorageObject` weigert bewijsstukken en inbox-originelen. |
+| `email-unsubscribe` | Een browser (`Accept: text/html`) gaat met 303 door naar `APP_PUBLIC_URL/afmelden?token=…`. Nieuw: een POST met JSON (`info`, `unsubscribe`) voor die pagina, open voor elke herkomst (het token is het bewijs). De one-click POST en de oude pagina voor verzoeken zonder browser blijven. |
+
+## App
+
+- **Nieuwe pagina `/afmelden?token=…`** (`src/features/PublicUnsubscribePage.tsx`). Wie in een
+  campagnemail op "Afmelden" klikte, zag HTML-code: Supabase serveert een GET met `text/html` op
+  `*.supabase.co` als platte tekst.
+- **Zo werkt de pagina:** eerst ziet de ontvanger van wie de mail komt en op welk adres, en pas
+  na de knop is hij afgemeld. Mailprogramma's en scanners openen links vooraf; zo meldt dat
+  niemand per ongeluk af.
+- **Test:** de pagina staat in de mobiele opmaaktest (`public-unsubscribe`).
 
 ## Workers
 
@@ -56,6 +67,8 @@ De onderstaande workers zijn op 10 november uitgerold naar staging, met
   - de interne DELETE weigert bewijsstukken;
   - de route `/internal/annual-account-snapshot` is nieuw;
   - een token voor één bestand opent de zip van de galerij niet meer.
+- **`resofly-client-domains-staging`:** een GET op `/afmelden` krijgt de afmeldpagina van de
+  app, in de huisstijl van het adres. De POST gaat zoals altijd naar `email-unsubscribe`.
 - **`resofly-caldav-staging`, versie `bf5ff3e8`:**
   - een teruggezette afspraak komt terug in plaats van een 500 te geven;
   - alleen de eigenaar hernoemt of herkleurt een agenda.
@@ -75,6 +88,9 @@ De onderstaande workers zijn op 10 november uitgerold naar staging, met
   - `WEBHOOK_SECRET_ENCRYPTION_KEY` en `MCP_STATE_SECRET` voor de API- en MCP-functies;
   - `MAIL_INBOUND_WEBHOOK_SECRET` en `MAIL_INBOUND_THREAD_LIMIT_PER_HOUR` voor de inkomende
     mail.
+- **`scripts/supabase-smoke-test.sh`:** na elke uitrol ook het OpenAPI-document, `mcp` en
+  `mcp-oauth` zonder bewijs, `mail-inbound` zonder geheim, en dat een browser van de afmeldlink
+  naar `/afmelden` gaat.
 - **`supabase/functions/_shared/portalMessages.test.ts`:** doorgestuurde post en post van een
   derde tussen vraag en antwoord.
 - **Lokaal getest:**
@@ -93,4 +109,4 @@ Zie het rapport, open punten O1 tot en met O4:
   uitzetten;
 - **O2:** het webhook-geheim van Mollie vernieuwen;
 - **O3:** de facturering een keer met de testsleutel van Mollie doorlopen;
-- **O4:** de afmeldpagina van marketingmail één keer aanklikken.
+- **O4:** de afmeldpagina is hersteld; klik hem één keer aan vanuit een testcampagne.
