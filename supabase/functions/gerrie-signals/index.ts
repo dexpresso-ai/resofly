@@ -210,7 +210,11 @@ async function processSignal(signal: SignalRow): Promise<SignalOutcome> {
   const today = await countGerrieCardsToday(org, settings.timezone || 'Europe/Amsterdam');
   if (today >= cap) return skipSignal(signal, `dagcap van ${cap} Gerrie-kaarten bereikt`);
 
-  const budget = await checkUserBudget(actor.id);
+  // Met de organisatie: zonder die tweede parameter gold alleen het plafond van
+  // de actor en sloeg dit het plafond van de organisatie over (een golf
+  // inkomende mail gaf zo een model-run per bericht, buiten het
+  // organisatietegoed om).
+  const budget = await checkUserBudget(actor.id, org);
   if (!budget.allowed) {
     await supabaseAdmin.from('ai_signal_settings').update({ budget_blocked_at: new Date().toISOString() }).eq('organization_id', org);
     return skipSignal(signal, 'maandtegoed van de actor is op');
