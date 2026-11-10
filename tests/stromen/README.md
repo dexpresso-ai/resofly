@@ -75,6 +75,18 @@ aanvragen beantwoordt hij zoals `nep-ai.mjs`). Getoetst:
 
 Zie `docs/changelog/CHANGELOG_RAPPORTAGES_GERRIE_2026-11-09.md`.
 
+En `boekingslinks`: de boekingslinks door `meeting-booking` en `meeting-booking-public`.
+Getoetst:
+- lezen met leesrecht op de Agenda, schrijven met schrijfrecht, en niets voor de boekhouder
+  of een andere organisatie;
+- de boekingspagina: huisstijl en contact, geen id's of hash naar de bezoeker, en alleen
+  momenten die nog moeten beginnen;
+- boeken, vol, annuleren, een mislukte boeking, en een poging die blijft hangen;
+- een link van iemand die geen teamlid meer is, gesloten, verlopen en verlengen;
+- mailen pas met vrije momenten, verwijderen met afspraken, en de rem per afzender.
+
+Zie `docs/changelog/CHANGELOG_BOEKINGSLINKS_2026-11-10.md`.
+
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in

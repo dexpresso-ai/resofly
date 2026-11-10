@@ -3,11 +3,15 @@
 //
 // Geen login. Toegang loopt via een onraadbaar token in de request-body, dat we
 // gehasht vergelijken (zoals contract-public). Twee acties:
-//  - getLink : link-info + beschikbare blokken tonen.
-//  - bookSlots : blokken boeken via een twee-fasen-commit:
+//  - getLink : de stand van de link, de huisstijl en de vrije momenten.
+//  - bookSlots : momenten boeken via een twee-fasen-commit:
 //      fase A = reserve_meeting_slot_by_token (DB, atomisch onder advisory lock)
 //      fase B = agenda-item aanmaken bij de provider; bij succes finalize_*,
 //               bij conflict/fout release_* (blok weer 'open').
+//
+// Een link kan nooit meer dan wie hem maakte: de afspraak komt in de agenda
+// namens die persoon. Is hij geen actief teamlid met schrijfrecht op de Agenda
+// meer, dan boekt de link niets (ook de database controleert dat).
 //
 // Ingebouwde Deno.serve (geen deno.land/std-import).
 // ============================================================
@@ -23,6 +27,19 @@ import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingConfirmedEmail } from '../_shared/emailTemplates/meetingBookingConfirmed.ts';
 import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
 import { loadSenderBrand, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
+import { loadBranding } from '../_shared/branding.ts';
+import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
+import { isWriterRole, memberModuleLevel } from '../_shared/roles.ts';
+import {
+  MAX_SLOTS_PER_BOOKING,
+  bookingLinkState,
+  bookingVideoLabel,
+  cleanVisitorEmail,
+  cleanVisitorName,
+  isActiveBooking,
+  isBookableSlot,
+  parseSlotIds,
+} from '../_shared/meetingBookingRules.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
@@ -53,6 +70,9 @@ type LinkRow = {
   public_token_expires_at: string | null;
 };
 
+const NOT_FOUND = 'Deze boekingslink is niet (meer) geldig.';
+const TOO_MANY = 'Je hebt het even te vaak geprobeerd. Wacht een paar minuten en probeer het dan opnieuw.';
+
 Deno.serve(async (req) => {
   // Van een klantadres (jansen.resofly.com, portaal.jansen.nl)? Eén keer
   // opzoeken; CORS en de controle of de link bij dat adres hoort, lezen het
@@ -61,21 +81,33 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return json({ ok: true });
   try {
     if (req.method !== 'POST') return json({ ok: false, error: 'Method not allowed' }, 405);
-    const body = await req.json().catch(() => ({}));
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    // Een NUL-teken kan Postgres niet opslaan; dat gaf een 500 voor de bezoeker.
+    if (containsNulCharacter(body)) throw new HttpErr(INVALID_CHARACTER_MESSAGE, 422);
     const action = String(body.action || '');
     const token = String(body.token || '').trim();
-    if (!token || token.length < 16) return json({ ok: false, error: 'Boekingslink ontbreekt of is ongeldig.' }, 400);
+    if (!token || token.length < 16 || token.length > 256) return json({ ok: false, error: 'Boekingslink ontbreekt of is ongeldig.' }, 400);
+
+    // Een rem per afzender. De token is niet te raden (256 bits), maar het
+    // antwoord bevat de huisstijl met logo's (een paar honderd kB), en boeken
+    // maakt afspraken en mails. Dat hoort niemand eindeloos te kunnen herhalen.
+    const sender = senderAddress(req);
+    if (action === 'getLink' && await throttled(`booking-view:ip:${sender}`, 600, 120, 600)) throw new HttpErr(TOO_MANY, 429);
+    if (action === 'bookSlots' && await throttled(`booking-book:ip:${sender}`, 600, 20, 900)) throw new HttpErr(TOO_MANY, 429);
+
     const tokenHash = await sha256Hex(token);
+    const link = await loadLinkByHash(tokenHash);
     // Een boekingslink van een andere organisatie opent niet op dit klantadres:
     // zelfde antwoord als een onbekende link.
-    if (clientOriginOf(req)) {
-      const { data: owner } = await supabaseAdmin.from('meeting_booking_links').select('organization_id').eq('public_token_hash', tokenHash).maybeSingle();
-      if (clientOriginMismatch(req, owner?.organization_id as string | undefined)) return json({ ok: false, error: 'Deze boekingslink is niet (meer) geldig.' }, 404);
-    }
+    if (clientOriginOf(req) && clientOriginMismatch(req, link.organization_id)) throw new HttpErr(NOT_FOUND, 404);
 
     switch (action) {
-      case 'getLink': return json({ ok: true, ...(await getPublicLink(tokenHash)) });
-      case 'bookSlots': return json({ ok: true, ...(await bookSlots(tokenHash, body)) });
+      case 'getLink': return json({ ok: true, ...(await getPublicLink(link)) });
+      case 'bookSlots': {
+        // Ook per link: wie de link heeft, kan er niet eindeloos pogingen mee doen.
+        if (await throttled(`booking-book:link:${tokenHash}`, 3600, 30, 3600)) throw new HttpErr(TOO_MANY, 429);
+        return json({ ok: true, ...(await bookSlots(link, tokenHash, body)) });
+      }
       default: return json({ ok: false, error: `Onbekende actie: ${action}` }, 400);
     }
   } catch (error) {
@@ -87,7 +119,9 @@ Deno.serve(async (req) => {
 });
 
 function json(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  // no-store: het antwoord hoort bij een geheime link en kan een naam en
+  // e-mailadres bevatten; geen tussenliggende cache mag het bewaren.
+  return new Response(JSON.stringify(payload), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -95,50 +129,129 @@ async function sha256Hex(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function isEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+function senderAddress(req: Request): string {
+  return (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
+    .trim().slice(0, 64);
 }
 
-const PENDING_GRACE_MS = 2 * 60 * 1000;
+/**
+ * Telt één aanvraag op deze sleutel (gehasht) met de teller van de
+ * portal-login (portal_login_hit, migratie 20261101080000). Die is algemeen:
+ * een gehashte sleutel, een venster en een grens. De sleutels beginnen hier met
+ * "booking-", dus ze tellen nooit mee voor het inloggen. Een kapotte teller
+ * blokkeert het boeken niet.
+ */
+async function throttled(key: string, windowSeconds: number, max: number, blockSeconds: number): Promise<boolean> {
+  const { data, error } = await supabaseAdmin.rpc('portal_login_hit', {
+    p_key: await sha256Hex(key), p_window_seconds: windowSeconds, p_max_attempts: max, p_block_seconds: blockSeconds,
+  });
+  if (error) { console.warn('boekingsrem mislukt', error.message); return false; }
+  return (Number(data) || 0) > 0;
+}
 
 async function loadLinkByHash(tokenHash: string): Promise<LinkRow> {
   const { data, error } = await supabaseAdmin.from('meeting_booking_links').select('*').eq('public_token_hash', tokenHash).maybeSingle();
-  if (error || !data) throw new HttpErr('Deze boekingslink is niet (meer) geldig.', 404);
-  const link = data as LinkRow;
-  if (link.status !== 'active') throw new HttpErr('Deze boekingslink is gesloten.', 410);
-  if (!link.public_token_expires_at || new Date(link.public_token_expires_at).getTime() < Date.now()) {
-    throw new HttpErr('Deze boekingslink is verlopen.', 410);
-  }
-  return link;
+  if (error || !data) throw new HttpErr(NOT_FOUND, 404);
+  return data as LinkRow;
 }
 
 class HttpErr extends Error { status: number; constructor(m: string, s = 400) { super(m); this.status = s; } }
 
-async function getPublicLink(tokenHash: string) {
-  const link = await loadLinkByHash(tokenHash);
+/**
+ * Mag de maker van de link nog boeken? Actief teamlid, een rol met
+ * schrijfrecht, en schrijfrecht op de Agenda. Dezelfde regel als
+ * reserve_meeting_slot_by_token in de database (20261110030000).
+ */
+async function ownerCanBook(link: LinkRow): Promise<boolean> {
+  if (!link.user_id) return false;
+  const { data, error } = await supabaseAdmin.from('organization_members')
+    .select('role, module_access')
+    .eq('organization_id', link.organization_id).eq('user_id', link.user_id).eq('status', 'active').limit(1);
+  if (error) throw new Error(`organization_members lookup mislukt: ${error.message}`);
+  const row = data?.[0] as { role?: string; module_access?: Record<string, unknown> | null } | undefined;
+  if (!row?.role || !isWriterRole(row.role)) return false;
+  return memberModuleLevel(row.role, row.module_access, 'calendar') === 'write';
+}
 
-  const nowMinusGrace = new Date(Date.now() - PENDING_GRACE_MS).toISOString();
-  // Beschikbaar = open, of pending maar vervallen (edge crash tussen fase A en B).
+/** De contactgegevens die de organisatie ook op haar offertes zet. Nooit meer dan dat. */
+async function loadCompanyContact(organizationId: string): Promise<{ name: string | null; email: string | null; phone: string | null; website: string | null } | null> {
+  const { data, error } = await supabaseAdmin.from('company_settings')
+    .select('company_name,trade_name,email,phone,website')
+    .eq('organization_id', organizationId).maybeSingle();
+  if (error || !data) return null;
+  const row = data as Record<string, unknown>;
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  return { name: text(row.trade_name) ?? text(row.company_name), email: text(row.email), phone: text(row.phone), website: text(row.website) };
+}
+
+type BookingRow = { status: string; created_at: string; slot_id: string; meeting_booking_slots: { starts_at?: string; ends_at?: string } | Array<{ starts_at?: string; ends_at?: string }> | null };
+
+async function getPublicLink(link: LinkRow) {
+  const now = Date.now();
+  const [branding, company, canBook, sourceRes, bookingsRes] = await Promise.all([
+    loadBranding(supabaseAdmin, link.organization_id),
+    loadCompanyContact(link.organization_id),
+    ownerCanBook(link),
+    link.source_id
+      ? supabaseAdmin.from('calendar_sources').select('provider').eq('organization_id', link.organization_id).eq('id', link.source_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    supabaseAdmin.from('meeting_bookings')
+      .select('status, created_at, slot_id, meeting_booking_slots!inner(starts_at, ends_at)')
+      .eq('booking_link_id', link.id)
+      .in('status', ['pending', 'confirmed']),
+  ]);
+  const sourceProvider = sourceRes.data ? String((sourceRes.data as { provider: string }).provider) : null;
+
+  // Een poging die al tien minuten hangt, telt niet meer (de functie viel om).
+  const active = ((bookingsRes.data ?? []) as BookingRow[]).filter(b => isActiveBooking(b.status, b.created_at, now));
+  const slotOf = (b: BookingRow) => (Array.isArray(b.meeting_booking_slots) ? b.meeting_booking_slots[0] : b.meeting_booking_slots) ?? {};
+  const state = bookingLinkState({
+    status: link.status,
+    expiresAt: link.public_token_expires_at,
+    ownerCanBook: canBook,
+    hasSource: Boolean(sourceProvider),
+    activeBookings: active.length,
+    maxTotal: link.max_total_bookings,
+    now,
+  });
+
+  // Wat er via deze link al vastligt en nog moet komen: alleen de tijden, nooit
+  // wie er boekte. Wie de link later nog eens opent, ziet zo wanneer hij komt.
+  const booked = active
+    .filter(b => b.status === 'confirmed')
+    .map(b => ({ starts_at: String(slotOf(b).starts_at ?? ''), ends_at: String(slotOf(b).ends_at ?? '') }))
+    .filter(b => b.starts_at && Date.parse(b.ends_at) > now)
+    .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+
+  const base = {
+    state,
+    link: {
+      title: link.title,
+      intro_text: link.intro_text,
+      max_total_bookings: link.max_total_bookings,
+      max_per_week: link.max_per_week,
+      expires_at: link.public_token_expires_at,
+      video: bookingVideoLabel({ meetingUrl: link.meeting_url, autoConference: link.auto_conference, conferenceProvider: link.conference_provider, sourceProvider }),
+    },
+    branding,
+    company,
+    booked,
+    taken_slot_starts: active.map(b => String(slotOf(b).starts_at ?? '')).filter(Boolean),
+  };
+  if (state !== 'open') return { ...base, slots: [], prefill: null };
+
+  // Alleen momenten die nog moeten beginnen. Eerst stond een blok tot het eind
+  // op de pagina, en reserveren keek niet naar de begintijd.
   const { data: slotRows } = await supabaseAdmin.from('meeting_booking_slots')
     .select('id,starts_at,ends_at,status,pending_at')
     .eq('booking_link_id', link.id)
     .in('status', ['open', 'pending'])
-    .gte('ends_at', new Date().toISOString())
-    .order('starts_at', { ascending: true });
-  const available = (slotRows ?? []).filter((s: Record<string, unknown>) =>
-    s.status === 'open' || (s.status === 'pending' && String(s.pending_at ?? '') < nowMinusGrace));
-
-  // Bezette (pending/confirmed) boekingen → hun slot-starttijden, voor de
-  // totaal-/weeklimiet-weergave op de pagina (server blijft leidend).
-  const { data: takenRows } = await supabaseAdmin.from('meeting_bookings')
-    .select('slot_id, meeting_booking_slots!inner(starts_at)')
-    .eq('booking_link_id', link.id)
-    .in('status', ['pending', 'confirmed']);
-  const takenStarts = (takenRows ?? []).map((r: Record<string, unknown>) => {
-    const s = r.meeting_booking_slots as { starts_at?: string } | { starts_at?: string }[] | null;
-    const rec = Array.isArray(s) ? s[0] : s;
-    return rec?.starts_at ?? null;
-  }).filter(Boolean) as string[];
+    .gt('starts_at', new Date(now).toISOString())
+    .order('starts_at', { ascending: true })
+    .limit(500);
+  const slots = ((slotRows ?? []) as Array<{ id: string; starts_at: string; ends_at: string; status: string; pending_at: string | null }>)
+    .filter(s => isBookableSlot(s, now))
+    .map(s => ({ id: s.id, starts_at: s.starts_at, ends_at: s.ends_at }));
 
   let prefill: { name: string | null; email: string | null } | null = null;
   if (link.client_id) {
@@ -147,29 +260,29 @@ async function getPublicLink(tokenHash: string) {
     if (client) prefill = { name: (client.contact_name || client.name || null) as string | null, email: (client.email || null) as string | null };
   }
 
-  return {
-    link: {
-      title: link.title,
-      intro_text: link.intro_text,
-      max_total_bookings: link.max_total_bookings,
-      max_per_week: link.max_per_week,
-    },
-    slots: available.map((s: Record<string, unknown>) => ({ id: s.id, starts_at: s.starts_at, ends_at: s.ends_at })),
-    taken_slot_starts: takenStarts,
-    prefill,
-  };
+  return { ...base, slots, prefill };
 }
 
-async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
-  const link = await loadLinkByHash(tokenHash);
-  const name = String(body.name || '').trim().slice(0, 160);
-  const email = String(body.email || '').trim().toLowerCase();
-  if (!isEmail(email)) throw new HttpErr('Vul een geldig e-mailadres in.', 422);
-  const slotIds = Array.isArray(body.slotIds) ? body.slotIds.map(String).filter(Boolean) : [];
-  if (slotIds.length === 0) throw new HttpErr('Kies minstens één tijdblok.', 422);
-  if (slotIds.length > 20) throw new HttpErr('Te veel blokken in één keer.', 422);
-  if (!link.source_id) throw new HttpErr('Deze boekingslink is niet meer gekoppeld aan een agenda. Neem contact op.', 409);
-  if (!link.user_id) throw new HttpErr('Deze boekingslink is niet meer beschikbaar. Neem contact op.', 409);
+/** De melding voor de bezoeker bij een mislukt moment: onze eigen zin, of een algemene. */
+function visitorReason(err: unknown): string {
+  if (err instanceof HttpErr) return err.message;
+  const answer = dbErrorAnswer(err);
+  return answer?.message ?? 'Dit moment kon niet worden geboekt. Kies een ander moment.';
+}
+
+async function bookSlots(link: LinkRow, tokenHash: string, body: Record<string, unknown>) {
+  const name = cleanVisitorName(body.name);
+  const email = cleanVisitorEmail(body.email);
+  if (!email) throw new HttpErr('Vul een geldig e-mailadres in.', 422);
+  const slotIds = parseSlotIds(body.slotIds);
+  if (slotIds.length === 0) throw new HttpErr('Kies minstens één moment.', 422);
+  if (slotIds.length > MAX_SLOTS_PER_BOOKING) throw new HttpErr('Te veel momenten in één keer.', 422);
+  if (link.status !== 'active') throw new HttpErr('Deze boekingslink is gesloten.', 410);
+  if (!link.public_token_expires_at || Date.parse(link.public_token_expires_at) < Date.now()) throw new HttpErr('Deze boekingslink is verlopen.', 410);
+  if (!link.source_id) throw new HttpErr('Deze boekingslink is niet meer gekoppeld aan een agenda. Neem contact op met de afzender.', 409);
+  if (!link.user_id || !(await ownerCanBook(link))) {
+    throw new HttpErr('Deze boekingslink is niet meer beschikbaar. Neem contact op met de afzender.', 409);
+  }
 
   // Welke videovergadering de boeking krijgt. Een zelf geplakte vaste videolink
   // heeft altijd voorrang. Anders, met auto_conference aan:
@@ -179,13 +292,16 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
   //   google_meet — per geboekt blok een Google Meet, en teams een Teams-
   //   / teams       vergadering: van de agenda zelf als die dat kan, anders los
   //                 met de koppeling van de maker van de link (createEvent).
-  const { data: srcRow } = await supabaseAdmin.from('calendar_sources').select('provider').eq('id', link.source_id).maybeSingle();
-  const provider = srcRow ? String(srcRow.provider) : 'native';
+  const { data: srcRow } = await supabaseAdmin.from('calendar_sources').select('provider').eq('organization_id', link.organization_id).eq('id', link.source_id).maybeSingle();
+  if (!srcRow) throw new HttpErr('Deze boekingslink is niet meer gekoppeld aan een agenda. Neem contact op met de afzender.', 409);
+  const provider = String(srcRow.provider);
   const service: VideoService | null = isVideoService(link.conference_provider) ? link.conference_provider : null;
   const useJitsi = link.auto_conference && link.conference_provider === 'jitsi' && !link.meeting_url;
   const useService = link.auto_conference && service !== null && !link.meeting_url;
   const addConference = link.auto_conference && !useJitsi && !useService && provider !== 'native' && !link.meeting_url;
   const jitsiBase = useJitsi ? await loadJitsiBaseUrl(link.organization_id) : null;
+  const ownerId = link.user_id;
+  const sourceId = link.source_id;
 
   const confirmed: Array<{ slot_id: string; starts_at: string; ends_at: string; meeting_url: string | null }> = [];
   const failed: Array<{ slot_id: string; reason: string }> = [];
@@ -197,22 +313,24 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
     let starts = '';
     let ends = '';
     try {
-      // Fase A: atomisch reserveren (limieten + advisory lock in de RPC).
+      // Fase A: atomisch reserveren (limieten, begintijd, maker en advisory
+      // lock in de RPC). De fout zelf gooien, niet alleen zijn tekst: aan de
+      // code ziet visitorReason() of het onze eigen zin voor de bezoeker is.
       const { data: reserved, error: reserveError } = await supabaseAdmin.rpc('reserve_meeting_slot_by_token', {
         p_token_hash: tokenHash, p_slot_id: slotId, p_name: name || null, p_email: email,
       });
-      if (reserveError) throw new Error(reserveError.message);
+      if (reserveError) throw reserveError;
       const row = (Array.isArray(reserved) ? reserved[0] : reserved) as { booking_id: string; starts_at: string; ends_at: string } | null;
       if (!row) throw new Error('Reserveren mislukt.');
       bookingId = row.booking_id; starts = row.starts_at; ends = row.ends_at;
 
       // Live-recheck: is er ondertussen handmatig een afspraak op deze bron gezet?
-      await assertNoConflict(link.organization_id, link.user_id, link.source_id, starts, ends);
+      await assertNoConflict(link.organization_id, ownerId, sourceId, starts, ends);
 
       // Fase B: agenda-item aanmaken bij de provider (klant als genodigde).
       const slotMeetingUrl = useJitsi ? jitsiMeetingUrl(jitsiBase) : link.meeting_url;
       const eventInput = {
-        sourceId: link.source_id,
+        sourceId,
         title: name ? `${link.title} — ${name}` : link.title,
         description: link.invite_message,
         startsAt: starts,
@@ -224,7 +342,7 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
       };
       let ev: Record<string, unknown>;
       try {
-        ev = await createEvent(link.organization_id, link.user_id, eventInput) as Record<string, unknown>;
+        ev = await createEvent(link.organization_id, ownerId, eventInput) as Record<string, unknown>;
       } catch (err) {
         // Lukt alleen de videovergadering niet (de koppeling van de eigenaar
         // mist het recht, de Meet API staat uit, geen Teams op dit account),
@@ -232,14 +350,14 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
         // eigenaar hoort dat hij zelf een link moet sturen.
         if (!(err instanceof VideoUnavailableError)) throw err;
         videoNotes.add(err.message);
-        ev = await createEvent(link.organization_id, link.user_id, { ...eventInput, meetingUrl: null, addConference: false, videoService: null }) as Record<string, unknown>;
+        ev = await createEvent(link.organization_id, ownerId, { ...eventInput, meetingUrl: null, addConference: false, videoService: null }) as Record<string, unknown>;
       }
       if (typeof ev.video_warning === 'string' && ev.video_warning) videoNotes.add(ev.video_warning);
 
-      const provider = String(ev.provider);
-      const nativeEventId = provider === 'native' ? String(ev.native_event_id ?? '') : null;
-      const externalEventId = provider !== 'native' ? String(ev.provider_event_id ?? '') : null;
-      const externalProvider = provider !== 'native' ? provider : null;
+      const evProvider = String(ev.provider);
+      const nativeEventId = evProvider === 'native' ? String(ev.native_event_id ?? '') : null;
+      const externalEventId = evProvider !== 'native' ? String(ev.provider_event_id ?? '') : null;
+      const externalProvider = evProvider !== 'native' ? evProvider : null;
 
       const { error: finalizeError } = await supabaseAdmin.rpc('finalize_meeting_booking', {
         p_booking_id: bookingId,
@@ -247,16 +365,23 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
         p_external_event_id: externalEventId || null,
         p_external_provider: externalProvider,
       });
-      if (finalizeError) throw new Error(finalizeError.message);
+      if (finalizeError) throw finalizeError;
 
       const evMeetingUrl = ev.meeting_url ? String(ev.meeting_url) : slotMeetingUrl;
       confirmed.push({ slot_id: slotId, starts_at: starts, ends_at: ends, meeting_url: evMeetingUrl });
     } catch (err) {
       if (bookingId) {
         try { await supabaseAdmin.rpc('release_meeting_booking', { p_booking_id: bookingId, p_reason: err instanceof Error ? err.message : 'error' }); } catch { /* best-effort */ }
+        // Stond er intussen een afspraak op dat moment, dan is het blok echt
+        // bezet. Eerst ging het na het vrijgeven weer open, en liep de volgende
+        // bezoeker tegen dezelfde botsing aan.
+        if (err instanceof HttpErr && err.status === 409) {
+          await supabaseAdmin.from('meeting_booking_slots').update({ status: 'cancelled' })
+            .eq('id', slotId).eq('organization_id', link.organization_id).eq('status', 'open');
+        }
       }
-      console.error('meeting-booking-public slot', slotId, err);
-      failed.push({ slot_id: slotId, reason: err instanceof HttpErr ? err.message : 'Dit moment kon niet worden geboekt. Kies een ander moment.' });
+      if (!(err instanceof HttpErr) && !dbErrorAnswer(err)) console.error('meeting-booking-public slot', slotId, err);
+      failed.push({ slot_id: slotId, reason: visitorReason(err) });
     }
   }
 
@@ -383,3 +508,4 @@ async function sendResend(organizationId: string, from: string, to: string[], re
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+

@@ -878,6 +878,24 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .client-project-row{display:flex;align-items:center;gap:8px}.client-project-row span:nth-child(2){font-weight:700;flex:1}.client-project-row em{font-style:normal;font-size:10px;color:var(--muted);background:var(--bg2);border-radius:999px;padding:2px 7px}.client-project-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .client-finance-row{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px}.client-finance-row.is-overdue{border-color:rgba(var(--danger-rgb),.4);background:rgba(var(--danger-rgb),.08)}.client-finance-number{font-weight:700;font-size:12px}.client-finance-meta{font-size:11px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.client-finance-amount{font-weight:700;white-space:nowrap}.client-finance-status{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;padding:4px 8px;border-radius:999px;background:var(--bg4);color:var(--muted2);white-space:nowrap}.client-finance-status.paid{background:rgba(var(--ok-rgb),.13);color:var(--accent-g)}.client-finance-status.overdue{background:rgba(var(--danger-rgb),.14);color:var(--accent-r)}.client-finance-status.sent,.client-finance-status.accepted{background:rgba(var(--warn-rgb),.13);color:var(--accent-o)}
 .client-empty-line{font-size:12px;color:var(--muted);border:1px dashed var(--border);border-radius:8px;padding:12px;text-align:center}
+/* Klantpagina → Afspraken (november 2026): wat er via een boekingslink al
+   gepland staat, en de links van deze klant met hun stand. Dezelfde rijen als
+   de kaart Projecten erboven. */
+.client-bookings{display:flex;flex-direction:column;gap:8px}
+.client-booking-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:2px 0 -1px}
+.client-booking-upcoming,.client-booking-links{display:flex;flex-direction:column;gap:7px}
+.client-booking-next,.client-booking-row{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:10px 11px;cursor:pointer;text-align:left;transition:all .15s;font-family:inherit}
+.client-booking-next:hover,.client-booking-row:hover{background:var(--bg4);border-color:var(--border2)}
+.client-booking-next{display:flex;align-items:flex-start;gap:9px;border-color:rgba(var(--accent-rgb),.3)}
+.client-booking-next svg{flex:none;margin-top:2px;color:var(--accent-ink)}
+.client-booking-next span{display:grid;gap:2px;min-width:0}
+.client-booking-next strong{font-size:12.5px}
+.client-booking-next strong::first-letter{text-transform:uppercase}
+.client-booking-next em{font-style:normal;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.client-booking-row{display:grid;gap:4px}
+.client-booking-title{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.client-booking-title>span:first-child{font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.client-booking-meta{font-size:11px;color:var(--muted)}
 
 /* Client detail — contactpersonen */
 .client-contact-list{display:flex;flex-direction:column;gap:7px}
@@ -7427,8 +7445,13 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .mbk-aside-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
 .mbk-main{min-width:0}
 .mbk-linklist{display:flex;flex-direction:column;gap:6px}
-.mbk-link{text-align:left;padding:8px 10px;height:auto}
-.mbk-link-title{font-weight:600}
+/* Titel (met de stand) boven de details: naast elkaar werd de titel na een
+   paar letters afgekapt. Met de lijst ervoor, want de opmaak van de zijbalk
+   verderop zet .nav-item op het bureaublad op 32px hoog, en dan schoven de
+   links over elkaar. */
+.mbk-linklist .mbk-link{text-align:left;padding:8px 10px;height:auto;min-height:0;flex-direction:column;align-items:stretch;gap:3px}
+.mbk-link-title{font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.mbk-link-title>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mbk-link-meta{font-size:12px}
 .mbk-form{padding:16px;display:flex;flex-direction:column;gap:12px}
 .mbk-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -7441,6 +7464,47 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .mbk-share-row{display:flex;gap:8px;align-items:center}
 .mbk-share-row .form-input{flex:1;min-width:0}
 .mbk-slotform{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+
+/* November 2026: elke link zegt in één woord hoe hij ervoor staat (open,
+   volgeboekt, gesloten, verlopen, niet beschikbaar), en de detailkaart zegt
+   in een zin wat dat voor de klant betekent. Eerst zag je alleen "gesloten"
+   als het al te laat was, en de status van een boeking stond er in het
+   Engels ("confirmed"). */
+.mbk-badge{flex:none;display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;line-height:1.6;white-space:nowrap;background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));color:var(--muted2)}
+.mbk-badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.mbk-badge.tone-success{background:rgba(var(--ok-rgb),.15);color:var(--accent-g)}
+.mbk-badge.tone-info{background:rgba(var(--accent-rgb),.14);color:var(--accent-ink)}
+.mbk-badge.tone-warning{background:rgba(var(--warn-rgb),.15);color:var(--accent-o)}
+.mbk-badge.tone-danger{background:rgba(var(--danger-rgb),.15);color:var(--accent-r)}
+.mbk-detail{display:flex;flex-direction:column;gap:16px}
+.mbk-detail-title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mbk-detail-title-row h3{margin:0}
+.mbk-detail-meta{font-size:13px;margin-top:4px}
+.mbk-state-line{margin:10px 0 0;font-size:13px;line-height:1.5;padding:8px 12px;border-radius:10px;background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)))}
+.mbk-state-line.tone-warning,.mbk-state-line.tone-danger{background:rgba(var(--danger-rgb),.08)}
+.mbk-share,.mbk-section{padding:16px;display:flex;flex-direction:column;gap:10px}
+.mbk-share-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mbk-share-head strong{margin-right:auto}
+.mbk-expiry{font-size:12.5px;color:var(--muted2)}
+.mbk-expiry.tone-soon{color:var(--accent-o);font-weight:600}
+.mbk-expiry.tone-expired{color:var(--accent-r);font-weight:600}
+.mbk-share-note{display:flex;align-items:flex-start;gap:6px;margin:0;font-size:12.5px;line-height:1.5}
+.mbk-share-note svg{flex:none;margin-top:2px}
+.mbk-mail{display:flex;flex-direction:column;gap:10px;padding-top:10px;border-top:1px solid var(--border)}
+.mbk-mail-fields{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:10px}
+.mbk-mail-fields label{display:grid;gap:4px;font-size:12px;color:var(--muted2)}
+.mbk-mail-actions{display:flex;gap:8px;flex-wrap:wrap}
+.mbk-rows{display:flex;flex-direction:column}
+.mbk-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)}
+.mbk-row:last-child{border-bottom:0}
+.mbk-rows.is-past .mbk-row{opacity:.7}
+.mbk-row-main{min-width:0}
+.mbk-row-title{font-weight:600}
+.mbk-row-sub{font-size:12px;overflow-wrap:anywhere}
+.mbk-row-side{display:flex;align-items:center;gap:8px;flex:none}
+.mbk-toggle{align-self:flex-start;border:0;background:transparent;padding:4px 0;color:var(--accent-ink);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.mbk-toggle:hover{text-decoration:underline}
+.mbk-subhead{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-top:6px}
 
 /* ── Blokken tekenen: uitnodiging in de kaart, rooster schermvullend ────────
    Het rooster stond ingeklemd in een vak van 460px — een derde werkdag, dus
@@ -7496,7 +7560,11 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .mbk-slotform>label{flex:1 1 100%}
   .mbk-slotform .btn{flex:1 1 100%}
   .mbk-weekgrid{height:clamp(300px,52dvh,460px)}
-  .mbk-aside,.mbk-form,.mbk-detail-head-card{padding:13px}
+  .mbk-aside,.mbk-form,.mbk-detail-head-card,.mbk-share,.mbk-section{padding:13px}
+  .mbk-mail-fields{grid-template-columns:minmax(0,1fr)}
+  .mbk-mail-actions .btn{flex:1 1 auto}
+  .mbk-row{flex-wrap:wrap}
+  .mbk-row-side{flex:1 1 100%;justify-content:space-between}
 }
 
 /* 16 ── Meldingen boven de onderbalk ──────────────────────────────────────
@@ -10874,11 +10942,8 @@ button.task-agenda-when:hover{text-decoration:underline}
   .public-decision-done{padding:12px}
   .quote-timeline.public .quote-timeline-item{padding:7px 0;font-size:13px}
 
-  /* Boekingslink: de tijden twee naast elkaar, dag klein erboven. */
-  .booking-slots{gap:6px!important}
-  .booking-slot{flex:1 1 calc(50% - 3px);min-width:0;min-height:52px;padding:7px 10px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:1px;border-radius:12px}
-  .booking-slot-day{font-size:11px;font-weight:600;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
-  .booking-slot-time{font-size:14px!important;font-weight:700;font-variant-numeric:tabular-nums}
+  /* De boekingslink heeft sinds november 2026 zijn eigen opmaak bij de andere
+     klantpagina's (portal-cockpit.css, § 8b). */
   .public-quote-card .muted{font-size:13px}
 
   /* Portaal: kop op één rij, tabbladen als veegrij, cijfers twee naast
@@ -10944,13 +11009,6 @@ button.task-agenda-when:hover{text-decoration:underline}
   .login-card h1{font-size:26px}
   .login-card .login-eyebrow{font-size:10px}
   .login-card p{font-size:14px}
-}
-
-/* Boekingslink: op de telefoon de korte dagnaam ("ma 14 sep"), elders de volle. */
-.booking-slot-day-short{display:none}
-@media(max-width:760px){
-  .booking-slot-day-long{display:none}
-  .booking-slot-day-short{display:inline}
 }
 
 /* ═══ 6 · BEWERKVENSTERS OP DE TELEFOON ═══════════════════════════════════

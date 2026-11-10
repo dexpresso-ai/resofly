@@ -63,8 +63,11 @@
 /contract/*
   X-Robots-Tag: noindex, nofollow
 
+# Boekingslink: de token zit in het pad. Geen zoekmachine, en geen Referer naar
+# buiten, net als /ontvang/* (de videolink, de website van de organisatie).
 /booking/*
   X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer
 
 /gedeeld/*
   X-Robots-Tag: noindex, nofollow

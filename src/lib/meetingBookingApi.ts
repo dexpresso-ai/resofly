@@ -1,9 +1,11 @@
 import { supabase } from './supabase';
+import { throwFunctionError } from './functionErrors';
 import type {
   ConferenceProvider,
   MeetingBooking,
   MeetingBookingLink,
   MeetingBookingLinkListItem,
+  MeetingBookingLinkState,
   MeetingBookingSlot,
   UUID,
 } from '../types';
@@ -12,18 +14,13 @@ type Ok<T> = { ok: true } & T;
 
 async function invoke<T>(organizationId: UUID, body: Record<string, unknown>): Promise<Ok<T>> {
   const { data, error } = await supabase.functions.invoke('meeting-booking', { body: { ...body, organizationId } });
-  if (error) {
-    // Edge function non-2xx: probeer de foutmelding uit de body te halen.
-    const ctx = (error as { context?: { body?: unknown } }).context;
-    const msg = typeof ctx?.body === 'string' ? tryParseError(ctx.body) : null;
-    throw new Error(msg || error.message || 'Boekingstool-actie mislukt.');
-  }
+  // Bij een 4xx zit de uitleg van de server in de Response (error.context). Hier
+  // las de code eerst error.context.body, dat bij supabase-js nooit bestaat: je
+  // zag dan "Edge Function returned a non-2xx status code" in plaats van
+  // bijvoorbeeld "Er staan geen vrije momenten op deze link".
+  if (error) await throwFunctionError(error, 'De actie op de boekingslink is mislukt.');
   if (!data || data.ok !== true) throw new Error(data?.error ?? 'De boekingstool gaf geen geldig antwoord terug.');
   return data as Ok<T>;
-}
-
-function tryParseError(body: string): string | null {
-  try { const j = JSON.parse(body); return typeof j?.error === 'string' ? j.error : null; } catch { return null; }
 }
 
 export interface CreateBookingLinkInput {
@@ -61,11 +58,18 @@ export interface BookingLinkDetail {
   source_name: string | null;
   source_provider: string | null;
   needs_reconnect: boolean;
+  /** Kan de maker van de link nog boeken (actief, schrijfrecht op de Agenda)? */
+  owner_can_book: boolean;
+  /** Vrije momenten die nog moeten beginnen. */
+  open_slot_count: number;
+  state: MeetingBookingLinkState;
 }
 
 export interface AddSlotsResult {
   slots: MeetingBookingSlot[];
   warnings: Array<{ starts_at: string; conflict: string }>;
+  /** Blokken die precies zo al op de link stonden en dus zijn overgeslagen. */
+  skipped?: number;
 }
 
 export interface TokenResult {
@@ -74,8 +78,9 @@ export interface TokenResult {
   booking_url: string;
 }
 
-export async function listBookingLinks(organizationId: UUID): Promise<MeetingBookingLinkListItem[]> {
-  const data = await invoke<{ links: MeetingBookingLinkListItem[] }>(organizationId, { action: 'listLinks' });
+/** Alle boekingslinks, of die van één klant (de klantpagina). Leesrecht op de Agenda is genoeg. */
+export async function listBookingLinks(organizationId: UUID, options: { clientId?: UUID | null } = {}): Promise<MeetingBookingLinkListItem[]> {
+  const data = await invoke<{ links: MeetingBookingLinkListItem[] }>(organizationId, { action: 'listLinks', ...(options.clientId ? { clientId: options.clientId } : {}) });
   return data.links;
 }
 
@@ -107,8 +112,15 @@ export async function updateBookingLink(organizationId: UUID, linkId: UUID, patc
   return data.link;
 }
 
+/** Een nieuwe URL: de oude link (ook die in een eerder verstuurde mail) werkt daarna niet meer. */
 export async function regenerateBookingToken(organizationId: UUID, linkId: UUID): Promise<TokenResult> {
   return await invoke<TokenResult>(organizationId, { action: 'regenerateToken', linkId });
+}
+
+/** Dezelfde URL langer laten werken (of weer, als hij verlopen is). */
+export async function extendBookingLink(organizationId: UUID, linkId: UUID, ttlDays = 120): Promise<MeetingBookingLink> {
+  const data = await invoke<{ link: MeetingBookingLink }>(organizationId, { action: 'extendLink', linkId, ttlDays });
+  return data.link;
 }
 
 /** Verwijdert een volledige boekingslink; server weigert (409) als er al geboekt is. */

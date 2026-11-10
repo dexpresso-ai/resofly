@@ -3925,10 +3925,30 @@ export interface MeetingBookingLink {
    */
   conference_provider?: ConferenceProvider;
   status: MeetingBookingLinkStatus;
-  public_token_hash: string | null;
+  /**
+   * Heeft de link een URL? De hash van de token zelf komt sinds november 2026
+   * niet meer naar de app (meeting-booking: publicLinkRow).
+   */
+  has_token: boolean;
   public_token_expires_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Hoe een link ervoor staat (meetingBookingRules.ts aan de serverkant):
+ * open, gesloten, verlopen, vol, of niet beschikbaar omdat de maker niet meer
+ * in de Agenda mag schrijven.
+ */
+export type MeetingBookingLinkState = 'open' | 'closed' | 'expired' | 'unavailable' | 'full';
+
+/** Een bevestigde afspraak die nog moet komen, voor de lijst en de klantpagina. */
+export interface MeetingBookingUpcoming {
+  id: UUID;
+  name: string | null;
+  email: string;
+  starts_at: string;
+  ends_at: string;
 }
 
 /** Boekingslink verrijkt met afgeleide velden voor de lijstweergave. */
@@ -3938,6 +3958,12 @@ export interface MeetingBookingLinkListItem extends MeetingBookingLink {
   source_provider: CalendarProvider | null;
   booking_count: number;
   needs_reconnect: boolean;
+  state: MeetingBookingLinkState;
+  /** Vrije momenten die nog moeten beginnen. */
+  open_slot_count: number;
+  next_open_slot_at: string | null;
+  upcoming_bookings: MeetingBookingUpcoming[];
+  owner_can_book: boolean;
 }
 
 export interface MeetingBookingSlot {

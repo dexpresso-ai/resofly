@@ -31,6 +31,7 @@ import type { ContentCreateTarget } from './ContentLibrary';
 import type { NewOfficeType } from '../lib/office';
 import { ClientContacts } from './ClientContacts';
 import { SendFilesDialog } from '../components/SendFilesDialog';
+import { ClientBookingLinks } from '../components/ClientBookingLinks';
 import { MailRecipientSelect, MessageFilesBar, mailRecipientFor, useMessageFiles } from '../components/MessageFiles';
 import { TransferMessageBlock } from '../components/TransfersPanel';
 import { loadTransfersForEmails } from '../lib/transfers-api';
@@ -448,6 +449,10 @@ export function ClientDetailPage({
   unreadTicketIds,
   canReadTickets,
   canWriteTickets,
+  canReadCalendar = false,
+  canWriteCalendar = false,
+  onOpenBookingLink,
+  onNewBookingLink,
 }: {
   data: AppData;
   client: Client;
@@ -476,6 +481,13 @@ export function ClientDetailPage({
   /** Module Tickets staat open voor dit teamlid: dan is er een tabblad Tickets. */
   canReadTickets: boolean;
   canWriteTickets: boolean;
+  /** Module Agenda: dan staan de afspraken en boekingslinks van de klant erbij. */
+  canReadCalendar?: boolean;
+  canWriteCalendar?: boolean;
+  /** Naar Agenda → Boekingslinks, met deze link open. */
+  onOpenBookingLink?: (linkId: string) => void;
+  /** Naar Agenda → Boekingslinks, met een nieuwe link voor deze klant. */
+  onNewBookingLink?: () => void;
 }) {
   const projects = data.projects.filter(project => project.client_id === client.id);
   // Het eigen inlogadres van het portaal: daar staat het inlogscherm meteen in
@@ -745,9 +757,20 @@ export function ClientDetailPage({
             {projects.length > 6 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('projects')}>+{projects.length - 6} meer projecten</button>}
           </div>
         </article>
+
       </aside>
 
       <div className="client-overview-main">
+        {/* Bovenaan: wat er met deze klant gepland staat, en of er een
+            boekingslink uitstaat (en hoe die ervoor staat). Op de telefoon
+            komt deze kolom als eerste. */}
+        {canReadCalendar && onOpenBookingLink && onNewBookingLink && <ClientBookingLinks
+          organizationId={organizationId}
+          clientId={client.id}
+          canWrite={canWriteCalendar}
+          onOpenLink={onOpenBookingLink}
+          onNewLink={onNewBookingLink}
+        />}
         <article className="client-panel">
           <div className="client-panel-head">
             <h3>Recente offertes</h3>

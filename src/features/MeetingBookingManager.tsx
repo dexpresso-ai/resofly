@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Maximize2, Minimize2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Copy, ExternalLink, Maximize2, Minimize2, RefreshCw, Send, ShieldCheck } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, CalendarSource, ConferenceProvider, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID, VideoServices } from '../types';
 import { Button, Input, Textarea, Select, normalizeColor } from '../components/Ui';
 import { listExternalCalendarEvents, loadCalendarIntegrations } from '../lib/calendar-api';
@@ -7,12 +7,24 @@ import { addDays, startOfWeek } from '../lib/dates';
 import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
 import { TimeBlockGrid, slotSelectionToIso, type BookingOverlaySlot } from './CalendarPage';
 import { BookingVideoSelect } from '../components/BookingVideoSelect';
+import { BookingStateBadge } from '../components/ClientBookingLinks';
 import { bookingVideoFields, bookingVideoFromLink, defaultBookingVideo, type BookingVideo } from '../lib/meeting';
+import {
+  BOOKING_STATUS_LABELS,
+  LINK_STATE_LABELS,
+  SLOT_STATUS_LABELS,
+  expiryLabel,
+  fmtDayLong,
+  fmtMoment,
+  fmtTime,
+  linkStateExplanation,
+} from '../lib/bookingLinks';
 import {
   addBookingSlots,
   cancelBooking,
   createBookingLink,
   deleteBookingLink,
+  extendBookingLink,
   getBookingLink,
   listBookingLinks,
   regenerateBookingToken,
@@ -22,20 +34,36 @@ import {
   type BookingLinkDetail,
 } from '../lib/meetingBookingApi';
 
-function fmt(dt: string): string {
-  return new Intl.DateTimeFormat('nl-NL', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Amsterdam' }).format(new Date(dt));
-}
-function fmtDate(dt: string): string {
-  return new Intl.DateTimeFormat('nl-NL', { dateStyle: 'full', timeZone: 'Europe/Amsterdam' }).format(new Date(dt));
-}
 /** datetime-local waarde (lokale wandkloktijd) → ISO string. */
 function localToIso(local: string): string {
   return new Date(local).toISOString();
 }
 
+/** Nu als datetime-local-waarde: de ondergrens van het handmatige invoerveld. */
+function nowLocalInput(): string {
+  const d = new Date();
+  d.setSeconds(0, 0);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
 const PROVIDER_LABEL: Record<string, string> = { native: 'ResoFly-agenda', google: 'Google', microsoft: 'Microsoft' };
 
-export function MeetingBookingManager({ organizationId, data, canWrite }: { organizationId: UUID; currentUserId: UUID; data: AppData; canWrite: boolean }) {
+/**
+ * Waar de pagina mee opent: een link (vanaf de klantpagina) of meteen een
+ * nieuwe link voor een klant. `key` maakt elke sprong uniek, zodat twee keer
+ * dezelfde knop ook twee keer werkt.
+ */
+export type BookingFocus = { key: number; linkId?: string | null; clientId?: string | null; create?: boolean };
+
+export function MeetingBookingManager({ organizationId, data, canWrite, focus, onFocusHandled }: {
+  organizationId: UUID;
+  currentUserId: UUID;
+  data: AppData;
+  canWrite: boolean;
+  focus?: BookingFocus | null;
+  /** De sprong is uitgevoerd: de app wist hem, anders opende hij opnieuw bij de volgende keer via het menu. */
+  onFocusHandled?: () => void;
+}) {
   const [links, setLinks] = useState<MeetingBookingLinkListItem[]>([]);
   const [sources, setSources] = useState<CalendarSource[]>([]);
   // Kan ik per boeking een losse Meet/Teams laten maken (alleen mijn eigen koppelingen)?
@@ -49,6 +77,9 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
   // Plaintext tokens leven alleen in het geheugen (server bewaart enkel de hash).
   const [tokenByLink, setTokenByLink] = useState<Record<string, { token: string; url: string }>>({});
   const [creating, setCreating] = useState(false);
+  /** De klant die een nieuwe link al krijgt (vanaf de klantpagina). */
+  const [createForClient, setCreateForClient] = useState<UUID | null>(null);
+  const handledFocus = useRef<number | null>(null);
 
   const writableSources = useMemo(
     () => sources.filter(s => s.provider === 'native' ? true : (s.write_enabled && ['owner', 'writer'].includes(String(s.access_role || '').toLowerCase()))),
@@ -76,7 +107,9 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
         setLinks(rows);
         setSources(integrations.sources);
         setVideoServices(integrations.videoServices ?? null);
-        if (rows.length && !selectedId) setSelectedId(rows[0].id);
+        // Niet de eerste link kiezen als we hier met een sprong binnenkwamen
+        // (die zet zelf de keuze, ook als hij al gewist is).
+        if (rows.length && !handledFocus.current) setSelectedId(prev => prev ?? rows[0].id);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : 'Laden mislukt.');
       } finally {
@@ -86,6 +119,24 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizationId]);
+
+  // Een sprong vanaf de klantpagina: die link openen, of meteen een nieuwe
+  // link voor die klant.
+  useEffect(() => {
+    if (!focus || handledFocus.current === focus.key) return;
+    handledFocus.current = focus.key;
+    setError(null); setNotice(null);
+    if (focus.create) {
+      setCreateForClient(focus.clientId ?? null);
+      setCreating(true);
+      setSelectedId(null);
+    } else if (focus.linkId) {
+      setCreating(false);
+      setSelectedId(focus.linkId);
+    }
+    onFocusHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus]);
 
   useEffect(() => {
     if (!selectedId) { setDetail(null); return; }
@@ -105,16 +156,17 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
   }, []);
 
   const clientsById = useMemo(() => new Map(data.clients.map(c => [c.id, c])), [data.clients]);
+  const clientOptions = useMemo(() => data.clients.map(c => ({ id: c.id, label: c.name })), [data.clients]);
 
   return (
     <div className="mbk-layout">
       <div className="card mbk-aside">
         <div className="mbk-aside-head">
           <strong>Boekingslinks</strong>
-          {canWrite && <Button variant="primary" onClick={() => { setCreating(true); setSelectedId(null); }}>Nieuw</Button>}
+          {canWrite && <Button variant="primary" onClick={() => { setCreateForClient(null); setCreating(true); setSelectedId(null); }}>Nieuw</Button>}
         </div>
         {loading && <p className="muted">Laden…</p>}
-        {!loading && links.length === 0 && <p className="muted">Nog geen boekingslinks. Maak er een aan om een klant zelf een moment te laten kiezen.</p>}
+        {!loading && links.length === 0 && <p className="muted">Nog geen boekingslinks. Met een boekingslink kiest een klant zelf een moment uit de tijden die jij aanbiedt; de afspraak komt meteen in je agenda.</p>}
         <div className="mbk-linklist">
           {links.map(l => (
             <button
@@ -122,10 +174,13 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
               className={`nav-item mbk-link ${selectedId === l.id && !creating ? 'active' : ''}`}
               onClick={() => { setCreating(false); setSelectedId(l.id); }}
             >
-              <div className="mbk-link-title">{l.title}</div>
+              <div className="mbk-link-title">
+                <span>{l.title}</span>
+                <BookingStateBadge state={l.state} />
+              </div>
               <div className="muted mbk-link-meta">
                 {l.client_name || 'Geen klant'} · {l.booking_count}/{l.max_total_bookings} geboekt
-                {l.status === 'closed' ? ' · gesloten' : ''}
+                {l.state === 'open' ? ` · ${l.open_slot_count} vrij` : ''}
                 {l.needs_reconnect ? ' · ⚠ koppeling' : ''}
               </div>
             </button>
@@ -134,16 +189,20 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
       </div>
 
       <div className="mbk-main">
-        {error && <div className="alert alert-danger" style={{ marginBottom: 12 }}>{error}</div>}
-        {notice && <div className="alert" style={{ marginBottom: 12 }}>{notice}</div>}
+        {error && <div className="alert alert-danger" role="alert" style={{ marginBottom: 12 }}>{error}</div>}
+        {notice && <div className="alert" role="status" style={{ marginBottom: 12 }}>{notice}</div>}
 
-        {creating && (
+        {/* Pas na het laden: de keuzelijst met agenda's vult zijn eerste keuze
+            maar één keer, en vanaf de klantpagina opent dit formulier meteen. */}
+        {creating && !loading && (
           <LinkForm
+            key={`create-${createForClient ?? ''}`}
             mode="create"
             sources={writableSources}
             videoServices={videoServices}
-            clients={data.clients.map(c => ({ id: c.id, label: c.name }))}
+            clients={clientOptions}
             busy={busy}
+            initial={createForClient ? { clientId: createForClient, title: `Afspraak met ${clientsById.get(createForClient)?.name ?? 'de klant'}` } : undefined}
             onCancel={() => setCreating(false)}
             onSubmit={(payload) => run(async () => {
               const res = await createBookingLink(organizationId, {
@@ -162,7 +221,7 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
               await reloadLinks();
               setCreating(false);
               setSelectedId(res.link.id);
-            }, 'Boekingslink aangemaakt. Kopieer of verstuur de link hieronder.')}
+            }, 'Boekingslink aangemaakt. Zet er momenten op en stuur hem daarna naar de klant.')}
           />
         )}
 
@@ -173,8 +232,8 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
             organizationId={organizationId}
             sources={writableSources}
             videoServices={videoServices}
-            clients={data.clients.map(c => ({ id: c.id, label: c.name }))}
-            clientEmail={detail.link.client_id ? (clientsById.get(detail.link.client_id)?.email ?? null) : null}
+            clients={clientOptions}
+            client={detail.link.client_id ? (clientsById.get(detail.link.client_id) ?? null) : null}
             token={tokenByLink[detail.link.id] ?? null}
             busy={busy}
             canWrite={canWrite}
@@ -185,30 +244,45 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
             onRegenerate={() => run(async () => {
               const res = await regenerateBookingToken(organizationId, detail.link.id);
               setTokenByLink(prev => ({ ...prev, [res.link.id]: { token: res.token, url: res.booking_url } }));
-              await reloadDetail(detail.link.id);
-            }, 'Nieuwe link gegenereerd.')}
-            onSendMail={(recipient) => run(async () => {
-              const tok = tokenByLink[detail.link.id];
-              if (!tok) throw new Error('Vernieuw eerst de link om hem te kunnen versturen.');
+              await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
+            }, 'Nieuwe link gemaakt. De vorige link werkt niet meer.')}
+            onExtend={() => run(async () => {
+              await extendBookingLink(organizationId, detail.link.id);
+              await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
+            }, 'Verlengd. De link die de klant al heeft, werkt weer (of langer).')}
+            onSendMail={(recipient, opts) => run(async () => {
+              let tok = tokenByLink[detail.link.id];
+              // De link zelf staat nergens leesbaar opgeslagen. Zonder link in het
+              // geheugen maken we een nieuwe; daar is al om bevestiging gevraagd.
+              if (!tok && opts.regenerate) {
+                const res = await regenerateBookingToken(organizationId, detail.link.id);
+                tok = { token: res.token, url: res.booking_url };
+                setTokenByLink(prev => ({ ...prev, [res.link.id]: tok! }));
+              }
+              if (!tok) throw new Error('Maak eerst een nieuwe link om hem te kunnen versturen.');
               await sendBookingLinkMail(organizationId, detail.link.id, tok.token, recipient);
-            }, 'Boekingsmail verstuurd naar de klant.')}
+              await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
+            }, `Boekingslink verstuurd naar ${recipient.email}.`)}
             onAddSlots={async (slots) => {
-              let warn = '';
+              let extra = '';
               await run(async () => {
                 const res = await addBookingSlots(organizationId, detail.link.id, slots);
-                if (res.warnings.length) warn = `Let op: ${res.warnings.length} blok(ken) overlappen met bestaande afspraken.`;
-                await reloadDetail(detail.link.id);
-              }, 'Blokken toegevoegd.');
-              if (warn) setNotice(warn);
+                const parts: string[] = [];
+                if (res.warnings.length) parts.push(`${res.warnings.length} ${res.warnings.length === 1 ? 'moment botst' : 'momenten botsen'} met een afspraak in je agenda`);
+                if (res.skipped) parts.push(`${res.skipped} ${res.skipped === 1 ? 'moment stond' : 'momenten stonden'} er al op`);
+                if (parts.length) extra = `Let op: ${parts.join(', ')}.`;
+                await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
+              }, slots.length === 1 ? 'Moment toegevoegd.' : 'Momenten toegevoegd.');
+              if (extra) setNotice(extra);
             }}
             onRemoveSlot={(slotId) => run(async () => {
               await removeBookingSlot(organizationId, detail.link.id, slotId);
-              await reloadDetail(detail.link.id);
+              await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
             })}
             onCancelBooking={(bookingId) => run(async () => {
               await cancelBooking(organizationId, bookingId);
               await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
-            }, 'Boeking geannuleerd; het blok staat weer open.')}
+            }, 'Afspraak geannuleerd en uit de agenda gehaald; het moment is weer vrij. Laat de klant zelf weten dat de afspraak niet doorgaat.')}
             onDelete={() => run(async () => {
               const removedId = detail.link.id;
               await deleteBookingLink(organizationId, removedId);
@@ -283,9 +357,9 @@ function LinkForm({ mode, sources, videoServices, clients, busy, onSubmit, onCan
   return (
     <div className="card mbk-form">
       <strong>{mode === 'create' ? 'Nieuwe boekingslink' : 'Instellingen'}</strong>
-      <label>Titel<Input value={title} onChange={e => setTitle(e.target.value)} placeholder="Afspraak inplannen" /></label>
+      <label>Titel (ziet de klant boven de pagina)<Input value={title} onChange={e => setTitle(e.target.value)} placeholder="Afspraak inplannen" maxLength={160} /></label>
       <div className="mbk-form-grid">
-        <label>Agenda
+        <label>Agenda waarin de afspraak komt
           <Select value={sourceId} onChange={e => setSourceId(e.target.value)} placeholder="Kies een agenda">
             {sources.map(s => <option key={s.id} value={s.id}>{s.name} ({PROVIDER_LABEL[s.provider] ?? s.provider})</option>)}
           </Select>
@@ -298,14 +372,14 @@ function LinkForm({ mode, sources, videoServices, clients, busy, onSubmit, onCan
         </label>
       </div>
       <div className="mbk-form-grid">
-        <label>Max. aantal boekingen totaal<Input type="number" min={1} value={maxTotal} onChange={e => setMaxTotal(e.target.value)} /></label>
-        <label>Max. aantal per week<Input type="number" min={1} value={maxWeek} onChange={e => setMaxWeek(e.target.value)} /></label>
+        <label>Hoeveel afspraken in totaal<Input type="number" min={1} max={999} value={maxTotal} onChange={e => setMaxTotal(e.target.value)} /></label>
+        <label>Hoeveel per week<Input type="number" min={1} max={99} value={maxWeek} onChange={e => setMaxWeek(e.target.value)} /></label>
       </div>
-      <label>Intro-tekst op de boekingspagina<Textarea value={introText} onChange={e => setIntroText(e.target.value)} rows={2} placeholder="Kies hieronder een moment dat jou uitkomt." /></label>
-      <label>Begeleidende tekst bij de uitnodiging<Textarea value={inviteMessage} onChange={e => setInviteMessage(e.target.value)} rows={2} placeholder="Fijn dat we een moment inplannen. Tot dan!" /></label>
+      <label>Tekst op de boekingspagina<Textarea value={introText} onChange={e => setIntroText(e.target.value)} rows={2} placeholder="Kies hieronder een moment dat jou uitkomt." /></label>
+      <label>Tekst bij de bevestiging en de agenda-uitnodiging<Textarea value={inviteMessage} onChange={e => setInviteMessage(e.target.value)} rows={2} placeholder="Fijn dat we een moment inplannen. Tot dan!" /></label>
       <BookingVideoSelect value={video} sourceProvider={selectedProvider} videoServices={videoServices} onChange={setVideo} />
       <label>Vaste videocall-link (optioneel)<Input value={meetingUrl} onChange={e => setMeetingUrl(e.target.value)} placeholder="https://… — gaat vóór de keuze hierboven" /></label>
-      {sources.length === 0 && <p className="muted">Er is nog geen schrijfbare agenda beschikbaar. Koppel of maak eerst een agenda.</p>}
+      {sources.length === 0 && <p className="muted">Er is nog geen agenda waarin ResoFly mag schrijven. Koppel of maak eerst een agenda (Instellingen → Agenda).</p>}
       <div className="mbk-form-actions">
         <Button variant="primary" onClick={submit} disabled={busy || !sourceId}>{mode === 'create' ? 'Aanmaken' : 'Opslaan'}</Button>
         <Button onClick={onCancel} disabled={busy}>Annuleren</Button>
@@ -314,19 +388,20 @@ function LinkForm({ mode, sources, videoServices, clients, busy, onSubmit, onCan
   );
 }
 
-function LinkDetail({ detail, organizationId, sources, videoServices, clients, clientEmail, token, busy, canWrite, onSavedPatch, onRegenerate, onSendMail, onAddSlots, onRemoveSlot, onCancelBooking, onDelete }: {
+function LinkDetail({ detail, organizationId, sources, videoServices, clients, client, token, busy, canWrite, onSavedPatch, onRegenerate, onExtend, onSendMail, onAddSlots, onRemoveSlot, onCancelBooking, onDelete }: {
   detail: BookingLinkDetail;
   organizationId: UUID;
   sources: CalendarSource[];
   videoServices?: VideoServices | null;
   clients: Array<{ id: UUID; label: string }>;
-  clientEmail: string | null;
+  client: { name: string; contact_name?: string | null; email?: string | null } | null;
   token: { token: string; url: string } | null;
   busy: boolean;
   canWrite: boolean;
   onSavedPatch: (patch: Record<string, unknown>) => void;
   onRegenerate: () => void;
-  onSendMail: (recipient?: { email?: string; name?: string }) => void;
+  onExtend: () => void;
+  onSendMail: (recipient: { email: string; name?: string }, opts: { regenerate: boolean }) => void;
   onAddSlots: (slots: Array<{ startsAt: string; endsAt: string }>) => void;
   onRemoveSlot: (slotId: UUID) => void;
   onCancelBooking: (bookingId: UUID) => void;
@@ -336,12 +411,36 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
   const [editing, setEditing] = useState(false);
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState(client?.email ?? '');
+  const [recipientName, setRecipientName] = useState(client?.contact_name || client?.name || '');
+  const [showPast, setShowPast] = useState(false);
 
   const slots = detail.slots as MeetingBookingSlot[];
   const bookings = detail.bookings as MeetingBooking[];
-  const openCount = slots.filter(s => s.status === 'open').length;
+  const now = Date.now();
+  const upcomingSlots = slots.filter(s => Date.parse(s.ends_at) > now && s.status !== 'cancelled');
+  const pastSlots = slots.filter(s => Date.parse(s.ends_at) <= now || s.status === 'cancelled');
+  const openCount = detail.open_slot_count ?? upcomingSlots.filter(s => s.status === 'open').length;
   // "Niet geboekt" = geen lopende of bevestigde boekingen; alleen dan mag de hele link weg.
   const activeBookingCount = bookings.filter(b => b.status === 'pending' || b.status === 'confirmed').length;
+  const slotById = useMemo(() => new Map(slots.map(s => [s.id, s])), [slots]);
+  const visibleBookings = bookings.filter(b => b.status !== 'failed');
+  const upcomingBookings = visibleBookings.filter(b => { const s = slotById.get(b.slot_id); return !s || Date.parse(s.ends_at) > now; });
+  const pastBookings = visibleBookings.filter(b => { const s = slotById.get(b.slot_id); return s && Date.parse(s.ends_at) <= now; });
+
+  const state = detail.state ?? (link.status === 'closed' ? 'closed' : 'open');
+  const expiry = expiryLabel(link.public_token_expires_at, now);
+  // Waarom mailen nu niet kan, kort: de volledige uitleg staat al bovenaan.
+  const MAIL_BLOCKED: Record<string, string> = {
+    expired: 'Verleng de link eerst; daarna kun je hem mailen.',
+    closed: 'Heropen de link eerst; daarna kun je hem mailen.',
+    full: 'Via deze link zijn alle afspraken gemaakt die kunnen.',
+    unavailable: 'Deze link boekt niets meer. Maak een nieuwe link.',
+  };
+  const mailBlocked = state !== 'open' ? (MAIL_BLOCKED[state] ?? linkStateExplanation(state, openCount))
+    : openCount === 0 ? 'Zet eerst een paar momenten op de link: anders ziet de klant een lege pagina.'
+    : null;
 
   // ── Visueel week-rooster (hergebruik TimeBlockGrid) ──────────────────────────
   //
@@ -417,8 +516,6 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
     };
   }, [drawing]);
 
-  const expired = link.public_token_expires_at ? new Date(link.public_token_expires_at).getTime() < Date.now() : true;
-
   const addSlot = () => {
     if (!start || !end) return;
     const startsAt = localToIso(start);
@@ -426,6 +523,29 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
     if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) return;
     onAddSlots([{ startsAt, endsAt }]);
     setStart(''); setEnd('');
+  };
+
+  const copyLink = () => {
+    if (!token) return;
+    void navigator.clipboard?.writeText(token.url).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    }).catch(() => setCopied(false));
+  };
+
+  const confirmRegenerate = () => {
+    if (confirm('Een nieuwe link maken?\n\nDe link die de klant al heeft (ook die in een eerder verstuurde mail) werkt daarna niet meer. Afspraken die al gemaakt zijn, blijven staan.\n\nIs de link alleen verlopen? Kies dan liever "Verlengen": dan blijft dezelfde link werken.')) onRegenerate();
+  };
+
+  const sendMail = () => {
+    const email = recipientEmail.trim();
+    if (!email) return;
+    if (!token) {
+      if (!confirm(`De link zelf bewaren we niet (alleen een versleutelde verwijzing), dus er wordt een nieuwe link gemaakt en naar ${email} gestuurd.\n\nDe link die eerder is gedeeld, werkt daarna niet meer. Doorgaan?`)) return;
+      onSendMail({ email, name: recipientName.trim() || undefined }, { regenerate: true });
+      return;
+    }
+    onSendMail({ email, name: recipientName.trim() || undefined }, { regenerate: false });
   };
 
   if (editing) {
@@ -449,17 +569,20 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="mbk-detail">
       <div className="card mbk-detail-head-card">
         <div className="mbk-detail-head">
           <div className="mbk-detail-title">
-            <h3>{link.title}</h3>
-            <div className="muted" style={{ fontSize: 13 }}>
-              Agenda: {detail.source_name ?? '— (verwijderd)'}{detail.source_provider ? ` · ${PROVIDER_LABEL[detail.source_provider] ?? detail.source_provider}` : ''}
-              {' · '}Max {link.max_total_bookings} totaal, {link.max_per_week}/week
-              {link.status === 'closed' ? ' · gesloten' : ''}
+            <div className="mbk-detail-title-row">
+              <h3>{link.title}</h3>
+              <BookingStateBadge state={state} />
             </div>
-            {detail.needs_reconnect && <div className="alert alert-danger" style={{ marginTop: 8 }}>De gekoppelde agenda-verbinding is niet meer actief. Koppel het account opnieuw voordat je boekingen laat plaatsvinden.</div>}
+            <div className="muted mbk-detail-meta">
+              {client ? `${client.name} · ` : ''}Agenda: {detail.source_name ?? '— (verwijderd)'}{detail.source_provider ? ` · ${PROVIDER_LABEL[detail.source_provider] ?? detail.source_provider}` : ''}
+              {' · '}hooguit {link.max_total_bookings} {link.max_total_bookings === 1 ? 'afspraak' : 'afspraken'}, {link.max_per_week} per week
+            </div>
+            <p className={`mbk-state-line tone-${LINK_STATE_LABELS[state]?.tone ?? 'muted'}`}>{linkStateExplanation(state, openCount)}</p>
+            {detail.needs_reconnect && <div className="alert alert-danger" style={{ marginTop: 8 }}>De gekoppelde agenda-verbinding is niet meer actief. Koppel het account opnieuw (Instellingen → Agenda), anders mislukken de boekingen.</div>}
           </div>
           {canWrite && (
             <div className="mbk-detail-actions">
@@ -472,10 +595,10 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
                 variant="danger"
                 disabled={busy || activeBookingCount > 0}
                 title={activeBookingCount > 0
-                  ? 'Er staan nog boekingen op deze link. Annuleer die eerst om de link te kunnen verwijderen.'
+                  ? 'Via deze link zijn afspraken gemaakt. Sluit de link liever: dan kan er niets meer geboekt worden en blijven de afspraken bewaard.'
                   : 'Deze boekingslink volledig verwijderen'}
                 onClick={() => {
-                  if (confirm(`Boekingslink "${link.title}" volledig verwijderen? De beschikbare blokken worden ook verwijderd. Dit kan niet ongedaan worden gemaakt.`)) onDelete();
+                  if (confirm(`Boekingslink "${link.title}" volledig verwijderen? De momenten gaan ook weg en de link werkt niet meer. Dit kan niet ongedaan worden gemaakt.`)) onDelete();
                 }}
               >
                 Verwijderen
@@ -486,31 +609,54 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
       </div>
 
       {/* Link delen */}
-      <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <strong>Boekingslink delen</strong>
+      <div className="card mbk-share">
+        <div className="mbk-share-head">
+          <strong>Link delen</strong>
+          <span className={`mbk-expiry tone-${expiry.tone}`}>{expiry.text}</span>
+          {canWrite && link.has_token && (expiry.tone === 'expired' || expiry.tone === 'soon') && (
+            <Button onClick={onExtend} disabled={busy} title="Dezelfde link werkt daarna weer 120 dagen">
+              <RefreshCw size={14} /> Verlengen
+            </Button>
+          )}
+        </div>
         {token ? (
           <>
             <div className="mbk-share-row">
-              <Input readOnly value={token.url} onFocus={e => e.currentTarget.select()} />
-              <Button onClick={() => navigator.clipboard?.writeText(token.url)}>Kopieer</Button>
+              <Input readOnly value={token.url} onFocus={e => e.currentTarget.select()} aria-label="Boekingslink" />
+              <Button onClick={copyLink} aria-live="polite">{copied ? <><Check size={14} /> Gekopieerd</> : <><Copy size={14} /> Kopieer</>}</Button>
+              <Button onClick={() => window.open(token.url, '_blank', 'noopener,noreferrer')} title="Bekijk de pagina zoals de klant hem ziet">
+                <ExternalLink size={14} /> Bekijk als klant
+              </Button>
             </div>
-            <p className="muted" style={{ fontSize: 12, margin: 0 }}>Bewaar of verstuur de link nu — om veiligheidsredenen tonen we hem hierna niet meer (alleen een versleutelde verwijzing wordt opgeslagen).</p>
-            {canWrite && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <Button variant="primary" disabled={busy} onClick={() => onSendMail(clientEmail ? { email: clientEmail } : undefined)}>
-                  {clientEmail ? `Mailen naar ${clientEmail}` : 'Mailen naar klant'}
-                </Button>
-              </div>
-            )}
+            <p className="muted mbk-share-note"><ShieldCheck size={13} /> Kopieer of verstuur de link nu. Om veiligheidsredenen bewaren we hem niet leesbaar; na verversen zie je hem hier niet meer.</p>
           </>
         ) : (
-          <>
-            <p className="muted" style={{ margin: 0 }}>
-              {expired ? 'Er is nog geen geldige link. ' : 'De link is aangemaakt maar wordt niet meer getoond. '}
-              Genereer een (nieuwe) link om hem te kunnen kopiëren of mailen.
-            </p>
-            {canWrite && <div><Button variant="primary" onClick={onRegenerate} disabled={busy}>Link (opnieuw) genereren</Button></div>}
-          </>
+          <p className="muted mbk-share-note">
+            <ShieldCheck size={13} /> {!link.has_token
+              ? 'Deze link heeft nog geen URL. Maak er een om hem te kunnen delen.'
+              : state === 'expired'
+                ? 'Met Verlengen werkt dezelfde link weer, ook die in de mail die de klant al heeft.'
+                : 'We bewaren de link niet leesbaar, dus hij staat hier niet meer. Wil je hem opnieuw sturen? Dan maken we een nieuwe link, en werkt de oude niet meer.'}
+          </p>
+        )}
+        {canWrite && (
+          <div className="mbk-mail">
+            <div className="mbk-mail-fields">
+              <label>Naar
+                <Input type="email" value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)} placeholder="klant@voorbeeld.nl" autoComplete="off" />
+              </label>
+              <label>Naam in de aanhef
+                <Input value={recipientName} onChange={e => setRecipientName(e.target.value)} placeholder="Naam van de klant" autoComplete="off" />
+              </label>
+            </div>
+            <div className="mbk-mail-actions">
+              <Button variant="primary" disabled={busy || !recipientEmail.trim() || Boolean(mailBlocked)} onClick={sendMail} title={mailBlocked ?? undefined}>
+                <Send size={14} /> {token ? 'Link mailen' : 'Nieuwe link mailen'}
+              </Button>
+              <Button onClick={confirmRegenerate} disabled={busy}>Nieuwe link maken</Button>
+            </div>
+            {mailBlocked && <p className="muted mbk-share-note">{mailBlocked}</p>}
+          </div>
         )}
       </div>
 
@@ -518,14 +664,14 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
       {canWrite && link.source_id && (
         <div className="card mbk-drawcard">
           <div className="mbk-drawcard-text">
-            <strong>Blokken tekenen</strong>
+            <strong>Momenten tekenen</strong>
             <p className="muted">
-              Het weekrooster opent schermvullend. Sleep de momenten waarop deze klant mag boeken;
+              Het weekrooster opent schermvullend. Sleep de momenten waarop de klant mag kiezen;
               je eigen afspraken staan als context in beeld. Met <em>Klaar</em> (of Escape) kom je hier terug.
             </p>
           </div>
           <div className="mbk-drawcard-side">
-            <span className="mbk-drawcard-count"><strong>{openCount}</strong> open blok{openCount === 1 ? '' : 'ken'}</span>
+            <span className="mbk-drawcard-count"><strong>{openCount}</strong> vrij{openCount === 1 ? ' moment' : 'e momenten'}</span>
             <Button variant="primary" onClick={openDrawing} disabled={busy}>
               <Maximize2 size={15} /> Rooster openen
             </Button>
@@ -534,10 +680,10 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
       )}
 
       {canWrite && link.source_id && drawing && (
-        <div className="mbk-draw" role="dialog" aria-modal="true" aria-label="Blokken tekenen">
+        <div className="mbk-draw" role="dialog" aria-modal="true" aria-label="Momenten tekenen">
           <header className="mbk-draw-bar">
             <div className="mbk-draw-title">
-              <strong>Blokken tekenen</strong>
+              <strong>Momenten tekenen</strong>
               <span className="muted">{link.title}</span>
             </div>
             <div className="mbk-draw-week">
@@ -547,12 +693,12 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
               <Button onClick={() => setWeekAnchor(startOfWeek(new Date()))} disabled={busy}>Deze week</Button>
             </div>
             <div className="mbk-draw-done">
-              <span className="mbk-draw-count"><strong>{openCount}</strong> open</span>
+              <span className="mbk-draw-count"><strong>{openCount}</strong> vrij</span>
               <Button variant="primary" onClick={closeDrawing}><Minimize2 size={15} /> Klaar</Button>
             </div>
           </header>
           <p className="mbk-draw-hint">
-            Sleep over het rooster om een blok toe te voegen · klik een groen blok om het te verwijderen (🔒 = al geboekt).
+            Sleep over het rooster om een moment toe te voegen · klik een groen moment om het weg te halen (🔒 = al geboekt) · een moment in het verleden kan niemand boeken.
           </p>
           {/* .calendar-agenda-page-scope zodat de gedeelde .tb-scroll-hoogte de vaste
               agenda-opmaak meekrijgt; de overlay zelf zet hem daarna op vullend. */}
@@ -578,62 +724,86 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
         </div>
       )}
 
-      {/* Beschikbare blokken (lijst + handmatige invoer als alternatief) */}
-      <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <strong>Beschikbare blokken ({openCount} open)</strong>
+      {/* Momenten (lijst + handmatige invoer als alternatief) */}
+      <div className="card mbk-section">
+        <strong>Momenten ({openCount} vrij)</strong>
         {canWrite && (
           <div className="mbk-slotform">
-            <label>Van<Input type="datetime-local" value={start} onChange={e => setStart(e.target.value)} /></label>
-            <label>Tot<Input type="datetime-local" value={end} onChange={e => setEnd(e.target.value)} /></label>
-            <Button variant="primary" onClick={addSlot} disabled={busy || !start || !end}>Blok toevoegen</Button>
+            <label>Van<Input type="datetime-local" min={nowLocalInput()} value={start} onChange={e => setStart(e.target.value)} /></label>
+            <label>Tot<Input type="datetime-local" min={start || nowLocalInput()} value={end} onChange={e => setEnd(e.target.value)} /></label>
+            <Button variant="primary" onClick={addSlot} disabled={busy || !start || !end}>Moment toevoegen</Button>
           </div>
         )}
-        {slots.length === 0 && <p className="muted">Nog geen blokken. Open hierboven het rooster en teken ze, of voeg handmatig tijden toe waaruit de klant kan kiezen.</p>}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {slots.map(s => (
-            <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,.06)' }}>
-              <span>{fmt(s.starts_at)} – {new Intl.DateTimeFormat('nl-NL', { timeStyle: 'short', timeZone: 'Europe/Amsterdam' }).format(new Date(s.ends_at))}</span>
-              <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <SlotBadge status={s.status} />
-                {canWrite && (s.status === 'open' || s.status === 'cancelled') && <Button variant="danger" onClick={() => onRemoveSlot(s.id)} disabled={busy}>Verwijder</Button>}
+        {upcomingSlots.length === 0 && <p className="muted">Nog geen momenten die nog moeten komen. Open hierboven het rooster en teken ze, of voeg ze hier handmatig toe.</p>}
+        <div className="mbk-rows">
+          {upcomingSlots.map(s => (
+            <div key={s.id} className="mbk-row">
+              <span>{fmtMoment(s.starts_at, s.ends_at)}</span>
+              <span className="mbk-row-side">
+                <span className={`mbk-badge tone-${SLOT_STATUS_LABELS[s.status]?.tone ?? 'muted'}`}>{SLOT_STATUS_LABELS[s.status]?.label ?? s.status}</span>
+                {canWrite && s.status === 'open' && <Button variant="danger" onClick={() => onRemoveSlot(s.id)} disabled={busy}>Weghalen</Button>}
               </span>
             </div>
           ))}
         </div>
+        {pastSlots.length > 0 && (
+          <button type="button" className="mbk-toggle" onClick={() => setShowPast(v => !v)} aria-expanded={showPast}>
+            {showPast ? 'Verberg' : 'Toon'} {pastSlots.length} voorbije of vervallen {pastSlots.length === 1 ? 'moment' : 'momenten'}
+          </button>
+        )}
+        {showPast && <div className="mbk-rows is-past">
+          {pastSlots.map(s => (
+            <div key={s.id} className="mbk-row">
+              <span>{fmtMoment(s.starts_at, s.ends_at)}</span>
+              <span className="mbk-row-side">
+                <span className={`mbk-badge tone-${SLOT_STATUS_LABELS[s.status]?.tone ?? 'muted'}`}>{Date.parse(s.ends_at) <= now && s.status === 'open' ? 'Voorbij' : (SLOT_STATUS_LABELS[s.status]?.label ?? s.status)}</span>
+                {canWrite && (s.status === 'open' || s.status === 'cancelled') && <Button variant="danger" onClick={() => onRemoveSlot(s.id)} disabled={busy}>Weghalen</Button>}
+              </span>
+            </div>
+          ))}
+        </div>}
       </div>
 
-      {/* Boekingen */}
-      <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <strong>Boekingen</strong>
-        {bookings.filter(b => b.status !== 'failed').length === 0 && <p className="muted">Nog geen boekingen.</p>}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {bookings.filter(b => b.status !== 'failed').map(b => {
-            const slot = slots.find(s => s.id === b.slot_id);
-            return (
-              <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                <div>
-                  <div style={{ fontWeight: 600 }}>{b.booked_name || b.booked_email}</div>
-                  <div className="muted" style={{ fontSize: 12 }}>
-                    {slot ? fmtDate(slot.starts_at) + ' · ' + fmt(slot.starts_at).split(' ').slice(-1) : '—'} · {b.booked_email} · {b.status}
-                  </div>
-                </div>
-                {canWrite && b.status === 'confirmed' && <Button variant="danger" disabled={busy} onClick={() => onCancelBooking(b.id)}>Annuleren</Button>}
-              </div>
-            );
-          })}
-        </div>
+      {/* Afspraken */}
+      <div className="card mbk-section">
+        <strong>Afspraken</strong>
+        {visibleBookings.length === 0 && <p className="muted">Nog geen afspraken via deze link.</p>}
+        {upcomingBookings.length > 0 && <BookingRows bookings={upcomingBookings} slotById={slotById} canWrite={canWrite} busy={busy} onCancel={onCancelBooking} />}
+        {pastBookings.length > 0 && <>
+          <div className="mbk-subhead muted">Geweest</div>
+          <BookingRows bookings={pastBookings} slotById={slotById} canWrite={false} busy={busy} onCancel={onCancelBooking} />
+        </>}
       </div>
     </div>
   );
 }
 
-function SlotBadge({ status }: { status: MeetingBookingSlot['status'] }) {
-  const map: Record<string, { label: string; color: string }> = {
-    open: { label: 'Open', color: '#3ba55d' },
-    pending: { label: 'Bezig…', color: '#d9a441' },
-    booked: { label: 'Geboekt', color: '#5865f2' },
-    cancelled: { label: 'Geannuleerd', color: '#888' },
-  };
-  const s = map[status] ?? map.open;
-  return <span style={{ fontSize: 12, color: s.color, fontWeight: 600 }}>{s.label}</span>;
+function BookingRows({ bookings, slotById, canWrite, busy, onCancel }: {
+  bookings: MeetingBooking[];
+  slotById: Map<string, MeetingBookingSlot>;
+  canWrite: boolean;
+  busy: boolean;
+  onCancel: (bookingId: UUID) => void;
+}) {
+  return <div className="mbk-rows">
+    {bookings.map(b => {
+      const slot = slotById.get(b.slot_id);
+      return (
+        <div key={b.id} className="mbk-row">
+          <div className="mbk-row-main">
+            <div className="mbk-row-title">{b.booked_name || b.booked_email}</div>
+            <div className="muted mbk-row-sub">
+              {slot ? `${fmtDayLong(slot.starts_at)} · ${fmtTime(slot.starts_at)}–${fmtTime(slot.ends_at)}` : '—'} · {b.booked_email}
+            </div>
+          </div>
+          <span className="mbk-row-side">
+            <span className={`mbk-badge tone-${b.status === 'confirmed' ? 'success' : b.status === 'pending' ? 'warning' : 'muted'}`}>{BOOKING_STATUS_LABELS[b.status] ?? b.status}</span>
+            {canWrite && b.status === 'confirmed' && <Button variant="danger" disabled={busy} onClick={() => {
+              if (confirm(`De afspraak met ${b.booked_name || b.booked_email} annuleren?\n\nHij wordt uit de agenda gehaald en het moment komt weer vrij. Laat de klant zelf weten dat de afspraak niet doorgaat.`)) onCancel(b.id);
+            }}>Annuleren</Button>}
+          </span>
+        </div>
+      );
+    })}
+  </div>;
 }
