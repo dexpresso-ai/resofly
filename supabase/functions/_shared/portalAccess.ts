@@ -33,3 +33,17 @@ export function portalDocumentScopeFilter(clientId: string, projectIds: Readonly
   if (ids.length === 0) return null;
   return `client_id.eq.${clientId},and(client_id.is.null,project_id.in.(${ids.join(',')}))`;
 }
+
+/**
+ * Tickets in het portaal: niet voor een klant op inactief. Een klant met wie je
+ * niet meer werkt, dient geen tickets meer in, leest ze niet meer en krijgt er
+ * geen mail over (keuze van de eigenaar, 10 november 2026). Tot dan kon zo'n
+ * klant gewoon tickets indienen, en elk ticket liet bij het team een melding
+ * afgaan. Facturen, offertes, contracten en berichten blijven: een oud-klant
+ * kan zo nog een openstaande factuur terugvinden en betalen.
+ */
+export const PORTAL_TICKETS_CLOSED_MESSAGE = 'Tickets staan voor dit dossier niet meer open. Heb je toch een vraag? Stuur dan een bericht.';
+
+export function portalTicketsOpen(client: { status?: string | null } | null | undefined): boolean {
+  return String(client?.status ?? '').trim().toLowerCase() !== 'inactive';
+}

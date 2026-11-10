@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { portalDocumentDecision, portalDocumentScopeFilter } from './portalAccess.ts';
+import { portalDocumentDecision, portalDocumentScopeFilter, portalTicketsOpen } from './portalAccess.ts';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -30,4 +30,15 @@ test('lijstfilter: projectdocumenten alleen als ze geen klant hebben', () => {
   // Iets wat geen uuid is, komt niet in de filter (en een ongeldige klant weigert).
   assert.equal(portalDocumentScopeFilter(B, ['x),or(id.neq.0']), null);
   assert.throws(() => portalDocumentScopeFilter('x', [P]));
+});
+
+test('tickets: dicht voor een klant op inactief, open voor actief en prospect', () => {
+  assert.equal(portalTicketsOpen({ status: 'inactive' }), false);
+  assert.equal(portalTicketsOpen({ status: ' Inactive ' }), false);
+  assert.equal(portalTicketsOpen({ status: 'active' }), true);
+  assert.equal(portalTicketsOpen({ status: 'prospect' }), true);
+  // Zonder status (een oudere rij of een server zonder de kolom): open, zoals het was.
+  assert.equal(portalTicketsOpen({ status: null }), true);
+  assert.equal(portalTicketsOpen({}), true);
+  assert.equal(portalTicketsOpen(null), true);
 });

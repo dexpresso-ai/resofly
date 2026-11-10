@@ -201,6 +201,8 @@ export interface PortalNotificationState {
   otherPortalUsers: number;
   /** Verstuurt de leverancier überhaupt meldingen? */
   orgEnabled: boolean;
+  /** false = de klant staat op inactief: geen tickets, dus niets in te stellen. Ontbreekt bij een oudere server. */
+  ticketsOpen?: boolean;
   settings: PortalNotificationSettings;
   defaults: PortalNotificationSettings;
 }
@@ -262,6 +264,12 @@ export interface PortalAccount {
   invoices: PortalInvoice[];
   quotes: PortalQuote[];
   contracts: PortalContract[];
+  /**
+   * false = de klant staat op inactief: geen tickets in het portaal (de lijst
+   * is dan leeg), geen indienen, geen meldingen. Ontbreekt bij een oudere
+   * server; dan geldt open.
+   */
+  ticketsOpen?: boolean;
   tickets: PortalTicket[];
   galleries: PortalGallery[];
   /** Aantal met deze contactpersoon gedeelde mappen/bestanden — voedt het tabbladtelletje. */

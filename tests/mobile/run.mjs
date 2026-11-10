@@ -152,6 +152,10 @@ const PAGES = {
   // Via de deeplink uit de meldingsmail, zoals een klant er ook binnenkomt.
   'portal-messages': { path: '/portal?view=berichten', portal: true },
   'portal-settings': { path: '/portal?view=instellingen', portal: true },
+  // 2026-11-10 — een klant op inactief: geen tab Tickets, Berichten op de plek
+  // van "Open tickets", en bij Instellingen alleen de uitleg over tickets.
+  'portal-inactief': { path: '/portal', portal: true, mock: { portalInactive: true } },
+  'portal-inactief-settings': { path: '/portal?view=instellingen', portal: true, mock: { portalInactive: true } },
   // Het voorbeeld dat Instellingen → Huisstijl in een iframe toont: het echte
   // portaal op verzonnen gegevens, zonder sessie. Los geopend moet het net zo
   // goed staan als het portaal zelf.
@@ -239,6 +243,8 @@ const FIRST_ITEM = {
   'public-invoice': { selector: '.public-lines', maxTop: 700 },
   'public-booking': { selector: '.booking-slot', maxTop: 360 },
   portal: { selector: '.portal-row', maxTop: 380 },
+  // Zelfde opbouw als het portaal, alleen zonder tab Tickets.
+  'portal-inactief': { selector: '.portal-row', maxTop: 380 },
   // 2026-10-04 — Berichten en Instellingen in het portaal, geopend via de
   // deeplink uit de meldingsmail. Gemeten: eerste gesprek 204px, eerste
   // schakelaar 267px; de grenzen liggen zo'n 20% hoger.

@@ -538,7 +538,67 @@ export default async function tickets() {
     gelijk(meldingen(met), ['ticket_new', 'ticket_note_client'], 'push voor het lid met leesrecht');
   });
 
-  // ── 10. Remmen: een klant maakt het mailquotum van het team niet op ─────
+  // ── 10. Een klant op inactief: geen tickets meer ──────────────────────
+  // Keuze van de eigenaar (10 november): een klant op inactief hoeft niet meer
+  // bij de tickets. Facturen en berichten blijven.
+  groep('Tickets — een klant op inactief');
+  let ticketB = null;
+
+  await stap('een wachtende melding gaat niet meer uit zodra de klant op inactief staat', async () => {
+    const res = await teamTicket(w, w.medewerker, { client_id: w.klantB.id, title: 'Voor klant B' });
+    gelijk(res.status, 201, res.tekst);
+    ticketB = res.json[0];
+    const inactief = await rest(`clients?id=eq.${w.klantB.id}&select=status`, {
+      method: 'PATCH', token: w.medewerker.token, prefer: 'return=representation', body: { status: 'inactive' },
+    });
+    gelijk(inactief.json?.[0]?.status, 'inactive', `klant B op inactief: ${inactief.tekst}`);
+    const voor = mailsAan(klantB).length;
+    gelukt(await mailronde(), 'mailronde');
+    gelijk(mailsAan(klantB).length, voor, 'geen mail aan de inactieve klant');
+    const rij = activiteit(ticketB.id)[0];
+    gelijk(rij.notify_status, 'skipped', 'overgeslagen');
+    verwacht(/inactief/.test(rij.last_error ?? ''), `reden: ${rij.last_error}`);
+  });
+
+  await stap('in het portaal: geen tickets, en indienen, openen of reageren wordt geweigerd', async () => {
+    const data = gelukt(await portaal(w.portaalB, { action: 'getPortalData' }), 'portaal B');
+    const dossier = data.accounts.find((a) => a.client.id === w.klantB.id);
+    gelijk([dossier?.ticketsOpen, dossier?.tickets.length], [false, 0], 'tickets in het dossier');
+    verwacht(!JSON.stringify(data).includes(ticketB.id), 'het ticket staat niet in het antwoord');
+    const nieuw = geweigerd(await portaal(w.portaalB, { action: 'createTicket', clientId: w.klantB.id, title: 'Toch nog iets' }), 'indienen', [403]);
+    verwacht(/niet meer open/.test(nieuw?.error ?? ''), `melding: ${nieuw?.error}`);
+    geweigerd(await portaal(w.portaalB, { action: 'getTicketThread', ticketId: ticketB.id }), 'openen', [403]);
+    geweigerd(await portaal(w.portaalB, { action: 'addTicketNote', ticketId: ticketB.id, body: 'Hallo?' }), 'reageren', [403]);
+    gelijk(sqlRij(`select count(*)::int as n from public.tickets where client_id = ${q(w.klantB.id)}`).n, 1, 'geen nieuw ticket');
+    gelijk(sqlRij(`select count(*)::int as n from public.ticket_notes where ticket_id = ${q(ticketB.id)}`).n, 0, 'geen reactie');
+    const instellingen = gelukt(await portaal(w.portaalB, { action: 'getNotificationSettings', clientId: w.klantB.id }), 'instellingen');
+    gelijk(instellingen.ticketsOpen, false, 'de instellingen weten het ook');
+  });
+
+  await stap('een antwoord van het team op het ticket van een inactieve klant: geen mail', async () => {
+    gelijk((await teamNotitie(w, w.medewerker, ticketB.id, 'Antwoord aan een inactieve klant', false)).status, 201, 'antwoord');
+    const voor = mailsAan(klantB).length;
+    gelukt(await mailronde(), 'mailronde');
+    gelijk(mailsAan(klantB).length, voor, 'geen mail');
+    gelijk(activiteit(ticketB.id).at(-1).notify_status, 'skipped', 'overgeslagen');
+  });
+
+  await stap('weer actief: de tickets staan er weer, zonder een stapel oude mails', async () => {
+    const actief = await rest(`clients?id=eq.${w.klantB.id}&select=status`, {
+      method: 'PATCH', token: w.medewerker.token, prefer: 'return=representation', body: { status: 'active' },
+    });
+    gelijk(actief.json?.[0]?.status, 'active', actief.tekst);
+    const draad = gelukt(await portaal(w.portaalB, { action: 'getTicketThread', ticketId: ticketB.id }), 'openen');
+    gelijk(draad.notes.map((n) => n.body), ['Antwoord aan een inactieve klant'], 'het antwoord staat er');
+    const data = gelukt(await portaal(w.portaalB, { action: 'getPortalData' }), 'portaal B');
+    const dossier = data.accounts.find((a) => a.client.id === w.klantB.id);
+    gelijk([dossier?.ticketsOpen, dossier?.tickets.map((t) => t.id)], [true, [ticketB.id]], 'tickets in het dossier');
+    const voor = mailsAan(klantB).length;
+    gelukt(await mailronde(), 'mailronde');
+    gelijk(mailsAan(klantB).length, voor, 'geen oude meldingen');
+  });
+
+  // ── 11. Remmen: een klant maakt het mailquotum van het team niet op ─────
   groep('Tickets — remmen');
   const rem = await stap('een eigen organisatie voor de remmen', () => maakWereld('tickets-rem'));
 

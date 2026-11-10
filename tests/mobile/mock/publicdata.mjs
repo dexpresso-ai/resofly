@@ -76,6 +76,12 @@ export const portalSettings = { ok: true, email: c0.email, isPrimary: true, othe
   settings: { ticketCreated: true, ticketStatus: true, ticketReply: true, scope: 'all' },
   defaults: { ticketCreated: true, ticketStatus: true, ticketReply: true, scope: 'all' } };
 
+// 2026-11-10 — een klant op inactief: geen tickets meer in het portaal
+// (_shared/portalAccess.ts). Geen tab Tickets, Berichten op de plek van
+// "Open tickets", en bij Instellingen alleen de uitleg.
+export const portalDataInactive = { ...portalData, accounts: portalData.accounts.map(account => ({ ...account, ticketsOpen: false, tickets: [] })) };
+export const portalSettingsInactive = { ...portalSettings, ticketsOpen: false };
+
 // Agenda → Boekingslinks en de kaart Afspraken op de klantpagina (november
 // 2026): een open link met een geboekte afspraak en vrije momenten, en een
 // verlopen link. Zo meet de test de standen, de knoppen en de rijen, niet
