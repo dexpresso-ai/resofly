@@ -237,11 +237,13 @@ export function PublicBookingPage({ token }: { token: string }) {
   }
 
   const eyebrow = companyName ? `Afspraak met ${companyName}` : 'Afspraak inplannen';
-  // De kern in twee tegels: hoe lang, en hoe (alleen als het een videogesprek is).
+  // De kern in twee tegels: hoe lang, en of het een videogesprek is (en via
+  // welke dienst). Twee regels per tegel: op de telefoon staan de momenten zo
+  // eerder in beeld.
   const videoVia = data.link.video ? data.link.video.replace(/^Videogesprek( via | — )?/, '') : '';
   const facts = [
     ...(duration ? [{ label: 'Duur', value: duration }] : []),
-    ...(data.link.video ? [{ label: 'Hoe', value: 'Videogesprek', sub: videoVia || undefined }] : []),
+    ...(data.link.video ? [{ label: 'Videogesprek', value: /bevestiging/.test(videoVia) ? 'Link volgt per mail' : (videoVia || 'Ja') }] : []),
   ];
 
   // ── Na het boeken ───────────────────────────────────────────────────────

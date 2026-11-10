@@ -612,6 +612,14 @@ html:root .portal.boot{background:var(--hdr-mid)}
 .booking-contact-lines a{display:inline-flex;align-items:center;gap:6px}
 .booking-bar{display:none}
 @media (max-width:760px){
+  /* Lage tegels en geen witruimte boven de eerste dag: de mobiele test eist het
+     eerste moment binnen 360px. Met de nieuwe kop stond het lokaal op 356px en
+     op de CI-runner (andere lettertypen) op 366px. */
+  .public-booking .public-hero-fact{padding:7px 10px}
+  .public-booking .public-hero-fact strong{font-size:14.5px}
+  .booking-pick-head{margin-bottom:6px}
+  .booking-pick-head+.booking-week>.booking-day:first-child,
+  .booking-week-label+.booking-day{padding-top:2px}
   .booking-day{grid-template-columns:minmax(0,1fr);gap:6px;padding:8px 0}
   .booking-day-label{padding-top:0;font-size:13px}
   .booking-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}

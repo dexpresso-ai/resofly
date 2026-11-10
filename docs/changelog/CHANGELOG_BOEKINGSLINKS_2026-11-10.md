@@ -124,8 +124,8 @@ De boekingspagina is nu een klantpagina zoals de offerte en de factuur:
 
 - **In de huisstijl** van de organisatie: logo, kleuren, letters en de
   afsluiting. Bovenaan staat "Afspraak met \<bedrijf\>", de titel, de tekst, en
-  twee tegels: **hoe lang** en **hoe** ("Videogesprek via Jitsi Meet"). Eerst
-  was het een kale kaart zonder afzender.
+  twee tegels: **hoe lang** ("30 min") en **welk videogesprek** ("Jitsi Meet").
+  Eerst was het een kale kaart zonder afzender.
 - **Momenten per dag**, als een rij tijdknoppen (10:00, 10:30 …), zoals in een
   agenda. Eerst was elk moment een brede knop met de hele datum erop.
 - **De week telt in Nederlandse tijd**, net als de weeklimiet in de database.
@@ -220,9 +220,13 @@ niet (harde regel 3).
 - `npm run test:stromen -- videovergadering`: 51 stappen, 0 fout.
   `rook beveiliging agenda`: 203 stappen, 0 fout.
 - `npm run test:mobile -- --theme=both`: 440 metingen, 0 problemen. De
-  boekingspagina houdt het eerste moment op de telefoon op 356px (grens 360),
-  ook met de nieuwe kop. De klantpagina en het beheer hebben nu echte
-  boekingslinks in de nagebootste backend.
+  klantpagina en het beheer hebben nu echte boekingslinks in de nagebootste
+  backend.
+- Na de eerste uitrol faalde de mobiele test in CI op twee metingen. Op de
+  CI-runner (andere lettertypen) stond het eerste moment op de telefoon op
+  366px, terwijl de grens 360px is; lokaal was het 356px. De tegels in de kop
+  zijn nu twee regels hoog, en boven de eerste dag staat geen witruimte meer.
+  Lokaal staat het eerste moment nu op 324px. De grens is niet verhoogd.
 - In Chromium doorgeklikt tegen die backend:
   - de boekingspagina: kiezen, wisselen, Verder, een fout e-mailadres,
     bevestigen, en de schermen voor gesloten, verlopen en vol (23 controles);
