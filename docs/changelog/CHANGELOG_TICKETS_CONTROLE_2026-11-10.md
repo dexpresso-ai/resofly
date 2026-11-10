@@ -229,6 +229,46 @@ Op de stand die naar staging gaat:
 | `npm run test:loading` | alle controles groen |
 | `npm run test:mobile -- --theme=both` | 440 pagina's gemeten, 0 met problemen |
 
+## Uitrol op staging (10 november, 09:28)
+
+Merge `14fcd89` naar `staging`:
+
+- **Deploy Supabase (staging), run 207: geslaagd.**
+  - `db push` paste `20261110100000_tickets_controle` toe.
+  - Alle 40 edge functions zijn uitgerold.
+  - De rooktest was geslaagd, ook "portal-notify draait met het secret uit de cron-taak (200)"
+    en "anon heeft geen rechten in public".
+- **Nacontrole op de database** (alleen lezen):
+  - de migratie staat er als laatste;
+  - de triggers `tickets_05_authorship` en `ticket_notes_05_authorship` staan er;
+  - de pushfuncties sturen naar wie Tickets mag lezen;
+  - `authenticated` kan niet meer schrijven op `ticket_unread`;
+  - de policy van `ticket_reads` controleert het ticket.
+- **De mailronde na de uitrol:** `portal-notify` antwoordt elke minuut met 200, nu ook met het
+  aantal wachtende meldingen (`deferred`).
+- **De vingerafdruk van het schema** is gelijk aan die van een database vanaf nul, op de bekende
+  verschillen na (`pg_cron`, `pg_net`, `public._migrations`, de schrijfwijze van
+  `galleries_cover_focus_check`), plus één nieuw gevonden verschil.
+  - Op staging zijn `ai_agent_run_push` en `is_own_org_address` lid van een extensie (`supabase_vault`
+    en `citext`). Ze bestaan en werken, maar de vingerafdruk slaat ze daarom over. Een `pg_dump`
+    neemt ze ook niet mee.
+  - Dat staat los van deze wijziging.
+- **Cloudflare Pages:** de build van `staging` (14fcd89) is uitgerold op
+  `staging.resofly.pages.dev`. Gezien via de API van Cloudflare; de site zelf is vanuit deze sessie
+  niet te bereiken.
+- **Frontend checks op `staging`, run 181: geslaagd.** Daarin zitten de migraties vanaf nul, de
+  echte `deno check` (met `esm.sh` en `deno.land`), typecheck, de CSP-hash, de unittests, de
+  mobiele test in beide thema's, laden per module en de inrichtingsstappen.
+- **Een echte proef met de mail** staat klaar in de goedkeurwachtrij van de eigenaar in ResoFly.
+  Na goedkeuring:
+  1. testklant "Gerjan" krijgt het adres `gerjanvanlopik+klant@gmail.com`. Het oude adres is dat
+     van de eigenaar, en een teamlid krijgt geen klantmail;
+  2. er komt een zichtbaar antwoord op het testticket "App offline". Dat antwoord hoort dan als
+     mail "Nieuw antwoord: App offline" in Gmail aan te komen.
+
+  Eerst het adres goedkeuren, dan het antwoord. Anders gaat het antwoord naar het oude adres, en
+  dat slaat de mailronde nu over.
+
 **Noot bij `deno check`:** `esm.sh` en `deno.land` zijn vanuit deze sessie niet bereikbaar. De
 check draaide met Deno 2.9.6 uit npm en een tijdelijke import map. De zes `esm.sh`-pakketten gingen
 via `npm:`, in dezelfde versies. `serve` uit std 0.224.0 ging via een vervanger met dezelfde
