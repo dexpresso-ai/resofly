@@ -52,7 +52,7 @@ const PAGE_SECTIONS: Record<string, string> = {
   'fiscal-years': 'Financiën', 'annual-accounts': 'Financiën',
   communication: 'Communicatie', chat: 'Communicatie', marketing: 'Communicatie',
   content: 'Kennis & inzicht', notes: 'Kennis & inzicht', documents: 'Kennis & inzicht',
-  stats: 'Kennis & inzicht',
+  stats: 'Kennis & inzicht', report: 'Kennis & inzicht',
 };
 
 /** De pagina één niveau hoger. Wat hier niet in staat, hangt direct onder het dashboard. */
@@ -65,7 +65,7 @@ const PAGE_PARENT: Record<string, string> = {
   gallery: 'project',
   notes: 'content',
   documents: 'content',
-  'meeting-booking': 'calendar',
+  'meeting-booking': 'calendar', report: 'stats',
 };
 
 /** Een ouderpagina bereik je met dezelfde context; alleen wat dieper zat valt weg. */

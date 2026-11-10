@@ -80,7 +80,7 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   calendar: 'calendar',
   'meeting-booking': 'calendar',
   time: 'time',
-  stats: 'stats',
+  stats: 'stats', report: 'stats',
   content: 'content',
   notes: 'content',
   documents: 'content',

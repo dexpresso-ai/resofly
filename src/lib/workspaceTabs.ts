@@ -1,4 +1,5 @@
 import type { AppData } from '../types';
+import { aiReportTitle } from './aiReportTitles.ts';
 
 /** Menselijke titel per pagina — gedeeld door de topbar-titel én het tabblad-label
  *  in de tabbalk. `page` is bewust `string` zodat deze module geen `Page`-union hoeft
@@ -6,7 +7,7 @@ import type { AppData } from '../types';
 export const PAGE_TITLES: Record<string, string> = {
   dashboard: 'Dashboard', gerrie: 'Gerrie', weekplanner: 'Weekplanner', calendar: 'Agenda',
   'meeting-booking': 'Boekingslinks',
-  time: 'Uren', stats: 'Statistieken', content: 'Inhoud', notes: 'Notities',
+  time: 'Uren', stats: 'Rapportages', report: 'Rapportage', content: 'Inhoud', notes: 'Notities',
   documents: 'Documenten', clients: 'Klanten', client: 'Klant', communication: 'Berichten', projects: 'Projecten',
   'project-planning': 'Projectplanning', tickets: 'Tickets', chat: 'Teamchat',
   marketing: 'Marketing', quotes: 'Offertes', contracts: 'Contracten', invoices: 'Facturen',
@@ -19,9 +20,11 @@ export const PAGE_TITLES: Record<string, string> = {
 
 /** Titel voor een view: projectnaam/klantnaam waar van toepassing, anders de paginanaam. */
 export function viewTitle(
-  view: { page: string; projectId: string | null; clientId: string | null; galleryId?: string | null },
+  view: { page: string; projectId: string | null; clientId: string | null; galleryId?: string | null; statsReportId?: string | null },
   data: AppData,
 ): string {
+  // Een rapportage van Gerrie: zijn eigen titel, zodat twee open rapportages uit elkaar te houden zijn.
+  if (view.page === 'report') return aiReportTitle(view.statsReportId) ?? 'Rapportage';
   if (view.page === 'project') return data.projects.find(p => p.id === view.projectId)?.name ?? 'Project';
   if (view.page === 'client') return data.clients.find(c => c.id === view.clientId)?.name ?? 'Klant';
   // De galerijtitel zegt méér dan "Galerij" zodra er twee openstaan.

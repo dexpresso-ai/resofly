@@ -386,6 +386,60 @@ export const auditLogs = [
 ];
 
 export const ids = { ORG, USER, USER2 };
+// Rapportages met Gerrie (2026-11-09): één rapportage met inhoud, zoals Gerrie
+// hem oplevert (HTML met de RF-bouwstenen en twee datasets), plus een kort
+// gesprek en drie versies. Het kader zelf (public/rapport-weergave.html) draait
+// in de test gewoon mee; alleen de gegevens komen van de nep-backend.
+const aiReportHtml = `<div class="rf-page">
+  <header class="rf-head"><h1>Omzet per maand</h1><p>Verstuurde en betaalde facturen, excl. btw, naast vorig jaar.</p></header>
+  <div id="kpis"></div>
+  <div class="rf-grid rf-grid-2">
+    <section class="rf-card rf-span-2"><div class="rf-card-head"><h3>Per maand</h3><span class="rf-card-sub">Dit jaar tegen vorig jaar</span></div><div id="trend"></div></section>
+    <section class="rf-card"><div class="rf-card-head"><h3>Top klanten</h3></div><div id="klanten"></div></section>
+    <section class="rf-card"><div class="rf-card-head"><h3>Details</h3></div><div id="tabel"></div></section>
+  </div>
+</div>
+<script>
+const nu = RF.rows('omzet_nu');
+const totaal = RF.totals('omzet_nu').omzet;
+RF.kpis('#kpis', [{ label: 'Omzet dit jaar', value: totaal, format: 'euro', delta: RF.change(totaal, RF.totals('omzet_toen').omzet), deltaLabel: 'tegen vorig jaar' }, { label: 'Facturen', value: RF.totals('omzet_nu').aantal, format: 'num' }]);
+RF.line('#trend', { labels: nu.map(m => m.date_month_label), series: [{ name: 'Dit jaar', values: nu.map(m => m.omzet) }, { name: 'Vorig jaar', values: RF.rows('omzet_toen').map(m => m.omzet) }], format: 'euro0', area: true });
+RF.bar('#klanten', { data: RF.rows('klanten').map(r => ({ label: r.client_name, value: r.omzet })), format: 'euro0' });
+RF.table('#tabel', { rows: RF.rows('klanten'), limit: 4, total: true, columns: [{ key: 'client_name', label: 'Klant' }, { key: 'omzet', label: 'Omzet', format: 'euro' }] });
+</script>`;
+const aiReportDatasets = [
+  { key: 'omzet_nu', label: 'Omzet per maand', tool: 'query_records', input: { source: 'invoices', from: '{{begin_jaar}}', to: '{{eind_jaar}}', group_by: [{ field: 'date', period: 'month' }], measures: [{ agg: 'sum', field: 'subtotal_eur', as: 'omzet' }, { agg: 'count', as: 'aantal' }] } },
+  { key: 'omzet_toen', label: 'Omzet vorig jaar', tool: 'query_records', input: { source: 'invoices', from: '{{begin_vorig_jaar}}', to: '{{eind_vorig_jaar}}', group_by: [{ field: 'date', period: 'month' }], measures: [{ agg: 'sum', field: 'subtotal_eur', as: 'omzet' }] } },
+  { key: 'klanten', label: 'Omzet per klant', tool: 'query_records', input: { source: 'invoices', from: '{{begin_jaar}}', to: '{{eind_jaar}}', group_by: ['client_name'], measures: [{ agg: 'sum', field: 'subtotal_eur', as: 'omzet' }] } },
+];
+export const aiReports = [{
+  id: uid('r'), ...base(), title: 'Omzet per maand, naast vorig jaar', summary: 'Omzet per maand dit jaar tegen vorig jaar, met de grootste klanten.',
+  html: aiReportHtml, datasets: aiReportDatasets, version: 3, last_request: 'Zet er de grootste klanten bij', created_at: iso(day(-6)), updated_at: iso(day(-1)),
+}];
+const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+const year = NOW.getFullYear();
+const nuMaanden = MONTHS.slice(0, NOW.getMonth() + 1).map((m, i) => ({ date_month: `${year}-${String(i + 1).padStart(2, '0')}`, date_month_label: `${m} ${year}`, omzet: 14000 + ((i * 3779) % 9000), aantal: 4 + (i % 5) }));
+const toenMaanden = MONTHS.map((m, i) => ({ date_month: `${year - 1}-${String(i + 1).padStart(2, '0')}`, date_month_label: `${m} ${year - 1}`, omzet: 12000 + ((i * 2531) % 8000) }));
+const sumOf = (rows, key) => rows.reduce((s, r) => s + r[key], 0);
+export const aiReportData = {
+  reportId: aiReports[0].id, version: 3, fetchedAt: iso(NOW), today: dkey(NOW),
+  datasets: [
+    { key: 'omzet_nu', label: 'Omzet per maand', tool: 'query_records', ok: true, rows: nuMaanden.length, truncated: false, data: { source: 'invoices', groups: nuMaanden, totals: { omzet: sumOf(nuMaanden, 'omzet'), aantal: sumOf(nuMaanden, 'aantal') } } },
+    { key: 'omzet_toen', label: 'Omzet vorig jaar', tool: 'query_records', ok: true, rows: toenMaanden.length, truncated: false, data: { source: 'invoices', groups: toenMaanden, totals: { omzet: sumOf(toenMaanden, 'omzet') } } },
+    { key: 'klanten', label: 'Omzet per klant', tool: 'query_records', ok: true, rows: 5, truncated: false, data: { source: 'invoices', groups: [
+      { client_name: 'Bakkerij De Gouden Korst', omzet: 48210.5 }, { client_name: 'Jansen Installatietechniek B.V.', omzet: 39120 },
+      { client_name: 'Studio Noord', omzet: 22800 }, { client_name: 'Gemeente Utrecht', omzet: 15400.25 }, { client_name: 'De Vries & Zn', omzet: 9800 },
+    ] } },
+  ],
+};
+export const aiReportMessages = [
+  { id: uid('m'), report_id: aiReports[0].id, ...base(), role: 'user', content: 'Omzet per maand dit jaar, naast vorig jaar', version: null, usage_fraction: null, created_at: iso(day(-6)) },
+  { id: uid('m'), report_id: aiReports[0].id, ...base(), role: 'assistant', content: 'Ik heb een pagina gemaakt met de omzet per maand en vorig jaar als vergelijking.', version: 1, usage_fraction: 0.0061, created_at: iso(day(-6)) },
+  { id: uid('m'), report_id: aiReports[0].id, ...base(), role: 'user', content: 'Zet er de grootste klanten bij', version: null, usage_fraction: null, created_at: iso(day(-1)) },
+  { id: uid('m'), report_id: aiReports[0].id, ...base(), role: 'assistant', content: 'De vijf grootste klanten staan er nu onder, als staafdiagram en als tabel.', version: 3, usage_fraction: 0.0028, created_at: iso(day(-1)) },
+];
+export const aiReportVersions = [1, 2, 3].map((version) => ({ id: uid('w'), report_id: aiReports[0].id, ...base(), version, title: aiReports[0].title, summary: aiReports[0].summary, html: aiReportHtml, datasets: aiReportDatasets, request: version === 1 ? 'Omzet per maand dit jaar, naast vorig jaar' : version === 2 ? 'Maak er een lijngrafiek van' : 'Zet er de grootste klanten bij', created_at: iso(day(-7 + version * 2)) }));
+
 export const tables = {
   clients, client_contacts: [
     { id: uid('o'), ...base(), client_id: clients[0].id, name: 'Joost Vermeer', email: 'joost@dekorenaar.nl', phone: '06-11223344', role: 'Eigenaar', gives_portal_access: true, is_active: true },
@@ -417,7 +471,7 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
-  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: auditLogs, contracts: [],
+  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], ai_reports: aiReports, ai_report_messages: aiReportMessages, ai_report_versions: aiReportVersions, planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: auditLogs, contracts: [],
   client_email_threads: clientEmailThreads, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
   inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias], organization_email_domains: sendingDomains,
   // Het eerste ticket heeft een klantreactie die nog niet gelezen is (view

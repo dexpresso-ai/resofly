@@ -63,6 +63,18 @@ en `notulen`. Dat laatste gaat over opnames:
 
 Zie `docs/changelog/CHANGELOG_TRANSCRIPTIE_AI_BUDGET_2026-11-08.md`.
 
+En `rapportages`: de rapportages met Gerrie (Statistieken → Rapportages), met een streamende
+nep-Claude die tools aanroept zoals het echte model (in het scenario zelf; niet-streamende
+aanvragen beantwoordt hij zoals `nep-ai.mjs`). Getoetst:
+- een vraag wordt een pagina, met alleen lees-endpoints, exacte cijfers en alleen de eigen
+  organisatie;
+- versies, het gesprek en het verbruik in `ai_usage`, en verversen zonder verbruik;
+- de rapportage is alleen van de maker, ook tegenover de eigenaar en de beheerder;
+- schrijf-tools, een pagina met netwerkverkeer en een dataset die iets verstuurt worden geweigerd;
+- rechten die later dichtgaan, tegoed op, en verwijderen.
+
+Zie `docs/changelog/CHANGELOG_RAPPORTAGES_GERRIE_2026-11-09.md`.
+
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in
@@ -122,6 +134,11 @@ met diens eigen beslisregels (`workers/client-domains/src/logic.ts`) en de echte
 Goed om te weten: Chromium volgt een redirect uit `route.fulfill` buiten de route om (naar het
 echte netwerk); de nagebootste Worker stuurt daarom door met een pagina die meteen doorverwijst,
 en legt vast wat de echte Worker zou doen (301 of 302).
+
+En `rapportage`: op Rapportages een vraag stellen. Daarna komt de pagina met de echte cijfers in
+het afgeschermde kader, en dan verversen zonder AI, aanpassen via de chat, een oude versie
+terugzetten, het menu en verwijderen. Het scenario heeft een eigen organisatie: de cijfers
+moeten exact kloppen.
 
 En `opname`: een telefoongesprek loggen en opnemen met de nep-microfoon van Chromium.
 - de knop "Opname starten" bij een gesprek;

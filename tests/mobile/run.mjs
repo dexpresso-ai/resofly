@@ -84,6 +84,12 @@ const PAGES = {
   'calendar-event': { page: 'calendar', prepare: 'button.tb-ev:not(.tb-task-block)' },
   'calendar-task': { page: 'calendar', prepare: '.tb-task-block' },
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
+  // Rapportages met Gerrie (2026-11-09): het overzicht, de rapportbouwer van
+  // voorheen (tweede tabblad), één rapportage met het kader, en dezelfde
+  // rapportage met het gesprek open (op telefoon en tablet een paneel).
+  'stats-builder': { page: 'stats', prepare: '.aire-mode button:nth-child(2)' },
+  report: { page: 'report', statsReportId: seed.aiReports[0].id },
+  'report-chat': { page: 'report', statsReportId: seed.aiReports[0].id, prepare: '.aire-chat-toggle' },
   'clients-table': { page: 'clients', storage: { 'resofly.clients.viewMode': 'table' } },
   'projects-table': { page: 'projects', storage: { 'resofly.projects.viewMode': 'table' } },
   'tickets-table': { page: 'tickets', storage: { 'resofly.tickets.view': 'table' } },

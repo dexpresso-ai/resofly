@@ -420,7 +420,9 @@ function edgeFunction(name, body) {
     }
   }
   if (name === 'portal-login') return body?.action === 'getBranding' ? (body.key === pub.PORTAL_LOGIN_KEY ? pub.portalLoginBranding : { ok: true, branding: null }) : { ok: true, known: true };
-  if (name === 'gerrie-agent') return { ok: true, budget: { remaining_cents: 5000 }, remaining: 5000, tools: [], proposals: [], usage: [] };
+  // Rapportages met Gerrie: de gegevens van een rapportage (zonder AI), en het tegoed voor de balk.
+  if (name === 'gerrie-agent' && body?.action === 'report_data') return { ...seed.aiReportData, reportId: body.reportId };
+  if (name === 'gerrie-agent') return { ok: true, budget: { remaining_cents: 5000 }, remaining: 5000, remainingFraction: 0.72, tools: [], proposals: [], usage: [] };
   // Instellingen → Betalen: gekoppeld in testmodus, met een lang profiel. Dat
   // is de langste stand van de kaart (profiel, waarschuwing, twee rijen knoppen).
   if (name === 'invoice-workflow' && body?.action === 'getInvoiceMollieStatus') {
@@ -527,9 +529,9 @@ export function storageScript(spec, extra = {}) {
     // werkruimtepagina's ervoor moet hier eerst weg — anders opent "/" niet
     // het inlogscherm maar de werkruimte.
     const items = { ...(view.portal ? { 'resofly.portal.auth': JSON.stringify(session) } : {}), ...extra };
-    return `(() => { localStorage.clear(); const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); })();`;
+    return `(() => { try { localStorage.clear(); const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); } catch { /* afgeschermd kader */ } })();`;
   }
-  const tabs = { tabs: [{ page: view.page, projectId: view.projectId ?? null, clientId: view.clientId ?? null, statsReportId: null, galleryId: null }], activeIndex: 0 };
+  const tabs = { tabs: [{ page: view.page, projectId: view.projectId ?? null, clientId: view.clientId ?? null, statsReportId: view.statsReportId ?? null, galleryId: null }], activeIndex: 0 };
   const items = {
     'sb-example-auth-token': JSON.stringify(session),
     'brandcore.activeOrganizationId': orgId,
@@ -538,7 +540,10 @@ export function storageScript(spec, extra = {}) {
     'resofly-dashboard-scope': 'mine',
     ...extra,
   };
-  return `(() => { const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); })();`;
+  // Playwright draait dit in élk frame, ook in het afgeschermde kader van een
+  // rapportage (sandbox zonder allow-same-origin). Daar is geen opslag, en dat is
+  // precies de bedoeling; dan niets doen in plaats van een fout te gooien.
+  return `(() => { try { const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); } catch { /* afgeschermd kader */ } })();`;
 }
 
 export { seed };

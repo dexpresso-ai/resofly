@@ -100,3 +100,34 @@
 
 /mcp/*
   X-Robots-Tag: noindex, nofollow
+
+# Het kader van de rapportages van Gerrie (public/rapport-weergave.html). De app
+# laadt het in een <iframe sandbox="allow-scripts"> zonder allow-same-origin: het
+# heeft dan geen eigen herkomst en kan niet bij de sessie of de opslag van de app.
+# De HTML erin schrijft Gerrie, met een eigen script dat de cijfers uitrekent.
+# Daarom hier een eigen CSP met 'unsafe-inline' en ZONDER de hash van het
+# thema-script: een hash in script-src schakelt 'unsafe-inline' uit, en dan
+# draait geen enkele rapportage. Het netwerk is dicht (default-src 'none',
+# connect-src 'none'), alleen de lettertypen van ResoFly mogen. Alleen de eigen
+# app mag het kader inlijsten. scripts/check-csp-hash.mjs controleert precies
+# deze regels. Cloudflare Pages stuurt /rapport-weergave.html door naar
+# /rapport-weergave; vandaar twee paden met dezelfde regels.
+/rapport-weergave
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  ! Referrer-Policy
+  Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+  X-DNS-Prefetch-Control: off
+  Referrer-Policy: no-referrer
+  X-Robots-Tag: noindex, nofollow
+
+/rapport-weergave.html
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  ! Referrer-Policy
+  Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+  X-DNS-Prefetch-Control: off
+  Referrer-Policy: no-referrer
+  X-Robots-Tag: noindex, nofollow
