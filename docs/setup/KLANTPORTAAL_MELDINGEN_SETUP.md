@@ -76,6 +76,7 @@ select cron.schedule(
 | `PORTAL_NOTIFY_MIN_AGE_SECONDS` | 30 | Zo lang na de eerste wijziging op een ticket wacht de mail. Een antwoord en een statuswijziging vlak na elkaar komen zo samen in één mail. |
 | `PORTAL_NOTIFY_MAX_AGE_HOURS` | 48 | Ouder dan dit wordt niet meer gemaild. Zet je de cron pas later aan, dan krijgen klanten geen stapel oude meldingen. |
 | `PORTAL_NOTIFY_BATCH` | 50 | Hoeveel gebeurtenissen per minuut maximaal. |
+| `PORTAL_NOTIFY_CLIENT_MAILS_PER_HOUR` | 100 | Meldingen die een klant zelf veroorzaakt (de bevestiging van zijn eigen ticket, een reactie van een collega), per organisatie per uur. Die tellen niet in het mailquotum van de organisatie, zodat een klant met veel tickets de facturen van de leverancier niet tegenhoudt. Wat erboven komt, wacht tot het volgende uur. |
 
 ## 4. Controleren
 
@@ -95,9 +96,14 @@ select kind, notify_status, attempts, last_error, notified_emails, created_at
  limit 20;
 ```
 
-- `queued` / `sending` — wacht op de volgende ronde;
+- `queued` / `sending` — wacht op de volgende ronde. Begint `last_error` met
+  "Wacht:", dan wacht de melding op het mailquotum of op de rem voor meldingen
+  die klanten zelf veroorzaken; dat telt niet als poging (tot 10 november wel,
+  en was zo'n melding na vijf minuten `dead`);
 - `done` — verwerkt; `notified_emails` zegt wie een mail kreeg (leeg kan: niemand
-  wilde deze melding, of de klant heeft geen portaaladres);
+  wilde deze melding, de klant heeft geen portaaladres, of het adres is van een
+  actief teamlid van de organisatie: dat is daar geen klant en krijgt geen
+  klantmail);
 - `skipped` — bewust niet gemaild, met de reden in `last_error` (organisatie heeft
   het uitgezet, antwoord weer intern gemaakt, te oud, gewijzigd via de API met
   een sleutel zonder `execute_high`, …);

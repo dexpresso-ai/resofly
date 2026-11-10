@@ -5,6 +5,7 @@ import { PROJECTS_ACTIONS } from './actions/projects.ts';
 import { CALENDAR_ACTIONS } from './actions/calendar.ts';
 import { ADMIN_ACTIONS } from './actions/admin.ts';
 import { MARKETING_ACTIONS } from './actions/marketing.ts';
+import { TICKETS_ACTIONS } from './actions/tickets.ts';
 import { ActionError, type ActionCtx, type ActionDef } from './actions/types.ts';
 
 /**
@@ -153,4 +154,23 @@ test('een datum in een handeling bestaat echt: 30 februari is een fout met het v
   assert.throws(() => isoDate({ d: '2026-02-30' }, 'd'), (error: unknown) => error instanceof ActionError && /"d" is geen bestaande datum/.test(error.message));
   assert.throws(() => optIsoDate({ d: '2026-13-01' }, 'd'), ActionError);
   assert.equal(optIsoDate({}, 'd'), null);
+});
+
+test('tickets: een klant koppelen vraagt leesrecht op Klanten, en zonder dat recht geen klantnamen', async () => {
+  // Controle van 10 november: de handelingen lazen klantnamen met de
+  // service-role, ook voor wie Klanten niet mag lezen, en koppelden een ticket
+  // aan elke klant-id die zo iemand ergens vandaan had.
+  const setClient = action(TICKETS_ACTIONS, 'ticket.set_client');
+  const listNotes = action(TICKETS_ACTIONS, 'ticket.list_notes');
+  const OTHER = 'c0000000-0000-4000-8000-000000000002';
+  const rows = { tickets: [{ title: 'Website offline', client_id: ID, status: 'new', priority: 'med' }], clients: [{ name: 'Jansen BV' }], ticket_notes: [] };
+  const onlyTickets = { write: ['tickets'] };
+  await assert.rejects(setClient.plan!(ctx(rows, onlyTickets), { ticket_id: ID, client_id: OTHER }),
+    (error: unknown) => error instanceof ActionError && /Klanten mag lezen/.test(error.message));
+  const unlink = await setClient.plan!(ctx(rows, onlyTickets), { ticket_id: ID });
+  assert.doesNotMatch(`${unlink.title} ${unlink.sub}`, /Jansen/, 'de klantnaam op de kaart');
+  const notes = await listNotes.read!(ctx(rows, onlyTickets), { ticket_id: ID }) as { ticket: { client_name: string | null } };
+  assert.equal(notes.ticket.client_name, null);
+  const link = await setClient.plan!(ctx(rows, { write: ['tickets'], read: ['clients'] }), { ticket_id: ID, client_id: OTHER });
+  assert.match(link.title, /Jansen BV/);
 });

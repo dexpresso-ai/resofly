@@ -176,3 +176,52 @@ export function ticketConversation(
     priority: ticket.priority,
   };
 }
+
+/* ── Opslaan vanuit het ticketvenster ──────────────────────────────────────
+ * Het venster vult zijn velden één keer, bij het openen. Stuurde Opslaan alle
+ * velden mee, dan zette een venster dat open stond terwijl de klant reageerde
+ * (de database zet het ticket dan terug op Review) het ticket met de oude
+ * status weer op Afgehandeld. De reactie verdween in het archief en de klant
+ * kreeg meteen een mail "afgehandeld". Hetzelfde tussen twee collega's.
+ * Daarom alleen wat in het venster veranderde, gemeten tegen het ticket zoals
+ * het venster het opende (bij een voorstel van Gerrie: vóór zijn wijzigingen).
+ */
+
+/** Leeg, null en ontbrekend zijn in het formulier hetzelfde. */
+function formValue(value: unknown): unknown {
+  return value === undefined || value === null || value === '' ? null : value;
+}
+
+export function changedTicketValues(values: Record<string, unknown>, baseline: Partial<Ticket>): Record<string, unknown> {
+  const changed: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (formValue(value) !== formValue((baseline as Record<string, unknown>)[key])) changed[key] = value;
+  }
+  return changed;
+}
+
+/**
+ * Hangt het team een ticket aan een andere klant, dan ziet die klant in het
+ * portaal de omschrijving en alles wat al zichtbaar op de tijdlijn staat, ook
+ * wat de vorige klant schreef. Dat kan de bedoeling zijn (het ticket stond bij
+ * de verkeerde klant), maar het mag geen verrassing zijn. Geeft de vraag voor
+ * een bevestiging, of null als er niets naar een nieuwe klant gaat.
+ */
+export function ticketClientChangeWarning(
+  baseline: Pick<Ticket, 'client_id' | 'description'>,
+  nextClientId: unknown,
+  visibleNotes: number,
+  clientName: (clientId: string) => string,
+): string | null {
+  const next = typeof nextClientId === 'string' && nextClientId.trim() ? nextClientId.trim() : null;
+  if (!next || next === (baseline.client_id ?? null)) return null;
+  const hasDescription = Boolean(String(baseline.description ?? '').trim());
+  if (visibleNotes <= 0 && !(baseline.client_id && hasDescription)) return null;
+  const name = clientName(next);
+  const parts = [hasDescription ? 'de omschrijving' : null, visibleNotes > 0 ? `${visibleNotes} zichtbare bericht${visibleNotes === 1 ? '' : 'en'} op de tijdlijn` : null]
+    .filter(Boolean)
+    .join(' en ');
+  return `${name} ziet dit ticket daarna in het klantportaal, met ${parts}`
+    + `${baseline.client_id ? `, ook wat ${clientName(baseline.client_id)} schreef` : ''}.`
+    + ` Hoort dat gesprek niet bij ${name}, maak dan liever een nieuw ticket. Toch koppelen?`;
+}

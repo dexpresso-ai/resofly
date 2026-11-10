@@ -9,7 +9,9 @@
 // De regels in het kort:
 //  - Portaalgebruikers van een klant zijn het hoofdadres (clients.email) en de
 //    actieve contactpersonen met portaaltoegang — precies wie er ook kan
-//    inloggen (portal_clients_for_email).
+//    inloggen (portal_clients_for_email). Een actief teamlid van de
+//    organisatie hoort daar niet bij; dat filtert portal-notify, want daarvoor
+//    is de database nodig.
 //  - Ieder kiest zelf per soort melding aan/uit (nieuw ticket, status,
 //    antwoord) en waarover: alle tickets van de klant, of alleen de tickets die
 //    zelf ingediend zijn. Geen keuze opgeslagen = alles aan; het hoofdadres over

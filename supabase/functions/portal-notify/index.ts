@@ -47,6 +47,7 @@ import {
   portalTicketUrl,
   type PlannedPortalMail,
   type PortalActivity,
+  type PortalPerson,
   type PortalSettingsRow,
 } from '../_shared/portalNotify.ts';
 
@@ -67,6 +68,8 @@ const BATCH = envInt('PORTAL_NOTIFY_BATCH', 50, 1, 500);
 const TIME_BUDGET_MS = 90_000;
 const MIN_AGE_SECONDS = envInt('PORTAL_NOTIFY_MIN_AGE_SECONDS', 30, 0, 600);
 const MAX_AGE_HOURS = envInt('PORTAL_NOTIFY_MAX_AGE_HOURS', 48, 1, 24 * 14);
+/** Meldingen die klanten zelf veroorzaken, per organisatie per uur (zie clientMailBudgetAllows). */
+const CLIENT_MAILS_PER_HOUR = envInt('PORTAL_NOTIFY_CLIENT_MAILS_PER_HOUR', 100, 1, 10_000);
 const SEND_PAUSE_MS = 550;
 
 type ActivityRow = PortalActivity & { organization_id: string; attempts: number };
@@ -175,6 +178,7 @@ async function drain(): Promise<Record<string, number>> {
       totals.sent += outcome.sent;
       totals.failed += outcome.failed;
       totals.skipped += outcome.skipped;
+      totals.deferred += outcome.deferred ?? 0;
     } catch (err) {
       // Eén ticket met een databasehik mag de rest niet tegenhouden. Terug in
       // de wachtrij; de claim telt de pogingen.
@@ -191,7 +195,7 @@ async function processTicket(
   ticketId: string,
   activity: ActivityRow[],
   orgs: Map<string, OrgContext>,
-): Promise<{ sent: number; failed: number; skipped: number }> {
+): Promise<{ sent: number; failed: number; skipped: number; deferred?: number }> {
   const now = Date.now();
   const maxAgeMs = MAX_AGE_HOURS * 3_600_000;
   const stale = activity.filter((row) => now - Date.parse(row.created_at) > maxAgeMs);
@@ -253,7 +257,7 @@ async function processTicket(
       : Promise.resolve([] as NoteRow[]),
   ]);
 
-  const people = portalPeople(client, contacts);
+  const people = await withoutTeamMembers(organizationId, portalPeople(client, contacts));
   const suppressed = await loadSuppressed(organizationId, people.map((person) => person.email));
   const notesById = new Map(notes.map((note) => [note.id, note]));
   const visibleNoteIds = new Set(notes.filter((note) => !note.is_internal).map((note) => note.id));
@@ -273,18 +277,40 @@ async function processTicket(
   // pas aan het eind: gaat er daarna iets mis (of valt de functie om), dan
   // weet de volgende poging nog steeds wie niet nog een mail moet krijgen.
   const notified = new Map(fresh.map((row) => [row.id, new Set(row.notified_emails ?? [])]));
+  const activityById = new Map(fresh.map((row) => [row.id, row]));
   const failedIds = new Set<string>();
+  const waitingIds = new Set<string>();
   let lastError: string | null = null;
+  let waitReason: string | null = null;
   let sent = 0;
   let failed = 0;
+  let waiting = 0;
 
   for (const mail of plan.mails) {
     const input = emailInput(mail, ticket, client, org, notesById);
     const rendered = renderEmailTemplate('portal.ticketUpdate', input);
-    try {
+    // Wat de klant zelf veroorzaakte (zijn eigen ticket, een reactie van een
+    // collega) telt niet in het mailquotum van de organisatie maar heeft een
+    // eigen rem. Eén portaalgebruiker met tien tickets en dertig reacties per
+    // tien minuten kon dat quotum anders opmaken, en dan gingen ook de facturen
+    // van de leverancier niet meer weg.
+    const clientCaused = mail.activityIds.every((id) => activityById.get(id)?.actor_type === 'client');
+    const allowed = clientCaused
+      ? await clientMailBudgetAllows(organizationId)
       // Quotum per organisatie (20261101050000): één organisatie maakt het gedeelde Resend-account niet voor iedereen op.
-      // Op = deze mail terug in de wachtrij (zie 'Afronden' hieronder).
-      if (!(await emailQuotaAllows(admin, organizationId, 1))) throw new Error('Mailquotum van de organisatie is op; later opnieuw.');
+      : await emailQuotaAllows(admin, organizationId, 1);
+    if (!allowed) {
+      // Wachten, geen mislukte poging: anders was de melding na vijf rondes
+      // (vijf minuten) 'dead' en kwam hij nooit meer aan, terwijl het quotum
+      // binnen het uur weer ruimte heeft. MAX_AGE_HOURS blijft de grens.
+      waiting += 1;
+      waitReason = clientCaused
+        ? 'Wacht: de rem op meldingen die klanten zelf veroorzaken is voor dit uur bereikt.'
+        : 'Wacht: het mailquotum van de organisatie is voor nu op.';
+      for (const id of mail.activityIds) waitingIds.add(id);
+      continue;
+    }
+    try {
       await paceSend();
       await sendViaResend(
         RESEND_API_KEY,
@@ -316,13 +342,21 @@ async function processTicket(
     }
   }
 
-  // Afronden: per gebeurtenis wie hem nu (ook) kreeg; mislukt = opnieuw.
+  // Afronden: per gebeurtenis wie hem nu (ook) kreeg; mislukt = opnieuw, en
+  // wachtend op het quotum = opnieuw zonder dat het als poging telt.
   const skippedIds = new Set(plan.skipped.map((item) => item.id));
   for (const row of fresh) {
     if (skippedIds.has(row.id)) continue;
     const emails = [...(notified.get(row.id) ?? [])];
     if (failedIds.has(row.id)) {
       await updateActivity([row.id], { notify_status: 'queued', notified_emails: emails, last_error: lastError });
+    } else if (waitingIds.has(row.id)) {
+      await updateActivity([row.id], {
+        notify_status: 'queued',
+        notified_emails: emails,
+        attempts: Math.max(0, (row.attempts ?? 1) - 1),
+        last_error: waitReason,
+      });
     } else {
       await updateActivity([row.id], {
         notify_status: 'done',
@@ -333,7 +367,27 @@ async function processTicket(
     }
   }
 
-  return { sent, failed, skipped: stale.length + plan.skipped.length };
+  return { sent, failed, skipped: stale.length + plan.skipped.length, deferred: waiting };
+}
+
+/**
+ * De rem op meldingen die klanten zelf veroorzaken: hooguit
+ * PORTAL_NOTIFY_CLIENT_MAILS_PER_HOUR per organisatie per uur. Telt en beslist
+ * in één keer (portal_login_hit, met een slot op de rij). Is de teller kapot,
+ * dan geldt het gewone mailquotum: zo gaat er nooit iets onbegrensd uit.
+ */
+async function clientMailBudgetAllows(organizationId: string): Promise<boolean> {
+  const { data, error } = await admin.rpc('portal_login_hit', {
+    p_key: await sha256Hex(`portal-notify:klantactiviteit:${organizationId}`),
+    p_window_seconds: 3600,
+    p_max_attempts: CLIENT_MAILS_PER_HOUR,
+    p_block_seconds: 600,
+  });
+  if (error) {
+    console.warn('portal-notify portal_login_hit mislukt; het mailquotum geldt', error.message);
+    return emailQuotaAllows(admin, organizationId, 1);
+  }
+  return Number(data) === 0;
 }
 
 /** Van plan naar de invoer van de mailtemplate. */
@@ -483,6 +537,28 @@ async function loadCompany(organizationId: string): Promise<Record<string, unkno
     return null;
   }
   return (data as Record<string, unknown> | null) ?? null;
+}
+
+/**
+ * Een actief teamlid is in zijn eigen organisatie geen portaalklant
+ * (portal_clients_for_email, sinds 20261106130000), en krijgt dus ook geen
+ * klantmail over tickets. Zonder deze controle ging de mail wel: een teamlid
+ * zonder recht op Tickets zette zijn eigen adres als klantadres of
+ * portaalcontact, en las zo de antwoorden van het team per mail mee. En wie
+ * zijn eigen adres als testklant gebruikte, kreeg een link naar een dossier
+ * dat het portaal hem niet toont.
+ */
+async function withoutTeamMembers(organizationId: string, people: PortalPerson[]): Promise<PortalPerson[]> {
+  const isMember = await Promise.all(people.map(async (person) => {
+    const { data, error } = await admin.rpc('portal_email_is_member', {
+      p_organization_id: organizationId,
+      p_email: person.email,
+    });
+    // Niet te controleren = niet mailen; de activiteit gaat terug in de wachtrij.
+    if (error) throw new Error(`portal_email_is_member mislukt: ${error.message}`);
+    return data === true;
+  }));
+  return people.filter((_, index) => !isMember[index]);
 }
 
 async function loadSuppressed(organizationId: string, emails: string[]): Promise<Set<string>> {

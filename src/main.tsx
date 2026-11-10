@@ -131,7 +131,7 @@ import { readBankReturn } from './lib/bankLink';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
 import { TimeTracking, defaultBillableForProject, resolveRateCents } from './features/TimeTracking';
 import { Tickets } from './features/Tickets';
-import { TICKET_REOPEN_STATUS } from './lib/tickets';
+import { TICKET_REOPEN_STATUS, changedTicketValues, ticketClientChangeWarning } from './lib/tickets';
 import { TicketTimeline } from './components/TicketTimeline';
 import { Marketing } from './features/Marketing';
 import { RelatedNotes, noteTypeLabels } from './features/Notes';
@@ -236,7 +236,10 @@ type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
   | { kind: 'task'; item?: Task; projectId?: string | null; defaults?: Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'tags' | 'start_date' | 'end_date' | 'planned_date' | 'estimated_minutes' | 'subtasks' | 'project_id' | 'client_id'>> }
-  | { kind: 'ticket'; item?: Ticket; defaults?: Partial<Pick<Ticket, 'title' | 'description' | 'client_id' | 'priority' | 'status' | 'notes'>> }
+  // baseline: het ticket zoals het in de database stond toen het venster opende
+  // (bij een voorstel van Gerrie: vóór zijn wijzigingen). Opslaan stuurt alleen
+  // wat daarvan afwijkt (changedTicketValues). Zonder baseline geldt item.
+  | { kind: 'ticket'; item?: Ticket; baseline?: Ticket; defaults?: Partial<Pick<Ticket, 'title' | 'description' | 'client_id' | 'priority' | 'status' | 'notes'>> }
   | { kind: 'note'; item?: Note; defaults?: Partial<Pick<Note, 'client_id' | 'project_id' | 'folder_id' | 'title' | 'content' | 'note_type' | 'tags'>>; calendarLink?: CalendarNoteLinkInput }
   | { kind: 'document'; item?: InternalDocument; defaults?: Partial<Pick<InternalDocument, 'client_id' | 'project_id' | 'folder_id' | 'title' | 'content' | 'document_type'>> }
   | { kind: 'quote'; item?: Quote; defaults?: Partial<Pick<Quote, 'client_id' | 'project_id' | 'notes' | 'valid_until' | 'lines'>> }
@@ -550,7 +553,7 @@ function editModeForProposal(p: GerrieProposal, data: AppData): ProposalEditTarg
       if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
       if (p.changes.status !== undefined) merged.status = p.changes.status as Ticket['status'];
       if (p.changes.priority !== undefined) merged.priority = p.changes.priority as Ticket['priority'];
-      return { page: 'tickets', edit: { kind: 'ticket', item: merged } };
+      return { page: 'tickets', edit: { kind: 'ticket', item: merged, baseline: existing } };
     }
     case 'content': {
       const defaults = {
@@ -1056,6 +1059,9 @@ function App() {
     },
     onActivity: () => { void refresh(); },
   });
+  // Naar Tickets gaan telt de ongelezen tickets ook opnieuw, net als Ververs
+  // (zie refresh): zo klopt de werklijst ook als realtime iets miste.
+  useEffect(() => { if (page === 'tickets') refreshTicketUnread(); }, [page, refreshTicketUnread]);
 
   // Teamchat — één realtime-/presence-abonnement op App-niveau, gedeeld door de
   // sidebar-badge, de volledige chatpagina, het zwevende paneel en de meldingen.
@@ -1275,6 +1281,11 @@ function App() {
   const [refreshRound, setRefreshRound] = useState(0);
   async function refresh() {
     setRefreshRound(round => round + 1);
+    // De badge "Nieuw" en de teller van ongelezen tickets komen live binnen via
+    // realtime. Miste die een gebeurtenis (laptop in slaap, verbinding weg), dan
+    // bleven ze staan tot je het ticket opende of de pagina herlaadde: Ververs
+    // telde ze niet opnieuw (gevonden met de browsertest tickets, 10 november).
+    refreshTicketUnread();
     await loadWorkspace();
   }
 
@@ -1895,9 +1906,16 @@ function App() {
       }
       case 'ticket': {
         const sanitizedValues = sanitizeTicketValues(values, edit.item);
-        edit.item
-          ? await updateRow<Ticket>('tickets', edit.item.id, sanitizedValues, activeOrg.id)
-          : await insertRow<Ticket>('tickets', activeOrg.id, sanitizedValues);
+        if (!String(sanitizedValues.title ?? '').trim()) throw new Error('Geef het ticket een titel.');
+        if (edit.item) {
+          // Alleen wat in het venster veranderde (zie changedTicketValues): een
+          // venster dat openstond terwijl de klant reageerde, zette het ticket
+          // anders met de oude status terug op Afgehandeld.
+          const changes = changedTicketValues(sanitizedValues, edit.baseline ?? edit.item);
+          if (Object.keys(changes).length > 0) await updateRow<Ticket>('tickets', edit.item.id, changes, activeOrg.id);
+        } else {
+          await insertRow<Ticket>('tickets', activeOrg.id, sanitizedValues);
+        }
         label = `Ticket "${String(sanitizedValues.title ?? '')}" ${edit.item ? 'bijgewerkt' : 'aangemaakt'}`;
         break;
       }
@@ -1972,6 +1990,14 @@ function App() {
     if (!ensureCanWrite()) return;
     const invalid = validateEditValues(edit.kind, values);
     if (invalid) { setError(invalid); return; }
+    if (edit.kind === 'ticket' && edit.item) {
+      // Een andere klant ziet het hele zichtbare gesprek: eerst even vragen.
+      const baseline = edit.baseline ?? edit.item;
+      const visibleNotes = data.ticketNotes.filter(note => note.ticket_id === baseline.id && !note.is_internal).length;
+      const question = ticketClientChangeWarning(baseline, values.client_id, visibleNotes,
+        (id) => data.clients.find(client => client.id === id)?.name ?? 'De klant');
+      if (question && !confirm(question)) return;
+    }
     setLoading(true); setError(null);
     try {
       // Schuift de startdatum van een project op? Dan blijven de ingeplande
@@ -3265,6 +3291,8 @@ function App() {
       case 'ticket':
         setPage('tickets');
         setEdit({ kind: 'ticket', item: result.item });
+        // Openen = gelezen, net als vanaf de ticketpagina.
+        markTicketRead(result.item.id).then(refreshTicketUnread).catch(() => {});
         break;
       case 'note':
         setPage('notes');
@@ -4139,7 +4167,7 @@ function App() {
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={workMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onPlanTaskTime={planTaskAtTime} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) setEdit({ kind: 'ticket', item: ticket }); }} onLinkTaskToEvent={linkTaskToEvent} onUnlinkTaskEvent={unlinkTaskEvent} onReserveTime={reserveTimeForTask}/>;
+    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={workMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onPlanTaskTime={planTaskAtTime} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) { setEdit({ kind: 'ticket', item: ticket }); markTicketRead(ticket.id).then(refreshTicketUnread).catch(() => {}); } }} onLinkTaskToEvent={linkTaskToEvent} onUnlinkTaskEvent={unlinkTaskEvent} onReserveTime={reserveTimeForTask}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} initialDraft={calendarDraft} onDraftConsumed={() => setCalendarDraft(null)} onMoveTask={(task, dayKey, startMin, endMin) => planTaskAtTime(task.id, dayKey, startMin, Math.max(15, endMin - startMin))} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite} focus={view.bookingFocus ?? null} onFocusHandled={() => setBookingFocus(null)}/>;
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;

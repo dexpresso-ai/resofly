@@ -29,7 +29,10 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
   data?: AppData;
 }) {
   const [draft, setDraft] = useState('');
-  const [internal, setInternal] = useState(false);
+  // Zonder klant is er niemand om het te zien: standaard intern. Anders werd een
+  // overleg in het team "zichtbaar" opgeslagen, en kwam het bij de klant zodra
+  // iemand het ticket later aan een klant koppelde.
+  const [internal, setInternal] = useState(() => !clientId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Bestanden bij een zichtbaar antwoord: de klant ziet ze in het portaal onder dat antwoord.
@@ -82,7 +85,10 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
       } else {
         await createTicketNote(organizationId, { ticketId, body, isInternal: internal });
       }
-      setDraft(''); setInternal(false);
+      // De keuze intern/zichtbaar blijft staan. Hij sprong na elk bericht terug
+      // op zichtbaar: twee interne notities achter elkaar, en de tweede ging
+      // naar het portaal en per mail naar de klant.
+      setDraft('');
     });
   }
 
@@ -112,6 +118,9 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
             {emailsOn === false
               ? 'De klant ziet dit in het klantportaal. E-mailmeldingen aan klanten staan uit (Instellingen → E-mail).'
               : 'De klant ziet dit in het klantportaal en krijgt er ook een e-mail van, tenzij de klant dat in het portaal heeft uitgezet.'}
+          </p>}
+          {!clientId && !internal && <p className="ticket-timeline-mailhint">
+            Dit ticket hangt nog niet aan een klant. Koppel je later een klant, dan ziet die deze notitie in het klantportaal.
           </p>}
         </div>
         {error && <p className="error">{error}</p>}

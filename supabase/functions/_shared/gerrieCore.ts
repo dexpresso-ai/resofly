@@ -1568,7 +1568,7 @@ const TOOL_DEFINITIONS = [
         status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected', 'converted', 'resolved'], description: "'resolved' = afgehandeld: staat in het archief, niet meer op de werklijst." },
         client_id: { type: 'string' },
         priority: { type: 'string', enum: ['low', 'med', 'high'] },
-        unanswered_only: { type: 'boolean', description: 'Alleen tickets waar nog niemand van het team op heeft gereageerd.' },
+        unanswered_only: { type: 'boolean', description: 'Alleen tickets die op het team wachten: nog geen antwoord dat de klant zag, of de klant schreef na het laatste antwoord nog iets. Een interne notitie telt niet als antwoord.' },
         from: { type: 'string', description: 'Vanaf aanmaakdatum YYYY-MM-DD.' },
         to: { type: 'string', description: 'Tot en met aanmaakdatum YYYY-MM-DD.' },
         limit: { type: 'integer' },
@@ -4576,7 +4576,11 @@ async function listProjects(orgId: string, input: Record<string, unknown>, limit
 }
 
 async function listTickets(orgId: string, input: Record<string, unknown>, limit: number) {
-  let query = orgTable('tickets', orgId).order('created_at', { ascending: false }).limit(limit);
+  const unansweredOnly = input.unanswered_only === true;
+  // Met "onbeantwoord" eerst ruim ophalen en dán pas afkappen: met de limiet
+  // vooraf vielen oudere onbeantwoorde tickets weg achter recentere die wél
+  // een antwoord hadden.
+  let query = orgTable('tickets', orgId).order('created_at', { ascending: false }).limit(unansweredOnly ? Math.max(limit, 500) : limit);
   if (input.status) query = query.eq('status', String(input.status));
   if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (input.priority) query = query.eq('priority', String(input.priority));
@@ -4588,14 +4592,33 @@ async function listTickets(orgId: string, input: Record<string, unknown>, limit:
   if (error) throw new Error(error.message);
 
   let rows = (data ?? []) as Record<string, unknown>[];
-  // "Onbeantwoord" = geen enkele notitie van het TEAM. Een bericht van de klant zelf
-  // maakt een ticket niet beantwoord; dat is juist waarom het er nog ligt.
-  if (input.unanswered_only === true && rows.length) {
-    const { data: notes } = await supabaseAdmin.from('ticket_notes')
-      .select('ticket_id').eq('organization_id', orgId).eq('author_type', 'user')
-      .in('ticket_id', rows.map((r) => String(r.id)));
-    const answered = new Set((notes ?? []).map((n: Record<string, unknown>) => String(n.ticket_id)));
-    rows = rows.filter((r) => !answered.has(String(r.id)));
+  // "Onbeantwoord" = het wacht op het team: er staat nog geen antwoord dat de
+  // klant zag, of de klant schreef ná het laatste antwoord nog iets. Een
+  // interne notitie is geen antwoord aan de klant; die telde eerst wel, net als
+  // een eerder antwoord waar de klant daarna nog een vraag op stelde.
+  if (unansweredOnly && rows.length) {
+    const ids = rows.map((r) => String(r.id));
+    const lastTeam = new Map<string, number>();
+    const lastClient = new Map<string, number>();
+    // In stukken: honderden id's in één `.in()` maken de URL te lang.
+    for (let i = 0; i < ids.length; i += 100) {
+      const { data: notes, error: notesError } = await supabaseAdmin.from('ticket_notes')
+        .select('ticket_id, author_type, created_at')
+        .eq('organization_id', orgId).eq('is_internal', false)
+        .in('ticket_id', ids.slice(i, i + 100));
+      if (notesError) throw new Error(notesError.message);
+      for (const note of (notes ?? []) as Record<string, unknown>[]) {
+        const target = note.author_type === 'client' ? lastClient : lastTeam;
+        const key = String(note.ticket_id);
+        const at = Date.parse(String(note.created_at ?? '')) || 0;
+        if (at > (target.get(key) ?? 0)) target.set(key, at);
+      }
+    }
+    rows = rows.filter((r) => {
+      const team = lastTeam.get(String(r.id));
+      if (team === undefined) return true;
+      return (lastClient.get(String(r.id)) ?? 0) > team;
+    }).slice(0, limit);
   }
 
   return {

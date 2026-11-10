@@ -16,12 +16,18 @@
 // Eén portaalgebruiker ziet daarom alleen het eigen gesprek:
 //  - wat die persoon zelf stuurde (inkomend, van het eigen adres);
 //  - wat het team die persoon stuurde (uitgaand, echt verzonden);
-//  - en wat het team daarna antwoordde in een gesprek waar die persoon aan
-//    meedeed (vanaf het eerste eigen bericht). Het team mailt altijd naar het
-//    hoofdadres van de klant; zo ziet een contactpersoon die iets vroeg toch
-//    het antwoord.
+//  - en een antwoord van het team aan het hoofdadres van de klant als dat op
+//    déze persoon antwoordt: het laatste inkomende bericht ervóór in het
+//    gesprek is van hem. Antwoorden gaan standaard naar het hoofdadres; zo
+//    ziet een contactpersoon die iets vroeg toch het antwoord.
 // Nooit: post van een collega of een derde, doorgestuurde mail, mail die niet
 // verstuurd is, en geen gesprek waar een campagne of stroom in zit.
+//
+// Tot 10 november zag een contactpersoon élke mail van het team in een gesprek
+// waar hij ooit aan meedeed. Maar inkomende mail komt vaak in het laatst
+// actieve gesprek van de klant terecht, en het team mailt sinds oktober ook
+// contactpersonen rechtstreeks. Zo las een collega het antwoord van het team op
+// een vertrouwelijke mail van het hoofdadres mee, met het citaat eronder.
 // ============================================================
 
 export interface PortalMessageRow {
@@ -99,16 +105,19 @@ export function isPortalEligibleMessage(row: PortalMessageRow, people: ReadonlyS
 
 /**
  * De gesprekken die één portaalgebruiker (`me`) ziet, nieuwste activiteit
- * bovenaan. Het onderwerp komt van het eerste zichtbare bericht: het
- * gesprek zelf kan begonnen zijn met post die de klant niet ziet.
+ * bovenaan. `primary` is het hoofdadres van de klant (clients.email). Het
+ * onderwerp komt van het eerste zichtbare bericht: het gesprek zelf kan
+ * begonnen zijn met post die de klant niet ziet.
  */
 export function portalThreadsFor(
   rows: ReadonlyArray<PortalMessageRow>,
   me: string,
   people: ReadonlySet<string>,
+  primary: string | null,
 ): PortalThreadSummary[] {
   const self = normalizeAddress(me);
   if (!self || !people.has(self)) return [];
+  const primaryAddress = normalizeAddress(primary);
 
   const marketingThreads = new Set(
     rows.filter((row) => MARKETING_SOURCES.has(String(row.source ?? ''))).map((row) => row.thread_id),
@@ -120,18 +129,35 @@ export function portalThreadsFor(
   const fromMe = (row: PortalMessageRow) => row.direction === 'inbound' && normalizeAddress(row.from_email) === self;
   const toMe = (row: PortalMessageRow) => row.direction === 'outbound' && normalizeAddress(row.to_email) === self;
 
-  // Vanaf wanneer deed deze persoon mee aan een gesprek?
-  const joinedAt = new Map<string, number>();
-  for (const row of eligible) {
-    if ((fromMe(row) || toMe(row)) && !joinedAt.has(row.thread_id)) {
-      joinedAt.set(row.thread_id, Date.parse(row.occurred_at));
-    }
+  // Per gesprek de inkomende berichten op volgorde: álle, ook wat zelf niet in
+  // het portaal komt (doorgestuurd, van een collega). Zo telt "het laatste
+  // bericht vóór dit antwoord" ook als het niet van deze persoon was.
+  const inboundByThread = new Map<string, Array<{ at: number; from: string | null }>>();
+  for (const row of rows) {
+    if (row.direction !== 'inbound') continue;
+    const list = inboundByThread.get(row.thread_id) ?? [];
+    list.push({ at: Date.parse(row.occurred_at), from: normalizeAddress(row.from_email) });
+    inboundByThread.set(row.thread_id, list);
   }
+  for (const list of inboundByThread.values()) list.sort((a, b) => a.at - b.at);
+
+  /** Antwoordt deze mail van het team op mij: was het laatste inkomende bericht ervóór van mij? */
+  const answersMe = (row: PortalMessageRow) => {
+    const at = Date.parse(row.occurred_at);
+    let last: { at: number; from: string | null } | null = null;
+    for (const item of inboundByThread.get(row.thread_id) ?? []) {
+      if (item.at > at) break;
+      last = item;
+    }
+    return last !== null && last.from === self;
+  };
+
   const visible = eligible.filter((row) => {
     if (row.direction === 'inbound') return fromMe(row);
     if (toMe(row)) return true;
-    const joined = joinedAt.get(row.thread_id);
-    return joined !== undefined && Date.parse(row.occurred_at) >= joined;
+    // Aan een ander: alleen een antwoord aan het hoofdadres op mijn eigen
+    // bericht. Mail van het team aan een collega zie je nooit.
+    return primaryAddress !== null && normalizeAddress(row.to_email) === primaryAddress && answersMe(row);
   });
 
   const byThread = new Map<string, PortalThreadSummary>();

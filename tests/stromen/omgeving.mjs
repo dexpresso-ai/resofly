@@ -99,6 +99,15 @@ Object.assign(process.env, {
   CAMPAIGN_CRON_SECRET: CRON_SECRET,
   UNSUBSCRIBE_SECRET: AFMELD_GEHEIM,
   CAMPAIGN_DISPATCH_BATCH: '5',
+  // Klantmeldingen over tickets (tickets.mjs). Zonder wachttijd: op staging
+  // wacht de ronde 30 seconden zodat een antwoord en een status samen in één
+  // mail komen; het scenario zet beide klaar vóór de ronde, dus dat bundelen
+  // wordt hier net zo getoetst.
+  PORTAL_NOTIFY_CRON_SECRET: CRON_SECRET,
+  PORTAL_NOTIFY_MIN_AGE_SECONDS: '0',
+  // Zes in plaats van honderd: dan is met zeven tickets te zien dat de rem op
+  // mail die klanten zelf veroorzaken werkt, en het quotum van het team niet raakt.
+  PORTAL_NOTIFY_CLIENT_MAILS_PER_HOUR: '6',
   // Klantadressen (klantdomein.mjs). CLIENT_DOMAINS_LIVE zet het scenario zelf
   // aan en weer uit: de andere scenario's verwachten links op PUBLIEK.
   CLOUDFLARE_SAAS_API_TOKEN: CLOUDFLARE_TOKEN,

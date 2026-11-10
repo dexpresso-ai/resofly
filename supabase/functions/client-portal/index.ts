@@ -163,7 +163,11 @@ serve(async (req) => {
     if (req.method !== 'POST') return json(req, { ok: false, error: 'Method not allowed.' }, 405);
 
     const user = await requireUser(req);
-    const body = await req.json().catch(() => ({}));
+    const parsed = await req.json().catch(() => ({}));
+    // Alleen een object: een body `null` (of een lijst) gaf hieronder een
+    // TypeError, en dus een 500 met een regel in de foutlog.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new PortalError('Ongeldig verzoek.', 400);
+    const body = parsed as Record<string, unknown>;
     // Een NUL-teken kan Postgres niet opslaan; dat gaf een 500 in het portaal.
     if (containsNulCharacter(body)) throw new PortalError(INVALID_CHARACTER_MESSAGE, 422);
     const action = String(body.action || 'getPortalData');
@@ -272,6 +276,7 @@ async function createTicket(user: PortalUser, body: Record<string, unknown>) {
   if (!client) throw new PortalError('Geen toegang tot deze klant.', 403);
 
   const contact = await resolveActingContact(client, user.email);
+  await assertPortalBurst('tickets', client.organization_id, user.id, TICKET_RATE_LIMIT, 'tickets aangemaakt');
   await assertPortalWriteRate('tickets', client.organization_id, user.id, TICKET_RATE_LIMIT, 'tickets aangemaakt');
 
   const { data, error } = await supabaseAdmin
@@ -385,6 +390,7 @@ async function addTicketNote(user: PortalUser, body: Record<string, unknown>) {
   const client = clients.find((row) => row.id === ticket.client_id) || null;
   const contact = client ? await resolveActingContact(client, user.email) : null;
   const authorName = contact?.name || client?.contact_name || client?.name || user.email;
+  await assertPortalBurst('ticket_notes', ticket.organization_id, user.id, TICKET_NOTE_RATE_LIMIT, 'reacties geplaatst');
   await assertPortalWriteRate('ticket_notes', ticket.organization_id, user.id, TICKET_NOTE_RATE_LIMIT, 'reacties geplaatst');
 
   const { data, error: insertError } = await supabaseAdmin
@@ -432,6 +438,36 @@ async function assertPortalWriteRate(
   const { count, error } = await query;
   if (error) throw error;
   if ((count ?? 0) >= limit) {
+    throw new PortalError(`Je hebt de afgelopen ${MESSAGE_RATE_WINDOW_MINUTES} minuten al veel ${what}. Probeer het zo nog eens.`, 429);
+  }
+}
+
+/**
+ * Dezelfde rem, maar zonder gat. assertPortalWriteRate telt eerst en schrijft
+ * daarna: tientallen verzoeken tegelijk kwamen allemaal door die telling, en
+ * elk ticket of elke reactie gaat ook per mail naar de klant en zijn collega's.
+ * portal_login_hit telt en beslist in één keer, met een slot op de rij
+ * (20261101080000), per portaalgebruiker per organisatie.
+ */
+async function assertPortalBurst(
+  kind: 'tickets' | 'ticket_notes' | 'messages',
+  organizationId: string,
+  userId: string,
+  limit: number,
+  what: string,
+): Promise<void> {
+  const { data, error } = await supabaseAdmin.rpc('portal_login_hit', {
+    p_key: await sha256Hex(`client-portal:${kind}:${organizationId}:${userId}`),
+    p_window_seconds: MESSAGE_RATE_WINDOW_MINUTES * 60,
+    p_max_attempts: limit,
+    p_block_seconds: MESSAGE_RATE_WINDOW_MINUTES * 60,
+  });
+  // Een kapotte teller mag het portaal niet stilleggen; de telling erna blijft staan.
+  if (error) {
+    console.warn('client-portal portal_login_hit mislukt', error.message);
+    return;
+  }
+  if (Number(data) > 0) {
     throw new PortalError(`Je hebt de afgelopen ${MESSAGE_RATE_WINDOW_MINUTES} minuten al veel ${what}. Probeer het zo nog eens.`, 429);
   }
 }
@@ -1197,7 +1233,9 @@ async function assertCreativeAccess(organizationId: string): Promise<void> {
 /** Tokenbundel (R2 + Stream) via de media-api worker; het portaal serveert nooit zelf bytes. */
 async function fetchGalleryTokens(organizationId: string, galleryId: string, allowDownload: boolean) {
   if (!MEDIA_WORKER_URL || !MEDIA_INTERNAL_SECRET) {
-    throw new PortalError('Galerij-weergave is niet geconfigureerd (MEDIA_WORKER_URL + INTERNAL_UPLOAD_SECRET).', 500);
+    // De namen van de secrets horen in de log, niet bij de klant.
+    console.error('client-portal: MEDIA_WORKER_URL of INTERNAL_UPLOAD_SECRET ontbreekt; de galerij kan niet open.');
+    throw new PortalError('De galerij is nu niet te openen. Probeer het later opnieuw.', 500);
   }
   const res = await fetch(`${MEDIA_WORKER_URL}/internal/gallery/tokens`, {
     method: 'POST',
@@ -1525,7 +1563,8 @@ async function loadMessageRows(client: ClientRow, people: PortalPerson[]): Promi
 }
 
 function threadsFor(rows: PortalMessageRow[], me: PortalPerson, people: PortalPerson[]): PortalThreadSummary[] {
-  return portalThreadsFor(rows, me.email, new Set(people.map((person) => person.email)));
+  const primary = people.find((person) => person.isPrimary)?.email ?? null;
+  return portalThreadsFor(rows, me.email, new Set(people.map((person) => person.email)), primary);
 }
 
 function threadForPortal(thread: PortalThreadSummary, reads: Map<string, string>) {
@@ -1628,6 +1667,7 @@ async function sendMessage(user: PortalUser, body: Record<string, unknown>) {
   const organizationId = client.organization_id;
 
   // Een rem op stortvloeden: elk bericht laat bij het team een melding afgaan.
+  await assertPortalBurst('messages', organizationId, user.id, MESSAGE_RATE_LIMIT, 'berichten gestuurd');
   const since = new Date(Date.now() - MESSAGE_RATE_WINDOW_MINUTES * 60_000).toISOString();
   const { count, error: countError } = await supabaseAdmin
     .from('client_emails')
@@ -2163,11 +2203,15 @@ function sanitizeTicket(row: Record<string, unknown>) {
 }
 
 function sanitizeTicketNote(row: Record<string, unknown>) {
+  const fromClient = row.author_type === 'client';
   return {
     id: row.id,
     ticket_id: row.ticket_id,
-    author_type: row.author_type === 'client' ? 'client' : 'user',
-    author_name: row.author_name ?? null,
+    author_type: fromClient ? 'client' : 'user',
+    // Bij een teamnotitie is author_name het inlogadres van het teamlid. Het
+    // portaal toont daar de bedrijfsnaam, maar het adres ging wel mee in het
+    // antwoord aan de browser van elke portaalgebruiker.
+    author_name: fromClient ? (row.author_name ?? null) : null,
     body: row.body,
     created_at: row.created_at,
   };

@@ -87,6 +87,20 @@ Getoetst:
 
 Zie `docs/changelog/CHANGELOG_BOEKINGSLINKS_2026-11-10.md`.
 
+En `tickets`: het team in de app, de klant in het portaal (`client-portal`) en de mailronde die
+pg_cron elke minuut aanroept (`portal-notify`). Getoetst:
+- een ticket van het team, een antwoord met een statuswijziging (één mail), afhandelen en
+  een interne notitie die zichtbaar wordt: de klant krijgt de mail, met de link naar het
+  ticket en zonder interne tekst;
+- een ticket uit het portaal geeft een ontvangstbevestiging; een reactie op een afgehandeld
+  ticket zet het weer open, zonder mail aan de klant zelf;
+- een collega op hetzelfde portaal, de eigen keuzes, de schakelaar van de organisatie en een
+  harde bounce;
+- wie wat mag: een andere klant, een andere organisatie, kijker, boekhouder, anon, een lid
+  zonder of met alleen leesrecht op Tickets, en een teamlid met zijn eigen adres als klant.
+
+Zie `docs/changelog/CHANGELOG_TICKETS_CONTROLE_2026-11-10.md`.
+
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in
@@ -151,6 +165,12 @@ En `rapportage`: op Rapportages een vraag stellen. Daarna komt de pagina met de 
 het afgeschermde kader, en dan verversen zonder AI, aanpassen via de chat, een oude versie
 terugzetten, het menu en verwijderen. Het scenario heeft een eigen organisatie: de cijfers
 moeten exact kloppen.
+
+En `tickets`: een medewerker maakt een ticket in het venster, plaatst een interne notitie en een
+zichtbaar antwoord en zet de status. De klant krijgt één mail, opent de knop daaruit, logt in en
+komt meteen bij het ticket, zonder de interne notitie. Zijn reactie staat na Ververs bij het team
+als nieuw. Afhandelen met de knop haalt het ticket van de werklijst; de klant vindt het onder
+Afgehandeld.
 
 En `opname`: een telefoongesprek loggen en opnemen met de nep-microfoon van Chromium.
 - de knop "Opname starten" bij een gesprek;
