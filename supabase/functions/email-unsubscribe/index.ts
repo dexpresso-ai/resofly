@@ -12,11 +12,23 @@ import { loadSenderName } from '../_shared/emailBrand.ts';
 //           zodat GET-prefetch door mailclients niet ongewild afmeldt.
 //  - POST → zet het adres op de suppressielijst en stopt lopende campagne-sends.
 //           Ondersteunt óók de RFC 8058 one-click POST (List-Unsubscribe-Post).
+//
+// GEWIJZIGD (10 november 2026): Supabase serveert een GET met text/html op
+// *.supabase.co als platte tekst (de rooktest stelde het op staging vast).
+// Wie in een campagnemail op "Afmelden" klikte, zag dus HTML-code in plaats van
+// de knop. Een browser (Accept: text/html) gaat daarom nu door naar de pagina
+// in de app (APP_PUBLIC_URL/afmelden, src/features/PublicUnsubscribePage.tsx),
+// en die praat met deze functie via een POST met JSON:
+//   {"action":"info","token":…}        → naam van de afzender en het adres;
+//   {"action":"unsubscribe","token":…} → afmelden, zelfde stappen als de knop.
+// Zonder browser-Accept (en zonder APP_PUBLIC_URL) blijft de oude pagina. De
+// one-click POST uit het mailprogramma verandert niet.
 // ============================================================================
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
 const UNSUBSCRIBE_SECRET = Deno.env.get('UNSUBSCRIBE_SECRET') || '';
+const APP_PUBLIC_URL = (Deno.env.get('APP_PUBLIC_URL') || '').replace(/\/+$/, '');
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -24,7 +36,24 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 serve(async (req) => {
   const url = new URL(req.url);
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: JSON_CORS });
+  if (req.method === 'POST' && (req.headers.get('content-type') || '').toLowerCase().includes('application/json')) {
+    return await handleJson(req);
+  }
   const token = url.searchParams.get('token') || '';
+
+  // Een browser naar de pagina in de app (zie boven). Het token gaat mee; de
+  // pagina controleert het hier opnieuw.
+  if ((req.method === 'GET' || req.method === 'HEAD') && APP_PUBLIC_URL && /text\/html/i.test(req.headers.get('accept') || '')) {
+    return new Response(null, {
+      status: 303,
+      headers: {
+        Location: `${APP_PUBLIC_URL}/afmelden?token=${encodeURIComponent(token)}`,
+        'Cache-Control': 'no-store',
+        'Referrer-Policy': 'no-referrer',
+      },
+    });
+  }
 
   if (!UNSUBSCRIBE_SECRET) {
     return htmlResponse(page('Afmelden tijdelijk niet mogelijk', 'De afmeldfunctie is nog niet geconfigureerd. Neem contact op met de afzender.'), 500);
@@ -57,6 +86,50 @@ serve(async (req) => {
   // GET → bevestigingspagina met POST-knop.
   return htmlResponse(confirmPage(brandName, verified.email, token), 200);
 });
+
+// Open voor elke herkomst: wat hier gebeurt, mag alleen met een geldig, door
+// ons ondertekend token, en er gaat geen cookie of sessie mee. Een andere
+// website kon met dat token ook al het formulier posten.
+const JSON_CORS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Max-Age': '86400',
+};
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { ...JSON_CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+  });
+}
+
+/** De ingang voor de afmeldpagina in de app: info of afmelden, met het token in de body. */
+async function handleJson(req: Request): Promise<Response> {
+  if (!UNSUBSCRIBE_SECRET) return jsonResponse({ error: 'Afmelden is nu niet mogelijk. Neem contact op met de afzender.' }, 503);
+  const parsed = await req.json().catch(() => null) as Record<string, unknown> | null;
+  const body = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  const action = String(body.action || '');
+  if (action !== 'info' && action !== 'unsubscribe') return jsonResponse({ error: 'Onbekende actie.' }, 400);
+  const verified = await verifyUnsubscribeToken(UNSUBSCRIBE_SECRET, String(body.token || ''));
+  if (!verified) return jsonResponse({ error: 'Deze afmeldlink is ongeldig of verlopen.' }, 400);
+  const brandName = await loadSenderName(supabaseAdmin, verified.organizationId);
+
+  if (action === 'unsubscribe') {
+    try {
+      await applyUnsubscribe(verified.organizationId, verified.email, 'link');
+    } catch (error) {
+      console.error('email-unsubscribe apply failed', error instanceof Error ? error.message : error);
+      return jsonResponse({ error: 'We konden je afmelding niet verwerken. Probeer het later opnieuw.' }, 500);
+    }
+    return jsonResponse({ brandName, email: verified.email, unsubscribed: true });
+  }
+
+  // Staat het adres al als afmelding op de lijst, dan zegt de pagina dat meteen.
+  const { data: existing } = await supabaseAdmin.from('email_suppressions').select('reason')
+    .eq('organization_id', verified.organizationId).eq('email', verified.email.trim().toLowerCase()).maybeSingle();
+  return jsonResponse({ brandName, email: verified.email, unsubscribed: existing?.reason === 'unsubscribed' });
+}
 
 // Elke stap controleert zijn fout. supabase-js gooit niet bij een databasefout,
 // het geeft { error } terug. Tot november 2026 werd die genegeerd: mislukte het

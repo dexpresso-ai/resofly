@@ -161,6 +161,7 @@ import { PublicContractPage } from './features/PublicContractPage';
 import { PublicBookingPage } from './features/PublicBookingPage';
 import { PublicGalleryPage } from './features/PublicGalleryPage';
 import { PublicSharePage } from './features/PublicSharePage';
+import { PublicUnsubscribePage } from './features/PublicUnsubscribePage';
 import { PublicTransferPage } from './features/PublicTransferPage';
 import { GalleryTab } from './features/ProjectGallery';
 import { Contracts } from './features/Contracts';
@@ -634,6 +635,13 @@ function getPublicShareTokenFromLocation(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+/** Afmelden voor marketingmail: /afmelden?token=<token> (zie PublicUnsubscribePage). */
+function getPublicUnsubscribeTokenFromLocation(): string | null {
+  const url = new URL(window.location.href);
+  if (!/^\/afmelden\/?$/.test(url.pathname)) return null;
+  return url.searchParams.get('token') || null;
+}
+
 /** Persoonlijke link naar een zending (bestanden versturen): /ontvang/<token>. */
 function getPublicTransferTokenFromLocation(): string | null {
   const url = new URL(window.location.href);
@@ -961,6 +969,7 @@ function App() {
   const publicGalleryToken = getPublicGalleryTokenFromLocation();
   const publicShareToken = getPublicShareTokenFromLocation();
   const publicTransferToken = getPublicTransferTokenFromLocation();
+  const publicUnsubscribeToken = getPublicUnsubscribeTokenFromLocation();
   const clientHost = clientHostInfo();
   const onClientHost = clientHost !== null;
   const portalRoute = isClientPortalRoute() || (onClientHost && window.location.pathname === '/');
@@ -1750,6 +1759,7 @@ function App() {
   if (publicGalleryToken) return <PublicGalleryPage token={publicGalleryToken} />;
   if (publicShareToken) return <PublicSharePage token={publicShareToken} />;
   if (publicTransferToken) return <PublicTransferPage token={publicTransferToken} />;
+  if (publicUnsubscribeToken) return <PublicUnsubscribePage token={publicUnsubscribeToken} />;
   // Nooit de werkruimte of het inlogscherm van een teamlid op een klantadres.
   if (onClientHost) return <ClientPortal />;
   if (!sessionReady) return <BootLoading />;

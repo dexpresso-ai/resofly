@@ -414,6 +414,8 @@ function edgeFunction(name, body, options = {}) {
   if (name === 'meeting-booking-public') return pub.bookingPublic;
   if (name === 'file-share-public') return pub.sharePublic;
   if (name === 'gallery-public') return pub.galleryPublic;
+  // Afmelden voor marketingmail (2026-11-10): de pagina in de app, nog niet afgemeld.
+  if (name === 'email-unsubscribe') return pub.unsubscribeInfo;
   if (name === 'client-portal') {
     // Een klant op inactief (2026-11-10): geen tickets (portalInactive op de pagina).
     const inactive = options?.portalInactive === true;

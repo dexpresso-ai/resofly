@@ -10,7 +10,7 @@
 // 10 november 2026 draaide geen enkele stromentest de functie `api` of
 // `mcp-oauth`. Zie docs/rapporten/CONTROLE_API_LAAG_2026-11-10.md.
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { API_URL, PUBLIEK } from './omgeving.mjs';
+import { AFMELD_GEHEIM, API_URL, PUBLIEK } from './omgeving.mjs';
 import { roep, roepRequest } from './functies.mjs';
 import { rest, sql, sqlRij } from './supabase.mjs';
 import { geweigerd, gelijk, gelukt, groep, stap, verwacht } from './toets.mjs';
@@ -426,6 +426,31 @@ export default async function apiScenario() {
         verwacht(res.status >= 400 && res.status < 500, `${naam} met ${inhoud}: ${res.status} ${res.tekst.slice(0, 160)}`);
       }
     }
+  });
+
+  groep('Afmelden voor marketingmail: de pagina in de app');
+  await stap('een browser gaat naar /afmelden in de app; de pagina meldt pas af na de knop', async () => {
+    const { makeUnsubscribeToken } = await import('../../supabase/functions/_shared/unsubscribe.ts');
+    const email = `nieuwsbrief.${randomBytes(4).toString('hex')}@klant.test`;
+    const token = await makeUnsubscribeToken(AFMELD_GEHEIM, a.orgId, email);
+    // De link uit de mail, geopend in een browser: doorsturen, niet afmelden.
+    const link = await roep('email-unsubscribe', { method: 'GET', query: `token=${encodeURIComponent(token)}`, origin: null, headers: { accept: 'text/html,application/xhtml+xml' } });
+    gelijk(link.status, 303, 'doorsturen');
+    gelijk(link.headers.get('location'), `${PUBLIEK}/afmelden?token=${encodeURIComponent(token)}`, 'naar de pagina in de app');
+    // De pagina vraagt wie het is, en meldt pas af na de knop.
+    const info = gelukt(await roep('email-unsubscribe', { body: { action: 'info', token }, origin: 'https://ergens.test' }), 'info');
+    gelijk([info.email, info.unsubscribed], [email, false], 'info');
+    verwacht(info.brandName, 'naam van de afzender ontbreekt');
+    gelijk(sqlRij(`select reason from public.email_suppressions where organization_id = ${q(a.orgId)} and email = ${q(email)}`), null, 'al afgemeld na alleen openen');
+    const klaar = gelukt(await roep('email-unsubscribe', { body: { action: 'unsubscribe', token } }), 'afmelden');
+    gelijk(klaar.unsubscribed, true, 'afgemeld');
+    gelijk(sqlRij(`select reason, source from public.email_suppressions where organization_id = ${q(a.orgId)} and email = ${q(email)}`), { reason: 'unsubscribed', source: 'link' }, 'blokkade');
+    gelijk(gelukt(await roep('email-unsubscribe', { body: { action: 'info', token } }), 'info daarna').unsubscribed, true, 'info na afmelden');
+    // Een vervalst token of een onbekende actie: een nette 400.
+    geweigerd(await roep('email-unsubscribe', { body: { action: 'info', token: `${token.split('.')[0]}.vervalst` } }), 'vervalst token', [400]);
+    geweigerd(await roep('email-unsubscribe', { body: { action: 'alles', token } }), 'onbekende actie', [400]);
+    const preflight = await roep('email-unsubscribe', { method: 'OPTIONS', origin: 'https://ergens.test' });
+    gelijk(preflight.status, 204, 'preflight');
   });
 
   groep('Inkomende mail: een rem op een golf antwoorden');

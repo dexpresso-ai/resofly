@@ -102,6 +102,13 @@ export default {
           headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff' },
         });
       case 'unsubscribe':
+        // Openen in de browser: de afmeldpagina van de app
+        // (src/features/PublicUnsubscribePage.tsx), in de huisstijl van dit
+        // adres. Tot 10 november ging ook de GET naar email-unsubscribe, en die
+        // pagina kwam via Supabase als platte tekst aan: de ontvanger zag code
+        // in plaats van een knop. De POST (de knop en afmelden met één klik
+        // vanuit het mailprogramma) gaat zoals altijd naar de functie.
+        if (request.method === 'GET' || request.method === 'HEAD') return page(request, env, lookup, true);
         return unsubscribe(request, url, env);
       case 'asset':
         return asset(request, url, env);

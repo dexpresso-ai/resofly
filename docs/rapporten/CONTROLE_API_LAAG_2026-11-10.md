@@ -20,9 +20,14 @@ praten."*
   - de unittests, 1486 en 0 fout;
   - de typecontrole van alle edge functions.
 
-  Drie werkingsfouten zijn hersteld: jaarrekening-PDF's werden nooit bewaard, een teruggezette
-  agenda-afspraak gaf een 500, en kapotte invoer gaf een 500 in plaats van een 400. Eén
-  configuratiepunt op staging staat open: de PDF-opslag loopt nog via de oude media-worker
+  Vier werkingsfouten zijn hersteld:
+  - jaarrekening-PDF's werden nooit bewaard;
+  - een teruggezette agenda-afspraak gaf een 500;
+  - kapotte invoer gaf een 500 in plaats van een 400;
+  - de afmeldlink in marketingmail toonde HTML-code in plaats van een knop. De uitgebreide
+    rooktest stelde dat op staging vast.
+
+  Eén configuratiepunt op staging staat open: de PDF-opslag loopt nog via de oude media-worker
   (punt O1).
 
 ## Wat er gecontroleerd is
@@ -88,6 +93,7 @@ reikwijdte; **laag** = klein, of moeilijk uit te buiten.
 | 16 | laag (werking) | Jaarrekening-PDF's werden nooit bewaard | route hersteld; werkt na O1 |
 | 17 | laag (werking) | CalDAV: teruggezette afspraak gaf een 500 | hersteld en uitgerold |
 | 18 | laag (werking) | Openbare functies: kapotte invoer gaf een 500 | hersteld |
+| 19 | middel (werking) | Afmeldlink in marketingmail toonde HTML-code in plaats van een knop | hersteld (O4) |
 
 ### 1. De opruimwachtrij wiste een bewijsstuk (middel)
 
@@ -207,7 +213,7 @@ database.
   met `Retry-After`. Dat gaat via de nieuwe databasefunctie `edge_note_attempt`.
 - Een 500 geeft geen databasetekst meer naar buiten.
 
-### 9 tot en met 18 (laag)
+### 9 tot en met 18 (laag), en 19
 
 - **9. Webhook-geheim van Mollie.**
   - **Wat:** `billing` bewaarde het Mollie-antwoord, met onze webhookUrl en het geheim erin,
@@ -240,6 +246,17 @@ database.
   bij elke poging een 500.
 - **18. Openbare functies:** een body `null` of een lijst gaf een 500 met de tekst van een
   TypeError. Nu een 400. `gallery-public` noemde ook de namen van secrets aan bezoekers.
+- **19. De afmeldlink in marketingmail.**
+  - **Wat:** Supabase serveert een GET met `text/html` op `*.supabase.co` als platte tekst. Wie
+    in een campagnemail op "Afmelden" klikte, zag HTML-code in plaats van een knop. Afmelden
+    met één klik vanuit het mailprogramma werkte wel. De uitgebreide rooktest stelde het op
+    staging vast.
+  - **Herstel:**
+    - `email-unsubscribe` stuurt een browser door naar de nieuwe pagina `/afmelden` in de app;
+    - die pagina vraagt eerst wie het is, en meldt pas af na de knop. Mailprogramma's en
+      scanners openen links vooraf, en mogen niemand per ongeluk afmelden;
+    - op een klantadres serveert de worker dezelfde pagina, in de huisstijl van de organisatie;
+    - de one-click POST is ongewijzigd.
 
 ## Uitgerold
 
@@ -319,18 +336,17 @@ testsleutel van Mollie:
 Kijk daarna in Mollie dat er steeds precies één lopend abonnement is, met het bedrag van het
 plan.
 
-### O4. De afmeldpagina van marketingmail (controleren)
+### O4. De afmeldpagina van marketingmail (hersteld, één klik ter controle)
 
-**Het risico:** Supabase serveert een GET op `*.supabase.co` met `text/html` als platte tekst.
-Zolang de klantadressen uit staan, linkt elke campagne rechtstreeks naar `email-unsubscribe`.
-Dan ziet de ontvanger HTML-code in plaats van een knop. Afmelden met één klik vanuit het
-mailprogramma (RFC 8058) werkt wel.
+De rooktest zag op staging dat de pagina als `text/plain` aankwam (bevinding 19). Dat is
+hersteld; zie hierboven.
 
-**Controleren:** één klik op staging beslist het. Dat is ook open punt O1 uit
-`CONTROLE_MARKETING_2026-11-07.md`.
+**Wat nog moet:**
+1. Verstuur een testcampagne naar jezelf.
+2. Klik in de mail op "Afmelden": je komt op `/afmelden` in de app, met een knop.
+3. Klik op de knop en controleer de afmelding onder Marketing.
 
-**Als het mis is:** laat de app `/afmelden` tonen en daarvandaan naar de functie posten, net als
-de andere openbare pagina's.
+De rooktest controleert na elke uitrol dat een browser wordt doorgestuurd naar `/afmelden`.
 
 ### O5. Wat er nog over is (code, later)
 

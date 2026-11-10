@@ -141,6 +141,8 @@ const PAGES = {
   'public-booking': { path: '/booking/demo-token' },
   'public-share': { path: '/gedeeld/demo-token' },
   'public-gallery': { path: '/gallerij/demo-token' },
+  // 2026-11-10 — de afmeldpagina voor marketingmail (de link uit een campagne).
+  'public-unsubscribe': { path: '/afmelden?token=demo-token' },
   'portal-login': { path: '/portal' },
   // 2026-11-05 — het inlogscherm op het eigen adres van de leverancier, met
   // eigen kleuren voor achtergrond, kaart en knop (zie tests/mobile/mock).
