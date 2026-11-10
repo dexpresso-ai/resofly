@@ -827,16 +827,22 @@ async function handleRsvp(organizerToken: string, body: Record<string, unknown>)
   const reply = parseIcsReply(calendar);
   if (!reply) return { skipped: 'rsvp_unparsable' };
 
-  // Genodigde matchen: bij voorkeur op het ATTENDEE-adres uit de REPLY, anders
-  // op de afzender van de mail.
-  const candidateEmail = reply.email || normalizeEmail(body.headerFrom || body.envelopeFrom);
+  // Genodigde matchen op het ATTENDEE-adres uit de REPLY, maar alleen als dat
+  // ook de afzender van de mail is. Elke genodigde krijgt het organizer-adres
+  // en de adressen van de anderen; zonder deze eis zette de een met een
+  // zelfgeschreven REPLY de ander op "afgewezen". Een '%' in het adres
+  // (`%@%.%` komt door isEmail) matchte bovendien met ilike de eerste de beste
+  // genodigde.
+  const senders = [normalizeEmail(body.headerFrom), normalizeEmail(body.envelopeFrom)].filter(Boolean);
+  const candidateEmail = reply.email || senders[0] || '';
   if (!isEmail(candidateEmail)) return { skipped: 'rsvp_no_attendee' };
+  if (!senders.includes(candidateEmail)) return { skipped: 'rsvp_sender_mismatch' };
 
   const { data: attendee, error: attendeeError } = await supabaseAdmin
     .from('calendar_event_attendees')
     .select('id')
     .eq('event_id', event.id)
-    .ilike('email', candidateEmail)
+    .ilike('email', candidateEmail.replace(/[\\%_]/g, (c) => `\\${c}`))
     .maybeSingle();
   if (attendeeError) throw attendeeError;
   if (!attendee) return { skipped: 'rsvp_unknown_attendee' };

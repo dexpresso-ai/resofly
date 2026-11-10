@@ -97,7 +97,10 @@ serve(async (req) => {
     assertAllowedOrigin(req);
     if (req.method !== 'POST') return json(req, { ok: false, error: 'Method not allowed.' }, 405);
 
-    const body = await req.json().catch(() => ({}));
+    // Alleen een JSON-object telt als invoer. `null`, een lijst of een getal gaf
+    // hier een TypeError, een 500 en een regel in de foutlog; nu een gewone 400.
+    const parsed = await req.json().catch(() => ({}));
+    const body = (parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {});
     const action = String(body.action || 'getGallery');
     // Een album van een andere organisatie opent niet op dit klantadres:
     // zelfde antwoord als een onbekende link.
@@ -301,7 +304,9 @@ async function assertCreativeAccess(organizationId: string): Promise<void> {
 
 async function fetchGalleryTokens(organizationId: string, galleryId: string, allowDownload: boolean) {
   if (!MEDIA_WORKER_URL || !MEDIA_INTERNAL_SECRET) {
-    throw new PublicError('Galerij-weergave is niet geconfigureerd (MEDIA_WORKER_URL + INTERNAL_UPLOAD_SECRET).', 500);
+    // De namen van de secrets zijn voor de logs, niet voor een bezoeker van de galerij.
+    console.error('gallery-public: MEDIA_WORKER_URL of INTERNAL_UPLOAD_SECRET ontbreekt');
+    throw new PublicError('De galerij kan nu niet worden getoond. Probeer het later opnieuw.', 500);
   }
   const res = await fetch(`${MEDIA_WORKER_URL}/internal/gallery/tokens`, {
     method: 'POST',

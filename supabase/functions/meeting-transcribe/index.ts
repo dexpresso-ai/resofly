@@ -86,7 +86,7 @@ Deno.serve(async (req) => {
       case 'budget': return cors.json(req, await budgetStatus(organizationId, user.id));
       case 'create': return cors.json(req, await createRecording(organizationId, user.id, role, body));
       case 'start': return cors.json(req, await startTranscription(organizationId, role, body));
-      case 'summarize': return cors.json(req, await summarize(organizationId, role, body));
+      case 'summarize': return cors.json(req, await summarize(organizationId, role, body, user.id));
       case 'update': return cors.json(req, await updateRecording(organizationId, role, body));
       case 'sendSummary': return cors.json(req, await sendSummary(organizationId, role, body));
       case 'delete': return cors.json(req, await deleteRecording(organizationId, role, body));
@@ -227,12 +227,13 @@ async function startTranscription(organizationId: string, role: Awaited<ReturnTy
   }
 }
 
-async function summarize(organizationId: string, role: Awaited<ReturnType<typeof requireOrganizationAccess>>, body: Record<string, unknown>) {
+async function summarize(organizationId: string, role: Awaited<ReturnType<typeof requireOrganizationAccess>>, body: Record<string, unknown>, userId: string) {
   assertWriteRole(role);
   const recordingId = String(body.recordingId || '');
   if (!isUuid(recordingId)) throw new HttpError('Ongeldige recordingId.', 400);
   await loadRecording(organizationId, recordingId); // org-check
-  const outcome = await runSummaryForRecording(admin, recordingId);
+  // Wie erom vraagt, betaalt (zie runSummaryForRecording).
+  const outcome = await runSummaryForRecording(admin, recordingId, { billTo: userId });
   return { ok: true, summary: outcome };
 }
 

@@ -405,6 +405,20 @@ export default async function apiScenario() {
     gelukt(await rest('rpc/preview_next_client_code', { method: 'POST', token: a.medewerker.token, body: { p_organization_id: a.orgId } }), 'lid met Klanten');
   });
 
+  await stap('een webhook van de organisatie gaat uit als zijn maker geen beheerder meer is', async () => {
+    const eindpunt = sql(`insert into public.webhook_endpoints (organization_id, url, events, created_by)
+      values (${q(a.orgId)}, 'https://203.0.113.20/hook', array['*'], ${q(a.beheerder.id)}) returning id`);
+    sql(`update public.organization_members set role = 'member' where organization_id = ${q(a.orgId)} and user_id = ${q(a.beheerder.id)}`);
+    try {
+      const rij = sqlRij(`select active, disabled_reason from public.webhook_endpoints where id = ${q(eindpunt)}`);
+      gelijk(rij?.active, false, 'eindpunt na degradatie van de maker');
+      verwacht(/geen owner of admin meer/.test(rij?.disabled_reason ?? ''), `reden ontbreekt: ${rij?.disabled_reason}`);
+    } finally {
+      sql(`update public.organization_members set role = 'admin' where organization_id = ${q(a.orgId)} and user_id = ${q(a.beheerder.id)}`);
+      sql(`delete from public.webhook_endpoints where id = ${q(eindpunt)}`);
+    }
+  });
+
   groep('Inkomende mail: een rem op een golf antwoorden');
   await stap('na de grens per gesprek wordt een antwoord geparkeerd, zonder melding aan het team', async () => {
     const thread = sql(`insert into public.client_email_threads (organization_id, client_id) values (${q(a.orgId)}, ${q(a.klantA.id)}) returning id`);

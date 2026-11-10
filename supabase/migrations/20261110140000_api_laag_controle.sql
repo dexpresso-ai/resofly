@@ -87,6 +87,26 @@
 --    parkeert hij een bericht als 'rate_limited' (geen pushmelding, geen
 --    signaal). Zonder deze indexen las dat tellen alle mail van de organisatie.
 --
+-- 7. Het webhook-geheim van Mollie uit de betaalgegevens. billing bewaarde het
+--    volledige Mollie-antwoord, met onze webhookUrl en dus het geheim erin, in
+--    organization_payment_records.raw_payload en
+--    organization_billing_events.payload. Die zijn leesbaar voor de
+--    beheerders van een organisatie: elke organisatie kon het geheim van de
+--    webhook van het hele platform lezen. billing laat het er nu uit; hier
+--    gaat het uit wat er al stond. De auditlog bewaart van raw_payload alleen
+--    dát hij veranderde, niet de waarde. Vernieuw daarna MOLLIE_WEBHOOK_SECRET
+--    (zie het rapport): wat al gelezen is, is niet terug te halen.
+--
+-- 8. Een webhook van de organisatie stopt als zijn maker geen owner of admin
+--    meer is. Zo'n eindpunt (Instellingen → API & webhooks, zonder sleutel)
+--    krijgt alle gebeurtenissen, ook uit Financiën, en alleen een owner of
+--    admin mag het aanmaken. Vertrok de maker, dan ging het al uit
+--    (disable_integrations_on_member_exit); werd hij lid met Financiën dicht,
+--    dan bleven facturen, offertes en contracten met bedragen naar zijn server
+--    gaan. Nu gaat het eindpunt dan ook uit, met de reden erbij; een owner of
+--    admin zet het weer aan. Eindpunten van een API-sleutel weegt de bezorger
+--    al bij elke bezorging opnieuw.
+--
 -- Veilig om meermaals te draaien.
 -- ============================================================
 
@@ -660,5 +680,49 @@ create index if not exists idx_inbound_messages_org_created
 create index if not exists idx_inbound_messages_origin_created
   on public.inbound_messages (origin_client_email_id, created_at desc)
   where origin_client_email_id is not null;
+
+-- ── 7. Het webhook-geheim van Mollie uit de betaalgegevens ─────────────────
+
+update public.organization_payment_records
+   set raw_payload = raw_payload - 'webhookUrl'
+ where raw_payload ? 'webhookUrl';
+
+update public.organization_billing_events
+   set payload = payload - 'webhookUrl'
+ where payload ? 'webhookUrl';
+
+-- ── 8. Webhooks van de organisatie stoppen als hun maker geen beheerder meer is
+
+create or replace function public.disable_org_webhooks_on_demotion()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not (old.role in ('owner', 'admin') and new.role not in ('owner', 'admin')) then
+    return new;
+  end if;
+  -- Zelfde vlag als bij vertrek: dan laat de bewaking van webhook_endpoints
+  -- de reden staan (alleen voor de rest van deze transactie).
+  perform set_config('resofly.member_exit', 'on', true);
+  update public.webhook_endpoints
+     set active = false,
+         disabled_reason = 'Uitgezet: wie dit eindpunt aanmaakte, is geen owner of admin meer. Een owner of admin kan het weer aanzetten.'
+   where organization_id = new.organization_id
+     and created_by = new.user_id
+     and api_key_id is null
+     and active;
+  perform set_config('resofly.member_exit', '', true);
+  return new;
+end;
+$$;
+
+revoke all on function public.disable_org_webhooks_on_demotion() from public, anon, authenticated;
+
+drop trigger if exists organization_members_disable_org_webhooks on public.organization_members;
+create trigger organization_members_disable_org_webhooks
+  after update of role on public.organization_members
+  for each row execute function public.disable_org_webhooks_on_demotion();
 
 commit;

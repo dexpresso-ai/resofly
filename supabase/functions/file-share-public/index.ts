@@ -97,7 +97,10 @@ serve(async (req) => {
     assertAllowedOrigin(req);
     if (req.method !== 'POST') return json(req, { ok: false, error: 'Method not allowed.' }, 405);
 
-    const body = await req.json().catch(() => ({}));
+    // Alleen een JSON-object telt als invoer. `null`, een lijst of een getal gaf
+    // hier een TypeError, een 500 en een regel in de foutlog; nu een gewone 400.
+    const parsed = await req.json().catch(() => ({}));
+    const body = (parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {});
     const action = String(body.action || 'get');
     const token = String(body.token || '').trim();
     if (!isPlausibleToken(token)) throw new ShareError('Deze deellink is ongeldig.', 400);
