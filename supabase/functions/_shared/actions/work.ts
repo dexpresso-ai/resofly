@@ -40,10 +40,24 @@ function hhmm(input: Record<string, unknown>, key: string): string | null {
   return value;
 }
 
+/**
+ * Een rapportage van Gerrie is van wie hem maakte (RLS: created_by = auth.uid()).
+ * De handelingen draaien op de service-role, dus zoeken we hier zelf op de maker:
+ * anders las een collega met het id de titel van een privérapport, en meldde een
+ * hernoeming succes terwijl RLS hem bij het uitvoeren stil tegenhield.
+ */
+async function ownAiReport(ctx: ActionCtx, reportId: string): Promise<{ title: string }> {
+  const { data, error } = await orgQuery(ctx, 'ai_reports', 'title').eq('id', reportId).eq('created_by', ctx.userId).maybeSingle();
+  if (error) throw new ActionError(`Rapportage ophalen mislukt: ${error.message}`);
+  if (!data) throw new ActionError('Rapportage niet gevonden onder jouw rapportages.');
+  return data as { title: string };
+}
+
 /** Vind de contactpersoon bij de klant, of geef een leesbare fout. */
 async function contactOfClient(ctx: ActionCtx, contactId: string, clientId: string | null) {
   const contact = await row<{ name: string; client_id: string; phone: string | null }>(ctx, 'client_contacts', contactId, 'name, client_id, phone', 'Contactpersoon');
-  if (clientId && contact.client_id !== clientId) throw new ActionError(`${contact.name} hoort bij een andere klant.`);
+  // Zonder de naam: een foutmelding gaat onafgebakend terug naar het model.
+  if (clientId && contact.client_id !== clientId) throw new ActionError('Die contactpersoon hoort bij een andere klant.');
   return contact;
 }
 
@@ -176,20 +190,20 @@ export const WORK_ACTIONS: ActionDef[] = [
       const subject = optStr(input, 'subject', 200);
       if (subject && subject !== call.subject) { patch.subject = subject; changes.push(`onderwerp → ${subject}`); }
       const notes = optStr(input, 'notes', 5000);
-      if (notes) {
-        patch.notes = bool(input, 'append_notes', false) && call.notes ? `${call.notes}\n\n${notes}` : notes;
-        changes.push(bool(input, 'append_notes', false) ? 'aantekening aangevuld' : 'aantekening vervangen');
-      }
+      // Aanvullen gebeurt bij het uitvoeren, op de tekst van dan (src/lib/actions/work.ts).
+      const appendNotes = notes && bool(input, 'append_notes', false) ? notes : null;
+      if (notes && !appendNotes) { patch.notes = notes; changes.push('aantekening vervangen'); }
+      if (appendNotes) changes.push('aantekening aangevuld');
       const outcome = optChoice(input, 'outcome', CALL_OUTCOMES);
       if (outcome) { patch.outcome = outcome; changes.push(OUTCOME_LABELS[outcome]); }
       const minutes = optNum(input, 'minutes');
       if (minutes !== null) { patch.duration_seconds = Math.max(0, Math.round(minutes * 60)); changes.push(`${Math.round(minutes)} min`); }
-      if (Object.keys(patch).length === 0) throw new ActionError('Geef minstens één ding dat verandert.');
+      if (Object.keys(patch).length === 0 && !appendNotes) throw new ActionError('Geef minstens één ding dat verandert.');
       return {
         title: `Gesprek "${call.subject || 'zonder onderwerp'}" aanpassen`,
         sub: joinShort(changes, 140),
         kind: 'work',
-        payload: { call_id: callId, patch, subject: call.subject },
+        payload: { call_id: callId, patch, append_notes: appendNotes, subject: call.subject },
       };
     },
   },
@@ -427,7 +441,7 @@ export const WORK_ACTIONS: ActionDef[] = [
     required: ['report_id', 'title'],
     async plan(ctx, input) {
       const reportId = id(input, 'report_id');
-      const report = await row<{ title: string }>(ctx, 'ai_reports', reportId, 'title', 'Rapportage');
+      const report = await ownAiReport(ctx, reportId);
       const title = str(input, 'title', 120);
       return {
         title: `Rapportage hernoemen naar "${title}"`,

@@ -84,10 +84,18 @@ De grenzen zijn voor allemaal hetzelfde, en staan in één bestand:
   verdwijnt.
 - **`humanOnly`**: een gekoppelde AI of API-sleutel voert nooit zelf iets weg. Er staat
   niets in `apply.ts`.
-- **De bewaarplicht blijft.** Een verstuurde of geboekte factuur verwijder je niet: die
-  herstel je met `invoice.credit`. Een verstuurde offerte trek je in. Een klant met
-  facturen of offertes kan niet weg. `plan()` zegt dat vóór er een kaart komt, en de
-  database weigert het daarna nog een keer.
+- **De bewaarplicht blijft.**
+  - Een verstuurde of geboekte factuur verwijder je niet: die herstel je met
+    `invoice.credit`.
+  - Een verstuurde offerte trek je in.
+  - Een klant met facturen of offertes kan niet weg.
+  - Het bewijsstuk bij een offerte, factuur of inkoopfactuur die geen concept meer is,
+    kan niet weg en niet hernoemd worden. Dat is dezelfde regel als in het scherm.
+
+  `plan()` zegt dat vóór er een kaart komt. De uitvoerder controleert het vlak voor het
+  verwijderen opnieuw op de stand van dat moment, want een kaart kan van gisteren zijn.
+  Bij facturen en offertes weigert de database het daarna nog een keer. Bij klanten en
+  bijlagen doet de database dat niet; daar zijn deze twee controles de grens.
 - **De uitvoerder kent zijn eigen tabel.** "Taak verwijderen" kan alleen een taak raken,
   wat er ook in het voorstel staat.
 - De systeemprompt laat Gerrie eerst de omkeerbare weg voorstellen: archiveren, op
@@ -142,8 +150,9 @@ De grenzen:
 - **Een trigger laat het opslaan van een ticket, mail of factuur nooit mislukken.** Gaat
   de wachtrij stuk, dan komt er een waarschuwing in het databaselog en wordt het ticket
   gewoon opgeslagen. Dat is getest.
-- `ai_agent_events` is alleen voor de service-role: RLS staat aan, er zijn geen policies,
-  en de modulepoort van Gerrie staat erop. Claimen mag alleen de service-role.
+- `ai_agent_events` is alleen voor de service-role: RLS staat aan, er zijn geen policies
+  behalve het boekhouder-hek, en claimen mag alleen de service-role. Afgehandelde regels
+  gaan na 30 dagen weg, want er staan namen en adressen van buiten in.
 
 In de app:
 
@@ -171,6 +180,22 @@ In de app:
 | Aandeelhoudersregister en btw-registers verwijderen | Dat is wettelijke administratie. Corrigeren gaat met een tegenboeking of een nieuwe regel, zoals in het scherm. |
 | Organisaties aanmaken of wisselen | Elke organisatie is een eigen wereld (harde regel 1). |
 
+## Wat de onafhankelijke review vond, en wat er mee gebeurde
+
+Een tweede reviewer las de wijziging zonder mijn conclusies. Alles is verholpen en
+getest:
+
+| Bevinding | Ernst | Wat er nu is |
+| --- | --- | --- |
+| `attachment.delete`/`rename` kon het bewijsstuk van een geboekte inkoopfactuur, of van een verstuurde offerte of factuur, weghalen | hoog | Alleen bij een concept, zoals in het scherm. Gecontroleerd in `plan()` en vlak voor het uitvoeren. |
+| De modulepoort op de wachtrij liet gebeurtenissen stil wegvallen als degene die iets opsloeg geen Gerrie had | middel | Boekhouder-hek in plaats van modulepoort, zonder schrijftrigger. Lokaal nagelopen: een lid zonder Gerrie maakt een klant aan, en de gebeurtenis komt binnen. |
+| Een kaart van gisteren kon bij het verwijderen van een concept eerst de bijlagen wissen, waarna de database het concept zelf weigerde | middel | De uitvoerder controleert de stand vóór `deleteEntityCascade`. Bij een map gaan alleen de submappen van nu mee, ook bij een klant. |
+| Een rapportage van Gerrie (privé) was via de service-role op id te vinden | laag-middel | Alleen de eigen rapportages. Hernoemen meldt geen succes meer als er niets veranderde. |
+| Namen uit de database (contactpersoon, klant) stonden in foutmeldingen die onafgebakend naar het model gaan | laag | Die foutmeldingen noemen geen namen meer. |
+| Wachtrij: een afgebroken run kreeg geen tweede kans, "afgehandeld" overschreef "overgeslagen", elke nieuwe klant of mail opende een subtransactie, en oude regels bleven bewaard | laag | Hoogstens drie pogingen, de poging telt mee in de run-sleutel, alleen de zichtbare gebeurtenissen gaan op afgehandeld, eerst kijken of iemand luistert, en opruimen na 30 dagen. |
+| Een gesprek aanvullen bouwde de tekst op bij het voorstel | laag | Aanvullen gebeurt bij het uitvoeren, op de tekst van dat moment. |
+| De changelog zei dat de database een klant met facturen weigert | — | Rechtgezet (zie "De bewaarplicht blijft"). |
+
 ## Wat er veranderde aan de grenzen
 
 Niets. Alle nieuwe handelingen:
@@ -192,18 +217,22 @@ alleen de handelingen uit `apply.ts` rechtstreeks uit; daar is niets bij gekomen
   - nieuwe kolom `max_event_runs_per_day` (1–96, standaard 24);
   - nieuwe index voor de triggers.
 - `ai_agent_runs.triggered_by` kent nu ook `event`.
-- Nieuwe tabel `ai_agent_events`: de wachtrij, met RLS aan, geen policies en de
-  modulepoort van Gerrie.
+- Nieuwe tabel `ai_agent_events`: de wachtrij, met RLS aan, geen policies, het
+  boekhouder-hek, een teller voor het aantal pogingen, en opruimen na 30 dagen.
 - `enqueue_agent_event()` (security definer, faalt nooit hard) en negen triggerfuncties.
-- `claim_agent_event_batches(p_limit)`: alleen de service-role. Doet de minuut wachttijd,
-  de daggrens, het vervallen na drie dagen en het terugzetten van vastgelopen claims.
+- `claim_agent_event_batches(p_limit)`: alleen de service-role. Doet:
+  - de minuut wachttijd;
+  - de daggrens;
+  - het vervallen na drie dagen;
+  - het terugzetten van vastgelopen claims, hoogstens drie pogingen;
+  - het opruimen.
 
 Veilig opnieuw te draaien. Getest op een lege database, met de hele keten vanaf nul.
 
 ## Getest
 
 - `npm run typecheck` is groen.
-- `npm test`: 1477 tests, allemaal groen. Nieuw of uitgebreid:
+- `npm test`: 1480 tests, allemaal groen. Nieuw of uitgebreid:
   - `actionAllTasks.test.ts`: de grenzen van de nieuwe handelingen, met een nep-database
     waarop `plan()` en `read()` echt draaien. Getoetst wordt:
     - de bewaarplicht bij facturen, offertes en klanten;
@@ -217,6 +246,9 @@ Veilig opnieuw te draaien. Getest op een lege database, met de hele keten vanaf 
     - de afzender van een chatbericht;
     - de weekplanner van de voorsteller;
     - de instellingen alleen voor owners en admins;
+    - het vastliggen van bewijsstukken;
+    - privérapportages;
+    - foutmeldingen zonder namen;
   - `actionSearch.test.ts` met 27 vragen voor de nieuwe handelingen;
   - `agentEvents.test.ts`: de lijst gelijk in code, CHECK en app, de module per
     gebeurtenis, en de aanleiding afgebakend als gegevens, ook met een onderwerp dat
@@ -224,11 +256,13 @@ Veilig opnieuw te draaien. Getest op een lege database, met de hele keten vanaf 
   - `agentAccess.test.ts` leest nu de nieuwste ritme-CHECK.
 - `deno check` op de geraakte functies (`gerrie-agent`, `gerrie-agent-runner`, `mcp`, `api`,
   `gerrie-signals`) is groen.
-- `supabase db start`: de hele migratieketen werkt op een lege database. De nieuwe
-  migratie draait ook een tweede keer zonder fout. In die database is nagelopen:
+- `supabase db start` en `supabase db reset`: de hele migratieketen werkt op een lege
+  database. De nieuwe migratie draait ook een tweede keer zonder fout. In die database is nagelopen:
   - een gebeurtenis komt alleen in de eigen organisatie, en alleen bij een actieve agent;
   - bij een klantmail alleen als hij inkomend is;
   - de minuut wachttijd, de bundel, en geen dubbele claim;
+  - drie pogingen na een afgebroken run, daarna overgeslagen, en opruimen na 30 dagen;
+  - een lid zonder Gerrie dat een klant aanmaakt, levert gewoon een gebeurtenis op;
   - de daggrens en het vervallen;
   - claimen zonder service-role wordt geweigerd. Gevonden en verholpen: `<>` liet een
     sessie zonder rol door, nu staat er `is distinct from`;

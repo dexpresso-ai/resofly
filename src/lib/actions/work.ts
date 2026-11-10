@@ -1,6 +1,7 @@
 import {
-  blockInboundSender, createClientCall, creditInvoice, currentSessionUserId, markClientEmailsRead, saveJitsiServer,
-  saveOrganizationPortalSettings, savePlannerDayCapacity, shiftProjectTaskPlanning, updateClientCall, withdrawQuote,
+  appendClientCallNotes, blockInboundSender, createClientCall, creditInvoice, currentSessionUserId, markClientEmailsRead,
+  saveJitsiServer, saveOrganizationPortalSettings, savePlannerDayCapacity, shiftProjectTaskPlanning, updateClientCall,
+  withdrawQuote,
 } from '../repository';
 import { extendBookingLink } from '../meetingBookingApi';
 import { renameAiReport } from '../aiReports';
@@ -20,7 +21,11 @@ export const WORK_EXECUTORS: Record<string, ActionExecutor> = {
   },
 
   'client_call.update': async (payload, ctx) => {
-    await updateClientCall(text(payload, 'call_id'), patchOf(payload), ctx.organizationId);
+    const callId = text(payload, 'call_id');
+    const patch = patchOf(payload);
+    if (Object.keys(patch).length > 0) await updateClientCall(callId, patch, ctx.organizationId);
+    const addition = optText(payload, 'append_notes');
+    if (addition) await appendClientCallNotes(callId, ctx.organizationId, addition);
     return `Gesprek "${optText(payload, 'subject') ?? ''}" bijgewerkt`;
   },
 

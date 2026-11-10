@@ -1,7 +1,7 @@
 import {
-  deleteAttachment, deleteCampaign, deleteClientCall, deleteClientContact, deleteClientEmail, deleteContentFolder,
-  deleteEntityCascade, deleteFlow, deletePlannerNote, deleteProjectTemplate, deleteSavedReport, deleteTicketNote,
-  deleteTimeEntry, loadAttachmentRef,
+  attachmentLockReason, clientHasFinanceDocuments, deleteAttachment, deleteCampaign, deleteClientCall, deleteClientContact,
+  deleteClientEmail, deleteContentFolder, deleteEntityCascade, deleteFlow, deletePlannerNote, deleteProjectTemplate,
+  deleteSavedReport, deleteTicketNote, deleteTimeEntry, draftDeleteBlockReason, loadAttachmentRef,
 } from '../repository';
 import { deleteBookingLink } from '../meetingBookingApi';
 import { deleteRecording, getRecording } from '../meeting-api';
@@ -33,7 +33,13 @@ export const REMOVAL_EXECUTORS: Record<string, ActionExecutor> = {
     return done(payload, 'Project');
   },
   'client.delete': async (payload, ctx) => {
-    await deleteEntityCascade('clients', text(payload, 'id'), ctx.organizationId);
+    const clientId = text(payload, 'id');
+    // Opnieuw, vlak voor het verwijderen: een factuur die na de kaart is gemaakt,
+    // zou anders zonder klant achterblijven (de koppeling gaat op leeg).
+    if (await clientHasFinanceDocuments(clientId, ctx.organizationId)) {
+      throw new Error('Deze klant heeft inmiddels offertes of facturen; die vallen onder de bewaarplicht. Zet de klant op inactief.');
+    }
+    await deleteEntityCascade('clients', clientId, ctx.organizationId);
     return done(payload, 'Klant');
   },
   'ticket.delete': async (payload, ctx) => {
@@ -48,12 +54,20 @@ export const REMOVAL_EXECUTORS: Record<string, ActionExecutor> = {
     await deleteEntityCascade('documents', text(payload, 'id'), ctx.organizationId);
     return done(payload, 'Document');
   },
+  // Bij een concept eerst kijken of het nog een concept IS, vóór deleteEntityCascade
+  // de bijlagen wist: weigert de database pas daarna, dan zijn die al weg.
   'invoice.delete_draft': async (payload, ctx) => {
-    await deleteEntityCascade('invoices', text(payload, 'id'), ctx.organizationId);
+    const invoiceId = text(payload, 'id');
+    const blocked = await draftDeleteBlockReason('invoice', invoiceId, ctx.organizationId);
+    if (blocked) throw new Error(blocked);
+    await deleteEntityCascade('invoices', invoiceId, ctx.organizationId);
     return done(payload, 'Conceptfactuur');
   },
   'quote.delete_draft': async (payload, ctx) => {
-    await deleteEntityCascade('quotes', text(payload, 'id'), ctx.organizationId);
+    const quoteId = text(payload, 'id');
+    const blocked = await draftDeleteBlockReason('quote', quoteId, ctx.organizationId);
+    if (blocked) throw new Error(blocked);
+    await deleteEntityCascade('quotes', quoteId, ctx.organizationId);
     return done(payload, 'Conceptofferte');
   },
   'week_action.delete': async (payload, ctx) => {
@@ -86,15 +100,17 @@ export const REMOVAL_EXECUTORS: Record<string, ActionExecutor> = {
   },
   'folder.delete': async (payload, ctx) => {
     const folderId = text(payload, 'id');
-    // De submappen van NU (de geladen werkruimte) plus die van het voorstel:
-    // een map die er intussen bij kwam, gaat ook mee, net als bij de knop.
-    const planned = Array.isArray(payload.descendant_ids) ? (payload.descendant_ids as unknown[]).map(String) : [];
+    // Alleen de submappen van NU (de geladen werkruimte), net als de knop. De lijst
+    // uit het voorstel niet: een submap die intussen ergens anders staat, hoort er
+    // niet meer bij, en zijn bestanden mogen dan niet mee.
     const current = folderDescendantIds(ctx.data.folders ?? [], folderId);
-    await deleteContentFolder(folderId, [...new Set([...current, ...planned])], ctx.organizationId);
+    await deleteContentFolder(folderId, current, ctx.organizationId);
     return done(payload, 'Map');
   },
   'attachment.delete': async (payload, ctx) => {
     const ref = await loadAttachmentRef(text(payload, 'id'), ctx.organizationId);
+    const locked = await attachmentLockReason(ref.entity_type, ref.entity_id, ctx.organizationId);
+    if (locked) throw new Error(locked);
     await deleteAttachment(ref);
     return done(payload, 'Bestand');
   },

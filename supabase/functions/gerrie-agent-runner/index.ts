@@ -277,12 +277,16 @@ async function runEventBatch(batch: EventBatch): Promise<Record<string, unknown>
     // Altijd binnen de organisatie van de agent: de id's komen uit onze eigen
     // claim, maar een rij van een andere organisatie hoort hier nooit bij.
     const { data: rows, error: rowsError } = await supabaseAdmin.from('ai_agent_events')
-      .select('id, event_type, entity_type, entity_id, summary, created_at')
+      .select('id, event_type, entity_type, entity_id, summary, created_at, attempts')
       .eq('organization_id', orgId).eq('agent_id', String(agent.id)).in('id', batch.event_ids)
       .order('created_at', { ascending: true });
     if (rowsError) throw new Error(`Gebeurtenissen ophalen mislukt: ${rowsError.message}`);
-    const events = (rows ?? []) as QueuedAgentEvent[];
-    const key = `event:${[...batch.event_ids].sort().join(',')}`;
+    const events = (rows ?? []) as Array<QueuedAgentEvent & { attempts?: number }>;
+    // De poging hoort in de sleutel: stopte een eerdere run met deze bundel halverwege,
+    // dan claimt de database hem opnieuw (hoogstens drie keer), en zonder poging in de
+    // sleutel liep die tweede kans vast op de run-rij van de eerste.
+    const attempt = Math.max(1, ...events.map((e) => Number(e.attempts ?? 1)));
+    const key = `event:${[...batch.event_ids].sort().join(',')}:${attempt}`;
     return await executeAgentRun(agent, 'event', key, { reschedule: true }, events);
   } catch (err) {
     console.error('gerrie-agent-runner gebeurtenis-run error', String(agent.id), describeError(err));
@@ -312,7 +316,10 @@ async function executeAgentRun(
   // De gebeurtenissen van deze run afsluiten, bij elke uitgang. Bij een geplande
   // of handmatige run is er niets af te sluiten.
   const eventIds = events.map((e) => e.id);
-  const settle = (status: 'done' | 'skipped', runId: string | null = null) => settleEvents(orgId, eventIds, status, runId);
+  // Standaard alle gebeurtenissen van de bundel; na de rechtencheck alleen nog de
+  // zichtbare (de rest staat dan al op overgeslagen en blijft dat).
+  let openIds = eventIds;
+  const settle = (status: 'done' | 'skipped', runId: string | null = null) => settleEvents(orgId, openIds, status, runId);
   const runAsUserId = agent.run_as_user_id ? String(agent.run_as_user_id) : '';
   const name = String(agent.name || 'Naamloze agent');
   const modelKind = resolveModelKind(agent.model_kind);
@@ -374,6 +381,7 @@ async function executeAgentRun(
   const visibleEvents = events.filter((e) => eventVisible(e.event_type, (module) => memberModuleLevel(role, ctx.moduleAccess, module) !== 'none'));
   const hiddenEventIds = eventIds.filter((eid) => !visibleEvents.some((e) => e.id === eid));
   if (hiddenEventIds.length > 0) await settleEvents(orgId, hiddenEventIds, 'skipped', runId);
+  openIds = visibleEvents.map((e) => e.id);
   if (triggeredBy === 'event' && visibleEvents.length === 0) {
     log.add('start', 'Gestart door een gebeurtenis', { events: eventIds.length });
     log.add('error', 'Niets te doen: de eigenaar van deze agent mag de module van deze gebeurtenis(sen) niet (meer) lezen.', {});

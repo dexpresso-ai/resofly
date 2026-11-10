@@ -414,8 +414,9 @@ export const CONTENT_ACTIONS: ActionDef[] = [
     required: ['attachment_id', 'name'],
     async plan(ctx, input) {
       const attachmentId = id(input, 'attachment_id');
-      const file = await row<{ name: string; entity_type: string }>(ctx, 'attachments', attachmentId, 'name, entity_type', 'Bestand');
+      const file = await row<{ name: string; entity_type: string; entity_id: string }>(ctx, 'attachments', attachmentId, 'name, entity_type, entity_id', 'Bestand');
       assertAttachmentWritable(ctx, file.entity_type);
+      await assertAttachmentParentOpen(ctx, file.entity_type, file.entity_id);
       let name = str(input, 'name', 200).replace(/[\\/]/g, '-');
       const oldExt = /\.[a-z0-9]{1,8}$/i.exec(file.name)?.[0] ?? '';
       if (oldExt && !/\.[a-z0-9]{1,8}$/i.test(name)) name = `${name}${oldExt}`;
@@ -537,8 +538,10 @@ export const CONTENT_ACTIONS: ActionDef[] = [
         for (const contactId of contactIds) {
           const contact = found.find((c) => c.id === contactId);
           if (!contact) throw new ActionError('Een van de contactpersonen is niet gevonden in deze organisatie.');
-          if (contact.client_id !== item.clientId) throw new ActionError(`${contact.name} hoort bij een andere klant dan dit item. Delen kan alleen binnen het eigen klantdossier.`);
-          if (contact.is_active === false) throw new ActionError(`${contact.name} staat op inactief.`);
+          // Foutmeldingen zonder namen uit de database: die gaan onafgebakend terug naar
+          // het model, en een naam kan van buiten komen (een afzender in het postvak).
+          if (contact.client_id !== item.clientId) throw new ActionError('Een van de contactpersonen hoort bij een andere klant dan dit item. Delen kan alleen binnen het eigen klantdossier.');
+          if (contact.is_active === false) throw new ActionError('Een van de contactpersonen staat op inactief.');
           recipients.push({ kind: 'contact', clientContactId: contact.id });
           labels.push(`${contact.name}${contact.email ? ` (${contact.email})` : ''}`);
         }
@@ -630,6 +633,26 @@ function assertAttachmentWritable(ctx: ActionCtx, entityType: string): void {
   const module = ATTACHMENT_MODULE[entityType];
   if (!module || module === 'chat') throw new ActionError('Dit bestand hoort bij de teamchat; dat beheer je in de chat zelf.');
   if (ctx.canWrite?.(module) === false) throw new ActionError(`Dit bestand hangt aan een ${entityLabel(entityType)}, en daar mag je niet wijzigen.`);
+}
+
+/**
+ * Het bewijsstuk bij een offerte, factuur of inkoopfactuur ligt vast zodra dat
+ * document geen concept meer is — dezelfde regel als het scherm (daar verdwijnt
+ * de knop Verwijderen). De database bewaakt bijlagen zelf niet, dus deze regel
+ * is de grens. Zonder hem verdween de PDF van een geboekte inkoopfactuur na één
+ * goedgekeurde kaart (bewaarplicht, harde regel 6).
+ */
+export async function assertAttachmentParentOpen(ctx: ActionCtx, entityType: string, entityId: string): Promise<void> {
+  if (entityType === 'quote') {
+    const quote = await row<{ status: string; sent_at: string | null }>(ctx, 'quotes', entityId, 'status, sent_at', 'Offerte');
+    if (quote.status !== 'draft' || quote.sent_at) throw new ActionError('Dit bestand hoort bij een offerte die geen concept meer is; het ligt vast (bewaarplicht).');
+  } else if (entityType === 'invoice') {
+    const invoice = await row<{ status: string; sent_at: string | null; journal_entry_id: string | null }>(ctx, 'invoices', entityId, 'status, sent_at, journal_entry_id', 'Factuur');
+    if (invoice.status !== 'draft' || invoice.sent_at || invoice.journal_entry_id) throw new ActionError('Dit bestand hoort bij een factuur die verstuurd of geboekt is; het ligt vast (bewaarplicht).');
+  } else if (entityType === 'purchase_invoice') {
+    const purchase = await row<{ status: string }>(ctx, 'purchase_invoices', entityId, 'status', 'Inkoopfactuur');
+    if (purchase.status !== 'draft') throw new ActionError('Dit bestand is het bewijsstuk van een geboekte inkoopfactuur; het ligt vast (bewaarplicht).');
+  }
 }
 
 function idList(input: Record<string, unknown>, key: string): string[] {

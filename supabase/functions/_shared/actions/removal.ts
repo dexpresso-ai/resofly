@@ -2,6 +2,7 @@ import {
   ActionError, id, joinShort, orgQuery, row,
   type ActionCtx, type ActionDef, type ActionPlan,
 } from './types.ts';
+import { assertAttachmentParentOpen } from './content.ts';
 
 /**
  * VERWIJDEREN — alles wat iets weggooit, op één plek.
@@ -28,6 +29,20 @@ import {
  */
 
 const IRREVERSIBLE = 'Dit kun je niet ongedaan maken.';
+
+/**
+ * Een rapportage van Gerrie is van wie hem maakte (RLS: created_by = auth.uid()).
+ * De handelingen draaien op de service-role, dus zoeken we hier zelf op de maker:
+ * anders las een collega met het id de titel van een privérapport, en meldde een
+ * hernoeming succes terwijl RLS hem bij het uitvoeren stil tegenhield.
+ */
+async function ownAiReport(ctx: ActionCtx, reportId: string): Promise<{ title: string }> {
+  const { data, error } = await orgQuery(ctx, 'ai_reports', 'title').eq('id', reportId).eq('created_by', ctx.userId).maybeSingle();
+  if (error) throw new ActionError(`Rapportage ophalen mislukt: ${error.message}`);
+  if (!data) throw new ActionError('Rapportage niet gevonden onder jouw rapportages.');
+  return data as { title: string };
+}
+
 
 function plan(fields: Omit<ActionPlan, 'kind'> & { kind?: ActionPlan['kind'] }): ActionPlan {
   return { kind: 'work', ...fields, risk: 'high', humanOnly: true };
@@ -178,7 +193,7 @@ export const REMOVAL_ACTIONS: ActionDef[] = [
         exactCount(ctx, 'projects', 'client_id', clientId),
       ]);
       if (invoices + quotes > 0) {
-        throw new ActionError(`${client.name} heeft ${invoices} factu${invoices === 1 ? 'ur' : 'ren'} en ${quotes} offerte${quotes === 1 ? '' : 's'}; die vallen onder de bewaarplicht, dus de klant kan niet weg. Zet hem op inactief (propose_edit_client, status inactive).`);
+        throw new ActionError(`Deze klant heeft ${invoices} factu${invoices === 1 ? 'ur' : 'ren'} en ${quotes} offerte${quotes === 1 ? '' : 's'}; die vallen onder de bewaarplicht, dus de klant kan niet weg. Zet hem op inactief (propose_edit_client, status inactive).`);
       }
       return plan({
         title: `Klant "${client.name}" verwijderen`,
@@ -391,10 +406,11 @@ export const REMOVAL_ACTIONS: ActionDef[] = [
     required: ['attachment_id'],
     async plan(ctx, input) {
       const attachmentId = id(input, 'attachment_id');
-      const file = await row<{ name: string; entity_type: string }>(ctx, 'attachments', attachmentId, 'name, entity_type', 'Bestand');
+      const file = await row<{ name: string; entity_type: string; entity_id: string }>(ctx, 'attachments', attachmentId, 'name, entity_type, entity_id', 'Bestand');
       const module = ({ folder: 'content', note: 'content', document: 'content', client: 'clients', project: 'projects', task: 'projects', subtask: 'projects', ticket: 'tickets', quote: 'finance', invoice: 'finance', supplier: 'finance', purchase_invoice: 'finance', fixed_asset: 'finance', meeting_recording: 'calendar' } as Record<string, string>)[file.entity_type];
       if (!module) throw new ActionError('Dit bestand hoort bij de teamchat; dat beheer je in de chat zelf.');
       if (ctx.canWrite?.(module) === false) throw new ActionError('Dit bestand hangt aan iets waar je niet mag wijzigen.');
+      await assertAttachmentParentOpen(ctx, file.entity_type, file.entity_id);
       return plan({
         title: `Bestand "${file.name}" verwijderen`,
         sub: 'ook uit de opslag',
@@ -592,7 +608,7 @@ export const REMOVAL_ACTIONS: ActionDef[] = [
     required: ['report_id'],
     async plan(ctx, input) {
       const reportId = id(input, 'report_id');
-      const report = await row<{ title: string }>(ctx, 'ai_reports', reportId, 'title', 'Rapportage');
+      const report = await ownAiReport(ctx, reportId);
       return plan({
         title: `Rapportage "${report.title}" verwijderen`,
         sub: 'met alle versies',

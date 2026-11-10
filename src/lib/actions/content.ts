@@ -1,6 +1,6 @@
 import {
-  loadContentHtml, moveAttachmentToFolder, renameAttachment, revokeDriveShare, shareDriveItem, updateRow,
-  type DriveShareRecipientInput,
+  attachmentLockReason, loadAttachmentRef, loadContentHtml, moveAttachmentToFolder, renameAttachment, revokeDriveShare,
+  shareDriveItem, updateRow, type DriveShareRecipientInput,
 } from '../repository';
 import { sanitizeRichText } from '../../components/RichTextEditor';
 import { optText, patchOf, text, type ActionExecutor, type ActionRunCtx } from './types';
@@ -45,7 +45,10 @@ export const CONTENT_EXECUTORS: Record<string, ActionExecutor> = {
 
   'attachment.rename': async (payload, ctx) => {
     const name = text(payload, 'name');
-    await renameAttachment(text(payload, 'attachment_id'), name, ctx.organizationId);
+    const ref = await loadAttachmentRef(text(payload, 'attachment_id'), ctx.organizationId);
+    const locked = await attachmentLockReason(ref.entity_type, ref.entity_id, ctx.organizationId);
+    if (locked) throw new Error(locked);
+    await renameAttachment(ref.id, name, ctx.organizationId);
     return `Bestand heet nu "${name}"`;
   },
 

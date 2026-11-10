@@ -75,10 +75,14 @@ create table if not exists public.ai_agent_events (
   status text not null default 'pending'
     check (status in ('pending', 'claimed', 'done', 'skipped', 'expired')),
   lease_until timestamptz,
+  -- Hoe vaak hij geclaimd is. Een run die halverwege stopt, krijgt een tweede
+  -- kans; na drie pogingen vervalt hij, anders kost hij elke tik opnieuw tegoed.
+  attempts int not null default 0,
   run_id uuid references public.ai_agent_runs(id) on delete set null,
   created_at timestamptz not null default now(),
   processed_at timestamptz
 );
+alter table public.ai_agent_events add column if not exists attempts int not null default 0;
 
 create index if not exists ai_agent_events_pending_idx
   on public.ai_agent_events (agent_id, created_at) where status = 'pending';
@@ -86,14 +90,25 @@ create index if not exists ai_agent_events_claimed_idx
   on public.ai_agent_events (lease_until) where status = 'claimed';
 create index if not exists ai_agent_events_run_idx
   on public.ai_agent_events (run_id) where run_id is not null;
+-- Voor het opruimen: afgehandelde regels gaan na dertig dagen weg (zie de claim).
+create index if not exists ai_agent_events_created_idx
+  on public.ai_agent_events (created_at);
 
 alter table public.ai_agent_events enable row level security;
 revoke all on public.ai_agent_events from anon, authenticated;
 grant all on public.ai_agent_events to service_role;
--- Geen policies: alleen de runner (service-role) leest en schrijft hier. De
--- modulepoort staat er toch op, net als bij ai_agent_runs: komt er ooit een
--- leesregel bij, dan geldt Gerrie meteen (en staat de boekhouder buiten).
-select public.apply_module_gate('ai_agent_events', 'gerrie');
+-- Geen policies: alleen de runner (service-role) leest en schrijft hier. Wel het
+-- boekhouder-hek, zoals elke organisatietabel. Bewust NIET de modulepoort van
+-- Gerrie: die zet een schrijftrigger op de tabel die kijkt naar wie de ticket of
+-- klant opslaat (auth.uid() blijft die persoon, ook binnen enqueue_agent_event).
+-- Een teamlid zonder Gerrie maakte dan een klant aan, en de gebeurtenis viel
+-- stil weg — dat zag de review van 10 november op een lokale database.
+drop trigger if exists zzz_module_write_gate on public.ai_agent_events;
+drop policy if exists "module gate select" on public.ai_agent_events;
+drop policy if exists "module gate insert" on public.ai_agent_events;
+drop policy if exists "module gate update" on public.ai_agent_events;
+drop policy if exists "module gate delete" on public.ai_agent_events;
+select public.apply_accountant_fence('ai_agent_events');
 
 -- 4. Een gebeurtenis in de wachtrij zetten, voor elke agent die erop wacht.
 create or replace function public.enqueue_agent_event(
@@ -105,18 +120,32 @@ set search_path = public
 as $$
 begin
   if p_organization_id is null then return; end if;
-  insert into public.ai_agent_events (organization_id, agent_id, event_type, entity_type, entity_id, summary)
-  select a.organization_id, a.id, p_event, p_entity_type, p_entity_id, coalesce(p_summary, '{}'::jsonb)
-    from public.ai_agents a
-   where a.organization_id = p_organization_id
-     and a.status = 'active'
-     and a.schedule_kind = 'event'
-     and p_event = any(a.trigger_events)
-     and (select count(*) from public.ai_agent_events e
-           where e.agent_id = a.id and e.status = 'pending') < 200;
-exception when others then
-  -- Een agent mag NOOIT het opslaan van een ticket, mail of factuur laten mislukken.
-  raise warning 'enqueue_agent_event(%): %', p_event, sqlerrm;
+  -- Eerst kijken of iemand luistert, BUITEN het blok met de foutafhandeling: dat
+  -- blok opent een subtransactie, en die hoort niet bij elke nieuwe klant, mail
+  -- of ticket te ontstaan als er geen enkele agent op wacht.
+  if not exists (
+    select 1 from public.ai_agents a
+     where a.organization_id = p_organization_id
+       and a.status = 'active'
+       and a.schedule_kind = 'event'
+       and p_event = any(a.trigger_events)
+  ) then
+    return;
+  end if;
+  begin
+    insert into public.ai_agent_events (organization_id, agent_id, event_type, entity_type, entity_id, summary)
+    select a.organization_id, a.id, p_event, p_entity_type, p_entity_id, coalesce(p_summary, '{}'::jsonb)
+      from public.ai_agents a
+     where a.organization_id = p_organization_id
+       and a.status = 'active'
+       and a.schedule_kind = 'event'
+       and p_event = any(a.trigger_events)
+       and (select count(*) from public.ai_agent_events e
+             where e.agent_id = a.id and e.status = 'pending') < 200;
+  exception when others then
+    -- Een agent mag NOOIT het opslaan van een ticket, mail of factuur laten mislukken.
+    raise warning 'enqueue_agent_event(%): %', p_event, sqlerrm;
+  end;
 end;
 $$;
 
@@ -291,10 +320,17 @@ begin
   update public.ai_agent_events
      set status = 'expired', processed_at = now()
    where status = 'pending' and created_at < now() - interval '3 days';
-  -- Een claim van een runner die halverwege stopte, komt terug in de wachtrij.
+  -- Een claim van een runner die halverwege stopte, komt terug in de wachtrij —
+  -- tot drie keer; daarna vervalt hij, want hij strandt kennelijk telkens.
   update public.ai_agent_events
-     set status = 'pending', lease_until = null
+     set status = case when attempts >= 3 then 'skipped' else 'pending' end,
+         lease_until = null,
+         processed_at = case when attempts >= 3 then now() else processed_at end
    where status = 'claimed' and lease_until < now();
+  -- Afgehandelde regels bewaren we niet langer dan nodig: er staan namen en
+  -- e-mailadressen van buiten in.
+  delete from public.ai_agent_events
+   where status in ('done', 'skipped', 'expired') and created_at < now() - interval '30 days';
 
   for v_agent in
     select a.id, a.max_event_runs_per_day
@@ -325,7 +361,7 @@ begin
        for update skip locked
     ), claimed as (
       update public.ai_agent_events e
-         set status = 'claimed', lease_until = now() + interval '10 minutes'
+         set status = 'claimed', lease_until = now() + interval '10 minutes', attempts = e.attempts + 1
         from picked
        where e.id = picked.id
       returning e.id
