@@ -234,7 +234,7 @@ Veilig opnieuw te draaien. Getest op een lege database, met de hele keten vanaf 
     sessie zonder rol door, nu staat er `is distinct from`;
   - een ingelogde gebruiker leest de wachtrij niet;
   - een kapotte wachtrij laat het opslaan van een ticket niet mislukken.
-- `npm run test:mobile -- --theme=both` (zie de commit).
+- `npm run test:mobile -- --theme=both`: 440 pagina's gemeten in licht en donker, geen problemen.
 
 ## Uitrollen
 
