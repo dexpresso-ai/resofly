@@ -25,7 +25,7 @@ import type { Emit, GerrieContext, OrganizationRole, Proposal, Usage } from '../
 import { localYmd, wallToUtc } from '../_shared/schedule.ts';
 import {
   GERRIE_KINDS, KIND_MODULE, KIND_ORIGIN, SIGNAL_KINDS,
-  buildGerrieBrief, buildRuleCard, severityForProposal,
+  buildGerrieBrief, buildRuleCard, checkGerrieProposal, severityForProposal,
   type DecisionTarget, type GerrieFacts, type RuleFacts, type Severity, type SignalKind,
 } from '../_shared/signalRules.ts';
 
@@ -232,7 +232,14 @@ async function processSignal(signal: SignalRow): Promise<SignalOutcome> {
     const said = outcome.text.replace(/\s+/g, ' ').trim();
     return skipSignal(signal, said ? `Gerrie: ${said.slice(0, 380)}` : 'Gerrie zag geen actie', { cost_usd: cost, trace: outcome.steps });
   }
+  // De opdracht zegt "precies deze klant"; hier staat het als regel. Een klantmail
+  // die Gerrie vraagt ook een ander te mailen, levert zo geen kaart op.
+  const problem = checkGerrieProposal(gathered.gerrie.kind, gathered.gerrie.facts, outcome.proposal as { type: string });
+  if (problem) return skipSignal(signal, problem, { cost_usd: cost, trace: outcome.steps });
   const severity = severityForProposal(outcome.proposal.type, (outcome.proposal as { risk?: string }).risk, brief.severity);
+  // outcome.text kwam al door het uitvoerfilter van runAgent (gerrieGuard.ts),
+  // met de adressen uit de mail en de gegevens als bekend. Een tweede ronde
+  // zonder die adressen haalde links weg die de eerste terecht liet staan.
   const said = outcome.text.replace(/\s+/g, ' ').trim();
   const decisionId = await insertCard({
     signal, kind, origin: 'gerrie', actorId: actor.id, proposal: outcome.proposal,

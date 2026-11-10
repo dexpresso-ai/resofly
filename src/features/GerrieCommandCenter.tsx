@@ -377,6 +377,7 @@ function RunCard({ run, canWrite, handlers, organizationId, onStop, onApprove, o
           <div className="cc-approve">
             <div className="cc-approve-t">{info.title}</div>
             {info.sub && <div className="cc-approve-s">{info.sub}</div>}
+            {info.detail && <div className="cc-approve-detail">{info.detail}</div>}
             <div className="cc-approve-actions">
               <button className="cc-btn tiny ghost" disabled={run.resolution === 'executing'} onClick={onReject}>Afwijzen</button>
               {/* Akkoord schrijft het weg; Openen zet het eerst vooringevuld in het scherm. */}
@@ -1791,6 +1792,7 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
               <div key={auditId} className="cc-approve">
                 <div className="cc-approve-t">{info.title}</div>
                 {info.sub && <div className="cc-approve-s">{info.sub}</div>}
+                {info.detail && <div className="cc-approve-detail">{info.detail}</div>}
                 {st === 'error' && pmsg[auditId] && <div className="cc-approve-err">{pmsg[auditId]}</div>}
                 {st === 'done' ? <div className="cc-lane-ok"><Check size={13} /> Uitgevoerd</div>
                   : st === 'rejected' ? <div className="cc-lane-cancel">Afgewezen.</div>

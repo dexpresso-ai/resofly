@@ -13,6 +13,10 @@ export const ai = {
   scribe: [],
   /** Elke aanvraag bij Claude: { apiKey, model, system, user } */
   claude: [],
+  /** Elke vraag aan de poortwachter van Gerrie (_shared/gerrieGuard.ts): { model, bericht } */
+  poortwachter: [],
+  /** Het oordeel dat de poortwachter de volgende keer geeft; daarna weer TOEGESTAAN. */
+  oordeel: null,
   /** request_id → het transcript dat de webhook nog moet bezorgen. */
   wachtrij: new Map(),
   /** Het transcript dat Scribe bij de volgende aanvraag teruggeeft. */
@@ -109,6 +113,8 @@ registreerDienst('https://api.anthropic.com', async (request, url) => {
   }
   const body = await request.json();
   const user = (body.messages ?? []).map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
+  const poort = poortwachterAntwoord(body, user);
+  if (poort) return poort;
   ai.claude.push({ apiKey: request.headers.get('x-api-key'), model: body.model, system: body.system, user });
   return json(200, {
     id: `msg_${randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model: body.model,
@@ -117,6 +123,26 @@ registreerDienst('https://api.anthropic.com', async (request, url) => {
     usage: { input_tokens: 1200, output_tokens: 300, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
   });
 });
+
+/**
+ * De poortwachter van Gerrie stelt zijn vraag niet-streamend, met een eigen
+ * systeemprompt. Die krijgt een oordeel terug (standaard TOEGESTAAN, of wat een
+ * scenario in `ai.oordeel` zette) en telt niet mee als vraag aan de notulen-AI.
+ */
+export function poortwachterAntwoord(body, user) {
+  const system = typeof body.system === 'string' ? body.system : JSON.stringify(body.system ?? '');
+  if (!system.startsWith('Je bent de poortwachter van Gerrie')) return null;
+  const bericht = (/<bericht-[0-9a-f]+>\n([\s\S]*)\n<\/bericht-[0-9a-f]+>/.exec(user) ?? [])[1] ?? user;
+  ai.poortwachter.push({ model: body.model, bericht });
+  const oordeel = ai.oordeel ?? 'TOEGESTAAN';
+  ai.oordeel = null;
+  return json(200, {
+    id: `msg_${randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model: body.model,
+    stop_reason: 'end_turn', stop_sequence: null,
+    content: [{ type: 'text', text: oordeel }],
+    usage: { input_tokens: 900, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+  });
+}
 
 /** Ondertekent een webhook-body zoals ElevenLabs (header ElevenLabs-Signature). */
 export function onderteken(body, geheim = process.env.ELEVENLABS_WEBHOOK_SECRET, tijd = Math.floor(Date.now() / 1000)) {

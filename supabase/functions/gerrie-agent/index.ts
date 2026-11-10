@@ -18,6 +18,7 @@ import {
   createConversation, loadHistory, insertMessage, recordUsage, costUsd,
   checkUserBudget, remainingFraction, confirmAction, getUsageSummary,
   requireUser, requireOrganizationAccess, describeError, parseAllowedOrigins, auditActionName,
+  screenGerrieMessage, guardRefusal, addGuardUsage,
 } from '../_shared/gerrieCore.ts';
 import type { Emit, HttpStatus } from '../_shared/gerrieCore.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
@@ -149,7 +150,21 @@ Deno.serve(async (req) => {
         return;
       }
 
+      // De poortwachter: een vraag buiten ResoFly, een zoekopdracht op internet,
+      // een vraag naar andermans gegevens of een poging de regels te omzeilen
+      // stopt hier, vóór Gerrie zijn tools krijgt. Het antwoord is een vaste zin.
+      const guard = await screenGerrieMessage(message, 'chat');
+      const refusal = guardRefusal(guard);
+      if (refusal) {
+        const refusedId = await insertMessage(convId, organizationId, user.id, 'assistant', refusal, []);
+        if (guard.usage.input || guard.usage.output) await recordUsage(organizationId, convId, refusedId, user.id, guard.usage, 'cheap');
+        const left = remainingFraction(budget, costUsd(guard.usage, 'cheap') * USD_TO_EUR);
+        await emit('done', { conversationId: convId, messageId: refusedId, text: refusal, ...(left !== null ? { budget: { remainingFraction: left } } : {}) });
+        return;
+      }
+
       const outcome = await runAgent(ctx, history, message, emit, modelKind);
+      addGuardUsage(outcome.usage, guard);
 
       const assistantId = await insertMessage(convId, organizationId, user.id, 'assistant', outcome.text, outcome.toolCalls);
       await recordUsage(organizationId, convId, assistantId, user.id, outcome.usage, modelKind);

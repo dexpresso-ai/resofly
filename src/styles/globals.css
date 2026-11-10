@@ -4651,6 +4651,7 @@ body::before{
 .cc-approve{ border:1px solid var(--border-strong); background:var(--accent-soft); border-radius:12px; padding:12px; }
 .cc-approve-t{ font-size:13.5px; font-weight:600; margin-bottom:2px; }
 .cc-approve-s{ font-size:12px; color:var(--muted2); margin-bottom:10px; }
+.cc-approve-detail{ margin:-4px 0 10px; padding:7px 9px; border-left:2px solid var(--line, rgba(127,127,127,.35)); font-size:12px; line-height:1.45; color:var(--muted2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:14em; overflow:auto; }
 .cc-approve-err{ font-size:12px; color:var(--accent-r); margin-bottom:8px; }
 .cc-approve-actions{ display:flex; gap:7px; justify-content:flex-end; }
 .cc-meter{ margin-bottom:12px; } .cc-meter:last-of-type{ margin-bottom:0; }
@@ -8634,6 +8635,8 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .ag-queue-meta{ display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; font-size:11.5px; color:var(--muted); }
 .ag-queue-agent{ font-weight:600; color:var(--muted2); }
 .ag-queue-sub{ max-width:46ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* De volledige tekst die met akkoord naar buiten gaat (reactie aan de klant, opdracht van een agent). */
+.ag-queue-detail{ margin:6px 0 0; padding:7px 9px; border-left:2px solid var(--line, rgba(127,127,127,.35)); font-size:12px; line-height:1.45; color:var(--muted2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:14em; overflow:auto; }
 .ag-queue-rowerr{ display:flex; align-items:center; gap:5px; margin:4px 0 0; font-size:12px; color:var(--accent-r); }
 .ag-queue-rowhint{ margin:4px 0 0; font-size:11.5px; color:var(--muted); }
 .ag-queue-actions{ display:flex; align-items:center; gap:7px; flex:none; }

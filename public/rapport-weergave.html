@@ -647,10 +647,130 @@ select,input{background:var(--surface);color:var(--ink);border:1px solid var(--l
   // Alleen voor de unittest: zonder kader eromheen niets opstarten.
   if (window.parent === window) return;
 
+  // ── Wat een pagina niet kan, ook als de controle op de server iets mist ─────
+  // Het netwerk is dicht (CSP, connect-src 'none'), maar twee wegen niet:
+  //  - WebRTC valt buiten connect-src: een RTCPeerConnection met een STUN-adres
+  //    stuurt gegevens via DNS naar buiten;
+  //  - een nieuw, leeg frame heeft zijn eigen, schone RTCPeerConnection, en het
+  //    onload-attribuut van zo'n frame draait al tijdens het invoegen.
+  // De servercontrole (reportHtml.ts) leest letterlijke tekst; `'RTCPeer' +
+  // 'Connection'` kwam daar langs. Dus hier: WebRTC weg, en geen frames,
+  // objecten of embeds, langs welke weg ze ook in de pagina komen. Dit draait
+  // vóór de HTML van Gerrie erin gaat, en zet de deuren vast (niet terug te zetten).
+  function lockDown() {
+    var RTC = ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection', 'RTCDataChannel',
+      'RTCSessionDescription', 'RTCIceCandidate', 'RTCRtpSender', 'RTCRtpReceiver', 'RTCRtpTransceiver',
+      'RTCDtlsTransport', 'RTCIceTransport', 'RTCSctpTransport', 'RTCCertificate', 'RTCRtpScriptTransform'];
+    RTC.forEach(function (name) {
+      try { Object.defineProperty(window, name, { value: undefined, writable: false, configurable: false, enumerable: false }); } catch (e) { /* bestaat hier niet */ }
+    });
+
+    var BLOCKED_NAME = /^(?:[a-z-]+:)?(iframe|frame|frameset|object|embed|portal|fencedframe|applet)$/i;
+    var BLOCKED = 'iframe,frame,frameset,object,embed,portal,fencedframe,applet';
+    function refuse() { throw new Error('Deze rapportage mag geen frames, objecten of embeds maken.'); }
+
+    // De echte getters en methoden, vastgelegd vóór er iets van de pagina draait:
+    // een eigen `nodeType` of `querySelector` op een element verandert de toets niet.
+    var nodeTypeOf = Object.getOwnPropertyDescriptor(Node.prototype, 'nodeType').get;
+    var localNameOf = Object.getOwnPropertyDescriptor(Element.prototype, 'localName').get;
+    var qsElement = Element.prototype.querySelector;
+    var qsFragment = DocumentFragment.prototype.querySelector;
+    var qsaFragment = DocumentFragment.prototype.querySelectorAll;
+    var qsDocument = Document.prototype.querySelector;
+    var createElement = Document.prototype.createElement;
+    var innerHtml = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+    var templateContent = Object.getOwnPropertyDescriptor(HTMLTemplateElement.prototype, 'content').get;
+
+    function checkNode(node) {
+      var type;
+      try { type = nodeTypeOf.call(node); } catch (e) { return; }
+      if (type === 1) {
+        if (BLOCKED_NAME.test(localNameOf.call(node)) || qsElement.call(node, BLOCKED)) refuse();
+      } else if (type === 11) {
+        if (qsFragment.call(node, BLOCKED)) refuse();
+      } else if (type === 9) {
+        if (qsDocument.call(node, BLOCKED)) refuse();
+      }
+    }
+    function checkNodes(args) { for (var i = 0; i < args.length; i += 1) checkNode(args[i]); }
+    // HTML als tekst: eerst inert ontleden in een <template> (daar laadt en draait
+    // niets), en pas als daar geen frame in zit, echt neerzetten. Ook in geneste
+    // templates kijken: setHTMLUnsafe maakt van <template shadowrootmode> een
+    // echte shadow-root, en een frame daarin laadt gewoon.
+    function hasBlocked(fragment, depth) {
+      if (qsFragment.call(fragment, BLOCKED)) return true;
+      if (depth > 20) return true;
+      var nested = qsaFragment.call(fragment, 'template');
+      for (var i = 0; i < nested.length; i += 1) {
+        if (hasBlocked(templateContent.call(nested[i]), depth + 1)) return true;
+      }
+      return false;
+    }
+    function checkHtml(html) {
+      var t = createElement.call(document, 'template');
+      innerHtml.set.call(t, String(html));
+      if (hasBlocked(templateContent.call(t), 0)) refuse();
+    }
+
+    function lockMethod(proto, name, check) {
+      var desc = proto && Object.getOwnPropertyDescriptor(proto, name);
+      if (!desc || typeof desc.value !== 'function') return;
+      var original = desc.value;
+      Object.defineProperty(proto, name, {
+        value: function () { check(arguments); return original.apply(this, arguments); },
+        writable: false, configurable: false, enumerable: desc.enumerable,
+      });
+    }
+    function lockSetter(proto, name) {
+      var desc = proto && Object.getOwnPropertyDescriptor(proto, name);
+      if (!desc || typeof desc.set !== 'function') return;
+      var setter = desc.set;
+      Object.defineProperty(proto, name, {
+        get: desc.get, set: function (value) { checkHtml(value); setter.call(this, value); },
+        configurable: false, enumerable: desc.enumerable,
+      });
+    }
+
+    lockMethod(Node.prototype, 'appendChild', checkNodes);
+    lockMethod(Node.prototype, 'insertBefore', function (a) { checkNode(a[0]); });
+    lockMethod(Node.prototype, 'replaceChild', function (a) { checkNode(a[0]); });
+    ['append', 'prepend', 'before', 'after', 'replaceWith', 'replaceChildren'].forEach(function (name) {
+      [Element.prototype, CharacterData.prototype, DocumentFragment.prototype, Document.prototype, DocumentType.prototype]
+        .forEach(function (proto) { lockMethod(proto, name, checkNodes); });
+    });
+    lockMethod(Element.prototype, 'insertAdjacentElement', function (a) { checkNode(a[1]); });
+    lockMethod(Element.prototype, 'insertAdjacentHTML', function (a) { checkHtml(a[1]); });
+    lockMethod(Element.prototype, 'setHTMLUnsafe', function (a) { checkHtml(a[0]); });
+    lockMethod(Element.prototype, 'setHTML', function (a) { checkHtml(a[0]); });
+    if (typeof ShadowRoot !== 'undefined') {
+      lockMethod(ShadowRoot.prototype, 'setHTMLUnsafe', function (a) { checkHtml(a[0]); });
+      lockMethod(ShadowRoot.prototype, 'setHTML', function (a) { checkHtml(a[0]); });
+      lockSetter(ShadowRoot.prototype, 'innerHTML');
+    }
+    lockMethod(Range.prototype, 'insertNode', function (a) { checkNode(a[0]); });
+    lockMethod(Range.prototype, 'surroundContents', function (a) { checkNode(a[0]); });
+    lockMethod(Document.prototype, 'write', function (a) { checkHtml(Array.prototype.join.call(a, '')); });
+    lockMethod(Document.prototype, 'writeln', function (a) { checkHtml(Array.prototype.join.call(a, '')); });
+    lockMethod(Document.prototype, 'createElement', function (a) { if (BLOCKED_NAME.test(String(a[0]))) refuse(); });
+    lockMethod(Document.prototype, 'createElementNS', function (a) { if (BLOCKED_NAME.test(String(a[1]))) refuse(); });
+    lockMethod(Document.prototype, 'execCommand', function (a) { if (/^insert(html|image)$/i.test(String(a[0]))) refuse(); });
+    lockSetter(Element.prototype, 'innerHTML');
+    lockSetter(Element.prototype, 'outerHTML');
+    // Een los document met shadow-roots erin; voeg je daar iets uit in, dan komt
+    // wat in die shadow-root zat mee, buiten het zicht van querySelector.
+    lockMethod(Document, 'parseHTMLUnsafe', function (a) { checkHtml(a[0]); });
+    if (typeof DOMParser !== 'undefined') lockMethod(DOMParser.prototype, 'parseFromString', function (a) { checkHtml(a[0]); });
+  }
+
   var TOKEN_NAME = /^--[a-z0-9-]{1,40}$/;
   function render(msg) {
     if (rendered) return;
+    // Zonder eigen herkomst (sandbox zonder allow-same-origin) is `origin` "null".
+    // Lijst iemand dit kader zonder sandbox in, dan zou de pagina van Gerrie hier
+    // in de herkomst van de app draaien: dan tonen we niets.
+    if (self.origin !== 'null') return;
     rendered = true;
+    lockDown();
     var theme = msg.theme === 'dark' ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', theme);
     var tokens = msg.tokens && typeof msg.tokens === 'object' ? msg.tokens : {};

@@ -57,6 +57,9 @@ const RULES: Array<{ test: RegExp; message: string }> = [
   { test: /<script[^>]*\bsrc\s*=/i, message: 'Geen <script src>: externe scripts worden geblokkeerd. Schrijf je script inline en gebruik de ingebouwde RF-bouwstenen voor grafieken.' },
   { test: /<(link|iframe|frame|object|embed|base|meta|form|portal)\b/i, message: 'Geen <link>, <iframe>, <object>, <embed>, <base>, <meta> of <form>: de rapportage draait zonder internet en zonder formulieren.' },
   { test: /\b(src|href|srcset|action|poster|data)\s*=\s*["']?\s*(https?:)?\/\//i, message: 'Geen afbeeldingen, links of bestanden van internet (http/https): de rapportage draait zonder netwerk. Teken grafieken met RF of inline SVG.' },
+  // Ook een adres dat de browser pas zelf rechtzet: "https:\\elders" leest hij als
+  // https://elders, en "javascript:" voert uit. Dat glipte langs de regel hierboven.
+  { test: /\b(src|href|srcset|action|formaction|poster|data|ping|xlink:href)\s*=\s*["']?\s*(?!data:image\/|#|mailto:|tel:)(?:[a-z][a-z0-9+.-]*:|\\\\|\/\\|\\\/)/i, message: 'Geen adressen met een schema (https:, javascript:, data:) in src, href of action: de rapportage draait zonder netwerk en zonder links naar buiten. Een mailto:- of tel:-link mag wel.' },
   { test: /url\(\s*["']?\s*(https?:)?\/\//i, message: 'Geen url(http…) in CSS: externe bronnen worden geblokkeerd.' },
   { test: /@import\b/i, message: 'Geen @import in CSS: externe stylesheets worden geblokkeerd. De ResoFly-opmaak (rf-klassen en de kleurvariabelen) staat al klaar.' },
   { test: /\b(fetch|XMLHttpRequest|WebSocket|EventSource|RTCPeerConnection|importScripts|SharedWorker|Worker)\s*\(|\bnew\s+(XMLHttpRequest|WebSocket|EventSource|RTCPeerConnection|Worker|SharedWorker)\b|navigator\s*\.\s*sendBeacon/, message: 'Geen netwerkverkeer (fetch, XMLHttpRequest, WebSocket, sendBeacon, workers): alle gegevens staan al klaar in RF.data.' },
@@ -67,12 +70,49 @@ const RULES: Array<{ test: RegExp; message: string }> = [
   { test: /\beval\s*\(|\bnew\s+Function\s*\(|\bFunction\s*\(\s*['"`]/, message: 'Geen eval of new Function; schrijf de code gewoon uit.' },
 ];
 
+/**
+ * Regels die alleen over SCRIPT gaan: de inhoud van <script> en van on…-attributen.
+ *
+ * Eerst liepen ze over de hele pagina, en dan was gewone tekst als "btw verlegd
+ * bij import (rubriek 4a)" ineens een import(). Tekst op de pagina voert niets
+ * uit; alleen het script kan iets opbouwen.
+ */
+const SCRIPT_RULES: Array<{ test: RegExp; message: string }> = [
+  // De regels hierboven lezen letterlijke tekst. `window['fe'+'tch']`, `(0, eval)`
+  // en `[].constructor.constructor('…')` deden hetzelfde zonder dat woord: een
+  // pagina die zo gegevens naar buiten probeerde te krijgen, kwam erdoor. Een
+  // rapportage heeft geen opgebouwde namen op het venster nodig; dus weg ermee.
+  // `top` en `parent` staan hier bewust niet in: RF.top() geeft een lijst, en
+  // `const top = RF.top(…); top[0]` is gewone code.
+  { test: /(?<![.\w$])(window|globalThis|self|document|navigator)\s*\[|\bReflect\s*\.\s*(get|apply|construct|getOwnPropertyDescriptor)\s*\(|\bObject\s*\.\s*(getOwnPropertyNames|getOwnPropertyDescriptors?|entries|values|keys)\s*\(\s*(window|globalThis|self)\b|\bfor\s*\([^)]*\bin\s+(window|globalThis|self)\b/, message: 'Geen opgebouwde namen op window, globalThis, self of document (zoals window[\'…\']) en geen lijst van alles op het venster: schrijf gewoon uit wat je gebruikt, met de RF-bouwstenen.' },
+  // `class X { constructor() {} }` en `v.constructor === Object` mogen;
+  // `[].constructor.constructor('…')` en `f.constructor('…')` niet.
+  { test: /\beval\b|\.\s*constructor\s*(\(|\[|\.\s*constructor\b)|\[\s*['"`]constructor['"`]\s*\]|\bset(Timeout|Interval)\s*\(\s*['"`]|(?<![\w$.])import\s*\(/, message: 'Geen eval, constructor-trucs, setTimeout met een tekst of import(): schrijf de code gewoon uit.' },
+  // WebRTC valt buiten de CSP (connect-src): een verbinding met een STUN-adres
+  // stuurt gegevens via DNS naar buiten. Een rapportage heeft er niets aan.
+  // "stun:" telt alleen als begin van een tekst ('stun:…'); `{turn: 1}` is een veld.
+  { test: /\b(RTC[A-Z]\w*|webkitRTC\w*|mozRTC\w*|iceServers|createDataChannel|createOffer|setLocalDescription)\b|['"`](stuns?|turns?):/, message: 'Geen WebRTC (RTCPeerConnection, STUN/TURN): de rapportage maakt geen verbindingen.' },
+  { test: /\.\s*(href|src|srcset|action|formAction|ping)\s*=(?!=)|\bsetAttribute(NS)?\s*\(\s*(['"`][^'"`]*['"`]\s*,\s*)?['"`](href|src|srcset|action|formaction|ping|xlink:href|data)['"`]/i, message: 'Zet geen adressen (href, src, action) vanuit script: een rapportage linkt nergens heen en laadt niets.' },
+  // Een nieuw frame heeft een eigen, schone set browserfuncties; het kader zelf
+  // houdt ze ook tegen (public/rapport-weergave.html), dit is de zin voor Gerrie.
+  { test: /\bcreateElement(NS)?\s*\([^)]*['"`](iframe|frame|frameset|object|embed|portal|fencedframe)['"`]|\battachShadow\b|\bdocument\s*\.\s*(write|writeln|open)\s*\(|\bDOMParser\b|\bcreateContextualFragment\b|\bexecCommand\b/i, message: 'Geen frames, objecten, document.write, shadow-DOM of DOMParser: zet inhoud neer met innerHTML of de RF-bouwstenen.' },
+];
+
+/** De scriptdelen van een pagina: <script>-blokken en inline event-handlers. */
+export function scriptParts(html: string): string {
+  const blocks = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)(?:<\/script\s*>|$)/gi)].map((m) => m[1]);
+  const handlers = [...html.matchAll(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi)].map((m) => m[1].replace(/^["']|["']$/g, ''));
+  return [...blocks, ...handlers].join('\n');
+}
+
 /** Wat er niet klopt aan deze HTML, als zinnen voor Gerrie. Leeg = in orde. */
 export function checkReportHtml(html: string): string[] {
   const problems: string[] = [];
   if (!html.trim()) problems.push('De HTML is leeg.');
   if (html.length > MAX_HTML_CHARS) problems.push(`De HTML is te groot (${html.length.toLocaleString('nl-NL')} tekens, hoogstens ${MAX_HTML_CHARS.toLocaleString('nl-NL')}). Laat de RF-bouwstenen het werk doen in plaats van alles uit te schrijven.`);
   for (const rule of RULES) if (rule.test.test(html)) problems.push(rule.message);
+  const script = scriptParts(html);
+  for (const rule of SCRIPT_RULES) if (rule.test.test(script)) problems.push(rule.message);
   return problems;
 }
 
