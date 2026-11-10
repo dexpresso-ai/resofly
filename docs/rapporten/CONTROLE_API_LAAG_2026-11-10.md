@@ -16,7 +16,7 @@ praten."*
     onderaan, met stappen.
 - **Functioneel:** ja. Gecontroleerd met de echte edge functions tegen een echte database:
   - de openbare API, de MCP-koppeling en de webhooks;
-  - de volledige stromentest, 1037 stappen en 0 fout;
+  - de volledige stromentest, 1039 stappen en 0 fout;
   - de unittests, 1486 en 0 fout;
   - de typecontrole van alle edge functions.
 
@@ -51,7 +51,7 @@ praten."*
 
   Elke bevinding is daarna opnieuw nagelopen in de code en, waar het kon, in de database.
 - **Staging, alleen lezen**, via de Management API van Supabase en de API van Cloudflare.
-- **Een nieuwe stromentest `api`** (`tests/stromen/api.mjs`, 57 stappen). De echte functies
+- **Een nieuwe stromentest `api`** (`tests/stromen/api.mjs`, 59 stappen). De echte functies
   draaien tegen een lokale Supabase met alle migraties. Daarna draaiden alle stromentests
   samen.
 
@@ -262,6 +262,7 @@ database.
 
 - **Database:** migratie `20261110140000_api_laag_controle.sql`, veilig om nog eens te draaien.
 - **Edge functions:**
+  - `email-unsubscribe`
   - `mcp-oauth`
   - `file-share`
   - `mail-inbound`
@@ -270,11 +271,15 @@ database.
   - `gerrie-signals`
   - de openbare functies uit punt 18
   - `_shared/fileTransferServer.ts` en `_shared/meetingPipeline.ts`
+- **App (Cloudflare Pages):** de nieuwe pagina `/afmelden`.
 - **Workers op staging (10 november):**
   - `resofly-media-api-staging`, versie `9896b7a9`;
-  - `resofly-caldav-staging`, versie `bf5ff3e8`.
+  - `resofly-caldav-staging`, versie `bf5ff3e8`;
+  - `resofly-client-domains-staging`, versie `ef5b3841`.
 
   Bindings en secrets zijn ongewijzigd.
+- **Rooktest na de uitrol:** groen, met de nieuwe controles op de API-laag. Een browser die de
+  afmeldlink opent, gaat op staging nu door naar `/afmelden`.
 
 ## Open punten
 

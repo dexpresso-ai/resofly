@@ -67,15 +67,16 @@ De onderstaande workers zijn op 10 november uitgerold naar staging, met
   - de interne DELETE weigert bewijsstukken;
   - de route `/internal/annual-account-snapshot` is nieuw;
   - een token voor één bestand opent de zip van de galerij niet meer.
-- **`resofly-client-domains-staging`:** een GET op `/afmelden` krijgt de afmeldpagina van de
-  app, in de huisstijl van het adres. De POST gaat zoals altijd naar `email-unsubscribe`.
+- **`resofly-client-domains-staging`, versie `ef5b3841`:** een GET op `/afmelden` krijgt de
+  afmeldpagina van de app, in de huisstijl van het adres. De POST gaat zoals altijd naar
+  `email-unsubscribe`.
 - **`resofly-caldav-staging`, versie `bf5ff3e8`:**
   - een teruggezette afspraak komt terug in plaats van een 500 te geven;
   - alleen de eigenaar hernoemt of herkleurt een agenda.
 
 ## Tests
 
-- **`tests/stromen/api.mjs` (nieuw, 57 stappen).** Dekt:
+- **`tests/stromen/api.mjs` (nieuw, 59 stappen).** Dekt:
   - API-sleutels: aanmaken, aanmelden, lezen en schrijven per organisatie en module,
     klaarzetten tegenover uitvoeren, idempotentie, webhooks naar interne adressen, verlopen,
     intrekken en vertrekken;
@@ -99,7 +100,9 @@ De onderstaande workers zijn op 10 november uitgerold naar staging, met
   - `tsc` in `workers/media-api` en `workers/caldav`;
   - `deno check` van alle functies uit `.github/workflows/frontend-checks.yml`. Lokaal kan dat
     met een import map die esm.sh naar `npm:` laat wijzen, en `--node-modules-dir=none`;
-  - `npm run test:stromen`, alle scenario's;
+  - `npm run test:stromen`, alle scenario's: 1039 stappen, 0 fout;
+  - `npm run test:mobile -- --theme=both`: 452 metingen, en daarna de afmeldpagina apart (6),
+    0 met problemen;
   - de migratie twee keer achter elkaar op een database met alle migraties.
 
 ## Voor de eigenaar
