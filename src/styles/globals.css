@@ -8800,6 +8800,16 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .ag-mailmode-opt b{ font-size:13px; font-weight:600; }
 .ag-mailmode-opt em{ grid-column:2; font-style:normal; font-size:11.5px; line-height:1.45; color:var(--muted); }
 
+/* Waarop een agent start (bij "Zodra er iets gebeurt"): dezelfde tegels als de mailkeuze. */
+.ag-events{ display:grid; grid-template-columns:repeat(auto-fit,minmax(224px,1fr)); gap:8px; }
+.ag-event{ display:grid; grid-template-columns:auto 1fr; gap:4px 9px; align-items:start; padding:10px 12px; border:1px solid var(--border2); border-radius:10px; cursor:pointer; transition:border-color .15s,background .15s; min-width:0; }
+.ag-event:hover{ border-color:var(--border-strong); }
+.ag-event.on{ border-color:var(--border-strong); background:var(--accent-soft); }
+.ag-event input{ margin-top:3px; accent-color:var(--accent); }
+.ag-event span{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+.ag-event b{ font-size:13px; font-weight:600; overflow-wrap:anywhere; }
+.ag-event small{ font-size:11.5px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
+
 .ag-tokens{ display:flex; flex-direction:column; gap:7px; }
 .ag-tokens-label{ font-size:10.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
 .ag-tokens-chips{ display:flex; flex-wrap:wrap; gap:6px; }

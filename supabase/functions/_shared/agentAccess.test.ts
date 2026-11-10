@@ -140,7 +140,13 @@ test('lezen: je eigen agents, runs, logboek en voorstellen — owners/admins all
 test('de ritmes in de database zijn dezelfde als in de runner', () => {
   const check = migration.match(/check \(schedule_kind in \(([^)]*)\)\)/);
   assert.ok(check, 'de nieuwe schedule_kind-check staat in de migratie');
-  assert.deepEqual([...check[1].matchAll(/'([a-z]+)'/g)].map((m) => m[1]), [...SCHEDULE_KINDS]);
+  // De nieuwste definitie telt: sinds 20261110090000 hoort 'event' erbij (agents op een gebeurtenis).
+  const latest = migrationFiles
+    .map((name) => readFileSync(new URL(name, MIGRATIONS), 'utf8'))
+    .map((sql) => sql.match(/check \(schedule_kind in \(([^)]*)\)\)/))
+    .filter((m): m is RegExpMatchArray => m !== null)
+    .pop()!;
+  assert.deepEqual([...latest[1].matchAll(/'([a-z]+)'/g)].map((m) => m[1]), [...SCHEDULE_KINDS]);
   assert.match(migration, /max_proposals_per_run int not null default 3\s*\n\s*check \(max_proposals_per_run between 1 and 10\)/);
 });
 

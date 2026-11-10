@@ -6,7 +6,9 @@
 //  1. ?cron=tick  — server-to-server, geauthenticeerd met x-cron-secret
 //     (AGENTS_CRON_SECRET). pg_cron roept dit per minuut aan (GERRIE_ROUTINES_SETUP.md).
 //     Claimt due agents (lease) en draait ze naast elkaar via HETZELFDE brein als
-//     de chat (_shared/gerrieCore.ts) met een no-op emit (geen browser).
+//     de chat (_shared/gerrieCore.ts) met een no-op emit (geen browser). In
+//     dezelfde tik: agents die op een GEBEURTENIS wachten (een klantmail, een
+//     nieuw ticket, …) krijgen hun bundel uit ai_agent_events (agentEvents.ts).
 //  2. app-pad    — Supabase-JWT; beheer (create/update/status/archive/clone/share),
 //     "nu draaien", antwoorden en proefdraaien. Lezen doet de client rechtstreeks
 //     via RLS: je eigen agents, en als owner/admin die van het hele team.
@@ -43,7 +45,12 @@ import {
   DEFAULT_MAX_PROPOSALS, MAX_AGENTS_PER_USER, MAX_PROPOSALS_LIMIT,
   type AgentAction, type AgentCapabilities, type AgentMode,
 } from '../_shared/agentAccess.ts';
-import { clampInt, computeNextRunAt, normalizeSchedule } from '../_shared/agentSchedule.ts';
+import { clampInt, nextRunIso, normalizeSchedule } from '../_shared/agentSchedule.ts';
+import {
+  AGENT_EVENTS, DEFAULT_EVENT_RUNS_PER_DAY, MAX_EVENT_RUNS_PER_DAY, eventDef, eventVisible, formatEventTrigger, sanitizeTriggerEvents,
+  type QueuedAgentEvent,
+} from '../_shared/agentEvents.ts';
+import { memberModuleLevel } from '../_shared/roles.ts';
 import { buildScheduledRunMessage, decisionStatusLabel, isNothingToReport, MEMORY_RUNS, type PastRun } from '../_shared/agentRun.ts';
 import { sendViaResend } from '../_shared/resend.ts';
 
@@ -168,7 +175,14 @@ Deno.serve(async (req) => {
       // eigen lijst bij te houden — zie de opmerking bij TOOL_LABELS in gerrieCore.
       // Met wat dit teamlid met agents mag, zodat de app niets aanbiedt wat straks
       // toch wordt geweigerd.
-      case 'tools': return json(req, { tools: toolCatalog(ctx), capabilities: caps, maxAgents: MAX_AGENTS_PER_USER });
+      // En de gebeurtenissen waarop een agent kan starten, alleen uit modules die
+      // dit teamlid mag lezen — dezelfde regel als bij het opslaan (fitToOwner).
+      case 'tools': return json(req, {
+        tools: toolCatalog(ctx), capabilities: caps, maxAgents: MAX_AGENTS_PER_USER,
+        events: AGENT_EVENTS
+          .filter((e) => memberModuleLevel(ctx.role, ctx.moduleAccess, e.module) !== 'none')
+          .map((e) => ({ key: e.key, label: e.label, example: e.example })),
+      });
       case 'preview': return json(req, await previewAgent(ctx, body));
       default: throw new HttpError('Onbekende actie.', 400);
     }
@@ -183,22 +197,99 @@ Deno.serve(async (req) => {
 
 // ── Cron-tik: due agents claimen + draaien ───────────────────────────────────
 
-async function runTick(): Promise<{ ok: true; claimed: number; results: Array<Record<string, unknown>> }> {
+async function runTick(): Promise<{ ok: true; claimed: number; events: number; results: Array<Record<string, unknown>> }> {
   const { data: agents, error } = await supabaseAdmin.rpc('claim_due_agents', { p_limit: CLAIM_LIMIT });
   if (error) throw new HttpError(`Claimen van agents mislukt: ${error.message}`, 500);
   const claimed = (agents ?? []) as Array<Record<string, unknown>>;
+  const batches = await claimEventBatches();
   // Naast elkaar: een agent wacht vooral op het model, niet op de processor.
-  const results = await Promise.all(claimed.map(async (agent) => {
-    try {
-      return await executeAgentRun(agent, 'schedule', occurrenceKeyForSlot(agent), { reschedule: true });
-    } catch (err) {
-      // Vangnet: één kapotte agent mag de batch niet vastzetten.
-      console.error('gerrie-agent-runner agent-run error', String(agent.id), describeError(err));
-      await failAndReschedule(agent, describeError(err));
-      return { agentId: agent.id, status: 'failed', error: describeError(err) } as Record<string, unknown>;
-    }
-  }));
-  return { ok: true, claimed: claimed.length, results };
+  const results = await Promise.all([
+    ...claimed.map(async (agent) => {
+      try {
+        return await executeAgentRun(agent, 'schedule', occurrenceKeyForSlot(agent), { reschedule: true });
+      } catch (err) {
+        // Vangnet: één kapotte agent mag de batch niet vastzetten.
+        console.error('gerrie-agent-runner agent-run error', String(agent.id), describeError(err));
+        await failAndReschedule(agent, describeError(err));
+        return { agentId: agent.id, status: 'failed', error: describeError(err) } as Record<string, unknown>;
+      }
+    }),
+    ...batches.map((batch) => runEventBatch(batch)),
+  ]);
+  return { ok: true, claimed: claimed.length, events: batches.length, results };
+}
+
+// ── Agents op een gebeurtenis ────────────────────────────────────────────────
+
+interface EventBatch { agent_id: string; event_ids: string[] }
+
+/**
+ * Per agent een bundel wachtende gebeurtenissen (claim_agent_event_batches).
+ * Mislukt dat — bijvoorbeeld omdat de migratie nog niet draaide — dan gaan de
+ * geplande agents gewoon door: een gebeurtenis-agent is geen reden om de rest
+ * stil te zetten.
+ */
+async function claimEventBatches(): Promise<EventBatch[]> {
+  const { data, error } = await supabaseAdmin.rpc('claim_agent_event_batches', { p_limit: CLAIM_LIMIT });
+  if (error) {
+    console.warn('gerrie-agent-runner gebeurtenissen claimen mislukt', error.message);
+    return [];
+  }
+  return ((data ?? []) as Array<{ agent_id: unknown; event_ids: unknown }>)
+    .map((row) => ({ agent_id: String(row.agent_id), event_ids: Array.isArray(row.event_ids) ? row.event_ids.map(String) : [] }))
+    .filter((row) => row.event_ids.length > 0);
+}
+
+/** Zet de gebeurtenissen van een bundel op afgehandeld of overgeslagen. Best-effort. */
+async function settleEvents(orgId: string | null, ids: string[], status: 'done' | 'skipped', runId: string | null): Promise<void> {
+  if (ids.length === 0) return;
+  let query = supabaseAdmin.from('ai_agent_events')
+    .update({ status, processed_at: new Date().toISOString(), lease_until: null, ...(runId ? { run_id: runId } : {}) })
+    .in('id', ids);
+  if (orgId) query = query.eq('organization_id', orgId);
+  const { error } = await query;
+  if (error) console.error('gerrie-agent-runner gebeurtenissen afsluiten mislukt', error.message);
+}
+
+/**
+ * Wachtende gebeurtenissen van een agent overslaan: bij pauzeren en archiveren
+ * allemaal, bij het aanpassen alleen de soorten die hij niet meer volgt. Anders
+ * handelt een agent die je na een week weer aanzet, alsnog de mail van toen af.
+ */
+async function dropPendingEvents(orgId: string, agentId: string, keepTypes: string[] = []): Promise<void> {
+  let query = supabaseAdmin.from('ai_agent_events')
+    .update({ status: 'skipped', processed_at: new Date().toISOString() })
+    .eq('organization_id', orgId).eq('agent_id', agentId).eq('status', 'pending');
+  if (keepTypes.length > 0) query = query.not('event_type', 'in', `(${keepTypes.map((t) => `"${t}"`).join(',')})`);
+  const { error } = await query;
+  if (error) console.warn('gerrie-agent-runner wachtende gebeurtenissen overslaan mislukt', error.message);
+}
+
+async function runEventBatch(batch: EventBatch): Promise<Record<string, unknown>> {
+  const { data: agentRow, error } = await supabaseAdmin.from('ai_agents').select('*').eq('id', batch.agent_id).maybeSingle();
+  if (error || !agentRow) {
+    await settleEvents(null, batch.event_ids, 'skipped', null);
+    return { agentId: batch.agent_id, status: 'skipped', reason: 'agent_missing' };
+  }
+  const agent = agentRow as Record<string, unknown>;
+  const orgId = String(agent.organization_id);
+  try {
+    // Altijd binnen de organisatie van de agent: de id's komen uit onze eigen
+    // claim, maar een rij van een andere organisatie hoort hier nooit bij.
+    const { data: rows, error: rowsError } = await supabaseAdmin.from('ai_agent_events')
+      .select('id, event_type, entity_type, entity_id, summary, created_at')
+      .eq('organization_id', orgId).eq('agent_id', String(agent.id)).in('id', batch.event_ids)
+      .order('created_at', { ascending: true });
+    if (rowsError) throw new Error(`Gebeurtenissen ophalen mislukt: ${rowsError.message}`);
+    const events = (rows ?? []) as QueuedAgentEvent[];
+    const key = `event:${[...batch.event_ids].sort().join(',')}`;
+    return await executeAgentRun(agent, 'event', key, { reschedule: true }, events);
+  } catch (err) {
+    console.error('gerrie-agent-runner gebeurtenis-run error', String(agent.id), describeError(err));
+    await settleEvents(orgId, batch.event_ids, 'skipped', null);
+    await failAndReschedule(agent, describeError(err));
+    return { agentId: agent.id, status: 'failed', error: describeError(err) };
+  }
 }
 
 function occurrenceKeyForSlot(agent: Record<string, unknown>): string {
@@ -210,12 +301,18 @@ function occurrenceKeyForSlot(agent: Record<string, unknown>): string {
 
 async function executeAgentRun(
   agent: Record<string, unknown>,
-  triggeredBy: 'schedule' | 'manual',
+  triggeredBy: 'schedule' | 'manual' | 'event',
   occurrenceKey: string,
   opts: { reschedule: boolean },
+  /** Alleen bij triggeredBy 'event': de geclaimde gebeurtenissen. */
+  events: QueuedAgentEvent[] = [],
 ): Promise<Record<string, unknown>> {
   const agentId = String(agent.id);
   const orgId = String(agent.organization_id);
+  // De gebeurtenissen van deze run afsluiten, bij elke uitgang. Bij een geplande
+  // of handmatige run is er niets af te sluiten.
+  const eventIds = events.map((e) => e.id);
+  const settle = (status: 'done' | 'skipped', runId: string | null = null) => settleEvents(orgId, eventIds, status, runId);
   const runAsUserId = agent.run_as_user_id ? String(agent.run_as_user_id) : '';
   const name = String(agent.name || 'Naamloze agent');
   const modelKind = resolveModelKind(agent.model_kind);
@@ -224,6 +321,7 @@ async function executeAgentRun(
   // Gearchiveerd = met pensioen. Hij bestaat nog voor de historie, maar draait niet.
   if (String(agent.status) === 'archived') {
     await supabaseAdmin.from('ai_agents').update({ next_run_at: null, lease_until: null }).eq('id', agentId);
+    await settle('skipped');
     return { agentId, status: 'skipped', reason: 'archived' };
   }
 
@@ -238,6 +336,7 @@ async function executeAgentRun(
     if (String(runErr.code) === '23505') {
       // Dit slot draaide al (crash-vangnet): schuif alleen het schema door, draai niets.
       if (opts.reschedule) await rescheduleAgent(agent, {});
+      await settle('skipped');
       return { agentId, status: 'skipped', reason: 'duplicate' };
     }
     throw new HttpError(`Run aanmaken mislukt: ${runErr.message}`, 500);
@@ -254,6 +353,7 @@ async function executeAgentRun(
     const reason = runAsUserId
       ? 'De medewerker namens wie deze agent draait, is geen actief lid meer. Agent gepauzeerd.'
       : 'De medewerker namens wie deze agent draaide, bestaat niet meer. Agent gepauzeerd; de historie blijft bewaard.';
+    await settle('skipped', runId);
     return await cancelRun(agentId, runId, log, reason, 'actor_inactive');
   }
 
@@ -265,7 +365,23 @@ async function executeAgentRun(
   ctx.clientEmail = clientEmailSettings(agent);
   const caps = agentCapabilities(role, ctx.moduleAccess);
   if (!caps.canUse) {
+    await settle('skipped', runId);
     return await cancelRun(agentId, runId, log, 'De medewerker namens wie deze agent draait, heeft geen toegang meer tot Gerrie. Agent gepauzeerd.', 'gerrie_closed');
+  }
+  // Alleen gebeurtenissen uit modules die de eigenaar VANDAAG mag lezen. Een
+  // ticket-gebeurtenis voor iemand zonder Tickets gaat niet naar het model,
+  // ook de titel niet.
+  const visibleEvents = events.filter((e) => eventVisible(e.event_type, (module) => memberModuleLevel(role, ctx.moduleAccess, module) !== 'none'));
+  const hiddenEventIds = eventIds.filter((eid) => !visibleEvents.some((e) => e.id === eid));
+  if (hiddenEventIds.length > 0) await settleEvents(orgId, hiddenEventIds, 'skipped', runId);
+  if (triggeredBy === 'event' && visibleEvents.length === 0) {
+    log.add('start', 'Gestart door een gebeurtenis', { events: eventIds.length });
+    log.add('error', 'Niets te doen: de eigenaar van deze agent mag de module van deze gebeurtenis(sen) niet (meer) lezen.', {});
+    log.add('finish', 'Overgeslagen', { status: 'succeeded', quiet: true });
+    await log.flush();
+    await finishRun(runId, { status: 'succeeded', summary: 'Niets te doen: geen gebeurtenis waar deze agent bij mag.', result: { toolCalls: [], auditIds: [], quiet: true }, proposals_created: 0 });
+    if (opts.reschedule) await rescheduleAgent(agent, { resetFailures: true });
+    return { agentId, runId, status: 'succeeded', proposalsCreated: 0, quiet: true };
   }
   const wanted: AgentMode = String(agent.mode || 'report') === 'propose' ? 'propose' : 'report';
   const mode = allowedAgentMode(wanted, caps);
@@ -273,13 +389,18 @@ async function executeAgentRun(
   // 3b) Het logboek begint: wat deze run mag. Vanaf hier is elke stap na te lezen op
   //     de agentpagina — ook dat hij als meekijker draait als de rechten dat vragen.
   const allowedToolNames = resolveAllowedTools(agent, mode);
-  log.add('start', triggeredBy === 'manual' ? 'Handmatig gestart' : 'Gestart volgens schema', {
+  const startLabel = triggeredBy === 'manual' ? 'Handmatig gestart'
+    : triggeredBy === 'event'
+      ? `Gestart door ${visibleEvents.length === 1 ? 'een gebeurtenis' : `${visibleEvents.length} gebeurtenissen`}: ${[...new Set(visibleEvents.map((e) => eventDef(e.event_type)?.label ?? e.event_type))].join('; ')}`
+      : 'Gestart volgens schema';
+  log.add('start', startLabel, {
     mode,
     model: modelKind,
     instruction: String(agent.instruction || '').slice(0, 2000),
     tools: allowedToolNames,
     max_proposals: mode === 'propose' ? maxProposals : 0,
     scheduled_for: agent.next_run_at ?? null,
+    ...(triggeredBy === 'event' ? { events: visibleEvents.map((e) => ({ type: e.event_type, entity: e.entity_type, id: e.entity_id })) } : {}),
   });
   if (wanted === 'propose' && mode === 'report') {
     log.add('error', 'Draait als meekijker: de eigenaar mag zelf niet (meer) wijzigen, dus deze agent zet niets klaar.', {});
@@ -295,6 +416,7 @@ async function executeAgentRun(
     log.add('finish', 'Overgeslagen', { status: 'skipped_budget' });
     await log.flush();
     await finishRun(runId, { status: 'skipped_budget', error: 'Budget bereikt.' });
+    await settle('skipped', runId);
     if (opts.reschedule) await rescheduleAgent(agent, {});
     return { agentId, status: 'skipped_budget' };
   }
@@ -311,6 +433,7 @@ async function executeAgentRun(
   const runMessage = buildScheduledRunMessage({
     instruction, mode, maxProposals, quietWhenEmpty: delivery.quiet, memory,
     timeZone: String(agent.timezone || 'Europe/Amsterdam'),
+    ...(triggeredBy === 'event' ? { trigger: formatEventTrigger(visibleEvents, String(agent.timezone || 'Europe/Amsterdam')) } : {}),
   });
   await insertMessage(convId, orgId, runAsUserId, 'user', instruction, []);
 
@@ -338,6 +461,7 @@ async function executeAgentRun(
       log.add('delivery', deliveryLabel(delivered), { ...delivered });
       log.add('finish', 'Niet uitgevoerd', { status: 'partial' });
       await log.flush();
+      await settle('skipped', runId);
       if (opts.reschedule) await rescheduleAgent(agent, { resetFailures: true });
       else await supabaseAdmin.from('ai_agents').update({ last_run_at: new Date().toISOString(), lease_until: null }).eq('id', agentId);
       return { agentId, runId, status: 'partial', proposalsCreated: 0, quiet: false, blocked: guard.verdict };
@@ -403,7 +527,8 @@ async function executeAgentRun(
     });
     await log.flush();
 
-    // 11) Succes: circuit-breaker resetten + herplannen.
+    // 11) Succes: gebeurtenissen afgehandeld, circuit-breaker resetten + herplannen.
+    await settle('done', runId);
     if (opts.reschedule) await rescheduleAgent(agent, { resetFailures: true });
     else await supabaseAdmin.from('ai_agents').update({ last_run_at: new Date().toISOString(), lease_until: null }).eq('id', agentId);
 
@@ -414,6 +539,9 @@ async function executeAgentRun(
     log.add('finish', 'Mislukt', { status: 'failed' });
     await log.flush();
     await finishRun(runId, { status: 'failed', error: describeError(err) });
+    // Niet opnieuw proberen: een run die stukloopt op deze gebeurtenis, loopt er
+    // de volgende minuut weer op stuk — en kost elke keer tegoed.
+    await settle('skipped', runId);
     if (opts.reschedule) await rescheduleAgent(agent, { failure: true });
     else await supabaseAdmin.from('ai_agents').update({ lease_until: null }).eq('id', agentId);
     throw err;
@@ -584,7 +712,8 @@ async function rescheduleAgent(agent: Record<string, unknown>, opts: { failure?:
   const patch: Record<string, unknown> = {
     last_run_at: new Date().toISOString(),
     lease_until: null,
-    next_run_at: computeNextRunAt(agent, new Date()).toISOString(),
+    // Null bij een agent op een gebeurtenis: die heeft geen klok.
+    next_run_at: nextRunIso(agent, new Date()),
   };
   if (opts.resetFailures) patch.consecutive_failures = 0;
   if (opts.failure) {
@@ -664,6 +793,9 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
   const modelKind = String(body.model_kind || 'cheap') === 'strong' ? 'strong' : 'cheap';
   const mode = String(body.mode || 'report') === 'propose' ? 'propose' : 'report';
   const schedule = normalizeSchedule(body);
+  // Alleen bij een agent op een gebeurtenis; anders leeg, zodat een oud lijstje
+  // niet blijft hangen als iemand terugwisselt naar een vast ritme.
+  const triggerEvents = schedule.kind === 'event' ? sanitizeTriggerEvents(body.trigger_events) : [];
   const enabledTools = Array.isArray(body.enabled_tools)
     ? [...new Set((body.enabled_tools as unknown[]).map(String).filter(isEnabledToolName))]
     : [];
@@ -700,6 +832,8 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
     day_of_week: schedule.dayOfWeek,
     day_of_month: schedule.dayOfMonth,
     timezone: schedule.timezone.slice(0, 64),
+    trigger_events: triggerEvents,
+    max_event_runs_per_day: clampInt(body.max_event_runs_per_day, DEFAULT_EVENT_RUNS_PER_DAY, 1, MAX_EVENT_RUNS_PER_DAY),
     // Geen budget-velden meer: kosten worden begrensd door het maandtegoed van het
     // account (checkUserBudget). Zie migratie 20260820000000.
     delivery: { channels, recipient_user_ids: [], quiet: rawDelivery.quiet === true },
@@ -723,11 +857,24 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
 function fitToOwner(fields: Record<string, unknown>, ctx: GerrieContext, caps: AgentCapabilities): { fields: Record<string, unknown>; dropped: string[]; downgraded: boolean } {
   const mode = allowedAgentMode(fields.mode, caps);
   const { tools, dropped } = permittedAgentTools(fields.enabled_tools as string[], toolCatalog(ctx), mode);
+  // Gebeurtenissen uit een module die de eigenaar niet mag lezen, vallen af:
+  // anders wekte zijn agent hem met nieuws dat hij zelf niet mag zien.
+  const wanted = Array.isArray(fields.trigger_events) ? fields.trigger_events as string[] : [];
+  const canRead = (module: string) => memberModuleLevel(ctx.role, ctx.moduleAccess, module) !== 'none';
+  const events = wanted.filter((key) => eventVisible(key, canRead));
+  for (const key of wanted) if (!events.includes(key)) dropped.push(`gebeurtenis: ${eventDef(key)?.label ?? key}`);
   return {
-    fields: { ...fields, mode, enabled_tools: tools },
+    fields: { ...fields, mode, enabled_tools: tools, trigger_events: events },
     dropped,
     downgraded: fields.mode === 'propose' && mode === 'report',
   };
+}
+
+/** Een agent op een gebeurtenis zonder gebeurtenis zou nooit draaien: dat zeggen we meteen. */
+function assertHasTrigger(fields: Record<string, unknown>): void {
+  if (fields.schedule_kind === 'event' && (!Array.isArray(fields.trigger_events) || fields.trigger_events.length === 0)) {
+    throw new HttpError('Kies minstens één gebeurtenis waarop de agent start (waar je ook mag kijken).', 400);
+  }
 }
 
 async function loadAgent(orgId: string, id: string): Promise<Record<string, unknown>> {
@@ -764,9 +911,10 @@ async function assertRoomForAgent(orgId: string, ownerId: string): Promise<void>
 async function createAgent(ctx: GerrieContext, caps: AgentCapabilities, body: Record<string, unknown>) {
   const fitted = fitToOwner(sanitizeAgentFields(body), ctx, caps);
   if (!fitted.fields.instruction) throw new HttpError('Geef een opdracht voor de agent.', 400);
+  assertHasTrigger(fitted.fields);
   await assertRoomForAgent(ctx.organizationId, ctx.userId);
   const activate = body.activate === true;
-  const nextRunAt = activate ? computeNextRunAt(fitted.fields, new Date()).toISOString() : null;
+  const nextRunAt = activate ? nextRunIso(fitted.fields, new Date()) : null;
   const { data, error } = await supabaseAdmin.from('ai_agents').insert({
     organization_id: ctx.organizationId, created_by: ctx.userId, run_as_user_id: ctx.userId,
     status: activate ? 'active' : 'draft', next_run_at: nextRunAt, ...fitted.fields,
@@ -785,14 +933,21 @@ async function updateAgent(ctx: GerrieContext, caps: AgentCapabilities, body: Re
   assertMay(existing, ctx, caps, 'edit');
   const fitted = fitToOwner(sanitizeAgentFields(body), ctx, caps);
   if (!fitted.fields.instruction) throw new HttpError('Geef een opdracht voor de agent.', 400);
+  assertHasTrigger(fitted.fields);
 
   const patch: Record<string, unknown> = { ...fitted.fields };
   // Draait de agent al? Herbereken de volgende run met het nieuwe schema.
   if (String(existing.status) === 'active') {
-    patch.next_run_at = computeNextRunAt({ ...existing, ...fitted.fields }, new Date()).toISOString();
+    patch.next_run_at = nextRunIso({ ...existing, ...fitted.fields }, new Date());
   }
   const { error } = await supabaseAdmin.from('ai_agents').update(patch).eq('id', String(existing.id)).eq('organization_id', ctx.organizationId);
   if (error) throw new HttpError(`Agent bijwerken mislukt: ${error.message}`, 500);
+  // Volgt hij een soort gebeurtenis niet meer (of niets meer), dan vervalt wat daarvan nog wachtte.
+  if (existing.schedule_kind === 'event') {
+    const keep = fitted.fields.schedule_kind === 'event' ? (fitted.fields.trigger_events as string[]) : [];
+    if (keep.length === 0) await dropPendingEvents(ctx.organizationId, String(existing.id));
+    else await dropPendingEvents(ctx.organizationId, String(existing.id), keep);
+  }
   return { ok: true as const, mode: fitted.fields.mode, dropped: fitted.dropped, downgraded: fitted.downgraded };
 }
 
@@ -809,13 +964,17 @@ async function setStatus(ctx: GerrieContext, caps: AgentCapabilities, id: string
   patch.archived_at = status === 'archived' ? (existing.archived_at ?? new Date().toISOString()) : null;
   if (status === 'active') {
     if (!String(existing.instruction || '').trim()) throw new HttpError('Geef eerst een opdracht voordat je de agent activeert.', 400);
-    patch.next_run_at = computeNextRunAt(existing, new Date()).toISOString();
+    if (existing.schedule_kind === 'event' && (!Array.isArray(existing.trigger_events) || existing.trigger_events.length === 0)) {
+      throw new HttpError('Kies eerst minstens één gebeurtenis waarop de agent start.', 400);
+    }
+    patch.next_run_at = nextRunIso(existing, new Date());
     patch.consecutive_failures = 0;
   } else {
     patch.next_run_at = null;
   }
   const { error } = await supabaseAdmin.from('ai_agents').update(patch).eq('id', id).eq('organization_id', ctx.organizationId);
   if (error) throw new HttpError(`Status bijwerken mislukt: ${error.message}`, 500);
+  if (status !== 'active') await dropPendingEvents(ctx.organizationId, id);
   return { ok: true, next_run_at: (patch.next_run_at as string | null) ?? null };
 }
 
@@ -834,6 +993,7 @@ async function archiveAgent(ctx: GerrieContext, caps: AgentCapabilities, id: str
     .update({ status: 'archived', archived_at: new Date().toISOString(), next_run_at: null, lease_until: null, visibility: 'private' })
     .eq('id', id).eq('organization_id', ctx.organizationId);
   if (error) throw new HttpError(`Agent archiveren mislukt: ${error.message}`, 500);
+  await dropPendingEvents(ctx.organizationId, id);
   return { ok: true, archived: true };
 }
 
@@ -866,7 +1026,11 @@ async function cloneAgent(ctx: GerrieContext, caps: AgentCapabilities, id: strin
   });
   const fitted = fitToOwner(fields, ctx, caps);
   if (!fitted.fields.instruction) throw new HttpError('Deze agent heeft geen opdracht om over te nemen.', 400);
-  const nextRunAt = activate ? computeNextRunAt(fitted.fields, new Date()).toISOString() : null;
+  // Vielen alle gebeurtenissen af (de collega mag die module niet lezen), dan
+  // komt de kopie als concept binnen in plaats van een agent die nooit start.
+  const startable = !(fitted.fields.schedule_kind === 'event' && (fitted.fields.trigger_events as string[]).length === 0);
+  if (activate && !startable) throw new HttpError('Deze agent start op gebeurtenissen die je zelf niet mag zien. Kies andere gebeurtenissen in je kopie.', 400);
+  const nextRunAt = activate ? nextRunIso(fitted.fields, new Date()) : null;
   const { data, error } = await supabaseAdmin.from('ai_agents').insert({
     organization_id: ctx.organizationId, created_by: ctx.userId, run_as_user_id: ctx.userId,
     status: activate ? 'active' : 'draft', next_run_at: nextRunAt, copied_from: String(source.id), ...fitted.fields,

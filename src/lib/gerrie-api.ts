@@ -204,6 +204,13 @@ export interface GerrieCalendarEventProposal {
    * agenda-functie pas bij "Aanmaken", met de rechten van wie dat doet.
    */
   video_service?: 'google_meet' | 'teams' | 'jitsi' | null;
+  /** Genodigden; zij krijgen bij "Aanmaken" een uitnodiging per e-mail. Ontbreekt bij oudere voorstellen. */
+  attendees?: Array<{ email: string; name: string | null }>;
+  /** Koppeling aan klant/project, zoals "Koppelen" in de agenda. */
+  client_id?: UUID | null;
+  client_name?: string | null;
+  project_id?: UUID | null;
+  project_name?: string | null;
 }
 export interface GerrieWeekActionProposal {
   type: 'week_action';
@@ -273,6 +280,9 @@ export interface GerrieAgentProposal {
   email_mode: AgentEmailMode;
   email_subject: string | null;
   email_body: string | null;
+  /** Bij 'event': waarop hij start. Ontbreekt bij oudere voorstellen. */
+  trigger_events?: string[];
+  max_event_runs_per_day?: number;
 }
 export interface GerrieReportProposal {
   type: 'report';
@@ -419,6 +429,11 @@ export interface GerrieContentProposal {
   client_name: string | null;
   project_id: UUID | null;
   project_name: string | null;
+  /** De map in de bibliotheek; ontbreekt bij oudere voorstellen. */
+  folder_id?: UUID | null;
+  folder_name?: string | null;
+  /** Soort notitie of document. */
+  subtype?: string | null;
 }
 /** Correctie op een bestaande urenregistratie; `current` toont waar hij nu op staat. */
 export interface GerrieEditTimeEntryProposal {
@@ -949,7 +964,8 @@ export async function loadGerrieUsage(organizationId: UUID): Promise<GerrieUsage
  * werkdagen, van `hour` tot en met `end_hour`. Dezelfde lijst als SCHEDULE_KINDS in
  * supabase/functions/_shared/agentSchedule.ts en de check in de database.
  */
-export type RoutineScheduleKind = 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'hourly';
+/** 'event' = geen klok: de agent start zodra er iets gebeurt (zie `trigger_events`). */
+export type RoutineScheduleKind = 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'hourly' | 'event';
 export type RoutineMode = 'report' | 'propose';
 export type RoutineStatus = 'draft' | 'active' | 'paused' | 'archived';
 /** Wie schrijft de klantmail: de agent zelf, of jouw vastgelegde tekst met variabelen. */
@@ -998,6 +1014,10 @@ export interface GerrieRoutine {
   day_of_week: number | null;
   day_of_month: number | null;
   timezone: string;
+  /** Bij 'event': de gebeurtenissen waarop hij start. Ontbreekt bij een oudere database. */
+  trigger_events?: string[];
+  /** Bij 'event': hoogstens zoveel runs per 24 uur. */
+  max_event_runs_per_day?: number;
   /** Hoeveel dingen één run hoogstens klaarzet (bij 'propose'). */
   max_proposals_per_run: number;
   status: RoutineStatus;
@@ -1015,7 +1035,7 @@ export interface GerrieRoutineRun {
   id: UUID;
   agent_id: UUID;
   conversation_id: UUID | null;
-  triggered_by: 'schedule' | 'manual' | 'retry';
+  triggered_by: 'schedule' | 'manual' | 'retry' | 'event';
   status: RoutineRunStatus;
   scheduled_for: string | null;
   started_at: string | null;
@@ -1051,6 +1071,8 @@ export interface GerrieRoutineInput {
   day_of_month?: number | null;
   timezone: string;
   max_proposals_per_run?: number;
+  trigger_events?: string[];
+  max_event_runs_per_day?: number;
   visibility?: AgentVisibility;
   // Bewust géén budget-velden: kosten lopen via het maandtegoed van het account
   // (secret GERRIE_MONTHLY_USER_COST_EUR). `max_emails_per_run` is geen budget maar
@@ -1456,8 +1478,13 @@ export async function listRoutineTools(organizationId: UUID): Promise<RoutineToo
  * De catalogus, met wat dit teamlid met agents mag (dezelfde regel als de runner,
  * _shared/agentAccess.ts) en hoeveel agents er op één naam mogen staan.
  */
+/** Een gebeurtenis waarop een agent kan starten (_shared/agentEvents.ts). */
+export interface RoutineEvent { key: string; label: string; example: string }
+
 export interface RoutineCatalog {
   tools: RoutineTool[];
+  /** Waarop een agent van dit teamlid kan starten; alleen modules die hij mag lezen. */
+  events: RoutineEvent[];
   /** null = niet van de server gekregen (terugval, of een oudere functie-versie). */
   capabilities: AgentCapabilities | null;
   maxAgents: number | null;
@@ -1483,8 +1510,13 @@ async function fetchRoutineCatalog(organizationId: UUID): Promise<Omit<RoutineCa
       kind: r.kind === 'propose' ? 'propose' as const : 'read' as const,
     }));
   for (const t of tools) { toolLabels.set(t.name, t.label); toolKinds.set(t.name, t.kind); }
+  const events = (Array.isArray(payload?.events) ? (payload.events as unknown[]) : [])
+    .map((r) => r as Record<string, unknown>)
+    .filter((r) => typeof r.key === 'string' && typeof r.label === 'string')
+    .map((r) => ({ key: String(r.key), label: String(r.label), example: String(r.example ?? '') }));
   return {
     tools,
+    events,
     capabilities: caps ? { canUse: caps.canUse === true, canPropose: caps.canPropose === true, canOversee: caps.canOversee === true } : null,
     maxAgents: Number.isFinite(maxAgents) && maxAgents > 0 ? maxAgents : null,
   };
@@ -1600,7 +1632,7 @@ export async function listRoutineToolsSafe(organizationId: UUID): Promise<Routin
     .then((catalog) => (catalog.tools.length > 0
       ? { ...catalog, fallback: false }
       : { ...catalog, tools: ROUTINE_FALLBACK_TOOLS, fallback: true }))
-    .catch(() => ({ tools: ROUTINE_FALLBACK_TOOLS, capabilities: null, maxAgents: null, fallback: true }));
+    .catch(() => ({ tools: ROUTINE_FALLBACK_TOOLS, events: [], capabilities: null, maxAgents: null, fallback: true }));
   catalogCache.set(organizationId, { at: Date.now(), promise });
   void promise.then((catalog) => {
     if (catalog.fallback && catalogCache.get(organizationId)?.promise === promise) catalogCache.delete(organizationId);

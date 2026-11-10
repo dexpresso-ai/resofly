@@ -3845,6 +3845,11 @@ async function currentUserId(): Promise<UUID> {
   return userId;
 }
 
+/** Wie er nu is ingelogd; voor een uitvoerder die alleen namens de voorsteller mag werken. */
+export async function currentSessionUserId(): Promise<UUID> {
+  return currentUserId();
+}
+
 
 export async function createNoteWithCalendarLink(organizationId: UUID, values: Record<string, unknown>, input: CalendarNoteLinkInput): Promise<Note> {
   if (input.visibility_snapshot !== 'organization' || input.is_private_masked_snapshot) {
@@ -5587,6 +5592,22 @@ export async function deleteAttachment(att: { id: UUID; storage_key: string; org
   }
 }
 
+/**
+ * Eén bijlage zoals hij nu in de database staat, met zijn opslagsleutel.
+ * Voor het verwijderen vanuit Gerrie: de sleutel komt uit de database van nu,
+ * niet uit een voorstel van eerder.
+ */
+export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise<{ id: UUID; storage_key: string; organization_id: UUID }> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('id, storage_key, organization_id')
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .single();
+  if (error) throw error;
+  return data as { id: UUID; storage_key: string; organization_id: UUID };
+}
+
 async function selectAttachmentRefsForEntity(type: EntityType, id: UUID, organizationId?: UUID): Promise<AttachmentRef[]> {
   let query = supabase
     .from('attachments')
@@ -5652,6 +5673,24 @@ export async function deleteEntityCascade(table: Table, id: UUID, organizationId
   }
 
   await deleteRow(table, id, organizationId);
+}
+
+/**
+ * De tekst van één notitie of document zoals hij NU in de database staat.
+ *
+ * Voor "tekst aanvullen" vanuit Gerrie: het voorstel is gemaakt op een eerder
+ * moment, en wie intussen iets typte, raakt dat anders kwijt als we op de
+ * kopie van toen voortbouwen.
+ */
+export async function loadContentHtml(table: 'notes' | 'documents', id: UUID, organizationId: UUID): Promise<string> {
+  const { data, error } = await supabase
+    .from(table)
+    .select('content')
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .single();
+  if (error) throw error;
+  return String((data as { content?: string | null } | null)?.content ?? '');
 }
 
 /** Atomic ticket → project conversion via Postgres function. */

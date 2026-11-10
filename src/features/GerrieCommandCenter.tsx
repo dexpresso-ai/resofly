@@ -13,6 +13,7 @@ import {
 import {
   DOW_NAMES, agentOwner, agentPowers, approvalScope, clock, hourlyEnd, monthStatsLine, scheduleLabel, shortSchedule, sortAgents,
   startOfMonthIso, summarizeAgentMonth, type AgentMonthStats, type AgentPowers,
+  AGENT_EVENT_LABELS,
 } from '../lib/agents';
 import { memberShortName } from '../lib/members';
 import { STANDARD_MERGE_TOKENS } from '../lib/mergeTokens';
@@ -406,6 +407,8 @@ interface RoutineTemplate {
   model?: 'cheap' | 'strong';
   /** Pushmelding bij nieuws, en stil als er niets is. */
   push?: boolean; quiet?: boolean;
+  /** Bij schedule_kind 'event': waarop hij start. */
+  events?: string[];
 }
 const ROUTINE_TEMPLATES: RoutineTemplate[] = [
   { name: 'Ochtendbriefing', blurb: 'Elke werkdag: je agenda, taken die vandaag moeten en tickets die wachten.', instruction: 'Geef me een korte ochtendbriefing: wat staat er vandaag in mijn agenda, welke taken moeten vandaag af of zijn te laat, en welke tickets wachten op een antwoord? Belangrijkste eerst, hoogstens acht regels.', mode: 'report', schedule_kind: 'weekdays', hour: 8, minute: 0, tools: ['list_calendar_events', 'list_tasks', 'list_tickets'], icon: 'calendar', hue: 32, push: true },
@@ -416,6 +419,10 @@ const ROUTINE_TEMPLATES: RoutineTemplate[] = [
   { name: 'Maandelijkse omzetsamenvatting', blurb: 'Vat je maand samen: omzet, klanten, openstaand.', instruction: 'Vat de omzet van de afgelopen maand samen: totaalomzet, grootste klanten en het totaal openstaande bedrag.', mode: 'report', schedule_kind: 'monthly', day_of_month: 1, hour: 8, tools: ['get_financial_summary', 'list_invoices'], icon: 'trending', hue: 140 },
   { name: 'Offertes die stilliggen', blurb: 'Signaleert verstuurde offertes zonder antwoord.', instruction: 'Welke offertes staan al langer dan twee weken op "verstuurd" zonder reactie? Noem klant, bedrag en hoe lang het stil is, met de oudste bovenaan.', mode: 'report', schedule_kind: 'weekly', day_of_week: 4, hour: 8, tools: ['list_quotes', 'search_clients'], icon: 'rocket', hue: 284 },
   { name: 'Maandagoverzicht van je week', blurb: 'Start je week met projecten, taken en tickets.', instruction: 'Geef een kort weekoverzicht: welke taken staan deze week gepland, welke projecten lopen en welke tickets zijn nog onbehandeld. Maximaal tien regels.', mode: 'report', schedule_kind: 'weekly', day_of_week: 1, hour: 7, tools: ['list_tasks', 'list_projects', 'list_tickets'], icon: 'checks', hue: 190 },
+  // Op een gebeurtenis: de agent begint zodra het gebeurt, met precies dat ding in handen.
+  { name: 'Klantmail beantwoorden', blurb: 'Zodra een klant mailt: een antwoord klaarzetten dat jij nakijkt.', instruction: 'Er is een mail van een klant binnengekomen. Lees de mail en wat er recent met deze klant speelde (offertes, facturen, tickets). Zet een kort, vriendelijk antwoord klaar dat op de vraag ingaat. Is het een vraag die je niet uit de administratie kunt beantwoorden, zet dan een taak klaar om het uit te zoeken in plaats van een antwoord.', mode: 'propose', schedule_kind: 'event', hour: 8, events: ['client_email.received'], tools: ['search_clients', 'list_invoices', 'list_quotes', 'list_tickets', 'action:client_email.list', 'propose_send_client_email', 'propose_task'], icon: 'mail', hue: 205, push: true, quiet: true },
+  { name: 'Eerste reactie op tickets', blurb: 'Zodra er een ticket binnenkomt: een eerste reactie en de prioriteit klaarzetten.', instruction: 'Er is een nieuw ticket binnengekomen. Bekijk het ticket en de klant. Zet een korte eerste reactie klaar voor de klant (zichtbaar in het portaal) waarin je bevestigt dat we ernaar kijken, en zet de prioriteit op hoog als het om een storing of iets dringends gaat.', mode: 'propose', schedule_kind: 'event', hour: 8, events: ['ticket.created'], tools: ['list_tickets', 'search_clients', 'propose_ticket_note', 'propose_edit_ticket'], icon: 'lifebuoy', hue: 200, model: 'cheap', push: true, quiet: true },
+  { name: 'Offerte geaccepteerd', blurb: 'Zodra een klant akkoord geeft: project en factuur klaarzetten.', instruction: 'Een klant heeft een offerte geaccepteerd. Zet een project klaar voor deze klant met de naam van de offerte, en zet de omzetting van de offerte naar een factuur klaar. Noem in je samenvatting de klant, het offertenummer en het bedrag.', mode: 'propose', schedule_kind: 'event', hour: 8, events: ['quote.accepted'], tools: ['list_quotes', 'search_clients', 'propose_project', 'propose_convert_quote'], icon: 'rocket', hue: 140, push: true },
 ];
 
 /**
@@ -425,7 +432,11 @@ const ROUTINE_TEMPLATES: RoutineTemplate[] = [
  */
 function startersFor(catalog: RoutineCatalog | null, canPropose: boolean): RoutineTemplate[] {
   const known = catalog && !catalog.fallback ? new Set(catalog.tools.map((t) => t.name)) : null;
-  return ROUTINE_TEMPLATES.filter((t) => (t.mode === 'report' || canPropose) && (!known || t.tools.every((name) => known.has(name))));
+  // Een startpunt op een gebeurtenis alleen als je die gebeurtenis ook mag zien.
+  const events = catalog && !catalog.fallback ? new Set(catalog.events.map((e) => e.key)) : null;
+  return ROUTINE_TEMPLATES.filter((t) => (t.mode === 'report' || canPropose)
+    && (!known || t.tools.every((name) => known.has(name)))
+    && (!t.events || !events || t.events.every((key) => events.has(key))));
 }
 
 /** "Sonnet 5.5 · grondig" — beide standen draaien op hetzelfde model; het verschil is hoe lang hij nadenkt. */
@@ -532,6 +543,7 @@ function templateToRoutine(t: RoutineTemplate): GerrieRoutine {
     model_kind: t.model ?? 'strong', mode: t.mode, enabled_tools: t.tools,
     schedule_kind: t.schedule_kind, hour: t.hour, minute: t.minute ?? 0, end_hour: t.end_hour ?? null,
     day_of_week: t.day_of_week ?? null, day_of_month: t.day_of_month ?? null,
+    trigger_events: t.events ?? [], max_event_runs_per_day: 24,
     delivery: { channels: t.push ? ['inapp', 'push'] : ['inapp'], recipient_user_ids: [], quiet: t.quiet === true },
   });
 }
@@ -542,7 +554,7 @@ function templateToRoutine(t: RoutineTemplate): GerrieRoutine {
  * anders wordt hij ruis.
  */
 function builderDelivery(p: GerrieAgentProposal): GerrieRoutine['delivery'] {
-  return { channels: ['inapp', 'push'], recipient_user_ids: [], quiet: p.schedule_kind === 'hourly' };
+  return { channels: ['inapp', 'push'], recipient_user_ids: [], quiet: p.schedule_kind === 'hourly' || p.schedule_kind === 'event' };
 }
 
 /** Zet een door Gerrie voorgestelde agent om in een concept voor de editor. */
@@ -555,6 +567,7 @@ function proposalToRoutine(p: GerrieAgentProposal): GerrieRoutine {
     schedule_kind: p.schedule_kind, hour: p.hour, minute: p.minute ?? 0, end_hour: p.end_hour ?? null,
     day_of_week: p.day_of_week, day_of_month: p.day_of_month,
     max_proposals_per_run: p.max_proposals_per_run ?? 3,
+    trigger_events: p.trigger_events ?? [], max_event_runs_per_day: p.max_event_runs_per_day ?? 24,
     delivery: builderDelivery(p),
   });
 }
@@ -1091,7 +1104,13 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
 
         <Capability icon={<Clock size={14} />} title="Ritme">
           <span className="ag-cap-plain">{scheduleLabel(routine)}</span>
-          <span className="ag-cap-note">Volgende: {fmtWhen(routine.next_run_at)}{routine.last_run_at ? ` · laatste: ${fmtWhen(routine.last_run_at)}` : ''}</span>
+          <span className="ag-cap-note">
+            {/* Een agent op een gebeurtenis heeft geen volgende tijd; een streepje las als "kapot". */}
+            {routine.schedule_kind === 'event'
+              ? `Draait zodra het gebeurt, hoogstens ${routine.max_event_runs_per_day ?? 24} keer per dag`
+              : `Volgende: ${fmtWhen(routine.next_run_at)}`}
+            {routine.last_run_at ? ` · laatste: ${fmtWhen(routine.last_run_at)}` : ''}
+          </span>
         </Capability>
 
         <Capability icon={<Mailbox size={14} />} title="Bezorging">
@@ -1209,6 +1228,8 @@ interface EditorFields {
   icon: AgentIconKey | null; hue: number | null;
   /** Klantmail: wie schrijft, welke vaste tekst, en hoeveel mails per run. */
   email_mode: AgentEmailMode; email_subject: string; email_body: string; max_emails: number;
+  /** Bij "zodra er iets gebeurt": waarop hij start, en hoe vaak per dag hoogstens. */
+  trigger_events: string[]; max_event_runs: number;
 }
 
 const MAIL_TOOL = 'propose_send_client_email';
@@ -1258,6 +1279,8 @@ function RoutineEditor({ organizationId, routine, catalog, canPropose, onDone, o
     email_subject: routine?.email_subject ?? '',
     email_body: routine?.email_body ?? '',
     max_emails: routine?.max_emails_per_run ?? 5,
+    trigger_events: routine?.trigger_events ?? [],
+    max_event_runs: routine?.max_event_runs_per_day ?? 24,
   }));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1284,6 +1307,15 @@ function RoutineEditor({ organizationId, routine, catalog, canPropose, onDone, o
   const catalogFallback = (catalog ?? ownCatalog)?.fallback === true;
   const readTools = tools.filter((t) => t.kind === 'read');
   const proposeTools = tools.filter((t) => t.kind === 'propose');
+  // Waarop een agent kan starten: van de server (alleen modules die jij mag lezen),
+  // of zolang die er niet is de vaste lijst.
+  const eventChoices = (catalog ?? ownCatalog)?.events?.length
+    ? (catalog ?? ownCatalog)!.events
+    : AGENT_EVENT_LABELS.map((e) => ({ key: e.key, label: e.label, example: '' }));
+
+  function toggleEvent(key: string) {
+    setF((p) => ({ ...p, trigger_events: p.trigger_events.includes(key) ? p.trigger_events.filter((k) => k !== key) : [...p.trigger_events, key] }));
+  }
 
   /** Plakt een variabele op de cursorpositie in de vaste tekst. */
   function insertToken(token: string) {
@@ -1333,6 +1365,9 @@ function RoutineEditor({ organizationId, routine, catalog, canPropose, onDone, o
     if (f.mode === 'propose' && mailsClients && f.email_mode === 'template' && !f.email_subject.trim()) {
       setErr('Geef een onderwerp voor de vaste mailtekst.'); return;
     }
+    if (f.schedule_kind === 'event' && f.trigger_events.length === 0) {
+      setErr('Kies minstens één gebeurtenis waarop de agent start.'); return;
+    }
     setSaving(true); setErr(null);
     const input: GerrieRoutineInput = {
       name: f.name.trim() || 'Naamloze agent',
@@ -1349,6 +1384,8 @@ function RoutineEditor({ organizationId, routine, catalog, canPropose, onDone, o
       day_of_month: f.schedule_kind === 'monthly' ? f.day_of_month : null,
       timezone: routine?.timezone || 'Europe/Amsterdam',
       max_proposals_per_run: f.max_proposals,
+      trigger_events: f.schedule_kind === 'event' ? f.trigger_events : [],
+      max_event_runs_per_day: f.max_event_runs,
       visibility: f.visibility,
       delivery: {
         channels: ['inapp', ...(f.email ? ['email'] : []), ...(f.push ? ['push'] : [])],
@@ -1445,6 +1482,7 @@ function RoutineEditor({ organizationId, routine, catalog, canPropose, onDone, o
               <option value="weekly">Wekelijks</option>
               <option value="monthly">Maandelijks</option>
               <option value="hourly">Elk uur op werkdagen</option>
+              <option value="event">Zodra er iets gebeurt</option>
             </select>
           </label>
           {f.schedule_kind === 'weekly' && (
@@ -1459,10 +1497,18 @@ function RoutineEditor({ organizationId, routine, catalog, canPropose, onDone, o
               <input className="cc-text" type="number" min={1} max={31} value={f.day_of_month} onChange={(e) => setF((p) => ({ ...p, day_of_month: Math.max(1, Math.min(31, Number(e.target.value) || 1)) }))} />
             </label>
           )}
-          <label className="cc-field"><span>{f.schedule_kind === 'hourly' ? 'Van' : 'Tijd'}</span>
-            <input className="cc-text" type="time" step={300} value={clock(f.hour, f.minute)}
-              onChange={(e) => setF((p) => ({ ...p, ...parseClock(e.target.value, { hour: p.hour, minute: p.minute }) }))} />
-          </label>
+          {f.schedule_kind !== 'event' && (
+            <label className="cc-field"><span>{f.schedule_kind === 'hourly' ? 'Van' : 'Tijd'}</span>
+              <input className="cc-text" type="time" step={300} value={clock(f.hour, f.minute)}
+                onChange={(e) => setF((p) => ({ ...p, ...parseClock(e.target.value, { hour: p.hour, minute: p.minute }) }))} />
+            </label>
+          )}
+          {f.schedule_kind === 'event' && (
+            <label className="cc-field"><span>Hoogstens zo vaak per dag</span>
+              <input className="cc-text ag-num" type="number" min={1} max={96} value={f.max_event_runs}
+                onChange={(e) => setF((p) => ({ ...p, max_event_runs: Math.max(1, Math.min(96, Number(e.target.value) || 1)) }))} />
+            </label>
+          )}
           {f.schedule_kind === 'hourly' && (
             <label className="cc-field"><span>Tot en met</span>
               <select className="cc-text" value={Math.max(f.hour, f.end_hour)} onChange={(e) => setF((p) => ({ ...p, end_hour: Number(e.target.value) }))}>
@@ -1471,6 +1517,22 @@ function RoutineEditor({ organizationId, routine, catalog, canPropose, onDone, o
             </label>
           )}
         </div>
+        {f.schedule_kind === 'event' && (
+          <div className="cc-field"><span>Waarop start hij?</span>
+            <div className="ag-events">
+              {eventChoices.map((e) => (
+                <label key={e.key} className={`ag-event${f.trigger_events.includes(e.key) ? ' on' : ''}`}>
+                  <input type="checkbox" checked={f.trigger_events.includes(e.key)} onChange={() => toggleEvent(e.key)} />
+                  <span>
+                    <b>{e.label}</b>
+                    {e.example && <small>bijv. {e.example}</small>}
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="cc-note">Komen er een paar tegelijk binnen, dan handelt hij ze in <b>één run</b> af, meestal binnen een paar minuten. Je ziet alleen gebeurtenissen uit modules die jij mag inzien.</p>
+          </div>
+        )}
         <p className="cc-note">{scheduleLabel(f)}.{f.schedule_kind === 'hourly' ? ' Zet hieronder “stil als er niets te melden is” aan, anders krijg je elk uur een bericht.' : ''}</p>
 
         <div className="cc-field"><span>Welke gegevens mag de agent gebruiken?</span>
@@ -1692,6 +1754,7 @@ function RunItem({ run, organizationId, canWrite, handlers, defaultOpen, onAppro
         <span className={`cc-pill ${runPillClass(run.status)}`}>{running ? <Spin size={11} /> : <span className="cc-dot" />}{runStatusLabel(run.status)}</span>
         <span className="cc-run-when">{fmtWhen(run.created_at)}</span>
         {run.triggered_by === 'manual' && <span className="cc-run-tag">handmatig</span>}
+        {run.triggered_by === 'event' && <span className="cc-run-tag">gebeurtenis</span>}
         {run.proposals_created > 0 && <span className="cc-run-badge">{run.proposals_created} voorstel{run.proposals_created === 1 ? '' : 'len'}</span>}
         {run.result?.quiet === true && <span className="cc-run-tag">niets te melden</span>}
         {!open && run.summary && <span className="cc-run-peek">{run.summary}</span>}

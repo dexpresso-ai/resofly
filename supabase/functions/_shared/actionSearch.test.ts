@@ -77,6 +77,35 @@ const CASES: Array<[string, string]> = [
   ['modulerechten van een teamlid aanpassen', 'team.set_module_access'],
   ['huisstijl aanpassen', 'branding.save'],
   ['kor aanzetten', 'settings.save_bookkeeping'],
+  // Inhoud: zoeken in de tekst, lezen, bijwerken en delen (november 2026).
+  ['zoek het document over de prijsafspraak', 'content.search'],
+  ['in welke notitie stond de afspraak over de levertijd', 'content.search'],
+  ['notitie helemaal lezen', 'content.get'],
+  ['document bijwerken', 'document.update'],
+  ['notulen aanvullen in de notitie', 'note.update'],
+  ['bestand hernoemen', 'attachment.rename'],
+  ['bestand naar een andere map verplaatsen', 'attachment.move'],
+  ['document delen met de klant via het portaal', 'drive.share'],
+  ['deling intrekken', 'drive.revoke_share'],
+  ['wat heb ik allemaal gedeeld', 'drive.list_shares'],
+  // De rest van de knoppen.
+  ['telefoongesprek vastleggen', 'client_call.log'],
+  ['wie heeft er gebeld', 'client_call.list'],
+  ['offerte intrekken', 'quote.withdraw'],
+  ['factuur crediteren', 'invoice.credit'],
+  ['afzender blokkeren', 'inbox.block_sender'],
+  ['collega een bericht sturen in de teamchat', 'teamchat.send_dm'],
+  ['planning van het project een week opschuiven', 'project.shift_planning'],
+  ['klantmail als gelezen markeren', 'client_email.mark_read'],
+  // Verwijderen.
+  ['taak verwijderen', 'task.delete'],
+  ['conceptfactuur verwijderen', 'invoice.delete_draft'],
+  ['conceptofferte weggooien', 'quote.delete_draft'],
+  ['notitie verwijderen', 'note.delete'],
+  ['map verwijderen', 'folder.delete'],
+  ['urenregistratie verwijderen', 'time_entry.delete'],
+  ['ticket verwijderen', 'ticket.delete'],
+  ['contactpersoon verwijderen', 'client_contact.delete'],
 ];
 
 test('elke vraag vindt zijn handeling binnen de eerste zes treffers', () => {

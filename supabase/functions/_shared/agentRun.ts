@@ -91,12 +91,19 @@ export interface ScheduledRunInput {
   quietWhenEmpty: boolean;
   memory: readonly PastRun[];
   timeZone?: string;
+  /**
+   * Het blok uit `formatEventTrigger` (agentEvents.ts) als een gebeurtenis deze
+   * run startte: welke mail, welk ticket, welke offerte. Al afgebakend als gegevens.
+   */
+  trigger?: string;
 }
 
 /** De opdracht voor een automatische run, met de spelregels en het geheugen erbij. */
 export function buildScheduledRunMessage(input: ScheduledRunInput): string {
   const rules = [
-    'Dit is een automatische, geplande run: er is nu niemand om iets na te vragen. Werk zelfstandig met de gegevens die je kunt ophalen en sluit af met een bondige samenvatting.',
+    input.trigger
+      ? 'Dit is een automatische run, gestart door een gebeurtenis (zie AANLEIDING hieronder): er is nu niemand om iets na te vragen. Werk zelfstandig met de gegevens die je kunt ophalen en sluit af met een bondige samenvatting van wat je per gebeurtenis deed.'
+      : 'Dit is een automatische, geplande run: er is nu niemand om iets na te vragen. Werk zelfstandig met de gegevens die je kunt ophalen en sluit af met een bondige samenvatting.',
     input.mode === 'propose'
       ? `Je mag in deze run hoogstens ${input.maxProposals} ${input.maxProposals === 1 ? 'ding' : 'dingen'} klaarzetten. Alles wat je klaarzet wacht op het akkoord van de gebruiker; er gaat niets weg zonder dat akkoord.`
       : 'Je kijkt alleen mee en zet niets klaar.',
@@ -110,6 +117,7 @@ export function buildScheduledRunMessage(input: ScheduledRunInput): string {
     '',
     '---',
     ...rules,
+    ...(input.trigger ? ['', input.trigger] : []),
     ...(memory ? ['', memory] : []),
   ].join('\n');
 }

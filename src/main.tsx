@@ -556,10 +556,11 @@ function editModeForProposal(p: GerrieProposal, data: AppData): ProposalEditTarg
       const defaults = {
         title: p.title, content: p.content,
         client_id: p.client_id ?? undefined, project_id: p.project_id ?? undefined,
+        folder_id: p.folder_id ?? undefined,
       };
       return p.kind === 'note'
-        ? { page: 'notes', edit: { kind: 'note', item: undefined, defaults } }
-        : { page: 'documents', edit: { kind: 'document', item: undefined, defaults } };
+        ? { page: 'notes', edit: { kind: 'note', item: undefined, defaults: { ...defaults, ...(p.subtype ? { note_type: p.subtype as Note['note_type'] } : {}) } } }
+        : { page: 'documents', edit: { kind: 'document', item: undefined, defaults: { ...defaults, ...(p.subtype ? { document_type: p.subtype as InternalDocument['document_type'] } : {}) } } };
     }
     default:
       return null;
@@ -3597,16 +3598,21 @@ function App() {
         schedule_kind: p.schedule_kind, hour: p.hour, minute: p.minute ?? 0, end_hour: p.end_hour ?? null,
         day_of_week: p.day_of_week, day_of_month: p.day_of_month,
         max_proposals_per_run: p.max_proposals_per_run ?? 3,
-        // In de app en met een pushmelding; een agent die elk uur kijkt, meldt
-        // zich alleen als hij iets vond.
-        timezone: 'Europe/Amsterdam', delivery: { channels: ['inapp', 'push'], quiet: p.schedule_kind === 'hourly' },
+        trigger_events: p.schedule_kind === 'event' ? (p.trigger_events ?? []) : [],
+        max_event_runs_per_day: p.max_event_runs_per_day ?? 24,
+        // In de app en met een pushmelding; een agent die elk uur kijkt of op een
+        // gebeurtenis wacht, meldt zich alleen als hij iets vond.
+        timezone: 'Europe/Amsterdam', delivery: { channels: ['inapp', 'push'], quiet: p.schedule_kind === 'hourly' || p.schedule_kind === 'event' },
       }, undefined, true);
       if (!saved.id) throw new Error('De agent is niet aangemaakt.');
       const agentId = saved.id;
       // Activeren zat al in het aanmaken; loopt dat toch mis, dan is een gepauzeerde
       // agent een eerlijker uitkomst dan doen alsof hij draait.
       if (saved.status !== 'active') await setRoutineStatus(activeOrg.id, agentId, 'active');
-      void runRoutineNow(activeOrg.id, agentId).catch(() => { /* staat in de run-historie */ });
+      // Een agent op een vast ritme draait meteen een keer, zodat je ziet wat hij doet.
+      // Een agent op een gebeurtenis niet: zonder aanleiding zou hij op eigen houtje
+      // gaan zoeken naar iets om te doen.
+      if (p.schedule_kind !== 'event') void runRoutineNow(activeOrg.id, agentId).catch(() => { /* staat in de run-historie */ });
       setPage('gerrie'); setProjectId(null); setClientId(null);
       setOpenAgentId(agentId);
     },
@@ -3624,8 +3630,28 @@ function App() {
       const video = p.video_service === 'google_meet' || p.video_service === 'teams'
         ? { videoService: p.video_service }
         : { meetingUrl: p.meeting_url ?? undefined };
-      const created = await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined, ...video });
+      const created = await createExternalCalendarEvent(activeOrg.id, {
+        sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined, ...video,
+        // Genodigden krijgen een uitnodiging per e-mail, net als bij "Deelnemers" in het afspraakvenster.
+        ...(p.attendees?.length ? { attendees: p.attendees.map((a) => ({ email: a.email, name: a.name ?? undefined, role: 'req' as const })) } : {}),
+      });
       invalidateCalendarEventsCache(activeOrg.id);
+      // Koppelen aan klant/project langs dezelfde weg als "Koppelen" in de agenda.
+      // Lukt dat niet, dan staat de afspraak er wél: niet laten klappen, wel melden.
+      let linkWarning: string | null = null;
+      if (p.client_id || p.project_id) {
+        try {
+          await upsertCalendarEventLink(activeOrg.id, {
+            provider: created.provider, calendar_source_id: created.source_id, provider_event_id: created.provider_event_id,
+            event_starts_at: created.starts_at, event_ends_at: created.ends_at, event_all_day: created.all_day,
+            event_title_snapshot: created.visibility === 'organization' && !created.is_private_masked ? created.title : null,
+            client_id: p.client_id ?? null, project_id: p.project_id ?? null, track_time: true,
+          });
+        } catch (linkError) {
+          linkWarning = `De afspraak staat in de agenda, maar koppelen aan ${[p.client_name, p.project_name].filter(Boolean).join(' / ') || 'de klant'} lukte niet: ${linkError instanceof Error ? linkError.message : 'onbekende fout'}`;
+        }
+      }
+      if (linkWarning) return `Agenda-item aangemaakt: ${p.title}. ${linkWarning}`;
       if (created.video_warning) {
         notify({ tone: 'muted', title: 'Afspraak aangemaakt, met een kanttekening', detail: created.video_warning, ttl: 12000 });
         return `Agenda-item aangemaakt: ${p.title}. ${created.video_warning}`;
