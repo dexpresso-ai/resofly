@@ -121,6 +121,30 @@ test('een collega ziet alleen het antwoord op zijn eigen vraag, niet het antwoor
   assert.deepEqual(portalThreadsFor(rows, ANJA, iedereen, null)[0].messageIds, ['d1']);
 });
 
+test('doorgestuurde post of post van een derde tussen de vraag en het antwoord: het antwoord aan het hoofdadres blijft dicht', () => {
+  // Gevonden bij de controle van de API-laag (10 november, avond): de vorige
+  // test hield alleen stand als Joost zelf mailde. Stuurt een teamlid zijn
+  // vertrouwelijke mail door naar het dossier, of koppelt het team post van
+  // een derde, dan stond die rij niet in wat portal_client_message_overview
+  // teruggaf. Voor Anja was haar eigen vraag dan "het laatste inkomende
+  // bericht", en zag ze het antwoord aan Joost met het citaat eronder.
+  // De functie geeft sinds 20261110140000 elk inkomend bericht van de klant
+  // mee; van wat niet van een portaalgebruiker zelf komt alleen tijd en
+  // gesprek (afzender, onderwerp en tekst leeg). Zo ziet het hier uit:
+  for (const bron of ['forward_block', 'rfc822_attachment', 'header_from']) {
+    // In deze volgorde aanmaken: row() geeft elk volgend bericht een later tijdstip.
+    const rows = [
+      inbound(ANJA, { id: 'e1', thread_id: 'E', subject: 'Vraag over de factuur' }),
+      row({ id: 'e2', thread_id: 'E', to_email: ANJA, preview: 'Hoi Anja…' }),
+      inbound('', { id: 'e3', thread_id: 'E', sender_source: bron, from_email: null, from_name: null, subject: null, preview: '' }),
+      row({ id: 'e4', thread_id: 'E', preview: 'Hoi Joost, over wat je doorstuurde…' }),
+    ];
+    assert.deepEqual(portalThreadsFor(rows, ANJA, people, JOOST)[0].messageIds, ['e1', 'e2'],
+      `Anja ziet het antwoord aan Joost niet (${bron})`);
+    assert.deepEqual(portalThreadsFor(rows, JOOST, people, JOOST)[0].messageIds, ['e4'], 'Joost ziet het antwoord aan zichzelf wel');
+  }
+});
+
 test('onderwerp komt nooit uit een bericht dat de klant niet ziet', () => {
   const rows = [
     inbound('incasso@elders.nl', { id: 'x1', thread_id: 'X', subject: 'Incasso De Korenaar' }),

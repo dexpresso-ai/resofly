@@ -210,6 +210,19 @@ async function handleInbound(body: Record<string, unknown>): Promise<Record<stri
     if (!parkReason && !forwardingEvidenceValue) parkReason = 'no_forwarding_evidence';
   }
 
+  // 9b. Een rem op de hoeveelheid. Het doorstuuradres had er al een (120 per
+  // uur, in register_inbound_message), maar die gold niet voor de reply-route
+  // en niet voor een exacte klantmatch. Wie ooit één mail van een klant kreeg
+  // (reply+<token>@…), kon zo duizenden mails "van" die klant sturen: elk
+  // gekoppeld bericht gaf een pushmelding aan elk teamlid en een signaal voor
+  // Gerrie, in wachtrijen die alle organisaties delen, en een model-run op het
+  // budget van de owner. Boven de grens wordt het bericht geparkeerd in de
+  // opvangbak: bewaard, zichtbaar en met de hand te koppelen, maar zonder
+  // melding en zonder signaal.
+  if (!dropReason && !parkReason) {
+    parkReason = await inboundVolumeParkReason(organizationId, origin?.id ?? null);
+  }
+
   // 10/11. Afkappen + dedupsleutel.
   const html = typeof body.html === 'string' && body.html.trim() ? body.html.slice(0, MAX_BODY_CHARS) : null;
   const bodyText = text ? text.slice(0, MAX_BODY_CHARS) : (html ? htmlToText(html) : '');
@@ -521,6 +534,38 @@ async function resolveAlias(localPart: string): Promise<AliasRow | null> {
   const { data, error } = await supabaseAdmin.rpc('resolve_inbound_alias', { p_local_part: localPart });
   if (error) throw error;
   return (Array.isArray(data) && data[0]) ? (data[0] as AliasRow) : null;
+}
+
+/**
+ * Hoeveel inkomende mail per uur er nog gewoon gekoppeld wordt. Per gesprek
+ * (de mail waarop geantwoord wordt) en per organisatie. Ruim boven wat een
+ * klant of een team echt binnenkrijgt; daarboven is het een lus of een golf.
+ */
+const INBOUND_THREAD_MAX_PER_HOUR = envInt('MAIL_INBOUND_THREAD_LIMIT_PER_HOUR', 30, 5, 10_000);
+const INBOUND_ORG_MAX_PER_HOUR = envInt('MAIL_INBOUND_ORG_LIMIT_PER_HOUR', 300, 20, 100_000);
+
+/** 'rate_limited' als dit gesprek of deze organisatie het afgelopen uur al te veel binnenkreeg, anders null. */
+async function inboundVolumeParkReason(organizationId: string, originId: string | null): Promise<string | null> {
+  const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  if (originId) {
+    const { count, error } = await supabaseAdmin.from('inbound_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', organizationId).eq('origin_client_email_id', originId).gte('created_at', since);
+    // Tellen is een rem, geen slot: lukt het niet, dan gewoon door.
+    if (error) console.warn('mail-inbound: tellen per gesprek mislukt', error.message);
+    else if ((count ?? 0) >= INBOUND_THREAD_MAX_PER_HOUR) return 'rate_limited';
+  }
+  const { count, error } = await supabaseAdmin.from('inbound_messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId).gte('created_at', since);
+  if (error) console.warn('mail-inbound: tellen per organisatie mislukt', error.message);
+  else if ((count ?? 0) >= INBOUND_ORG_MAX_PER_HOUR) return 'rate_limited';
+  return null;
+}
+
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(Deno.env.get(name));
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.max(Math.trunc(value), min), max) : fallback;
 }
 
 async function loadOutboundByToken(token: string): Promise<

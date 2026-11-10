@@ -121,4 +121,14 @@ Object.assign(process.env, {
   // scenario zet het geheim zelf voor de webhook-route.
   ELEVENLABS_API_KEY: 'xi-stromen-test',
   ANTHROPIC_API_KEY: 'sk-ant-stromen-test',
+  // De openbare API en de MCP-koppeling (api.mjs). Ook hier en niet in het
+  // scenario: `api` leest de webhook-sleutel bij het laden, en in een volledige
+  // run laadt een eerder scenario die functie al. Toen dit in api.mjs stond,
+  // gaf elke webhook daar 503 "staat nog niet aan".
+  WEBHOOK_SECRET_ENCRYPTION_KEY: 'stromen-webhook-sleutel-voor-de-api-test',
+  MCP_STATE_SECRET: 'stromen-mcp-state-geheim',
+  // Inkomende mail (api.mjs, de rem op een golf antwoorden). Een lage grens
+  // per gesprek, zodat het scenario hem met een handvol mails raakt.
+  MAIL_INBOUND_WEBHOOK_SECRET: 'stromen-inbound-geheim',
+  MAIL_INBOUND_THREAD_LIMIT_PER_HOUR: '5',
 });

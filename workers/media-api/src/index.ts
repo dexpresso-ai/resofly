@@ -175,6 +175,19 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
     return errorResponse('Method not allowed', 405, context);
   }
 
+  // Jaarrekening-PDF's (de vastgestelde en gedeponeerde stukken). annual-accounts
+  // schreef hier al naartoe, maar de route ontbrak: elke archivering liep op een
+  // 404 (stored: false), dus er werd nooit een PDF bewaard, terwijl de
+  // bewaarplicht er juist om vraagt. Zelfde vorm als de offerte-route.
+  if (method === 'POST' && pathname === '/internal/annual-account-snapshot') {
+    return handleInternalUpload(request, env, context);
+  }
+  const annualSnapshotKey = matchInternalAnnualAccountSnapshotRoute(pathname);
+  if (annualSnapshotKey) {
+    if (method === 'GET') return handleInternalDownload(request, env, context, annualSnapshotKey);
+    return errorResponse('Method not allowed', 405, context);
+  }
+
   // Docx → PDF via Collabora, server-side. Alleen intern: de edge-functions
   // maken hiermee de contract-PDF, de browser komt er niet bij.
   if (method === 'POST' && pathname === '/internal/office/convert-pdf') {
@@ -498,6 +511,13 @@ async function handleInternalDelete(
 ): Promise<Response> {
   requireInternalSecret(request, env);
   assertInternalKeyOrg(request, key);
+  // Ook de interne route wist geen bewijsstuk. De opruimronde van
+  // file-transfer kon een factuur-PDF in zijn wachtrij krijgen (een document
+  // dat naar die sleutel wees en daarna werd verwijderd); DELETE /file weigerde
+  // dat al, deze route niet. Zie migratie 20261110140000, punt 3.
+  if (IMMUTABLE_KEY_SEGMENTS.has(keySegment(key))) {
+    throw new HttpError(403, 'Een vastgelegd bewijsstuk kan niet worden verwijderd.');
+  }
   await env.MEDIA_BUCKET.delete(key);
   return jsonResponse({ ok: true, key }, 200, context);
 }
@@ -1846,6 +1866,10 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
   const payload = await requireGalleryToken(request, env);
   if (payload.gal !== galleryId) throw new HttpError(403, 'Token hoort niet bij deze galerij.');
   if (!payload.dl) throw new HttpError(403, 'Downloaden is niet toegestaan voor deze link.');
+  // Een token voor één bestand (k: de kijkkopie voor Cloudflare Stream, zes uur
+  // geldig, met downloadrecht op het origineel) opende hier de hele galerij als
+  // zip: handleGalleryFile hield zich aan k, deze route niet.
+  if (payload.k) throw new HttpError(403, 'Deze link hoort bij één bestand, niet bij de hele galerij.');
 
   const mediaParam = context.url.searchParams.get('media');
   const media: 'all' | 'photos' | 'videos' = mediaParam === 'photos' || mediaParam === 'videos' ? mediaParam : 'all';
@@ -3941,6 +3965,14 @@ function matchInternalContractSnapshotRoute(pathname: string): string | null {
 /** `/internal/quote-snapshot/{key}` — de bij versturen vastgelegde offerte-PDF. */
 function matchInternalQuoteSnapshotRoute(pathname: string): string | null {
   const match = pathname.match(/^\/internal\/quote-snapshot\/(.+)$/);
+  if (!match?.[1]) return null;
+  const key = safeDecode(match[1]);
+  return key !== null && isSafeStorageKey(key) ? key : null;
+}
+
+/** `/internal/annual-account-snapshot/{key}` — een bewaarde jaarrekening-PDF. */
+function matchInternalAnnualAccountSnapshotRoute(pathname: string): string | null {
+  const match = pathname.match(/^\/internal\/annual-account-snapshot\/(.+)$/);
   if (!match?.[1]) return null;
   const key = safeDecode(match[1]);
   return key !== null && isSafeStorageKey(key) ? key : null;

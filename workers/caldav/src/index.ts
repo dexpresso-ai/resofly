@@ -250,9 +250,9 @@ async function fetchEvents(env: Env, sourceId: string): Promise<EventRow[]> {
   return await res.json() as EventRow[];
 }
 
-async function fetchEvent(env: Env, sourceId: string, uid: string): Promise<EventRow | null> {
+async function fetchEvent(env: Env, sourceId: string, uid: string, { includeDeleted = false } = {}): Promise<EventRow | null> {
   const res = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/calendar_events?source_id=eq.${sourceId}&uid=eq.${encodeURIComponent(uid)}&deleted_at=is.null`,
+    `${env.SUPABASE_URL}/rest/v1/calendar_events?source_id=eq.${sourceId}&uid=eq.${encodeURIComponent(uid)}${includeDeleted ? '' : '&deleted_at=is.null'}`,
     { headers: restHeaders(env) },
   );
   if (!res.ok) return null;
@@ -537,8 +537,16 @@ async function putEvent(request: Request, env: Env, principal: Principal, source
     icalendar_raw: body,
   };
 
-  const row = existing
-    ? await mutateEvent(env, `id=eq.${existing.id}`, 'PATCH', { ...fields, deleted_at: null })
+  // Een verwijderd item blijft als grafsteen staan (voor sync-collection), en
+  // (source_id, uid) is uniek. Zet een client hetzelfde item terug (ongedaan
+  // maken op de iPhone, een afspraak terugslepen), dan moet die grafsteen weer
+  // tot leven komen: een nieuwe rij liep op de unieke sleutel stuk, en elke
+  // nieuwe poging van de client gaf opnieuw een 500.
+  const tombstone = existing ? null : await fetchEvent(env, source.id, uid, { includeDeleted: true });
+  const target = existing ?? tombstone;
+
+  const row = target
+    ? await mutateEvent(env, `id=eq.${target.id}`, 'PATCH', { ...fields, deleted_at: null })
     : await mutateEvent(env, '', 'POST', {
         organization_id: source.organization_id,
         source_id: source.id,
@@ -564,7 +572,10 @@ async function deleteEvent(request: Request, env: Env, principal: Principal, sou
 }
 
 async function proppatch(request: Request, env: Env, principal: Principal, source: SourceRow): Promise<Response> {
-  if (!sourceWritable(source, principal)) return forbidden();
+  // Naam en kleur van een agenda zijn van de eigenaar, net als in de app (RLS:
+  // alleen de eigenaar wijzigt calendar_sources). Afspraken in een gedeelde
+  // agenda mag een collega wel schrijven; de agenda zelf hernoemen niet.
+  if (!sourceWritable(source, principal) || source.user_id !== principal.userId) return forbidden();
   const body = await request.text();
   const patch: Record<string, unknown> = {};
   const nameM = body.match(/<[^>]*displayname[^>]*>([^<]*)<\/[^>]*displayname>/i);

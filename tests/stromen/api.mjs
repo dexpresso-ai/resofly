@@ -9,18 +9,15 @@
 // toetsen de bouwstenen, maar niet of de deur in zijn geheel dicht zit. Tot
 // 10 november 2026 draaide geen enkele stromentest de functie `api` of
 // `mcp-oauth`. Zie docs/rapporten/CONTROLE_API_LAAG_2026-11-10.md.
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { API_URL, PUBLIEK } from './omgeving.mjs';
 import { roep, roepRequest } from './functies.mjs';
 import { rest, sql, sqlRij } from './supabase.mjs';
 import { geweigerd, gelijk, gelukt, groep, stap, verwacht } from './toets.mjs';
 import { maakWereld } from './wereld.mjs';
 
-// De functies lezen hun secrets bij het laden; dit moet er dus vóór de eerste
-// aanroep staan. Zonder het eerste zegt `api` bij elke webhook "staat nog niet
-// aan", zonder het tweede laadt `mcp-oauth` niet.
-process.env.WEBHOOK_SECRET_ENCRYPTION_KEY ||= 'stromen-webhook-sleutel-voor-de-api-test';
-process.env.MCP_STATE_SECRET ||= 'stromen-mcp-state-geheim';
+// WEBHOOK_SECRET_ENCRYPTION_KEY en MCP_STATE_SECRET staan in omgeving.mjs: de
+// functies lezen ze bij het laden, en dat kan in een eerder scenario zijn.
 
 const BASIS = `${API_URL}/functions/v1/api`;
 
@@ -82,6 +79,22 @@ async function oauth(pad, { method = 'GET', query = '', form, json: body, token,
   let json = null;
   try { json = JSON.parse(tekst); } catch { /* geen json */ }
   return { status: res.status, json, tekst, headers: res.headers };
+}
+
+/** Een inkomende mail zoals de email-worker hem aflevert: met het geheim en een handtekening over tijd en inhoud. */
+async function inkomend(payload) {
+  const geheim = process.env.MAIL_INBOUND_WEBHOOK_SECRET;
+  const raw = JSON.stringify(payload);
+  const ts = String(Math.floor(Date.now() / 1000));
+  const handtekening = createHmac('sha256', geheim).update(`${ts}.${raw}`).digest('hex');
+  const res = await roepRequest('mail-inbound', new Request(`${API_URL}/functions/v1/mail-inbound`, {
+    method: 'POST', body: raw,
+    headers: { 'content-type': 'application/json', 'x-inbound-secret': geheim, 'x-inbound-timestamp': ts, 'x-inbound-signature': handtekening },
+  }));
+  const tekst = await res.text();
+  let json = null;
+  try { json = JSON.parse(tekst); } catch { /* geen json */ }
+  return { status: res.status, json, tekst };
 }
 
 function pkce() {
@@ -330,6 +343,99 @@ export default async function apiScenario() {
       sql(`update public.organization_members set status = 'active' where organization_id = ${q(a.orgId)} and user_id = ${q(a.beheerder.id)}`);
     }
     gelijk((await api('/v1/me', { sleutel: uitvoeren.geheim })).status, 401, 'sleutel werkt weer na terugkeer');
+  });
+
+  groep('Database en bestanden: wat de controle van 10 november dichtzette');
+  await stap('een bijlage van een ticket delen kan niet, ook niet met schrijfrecht op Inhoud', async () => {
+    const ticket = { id: sql(`insert into public.tickets (organization_id, title) values (${q(a.orgId)}, 'Intern ticket') returning id`) };
+    const bijlage = { id: sql(`insert into public.attachments (organization_id, entity_type, entity_id, name, mime_type, size_bytes, storage_key)
+      values (${q(a.orgId)}, 'ticket', ${q(ticket.id)}, 'geheim.pdf', 'application/pdf', 10, ${q(`${a.orgId}/ticket/${ticket.id}/geheim.pdf`)}) returning id`) };
+    // Een lid zonder Tickets, wel met schrijfrecht op Inhoud.
+    sql(`update public.organization_members set module_access = '{"tickets":"none"}'::jsonb where organization_id = ${q(a.orgId)} and user_id = ${q(a.medewerker.id)}`);
+    try {
+      const res = await roep('file-share', { token: a.medewerker.token, body: {
+        action: 'share', organizationId: a.orgId, itemType: 'attachment', itemId: bijlage.id,
+        recipients: [{ kind: 'link', email: 'mijzelf@buiten.test' }],
+      } });
+      geweigerd(res, 'bijlage van een ticket delen via file-share', [403]);
+      // Ook rechtstreeks in de database (zoals PostgREST het toelaat met Inhoud).
+      const direct = await rest('drive_shares?select=id', { method: 'POST', token: a.medewerker.token, prefer: 'return=representation', body: {
+        organization_id: a.orgId, item_type: 'attachment', item_id: bijlage.id, recipient_kind: 'link',
+        recipient_email: 'mijzelf@buiten.test', token_hash: 'a'.repeat(64), created_by: a.medewerker.id,
+      } });
+      verwacht(direct.status >= 400, `deling rechtstreeks aangemaakt: ${direct.status} ${direct.tekst}`);
+      gelijk(Number(sql(`select count(*) from public.drive_shares where item_id = ${q(bijlage.id)}`)), 0, 'delingen van de ticketbijlage');
+    } finally {
+      sql(`update public.organization_members set module_access = null where organization_id = ${q(a.orgId)} and user_id = ${q(a.medewerker.id)}`);
+    }
+  });
+  await stap('een document dat naar een factuur-PDF wijst, wist die PDF niet bij het opruimen', async () => {
+    const sleutel = `${a.orgId}/invoice-pdfs/${randomBytes(8).toString('hex')}/factuur.pdf`;
+    const doc = gelukt(await rest('documents?select=id', { method: 'POST', token: a.medewerker.token, prefer: 'return=representation', body: {
+      organization_id: a.orgId, created_by: a.medewerker.id, title: 'Lokaas', storage_key: sleutel,
+    } }), 'document met de sleutel van een factuur-PDF')[0];
+    gelukt(await rest(`documents?id=eq.${doc.id}`, { method: 'DELETE', token: a.medewerker.token, prefer: 'return=representation' }), 'document verwijderen');
+    gelijk(Number(sql(`select count(*) from public.storage_purge_queue where storage_key = ${q(sleutel)}`)), 0, 'factuur-PDF in de opruimwachtrij');
+    // En een eigen Word-bestand gaat er wel in, zoals bedoeld.
+    const eigen = `${a.orgId}/document/${randomBytes(8).toString('hex')}/brief.docx`;
+    const brief = gelukt(await rest('documents?select=id', { method: 'POST', token: a.medewerker.token, prefer: 'return=representation', body: {
+      organization_id: a.orgId, created_by: a.medewerker.id, title: 'Brief', storage_key: eigen,
+    } }), 'eigen document')[0];
+    gelukt(await rest(`documents?id=eq.${brief.id}`, { method: 'DELETE', token: a.medewerker.token, prefer: 'return=representation' }), 'eigen document verwijderen');
+    gelijk(Number(sql(`select count(*) from public.storage_purge_queue where storage_key = ${q(eigen)}`)), 1, 'eigen bestand in de opruimwachtrij');
+  });
+  await stap('een losse journaalpost van een systeemsoort (desinvestering) boekt niemand rechtstreeks', async () => {
+    const res = await rest('rpc/post_journal_entry', { method: 'POST', token: a.eigenaar.token, body: {
+      p_organization_id: a.orgId, p_date: new Date().toISOString().slice(0, 10), p_description: 'Desinvestering?',
+      p_source_type: 'asset_disposal', p_source_id: a.klantA.id,
+      p_lines: [{ account_code: '4900', debit_cents: 1 }, { account_code: '4900', credit_cents: 1 }],
+    } });
+    verwacht(res.status >= 400 && /alleen de bijbehorende functie/.test(res.tekst), `systeemboeking rechtstreeks: ${res.status} ${res.tekst.slice(0, 200)}`);
+  });
+  await stap('wie geen lid is, leert niets over een andere organisatie', async () => {
+    const tellen = await rest('rpc/organization_reserved_license_count', { method: 'POST', token: a.portaalA.token, body: { p_organization_id: a.orgId } });
+    gelijk(tellen.json, 0, 'aantal leden van A voor een portaalgebruiker');
+    const eigen = await rest('rpc/organization_reserved_license_count', { method: 'POST', token: a.eigenaar.token, body: { p_organization_id: a.orgId } });
+    verwacht(Number(eigen.json) >= 6, `de eigenaar telt zijn eigen leden niet meer: ${eigen.tekst}`);
+    gelijk((await rest('rpc/org_has_creative', { method: 'POST', token: b.eigenaar.token, body: { p_organization_id: a.orgId } })).json, false, 'creatieve module van A voor B');
+  });
+  await stap('het volgende klantnummer alleen met schrijfrecht op Klanten', async () => {
+    geweigerd(await rest('rpc/preview_next_client_code', { method: 'POST', token: a.boekhouder.token, body: { p_organization_id: a.orgId } }), 'boekhouder');
+    geweigerd(await rest('rpc/preview_next_client_code', { method: 'POST', token: a.kijker.token, body: { p_organization_id: a.orgId } }), 'kijker');
+    gelukt(await rest('rpc/preview_next_client_code', { method: 'POST', token: a.medewerker.token, body: { p_organization_id: a.orgId } }), 'lid met Klanten');
+  });
+
+  groep('Inkomende mail: een rem op een golf antwoorden');
+  await stap('na de grens per gesprek wordt een antwoord geparkeerd, zonder melding aan het team', async () => {
+    const thread = sql(`insert into public.client_email_threads (organization_id, client_id) values (${q(a.orgId)}, ${q(a.klantA.id)}) returning id`);
+    const uit = sql(`insert into public.client_emails (organization_id, thread_id, client_id, direction, from_email, to_email, subject, status)
+      values (${q(a.orgId)}, ${q(thread)}, ${q(a.klantA.id)}, 'outbound', 'team@api-a.test', ${q(a.klantA.email)}, 'Offerte', 'sent') returning id`);
+    const run = randomBytes(4).toString('hex');
+    const uitkomsten = [];
+    for (let i = 0; i < 7; i += 1) {
+      const res = await inkomend({
+        to: `reply+${uit}@inbound.test`, toHeader: `reply+${uit}@inbound.test`,
+        envelopeFrom: a.klantA.email, headerFrom: a.klantA.email, headerFromName: 'Klant A',
+        subject: `Re: Offerte ${i}`, text: `Bedankt, verder niets nodig (${i}).`,
+        messageId: `<golf-${run}-${i}@klant.test>`, rawHash: `golf-${run}-${i}`, receivedAt: new Date().toISOString(),
+      });
+      gelijk(res.status, 200, `inkomende mail ${i + 1}`);
+      uitkomsten.push(res.json?.outcome === 'parked' ? `parked:${res.json?.reason}` : res.json?.outcome);
+    }
+    // MAIL_INBOUND_THREAD_LIMIT_PER_HOUR staat in omgeving.mjs op 5.
+    gelijk(uitkomsten, ['linked', 'linked', 'linked', 'linked', 'linked', 'parked:rate_limited', 'parked:rate_limited'], 'uitkomsten');
+    gelijk(Number(sql(`select count(*) from public.client_emails where thread_id is not null and organization_id = ${q(a.orgId)} and direction = 'inbound' and subject like 'Re: Offerte %'`)), 5, 'gekoppelde berichten');
+  });
+  await stap('zonder geldig geheim of met een vervalste handtekening: 401', async () => {
+    const body = JSON.stringify({ to: 'x@inbound.test' });
+    const kaal = await roepRequest('mail-inbound', new Request(`${API_URL}/functions/v1/mail-inbound`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }));
+    gelijk(kaal.status, 401, 'zonder geheim');
+    const ts = String(Math.floor(Date.now() / 1000));
+    const vervalst = await roepRequest('mail-inbound', new Request(`${API_URL}/functions/v1/mail-inbound`, {
+      method: 'POST', body,
+      headers: { 'content-type': 'application/json', 'x-inbound-secret': process.env.MAIL_INBOUND_WEBHOOK_SECRET, 'x-inbound-timestamp': ts, 'x-inbound-signature': 'f'.repeat(64) },
+    }));
+    gelijk(vervalst.status, 401, 'vervalste handtekening');
   });
 
   groep('MCP-koppeling: de OAuth-route');
