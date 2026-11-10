@@ -16,7 +16,7 @@ praten."*
     onderaan, met stappen.
 - **Functioneel:** ja. Gecontroleerd met de echte edge functions tegen een echte database:
   - de openbare API, de MCP-koppeling en de webhooks;
-  - de volledige stromentest, 1037 stappen en 0 fout;
+  - de volledige stromentest, 1039 stappen en 0 fout;
   - de unittests, 1486 en 0 fout;
   - de typecontrole van alle edge functions.
 
@@ -51,7 +51,7 @@ praten."*
 
   Elke bevinding is daarna opnieuw nagelopen in de code en, waar het kon, in de database.
 - **Staging, alleen lezen**, via de Management API van Supabase en de API van Cloudflare.
-- **Een nieuwe stromentest `api`** (`tests/stromen/api.mjs`, 57 stappen). De echte functies
+- **Een nieuwe stromentest `api`** (`tests/stromen/api.mjs`, 59 stappen). De echte functies
   draaien tegen een lokale Supabase met alle migraties. Daarna draaiden alle stromentests
   samen.
 
