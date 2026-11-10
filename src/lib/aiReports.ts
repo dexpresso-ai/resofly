@@ -1,6 +1,7 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { supabase } from './supabase';
 import { rememberReportTitle } from './aiReportTitles';
+import { nextBuildPhase, type BuildPhase } from './reportBuild';
 import type { UUID } from '../types';
 
 /**
@@ -204,6 +205,8 @@ export interface ReportChatState {
   running: boolean;
   question: string;
   status: string | null;
+  /** Waar Gerrie is: lezen, gegevens, bouwen, controleren (reportBuild.ts). */
+  phase: BuildPhase;
   streamed: string;
   error: string | null;
   done: ReportChatDone | null;
@@ -219,6 +222,38 @@ function notify(state: ReportChatState) {
   for (const key of new Set([state.key, state.reportId ?? ''])) {
     for (const fn of sessionListeners.get(key) ?? []) fn();
   }
+  refreshBuilding();
+}
+
+// Welke rapportages Gerrie nu bouwt, als één tekst: dan is de momentopname voor
+// useSyncExternalStore stabiel en rendert de tabbalk alleen als er echt iets
+// begint of klaar is, niet bij elk stukje tekst dat binnenkomt.
+let buildingKey = '';
+const buildingListeners = new Set<() => void>();
+function refreshBuilding() {
+  const keys = new Set<string>();
+  for (const s of sessions.values()) {
+    if (!s.running) continue;
+    keys.add(s.key);
+    if (s.reportId) keys.add(s.reportId);
+  }
+  const next = [...keys].sort().join('|');
+  if (next === buildingKey) return;
+  buildingKey = next;
+  for (const fn of buildingListeners) fn();
+}
+
+/**
+ * De sleutels (tijdelijk of id) van de rapportages waar Gerrie nu aan bouwt. De
+ * tabbalk, de zijbalk en het overzicht laten daarmee zien dat hij bezig is, ook
+ * als je intussen op een andere pagina zit.
+ */
+export function useBuildingReports(): ReadonlySet<string> {
+  const key = useSyncExternalStore(
+    (fn) => { buildingListeners.add(fn); return () => { buildingListeners.delete(fn); }; },
+    () => buildingKey,
+  );
+  return useMemo(() => new Set(key ? key.split('|') : []), [key]);
 }
 function patch(state: ReportChatState, next: Partial<ReportChatState>) {
   const updated = { ...state, ...next };
@@ -259,7 +294,7 @@ export function startReportChat(opts: { organizationId: UUID; reportId: UUID | n
   if (running?.running) throw new Error('Gerrie is nog bezig met deze rapportage.');
   const key = opts.reportId ?? `${NEW_REPORT_PREFIX}${Date.now().toString(36)}${(++sessionSeq).toString(36)}`;
   let state: ReportChatState = {
-    key, reportId: opts.reportId, running: true, question: opts.message, status: 'Gerrie denkt na…',
+    key, reportId: opts.reportId, running: true, question: opts.message, status: 'Gerrie denkt na…', phase: 0,
     streamed: '', error: null, done: null, startedAt: Date.now(),
   };
   sessions.set(key, state);
@@ -286,7 +321,7 @@ export function startReportChat(opts: { organizationId: UUID; reportId: UUID | n
           const parsed = parseSse(block);
           if (!parsed) continue;
           const payload = parsed.data as Record<string, unknown>;
-          if (parsed.event === 'status') state = patch(state, { status: String(payload.label ?? '') || state.status });
+          if (parsed.event === 'status') state = patch(state, { status: String(payload.label ?? '') || state.status, phase: nextBuildPhase(state.phase, payload) });
           else if (parsed.event === 'delta') state = patch(state, { streamed: state.streamed + String(payload.text ?? '') });
           else if (parsed.event === 'report') {
             const report = payload.report as AiReport | undefined;

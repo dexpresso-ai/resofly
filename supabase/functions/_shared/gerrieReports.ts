@@ -527,17 +527,20 @@ export async function runReportChat(params: {
     maxTokens: REPORT_MAX_TOKENS,
     onToolStart: async (name: string) => {
       lastProgress = 0;
-      if (name === 'save_report') await emit('status', { kind: 'tool', label: 'Rapportage opbouwen…' });
+      if (name === 'save_report') await emit('status', { kind: 'tool', step: 'bouwen', label: 'Rapportage opbouwen…' });
     },
     onToolInput: async (name: string, chars: number) => {
       if (name !== 'save_report' || chars - lastProgress < 2500) return;
       lastProgress = chars;
-      await emit('status', { kind: 'tool', label: `Rapportage opbouwen… (${Math.round(chars / 1000)}k tekens)` });
+      await emit('status', { kind: 'tool', step: 'bouwen', label: `Rapportage opbouwen… (${Math.round(chars / 1000)}k tekens)` });
     },
   };
 
+  // `step` is de stap in de bouwanimatie van de app (src/lib/reportBuild.ts).
+  // Vast, los van het label: dat label is schermtekst en verandert weleens.
+  // "Gerrie werkt verder…" heeft geen stap; de app laat de voortgang dan staan.
   for (let i = 0; i < MAX_REPORT_ITERATIONS; i += 1) {
-    await emit('status', { kind: 'thinking', label: i === 0 ? 'Gerrie denkt na…' : 'Gerrie werkt verder…' });
+    await emit('status', { kind: 'thinking', ...(i === 0 ? { step: 'lezen' } : {}), label: i === 0 ? 'Gerrie denkt na…' : 'Gerrie werkt verder…' });
     const response = await callAnthropicStream(system, messages, emit, 'strong', tools, undefined, streamOptions);
     accumulateUsage(usage, response.usage, MODELS.strong, response.model);
     if (response.stop_reason === 'refusal') {
@@ -566,7 +569,7 @@ export async function runReportChat(params: {
         continue;
       }
       if (name === 'save_report') {
-        await emit('status', { kind: 'tool', label: 'Rapportage controleren…' });
+        await emit('status', { kind: 'tool', step: 'controleren', label: 'Rapportage controleren…' });
         const built = await buildDraft(ctx, report, input);
         if (built.ok) {
           const done = answer() || `Klaar: "${built.draft.title}" staat op je pagina.`;
@@ -575,7 +578,7 @@ export async function runReportChat(params: {
         toolResults.push({ type: 'tool_result', tool_use_id: id, content: `Nog niet opgeslagen:\n${built.error}`, is_error: true });
         continue;
       }
-      await emit('status', { kind: 'tool', label: name === 'query_records' ? 'Gegevens berekenen…' : name === 'find_actions' ? 'Zoeken wat de app kan…' : toolLabel(name) });
+      await emit('status', { kind: 'tool', step: 'gegevens', label: name === 'query_records' ? 'Gegevens berekenen…' : name === 'find_actions' ? 'Zoeken wat de app kan…' : toolLabel(name) });
       try {
         // Ook bij het rondkijken de datum-tokens invullen: Gerrie probeert de invoer
         // die hij straks in een dataset zet, en die bevat {{begin_jaar}} en dergelijke.
