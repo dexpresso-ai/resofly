@@ -24,6 +24,36 @@ export interface RhythmFields {
   end_hour?: number | null;
   day_of_week?: number | null;
   day_of_month?: number | null;
+  /** Alleen bij 'event': waarop hij start. */
+  trigger_events?: string[] | null;
+}
+
+// ── Gebeurtenissen ───────────────────────────────────────────────────────────
+
+/**
+ * Waarop een agent kan starten. Dezelfde sleutels en teksten als
+ * supabase/functions/_shared/agentEvents.ts; agents.test.ts legt ze naast elkaar.
+ * `short` is voor op de tegel.
+ */
+export const AGENT_EVENT_LABELS: ReadonlyArray<{ key: string; label: string; short: string }> = [
+  { key: 'client_email.received', label: 'Er komt een mail van een klant binnen', short: 'klantmail' },
+  { key: 'ticket.created', label: 'Er komt een nieuw ticket binnen', short: 'nieuw ticket' },
+  { key: 'ticket.client_reply', label: 'Een klant reageert op een ticket', short: 'ticketreactie' },
+  { key: 'quote.accepted', label: 'Een klant accepteert een offerte', short: 'offerte akkoord' },
+  { key: 'quote.rejected', label: 'Een klant wijst een offerte af', short: 'offerte afgewezen' },
+  { key: 'invoice.paid', label: 'Een factuur is betaald', short: 'factuur betaald' },
+  { key: 'booking.created', label: 'Een klant boekt een afspraak', short: 'nieuwe boeking' },
+  { key: 'meeting_recording.ready', label: 'De notulen van een gesprek zijn klaar', short: 'notulen klaar' },
+  { key: 'purchase_invoice.received', label: 'Er komt een inkoopfactuur binnen', short: 'inkoopfactuur' },
+  { key: 'client.created', label: 'Er is een nieuwe klant', short: 'nieuwe klant' },
+];
+
+export function agentEventLabel(key: string): string {
+  return AGENT_EVENT_LABELS.find((e) => e.key === key)?.label ?? key;
+}
+
+function lowerFirst(text: string): string {
+  return text ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
 }
 
 export function clock(hour: number, minute = 0): string {
@@ -40,6 +70,12 @@ export function scheduleLabel(r: RhythmFields): string {
   const minute = r.minute ?? 0;
   const t = clock(r.hour, minute);
   switch (r.schedule_kind) {
+    case 'event': {
+      const labels = (r.trigger_events ?? []).map((key) => lowerFirst(agentEventLabel(key)));
+      return labels.length === 0
+        ? 'Bij een gebeurtenis (kies er nog een)'
+        : `Start zodra er iets gebeurt: ${labels.join('; ')}`;
+    }
     case 'daily': return `Elke dag om ${t}`;
     case 'weekdays': return `Elke werkdag om ${t}`;
     case 'weekly': return `Elke ${DOW_NAMES[(r.day_of_week ?? 1) - 1] ?? DOW_NAMES[0]} om ${t}`;
@@ -63,6 +99,11 @@ export function shortSchedule(r: RhythmFields): string {
   const minute = r.minute ?? 0;
   const t = clock(r.hour, minute);
   switch (r.schedule_kind) {
+    case 'event': {
+      const shorts = (r.trigger_events ?? []).map((key) => AGENT_EVENT_LABELS.find((e) => e.key === key)?.short ?? key);
+      if (shorts.length === 0) return 'Bij gebeurtenis';
+      return `Zodra · ${shorts.slice(0, 2).join(', ')}${shorts.length > 2 ? ` +${shorts.length - 2}` : ''}`;
+    }
     case 'daily': return `Elke dag · ${t}`;
     case 'weekdays': return `Ma–vr · ${t}`;
     case 'weekly': {

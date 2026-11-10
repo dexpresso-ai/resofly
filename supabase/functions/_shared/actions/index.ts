@@ -10,6 +10,9 @@ import { MARKETING_ACTIONS } from './marketing.ts';
 import { ADMIN_ACTIONS } from './admin.ts';
 import { INSIGHT_ACTIONS } from './insight.ts';
 import { FILES_ACTIONS } from './files.ts';
+import { CONTENT_ACTIONS } from './content.ts';
+import { WORK_ACTIONS } from './work.ts';
+import { REMOVAL_ACTIONS } from './removal.ts';
 
 /**
  * De volledige handelingenregistry, samengesteld uit de domeinbestanden.
@@ -33,6 +36,9 @@ export const ACTIONS: ActionDef[] = [
   ...ADMIN_ACTIONS,
   ...INSIGHT_ACTIONS,
   ...FILES_ACTIONS,
+  ...CONTENT_ACTIONS,
+  ...WORK_ACTIONS,
+  ...REMOVAL_ACTIONS,
 ].map(withRequiredFields);
 
 /**

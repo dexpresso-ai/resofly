@@ -3845,6 +3845,11 @@ async function currentUserId(): Promise<UUID> {
   return userId;
 }
 
+/** Wie er nu is ingelogd; voor een uitvoerder die alleen namens de voorsteller mag werken. */
+export async function currentSessionUserId(): Promise<UUID> {
+  return currentUserId();
+}
+
 
 export async function createNoteWithCalendarLink(organizationId: UUID, values: Record<string, unknown>, input: CalendarNoteLinkInput): Promise<Note> {
   if (input.visibility_snapshot !== 'organization' || input.is_private_masked_snapshot) {
@@ -5587,6 +5592,89 @@ export async function deleteAttachment(att: { id: UUID; storage_key: string; org
   }
 }
 
+/**
+ * Eén bijlage zoals hij nu in de database staat, met zijn opslagsleutel.
+ * Voor het verwijderen vanuit Gerrie: de sleutel komt uit de database van nu,
+ * niet uit een voorstel van eerder.
+ */
+export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise<{ id: UUID; storage_key: string; organization_id: UUID; entity_type: string; entity_id: UUID }> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('id, storage_key, organization_id, entity_type, entity_id')
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .single();
+  if (error) throw error;
+  return data as { id: UUID; storage_key: string; organization_id: UUID; entity_type: string; entity_id: UUID };
+}
+
+/**
+ * Ligt een bijlage vast omdat het document waar hij aan hangt geen concept meer
+ * is? Dezelfde regel als het scherm (geen Verwijderen-knop bij een verstuurde
+ * offerte of factuur, of een geboekte inkoopfactuur), nu gelezen vlak voor het
+ * uitvoeren. De database bewaakt bijlagen zelf niet. Null = vrij.
+ */
+export async function attachmentLockReason(entityType: string, entityId: UUID, organizationId: UUID): Promise<string | null> {
+  const table = entityType === 'quote' ? 'quotes' : entityType === 'invoice' ? 'invoices' : entityType === 'purchase_invoice' ? 'purchase_invoices' : null;
+  if (!table) return null;
+  const columns = table === 'purchase_invoices' ? 'status' : table === 'invoices' ? 'status, sent_at, journal_entry_id' : 'status, sent_at';
+  const { data, error } = await supabase.from(table).select(columns).eq('id', entityId).eq('organization_id', organizationId).maybeSingle();
+  if (error) throw error;
+  const doc = data as { status?: string; sent_at?: string | null; journal_entry_id?: string | null } | null;
+  if (!doc) return null;
+  if (doc.status !== 'draft' || doc.sent_at || doc.journal_entry_id) {
+    return 'Dit bestand hoort bij een document dat geen concept meer is; het ligt vast (bewaarplicht).';
+  }
+  return null;
+}
+
+/**
+ * Mag dit concept nog weg? Gelezen vlak voor het verwijderen, want een kaart kan
+ * van gisteren zijn. Het scherm doet dezelfde controle vóór het wissen van de
+ * bijlagen: weigert de database pas daarna, dan zijn die al weg. Null = mag.
+ */
+export async function draftDeleteBlockReason(kind: 'invoice' | 'quote', id: UUID, organizationId: UUID): Promise<string | null> {
+  if (kind === 'invoice') {
+    const { data, error } = await supabase.from('invoices').select('status, sent_at, journal_entry_id')
+      .eq('id', id).eq('organization_id', organizationId).maybeSingle();
+    if (error) throw error;
+    const inv = data as { status: string; sent_at: string | null; journal_entry_id: string | null } | null;
+    if (!inv) return 'Deze factuur bestaat niet (meer).';
+    if (inv.journal_entry_id) return 'Deze factuur staat inmiddels in het grootboek en kan niet worden verwijderd. Maak een creditnota.';
+    if (inv.status !== 'draft' || inv.sent_at) return 'Deze factuur is inmiddels verstuurd en valt onder de bewaarplicht. Crediteer hem in plaats van verwijderen.';
+    return null;
+  }
+  const { data, error } = await supabase.from('quotes').select('status, sent_at, client_decision_at')
+    .eq('id', id).eq('organization_id', organizationId).maybeSingle();
+  if (error) throw error;
+  const quote = data as { status: string; sent_at: string | null; client_decision_at: string | null } | null;
+  if (!quote) return 'Deze offerte bestaat niet (meer).';
+  if (quote.sent_at || quote.client_decision_at || quote.status !== 'draft') return 'Deze offerte is inmiddels naar de klant gestuurd en valt onder de bewaarplicht. Trek hem in in plaats van verwijderen.';
+  return null;
+}
+
+/** Heeft deze klant (nu) offertes of facturen? Die horen bij de bewaarplicht. */
+export async function clientHasFinanceDocuments(clientId: UUID, organizationId: UUID): Promise<boolean> {
+  const [invoices, quotes] = await Promise.all([
+    supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('client_id', clientId),
+    supabase.from('quotes').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).eq('client_id', clientId),
+  ]);
+  if (invoices.error) throw invoices.error;
+  if (quotes.error) throw quotes.error;
+  return Number(invoices.count ?? 0) + Number(quotes.count ?? 0) > 0;
+}
+
+/**
+ * Een aanvulling onder de aantekening van een gelogd gesprek, op de tekst van NU:
+ * wie intussen iets typte, raakt dat anders kwijt.
+ */
+export async function appendClientCallNotes(id: UUID, organizationId: UUID, addition: string): Promise<ClientCall> {
+  const { data, error } = await supabase.from('client_calls').select('notes').eq('id', id).eq('organization_id', organizationId).single();
+  if (error) throw error;
+  const current = String((data as { notes?: string | null } | null)?.notes ?? '').trim();
+  return updateClientCall(id, { notes: current ? `${current}\n\n${addition}` : addition }, organizationId);
+}
+
 async function selectAttachmentRefsForEntity(type: EntityType, id: UUID, organizationId?: UUID): Promise<AttachmentRef[]> {
   let query = supabase
     .from('attachments')
@@ -5652,6 +5740,24 @@ export async function deleteEntityCascade(table: Table, id: UUID, organizationId
   }
 
   await deleteRow(table, id, organizationId);
+}
+
+/**
+ * De tekst van één notitie of document zoals hij NU in de database staat.
+ *
+ * Voor "tekst aanvullen" vanuit Gerrie: het voorstel is gemaakt op een eerder
+ * moment, en wie intussen iets typte, raakt dat anders kwijt als we op de
+ * kopie van toen voortbouwen.
+ */
+export async function loadContentHtml(table: 'notes' | 'documents', id: UUID, organizationId: UUID): Promise<string> {
+  const { data, error } = await supabase
+    .from(table)
+    .select('content')
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .single();
+  if (error) throw error;
+  return String((data as { content?: string | null } | null)?.content ?? '');
 }
 
 /** Atomic ticket → project conversion via Postgres function. */

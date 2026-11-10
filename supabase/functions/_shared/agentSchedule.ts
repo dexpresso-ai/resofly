@@ -11,11 +11,15 @@
 //   hourly   — elk uur op werkdagen, van `hour` tot en met `end_hour`, op :mm
 // Alles in de wandklok van de agent (standaard Europe/Amsterdam): "08:30"
 // blijft 08:30, ook in de nacht van de klokwissel.
+//
+// En een zesde, zonder klok:
+//   event    — op een gebeurtenis (een klantmail, een nieuw ticket, …); zie
+//              agentEvents.ts. Zo'n agent heeft geen volgende run-tijd.
 // ============================================================
 
 import { daysInMonth, localYmd, wallToUtc } from './schedule.ts';
 
-export const SCHEDULE_KINDS = ['daily', 'weekdays', 'weekly', 'monthly', 'hourly'] as const;
+export const SCHEDULE_KINDS = ['daily', 'weekdays', 'weekly', 'monthly', 'hourly', 'event'] as const;
 export type ScheduleKind = typeof SCHEDULE_KINDS[number];
 
 export function isScheduleKind(value: unknown): value is ScheduleKind {
@@ -101,4 +105,14 @@ export function computeNextRunAt(fields: AgentScheduleFields, after: Date): Date
   }
   // Vangnet; met een geldig ritme komen we hier niet.
   return new Date(after.getTime() + 86_400_000);
+}
+
+/**
+ * De volgende run volgens het ritme, als ISO-tijd; null voor een agent die op
+ * een gebeurtenis wacht. Gebruik dit in plaats van computeNextRunAt waar een
+ * agent ook 'event' kan zijn: die heeft geen klok, en een verzonnen tijd zou
+ * hem via claim_due_agents alsnog op een vast moment laten draaien.
+ */
+export function nextRunIso(fields: AgentScheduleFields, after: Date): string | null {
+  return normalizeSchedule(fields).kind === 'event' ? null : computeNextRunAt(fields, after).toISOString();
 }

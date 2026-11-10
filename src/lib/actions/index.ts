@@ -9,6 +9,9 @@ import { MARKETING_EXECUTORS } from './marketing';
 import { ADMIN_EXECUTORS } from './admin';
 import { INSIGHT_EXECUTORS } from './insight';
 import { FILES_EXECUTORS } from './files';
+import { CONTENT_EXECUTORS } from './content';
+import { WORK_EXECUTORS } from './work';
+import { REMOVAL_EXECUTORS } from './removal';
 import type { ActionExecutor, ActionRunCtx } from './types';
 
 export type { ActionExecutor, ActionRunCtx } from './types';
@@ -35,6 +38,9 @@ export const ACTION_EXECUTORS: Record<string, ActionExecutor> = {
   ...ADMIN_EXECUTORS,
   ...INSIGHT_EXECUTORS,
   ...FILES_EXECUTORS,
+  ...CONTENT_EXECUTORS,
+  ...WORK_EXECUTORS,
+  ...REMOVAL_EXECUTORS,
 };
 
 /** Voert een goedgekeurde handeling uit en geeft de bevestigingszin terug. */

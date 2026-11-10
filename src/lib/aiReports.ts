@@ -92,8 +92,11 @@ export async function listAiReportVersions(organizationId: UUID, reportId: UUID)
 export async function renameAiReport(organizationId: UUID, id: UUID, title: string): Promise<void> {
   const clean = title.replace(/\s+/g, ' ').trim().slice(0, 120);
   if (!clean) throw new Error('Geef de rapportage een naam.');
-  const { error } = await supabase.from('ai_reports').update({ title: clean }).eq('organization_id', organizationId).eq('id', id);
+  const { error, count } = await supabase.from('ai_reports').update({ title: clean }, { count: 'exact' }).eq('organization_id', organizationId).eq('id', id);
   if (error) fail('Hernoemen lukte niet.', error);
+  // RLS laat alleen je eigen rapportages toe; zonder deze controle meldde een
+  // hernoeming van andermans rapport succes terwijl er niets veranderde.
+  if (count === 0) throw new Error('Deze rapportage bestaat niet (meer), of je mag hem niet hernoemen.');
   rememberReportTitle(id, clean);
   void refreshAiReportList(organizationId);
 }
