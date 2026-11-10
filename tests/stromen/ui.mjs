@@ -37,6 +37,7 @@ import { maakWereld, REGELS } from './wereld.mjs';
 import { startUiServer } from './ui-server.mjs';
 import { GOOGLE_ALLES, account, geefCode } from './nep-agenda.mjs';
 import { ai, gesprek, NOTULEN } from './nep-ai.mjs';
+import { claude, installeerClaude, OMZET_DATASETS, OMZET_HTML, JAAR, regel, zetFacturen } from './rapportages.mjs';
 import { clearClientOriginCache } from '../../supabase/functions/_shared/clientLinks.ts';
 import {
   clientHostMeta, escapeAttr, faviconSvg, isPortalPath, neutralPage, pageTitle, parseLookup, portalRedirectUrl, routeFor, sameUrlOn,
@@ -48,7 +49,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -2686,6 +2687,98 @@ async function scenarioKlantdomein() {
   for (const s of [opDomein, opNaam, eigenaar]) await sluit(s);
 }
 
+// ── Rapportages met Gerrie ──────────────────────────────────────────────────
+// Zoals een gebruiker het doet: op Rapportages een vraag stellen, de pagina die
+// dan ontstaat met de echte cijfers in het afgeschermde kader, aanpassen via de
+// chat, een oude versie terugzetten en verwijderen. Claude is nep (streamend, met
+// tool-aanroepen; zie rapportages.mjs), de functie en de database zijn echt.
+async function scenarioRapportage() {
+  groep('UI: rapportages met Gerrie');
+  installeerClaude();
+  // Een eigen organisatie: de cijfers moeten exact kloppen, en de andere
+  // scenario's maken in de gedeelde wereld hun eigen facturen.
+  const w = await maakWereld('uirapport');
+  const lid = await openWerkruimte(w.medewerker, 'rapporteur', w.orgId);
+  zetFacturen(w, [
+    { klant: w.klantA.id, datum: `${JAAR}-01-15`, status: 'paid', regels: [regel(1, 1000)] },
+    { klant: w.klantB.id, datum: `${JAAR}-03-20`, status: 'sent', regels: [regel(3, 100.1)] },
+    { klant: w.klantB.id, datum: `${JAAR}-03-21`, status: 'draft', regels: [regel(1, 5000)] },
+  ]);
+  const kader = () => lid.page.frameLocator('.aire-frame');
+  let rapportId = null;
+
+  await uiStap('Rapportages openen: vraagveld, voorbeeldvragen en het AI-tegoed', async () => {
+    await lid.page.locator('.sidebar-nav .nav-item', { hasText: 'Rapportages' }).first().click();
+    await lid.page.locator('.aire-ask textarea').waitFor({ timeout: 15000 });
+    verwacht(await lid.page.locator('.aire-ask .aire-suggest button').count() >= 4, 'geen voorbeeldvragen');
+    verwacht(/AI-tegoed/.test(await lid.page.locator('.aire-ask-foot').innerText()), 'het tegoed staat er niet bij');
+    await lid.page.getByText('Nog geen rapportages').waitFor();
+  });
+
+  await uiStap('een vraag wordt een eigen pagina met de echte cijfers', async () => {
+    const sinds = server.verkeer.length;
+    claude.beurten.push(
+      { text: 'Ik kijk eerst naar je facturen.', tools: [{ name: 'query_records', input: OMZET_DATASETS[0].input }] },
+      { text: 'Ik heb een pagina gemaakt met je omzet per maand en per klant.', tools: [{ name: 'save_report', input: { title: 'Omzet dit jaar', summary: 'Omzet per maand en per klant.', datasets: OMZET_DATASETS, html: OMZET_HTML } }] },
+    );
+    await lid.page.locator('.aire-ask textarea').fill('Omzet per maand dit jaar');
+    await lid.page.locator('.aire-ask-send').click();
+    await lid.page.locator('.aire-frame').waitFor({ timeout: 45000 });
+    await kader().locator('.rf-kpi-value').first().waitFor({ timeout: 20000 });
+    gelijk(tekst(await kader().locator('.rf-kpi-value').first().innerText()), '€ 1.300,30', 'omzet in het kader');
+    await lid.page.locator('.aire-msg.assistant .aire-chip', { hasText: 'versie 1' }).waitFor();
+    verwacht(/AI-tegoed/.test(await lid.page.locator('.aire-msg.assistant .aire-msg-meta').last().innerText()), 'wat de beurt kostte staat er niet bij');
+    // Het tabblad wijst nu naar de echte rapportage (niet meer naar de tijdelijke sleutel).
+    const tabs = JSON.parse(await lid.page.evaluate((org) => localStorage.getItem(`brandcore.tabs.${org}`), w.orgId));
+    rapportId = tabs.tabs[tabs.activeIndex].statsReportId;
+    verwacht(/^[0-9a-f-]{36}$/.test(rapportId ?? ''), `tabblad: ${rapportId}`);
+    gelijk(sqlRij(`select created_by from public.ai_reports where id = ${q(rapportId)}`).created_by, w.medewerker.id, 'eigenaar');
+    verwacht(await lid.page.locator('.tabbar .tab, [class*="tab"]').filter({ hasText: 'Omzet dit jaar' }).count() > 0, 'de tabtitel is niet de titel van de rapportage');
+    // Gerrie bouwde in één beurt; de gegevens kwamen mee, dus geen extra report_data.
+    gelijk(aanroepen(sinds, { functie: 'gerrie-agent', actie: 'report_data' }).length, 0, 'extra ophaalronde');
+  });
+
+  await uiStap('verversen haalt de cijfers opnieuw op, zonder AI', async () => {
+    const sinds = server.verkeer.length;
+    const verbruik = sqlRij(`select count(*)::int as n from public.ai_usage where user_id = ${q(w.medewerker.id)}`).n;
+    zetFacturen(w, [{ klant: w.klantA.id, datum: `${JAAR}-02-02`, status: 'paid', regels: [regel(1, 199.7)] }]);
+    await lid.page.locator('.aire-actions button', { hasText: 'Verversen' }).click();
+    await wachtTot(async () => tekst(await kader().locator('.rf-kpi-value').first().innerText().catch(() => '')) === '€ 1.500,00', { melding: 'de nieuwe factuur telt niet mee na verversen' });
+    gelijk(aanroepen(sinds, { functie: 'gerrie-agent', actie: 'report_data' }).length, 1, 'report_data');
+    gelijk(sqlRij(`select count(*)::int as n from public.ai_usage where user_id = ${q(w.medewerker.id)}`).n, verbruik, 'nieuw verbruik door verversen');
+  });
+
+  await uiStap('aanpassen via de chat wordt versie 2', async () => {
+    claude.beurten.push({ text: 'De kop heet nu "Omzet per maand".', tools: [{ name: 'save_report', input: { title: 'Omzet dit jaar', html_edits: [{ find: '<h1>Omzet</h1>', replace: '<h1>Omzet per maand</h1>' }] } }] });
+    await lid.page.locator('.aire-composer textarea').fill('Noem de kop "Omzet per maand"');
+    await lid.page.locator('.aire-send').click();
+    await lid.page.locator('.aire-msg.assistant .aire-chip', { hasText: 'versie 2' }).waitFor({ timeout: 30000 });
+    await kader().locator('h1', { hasText: 'Omzet per maand' }).waitFor({ timeout: 15000 });
+    verwacht(/Versie 2/.test(await lid.page.locator('.aire-meta').innerText()), 'de kop zegt geen versie 2');
+  });
+
+  await uiStap('versie 1 bekijken en terugzetten: dat wordt versie 3', async () => {
+    await lid.page.locator('.aire-versions button', { hasText: 'Versies' }).click();
+    await lid.page.locator('.aire-versions-menu button', { hasText: 'Versie 1' }).click();
+    await lid.page.locator('.aire-preview-bar').waitFor();
+    await kader().locator('h1', { hasText: /^Omzet$/ }).waitFor({ timeout: 15000 });
+    await lid.page.locator('.aire-preview-bar button', { hasText: 'Deze versie terugzetten' }).click();
+    await lid.page.locator('.aire-preview-bar').waitFor({ state: 'detached' });
+    await wachtTot(async () => /Versie 3/.test(await lid.page.locator('.aire-meta').innerText()), { melding: 'geen versie 3 na terugzetten' });
+    gelijk(sqlRij(`select request from public.ai_report_versions where report_id = ${q(rapportId)} and version = 3`).request, 'Versie 1 teruggezet', 'de versie zegt wat er gebeurde');
+  });
+
+  await uiStap('de rapportage staat in het menu en in het overzicht; verwijderen ruimt hem op', async () => {
+    verwacht(await lid.page.locator('.nav-submenu-reports button', { hasText: 'Omzet dit jaar' }).count() === 1, 'niet in het menu onder Rapportages');
+    lid.plan.push({});
+    await lid.page.locator('.aire-actions button', { hasText: 'Verwijderen' }).click();
+    await lid.page.getByText('Nog geen rapportages').waitFor({ timeout: 15000 });
+    verwacht(lid.dialogen.some((d) => /komt niet terug/.test(d.tekst)), 'de vraag vooraf noemt niet dat het tegoed niet terugkomt');
+    gelijk(sqlRij(`select count(*)::int as n from public.ai_reports where id = ${q(rapportId)}`).n, 0, 'nog in de database');
+  });
+  await sluit(lid);
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -2701,7 +2794,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

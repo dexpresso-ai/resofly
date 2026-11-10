@@ -21,6 +21,7 @@ import {
 } from '../_shared/gerrieCore.ts';
 import type { Emit, HttpStatus } from '../_shared/gerrieCore.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
+import { handleReportChat, handleReportData } from '../_shared/gerrieReports.ts';
 
 // Toegestane frontend-origins (CORS + harde origin-controle). Alleen HTTP-schil.
 const GERRIE_ALLOWED_ORIGINS = parseAllowedOrigins([
@@ -46,6 +47,29 @@ Deno.serve(async (req) => {
     // maar deze functie draait met de service-role en komt daar niet langs.
     if (await getModuleLevel(supabaseAdmin, user.id, organizationId, 'gerrie') === 'none') {
       throw new HttpError('Je hebt in deze organisatie geen toegang tot Gerrie.', 403);
+    }
+
+    // Rapportages (Statistieken → Rapportages): een eigen pagina per vraag, alleen
+    // van deze gebruiker. De tabellen staan achter de module Statistieken; deze
+    // functie draait met de service-role, dus die poort controleren we hier zelf.
+    const action = String(body.action || '');
+    if (action === 'report_chat' || action === 'report_data') {
+      if (await getModuleLevel(supabaseAdmin, user.id, organizationId, 'stats') === 'none') {
+        throw new HttpError('Je hebt in deze organisatie geen toegang tot Statistieken.', 403);
+      }
+      // Gegevens verversen: geen AI, geen tegoed.
+      if (action === 'report_data') {
+        const ctx = await buildContext(organizationId, role, user);
+        return json(req, await handleReportData(ctx, body));
+      }
+      if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
+      const message = String(body.message || '').trim();
+      if (!message) throw new HttpError('Leeg bericht.', 400);
+      if (message.length > 4000) throw new HttpError('Bericht is te lang.', 400);
+      return streamResponse(req, async (emit) => {
+        const ctx = await buildContext(organizationId, role, user);
+        await handleReportChat(ctx, body, emit);
+      });
     }
 
     // Een uitgevoerde/mislukte actie loggen — gewone JSON, geen AI-call nodig.

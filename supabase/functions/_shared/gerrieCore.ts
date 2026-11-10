@@ -120,6 +120,12 @@ interface GerrieContext {
   orgName: string; today: string; moduleAccess: Record<string, string>; clientEmail?: ClientEmailSettings;
   /** Handelingen die deze run mag gebruiken (geplande agent). null/undefined = alles wat de rechten toestaan. */
   allowedActionIds?: Set<string> | null;
+  /**
+   * Hoeveel regels een lijst-tool hoogstens teruggeeft. Leeg = 100, zoals altijd in de
+   * chat. De rapportages zetten hem op 1000 (de grens van PostgREST): een grafiek over
+   * het hele jaar die op de eerste honderd facturen rekent, toont stil een fout getal.
+   */
+  maxRows?: number;
 }
 /** Tokens, en (na de eerste beurt) wat ze kostten per model dat ze verbruikte — zie claudeModels.ts. */
 type Usage = TokenUsage;
@@ -794,18 +800,28 @@ interface AnthropicResponse {
   model: string | null;
 }
 
+/** Wat een streamende call naast de vaste velden nog kan meekrijgen. */
+interface StreamOptions {
+  /** Plafond voor nadenken + antwoord. De rapportages schrijven een hele HTML-pagina in één tool-aanroep. */
+  maxTokens?: number;
+  /** Het model begint aan een tool-aanroep (de naam staat dan al vast, de invoer nog niet). */
+  onToolStart?: (name: string) => Promise<void> | void;
+  /** Hoeveel tekens invoer er voor deze tool al binnen is: voortgang bij een lange invoer. */
+  onToolInput?: (name: string, chars: number) => Promise<void> | void;
+}
+
 /**
  * Eén streamende Messages-call. `toolChoice: 'none'` is voor de afrondende beurt:
  * dezelfde tools blijven in het request (een andere toollijst halverwege maakt de
  * thinking-blokken van eerdere rondes ongeldig), het model gebruikt ze alleen niet.
  */
-async function callAnthropicStream(system: string, messages: AnthropicMessage[], emit: Emit, modelKind: ModelKind = 'strong', tools: readonly unknown[] = TOOL_DEFINITIONS, toolChoice?: 'none'): Promise<AnthropicResponse> {
+async function callAnthropicStream(system: string, messages: AnthropicMessage[], emit: Emit, modelKind: ModelKind = 'strong', tools: readonly unknown[] = TOOL_DEFINITIONS, toolChoice?: 'none', options: StreamOptions = {}): Promise<AnthropicResponse> {
   const spec = MODELS[modelKind];
   const requestBody: Record<string, unknown> = {
     // Model, adaptive thinking + effort (waar het model dat kent) en het vangnet bij
     // een weigering — zie claudeModels.ts.
     ...modelRequestFields(spec, spec.effort),
-    max_tokens: MAX_OUTPUT_TOKENS,
+    max_tokens: options.maxTokens ?? MAX_OUTPUT_TOKENS,
     stream: true,
     // Prompt-caching: tools + systeemprompt zijn stabiel -> cache ze samen (~90% goedkoper input).
     system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
@@ -865,7 +881,10 @@ async function callAnthropicStream(system: string, messages: AnthropicMessage[],
         blocks[index] = { ...cb };
         if (cb.type === 'text') blocks[index].text = '';
         if (cb.type === 'thinking') { blocks[index].thinking = ''; blocks[index].signature = ''; await emit('status', { kind: 'thinking', label: 'Gerrie denkt na…' }); }
-        if (cb.type === 'tool_use') { partialJson[index] = ''; blocks[index].input = {}; }
+        if (cb.type === 'tool_use') {
+          partialJson[index] = ''; blocks[index].input = {};
+          if (options.onToolStart) await options.onToolStart(String(cb.name ?? ''));
+        }
       } else if (type === 'content_block_delta') {
         const index = Number(ev.index);
         const d = (ev.delta ?? {}) as Record<string, unknown>;
@@ -875,7 +894,10 @@ async function callAnthropicStream(system: string, messages: AnthropicMessage[],
         if (dtype === 'text_delta') { const t = String(d.text ?? ''); b.text = String(b.text ?? '') + t; if (t) await emit('delta', { text: t }); }
         else if (dtype === 'thinking_delta') { b.thinking = String(b.thinking ?? '') + String(d.thinking ?? ''); }
         else if (dtype === 'signature_delta') { b.signature = String(b.signature ?? '') + String(d.signature ?? ''); }
-        else if (dtype === 'input_json_delta') { partialJson[index] = (partialJson[index] ?? '') + String(d.partial_json ?? ''); }
+        else if (dtype === 'input_json_delta') {
+          partialJson[index] = (partialJson[index] ?? '') + String(d.partial_json ?? '');
+          if (options.onToolInput) await options.onToolInput(String(b.name ?? ''), partialJson[index].length);
+        }
       } else if (type === 'content_block_stop') {
         const index = Number(ev.index);
         const b = blocks[index];
@@ -975,6 +997,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_edit_time_entry` — een bestaande urenregistratie corrigeren (datum, duur, omschrijving, declarabel). Zoek hem eerst met `list_time_entries`.',
           '- `propose_time_entry` — GEWERKTE UREN registreren op een project of klant (urenregistratie). Zoek het project met `list_projects` (project_id) of de klant met `search_clients` (client_id); minstens één is verplicht. Duur in uren/minuten, datum standaard vandaag (reken relatieve datums om). Declarabel volgt automatisch het projecttype (urenbasis = wél declarabel, aangenomen prijs = niet), tenzij de gebruiker iets anders zegt.',
           '- `propose_report` — een RAPPORTAGE klaarzetten op de Statistieken-pagina (telt/berekent over één bron, optioneel gegroepeerd en gefilterd). De bouwer opent vooringevuld met een live grafiek die de gebruiker zelf controleert en opslaat. Gebruik exact de bron-/veldsleutels uit de tooluitleg; gis geen veldnamen. Geef de rapportage altijd een korte, duidelijke naam.',
+          '- Wil de gebruiker méér dan één grafiek over één bron (meerdere onderdelen, vergelijkingen met vorig jaar, gegevens uit verschillende bronnen, een overzicht dat hij vaker wil openen), wijs hem dan op Rapportages in het menu: daar stelt hij dezelfde vraag aan jou en wordt het een eigen pagina die altijd de actuele cijfers toont.',
           '- `propose_convert_quote` — een GEACCEPTEERDE offerte omzetten naar een factuur. Zoek de offerte met `list_quotes`; alleen status "accepted" kan omgezet worden.',
           '- `propose_edit_invoice` / `propose_edit_quote` — een bestaande CONCEPT-factuur/offerte wijzigen. Alleen status "draft" mag; een verstuurde of verwerkte factuur mag wettelijk niet meer aangepast worden — zeg dat dan. Geef alleen de velden die veranderen; voor losse regelaanpassingen heb je de volledige set regels nodig, laat `lines` anders weg zodat de gebruiker ze zelf aanpast.',
           '- `propose_edit_client` — klantgegevens wijzigen. Geef alleen de velden die veranderen.',
@@ -2836,7 +2859,7 @@ function withActionMenu<T extends { name: string; description: string }>(tool: T
 
 async function runTool(ctx: GerrieContext, name: string, input: Record<string, unknown>): Promise<unknown> {
   const orgId = ctx.organizationId;
-  const limit = clampLimit(input.limit);
+  const limit = clampLimit(input.limit, ctx.maxRows);
   // Tweede slot op de deur: ook als het model toch een afgeschermde tool kiest.
   const module = TOOL_MODULE[name];
   if (module && moduleLevel(ctx, module) === 'none') {
@@ -5714,9 +5737,15 @@ function parseAllowedOrigins(values: Array<string | null | undefined>): string[]
   }
   return [...origins];
 }
-function clampLimit(value: unknown): number {
-  const n = Math.floor(num(value)) || 25;
-  return Math.max(1, Math.min(100, n));
+/**
+ * Het aantal regels voor een lijst-tool. In de chat: standaard 25, hoogstens 100.
+ * Met een hoger plafond (rapportages, `maxRows`) is dat plafond ook de standaard:
+ * een rapportage wil alles in de periode, niet de eerste 25.
+ */
+function clampLimit(value: unknown, max = 100): number {
+  const cap = Math.max(1, Math.min(1000, Math.floor(max) || 100));
+  const n = Math.floor(num(value)) || (cap > 100 ? cap : 25);
+  return Math.max(1, Math.min(cap, n));
 }
 function isoDate(value: unknown): string | null {
   const s = String(value || '').trim();
@@ -5770,9 +5799,12 @@ export {
   buildCreateTasksProposal, buildProposal, lineTotal,
   GERRIE_CORE_ACTIONS, getGerrieCoreAction, runTool as runGerrieTool, describeProposal,
   describeError, requiredEnv, parseAllowedOrigins, isUuid, todayIso, tzOffsetMs,
+  // De rapportages (gerrieReports.ts) draaien hun eigen lus met dezelfde streamende call.
+  callAnthropicStream, accumulateUsage, extractText, toolLabel,
 };
 export type {
   GerrieContext, Emit, Proposal, CreateTasksProposal, ModelKind, Usage, AgentOutcome, AgentStep, BudgetCheck,
   OrganizationRole, HttpStatus, MissionSubtask, RunAgentOptions,
+  AnthropicBlock, AnthropicMessage, AnthropicResponse, StreamOptions,
 };
 // ToolCatalogEntry wordt hierboven al als interface geëxporteerd.

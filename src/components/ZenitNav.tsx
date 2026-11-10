@@ -60,7 +60,7 @@ const MODULE_PAGES: Record<ModuleId, Page[]> = {
   werk: ['clients', 'client', 'projects', 'project', 'gallery', 'project-planning', 'tickets', 'archive'],
   geld: FINANCE_PAGES,
   berichten: ['communication', 'chat', 'marketing'],
-  inzicht: ['stats', 'content', 'notes', 'documents'],
+  inzicht: ['stats', 'report', 'content', 'notes', 'documents'],
 };
 
 function moduleOfPage(page: Page): ModuleId | null {
@@ -156,7 +156,7 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
       { page: 'marketing', label: 'Marketing', Icon: Megaphone },
     ]) }] },
     { id: 'inzicht', label: 'Inzicht', Icon: BarChart3, home: ['stats', 'content'], badge: 0, groups: [{ items: keep([
-      { page: 'stats', label: 'Statistieken', Icon: BarChart3 },
+      { page: 'stats', label: 'Rapportages', Icon: BarChart3, also: ['report'] },
       { page: 'content', label: 'Inhoud', Icon: Library, also: ['notes', 'documents'] },
     ]) }] },
   ];

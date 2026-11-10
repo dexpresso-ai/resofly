@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Archive, BarChart3, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Scale, Settings, Sparkles, StickyNote, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, BarChart3, FileBarChart, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Scale, Settings, Sparkles, StickyNote, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData } from '../types';
 import { viewTitle } from '../lib/workspaceTabs';
 
@@ -16,7 +16,7 @@ export const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
   // een werktab alléén het icoon, dus die waren onderling niet te
   // onderscheiden. Nu elk een eigen vorm.
   dashboard: LayoutDashboard, gerrie: Sparkles, weekplanner: CalendarRange, calendar: Calendar,
-  'meeting-booking': CalendarClock, time: Clock, stats: BarChart3, content: Library, notes: StickyNote,
+  'meeting-booking': CalendarClock, time: Clock, stats: BarChart3, report: FileBarChart, content: Library, notes: StickyNote,
   documents: Files, clients: Users, client: Users, projects: FolderOpen, project: FolderOpen,
   'project-planning': GanttChart, tickets: Ticket, chat: MessageSquare, marketing: Megaphone, quotes: FileText,
   contracts: FileSignature, invoices: Receipt, suppliers: Truck, 'purchase-invoices': FileText, ledger: BookOpen,

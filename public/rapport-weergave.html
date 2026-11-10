@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Het kader waarin een rapportage van Gerrie draait.
+
+  De app laadt deze pagina in een <iframe sandbox="allow-scripts"> (zonder
+  allow-same-origin): de pagina heeft dan geen eigen herkomst en kan niet bij de
+  sessie, de opslag of de pagina eromheen. Deze CSP (en dezelfde als header in
+  public/_headers) sluit het netwerk af: geen fetch, geen afbeeldingen of scripts
+  van buiten. Alleen de lettertypen van ResoFly mogen, van Google Fonts.
+
+  Waarom een eigen pagina en geen srcdoc: een srcdoc-iframe erft de CSP van de
+  app, en die staat geen inline scripts toe. Een rapportage zonder script kan
+  zijn cijfers niet zelf uitrekenen en zou dan bij elke wijziging in de gegevens
+  opnieuw door Gerrie geschreven moeten worden (AI-tegoed).
+
+  De app stuurt één bericht: { type: 'render', html, data, tokens, theme }.
+  Daarna is deze pagina klaar; een nieuwe weergave = een nieuw kader.
+  De bouwstenen (window.RF) staan beschreven in supabase/functions/_shared/gerrieReports.ts (RF_GUIDE).
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="x-dns-prefetch-control" content="off">
+<meta name="referrer" content="no-referrer">
+<title>Rapportage</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  color-scheme:light;
+  --bg:#F2F2F5;--surface:#FFFFFF;--surface-2:#F6F6F9;--surface-3:#EDEDF2;--well:#ECECF1;
+  --line:#E3E3EA;--line-2:#D5D5DE;--line-3:#BFBFCA;
+  --ink:#16161C;--ink-2:#4A4A57;--ink-3:#5E5E6B;--ink-4:#A1A1AD;
+  --accent:#F4BC2E;--accent-ink:#855800;--on-accent:#1C1405;--accent-rgb:244,188,46;
+  --ok:#0B6B4E;--warn:#A3470A;--danger:#BD1F31;--info:#1A5FBA;--note:#5B3FC4;
+  --ok-rgb:11,107,78;--warn-rgb:163,71,10;--danger-rgb:189,31,49;--info-rgb:26,95,186;
+  --grid:#ECECF1;
+  --r-xs:6px;--r-sm:8px;--r-md:10px;--r-lg:14px;--r-xl:18px;--r-card:18px;
+  --shadow-card:0 1px 2px rgba(22,22,28,.05),0 8px 24px -16px rgba(22,22,28,.24);
+  --font-sans:'Poppins',ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  /* Grafiekkleuren: gevalideerd op kleurenblindheid en contrast (licht op #FFFFFF, donker op #1B1B22);
+     ResoFly-goud voorop. Volgorde is vast, nooit doorschuiven. */
+  --series-1:#A36F00;--series-2:#2a78d6;--series-3:#eb6834;--series-4:#1baf7a;
+  --series-5:#6250d6;--series-6:#e87ba4;--series-7:#008300;--series-8:#e34948;
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#15151B;--surface:#1B1B22;--surface-2:#212129;--surface-3:#282831;--well:#121218;
+  --line:#2A2A33;--line-2:#363640;--line-3:#474752;
+  --ink:#F3F3F6;--ink-2:#B9B9C4;--ink-3:#9494A1;--ink-4:#5F5F6B;
+  --accent:#F7C548;--accent-ink:#F7C548;--on-accent:#1A1405;--accent-rgb:247,197,72;
+  --ok:#4CD9A0;--warn:#FFA24C;--danger:#FF6B72;--info:#6CB6FF;--note:#B79CFF;
+  --ok-rgb:76,217,160;--warn-rgb:255,162,76;--danger-rgb:255,107,114;--info-rgb:108,182,255;
+  --grid:rgba(255,255,255,.06);
+  --shadow-card:0 1px 2px rgba(0,0,0,.25),0 12px 28px -18px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.045);
+  --series-1:#c98500;--series-2:#3987e5;--series-3:#d95926;--series-4:#199e70;
+  --series-5:#9085e9;--series-6:#d55181;--series-7:#008300;--series-8:#e66767;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0;background:transparent}
+body{font-family:var(--font-sans);font-size:14px;line-height:1.5;color:var(--ink);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+#rf-root{padding:2px 2px 8px}
+h1,h2,h3,h4{margin:0;color:var(--ink);letter-spacing:-.01em}
+p{margin:0}
+.rf-page{display:flex;flex-direction:column;gap:16px}
+.rf-head{display:flex;flex-direction:column;gap:4px}
+.rf-head h1{font-size:22px;font-weight:700;line-height:1.25}
+.rf-head p{color:var(--ink-2);font-size:13.5px;max-width:720px}
+.rf-section{display:flex;flex-direction:column;gap:12px}
+.rf-section>h2{font-size:15px;font-weight:700}
+.rf-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
+.rf-grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.rf-grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.rf-grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.rf-span-2{grid-column:span 2}
+.rf-span-all{grid-column:1/-1}
+@media (max-width:900px){.rf-grid-3,.rf-grid-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.rf-grid-2,.rf-grid-3,.rf-grid-4{grid-template-columns:minmax(0,1fr)}.rf-span-2{grid-column:auto}}
+.rf-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-card);padding:16px 18px;min-width:0;display:flex;flex-direction:column;gap:12px}
+.rf-card-head{display:flex;flex-direction:column;gap:2px}
+.rf-card-head h3{font-size:14px;font-weight:600}
+.rf-card-sub{color:var(--ink-3);font-size:12px}
+.rf-muted{color:var(--ink-3)}
+.rf-note{color:var(--ink-2);font-size:12.5px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-md);padding:9px 12px}
+.rf-num{font-variant-numeric:tabular-nums}
+.rf-badge{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;line-height:1;padding:4px 8px;border-radius:999px;background:var(--surface-3);color:var(--ink-2);white-space:nowrap}
+.rf-badge.is-good{background:rgba(var(--ok-rgb),.12);color:var(--ok)}
+.rf-badge.is-bad{background:rgba(var(--danger-rgb),.12);color:var(--danger)}
+.rf-badge.is-warn{background:rgba(var(--warn-rgb),.13);color:var(--warn)}
+.rf-badge.is-info{background:rgba(var(--info-rgb),.12);color:var(--info)}
+/* Kerncijfers */
+.rf-kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr))}
+.rf-kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-card);padding:14px 16px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.rf-kpi-label{font-size:12px;color:var(--ink-2);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rf-kpi-value{font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.15;overflow-wrap:anywhere}
+.rf-kpi-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--ink-3)}
+/* Grafieken */
+.rf-chart{position:relative;width:100%;min-width:0}
+.rf-chart svg{display:block;width:100%;overflow:visible}
+.rf-axis{fill:var(--ink-3);font-size:11px;font-variant-numeric:tabular-nums}
+.rf-gridline{stroke:var(--grid);stroke-width:1;shape-rendering:crispEdges}
+.rf-baseline{stroke:var(--line-2);stroke-width:1;shape-rendering:crispEdges}
+.rf-vlabel{fill:var(--ink-2);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
+.rf-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--ink-2);margin-bottom:6px}
+.rf-legend span{display:inline-flex;align-items:center;gap:6px}
+.rf-legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.rf-legend i.is-line{height:3px;width:14px;border-radius:2px}
+.rf-hbars{display:flex;flex-direction:column;gap:9px}
+.rf-hbar{display:grid;grid-template-columns:minmax(80px,32%) minmax(0,1fr) auto;align-items:center;gap:10px;font-size:12.5px}
+.rf-hbar-label{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rf-hbar-track{height:14px;position:relative}
+.rf-hbar-fill{position:absolute;left:0;top:0;bottom:0;border-radius:0 4px 4px 0;min-width:2px}
+.rf-hbar-val{font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink);text-align:right}
+@media (max-width:480px){.rf-hbar{grid-template-columns:minmax(0,1fr) auto}.rf-hbar-label{grid-column:1/-1}.rf-hbar-track{grid-column:1}}
+.rf-donut{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.rf-donut svg{width:168px;height:168px;flex:0 0 auto}
+.rf-donut-list{display:flex;flex-direction:column;gap:7px;flex:1;min-width:180px}
+.rf-donut-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:8px;align-items:center;font-size:12.5px}
+.rf-donut-row i{width:10px;height:10px;border-radius:3px}
+.rf-donut-row span:nth-child(2){color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rf-donut-row b{font-weight:600;font-variant-numeric:tabular-nums}
+.rf-donut-row em{font-style:normal;color:var(--ink-3);min-width:42px;text-align:right;font-variant-numeric:tabular-nums}
+.rf-donut-total{fill:var(--ink);font-size:17px;font-weight:600}
+.rf-donut-caption{fill:var(--ink-3);font-size:10.5px}
+.rf-tip{position:fixed;z-index:10;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--line-2);border-radius:var(--r-md);box-shadow:0 10px 30px -12px rgba(0,0,0,.35);padding:8px 10px;font-size:12px;line-height:1.45;max-width:260px;opacity:0;transition:opacity .08s}
+.rf-tip.is-on{opacity:1}
+.rf-tip b{display:block;font-weight:600;margin-bottom:2px}
+.rf-tip span{display:flex;align-items:center;gap:6px;justify-content:space-between}
+.rf-tip i{width:8px;height:8px;border-radius:2px;display:inline-block}
+.rf-tip em{font-style:normal;font-weight:600;font-variant-numeric:tabular-nums}
+/* Tabellen */
+.rf-table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.rf-table{width:100%;border-collapse:collapse;font-size:13px}
+.rf-table th,.rf-table td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.rf-table th{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap;user-select:none}
+.rf-table th.is-sortable{cursor:pointer}
+.rf-table th.is-sortable:hover{color:var(--ink)}
+.rf-table th .rf-sort{opacity:.55;margin-left:3px}
+.rf-table td.is-right,.rf-table th.is-right{text-align:right;font-variant-numeric:tabular-nums}
+.rf-table tbody tr:hover td{background:var(--surface-2)}
+.rf-table tfoot td{font-weight:600;border-bottom:none;border-top:2px solid var(--line-2)}
+.rf-more{margin-top:8px;background:none;border:1px solid var(--line-2);border-radius:999px;color:var(--ink-2);font:inherit;font-size:12px;font-weight:600;padding:5px 12px;cursor:pointer}
+.rf-more:hover{color:var(--ink);border-color:var(--line-3)}
+/* Meter */
+.rf-meter{display:flex;flex-direction:column;gap:6px}
+.rf-meter-top{display:flex;justify-content:space-between;gap:10px;font-size:12.5px}
+.rf-meter-top span{color:var(--ink-2)}
+.rf-meter-top b{font-weight:600;font-variant-numeric:tabular-nums}
+.rf-meter-track{height:8px;border-radius:999px;background:rgba(var(--accent-rgb),.18);overflow:hidden}
+.rf-meter-fill{height:100%;border-radius:999px;background:var(--series-1)}
+.rf-meter-fill.is-warn{background:var(--warn)}
+.rf-meter-fill.is-bad{background:var(--danger)}
+/* Leeg en fout */
+.rf-empty{color:var(--ink-3);font-size:13px;text-align:center;padding:26px 12px;border:1px dashed var(--line-2);border-radius:var(--r-lg)}
+.rf-error{background:rgba(var(--danger-rgb),.08);border:1px solid rgba(var(--danger-rgb),.3);color:var(--ink);border-radius:var(--r-lg);padding:12px 14px;font-size:13px;margin-bottom:12px}
+.rf-error b{color:var(--danger)}
+/* Tabbladen */
+.rf-tabs{display:inline-flex;gap:4px;padding:4px;background:var(--surface-3);border-radius:999px;flex-wrap:wrap;max-width:100%}
+.rf-tabs button{border:0;background:transparent;color:var(--ink-2);font:inherit;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:999px;cursor:pointer}
+.rf-tabs button.is-active{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+select,input,button{font:inherit}
+select,input{background:var(--surface);color:var(--ink);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:6px 9px;font-size:13px}
+</style>
+</head>
+<body>
+<div id="rf-root" aria-live="polite"></div>
+<script>
+(function () {
+  'use strict';
+  var root = document.getElementById('rf-root');
+  var host = window.parent;
+  var rendered = false;
+
+  function post(msg) {
+    msg.source = 'rf-frame';
+    try { host.postMessage(msg, '*'); } catch (e) { /* geen host */ }
+  }
+
+  // ── Opmaak ────────────────────────────────────────────────────────────────
+  var NL = 'nl-NL';
+  var MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+  function n(v) { var x = typeof v === 'number' ? v : Number(v); return isFinite(x) ? x : 0; }
+  function isNum(v) { return v !== null && v !== undefined && v !== '' && isFinite(Number(v)); }
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function euro(v, opt) {
+    opt = opt || {};
+    if (!isNum(v)) return '—';
+    if (opt.compact) return new Intl.NumberFormat(NL, { style: 'currency', currency: 'EUR', notation: 'compact', maximumFractionDigits: 1 }).format(n(v));
+    var d = opt.decimals === undefined ? 2 : opt.decimals;
+    return new Intl.NumberFormat(NL, { style: 'currency', currency: 'EUR', minimumFractionDigits: d, maximumFractionDigits: d }).format(n(v));
+  }
+  function num(v, d) {
+    if (!isNum(v)) return '—';
+    d = d === undefined ? 0 : d;
+    return new Intl.NumberFormat(NL, { minimumFractionDigits: d, maximumFractionDigits: d }).format(n(v));
+  }
+  function pct(v, d) {
+    if (!isNum(v)) return '—';
+    return new Intl.NumberFormat(NL, { style: 'percent', minimumFractionDigits: d === undefined ? 1 : d, maximumFractionDigits: d === undefined ? 1 : d }).format(n(v));
+  }
+  function ymd(v) {
+    var s = String(v || '');
+    var m = s.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?/);
+    return m ? { y: +m[1], m: +m[2], d: m[3] ? +m[3] : null } : null;
+  }
+  function date(v) { var p = ymd(v); if (!p) return v ? String(v) : '—'; return (p.d ? p.d + ' ' : '') + MONTHS[p.m - 1] + ' ' + p.y; }
+  function month(v) {
+    var s = String(v || '');
+    var q = s.match(/^(\d{4})-Q([1-4])$/); if (q) return 'Q' + q[2] + ' ' + q[1];
+    var w = s.match(/^(\d{4})-W(\d{2})$/); if (w) return 'wk ' + (+w[2]) + ' ' + w[1];
+    var p = ymd(s); if (!p) return s || '—';
+    return MONTHS[p.m - 1] + ' ' + p.y;
+  }
+  function hours(v) { return isNum(v) ? num(v, n(v) % 1 === 0 ? 0 : 1) + ' u' : '—'; }
+  function duration(min) {
+    if (!isNum(min)) return '—';
+    var t = Math.round(n(min)); var h = Math.floor(Math.abs(t) / 60); var m = Math.abs(t) % 60;
+    return (t < 0 ? '−' : '') + (h ? h + 'u' + (m ? ' ' + m + 'm' : '') : m + 'm');
+  }
+  function formatter(f) {
+    if (typeof f === 'function') return f;
+    switch (f) {
+      case 'euro': return function (v) { return euro(v); };
+      case 'euro0': return function (v) { return euro(v, { decimals: 0 }); };
+      case 'num1': return function (v) { return num(v, 1); };
+      case 'num2': return function (v) { return num(v, 2); };
+      case 'pct': return function (v) { return pct(v); };
+      case 'pct0': return function (v) { return pct(v, 0); };
+      case 'hours': return hours;
+      case 'duration': return duration;
+      case 'date': return date;
+      case 'month': return month;
+      case 'text': return function (v) { return v === null || v === undefined || v === '' ? '—' : String(v); };
+      default: return function (v) { return isNum(v) ? num(v, Math.abs(n(v)) < 10 && n(v) % 1 !== 0 ? 1 : 0) : (v === null || v === undefined || v === '' ? '—' : String(v)); };
+    }
+  }
+  function axisFormat(f, max) {
+    if (f === 'euro' || f === 'euro0') return function (v) { return Math.abs(max) >= 10000 ? euro(v, { compact: true }) : euro(v, { decimals: 0 }); };
+    if (f === 'pct' || f === 'pct0') return function (v) { return pct(v, 0); };
+    if (f === 'hours') return function (v) { return num(v) + ' u'; };
+    if (typeof f === 'function') return f;
+    return function (v) { return Math.abs(max) >= 10000 ? new Intl.NumberFormat(NL, { notation: 'compact', maximumFractionDigits: 1 }).format(v) : num(v); };
+  }
+
+  // ── Rekenen ───────────────────────────────────────────────────────────────
+  function getter(f) {
+    if (typeof f === 'function') return f;
+    if (f === undefined || f === null) return function (r) { return r; };
+    var path = String(f).split('.');
+    return function (r) { var v = r; for (var i = 0; i < path.length && v !== null && v !== undefined; i++) v = v[path[i]]; return v; };
+  }
+  function list(v) { return Array.isArray(v) ? v : []; }
+  function sum(rows, f) { var g = getter(f); var cents = 0; var plain = 0; list(rows).forEach(function (r) { var v = n(g(r)); plain += v; cents += Math.round(v * 100); }); return Math.abs(plain - cents / 100) < 0.01 ? cents / 100 : plain; }
+  function count(rows, f) { if (!f) return list(rows).length; var g = getter(f); return list(rows).filter(function (r) { return g(r); }).length; }
+  function avg(rows, f) { var r = list(rows); var g = getter(f); var vals = r.map(g).filter(isNum).map(n); return vals.length ? vals.reduce(function (a, b) { return a + b; }, 0) / vals.length : null; }
+  function min(rows, f) { var g = getter(f); var vals = list(rows).map(g).filter(isNum).map(n); return vals.length ? Math.min.apply(null, vals) : null; }
+  function max(rows, f) { var g = getter(f); var vals = list(rows).map(g).filter(isNum).map(n); return vals.length ? Math.max.apply(null, vals) : null; }
+  function sortBy(rows, f, dir) {
+    var g = getter(f); var sign = dir === 'desc' ? -1 : 1;
+    return list(rows).slice().sort(function (a, b) {
+      var x = g(a), y = g(b);
+      if (x === y) return 0; if (x === null || x === undefined) return 1; if (y === null || y === undefined) return -1;
+      return (isNum(x) && isNum(y) ? n(x) - n(y) : String(x).localeCompare(String(y), NL)) * sign;
+    });
+  }
+  function top(rows, k, f) { return sortBy(rows, f, 'desc').slice(0, k); }
+  function groupBy(rows, f) {
+    var g = getter(f); var map = new Map();
+    list(rows).forEach(function (r) { var key = g(r); var k = key === undefined ? null : key; if (!map.has(k)) map.set(k, []); map.get(k).push(r); });
+    return Array.from(map.entries()).map(function (e) { return { key: e[0], rows: e[1] }; });
+  }
+  function rollup(rows, by, value, opt) {
+    opt = opt || {}; var agg = opt.agg || 'sum'; var vg = getter(value);
+    var out = groupBy(rows, by).map(function (grp) {
+      var v = agg === 'count' ? grp.rows.length : agg === 'avg' ? avg(grp.rows, vg) : sum(grp.rows, vg);
+      return { label: grp.key === null ? 'Onbekend' : String(grp.key), value: v, rows: grp.rows };
+    }).sort(function (a, b) { return n(b.value) - n(a.value); });
+    if (opt.limit && out.length > opt.limit) {
+      var kept = out.slice(0, opt.limit);
+      if (opt.other !== false) {
+        var rest = out.slice(opt.limit);
+        kept.push({ label: opt.other || 'Overig', value: agg === 'count' || agg === 'sum' ? rest.reduce(function (s, x) { return s + n(x.value); }, 0) : null, rows: [] });
+      }
+      return kept;
+    }
+    return out;
+  }
+  function pad(x) { return String(x).padStart(2, '0'); }
+  function bucket(day, period) {
+    var p = ymd(day); if (!p || !p.d) return null;
+    if (period === 'year') return { key: '' + p.y, label: '' + p.y };
+    if (period === 'quarter') { var q = Math.floor((p.m - 1) / 3) + 1; return { key: p.y + '-Q' + q, label: 'Q' + q + ' ' + p.y }; }
+    if (period === 'day') return { key: day.slice(0, 10), label: date(day) };
+    if (period === 'week') {
+      var dt = new Date(Date.UTC(p.y, p.m - 1, p.d)); var wd = dt.getUTCDay() || 7; dt.setUTCDate(dt.getUTCDate() + 4 - wd);
+      var ys = Date.UTC(dt.getUTCFullYear(), 0, 1); var wk = Math.ceil(((dt - ys) / 86400000 + 1) / 7);
+      return { key: dt.getUTCFullYear() + '-W' + pad(wk), label: 'wk ' + wk + ' ' + dt.getUTCFullYear() };
+    }
+    return { key: p.y + '-' + pad(p.m), label: MONTHS[p.m - 1] + ' ' + p.y };
+  }
+  function addPeriod(day, period) {
+    var p = ymd(day); var d = new Date(Date.UTC(p.y, p.m - 1, p.d || 1));
+    if (period === 'year') d = new Date(Date.UTC(p.y + 1, 0, 1));
+    else if (period === 'quarter') d = new Date(Date.UTC(p.y, Math.floor((p.m - 1) / 3) * 3 + 3, 1));
+    else if (period === 'month') d = new Date(Date.UTC(p.y, p.m, 1));
+    else if (period === 'week') d.setUTCDate(d.getUTCDate() + 7);
+    else d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+  }
+  function series(rows, dateField, valueField, opt) {
+    opt = opt || {}; var period = opt.period || 'month'; var agg = opt.agg || 'sum';
+    var dg = getter(dateField); var vg = valueField ? getter(valueField) : function () { return 1; };
+    var map = new Map();
+    list(rows).forEach(function (r) {
+      var d = dg(r); var b = bucket(String(d || '').slice(0, 10), period); if (!b) return;
+      var e = map.get(b.key) || { key: b.key, label: b.label, values: [] }; e.values.push(vg(r)); map.set(b.key, e);
+    });
+    var keys = Array.from(map.keys()).sort();
+    var from = opt.from || (keys.length ? null : null); var to = opt.to || null;
+    var start = from ? from : (keys.length ? firstDay(keys[0], period) : null);
+    var end = to ? to : (keys.length ? firstDay(keys[keys.length - 1], period) : null);
+    var out = [];
+    if (start && end) {
+      var cursor = firstDay(bucket(start, period).key, period); var guard = 0;
+      while (cursor <= end && guard++ < 500) {
+        var b = bucket(cursor, period); var e = map.get(b.key);
+        out.push({ key: b.key, label: b.label, value: e ? reduce(e.values, agg) : (agg === 'avg' ? null : 0) });
+        cursor = addPeriod(cursor, period);
+      }
+    }
+    return out;
+  }
+  function firstDay(key, period) {
+    if (period === 'year') return key + '-01-01';
+    if (period === 'quarter') { var q = key.split('-Q'); return q[0] + '-' + pad((+q[1] - 1) * 3 + 1) + '-01'; }
+    if (period === 'month') return key + '-01';
+    if (period === 'week') { var w = key.split('-W'); var j4 = new Date(Date.UTC(+w[0], 0, 4)); var wd = j4.getUTCDay() || 7; j4.setUTCDate(j4.getUTCDate() + 1 - wd + (+w[1] - 1) * 7); return j4.toISOString().slice(0, 10); }
+    return key;
+  }
+  function reduce(values, agg) {
+    if (agg === 'count') return values.length;
+    var nums = values.filter(isNum).map(n);
+    if (agg === 'avg') return nums.length ? nums.reduce(function (a, b) { return a + b; }, 0) / nums.length : null;
+    return sum(nums);
+  }
+  function change(now, before) { if (!isNum(now) || !isNum(before) || n(before) === 0) return null; return (n(now) - n(before)) / Math.abs(n(before)); }
+
+  // ── Weergave ──────────────────────────────────────────────────────────────
+  function target(t) {
+    var el = typeof t === 'string' ? document.querySelector(t) : t;
+    if (!el) throw new Error('Element ' + t + ' niet gevonden');
+    return el;
+  }
+  function seriesColor(i) { return 'var(--series-' + ((i % 8) + 1) + ')'; }
+  function empty(t, text) { var el = target(t); el.innerHTML = '<div class="rf-empty">' + esc(text || 'Geen gegevens in deze periode.') + '</div>'; return el; }
+
+  var tip = null;
+  function showTip(html, x, y) {
+    if (!tip) { tip = document.createElement('div'); tip.className = 'rf-tip'; tip.setAttribute('role', 'tooltip'); document.body.appendChild(tip); }
+    tip.innerHTML = html; tip.classList.add('is-on');
+    var w = tip.offsetWidth, h = tip.offsetHeight, vw = document.documentElement.clientWidth;
+    var left = Math.min(Math.max(8, x + 14), vw - w - 8); var topPos = Math.max(8, y - h - 12);
+    tip.style.left = left + 'px'; tip.style.top = topPos + 'px';
+  }
+  function hideTip() { if (tip) tip.classList.remove('is-on'); }
+
+  function niceTicks(lo, hi, count) {
+    if (lo === hi) { hi = lo === 0 ? 1 : lo * 1.2; if (lo > 0) lo = 0; }
+    var span = hi - lo; var step = Math.pow(10, Math.floor(Math.log10(span / count)));
+    var err = (count * step) / span;
+    if (err <= 0.15) step *= 10; else if (err <= 0.35) step *= 5; else if (err <= 0.75) step *= 2;
+    var start = Math.floor(lo / step) * step; var end = Math.ceil(hi / step) * step; var ticks = [];
+    for (var v = start; v <= end + step / 2; v += step) ticks.push(Math.round(v / step) * step);
+    return ticks;
+  }
+  function legendHtml(names, kind) {
+    if (names.length < 2) return '';
+    return '<div class="rf-legend">' + names.map(function (nm, i) {
+      return '<span><i class="' + (kind === 'line' ? 'is-line' : '') + '" style="background:' + seriesColor(i) + '"></i>' + esc(nm) + '</span>';
+    }).join('') + '</div>';
+  }
+  function normSeries(opt) {
+    if (Array.isArray(opt.data)) {
+      return { labels: opt.data.map(function (d) { return d.label === null || d.label === undefined ? 'Onbekend' : String(d.label); }), series: [{ name: opt.name || '', values: opt.data.map(function (d) { return d.value; }) }] };
+    }
+    // Een reeks met meer waarden dan labels (vorig jaar heeft twaalf maanden, dit jaar
+    // pas elf) tekende anders punten buiten de grafiek.
+    var labels = (opt.labels || []).map(String);
+    return { labels: labels, series: (opt.series || []).map(function (s) { return { name: String(s.name || ''), values: list(s.values).slice(0, labels.length) }; }) };
+  }
+  var resizers = [];
+  function responsive(el, draw) {
+    var last = 0;
+    function run() { var w = el.clientWidth || 600; if (Math.abs(w - last) < 2) return; last = w; draw(w); }
+    run();
+    resizers.push(run);
+  }
+  window.addEventListener('resize', function () { resizers.forEach(function (f) { try { f(); } catch (e) { /* toon de rest */ } }); });
+
+  function bar(t, opt) {
+    opt = opt || {}; var el = target(t); var s = normSeries(opt); var fmt = formatter(opt.format);
+    var hasData = s.series.some(function (x) { return x.values.some(function (v) { return isNum(v) && n(v) !== 0; }); });
+    if (!s.labels.length || !hasData) return empty(el, opt.empty);
+    if (opt.horizontal || (s.series.length === 1 && !opt.vertical && s.labels.some(function (l) { return l.length > 14; }) && s.labels.length <= 25)) {
+      return hbars(el, s, fmt, opt);
+    }
+    el.classList.add('rf-chart');
+    responsive(el, function (W) {
+      var H = opt.height || 240; var padL = 56, padR = 8, padT = 18, padB = 34;
+      var stacked = !!opt.stacked && s.series.length > 1;
+      var all = []; s.labels.forEach(function (_, i) {
+        if (stacked) { var pos = 0, neg = 0; s.series.forEach(function (x) { var v = n(x.values[i]); if (v >= 0) pos += v; else neg += v; }); all.push(pos, neg); }
+        else s.series.forEach(function (x) { all.push(n(x.values[i])); });
+      });
+      var ticks = niceTicks(Math.min(0, Math.min.apply(null, all)), Math.max(0, Math.max.apply(null, all)), 4);
+      var lo = ticks[0], hi = ticks[ticks.length - 1]; var axisF = axisFormat(opt.format, hi);
+      var plotW = Math.max(40, W - padL - padR), plotH = H - padT - padB;
+      var y = function (v) { return padT + plotH - ((v - lo) / (hi - lo)) * plotH; };
+      var band = plotW / s.labels.length; var groups = stacked ? 1 : s.series.length;
+      var bw = Math.max(2, Math.min(24, (band * 0.72 - (groups - 1) * 2) / groups));
+      var out = '<svg viewBox="0 0 ' + W + ' ' + H + '" height="' + H + '" role="img" aria-label="' + esc(opt.title || 'Staafdiagram') + '">';
+      ticks.forEach(function (tv) { out += '<line class="rf-gridline" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(tv) + '" y2="' + y(tv) + '"/><text class="rf-axis" x="' + (padL - 8) + '" y="' + (y(tv) + 4) + '" text-anchor="end">' + esc(axisF(tv)) + '</text>'; });
+      out += '<line class="rf-baseline" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
+      var every = Math.max(1, Math.ceil(s.labels.length / Math.max(1, Math.floor(plotW / 64))));
+      var showVals = s.series.length === 1 && opt.valueLabels !== false && s.labels.length <= 12 && band > 44;
+      s.labels.forEach(function (label, i) {
+        var cx = padL + band * i + band / 2; var acc = 0, accNeg = 0;
+        s.series.forEach(function (x, j) {
+          var v = n(x.values[i]); if (!isNum(x.values[i])) return;
+          var xPos, from, to;
+          if (stacked) { xPos = cx - bw / 2; if (v >= 0) { from = acc; to = acc + v; acc = to; } else { from = accNeg; to = accNeg + v; accNeg = to; } }
+          else { xPos = cx - (groups * bw + (groups - 1) * 2) / 2 + j * (bw + 2); from = 0; to = v; }
+          var yTop = y(Math.max(from, to)), yBot = y(Math.min(from, to)); var h = Math.max(0, yBot - yTop);
+          if (stacked && j > 0 && h > 2) { if (v >= 0) yBot -= 2; else yTop += 2; h = Math.max(0, yBot - yTop); }
+          var r = Math.min(4, h / 2, bw / 2); var up = v >= 0;
+          var d = up
+            ? 'M' + xPos + ',' + yBot + 'V' + (yTop + r) + 'Q' + xPos + ',' + yTop + ' ' + (xPos + r) + ',' + yTop + 'H' + (xPos + bw - r) + 'Q' + (xPos + bw) + ',' + yTop + ' ' + (xPos + bw) + ',' + (yTop + r) + 'V' + yBot + 'Z'
+            : 'M' + xPos + ',' + yTop + 'V' + (yBot - r) + 'Q' + xPos + ',' + yBot + ' ' + (xPos + r) + ',' + yBot + 'H' + (xPos + bw - r) + 'Q' + (xPos + bw) + ',' + yBot + ' ' + (xPos + bw) + ',' + (yBot - r) + 'V' + yTop + 'Z';
+          if (stacked && !(j === s.series.length - 1 || h <= 0)) d = 'M' + xPos + ',' + yTop + 'H' + (xPos + bw) + 'V' + yBot + 'H' + xPos + 'Z';
+          out += '<path d="' + d + '" fill="' + seriesColor(j) + '"/>';
+        });
+        if (showVals) { var v0 = n(s.series[0].values[i]); out += '<text class="rf-vlabel" x="' + cx + '" y="' + (v0 >= 0 ? y(v0) - 6 : y(v0) + 14) + '" text-anchor="middle">' + esc(fmt(v0)) + '</text>'; }
+        if (i % every === 0) out += '<text class="rf-axis" x="' + cx + '" y="' + (H - padB + 18) + '" text-anchor="middle">' + esc(label.length > 12 ? label.slice(0, 11) + '…' : label) + '</text>';
+        out += '<rect data-i="' + i + '" x="' + (padL + band * i) + '" y="' + padT + '" width="' + band + '" height="' + plotH + '" fill="transparent"/>';
+      });
+      out += '</svg>';
+      el.innerHTML = legendHtml(s.series.map(function (x) { return x.name; }), 'bar') + out;
+      el.querySelectorAll('rect[data-i]').forEach(function (rect) {
+        function show(ev) {
+          var i = +rect.getAttribute('data-i'); var p = ev.touches ? ev.touches[0] : ev;
+          var rows = s.series.map(function (x, j) { return '<span><span><i style="background:' + seriesColor(j) + '"></i> ' + esc(x.name || s.labels[i]) + '</span><em>' + esc(fmt(x.values[i])) + '</em></span>'; }).join('');
+          showTip('<b>' + esc(s.labels[i]) + '</b>' + rows, p.clientX, p.clientY);
+        }
+        rect.addEventListener('mousemove', show); rect.addEventListener('touchstart', show, { passive: true }); rect.addEventListener('mouseleave', hideTip);
+      });
+    });
+    return el;
+  }
+  function hbars(el, s, fmt, opt) {
+    var values = s.series[0].values.map(n); var hi = Math.max.apply(null, values.map(Math.abs).concat([0])) || 1;
+    var limit = opt.limit || 25;
+    var rows = s.labels.map(function (l, i) { return { l: l, v: values[i] }; }).slice(0, limit);
+    el.innerHTML = '<div class="rf-hbars" role="list">' + rows.map(function (r) {
+      return '<div class="rf-hbar" role="listitem"><span class="rf-hbar-label" title="' + esc(r.l) + '">' + esc(r.l) + '</span><span class="rf-hbar-track"><span class="rf-hbar-fill" style="width:' + Math.max(0.5, (Math.abs(r.v) / hi) * 100) + '%;background:' + (r.v < 0 ? 'var(--danger)' : seriesColor(0)) + '"></span></span><span class="rf-hbar-val">' + esc(fmt(r.v)) + '</span></div>';
+    }).join('') + '</div>';
+    return el;
+  }
+
+  function line(t, opt) {
+    opt = opt || {}; var el = target(t); var s = normSeries(opt); var fmt = formatter(opt.format);
+    if (!s.labels.length || !s.series.some(function (x) { return x.values.some(isNum); })) return empty(el, opt.empty);
+    el.classList.add('rf-chart');
+    responsive(el, function (W) {
+      var H = opt.height || 240; var padL = 56, padR = 14, padT = 16, padB = 34;
+      var all = []; s.series.forEach(function (x) { x.values.forEach(function (v) { if (isNum(v)) all.push(n(v)); }); });
+      var ticks = niceTicks(Math.min(0, Math.min.apply(null, all)), Math.max.apply(null, all.concat([0])), 4);
+      var lo = ticks[0], hi = ticks[ticks.length - 1]; var axisF = axisFormat(opt.format, hi);
+      var plotW = Math.max(40, W - padL - padR), plotH = H - padT - padB;
+      var x = function (i) { return s.labels.length === 1 ? padL + plotW / 2 : padL + (plotW * i) / (s.labels.length - 1); };
+      var y = function (v) { return padT + plotH - ((v - lo) / (hi - lo)) * plotH; };
+      var out = '<svg viewBox="0 0 ' + W + ' ' + H + '" height="' + H + '" role="img" aria-label="' + esc(opt.title || 'Lijndiagram') + '">';
+      ticks.forEach(function (tv) { out += '<line class="rf-gridline" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(tv) + '" y2="' + y(tv) + '"/><text class="rf-axis" x="' + (padL - 8) + '" y="' + (y(tv) + 4) + '" text-anchor="end">' + esc(axisF(tv)) + '</text>'; });
+      var every = Math.max(1, Math.ceil(s.labels.length / Math.max(1, Math.floor(plotW / 70))));
+      s.labels.forEach(function (label, i) { if (i % every === 0 || i === s.labels.length - 1) out += '<text class="rf-axis" x="' + x(i) + '" y="' + (H - padB + 18) + '" text-anchor="' + (i === 0 && s.labels.length > 1 ? 'start' : i === s.labels.length - 1 && s.labels.length > 1 ? 'end' : 'middle') + '">' + esc(label) + '</text>'; });
+      s.series.forEach(function (ser, j) {
+        var pts = []; ser.values.forEach(function (v, i) { if (isNum(v)) pts.push([x(i), y(n(v))]); });
+        if (!pts.length) return;
+        var d = pts.map(function (p, k) { return (k ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join('');
+        if (opt.area && s.series.length <= 3) out += '<path d="' + d + 'L' + pts[pts.length - 1][0].toFixed(1) + ',' + y(Math.max(lo, 0)) + 'L' + pts[0][0].toFixed(1) + ',' + y(Math.max(lo, 0)) + 'Z" fill="' + seriesColor(j) + '" fill-opacity=".1"/>';
+        out += '<path d="' + d + '" fill="none" stroke="' + seriesColor(j) + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+        var last = pts[pts.length - 1];
+        out += '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="4" fill="' + seriesColor(j) + '" stroke="var(--surface)" stroke-width="2"/>';
+      });
+      out += '<line class="rf-cross" x1="0" x2="0" y1="' + padT + '" y2="' + (padT + plotH) + '" stroke="var(--line-3)" stroke-width="1" visibility="hidden"/>';
+      out += '<rect class="rf-hit" x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + plotH + '" fill="transparent"/></svg>';
+      el.innerHTML = legendHtml(s.series.map(function (z) { return z.name; }), 'line') + out;
+      var svg = el.querySelector('svg'); var hit = el.querySelector('.rf-hit'); var cross = el.querySelector('.rf-cross');
+      function show(ev) {
+        var p = ev.touches ? ev.touches[0] : ev; var box = svg.getBoundingClientRect();
+        var px = ((p.clientX - box.left) / box.width) * W; var i = s.labels.length === 1 ? 0 : Math.round(((px - padL) / plotW) * (s.labels.length - 1));
+        i = Math.max(0, Math.min(s.labels.length - 1, i));
+        cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
+        var rows = s.series.map(function (z, j) { return '<span><span><i style="background:' + seriesColor(j) + '"></i> ' + esc(z.name || 'Waarde') + '</span><em>' + esc(fmt(z.values[i])) + '</em></span>'; }).join('');
+        showTip('<b>' + esc(s.labels[i]) + '</b>' + rows, p.clientX, p.clientY);
+      }
+      hit.addEventListener('mousemove', show); hit.addEventListener('touchstart', show, { passive: true });
+      hit.addEventListener('mouseleave', function () { hideTip(); cross.setAttribute('visibility', 'hidden'); });
+    });
+    return el;
+  }
+
+  function donut(t, opt) {
+    opt = opt || {}; var el = target(t); var fmt = formatter(opt.format);
+    var data = (opt.data || []).filter(function (d) { return isNum(d.value) && n(d.value) > 0; }).sort(function (a, b) { return n(b.value) - n(a.value); });
+    if (!data.length) return empty(el, opt.empty);
+    var maxParts = opt.max || 6;
+    if (data.length > maxParts) { var rest = data.slice(maxParts - 1); data = data.slice(0, maxParts - 1).concat([{ label: 'Overig', value: rest.reduce(function (s2, d) { return s2 + n(d.value); }, 0) }]); }
+    var total = data.reduce(function (s2, d) { return s2 + n(d.value); }, 0);
+    var R = 80, r = 54, C = 84, a0 = -Math.PI / 2, gap = data.length > 1 ? 0.025 : 0;
+    var svg = '<svg viewBox="0 0 168 168" role="img" aria-label="' + esc(opt.title || 'Verdeling') + '">';
+    data.forEach(function (d, i) {
+      var frac = n(d.value) / total; var a1 = a0 + frac * Math.PI * 2;
+      var s1 = a0 + gap / 2, e1 = a1 - gap / 2; if (e1 <= s1) { a0 = a1; return; }
+      var large = e1 - s1 > Math.PI ? 1 : 0;
+      if (data.length === 1) { svg += '<circle cx="' + C + '" cy="' + C + '" r="' + ((R + r) / 2) + '" fill="none" stroke="' + seriesColor(0) + '" stroke-width="' + (R - r) + '" data-i="0"/>'; }
+      else {
+        var p = function (rad, ang) { return (C + rad * Math.cos(ang)).toFixed(2) + ',' + (C + rad * Math.sin(ang)).toFixed(2); };
+        svg += '<path data-i="' + i + '" d="M' + p(R, s1) + 'A' + R + ',' + R + ' 0 ' + large + ' 1 ' + p(R, e1) + 'L' + p(r, e1) + 'A' + r + ',' + r + ' 0 ' + large + ' 0 ' + p(r, s1) + 'Z" fill="' + seriesColor(i) + '"/>';
+      }
+      a0 = a1;
+    });
+    svg += '<text class="rf-donut-total" x="84" y="86" text-anchor="middle">' + esc(opt.centerValue !== undefined ? opt.centerValue : fmt(total)) + '</text>';
+    svg += '<text class="rf-donut-caption" x="84" y="104" text-anchor="middle">' + esc(opt.centerLabel || 'totaal') + '</text></svg>';
+    el.innerHTML = '<div class="rf-donut">' + svg + '<div class="rf-donut-list">' + data.map(function (d, i) {
+      return '<div class="rf-donut-row"><i style="background:' + seriesColor(i) + '"></i><span title="' + esc(d.label) + '">' + esc(d.label === null || d.label === undefined ? 'Onbekend' : d.label) + '</span><b>' + esc(fmt(d.value)) + '</b><em>' + pct(n(d.value) / total, 0) + '</em></div>';
+    }).join('') + '</div></div>';
+    el.querySelectorAll('[data-i]').forEach(function (seg) {
+      function show(ev) { var i = +seg.getAttribute('data-i'); var p = ev.touches ? ev.touches[0] : ev; showTip('<b>' + esc(data[i].label) + '</b><span><em>' + esc(fmt(data[i].value)) + '</em><em>' + pct(n(data[i].value) / total, 1) + '</em></span>', p.clientX, p.clientY); }
+      seg.addEventListener('mousemove', show); seg.addEventListener('touchstart', show, { passive: true }); seg.addEventListener('mouseleave', hideTip);
+    });
+    return el;
+  }
+
+  function kpis(t, items) {
+    var el = target(t);
+    el.innerHTML = '<div class="rf-kpis">' + list(items).map(function (k) {
+      var fmt = formatter(k.format); var foot = '';
+      if (isNum(k.delta)) {
+        var up = n(k.delta) >= 0; var good = k.goodWhen === 'down' ? !up : up;
+        var tone = n(k.delta) === 0 || k.goodWhen === 'neutral' ? '' : good ? ' is-good' : ' is-bad';
+        foot += '<span class="rf-badge' + tone + '">' + (n(k.delta) === 0 ? '±' : up ? '▲' : '▼') + ' ' + pct(Math.abs(n(k.delta)), 1) + '</span>';
+        if (k.deltaLabel) foot += '<span>' + esc(k.deltaLabel) + '</span>';
+      }
+      if (k.hint) foot += '<span>' + esc(k.hint) + '</span>';
+      return '<div class="rf-kpi"><div class="rf-kpi-label" title="' + esc(k.label) + '">' + esc(k.label) + '</div><div class="rf-kpi-value">' + esc(k.value === null || k.value === undefined ? '—' : fmt(k.value)) + '</div>' + (foot ? '<div class="rf-kpi-foot">' + foot + '</div>' : '') + '</div>';
+    }).join('') + '</div>';
+    return el;
+  }
+  function kpi(t, item) { return kpis(t, [item]); }
+
+  function table(t, opt) {
+    opt = opt || {}; var el = target(t); var rows = list(opt.rows);
+    if (!rows.length) return empty(el, opt.empty || 'Geen regels in deze selectie.');
+    var cols = opt.columns || Object.keys(rows[0] || {}).filter(function (k) { return typeof rows[0][k] !== 'object'; }).map(function (k) { return { key: k, label: k }; });
+    cols = cols.map(function (c) {
+      var g = c.value ? c.value : getter(c.key); var numeric = c.align === 'right' || ['euro', 'euro0', 'num', 'num1', 'num2', 'pct', 'pct0', 'hours', 'duration'].indexOf(c.format) >= 0;
+      return { label: c.label === undefined ? c.key : c.label, get: g, fmt: formatter(c.format || (numeric ? 'num' : 'text')), right: numeric || c.align === 'right', html: c.html, sum: c.total !== false && numeric && ['pct', 'pct0'].indexOf(c.format) < 0 };
+    });
+    var state = { sort: -1, dir: 1, all: false }; var limit = opt.limit || 0;
+    function draw() {
+      var data = rows.slice();
+      if (state.sort >= 0) { var c = cols[state.sort]; data.sort(function (a, b) { var x = c.get(a), y = c.get(b); if (x === y) return 0; if (x === null || x === undefined) return 1; if (y === null || y === undefined) return -1; return (isNum(x) && isNum(y) ? n(x) - n(y) : String(x).localeCompare(String(y), NL)) * state.dir; }); }
+      var shown = limit && !state.all ? data.slice(0, limit) : data;
+      var h = '<div class="rf-table-wrap"><table class="rf-table"><thead><tr>' + cols.map(function (c, i) {
+        return '<th class="is-sortable' + (c.right ? ' is-right' : '') + '" data-col="' + i + '" scope="col" aria-sort="' + (state.sort === i ? (state.dir > 0 ? 'ascending' : 'descending') : 'none') + '">' + esc(c.label) + (state.sort === i ? '<span class="rf-sort">' + (state.dir > 0 ? '↑' : '↓') + '</span>' : '') + '</th>';
+      }).join('') + '</tr></thead><tbody>' + shown.map(function (r) {
+        return '<tr>' + cols.map(function (c) { var v = c.get(r); return '<td' + (c.right ? ' class="is-right"' : '') + '>' + (c.html ? c.html(r) : esc(c.fmt(v))) + '</td>'; }).join('') + '</tr>';
+      }).join('') + '</tbody>';
+      if (opt.total) h += '<tfoot><tr>' + cols.map(function (c, i) { return '<td' + (c.right ? ' class="is-right"' : '') + '>' + (i === 0 ? 'Totaal' : c.sum ? esc(c.fmt(sum(data, c.get))) : '') + '</td>'; }).join('') + '</tr></tfoot>';
+      h += '</table></div>';
+      if (limit && data.length > limit) h += '<button type="button" class="rf-more">' + (state.all ? 'Toon minder' : 'Toon alle ' + num(data.length)) + '</button>';
+      el.innerHTML = h;
+      el.querySelectorAll('th[data-col]').forEach(function (th) { th.addEventListener('click', function () { var i = +th.getAttribute('data-col'); if (state.sort === i) state.dir = -state.dir; else { state.sort = i; state.dir = cols[i].right ? -1 : 1; } draw(); }); });
+      var more = el.querySelector('.rf-more'); if (more) more.addEventListener('click', function () { state.all = !state.all; draw(); });
+    }
+    draw();
+    return el;
+  }
+
+  function meter(t, opt) {
+    opt = opt || {}; var el = target(t); var fmt = formatter(opt.format); var v = n(opt.value); var m = n(opt.max);
+    var frac = m > 0 ? v / m : 0; var tone = frac > 1 ? ' is-bad' : frac > 0.9 ? ' is-warn' : '';
+    el.innerHTML = '<div class="rf-meter"><div class="rf-meter-top"><span>' + esc(opt.label || '') + '</span><b>' + esc(fmt(v)) + (m > 0 ? ' / ' + esc(fmt(m)) : '') + '</b></div><div class="rf-meter-track" role="progressbar" aria-valuenow="' + v + '" aria-valuemin="0" aria-valuemax="' + m + '"><div class="rf-meter-fill' + tone + '" style="width:' + Math.min(100, Math.max(0, frac * 100)) + '%"></div></div></div>';
+    return el;
+  }
+
+  function wireTabs() {
+    document.querySelectorAll('.rf-tabs').forEach(function (tabs) {
+      var scope = tabs.parentElement || document;
+      var buttons = tabs.querySelectorAll('button[data-tab]');
+      function activate(name) {
+        buttons.forEach(function (b) { var on = b.getAttribute('data-tab') === name; b.classList.toggle('is-active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
+        scope.querySelectorAll('[data-panel]').forEach(function (p) { p.hidden = p.getAttribute('data-panel') !== name; });
+        resizers.forEach(function (f) { try { f(); } catch (e) { /* verder */ } });
+      }
+      tabs.setAttribute('role', 'tablist');
+      buttons.forEach(function (b) { b.setAttribute('role', 'tab'); b.setAttribute('type', 'button'); b.addEventListener('click', function () { activate(b.getAttribute('data-tab')); }); });
+      if (buttons.length) activate((tabs.querySelector('button.is-active[data-tab]') || buttons[0]).getAttribute('data-tab'));
+    });
+  }
+
+  // ── Fouten en hoogte ──────────────────────────────────────────────────────
+  var reported = false;
+  function showError(message) {
+    var box = document.createElement('div'); box.className = 'rf-error'; box.setAttribute('role', 'alert');
+    box.innerHTML = '<b>Dit deel van de rapportage kon niet worden getoond.</b><br>' + esc(message);
+    root.insertBefore(box, root.firstChild);
+    if (!reported) { reported = true; post({ type: 'error', message: String(message).slice(0, 500) }); }
+  }
+  window.addEventListener('error', function (e) { showError(e && e.message ? e.message : 'Onbekende fout'); });
+  window.addEventListener('unhandledrejection', function (e) { showError(e && e.reason ? String(e.reason.message || e.reason) : 'Onbekende fout'); });
+
+  var lastHeight = 0;
+  function reportHeight() {
+    var h = Math.ceil(Math.max(root.scrollHeight + 4, 60));
+    if (Math.abs(h - lastHeight) > 1) { lastHeight = h; post({ type: 'height', height: h }); }
+  }
+  if (window.ResizeObserver) new ResizeObserver(function () { window.requestAnimationFrame(reportHeight); }).observe(root);
+  window.addEventListener('load', reportHeight);
+
+  // ── De bouwstenen ─────────────────────────────────────────────────────────
+  var RF = {
+    data: {}, meta: {}, today: '', fetchedAt: '', title: '',
+    rows: function (key) { var d = RF.data[key]; if (Array.isArray(d)) return d; if (!d || typeof d !== 'object') return []; if (Array.isArray(d.groups)) return d.groups; if (Array.isArray(d.rows)) return d.rows; var best = []; Object.keys(d).forEach(function (k) { if (Array.isArray(d[k]) && d[k].length > best.length) best = d[k]; }); return best; },
+    totals: function (key) { var d = RF.data[key]; return d && typeof d === 'object' && d.totals && typeof d.totals === 'object' ? d.totals : {}; },
+    euro: euro, num: num, pct: pct, date: date, month: month, hours: hours, duration: duration, esc: esc, format: function (v, f) { return formatter(f)(v); },
+    sum: sum, avg: avg, min: min, max: max, count: count, sortBy: sortBy, top: top, groupBy: groupBy, rollup: rollup, series: series, change: change,
+    kpi: kpi, kpis: kpis, bar: bar, line: line, donut: donut, table: table, meter: meter, empty: empty,
+  };
+  RF.list = RF.rows;
+  window.RF = RF;
+
+  // Alleen voor de unittest: zonder kader eromheen niets opstarten.
+  if (window.parent === window) return;
+
+  var TOKEN_NAME = /^--[a-z0-9-]{1,40}$/;
+  function render(msg) {
+    if (rendered) return;
+    rendered = true;
+    var theme = msg.theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+    var tokens = msg.tokens && typeof msg.tokens === 'object' ? msg.tokens : {};
+    Object.keys(tokens).forEach(function (name) {
+      var value = String(tokens[name] || '');
+      // Alleen kleur-, maat- en lettervariabelen; nooit iets dat zelf iets ophaalt.
+      if (!TOKEN_NAME.test(name) || /url\(|expression|@import|[<>{};]/i.test(value) || value.length > 300) return;
+      if (/^--series-/.test(name)) return;
+      document.documentElement.style.setProperty(name, value);
+    });
+    var data = msg.data && typeof msg.data === 'object' ? msg.data : {};
+    RF.today = String(data.today || ''); RF.fetchedAt = String(data.fetchedAt || ''); RF.title = String(msg.title || '');
+    list(data.datasets).forEach(function (d) {
+      if (!d || typeof d.key !== 'string') return;
+      RF.data[d.key] = d.ok ? d.data : null;
+      RF.meta[d.key] = { label: d.label, rows: d.rows, truncated: !!d.truncated, error: d.ok ? null : (d.error || 'Ophalen mislukt') };
+    });
+    root.innerHTML = String(msg.html || '');
+    // innerHTML voert scripts niet uit: opnieuw aanmaken, in volgorde.
+    var scripts = Array.prototype.slice.call(root.querySelectorAll('script'));
+    scripts.forEach(function (old) {
+      var s = document.createElement('script');
+      s.textContent = old.textContent;
+      old.parentNode.replaceChild(s, old);
+    });
+    wireTabs();
+    reportHeight();
+    window.setTimeout(reportHeight, 120);
+    window.setTimeout(reportHeight, 600);
+    post({ type: 'rendered' });
+  }
+
+  window.addEventListener('message', function (e) {
+    if (e.source !== host) return;
+    var msg = e.data;
+    if (!msg || msg.source !== 'rf-host' || msg.type !== 'render') return;
+    render(msg);
+  });
+  post({ type: 'ready' });
+})();
+</script>
+</body>
+</html>

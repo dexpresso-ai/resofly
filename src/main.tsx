@@ -169,7 +169,9 @@ import { clientHostInfo, portalRedirectTarget } from './lib/clientHost';
 import { PORTAL_PREVIEW_PATH } from './lib/portalPreview';
 import { Archive, Settings, type SettingsTab } from './features/SimplePages';
 import { ProjectTemplatePicker } from './features/ProjectTemplates';
-import { Statistics } from './features/Statistics';
+import { Reports } from './features/Reports';
+import { AiReportPage } from './features/AiReportPage';
+import { NEW_REPORT_PREFIX, onReportCreated, useAiReportList } from './lib/aiReports';
 import type { ReportDefinition } from './lib/reporting';
 import { CalendarPage, type CalendarDraft, type CalendarLinkNotice } from './features/CalendarPage';
 import { TaskAgendaSection } from './components/TaskAgenda';
@@ -225,9 +227,11 @@ import './styles/baken.css';
 // klassen (.onb), buiten de werkruimte; na baken.css zodat de knoppen daar
 // niet de stijl van het inlogscherm overnemen.
 import './styles/onboarding.css';
+// Rapportages met Gerrie; alleen eigen klassen (aire-*) op de gedeelde variabelen.
+import './styles/rapportages.css';
 import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -336,6 +340,10 @@ function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
     let projectId = p.projectId;
     let clientId = p.clientId;
     let galleryId = p.galleryId;
+    let statsReportId = p.statsReportId;
+    // Een rapportage die nog werd aangemaakt toen de pagina herlaadde, heeft alleen
+    // een tijdelijke sleutel; die chat bestaat niet meer. Dan het overzicht.
+    if (page === 'report' && (!statsReportId || statsReportId.startsWith(NEW_REPORT_PREFIX))) { page = 'stats'; statsReportId = null; }
     if (page === 'project' && !data.projects.some(x => x.id === projectId)) { page = 'projects'; projectId = null; }
     if (page === 'client' && !data.clients.some(x => x.id === clientId)) { page = 'clients'; clientId = null; }
     // Een galerij die intussen is verwijderd zou een leeg tabblad geven; val dan
@@ -345,7 +353,7 @@ function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
       page = data.projects.some(x => x.id === projectId) ? 'project' : 'projects';
       if (page === 'projects') projectId = null;
     }
-    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: legacyCalendarSettings ? { tab: 'agenda', key: 0 } : null, pendingReport: null, openAgentId: null, commFocus: null, pendingDraft: null, edit: null };
+    return { id: uid(), page, projectId, clientId, statsReportId, galleryId, settingsNav: legacyCalendarSettings ? { tab: 'agenda', key: 0 } : null, pendingReport: null, openAgentId: null, commFocus: null, pendingDraft: null, edit: null };
   });
 }
 
@@ -977,6 +985,14 @@ function App() {
   // een chat die dicht staat. De database geeft sowieso niets terug.
   const loadedOrganizationId = activeOrganization?.id ?? null;
   const organizationFor = (module: ModuleKey) => (permissions.canRead(module) ? loadedOrganizationId : null);
+  // De rapportages van Gerrie van dit teamlid: voor de zijbalk en de tabbladtitels.
+  // Alleen de titels; de inhoud laadt de pagina zelf.
+  const aiReportList = useAiReportList(loadedOrganizationId, permissions.canRead('stats') && permissions.canRead('gerrie'));
+  // Een nieuwe rapportage krijgt pas na een halve seconde zijn id; het tabblad
+  // stond tot dan op een tijdelijke sleutel. Zo blijft hij na herladen bestaan.
+  useEffect(() => onReportCreated((key, reportId) => {
+    setTabs(ts => ts.map(t => (t.statsReportId === key ? { ...t, statsReportId: reportId } : t)));
+  }), []);
   // Collega's om werk aan toe te wijzen of mee te chatten. De boekhouder is een
   // gast en hoort daar niet bij; in Instellingen staat de boekhouder wel bij het team.
   const workMembers = useMemo(
@@ -3379,7 +3395,7 @@ function App() {
       }
       case 'report': {
         const saved = await createSavedReport(activeOrg.id, { name: proposal.name, definition: proposal.definition });
-        return `Rapportage "${saved.name}" opgeslagen bij Statistieken`;
+        return `Rapportage "${saved.name}" opgeslagen bij Rapportages → Rapportbouwer`;
       }
       default:
         break;
@@ -3835,6 +3851,9 @@ function App() {
     onRefresh: refresh,
     refreshing: loading,
     readOnly: pageReadOnly,
+    aiReports: aiReportList.reports,
+    activeAiReportId: page === 'report' ? statsReportId : null,
+    onOpenAiReport: (id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('report'); setMobileNavOpen(false); },
   };
 
   return <div className={`app${sidebarPinned ? ' sidebar-pinned' : ''}`}>
@@ -4077,7 +4096,14 @@ function App() {
     if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} initialDraft={calendarDraft} onDraftConsumed={() => setCalendarDraft(null)} onMoveTask={(task, dayKey, startMin, endMin) => planTaskAtTime(task.id, dayKey, startMin, Math.max(15, endMin - startMin))} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite}/>;
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
-    if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}/>;
+    if (page === 'stats') return <Reports data={data} organizationId={activeOrg.id} canWrite={canWrite} canChat={permissions.canRead('gerrie')} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}
+      onOpenReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('report'); }}
+      onNewReport={(key) => { setStatsReportId(key); setProjectId(null); setClientId(null); setPage('report'); }}/>;
+    // Eén rapportage van Gerrie: een eigen pagina, alleen van deze gebruiker.
+    if (page === 'report' && statsReportId) return <AiReportPage key={`${view.id}:${statsReportId}`} organizationId={activeOrg.id} reportKey={statsReportId} canChat={permissions.canRead('gerrie')}
+      onOpenOverview={() => { setStatsReportId(null); setPage('stats'); }}
+      onDeleted={() => { setStatsReportId(null); setPage('stats'); }}/>;
+    if (page === 'report') return <div className="empty"><div className="e-big">Geen rapportage gekozen</div><Button onClick={() => setPage('stats')}>Naar je rapportages</Button></div>;
     if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
     if (page === 'settings') {
       // De agenda-instellingen zijn geen eigen pagina meer maar het tabblad

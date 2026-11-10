@@ -18,7 +18,7 @@ const LOOK_CHOICES: { look: Look; label: string; hint: string }[] = [
   { look: 'stroom', label: 'Stroom', hint: 'licht, glas en de stroom' },
 ];
 
-export type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+export type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 
 /**
  * Het menu in categorieën in plaats van dertien regels onder elkaar. Een groep
@@ -59,7 +59,7 @@ const navGroups = [
   ] },
   { id: 'kennis', label: 'Kennis & inzicht', items: [
     ['content', Library, 'Inhoud'],
-    ['stats', BarChart3, 'Statistieken'],
+    ['stats', BarChart3, 'Rapportages'],
   ] },
 ] as const;
 
@@ -84,6 +84,8 @@ const projectPages: Page[] = ['projects', 'project', 'project-planning', 'weekpl
  * notitie of document rechtstreeks — en dan hoort "Inhoud" op te lichten.
  */
 const contentPages: Page[] = ['content', 'notes', 'documents'];
+/** Een rapportage van Gerrie is een eigen pagina, maar hoort onder Rapportages. */
+const reportPages: Page[] = ['stats', 'report'];
 
 /** De instellingen in het accountmenu. AI-gebruik en API-sleutels zijn alleen
  *  zichtbaar voor owners/admins, en de agenda-instellingen alleen als de
@@ -138,7 +140,14 @@ export interface SidebarProps {
   onRefresh?: () => void;
   refreshing?: boolean;
   readOnly?: boolean;
+  /** De rapportages van Gerrie van dit teamlid: elk een eigen pagina onder Rapportages. */
+  aiReports?: Array<{ id: string; title: string }>;
+  activeAiReportId?: string | null;
+  onOpenAiReport?: (id: string) => void;
 }
+
+/** Zoveel rapportages staan er onder Rapportages in het menu; de rest via het overzicht. */
+const MENU_REPORTS = 6;
 
 export function Sidebar({
   page,
@@ -168,8 +177,14 @@ export function Sidebar({
   onRefresh,
   refreshing = false,
   readOnly = false,
+  aiReports = [],
+  activeAiReportId = null,
+  onOpenAiReport,
 }: SidebarProps) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
+  const [reportsOpen, setReportsOpen] = useState(() => reportPages.includes(page));
+  // Sta je op een rapportage, dan staat het submenu open: zo zie je welke het is.
+  useEffect(() => { if (page === 'report') setReportsOpen(true); }, [page]);
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
   const [calendarOpen, setCalendarOpen] = useState(() => calendarPages.includes(page));
   // Account-menu onderin: opent alle instellingen + uitloggen boven de avatar.
@@ -321,7 +336,9 @@ export function Sidebar({
         const isCalendarActive = key === 'calendar' && calendarPages.includes(page);
         const isFinanceActive = key === 'finance' && financePages.includes(page);
         const isContentActive = key === 'content' && contentPages.includes(page);
-        const isActive = key === page || isProjectsActive || isCalendarActive || isFinanceActive || isContentActive;
+        const isReportsActive = key === 'stats' && reportPages.includes(page);
+        const isActive = key === page || isProjectsActive || isCalendarActive || isFinanceActive || isContentActive || isReportsActive;
+        const reportMenu = key === 'stats' && aiReports.length > 0 && Boolean(onOpenAiReport);
 
         return <div className="nav-item-wrap" key={key}>
           {key === 'finance'
@@ -348,6 +365,17 @@ export function Sidebar({
                   <span className="ni-label">{label}</span>
                   <span className="nav-chevron" aria-hidden="true">{projectsOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
                 </button>
+            : reportMenu
+              ? <button
+                  type="button"
+                  className={`nav-item nav-item-parent ${isActive ? 'active' : ''}`}
+                  aria-expanded={reportsOpen}
+                  onClick={() => setReportsOpen(open => !open)}
+                >
+                  <Icon size={16}/>
+                  <span className="ni-label">{label}</span>
+                  <span className="nav-chevron" aria-hidden="true">{reportsOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
+                </button>
             : key === 'calendar'
               ? <button
                   type="button"
@@ -360,6 +388,15 @@ export function Sidebar({
                   <span className="nav-chevron" aria-hidden="true">{calendarOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
                 </button>
               : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span>{key === 'communication' && messageBadge > 0 && <span className="nav-badge" title={messageBadgeTitle}>{messageBadge > 99 ? '99+' : messageBadge}</span>}{key === 'tickets' && ticketUnread > 0 && <span className="nav-badge" title={`${ticketUnread} ticket${ticketUnread === 1 ? '' : 's'} met nieuwe klant-activiteit`}>{ticketUnread > 99 ? '99+' : ticketUnread}</span>}{key === 'chat' && chatUnread > 0 && <span className="nav-badge" title={`${chatUnread} ongelezen chatbericht${chatUnread === 1 ? '' : 'en'}`}>{chatUnread > 99 ? '99+' : chatUnread}</span>}{key === 'gerrie' && decisionCount > 0 && <span className="nav-badge" title={`${decisionCount} kaart${decisionCount === 1 ? '' : 'en'} te beslissen`}>{decisionCount > 99 ? '99+' : decisionCount}</span>}</button>}
+
+          {reportMenu && reportsOpen && <div className="nav-submenu nav-submenu-projects nav-submenu-reports">
+            <button type="button" className={page === 'stats' ? 'active' : ''} onClick={() => onPage('stats')}><BarChart3 size={13}/><span>Alle rapportages</span></button>
+            {aiReports.slice(0, MENU_REPORTS).map(report => (
+              <button key={report.id} type="button" className={page === 'report' && activeAiReportId === report.id ? 'active' : ''} onClick={() => onOpenAiReport?.(report.id)} title={report.title}>
+                <FileText size={13}/><span>{report.title}</span>
+              </button>
+            ))}
+          </div>}
 
           {key === 'calendar' && calendarOpen && <div className="nav-submenu nav-submenu-projects">
             {permissions.canOpenPage('calendar') && <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={openCalendarView}><Calendar size={13}/><span>Agendaweergave</span></button>}
