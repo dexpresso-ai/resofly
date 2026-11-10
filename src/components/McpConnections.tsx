@@ -171,8 +171,11 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
       <p className="mcp-connections-intro">
         Koppel je eigen AI — Claude, ChatGPT of een andere assistent die MCP spreekt — aan deze werkruimte. Die AI kan
         dan <strong>meelezen</strong> met alles wat jij zelf mag inzien, en wijzigingen <strong>klaarzetten</strong> in
-        je goedkeurwachtrij. Wil je niet elke keer zelf op Uitvoeren klikken, dan zet je per koppeling hieronder{' '}
-        <strong>rechtstreeks uitvoeren</strong> aan. Wat die AI mag blijft hoe dan ook binnen jouw eigen rechten.
+        je goedkeurwachtrij.{' '}
+        {canAdmin
+          ? <>Wil je niet elke keer zelf op Uitvoeren klikken, dan zet je per koppeling hieronder <strong>rechtstreeks uitvoeren</strong> aan.</>
+          : <>Rechtstreeks uitvoeren, zonder dat iemand eerst op Uitvoeren klikt, kan alleen een owner of admin aanzetten.</>}
+        {' '}Wat die AI mag blijft hoe dan ook binnen jouw eigen rechten.
       </p>
 
       {error && <p className="error">{error}</p>}
@@ -245,7 +248,11 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
                   grant={grant}
                   busy={busyId === grant.id}
                   onRevoke={() => void revoke(grant, false)}
-                  onScope={change => void changeScope(grant, change)}
+                  // Rechtstreeks uitvoeren alleen voor een owner of admin
+                  // (20261110110000); de database en de MCP-functie dwingen
+                  // hetzelfde af, dit is het scherm.
+                  onScope={canAdmin ? change => void changeScope(grant, change) : undefined}
+                  executeAllowed={canAdmin}
                 />
               ))}
             </ul>
@@ -268,6 +275,7 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
                       owner={emailByUser.get(grant.user_id) ?? 'onbekend teamlid'}
                       busy={busyId === grant.id}
                       onRevoke={() => void revoke(grant, true)}
+                      executeAllowed={teamMemberMayExecute(teamMembers, grant.user_id)}
                     />
                   ))}
                 </ul>
@@ -280,15 +288,21 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
   );
 }
 
-function GrantRow({ grant, owner, busy, onRevoke, onScope }: {
+function GrantRow({ grant, owner, busy, onRevoke, onScope, executeAllowed }: {
   grant: McpGrant;
   owner?: string;
   busy: boolean;
   onRevoke: () => void;
-  /** Alleen bij je eigen koppelingen; bij die van een collega ontbreekt hij. */
+  /** Alleen bij je eigen koppelingen, en alleen voor een owner of admin. */
   onScope?: (change: { execute?: boolean; executeHigh?: boolean }) => void;
+  /**
+   * Mag de eigenaar van deze koppeling nu rechtstreeks laten uitvoeren? Zo niet,
+   * dan telt een uitvoerrecht in de koppeling niet: de MCP-functie kijkt bij
+   * elke aanroep naar de rol, en de badge zegt dan wat er echt gebeurt.
+   */
+  executeAllowed: boolean;
 }) {
-  const executes = grantMayExecute(grant);
+  const executes = executeAllowed && grantMayExecute(grant);
   return (
     <li>
       <div className="mcp-connection-main">
@@ -301,7 +315,7 @@ function GrantRow({ grant, owner, busy, onRevoke, onScope }: {
             {grant.last_used_at ? `laatst gebruikt ${formatDate(grant.last_used_at)}` : 'nog niet gebruikt'}
           </small>
         </div>
-        <span className={`mcp-connection-scope${scopeTone(grant)}`}>{scopeLabel(grant)}</span>
+        <span className={`mcp-connection-scope${scopeTone(grant, executeAllowed)}`}>{scopeLabel(grant, executeAllowed)}</span>
         <Button variant="danger" onClick={onRevoke} disabled={busy}>
           {busy ? 'Bezig…' : owner ? 'Stoppen' : 'Loskoppelen'}
         </Button>
@@ -344,21 +358,34 @@ function GrantRow({ grant, owner, busy, onRevoke, onScope }: {
           )}
         </div>
       )}
+
+      {!owner && !onScope && grantCanEnable(grant, 'execute') && (
+        <p className="mcp-connections-hint">
+          Rechtstreeks uitvoeren kan alleen een owner of admin aanzetten. Wat jouw AI wil wijzigen, zet hij klaar in je
+          goedkeurwachtrij; daar beslis jij.
+        </p>
+      )}
     </li>
   );
 }
 
+/** Een collega met een eigen koppeling: telt zijn uitvoerrecht nog (owner of admin)? */
+function teamMemberMayExecute(members: OrganizationMember[], userId: UUID): boolean {
+  const role = members.find(m => m.user_id === userId)?.role;
+  return role === 'owner' || role === 'admin';
+}
+
 /** Wat deze koppeling mag, in twee woorden op de badge. */
-function scopeLabel(grant: McpGrant): string {
-  if (grantMayExecuteHigh(grant)) return 'Leest mee · voert alles uit';
-  if (grantMayExecute(grant)) return 'Leest mee · voert uit';
+function scopeLabel(grant: McpGrant, executeAllowed: boolean): string {
+  if (executeAllowed && grantMayExecuteHigh(grant)) return 'Leest mee · voert alles uit';
+  if (executeAllowed && grantMayExecute(grant)) return 'Leest mee · voert uit';
   if (grantMayPropose(grant)) return 'Leest mee · zet klaar';
   return 'Leest alleen mee';
 }
 
 /** Hoe zwaarder de koppeling mag ingrijpen, hoe meer de badge opvalt. */
-function scopeTone(grant: McpGrant): string {
-  if (grantMayExecute(grant)) return ' is-execute';
+function scopeTone(grant: McpGrant, executeAllowed: boolean): string {
+  if (executeAllowed && grantMayExecute(grant)) return ' is-execute';
   if (grantMayPropose(grant)) return ' is-propose';
   return '';
 }

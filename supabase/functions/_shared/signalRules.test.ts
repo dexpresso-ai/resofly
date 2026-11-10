@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  GERRIE_ALLOWED_TOOLS, MAX_TASKS_PER_CARD, buildGerrieBrief, buildRuleCard, checkGerrieProposal, severityForProposal,
+  GERRIE_ALLOWED_TOOLS, MAX_TASKS_PER_CARD, buildGerrieBrief, buildRuleCard, checkGerrieProposal, requiredModules, severityForProposal,
   type FavoritesFacts, type InboundMailFacts, type MailUnmatchedFacts, type NotesReadyFacts, type QuoteExpiringFacts,
 } from './signalRules.ts';
 
@@ -125,4 +125,25 @@ test('ernst volgt het voorstel: post naar buiten is hoog, een taak niet', () => 
   assert.equal(severityForProposal('action', 'normal', 'normal'), 'normal');
   assert.equal(severityForProposal('task', null, 'normal'), 'normal');
   assert.equal(severityForProposal('create_tasks', null, 'info'), 'info');
+});
+
+test('een kaart vraagt leesrecht op elke module waarvan hij gegevens toont', () => {
+  const mail = (quotes: number, invoices: number) => ({
+    open_quotes: Array.from({ length: quotes }, () => ({ number: 'O1', total_eur: 10, valid_until: null })),
+    open_invoices: Array.from({ length: invoices }, () => ({ number: 'F1', total_eur: 10, due_date: null, status: 'sent' })),
+  });
+  // Een klantmail zonder open posten: alleen Klanten (de eigen module, dus niets extra's).
+  assert.deepEqual(requiredModules({ kind: 'inbound_mail', facts: mail(0, 0), proposalType: 'send_client_email' }), []);
+  // Met open offertes of facturen op de kaart: ook Financiën.
+  assert.deepEqual(requiredModules({ kind: 'inbound_mail', facts: mail(1, 0), proposalType: 'send_client_email' }), ['finance']);
+  assert.deepEqual(requiredModules({ kind: 'inbound_mail', facts: mail(0, 2), proposalType: 'ticket' }), ['finance']);
+  // Een taak noemt een bestaand project; list_projects gaf projectnamen.
+  assert.deepEqual(requiredModules({ kind: 'inbound_mail', facts: mail(0, 0), proposalType: 'task' }), ['projects']);
+  assert.deepEqual(requiredModules({ kind: 'inbound_mail', facts: mail(1, 1), proposalType: 'send_client_email', extra: ['projects', null] }), ['projects', 'finance']);
+  // Actiepunten uit notulen: de opname hoort bij de Agenda.
+  assert.deepEqual(requiredModules({ kind: 'meeting_notes_ready', proposalType: 'create_tasks' }), ['calendar']);
+  // De eigen module komt er nooit in; een weekactie of een nieuw ticket noemt niets wat er al was.
+  assert.deepEqual(requiredModules({ kind: 'quote_expiring', proposalType: 'week_action' }), []);
+  assert.deepEqual(requiredModules({ kind: 'gallery_favorites_chosen', proposalType: 'task' }), []);
+  assert.deepEqual(requiredModules({ kind: 'meeting_notes_unsent', proposalType: 'action', extra: ['calendar'] }), []);
 });

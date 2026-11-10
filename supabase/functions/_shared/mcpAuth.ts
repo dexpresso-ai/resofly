@@ -322,6 +322,22 @@ export function scopeAllows(granted: string, need: string): boolean {
   return parseScopes(granted).includes(need);
 }
 
+/**
+ * Rollen die een AI-koppeling rechtstreeks mogen laten uitvoeren.
+ *
+ * Een koppeling die zelf mag uitvoeren, handelt zonder dat er een mens op
+ * Uitvoeren klikt, en hij leest klantmail, tickets en notulen: tekst die iemand
+ * daarin zet, kan hem sturen. Dat besluit hoort bij wie de organisatie beheert
+ * (20261110110000). Voor een teamlid valt elke wijziging terug op klaarzetten.
+ * De rol telt van het moment van de aanroep: wie geen admin meer is, verliest
+ * het meteen, ook als zijn koppeling het recht nog draagt.
+ */
+export const EXECUTE_ROLES = ['owner', 'admin'] as const;
+
+export function roleMayExecute(role: unknown): boolean {
+  return typeof role === 'string' && (EXECUTE_ROLES as readonly string[]).includes(role);
+}
+
 // ── Discovery ────────────────────────────────────────────────────────────────
 //
 // Met deze documenten vindt een AI-client zelf uit hoe hij koppelt: welke

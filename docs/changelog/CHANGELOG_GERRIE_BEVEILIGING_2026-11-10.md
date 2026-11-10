@@ -252,13 +252,18 @@ factuurherkenning) en de Cloudflare Workers.
 
 ## Bewust niet veranderd (en waarom)
 
-- **Een gekoppelde AI via MCP mag, als de gebruiker dat zelf aanzet, rechtstreeks uitvoeren**
+De eerste twee punten hieronder zijn later dezelfde dag doorgevoerd, op verzoek. Zie
+[CHANGELOG_AI_RECHTEN_2026-11-10.md](CHANGELOG_AI_RECHTEN_2026-11-10.md): rechtstreeks uitvoeren
+kan nu alleen een owner of admin aanzetten, en een kaart van de beslislijst vraagt leesrecht op
+elke module die hij toont.
+
+- *(Doorgevoerd.)* **Een gekoppelde AI via MCP mocht, als de gebruiker dat zelf aanzet, rechtstreeks uitvoeren**
   (Instellingen → AI, `execute` en `execute_high`). Dat is geen Gerrie maar de eigen AI van de
   gebruiker, met zijn eigen rechten, en het staat standaard uit. Het blijft wel een plek waar
   ingevoegde tekst in een mail zonder tussenkomst van een mens tot een wijziging kan leiden.
   Advies: alleen owners/admins `execute_high` laten aanzetten, of het per organisatie kunnen
   uitzetten. Dat is een productkeuze, dus niet vannacht gemaakt.
-- **Kaarten van de beslislijst en modulerechten.** Een kaart over een klantmail (module Klanten)
+- *(Doorgevoerd.)* **Kaarten van de beslislijst en modulerechten.** Een kaart over een klantmail (module Klanten)
   noemt de nummers van open offertes en facturen, ook voor een teamlid zonder Financiën. Dat
   blijft binnen de organisatie, maar wijkt af van "modulerechten gelden overal". Het vraagt een
   aanpassing van wie welke kaart ziet (migratie op `ai_decisions`), en die hoort niet in een

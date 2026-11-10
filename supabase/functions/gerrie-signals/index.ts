@@ -19,13 +19,13 @@
 import {
   supabaseAdmin, HttpError, MODELS, runAgent, buildContext, buildProposal, checkUserBudget, costUsd,
   requireUser, requireOrganizationAccess, describeError, parseAllowedOrigins, isUuid, todayIso,
-  auditActionName, lineTotal,
+  auditActionName, lineTotal, getGerrieCoreAction,
 } from '../_shared/gerrieCore.ts';
 import type { Emit, GerrieContext, OrganizationRole, Proposal, Usage } from '../_shared/gerrieCore.ts';
 import { localYmd, wallToUtc } from '../_shared/schedule.ts';
 import {
   GERRIE_KINDS, KIND_MODULE, KIND_ORIGIN, SIGNAL_KINDS,
-  buildGerrieBrief, buildRuleCard, checkGerrieProposal, severityForProposal,
+  buildGerrieBrief, buildRuleCard, checkGerrieProposal, requiredModules, severityForProposal,
   type DecisionTarget, type GerrieFacts, type RuleFacts, type Severity, type SignalKind,
 } from '../_shared/signalRules.ts';
 
@@ -199,6 +199,7 @@ async function processSignal(signal: SignalRow): Promise<SignalOutcome> {
     const severity = severityForProposal(built.proposal.type, (built.proposal as { risk?: string }).risk, card.severity);
     const decisionId = await insertCard({
       signal, kind, origin: 'rule', actorId: actor?.id ?? null, proposal: built.proposal,
+      requiredModules: requiredModules({ kind, facts: gathered.rule.facts, proposalType: built.proposal.type }),
       title: card.title, summary: card.summary, evidence: card.evidence, severity, target: card.target,
     });
     return { id: signal.id, kind, outcome: 'card', decision_id: decisionId };
@@ -241,8 +242,14 @@ async function processSignal(signal: SignalRow): Promise<SignalOutcome> {
   // met de adressen uit de mail en de gegevens als bekend. Een tweede ronde
   // zonder die adressen haalde links weg die de eerste terecht liet staan.
   const said = outcome.text.replace(/\s+/g, ' ').trim();
+  // Wat Gerrie raadpleegde, kan op de kaart terechtkomen (list_projects geeft
+  // projectnamen): die modules vraagt de kaart dan ook (20261110110100).
+  const consulted = outcome.toolCalls
+    .filter((call) => !call.name.startsWith('propose_'))
+    .map((call) => getGerrieCoreAction(call.name)?.module ?? null);
   const decisionId = await insertCard({
     signal, kind, origin: 'gerrie', actorId: actor.id, proposal: outcome.proposal,
+    requiredModules: requiredModules({ kind, facts: gathered.gerrie.facts, proposalType: outcome.proposal.type, extra: consulted }),
     title: brief.title, summary: said ? said.slice(0, 600) : brief.summary, evidence: brief.evidence, severity, target: brief.target,
     model_kind: 'cheap', cost_usd: cost, trace: outcome.steps,
   });
@@ -251,6 +258,8 @@ async function processSignal(signal: SignalRow): Promise<SignalOutcome> {
 
 async function insertCard(args: {
   signal: SignalRow; kind: SignalKind; origin: 'rule' | 'gerrie'; actorId: string | null; proposal: Proposal;
+  /** Modules boven de eigen module waarvan de kaart gegevens toont; wie er één niet mag lezen, ziet hem niet. */
+  requiredModules: string[];
   title: string; summary: string; evidence: string[]; severity: Severity; target: DecisionTarget | null;
   model_kind?: 'cheap' | 'strong'; cost_usd?: number; trace?: unknown;
 }): Promise<string> {
@@ -266,6 +275,7 @@ async function insertCard(args: {
     kind: args.kind, module: KIND_MODULE[args.kind], origin: args.origin, severity: args.severity,
     entity_type: signal.entity_type, entity_id: signal.entity_id, client_id: signal.client_id,
     title: args.title.slice(0, 200), summary: args.summary.slice(0, 600), evidence: args.evidence.slice(0, 8),
+    required_modules: args.requiredModules,
     proposal: args.proposal, audit_id: audit.id, target: args.target, status: 'open',
     model_kind: args.model_kind ?? null, cost_usd: args.cost_usd ?? null, trace: args.trace ?? null,
   }).select('id').single();

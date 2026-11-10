@@ -145,7 +145,7 @@ export function McpConsent({ request, organizations, defaultOrganizationId }: {
               <small>
                 Alles wat wijzigt, wacht op jouw klik.
                 {info.mayEnableExecute
-                  ? ' Wil je dat later niet meer, dan zet je "rechtstreeks uitvoeren" zelf aan onder Instellingen → AI. Hier niet: dat is een keuze voor als je er rustig voor zit, niet voor onderweg naar je AI-app.'
+                  ? ' Ben je owner of admin en wil je dat later niet meer, dan zet je "rechtstreeks uitvoeren" voor je eigen koppeling aan onder Instellingen → AI. Hier niet: dat is een keuze voor als je er rustig voor zit, niet voor onderweg naar je AI-app.'
                   : ' Deze AI-client heeft niet eens gevraagd om meer, dus meer kan hij ook niet krijgen.'}
               </small>
             </span>

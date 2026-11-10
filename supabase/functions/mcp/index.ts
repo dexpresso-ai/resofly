@@ -66,7 +66,7 @@ import {
 import {
   isJsonRpcRequest, isNotification, openCorsHeaders, parseToken, protectedResourceMetadata, rpcError, rpcResult, scopeAllows,
   toolFailure, toolText, verifyToken, JSONRPC_INVALID_PARAMS, JSONRPC_INVALID_REQUEST,
-  JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH, SCOPE_PROPOSE, SCOPE_READ,
+  JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH, SCOPE_PROPOSE, SCOPE_READ, roleMayExecute,
   type JsonRpcRequest,
 } from '../_shared/mcpAuth.ts';
 import { wrapToolData } from '../_shared/gerrieGuard.ts';
@@ -1289,9 +1289,15 @@ function mayPropose(session: Session): boolean {
   return scopeAllows(session.scope, SCOPE_PROPOSE) || mayExecute(session);
 }
 
-/** Mag deze koppeling omkeerbare handelingen rechtstreeks uitvoeren? */
+/**
+ * Mag deze koppeling omkeerbare handelingen rechtstreeks uitvoeren?
+ *
+ * Alleen als de koppeling het recht draagt ÉN de gebruiker nu owner of admin
+ * is (roleMayExecute, 20261110110000). De rol komt per aanroep vers uit
+ * organization_members; een teamlid valt zo altijd terug op klaarzetten.
+ */
 function mayExecute(session: Session): boolean {
-  return scopeAllows(session.scope, SCOPE_EXECUTE);
+  return roleMayExecute(session.role) && scopeAllows(session.scope, SCOPE_EXECUTE);
 }
 
 /**

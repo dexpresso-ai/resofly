@@ -5,8 +5,9 @@ import {
   isNotification, isValidCodeVerifier, parseToken, protectedResourceMetadata, redirectUriAllowed, scopeAllows,
   sha256Hex, verifyPkce, verifyToken, base64Url, randomBytes,
   signAuthRequest, verifyAuthRequest, AUTH_REQUEST_TTL_SECONDS, ISSUABLE_SCOPES, narrowScopes, type AuthRequest,
-  openCorsHeaders, normalizeScopes, CONSENT_SCOPES, describeRedirectTarget, isKnownAiRedirect,
+  openCorsHeaders, normalizeScopes, CONSENT_SCOPES, describeRedirectTarget, isKnownAiRedirect, roleMayExecute,
 } from './mcpAuth.ts';
+import { readFileSync } from 'node:fs';
 
 /**
  * Bewaakt de rekensommen waar de MCP-koppeling op rust.
@@ -438,4 +439,36 @@ test('toestemmingsscherm: alleen bekende AI-diensten gelden als geverifieerd', (
   assert.equal(isKnownAiRedirect('http://claude.ai/cb'), false);
   assert.equal(isKnownAiRedirect('https://example.com/cb'), false);
   assert.equal(isKnownAiRedirect('claude://oauth'), false);
+});
+
+
+// ── Rechtstreeks uitvoeren: alleen owners en admins (20261110110000) ─────────
+
+test('alleen een owner of admin laat een AI-koppeling rechtstreeks uitvoeren', () => {
+  assert.equal(roleMayExecute('owner'), true);
+  assert.equal(roleMayExecute('admin'), true);
+  for (const role of ['member', 'viewer', 'accountant', '', null, undefined, 'Owner']) {
+    assert.equal(roleMayExecute(role), false, String(role));
+  }
+});
+
+test('de MCP-functie weegt de rol bij elke aanroep, niet alleen de scope van de koppeling', () => {
+  // Een koppeling kan het recht nog dragen (van vóór de migratie, of van iemand
+  // die geen admin meer is); de rol van dat moment beslist.
+  const mcp = readFileSync(new URL('../mcp/index.ts', import.meta.url), 'utf8');
+  assert.match(mcp, /function mayExecute\(session: Session\): boolean \{\s*return roleMayExecute\(session\.role\) && scopeAllows\(session\.scope, SCOPE_EXECUTE\);/);
+  // mayExecuteHigh en directlyExecutable bouwen op mayExecute.
+  assert.match(mcp, /function mayExecuteHigh\(session: Session\): boolean \{\s*return mayExecute\(session\) &&/);
+  assert.match(mcp, /function directlyExecutable\([^)]*\): boolean \{\s*if \(!mayExecute\(session\)\) return false;/);
+});
+
+test('de database laat een teamlid geen uitvoerrecht aanzetten, en neemt het bestaande teamleden af', () => {
+  const sql = readFileSync(new URL('../../migrations/20261110110000_mcp_uitvoeren_alleen_beheer.sql', import.meta.url), 'utf8');
+  assert.match(sql, /create or replace function public\.mcp_grants_guard_client_update\(\)/);
+  assert.match(sql, /'execute_high' = any\(v_scopes\)\)\s*and not public\.can_admin_org\(old\.organization_id\)/);
+  assert.match(sql, /update public\.mcp_grants g[\s\S]*not in \('execute', 'execute_high'\)[\s\S]*m\.role in \('owner', 'admin'\)/);
+  // De eerdere regels blijven staan: alleen de eigenaar, binnen het plafond, geen losse treden.
+  assert.match(sql, /auth\.uid\(\) is distinct from old\.user_id/);
+  assert.match(sql, /not \(s = any\(v_ceiling\)\)/);
+  assert.match(sql, /'execute_high' = any\(v_scopes\) and not \('execute' = any\(v_scopes\)\)/);
 });

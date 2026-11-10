@@ -417,3 +417,54 @@ export function checkGerrieProposal(
   }
   return null;
 }
+
+/** De modulesleutels die een kaart kan vragen (gelijk aan de check op ai_decisions.module). */
+const MODULE_KEYS = ['clients', 'projects', 'time', 'calendar', 'tickets', 'content', 'stats', 'marketing', 'finance', 'chat', 'gerrie'];
+
+/**
+ * Voorsteltypen die BESTAANDE gegevens uit een andere module op de kaart zetten.
+ * Een taak noemt het project waar hij in komt. Een nieuw ticket of een
+ * weekactie noemt niets wat er al was, en vraagt dus ook niets extra's.
+ */
+const PROPOSAL_DATA_MODULE: Record<string, string> = {
+  task: 'projects', create_tasks: 'projects', edit_task: 'projects', edit_project: 'projects',
+  edit_ticket: 'tickets', ticket_note: 'tickets',
+};
+
+/**
+ * Welke modules een kaart BOVEN zijn eigen module vraagt om hem te mogen zien
+ * (ai_decisions.required_modules, 20261110110100).
+ *
+ * Een kaart hing aan één module: die van het voorstel. Maar een kaart over een
+ * klantmail (module Klanten) noemde ook de open offertes en facturen van die
+ * klant, met bedragen in wat Gerrie schreef. Zo zag een teamlid zonder
+ * Financiën toch financiële gegevens. En een kaart met actiepunten uit notulen
+ * (module Projecten) liet de opname zien, die bij de Agenda hoort. "Modulerechten
+ * gelden overal" betekent: wie één van die modules niet mag lezen, ziet de kaart
+ * niet.
+ *
+ * `extra`: modules van wat er buiten de feiten op de kaart komt. Dat zijn de
+ * tools die Gerrie raadpleegde (list_projects geeft projectnamen) en het type
+ * van het voorstel.
+ */
+export function requiredModules(input: {
+  kind: SignalKind;
+  facts?: unknown;
+  proposalType?: string | null;
+  extra?: ReadonlyArray<string | null | undefined>;
+}): string[] {
+  const out = new Set<string>();
+  const facts = (input.facts ?? {}) as Record<string, unknown>;
+  if (input.kind === 'inbound_mail') {
+    const quotes = Array.isArray(facts.open_quotes) ? facts.open_quotes.length : 0;
+    const invoices = Array.isArray(facts.open_invoices) ? facts.open_invoices.length : 0;
+    if (quotes + invoices > 0) out.add('finance');
+  }
+  // De opname, de titel en de actiepunten komen uit meeting_recordings (Agenda).
+  if (input.kind === 'meeting_notes_ready') out.add('calendar');
+  const fromProposal = input.proposalType ? PROPOSAL_DATA_MODULE[input.proposalType] : undefined;
+  if (fromProposal) out.add(fromProposal);
+  for (const module of input.extra ?? []) if (module) out.add(module);
+  out.delete(KIND_MODULE[input.kind]);
+  return MODULE_KEYS.filter((m) => out.has(m));
+}
