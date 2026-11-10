@@ -35,6 +35,7 @@ import {
   recordUsage, costUsd, checkUserBudget, requireUser, requireOrganizationAccess,
   describeError, isUuid, todayIso, parseAllowedOrigins, loadHistory, describeProposal,
   AGENT_ICON_KEYS, isEnabledToolName, isReadOnlyToolName, auditActionName,
+  screenGerrieMessage, guardRefusal, addGuardUsage,
 } from '../_shared/gerrieCore.ts';
 import type { AgentOutcome, AgentStep, Emit, GerrieContext, OrganizationRole, Proposal } from '../_shared/gerrieCore.ts';
 import {
@@ -306,7 +307,7 @@ async function executeAgentRun(
   // 6) De opdracht, met de spelregels van deze run en wat hij de vorige keren vond.
   const instruction = String(agent.instruction || '').trim();
   const delivery = deliverySettings(agent);
-  const memory = await loadMemory(agentId, runId);
+  const memory = await loadMemory(orgId, agentId, runId);
   const runMessage = buildScheduledRunMessage({
     instruction, mode, maxProposals, quietWhenEmpty: delivery.quiet, memory,
     timeZone: String(agent.timezone || 'Europe/Amsterdam'),
@@ -314,11 +315,40 @@ async function executeAgentRun(
   await insertMessage(convId, orgId, runAsUserId, 'user', instruction, []);
 
   try {
+    // 6b) De poortwachter weegt de opdracht, elke run opnieuw: een opdracht kan
+    // in de editor veranderd zijn zonder langs de agent-bouwer te gaan. Valt hij
+    // buiten ResoFly, dan draait er niets; de run zegt waarom, met een vaste zin.
+    // De agent blijft staan: is het oordeel ooit te streng, dan draait de
+    // volgende run gewoon opnieuw.
+    const guard = await screenGerrieMessage(instruction, 'agent');
+    const refusal = guardRefusal(guard);
+    if (refusal) {
+      const refusedId = await insertMessage(convId, orgId, runAsUserId, 'assistant', refusal, []);
+      if (guard.usage.input || guard.usage.output) await recordUsage(orgId, convId, refusedId, runAsUserId, guard.usage, modelKind, agentId, runId);
+      const notice = `Deze run is niet uitgevoerd: de opdracht van deze agent valt buiten wat Gerrie mag doen.\n\n${refusal}\n\nWas dat niet de bedoeling, pas dan de opdracht van de agent aan.`;
+      log.add('error', `Niet uitgevoerd: de opdracht van deze agent valt buiten wat Gerrie mag doen. ${refusal}`, { verdict: guard.verdict });
+      await finishRun(runId, {
+        status: 'partial', summary: notice,
+        result: { toolCalls: [], auditIds: [], quiet: false, blocked: guard.verdict },
+        cost_usd: costUsd(guard.usage, modelKind), proposals_created: 0,
+      });
+      // Wel melden, langs de gewone weg: een agent die stil niets meer doet, merkt
+      // de eigenaar anders pas als hij zijn overzicht mist.
+      const delivered = await deliver(agent, runId, name, notice, 0, actorEmail);
+      log.add('delivery', deliveryLabel(delivered), { ...delivered });
+      log.add('finish', 'Niet uitgevoerd', { status: 'partial' });
+      await log.flush();
+      if (opts.reschedule) await rescheduleAgent(agent, { resetFailures: true });
+      else await supabaseAdmin.from('ai_agents').update({ last_run_at: new Date().toISOString(), lease_until: null }).eq('id', agentId);
+      return { agentId, runId, status: 'partial', proposalsCreated: 0, quiet: false, blocked: guard.verdict };
+    }
+
     // 7) Het brein draaien (headless, no-op emit).
     const outcome = await runAgent(ctx, [], runMessage, noopEmit, modelKind, allowedToolNames, {
       maxProposals: mode === 'propose' ? maxProposals : 1,
       maxIterations: MAX_AGENT_ITERATIONS,
     });
+    addGuardUsage(outcome.usage, guard);
 
     // 7b) Elke stap uit de loop het logboek in — dít is "wat heeft hij gedaan?".
     for (const step of outcome.steps) log.addStep(step);
@@ -421,16 +451,19 @@ async function queueProposals(
  * Het geheugen van een agent: zijn laatste runs, met wat er van zijn voorstellen
  * werd. Best-effort — zonder geheugen draait hij gewoon zoals vroeger.
  */
-async function loadMemory(agentId: string, currentRunId: string): Promise<PastRun[]> {
+async function loadMemory(orgId: string, agentId: string, currentRunId: string): Promise<PastRun[]> {
   try {
+    // Ook hier zelf op de organisatie filteren: de service-role slaat RLS over.
     const { data: runs } = await supabaseAdmin.from('ai_agent_runs')
       .select('id, created_at, summary')
+      .eq('organization_id', orgId)
       .eq('agent_id', agentId).in('status', ['succeeded', 'partial']).neq('id', currentRunId)
       .order('created_at', { ascending: false }).limit(MEMORY_RUNS);
     const rows = (runs ?? []) as Array<{ id: string; created_at: string; summary: string | null }>;
     if (rows.length === 0) return [];
     const { data: audits } = await supabaseAdmin.from('ai_action_audit')
       .select('agent_run_id, params, status, result')
+      .eq('organization_id', orgId)
       .in('agent_run_id', rows.map((r) => r.id));
     const byRun = new Map<string, PastRun['decisions']>();
     for (const a of (audits ?? []) as Array<{ agent_run_id: string; params: unknown; status: string; result: { decision?: string } | null }>) {
@@ -496,8 +529,20 @@ async function previewAgent(ctx: GerrieContext, body: Record<string, unknown>): 
   const allowedToolNames = resolveAllowedTools({ ...fields, enabled_tools: tools }, 'report');
   const modelKind = resolveModelKind(fields.model_kind);
 
+  // Dezelfde poortwachter als bij de echte run: wat daar niet draait, draait
+  // hier ook niet, en de gebruiker ziet nu al waarom.
+  const guard = await screenGerrieMessage(instruction, 'agent');
+  const refusal = guardRefusal(guard);
+  if (refusal) {
+    const refusedConv = await createConversation(ctx.organizationId, ctx.userId, `Proefrun: ${instruction.slice(0, 50)}`);
+    const refusedId = await insertMessage(refusedConv, ctx.organizationId, ctx.userId, 'assistant', refusal, []);
+    if (guard.usage.input || guard.usage.output) await recordUsage(ctx.organizationId, refusedConv, refusedId, ctx.userId, guard.usage, modelKind);
+    return { ok: true, text: refusal, steps: [], tools: allowedToolNames, blocked: guard.verdict };
+  }
+
   const message = `${instruction}\n\n(PROEFRUN — laat zien wat je met de beschikbare gegevens vindt. Zet niets klaar en verstuur niets; je mag alleen kijken. Kun je iets niet met de tools die je hebt, zeg dat dan expliciet in plaats van het te benaderen.)`;
   const outcome = await runAgent(ctx, [], message, noopEmit, modelKind, allowedToolNames, { maxIterations: MAX_AGENT_ITERATIONS });
+  addGuardUsage(outcome.usage, guard);
 
   // Verbruik boeken op een los gesprek: een proefrun kost tegoed, dus die mag niet
   // buiten de telling vallen.
@@ -898,6 +943,17 @@ async function replyToRun(ctx: GerrieContext, caps: AgentCapabilities, body: Rec
   const log = runLogger(orgId, String(agent.id), runId, await nextLogSeq(runId));
   log.add('reply', 'Jij antwoordde de agent', { message: message.slice(0, 2000) });
 
+  // Een antwoord op een run is een chatbericht: dezelfde poortwachter als de chat.
+  const guard = await screenGerrieMessage(message, 'chat');
+  const refusal = guardRefusal(guard);
+  if (refusal) {
+    const refusedId = await insertMessage(convId, orgId, ctx.userId, 'assistant', refusal, []);
+    if (guard.usage.input || guard.usage.output) await recordUsage(orgId, convId, refusedId, ctx.userId, guard.usage, modelKind, String(agent.id), runId);
+    log.add('answer', 'Zijn antwoord', { text: refusal });
+    await log.flush();
+    return { text: refusal, proposalCreated: 0 };
+  }
+
   // Antwoorden op een run gebruikt dezelfde schrijfwijze en hetzelfde mailplafond
   // als de geplande run zelf; anders zou "ja, stuur maar" ineens andere post opleveren.
   ctx.clientEmail = clientEmailSettings(agent);
@@ -906,6 +962,7 @@ async function replyToRun(ctx: GerrieContext, caps: AgentCapabilities, body: Rec
     maxProposals: mode === 'propose' ? maxProposals : 1,
     maxIterations: MAX_AGENT_ITERATIONS,
   });
+  addGuardUsage(outcome.usage, guard);
   for (const step of outcome.steps) log.addStep(step);
 
   const assistantId = await insertMessage(convId, orgId, ctx.userId, 'assistant', outcome.text, outcome.toolCalls);

@@ -230,6 +230,7 @@ export function AgentApprovals({
                         {info.sub && <span className="ag-queue-sub">{info.sub}</span>}
                         <span className="ag-queue-when">{relativeTime(item.createdAt)}</span>
                       </div>
+                      {info.detail && <p className="ag-queue-detail">{info.detail}</p>}
                       {state === 'error' && rowError[item.auditId] && (
                         <p className="ag-queue-rowerr"><AlertTriangle size={12} /> {rowError[item.auditId]}</p>
                       )}

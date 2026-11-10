@@ -482,10 +482,12 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
       const when = label.charAt(0).toLowerCase() + label.slice(1);
       // Akkoord = de agent bestaat, staat aan en draait meteen zijn eerste ronde.
       // Wat hij daarna wil versturen komt gewoon weer als afvinklijst terug.
+      // De opdracht staat er voluit bij: akkoord laat hem meteen en daarna steeds
+      // opnieuw draaien, en hij komt uit het model. Wie goedkeurt, hoort te lezen wat.
       return <ConfirmActionCard
         icon={<RobotIcon />}
         title={`Agent "${p.name}" aanmaken en aanzetten?`}
-        sub={`${when} · ${p.mode === 'propose' ? 'zet acties klaar die jij afvinkt' : 'kijkt alleen mee'}`}
+        sub={`${when} · ${p.mode === 'propose' ? 'zet acties klaar die jij afvinkt' : 'kijkt alleen mee'} — Opdracht: ${p.instruction}`}
         confirmLabel="Aanmaken en starten" pendingLabel="Aanmaken…" doneLabel={`Agent "${p.name}" staat aan en draait zijn eerste ronde`}
         onConfirm={() => runConfirmed(auditId, () => onCreateAgent ? onCreateAgent(p) : Promise.reject(new Error('Agents aanmaken is hier niet beschikbaar.')))}
       />;

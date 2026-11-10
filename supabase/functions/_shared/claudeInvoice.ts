@@ -17,6 +17,7 @@
 // ============================================================
 
 import { HttpError } from './edgeAuth.ts';
+import { wrapToolData } from './gerrieGuard.ts';
 import type { Usage } from './claudeSummary.ts';
 import { DOCUMENT_MIME_TYPES } from './invoiceInboxRules.ts';
 import {
@@ -218,7 +219,9 @@ export async function extractInvoiceFromText(input: {
       type: 'text',
       text: 'Hieronder staat de tekst van een ontvangen e-mail. Als die tekst zelf een inkoopfactuur is (leverancier, regels, bedragen), lees die dan uit. ' +
         'Is het alleen een begeleidend bericht ("zie bijlage") of geen factuur, geef dan GEEN regels (lines leeg) en confidence "low".\n\n' +
-        `<<<EMAIL_TEKST>>>\n${text}\n<<<EINDE_EMAIL_TEKST>>>`,
+        // Afgebakend als gegevens (gerrieGuard.ts): een mail met "<<<EINDE_EMAIL_TEKST>>>"
+        // erin stapte uit de oude markering, en dan las het model de rest als opdracht.
+        wrapToolData('email_tekst', text),
     },
     { type: 'text', text: 'Roep de tool extract_invoice aan met wat je uit deze e-mailtekst kunt uitlezen.' },
   ]);
