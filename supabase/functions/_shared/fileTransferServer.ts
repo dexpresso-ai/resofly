@@ -91,6 +91,9 @@ export type TransferRecipientRow = {
 };
 
 /** De kolommen die naar de browser van een teamlid mogen (geen html_snapshot, geen hashes). */
+/** Opslagsoorten die nooit via een opruimroute weggaan: de bewijsstukken en de originelen uit de factuur-inbox. */
+export const PROTECTED_KEY_SEGMENTS = new Set(['invoice-pdfs', 'quote-pdfs', 'contract-pdfs', 'annual-account-pdfs', 'purchase_invoice_inbox']);
+
 export const ITEM_COLUMNS = 'id,organization_id,transfer_id,source_type,source_id,name,mime_type,size_bytes,sha256,storage_key,path,position,purged_at,created_at';
 export const RECIPIENT_COLUMNS = 'id,organization_id,transfer_id,kind,client_contact_id,email,name,client_email_id,notified_at,notify_error,delivery_status,first_opened_at,last_opened_at,open_count,first_downloaded_at,last_downloaded_at,download_count,revoked_at,code_blocked_at,created_at';
 
@@ -186,6 +189,13 @@ export async function deleteStorageObject(organizationId: string, key: string): 
   const { url, secret } = mediaWorker();
   if (!url || !secret) throw new TransferStorageError('De bestandsopslag is niet gekoppeld.', 503);
   if (!key.startsWith(`${organizationId}/`) || key.includes('..')) throw new TransferStorageError('Deze sleutel hoort niet bij de organisatie.', 403);
+  // Een bewijsstuk (verstuurde factuur, offerte, contract, jaarrekening) of een
+  // origineel uit de factuur-inbox wist deze weg nooit. De opruimwachtrij kon
+  // er een bevatten: een teamlid liet een document naar zo'n sleutel wijzen en
+  // verwijderde het document daarna (migratie 20261110140000, punt 3).
+  if (PROTECTED_KEY_SEGMENTS.has(key.split('/')[1] ?? '')) {
+    throw new TransferStorageError('Een vastgelegd bewijsstuk wordt niet uit de opslag verwijderd.', 403);
+  }
   const response = await fetch(`${url}/internal/media/${encodeURIComponent(key)}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${secret}`, 'x-organization-id': organizationId },

@@ -96,7 +96,10 @@ serve(async (req) => {
   try {
     cors.assert(req);
     if (req.method !== 'POST') throw new PublicError('Alleen POST.', 405);
-    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    // Alleen een JSON-object telt als invoer. `null`, een lijst of een getal gaf
+    // hier een TypeError, een 500 en een regel in de foutlog; nu een gewone 400.
+    const parsed = await req.json().catch(() => ({}));
+    const body = (parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}) as Record<string, unknown>;
     const action = String(body.action || 'get');
     const token = body.token;
     if (!isPlausibleToken(token)) throw new PublicError('Deze link is ongeldig.', 400);

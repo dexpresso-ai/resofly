@@ -529,6 +529,26 @@ async function mollieFetch(method: string, path: string, body?: unknown, idempot
   return data as Record<string, unknown>;
 }
 
+/**
+ * Een abonnement bij Mollie, of null als het daar niet (meer) bestaat (404/410).
+ * Elke andere fout gooit: dan probeert Mollie de webhook later opnieuw. Een
+ * storing als "bestaat niet" lezen zou een tweede abonnement naast een lopend
+ * abonnement aanmaken, en dan wordt er dubbel afgeschreven.
+ */
+async function mollieSubscriptionOrNull(path: string): Promise<Record<string, unknown> | null> {
+  assertMollieConfigured();
+  const response = await fetch(`${MOLLIE_API_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${MOLLIE_API_KEY}`, 'Content-Type': 'application/json' },
+  });
+  if (response.status === 404 || response.status === 410) return null;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    console.error(`Mollie GET ${path} failed`, String((data as Record<string, unknown>).detail || response.statusText));
+    throw new BillingHttpError('Mollie-aanvraag mislukt. Controleer de Mollie-configuratie en logs.', 502);
+  }
+  return data as Record<string, unknown>;
+}
+
 async function ensureMollieCustomer(profile: BillingProfile): Promise<string> {
   if (profile.mollie_customer_id) return profile.mollie_customer_id;
 
@@ -580,6 +600,18 @@ async function startSubscriptionCheckout(userId: string, organizationId: string,
   const interval = normalizeInterval(intervalRaw);
   const plan = await getPlan(planKey);
   if (plan.is_custom) throw new BillingHttpError('Custom-plannen lopen handmatig, niet via self-service checkout.', 400);
+  // Een nieuw abonnement naast een lopend abonnement kan niet. Een owner of
+  // admin op een actief starterabonnement startte hier rechtstreeks een
+  // checkout voor een duurder plan (met de creatieve module): na die ene
+  // betaling stond de organisatie op het dure plan, terwijl Mollie het oude,
+  // lagere bedrag bleef afschrijven (de webhook hergebruikte het lopende
+  // abonnement). Een ander plan gaat via createPlanChangeCheckout, dat het
+  // bedrag bij Mollie meeneemt. createPlanChangeCheckout komt hier alleen
+  // zonder lopend abonnement, en controleert is_active zelf al.
+  if (hasActiveSubscription(profile)) {
+    throw new BillingHttpError('Deze organisatie heeft al een lopend abonnement. Kies een ander plan via "Plan wijzigen".', 409);
+  }
+  if (!plan.is_active) throw new BillingHttpError('Dit plan is niet actief.', 400);
   if (interval === 'year' && plan.yearly_price_cents <= 0) {
     throw new BillingHttpError('Voor dit plan is geen jaarprijs ingesteld. Kies maandelijks of stel eerst een jaarprijs in.', 400);
   }
@@ -817,9 +849,13 @@ async function cancelSubscription(organizationId: string): Promise<CheckoutResul
   if (profile.mollie_customer_id && profile.mollie_subscription_id && !MOLLIE_ALLOW_MOCK) {
     await mollieFetch('DELETE', `/customers/${encodeURIComponent(profile.mollie_customer_id)}/subscriptions/${encodeURIComponent(profile.mollie_subscription_id)}`);
   }
+  // Het opgezegde abonnement vergeten. Bleef het id staan, dan hergebruikte de
+  // eerste betaling van een nieuw abonnement het dode abonnement: de
+  // organisatie stond weer op actief, maar Mollie schreef nooit meer af, en elke
+  // latere wijziging (plaatsen, modules) liep op een 502 bij Mollie.
   await supabaseAdmin
     .from('organization_billing_profiles')
-    .update({ subscription_status: 'cancelled', updated_at: new Date().toISOString() })
+    .update({ subscription_status: 'cancelled', mollie_subscription_id: null, updated_at: new Date().toISOString() })
     .eq('organization_id', organizationId);
 
   // Opzeggen bevriest ook de creatieve module: geen nieuwe galerijen meer, maar
@@ -908,13 +944,13 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
   if (!organizationId) return json(req, { ok: true, ignored: true });
 
   const eventKey = `mollie:payment:${paymentId}:${status}`;
-  const shouldProcess = await claimBillingEvent(organizationId, eventKey, `payment.${status}`, paymentId, payment);
+  const shouldProcess = await claimBillingEvent(organizationId, eventKey, `payment.${status}`, paymentId, withoutWebhookSecret(payment));
   if (!shouldProcess) return json(req, { ok: true, deduped: true });
 
   // Lokale betaalstatus bijwerken (traceability).
   await supabaseAdmin
     .from('organization_payment_records')
-    .update({ status, raw_payload: payment, updated_at: new Date().toISOString() })
+    .update({ status, raw_payload: withoutWebhookSecret(payment), updated_at: new Date().toISOString() })
     .eq('provider', 'mollie')
     .eq('provider_payment_id', paymentId);
 
@@ -929,6 +965,7 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
         // Alleen een echte keuze doorgeven; ontbreekt de sleutel (betaling van
         // vóór de creatieve module), dan blijft de stand ongemoeid.
         metadata.creative === undefined ? undefined : String(metadata.creative) === '1',
+        paymentId,
       );
     }
   } else if (subscriptionId) {
@@ -967,7 +1004,7 @@ async function resolveWebhookOrganization(metaOrgId: string, subscriptionId: str
   return null;
 }
 
-async function activateSubscriptionFromFirstPayment(organizationId: string, planKey: string, customerId: string, mandateId: string, interval: BillingInterval, creative?: boolean): Promise<void> {
+async function activateSubscriptionFromFirstPayment(organizationId: string, planKey: string, customerId: string, mandateId: string, interval: BillingInterval, creative?: boolean, firstPaymentId?: string): Promise<void> {
   const profile = await getProfile(organizationId);
   const effectivePlanKey = planKey || profile.plan_key || 'starter';
   const plan = await getPlan(effectivePlanKey);
@@ -999,6 +1036,28 @@ async function activateSubscriptionFromFirstPayment(organizationId: string, plan
   const intervalLabel = interval === 'year' ? 'jaarabonnement' : 'maandabonnement';
 
   let subscriptionId = profile.mollie_subscription_id || '';
+  // Een opgeslagen abonnement alleen hergebruiken als het bij Mollie nog loopt,
+  // en dan met het bedrag en de termijn van wat er nu betaald is. Na een
+  // opzegging of bij een achterstand (past_due) met een ander plan of een
+  // andere termijn bleef anders het oude abonnement met het oude bedrag lopen
+  // (of liep er niets meer), terwijl de database het nieuwe plan toonde.
+  if (subscriptionId && effectiveCustomerId && !(MOLLIE_ALLOW_MOCK && !MOLLIE_API_KEY)) {
+    const path = `/customers/${encodeURIComponent(effectiveCustomerId)}/subscriptions/${encodeURIComponent(subscriptionId)}`;
+    const existing = await mollieSubscriptionOrNull(path);
+    const sameInterval = String(existing?.interval || '') === mollieInterval;
+    if (existing && String(existing.status || '') === 'active' && sameInterval) {
+      await mollieFetch('PATCH', path, {
+        amount: { currency: plan.currency, value: formatAmount(amountCents) },
+        description: `ResoFly ${plan.name} — ${intervalLabel}`,
+        metadata: { organizationId, planKey: effectivePlanKey, interval },
+      });
+    } else {
+      // Loopt niet meer, of een andere termijn: opzeggen wat er nog liep, en
+      // hieronder een nieuw abonnement met het juiste bedrag.
+      if (existing && String(existing.status || '') === 'active') await mollieFetch('DELETE', path);
+      subscriptionId = '';
+    }
+  }
   if (!subscriptionId && !(MOLLIE_ALLOW_MOCK && !MOLLIE_API_KEY)) {
     const subscription = await mollieFetch('POST', `/customers/${encodeURIComponent(effectiveCustomerId)}/subscriptions`, {
       amount: { currency: plan.currency, value: formatAmount(amountCents) },
@@ -1007,7 +1066,10 @@ async function activateSubscriptionFromFirstPayment(organizationId: string, plan
       webhookUrl: webhookUrlWithSecret(),
       mandateId: mandateId || undefined,
       metadata: { organizationId, planKey: effectivePlanKey, interval },
-    }, `sub-create:${organizationId}:${effectivePlanKey}:${interval}`);
+      // De eerste betaling in de sleutel: een nieuw abonnement na een opzegging
+      // op dezelfde dag (zelfde plan en termijn) kreeg anders van Mollie het
+      // opgezegde abonnement terug (idempotentie geldt 24 uur).
+    }, `sub-create:${organizationId}:${effectivePlanKey}:${interval}${firstPaymentId ? `:${firstPaymentId}` : ''}`);
     subscriptionId = String(subscription.id || '');
   }
   if (MOLLIE_ALLOW_MOCK && !subscriptionId) subscriptionId = `mock_sub_${organizationId.slice(0, 8)}`;
@@ -1022,6 +1084,18 @@ async function activateSubscriptionFromFirstPayment(organizationId: string, plan
     p_metadata: { source: 'subscription_first_paid' },
   });
   if (error) throw error;
+}
+
+/**
+ * Het Mollie-antwoord bevat onze webhookUrl, met het webhook-secret erin.
+ * organization_payment_records en organization_billing_events zijn leesbaar
+ * voor de beheerders van een organisatie (RLS): zo kreeg elke organisatie het
+ * geheim van de webhook van het hele platform te zien. De factuurroutes haalden
+ * het er al uit (invoiceCheckout.ts); billing nog niet.
+ */
+function withoutWebhookSecret(payment: Record<string, unknown>): Record<string, unknown> {
+  const { webhookUrl: _webhookUrl, ...rest } = payment;
+  return rest;
 }
 
 // Claim een billing-event voor verwerking. Geeft true terug zolang het event nog niet

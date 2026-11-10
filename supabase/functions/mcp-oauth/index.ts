@@ -113,10 +113,18 @@ Deno.serve(async (req) => {
     return openJson({ error: 'not_found', error_description: 'Dit pad bestaat niet op de autorisatieserver.' }, 404);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
-    const message = error instanceof Error ? error.message : 'Onbekende fout.';
+    let message = error instanceof Error ? error.message : 'Onbekende fout.';
+    // Een 500 is aan onze kant misgegaan, en de zin bevat dan vaak de tekst van
+    // de database ("Code opzoeken mislukt: …"). Die hoort in de logs, niet bij
+    // een AI-client of een bezoeker zonder login: /register en /token staan
+    // open voor iedereen.
+    if (status >= 500) {
+      console.error('[mcp-oauth]', message);
+      message = 'Er ging iets mis aan onze kant. Probeer het opnieuw.';
+    }
     // OAuth-fouten hebben een vaste vorm; de app-paden krijgen onze eigen.
     if (at(path, 'approve')) return cors.json(req, { error: message }, status);
-    return openJson({ error: status === 500 ? 'server_error' : 'invalid_request', error_description: message }, status);
+    return openJson({ error: status >= 500 ? 'server_error' : 'invalid_request', error_description: message }, status);
   }
 });
 
@@ -131,7 +139,25 @@ Deno.serve(async (req) => {
 const MAX_REGISTER_BODY_BYTES = 16 * 1024;
 const MAX_REDIRECT_URI_LENGTH = 512;
 
+// Hoeveel registraties per uur. De grootte van één registratie was al begrensd
+// en ongebruikte gaan na twee dagen weg, maar het AANTAL niet: een lus over
+// /register zette in die twee dagen zoveel rijen neer als de functie aankon, in
+// de database die alle organisaties delen. Ruim genoeg voor Claude en ChatGPT,
+// die per gebruiker die de connector toevoegt één keer registreren (vanaf hun
+// eigen servers, dus veel gebruikers achter weinig adressen).
+const REGISTER_WINDOW_SECONDS = 60 * 60;
+const REGISTER_MAX_PER_SENDER = envInt('MCP_REGISTER_LIMIT_PER_HOUR', 60, 5, 10_000);
+const REGISTER_GLOBAL_MAX = envInt('MCP_REGISTER_GLOBAL_LIMIT_PER_HOUR', 1000, 50, 1_000_000);
+const REGISTER_BLOCK_SECONDS = 30 * 60;
+
 async function handleRegister(req: Request): Promise<Response> {
+  const wait = await noteRegistration(req);
+  if (wait > 0) {
+    return new Response(JSON.stringify({
+      error: 'temporarily_unavailable',
+      error_description: `Er zijn te veel AI-clients tegelijk aangemeld. Probeer het over ${Math.max(1, Math.ceil(wait / 60))} minuten opnieuw.`,
+    }), { status: 429, headers: { ...openCorsHeaders(), 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Retry-After': String(wait) } });
+  }
   const declared = Number(req.headers.get('content-length') || 0);
   if (declared > MAX_REGISTER_BODY_BYTES) {
     return openJson({ error: 'invalid_client_metadata', error_description: 'De registratie is te groot.' }, 413);
@@ -191,6 +217,36 @@ async function handleRegister(req: Request): Promise<Response> {
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
   }, 201);
+}
+
+/**
+ * Telt deze registratie; geeft de seconden tot het weer mag (0 = gewoon door).
+ * Per afzender (het adres dat Cloudflare zag, gehasht) en voor iedereen samen.
+ * Lukt het tellen niet (een database die hapert, of de migratie staat er nog
+ * niet), dan gaat de registratie door: de rem is een vangnet, geen slot op de
+ * voordeur.
+ */
+async function noteRegistration(req: Request): Promise<number> {
+  const address = (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
+    .trim().slice(0, 64);
+  const { data, error } = await admin.rpc('edge_note_attempt', {
+    p_bucket: 'mcp-register',
+    p_client: await sha256Hex(`mcp-register:${address}`),
+    p_window_seconds: REGISTER_WINDOW_SECONDS,
+    p_max: REGISTER_MAX_PER_SENDER,
+    p_block_seconds: REGISTER_BLOCK_SECONDS,
+    p_global_max: REGISTER_GLOBAL_MAX,
+  });
+  if (error) {
+    console.error('[mcp-oauth] registratie tellen mislukt:', error.message);
+    return 0;
+  }
+  return Number(data) || 0;
+}
+
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(Deno.env.get(name));
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.max(Math.trunc(value), min), max) : fallback;
 }
 
 // ── 2. De gebruiker komt langs ───────────────────────────────────────────────

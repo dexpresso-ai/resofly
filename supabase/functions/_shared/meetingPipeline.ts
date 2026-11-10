@@ -14,7 +14,7 @@ import { recordAiUsage, summarizeTranscript, userHasBudget } from './claudeSumma
 import type { NormalizedTranscript } from './scribeTranscript.ts';
 import { recordTranscriptionUsage, type RecordingForUsage } from './transcriptionUsage.ts';
 
-export interface SummaryOutcome { summarized: boolean; reason?: 'no_transcript' | 'budget' | 'error'; message?: string }
+export interface SummaryOutcome { summarized: boolean; reason?: 'no_transcript' | 'budget' | 'error' | 'busy'; message?: string }
 
 export interface TranscriptionOutcome { stored: boolean; summary?: SummaryOutcome }
 
@@ -42,7 +42,16 @@ export async function completeTranscription(admin: SupabaseClient, recordingId: 
   return { stored: true, summary: await runSummaryForRecording(admin, recordingId) };
 }
 
-export async function runSummaryForRecording(admin: SupabaseClient, recordingId: string): Promise<SummaryOutcome> {
+/**
+ * `billTo`: wie de notulen betaalt. Na een transcriptie is dat de maker van de
+ * opname (de standaard). Vraagt een collega later met de hand om nieuwe notulen
+ * (meeting-transcribe 'summarize'), dan betaalt die collega: anders liep een
+ * teamlid via de opnames van een ander diens maandtegoed leeg, en kwam hij zelf
+ * om zijn eigen plafond heen.
+ */
+export async function runSummaryForRecording(
+  admin: SupabaseClient, recordingId: string, { billTo }: { billTo?: string | null } = {},
+): Promise<SummaryOutcome> {
   const { data: rec, error } = await admin.from('meeting_recordings')
     .select('id, organization_id, created_by, transcript_text, event_title_snapshot, client_id, project_id, language')
     .eq('id', recordingId).single();
@@ -54,8 +63,9 @@ export async function runSummaryForRecording(admin: SupabaseClient, recordingId:
     return { summarized: false, reason: 'no_transcript' };
   }
 
-  // Budget van de eigenaar (zelfde maandplafond als Gerrie).
-  if (!(await userHasBudget(admin, rec.created_by ? String(rec.created_by) : null, String(rec.organization_id)))) {
+  // Budget van wie betaalt (zelfde maandplafond als Gerrie).
+  const payer = billTo !== undefined ? billTo : (rec.created_by ? String(rec.created_by) : null);
+  if (!(await userHasBudget(admin, payer, String(rec.organization_id)))) {
     await admin.from('meeting_recordings').update({
       status: 'transcribed',
       error_message: 'AI-tegoed voor deze maand is op — transcript is klaar, notulen overgeslagen.',
@@ -63,7 +73,14 @@ export async function runSummaryForRecording(admin: SupabaseClient, recordingId:
     return { summarized: false, reason: 'budget' };
   }
 
-  await admin.from('meeting_recordings').update({ status: 'summarizing', error_message: null }).eq('id', recordingId);
+  // Eén samenvatting tegelijk. Zonder deze voorwaarde startten parallelle
+  // verzoeken elk een eigen Claude-aanroep, allemaal betaald. Een samenvatting
+  // die al tien minuten "bezig" is, is nooit afgekomen (de functie werd
+  // gestopt); die mag opnieuw, anders bleef de opname voorgoed op slot.
+  const stale = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const { data: claimed } = await admin.from('meeting_recordings').update({ status: 'summarizing', error_message: null })
+    .eq('id', recordingId).or(`status.neq.summarizing,updated_at.lt.${stale}`).select('id');
+  if (!claimed?.length) return { summarized: false, reason: 'busy', message: 'Er wordt al een samenvatting gemaakt.' };
 
   // Klant/project-namen als context voor betere notulen.
   const [clientName, projectName] = await Promise.all([
@@ -83,7 +100,7 @@ export async function runSummaryForRecording(admin: SupabaseClient, recordingId:
       status: 'done',
       error_message: null,
     }).eq('id', recordingId);
-    await recordAiUsage(admin, String(rec.organization_id), rec.created_by ? String(rec.created_by) : null, model, usage);
+    await recordAiUsage(admin, String(rec.organization_id), payer, model, usage);
     return { summarized: true };
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Samenvatten mislukt.';

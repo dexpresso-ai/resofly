@@ -202,6 +202,12 @@ workflow op een andere branch de secrets niet ziet.
 workers.dev en gebruikt dezelfde bucket als de media-worker. `resofly-media`
 bestaat niet meer.
 
+**Stand op 10 november:** hij is nog in gebruik. Het secret
+`QUOTE_PDF_STORAGE_WORKER_URL` op staging wijst ernaar. Via de terugvalketen bewaren
+offertes, facturen en jaarrekeningen hun PDF dus via deze oude worker. Eerst de
+PDF-opslag omzetten, daarna pas uitzetten. De stappen staan bij O1 in
+`docs/rapporten/CONTROLE_API_LAAG_2026-11-10.md`.
+
 **Waarom:** de map `cloudflare-worker/` is de voorganger van
 `workers/media-api`, zonder de bewaking van deze ronde. Draait hij nog, dan is
 hij een tweede deur naar dezelfde bestanden.

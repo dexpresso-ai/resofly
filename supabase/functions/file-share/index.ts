@@ -152,6 +152,21 @@ async function shareItem(
   const message = trimOrNull(body.message, 2000);
   const expiresAt = parseExpiry(body.expiresAt);
 
+  // Alleen een bestand in een map hoort bij Inhoud. Een bijlage van een ticket,
+  // project, taak of klant valt onder díe module, en hier is alleen schrijfrecht
+  // op Inhoud gecontroleerd: zonder deze grens deelde een teamlid zonder
+  // Tickets een bijlage van een intern ticket via een deellink. De database
+  // weigert het ook (drive_share_attachment_in_content); dit is de zin vooraf.
+  if (itemType === 'attachment') {
+    const { data: file, error: fileError } = await admin.from('attachments').select('entity_type')
+      .eq('organization_id', organizationId).eq('id', itemId).maybeSingle();
+    if (fileError) throw new HttpError('Het bestand kon niet worden opgezocht. Probeer het opnieuw.', 500);
+    if (!file) throw new HttpError('Dit bestand bestaat niet (meer) in deze organisatie.', 404);
+    if (file.entity_type !== 'folder') {
+      throw new HttpError('Alleen bestanden die in een map van Inhoud staan, kun je delen. Verplaats het bestand eerst naar een map.', 403);
+    }
+  }
+
   // De klantcontext komt van de database, niet van de browser. Dit is dezelfde
   // functie die de trigger straks gebruikt, dus wat hier "klantgerelateerd" heet
   // is precies wat de database ook zo noemt.
