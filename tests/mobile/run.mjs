@@ -90,6 +90,15 @@ const PAGES = {
   'stats-builder': { page: 'stats', prepare: '.aire-mode button:nth-child(2)' },
   report: { page: 'report', statsReportId: seed.aiReports[0].id },
   'report-chat': { page: 'report', statsReportId: seed.aiReports[0].id, prepare: '.aire-chat-toggle' },
+  // Gerrie aan het werk (2026-11-10). De mock laat report_chat openstaan, dus
+  // hij blijft bouwen. Een nieuwe rapportage: de opbouwanimatie in plaats van
+  // de pagina. Een bestaande aanpassen: de pagina gedimd, met de balk erboven
+  // (op telefoon en tablet eerst het gesprek open, vraag sturen, weer dicht).
+  'report-building': { page: 'stats', prepare: '.aire-ask .aire-suggest button' },
+  'report-updating': {
+    page: 'report', statsReportId: seed.aiReports[0].id,
+    prepare: ['.aire-chat-toggle', { fill: '.aire-composer textarea', value: 'Zet er vorig jaar naast' }, '.aire-send', '.aire-chat-close'],
+  },
   'clients-table': { page: 'clients', storage: { 'resofly.clients.viewMode': 'table' } },
   'projects-table': { page: 'projects', storage: { 'resofly.projects.viewMode': 'table' } },
   'tickets-table': { page: 'tickets', storage: { 'resofly.tickets.view': 'table' } },
@@ -331,16 +340,19 @@ try {
         // Een pagina die pas in een bepaalde stand krap wordt (een uitgeklapt
         // filterpaneel) zet die stand hier zelf aan. Staat de knop er niet op
         // dit formaat, dan gebeurt er niets.
-        if (spec.prepare) {
-          const knop = page.locator(spec.prepare).first();
-          if (await knop.isVisible().catch(() => false)) {
-            // De muis van de testbrowser staat op (0,0); op tabletformaat klapt
-            // de niet-vastgezette zijbalk daardoor open over de eerste
-            // agendakolom en vangt hij de klik af. Een echte tablet heeft geen
-            // hover — dan gaat de klik rechtstreeks naar het element.
-            await knop.click({ timeout: 3000 }).catch(() => knop.dispatchEvent('click'));
-            await page.waitForTimeout(250);
-          }
+        // Meerdere stappen kan ook (2026-11-10): een lijst met selectors om op te
+        // klikken, of { fill, value } om een veld in te vullen. Zo opent de test
+        // het gesprek, typt een vraag en verstuurt die.
+        for (const step of spec.prepare ? [spec.prepare].flat() : []) {
+          const knop = page.locator(typeof step === 'string' ? step : step.fill).first();
+          if (!(await knop.isVisible().catch(() => false))) continue;
+          if (typeof step !== 'string') { await knop.fill(step.value); continue; }
+          // De muis van de testbrowser staat op (0,0); op tabletformaat klapt
+          // de niet-vastgezette zijbalk daardoor open over de eerste
+          // agendakolom en vangt hij de klik af. Een echte tablet heeft geen
+          // hover — dan gaat de klik rechtstreeks naar het element.
+          await knop.click({ timeout: 3000 }).catch(() => knop.dispatchEvent('click'));
+          await page.waitForTimeout(250);
         }
         const m = await page.evaluate((firstSel) => {
           const box = (sel) => { const el = document.querySelector(sel); if (!el) return 0; const cs = getComputedStyle(el); if (cs.display === 'none') return 0; return Math.round(el.getBoundingClientRect().height); };

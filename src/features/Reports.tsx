@@ -5,7 +5,7 @@ import type { ReportDefinition } from '../lib/reporting';
 import { PageIcon } from '../components/PageIcon';
 import { Statistics } from './Statistics';
 import { loadGerrieBudget } from '../lib/gerrie-api';
-import { deleteAiReport, startReportChat, useAiReportList, type AiReportMeta } from '../lib/aiReports';
+import { deleteAiReport, startReportChat, useAiReportList, useBuildingReports, type AiReportMeta } from '../lib/aiReports';
 import type { UUID } from '../types';
 
 /**
@@ -53,6 +53,7 @@ export function Reports({ data, organizationId, canWrite, canChat, onChanged, op
   useEffect(() => { if (builderContext) setMode('builder'); }, [builderContext, pendingReport?.key, openReportId]);
 
   const list = useAiReportList(organizationId, canChat);
+  const building = useBuildingReports();
   const [question, setQuestion] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [budget, setBudget] = useState<number | null>(null);
@@ -173,17 +174,22 @@ export function Reports({ data, organizationId, canWrite, canChat, onChanged, op
             </div>
           ) : (
             <div className="aire-cards">
-              {reports.map((r) => (
-                <article key={r.id} className="aire-card">
+              {reports.map((r) => {
+                const isBuilding = building.has(r.id);
+                return (
+                <article key={r.id} className={`aire-card${isBuilding ? ' is-building' : ''}`}>
                   <button type="button" className="aire-card-open" onClick={() => onOpenReport(r.id)}>
-                    <span className="aire-card-icon" aria-hidden="true"><FileBarChart size={16} /></span>
+                    <span className="aire-card-icon" aria-hidden="true">{isBuilding ? <Sparkles size={16} /> : <FileBarChart size={16} />}</span>
                     <span className="aire-card-title">{r.title}</span>
                     <span className="aire-card-summary">{r.summary || (r.version === 0 ? 'Nog in de maak.' : 'Rapportage van Gerrie.')}</span>
-                    <span className="aire-card-meta">{r.version > 0 ? `Versie ${r.version} · ` : ''}bijgewerkt {formatWhen(r.updated_at)}</span>
+                    {isBuilding
+                      ? <span className="aire-card-meta aire-card-live">{r.version > 0 ? 'Gerrie past hem aan…' : 'Gerrie bouwt hem nu…'}</span>
+                      : <span className="aire-card-meta">{r.version > 0 ? `Versie ${r.version} · ` : ''}bijgewerkt {formatWhen(r.updated_at)}</span>}
                   </button>
-                  <button type="button" className="aire-card-del" onClick={() => void remove(r)} disabled={deleting === r.id} aria-label={`Verwijder ${r.title}`} title="Verwijderen"><Trash2 size={14} /></button>
+                  <button type="button" className="aire-card-del" onClick={() => void remove(r)} disabled={deleting === r.id || isBuilding} aria-label={`Verwijder ${r.title}`} title={isBuilding ? 'Wacht tot Gerrie klaar is' : 'Verwijderen'}><Trash2 size={14} /></button>
                 </article>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>

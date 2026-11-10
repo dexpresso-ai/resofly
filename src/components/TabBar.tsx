@@ -2,11 +2,12 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { Archive, BarChart3, FileBarChart, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Scale, Settings, Sparkles, StickyNote, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData } from '../types';
 import { viewTitle } from '../lib/workspaceTabs';
+import { useBuildingReports } from '../lib/aiReports';
 
 /** Minimale vorm van een tabblad die de tabbalk nodig heeft om te renderen. Het
  *  volledige WorkspaceTab-type (met view-state + editor) leeft in main.tsx; door
  *  hier structureel te typen vermijden we een circulaire import. */
-type TabLike = { id: string; page: string; projectId: string | null; clientId: string | null; galleryId?: string | null };
+type TabLike = { id: string; page: string; projectId: string | null; clientId: string | null; galleryId?: string | null; statsReportId?: string | null };
 
 // Icoon per pagina — op de telefoon draagt het icoon een tabblad dat níét actief
 // is helemaal alleen (zie globals.css ≤760px), op desktop staat het vóór het
@@ -39,6 +40,9 @@ export function TabBar({ tabs, activeTabId, data, onSelect, onClose, onNew, trai
 }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLDivElement | null>(null);
+  // Een rapportage waar Gerrie aan bouwt: het icoon krijgt een draaiende ring,
+  // zodat je ook vanuit een ander tabblad ziet dat hij nog bezig is.
+  const building = useBuildingReports();
 
   /**
    * Het actieve tabblad hoort in beeld te staan. Op de telefoon past er een
@@ -62,6 +66,7 @@ export function TabBar({ tabs, activeTabId, data, onSelect, onClose, onNew, trai
           const active = tab.id === activeTabId;
           const label = viewTitle(tab, data);
           const Icon = PAGE_ICON[tab.page] ?? FileText;
+          const isBuilding = tab.page === 'report' && Boolean(tab.statsReportId) && building.has(tab.statsReportId ?? '');
           return (
             <div
               key={tab.id}
@@ -71,8 +76,8 @@ export function TabBar({ tabs, activeTabId, data, onSelect, onClose, onNew, trai
               // Rovende tabindex: Tab springt naar de tabbalk als geheel, niet
               // langs elk open tabblad afzonderlijk.
               tabIndex={active ? 0 : -1}
-              className={`tab${active ? ' active' : ''}`}
-              title={label}
+              className={`tab${active ? ' active' : ''}${isBuilding ? ' is-building' : ''}`}
+              title={isBuilding ? `${label} — Gerrie is bezig` : label}
               onClick={() => onSelect(tab.id)}
               onKeyDown={event => {
                 if (event.key !== 'Enter' && event.key !== ' ') return;

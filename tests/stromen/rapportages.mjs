@@ -190,6 +190,11 @@ export default async function rapportages() {
     verwacht(uit.done?.changed === true && uit.done?.version === 1, `done: ${JSON.stringify(uit.done)?.slice(0, 300)}`);
     rapportId = uit.report.id;
     gelijk(uit.done.reportId, rapportId, 'zelfde rapportage');
+    // De bouwanimatie in de app volgt deze stappen (src/lib/reportBuild.ts).
+    // "Gerrie werkt verder…" heeft geen stap; dubbele op een rij tellen één keer.
+    const stappen = uit.lijst.filter((e) => e.event === 'status').map((e) => e.data?.step).filter(Boolean)
+      .filter((s, i, alle) => s !== alle[i - 1]);
+    gelijk(stappen, ['lezen', 'gegevens', 'bouwen', 'controleren'], 'stappen in de statusmeldingen');
     // De systeemprompt en de tools: lezen ja, schrijven nee.
     const tools = claude.aanvragen[0].tools.map((t) => t.name);
     verwacht(tools.includes('query_records') && tools.includes('save_report') && tools.includes('list_invoices'), `tools: ${tools.join(', ')}`);

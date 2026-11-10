@@ -141,6 +141,166 @@
 .aire-chat-toggle{display:none}
 .aire-scrim{display:none}
 
+/* ── Gerrie bouwt ──────────────────────────────────────────────
+   De opbouw van een rapportage (src/components/ReportBuilding.tsx). Het stadium
+   volgt de stap van Gerrie (data-phase 0–3): blauwdruk, rekenen, bouwen,
+   controleren.
+
+   De basisstand van elk onderdeel is het áfgebouwde plaatje; de animaties
+   beginnen bij leeg en eindigen daar. Met "minder beweging" zet globals.css
+   alle animaties uit, en dan zie je zo nog steeds een af dashboard dat per stap
+   verandert, in plaats van lege vakken. */
+@property --aire-angle{syntax:'<angle>';inherits:false;initial-value:0deg}
+@keyframes aire-rotate{to{--aire-angle:360deg}}
+
+/* Een komeet van poollicht die om de kaart loopt: zo zie je ook vanuit je
+   ooghoek dat er gewerkt wordt. */
+.aire-build,.aire-card.is-building{border-color:transparent;background:linear-gradient(var(--surface),var(--surface)) padding-box,conic-gradient(from var(--aire-angle),transparent 0 58%,var(--ai-1) 72%,var(--ai-2) 84%,var(--ai-3) 93%,transparent) border-box,linear-gradient(var(--line),var(--line)) border-box;animation:aire-rotate 5s linear infinite}
+.aire-build{position:relative;display:flex;flex-direction:column;border:1.5px solid transparent;border-radius:var(--r-card,var(--r-xl));box-shadow:var(--shadow-card,var(--shadow-1)),0 26px 52px -34px var(--ai-glow,rgba(110,90,230,.3));overflow:hidden}
+
+.aire-stage{position:relative;display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);grid-template-areas:"title title" "kpis kpis" "bars line" "table table";gap:10px;padding:18px 18px 16px;background:radial-gradient(120% 90% at 0% 0%,var(--ai-soft,rgba(110,90,230,.07)),transparent 62%),radial-gradient(circle,var(--line-2) 1px,transparent 1.3px) 0 0/16px 16px,var(--bg,var(--surface-2));border-bottom:1px solid var(--line);overflow:hidden;isolation:isolate;animation:aire-drift 16s linear infinite}
+@keyframes aire-drift{to{background-position:0 0,16px 16px,0 0}}
+
+/* De vakken: eerst een stippellijn (de blauwdruk), bij het bouwen een vlak. */
+.aire-sk{position:relative;min-width:0;border:1.5px dashed var(--line-3,var(--line-2));border-radius:10px;padding:10px;animation:aire-pop .55s cubic-bezier(.2,.9,.3,1.2) both;animation-delay:calc(var(--aire-t,0s) + var(--i,0) * 110ms)}
+.aire-sk::before{content:"";position:absolute;inset:-1.5px;z-index:0;border-radius:inherit;border:1px solid var(--line);background:var(--surface);box-shadow:0 10px 24px -18px rgba(var(--shade-rgb,0,0,0),.5);opacity:0;transition:opacity .5s ease calc(var(--i,0) * 150ms)}
+.aire-sk>*{position:relative;z-index:1}
+.aire-stage[data-phase="2"] .aire-sk::before,.aire-stage[data-phase="3"] .aire-sk::before{opacity:1}
+@keyframes aire-pop{from{opacity:0;transform:translateY(8px) scale(.96)}}
+@keyframes aire-shine{from{background-position:120% 0}to{background-position:-120% 0}}
+
+.aire-sk-title{grid-area:title;display:flex;flex-direction:column;gap:6px;border:0;padding:2px 0}
+.aire-sk-title::before{display:none}
+.aire-sk-title i{display:block;width:28%;height:8px;border-radius:5px;background:var(--line-2);opacity:.75}
+.aire-sk-title i:first-child{width:46%;height:12px;opacity:1}
+.aire-stage[data-phase="2"] .aire-sk-title i:first-child,.aire-stage[data-phase="3"] .aire-sk-title i:first-child{background:var(--ink-3);animation:aire-type 1.2s cubic-bezier(.3,.7,.3,1) both}
+@keyframes aire-type{from{width:3%}}
+
+.aire-sk-kpis{grid-area:kpis;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.aire-sk-kpi{display:flex;flex-direction:column;gap:7px;padding:10px 11px}
+.aire-sk-kpi i{display:block;width:55%;height:6px;border-radius:3px;background:var(--line-2)}
+.aire-sk-kpi b{display:block;width:72%;height:13px;border-radius:5px;background:var(--line-2)}
+.aire-stage[data-phase="1"] .aire-sk-kpi b,.aire-stage[data-phase="1"] .aire-sk-row i{background:linear-gradient(90deg,var(--line-2) 30%,var(--ai-2) 50%,var(--line-2) 70%) 0 0/260% 100%;animation:aire-shine 1.4s linear infinite;animation-delay:calc(var(--i,0) * 160ms + var(--j,0) * 120ms)}
+.aire-stage[data-phase="2"] .aire-sk-kpi b,.aire-stage[data-phase="3"] .aire-sk-kpi b{background:var(--aurora,var(--ai-1));animation:aire-fill .7s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(.2s + var(--i,0) * 150ms)}
+@keyframes aire-fill{from{width:6%;opacity:.3}}
+
+.aire-sk-bars{grid-area:bars;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;align-items:end;height:96px;padding:12px 12px 10px}
+.aire-sk-bars span{display:block;height:100%;border-radius:4px 4px 2px 2px;background:var(--line-2);transform-origin:50% 100%;transform:scaleY(var(--h))}
+.aire-stage[data-phase="1"] .aire-sk-bars span{background:var(--line-3,var(--line-2));animation:aire-compute calc(.9s + var(--j) * 70ms) ease-in-out infinite alternate;animation-delay:calc(var(--j) * -170ms)}
+.aire-stage[data-phase="2"] .aire-sk-bars span,.aire-stage[data-phase="3"] .aire-sk-bars span{background:linear-gradient(to top,var(--ai-1),var(--ai-2));animation:aire-grow .8s cubic-bezier(.2,.9,.25,1.25) both,aire-breathe 2.6s ease-in-out infinite alternate;animation-delay:calc(var(--j) * 80ms),calc(.9s + var(--j) * 120ms)}
+@keyframes aire-compute{0%{transform:scaleY(.16)}55%{transform:scaleY(var(--h))}100%{transform:scaleY(calc(var(--h) * .5))}}
+@keyframes aire-grow{from{transform:scaleY(.05)}}
+@keyframes aire-breathe{to{transform:scaleY(calc(var(--h) * .8))}}
+
+.aire-sk-line{grid-area:line;display:flex;height:96px;padding:12px 10px 8px}
+.aire-sk-line svg{display:block;width:100%;height:100%;overflow:visible}
+.aire-sk-path{fill:none;stroke:var(--line-3,var(--line-2));stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:2 5;vector-effect:non-scaling-stroke}
+.aire-sk-area{fill:var(--ai-2);fill-opacity:.14;opacity:0}
+.aire-stage[data-phase="1"] .aire-sk-path{animation:aire-march 1s linear infinite}
+@keyframes aire-march{to{stroke-dashoffset:-14}}
+/* De lijn tekent zich met een veeg van links naar rechts, niet met
+   stroke-dashoffset: Chrome negeert pathLength bij non-scaling-stroke, en dan
+   kwam de lijn met gaten tevoorschijn. */
+.aire-stage[data-phase="2"] .aire-sk-path,.aire-stage[data-phase="3"] .aire-sk-path{stroke:var(--ai-2);stroke-width:2.4;stroke-dasharray:none}
+.aire-stage[data-phase="2"] .aire-sk-area,.aire-stage[data-phase="3"] .aire-sk-area{opacity:1}
+.aire-stage[data-phase="2"] .aire-sk-line svg,.aire-stage[data-phase="3"] .aire-sk-line svg{animation:aire-wipe 3.4s ease-in-out .5s infinite backwards}
+@keyframes aire-wipe{0%{clip-path:inset(0 100% 0 0);opacity:1}45%,80%{clip-path:inset(0 0 0 0);opacity:1}100%{clip-path:inset(0 0 0 0);opacity:0}}
+
+.aire-sk-table{grid-area:table;display:flex;flex-direction:column;gap:8px;padding:11px 12px}
+.aire-sk-row{display:grid;grid-template-columns:1.6fr 1fr .7fr;gap:10px;align-items:center}
+.aire-sk-row i{display:block;height:7px;border-radius:4px;background:var(--line-2)}
+.aire-sk-row i:nth-child(2){width:70%}
+.aire-sk-row i:nth-child(3){width:85%;justify-self:end}
+.aire-stage[data-phase="2"] .aire-sk-row,.aire-stage[data-phase="3"] .aire-sk-row{animation:aire-row .5s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(.4s + var(--j) * 130ms)}
+.aire-stage[data-phase="2"] .aire-sk-row i:first-child,.aire-stage[data-phase="3"] .aire-sk-row i:first-child{background:var(--ink-4,var(--line-3))}
+.aire-stage[data-phase="2"] .aire-sk-row i:nth-child(3),.aire-stage[data-phase="3"] .aire-sk-row i:nth-child(3){background:var(--ai-2);opacity:.75}
+@keyframes aire-row{from{opacity:0;transform:translateX(-12px)}}
+
+/* Het poollicht van Gerrie: eerst denkt het na in het midden, daarna vliegt
+   het langs de vakken en zet het ze neer. */
+.aire-orb{position:absolute;left:50%;top:50%;z-index:3;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;pointer-events:none;background:radial-gradient(circle at 35% 30%,#fff,var(--ai-2) 45%,var(--ai-1) 78%);box-shadow:0 0 0 4px var(--ai-soft,rgba(110,90,230,.08)),0 0 22px 6px var(--ai-glow,rgba(110,90,230,.35));animation:aire-think 2.4s ease-in-out infinite}
+.aire-orb::before,.aire-orb::after{content:"";position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--ai-1);opacity:0;animation:aire-ripple 2.4s ease-out infinite}
+.aire-orb::after{animation-delay:1.2s}
+.aire-orb i{position:absolute;width:7px;height:7px;background:var(--ai-3);clip-path:polygon(50% 0,62% 38%,100% 50%,62% 62%,50% 100%,38% 62%,0 50%,38% 38%);opacity:0;animation:aire-twinkle 1.6s ease-in-out infinite}
+.aire-orb i:nth-child(1){left:-13px;top:-11px}
+.aire-orb i:nth-child(2){right:-14px;top:-4px;background:var(--ai-2);animation-delay:.4s}
+.aire-orb i:nth-child(3){left:-7px;bottom:-14px;width:5px;height:5px;background:var(--ai-1);animation-delay:.8s}
+.aire-orb i:nth-child(4){right:-10px;bottom:-12px;width:5px;height:5px;animation-delay:1.2s}
+.aire-stage:not([data-phase="0"]) .aire-orb{animation:aire-travel 8s ease-in-out infinite}
+.aire-stage:not([data-phase="0"]) .aire-orb::before,.aire-stage:not([data-phase="0"]) .aire-orb::after{animation-duration:1.6s}
+@keyframes aire-think{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-6px) scale(1.14)}}
+@keyframes aire-ripple{0%{opacity:.7;transform:scale(1)}100%{opacity:0;transform:scale(3.6)}}
+@keyframes aire-twinkle{0%,100%{opacity:0;transform:scale(.3) rotate(0)}50%{opacity:1;transform:scale(1) rotate(45deg)}}
+@keyframes aire-travel{0%,100%{left:16%;top:30%}16%{left:50%;top:30%}30%{left:84%;top:30%}48%{left:24%;top:60%}64%{left:80%;top:58%}82%{left:46%;top:86%}}
+
+/* Controleren: een lichtstraal loopt de pagina na. */
+.aire-beam{position:absolute;left:0;right:0;top:0;z-index:2;height:2px;pointer-events:none;background:linear-gradient(90deg,transparent,var(--ai-2) 20%,var(--ai-1) 50%,var(--ai-3) 80%,transparent);box-shadow:0 0 14px 2px var(--ai-glow,rgba(110,90,230,.35));opacity:0}
+.aire-beam::after{content:"";position:absolute;left:0;right:0;bottom:2px;height:52px;background:linear-gradient(to top,var(--ai-soft,rgba(110,90,230,.08)),transparent)}
+.aire-stage[data-phase="3"] .aire-beam{opacity:1;animation:aire-scan 1.8s ease-in-out infinite}
+@keyframes aire-scan{0%{top:0;opacity:0}12%,88%{opacity:1}100%{top:100%;opacity:0}}
+
+.aire-build-info{display:flex;flex-direction:column;gap:14px;padding:16px 18px 18px}
+.aire-build-head{display:flex;align-items:center;gap:12px;min-width:0}
+.aire-build-badge{flex:0 0 auto;width:34px;height:34px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:var(--aurora,var(--accent));color:#fff;box-shadow:0 8px 18px -8px var(--ai-glow,rgba(110,90,230,.4));animation:aire-badge 2.4s ease-in-out infinite}
+@keyframes aire-badge{0%,100%{transform:rotate(0) scale(1)}50%{transform:rotate(14deg) scale(1.07)}}
+.aire-build-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+/* De kop glanst met het poollicht mee; stil is hij gewoon inkt. */
+.aire-build-text b{font-size:15px;font-weight:650;color:var(--ink);background:linear-gradient(90deg,var(--ink) 0 38%,var(--ai-1) 46%,var(--ai-2) 52%,var(--ink) 60% 100%) 0 0/260% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:aire-shine 3s linear infinite}
+.aire-build-status{font-size:13px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aire-build-time{flex:0 0 auto;font-variant-numeric:tabular-nums;font-size:12px;font-weight:600;color:var(--ai-ink,var(--accent-ink));background:var(--ai-soft,rgba(var(--accent-rgb),.12));border-radius:999px;padding:3px 9px}
+.aire-build-note{margin:0;font-size:12.5px;color:var(--ink-3);text-align:center}
+
+/* De vier stappen. */
+.aire-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+.aire-steps li{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0;text-align:center;font-size:11.5px;color:var(--ink-3)}
+.aire-steps li::before{content:"";position:absolute;top:9px;left:calc(-50% + 14px);right:calc(50% + 14px);height:2px;border-radius:2px;background:var(--line-2)}
+.aire-steps li:first-child::before{display:none}
+.aire-steps li.is-done::before{background:linear-gradient(90deg,var(--ai-1),var(--ai-2))}
+.aire-steps li.is-active::before{background:linear-gradient(90deg,var(--ai-1),var(--ai-2),var(--ai-1)) 0 0/200% 100%;animation:aire-shine 1.6s linear infinite}
+.aire-steps li.is-done{color:var(--ink-2)}
+.aire-steps li.is-active{color:var(--ink);font-weight:600}
+.aire-step-dot{position:relative;z-index:1;width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:var(--surface);border:2px solid var(--line-2);color:#fff}
+.aire-steps li.is-done .aire-step-dot{border-color:transparent;background:linear-gradient(135deg,var(--ai-1),var(--ai-2))}
+.aire-steps li.is-active .aire-step-dot{border-color:var(--ai-1);box-shadow:0 0 0 4px var(--ai-soft,rgba(110,90,230,.1))}
+.aire-steps li.is-active .aire-step-dot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ai-1);animation:aire-pulse 1.2s ease-in-out infinite}
+.aire-steps li.is-active .aire-step-dot::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid transparent;border-top-color:var(--ai-2);border-right-color:var(--ai-1);animation:aire-spin 1s linear infinite}
+.aire-step-label{line-height:1.25;overflow-wrap:anywhere}
+
+/* Een bestaande rapportage aanpassen: de pagina blijft staan, iets gedimd, met
+   een straal eroverheen en bovenaan een balk die meescrolt. */
+.aire-live{position:relative;min-width:0}
+.aire-live>.aire-frame-wrap{transition:opacity .3s ease,filter .3s ease}
+.aire-live.is-updating>.aire-frame-wrap{opacity:.55;filter:saturate(.55)}
+.aire-live-veil{position:absolute;inset:0;z-index:2;pointer-events:none;overflow:hidden;border-radius:var(--r-card,var(--r-xl));background:linear-gradient(180deg,var(--ai-soft,rgba(110,90,230,.07)),transparent 45%)}
+.aire-live-veil::after{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:linear-gradient(90deg,transparent,var(--ai-2) 20%,var(--ai-1) 50%,var(--ai-3) 80%,transparent);box-shadow:0 0 16px 3px var(--ai-glow,rgba(110,90,230,.35));animation:aire-scan 3.2s ease-in-out infinite}
+.aire-updating{position:sticky;top:10px;z-index:5;display:flex;align-items:center;gap:10px;box-sizing:border-box;width:fit-content;max-width:calc(100% - 24px);height:48px;margin:10px auto -58px;padding:0 8px 0 9px;border-radius:999px;border:1.5px solid transparent;background:linear-gradient(var(--surface),var(--surface)) padding-box,var(--aurora,var(--accent)) border-box;box-shadow:var(--shadow-pop),0 12px 30px -14px var(--ai-glow,rgba(110,90,230,.4));animation:aire-drop .45s cubic-bezier(.2,.9,.3,1.2) both}
+@keyframes aire-drop{from{opacity:0;transform:translateY(-10px) scale(.96)}}
+.aire-mini-orb{position:relative;flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,var(--ai-2) 45%,var(--ai-1) 80%);box-shadow:0 0 12px 2px var(--ai-glow,rgba(110,90,230,.35));animation:aire-think 2s ease-in-out infinite}
+.aire-mini-orb::after{content:"";position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--ai-1);opacity:0;animation:aire-ripple 2s ease-out infinite}
+.aire-updating-text{display:flex;flex-direction:column;min-width:0;line-height:1.3}
+.aire-updating-text b{font-size:12.5px;font-weight:650;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aire-updating-text span{font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aire-mini-steps{flex:0 0 auto;display:inline-flex;gap:4px}
+.aire-mini-steps i{width:14px;height:4px;border-radius:2px;background:var(--line-2)}
+.aire-mini-steps i.is-done{background:var(--ai-1)}
+.aire-mini-steps i.is-active{background:linear-gradient(90deg,var(--ai-1),var(--ai-2),var(--ai-1)) 0 0/200% 100%;animation:aire-shine 1.2s linear infinite}
+
+/* Klaar: de nieuwe versie komt tevoorschijn, met één keer een gloed. */
+.aire-live.is-fresh>.aire-frame-wrap{animation:aire-reveal .9s cubic-bezier(.2,.8,.2,1) both}
+.aire-live.is-fresh::after{content:"";position:absolute;inset:0;z-index:2;pointer-events:none;border-radius:var(--r-card,var(--r-xl));box-shadow:0 0 0 1.5px var(--ai-1),0 0 36px -6px var(--ai-glow,rgba(110,90,230,.4));opacity:0;animation:aire-glow 1.6s ease-out both}
+@keyframes aire-reveal{from{opacity:0;transform:translateY(10px);filter:blur(4px)}}
+@keyframes aire-glow{0%{opacity:0}25%{opacity:1}100%{opacity:0}}
+
+/* Elders in de app: het tabblad, het menu en de kaart in het overzicht. */
+.tab.is-building .tab-ico{position:relative}
+.tab.is-building .tab-ico::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid transparent;border-top-color:var(--ai-1);border-right-color:var(--ai-2);animation:aire-spin .9s linear infinite}
+.aire-nav-live{flex:0 0 auto;width:7px;height:7px;margin-left:auto;border-radius:50%;background:var(--ai-1);animation:aire-beacon 1.6s ease-out infinite}
+@keyframes aire-beacon{0%{box-shadow:0 0 0 0 var(--ai-glow,rgba(110,90,230,.4))}100%{box-shadow:0 0 0 7px transparent}}
+.aire-card.is-building .aire-card-icon{position:relative;background:var(--aurora,var(--accent));color:#fff}
+.aire-card.is-building .aire-card-icon::after{content:"";position:absolute;inset:-4px;border-radius:12px;border:1.5px solid var(--ai-1);opacity:0;animation:aire-ripple 2s ease-out infinite}
+.aire-card-live{display:inline-flex;align-items:center;gap:6px;color:var(--ai-ink,var(--accent-ink));font-weight:600}
+.aire-card-live::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ai-1);animation:aire-beacon 1.6s ease-out infinite}
+
 @media(max-width:1100px){
   .aire-page{grid-template-columns:minmax(0,1fr)}
   .aire-chat-toggle{display:inline-flex}
@@ -155,5 +315,12 @@
   .aire-hub-head{flex-direction:column;align-items:stretch}
   .aire-mode{align-self:flex-start}
   .aire-head h2{font-size:18px}
+  .aire-stage{gap:8px;padding:14px 12px 12px}
+  .aire-sk-kpis{gap:8px}
+  .aire-sk-kpi{padding:8px}
+  .aire-sk-bars,.aire-sk-line{height:80px}
+  .aire-sk-bars{gap:4px;padding:10px 8px 8px}
+  .aire-build-info{padding:14px 14px 16px;gap:12px}
+  .aire-mini-steps{display:none}
   .aire-chat{right:0;bottom:0;width:100vw;height:min(82vh,calc(100vh - 56px));border-radius:var(--r-xl) var(--r-xl) 0 0}
 }

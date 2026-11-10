@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../components/Ui';
 import { ReportFrame } from '../components/ReportFrame';
+import { ReportBuilding, ReportUpdating } from '../components/ReportBuilding';
 import { downloadCsv } from '../lib/csv';
 import { loadGerrieBudget } from '../lib/gerrie-api';
 import {
@@ -84,6 +85,8 @@ export function AiReportPage({ organizationId, reportKey, canChat, onOpenOvervie
   const [draft, setDraft] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
   const [budget, setBudget] = useState<number | null>(null);
+  // Net een nieuwe versie binnen: die komt even met een gloed tevoorschijn.
+  const [fresh, setFresh] = useState(false);
   const msgsRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const handledDone = useRef<unknown>(null);
@@ -149,6 +152,7 @@ export function AiReportPage({ organizationId, reportKey, canChat, onOpenOvervie
     if (!id) return;
     if (done.report) setReport({ ...done.report, datasets: Array.isArray(done.report.datasets) ? done.report.datasets : [] });
     if (done.data) { setData(done.data); hasData.current = true; setFrameError(null); }
+    if (done.changed) setFresh(true);
     setPreview(null);
     setVersions(null);
     void listAiReportMessages(organizationId, id).then((msgs) => {
@@ -157,6 +161,12 @@ export function AiReportPage({ organizationId, reportKey, canChat, onOpenOvervie
     }).catch(() => undefined);
     if (done.changed && !done.data) void loadData(id);
   }, [session?.done]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!fresh) return;
+    const timer = window.setTimeout(() => setFresh(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [fresh]);
 
   useEffect(() => {
     msgsRef.current?.scrollTo({ top: msgsRef.current.scrollHeight, behavior: 'smooth' });
@@ -409,15 +419,12 @@ export function AiReportPage({ organizationId, reportKey, canChat, onOpenOvervie
           </div>
         )}
 
-        {!hasContent ? (
-          <div className={`aire-placeholder${running ? ' is-busy' : ''}`}>
+        {!hasContent && running && session ? (
+          <ReportBuilding status={session.status} phase={session.phase} startedAt={session.startedAt} />
+        ) : !hasContent ? (
+          <div className="aire-placeholder">
             <Sparkles size={22} />
-            {running ? (
-              <>
-                <b>Gerrie bouwt je rapportage…</b>
-                <span>{session?.status ?? 'Even geduld.'} Je kunt intussen gewoon verder werken; de pagina blijft hier staan.</span>
-              </>
-            ) : session?.error ? (
+            {session?.error ? (
               <>
                 <b>Dit lukte nog niet</b>
                 <span>{session.error}</span>
@@ -445,7 +452,15 @@ export function AiReportPage({ organizationId, reportKey, canChat, onOpenOvervie
         ) : !shownData ? (
           <div className="aire-placeholder is-busy"><RefreshCw size={20} className="aire-spin" /><b>Cijfers ophalen…</b><span>Dit kost geen AI-tegoed.</span></div>
         ) : (
-          <ReportFrame html={shownHtml} data={shownData} title={title} onError={setFrameError} />
+          <div className={`aire-live${running && !preview ? ' is-updating' : ''}${fresh ? ' is-fresh' : ''}`}>
+            {running && !preview && session && (
+              <>
+                <ReportUpdating status={session.status} phase={session.phase} startedAt={session.startedAt} />
+                <span className="aire-live-veil" aria-hidden="true" />
+              </>
+            )}
+            <ReportFrame html={shownHtml} data={shownData} title={title} onError={setFrameError} />
+          </div>
         )}
 
         {hasContent && datasets.length > 0 && (

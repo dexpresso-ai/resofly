@@ -8,6 +8,7 @@ import { BrandMark } from './BrandMark';
 import { FULL_PERMISSIONS, isAccountantRole, type Permissions } from '../lib/permissions';
 import { useTheme } from '../lib/theme';
 import { useLook, type Look } from '../lib/look';
+import { useBuildingReports } from '../lib/aiReports';
 
 /** De looks in het accountmenu (Weergave). Baken is de standaard; de andere
  *  drie blijven kiesbaar, zodat je ze naast elkaar kunt leggen. */
@@ -183,6 +184,8 @@ export function Sidebar({
 }: SidebarProps) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [reportsOpen, setReportsOpen] = useState(() => reportPages.includes(page));
+  // Rapportages waar Gerrie nu aan bouwt: een knipperend lichtje in het menu.
+  const buildingReports = useBuildingReports();
   // Sta je op een rapportage, dan staat het submenu open: zo zie je welke het is.
   useEffect(() => { if (page === 'report') setReportsOpen(true); }, [page]);
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
@@ -392,8 +395,9 @@ export function Sidebar({
           {reportMenu && reportsOpen && <div className="nav-submenu nav-submenu-projects nav-submenu-reports">
             <button type="button" className={page === 'stats' ? 'active' : ''} onClick={() => onPage('stats')}><BarChart3 size={13}/><span>Alle rapportages</span></button>
             {aiReports.slice(0, MENU_REPORTS).map(report => (
-              <button key={report.id} type="button" className={page === 'report' && activeAiReportId === report.id ? 'active' : ''} onClick={() => onOpenAiReport?.(report.id)} title={report.title}>
+              <button key={report.id} type="button" className={page === 'report' && activeAiReportId === report.id ? 'active' : ''} onClick={() => onOpenAiReport?.(report.id)} title={buildingReports.has(report.id) ? `${report.title} — Gerrie is bezig` : report.title} aria-label={buildingReports.has(report.id) ? `${report.title}, Gerrie is bezig` : undefined}>
                 <FileText size={13}/><span>{report.title}</span>
+                {buildingReports.has(report.id) && <span className="aire-nav-live" aria-hidden="true" />}
               </button>
             ))}
           </div>}

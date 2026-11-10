@@ -510,6 +510,11 @@ export async function installMock(context, options = {}) {
         const result = setupEdgeFunction(setup, name, body);
         if (result !== undefined) return reply(route, result);
       }
+      // Een rapportage bouwen is een stroom die pas sluit als Gerrie klaar is.
+      // Hier blijft hij open: zo meet de test de opbouw (report-building en
+      // report-updating in run.mjs). Een leeg antwoord gaf in de app "de
+      // verbinding viel weg".
+      if (name === 'gerrie-agent' && body?.action === 'report_chat') return;
       return json(route, edgeFunction(name, body, options));
     }
     if (p.startsWith('/realtime')) return route.abort();
