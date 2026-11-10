@@ -96,6 +96,8 @@ pg_cron elke minuut aanroept (`portal-notify`). Getoetst:
   ticket zet het weer open, zonder mail aan de klant zelf;
 - een collega op hetzelfde portaal, de eigen keuzes, de schakelaar van de organisatie en een
   harde bounce;
+- een klant op inactief: geen tickets in het portaal, indienen, openen en reageren geweigerd,
+  geen mail, en weer actief zonder een stapel oude mails;
 - wie wat mag: een andere klant, een andere organisatie, kijker, boekhouder, anon, een lid
   zonder of met alleen leesrecht op Tickets, en een teamlid met zijn eigen adres als klant.
 
@@ -170,7 +172,8 @@ En `tickets`: een medewerker maakt een ticket in het venster, plaatst een intern
 zichtbaar antwoord en zet de status. De klant krijgt één mail, opent de knop daaruit, logt in en
 komt meteen bij het ticket, zonder de interne notitie. Zijn reactie staat na Ververs bij het team
 als nieuw. Afhandelen met de knop haalt het ticket van de werklijst; de klant vindt het onder
-Afgehandeld.
+Afgehandeld. Een open venster zet een heropend ticket niet terug, een andere klant koppelen vraagt
+eerst, en een klant op inactief ziet geen tabblad Tickets meer.
 
 En `opname`: een telefoongesprek loggen en opnemen met de nep-microfoon van Chromium.
 - de knop "Opname starten" bij een gesprek;

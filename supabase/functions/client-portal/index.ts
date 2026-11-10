@@ -27,7 +27,7 @@ import {
   type PortalThreadSummary,
 } from '../_shared/portalMessages.ts';
 import { officeDownloadName, transferZipName } from '../_shared/fileTransfer.ts';
-import { portalDocumentDecision, portalDocumentScopeFilter } from '../_shared/portalAccess.ts';
+import { PORTAL_TICKETS_CLOSED_MESSAGE, portalDocumentDecision, portalDocumentScopeFilter, portalTicketsOpen } from '../_shared/portalAccess.ts';
 import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
 import {
   storageKeyBelongsOnlyTo,
@@ -147,6 +147,8 @@ type ClientRow = {
   contact_name: string | null;
   email: string | null;
   phone: string | null;
+  /** active, prospect of inactive. Op inactief: geen tickets meer (portalTicketsOpen). */
+  status?: string | null;
 };
 
 type ActingContact = { id: string; name: string; email: string };
@@ -274,6 +276,7 @@ async function createTicket(user: PortalUser, body: Record<string, unknown>) {
   const clients = await resolveAccounts(user);
   const client = clients.find((row) => row.id === clientId);
   if (!client) throw new PortalError('Geen toegang tot deze klant.', 403);
+  if (!portalTicketsOpen(client)) throw new PortalError(PORTAL_TICKETS_CLOSED_MESSAGE, 403);
 
   const contact = await resolveActingContact(client, user.email);
   await assertPortalBurst('tickets', client.organization_id, user.id, TICKET_RATE_LIMIT, 'tickets aangemaakt');
@@ -319,6 +322,7 @@ async function getTicketThread(user: PortalUser, body: Record<string, unknown>) 
   if (error) throw error;
   if (!ticket) throw new PortalError('Ticket niet gevonden.', 404);
   await assertEntityBelongsToClients({ client_id: ticket.client_id, project_id: null, organization_id: ticket.organization_id }, clients);
+  assertTicketsOpen(clients, ticket.client_id);
 
   const { data: notes, error: notesError } = await supabaseAdmin
     .from('ticket_notes')
@@ -383,6 +387,7 @@ async function addTicketNote(user: PortalUser, body: Record<string, unknown>) {
   if (error) throw error;
   if (!ticket) throw new PortalError('Ticket niet gevonden.', 404);
   await assertEntityBelongsToClients({ client_id: ticket.client_id, project_id: null, organization_id: ticket.organization_id }, clients);
+  assertTicketsOpen(clients, ticket.client_id);
 
   // NOOIT terugvallen op clients[0]: dat kan een ander, ongerelateerd klantdossier
   // zijn (bv. als dezelfde contactpersoon ook actief is bij een andere klant) en
@@ -413,6 +418,12 @@ async function addTicketNote(user: PortalUser, body: Record<string, unknown>) {
   if (ticket.client_id) await markPortalRead(user.email, ticket.client_id, ticket.organization_id, 'ticket', ticket.id);
 
   return { note: sanitizeTicketNote(data) };
+}
+
+/** Staat de klant van dit ticket op inactief, dan is het ticket voor het portaal dicht (_shared/portalAccess.ts). */
+function assertTicketsOpen(clients: ClientRow[], clientId: unknown): void {
+  const client = clients.find((row) => row.id === clientId);
+  if (client && !portalTicketsOpen(client)) throw new PortalError(PORTAL_TICKETS_CLOSED_MESSAGE, 403);
 }
 
 /**
@@ -1434,6 +1445,8 @@ async function getNotificationSettings(user: PortalUser, body: Record<string, un
   return {
     email: person.email,
     isPrimary: person.isPrimary,
+    // Op inactief geen tickets, dus ook geen meldingen erover om in te stellen.
+    ticketsOpen: portalTicketsOpen(client),
     // Alleen met meer mensen op het portaal betekent "alle tickets" iets anders
     // dan "mijn tickets" — en dan alleen voor tickets die het team aanmaakt.
     otherPortalUsers: people.length - 1,
@@ -1860,13 +1873,17 @@ async function buildAccount(client: ClientRow, email: string) {
     loadPortalLoginKey(supabaseAdmin, orgId),
   ]);
   const projectIds = projects.map((p: Record<string, unknown>) => String(p.id));
+  // Op inactief: geen tickets in het portaal, ook de oude niet (_shared/portalAccess.ts).
+  const ticketsOpen = portalTicketsOpen(client);
 
   // Facturen: alleen uitgegeven (geen concepten). Offertes: alleen die echt naar de
   // klant zijn verstuurd (sent_at gezet). Beide ook gekoppeld via projecten van de klant.
   const [invoices, quotes, tickets, contracts, galleries] = await Promise.all([
     selectRows('invoices', (q) => scopeToClient(q.eq('organization_id', orgId).neq('status', 'draft'), client.id, projectIds).order('date', { ascending: false })),
     selectRows('quotes', (q) => scopeToClient(q.eq('organization_id', orgId).not('sent_at', 'is', null), client.id, projectIds).order('date', { ascending: false })),
-    selectRows('tickets', (q) => q.eq('organization_id', orgId).eq('client_id', client.id).order('created_at', { ascending: false })),
+    ticketsOpen
+      ? selectRows('tickets', (q) => q.eq('organization_id', orgId).eq('client_id', client.id).order('created_at', { ascending: false }))
+      : Promise.resolve([] as Record<string, unknown>[]),
     // Contracten zijn alleen op client_id gekoppeld; toon enkel verstuurde/getekende/geweigerde.
     selectRows('contracts', (q) => q.eq('organization_id', orgId).eq('client_id', client.id).in('status', ['sent', 'signed', 'declined']).order('created_at', { ascending: false })),
     // Galerijen hangen aan projecten van de klant; alleen gepubliceerd en niet
@@ -1887,7 +1904,9 @@ async function buildAccount(client: ClientRow, email: string) {
   // de migratie van 2026-10-04 is er gewoon niets "nieuw".
   const peoplePromise = loadPortalContacts(client).then((contacts) => portalPeople(client, contacts));
   const [overview, reads, people, messageRows] = await Promise.all([
-    optionalRpc('portal_ticket_overview', { p_organization_id: orgId, p_client_id: client.id }),
+    ticketsOpen
+      ? optionalRpc('portal_ticket_overview', { p_organization_id: orgId, p_client_id: client.id })
+      : Promise.resolve([] as Record<string, unknown>[]),
     loadPortalReads(client.id, email),
     peoplePromise,
     peoplePromise.then((portalUsers) => loadMessageRows(client, portalUsers)).catch((error) => {
@@ -1915,6 +1934,8 @@ async function buildAccount(client: ClientRow, email: string) {
     projects: projects.map(sanitizeProject),
     invoices: invoices.map(sanitizeInvoice),
     quotes: quotes.map(sanitizeQuote),
+    // false = de klant staat op inactief: het portaal toont geen tickets.
+    ticketsOpen,
     tickets: tickets.map((ticket) => ({
       ...sanitizeTicket(ticket),
       ...ticketActivityForPortal(ticket, overviewByTicket.get(String(ticket.id)), reads),

@@ -830,7 +830,14 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
   /** Open meteen deze factuur of offerte (het voorbeeld bij Instellingen). */
   initialDoc?: { type: 'quote' | 'invoice'; id: string } | null;
 }) {
-  const [initial] = useState(() => viewFromLink(link));
+  // Staat de klant op inactief, dan zijn tickets dicht (_shared/portalAccess.ts):
+  // geen tab, geen telling, en een link naar een ticket uit een oude mail opent
+  // het overzicht.
+  const ticketsOpen = account.ticketsOpen !== false;
+  const [initial] = useState(() => {
+    const view = viewFromLink(link);
+    return !ticketsOpen && view.tab === 'tickets' ? { tab: 'overview' as PortalTab, ticketId: null, threadId: null } : view;
+  });
   const [tab, setTab] = useState<PortalTab>(initial.tab);
   const [openDoc, setOpenDoc] = useState<{ type: 'quote' | 'invoice'; id: string } | null>(initialDoc);
   const [openTicketId, setOpenTicketId] = useState<string | null>(initial.ticketId);
@@ -869,6 +876,9 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
 
   // De deeplink is gebruikt zodra dit dossier ermee geopend is.
   useEffect(() => { if (link) onLinkUsed(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Werd de klant inactief terwijl Tickets openstond (na Ververs), dan terug naar het overzicht.
+  useEffect(() => { if (!ticketsOpen && tab === 'tickets') setTab('overview'); }, [ticketsOpen, tab]);
 
   // Alleen een klik ná het openen van dit dossier telt; wie van dossier wisselt
   // na een eerdere klik, begint gewoon op het overzicht.
@@ -911,7 +921,7 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
   const tabs: Array<{ id: PortalTab; label: string; count?: number; fresh?: number }> = [
     { id: 'overview', label: 'Overzicht' },
     { id: 'messages', label: 'Berichten', fresh: unreadTickets.length + unreadThreads },
-    { id: 'tickets', label: 'Tickets', count: account.tickets.length, fresh: unreadTickets.length },
+    ...(ticketsOpen ? [{ id: 'tickets' as const, label: 'Tickets', count: account.tickets.length, fresh: unreadTickets.length }] : []),
     { id: 'invoices', label: 'Facturen', count: account.invoices.length },
     { id: 'quotes', label: 'Offertes', count: account.quotes.length },
     { id: 'contracts', label: 'Contracten', count: account.contracts?.length ?? 0 },
@@ -943,7 +953,10 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
       {overviewHead && <div className="portal-kpis">
         <PortalKpi label="Openstaand" value={euro(openTotal)} sub={`${openInvoices.length} factuur${openInvoices.length === 1 ? '' : 'en'}`} tone={openInvoices.length ? 'warning' : undefined} />
         <PortalKpi label="Vervallen" value={euro(overdueTotal)} sub={`${overdueInvoices.length} factuur${overdueInvoices.length === 1 ? '' : 'en'}`} tone={overdueInvoices.length ? 'danger' : undefined} />
-        <PortalKpi label="Open tickets" value={String(openTickets.length)} sub={unreadTickets.length ? `${unreadTickets.length} met nieuw antwoord` : `${account.tickets.length} totaal`} />
+        {ticketsOpen
+          ? <PortalKpi label="Open tickets" value={String(openTickets.length)} sub={unreadTickets.length ? `${unreadTickets.length} met nieuw antwoord` : `${account.tickets.length} totaal`} />
+          // Zonder tickets (klant op inactief) de berichten op die plek: zo blijft het raster heel.
+          : <PortalKpi label="Berichten" value={String(account.messages?.threads ?? 0)} sub={unreadThreads ? `${unreadThreads} nieuw` : `met ${supplierName}`} />}
         <PortalKpi label="Lopende projecten" value={String(ongoingProjects.length)} sub={`${account.projects.length} totaal`} />
       </div>}
       <div className="portal-tabs" role="tablist" aria-label="Onderdelen van je dossier">
@@ -1036,7 +1049,7 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
       onOpenSettings={() => openTab('settings')}
     />}
 
-    {!showingDoc && tab === 'tickets' && <TicketsTab
+    {!showingDoc && ticketsOpen && tab === 'tickets' && <TicketsTab
       account={account}
       supplierName={supplierName}
       onTicketCreated={onTicketCreated}
@@ -1051,7 +1064,7 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
 
     {!showingDoc && tab === 'galleries' && <GalleriesTab account={account} />}
 
-    {!showingDoc && tab === 'settings' && <SettingsTab account={account} supplierName={supplierName} onBack={() => openTab('overview')} />}
+    {!showingDoc && tab === 'settings' && <SettingsTab account={account} supplierName={supplierName} ticketsOpen={ticketsOpen} onBack={() => openTab('overview')} />}
     </div>
     {footer}
     </section>
@@ -2142,10 +2155,10 @@ function MessagesTab({ account, email, supplierName, threads, threadsError, onRe
       <h2>Berichten</h2>
       <Button variant="primary" onClick={() => onOpen({ kind: 'new' })}>+ Nieuw bericht</Button>
     </div>
-    <p className="portal-muted portal-card-intro">Je gesprekken met {supplierName} — e-mails en tickets, nieuwste bovenaan.</p>
+    <p className="portal-muted portal-card-intro">Je gesprekken met {supplierName} — {account.ticketsOpen === false ? 'e-mails' : 'e-mails en tickets'}, nieuwste bovenaan.</p>
     {threadsError && <p className="error">{threadsError}</p>}
     {!conversations && <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Berichten laden…</span></div>}
-    {conversations && conversations.length === 0 && <p className="portal-muted">Nog geen berichten. Stel je vraag met “Nieuw bericht”, of maak een ticket aan als je de voortgang wilt volgen.</p>}
+    {conversations && conversations.length === 0 && <p className="portal-muted">Nog geen berichten. Stel je vraag met “Nieuw bericht”{account.ticketsOpen === false ? '.' : ', of maak een ticket aan als je de voortgang wilt volgen.'}</p>}
     {conversations && conversations.length > 0 && <div className="portal-conv-list">
       {conversations.map(c => (
         <button
@@ -2334,7 +2347,7 @@ function PortalNewMessage({ account, email, supplierName, onCancel, onSent }: {
 // alleen voor de ingelogde persoon; een collega op hetzelfde portaal houdt
 // eigen keuzes. Elke wijziging wordt meteen opgeslagen.
 
-function SettingsTab({ account, supplierName, onBack }: { account: PortalAccount; supplierName: string; onBack: () => void }) {
+function SettingsTab({ account, supplierName, ticketsOpen, onBack }: { account: PortalAccount; supplierName: string; ticketsOpen: boolean; onBack: () => void }) {
   const [state, setState] = useState<PortalNotificationState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -2380,6 +2393,8 @@ function SettingsTab({ account, supplierName, onBack }: { account: PortalAccount
   }
 
   const s = state.settings;
+  // Klant op inactief: geen tickets, dus ook niets over ticketmail in te stellen.
+  const ticketSettings = ticketsOpen && state.ticketsOpen !== false;
   return <article className="portal-card portal-settings">
     {back}
     <div className="portal-card-head">
@@ -2387,7 +2402,14 @@ function SettingsTab({ account, supplierName, onBack }: { account: PortalAccount
       <span className="portal-settings-status" aria-live="polite">{saving ? 'Opslaan…' : saved ? 'Opgeslagen' : ''}</span>
     </div>
 
-    <section className="portal-settings-section">
+    {!ticketSettings && <section className="portal-settings-section">
+      <h3>Tickets</h3>
+      <p className="portal-settings-note">
+        Tickets staan voor {clientName} niet meer open, dus je krijgt er ook geen e-mail over. Heb je toch een vraag? Stuur {supplierName} dan een bericht.
+      </p>
+    </section>}
+
+    {ticketSettings && <section className="portal-settings-section">
       <h3>E-mailmeldingen over tickets</h3>
       <p className="portal-muted">
         We sturen ze naar <strong>{state.email}</strong>. Wat je hier kiest geldt alleen voor jou
@@ -2416,9 +2438,9 @@ function SettingsTab({ account, supplierName, onBack }: { account: PortalAccount
           onChange={value => void change({ ticketReply: value })}
         />
       </div>
-    </section>
+    </section>}
 
-    <section className="portal-settings-section">
+    {ticketSettings && <section className="portal-settings-section">
       <h3>Over welke tickets?</h3>
       <div className="portal-choice-list" role="radiogroup" aria-label="Over welke tickets wil je e-mail krijgen?">
         <label className={`portal-choice${s.scope === 'all' ? ' is-selected' : ''}`}>
@@ -2436,7 +2458,7 @@ function SettingsTab({ account, supplierName, onBack }: { account: PortalAccount
           </span>
         </label>
       </div>
-    </section>
+    </section>}
 
     <section className="portal-settings-section">
       <h3>Berichten</h3>

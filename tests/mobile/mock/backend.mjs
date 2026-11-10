@@ -382,7 +382,7 @@ function rpc(fn, body = null) {
   }
 }
 
-function edgeFunction(name, body) {
+function edgeFunction(name, body, options = {}) {
   if (name === 'calendar-integrations') {
     const action = body?.action;
     if (action === 'listIntegrations') return { ok: true, connections: seed.calendarConnections, sources: [seed.calendarSource, seed.googleCalendarSource], videoServices: seed.videoServices };
@@ -415,13 +415,15 @@ function edgeFunction(name, body) {
   if (name === 'file-share-public') return pub.sharePublic;
   if (name === 'gallery-public') return pub.galleryPublic;
   if (name === 'client-portal') {
+    // Een klant op inactief (2026-11-10): geen tickets (portalInactive op de pagina).
+    const inactive = options?.portalInactive === true;
     switch (body?.action) {
       case 'getMessageThreads': return pub.portalThreads;
       case 'getMessageThread': return pub.portalThread;
-      case 'getTicketThread': return pub.portalTicketThread;
-      case 'getNotificationSettings': return pub.portalSettings;
+      case 'getTicketThread': return inactive ? { ok: false, error: 'Tickets staan voor dit dossier niet meer open.' } : pub.portalTicketThread;
+      case 'getNotificationSettings': return inactive ? pub.portalSettingsInactive : pub.portalSettings;
       case 'updateNotificationSettings': return { ok: true, settings: body.settings };
-      default: return pub.portalData;
+      default: return inactive ? pub.portalDataInactive : pub.portalData;
     }
   }
   if (name === 'portal-login') return body?.action === 'getBranding' ? (body.key === pub.PORTAL_LOGIN_KEY ? pub.portalLoginBranding : { ok: true, branding: null }) : { ok: true, known: true };
@@ -506,7 +508,7 @@ export async function installMock(context, options = {}) {
         const result = setupEdgeFunction(setup, name, body);
         if (result !== undefined) return reply(route, result);
       }
-      return json(route, edgeFunction(name, body));
+      return json(route, edgeFunction(name, body, options));
     }
     if (p.startsWith('/realtime')) return route.abort();
     return json(route, {});

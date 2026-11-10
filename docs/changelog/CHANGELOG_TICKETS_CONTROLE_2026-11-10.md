@@ -152,9 +152,8 @@ aankomen."*
 
 - **Bestanden bij een ticketantwoord** volgen de rechten van Inhoud, niet van Tickets. Een lid
   zonder Tickets ziet bij Bestanden versturen de titel van het ticket in het onderwerp.
-- **Een klant die op "inactief" staat**, kan nog in het portaal: tickets en berichten indienen,
-  facturen terugzien. Of dat zo moet blijven, is een keuze voor de eigenaar; het is niet
-  veranderd.
+- **Een klant die op "inactief" staat**, kan nog in het portaal: berichten sturen, facturen
+  terugzien. Bij de tickets kan zo'n klant sinds het vervolg hieronder niet meer.
 - **Berichten van langer geleden:** het portaal laadt de nieuwste 2000 berichten van een klant;
   oudere gesprekken vallen weg.
 - **Afbeeldingen van buiten** in een mail van het team worden in het portaal geladen. De app zelf
@@ -162,6 +161,49 @@ aankomen."*
 - **Supabase-inlogmail van teamleden:** de afzender is "Gerjan van Lopik" `<ne-reply@resofly.com>`
   (*ne*-reply), met de Engelse standaardtekst. Dat staat in het dashboard van Supabase, niet in de
   code; zie ook `docs/plannen/EIGEN_SUBDOMEIN_PLAN_2026-11-08.md` §2.2.
+
+## Vervolg: een klant op inactief kan niet meer bij de tickets
+
+Keuze van de eigenaar, na de controle: *"Een klant op inactief hoeft ook niet meer bij de tickets."*
+Tot nu toe kon zo'n klant in het portaal gewoon tickets indienen, lezen en beantwoorden. Elk ticket
+liet bij het team een melding afgaan, en de klant kreeg er mail over.
+
+Nu, voor een klant met status *inactief*:
+
+- **In het portaal:**
+  - geen tabblad Tickets;
+  - bij de kerncijfers staat Berichten op de plek van "Open tickets";
+  - een link naar een ticket uit een oude mail opent het overzicht;
+  - Instellingen zegt dat tickets niet meer openstaan, in plaats van de schakelaars voor ticketmail.
+- **De server** (`client-portal`) geeft geen tickets mee en weigert indienen, openen en reageren
+  (403, met de zin "Tickets staan voor dit dossier niet meer open. Heb je toch een vraag? Stuur dan
+  een bericht."). Daar zit de grens, niet in het scherm.
+- **De mailronde** slaat meldingen over zodra de klant op inactief staat, ook een melding die al
+  klaarstond. De reden staat in `last_error`. Wordt de klant weer actief, dan staan de tickets er
+  weer, maar komt er geen stapel oude mails.
+- **Het team** ziet het:
+  - in het tabblad Tickets van het klantdossier;
+  - onder het schrijfvak van het ticket ("Deze klant staat op inactief…");
+  - op de kaart van Gerrie bij het koppelen van een ticket aan zo'n klant.
+- **Blijft:** facturen, offertes, contracten, bestanden en berichten. Een oud-klant kan zo nog een
+  openstaande factuur terugvinden en betalen, of een vraag stellen. *Prospect* telt als actief.
+
+De regel staat op één plek, `portalTicketsOpen` in `_shared/portalAccess.ts`, en wordt gebruikt in
+`client-portal`, `portal-notify` en `actions/tickets.ts`. Geen migratie: de status stond al in de
+database.
+
+Getest:
+
+| Controle | Uitslag |
+| --- | --- |
+| `npm run typecheck` | schoon |
+| `npm test` | 1485 tests groen, nieuw: de regel in `portalAccess.test.ts` |
+| Stromentest `tickets` | 39 stappen, 0 fout. Nieuw: een wachtende melding gaat niet meer uit; portaal zonder tickets; indienen, openen en reageren geweigerd; geen mail bij een antwoord van het team; weer actief zonder oude mails. |
+| Stromentest `beveiliging`, `klantdomein`, `documenten` | 307 stappen, 0 fout |
+| Browsertest `tickets` | 12 stappen, 0 fout. Nieuw: geen tabblad Tickets in het portaal, wel Facturen en Berichten; de uitleg bij Instellingen; de regel in het klantdossier. |
+| `npm run test:mobile -- --theme=both` | de portaalpagina's en het tabblad Tickets van het klantdossier, met twee nieuwe pagina's voor een klant op inactief: 42 metingen, 0 met problemen. De hele set draait in CI. |
+| `npm run test:loading` | alle controles groen |
+| `deno check` | `client-portal`, `portal-notify`, `gerrie-agent`, `mcp`, `api`: schoon |
 
 ## Gevolgen bij de uitrol
 

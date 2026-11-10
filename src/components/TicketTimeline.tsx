@@ -45,6 +45,9 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
     loadTransfersForTicket(organizationId, ticketId).then(setNoteFiles).catch(() => { /* zonder bestanden blijft de tijdlijn bruikbaar */ });
   }, [hasData, organizationId, ticketId]);
   useEffect(() => { reloadNoteFiles(); }, [reloadNoteFiles, notes.length]);
+  // Een klant op inactief ziet geen tickets meer in het portaal en krijgt er
+  // geen mail over (_shared/portalAccess.ts); de hint mag dan niet anders zeggen.
+  const clientInactive = Boolean(clientId && data?.clients.find(client => client.id === clientId)?.status === 'inactive');
   // Krijgt de klant van een zichtbare notitie ook een e-mail? (Instellingen → E-mail)
   const [emailsOn, setEmailsOn] = useState<boolean | null>(null);
   useEffect(() => {
@@ -115,9 +118,11 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
           {canAttach && data && !internal && <MessageFilesBar state={files} data={data} clientId={clientId ?? null} disabled={busy} />}
           {canAttach && internal && files.items.length > 0 && <p className="ticket-timeline-mailhint">Bestanden gaan alleen mee met een antwoord dat zichtbaar is voor de klant.</p>}
           {clientId && !internal && <p className="ticket-timeline-mailhint">
-            {emailsOn === false
-              ? 'De klant ziet dit in het klantportaal. E-mailmeldingen aan klanten staan uit (Instellingen → E-mail).'
-              : 'De klant ziet dit in het klantportaal en krijgt er ook een e-mail van, tenzij de klant dat in het portaal heeft uitgezet.'}
+            {clientInactive
+              ? 'Deze klant staat op inactief: tickets staan niet meer in het klantportaal en er gaat geen e-mail over naar de klant.'
+              : emailsOn === false
+                ? 'De klant ziet dit in het klantportaal. E-mailmeldingen aan klanten staan uit (Instellingen → E-mail).'
+                : 'De klant ziet dit in het klantportaal en krijgt er ook een e-mail van, tenzij de klant dat in het portaal heeft uitgezet.'}
           </p>}
           {!clientId && !internal && <p className="ticket-timeline-mailhint">
             Dit ticket hangt nog niet aan een klant. Koppel je later een klant, dan ziet die deze notitie in het klantportaal.

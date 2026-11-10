@@ -31,6 +31,7 @@ import { emailQuotaAllows } from '../_shared/emailQuota.ts';
 import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
 import { loadPortalLoginKey } from '../_shared/portalAddress.ts';
 import { portalLinkBase } from '../_shared/clientLinks.ts';
+import { portalTicketsOpen } from '../_shared/portalAccess.ts';
 import { emailBrandFromRow, withEmailBrand, type EmailBrand } from '../_shared/emailBrand.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 import { PORTAL_TICKET_TEMPLATE_KEYS } from '../_shared/emailTemplates/portalTicketUpdate.ts';
@@ -223,14 +224,22 @@ async function processTicket(
     return { sent: 0, failed: 0, skipped: activity.length };
   }
 
-  const client = await single<{ id: string; name: string | null; contact_name: string | null; email: string | null }>(admin
+  const client = await single<{ id: string; name: string | null; contact_name: string | null; email: string | null; status: string | null }>(admin
     .from('clients')
-    .select('id,name,contact_name,email')
+    .select('id,name,contact_name,email,status')
     .eq('id', ticket.client_id)
     .eq('organization_id', organizationId)
     .maybeSingle());
   if (!client) {
     await skip(fresh.map((row) => row.id), 'De klant bestaat niet meer.');
+    return { sent: 0, failed: 0, skipped: activity.length };
+  }
+  // Op inactief ziet de klant geen tickets meer in het portaal; een mail met een
+  // link ernaartoe zou nergens heen gaan (_shared/portalAccess.ts). Overgeslagen,
+  // niet uitgesteld: wordt de klant later weer actief, dan komt er geen stapel
+  // oude meldingen.
+  if (!portalTicketsOpen(client)) {
+    await skip(fresh.map((row) => row.id), 'De klant staat op inactief: geen tickets in het portaal, dus ook geen mail.');
     return { sent: 0, failed: 0, skipped: activity.length };
   }
 

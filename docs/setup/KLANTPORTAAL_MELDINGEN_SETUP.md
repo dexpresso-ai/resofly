@@ -106,7 +106,7 @@ select kind, notify_status, attempts, last_error, notified_emails, created_at
   klantmail);
 - `skipped` — bewust niet gemaild, met de reden in `last_error` (organisatie heeft
   het uitgezet, antwoord weer intern gemaakt, te oud, gewijzigd via de API met
-  een sleutel zonder `execute_high`, …);
+  een sleutel zonder `execute_high`, de klant staat op inactief, …);
 - `dead` — vijf keer mislukt; `last_error` zegt waarom.
 
 Laatste rondes van de taak:

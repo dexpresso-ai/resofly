@@ -2,6 +2,7 @@ import {
   ActionError, bool, id, ids, joinShort, optId, optNum, orgQuery, row,
   type ActionCtx, type ActionDef,
 } from './types.ts';
+import { portalTicketsOpen } from '../portalAccess.ts';
 
 /**
  * Handelingen rond TICKETS: de meldingen die binnenkomen van de klant of van een
@@ -98,13 +99,16 @@ export const TICKETS_ACTIONS: ActionDef[] = [
       // De nieuwe klant hard controleren (fout id = fout voorstel); de oude zacht,
       // want die hoeft alleen het onderschrift leesbaar te maken.
       let newName: string | null = null;
+      let newClientInactive = false;
       if (clientId) {
         // Net als bij de API en de inhoud: een klant koppelen kan alleen wie
         // Klanten mag lezen. Anders hing een lid zonder Klanten een ticket aan
         // een klant-id uit een ander ticket, en zag die klant het in zijn portaal.
         if (ctx.canRead?.('clients') === false) throw new ActionError('Een ticket aan een klant koppelen kan alleen als je Klanten mag lezen.');
-        const client = await row<{ name: string }>(ctx, 'clients', clientId, 'name', 'Klant');
+        const client = await row<{ name: string; status?: string | null }>(ctx, 'clients', clientId, 'name, status', 'Klant');
         newName = client.name;
+        // Op inactief ziet de klant geen tickets in het portaal (_shared/portalAccess.ts).
+        newClientInactive = !portalTicketsOpen(client);
       }
       const oldName = await clientNameOf(ctx, ticket.client_id);
       // Wat de nieuwe klant meteen te zien krijgt: de omschrijving en alles wat
@@ -120,9 +124,11 @@ export const TICKETS_ACTIONS: ActionDef[] = [
           `nu: ${oldName ?? 'geen klant'}`,
           `wordt: ${newName ?? 'geen klant'}`,
           STATUS_LABELS[ticket.status] ? `status ${STATUS_LABELS[ticket.status]}` : null,
-          clientId ? 'de klant ziet dit ticket daarna in zijn portaal' : (oldName ? `${oldName} ziet het ticket daarna niet meer in het portaal` : null),
+          clientId
+            ? (newClientInactive ? 'deze klant staat op inactief en ziet het ticket niet in het portaal' : 'de klant ziet dit ticket daarna in zijn portaal')
+            : (oldName ? `${oldName} ziet het ticket daarna niet meer in het portaal` : null),
         ], 160),
-        warning: clientId && (visibleNotes ?? 0) > 0
+        warning: clientId && !newClientInactive && (visibleNotes ?? 0) > 0
           ? `${newName} ziet daarna ook de omschrijving en de ${visibleNotes} zichtbare bericht${visibleNotes === 1 ? '' : 'en'} op de tijdlijn${ticket.client_id ? ', ook wat de vorige klant schreef' : ''}. Hoort dat gesprek niet bij ${newName}, maak dan een nieuw ticket.`
           : undefined,
         kind: 'work',

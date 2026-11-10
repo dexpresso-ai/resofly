@@ -847,6 +847,7 @@ export function ClientDetailPage({
       searching={Boolean(normalizedQuery)}
       unreadTicketIds={unreadTicketIds}
       canWrite={canWrite && canWriteTickets}
+      clientInactive={client.status === 'inactive'}
       onNew={onNewTicket}
       onOpen={onEditTicket}
     />}
@@ -1228,7 +1229,7 @@ type ClientTicketRow = { ticket: Ticket; lastAt: string; noteCount: number };
  * agentengalerij. De zoekterm geldt ook daar; de kop zegt hoeveel er passen,
  * zodat je niet hoeft open te klappen om te zien of het zin heeft.
  */
-function ClientTicketsPanel({ rows, total, archivedRows, archivedTotal, searching, unreadTicketIds, canWrite, onNew, onOpen }: {
+function ClientTicketsPanel({ rows, total, archivedRows, archivedTotal, searching, unreadTicketIds, canWrite, clientInactive, onNew, onOpen }: {
   rows: ClientTicketRow[];
   total: number;
   archivedRows: ClientTicketRow[];
@@ -1236,6 +1237,8 @@ function ClientTicketsPanel({ rows, total, archivedRows, archivedTotal, searchin
   searching: boolean;
   unreadTicketIds: Set<string>;
   canWrite: boolean;
+  /** Klant op inactief: de klant ziet deze tickets niet meer in het portaal en krijgt er geen mail over. */
+  clientInactive: boolean;
   onNew: () => void;
   onOpen: (ticket: Ticket) => void;
 }) {
@@ -1255,6 +1258,9 @@ function ClientTicketsPanel({ rows, total, archivedRows, archivedTotal, searchin
         {canWrite && <button type="button" className="client-overview-more-btn" onClick={onNew}>+ Nieuw ticket</button>}
       </div>
     </div>
+    {clientInactive && <p className="client-tickets-inactive" role="note">
+      Deze klant staat op inactief: tickets staan niet meer in het klantportaal en er gaat geen e-mail over naar de klant.
+    </p>}
     {rows.length === 0 && <div className="client-empty-line">{noTicketsAtAll
       ? 'Nog geen tickets voor deze klant.'
       : total === 0 ? 'Niets op de werklijst: alles is afgehandeld. Afgehandelde tickets staan hieronder in het archief.' : 'Geen tickets voor deze zoekopdracht of filter.'}</div>}

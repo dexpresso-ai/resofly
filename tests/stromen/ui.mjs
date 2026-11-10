@@ -2974,6 +2974,31 @@ async function scenarioTickets() {
     await sluitModal(m);
   });
 
+  await uiStap('een klant op inactief: geen tickets meer in het portaal, wel facturen en berichten', async () => {
+    // Keuze van de eigenaar (10 november): een klant op inactief hoeft niet meer bij de tickets.
+    sql(`update public.clients set status = 'inactive' where id = ${q(w.klantA.id)}`);
+    try {
+      await klant.page.reload({ waitUntil: 'domcontentloaded' });
+      await wachtOpPortaal(klant, 'dossier');
+      const tabs = (await klant.page.locator('.portal-tabs [role="tab"]').allInnerTexts()).map(tekst);
+      verwacht(!tabs.some((t) => /^Tickets/.test(t)), `een tabblad Tickets: ${tabs.join(', ')}`);
+      verwacht(tabs.some((t) => /^Facturen/.test(t)) && tabs.some((t) => /^Berichten/.test(t)), `tabbladen: ${tabs.join(', ')}`);
+      const kengetallen = tekst(await klant.page.locator('.portal-kpis').innerText());
+      verwacht(!/Open tickets/.test(kengetallen) && /Berichten/.test(kengetallen), `kengetallen: ${kengetallen}`);
+      await klant.page.locator('.portal-topbar-actions').getByRole('button', { name: /Instellingen/ }).click();
+      await klant.page.locator('.portal-settings .portal-settings-note', { hasText: 'Tickets staan voor' }).waitFor({ timeout: 15000 });
+      gelijk(await klant.page.locator('.portal-settings .portal-toggle-list').count(), 0, 'schakelaars voor ticketmail');
+      // Het team ziet het ook, in het klantdossier (na Ververs: de status kwam hierboven via de database).
+      await ververs(lid);
+      await lid.page.locator('.sidebar-nav .nav-item', { hasText: /^Klanten/ }).first().click();
+      await inhoud(lid.page).getByText(w.klantA.name, { exact: true }).first().click();
+      await inhoud(lid.page).locator('.client-tabs-bar [role="tab"]', { hasText: /^Tickets/ }).first().click();
+      await inhoud(lid.page).locator('.client-tickets-inactive').waitFor({ timeout: 15000 });
+    } finally {
+      sql(`update public.clients set status = 'active' where id = ${q(w.klantA.id)}`);
+    }
+  });
+
   for (const s of [klant, lid]) await sluit(s);
 }
 
