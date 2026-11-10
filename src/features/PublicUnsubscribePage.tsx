@@ -68,7 +68,8 @@ export function PublicUnsubscribePage({ token }: { token: string }) {
   }
 
   return <main className="public-quote-page">
-    <section className="public-quote-card">
+    {/* Wat lucht tussen tekst, knop en uitleg: de kaart zelf zet geen marges. */}
+    <section className="public-quote-card" style={{ display: 'grid', gap: 14, justifyItems: 'start' }}>
       <p className="eyebrow">{info.brandName}</p>
       {info.unsubscribed
         ? <>

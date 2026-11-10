@@ -596,6 +596,9 @@ const editKindToEntity: Record<NonNullable<EditMode>['kind'], EntityType> = {
 
 function getPublicQuoteTokenFromLocation(): string | null {
   const url = new URL(window.location.href);
+  // Een oude offertelink is `?token=…` op elk pad. De afmeldlink is
+  // `/afmelden?token=…`: zonder deze regel opende die de offertepagina.
+  if (/^\/afmelden\/?$/.test(url.pathname)) return null;
   const queryToken = url.searchParams.get('quote_token') || url.searchParams.get('token');
   if (queryToken) return queryToken;
   const match = url.pathname.match(/^\/quote\/([^/]+)\/?$/);
@@ -1752,6 +1755,7 @@ function App() {
   if (portalElsewhere) return <BootLoading message="Even doorsturen…" />;
   if (portalRoute) return !onClientHost && isPortalPreviewRoute() ? <PortalPreview /> : <ClientPortal />;
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
+  if (publicUnsubscribeToken) return <PublicUnsubscribePage token={publicUnsubscribeToken} />;
   if (publicQuoteToken) return <PublicQuotePage token={publicQuoteToken} />;
   if (publicInvoiceToken) return <PublicInvoicePage token={publicInvoiceToken} />;
   if (publicContractToken) return <PublicContractPage token={publicContractToken} />;
@@ -1759,7 +1763,6 @@ function App() {
   if (publicGalleryToken) return <PublicGalleryPage token={publicGalleryToken} />;
   if (publicShareToken) return <PublicSharePage token={publicShareToken} />;
   if (publicTransferToken) return <PublicTransferPage token={publicTransferToken} />;
-  if (publicUnsubscribeToken) return <PublicUnsubscribePage token={publicUnsubscribeToken} />;
   // Nooit de werkruimte of het inlogscherm van een teamlid op een klantadres.
   if (onClientHost) return <ClientPortal />;
   if (!sessionReady) return <BootLoading />;
