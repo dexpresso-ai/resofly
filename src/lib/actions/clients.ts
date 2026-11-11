@@ -23,6 +23,22 @@ export const CLIENT_EXECUTORS: Record<string, ActionExecutor> = {
     return `Klantvelden van ${optText(payload, 'client_name') ?? 'de klant'} ingevuld`;
   },
 
+  'client.set_account_lead': async (payload, ctx) => {
+    const clientIds = list(payload, 'client_ids');
+    const names = Array.isArray(payload.names) ? (payload.names as unknown[]).map(String) : [];
+    const userId = optText(payload, 'user_id');
+    const lead = optText(payload, 'lead_name');
+    // Per klant, zodat één mislukte rij de rest niet meesleept.
+    const failed: string[] = [];
+    for (let i = 0; i < clientIds.length; i += 1) {
+      try { await updateRow('clients', clientIds[i], { account_lead_user_id: userId }, ctx.organizationId); }
+      catch { failed.push(names[i] ?? clientIds[i]); }
+    }
+    if (failed.length) throw new Error(`${clientIds.length - failed.length} bijgewerkt, ${failed.length} mislukt (${failed.join(', ')}).`);
+    const what = clientIds.length === 1 ? (names[0] ?? 'De klant') : `${clientIds.length} klanten`;
+    return userId ? `${lead ?? 'Het teamlid'} is nu accountlead van ${what}` : `${what} ${clientIds.length === 1 ? 'heeft' : 'hebben'} geen accountlead meer`;
+  },
+
   'client.send_portal_welcome': async (payload, ctx) => {
     const clientId = text(payload, 'client_id');
     // Het adres op de goedgekeurde kaart: is dat sindsdien veranderd, dan verstuurt de server niets.

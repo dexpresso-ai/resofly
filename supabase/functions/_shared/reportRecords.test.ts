@@ -201,3 +201,61 @@ test('perioden: week, kwartaal en jaar', () => {
   assert.deepEqual(periodBucket('2026-11-09', 'quarter'), { key: '2026-Q4', label: 'Q4 2026' });
   assert.deepEqual(periodBucket('2026-11-09', 'year'), { key: '2026', label: '2026' });
 });
+
+// Accountlead en toegewezen teamlid (20261111160000). Rapporteren "per
+// accountlead" of "per behandelaar" moet kloppen, en de accountlead blijft leeg
+// voor wie Klanten niet mag lezen: wie welke klant beheert is klantinformatie.
+test('omzet per accountlead: via de klant, en leeg zonder leesrecht op Klanten', async () => {
+  const invoices: Row[] = [
+    { id: 'a', organization_id: ORG, status: 'paid', date: '2026-02-01', client_id: 'c1', lines: [line(1, 100)] },
+    { id: 'b', organization_id: ORG, status: 'paid', date: '2026-03-01', client_id: 'c2', lines: [line(1, 50)] },
+    { id: 'c', organization_id: ORG, status: 'paid', date: '2026-03-02', client_id: 'c3', lines: [line(1, 7)] },
+  ];
+  const clients: Row[] = [
+    { id: 'c1', organization_id: ORG, name: 'Jansen', account_lead_user_id: 'u1' },
+    { id: 'c2', organization_id: ORG, name: 'De Vries', account_lead_user_id: 'u1' },
+    { id: 'c3', organization_id: ORG, name: 'Bakker', account_lead_user_id: null },
+  ];
+  const organization_members: Row[] = [{ user_id: 'u1', organization_id: ORG, email: 'anna@bureau.nl' }];
+  const tables = { invoices, clients, projects: [], organization_members };
+  const result = await runRecordsQuery(ctx(tables), {
+    source: 'invoices', group_by: ['account_lead'], measures: [{ agg: 'sum', field: 'subtotal_eur', as: 'omzet' }],
+  });
+  const byLead = Object.fromEntries((result.groups ?? []).map((g) => [String(g.account_lead), g.omzet]));
+  assert.deepEqual(byLead, { 'anna@bureau.nl': 150, null: 7 });
+
+  const filtered = await runRecordsQuery(ctx(tables), {
+    source: 'invoices', filters: [{ field: 'account_lead_id', op: 'eq', value: 'u1' }], measures: [{ agg: 'count', as: 'n' }],
+  });
+  assert.equal(filtered.groups?.[0]?.n, 2);
+
+  // De boekhouder: Financiën wel, Klanten niet.
+  const accountant = await runRecordsQuery(ctx(tables, { modules: ['finance'] }), { source: 'invoices', fields: ['number', 'account_lead_id', 'account_lead'] });
+  assert.ok((accountant.rows ?? []).every((r) => r.account_lead === null && r.account_lead_id === null));
+  assert.match(String(accountant.note), /Klanten/);
+});
+
+test('tickets per toegewezen teamlid, met filter in de databasevraag', async () => {
+  const calls: Call[] = [];
+  const tickets: Row[] = [
+    { id: 't1', organization_id: ORG, status: 'new', created_at: '2026-05-01T09:00:00Z', client_id: null, assignee_user_id: 'u1' },
+    { id: 't2', organization_id: ORG, status: 'review', created_at: '2026-05-02T09:00:00Z', client_id: null, assignee_user_id: 'u2' },
+    { id: 't3', organization_id: ORG, status: 'new', created_at: '2026-05-03T09:00:00Z', client_id: null, assignee_user_id: null },
+    { id: 'x', organization_id: 'org-2', status: 'new', created_at: '2026-05-03T09:00:00Z', client_id: null, assignee_user_id: 'u1' },
+  ];
+  const organization_members: Row[] = [
+    { user_id: 'u1', organization_id: ORG, email: 'anna@bureau.nl' },
+    { user_id: 'u2', organization_id: ORG, email: 'bram@bureau.nl' },
+  ];
+  const grouped = await runRecordsQuery(ctx({ tickets, clients: [], organization_members }), {
+    source: 'tickets', group_by: ['assignee'], measures: [{ agg: 'count', as: 'n' }],
+  });
+  const byAssignee = Object.fromEntries((grouped.groups ?? []).map((g) => [String(g.assignee), g.n]));
+  assert.deepEqual(byAssignee, { 'anna@bureau.nl': 1, 'bram@bureau.nl': 1, null: 1 });
+
+  const mine = await runRecordsQuery(ctx({ tickets, clients: [], organization_members }, { calls }), {
+    source: 'tickets', filters: [{ field: 'assignee_id', op: 'eq', value: 'u1' }], fields: ['id', 'assignee'],
+  });
+  assert.deepEqual(mine.rows, [{ id: 't1', assignee: 'anna@bureau.nl' }]);
+  assert.ok(calls.some((c) => c.table === 'tickets' && c.filters.includes('assignee_user_id=u1')));
+});

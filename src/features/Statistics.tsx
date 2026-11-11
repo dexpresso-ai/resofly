@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BarChart3, Download, LayoutGrid, LineChart as LineIcon, Pin, PinOff, PieChart as PieIcon, Plus, Save, Table as TableIcon, Trash2 } from 'lucide-react';
-import type { AppData, SavedReport } from '../types';
+import type { AppData, OrganizationMember, SavedReport } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { downloadCsv } from '../lib/csv';
 import { createSavedReport, deleteSavedReport, updateSavedReport } from '../lib/repository';
 import { BarChart, LineChart, PieChart } from '../components/Charts';
 import {
   DATE_PRESET_LABELS, GRANULARITY_LABELS, REPORT_SOURCES, REPORT_SOURCE_ORDER, REPORT_TEMPLATES,
-  cloneDefinition, defaultReportFor, formatMeasure, measureKey, measureOptions, runReport,
+  cloneDefinition, defaultReportFor, formatMeasure, measureKey, measureOptions, memberLookups, runReport,
   type ChartType, type DateGranularity, type DateRangePreset, type ReportDefinition,
   type ReportField, type ReportSourceKey,
 } from '../lib/reporting';
@@ -41,7 +41,7 @@ function coerceDefinition(raw: unknown): ReportDefinition {
   };
 }
 
-export function Statistics({ data, organizationId, canWrite, onChanged, openReportId, pendingReport }: {
+export function Statistics({ data, organizationId, canWrite, onChanged, openReportId, pendingReport, teamMembers = [], currentUserId = null }: {
   data: AppData;
   organizationId: string;
   canWrite: boolean;
@@ -49,6 +49,9 @@ export function Statistics({ data, organizationId, canWrite, onChanged, openRepo
   openReportId?: string | null;
   /** Door Gerrie voorgestelde, nog niet opgeslagen rapportage; opent vooringevuld. */
   pendingReport?: { key: string; name: string; definition: ReportDefinition } | null;
+  /** Voor de teamleden als dimensie en filter (accountlead, toegewezen). */
+  teamMembers?: OrganizationMember[];
+  currentUserId?: string | null;
 }) {
   const [def, setDef] = useState<ReportDefinition>(() => defaultReportFor('invoices'));
   const [loadedId, setLoadedId] = useState<string | null>(null);
@@ -58,7 +61,9 @@ export function Statistics({ data, organizationId, canWrite, onChanged, openRepo
   const [message, setMessage] = useState<string | null>(null);
 
   const source = REPORT_SOURCES[def.source];
-  const result = useMemo(() => runReport(def, data), [def, data]);
+  const reportCtx = useMemo(() => ({ members: teamMembers, currentUserId }), [teamMembers, currentUserId]);
+  const result = useMemo(() => runReport(def, data, reportCtx), [def, data, reportCtx]);
+  const memberLk = useMemo(() => memberLookups(reportCtx), [reportCtx]);
   const loadedReport = loadedId ? data.savedReports.find(r => r.id === loadedId) ?? null : null;
 
   function loadDefinition(definition: ReportDefinition, reportName: string, id: string | null) {
@@ -86,7 +91,8 @@ export function Statistics({ data, organizationId, canWrite, onChanged, openRepo
   }, [pendingReport?.key]);
 
   const dimensionFields = source.fields.filter(f => f.role === 'dimension');
-  const enumFields = source.fields.filter(f => f.type === 'enum');
+  // Vaste keuzes (status) én teamleden (accountlead, toegewezen).
+  const filterFields = source.fields.filter(f => f.enumValues || f.filterOptions);
   const selectedDimField = def.dimension ? source.fields.find(f => f.key === def.dimension) ?? null : null;
   const charts = allowedCharts(selectedDimField);
   const measures = measureOptions(source);
@@ -241,16 +247,20 @@ export function Statistics({ data, organizationId, canWrite, onChanged, openRepo
             </Select>
           </Field>
 
-          {enumFields.length > 0 && (
+          {filterFields.length > 0 && (
             <div className="rb-field">
               <div className="rb-field-label">Filters</div>
               <div className="rb-filters">
-                {enumFields.map(f => {
+                {filterFields.map(f => {
                   const current = def.filters.find(x => x.field === f.key)?.value ?? '';
+                  const choices = f.enumValues ?? f.filterOptions?.(memberLk) ?? [];
+                  // Een opgeslagen filter op een teamlid dat er niet meer is, blijft zichtbaar.
+                  const missing = current && !choices.some(v => v.value === current);
                   return (
-                    <Select key={f.key} value={current} onChange={e => setFilter(f.key, e.target.value)}>
+                    <Select key={f.key} value={current} onChange={e => setFilter(f.key, e.target.value)} searchable={choices.length > 10}>
                       <option value="">Alle · {f.label}</option>
-                      {f.enumValues?.map(v => <option key={v.value} value={v.value}>{f.label}: {v.label}</option>)}
+                      {missing && <option value={current}>{f.label}: Oud-teamlid</option>}
+                      {choices.map(v => <option key={v.value} value={v.value}>{f.label}: {v.label}</option>)}
                     </Select>
                   );
                 })}

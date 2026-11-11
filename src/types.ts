@@ -321,6 +321,8 @@ export interface Client extends OrgScopedRow {
   e_invoice_channel?: EInvoiceChannel | null;
   /** Waarden van de zelf gedefinieerde vrije velden, als {field_key: waarde}. */
   custom_fields: Record<string, CustomFieldValue>;
+  /** Het teamlid dat de klant beheert; null = nog niemand. Ontbreekt op een database van vóór 2026-11-11. */
+  account_lead_user_id?: UUID | null;
   created_at: string; updated_at: string;
 }
 
@@ -719,6 +721,8 @@ export interface Ticket extends OrgScopedRow {
   client_id: UUID | null; title: string; description: string | null; priority: Priority; status: TicketStatus; notes: string | null; converted_to_project_id: UUID | null; created_at: string; updated_at: string;
   /** Wanneer het ticket afgehandeld werd; zet de database zelf. Ontbreekt op een database van vóór 2026-11-05. */
   resolved_at?: string | null;
+  /** Het teamlid dat het ticket oppakt; null = niet toegewezen. Ontbreekt op een database van vóór 2026-11-11. */
+  assignee_user_id?: UUID | null;
 }
 export type TicketNoteAuthorType = 'user' | 'client';
 export interface TicketNote extends OrgScopedRow {

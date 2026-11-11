@@ -157,7 +157,7 @@ type Usage = TokenUsage;
 interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number; vat_code?: string }
 interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
 interface QuoteProposal { type: 'quote'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; valid_until: string | null; total_eur: number }
-interface ClientProposal { type: 'client'; name: string; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; status: string }
+interface ClientProposal { type: 'client'; name: string; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; status: string; account_lead_user_id: string | null; account_lead_name: string | null }
 interface SendInvoiceProposal { type: 'send_invoice'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
 interface SendQuoteProposal { type: 'send_quote'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
 /**
@@ -375,7 +375,7 @@ interface ContentProposal {
   /** Soort notitie (general, meeting, …) of document (general, contract, …). */
   subtype?: string | null;
 }
-interface TicketProposal { type: 'ticket'; title: string; description: string | null; client_id: string | null; client_name: string | null; priority: string; status: string }
+interface TicketProposal { type: 'ticket'; title: string; description: string | null; client_id: string | null; client_name: string | null; priority: string; status: string; assignee_user_id: string | null; assignee_name: string | null }
 interface EditTicketProposal { type: 'edit_ticket'; id: string; title: string; changes: { title?: string; description?: string | null; status?: string; priority?: string; notes?: string | null } }
 /** Een reactie op een ticket. `is_internal` bepaalt of de klant hem in het portaal ziet. */
 interface TicketNoteProposal { type: 'ticket_note'; ticket_id: string; ticket_title: string; body: string; is_internal: boolean }
@@ -1070,7 +1070,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- INHOUD — `list_content` (zoekt in titel en tekst), `propose_note` en `propose_document` voor nieuwe notities en documenten; bijwerken, lezen, delen, bestanden en mappen via `find_actions`.',
           '- GALERIJEN en BOEKINGEN — `list_galleries` en `list_bookings` om mee te lezen; publiceren, een deellink maken, een boekingslink maken of verlengen en een afspraak afzeggen vind je via `find_actions`.',
           '- MEETINGS — `propose_calendar_event` met `attendees` (zij krijgen een uitnodiging per e-mail), een videovergadering (`video_call` of `video_service`) en een koppeling aan een klant of project (`client_id`, `project_id`). Zoek een moment met `suggest_meeting_slots`. Neem alleen e-mailadressen die je in de administratie vond of die de gebruiker noemde.',
-          '- `propose_ticket` / `propose_edit_ticket` — een ticket (melding/supportvraag) aanmaken of wijzigen (titel, omschrijving, status, prioriteit). Zoek bestaande tickets met `list_tickets`.',
+          '- `propose_ticket` / `propose_edit_ticket` — een ticket (melding/supportvraag) aanmaken of wijzigen (titel, omschrijving, status, prioriteit). Zoek bestaande tickets met `list_tickets`. Een nieuw ticket kan meteen een behandelaar krijgen (`assignee_user_id`); een bestaand ticket toewijzen gaat met de handeling `ticket.assign`, een accountlead van een klant kiezen met `client.set_account_lead`.',
           '- `propose_ticket_note` — REAGEREN op een ticket. Let op `is_internal`: op false leest de KLANT je tekst in het portaal, op true is het een interne notitie. Standaard intern; zeg in je antwoord expliciet welke van de twee je hebt klaargezet.',
           '- `propose_edit_time_entry` — een bestaande urenregistratie corrigeren (datum, duur, omschrijving, declarabel). Zoek hem eerst met `list_time_entries`.',
           '- `propose_time_entry` — GEWERKTE UREN registreren op een project of klant (urenregistratie). Zoek het project met `list_projects` (project_id) of de klant met `search_clients` (client_id); minstens één is verplicht. Duur in uren/minuten, datum standaard vandaag (reken relatieve datums om). Declarabel volgt automatisch het projecttype (urenbasis = wél declarabel, aangenomen prijs = niet), tenzij de gebruiker iets anders zegt.',
@@ -1510,7 +1510,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'search_clients',
-    description: 'Zoek klanten op naam, contactpersoon of e-mail, of filter op status, type, plaats, of ze een e-mailadres hebben en wanneer ze voor het laatst gemaild zijn.',
+    description: 'Zoek klanten op naam, contactpersoon of e-mail, of filter op status, type, plaats, accountlead, of ze een e-mailadres hebben en wanneer ze voor het laatst gemaild zijn. Elke klant komt terug met zijn accountlead (het teamlid dat hem beheert).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1521,6 +1521,7 @@ const TOOL_DEFINITIONS = [
         city: { type: 'string', description: 'Alleen klanten in deze plaats.' },
         not_emailed_since: { type: 'string', description: 'Alleen klanten die sinds deze datum (YYYY-MM-DD) GEEN mail van je kregen — klanten die nog nooit gemaild zijn tellen mee.' },
         emailed_since: { type: 'string', description: 'Juist alleen klanten die sinds deze datum (YYYY-MM-DD) wél mail kregen.' },
+        account_lead_user_id: { type: 'string', description: 'Alleen klanten met deze accountlead: een user_id uit list_team_members, "me" (de gebruiker zelf, voor "mijn klanten") of "none" (klanten zonder accountlead).' },
         limit: { type: 'integer', description: 'Maximaal aantal resultaten (standaard 25, max 100).' },
       },
     },
@@ -1588,7 +1589,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_tickets',
-    description: 'Toon tickets/supportverzoeken, te filteren op status, klant, prioriteit, periode en of er al door het team op gereageerd is. Afgehandelde tickets (status \'resolved\') staan in het archief en niet op de werklijst; vraagt iemand naar "openstaande" of "lopende" tickets, laat die dan weg.',
+    description: 'Toon tickets/supportverzoeken, te filteren op status, klant, prioriteit, periode, aan wie ze zijn toegewezen en of er al door het team op gereageerd is. Afgehandelde tickets (status \'resolved\') staan in het archief en niet op de werklijst; vraagt iemand naar "openstaande" of "lopende" tickets, laat die dan weg.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1596,6 +1597,7 @@ const TOOL_DEFINITIONS = [
         client_id: { type: 'string' },
         priority: { type: 'string', enum: ['low', 'med', 'high'] },
         unanswered_only: { type: 'boolean', description: 'Alleen tickets die op het team wachten: nog geen antwoord dat de klant zag, of de klant schreef na het laatste antwoord nog iets. Een interne notitie telt niet als antwoord.' },
+        assignee_user_id: { type: 'string', description: 'Alleen tickets die zijn toegewezen aan dit teamlid: een user_id uit list_team_members, "me" (de gebruiker zelf, voor "mijn tickets") of "none" (niet toegewezen).' },
         from: { type: 'string', description: 'Vanaf aanmaakdatum YYYY-MM-DD.' },
         to: { type: 'string', description: 'Tot en met aanmaakdatum YYYY-MM-DD.' },
         limit: { type: 'integer' },
@@ -1713,6 +1715,7 @@ const TOOL_DEFINITIONS = [
         phone: { type: 'string', description: 'Telefoonnummer (optioneel).' },
         status: { type: 'string', enum: ['active', 'prospect', 'inactive'], description: "Status (standaard 'active'; 'prospect' voor een nieuwe lead)." },
         notes: { type: 'string', description: 'Optionele notitie bij de klant.' },
+        account_lead_user_id: { type: 'string', description: 'Optioneel: de accountlead, het teamlid dat de klant beheert. Een user_id uit list_team_members, of "me" voor de gebruiker zelf. Voor een BESTAANDE klant gebruik je de handeling client.set_account_lead (find_actions).' },
       },
       required: ['name'],
     },
@@ -2128,6 +2131,7 @@ const TOOL_DEFINITIONS = [
         client_id: { type: 'string', description: 'Optioneel: het exacte id van de klant.' },
         priority: { type: 'string', enum: ['low', 'med', 'high'], description: "Prioriteit (standaard 'med')." },
         status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected', 'resolved'], description: "Status (standaard 'new'). 'resolved' = afgehandeld (gaat meteen naar het archief, bv. een vraag die al beantwoord is). 'converted' kan niet: die zet de app zelf bij het omzetten naar een project." },
+        assignee_user_id: { type: 'string', description: 'Optioneel: het teamlid dat het ticket oppakt. Een user_id uit list_team_members, of "me" voor de gebruiker zelf. Een BESTAAND ticket toewijzen doe je met de handeling ticket.assign (find_actions).' },
       },
       required: ['title'],
     },
@@ -2466,13 +2470,14 @@ const TOOL_DEFINITIONS = [
       'Zet een RAPPORTAGE klaar op de Statistieken-pagina. Je slaat NIETS op: het voorstel opent de rapportbouwer vooringevuld met een live grafiek, die de gebruiker zelf controleert en opslaat.',
       'Een rapport telt of rekent over één gegevensbron, optioneel gegroepeerd op een veld en gefilterd op een periode/status.',
       'Gebruik EXACT deze bron- en veldsleutels:',
-      '- invoices (Facturen): groeperen op client|status|date · meten: count, of sum/avg van amount · filter status∈[draft,sent,overdue,paid,cancelled,void,written_off,refunded]',
-      '- quotes (Offertes): groeperen op status|client|date · meten: count, of sum/avg van amount · filter status∈[draft,pending_internal_approval,internally_approved,sent,accepted,rejected,expired,paid,overdue,cancelled]',
+      '- invoices (Facturen): groeperen op client|account_lead|status|date · meten: count, of sum/avg van amount (incl. btw) of subtotal (excl. btw, = omzet) · filter status∈[draft,sent,overdue,paid,cancelled,void,written_off,refunded], account_lead',
+      '- quotes (Offertes): groeperen op status|client|account_lead|date · meten: count, of sum/avg van amount · filter status∈[draft,pending_internal_approval,internally_approved,sent,accepted,rejected,expired,paid,overdue,cancelled], account_lead',
       '- purchase_invoices (Inkoopfacturen): groeperen op supplier|status|date · meten: count, of sum/avg van amount · filter status∈[draft,booked,paid,cancelled]',
-      '- clients (Klanten): groeperen op status|created · meten: count, of sum/avg van value · filter status∈[active,prospect,inactive]',
-      '- projects (Projecten): groeperen op client|state|created · meten: alleen count · filter state∈[active,archived]',
+      '- clients (Klanten): groeperen op status|account_lead|created · meten: count, of sum/avg van value · filter status∈[active,prospect,inactive], account_lead',
+      '- projects (Projecten): groeperen op client|account_lead|state|created · meten: alleen count · filter state∈[active,archived], account_lead',
       '- tasks (Taken): groeperen op status|priority|project|created|deadline · meten: count, of sum/avg van minutes · filter status∈[todo,doing,review,done], priority∈[low,med,high]',
-      '- tickets (Tickets): groeperen op status|priority|client|created · meten: alleen count · filter status∈[new,review,approved,rejected,converted,resolved], priority∈[low,med,high]',
+      '- tickets (Tickets): groeperen op status|open|assignee|priority|client|account_lead|created · meten: alleen count · filter status∈[new,review,approved,rejected,converted,resolved], open∈[yes,no] (yes = nog te behandelen), priority∈[low,med,high], assignee, account_lead',
+      'account_lead = de accountlead van de klant (bij klanten: van de klant zelf); assignee = het teamlid aan wie het ticket is toegewezen. Filterwaarde voor die twee: een user_id uit list_team_members, "me" (wie het rapport bekijkt) of "none" (niemand).',
       'Periode (date_preset): all|this_month|last_month|this_quarter|this_year|last_12m. Granulariteit (granularity) telt alleen bij een datum-dimensie (date/created/deadline). Laat dimension leeg voor één totaal (kerncijfer).',
       'Voorbeeld "omzet per klant dit jaar": source=invoices, measure_agg=sum, measure_field=amount, dimension=client, date_preset=this_year, filters=[{field:status,value:paid}], chart=bar.',
     ].join('\n'),
@@ -3010,12 +3015,12 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
   switch (name) {
     case 'find_actions': return findActionsTool(ctx, input);
     case 'run_action': return runActionTool(ctx, input);
-    case 'search_clients': return searchClients(orgId, input, limit, moduleLevel(ctx, 'finance') !== 'none');
+    case 'search_clients': return searchClients(orgId, input, limit, moduleLevel(ctx, 'finance') !== 'none', ctx.userId);
     case 'list_invoices': return listInvoices(orgId, input, limit);
     case 'list_quotes': return listQuotes(orgId, input, limit);
     case 'get_financial_summary': return getFinancialSummary(ctx, input);
     case 'list_projects': return listProjects(orgId, input, limit);
-    case 'list_tickets': return listTickets(orgId, input, limit);
+    case 'list_tickets': return listTickets(orgId, input, limit, ctx.userId);
     case 'list_time_entries': return listTimeEntries(ctx, input, limit);
     case 'list_contracts': return listContracts(orgId, input, limit);
     case 'list_contract_templates': return listContractTemplates(orgId);
@@ -3248,7 +3253,7 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_action': return buildActionProposal(ctx, input);
     case 'propose_invoice': return buildInvoiceProposal(ctx, input);
     case 'propose_quote': return buildQuoteProposal(ctx, input);
-    case 'propose_client': return buildClientProposal(input);
+    case 'propose_client': return buildClientProposal(ctx, input);
     case 'propose_send_invoice': return buildSendProposal(ctx, 'invoice', input);
     case 'propose_send_quote': return buildSendProposal(ctx, 'quote', input);
     case 'propose_send_invoices': return buildSendBatchProposal(ctx, 'invoice', input);
@@ -3284,7 +3289,7 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_ticket': return buildTicketProposal(ctx, input);
     case 'propose_edit_ticket': return buildEditTicketProposal(ctx, input);
     case 'propose_ticket_note': return buildTicketNoteProposal(ctx, input);
-    case 'propose_report': return buildReportProposal(input);
+    case 'propose_report': return buildReportProposal(ctx, input);
     default: return { ok: false, error: `Onbekende actie: ${toolName}` };
   }
 }
@@ -3563,36 +3568,43 @@ interface ReportSourceSchema {
   measures: string[];                   // velden waarop sum/avg/min/max mag
   enums: Record<string, string[]>;      // filterbaar veld -> toegestane waarden
   dateFields: string[];                 // dimensies van het type datum
+  members?: string[];                   // filterbaar op een teamlid: user_id, 'me' of 'none'
 }
 
 const REPORT_SCHEMA: Record<string, ReportSourceSchema> = {
   invoices: {
-    dimensions: ['client', 'status', 'date'], measures: ['amount'],
+    // subtotal (excl. btw) bestond in de bouwer al; zonder hier kon Gerrie omzet alleen incl. btw voorstellen.
+    dimensions: ['client', 'account_lead', 'status', 'date'], measures: ['amount', 'subtotal'],
     enums: { status: ['draft', 'sent', 'overdue', 'paid', 'cancelled', 'void', 'written_off', 'refunded'] }, dateFields: ['date'],
+    members: ['account_lead'],
   },
   quotes: {
-    dimensions: ['status', 'client', 'date'], measures: ['amount'],
+    dimensions: ['status', 'client', 'account_lead', 'date'], measures: ['amount'],
     enums: { status: ['draft', 'pending_internal_approval', 'internally_approved', 'sent', 'accepted', 'rejected', 'expired', 'paid', 'overdue', 'cancelled'] }, dateFields: ['date'],
+    members: ['account_lead'],
   },
   purchase_invoices: {
     dimensions: ['supplier', 'status', 'date'], measures: ['amount'],
     enums: { status: ['draft', 'booked', 'paid', 'cancelled'] }, dateFields: ['date'],
   },
   clients: {
-    dimensions: ['status', 'created'], measures: ['value'],
+    dimensions: ['status', 'account_lead', 'created'], measures: ['value'],
     enums: { status: ['active', 'prospect', 'inactive'] }, dateFields: ['created'],
+    members: ['account_lead'],
   },
   projects: {
-    dimensions: ['client', 'state', 'created'], measures: [],
+    dimensions: ['client', 'account_lead', 'state', 'created'], measures: [],
     enums: { state: ['active', 'archived'] }, dateFields: ['created'],
+    members: ['account_lead'],
   },
   tasks: {
     dimensions: ['status', 'priority', 'project', 'created', 'deadline'], measures: ['minutes'],
     enums: { status: ['todo', 'doing', 'review', 'done'], priority: ['low', 'med', 'high'] }, dateFields: ['created', 'deadline'],
   },
   tickets: {
-    dimensions: ['status', 'priority', 'client', 'created'], measures: [],
-    enums: { status: ['new', 'review', 'approved', 'rejected', 'converted', 'resolved'], priority: ['low', 'med', 'high'] }, dateFields: ['created'],
+    dimensions: ['status', 'open', 'assignee', 'priority', 'client', 'account_lead', 'created'], measures: [],
+    enums: { status: ['new', 'review', 'approved', 'rejected', 'converted', 'resolved'], open: ['yes', 'no'], priority: ['low', 'med', 'high'] }, dateFields: ['created'],
+    members: ['assignee', 'account_lead'],
   },
 };
 
@@ -3601,7 +3613,7 @@ const REPORT_GRANS = ['day', 'week', 'month', 'quarter', 'year'];
 const REPORT_PRESETS = ['all', 'this_month', 'last_month', 'this_quarter', 'this_year', 'last_12m'];
 
 /** Valideer Gerrie's rapportvoorstel tegen het veldregister en lever een nette definitie. */
-function buildReportProposal(input: Record<string, unknown>): ProposalResult {
+async function buildReportProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
   const sourceKey = String(input.source || '').trim();
   const schema = REPORT_SCHEMA[sourceKey];
   if (!schema) return { ok: false, error: `Onbekende bron "${sourceKey}". Kies uit: ${Object.keys(REPORT_SCHEMA).join(', ')}.` };
@@ -3634,15 +3646,26 @@ function buildReportProposal(input: Record<string, unknown>): ProposalResult {
   const granularity = REPORT_GRANS.includes(String(input.granularity)) ? String(input.granularity) : 'month';
   const datePreset = REPORT_PRESETS.includes(String(input.date_preset)) ? String(input.date_preset) : 'this_year';
 
-  // Filters: alleen op enum-velden, met een toegestane waarde.
+  // Filters: op enum-velden met een toegestane waarde, of op een teamlid van
+  // DEZE organisatie. Een verzonnen of vreemd user_id kwam anders als filter
+  // in een opgeslagen rapport terecht dat dan altijd 0 liet zien.
   const filters: Array<{ field: string; value: string }> = [];
+  let teamIds: Map<string, string> | null = null;
   if (Array.isArray(input.filters)) {
     for (const f of input.filters as Record<string, unknown>[]) {
       const ff = String(f?.field || '').trim();
       const fv = String(f?.value || '').trim();
       if (!ff || !fv) continue;
+      if (schema.members?.includes(ff)) {
+        if (fv !== 'me' && fv !== 'none') {
+          teamIds ??= await teamMemberNames(ctx.organizationId);
+          if (!teamIds.has(fv)) return { ok: false, error: `"${fv}" is geen actief teamlid. Gebruik een user_id uit list_team_members, "me" of "none".` };
+        }
+        filters.push({ field: ff, value: fv });
+        continue;
+      }
       const allowed = schema.enums[ff];
-      if (!allowed) return { ok: false, error: `Op deze bron kun je niet filteren op "${ff}". Filterbare velden: ${Object.keys(schema.enums).join(', ') || 'geen'}.` };
+      if (!allowed) return { ok: false, error: `Op deze bron kun je niet filteren op "${ff}". Filterbare velden: ${[...Object.keys(schema.enums), ...(schema.members ?? [])].join(', ') || 'geen'}.` };
       if (!allowed.includes(fv)) return { ok: false, error: `Ongeldige waarde "${fv}" voor filter ${ff}. Kies uit: ${allowed.join(', ')}.` };
       filters.push({ field: ff, value: fv });
     }
@@ -4417,19 +4440,48 @@ async function buildQuoteProposal(ctx: GerrieContext, input: Record<string, unkn
   };
 }
 
-function buildClientProposal(input: Record<string, unknown>): ProposalResult {
+async function buildClientProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
   const name = String(input.name || '').trim();
   if (!name) return { ok: false, error: 'Geef minimaal de naam van de klant.' };
   const status = ['active', 'prospect', 'inactive'].includes(String(input.status)) ? String(input.status) : 'active';
   const opt = (v: unknown) => { const s = String(v ?? '').trim(); return s ? s.slice(0, 300) : null; };
+  const lead = await resolveProposalHolder(ctx, input.account_lead_user_id, 'clients');
+  if (!lead.ok) return lead;
   return {
     ok: true,
     proposal: {
       type: 'client', name: name.slice(0, 300), contact_name: opt(input.contact_name),
       email: opt(input.email), phone: opt(input.phone),
       notes: input.notes ? String(input.notes).slice(0, 2000) : null, status,
+      account_lead_user_id: lead.holder?.user_id ?? null, account_lead_name: lead.holder?.name ?? null,
     },
   };
+}
+
+/**
+ * Een teamlid voor een nieuwe klant (accountlead) of een nieuw ticket
+ * (toegewezen). Zelfde regel als de database (public.member_can_hold): actief,
+ * geen boekhouder, en de module mag hij lezen. Leeg = niemand; "me" = de
+ * gebruiker zelf, want het model kent zijn eigen user_id niet.
+ */
+async function resolveProposalHolder(
+  ctx: GerrieContext, raw: unknown, module: 'clients' | 'tickets',
+): Promise<{ ok: true; holder: { user_id: string; name: string } | null } | { ok: false; error: string }> {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (!value || value === 'none') return { ok: true, holder: null };
+  const userId = value === 'me' ? ctx.userId : value;
+  if (!isUuid(userId)) return { ok: false, error: 'Dat is geen user_id. Zoek het teamlid met list_team_members, of gebruik "me".' };
+  const { data, error } = await supabaseAdmin.from('organization_members')
+    .select('user_id, email, role, status, module_access')
+    .eq('organization_id', ctx.organizationId).eq('user_id', userId).maybeSingle();
+  if (error) return { ok: false, error: `Teamlid ophalen mislukt: ${error.message}` };
+  if (!data || data.status !== 'active') return { ok: false, error: 'Dit is geen actief teamlid van deze organisatie. Zoek het teamlid met list_team_members.' };
+  const name = String(data.email ?? '').trim() || 'Teamlid';
+  const what = module === 'clients' ? 'Klanten' : 'Tickets';
+  if (data.role === 'accountant' || memberModuleLevel(String(data.role), data.module_access as Record<string, unknown> | null, module) === 'none') {
+    return { ok: false, error: `${name} kan dit niet krijgen: alleen een teamlid dat ${what} mag zien (geen boekhouder).` };
+  }
+  return { ok: true, holder: { user_id: userId, name } };
 }
 
 /** Elke query begint hier: altijd vastgepind op de geverifieerde organisatie. */
@@ -4445,8 +4497,9 @@ function orgTable(table: string, orgId: string) {
  * schreef, schreef je ook niet ná die datum — dat is precies de groep die je zoekt
  * als je vraagt wie je al een tijd niet hebt gesproken.
  */
-async function searchClients(orgId: string, input: Record<string, unknown>, limit: number, seeMoney: boolean) {
+async function searchClients(orgId: string, input: Record<string, unknown>, limit: number, seeMoney: boolean, me: string) {
   let query = orgTable('clients', orgId).order('name', { ascending: true }).limit(limit);
+  query = holderFilter(query, 'account_lead_user_id', input, 'account_lead_user_id', me);
   if (input.status) query = query.eq('status', String(input.status));
   if (input.client_kind) query = query.eq('client_kind', String(input.client_kind));
   if (input.city) query = query.ilike('city', `%${escapeLike(String(input.city))}%`);
@@ -4475,6 +4528,7 @@ async function searchClients(orgId: string, input: Record<string, unknown>, limi
     rows = rows.filter((c) => (wantMailed ? mailed.has(String(c.id)) : !mailed.has(String(c.id))));
   }
 
+  const names = rows.some((c) => c.account_lead_user_id) ? await teamMemberNames(orgId) : new Map<string, string>();
   return {
     count: rows.length,
     clients: rows.map((c) => ({
@@ -4482,8 +4536,30 @@ async function searchClients(orgId: string, input: Record<string, unknown>, limi
       email: c.email, phone: c.phone, city: c.city, client_kind: c.client_kind,
       // De klantwaarde hoort bij Financiën: zonder leesrecht daar null, zoals in de API.
       status: c.status, value_eur: seeMoney ? c.value_eur : null, tags: c.tags,
+      account_lead_user_id: c.account_lead_user_id ?? null,
+      account_lead_name: holderLabel(names, c.account_lead_user_id),
     })),
   };
+}
+
+/**
+ * Filter op wie iets "heeft" (accountlead, toegewezen): een user_id, "me" voor
+ * de gebruiker zelf of "none" voor niemand. "me" lost hier op en niet in het
+ * model: dat kent zijn eigen user_id niet en verzon er anders een.
+ */
+// deno-lint-ignore no-explicit-any
+function holderFilter(query: any, column: string, input: Record<string, unknown>, key: string, me: string) {
+  const raw = String(input[key] ?? '').trim().toLowerCase();
+  if (!raw) return query;
+  if (raw === 'none') return query.is(column, null);
+  if (raw === 'me') return query.eq(column, me);
+  return query.eq(column, idFilter(input, key));
+}
+
+/** Naam bij een user_id; "oud-teamlid" voor iemand die er niet meer is. */
+function holderLabel(names: Map<string, string>, userId: unknown): string | null {
+  if (!userId) return null;
+  return names.get(String(userId)) ?? 'oud-teamlid';
 }
 
 async function listInvoices(orgId: string, input: Record<string, unknown>, limit: number) {
@@ -4605,7 +4681,7 @@ async function listProjects(orgId: string, input: Record<string, unknown>, limit
   };
 }
 
-async function listTickets(orgId: string, input: Record<string, unknown>, limit: number) {
+async function listTickets(orgId: string, input: Record<string, unknown>, limit: number, me: string) {
   const unansweredOnly = input.unanswered_only === true;
   // Met "onbeantwoord" eerst ruim ophalen en dán pas afkappen: met de limiet
   // vooraf vielen oudere onbeantwoorde tickets weg achter recentere die wél
@@ -4614,6 +4690,7 @@ async function listTickets(orgId: string, input: Record<string, unknown>, limit:
   if (input.status) query = query.eq('status', String(input.status));
   if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (input.priority) query = query.eq('priority', String(input.priority));
+  query = holderFilter(query, 'assignee_user_id', input, 'assignee_user_id', me);
   const from = isoDate(input.from);
   const to = isoDate(input.to);
   if (from) query = query.gte('created_at', `${from}T00:00:00Z`);
@@ -4651,6 +4728,7 @@ async function listTickets(orgId: string, input: Record<string, unknown>, limit:
     }).slice(0, limit);
   }
 
+  const names = rows.some((r) => r.assignee_user_id) ? await teamMemberNames(orgId) : new Map<string, string>();
   return {
     count: rows.length,
     tickets: rows.map((r) => ({
@@ -4658,6 +4736,8 @@ async function listTickets(orgId: string, input: Record<string, unknown>, limit:
       client_id: r.client_id, created_at: r.created_at,
       // Alleen bij een afgehandeld ticket gevuld; een database van vóór 2026-11-05 kent de kolom niet.
       resolved_at: r.resolved_at ?? null,
+      assignee_user_id: r.assignee_user_id ?? null,
+      assignee_name: holderLabel(names, r.assignee_user_id),
     })),
   };
 }
@@ -5669,11 +5749,15 @@ async function buildTicketProposal(ctx: GerrieContext, input: Record<string, unk
     if (!c.ok) return c;
     clientId = c.id; clientName = c.name;
   }
+  const assignee = await resolveProposalHolder(ctx, input.assignee_user_id, 'tickets');
+  if (!assignee.ok) return assignee;
 
   return {
     ok: true,
     proposal: {
       type: 'ticket',
+      assignee_user_id: assignee.holder?.user_id ?? null,
+      assignee_name: assignee.holder?.name ?? null,
       title: title.slice(0, 300),
       description: input.description ? String(input.description).slice(0, 4000) : null,
       client_id: clientId,

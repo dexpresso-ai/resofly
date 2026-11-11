@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { BarChart3, FileBarChart, LayoutGrid, Send, Sparkles, Trash2 } from 'lucide-react';
-import type { AppData } from '../types';
+import type { AppData, OrganizationMember } from '../types';
 import type { ReportDefinition } from '../lib/reporting';
 import { PageIcon } from '../components/PageIcon';
 import { Statistics } from './Statistics';
@@ -35,7 +35,7 @@ function formatWhen(iso: string): string {
   return d.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
 }
 
-export function Reports({ data, organizationId, canWrite, canChat, onChanged, openReportId, pendingReport, onOpenReport, onNewReport }: {
+export function Reports({ data, organizationId, canWrite, canChat, onChanged, openReportId, pendingReport, onOpenReport, onNewReport, teamMembers = [], currentUserId = null }: {
   data: AppData;
   organizationId: UUID;
   /** Schrijfrecht op Statistieken: voor de rapportbouwer (gedeelde rapporten). */
@@ -47,6 +47,9 @@ export function Reports({ data, organizationId, canWrite, canChat, onChanged, op
   pendingReport?: { key: string; name: string; definition: ReportDefinition } | null;
   onOpenReport: (id: UUID) => void;
   onNewReport: (key: string) => void;
+  /** Voor rapporten per accountlead of per toegewezen teamlid. */
+  teamMembers?: OrganizationMember[];
+  currentUserId?: string | null;
 }) {
   const builderContext = Boolean(openReportId || pendingReport);
   const [mode, setMode] = useState<Mode>(builderContext ? 'builder' : 'ai');
@@ -104,7 +107,7 @@ export function Reports({ data, organizationId, canWrite, canChat, onChanged, op
     return (
       <div className="aire-hub">
         <div className="aire-hub-bar">{tabs}</div>
-        <Statistics data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} openReportId={openReportId} pendingReport={pendingReport} />
+        <Statistics data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} openReportId={openReportId} pendingReport={pendingReport} teamMembers={teamMembers} currentUserId={currentUserId} />
       </div>
     );
   }
