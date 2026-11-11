@@ -24,6 +24,9 @@
 #   - de API-laag (controle van 10 november): het OpenAPI-document, mcp en
 #     mcp-oauth zonder bewijs, mail-inbound zonder geheim, en de afmeldlink
 #     uit een campagne (een browser gaat door naar /afmelden in de app).
+#   - het eigen adres van de AI-koppeling (mcp.resofly.com, workers/mcp): als
+#     MCP_RESOURCE_URL daarop staat, de weg die een AI-client er aflegt, met
+#     adressen die letterlijk overeenkomen. Anders overgeslagen.
 #
 # Draait in de workflow "Deploy Supabase (staging)" na elke deploy, en kan ook
 # vanaf een laptop: SUPABASE_PROJECT_ID=enzghpduqwaojcxgwarr bash scripts/supabase-smoke-test.sh
@@ -79,6 +82,86 @@ check "mcp-oauth stuurt een onbekende client nergens heen" 400 'Onbekende AI-cli
   "$base/mcp-oauth/authorize?client_id=rooktest&redirect_uri=https%3A%2F%2Frooktest.invalid%2Fcb&response_type=code"
 check "mail-inbound weigert zonder geheim" 401 'Niet geautoriseerd' \
   -X POST "$base/mail-inbound" -H 'Content-Type: application/json' --data '{}'
+
+# Het eigen adres van de AI-koppeling (workers/mcp, sinds 11 november
+# https://mcp.resofly.com/mcp). Welk adres dat is, zegt de MCP-server zelf: de
+# `resource` in zijn resource-document (MCP_RESOURCE_URL). Staat dat op een
+# eigen domein, dan loopt een AI-client hier dezelfde weg als hieronder: de 401,
+# het resource-document, de metadata van de autorisatieserver, /authorize en
+# /register. De adressen moeten letterlijk kloppen; één teken verschil en Claude
+# weigert te koppelen. Zo valt ook op als iemand MCP_RESOURCE_URL op een domein
+# zet waar de Worker (nog) niet staat: dan koppelt niemand meer.
+if command -v python3 >/dev/null; then
+  # json_get <bestand> <python-expressie op d>: één waarde uit een JSON-antwoord, of leeg.
+  json_get() { python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1])); v = eval(sys.argv[2], {}, {"d": d}); print("" if v is None else v)
+except Exception:
+    print("")' "$1" "$2"; }
+  # split_url <url>: "<origin> <pad>", het pad zonder slash aan het eind.
+  split_url() { python3 -c 'import sys,urllib.parse as u
+p = u.urlsplit(sys.argv[1]); print(f"{p.scheme}://{p.netloc}", p.path.rstrip("/"))' "$1"; }
+  mcp_fail() {
+    problems=$((problems + 1))
+    echo "FOUT   $1"
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::$1"; fi
+  }
+
+  curl -s -o "$body" --max-time 60 "$base/mcp/.well-known/oauth-protected-resource" || true
+  mcp_url="$(json_get "$body" 'd["resource"]')"
+  if [ -z "$mcp_url" ]; then
+    mcp_fail "het resource-document van mcp is niet leesbaar: $(head -c 200 "$body")"
+  elif [ "$mcp_url" = "$base/mcp" ]; then
+    echo "-      eigen adres van de AI-koppeling: overgeslagen (MCP_RESOURCE_URL staat niet ingesteld)"
+  else
+    echo "info   eigen adres van de AI-koppeling: $mcp_url"
+    read -r mcp_origin mcp_path < <(split_url "$mcp_url")
+    headers_file="$(mktemp)"
+    got="$(curl -s -D "$headers_file" -o "$body" -w '%{http_code}' --max-time 60 -X POST "$mcp_url" \
+      -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || echo 000)"
+    wanted_meta="resource_metadata=\"$mcp_url/.well-known/oauth-protected-resource\""
+    if [ "$got" = "401" ] && grep -qF '"unauthorized"' "$body" && grep -qiF "$wanted_meta" "$headers_file"; then
+      echo "ok     het eigen adres weigert zonder token en wijst naar zijn resource-document (401)"
+    else
+      mcp_fail "het eigen adres $mcp_url: verwacht 401 met $wanted_meta, kreeg $got: $(head -c 200 "$body")"
+    fi
+    rm -f "$headers_file"
+
+    issuer=""
+    for doc in "$mcp_url/.well-known/oauth-protected-resource" "$mcp_origin/.well-known/oauth-protected-resource$mcp_path"; do
+      got="$(curl -s -o "$body" -w '%{http_code}' --max-time 60 "$doc" || echo 000)"
+      seen="$(json_get "$body" 'd["resource"]')"
+      if [ "$got" = "200" ] && [ "$seen" = "$mcp_url" ]; then
+        echo "ok     resource-document op $doc noemt precies dit adres"
+        issuer="$(json_get "$body" 'd["authorization_servers"][0]')"
+      else
+        mcp_fail "resource-document op $doc: verwacht 200 met resource $mcp_url, kreeg $got met \"$seen\""
+      fi
+    done
+
+    if [ -n "$issuer" ]; then
+      read -r issuer_origin issuer_path < <(split_url "$issuer")
+      as_doc="$issuer_origin/.well-known/oauth-authorization-server$issuer_path"
+      got="$(curl -s -o "$body" -w '%{http_code}' --max-time 60 "$as_doc" || echo 000)"
+      seen="$(json_get "$body" 'd["issuer"]')"
+      token_endpoint="$(json_get "$body" 'd["token_endpoint"]')"
+      if [ "$got" = "200" ] && [ "$seen" = "$issuer" ] && [ "$token_endpoint" = "$issuer/token" ] \
+        && grep -qF '"code_challenge_methods_supported":["S256"]' "$body"; then
+        echo "ok     metadata van de autorisatieserver op $as_doc (issuer $issuer)"
+      else
+        mcp_fail "metadata op $as_doc: verwacht 200 met issuer $issuer, kreeg $got met \"$seen\""
+      fi
+      check "het eigen adres stuurt een onbekende client nergens heen" 400 'Onbekende AI-client' \
+        "$issuer/authorize?client_id=rooktest&redirect_uri=https%3A%2F%2Frooktest.invalid%2Fcb&response_type=code"
+      # Een registratie zonder terugkeeradres: de inhoud komt aan, er komt geen
+      # client bij. Telt wel één poging voor de rem (zie senderAddress).
+      check "het eigen adres neemt een registratie in ontvangst" 400 'redirect_uri' \
+        -X POST "$issuer/register" -H 'Content-Type: application/json' --data '{}'
+    fi
+  fi
+else
+  echo "-      eigen adres van de AI-koppeling: overgeslagen (geen python3)"
+fi
 # De afmeldlink uit een campagnemail. Supabase serveert een GET met text/html op
 # *.supabase.co als platte tekst: de ontvanger zag code in plaats van een knop
 # (bevinding 19 van die controle). Een browser hoort daarom door te gaan naar

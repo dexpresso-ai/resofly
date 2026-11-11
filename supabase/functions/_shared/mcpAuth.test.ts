@@ -6,6 +6,7 @@ import {
   sha256Hex, verifyPkce, verifyToken, base64Url, randomBytes,
   signAuthRequest, verifyAuthRequest, AUTH_REQUEST_TTL_SECONDS, ISSUABLE_SCOPES, narrowScopes, type AuthRequest,
   openCorsHeaders, normalizeScopes, CONSENT_SCOPES, describeRedirectTarget, isKnownAiRedirect,
+  senderAddress, PROXY_CLIENT_IP_HEADER, PROXY_SECRET_HEADER,
 } from './mcpAuth.ts';
 
 /**
@@ -414,6 +415,55 @@ test('de MCP-server mag zijn eigen headers erbij zetten zonder de rest kwijt te 
 
 test('zonder extra headers blijft Expose-Headers weg', () => {
   assert.equal('Access-Control-Expose-Headers' in openCorsHeaders(), false);
+});
+
+// ── Het adres van de client achter mcp.resofly.com ───────────────────────────
+// De rem op registraties telt per adres. Achter de Worker is dat voor iedereen
+// hetzelfde Cloudflare-adres, dus geeft de Worker het echte mee. Dat mag alleen
+// gelden met het geheim erbij, anders kiest elke client zijn eigen teller.
+
+const PROXY_SECRET = 'werker-geheim-mcp-0123456789abcdef';
+const WORKER_ADDRESS = '2a06:98c0:3600::103';
+
+function proxied(extra: Record<string, string>): Headers {
+  return new Headers({ 'cf-connecting-ip': WORKER_ADDRESS, ...extra });
+}
+
+test('rechtstreeks op Supabase telt het adres van de infrastructuur', () => {
+  assert.equal(senderAddress(new Headers({ 'cf-connecting-ip': '203.0.113.7' }), PROXY_SECRET), '203.0.113.7');
+  assert.equal(senderAddress(new Headers({ 'x-forwarded-for': '198.51.100.4, 10.0.0.1' }), undefined), '198.51.100.4');
+  assert.equal(senderAddress(new Headers(), undefined), 'onbekend');
+});
+
+test('via de Worker telt het echte adres van de client, met het juiste geheim', () => {
+  const headers = proxied({ [PROXY_CLIENT_IP_HEADER]: '203.0.113.7', [PROXY_SECRET_HEADER]: PROXY_SECRET });
+  assert.equal(senderAddress(headers, PROXY_SECRET), '203.0.113.7');
+  const v6 = proxied({ [PROXY_CLIENT_IP_HEADER]: '2001:db8::1', [PROXY_SECRET_HEADER]: PROXY_SECRET });
+  assert.equal(senderAddress(v6, PROXY_SECRET), '2001:db8::1');
+});
+
+test('een client die zelf een adres opgeeft, ontloopt de rem niet', () => {
+  // Zonder geheim, met een verkeerd geheim, of met een geheim dat aan onze kant
+  // niet is ingesteld: het opgegeven adres telt niet.
+  const spoofed = { [PROXY_CLIENT_IP_HEADER]: '192.0.2.99' };
+  assert.equal(senderAddress(proxied(spoofed), PROXY_SECRET), WORKER_ADDRESS);
+  assert.equal(senderAddress(proxied({ ...spoofed, [PROXY_SECRET_HEADER]: 'geraden' }), PROXY_SECRET), WORKER_ADDRESS);
+  assert.equal(senderAddress(proxied({ ...spoofed, [PROXY_SECRET_HEADER]: `${PROXY_SECRET}x` }), PROXY_SECRET), WORKER_ADDRESS);
+  assert.equal(senderAddress(proxied({ ...spoofed, [PROXY_SECRET_HEADER]: PROXY_SECRET }), undefined), WORKER_ADDRESS);
+  assert.equal(senderAddress(proxied({ ...spoofed, [PROXY_SECRET_HEADER]: '' }), ''), WORKER_ADDRESS);
+});
+
+test('een te kort geheim aan onze kant geldt niet', () => {
+  const kort = 'kort-geheim';
+  const headers = proxied({ [PROXY_CLIENT_IP_HEADER]: '203.0.113.7', [PROXY_SECRET_HEADER]: kort });
+  assert.equal(senderAddress(headers, kort), WORKER_ADDRESS);
+});
+
+test('met het geheim telt alleen iets wat op een IP-adres lijkt', () => {
+  for (const bad of ['', 'onbekend', '203.0.113.7, 10.0.0.1', '<script>', 'a'.repeat(65)]) {
+    const headers = proxied({ [PROXY_CLIENT_IP_HEADER]: bad, [PROXY_SECRET_HEADER]: PROXY_SECRET });
+    assert.equal(senderAddress(headers, PROXY_SECRET), WORKER_ADDRESS, JSON.stringify(bad));
+  }
 });
 
 // ── Bestemming op het toestemmingsscherm ─────────────────────────────────────

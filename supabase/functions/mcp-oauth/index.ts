@@ -41,7 +41,7 @@ import {
   isAcceptableRedirectUri, isValidCodeChallenge, parseToken, protectedResourceMetadata, redirectUriAllowed,
   sha256Hex, signAuthRequest, verifyAuthRequest, verifyPkce, verifyToken,
   base64Url, randomBytes, openCorsHeaders, parseScopes, CONSENT_SCOPES, SCOPE_EXECUTE, SCOPE_READ,
-  describeRedirectTarget, isKnownAiRedirect,
+  describeRedirectTarget, isKnownAiRedirect, senderAddress,
   type AuthRequest, type McpDiscoveryUrls,
 } from '../_shared/mcpAuth.ts';
 
@@ -227,8 +227,9 @@ async function handleRegister(req: Request): Promise<Response> {
  * voordeur.
  */
 async function noteRegistration(req: Request): Promise<number> {
-  const address = (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
-    .trim().slice(0, 64);
+  // Via mcp.resofly.com komt elk verzoek van hetzelfde Cloudflare-adres; de
+  // Worker geeft dan het echte mee (zie senderAddress).
+  const address = senderAddress(req.headers, Deno.env.get('MCP_PROXY_SECRET'));
   const { data, error } = await admin.rpc('edge_note_attempt', {
     p_bucket: 'mcp-register',
     p_client: await sha256Hex(`mcp-register:${address}`),
