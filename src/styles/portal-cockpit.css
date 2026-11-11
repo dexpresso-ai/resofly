@@ -546,28 +546,72 @@ html:root .portal.boot{background:var(--hdr-mid)}
 }
 
 /* ── 8b · De boekingspagina ─────────────────────────────────────────────────
-   Sinds november 2026 een klantpagina als de offerte: dezelfde kop (met wie,
-   wat, hoe lang, hoe) en hetzelfde werkvlak. De momenten staan per dag als een
-   rij tijdknoppen, zoals in een agenda. Eerst was elk moment een brede knop met
-   de hele datum erop, en zocht je op de telefoon in een lange lijst naar een
-   tijd. De klassen .booking-slots en .booking-slot meet de mobiele test. */
+   Een klantpagina als de offerte: dezelfde kop (met wie, wat, hoe lang, welk
+   videogesprek) en hetzelfde werkvlak. Sinds de tweede ronde (11 november
+   2026) in stappen, zoals de bekende planningsdiensten: links een
+   maandkalender met de dagen waarop iets vrij is, rechts de tijden van de
+   gekozen dag; daarna je gegevens met een samenvatting ernaast. Op de telefoon
+   een strook met dagen in plaats van de kalender. De klassen .booking-slots en
+   .booking-slot meet de mobiele test (eerste moment binnen 360px). */
 .public-booking .booking-intro{white-space:pre-wrap}
-.booking-pick-head{display:grid;gap:4px;margin-bottom:12px}
-.booking-pick-head h2,.booking-pick-head p{margin:0}
-.booking-week+.booking-week{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
-.booking-week-label{margin:0 0 6px;font-size:14px;font-weight:700}
-.booking-day{display:grid;grid-template-columns:210px minmax(0,1fr);gap:8px 16px;align-items:start;padding:10px 0}
-.booking-day+.booking-day{border-top:1px dashed var(--line)}
-.booking-day-label{padding-top:11px;font-weight:700}
-.booking-day-label::first-letter,.booking-moments strong::first-letter{text-transform:uppercase}
-.booking-slots{display:flex;flex-wrap:wrap;gap:8px}
+/* .public-hero-fact span zet elke span op 12px (het label); de dienst hoort
+   even groot te zijn als "30 min" ernaast. */
+.public-hero-fact .bk-fact-video{display:inline-flex;align-items:center;gap:8px;min-width:0;font-size:inherit;color:inherit}
+
+/* De kaart met de stappen */
+.public-doc .bk-card{padding:0;overflow:hidden}
+.bk-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px 20px;flex-wrap:wrap;padding:18px 22px;border-bottom:1px solid var(--line)}
+.bk-card-title{display:flex;align-items:center;gap:10px;min-width:0}
+.bk-card-title h2{margin:0;font-size:19px;letter-spacing:-.01em}
+.bk-back{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--line);border-radius:50%;background:transparent;color:var(--text);cursor:pointer}
+.bk-back:hover{border-color:var(--accent);color:var(--accent-ink)}
+.bk-back:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.bk-steps{display:flex;align-items:center;gap:6px;list-style:none;margin:0;padding:0;font-size:12.5px;font-weight:600;color:var(--muted)}
+.bk-steps li{display:inline-flex;align-items:center;gap:7px}
+.bk-steps li+li::before{content:"";width:18px;height:1px;background:var(--line-2,var(--line));margin-right:2px}
+.bk-steps li>span{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;border:1px solid var(--line-2,var(--line));font-size:11.5px;font-variant-numeric:tabular-nums}
+.bk-steps li.is-current{color:var(--text)}
+.bk-steps li.is-current>span{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.bk-steps li.is-done>span{background:rgba(var(--accent-rgb),.16);border-color:rgba(var(--accent-rgb),.5);color:var(--accent-ink)}
+
+/* Stap 1: kalender en tijden */
+.bk-pick{display:grid;grid-template-columns:minmax(260px,320px) minmax(0,1fr);min-height:330px}
+.bk-cal{padding:18px 20px 16px;border-right:1px solid var(--line)}
+.bk-cal-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.bk-cal-head strong{font-size:14.5px}
+.bk-cal-head strong::first-letter{text-transform:uppercase}
+.bk-cal-nav{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:50%;background:transparent;color:var(--text);cursor:pointer}
+.bk-cal-nav:hover:not(:disabled){background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)))}
+.bk-cal-nav:disabled{opacity:.3;cursor:default}
+.bk-cal-nav:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.bk-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;text-align:center}
+.bk-cal-wd{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:4px 0}
+.bk-cal-day{position:relative;display:inline-flex;align-items:center;justify-content:center;aspect-ratio:1;min-height:34px;border-radius:50%;font-size:13.5px;font-variant-numeric:tabular-nums;color:var(--muted);opacity:.55}
+.bk-cal-day.is-empty{opacity:0}
+button.bk-cal-day{border:0;font:inherit;font-size:13.5px;cursor:pointer;opacity:1}
+.bk-cal-day.is-open{background:rgba(var(--accent-rgb),.13);color:var(--accent-ink);font-weight:700;transition:background .15s ease,transform .15s ease}
+.bk-cal-day.is-open:hover{background:rgba(var(--accent-rgb),.24)}
+.bk-cal-day.is-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.bk-cal-day.is-active{background:var(--accent);color:var(--on-accent);box-shadow:0 8px 20px -10px rgba(var(--accent-rgb),.8)}
+.bk-cal-day.is-chosen::after{content:"";position:absolute;bottom:4px;left:50%;width:5px;height:5px;margin-left:-2.5px;border-radius:50%;background:currentColor}
+.bk-cal-legend{display:flex;align-items:center;gap:7px;margin:12px 0 0;font-size:12px}
+.bk-dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:rgba(var(--accent-rgb),.3)}
+.bk-strip{display:none}
+.bk-times{padding:18px 22px;min-width:0}
+.bk-times-head{display:grid;gap:2px;margin-bottom:12px}
+.bk-times-head strong{font-size:15px}
+.bk-times-head strong::first-letter{text-transform:uppercase}
+.bk-times-head .muted{font-size:12.5px}
+.bk-times-note{margin:0 0 10px;padding:9px 12px;border-radius:11px;background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)));font-size:13px}
+.booking-slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px}
 .booking-slot{
-  min-width:88px;min-height:44px;
-  display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
-  padding:8px 14px;
-  border:1px solid rgba(var(--accent-rgb),.4);
+  position:relative;
+  min-height:52px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  padding:8px 12px;
+  border:1px solid rgba(var(--accent-rgb),.38);
   border-radius:12px;
-  background:rgba(var(--accent-rgb),.07);
+  background:rgba(var(--accent-rgb),.06);
   color:var(--text);
   font:inherit;
   cursor:pointer;
@@ -575,57 +619,145 @@ html:root .portal.boot{background:var(--hdr-mid)}
 }
 .booking-slot:hover:not(:disabled){border-color:var(--accent);background:rgba(var(--accent-rgb),.14);transform:translateY(-1px)}
 .booking-slot:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.booking-slot.is-selected{background:var(--accent);border-color:var(--accent);color:var(--on-accent);box-shadow:0 10px 26px -12px rgba(var(--accent-rgb),.75)}
+/* Ook onder de muis: de hoverregel hierboven is specifieker, en zette een
+   gekozen moment anders terug op de lichte tint met donkere tekst. */
+.booking-slot.is-selected,.booking-slot.is-selected:hover:not(:disabled){background:var(--accent);border-color:var(--accent);color:var(--on-accent);box-shadow:0 10px 26px -12px rgba(var(--accent-rgb),.75)}
 .booking-slot:disabled{opacity:.4;cursor:not-allowed;border-style:dashed}
-.booking-slot-time{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums}
-.booking-slot-end{font-size:11px;opacity:.75}
-.booking-empty{display:flex;gap:10px;align-items:flex-start;padding:14px;border-radius:14px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))}
+.booking-slot-check{position:absolute;top:6px;right:7px}
+.booking-slot-time{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.booking-slot-end{font-size:11px;opacity:.72;font-variant-numeric:tabular-nums}
+.booking-empty{display:flex;gap:10px;align-items:flex-start;margin:18px 22px;padding:14px;border-radius:14px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))}
 .booking-empty p{margin:0}
-.booking-details h2,.booking-contact h2{margin-top:0}
-.booking-chosen{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-wrap:wrap;gap:8px}
-.booking-chosen li{display:inline-flex;align-items:center;gap:4px;padding:5px 5px 5px 12px;border:1px solid rgba(var(--accent-rgb),.32);border-radius:999px;background:rgba(var(--accent-rgb),.12);font-size:13px;font-weight:600}
+.bk-pick-foot{display:flex;align-items:center;justify-content:space-between;gap:12px 18px;flex-wrap:wrap;padding:14px 22px;border-top:1px solid var(--line);background:rgba(var(--sheen-rgb),calc(.025 * var(--sheen-k)))}
+.bk-pick-choice{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;min-width:0}
+.bk-rule{font-size:13px}
+.bk-pick-empty{font-size:13px;font-weight:600}
+.bk-pick-foot .btn{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:11px 22px;font-size:14px}
+.booking-chosen{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+.booking-chosen li{display:inline-flex;align-items:center;gap:4px;padding:4px 4px 4px 12px;border:1px solid rgba(var(--accent-rgb),.32);border-radius:999px;background:rgba(var(--accent-rgb),.12);font-size:13px;font-weight:600}
 .booking-chosen-remove{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}
 .booking-chosen-remove:hover{background:rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k)))}
-.booking-chosen-empty{margin:0 0 12px}
-.booking-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:660px}
+.bk-card>.booking-error{margin:0 22px 16px}
+
+/* Stap 2: gegevens met de samenvatting ernaast */
+.bk-details{display:grid;grid-template-columns:minmax(240px,320px) minmax(0,1fr)}
+.bk-summary{padding:20px 22px;border-right:1px solid var(--line);background:rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k)))}
+.bk-summary-eyebrow{margin:0 0 4px;font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.bk-summary h3{margin:0 0 14px;font-size:17px;line-height:1.3}
+.bk-summary-list{list-style:none;margin:0 0 14px;padding:0;display:grid;gap:12px}
+.bk-summary-list li{display:flex;align-items:flex-start;gap:10px;font-size:13.5px}
+.bk-summary-list li>svg{flex:none;margin-top:2px;color:var(--accent-ink)}
+.bk-summary-list li>span{display:grid;gap:1px;min-width:0}
+.bk-summary-list strong::first-letter{text-transform:uppercase}
+.bk-summary-list em{font-style:normal;color:var(--muted)}
+.bk-summary-video{padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:var(--surface)}
+.bk-summary-list li.bk-summary-video>.vsm-line{display:flex;align-items:flex-start}
+.bk-form{padding:20px 22px;min-width:0}
+.booking-fields{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;max-width:460px}
 /* align-content:start: naast een veld mét uitleg eronder rekte het naamveld
    anders mee, en stond het lager dan het e-mailveld. */
 .booking-fields label{display:grid;gap:6px;align-content:start;font-size:13px;font-weight:600}
+.booking-fields .form-input{min-height:44px}
 .booking-fields .form-input[aria-invalid="true"]{border-color:rgba(var(--danger-rgb),.6)}
 .booking-field-hint{font-size:12px;font-weight:400;color:var(--muted)}
 .booking-field-hint.is-error{color:var(--danger)}
 .public-doc .booking-error{margin:14px 0 0}
-.booking-confirm{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px}
-.booking-confirm .btn{min-height:46px;padding:12px 22px;font-size:14px}
+.booking-confirm{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px}
+.booking-confirm .btn{min-height:46px;padding:12px 24px;font-size:14px}
+
+/* Het teken van de videodienst met de naam en hoe je meedoet */
+.vsm-line .vsm-text small{font-size:12.5px;line-height:1.45}
+
+/* Afspraken als kaarten met een datumblok */
+.bk-moment-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.bk-moment{display:flex;align-items:center;gap:14px;padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))}
+.bk-moment-date{flex:none;display:grid;place-items:center;width:52px;height:56px;border-radius:12px;background:rgba(var(--accent-rgb),.14);color:var(--accent-ink);line-height:1}
+.bk-moment-date em{font-style:normal;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.bk-moment-date strong{font-size:22px;font-variant-numeric:tabular-nums}
+.bk-moment-text{display:grid;gap:2px;min-width:0;flex:1}
+.bk-moment-text strong::first-letter{text-transform:uppercase}
+.bk-moment-text span{color:var(--muted);font-size:13.5px;font-variant-numeric:tabular-nums}
+.bk-moment-action{flex:none}
+.bk-link-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 2px;border:0;background:none;color:var(--accent-ink);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.bk-link-btn:hover{text-decoration:underline}
+.bk-link-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+/* Na het boeken */
+.bk-done-head{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.bk-done-head h2{margin:0;font-size:19px}
+.bk-done-head p{margin:2px 0 0}
+.bk-done-check{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:50%;background:var(--accent);color:var(--on-accent);box-shadow:0 10px 26px -12px rgba(var(--accent-rgb),.85)}
+.bk-video-card{display:flex;align-items:center;justify-content:space-between;gap:12px 18px;flex-wrap:wrap;margin-top:14px;padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+.bk-join{display:inline-flex;align-items:center;min-height:44px;padding:11px 20px;text-decoration:none}
+.bk-video-later{margin:0;font-size:13px;max-width:360px}
+.bk-next{list-style:none;margin:16px 0 0;padding:14px 0 0;border-top:1px solid var(--line);display:grid;gap:8px;font-size:13.5px}
+.bk-next li{display:flex;align-items:center;gap:9px;color:var(--muted)}
+.bk-next li svg{flex:none;color:var(--accent-ink)}
 .booking-moments{list-style:none;margin:0;padding:0;display:grid;gap:8px}
 .booking-moments li{display:grid;gap:2px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)))}
 .booking-moments li span{color:var(--muted);font-size:13.5px}
-.booking-done h2,.booking-failed h2,.booking-state h2{display:flex;align-items:center;gap:8px;margin-top:0}
+.booking-moments strong::first-letter{text-transform:uppercase}
+.booking-failed h2,.booking-state h2{display:flex;align-items:center;gap:8px;margin-top:0}
 .booking-state p{margin:0 0 12px}
-.booking-video-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 0}
-.booking-video-line a,.booking-contact-lines a{color:var(--accent-ink);font-weight:600;text-decoration:none;overflow-wrap:anywhere}
-.booking-video-line a:hover,.booking-contact-lines a:hover{text-decoration:underline}
 .booking-note{margin:14px 0 0;white-space:pre-wrap;color:var(--muted)}
 .booking-failed .btn{margin-top:14px}
+.booking-contact h2{margin-top:0}
 .booking-contact p{margin:0}
 .booking-contact-lines{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px}
-.booking-contact-lines a{display:inline-flex;align-items:center;gap:6px}
+.booking-contact-lines a{display:inline-flex;align-items:center;gap:6px;color:var(--accent-ink);font-weight:600;text-decoration:none;overflow-wrap:anywhere}
+.booking-contact-lines a:hover{text-decoration:underline}
 .booking-bar{display:none}
+
+@media (max-width:900px){
+  /* Tablet: kalender en tijden blijven naast elkaar, alleen smaller. */
+  .bk-pick{grid-template-columns:minmax(240px,270px) minmax(0,1fr)}
+  .bk-cal{padding:16px 14px 14px}
+  .bk-cal-day{min-height:30px}
+  .bk-details{grid-template-columns:minmax(220px,270px) minmax(0,1fr)}
+}
 @media (max-width:760px){
-  /* Lage tegels en geen witruimte boven de eerste dag: de mobiele test eist het
-     eerste moment binnen 360px. Met de nieuwe kop stond het lokaal op 356px en
-     op de CI-runner (andere lettertypen) op 366px. */
+  /* Lage tegels en geen witruimte boven de eerste tijd: de mobiele test eist
+     het eerste moment binnen 360px. Op de telefoon dus geen kalender (de
+     strook met dagen neemt één regel), geen stappen en geen dagkop: de
+     gekozen dag licht in de strook op. */
   .public-booking .public-hero-fact{padding:7px 10px}
   .public-booking .public-hero-fact strong{font-size:14.5px}
-  .booking-pick-head{margin-bottom:6px}
-  .booking-pick-head+.booking-week>.booking-day:first-child,
-  .booking-week-label+.booking-day{padding-top:2px}
-  .booking-day{grid-template-columns:minmax(0,1fr);gap:6px;padding:8px 0}
-  .booking-day-label{padding-top:0;font-size:13px}
-  .booking-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
-  .booking-slot{min-width:0;min-height:46px;padding:6px 8px}
-  .booking-fields{grid-template-columns:minmax(0,1fr)}
+  .bk-card-head{padding:12px 14px 4px;border-bottom:0}
+  /* Bij het kiezen geen kop: de statuspil in de kop zegt al "Kies een moment". */
+  .bk-card.is-pick .bk-card-head{display:none}
+  .bk-card.is-pick .bk-strip{padding-top:12px}
+  .bk-pick{grid-template-columns:minmax(0,1fr)}
+  .bk-details{grid-template-columns:minmax(0,1fr)}
+  .bk-summary{border-right:0;border-bottom:1px solid var(--line)}
+  .bk-card-title h2{font-size:17px}
+  .bk-steps{display:none}
+  .bk-cal{display:none}
+  .bk-strip{display:flex;gap:6px;overflow-x:auto;padding:6px 14px 10px;scroll-snap-type:x proximity;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .bk-strip::-webkit-scrollbar{display:none}
+  .bk-strip-day{flex:none;scroll-snap-align:start;display:grid;justify-items:center;gap:0;min-width:52px;padding:6px 8px;border:1px solid var(--line);border-radius:13px;background:transparent;color:var(--text);font:inherit;cursor:pointer;line-height:1.15}
+  .bk-strip-day span{font-size:10.5px;font-weight:600;color:var(--muted);text-transform:lowercase}
+  .bk-strip-day strong{font-size:17px;font-variant-numeric:tabular-nums}
+  .bk-strip-day.is-chosen{border-color:rgba(var(--accent-rgb),.55)}
+  .bk-strip-day.is-active{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+  .bk-strip-day.is-active span{color:inherit;opacity:.85}
+  .bk-strip-day:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .bk-pick{min-height:0}
+  .bk-times{padding:2px 14px 12px}
+  .bk-times-head{display:none}
+  .booking-slots{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .booking-slot{min-height:48px;padding:6px 6px}
+  .booking-slot-time{font-size:15px}
+  .booking-slot-end{font-size:10.5px}
+  .booking-empty{margin:8px 14px 14px}
+  .bk-pick-foot{padding:10px 14px;background:none}
+  .bk-pick-foot .btn,.bk-pick-foot .booking-chosen,.bk-pick-empty{display:none}
+  .bk-card>.booking-error{margin:0 14px 12px}
+  .bk-summary,.bk-form{padding:14px}
+  .booking-fields{max-width:none}
   .booking-confirm .btn{width:100%}
+  .bk-moment{gap:10px;flex-wrap:wrap}
+  .bk-moment-action{width:100%;padding-left:62px;margin-top:-6px}
+  .bk-video-card .bk-join{width:100%;justify-content:center}
   /* De keuze onderaan in beeld: wie op de telefoon een tijd tikt, ziet het
      formulier niet; met "Verder" staat hij er meteen. */
   .public-canvas.has-booking-bar{padding-bottom:96px}

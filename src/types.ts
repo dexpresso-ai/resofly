@@ -3996,4 +3996,8 @@ export interface MeetingBooking {
   created_at: string;
   confirmed_at: string | null;
   cancelled_at: string | null;
+  /** De link naar het videogesprek van deze afspraak (sinds 2026-11-11; ontbreekt bij een oudere server). */
+  meeting_url?: string | null;
+  /** Welke dienst daarachter zit: jitsi, google_meet, teams, zoom of link. */
+  video_service?: string | null;
 }

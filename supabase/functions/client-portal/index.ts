@@ -29,6 +29,7 @@ import {
 import { officeDownloadName, transferZipName } from '../_shared/fileTransfer.ts';
 import { PORTAL_TICKETS_CLOSED_MESSAGE, portalDocumentDecision, portalDocumentScopeFilter, portalTicketsOpen } from '../_shared/portalAccess.ts';
 import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
+import { bookingVideoService, isBookingVideoKind, videoKindOfUrl, type BookingVideoKind } from '../_shared/meetingBookingRules.ts';
 import {
   storageKeyBelongsOnlyTo,
   itemForRecipient,
@@ -1879,7 +1880,7 @@ async function buildAccount(client: ClientRow, email: string) {
 
   // Facturen: alleen uitgegeven (geen concepten). Offertes: alleen die echt naar de
   // klant zijn verstuurd (sent_at gezet). Beide ook gekoppeld via projecten van de klant.
-  const [invoices, quotes, tickets, contracts, galleries] = await Promise.all([
+  const [invoices, quotes, tickets, contracts, galleries, appointments] = await Promise.all([
     selectRows('invoices', (q) => scopeToClient(q.eq('organization_id', orgId).neq('status', 'draft'), client.id, projectIds).order('date', { ascending: false })),
     selectRows('quotes', (q) => scopeToClient(q.eq('organization_id', orgId).not('sent_at', 'is', null), client.id, projectIds).order('date', { ascending: false })),
     ticketsOpen
@@ -1897,6 +1898,7 @@ async function buildAccount(client: ClientRow, email: string) {
           return [] as Record<string, unknown>[];
         })
       : Promise.resolve([] as Record<string, unknown>[]),
+    loadAppointments(client),
   ]);
   const activeGalleries = galleries.filter((g) => !g.expires_at || new Date(String(g.expires_at)) > new Date());
 
@@ -1952,8 +1954,119 @@ async function buildAccount(client: ClientRow, email: string) {
     })),
     contracts: contracts.map(sanitizeContract),
     galleries: activeGalleries.map(sanitizeGallery),
+    appointments,
     messages: { threads: threads.length, unread: threads.filter((thread) => thread.unread).length },
   };
+}
+
+/** Een afspraak zoals het portaal hem krijgt: alleen wat de klant mag zien. */
+type PortalAppointment = {
+  id: string;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  status: 'confirmed' | 'cancelled';
+  video_service: BookingVideoKind | null;
+  meeting_url: string | null;
+  booked_by: string | null;
+};
+
+/** Hoe ver terug het portaal "Geweest" toont. */
+const APPOINTMENTS_PAST_DAYS = 90;
+
+/**
+ * De afspraken die deze klant via een boekingslink maakte (of die voor hem
+ * gemaakt werden), voor de tab Afspraken. Eerst zag de klant een afspraak
+ * alleen in zijn mail en zijn eigen agenda.
+ *
+ * Wie wat ziet:
+ * - Alleen boekingen van déze klant (client_id, gezet bij het reserveren uit
+ *   de link, nooit uit wat de bezoeker invulde) in déze organisatie. Een
+ *   boeking via een link zonder klant hoort bij niemand, en komt dus in geen
+ *   enkel portaal: het e-mailadres dat iemand op de boekingspagina typte, is
+ *   niet geverifieerd.
+ * - Bevestigd of geannuleerd; een poging die nooit doorging niet.
+ * - De videolink alleen bij een bevestigde afspraak die nog niet voorbij is.
+ * - Geen e-mailadres, geen agenda- of interne gegevens.
+ * Een fout hier laat het portaal niet omvallen: dan geen afspraken.
+ */
+async function loadAppointments(client: ClientRow): Promise<PortalAppointment[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('meeting_bookings')
+      .select('*, slot:meeting_booking_slots!inner(starts_at,ends_at), link:meeting_booking_links!inner(title,meeting_url,auto_conference,conference_provider,source_id)')
+      .eq('organization_id', client.organization_id)
+      .eq('client_id', client.id)
+      .in('status', ['confirmed', 'cancelled'])
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    if (rows.length === 0) return [];
+
+    // Welke agenda (Google of Microsoft) bepaalt bij "van de agenda" of het
+    // Meet of Teams is; alleen nodig voor oude boekingen zonder eigen dienst.
+    const one = (v: unknown) => (Array.isArray(v) ? v[0] : v) as Record<string, unknown> | undefined;
+    const sourceIds = [...new Set(rows.map((r) => String(one(r.link)?.source_id ?? '')).filter(isUuid))];
+    const providers = new Map<string, string>();
+    if (sourceIds.length) {
+      const { data: sources } = await supabaseAdmin.from('calendar_sources')
+        .select('id,provider').eq('organization_id', client.organization_id).in('id', sourceIds);
+      for (const row of (sources ?? []) as Array<{ id: string; provider: string }>) providers.set(row.id, row.provider);
+    }
+
+    const now = Date.now();
+    const since = now - APPOINTMENTS_PAST_DAYS * 86_400_000;
+    const list: PortalAppointment[] = [];
+    for (const row of rows) {
+      const slot = one(row.slot);
+      const link = one(row.link);
+      const startsAt = String(slot?.starts_at ?? '');
+      const endsAt = String(slot?.ends_at ?? '');
+      const ends = Date.parse(endsAt);
+      if (!startsAt || !Number.isFinite(ends) || ends < since) continue;
+      const status = row.status === 'cancelled' ? 'cancelled' : 'confirmed';
+      // Een geannuleerde afspraak die al voorbij is, zegt de klant niets meer.
+      if (status === 'cancelled' && ends <= now) continue;
+      const ownUrl = portalMeetingUrl(row.meeting_url);
+      const fixedUrl = portalMeetingUrl(link?.meeting_url);
+      const url = ownUrl ?? fixedUrl;
+      const planned = bookingVideoService({
+        meetingUrl: fixedUrl,
+        autoConference: link?.auto_conference as boolean | null | undefined,
+        conferenceProvider: (link?.conference_provider as string | null | undefined) ?? null,
+        sourceProvider: providers.get(String(link?.source_id ?? '')) ?? null,
+      });
+      const stored = isBookingVideoKind(row.video_service) ? row.video_service : null;
+      list.push({
+        id: String(row.id),
+        title: String(link?.title ?? 'Afspraak').slice(0, 200),
+        starts_at: startsAt,
+        ends_at: endsAt,
+        status,
+        video_service: stored ?? (url ? videoKindOfUrl(url) : null) ?? planned,
+        meeting_url: status === 'confirmed' && ends > now ? url : null,
+        booked_by: typeof row.booked_name === 'string' && row.booked_name.trim() ? row.booked_name.trim().slice(0, 160) : null,
+      });
+    }
+    return list.sort((a, b) => a.starts_at.localeCompare(b.starts_at)).slice(-100);
+  } catch (error) {
+    console.warn('client-portal afspraken overgeslagen', describeError(error));
+    return [];
+  }
+}
+
+/** Alleen een https-link (of http) zonder stuurtekens; anders geen knop. */
+function portalMeetingUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw || raw.length > 2048 || /[\u0000-\u001f\u007f\s]/.test(raw)) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? raw : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

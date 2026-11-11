@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import type React from 'react';
-import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Lock, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { hasPlannedTime, taskBlockMinutes } from '../lib/planning';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
@@ -17,6 +17,8 @@ import {
   type BookingVideo, type MeetingMode,
 } from '../lib/meeting';
 import { BookingVideoSelect } from '../components/BookingVideoSelect';
+import { SlotDurationPicker, useSlotSplit } from '../components/SlotDurationPicker';
+import { splitIntoSlots } from '../lib/bookingLinks';
 import {
   createCalendarAppPassword,
   createExternalCalendarEvent,
@@ -1823,21 +1825,21 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
                     const height = Math.max(bottom - top, 1.6);
                     const taken = s.status === 'booked' || s.status === 'pending';
                     const removable = !taken && s.removable === true;
+                    // Opmaak in globals.css (.tb-booking-slot): eerst stond alles hier
+                    // inline, met vaste kleuren die in Dag niet leesbaar waren
+                    // (lichtgroene tekst op lichtgroen) en emoji als teken.
+                    const kind = taken ? 'is-taken' : removable ? 'is-draft' : 'is-offered';
                     return (
                       <button type="button" key={`bk-${s.id}`}
-                        className="tb-booking-slot"
+                        className={`tb-booking-slot ${kind}`}
                         onClick={() => { if (removable && onRemoveBookingSlot) onRemoveBookingSlot(s.id); }}
-                        title={taken ? 'Dit blok is geboekt' : removable ? 'Concept-optie — klik om te verwijderen' : 'Aangeboden optie aan de klant'}
-                        style={{
-                          position: 'absolute', top: `${top}%`, height: `${height}%`, left: '2px', right: '2px', zIndex: 6,
-                          borderRadius: 6, border: `2px ${removable ? 'solid' : 'dashed'}`, borderColor: taken ? '#5865f2' : '#3ba55d',
-                          background: taken ? 'rgba(88,101,242,.20)' : removable ? 'rgba(59,165,93,.24)' : 'rgba(59,165,93,.12)',
-                          color: '#eafff0', fontWeight: 600, fontSize: 11, lineHeight: 1.2, cursor: removable ? 'pointer' : 'default',
-                          // Alleen-lezen opties mogen het slepen/aanmaken van gewone afspraken eronder niet blokkeren.
-                          pointerEvents: removable ? 'auto' : 'none',
-                          display: 'flex', alignItems: 'flex-start', padding: '2px 5px', overflow: 'hidden',
-                        }}>
-                        {taken ? '🔒 ' : removable ? '✕ ' : '○ '}{formatTime(s.starts_at)}–{formatTime(s.ends_at)}
+                        title={taken ? 'Dit moment is geboekt' : removable ? 'Klik om dit moment weg te halen' : 'Aangeboden aan de klant'}
+                        aria-label={`${formatTime(s.starts_at)} tot ${formatTime(s.ends_at)}: ${taken ? 'geboekt' : removable ? 'vrij, klik om weg te halen' : 'aangeboden'}`}
+                        tabIndex={removable ? 0 : -1}
+                        style={{ top: `${top}%`, height: `${height}%` }}>
+                        {taken && <Lock size={10} aria-hidden="true" />}
+                        <span className="tb-booking-time">{formatTime(s.starts_at)}–{formatTime(s.ends_at)}</span>
+                        {removable && <X size={11} aria-hidden="true" className="tb-booking-x" />}
                       </button>
                     );
                   })}
@@ -3925,6 +3927,8 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   // de klant/agenda. De opties van al je actieve boekingslinks blijven als aparte
   // laag zichtbaar in de agenda (persistent, ook ná versturen).
   const [bookingMode, setBookingMode] = useState(false);
+  // Hoe lang één optie is (en de pauze ertussen) als je in "Beschikbaarheid" sleept.
+  const [slotSplit, setSlotSplit] = useSlotSplit();
   const [bookingLinks, setBookingLinks] = useState<MeetingBookingLinkListItem[]>([]);
   const [showBookingOptions, setShowBookingOptions] = useState(true);
   const [agendaOptions, setAgendaOptions] = useState<{ id: string; starts_at: string; ends_at: string; status: string }[]>([]);
@@ -4257,14 +4261,21 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     const sd = new Date(day); sd.setHours(st.hour, st.minutes, 0, 0);
     const ed = new Date(day); ed.setHours(et.hour, et.minutes, 0, 0);
     if (bookingMode) {
-      // Concept-optie: bewaren tot je 'm doorstuurt naar de klant.
-      setDraftSlots(prev => [...prev, { startsAt: sd.toISOString(), endsAt: ed.toISOString() }].sort((a, b) => a.startsAt.localeCompare(b.startsAt)));
+      // Concept-opties: bewaren tot je ze doorstuurt naar de klant. Een sleep
+      // wordt momenten van de gekozen duur (SlotDurationPicker); wat al begonnen
+      // is of er al staat, valt weg.
+      const pieces = splitIntoSlots(sd.toISOString(), ed.toISOString(), slotSplit.durationMin, slotSplit.bufferMin)
+        .filter(p => Date.parse(p.startsAt) > Date.now());
+      setDraftSlots(prev => {
+        const seen = new Set(prev.map(d => d.startsAt));
+        return [...prev, ...pieces.filter(p => !seen.has(p.startsAt))].sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+      });
       return;
     }
     setEditingOriginal(null);
     setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', taskId: '', trackTime: true, editingEventId: '', meetingUrl: '', videoService: '' }));
     setShowCreatePanel(true);
-  }, [bookingMode]);
+  }, [bookingMode, slotSplit]);
 
   // Klikken op een lege plek in de maandweergave maakt een afspraak op die dag —
   // net als Google, dat daar een snelinvoer opent. Standaardduur: het eerstvolgende
@@ -4960,7 +4971,8 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       {isTimeGridView(view) && bookingMode && (
         <div className="calendar-toolbar calendar-booking-toolbar">
           <span className="calendar-range-label">Opties tekenen</span>
-          <span className="muted" style={{ fontSize: 13 }}>Sleep op het rooster om opties te maken ({draftSlots.length} gekozen) · klik een concept-blok om het te verwijderen.</span>
+          <SlotDurationPicker value={slotSplit} onChange={setSlotSplit} />
+          <span className="muted" style={{ fontSize: 13 }}>Sleep over een dagdeel ({draftSlots.length} gekozen) · klik een optie om hem weg te halen.</span>
           <Button variant="primary" disabled={draftSlots.length === 0} onClick={() => setShowBookingSend(true)}>Doorsturen naar klant…</Button>
           {draftSlots.length > 0 && <Button onClick={() => setDraftSlots([])}>Wissen</Button>}
           <Button onClick={() => { setBookingMode(false); setDraftSlots([]); }}>Sluiten</Button>

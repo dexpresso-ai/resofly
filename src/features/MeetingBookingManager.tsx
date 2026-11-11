@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, ExternalLink, Maximize2, Minimize2, RefreshCw, Send, ShieldCheck } from 'lucide-react';
+import { CalendarRange, Check, Copy, ExternalLink, Lock, Maximize2, Minimize2, Repeat, RefreshCw, Send, ShieldCheck, X } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, CalendarSource, ConferenceProvider, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID, VideoServices } from '../types';
 import { Button, Input, Textarea, Select, normalizeColor } from '../components/Ui';
 import { listExternalCalendarEvents, loadCalendarIntegrations } from '../lib/calendar-api';
@@ -7,14 +7,23 @@ import { addDays, startOfWeek } from '../lib/dates';
 import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
 import { TimeBlockGrid, slotSelectionToIso, type BookingOverlaySlot } from './CalendarPage';
 import { BookingVideoSelect } from '../components/BookingVideoSelect';
+import { SlotDurationPicker, useSlotSplit } from '../components/SlotDurationPicker';
+import { VideoServiceMark } from '../components/VideoServiceMark';
 import { BookingStateBadge } from '../components/ClientBookingLinks';
 import { bookingVideoFields, bookingVideoFromLink, defaultBookingVideo, type BookingVideo } from '../lib/meeting';
 import {
   BOOKING_STATUS_LABELS,
   LINK_STATE_LABELS,
   SLOT_STATUS_LABELS,
+  VIDEO_INFO,
   expiryLabel,
+  fmtDayKey,
   fmtDayLong,
+  generatePatternSlots,
+  groupByDay,
+  linkVideoKind,
+  splitIntoSlots,
+  weekdaysLabel,
   fmtMoment,
   fmtTime,
   linkStateExplanation,
@@ -179,6 +188,7 @@ export function MeetingBookingManager({ organizationId, data, canWrite, focus, o
                 <BookingStateBadge state={l.state} />
               </div>
               <div className="muted mbk-link-meta">
+                {(() => { const k = linkVideoKind(l, l.source_provider); return k ? <VideoServiceMark kind={k} size="sm" /> : null; })()}
                 {l.client_name || 'Geen klant'} · {l.booking_count}/{l.max_total_bookings} geboekt
                 {l.state === 'open' ? ` · ${l.open_slot_count} vrij` : ''}
                 {l.needs_reconnect ? ' · ⚠ koppeling' : ''}
@@ -265,16 +275,37 @@ export function MeetingBookingManager({ organizationId, data, canWrite, focus, o
             }, `Boekingslink verstuurd naar ${recipient.email}.`)}
             onAddSlots={async (slots) => {
               let extra = '';
+              let added = 0;
               await run(async () => {
-                const res = await addBookingSlots(organizationId, detail.link.id, slots);
+                // De server neemt hooguit 200 momenten per aanvraag; een
+                // weekpatroon kan er meer maken. Dus in porties.
+                const warnings: number[] = [];
+                let skipped = 0;
+                try {
+                  for (let i = 0; i < slots.length; i += 200) {
+                    const res = await addBookingSlots(organizationId, detail.link.id, slots.slice(i, i + 200));
+                    added += res.slots?.length ?? 0;
+                    warnings.push(res.warnings?.length ?? 0);
+                    skipped += res.skipped ?? 0;
+                  }
+                } finally {
+                  await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
+                }
+                const clashes = warnings.reduce((a, b) => a + b, 0);
                 const parts: string[] = [];
-                if (res.warnings.length) parts.push(`${res.warnings.length} ${res.warnings.length === 1 ? 'moment botst' : 'momenten botsen'} met een afspraak in je agenda`);
-                if (res.skipped) parts.push(`${res.skipped} ${res.skipped === 1 ? 'moment stond' : 'momenten stonden'} er al op`);
+                if (clashes) parts.push(`${clashes} ${clashes === 1 ? 'moment botst' : 'momenten botsen'} met een afspraak in je agenda`);
+                if (skipped) parts.push(`${skipped} ${skipped === 1 ? 'moment stond' : 'momenten stonden'} er al op`);
                 if (parts.length) extra = `Let op: ${parts.join(', ')}.`;
-                await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
-              }, slots.length === 1 ? 'Moment toegevoegd.' : 'Momenten toegevoegd.');
-              if (extra) setNotice(extra);
+              }, slots.length === 1 ? 'Moment toegevoegd.' : `${slots.length} momenten toegevoegd.`);
+              if (extra) setNotice(`${added === 1 ? '1 moment' : `${added} momenten`} toegevoegd. ${extra}`);
             }}
+            onRemoveSlots={(slotIds) => run(async () => {
+              try {
+                for (const id of slotIds) await removeBookingSlot(organizationId, detail.link.id, id);
+              } finally {
+                await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
+              }
+            }, slotIds.length === 1 ? 'Moment weggehaald.' : `${slotIds.length} momenten weggehaald.`)}
             onRemoveSlot={(slotId) => run(async () => {
               await removeBookingSlot(organizationId, detail.link.id, slotId);
               await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
@@ -369,6 +400,9 @@ function LinkForm({ mode, sources, videoServices, clients, busy, onSubmit, onCan
             <option value="">Geen klant</option>
             {clients.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
           </Select>
+          {/* Alleen via de klant van de link komt een afspraak in een portaal:
+              het e-mailadres op de boekingspagina is niet gecontroleerd. */}
+          <small className="muted mbk-field-hint">{clientId ? 'De klant ziet zijn afspraken ook in zijn klantportaal.' : 'Met een klant ziet hij de afspraak ook in zijn klantportaal.'}</small>
         </label>
       </div>
       <div className="mbk-form-grid">
@@ -388,7 +422,7 @@ function LinkForm({ mode, sources, videoServices, clients, busy, onSubmit, onCan
   );
 }
 
-function LinkDetail({ detail, organizationId, sources, videoServices, clients, client, token, busy, canWrite, onSavedPatch, onRegenerate, onExtend, onSendMail, onAddSlots, onRemoveSlot, onCancelBooking, onDelete }: {
+function LinkDetail({ detail, organizationId, sources, videoServices, clients, client, token, busy, canWrite, onSavedPatch, onRegenerate, onExtend, onSendMail, onAddSlots, onRemoveSlot, onRemoveSlots, onCancelBooking, onDelete }: {
   detail: BookingLinkDetail;
   organizationId: UUID;
   sources: CalendarSource[];
@@ -404,10 +438,13 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
   onSendMail: (recipient: { email: string; name?: string }, opts: { regenerate: boolean }) => void;
   onAddSlots: (slots: Array<{ startsAt: string; endsAt: string }>) => void;
   onRemoveSlot: (slotId: UUID) => void;
+  onRemoveSlots: (slotIds: UUID[]) => void;
   onCancelBooking: (bookingId: UUID) => void;
   onDelete: () => void;
 }) {
   const link = detail.link;
+  const [split, setSplit] = useSlotSplit();
+  const videoKind = linkVideoKind(link, detail.source_provider);
   const [editing, setEditing] = useState(false);
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
@@ -525,6 +562,48 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
     setStart(''); setEnd('');
   };
 
+  // Een getekend blok in momenten van de gekozen duur. Wat al begonnen is,
+  // valt weg: de server weigert anders de hele aanvraag.
+  const [drawNote, setDrawNote] = useState<string | null>(null);
+  const addDrawn = (startsAt: string, endsAt: string) => {
+    const pieces = splitIntoSlots(startsAt, endsAt, split.durationMin, split.bufferMin).filter(p => Date.parse(p.startsAt) > Date.now());
+    if (!pieces.length) { setDrawNote('Dat moment is al voorbij; kies een moment dat nog moet komen.'); return; }
+    setDrawNote(null);
+    onAddSlots(pieces);
+  };
+
+  // De vrije momenten van de week in beeld, een week later nog eens. Wat er
+  // daar al precies zo staat, slaat de server over.
+  const visibleWeekOpen = slots.filter(sl => sl.status === 'open' && Date.parse(sl.starts_at) >= weekDays[0].getTime() && Date.parse(sl.starts_at) < addDays(weekDays[6], 1).getTime());
+  const repeatWeek = () => {
+    const week = 7 * 86_400_000;
+    const copies = visibleWeekOpen
+      .map(sl => ({ startsAt: new Date(Date.parse(sl.starts_at) + week).toISOString(), endsAt: new Date(Date.parse(sl.ends_at) + week).toISOString() }))
+      .filter(c => Date.parse(c.startsAt) > Date.now());
+    if (!copies.length) return;
+    onAddSlots(copies);
+    setWeekAnchor(addDays(weekAnchor, 7));
+  };
+
+  // Weekpatroon: in één keer momenten op vaste dagen en tijden.
+  const [patternOpen, setPatternOpen] = useState(false);
+  const [patternDays, setPatternDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [patternFrom, setPatternFrom] = useState('09:00');
+  const [patternTo, setPatternTo] = useState('12:00');
+  const [patternWeeks, setPatternWeeks] = useState(2);
+  const [patternStart, setPatternStart] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+  const patternSlots = useMemo(() => generatePatternSlots({
+    weekdays: patternDays, from: patternFrom, to: patternTo,
+    durationMin: split.durationMin || 30, bufferMin: split.durationMin ? split.bufferMin : 0,
+    weeks: patternWeeks, startDate: patternStart,
+  }), [patternDays, patternFrom, patternTo, split, patternWeeks, patternStart]);
+
+  // De momenten die nog komen, per dag (Nederlandse tijd, zoals de klant ze ziet).
+  const upcomingByDay = useMemo(() => groupByDay(upcomingSlots), [upcomingSlots]);
+
   const copyLink = () => {
     if (!token) return;
     void navigator.clipboard?.writeText(token.url).then(() => {
@@ -580,6 +659,11 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
             <div className="muted mbk-detail-meta">
               {client ? `${client.name} · ` : ''}Agenda: {detail.source_name ?? '— (verwijderd)'}{detail.source_provider ? ` · ${PROVIDER_LABEL[detail.source_provider] ?? detail.source_provider}` : ''}
               {' · '}hooguit {link.max_total_bookings} {link.max_total_bookings === 1 ? 'afspraak' : 'afspraken'}, {link.max_per_week} per week
+            </div>
+            <div className="mbk-video-meta">
+              {videoKind
+                ? <><VideoServiceMark kind={videoKind} size="sm" /> <span>{videoKind === 'link' ? 'Videogesprek met een vaste link' : `Videogesprek via ${VIDEO_INFO[videoKind].name}`}</span></>
+                : <span className="muted">Geen videogesprek</span>}
             </div>
             <p className={`mbk-state-line tone-${LINK_STATE_LABELS[state]?.tone ?? 'muted'}`}>{linkStateExplanation(state, openCount)}</p>
             {detail.needs_reconnect && <div className="alert alert-danger" style={{ marginTop: 8 }}>De gekoppelde agenda-verbinding is niet meer actief. Koppel het account opnieuw (Instellingen → Agenda), anders mislukken de boekingen.</div>}
@@ -666,8 +750,8 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
           <div className="mbk-drawcard-text">
             <strong>Momenten tekenen</strong>
             <p className="muted">
-              Het weekrooster opent schermvullend. Sleep de momenten waarop de klant mag kiezen;
-              je eigen afspraken staan als context in beeld. Met <em>Klaar</em> (of Escape) kom je hier terug.
+              Het weekrooster opent schermvullend. Sleep over een dagdeel; dat wordt vanzelf momenten van de duur die je kiest
+              (30 min, een uur …). Je eigen afspraken staan als context in beeld. Met <em>Klaar</em> (of Escape) kom je hier terug.
             </p>
           </div>
           <div className="mbk-drawcard-side">
@@ -691,15 +775,26 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
               <span className="mbk-draw-weeklabel">{weekLabel}</span>
               <Button onClick={() => setWeekAnchor(addDays(weekAnchor, 7))} disabled={busy}>Volgende →</Button>
               <Button onClick={() => setWeekAnchor(startOfWeek(new Date()))} disabled={busy}>Deze week</Button>
+              <Button onClick={repeatWeek} disabled={busy || visibleWeekOpen.length === 0}
+                title="Zet de vrije momenten van deze week ook in de week erna">
+                <Repeat size={14} /> Herhaal volgende week
+              </Button>
             </div>
             <div className="mbk-draw-done">
               <span className="mbk-draw-count"><strong>{openCount}</strong> vrij</span>
               <Button variant="primary" onClick={closeDrawing}><Minimize2 size={15} /> Klaar</Button>
             </div>
           </header>
-          <p className="mbk-draw-hint">
-            Sleep over het rooster om een moment toe te voegen · klik een groen moment om het weg te halen (🔒 = al geboekt) · een moment in het verleden kan niemand boeken.
-          </p>
+          <div className="mbk-draw-tools">
+            <SlotDurationPicker value={split} onChange={setSplit} disabled={busy} />
+            <p className="mbk-draw-hint">
+              {split.durationMin
+                ? `Sleep over een dagdeel: dat wordt vanzelf momenten van ${split.durationMin} min${split.bufferMin ? ` met ${split.bufferMin} min pauze` : ''}. Een klik is één moment.`
+                : 'Sleep over het rooster: elk blok is één moment.'}
+              {' '}Klik een groen moment om het weg te halen; een moment met een slotje is geboekt.
+            </p>
+            {drawNote && <p className="mbk-draw-note" role="status">{drawNote}</p>}
+          </div>
           {/* .calendar-agenda-page-scope zodat de gedeelde .tb-scroll-hoogte de vaste
               agenda-opmaak meekrijgt; de overlay zelf zet hem daarna op vullend. */}
           <div className="calendar-agenda-page mbk-draw-grid">
@@ -711,7 +806,7 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
               trackedMinutesFor={() => null}
               canWrite={canWrite}
               writeableSources={sources}
-              onSelectSlot={(day, s, e) => { const iso = slotSelectionToIso(day, s, e); onAddSlots([{ startsAt: iso.startsAt, endsAt: iso.endsAt }]); }}
+              onSelectSlot={(day, s, e) => { const iso = slotSelectionToIso(day, s, e); addDrawn(iso.startsAt, iso.endsAt); }}
               onEditTask={() => {}}
               onOpenEvent={() => {}}
               onMoveEvent={() => {}}
@@ -724,40 +819,110 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
         </div>
       )}
 
-      {/* Momenten (lijst + handmatige invoer als alternatief) */}
-      <div className="card mbk-section">
-        <strong>Momenten ({openCount} vrij)</strong>
-        {canWrite && (
-          <div className="mbk-slotform">
-            <label>Van<Input type="datetime-local" min={nowLocalInput()} value={start} onChange={e => setStart(e.target.value)} /></label>
-            <label>Tot<Input type="datetime-local" min={start || nowLocalInput()} value={end} onChange={e => setEnd(e.target.value)} /></label>
-            <Button variant="primary" onClick={addSlot} disabled={busy || !start || !end}>Moment toevoegen</Button>
-          </div>
-        )}
-        {upcomingSlots.length === 0 && <p className="muted">Nog geen momenten die nog moeten komen. Open hierboven het rooster en teken ze, of voeg ze hier handmatig toe.</p>}
-        <div className="mbk-rows">
-          {upcomingSlots.map(s => (
-            <div key={s.id} className="mbk-row">
-              <span>{fmtMoment(s.starts_at, s.ends_at)}</span>
-              <span className="mbk-row-side">
-                <span className={`mbk-badge tone-${SLOT_STATUS_LABELS[s.status]?.tone ?? 'muted'}`}>{SLOT_STATUS_LABELS[s.status]?.label ?? s.status}</span>
-                {canWrite && s.status === 'open' && <Button variant="danger" onClick={() => onRemoveSlot(s.id)} disabled={busy}>Weghalen</Button>}
-              </span>
+      {/* Weekpatroon: in één keer momenten op vaste dagen en tijden. */}
+      {canWrite && link.source_id && (
+        <div className="card mbk-pattern">
+          <button type="button" className="mbk-pattern-toggle" aria-expanded={patternOpen} onClick={() => setPatternOpen(v => !v)}>
+            <CalendarRange size={16} aria-hidden="true" />
+            <span><strong>Snel invullen met een weekpatroon</strong><em>Bijvoorbeeld elke werkdag van 9.00 tot 12.00 uur, in momenten van een half uur.</em></span>
+            <span className="mbk-pattern-chevron" aria-hidden="true">{patternOpen ? '−' : '+'}</span>
+          </button>
+          {patternOpen && <div className="mbk-pattern-body">
+            <div className="mbk-pattern-days" role="group" aria-label="Dagen">
+              {['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'].map((d, i) => {
+                const n = i + 1;
+                const on = patternDays.includes(n);
+                return <button key={d} type="button" aria-pressed={on} className={on ? 'is-on' : ''}
+                  onClick={() => setPatternDays(prev => on ? prev.filter(x => x !== n) : [...prev, n].sort((a, b) => a - b))}>{d}</button>;
+              })}
             </div>
-          ))}
+            <div className="mbk-pattern-grid">
+              <label>Van<Input type="time" step={900} value={patternFrom} onChange={e => setPatternFrom(e.target.value)} /></label>
+              <label>Tot<Input type="time" step={900} value={patternTo} onChange={e => setPatternTo(e.target.value)} /></label>
+              <label>Vanaf<Input type="date" value={patternStart} onChange={e => setPatternStart(e.target.value)} /></label>
+              <label>Hoeveel weken
+                <Select value={String(patternWeeks)} onChange={e => setPatternWeeks(Number(e.target.value))}>
+                  {[1, 2, 3, 4, 6, 8].map(w => <option key={w} value={w}>{w === 1 ? '1 week' : `${w} weken`}</option>)}
+                </Select>
+              </label>
+            </div>
+            <SlotDurationPicker value={split.durationMin ? split : { ...split, durationMin: 30 }} onChange={setSplit} disabled={busy} allowAsDrawn={false} />
+            <div className="mbk-pattern-foot">
+              <span className="muted">
+                {patternSlots.length
+                  ? `${patternSlots.length} ${patternSlots.length === 1 ? 'moment' : 'momenten'}: ${weekdaysLabel(patternDays)}, ${patternFrom}–${patternTo}, ${patternWeeks === 1 ? '1 week' : `${patternWeeks} weken`}.`
+                  : 'Met deze keuze komt er geen moment bij (geen dag gekozen, of de tijden kloppen niet).'}
+              </span>
+              <Button variant="primary" disabled={busy || patternSlots.length === 0} onClick={() => { onAddSlots(patternSlots); setPatternOpen(false); }}>
+                {patternSlots.length ? `${patternSlots.length} momenten toevoegen` : 'Momenten toevoegen'}
+              </Button>
+            </div>
+          </div>}
         </div>
+      )}
+
+      {/* Momenten, per dag als tijdchips */}
+      <div className="card mbk-section">
+        <div className="mbk-section-head">
+          <strong>Momenten</strong>
+          <span className="mbk-count"><strong>{openCount}</strong> vrij{upcomingSlots.length > openCount ? ` · ${upcomingSlots.length - openCount} geboekt` : ''}</span>
+        </div>
+        {upcomingSlots.length === 0 && <p className="muted">Nog geen momenten die nog moeten komen. Open het rooster en sleep een dagdeel, of vul een weekpatroon in.</p>}
+        <div className="mbk-days">
+          {upcomingByDay.map(({ day, slots: list }) => {
+            const removable = list.filter(sl => sl.status === 'open');
+            return (
+              <div key={day} className="mbk-day">
+                <div className="mbk-day-head">
+                  <span className="mbk-day-label">{fmtDayKey(day)}</span>
+                  {canWrite && removable.length > 1 && (
+                    <button type="button" className="mbk-day-clear" disabled={busy}
+                      onClick={() => { if (confirm(`De ${removable.length} vrije momenten van ${fmtDayKey(day)} weghalen? Geboekte momenten blijven staan.`)) onRemoveSlots(removable.map(sl => sl.id)); }}>
+                      Dag leegmaken
+                    </button>
+                  )}
+                </div>
+                <div className="mbk-chips">
+                  {list.map(sl => {
+                    const taken = sl.status === 'booked' || sl.status === 'pending';
+                    return (
+                      <span key={sl.id} className={`mbk-chip${taken ? ' is-taken' : ''}`} title={SLOT_STATUS_LABELS[sl.status]?.label ?? sl.status}>
+                        {taken && <Lock size={12} aria-hidden="true" />}
+                        <span>{fmtTime(sl.starts_at)}–{fmtTime(sl.ends_at)}</span>
+                        {taken && <em>{SLOT_STATUS_LABELS[sl.status]?.label ?? sl.status}</em>}
+                        {canWrite && sl.status === 'open' && (
+                          <button type="button" className="mbk-chip-x" disabled={busy} onClick={() => onRemoveSlot(sl.id)} aria-label={`${fmtDayKey(day)} ${fmtTime(sl.starts_at)} weghalen`}><X size={12} /></button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {canWrite && (
+          <details className="mbk-manual">
+            <summary>Eén moment met de hand</summary>
+            <div className="mbk-slotform">
+              <label>Van<Input type="datetime-local" min={nowLocalInput()} value={start} onChange={e => setStart(e.target.value)} /></label>
+              <label>Tot<Input type="datetime-local" min={start || nowLocalInput()} value={end} onChange={e => setEnd(e.target.value)} /></label>
+              <Button variant="primary" onClick={addSlot} disabled={busy || !start || !end}>Moment toevoegen</Button>
+            </div>
+          </details>
+        )}
         {pastSlots.length > 0 && (
           <button type="button" className="mbk-toggle" onClick={() => setShowPast(v => !v)} aria-expanded={showPast}>
             {showPast ? 'Verberg' : 'Toon'} {pastSlots.length} voorbije of vervallen {pastSlots.length === 1 ? 'moment' : 'momenten'}
           </button>
         )}
         {showPast && <div className="mbk-rows is-past">
-          {pastSlots.map(s => (
-            <div key={s.id} className="mbk-row">
-              <span>{fmtMoment(s.starts_at, s.ends_at)}</span>
+          {pastSlots.map(sl => (
+            <div key={sl.id} className="mbk-row">
+              <span>{fmtMoment(sl.starts_at, sl.ends_at)}</span>
               <span className="mbk-row-side">
-                <span className={`mbk-badge tone-${SLOT_STATUS_LABELS[s.status]?.tone ?? 'muted'}`}>{Date.parse(s.ends_at) <= now && s.status === 'open' ? 'Voorbij' : (SLOT_STATUS_LABELS[s.status]?.label ?? s.status)}</span>
-                {canWrite && (s.status === 'open' || s.status === 'cancelled') && <Button variant="danger" onClick={() => onRemoveSlot(s.id)} disabled={busy}>Weghalen</Button>}
+                <span className={`mbk-badge tone-${SLOT_STATUS_LABELS[sl.status]?.tone ?? 'muted'}`}>{Date.parse(sl.ends_at) <= now && sl.status === 'open' ? 'Voorbij' : (SLOT_STATUS_LABELS[sl.status]?.label ?? sl.status)}</span>
+                {canWrite && (sl.status === 'open' || sl.status === 'cancelled') && <Button variant="danger" onClick={() => onRemoveSlot(sl.id)} disabled={busy}>Weghalen</Button>}
               </span>
             </div>
           ))}

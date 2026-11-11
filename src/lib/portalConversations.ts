@@ -95,7 +95,7 @@ export function ticketPreview(ticket: Pick<PortalTicket, 'last_reply_from' | 'la
 
 // ── Deeplinks uit de meldingsmail ─────────────────────────────────────────
 
-export type PortalView = 'settings' | 'messages' | 'tickets';
+export type PortalView = 'settings' | 'messages' | 'tickets' | 'appointments';
 
 export interface PortalLink {
   /** Het klantdossier (clientId); belangrijk als iemand bij meer leveranciers klant is. */
@@ -106,7 +106,7 @@ export interface PortalLink {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const VIEWS: Record<string, PortalView> = { instellingen: 'settings', berichten: 'messages', tickets: 'tickets' };
+const VIEWS: Record<string, PortalView> = { instellingen: 'settings', berichten: 'messages', tickets: 'tickets', afspraken: 'appointments' };
 
 /**
  * Leest ?dossier=…&ticket=… (of &bericht=…, of &view=instellingen) uit de URL.

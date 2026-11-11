@@ -11,6 +11,8 @@ export type MeetingBookingLinkEmailInput = {
   /** Per-link intro-tekst die de gebruiker bij deze specifieke link heeft ingevuld. */
   introText?: string | null;
   bookingUrl: string;
+  /** Welk videogesprek het wordt ("Microsoft Teams"); null = geen of onbekend. */
+  videoName?: string | null;
   accentColor?: string | null;
   /** Org-brede, in de editor aangepaste e-mailtekst. */
   content?: EmailTemplateContent | null;
@@ -36,7 +38,15 @@ export function renderMeetingBookingLinkEmail(input: MeetingBookingLinkEmailInpu
   const introText = renderContentText(fieldOr(input.content, 'intro', DEFAULT_INTRO), vars);
   const ctaLabel = renderContentText(fieldOr(input.content, 'ctaLabel', DEFAULT_CTA), vars).trim() || DEFAULT_CTA;
 
-  const bodyHtml = perLinkNote ? `<p style="margin:16px 0 0;color:#d8d8df;line-height:1.6;white-space:pre-wrap;">${escapeHtml(perLinkNote)}</p>` : undefined;
+  // Hoe het gesprek gaat, al in de uitnodiging: wie Teams of Meet ziet staan,
+  // weet vooraf of hij een app of account nodig heeft.
+  const videoName = input.videoName?.trim() || '';
+  const videoLine = videoName ? `Het gesprek is een videogesprek via ${videoName}. De link krijg je bij de bevestiging.` : '';
+  const bodyParts = [
+    videoLine ? `<p style="margin:16px 0 0;line-height:1.6;"><strong>Hoe:</strong> ${escapeHtml(videoLine)}</p>` : '',
+    perLinkNote ? `<p style="margin:16px 0 0;color:#d8d8df;line-height:1.6;white-space:pre-wrap;">${escapeHtml(perLinkNote)}</p>` : '',
+  ].filter(Boolean);
+  const bodyHtml = bodyParts.length ? bodyParts.join('') : undefined;
 
   const html = renderEmailLayout({
     brandName,
@@ -54,6 +64,8 @@ export function renderMeetingBookingLinkEmail(input: MeetingBookingLinkEmailInpu
     introText,
     '',
     input.bookingUrl,
+    videoLine ? '' : false,
+    videoLine || false,
     perLinkNote ? '' : false,
     perLinkNote || false,
   ]);

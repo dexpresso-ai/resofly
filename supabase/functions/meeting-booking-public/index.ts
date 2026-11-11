@@ -30,10 +30,15 @@ import { loadSenderBrand, withEmailBrand, type EmailBrand } from '../_shared/ema
 import { loadBranding } from '../_shared/branding.ts';
 import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
 import { isWriterRole, memberModuleLevel } from '../_shared/roles.ts';
+import { sanitizeMeetingUrl } from '../_shared/meetingLinks.ts';
 import {
+  BOOKING_VIDEO_NAMES,
   MAX_SLOTS_PER_BOOKING,
   bookingLinkState,
   bookingVideoLabel,
+  bookingVideoService,
+  videoKindOfUrl,
+  type BookingVideoKind,
   cleanVisitorEmail,
   cleanVisitorName,
   isActiveBooking,
@@ -235,6 +240,9 @@ async function getPublicLink(link: LinkRow) {
       max_per_week: link.max_per_week,
       expires_at: link.public_token_expires_at,
       video: bookingVideoLabel({ meetingUrl: link.meeting_url, autoConference: link.auto_conference, conferenceProvider: link.conference_provider, sourceProvider }),
+      // Welke dienst, als sleutel: de pagina zet er een eigen kaart bij (naam,
+      // hoe je deelneemt). `video` blijft voor een app die nog niet ververst is.
+      video_service: bookingVideoService({ meetingUrl: link.meeting_url, autoConference: link.auto_conference, conferenceProvider: link.conference_provider, sourceProvider }),
     },
     branding,
     company,
@@ -371,6 +379,7 @@ async function bookSlots(link: LinkRow, tokenHash: string, body: Record<string, 
       if (finalizeError) throw finalizeError;
 
       const evMeetingUrl = ev.meeting_url ? String(ev.meeting_url) : slotMeetingUrl;
+      await rememberMeetingUrl(link.organization_id, bookingId, evMeetingUrl);
       confirmed.push({ slot_id: slotId, starts_at: starts, ends_at: ends, meeting_url: evMeetingUrl });
     } catch (err) {
       if (bookingId) {
@@ -393,21 +402,47 @@ async function bookSlots(link: LinkRow, tokenHash: string, body: Record<string, 
   // auto-links verschilt de link per afspraak en staat hij in de losse
   // agenda-uitnodigingen.
   const displayMeetingUrl = link.meeting_url || (confirmed.length === 1 ? confirmed[0].meeting_url : null);
+  // Welk videogesprek: wat de link er echt van maakte, en anders wat hij beloofde.
+  const plannedVideo = bookingVideoService({ meetingUrl: link.meeting_url, autoConference: link.auto_conference, conferenceProvider: link.conference_provider, sourceProvider: provider });
+  const videoService: BookingVideoKind | null = (displayMeetingUrl ? videoKindOfUrl(displayMeetingUrl) : null) ?? plannedVideo;
 
   if (confirmed.length > 0) {
     const videoNote = videoNotes.size
       ? `${service ? serviceLabel(service) : 'De videovergadering'}: ${[...videoNotes].join(' ')} Stuur de klant zelf een videolink als dat nodig is.`
       : null;
-    await sendConfirmationEmails(link, name, email, confirmed, displayMeetingUrl, videoNote).catch(err => console.error('confirmation mail failed', err));
+    const videoName = videoService && videoService !== 'link' ? BOOKING_VIDEO_NAMES[videoService] : null;
+    await sendConfirmationEmails(link, name, email, confirmed, displayMeetingUrl, videoNote, videoName).catch(err => console.error('confirmation mail failed', err));
   }
 
   return {
     confirmed,
     failed,
     meeting_url: displayMeetingUrl,
+    video_service: videoService,
     invite_message: link.invite_message,
     title: link.title,
   };
+}
+
+/**
+ * De videolink bij de boeking zelf, zodat de klant hem in zijn portaal terugziet
+ * (client-portal: afspraken). Eerst stond hij alleen in de agenda en in de mail:
+ * wie de mail kwijt was, had geen link. Alleen een echte http(s)-link; mislukt
+ * dit (de kolom bestaat nog niet), dan gaat de boeking gewoon door.
+ */
+async function rememberMeetingUrl(organizationId: string, bookingId: string, meetingUrl: string | null): Promise<void> {
+  const url = sanitizeMeetingUrl(meetingUrl);
+  if (!url) return;
+  // Nooit gooien: de boeking staat op dit punt al vast in de agenda, en een
+  // fout hier zou hem in de catch van bookSlots weer vrijgeven.
+  try {
+    const { error } = await supabaseAdmin.from('meeting_bookings')
+      .update({ meeting_url: url, video_service: videoKindOfUrl(url) ?? 'link' })
+      .eq('id', bookingId).eq('organization_id', organizationId);
+    if (error) console.warn('videolink bij de boeking niet bewaard', error.message);
+  } catch (err) {
+    console.warn('videolink bij de boeking niet bewaard', err);
+  }
 }
 
 /** Overlapt [starts, ends) met een bestaand item op deze agenda-bron? */
@@ -434,7 +469,7 @@ function whenLine(starts: string, ends: string): string {
   return `${d} – ${t}`;
 }
 
-async function sendConfirmationEmails(link: LinkRow, name: string, email: string, confirmed: Array<{ starts_at: string; ends_at: string }>, meetingUrl: string | null, videoNote: string | null = null): Promise<void> {
+async function sendConfirmationEmails(link: LinkRow, name: string, email: string, confirmed: Array<{ starts_at: string; ends_at: string }>, meetingUrl: string | null, videoNote: string | null = null, videoName: string | null = null): Promise<void> {
   if (!RESEND_API_KEY) return;
   const sender = await resolveSenderIdentity(supabaseAdmin, link.organization_id, RESEND_FROM_EMAIL);
   if (!sender.from) return;
@@ -453,6 +488,7 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     title: link.title,
     whenLines,
     meetingUrl,
+    videoName,
     inviteMessage: link.invite_message,
     content,
   });

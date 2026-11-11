@@ -28,8 +28,11 @@ import {
 import { dbErrorAnswer } from '../_shared/dbError.ts';
 import { isWriterRole, memberModuleLevel } from '../_shared/roles.ts';
 import {
+  BOOKING_VIDEO_NAMES,
   DEFAULT_TOKEN_TTL_DAYS,
+  MAX_OPEN_SLOTS_PER_LINK,
   bookingLinkState,
+  bookingVideoService,
   checkNewSlots,
   clampTtlDays,
   cleanVisitorEmail,
@@ -568,8 +571,22 @@ async function addSlots(organizationId: string, userId: string, linkId: string, 
   // hetzelfde uur gaf de klant eerst twee keer hetzelfde moment.
   const { data: existingRows } = await supabaseAdmin.from('meeting_booking_slots')
     .select('starts_at,ends_at,status').eq('organization_id', organizationId).eq('booking_link_id', linkId);
-  const { fresh: parsed, skipped } = withoutDuplicateSlots(requested, (existingRows ?? []) as Array<{ starts_at: string; ends_at: string; status: string }>);
+  const existing = (existingRows ?? []) as Array<{ starts_at: string; ends_at: string; status: string }>;
+  const { fresh: parsed, skipped } = withoutDuplicateSlots(requested, existing);
   if (parsed.length === 0) return { slots: [], warnings: [], skipped };
+
+  // Hooguit 500 vrije momenten die nog moeten komen per link: meer toont de
+  // klantpagina niet. Met het weekpatroon zet je er in één klik tientallen op;
+  // een vergissing ("elke dag, een jaar lang") hoort een melding te geven en
+  // geen pagina die halverwege ophoudt.
+  const nowMs = Date.now();
+  const openAhead = existing.filter(s => (s.status === 'open' || s.status === 'pending') && Date.parse(s.starts_at) > nowMs).length;
+  if (openAhead + parsed.length > MAX_OPEN_SLOTS_PER_LINK) {
+    const room = Math.max(0, MAX_OPEN_SLOTS_PER_LINK - openAhead);
+    throw new HttpError(room === 0
+      ? `Op deze link staan al ${openAhead} vrije momenten; meer dan ${MAX_OPEN_SLOTS_PER_LINK} kan niet. Haal er eerst een paar weg.`
+      : `Op een link passen hooguit ${MAX_OPEN_SLOTS_PER_LINK} vrije momenten. Er kunnen er nog ${room} bij; je probeerde er ${parsed.length}.`, 422);
+  }
 
   // Overlap-waarschuwing t.o.v. de bestaande agenda-items op de gekozen bron.
   const warnings: Array<{ starts_at: string; conflict: string }> = [];
@@ -680,6 +697,16 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
   const brand = await loadSenderBrand(supabaseAdmin, organizationId);
   const brandName = brand.name;
   const content = await loadBookingEmailContent(organizationId, 'meetingBooking.linkSent');
+  // Welk videogesprek het wordt, al in de uitnodiging (zoals op de boekingspagina).
+  const { data: sourceRow } = link.source_id
+    ? await supabaseAdmin.from('calendar_sources').select('provider').eq('organization_id', organizationId).eq('id', link.source_id).maybeSingle()
+    : { data: null };
+  const videoKind = bookingVideoService({
+    meetingUrl: link.meeting_url,
+    autoConference: link.auto_conference,
+    conferenceProvider: link.conference_provider,
+    sourceProvider: sourceRow ? String((sourceRow as { provider: string }).provider) : null,
+  });
   const rendered = renderMeetingBookingLinkEmail({
     brandName,
     accentColor: brand.accent,
@@ -687,6 +714,7 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
     title: link.title,
     introText: link.intro_text,
     bookingUrl,
+    videoName: videoKind && videoKind !== 'link' ? BOOKING_VIDEO_NAMES[videoKind] : null,
     content,
   });
 

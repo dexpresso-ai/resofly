@@ -452,7 +452,11 @@ function edgeFunction(name, body, options = {}) {
   if (name === 'quote-public') return pub.quotePublic;
   if (name === 'invoice-public') return pub.invoicePublic;
   if (name === 'contract-public') return pub.contractPublic;
-  if (name === 'meeting-booking-public') return pub.bookingPublic;
+  if (name === 'meeting-booking-public') {
+    // Boeken: elk gekozen moment lukt, met een Teams-link (zie publicdata).
+    if (body?.action === 'bookSlots') return pub.bookingBooked(Array.isArray(body.slotIds) ? body.slotIds.map(String) : []);
+    return pub.bookingPublic;
+  }
   if (name === 'file-share-public') return pub.sharePublic;
   if (name === 'gallery-public') return pub.galleryPublic;
   // Afmelden voor marketingmail (2026-11-10): de pagina in de app, nog niet afgemeld.

@@ -10,7 +10,7 @@
 // meetingBookingRules.test.ts het kan vastleggen.
 // ============================================================
 
-import { isVideoService, serviceLabel, serviceOfProvider } from './conference.ts';
+import { isVideoService, serviceLabel, serviceOfProvider, serviceOfUrl } from './conference.ts';
 
 /**
  * Na zoveel minuten is een poging die nog op 'pending' staat dood: de edge
@@ -156,6 +156,80 @@ export function bookingVideoLabel(input: {
   const service = serviceOfProvider(input.sourceProvider);
   return service ? `Videogesprek via ${serviceLabel(service)}` : null;
 }
+
+/**
+ * Welk videogesprek, als één sleutel voor de klantpagina en het portaal. De
+ * pagina zet er een eigen kaart bij (naam, hoe je deelneemt). Eerst kreeg de
+ * klant alleen een zin ("Videogesprek via …") en bij een vaste link zelfs
+ * alleen "de link staat in je bevestiging": of het Teams, Meet of Zoom was,
+ * wist hij pas als de mail er was.
+ */
+export type BookingVideoKind = 'jitsi' | 'google_meet' | 'teams' | 'zoom' | 'link';
+
+export const BOOKING_VIDEO_KINDS: readonly BookingVideoKind[] = ['jitsi', 'google_meet', 'teams', 'zoom', 'link'];
+
+export const BOOKING_VIDEO_NAMES: Record<BookingVideoKind, string> = {
+  jitsi: 'Jitsi Meet',
+  google_meet: 'Google Meet',
+  teams: 'Microsoft Teams',
+  zoom: 'Zoom',
+  link: 'Videogesprek',
+};
+
+export function isBookingVideoKind(value: unknown): value is BookingVideoKind {
+  return typeof value === 'string' && (BOOKING_VIDEO_KINDS as readonly string[]).includes(value);
+}
+
+/** De kamernaam die ResoFly voor Jitsi maakt (jitsi.ts): op elke server herkenbaar. */
+const RESOFLY_JITSI_ROOM = /\/ResoFly-[A-Za-z0-9]{14}\/?$/;
+
+/**
+ * De dienst achter een videolink, of 'link' als we hem niet kennen. Alleen
+ * http(s); al het andere (een `javascript:`-link, onzin) is null: dat hoort nooit
+ * als videolink bij een klant te belanden.
+ */
+export function videoKindOfUrl(url: unknown): BookingVideoKind | null {
+  if (typeof url !== 'string' || !url.trim() || url.length > 2048) return null;
+  let parsed: URL;
+  try { parsed = new URL(url.trim()); } catch { return null; }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+  // Dezelfde herkenning als conference.ts (alleen https); een http-link naar
+  // dezelfde dienst noemen we gewoon bij naam.
+  const service = serviceOfUrl(`https://${parsed.host}${parsed.pathname}`);
+  if (service) return service;
+  const host = parsed.hostname.toLowerCase();
+  if (host === 'zoom.us' || host === 'zoom.com' || host.endsWith('.zoom.us') || host.endsWith('.zoom.com')) return 'zoom';
+  if (host === 'meet.jit.si' || host === '8x8.vc' || RESOFLY_JITSI_ROOM.test(parsed.pathname)) return 'jitsi';
+  return 'link';
+}
+
+/**
+ * Welk videogesprek een boeking via deze link krijgt. Dezelfde volgorde als
+ * bookSlots: een vaste link gaat voor, anders wat de link zelf aanmaakt. Null:
+ * geen videogesprek.
+ */
+export function bookingVideoService(input: {
+  meetingUrl: string | null | undefined;
+  autoConference: boolean | null | undefined;
+  conferenceProvider: string | null | undefined;
+  sourceProvider: string | null | undefined;
+}): BookingVideoKind | null {
+  if (input.meetingUrl) return videoKindOfUrl(input.meetingUrl) ?? 'link';
+  if (input.autoConference === false) return null;
+  const provider = input.conferenceProvider ?? 'calendar';
+  if (provider === 'jitsi') return 'jitsi';
+  if (isVideoService(provider)) return provider;
+  return serviceOfProvider(input.sourceProvider);
+}
+
+/**
+ * Hoeveel vrije momenten die nog moeten komen er hooguit op één link staan.
+ * De publieke pagina toont er nooit meer dan dit (limit 500 in getLink); met
+ * het weekpatroon in het beheer zet je er in één klik tientallen op, en een
+ * vergissing ("elke dag, een jaar lang") gaf anders een pagina die halverwege
+ * ophield.
+ */
+export const MAX_OPEN_SLOTS_PER_LINK = 500;
 
 export type NewSlot = { starts_at: string; ends_at: string };
 

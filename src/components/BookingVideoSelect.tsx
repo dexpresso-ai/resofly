@@ -1,5 +1,6 @@
-import { Select } from './Ui';
+import { Ban } from 'lucide-react';
 import { calendarMakesConference, effectiveBookingVideo, type BookingVideo } from '../lib/meeting';
+import { VideoServiceMark } from './VideoServiceMark';
 import type { CalendarProvider, VideoServices } from '../types';
 
 /**
@@ -9,7 +10,46 @@ import type { CalendarProvider, VideoServices } from '../types';
  * Teams maakt een Google- of Microsoft-agenda zelf; op een andere agenda per
  * boeking los, met je eigen koppeling, als je daar bij Instellingen → Agenda
  * toestemming voor gaf. Een vaste link (apart veld) gaat voor.
+ *
+ * Sinds 11 november 2026 vier kaarten in plaats van een keuzelijst: Jitsi,
+ * Google Meet, Teams en geen. Wat hier niet kan, staat er ook, met waarom en
+ * wat je eraan doet. In de keuzelijst stond Teams eerst gewoon niet als het
+ * (nog) niet kon, en zocht je ernaar zonder te weten waarom het ontbrak. De
+ * klant ziet dezelfde naam en kleur op de boekingspagina.
  */
+type ServiceCard = {
+  id: 'jitsi' | 'google_meet' | 'teams' | 'none';
+  /** De waarde voor meeting_booking_links: Meet op een Google-agenda is 'calendar'. */
+  value: BookingVideo;
+  name: string;
+  detail: string;
+  available: boolean;
+};
+
+const ACCOUNT = { google_meet: 'Google', teams: 'Microsoft' } as const;
+const NAME = { google_meet: 'Google Meet', teams: 'Microsoft Teams' } as const;
+
+function serviceCard(service: 'google_meet' | 'teams', sourceProvider: CalendarProvider | null, videoServices: VideoServices | null | undefined, effective: BookingVideo): ServiceCard {
+  const own = (service === 'google_meet' && sourceProvider === 'google') || (service === 'teams' && sourceProvider === 'microsoft');
+  if (own) return { id: service, value: 'calendar', name: NAME[service], detail: `Van je ${ACCOUNT[service]}-agenda. De klant krijgt de link in de agenda-uitnodiging.`, available: true };
+  const state = videoServices?.[service]?.state;
+  if (state === 'klaar' || effective === service) {
+    const missing = Boolean(videoServices) && state !== 'klaar';
+    return {
+      id: service, value: service, name: NAME[service], available: true,
+      detail: missing
+        ? `Kan nu niet: zet het aan bij Instellingen → Agenda, bij je ${ACCOUNT[service]}-account, of kies iets anders.`
+        : `Per boeking met je ${ACCOUNT[service]}-account. De klant krijgt de link in de bevestiging.`,
+    };
+  }
+  const why = !videoServices ? 'Even kijken of dit kan…'
+    : state === 'toestemming' ? `Zet het aan bij Instellingen → Agenda, bij je ${ACCOUNT[service]}-account.`
+      : state === 'verlopen' ? `Koppel je ${ACCOUNT[service]}-account opnieuw (Instellingen → Agenda).`
+        : state === 'account' ? `Je ${ACCOUNT[service]}-account kan dit niet${service === 'teams' ? ' (een privé-Microsoftaccount maakt geen Teams-vergaderingen)' : ''}.`
+          : `Koppel eerst een ${ACCOUNT[service]}-account (Instellingen → Agenda).`;
+  return { id: service, value: service, name: NAME[service], detail: why, available: false };
+}
+
 export function BookingVideoSelect({ value, sourceProvider, videoServices, onChange }: {
   value: BookingVideo;
   sourceProvider: CalendarProvider | null;
@@ -17,36 +57,44 @@ export function BookingVideoSelect({ value, sourceProvider, videoServices, onCha
   videoServices?: VideoServices | null;
   onChange: (next: BookingVideo) => void;
 }) {
-  const external = calendarMakesConference(sourceProvider);
   const effective = effectiveBookingVideo(value, sourceProvider);
-  // Los per boeking: alleen bij een agenda van een ándere aanbieder (Meet op een
-  // Google-agenda is gewoon "van je agenda"), en als het recht er is. Staat de
-  // link al op Meet/Teams terwijl dat (nu) niet kan, dan blijft hij zichtbaar
-  // met uitleg, zodat opslaan hem niet stil verandert.
-  const standalone = (['google_meet', 'teams'] as const).filter(service => {
-    if ((service === 'google_meet' && sourceProvider === 'google') || (service === 'teams' && sourceProvider === 'microsoft')) return false;
-    return videoServices?.[service]?.state === 'klaar' || effective === service;
-  });
-  const label = { google_meet: 'Google Meet', teams: 'Teams' } as const;
-  // Pas iets zeggen als de stand bekend is (anders flitst de uitleg bij het laden).
-  const missing = Boolean(videoServices) && (effective === 'google_meet' || effective === 'teams') && videoServices?.[effective]?.state !== 'klaar';
+  const cards: ServiceCard[] = [
+    { id: 'jitsi', value: 'jitsi', name: 'Jitsi Meet', detail: 'Werkt op elke agenda. Per boeking een eigen ruimte; de klant heeft geen account nodig.', available: true },
+    serviceCard('google_meet', sourceProvider, videoServices, effective),
+    serviceCard('teams', sourceProvider, videoServices, effective),
+    { id: 'none', value: 'none', name: 'Geen videogesprek', detail: 'Bijvoorbeeld een afspraak op locatie of aan de telefoon.', available: true },
+  ];
+  // 'calendar' hoort bij de kaart van de dienst die de agenda zelf maakt.
+  const selectedId = effective === 'calendar'
+    ? (sourceProvider === 'microsoft' ? 'teams' : calendarMakesConference(sourceProvider) ? 'google_meet' : 'jitsi')
+    : effective;
   return (
-    <div className="booking-video-select">
-      <label>Videovergadering bij een boeking
-        <Select value={effective} onChange={e => onChange(e.target.value as BookingVideo)}>
-          <option value="jitsi">Jitsi Meet — per boeking een eigen vergaderruimte</option>
-          {external && <option value="calendar">{sourceProvider === 'microsoft' ? 'Teams-vergadering van je Microsoft-agenda' : 'Google Meet van je Google-agenda'}</option>}
-          {standalone.map(service => (
-            <option key={service} value={service}>{label[service]} — per boeking, met je {service === 'google_meet' ? 'Google' : 'Microsoft'}-account</option>
-          ))}
-          <option value="none">Geen videovergadering</option>
-        </Select>
-      </label>
-      {effective === 'jitsi' && <p className="muted booking-video-help">Werkt op elke agenda, zonder Google of Microsoft. De klant krijgt de link in de bevestiging en de agenda-uitnodiging, en heeft geen account nodig.</p>}
-      {effective === 'calendar' && <p className="muted booking-video-help">De klant krijgt de deelnamelink in de agenda-uitnodiging.</p>}
-      {(effective === 'google_meet' || effective === 'teams') && (missing
-        ? <p className="muted booking-video-help calendar-help-warn">{label[effective]} kan nu niet bij deze link: zet het aan bij Instellingen → Agenda, bij je {effective === 'google_meet' ? 'Google' : 'Microsoft'}-account, of kies iets anders.</p>
-        : <p className="muted booking-video-help">Per boeking maakt ResoFly een {label[effective]}-vergadering met je {effective === 'google_meet' ? 'Google' : 'Microsoft'}-account. De klant krijgt de link in de bevestiging en de agenda-uitnodiging.</p>)}
-    </div>
+    <fieldset className="booking-video-select">
+      <legend>Videogesprek bij een boeking</legend>
+      <div className="bvs-grid" role="radiogroup" aria-label="Videogesprek bij een boeking">
+        {cards.map(card => {
+          const checked = selectedId === card.id;
+          return (
+            <button
+              key={card.id}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              disabled={!card.available}
+              className={`bvs-card${checked ? ' is-checked' : ''}${card.available ? '' : ' is-off'}`}
+              onClick={() => card.available && onChange(card.value)}
+            >
+              {card.id === 'none'
+                ? <span className="vsm vsm-link" aria-hidden="true"><Ban size={16} /></span>
+                : <VideoServiceMark kind={card.id} />}
+              <span className="bvs-text">
+                <strong>{card.name}</strong>
+                <small>{card.detail}</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
   );
 }

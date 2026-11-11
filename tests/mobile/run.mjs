@@ -180,6 +180,8 @@ const PAGES = {
   // Via de deeplink uit de meldingsmail, zoals een klant er ook binnenkomt.
   'portal-messages': { path: '/portal?view=berichten', portal: true },
   'portal-settings': { path: '/portal?view=instellingen', portal: true },
+  // 2026-11-11 — de afspraken via een boekingslink, geopend via ?view=afspraken.
+  'portal-appointments': { path: '/portal?view=afspraken', portal: true },
   // 2026-11-10 — een klant op inactief: geen tab Tickets, Berichten op de plek
   // van "Open tickets", en bij Instellingen alleen de uitleg over tickets.
   'portal-inactief': { path: '/portal', portal: true, mock: { portalInactive: true } },
@@ -278,6 +280,10 @@ const FIRST_ITEM = {
   // schakelaar 267px; de grenzen liggen zo'n 20% hoger.
   'portal-messages': { selector: '.portal-conv', maxTop: 245 },
   'portal-settings': { selector: '.portal-toggle-row', maxTop: 320 },
+  // 2026-11-11 — Afspraken in het portaal, geopend via ?view=afspraken: de
+  // eerste afspraak staat net onder de tabbladen. Gemeten: 150px (licht en
+  // donker); de grens ligt 20% hoger.
+  'portal-appointments': { selector: '.portal-appointment', maxTop: 180 },
   // 2026-11-07 — de inrichtingsstappen: de kop van de stap staat onder de
   // stappenkop (merk met Uitloggen, voortgang, bolletjes). Gemeten: 215px bij
   // elke stap, licht en donker; de grens ligt 20% hoger.

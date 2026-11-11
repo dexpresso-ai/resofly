@@ -139,10 +139,40 @@ export default async function boekingslinksScenario() {
   });
   if (!geboekt) return;
 
+  // November 2026, tweede ronde: de klant ziet zijn afspraak in zijn portaal,
+  // met de videolink; en de pagina zegt welk videogesprek het is.
+  await stap('de videolink staat bij de boeking, en de pagina noemt de dienst', async () => {
+    const rij = sqlRij(`select meeting_url, video_service from public.meeting_bookings where id = ${q(geboekt.id)}`);
+    verwacht(/^https:\/\/meet\.jit\.si\/ResoFly-[A-Za-z0-9]{14}$/.test(rij.meeting_url ?? ''), `Jitsi-link bewaard: ${rij.meeting_url}`);
+    gelijk(rij.video_service, 'jitsi', 'dienst bewaard');
+    const info = gelukt(await publiek('getLink', { token: link.token }), 'pagina');
+    gelijk(info.link.video_service, 'jitsi', 'de pagina noemt Jitsi');
+  });
+
+  await stap('het klantportaal toont de afspraak, alleen aan deze klant', async () => {
+    const portaal = gelukt(await roep('client-portal', { token: w.portaalA.token, body: { action: 'getPortalData' } }), 'portaal A');
+    const account = portaal.accounts.find((a) => a.client?.id === w.klantA.id);
+    verwacht(account, 'dossier van klant A');
+    const afspraak = (account.appointments ?? []).find((a) => a.id === geboekt.id);
+    verwacht(afspraak, 'de afspraak staat erin');
+    gelijk([afspraak.status, afspraak.title, afspraak.video_service, afspraak.booked_by], ['confirmed', 'Kennismaking', 'jitsi', 'Klaas Klant'], 'stand, titel, dienst en wie boekte');
+    verwacht(/^https:\/\/meet\.jit\.si\//.test(afspraak.meeting_url ?? ''), 'met de videolink');
+    verwacht(!('booked_email' in afspraak) && !JSON.stringify(account.appointments).includes('klaas@klant.test'), 'geen e-mailadres van wie boekte');
+    const portaalB = gelukt(await roep('client-portal', { token: w.portaalB.token, body: { action: 'getPortalData' } }), 'portaal B');
+    verwacht(portaalB.accounts.every((a) => !(a.appointments ?? []).some((x) => x.id === geboekt.id)), 'klant B ziet hem niet');
+  });
+
   await stap('annuleren door het team: het moment komt weer vrij', async () => {
     gelukt(await boeking(w.medewerker.token, w.orgId, 'cancelBooking', { bookingId: geboekt.id }), 'annuleren');
     const info = gelukt(await publiek('getLink', { token: link.token }), 'pagina');
     gelijk([info.state, info.slots.length], ['open', 2], 'weer open, beide momenten vrij');
+  });
+
+  await stap('na annuleren: in het portaal "gaat niet door", zonder videolink', async () => {
+    const portaal = gelukt(await roep('client-portal', { token: w.portaalA.token, body: { action: 'getPortalData' } }), 'portaal A');
+    const afspraak = portaal.accounts.flatMap((a) => a.appointments ?? []).find((a) => a.id === geboekt.id);
+    verwacht(afspraak, 'staat er nog');
+    gelijk([afspraak.status, afspraak.meeting_url], ['cancelled', null], 'geannuleerd, zonder link');
   });
 
   await stap('een mislukte boeking annuleren kan niet, en zet geen blok van een ander open', async () => {
@@ -211,7 +241,19 @@ export default async function boekingslinksScenario() {
     gelukt(await boeking(w.medewerker.token, w.orgId, 'sendLinkMail', { linkId: link.link.id, token: link.token, recipientEmail: 'Klant.A@Klant.test', recipientName: 'Klant\nA' }), 'mailen');
     const mail = mailsAan('klant.a@klant.test').at(-1);
     verwacht(mail && mail.text.includes(link.token), 'de link staat in de mail');
+    verwacht(mail && /videogesprek via Jitsi Meet/.test(mail.text), 'de mail noemt het videogesprek');
     geweigerd(await boeking(w.medewerker.token, w.orgId, 'sendLinkMail', { linkId: link.link.id, token: 'verkeerd-token', recipientEmail: 'klaas@klant.test' }), 'verkeerde token', [422]);
+  });
+
+  await stap('hooguit 500 vrije momenten op één link', async () => {
+    const vol = gelukt(await boeking(w.medewerker.token, w.orgId, 'createLink', { sourceId: bron.id, title: 'Vol' }), 'link');
+    sql(`insert into public.meeting_booking_slots (booking_link_id, organization_id, starts_at, ends_at, status)
+         select ${q(vol.link.id)}, ${q(w.orgId)}, now() + (g || ' hours')::interval + interval '1 day', now() + (g || ' hours')::interval + interval '1 day 30 minutes', 'open'
+           from generate_series(1, 499) g`);
+    const twee = [moment(24 * 40), moment(24 * 40 + 1)];
+    const res = geweigerd(await boeking(w.medewerker.token, w.orgId, 'addSlots', { linkId: vol.link.id, slots: twee }), 'twee te veel', [422]);
+    verwacht(/nog 1 bij/.test(res?.error ?? ''), `uitleg: ${res?.error}`);
+    gelijk(gelukt(await boeking(w.medewerker.token, w.orgId, 'addSlots', { linkId: vol.link.id, slots: [twee[0]] }), 'nog één').slots.length, 1, 'de laatste past');
   });
 
   await stap('verwijderen met afspraken: liever sluiten', async () => {

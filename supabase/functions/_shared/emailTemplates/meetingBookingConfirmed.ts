@@ -11,6 +11,12 @@ export type MeetingBookingConfirmedEmailInput = {
   title: string;
   whenLines: string[];
   meetingUrl?: string | null;
+  /**
+   * Welk videogesprek ("Microsoft Teams", "Jitsi Meet"). Eerst stond er alleen
+   * "Videocall:" met een link, en wist de klant pas bij het klikken of hij Teams
+   * nodig had.
+   */
+  videoName?: string | null;
   /** Per-link begeleidende tekst die de gebruiker bij deze link heeft ingevuld. */
   inviteMessage?: string | null;
   location?: string | null;
@@ -26,6 +32,7 @@ export function renderMeetingBookingConfirmedEmail(input: MeetingBookingConfirme
   const brandName = input.brandName || 'ResoFly';
   const recipientName = input.recipientName?.trim() || 'relatie';
   const perLinkNote = String(input.inviteMessage || '').trim();
+  const videoName = input.videoName?.trim() || 'Videocall';
 
   const vars: TemplateVars = {
     recipient_name: recipientName,
@@ -49,7 +56,8 @@ export function renderMeetingBookingConfirmedEmail(input: MeetingBookingConfirme
     `<p style="margin:16px 0 6px;font-weight:700;">Wanneer</p>`,
     whenHtml,
     input.location ? `<p style="margin:0 0 12px;"><strong>Locatie:</strong> ${escapeHtml(input.location)}</p>` : '',
-    input.meetingUrl ? `<p style="margin:0 0 12px;"><strong>Videocall:</strong> <a href="${escapeHtml(input.meetingUrl)}" style="color:inherit;">${escapeHtml(input.meetingUrl)}</a></p>` : '',
+    input.meetingUrl ? `<p style="margin:0 0 12px;"><strong>${escapeHtml(videoName)}:</strong> <a href="${escapeHtml(input.meetingUrl)}" style="color:inherit;">${escapeHtml(input.meetingUrl)}</a></p>` : '',
+    !input.meetingUrl && input.videoName ? `<p style="margin:0 0 12px;"><strong>Hoe:</strong> videogesprek via ${escapeHtml(input.videoName)}. De deelnamelink staat in de agenda-uitnodiging, of je krijgt hem nog van ${escapeHtml(brandName)}.</p>` : '',
     perLinkNote ? `<p style="margin:12px 0 0;color:#d8d8df;line-height:1.6;white-space:pre-wrap;">${escapeHtml(perLinkNote)}</p>` : '',
     closingHtml ? `<p style="margin:16px 0 0;color:#d8d8df;line-height:1.6;">${closingHtml}</p>` : '',
   ].join('');
@@ -61,7 +69,7 @@ export function renderMeetingBookingConfirmedEmail(input: MeetingBookingConfirme
     title: 'Afspraak bevestigd',
     introHtml: `<p style="margin:0;">${introHtml}</p>`,
     bodyHtml,
-    cta: input.meetingUrl ? { label: 'Deelnemen aan videocall', url: input.meetingUrl } : undefined,
+    cta: input.meetingUrl ? { label: input.videoName ? `Deelnemen via ${input.videoName}` : 'Deelnemen aan videocall', url: input.meetingUrl } : undefined,
     accentColor: input.accentColor,
   });
 
@@ -71,7 +79,8 @@ export function renderMeetingBookingConfirmedEmail(input: MeetingBookingConfirme
     'Wanneer:',
     ...input.whenLines.map(w => `- ${w}`),
     input.location ? `Locatie: ${input.location}` : false,
-    input.meetingUrl ? `Videocall: ${input.meetingUrl}` : false,
+    input.meetingUrl ? `${videoName}: ${input.meetingUrl}` : false,
+    !input.meetingUrl && input.videoName ? `Hoe: videogesprek via ${input.videoName}. De deelnamelink staat in de agenda-uitnodiging, of je krijgt hem nog van ${brandName}.` : false,
     perLinkNote ? '' : false,
     perLinkNote || false,
     closingText ? '' : false,

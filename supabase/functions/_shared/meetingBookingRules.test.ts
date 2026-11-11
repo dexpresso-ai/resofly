@@ -14,7 +14,10 @@ import {
   MAX_TOKEN_TTL_DAYS,
   bookingLinkState,
   bookingVideoLabel,
+  bookingVideoService,
   checkNewSlots,
+  isBookingVideoKind,
+  videoKindOfUrl,
   clampTtlDays,
   cleanVisitorEmail,
   cleanVisitorName,
@@ -108,6 +111,36 @@ test('videogesprek in woorden voor de klant', () => {
   assert.equal(bookingVideoLabel({ meetingUrl: null, autoConference: true, conferenceProvider: 'calendar', sourceProvider: 'google' }), 'Videogesprek via Google Meet');
   assert.equal(bookingVideoLabel({ meetingUrl: null, autoConference: true, conferenceProvider: 'calendar', sourceProvider: 'native' }), null);
   assert.equal(bookingVideoLabel({ meetingUrl: null, autoConference: false, conferenceProvider: 'jitsi', sourceProvider: 'native' }), null);
+});
+
+test('welk videogesprek: Jitsi, Google Meet, Teams of Zoom, ook bij een vaste link', () => {
+  const base = { meetingUrl: null, autoConference: true, conferenceProvider: 'calendar', sourceProvider: 'native' };
+  assert.equal(bookingVideoService({ ...base, conferenceProvider: 'jitsi' }), 'jitsi');
+  assert.equal(bookingVideoService({ ...base, conferenceProvider: 'google_meet' }), 'google_meet');
+  assert.equal(bookingVideoService({ ...base, conferenceProvider: 'teams' }), 'teams');
+  assert.equal(bookingVideoService({ ...base, sourceProvider: 'google' }), 'google_meet');
+  assert.equal(bookingVideoService({ ...base, sourceProvider: 'microsoft' }), 'teams');
+  // Een ResoFly-agenda maakt zelf niets.
+  assert.equal(bookingVideoService(base), null);
+  assert.equal(bookingVideoService({ ...base, autoConference: false, conferenceProvider: 'jitsi' }), null);
+  // Een vaste link gaat voor, en zegt nu ook welke dienst het is (eerst alleen
+  // "de link staat in je bevestiging").
+  assert.equal(bookingVideoService({ ...base, meetingUrl: 'https://teams.microsoft.com/l/meetup-join/abc' }), 'teams');
+  assert.equal(bookingVideoService({ ...base, meetingUrl: 'https://meet.google.com/abc-defg-hij' }), 'google_meet');
+  assert.equal(bookingVideoService({ ...base, meetingUrl: 'https://us02web.zoom.us/j/123' }), 'zoom');
+  assert.equal(bookingVideoService({ ...base, meetingUrl: 'https://meet.jit.si/Overleg' }), 'jitsi');
+  assert.equal(bookingVideoService({ ...base, meetingUrl: 'https://video.eigen.nl/ResoFly-abcdefghijkmno' }), 'jitsi');
+  assert.equal(bookingVideoService({ ...base, meetingUrl: 'https://whereby.com/kamer' }), 'link');
+});
+
+test('een videolink is alleen http(s)', () => {
+  assert.equal(videoKindOfUrl('javascript:alert(1)'), null);
+  assert.equal(videoKindOfUrl('geen link'), null);
+  assert.equal(videoKindOfUrl(''), null);
+  assert.equal(videoKindOfUrl(`https://x.nl/${'a'.repeat(3000)}`), null);
+  assert.equal(videoKindOfUrl('http://meet.google.com/abc'), 'google_meet');
+  assert.equal(isBookingVideoKind('teams'), true);
+  assert.equal(isBookingVideoKind('skype'), false);
 });
 
 test('nieuwe blokken: niet in het verleden, einde na begin, hooguit twaalf uur', () => {
