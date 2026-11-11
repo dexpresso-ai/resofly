@@ -30,6 +30,7 @@ import {
   convertAcceptedQuoteToInvoice,
   convertTicketToProject,
   createClientWithServerCode,
+  linkInboundMessage,
   createCampaign,
   createTicketNote,
   sendClientPortalWelcomeEmail,
@@ -133,6 +134,7 @@ import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/
 import { TimeTracking, defaultBillableForProject, resolveRateCents } from './features/TimeTracking';
 import { Tickets } from './features/Tickets';
 import { TICKET_REOPEN_STATUS, changedTicketValues, ticketClientChangeWarning } from './lib/tickets';
+import { clientDraftFromEmail, describeFoundFields, type ClientDraftField } from './lib/clientFromEmail';
 import { TicketTimeline } from './components/TicketTimeline';
 import { Marketing } from './features/Marketing';
 import { RelatedNotes, noteTypeLabels } from './features/Notes';
@@ -196,7 +198,7 @@ import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { exportFinancePDF, financePdfOptions } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, NoteHandwritingSummary, Organization, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InboundMessage, InternalDocument, Invoice, Note, NoteHandwritingSummary, Organization, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, Subtask, Comment as TaskComment,
 } from './types';
 import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
@@ -237,8 +239,27 @@ import './styles/agents.css';
 import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+/**
+ * Een nieuwe klant uit een mail in de opvangbak ("Nieuwe klant" in
+ * InboundInbox). Na opslaan koppelt persistEdit de mail aan de nieuwe klant.
+ */
+type ClientFromMail = {
+  messageId: string;
+  /** Voor de melding boven het formulier: "Peter de Vries (peter@nieuwbedrijf.nl)". */
+  sender: string;
+  /** Wat er uit de tekst van de mail kwam (zie lib/clientFromEmail.ts). */
+  found: ClientDraftField[];
+  /**
+   * Het afzenderadres dat bij de klant onthouden mag worden, zodat volgende mail
+   * vanzelf goed komt. Null bij een contactformulier, een no-reply-adres of een
+   * mail die een collega doorstuurde: dan zou elke volgende mail van die website
+   * of collega bij deze ene klant terechtkomen.
+   */
+  rememberAddress: string | null;
+};
+
 type EditMode =
-  | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status' | 'account_lead_user_id'>> }
+  | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status' | 'account_lead_user_id' | 'client_kind' | 'address_line1' | 'postal_code' | 'city' | 'country' | 'kvk_number' | 'vat_number'>>; fromMail?: ClientFromMail }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
   | { kind: 'task'; item?: Task; projectId?: string | null; defaults?: Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'tags' | 'start_date' | 'end_date' | 'planned_date' | 'estimated_minutes' | 'subtasks' | 'project_id' | 'client_id'>> }
   // baseline: het ticket zoals het in de database stond toen het venster opende
@@ -1297,6 +1318,8 @@ function App() {
   // Eerder liet Ververs die lijsten staan: een contract dat de klant net had
   // ondertekend, bleef daar "Wacht op ondertekening".
   const [refreshRound, setRefreshRound] = useState(0);
+  /** Loopt op als de app zelf iets in de opvangbak veranderde (een mail aan een nieuwe klant gekoppeld). */
+  const [inboxRevision, setInboxRevision] = useState(0);
   async function refresh() {
     setRefreshRound(round => round + 1);
     // De badge "Nieuw" en de teller van ongelezen tickets komen live binnen via
@@ -1843,6 +1866,58 @@ function App() {
   }
 
   /**
+   * "Nieuwe klant" bij een mail in de opvangbak: het klantformulier, ingevuld
+   * met wat er in de mail staat (afzender, handtekening, contactformulier).
+   * Er wordt nog niets opgeslagen; dat doet de gebruiker in het formulier.
+   */
+  function openClientFromMail(message: InboundMessage) {
+    if (!ensureCanWrite()) return;
+    if (!canEditKind('client')) { setError('Je hebt geen wijzigrechten voor Klanten. Vraag een owner of admin om deze module voor je open te zetten.'); return; }
+    const settings = data.companySettings;
+    const draft = clientDraftFromEmail(
+      { senderEmail: message.sender_email, senderName: message.sender_name, subject: message.subject, bodyText: message.body_text, receivedAt: message.received_at },
+      {
+        // De eigen organisatie: onder een antwoord staat haar handtekening geciteerd,
+        // en een doorgestuurde mail komt van een collega.
+        emails: [settings?.email, currentUserEmail, ...workMembers.map(member => member.email)],
+        websites: [settings?.website],
+        phones: [settings?.phone],
+        kvkNumbers: [settings?.kvk_number],
+        vatNumbers: [settings?.vat_number],
+        postalCodes: [settings?.postal_code],
+        names: [settings?.company_name, settings?.trade_name, activeOrg.name],
+      },
+    );
+    const senderName = (message.sender_name ?? '').trim().slice(0, 80);
+    const sender = senderName && message.sender_email ? `${senderName} (${message.sender_email})` : (message.sender_email || senderName || 'een onbekende afzender');
+    setEdit({
+      kind: 'client',
+      defaults: draft.values,
+      fromMail: {
+        messageId: message.id,
+        sender,
+        found: draft.found,
+        rememberAddress: draft.senderIsContact ? (message.sender_email ?? '').trim().toLowerCase() || null : null,
+      },
+    });
+  }
+
+  /**
+   * Koppelt de mail aan de klant die er net uit gemaakt is. Kreeg de klant een
+   * ander e-mailadres dan de afzender (bijvoorbeeld info@ in plaats van jan@),
+   * dan onthoudt ResoFly de afzender als contactpersoon; anders herkende hij de
+   * volgende mail van jan@ niet en lag die weer in de opvangbak.
+   */
+  async function linkMailToNewClient(fromMail: ClientFromMail, client: Client) {
+    const clientEmail = (client.email ?? '').trim().toLowerCase();
+    const remember = Boolean(fromMail.rememberAddress) && fromMail.rememberAddress !== clientEmail;
+    await linkInboundMessage(activeOrg.id, fromMail.messageId, client.id, remember);
+    setInboxRevision(round => round + 1);
+    refreshInbox();
+    refreshClientEmailUnread();
+  }
+
+  /**
    * Schrijft één bewerking weg — de enige plek waar dat gebeurt.
    *
    * Zowel de knop Opslaan in het formulier als Gerrie's "Aanmaken" komt hier langs.
@@ -1869,6 +1944,20 @@ function App() {
           await updateRow<Client>('clients', edit.item.id, clientValues, activeOrg.id);
         } else {
           const newClient = await createClientWithServerCode(activeOrg.id, clientValues);
+          if (edit.fromMail) {
+            // De mail waar de klant uit kwam, hoort in zijn dossier. Lukt dat niet,
+            // dan bestaat de klant wel; de mail blijft in de opvangbak staan en
+            // is daar met de hand te koppelen.
+            try {
+              await linkMailToNewClient(edit.fromMail, newClient);
+            } catch (linkError) {
+              // Niet alleen `instanceof Error`: een fout van een databasefunctie is
+              // een los object met `message`, en dan stond hier "onbekende fout".
+              const reason = linkError instanceof Error ? linkError.message
+                : String((linkError as { message?: unknown } | null)?.message ?? '') || 'onbekende fout';
+              deferredWarning = `Klant is aangemaakt, maar de mail kon niet aan het dossier worden gekoppeld: ${reason.replace(/[.\s]+$/, '')}. Koppel hem in de opvangbak alsnog.`;
+            }
+          }
           if (_sendWelcomeEmail && newClient.email) {
             try {
               await sendClientPortalWelcomeEmail(activeOrg.id, newClient.id);
@@ -4158,8 +4247,8 @@ function App() {
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
     if (page === 'client' && client) return <ClientDetailPage data={data} client={client} teamMembers={workMembers} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewProject={() => ensureCanWrite() && setEdit({kind:'project', defaults: { client_id: client.id }})} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread} onNewTicket={() => { if (!canEditKind('ticket')) { setError('Je hebt geen wijzigrechten voor Tickets. Vraag een owner of admin om deze module voor je open te zetten.'); return; } setEdit({kind:'ticket', defaults: { client_id: client.id }}); }} onEditTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} unreadTicketIds={ticketUnreadIds} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} canReadCalendar={permissions.canRead('calendar')} canWriteCalendar={orgCanWrite && permissions.canWrite('calendar')} onOpenBookingLink={(linkId) => openBookingLinks({ linkId })} onNewBookingLink={() => openBookingLinks({ create: true, clientId: client.id })}/>;
-    if (page === 'communication') return <CommunicationPage data={data} organizationId={activeOrg.id} canWrite={canWrite} inboxCount={inboxCount} activity={communicationActivity} focus={view.commFocus} ticketUnreadIds={ticketUnreadIds} currentUserId={currentUserId} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} onUnreadChanged={refreshClientEmailUnread} onInboxChanged={refreshInbox} onTicketUnreadChanged={refreshTicketUnread} onOpenClient={(id) => { setClientId(id); setProjectId(null); setPage('client'); }} onOpenTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} onChanged={refresh} />;
-    if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient} teamMembers={workMembers} currentUserId={currentUserId}/>;
+    if (page === 'communication') return <CommunicationPage data={data} organizationId={activeOrg.id} canWrite={canWrite} inboxCount={inboxCount} activity={communicationActivity} focus={view.commFocus} ticketUnreadIds={ticketUnreadIds} currentUserId={currentUserId} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} onUnreadChanged={refreshClientEmailUnread} onInboxChanged={refreshInbox} onTicketUnreadChanged={refreshTicketUnread} onOpenClient={(id) => { setClientId(id); setProjectId(null); setPage('client'); }} onOpenTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} onChanged={refresh} onNewClientFromMail={openClientFromMail} inboxRefreshKey={inboxRevision} />;
+    if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient} teamMembers={workMembers} currentUserId={currentUserId} onNewFromMail={openClientFromMail} inboxRefreshKey={inboxRevision}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} onResolve={(item) => void setTicketStatus(item, 'resolved')} onReopen={(item) => void setTicketStatus(item, TICKET_REOPEN_STATUS)} unreadTicketIds={ticketUnreadIds} teamMembers={workMembers} currentUserId={currentUserId}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} active={view.id === activeTab.id} />;
     if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} isAdmin={activeMembership?.role === 'owner' || activeMembership?.role === 'admin'} onOpenDecisionTarget={openDecisionTarget} currentUserId={currentUserId} teamMembers={workMembers} {...gerrieActions} />;
@@ -4369,6 +4458,24 @@ type TaskAgendaHandlers = {
   onOpenDay: (dateKey: string) => void;
 };
 
+/**
+ * Boven het klantformulier als de klant uit een mail komt: waar de gegevens
+ * vandaan komen, wat je moet nakijken en wat er na opslaan met de mail gebeurt.
+ */
+function ClientFromMailNote({ fromMail }: { fromMail: ClientFromMail }) {
+  const found = describeFoundFields(fromMail.found);
+  return <div className="client-from-mail-note" role="note">
+    <strong>Uit de mail van {fromMail.sender}</strong>
+    <p>
+      {found
+        ? <>Uit de tekst van de mail ingevuld: {found}. Kijk het even na; wat ontbreekt, vul je zelf aan.</>
+        : <>De mail had geen handtekening of formuliervelden om uit te lezen. Naam en e-mail komen van de afzender; vul de rest zelf aan.</>}
+      {' '}Na opslaan staat de mail in het dossier van deze klant
+      {fromMail.rememberAddress ? ', en komt volgende post van dit adres daar vanzelf terecht.' : '.'}
+    </p>
+  </div>;
+}
+
 function EditModal({ edit, data, dataStatus, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, onNoteHandwritingChanged, taskAgenda }: { edit: NonNullable<EditMode>; data: AppData; dataStatus: (group: DataGroup) => DataGroupStatus; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; onNoteHandwritingChanged: (noteId: string, summary: NoteHandwritingSummary | null) => void; taskAgenda: TaskAgendaHandlers }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
@@ -4542,6 +4649,7 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
         </div>
         <strong>{form.client_code || 'Wordt automatisch gevuld'}</strong>
       </section>
+      {!item && edit.fromMail && <ClientFromMailNote fromMail={edit.fromMail} />}
       <Field label="Klantnaam">
         <Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Bijv. Acme BV" disabled={disabled}/>
       </Field>
@@ -5257,7 +5365,10 @@ function defaultVatRate(data: AppData): number {
 function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
   if (edit.kind === "client") {
     const item = edit.item;
-    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", client_kind: item?.client_kind ?? "business", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", address_line1: item?.address_line1 ?? "", address_line2: item?.address_line2 ?? "", postal_code: item?.postal_code ?? "", city: item?.city ?? "", country: item?.country ?? (item ? "" : "Nederland"), vat_number: item?.vat_number ?? "", kvk_number: item?.kvk_number ?? "", e_invoicing_enabled: item?.e_invoicing_enabled ?? false, e_invoice_email: item?.e_invoice_email ?? "", e_invoice_channel: item?.e_invoice_channel ?? "email", account_lead_user_id: item ? item.account_lead_user_id ?? null : edit.defaults?.account_lead_user_id ?? null, custom_fields: { ...(item?.custom_fields ?? {}) }, _sendWelcomeEmail: !item };
+    // De welkomstmail met portaallink staat bij een nieuwe klant aan, maar niet
+    // bij een klant uit een mail: wie net een vraag stelde, is nog geen klant die
+    // een portaal nodig heeft. Aanvinken kan altijd.
+    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", client_kind: item?.client_kind ?? edit.defaults?.client_kind ?? "business", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", address_line1: item?.address_line1 ?? edit.defaults?.address_line1 ?? "", address_line2: item?.address_line2 ?? "", postal_code: item?.postal_code ?? edit.defaults?.postal_code ?? "", city: item?.city ?? edit.defaults?.city ?? "", country: item?.country ?? (item ? "" : edit.defaults?.country ?? "Nederland"), vat_number: item?.vat_number ?? edit.defaults?.vat_number ?? "", kvk_number: item?.kvk_number ?? edit.defaults?.kvk_number ?? "", e_invoicing_enabled: item?.e_invoicing_enabled ?? false, e_invoice_email: item?.e_invoice_email ?? "", e_invoice_channel: item?.e_invoice_channel ?? "email", account_lead_user_id: item ? item.account_lead_user_id ?? null : edit.defaults?.account_lead_user_id ?? null, custom_fields: { ...(item?.custom_fields ?? {}) }, _sendWelcomeEmail: !item && !edit.fromMail };
   }
   if (edit.kind === "project") {
     const item = edit.item;
