@@ -35,15 +35,26 @@ import type { OrganizationMember, UUID } from '../types';
  * iets stuk is.
  */
 
-type ConnectApp = 'claude' | 'claude-code' | 'chatgpt';
+type ConnectApp = 'claude' | 'claude-code' | 'chatgpt' | 'gemini' | 'gemini-cli';
 
 const CONNECT_APPS: { id: ConnectApp; label: string }[] = [
   { id: 'claude', label: 'Claude (web, desktop, telefoon)' },
   { id: 'claude-code', label: 'Claude Code' },
   { id: 'chatgpt', label: 'ChatGPT' },
+  { id: 'gemini', label: 'Gemini (web)' },
+  { id: 'gemini-cli', label: 'Gemini CLI' },
 ];
 
-const CLAUDE_CODE_COMMAND = `claude mcp add --transport http resofly ${MCP_SERVER_URL}`;
+/**
+ * Een opdracht voor de terminal, bij de apps die zo koppelen. Gemini CLI stond
+ * hier eerst niet bij: de connector werkte er wel mee (dynamische registratie,
+ * PKCE, een terugkeeradres op deze computer), maar wie Gemini gebruikte vond
+ * in dit scherm alleen Claude en ChatGPT en dacht dat het niet kon.
+ */
+const TERMINAL_COMMANDS: Partial<Record<ConnectApp, string>> = {
+  'claude-code': `claude mcp add --transport http resofly ${MCP_SERVER_URL}`,
+  'gemini-cli': `gemini mcp add --transport http resofly ${MCP_SERVER_URL}`,
+};
 
 /**
  * De stappen tot aan het toestemmingsscherm, per AI-app. Menunamen in het
@@ -68,6 +79,16 @@ const CONNECT_STEPS: Record<ConnectApp, ReactNode[]> = {
     <>Maak een nieuwe app aan met het adres hierboven en kies <strong>OAuth</strong> als aanmelding.</>,
     <>ChatGPT stuurt je naar ResoFly: log in, kies de organisatie en geef akkoord.</>,
     <>Kies in een gesprek via <strong>+</strong> de Developer mode en zet ResoFly aan.</>,
+  ],
+  gemini: [
+    <>Open Gemini op het web en voeg in de instellingen bij <strong>Apps</strong> een eigen app (<strong>custom app</strong>) toe. Dat kan nog niet bij elk Google-abonnement en alleen in de webversie.</>,
+    <>Plak het adres hierboven. Gemini registreert zich zelf; een client-id of geheim hoef je niet in te vullen.</>,
+    <>Gemini stuurt je naar ResoFly: log in, kies de organisatie en geef akkoord.</>,
+  ],
+  'gemini-cli': [
+    <>Voer de opdracht hierboven uit in je terminal.</>,
+    <>Start Gemini CLI en typ <strong>/mcp auth resofly</strong>.</>,
+    <>Je browser opent ResoFly: log in, kies de organisatie en geef akkoord.</>,
   ],
 };
 
@@ -169,7 +190,7 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
     <div className="settings-card mcp-connections">
       <h3>AI-koppelingen</h3>
       <p className="mcp-connections-intro">
-        Koppel je eigen AI — Claude, ChatGPT of een andere assistent die MCP spreekt — aan deze werkruimte. Die AI kan
+        Koppel je eigen AI — Claude, ChatGPT, Gemini of een andere assistent die MCP spreekt — aan deze werkruimte. Die AI kan
         dan <strong>meelezen</strong> met alles wat jij zelf mag inzien, en wijzigingen <strong>klaarzetten</strong> in
         je goedkeurwachtrij. Wil je niet elke keer zelf op Uitvoeren klikken, dan zet je per koppeling hieronder{' '}
         <strong>rechtstreeks uitvoeren</strong> aan. Wat die AI mag blijft hoe dan ook binnen jouw eigen rechten.
@@ -202,13 +223,13 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
             </label>
           </div>
 
-          {app === 'claude-code' && (
+          {TERMINAL_COMMANDS[app] && (
             <div className="dns-record">
               <div className="dns-record-field grow">
                 <span className="dns-record-label">Opdracht voor je terminal</span>
-                <code className="dns-record-value">{CLAUDE_CODE_COMMAND}</code>
+                <code className="dns-record-value">{TERMINAL_COMMANDS[app]}</code>
               </div>
-              <Button onClick={() => void copy(CLAUDE_CODE_COMMAND, 'command')}>{copied === 'command' ? 'Gekopieerd' : 'Kopieer'}</Button>
+              <Button onClick={() => void copy(TERMINAL_COMMANDS[app]!, 'command')}>{copied === 'command' ? 'Gekopieerd' : 'Kopieer'}</Button>
             </div>
           )}
 
@@ -220,6 +241,14 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
             <p className="mcp-connections-hint">
               Werk je met Claude Team of Enterprise? Dan zet een owner van dat Claude-account het adres eerst klaar
               onder <strong>Organization settings → Connectors</strong>; daarna klik jij op Connect.
+            </p>
+          )}
+
+          {app === 'gemini' && (
+            <p className="mcp-connections-hint">
+              Op het toestemmingsscherm staat bij Gemini <strong>Niet geverifieerd</strong>, met als adres
+              oauth-redirect.googleusercontent.com. Dat is het doorgeefadres van Google, en dat gebruiken ook andere
+              diensten op Google. Koppel dus alleen als je het net zelf in Gemini hebt toegevoegd.
             </p>
           )}
         </>

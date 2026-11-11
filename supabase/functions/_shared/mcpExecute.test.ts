@@ -320,3 +320,44 @@ test('team- en instellingshandelingen alleen namens owners/admins', () => {
     assert.match(fn, /action.adminOnly && [a-z]+.role !== 'owner' && [a-z]+.role !== 'admin'/, `${name}: actionPermitted weegt adminOnly niet`);
   }
 });
+
+test('find_actions toont een member geen team- en instellingshandelingen', async () => {
+  // Uitvoeren werd al geweigerd (zie hierboven), maar zoeken niet: het filter
+  // van find_actions kreeg alleen module en soort, en zag adminOnly dus nooit.
+  // Een member vond via zijn gekoppelde AI zo "teamlid uitnodigen" en de
+  // organisatie-instellingen, en het model bood ze de gebruiker aan.
+  const { searchActions } = await import('./actions/registry.ts');
+  const memberMay = (action: { adminOnly?: boolean }) => !action.adminOnly;
+
+  const open = searchActions('teamlid uitnodigen', { limit: 25 }).map((a) => a.id);
+  assert.ok(open.includes('team.invite'), `zonder filter hoort team.invite gevonden te worden (kreeg: ${open.join(', ')})`);
+
+  const member = searchActions('teamlid uitnodigen', { permits: memberMay, limit: 25 }).map((a) => a.id);
+  assert.ok(!member.includes('team.invite'), `een member hoort team.invite niet te vinden (kreeg: ${member.join(', ')})`);
+
+  // En beide find_actions geven het volledige rechtenfilter mee, niet alleen module en soort.
+  const coreSource = readFileSync(join(here, 'gerrieCore.ts'), 'utf8');
+  for (const [name, src] of [['mcp/index.ts', mcpSource], ['gerrieCore.ts', coreSource]] as const) {
+    const call = src.slice(src.indexOf('searchActions(query, {'), src.indexOf('searchActions(query, {') + 900);
+    assert.match(call, /permits: \(action\) => actionPermitted\([a-z]+, action\)/,
+      `${name}: find_actions hoort de hele handeling langs actionPermitted te halen (ook adminOnly)`);
+    assert.doesNotMatch(call, /modules: \(module, kind\) => actionPermitted/,
+      `${name}: een filter op alleen module en soort ziet adminOnly niet`);
+  }
+});
+
+test('bronnen gaan net als run_action afgebakend als gegevens terug', () => {
+  // Dezelfde klantmail via run_action was herkenbaar als gegevens, via
+  // resources/read kwam hij als kaal JSON in de context van het model.
+  const fn = mcpSource.slice(mcpSource.indexOf('function resourceContents('), mcpSource.indexOf('function resourceContents(') + 300);
+  assert.match(fn, /wrapToolData\(/, 'resourceContents hoort de inhoud met wrapToolData af te bakenen');
+  const read = mcpSource.slice(mcpSource.indexOf('async function readResource('), mcpSource.indexOf('function resourceContents('));
+  assert.doesNotMatch(read, /JSON\.stringify/, 'readResource hoort geen kaal JSON terug te geven');
+});
+
+test('de organisatienaam gaat ontsmet de instructies van de AI in', () => {
+  const init = mcpSource.slice(mcpSource.indexOf('function initialize('), mcpSource.indexOf('// ── De tools'));
+  assert.doesNotMatch(init, /\$\{session\.organizationName\}/,
+    'de naam kiest een beheerder zelf; zonder promptValue wordt een regeleinde erin een eigen instructie');
+  assert.match(init, /promptValue\(session\.organizationName\)/);
+});

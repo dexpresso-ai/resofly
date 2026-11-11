@@ -215,6 +215,45 @@ hem eerst klaar onder Organization settings → Connectors.
 **Claude Code** — `claude mcp add --transport http resofly <URL>`, daarna `/mcp`
 → resofly → Authenticate.
 **ChatGPT** — Developer mode aan, nieuwe app met de URL, OAuth als aanmelding.
+**Gemini (web)** — in de instellingen bij Apps een eigen app (*custom app*)
+toevoegen met de URL. Nog niet bij elk Google-abonnement, en alleen op het web.
+**Gemini CLI** — `gemini mcp add --transport http resofly <URL>`, daarna in de
+CLI `/mcp auth resofly`.
+
+Al deze apps staan met hun stappen in **Instellingen → AI**. Gemini stond daar
+tot 11 november niet bij, terwijl de connector er al mee werkte.
+
+### Wat elke AI-app van de autorisatieserver verwacht
+
+Alle vier registreren zich zelf (dynamische clientregistratie) als publieke
+client met PKCE. Het verschil zit in het terugkeeradres, en dat bepaalt wat de
+gebruiker op het toestemmingsscherm ziet:
+
+| AI-app | Terugkeeradres | Op het toestemmingsscherm |
+|---|---|---|
+| Claude (web, desktop, telefoon) | `https://claude.ai/…` | geverifieerd |
+| Claude Code, Gemini CLI | `http://localhost:<poort>/…` of `http://127.0.0.1:<poort>/…` | geverifieerd ("deze computer") |
+| ChatGPT | `https://chatgpt.com/connector/oauth/<id>` | geverifieerd |
+| Gemini (web) | `https://oauth-redirect.googleusercontent.com/…` | **niet geverifieerd** |
+
+**Gemini staat bewust op "niet geverifieerd".** Het doorgeefadres van Google
+gebruiken ook andere diensten op Google Cloud (`/r/<project>`), dus het adres
+alleen bewijst niet dat het Gemini is. Het scherm waarschuwt daarom, laat de naam
+leeg en zet klaarzetten uit; de gebruiker kan dat zelf aanvinken. Instellingen →
+AI zegt dat er vooraf bij.
+
+**ChatGPT en RFC 9207.** ChatGPT kiest een vast terugkeeradres
+(`connector_platform_oauth_redirect`) als de autorisatieserver
+`authorization_response_iss_parameter_supported: true` meldt en in élk
+autorisatieantwoord, ook bij een fout, `iss` meestuurt. Wij melden dat niet, dus
+gebruikt ChatGPT een adres per koppeling. Dat werkt. Het aanzetten verandert
+het terugkeeradres van bestaande ChatGPT-koppelingen, en dat kunnen we hier niet
+met ChatGPT zelf testen. Zie *Wat er hierna komt*.
+
+**Gemini Enterprise** (de zakelijke Google-omgeving) registreert zich niet zelf:
+een beheerder voert daar een client-id en meestal een geheim in. Wij geven geen
+geheimen uit (alleen publieke clients met PKCE), dus die route is niet getest en
+werkt waarschijnlijk niet zonder aanpassing.
 
 ### Discovery op supabase.co: waarom er een OpenID-vorm is
 
@@ -286,6 +325,11 @@ tweede weg naar de gegevens bij — alleen een tweede manier om die ene weg aan 
 roepen. Wie Financiën niet mag zien, krijgt *facturen nalopen* niet in zijn menu
 én kan `resofly://openstaande-posten` niet ophalen; beide kanten controleren
 hetzelfde.
+
+De inhoud van een bron gaat, net als een antwoord van `run_action`, tussen
+`<gegevens bron="resource:…">` en `</gegevens>` terug (`text/plain`). Tot
+11 november ging hij als kaal JSON mee. Een klantmail met een opdracht erin was
+via `run_action` dan herkenbaar als gegevens, en als bron niet.
 
 Dat de catalogus blijft kloppen met de registry is een test: `mcpCatalog.test.ts`
 faalt als een bron naar een handeling wijst die niet bestaat, naar een
@@ -465,6 +509,14 @@ Dat is ruim voor een gesprek; loopt een klant er structureel tegenaan, dan is er
 waarschijnlijk een agent aan het doorslaan.
 
 ## Wat er hierna komt
+
+**Issuer-identificatie (RFC 9207).** `iss` meesturen in elk antwoord van
+`/authorize` en `/approve` (ook bij een fout), en
+`authorization_response_iss_parameter_supported: true` in de metadata. Dat
+beschermt de AI-client tegen een verwisseling van autorisatieservers, en ChatGPT
+gebruikt dan een vast terugkeeradres. Doe het samen met een echte koppeltest
+in ChatGPT en Claude: bestaande ChatGPT-koppelingen krijgen dan een ander
+terugkeeradres, dat niet in hun registratie staat.
 
 **Meer rechtstreekse uitvoerders.** Er zijn er nu 36 van de 188
 schrijf-handelingen. Elke handeling waarvan de browser-uitvoerder één org-scoped

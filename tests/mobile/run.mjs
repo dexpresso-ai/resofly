@@ -142,6 +142,11 @@ const PAGES = {
   // nog op het record wacht (lange hostnaam, CNAME en TXT met kopieerknoppen,
   // de stappen per provider) en een verhuisd domein. De langste stand.
   'settings-domein': { page: 'settings', prepare: '[data-settings-tab="domein"]' },
+  // Instellingen → AI (november 2026): het adres van de connector met
+  // kopieerknop, de keuze tussen vijf AI-apps met hun stappen, en de
+  // koppelingen. Stond tot nu toe niet in deze test; de lange URL in een
+  // smalle kaart is precies wat zijwaarts uit beeld kan lopen.
+  'settings-ai': { page: 'settings', prepare: '[data-settings-tab="ai"]' },
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },

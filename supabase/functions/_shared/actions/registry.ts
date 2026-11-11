@@ -104,6 +104,15 @@ export function searchActions(
   opts: {
     allowedIds?: Set<string> | null;
     modules?: (module: string, kind: 'read' | 'write') => boolean;
+    /**
+     * Mag de aanroeper deze handeling? Ziet de HELE handeling, ook `adminOnly`.
+     *
+     * `modules` hierboven kreeg alleen module en soort, en daarmee vond een gewoon
+     * teamlid via zijn gekoppelde AI ook de team- en instellingshandelingen die
+     * alleen een owner of admin mag. Uitvoeren werd daarna wel geweigerd, maar
+     * "wat hij niet mag, bestaat voor zijn AI niet" klopte zo niet.
+     */
+    permits?: (action: ActionDef) => boolean;
     limit?: number;
     /** Extra doorzoekbare handelingen buiten de registry; de MCP geeft hier Gerrie's kerntools mee. */
     extra?: ActionDef[];
@@ -118,7 +127,8 @@ export function searchActions(
   const all = opts.extra && opts.extra.length > 0 ? [...INDEX, ...extraIndex(opts.extra)] : INDEX;
   const pool = all
     .filter((e) => !opts.allowedIds || opts.allowedIds.has(e.action.id))
-    .filter((e) => !opts.modules || opts.modules(e.action.module, e.action.kind));
+    .filter((e) => !opts.modules || opts.modules(e.action.module, e.action.kind))
+    .filter((e) => !opts.permits || opts.permits(e.action));
 
   if (terms.length === 0 || pool.length === 0) return pool.slice(0, limit).map((e) => summarize(e.action));
 
