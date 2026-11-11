@@ -103,6 +103,10 @@ Domains & Routes (of zet ze in `wrangler.toml` en deploy opnieuw):
    `mail`. Een preciezere route gaat voor, zo kost de werkruimte geen Worker-aanroepen. Een
    adres dat alleen in de DNS staat (grijs wolkje, zoals `smtp`, `pop`, `inbound`), komt
    nooit bij een Worker.
+3. `mcp.resofly.com/*` heeft een eigen Worker, `resofly-mcp-staging`: het adres van de
+   AI-koppeling (`workers/mcp`, zie MCP_CONNECTOR_SETUP.md). Ook die route is preciezer dan
+   de wildcard en gaat dus voor. Hij staat niet in `PASSTHROUGH_HOSTS`: daar komt hij
+   nooit.
 
 Testen:
 

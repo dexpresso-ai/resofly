@@ -452,6 +452,48 @@ export function openCorsHeaders(extraHeaders = '', extraExposed = ''): Record<st
   return headers;
 }
 
+// ── Achter het eigen adres (mcp.resofly.com) ─────────────────────────────────
+//
+// De klant plakt https://mcp.resofly.com/mcp in zijn AI-app. Daar staat een
+// Cloudflare Worker (workers/mcp) die doorstuurt naar deze functies. Voor de
+// meeste paden maakt dat niets uit, behalve voor het IP-adres: dat is bij ons
+// het adres van Cloudflare, niet dat van de client.
+
+/** Het echte adres van de client, gezet door de Worker. Namen gelijk aan workers/mcp/src/logic.ts. */
+export const PROXY_CLIENT_IP_HEADER = 'x-resofly-client-ip';
+/** Het geheim waarmee de Worker laat zien dat hij het is (MCP_PROXY_SECRET). */
+export const PROXY_SECRET_HEADER = 'x-resofly-proxy-secret';
+
+/** Korter dan dit is geen geheim maar een wachtwoord dat iemand kan raden. */
+const MIN_PROXY_SECRET_LENGTH = 24;
+
+/**
+ * Van welk adres komt dit verzoek? Voor de rem op registraties (mcp-oauth).
+ *
+ * Rechtstreeks op Supabase is dat `cf-connecting-ip`: dat zet de infrastructuur,
+ * de aanroeper kan het niet vervalsen. Via de Worker op mcp.resofly.com is dat
+ * adres voor ÁLLE clients hetzelfde: Cloudflare zet het bij een verzoek van een
+ * Worker naar een ander domein op een vast eigen adres. Dan deelden alle
+ * klanten één teller van zestig registraties per uur, en lag koppelen voor
+ * iedereen stil zodra die vol was.
+ *
+ * Daarom geeft de Worker het echte adres mee. We geloven het alleen met het
+ * juiste geheim erbij: zonder geheim kan iedere client een willekeurig adres
+ * opgeven en zo de rem ontlopen. Is het geheim fout of niet ingesteld, dan telt
+ * het gewone adres. Dat is strenger, nooit ruimer.
+ */
+export function senderAddress(headers: Headers, proxySecret: string | undefined): string {
+  const secret = String(proxySecret || '');
+  const given = headers.get(PROXY_SECRET_HEADER) || '';
+  if (secret.length >= MIN_PROXY_SECRET_LENGTH && given
+    && timingSafeEqualHex(hexOfString(given), hexOfString(secret))) {
+    const forwarded = (headers.get(PROXY_CLIENT_IP_HEADER) || '').trim();
+    if (/^[0-9A-Fa-f:.]{2,64}$/.test(forwarded)) return forwarded;
+  }
+  return (headers.get('cf-connecting-ip') || (headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
+    .trim().slice(0, 64);
+}
+
 // ── Het autorisatieverzoek onderweg ──────────────────────────────────────────
 //
 // Tussen "de AI-client stuurt de gebruiker naar ons toe" en "de gebruiker geeft
