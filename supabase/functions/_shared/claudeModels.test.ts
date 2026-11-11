@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   addUsage, anthropicHeaders, assistantContentForHistory, claudeModelSpec, DEFAULT_CLAUDE_MODEL, modelCostUsd,
-  modelRequestFields, refusalText, SERVER_FALLBACK_BETA, usageFromResponse, type TokenUsage,
+  modelRequestFields, refusalText, SERVER_FALLBACK_BETA, usageFromResponse, type TokenUsage, aiErrorMessage,
 } from './claudeModels.ts';
 
 /**
@@ -131,5 +131,22 @@ test('geen geforceerde tool_choice meer in de code die Sonnet 5.5 aanspreekt', (
   for (const file of ['./gerrieCore.ts', './claudeSummary.ts', './claudeInvoice.ts']) {
     assert.doesNotMatch(read(file), /'claude-sonnet-4-6'/, `${file} noemt nog een eigen standaardmodel`);
     assert.match(read(file), /from '\.\/claudeModels\.ts'|from '\.\.\/_shared\/claudeModels\.ts'/, `${file} gebruikt het register niet`);
+  }
+});
+
+test('een mislukte AI-aanroep noemt geen model en geen leverancier', () => {
+  // Eerst ging de API-fout letterlijk door ("Claude-fout (404): model:
+  // claude-sonnet-5-5"), tot in de chat en het logboek van een agent.
+  for (const status of [400, 401, 404, 429, 500, 529]) {
+    const text = aiErrorMessage(status);
+    assert.doesNotMatch(text, /claude|anthropic|sonnet|haiku|opus|model/i, `status ${status}`);
+    assert.match(text, /^De AI\b/);
+  }
+  assert.match(aiErrorMessage(429), /te druk/);
+  assert.match(aiErrorMessage(529), /niet bereikbaar/);
+  assert.match(aiErrorMessage(404), /fout 404/);
+  // Geen enkele aanroeper stuurt de ruwe fout van de API nog als melding door.
+  for (const file of ['./gerrieCore.ts', './claudeInvoice.ts', './claudeSummary.ts']) {
+    assert.doesNotMatch(read(file), /new HttpError\(`Claude/, file);
   }
 });

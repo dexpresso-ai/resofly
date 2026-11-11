@@ -19,8 +19,8 @@ import { videoServiceStatus } from '../_shared/onlineMeetings.ts';
 import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '../_shared/actions/types.ts';
 import { isOrganizationRole, memberModuleLevel, type OrganizationRole } from '../_shared/roles.ts';
 import {
-  addUsage, anthropicHeaders, assistantContentForHistory, claudeModelSpec, DEFAULT_CLAUDE_MODEL, modelCostUsd, modelRequestFields,
-  refusalText, usageFromResponse, type ClaudeModelSpec, type Effort, type TokenUsage,
+  addUsage, aiErrorLog, aiErrorMessage, anthropicHeaders, assistantContentForHistory, claudeModelSpec, DEFAULT_CLAUDE_MODEL,
+  modelCostUsd, modelRequestFields, refusalText, usageFromResponse, type ClaudeModelSpec, type Effort, type TokenUsage,
 } from '../_shared/claudeModels.ts';
 import { DEFAULT_MAX_PROPOSALS, MAX_PROPOSALS_LIMIT } from '../_shared/agentAccess.ts';
 import { SCHEDULE_KINDS, isScheduleKind, type ScheduleKind } from '../_shared/agentSchedule.ts';
@@ -906,7 +906,8 @@ async function callAnthropicStream(system: string, messages: AnthropicMessage[],
     const text = await res.text().catch(() => '');
     let detail = text.slice(0, 300);
     try { detail = (JSON.parse(text)?.error?.message as string) || detail; } catch { /* niet-JSON */ }
-    throw new HttpError(`Claude-fout (${res.status}): ${detail || 'onbekend'}`, res.status === 429 ? 429 : 502);
+    aiErrorLog('gerrie', res.status, detail || 'onbekend');
+    throw new HttpError(aiErrorMessage(res.status), res.status === 429 ? 429 : 502);
   }
 
   // Reconstrueer de content-blokken uit de SSE-stream en forward tekst-deltas live.
@@ -973,7 +974,9 @@ async function callAnthropicStream(system: string, messages: AnthropicMessage[],
         if (delta.stop_details) stopDetails = delta.stop_details;
         Object.assign(usage, (ev.usage as Record<string, unknown>) ?? {});
       } else if (type === 'error') {
-        throw new HttpError(`Claude-streamfout: ${(ev.error as { message?: string })?.message ?? 'onbekend'}`, 502);
+        const streamError = (ev.error ?? {}) as { type?: string; message?: string };
+        aiErrorLog('gerrie-stream', 502, `${streamError.type ?? ''} ${streamError.message ?? 'onbekend'}`);
+        throw new HttpError(aiErrorMessage(streamError.type === 'rate_limit_error' ? 429 : 502), 502);
       }
     }
   }
@@ -1404,7 +1407,8 @@ async function callAnthropicOnce(
     const text = await res.text().catch(() => '');
     let detail = text.slice(0, 300);
     try { detail = (JSON.parse(text)?.error?.message as string) || detail; } catch { /* niet-JSON */ }
-    throw new HttpError(`Claude-fout (${res.status}): ${detail || 'onbekend'}`, res.status === 429 ? 429 : 502);
+    aiErrorLog('gerrie', res.status, detail || 'onbekend');
+    throw new HttpError(aiErrorMessage(res.status), res.status === 429 ? 429 : 502);
   }
   const data = await res.json();
   accumulateUsage(usage, (data?.usage ?? {}) as Record<string, unknown>, spec, typeof data?.model === 'string' ? data.model : null);

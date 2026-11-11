@@ -11,8 +11,8 @@ import { wrapToolData } from './gerrieGuard.ts';
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { HttpError } from './edgeAuth.ts';
 import {
-  anthropicHeaders, claudeModelSpec, DEFAULT_CLAUDE_MODEL, modelCostUsd, modelRequestFields, refusalText, usageFromResponse,
-  type TokenUsage,
+  aiErrorLog, aiErrorMessage, anthropicHeaders, claudeModelSpec, DEFAULT_CLAUDE_MODEL, modelCostUsd, modelRequestFields,
+  refusalText, usageFromResponse, type TokenUsage,
 } from './claudeModels.ts';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
@@ -80,8 +80,8 @@ export async function summarizeTranscript(transcript: string, meta: SummaryMeta)
   });
 
   if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new HttpError(`Claude-call mislukt (${res.status}): ${detail.slice(0, 300)}`, 502);
+    aiErrorLog('notulen', res.status, await res.text().catch(() => ''));
+    throw new HttpError(aiErrorMessage(res.status), 502);
   }
 
   const data = await res.json() as {

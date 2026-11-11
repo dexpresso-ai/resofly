@@ -1563,7 +1563,7 @@ function AiUsagePanel({ organizationId, members }: { organizationId: string; mem
       <div className="settings-card-head">
         <div>
           <h3>AI-gebruik deze maand</h3>
-          <p className="settings-help">AI-verbruik per gebruiker in deze organisatie, in de huidige kalendermaand: Gerrie en de agents, notulen, het uitlezen van facturen en het uitschrijven van opnames. Bedragen zijn schattingen op basis van de tarieven van Claude en ElevenLabs, omgerekend naar euro's. Het tegoed per gebruiker telt het verbruik in alle organisaties samen.</p>
+          <p className="settings-help">AI-verbruik per gebruiker in deze organisatie, in de huidige kalendermaand: Gerrie en de agents, notulen, het uitlezen van facturen en het uitschrijven van opnames. Bedragen zijn schattingen op basis van de tarieven van onze AI-leveranciers, omgerekend naar euro's. Het tegoed per gebruiker telt het verbruik in alle organisaties samen.</p>
         </div>
       </div>
       {error && <div className="error">{error}</div>}
