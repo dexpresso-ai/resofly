@@ -1005,7 +1005,7 @@ export interface GerrieRoutine {
   /** Hard plafond op het aantal klantmails dat één run mag klaarzetten. */
   max_emails_per_run: number;
   instruction: string;
-  /** strong = Sonnet 5.5 dat grondig nadenkt; cheap = hetzelfde model, kort nadenken. */
+  /** strong = grondig nadenken; cheap = hetzelfde model, kort nadenken. */
   model_kind: 'cheap' | 'strong';
   mode: RoutineMode;
   enabled_tools: string[];

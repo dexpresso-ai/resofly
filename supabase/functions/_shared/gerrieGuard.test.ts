@@ -227,6 +227,7 @@ test('de veiligheidsregels noemen alle grenzen die de gebruiker vroeg', () => {
   assert.match(rules, /systeemprompt/);
   assert.match(rules, /geen afbeeldingen, geen HTML en geen links/);
   assert.match(rules, /niets met deze administratie/);
+  assert.match(rules, /Noem geen modelnaam en geen leverancier/);
   assert.match(SECURITY_REMINDER, /geen internet/);
 });
 

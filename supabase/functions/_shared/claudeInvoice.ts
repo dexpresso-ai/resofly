@@ -21,7 +21,8 @@ import { wrapToolData } from './gerrieGuard.ts';
 import type { Usage } from './claudeSummary.ts';
 import { DOCUMENT_MIME_TYPES } from './invoiceInboxRules.ts';
 import {
-  addUsage, anthropicHeaders, claudeModelSpec, DEFAULT_CLAUDE_MODEL, modelRequestFields, refusalText, usageFromResponse,
+  addUsage, aiErrorLog, aiErrorMessage, anthropicHeaders, claudeModelSpec, DEFAULT_CLAUDE_MODEL, modelRequestFields, refusalText,
+  usageFromResponse,
 } from './claudeModels.ts';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
@@ -259,8 +260,8 @@ async function runExtraction(
     });
 
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new HttpError(`Claude-call mislukt (${res.status}): ${detail.slice(0, 300)}`, 502);
+      aiErrorLog('factuurherkenning', res.status, await res.text().catch(() => ''));
+      throw new HttpError(aiErrorMessage(res.status), 502);
     }
 
     const data = await res.json() as {

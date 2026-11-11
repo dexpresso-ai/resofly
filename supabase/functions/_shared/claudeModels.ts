@@ -238,3 +238,21 @@ export function refusalText(category: unknown): string {
   }
   return `${base} Formuleer het anders, of doe dit stuk zelf in de app.`;
 }
+
+/**
+ * Wat de gebruiker leest als een aanroep naar de AI mislukt. Eerst ging de
+ * foutmelding van de API letterlijk door ("Claude-fout (404): model:
+ * claude-sonnet-5-5"), en die kwam zo in de chat en in het logboek van een
+ * agent. De gebruiker hoort niet te zien welk model of welke leverancier er
+ * achter Gerrie zit; de details staan in de serverlog (`aiErrorLog`).
+ */
+export function aiErrorMessage(status: number): string {
+  if (status === 429) return 'De AI heeft het even te druk. Probeer het over een minuut opnieuw.';
+  if (status >= 500) return 'De AI is even niet bereikbaar. Probeer het zo opnieuw.';
+  return `De AI-aanroep is mislukt (fout ${status}). Probeer het later opnieuw; blijft het misgaan, meld het dan.`;
+}
+
+/** De echte foutmelding van de API, alleen voor de serverlog. */
+export function aiErrorLog(where: string, status: number, detail: string): void {
+  console.error(`AI-aanroep mislukt (${where}, ${status})`, detail.slice(0, 500));
+}

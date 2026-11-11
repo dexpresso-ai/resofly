@@ -443,9 +443,13 @@ function startersFor(catalog: RoutineCatalog | null, canPropose: boolean): Routi
     && (!t.events || !events || t.events.every((key) => events.has(key))));
 }
 
-/** "Sonnet 5.5 · grondig" — beide standen draaien op hetzelfde model; het verschil is hoe lang hij nadenkt. */
-function modelLabel(kind: 'cheap' | 'strong'): string {
-  return kind === 'strong' ? 'Claude Sonnet 5.5 · grondig' : 'Claude Sonnet 5.5 · snel';
+/**
+ * Hoe lang de agent nadenkt, in gewone taal. Hier stond eerst de naam van het
+ * model erbij; welk model er achter Gerrie zit, laat de app bewust nergens
+ * zien (modelnaam.test.ts).
+ */
+function thinkingLabel(kind: 'cheap' | 'strong'): string {
+  return kind === 'strong' ? 'Grondig — denkt langer na' : 'Snel — korter nadenken, zuiniger';
 }
 
 /** Waar het resultaat heen gaat, in gewone taal. */
@@ -1322,8 +1326,8 @@ function AgentDetail({ routine, organizationId, canWrite, handlers, busy, runsKe
           </dd>
         </div>
         <div>
-          <dt><Gauge size={14} /> Model en kosten</dt>
-          <dd>{modelLabel(routine.model_kind)}
+          <dt><Gauge size={14} /> Nadenken en kosten</dt>
+          <dd>{thinkingLabel(routine.model_kind)}
             <small>Gaat van het maandtegoed van {owner ? `het account van ${owner}` : 'je account'}{budget !== null && !owner ? `; nog ${Math.round(budget * 100)}% over` : ''}.{budget !== null && budget <= 0 && !owner ? ' Hij slaat runs over tot volgende maand.' : ''}</small>
           </dd>
         </div>
@@ -1601,15 +1605,15 @@ function RoutineEditor({ organizationId, routine, catalog, canPropose, onDone, o
           </label>
           <label className="cc-field"><span>Nadenken</span>
             <select className="cc-text" value={f.model_kind} onChange={(e) => setF((p) => ({ ...p, model_kind: e.target.value === 'cheap' ? 'cheap' : 'strong' }))}>
-              <option value="strong">Grondig — denkt langer na</option>
-              <option value="cheap">Snel — korter nadenken, zuiniger</option>
+              <option value="strong">{thinkingLabel('strong')}</option>
+              <option value="cheap">{thinkingLabel('cheap')}</option>
             </select>
           </label>
         </div>
         {!canPropose
           ? <p className="cc-note">Jij kunt in Gerrie <b>lezen maar niets laten klaarzetten</b>, dus deze agent kijkt mee en vat samen. Een agent kan nooit meer dan degene namens wie hij draait.</p>
           : f.mode === 'report' && <p className="cc-note">Wil je dat de agent ook iets kan <b>versturen of aanmaken</b> (bv. herinneringen of facturen)? Zet “Wat mag de agent?” op <b>Voorstellen doen</b>.</p>}
-        <p className="cc-note">Beide standen draaien op <b>Claude Sonnet 5.5</b>. Grondig is het beste voor opdrachten waarbij hij moet zoeken en afwegen; snel volstaat voor een korte check die vaak draait.</p>
+        <p className="cc-note"><b>Grondig</b> is het beste voor opdrachten waarbij hij moet zoeken en afwegen; <b>snel</b> volstaat voor een korte check die vaak draait.</p>
 
         <div className="cc-field-row">
           <label className="cc-field"><span>Wanneer</span>

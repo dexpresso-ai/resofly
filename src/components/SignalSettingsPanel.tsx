@@ -162,7 +162,7 @@ export function SignalSettingsPanel({ organizationId, canManage }: { organizatio
               <input className="form-input" type="number" min={1} max={50} value={draft.max_gerrie_cards_per_day} onChange={(e) => setDraft((d) => ({ ...d, max_gerrie_cards_per_day: clamp(e.target.value, 1, 50, 10) }))} />
             </label>
           </div>
-          <p className="hint">Gerrie-kaarten draaien op het zuinige model onder het maandtegoed van {settings?.actor_user_id === userId ? 'jou' : 'de owner of admin die de lijst aanzette'}. Regelkaarten kosten geen tegoed. De dagcap is een rem op ruis, geen budget.</p>
+          <p className="hint">Gerrie-kaarten gaan van het maandtegoed van {settings?.actor_user_id === userId ? 'jou' : 'de owner of admin die de lijst aanzette'}. Regelkaarten kosten geen tegoed. De dagcap is een rem op ruis, geen budget.</p>
           <div className="dc-actions-row">
             <Button disabled={busy === 'save'} onClick={() => void save()}>{busy === 'save' ? <Loader2 size={13} className="ag-spin" /> : <Check size={13} />} Opslaan</Button>
           </div>
