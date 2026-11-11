@@ -95,7 +95,7 @@ export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   bank_rule: 'finance', bank_transaction: 'finance', company_settings: 'finance', contract: 'finance', contract_note: 'finance', contract_project: 'finance',
   contract_template: 'finance', corporate_tax_return: 'finance', credit_note: 'finance', dividend_distribution: 'finance',
   fiscal_year: 'finance', fiscal_year_size_input: 'finance', fixed_asset: 'finance', invoice: 'finance', journal_entry: 'finance',
-  ledger_account: 'finance', partnership_partner: 'finance', purchase_invoice: 'finance', quote: 'finance', result_appropriation: 'finance',
+  ledger_account: 'finance', partnership_partner: 'finance', prepaid_expense: 'finance', purchase_invoice: 'finance', quote: 'finance', result_appropriation: 'finance',
   share_transaction: 'finance', shareholder: 'finance', supplier: 'finance', vat_return: 'finance',
   calendar_event: 'calendar', calendar_event_link: 'calendar', calendar_source: 'calendar', note_calendar_link: 'calendar',
   client: 'clients', client_call: 'clients', client_contact: 'clients', client_field: 'clients',
@@ -227,6 +227,9 @@ const FIELD_LABELS: Record<string, string> = {
   finalized_at: 'Definitief op', filed_at: 'Ingediend op', rubrieken: 'Rubrieken', paid_bank_transaction_id: 'Betaald met',
   asset_number: 'Activumnummer', category: 'Categorie', acquisition_date: 'Aanschafdatum', acquisition_cost_cents: 'Aanschafprijs',
   residual_value_cents: 'Restwaarde', useful_life_months: 'Levensduur (maanden)', method: 'Methode', disposal_date: 'Verkocht of afgestoten op',
+  payment_date: 'Betaald op', months: 'Looptijd (maanden)', start_mode: 'Op de balans via', end_amount_cents: 'Van de balans bij beëindigen',
+  end_refund_cents: 'Terugbetaald', prepaid_account_id: 'Balansrekening', expense_account_id: 'Kostenrekening',
+  counter_account_id: 'Tegenrekening', end_refund_account_id: 'Rekening terugbetaling', source_purchase_invoice_id: 'Inkoopfactuur',
   disposal_proceeds_cents: 'Opbrengst', result_cents: 'Resultaat', closed_at: 'Afgesloten op', reopened_at: 'Heropend op',
   taxable_amount_cents: 'Belastbaar bedrag', tax_cents: 'Belasting', balance_due_cents: 'Te betalen',
   prepared_on: 'Opgemaakt op', prepare_deadline: 'Uiterlijk op te maken', adoption_date: 'Vastgesteld op', adoption_method: 'Vastgesteld via',
@@ -462,7 +465,7 @@ const NOUN: Record<string, string> = {
   contract_note: 'interne notitie bij contract', contract_project: 'koppeling van contract', contract_template: 'contractsjabloon',
   credit_note: 'creditnota', purchase_invoice: 'inkoopfactuur', supplier: 'leverancier', journal_entry: 'boeking',
   ledger_account: 'grootboekrekening', bank_account: 'bankrekening', bank_rule: 'bankregel', bank_transaction: 'banktransactie',
-  vat_return: 'btw-aangifte', fixed_asset: 'activum', fiscal_year: 'boekjaar', corporate_tax_return: 'vpb-aangifte',
+  vat_return: 'btw-aangifte', fixed_asset: 'activum', prepaid_expense: 'vooruitbetaling', fiscal_year: 'boekjaar', corporate_tax_return: 'vpb-aangifte',
   annual_account: 'jaarrekening', annual_account_filing: 'deponering', annual_account_signature: 'ondertekening van',
   dividend_distribution: 'dividenduitkering', result_appropriation: 'resultaatbestemming', share_transaction: 'aandelentransactie',
   shareholder: 'aandeelhouder', partnership_partner: 'vennoot', fiscal_year_size_input: 'grootte-gegevens',
@@ -798,7 +801,7 @@ export type AuditTarget =
   | { kind: 'task'; id: string }
   | { kind: 'project'; id: string }
   | { kind: 'client'; id: string }
-  | { kind: 'page'; page: 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'documents' | 'notes' | 'content' | 'time' | 'marketing' | 'purchase-invoices' | 'suppliers' | 'ledger' | 'bank' | 'vat-returns' | 'calendar' | 'stats' | 'settings' };
+  | { kind: 'page'; page: 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'documents' | 'notes' | 'content' | 'time' | 'marketing' | 'purchase-invoices' | 'suppliers' | 'ledger' | 'bank' | 'prepaid' | 'vat-returns' | 'calendar' | 'stats' | 'settings' };
 
 export function auditTarget(e: AuditEntry): AuditTarget | null {
   if (e.action === 'deleted') {
@@ -824,6 +827,7 @@ export function auditTarget(e: AuditEntry): AuditTarget | null {
     case 'journal_entry': case 'ledger_account': return { kind: 'page', page: 'ledger' };
     case 'bank_account': case 'bank_rule': case 'bank_transaction': return { kind: 'page', page: 'bank' };
     case 'vat_return': return { kind: 'page', page: 'vat-returns' };
+    case 'prepaid_expense': return { kind: 'page', page: 'prepaid' };
     case 'calendar_event': case 'calendar_source': return { kind: 'page', page: 'calendar' };
     case 'saved_report': return { kind: 'page', page: 'stats' };
     default: return null;

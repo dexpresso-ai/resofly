@@ -88,6 +88,8 @@ import type {
   PurchaseInvoice,
   FixedAsset,
   AssetDepreciation,
+  PrepaidExpense,
+  PrepaidExpenseRelease,
   ProfitAndLossRow,
   BalanceSheetRow,
   TrialBalanceRow,
@@ -673,11 +675,12 @@ const GROUP_LOADERS: { [G in DataGroup]: (organizationId: UUID) => Promise<Group
     };
   },
   bookkeeping: async (organizationId) => {
-    const [journalEntries, journalLines, closedPeriods, fiscalYears, fixedAssets, assetDepreciations, vatReturns] = await Promise.all([
+    const [journalEntries, journalLines, closedPeriods, fiscalYears, fixedAssets, assetDepreciations, prepaidExpenses, prepaidExpenseReleases, vatReturns] = await Promise.all([
       selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectFiscalYears(organizationId),
-      selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
+      selectFixedAssets(organizationId), selectAssetDepreciations(organizationId),
+      selectPrepaidExpenses(organizationId), selectPrepaidExpenseReleases(organizationId), selectVatReturns(organizationId),
     ]);
-    return { journalEntries, journalLines, closedPeriods, fiscalYears, fixedAssets, assetDepreciations, vatReturns };
+    return { journalEntries, journalLines, closedPeriods, fiscalYears, fixedAssets, assetDepreciations, prepaidExpenses, prepaidExpenseReleases, vatReturns };
   },
   bank: async (organizationId) => {
     const [bankAccounts, bankStatements, bankTransactions, bankAllocations, bankRules, bankRequisitions] = await Promise.all([
@@ -2050,6 +2053,12 @@ export const selectFixedAssets = (organizationId: UUID) =>
   selectOptional<FixedAsset>('fixed_assets', organizationId, { orderBy: 'acquisition_date', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
 export const selectAssetDepreciations = (organizationId: UUID) =>
   selectOptional<AssetDepreciation>('asset_depreciations', organizationId, { orderBy: 'date', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
+const PREPAID_MIGRATION_HINT =
+  'Voer de migratie 20261111220000_vooruitbetaalde_kosten.sql uit in Supabase om vooruitbetaalde kosten te kunnen boeken.';
+export const selectPrepaidExpenses = (organizationId: UUID) =>
+  selectOptional<PrepaidExpense>('prepaid_expenses', organizationId, { orderBy: 'start_date', ascending: false, hint: PREPAID_MIGRATION_HINT });
+export const selectPrepaidExpenseReleases = (organizationId: UUID) =>
+  selectOptional<PrepaidExpenseRelease>('prepaid_expense_releases', organizationId, { orderBy: 'date', ascending: true, hint: PREPAID_MIGRATION_HINT });
 export const selectVatReturns = (organizationId: UUID) =>
   selectOptional<VatReturn>('vat_returns', organizationId, { orderBy: 'period_start', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
 export const selectFiscalYears = (organizationId: UUID) =>
@@ -3404,6 +3413,87 @@ export async function bookAssetDisposal(organizationId: UUID, assetId: UUID, cou
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as FixedAsset;
+}
+
+// ── Vooruitbetaalde kosten (migratie 20261111220000) ───────────────────────
+// De tabellen zijn voor de app alleen-lezen; elke wijziging gaat via deze
+// functies, die het register en het grootboek samen bijwerken.
+
+/** Velden van een vooruitbetaling zoals save_prepaid_expense ze leest. Wat ontbreekt, blijft zoals het is. */
+export interface PrepaidExpenseInput {
+  description?: string;
+  amount_cents?: number;
+  payment_date?: string;
+  start_date?: string;
+  months?: number;
+  /** Leeg: de rekening Vooruitbetaalde kosten (die komt erbij als hij er nog niet is). */
+  prepaid_account_id?: UUID | null;
+  expense_account_id?: UUID;
+  start_mode?: 'book' | 'existing';
+  counter_account_id?: UUID | null;
+  source_purchase_invoice_id?: UUID | null;
+  notes?: string | null;
+}
+
+/** Legt een vooruitbetaling vast (id leeg) of werkt hem bij, met het schema per maand. Er wordt nog niets geboekt. */
+export async function savePrepaidExpense(organizationId: UUID, prepaidExpenseId: UUID | null, values: PrepaidExpenseInput): Promise<PrepaidExpense> {
+  const { data, error } = await supabase.rpc('save_prepaid_expense', {
+    p_organization_id: organizationId,
+    p_prepaid_expense_id: prepaidExpenseId,
+    p_values: values,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as PrepaidExpense;
+}
+
+/** Verwijdert een vooruitbetaling waarvan niets (meer) in het grootboek staat. */
+export async function deletePrepaidExpense(organizationId: UUID, prepaidExpenseId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('delete_prepaid_expense', {
+    p_organization_id: organizationId,
+    p_prepaid_expense_id: prepaidExpenseId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/** Boekt het bedrag naar de balans: debet Vooruitbetaalde kosten / credit de tegenrekening. */
+export async function bookPrepaidExpenseStart(organizationId: UUID, prepaidExpenseId: UUID, counterAccountId?: UUID | null, date?: string | null): Promise<PrepaidExpense> {
+  const { data, error } = await supabase.rpc('book_prepaid_expense_start', {
+    p_organization_id: organizationId,
+    p_prepaid_expense_id: prepaidExpenseId,
+    p_counter_account_id: counterAccountId ?? null,
+    p_date: date ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as PrepaidExpense;
+}
+
+/** Boekt de geplande maandtermijnen t/m een datum (uiterlijk het einde van deze maand): van één post, of van alle lopende posten. */
+export async function postPrepaidReleases(organizationId: UUID, throughDate: string, prepaidExpenseId?: UUID | null): Promise<{ posted_count: number; posted_cents: number }> {
+  const { data, error } = await supabase.rpc('post_prepaid_releases', {
+    p_organization_id: organizationId,
+    p_through_date: throughDate,
+    p_prepaid_expense_id: prepaidExpenseId ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  const result = (data ?? {}) as { posted_count?: number; posted_cents?: number };
+  return { posted_count: Number(result.posted_count ?? 0), posted_cents: Number(result.posted_cents ?? 0) };
+}
+
+/**
+ * Beëindigt een vooruitbetaling: eerst de termijnen t/m de einddatum, dan gaat
+ * de rest in één keer van de balans: een terugbetaling naar `refundAccountId`,
+ * wat overblijft naar de kosten.
+ */
+export async function endPrepaidExpense(organizationId: UUID, prepaidExpenseId: UUID, date: string, refundCents = 0, refundAccountId: UUID | null = null): Promise<PrepaidExpense> {
+  const { data, error } = await supabase.rpc('end_prepaid_expense', {
+    p_organization_id: organizationId,
+    p_prepaid_expense_id: prepaidExpenseId,
+    p_date: date,
+    p_refund_cents: refundCents,
+    p_refund_account_id: refundAccountId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as PrepaidExpense;
 }
 
 /** Winst- en verliesrekening over een periode (alleen geboekte journaalposten). */

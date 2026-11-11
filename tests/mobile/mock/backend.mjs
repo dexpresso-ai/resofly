@@ -143,6 +143,63 @@ const LEDGER_ACCOUNTS = [
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
 }));
 
+/**
+ * `prepaid: true`: vooruitbetaalde kosten (2026-11-11). Een verzekering van
+ * € 1.000 over 36 maanden die vier maanden geleden begon: drie termijnen
+ * geboekt, de vorige en deze maand klaar om te boeken. En een jaarabonnement
+ * dat al op de balans stond. De datums lopen mee met de dag van de test, net
+ * als "vandaag" in de app.
+ */
+const PREPAID_ACCOUNT = {
+  id: '1ed9e000-0000-4000-8000-000000000050', organization_id: seed.ids.ORG, code: '1350', name: 'Vooruitbetaalde kosten',
+  type: 'asset', subtype: 'prepaid_expenses', default_vat_code: null, report_group: 'vorderingen', is_restricted_reserve: false,
+  is_system: false, is_active: true, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+};
+
+function monthEndIso(offset) {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset + 1, 0)).toISOString().slice(0, 10);
+}
+
+function prepaidRows() {
+  const expense = LEDGER_ACCOUNTS.find(a => a.code === '4500').id;
+  const bank = LEDGER_ACCOUNTS.find(a => a.code === '1100').id;
+  const stamp = { organization_id: seed.ids.ORG, created_by: seed.ids.USER, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' };
+  const item = (id, values) => ({
+    id, ...stamp, prepaid_account_id: PREPAID_ACCOUNT.id, expense_account_id: expense, counter_account_id: null, start_journal_entry_id: null,
+    source_purchase_invoice_id: null, status: 'active', end_date: null, end_amount_cents: null, end_refund_cents: null,
+    end_refund_account_id: null, end_journal_entry_id: null, notes: null, ...values,
+  });
+  const items = [
+    item('9e9a1d00-0000-4000-8000-000000000001', {
+      description: 'Bedrijfsaansprakelijkheidsverzekering', amount_cents: 100000, months: 36, start_mode: 'book', counter_account_id: bank,
+      start_journal_entry_id: '9e9a1d00-0000-4000-8000-0000000000e1', payment_date: `${monthEndIso(-4).slice(0, 8)}05`, start_date: `${monthEndIso(-4).slice(0, 8)}01`,
+    }),
+    item('9e9a1d00-0000-4000-8000-000000000002', {
+      description: 'Jaarabonnement boekhoudpakket', amount_cents: 12000, months: 12, start_mode: 'existing',
+      payment_date: `${monthEndIso(0).slice(0, 8)}01`, start_date: `${monthEndIso(0).slice(0, 8)}01`,
+    }),
+  ];
+  const releases = [];
+  for (const [itemIndex, firstMonth, posted] of [[0, -4, 3], [1, 0, 0]]) {
+    const it = items[itemIndex];
+    const monthly = Math.floor(it.amount_cents / it.months);
+    const remainder = it.amount_cents - monthly * it.months;
+    let accumulated = 0;
+    for (let i = 1; i <= it.months; i += 1) {
+      const amount = monthly + (i <= remainder ? 1 : 0);
+      accumulated += amount;
+      releases.push({
+        id: `9e9a1d00-0000-4000-8${itemIndex}00-${String(i).padStart(12, '0')}`, organization_id: seed.ids.ORG, prepaid_expense_id: it.id,
+        period_index: i, date: monthEndIso(firstMonth + i - 1), amount_cents: amount, remaining_after_cents: it.amount_cents - accumulated,
+        status: i <= posted ? 'posted' : 'scheduled', journal_entry_id: i <= posted ? `9e9a1d00-0000-4000-8${itemIndex}e0-${String(i).padStart(12, '0')}` : null,
+        posted_at: i <= posted ? '2026-01-01T00:00:00Z' : null, created_at: '2026-01-01T00:00:00Z',
+      });
+    }
+  }
+  return { prepaid_expenses: items, prepaid_expense_releases: releases };
+}
+
 function createSetup(options) {
   if (!options?.onboarding) return null;
   const settings = options.emptySettings ? null : {
@@ -545,7 +602,11 @@ export async function installMock(context, options = {}) {
       // `ledger: true`: een organisatie met het standaard rekeningschema, voor
       // de beginbalans met de auditfile-import (2026-11-11). Alleen voor die
       // pagina: de rest van de seed heeft bewust geen boekhouding.
-      const rows = options.ledger && table === 'ledger_accounts' ? LEDGER_ACCOUNTS : restRows(table, url, setup);
+      // `prepaid: true`: vooruitbetaalde kosten met de rekening 1350 erbij.
+      const prepaid = options.prepaid ? prepaidRows() : null;
+      const rows = options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
+        : prepaid && table in prepaid ? prepaid[table]
+        : restRows(table, url, setup);
       const accept = req.headers()['accept'] ?? '';
       const headers = { 'content-range': `0-${Math.max(0, rows.length - 1)}/${rows.length}` };
       if (accept.includes('pgrst.object')) {

@@ -154,6 +154,78 @@ const lineCents = (line: RawLine, key: 'debit_eur' | 'credit_eur'): number => {
   return Math.round(value * 100);
 };
 
+// ── Vooruitbetaalde kosten: dezelfde rekenregels als de database ────────────
+// (prepaid_build_schedule, 20261111220000) en als src/lib/prepaid.ts, zodat de
+// kaart zegt wat er straks geboekt wordt.
+
+const PREPAID_HOW = ['book', 'expense', 'existing'] as const;
+/** Subsoorten die nooit "Vooruitbetaalde kosten" zijn; de database weigert ze ook. */
+const NOT_PREPAID = ['bank', 'accounts_receivable', 'vat_input', 'psp_clearing', 'fixed_asset', 'accumulated_depreciation', 'accumulated_amortization', 'intangible_asset'];
+const VAT_SUBTYPES = ['vat_input', 'vat_output', 'vat_reverse', 'vat_payable'];
+const MONTH_NAMES = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
+
+/** De laatste dag van de maand, `offset` maanden na de maand van `iso`. */
+function prepaidMonthEnd(iso: string, offset = 0): string {
+  const [y, m] = iso.split('-').map(Number);
+  const index = (m - 1) + offset;
+  const year = y + Math.floor(index / 12);
+  const month = ((index % 12) + 12) % 12;
+  const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+}
+
+const prepaidMonthLabel = (iso: string) => `${MONTH_NAMES[Number(iso.slice(5, 7)) - 1]} ${iso.slice(0, 4)}`;
+
+/** Het schema: per maand een termijn op de laatste dag, het restant met een cent per termijn in de eerste maanden. */
+function prepaidTerms(amountCents: number, months: number, startDate: string): Array<{ date: string; cents: number }> {
+  const monthly = Math.floor(amountCents / months);
+  const remainder = amountCents - monthly * months;
+  const terms: Array<{ date: string; cents: number }> = [];
+  for (let i = 1; i <= months; i += 1) {
+    const cents = monthly + (i <= remainder ? 1 : 0);
+    if (cents > 0) terms.push({ date: prepaidMonthEnd(startDate, i - 1), cents });
+  }
+  return terms;
+}
+
+/** "€ 27,78 per maand (28×) en € 27,77 (8×)" */
+function prepaidPerMonth(terms: Array<{ cents: number }>): string {
+  const groups: Array<{ cents: number; count: number }> = [];
+  for (const t of terms) {
+    const last = groups[groups.length - 1];
+    if (last && last.cents === t.cents) last.count += 1; else groups.push({ cents: t.cents, count: 1 });
+  }
+  if (groups.length === 0) return '';
+  if (groups.length === 1) return `${euroCents(groups[0].cents)} per maand`;
+  return `${euroCents(groups[0].cents)} per maand (${groups[0].count}×) en ${groups.slice(1).map((g) => `${euroCents(g.cents)} (${g.count}×)`).join(' en ')}`;
+}
+
+interface PrepaidRow {
+  id: string; description: string; amount_cents: number; months: number; start_date: string; payment_date: string;
+  start_mode: string; start_journal_entry_id: string | null; status: string; prepaid_account_id: string; expense_account_id: string;
+}
+
+const prepaidOnBalance = (p: Pick<PrepaidRow, 'start_mode' | 'start_journal_entry_id'>) => p.start_mode === 'existing' || p.start_journal_entry_id != null;
+
+/**
+ * Alle rijen van een vraag, in pagina's van duizend. De API geeft er per keer
+ * hooguit duizend (max_rows); dertig posten van 36 maanden zijn er al meer, en
+ * dan noemde de kaart te weinig termijnen. `make` maakt elke keer een nieuwe,
+ * geordende vraag (zelfde patroon als fetchAll in reportRecords.ts).
+ */
+// deno-lint-ignore no-explicit-any
+async function allRows<T>(make: () => any, label: string, cap = 50_000): Promise<T[]> {
+  const rows: T[] = [];
+  for (let offset = 0; offset < cap; offset += 1000) {
+    const { data, error } = await make().range(offset, offset + 999);
+    if (error) throw new ActionError(`${label} ophalen mislukt: ${error.message}`);
+    const page = (data ?? []) as T[];
+    rows.push(...page);
+    if (page.length < 1000) break;
+  }
+  return rows;
+}
+
 export const BOOKKEEPING_ACTIONS: ActionDef[] = [
   // ── Rekeningschema en btw-codes ───────────────────────────────────────────
   {
@@ -2633,6 +2705,285 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
         warning: 'Het activum krijgt de status "afgestoten" en de boekwaarde gaat van de balans. Je kunt dit niet ongedaan maken; corrigeren kan alleen met een tegenboeking.',
         kind: 'money',
         payload: { asset_id: assetId, name: asset.name, counter_account_id: counterAccount.id, proceeds_cents: proceeds, vat_code: vatCode || null, vat_cents: vatCents, date },
+      };
+    },
+  },
+  // ── Vooruitbetaalde kosten ────────────────────────────────────────────────
+  {
+    id: 'prepaid.list',
+    label: 'Vooruitbetaalde kosten bekijken',
+    module: 'finance',
+    kind: 'read',
+    description:
+      'Geeft de vooruitbetaalde kosten: betalingen die over meerdere maanden naar de kosten gaan, zoals een verzekering voor drie jaar of een jaarabonnement. Per post de omschrijving, het bedrag, de looptijd, wat er al naar de kosten ging, wat er nog op de balans staat, de status ' +
+      '(lopend, afgerond, beëindigd), of het bedrag al op de balans staat, en hoeveel termijnen er t/m het einde van deze maand klaarstaan. Gebruik dit om het id te vinden voordat je termijnen boekt of een post beëindigt.',
+    keywords: ['vooruitbetaald', 'vooruitbetaalde kosten', 'vooruitbetaling', 'overlopende activa', 'transitorische posten', 'spreiden', 'verzekering', 'jaarabonnement', 'termijnen', 'op de balans'],
+    input: {
+      status: { type: 'string', enum: ['active', 'completed', 'ended'], description: 'Beperk tot één status.' },
+      limit: { type: 'number', description: 'Maximaal aantal posten (standaard 50).' },
+    },
+    async read(ctx, input) {
+      const limit = Math.min(Math.max(Number(input.limit) || 50, 1), 200);
+      let query = orgQuery(ctx, 'prepaid_expenses',
+        'id, description, amount_cents, months, start_date, payment_date, start_mode, start_journal_entry_id, status, end_date, end_amount_cents, end_refund_cents, source_purchase_invoice_id')
+        .order('start_date', { ascending: false }).limit(limit);
+      const status = optChoice(input, 'status', ['active', 'completed', 'ended'] as const);
+      if (status) query = query.eq('status', status);
+      const { data, error } = await query;
+      if (error) throw new ActionError(`Vooruitbetaalde kosten ophalen mislukt: ${error.message}`);
+      const items = (data ?? []) as Array<PrepaidRow & Record<string, unknown>>;
+      if (items.length === 0) return { prepaid_expenses: [] };
+
+      const through = prepaidMonthEnd(ctx.today);
+      const releases = await allRows<{ prepaid_expense_id: string; date: string; amount_cents: number; status: string }>(
+        () => orgQuery(ctx, 'prepaid_expense_releases', 'id, prepaid_expense_id, date, amount_cents, status')
+          .in('prepaid_expense_id', items.map((p) => p.id)).order('id', { ascending: true }),
+        'Termijnen');
+      const byItem = new Map<string, Array<{ date: string; amount_cents: number; status: string }>>();
+      for (const r of releases) {
+        const list = byItem.get(r.prepaid_expense_id) ?? [];
+        list.push(r);
+        byItem.set(r.prepaid_expense_id, list);
+      }
+      return {
+        through_date: through,
+        prepaid_expenses: items.map((p) => {
+          const own = byItem.get(p.id) ?? [];
+          const released = own.filter((r) => r.status === 'posted').reduce((sum, r) => sum + Number(r.amount_cents ?? 0), 0);
+          const onBalance = prepaidOnBalance(p);
+          const due = p.status === 'active' && onBalance ? own.filter((r) => r.status === 'scheduled' && r.date <= through) : [];
+          const next = own.filter((r) => r.status === 'scheduled').sort((a, b) => a.date.localeCompare(b.date))[0]?.date ?? null;
+          return {
+            ...p,
+            on_balance: onBalance,
+            released_cents: released,
+            remaining_on_balance_cents: p.status === 'active' && onBalance ? Number(p.amount_cents) - released : 0,
+            due_count: due.length,
+            due_cents: due.reduce((sum, r) => sum + Number(r.amount_cents ?? 0), 0),
+            next_release_date: next,
+          };
+        }),
+      };
+    },
+  },
+
+  {
+    id: 'prepaid.create',
+    label: 'Vooruitbetaald bedrag over de maanden spreiden',
+    module: 'finance',
+    kind: 'write',
+    risk: 'high',
+    description:
+      'Legt een vooruitbetaling vast en boekt hem: het bedrag gaat naar de balans (rekening Vooruitbetaalde kosten) en elke maand gaat er een gelijk deel naar de kostenrekening, op de laatste dag van de maand. Voorbeeld: € 1.000 verzekering met drie jaar dekking = 36 maanden, 28 × € 27,78 en 8 × € 27,77. ' +
+      'Kies met "how" hoe het bedrag nu in de boekhouding staat: "book" (nog niet geboekt: debet Vooruitbetaalde kosten / credit counter_account_id, standaard 1100 Bank), "expense" (de factuur is al als kosten geboekt: het bedrag gaat van die kostenrekening, standaard expense_account_id, naar de balans) of "existing" (het staat al op de balansrekening, bijvoorbeeld via de bank of de beginbalans; dan worden alleen de maandtermijnen geboekt). ' +
+      'Het bedrag is EXCLUSIEF btw; btw op de factuur hoort via de inkoopfactuur te lopen. Termijnen t/m het einde van deze maand worden meteen geboekt, tenzij post_now false is. DIT ZIJN DEFINITIEVE GROOTBOEKBOEKINGEN; corrigeren kan alleen met tegenboeken. Begon de periode vóór de start van de boekhouding in ResoFly, geef dan het bedrag dat er bij de start nog op de balans stond, de maanden die toen nog over waren, en how "existing".',
+    keywords: ['vooruitbetaald', 'vooruitbetaalde kosten', 'vooruitbetaling', 'spreiden', 'verspreiden', 'verdelen', 'over maanden', 'verzekering', 'premie', 'jaarabonnement', 'abonnement', 'huur vooruit', 'overlopende activa', 'transitorisch'],
+    input: {
+      description: { type: 'string', description: 'Wat er vooruitbetaald is, bijvoorbeeld "Bedrijfsaansprakelijkheidsverzekering 2026–2029".' },
+      amount_eur: { type: 'number', description: 'Het bedrag in euro, EXCLUSIEF btw.' },
+      months: { type: 'number', description: 'Over hoeveel maanden, bijvoorbeeld 36 voor drie jaar (1 t/m 600).' },
+      start_date: { type: 'string', description: 'Eerste dag van de periode JJJJ-MM-DD; standaard de eerste van deze maand. De eerste termijn valt op het einde van die maand.' },
+      payment_date: { type: 'string', description: 'Betaal- of factuurdatum JJJJ-MM-DD; standaard vandaag. Daarop gaat het bedrag naar de balans.' },
+      expense_account_id: { type: 'string', description: 'Kostenrekening voor de maandbedragen (bijvoorbeeld Verzekeringen); standaard 4500 Algemene kosten.' },
+      how: { type: 'string', enum: [...PREPAID_HOW], description: 'book (standaard), expense of existing; zie de omschrijving.' },
+      counter_account_id: { type: 'string', description: 'Bij book: de tegenrekening (standaard 1100 Bank). Bij expense: de kostenrekening waarop de factuur al staat (standaard expense_account_id).' },
+      prepaid_account_id: { type: 'string', description: 'Balansrekening; standaard "Vooruitbetaalde kosten" (die maakt ResoFly aan als hij er nog niet is).' },
+      source_purchase_invoice_id: { type: 'string', description: 'De inkoopfactuur waar het bij hoort (optioneel).' },
+      notes: { type: 'string' },
+      post_now: { type: 'boolean', description: 'De termijnen t/m het einde van deze maand meteen boeken (standaard true).' },
+    },
+    required: ['description', 'amount_eur', 'months'],
+    async plan(ctx, input) {
+      const description = str(input, 'description', 200);
+      const amountCents = cents(input, 'amount_eur');
+      if (amountCents <= 0) throw new ActionError('Het bedrag moet groter zijn dan nul.');
+      if (amountCents > 100_000_000_000) throw new ActionError('Dat bedrag is te groot.');
+      const months = Math.trunc(num(input, 'months'));
+      if (months < 1 || months > 600) throw new ActionError('"months" is 1 t/m 600 maanden.');
+      const startDate = optIsoDate(input, 'start_date') ?? `${ctx.today.slice(0, 8)}01`;
+      const paymentDate = optIsoDate(input, 'payment_date') ?? ctx.today;
+      const how = optChoice(input, 'how', PREPAID_HOW) ?? 'book';
+
+      const givenExpense = optId(input, 'expense_account_id');
+      const expense = givenExpense ? await loadAccount(ctx, givenExpense, 'Kostenrekening') : await accountByCode(ctx, '4500');
+      if (!expense) throw new ActionError('Geen kostenrekening gekozen en 4500 Algemene kosten bestaat niet. Geef "expense_account_id" mee of maak eerst het rekeningschema aan.');
+      if (expense.type !== 'expense' || !expense.is_active) throw new ActionError(`${accountLabel(expense)} is geen actieve kostenrekening.`);
+
+      const givenPrepaid = optId(input, 'prepaid_account_id');
+      let prepaid: AccountRow | null = null;
+      if (givenPrepaid) {
+        prepaid = await loadAccount(ctx, givenPrepaid, 'Balansrekening');
+        if (prepaid.type !== 'asset' || NOT_PREPAID.includes(prepaid.subtype ?? '') || !prepaid.is_active) {
+          throw new ActionError(`${accountLabel(prepaid)} is geen geschikte balansrekening voor vooruitbetaalde kosten.`);
+        }
+      } else {
+        const { data } = await orgQuery(ctx, 'ledger_accounts', 'id, code, name, type, subtype, is_system, is_active')
+          .eq('subtype', 'prepaid_expenses').eq('is_active', true).order('code', { ascending: true }).limit(1);
+        prepaid = ((data ?? []) as AccountRow[])[0] ?? null;
+      }
+      if (prepaid && prepaid.id === expense.id) throw new ActionError('De balansrekening en de kostenrekening moeten verschillen.');
+
+      let counter: AccountRow | null = null;
+      if (how === 'book') {
+        const givenCounter = optId(input, 'counter_account_id');
+        counter = givenCounter ? await loadAccount(ctx, givenCounter, 'Tegenrekening') : await accountByCode(ctx, '1100');
+        if (!counter) throw new ActionError('Geen tegenrekening gekozen en 1100 Bank bestaat niet. Geef "counter_account_id" mee.');
+        if (counter.type === 'revenue' || VAT_SUBTYPES.includes(counter.subtype ?? '') || !counter.is_active) {
+          throw new ActionError(`${accountLabel(counter)} kan geen tegenrekening zijn; kies de bank, crediteuren of een andere balansrekening.`);
+        }
+      } else if (how === 'expense') {
+        const givenCounter = optId(input, 'counter_account_id');
+        counter = givenCounter ? await loadAccount(ctx, givenCounter, 'Kostenrekening van de factuur') : expense;
+        if (counter.type !== 'expense') throw new ActionError(`${accountLabel(counter)} is geen kostenrekening; bij how "expense" is de tegenrekening de kostenrekening waarop de factuur staat.`);
+      }
+      if (counter && prepaid && counter.id === prepaid.id) throw new ActionError('De tegenrekening mag niet de balansrekening zelf zijn.');
+
+      const sourceId = optId(input, 'source_purchase_invoice_id');
+      if (sourceId) await row<{ id: string }>(ctx, 'purchase_invoices', sourceId, 'id', 'Inkoopfactuur');
+
+      // Zelfde regel als de database: niets van vóór de start van de boekhouding.
+      const { data: settings } = await orgQuery(ctx, 'company_settings', 'bookkeeping_start_date').maybeSingle();
+      const bookkeepingStart = (settings as { bookkeeping_start_date?: string | null } | null)?.bookkeeping_start_date ?? null;
+      if (bookkeepingStart && prepaidMonthEnd(startDate) < bookkeepingStart) {
+        throw new ActionError(`De boekhouding in ResoFly begint op ${bookkeepingStart}. Geef het bedrag dat er op die dag nog op de balans stond, met de maanden die toen nog over waren, en how "existing".`);
+      }
+      if (bookkeepingStart && how !== 'existing' && paymentDate < bookkeepingStart) {
+        throw new ActionError(`De betaling was vóór de start van de boekhouding in ResoFly (${bookkeepingStart}) en zit dus in de beginbalans: gebruik how "existing".`);
+      }
+
+      const terms = prepaidTerms(amountCents, months, startDate);
+      const through = prepaidMonthEnd(ctx.today);
+      const postNow = bool(input, 'post_now', true);
+      const due = postNow ? terms.filter((t) => t.date <= through) : [];
+      const prepaidLabel = prepaid ? accountLabel(prepaid) : 'Vooruitbetaalde kosten (nieuw)';
+      return {
+        title: `Vooruitbetaald spreiden: ${description} (${euroCents(amountCents)} over ${months} maanden)`,
+        sub: joinShort([
+          `${prepaidPerMonth(terms)}, ${prepaidMonthLabel(terms[0].date)} t/m ${prepaidMonthLabel(terms[terms.length - 1].date)}, naar ${accountLabel(expense)}`,
+          how === 'existing' ? 'staat al op de balans' : `naar de balans: debet ${prepaidLabel} / credit ${accountLabel(counter!)} op ${paymentDate}`,
+          due.length ? `${due.length} termijn${due.length === 1 ? '' : 'en'} t/m ${through} meteen geboekt (${euroCents(due.reduce((s, t) => s + t.cents, 0))})` : null,
+        ], 300),
+        warning: 'Dit zijn definitieve journaalposten in het grootboek; corrigeren kan alleen met tegenboeken (eerst de termijnen, dan de boeking naar de balans).',
+        kind: 'money',
+        payload: {
+          description, amount_cents: amountCents, months, start_date: startDate, payment_date: paymentDate,
+          expense_account_id: expense.id, prepaid_account_id: prepaid?.id ?? null,
+          start_mode: how === 'existing' ? 'existing' : 'book', counter_account_id: counter?.id ?? null,
+          source_purchase_invoice_id: sourceId, notes: optStr(input, 'notes', 2000),
+          post_now: postNow && due.length > 0, through_date: through,
+        },
+      };
+    },
+  },
+
+  {
+    id: 'prepaid.post_releases',
+    label: 'Termijnen van vooruitbetaalde kosten boeken',
+    module: 'finance',
+    kind: 'write',
+    risk: 'high',
+    description:
+      'Boekt de geplande maandtermijnen van vooruitbetaalde kosten tot en met een datum (uiterlijk het einde van deze maand): debet de kostenrekening, credit Vooruitbetaalde kosten. Van één post (prepaid_expense_id) of van alle lopende posten tegelijk. Elke termijn wordt een journaalpost. ' +
+      'Een termijn in een afgesloten boekjaar komt op de eerste open dag daarna; een afgesloten btw-periode houdt hem niet tegen (hij raakt de aangifte niet). Bekijk eerst met `prepaid.list` wat er klaarstaat. DIT ZIJN DEFINITIEVE BOEKINGEN; corrigeren kan alleen met tegenboeken. Handig als maandelijkse taak van een agent.',
+    keywords: ['termijnen boeken', 'termijn', 'maandtermijn', 'vrijval', 'vooruitbetaald', 'vooruitbetaalde kosten', 'maandafsluiting', 'naar de kosten', 'spreiden'],
+    input: {
+      through_date: { type: 'string', description: 'Boek t/m deze datum JJJJ-MM-DD; standaard het einde van deze maand.' },
+      prepaid_expense_id: { type: 'string', description: 'Alleen deze post (uit prepaid.list); leeg = alle lopende posten.' },
+    },
+    async plan(ctx, input) {
+      const lastAllowed = prepaidMonthEnd(ctx.today);
+      const through = optIsoDate(input, 'through_date') ?? lastAllowed;
+      if (through > lastAllowed) throw new ActionError(`Termijnen boek je tot en met het einde van deze maand (${lastAllowed}); latere maanden als ze aan de beurt zijn.`);
+      const itemId = optId(input, 'prepaid_expense_id');
+      let label: string | null = null;
+      let query = orgQuery(ctx, 'prepaid_expenses', 'id, description, start_mode, start_journal_entry_id, status').eq('status', 'active');
+      if (itemId) {
+        const item = await row<PrepaidRow>(ctx, 'prepaid_expenses', itemId, 'id, description, start_mode, start_journal_entry_id, status', 'Vooruitbetaling');
+        if (item.status !== 'active') throw new ActionError(`${item.description} is afgerond of beëindigd; er staan geen termijnen meer open.`);
+        if (!prepaidOnBalance(item)) throw new ActionError(`Het bedrag van ${item.description} staat nog niet op de balans. Boek dat eerst (in het scherm Vooruitbetaald).`);
+        label = item.description;
+        query = query.eq('id', itemId);
+      }
+      const { data: items, error } = await query.limit(1000);
+      if (error) throw new ActionError(`Vooruitbetaalde kosten ophalen mislukt: ${error.message}`);
+      const ready = ((items ?? []) as PrepaidRow[]).filter(prepaidOnBalance).map((p) => p.id);
+      if (ready.length === 0) throw new ActionError('Er zijn geen lopende vooruitbetalingen die op de balans staan.');
+      const due = await allRows<{ amount_cents: number }>(
+        () => orgQuery(ctx, 'prepaid_expense_releases', 'id, amount_cents')
+          .in('prepaid_expense_id', ready).eq('status', 'scheduled').lte('date', through).order('id', { ascending: true }),
+        'Termijnen');
+      if (due.length === 0) throw new ActionError(`Er staan geen termijnen open t/m ${through}${label ? ` voor ${label}` : ''}.`);
+      const total = due.reduce((sum, r) => sum + Number(r.amount_cents ?? 0), 0);
+      return {
+        title: `Vooruitbetaalde kosten boeken t/m ${through}${label ? `: ${label}` : ''}`,
+        sub: joinShort([`${due.length} termijn${due.length === 1 ? '' : 'en'} · ${euroCents(total)} van de balans naar de kosten`], 180),
+        warning: `Er komen ${due.length} definitieve journaalposten in het grootboek; corrigeren kan alleen met tegenboeken.`,
+        kind: 'money',
+        payload: { through_date: through, prepaid_expense_id: itemId, label, count: due.length, total_cents: total },
+      };
+    },
+  },
+
+  {
+    id: 'prepaid.end',
+    label: 'Vooruitbetaling eerder beëindigen',
+    module: 'finance',
+    kind: 'write',
+    risk: 'high',
+    description:
+      'Beëindigt een vooruitbetaling die eerder stopt, bijvoorbeeld een opgezegde verzekering. Eerst gaan de termijnen t/m de einddatum naar de kosten; wat er dan nog op de balans staat, gaat in één keer weg: een terugbetaling (refund_eur) naar refund_account_id (standaard 1100 Bank) en de rest naar de kostenrekening. De overige termijnen vervallen. ' +
+      'De einddatum ligt niet vóór de maand van de laatst geboekte termijn en niet na het einde van deze maand. DIT IS EEN DEFINITIEVE BOEKING; terugdraaien kan met tegenboeken.',
+    keywords: ['opzeggen', 'opgezegd', 'beëindigen', 'stoppen', 'eerder stoppen', 'terugbetaling', 'restitutie', 'vooruitbetaald', 'vooruitbetaling', 'verzekering opgezegd'],
+    input: {
+      prepaid_expense_id: { type: 'string', description: 'Id uit prepaid.list.' },
+      date: { type: 'string', description: 'Einddatum JJJJ-MM-DD; standaard vandaag.' },
+      refund_eur: { type: 'number', description: 'Wat je terugkrijgt, in euro (standaard 0).' },
+      refund_account_id: { type: 'string', description: 'Waar de terugbetaling op komt; standaard 1100 Bank.' },
+    },
+    required: ['prepaid_expense_id'],
+    async plan(ctx, input) {
+      const itemId = id(input, 'prepaid_expense_id');
+      const item = await row<PrepaidRow>(ctx, 'prepaid_expenses', itemId,
+        'id, description, amount_cents, months, start_date, payment_date, start_mode, start_journal_entry_id, status, prepaid_account_id, expense_account_id', 'Vooruitbetaling');
+      if (item.status !== 'active') throw new ActionError(`${item.description} is al afgerond of beëindigd.`);
+      if (!prepaidOnBalance(item)) throw new ActionError(`Het bedrag van ${item.description} staat nog niet op de balans; er valt niets te beëindigen. Verwijder de post in het scherm Vooruitbetaald als hij weg moet.`);
+      const date = optIsoDate(input, 'date') ?? ctx.today;
+      const lastAllowed = prepaidMonthEnd(ctx.today);
+      if (date > lastAllowed) throw new ActionError(`Je beëindigt een post uiterlijk per het einde van deze maand (${lastAllowed}).`);
+
+      const { data, error } = await orgQuery(ctx, 'prepaid_expense_releases', 'date, amount_cents, status').eq('prepaid_expense_id', itemId).limit(1000);
+      if (error) throw new ActionError(`Schema ophalen mislukt: ${error.message}`);
+      const releases = (data ?? []) as Array<{ date: string; amount_cents: number; status: string }>;
+      const posted = releases.filter((r) => r.status === 'posted');
+      const lastPosted = posted.map((r) => r.date).sort().pop() ?? null;
+      if (lastPosted && date < `${lastPosted.slice(0, 8)}01`) {
+        throw new ActionError(`De termijn van ${prepaidMonthLabel(lastPosted)} is al geboekt. Kies een einddatum vanaf ${lastPosted.slice(0, 8)}01, of draai die termijnen eerst terug.`);
+      }
+      const dueBefore = releases.filter((r) => r.status === 'scheduled' && r.date <= date);
+      const rest = Number(item.amount_cents) - posted.reduce((s, r) => s + Number(r.amount_cents), 0) - dueBefore.reduce((s, r) => s + Number(r.amount_cents), 0);
+      const refund = optCents(input, 'refund_eur') ?? 0;
+      if (refund < 0) throw new ActionError('Een terugbetaling kan niet negatief zijn.');
+      if (refund > rest) throw new ActionError(`De terugbetaling (${euroCents(refund)}) is hoger dan wat er dan nog op de balans staat (${euroCents(rest)}).`);
+      let refundAccount: AccountRow | null = null;
+      if (refund > 0) {
+        const given = optId(input, 'refund_account_id');
+        refundAccount = given ? await loadAccount(ctx, given, 'Rekening van de terugbetaling') : await accountByCode(ctx, '1100');
+        if (!refundAccount) throw new ActionError('Geen rekening voor de terugbetaling gekozen en 1100 Bank bestaat niet. Geef "refund_account_id" mee.');
+        if (['revenue', 'expense'].includes(refundAccount.type) || VAT_SUBTYPES.includes(refundAccount.subtype ?? '') || refundAccount.id === item.prepaid_account_id) {
+          throw new ActionError(`${accountLabel(refundAccount)} kan niet; kies de bank of een vordering.`);
+        }
+      }
+      return {
+        title: `Vooruitbetaling beëindigen per ${date}: ${item.description}`,
+        sub: joinShort([
+          dueBefore.length ? `eerst ${dueBefore.length} termijn${dueBefore.length === 1 ? '' : 'en'} t/m ${date} naar de kosten` : null,
+          refund > 0 ? `${euroCents(refund)} terug naar ${accountLabel(refundAccount!)}` : null,
+          rest - refund > 0 ? `${euroCents(rest - refund)} in één keer naar de kosten` : null,
+          'de overige termijnen vervallen',
+        ], 260),
+        warning: 'De post stopt en de geplande termijnen vervallen. Terugdraaien kan met tegenboeken in het Grootboek.',
+        kind: 'money',
+        payload: { prepaid_expense_id: itemId, description: item.description, date, refund_cents: refund, refund_account_id: refundAccount?.id ?? null },
       };
     },
   },

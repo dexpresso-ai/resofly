@@ -38,7 +38,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261111190000 (de videolink bij een boeking) zet meeting_url en
 // video_service op meeting_bookings. Die gaan gewoon mee: de tabel staat al op
 // 'export', en een videolink van je eigen afspraak is geen geheim van de server.
-export const EXPORT_SCHEMA_VERSION = '20261111190000';
+// 20261111220000 (vooruitbetaalde kosten) zet twee tabellen erbij:
+// prepaid_expenses (met een leesbare lijst) en het schema per maand,
+// prepaid_expense_releases. Boekhouding van de klant zelf: alles gaat mee.
+export const EXPORT_SCHEMA_VERSION = '20261111220000';
 
 export type TableKind =
   | 'export'
@@ -255,6 +258,8 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   fiscal_year_size_inputs: { kind: 'export' },
   fixed_assets: { kind: 'export', list: 'vaste-activa' },
   asset_depreciations: { kind: 'export' },
+  prepaid_expenses: { kind: 'export', list: 'vooruitbetaalde-kosten' },
+  prepaid_expense_releases: { kind: 'export' },
   vat_returns: { kind: 'export' },
   vat_supplement_entries: { kind: 'export' },
   bank_accounts: { kind: 'export' },

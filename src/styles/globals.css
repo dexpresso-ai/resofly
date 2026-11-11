@@ -2960,6 +2960,42 @@ body::before{
 .bk-asset-kpis strong{font-size:1.2rem;font-variant-numeric:tabular-nums}
 .bk-asset-kpi-main{border-color:rgba(var(--accent-rgb),.4)!important;background:rgba(var(--accent-rgb),.06)!important}
 .bk-asset-kpi-main strong{color:var(--accent-ink)}
+/* Vooruitbetaalde kosten (Prepaid.tsx): dezelfde taal als de activa. */
+.bk-prepaid-active{border-color:rgba(var(--ok-rgb),.5);color:var(--ok)}
+.bk-prepaid-completed{border-color:rgba(var(--info-rgb),.5);color:var(--info)}
+.bk-prepaid-ended{opacity:.6}
+.bk-prepaid-draft{border-color:rgba(var(--warn-rgb),.5);color:var(--accent-o)}
+.bk-prepaid-due{margin:0 0 14px}
+.bk-prepaid-start{margin-top:4px}
+.bk-prepaid-preview{line-height:1.55}
+.bk-prepaid-check{display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer;font-weight:500}
+.bk-prepaid-check input{width:16px;height:16px;accent-color:var(--accent);flex:none}
+/* Een veld met een hulptekst eronder maakt de rij hoger; zonder dit rekte het
+   invoerveld ernaast mee tot een dubbele hoogte. */
+.bk-prepaid-grid{align-items:start}
+.bk-prepaid-kpis{margin-bottom:14px}
+.bk-prepaid-period{white-space:nowrap}
+.bk-prepaid-sched .bk-post-inline button{white-space:nowrap;flex:none}
+/* Op de telefoon: elke post een kaart, zoals de factuurlijst. Zes kolommen in
+   een zijwaarts schuivende tabel van 560px persten de periode in vier regels,
+   en de bedragen vielen buiten beeld. */
+@media(max-width:760px){
+  .bk-table-wrap.bk-prepaid-list{border:0;border-radius:0;background:transparent;overflow:visible}
+  .bk-prepaid-list .bk-table{min-width:0;border-collapse:separate;border-spacing:0 10px}
+  .bk-prepaid-list thead{display:none}
+  .bk-prepaid-list tbody,.bk-prepaid-list tr,.bk-prepaid-list td{display:block;width:100%}
+  .bk-prepaid-list tr{border:1px solid var(--border);border-radius:16px;background:rgba(var(--sheen-rgb),calc(.022 * var(--sheen-k)));overflow:hidden}
+  .bk-prepaid-list td{display:grid;grid-template-columns:116px minmax(0,1fr);gap:10px;align-items:center;padding:8px 13px;text-align:left!important;border-bottom:1px solid rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)))}
+  .bk-prepaid-list td:last-child{border-bottom:0}
+  .bk-prepaid-list td::before{content:attr(data-label);color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+  .bk-prepaid-list td.bk-prepaid-name{display:block;padding:12px 13px 8px}
+  .bk-prepaid-list td.bk-prepaid-name::before{display:none}
+  .bk-prepaid-period{white-space:normal}
+  .bk-prepaid-schedule .bk-table{min-width:0}
+  .bk-prepaid-schedule .bk-prepaid-after{display:none}
+  .bk-prepaid-due .bk-acq-actions{width:100%}
+  .bk-prepaid-due .bk-acq-actions .form-input{flex:1 1 140px;width:auto;min-width:0}
+}
 /* Balans: uitklapbare boekwaarderegel voor vaste activa */
 .bk-balance-group{cursor:pointer}
 .bk-balance-group td{font-weight:600}

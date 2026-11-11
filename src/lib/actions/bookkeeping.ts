@@ -1,9 +1,9 @@
 import {
-  bookAssetAcquisition, bookAssetDisposal, bookBankTransaction, bookPurchaseInvoice,
+  bookAssetAcquisition, bookAssetDisposal, bookBankTransaction, bookPrepaidExpenseStart, bookPurchaseInvoice,
   closeFiscalYear, closeVatPeriod, createManualBankTransaction, createOpeningBalance, createVatSupplement,
-  deleteManualBankTransaction, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, matchBankTransactions,
-  mergeBankTransactions, openFiscalYear, postAssetDepreciation, postManualJournalEntry, reopenFiscalYear,
-  reverseJournalEntry, setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction,
+  deleteManualBankTransaction, endPrepaidExpense, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, matchBankTransactions,
+  mergeBankTransactions, openFiscalYear, postAssetDepreciation, postManualJournalEntry, postPrepaidReleases, reopenFiscalYear,
+  reverseJournalEntry, savePrepaidExpense, setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction,
   updateManualBankTransaction, updateRow, type BankAllocationInput,
 } from '../repository';
 import { purchaseTotals } from '../../features/Bookkeeping';
@@ -400,6 +400,46 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
       optText(payload, 'vat_code'),
     );
     return `Activum "${asset.name}" afgestoten per ${asset.disposal_date ?? text(payload, 'date')} — opbrengst ${euroCents(asset.disposal_proceeds_cents ?? 0)}`;
+  },
+
+  // ── Vooruitbetaalde kosten ────────────────────────────────────────────────
+  // Dezelfde drie stappen als "Vastleggen en boeken" in het scherm. Lukt een
+  // latere stap niet, dan staat de post er wel (zonder boeking) en zegt de
+  // foutmelding wat er nog moet; het scherm Vooruitbetaald maakt het af.
+  'prepaid.create': async (payload, ctx) => {
+    let item = await savePrepaidExpense(ctx.organizationId, null, {
+      description: text(payload, 'description'),
+      amount_cents: amount(payload, 'amount_cents'),
+      months: amount(payload, 'months'),
+      start_date: text(payload, 'start_date'),
+      payment_date: text(payload, 'payment_date'),
+      expense_account_id: text(payload, 'expense_account_id'),
+      prepaid_account_id: optText(payload, 'prepaid_account_id'),
+      start_mode: text(payload, 'start_mode') === 'existing' ? 'existing' : 'book',
+      counter_account_id: optText(payload, 'counter_account_id'),
+      source_purchase_invoice_id: optText(payload, 'source_purchase_invoice_id'),
+      notes: optText(payload, 'notes'),
+    });
+    if (item.start_mode === 'book') item = await bookPrepaidExpenseStart(ctx.organizationId, item.id);
+    const posted = flag(payload, 'post_now')
+      ? await postPrepaidReleases(ctx.organizationId, text(payload, 'through_date'), item.id)
+      : { posted_count: 0, posted_cents: 0 };
+    const start = item.start_mode === 'book' ? `${euroCents(item.amount_cents)} staat op de balans` : 'het bedrag stond al op de balans';
+    const releases = posted.posted_count ? `, ${posted.posted_count} termijn${posted.posted_count === 1 ? '' : 'en'} naar de kosten (${euroCents(posted.posted_cents)})` : '';
+    return `Vooruitbetaling "${item.description}" vastgelegd over ${item.months} maanden: ${start}${releases}`;
+  },
+
+  'prepaid.post_releases': async (payload, ctx) => {
+    const result = await postPrepaidReleases(ctx.organizationId, text(payload, 'through_date'), optText(payload, 'prepaid_expense_id'));
+    const label = optText(payload, 'label');
+    return `${result.posted_count} termijn${result.posted_count === 1 ? '' : 'en'} vooruitbetaalde kosten geboekt t/m ${text(payload, 'through_date')}${label ? ` (${label})` : ''}: ${euroCents(result.posted_cents)} naar de kosten`;
+  },
+
+  'prepaid.end': async (payload, ctx) => {
+    const refund = amount(payload, 'refund_cents');
+    const item = await endPrepaidExpense(ctx.organizationId, text(payload, 'prepaid_expense_id'), text(payload, 'date'), refund, optText(payload, 'refund_account_id'));
+    if (item.status !== 'ended') return `Alle termijnen van "${item.description}" waren al geboekt; de post is afgerond`;
+    return `Vooruitbetaling "${item.description}" beëindigd per ${item.end_date}: ${euroCents(item.end_amount_cents ?? 0)} van de balans${refund > 0 ? `, waarvan ${euroCents(refund)} terug` : ''}`;
   },
 
 };

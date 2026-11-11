@@ -155,6 +155,19 @@ const PAGES = {
   // Boekhouding → Beginbalans met het paneel "Overstappen van een ander
   // pakket?" (auditfile inlezen, 11 november 2026) boven de handmatige regels.
   'ledger-beginbalans': { page: 'ledger', mock: { ledger: true }, prepare: '.bk-tabs button:has-text("Beginbalans")' },
+  // Vooruitbetaalde kosten (2026-11-11): de lijst met de balk "klaar om te
+  // boeken", een lopende post met zijn schema, en het formulier voor een
+  // nieuwe vooruitbetaling met het voorbeeld van de verdeling.
+  prepaid: { page: 'prepaid', mock: { ledger: true, prepaid: true } },
+  // Het journaal in het Grootboek heeft naast Memoriaalboeking nu ook de knop
+  // Vooruitbetaald; de pagina "ledger" hierboven toont zonder rekeningschema
+  // alleen de knop om dat aan te maken.
+  'ledger-journaal': { page: 'ledger', mock: { ledger: true } },
+  'prepaid-venster': { page: 'prepaid', mock: { ledger: true, prepaid: true }, prepare: '.bk-row' },
+  'prepaid-nieuw': {
+    page: 'prepaid', mock: { ledger: true, prepaid: true },
+    prepare: ['button:has-text("Vooruitbetaling vastleggen")', { fill: '.modal input[type="number"]', value: '1000' }],
+  },
   // Instellingen → Gegevens (11 november 2026): alles exporteren, met de twee
   // kolommen "wat erin zit" en "wat er niet in zit". Alleen voor de eigenaar
   // en de beheerders; de mock is eigenaar.
@@ -269,6 +282,10 @@ const FIRST_ITEM = {
   // volgt mee, anders meet deze test niets meer.
   communication: { selector: '.comm-row', maxTop: 185 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 356 },
+  // 2026-11-11 — vooruitbetaalde kosten: de balk "klaar om te boeken" en twee
+  // kerncijfers gaan voor. Gemeten: 435px (licht en donker); de grens ligt 20%
+  // hoger.
+  prepaid: { selector: '.bk-prepaid-list tbody tr', maxTop: 522 },
   'public-quote': { selector: '.public-lines', maxTop: 560 },
   'public-invoice': { selector: '.public-lines', maxTop: 700 },
   'public-booking': { selector: '.booking-slot', maxTop: 360 },

@@ -466,7 +466,7 @@ const SOURCES: SourceSpec[] = [
       { key: 'entry_number', label: 'Boekingsnummer', type: 'text' },
       { key: 'entry_status', label: 'Status boeking', type: 'text', values: ['draft', 'posted', 'reversed'] },
       { key: 'entry_description', label: 'Omschrijving boeking', type: 'text' },
-      { key: 'source_type', label: 'Bron', type: 'text', values: ['sales_invoice', 'purchase_invoice', 'asset_depreciation', 'asset_acquisition', 'asset_disposal', 'vat_return', 'payment', 'opening_balance', 'manual', 'year_close', 'credit_note'] },
+      { key: 'source_type', label: 'Bron', type: 'text', values: ['sales_invoice', 'purchase_invoice', 'asset_depreciation', 'asset_acquisition', 'asset_disposal', 'vat_return', 'payment', 'opening_balance', 'manual', 'year_close', 'credit_note', 'result_appropriation', 'corporate_tax', 'dga_interest', 'payroll', 'dividend', 'prepaid_start', 'prepaid_release', 'prepaid_end'] },
       ID('account_id', 'Rekening-id'), { key: 'account_code', label: 'Rekeningnummer', type: 'text' }, { key: 'account_name', label: 'Grootboekrekening', type: 'text' },
       { key: 'account_type', label: 'Soort rekening', type: 'text', values: ['asset', 'liability', 'equity', 'revenue', 'expense'] },
       { key: 'account_group', label: 'Rapportagegroep', type: 'text' },
