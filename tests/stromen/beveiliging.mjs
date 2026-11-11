@@ -584,6 +584,19 @@ async function rollenBinnenA(A, d) {
       { token: A.zonderFinancien.token }), 'audit-log')],
   ]));
 
+  // Het logboek is alleen voor owners en admins (20261111140000). Daarvóór las
+  // een teamlid per module mee: met alle modules vrijwel het hele logboek, met
+  // de e-mailadressen van collega's en wie wiens rechten aanpaste. Op dit punt
+  // staan er regels in (de offertes, facturen en contracten van klaarzetten),
+  // dus een lege uitslag betekent hier "geen toegang", niet "niets gelogd".
+  await stap('het logboek: eigenaar en beheerder lezen het; lid, lezer, kijker en boekhouder krijgen 0 regels', () => allemaal([
+    ...[['eigenaar', A.eigenaar], ['beheerder', A.beheerder]].map(([n, g]) => [n, async () => {
+      const res = await rest(`audit_logs?organization_id=eq.${A.orgId}&entity_type=eq.invoice&select=id&limit=5`, { token: g.token });
+      verwacht(res.status === 200 && Array.isArray(res.json) && res.json.length > 0, `${n} leest de regels over facturen niet: ${kort(res)}`);
+    }]),
+    ...[['lid (alle modules)', A.medewerker], ...zwak].map(([n, g]) => [n, async () => leeg(await rest(`audit_logs?organization_id=eq.${A.orgId}&select=*`, { token: g.token }), 'logboek')]),
+  ]));
+
   await stap('zonder Financiën: geen download, voorbeeld of Mollie-stand via de functies (403)', () => allemaal(
     workflowActies(d).filter(([, actie]) => leesActies.has(actie)).map(([functie, actie, velden]) => [actie, async () => geweigerd(
       await fn(functie, { token: A.zonderFinancien.token, body: { action: actie, organizationId: A.orgId, ...velden } }), 'weigering', [403])]),

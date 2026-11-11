@@ -135,7 +135,7 @@ export function DataExportPanel({ organizationId, organizationName, userId, user
       </div>
     </div>
 
-    <p className="settings-help">Het hele team ziet in het logboek dat je een export hebt gemaakt. Houd dit venster open tot de download klaar is; met veel bestanden duurt dat een paar minuten.</p>
+    <p className="settings-help">De eigenaar en de beheerders zien in het logboek dat je een export hebt gemaakt. Houd dit venster open tot de download klaar is; met veel bestanden duurt dat een paar minuten.</p>
 
     {error && <div className="error">Exporteren lukte niet: {error}</div>}
 

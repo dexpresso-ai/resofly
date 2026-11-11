@@ -22,7 +22,7 @@ import { ClientFieldsManager } from './ClientFields';
 import { McpConnections } from '../components/McpConnections';
 import { ApiIntegrations } from '../components/ApiIntegrations';
 import { PageIcon } from '../components/PageIcon';
-import { FULL_PERMISSIONS, isAccountantRole, LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel, type Permissions } from '../lib/permissions';
+import { FULL_PERMISSIONS, isAccountantRole, isAdminRole, LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel, type Permissions } from '../lib/permissions';
 import { AuditLogPanel } from './AuditLog';
 import { ClientDomainSettings } from './ClientDomainSettings';
 import { DataExportPanel } from './DataExport';
@@ -91,9 +91,8 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
 export type SettingsTab = 'organisatie' | 'logboek' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'domein' | 'documenten' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'gegevens' | 'ai' | 'api' | 'email';
 
 /** De boekhouder ziet alleen wat bij de financiën hoort, en dan alleen-lezen. */
-// Het logboek ook: de boekhouder ziet daar alleen de regels over Financiën
-// (de database houdt de rest dicht), en wie wat boekte hoort bij zijn werk.
-export const ACCOUNTANT_SETTINGS_TABS: SettingsTab[] = ['organisatie', 'logboek', 'facturatie', 'boekhouding'];
+// Het logboek niet meer: dat is sinds 11 november alleen voor owners en admins.
+export const ACCOUNTANT_SETTINGS_TABS: SettingsTab[] = ['organisatie', 'facturatie', 'boekhouding'];
 
 /**
  * De regels per rol voor de instellingen-tabbladen, gedeeld door de pagina en
@@ -104,6 +103,11 @@ export function settingsTabRoleRule(tab: SettingsTab, role: OrganizationRole | n
   if (isAccountantRole(role)) return ACCOUNTANT_SETTINGS_TABS.includes(tab);
   // Een boekhouder uitnodigen of de toegang intrekken is beheer.
   if (tab === 'boekhouder') return role === 'owner' || role === 'admin';
+  // Het logboek is overzicht voor wie de organisatie beheert. Een teamlid zag
+  // er per module wie wat deed, met de e-mailadressen van collega's en wie
+  // wiens rechten aanpaste. De database geeft het hun ook niet meer
+  // (20261111140000).
+  if (tab === 'logboek') return isAdminRole(role);
   // Alles exporteren: de eigenaar en de beheerders (keuze van 11 november).
   // Het leest met de eigen rechten, maar het is wel alles in één keer; een
   // gewoon teamlid of de boekhouder doet dat niet. log_data_export weigert hen
@@ -1861,8 +1865,9 @@ export function Settings({
   // API-sleutel is een deur naar de hele organisatie, en die geeft niet elk
   // teamlid uit (api-admin weigert het ook).
   //
-  // De boekhouder ziet alleen Organisatie, Facturatie en Boekhouding; het
-  // tabblad Boekhouder (uitnodigen, intrekken) is voor owners en admins.
+  // De boekhouder ziet alleen Organisatie, Facturatie en Boekhouding; de
+  // tabbladen Boekhouder (uitnodigen, intrekken) en Logboek zijn voor owners
+  // en admins.
   const hasCalendarSettings = Boolean(calendarSettings);
   const visibleTabs = SETTINGS_TABS.filter(tab => {
     const roleRule = settingsTabRoleRule(tab.id, activeMembership?.role);
@@ -2658,15 +2663,15 @@ export function Settings({
 
     {/* Het logboek verving hier de kaart "Audit-log basis": die toonde de
         laatste 40 regels als "Bijgewerkt · task · status, due_date", zonder wie
-        of van wat naar wat. */}
-    {activeTab === 'logboek' && <div className="settings-tab-panel">
+        of van wat naar wat. Alleen voor owners en admins: ook in de render
+        zelf, want het tabblad terugzetten gebeurt pas ná de eerste render. */}
+    {activeTab === 'logboek' && canAdminOrganization && <div className="settings-tab-panel">
       <AuditLogPanel
         organizationId={organizationId}
         data={data}
         members={organizationContext.teamMembers}
         currentUserId={currentUserId}
         permissions={permissions}
-        isAdmin={canAdminOrganization}
         onOpenTarget={onOpenAuditTarget}
       />
     </div>}
