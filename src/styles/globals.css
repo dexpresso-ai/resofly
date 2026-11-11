@@ -7669,8 +7669,8 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Welke agenda's in het rooster meetellen (2026-11-11). Op de telefoon één rij
    die zijwaarts schuift: elke regel boven het rooster kost een uur in beeld. */
 .mbk-draw-legend{display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;margin:0;font-size:12px;color:var(--muted2,var(--muted))}
-.mbk-draw-legend-label{font-weight:600}
-.mbk-draw-legend-item{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;color:var(--text)}
+.mbk-draw-legend-label{font-weight:600;white-space:nowrap;flex:0 0 auto}
+.mbk-draw-legend-item{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex:0 0 auto;color:var(--text)}
 .mbk-draw-legend-item i{width:9px;height:9px;border-radius:3px;flex:0 0 auto;background:var(--muted)}
 .mbk-draw-legend-item em{font-style:normal;color:var(--muted)}
 .mbk-draw-legend.is-error{color:var(--danger);font-weight:600}

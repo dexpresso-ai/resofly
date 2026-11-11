@@ -106,6 +106,23 @@ in deze wijziging.
 - `deno check` op de 35 functies uit `frontend-checks.yml`: schoon. Lokaal met
   deno uit npm en een import map naar npm, want esm.sh en deno.land zijn vanuit
   de cloudsessie niet bereikbaar.
+- `npm run test:stromen -- boekingslinks`: 27 stappen, 0 fout. Nieuw: een
+  afspraak in een tweede ResoFly-agenda van de maker staat in wat het rooster
+  ophaalt; tekenen slaat dat moment over ("Tandarts"); een afspraak in de
+  gedeelde agenda van een collega telt niet; met de hand komt het moment erop,
+  met een waarschuwing.
+- `npm run test:stromen -- videovergadering agenda`: 87 stappen, 0 fout.
+- `npm run test:mobile -- --theme=both`: 506 metingen, 0 problemen.
+- `npm run test:loading`: alle controles geslaagd.
+- In Chromium doorgeklikt tegen de nagebootste backend, met een extra
+  Google-agenda en de gedeelde agenda van een collega (laptop en telefoon,
+  licht en donker, 24 controles): de legenda noemt de ResoFly- en de
+  Google-agenda en niet die van de collega; de Google-afspraak staat in het
+  rooster, die van de collega niet; geen horizontale scroll; slepen over de
+  Google-afspraak vraagt `skipClashes` en het rooster meldt "1 moment
+  overgeslagen: dan heb je al een afspraak (Tandarts (Google))". Op de telefoon
+  brak "Afspraken uit" eerst over twee regels; nu één regel die zijwaarts
+  schuift.
 
 ## Na de uitrol
 
