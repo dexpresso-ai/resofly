@@ -30,10 +30,11 @@ export const EXPORT_FORMAT_VERSION = 1;
  * De test faalt zodra er een nieuwere migratie is: kijk dan of er tabellen of
  * kolommen bij kwamen, en zet het nummer hier op de nieuwste.
  */
-// 20261111140000 (het logboek alleen voor owners en admins) zet alleen een
-// leesregel en een tabelcommentaar: geen tabellen of kolommen erbij.
 // 20261111150500 (mcp-staging is geen klantnaam) vervangt alleen de functie
-// client_subdomain_problem: ook geen tabellen of kolommen erbij.
+// client_subdomain_problem: geen tabellen of kolommen erbij.
+// 20261111160000 zet twee kolommen bij in tabellen die al meegaan:
+// clients.account_lead_user_id en tickets.assignee_user_id. Geen geheim, geen
+// opslagsleutel; ze gaan gewoon mee met klanten en tickets.
 // 20261111190000 (de videolink bij een boeking) zet meeting_url en
 // video_service op meeting_bookings. Die gaan gewoon mee: de tabel staat al op
 // 'export', en een videolink van je eigen afspraak is geen geheim van de server.

@@ -3,6 +3,7 @@ import {
   type ActionCtx, type ActionDef,
 } from './types.ts';
 import { portalTicketsOpen } from '../portalAccess.ts';
+import { holderNames, resolveHolder } from './holders.ts';
 
 /**
  * Handelingen rond TICKETS: de meldingen die binnenkomen van de klant of van een
@@ -136,6 +137,59 @@ export const TICKETS_ACTIONS: ActionDef[] = [
         // het portaal: dat is naar buiten. Losmaken verbergt alleen.
         risk: clientId ? 'high' : 'normal',
         payload: { ticket_id: ticketId, ticket_title: ticket.title, client_id: clientId, client_name: newName },
+      };
+    },
+  },
+
+  {
+    id: 'ticket.assign',
+    label: 'Ticket toewijzen aan een teamlid',
+    module: 'tickets',
+    kind: 'write',
+    description:
+      'Wijst een of meer tickets toe aan een teamlid: de collega die ze oppakt. Dat teamlid staat dan bij het ticket in de lijst, ziet het onder "Aan mij", en je kunt erop rapporteren (tickets per teamlid). ' +
+      'Laat `user_id` leeg (of "none") om de toewijzing weg te halen; "me" is de gebruiker zelf. Je kunt alleen toewijzen aan een actief teamlid dat Tickets mag zien, geen boekhouder. ' +
+      'De klant merkt hier niets van: het portaal toont niet wie het ticket heeft. Zoek de tickets met `list_tickets` (die laat ook zien aan wie ze nu zijn toegewezen) en het teamlid met `list_team_members`.',
+    keywords: ['toewijzen', 'toegewezen', 'behandelaar', 'oppakken', 'verdelen', 'aan mij', 'mijn tickets', 'eigenaar', 'doorzetten', 'overdragen', 'ticket', 'melding'],
+    input: {
+      ticket_ids: { type: 'array', items: { type: 'string' }, description: 'Id\'s van de tickets (exact, uit list_tickets). Hooguit 100.' },
+      user_id: { type: 'string', description: 'User_id van het teamlid (uit list_team_members), "me" voor de gebruiker zelf, of leeg om de toewijzing weg te halen.' },
+    },
+    required: ['ticket_ids'],
+    async plan(ctx, input) {
+      const wanted = ids(input, 'ticket_ids', 100);
+      const assignee = await resolveHolder(ctx, input, 'user_id', 'tickets');
+      const { data, error } = await orgQuery(ctx, 'tickets', 'id, title, status, assignee_user_id').in('id', wanted);
+      if (error) throw new ActionError(`Tickets ophalen mislukt: ${error.message}`);
+      const rows = (data ?? []) as Array<{ id: string; title: string; status: string; assignee_user_id: string | null }>;
+      if (rows.length !== wanted.length) {
+        const found = new Set(rows.map((r) => String(r.id)));
+        throw new ActionError(`Deze tickets bestaan niet in deze organisatie: ${wanted.filter((x) => !found.has(x)).join(', ')}.`);
+      }
+      // Wat al goed staat, valt eraf: anders telde de kaart tickets mee waar niets aan verandert.
+      const changing = rows.filter((r) => (r.assignee_user_id ?? null) !== (assignee?.userId ?? null));
+      if (changing.length === 0) {
+        throw new ActionError(assignee
+          ? `${rows.length === 1 ? `"${rows[0].title}" staat` : 'Deze tickets staan'} al op naam van ${assignee.name}.`
+          : `${rows.length === 1 ? `"${rows[0].title}" is` : 'Deze tickets zijn'} al aan niemand toegewezen.`);
+      }
+      const current = await holderNames(ctx, changing.map((r) => r.assignee_user_id));
+      const titles = changing.map((r) => String(r.title));
+      const before = [...new Set(changing.map((r) => (r.assignee_user_id ? current.get(r.assignee_user_id) ?? 'oud-teamlid' : 'niemand')))];
+      const archived = changing.filter((r) => r.status === 'resolved').length;
+
+      return {
+        title: changing.length === 1
+          ? (assignee ? `Ticket toewijzen aan ${assignee.name}: ${titles[0]}` : `Toewijzing weghalen: ${titles[0]}`)
+          : (assignee ? `${changing.length} tickets toewijzen aan ${assignee.name}` : `Toewijzing weghalen bij ${changing.length} tickets`),
+        sub: joinShort([
+          changing.length > 1 ? titles.join(', ') : null,
+          `nu: ${before.join(', ')}`,
+          rows.length > changing.length ? `${rows.length - changing.length} stond${rows.length - changing.length === 1 ? '' : 'en'} al goed` : null,
+          archived > 0 ? `${archived === 1 ? 'één staat' : `${archived} staan`} al in het archief (afgehandeld)` : null,
+        ], 170),
+        kind: 'work',
+        payload: { ticket_ids: changing.map((r) => String(r.id)), titles, user_id: assignee?.userId ?? null, assignee_name: assignee?.name ?? null },
       };
     },
   },

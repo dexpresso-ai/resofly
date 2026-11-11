@@ -1,4 +1,5 @@
 import type { OrganizationMember, UUID } from '../types';
+import { parseModuleAccess, resolveModuleLevel, type ModuleKey } from './permissions.ts';
 
 /**
  * Helpers om organisatieleden in de UI te tonen. Er is (bewust) geen aparte
@@ -47,4 +48,43 @@ export function memberColor(userId: UUID): string {
   for (let i = 0; i < userId.length; i++) hash = (hash * 31 + userId.charCodeAt(i)) | 0;
   const hue = Math.abs(hash) % 360;
   return `hsl(${hue} 52% 42%)`;
+}
+
+/**
+ * Teamleden die een klant (accountlead) of een ticket (toegewezen) kunnen
+ * krijgen: actief, geen boekhouder, en de module mogen lezen. Spiegel van
+ * `public.member_can_hold` (migratie 20261111160000); de database weigert de
+ * rest. Een accountlead die Klanten niet ziet, krijgt zijn klanten nergens te
+ * zien — die bood de keuzelijst dus ook niet aan.
+ */
+export function membersWhoCanHold(members: OrganizationMember[], module: ModuleKey): OrganizationMember[] {
+  return members
+    .filter(m => (m.status ?? 'active') === 'active' && m.role !== 'accountant')
+    .filter(m => resolveModuleLevel(m.role, parseModuleAccess(m.module_access), module) !== 'none')
+    .sort((a, b) => memberEmail(a).localeCompare(memberEmail(b), 'nl'));
+}
+
+/**
+ * Naam voor een lijst of rapport. Anders dan `memberName` zegt dit "Oud-teamlid"
+ * voor iemand die niet (meer) in de lijst staat: "Teamlid" las als een echte
+ * collega met die naam.
+ */
+export function holderName(userId: UUID | null | undefined, members: OrganizationMember[], emptyLabel: string): string {
+  if (!userId) return emptyLabel;
+  const member = findMember(userId, members);
+  return member ? memberEmail(member) : 'Oud-teamlid';
+}
+
+/**
+ * Filter op wie iets "heeft" (accountlead, toegewezen). '' = iedereen,
+ * 'me' = de ingelogde gebruiker, 'none' = niemand, anders een user-id. "Mij"
+ * is een eigen waarde en geen user-id, zodat een filter voor elke collega
+ * hetzelfde betekent.
+ */
+export function matchesHolder(holderId: UUID | null | undefined, filter: string, currentUserId: UUID | null | undefined): boolean {
+  if (!filter) return true;
+  const holder = holderId ?? null;
+  if (filter === 'none') return holder === null;
+  if (filter === 'me') return Boolean(currentUserId) && holder === currentUserId;
+  return holder === filter;
 }

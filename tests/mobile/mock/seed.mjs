@@ -32,6 +32,8 @@ const clientDefs = [
 ];
 export const clients = clientDefs.map(([name, contact, color, status, tags, value], i) => ({
   id: uid('c'), ...base(), name, client_code: `K-${String(1001 + i)}`, contact_name: contact, email: `${contact.split(' ')[0].toLowerCase()}@${name.split(' ')[0].toLowerCase().replace(/[^a-z]/g, '')}.nl`, phone: `06-1234 56${String(10 + i)}`, notes: null, color, status, client_kind: 'business', tags, follow_up: i === 3 ? mon(2) : null, value_eur: value, vat_number: 'NL001234567B01', kvk_number: `1234567${i}`, address_line1: `Dorpsstraat ${10 + i}`, address_line2: null, postal_code: `34${10 + i} AB`, city: 'Lopik', country: 'NL', custom_fields: {},
+  // Accountlead (2026-11-11): afwisselend jij, Sanne en niemand, zodat de kaart, de tabel en het filter alle drie gemeten worden.
+  account_lead_user_id: [USER, USER2, null][i % 3],
 }));
 
 const projectDefs = [
@@ -86,7 +88,9 @@ export const tickets = [
   // gemeten wordt (pagina client-tickets).
   ['Contactformulier stuurde geen mail', 0, 'med', 'resolved'],
   ['Openingstijden aangepast op de site', 2, 'low', 'resolved'],
-].map(([title, ci, priority, status], i) => ({ id: uid('k'), ...base(), client_id: clients[ci].id, title, description: 'Ingezonden via het klantportaal.', priority, status, notes: null, converted_to_project_id: null, resolved_at: status === 'resolved' ? iso(day(-2 - i)) : null }));
+].map(([title, ci, priority, status], i) => ({ id: uid('k'), ...base(), client_id: clients[ci].id, title, description: 'Ingezonden via het klantportaal.', priority, status, notes: null, converted_to_project_id: null, resolved_at: status === 'resolved' ? iso(day(-2 - i)) : null,
+  // Toegewezen (2026-11-11): jij, Sanne, Daan of niemand.
+  assignee_user_id: [USER, USER2, null, USER3][i % 4] }));
 
 export const notes = [
   ['Notulen kick-off huisstijl', 0, 'meeting', '<p>Besproken: kleuren, tone of voice. <strong>Actie:</strong> schetsen voor vrijdag.</p><ul><li>Joost stuurt oude logo\'s</li><li>Fotoshoot in oktober</li></ul>'],

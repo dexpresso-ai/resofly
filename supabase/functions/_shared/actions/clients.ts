@@ -3,6 +3,7 @@ import {
   optIsoDate, optNum, optStr, orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
+import { holderNames, resolveHolder } from './holders.ts';
 
 /**
  * Handelingen rond KLANTEN: het dossier zelf, de vrije velden, de contactpersonen
@@ -155,6 +156,57 @@ export const CLIENT_ACTIONS: ActionDef[] = [
           ...(destinationChanged ? { humanOnly: true } : {}),
           warning: 'Hiermee verandert waar de facturen van deze klant heen gaan. Klopt het adres? Vraag het bij twijfel na bij de klant zelf.',
         } : {}),
+      };
+    },
+  },
+
+  {
+    id: 'client.set_account_lead',
+    label: 'Accountlead van een klant kiezen',
+    module: 'clients',
+    kind: 'write',
+    description:
+      'Maakt een teamlid accountlead van een of meer klanten: de collega die de klant beheert. Dat teamlid staat dan bij de klant in de lijst en het dossier, en je kunt erop filteren ("mijn klanten") en rapporteren (omzet, klanten en tickets per accountlead). ' +
+      'Laat `user_id` leeg (of "none") om de accountlead weg te halen; "me" is de gebruiker zelf. Een accountlead is een actief teamlid dat Klanten mag zien, geen boekhouder. ' +
+      'Zoek de klanten met `search_clients` (die laat ook de huidige accountlead zien) en het teamlid met `list_team_members`.',
+    keywords: ['accountlead', 'accountmanager', 'account manager', 'eigenaar', 'beheerder', 'verantwoordelijke', 'klantbeheer', 'toewijzen', 'mijn klanten', 'portefeuille'],
+    input: {
+      client_ids: { type: 'array', items: { type: 'string' }, description: 'Id\'s van de klanten (exact, uit search_clients). Hooguit 100.' },
+      user_id: { type: 'string', description: 'User_id van het teamlid (uit list_team_members), "me" voor de gebruiker zelf, of leeg om de accountlead weg te halen.' },
+    },
+    required: ['client_ids'],
+    async plan(ctx, input) {
+      const wanted = ids(input, 'client_ids', 100);
+      const lead = await resolveHolder(ctx, input, 'user_id', 'clients');
+      const { data, error } = await orgQuery(ctx, 'clients', 'id, name, account_lead_user_id').in('id', wanted);
+      if (error) throw new ActionError(`Klanten ophalen mislukt: ${error.message}`);
+      const rows = (data ?? []) as Array<{ id: string; name: string; account_lead_user_id: string | null }>;
+      if (rows.length !== wanted.length) {
+        const found = new Set(rows.map((r) => String(r.id)));
+        throw new ActionError(`Deze klanten bestaan niet in deze organisatie: ${wanted.filter((x) => !found.has(x)).join(', ')}.`);
+      }
+      // Wat al goed staat, valt eraf: anders telde de kaart klanten mee waar niets aan verandert.
+      const changing = rows.filter((r) => (r.account_lead_user_id ?? null) !== (lead?.userId ?? null));
+      if (changing.length === 0) {
+        throw new ActionError(lead
+          ? `${rows.length === 1 ? `${rows[0].name} heeft` : 'Deze klanten hebben'} ${lead.name} al als accountlead.`
+          : `${rows.length === 1 ? `${rows[0].name} heeft` : 'Deze klanten hebben'} al geen accountlead.`);
+      }
+      const current = await holderNames(ctx, changing.map((r) => r.account_lead_user_id));
+      const names = changing.map((r) => String(r.name));
+      const before = [...new Set(changing.map((r) => (r.account_lead_user_id ? current.get(r.account_lead_user_id) ?? 'oud-teamlid' : 'niemand')))];
+
+      return {
+        title: changing.length === 1
+          ? (lead ? `${lead.name} accountlead maken van ${names[0]}` : `Accountlead weghalen bij ${names[0]}`)
+          : (lead ? `${lead.name} accountlead maken van ${changing.length} klanten` : `Accountlead weghalen bij ${changing.length} klanten`),
+        sub: joinShort([
+          changing.length > 1 ? names.join(', ') : null,
+          `nu: ${before.join(', ')}`,
+          rows.length > changing.length ? `${rows.length - changing.length} stond${rows.length - changing.length === 1 ? '' : 'en'} al goed` : null,
+        ], 170),
+        kind: 'work',
+        payload: { client_ids: changing.map((r) => String(r.id)), names, user_id: lead?.userId ?? null, lead_name: lead?.name ?? null },
       };
     },
   },

@@ -219,6 +219,21 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
     return `Klantvelden van ${pOptText(payload, 'client_name') ?? 'de klant'} ingevuld`;
   },
 
+  'client.set_account_lead': async (ctx, payload) => {
+    const clientIds = pList(payload, 'client_ids');
+    const names = pStrings(payload, 'names');
+    const userId = pOptText(payload, 'user_id');
+    const lead = pOptText(payload, 'lead_name');
+    const failed: string[] = [];
+    for (let i = 0; i < clientIds.length; i += 1) {
+      try { await updateOne(ctx, 'clients', clientIds[i], { account_lead_user_id: userId }, 'id', 'Klant'); }
+      catch { failed.push(names[i] ?? clientIds[i]); }
+    }
+    if (failed.length) throw new ActionError(`${clientIds.length - failed.length} bijgewerkt, ${failed.length} mislukt (${failed.join(', ')}).`);
+    const what = clientIds.length === 1 ? (names[0] ?? 'De klant') : `${clientIds.length} klanten`;
+    return userId ? `${lead ?? 'Het teamlid'} is nu accountlead van ${what}` : `${what} ${clientIds.length === 1 ? 'heeft' : 'hebben'} geen accountlead meer`;
+  },
+
   'client_contact.set_active': async (ctx, payload) => {
     const active = pFlag(payload, 'is_active');
     await updateOne(ctx, 'client_contacts', pText(payload, 'contact_id'), { is_active: active }, 'id', 'Contactpersoon');
@@ -336,6 +351,21 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
     return clientName
       ? `Ticket "${title}" gekoppeld aan ${clientName}`
       : `Ticket "${title}" losgemaakt van de klant`;
+  },
+
+  'ticket.assign': async (ctx, payload) => {
+    const ticketIds = pList(payload, 'ticket_ids');
+    const titles = pStrings(payload, 'titles');
+    const userId = pOptText(payload, 'user_id');
+    const name = pOptText(payload, 'assignee_name');
+    const failed: string[] = [];
+    for (let i = 0; i < ticketIds.length; i += 1) {
+      try { await updateOne(ctx, 'tickets', ticketIds[i], { assignee_user_id: userId }, 'id', 'Ticket'); }
+      catch { failed.push(titles[i] ?? ticketIds[i]); }
+    }
+    if (failed.length) throw new ActionError(`${ticketIds.length - failed.length} toegewezen, ${failed.length} mislukt (${failed.join(', ')}).`);
+    const what = ticketIds.length === 1 ? `Ticket "${titles[0] ?? 'ticket'}"` : `${ticketIds.length} tickets`;
+    return userId ? `${what} toegewezen aan ${name ?? 'het teamlid'}` : `${what} aan niemand meer toegewezen`;
   },
 
   'ticket_note.set_visibility': async (ctx, payload) => {

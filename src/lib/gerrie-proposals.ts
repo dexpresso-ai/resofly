@@ -177,7 +177,7 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
       sub: [p.client_name, p.project_name].filter(Boolean).join(' · '),
       write: true, kind: 'work',
     };
-    case 'ticket': return { title: 'Ticket aanmaken', sub: [p.title, p.client_name].filter(Boolean).join(' · '), write: true, kind: 'work' };
+    case 'ticket': return { title: 'Ticket aanmaken', sub: [p.title, p.client_name, p.assignee_name ? `voor ${p.assignee_name}` : null].filter(Boolean).join(' · '), write: true, kind: 'work' };
     case 'edit_ticket': return { title: 'Ticket bijwerken', sub: p.title, write: true, kind: 'work' };
     case 'ticket_note': return {
       title: p.is_internal ? 'Interne notitie plaatsen' : 'Reactie naar de klant plaatsen',
@@ -187,7 +187,7 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
     };
     case 'invoice': return { title: 'Conceptfactuur aanmaken', sub: `${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`, write: true, kind: 'money' };
     case 'quote': return { title: 'Conceptofferte aanmaken', sub: `${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`, write: true, kind: 'money' };
-    case 'client': return { title: 'Klant aanmaken', sub: [p.name, p.email].filter(Boolean).join(' · '), write: true, kind: 'work' };
+    case 'client': return { title: 'Klant aanmaken', sub: [p.name, p.email, p.account_lead_name ? `accountlead ${p.account_lead_name}` : null].filter(Boolean).join(' · '), write: true, kind: 'work' };
     case 'edit_invoice': return { title: `Factuur ${p.number} bijwerken`, sub: p.client_name, write: true, kind: 'money' };
     case 'edit_quote': return { title: `Offerte ${p.number} bijwerken`, sub: p.client_name, write: true, kind: 'money' };
     case 'edit_client': return 'email' in p.changes
