@@ -32,7 +32,9 @@ export const EXPORT_FORMAT_VERSION = 1;
  */
 // 20261111140000 (het logboek alleen voor owners en admins) zet alleen een
 // leesregel en een tabelcommentaar: geen tabellen of kolommen erbij.
-export const EXPORT_SCHEMA_VERSION = '20261111140000';
+// 20261111150500 (mcp-staging is geen klantnaam) vervangt alleen de functie
+// client_subdomain_problem: ook geen tabellen of kolommen erbij.
+export const EXPORT_SCHEMA_VERSION = '20261111150500';
 
 export type TableKind =
   | 'export'

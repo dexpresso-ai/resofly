@@ -1,6 +1,7 @@
 // ResoFly — het adres van de AI-koppeling (Cloudflare Worker)
 //
-// https://mcp.resofly.com/mcp is wat een klant in zijn AI-app plakt. Daarvoor
+// Dit adres plakt een klant in zijn AI-app: https://mcp-staging.resofly.com/mcp
+// op staging, en straks https://mcp.resofly.com/mcp op productie. Daarvoor
 // was dat https://<project>.supabase.co/functions/v1/mcp: het werkte, maar het
 // was het adres van onze leverancier, met een projectcode erin, en het
 // veranderde zodra we van Supabase-project wisselden.
