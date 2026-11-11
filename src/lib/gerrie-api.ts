@@ -918,8 +918,10 @@ export type AgentDesignStep =
 export async function designGerrieAgent(
   organizationId: UUID,
   messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  /** Bij aanpassen via de chat: hoe de agent nu is. De server neemt alleen over wat de bouwer nodig heeft. */
+  current?: object | null,
 ): Promise<AgentDesignStep> {
-  const payload = await postGerrie({ action: 'design_agent', organizationId, messages });
+  const payload = await postGerrie({ action: 'design_agent', organizationId, messages, ...(current ? { current } : {}) });
   const kind = String(payload?.kind ?? '');
   if (kind === 'budget') return { kind: 'budget' };
   if (kind === 'agent' && payload?.agent) {
@@ -1135,6 +1137,20 @@ export async function listRoutines(organizationId: UUID): Promise<GerrieRoutine[
 export async function listRoutineRuns(organizationId: UUID, agentId: UUID, limit = 100): Promise<GerrieRoutineRun[]> {
   const { data, error } = await supabase.from('ai_agent_runs')
     .select('*').eq('organization_id', organizationId).eq('agent_id', agentId)
+    .order('created_at', { ascending: false }).limit(limit);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as GerrieRoutineRun[];
+}
+
+/**
+ * De recente runs van álle agents die je mag zien, in één vraag. Voor de kaarten:
+ * wat leverde de laatste run op, en welke agent is nu aan het werk (agentWork.ts).
+ * De RLS bepaalt welke runs je ziet: je eigen, en als owner/admin die van het team.
+ */
+export async function listRecentAgentRuns(organizationId: UUID, limit = 150): Promise<GerrieRoutineRun[]> {
+  const { data, error } = await supabase.from('ai_agent_runs')
+    .select('id, agent_id, conversation_id, triggered_by, status, scheduled_for, started_at, finished_at, summary, cost_usd, proposals_created, error, result, created_at')
+    .eq('organization_id', organizationId)
     .order('created_at', { ascending: false }).limit(limit);
   if (error) throw new Error(error.message);
   return (data ?? []) as GerrieRoutineRun[];

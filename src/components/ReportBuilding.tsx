@@ -1,6 +1,7 @@
-import { useEffect, useState, type CSSProperties } from 'react';
-import { Check, Sparkles } from 'lucide-react';
+import { useState, type CSSProperties } from 'react';
+import { Sparkles } from 'lucide-react';
 import { BUILD_STEPS, buildPatienceNote, formatElapsed, type BuildPhase } from '../lib/reportBuild';
+import { StepTrack, useElapsed } from './StepTrack';
 
 /**
  * Zolang Gerrie een rapportage bouwt: een klein dashboard dat zichzelf opbouwt.
@@ -21,16 +22,6 @@ const BARS = [0.42, 0.68, 0.5, 0.86, 0.6, 0.94, 0.74];
 const LINE = 'M2 38 C14 34 20 20 32 23 S50 36 62 27 S80 8 93 13 S110 21 118 6';
 
 type Vars = CSSProperties & Record<`--${string}`, string | number>;
-
-/** Hoe lang Gerrie al bezig is; tikt elke seconde. */
-function useElapsed(startedAt: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-  return Math.max(0, now - startedAt);
-}
 
 /**
  * Bij de eerste opbouw krijgt het tabblad na een halve seconde het echte id en
@@ -73,19 +64,6 @@ function BuildStage({ phase, startedAt }: { phase: BuildPhase; startedAt: number
   );
 }
 
-function BuildSteps({ phase }: { phase: BuildPhase }) {
-  return (
-    <ol className="aire-steps" aria-label="Voortgang">
-      {BUILD_STEPS.map((label, i) => (
-        <li key={label} className={i < phase ? 'is-done' : i === phase ? 'is-active' : undefined} aria-current={i === phase ? 'step' : undefined}>
-          <span className="aire-step-dot">{i < phase ? <Check size={11} strokeWidth={3} /> : null}</span>
-          <span className="aire-step-label">{label}</span>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
 /** Een nieuwe rapportage, of een die nog geen inhoud heeft: de hele opbouw. */
 export function ReportBuilding({ status, phase, startedAt }: { status: string | null; phase: BuildPhase; startedAt: number }) {
   const elapsed = useElapsed(startedAt);
@@ -102,7 +80,7 @@ export function ReportBuilding({ status, phase, startedAt }: { status: string | 
           </div>
           <span className="aire-build-time" title="Zo lang is Gerrie al bezig">{formatElapsed(elapsed)}</span>
         </div>
-        <BuildSteps phase={phase} />
+        <StepTrack steps={BUILD_STEPS} phase={phase} />
         <p className="aire-build-note">{patience ?? 'Je kunt intussen gewoon verder werken; de pagina blijft hier staan.'}</p>
       </div>
     </section>

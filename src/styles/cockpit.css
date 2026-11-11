@@ -181,10 +181,6 @@ main.login:not(.portal) .login-card h1 .serif{color:var(--accent-ink)}
   --shadow-soft:inset 0 1px 0 rgba(255,255,255,.045),0 1px 2px rgba(0,0,0,.35);
   --shadow-card:0 1px 2px rgba(0,0,0,.16),0 10px 28px -18px rgba(0,0,0,.75),inset 0 1px 0 rgba(255,255,255,.045);
   --shadow-card-hover:0 2px 6px rgba(0,0,0,.2),0 24px 48px -24px rgba(0,0,0,1),inset 0 1px 0 rgba(255,255,255,.045);
-  --ag-t-quiet:rgba(163,146,255,.14);
-  --ag-t-quiet2:rgba(163,146,255,.08);
-  --ag-t-bloom:rgba(163,146,255,.26);
-  --ag-t-shade:rgba(0,0,0,.18);
   color-scheme:dark;
 }
 

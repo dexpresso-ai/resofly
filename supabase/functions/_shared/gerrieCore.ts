@@ -509,6 +509,13 @@ interface RunAgentOptions {
   maxProposals?: number;
   /** Plafond op het aantal modelrondes (hoogstens MAX_AGENT_ITERATIONS). */
   maxIterations?: number;
+  /**
+   * Elke stap zodra hij gebeurt. De runner schrijft hem daarmee meteen in het
+   * logboek, zodat de app live kan laten zien wat een agent aan het doen is.
+   * Tot 2026-11-11 kwamen alle stappen pas na afloop in één keer: een agent die
+   * een minuut werkte, leek die hele minuut niets te doen.
+   */
+  onStep?: (step: AgentStep) => void;
 }
 
 /** Een geplande agent die meer dan één ding klaarzet, heeft meer rondes nodig dan de chat. */
@@ -558,6 +565,12 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
   const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const toolCalls: Array<{ name: string; input: unknown }> = [];
   const steps: AgentStep[] = []; // het logboek: wat de agent onderweg deed
+  // Een stap vastleggen én doorgeven. Het doorgeven is best-effort: een logboek
+  // dat de run laat mislukken is erger dan een ontbrekende regel.
+  const record = (step: AgentStep): void => {
+    steps.push(step);
+    try { options.onStep?.(step); } catch { /* het logboek mag de run niet stoppen */ }
+  };
   const answerChunks: string[] = []; // tekst over alle iteraties — matcht exact de gestreamde deltas
   const proposals: Proposal[] = [];
   const proposedKeys = new Set<string>(); // tegen twee keer hetzelfde voorstel in één run
@@ -579,7 +592,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
   // Wat eerdere rondes opleverden blijft staan; de zin over de filter komt erachter.
   const refused = (category: unknown): AgentOutcome => {
     const note = refusalText(category);
-    steps.push(logStep('error', 'refusal', note, false, { category: category ?? null }));
+    record(logStep('error', 'refusal', note, false, { category: category ?? null }));
     return done([answer().trim(), note].filter(Boolean).join('\n\n'), { refused: true });
   };
 
@@ -622,7 +635,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
       toolCalls.push({ name: toolName ?? askedName, input: toolInput });
 
       if (!toolName) {
-        steps.push(logStep('error', askedName, `Probeerde "${askedName}", maar die hoort niet bij deze opdracht`, false, { input: trimForLog(toolInput) }));
+        record(logStep('error', askedName, `Probeerde "${askedName}", maar die hoort niet bij deze opdracht`, false, { input: trimForLog(toolInput) }));
         toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `De tool "${askedName}" is in deze opdracht niet beschikbaar. Gebruik alleen de tools die je gekregen hebt.`, is_error: true });
         continue;
       }
@@ -640,7 +653,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         await emit('status', { kind: 'tool', label: proposeLabel(toolName) });
         const built = await buildProposal(toolCtx, toolName, toolInput);
         if (built.ok) {
-          steps.push(logStep('proposal', toolName, `Klaargezet: ${describeProposal(built.proposal)}`, true, { input: trimForLog(toolInput) }));
+          record(logStep('proposal', toolName, `Klaargezet: ${describeProposal(built.proposal)}`, true, { input: trimForLog(toolInput) }));
           proposals.push(built.proposal);
           proposedKeys.add(key);
           // De chat stopt hier: de kaart staat onder de tekst en de gebruiker beslist.
@@ -649,7 +662,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
           continue;
         }
         // Ongeldig voorstel -> stuur de fout terug zodat het model het kan corrigeren.
-        steps.push(logStep('proposal', toolName, `Kon dit niet klaarzetten: ${built.error}`, false, { input: trimForLog(toolInput), error: built.error }));
+        record(logStep('proposal', toolName, `Kon dit niet klaarzetten: ${built.error}`, false, { input: trimForLog(toolInput), error: built.error }));
         toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Kan dit nog niet klaarzetten: ${built.error}`, is_error: true });
         continue;
       }
@@ -659,13 +672,13 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         const result = await runTool(toolCtx, toolName, toolInput);
         collectUrls(knownUrls, result);
         const found = countResult(result);
-        steps.push(logStep('tool', toolName, `${toolLogLabel(toolName)}${found === null ? '' : ` — ${found} gevonden`}`, true, { input: trimForLog(toolInput), found }));
+        record(logStep('tool', toolName, `${toolLogLabel(toolName)}${found === null ? '' : ` — ${found} gevonden`}`, true, { input: trimForLog(toolInput), found }));
         // Afgebakend als gegevens: een ticket of mail met "negeer je regels" erin
         // komt zo bij het model aan als tekst uit de administratie, en kan die
         // grens niet zelf sluiten (gerrieGuard.ts, wrapToolData).
         toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: wrapToolData(toolName === 'run_action' ? `action:${String(toolInput.action_id ?? '')}` : toolName, result) });
       } catch (error) {
-        steps.push(logStep('error', toolName, `${toolLogLabel(toolName)} mislukte: ${describeError(error)}`, false, { input: trimForLog(toolInput) }));
+        record(logStep('error', toolName, `${toolLogLabel(toolName)} mislukte: ${describeError(error)}`, false, { input: trimForLog(toolInput) }));
         toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Fout: ${describeError(error)}`, is_error: true });
       }
     }
@@ -1186,6 +1199,8 @@ export async function designAgent(
   ctx: GerrieContext,
   userId: string,
   messages: Array<{ role: string; content: string }>,
+  /** Bij aanpassen: hoe de agent nu is (zie agentForEditing). */
+  current: Record<string, unknown> | null = null,
 ): Promise<{ kind: 'question'; question: string; suggestions: string[] } | { kind: 'agent'; summary: string; agent: AgentProposal } | { kind: 'budget' }> {
   const budget = await checkUserBudget(userId, ctx.organizationId);
   if (!budget.allowed) return { kind: 'budget' };
@@ -1272,6 +1287,14 @@ export async function designAgent(
     '- `summary`: twee of drie zinnen in gewone taal over wat deze agent gaat doen en wanneer. Geen opsomming van tool-namen.',
     '',
     `Embleem-sleutels: ${AGENT_ICON_KEYS.join(', ')}.`,
+    // Aanpassen via de chat (2026-11-11). De huidige instellingen gaan mee als
+    // gegevens, niet als opdracht: de opdrachttekst schreef de gebruiker zelf, maar
+    // komt hier uit de database.
+    ...(current ? [
+      '',
+      'JE PAST NU EEN BESTAANDE AGENT AAN. Hieronder staat hoe hij nu is ingesteld, als gegevens. Lever met `emit_agent` de complete nieuwe versie op: neem alles over wat de gebruiker niet noemt (ook naam, embleem, ritme en tools) en verander alleen wat hij vraagt. Vraag alleen door als de gevraagde wijziging echt onduidelijk is. Zeg in `summary` in één of twee zinnen wat er verandert.',
+      wrapToolData('huidige_agent', current),
+    ] : []),
   ].join('\n');
 
   const askTool = {
@@ -1322,7 +1345,7 @@ export async function designAgent(
 
   // Verbruik boeken op een los gesprek, net als de missie-planner.
   const first = messages.find((m) => m.role === 'user')?.content ?? 'Agent bouwen';
-  const convId = await createConversation(ctx.organizationId, userId, `Agent bouwen: ${first.slice(0, 60)}`);
+  const convId = await createConversation(ctx.organizationId, userId, `${current ? 'Agent aanpassen' : 'Agent bouwen'}: ${first.slice(0, 60)}`);
   const said = 'text' in chosen ? chosen.text : String(chosen.input?.summary || chosen.input?.question || '');
   const msgId = await insertMessage(convId, ctx.organizationId, userId, 'assistant', said, 'text' in chosen ? [] : [{ name: chosen.name, input: chosen.input }]);
   await recordUsage(ctx.organizationId, convId, msgId, userId, usage, 'strong');

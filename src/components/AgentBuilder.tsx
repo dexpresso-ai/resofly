@@ -1,70 +1,130 @@
-import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUp, ChevronDown, ChevronUp, Clock, Eye, Loader2, Pencil, Sparkles, Wand2, X } from 'lucide-react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { AlertTriangle, ArrowLeft, ArrowUp, CalendarClock, ClipboardCheck, Eye, Loader2, Mails, ScanSearch, SlidersHorizontal, Sparkles, WandSparkles } from 'lucide-react';
 import {
   designGerrieAgent, routineToolLabel, routineToolIsRead, previewRoutine,
-  type GerrieAgentProposal, type RoutinePreview,
+  type GerrieAgentProposal, type GerrieRoutine, type RoutinePreview,
 } from '../lib/gerrie-api';
 import { scheduleLabel } from '../lib/agents';
 import { AgentGlyph } from './AgentGlyph';
 import type { UUID } from '../types';
 
 /**
- * De agent-bouwer: je vertelt wat je nodig hebt, Gerrie bouwt de agent.
+ * De agent-bouwer: je vertelt het Gerrie, en ziet de agent ontstaan.
  *
- * Het formulier met modus, tools en schema is prima als je precies weet wat je
- * doet, maar het is een slechte startpagina — je moet er de begrippen van de
- * machine voor kennen. Hier begin je bij je eigen woorden. Ontbreekt er iets
- * essentieels (hoe vaak? mag hij versturen?), dan vraagt Gerrie het na; verder
- * kiest hij zelf naam, embleem, tijdstip en rechten.
+ * Opnieuw opgezet op 2026-11-11. Het gesprek stond eerst alleen op de pagina, met
+ * de agent pas onderaan zodra hij af was; je zag niet wat Gerrie aan het doen was,
+ * en aanpassen via de chat kon niet (alleen in het formulier). Nu:
+ *   - links het gesprek; Gerrie begint zelf, met voorbeelden om op te tikken;
+ *   - rechts de agent in opbouw: een blauwdruk, die tijdens het nadenken in elkaar
+ *     wordt gezet en daarna de echte agent laat zien, met proefdraaien en aanmaken;
+ *   - met `editing` pas je een bestaande agent aan: Gerrie krijgt zijn huidige
+ *     instellingen mee en wat er verandert, staat erbij als "gewijzigd".
  *
- * Wat eruit komt is een VOORSTEL. Je ziet in gewone taal wat de agent gaat doen,
- * je kunt blijven bijsturen in hetzelfde gesprek ("maak hem maandelijks"), en
- * pas als je op Aanmaken drukt bestaat hij. Bijschaven in het formulier kan altijd.
- *
- * VOLGORDE OP HET SCHERM: gesprek — jouw antwoord — pas daaronder de kaart met
- * wat hij kan. Die kaart stond eerst middenin de stroom, tussen de vraag en het
- * invoerveld in, waardoor het veld waar je moest antwoorden telkens een half
- * scherm naar beneden zakte. Nu zit het antwoord vlak onder het gesprek en blijft
- * de kaart onderin staan (in te klappen tot een balkje als hij in de weg zit).
+ * Wat eruit komt is een VOORSTEL. Pas bij Aanmaken of Opslaan bestaat (of verandert)
+ * de agent; bijschaven in het formulier kan altijd.
  */
 
 interface Turn { role: 'user' | 'assistant'; content: string }
 
 const STARTERS = [
   'Elke maandag een overzicht van facturen die te laat zijn',
-  'Wekelijks kijken welke offertes stil liggen en de klant een berichtje sturen',
-  'Elke maand een samenvatting van mijn omzet en grootste klanten',
-  'Klanten met een afgerond project een bedankje sturen',
+  'Zodra een klant mailt, een antwoord voor me klaarzetten',
+  'Elke ochtend mijn agenda, taken en open tickets',
+  'Wekelijks kijken welke offertes stilliggen',
+];
+const EDIT_STARTERS = [
+  'Laat hem elke maand draaien in plaats van elke week',
+  'Alleen facturen boven € 500',
+  'Neem ook de offertes mee',
+  'Maak de opdracht korter en zakelijker',
 ];
 
+/** Een opgeslagen agent in de vorm van een voorstel, zodat de kaart hem net zo toont. */
+export function routineToProposal(r: GerrieRoutine): GerrieAgentProposal {
+  return {
+    type: 'agent', name: r.name, icon: r.icon, instruction: r.instruction, mode: r.mode, enabled_tools: r.enabled_tools,
+    schedule_kind: r.schedule_kind, hour: r.hour, minute: r.minute, end_hour: r.end_hour, day_of_week: r.day_of_week, day_of_month: r.day_of_month,
+    max_proposals_per_run: r.max_proposals_per_run, email_mode: r.email_mode, email_subject: r.email_subject, email_body: r.email_body,
+    max_emails_per_run: r.max_emails_per_run, trigger_events: r.trigger_events ?? [], max_event_runs_per_day: r.max_event_runs_per_day,
+  };
+}
 
-export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }: {
+type Field = 'name' | 'when' | 'mode' | 'read' | 'propose' | 'instruction' | 'mail';
+
+/** Wat er verschilt tussen de huidige agent en het nieuwe voorstel. */
+function changedFields(before: GerrieAgentProposal | null, after: GerrieAgentProposal): Set<Field> {
+  const out = new Set<Field>();
+  if (!before) return out;
+  const tools = (p: GerrieAgentProposal, read: boolean) => p.enabled_tools.filter((t) => routineToolIsRead(t) === read).sort().join('|');
+  if (before.name !== after.name) out.add('name');
+  if (scheduleLabel(before) !== scheduleLabel(after)) out.add('when');
+  if (before.mode !== after.mode) out.add('mode');
+  if (tools(before, true) !== tools(after, true)) out.add('read');
+  if (tools(before, false) !== tools(after, false)) out.add('propose');
+  if (before.instruction.trim() !== after.instruction.trim()) out.add('instruction');
+  if (before.email_mode !== after.email_mode || (before.email_subject ?? '') !== (after.email_subject ?? '')) out.add('mail');
+  return out;
+}
+
+export function AgentBuilder({ organizationId, editing = null, initialMessage = null, initial = null, onCreate, onSave, onOpenForm, onCancel }: {
   organizationId: UUID;
-  /** Slaat de agent op; `activate` bepaalt of hij meteen aan gaat. */
+  /** Een bestaande agent aanpassen via de chat; null = een nieuwe bouwen. */
+  editing?: GerrieRoutine | null;
+  /** De eerste vraag, al getypt bovenaan de agentspagina. */
+  initialMessage?: string | null;
+  /** Een startpunt dat al klaarstaat: meteen te zien, en via de chat bij te sturen. */
+  initial?: { agent: GerrieAgentProposal; summary: string } | null;
+  /** Slaat een nieuwe agent op; `activate` bepaalt of hij meteen aan gaat. */
   onCreate: (agent: GerrieAgentProposal, activate: boolean) => Promise<void>;
+  /** Slaat de aangepaste versie op over de bestaande agent heen. */
+  onSave?: (agent: GerrieAgentProposal) => Promise<void>;
   /** Naar het formulier: met een gebouwde agent erin, of leeg als er nog niets ligt. */
   onOpenForm: (agent: GerrieAgentProposal | null) => void;
   onCancel: () => void;
 }) {
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const current = editing ? routineToProposal(editing) : null;
+  const [turns, setTurns] = useState<Turn[]>(() => (initial
+    ? [{ role: 'assistant', content: `Ik heb “${initial.agent.name}” voor je klaargezet. ${initial.summary} Wil je iets anders? Zeg het hieronder; anders kun je hem rechts meteen aanmaken.` }]
+    : []));
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [built, setBuilt] = useState<{ agent: GerrieAgentProposal; summary: string } | null>(null);
+  const [built, setBuilt] = useState<{ agent: GerrieAgentProposal; summary: string } | null>(initial);
+  const [fresh, setFresh] = useState(false);
   const [activate, setActivate] = useState(true);
   const [saving, setSaving] = useState(false);
-  // Proefrun: het antwoord én de stappen die hij zette.
   const [trying, setTrying] = useState(false);
   const [preview, setPreview] = useState<RoutinePreview | null>(null);
-  // De kaart onderin staat open zodra hij gebouwd is; inklappen laat alleen de
-  // naam en de knoppen staan, zodat het gesprek meer lucht krijgt.
-  const [showDetails, setShowDetails] = useState(true);
   const streamRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const bpRef = useRef<HTMLElement | null>(null);
+  const started = useRef(false);
 
   useEffect(() => {
     streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight, behavior: 'smooth' });
-  }, [turns.length, built, thinking]);
+  }, [turns.length, thinking, error]);
+
+  useEffect(() => {
+    if (!fresh) return undefined;
+    // Op een smal scherm staat de agent ónder het gesprek: daarheen, anders zie je
+    // niet dat hij klaar is.
+    if (window.matchMedia?.('(max-width: 1000px)').matches) {
+      const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+      bpRef.current?.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });
+    }
+    const timer = window.setTimeout(() => setFresh(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [fresh]);
+
+  // De vraag die bovenaan de agentspagina al getypt was: meteen versturen. Eén keer,
+  // ook als React het effect in de ontwikkelmodus twee keer draait.
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    if (initialMessage?.trim()) void send(initialMessage);
+    else inputRef.current?.focus();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function send(text: string) {
     const message = text.trim();
@@ -76,9 +136,14 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
     setThinking(true);
     setError(null);
     try {
-      const step = await designGerrieAgent(organizationId, next);
+      // Bij aanpassen, en bij een startpunt, krijgt Gerrie de agent mee zoals hij
+      // nu is; anders wist hij bij "maak hem maandelijks" niet over welke agent het ging.
+      // Het welkomstbericht is van de app, niet van het gesprek: dat gaat niet mee.
+      const base = built?.agent ?? editing;
+      const history = initial ? next.slice(1) : next;
+      const step = await designGerrieAgent(organizationId, history, base);
       if (step.kind === 'budget') {
-        setError('Je AI-tegoed voor deze maand is op. Vul de agent zolang zelf in met “Liever zelf invullen”.');
+        setError('Je AI-tegoed voor deze maand is op. Vul de agent zolang zelf in met “Zelf invullen”.');
         return;
       }
       if (step.kind === 'question') {
@@ -87,28 +152,25 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
         return;
       }
       setBuilt({ agent: step.agent, summary: step.summary });
+      setFresh(true);
       setPreview(null);
-      setShowDetails(true);
-      setTurns([...next, { role: 'assistant', content: step.summary }]);
+      setTurns([...next, { role: 'assistant', content: step.summary || (editing ? 'Aangepast. Rechts zie je de nieuwe versie.' : 'Je agent staat klaar. Rechts zie je wat hij gaat doen.') }]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gerrie kon deze agent even niet bouwen.');
     } finally {
       setThinking(false);
+      inputRef.current?.focus();
     }
   }
 
-  /** Draait de voorgestelde agent één keer proef, zodat je hem kunt beoordelen op
-   *  wat hij vindt in plaats van op wat hij zegt te kunnen. */
+  /** Eén keer proef, alleen kijken: zo beoordeel je hem op wat hij vindt. */
   async function tryOut() {
-    if (!built || trying) return;
+    const agent = built?.agent ?? current;
+    if (!agent || trying) return;
     setTrying(true);
     setError(null);
     try {
-      setPreview(await previewRoutine(organizationId, {
-        instruction: built.agent.instruction,
-        enabled_tools: built.agent.enabled_tools,
-        model_kind: 'strong',
-      }));
+      setPreview(await previewRoutine(organizationId, { instruction: agent.instruction, enabled_tools: agent.enabled_tools, model_kind: 'strong' }));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Proefdraaien lukte niet.');
     } finally {
@@ -116,204 +178,224 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
     }
   }
 
-  async function create() {
+  async function confirm() {
     if (!built || saving) return;
     setSaving(true);
     setError(null);
-    try { await onCreate(built.agent, activate); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Aanmaken mislukt.'); setSaving(false); }
+    try {
+      if (editing && onSave) await onSave(built.agent);
+      else await onCreate(built.agent, activate);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : editing ? 'Opslaan mislukt.' : 'Aanmaken mislukt.');
+      setSaving(false);
+    }
   }
 
-  const agent = built?.agent ?? null;
-  // Lezen of klaarzetten volgt de catalogus: een handeling uit de registry
-  // ('action:gallery.publish') zet iets klaar, ook al begint hij niet met propose_.
-  const readTools = agent ? agent.enabled_tools.filter(routineToolIsRead) : [];
-  const proposeTools = agent ? agent.enabled_tools.filter((t) => !routineToolIsRead(t)) : [];
+  const shown = built?.agent ?? current;
+  const changes = built ? changedFields(current, built.agent) : new Set<Field>();
+  const state = thinking && !built ? 'thinking' : shown ? 'built' : 'empty';
+  const greeting = editing
+    ? `Wat wil je anders aan “${editing.name || 'deze agent'}”? Zeg het in gewone taal; ik pas hem aan en laat rechts zien wat er verandert.`
+    : 'Vertel me wat er vanzelf moet gebeuren: iets wat je elke week controleert, of wat er moet gebeuren zodra er een mail of ticket binnenkomt. Ik zet de agent voor je in elkaar.';
+  const starters = editing ? EDIT_STARTERS : STARTERS;
 
   return (
-    <div className="ag-page">
-      <header className="ag-page-head">
-        <div className="ag-editor-ident">
-          <AgentGlyph agent={agent ? { id: agent.name, name: agent.name, instruction: agent.instruction, enabled_tools: agent.enabled_tools, icon: agent.icon } : { id: 'nieuw', name: 'Nieuwe agent' }} size="lg" />
-          <div>
-            <h2>Wat moet deze agent voor je doen?</h2>
-            <p>Vertel het in je eigen woorden. Gerrie vraagt na wat hij nog moet weten en zet de rest zelf in elkaar.</p>
-          </div>
+    <div className="ag-page agx-builder">
+      <header className="agx-builder-head">
+        <button type="button" className="agx-back" onClick={onCancel}><ArrowLeft size={15} /> {editing ? 'Terug naar de agent' : 'Alle agents'}</button>
+        <div className="agx-builder-title">
+          <h2>{editing ? `${editing.name || 'Agent'} aanpassen` : 'Nieuwe agent'}</h2>
+          <p>{editing ? 'Met Gerrie, in gewone taal. Er verandert pas iets als je opslaat.' : 'Met Gerrie, in gewone taal. Hij vraagt na wat hij nog moet weten.'}</p>
         </div>
-        <button className="cc-btn ghost" onClick={onCancel}><X size={14} /> Sluiten</button>
+        <button type="button" className="agx-ghost" onClick={() => onOpenForm(built?.agent ?? current)}><SlidersHorizontal size={14} /> Zelf invullen</button>
       </header>
 
-      <div className={`abx${agent ? ' has-dock' : ''}`}>
-        <div className="abx-stream" ref={streamRef}>
-          {turns.length === 0 && !thinking && (
-            <div className="abx-starters">
-              <span className="ag-tokens-label">Bijvoorbeeld</span>
-              <div className="abx-starter-list">
-                {STARTERS.map((s) => (
-                  <button key={s} type="button" className="cc-chip" onClick={() => void send(s)}>{s}</button>
-                ))}
+      <div className={`agx-split is-${state}`}>
+        <section className="agx-chat" aria-label="Gesprek met Gerrie">
+          <div className="agx-stream" ref={streamRef}>
+            {/* Bij een startpunt begint het gesprek met dat startpunt, niet met de
+                algemene uitnodiging en voorbeelden. */}
+            {!initial && (
+              <div className="agx-msg is-assistant">
+                <span className="agx-orb" aria-hidden="true" />
+                <p>{greeting}</p>
               </div>
-            </div>
-          )}
-
-          {turns.map((t, i) => (
-            <div key={i} className={`abx-turn ${t.role}`}>
-              {t.role === 'assistant' && <span className="abx-mark" aria-hidden="true"><Sparkles size={13} /></span>}
-              <p>{t.content}</p>
-            </div>
-          ))}
-
-          {thinking && (
-            <div className="abx-turn assistant">
-              <span className="abx-mark" aria-hidden="true"><Sparkles size={13} /></span>
-              <p className="abx-thinking"><Loader2 size={13} className="ag-spin" /> Gerrie zet hem in elkaar…</p>
-            </div>
-          )}
-
-          {error && <p className="abx-error"><AlertTriangle size={13} /> {error}</p>}
-        </div>
-
-        <form
-          className="abx-composer"
-          onSubmit={(e) => { e.preventDefault(); void send(draft); }}
-        >
-          {suggestions.length > 0 && (
-            <div className="abx-suggestions">
-              {suggestions.map((s) => (
-                <button key={s} type="button" className="cc-chip" onClick={() => void send(s)}>{s}</button>
-              ))}
-            </div>
-          )}
-          <div className="abx-input-row">
-            <textarea
-              className="cc-input"
-              rows={2}
-              value={draft}
-              disabled={thinking}
-              placeholder={built ? 'Nog iets aanpassen?' : 'Bijv. elke maandag kijken wie er nog niet betaald heeft'}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(draft); } }}
-            />
-            <button type="submit" className="abx-send" disabled={!draft.trim() || thinking} aria-label="Versturen">
-              <ArrowUp size={16} />
-            </button>
-          </div>
-          <button type="button" className="abx-manual" onClick={() => onOpenForm(built?.agent ?? null)}>
-            Liever zelf invullen
-          </button>
-        </form>
-
-        {agent && (
-          <article className={`abx-card abx-dock${showDetails ? '' : ' is-folded'}`}>
-            <header>
-              <AgentGlyph agent={{ id: agent.name, name: agent.name, instruction: agent.instruction, enabled_tools: agent.enabled_tools, icon: agent.icon }} size="md" state="active" />
-              <div>
-                <strong>{agent.name}</strong>
-                <span><Clock size={11} /> {scheduleLabel(agent)}</span>
-              </div>
-              <span className={`cc-kind ${agent.mode === 'propose' ? 'write' : 'read'}`}>
-                {agent.mode === 'propose' ? 'stelt acties voor' : 'alleen lezen'}
-              </span>
-              <button
-                type="button"
-                className="abx-fold"
-                aria-expanded={showDetails}
-                onClick={() => setShowDetails((v) => !v)}
-              >
-                {showDetails
-                  ? <><ChevronDown size={13} /> Inklappen</>
-                  : <><ChevronUp size={13} /> Wat hij kan</>}
-              </button>
-            </header>
-
-            {/* Ingeklapt blijven alleen de naam, het tijdstip en de knoppen over. */}
-            {showDetails && <>
-              <dl className="abx-facts">
-                <div>
-                  <dt><Eye size={12} /> Mag inzien</dt>
-                  <dd>{readTools.length ? readTools.map(routineToolLabel).join(', ') : 'de standaard leesset'}</dd>
-                </div>
-                {agent.mode === 'propose' && (
-                  <div>
-                    <dt><Wand2 size={12} /> Mag klaarzetten</dt>
-                    <dd>
-                      {proposeTools.length ? proposeTools.map(routineToolLabel).join(', ') : 'niets'}
-                      {proposeTools.length > 0 && <em> — hoogstens {agent.max_proposals_per_run ?? 3} per run, elk achter jouw akkoord</em>}
-                    </dd>
-                  </div>
-                )}
-                {agent.enabled_tools.includes('propose_send_client_email') && (
-                  <div>
-                    <dt>De mailtekst</dt>
-                    <dd>{agent.email_mode === 'template'
-                      ? <>Vaste tekst: <em>“{agent.email_subject || 'zonder onderwerp'}”</em></>
-                      : 'Gerrie schrijft hem per klant'}</dd>
-                  </div>
-                )}
-                <div>
-                  <dt>Zijn opdracht</dt>
-                  <dd className="abx-instruction">{agent.instruction}</dd>
-                </div>
-              </dl>
-
-              {/* Proefdraaien vóór aanmaken. Dit is er omdat een agent kon beloven
-                  wat hij daarna niet waarmaakte: je zag pas bij de eerste échte run
-                  dat de opdracht iets vroeg wat de tools niet kunnen. */}
-              <div className="abx-try">
-                <button type="button" className="cc-btn ghost" disabled={saving || trying} onClick={() => void tryOut()}>
-                  {trying ? <><Loader2 size={13} className="ag-spin" /> Hij kijkt…</> : <><Eye size={13} /> Laat zien wat hij vindt</>}
-                </button>
-                <span>Draait hem één keer proef — alleen kijken, hij zet niets klaar en verstuurt niets.</span>
-              </div>
-
-              {preview && (
-                <div className={`abx-preview${preview.ok ? '' : ' is-empty'}`}>
-                  {preview.budget
-                    ? <p className="abx-preview-note">Je maandtegoed is op, dus proefdraaien kan nu niet.</p>
-                    : <>
-                        <p className="abx-preview-text">{preview.text || 'Hij kwam niet met een antwoord terug.'}</p>
-                        {preview.steps.length > 0 && (
-                          <ul className="abx-preview-steps">
-                            {preview.steps.map((st, i) => (
-                              <li key={i} className={st.ok ? undefined : 'is-fail'}>{st.label}</li>
-                            ))}
-                          </ul>
-                        )}
-                        <p className="abx-preview-note">
-                          Klopt dit niet? Zeg het hierboven in het gesprek — bijvoorbeeld “alleen facturen boven €500” of “ook offertes die nog niet verstuurd zijn”.
-                        </p>
-                      </>}
-                </div>
-              )}
-            </>}
-
-            {showDetails && (
-              <p className="abx-hint">
-                {activate
-                  ? <>Hij gaat meteen aan en draait direct één ronde, zodat je vandaag al ziet wat hij oplevert. {agent.mode === 'propose' ? <>Alles wat hij wil versturen komt als <b>afvinklijst</b> bij je terug.</> : 'Hij leest alleen mee en verandert niets.'}</>
-                  : <>Niet helemaal goed? Zeg het gewoon hierboven in het gesprek — bijvoorbeeld “maak hem maandelijks” of “laat hem ook de offertes meenemen”.</>}
-              </p>
             )}
+            {turns.length === 0 && !thinking && (
+              <div className="agx-chat-starters">
+                {starters.map((s) => <button key={s} type="button" className="agx-chip" onClick={() => void send(s)}>{s}</button>)}
+              </div>
+            )}
+            {turns.map((t, i) => (
+              <div key={i} className={`agx-msg is-${t.role}`}>
+                {t.role === 'assistant' && <span className="agx-orb" aria-hidden="true" />}
+                <p>{t.content}</p>
+              </div>
+            ))}
+            {thinking && (
+              <div className="agx-msg is-assistant is-thinking" role="status">
+                <span className="agx-orb is-busy" aria-hidden="true" />
+                <p><span className="agw-dots" aria-hidden="true"><i /><i /><i /></span> {built || editing ? 'Gerrie past hem aan…' : 'Gerrie zet hem in elkaar…'}</p>
+              </div>
+            )}
+            {error && <p className="agx-error"><AlertTriangle size={13} /> {error}</p>}
+          </div>
 
-            {/* De knoppen staan als laatste en blijven plakken als de kaart
-                scrolt, zodat Aanmaken altijd binnen bereik is. */}
-            <footer>
-              <label className="abx-activate">
-                <input type="checkbox" checked={activate} onChange={(e) => setActivate(e.target.checked)} />
-                Meteen aanzetten en nu draaien
-              </label>
-              <button type="button" className="cc-btn ghost" disabled={saving} onClick={() => onOpenForm(agent)}>
-                <Pencil size={13} /> Zelf bijschaven
-              </button>
-              <button type="button" className="cc-btn primary" disabled={saving} onClick={() => void create()}>
+          <form className="agx-composer" onSubmit={(e) => { e.preventDefault(); void send(draft); }}>
+            {suggestions.length > 0 && (
+              <div className="agx-suggestions">
+                {suggestions.map((s) => <button key={s} type="button" className="agx-chip" onClick={() => void send(s)}>{s}</button>)}
+              </div>
+            )}
+            <div className="agx-input">
+              <textarea
+                ref={inputRef}
+                rows={2}
+                value={draft}
+                disabled={thinking}
+                aria-label="Bericht aan Gerrie"
+                placeholder={built || editing ? 'Wat moet er anders?' : 'Bijv. elke maandag kijken wie er nog niet betaald heeft'}
+                onChange={(e) => setDraft(e.target.value.slice(0, 4000))}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(draft); } }}
+              />
+              <button type="submit" className="agx-send" disabled={!draft.trim() || thinking} aria-label="Versturen"><ArrowUp size={17} /></button>
+            </div>
+            <span className="agx-composer-note">Gerrie bouwt alleen een voorstel. Bouwen kost een klein beetje AI-tegoed.</span>
+          </form>
+        </section>
+
+        <aside ref={bpRef} className={`agx-bp is-${state}${fresh ? ' is-fresh' : ''}${thinking && shown ? ' is-reworking' : ''}`} aria-label="Je agent" aria-busy={thinking}>
+          <div className="agx-bp-label">
+            {state === 'built' && built ? (editing ? 'Nieuwe versie' : 'Je nieuwe agent') : editing ? 'Zoals hij nu is' : state === 'thinking' ? 'In opbouw' : 'Je agent'}
+          </div>
+          {!shown ? <Blueprint thinking={thinking} /> : (
+            <AgentPreviewCard
+              agent={shown}
+              changes={changes}
+              reworking={thinking}
+              preview={preview}
+              trying={trying}
+              onTry={() => void tryOut()}
+            />
+          )}
+
+          {built && (
+            <footer className="agx-bp-foot">
+              {!editing && (
+                <label className="agx-check">
+                  <input type="checkbox" checked={activate} onChange={(e) => setActivate(e.target.checked)} />
+                  Meteen aanzetten en één keer draaien
+                </label>
+              )}
+              <button type="button" className="agx-primary" disabled={saving || thinking} onClick={() => void confirm()}>
                 {saving
-                  ? <><Loader2 size={14} className="ag-spin" /> Aanmaken…</>
-                  : activate ? <>Aanmaken en starten</> : <>Aanmaken als concept</>}
+                  ? <><Loader2 size={15} className="ag-spin" /> {editing ? 'Opslaan…' : 'Aanmaken…'}</>
+                  : editing ? <>Wijzigingen opslaan</> : activate ? <><WandSparkles size={15} /> Aanmaken en starten</> : <>Aanmaken als concept</>}
               </button>
             </footer>
-          </article>
-        )}
+          )}
+          {!built && editing && <p className="agx-bp-hint">Vertel links wat er anders moet; hier verschijnt dan de nieuwe versie.</p>}
+        </aside>
       </div>
+    </div>
+  );
+}
+
+/** De lege agent, of de agent die in elkaar wordt gezet terwijl Gerrie nadenkt. */
+function Blueprint({ thinking }: { thinking: boolean }) {
+  const rows = [
+    { icon: <CalendarClock size={13} />, label: 'Wanneer' },
+    { icon: <ScanSearch size={13} />, label: 'Kijkt in' },
+    { icon: <ClipboardCheck size={13} />, label: 'Mag klaarzetten' },
+  ];
+  return (
+    <div className={`agx-bp-card is-blueprint${thinking ? ' is-assembling' : ''}`} aria-hidden="true">
+      <div className="agx-bp-top">
+        <span className="agx-bp-slot"><Sparkles size={20} /></span>
+        <span className="agx-bp-lines"><i /><i /></span>
+      </div>
+      {rows.map((r, i) => (
+        <div key={r.label} className="agx-bp-row" style={{ '--i': i } as CSSProperties}>
+          <span className="agx-bp-key">{r.icon}{r.label}</span>
+          <span className="agx-bp-val"><i /><i /></span>
+        </div>
+      ))}
+      <span className="agx-bp-beam" />
+      <p className="agx-bp-caption">{thinking ? 'Gerrie kiest wat hij moet bekijken, wanneer hij draait en wat hij mag klaarzetten…' : 'Hier verschijnt je agent. Gerrie vult hem in terwijl jullie praten.'}</p>
+    </div>
+  );
+}
+
+/** De agent zoals hij wordt: in gewone taal, met wat er verandert. */
+function AgentPreviewCard({ agent, changes, reworking, preview, trying, onTry }: {
+  agent: GerrieAgentProposal;
+  changes: Set<Field>;
+  reworking: boolean;
+  preview: RoutinePreview | null;
+  trying: boolean;
+  onTry: () => void;
+}) {
+  const read = agent.enabled_tools.filter(routineToolIsRead);
+  const propose = agent.enabled_tools.filter((t) => !routineToolIsRead(t));
+  const mark = (f: Field) => (changes.has(f) ? <em className="agx-changed">gewijzigd</em> : null);
+  const sendsMail = agent.enabled_tools.includes('propose_send_client_email');
+  return (
+    <div className={`agx-bp-card is-real${reworking ? ' is-assembling' : ''}`}>
+      <div className="agx-bp-top">
+        <AgentGlyph agent={{ id: agent.name, name: agent.name, instruction: agent.instruction, enabled_tools: agent.enabled_tools, icon: agent.icon }} size="lg" state={reworking ? 'running' : 'active'} />
+        <div className="agx-bp-ident">
+          <strong>{agent.name}{mark('name')}</strong>
+          <span className={`agx-mode is-${agent.mode}`}>{agent.mode === 'propose' ? 'Zet klaar, jij keurt goed' : 'Kijkt mee, verandert niets'}{mark('mode')}</span>
+        </div>
+      </div>
+      <dl className="agx-facts">
+        <div className={changes.has('when') ? 'is-changed' : undefined}>
+          <dt><CalendarClock size={13} /> Wanneer</dt>
+          <dd>{scheduleLabel(agent)}{mark('when')}</dd>
+        </div>
+        <div className={changes.has('read') ? 'is-changed' : undefined}>
+          <dt><ScanSearch size={13} /> Kijkt in</dt>
+          <dd>{read.length ? <span className="agx-tags">{read.map((t) => <span key={t}>{routineToolLabel(t)}</span>)}</span> : 'De standaard leesset'}{mark('read')}</dd>
+        </div>
+        {agent.mode === 'propose' && (
+          <div className={changes.has('propose') ? 'is-changed' : undefined}>
+            <dt><ClipboardCheck size={13} /> Mag klaarzetten</dt>
+            <dd>
+              {propose.length ? <span className="agx-tags is-write">{propose.map((t) => <span key={t}>{routineToolLabel(t)}</span>)}</span> : 'Niets'}
+              {mark('propose')}
+              {propose.length > 0 && <small>Hoogstens {agent.max_proposals_per_run ?? 3} per keer, elk wacht op jouw akkoord.</small>}
+            </dd>
+          </div>
+        )}
+        {sendsMail && (
+          <div className={changes.has('mail') ? 'is-changed' : undefined}>
+            <dt><Mails size={13} /> Mailtekst</dt>
+            <dd>{agent.email_mode === 'template' ? <>Vaste tekst: “{agent.email_subject || 'zonder onderwerp'}”</> : 'Gerrie schrijft hem per klant'}{mark('mail')}</dd>
+          </div>
+        )}
+      </dl>
+      <details className={`agx-brief${changes.has('instruction') ? ' is-changed' : ''}`}>
+        <summary>Zijn opdracht{mark('instruction')}</summary>
+        <p>{agent.instruction}</p>
+      </details>
+
+      <div className="agx-try">
+        <button type="button" className="agx-ghost" disabled={trying || reworking} onClick={onTry}>
+          {trying ? <><Loader2 size={13} className="ag-spin" /> Hij kijkt…</> : <><Eye size={13} /> Laat zien wat hij vindt</>}
+        </button>
+        <span>Eén keer proef. Hij kijkt alleen, zet niets klaar en verstuurt niets.</span>
+      </div>
+      {preview && (
+        <div className={`agx-preview${preview.ok ? '' : ' is-empty'}`}>
+          {preview.budget
+            ? <p>Je maandtegoed is op, dus proefdraaien kan nu niet.</p>
+            : <>
+                <p className="agx-preview-text">{preview.text || 'Hij kwam niet met een antwoord terug.'}</p>
+                {preview.steps.length > 0 && <ul>{preview.steps.map((st, i) => <li key={i} className={st.ok ? undefined : 'is-fail'}>{st.label}</li>)}</ul>}
+                <p className="agx-preview-note">Klopt dit niet? Zeg het links in het gesprek, bijvoorbeeld “alleen facturen boven €500”.</p>
+              </>}
+        </div>
+      )}
     </div>
   );
 }

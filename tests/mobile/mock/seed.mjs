@@ -440,7 +440,57 @@ export const aiReportMessages = [
 ];
 export const aiReportVersions = [1, 2, 3].map((version) => ({ id: uid('w'), report_id: aiReports[0].id, ...base(), version, title: aiReports[0].title, summary: aiReports[0].summary, html: aiReportHtml, datasets: aiReportDatasets, request: version === 1 ? 'Omzet per maand dit jaar, naast vorig jaar' : version === 2 ? 'Maak er een lijngrafiek van' : 'Zet er de grootste klanten bij', created_at: iso(day(-7 + version * 2)) }));
 
+// Agents van Gerrie (2026-11-11): een gevulde galerij, zodat de test de pagina
+// meet zoals een gebruiker hem ziet, niet alleen de lege startpunten. Eén agent
+// draait op dit moment (een run op "running", 40 seconden oud, met de eerste
+// stappen in het logboek): daar hoort de werkanimatie bij. Eén agent is van een
+// collega (toezicht) en één is gearchiveerd. Geen openstaande voorstellen: die
+// staan ook op het dashboard en zouden de meting daar verschuiven.
+const agentBase = (extra) => ({
+  ...base(), run_as_user_id: USER, visibility: 'private', copied_from: null, description: null, icon: null, hue: null,
+  email_mode: 'compose', email_subject: null, email_body: null, max_emails_per_run: 5, model_kind: 'strong', minute: 0,
+  end_hour: null, day_of_week: null, day_of_month: null, timezone: 'Europe/Amsterdam', trigger_events: [], max_event_runs_per_day: 24,
+  max_proposals_per_run: 3, archived_at: null, next_run_at: iso(day(1)), last_run_at: iso(day(-1)), consecutive_failures: 0,
+  delivery: { channels: ['inapp', 'push'], recipient_user_ids: [] }, lease_until: null, ...extra,
+});
+export const aiAgents = [
+  agentBase({ id: uid('g'), name: 'Te late facturen', icon: 'receipt', status: 'active', mode: 'report', schedule_kind: 'weekly', day_of_week: 1, hour: 8,
+    instruction: 'Geef een overzicht van alle openstaande facturen ouder dan 30 dagen: klantnaam, bedrag en aantal dagen te laat. Sluit af met het totaalbedrag.',
+    enabled_tools: ['list_invoices', 'list_due_reminders', 'search_clients'] }),
+  agentBase({ id: uid('g'), name: 'Ticketwacht', icon: 'lifebuoy', status: 'active', mode: 'report', schedule_kind: 'hourly', hour: 9, minute: 5, end_hour: 17, model_kind: 'cheap',
+    instruction: 'Welke tickets zijn het afgelopen uur binnengekomen of hebben een nieuwe reactie van de klant die nog niet beantwoord is?',
+    enabled_tools: ['list_tickets', 'search_clients'], delivery: { channels: ['inapp', 'push'], recipient_user_ids: [], quiet: true } }),
+  agentBase({ id: uid('g'), name: 'Klantmail beantwoorden', icon: 'mail', status: 'active', mode: 'propose', schedule_kind: 'event', trigger_events: ['client_email.received'], next_run_at: null,
+    instruction: 'Er is een mail van een klant binnengekomen. Zet een kort, vriendelijk antwoord klaar dat op de vraag ingaat.',
+    enabled_tools: ['search_clients', 'list_invoices', 'list_tickets', 'propose_send_client_email'] }),
+  agentBase({ id: uid('g'), name: 'Betalingsherinneringen', icon: 'bell', status: 'paused', mode: 'propose', schedule_kind: 'weekly', day_of_week: 1, hour: 9, next_run_at: null,
+    instruction: 'Bekijk welke betalingsherinneringen vandaag aan de beurt zijn en zet ze klaar om te versturen.',
+    enabled_tools: ['list_due_reminders', 'propose_send_reminders'] }),
+  agentBase({ id: uid('g'), name: 'Omzet van de maand', icon: 'trending', status: 'draft', mode: 'report', schedule_kind: 'monthly', day_of_month: 1, hour: 8, next_run_at: null, last_run_at: null,
+    instruction: 'Vat de omzet van de afgelopen maand samen: totaalomzet, grootste klanten en het totaal openstaande bedrag.',
+    enabled_tools: ['get_financial_summary', 'list_invoices'] }),
+  agentBase({ id: uid('g'), name: 'Urencheck op vrijdag', icon: 'clock', status: 'active', mode: 'report', schedule_kind: 'weekly', day_of_week: 5, hour: 15, minute: 30,
+    created_by: USER2, run_as_user_id: USER2, instruction: 'Hoeveel uur heb ik deze week geschreven, per project?', enabled_tools: ['list_time_entries', 'list_projects'] }),
+  agentBase({ id: uid('g'), name: 'Offertes die stilliggen', icon: 'rocket', status: 'archived', archived_at: iso(day(-12)), mode: 'report', schedule_kind: 'weekly', day_of_week: 4, hour: 8, next_run_at: null,
+    instruction: 'Welke offertes staan al langer dan twee weken op verstuurd zonder reactie?', enabled_tools: ['list_quotes'] }),
+];
+const [agentInvoices, agentTickets] = aiAgents;
+const runAt = (offsetSec) => iso(new Date(NOW.getTime() + offsetSec * 1000));
+export const aiAgentRuns = [
+  // Ticketwacht draait nu.
+  { id: uid('u'), organization_id: ORG, agent_id: agentTickets.id, conversation_id: null, triggered_by: 'schedule', status: 'running', scheduled_for: runAt(-45), started_at: runAt(-40), finished_at: null, summary: null, cost_usd: 0, proposals_created: 0, error: null, result: null, created_at: runAt(-40) },
+  { id: uid('u'), organization_id: ORG, agent_id: agentTickets.id, conversation_id: null, triggered_by: 'schedule', status: 'succeeded', scheduled_for: runAt(-3600), started_at: runAt(-3600), finished_at: runAt(-3570), summary: 'Niets te melden.', cost_usd: 0.002, proposals_created: 0, error: null, result: { quiet: true }, created_at: runAt(-3600) },
+  { id: uid('u'), organization_id: ORG, agent_id: agentInvoices.id, conversation_id: null, triggered_by: 'schedule', status: 'succeeded', scheduled_for: iso(day(-1)), started_at: iso(day(-1)), finished_at: iso(day(-1)), summary: 'Vier facturen staan langer dan 30 dagen open, samen € 7.420,50. De oudste is van Studio Noord (52 dagen).', cost_usd: 0.011, proposals_created: 0, error: null, result: {}, created_at: iso(day(-1)) },
+  { id: uid('u'), organization_id: ORG, agent_id: agentInvoices.id, conversation_id: null, triggered_by: 'manual', status: 'failed', scheduled_for: null, started_at: iso(day(-8)), finished_at: iso(day(-8)), summary: null, cost_usd: 0.001, proposals_created: 0, error: 'Claude was even niet bereikbaar.', result: null, created_at: iso(day(-8)) },
+];
+const runningRun = aiAgentRuns[0];
+export const aiAgentRunEvents = [
+  { id: uid('e'), organization_id: ORG, agent_id: agentTickets.id, run_id: runningRun.id, seq: 0, kind: 'start', label: 'Gestart volgens schema', detail: { mode: 'report', tools: ['list_tickets', 'search_clients'] }, created_at: runAt(-40) },
+  { id: uid('e'), organization_id: ORG, agent_id: agentTickets.id, run_id: runningRun.id, seq: 1, kind: 'tool', label: 'Tickets bekijken — 6 gevonden', detail: { tool: 'list_tickets', ok: true, found: 6 }, created_at: runAt(-30) },
+];
+
 export const tables = {
+  ai_agents: aiAgents, ai_agent_runs: aiAgentRuns, ai_agent_run_events: aiAgentRunEvents,
   clients, client_contacts: [
     { id: uid('o'), ...base(), client_id: clients[0].id, name: 'Joost Vermeer', email: 'joost@dekorenaar.nl', phone: '06-11223344', role: 'Eigenaar', gives_portal_access: true, is_active: true },
     { id: uid('o'), ...base(), client_id: clients[0].id, name: 'Anja Vermeer', email: 'anja@dekorenaar.nl', phone: null, role: 'Marketing', gives_portal_access: false, is_active: true },

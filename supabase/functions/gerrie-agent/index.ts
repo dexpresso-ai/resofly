@@ -20,6 +20,7 @@ import {
   requireUser, requireOrganizationAccess, describeError, parseAllowedOrigins, auditActionName,
   screenGerrieMessage, guardRefusal, addGuardUsage,
 } from '../_shared/gerrieCore.ts';
+import { agentForEditing } from '../_shared/agentEditing.ts';
 import type { Emit, HttpStatus } from '../_shared/gerrieCore.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { handleReportChat, handleReportData } from '../_shared/gerrieReports.ts';
@@ -108,7 +109,8 @@ Deno.serve(async (req) => {
         .slice(-12);
       if (messages.length === 0) throw new HttpError('Vertel eerst wat de agent moet doen.', 400);
       const ctx = await buildContext(organizationId, role, user);
-      return json(req, await designAgent(ctx, user.id, messages));
+      // Een bestaande agent aanpassen via de chat: zijn huidige instellingen gaan mee.
+      return json(req, await designAgent(ctx, user.id, messages, agentForEditing(body.current)));
     }
     // Commandocentrum — kosteninschatting vooraf (fractie van het maandtegoed) voor een missie.
     if (String(body.action || '') === 'estimate') {

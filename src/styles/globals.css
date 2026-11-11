@@ -8274,145 +8274,14 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   GERRIE-AGENTS — embleem, galerij en goedkeurwachtrij  (2026-08-16)
+   GERRIE-AGENTS — paginakader, editor en goedkeurwachtrij  (2026-08-16)
    ───────────────────────────────────────────────────────────────────────
-   Een agent was een regel in een lijst; nu is het een personage met een
-   gezicht. Drie onderdelen, in deze volgorde:
-
-     1) .ag-glyph   het embleem — tegel + lichtval + icoon + statusring. Twee
-                    standen: gevuld goud als de agent loopt, een tonale tegel met
-                    een gouden icoon als hij stilstaat.
-     2) .ag-tile    de galerij-tegel. Toont bewust ALLEEN gezicht, naam, ritme en
-                    status — wat de agent kán staat in .ag-sheet, die pas opengaat
-                    als je klikt.
-     3) .ag-queue   de wachtrij: wat een agent heeft klaargezet en op jou wacht.
-                    Draait zowel op de Gerrie-pagina als op het startscherm; op het
-                    startscherm verbergt de component zichzelf als er niets staat.
-
-   Kleur: alles rekent op `--accent-rgb`, met per thema andere alfawaarden —
-   dezelfde vlek is op zwart een zichtbare tegel en op wit bijna niets.
+   Het embleem, de agentkaarten, het detail van een agent, de werkbank en de
+   bouwer staan sinds 2026-11-11 in agents.css (agx-*, agw-*). Hier staat wat
+   daarnaast nog in gebruik is: het paginakader, de editor, de gedeelde
+   agents van het team, het archief en de goedkeurwachtrij (.ag-queue), die
+   zowel op de Gerrie-pagina als op het startscherm draait.
    ═══════════════════════════════════════════════════════════════════════ */
-
-/* 1 ── Het embleem ─────────────────────────────────────────────────────── */
-/* Eén merkkleur, twee STANDEN.
-     • gevuld  — de agent doet iets (actief of draaiend): de tegel is het merkgoud
-                 en het icoon staat er donker in.
-     • stil    — de agent staat stil (gepauzeerd, concept, archief): de tegel zakt
-                 terug naar een tonale vlek en het ICOON draagt het goud.
-
-   Zo blijft één emblemenfamilie herkenbaar en zie je in één oogopslag wie er
-   loopt. Wat hier vroeger stond: één gouden tegel voor iedereen, met
-   `filter:saturate(.3)` over de stilstaande. Dat maakte van het merkgoud een
-   vuilbeige vlek — vier daarvan naast elkaar was precies wat er niet modern aan
-   was. Weg zijn ook de glansstrook en het opstaande witte randje (de
-   glimmende-knop-look) en de "sigil" van gestreepte ringen, die als ruis las.
-   De lichtval doet het werk nu: twee zachte vlekken op een uit het agent-id
-   gerekende plek, doorgegeven als `--ag-x1/y1` en `--ag-x2/y2`.
-
-   De alfa's van de stille tegel verschillen per thema — 13% goud op zwart is een
-   zichtbare vlek, 13% goud op wit is niets. Die twee getallenparen staan daarom
-   als GEËRFDE tokens op de root en niet op `.ag-glyph` zelf: anders zou
-   `:root[data-theme="light"] .ag-glyph` (0,3,0) elke standregel als
-   `.ag-glyph.is-archived` (0,2,0) overstemmen en werkten de standen alleen in
-   het donker. */
-:root{
-  --ag-t-quiet:rgba(var(--accent-rgb),.13);   /* stille tegel                  */
-  --ag-t-quiet2:rgba(var(--accent-rgb),.08);  /* idem, nog een stap stiller    */
-  --ag-t-bloom:rgba(var(--accent-rgb),.26);   /* de lichtvlek erboven          */
-  --ag-t-shade:rgba(var(--shade-rgb),.18);    /* de tegenvlek eronder          */
-}
-:root[data-theme="light"]{
-  --ag-t-quiet:rgba(var(--accent-rgb),.34);
-  --ag-t-quiet2:rgba(var(--accent-rgb),.2);
-  --ag-t-bloom:rgba(255,255,255,.6);
-  --ag-t-shade:rgba(133,88,0,.1);
-}
-
-.ag-glyph{
-  --ag-size:46px;
-  --ag-r:calc(var(--ag-size) * .3);
-  /* Terugval als de component geen seed doorgeeft: netjes gecentreerd licht. */
-  --ag-x1:50%; --ag-y1:14%; --ag-x2:50%; --ag-y2:86%;
-
-  --ag-face:var(--ag-t-quiet);
-  --ag-bloom:var(--ag-t-bloom);
-  --ag-shade:var(--ag-t-shade);
-  --ag-line:var(--border-strong);
-  --ag-mark:var(--accent-ink);
-  --ag-lift:0 4px 12px -9px rgba(var(--shade-rgb),calc(.8 * var(--shade-k)));
-
-  position:relative; display:inline-grid; place-items:center; flex:0 0 auto;
-  width:var(--ag-size); height:var(--ag-size);
-}
-.ag-glyph-sm{ --ag-size:34px; }
-.ag-glyph-md{ --ag-size:46px; }
-.ag-glyph-lg{ --ag-size:68px; }
-
-.ag-glyph-tile{
-  position:relative; display:grid; place-items:center; overflow:hidden; isolation:isolate;
-  width:100%; height:100%;
-  border-radius:var(--ag-r);
-  background:
-    radial-gradient(76% 66% at var(--ag-x1) var(--ag-y1),var(--ag-bloom),transparent 68%),
-    radial-gradient(70% 62% at var(--ag-x2) var(--ag-y2),var(--ag-shade),transparent 66%),
-    var(--ag-face);
-  color:var(--ag-mark);
-  box-shadow:inset 0 0 0 1px var(--ag-line),var(--ag-lift);
-  transition:transform .28s cubic-bezier(.16,1,.3,1),background .2s,box-shadow .2s,color .2s;
-}
-.ag-glyph-icon{ position:relative; display:grid; place-items:center; }
-
-/* ── De standen ── */
-/* Gevuld: het goud is een VULLING, dus de inkt erop is donker (`--on-accent`).
-   Wit op goud haalt nergens genoeg contrast. */
-.ag-glyph.is-active,.ag-glyph.is-running{
-  --ag-face:var(--accent);
-  --ag-bloom:rgba(255,255,255,.58);
-  --ag-shade:rgba(122,84,0,.24);
-  --ag-line:rgba(var(--accent-rgb),.55);
-  --ag-mark:var(--on-accent);
-  --ag-lift:0 8px 20px -12px rgba(var(--shade-rgb),calc(.85 * var(--shade-k)));
-}
-.ag-glyph.is-paused{ --ag-mark:color-mix(in srgb,var(--accent-ink) 85%,var(--muted)); }
-.ag-glyph.is-draft{ --ag-face:var(--ag-t-quiet2); --ag-line:var(--border2); }
-.ag-glyph.is-archived{
-  --ag-face:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));
-  --ag-bloom:rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)));
-  --ag-shade:transparent;
-  --ag-line:var(--border);
-  --ag-mark:var(--muted);
-  --ag-lift:none;
-}
-
-/* Statusring: staat búiten de tegel, zodat het embleem zelf niet verspringt.
-   Draait de agent, dan is het geen knipperende rand meer maar een draaiende
-   boog — hetzelfde teken als elke andere "bezig" in de app. */
-.ag-glyph::after{
-  content:""; position:absolute; inset:-4px; pointer-events:none;
-  border-radius:calc(var(--ag-r) + 4px);
-  border:1.5px solid transparent; transition:border-color .2s;
-}
-.ag-glyph.is-active::after{ border-color:var(--border-strong); }
-.ag-glyph.is-draft::after{ border-style:dashed; border-color:var(--border2); }
-.ag-glyph.is-running::after{ border-color:var(--cc-run,#37B6A3); }
-/* De boog draait, maar de VORM mag niet meedraaien: een rechthoek met ronde
-   hoeken steekt bij 45° buiten zijn eigen omtrek uit en dan lijkt het krabbel.
-   Daarom draait de hoek van een conisch verloop en knipt een masker alles weg
-   behalve de rand. Zonder maskerondersteuning blijft de effen ring hierboven
-   staan — stiller, maar nooit stuk. */
-@property --ag-sweep{ syntax:"<angle>"; inherits:false; initial-value:0deg; }
-@supports ((mask-composite:exclude) or (-webkit-mask-composite:xor)){
-  .ag-glyph.is-running::after{
-    border:0; padding:1.5px; border-color:transparent;
-    background:conic-gradient(from var(--ag-sweep),transparent 0 56%,var(--cc-run,#37B6A3) 86%,transparent 100%);
-    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
-    -webkit-mask-composite:xor;
-    mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
-    mask-composite:exclude;
-    animation:ag-orbit 1.5s linear infinite;
-  }
-}
-@keyframes ag-orbit{ to{ --ag-sweep:360deg; } }
 
 /* 2 ── Paginakader (agents + editor + wachtrij-tab) ────────────────────── */
 .ag-page{ flex:1 1 auto; min-height:0; overflow-y:auto; padding:18px 2px 40px; display:flex; flex-direction:column; gap:18px; }
@@ -8424,117 +8293,11 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .ag-editor-ident{ display:flex; align-items:center; gap:14px; min-width:0; }
 .ag-loading{ display:flex; align-items:center; gap:8px; margin:0; font-size:13px; color:var(--muted); }
 
-/* 3 ── Startpunten (nog geen agents) ───────────────────────────────────── */
-.ag-starters{ display:flex; flex-direction:column; gap:12px; }
-.ag-starters-lead{ margin:0; font-size:13px; color:var(--muted2); }
-.ag-starter-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(212px,1fr)); gap:12px; }
-.ag-starter{
-  all:unset; box-sizing:border-box; cursor:pointer;
-  display:flex; flex-direction:column; align-items:flex-start; gap:9px; padding:16px;
-  border:1px solid var(--border); border-radius:var(--radius-md); background:var(--panel);
-  transition:border-color .15s,transform .12s,box-shadow .15s;
-}
-.ag-starter:hover{ border-color:var(--border-strong); transform:translateY(-2px); box-shadow:0 18px 36px -28px rgba(var(--shade-rgb),calc(.95 * var(--shade-k))); }
-.ag-starter:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
-.ag-starter strong{ font-size:14px; font-weight:600; line-height:1.35; }
-.ag-starter span{ font-size:12.5px; color:var(--muted2); line-height:1.5; }
-.ag-starter-blank{ border-style:dashed; background:transparent; }
-
-/* 4 ── De galerij ──────────────────────────────────────────────────────── */
-.ag-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(184px,1fr)); gap:12px; }
-.ag-tile{
-  all:unset; box-sizing:border-box; cursor:pointer; position:relative; overflow:hidden;
-  display:flex; flex-direction:column; align-items:center; text-align:center; gap:8px;
-  padding:22px 14px 14px; min-height:192px;
-  border:1px solid var(--border); border-radius:var(--radius-md); background:var(--panel);
-  transition:border-color .18s,transform .22s cubic-bezier(.16,1,.3,1),box-shadow .18s,background .18s;
-}
-/* Lichtkoepel achter het embleem: verschijnt pas bij aandacht, en komt van
-   bóven de kaart af, zodat het embleem erin lijkt te staan in plaats van dat de
-   kaart zelf gaat gloeien. */
-.ag-tile::before{
-  content:""; position:absolute; left:50%; top:-72px; width:190px; height:190px;
-  transform:translateX(-50%); border-radius:50%; pointer-events:none;
-  background:radial-gradient(circle,rgba(var(--accent-rgb),.17),transparent 66%);
-  opacity:0; transition:opacity .22s;
-}
-.ag-tile:hover::before,.ag-tile.is-open::before{ opacity:1; }
-.ag-tile:hover{ border-color:var(--border-strong); transform:translateY(-2px); box-shadow:0 16px 34px -26px rgba(var(--shade-rgb),calc(.9 * var(--shade-k))); }
-.ag-tile:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
-/* Een kantelende tegel was het speelse gebaar van tien jaar terug; optillen is
-   genoeg en laat het embleem recht staan. */
-.ag-tile:hover .ag-glyph-tile{ transform:translateY(-2px) scale(1.04); }
-.ag-tile.is-open{ border-color:var(--border-strong); background:var(--panel-strong); box-shadow:inset 0 0 0 1px var(--accent-soft); }
-.ag-tile-name{ font-size:13.5px; font-weight:600; line-height:1.3; letter-spacing:-.012em; }
-.ag-tile-rhythm{ display:inline-flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
-/* Status als stip + woord in gewone schrijfwijze. "GEPAUZEERD" in kapitalen met
-   letterspatiëring schreeuwde harder dan de agentnaam erboven. */
-.ag-tile-state{
-  display:inline-flex; align-items:center; gap:6px;
-  font-size:11px; font-weight:500; padding:3px 10px 3px 8px;
-  border-radius:var(--r-pill); border:1px solid var(--border); color:var(--muted);
-  background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));
-}
-.ag-tile-state::before{ content:""; width:6px; height:6px; border-radius:50%; background:currentColor; flex:none; }
-.ag-tile-state.is-active{ color:var(--accent-g); border-color:rgba(var(--ok-rgb),.3); background:rgba(var(--ok-rgb),.1); }
-.ag-tile-state.is-paused{ color:var(--muted2); }
-.ag-tile-state.is-archived{ color:var(--muted); }
-/* De uitnodiging om te klikken staat er altijd — ook op een aanraakscherm,
-   waar "hover om het te ontdekken" niet bestaat. */
-/* Geen extra dekking bovenop `--muted`: dat is al de stilste inkt van het
-   stelsel, en .75 daarvan zakte op wit onder de leesbaarheidsgrens. */
-.ag-tile-hint{ margin-top:auto; display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--muted); transition:color .18s; }
-.ag-tile:hover .ag-tile-hint,.ag-tile.is-open .ag-tile-hint{ color:var(--accent-ink); }
-.ag-tile-badge{
-  position:absolute; top:11px; right:11px; z-index:2;
-  min-width:20px; height:20px; padding:0 6px; display:grid; place-items:center;
-  border-radius:var(--r-pill); background:var(--accent); color:var(--on-accent);
-  font-size:11px; font-weight:600; font-variant-numeric:tabular-nums;
-  box-shadow:0 0 0 3px var(--panel);
-}
-.ag-tile-badge::after{ content:""; position:absolute; inset:-2px; border-radius:var(--r-pill); border:1.5px solid var(--accent); animation:ag-ping 2.6s ease-out infinite; }
-.ag-tile-new{ border-style:dashed; background:transparent; justify-content:center; }
-.ag-tile-new:hover{ border-style:solid; }
-.ag-tile-plus{
-  display:grid; place-items:center; width:68px; height:68px;
-  border-radius:21px; border:1px dashed var(--border2); color:var(--muted);
-  background:rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k)));
-  transition:color .18s,border-color .18s,background .18s,transform .22s cubic-bezier(.16,1,.3,1);
-}
-.ag-tile-new:hover .ag-tile-plus,.ag-starter-blank:hover .ag-tile-plus{ color:var(--accent-ink); border-color:var(--border-strong); background:var(--accent-soft); transform:translateY(-2px) scale(1.04); }
-
-/* 5 ── Het opengeklapte paneel: wat kan deze agent? ────────────────────── */
-.ag-sheet{
-  border:1px solid var(--border-strong); border-radius:var(--radius-md); background:var(--panel);
-  padding:18px; display:flex; flex-direction:column; gap:16px;
-  box-shadow:0 26px 52px -40px rgba(var(--shade-rgb),calc(1 * var(--shade-k)));
-  animation:ag-reveal .22s ease-out;
-}
-.ag-sheet-head{ display:flex; align-items:center; gap:14px; }
-.ag-sheet-ident{ flex:1; min-width:0; }
-.ag-sheet-ident h3{ margin:0 0 7px; font-size:17px; font-weight:600; letter-spacing:-.01em; }
-.ag-sheet-pills{ display:flex; flex-wrap:wrap; align-items:center; gap:7px; }
-.ag-sheet-waiting{ display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:3px 9px; border-radius:20px; background:var(--accent); color:var(--on-accent); }
+/* 5 ── Uit het oude paneel blijven de sluitknop en de geschiedenis over; de
+   rest van het detail van een agent staat sinds 2026-11-11 in agents.css. */
 .ag-sheet-close{ all:unset; cursor:pointer; display:grid; place-items:center; width:30px; height:30px; border-radius:9px; color:var(--muted); flex:none; }
 .ag-sheet-close:hover{ background:var(--bg4); color:var(--text); }
 .ag-sheet-close:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
-
-.ag-caps{ display:grid; grid-template-columns:repeat(auto-fit,minmax(224px,1fr)); gap:12px; }
-.ag-cap{ display:flex; flex-direction:column; gap:6px; padding:12px 13px; border:1px solid var(--border); border-radius:12px; background:var(--bg-deep); }
-.ag-cap-icon{ display:grid; place-items:center; width:26px; height:26px; border-radius:8px; background:var(--bg4); color:var(--muted2); }
-.ag-cap h4{ margin:0; font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
-.ag-cap-plain{ font-size:13px; color:var(--text); line-height:1.45; }
-.ag-cap-note{ font-size:11.5px; color:var(--muted); line-height:1.45; }
-.ag-cap-chips{ display:flex; flex-wrap:wrap; gap:6px; }
-.ag-cap-chip{ font-size:11.5px; padding:3px 9px; border-radius:20px; border:1px solid var(--border2); color:var(--muted2); }
-.ag-cap-chip.is-write{ color:var(--accent-ink); border-color:var(--border-strong); background:var(--accent-soft); }
-
-.ag-brief{ padding:13px 15px; border:1px solid var(--border); border-radius:12px; background:var(--bg-deep); }
-.ag-brief-label{ display:inline-flex; align-items:center; gap:6px; font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
-.ag-brief p{ margin:7px 0 0; font-size:13.5px; line-height:1.6; color:var(--text); }
-
-.ag-sheet-actions{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
-.ag-sheet-spacer{ flex:1; }
 .ag-history{ border-top:1px solid var(--border); padding-top:14px; }
 .ag-history-label{ display:inline-flex; align-items:center; gap:6px; font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
 .ag-history .cc-runs{ margin-top:0; border-top:0; padding-top:8px; }
@@ -8544,19 +8307,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    zien: bij een agent van een collega staat van wie hij is, een gedeelde agent
    draagt een klein vlagje, en de agents van het team staan in een eigen sectie
    onder je eigen galerij — nooit ertussen. */
-.ag-tile-owner{ display:inline-flex; align-items:center; gap:4px; max-width:100%; font-size:11px; color:var(--muted2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ag-tile-flag{
-  position:absolute; top:11px; left:11px; z-index:2;
-  display:grid; place-items:center; width:22px; height:22px; border-radius:var(--r-pill);
-  border:1px solid var(--border-strong); background:var(--accent-soft); color:var(--accent-ink);
-}
-.ag-sheet-owner{ display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:500; padding:3px 9px; border-radius:20px; border:1px solid var(--border2); color:var(--muted2); }
 
-.ag-section{ display:flex; flex-direction:column; gap:12px; margin-top:6px; border-top:1px solid var(--border); padding-top:16px; }
-.ag-section-head{ display:flex; flex-wrap:wrap; align-items:center; gap:6px 9px; font-size:13px; color:var(--muted2); }
-.ag-section-head svg{ color:var(--muted); flex:none; }
-.ag-section-head strong{ font-weight:600; color:var(--text); }
-.ag-section-head span{ flex-basis:100%; font-size:11.5px; color:var(--muted); line-height:1.5; }
 
 /* Een gedeelde agent is een startpunt, geen tegel: je ziet wat hij doet en neemt hem over. */
 .ag-shared-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; }
@@ -8595,13 +8346,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 }
 .ag-pick-icon:hover{ background:var(--bg4); }
 .ag-pick-icon.on{ border-color:var(--border-strong); background:var(--accent-soft); }
-/* Het gekozen embleem krijgt de gevulde stand — dan kies je een gezicht en niet
-   een vinkje. */
-.ag-pick-icon.on .ag-glyph-tile{
-  background:radial-gradient(76% 66% at var(--ag-x1) var(--ag-y1),rgba(255,255,255,.58),transparent 68%),var(--accent);
-  color:var(--on-accent);
-  box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.55);
-}
 .ag-pick-icon:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
 .ag-pick-auto{ padding-right:6px; font-size:12px; font-weight:600; color:var(--muted2); }
 /* Hier stond ook een kleurkiezer (12 tinten). Die is weg: elk embleem draagt nu het
@@ -8666,30 +8410,15 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* 8 ── Beweging ────────────────────────────────────────────────────────── */
 .ag-spin{ animation:ag-turn 1s linear infinite; }
 @keyframes ag-turn{ from{ transform:rotate(0); } to{ transform:rotate(360deg); } }
-@keyframes ag-reveal{ from{ opacity:0; transform:translateY(-6px); } to{ opacity:1; transform:none; } }
 @keyframes ag-ping{ 0%{ opacity:.75; transform:scale(1); } 70%,100%{ opacity:0; transform:scale(1.7); } }
 @media(prefers-reduced-motion:reduce){
-  .ag-spin,.ag-sheet,.ag-tile-badge::after,.ag-glyph.is-running::after{ animation:none; }
-  /* Zonder beweging is een halve boog een lelijk toeval: terug naar de hele ring. */
-  .ag-glyph.is-running::after{ background:none; mask:none; -webkit-mask:none; border:1.5px solid var(--cc-run,#37B6A3); padding:0; }
-  .ag-tile:hover,.ag-starter:hover{ transform:none; }
-  .ag-tile:hover .ag-glyph-tile,.ag-tile-new:hover .ag-tile-plus,.ag-starter-blank:hover .ag-tile-plus{ transform:none; }
+  .ag-spin{ animation:none; }
 }
 
 /* 9 ── Smallere schermen ───────────────────────────────────────────────── */
-@media(max-width:900px){
-  .ag-caps{ grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); }
-}
 @media(max-width:760px){
   .ag-page{ padding:14px 0 32px; gap:14px; }
   .ag-page-head>.cc-btn{ margin-left:0; width:100%; justify-content:center; min-height:44px; }
-  .ag-grid{ grid-template-columns:repeat(auto-fill,minmax(146px,1fr)); gap:10px; }
-  .ag-tile{ min-height:166px; padding:16px 10px 12px; }
-  .ag-glyph-lg{ --ag-size:56px; }
-  .ag-tile-plus{ width:56px; height:56px; border-radius:18px; }
-  .ag-starter-grid{ grid-template-columns:1fr; }
-  .ag-sheet{ padding:14px; gap:13px; }
-  .ag-caps{ grid-template-columns:1fr; }
   .ag-queue{ padding:13px; }
   .ag-queue-row{ flex-wrap:wrap; }
   .ag-queue-actions{ width:100%; justify-content:flex-end; }
@@ -8847,10 +8576,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .ag-archive-head:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; border-radius:8px; }
 .ag-archive-head strong{ font-weight:600; }
 .ag-archive-head span{ font-size:11.5px; color:var(--muted); }
-.ag-grid-archive .ag-tile{ opacity:.72; }
-.ag-grid-archive .ag-tile:hover,.ag-grid-archive .ag-tile.is-open{ opacity:1; }
-.ag-tile.is-archived{ border-style:dashed; }
-.ag-tile-state.is-archived{ color:var(--muted); border-color:var(--border2); }
 
 /* De strook boven een gearchiveerde agent: waarom je hier geen knoppen ziet. */
 .ag-archived-note{ display:flex; align-items:flex-start; gap:8px; margin:0; padding:10px 12px; border:1px dashed var(--border2); border-radius:10px; font-size:12px; line-height:1.5; color:var(--muted2); }
@@ -10753,7 +10478,6 @@ button.task-agenda-when:hover{text-decoration:underline}
   .ag-page-head h2{font-size:17px;margin:0}
   .ag-page-head p{display:none}
   .ag-page-head>.cc-btn{padding:8px 12px;font-size:12.5px}
-  .ag-starters-lead{font-size:12.5px}
   .cc-top{gap:8px;padding-bottom:8px;flex-wrap:wrap}
   /* De tabrij is een veegrij. Vier tabs met tekst (Agents · Nu uitvoeren ·
      Jouw akkoord · Beslissingen) zijn samen ~430px; met `flex:1 1 auto` kon
@@ -12402,33 +12126,9 @@ body::before{display:none}
 .login-card h1 .serif{font-size:1.12em;line-height:.9}
 .login-card p{color:var(--ink-2)}
 
-/* ── 16 · Gerrie-agents in het poollicht ─────────────────────────────────────
-   De emblemen waren goud, net als de hoofdknoppen. Nu dragen ze het licht van
-   Gerrie: een stille violette tegel met het icoon in poolinkt, en een agent
-   die draait of actief is krijgt het volle poollicht. */
-:root{
-  --ag-t-quiet:rgba(var(--ai-rgb),.14);
-  --ag-t-quiet2:rgba(var(--ai-rgb),.08);
-  --ag-t-bloom:rgba(var(--ai-rgb),.26);
-  --ag-t-shade:rgba(var(--shade-rgb),.18);
-}
-:root[data-theme="light"]{
-  --ag-t-quiet:rgba(var(--ai-rgb),.12);
-  --ag-t-quiet2:rgba(var(--ai-rgb),.07);
-  --ag-t-bloom:rgba(255,255,255,.6);
-  --ag-t-shade:rgba(var(--ai-rgb),.1);
-}
-.ag-glyph{--ag-line:rgba(var(--ai-rgb),.3);--ag-mark:var(--ai-ink)}
-.ag-glyph.is-active,.ag-glyph.is-running{
-  --ag-face:linear-gradient(135deg,var(--ai-1),var(--ai-2) 55%,var(--ai-3));
-  --ag-bloom:rgba(255,255,255,.5);
-  --ag-shade:rgba(20,14,60,.22);
-  --ag-line:rgba(var(--ai-rgb),.55);
-  --ag-mark:#15121F;
-}
-:root[data-theme="light"] .ag-glyph.is-active,:root[data-theme="light"] .ag-glyph.is-running{--ag-mark:#FFFFFF}
-.ag-glyph.is-paused{--ag-mark:color-mix(in srgb,var(--ai-ink) 80%,var(--ink-3))}
-.ag-glyph.is-active::after{border-color:rgba(var(--ai-rgb),.4)}
+/* ── 16 · Gerrie in het poollicht ────────────────────────────────────────────
+   De emblemen van de agents dragen het licht van Gerrie; die staan sinds
+   2026-11-11 in agents.css. */
 /* Het merkteken van het commandocentrum is de bol van Gerrie. */
 .cc-spark{
   position:relative;

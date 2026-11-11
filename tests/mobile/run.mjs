@@ -95,6 +95,11 @@ const PAGES = {
   // de pagina. Een bestaande aanpassen: de pagina gedimd, met de balk erboven
   // (op telefoon en tablet eerst het gesprek open, vraag sturen, weer dicht).
   'report-building': { page: 'stats', prepare: '.aire-ask .aire-suggest button' },
+  // Agents van Gerrie (2026-11-11). De seed heeft een agent die nu draait: zijn
+  // detail met de werkbank (de animatie), en de bouwer waarin je een agent in
+  // een gesprek laat maken. Het overzicht zelf is de pagina "gerrie".
+  'gerrie-agent': { page: 'gerrie', prepare: '.agx-card.is-working .agx-card-open' },
+  'gerrie-bouwer': { page: 'gerrie', prepare: '.agx-hero-foot .agx-link' },
   'report-updating': {
     page: 'report', statsReportId: seed.aiReports[0].id,
     prepare: ['.aire-chat-toggle', { fill: '.aire-composer textarea', value: 'Zet er vorig jaar naast' }, '.aire-send', '.aire-chat-close'],
