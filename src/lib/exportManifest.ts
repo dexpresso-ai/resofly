@@ -30,6 +30,8 @@ export const EXPORT_FORMAT_VERSION = 1;
  * De test faalt zodra er een nieuwere migratie is: kijk dan of er tabellen of
  * kolommen bij kwamen, en zet het nummer hier op de nieuwste.
  */
+// 20261111150500 (mcp-staging is geen klantnaam) vervangt alleen de functie
+// client_subdomain_problem: geen tabellen of kolommen erbij.
 // 20261111160000 zet twee kolommen bij in tabellen die al meegaan:
 // clients.account_lead_user_id en tickets.assignee_user_id. Geen geheim, geen
 // opslagsleutel; ze gaan gewoon mee met klanten en tickets.

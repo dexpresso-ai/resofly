@@ -417,7 +417,7 @@ test('zonder extra headers blijft Expose-Headers weg', () => {
   assert.equal('Access-Control-Expose-Headers' in openCorsHeaders(), false);
 });
 
-// ── Het adres van de client achter mcp.resofly.com ───────────────────────────
+// ── Het adres van de client achter het eigen adres ───────────────────────────
 // De rem op registraties telt per adres. Achter de Worker is dat voor iedereen
 // hetzelfde Cloudflare-adres, dus geeft de Worker het echte mee. Dat mag alleen
 // gelden met het geheim erbij, anders kiest elke client zijn eigen teller.

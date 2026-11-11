@@ -452,10 +452,11 @@ export function openCorsHeaders(extraHeaders = '', extraExposed = ''): Record<st
   return headers;
 }
 
-// ── Achter het eigen adres (mcp.resofly.com) ─────────────────────────────────
+// ── Achter het eigen adres (mcp-staging.resofly.com, later mcp.resofly.com) ─
 //
-// De klant plakt https://mcp.resofly.com/mcp in zijn AI-app. Daar staat een
-// Cloudflare Worker (workers/mcp) die doorstuurt naar deze functies. Voor de
+// De klant plakt het eigen adres (https://mcp-staging.resofly.com/mcp op
+// staging) in zijn AI-app. Daar staat een Cloudflare Worker (workers/mcp) die
+// doorstuurt naar deze functies. Voor de
 // meeste paden maakt dat niets uit, behalve voor het IP-adres: dat is bij ons
 // het adres van Cloudflare, niet dat van de client.
 
@@ -471,7 +472,7 @@ const MIN_PROXY_SECRET_LENGTH = 24;
  * Van welk adres komt dit verzoek? Voor de rem op registraties (mcp-oauth).
  *
  * Rechtstreeks op Supabase is dat `cf-connecting-ip`: dat zet de infrastructuur,
- * de aanroeper kan het niet vervalsen. Via de Worker op mcp.resofly.com is dat
+ * de aanroeper kan het niet vervalsen. Via de Worker op het eigen adres is dat
  * adres voor ÁLLE clients hetzelfde: Cloudflare zet het bij een verzoek van een
  * Worker naar een ander domein op een vast eigen adres. Dan deelden alle
  * klanten één teller van zestig registraties per uur, en lag koppelen voor

@@ -1,4 +1,5 @@
-// De regels van de Worker op mcp.resofly.com, los van de runtime zodat
+// De regels van de Worker op het eigen adres van de AI-koppeling
+// (mcp-staging.resofly.com, straks mcp.resofly.com), los van de runtime zodat
 // `npm test` ze in node kan nalopen (logic.test.ts). Zie index.ts voor het
 // geheel.
 
@@ -15,8 +16,9 @@ export type Route =
 
 /**
  * De paden van de autorisatieserver. De issuer is de root van het domein
- * (MCP_PUBLIC_BASE_URL = https://mcp.resofly.com), dus de eindpunten staan daar
- * ook: authorizationServerMetadata noemt ze als `${issuer}/authorize` enzovoort.
+ * (MCP_PUBLIC_BASE_URL, op staging https://mcp-staging.resofly.com), dus de
+ * eindpunten staan daar ook: authorizationServerMetadata noemt ze als
+ * `${issuer}/authorize` enzovoort.
  *
  * /consent en /approve staan er bewust niet bij. Die roept alleen ons eigen
  * toestemmingsscherm aan, rechtstreeks op Supabase (src/lib/mcp-api.ts). Een
@@ -102,7 +104,7 @@ export function upstreamUrl(supabaseUrl: string, fn: McpFunction, path: string, 
  * WAAROM. mcp-oauth remt registraties per IP-adres (60 per uur). Een verzoek
  * dat via een Worker bij Supabase aankomt, komt van het adres van Cloudflare
  * zelf: daar zet Cloudflare `cf-connecting-ip` op een vast Worker-adres. Zonder
- * deze headers deelden álle klanten achter mcp.resofly.com dus één teller, en
+ * deze headers deelden álle klanten achter het eigen adres dus één teller, en
  * zat koppelen voor iedereen dicht zodra er in een uur zestig AI-apps bij
  * kwamen. De Worker kent het echte adres wel (`cf-connecting-ip` op het
  * binnenkomende verzoek, gezet door Cloudflare) en geeft het door.
