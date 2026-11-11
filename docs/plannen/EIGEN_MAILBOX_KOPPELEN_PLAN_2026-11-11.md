@@ -1,39 +1,56 @@
-# Plan: je eigen mailbox koppelen aan Berichten (2026-11-11)
+# Plan: je eigen mailbox als afzender en postvak van ResoFly (2026-11-11)
 
 > **Stand op 11 november 2026: plan, nog niets gebouwd.** Onderzocht op `staging` (`a3a455a`).
-> Tickets en telefoon blijven zoals ze zijn; dit plan gaat alleen over e-mail.
+> Tweede versie. In de eerste ging alleen losse klantmail via de mailbox en bleef Resend de afzender
+> van facturen en offertes. Op verzoek gaat nu **alles wat ResoFly namens een organisatie aan haar
+> klanten stuurt** via de gekoppelde mailbox. Tickets en telefoon blijven zoals ze zijn.
 
 Vraag: *Ik wil een eigen mailfunctionaliteit inbouwen binnen Berichten. Klanten moeten hun eigen
 mailbox kunnen koppelen. Voor Microsoft via MS Graph, en nodemailer en imapflow voor mailboxen bij
-een hostingpartij en dergelijke.*
+een hostingpartij en dergelijke.* Daarna: *Ik wil net wat professioneler dan een doorstuurlink.
+Zodat de functionaliteit van ResoFly en het verzenden ook echt via de mailbox gebeurt.*
 
-**Kort.** Een organisatie koppelt één of meer echte mailboxen: `jan@bedrijf.nl` of `info@bedrijf.nl`.
-Berichten wordt daarmee een postvak voor klantmail, niet langer een kopie van wat via ResoFly ging.
+**Kort.** Een organisatie koppelt haar echte mailboxen, bijvoorbeeld `jan@bedrijf.nl`,
+`info@bedrijf.nl` of `administratie@bedrijf.nl`. Vanaf dat moment is de mailbox **de afzender** van
+alles wat ResoFly aan klanten stuurt, en **het postvak** waaruit Berichten leest.
 
-1. **Twee soorten koppeling, één resultaat.**
-   - **Microsoft 365 en Outlook.com**: inloggen met Microsoft en toestemming geven. ResoFly praat met
-     Microsoft Graph. Er wordt geen wachtwoord opgeslagen.
-   - **Andere mailboxen** (TransIP, Strato, Hostnet, one.com, een eigen server; Gmail en iCloud met een
-     app-wachtwoord): adres en wachtwoord invullen. ResoFly zoekt de instellingen zelf op. Lezen gaat
-     met imapflow, versturen met nodemailer.
-2. **Lezen.** Mail van en naar klanten komt vanzelf in Berichten en in het klantdossier: wat
-   binnenkomt én wat je vanuit Outlook verstuurt. Je kiest per mailbox: *alleen klantmail* (standaard)
-   of *alles* (voor een gedeeld adres als info@). Wat niet bij een klant hoort, haalt ResoFly bij
-   *alleen klantmail* niet eens op.
-3. **Versturen.** Een antwoord uit Berichten gaat vanuit je eigen mailbox. Het staat in je eigen map
-   Verzonden. De klant antwoordt op je echte adres, en dat antwoord komt terug in hetzelfde gesprek.
-4. **Eén weg naar binnen, één weg naar buiten.** Microsoft en IMAP leveren hun mail af bij één
-   databasefunctie die ontdubbelt, het gesprek zoekt en de klant koppelt. Versturen gaat altijd via de
-   bestaande functie `mail`, met dezelfde rechtencontrole als nu.
-5. **Waar het draait.**
-   - Microsoft past in de edge functions, net als de agenda nu.
-   - IMAP en SMTP niet. Die hebben een proces nodig dat altijd draait en verbindingen openhoudt, en
-     Supabase blokkeert poort 587. Daarvoor komt één nieuwe service, `workers/mail-engine`: Node in
-     een Cloudflare Container, zoals de Office-server al draait.
-6. **Resend blijft** voor systeemmail: facturen, offertes, herinneringen, het portaal en marketing.
-   Het doorstuuradres blijft bestaan voor wie niet wil koppelen.
+1. **Koppelen.**
+   - Microsoft 365 en Outlook.com via Microsoft Graph: inloggen en toestemming geven. Er wordt geen
+     wachtwoord bewaard.
+   - Mailboxen bij een hoster (TransIP, Strato, Hostnet, one.com, een eigen server; Gmail en iCloud
+     met een app-wachtwoord) via imapflow (lezen) en nodemailer (versturen).
+2. **Alles naar klanten gaat via de mailbox.** Dat zijn: klantmail, offertes, facturen,
+   herinneringen, aanmaningen, creditnota's, contracten, afspraken en uitnodigingen, bestanden,
+   portaalmeldingen en inlogcodes. De mail komt van je eigen adres, met je eigen SPF en DKIM, staat in
+   je eigen map Verzonden, en de klant antwoordt gewoon aan jou.
+3. **Per soort mail kies je de mailbox.** Facturen vanaf `administratie@`, offertes en klantmail
+   vanaf de mailbox van wie verstuurt, het portaal vanaf `info@`. Bij een eenmanszaak is dat gewoon
+   overal dezelfde mailbox.
+4. **Antwoorden komen terug waar ze horen.** Een klant die op een factuur antwoordt ("klopt dit
+   bedrag?"), staat in Berichten in het gesprek van díe factuur, met een knop naar de factuur.
+5. **Eén verzendlaag.** Nu roepen 28 plekken in de code Resend elk zelf aan. Die gaan allemaal via
+   één functie, `sendOrgMail`, en één verzendregister, `mail_sends`. Daar zit de logica:
+   - welke weg (mailbox of Resend);
+   - de wachtrij en het tempo per mailbox;
+   - de terugval als een mailbox niet werkt;
+   - nooit dubbel versturen;
+   - een kopie van het bericht zoals het verstuurd is;
+   - de status.
+6. **Bezorging zonder Resend.**
+   - Een bounce leest ResoFly uit de mailbox zelf (het "onbestelbaar"-bericht).
+   - *Geopend* via een trackingpixel wordt *Bekeken*: de klant opende de offerte- of factuurpagina.
+     Dat bestaat al, en het is betrouwbaarder.
+7. **Resend blijft** voor marketing (bulk hoort niet door een gewone mailbox), voor mail van ResoFly
+   aan je eigen team, en als vangnet.
+8. **Het doorstuuradres wordt plan B** voor wie niet wil of kan koppelen.
 
-Dit document is een plan, geen bouwopdracht. De volgorde staat in §13, de beslissingen in §15.
+Waar het draait:
+
+- Microsoft in de edge functions, zoals de agenda nu.
+- IMAP en SMTP in één nieuwe service, `workers/mail-engine`: Node in een Cloudflare Container, zoals
+  de Office-server. Supabase blokkeert poort 587 en houdt geen verbindingen open.
+
+Dit document is een plan, geen bouwopdracht. De volgorde staat in §16, de beslissingen in §18.
 
 ---
 
@@ -41,837 +58,975 @@ Dit document is een plan, geen bouwopdracht. De volgorde staat in §13, de besli
 
 | Bouwsteen | Waar | Wat we eraan hebben |
 |---|---|---|
-| Berichten: gesprekken, Ongelezen, Niet gekoppeld, zoeken, filters, tickets ertussen | `src/features/Communication.tsx` (`CommunicationPage`, `ThreadPane`, `ComposePane`), `src/lib/communication.ts` | Het scherm bestaat. Mailboxmail wordt gewoon een gesprek. |
-| Klantmail in de database | `client_email_threads`, `client_emails` (`20260620000003_client_emails.sql`), leesstatus per persoon in `client_email_reads`, view `client_email_thread_overview`, `search_client_emails` | Zelfde tabellen. Er komen kolommen bij, geen tweede postvak. |
-| Inkomende mail: ontdubbelen, klant zoeken, gesprek kiezen, opvangbak | `register_inbound_message`, `resolve_inbound_client`, `pick_client_email_thread`, `inbound_messages` (`20260815000000_inbound_doorstuuradres.sql`) | De slimste stukken zijn er al, in SQL. De nieuwe ingang gebruikt ze opnieuw. |
-| MIME lezen | `postal-mime` in `workers/email-inbound` | Werkt in Node én in Deno: één parser voor Microsoft en IMAP. |
-| HTML van klanten veilig tonen | `src/lib/sanitizeHtml.ts` (`sanitizeInboundEmailHtml`, blokkeert afbeeldingen) | Ongewijzigd bruikbaar. |
-| Microsoft-login met Graph | `_shared/calendarOAuth.ts` (state met HMAC, terugkeeradres gecontroleerd, code pas inwisselen met de sessie van de gebruiker), `_shared/calendarCore.ts` (`refreshAccessToken`, `classifyTokenFailure`) | Het hele OAuth-patroon is er en is al eens gehard (`CHANGELOG_CALENDAR_OAUTH_PUBLIC_CALLBACK_STATE_HARDENING_2026-05-26.md`). |
-| Geheimen versleutelen | AES-GCM in `_shared/webhooks.ts:206` (`encryptSecret`/`decryptSecret`, sleutel als argument), twee kopieën in `calendarCore.ts` en `mollieSecrets.ts` | Wordt één gedeelde module die ook in Node draait. |
-| Wachtrij met `FOR UPDATE SKIP LOCKED` | `claim_webhook_deliveries` (`20261003010000_webhooks.sql`): pogingen, `next_attempt_at`, vastgelopen rijen terugpakken | Sjabloon voor de verzendwachtrij en de leases. |
-| Bestanden op R2 vanuit de server | `storeInboxAttachment` in `_shared/invoiceInbox.ts` → media-worker `/internal/media` | Bijlagen van mailboxmail gaan dezelfde weg. |
+| Berichten: gesprekken, Ongelezen, Niet gekoppeld, zoeken, filters, tickets ertussen | `src/features/Communication.tsx`, `src/lib/communication.ts` | Het scherm bestaat. Mailboxmail wordt gewoon een gesprek. |
+| Klantmail in de database | `client_email_threads`, `client_emails`, `client_email_reads`, view `client_email_thread_overview`, `search_client_emails` | Zelfde tabellen. Er komen kolommen bij, geen tweede postvak. |
+| Inkomende mail: ontdubbelen, klant zoeken, gesprek kiezen, opvangbak | `register_inbound_message`, `resolve_inbound_client`, `pick_client_email_thread`, `inbound_messages` (`20260815000000`) | De slimste stukken zijn er al, in SQL. De nieuwe ingang gebruikt ze opnieuw. |
+| Bekeken door de klant | `client_viewed`-gebeurtenissen in `quote-public`, `invoice-public` en `contract-public` (hooguit één per tien minuten) | De vervanger van de trackingpixel. |
+| MIME lezen en HTML veilig tonen | `postal-mime` (`workers/email-inbound`), `src/lib/sanitizeHtml.ts` | Werkt in Node én Deno; ongewijzigd bruikbaar. |
+| Microsoft-login met Graph | `_shared/calendarOAuth.ts`, `_shared/calendarCore.ts` (`refreshAccessToken`, `classifyTokenFailure`) | Het OAuth-patroon is er en is al gehard. |
+| Geheimen versleutelen | AES-GCM in `_shared/webhooks.ts:206` (twee kopieën in `calendarCore.ts` en `mollieSecrets.ts`) | Wordt één gedeelde module die ook in Node draait. |
+| Wachtrij met `FOR UPDATE SKIP LOCKED` | `claim_webhook_deliveries` (`20261003010000`) | Sjabloon voor het verzendregister en de leases. |
+| Status naar de bron spiegelen | De trigger die status van `client_emails` naar campagnes en stromen kopieert | Zelfde patroon: `mail_sends` → `invoice_email_deliveries` enzovoort. |
+| Bestanden op R2 vanuit de server | `storeInboxAttachment` (`_shared/invoiceInbox.ts`) → media-worker `/internal/media` | Bijlagen, ingelezen mail en "zoals verstuurd". |
 | Een Node-container op Cloudflare | `workers/office-server` (Worker + Durable Object + Container) | Het deploypatroon voor de mail-engine. |
-| Verzendlimiet per organisatie | `email_quota_take`, `organization_email_limits` (200 per uur, 1000 per dag) | Geldt ook voor versturen via de mailbox. |
-| Vertrek van een teamlid zet koppelingen uit | `disable_integrations_on_member_exit` (`20261101020000`) | Uitbreiden met persoonlijke mailboxen. |
-| Logboek, exportmanifest | `audit_row_change`, `audit_logs_action_check`, `src/lib/exportManifest.ts` | Nieuwe tabellen krijgen daar meteen hun plek. |
+| SSRF-bescherming | `isPrivateIpv4`/`isPrivateIpv6` (`_shared/webhooks.ts`), vastgepind adres (`_shared/webhookTransport.ts`) | Voor de IMAP- en SMTP-server die een klant invult. |
+| Verzendlimiet, logboek, exportmanifest, vertrek van een teamlid | `email_quota_take`, `audit_row_change`, `src/lib/exportManifest.ts`, `disable_integrations_on_member_exit` | Nieuwe tabellen krijgen daar meteen hun plek. |
 
-**Wat er niet is:**
+---
 
-- Geen enkele verbinding met een mailbox. Mail komt binnen op `reply+…@inbound.resofly.com` of via een
-  doorstuurregel die de klant zelf moet instellen.
-- **ResoFly zet bij uitgaande mail geen eigen `Message-ID`, `In-Reply-To` of `References`.** Resend
-  kiest zelf een `Message-ID`, maar die wordt niet bewaard. Het commentaar bij de kolom belooft dat
-  `resend-webhook` hem vult, maar dat gebeurt nergens. Antwoorden vinden hun gesprek nu via het `reply+`-adres. Met een eigen mailbox bestaat dat
-  adres niet meer, dus de koppen moeten kloppen.
-- De route met een `reply+`-token kiest het gesprek opnieuw in plaats van het gesprek van het
-  oorspronkelijke bericht te nemen, en `in_reply_to` wordt opgeslagen maar nergens gebruikt.
-- `client_emails` kent één `to_email`, geen cc en geen bijlagen. Van inkomende mail bewaren we alleen
-  de namen van bijlagen.
-- Gerrie stuurt `sendClientEmail` zonder `threadId`. Elke mail van Gerrie begint dus een nieuw gesprek.
+## 2 · Wat er nu gebeurt als ResoFly mailt
 
-## 2 · Waarom nu wel (in juli bewust niet)
+ResoFly verstuurt mail op **28 plekken**. Elke plek bouwt zelf een bericht voor Resend en roept
+`api.resend.com` zelf aan. Er bestaan vier kopieën van een `sendViaResend`-functie, en acht plekken
+gebruiken er geen enkele.
+
+| Groep | Verzendpunten (bestand) | Wordt nu vastgelegd in |
+|---|---|---|
+| **Documenten naar de klant** | factuur, herinnering, aanmaning, creditnota (`invoice-workflow`); offerte (`quote-workflow`); contract, getekende kopie (`contract-workflow`, `contract-public`) | `invoice_email_deliveries`, `quote_email_deliveries`, `contract_email_deliveries`. De creditnota en de getekende kopie alleen als gebeurtenis. |
+| **Klantmail** | vrije mail, Gerrie-voorstel, portaalwelkom (`mail`) | `client_emails`; het welkom nergens |
+| **Afspraken** | boekingslink, bevestiging (`meeting-booking`, `meeting-booking-public`); uitnodiging en annulering met ICS (`_shared/calendarEventWrite.ts`); gespreksverslag (`meeting-transcribe`) | deels (`calendar_event_attendees.invited_at`, `summary_sent_at`), deels nergens |
+| **Bestanden** | zending, toegangscode (`_shared/fileTransferServer.ts`, `file-transfer-public`); gedeeld bestand (`file-share`) | `file_transfer_recipients`, `drive_shares.notified_at` |
+| **Klantportaal** | inlogcode (`portal-login`); ticketupdates (`portal-notify`) | `portal_login_requests`, `portal_ticket_activity` |
+| **Marketing** | campagnes, campagnetest, stromen (`campaigns`) | `email_campaign_recipients`, `email_flow_sends`, `client_emails` |
+| **Aan het eigen team** | "contract getekend", nieuwe boeking, testmail, uitnodiging teamlid, domeinmelding, Gerrie-agentrapport | meestal nergens |
+
+**Wat daaraan opvalt:**
+
+- **Er is geen centrale verzender.** Elke wijziging (een andere afzender, een kop erbij) moet op 28
+  plekken.
+- **De afzender** komt bijna overal uit `resolveSenderIdentity` (`_shared/sendingDomain.ts`). De
+  uitzonderingen:
+  - de agenda heeft een eigen kopie (`resolveOrgSender`);
+  - de domeinmelding en de Gerrie-agent gebruiken een vast adres, de agent zelfs een andere
+    variabele (`RESEND_FROM` in plaats van `RESEND_FROM_EMAIL`).
+- **Bijlagen.** Factuur, offerte, contract, herinnering, aanmaning en creditnota gaan als PDF mee
+  (tot 8 MB), bij e-facturatie met UBL erbij. Het logo zit er als inline-afbeelding (`cid`) in. Een
+  uitnodiging heeft een `invite.ics`.
+- **Status uit `resend-webhook`.** De webhook werkt facturen, offertes, klantmail, zendingen en
+  portaal-bounces bij. **Contracten, creditnota's, afspraken, verslagen en gedeelde bestanden krijgen
+  nooit een status.**
+- **Wat ervan afhangt:**
+  - de labels *Afgeleverd*, *Geopend* en *Gebounced* in Financiën (`Finance.tsx:1393`) en bij
+    klantmail (`ClientEmailMessage.tsx`);
+  - het Gerrie-signaal "offerte geopend, geen reactie" (`ai_signal_quote_delivery_opened`, op
+    `quote_email_deliveries.opened_at`);
+  - het overslaan van adressen die bouncen (`email_suppressions`) bij het portaal en bij marketing.
+- **Kleine gaten**, die meteen mee kunnen:
+  - de inlogcode van het portaal en de annulering van een afspraak tellen niet mee voor de
+    verzendlimiet;
+  - de toegangscode van een zending en het gespreksverslag hebben een `Idempotency-Key` met
+    `Date.now()` of een willekeurige waarde, en beschermen dus niet tegen dubbel versturen.
+- **Threading.**
+  - ResoFly zet bij uitgaande mail geen eigen `Message-ID`, `In-Reply-To` of `References`. Resend
+    kiest zelf een `Message-ID`, maar die wordt niet bewaard.
+  - Antwoorden vinden hun gesprek nu alleen via het `reply+`-adres. Met een eigen mailbox bestaat dat
+    adres niet meer.
+  - De route met een `reply+`-token kiest het gesprek bovendien opnieuw in plaats van het gesprek van
+    het oorspronkelijke bericht te nemen.
+- **Uitnodigingen.** Een uitnodiging uit een ResoFly-agenda heeft als organisator
+  `organizer+<token>@inbound.resofly.com`. Dat is het "doorstuuradres" dat een klant in zijn agenda
+  ziet.
+
+---
+
+## 3 · Waarom nu wel (in juli bewust niet)
 
 `20260721020000_user_sender_identities.sql` zegt het letterlijk: *"GEEN mailbox-koppeling (bewust:
-Gmail/Microsoft-OAuth eerder afgewezen)"*. De reden staat er niet bij. Sindsdien is er wel veel
-veranderd:
+Gmail/Microsoft-OAuth eerder afgewezen)"*. De reden staat er niet bij. Wat sindsdien veranderd is:
 
-- **Resend schaalt niet als verzenddomein voor iedereen.** Alle organisaties delen één Resend-account,
-  en Resend Pro heeft 10 domeinen (`CHANGELOG_EIGEN_VERZENDDOMEIN_2026-11-06.md`). Een gekoppelde
-  mailbox heeft geen Resend-domein nodig.
-- **De helft van het gesprek ontbreekt.** Wat de ondernemer vanuit Outlook naar een klant stuurt, ziet
-  ResoFly nooit. Wat ResoFly verstuurt, staat niet in diens eigen map Verzonden. Voor een CRM is dat
-  het belangrijkste gemis.
-- **Microsoft zet wachtwoorden voor mail uit.** IMAP en POP met een wachtwoord werken bij Exchange
-  Online al sinds oktober 2022 niet meer. SMTP met een wachtwoord gaat vanaf december 2026 standaard
-  uit, en de definitieve datum volgt in 2027 (Microsoft Message Center MC786329). Wie Outlook
-  gebruikt, kan dus alleen nog via OAuth. Daarom moet Microsoft via Graph.
-- **De bouwstenen zijn er nu.** Microsoft-OAuth (agenda, november), een Node-container op Cloudflare
-  (Office-server) en een wachtrijpatroon (webhooks, push) bestonden in juli nog niet of niet zo.
+- **Professioneel overkomen.** Een factuur van `administratie@jansen.nl` die ook in de map Verzonden
+  van Jansen staat, en waarop de klant gewoon kan antwoorden, is wat een ondernemer verwacht. Het
+  huidige alternatief heeft drie onderdelen die een klant ziet of moet regelen: een `reply+`-adres,
+  een doorstuurregel en een organisator `organizer+…`.
+- **Aankomen.** Mail uit je eigen mailbox is al goed ondertekend (SPF, DKIM, DMARC van je eigen
+  domein). Er hoeven geen DNS-records bij Resend gezet te worden, en spamfilters zien het
+  vertrouwde verkeer van jouw domein.
+- **Resend schaalt niet als verzenddomein voor iedereen.** Alle organisaties delen één account, en
+  Resend Pro heeft 10 domeinen (`CHANGELOG_EIGEN_VERZENDDOMEIN_2026-11-06.md`). Met een gekoppelde
+  mailbox is een eigen verzenddomein alleen nog nodig voor marketing.
+- **De helft van het gesprek ontbreekt nu.** Wat de ondernemer vanuit Outlook aan een klant stuurt,
+  ziet ResoFly nooit.
+- **Microsoft zet wachtwoorden voor mail uit.**
+  - IMAP met een wachtwoord werkt bij Exchange Online al sinds oktober 2022 niet meer.
+  - SMTP met een wachtwoord gaat vanaf december 2026 standaard uit (Message Center MC786329).
 
-De gebruikelijke bezwaren (wachtwoorden bewaren, de Google-audit, een proces dat altijd draait,
-privacy) komen hieronder elk aan bod: §6, §11 en §15.
-
----
-
-## 3 · Wat je straks ziet
-
-**Instellingen → E-mail → Mailboxen** (bovenaan het tabblad, boven het doorstuuradres):
-
-- *Mailbox koppelen* → twee knoppen: **Microsoft 365 / Outlook** en **Andere mailbox**.
-- Bij Microsoft: inloggen bij Microsoft, toestemming geven, klaar. Moet een beheerder van jouw bedrijf
-  eerst toestemming geven, dan zegt het scherm dat in gewone woorden. Je krijgt dan een link die je
-  naar je IT-beheerder stuurt.
-- Bij een andere mailbox: je e-mailadres en wachtwoord. ResoFly zoekt de server erbij. Lukt dat niet,
-  dan vul je hem zelf in, met hulp per hoster. *Verbinding testen* laat per stap zien wat lukt:
-  inloggen ✓, map Verzonden gevonden ✓, versturen ✓.
-- Daarna drie keuzes, met een uitleg ernaast:
-  - **Wat haal je binnen?** *Alleen mail van en naar klanten* (standaard) of *alle mail* (handig voor
-    info@).
-  - **Vanaf wanneer?** De afgelopen 30 dagen, 90 dagen (standaard) of een jaar.
-  - **Wie mag vanaf dit adres versturen?** Alleen jij (een persoonlijke mailbox) of het team (een
-    gedeelde mailbox).
-- Per mailbox zie je de status in gewone woorden: *Bezig met inlezen: 1.240 van 3.900*, *Bijgewerkt
-  om 10:42*, *Koppeling verlopen — verbind opnieuw*. Verder kun je hem pauzeren, ontkoppelen en een
-  handtekening instellen.
-
-**Berichten:**
-
-- Mail uit de mailbox staat tussen de andere gesprekken. Heeft de organisatie meer dan één mailbox,
-  dan staat er een klein label bij (`info@`) en kun je erop filteren.
-- **Beantwoorden** vult *Van* met de mailbox waarop het gesprek binnenkwam. Bij **Nieuw bericht** staat
-  je eigen mailbox voorgeselecteerd. In de lijst staan alleen mailboxen waarvan jij mag versturen, plus
-  "ResoFly-afzender" (de huidige weg via Resend).
-- Bijlagen staan onder het bericht en zijn te downloaden. Afbeeldingen in de mail blijven geblokkeerd
-  tot je op *Afbeeldingen tonen* klikt, zoals nu.
-- Wat je vanuit Outlook aan een klant stuurde, staat ook in het gesprek, met *Verstuurd vanuit je
-  mailbox*.
-- Lukt versturen niet, dan staat de reden bij het bericht met *Opnieuw proberen*. Bij een mailbox van
-  een hoster zie je even *Wordt verstuurd…*.
-- Werkt een koppeling niet meer, dan zie je dat bovenaan Berichten en op de beslislijst. Alleen wie de
-  mailbox beheert, krijgt de knop *Opnieuw verbinden*.
-
-**Klantdossier → Communicatie:** dezelfde mail, dezelfde knoppen.
+  Outlook kan dus alleen via OAuth, en daarom via Graph.
+- **De bouwstenen zijn er nu**: Microsoft-OAuth (agenda), een Node-container (Office-server) en een
+  wachtrijpatroon (webhooks, push).
 
 ---
 
-## 4 · Hoe het in elkaar zit
+## 4 · Wat je straks ziet
+
+**Inrichten** (`OrganizationSetup`) krijgt een stap *Koppel je mailbox*, met twee knoppen:
+**Microsoft 365 / Outlook** en **Andere mailbox**. Daarna één vraag: *Wil je voortaan alles naar je
+klanten vanaf dit adres versturen?* Ja zet alle soorten mail op deze mailbox.
+
+**Instellingen → E-mail** krijgt drie delen, in deze volgorde:
+
+1. **Mailboxen**
+   - De gekoppelde mailboxen, met hun status in gewone woorden: *Bijgewerkt om 10:42*, *Bezig met
+     inlezen: 1.240 van 3.900*, *Koppeling verlopen — verbind opnieuw*.
+   - Per mailbox:
+     - Is hij *van jou* (persoonlijk) of *van de organisatie* (gedeeld)?
+     - Wat haal je binnen: *alleen mail van en naar klanten* (standaard) of *alle mail*?
+     - Vanaf wanneer: 30 dagen, 90 dagen (standaard) of een jaar?
+     - Wie mag ervan versturen?
+     - Je handtekening; pauzeren; ontkoppelen.
+   - Microsoft vraagt soms eerst toestemming van een beheerder. Het scherm zegt dat dan in gewone
+     woorden en geeft een link die je naar je IT-beheerder stuurt.
+2. **Verzenden: wat gaat via welke mailbox**
+
+   | Soort | Verstuurd vanaf | Als de mailbox niet werkt |
+   |---|---|---|
+   | Klantmail (Berichten, klantdossier) | de mailbox van wie verstuurt | niet versturen, laten zien |
+   | Offertes en contracten | de mailbox van wie verstuurt | via ResoFly, met melding |
+   | Facturen, herinneringen, aanmaningen, creditnota's | `administratie@jansen.nl` | via ResoFly, met melding |
+   | Afspraken en uitnodigingen | de mailbox van wie de afspraak heeft | via ResoFly, met melding |
+   | Bestanden | de mailbox van wie verstuurt | via ResoFly, met melding |
+   | Klantportaal (meldingen en inlogcodes) | `info@jansen.nl` | via ResoFly, direct |
+   | Marketing | ResoFly (je verzenddomein) | — |
+
+   Per regel kies je een gedeelde mailbox, *de mailbox van wie verstuurt*, of *ResoFly*. Bij *als de
+   mailbox niet werkt* kies je *via ResoFly* of *wachten tot hij weer werkt*. Alleen de eigenaar en de
+   beheerders mogen dit instellen.
+3. **Zonder mailbox** (ingeklapt als er een mailbox is): het verzenddomein bij ResoFly (nodig voor
+   marketing) en het doorstuuradres.
+
+**Berichten en het klantdossier:**
+
+- Mailboxmail staat tussen de andere gesprekken, met een label (`info@`) als er meer mailboxen zijn,
+  en een filter.
+- **Beantwoorden** vult *Van* met de mailbox waarop het gesprek binnenkwam. In de lijst staan alleen
+  mailboxen waarvan jij mag versturen.
+- Wat je vanuit Outlook aan een klant stuurde, staat er ook in.
+- **Documentgesprekken.** De factuurmail, de herinneringen en het antwoord van de klant vormen samen
+  het gesprek *Factuur 2026-014*, met een knop naar de factuur.
+  - In het klantdossier staan ze altijd.
+  - In Berichten verschijnen ze pas als de klant antwoordt, of via het filter *Soort: documenten*.
+    Zo vult een herinneringsronde Berichten niet met honderd gesprekken.
+- Bijlagen staan onder het bericht. Afbeeldingen blijven dicht tot *Afbeeldingen tonen*.
+- Werkt een koppeling niet meer, dan staat dat bovenaan Berichten en op de beslislijst.
+
+**Financiën, offertes, contracten.** Bij elke verzending staat:
+
+- *Verstuurd vanuit administratie@jansen.nl om 10:42*, of *Verstuurd via ResoFly; de mailbox werkte
+  niet (koppeling verlopen)*;
+- *Bekeken door de klant op 12 nov om 9:15* (de pagina, zie §8);
+- *Kwam niet aan: het adres bestaat niet* bij een bounce, met *Opnieuw versturen naar ander adres*.
+
+---
+
+## 5 · Welke mail via de mailbox gaat
+
+| Groep | Via de mailbox? | Waarom |
+|---|---|---|
+| Documenten naar de klant (factuur, herinnering, aanmaning, creditnota, offerte, contract, getekende kopie) | **Ja** | De kern van "professioneel". De PDF en UBL gaan als bijlage mee, zoals nu. |
+| Klantmail, portaalwelkom | **Ja** | Gesprekken horen in je eigen mailbox. |
+| Afspraken: boekingslink, bevestiging, gespreksverslag | **Ja** | Komt van degene met wie de klant de afspraak heeft. |
+| Uitnodiging en annulering (ICS) uit een ResoFly-agenda | **Ja** (fase 5) | De organisator wordt je echte adres in plaats van `organizer+…`. Antwoorden (geaccepteerd, afgewezen) komen in je mailbox, en de synchronisatie geeft ze door aan de bestaande verwerking. Bij een gekoppelde Outlook-agenda stuurt Exchange de uitnodiging al zelf. |
+| Bestanden: zending, gedeeld bestand | **Ja** | Zelfde reden als klantmail. |
+| Toegangscode zending, inlogcode portaal | **Ja**, niet in Verzonden, met directe terugval | Moet binnen seconden aankomen. Een code in je Verzonden heeft geen nut en is een risico. |
+| Ticketupdates portaal | **Ja** | Komt van het adres van de organisatie. Een bounce zet het adres op de lijst om over te slaan, zoals nu. |
+| Marketing: campagnes, stromen | **Nee** | Bulk door een gewone mailbox gaat mis: Microsoft staat 10.000 ontvangers per dag toe, hosters veel minder. Eén spamklacht schaadt de naam van het domein waar ook je facturen vandaan komen. Afmelden met één klik (`List-Unsubscribe`) hoort bij een verzenddienst. Een eigen verzenddomein bij Resend blijft hiervoor de weg. |
+| Aan het eigen team (contract getekend, nieuwe boeking, testmail, uitnodiging teamlid, domeinmelding, Gerrie-agent) | **Nee** | Dit is ResoFly die met jou praat, niet de organisatie met haar klant. |
+
+**Terugval.** Werkt een mailbox niet (status `needs_reauth` of `error`), of mislukt het versturen
+definitief, dan geldt de keuze van §4:
+
+- **Klantmail valt nooit stil terug.** Je ziet de fout, met *Toch versturen via ResoFly*.
+- **Documenten, afspraken, bestanden en portaal** gaan via ResoFly, met:
+  - `Reply-To` naar het adres van de mailbox, zodat het antwoord toch bij jou komt;
+  - de reden bij de verzending;
+  - een melding aan de beheerders.
+
+  Wie dat niet wil, kiest *wachten*. De mail blijft dan in de wachtrij tot de mailbox weer werkt.
+- **Codes** wachten hooguit 10 seconden op de mailbox en gaan anders direct via ResoFly. Een klant die
+  wil inloggen, wacht niet.
+
+---
+
+## 6 · Hoe het in elkaar zit
 
 ```
- App: Berichten · klantdossier · Instellingen → E-mail
-   │ koppelen, instellingen            │ versturen ("Van: jan@…")
-   ▼                                   ▼
- edge: mailboxes                     edge: mail  (sendClientEmail, bestaand)
- OAuth Microsoft, IMAP-gegevens,       ├─ Resend ............................ zoals nu
- test, ontkoppelen                     ├─ Microsoft Graph ................... direct, synchroon
-   │                                   └─ IMAP/SMTP → mailbox_outbox ──┐
-   ▼                                                                    │ seintje
- Postgres: mailboxes · mailbox_secrets (versleuteld) · client_emails    │
-           inbound_messages · client_email_attachments                  ▼
-   ▲  register_mailbox_message (één ingang)      workers/mail-engine
-   │                                             Worker + Container (Node 22)
- edge: mailbox-sync                              imapflow · nodemailer · postal-mime
- Microsoft: meldingen, delta, verlengen          leases, wachtrij, IDLE
-   ▲                                               │ IMAP 993     │ SMTP 465/587
- Microsoft Graph                                   └── server van de hoster ──┘
+ App: Berichten · klantdossier · Financiën · Instellingen → E-mail
+   │ koppelen                        │ elke verzendknop, elke cron
+   ▼                                 ▼
+ edge: mailboxes            de 28 verzendpunten (invoice-workflow, quote-workflow, mail, …)
+ OAuth, IMAP-gegevens,               │
+ test, ontkoppelen                   ▼
+   │                        _shared/mail/sendOrgMail ── kiest de weg, bouwt de MIME,
+   │                                 │                   legt vast in mail_sends
+   │                                 ├─ Resend .......................... zoals nu
+   │                                 ├─ Microsoft Graph ................. direct of via de wachtrij
+   │                                 └─ IMAP/SMTP → wachtrij → mail-engine
+   ▼                                                              │
+ Postgres: mailboxes · mailbox_secrets · organization_mail_routes │ seintje
+           mail_sends · client_emails · inbound_messages          ▼
+   ▲  register_mailbox_message (één ingang)     workers/mail-engine
+   │                                            Worker + Container (Node 22)
+ edge: mailbox-sync                             imapflow · nodemailer · postal-mime
+ Microsoft: meldingen, delta, wachtrij          leases, IDLE, wachtrij, bounces
+   ▲                                              │ IMAP 993   │ SMTP 465/587
+ Microsoft Graph                                  └─ server van de hoster ─┘
 ```
-
-**Onderdelen:**
 
 | Onderdeel | Soort | Doet |
 |---|---|---|
-| `mailboxes` | edge function (nieuw) | Microsoft koppelen (start, terugkeer, afronden), IMAP-gegevens opslaan en laten testen, instellingen, pauzeren, ontkoppelen. Rechten uit de sessie. |
-| `mailbox-sync` | edge function (nieuw, `verify_jwt = false`) | Microsoft: meldingen van Graph ontvangen, de nieuwe mail ophalen met delta, abonnementen verlengen, het eerste inlezen in porties. Elke minuut een cron (`?cron=tick`, `x-cron-secret`). |
-| `mail` | edge function (bestaand) | `sendClientEmail` krijgt `mailboxId`. Microsoft verstuurt direct, IMAP gaat via de wachtrij, Resend blijft zoals het is. |
-| `workers/mail-engine` | Cloudflare Worker + Container (nieuw) | Alles met IMAP en SMTP: verbindingen openhouden, nieuwe mail ophalen, versturen, kopie in Verzonden zetten, verbinding testen. |
-| `register_mailbox_message` | SQL-functie (nieuw, alleen service-role) | De ene ingang: ontdubbelen, gesprek kiezen, klant koppelen, opslaan, opvangbak. |
-| media-worker | bestaand | Bijlagen en het originele bericht op R2, onder `<orgId>/client_mail/…`. |
+| `_shared/mail/` | gedeelde code, zonder runtime-imports | `sendOrgMail`, de routekeuze, de MIME-bouwer, `secretBox`, adressen normaliseren, foutteksten. Ook bruikbaar in de engine (Node), getest met `deno test` én `node --test`. |
+| `mailboxes` | edge function (nieuw) | Koppelen (Microsoft-OAuth, IMAP-gegevens), testen, instellingen, routes, ontkoppelen. |
+| `mailbox-sync` | edge function (nieuw, `verify_jwt = false`) | Microsoft: meldingen van Graph, delta, abonnementen verlengen, het eerste inlezen. Verder de wachtrij van Microsoft-mailboxen. Een cron elke minuut. |
+| `workers/mail-engine` | Worker + Container (nieuw) | Alles met IMAP en SMTP: verbindingen, IDLE, nieuwe mail, versturen, `APPEND` in Verzonden, testen. |
+| `register_mailbox_message` | SQL (nieuw, alleen service-role) | De ene ingang voor binnenkomende mail. |
+| `mail_sends` | tabel (nieuw) | Het verzendregister en de wachtrij: elke mail die ResoFly namens een organisatie verstuurt, via welke weg ook. |
+| `resend-webhook` | bestaand | Werkt `mail_sends` bij naast de tabellen die hij nu bijwerkt. |
 
-**Waarom deze verdeling.** Overwogen en afgevallen:
+**Waarom deze verdeling.**
 
 | Alternatief | Waarom niet |
 |---|---|
-| Alles in edge functions, ook IMAP | Een edge function leeft per aanroep, met een tijdslimiet: geen IDLE en geen verbinding die openblijft. Volgens de documentatie van Supabase mogen ze niet naar poort 25 en 587, en 587 is bij veel hosters de verzendpoort. |
-| IMAP in een gewone Cloudflare Worker (`node:net`) | Een TCP-socket leeft maar zo lang als het verzoek, en imapflow is gebouwd voor Node. Om één verbinding per mailbox open te houden zou je een Durable Object per mailbox nodig hebben: duur en broos. |
-| Ook Microsoft in de mail-engine | Kan, en geeft één plek voor alle synchronisatie. Maar dan hangt Microsoft, waarschijnlijk de grootste groep, aan de container. Graph is gewoon HTTPS, en de agenda doet het al vanuit edge functions. Microsoft kan zo eerst live, zonder nieuwe infrastructuur. |
-| Een dienst als Nylas of Unipile | Snel, maar duur per mailbox, een extra verwerker met toegang tot alle klantmail, en het is niet wat je vroeg. |
-
-Wat Microsoft en IMAP wél delen, staat op één plek:
-
-- **`supabase/functions/_shared/mailbox/`**, zonder runtime-imports (zoals `lib/communication.ts`).
-  Daarin: adressen normaliseren, de payload voor `register_mailbox_message` bouwen, de MIME-bouwer
-  aanroepen, versleutelen (WebCrypto, werkt in Deno én Node 22) en de foutteksten. De mail-engine
-  importeert dezelfde bestanden; de tests draaien in `deno test` én `node --test`.
-- **`register_mailbox_message`** in SQL: alle beslissingen over gesprek en klant.
+| Alles in edge functions, ook IMAP | Een edge function leeft per aanroep: geen IDLE, geen verbinding die openblijft. Poort 587 is dicht volgens de documentatie van Supabase. |
+| IMAP in een gewone Worker (`node:net`) | Een socket leeft maar zo lang als het verzoek. Een verbinding per mailbox openhouden kost een Durable Object per mailbox. |
+| Ook Microsoft in de mail-engine | Dan hangt de grootste groep aan de container. Graph is HTTPS, en de agenda doet het al vanuit edge functions. |
+| Alleen klantmail via de mailbox (de eerste versie) | Voor de klant van je klant blijft het dan een mengsel: de factuur van ResoFly, het antwoord naar `reply+`. Precies wat je niet wilt. |
+| Een dienst als Nylas of Unipile | Duur per mailbox, een extra verwerker met toegang tot alle klantmail, en niet wat je vroeg. |
 
 ---
 
-## 5 · Microsoft 365 via Graph
+## 7 · De verzendlaag: één functie, één register
 
-### 5.1 De app bij Microsoft
+### 7.1 `sendOrgMail`
 
-- Een **aparte app-registratie "ResoFly Mail"** in Entra, niet de agenda-app uitbreiden.
+Alle verzendpunten roepen voortaan één functie aan in `_shared/mail/sendOrgMail.ts`:
+
+```ts
+await sendOrgMail(admin, {
+  organizationId,
+  kind: 'invoice',                 // welke soort (bepaalt de route en de module)
+  requestedBy: userId ?? null,     // null = automatisch (cron, openbare pagina)
+  clientId,                        // voor het documentgesprek en de rechten
+  to: [{ email, name }], cc: [],
+  subject, html, text,
+  attachments,                     // PDF, UBL, ICS, logo (cid)
+  thread: { sourceKind: 'invoice', sourceId: invoiceId },   // of { threadId } bij klantmail
+  idempotencyKey: `invoice-${invoiceId}-${deliveryId}`,
+  record: { table: 'invoice_email_deliveries', id: deliveryId },
+  urgency: 'interactive',          // 'code' | 'interactive' | 'batch'
+});
+// → { sendId, transport: 'mailbox' | 'resend', mailboxId, status: 'sent' | 'queued', fromEmail, messageId }
+```
+
+Wat de functie doet:
+
+1. **De route kiezen** (`resolveMailRoute`): de regel van `organization_mail_routes` voor deze soort.
+   - *De mailbox van wie verstuurt*: de persoonlijke mailbox van `requestedBy`, als die bestaat en
+     werkt.
+   - Een vaste mailbox: die mailbox, als hij werkt.
+   - Anders de terugval van §5.
+   - Zonder gekoppelde mailbox verandert er niets: Resend met `resolveSenderIdentity`, zoals nu.
+2. **De afzender** is altijd het adres van de mailbox. Er is geen vrij `From`; zo kan niemand via
+   ResoFly als een ander versturen. De naam erbij komt uit de route ("Jansen Fotografie —
+   Administratie").
+3. **Het bericht** bouwt één MIME-bouwer, de `MailComposer` van nodemailer:
+   - wij zetten `Message-ID` (`<uuid@domein-van-de-mailbox>`), `X-ResoFly-Id: <sendId>`, en bij een
+     antwoord of een herinnering `In-Reply-To` en `References`;
+   - de huisstijl (`withEmailBrand`) en het logo als `cid` blijven zoals nu;
+   - de handtekening van de mailbox komt eronder.
+
+   Het bericht gaat als `.eml` naar R2 (`<orgId>/mail_sends/<sendId>.eml`). Dat is de kopie *zoals
+   verstuurd*, en de wachtrij leest hem daar.
+4. **Vastleggen** in `mail_sends`, met `status = 'queued'`.
+5. **Versturen.**
+   - Bij `interactive` en `code` probeert de functie het meteen, dus Microsoft direct vanuit de edge
+     function. Bij IMAP stuurt hij een seintje aan de engine en wacht hij hooguit een paar seconden
+     op het resultaat.
+   - Bij `batch` (herinneringen, aanmaningen, portaalmeldingen) blijft de mail in de wachtrij. Het
+     tempo per mailbox regelt de rest.
+6. **De status** `sent` of `failed` gaat via een trigger terug naar de bron (`record`), zoals de
+   status nu van `client_emails` naar campagnes gaat. De bestaande `begin_`/`complete_`-functies van
+   facturen en offertes blijven het verloop van het document bepalen.
+
+### 7.2 Tempo, voorrang en nooit dubbel
+
+- **Tempo per mailbox.**
+  - Microsoft staat 30 berichten per minuut en 10.000 ontvangers per dag toe; wij houden 25 per
+    minuut aan.
+  - Hosters hebben eigen grenzen. We beginnen voorzichtig (standaard 60 per uur, aan te passen per
+    preset) en remmen af bij een SMTP-fout `421` of `4xx` met *rate*.
+
+  Een herinneringsronde van 200 facturen duurt via Microsoft dus zo'n 8 minuten. Dat is prima voor
+  een cron, en het scherm zegt *Wordt verstuurd (34 van 200)*.
+- **Voorrang:** eerst codes, dan wat iemand net met de hand verstuurde, dan rondes.
+- **Nooit dubbel.**
+  - De `idempotencyKey` is uniek per organisatie: twee keer op *Versturen* klikken geeft één mail.
+  - Een rij die na een crash op `sending` blijft staan, wordt pas opnieuw verstuurd nadat de map
+    Verzonden is doorzocht op de `Message-ID`.
+  - De bestaande sleutels met `Date.now()` of een willekeurige waarde worden vaste sleutels.
+- **De verzendlimiet** (`email_quota_take`) geldt voor elke route, ook voor de inlogcode en de
+  annulering, die nu niet meetellen.
+- **In Verzonden.** Microsoft zet de kopie er zelf in. Bij IMAP doet de engine een `APPEND` van
+  dezelfde bytes. Codes gaan niet naar Verzonden (`saveToSentItems: false`, geen `APPEND`).
+
+### 7.3 Zonder gedragswijziging overstappen
+
+De verzendpunten raken facturen en betalingen. `_shared/resend.ts` noemt de functie `mail` zelfs
+bewust "betaalkritisch" en wilde hem niet aanraken. Daarom gaat de overstap in twee stappen:
+
+1. **Eerst alles via `sendOrgMail`, met alleen Resend als weg** (fase 1). Een gouden test legt per
+   verzendpunt de Resend-payload van nu vast (afzender, ontvangers, onderwerp, bijlagen, tags,
+   idempotentiesleutel). Na de overstap moet de payload hetzelfde zijn. Alleen de kleine gaten van §2
+   worden bewust gerepareerd, met een eigen test.
+2. **Dan pas de mailbox als weg erbij** (fase 2 en 3), per soort, achter de schakelaar.
+
+---
+
+## 8 · Bezorging en status zonder Resend
+
+Via een mailbox weet ResoFly minder dan via Resend. Dit is wat we wel weten en hoe het scherm het
+zegt:
+
+| Nu (Resend) | Via de mailbox | In het scherm |
+|---|---|---|
+| Verstuurd | De server van Microsoft of de hoster nam het bericht aan | *Verstuurd vanuit administratie@…* |
+| Afgeleverd | Niet te weten | Niet meer tonen bij mailboxmail |
+| Geopend (pixel) | Geen pixel | *Bekeken door de klant*, uit `client_viewed` van de pagina |
+| Geklikt | — | Zelfde als bekeken: de link gaat naar de pagina |
+| Gebounced | Uit het "onbestelbaar"-bericht in de mailbox | *Kwam niet aan: …* met de reden |
+| Spamklacht | Niet te weten | — |
+
+**Bounces uit de mailbox.** De synchronisatie herkent een onbestelbaar-bericht vóór de klantfilter:
+
+- afzender `MAILER-DAEMON` of `postmaster`;
+- `Content-Type: multipart/report; report-type=delivery-status`;
+- of de vorm die Exchange gebruikt.
+
+Uit het bijgevoegde origineel of uit `message/rfc822-headers` haalt hij de `X-ResoFly-Id` of de
+`Message-ID`. Dan gebeurt er dit:
+
+- De rij in `mail_sends` wordt `bounced`, met de reden in gewone woorden ("het adres bestaat niet",
+  "de mailbox van de ontvanger is vol").
+- De trigger zet de bron op *gebounced*, net als nu bij Resend.
+- Een harde bounce zet het adres in `email_suppressions`, zoals nu bij het portaal.
+- Het onbestelbaar-bericht zelf komt niet in Berichten en niet in de opvangbak.
+
+Fase 0 verzamelt echte voorbeelden van Microsoft, Gmail, Postfix en Exim voor de tests.
+
+**Waarom geen trackingpixel.**
+
+- Apple Mail en steeds meer zakelijke filters openen elke mail vooraf. *Geopend* zegt dus weinig.
+- Een pixel in een factuur vanuit je eigen mailbox is een privacyvraag die je klant niet verwacht.
+- Pixels kosten punten bij spamfilters.
+
+*Bekeken* (de klant opende de offerte, factuur of het contract) bestaat al en is eerlijker.
+
+**Wat er mee verandert:**
+
+- `emailStatusLabel` (`Finance.tsx:1393`) en `ClientEmailMessage.tsx` kennen *Verstuurd vanuit…*,
+  *Bekeken* en *Kwam niet aan*.
+- Het Gerrie-signaal `quote_opened_unanswered` kijkt voortaan naar `client_viewed`, of naar
+  `opened_at` als die er is. `gerrie-signals/index.ts:533` telt mee.
+- `src/lib/stroom.ts:147` (*geopend*) leest hetzelfde.
+- Contracten krijgen ook bij Resend eindelijk een status, via `mail_sends` (§2).
+
+---
+
+## 9 · Microsoft 365 via Graph
+
+### 9.1 De app bij Microsoft
+
+- **Een aparte app-registratie "ResoFly Mail"** in Entra, los van de agenda-app.
   - Het toestemmingsscherm noemt dan alleen mail.
-  - Een bedrijf dat mail blokkeert, raakt zo zijn agenda niet kwijt.
-  - Je kunt de geheimen los van elkaar vervangen.
-- Instelling: *multitenant + persoonlijke Microsoft-accounts* (`common`), zoals de agenda.
-- **Rechten, zo weinig mogelijk:** `openid email offline_access User.Read Mail.Read Mail.Send`.
-  - `Mail.ReadWrite` pas als we de gelezen-status terugzetten (fase 4).
-  - `Mail.Read.Shared` en `Mail.Send.Shared` pas voor gedeelde postvakken van Microsoft (fase 4).
-- **Een geverifieerde uitgever** (*publisher verification*, met een ID uit het Microsoft AI Cloud
-  Partner Program). Zonder die badge zien gebruikers een waarschuwing, en veel bedrijven staan
-  toestemming voor onbekende uitgevers niet toe. Begin hier in fase 0: het kan weken duren.
-- **Reken op toestemming van een beheerder.** Microsoft beperkt steeds meer welke mailrechten een
-  gewone gebruiker zelf mag geven. Vangt de terugkeer `consent_required` of `admin_consent_required`,
-  dan toont het scherm de link voor beheerderstoestemming
-  (`/{tenant}/adminconsent?client_id=…`), met een tekst die je aan je IT-beheerder kunt sturen.
+  - Wie mail blokkeert, raakt zijn agenda niet kwijt.
+  - De geheimen zijn los van elkaar te vervangen.
 
-### 5.2 Koppelen
+  De app is multitenant, met persoonlijke accounts (`common`).
+- **Rechten, in één keer:** `openid email offline_access User.Read Mail.ReadWrite Mail.Send
+  Mail.ReadWrite.Shared Mail.Send.Shared`. Waarom meer dan het minimum (`Mail.Read Mail.Send`):
+  - Facturen en offertes komen meestal van een **gedeeld postvak** (`administratie@`, `info@`).
+    Daarvoor zijn de `.Shared`-rechten nodig, en de gebruiker die koppelt heeft *Send As* op dat
+    postvak.
+  - Een bijlage boven ongeveer 3 MB gaat bij Graph via een concept en een upload. Daarvoor is
+    `Mail.ReadWrite` nodig. Contracten met een Office-bestand kunnen zo groot zijn.
+  - Vaak moet een beheerder van de klant toestemming geven. Dat wil je één keer vragen, niet bij elke
+    nieuwe functie opnieuw. Zie beslissing 8.
+- **Een geverifieerde uitgever** (*publisher verification*, via het Microsoft AI Cloud Partner
+  Program). Zonder die badge zien gebruikers een waarschuwing, en veel bedrijven blokkeren onbekende
+  uitgevers. Begin in fase 0: het kan weken duren.
+- **Toestemming van een beheerder.** Bij `consent_required` of `admin_consent_required` toont het
+  scherm de link voor beheerderstoestemming (`/{tenant}/adminconsent?client_id=…`), met een tekst
+  voor de IT-beheerder.
 
-Hetzelfde patroon als de agenda (`calendarOAuth.ts`), algemener gemaakt in
-`_shared/oauthState.ts`:
+### 9.2 Koppelen
 
-1. `mailboxes` → `oauthStart`. De state wordt getekend met HMAC en bevat provider, gebruiker,
-   organisatie, het soort mailbox, `returnTo` en een nonce. Hij is 30 minuten geldig.
-2. Microsoft stuurt terug naar `mailboxes` (GET). Die wisselt de code níet in, maar stuurt door naar de
-   app met `mailbox_code` en `mailbox_state`.
-3. De app roept `oauthComplete` aan, met de sessie van de gebruiker. De gebruiker moet dezelfde zijn als
-   in de state. Pas dan wisselt de server de code in, haalt `/me` op (adres, tenant) en slaat de tokens
-   versleuteld op.
-4. De server maakt de mailbox aan met status `importing` en plant het eerste inlezen.
+Hetzelfde patroon als de agenda (`calendarOAuth.ts`), algemener gemaakt in `_shared/oauthState.ts`:
 
-### 5.3 Lezen
+1. `oauthStart` maakt een getekende state, 30 minuten geldig.
+2. De terugkeer gaat naar `mailboxes`, die doorstuurt naar de app zonder de code in te wisselen.
+3. `oauthComplete` gebeurt met de sessie van dezelfde gebruiker.
+4. Daarna `/me`: het adres en de tenant.
 
-- **Mappen:** Postvak IN en Verzonden items (`wellKnownName` `inbox` en `sentitems`), zodat ook mail
-  die je in Outlook verstuurt in het dossier komt.
-- **Delta per map** (`/me/mailFolders/{id}/messages/delta`). De `deltaLink` staat per map in
-  `mailbox_folders`. Een verlopen delta (`410 Gone`) betekent: opnieuw inlezen vanaf de laatste datum,
-  en de ontdubbeling vangt de rest op.
-- **Altijd met `Prefer: IdType="ImmutableId"`.** Anders verandert het id van een bericht zodra iemand
-  het naar een andere map sleept.
-- **Eerst de envelop, dan de inhoud.** De delta vraagt alleen `from`, `toRecipients`, `ccRecipients`,
-  `internetMessageId`, `conversationId`, `receivedDateTime` en `hasAttachments` op. Bij *alleen
-  klantmail* vraagt de server de database eerst of een adres bij een klant hoort
-  (`mailbox_match_preview`). Alleen dan haalt hij het hele bericht op (`/messages/{id}/$value`, de
-  MIME) en gaat dat door `postal-mime`. Privémail wordt dus nooit gedownload.
+Een **gedeeld postvak toevoegen** gebeurt met dezelfde tokens. Je typt het adres, en ResoFly
+controleert met een leesverzoek en een testverzending of je erbij mag.
 
-  Graph geeft `In-Reply-To` niet mee in de delta. De voorcontrole mag daarom iets ruimer zijn dan de
-  echte beslissing: is het `conversationId` al bekend bij een klantgesprek, dan haalt hij de MIME
-  ook op. `register_mailbox_message` beslist daarna met de echte koppen (§7). Valt het dan alsnog
-  af, dan wordt er niets bewaard.
-- **Meldingen als wekker, niet als waarheid.** Per map is er een abonnement op `created`:
-  - Maximaal 10.080 minuten geldig; de cron verlengt elke dag.
-  - Met een `clientState` per abonnement; daarvan bewaren we alleen de hash.
-  - Met een `lifecycleNotificationUrl`, voor `reauthorizationRequired`, `subscriptionRemoved` en
-    `missed`.
+### 9.3 Lezen
 
-  Komt er een melding, dan zet `mailbox-sync` een vlag op de mailbox, antwoordt binnen een paar
-  seconden met `202` (Microsoft noemt 3 seconden) en draait daarna de delta. Een melding kan
-  wegvallen, daarom draait de delta ook elke 10 minuten zonder melding.
-- **Het eerste inlezen** gaat in porties van een paar honderd berichten per aanroep, met de voortgang
-  in `mailboxes.import_progress`. Een edge function heeft een tijdslimiet, dus de cron pakt de volgende
-  portie.
+- **Mappen:** Postvak IN en Verzonden items, per map een delta (`/mailFolders/{id}/messages/delta`).
+  Bij een gedeeld postvak via `/users/{adres}/…`.
+- **Altijd `Prefer: IdType="ImmutableId"`.** Anders verandert het id als iemand een mail verplaatst.
+- **Eerst de envelop, dan de inhoud.** De delta vraagt alleen afzender, ontvangers, `internetMessageId`,
+  `conversationId`, datum en `hasAttachments`. Bij *alleen klantmail* vraagt de server eerst
+  `mailbox_match_preview`. Alleen bij een treffer haalt hij de MIME op (`/messages/{id}/$value`).
 
-### 5.4 Versturen
+  Graph geeft `In-Reply-To` niet in de delta. Daarom haalt de voorcontrole de MIME ook op als het
+  `conversationId` al bekend is bij een klant- of documentgesprek. Onbestelbaar-berichten en
+  antwoorden op uitnodigingen (`eventMessage`) gaan altijd door. De echte beslissing valt in
+  `register_mailbox_message`.
+- **Meldingen als wekker:**
+  - een abonnement op `created` per map, maximaal 10.080 minuten geldig, dagelijks verlengd;
+  - een `clientState` per abonnement (alleen de hash bewaard);
+  - lifecycle-meldingen voor `reauthorizationRequired`, `subscriptionRemoved` en `missed`.
 
-- **Eén MIME-bouwer voor Microsoft en SMTP:** de `MailComposer` van nodemailer. In de edge function
-  komt die via een `npm:`-import; dat test fase 0.
-  - Wij zetten zelf `Message-ID`, `In-Reply-To`, `References` en `X-ResoFly-Id: <client_email_id>`.
-  - Dat bericht gaat met `POST /me/sendMail` als MIME (base64, `Content-Type: text/plain`). Daarvoor
-    is alleen `Mail.Send` nodig. De kopie in Verzonden items maakt Exchange zelf.
-  - Fase 0 controleert of Exchange onze `Message-ID` laat staan. Zo niet, dan vindt de synchronisatie
-    van Verzonden items de kopie terug via `X-ResoFly-Id` en vult de echte `Message-ID` in.
-- **Synchroon in `mail`**, net als Resend nu: je ziet meteen *Verstuurd* of de fout.
-- **Grenzen:**
-  - Exchange Online staat 30 berichten per minuut en 10.000 ontvangers per dag per mailbox toe.
-  - Graph knijpt af op 4 gelijktijdige verzoeken per mailbox. Bij `429` volgen we `Retry-After`.
-  - Een MIME-bericht via Graph mag een paar MB zijn. Grote bestanden gaan als beveiligde link, zoals
-    ResoFly nu al doet (`file_transfer_recipients`).
+  Antwoord met `202` binnen een paar seconden. De delta draait ook elke 10 minuten zonder melding.
+- **Het eerste inlezen** gaat in porties, met de voortgang in `mailboxes.import_progress`.
+
+### 9.4 Versturen
+
+- **De MIME uit §7.1 via `POST /sendMail`** (base64, `Content-Type: text/plain`), bij een gedeeld
+  postvak via `/users/{adres}/sendMail`.
+- **Bij meer dan ongeveer 3 MB** gaat het via een concept, een upload-sessie voor de bijlage, en
+  `send`.
+- **Fase 0 controleert** of Exchange onze `Message-ID` laat staan, en in welke map Verzonden de kopie
+  komt bij een gedeeld postvak. Exchange zet die standaard bij wie verstuurt, tenzij
+  `MessageCopyForSentAsEnabled` op het postvak aan staat; dan geeft het scherm die tip.
 - **Fouten in gewone woorden:**
-  - `invalid_grant` → *Koppeling verlopen, verbind opnieuw*, status `needs_reauth`.
-  - `MailboxNotEnabledForRESTAPI` → *Deze mailbox staat niet in Microsoft 365 (bijvoorbeeld op een
-    eigen Exchange-server). Koppel hem als andere mailbox.*
-  - `ErrorSendAsDenied` → *Je mag niet vanaf dit adres versturen.*
+  - `invalid_grant` → *Koppeling verlopen, verbind opnieuw*;
+  - `ErrorSendAsDenied` → *Je mag niet vanaf dit adres versturen; vraag je beheerder om "Verzenden
+    als"*;
+  - `MailboxNotEnabledForRESTAPI` → *Deze mailbox staat niet in Microsoft 365; koppel hem als andere
+    mailbox*;
+  - `429` → wachten volgens `Retry-After`.
 
 ---
 
-## 6 · Andere mailboxen via IMAP en SMTP (imapflow, nodemailer)
+## 10 · Andere mailboxen via IMAP en SMTP (imapflow, nodemailer)
 
-### 6.1 Instellen zonder dat je iets hoeft te weten
+### 10.1 Instellen zonder dat je iets hoeft te weten
 
-`mailboxes` → `imapDiscover(email)` zoekt in deze volgorde en stopt bij de eerste treffer:
+`imapDiscover(email)` zoekt in deze volgorde:
 
-1. **MX-record.** Wijst het naar Microsoft (`*.mail.protection.outlook.com`), dan zegt het scherm:
-   *Dit is een Microsoft-mailbox, koppel hem met de Microsoft-knop.* Wijst het naar Google, dan volgt
-   de uitleg voor een app-wachtwoord.
-2. **Vaste instellingen** voor de hosters die onze klanten echt gebruiken. Die lijst stellen we samen
-   in fase 2 en houden we bij in `_shared/mailbox/presets.ts`, met de stappen per hoster zoals
-   `FORWARDING_PROVIDERS` in `SimplePages.tsx`.
-3. **Autoconfig**: `autoconfig.<domein>/mail/config-v1.1.xml` en de database van Thunderbird
-   (`autoconfig.thunderbird.net/v1.1/<domein>`), ook voor het domein van het MX-record.
-4. **SRV-records** (RFC 6186 en 8314): `_imaps._tcp`, `_submissions._tcp`, `_submission._tcp`.
+1. **MX-record.** Microsoft → *koppel hem met de Microsoft-knop*. Google → uitleg voor een
+   app-wachtwoord.
+2. **Vaste instellingen** voor de hosters die onze klanten echt gebruiken
+   (`_shared/mail/presets.ts`, met stappen per hoster zoals `FORWARDING_PROVIDERS`).
+3. **Autoconfig**: `autoconfig.<domein>` en de database van Thunderbird.
+4. **SRV-records** (RFC 6186, 8314).
 5. Lukt niets, dan vul je zelf de server, poort en beveiliging in.
 
-**Gmail en Google Workspace** gaan in fase 2 via IMAP met een **app-wachtwoord** (daarvoor moet
-tweestapsverificatie aan staan). Google staat alleen nog dat of OAuth toe. OAuth voor Gmail vraagt een
-jaarlijkse beveiligingsaudit (CASA), omdat mailrechten bij Google "restricted" zijn. Dat doen we pas
-als er genoeg vraag is (fase 4). **iCloud** werkt hetzelfde, met een app-specifiek wachtwoord.
-
-**Testen** gebeurt in de mail-engine, niet in de browser. Het scherm laat per stap zien wat lukt en
-wat niet:
+**Testen** gebeurt in de engine, per stap zichtbaar:
 
 - inloggen op IMAP;
-- de map Verzonden vinden (`\Sent` volgens RFC 6154, anders op naam: "Sent", "Verzonden",
-  "Verzonden items", "INBOX.Sent");
+- de map Verzonden vinden (`\Sent`, anders op naam);
 - inloggen op SMTP;
-- een testbericht naar jezelf (optioneel).
+- een testbericht naar jezelf. Komt dat vanzelf in Verzonden? Dan slaan we de `APPEND` over.
 
-Pas na een geslaagde test wordt het wachtwoord opgeslagen.
+Het wachtwoord wordt pas na een geslaagde test opgeslagen.
 
-### 6.2 Lezen
+**Gmail en Google Workspace** gaan via IMAP met een app-wachtwoord (tweestapsverificatie aan). OAuth
+voor Gmail vraagt een jaarlijkse beveiligingsaudit (CASA); dat doen we pas bij genoeg vraag.
+**iCloud** werkt hetzelfde.
 
-- **Leases.** Een mailbox wordt door precies één engine-proces bijgehouden.
-  - `claim_mailboxes(worker, max)` pakt mailboxen met `FOR UPDATE SKIP LOCKED` en zet een lease van
-    2 minuten. Elke 30 seconden verlengt de engine die.
-  - Valt de container om, dan loopt de lease af en pakt de volgende start hem op.
-  - Zo kunnen er later zonder wijziging meer instanties bij.
+### 10.2 Lezen
+
+- **Leases.** Precies één engine-proces houdt een mailbox bij (`claim_mailboxes`, `FOR UPDATE SKIP
+  LOCKED`). De lease is 2 minuten en wordt elke 30 seconden verlengd. Zo kunnen er later instances
+  bij.
 - **Eén verbinding per mailbox:**
-  - Postvak IN met **IDLE**; imapflow doet dat vanzelf als de verbinding niets te doen heeft. Komt er
-    een `exists`, dan haalt de engine de nieuwe UID's op.
-  - Verzonden elke 5 minuten via `STATUS` en daarna een fetch.
-  - Kent de server geen IDLE, dan elke 2 minuten `NOOP`.
-- **Stand per map:** `uidvalidity` en de laatst verwerkte UID. Verandert `uidvalidity`, dan leest de
-  engine opnieuw in vanaf de laatste datum, en de ontdubbeling op `Message-ID` voorkomt dubbelen.
-- **Eerst de envelop, dan de inhoud.** Zelfde regel als bij Microsoft: bij *alleen klantmail* eerst de
-  envelop ophalen, `mailbox_match_preview` vragen, en alleen bij een treffer de hele bron
-  (`source`). Die gaat door `postal-mime` naar `register_mailbox_message`.
-- **We veranderen niets in de mailbox.** Bij het lezen gebruiken we `BODY.PEEK`, dus de mail wordt bij
-  de klant niet als gelezen gemarkeerd. ResoFly verplaatst en wist niets.
+  - Postvak IN met IDLE;
+  - Verzonden elke 5 minuten;
+  - zonder IDLE elke 2 minuten `NOOP`.
+- **Stand per map:** `uidvalidity` en de laatste UID. Verandert `uidvalidity`, dan lezen we opnieuw in
+  vanaf de laatste datum, en de ontdubbeling vangt de rest op.
+- **Eerst de envelop en `BODYSTRUCTURE`**, dan pas de bron. Zo herkent de engine een onbestelbaar-
+  bericht of een uitnodigingsantwoord (`text/calendar; method=REPLY`) zonder privémail te downloaden.
+- **We veranderen niets in de mailbox.** `BODY.PEEK`: niets wordt gelezen gemarkeerd, verplaatst of
+  gewist.
 
-### 6.3 Versturen
+### 10.3 Versturen
 
-1. `mail` legt de `client_emails`-rij vast als `queued`, met de `Message-ID` die wij kiezen, en zet een
-   rij in `mailbox_outbox`. Daarna stuurt hij de engine een seintje.
-2. De engine pakt de rij (`claim_mailbox_outbox`) en bouwt de MIME met `MailComposer`. Die bytes gaan
-   via nodemailer naar SMTP: poort 465 met TLS, of 587 met STARTTLS.
-3. Daarna zet de engine **dezelfde bytes** met IMAP `APPEND` in Verzonden, met de vlag `\Seen`. Veel
-   hosters doen dat niet zelf. Gmail wel; dat herkent de test (§6.1), en dan slaan we deze stap over.
-4. Status `sent`. Via realtime springt *Wordt verstuurd…* in het scherm op *Verstuurd*.
+1. De engine pakt een rij uit `mail_sends` (`claim_mail_sends`) en leest het `.eml` van R2.
+2. nodemailer geeft het door aan SMTP: poort 465 met TLS, of 587 met STARTTLS.
+3. Een `APPEND` van dezelfde bytes in Verzonden, met `\Seen`.
+4. Status `sent`. Een rij die op `sending` bleef staan, wordt pas opnieuw verstuurd nadat Verzonden
+   is doorzocht op de `Message-ID`.
 
-**Nooit dubbel versturen.** Een rij die al 5 minuten op `sending` staat, verstuurt de engine niet
-zomaar opnieuw, want misschien ging hij al de deur uit vlak voor een crash. Hij zoekt eerst in
-Verzonden naar de `Message-ID` (`SEARCH HEADER Message-ID`). Vindt hij hem, dan is de rij verstuurd.
-Zo niet, dan probeert hij opnieuw. Na 5 pogingen wordt de rij `failed`, met de reden voor het scherm.
+### 10.4 Netjes zijn tegen hosters
 
-### 6.4 Netjes zijn tegen hosters
+Alle verbindingen komen van dezelfde paar adressen. Eén slordige klant kan zo de rest laten
+blokkeren.
 
-Alle verbindingen komen van dezelfde paar adressen van Cloudflare. Eén slordige klant kan zo de rest
-laten blokkeren.
-
-- **Bij een fout wachtwoord meteen stoppen.** Status `needs_reauth`, geen nieuwe pogingen. Hosters
-  blokkeren met fail2ban het IP na een paar mislukte inlogpogingen, en dat IP delen al onze klanten.
-- **Wachten met terugval** bij netwerk- en serverfouten (1, 2, 4 … tot 60 minuten), met
-  `backoff_until` per mailbox.
-- **Een maximum per server**, standaard 20 gelijktijdige verbindingen naar dezelfde IMAP-host. Veel
-  hosters staan per account ook maar rond de 10 verbindingen toe; wij gebruiken er één.
-- **Een herkenbare naam**: imapflow stuurt `ID` met `name: "ResoFly"`, zodat een beheerder ziet wie
-  er verbindt.
-- Vraagt een hoster om een vast IP, dan is dat een reden voor Fly.io met een vast uitgaand adres
-  (§14).
+- **Bij een fout wachtwoord meteen stoppen** (`needs_reauth`). Hosters blokkeren met fail2ban het IP,
+  en dat IP delen al onze klanten.
+- **Wachten met terugval** bij netwerkfouten (1, 2, 4 … tot 60 minuten).
+- **Hooguit 20 gelijktijdige verbindingen** naar dezelfde IMAP-host. Per mailbox gebruiken we er één.
+- **Een herkenbare naam**: `ID name=ResoFly`.
+- Vraagt een hoster om een vast IP, dan is dat een reden voor Fly.io met een vast uitgaand adres.
 
 ---
 
-## 7 · Eén weg naar binnen: van mail naar gesprek
+## 11 · Eén weg naar binnen: van mail naar gesprek
 
-Microsoft (edge) en IMAP (engine) maken van elk bericht dezelfde payload: mailbox, map
-(`inbox`/`sent`), adressen, onderwerp, tekst, HTML, `Message-ID`, `In-Reply-To`, `References`, het id bij
-de provider, eventueel `conversationId`, en van de bijlagen alleen naam, type en grootte. Daarna
-beslist `register_mailbox_message(p_payload)` (security definer, alleen service-role). Pas als die
-een `client_email_id` teruggeeft, gaan de bijlagen en het `.eml` naar R2. Zo komen er geen
-bestanden van mail die uiteindelijk niet bewaard wordt.
-
-De stappen van `register_mailbox_message`:
+Microsoft (edge) en IMAP (engine) maken van elk bericht dezelfde payload. Bijlagen staan er alleen met
+naam, type en grootte in. `register_mailbox_message` beslist. Pas daarna gaan de bijlagen en het
+`.eml` naar R2.
 
 1. **Organisatie** = die van de mailbox. Nooit uit de mail zelf (harde regel 1).
-2. **Ontdubbelen** op `(organization_id, rfc_message_id)`.
-   - Kwam dezelfde mail al binnen via het doorstuuradres of via een tweede gekoppelde mailbox, dan
-     krijgt de bestaande rij alleen het `mailbox_id` erbij.
-   - Is het een kopie in Verzonden van iets dat ResoFly zelf verstuurde, dan wordt de rij uit de
-     wachtrij aangevuld en komt er geen tweede.
-3. **Intern overslaan.** Mail tussen twee adressen van de eigen organisatie (`is_own_org_address`)
-   is geen klantmail.
-4. **Eerst de klant, dan het gesprek.** Koppen als `References` kiest de afzender zelf. Ze mogen dus
-   nooit bepalen bij welke klant een mail hoort, alleen welk gesprek binnen die klant. Dat is nu ook
-   de regel (commentaar in `pick_client_email_thread`), en die blijft. Anders kan iedereen met een
-   verzonnen `References` zijn mail in het dossier van een andere klant schuiven.
+2. **Speciale mail eerst.** Een onbestelbaar-bericht → bounce (§8). Een antwoord op een uitnodiging →
+   de bestaande RSVP-verwerking. Geen van beide wordt een gesprek.
+3. **Ontdubbelen** op `(organization_id, rfc_message_id)`:
+   - via het doorstuuradres of een tweede mailbox: het `mailbox_id` erbij;
+   - een kopie in Verzonden van een eigen `mail_sends`-rij: aanvullen, geen tweede rij.
+4. **Intern overslaan**: mail tussen adressen van de eigen organisatie.
+5. **Eerst de klant, dan het gesprek.** Koppen als `References` kiest de afzender zelf. Ze mogen nooit
+   bepalen bij welke klant een mail hoort, alleen welk gesprek binnen die klant. Dat is nu ook de
+   regel (commentaar in `pick_client_email_thread`). Anders schuift iemand met een verzonnen kop zijn
+   mail in het dossier van een andere klant.
    - **De klant**, in deze volgorde:
-     1. `resolve_inbound_client` op de tegenpartij: de afzender bij binnenkomend, de ontvangers bij
-        Verzonden. Alleen een exact adres van een klant of contactpersoon koppelt.
-     2. Geen treffer op adres, maar `In-Reply-To` wijst naar een bericht dat **wij** verstuurden (onze
-        eigen, willekeurige `Message-ID`)? Dan is dat net zo sterk als het `reply+`-token van nu:
-        alleen wie onze mail kreeg, kent die id. Dan geldt de klant van dat bericht. Zo komt ook het
-        antwoord van een collega van de klant, vanaf een ander adres, goed terecht.
-     3. Een domein is een voorstel, net als nu, en gaat naar de opvangbak.
+     1. Een exact adres van een klant of contactpersoon. Bij binnenkomend is dat de afzender, bij
+        Verzonden de ontvangers.
+     2. Geen adres, maar `In-Reply-To` wijst naar een bericht dat **wij** verstuurden? Dat is net zo
+        sterk als het `reply+`-token van nu: alleen wie onze mail kreeg, kent die id. Dan geldt de
+        klant van dat bericht. Zo komt het antwoord van de boekhouder van je klant, die op de factuur
+        antwoordt, goed terecht.
+     3. Een domein is een voorstel, en gaat naar de opvangbak.
    - **Het gesprek** binnen die klant, in deze volgorde:
-     1. `In-Reply-To` en `References` tegen `client_emails.rfc_message_id`;
-     2. `X-ResoFly-Id`, alleen bij mail uit de eigen map Verzonden;
-     3. het `conversationId` van Microsoft (`provider_thread_id`);
-     4. pas daarna de bestaande regel: het laatste gesprek van minder dan 30 dagen, of een nieuw.
-5. **Opslaan.**
-   - Gevonden: een rij in `client_emails` met `provider = 'mailbox'`. Binnenkomend krijgt `inbound` /
-     `received`; Verzonden krijgt `outbound` / `sent`.
-   - Niet gevonden, bij *alle mail*: een rij in `inbound_messages` met `route = 'mailbox'`. Het
-     tabblad Niet gekoppeld werkt dan ongewijzigd: koppelen, negeren, "onthoud dit adres".
-   - Niet gevonden, bij *alleen klantmail*: niets. Alleen een teller in de mailbox, voor *x berichten
-     overgeslagen*.
+     1. `In-Reply-To` en `References`;
+     2. `X-ResoFly-Id`, alleen uit de eigen map Verzonden;
+     3. het documentgesprek (`source_kind`, `source_id`) van het bericht waarop geantwoord wordt;
+     4. het `conversationId` van Microsoft;
+     5. de bestaande regel: het laatste gesprek van minder dan 30 dagen, of een nieuw.
+6. **Opslaan.**
+   - Gevonden: een rij in `client_emails`, `provider = 'mailbox'`.
+   - Niet gevonden, bij *alle mail*: `inbound_messages` met `route = 'mailbox'` (Niet gekoppeld).
+   - Niet gevonden, bij *alleen klantmail*: niets, alleen een teller.
 
-**Het eerste inlezen mag geen lawine geven.** Op `client_emails` hangen triggers voor push
-(`push_on_client_email_insert`), Gerrie-signalen (`ai_signal_client_email_inbound`), agents
-(`agent_event_client_email`) en campagnes. Inlezen van 90 dagen zou honderden meldingen en
-agentruns geven. Daarom:
-
-- Een kolom `imported` (true bij het eerste inlezen). Alle vier de triggers slaan zulke rijen over.
-- Ingelezen mail telt als gelezen: `client_email_unread` sluit `imported` uit. Anders begint iedereen
-  met 600 ongelezen berichten.
+**Het eerste inlezen mag geen lawine geven.** Een kolom `imported` zorgt ervoor dat push,
+Gerrie-signalen, agents en campagnetriggers zulke rijen overslaan. Ingelezen mail telt als gelezen.
 
 **Bijlagen.**
 
-- Bestanden tot 25 MB gaan naar R2 via `/internal/media`, onder
-  `<orgId>/client_mail/<client_email_id>/<uuid>-<naam>`, met een rij in `client_email_attachments`.
-- Grotere bestanden krijgen alleen een naam en de tekst *Open dit bericht in je mailbox*.
-- Mislukt het uploaden, dan blijft de mail staan. De bijlage krijgt dan `storage_key = null` met
-  *Bijlage nog niet opgehaald*, en de volgende ronde probeert het opnieuw.
-- Inline afbeeldingen (`cid:`) worden ook opgeslagen, maar alleen getoond na *Afbeeldingen tonen*.
-- De media-worker geeft ze alleen aan wie module Klanten mag lezen. Het voorvoegsel `client_mail/`
-  komt in zijn lijst van modules per pad.
-
-**Het originele bericht** (`.eml`) gaat ook naar R2, als een gekoppelde mail kleiner is dan 25 MB.
-Dan kun je later opnieuw inlezen als de parser beter wordt, staat het bewijs van wat er precies
-binnenkwam vast, en kan de export het originele bericht meenemen. Zie beslissing 4.
+- Tot 25 MB per bestand naar R2 (`<orgId>/client_mail/…`), met een rij in
+  `client_email_attachments`. Groter: alleen de naam.
+- Mislukt het uploaden, dan blijft de mail staan en volgt een nieuwe poging.
+- Inline afbeeldingen alleen na *Afbeeldingen tonen*.
+- De media-worker geeft ze alleen aan wie module Klanten mag lezen.
 
 ---
 
-## 8 · Eén weg naar buiten: versturen
+## 12 · Datamodel (schets)
 
-`sendClientEmail` in `supabase/functions/mail/index.ts` krijgt `mailboxId` (optioneel; leeg =
-Resend, zoals nu). Wat er gebeurt:
-
-1. **Rechten**, zoals nu: rol owner, admin of member, `assertClientModuleWrite`. Daar komt bij: de
-   gebruiker staat in `mailbox_members` met `can_send`, en de mailbox heeft status `active`.
-2. **Het gesprek.** Antwoord je in een bestaand gesprek (`threadId`), dan neemt de server
-   `In-Reply-To` en `References` over van het laatste bericht van de klant, en `Re: ` één keer.
-3. **De `Message-ID`** kiezen wij altijd zelf (`<uuid@domein-van-de-mailbox>`) en die wordt bewaard.
-   Dat geldt vanaf nu ook voor Resend, via `headers` in de API, zodat een antwoord op een
-   Resend-mail later ook via de koppen zijn gesprek vindt. Laat Resend een eigen `Message-ID` niet
-   toe (fase 0 controleert dat), dan bewaren we de id die Resend zelf kiest.
-4. **Limiet.** `email_quota_take` geldt ook voor de mailbox. Daarbovenop komen de grenzen van de
-   provider (§5.4) als eigen teller per mailbox.
-5. **Versturen.** Microsoft gaat direct (§5.4). IMAP/SMTP gaat via de wachtrij (§6.3). Bij een
-   mailbox valt de `reply+`-Reply-To weg: antwoorden komen in de mailbox, en de synchronisatie haalt
-   ze op.
-6. **De opmaak.** Een mail vanuit je eigen mailbox ziet eruit als een gewone mail: jouw tekst en je
-   handtekening, zonder de huisstijl-omlijsting van `buildClientEmailHtml`. Die blijft voor Resend.
-   HTML gaat zoals nu door `sanitizeEmailBodyHtml`.
-
-**Resend blijft voor systeemmail.** Facturen, offertes, herinneringen, aanmaningen, contracten,
-portaalmail en marketing gaan door Resend, met hun eigen sjablonen en bezorgstatus. Bulk via een
-mailbox is gevraagd om in een spamfilter te belanden, en raakt de grenzen van Microsoft. Facturen
-vanuit de eigen mailbox kan later een keuze worden (fase 4).
-
----
-
-## 9 · Datamodel (schets)
-
-Migratie `<versie>_mailboxen.sql`, met een versie na `20261111190000`, veilig opnieuw te draaien.
+Migratie `<versie>_mailboxen.sql`, na `20261111190000`, veilig opnieuw te draaien. In fase 1 komt
+alleen het verzendregister; de mailboxtabellen komen in fase 2.
 
 ```sql
--- De mailbox zelf: wat het scherm mag zien. Geen geheimen.
-create table if not exists public.mailboxes (
-  id uuid primary key default gen_random_uuid(),
+-- Het verzendregister en de wachtrij: elke mail die ResoFly namens een organisatie verstuurt.
+create table if not exists public.mail_sends (
+  id uuid primary key default gen_random_uuid(),        -- ook de X-ResoFly-Id
   organization_id uuid not null references public.organizations(id) on delete cascade,
-  provider text not null check (provider in ('microsoft', 'imap')),
-  email text not null,                                   -- lowercase
-  display_name text,
-  kind text not null check (kind in ('personal', 'shared')),
-  owner_user_id uuid references auth.users(id) on delete set null,  -- wie hem koppelde
-  import_mode text not null default 'clients_only' check (import_mode in ('clients_only', 'all')),
-  import_since date not null,
-  status text not null default 'connecting' check (status in
-    ('connecting', 'importing', 'active', 'needs_reauth', 'error', 'paused', 'disconnected')),
-  status_detail text,                                    -- in gewone woorden, voor het scherm
-  import_progress jsonb,                                 -- {"done": 1240, "total": 3900}
-  skipped_count integer not null default 0,              -- "alleen klantmail": overgeslagen
-  signature_html text,
-  server_info jsonb,                                     -- imap: host/poort/tls (geen wachtwoord)
-  last_synced_at timestamptz,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique (organization_id, email)
-);
-
--- Tokens en wachtwoorden, versleuteld. RLS aan, geen policies: alleen de server.
-create table if not exists public.mailbox_secrets (
-  mailbox_id uuid primary key references public.mailboxes(id) on delete cascade,
-  organization_id uuid not null,
-  secret_encrypted text not null,                        -- "v1.<sleutel-id>.<iv>.<cipher>"
-  expires_at timestamptz,                                -- Microsoft: access token
-  updated_at timestamptz not null default now()
-);
-
--- Wie mag versturen vanaf een mailbox.
-create table if not exists public.mailbox_members (
-  mailbox_id uuid not null references public.mailboxes(id) on delete cascade,
-  organization_id uuid not null,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  can_send boolean not null default true,
-  primary key (mailbox_id, user_id)
-);
-
--- De stand per map, en de lease. Intern.
-create table if not exists public.mailbox_folders (
-  id uuid primary key default gen_random_uuid(),
-  mailbox_id uuid not null references public.mailboxes(id) on delete cascade,
-  organization_id uuid not null,
-  role text not null check (role in ('inbox', 'sent')),
-  remote_name text not null,                             -- "INBOX", "Verzonden items", Graph-id
-  uidvalidity bigint, last_uid bigint,                   -- imap
-  delta_link text,                                       -- microsoft
-  subscription_id text, subscription_expires_at timestamptz, client_state_hash text,
-  last_synced_at timestamptz,
-  unique (mailbox_id, role)
-);
-create table if not exists public.mailbox_sync (
-  mailbox_id uuid primary key references public.mailboxes(id) on delete cascade,
-  organization_id uuid not null,
-  lease_owner text, lease_until timestamptz,
-  wake_requested_at timestamptz,                         -- melding van Graph / seintje
-  failures integer not null default 0, backoff_until timestamptz
-);
-
--- De verzendwachtrij voor IMAP/SMTP. Intern.
-create table if not exists public.mailbox_outbox (
-  id uuid primary key default gen_random_uuid(),
-  organization_id uuid not null,
-  mailbox_id uuid not null references public.mailboxes(id) on delete cascade,
-  client_email_id uuid not null unique references public.client_emails(id) on delete cascade,
-  status text not null default 'queued' check (status in ('queued', 'sending', 'sent', 'failed', 'cancelled')),
+  kind text not null,                                   -- 'invoice', 'invoice_reminder', 'dunning',
+                                                        -- 'credit_note', 'quote', 'contract', 'client_mail',
+                                                        -- 'booking', 'calendar_invite', 'file_transfer',
+                                                        -- 'portal_update', 'portal_code', 'campaign', …
+  source_table text, source_id uuid,                    -- invoice_email_deliveries.id enz.
+  client_id uuid references public.clients(id) on delete set null,
+  requested_by uuid references auth.users(id) on delete set null,   -- null = automatisch
+  idempotency_key text not null,
+  transport text not null check (transport in ('mailbox', 'resend')),
+  mailbox_id uuid,                                      -- fk naar mailboxes in fase 2
+  fallback_reason text,                                 -- "mailbox werkte niet: koppeling verlopen"
+  from_email text not null,
+  to_emails text[] not null, cc_emails text[],
+  subject text not null,
+  rfc_message_id text not null,
+  mime_storage_key text,                                -- het bericht zoals verstuurd, op R2
+  urgency text not null default 'interactive' check (urgency in ('code', 'interactive', 'batch')),
+  status text not null default 'queued' check (status in
+    ('queued', 'sending', 'sent', 'failed', 'bounced', 'cancelled')),
   attempts integer not null default 0,
   next_attempt_at timestamptz not null default now(),
   locked_until timestamptz,
-  last_error text,
-  created_at timestamptz not null default now()
+  provider_id text,                                     -- id bij Resend of Microsoft
+  last_error text, bounce_reason text,
+  sent_at timestamptz, bounced_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (organization_id, idempotency_key),
+  unique (organization_id, rfc_message_id)
 );
 
--- Klantmail: wat er bij moet.
+-- Welke mailbox voor welke soort mail (§4). Fase 2.
+create table if not exists public.organization_mail_routes (
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  kind_group text not null check (kind_group in
+    ('client_mail', 'quotes_contracts', 'invoices', 'appointments', 'files', 'portal')),
+  sender text not null check (sender in ('mailbox', 'own_mailbox', 'resofly')),
+                                                        -- own_mailbox = van wie verstuurt
+  mailbox_id uuid references public.mailboxes(id) on delete set null,
+  display_name text,
+  on_failure text not null default 'resofly' check (on_failure in ('resofly', 'wait')),
+  primary key (organization_id, kind_group)
+);
+
+-- De mailboxen (fase 2): zoals in de eerste versie.
+--   mailboxes          (provider, email, kind personal/shared, owner_user_id, import_mode,
+--                       import_since, status, status_detail, import_progress, signature_html,
+--                       send_rate_per_minute, server_info)
+--   mailbox_secrets    (versleuteld; RLS aan, geen policies)
+--   mailbox_members    (wie mag versturen)
+--   mailbox_folders    (uidvalidity/last_uid of delta_link, abonnement)
+--   mailbox_sync       (lease, wekker, terugval)
+
+-- Klantmail en documentgesprekken.
 alter table public.client_emails
-  add column if not exists mailbox_id uuid references public.mailboxes(id) on delete set null,
-  add column if not exists to_emails text[],
-  add column if not exists cc_emails text[],
-  add column if not exists in_reply_to text,
-  add column if not exists reference_ids text[],
-  add column if not exists provider_thread_id text,      -- conversationId van Microsoft
-  add column if not exists raw_storage_key text,         -- het .eml op R2
+  add column if not exists mailbox_id uuid,
+  add column if not exists mail_send_id uuid references public.mail_sends(id) on delete set null,
+  add column if not exists source_kind text,            -- 'invoice', 'quote', 'contract', …
+  add column if not exists source_id uuid,              -- het document
+  add column if not exists to_emails text[], add column if not exists cc_emails text[],
+  add column if not exists in_reply_to text, add column if not exists reference_ids text[],
+  add column if not exists provider_thread_id text,
+  add column if not exists raw_storage_key text,
   add column if not exists imported boolean not null default false;
--- provider: 'mailbox' erbij in de check. Uniek: (organization_id, rfc_message_id) ook voor
--- uitgaand, zodat de kopie in Verzonden en de rij uit de wachtrij één rij blijven.
 
-create table if not exists public.client_email_attachments (
-  id uuid primary key default gen_random_uuid(),
-  organization_id uuid not null,
-  client_email_id uuid not null references public.client_emails(id) on delete cascade,
-  file_name text not null, mime_type text, size_bytes bigint,
-  storage_key text,                                      -- null = te groot, niet opgeslagen
-  sha256 text, content_id text, is_inline boolean not null default false,
-  created_at timestamptz not null default now()
-);
+-- De bestaande registraties wijzen naar het register.
+alter table public.invoice_email_deliveries  add column if not exists mail_send_id uuid;
+alter table public.quote_email_deliveries    add column if not exists mail_send_id uuid;
+alter table public.contract_email_deliveries add column if not exists mail_send_id uuid;
+alter table public.file_transfer_recipients  add column if not exists mail_send_id uuid;
+
+create table if not exists public.client_email_attachments (…);   -- zoals in de eerste versie
 ```
 
 **Daarbij:**
 
-- **RLS.**
-  - `mailboxes` en `mailbox_members`: lezen met `can_read_module(org, 'clients')`. Schrijven alleen
-    via `mailboxes` (service-role) of security-definer-RPC's.
-  - `client_email_attachments`: `apply_module_gate(…, 'clients')`, net als `client_emails`.
-  - `mailbox_secrets`, `mailbox_sync`, `mailbox_folders` en `mailbox_outbox`: RLS aan, geen policies.
-  - Een trigger controleert dat `mailbox_id` en `client_email_id` bij dezelfde organisatie horen
-    (zoals `20260926000000_security_hardening.sql`).
-- **Functies:** `register_mailbox_message`, `mailbox_match_preview`, `claim_mailboxes`,
-  `renew_mailbox_lease`, `claim_mailbox_outbox` (naar `claim_webhook_deliveries`), en
-  `mark_mailbox_needs_reauth`. Allemaal `revoke … from public, anon, authenticated`.
-- **De triggers op `client_emails`** slaan `imported` over (§7). `client_email_unread` sluit
-  `imported` uit.
-- **Realtime:** `mailboxes` erbij voor de status. `useClientEmailUnread` luistert nu alleen naar
-  `INSERT` op `client_emails`; voor *Wordt verstuurd → Verstuurd* komt `UPDATE` erbij, op een eigen
-  kanaal (zie de les in `CHANGELOG_BERICHTEN_2026-09-17.md` §6).
-- **Logboek:** `audit_row_change('mailbox', 'email')` op `mailboxes`. Nieuwe acties
-  `mailbox_connected`, `mailbox_reconnected` en `mailbox_disconnected` in `audit_logs_action_check`.
-  In de metadata staan nooit geheimen of serverwachtwoorden.
-- **Vertrek van een teamlid** (`disable_integrations_on_member_exit`):
-  - Zijn persoonlijke mailboxen gaan naar `disconnected` en de geheimen worden gewist.
-  - Een gedeelde mailbox die hij koppelde, blijft staan. Bij Microsoft hangen de tokens wel aan zijn
-    account; zodra dat account uitgaat, wordt de status `needs_reauth` en krijgen de beheerders een
-    melding.
-- **Exportmanifest** (`src/lib/exportManifest.ts`):
-  - `mailboxes`, `mailbox_members` en `client_email_attachments` gaan mee, met bestanden.
-  - `mailbox_secrets` valt onder `geheim`.
-  - `mailbox_folders`, `mailbox_sync` en `mailbox_outbox` vallen onder `intern`.
-- **dataGroups:** geen wijziging. `client_emails` wordt nu al per gesprek geladen, niet bij het
-  opstarten. Leest nieuwe code toch een veld uit een groep, dan gelden harde regel 5 en
-  `dataGroups.test.ts`.
+- **RLS op `mail_sends`.** Lezen mag alleen met de module die bij de soort hoort, via een functie
+  `mail_kind_module(kind)`. Dezelfde indeling als `PAGE_MODULE` in `src/lib/permissions.ts`:
+  - facturen, offertes en contracten → Financiën;
+  - klantmail → Klanten;
+  - afspraken → Agenda;
+  - bestanden → Inhoud;
+  - het portaal → Tickets;
+  - marketing → Marketing.
+
+  Zo ziet een teamlid zonder Financiën ook in het register geen factuurmail (harde regel 3).
+  Schrijven alleen via de service-role.
+- **Documentgesprekken volgen de module van het document.** Een factuurmail in het klantdossier
+  vertelt bedragen. Iemand met Klanten maar zonder Financiën mag die niet zien, ook het antwoord
+  van de klant erop niet. Daarom:
+  - `client_email_threads` krijgt ook `source_kind`;
+  - een extra restrictive policy op `client_email_threads`, `client_emails` en
+    `client_email_attachments`: `source_kind is null or can_read_module(org,
+    mail_kind_module(source_kind))`;
+  - de views `client_email_thread_overview` en `client_email_unread` zijn `security_invoker` en
+    volgen vanzelf.
+- **Een trigger** spiegelt `sent`, `failed` en `bounced` naar `source_table`/`source_id`. De bestaande
+  `begin_`/`complete_`-functies van facturen en offertes blijven het document bijwerken.
+- **`resend-webhook`** werkt naast zijn huidige tabellen ook `mail_sends` bij (op `provider_id`).
+- **Documentgesprekken.** Een documentmail naar een klant krijgt ook een rij in `client_emails`,
+  outbound, met `source_kind` en `source_id`, in een gesprek per document. Een trigger op
+  `client_emails` die uitgaande mail niet verwacht (signalen, agents), wordt nagelopen.
+- **Logboek.**
+  - `audit_row_change` op `mailboxes` en `organization_mail_routes`.
+  - Acties `mailbox_connected`, `mailbox_disconnected` en `mail_route_changed` in
+    `audit_logs_action_check`.
+  - Een terugval naar ResoFly komt ook in het logboek.
+- **Vertrek van een teamlid.** Persoonlijke mailboxen gaan naar `disconnected` en hun geheimen worden
+  gewist. Routes met *de mailbox van wie verstuurt* gaan voor die persoon niet meer.
+- **Exportmanifest.**
+  - `mail_sends` gaat mee, met de `.eml`'s: het bewijs van wat er verstuurd is.
+  - `organization_mail_routes`, `mailboxes`, `mailbox_members` en `client_email_attachments` gaan mee.
+  - `mailbox_secrets` valt onder `geheim`; `mailbox_folders` en `mailbox_sync` onder `intern`.
+- **dataGroups:** geen wijziging nodig.
 
 ---
 
-## 10 · De harde regels, één voor één
+## 13 · De harde regels, één voor één
 
 | Regel | Hoe dit plan eraan voldoet |
 |---|---|
-| 1 · Elke organisatie een eigen wereld | De organisatie komt uit de mailbox, en de mailbox uit de sessie (`mailboxes`) of uit de lease (engine). De engine gebruikt de service-role, zoals `caldav` en `media-api`. Hij schrijft daarom alleen via RPC's die zelf op `organization_id` filteren, en nooit rechtstreeks in tabellen. Een test geeft `register_mailbox_message` een mailbox van organisatie A en een gesprek van B, en verwacht een weigering. |
-| 2 · De AI voert niets zelf uit | Gerrie, agents en MCP krijgen `mailbox_id` en `thread_id` in `propose_send_client_email`, en het blijft een voorstel. Na goedkeuring loopt het via `onSendClientEmail` → `mail`, met de rechten van wie goedkeurt: die moet zelf `can_send` hebben op die mailbox (`agentAccess.ts`). Mailtekst gaat als gegevens naar Gerrie, tussen de bekende markeringen, nooit als opdracht. Er komt geen handeling om mailboxen te koppelen of te ontkoppelen. `actionTenancy.test.ts` krijgt de nieuwe parameters. |
-| 3 · Modulerechten overal | Mailboxmail valt onder module Klanten, net als Berichten. Wie Klanten niet mag lezen, ziet geen mailboxen, geen mail en geen bijlagen (RLS én de media-worker). Versturen vraagt schrijfrecht op Klanten én `can_send`. |
-| 4 · Alleen via migraties | Eén migratie, veilig opnieuw te draaien, na `20261111190000`. Daarna `supabase db start` en de keten vanaf nul. |
-| 5 · Laden per module | Geen nieuwe groep nodig (zie §9). |
-| 6 · Geld en bewaarplicht | Niet geraakt. Facturen blijven via Resend gaan, met hun vaste kopie. |
+| 1 · Elke organisatie een eigen wereld | `sendOrgMail` krijgt de organisatie van de aanroeper (uit de sessie of de rij die al van die organisatie is). De route en de mailbox moeten van dezelfde organisatie zijn; een trigger en een test bewaken dat. De engine schrijft alleen via RPC's die zelf op `organization_id` filteren. |
+| 2 · De AI voert niets zelf uit | Gerrie, agents en MCP stellen voor (`propose_send_client_email` met `thread_id`). Na goedkeuring loopt het via de knop, met de rechten van wie goedkeurt. *De mailbox van wie verstuurt* is dan de mailbox van die mens, nooit van de agent. Mailtekst is gegevens. Er is geen handeling om mailboxen of routes te veranderen. |
+| 3 · Modulerechten overal | Mailboxmail valt onder Klanten. Het register volgt de module van de soort. Een documentgesprek (factuur, offerte, contract) volgt ook Financiën: zonder Financiën zie je het niet in Berichten en niet in het klantdossier. Bijlagen gaan via de media-worker met dezelfde controle. |
+| 4 · Alleen via migraties | Migraties na `20261111190000`, veilig opnieuw te draaien; daarna de keten vanaf nul. |
+| 5 · Laden per module | Geen nieuwe groep nodig. |
+| 6 · Geld en bewaarplicht | Een factuur ligt vast op het moment van *Versturen*, zoals nu. De mail is een aparte stap met een eigen status. Mislukt de mail, dan blijft de factuur staan, met *Mail niet verstuurd — opnieuw*. Het `.eml` op R2 legt vast wat de klant precies kreeg, naast de PDF-kopie die er al is. |
 
 ---
 
-## 11 · Veiligheid en privacy
+## 14 · Veiligheid en privacy
 
 **Geheimen.**
 
-- Eén module `_shared/mailbox/secretBox.ts` (AES-GCM, WebCrypto) met een sleutel-id in het formaat,
-  zodat we sleutels kunnen vervangen zonder alles opnieuw te koppelen.
-- **Twee sleutels:**
-  - `MAILBOX_MS_TOKEN_KEY` voor Microsoft-tokens. Alleen de edge functions hebben die.
-  - `MAILBOX_IMAP_SECRET_KEY` voor IMAP-wachtwoorden. Die hebben `mailboxes` en de engine.
+- Eén module `secretBox` (AES-GCM, WebCrypto), met een sleutel-id voor het vervangen van sleutels.
+- Twee sleutels: `MAILBOX_MS_TOKEN_KEY` (alleen de edge functions) en `MAILBOX_IMAP_SECRET_KEY`
+  (`mailboxes` en de engine). Een lek in de engine geeft geen Microsoft-tokens prijs.
+- Geheimen gaan nooit naar de browser en worden bij ontkoppelen meteen gewist.
 
-  Een lek in de engine geeft dus geen Microsoft-tokens prijs.
-- Geheimen gaan nooit naar de browser. Het scherm ziet alleen *verbonden als jan@…* en de server.
-- Bij ontkoppelen worden ze meteen gewist. Bij Microsoft verwijderen we ook de abonnementen. Een
-  token intrekken kan alleen de gebruiker zelf (myapps.microsoft.com); het scherm zegt dat.
+**Versturen als iemand anders.**
 
-**De server die de klant invult (SSRF).** Een IMAP- of SMTP-host is invoer van een gebruiker.
+- Het `From` is altijd het adres van de mailbox; vrije adressen bestaan niet.
+- Een persoonlijke mailbox verstuurt alleen voor zijn eigenaar.
+- Automatische mail (cron, openbare pagina) gaat alleen via een gedeelde mailbox die een beheerder aan
+  die soort heeft gekoppeld.
+- Bij Microsoft controleert Exchange daarnaast *Send As*.
 
-- De engine zoekt de naam één keer op, weigert IP's die privé, lokaal of link-local zijn, en
-  verbindt met precies dat gecontroleerde adres. De naam gaat mee voor het certificaat (SNI;
-  `servername` in imapflow en nodemailer). Zo glipt DNS-rebinding er niet langs. Beide stukken staan
-  er al voor webhooks: de IP-controle in `_shared/webhooks.ts` (`isPrivateIpv4`, `isPrivateIpv6`)
-  en het vastpinnen in `_shared/webhookTransport.ts`. Ze komen in de gedeelde map, zodat de engine
-  ze ook gebruikt.
-- Alleen de poorten 993, 143 (met STARTTLS), 465 en 587.
-- TLS is verplicht, met een geldig certificaat. Er komt geen knop "certificaat negeren".
+**De server die een klant invult (SSRF).**
 
-**De engine zelf.**
+- Eén keer opzoeken; privé, lokaal en link-local weigeren; verbinden met dat vaste adres, met de naam
+  voor het certificaat (`servername`).
+- Alleen de poorten 993, 143 (STARTTLS), 465 en 587.
+- TLS verplicht, geen knop "certificaat negeren".
 
-- Er komt geen enkele poort van buitenaf binnen.
-- De Worker ervoor accepteert alleen verzoeken met `MAIL_ENGINE_SECRET`, van `mailboxes` (testen) en
-  `mail` (seintje).
-- Hij logt nooit inhoud of wachtwoorden, alleen mailbox-id's en foutcodes.
+**De engine** heeft geen open poort. De Worker ervoor accepteert alleen `MAIL_ENGINE_SECRET`. Hij logt
+nooit inhoud of wachtwoorden.
 
-**Mail van klanten is onbetrouwbare invoer.**
+**Misbruik.** De verzendlimiet geldt voor elke route, het tempo per mailbox ook. Een plotselinge piek
+zet de mailbox op pauze en meldt dat de beheerders. Een overgenomen account kan zo via ResoFly geen
+spamrun starten vanaf het domein van de klant.
 
-- HTML gaat door `sanitizeInboundEmailHtml`, en afbeeldingen blijven dicht. Zo zie je geen
-  trackingpixels zonder dat je erop klikt.
-- Bijlagen serveert de media-worker als download, met `nosniff` en `CSP: sandbox`.
-- Gerrie behandelt mailtekst als gegevens (harde regel 2).
-
-**Misbruik.** Een overgenomen account kan via ResoFly geen spam versturen. Daarvoor zorgen
-`email_quota_take`, de tellers per mailbox en het logboek. Een plotselinge piek zet de mailbox op
-pauze en meldt dat de beheerders.
+**Inkomende mail is onbetrouwbaar.** HTML gaat door `sanitizeInboundEmailHtml`, en afbeeldingen
+blijven dicht. Bijlagen worden als download geserveerd, met `nosniff` en `CSP: sandbox`. Voor Gerrie
+is het gegevens, nooit een opdracht.
 
 **Privacy (AVG).**
 
-- **Minimale gegevens.** Standaard *alleen klantmail*, en de envelop wordt gecontroleerd vóór de
-  inhoud (§5.3, §6.2). ResoFly krijgt alleen wat in het klantdossier hoort.
-- **Eenrichtingsverkeer.** ResoFly bewaart een kopie; de mailbox blijft de baas over zichzelf.
-  - Iets verwijderen in ResoFly verwijdert niets in de mailbox.
-  - Iets verwijderen in de mailbox laat de kopie in ResoFly staan. Dat staat zo in het scherm.
-- **Ontkoppelen** vraagt: *ingelezen mail bewaren* (standaard: hij hoort bij het klantdossier) of
-  *ook alles van deze mailbox uit ResoFly verwijderen*.
-- **Verwerkersovereenkomst.** ResoFly verwerkt nu mailboxinhoud. Dat moet erin, net als de
-  subverwerker waar de engine draait en de regio daarvan. Laat dat toetsen door een jurist.
-- **Gegevens meenemen, fase 2** (`GEGEVENS_MEENEMEN_BOUWPLAN_2026-11-11.md`): bij wissen ook alle
-  mailboxen ontkoppelen en de bijlagen onder `client_mail/` wissen.
+- Standaard *alleen klantmail*, en de envelop gaat vóór de inhoud.
+- Eenrichtingsverkeer: ResoFly verwijdert of verplaatst niets in de mailbox.
+- Ontkoppelen vraagt of de ingelezen mail mag blijven.
+- In de verwerkersovereenkomst komen: mailboxinhoud, de subverwerker van de engine en de regio
+  daarvan. Laat dat toetsen door een jurist.
+- Gegevens meenemen, fase 2: bij wissen ook ontkoppelen en `client_mail/` en `mail_sends/` op R2
+  wissen.
 
 ---
 
-## 12 · Wat er misgaat als je het simpel doet
+## 15 · Wat er misgaat als je het simpel doet
 
 | Valkuil | Wat er dan gebeurt | In dit plan |
 |---|---|---|
-| Alles uit de mailbox binnenhalen | Privémail van de ondernemer bij het hele team, veel opslag, AVG-probleem | *Alleen klantmail* als standaard; de envelop eerst |
-| Inlezen van 90 dagen als nieuwe mail behandelen | Honderden pushmeldingen, agentruns en een badge van 600 | Kolom `imported`; de triggers en de ongelezen-view slaan die over |
-| Antwoorden koppelen op onderwerp | Gesprekken lopen door elkaar ("Re: offerte") | Eerst de koppen (`In-Reply-To`, `References`), dan `conversationId`, dan pas de oude regels |
-| De klant bepalen uit `References` | Een vreemde zet met een verzonnen kop zijn mail in het dossier van een andere klant | De klant komt uit het adres of uit onze eigen `Message-ID`; koppen kiezen alleen het gesprek binnen die klant |
-| Geen eigen `Message-ID` | Een antwoord vindt zijn gesprek niet; de kopie in Verzonden wordt een tweede bericht | Wij kiezen en bewaren de `Message-ID`; uniek per organisatie |
-| Doorstuurregel én koppeling | Elke mail twee keer | Ontdubbelen op `Message-ID` over alle ingangen; tip in het scherm om het doorsturen uit te zetten |
-| Opnieuw proberen na een crash tijdens versturen | De klant krijgt de mail twee keer | Eerst in Verzonden zoeken naar de `Message-ID` |
-| Doorgaan na een fout wachtwoord | De hoster blokkeert het IP van ResoFly, voor alle klanten | Direct `needs_reauth`; terugval; een maximum per server |
-| Alleen op meldingen van Microsoft vertrouwen | Gemiste mail, abonnementen die na een week verlopen | Delta elke 10 minuten; elke dag verlengen; lifecycle-meldingen |
-| Graph-id's zonder `ImmutableId` | Een verplaatste mail lijkt nieuw of verdwijnt | Altijd `Prefer: IdType="ImmutableId"` |
-| IMAP-mail als gelezen markeren | De ondernemer mist mail in zijn eigen Outlook | `BODY.PEEK`, we veranderen niets in de mailbox |
-| Versturen via SMTP zonder kopie in Verzonden | Je eigen mailbox mist wat je via ResoFly stuurde | `APPEND` van dezelfde bytes |
-| Een mailbox van Microsoft via IMAP koppelen | Werkt niet (geen wachtwoorden meer) of stopt in december | MX herkennen en naar de Microsoft-knop sturen |
-| Gedeelde mailbox via de tokens van één medewerker | Die vertrekt en de koppeling breekt stil | Status `needs_reauth` met melding; app-only-rechten in fase 4 |
+| Elk verzendpunt zelf laten kiezen tussen Resend en mailbox | 28 plekken met elk een eigen variant; de volgende wijziging vergeet er drie | Eén `sendOrgMail` |
+| De overstap in één keer, met de mailbox erbij | Een fout in de factuurmail valt niet op tussen alle andere wijzigingen | Eerst alles via de verzendlaag met alleen Resend, met gouden tests; dan pas de mailbox |
+| Herinneringen in één klap via Microsoft | Na 30 berichten in een minuut weigert Exchange; de rest faalt | Een wachtrij met tempo per mailbox; rondes als `batch` |
+| Mailbox kapot, factuur gaat stil niet weg | De klant krijgt nooit een factuur, niemand weet het | Terugval naar ResoFly (of wachten), altijd zichtbaar, met melding |
+| Klantmail stil via ResoFly als de mailbox kapot is | De klant krijgt mail van een onverwacht adres | Klantmail valt nooit stil terug |
+| De kopie in Verzonden opnieuw inlezen | Elke factuurmail twee keer in het dossier | `X-ResoFly-Id` en de `Message-ID` koppelen de kopie aan de rij in `mail_sends` |
+| *Geopend* laten staan zonder pixel | Elke offerte "nooit geopend"; het Gerrie-signaal vuurt bij alles | *Bekeken* uit de pagina; het signaal kijkt daarnaar |
+| Bounces negeren | Herinneringen naar een adres dat niet bestaat, tot aan de aanmaning | Onbestelbaar-berichten uit de mailbox lezen; `email_suppressions` |
+| Marketing via de mailbox | Microsoft blokkeert het account; het domein van de facturen belandt op een zwarte lijst | Marketing blijft via het verzenddomein |
+| Inlogcodes wachten op een trage hoster | De klant komt het portaal niet in | Hooguit 10 seconden, dan via ResoFly |
+| De klant bepalen uit `References` | Iemand schuift met een verzonnen kop mail in het dossier van een andere klant | De klant uit het adres of uit onze eigen `Message-ID` |
+| Factuurmail gewoon als klantmail opslaan | Een teamlid zonder Financiën leest bedragen in het klantdossier | Documentgesprekken volgen de module van het document |
+| Inlezen van 90 dagen als nieuwe mail behandelen | Honderden meldingen en agentruns | Kolom `imported` |
+| Alles uit de mailbox binnenhalen | Privémail bij het hele team | *Alleen klantmail* als standaard |
+| Doorgaan na een fout wachtwoord | De hoster blokkeert het IP van ResoFly, voor alle klanten | Direct `needs_reauth`, terugval, een maximum per server |
+| Alleen op meldingen van Microsoft vertrouwen | Gemiste mail, verlopen abonnementen | Delta elke 10 minuten, dagelijks verlengen |
+| Een gedeeld postvak via de tokens van één medewerker | Die vertrekt, en de facturen gaan via ResoFly | Terugval met melding; app-only-rechten in fase 6 |
 
 ---
 
-## 13 · Fasen
+## 16 · Fasen
 
 Alles staat achter een schakelaar per organisatie (`organizations.mailboxes_enabled`, alleen door
-ResoFly zelf aan te zetten). Zo proberen eerst een paar organisaties het, op staging en daarna echt.
+ResoFly aan te zetten). Fase 1 verandert voor klanten niets, behalve de kleine reparaties.
 
 ### Fase 0 · Proeven en voorbereiden (± 1 week)
 
-Doel: de onzekerheden weg, vóór er een tabel bestaat.
-
-- **Entra:** app "ResoFly Mail" registreren en de uitgeversverificatie starten. Met een testtenant:
-  hoe ziet toestemming eruit met de standaardinstellingen van Microsoft, en met *alleen
-  geverifieerde uitgevers*?
-- **Graph:** `sendMail` met MIME. Blijft onze `Message-ID` staan? Komt de kopie in Verzonden items?
-  Kloppen `In-Reply-To` en `References` bij de ontvanger in Outlook en Gmail?
+- **Entra:** app "ResoFly Mail" registreren en de uitgeversverificatie starten. Toestemming testen in
+  een testtenant met de standaardinstellingen.
+- **Graph:**
+  - `sendMail` met MIME, met een PDF van 2 en van 5 MB (de tweede via concept en upload).
+  - Blijft onze `Message-ID` staan?
+  - Een gedeeld postvak met *Send As*: in welke map Verzonden komt de kopie?
+  - Een `text/calendar`-uitnodiging via MIME: hoe gaat Exchange daarmee om?
 - **Deno:** `postal-mime` en `MailComposer` (via `npm:`) in een edge function.
+- **Container:** lukt uitgaand 993, 465 en 587 naar drie Nederlandse hosters, Gmail en iCloud? Hoe lang
+  blijft hij leven, en in welke regio draait hij?
+- **Bounces:** echte onbestelbaar-berichten van Microsoft, Gmail, Postfix en Exim, als testdata.
 - **Resend:** neemt de API een eigen `Message-ID` in `headers` over?
-- **Container:** Node 22 met imapflow en nodemailer in een Cloudflare Container.
-  - Lukt uitgaand 993, 465 en 587 naar drie Nederlandse hosters, Gmail en iCloud?
-  - Hoe lang blijft hij leven, en komt hij na een herstart vanzelf terug (cron, Durable Object)?
-  - In welke regio draait hij?
-- **Besluit:** Cloudflare Containers of Fly.io (regio Amsterdam, vast uitgaand IP).
-- **Resultaat:** `docs/rapporten/MAILBOX_PROEF_<datum>.md`, en de beslissingen van §15 genomen.
+- **Besluit:** Cloudflare Containers of Fly.io.
+- **Resultaat:** `docs/rapporten/MAILBOX_PROEF_<datum>.md`, en de beslissingen van §18 genomen.
 
-### Fase 1 · Microsoft 365: koppelen, lezen, versturen (± 3 weken)
+### Fase 1 · De verzendlaag, nog alleen via Resend (± 2 weken)
 
-- De migratie van §9 (alles, ook wat IMAP straks nodig heeft), `secretBox`, `oauthState` algemener.
-- Edge function `mailboxes` (Microsoft) en `mailbox-sync` (delta, meldingen, verlengen, eerste
-  inlezen), plus cron `mailbox-sync-tick`, elke minuut.
-- `register_mailbox_message`, `mailbox_match_preview`, bijlagen en `.eml` naar R2, de media-worker
-  met `client_mail/`.
-- `mail`: `mailboxId`, onze eigen `Message-ID` (ook voor Resend), de koppen bij antwoorden, en de
-  route via Microsoft.
-- Meteen meegenomen: de `reply+`-route gebruikt het gesprek van het oorspronkelijke bericht, en
-  `in_reply_to` telt mee bij het kiezen van het gesprek.
-- **Scherm:**
-  - Instellingen → E-mail → Mailboxen.
-  - In Berichten en het klantdossier: *Van*, het mailboxlabel, bijlagen, *Verstuurd vanuit je
-    mailbox* en de melding bij een kapotte koppeling.
-- **Verder:** de triggers met `imported`, het logboek, vertrek van een teamlid, het exportmanifest en
-  een setup-handleiding (`docs/setup/MAILBOX_KOPPELEN_SETUP.md`).
+- `mail_sends`, `sendOrgMail` (alleen Resend), de MIME-bouwer en het `.eml` op R2.
+- Alle 28 verzendpunten erop, met gouden tests per punt (§7.3).
+- `resend-webhook` werkt `mail_sends` bij, en de statustrigger spiegelt naar de bron.
+- **De gaten van §2 dicht:**
+  - contracten en creditnota's krijgen een status;
+  - vaste idempotentiesleutels;
+  - de inlogcode en de annulering tellen mee voor de limiet;
+  - de Gerrie-agent gebruikt `RESEND_FROM_EMAIL`.
+- **De eigen `Message-ID`** voor elke mail, en `In-Reply-To` en `References` bij antwoorden en
+  herinneringen. De `reply+`-route gebruikt het gesprek van het oorspronkelijke bericht.
+- **Documentgesprekken** in `client_emails` (factuur, offerte, contract) en het filter *Soort:
+  documenten*.
+- ***Bekeken*** in Financiën en bij offertes, en het Gerrie-signaal op `client_viewed`.
 
-### Fase 2 · Andere mailboxen: IMAP en SMTP (± 3 weken)
+Dit is op zichzelf waardevol en verkleint het risico van alles wat volgt.
+
+### Fase 2 · Microsoft 365: koppelen, lezen, alles versturen (± 3 weken)
+
+- `mailboxes` (Microsoft, ook gedeelde postvakken) en `mailbox-sync` (delta, meldingen, verlengen,
+  inlezen, de wachtrij van Microsoft).
+- `register_mailbox_message`, `mailbox_match_preview`, bijlagen naar R2, en bounces uit de mailbox.
+- `organization_mail_routes` en de route via Microsoft in `sendOrgMail`, voor:
+  - klantmail;
+  - offertes en contracten;
+  - facturen, herinneringen, aanmaningen en creditnota's;
+  - de afspraakmails (zonder ICS);
+  - bestanden;
+  - het portaal en de codes.
+- Terugval, tempo en voorrang.
+- **Scherm:** Instellingen → E-mail (Mailboxen, Verzenden), *Van* in Berichten, de statussen in
+  Financiën, de melding bij een kapotte koppeling, en de stap bij Inrichten.
+- Verder: logboek, vertrek van een teamlid, exportmanifest, en
+  `docs/setup/MAILBOX_KOPPELEN_SETUP.md`.
+
+### Fase 3 · Andere mailboxen: IMAP en SMTP (± 3 weken)
 
 - `workers/mail-engine`:
-  - De Worker: cron die de container wakker houdt, `/poke`, `/test`.
-  - De container: Node 22 met imapflow, nodemailer en postal-mime.
-  - Leases, IDLE, de wachtrij, `APPEND` en de controle in Verzonden.
-- Instellen: zoeken (MX, presets, autoconfig, SRV), testen per stap, presets met stappen per hoster,
-  en de uitleg voor Gmail en iCloud.
-- Netjes tegen hosters (§6.4) en SSRF (§11).
-- In het scherm: *Wordt verstuurd…*, *Opnieuw proberen* en de realtime-update.
-- Deployen gaat met de hand, zoals de andere workers (`npm run deploy:staging`). Dat komt in de
-  setup-handleiding.
+  - de Worker: cron, `/poke`, `/test`;
+  - de container: Node 22 met imapflow, nodemailer en postal-mime;
+  - leases, IDLE, de wachtrij, `APPEND`, de controle in Verzonden en bounces.
+- Instellen: zoeken, presets, testen per stap, de uitleg voor Gmail en iCloud.
+- Netjes tegen hosters, SSRF.
+- Dezelfde routes als bij Microsoft; het scherm hoeft niet te weten welke soort mailbox het is.
+- Deployen met de hand, zoals de andere workers.
 
-### Fase 3 · Werken vanuit Berichten (± 2 weken)
+### Fase 4 · Werken vanuit Berichten (± 2 weken)
 
-- **Gedeelde mailboxen:** wie mag versturen (`mailbox_members`), en een handtekening per mailbox.
-- **Versturen ongedaan maken:** 10 seconden. De wachtrij heeft er al een `next_attempt_at` voor; voor
-  Microsoft gaat het in dat geval ook via de wachtrij.
-- **Filter op mailbox** in Berichten.
-- **Gerrie:** antwoord in hetzelfde gesprek en vanaf de juiste mailbox (`thread_id`, `mailbox_id`), en
-  een leeshandeling `mailbox.list` (status, geen geheimen).
-- **Oude mail van deze klant ophalen**, in het klantdossier: zoeken in de mailbox op het adres van de
-  klant (IMAP `SEARCH FROM/TO`, Graph `$search`), via dezelfde ingang.
-- **Beslislijst:** een kaart *Mailbox moet opnieuw verbonden worden*.
-- **Inrichten:** een optionele stap *Koppel je mailbox* (`test:inrichten`).
-- **Telefoon:** *Van* als compacte keuze, en bijlagen in een strook.
+- Gedeelde mailboxen in Berichten: wie mag versturen, en een handtekening per mailbox.
+- Versturen ongedaan maken: 10 seconden in de wachtrij voor wat je met de hand verstuurt.
+- Gerrie antwoordt in hetzelfde gesprek, en een leeshandeling `mailbox.list`.
+- *Oude mail van deze klant ophalen* in het klantdossier.
+- Een kaart op de beslislijst bij een kapotte koppeling.
+- Telefoon: *Van* als compacte keuze, en bijlagen in een strook.
+- Het doorstuuradres wordt in Instellingen plan B (ingeklapt).
 
-### Fase 4 · Later, als er vraag naar is
+### Fase 5 · Afspraken volledig via de mailbox (± 1–2 weken)
 
-- **Gelezen-status heen en weer**: `Mail.ReadWrite` en `\Seen`.
-- **Gedeelde postvakken van Microsoft** (`Mail.Read.Shared`), en app-only-rechten met beperking per
-  postvak (RBAC for Applications) voor bedrijven die geen persoonlijke tokens willen.
-- **Gmail via OAuth**, na de CASA-audit.
-- **Inkoopfacturen uit de mailbox**: een regel per map of adres naar de factuurinbox.
-- **Facturen en offertes vanuit de eigen mailbox**, als keuze per organisatie.
-- **Meer engine-instanties**: de leases maken dat al mogelijk.
-- Het doorstuuradres alleen nog tonen aan wie niet gekoppeld heeft.
+- Uitnodigingen en annuleringen uit een ResoFly-agenda via de mailbox: de organisator wordt het echte
+  adres in plaats van `organizer+…`.
+- Antwoorden op uitnodigingen uit de mailbox naar de bestaande RSVP-verwerking.
+- Een route *de mailbox van de vaste contactpersoon* (accountlead) voor klantmail en offertes.
 
-De weken zijn een schatting voor één ontwikkelaar met AI, inclusief tests en documentatie.
+### Fase 6 · Later, als er vraag naar is
 
----
+- Gelezen-status heen en weer.
+- App-only-rechten met beperking per postvak (RBAC for Applications) voor bedrijven die geen tokens
+  van een medewerker willen.
+- Gmail via OAuth (na de CASA-audit).
+- Inkoopfacturen uit de mailbox: een regel per map of adres naar de factuurinbox.
+- Meer engine-instanties.
 
-## 14 · Kosten en capaciteit
-
-**Container.** Eén instance `basic` (¼ vCPU, 1 GiB) die altijd aan staat.
-
-- Cloudflare rekent sinds november 2025 alleen de CPU die echt gebruikt wordt; geheugen en schijf
-  gaan op wat je toewijst. Een proces dat vooral wacht op IDLE kost dus vooral geheugen. Reken op een
-  paar tientjes per maand, of minder; controleer de actuele prijstabel.
-- Eén IMAP-verbinding kost enkele honderden KB. Eén instance kan dus naar schatting honderden tot
-  ongeveer duizend mailboxen aan. Daarboven komen er instances bij (leases).
-
-**Supabase.**
-
-- Een melding van Microsoft kost één aanroep van een edge function, plus de cron elke minuut. Bij
-  honderden mailboxen blijft dat ruim binnen het tegoed van Pro.
-- De database groeit met de mail zelf (tekst en HTML, zoals nu, tot 128 KB per bericht). Bijlagen
-  staan niet in de database.
-
-**R2.** De bijlagen en de `.eml`'s, de grootste post. Een quotum per organisatie of per abonnement
-is beslissing 11.
-
-**Microsoft en hosters.** Kosten niets. Voor de uitgeversverificatie is lidmaatschap van het
-Microsoft AI Cloud Partner Program nodig, en dat is gratis.
-
-**Fly.io als terugval.** Een kleine machine in Amsterdam met een vast uitgaand IP. Vergelijkbare
-kosten, maar een nieuwe subverwerker.
+De weken zijn een schatting voor één ontwikkelaar met AI, inclusief tests en documentatie. Samen
+ongeveer 12 tot 14 weken tot en met fase 5.
 
 ---
 
-## 15 · Beslissingen
+## 17 · Kosten en capaciteit
+
+- **Container:** één instance `basic` (¼ vCPU, 1 GiB), altijd aan. Cloudflare rekent sinds november
+  2025 alleen de CPU die echt gebruikt wordt; geheugen en schijf op wat je toewijst. Reken op een paar
+  tientjes per maand, of minder; controleer de actuele prijstabel. Eén instance kan naar schatting
+  honderden tot ongeveer duizend IMAP-mailboxen aan.
+- **Supabase:** een melding van Microsoft kost één aanroep, plus de cron elke minuut. Dat blijft ruim
+  binnen het tegoed van Pro.
+- **R2:** bijlagen, ingelezen `.eml`'s en de `.eml`'s *zoals verstuurd*. De grootste post. Een
+  quotum per abonnement is beslissing 13.
+- **Resend:** minder verkeer, en minder eigen domeinen nodig. Op termijn kan een kleiner abonnement
+  volstaan.
+- **Microsoft en hosters:** gratis. Lidmaatschap van het Microsoft AI Cloud Partner Program ook.
+
+---
+
+## 18 · Beslissingen
 
 | # | Vraag | Voorstel | Wie |
 |---|---|---|---|
-| 1 | Wat halen we binnen? | Per mailbox kiezen; standaard *alleen klantmail*, *alle mail* voor gedeelde adressen | Gerjan |
-| 2 | Hoe ver terug bij koppelen? | 90 dagen standaard; keuze 30 / 90 / 365 | Gerjan |
-| 3 | Bijlagen opslaan? | Ja, tot 25 MB per bestand; groter alleen de naam | Gerjan |
-| 4 | Het originele `.eml` bewaren? | Ja, voor gekoppelde mail (opnieuw inlezen, bewijs, export) | Gerjan |
-| 5 | Een privé-mailbox waarvan alleen de eigenaar de mail ziet? | Niet in fase 1–3. *Alleen klantmail* plus "nooit importeren van/naar" (adres of domein) dekt het meeste | Gerjan |
-| 6 | Gelezen-status synchroniseren met de mailbox? | Nee tot fase 4; ResoFly houdt zijn eigen stand per teamlid | Voorstel |
-| 7 | Waar draait de mail-engine? | Cloudflare Containers; Fly.io als fase 0 problemen geeft (poorten, regio, vast IP) | Na fase 0 |
-| 8 | Facturen en offertes via de eigen mailbox? | Nee, Resend blijft; later een keuze | Gerjan |
-| 9 | Gmail? | App-wachtwoord via IMAP; OAuth pas bij genoeg vraag (CASA-audit) | Gerjan |
-| 10 | Wie mag koppelen? | Een persoonlijke mailbox: elk teamlid met schrijfrecht op Klanten. Een gedeelde: eigenaar en beheerders | Voorstel |
-| 11 | Hoeveel mailboxen per abonnement, en een opslagquotum? | Open | Gerjan |
-| 12 | Het doorstuuradres? | Blijft; tip om het uit te zetten na koppelen | Voorstel |
+| 1 | Wat gaat via de mailbox? | Alles naar klanten (§5), behalve marketing | Gerjan, 11 november: ja, ook documenten |
+| 2 | Terugval als de mailbox niet werkt? | Documenten, afspraken, bestanden en portaal via ResoFly, met melding; per organisatie *wachten* te kiezen. Klantmail nooit stil. | Gerjan |
+| 3 | Codes via de mailbox? | Ja, niet in Verzonden; na 10 seconden via ResoFly | Gerjan |
+| 4 | Marketing via de mailbox? | Nee, het verzenddomein blijft | Voorstel |
+| 5 | Trackingpixel? | Nee; *Bekeken* via de pagina | Gerjan |
+| 6 | Wat halen we binnen? | Per mailbox; standaard *alleen klantmail* | Gerjan |
+| 7 | Hoe ver terug bij koppelen? | 90 dagen; keuze 30 / 90 / 365 | Gerjan |
+| 8 | Microsoft-rechten? | Alles in één toestemming (`Mail.ReadWrite`, `Mail.Send` en de `.Shared`-varianten) | Gerjan |
+| 9 | Bijlagen en `.eml` bewaren? | Ja; bijlagen tot 25 MB | Gerjan |
+| 10 | Documentgesprekken in Berichten? | Zodra de klant antwoordt, of via het filter | Voorstel |
+| 11 | Waar draait de mail-engine? | Cloudflare Containers; Fly.io als fase 0 problemen geeft | Na fase 0 |
+| 12 | Gmail? | App-wachtwoord via IMAP; OAuth bij genoeg vraag | Gerjan |
+| 13 | Mailboxen per abonnement, en opslag? | Open | Gerjan |
+| 14 | Wie stelt routes in, wie koppelt? | Routes: eigenaar en beheerders. Persoonlijke mailbox: elk teamlid met schrijfrecht op Klanten. | Voorstel |
 
 ---
 
-## 16 · Testen
+## 19 · Testen
 
+- **Gouden tests voor de verzendlaag** (fase 1): per verzendpunt de Resend-payload van vóór en na de
+  overstap naast elkaar. Alleen de bewuste reparaties mogen verschillen.
 - **`npm test`** (app en `_shared`, ook onder Node):
-  - adressen normaliseren, presets en autoconfig lezen;
-  - de SSRF-controle (privé-IP's, DNS die naar binnen wijst);
-  - de MIME-bouwer (koppen, `Re: `, `X-ResoFly-Id`);
-  - `secretBox` (sleutel-id, verkeerde sleutel);
-  - de foutteksten;
-  - het gesprek kiezen in `lib/communication.ts` met mailboxmail.
-- **Edge functions:** de `deno check`-lijst in `.github/workflows/frontend-checks.yml` krijgt
-  `mailboxes` en `mailbox-sync`. Tests voor de state van OAuth, de validatie van meldingen
-  (`validationToken`, een verkeerde `clientState`) en de delta met een nep-Graph.
-- **Mail-engine:** tests tegen een echte IMAP/SMTP-server in Docker (bijvoorbeeld GreenMail):
-  - eerste inlezen en IDLE;
-  - een veranderde `uidvalidity`;
-  - versturen, `APPEND` en de controle in Verzonden na een gesimuleerde crash;
-  - stoppen bij een fout wachtwoord.
-- **Database** (`supabase db start`, de keten vanaf nul):
-  - `register_mailbox_message` met dubbele mail (doorsturen en mailbox);
-  - de kopie in Verzonden van een rij uit de wachtrij;
-  - een mailbox en een gesprek van verschillende organisaties (moet weigeren);
-  - een onbekende afzender met een verzonnen `References` naar het gesprek van een klant (moet naar
-    de opvangbak, niet in dat gesprek);
-  - een antwoord vanaf een onbekend adres met `In-Reply-To` op onze eigen `Message-ID` (moet in het
-    gesprek);
-  - `imported` zonder triggers;
-  - RLS zonder module Klanten.
+  - `resolveMailRoute` (elke route, elke terugval, een persoonlijke mailbox van een ander, een
+    mailbox van een andere organisatie);
+  - de MIME-bouwer (koppen, `cid`-logo, ICS, PDF en UBL);
+  - het herkennen van bounces met de echte voorbeelden;
+  - presets en autoconfig, de SSRF-controle, `secretBox`;
+  - de statuslabels.
+- **Edge functions:** `mailboxes` en `mailbox-sync` in de `deno check`-lijst (`frontend-checks.yml`).
+  Tests met een nep-Graph:
+  - meldingen (`validationToken`, een verkeerde `clientState`);
+  - delta;
+  - `sendMail` met `429`;
+  - een gedeeld postvak zonder *Send As*.
+- **Mail-engine:** tegen een IMAP/SMTP-server in Docker (GreenMail):
+  - inlezen en IDLE;
+  - `uidvalidity`;
+  - tempo;
+  - `APPEND`;
+  - een crash tijdens het versturen;
+  - een fout wachtwoord.
+- **Database** (`supabase db start`):
+  - ontdubbelen over doorsturen, mailbox en de kopie in Verzonden;
+  - een verzonnen `References` (moet naar de opvangbak);
+  - `In-Reply-To` op onze eigen `Message-ID` vanaf een onbekend adres (moet in het gesprek);
+  - organisatiegrenzen;
+  - de module per soort in `mail_sends`;
+  - een factuurgesprek en het antwoord van de klant erop, voor een teamlid met Klanten maar zonder
+    Financiën (moet onzichtbaar zijn);
+  - `imported` zonder triggers.
+- **`tests/stromen/`:**
+  - factuur versturen via een Microsoft-mailbox (nep-Graph) → *Verstuurd vanuit…* → de klant
+    antwoordt → het antwoord in het gesprek van de factuur;
+  - een herinneringsronde met tempo;
+  - een kapotte mailbox → terugval met melding;
+  - een bounce → *Kwam niet aan*.
 - **`actionTenancy.test.ts`** voor de nieuwe parameters van Gerrie.
-- **`npm run test:mobile -- --theme=both`:** Instellingen → E-mail met mailboxen, Berichten met *Van*,
-  bijlagen en de melding. Seed in `tests/mobile/mock/seed.mjs`.
-- **`tests/stromen/`:** een stroom *mailbox koppelen → mail binnen → antwoorden → kopie in Verzonden*
-  met de nep-Graph.
-- **`npm run test:inrichten`** zodra de stap bij Inrichten komt (fase 3).
+- **`npm run test:mobile -- --theme=both`:** Instellingen → E-mail, Berichten met *Van* en
+  documentgesprekken, Financiën met de nieuwe statussen.
+- **`npm run test:inrichten`:** de stap *Koppel je mailbox*.
 
-## 17 · Inrichten (voor de setup-handleiding)
+---
+
+## 20 · Inrichten (voor de setup-handleiding)
 
 - **Entra:** app "ResoFly Mail".
   - Redirect: `…/functions/v1/mailboxes`.
-  - Rechten: §5.1.
+  - Rechten: §9.1.
   - Uitgeversverificatie.
 - **Secrets voor de edge functions:**
-  - `MICROSOFT_MAIL_CLIENT_ID`, `MICROSOFT_MAIL_CLIENT_SECRET`, `MICROSOFT_MAIL_TENANT_ID`
-    (`common`);
+  - `MICROSOFT_MAIL_CLIENT_ID`, `MICROSOFT_MAIL_CLIENT_SECRET`, `MICROSOFT_MAIL_TENANT_ID`;
   - `MAILBOX_OAUTH_STATE_SECRET`, `MAILBOX_REDIRECT_URL`, `MAILBOX_ALLOWED_RETURN_ORIGINS`;
   - `MAILBOX_MS_TOKEN_KEY`, `MAILBOX_IMAP_SECRET_KEY`, `MAILBOX_SYNC_CRON_SECRET`;
   - `MAIL_ENGINE_URL`, `MAIL_ENGINE_SECRET`.
-- **Cron:** `mailbox-sync-tick` elke minuut → `mailbox-sync?cron=tick` met `x-cron-secret`, in
-  `scripts/supabase-setup-webhooks.sh`.
+- **Cron:** `mailbox-sync-tick` elke minuut (in `scripts/supabase-setup-webhooks.sh`).
 - **`supabase/config.toml`:** `[functions.mailboxes]` en `[functions.mailbox-sync]` met
   `verify_jwt = false`; beide controleren zelf.
 - **Mail-engine:**
@@ -885,17 +1040,18 @@ kosten, maar een nieuwe subverwerker.
 
 - Microsoft, SMTP AUTH met wachtwoord standaard uit vanaf december 2026: Message Center
   [MC786329](https://mc.merill.net/message/MC786329).
-- Microsoft Graph, abonnementen (Outlook-berichten maximaal 10.080 minuten, lifecycle-meldingen):
+- Microsoft Graph, abonnementen en lifecycle-meldingen:
   [subscription resource type](https://learn.microsoft.com/graph/api/resources/subscription),
   [Outlook change notifications](https://learn.microsoft.com/graph/outlook-change-notifications-overview).
-- Cloudflare Containers (instance-types, alleen gebruikte CPU, `sleepAfter`, uitgaand internet):
+- Cloudflare Containers:
   [pricing](https://developers.cloudflare.com/containers/pricing/),
   [container class](https://developers.cloudflare.com/containers/reference/container-class/),
   [FAQ](https://developers.cloudflare.com/containers/faq/).
-- Cloudflare Workers en TCP (poort 25 dicht, sockets per verzoek):
+- Cloudflare Workers en TCP:
   [TCP sockets](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/).
 - Mailrechten bij Microsoft en toestemming van een beheerder: indicatief, uit Microsoft Q&A en
   [Nylas over uitgeversverificatie](https://support.nylas.com/hc/en-us/articles/28841177145117-Understanding-This-App-May-Be-Risky-Warnings-Post-Publisher-Verification).
   Fase 0 test dit in een echte tenant.
-- De limieten van Supabase Edge Functions (poorten 25 en 587, tijdslimiet) staan in de documentatie
-  van Supabase onder *Functions → Limits*. Controleer ze bij de bouw.
+- De grenzen van Exchange Online (30 berichten per minuut, 10.000 ontvangers per dag) en van
+  Supabase Edge Functions (poorten 25 en 587, tijdslimiet) staan in hun documentatie. Controleer ze
+  bij de bouw.
