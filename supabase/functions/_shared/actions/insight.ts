@@ -180,7 +180,10 @@ function describeDefinition(def: ReportDefinitionLite): string {
 /** Roept een rapport-RPC aan. De service-role slaat de can_read_org-check over, dus
  *  het organisatie-id uit de geverifieerde sessie is hier de enige grens. */
 async function callReport<T>(ctx: ActionCtx, fn: string, params: Record<string, unknown>, label: string): Promise<T> {
-  const { data, error } = await ctx.db.rpc(fn, { p_organization_id: ctx.organizationId, ...params });
+  // De organisatie ACHTERAAN, zodat niets in `params` hem kan overschrijven.
+  // Stond hij vooraan, dan won een `p_organization_id` in params: nu geeft geen
+  // enkele aanroep die mee, maar de tenancy-test ziet een spread niet.
+  const { data, error } = await ctx.db.rpc(fn, { ...params, p_organization_id: ctx.organizationId });
   if (error) throw new ActionError(`${label} ophalen mislukt: ${error.message}`);
   return data as T;
 }

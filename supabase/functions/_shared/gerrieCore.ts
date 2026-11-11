@@ -2896,7 +2896,10 @@ function findActionsTool(ctx: GerrieContext, input: Record<string, unknown>) {
   const query = String(input.query ?? '').trim();
   const found = searchActions(query, {
     allowedIds: ctx.allowedActionIds ?? null,
-    modules: (module, kind) => actionPermitted(ctx, { module, kind }),
+    // De hele handeling, zodat ook adminOnly meeweegt: met alleen module en
+    // soort vond een member hier de team- en instellingshandelingen terug die
+    // resolveAction hem daarna weigerde.
+    permits: (action) => actionPermitted(ctx, action),
     limit: Number(input.limit) || 12,
   });
   return {

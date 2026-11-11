@@ -236,3 +236,18 @@ test('er wordt daadwerkelijk iets nagekeken', () => {
     `verwacht honderden org-scoped toegangen in de registry, gevonden: ${queries + helpers}. ` +
     'Is de registry verbouwd? Dan moeten de controles hierboven daarop worden aangepast.');
 });
+
+test('geen spread na de organisatie in de parameters van een RPC', () => {
+  // `{ p_organization_id: ctx.organizationId, ...params }` ziet er veilig uit en
+  // komt door de RPC-test hierboven, maar een `p_organization_id` in params wint
+  // dan. Zo stond het in de hulpjes rpc() (bookkeeping.ts) en callReport()
+  // (insight.ts). Geen aanroep gaf hem mee; de volgorde hoort het ook niet toe
+  // te laten.
+  const problems: string[] = [];
+  for (const { name, lines } of actionSources()) {
+    lines.forEach((line, index) => {
+      if (/p_organization_id:\s*ctx\.organizationId\s*,\s*\.\.\./.test(line)) problems.push(`${name}:${index + 1} — ${line.trim()}`);
+    });
+  }
+  assert.deepEqual(problems, [], 'Zet de spread vóór p_organization_id, zodat de organisatie uit de sessie altijd het laatste woord heeft.');
+});
