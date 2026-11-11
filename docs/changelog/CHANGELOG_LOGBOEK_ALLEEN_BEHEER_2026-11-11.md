@@ -33,12 +33,18 @@ een teamlid (member), een kijker (viewer) en de boekhouder:
 
 Wat zij doen, wordt nog steeds gelogd: alleen wie het mag lezen is veranderd.
 
+**Alle gegevens exporteren** (Instellingen → Gegevens, ook van vandaag) zette
+een regel in het logboek die bedoeld was voor het hele team. Die regel zien nu
+de eigenaar en de beheerders, dezelfde mensen die een export kunnen maken. De
+tekst onder de knop zegt dat nu ook: *"De eigenaar en de beheerders zien in
+het logboek dat je een export hebt gemaakt."*
+
 In het logboek zelf zegt de uitleg bovenaan nu: *"Alleen owners en admins zien
 het logboek. Niemand kan het aanpassen of wissen."*, met in de uitklap dat
 teamleden, kijkers en de boekhouder het niet zien, ook niet via Gerrie of de
 API.
 
-## Database — `20261111090000_logboek_alleen_beheer.sql`
+## Database — `20261111140000_logboek_alleen_beheer.sql`
 
 - De leesregel `audit logs read by org members` (per module) is vervangen door
   `audit logs read by owners and admins`: `can_admin_org(organization_id)`.
@@ -49,7 +55,9 @@ API.
   in het filter, en `audit.list` voor een sleutel van een owner of admin die
   tot een paar modules beperkt is.
 
-Veilig opnieuw te draaien.
+Veilig opnieuw te draaien. Eerst heette hij `20261111090000`. Staging kreeg
+eerder vandaag `20261111120000` (de export), en een nieuwe migratie moet later
+zijn dan de laatste op staging.
 
 ## Code
 
@@ -62,6 +70,8 @@ Veilig opnieuw te draaien.
   admin); de uitleg bovenaan is aangepast.
 - `src/lib/repository.ts`: `loadOrganizationContext` vraagt het logboek alleen
   op voor owners en admins.
+- `src/features/DataExport.tsx` en `src/lib/auditLog.ts`: de tekst bij de
+  export en het commentaar bij `data_export` zeggen wie de regel ziet.
 - `supabase/functions/_shared/actions/admin.ts`: `audit.list` is `adminOnly`
   en weigert een andere rol ook zelf (hij leest met de service-role);
   `visibleAuditEntityTypes` geeft een teamlid, kijker of boekhouder een lege
@@ -69,25 +79,33 @@ Veilig opnieuw te draaien.
 
 ## Getest
 
-- `npm run typecheck` en `npm test` (1.511 tests), met in
+Eerst op de stand van staging van vanochtend. Daarna opnieuw, na het
+samenvoegen met staging (de export en het MCP-adres), waar dat hieronder staat.
+
+- `npm run typecheck` en `npm test` (1.564 tests na het samenvoegen), met in
   `supabase/functions/_shared/auditVisibility.test.ts`:
   - na de hele migratieketen staat er precies één leesregel op `audit_logs`,
     en die is `can_admin_org(organization_id)`;
   - `audit.list` is `adminOnly` en weigert een teamlid, kijker en boekhouder,
     zonder query naar de database;
   - een beperkte sleutel van een admin ziet alleen zijn modules.
-- `supabase start`: de keten vanaf nul (Postgres 17.11.0.018), en de nieuwe
-  migratie nog een keer erachteraan. Op de verse database staat alleen de
-  nieuwe leesregel, plus het hek van de boekhouder.
-- `npm run test:stromen -- beveiliging`: 161 stappen, 0 fout. De nieuwe stap
+- `supabase db reset` na het samenvoegen: de keten vanaf nul (Postgres
+  17.11.0.018), met `20261111120000` en daarna `20261111140000`. Daarna de
+  nieuwe migratie nog een keer. Op de verse database staat alleen de nieuwe
+  leesregel, plus het hek van de boekhouder.
+- `npm run test:stromen -- beveiliging`, voor en na het samenvoegen: 161
+  stappen, 0 fout. De nieuwe stap
   *"het logboek: eigenaar en beheerder lezen het; lid, lezer, kijker en
   boekhouder krijgen 0 regels"* loopt tegen de echte RLS.
 - Tegenproef op die database, in een transactie die is teruggedraaid. Een
   teamlid met alle modules las met de oude regel 155 van de 158 regels van
   zijn organisatie, met de nieuwe 0.
-- `npm run test:mobile -- --theme=both`: 488 pagina's, 0 met problemen.
-- `npm run test:loading`: alle controles geslaagd.
-- Eenmalig in de browser, met de nagebootste backend, als owner en als member.
+- `npm run test:mobile -- --theme=both`: 488 pagina's, 0 met problemen. Na het
+  samenvoegen opnieuw voor dashboard, instellingen, logboek, gegevens en
+  boekhouder: 30 pagina's, 0 met problemen.
+- `npm run test:loading`, voor en na het samenvoegen: alle controles geslaagd.
+- Eenmalig in de browser, voor en na het samenvoegen, met de nagebootste
+  backend, als owner en als member.
   De owner ziet het blok en het tabblad. De member ziet ze niet, de app vraagt
   `audit_logs` voor hem niet op, en er is geen JavaScript-fout.
 - `deno check` kon hier niet: deno is in de cloudsessie niet beschikbaar. Dat

@@ -584,7 +584,7 @@ async function rollenBinnenA(A, d) {
       { token: A.zonderFinancien.token }), 'audit-log')],
   ]));
 
-  // Het logboek is alleen voor owners en admins (20261111090000). Daarvóór las
+  // Het logboek is alleen voor owners en admins (20261111140000). Daarvóór las
   // een teamlid per module mee: met alle modules vrijwel het hele logboek, met
   // de e-mailadressen van collega's en wie wiens rechten aanpaste. Op dit punt
   // staan er regels in (de offertes, facturen en contracten van klaarzetten),

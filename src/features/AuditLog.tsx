@@ -9,7 +9,7 @@
  *    met de laatste regels en een knop naar het hele logboek.
  *
  * Alleen voor owners en admins: de app toont het tabblad en het blok niet aan
- * anderen, en de database geeft hun geen regel (migratie 20261111090000;
+ * anderen, en de database geeft hun geen regel (migratie 20261111140000;
  * daarvóór las een teamlid per module mee). De zinnen komen uit
  * src/lib/auditLog.ts.
  */

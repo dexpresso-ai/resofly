@@ -142,6 +142,9 @@ Dat draait zes migraties, in volgorde en veilig om te herhalen:
 supabase secrets set MCP_STATE_SECRET="$(openssl rand -base64 48)"
 ```
 
+Met een eigen adres komen daar `MCP_RESOURCE_URL`, `MCP_PUBLIC_BASE_URL` en
+`MCP_PROXY_SECRET` bij; zie *Het eigen adres*.
+
 `APP_PUBLIC_URL` moet al staan (daar leeft het toestemmingsscherm). Staat hij er
 niet, zet hem dan nu:
 
@@ -170,6 +173,8 @@ geregistreerde client en PKCE (`mcp-oauth`), of met het toegangstoken uit de
 koppeling (`mcp`).
 
 ## 4. Controleren dat het staat
+
+Rechtstreeks op de functies (op het eigen adres: zie *Het eigen adres*, stap 5):
 
 ```bash
 curl -s https://<PROJECT>.supabase.co/functions/v1/mcp-oauth/.well-known/oauth-authorization-server | jq
@@ -201,8 +206,12 @@ Eén URL, letterlijk zo — zonder slash erachter, want Claude vergelijkt hem me
 `resource` uit het discovery-document:
 
 ```
-https://<PROJECT>.supabase.co/functions/v1/mcp
+https://mcp.resofly.com/mcp
 ```
+
+Dat is het eigen adres (zie *Het eigen adres* hieronder; staging sinds
+11 november). Een omgeving zonder eigen adres gebruikt het adres van de functie
+zelf, `https://<PROJECT>.supabase.co/functions/v1/mcp`.
 
 Die staat met een kopieerknop en de stappen per AI-app in **Instellingen → AI**
 (`MCP_SERVER_URL` in `src/lib/mcp-api.ts`). De rest gaat vanzelf: de AI-client
@@ -288,20 +297,132 @@ Loskoppelen doet hij onder **Instellingen → AI**; dat werkt meteen. De databas
 trekt de tokens mee in en zet alles wat die koppeling nog had klaarstaan op
 geannuleerd.
 
-### Een eigen domein ervoor (optioneel)
+## Het eigen adres: mcp.resofly.com
 
-De URL hierboven werkt, maar hij is lelijk en de discovery-adressen staan op een
-Supabase-pad in plaats van op een root. Wil je
-`https://mcp.jouwdomein.nl`, zet er dan een Cloudflare Worker of een
-Pages-redirect voor die doorstuurt naar de twee functies, en zet:
+Tot 11 november plakte een klant
+`https://enzghpduqwaojcxgwarr.supabase.co/functions/v1/mcp` in zijn AI-app. Dat
+werkte, maar het was het adres van onze leverancier, met een projectcode erin.
+Het zou ook veranderen zodra we van Supabase-project wisselen. Nu is het
+`https://mcp.resofly.com/mcp`.
 
-```bash
-supabase secrets set MCP_PUBLIC_BASE_URL="https://mcp.jouwdomein.nl/oauth"
-supabase secrets set MCP_RESOURCE_URL="https://mcp.jouwdomein.nl"
-```
+### Hoe het in elkaar zit
 
-De functies vergelijken op de staart van het pad, dus ze werken in beide
-opstellingen zonder codewijziging.
+Op `mcp.resofly.com` staat een Cloudflare Worker (`workers/mcp`). Die stuurt door
+naar dezelfde twee edge functions als altijd. Er draait geen tweede server en
+er is geen tweede weg naar de gegevens.
+
+| Pad op mcp.resofly.com | Gaat naar |
+|---|---|
+| `/mcp` | `mcp` (de MCP-server) |
+| `/mcp/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-protected-resource` | het resource-document van `mcp` |
+| `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/authorize`, `/token`, `/register`, `/revoke`, `/jwks` | `mcp-oauth` |
+| `/` en `/mcp` in een browser | een korte uitleg (geen "Method not allowed") |
+| al het andere | 404 |
+
+Een vaste tabel, geen doorgegeven pad: andere edge functions zijn via dit adres
+niet te bereiken. `/consent` en `/approve` staan er bewust niet in. Die roept
+alleen ons eigen toestemmingsscherm aan, rechtstreeks op Supabase.
+
+Twee dingen zijn beter dan op supabase.co, behalve het adres zelf:
+
+- **Discovery op de root.** De autorisatieserver heeft als issuer
+  `https://mcp.resofly.com`, zonder pad. Een client vindt zijn metadata bij de
+  eerste poging (`/.well-known/oauth-authorization-server`). Op supabase.co was
+  die root niet van ons en was de omweg via de OpenID-vorm nodig (zie
+  *Discovery op supabase.co*). Die vorm blijft bestaan voor het oude adres.
+- **Oudere clients.** Clients op MCP-versie 2025-03-26 lezen geen
+  resource-document en zoeken de autorisatieserver op de root van het adres van
+  de MCP-server. Op supabase.co liep dat dood; hier komen ze goed uit.
+
+### De rem op registraties en het IP-adres
+
+`mcp-oauth` telt registraties per IP-adres: zestig per uur. Via een Worker komt
+elk verzoek bij Supabase binnen vanaf een adres van Cloudflare zelf. Zonder
+maatregel deelden alle klanten achter mcp.resofly.com dus één teller, en lag
+koppelen voor iedereen stil zodra die vol was.
+
+Daarom geeft de Worker het echte adres van de client mee
+(`x-resofly-client-ip`), samen met een geheim (`x-resofly-proxy-secret`, het
+secret `MCP_PROXY_SECRET`). `mcp-oauth` gelooft dat adres alleen met het juiste
+geheim (`senderAddress` in `_shared/mcpAuth.ts`). Stuurt een client die headers
+zelf mee, dan haalt de Worker ze eerst weg. Klopt het geheim niet of ontbreekt
+het, dan telt het gewone adres: strenger, nooit ruimer. De rem per koppeling op
+`/mcp` zelf telt per token en heeft hier geen last van.
+
+### Inrichten
+
+1. **De Worker** (staging):
+
+   ```bash
+   cd workers/mcp
+   npm install
+   npm test                                      # de Worker in workerd, zonder netwerk
+   npm run deploy:staging                        # route mcp.resofly.com/* staat in wrangler.toml
+   openssl rand -base64 48                       # het geheim; bewaar het even voor stap 3
+   npx wrangler secret put MCP_PROXY_SECRET --env staging
+   ```
+
+   De route `mcp.resofly.com/*` gaat voor de wildcard `*.resofly.com/*` van de
+   klantadressen: een preciezere route wint. `mcp` staat op de lijst met
+   gereserveerde namen (migratie `20261108230000`), dus geen klant krijgt hem.
+
+2. **DNS**, zone `resofly.com`: `AAAA mcp 100::`, proxied. Achter `100::` staat
+   geen server; de Worker beantwoordt alles. De wildcard dekt `mcp` ook, maar met
+   een eigen record hangt dit adres niet aan de klantadressen.
+
+3. **Supabase-secrets** van dezelfde omgeving:
+
+   ```bash
+   supabase secrets set MCP_RESOURCE_URL="https://mcp.resofly.com/mcp"
+   supabase secrets set MCP_PUBLIC_BASE_URL="https://mcp.resofly.com"
+   supabase secrets set MCP_PROXY_SECRET="<hetzelfde geheim als bij de Worker>"
+   ```
+
+   De functies vergelijken op de staart van het pad (`subPath` in `mcp-oauth`),
+   dus ze werken zonder codewijziging op beide adressen.
+
+4. **Pages**, de build die bij deze omgeving hoort: `VITE_MCP_SERVER_URL` op
+   precies dezelfde waarde als `MCP_RESOURCE_URL`. Voor staging staat hij bij de
+   *preview*-variabelen van het Pages-project `resofly`; de branch `staging` is
+   daar een preview. Instellingen → AI en de opdrachten voor Claude Code en
+   Gemini CLI tonen hem na de volgende build.
+
+5. **Controleren.** De rooktest (`scripts/supabase-smoke-test.sh`) leest de
+   `resource` uit het resource-document. Staat die op een eigen domein, dan loopt
+   hij daar de weg van een AI-client af: de 401 met de wegwijzer, het
+   resource-document op beide plekken, de metadata van de autorisatieserver,
+   `/authorize` en `/register`. Met de hand:
+
+   ```bash
+   curl -si -X POST https://mcp.resofly.com/mcp -H 'Content-Type: application/json' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -i www-authenticate
+   curl -s https://mcp.resofly.com/.well-known/oauth-authorization-server | jq .issuer
+   ```
+
+### Wat er gebeurt met bestaande koppelingen
+
+Die blijven werken. Een token is niet aan het adres gebonden, en het oude
+Supabase-adres blijft antwoorden, ook bij het vernieuwen van een token. Maar
+haalt de AI-app later opnieuw de koppelgegevens op, dan noemt de server een ander
+adres dan de app kent, en dan weigert Claude. Verwijder de connector dan en voeg
+hem opnieuw toe met het nieuwe adres. Doe dat liever meteen; dan gebeurt het niet
+midden in een gesprek.
+
+### Als productie het adres krijgt
+
+Het adres hoort bij één omgeving tegelijk. Nu is dat staging, omdat er nog geen
+productie is. Gaat productie live:
+
+1. Geef staging een eigen naam, bijvoorbeeld `mcp-staging.resofly.com`. Gebruik
+   geen `mcp.staging.resofly.com`: een tweede niveau zit niet in het certificaat
+   van `*.resofly.com`. Zet die naam op de lijst met gereserveerde namen (nieuwe
+   migratie), zodat geen klant hem kan nemen.
+2. Verplaats de route in `workers/mcp/wrangler.toml` van `[env.staging]` naar
+   `[env.production]`, met `mcp-staging.resofly.com/*` voor staging. Rol beide
+   uit, elk met een eigen `MCP_PROXY_SECRET`.
+3. Zet in beide Supabase-projecten `MCP_RESOURCE_URL` en `MCP_PUBLIC_BASE_URL`,
+   en in beide Pages-omgevingen (production en preview) `VITE_MCP_SERVER_URL`.
+4. Wie op staging gekoppeld was, voegt de connector opnieuw toe (zie hierboven).
 
 ## Standaardvragen en bronnen
 
@@ -456,6 +577,17 @@ week uit. De wachtrij op het startscherm blijft van het team.
 **"Onbekende AI-client" in de browser.** De client registreerde zich bij een
 andere omgeving dan waar hij nu naartoe stuurt (staging versus productie).
 Verwijder de connector in de AI-app en voeg hem opnieuw toe.
+
+**Een koppeling van vóór 11 november werkt niet meer na opnieuw koppelen.** De
+connector staat nog op het Supabase-adres, terwijl de server nu
+`https://mcp.resofly.com/mcp` als zijn adres noemt. Verwijder de connector en
+voeg hem opnieuw toe met het nieuwe adres (zie *Het eigen adres*).
+
+**Koppelen via mcp.resofly.com loopt vast met een 502 of "Dit pad bestaat hier
+niet".** Een 502 komt van de Worker: Supabase antwoordde niet. Een 404 met die
+zin betekent dat de AI-app een pad vraagt dat niet in de tabel van de Worker
+staat (`routeFor` in `workers/mcp/src/logic.ts`). Kijk dan in de logs van de
+Worker (`npx wrangler tail --env staging` in `workers/mcp`) welk pad het was.
 
 **"Ongeldig terugkeeradres".** De AI-app vraagt een redirect-URI die niet in zijn
 registratie staat. Opnieuw toevoegen lost dit op; komt het terug, kijk dan in

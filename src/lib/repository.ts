@@ -1,4 +1,5 @@
 import type { DriveDragItem, DriveLocation } from './driveDnd';
+import type { ExportPageRequest } from './dataExport';
 import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
@@ -235,7 +236,7 @@ export const AUDIT_PAGE_SIZE = 50;
 /**
  * Eén pagina uit het logboek, nieuwste eerst, met de filters van de pagina.
  * Wie het mag lezen, beslist de database (RLS op audit_logs: alleen owners en
- * admins, 20261111090000): hier staat geen eigen rechtencontrole, en dus ook
+ * admins, 20261111140000): hier staat geen eigen rechtencontrole, en dus ook
  * geen tweede die kan afwijken.
  * `total` = hoeveel regels er bij deze filters zijn (alle pagina's samen).
  */
@@ -334,7 +335,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     // Voor de rest gaf deze aanroep bij elke start een 403, met een waarschuwing
     // in de console die naar een ontbrekende migratie wees.
     const canSeeBilling = isAdminRole(activeMembership?.role);
-    // Het logboek ook (20261111090000): voor de rest geeft de database niets,
+    // Het logboek ook (20261111140000): voor de rest geeft de database niets,
     // dus vragen we het dan ook niet op.
     const canSeeAuditLog = canSeeBilling;
     const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }, { data: businessRows, error: businessError }] = await Promise.all([
@@ -3583,6 +3584,37 @@ export async function reportOpenItems(organizationId: UUID, asOf?: string): Prom
   });
   if (error) throw bookkeepingError(error);
   return data as OpenItemsReport;
+}
+
+/**
+ * Eén pagina van een tabel voor "Alles exporteren" (src/lib/dataExport.ts).
+ * Met de gewone client, dus met de rechten van wie exporteert: wat hij in de
+ * app niet mag zien, geeft de database hier ook niet terug.
+ */
+export async function fetchExportPage(request: ExportPageRequest): Promise<Record<string, unknown>[]> {
+  let query = supabase.from(request.table).select(request.select).eq(request.orgColumn, request.organizationId);
+  // Bladeren op de sorteerkolom, behalve bij een sleutel van meer kolommen.
+  const keyset = request.offset === undefined;
+  if (keyset && request.after !== undefined) query = query.gt(request.orderBy[0], request.after as string);
+  for (const column of request.orderBy) query = query.order(column, { ascending: true });
+  const { data, error } = keyset
+    ? await query.limit(request.limit)
+    : await query.range(request.offset!, request.offset! + request.limit - 1);
+  if (error) throw error;
+  return (data ?? []) as unknown as Record<string, unknown>[];
+}
+
+/**
+ * Een regel in het logboek: dit teamlid exporteerde alles (migratie
+ * 20261111120000). 'ontbreekt' als de functie er nog niet is, zodat de export
+ * op een database zonder die migratie niet vastloopt; een weigering (geen
+ * eigenaar of beheerder) gooit wel.
+ */
+export async function logDataExport(organizationId: UUID, summary: Record<string, number>): Promise<'gelogd' | 'ontbreekt'> {
+  const { error } = await supabase.rpc('log_data_export', { p_organization_id: organizationId, p_summary: summary });
+  if (!error) return 'gelogd';
+  if (error.code === 'PGRST202' || /could not find the function/i.test(error.message ?? '')) return 'ontbreekt';
+  throw error;
 }
 
 /** Zorgt dat het standaard rekeningschema + BTW-codes geseed zijn voor de organisatie. */

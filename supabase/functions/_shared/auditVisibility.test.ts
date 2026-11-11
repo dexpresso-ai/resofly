@@ -5,7 +5,7 @@ import { ADMIN_ACTIONS, AUDIT_ENTITY_MODULE, visibleAuditEntityTypes } from './a
 import { ActionError, type ActionCtx } from './actions/types.ts';
 
 /**
- * Wie leest welke regel uit het auditlog. Sinds 20261111090000 alleen owners en
+ * Wie leest welke regel uit het auditlog. Sinds 20261111140000 alleen owners en
  * admins: geen teamlid, kijker of boekhouder. Het label van een regel is de
  * naam, titel of het e-mailadres uit de rij die veranderde; een afspraak in een
  * privé-agenda geeft zijn titel daarom niet prijs, ook niet aan een owner.
@@ -21,7 +21,7 @@ const migrationFiles = readdirSync(MIGRATIONS).filter((name) => name.endsWith('.
 const migration = (name: string) => readFileSync(new URL(name, MIGRATIONS), 'utf8');
 const RECHECK = '20261003060000_recheck_audit_and_licenses.sql';
 const ACCOUNTANT = '20261011000000_accountant_guest_access.sql';
-const ALLEEN_BEHEER = '20261111090000_logboek_alleen_beheer.sql';
+const ALLEEN_BEHEER = '20261111140000_logboek_alleen_beheer.sql';
 
 /** De laatste definitie van een functie, over alle migraties heen. */
 function latestDefinition(fn: string): { file: string; body: string } {
@@ -85,7 +85,7 @@ function auditPolicies(): Map<string, { file: string; body: string }> {
 }
 
 test('de leesregel: alleen owners en admins van de organisatie lezen het logboek', () => {
-  // Tot 20261111090000 las elk lid de regels over de modules die hij mocht
+  // Tot 20261111140000 las elk lid de regels over de modules die hij mocht
   // openen (20261003060000). Met alle modules zag een teamlid zo vrijwel het
   // hele logboek, met de e-mailadressen van collega's en wie wiens rechten
   // aanpaste. Nu is het logboek alleen voor wie de organisatie beheert.

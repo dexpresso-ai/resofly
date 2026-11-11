@@ -148,7 +148,7 @@ De zevende, uit de herkontrole:
 
 | Onderdeel | Wat |
 |---|---|
-| `audit_entity_module()` + RLS op `audit_logs` | Een regel hoort bij een module; een teamlid leest hem alleen met leesrecht in die module. Sleutels, webhooks, uitnodigingen, agendakoppelingen, abonnement en betalingen alleen owners/admins. `audit.list` gebruikt dezelfde lijst (`AUDIT_ENTITY_MODULE`). **Sinds `20261111090000`** leest alleen een owner of admin het logboek; `audit.list` is `adminOnly`. De indeling per module telt nog voor een sleutel van een owner of admin die tot een paar modules beperkt is. |
+| `audit_entity_module()` + RLS op `audit_logs` | Een regel hoort bij een module; een teamlid leest hem alleen met leesrecht in die module. Sleutels, webhooks, uitnodigingen, agendakoppelingen, abonnement en betalingen alleen owners/admins. `audit.list` gebruikt dezelfde lijst (`AUDIT_ENTITY_MODULE`). **Sinds `20261111140000`** leest alleen een owner of admin het logboek; `audit.list` is `adminOnly`. De indeling per module telt nog voor een sleutel van een owner of admin die tot een paar modules beperkt is. |
 | `audit_logs_mask_private_calendar` | Trigger: een afspraak, koppeling of agenda in een privé-agenda krijgt in het auditlog een neutraal label ("Privé-afspraak", "Privé-agenda"); bestaande regels worden net zo opgeschoond. |
 | `organization_license_usage()` | Werkt nu ook voor de service role (`team.license_usage`, de plan-stap van `team.invite`); anon kan hem niet aanroepen. |
 

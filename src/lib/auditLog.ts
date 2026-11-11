@@ -584,6 +584,13 @@ export function sentence(e: AuditEntry, lookup: AuditLookup = {}): { parts: Sent
     case 'business_module_enabled': return { parts: [t('zette de zakelijke module aan')] };
     case 'business_module_disabled': return { parts: [t('zette de zakelijke module uit')] };
     case 'entity_created': return { parts: [t('maakte administratie '), b(name), t(' aan')] };
+    // Instellingen → Gegevens (migratie 20261111120000). Wie alles in één keer
+    // meeneemt, hoort zichtbaar te zijn: voor de eigenaar en de beheerders,
+    // want sinds 20261111140000 lezen alleen zij het logboek.
+    case 'data_export': {
+      const files = Number(meta.bestanden ?? 0);
+      return { parts: [t('exporteerde alle gegevens van de organisatie'), ...(files > 0 ? [t(`, met ${files} bestanden`)] : [])] };
+    }
   }
 
   // Een eigen domein (client-domains): de gebeurtenis staat in de metadata,

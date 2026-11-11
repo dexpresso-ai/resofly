@@ -61,6 +61,13 @@ test('een regel van vóór het logboek (zonder de nieuwe kolommen) leest gewoon'
   assert.deepEqual(changeLines(e).map(l => [l.label, l.kind]), [['Status', 'changed'], ['Vervaldatum', 'changed']]);
 });
 
+test('zinnen: alle gegevens exporteren', () => {
+  assert.equal(sentenceText(entry({ action: 'data_export', entity_type: 'organization', entity_label: 'Alle gegevens', metadata: { tabellen: 150, bestanden: 12 } }), lookup),
+    'anne exporteerde alle gegevens van de organisatie, met 12 bestanden');
+  assert.equal(sentenceText(entry({ action: 'data_export', entity_type: 'organization', entity_label: 'Alle gegevens', actor_user_id: ME }), lookup),
+    'Jij exporteerde alle gegevens van de organisatie');
+});
+
 test('zinnen: facturen versturen, betalen, herinneren', () => {
   assert.equal(sentenceText(entry({ action: 'invoice_sent_to_client', entity_type: 'invoice', entity_label: '2026-014' }), lookup),
     'anne verstuurde factuur 2026-014 naar de klant');

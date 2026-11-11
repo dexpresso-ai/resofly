@@ -1,0 +1,19 @@
+{
+  "name": "@brandcore/mcp-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --env production",
+    "deploy:staging": "wrangler deploy --env staging",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/worker.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "esbuild": "latest",
+    "miniflare": "^4.20260730.0",
+    "typescript": "latest",
+    "wrangler": "latest"
+  }
+}

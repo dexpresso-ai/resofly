@@ -50,7 +50,7 @@ const MODULE_LABELS: Record<string, string> = {
  * public.audit_entity_module() (migratie 20261003060000); auditVisibility.test.ts
  * houdt de twee gelijk. `null` = het team en de organisatie, 'admin' = beheer
  * (sleutels, koppelingen, abonnement). Het hele logboek is alleen voor owners
- * en admins (20261111090000); de indeling telt nog voor een sleutel van een
+ * en admins (20261111140000); de indeling telt nog voor een sleutel van een
  * owner of admin die tot een paar modules beperkt is.
  */
 export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
@@ -78,7 +78,7 @@ export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
 
 /**
  * Welke soorten auditregels mag de aanroeper zien? Het logboek is sinds
- * 20261111090000 alleen voor owners en admins (de RLS op audit_logs, die hier
+ * 20261111140000 alleen voor owners en admins (de RLS op audit_logs, die hier
  * niet meedoet: de handelingen lezen met de service-role). Een teamlid, kijker
  * of boekhouder krijgt dus een lege lijst. Daarvóór las een teamlid per module
  * mee, en zag zo met alle modules vrijwel het hele logboek, inclusief wie de
@@ -385,7 +385,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'audit.list',
-    // Net als in de app (RLS sinds 20261111090000): het logboek is alleen voor
+    // Net als in de app (RLS sinds 20261111140000): het logboek is alleen voor
     // owners en admins, niet voor teamleden, kijkers of de boekhouder.
     adminOnly: true,
     label: 'Audit-log met de laatste wijzigingen bekijken',

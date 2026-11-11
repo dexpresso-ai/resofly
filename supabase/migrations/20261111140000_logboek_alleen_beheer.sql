@@ -28,6 +28,10 @@
 --     de boekhouder niets meer leest, maar het kan geen kwaad en houdt hem
 --     dicht als iemand de leesregel ooit weer verruimt.
 --
+-- De regel "exporteerde alle gegevens" (20261111120000) was bedoeld voor het
+-- hele team. Hij valt nu ook onder deze regel: de eigenaar en de beheerders
+-- zien hem, en dat zijn ook de enigen die een export kunnen maken.
+--
 -- Veilig om meermaals te draaien.
 -- ============================================================
 
@@ -40,6 +44,6 @@ create policy "audit logs read by owners and admins" on public.audit_logs for se
 );
 
 comment on table public.audit_logs is
-  'Het logboek: wie wat wanneer en waar heeft aangepast. Gevuld door triggers; alleen owners en admins van de organisatie lezen het (20261111090000). Niemand wijzigt of wist een regel.';
+  'Het logboek: wie wat wanneer en waar heeft aangepast. Gevuld door triggers; alleen owners en admins van de organisatie lezen het (20261111140000). Niemand wijzigt of wist een regel.';
 
 commit;
