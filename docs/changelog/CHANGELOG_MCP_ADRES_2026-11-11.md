@@ -1,4 +1,4 @@
-# De AI-koppeling heeft een eigen adres: mcp.resofly.com
+# De AI-koppeling heeft een eigen adres: mcp-staging.resofly.com
 
 **11 november 2026 · zie [MCP_CONNECTOR_SETUP.md](../setup/MCP_CONNECTOR_SETUP.md), "Het eigen adres"**
 
@@ -10,20 +10,45 @@ https://enzghpduqwaojcxgwarr.supabase.co/functions/v1/mcp
 ```
 
 Dat werkte. Maar het was het adres van onze leverancier, met een projectcode
-erin. Het zou ook veranderen zodra we van Supabase-project wisselen. Nu is het:
+erin. Het zou ook veranderen zodra we van Supabase-project wisselen. Nu is het
+op staging:
 
 ```
-https://mcp.resofly.com/mcp
+https://mcp-staging.resofly.com/mcp
 ```
+
+Productie krijgt `https://mcp.resofly.com/mcp` als die live gaat.
 
 De opdracht voor Gemini CLI wordt daarmee
-`gemini mcp add --transport http resofly https://mcp.resofly.com/mcp`, en voor
-Claude Code hetzelfde met `claude`. Instellingen → AI toont het nieuwe adres na
-de eerstvolgende build van staging.
+`gemini mcp add --transport http resofly https://mcp-staging.resofly.com/mcp`,
+en voor Claude Code hetzelfde met `claude`. Instellingen → AI toont het nieuwe
+adres na de eerstvolgende build van staging.
+
+## Eerst mcp.resofly.com, daarna mcp-staging.resofly.com
+
+Staging stond eerst een paar uur op `mcp.resofly.com`. Productie was er nog
+niet, en dat adres zou later naar productie gaan. Op verzoek heeft staging toch
+meteen een eigen naam gekregen, `mcp-staging.resofly.com`. Dan hoeft niemand
+die op staging koppelt later nog te verhuizen. De korte naam blijft vrij voor
+productie.
+
+- De Worker-route is nu `mcp-staging.resofly.com/*`. De route op
+  `mcp.resofly.com` en het DNS-record `mcp` zijn weg. Wie daar nog heen gaat,
+  komt bij de Worker van de klantadressen uit en vindt niets.
+- `mcp-staging` staat op de lijst met gereserveerde klantnamen (migratie
+  `20261111150500_mcp_staging_gereserveerd.sql`). Anders had een organisatie
+  `mcp-staging.resofly.com` als eigen adres kunnen kiezen. `mcp` stond er al op.
+  Op staging had niemand de naam.
+- `MCP_RESOURCE_URL`, `MCP_PUBLIC_BASE_URL` en `VITE_MCP_SERVER_URL` wijzen naar
+  het nieuwe adres. Het geheim van de Worker is niet veranderd.
+
+**Wie in die paar uur zijn connector op `https://mcp.resofly.com/mcp` heeft
+gezet, voegt hem nog één keer opnieuw toe met
+`https://mcp-staging.resofly.com/mcp`.**
 
 ## Hoe
 
-Op `mcp.resofly.com` staat een Cloudflare Worker (`workers/mcp`). Die stuurt door
+Op het eigen adres staat een Cloudflare Worker (`workers/mcp`). Die stuurt door
 naar dezelfde twee edge functions als altijd, `mcp` en `mcp-oauth`. Er draait
 geen tweede server en er is geen tweede weg naar de gegevens. De Worker kent een
 vaste tabel met paden: wat een AI-client nodig heeft, en verder niets. Andere
@@ -49,7 +74,7 @@ Wie het adres in een browser opent, krijgt een korte uitleg in plaats van
 
 `mcp-oauth` remt registraties van AI-clients: zestig per uur per IP-adres. Een
 verzoek dat via een Worker bij Supabase aankomt, komt van een adres van
-Cloudflare zelf. Zonder maatregel hadden alle klanten achter mcp.resofly.com
+Cloudflare zelf. Zonder maatregel hadden alle klanten achter het eigen adres
 samen één teller gedeeld. Koppelen had dan voor iedereen stilgelegen zodra er
 in een uur zestig AI-apps bij kwamen.
 
@@ -64,14 +89,13 @@ adres: strenger, nooit ruimer.
 
 | Waar | Wat |
 |---|---|
-| Cloudflare Workers | `resofly-mcp-staging`, route `mcp.resofly.com/*`, secret `MCP_PROXY_SECRET` |
-| Cloudflare DNS (`resofly.com`) | `AAAA mcp 100::`, proxied |
-| Supabase-secrets (staging) | `MCP_RESOURCE_URL=https://mcp.resofly.com/mcp`, `MCP_PUBLIC_BASE_URL=https://mcp.resofly.com`, `MCP_PROXY_SECRET` |
-| Cloudflare Pages (`resofly`, preview) | `VITE_MCP_SERVER_URL=https://mcp.resofly.com/mcp` |
+| Cloudflare Workers | `resofly-mcp-staging`, route `mcp-staging.resofly.com/*`, secret `MCP_PROXY_SECRET` |
+| Cloudflare DNS (`resofly.com`) | `AAAA mcp-staging 100::`, proxied |
+| Supabase-secrets (staging) | `MCP_RESOURCE_URL=https://mcp-staging.resofly.com/mcp`, `MCP_PUBLIC_BASE_URL=https://mcp-staging.resofly.com`, `MCP_PROXY_SECRET` |
+| Cloudflare Pages (`resofly`, preview) | `VITE_MCP_SERVER_URL=https://mcp-staging.resofly.com/mcp` |
 
 De productie-omgeving van Pages en het productieproject in Supabase zijn niet
-aangeraakt. Het adres hoort nu bij staging, omdat er nog geen productie is.
-Hoe productie het overneemt, staat in de handleiding.
+aangeraakt. Hoe productie `mcp.resofly.com` krijgt, staat in de handleiding.
 
 ## Wat je zelf moet doen
 
@@ -81,7 +105,7 @@ token. Dat is na de overstap gecontroleerd met de Claude-koppeling van deze
 werkruimte. Maar haalt je AI-app later opnieuw de koppelgegevens op, dan noemt
 de server het nieuwe adres. Claude weigert dan, omdat de connector nog op het
 oude adres staat. Verwijder de connector daarom nu en voeg hem opnieuw toe met
-`https://mcp.resofly.com/mcp`.
+`https://mcp-staging.resofly.com/mcp`.
 
 ## Bewaakt
 
@@ -96,6 +120,8 @@ oude adres staat. Verwijder de connector daarom nu en voeg hem opnieuw toe met
   sessie-header komt terug.
 - `mcpAuth.test.ts`: het adres van de Worker telt alleen met het juiste geheim, en
   alleen als het op een IP-adres lijkt.
+- `20261111150500_mcp_staging_gereserveerd.sql` en de stroomtest
+  `tests/stromen/klantdomein.mjs`: `mcp` en `mcp-staging` zijn geen klantnamen.
 - De rooktest na elke uitrol loopt het eigen adres af zoals een AI-client dat
   doet. Hij leest daarvoor de `resource` uit het resource-document. Noemt de
   server een adres waar de Worker niet staat, dan wordt de rooktest rood.
@@ -108,8 +134,9 @@ oude adres staat. Verwijder de connector daarom nu en voeg hem opnieuw toe met
 - Het nieuwe deel van de rooktest tegen een nagebootste server: een goede
   instelling, geen eigen adres (overgeslagen) en een adres met een slash te veel
   (rood).
-- **Op staging, na de uitrol (run 217 van *Deploy Supabase (staging)*).** De
-  rooktest liep `https://mcp.resofly.com/mcp` af zoals een AI-client dat doet:
+- **Op staging, na de eerste uitrol (run 217 van *Deploy Supabase
+  (staging)*), toen nog op mcp.resofly.com.** De rooktest liep
+  `https://mcp.resofly.com/mcp` af zoals een AI-client dat doet:
   - de 401 met de wegwijzer naar het resource-document;
   - het resource-document op beide plekken, met precies dit adres;
   - de metadata met issuer `https://mcp.resofly.com`;

@@ -227,8 +227,8 @@ async function handleRegister(req: Request): Promise<Response> {
  * voordeur.
  */
 async function noteRegistration(req: Request): Promise<number> {
-  // Via mcp.resofly.com komt elk verzoek van hetzelfde Cloudflare-adres; de
-  // Worker geeft dan het echte mee (zie senderAddress).
+  // Via het eigen adres (de Worker) komt elk verzoek van hetzelfde
+  // Cloudflare-adres; de Worker geeft dan het echte mee (zie senderAddress).
   const address = senderAddress(req.headers, Deno.env.get('MCP_PROXY_SECRET'));
   const { data, error } = await admin.rpc('edge_note_attempt', {
     p_bucket: 'mcp-register',

@@ -24,7 +24,8 @@
 #   - de API-laag (controle van 10 november): het OpenAPI-document, mcp en
 #     mcp-oauth zonder bewijs, mail-inbound zonder geheim, en de afmeldlink
 #     uit een campagne (een browser gaat door naar /afmelden in de app).
-#   - het eigen adres van de AI-koppeling (mcp.resofly.com, workers/mcp): als
+#   - het eigen adres van de AI-koppeling (workers/mcp; op staging
+#     mcp-staging.resofly.com): als
 #     MCP_RESOURCE_URL daarop staat, de weg die een AI-client er aflegt, met
 #     adressen die letterlijk overeenkomen. Anders overgeslagen.
 #
@@ -83,7 +84,8 @@ check "mcp-oauth stuurt een onbekende client nergens heen" 400 'Onbekende AI-cli
 check "mail-inbound weigert zonder geheim" 401 'Niet geautoriseerd' \
   -X POST "$base/mail-inbound" -H 'Content-Type: application/json' --data '{}'
 
-# Het eigen adres van de AI-koppeling (workers/mcp, sinds 11 november
+# Het eigen adres van de AI-koppeling (workers/mcp; op staging sinds 11 november
+# https://mcp-staging.resofly.com/mcp, op productie straks
 # https://mcp.resofly.com/mcp). Welk adres dat is, zegt de MCP-server zelf: de
 # `resource` in zijn resource-document (MCP_RESOURCE_URL). Staat dat op een
 # eigen domein, dan loopt een AI-client hier dezelfde weg als hieronder: de 401,

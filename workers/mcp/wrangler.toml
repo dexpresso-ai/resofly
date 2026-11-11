@@ -2,20 +2,19 @@ name = "resofly-mcp"
 main = "src/index.ts"
 compatibility_date = "2026-11-01"
 
-# Het adres van de AI-koppeling: https://mcp.resofly.com/mcp. Stuurt door naar
-# de edge functions mcp en mcp-oauth. Inrichten en controleren:
+# Het adres van de AI-koppeling: https://mcp-staging.resofly.com/mcp op
+# staging, https://mcp.resofly.com/mcp op productie. Stuurt door naar de edge
+# functions mcp en mcp-oauth van die omgeving. Inrichten en controleren:
 # docs/setup/MCP_CONNECTOR_SETUP.md, "Het eigen adres".
 #
-# Secret (via `wrangler secret put MCP_PROXY_SECRET --env staging`, NIET hier):
-# moet gelijk zijn aan het Supabase-secret met dezelfde naam. Daarmee gelooft
-# mcp-oauth het IP-adres dat deze Worker doorgeeft.
+# Secret (via `wrangler secret put MCP_PROXY_SECRET --env <omgeving>`, NIET
+# hier): moet gelijk zijn aan het Supabase-secret met dezelfde naam in die
+# omgeving. Daarmee gelooft mcp-oauth het IP-adres dat deze Worker doorgeeft.
 #
-# Het adres hoort bij één omgeving tegelijk. Nu is dat staging (er is nog geen
-# productie). Krijgt productie het, verplaats dan de route hieronder naar
-# [env.production] en geef staging een eigen naam, bijvoorbeeld
-# mcp-staging.resofly.com. Pas daarna MCP_RESOURCE_URL en MCP_PUBLIC_BASE_URL in
-# beide Supabase-projecten aan, en VITE_MCP_SERVER_URL in beide Pages-builds.
-# Wrangler weigert een route die al bij een andere Worker hoort.
+# Beide namen staan op de lijst met gereserveerde klantnamen ("mcp" sinds
+# 20261108230000, "mcp-staging" sinds 20261111150500): geen organisatie kan ze
+# als eigen adres kiezen. Gebruik geen mcp.staging.resofly.com: een tweede
+# niveau zit niet in het certificaat van *.resofly.com.
 
 [vars]
 SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
@@ -32,12 +31,15 @@ SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
 APP_URL = "https://staging.resofly.com"
 
 # De wildcard *.resofly.com/* (de klantadressen) gaat voor alle andere namen;
-# deze preciezere route gaat daar weer voor. "mcp" staat op de lijst met
-# gereserveerde namen (migratie 20261108230000), dus geen klant krijgt hem.
-# DNS: een eigen record mcp AAAA 100:: (proxied). Zonder dat record dekt de
-# wildcard *.resofly.com het ook, maar dan hangt dit adres aan de klantadressen.
+# deze preciezere route gaat daar weer voor. DNS: een eigen record
+# mcp-staging AAAA 100:: (proxied). Zonder dat record dekt de wildcard het
+# ook, maar dan hangt dit adres aan de klantadressen.
+#
+# Op 11 november stond staging een paar uur op mcp.resofly.com. Die route is
+# weg: dat adres is voor productie. Wie er nog heen gaat, komt bij de Worker van
+# de klantadressen uit en vindt daar niets.
 [[env.staging.routes]]
-pattern = "mcp.resofly.com/*"
+pattern = "mcp-staging.resofly.com/*"
 zone_name = "resofly.com"
 
 # ---- production ----
@@ -47,3 +49,10 @@ name = "resofly-mcp"
 [env.production.vars]
 SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
 APP_URL = "https://app.resofly.com"
+
+# Pas aan zetten als productie live gaat, samen met een DNS-record
+# mcp AAAA 100:: (proxied), de secrets in het productieproject en
+# VITE_MCP_SERVER_URL bij de production-variabelen van Pages.
+# [[env.production.routes]]
+# pattern = "mcp.resofly.com/*"
+# zone_name = "resofly.com"
