@@ -1969,6 +1969,10 @@ body::before{
 .client-form-intro h3{margin:0;color:var(--text);font-size:22px;line-height:1.08;font-weight:700;letter-spacing:-.025em}
 .client-form-intro p{max-width:560px;margin:8px 0 0;color:var(--muted2);font-size:12px;line-height:1.55}
 .client-form-intro strong{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-width:118px;min-height:42px;padding:8px 12px;border:1px solid rgba(var(--accent-rgb),.28);border-radius:14px;background:rgba(var(--accent-rgb),.1);color:var(--accent-ink);font-size:14px;font-weight:700;letter-spacing:.05em;white-space:nowrap}
+/* Klant uit een mail: waar de gegevens vandaan komen (main.tsx, ClientFromMailNote). */
+.client-from-mail-note{grid-column:1/-1;padding:12px 14px;border:1px solid var(--border);border-radius:14px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))}
+.client-from-mail-note strong{display:block;color:var(--text);font-size:13px;font-weight:700;overflow-wrap:anywhere}
+.client-from-mail-note p{margin:4px 0 0;color:var(--muted2);font-size:12.5px;line-height:1.5}
 .modal.modal-client-editor .field .form-input,.modal.modal-client-editor .field .form-select,.modal.modal-client-editor .field .form-textarea{min-height:46px;border-radius:14px;background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)))}
 .client-duplicate-notice{grid-column:1/-1;display:flex;flex-direction:column;gap:4px;padding:13px 15px;border-radius:16px;border:1px solid rgba(var(--accent-rgb),.24);background:rgba(var(--accent-rgb),.08);color:var(--text);box-shadow:0 14px 34px rgba(var(--shade-rgb),calc(.18 * var(--shade-k)))}
 .client-duplicate-notice strong{font-size:13px;font-weight:700;letter-spacing:-.01em}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Archive, Check, ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Phone, PhoneIncoming, PhoneOutgoing, Receipt, RotateCcw, Search, Send, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
-import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, FileTransferBundle, FileTransferRecipient, InternalDocument, Invoice, Note, OrganizationMember, Project, Quote, Ticket } from '../types';
+import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, FileTransferBundle, FileTransferRecipient, InboundMessage, InternalDocument, Invoice, Note, OrganizationMember, Project, Quote, Ticket } from '../types';
 import { holderName, matchesHolder, memberColor, memberInitials, membersWhoCanHold } from '../lib/members';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, priorityLabel, total } from '../lib/format';
@@ -162,11 +162,17 @@ export function Clients({
   unreadByClient,
   teamMembers = [],
   currentUserId = null,
+  onNewFromMail,
+  inboxRefreshKey = 0,
 }: {
   data: AppData;
   organizationId: string;
   canWrite: boolean;
   onNew: () => void;
+  /** "Nieuwe klant" bij een mail in de opvangbak: het klantformulier, ingevuld uit die mail. */
+  onNewFromMail?: (message: InboundMessage) => void;
+  /** Loopt op als de app iets in de opvangbak veranderde (een mail aan een nieuwe klant gekoppeld). */
+  inboxRefreshKey?: number;
   onOpen: (c: Client) => void;
   onChanged: () => void;
   unreadByClient: Record<string, number>;
@@ -185,7 +191,7 @@ export function Clients({
   const refreshInboxCount = () => {
     loadInboundOpenCount(organizationId).then(setInboxCount).catch(() => setInboxCount(0));
   };
-  useEffect(refreshInboxCount, [organizationId]);
+  useEffect(refreshInboxCount, [organizationId, inboxRefreshKey]);
 
   const rows = useMemo<ClientOverviewRow[]>(() => data.clients.map(client => {
     const invoices = getClientInvoices(data, client.id);
@@ -309,6 +315,8 @@ export function Clients({
       clients={data.clients}
       canWrite={canWrite}
       onChanged={() => { refreshInboxCount(); onChanged(); }}
+      onCreateClient={onNewFromMail}
+      refreshKey={inboxRefreshKey}
     />}
 
     {listTab === 'clients' && rows.length > 0 && <SearchFilterPanel

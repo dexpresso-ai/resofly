@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowLeft, CalendarDays, Check, ExternalLink, Folder, FolderInput, Inbox, Layers, Mail, MailOpen, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, User, Users, X } from 'lucide-react';
-import type { AppData, Client, ClientCall, ClientEmail, ClientEmailFolder, ClientEmailSearchHit, ClientEmailThreadOverview, FileTransferBundle, FileTransferRecipient, Ticket } from '../types';
+import type { AppData, Client, ClientCall, ClientEmail, ClientEmailFolder, ClientEmailSearchHit, ClientEmailThreadOverview, FileTransferBundle, FileTransferRecipient, InboundMessage, Ticket } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { DetailTabs } from '../components/DetailTabs';
 import { RichTextEditor } from '../components/RichTextEditor';
@@ -114,6 +114,8 @@ export function CommunicationPage({
   onOpenClient,
   onOpenTicket,
   onChanged,
+  onNewClientFromMail,
+  inboxRefreshKey = 0,
 }: {
   data: AppData;
   organizationId: string;
@@ -141,6 +143,10 @@ export function CommunicationPage({
   onOpenTicket: (ticket: Ticket) => void;
   /** Werkruimte-data verversen (koppelen kan een contactpersoon aanmaken; een notitie hoort in AppData). */
   onChanged: () => void;
+  /** "Nieuwe klant" bij een mail in de opvangbak: het klantformulier, ingevuld uit die mail. */
+  onNewClientFromMail?: (message: InboundMessage) => void;
+  /** Loopt op als de app iets in de opvangbak veranderde (een mail aan een nieuwe klant gekoppeld). */
+  inboxRefreshKey?: number;
 }) {
   const narrow = useNarrowViewport();
   const [tab, setTab] = useState<CommunicationTab>('all');
@@ -690,6 +696,8 @@ export function CommunicationPage({
               clients={data.clients}
               canWrite={canWrite}
               heading={false}
+              onCreateClient={onNewClientFromMail}
+              refreshKey={inboxRefreshKey}
               onChanged={() => {
                 onInboxChanged();
                 onUnreadChanged();
