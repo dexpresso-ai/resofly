@@ -10,7 +10,7 @@ exporteren.* Daarna: *data van galerijen hoeft niet mee; het gaat om de data bin
 
 **Kort.** Gegevens meenemen wordt een vaste functie, geen klus op aanvraag:
 
-1. **Alles exporteren**: één knop voor de eigenaar. Die maakt een zip die ook zonder ResoFly
+1. **Alles exporteren**: één knop voor de eigenaar en de beheerders. Die maakt een zip die ook zonder ResoFly
    te lezen is, voor de accountant en voor het volgende pakket. Galerijen zitten er niet in.
 2. **Een manifest in de code** legt per tabel vast of hij meegaat, en waarom niet. Een test
    faalt als een migratie een tabel toevoegt die er niet in staat.
@@ -77,15 +77,16 @@ het journaal, uren, tickets, versies, het logboek, de PDF's zoals verstuurd, de 
 Bestanden van een zending (`file_transfer_items`) verlopen en worden opgeruimd:
 het overzicht gaat mee, de bestanden zelf niet (`skipFiles` in het manifest).
 
-Op 11 november: 146 tabellen gaan mee, 59 niet. Als eigenaar waren in een
-lokale database alle 146 leesbaar met de select en sortering van de export.
+Op 11 november: 146 tabellen gaan mee, 59 niet. Als eigenaar én als beheerder
+waren in een lokale database alle 146 leesbaar met de select en sortering van
+de export.
 
 Daarnaast laat het manifest **kolommen** weg die als sleutel werken: tokens van openbare
 links, hashes van pincodes, wachtwoorden. Een kolom met zo'n naam gaat alleen mee als het
 manifest hem uitdrukkelijk toestaat; de test bewaakt dat.
 
 **Met de rechten van wie exporteert.** De export leest via de gewone weg (Supabase met de
-sessie van de eigenaar), dus RLS beslist. Wat de eigenaar in ResoFly niet kan zien, zoals
+sessie van wie exporteert), dus RLS beslist. Wat die in ResoFly niet kan zien, zoals
 de privé-agenda van een collega, komt er ook niet in. Er is geen service-role bij nodig:
 een export kan nooit meer dan het scherm.
 
@@ -128,7 +129,7 @@ inlezen. Dat rondje is meteen het bewijs dat de export compleet is.
 - `src/lib/dataExport.ts`: leest per tabel in pagina's, laat kolommen weg, haalt de bestanden
   via de media-worker (`/file/<sleutel>`, die per module controleert), maakt per boekjaar een
   XAF en schrijft de lijsten en het manifest.
-- **Instellingen → Gegevens**: alleen voor de eigenaar. Uitleg wat erin zit en wat niet, de
+- **Instellingen → Gegevens**: alleen voor de eigenaar en de beheerders. Uitleg wat erin zit en wat niet, de
   knop, de voortgang.
 - **Logboek**: migratie met `log_data_export`, zodat in het logboek staat wie wanneer alles
   exporteerde. Een export is de snelste manier om met één overgenomen account alles mee te
@@ -181,7 +182,7 @@ inlezen. Dat rondje is meteen het bewijs dat de export compleet is.
 | Vraag | Keuze | Wie |
 | --- | --- | --- |
 | Galerijen in de export? | Nee; zip per galerij. Wel wissen. | Gerjan, 11 november |
-| Wie mag exporteren? | De eigenaar (te verruimen naar beheerders in `canExportAll`). | Voorstel |
+| Wie mag exporteren? | De eigenaar en de beheerders. | Gerjan, 11 november |
 | Privé van teamleden? | Niet in de export van de organisatie; elk teamlid zelf. | Voorstel |
 | Hoe lang ophalen? | 60 dagen (wet: minimaal 30). | Voorstel |
 | Archiefabonnement? | Open. | Gerjan |

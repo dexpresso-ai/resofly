@@ -9,7 +9,7 @@ het moet (Data Act, AVG, bewaarplicht) en wat de volgende fasen zijn.
 
 ### Alles exporteren (Instellingen → Gegevens)
 
-Een nieuw tabblad, alleen voor de eigenaar. Eén knop maakt een zip die je ook
+Een nieuw tabblad, alleen voor de eigenaar en de beheerders. Eén knop maakt een zip die je ook
 zonder ResoFly kunt openen:
 
 | In de zip | Wat |
@@ -34,7 +34,7 @@ Niet in de zip: 59 tabellen, elk met een reden in het manifest.
 Daarnaast laat de export 20 kolommen weg die als sleutel werken, zoals de
 sleutel van de openbare link van een factuur.
 
-De export leest met de rechten van wie hem maakt. Wat de eigenaar in ResoFly
+De export leest met de rechten van wie hem maakt. Wat die in ResoFly
 niet kan zien, zoals de privé-agenda van een collega, zit er dus ook niet in.
 Bovendien weigert de export een tabel waarin een rij van een andere
 organisatie staat: die tabel blijft uit de zip, met een melding (regel 1).
@@ -81,7 +81,7 @@ meetellen in btw-aangiftes die het oude pakket al deed.
 | `src/lib/dataExport.ts` | de opbouw achter `ExportSource` (`fetchExportPage` in `repository.ts`, `fetchStoredFileBlob` in `r2.ts`) |
 | `src/lib/xafImport.ts` | XAF lezen, saldi op de overstapdatum, voorstellen, regels, relaties |
 | `src/features/DataExport.tsx`, `src/features/XafImport.tsx` | de twee schermen |
-| `supabase/migrations/20261111120000_gegevens_export_logboek.sql` | `log_data_export` (alleen de eigenaar) en `data_export` in `audit_logs_action_check` |
+| `supabase/migrations/20261111120000_gegevens_export_logboek.sql` | `log_data_export` (alleen de eigenaar of een beheerder) en `data_export` in `audit_logs_action_check` |
 
 **Voor wie verder bouwt:**
 
@@ -119,12 +119,12 @@ meetellen in btw-aangiftes die het oude pakket al deed.
 - **Lokale database** (`supabase db start`):
   - `supabase db reset`: alle 266 migraties vanaf nul, de nieuwe als laatste;
   - de migratie twee keer achter elkaar toegepast;
-  - als eigenaar geeft `log_data_export` een regel, als teamlid "Alleen de
-    eigenaar …";
-  - het teamlid ziet de regel in het logboek;
-  - als eigenaar zijn alle 146 tabellen uit het manifest leesbaar met precies de
-    select en sortering van de export (RLS, grants, kolomrechten), zonder één
-    weigering.
+  - als eigenaar en als beheerder geeft `log_data_export` een regel; een
+    teamlid en de boekhouder krijgen "Alleen de eigenaar of een beheerder …";
+  - het teamlid ziet beide regels in het logboek;
+  - als eigenaar én als beheerder zijn alle 146 tabellen uit het manifest
+    leesbaar met precies de select en sortering van de export (RLS, grants,
+    kolomrechten), zonder één weigering.
 - **Mobiel**: `npm run test:mobile -- --theme=both`: 500 pagina's, 0
   problemen. Twee standen zijn nieuw: `settings-gegevens` en
   `ledger-beginbalans`.

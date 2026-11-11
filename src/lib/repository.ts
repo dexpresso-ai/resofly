@@ -3599,10 +3599,10 @@ export async function fetchExportPage(request: ExportPageRequest): Promise<Recor
 }
 
 /**
- * Een regel in het logboek: deze eigenaar exporteerde alles (migratie
+ * Een regel in het logboek: dit teamlid exporteerde alles (migratie
  * 20261111120000). 'ontbreekt' als de functie er nog niet is, zodat de export
  * op een database zonder die migratie niet vastloopt; een weigering (geen
- * eigenaar) gooit wel.
+ * eigenaar of beheerder) gooit wel.
  */
 export async function logDataExport(organizationId: UUID, summary: Record<string, number>): Promise<'gelogd' | 'ontbreekt'> {
   const { error } = await supabase.rpc('log_data_export', { p_organization_id: organizationId, p_summary: summary });

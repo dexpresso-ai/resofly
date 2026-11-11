@@ -4,16 +4,18 @@
 --
 -- Zie docs/plannen/GEGEVENS_MEENEMEN_BOUWPLAN_2026-11-11.md (fase 1).
 --
--- De eigenaar kan onder Instellingen → Gegevens alles van de organisatie in
--- één zip downloaden. De export leest met zijn eigen rechten (RLS), dus hij
--- krijgt niets wat hij in ResoFly niet al kon zien. Wel is een export de
--- snelste manier om met één overgenomen account in één keer alles mee te
--- nemen. Daarom komt er een regel in het logboek, zichtbaar voor het hele
--- team (entity_type 'organization', zie audit_entity_module).
+-- De eigenaar en de beheerders kunnen onder Instellingen → Gegevens alles van
+-- de organisatie in één zip downloaden (keuze van 11 november). De export
+-- leest met de eigen rechten (RLS), dus je krijgt niets wat je in ResoFly niet
+-- al kon zien. Wel is een export de snelste manier om met één overgenomen
+-- account in één keer alles mee te nemen. Daarom komt er een regel in het
+-- logboek, zichtbaar voor het hele team (entity_type 'organization', zie
+-- audit_entity_module).
 --
 -- De app mag zelf niet in audit_logs schrijven; dat doen de triggers en de
--- server. Deze functie is de enige weg, en alleen voor een eigenaar: dezelfde
--- regel als de knop in het scherm (settingsTabRoleRule, tabblad 'gegevens').
+-- server. Deze functie is de enige weg, en alleen voor de eigenaar of een
+-- beheerder (can_admin_org): dezelfde regel als de knop in het scherm
+-- (settingsTabRoleRule, tabblad 'gegevens').
 --
 -- Veilig opnieuw te draaien: create or replace, de lijst met acties wordt
 -- alleen aangevuld, en de rechten opnieuw gezet.
@@ -58,8 +60,8 @@ begin
   if v_user is null then
     raise exception 'Log eerst in.' using errcode = '42501';
   end if;
-  if not public.user_has_org_role(p_organization_id, array['owner']) then
-    raise exception 'Alleen de eigenaar kan alle gegevens exporteren.' using errcode = '42501';
+  if not public.can_admin_org(p_organization_id) then
+    raise exception 'Alleen de eigenaar of een beheerder kan alle gegevens exporteren.' using errcode = '42501';
   end if;
   -- Alleen een object, en klein: dit is een samenvatting (aantallen), geen
   -- plek om gegevens op te slaan.

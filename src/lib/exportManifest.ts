@@ -14,9 +14,9 @@
  * omdat niemand wist welke tabellen naar bestanden verwijzen
  * (ACTIEPUNTEN_BEVEILIGING_SAAS, actie 19). Hier staat het per kolom.
  *
- * De export leest met de rechten van wie hem maakt (Supabase, RLS). Wat de
- * eigenaar in ResoFly niet kan zien, zoals de privé-agenda van een collega,
- * komt er dus ook niet in. Zie docs/plannen/GEGEVENS_MEENEMEN_BOUWPLAN_2026-11-11.md.
+ * De export leest met de rechten van wie hem maakt (Supabase, RLS): de
+ * eigenaar of een beheerder. Wat die in ResoFly niet kan zien, zoals de
+ * privé-agenda van een collega, komt er dus ook niet in. Zie docs/plannen/GEGEVENS_MEENEMEN_BOUWPLAN_2026-11-11.md.
  *
  * Puur (geen Supabase, geen React), zodat `npm test` het kan nalopen.
  */

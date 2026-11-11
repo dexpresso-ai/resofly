@@ -2,9 +2,9 @@
  * Instellingen → Gegevens: alles van de organisatie in één zip downloaden.
  * Zie docs/plannen/GEGEVENS_MEENEMEN_BOUWPLAN_2026-11-11.md.
  *
- * Alleen de eigenaar ziet dit tabblad (settingsTabRoleRule). De export leest
- * met zijn eigen rechten, dus hij krijgt niets wat hij in de app niet al kon
- * zien. Het scherm haalt niets op tot je op de knop drukt.
+ * Alleen de eigenaar en de beheerders zien dit tabblad (settingsTabRoleRule).
+ * De export leest met de eigen rechten, dus je krijgt niets wat je in de app
+ * niet al kon zien. Het scherm haalt niets op tot je op de knop drukt.
  */
 import { useEffect, useRef, useState } from 'react';
 import { Download, Loader2 } from 'lucide-react';
@@ -89,7 +89,7 @@ export function DataExportPanel({ organizationId, organizationName, userId, user
         signal: controller.signal,
       });
       // Eerst de regel in het logboek, dan pas de download. Weigert de
-      // database (geen eigenaar), dan geen zip.
+      // database (geen eigenaar of beheerder), dan geen zip.
       await logDataExport(organizationId, { tabellen: built.summary.tables, rijen: built.summary.rows, bestanden: built.summary.files });
       setResult(built);
       download(built);

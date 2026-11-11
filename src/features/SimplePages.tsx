@@ -104,9 +104,11 @@ export function settingsTabRoleRule(tab: SettingsTab, role: OrganizationRole | n
   if (isAccountantRole(role)) return ACCOUNTANT_SETTINGS_TABS.includes(tab);
   // Een boekhouder uitnodigen of de toegang intrekken is beheer.
   if (tab === 'boekhouder') return role === 'owner' || role === 'admin';
-  // Alles exporteren: alleen de eigenaar. Het leest met de eigen rechten, maar
-  // het is wel alles in één keer, en dat hoort bij wie de organisatie bezit.
-  if (tab === 'gegevens') return role === 'owner';
+  // Alles exporteren: de eigenaar en de beheerders (keuze van 11 november).
+  // Het leest met de eigen rechten, maar het is wel alles in één keer; een
+  // gewoon teamlid of de boekhouder doet dat niet. log_data_export weigert hen
+  // ook.
+  if (tab === 'gegevens') return role === 'owner' || role === 'admin';
   return null;
 }
 
