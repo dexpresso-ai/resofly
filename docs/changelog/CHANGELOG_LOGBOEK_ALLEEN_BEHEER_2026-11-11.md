@@ -110,3 +110,18 @@ samenvoegen met staging (de export en het MCP-adres), waar dat hieronder staat.
   `audit_logs` voor hem niet op, en er is geen JavaScript-fout.
 - `deno check` kon hier niet: deno is in de cloudsessie niet beschikbaar. Dat
   doet CI na de push.
+
+## Uitrol op staging (11 november, 13:53)
+
+- *Deploy Supabase (staging)*: migraties, edge functions en rooktest geslaagd.
+- *Frontend checks*: `deno check` van alle edge functions (ook factuur-inbox en
+  documentopmaak), de migraties vanaf nul, de typecheck, de CSP-hash en de
+  unittests geslaagd. De browsertests (mobiel, laden, inrichten) kwamen niet
+  aan de beurt: Chromium installeren mislukte twee keer, omdat de runner
+  `azure.archive.ubuntu.com` niet kon bereiken ("Temporary failure
+  resolving"). Dat zit in GitHub, niet in deze wijziging. Lokaal slaagden
+  dezelfde tests, zie hierboven.
+- Nacontrole op de staging-database (alleen lezen): `20261111140000` staat in
+  `schema_migrations`, na `20261111120000`. Op `audit_logs` staat als enige
+  leesregel `audit logs read by owners and admins` met
+  `can_admin_org(organization_id)`, plus het hek van de boekhouder.
