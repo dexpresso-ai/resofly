@@ -278,6 +278,24 @@ export interface PortalAccount {
   transferCount?: number;
   /** Mailgesprekken met de leverancier: hoeveel, en hoeveel met nieuws (sinds 2026-10-04). */
   messages?: { threads: number; unread: number };
+  /** Afspraken via een boekingslink (sinds 2026-11-11; ontbreekt bij een oudere server). */
+  appointments?: PortalAppointment[];
+}
+
+/**
+ * Een afspraak die de klant (of een collega) via een boekingslink maakte. Alleen
+ * wat de klant mag zien: geen e-mailadres, en de videolink alleen bij een
+ * bevestigde afspraak die nog niet voorbij is (client-portal: loadAppointments).
+ */
+export interface PortalAppointment {
+  id: string;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  status: 'confirmed' | 'cancelled';
+  video_service: 'jitsi' | 'google_meet' | 'teams' | 'zoom' | 'link' | null;
+  meeting_url: string | null;
+  booked_by: string | null;
 }
 
 /** Eén ding binnen een deling: een bestand, notitie of document. */

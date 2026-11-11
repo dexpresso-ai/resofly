@@ -2625,6 +2625,28 @@ body::before{
 .portal-resolved-head strong{font-weight:600}
 .portal-resolved-hint{margin:0 0 8px}
 .portal-row-actions{display:flex;align-items:center;gap:8px}
+.portal-inline-link{background:none;border:0;padding:0;color:var(--accent-ink);font:inherit;font-weight:600;cursor:pointer}
+.portal-inline-link:hover{text-decoration:underline}
+/* Afspraken in het portaal (sinds 2026-11-11): een datumblok, wanneer, welk
+   videogesprek, en de knoppen Deelnemen en In agenda. */
+.portal-appointment{align-items:center}
+.portal-appointment-date{flex:none;display:grid;place-items:center;width:48px;height:52px;border-radius:11px;background:rgba(var(--accent-rgb),.14);color:var(--accent-ink);line-height:1}
+.portal-appointment-date em{font-style:normal;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.portal-appointment-date strong{font-size:20px;font-variant-numeric:tabular-nums}
+.portal-appointment-when::first-letter{text-transform:uppercase}
+.portal-appointment-video{margin-top:3px}
+.portal-appointment-video .vsm-text strong{font-size:12px;font-weight:600}
+.portal-appointment-actions{flex:none}
+.portal-appointment-actions .btn{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:7px 12px;font-size:12.5px;text-decoration:none}
+.portal-appointment.is-cancelled .portal-row-number,.portal-appointment.is-cancelled .portal-appointment-when{text-decoration:line-through;text-decoration-color:rgba(var(--danger-rgb),.6)}
+.portal-appointment.is-cancelled .portal-appointment-date,.portal-appointment.is-past .portal-appointment-date{background:var(--bg5);color:var(--muted)}
+.portal-appointments-note{margin:12px 0 0}
+@media (max-width:640px){
+  .portal-appointment{flex-wrap:wrap;gap:10px 12px}
+  .portal-appointment .portal-row-main{flex:1 1 calc(100% - 62px)}
+  .portal-appointment-actions{width:100%;padding-left:60px}
+  .portal-appointment-actions .btn{flex:1;justify-content:center}
+}
 .portal-row-error{font-size:11px;color:var(--accent-r)}
 .portal-ticket{align-items:flex-start}
 .portal-ticket-desc{font-size:12px;color:var(--muted2);line-height:1.5;margin-top:4px}
@@ -3841,8 +3863,52 @@ body::before{
 .event-meeting-jitsi-actions{display:flex;gap:6px;flex:0 0 auto}
 .event-meeting-jitsi .btn{display:inline-flex;align-items:center;gap:5px}
 /* Boekingslink: keuzelijst met één regel uitleg eronder. */
-.booking-video-select{display:flex;flex-direction:column;gap:4px}
+.booking-video-select{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;border:0;min-width:0}
+.booking-video-select legend{padding:0;margin-bottom:6px;font-size:12px;font-weight:600;color:var(--muted2,var(--muted))}
 .booking-video-help{margin:0;font-size:12px}
+/* De videokeuze als kaarten (BookingVideoSelect): twee bij twee, en in een smal
+   vak (het doorstuurpaneel in de agenda, de telefoon) onder elkaar. */
+.bvs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:8px}
+.bvs-card{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg3);color:var(--text);font:inherit;text-align:left;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
+.bvs-card:hover:not(:disabled){border-color:var(--border2,var(--border));background:var(--bg4,var(--bg3))}
+.bvs-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.bvs-card.is-checked{border-color:var(--accent);background:rgba(var(--accent-rgb),.08);box-shadow:0 0 0 1px var(--accent) inset}
+.bvs-card.is-off{opacity:.62;cursor:not-allowed}
+.bvs-card.is-off .vsm{filter:grayscale(1)}
+.bvs-text{display:grid;gap:2px;min-width:0}
+.bvs-text strong{font-size:13px}
+.bvs-text small{font-size:11.5px;line-height:1.4;color:var(--muted)}
+/* Het teken van een videodienst (VideoServiceMark): een gekleurd vlak met een
+   camera, in de kleur van de dienst. Op de boekingspagina, in het portaal en in
+   het beheer hetzelfde, zodat iedereen ziet om welk gesprek het gaat. */
+.vsm{--vsm:#6b7280;flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;background:var(--vsm);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14),0 6px 14px -8px var(--vsm)}
+.vsm-sm{width:20px;height:20px;border-radius:6px}
+.vsm-lg{width:40px;height:40px;border-radius:12px}
+.vsm-jitsi{--vsm:#1d76ba}
+.vsm-google_meet{--vsm:#00897b}
+.vsm-teams{--vsm:#5b5fc7}
+.vsm-zoom{--vsm:#0b5cff}
+.vsm-link{--vsm:#6b7280}
+.vsm-line{display:inline-flex;align-items:center;gap:10px;min-width:0}
+.vsm-text{display:grid;gap:1px;min-width:0}
+.vsm-text strong{font-size:13.5px}
+.vsm-text small{font-size:12px;color:var(--muted);line-height:1.4}
+/* Boekingsmomenten in het rooster (TimeBlockGrid, bookingMode): vrij en
+   verwijderbaar (groen, met een kruisje bij aanwijzen), aangeboden aan de klant
+   (gestippeld) en geboekt (accentkleur, met een slotje). Kleuren uit het palet,
+   zodat ze in Dag en Nacht leesbaar zijn. */
+.tb-booking-slot{position:absolute;left:2px;right:2px;z-index:6;display:flex;align-items:flex-start;gap:4px;padding:2px 6px;overflow:hidden;border-radius:7px;border:1.5px solid rgba(var(--ok-rgb),.75);background:rgba(var(--ok-rgb),.18);color:var(--text);font:inherit;font-size:11px;font-weight:700;line-height:1.25;text-align:left;font-variant-numeric:tabular-nums;cursor:pointer;transition:background .12s,box-shadow .12s}
+.tb-booking-slot svg{flex:none;margin-top:1px}
+.tb-booking-time{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tb-booking-x{margin-left:auto;opacity:0;transition:opacity .12s}
+.tb-booking-slot.is-draft:hover{background:rgba(var(--danger-rgb),.16);border-color:rgba(var(--danger-rgb),.7)}
+.tb-booking-slot.is-draft:hover .tb-booking-x,.tb-booking-slot.is-draft:focus-visible .tb-booking-x{opacity:1}
+.tb-booking-slot:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* Alleen-lezen: slepen en klikken op het rooster eronder blijven werken. */
+.tb-booking-slot.is-offered,.tb-booking-slot.is-taken{pointer-events:none;cursor:default}
+.tb-booking-slot.is-offered{border-style:dashed;background:rgba(var(--ok-rgb),.08)}
+.tb-booking-slot.is-taken{border-color:var(--accent);background:rgba(var(--accent-rgb),.22);color:var(--accent-ink)}
+@media (hover:none){.tb-booking-slot.is-draft .tb-booking-x{opacity:.8}}
 /* Instellingen → Agenda: de Jitsi-server. */
 .video-server-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;margin:8px 0 10px}
 .video-server-form label{flex:1 1 260px;display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -7483,6 +7549,10 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .mbk-link-title{font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
 .mbk-link-title>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mbk-link-meta{font-size:12px}
+.mbk-link-meta .vsm{width:16px;height:16px;border-radius:5px;margin-right:6px;vertical-align:-3px}
+.mbk-link-meta .vsm svg{width:10px;height:10px}
+/* Het teken houdt zijn eigen kleur, ook binnen een .nav-item (die kleurt zijn iconen). */
+.vsm svg,.nav-item .vsm svg,.nav-item:hover .vsm svg,.nav-item.active .vsm svg{color:#fff}
 .mbk-form{padding:16px;display:flex;flex-direction:column;gap:12px}
 .mbk-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .mbk-form-actions{display:flex;gap:8px}
@@ -7574,6 +7644,61 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    hier niet in beeld. */
 .mbk-draw .tb-overlay{top:0}
 
+/* Tijdsloten selecteren (2026-11-11): de duur per moment en de pauze, het
+   weekpatroon en de momenten per dag als tijdchips. */
+.mbk-draw-tools{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
+.mbk-draw-note{margin:0;font-size:12.5px;color:var(--accent-o)}
+.mbk-video-meta{display:flex;align-items:center;gap:7px;margin-top:6px;font-size:13px;font-weight:600}
+.mbk-field-hint{display:block;margin-top:4px;font-size:11.5px;font-weight:400}
+.slot-split{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}
+.slot-split-label{font-size:12.5px;font-weight:600;color:var(--muted2,var(--muted))}
+.slot-seg{display:inline-flex;flex-wrap:wrap;gap:2px;padding:3px;border-radius:11px;background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)))}
+.slot-seg button{padding:5px 10px;border:0;border-radius:8px;background:none;color:var(--muted2,var(--muted));font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.slot-seg button:hover:not(:disabled){color:var(--text)}
+.slot-seg button[aria-checked="true"]{background:var(--bg2);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.18),0 0 0 1px var(--border)}
+.slot-seg button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.slot-seg button:disabled{opacity:.5;cursor:not-allowed}
+.slot-split-buffer{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--muted2,var(--muted))}
+.slot-split-buffer .form-input{width:auto;min-height:32px;padding:4px 28px 4px 10px;font-size:12.5px}
+.mbk-pattern{padding:0;overflow:hidden}
+.mbk-pattern-toggle{width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;border:0;background:none;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.mbk-pattern-toggle:hover{background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))}
+.mbk-pattern-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.mbk-pattern-toggle>svg{flex:none;color:var(--accent-ink)}
+.mbk-pattern-toggle>span:nth-child(2){display:grid;gap:2px;flex:1;min-width:0}
+.mbk-pattern-toggle em{font-style:normal;font-size:12.5px;color:var(--muted)}
+.mbk-pattern-chevron{flex:none;font-size:18px;color:var(--muted)}
+.mbk-pattern-body{display:flex;flex-direction:column;gap:12px;padding:4px 16px 16px}
+.mbk-pattern-days{display:flex;flex-wrap:wrap;gap:6px}
+.mbk-pattern-days button{width:40px;height:36px;border:1px solid var(--border);border-radius:10px;background:var(--bg3);color:var(--muted2,var(--muted));font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.mbk-pattern-days button.is-on{border-color:var(--accent);background:rgba(var(--accent-rgb),.14);color:var(--accent-ink)}
+.mbk-pattern-days button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mbk-pattern-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.mbk-pattern-grid label{display:grid;gap:4px;font-size:12px;color:var(--muted2,var(--muted))}
+.mbk-pattern-foot{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--border)}
+.mbk-pattern-foot .muted{font-size:12.5px}
+.mbk-section-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.mbk-count{font-size:12.5px;color:var(--muted2,var(--muted))}
+.mbk-count strong{color:var(--accent-ink);font-size:14px}
+.mbk-days{display:flex;flex-direction:column}
+.mbk-day{display:grid;grid-template-columns:200px minmax(0,1fr);gap:6px 14px;align-items:start;padding:9px 0;border-bottom:1px solid var(--border)}
+.mbk-day:last-child{border-bottom:0}
+.mbk-day-head{display:flex;flex-direction:column;gap:2px;padding-top:4px}
+.mbk-day-label{font-size:13px;font-weight:700}
+.mbk-day-label::first-letter{text-transform:uppercase}
+.mbk-day-clear{align-self:flex-start;padding:0;border:0;background:none;color:var(--muted);font:inherit;font-size:11.5px;cursor:pointer}
+.mbk-day-clear:hover:not(:disabled){color:var(--accent-r);text-decoration:underline}
+.mbk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.mbk-chip{display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:3px 4px 3px 10px;border:1px solid rgba(var(--ok-rgb),.4);border-radius:999px;background:rgba(var(--ok-rgb),.1);font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}
+.mbk-chip.is-taken{padding-right:10px;border-color:rgba(var(--accent-rgb),.45);background:rgba(var(--accent-rgb),.12);color:var(--accent-ink)}
+.mbk-chip em{font-style:normal;font-weight:500;font-size:11px;opacity:.85}
+.mbk-chip-x{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:0;border-radius:50%;background:none;color:inherit;cursor:pointer;opacity:.7}
+.mbk-chip-x:hover:not(:disabled){opacity:1;background:rgba(var(--danger-rgb),.16);color:var(--accent-r)}
+.mbk-chip-x:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.mbk-manual{margin-top:4px}
+.mbk-manual summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--accent-ink);padding:4px 0}
+.mbk-manual[open] summary{margin-bottom:8px}
+
 @media(max-width:1024px){
   /* Eén kolom: de lijst met links bovenaan, het geopende item eronder. */
   .mbk-layout{grid-template-columns:minmax(0,1fr);gap:14px}
@@ -7595,6 +7720,11 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .mbk-mail-actions .btn{flex:1 1 auto}
   .mbk-row{flex-wrap:wrap}
   .mbk-row-side{flex:1 1 100%;justify-content:space-between}
+  .mbk-day{grid-template-columns:minmax(0,1fr)}
+  .mbk-day-head{flex-direction:row;align-items:baseline;justify-content:space-between;padding-top:0}
+  .mbk-pattern-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mbk-pattern-foot .btn{flex:1 1 100%}
+  .mbk-chip{min-height:34px}
 }
 
 /* 16 ── Meldingen boven de onderbalk ──────────────────────────────────────

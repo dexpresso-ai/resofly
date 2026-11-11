@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { LifeBuoy, Mail, Settings } from 'lucide-react';
+import { CalendarPlus, LifeBuoy, Mail, Settings, Video } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../../components/Ui';
 import { isSupabaseConfigured } from '../../lib/supabase';
 import { supabasePortalAuth, verifyPortalLogin } from '../../lib/supabasePortal';
@@ -36,6 +36,7 @@ import {
   togglePortalGalleryFavorite,
   updatePortalNotificationSettings,
   type PortalAccount,
+  type PortalAppointment,
   type PortalContract,
   type PortalGallery,
   type PortalGalleryDetail,
@@ -87,9 +88,11 @@ import { onPortalTokenChange, portalTokenMode, storePortalToken, storedPortalTok
 import { isPortalLoginKey, portalKeyFromPathname } from '../../lib/portalLoginKey';
 import { PORTAL_PREVIEW_READY, defaultPortalPreview, demoPortalBackend, readPortalPreviewMessage, type PortalPreviewState } from '../../lib/portalPreview';
 import { formatDocUnitPrice } from '../../lib/documentLayout';
+import { VideoServiceLine } from '../../components/VideoServiceMark';
+import { VIDEO_INFO, buildIcs, durationLabel, fmtDayLong, fmtDayParts, fmtTime, amsterdamDateKey, isBookingVideoKind, safeMeetingLink } from '../../lib/bookingLinks';
 import { quoteDecision } from '../../lib/financeRules';
 
-type PortalTab = 'overview' | 'messages' | 'tickets' | 'invoices' | 'quotes' | 'contracts' | 'files' | 'projects' | 'galleries' | 'settings';
+type PortalTab = 'overview' | 'messages' | 'tickets' | 'appointments' | 'invoices' | 'quotes' | 'contracts' | 'files' | 'projects' | 'galleries' | 'settings';
 
 /**
  * Deeplinks uit de meldingsmail: /portal?dossier=…&ticket=… opent meteen het
@@ -915,6 +918,11 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
   const overdueTotal = overdueInvoices.reduce((sum, inv) => sum + total(inv.lines).total, 0);
   const openTickets = account.tickets.filter(t => !['approved', 'rejected', 'converted', 'resolved'].includes(t.status));
   const ongoingProjects = account.projects.filter(p => !p.archived);
+  const now = new Date();
+  // Afspraken via een boekingslink: wat er nog komt (ook een geannuleerde, zodat
+  // de klant ziet dat hij niet doorgaat) en wat er al geweest is.
+  const appointments = account.appointments ?? [];
+  const upcomingAppointments = appointments.filter(a => Date.parse(a.ends_at) > now.getTime());
 
   // `fresh` = iets nieuws van de leverancier dat je hier nog niet opende; dat
   // telletje krijgt de accentkleur, een gewoon aantal blijft grijs.
@@ -922,6 +930,10 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
     { id: 'overview', label: 'Overzicht' },
     { id: 'messages', label: 'Berichten', fresh: unreadTickets.length + unreadThreads },
     ...(ticketsOpen ? [{ id: 'tickets' as const, label: 'Tickets', count: account.tickets.length, fresh: unreadTickets.length }] : []),
+    // Alleen als er afspraken zijn (of de klant er via een link heen sprong): een lege tab zegt niets.
+    ...(appointments.length > 0 || tab === 'appointments'
+      ? [{ id: 'appointments' as const, label: 'Afspraken', count: upcomingAppointments.filter(a => a.status === 'confirmed').length }]
+      : []),
     { id: 'invoices', label: 'Facturen', count: account.invoices.length },
     { id: 'quotes', label: 'Offertes', count: account.quotes.length },
     { id: 'contracts', label: 'Contracten', count: account.contracts?.length ?? 0 },
@@ -934,7 +946,6 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
   ];
 
   const overviewHead = activeTab === 'overview';
-  const now = new Date();
   const name = firstName(account.actingContact?.name || account.client?.contact_name);
 
   return <>
@@ -1003,6 +1014,11 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
         </div>
       </article>}
 
+      {upcomingAppointments.length > 0 && <article className="portal-card portal-appointments-card">
+        <div className="portal-card-head"><h2>Komende afspraken</h2><button type="button" className="portal-more" onClick={() => openTab('appointments')}>Alle afspraken →</button></div>
+        <div className="portal-rows">{upcomingAppointments.slice(0, 3).map(a => <AppointmentRow key={a.id} appointment={a} supplierName={supplierName} />)}</div>
+      </article>}
+
       <article className="portal-card">
         <div className="portal-card-head"><h2>Recente facturen</h2>{account.invoices.length > 0 && <button type="button" className="portal-more" onClick={() => setTab('invoices')}>Alle facturen →</button>}</div>
         {account.invoices.length === 0 && <p className="portal-muted">Nog geen facturen.</p>}
@@ -1029,6 +1045,8 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
       {account.quotes.length === 0 && <p className="portal-muted">Er zijn nog geen offertes voor je.</p>}
       <div className="portal-rows">{account.quotes.map(q => <QuoteRow key={q.id} quote={q} onOpen={() => setOpenDoc({ type: 'quote', id: q.id })} />)}</div>
     </article>}
+
+    {!showingDoc && tab === 'appointments' && <AppointmentsTab appointments={appointments} supplierName={supplierName} onOpenMessages={() => openTab('messages')} />}
 
     {!showingDoc && tab === 'contracts' && <ContractsTab account={account} />}
 
@@ -1072,6 +1090,74 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
 }
 
 type OpenConversation = { kind: 'thread' | 'ticket'; id: string } | { kind: 'new' };
+
+// ── Afspraken (via een boekingslink) ────────────────────────────────────────
+//
+// Sinds 11 november 2026. Een klant die via een boekingslink een afspraak
+// maakte, zag hem daarna alleen in zijn mail en zijn eigen agenda; wie de mail
+// kwijt was, had ook de videolink niet meer. Nu staat hij hier, met welk
+// videogesprek het is (Jitsi, Google Meet, Teams), de knop om mee te doen en
+// een agenda-bestand. Een afspraak die het team annuleerde, staat er als "Gaat
+// niet door" tot het moment voorbij is.
+
+function AppointmentsTab({ appointments, supplierName, onOpenMessages }: { appointments: PortalAppointment[]; supplierName: string; onOpenMessages: () => void }) {
+  const nowMs = Date.now();
+  const upcoming = appointments.filter(a => Date.parse(a.ends_at) > nowMs);
+  const past = appointments.filter(a => Date.parse(a.ends_at) <= nowMs && a.status === 'confirmed').reverse();
+  const [showPast, setShowPast] = useState(false);
+  return <>
+    <article className="portal-card portal-appointments-card">
+      <div className="portal-card-head"><h2>Komende afspraken</h2><span>{upcoming.filter(a => a.status === 'confirmed').length}</span></div>
+      {upcoming.length === 0 && <p className="portal-muted">Er staat nu geen afspraak met {supplierName} gepland.</p>}
+      <div className="portal-rows">{upcoming.map(a => <AppointmentRow key={a.id} appointment={a} supplierName={supplierName} />)}</div>
+      {upcoming.some(a => a.status === 'confirmed') && <p className="portal-muted portal-appointments-note">
+        Kun je niet? <button type="button" className="portal-inline-link" onClick={onOpenMessages}>Stuur {supplierName} een bericht</button>.
+      </p>}
+    </article>
+    {past.length > 0 && <article className="portal-card">
+      <div className="portal-card-head">
+        <h2>Geweest</h2>
+        <button type="button" className="portal-more" aria-expanded={showPast} onClick={() => setShowPast(v => !v)}>{showPast ? 'Verberg' : `Toon ${past.length}`}</button>
+      </div>
+      {showPast && <div className="portal-rows">{past.map(a => <AppointmentRow key={a.id} appointment={a} supplierName={supplierName} past />)}</div>}
+    </article>}
+  </>;
+}
+
+function AppointmentRow({ appointment: a, supplierName, past = false }: { appointment: PortalAppointment; supplierName: string; past?: boolean }) {
+  const p = fmtDayParts(amsterdamDateKey(a.starts_at));
+  const cancelled = a.status === 'cancelled';
+  const kind = isBookingVideoKind(a.video_service) ? a.video_service : null;
+  const url = cancelled || past ? null : safeMeetingLink(a.meeting_url);
+  const downloadIcs = () => {
+    const content = buildIcs({ uid: a.id, title: `${a.title} (${supplierName})`, startsAt: a.starts_at, endsAt: a.ends_at, url });
+    if (!content) return;
+    const href = URL.createObjectURL(new Blob([content], { type: 'text/calendar;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = href;
+    link.download = 'afspraak.ics';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(href), 2000);
+  };
+  return <div className={`portal-row portal-appointment${cancelled ? ' is-cancelled' : ''}${past ? ' is-past' : ''}`}>
+    <span className="portal-appointment-date" aria-hidden="true"><em>{p.month}</em><strong>{p.day}</strong></span>
+    <div className="portal-row-main">
+      <span className="portal-row-number">{a.title}</span>
+      <span className="portal-muted portal-appointment-when">{fmtDayLong(a.starts_at)} · {fmtTime(a.starts_at)}–{fmtTime(a.ends_at)} · {durationLabel(a.starts_at, a.ends_at)}</span>
+      {kind && !cancelled && <span className="portal-appointment-video"><VideoServiceLine kind={kind} size="sm" /></span>}
+    </div>
+    {cancelled
+      ? <span className="portal-status overdue">Gaat niet door</span>
+      : past
+        ? <span className="portal-status">Geweest</span>
+        : <span className="portal-row-actions portal-appointment-actions">
+            {url && <a className="btn btn-primary portal-appointment-join" href={url} target="_blank" rel="noopener noreferrer" title={kind ? `Deelnemen via ${VIDEO_INFO[kind].name}` : 'Deelnemen'}><Video size={14} aria-hidden="true" /> Deelnemen</a>}
+            <button type="button" className="btn btn-ghost portal-appointment-ics" onClick={downloadIcs} title="Zet deze afspraak in je eigen agenda"><CalendarPlus size={14} aria-hidden="true" /><span>In agenda</span></button>
+          </span>}
+  </div>;
+}
 
 // ── Galerijen (foto/video-oplevering) ───────────────────────────────────────
 

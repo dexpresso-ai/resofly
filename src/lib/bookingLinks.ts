@@ -143,3 +143,273 @@ export function choiceRule(maxTotal: number, maxPerWeek: number, alreadyBooked =
   const base = left <= 1 ? 'Je kiest één moment' : `Je kiest maximaal ${left} momenten`;
   return left > 1 && maxPerWeek < left ? `${base}, hooguit ${maxPerWeek} per week` : base;
 }
+
+// ── Videogesprek: welke dienst ──────────────────────────────────────────────
+
+/** Dezelfde sleutels als BookingVideoKind in _shared/meetingBookingRules.ts. */
+export type BookingVideoKind = 'jitsi' | 'google_meet' | 'teams' | 'zoom' | 'link';
+
+/**
+ * Wat de klant over het videogesprek moet weten: de naam van de dienst en hoe
+ * hij meedoet. Eerst stond er op de boekingspagina alleen "Jitsi Meet" in een
+ * tegel, en bij een vaste link "Link volgt per mail"; of het Teams of Meet was
+ * (en of je daar een app voor nodig had), zag je pas als de mail er was.
+ */
+export const VIDEO_INFO: Record<BookingVideoKind, { name: string; how: string }> = {
+  jitsi: { name: 'Jitsi Meet', how: 'Je doet mee via je browser. Je hebt geen account of app nodig.' },
+  google_meet: { name: 'Google Meet', how: 'Je doet mee via je browser of de Google Meet-app.' },
+  teams: { name: 'Microsoft Teams', how: 'Je doet mee via je browser of de Teams-app.' },
+  zoom: { name: 'Zoom', how: 'Je doet mee via de Zoom-app of je browser.' },
+  link: { name: 'Videogesprek', how: 'De link naar het gesprek krijg je in je bevestiging.' },
+};
+
+const VIDEO_KINDS = Object.keys(VIDEO_INFO) as BookingVideoKind[];
+
+export function isBookingVideoKind(value: unknown): value is BookingVideoKind {
+  return typeof value === 'string' && (VIDEO_KINDS as string[]).includes(value);
+}
+
+/**
+ * De dienst van een boekingslink: de sleutel van de server (`video_service`),
+ * of, bij een server van vóór 11 november, afgeleid uit de zin (`video`).
+ */
+export function videoKindOf(link: { video_service?: unknown; video?: unknown } | null | undefined): BookingVideoKind | null {
+  if (!link) return null;
+  if (isBookingVideoKind(link.video_service)) return link.video_service;
+  if (link.video_service === null && 'video_service' in link) return null;
+  const label = typeof link.video === 'string' ? link.video : '';
+  if (!label) return null;
+  if (/jitsi/i.test(label)) return 'jitsi';
+  if (/google meet/i.test(label)) return 'google_meet';
+  if (/teams/i.test(label)) return 'teams';
+  if (/zoom/i.test(label)) return 'zoom';
+  return 'link';
+}
+
+// ── Momenten maken: opdelen en een weekpatroon ──────────────────────────────
+
+export type SlotTimes = { startsAt: string; endsAt: string };
+
+/** Zoveel momenten maakt het beheer hooguit in één keer (de server neemt er 200 per aanvraag). */
+export const MAX_GENERATED_SLOTS = 500;
+
+/**
+ * Een getekend blok als momenten van `durationMin` minuten, met `bufferMin`
+ * pauze ertussen. 0 = het blok zoals getekend.
+ *
+ * Waarom: eerst was elk getekend blok één moment. Wie de klant een ochtend
+ * wilde aanbieden in halve uren, sleepte zes keer, en een sleep van 9.00 tot
+ * 12.00 uur gaf de klant één afspraak van drie uur. Een klik (zonder slepen)
+ * geeft nu één moment van de gekozen duur.
+ */
+export function splitIntoSlots(startsAt: string, endsAt: string, durationMin: number, bufferMin = 0): SlotTimes[] {
+  const start = Date.parse(startsAt);
+  const end = Date.parse(endsAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+  const iso = (ms: number) => new Date(ms).toISOString();
+  if (!Number.isFinite(durationMin) || durationMin <= 0) return [{ startsAt: iso(start), endsAt: iso(end) }];
+  const len = Math.round(durationMin) * 60_000;
+  const step = len + Math.max(0, Math.round(bufferMin || 0)) * 60_000;
+  const out: SlotTimes[] = [];
+  for (let t = start; t + len <= end && out.length < MAX_GENERATED_SLOTS; t += step) out.push({ startsAt: iso(t), endsAt: iso(t + len) });
+  return out.length ? out : [{ startsAt: iso(start), endsAt: iso(start + len) }];
+}
+
+/** Een weekpatroon: op welke dagen, van hoe laat tot hoe laat, en hoeveel weken. */
+export interface SlotPattern {
+  /** 1 = maandag … 7 = zondag. */
+  weekdays: number[];
+  /** "09:00". */
+  from: string;
+  /** "12:00". */
+  to: string;
+  durationMin: number;
+  bufferMin: number;
+  /** 1 tot en met 12. */
+  weeks: number;
+  /** De eerste dag (JJJJ-MM-DD), in de tijd van je eigen apparaat. */
+  startDate: string;
+}
+
+function parseClock(value: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  return h <= 24 && min < 60 && h * 60 + min <= 24 * 60 ? h * 60 + min : null;
+}
+
+/**
+ * Alle momenten van een weekpatroon, in de tijd van je eigen apparaat (zoals
+ * het rooster). Momenten die al begonnen zijn, vallen weg; hooguit 500.
+ */
+export function generatePatternSlots(pattern: SlotPattern, now: number = Date.now()): SlotTimes[] {
+  const from = parseClock(pattern.from);
+  const to = parseClock(pattern.to);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(pattern.startDate);
+  if (from === null || to === null || to <= from || !m || !pattern.weekdays.length) return [];
+  const weeks = Math.min(12, Math.max(1, Math.round(pattern.weeks) || 1));
+  const days = new Set(pattern.weekdays);
+  const out: SlotTimes[] = [];
+  for (let i = 0; i < weeks * 7 && out.length < MAX_GENERATED_SLOTS; i++) {
+    const day = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + i);
+    const weekday = ((day.getDay() + 6) % 7) + 1;
+    if (!days.has(weekday)) continue;
+    const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, from);
+    const end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, to);
+    for (const slot of splitIntoSlots(start.toISOString(), end.toISOString(), pattern.durationMin, pattern.bufferMin)) {
+      if (Date.parse(slot.startsAt) <= now) continue;
+      // Een patroon past precies in het blok, of het moment valt weg.
+      if (Date.parse(slot.endsAt) > end.getTime()) continue;
+      out.push(slot);
+      if (out.length >= MAX_GENERATED_SLOTS) break;
+    }
+  }
+  return out;
+}
+
+/** "ma t/m vr", "ma, wo, vr", "elke dag". */
+export function weekdaysLabel(weekdays: number[]): string {
+  const names = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'];
+  const sorted = [...new Set(weekdays)].filter(d => d >= 1 && d <= 7).sort((a, b) => a - b);
+  if (sorted.length === 7) return 'elke dag';
+  if (sorted.length >= 3 && sorted.every((d, i) => i === 0 || d === sorted[i - 1] + 1)) return `${names[sorted[0] - 1]} t/m ${names[sorted[sorted.length - 1] - 1]}`;
+  return sorted.map(d => names[d - 1]).join(', ');
+}
+
+// ── De kalender op de boekingspagina ────────────────────────────────────────
+
+/** "2026-11" voor een dag-sleutel. */
+export function monthKeyOf(dayKey: string): string { return dayKey.slice(0, 7); }
+
+/** De maand ervoor of erna ("2026-11" → "2026-12"). */
+export function shiftMonth(monthKey: string, delta: number): string {
+  const [y, mo] = monthKey.split('-').map(Number);
+  const d = new Date(Date.UTC(y, mo - 1 + delta, 1, 12));
+  return d.toISOString().slice(0, 7);
+}
+
+/** "november 2026". */
+export function fmtMonthLabel(monthKey: string): string {
+  return fmt({ month: 'long', year: 'numeric' }).format(new Date(`${monthKey}-15T12:00:00Z`));
+}
+
+/**
+ * De weken van een maand voor een kalender: zeven dag-sleutels per rij, van
+ * maandag tot zondag. Dagen van de maand ervoor en erna zijn null.
+ */
+export function monthGrid(monthKey: string): Array<Array<string | null>> {
+  const [y, mo] = monthKey.split('-').map(Number);
+  const first = new Date(Date.UTC(y, mo - 1, 1, 12));
+  const daysInMonth = new Date(Date.UTC(y, mo, 0, 12)).getUTCDate();
+  const lead = (first.getUTCDay() + 6) % 7;
+  const cells: Array<string | null> = Array.from({ length: lead }, () => null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(`${monthKey}-${String(d).padStart(2, '0')}`);
+  while (cells.length % 7) cells.push(null);
+  const rows: Array<Array<string | null>> = [];
+  for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7));
+  return rows;
+}
+
+/** "17" en "di" voor een dag-sleutel (Nederlandse tijd). */
+export function fmtDayParts(dayKey: string): { weekday: string; day: string; month: string } {
+  const d = new Date(`${dayKey}T12:00:00Z`);
+  return {
+    weekday: fmt({ weekday: 'short' }).format(d).replace('.', ''),
+    day: String(Number(dayKey.slice(8, 10))),
+    month: fmt({ month: 'short' }).format(d).replace('.', ''),
+  };
+}
+
+// ── Een afspraak in je eigen agenda (.ics) ──────────────────────────────────
+
+/** Tekst in een iCalendar-veld: backslash, puntkomma, komma en regeleinde ontsnapt; stuurtekens weg. */
+export function icsText(value: string): string {
+  return value
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r\n|\r|\n/g, '\\n');
+}
+
+function icsStamp(ms: number): string {
+  return new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
+/** Lange regels vouwen (RFC 5545: hooguit 75 tekens, vervolg met een spatie). */
+function icsFold(line: string): string {
+  if (line.length <= 73) return line;
+  const parts: string[] = [];
+  for (let i = 0; i < line.length; i += 73) parts.push(line.slice(i, i + 73));
+  return parts.join('\r\n ');
+}
+
+/** Alleen een http(s)-link zonder spaties of stuurtekens. */
+export function safeMeetingLink(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  // eslint-disable-next-line no-control-regex
+  if (!raw || raw.length > 2048 || /[\s\u0000-\u001f\u007f]/.test(raw)) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Een agenda-bestand met één afspraak, voor "Zet in je agenda". Alles wat erin
+ * staat komt van de leverancier of de server; daarom wordt elk veld ontsnapt
+ * (een regeleinde in een titel maakte er anders een eigen regel van, met
+ * bijvoorbeeld een andere begintijd) en komt alleen een echte http(s)-link mee.
+ */
+export function buildIcs(ev: { uid: string; title: string; startsAt: string; endsAt: string; description?: string | null; url?: string | null }, now: number = Date.now()): string {
+  const start = Date.parse(ev.startsAt);
+  const end = Date.parse(ev.endsAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '';
+  const url = safeMeetingLink(ev.url);
+  const description = [ev.description?.trim(), url ? `Videogesprek: ${url}` : ''].filter(Boolean).join('\n\n');
+  const uid = `${ev.uid.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 80) || 'afspraak'}@resofly`;
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//ResoFly//Afspraak//NL',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${uid}`,
+    `DTSTAMP:${icsStamp(now)}`,
+    `DTSTART:${icsStamp(start)}`,
+    `DTEND:${icsStamp(end)}`,
+    `SUMMARY:${icsText(ev.title.slice(0, 200))}`,
+    ...(description ? [`DESCRIPTION:${icsText(description.slice(0, 2000))}`] : []),
+    ...(url ? [`LOCATION:${icsText(url)}`, `URL:${url}`] : []),
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ];
+  return `${lines.map(icsFold).join('\r\n')}\r\n`;
+}
+
+/**
+ * De dienst van een boekingslink in het beheer, met dezelfde volgorde als de
+ * server (bookingVideoService in _shared/meetingBookingRules.ts): een vaste
+ * link gaat voor, anders wat de link per boeking maakt.
+ */
+export function linkVideoKind(link: { meeting_url?: string | null; auto_conference?: boolean | null; conference_provider?: string | null }, sourceProvider: string | null | undefined): BookingVideoKind | null {
+  const url = safeMeetingLink(link.meeting_url);
+  if (url) {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === 'meet.google.com') return 'google_meet';
+    if (host === 'teams.microsoft.com' || host === 'teams.live.com' || host.endsWith('.teams.microsoft.com')) return 'teams';
+    if (host === 'zoom.us' || host === 'zoom.com' || host.endsWith('.zoom.us') || host.endsWith('.zoom.com')) return 'zoom';
+    if (host === 'meet.jit.si' || host === '8x8.vc' || /\/ResoFly-[A-Za-z0-9]{14}\/?$/.test(new URL(url).pathname)) return 'jitsi';
+    return 'link';
+  }
+  if (link.auto_conference === false) return null;
+  const provider = link.conference_provider ?? 'calendar';
+  if (provider === 'jitsi' || provider === 'google_meet' || provider === 'teams') return provider;
+  return sourceProvider === 'google' ? 'google_meet' : sourceProvider === 'microsoft' ? 'teams' : null;
+}

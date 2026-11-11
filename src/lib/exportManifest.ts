@@ -34,7 +34,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // leesregel en een tabelcommentaar: geen tabellen of kolommen erbij.
 // 20261111150500 (mcp-staging is geen klantnaam) vervangt alleen de functie
 // client_subdomain_problem: ook geen tabellen of kolommen erbij.
-export const EXPORT_SCHEMA_VERSION = '20261111150500';
+// 20261111190000 (de videolink bij een boeking) zet meeting_url en
+// video_service op meeting_bookings. Die gaan gewoon mee: de tabel staat al op
+// 'export', en een videolink van je eigen afspraak is geen geheim van de server.
+export const EXPORT_SCHEMA_VERSION = '20261111190000';
 
 export type TableKind =
   | 'export'

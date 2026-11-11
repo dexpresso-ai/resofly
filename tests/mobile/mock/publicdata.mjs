@@ -25,7 +25,13 @@ const slots = []; let sid = 0;
 for (const d of [1, 2, 3, 4]) for (const h of [9, 10, 11, 14, 15]) { const s = day(d, h); const e = day(d, h); e.setMinutes(30); slots.push({ id: `s${++sid}`, starts_at: iso(s), ends_at: iso(e) }); }
 // Sinds november 2026 een klantpagina in de huisstijl (stand, kop met
 // bedrijfsnaam, contact) zoals meeting-booking-public hem teruggeeft.
-export const bookingPublic = { ok: true, state: 'open', link: { title: 'Kennismakingsgesprek', intro_text: 'Kies een moment dat jou uitkomt; je krijgt direct een bevestiging met videolink.', max_total_bookings: 1, max_per_week: 1, expires_at: iso(day(60)), video: 'Videogesprek via Jitsi Meet' }, slots, taken_slot_starts: [], booked: [], prefill: { name: 'Els de Boer', email: 'els@zonnetje.nl' }, branding, company: { name: company.trade_name, email: company.email, phone: company.phone, website: company.website } };
+export const bookingPublic = { ok: true, state: 'open', link: { title: 'Kennismakingsgesprek', intro_text: 'Kies een moment dat jou uitkomt; je krijgt direct een bevestiging met videolink.', max_total_bookings: 1, max_per_week: 1, expires_at: iso(day(60)), video: 'Videogesprek via Microsoft Teams', video_service: 'teams' }, slots, taken_slot_starts: [], booked: [], prefill: { name: 'Els de Boer', email: 'els@zonnetje.nl' }, branding, company: { name: company.trade_name, email: company.email, phone: company.phone, website: company.website } };
+/** Het antwoord op bookSlots: de gekozen momenten staan vast, met een Teams-link. */
+export function bookingBooked(slotIds) {
+  const chosen = slots.filter(s => slotIds.includes(s.id));
+  const url = 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_demo';
+  return { ok: true, confirmed: chosen.map(s => ({ slot_id: s.id, starts_at: s.starts_at, ends_at: s.ends_at, meeting_url: url })), failed: [], meeting_url: chosen.length === 1 ? url : null, video_service: 'teams', invite_message: 'Fijn dat we elkaar spreken. Tot dan!', title: 'Kennismakingsgesprek' };
+}
 export const sharePublic = { ok: true, share: { itemType: 'folder', itemName: 'Concepten huisstijl', recipientName: 'Joost Vermeer', message: 'Hierbij de eerste concepten. Kijk vooral naar variant 2 — daar zijn we zelf het meest enthousiast over.', canDownload: true, expiresAt: iso(day(14)) }, items: [
   { itemType: 'attachment', itemId: 'a1', name: 'huisstijl-schets-v2.pdf', mimeType: 'application/pdf', sizeBytes: 1240000, modified: iso(day(-1)), path: 'Concepten', downloadable: true, readable: false },
   { itemType: 'attachment', itemId: 'a2', name: 'moodboard.jpg', mimeType: 'image/jpeg', sizeBytes: 2400000, modified: iso(day(-1)), path: 'Concepten', downloadable: true, readable: false },
@@ -53,6 +59,13 @@ export const portalData = { ok: true, email: c0.email, accounts: [{
   tickets: portalTickets,
   galleries: [], sharedFileCount: 3,
   messages: { threads: 2, unread: 1 },
+  // Afspraken via een boekingslink (2026-11-11): een komende met Teams, een die
+  // niet doorgaat, en een die geweest is.
+  appointments: [
+    { id: 'ap0', title: 'Kennismakingsgesprek', starts_at: iso(day(-12, 10)), ends_at: iso(new Date(day(-12, 10).getTime() + 30 * 60000)), status: 'confirmed', video_service: 'jitsi', meeting_url: null, booked_by: 'Joost Vermeer' },
+    { id: 'ap1', title: 'Bespreking drukproef herfstactie', starts_at: iso(day(2, 14)), ends_at: iso(new Date(day(2, 14).getTime() + 45 * 60000)), status: 'confirmed', video_service: 'teams', meeting_url: 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_demo', booked_by: 'Joost Vermeer' },
+    { id: 'ap2', title: 'Opvolging offerte', starts_at: iso(day(5, 9)), ends_at: iso(new Date(day(5, 9).getTime() + 30 * 60000)), status: 'cancelled', video_service: 'google_meet', meeting_url: null, booked_by: 'Joost Vermeer' },
+  ],
 }] };
 
 // Klantportaal: Berichten, het ticketgesprek en de meldingsinstellingen.
