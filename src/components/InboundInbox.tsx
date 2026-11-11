@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Client, InboundMessage, InboundMessageCategory } from '../types';
 import { Button, Select } from './Ui';
 import { blockInboundSender, linkInboundMessage, loadInboundAlias, loadInboundMessages, setInboundMessageStatus } from '../lib/repository';
@@ -31,13 +31,20 @@ export const INBOUND_REASON_LABELS: Record<string, string> = {
  * bij de rest van de post. Koppelen, negeren en blokkeren doen op beide
  * plekken precies hetzelfde.
  */
-export function InboundInboxTab({ organizationId, clients, canWrite, onChanged, heading = true }: {
+export function InboundInboxTab({ organizationId, clients, canWrite, onChanged, heading = true, onCreateClient, refreshKey = 0 }: {
   organizationId: string;
   clients: Client[];
   canWrite: boolean;
   onChanged: () => void;
   /** De kop "Niet gekoppelde berichten" met uitleg. Uit op de pagina Berichten: daar zegt het tabblad het al. */
   heading?: boolean;
+  /**
+   * Opent het klantformulier, ingevuld uit deze mail. Na opslaan koppelt de app
+   * de mail aan de nieuwe klant (main.tsx, persistEdit) en verhoogt `refreshKey`.
+   */
+  onCreateClient?: (message: InboundMessage) => void;
+  /** Loopt op als er van buitenaf iets in de opvangbak veranderde: dan opnieuw laden. */
+  refreshKey?: number;
 }) {
   const [category, setCategory] = useState<InboundMessageCategory>('human');
   const [messages, setMessages] = useState<InboundMessage[]>([]);
@@ -46,9 +53,15 @@ export function InboundInboxTab({ organizationId, clients, canWrite, onChanged, 
   const [aliasId, setAliasId] = useState<string | null>(null);
   const [hasAlias, setHasAlias] = useState<boolean | null>(null);
 
+  // Opnieuw laden na een klant uit een mail gebeurt stil: de lijst staat er al,
+  // en "Opvangbak laden…" tussendoor zou de rij waar je net mee bezig was even
+  // laten verdwijnen en terugkomen.
+  const loadedFor = useRef<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
-    setLoaded(false);
+    const listKey = `${organizationId}|${category}`;
+    if (loadedFor.current !== listKey) setLoaded(false);
     setLoadError(null);
     Promise.all([loadInboundMessages(organizationId, category), loadInboundAlias(organizationId)])
       .then(([rows, alias]) => {
@@ -57,10 +70,11 @@ export function InboundInboxTab({ organizationId, clients, canWrite, onChanged, 
         setAliasId(alias?.id ?? null);
         setHasAlias(Boolean(alias));
         setLoaded(true);
+        loadedFor.current = listKey;
       })
       .catch(err => { if (!cancelled) { setLoadError(err instanceof Error ? err.message : 'Opvangbak laden mislukt.'); setLoaded(true); } });
     return () => { cancelled = true; };
-  }, [organizationId, category]);
+  }, [organizationId, category, refreshKey]);
 
   function removeRow(id: string) {
     setMessages(prev => prev.filter(m => m.id !== id));
@@ -114,19 +128,21 @@ export function InboundInboxTab({ organizationId, clients, canWrite, onChanged, 
           aliasId={aliasId}
           canWrite={canWrite}
           onDone={() => removeRow(message.id)}
+          onCreateClient={onCreateClient}
         />
       ))}
     </div>
   </div>;
 }
 
-function InboundInboxRow({ message, clients, organizationId, aliasId, canWrite, onDone }: {
+function InboundInboxRow({ message, clients, organizationId, aliasId, canWrite, onDone, onCreateClient }: {
   message: InboundMessage;
   clients: Client[];
   organizationId: string;
   aliasId: string | null;
   canWrite: boolean;
   onDone: () => void;
+  onCreateClient?: (message: InboundMessage) => void;
 }) {
   const [clientId, setClientId] = useState<string>(message.suggested_client_id ?? '');
   const [remember, setRemember] = useState(false);
@@ -202,6 +218,13 @@ function InboundInboxRow({ message, clients, organizationId, aliasId, canWrite, 
       >
         {busy ? 'Bezig…' : 'Koppelen'}
       </Button>
+      {onCreateClient && <Button
+        disabled={!canWrite || busy}
+        onClick={() => onCreateClient(message)}
+        title="Maak een nieuwe klant met de gegevens uit deze mail. Na opslaan komt de mail in het dossier."
+      >
+        Nieuwe klant
+      </Button>}
       <Button disabled={!canWrite || busy} onClick={() => act(() => setInboundMessageStatus(organizationId, message.id, 'dropped'))}>
         Negeren
       </Button>
