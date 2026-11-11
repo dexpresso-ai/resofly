@@ -1,8 +1,8 @@
-import { useMemo, type CSSProperties } from 'react';
+import { useId, useMemo, type CSSProperties } from 'react';
 import {
-  BarChart3, BellRing, Bot, Brain, CalendarClock, Clock4, Compass, Flame, FolderKanban,
-  Gem, HandCoins, Inbox, LifeBuoy, ListChecks, Mail, Megaphone, PiggyBank, Radar, Receipt,
-  Rocket, Scale, ShieldCheck, Sparkles, Telescope, TrendingUp, Users, Wallet, Zap,
+  AreaChart, BellRing, BotMessageSquare, BrainCircuit, CalendarClock, Compass, Flame, FolderKanban,
+  Gem, HandCoins, Headset, Inbox, ListTodo, Mails, Megaphone, PiggyBank, Radar, ReceiptText,
+  Rocket, Scale, ShieldCheck, Sparkles, Telescope, Timer, TrendingUp, UsersRound, Wallet, Zap,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -44,7 +44,7 @@ interface AgentIconDef {
  * ontbreekt wordt bij het opslaan stil op null gezet.
  */
 export const AGENT_ICONS: AgentIconDef[] = [
-  { key: 'receipt', label: 'Facturen', Icon: Receipt, hints: ['factuur', 'facturen', 'list_invoices', 'debiteur', 'openstaand'] },
+  { key: 'receipt', label: 'Facturen', Icon: ReceiptText, hints: ['factuur', 'facturen', 'list_invoices', 'debiteur', 'openstaand'] },
   { key: 'bell', label: 'Herinneringen', Icon: BellRing, hints: ['herinnering', 'herinneringen', 'aanmaning', 'reminder', 'list_due_reminders', 'propose_send_reminders'] },
   { key: 'trending', label: 'Omzet & groei', Icon: TrendingUp, hints: ['omzet', 'groei', 'resultaat', 'get_financial_summary'] },
   { key: 'wallet', label: 'Geld', Icon: Wallet, hints: ['geld', 'kas', 'cashflow', 'saldo'] },
@@ -52,22 +52,22 @@ export const AGENT_ICONS: AgentIconDef[] = [
   { key: 'piggy', label: 'Reserveren', Icon: PiggyBank, hints: ['reserve', 'potje', 'sparen', 'buffer'] },
   { key: 'scale', label: 'Btw & belasting', Icon: Scale, hints: ['btw', 'belasting', 'aangifte', 'fiscaal', 'vpb'] },
   { key: 'calendar', label: 'Agenda', Icon: CalendarClock, hints: ['agenda', 'afspraak', 'afspraken', 'kalender', 'propose_calendar_event'] },
-  { key: 'clock', label: 'Uren', Icon: Clock4, hints: ['uren', 'urenregistratie', 'tijd', 'propose_time_entry'] },
-  { key: 'users', label: 'Klanten', Icon: Users, hints: ['klant', 'klanten', 'relatie', 'search_clients'] },
+  { key: 'clock', label: 'Uren', Icon: Timer, hints: ['uren', 'urenregistratie', 'tijd', 'propose_time_entry'] },
+  { key: 'users', label: 'Klanten', Icon: UsersRound, hints: ['klant', 'klanten', 'relatie', 'search_clients'] },
   { key: 'folder', label: 'Projecten', Icon: FolderKanban, hints: ['project', 'projecten', 'list_projects'] },
-  { key: 'checks', label: 'Taken', Icon: ListChecks, hints: ['taak', 'taken', 'actiepunt', 'list_tasks', 'todo'] },
-  { key: 'lifebuoy', label: 'Tickets', Icon: LifeBuoy, hints: ['ticket', 'tickets', 'support', 'list_tickets'] },
+  { key: 'checks', label: 'Taken', Icon: ListTodo, hints: ['taak', 'taken', 'actiepunt', 'list_tasks', 'todo'] },
+  { key: 'lifebuoy', label: 'Tickets', Icon: Headset, hints: ['ticket', 'tickets', 'support', 'list_tickets'] },
   { key: 'inbox', label: 'Postvak', Icon: Inbox, hints: ['inbox', 'postvak', 'binnengekomen'] },
-  { key: 'mail', label: 'Mail', Icon: Mail, hints: ['mail', 'e-mail', 'versturen', 'propose_send_invoice', 'propose_send_quote'] },
+  { key: 'mail', label: 'Mail', Icon: Mails, hints: ['mail', 'e-mail', 'versturen', 'propose_send_invoice', 'propose_send_quote'] },
   { key: 'megaphone', label: 'Marketing', Icon: Megaphone, hints: ['campagne', 'marketing', 'nieuwsbrief', 'mailing'] },
-  { key: 'chart', label: 'Rapportage', Icon: BarChart3, hints: ['rapport', 'rapportage', 'overzicht', 'statistiek', 'samenvatting'] },
+  { key: 'chart', label: 'Rapportage', Icon: AreaChart, hints: ['rapport', 'rapportage', 'overzicht', 'statistiek', 'samenvatting'] },
   { key: 'shield', label: 'Bewaking', Icon: ShieldCheck, hints: ['controle', 'bewaking', 'risico', 'check', 'audit'] },
   { key: 'radar', label: 'Signalen', Icon: Radar, hints: ['signaal', 'signalen', 'afwijking', 'monitor'] },
   { key: 'telescope', label: 'Vooruitblik', Icon: Telescope, hints: ['prognose', 'vooruit', 'verwacht', 'forecast'] },
   { key: 'compass', label: 'Verkenner', Icon: Compass, hints: ['verken', 'onderzoek', 'analyse'] },
   { key: 'rocket', label: 'Aanjager', Icon: Rocket, hints: ['offerte', 'offertes', 'kans', 'sales', 'list_quotes'] },
-  { key: 'brain', label: 'Denker', Icon: Brain, hints: ['denk', 'advies', 'strategie'] },
-  { key: 'bot', label: 'Robot', Icon: Bot, hints: [] },
+  { key: 'brain', label: 'Denker', Icon: BrainCircuit, hints: ['denk', 'advies', 'strategie'] },
+  { key: 'bot', label: 'Robot', Icon: BotMessageSquare, hints: [] },
   { key: 'zap', label: 'Bliksem', Icon: Zap, hints: ['snel', 'direct'] },
   { key: 'flame', label: 'Urgent', Icon: Flame, hints: ['urgent', 'te laat', 'achterstand', 'spoed'] },
   // Geen losse woordjes als "top" hier: die zitten in "laptop" en "stoppen" en
@@ -135,31 +135,29 @@ export function agentIconKey(agent: AgentLike): AgentIconKey {
  * hij bruikbaar als je ooit terug wilt.
  */
 
-export type AgentGlyphSize = 'sm' | 'md' | 'lg';
+export type AgentGlyphSize = 'sm' | 'md' | 'lg' | 'xl';
 export type AgentGlyphState = 'active' | 'paused' | 'draft' | 'archived' | 'running';
 
-const GLYPH_PX: Record<AgentGlyphSize, number> = { sm: 34, md: 46, lg: 68 };
+const GLYPH_PX: Record<AgentGlyphSize, number> = { sm: 32, md: 44, lg: 56, xl: 76 };
 
 /**
- * Het embleem zelf.
+ * Het embleem zelf (opnieuw ontworpen op 2026-11-11).
  *
- * Drie lagen, in deze volgorde: een tegel, twee uit de seed gerekende lichtvlekken
- * erop, en het icoon erbovenop. Meer is het niet — en dat is precies het punt.
+ * Wat er stond: een glimmende tegel met twee lichtvlekken, die bij een actieve
+ * agent helemaal in het poollicht ging. Vier van die regenboogtegels naast elkaar
+ * was druk, en het "aan" of "uit" zat in glans, niet in iets wat je leest.
  *
- * Wat hier VROEGER stond en bewust weg is: een glans-verloop met een opstaand
- * randje (`inset 0 1px 0 wit`) en een "sigil" van gestreepte ringen met drie
- * satellieten. Samen gaven die het embleem de glimmende-knop-look van een decennium
- * geleden, en de ringen lazen als ruis in plaats van als informatie. De herkenning
- * die de sigil moest leveren zit nu in de lichtvlekken: hun plek komt uit dezelfde
- * seed, dus twee agents met hetzelfde icoon vangen het licht nog steeds anders,
- * zonder dat je een patroon ziet dat iets lijkt te betekenen.
- *
- * `state` bepaalt de STAND van de tegel, niet alleen een ring eromheen:
- * een agent die draait of actief staat krijgt het merkgoud als vulling, een
- * gepauzeerde of gearchiveerde agent zakt terug naar een tonale tegel met een
- * gouden icoon. Dat verving het oude `filter:saturate(.3)`, dat van elk goud een
- * vuilbeige vlek maakte — vier van die vlekken naast elkaar was de kern van de
- * "niet modern"-klacht.
+ * Nu, van achter naar voor:
+ *   - een rustige tegel met een dun randje van poollicht; de lichtval uit het
+ *     agent-id is nog maar één zachte gloed, zodat twee agents met hetzelfde icoon
+ *     toch niet identiek zijn;
+ *   - het icoon met een kleurverloop van het poollicht in de lijn (een eigen
+ *     verloop per embleem, in gebruikerscoördinaten: anders verdwijnen rechte
+ *     lijnen, want die hebben een vlak zonder breedte);
+ *   - een statusstip in de hoek: groen is actief, oranje gepauzeerd, een open
+ *     rondje is een concept;
+ *   - aan het werk: een draaiende ring van poollicht en een kloppende gloed.
+ * Gepauzeerd en gearchiveerd verliezen het verloop: het icoon wordt grijs.
  */
 export function AgentGlyph({ agent, size = 'md', state, title }: {
   agent: AgentLike;
@@ -171,30 +169,32 @@ export function AgentGlyph({ agent, size = 'md', state, title }: {
   const def = ICON_BY_KEY.get(key) ?? AGENT_ICONS[AGENT_ICONS.length - 1];
   const px = GLYPH_PX[size];
   const seed = useMemo(() => hash(`${agent.id || ''}|${agent.name || ''}|${key}`), [agent.id, agent.name, key]);
+  const gradientId = `agx-g${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const quiet = state === 'paused' || state === 'archived';
 
-  /**
-   * De twee lichtvlekken. De eerste zit in de bovenste helft (daar valt licht
-   * vandaan), de tweede in de onderste — zo blijft het een belichte tegel en wordt
-   * het nooit een willekeurige vlekkenwolk. De marges houden elke vlek van de rand
-   * af, anders valt hij half buiten de tegel en zie je alleen een lichte hoek.
-   */
+  // Eén zachte gloed op een uit het id gerekende plek in de bovenste helft.
   const face = useMemo<CSSProperties>(() => ({
-    '--ag-x1': `${20 + (seed % 60)}%`,
-    '--ag-y1': `${6 + ((seed >>> 5) % 34)}%`,
-    '--ag-x2': `${18 + ((seed >>> 11) % 64)}%`,
-    '--ag-y2': `${64 + ((seed >>> 17) % 32)}%`,
-  } as CSSProperties), [seed]);
+    '--agx-x': `${18 + (seed % 64)}%`,
+    '--agx-y': `${4 + ((seed >>> 7) % 30)}%`,
+    '--agx-size': `${px}px`,
+  } as CSSProperties), [seed, px]);
 
   return (
-    <span
-      className={`ag-glyph ag-glyph-${size}${state ? ` is-${state}` : ''}`}
-      style={face}
-      title={title}
-      aria-hidden="true"
-    >
-      <span className="ag-glyph-tile">
-        <span className="ag-glyph-icon"><def.Icon size={Math.round(px * 0.44)} strokeWidth={1.75} /></span>
+    <span className={`agx-glyph agx-glyph-${size}${state ? ` is-${state}` : ''}`} style={face} title={title} aria-hidden="true">
+      <span className="agx-glyph-tile">
+        <def.Icon size={Math.round(px * 0.46)} strokeWidth={size === 'sm' ? 1.9 : 1.7} stroke={quiet ? 'currentColor' : `url(#${gradientId})`}>
+          {!quiet && (
+            <defs>
+              <linearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1="3" y1="3" x2="21" y2="21">
+                <stop offset="0" style={{ stopColor: 'var(--agx-ico-1)' }} />
+                <stop offset="0.55" style={{ stopColor: 'var(--agx-ico-2)' }} />
+                <stop offset="1" style={{ stopColor: 'var(--agx-ico-3)' }} />
+              </linearGradient>
+            </defs>
+          )}
+        </def.Icon>
       </span>
+      {state && state !== 'archived' && <span className="agx-glyph-dot" />}
     </span>
   );
 }

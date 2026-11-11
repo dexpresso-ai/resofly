@@ -93,6 +93,18 @@ const DELIVERY_CHANNELS = ['inapp', 'email', 'push'];
 function runLogger(orgId: string, agentId: string, runId: string, startSeq = 0) {
   let seq = startSeq;
   let pending: Array<Record<string, unknown>> = [];
+  // Elke wegschrijfbeurt sluit aan achter de vorige. Zo kan een stap tijdens de
+  // run worden weggeschreven zonder dat de agent erop wacht (`void log.flush()`),
+  // en wacht de laatste `await log.flush()` tot álles er staat.
+  let chain: Promise<void> = Promise.resolve();
+  async function write(batch: Array<Record<string, unknown>>): Promise<void> {
+    try {
+      const { error } = await supabaseAdmin.from('ai_agent_run_events').insert(batch);
+      if (error) console.error('gerrie-agent-runner logboek schrijven mislukt', runId, error.message);
+    } catch (error) {
+      console.error('gerrie-agent-runner logboek schrijven mislukt', runId, error instanceof Error ? error.message : error);
+    }
+  }
   return {
     add(kind: string, label: string, detail: Record<string, unknown> = {}): void {
       pending.push({
@@ -105,12 +117,22 @@ function runLogger(orgId: string, agentId: string, runId: string, startSeq = 0) 
     addStep(step: AgentStep): void {
       this.add(step.kind, step.label, { tool: step.name, ok: step.ok, ...step.detail });
     },
-    async flush(): Promise<void> {
-      if (pending.length === 0) return;
-      const batch = pending;
-      pending = [];
-      const { error } = await supabaseAdmin.from('ai_agent_run_events').insert(batch);
-      if (error) console.error('gerrie-agent-runner logboek schrijven mislukt', runId, error.message);
+    flush(): Promise<void> {
+      if (pending.length > 0) {
+        const batch = pending;
+        pending = [];
+        chain = chain.then(() => write(batch));
+      }
+      return chain;
+    },
+    /**
+     * Een stap uit de agent-loop, meteen naar het logboek. Dan ziet de app live
+     * wat de agent doet ("Facturen bekijken — 12 gevonden"). Niet afwachten: het
+     * schrijven loopt naast het werk, de afsluitende flush wacht er wel op.
+     */
+    live(step: AgentStep): void {
+      this.addStep(step);
+      void this.flush();
     },
   };
 }
@@ -476,14 +498,14 @@ async function executeAgentRun(
     }
 
     // 7) Het brein draaien (headless, no-op emit).
+    // 7b) Elke stap gaat zodra hij gebeurt het logboek in — dít is "wat heeft hij
+    //     gedaan?", en terwijl hij draait "waar is hij nu?".
     const outcome = await runAgent(ctx, [], runMessage, noopEmit, modelKind, allowedToolNames, {
       maxProposals: mode === 'propose' ? maxProposals : 1,
       maxIterations: MAX_AGENT_ITERATIONS,
+      onStep: (step) => log.live(step),
     });
     addGuardUsage(outcome.usage, guard);
-
-    // 7b) Elke stap uit de loop het logboek in — dít is "wat heeft hij gedaan?".
-    for (const step of outcome.steps) log.addStep(step);
 
     const assistantId = await insertMessage(convId, orgId, runAsUserId, 'assistant', outcome.text, outcome.toolCalls);
     await recordUsage(orgId, convId, assistantId, runAsUserId, outcome.usage, modelKind, agentId, runId);
@@ -1133,9 +1155,9 @@ async function replyToRun(ctx: GerrieContext, caps: AgentCapabilities, body: Rec
   const outcome: AgentOutcome = await runAgent(ctx, history, message, noopEmit, modelKind, allowedToolNames, {
     maxProposals: mode === 'propose' ? maxProposals : 1,
     maxIterations: MAX_AGENT_ITERATIONS,
+    onStep: (step) => log.live(step),
   });
   addGuardUsage(outcome.usage, guard);
-  for (const step of outcome.steps) log.addStep(step);
 
   const assistantId = await insertMessage(convId, orgId, ctx.userId, 'assistant', outcome.text, outcome.toolCalls);
   await recordUsage(orgId, convId, assistantId, ctx.userId, outcome.usage, modelKind, String(agent.id), runId);

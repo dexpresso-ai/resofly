@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Sparkles, Send, Check, X, AlertTriangle, Wand2, Clock, Plus, Play, Pause, Archive, ArchiveRestore, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, ChevronUp, CornerDownLeft, ClipboardCheck, BellRing, Eye, Mailbox, Users2, Gauge, BookOpen, ScrollText, Copy, Share2, UserRound, BarChart3 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
+import { Sparkles, Send, Check, X, AlertTriangle, Play, Pause, Archive, ArchiveRestore, Loader2, ChevronDown, ChevronRight, CornerDownLeft, ClipboardCheck, Eye, Mailbox, Users2, Gauge, BookOpen, ScrollText, Copy, Share2, UserRound, BarChart3,
+  ArrowLeft, ArrowUp, BotMessageSquare, CalendarClock, CheckCheck, Ellipsis, History, MessagesSquare, Power, Radar, ScanSearch, ShieldCheck, SlidersHorizontal, WandSparkles, Zap } from 'lucide-react';
 import {
   streamGerrieReply, loadGerrieBudget, confirmGerrieAction, runGerrieDecision, rejectGerrieAction, claimingHandlers, batchDecision,
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, archiveRoutine, restoreRoutine, runRoutineNow, listRunProposals,
@@ -25,6 +26,8 @@ import { DecisionFeed } from '../components/DecisionFeed';
 import { SignalSettingsPanel } from '../components/SignalSettingsPanel';
 import { countDueDecisions, type DecisionTarget } from '../lib/decisions-api';
 import { AGENT_ICONS, AgentGlyph, agentIconKey, type AgentIconKey } from '../components/AgentGlyph';
+import { AgentLiveLine, AgentWorkbench, useAgentActivity, useRunEvents } from '../components/AgentWork';
+import { isLiveRun, runOutcome, whenShort, type LiveRun } from '../lib/agentWork';
 import type { OrganizationMember, UUID } from '../types';
 
 /**
@@ -215,14 +218,14 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
       <header className="cc-top">
         <div className="cc-brand"><span className="cc-spark" aria-hidden="true"><Sparkles size={18} /></span><b>Gerrie</b><span className="cc-sub">Commandocentrum</span></div>
         <nav className="cc-tabs" aria-label="Gerrie-weergave">
-          <button className={`cc-tab${tab === 'agents' ? ' on' : ''}`} onClick={() => setTab('agents')}><Clock size={14} /> Agents</button>
-          <button className={`cc-tab${tab === 'run' ? ' on' : ''}`} onClick={() => setTab('run')}><Sparkles size={14} /> Nu uitvoeren</button>
+          <button className={`cc-tab${tab === 'agents' ? ' on' : ''}`} onClick={() => setTab('agents')}><BotMessageSquare size={15} /> Agents</button>
+          <button className={`cc-tab${tab === 'run' ? ' on' : ''}`} onClick={() => setTab('run')}><Zap size={15} /> Nu uitvoeren</button>
           <button className={`cc-tab${tab === 'queue' ? ' on' : ''}`} onClick={() => { setTab('queue'); reloadPending(); }}>
-            <ClipboardCheck size={14} /> Jouw akkoord
+            <CheckCheck size={15} /> Jouw akkoord
             {pendingTotal > 0 && <span className="cc-tab-badge">{pendingTotal}</span>}
           </button>
           <button className={`cc-tab${tab === 'decisions' ? ' on' : ''}`} onClick={() => setTab('decisions')}>
-            <BellRing size={14} /> Beslissingen
+            <Radar size={15} /> Beslissingen
             {decisionTotal > 0 && <span className="cc-tab-badge">{decisionTotal}</span>}
           </button>
         </nav>
@@ -242,7 +245,8 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
           pendingByAgent={pendingByAgent} onApprovalsChanged={reloadPending} budget={budget}
           openAgentId={openAgentId} onOpenAgentConsumed={onOpenAgentConsumed}
           currentUserId={currentUserId} teamMembers={teamMembers} catalog={catalog}
-          canPropose={canPropose} canOversee={canOversee} />
+          canPropose={canPropose} canOversee={canOversee}
+          pendingTotal={pendingTotal} onOpenQueue={() => { setTab('queue'); reloadPending(); }} />
       ) : tab === 'decisions' ? (
         <div className="ag-page">
           <DecisionFeed organizationId={organizationId} canWrite={() => canWrite} handlers={handlers}
@@ -537,17 +541,6 @@ function blankRoutine(fields: Partial<GerrieRoutine> & Pick<GerrieRoutine, 'name
   };
 }
 
-function templateToRoutine(t: RoutineTemplate): GerrieRoutine {
-  return blankRoutine({
-    name: t.name, icon: t.icon, hue: t.hue, instruction: t.instruction,
-    model_kind: t.model ?? 'strong', mode: t.mode, enabled_tools: t.tools,
-    schedule_kind: t.schedule_kind, hour: t.hour, minute: t.minute ?? 0, end_hour: t.end_hour ?? null,
-    day_of_week: t.day_of_week ?? null, day_of_month: t.day_of_month ?? null,
-    trigger_events: t.events ?? [], max_event_runs_per_day: 24,
-    delivery: { channels: t.push ? ['inapp', 'push'] : ['inapp'], recipient_user_ids: [], quiet: t.quiet === true },
-  });
-}
-
 /**
  * Waar een door Gerrie gebouwde agent zijn resultaat laat: in de app en met een
  * pushmelding. Een agent die elk uur draait, meldt zich alleen als hij iets vond —
@@ -572,7 +565,48 @@ function proposalToRoutine(p: GerrieAgentProposal): GerrieRoutine {
   });
 }
 
-function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onApprovalsChanged, budget, openAgentId, onOpenAgentConsumed, currentUserId, teamMembers, catalog, canPropose, canOversee }: {
+/**
+ * Wat er van een door Gerrie gebouwd voorstel wordt opgeslagen. Bij aanpassen via
+ * de chat blijft van de bestaande agent staan wat het gesprek niet raakt: hoe hij
+ * bezorgt, met wie hij gedeeld is, hoe grondig hij nadenkt.
+ *
+ * `trigger_events` ging tot 2026-11-11 niet mee: een agent die Gerrie bouwde voor
+ * "zodra er een klantmail binnenkomt", werd zonder gebeurtenis opgeslagen en
+ * startte dus nooit.
+ */
+function inputFromProposal(p: GerrieAgentProposal, base?: GerrieRoutine): GerrieRoutineInput {
+  const routine = proposalToRoutine(p);
+  return {
+    name: routine.name, instruction: routine.instruction,
+    icon: p.icon ?? base?.icon ?? null, hue: base?.hue ?? null,
+    email_mode: routine.email_mode, email_subject: routine.email_subject, email_body: routine.email_body,
+    max_emails_per_run: routine.max_emails_per_run,
+    model_kind: base?.model_kind ?? routine.model_kind, mode: routine.mode, enabled_tools: routine.enabled_tools,
+    schedule_kind: routine.schedule_kind, hour: routine.hour, minute: routine.minute,
+    end_hour: routine.schedule_kind === 'hourly' ? routine.end_hour : null,
+    day_of_week: routine.schedule_kind === 'weekly' ? routine.day_of_week : null,
+    day_of_month: routine.schedule_kind === 'monthly' ? routine.day_of_month : null,
+    max_proposals_per_run: routine.max_proposals_per_run,
+    trigger_events: routine.schedule_kind === 'event' ? routine.trigger_events ?? [] : [],
+    max_event_runs_per_day: routine.max_event_runs_per_day ?? 24,
+    timezone: base?.timezone || 'Europe/Amsterdam',
+    ...(base ? { visibility: base.visibility } : {}),
+    delivery: base?.delivery ?? routine.delivery,
+  };
+}
+
+/** Een startpunt als voorstel: dan opent het in het gesprek, meteen klaar om aan te maken. */
+function templateToProposal(t: RoutineTemplate): GerrieAgentProposal {
+  return {
+    type: 'agent', name: t.name, icon: t.icon, instruction: t.instruction, mode: t.mode, enabled_tools: t.tools,
+    schedule_kind: t.schedule_kind, hour: t.hour, minute: t.minute ?? 0, end_hour: t.end_hour ?? null,
+    day_of_week: t.day_of_week ?? null, day_of_month: t.day_of_month ?? null, max_proposals_per_run: 3,
+    email_mode: 'compose', email_subject: null, email_body: null, max_emails_per_run: 5,
+    trigger_events: t.events ?? [], max_event_runs_per_day: 24,
+  };
+}
+
+function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onApprovalsChanged, budget, openAgentId, onOpenAgentConsumed, currentUserId, teamMembers, catalog, canPropose, canOversee, pendingTotal, onOpenQueue }: {
   organizationId: UUID;
   canWrite: boolean;
   handlers: GerrieActionHandlers;
@@ -592,14 +626,24 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
   canPropose: boolean;
   /** Owner/admin: ziet ook de agents van collega's (pauzeren, archiveren). */
   canOversee: boolean;
+  /** Wat er in totaal op jouw akkoord wacht, en de weg erheen. */
+  pendingTotal: number;
+  onOpenQueue: () => void;
 }) {
   const [routines, setRoutines] = useState<GerrieRoutine[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  // 'build' = het gesprek waarin Gerrie de agent voor je in elkaar zet (de voordeur);
-  // 'new' = het lege formulier voor wie het liever zelf invult.
-  const [editing, setEditing] = useState<GerrieRoutine | 'new' | 'build' | null>(null);
+  // Het formulier, voor wie het liever zelf invult: een agent, of 'new' voor een lege.
+  const [editing, setEditing] = useState<GerrieRoutine | 'new' | null>(null);
+  // Het gesprek waarin Gerrie de agent bouwt of aanpast: de voordeur.
+  const [builder, setBuilder] = useState<{ editing: GerrieRoutine | null; message: string | null; initial: { agent: GerrieAgentProposal; summary: string } | null } | null>(null);
+  // De vraag bovenaan de pagina; versturen opent het gesprek met die vraag erin.
+  const [ask, setAsk] = useState('');
+  // Hoeveel runs we zelf net gestart hebben: dan kijken we vlot mee tot ze lopen.
+  const [starting, setStarting] = useState(0);
+  const anchor = useRef<HTMLDivElement | null>(null);
+  const activity = useAgentActivity(organizationId, anchor, starting > 0);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [showArchive, setShowArchive] = useState(false);
@@ -647,15 +691,17 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
     catch (e) { notify(e instanceof Error ? e.message : 'Terugzetten mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
+  // De run zelf zie je op de werkbank in het paneel (live, uit het logboek); de
+  // melding hier zegt alleen hoe hij afliep.
   async function doRunNow(r: GerrieRoutine) {
-    setBusyId(r.id); setOpenId(r.id);
-    notify(`"${r.name || 'Agent'}" draait…`, 'info', true);
+    setBusyId(r.id); setOpenId(r.id); setStarting((n) => n + 1);
+    activity.refresh();
     try {
       const res = await runRoutineNow(organizationId, r.id);
-      notify(res.proposalsCreated ? `Klaar — ${res.proposalsCreated} voorstel${res.proposalsCreated === 1 ? '' : 'len'} klaargezet om goed te keuren.` : 'Klaar — bekijk de run hieronder.', 'success');
+      notify(res.proposalsCreated ? `Klaar: ${res.proposalsCreated} voorstel${res.proposalsCreated === 1 ? '' : 'len'} klaargezet om goed te keuren.` : 'Klaar. De uitkomst staat hieronder.', 'success');
       setRunsKey((k) => k + 1); reload(); onApprovalsChanged();
     } catch (e) { notify(e instanceof Error ? e.message : 'Draaien mislukt.', 'error'); }
-    finally { setBusyId(null); }
+    finally { setBusyId(null); setStarting((n) => Math.max(0, n - 1)); activity.refresh(); }
   }
   // Delen = je collega's zien zijn instellingen en kunnen er een eigen kopie van
   // maken. Zijn runs, logboek en voorstellen blijven van jou.
@@ -719,19 +765,8 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
    * tientallen seconden en hoort thuis in de historie hieronder.
    */
   async function createFromBuilder(p: GerrieAgentProposal, startNow: boolean) {
-    const routine = proposalToRoutine(p);
-    const saved = await saveRoutine(organizationId, {
-      name: routine.name, instruction: routine.instruction,
-      icon: p.icon, hue: null,
-      email_mode: routine.email_mode, email_subject: routine.email_subject, email_body: routine.email_body,
-      max_emails_per_run: routine.max_emails_per_run,
-      model_kind: routine.model_kind, mode: routine.mode, enabled_tools: routine.enabled_tools,
-      schedule_kind: routine.schedule_kind, hour: routine.hour, minute: routine.minute, end_hour: routine.end_hour,
-      day_of_week: routine.day_of_week, day_of_month: routine.day_of_month,
-      max_proposals_per_run: routine.max_proposals_per_run,
-      timezone: 'Europe/Amsterdam', delivery: routine.delivery,
-    }, undefined, startNow);
-    setEditing(null);
+    const saved = await saveRoutine(organizationId, inputFromProposal(p), undefined, startNow);
+    setBuilder(null);
     setOpenId(saved.id ?? null);
     // Wat er van zijn rechten afviel, hoort de maker meteen te horen — ook als
     // hij daarna gewoon gaat draaien.
@@ -743,15 +778,17 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
         try { await setRoutineStatus(organizationId, saved.id as UUID, 'active'); }
         catch { notify('Agent aangemaakt, maar aanzetten lukte niet. Zet hem zelf aan.', 'error'); reload(); return; }
       }
-      notify(`Agent staat aan en draait zijn eerste ronde…${trimmed ? ` ${trimmed}` : ''}`, 'info', true);
+      notify(`Je agent staat aan en doet zijn eerste ronde.${trimmed ? ` ${trimmed}` : ''}`, 'success');
+      setStarting((n) => n + 1);
       runRoutineNow(organizationId, saved.id as UUID)
         .then((res) => {
           notify(res.proposalsCreated
-            ? `Eerste ronde klaar — ${res.proposalsCreated} voorstel${res.proposalsCreated === 1 ? '' : 'len'} om af te vinken.`
-            : 'Eerste ronde klaar — bekijk het resultaat hieronder.', 'success');
+            ? `Eerste ronde klaar: ${res.proposalsCreated} voorstel${res.proposalsCreated === 1 ? '' : 'len'} om af te vinken.`
+            : 'Eerste ronde klaar. De uitkomst staat hieronder.', 'success');
           setRunsKey((k) => k + 1); onApprovalsChanged();
         })
-        .catch((e) => notify(e instanceof Error ? e.message : 'De eerste ronde mislukte; kijk in de historie.', 'error'));
+        .catch((e) => notify(e instanceof Error ? e.message : 'De eerste ronde mislukte; kijk in de geschiedenis.', 'error'))
+        .finally(() => { setStarting((n) => Math.max(0, n - 1)); activity.refresh(); reload(); });
     } else {
       const message = saveMessage(saved, 'Agent aangemaakt als concept.');
       notify(message.text, message.kind);
@@ -759,12 +796,33 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
     reload();
   }
 
-  if (editing === 'build') {
+  /** Een via de chat aangepaste agent opslaan over de bestaande heen. */
+  async function saveFromBuilder(base: GerrieRoutine, p: GerrieAgentProposal) {
+    const saved = await saveRoutine(organizationId, inputFromProposal(p, base), base.id);
+    setBuilder(null);
+    reload();
+    setOpenId(base.id);
+    const message = saveMessage(saved, 'Aangepast en opgeslagen.');
+    notify(message.text, message.kind);
+  }
+
+  if (builder) {
+    const base = builder.editing;
     return <AgentBuilder
       organizationId={organizationId}
+      editing={base}
+      initialMessage={builder.message}
+      initial={builder.initial}
       onCreate={createFromBuilder}
-      onOpenForm={(p) => setEditing(p ? proposalToRoutine(p) : 'new')}
-      onCancel={() => setEditing(null)}
+      onSave={base ? (p) => saveFromBuilder(base, p) : undefined}
+      onOpenForm={(p) => {
+        setBuilder(null);
+        // Naar het formulier met wat er in het gesprek ontstond; bij aanpassen over
+        // de bestaande agent heen, zodat opslaan hem bijwerkt in plaats van te kopiëren.
+        if (base) setEditing(p ? { ...base, ...proposalToRoutine(p), id: base.id, status: base.status, delivery: base.delivery, visibility: base.visibility } : base);
+        else setEditing(p ? proposalToRoutine(p) : 'new');
+      }}
+      onCancel={() => { setBuilder(null); if (base) setOpenId(base.id); }}
     />;
   }
   if (editing) {
@@ -786,71 +844,53 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
     if (!owner) return FORMER_MEMBER;
     return owner === currentUserId ? null : memberShortName(owner, teamMembers, currentUserId);
   };
-  const startNew = () => {
-    if (atCap) { notify(`Je hebt al ${catalog?.maxAgents} agents. Archiveer er eerst een die je niet meer gebruikt.`, 'error'); return; }
-    setEditing('build');
+  const capMessage = () => notify(`Je hebt al ${catalog?.maxAgents} agents. Archiveer er eerst een die je niet meer gebruikt.`, 'error');
+  const openBuilder = (message: string | null, initial: { agent: GerrieAgentProposal; summary: string } | null = null) => {
+    if (atCap) { capMessage(); return; }
+    setBuilder({ editing: null, message, initial });
+    setAsk('');
   };
+  const working = [...live, ...sections.team].filter((r) => activity.live[r.id]);
+  const counts = {
+    active: live.filter((r) => r.status === 'active').length,
+    paused: live.filter((r) => r.status === 'paused').length,
+    draft: live.filter((r) => r.status === 'draft').length,
+  };
+  const card = (r: GerrieRoutine, compact = false) => (
+    <AgentCard key={r.id} routine={r} organizationId={organizationId} anchor={anchor} compact={compact}
+      selected={openId === r.id} busy={busyId === r.id} waiting={pendingByAgent[r.id] ?? 0}
+      owner={ownerName(r)} live={activity.live[r.id] ?? null} latest={activity.latest[r.id] ?? null}
+      canRun={agentPowers(r, currentUserId, canOversee).manage && r.status !== 'archived'}
+      onOpen={() => setOpenId(openId === r.id && !compact ? null : r.id)}
+      onRunNow={() => void doRunNow(r)} />
+  );
 
-  return (
-    <div className="ag-page">
-      <header className="ag-page-head">
-        <div>
-          <h2>Je agents</h2>
-          {canPropose
-            ? <p>Elk embleem is een agent die vanzelf op zijn eigen moment draait, <b>met precies jouw rechten</b>. Hij stelt voor, jij vinkt af — er gaat niets de deur uit zonder jouw akkoord.</p>
-            : <p>Elk embleem is een agent die vanzelf op zijn eigen moment draait, <b>met precies jouw rechten</b>. Jij kunt in Gerrie lezen maar niets laten klaarzetten, dus je agents kijken mee en vatten samen.</p>}
-        </div>
-        <button className="cc-btn primary" onClick={startNew} disabled={atCap} title={atCap ? 'Je hebt het maximum aantal agents bereikt' : undefined}><Plus size={15} /> Nieuwe agent</button>
-      </header>
+  const toastView = toast && (
+    <div className={`cc-routines-toast ${toast.kind}`} role="status" onClick={() => setToast(null)}>
+      {toast.kind === 'success' ? <Check size={15} /> : toast.kind === 'error' ? <AlertTriangle size={15} /> : <Loader2 size={15} className="cc-spin" />}
+      <span>{toast.text}</span>
+    </div>
+  );
 
-      {toast && (
-        <div className={`cc-routines-toast ${toast.kind}`} role="status" onClick={() => setToast(null)}>
-          {toast.kind === 'success' ? <Check size={15} /> : toast.kind === 'error' ? <AlertTriangle size={15} /> : <Loader2 size={15} className="cc-spin" />}
-          <span>{toast.text}</span>
-        </div>
-      )}
-      {error && <div className="cc-plan-error">{error}</div>}
-
-      {loading ? <p className="ag-loading"><Loader2 size={14} className="cc-spin" /> Agents laden…</p> : <>
-        {live.length === 0 ? (
-          <div className="ag-starters">
-            <p className="ag-starters-lead">Je hebt nog geen agents. Kies een startpunt — je kunt daarna alles nog aanpassen.</p>
-            <div className="ag-starter-grid">
-              {starters.map((t) => (
-                <button key={t.name} type="button" className="ag-starter" onClick={() => setEditing(templateToRoutine(t))}>
-                  <AgentGlyph agent={{ id: t.name, name: t.name, icon: t.icon, hue: t.hue }} size="lg" />
-                  <strong>{t.name}</strong>
-                  <span>{t.blurb}</span>
-                </button>
-              ))}
-              <button type="button" className="ag-starter ag-starter-blank" onClick={startNew}>
-                <span className="ag-tile-plus" aria-hidden="true"><Wand2 size={24} /></span>
-                <strong>Vertel het Gerrie</strong>
-                <span>Zeg in je eigen woorden wat je nodig hebt; hij bouwt de agent.</span>
-              </button>
+  // ── Eén agent open: links de lijst, rechts alles over deze agent. ──
+  // Dit stond eerst als paneel ónder de hele galerij: met tien agents scrolde je
+  // weg van wat je net aanklikte, en terug naar de lijst ging nergens heen.
+  if (open) {
+    return (
+      <div className="ag-page agx-page is-detail" ref={anchor}>
+        {toastView}
+        <div className="agx-layout">
+          <nav className="agx-rail" aria-label="Je agents">
+            <button type="button" className="agx-back" onClick={() => setOpenId(null)}><ArrowLeft size={15} /> Alle agents</button>
+            <div className="agx-rail-list">
+              {live.map((r) => card(r, true))}
+              {sections.team.length > 0 && <span className="agx-rail-head">Van je team</span>}
+              {sections.team.map((r) => card(r, true))}
+              {archived.some((r) => r.id === open.id) && <><span className="agx-rail-head">Archief</span>{card(open, true)}</>}
             </div>
-          </div>
-        ) : (
-          <div className="ag-grid">
-            {live.map((r) => (
-              <AgentTile key={r.id} routine={r} isOpen={openId === r.id} busy={busyId === r.id}
-                waiting={pendingByAgent[r.id] ?? 0} owner={null}
-                onToggle={() => setOpenId(openId === r.id ? null : r.id)} />
-            ))}
-            {!atCap && (
-              <button type="button" className="ag-tile ag-tile-new" onClick={startNew}>
-                <span className="ag-tile-plus" aria-hidden="true"><Wand2 size={24} /></span>
-                <strong className="ag-tile-name">Nieuwe agent</strong>
-                <span className="ag-tile-rhythm">Vertel wat je nodig hebt</span>
-              </button>
-            )}
-          </div>
-        )}
-        {atCap && <p className="cc-note">Je hebt het maximum van {catalog?.maxAgents} agents bereikt. Archiveer er een die je niet meer gebruikt om ruimte te maken.</p>}
-
-        {open && (
-          <div className="ag-sheet" ref={sheetRef}>
-            <AgentSheet
+          </nav>
+          <div className="agx-detail-col" ref={sheetRef}>
+            <AgentDetail
               routine={open}
               organizationId={organizationId}
               canWrite={canWrite}
@@ -861,8 +901,12 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
               waiting={pendingByAgent[open.id] ?? 0}
               powers={agentPowers(open, currentUserId, canOversee)}
               owner={ownerName(open)}
+              live={activity.live[open.id] ?? null}
+              latest={activity.latest[open.id] ?? null}
+              anchor={anchor}
               onRunNow={() => void doRunNow(open)}
-              onStatus={(s) => void doStatus(open, s)}
+              onStatus={(st) => void doStatus(open, st)}
+              onChat={() => setBuilder({ editing: open, message: null, initial: null })}
               onEdit={() => setEditing(open)}
               onArchive={() => void doArchive(open)}
               onRestore={() => void doRestore(open)}
@@ -870,19 +914,93 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
               onCopy={() => void doCopy(open)}
               onClose={() => setOpenId(null)}
               onApprovalsChanged={onApprovalsChanged}
+              onOpenQueue={onOpenQueue}
             />
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Het overzicht ──
+  return (
+    <div className="ag-page agx-page" ref={anchor}>
+      {/* De voordeur is een vraag aan Gerrie, niet een formulier: je zegt wat er
+          vanzelf moet gebeuren en hij bouwt de agent. Voorheen zat dat gesprek
+          achter de knop "Nieuwe agent", en wist je niet dat het er was. */}
+      <section className="agx-hero" aria-label="Een agent laten bouwen">
+        <div className="agx-hero-text">
+          <h2>Je agents</h2>
+          <p>{canPropose
+            ? <>Agents doen vanzelf werk voor je, met precies jouw rechten. Wat ze willen versturen of aanmaken, zetten ze klaar; <b>jij keurt het goed</b>.</>
+            : <>Agents kijken vanzelf voor je mee en vatten samen, met precies jouw rechten. Laten klaarzetten kan met jouw rechten niet.</>}</p>
+        </div>
+        <form className={`agx-ask${atCap ? ' is-disabled' : ''}`} onSubmit={(e) => { e.preventDefault(); if (ask.trim()) openBuilder(ask.trim()); }}>
+          <span className="agx-orb" aria-hidden="true" />
+          <label htmlFor="agx-ask-input" className="agx-sr">Wat moet er vanzelf gebeuren?</label>
+          <input
+            id="agx-ask-input"
+            value={ask}
+            disabled={atCap}
+            onChange={(e) => setAsk(e.target.value.slice(0, 4000))}
+            placeholder={atCap ? `Je hebt het maximum van ${catalog?.maxAgents} agents bereikt` : 'Wat moet er vanzelf gebeuren? Bijv. elke maandag de te late facturen'}
+          />
+          <button type="submit" className="agx-send" disabled={!ask.trim() || atCap} aria-label="Laat Gerrie de agent bouwen"><ArrowUp size={17} /></button>
+        </form>
+        <div className="agx-hero-foot">
+          <button type="button" className="agx-link" onClick={() => openBuilder(null)} disabled={atCap}><MessagesSquare size={14} /> Gesprek beginnen</button>
+          <button type="button" className="agx-link" onClick={() => { if (atCap) capMessage(); else setEditing('new'); }}><SlidersHorizontal size={14} /> Zelf invullen</button>
+        </div>
+      </section>
+
+      {toastView}
+      {error && <div className="cc-plan-error">{error}</div>}
+
+      {loading ? <p className="ag-loading"><Loader2 size={14} className="cc-spin" /> Agents laden…</p> : <>
+        {live.length > 0 && (
+          <div className="agx-summary" role="status">
+            {working.length > 0 && <span className="agx-sum is-working"><span className="agx-sum-dot" />{working.length} aan het werk</span>}
+            <span className="agx-sum"><span className="agx-sum-dot is-active" />{counts.active} actief</span>
+            {counts.paused > 0 && <span className="agx-sum"><span className="agx-sum-dot is-paused" />{counts.paused} gepauzeerd</span>}
+            {counts.draft > 0 && <span className="agx-sum"><span className="agx-sum-dot is-draft" />{counts.draft} concept{counts.draft === 1 ? '' : 'en'}</span>}
+            {pendingTotal > 0 && (
+              <button type="button" className="agx-sum is-waiting" onClick={onOpenQueue}>
+                <ClipboardCheck size={13} /> {pendingTotal} wacht{pendingTotal === 1 ? '' : 'en'} op jouw akkoord <ChevronRight size={13} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {live.length > 0 && <div className="agx-cards">{live.map((r) => card(r))}</div>}
+        {atCap && <p className="cc-note">Je hebt het maximum van {catalog?.maxAgents} agents bereikt. Archiveer er een die je niet meer gebruikt om ruimte te maken.</p>}
+
+        {/* Startpunten: kant-en-klare agents. Een klik opent ze in het gesprek, al
+            ingevuld; aanmaken kan meteen, bijsturen in gewone taal. */}
+        {starters.length > 0 && !atCap && (
+          <section className="agx-section" aria-label="Startpunten">
+            <header className="agx-section-head">
+              <strong>{live.length === 0 ? 'Begin met een voorbeeld' : 'Meer ideeën'}</strong>
+              <span>Kant-en-klaar; je kunt alles nog aanpassen.</span>
+            </header>
+            <div className={`agx-starters${live.length > 0 ? ' is-compact' : ''}`}>
+              {(live.length === 0 ? starters : starters.filter((t) => !live.some((r) => r.name === t.name)).slice(0, 4)).map((t) => (
+                <button key={t.name} type="button" className="agx-starter" onClick={() => openBuilder(null, { agent: templateToProposal(t), summary: t.blurb })}>
+                  <AgentGlyph agent={{ id: t.name, name: t.name, icon: t.icon }} size="md" />
+                  <span><strong>{t.name}</strong><small>{t.blurb}</small></span>
+                </button>
+              ))}
+            </div>
+          </section>
         )}
 
         {/* Gedeeld door je team: agents die een collega als startpunt aanbiedt.
             Je ziet zijn instellingen, niet zijn runs; "Gebruik deze" maakt er JOUW
-            agent van, met jouw rechten. Owners/admins zien ze hieronder bij het team. */}
+            agent van, met jouw rechten. */}
         {sections.shared.length > 0 && (
-          <section className="ag-section" aria-label="Gedeeld door je team">
-            <header className="ag-section-head">
-              <Share2 size={14} aria-hidden="true" />
-              <strong>Gedeeld door je team</strong>
-              <span>Maak er je eigen kopie van — hij draait dan met jóuw rechten.</span>
+          <section className="agx-section" aria-label="Gedeeld door je team">
+            <header className="agx-section-head">
+              <strong><Share2 size={14} aria-hidden="true" /> Gedeeld door je team</strong>
+              <span>Maak er je eigen kopie van; hij draait dan met jóuw rechten.</span>
             </header>
             <div className="ag-shared-grid">
               {sections.shared.map((r) => (
@@ -908,41 +1026,26 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
             voorstellen wachten op hén; een owner/admin kan ze pauzeren of
             archiveren, maar niet aanzetten of aanpassen. */}
         {sections.team.length > 0 && (
-          <section className="ag-section" aria-label="Agents van je team">
-            <header className="ag-section-head">
-              <Users2 size={14} aria-hidden="true" />
-              <strong>Agents van je team</strong>
-              <span>Ze draaien namens je collega’s, met hún rechten. Jij kunt ze pauzeren of archiveren; aanpassen en aanzetten doet de eigenaar.</span>
+          <section className="agx-section" aria-label="Agents van je team">
+            <header className="agx-section-head">
+              <strong><Users2 size={14} aria-hidden="true" /> Agents van je team</strong>
+              <span>Ze draaien namens je collega’s, met hún rechten. Jij kunt ze pauzeren of archiveren.</span>
             </header>
-            <div className="ag-grid">
-              {sections.team.map((r) => (
-                <AgentTile key={r.id} routine={r} isOpen={openId === r.id} busy={busyId === r.id}
-                  waiting={pendingByAgent[r.id] ?? 0} owner={ownerName(r)}
-                  onToggle={() => setOpenId(openId === r.id ? null : r.id)} />
-              ))}
-            </div>
+            <div className="agx-cards">{sections.team.map((r) => card(r))}</div>
           </section>
         )}
 
         {/* Het archief: agents die niet meer draaien maar wél verantwoording dragen.
-            Standaard dicht, want dit is naslag — geen dagelijks werk. */}
+            Standaard dicht, want dit is naslag, geen dagelijks werk. */}
         {archived.length > 0 && (
           <section className="ag-archive">
             <button type="button" className="ag-archive-head" aria-expanded={showArchive} onClick={() => setShowArchive((v) => !v)}>
               {showArchive ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               <Archive size={14} />
               <strong>Archief</strong>
-              <span>{archived.length} gearchiveerde agent{archived.length === 1 ? '' : 's'} — hun logboek blijft raadpleegbaar</span>
+              <span>{archived.length} gearchiveerde agent{archived.length === 1 ? '' : 's'}; hun logboek blijft te lezen</span>
             </button>
-            {showArchive && (
-              <div className="ag-grid ag-grid-archive">
-                {archived.map((r) => (
-                  <AgentTile key={r.id} routine={r} isOpen={openId === r.id} busy={false}
-                    waiting={0} owner={ownerName(r)}
-                    onToggle={() => setOpenId(openId === r.id ? null : r.id)} />
-                ))}
-              </div>
-            )}
+            {showArchive && <div className="agx-cards">{archived.map((r) => card(r))}</div>}
           </section>
         )}
       </>}
@@ -960,55 +1063,77 @@ function excerpt(text: string, max = 160): string {
 }
 
 /**
- * Eén tegel in de galerij. Toont bewust alleen gezicht, naam, ritme en status —
- * plus, bij een agent van een collega, van wie hij is. Wat hij kán staat in het
- * paneel dat opengaat als je klikt.
+ * Eén agent in de lijst (2026-11-11; voorheen een tegel met alleen gezicht, naam,
+ * ritme en "Wat kan hij?"). Nu staat erop wat je wilt weten zonder te klikken:
+ * of hij aan staat, wanneer hij draait, wat hij de vorige keer vond, wat er op je
+ * wacht, en als hij nu bezig is wat hij aan het doen is. Nu draaien kan vanaf de
+ * kaart; de rest staat in het detail.
  */
-function AgentTile({ routine: r, isOpen, busy, waiting, owner, onToggle }: {
+function AgentCard({ routine: r, organizationId, anchor, compact, selected, busy, waiting, owner, live, latest, canRun, onOpen, onRunNow }: {
   routine: GerrieRoutine;
-  isOpen: boolean;
+  organizationId: UUID;
+  anchor: RefObject<HTMLElement>;
+  /** In de lijst naast het detail: kleiner, zonder knoppen. */
+  compact: boolean;
+  selected: boolean;
   busy: boolean;
   waiting: number;
   /** Naam van de eigenaar; null = jouw eigen agent. */
   owner: string | null;
-  onToggle: () => void;
+  live: LiveRun | null;
+  latest: GerrieRoutineRun | null;
+  canRun: boolean;
+  onOpen: () => void;
+  onRunNow: () => void;
 }) {
   const archived = r.status === 'archived';
+  const working = Boolean(live) || busy;
+  const finished = latest && !isLiveRun(latest) ? latest : null;
+  const outcome = runOutcome(finished);
+  const when = finished ? whenShort(finished.finished_at ?? finished.started_at ?? finished.created_at) : '';
   return (
-    <button
-      type="button"
-      className={`ag-tile${archived ? ' is-archived' : ''}${isOpen ? ' is-open' : ''}`}
-      aria-expanded={isOpen}
-      onClick={onToggle}
-    >
-      {waiting > 0 && <span className="ag-tile-badge" title={owner ? `${waiting} wacht op ${owner}` : `${waiting} wacht op jouw akkoord`}>{waiting}</span>}
-      {r.visibility === 'team' && !archived && <span className="ag-tile-flag" title="Gedeeld met je team"><Share2 size={11} aria-hidden="true" /></span>}
-      <AgentGlyph agent={r} size="lg" state={archived ? 'archived' : busy ? 'running' : r.status} />
-      <strong className="ag-tile-name">{r.name || 'Naamloze agent'}</strong>
-      {owner && <span className="ag-tile-owner"><UserRound size={11} aria-hidden="true" /> {owner}</span>}
-      <span className="ag-tile-rhythm">
-        {archived
-          ? <><Archive size={11} /> {r.archived_at ? fmtWhen(r.archived_at) : 'gearchiveerd'}</>
-          : <><Clock size={11} /> {shortSchedule(r)}</>}
-      </span>
-      <span className={`ag-tile-state is-${r.status}`}>{routineStatusLabel(r.status)}</span>
-      <span className="ag-tile-hint">
-        {isOpen ? <>Sluiten <ChevronUp size={12} /></> : archived ? <>Logboek <ChevronDown size={12} /></> : <>Wat kan hij? <ChevronDown size={12} /></>}
-      </span>
-    </button>
+    <article className={`agx-card is-${r.status}${working ? ' is-working' : ''}${selected ? ' is-selected' : ''}${compact ? ' is-compact' : ''}`}>
+      <button type="button" className="agx-card-open" onClick={onOpen} aria-current={selected ? 'true' : undefined}
+        aria-label={`${r.name || 'Naamloze agent'}${working ? ', aan het werk' : ''}${waiting ? `, ${waiting} wacht op akkoord` : ''}`} />
+      <AgentGlyph agent={r} size={compact ? 'sm' : 'md'} state={working ? 'running' : archived ? 'archived' : r.status} />
+      <div className="agx-card-body">
+        <div className="agx-card-top">
+          <strong>{r.name || 'Naamloze agent'}</strong>
+          {waiting > 0 && <span className="agx-badge" title={owner ? `${waiting} wacht op ${owner}` : `${waiting} wacht op jouw akkoord`}>{waiting}</span>}
+          {r.visibility === 'team' && !archived && !compact && <span className="agx-flag" title="Gedeeld met je team"><Share2 size={11} /></span>}
+        </div>
+        <div className="agx-card-meta">
+          <span className={`agx-state is-${working ? 'working' : r.status}`}>{working ? 'Aan het werk' : routineStatusLabel(r.status)}</span>
+          {!compact && <span>{archived ? (r.archived_at ? `gearchiveerd ${whenShort(r.archived_at)}` : 'gearchiveerd') : shortSchedule(r)}</span>}
+          {!compact && <span>{r.mode === 'propose' ? 'zet klaar' : 'kijkt mee'}</span>}
+          {owner && <span className="agx-owner"><UserRound size={11} aria-hidden="true" /> {owner}</span>}
+        </div>
+        {!compact && (live
+          ? <AgentLiveLine organizationId={organizationId} run={live} anchor={anchor} />
+          : busy
+            ? <span className="agx-live"><span className="agx-live-dots" aria-hidden="true"><i /><i /><i /></span><span className="agx-live-text">Opstarten…</span></span>
+            : <span className={`agx-last is-${outcome.tone}`}>{when && <b>{when}</b>}<span>{outcome.text}</span></span>)}
+      </div>
+      {!compact && canRun && (
+        <button type="button" className="agx-icon-btn" onClick={onRunNow} disabled={working} title={working ? 'Hij is al bezig' : 'Nu één keer draaien'} aria-label={`${r.name || 'Agent'} nu draaien`}>
+          {working ? <Loader2 size={15} className="cc-spin" /> : <Play size={15} />}
+        </button>
+      )}
+    </article>
   );
 }
 
 /**
- * Wat de tegel bewust NIET laat zien: hier staat het. Eerst wat de agent mag —
- * lezen, voorstellen, wanneer, waar het heen gaat en binnen welke grenzen — dan
- * zijn opdracht, dan de knoppen, en onderaan wat hij tot nu toe gedaan heeft.
+ * Alles over één agent, naast de lijst (voorheen een paneel ónder de galerij, met
+ * zeven losse vakjes). Van boven naar beneden: wie hij is en de knoppen, wat hij
+ * nu doet (de werkbank), wat hij de vorige keer vond, hoe hij werkt, zijn
+ * opdracht, en zijn geschiedenis.
  *
  * Welke knoppen er staan, volgt `powers` (dezelfde regel als de runner): de
  * eigenaar mag alles; een owner/admin kan de agent van een collega alleen
- * pauzeren, archiveren of terugzetten — hij draait namens die collega.
+ * pauzeren, archiveren of terugzetten, want hij draait namens die collega.
  */
-function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey, budget, waiting, powers, owner, onRunNow, onStatus, onEdit, onArchive, onRestore, onShare, onCopy, onClose, onApprovalsChanged }: {
+function AgentDetail({ routine, organizationId, canWrite, handlers, busy, runsKey, budget, waiting, powers, owner, live, latest, anchor, onRunNow, onStatus, onChat, onEdit, onArchive, onRestore, onShare, onCopy, onClose, onApprovalsChanged, onOpenQueue }: {
   routine: GerrieRoutine;
   organizationId: UUID;
   canWrite: boolean;
@@ -1021,8 +1146,12 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
   powers: AgentPowers;
   /** Naam van de eigenaar; null = jouw eigen agent. */
   owner: string | null;
+  live: LiveRun | null;
+  latest: GerrieRoutineRun | null;
+  anchor: RefObject<HTMLElement>;
   onRunNow: () => void;
   onStatus: (status: RoutineStatus) => void;
+  onChat: () => void;
   onEdit: () => void;
   onArchive: () => void;
   onRestore: () => void;
@@ -1030,11 +1159,17 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
   onCopy: () => void;
   onClose: () => void;
   onApprovalsChanged: () => void;
+  onOpenQueue: () => void;
 }) {
   const readTools = routine.enabled_tools.filter(routineToolIsRead);
   const proposeTools = routine.enabled_tools.filter((n) => !routineToolIsRead(n));
   const isArchived = routine.status === 'archived';
   const shared = routine.visibility === 'team';
+  const events = useRunEvents(organizationId, live?.id ?? null, anchor);
+  const finished = latest && !isLiveRun(latest) ? latest : null;
+  const outcome = runOutcome(finished);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement | null>(null);
 
   // Wat hij deze maand deed. Best-effort: lukt het niet, dan staat er gewoon niets.
   const [month, setMonth] = useState<AgentMonthStats | null>(null);
@@ -1046,172 +1181,174 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
     return () => { alive = false; };
   }, [organizationId, routine.id, runsKey]);
 
+  // Het menu "Meer" sluit bij een klik ernaast en met Escape.
+  useEffect(() => {
+    if (!moreOpen) return undefined;
+    const onDoc = (e: MouseEvent) => { if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMoreOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  }, [moreOpen]);
+
+  const working = Boolean(live) || busy;
+  const nextLine = routine.schedule_kind === 'event'
+    ? `Start zodra het gebeurt, hoogstens ${routine.max_event_runs_per_day ?? 24} keer per dag`
+    : routine.status === 'active' && routine.next_run_at ? `Volgende keer: ${fmtWhen(routine.next_run_at)}` : routine.status === 'active' ? '' : 'Draait niet zolang hij niet aan staat';
+  const menu = (label: ReactNode, onClick: () => void, opts: { danger?: boolean; title?: string } = {}) => (
+    <button type="button" role="menuitem" className={opts.danger ? 'is-danger' : undefined} title={opts.title} onClick={() => { setMoreOpen(false); onClick(); }}>{label}</button>
+  );
+
   return (
-    <>
-      <header className="ag-sheet-head">
-        <AgentGlyph agent={routine} size="lg" state={busy ? 'running' : routine.status} />
-        <div className="ag-sheet-ident">
-          <h3>{routine.name || 'Naamloze agent'}</h3>
-          <div className="ag-sheet-pills">
-            <span className={`cc-pill ${routine.status === 'active' ? 'run' : routine.status === 'paused' ? 'wait' : 'cancel'}`}><span className="cc-dot" />{routineStatusLabel(routine.status)}</span>
-            <span className={`cc-kind ${routine.mode === 'propose' ? 'write' : 'read'}`}>{routine.mode === 'propose' ? 'stelt acties voor' : 'alleen lezen'}</span>
-            {owner && <span className="ag-sheet-owner"><UserRound size={12} /> van {owner}</span>}
-            {shared && !isArchived && <span className="ag-sheet-owner"><Share2 size={12} /> gedeeld met het team</span>}
-            {waiting > 0 && <span className="ag-sheet-waiting"><ClipboardCheck size={12} /> {waiting} wacht op {owner ?? 'jou'}</span>}
+    <article className={`agx-detail${working ? ' is-working' : ''}`} aria-label={routine.name || 'Agent'}>
+      <header className="agx-detail-head">
+        <AgentGlyph agent={routine} size="lg" state={working ? 'running' : isArchived ? 'archived' : routine.status} />
+        <div className="agx-detail-ident">
+          <h2>{routine.name || 'Naamloze agent'}</h2>
+          <div className="agx-detail-pills">
+            <span className={`agx-state is-${working ? 'working' : routine.status}`}>{working ? 'Aan het werk' : routineStatusLabel(routine.status)}</span>
+            <span className={`agx-mode is-${routine.mode}`}>{routine.mode === 'propose' ? 'Zet klaar, jij keurt goed' : 'Kijkt mee, verandert niets'}</span>
+            {owner && <span className="agx-owner"><UserRound size={12} /> van {owner}</span>}
+            {shared && !isArchived && <span className="agx-owner"><Share2 size={12} /> gedeeld met het team</span>}
           </div>
+          <p className="agx-detail-when"><CalendarClock size={13} /> {scheduleLabel(routine)}{nextLine ? <span> · {nextLine}</span> : null}</p>
         </div>
         <button type="button" className="ag-sheet-close" onClick={onClose} aria-label="Sluiten"><X size={16} /></button>
       </header>
 
+      <div className="agx-actions">
+        {isArchived ? (
+          powers.oversee && (
+            <button className="agx-primary" disabled={busy} onClick={onRestore}>
+              {busy ? <><Loader2 size={14} className="cc-spin" /> Bezig…</> : <><ArchiveRestore size={14} /> Terugzetten</>}
+            </button>
+          )
+        ) : <>
+          {powers.manage && <>
+            <button className="agx-primary" disabled={working} onClick={onRunNow}>
+              {working ? <><Loader2 size={14} className="cc-spin" /> Aan het werk…</> : <><Play size={14} /> Nu draaien</>}
+            </button>
+            {routine.status === 'active'
+              ? <button className="agx-ghost" disabled={busy} onClick={() => onStatus('paused')}><Pause size={14} /> Pauzeren</button>
+              : <button className="agx-ghost is-go" disabled={busy} onClick={() => onStatus('active')}><Power size={14} /> Aanzetten</button>}
+            <button className="agx-ghost" onClick={onChat}><WandSparkles size={14} /> Aanpassen met Gerrie</button>
+          </>}
+          {/* Toezicht: stilzetten mag, aanzetten niet; dan zou hij gaan draaien
+              namens iemand die daar niet om vroeg. */}
+          {!powers.manage && powers.oversee && routine.status === 'active' && (
+            <button className="agx-ghost" disabled={busy} onClick={() => onStatus('paused')}><Pause size={14} /> Pauzeren</button>
+          )}
+          {!powers.manage && powers.copy && (
+            <button className="agx-ghost" disabled={busy} onClick={onCopy}><Copy size={14} /> Kopie voor mezelf</button>
+          )}
+          {(powers.manage || powers.oversee) && (
+            <div className="agx-more" ref={moreRef}>
+              <button type="button" className="agx-ghost" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}><Ellipsis size={15} /> Meer</button>
+              {moreOpen && (
+                <div className="agx-menu" role="menu">
+                  {powers.manage && menu(<><SlidersHorizontal size={14} /> In het formulier bewerken</>, onEdit)}
+                  {powers.manage && menu(<><Share2 size={14} /> {shared ? 'Niet meer delen' : 'Delen met het team'}</>, () => onShare(shared ? 'private' : 'team'),
+                    { title: shared ? 'Collega’s zien hem dan niet meer als startpunt' : 'Collega’s zien zijn instellingen en kunnen er een eigen kopie van maken; niet zijn runs of voorstellen' })}
+                  {powers.manage && powers.copy && menu(<><Copy size={14} /> Kopie maken</>, onCopy)}
+                  {/* Geen "verwijderen": wat hij namens iemand deed gooien we niet weg. */}
+                  {powers.oversee && menu(<><Archive size={14} /> Archiveren</>, onArchive, { danger: true, title: 'De agent stopt; zijn logboek blijft bewaard' })}
+                </div>
+              )}
+            </div>
+          )}
+        </>}
+      </div>
+
       {isArchived && (
         <p className="ag-archived-note">
           <Archive size={13} />
-          <span>
-            Deze agent is gearchiveerd{routine.archived_at ? ` op ${fmtWhen(routine.archived_at)}` : ''} en draait niet meer.
-            Zijn volledige logboek staat hieronder; zet hem terug als je hem weer wilt gebruiken.
-          </span>
+          <span>Deze agent is gearchiveerd{routine.archived_at ? ` op ${fmtWhen(routine.archived_at)}` : ''} en draait niet meer. Zijn logboek staat hieronder; zet hem terug als je hem weer wilt gebruiken.</span>
         </p>
       )}
-
       {/* Toezicht op de agent van een collega: zeg waarom de helft van de knoppen
           ontbreekt, in plaats van ze te tonen en dan te weigeren. */}
       {!isArchived && !powers.manage && (
         <p className="ag-archived-note">
           <Users2 size={13} />
-          <span>
-            {owner === FORMER_MEMBER
-              ? 'De medewerker namens wie deze agent draaide, is er niet meer. Hij draait niet; archiveer hem, of maak er een eigen kopie van.'
-              : `Deze agent draait namens ${owner}, met diens rechten, en zijn voorstellen wachten op ${owner}. Jij kunt hem pauzeren of archiveren; aanpassen, aanzetten en starten doet ${owner} zelf.`}
-          </span>
+          <span>{owner === FORMER_MEMBER
+            ? 'De medewerker namens wie deze agent draaide, is er niet meer. Hij draait niet; archiveer hem, of maak er een eigen kopie van.'
+            : `Deze agent draait namens ${owner}, met diens rechten, en zijn voorstellen wachten op ${owner}. Jij kunt hem pauzeren of archiveren; aanpassen, aanzetten en starten doet ${owner} zelf.`}</span>
         </p>
       )}
 
-      <div className="ag-caps">
-        <Capability icon={<Eye size={14} />} title="Mag inzien">
-          {readTools.length === 0
-            ? <span className="ag-cap-plain">De standaard leesset (klanten, facturen, herinneringen).</span>
-            : <div className="ag-cap-chips">{readTools.map((n) => <span key={n} className="ag-cap-chip">{routineToolLabel(n)}</span>)}</div>}
-        </Capability>
+      {live
+        ? <AgentWorkbench routine={routine} run={live} events={events} />
+        : busy && <div className="agx-starting" role="status"><span className="agw-dots" aria-hidden="true"><i /><i /><i /></span> Hij start op…</div>}
 
-        <Capability icon={<ClipboardCheck size={14} />} title="Mag voorstellen">
-          {routine.mode !== 'propose' || proposeTools.length === 0
-            ? <span className="ag-cap-plain">Niets — deze agent rapporteert alleen en raakt nooit iets aan.</span>
-            : <>
-                <div className="ag-cap-chips">{proposeTools.map((n) => <span key={n} className="ag-cap-chip is-write">{routineToolLabel(n)}</span>)}</div>
-                <span className="ag-cap-note">Hoogstens {routine.max_proposals_per_run ?? 3} per run, elk achter {owner ? `het akkoord van ${owner}` : 'jouw akkoord'}.</span>
-              </>}
-        </Capability>
-
-        <Capability icon={<Clock size={14} />} title="Ritme">
-          <span className="ag-cap-plain">{scheduleLabel(routine)}</span>
-          <span className="ag-cap-note">
-            {/* Een agent op een gebeurtenis heeft geen volgende tijd; een streepje las als "kapot". */}
-            {routine.schedule_kind === 'event'
-              ? `Draait zodra het gebeurt, hoogstens ${routine.max_event_runs_per_day ?? 24} keer per dag`
-              : `Volgende: ${fmtWhen(routine.next_run_at)}`}
-            {routine.last_run_at ? ` · laatste: ${fmtWhen(routine.last_run_at)}` : ''}
-          </span>
-        </Capability>
-
-        <Capability icon={<Mailbox size={14} />} title="Bezorging">
-          <span className="ag-cap-plain">{deliveryLabel(routine.delivery)}</span>
-          {routine.delivery?.quiet && <span className="ag-cap-note">Niets te melden? Dan geen mail of melding — de run staat wel in de app.</span>}
-        </Capability>
-
-        {/* Eén budget: het maandtegoed van het account. Hier stond eerder "max € per
-            run · hoogstens N× per dag" — twee grenzen die nergens werden afgedwongen.
-            Een scherm dat een grens belooft die de code niet kent is erger dan geen
-            grens tonen, dus staat er nu alleen wat écht geldt. */}
-        <Capability icon={<Gauge size={14} />} title="Model en kosten">
-          <span className="ag-cap-plain">{modelLabel(routine.model_kind)}</span>
-          <span className="ag-cap-note">
-            Wat hij verbruikt gaat van het maandtegoed van {owner ? `het account van ${owner}` : 'je account'}
-            {budget !== null && !owner ? ` — daarvan is nog ${Math.round(budget * 100)}% over` : ''}.
-            {budget !== null && budget <= 0 && !owner ? ' Hij slaat runs over tot volgende maand.' : ''}
-          </span>
-        </Capability>
-
-        <Capability icon={<BarChart3 size={14} />} title="Deze maand">
-          <span className="ag-cap-plain">{month ? monthStatsLine(month) : '—'}</span>
-          {/* De verhouding akkoord/afgewezen is de eerlijkste feedback die een agent
-              krijgt: wijs je het meeste af, dan is de opdracht te ruim. */}
-          {month && month.rejected > month.approved && month.rejected >= 2 && (
-            <span className="ag-cap-note">Meer afgewezen dan goedgekeurd: maak de opdracht scherper, of laat hem alleen rapporteren.</span>
+      {!live && (
+        <section className={`agx-outcome is-${outcome.tone}`} aria-label="Laatste uitkomst">
+          <header>
+            <span>Laatste keer{finished ? ` · ${whenShort(finished.finished_at ?? finished.started_at ?? finished.created_at)}` : ''}</span>
+            {finished && <span className={`cc-pill ${runPillClass(finished.status)}`}><span className="cc-dot" />{runStatusLabel(finished.status)}</span>}
+          </header>
+          <p>{finished?.summary && outcome.tone !== 'bad' && outcome.tone !== 'quiet' ? finished.summary : outcome.text}</p>
+          {waiting > 0 && (
+            <button type="button" className="agx-link" onClick={onOpenQueue}>
+              <ClipboardCheck size={14} /> {waiting} voorstel{waiting === 1 ? '' : 'len'} wacht{waiting === 1 ? '' : 'en'} op {owner ?? 'jouw'} akkoord <ChevronRight size={13} />
+            </button>
           )}
-        </Capability>
-
-        <Capability icon={<Users2 size={14} />} title="Bevoegdheid">
-          <span className="ag-cap-plain">{routine.mode === 'propose' ? 'Zet klaar, verstuurt nooit zelf' : 'Kijkt mee, verandert niets'}</span>
-          <span className="ag-cap-note">Draait met de rechten van {owner ?? 'jou'} — nooit meer.</span>
-          {routine.consecutive_failures > 0 && <span className="ag-cap-note">{routine.consecutive_failures}× achter elkaar mislukt</span>}
-        </Capability>
-      </div>
-
-      {routine.instruction && (
-        <div className="ag-brief">
-          <span className="ag-brief-label"><BookOpen size={13} /> Zijn opdracht</span>
-          <p>{routine.instruction}</p>
-        </div>
+        </section>
       )}
 
-      <div className="ag-sheet-actions">
-        {isArchived ? (
-          powers.oversee && (
-            <button className="cc-btn tiny primary" disabled={busy} onClick={onRestore}>
-              {busy ? <><Loader2 size={13} className="cc-spin" /> Bezig…</> : <><ArchiveRestore size={13} /> Terugzetten</>}
-            </button>
-          )
-        ) : <>
-          {powers.manage && <>
-            <button className="cc-btn tiny ghost" disabled={busy} onClick={onRunNow}>
-              {busy ? <><Loader2 size={13} className="cc-spin" /> Draait…</> : <><Play size={13} /> Nu draaien</>}
-            </button>
-            {routine.status === 'active'
-              ? <button className="cc-btn tiny ghost" disabled={busy} onClick={() => onStatus('paused')}><Pause size={13} /> Pauzeren</button>
-              : <button className="cc-btn tiny primary" disabled={busy} onClick={() => onStatus('active')}><Play size={13} /> Activeren</button>}
-            <button className="cc-btn tiny ghost" onClick={onEdit}><Pencil size={13} /> Bewerken</button>
-            <button className="cc-btn tiny ghost" disabled={busy} onClick={() => onShare(shared ? 'private' : 'team')}
-              title={shared ? 'Collega’s zien hem dan niet meer als startpunt' : 'Collega’s zien zijn instellingen en kunnen er een eigen kopie van maken — niet zijn runs of voorstellen'}>
-              <Share2 size={13} /> {shared ? 'Niet meer delen' : 'Delen met team'}
-            </button>
-          </>}
-          {/* Toezicht: stilzetten mag, aanzetten niet — dan zou hij gaan draaien
-              namens iemand die daar niet om vroeg. */}
-          {!powers.manage && powers.oversee && routine.status === 'active' && (
-            <button className="cc-btn tiny ghost" disabled={busy} onClick={() => onStatus('paused')}><Pause size={13} /> Pauzeren</button>
-          )}
-          {powers.copy && (
-            <button className="cc-btn tiny ghost" disabled={busy} onClick={onCopy}
-              title={powers.manage ? 'Een tweede agent op basis van deze' : 'Een eigen agent op basis van deze, met jouw rechten'}>
-              <Copy size={13} /> {powers.manage ? 'Kopie maken' : 'Kopie voor mezelf'}
-            </button>
-          )}
-          <span className="ag-sheet-spacer" />
-          {/* Geen "verwijderen": wat hij namens iemand deed gooien we niet weg. */}
-          {powers.oversee && (
-            <button className="cc-btn tiny ghost danger" disabled={busy} onClick={onArchive} title="De agent stopt; zijn logboek blijft bewaard">
-              <Archive size={13} /> Archiveren
-            </button>
-          )}
-        </>}
-      </div>
+      <dl className="agx-how" aria-label="Zo werkt hij">
+        <div>
+          <dt><ScanSearch size={14} /> Kijkt in</dt>
+          <dd>{readTools.length === 0
+            ? 'De standaard leesset (klanten, facturen, herinneringen)'
+            : <span className="agx-tags">{readTools.map((n) => <span key={n}>{routineToolLabel(n)}</span>)}</span>}</dd>
+        </div>
+        <div>
+          <dt><ClipboardCheck size={14} /> Mag klaarzetten</dt>
+          <dd>{routine.mode !== 'propose' || proposeTools.length === 0
+            ? 'Niets; deze agent rapporteert alleen'
+            : <><span className="agx-tags is-write">{proposeTools.map((n) => <span key={n}>{routineToolLabel(n)}</span>)}</span>
+                <small>Hoogstens {routine.max_proposals_per_run ?? 3} per keer, elk achter {owner ? `het akkoord van ${owner}` : 'jouw akkoord'}.</small></>}</dd>
+        </div>
+        <div>
+          <dt><Mailbox size={14} /> Bezorging</dt>
+          <dd>{deliveryLabel(routine.delivery)}{routine.delivery?.quiet && <small>Niets te melden? Dan geen mail of melding; de run staat wel in de app.</small>}</dd>
+        </div>
+        <div>
+          <dt><BarChart3 size={14} /> Deze maand</dt>
+          <dd>{month ? monthStatsLine(month) : '—'}
+            {/* De verhouding akkoord/afgewezen is de eerlijkste feedback die een
+                agent krijgt: wijs je het meeste af, dan is de opdracht te ruim. */}
+            {month && month.rejected > month.approved && month.rejected >= 2 && <small>Meer afgewezen dan goedgekeurd: maak de opdracht scherper, of laat hem alleen rapporteren.</small>}
+          </dd>
+        </div>
+        <div>
+          <dt><Gauge size={14} /> Model en kosten</dt>
+          <dd>{modelLabel(routine.model_kind)}
+            <small>Gaat van het maandtegoed van {owner ? `het account van ${owner}` : 'je account'}{budget !== null && !owner ? `; nog ${Math.round(budget * 100)}% over` : ''}.{budget !== null && budget <= 0 && !owner ? ' Hij slaat runs over tot volgende maand.' : ''}</small>
+          </dd>
+        </div>
+        <div>
+          <dt><ShieldCheck size={14} /> Rechten</dt>
+          <dd>Precies die van {owner ?? 'jou'}, nooit meer.{routine.consecutive_failures > 0 && <small>{routine.consecutive_failures}× achter elkaar mislukt</small>}</dd>
+        </div>
+      </dl>
+
+      {routine.instruction && (
+        <section className="agx-brief-box">
+          <header>
+            <span><BookOpen size={14} /> Zijn opdracht</span>
+            {powers.manage && !isArchived && <button type="button" className="agx-link" onClick={onChat}><WandSparkles size={13} /> Aanpassen</button>}
+          </header>
+          <p>{routine.instruction}</p>
+        </section>
+      )}
 
       <div className="ag-history">
-        <span className="ag-history-label"><RotateCw size={13} /> Wat heeft hij gedaan?</span>
+        <span className="ag-history-label"><History size={13} /> Geschiedenis</span>
         <RoutineRuns organizationId={organizationId} agentId={routine.id} canWrite={canWrite} handlers={handlers}
           refreshKey={runsKey} onApprovalsChanged={onApprovalsChanged} canReply={powers.manage && !isArchived} />
       </div>
-    </>
-  );
-}
-
-function Capability({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
-  return (
-    <section className="ag-cap">
-      <span className="ag-cap-icon" aria-hidden="true">{icon}</span>
-      <h4>{title}</h4>
-      {children}
-    </section>
+    </article>
   );
 }
 

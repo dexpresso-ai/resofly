@@ -33,6 +33,33 @@ const json = (route, body, status = 200, headers = {}) => route.fulfill({ status
 // `role: 'member'` maakt van de gebruiker een gewoon teamlid; `emptySettings`
 // begint zonder bedrijfsgegevens, zoals een organisatie van create_organization.
 const BUSINESS_FORMS = ['bv', 'nv', 'cooperatie'];
+/** De toolcatalogus van de agents, zoals gerrie-agent-runner hem geeft (action: tools). */
+const AGENT_CATALOG = {
+  ok: true,
+  maxAgents: 25,
+  capabilities: { canUse: true, canPropose: true, canOversee: true },
+  tools: [
+    { name: 'search_clients', label: 'Klanten zoeken', module: 'clients', moduleLabel: 'Klanten', kind: 'read' },
+    { name: 'list_invoices', label: 'Facturen bekijken', module: 'finance', moduleLabel: 'Financiën', kind: 'read' },
+    { name: 'list_quotes', label: 'Offertes bekijken', module: 'finance', moduleLabel: 'Financiën', kind: 'read' },
+    { name: 'list_due_reminders', label: 'Openstaande herinneringen', module: 'finance', moduleLabel: 'Financiën', kind: 'read' },
+    { name: 'get_financial_summary', label: 'Financieel overzicht', module: 'finance', moduleLabel: 'Financiën', kind: 'read' },
+    { name: 'list_projects', label: 'Projecten bekijken', module: 'projects', moduleLabel: 'Projecten', kind: 'read' },
+    { name: 'list_tasks', label: 'Taken bekijken', module: 'projects', moduleLabel: 'Projecten', kind: 'read' },
+    { name: 'list_tickets', label: 'Tickets bekijken', module: 'tickets', moduleLabel: 'Tickets', kind: 'read' },
+    { name: 'list_time_entries', label: 'Uren bekijken', module: 'time', moduleLabel: 'Uren', kind: 'read' },
+    { name: 'list_calendar_events', label: 'Agenda bekijken', module: 'calendar', moduleLabel: 'Agenda', kind: 'read' },
+    { name: 'propose_send_client_email', label: 'Klantmail klaarzetten', module: 'clients', moduleLabel: 'Klanten', kind: 'propose' },
+    { name: 'propose_send_reminders', label: 'Herinneringen klaarzetten', module: 'finance', moduleLabel: 'Financiën', kind: 'propose' },
+    { name: 'propose_task', label: 'Taak klaarzetten', module: 'projects', moduleLabel: 'Projecten', kind: 'propose' },
+  ],
+  events: [
+    { key: 'client_email.received', label: 'Er komt een klantmail binnen', example: 'een vraag over een factuur' },
+    { key: 'ticket.created', label: 'Er komt een ticket binnen', example: 'een storingsmelding' },
+    { key: 'quote.accepted', label: 'Een klant accepteert een offerte', example: 'akkoord via het portaal' },
+  ],
+};
+
 const PLANS = [
   { plan_key: 'starter', name: 'Starter', description: 'Voor solo-gebruikers en kleine starts.', included_seats: 1, monthly_price_cents: 1500, yearly_price_cents: 18000, extra_seat_price_cents: 900, extra_seat_yearly_price_cents: 10800, currency: 'EUR', is_custom: false, is_active: true, sort_order: 10, limits: { storage_gb: 50, included_seats: 1 }, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000, business_addon_price_cents: 1900, business_addon_yearly_price_cents: 19000 },
   { plan_key: 'team', name: 'Team', description: 'Voor kleine teams met standaard samenwerking.', included_seats: 3, monthly_price_cents: 3900, yearly_price_cents: 46800, extra_seat_price_cents: 800, extra_seat_yearly_price_cents: 9600, currency: 'EUR', is_custom: false, is_active: true, sort_order: 20, limits: { storage_gb: 250, included_seats: 3 }, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000, business_addon_price_cents: 1900, business_addon_yearly_price_cents: 19000 },
@@ -432,6 +459,9 @@ function edgeFunction(name, body, options = {}) {
   // Rapportages met Gerrie: de gegevens van een rapportage (zonder AI), en het tegoed voor de balk.
   if (name === 'gerrie-agent' && body?.action === 'report_data') return { ...seed.aiReportData, reportId: body.reportId };
   if (name === 'gerrie-agent') return { ok: true, budget: { remaining_cents: 5000 }, remaining: 5000, remainingFraction: 0.72, tools: [], proposals: [], usage: [] };
+  // De agents (2026-11-11): wat dit teamlid zijn agents mag geven, zoals de runner
+  // het levert. Zonder catalogus toonde de pagina ruwe toolnamen.
+  if (name === 'gerrie-agent-runner' && body?.action === 'tools') return AGENT_CATALOG;
   // Instellingen → Betalen: gekoppeld in testmodus, met een lang profiel. Dat
   // is de langste stand van de kaart (profiel, waarschuwing, twee rijen knoppen).
   if (name === 'invoice-workflow' && body?.action === 'getInvoiceMollieStatus') {

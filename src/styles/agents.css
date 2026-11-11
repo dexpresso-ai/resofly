@@ -1,0 +1,508 @@
+/* ============================================================
+   Agents van Gerrie (Gerrie → Agents), opnieuw opgezet op 2026-11-11.
+
+   Vijf delen:
+     1. het embleem (.agx-glyph)
+     2. het overzicht: de vraag aan Gerrie, de samenvatting, de kaarten
+     3. één agent: de lijst ernaast en het detail
+     4. de werkbank: een agent aan het werk (.agw-*)
+     5. de bouwer: een agent maken of aanpassen in een gesprek
+
+   Alleen ResoFly-variabelen, zodat de pagina Dag/Nacht en de stijlen volgt.
+   De animaties beginnen bij leeg en eindigen bij de basisstand; met "minder
+   beweging" (globals.css zet dan alles stil) staat er dus een af beeld.
+   ============================================================ */
+
+@property --agx-spin{syntax:'<angle>';inherits:false;initial-value:0deg}
+@keyframes agx-spin{to{--agx-spin:360deg}}
+@keyframes agx-pop{from{opacity:0;transform:translateY(6px) scale(.96)}}
+@keyframes agx-slide{from{opacity:0;transform:translateX(-6px)}}
+@keyframes agx-in{from{opacity:0;transform:translateY(6px)}}
+@keyframes agx-dot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
+@keyframes agx-beacon{0%{box-shadow:0 0 0 0 rgba(var(--ai-rgb),.45)}100%{box-shadow:0 0 0 7px rgba(var(--ai-rgb),0)}}
+@keyframes agx-shine{from{background-position:120% 0}to{background-position:-120% 0}}
+@keyframes agx-flow{from{background-position:0 0}to{background-position:-200% 0}}
+@keyframes agx-scan{0%{top:0;opacity:0}12%,88%{opacity:1}100%{top:100%;opacity:0}}
+@keyframes agx-reveal{from{opacity:0;transform:translateY(10px) scale(.985);filter:blur(3px)}}
+@keyframes agx-turn{to{transform:rotate(360deg)}}
+
+/* ── 1. Het embleem ───────────────────────────────────────────
+   Een rustige tegel met een dun randje van poollicht, een icoon met een
+   kleurverloop in de lijn (AgentGlyph.tsx), en een statusstip in de hoek. Wat
+   er stond, was een glimmende regenboogtegel: vier daarvan naast elkaar was
+   druk, en "aan" of "uit" zat in glans in plaats van in iets wat je leest. */
+.agx-glyph{
+  --agx-ico-1:var(--ai-1);--agx-ico-2:var(--ai-2);--agx-ico-3:var(--ai-3);
+  --agx-r:calc(var(--agx-size,44px) * .3);
+  position:relative;display:inline-grid;place-items:center;flex:0 0 auto;
+  width:var(--agx-size,44px);height:var(--agx-size,44px);
+}
+.agx-glyph-tile{
+  position:relative;display:grid;place-items:center;width:100%;height:100%;
+  border-radius:var(--agx-r);color:var(--ink-3);
+  background:
+    radial-gradient(90% 70% at var(--agx-x,50%) var(--agx-y,10%),rgba(var(--ai-rgb),.2),transparent 70%),
+    linear-gradient(180deg,var(--surface-2),var(--surface));
+  box-shadow:inset 0 0 0 1px rgba(var(--ai-rgb),.24),inset 0 1px 0 rgba(255,255,255,.06),0 6px 16px -11px rgba(var(--shade-rgb),.7);
+  transition:transform .25s cubic-bezier(.16,1,.3,1),box-shadow .2s;
+}
+.agx-glyph-tile svg{display:block}
+.agx-glyph.is-active .agx-glyph-tile{box-shadow:inset 0 0 0 1px rgba(var(--ai-rgb),.42),inset 0 1px 0 rgba(255,255,255,.08),0 8px 22px -12px var(--ai-glow,rgba(110,90,230,.4))}
+.agx-glyph.is-draft .agx-glyph-tile{box-shadow:inset 0 0 0 1px var(--line-2);background:var(--surface)}
+.agx-glyph.is-paused .agx-glyph-tile{color:var(--ink-3);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line-2)}
+.agx-glyph.is-archived .agx-glyph-tile{color:var(--ink-4);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line)}
+.agx-glyph-dot{
+  position:absolute;right:-2px;bottom:-2px;width:clamp(9px,calc(var(--agx-size,44px) * .22),14px);height:clamp(9px,calc(var(--agx-size,44px) * .22),14px);
+  border-radius:50%;background:var(--ok);box-shadow:0 0 0 2.5px var(--surface);
+}
+.agx-glyph.is-paused .agx-glyph-dot{background:var(--warn)}
+.agx-glyph.is-draft .agx-glyph-dot{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--ink-4),0 0 0 2.5px var(--surface)}
+.agx-glyph.is-running .agx-glyph-dot{background:var(--ai-2);animation:agx-beacon 1.4s ease-out infinite}
+/* Aan het werk: een draaiende ring van poollicht om de tegel, en een gloed die
+   klopt. De vorm draait niet mee (een afgeronde rechthoek die draait, steekt bij
+   45° buiten zichzelf uit); alleen de hoek van het verloop draait. */
+.agx-glyph.is-running::before{
+  content:"";position:absolute;inset:-4px;border-radius:calc(var(--agx-r) + 4px);padding:2px;pointer-events:none;
+  background:conic-gradient(from var(--agx-spin),transparent 0 35%,var(--ai-1) 60%,var(--ai-2) 80%,var(--ai-3) 92%,transparent);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;
+  mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;
+  animation:agx-spin 1.6s linear infinite;
+}
+.agx-glyph.is-running .agx-glyph-tile{animation:agx-glyph-glow 2.2s ease-in-out infinite}
+@keyframes agx-glyph-glow{0%,100%{box-shadow:inset 0 0 0 1px rgba(var(--ai-rgb),.4),0 0 0 0 rgba(var(--ai-rgb),0)}50%{box-shadow:inset 0 0 0 1px rgba(var(--ai-rgb),.6),0 0 24px 2px rgba(var(--ai-rgb),.35)}}
+/* Het gekozen embleem in het formulier. */
+.ag-pick-icon.on .agx-glyph-tile{box-shadow:inset 0 0 0 2px var(--ai-1),0 8px 20px -12px var(--ai-glow,rgba(110,90,230,.4))}
+
+/* ── 2. Het overzicht ─────────────────────────────────────── */
+.agx-page{gap:16px}
+.agx-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* De voordeur: een vraag aan Gerrie. */
+.agx-hero{
+  position:relative;overflow:hidden;display:flex;flex-direction:column;gap:12px;padding:20px 20px 16px;
+  border-radius:var(--r-card,var(--r-xl,18px));border:1px solid var(--line);
+  background:radial-gradient(120% 140% at 0% 0%,rgba(var(--ai-rgb),.1),transparent 55%),var(--surface);
+  box-shadow:var(--shadow-card,var(--shadow-1));
+}
+.agx-hero::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:var(--aurora,var(--ai-1))}
+.agx-hero-text h2{margin:0 0 4px;font-size:22px;font-weight:700;letter-spacing:-.015em}
+.agx-hero-text p{margin:0;font-size:13.5px;line-height:1.55;color:var(--ink-2);max-width:72ch}
+.agx-hero-text p b{color:var(--ink)}
+.agx-ask{display:flex;align-items:center;gap:10px;padding:6px 6px 6px 12px;border-radius:16px;background:var(--field,var(--surface-2));border:1px solid var(--line-2);transition:border-color .15s,box-shadow .15s}
+.agx-ask:focus-within{border-color:var(--ai-1);box-shadow:0 0 0 3px var(--ai-soft,rgba(110,90,230,.12))}
+.agx-ask input{flex:1;min-width:0;border:0;background:none;outline:none;color:var(--ink);font:inherit;font-size:14.5px;padding:10px 0}
+.agx-ask input::placeholder{color:var(--ink-3)}
+.agx-ask.is-disabled{opacity:.6}
+.agx-orb{
+  width:22px;height:22px;border-radius:50%;flex:0 0 auto;
+  background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.95),rgba(255,255,255,.3) 24%,transparent 48%),conic-gradient(from 200deg,var(--ai-1),var(--ai-2),var(--ai-3),var(--ai-1));
+  box-shadow:0 0 14px -2px var(--ai-glow,rgba(110,90,230,.4));
+}
+.agx-orb.is-busy{animation:agx-turn 1.4s linear infinite}
+.agx-send{width:40px;height:40px;flex:0 0 auto;border:0;border-radius:12px;background:var(--accent);color:var(--on-accent);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:filter .15s,opacity .15s}
+.agx-send:not(:disabled):hover{filter:brightness(1.06)}
+.agx-send:disabled{opacity:.4;cursor:not-allowed}
+.agx-hero-foot{display:flex;flex-wrap:wrap;gap:6px 18px}
+.agx-link{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--ai-ink,var(--accent-ink));border-radius:6px}
+.agx-link:hover{text-decoration:underline}
+.agx-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agx-link:disabled{opacity:.5;cursor:not-allowed;text-decoration:none}
+
+/* Eén regel met de stand van zaken. */
+.agx-summary{display:flex;flex-wrap:wrap;gap:8px}
+.agx-sum{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:12.5px;font-weight:500;color:var(--ink-2)}
+.agx-sum-dot{width:7px;height:7px;border-radius:50%;background:var(--ink-4)}
+.agx-sum-dot.is-active{background:var(--ok)}
+.agx-sum-dot.is-paused{background:var(--warn)}
+.agx-sum-dot.is-draft{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ink-4)}
+.agx-sum.is-working{color:var(--ai-ink);border-color:rgba(var(--ai-rgb),.35);background:var(--ai-soft,rgba(110,90,230,.08))}
+.agx-sum.is-working .agx-sum-dot{background:var(--ai-1);animation:agx-beacon 1.4s ease-out infinite}
+button.agx-sum{font:inherit;font-size:12.5px;cursor:pointer}
+.agx-sum.is-waiting{color:var(--on-accent);background:var(--accent);border-color:transparent;font-weight:600}
+.agx-sum.is-waiting:hover{filter:brightness(1.05)}
+
+/* De kaarten. */
+.agx-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,330px),1fr));gap:10px}
+.agx-card{
+  position:relative;display:flex;align-items:flex-start;gap:12px;min-width:0;padding:14px;
+  border-radius:var(--r-lg,14px);border:1px solid var(--line);background:var(--surface);
+  transition:border-color .15s,box-shadow .2s,transform .2s;
+}
+.agx-card:hover{border-color:var(--line-2);box-shadow:0 14px 30px -24px rgba(var(--shade-rgb),.9);transform:translateY(-1px)}
+.agx-card:hover .agx-glyph-tile{transform:translateY(-1px) scale(1.03)}
+/* De hele kaart is de knop; de knop "nu draaien" ligt erboven. */
+.agx-card-open{all:unset;position:absolute;inset:0;z-index:1;border-radius:inherit;cursor:pointer}
+.agx-card-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agx-card-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.agx-card-top{display:flex;align-items:center;gap:7px;min-width:0}
+.agx-card-top strong{font-size:14px;font-weight:600;letter-spacing:-.01em;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agx-badge{flex:0 0 auto;min-width:19px;height:19px;padding:0 6px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:11px;font-weight:700;display:inline-grid;place-items:center}
+.agx-flag{display:inline-flex;color:var(--ai-ink)}
+.agx-card-meta{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;font-size:12px;color:var(--ink-3)}
+.agx-state{display:inline-flex;align-items:center;gap:5px;font-weight:600;color:var(--ink-2)}
+.agx-state::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.agx-state.is-active{color:var(--ok)}
+.agx-state.is-paused{color:var(--warn)}
+.agx-state.is-draft{color:var(--ink-3)}
+.agx-state.is-draft::before{background:transparent;box-shadow:inset 0 0 0 1.5px currentColor}
+.agx-state.is-archived{color:var(--ink-4)}
+.agx-state.is-working{color:var(--ai-ink)}
+.agx-state.is-working::before{animation:agx-beacon 1.4s ease-out infinite}
+.agx-owner{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--ink-3)}
+.agx-last{display:flex;gap:6px;margin-top:2px;font-size:12.5px;line-height:1.45;color:var(--ink-2);min-width:0}
+.agx-last b{flex:0 0 auto;font-weight:600;color:var(--ink-3)}
+.agx-last span{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.agx-last.is-bad span{color:var(--danger)}
+.agx-last.is-warn span{color:var(--warn)}
+.agx-last.is-quiet span,.agx-last.is-none span{color:var(--ink-3)}
+.agx-icon-btn{
+  position:relative;z-index:2;align-self:center;flex:0 0 auto;width:36px;height:36px;border-radius:11px;
+  border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
+  transition:color .15s,border-color .15s,background .15s;
+}
+.agx-icon-btn:not(:disabled):hover{color:var(--ai-ink);border-color:rgba(var(--ai-rgb),.5);background:var(--ai-soft,rgba(110,90,230,.08))}
+.agx-icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agx-icon-btn:disabled{cursor:default;color:var(--ai-ink)}
+.agx-card.is-paused .agx-card-top strong,.agx-card.is-archived .agx-card-top strong{color:var(--ink-2)}
+.agx-card.is-selected{border-color:rgba(var(--ai-rgb),.5);background:linear-gradient(var(--ai-soft,rgba(110,90,230,.08)),var(--ai-soft,rgba(110,90,230,.08))),var(--surface)}
+/* Aan het werk: een komeet van poollicht om de kaart, net als bij een rapportage in opbouw. */
+.agx-card.is-working{
+  border-color:transparent;
+  background:linear-gradient(var(--surface),var(--surface)) padding-box,conic-gradient(from var(--agx-spin),transparent 0 60%,var(--ai-1) 75%,var(--ai-2) 86%,var(--ai-3) 94%,transparent) border-box,linear-gradient(var(--line),var(--line)) border-box;
+  animation:agx-spin 3.2s linear infinite;
+}
+.agx-card.is-compact{padding:9px 10px;gap:10px;align-items:center;border-radius:12px}
+.agx-card.is-compact:hover{transform:none}
+.agx-card.is-compact .agx-card-top strong{font-size:13px}
+.agx-card.is-compact .agx-card-meta{font-size:11.5px}
+
+/* Wat hij nu doet, op de kaart. */
+.agx-live{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin-top:3px;font-size:12.5px;color:var(--ai-ink);min-width:0}
+.agx-live-dots,.agw-dots{display:inline-flex;gap:3px;flex:0 0 auto}
+.agx-live-dots i,.agw-dots i{width:5px;height:5px;border-radius:50%;background:var(--ai-1);animation:agx-dot 1.2s ease-in-out infinite}
+.agx-live-dots i:nth-child(2),.agw-dots i:nth-child(2){animation-delay:.15s}
+.agx-live-dots i:nth-child(3),.agw-dots i:nth-child(3){animation-delay:.3s}
+.agx-live-text{flex:1 1 140px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.agx-live-time{flex:0 0 auto;font-variant-numeric:tabular-nums;font-size:11.5px;color:var(--ink-3)}
+.agx-live-track{display:flex;gap:3px;flex-basis:100%}
+.agx-live-track i{flex:1;height:3px;border-radius:2px;background:var(--line-2)}
+.agx-live-track i.is-done{background:var(--ai-1)}
+.agx-live-track i.is-active{background:linear-gradient(90deg,var(--ai-1),var(--ai-2),var(--ai-1)) 0 0/200% 100%;animation:agx-flow 1.2s linear infinite}
+
+/* Secties eronder. */
+.agx-section{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+.agx-section-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}
+.agx-section-head strong{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:650;color:var(--ink)}
+.agx-section-head strong svg{color:var(--ink-3)}
+.agx-section-head span{font-size:12px;color:var(--ink-3)}
+.agx-starters{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr));gap:10px}
+.agx-starter{
+  all:unset;box-sizing:border-box;cursor:pointer;display:flex;align-items:flex-start;gap:12px;padding:13px;
+  border-radius:var(--r-lg,14px);border:1px dashed var(--line-2);transition:border-color .15s,background .15s;
+}
+.agx-starter:hover{border-style:solid;border-color:rgba(var(--ai-rgb),.45);background:var(--surface)}
+.agx-starter:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agx-starter>span:last-child{display:flex;flex-direction:column;gap:3px;min-width:0}
+.agx-starter strong{font-size:13.5px;font-weight:600;line-height:1.3}
+.agx-starter small{font-size:12px;line-height:1.45;color:var(--ink-3)}
+.agx-starters.is-compact small{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+
+/* ── 3. Eén agent ─────────────────────────────────────────── */
+.agx-layout{display:grid;grid-template-columns:290px minmax(0,1fr);gap:18px;align-items:start}
+.agx-rail{position:sticky;top:0;display:flex;flex-direction:column;gap:10px;min-height:0;max-height:calc(100vh - 170px)}
+.agx-rail-list{display:flex;flex-direction:column;gap:6px;overflow-y:auto;padding:2px;min-height:0}
+.agx-rail-head{margin:8px 2px 0;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-4)}
+.agx-back{all:unset;box-sizing:border-box;cursor:pointer;align-self:flex-start;display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border-radius:10px;font-size:13px;font-weight:600;color:var(--ink-2)}
+.agx-back:hover{background:var(--surface-2);color:var(--ink)}
+.agx-back:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agx-detail-col{min-width:0}
+
+.agx-detail{
+  display:flex;flex-direction:column;gap:16px;min-width:0;padding:20px;
+  border-radius:var(--r-card,var(--r-xl,18px));border:1px solid var(--line);background:var(--surface);
+  box-shadow:var(--shadow-card,var(--shadow-1));animation:agx-in .25s ease-out;
+}
+.agx-detail-head{display:flex;align-items:flex-start;gap:16px}
+.agx-detail-ident{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+.agx-detail-ident h2{margin:0;font-size:20px;font-weight:700;letter-spacing:-.015em;line-height:1.25}
+.agx-detail-pills{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;font-size:12.5px}
+.agx-mode{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);font-size:12px;font-weight:600;color:var(--ink-2)}
+.agx-mode.is-propose{color:var(--accent-ink);background:rgba(var(--accent-rgb),.1);border-color:rgba(var(--accent-rgb),.3)}
+/* Een blok met een inline icoon: als flex sprong het icoon op een smal scherm
+   alleen op een eigen regel. */
+.agx-detail-when{margin:0;font-size:13px;line-height:1.5;color:var(--ink-2)}
+.agx-detail-when svg{display:inline-block;vertical-align:-2px;margin-right:6px;color:var(--ink-3)}
+.agx-detail-when span{color:var(--ink-3)}
+.agx-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.agx-primary{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:11px;padding:9px 15px;background:var(--accent);color:var(--on-accent);font:inherit;font-size:13px;font-weight:650;cursor:pointer;transition:filter .15s,opacity .15s}
+.agx-primary:not(:disabled):hover{filter:brightness(1.06)}
+.agx-primary:focus-visible,.agx-ghost:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agx-primary:disabled{opacity:.65;cursor:default}
+.agx-ghost{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-2);border-radius:11px;padding:8px 13px;background:var(--surface);color:var(--ink);font:inherit;font-size:13px;font-weight:550;cursor:pointer;transition:border-color .15s,background .15s}
+.agx-ghost:not(:disabled):hover{border-color:var(--line-3,var(--line-2));background:var(--surface-2)}
+.agx-ghost:disabled{opacity:.55;cursor:default}
+.agx-ghost.is-go{color:var(--ok)}
+.agx-ghost svg,.agx-primary svg{flex:0 0 auto}
+.agx-more{position:relative}
+.agx-menu{
+  position:absolute;left:0;top:calc(100% + 6px);z-index:30;min-width:240px;padding:6px;display:flex;flex-direction:column;gap:2px;
+  border-radius:12px;border:1px solid var(--line-2);background:var(--surface);box-shadow:var(--shadow-pop);animation:agx-in .15s ease-out;
+}
+.agx-menu button{all:unset;box-sizing:border-box;cursor:pointer;display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;font-size:13px;color:var(--ink)}
+.agx-menu button svg{color:var(--ink-3)}
+.agx-menu button:hover,.agx-menu button:focus-visible{background:var(--surface-2)}
+.agx-menu button.is-danger,.agx-menu button.is-danger svg{color:var(--danger)}
+.agx-starting{display:flex;align-items:center;gap:9px;padding:12px 14px;border-radius:12px;background:var(--ai-soft,rgba(110,90,230,.08));color:var(--ai-ink);font-size:13px;font-weight:500}
+
+/* Wat hij de vorige keer vond: het belangrijkste wat een agent oplevert. */
+.agx-outcome{display:flex;flex-direction:column;gap:8px;padding:14px 16px;border-radius:14px;border:1px solid var(--line);background:var(--surface-2)}
+.agx-outcome header{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.agx-outcome p{margin:0;font-size:14px;line-height:1.6;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere;max-height:16em;overflow:auto}
+.agx-outcome.is-bad{border-color:rgba(var(--danger-rgb),.35);background:rgba(var(--danger-rgb),.06)}
+.agx-outcome.is-warn{border-color:rgba(var(--warn-rgb),.35)}
+.agx-outcome.is-quiet p,.agx-outcome.is-none p{color:var(--ink-2)}
+
+.agx-how{margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:14px 22px;padding:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.agx-how>div{display:flex;flex-direction:column;gap:6px;min-width:0}
+.agx-how dt{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink-3)}
+.agx-how dd{margin:0;display:flex;flex-direction:column;gap:5px;font-size:13px;line-height:1.5;color:var(--ink)}
+.agx-how small,.agx-facts small{font-size:11.5px;line-height:1.45;color:var(--ink-3)}
+.agx-tags{display:flex;flex-wrap:wrap;gap:5px}
+.agx-tags span{padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);font-size:12px;color:var(--ink-2)}
+.agx-tags.is-write span{color:var(--accent-ink);background:rgba(var(--accent-rgb),.08);border-color:rgba(var(--accent-rgb),.28)}
+.agx-brief-box{display:flex;flex-direction:column;gap:8px}
+.agx-brief-box header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.agx-brief-box header>span{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink-3)}
+.agx-brief-box p{margin:0;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2);font-size:13.5px;line-height:1.6;color:var(--ink-2);white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* ── 4. De werkbank: een agent aan het werk ───────────────────
+   Links de gegevens waar hij in kijkt, in het midden de agent, rechts wat hij
+   oplevert. De stap (data-phase) komt uit het logboek: 0 opstarten,
+   1 gegevens bekijken, 2 uitwerken, 3 afronden. */
+.agw{
+  display:flex;flex-direction:column;overflow:hidden;border-radius:16px;border:1.5px solid transparent;
+  background:linear-gradient(var(--surface),var(--surface)) padding-box,conic-gradient(from var(--agx-spin),transparent 0 58%,var(--ai-1) 72%,var(--ai-2) 84%,var(--ai-3) 93%,transparent) border-box,linear-gradient(var(--line),var(--line)) border-box;
+  box-shadow:0 22px 48px -34px var(--ai-glow,rgba(110,90,230,.4));
+  animation:agx-spin 4s linear infinite;
+}
+.agw-stage{
+  position:relative;isolation:isolate;display:grid;grid-template-columns:minmax(0,1fr) 64px 132px 64px minmax(0,1fr);align-items:stretch;
+  min-height:210px;padding:18px 16px;border-bottom:1px solid var(--line);
+  background:radial-gradient(60% 90% at 50% 50%,rgba(var(--ai-rgb),.12),transparent 70%),radial-gradient(circle,var(--line-2) 1px,transparent 1.3px) 0 0/16px 16px,var(--bg,var(--surface-2));
+}
+.agw-sources,.agw-outputs{display:flex;flex-direction:column;justify-content:space-around;gap:6px;min-width:0}
+.agw-sources{align-items:flex-end}
+.agw-outputs{align-items:flex-start}
+.agw-chip{
+  display:inline-flex;align-items:center;gap:7px;max-width:100%;padding:6px 10px;border-radius:10px;
+  border:1px solid var(--line-2);background:var(--surface);color:var(--ink-3);font-size:12px;
+  box-shadow:0 4px 12px -9px rgba(var(--shade-rgb),.6);
+  animation:agx-pop .45s cubic-bezier(.2,.9,.3,1.2) both;animation-delay:calc(var(--i,0) * 90ms);
+  transition:color .3s,border-color .3s,box-shadow .3s,opacity .3s;
+}
+.agw-chip svg{flex:0 0 auto}
+.agw-chip em{font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agw-chip.is-lit{color:var(--ai-ink);border-color:rgba(var(--ai-rgb),.6);box-shadow:0 0 0 3px var(--ai-soft,rgba(110,90,230,.1)),0 6px 18px -8px var(--ai-glow,rgba(110,90,230,.4))}
+.agw-chip.is-dim{opacity:.6}
+/* Weet het logboek nog niet welke bron hij gebruikt, dan lichten ze om de beurt op. */
+.agw-stage[data-phase="1"] .agw-chip:not(.is-lit):not(.is-dim){
+  animation:agx-pop .45s cubic-bezier(.2,.9,.3,1.2) both,agw-scan calc(var(--agw-n,3) * 1.1s) ease-in-out infinite;
+  animation-delay:calc(var(--i,0) * 90ms),calc(var(--i,0) * 1.1s);
+}
+@keyframes agw-scan{0%,45%,100%{color:var(--ink-3);border-color:var(--line-2)}12%,30%{color:var(--ai-ink);border-color:rgba(var(--ai-rgb),.6);box-shadow:0 0 0 3px var(--ai-soft,rgba(110,90,230,.1))}}
+.agw-stage[data-phase="2"] .agw-chip,.agw-stage[data-phase="3"] .agw-chip{opacity:.65}
+
+.agw-flow{display:block;width:100%;height:100%;overflow:visible}
+.agw-flow path{fill:none;stroke:var(--line-3,var(--line-2));stroke-width:1.5;stroke-linecap:round;stroke-dasharray:2 6;vector-effect:non-scaling-stroke;opacity:.85}
+@keyframes agw-march{to{stroke-dashoffset:-16}}
+.agw-stage[data-phase="0"] .agw-flow-in path,.agw-stage[data-phase="1"] .agw-flow-in path{stroke:rgba(var(--ai-rgb),.5);animation:agw-march .8s linear infinite}
+.agw-stage[data-phase="1"] .agw-flow-in path.is-lit{stroke:var(--ai-2);stroke-width:2.4}
+.agw-stage[data-phase="2"] .agw-flow-out path,.agw-stage[data-phase="3"] .agw-flow-out path{stroke:rgba(var(--ai-rgb),.6);animation:agw-march .8s linear infinite}
+
+.agw-core{position:relative;display:grid;place-items:center}
+.agw-core::before{content:"";position:absolute;width:150px;height:150px;border-radius:50%;background:radial-gradient(circle,rgba(var(--ai-rgb),.28),transparent 65%);animation:agw-breathe 2.4s ease-in-out infinite}
+@keyframes agw-breathe{0%,100%{transform:scale(.85);opacity:.6}50%{transform:scale(1.05);opacity:1}}
+.agw-orbit{position:absolute;width:118px;height:118px;border-radius:50%;border:1px dashed rgba(var(--ai-rgb),.35);animation:agx-turn 14s linear infinite}
+.agw-orbit-2{width:94px;height:94px;border:1.5px solid transparent;border-top-color:rgba(var(--ai-rgb),.6);border-right-color:rgba(var(--ai-rgb),.25);animation-duration:2.2s;animation-direction:reverse}
+.agw-core .agx-glyph{position:relative;z-index:1}
+.agw-spark{position:absolute;width:7px;height:7px;background:var(--ai-3);clip-path:polygon(50% 0,62% 38%,100% 50%,62% 62%,50% 100%,38% 62%,0 50%,38% 38%);opacity:0;animation:agw-twinkle 1.8s ease-in-out infinite}
+.agw-spark:nth-last-child(1){top:14%;right:16%}
+.agw-spark:nth-last-child(2){bottom:16%;left:14%;background:var(--ai-2);animation-delay:.6s}
+.agw-spark:nth-last-child(3){top:22%;left:12%;width:5px;height:5px;background:var(--ai-1);animation-delay:1.2s}
+@keyframes agw-twinkle{0%,100%{opacity:0;transform:scale(.3) rotate(0)}50%{opacity:1;transform:scale(1) rotate(45deg)}}
+
+.agw-out{position:relative;display:flex;align-items:center;gap:7px;width:min(100%,150px);padding:7px 9px;border-radius:10px;border:1px dashed var(--line-2);background:var(--surface);opacity:.45;transition:opacity .4s,border-color .4s}
+.agw-out i{display:block;flex:1;height:5px;border-radius:3px;background:var(--line-2)}
+.agw-out i:last-of-type{flex:.6}
+.agw-out-mark{display:inline-flex;color:var(--ink-4)}
+.agw-out-check{position:absolute;top:-6px;right:-6px;width:17px;height:17px;border-radius:50%;background:var(--ok);color:#fff;display:none;place-items:center;box-shadow:0 0 0 2px var(--surface)}
+.agw-stage[data-phase="2"] .agw-out,.agw-stage[data-phase="3"] .agw-out{opacity:1;border-style:solid;border-color:rgba(var(--ai-rgb),.4)}
+.agw-stage[data-phase="2"] .agw-out{animation:agx-pop .5s cubic-bezier(.2,.9,.3,1.2) both;animation-delay:calc(.15s + var(--i,0) * .35s)}
+.agw-stage[data-phase="2"] .agw-out i{background:linear-gradient(90deg,var(--line-2) 30%,rgba(var(--ai-rgb),.6) 50%,var(--line-2) 70%) 0 0/260% 100%;animation:agx-shine 1.5s linear infinite;animation-delay:calc(var(--i,0) * .3s)}
+.agw-stage[data-phase="2"] .agw-out-mark,.agw-stage[data-phase="3"] .agw-out-mark{color:var(--ai-ink)}
+.agw-stage[data-phase="3"] .agw-out i{background:rgba(var(--ai-rgb),.45)}
+.agw-stage[data-phase="3"] .agw-out-check{display:grid;animation:agx-pop .4s cubic-bezier(.2,.9,.3,1.3) both;animation-delay:calc(var(--i,0) * .15s)}
+
+.agw-info{display:flex;flex-direction:column;gap:12px;padding:14px 16px 16px}
+.agw-head{display:flex;align-items:center;gap:10px}
+.agw-head-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.agw-head-text b{font-size:14.5px;font-weight:650;color:var(--ink)}
+.agw-head-text span{font-size:12.5px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agw-log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;max-height:190px;overflow:auto}
+.agw-log li{display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:center;gap:8px;padding:5px 2px;font-size:12.5px;color:var(--ink-2);animation:agx-slide .35s ease-out both}
+.agw-log-mark{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:rgba(var(--ok-rgb),.15);color:var(--ok)}
+.agw-log li.is-fail .agw-log-mark{background:rgba(var(--warn-rgb),.15);color:var(--warn)}
+.agw-log li.is-now .agw-log-mark{background:var(--ai-soft,rgba(110,90,230,.1))}
+.agw-log li.is-now .agw-log-label{color:var(--ai-ink);font-weight:550}
+.agw-log li.is-now .agw-dots i{width:3px;height:3px}
+.agw-log-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agw-log-at{font-variant-numeric:tabular-nums;font-size:11px;color:var(--ink-4)}
+.agw-note{margin:0;font-size:12px;color:var(--ink-3)}
+
+/* ── 5. De bouwer ─────────────────────────────────────────── */
+.agx-builder{gap:14px}
+.agx-builder-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+.agx-builder-title{flex:1 1 240px;min-width:0}
+.agx-builder-title h2{margin:0;font-size:20px;font-weight:700;letter-spacing:-.015em}
+.agx-builder-title p{margin:2px 0 0;font-size:13px;color:var(--ink-3)}
+.agx-split{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
+.agx-chat{
+  position:sticky;top:0;display:flex;flex-direction:column;min-height:480px;max-height:calc(100vh - 220px);overflow:hidden;
+  border-radius:var(--r-card,var(--r-xl,18px));border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-card,var(--shadow-1));
+}
+.agx-stream{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:18px;background:var(--bg)}
+.agx-msg{display:flex;align-items:flex-end;gap:9px;max-width:100%;animation:agx-in .25s ease-out}
+.agx-msg p{margin:0;max-width:88%;padding:10px 13px;border-radius:16px;font-size:13.5px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.agx-msg.is-assistant p{background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:5px;color:var(--ink)}
+.agx-msg.is-user{justify-content:flex-end}
+.agx-msg.is-user p{background:var(--surface-3,var(--surface-2));color:var(--ink);border-bottom-right-radius:5px}
+.agx-msg .agx-orb{width:24px;height:24px;margin-bottom:2px}
+.agx-msg.is-thinking p{display:inline-flex;align-items:center;gap:9px;color:var(--ai-ink)}
+.agx-chat-starters{display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding-left:33px}
+.agx-chip{
+  all:unset;box-sizing:border-box;cursor:pointer;max-width:100%;padding:7px 12px;border-radius:999px;border:1px solid var(--line-2);background:var(--surface);
+  font-size:12.5px;font-weight:500;line-height:1.35;color:var(--ink-2);text-align:left;transition:border-color .15s,color .15s;
+}
+.agx-chip:hover{border-color:rgba(var(--ai-rgb),.5);color:var(--ink)}
+.agx-chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agx-error{display:flex;align-items:center;gap:6px;margin:0;padding:9px 12px;border-radius:10px;background:rgba(var(--danger-rgb),.08);color:var(--danger);font-size:12.5px}
+.agx-composer{display:flex;flex-direction:column;gap:8px;padding:12px;border-top:1px solid var(--line);background:var(--surface)}
+.agx-suggestions{display:flex;flex-wrap:wrap;gap:6px}
+.agx-input{display:flex;align-items:flex-end;gap:8px}
+.agx-input textarea{flex:1;min-width:0;max-height:140px;resize:none;padding:10px 12px;border-radius:14px;border:1px solid var(--line-2);background:var(--field,var(--surface-2));color:var(--ink);font:inherit;font-size:13.5px;line-height:1.45;outline:none}
+.agx-input textarea:focus{border-color:var(--ai-1);box-shadow:0 0 0 3px var(--ai-soft,rgba(110,90,230,.12))}
+.agx-composer-note{font-size:11px;color:var(--ink-3)}
+
+/* De agent in opbouw. */
+.agx-bp{display:flex;flex-direction:column;gap:10px;min-width:0}
+.agx-bp-label{font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.agx-bp-card{
+  position:relative;overflow:hidden;display:flex;flex-direction:column;gap:14px;padding:18px;
+  border-radius:var(--r-card,var(--r-xl,18px));border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-card,var(--shadow-1));
+}
+.agx-bp-card.is-blueprint{border-style:dashed;border-color:var(--line-2);box-shadow:none;background:radial-gradient(circle,var(--line-2) 1px,transparent 1.3px) 0 0/16px 16px,var(--bg,var(--surface-2))}
+.agx-bp-top{display:flex;align-items:center;gap:14px}
+.agx-bp-slot{width:56px;height:56px;flex:0 0 auto;display:grid;place-items:center;border-radius:17px;border:1.5px dashed var(--line-3,var(--line-2));color:var(--ink-4)}
+.agx-bp-lines{flex:1;display:flex;flex-direction:column;gap:7px}
+.agx-bp-lines i{display:block;width:60%;height:10px;border-radius:5px;background:var(--line-2)}
+.agx-bp-lines i:last-child{width:38%;height:8px}
+.agx-bp-row{display:flex;flex-direction:column;gap:7px;padding-top:12px;border-top:1px dashed var(--line-2)}
+.agx-bp-key{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink-3)}
+.agx-bp-val{display:flex;gap:6px}
+.agx-bp-val i{display:block;width:84px;height:20px;border-radius:999px;background:var(--line-2)}
+.agx-bp-val i:last-child{width:62px}
+.agx-bp-caption{margin:0;font-size:12.5px;line-height:1.5;color:var(--ink-3);text-align:center}
+.agx-bp-beam{position:absolute;left:0;right:0;top:0;height:2px;opacity:0;pointer-events:none;background:linear-gradient(90deg,transparent,var(--ai-2) 20%,var(--ai-1) 50%,var(--ai-3) 80%,transparent);box-shadow:0 0 14px 2px var(--ai-glow,rgba(110,90,230,.35))}
+/* Gerrie denkt na: de vakken vullen zich met licht en een straal loopt de kaart na. */
+.agx-bp-card.is-assembling .agx-bp-slot{border-style:solid;border-color:rgba(var(--ai-rgb),.55);color:var(--ai-ink);animation:agx-glyph-glow 1.8s ease-in-out infinite}
+.agx-bp-card.is-assembling .agx-bp-slot svg{animation:agx-turn 3s linear infinite}
+.agx-bp-card.is-assembling .agx-bp-lines i,.agx-bp-card.is-assembling .agx-bp-val i{background:linear-gradient(90deg,var(--line-2) 30%,rgba(var(--ai-rgb),.55) 50%,var(--line-2) 70%) 0 0/260% 100%;animation:agx-shine 1.4s linear infinite;animation-delay:calc(var(--i,0) * .25s)}
+.agx-bp-card.is-assembling .agx-bp-beam{opacity:1;animation:agx-scan 2.2s ease-in-out infinite}
+.agx-bp-card.is-real.is-assembling::after{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:linear-gradient(90deg,transparent,var(--ai-2) 20%,var(--ai-1) 50%,var(--ai-3) 80%,transparent);box-shadow:0 0 14px 2px var(--ai-glow,rgba(110,90,230,.35));animation:agx-scan 2.2s ease-in-out infinite}
+.agx-bp-card.is-real.is-assembling>*{opacity:.6;transition:opacity .3s}
+/* Klaar: hij komt tevoorschijn met één keer een gloed. */
+.agx-bp.is-fresh .agx-bp-card{animation:agx-reveal .7s cubic-bezier(.2,.8,.2,1) both,agx-bp-glow 1.6s ease-out both}
+@keyframes agx-bp-glow{0%{box-shadow:0 0 0 0 rgba(var(--ai-rgb),0)}30%{box-shadow:0 0 0 2px rgba(var(--ai-rgb),.55),0 0 36px -4px var(--ai-glow,rgba(110,90,230,.45))}100%{box-shadow:var(--shadow-card,var(--shadow-1))}}
+.agx-bp-ident{display:flex;flex-direction:column;gap:6px;min-width:0}
+.agx-bp-ident strong{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:16px;font-weight:700;letter-spacing:-.01em}
+.agx-changed{margin-left:6px;padding:1px 7px;border-radius:999px;border:1px solid rgba(var(--ai-rgb),.35);background:var(--ai-soft,rgba(110,90,230,.1));font-style:normal;font-size:10.5px;font-weight:700;color:var(--ai-ink);white-space:nowrap}
+.agx-facts{margin:0;display:flex;flex-direction:column;gap:10px}
+.agx-facts>div{display:flex;flex-direction:column;gap:5px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2)}
+.agx-facts>div.is-changed{border-color:rgba(var(--ai-rgb),.45);background:linear-gradient(var(--ai-soft,rgba(110,90,230,.08)),var(--ai-soft,rgba(110,90,230,.08))),var(--surface-2)}
+.agx-facts dt{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink-3)}
+.agx-facts dd{margin:0;display:flex;flex-direction:column;align-items:flex-start;gap:5px;font-size:13px;color:var(--ink)}
+.agx-brief{padding:0 12px;border-radius:12px;border:1px solid var(--line)}
+.agx-brief.is-changed{border-color:rgba(var(--ai-rgb),.45)}
+.agx-brief summary{cursor:pointer;padding:10px 0;font-size:12.5px;font-weight:600;color:var(--ink-2);list-style:none}
+.agx-brief summary::-webkit-details-marker{display:none}
+.agx-brief summary::before{content:"▸";display:inline-block;margin-right:6px;color:var(--ink-3);transition:transform .15s}
+.agx-brief[open] summary::before{transform:rotate(90deg)}
+.agx-brief p{margin:0 0 12px;font-size:13px;line-height:1.6;color:var(--ink-2);white-space:pre-wrap;overflow-wrap:anywhere}
+.agx-try{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.agx-try span{flex:1 1 200px;font-size:12px;color:var(--ink-3)}
+.agx-preview{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2)}
+.agx-preview p{margin:0;font-size:13px;line-height:1.55}
+.agx-preview-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.agx-preview-note{font-size:12px;color:var(--ink-3)}
+.agx-preview ul{margin:0;padding-left:18px;font-size:12px;color:var(--ink-2)}
+.agx-preview li.is-fail{color:var(--warn)}
+.agx-bp-foot{position:sticky;bottom:0;display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:14px;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-card,var(--shadow-1))}
+.agx-bp-foot .agx-primary{padding:12px 16px;font-size:14px}
+.agx-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2);cursor:pointer}
+.agx-bp-hint{margin:0;font-size:12.5px;color:var(--ink-3)}
+
+/* ── Smallere schermen ────────────────────────────────────── */
+@media(max-width:1100px){
+  /* Eén agent open: dan alleen het detail, met "Alle agents" erboven. */
+  .agx-layout{grid-template-columns:minmax(0,1fr)}
+  .agx-rail{position:static;max-height:none}
+  .agx-rail-list{display:none}
+}
+@media(max-width:1000px){
+  .agx-split{grid-template-columns:minmax(0,1fr)}
+  .agx-chat{position:static;min-height:0;max-height:none}
+  .agx-stream{max-height:58vh;min-height:220px}
+  /* Een lege blauwdruk onder het gesprek is op een telefoon alleen scrollen. */
+  .agx-split.is-empty .agx-bp{display:none}
+}
+@media(max-width:760px){
+  .agx-hero{padding:16px 14px 14px;gap:10px}
+  .agx-hero-text h2{font-size:19px}
+  .agx-hero-text p{font-size:13px}
+  .agx-ask{padding:5px 5px 5px 10px}
+  .agx-ask input{font-size:16px}
+  .agx-cards{grid-template-columns:minmax(0,1fr)}
+  .agx-card{padding:12px}
+  .agx-detail{padding:14px;gap:14px}
+  .agx-detail-head{gap:12px}
+  .agx-detail-ident h2{font-size:18px}
+  .agx-actions>.agx-primary{flex:1 1 100%;min-height:44px}
+  .agx-actions>.agx-ghost,.agx-more>.agx-ghost{min-height:40px}
+  .agx-menu{left:auto;right:0}
+  /* De werkbank op een telefoon: bronnen alleen als icoon, alles iets kleiner. */
+  .agw-stage{grid-template-columns:minmax(0,1fr) 30px 96px 30px minmax(0,1fr);min-height:176px;padding:14px 10px}
+  .agw-chip{padding:6px 7px}
+  .agw-chip em{display:none}
+  .agw-core::before{width:110px;height:110px}
+  .agw-orbit{width:90px;height:90px}
+  .agw-orbit-2{width:72px;height:72px}
+  .agw-core .agx-glyph{transform:scale(.72)}
+  .agw-out{width:100%;padding:6px 7px}
+  .agx-builder-head .agx-ghost{order:3}
+  .agx-input textarea{font-size:16px}
+  /* De zwevende Gerrie-knop staat rechtsonder; zonder deze ruimte viel de
+     verstuurknop van het gesprek eronder. */
+  .agx-input{padding-right:58px}
+  .agx-chat-starters{padding-left:0}
+  /* De tabs van het commandocentrum: vier gelijke vakken met icoon en woord, in
+     plaats van een veegrij waarin "Beslissingen" van het scherm viel. */
+  .cc-root .cc-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;width:100%;overflow:visible;border-radius:16px}
+  .cc-root .cc-tabs .cc-tab{position:relative;flex-direction:column;justify-content:center;gap:3px;min-height:48px;padding:6px 2px;border-radius:13px;font-size:10.5px;line-height:1.15;text-align:center;white-space:normal}
+  .cc-root .cc-tabs .cc-tab .cc-tab-badge{position:absolute;top:3px;left:calc(50% + 6px);margin:0}
+}
+
+@media(prefers-reduced-motion:reduce){
+  /* Zonder beweging is een halve boog een lelijk toeval: een hele ring. */
+  .agx-glyph.is-running::before{background:linear-gradient(135deg,var(--ai-1),var(--ai-2),var(--ai-3))}
+  .agx-card:hover,.agx-card:hover .agx-glyph-tile{transform:none}
+}

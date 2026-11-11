@@ -230,6 +230,9 @@ import './styles/baken.css';
 import './styles/onboarding.css';
 // Rapportages met Gerrie; alleen eigen klassen (aire-*) op de gedeelde variabelen.
 import './styles/rapportages.css';
+// Agents van Gerrie (2026-11-11): eigen klassen (agx-*, agw-*), ná rapportages.css
+// omdat de werkbank de stappenbalk daarvan hergebruikt.
+import './styles/agents.css';
 import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
