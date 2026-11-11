@@ -115,4 +115,9 @@ dat het Gemini is. Instellingen → AI zegt dat er vooraf bij.
   `gerrie-agent-runner` en `gerrie-signals`: groen. Dat zijn alle functies die
   de gewijzigde code gebruiken. De rest van de CI-lijst kon hier niet:
   deno.land is vanuit deze sessie niet bereikbaar. CI draait hem bij de push.
-- `npm run test:mobile -- --theme=both`: zie het commitbericht.
+- `npm run test:mobile -- --theme=both`: 476 pagina's, 0 problemen. Instellingen
+  → AI (`settings-ai`) stond nog niet in die test en is toegevoegd: telefoon,
+  tablet en liggend, licht en donker.
+- Instellingen → AI is ook los doorgeklikt op 390px breed, licht en donker,
+  met elk van de vijf AI-apps gekozen. Er liep niets zijwaarts uit beeld, er
+  kwamen geen fouten, en de terminalopdracht en de stappen per app klopten.
