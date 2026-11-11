@@ -138,6 +138,9 @@ function demoInvoices(today: Date): PortalInvoice[] {
   ];
 }
 
+/** De verzonnen vaste contactpersoon: accountlead van het dossier en behandelaar van het eerste ticket. */
+const DEMO_CONTACT = 'Sanne de Wit';
+
 function demoTickets(today: Date, supplier: string): PortalTicket[] {
   return [
     {
@@ -146,6 +149,7 @@ function demoTickets(today: Date, supplier: string): PortalTicket[] {
       status: 'review', priority: 'medium', created_at: at(today, -5, 9), updated_at: at(today, 0, 11),
       last_activity_at: at(today, 0, 11), reply_count: 2, last_reply_from: 'team', last_reply_author: supplier,
       last_reply_preview: 'De eerste schetsen staan klaar; welke variant spreekt je het meest aan?', unread: true,
+      assigned: true, assignee_name: DEMO_CONTACT,
     },
     {
       id: 'voorbeeld-ticket-2', title: 'Openingstijden op de website aanpassen',
@@ -169,6 +173,7 @@ export function demoPortalAccount(state: PortalPreviewState, today = new Date())
     },
     branding: state.branding,
     client: CLIENT,
+    accountLead: { name: DEMO_CONTACT },
     actingContact: null,
     projects: [{
       id: 'voorbeeld-project', name: 'Nieuwe huisstijl De Korenaar', description: 'Logo, huisstijlhandboek en drukwerk',
