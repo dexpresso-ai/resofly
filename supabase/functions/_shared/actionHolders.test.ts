@@ -122,3 +122,15 @@ test('accountlead: alleen een teamlid dat Klanten ziet, en niets doen is geen vo
   await assert.rejects(setLead.plan!(ctx({ clients: [], organization_members: [member()] }), { client_ids: [T1], user_id: ANNA }),
     (error: unknown) => error instanceof ActionError && /bestaan niet in deze organisatie/.test(error.message));
 });
+
+test('toewijzen aan een ticket van een klant: de kaart zegt vooraan dat de klant het ziet', async () => {
+  const assign = action(TICKETS_ACTIONS, 'ticket.assign');
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    id: `c0000000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`, title: `Een lange tickettitel nummer ${i}`, status: 'new', client_id: T2, assignee_user_id: null,
+  }));
+  const plan = await assign.plan!(ctx({ tickets: many, organization_members: [member()] }), { ticket_ids: many.map((t) => t.id), user_id: ANNA });
+  // Vooraan, want na 170 tekens wordt de regel afgekapt.
+  assert.match(String(plan.sub), /^de klant ziet in het portaal wie het oppakt/);
+  const internal = await assign.plan!(ctx({ tickets: [{ id: T1, title: 'Intern', status: 'new', client_id: null, assignee_user_id: null }], organization_members: [member()] }), { ticket_ids: [T1], user_id: ANNA });
+  assert.doesNotMatch(String(internal.sub), /portaal/, 'een ticket zonder klant gaat niet naar buiten');
+});

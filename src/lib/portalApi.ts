@@ -113,6 +113,11 @@ export interface PortalTicket {
   last_reply_preview?: string | null;
   /** Er is een antwoord van de leverancier dat je hier nog niet geopend hebt. */
   unread?: boolean;
+  // Sinds 2026-11-11; een oudere edge function laat ze weg.
+  /** Iemand bij de leverancier heeft het ticket opgepakt. */
+  assigned?: boolean;
+  /** Zijn naam voor klanten (afzendernaam); null als hij die niet instelde. */
+  assignee_name?: string | null;
 }
 
 /** Een statuswijziging, als regel in het gesprek van een ticket. */
@@ -256,6 +261,12 @@ export interface PortalAccount {
    *  bij een oudere server of als het (nog) niet bestaat. */
   portalLoginKey?: string | null;
   client: PortalClient | null;
+  /**
+   * De vaste contactpersoon bij de leverancier (accountlead), met zijn naam
+   * voor klanten. Null zonder accountlead of zonder naam; ontbreekt bij een
+   * oudere server.
+   */
+  accountLead?: { name: string } | null;
   /** Gezet als de ingelogde gebruiker een geregistreerde contactpersoon is
    *  (i.p.v. het hoofd-e-mailadres van de klant zelf) — voor een persoonlijke
    *  begroeting in het portaal. */

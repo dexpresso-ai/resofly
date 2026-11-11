@@ -9,7 +9,9 @@
 //    hemzelf;
 //  - de eigen keuzes in het portaal en de schakelaar van de organisatie;
 //  - wie wat mag: een andere klant, een andere organisatie, de kijker, de
-//    boekhouder, een lid zonder of met alleen leesrecht op Tickets, anon.
+//    boekhouder, een lid zonder of met alleen leesrecht op Tickets, anon;
+//  - de accountlead en de behandelaar in het portaal: alleen hun afzendernaam,
+//    nooit een e-mailadres of user-id (2026-11-11).
 //
 // Aanleiding: de controle van het ticketsysteem op 10 november 2026
 // (docs/changelog/CHANGELOG_TICKETS_CONTROLE_2026-11-10.md). Er was geen
@@ -181,6 +183,54 @@ export default async function tickets() {
     gelijk(draad.notes.map((n) => n.body), ['We kijken ernaar.\nGroet!'], 'notities in het portaal');
     verwacht(!JSON.stringify(draad).includes(geheim), 'niets van de interne notitie in het antwoord');
     gelijk(draad.events.map((e) => `${e.old_status}->${e.new_status}`), ['new->review'], 'statusregels');
+  });
+
+  // ── Accountlead en behandelaar in het portaal (2026-11-11) ──────────────
+  // De klant ziet wie zijn ticket oppakt en wie zijn vaste contactpersoon is:
+  // de afzendernaam van dat teamlid, nooit zijn inlogadres of user-id.
+  groep('Tickets — de klant ziet wie het oppakt, nooit een e-mailadres');
+
+  await stap('opgepakt door een teamlid zonder afzendernaam: wel "opgepakt", geen naam', async () => {
+    const res = await rest(`tickets?id=eq.${ticket.id}&organization_id=eq.${w.orgId}&select=id,assignee_user_id`, {
+      method: 'PATCH', token: w.medewerker.token, prefer: 'return=representation', body: { assignee_user_id: w.medewerker.id },
+    });
+    gelijk(res.status, 200, `toewijzen: ${res.tekst}`);
+    const draad = gelukt(await portaal(w.portaalA, { action: 'getTicketThread', ticketId: ticket.id }), 'ticket openen');
+    gelijk(draad.ticket.assigned, true, 'opgepakt');
+    gelijk(draad.ticket.assignee_name, null, 'geen naam zonder afzendernaam');
+    const tekst = JSON.stringify(draad);
+    verwacht(!tekst.includes(w.medewerker.email) && !tekst.includes(w.medewerker.id), 'geen e-mailadres of user-id van het teamlid');
+  });
+
+  await stap('met afzendernaam: de naam bij het ticket en als vaste contactpersoon', async () => {
+    const naam = 'Mila de Medewerker';
+    const afzender = await rest('user_sender_identities?on_conflict=organization_id,user_id', {
+      method: 'POST', token: w.medewerker.token, prefer: 'resolution=merge-duplicates,return=representation',
+      body: { organization_id: w.orgId, user_id: w.medewerker.id, from_name: naam },
+    });
+    gelijk(afzender.status, 201, `afzendernaam: ${afzender.tekst}`);
+    const lead = await rest(`clients?id=eq.${w.klantA.id}&organization_id=eq.${w.orgId}&select=id`, {
+      method: 'PATCH', token: w.medewerker.token, prefer: 'return=representation', body: { account_lead_user_id: w.medewerker.id },
+    });
+    gelijk(lead.status, 200, `accountlead: ${lead.tekst}`);
+
+    const data = gelukt(await portaal(w.portaalA, { action: 'getPortalData' }), 'portaal A');
+    const account = data.accounts.find((a) => a.id === w.klantA.id);
+    verwacht(account, 'het dossier van klant A');
+    gelijk(account.accountLead, { name: naam }, 'vaste contactpersoon');
+    gelijk(account.tickets.find((t) => t.id === ticket.id)?.assignee_name, naam, 'behandelaar in de lijst');
+    const draad = gelukt(await portaal(w.portaalA, { action: 'getTicketThread', ticketId: ticket.id }), 'ticket openen');
+    gelijk(draad.ticket.assignee_name, naam, 'behandelaar in het ticket');
+    for (const [wat, payload] of [['dossier', data], ['ticket', draad]]) {
+      const tekst = JSON.stringify(payload);
+      verwacht(!tekst.includes(w.medewerker.email) && !tekst.includes(w.medewerker.id), `${wat}: geen e-mailadres of user-id van het teamlid`);
+    }
+  });
+
+  await stap('klant B ziet de contactpersoon van klant A niet', async () => {
+    const data = gelukt(await portaal(w.portaalB, { action: 'getPortalData' }), 'portaal B');
+    verwacht(data.accounts.every((a) => !a.accountLead), 'geen contactpersoon bij klant B');
+    verwacht(!JSON.stringify(data).includes('Mila de Medewerker'), 'de naam komt niet in het dossier van B');
   });
 
   await stap('een interne notitie die zichtbaar wordt, gaat alsnog als antwoord', async () => {

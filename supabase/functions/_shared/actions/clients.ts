@@ -168,6 +168,7 @@ export const CLIENT_ACTIONS: ActionDef[] = [
     description:
       'Maakt een teamlid accountlead van een of meer klanten: de collega die de klant beheert. Dat teamlid staat dan bij de klant in de lijst en het dossier, en je kunt erop filteren ("mijn klanten") en rapporteren (omzet, klanten en tickets per accountlead). ' +
       'Laat `user_id` leeg (of "none") om de accountlead weg te halen; "me" is de gebruiker zelf. Een accountlead is een actief teamlid dat Klanten mag zien, geen boekhouder. ' +
+      'De klant ziet zijn accountlead in het portaal als vaste contactpersoon, met de afzendernaam van het teamlid (nooit het e-mailadres; zonder afzendernaam geen naam). ' +
       'Zoek de klanten met `search_clients` (die laat ook de huidige accountlead zien) en het teamlid met `list_team_members`.',
     keywords: ['accountlead', 'accountmanager', 'account manager', 'eigenaar', 'beheerder', 'verantwoordelijke', 'klantbeheer', 'toewijzen', 'mijn klanten', 'portefeuille'],
     input: {
@@ -200,10 +201,12 @@ export const CLIENT_ACTIONS: ActionDef[] = [
         title: changing.length === 1
           ? (lead ? `${lead.name} accountlead maken van ${names[0]}` : `Accountlead weghalen bij ${names[0]}`)
           : (lead ? `${lead.name} accountlead maken van ${changing.length} klanten` : `Accountlead weghalen bij ${changing.length} klanten`),
+        // Wat naar buiten gaat eerst: na 170 tekens wordt de regel afgekapt.
         sub: joinShort([
-          changing.length > 1 ? names.join(', ') : null,
+          lead ? 'de klant ziet de naam in het portaal' : null,
           `nu: ${before.join(', ')}`,
           rows.length > changing.length ? `${rows.length - changing.length} stond${rows.length - changing.length === 1 ? '' : 'en'} al goed` : null,
+          changing.length > 1 ? names.join(', ') : null,
         ], 170),
         kind: 'work',
         payload: { client_ids: changing.map((r) => String(r.id)), names, user_id: lead?.userId ?? null, lead_name: lead?.name ?? null },

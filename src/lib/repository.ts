@@ -4593,6 +4593,37 @@ export async function loadMySenderIdentity(organizationId: UUID): Promise<UserSe
   return (data ?? null) as UserSenderIdentity | null;
 }
 
+/**
+ * De naam waaronder elk teamlid voor klanten zichtbaar is: zijn afzendernaam.
+ * Het klantportaal toont die bij de accountlead en bij wie een ticket oppakt
+ * (client-portal, teamNamesForPortal); het formulier laat hem vooraf zien.
+ * Eén keer per organisatie opgehaald; een eigen wijziging wist de cache.
+ */
+const clientFacingNameCache = new Map<UUID, Promise<Map<UUID, string>>>();
+
+export function loadClientFacingNames(organizationId: UUID): Promise<Map<UUID, string>> {
+  let pending = clientFacingNameCache.get(organizationId);
+  if (!pending) {
+    pending = (async () => {
+      const { data, error } = await supabase
+        .from('user_sender_identities')
+        .select('user_id,from_name')
+        .eq('organization_id', organizationId);
+      if (error) throw error;
+      const names = new Map<UUID, string>();
+      for (const row of (data ?? []) as Array<{ user_id: UUID; from_name: string | null }>) {
+        const name = String(row.from_name ?? '').replace(/\s+/g, ' ').trim();
+        if (name) names.set(row.user_id, name);
+      }
+      return names;
+    })();
+    // Een mislukte poging blijft niet hangen: de volgende keer opnieuw.
+    pending.catch(() => clientFacingNameCache.delete(organizationId));
+    clientFacingNameCache.set(organizationId, pending);
+  }
+  return pending;
+}
+
 /** Sla de persoonlijke afzender op (upsert op eigen rij; RLS dwingt user_id = auth.uid() af). */
 export async function saveMySenderIdentity(organizationId: UUID, input: { from_name: string | null; from_email: string | null }): Promise<UserSenderIdentity> {
   const userId = await currentUserId();
@@ -4605,6 +4636,7 @@ export async function saveMySenderIdentity(organizationId: UUID, input: { from_n
     .select('organization_id,user_id,from_name,from_email,created_at,updated_at')
     .single();
   if (error) throw error;
+  clientFacingNameCache.delete(organizationId);
   return data as UserSenderIdentity;
 }
 
@@ -4618,6 +4650,7 @@ export async function clearMySenderIdentity(organizationId: UUID): Promise<void>
     .eq('organization_id', organizationId)
     .eq('user_id', userId);
   if (error) throw error;
+  clientFacingNameCache.delete(organizationId);
 }
 
 export async function loadSendingDomains(organizationId: UUID): Promise<SendingDomain[]> {

@@ -41,9 +41,13 @@ const portalTickets = seed.tickets.filter(t => t.client_id === c0.id).map((t, i)
   id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, created_at: t.created_at, updated_at: t.updated_at,
   last_activity_at: iso(day(0, 9)), reply_count: 2, last_reply_from: 'team', last_reply_author: null,
   last_reply_preview: 'De eerste schetsen staan klaar; welke variant spreekt je het meest aan?', unread: i === 0,
+  // Behandelaar (2026-11-11): met naam, zonder naam (dan de leverancier) en niemand.
+  assigned: i % 3 !== 2, assignee_name: i % 3 === 0 ? 'Sanne de Wit' : null,
 }));
 export const portalData = { ok: true, email: c0.email, accounts: [{
   id: 'acc1', organizationId: seed.ids.ORG, company, branding, client: { id: c0.id, name: c0.name, contact_name: c0.contact_name, email: c0.email, phone: c0.phone }, actingContact: { name: 'Joost Vermeer', email: c0.email },
+  // De accountlead met zijn naam voor klanten (2026-11-11): de contactkaart.
+  accountLead: { name: 'Gerjan van Lopik' },
   projects: seed.projects.filter(p => p.client_id === c0.id).map(p => ({ id: p.id, name: p.name, description: p.description, color: p.color, archived: false, start_date: p.start_date, end_date: p.end_date, created_at: p.created_at })),
   invoices: seed.invoices.filter(i => i.client_id === c0.id).map(i => ({ id: i.id, number: i.number, date: i.date, due_date: i.due_date, status: i.status, lines: i.lines, notes: null, sent_at: i.sent_at, paid_at: i.paid_at, project_id: i.project_id })),
   quotes: seed.quotes.filter(x => x.client_id === c0.id).map(x => ({ id: x.id, number: x.number, date: x.date, valid_until: x.valid_until, status: x.status, lines: x.lines, notes: null, sent_at: x.sent_at, accepted_at: x.accepted_at, project_id: x.project_id })),

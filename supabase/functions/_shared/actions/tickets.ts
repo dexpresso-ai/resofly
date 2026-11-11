@@ -149,7 +149,7 @@ export const TICKETS_ACTIONS: ActionDef[] = [
     description:
       'Wijst een of meer tickets toe aan een teamlid: de collega die ze oppakt. Dat teamlid staat dan bij het ticket in de lijst, ziet het onder "Aan mij", en je kunt erop rapporteren (tickets per teamlid). ' +
       'Laat `user_id` leeg (of "none") om de toewijzing weg te halen; "me" is de gebruiker zelf. Je kunt alleen toewijzen aan een actief teamlid dat Tickets mag zien, geen boekhouder. ' +
-      'De klant merkt hier niets van: het portaal toont niet wie het ticket heeft. Zoek de tickets met `list_tickets` (die laat ook zien aan wie ze nu zijn toegewezen) en het teamlid met `list_team_members`.',
+      'Hangt het ticket aan een klant, dan ziet die in zijn portaal "Opgepakt door" met de afzendernaam van het teamlid (zonder afzendernaam: de bedrijfsnaam), nooit het e-mailadres. Zoek de tickets met `list_tickets` (die laat ook zien aan wie ze nu zijn toegewezen) en het teamlid met `list_team_members`.',
     keywords: ['toewijzen', 'toegewezen', 'behandelaar', 'oppakken', 'verdelen', 'aan mij', 'mijn tickets', 'eigenaar', 'doorzetten', 'overdragen', 'ticket', 'melding'],
     input: {
       ticket_ids: { type: 'array', items: { type: 'string' }, description: 'Id\'s van de tickets (exact, uit list_tickets). Hooguit 100.' },
@@ -159,9 +159,9 @@ export const TICKETS_ACTIONS: ActionDef[] = [
     async plan(ctx, input) {
       const wanted = ids(input, 'ticket_ids', 100);
       const assignee = await resolveHolder(ctx, input, 'user_id', 'tickets');
-      const { data, error } = await orgQuery(ctx, 'tickets', 'id, title, status, assignee_user_id').in('id', wanted);
+      const { data, error } = await orgQuery(ctx, 'tickets', 'id, title, status, client_id, assignee_user_id').in('id', wanted);
       if (error) throw new ActionError(`Tickets ophalen mislukt: ${error.message}`);
-      const rows = (data ?? []) as Array<{ id: string; title: string; status: string; assignee_user_id: string | null }>;
+      const rows = (data ?? []) as Array<{ id: string; title: string; status: string; client_id: string | null; assignee_user_id: string | null }>;
       if (rows.length !== wanted.length) {
         const found = new Set(rows.map((r) => String(r.id)));
         throw new ActionError(`Deze tickets bestaan niet in deze organisatie: ${wanted.filter((x) => !found.has(x)).join(', ')}.`);
@@ -182,11 +182,14 @@ export const TICKETS_ACTIONS: ActionDef[] = [
         title: changing.length === 1
           ? (assignee ? `Ticket toewijzen aan ${assignee.name}: ${titles[0]}` : `Toewijzing weghalen: ${titles[0]}`)
           : (assignee ? `${changing.length} tickets toewijzen aan ${assignee.name}` : `Toewijzing weghalen bij ${changing.length} tickets`),
+        // Wat naar buiten gaat eerst: na 170 tekens wordt de regel afgekapt, en
+        // een lange lijst titels drukte die melding er anders af.
         sub: joinShort([
-          changing.length > 1 ? titles.join(', ') : null,
+          assignee && changing.some((r) => r.client_id) ? 'de klant ziet in het portaal wie het oppakt' : null,
           `nu: ${before.join(', ')}`,
           rows.length > changing.length ? `${rows.length - changing.length} stond${rows.length - changing.length === 1 ? '' : 'en'} al goed` : null,
           archived > 0 ? `${archived === 1 ? 'één staat' : `${archived} staan`} al in het archief (afgehandeld)` : null,
+          changing.length > 1 ? titles.join(', ') : null,
         ], 170),
         kind: 'work',
         payload: { ticket_ids: changing.map((r) => String(r.id)), titles, user_id: assignee?.userId ?? null, assignee_name: assignee?.name ?? null },

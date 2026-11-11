@@ -1015,7 +1015,7 @@ function PortalAccountView({ account, email, supplierName, onTicketCreated, link
         <div className="portal-rows">{account.quotes.slice(0, 4).map(q => <QuoteRow key={q.id} quote={q} onOpen={() => setOpenDoc({ type: 'quote', id: q.id })} />)}</div>
       </article>
 
-      {account.company && <PortalContactCard account={account} />}
+      {(account.company || account.accountLead) && <PortalContactCard account={account} />}
     </div>}
 
     {!showingDoc && tab === 'invoices' && <article className="portal-card">
@@ -1780,18 +1780,37 @@ function ContractRow({ contract }: { contract: PortalContract }) {
 }
 
 function PortalContactCard({ account }: { account: PortalAccount }) {
-  const c = account.company!;
-  const name = c.trade_name || c.company_name || 'Contact';
+  const c = account.company;
+  const name = c?.trade_name || c?.company_name || 'Contact';
+  const lead = account.accountLead?.name ?? null;
   return <article className="portal-card">
     <div className="portal-card-head"><h2>Contact</h2></div>
+    {lead && <div className="portal-contact-lead">
+      <span className="portal-contact-lead-avatar" aria-hidden="true">{initialsOf(lead)}</span>
+      <span><span className="portal-muted">Je vaste contactpersoon</span><strong>{lead}</strong></span>
+    </div>}
     <div className="portal-contact">
       <p><strong>{name}</strong></p>
-      {c.email && <p>{c.email}</p>}
-      {c.phone && <p>{c.phone}</p>}
-      {c.website && <p>{c.website}</p>}
-      {c.iban && <p className="portal-muted">IBAN: {c.iban}</p>}
+      {c?.email && <p>{c.email}</p>}
+      {c?.phone && <p>{c.phone}</p>}
+      {c?.website && <p>{c.website}</p>}
+      {c?.iban && <p className="portal-muted">IBAN: {c.iban}</p>}
     </div>
   </article>;
+}
+
+/** "Anna de Vries" → "AV": voor- en achternaam, tussenvoegsels tellen niet. */
+function initialsOf(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  const first = words[0]?.[0] ?? '';
+  const last = words.length > 1 ? words[words.length - 1][0] : '';
+  return (first + last).toUpperCase() || '?';
+}
+
+/** Wie het ticket bij de leverancier oppakt: zijn naam, of de leverancier als hij geen naam voor klanten heeft. */
+function ticketHandler(ticket: PortalTicket, supplierName: string): string | null {
+  if (!ticket.assigned) return null;
+  return ticket.assignee_name || supplierName;
 }
 
 function TicketsTab({ account, supplierName, onTicketCreated, openTicketId, onOpenTicket, seen, markSeen, onOpenSettings }: {
@@ -1933,6 +1952,7 @@ function TicketRow({ ticket, supplierName, unread, highlight, onOpen }: {
       <span className="portal-row-number">{unread && <span className="portal-unread-dot" title={ticketNewLabel(ticket, supplierName)} />}{ticket.title}</span>
       <span className="portal-muted">
         {dateNL(ticket.created_at)} · Prioriteit {priorityLabel(ticket.priority)}
+        {ticketHandler(ticket, supplierName) ? ` · Opgepakt door ${ticketHandler(ticket, supplierName)}` : ''}
         {replies > 0 ? ` · ${replies} ${replies === 1 ? 'reactie' : 'reacties'}` : ''}
         {lastActivity ? ` · laatst ${listTime(lastActivity)}` : ''}
       </span>
@@ -2047,7 +2067,7 @@ function PortalTicketDetail({ ticketId, supplierName, backLabel, onBack, onChang
         <h2>{thread.ticket.title}</h2>
         <span className={`portal-status ticket-${thread.ticket.status}`}>{ticketStatusLabels[thread.ticket.status] ?? thread.ticket.status}</span>
       </div>
-      <p className="portal-muted">Aangemaakt {dateNL(thread.ticket.created_at)} · Prioriteit {priorityLabel(thread.ticket.priority)}</p>
+      <p className="portal-muted">Aangemaakt {dateNL(thread.ticket.created_at)} · Prioriteit {priorityLabel(thread.ticket.priority)}{ticketHandler(thread.ticket, supplierName) ? ` · Opgepakt door ${ticketHandler(thread.ticket, supplierName)}` : ''}</p>
       {thread.ticket.description && <p className="portal-detail-desc">{thread.ticket.description}</p>}
 
       <div className="portal-thread">

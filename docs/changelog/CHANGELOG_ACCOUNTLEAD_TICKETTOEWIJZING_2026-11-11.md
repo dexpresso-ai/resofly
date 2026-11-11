@@ -25,7 +25,8 @@ specifieke naam kunt toewijzen. Ook hier moet men op kunnen rapporteren."*
   houdt.
 - **Filteren en zoeken.** Twee nieuwe snelfilters vooraan: *Aan mij* en *Niet toegewezen*.
   Daarnaast het filter *Toegewezen aan* per teamlid. Zoeken op de naam van het teamlid werkt ook.
-- De klant ziet niet wie zijn ticket heeft; het portaal kiest zijn eigen kolommen.
+- De klant ziet niet wie zijn ticket heeft; het portaal kiest zijn eigen kolommen. *Later die dag
+  wel: zie `CHANGELOG_PORTAAL_ACCOUNTLEAD_BEHANDELAAR_2026-11-11.md`.*
 
 ### Rapporteren
 

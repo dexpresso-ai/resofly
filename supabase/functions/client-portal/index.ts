@@ -316,13 +316,14 @@ async function getTicketThread(user: PortalUser, body: Record<string, unknown>) 
 
   const { data: ticket, error } = await supabaseAdmin
     .from('tickets')
-    .select('id,organization_id,client_id,title,description,status,priority,created_at,updated_at,converted_to_project_id')
+    .select('id,organization_id,client_id,title,description,status,priority,created_at,updated_at,converted_to_project_id,assignee_user_id')
     .eq('id', ticketId)
     .maybeSingle();
   if (error) throw error;
   if (!ticket) throw new PortalError('Ticket niet gevonden.', 404);
   await assertEntityBelongsToClients({ client_id: ticket.client_id, project_id: null, organization_id: ticket.organization_id }, clients);
   assertTicketsOpen(clients, ticket.client_id);
+  const assigneeNames = await teamNamesForPortal(String(ticket.organization_id), [ticket.assignee_user_id]);
 
   const { data: notes, error: notesError } = await supabaseAdmin
     .from('ticket_notes')
@@ -355,7 +356,7 @@ async function getTicketThread(user: PortalUser, body: Record<string, unknown>) 
   const filesByNote = await ticketNoteFiles(ticket.organization_id, ticket.id, ticket.client_id ?? null, (notes || []).map((note) => String(note.id)));
 
   return {
-    ticket: sanitizeTicket(ticket),
+    ticket: sanitizeTicket(ticket, assigneeNames),
     notes: (notes || []).map((note) => ({ ...sanitizeTicketNote(note), files: filesByNote.get(String(note.id)) ?? null })),
     events: statusRows.map((row) => ({
       id: row.id,
@@ -1916,6 +1917,13 @@ async function buildAccount(client: ClientRow, email: string) {
   ]);
   const overviewByTicket = new Map(overview.map((row) => [String(row.ticket_id), row]));
   const me = people.find((person) => person.email === normalizeEmail(email)) ?? null;
+  // De accountlead staat niet in de rij van portal_clients_for_email; apart, en
+  // altijd binnen de organisatie van deze klant.
+  const { data: leadRow } = await supabaseAdmin.from('clients').select('account_lead_user_id')
+    .eq('organization_id', orgId).eq('id', client.id).maybeSingle();
+  const leadId = (leadRow as { account_lead_user_id?: string | null } | null)?.account_lead_user_id ?? null;
+  const teamNames = await teamNamesForPortal(orgId, [leadId, ...tickets.map((ticket) => ticket.assignee_user_id)]);
+  const leadName = leadId ? teamNames.get(String(leadId)) ?? null : null;
   const threads = me ? threadsFor(messageRows, me, people).map((thread) => threadForPortal(thread, reads)) : [];
 
   return {
@@ -1930,6 +1938,8 @@ async function buildAccount(client: ClientRow, email: string) {
     // terecht en niet in dat van een ander (zie ClientPortal.tsx).
     portalLoginKey,
     client: sanitizeClient(client),
+    // Alleen de naam: het inlogadres van een teamlid gaat nooit naar het portaal.
+    accountLead: leadName ? { name: leadName } : null,
     actingContact: actingContact ? { name: actingContact.name, email: actingContact.email } : null,
     projects: projects.map(sanitizeProject),
     invoices: invoices.map(sanitizeInvoice),
@@ -1937,7 +1947,7 @@ async function buildAccount(client: ClientRow, email: string) {
     // false = de klant staat op inactief: het portaal toont geen tickets.
     ticketsOpen,
     tickets: tickets.map((ticket) => ({
-      ...sanitizeTicket(ticket),
+      ...sanitizeTicket(ticket, teamNames),
       ...ticketActivityForPortal(ticket, overviewByTicket.get(String(ticket.id)), reads),
     })),
     contracts: contracts.map(sanitizeContract),
@@ -2211,7 +2221,13 @@ function sanitizeContract(row: Record<string, unknown>) {
   };
 }
 
-function sanitizeTicket(row: Record<string, unknown>) {
+/**
+ * Een ticket zoals de klant het ziet. Van de behandelaar alleen of er een is
+ * en zijn naam (teamNamesForPortal); het user-id en het inlogadres blijven op
+ * de server.
+ */
+function sanitizeTicket(row: Record<string, unknown>, teamNames: Map<string, string> = new Map()) {
+  const assigneeId = row.assignee_user_id ? String(row.assignee_user_id) : null;
   return {
     id: row.id,
     title: row.title,
@@ -2220,7 +2236,36 @@ function sanitizeTicket(row: Record<string, unknown>) {
     priority: row.priority,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    assigned: assigneeId !== null,
+    assignee_name: assigneeId ? teamNames.get(assigneeId) ?? null : null,
   };
+}
+
+/**
+ * De naam waaronder een teamlid voor klanten zichtbaar is: zijn afzendernaam
+ * (Instellingen → E-mail → Persoonlijke afzender). Dat is de naam die klanten
+ * al boven zijn mails zien, en die hij zelf voor klanten koos. Nooit het
+ * inlogadres: dat hield het portaal al buiten de tijdlijn (sanitizeTicketNote),
+ * en een naam afleiden uit dat adres gaf het alsnog half prijs.
+ *
+ * Zonder afzendernaam: geen naam (het portaal noemt dan de leverancier).
+ * Versiering, dus zacht: mislukt het opzoeken, dan staat het portaal er gewoon.
+ */
+async function teamNamesForPortal(orgId: string, userIds: unknown[]): Promise<Map<string, string>> {
+  const wanted = [...new Set(userIds.map((id) => String(id ?? '')).filter((id) => isUuid(id)))];
+  const names = new Map<string, string>();
+  if (wanted.length === 0) return names;
+  const { data, error } = await supabaseAdmin.from('user_sender_identities').select('user_id,from_name')
+    .eq('organization_id', orgId).in('user_id', wanted);
+  if (error) {
+    console.warn('client-portal teamnamen overgeslagen', error.message);
+    return names;
+  }
+  for (const row of (data ?? []) as Array<{ user_id: string; from_name: string | null }>) {
+    const name = String(row.from_name ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (name) names.set(String(row.user_id), name);
+  }
+  return names;
 }
 
 function sanitizeTicketNote(row: Record<string, unknown>) {

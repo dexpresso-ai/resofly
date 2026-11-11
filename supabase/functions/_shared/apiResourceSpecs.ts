@@ -78,7 +78,7 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       follow_up: { type: 'date', description: 'Datum om op terug te komen.', nullable: true },
       custom_fields: { type: 'object', description: 'Eigen velden, zoals ingesteld onder Instellingen → Klanten.' },
       // De database controleert dat het een actief teamlid is dat Klanten mag zien.
-      account_lead_user_id: { type: 'uuid', description: 'Het teamlid dat de klant beheert (accountlead): een actief teamlid dat Klanten mag zien. Leeg = geen accountlead.', nullable: true },
+      account_lead_user_id: { type: 'uuid', description: 'Het teamlid dat de klant beheert (accountlead): een actief teamlid dat Klanten mag zien. Leeg = geen accountlead. De klant ziet in het portaal de afzendernaam van dit teamlid, nooit het e-mailadres.', nullable: true },
       created_by: CREATED_BY,
       created_at: CREATED_AT,
       updated_at: UPDATED_AT,
@@ -235,7 +235,7 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       notes: { type: 'text', description: 'Interne notities bij het ticket.', nullable: true, maxLength: 20_000 },
       converted_to_project_id: { type: 'uuid', description: 'Het project waar dit ticket in is omgezet.', readOnly: true, nullable: true },
       // De database controleert dat het een actief teamlid is dat Tickets mag zien.
-      assignee_user_id: { type: 'uuid', description: 'Het teamlid dat het ticket oppakt: een actief teamlid dat Tickets mag zien. Leeg = niet toegewezen. De klant ziet dit niet.', nullable: true },
+      assignee_user_id: { type: 'uuid', description: 'Het teamlid dat het ticket oppakt: een actief teamlid dat Tickets mag zien. Leeg = niet toegewezen. De klant ziet in het portaal de afzendernaam van dit teamlid, nooit het e-mailadres.', nullable: true },
       created_by_name: { type: 'text', description: 'Naam van de indiener (bij een ticket uit het portaal).', readOnly: true, nullable: true },
       created_by_email: { type: 'email', description: 'E-mailadres van de indiener (bij een ticket uit het portaal).', readOnly: true, nullable: true },
       created_by: CREATED_BY,
