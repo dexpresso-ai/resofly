@@ -77,6 +77,8 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       value_eur: { type: 'number', description: 'Geschatte waarde in euro. Zonder leesrecht in Financiën: null.', minimum: 0, maximum: 9_999_999_999, module: 'finance' },
       follow_up: { type: 'date', description: 'Datum om op terug te komen.', nullable: true },
       custom_fields: { type: 'object', description: 'Eigen velden, zoals ingesteld onder Instellingen → Klanten.' },
+      // De database controleert dat het een actief teamlid is dat Klanten mag zien.
+      account_lead_user_id: { type: 'uuid', description: 'Het teamlid dat de klant beheert (accountlead): een actief teamlid dat Klanten mag zien. Leeg = geen accountlead.', nullable: true },
       created_by: CREATED_BY,
       created_at: CREATED_AT,
       updated_at: UPDATED_AT,
@@ -86,6 +88,7 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       client_kind: { column: 'client_kind', op: 'eq', type: 'enum', values: CLIENT_KINDS, description: 'Zakelijk of particulier.' },
       email: { column: 'email', op: 'eq', type: 'text', description: 'Precies dit e-mailadres (hoofdletters maken niet uit).', lowercase: true },
       e_invoicing_enabled: { column: 'e_invoicing_enabled', op: 'eq_bool', type: 'boolean', description: 'Alleen klanten met (true) of zonder (false) e-facturatie.' },
+      account_lead_user_id: { column: 'account_lead_user_id', op: 'eq', type: 'uuid', description: 'Alleen klanten met deze accountlead.' },
     },
     search: ['name', 'contact_name', 'email', 'client_code'],
     sort: ['-created_at', 'created_at', 'name', '-name', '-updated_at', 'updated_at'],
@@ -231,6 +234,8 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       client_id: { type: 'uuid', description: 'De klant.', nullable: true, references: 'clients' },
       notes: { type: 'text', description: 'Interne notities bij het ticket.', nullable: true, maxLength: 20_000 },
       converted_to_project_id: { type: 'uuid', description: 'Het project waar dit ticket in is omgezet.', readOnly: true, nullable: true },
+      // De database controleert dat het een actief teamlid is dat Tickets mag zien.
+      assignee_user_id: { type: 'uuid', description: 'Het teamlid dat het ticket oppakt: een actief teamlid dat Tickets mag zien. Leeg = niet toegewezen. De klant ziet dit niet.', nullable: true },
       created_by_name: { type: 'text', description: 'Naam van de indiener (bij een ticket uit het portaal).', readOnly: true, nullable: true },
       created_by_email: { type: 'email', description: 'E-mailadres van de indiener (bij een ticket uit het portaal).', readOnly: true, nullable: true },
       created_by: CREATED_BY,
@@ -241,6 +246,7 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       client_id: { column: 'client_id', op: 'eq', type: 'uuid', description: 'Alleen tickets van deze klant.' },
       status: { column: 'status', op: 'eq', type: 'enum', values: TICKET_STATUSES, description: 'Alleen tickets met deze status.' },
       priority: { column: 'priority', op: 'eq', type: 'enum', values: PRIORITIES, description: 'Alleen tickets met deze prioriteit.' },
+      assignee_user_id: { column: 'assignee_user_id', op: 'eq', type: 'uuid', description: 'Alleen tickets die aan dit teamlid zijn toegewezen.' },
     },
     search: ['title', 'description'],
     sort: ['-created_at', 'created_at', '-updated_at', 'updated_at', 'title'],

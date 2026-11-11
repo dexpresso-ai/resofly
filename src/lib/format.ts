@@ -1,5 +1,5 @@
-import { computeTotals, lineGross, lineNet, type MoneyTotals } from './money';
-import { ticketPriorityLabel } from './tickets';
+import { computeTotals, lineGross, lineNet, type MoneyTotals } from './money.ts';
+import { ticketPriorityLabel } from './tickets.ts';
 
 export const euro = (amount: number | null | undefined) =>
   new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(Number(amount ?? 0));

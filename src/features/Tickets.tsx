@@ -1,7 +1,7 @@
 ﻿import { useMemo, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarPlus, CircleCheck, FolderPlus, List, MoreVertical, RotateCcw, Table as TableIcon } from 'lucide-react';
-import type { AppData, Priority, Ticket, TicketStatus } from '../types';
+import type { AppData, OrganizationMember, Priority, Ticket, TicketStatus } from '../types';
 import { Button } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
@@ -13,6 +13,7 @@ import {
   canResolveTicket, isTicketArchived, sortArchivedTickets, ticketInScope, ticketResolvedAt, type TicketScope,
 } from '../lib/tickets';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
+import { holderName, matchesHolder, memberColor, memberInitials, memberShortName, membersWhoCanHold } from '../lib/members';
 
 // Om te zetten naar een project = nog actief te behandelen: dezelfde drie
 // statussen als "Openstaand" (niet afgewezen, niet omgezet en niet
@@ -51,15 +52,18 @@ type TicketActions = {
  * Een paar vragen gaan alleen over de werklijst: in het archief is alles
  * afgehandeld, niet meer om te zetten en niet ongelezen (de view ticket_unread
  * telt een afgehandeld ticket niet). Daar zouden ze altijd 0 tonen. */
-type QuickFilterKey = 'open' | 'unread' | 'high' | 'convertible' | 'noClient';
+type QuickFilterKey = 'mine' | 'unassigned' | 'open' | 'unread' | 'high' | 'convertible' | 'noClient';
 type QuickFilterDef = {
   key: QuickFilterKey;
   label: string;
   title: string;
   worklistOnly?: boolean;
-  match: (ticket: Ticket, unread: Set<string>) => boolean;
+  match: (ticket: Ticket, unread: Set<string>, currentUserId: string | null) => boolean;
 };
 const QUICK_FILTERS: QuickFilterDef[] = [
+  // Vooraan: "wat ligt er op mijn bord?" is de eerste vraag van wie de werklijst opent.
+  { key: 'mine', label: 'Aan mij', title: 'Alleen tickets die aan jou zijn toegewezen', match: (ticket, _unread, me) => matchesHolder(ticket.assignee_user_id, 'me', me) },
+  { key: 'unassigned', label: 'Niet toegewezen', title: 'Alleen tickets die nog niemand heeft opgepakt', worklistOnly: true, match: ticket => !ticket.assignee_user_id },
   { key: 'open', label: 'Openstaand', title: 'Alleen tickets die nog behandeld moeten worden', worklistOnly: true, match: ticket => openStatuses.has(ticket.status) },
   { key: 'unread', label: 'Ongelezen', title: 'Alleen tickets met iets nieuws dat je nog niet gezien hebt', worklistOnly: true, match: (ticket, unread) => unread.has(ticket.id) },
   { key: 'high', label: 'Hoge prioriteit', title: 'Alleen tickets met prioriteit hoog', match: ticket => ticket.priority === 'high' },
@@ -70,10 +74,11 @@ function quickFiltersFor(scope: TicketScope): QuickFilterDef[] {
   return scope === 'worklist' ? QUICK_FILTERS : QUICK_FILTERS.filter(def => !def.worklistOnly);
 }
 
-type TicketFilters = { query: string; status: string; priority: string; clientId: string; quick: QuickFilterKey[] };
-const emptyTicketFilters: TicketFilters = { query: '', status: '', priority: '', clientId: '', quick: [] };
+/** `assignee`: zie matchesHolder ('' = iedereen, 'me', 'none' of een user-id). */
+type TicketFilters = { query: string; status: string; priority: string; clientId: string; assignee: string; quick: QuickFilterKey[] };
+const emptyTicketFilters: TicketFilters = { query: '', status: '', priority: '', clientId: '', assignee: '', quick: [] };
 
-type SortKey = 'title' | 'client' | 'priority' | 'status' | 'created' | 'resolved';
+type SortKey = 'title' | 'client' | 'assignee' | 'priority' | 'status' | 'created' | 'resolved';
 type SortState = { key: SortKey; dir: 'asc' | 'desc' };
 /** Het archief begint bij wat het laatst is afgehandeld, de werklijst bij het nieuwste ticket. */
 function defaultSort(scope: TicketScope): SortState {
@@ -89,9 +94,10 @@ function normalize(value: string): string {
     .trim();
 }
 
-function buildTicketSearchText(ticket: Ticket, data: AppData): string {
+function buildTicketSearchText(ticket: Ticket, data: AppData, members: OrganizationMember[]): string {
   const client = data.clients.find(c => c.id === ticket.client_id) ?? null;
   const parts = [
+    ticket.assignee_user_id ? holderName(ticket.assignee_user_id, members, '') : null,
     ticket.title,
     ticket.description,
     ticket.notes,
@@ -104,11 +110,12 @@ function buildTicketSearchText(ticket: Ticket, data: AppData): string {
   return normalize(parts.filter(part => part !== null && part !== undefined).join(' '));
 }
 
-function filterTickets(tickets: Ticket[], data: AppData, filters: TicketFilters, unread: Set<string>, scope: TicketScope): Ticket[] {
+function filterTickets(tickets: Ticket[], data: AppData, filters: TicketFilters, unread: Set<string>, scope: TicketScope, members: OrganizationMember[], currentUserId: string | null): Ticket[] {
   const query = normalize(filters.query);
   const quick = quickFiltersFor(scope).filter(def => filters.quick.includes(def.key));
   return tickets.filter(ticket => {
     if (filters.clientId && ticket.client_id !== filters.clientId) return false;
+    if (!matchesHolder(ticket.assignee_user_id, filters.assignee, currentUserId)) return false;
     if (filters.priority && ticket.priority !== filters.priority) return false;
     // Het statusfilter is er alleen op de werklijst; in het archief is alles afgehandeld.
     if (scope === 'worklist') {
@@ -116,20 +123,23 @@ function filterTickets(tickets: Ticket[], data: AppData, filters: TicketFilters,
         if (!openStatuses.has(ticket.status)) return false;
       } else if (filters.status && ticket.status !== filters.status) return false;
     }
-    for (const def of quick) if (!def.match(ticket, unread)) return false;
+    for (const def of quick) if (!def.match(ticket, unread, currentUserId)) return false;
     if (!query) return true;
-    return buildTicketSearchText(ticket, data).includes(query);
+    return buildTicketSearchText(ticket, data, members).includes(query);
   });
 }
 
-function sortTickets(tickets: Ticket[], data: AppData, sort: SortState): Ticket[] {
+function sortTickets(tickets: Ticket[], data: AppData, sort: SortState, members: OrganizationMember[]): Ticket[] {
   const dir = sort.dir === 'asc' ? 1 : -1;
   const clientName = (ticket: Ticket) => data.clients.find(c => c.id === ticket.client_id)?.name ?? '';
+  // Niet toegewezen sorteert achteraan bij oplopend: "~" komt na elke letter.
+  const assigneeName = (ticket: Ticket) => ticket.assignee_user_id ? holderName(ticket.assignee_user_id, members, '') : '~';
   return [...tickets].sort((a, b) => {
     let cmp = 0;
     switch (sort.key) {
       case 'title': cmp = a.title.localeCompare(b.title, 'nl-NL'); break;
       case 'client': cmp = clientName(a).localeCompare(clientName(b), 'nl-NL'); break;
+      case 'assignee': cmp = assigneeName(a).localeCompare(assigneeName(b), 'nl-NL'); break;
       case 'priority': cmp = priorityRank[a.priority] - priorityRank[b.priority]; break;
       case 'status': cmp = STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status); break;
       case 'created': cmp = (a.created_at || '').localeCompare(b.created_at || ''); break;
@@ -141,7 +151,7 @@ function sortTickets(tickets: Ticket[], data: AppData, sort: SortState): Ticket[
   });
 }
 
-export function Tickets({ data, onNew, onEdit, onConvert, onPlan, onResolve, onReopen, unreadTicketIds }: { data: AppData; onNew: () => void; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; onPlan: (t: Ticket) => void; onResolve: (t: Ticket) => void; onReopen: (t: Ticket) => void; unreadTicketIds: Set<string> }) {
+export function Tickets({ data, onNew, onEdit, onConvert, onPlan, onResolve, onReopen, unreadTicketIds, teamMembers = [], currentUserId = null }: { data: AppData; onNew: () => void; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; onPlan: (t: Ticket) => void; onResolve: (t: Ticket) => void; onReopen: (t: Ticket) => void; unreadTicketIds: Set<string>; teamMembers?: OrganizationMember[]; currentUserId?: string | null }) {
   const [view, setView] = useState<TicketView>(() => readStoredView());
   const [scope, setScope] = useState<TicketScope>('worklist');
   const [filters, setFilters] = useState<TicketFilters>(emptyTicketFilters);
@@ -155,7 +165,7 @@ export function Tickets({ data, onNew, onEdit, onConvert, onPlan, onResolve, onR
   // Filteren gebeurt hier en niet in de tabel, zodat hetzelfde filter ook in de
   // lijstweergave werkt en een klik op een statuskaart je niet meer naar de
   // tabel hoeft te duwen om iets te doen.
-  const visible = useMemo(() => filterTickets(scopeTickets, data, filters, unreadTicketIds, scope), [scopeTickets, data, filters, unreadTicketIds, scope]);
+  const visible = useMemo(() => filterTickets(scopeTickets, data, filters, unreadTicketIds, scope, teamMembers, currentUserId), [scopeTickets, data, filters, unreadTicketIds, scope, teamMembers, currentUserId]);
   const actions: TicketActions = { onEdit, onConvert, onPlan, onResolve, onReopen };
 
   const switchView = (next: TicketView) => { setView(next); persistView(next); };
@@ -212,12 +222,12 @@ export function Tickets({ data, onNew, onEdit, onConvert, onPlan, onResolve, onR
       <p><strong>Archief</strong>: afgehandelde tickets, laatst afgehandeld bovenaan. Reageert de klant nog, dan komt het ticket vanzelf terug op de werklijst. <button type="button" className="ticket-archive-back" onClick={() => switchScope('worklist')}>Naar de werklijst</button></p>
     </div>}
 
-    <TicketFilterPanel data={data} tickets={scopeTickets} scope={scope} filters={filters} visibleCount={visible.length} onChange={setFilters} unreadTicketIds={unreadTicketIds} />
+    <TicketFilterPanel data={data} tickets={scopeTickets} scope={scope} filters={filters} visibleCount={visible.length} onChange={setFilters} unreadTicketIds={unreadTicketIds} teamMembers={teamMembers} currentUserId={currentUserId} />
 
     {view === 'list'
-      ? <TicketCardList data={data} tickets={visible} scope={scope} scopeTotal={scopeTickets.length} actions={actions} unreadTicketIds={unreadTicketIds} onReset={resetFilters} onScope={switchScope} />
+      ? <TicketCardList data={data} tickets={visible} scope={scope} scopeTotal={scopeTickets.length} actions={actions} unreadTicketIds={unreadTicketIds} onReset={resetFilters} onScope={switchScope} teamMembers={teamMembers} currentUserId={currentUserId} />
       // key: een andere lijst begint met zijn eigen sortering (zie defaultSort).
-      : <TicketTable key={scope} data={data} tickets={visible} scope={scope} scopeTotal={scopeTickets.length} actions={actions} unreadTicketIds={unreadTicketIds} onReset={resetFilters} onScope={switchScope} />}
+      : <TicketTable key={scope} data={data} tickets={visible} scope={scope} scopeTotal={scopeTickets.length} actions={actions} unreadTicketIds={unreadTicketIds} onReset={resetFilters} onScope={switchScope} teamMembers={teamMembers} currentUserId={currentUserId} />}
   </>;
 }
 
@@ -271,24 +281,36 @@ function TicketActionButtons({ ticket, actions }: { ticket: Ticket; actions: Tic
   </>;
 }
 
-type TicketListProps = { data: AppData; tickets: Ticket[]; scope: TicketScope; scopeTotal: number; actions: TicketActions; unreadTicketIds: Set<string>; onReset: () => void; onScope: (scope: TicketScope) => void };
+type TicketListProps = { data: AppData; tickets: Ticket[]; scope: TicketScope; scopeTotal: number; actions: TicketActions; unreadTicketIds: Set<string>; onReset: () => void; onScope: (scope: TicketScope) => void; teamMembers: OrganizationMember[]; currentUserId: string | null };
 
-function TicketCardList({ data, tickets, scope, scopeTotal, actions, unreadTicketIds, onReset, onScope }: TicketListProps) {
+/** Wie het ticket heeft, als avatar met naam; niets als niemand het heeft. */
+function TicketAssignee({ ticket, teamMembers, currentUserId, withName = true }: { ticket: Ticket; teamMembers: OrganizationMember[]; currentUserId: string | null; withName?: boolean }) {
+  const userId = ticket.assignee_user_id;
+  if (!userId) return null;
+  const full = holderName(userId, teamMembers, '');
+  const short = userId === currentUserId ? 'Jij' : full === 'Oud-teamlid' ? full : memberShortName(userId, teamMembers);
+  return <span className="tk-assignee" title={`Toegewezen aan ${userId === currentUserId ? 'jou' : full}`}>
+    <span className="assignee-avatar" style={{ background: memberColor(userId) }}>{memberInitials(userId, teamMembers)}</span>
+    {withName && <span className="tk-assignee-name">{short}</span>}
+  </span>;
+}
+
+function TicketCardList({ data, tickets, scope, scopeTotal, actions, unreadTicketIds, onReset, onScope, teamMembers, currentUserId }: TicketListProps) {
   if (tickets.length === 0) return <TicketEmpty scope={scope} scopeTotal={scopeTotal} hasTickets={data.tickets.length > 0} onReset={onReset} onScope={onScope} />;
   return <div className={`ticket-list${scope === 'archive' ? ' is-archive' : ''}`}>
     {tickets.map(ticket => {
       const client = data.clients.find(c => c.id === ticket.client_id);
       const isUnread = unreadTicketIds.has(ticket.id);
       return <article className={`ticket-item pri-${ticket.priority}${isUnread ? ' is-unread' : ''}`} key={ticket.id} onClick={() => actions.onEdit(ticket)}>
-        <div className="tk-body"><div className="tk-title">{ticket.title}</div><div className="tk-meta"><span>{client?.name ?? 'Geen klant'}</span><span className={`tk-pri-label ${ticket.priority}`}>{priorityLabel(ticket.priority)}</span>{isUnread && <span className="tk-new-badge">Nieuw</span>}{ticket.converted_to_project_id && <span>Project aangemaakt</span>}{isTicketArchived(ticket) && <span className="tk-resolved-on">Afgehandeld {dateNL(ticketResolvedAt(ticket))}</span>}</div></div><span className={`tk-status ${ticket.status}`}>{ticketStatusLabels[ticket.status]}</span><div className="tk-actions-btn"><TicketActionButtons ticket={ticket} actions={actions} /></div>
+        <div className="tk-body"><div className="tk-title">{ticket.title}</div><div className="tk-meta"><TicketAssignee ticket={ticket} teamMembers={teamMembers} currentUserId={currentUserId} /><span>{client?.name ?? 'Geen klant'}</span><span className={`tk-pri-label ${ticket.priority}`}>{priorityLabel(ticket.priority)}</span>{isUnread && <span className="tk-new-badge">Nieuw</span>}{ticket.converted_to_project_id && <span>Project aangemaakt</span>}{isTicketArchived(ticket) && <span className="tk-resolved-on">Afgehandeld {dateNL(ticketResolvedAt(ticket))}</span>}</div></div><span className={`tk-status ${ticket.status}`}>{ticketStatusLabels[ticket.status]}</span><div className="tk-actions-btn"><TicketActionButtons ticket={ticket} actions={actions} /></div>
       </article>;
     })}
   </div>;
 }
 
-function TicketTable({ data, tickets, scope, scopeTotal, actions, unreadTicketIds, onReset, onScope }: TicketListProps) {
+function TicketTable({ data, tickets, scope, scopeTotal, actions, unreadTicketIds, onReset, onScope, teamMembers, currentUserId }: TicketListProps) {
   const [sort, setSort] = useState<SortState>(() => defaultSort(scope));
-  const sorted = useMemo(() => sortTickets(tickets, data, sort), [tickets, data, sort]);
+  const sorted = useMemo(() => sortTickets(tickets, data, sort, teamMembers), [tickets, data, sort, teamMembers]);
   const narrow = useNarrowViewport();
   const archive = scope === 'archive';
 
@@ -297,7 +319,7 @@ function TicketTable({ data, tickets, scope, scopeTotal, actions, unreadTicketId
     : { key, dir: key === 'created' || key === 'resolved' ? 'desc' : 'asc' });
 
   const empty = <TicketEmpty scope={scope} scopeTotal={scopeTotal} hasTickets={data.tickets.length > 0} onReset={onReset} onScope={onScope} />;
-  if (narrow) return <TicketCompactTable data={data} tickets={sorted} scope={scope} sort={sort} onSort={toggleSort} actions={actions} unreadTicketIds={unreadTicketIds} empty={empty} />;
+  if (narrow) return <TicketCompactTable data={data} tickets={sorted} scope={scope} sort={sort} onSort={toggleSort} actions={actions} unreadTicketIds={unreadTicketIds} empty={empty} teamMembers={teamMembers} currentUserId={currentUserId} />;
 
   return <div className="quote-table-card ticket-table-card">
     <div className="quote-table-scroll" role="region" aria-label={archive ? 'Archief van tickets' : 'Tickets tabel'}>
@@ -306,6 +328,7 @@ function TicketTable({ data, tickets, scope, scopeTotal, actions, unreadTicketId
           <tr>
             <SortableTh label="Titel" sortKey="title" sort={sort} onSort={toggleSort} />
             <SortableTh label="Klant" sortKey="client" sort={sort} onSort={toggleSort} />
+            <SortableTh label="Toegewezen" sortKey="assignee" sort={sort} onSort={toggleSort} />
             <SortableTh label="Prioriteit" sortKey="priority" sort={sort} onSort={toggleSort} />
             {/* In het archief is de status altijd "Afgehandeld"; wanneer zegt daar meer. */}
             {archive
@@ -329,6 +352,7 @@ function TicketTable({ data, tickets, scope, scopeTotal, actions, unreadTicketId
               }}>
               <td data-label="Titel"><strong>{ticket.title}</strong>{isUnread && <span className="tk-new-badge">Nieuw</span>}</td>
               <td data-label="Klant"><span>{client?.name ?? 'Geen klant'}</span></td>
+              <td data-label="Toegewezen">{ticket.assignee_user_id ? <TicketAssignee ticket={ticket} teamMembers={teamMembers} currentUserId={currentUserId} /> : <span className="tk-unassigned">Niemand</span>}</td>
               <td data-label="Prioriteit"><span className={`tk-pri-label ${ticket.priority}`}>{priorityLabel(ticket.priority)}</span></td>
               {archive
                 ? <td data-label="Afgehandeld"><span>{dateNL(ticketResolvedAt(ticket))}</span></td>
@@ -369,7 +393,7 @@ function TicketTable({ data, tickets, scope, scopeTotal, actions, unreadTicketId
  * en de kaartstapel die daar op mobiel onder ligt, zou elke regel hier
  * moeten terugdraaien. Welke van de twee er staat, beslist
  * `useNarrowViewport` — dezelfde grens (760px) als de mobiele CSS. */
-function TicketCompactTable({ data, tickets, scope, sort, onSort, actions, unreadTicketIds, empty }: { data: AppData; tickets: Ticket[]; scope: TicketScope; sort: SortState; onSort: (key: SortKey) => void; actions: TicketActions; unreadTicketIds: Set<string>; empty: ReactNode }) {
+function TicketCompactTable({ data, tickets, scope, sort, onSort, actions, unreadTicketIds, empty, teamMembers, currentUserId }: { data: AppData; tickets: Ticket[]; scope: TicketScope; sort: SortState; onSort: (key: SortKey) => void; actions: TicketActions; unreadTicketIds: Set<string>; empty: ReactNode; teamMembers: OrganizationMember[]; currentUserId: string | null }) {
   const [actionsFor, setActionsFor] = useState<Ticket | null>(null);
   const archive = scope === 'archive';
   /** Eerst het paneel dicht, dan de actie: die opent zelf een bevestiging of een andere pagina. */
@@ -425,6 +449,7 @@ function TicketCompactTable({ data, tickets, scope, sort, onSort, actions, unrea
                 <strong>{ticket.title}</strong>
               </span>
               <span className="tk-ct-sub">
+                <TicketAssignee ticket={ticket} teamMembers={teamMembers} currentUserId={currentUserId} withName={false} />
                 <span className="tk-ct-client">{client?.name ?? 'Geen klant'}</span>
                 <span aria-hidden="true">·</span>
                 <time dateTime={when} title={archive ? `Afgehandeld ${dateNL(when)}` : dateNL(when)}>{listTime(when)}</time>
@@ -486,7 +511,7 @@ function SortableTh({ label, sortKey, sort, onSort, className }: { label: string
   </th>;
 }
 
-function TicketFilterPanel({ data, tickets, scope, filters, visibleCount, onChange, unreadTicketIds }: { data: AppData; tickets: Ticket[]; scope: TicketScope; filters: TicketFilters; visibleCount: number; onChange: (filters: TicketFilters) => void; unreadTicketIds: Set<string> }) {
+function TicketFilterPanel({ data, tickets, scope, filters, visibleCount, onChange, unreadTicketIds, teamMembers, currentUserId }: { data: AppData; tickets: Ticket[]; scope: TicketScope; filters: TicketFilters; visibleCount: number; onChange: (filters: TicketFilters) => void; unreadTicketIds: Set<string>; teamMembers: OrganizationMember[]; currentUserId: string | null }) {
   const clientOptions = useMemo(() => {
     const clientIds = new Set(tickets.map(ticket => ticket.client_id).filter(Boolean));
     return data.clients
@@ -498,10 +523,25 @@ function TicketFilterPanel({ data, tickets, scope, filters, visibleCount, onChan
       key: def.key,
       label: def.label,
       title: def.title,
-      count: tickets.filter(ticket => def.match(ticket, unreadTicketIds)).length,
+      count: tickets.filter(ticket => def.match(ticket, unreadTicketIds, currentUserId)).length,
     })),
-    [tickets, scope, unreadTicketIds],
+    [tickets, scope, unreadTicketIds, currentUserId],
   );
+  // Wie tickets kan krijgen, plus wie er nu een heeft. Meestal dezelfde mensen
+  // (de database haalt de toewijzing weg bij wie de toegang verliest), maar een
+  // teamlijst die even achterloopt mag geen tickets onvindbaar maken.
+  const assigneeOptions = useMemo(() => {
+    const holders = membersWhoCanHold(teamMembers, 'tickets').map(m => m.user_id);
+    const used = tickets.map(t => t.assignee_user_id).filter((id): id is string => Boolean(id));
+    const ids = [...new Set([...holders, ...used])].filter(id => id !== currentUserId);
+    return [
+      { value: '', label: 'Iedereen' },
+      ...(currentUserId ? [{ value: 'me', label: 'Aan mij' }] : []),
+      { value: 'none', label: 'Niet toegewezen' },
+      ...ids.map(id => ({ value: id, label: holderName(id, teamMembers, '') }))
+        .sort((a, b) => a.label.localeCompare(b.label, 'nl')),
+    ];
+  }, [teamMembers, tickets, currentUserId]);
 
   const update = (patch: Partial<TicketFilters>) => onChange({ ...filters, ...patch });
   const fields: FilterField[] = [
@@ -510,13 +550,14 @@ function TicketFilterPanel({ data, tickets, scope, filters, visibleCount, onChan
       : []),
     { key: 'priority', label: 'Prioriteit', value: filters.priority, options: [{ value: '', label: 'Alle prioriteiten' }, { value: 'high', label: 'Hoog' }, { value: 'med', label: 'Normaal' }, { value: 'low', label: 'Laag' }] },
     { key: 'clientId', label: 'Klant', value: filters.clientId, searchable: true, searchPlaceholder: 'Zoek een klant…', options: [{ value: '', label: 'Alle klanten' }, ...clientOptions.map(client => ({ value: client.id, label: client.name }))] },
+    { key: 'assignee', label: 'Toegewezen aan', value: filters.assignee, searchable: assigneeOptions.length > 8, searchPlaceholder: 'Zoek een teamlid…', options: assigneeOptions },
   ];
 
   return <SearchFilterPanel
     className="is-wide"
     ariaLabel={scope === 'archive' ? 'Archief zoeken en filteren' : 'Tickets zoeken en filteren'}
     query={filters.query}
-    queryPlaceholder={scope === 'archive' ? 'Zoek in het archief…' : 'Zoek op titel, klant, omschrijving of notitie…'}
+    queryPlaceholder={scope === 'archive' ? 'Zoek in het archief…' : 'Zoek op titel, klant, teamlid, omschrijving of notitie…'}
     onQueryChange={query => update({ query })}
     visibleCount={visibleCount}
     totalCount={tickets.length}

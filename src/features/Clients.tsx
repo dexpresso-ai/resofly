@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Archive, ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Phone, PhoneIncoming, PhoneOutgoing, Receipt, RotateCcw, Search, Send, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
-import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, FileTransferBundle, FileTransferRecipient, InternalDocument, Invoice, Note, Project, Quote, Ticket } from '../types';
+import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, FileTransferBundle, FileTransferRecipient, InternalDocument, Invoice, Note, OrganizationMember, Project, Quote, Ticket } from '../types';
+import { holderName, matchesHolder, memberColor, memberInitials, membersWhoCanHold } from '../lib/members';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, priorityLabel, total } from '../lib/format';
 import { TICKET_STATUS_LABELS, TICKET_WORKLIST_STATUSES, groupNotesByTicket, isTicketArchived, ticketLastActivity, ticketMatchesStatus, ticketResolvedAt } from '../lib/tickets';
@@ -80,6 +81,8 @@ type ClientViewMode = 'cards' | 'table';
 
 type ClientOverviewRow = {
   client: Client;
+  /** Naam van de accountlead, of leeg. Eén keer per lijst uitgerekend. */
+  leadName: string;
   noteCount: number;
   invoiceCount: number;
   quoteCount: number;
@@ -115,8 +118,9 @@ const CLIENT_QUICK_FILTERS: ClientQuickDef[] = [
   { key: 'noEmail', label: 'Zonder e-mailadres', title: 'Klanten die je niet kunt mailen omdat er geen adres bekend is', match: row => !row.client.email },
 ];
 
-type ClientFilters ={ query: string; status: string; tag: string; quick: ClientQuickKey[] };
-const emptyClientFilters: ClientFilters = { query: '', status: '', tag: '', quick: [] };
+/** `lead`: zie matchesHolder ('' = iedereen, 'me' = mijn klanten, 'none' of een user-id). */
+type ClientFilters ={ query: string; status: string; tag: string; lead: string; quick: ClientQuickKey[] };
+const emptyClientFilters: ClientFilters = { query: '', status: '', tag: '', lead: '', quick: [] };
 
 function normalizeClientSearch(value: string): string {
   return value.toLocaleLowerCase('nl-NL').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
@@ -128,16 +132,17 @@ function buildClientSearchText(row: ClientOverviewRow): string {
   const client = row.client;
   return normalizeClientSearch([
     client.name, client.client_code, client.contact_name, client.email, client.phone, client.city,
-    clientStatusLabels[client.status], (client.tags ?? []).join(' '),
+    clientStatusLabels[client.status], (client.tags ?? []).join(' '), row.leadName,
   ].filter(Boolean).join(' '));
 }
 
-function filterClientRows(rows: ClientOverviewRow[], filters: ClientFilters, unreadByClient: Record<string, number>): ClientOverviewRow[] {
+function filterClientRows(rows: ClientOverviewRow[], filters: ClientFilters, unreadByClient: Record<string, number>, currentUserId: string | null): ClientOverviewRow[] {
   const query = normalizeClientSearch(filters.query);
   const quick = CLIENT_QUICK_FILTERS.filter(def => filters.quick.includes(def.key));
   return rows.filter(row => {
     if (filters.status && row.client.status !== filters.status) return false;
     if (filters.tag && !(row.client.tags ?? []).includes(filters.tag)) return false;
+    if (!matchesHolder(row.client.account_lead_user_id, filters.lead, currentUserId)) return false;
     const unread = unreadByClient[row.client.id] ?? 0;
     for (const def of quick) if (!def.match(row, unread)) return false;
     if (!query) return true;
@@ -153,6 +158,8 @@ export function Clients({
   onOpen,
   onChanged,
   unreadByClient,
+  teamMembers = [],
+  currentUserId = null,
 }: {
   data: AppData;
   organizationId: string;
@@ -161,6 +168,9 @@ export function Clients({
   onOpen: (c: Client) => void;
   onChanged: () => void;
   unreadByClient: Record<string, number>;
+  /** Voor de naam van de accountlead en het filter erop. */
+  teamMembers?: OrganizationMember[];
+  currentUserId?: string | null;
 }) {
   const [viewMode, setViewMode] = useState<ClientViewMode>(readClientViewMode);
   const [importing, setImporting] = useState(false);
@@ -182,6 +192,7 @@ export function Clients({
 
     return {
       client,
+      leadName: client.account_lead_user_id ? holderName(client.account_lead_user_id, teamMembers, '') : '',
       noteCount: getClientNotes(data, client.id).length,
       invoiceCount: invoices.length,
       quoteCount: getClientQuotes(data, client.id).length,
@@ -189,9 +200,9 @@ export function Clients({
       openInvoiceCount: openInvoices.length,
       openInvoiceTotal: openInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0),
     };
-  }), [data]);
+  }), [data, teamMembers]);
 
-  const visibleRows = useMemo(() => filterClientRows(rows, filters, unreadByClient), [rows, filters, unreadByClient]);
+  const visibleRows = useMemo(() => filterClientRows(rows, filters, unreadByClient, currentUserId), [rows, filters, unreadByClient, currentUserId]);
 
   // De tellers staan op de volledige lijst, niet op de al gefilterde selectie:
   // een chip zegt "hoeveel klanten zijn er zo?", niet "hoeveel blijven er over".
@@ -210,9 +221,27 @@ export function Clients({
     [data.clients],
   );
 
+  // Iedereen die accountlead kan zijn, plus wie er nu op een klant staat.
+  // Meestal dezelfde mensen (de database haalt de accountlead weg bij wie de
+  // toegang verliest), maar een teamlijst die even achterloopt mag geen
+  // klanten onvindbaar maken.
+  const leadOptions = useMemo(() => {
+    const holders = membersWhoCanHold(teamMembers, 'clients').map(m => m.user_id);
+    const used = data.clients.map(c => c.account_lead_user_id).filter((id): id is string => Boolean(id));
+    const ids = [...new Set([...holders, ...used])].filter(id => id !== currentUserId);
+    return [
+      { value: '', label: 'Alle accountleads' },
+      ...(currentUserId ? [{ value: 'me', label: 'Mijn klanten' }] : []),
+      { value: 'none', label: 'Zonder accountlead' },
+      ...ids.map(id => ({ value: id, label: holderName(id, teamMembers, '') }))
+        .sort((a, b) => a.label.localeCompare(b.label, 'nl')),
+    ];
+  }, [teamMembers, data.clients, currentUserId]);
+
   const clientFields: FilterField[] = [
     { key: 'status', label: 'Status', value: filters.status, options: [{ value: '', label: 'Alle statussen' }, ...(['active', 'prospect', 'inactive'] as ClientStatus[]).map(status => ({ value: status, label: clientStatusLabels[status] }))] },
     { key: 'tag', label: 'Label', value: filters.tag, searchPlaceholder: 'Zoek een label…', options: [{ value: '', label: 'Alle labels' }, ...clientTags.map(tag => ({ value: tag, label: tag }))] },
+    { key: 'lead', label: 'Accountlead', value: filters.lead, searchPlaceholder: 'Zoek een teamlid…', options: leadOptions },
   ];
 
   // Alleen de vrije velden die als kolom gemarkeerd zijn; de rest zou de tabel
@@ -313,13 +342,13 @@ export function Clients({
         <button type="button" onClick={() => setFilters(emptyClientFilters)}><RotateCcw size={14}/> Filters wissen</button>
       </div>}
 
-      {visibleRows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={visibleRows} onOpen={onOpen} unreadByClient={unreadByClient} />}
+      {visibleRows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={visibleRows} onOpen={onOpen} unreadByClient={unreadByClient} teamMembers={teamMembers} />}
       {visibleRows.length > 0 && viewMode === 'table' && <ClientTable rows={visibleRows} onOpen={onOpen} unreadByClient={unreadByClient} listFields={listFields} />}
     </>}
   </div>;
 }
 
-function ClientCardGrid({ rows, onOpen, unreadByClient }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void; unreadByClient: Record<string, number> }) {
+function ClientCardGrid({ rows, onOpen, unreadByClient, teamMembers }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void; unreadByClient: Record<string, number>; teamMembers: OrganizationMember[] }) {
   return <div className="clients-grid">
     {rows.map(row => {
       const { client } = row;
@@ -340,6 +369,10 @@ function ClientCardGrid({ rows, onOpen, unreadByClient }: { rows: ClientOverview
           <span>{row.invoiceCount} factu{row.invoiceCount === 1 ? 'ur' : 'ren'}</span>
         </div>
         <div className="cc-note-count">📝 {row.noteCount} notitie{row.noteCount === 1 ? '' : 's'}</div>
+        {client.account_lead_user_id && <div className="cc-lead" title={`Accountlead: ${row.leadName}`}>
+          <span className="assignee-avatar" style={{ background: memberColor(client.account_lead_user_id) }}>{memberInitials(client.account_lead_user_id, teamMembers)}</span>
+          <span>{row.leadName}</span>
+        </div>}
         <div className="cd-tags">{client.tags?.map(tag => <span className="cd-tag" key={tag}>{tag}</span>)}</div>
       </article>;
     })}
@@ -361,6 +394,7 @@ function ClientTable({ rows, onOpen, unreadByClient, listFields }: {
             <th>Klant</th>
             <th>Contact</th>
             <th>Status</th>
+            <th>Accountlead</th>
             <th className="number">Offertes</th>
             <th className="number">Facturen</th>
             <th className="money">Openstaand</th>
@@ -394,6 +428,7 @@ function ClientTable({ rows, onOpen, unreadByClient, listFields }: {
               </td>
               <td><span>{client.contact_name || client.email || '—'}</span></td>
               <td><span className={`client-status-pill ${client.status}`}>{clientStatusLabels[client.status] ?? client.status}</span></td>
+              <td>{row.leadName || '—'}</td>
               <td className="number">{row.quoteCount}</td>
               <td className="number">
                 <span className="client-table-finance-count">{row.invoiceCount}</span>
@@ -453,6 +488,7 @@ export function ClientDetailPage({
   canWriteCalendar = false,
   onOpenBookingLink,
   onNewBookingLink,
+  teamMembers = [],
 }: {
   data: AppData;
   client: Client;
@@ -488,6 +524,8 @@ export function ClientDetailPage({
   onOpenBookingLink?: (linkId: string) => void;
   /** Naar Agenda → Boekingslinks, met een nieuwe link voor deze klant. */
   onNewBookingLink?: () => void;
+  /** Voor de naam van de accountlead. */
+  teamMembers?: OrganizationMember[];
 }) {
   const projects = data.projects.filter(project => project.client_id === client.id);
   // Het eigen inlogadres van het portaal: daar staat het inlogscherm meteen in
@@ -697,6 +735,7 @@ export function ClientDetailPage({
           <div className="client-panel-head"><h3>Klantgegevens</h3></div>
           <dl className="client-info-list">
             <div><dt>Contactpersoon</dt><dd>{client.contact_name || '—'}</dd></div>
+            <div><dt>Accountlead</dt><dd>{holderName(client.account_lead_user_id, teamMembers, 'Nog niemand')}</dd></div>
             <div><dt>E-mail</dt><dd>{client.email || '—'}</dd></div>
             <div><dt>Telefoon</dt><dd>{clientTelHref
               ? <a

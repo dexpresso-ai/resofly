@@ -846,6 +846,15 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .related-note-item p{font-size:11px;color:var(--muted2);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .note-created-meta{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--muted);border:1px solid var(--border);background:var(--bg3);border-radius:8px;padding:9px 11px}
 .cc-note-count{font-size:11px;color:var(--muted2);margin-top:9px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));border:1px solid var(--border);display:inline-flex;border-radius:999px;padding:3px 8px}
+/* Accountlead op de klantkaart: dezelfde avatar als bij taken, zodat je een collega overal herkent. */
+.cc-lead{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:var(--muted2);min-width:0}
+.cc-lead>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Behandelaar van een ticket: avatar met korte naam in de lijst en de tabel, alleen de avatar op de telefoon. */
+.tk-assignee{display:inline-flex;align-items:center;gap:5px;min-width:0;color:var(--muted2)}
+.tk-assignee .assignee-avatar{margin-left:0}
+.tk-assignee-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:14ch}
+.tk-unassigned{color:var(--muted)}
+.tk-ct-sub .tk-assignee .assignee-avatar{width:16px;height:16px;font-size:8px}
 .proj-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 
 @media(max-width:900px){

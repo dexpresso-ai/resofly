@@ -30,9 +30,10 @@ export const EXPORT_FORMAT_VERSION = 1;
  * De test faalt zodra er een nieuwere migratie is: kijk dan of er tabellen of
  * kolommen bij kwamen, en zet het nummer hier op de nieuwste.
  */
-// 20261111140000 (het logboek alleen voor owners en admins) zet alleen een
-// leesregel en een tabelcommentaar: geen tabellen of kolommen erbij.
-export const EXPORT_SCHEMA_VERSION = '20261111140000';
+// 20261111160000 zet twee kolommen bij in tabellen die al meegaan:
+// clients.account_lead_user_id en tickets.assignee_user_id. Geen geheim, geen
+// opslagsleutel; ze gaan gewoon mee met klanten en tickets.
+export const EXPORT_SCHEMA_VERSION = '20261111160000';
 
 export type TableKind =
   | 'export'

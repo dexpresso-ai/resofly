@@ -56,12 +56,14 @@ export interface RecordField {
   values?: readonly string[];
   /** Bedrag dat bij Financiën hoort: leeg zonder leesrecht daar. */
   finance?: boolean;
+  /** Hoort bij Klanten (de accountlead op een factuur of ticket): leeg zonder leesrecht daar. */
+  clients?: boolean;
 }
 
 type Row = Record<string, unknown>;
 type LookupKey = 'clients' | 'projects' | 'suppliers' | 'members' | 'accounts' | 'bankAccounts' | 'invoices';
 interface Lookups {
-  clients: Map<string, { name: string }>;
+  clients: Map<string, { name: string; lead: string | null }>;
   projects: Map<string, { name: string; client_id: string | null; hourly_rate_cents: number | null }>;
   suppliers: Map<string, { name: string }>;
   members: Map<string, { email: string }>;
@@ -69,7 +71,7 @@ interface Lookups {
   bankAccounts: Map<string, { name: string }>;
   invoices: Map<string, { number: string; client_id: string | null }>;
 }
-interface MapCtx { today: string; seeFinance: boolean }
+interface MapCtx { today: string; seeFinance: boolean; seeClients: boolean }
 
 interface DateField { column: string; kind: 'date' | 'timestamp' }
 interface SourceSpec {
@@ -150,27 +152,47 @@ function nameOf(map: Map<string, { name: string }>, id: unknown): string | null 
   const key = str(id);
   return key ? map.get(key)?.name ?? null : null;
 }
+function memberEmail(lk: Lookups, userId: unknown): string | null {
+  const key = str(userId);
+  return key ? lk.members.get(key)?.email || null : null;
+}
+/**
+ * De accountlead van de klant bij een factuur, offerte, project of ticket. Leeg
+ * voor wie Klanten niet mag lezen: wie welke klant beheert, is klantinformatie
+ * (modulerechten gelden overal), ook als de factuur zelf wel zichtbaar is.
+ */
+function leadOf(lk: Lookups, ctx: MapCtx, clientId: unknown): { account_lead_id: string | null; account_lead: string | null } {
+  const key = str(clientId);
+  const lead = key && ctx.seeClients ? lk.clients.get(key)?.lead ?? null : null;
+  return { account_lead_id: lead, account_lead: memberEmail(lk, lead) };
+}
 
 // ── De bronnen ──────────────────────────────────────────────────────────────
 
 const ID = (key: string, label: string): RecordField => ({ key, label, type: 'id' });
+/** Accountlead van de klant: id om op te filteren, e-mailadres om te tonen. */
+const LEAD_FIELDS: RecordField[] = [
+  { key: 'account_lead_id', label: 'Accountlead-id', type: 'id', clients: true },
+  { key: 'account_lead', label: 'Accountlead', type: 'text', clients: true },
+];
+const LEAD_ABOUT = ' account_lead is het teamlid dat de klant beheert (e-mailadres; account_lead_id om op te filteren); leeg = geen accountlead.';
 const INVOICE_STATUSES = ['draft', 'sent', 'overdue', 'paid', 'cancelled', 'void', 'written_off', 'refunded'] as const;
 const QUOTE_STATUSES = ['draft', 'pending_internal_approval', 'internally_approved', 'sent', 'accepted', 'rejected', 'expired', 'paid', 'overdue', 'cancelled'] as const;
 
 const SOURCES: SourceSpec[] = [
   {
     key: 'invoices', label: 'Facturen', module: 'finance', table: 'invoices',
-    about: 'Verkoopfacturen. Omzet = som van subtotal_eur (excl. btw) van facturen met status sent, overdue of paid; concepten (draft) en geannuleerde/vervallen facturen tellen niet mee. Trek uitgegeven creditnota\'s (bron credit_notes) daar vanaf. Openstaand = is_open (verstuurd, nog niet betaald).',
+    about: 'Verkoopfacturen. Omzet = som van subtotal_eur (excl. btw) van facturen met status sent, overdue of paid; concepten (draft) en geannuleerde/vervallen facturen tellen niet mee. Trek uitgegeven creditnota\'s (bron credit_notes) daar vanaf. Openstaand = is_open (verstuurd, nog niet betaald).' + LEAD_ABOUT,
     select: 'id, number, status, date, due_date, client_id, project_id, lines, subtotal_amount, vat_amount, total_amount, sent_at, paid_at, refunded_amount',
     dateFields: { date: { column: 'date', kind: 'date' }, due_date: { column: 'due_date', kind: 'date' }, paid_date: { column: 'paid_at', kind: 'timestamp' }, sent_date: { column: 'sent_at', kind: 'timestamp' } },
     sqlColumns: { status: 'status', client_id: 'client_id', project_id: 'project_id', number: 'number' },
-    lookups: ['clients', 'projects'],
+    lookups: ['clients', 'projects', 'members'],
     fields: [
       ID('id', 'Id'), { key: 'number', label: 'Factuurnummer', type: 'text' },
       { key: 'status', label: 'Status', type: 'text', values: INVOICE_STATUSES },
       { key: 'date', label: 'Factuurdatum', type: 'date' }, { key: 'due_date', label: 'Vervaldatum', type: 'date' },
       { key: 'sent_date', label: 'Verstuurd op', type: 'date' }, { key: 'paid_date', label: 'Betaald op', type: 'date' },
-      ID('client_id', 'Klant-id'), { key: 'client_name', label: 'Klant', type: 'text' },
+      ID('client_id', 'Klant-id'), { key: 'client_name', label: 'Klant', type: 'text' }, ...LEAD_FIELDS,
       ID('project_id', 'Project-id'), { key: 'project_name', label: 'Project', type: 'text' },
       { key: 'subtotal_eur', label: 'Bedrag excl. btw', type: 'money' }, { key: 'vat_eur', label: 'Btw', type: 'money' },
       { key: 'total_eur', label: 'Bedrag incl. btw', type: 'money' }, { key: 'refunded_eur', label: 'Terugbetaald', type: 'money' },
@@ -189,7 +211,7 @@ const SOURCES: SourceSpec[] = [
       return {
         id: r.id, number: str(r.number), status: str(r.status), date, due_date: due,
         sent_date: amsterdamDay(r.sent_at), paid_date: paid,
-        client_id: str(r.client_id), client_name: nameOf(lk.clients, r.client_id),
+        client_id: str(r.client_id), client_name: nameOf(lk.clients, r.client_id), ...leadOf(lk, ctx, r.client_id),
         project_id: str(r.project_id), project_name: project?.name ?? null,
         subtotal_eur: amounts.subtotal, vat_eur: amounts.vat, total_eur: amounts.total,
         refunded_eur: money(num(r.refunded_amount)),
@@ -225,18 +247,18 @@ const SOURCES: SourceSpec[] = [
   },
   {
     key: 'quotes', label: 'Offertes', module: 'finance', table: 'quotes',
-    about: 'Offertes. Conversie = aantal accepted gedeeld door het aantal dat een beslissing kreeg (accepted + rejected + expired). Bedragen komen uit de offerteregels.',
+    about: 'Offertes. Conversie = aantal accepted gedeeld door het aantal dat een beslissing kreeg (accepted + rejected + expired). Bedragen komen uit de offerteregels.' + LEAD_ABOUT,
     select: 'id, number, status, date, valid_until, client_id, project_id, lines, sent_at, accepted_at, client_decision_at',
     dateFields: { date: { column: 'date', kind: 'date' }, valid_until: { column: 'valid_until', kind: 'date' }, sent_date: { column: 'sent_at', kind: 'timestamp' }, accepted_date: { column: 'accepted_at', kind: 'timestamp' } },
     sqlColumns: { status: 'status', client_id: 'client_id', project_id: 'project_id' },
-    lookups: ['clients', 'projects'],
+    lookups: ['clients', 'projects', 'members'],
     fields: [
       ID('id', 'Id'), { key: 'number', label: 'Offertenummer', type: 'text' },
       { key: 'status', label: 'Status', type: 'text', values: QUOTE_STATUSES },
       { key: 'date', label: 'Offertedatum', type: 'date' }, { key: 'valid_until', label: 'Geldig tot', type: 'date' },
       { key: 'sent_date', label: 'Verstuurd op', type: 'date' }, { key: 'accepted_date', label: 'Geaccepteerd op', type: 'date' },
       { key: 'decision_date', label: 'Beslist op', type: 'date' },
-      ID('client_id', 'Klant-id'), { key: 'client_name', label: 'Klant', type: 'text' },
+      ID('client_id', 'Klant-id'), { key: 'client_name', label: 'Klant', type: 'text' }, ...LEAD_FIELDS,
       ID('project_id', 'Project-id'), { key: 'project_name', label: 'Project', type: 'text' },
       { key: 'subtotal_eur', label: 'Bedrag excl. btw', type: 'money' }, { key: 'vat_eur', label: 'Btw', type: 'money' }, { key: 'total_eur', label: 'Bedrag incl. btw', type: 'money' },
       { key: 'is_sent', label: 'Verstuurd', type: 'boolean' }, { key: 'is_expired', label: 'Verlopen', type: 'boolean' },
@@ -248,7 +270,7 @@ const SOURCES: SourceSpec[] = [
       return {
         id: r.id, number: str(r.number), status: str(r.status), date: str(r.date), valid_until: validUntil,
         sent_date: amsterdamDay(r.sent_at), accepted_date: amsterdamDay(r.accepted_at), decision_date: amsterdamDay(r.client_decision_at),
-        client_id: str(r.client_id), client_name: nameOf(lk.clients, r.client_id),
+        client_id: str(r.client_id), client_name: nameOf(lk.clients, r.client_id), ...leadOf(lk, ctx, r.client_id),
         project_id: str(r.project_id), project_name: str(r.project_id) ? lk.projects.get(String(r.project_id))?.name ?? null : null,
         subtotal_eur: t.subtotal, vat_eur: t.vat, total_eur: t.total,
         is_sent: Boolean(r.sent_at),
@@ -289,11 +311,11 @@ const SOURCES: SourceSpec[] = [
   },
   {
     key: 'clients', label: 'Klanten', module: 'clients', table: 'clients',
-    about: 'Klanten en prospects. value_eur (geschatte klantwaarde) is leeg zonder leesrecht op Financiën.',
-    select: 'id, name, client_code, status, client_kind, city, country, tags, follow_up, value_eur, created_at',
+    about: 'Klanten en prospects. value_eur (geschatte klantwaarde) is leeg zonder leesrecht op Financiën.' + LEAD_ABOUT,
+    select: 'id, name, client_code, status, client_kind, city, country, tags, follow_up, value_eur, created_at, account_lead_user_id',
     dateFields: { created_date: { column: 'created_at', kind: 'timestamp' }, follow_up: { column: 'follow_up', kind: 'date' } },
-    sqlColumns: { status: 'status', client_kind: 'client_kind', id: 'id' },
-    lookups: [],
+    sqlColumns: { status: 'status', client_kind: 'client_kind', id: 'id', account_lead_id: 'account_lead_user_id' },
+    lookups: ['members'],
     fields: [
       ID('id', 'Id'), { key: 'name', label: 'Naam', type: 'text' }, { key: 'client_code', label: 'Klantnummer', type: 'text' },
       { key: 'status', label: 'Status', type: 'text', values: ['active', 'prospect', 'inactive'] },
@@ -301,8 +323,10 @@ const SOURCES: SourceSpec[] = [
       { key: 'city', label: 'Plaats', type: 'text' }, { key: 'country', label: 'Land', type: 'text' }, { key: 'tags', label: 'Labels', type: 'list' },
       { key: 'created_date', label: 'Aangemaakt op', type: 'date' }, { key: 'follow_up', label: 'Opvolgen op', type: 'date' },
       { key: 'value_eur', label: 'Klantwaarde', type: 'money', finance: true },
+      ...LEAD_FIELDS,
     ],
-    map: (r, _lk, ctx) => ({
+    map: (r, lk, ctx) => ({
+      account_lead_id: str(r.account_lead_user_id), account_lead: memberEmail(lk, r.account_lead_user_id),
       id: r.id, name: str(r.name), client_code: str(r.client_code), status: str(r.status), client_kind: str(r.client_kind),
       city: str(r.city), country: str(r.country), tags: Array.isArray(r.tags) ? r.tags.map(String) : [],
       created_date: amsterdamDay(r.created_at), follow_up: str(r.follow_up),
@@ -311,20 +335,20 @@ const SOURCES: SourceSpec[] = [
   },
   {
     key: 'projects', label: 'Projecten', module: 'projects', table: 'projects',
-    about: 'Projecten. budgeted_hours is het urenbudget; zet het naast bron time_entries (hours per project_id) voor budgetbewaking. hourly_rate_eur is leeg zonder leesrecht op Financiën.',
+    about: 'Projecten. budgeted_hours is het urenbudget; zet het naast bron time_entries (hours per project_id) voor budgetbewaking. hourly_rate_eur is leeg zonder leesrecht op Financiën.' + LEAD_ABOUT,
     select: 'id, name, client_id, archived, start_date, end_date, billing_type, budgeted_minutes, hourly_rate_cents, created_at',
     dateFields: { created_date: { column: 'created_at', kind: 'timestamp' }, start_date: { column: 'start_date', kind: 'date' }, end_date: { column: 'end_date', kind: 'date' } },
     sqlColumns: { id: 'id', client_id: 'client_id', archived: 'archived', billing_type: 'billing_type' },
-    lookups: ['clients'],
+    lookups: ['clients', 'members'],
     fields: [
-      ID('id', 'Id'), { key: 'name', label: 'Project', type: 'text' }, ID('client_id', 'Klant-id'), { key: 'client_name', label: 'Klant', type: 'text' },
+      ID('id', 'Id'), { key: 'name', label: 'Project', type: 'text' }, ID('client_id', 'Klant-id'), { key: 'client_name', label: 'Klant', type: 'text' }, ...LEAD_FIELDS,
       { key: 'archived', label: 'Gearchiveerd', type: 'boolean' }, { key: 'start_date', label: 'Start', type: 'date' }, { key: 'end_date', label: 'Einde', type: 'date' },
       { key: 'billing_type', label: 'Facturering', type: 'text', values: ['hourly', 'fixed_price'] },
       { key: 'budgeted_hours', label: 'Urenbudget', type: 'number' }, { key: 'hourly_rate_eur', label: 'Uurtarief', type: 'money', finance: true },
       { key: 'created_date', label: 'Aangemaakt op', type: 'date' },
     ],
     map: (r, lk, ctx) => ({
-      id: r.id, name: str(r.name), client_id: str(r.client_id), client_name: nameOf(lk.clients, r.client_id),
+      id: r.id, name: str(r.name), client_id: str(r.client_id), client_name: nameOf(lk.clients, r.client_id), ...leadOf(lk, ctx, r.client_id),
       archived: Boolean(r.archived), start_date: str(r.start_date), end_date: str(r.end_date), billing_type: str(r.billing_type),
       budgeted_hours: r.budgeted_minutes == null ? null : Math.round((num(r.budgeted_minutes) / 60) * 100) / 100,
       hourly_rate_eur: ctx.seeFinance && r.hourly_rate_cents != null ? cents(r.hourly_rate_cents) : null,
@@ -369,25 +393,27 @@ const SOURCES: SourceSpec[] = [
   },
   {
     key: 'tickets', label: 'Tickets', module: 'tickets', table: 'tickets',
-    about: 'Meldingen en supportvragen. Afgehandeld = status resolved; open = is_open. hours_to_resolve is de doorlooptijd van afgehandelde tickets.',
-    select: 'id, title, status, priority, client_id, created_at, resolved_at',
+    about: 'Meldingen en supportvragen. Afgehandeld = status resolved; open = is_open. hours_to_resolve is de doorlooptijd van afgehandelde tickets. assignee is het teamlid aan wie het ticket is toegewezen (e-mailadres; assignee_id om op te filteren); leeg = niet toegewezen.' + LEAD_ABOUT,
+    select: 'id, title, status, priority, client_id, created_at, resolved_at, assignee_user_id',
     dateFields: { created_date: { column: 'created_at', kind: 'timestamp' }, resolved_date: { column: 'resolved_at', kind: 'timestamp' } },
-    sqlColumns: { status: 'status', priority: 'priority', client_id: 'client_id' },
-    lookups: ['clients'],
+    sqlColumns: { status: 'status', priority: 'priority', client_id: 'client_id', assignee_id: 'assignee_user_id' },
+    lookups: ['clients', 'members'],
     fields: [
       ID('id', 'Id'), { key: 'title', label: 'Ticket', type: 'text' },
       { key: 'status', label: 'Status', type: 'text', values: ['new', 'review', 'approved', 'rejected', 'converted', 'resolved'] },
       { key: 'priority', label: 'Prioriteit', type: 'text', values: ['low', 'med', 'high'] },
-      ID('client_id', 'Klant-id'), { key: 'client_name', label: 'Klant', type: 'text' },
+      ID('assignee_id', 'Toegewezen-id'), { key: 'assignee', label: 'Toegewezen aan', type: 'text' },
+      ID('client_id', 'Klant-id'), { key: 'client_name', label: 'Klant', type: 'text' }, ...LEAD_FIELDS,
       { key: 'created_date', label: 'Gemeld op', type: 'date' }, { key: 'resolved_date', label: 'Afgehandeld op', type: 'date' },
       { key: 'is_open', label: 'Open', type: 'boolean' }, { key: 'hours_to_resolve', label: 'Doorlooptijd in uren', type: 'number' },
     ],
-    map: (r, lk) => {
+    map: (r, lk, ctx) => {
       const created = Date.parse(String(r.created_at ?? ''));
       const resolved = Date.parse(String(r.resolved_at ?? ''));
       return {
         id: r.id, title: str(r.title), status: str(r.status), priority: str(r.priority),
-        client_id: str(r.client_id), client_name: nameOf(lk.clients, r.client_id),
+        assignee_id: str(r.assignee_user_id), assignee: memberEmail(lk, r.assignee_user_id),
+        client_id: str(r.client_id), client_name: nameOf(lk.clients, r.client_id), ...leadOf(lk, ctx, r.client_id),
         created_date: amsterdamDay(r.created_at), resolved_date: amsterdamDay(r.resolved_at),
         is_open: !['resolved', 'rejected', 'converted'].includes(String(r.status)),
         hours_to_resolve: Number.isFinite(created) && Number.isFinite(resolved) ? Math.round(((resolved - created) / 3_600_000) * 10) / 10 : null,
@@ -727,7 +753,9 @@ async function loadLookups(ctx: RecordsCtx, keys: LookupKey[]): Promise<Lookups>
     (await fetchAll(() => ctx.db.from(table).select(columns).eq('organization_id', org).order('id', { ascending: true }), MAX_SCAN_ROWS)).rows;
   const tasks: Array<Promise<void>> = [];
   const want = new Set(keys);
-  if (want.has('clients')) tasks.push(list('clients', 'id, name').then((rows) => { for (const r of rows) lk.clients.set(String(r.id), { name: String(r.name ?? '') }); }));
+  if (want.has('clients')) tasks.push(list('clients', 'id, name, account_lead_user_id').then((rows) => {
+    for (const r of rows) lk.clients.set(String(r.id), { name: String(r.name ?? ''), lead: str(r.account_lead_user_id) });
+  }));
   if (want.has('projects')) tasks.push(list('projects', 'id, name, client_id, hourly_rate_cents').then((rows) => {
     for (const r of rows) lk.projects.set(String(r.id), { name: String(r.name ?? ''), client_id: str(r.client_id), hourly_rate_cents: numOrNull(r.hourly_rate_cents) });
   }));
@@ -884,6 +912,7 @@ export async function runRecordsQuery(ctx: RecordsCtx, raw: unknown): Promise<Re
     throw new RecordsQueryError(`Je hebt geen toegang tot de gegevens van ${source.label.toLowerCase()} (module ${source.module}).`);
   }
   const seeFinance = ctx.canRead('finance');
+  const seeClients = ctx.canRead('clients');
   const pushdown = (query: Query): Query => {
     let next = query;
     if (q.dateField) {
@@ -914,7 +943,7 @@ export async function runRecordsQuery(ctx: RecordsCtx, raw: unknown): Promise<Re
     loadLookups(ctx, source.lookups),
   ]);
 
-  const mapCtx: MapCtx = { today: ctx.today, seeFinance };
+  const mapCtx: MapCtx = { today: ctx.today, seeFinance, seeClients };
   let records = rawRows.map((r) => source.map(r, lookups, mapCtx));
   for (const f of q.filters) records = records.filter((r) => matches(r[f.field], f));
 
@@ -930,6 +959,8 @@ export async function runRecordsQuery(ctx: RecordsCtx, raw: unknown): Promise<Re
   if (truncated) out.note = `Er zijn meer dan ${MAX_SCAN_ROWS.toLocaleString('nl-NL')} regels; alleen de eerste ${MAX_SCAN_ROWS.toLocaleString('nl-NL')} zijn meegeteld. Kies een kortere periode of een strenger filter.`;
   const hidden = source.fields.filter((f) => f.finance && !seeFinance).map((f) => f.key);
   if (hidden.length) out.note = [out.note, `Zonder leesrecht op Financiën blijven ${hidden.join(', ')} leeg.`].filter(Boolean).join(' ');
+  const hiddenClients = source.fields.filter((f) => f.clients && !seeClients).map((f) => f.key);
+  if (hiddenClients.length) out.note = [out.note, `Zonder leesrecht op Klanten blijven ${hiddenClients.join(', ')} leeg.`].filter(Boolean).join(' ');
 
   if (q.groupBy.length === 0 && q.measures.length === 0) {
     const keys = q.fields ?? source.fields.map((f) => f.key);

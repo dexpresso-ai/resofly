@@ -9,8 +9,9 @@
 // Bedragen worden overal genormaliseerd naar euro's en cent-exact berekend via
 // de centrale geldmodule (`total`), identiek aan Financiën/Dashboard.
 // ───────────────────────────────────────────────────────────────────────────
-import type { AppData } from '../types';
-import { euro, total } from './format';
+import type { AppData, OrganizationMember } from '../types';
+import { euro, total } from './format.ts';
+import { holderName, matchesHolder } from './members.ts';
 
 export type ReportSourceKey =
   | 'invoices' | 'quotes' | 'purchase_invoices' | 'clients' | 'projects' | 'tasks' | 'tickets';
@@ -21,10 +22,28 @@ export type ChartType = 'table' | 'bar' | 'line' | 'pie' | 'kpi';
 export type FieldType = 'string' | 'number' | 'money' | 'date' | 'enum';
 export type DateRangePreset = 'all' | 'this_month' | 'last_month' | 'this_quarter' | 'this_year' | 'last_12m';
 
-export interface Lookups {
+/** Wat een teamlidveld nodig heeft; los van AppData, zodat ook een voorstelkaart zonder gegevens het kan. */
+export interface MemberLookups {
+  /** Naam van een teamlid; `emptyLabel` als er niemand is, "Oud-teamlid" als hij er niet meer is. */
+  memberName: (id: string | null | undefined, emptyLabel: string) => string;
+  /** Wie het rapport bekijkt: het filter "ik" rekent hiermee. */
+  currentUserId: string | null;
+  /** De teamleden waarop je kunt filteren. */
+  members: OrganizationMember[];
+}
+
+export interface Lookups extends MemberLookups {
   clientName: (id: string | null | undefined) => string;
   projectName: (id: string | null | undefined) => string;
   supplierName: (id: string | null | undefined) => string;
+  /** User-id van de accountlead van een klant, of null. */
+  clientLead: (clientId: string | null | undefined) => string | null;
+}
+
+/** Wie er kijkt en wie er in het team zit. Zonder dit tellen teamleden als "Oud-teamlid". */
+export interface ReportContext {
+  members?: OrganizationMember[];
+  currentUserId?: string | null;
 }
 
 export interface ReportField<T = unknown> {
@@ -34,6 +53,10 @@ export interface ReportField<T = unknown> {
   role: 'dimension' | 'measure';
   enumValues?: { value: string; label: string }[];
   get: (row: T, lk: Lookups) => unknown;
+  /** Filterkeuzes die niet vastliggen, zoals de teamleden. Een veld met dit of met enumValues is filterbaar. */
+  filterOptions?: (lk: MemberLookups) => { value: string; label: string }[];
+  /** Eigen filtervergelijking. Standaard: de tekst van `get` is gelijk aan de filterwaarde. */
+  matches?: (row: T, value: string, lk: Lookups) => boolean;
 }
 
 export interface ReportSourceDef<T = unknown> {
@@ -168,25 +191,37 @@ function aggregate(agg: Aggregation, values: number[]): number {
   }
 }
 
-function buildLookups(data: AppData): Lookups {
+export function memberLookups(ctx: ReportContext = {}): MemberLookups {
+  const members = ctx.members ?? [];
+  return {
+    memberName: (id, emptyLabel) => holderName(id, members, emptyLabel),
+    currentUserId: ctx.currentUserId ?? null,
+    members,
+  };
+}
+
+function buildLookups(data: AppData, ctx: ReportContext): Lookups {
   const clients = new Map(data.clients.map(c => [c.id, c.name]));
+  const leads = new Map(data.clients.map(c => [c.id, c.account_lead_user_id ?? null]));
   const projects = new Map(data.projects.map(p => [p.id, p.name]));
   const suppliers = new Map(data.suppliers.map(s => [s.id, s.name]));
   return {
+    ...memberLookups(ctx),
     clientName: id => (id ? clients.get(id) ?? 'Onbekende klant' : 'Geen klant'),
     projectName: id => (id ? projects.get(id) ?? 'Onbekend project' : 'Geen project'),
     supplierName: id => (id ? suppliers.get(id) ?? 'Onbekende leverancier' : 'Geen leverancier'),
+    clientLead: id => (id ? leads.get(id) ?? null : null),
   };
 }
 
 // ── De engine ───────────────────────────────────────────────────────────────
 const EMPTY_RESULT: ReportResult = { rows: [], measureLabel: 'Aantal', measureType: 'number', dimensionLabel: null, total: 0, groupCount: 0, rowCount: 0 };
 
-export function runReport(def: ReportDefinition, data: AppData): ReportResult {
+export function runReport(def: ReportDefinition, data: AppData, ctx: ReportContext = {}): ReportResult {
   const source = (def && REPORT_SOURCES[def.source]) as ReportSourceDef | undefined;
   // Bescherm tegen een onvolledige/legacy opgeslagen definitie: nooit crashen.
   if (!source || !def.measure) return EMPTY_RESULT;
-  const lk = buildLookups(data);
+  const lk = buildLookups(data, ctx);
   let rows = source.rows(data);
 
   // 1 — Periodefilter.
@@ -201,12 +236,14 @@ export function runReport(def: ReportDefinition, data: AppData): ReportResult {
     }
   }
 
-  // 2 — Enum-filters.
+  // 2 — Filters (vaste keuzes en teamleden).
   for (const filter of def.filters ?? []) {
     if (!filter.value) continue;
     const field = source.fields.find(f => f.key === filter.field);
     if (!field) continue;
-    rows = rows.filter(r => String(field.get(r, lk) ?? '') === filter.value);
+    rows = rows.filter(r => (field.matches
+      ? field.matches(r, filter.value, lk)
+      : String(field.get(r, lk) ?? '') === filter.value));
   }
 
   const measureField = def.measure.agg === 'count' ? null : source.fields.find(f => f.key === def.measure.field) ?? null;
@@ -292,15 +329,49 @@ const ENUMS = {
   priority: [
     { value: 'high', label: 'Hoog' }, { value: 'med', label: 'Normaal' }, { value: 'low', label: 'Laag' },
   ],
+  yesNo: [
+    { value: 'yes', label: 'Ja' }, { value: 'no', label: 'Nee' },
+  ],
 } as const;
 
+/** Gelijk aan TICKET_OPEN_STATUSES in tickets.ts: nieuw, in behandeling en goedgekeurd. */
+const OPEN_TICKET_STATUSES = new Set<string>(['new', 'review', 'approved']);
+
 function defineSource<T>(def: ReportSourceDef<T>): ReportSourceDef<T> { return def; }
+
+/**
+ * Een teamlid als dimensie en filter (accountlead, toegewezen). Groeperen gaat
+ * op naam, filteren op user-id: de naam is het e-mailadres en dat kan
+ * veranderen, en dan klopte een opgeslagen rapport niet meer. "Ik" is een eigen
+ * keuze, zodat één gedeeld rapport ("mijn openstaande tickets") voor elke
+ * collega zijn eigen cijfers laat zien.
+ */
+export function memberDimension<T>(key: string, label: string, idOf: (row: T, lk: Lookups) => string | null | undefined, emptyLabel: string): ReportField<T> {
+  return {
+    key, label, type: 'string', role: 'dimension',
+    get: (r, lk) => lk.memberName(idOf(r, lk), emptyLabel),
+    matches: (r, value, lk) => matchesHolder(idOf(r, lk), value, lk.currentUserId),
+    filterOptions: lk => [
+      { value: 'me', label: 'Ik (wie het rapport bekijkt)' },
+      { value: 'none', label: emptyLabel },
+      ...lk.members
+        .map(m => ({ value: m.user_id, label: lk.memberName(m.user_id, emptyLabel) }))
+        .sort((a, b) => a.label.localeCompare(b.label, 'nl')),
+    ],
+  };
+}
+
+/** De accountlead van de klant van een factuur, offerte, project of ticket. */
+function clientLeadDimension<T extends { client_id: string | null }>(): ReportField<T> {
+  return memberDimension<T>('account_lead', 'Accountlead (klant)', (r, lk) => lk.clientLead(r.client_id), 'Geen accountlead');
+}
 
 const invoices = defineSource<AppData['invoices'][number]>({
   key: 'invoices', label: 'Facturen', rows: d => d.invoices, dateField: 'date',
   defaultMeasure: { field: 'amount', agg: 'sum' }, defaultDimension: 'client',
   fields: [
     { key: 'client', label: 'Klant', type: 'string', role: 'dimension', get: (r, lk) => lk.clientName(r.client_id) },
+    clientLeadDimension(),
     { key: 'status', label: 'Status', type: 'enum', role: 'dimension', enumValues: [...ENUMS.invoiceStatus], get: r => r.status },
     { key: 'date', label: 'Factuurdatum', type: 'date', role: 'dimension', get: r => r.date },
     { key: 'amount', label: 'Bedrag (incl. btw)', type: 'money', role: 'measure', get: r => total(r.lines).total },
@@ -315,6 +386,7 @@ const quotes = defineSource<AppData['quotes'][number]>({
   fields: [
     { key: 'status', label: 'Status', type: 'enum', role: 'dimension', enumValues: [...ENUMS.quoteStatus], get: r => r.status },
     { key: 'client', label: 'Klant', type: 'string', role: 'dimension', get: (r, lk) => lk.clientName(r.client_id) },
+    clientLeadDimension(),
     { key: 'date', label: 'Offertedatum', type: 'date', role: 'dimension', get: r => r.date },
     { key: 'amount', label: 'Bedrag (incl. btw)', type: 'money', role: 'measure', get: r => total(r.lines).total },
   ],
@@ -336,6 +408,7 @@ const clients = defineSource<AppData['clients'][number]>({
   defaultMeasure: { field: '*', agg: 'count' }, defaultDimension: 'status',
   fields: [
     { key: 'status', label: 'Status', type: 'enum', role: 'dimension', enumValues: [...ENUMS.clientStatus], get: r => r.status },
+    memberDimension('account_lead', 'Accountlead', r => r.account_lead_user_id, 'Geen accountlead'),
     { key: 'created', label: 'Aangemaakt', type: 'date', role: 'dimension', get: r => r.created_at },
     { key: 'value', label: 'Klantwaarde', type: 'money', role: 'measure', get: r => r.value_eur },
   ],
@@ -346,6 +419,7 @@ const projects = defineSource<AppData['projects'][number]>({
   defaultMeasure: { field: '*', agg: 'count' }, defaultDimension: 'client',
   fields: [
     { key: 'client', label: 'Klant', type: 'string', role: 'dimension', get: (r, lk) => lk.clientName(r.client_id) },
+    clientLeadDimension(),
     { key: 'state', label: 'Staat', type: 'enum', role: 'dimension', enumValues: [...ENUMS.projectState], get: r => (r.archived ? 'archived' : 'active') },
     { key: 'created', label: 'Aangemaakt', type: 'date', role: 'dimension', get: r => r.created_at },
   ],
@@ -370,8 +444,14 @@ const tickets = defineSource<AppData['tickets'][number]>({
   defaultMeasure: { field: '*', agg: 'count' }, defaultDimension: 'status',
   fields: [
     { key: 'status', label: 'Status', type: 'enum', role: 'dimension', enumValues: [...ENUMS.ticketStatus], get: r => r.status },
+    // Openstaand = nog te behandelen, zoals het snelfilter op de ticketpagina.
+    // Met alleen het statusfilter (één status tegelijk) kon je "alles wat nog
+    // open staat" niet in één rapport vragen.
+    { key: 'open', label: 'Openstaand', type: 'enum', role: 'dimension', enumValues: [...ENUMS.yesNo], get: r => (OPEN_TICKET_STATUSES.has(r.status) ? 'yes' : 'no') },
+    memberDimension('assignee', 'Toegewezen aan', r => r.assignee_user_id, 'Niet toegewezen'),
     { key: 'priority', label: 'Prioriteit', type: 'enum', role: 'dimension', enumValues: [...ENUMS.priority], get: r => r.priority },
     { key: 'client', label: 'Klant', type: 'string', role: 'dimension', get: (r, lk) => lk.clientName(r.client_id) },
+    clientLeadDimension(),
     { key: 'created', label: 'Aangemaakt', type: 'date', role: 'dimension', get: r => r.created_at },
   ],
 });
@@ -443,6 +523,11 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
     definition: { source: 'quotes', measure: { field: '*', agg: 'count' }, dimension: 'status', granularity: 'month', filters: [], datePreset: 'this_year', chart: 'pie' },
   },
   {
+    name: 'Omzet per accountlead',
+    description: 'Som van het bedrag excl. btw van betaalde facturen, per accountlead van de klant — dit jaar.',
+    definition: { source: 'invoices', measure: { field: 'subtotal', agg: 'sum' }, dimension: 'account_lead', granularity: 'month', filters: [{ field: 'status', value: 'paid' }], datePreset: 'this_year', chart: 'bar' },
+  },
+  {
     name: 'Kosten per leverancier',
     description: 'Som van bedrag van inkoopfacturen, per leverancier — dit jaar.',
     definition: { source: 'purchase_invoices', measure: { field: 'amount', agg: 'sum' }, dimension: 'supplier', granularity: 'month', filters: [], datePreset: 'this_year', chart: 'bar' },
@@ -451,6 +536,21 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
     name: 'Klanten per status',
     description: 'Aantal klanten per status — alle periodes.',
     definition: { source: 'clients', measure: { field: '*', agg: 'count' }, dimension: 'status', granularity: 'month', filters: [], datePreset: 'all', chart: 'pie' },
+  },
+  {
+    name: 'Klanten per accountlead',
+    description: 'Aantal actieve klanten per accountlead — alle periodes.',
+    definition: { source: 'clients', measure: { field: '*', agg: 'count' }, dimension: 'account_lead', granularity: 'month', filters: [{ field: 'status', value: 'active' }], datePreset: 'all', chart: 'bar' },
+  },
+  {
+    name: 'Openstaande tickets per teamlid',
+    description: 'Aantal tickets dat nog behandeld moet worden, per toegewezen teamlid — alle periodes.',
+    definition: { source: 'tickets', measure: { field: '*', agg: 'count' }, dimension: 'assignee', granularity: 'month', filters: [{ field: 'open', value: 'yes' }], datePreset: 'all', chart: 'bar' },
+  },
+  {
+    name: 'Afgehandelde tickets per teamlid',
+    description: 'Aantal afgehandelde tickets per toegewezen teamlid, op aanmaakdatum — dit jaar.',
+    definition: { source: 'tickets', measure: { field: '*', agg: 'count' }, dimension: 'assignee', granularity: 'month', filters: [{ field: 'status', value: 'resolved' }], datePreset: 'this_year', chart: 'bar' },
   },
   {
     name: 'Taken per status',
@@ -474,8 +574,9 @@ export function cloneDefinition(def: ReportDefinition): ReportDefinition {
  * "Facturen · Som · Bedrag (incl. btw) · per Klant · Dit jaar · Status: Betaald".
  * Gebruikt voor de subtitel van Gerrie's rapport-voorstelkaart.
  */
-export function describeReportDefinition(def: ReportDefinition): string {
+export function describeReportDefinition(def: ReportDefinition, ctx: ReportContext = {}): string {
   const source = REPORT_SOURCES[def.source];
+  const mlk = memberLookups(ctx);
   if (!source) return 'Rapportage';
   const parts: string[] = [source.label, measureLabelOf(def.measure, source)];
   if (def.dimension) {
@@ -486,7 +587,9 @@ export function describeReportDefinition(def: ReportDefinition): string {
   for (const filter of def.filters ?? []) {
     const field = source.fields.find(f => f.key === filter.field);
     if (!field) continue;
-    const value = field.enumValues?.find(e => e.value === filter.value)?.label ?? filter.value;
+    // Een teamlid dat de kaart niet kent, heet hier "een teamlid": geen user-id op het scherm.
+    const value = field.enumValues?.find(e => e.value === filter.value)?.label
+      ?? (field.filterOptions ? field.filterOptions(mlk).find(o => o.value === filter.value)?.label ?? 'een teamlid' : filter.value);
     parts.push(`${field.label}: ${value}`);
   }
   return parts.filter(Boolean).join(' · ');

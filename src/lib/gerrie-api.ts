@@ -45,6 +45,9 @@ export interface GerrieClientProposal {
   phone: string | null;
   notes: string | null;
   status: string;
+  /** Ontbreekt op voorstellen van vóór 2026-11-11. */
+  account_lead_user_id?: UUID | null;
+  account_lead_name?: string | null;
 }
 export interface GerrieSendInvoiceProposal {
   type: 'send_invoice';
@@ -450,6 +453,9 @@ export interface GerrieTicketProposal {
   client_name: string;
   priority: string;
   status: string;
+  /** Ontbreekt op voorstellen van vóór 2026-11-11. */
+  assignee_user_id?: UUID | null;
+  assignee_name?: string | null;
 }
 export interface GerrieEditTicketProposal {
   type: 'edit_ticket';

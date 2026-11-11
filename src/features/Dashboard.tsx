@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeEuro, BarChart3, BellRing, CalendarDays, CalendarRange, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Hammer, Landmark, ListTodo, MessagesSquare, Percent, Pin, Receipt, Ticket as TicketIcon, type LucideIcon } from 'lucide-react';
-import type { AppData, CalendarExternalEvent, Invoice, OrganizationContext, SavedReport, Task, TaskStatus, UUID } from '../types';
+import type { AppData, CalendarExternalEvent, Invoice, OrganizationContext, OrganizationMember, SavedReport, Task, TaskStatus, UUID } from '../types';
 import { coversDay, isOverdue, scopeTasks, taskDayKey, taskLastDayKey } from '../lib/workweek';
 import { euro, formatMinutes, total } from '../lib/format';
 import { addDays, formatISODate, isoWeekNumber, startOfWeek } from '../lib/dates';
@@ -421,7 +421,7 @@ export function Dashboard({
       <button type="button" onClick={() => openPage('stats')}>Rapportbouwer <ChevronRight size={14} /></button>
     </header>
     <div className="dash-reports-grid">
-      {pinnedReports.map(report => <PinnedReportCard key={report.id} report={report} data={data} onOpen={() => openReport(report.id)} />)}
+      {pinnedReports.map(report => <PinnedReportCard key={report.id} report={report} data={data} teamMembers={organizationContext.teamMembers ?? []} currentUserId={currentUserId ?? null} onOpen={() => openReport(report.id)} />)}
     </div>
   </div>;
   const onboardingBlock = showOnboarding && <div className="onboarding-card">
@@ -987,9 +987,10 @@ function TaskRow({ task, data, todayKey, canWrite, openTask, onSetTaskStatus }: 
   </div>;
 }
 
-function PinnedReportCard({ report, data, onOpen }: { report: SavedReport; data: AppData; onOpen: () => void }) {
+function PinnedReportCard({ report, data, teamMembers, currentUserId, onOpen }: { report: SavedReport; data: AppData; teamMembers: OrganizationMember[]; currentUserId: string | null; onOpen: () => void }) {
   const def = report.definition;
-  const result = useMemo(() => runReport(def, data), [def, data]);
+  // Met de teamleden: anders stond een vastgezet rapport per accountlead vol "Oud-teamlid".
+  const result = useMemo(() => runReport(def, data, { members: teamMembers, currentUserId }), [def, data, teamMembers, currentUserId]);
   const format = (n: number) => formatMeasure(n, result.measureType);
   return (
     <button type="button" className="dash-report-card" onClick={onOpen}>

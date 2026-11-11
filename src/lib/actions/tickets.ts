@@ -19,6 +19,23 @@ export const TICKETS_EXECUTORS: Record<string, ActionExecutor> = {
       : `Ticket "${title}" losgemaakt van de klant`;
   },
 
+  'ticket.assign': async (payload, ctx) => {
+    const ticketIds = list(payload, 'ticket_ids');
+    const titles = Array.isArray(payload.titles) ? (payload.titles as unknown[]).map(String) : [];
+    const userId = optText(payload, 'user_id');
+    const name = optText(payload, 'assignee_name');
+    // Per ticket, zodat één mislukte toewijzing de rest niet meesleept en je aan
+    // de melding ziet welke er wél doorheen zijn.
+    const failed: string[] = [];
+    for (let i = 0; i < ticketIds.length; i += 1) {
+      try { await updateRow('tickets', ticketIds[i], { assignee_user_id: userId }, ctx.organizationId); }
+      catch { failed.push(titles[i] ?? ticketIds[i]); }
+    }
+    if (failed.length) throw new Error(`${ticketIds.length - failed.length} toegewezen, ${failed.length} mislukt (${failed.join(', ')}).`);
+    const what = ticketIds.length === 1 ? `Ticket "${titles[0] ?? 'ticket'}"` : `${ticketIds.length} tickets`;
+    return userId ? `${what} toegewezen aan ${name ?? 'het teamlid'}` : `${what} aan niemand meer toegewezen`;
+  },
+
   'ticket.convert_to_project': async (payload, ctx) => {
     const ticketId = text(payload, 'ticket_id');
     // De Postgres-functie doet de conversie atomair; die heeft het hele ticket nodig,
