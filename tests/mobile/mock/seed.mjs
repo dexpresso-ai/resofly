@@ -282,20 +282,44 @@ export const clientEmailThreads = [
   mailThread(1, 'Planning fotoshoot', 'outbound', at(-1, 16, 40)),
   mailThread(4, 'Menukaart: laatste versie', 'inbound', at(-3, 11, 5)),
 ];
-const mail = (thread, direction, from_name, from_email, to_email, body_text, created_at) => ({
-  id: uid('e'), ...base(), thread_id: thread.id, client_id: thread.client_id, direction, provider: direction === 'inbound' ? 'inbound' : 'resend', provider_email_id: null,
+// Mappen per klant (Berichten, 2026-11-11): de eerste klant heeft een kleine
+// boom — Offertes, en Project huisstijl met daarin Feedback — en drie extra
+// gesprekken, zodat de verkenner op elk formaat mappen, gesprekken in een
+// submap en "Zonder map" laat zien. Vaste id's: uid() telt door, en extra
+// aanroepen hier zouden elk id verderop in deze seed verschuiven.
+const fixedId = (prefix, k) => `${prefix}${String(k).padStart(7, '0')}-0000-4000-8000-000000000000`;
+const folderRow = (k, name, parentK = null) => ({ id: fixedId('f9', k), organization_id: ORG, client_id: clients[0].id, parent_id: parentK ? fixedId('f9', parentK) : null, name, created_by: USER, created_at: iso(day(-20)), updated_at: iso(day(-20)) });
+export const clientEmailFolders = [
+  folderRow(1, 'Offertes'),
+  folderRow(2, 'Project huisstijl'),
+  folderRow(3, 'Feedback', 2),
+];
+clientEmailThreads[0].folder_id = clientEmailFolders[0].id;
+for (const t of clientEmailThreads.slice(1)) t.folder_id = null;
+const extraThread = (k, subject, lastDir, lastAt, folderId) => ({ id: fixedId('r9', k), ...base(), client_id: clients[0].id, subject, last_direction: lastDir, last_message_at: lastAt, updated_at: lastAt, folder_id: folderId });
+clientEmailThreads.push(
+  extraThread(1, 'Logo-varianten ronde 2', 'inbound', at(-1, 10, 30), clientEmailFolders[2].id),
+  extraThread(2, 'Kleurenpalet', 'outbound', at(-4, 14, 0), clientEmailFolders[1].id),
+  extraThread(3, 'Factuur oktober', 'outbound', at(-6, 9, 0), null),
+);
+const mailRow = (id, thread, direction, from_name, from_email, to_email, body_text, created_at) => ({
+  id, ...base(), thread_id: thread.id, client_id: thread.client_id, direction, provider: direction === 'inbound' ? 'inbound' : 'resend', provider_email_id: null,
   from_email, from_name, to_email, subject: thread.subject, body_html: null, body_text,
   status: direction === 'inbound' ? 'received' : 'delivered', sent_at: direction === 'outbound' ? created_at : null, delivered_at: direction === 'outbound' ? created_at : null,
   opened_at: null, clicked_at: null, bounced_at: null, failed_at: null, complained_at: null, received_at: direction === 'inbound' ? created_at : null, last_event_at: created_at,
   error_message: null, link_source: direction === 'inbound' ? 'reply_token' : null, link_confidence: null, rfc_message_id: null, metadata: {}, created_at, updated_at: created_at,
 });
+const mail = (...args) => mailRow(uid('e'), ...args);
 export const clientEmails = [
   mail(clientEmailThreads[0], 'outbound', 'Studio Lopik', 'info@studiolopik.nl', clients[0].email, 'Beste Joost, hierbij de offerte voor de nieuwe huisstijl. Laat je weten wat je ervan vindt?', at(-2, 10, 0)),
   mail(clientEmailThreads[0], 'inbound', 'Joost Vermeer', clients[0].email, 'info@studiolopik.nl', 'Dank voor de offerte, we gaan akkoord. Wanneer kunnen we starten?', at(0, 9, 12)),
   mail(clientEmailThreads[1], 'outbound', 'Studio Lopik', 'info@studiolopik.nl', clients[1].email, 'Zullen we de fotoshoot donderdag om 9 uur doen?', at(-1, 16, 40)),
   mail(clientEmailThreads[2], 'inbound', 'Karim El Amrani', clients[4].email, 'info@studiolopik.nl', 'Hierbij de laatste versie van de menukaart, met de nieuwe prijzen.', at(-3, 11, 5)),
+  mailRow(fixedId('e9', 1), clientEmailThreads[3], 'inbound', 'Joost Vermeer', clients[0].email, 'info@studiolopik.nl', 'Variant B vinden we het mooist, kan het groen iets donkerder?', at(-1, 10, 30)),
+  mailRow(fixedId('e9', 2), clientEmailThreads[4], 'outbound', 'Studio Lopik', 'info@studiolopik.nl', clients[0].email, 'Hierbij het kleurenpalet zoals besproken.', at(-4, 14, 0)),
+  mailRow(fixedId('e9', 3), clientEmailThreads[5], 'outbound', 'Studio Lopik', 'info@studiolopik.nl', clients[0].email, 'In de bijlage de factuur over oktober.', at(-6, 9, 0)),
 ];
-// Gelezen: alles behalve het antwoord van Joost van vanochtend.
+// Gelezen: alles behalve de antwoorden van Joost (vanochtend, en gisteren in de map Feedback).
 export const clientEmailReads = [
   { organization_id: ORG, client_id: clients[4].id, client_email_id: clientEmails[3].id, user_id: USER, read_at: at(-3, 12, 0) },
 ];
@@ -526,7 +550,7 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
   notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], prepaid_expenses: [], prepaid_expense_releases: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], ai_reports: aiReports, ai_report_messages: aiReportMessages, ai_report_versions: aiReportVersions, planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: auditLogs, contracts: [],
-  client_email_threads: clientEmailThreads, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
+  client_email_threads: clientEmailThreads, client_email_folders: clientEmailFolders, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
   inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias], organization_email_domains: sendingDomains,
   // Het eerste ticket heeft een klantreactie die nog niet gelezen is (view
   // ticket_unread): zo meet de test de "Nieuw"-markering in Berichten en op

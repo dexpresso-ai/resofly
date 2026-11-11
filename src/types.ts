@@ -1278,6 +1278,26 @@ export interface ClientEmailThread extends OrgScopedRow {
   last_direction: ClientEmailDirection;
   created_at: string;
   updated_at: string;
+  /**
+   * Map van dit gesprek (client_email_folders); null = Zonder map. Optioneel:
+   * zolang de migratie 20261111210000 niet gedraaid is, ontbreekt de kolom.
+   */
+  folder_id?: UUID | null;
+}
+
+/**
+ * Een map voor klantmail op Berichten: per klant een eigen boom, genest via
+ * parent_id (hooguit vijf lagen). Schrijven loopt via rpc's, zie repository.
+ */
+export interface ClientEmailFolder {
+  id: UUID;
+  organization_id: UUID;
+  client_id: UUID;
+  parent_id: UUID | null;
+  name: string;
+  created_by: UUID | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ClientEmail extends OrgScopedRow {
@@ -1512,6 +1532,8 @@ export interface ClientEmailThreadOverview extends OrgScopedRow {
   last_status: ClientEmailStatus | null;
   last_email_at: string | null;
   last_preview: string | null;
+  /** Map van het gesprek; ontbreekt zolang de migratie 20261111210000 niet gedraaid is. */
+  folder_id?: UUID | null;
 }
 
 /**

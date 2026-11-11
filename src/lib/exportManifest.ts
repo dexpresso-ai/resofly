@@ -38,6 +38,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261111190000 (de videolink bij een boeking) zet meeting_url en
 // video_service op meeting_bookings. Die gaan gewoon mee: de tabel staat al op
 // 'export', en een videolink van je eigen afspraak is geen geheim van de server.
+// 20261111210000 (mappen op Berichten) voegt client_email_folders toe en zet
+// folder_id op client_email_threads. Beide gaan mee: hoe een klant zijn mail
+// ordent, hoort bij zijn administratie, en een mapnaam is geen geheim.
 // 20261111220000 (vooruitbetaalde kosten) zet twee tabellen erbij:
 // prepaid_expenses (met een leesbare lijst) en het schema per maand,
 // prepaid_expense_releases. Boekhouding van de klant zelf: alles gaat mee.
@@ -124,6 +127,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   client_field_definitions: { kind: 'export' },
   client_calls: { kind: 'export' },
   client_email_threads: { kind: 'export' },
+  client_email_folders: { kind: 'export' },
   client_emails: { kind: 'export' },
   client_email_events: { kind: 'export' },
   client_email_reads: { kind: 'intern', reason: LEESSTATUS },

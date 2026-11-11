@@ -37,6 +37,8 @@ export interface EmailConversation extends ConversationBase {
   kind: 'email';
   clientId: string;
   thread: ClientEmailThreadOverview;
+  /** De map van het gesprek (Berichten → mappen per klant); null = Zonder map. */
+  folderId: string | null;
 }
 
 export interface TicketConversation extends ConversationBase {
@@ -138,8 +140,12 @@ export function foldedSearchText(item: Pick<Conversation, 'searchText'>): string
   return folded;
 }
 
-/** Een mailgesprek uit de view client_email_thread_overview als lijstregel. */
-export function emailConversation(thread: ClientEmailThreadOverview): EmailConversation {
+/**
+ * Een mailgesprek uit de view client_email_thread_overview als lijstregel.
+ * `folderLabel` is het pad van zijn map ("Offertes / 2025"): dat telt mee bij
+ * zoeken, zodat "offertes" ook de gesprekken in die map vindt.
+ */
+export function emailConversation(thread: ClientEmailThreadOverview, folderLabel = ''): EmailConversation {
   return {
     key: `email:${thread.id}`,
     kind: 'email',
@@ -151,8 +157,9 @@ export function emailConversation(thread: ClientEmailThreadOverview): EmailConve
     lastAt: thread.last_message_at,
     unread: Math.max(0, thread.unread_count),
     hasProblem: thread.has_delivery_problem,
-    searchText: [thread.client_name, thread.subject, thread.last_from_name, thread.last_from_email, thread.last_preview].filter(Boolean).join('\n'),
+    searchText: [thread.client_name, thread.subject, thread.last_from_name, thread.last_from_email, thread.last_preview, folderLabel].filter(Boolean).join('\n'),
     thread,
+    folderId: thread.folder_id ?? null,
   };
 }
 
