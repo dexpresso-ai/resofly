@@ -103,6 +103,23 @@ pg_cron elke minuut aanroept (`portal-notify`). Getoetst:
 
 Zie `docs/changelog/CHANGELOG_TICKETS_CONTROLE_2026-11-10.md`.
 
+En `vooruitbetaald`: vooruitbetaalde kosten, een betaling die over de maanden naar de kosten gaat
+(de functies uit migratie 20261111220000). Getoetst:
+- € 1.000 verzekering over 36 maanden: het schema (28 × € 27,78 en 8 × € 27,77, op de laatste dag
+  van elke maand), de rekening 1350 Vooruitbetaalde kosten die er één keer bij komt, de boeking naar
+  de balans en de termijn van deze maand naar de kosten, nooit dubbel en niet verder vooruit dan het
+  einde van deze maand;
+- een post die al op de balans stond (de achterstand per maand op zijn eigen datum) en een factuur
+  die al als kosten was geboekt (de kostenrekening als tegenrekening);
+- wie wat mag: lezen met leesrecht, niets zonder Financiën of van een andere organisatie, en
+  niemand schrijft rechtstreeks in de tabellen;
+- vastliggen na boeken, tegenboeken in de goede volgorde (het register gaat mee terug),
+  beëindigen met een terugbetaling, en daarna alles terug tot de post weg kan;
+- een termijn in een afgesloten boekjaar op de eerste open dag, en niets van vóór de start van de
+  boekhouding in ResoFly.
+
+Zie `docs/changelog/CHANGELOG_VOORUITBETAALDE_KOSTEN_2026-11-11.md`.
+
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in
@@ -182,6 +199,12 @@ En `opname`: een telefoongesprek loggen en opnemen met de nep-microfoon van Chro
   er weer tegoed is.
 
 De UI-test vangt daarvoor de upload naar de media-worker zelf op en legt de audio in nep-R2.
+
+En `vooruitbetaald`: € 1.000 verzekering over 36 maanden via het formulier. Het voorbeeld vóór het
+vastleggen (28 × € 27,78 en 8 × € 27,77), de bevestigingsvraag, de drie functies achter "Vastleggen
+en boeken", het venster daarna (kerncijfers, de nieuwe balansrekening, het schema), de rij in de
+lijst, de twee boekstukken in het Grootboek, Tegenboeken van de termijn (die staat daarna weer klaar),
+de knop Vooruitbetaald in het journaal, en een lezer die alles ziet maar niets kan boeken.
 
 Elke stap controleert ook: geen JavaScript-fout, geen foutmelding of "laden…" die blijft staan,
 en geen mislukte aanroep die de stap niet verwachtte. Mislukt een stap, dan komt er een

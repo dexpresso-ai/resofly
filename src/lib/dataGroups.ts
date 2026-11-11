@@ -42,7 +42,7 @@ export const GROUP_FIELDS = {
     'invoiceWorkflowEvents', 'invoiceEmailDeliveries', 'invoicePaymentRecords', 'invoiceVersions',
     'invoiceRefunds', 'creditNotes', 'invoiceChargebacks', 'dunningNotices',
   ],
-  bookkeeping: ['journalEntries', 'journalLines', 'closedPeriods', 'fiscalYears', 'fixedAssets', 'assetDepreciations', 'vatReturns'],
+  bookkeeping: ['journalEntries', 'journalLines', 'closedPeriods', 'fiscalYears', 'fixedAssets', 'assetDepreciations', 'prepaidExpenses', 'prepaidExpenseReleases', 'vatReturns'],
   bank: ['bankAccounts', 'bankStatements', 'bankTransactions', 'bankAllocations', 'bankRules', 'bankRequisitions'],
 } as const satisfies Record<DataGroup, readonly (keyof AppData)[]>;
 
@@ -67,6 +67,7 @@ export const PAGE_DATA_GROUPS: Readonly<Record<string, readonly DataGroup[]>> = 
   bank: ['bank', 'bookkeeping'],
   'vat-returns': ['bookkeeping', 'bank'],
   assets: ['bookkeeping'],
+  prepaid: ['bookkeeping'],
   pnl: ['bookkeeping'],
 };
 
@@ -106,6 +107,7 @@ export const GROUP_FILES: Readonly<Record<DataGroup, readonly string[]>> = {
     'src/features/Bank.tsx', // (bank)
     'src/features/VatReturns.tsx', // (vat-returns)
     'src/features/Assets.tsx', // (assets)
+    'src/features/Prepaid.tsx', // (prepaid), en het venster in LedgerPage (ledger)
     'src/features/ProfitLoss.tsx', // (pnl)
   ],
   bank: [

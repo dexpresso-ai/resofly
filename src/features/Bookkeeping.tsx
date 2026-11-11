@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Calculator, Download, FileDown, FileText, Inbox, Layers, Mail, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
+import { BookOpen, Calculator, Download, FileDown, FileText, Hourglass, Inbox, Layers, Mail, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
   AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceInboxItem, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
 } from '../types';
@@ -27,6 +27,7 @@ import {
 } from '../lib/invoiceInbox';
 import { todayIso } from '../lib/dates';
 import { XafImportPanel } from './XafImport';
+import { PrepaidForm } from './Prepaid';
 
 // Vaste kolommen voor de bulk CSV-import van leveranciers (crediteuren).
 const SUPPLIER_IMPORT_COLUMNS: ImportColumn[] = [
@@ -1135,6 +1136,9 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showMemorial, setShowMemorial] = useState(false);
+  // Vooruit betaald (een verzekering voor drie jaar): niet 36 memoriaalposten
+  // met de hand, maar één keer vastleggen; zie Prepaid.tsx.
+  const [showPrepaid, setShowPrepaid] = useState(false);
   const [reversing, setReversing] = useState<JournalEntry | null>(null);
   const [reverseDate, setReverseDate] = useState(() => todayIso());
   const accountLabel = (id: string) => {
@@ -1170,10 +1174,17 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
   return (
     <div className="bk-journal">
       <div className="bk-subhead">
-        <p className="bk-muted">Elke boeking — automatisch of handmatig — is een boekstuk. Met een memoriaalboeking corrigeer je vrij (afschrijving, privé-opname, correctie op een eerdere periode).</p>
-        <Button variant="primary" disabled={!canWrite} onClick={() => setShowMemorial(true)}><PenSquare size={14} /> Memoriaalboeking</Button>
+        <p className="bk-muted">Elke boeking — automatisch of handmatig — is een boekstuk. Met een memoriaalboeking corrigeer je vrij (afschrijving, privé-opname, correctie op een eerdere periode). Vooruit betaald, zoals een verzekering voor drie jaar? Met Vooruitbetaald gaat het per maand naar de kosten.</p>
+        <div className="bk-head-actions">
+          <Button disabled={!canWrite} onClick={() => setShowPrepaid(true)}><Hourglass size={14} /> Vooruitbetaald</Button>
+          <Button variant="primary" disabled={!canWrite} onClick={() => setShowMemorial(true)}><PenSquare size={14} /> Memoriaalboeking</Button>
+        </div>
       </div>
       {error && <div className="error">{error}</div>}
+      {showPrepaid && (
+        <PrepaidForm data={data} organizationId={organizationId} canWrite={canWrite} item={null}
+          onClose={() => setShowPrepaid(false)} onChanged={onChanged} />
+      )}
       {showMemorial && (
         <MemorialModal
           data={data}

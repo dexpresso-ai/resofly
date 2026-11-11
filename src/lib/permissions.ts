@@ -99,6 +99,7 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   ledger: 'finance',
   bank: 'finance',
   assets: 'finance',
+  prepaid: 'finance',
   pnl: 'finance',
   'vat-returns': 'finance',
   'corporate-tax': 'finance',

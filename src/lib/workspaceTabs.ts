@@ -12,7 +12,7 @@ export const PAGE_TITLES: Record<string, string> = {
   'project-planning': 'Projectplanning', tickets: 'Tickets', chat: 'Teamchat',
   marketing: 'Marketing', quotes: 'Offertes', contracts: 'Contracten', invoices: 'Facturen',
   suppliers: 'Leveranciers', 'purchase-invoices': 'Inkoopfacturen', ledger: 'Grootboek',
-  bank: 'Bank', assets: 'Activa', pnl: 'Winst & verlies', 'vat-returns': 'Omzetbelasting', 'corporate-tax': 'Vennootschapsbelasting', dga: 'DGA', shareholders: 'Aandeelhouders', owners: 'Eigen vermogen',
+  bank: 'Bank', assets: 'Activa', prepaid: 'Vooruitbetaald', pnl: 'Winst & verlies', 'vat-returns': 'Omzetbelasting', 'corporate-tax': 'Vennootschapsbelasting', dga: 'DGA', shareholders: 'Aandeelhouders', owners: 'Eigen vermogen',
   'fiscal-years': 'Boekjaren', 'annual-accounts': 'Jaarrekening',
   archive: 'Archief', settings: 'Instellingen', project: 'Project',
   gallery: 'Galerij',

@@ -41,7 +41,7 @@ const GROUP_TABLES = {
     'invoice_workflow_events', 'invoice_email_deliveries', 'invoice_payment_records', 'invoice_versions',
     'invoice_refunds', 'credit_notes', 'invoice_chargebacks', 'invoice_dunning_notices',
   ],
-  bookkeeping: ['journal_entries', 'journal_lines', 'closed_periods', 'fiscal_years', 'fixed_assets', 'asset_depreciations', 'vat_returns'],
+  bookkeeping: ['journal_entries', 'journal_lines', 'closed_periods', 'fiscal_years', 'fixed_assets', 'asset_depreciations', 'prepaid_expenses', 'prepaid_expense_releases', 'vat_returns'],
   bank: ['bank_accounts', 'bank_statements', 'bank_transactions', 'bank_transaction_allocations', 'bank_rules', 'bank_requisitions'],
 };
 const ALL_GROUP_TABLES = Object.values(GROUP_TABLES).flat();
@@ -53,7 +53,7 @@ const PAGES = {
   client: { page: 'client', clientId: seed.clients[0].id },
   project: { page: 'project', projectId: seed.projects[0].id },
   communication: 'communication', quotes: 'quotes', invoices: 'invoices',
-  ledger: 'ledger', bank: 'bank', 'vat-returns': 'vat-returns', assets: 'assets', pnl: 'pnl',
+  ledger: 'ledger', bank: 'bank', 'vat-returns': 'vat-returns', assets: 'assets', prepaid: 'prepaid', pnl: 'pnl',
 };
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));

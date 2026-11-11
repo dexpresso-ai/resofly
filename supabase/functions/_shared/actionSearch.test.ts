@@ -60,6 +60,12 @@ const CASES: Array<[string, string]> = [
   ['boekjaar afsluiten', 'fiscal_year.close'],
   ['nieuwe grootboekrekening', 'ledger_account.create'],
   ['afschrijving boeken', 'asset.post_depreciation'],
+  // Vooruitbetaalde kosten (november 2026): de vraag waar het mee begon.
+  ['verzekering voor drie jaar vooruitbetaald over 36 maanden spreiden', 'prepaid.create'],
+  ['vooruitbetaalde kosten boeken', 'prepaid.create'],
+  ['termijnen van de vooruitbetaalde kosten boeken', 'prepaid.post_releases'],
+  ['verzekering opgezegd, vooruitbetaling beëindigen', 'prepaid.end'],
+  ['welke vooruitbetalingen staan er nog op de balans', 'prepaid.list'],
   ['dividend uitkeren', 'dividend.declare'],
   ['aandeelhouder toevoegen', 'shareholder.create'],
   ['jaarrekening opmaken', 'annual_accounts.prepare'],

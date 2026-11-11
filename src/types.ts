@@ -1745,7 +1745,8 @@ export type JournalEntryStatus = 'draft' | 'posted' | 'reversed';
 export type JournalSourceType =
   | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition' | 'asset_disposal'
   | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note'
-  | 'result_appropriation' | 'corporate_tax' | 'dga_interest' | 'payroll';
+  | 'result_appropriation' | 'corporate_tax' | 'dga_interest' | 'payroll' | 'dividend'
+  | 'prepaid_start' | 'prepaid_release' | 'prepaid_end';
 
 /**
  * Rubriek van een grootboekrekening in de balans of de winst- en verliesrekening.
@@ -2810,6 +2811,53 @@ export interface AssetDepreciation {
   created_at: string;
 }
 
+/**
+ * Vooruitbetaalde kosten (migratie 20261111220000): één betaling die over de
+ * maanden naar de kosten gaat. De app schrijft niets rechtstreeks in deze
+ * tabellen; alles loopt via save_prepaid_expense en de boekingsfuncties.
+ */
+export type PrepaidExpenseStatus = 'active' | 'completed' | 'ended';
+/** book = ResoFly boekt het bedrag naar de balans; existing = het staat er al. */
+export type PrepaidStartMode = 'book' | 'existing';
+
+export interface PrepaidExpense extends OrgScopedRow {
+  description: string;
+  amount_cents: number;
+  payment_date: string;
+  /** Eerste dag van de periode; de eerste termijn valt op het einde van die maand. */
+  start_date: string;
+  months: number;
+  prepaid_account_id: UUID;
+  expense_account_id: UUID;
+  start_mode: PrepaidStartMode;
+  counter_account_id: UUID | null;
+  start_journal_entry_id: UUID | null;
+  source_purchase_invoice_id: UUID | null;
+  status: PrepaidExpenseStatus;
+  end_date: string | null;
+  end_amount_cents: number | null;
+  end_refund_cents: number | null;
+  end_refund_account_id: UUID | null;
+  end_journal_entry_id: UUID | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PrepaidExpenseRelease {
+  id: UUID;
+  organization_id: UUID;
+  prepaid_expense_id: UUID;
+  period_index: number;
+  date: string;
+  amount_cents: number;
+  remaining_after_cents: number;
+  status: 'scheduled' | 'posted';
+  journal_entry_id: UUID | null;
+  posted_at: string | null;
+  created_at: string;
+}
+
 /** Regel uit report_profit_and_loss. amount_cents is positief georiënteerd per soort. */
 export interface ProfitAndLossRow {
   account_id: UUID | null;
@@ -3604,7 +3652,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankAllocations: BankAllocation[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null;
+export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; prepaidExpenses: PrepaidExpense[]; prepaidExpenseReleases: PrepaidExpenseRelease[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankAllocations: BankAllocation[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null;
   /** Tellingen voor het dashboard, zonder de bank en de boekhouding te laden (src/lib/dataGroups.ts). */
   bankTransactionsToReconcile: number; vatReturnsToFile: number; }
 

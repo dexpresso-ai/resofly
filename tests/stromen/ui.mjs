@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -49,7 +49,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -3002,6 +3002,137 @@ async function scenarioTickets() {
   for (const s of [klant, lid]) await sluit(s);
 }
 
+// ── Vooruitbetaalde kosten ──────────────────────────────────────────────────
+
+/** Naar de pagina Vooruitbetaald; de kop heet "Vooruitbetaalde kosten", het menu korter. */
+async function naarVooruitbetaald(scherm) {
+  const page = scherm.page;
+  await sluitAlles(scherm);
+  const knop = page.locator('.nav-submenu-finance button').filter({ hasText: /^Vooruitbetaald$/ });
+  if (!(await knop.isVisible().catch(() => false))) {
+    await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Financiën/ }).first().click();
+  }
+  await knop.click();
+  await rustig(scherm);
+  await inhoud(page).locator('h2').filter({ hasText: /^Vooruitbetaalde kosten$/ }).first().waitFor({ timeout: 15000 });
+}
+
+const VERZEKERING = 'Bedrijfsaansprakelijkheidsverzekering UI';
+
+/**
+ * Waarom in de browser: de boekingen zelf toetst run.mjs (scenario
+ * vooruitbetaald). Hier gaat het om de vraag zoals hij gesteld werd: € 1.000
+ * verzekering met drie jaar dekking, via het formulier. Klopt het voorbeeld
+ * vóór het vastleggen, roept de knop de drie functies aan, staat daarna het
+ * schema in het venster en de post in de lijst, en loopt tegenboeken in het
+ * Grootboek terug naar het schema?
+ */
+async function scenarioVooruitbetaald() {
+  groep('UI: vooruitbetaalde kosten — € 1.000 verzekering over 36 maanden');
+  const { w } = t;
+  const klaar = await stap('rekeningschema', async () => {
+    gelukt(await rpc('ensure_default_ledger_accounts', { p_organization_id: w.orgId }, w.medewerker.token), 'rekeningschema');
+    return true;
+  });
+  if (!klaar) return;
+
+  const post = await uiStap('het formulier toont 28 × € 27,78 en 8 × € 27,77, en boekt naar de balans en deze maand naar de kosten', async () => {
+    const lid = await medewerker();
+    const page = lid.page;
+    // De app laadde misschien vóór het rekeningschema bestond.
+    await ververs(lid);
+    await naarVooruitbetaald(lid);
+    await inhoud(page).getByRole('button', { name: 'Vooruitbetaling vastleggen' }).click();
+    const m = modal(page, 'Vooruitbetaling vastleggen');
+    await m.waitFor({ timeout: 10000 });
+    await veld(m, 'Omschrijving').locator('input').fill(VERZEKERING);
+    await veld(m, 'Bedrag (excl. btw)').locator('input').fill('1000');
+    await veld(m, 'Looptijd (maanden)').locator('input').fill('36');
+    const voorbeeld = tekst(await m.locator('.bk-prepaid-preview').innerText());
+    verwacht(voorbeeld.includes('€ 27,78 per maand (28×) en € 27,77 (8×)'), `voorbeeld: ${voorbeeld}`);
+    verwacht(voorbeeld.includes('Vooruitbetaalde kosten (nieuw)') && voorbeeld.includes('1100 · Bank'), `voorbeeld noemt de rekeningen niet: ${voorbeeld}`);
+    gelijk(await m.locator('.bk-prepaid-schedule tbody tr').count(), 36, 'het voorbeeldschema');
+    const sinds = server.verkeer.length;
+    const dialogen = lid.dialogen.length;
+    await klik(m.locator('.modal-foot'), 'Vastleggen en boeken');
+    await wachtTot(() => lid.dialogen.length > dialogen, { melding: 'geen bevestigingsvraag vóór het boeken' });
+    const vraag = tekst(lid.dialogen.at(-1).tekst);
+    verwacht(vraag.includes('€ 1.000,00 naar de balans') && vraag.includes('1 termijn'), `de vraag: ${vraag}`);
+    await rustig(lid);
+    verwachtAanroep(sinds, { rpc: 'save_prepaid_expense' }, 'vastleggen');
+    verwachtAanroep(sinds, { rpc: 'book_prepaid_expense_start' }, 'naar de balans');
+    verwachtAanroep(sinds, { rpc: 'post_prepaid_releases' }, 'de termijn van deze maand');
+    const rijDb = sqlRij(`select id, amount_cents, months, status, start_journal_entry_id from public.prepaid_expenses
+      where organization_id = ${q(w.orgId)} and description = ${q(VERZEKERING)}`);
+    gelijk([rijDb?.amount_cents, rijDb?.months, rijDb?.status, Boolean(rijDb?.start_journal_entry_id)], [100000, 36, 'active', true], 'de post in de database');
+    const termijnen = sqlRijen(`select status from public.prepaid_expense_releases where prepaid_expense_id = ${q(rijDb.id)} order by period_index`);
+    gelijk([termijnen.length, termijnen.filter((r) => r.status === 'posted').length], [36, 1], 'het schema in de database');
+    // Het venster blijft open, nu met de naam van de post als titel: de
+    // kerncijfers, de balansrekening die nu bestaat, en het echte schema.
+    const venster = modal(page, VERZEKERING);
+    await venster.waitFor({ timeout: 10000 });
+    await wachtTot(async () => (await venster.locator('.bk-prepaid-sched .status-pill', { hasText: 'Geboekt' }).count()) === 1, { melding: 'het schema in het venster toont geen geboekte termijn' });
+    const kerncijfers = tekst(await venster.locator('.bk-asset-kpis').innerText());
+    verwacht(kerncijfers.includes('€ 27,78') && kerncijfers.includes('€ 972,22'), `kerncijfers: ${kerncijfers}`);
+    gelijk(tekst(await veld(venster, 'Balansrekening').locator('.select-value').innerText()), '1350 · Vooruitbetaalde kosten', 'de balansrekening na vastleggen');
+    verwacht(await venster.locator('.bk-dispose').isVisible(), 'geen blok Eerder stoppen');
+    await schermafdruk('vooruitbetaald-venster', lid);
+    await sluitModal(venster);
+    const lijst = tekst(await inhoud(page).locator('.bk-prepaid-list tbody tr').filter({ hasText: VERZEKERING }).first().innerText());
+    verwacht(lijst.includes('€ 972,22') && lijst.includes('Loopt'), `de rij in de lijst: ${lijst}`);
+    return rijDb;
+  });
+
+  await uiStap('in het Grootboek: de twee boekstukken, en Tegenboeken zet de termijn terug in het schema', async () => {
+    const id = post?.id;
+    verwacht(id, 'overgeslagen: de post ontbreekt');
+    const lid = t.lid;
+    const page = lid.page;
+    await naarFinancien(lid, 'Grootboek');
+    await inhoud(page).locator('.bk-entry').filter({ hasText: `Vooruitbetaald naar de balans: ${VERZEKERING}` }).first().waitFor({ timeout: 10000 });
+    const termijn = inhoud(page).locator('.bk-entry').filter({ hasText: `Vooruitbetaalde kosten 1/36: ${VERZEKERING}` }).first();
+    await termijn.waitFor({ timeout: 10000 });
+    const sinds = server.verkeer.length;
+    await termijn.getByRole('button', { name: 'Tegenboeken' }).click();
+    const m = modal(page, /tegenboeken$/);
+    await m.waitFor({ timeout: 10000 });
+    await klik(m.locator('.modal-foot'), 'Tegenboeken');
+    await m.waitFor({ state: 'detached', timeout: 10000 });
+    await rustig(lid);
+    verwachtAanroep(sinds, { rpc: 'reverse_journal_entry' }, 'tegenboeken');
+    gelijk(sqlRij(`select status from public.prepaid_expense_releases where prepaid_expense_id = ${q(id)} and period_index = 1`).status, 'scheduled', 'de termijn staat weer gepland');
+    // En weer terug naar de pagina: de termijn staat klaar om te boeken.
+    await naarVooruitbetaald(lid);
+    await inhoud(page).locator('.bk-prepaid-due').waitFor({ timeout: 10000 });
+    const balk = tekst(await inhoud(page).locator('.bk-prepaid-due').innerText());
+    verwacht(/1 termijn staat klaar/.test(balk) && balk.includes('€ 27,78'), `de balk: ${balk}`);
+  });
+
+  await uiStap('vanuit het journaal opent de knop Vooruitbetaald hetzelfde formulier', async () => {
+    const lid = t.lid;
+    const page = lid.page;
+    await naarFinancien(lid, 'Grootboek');
+    await inhoud(page).locator('.bk-subhead').getByRole('button', { name: 'Vooruitbetaald' }).click();
+    const m = modal(page, 'Vooruitbetaling vastleggen');
+    await m.waitFor({ timeout: 10000 });
+    verwacht(await veld(m, 'Looptijd (maanden)').isVisible(), 'het formulier is niet compleet');
+    await sluitModal(m);
+  });
+
+  await uiStap('de lezer ziet de post, maar kan niets vastleggen of boeken', async () => {
+    const lezer = await openWerkruimte(w.lezer, 'lezer', w.orgId, { tijdelijk: true });
+    const page = lezer.page;
+    await naarVooruitbetaald(lezer);
+    verwacht(!(await inhoud(page).getByRole('button', { name: 'Vooruitbetaling vastleggen' }).isEnabled()), 'de lezer kan een vooruitbetaling vastleggen');
+    gelijk(await inhoud(page).locator('.bk-prepaid-due').count(), 0, 'de balk met Alles boeken voor de lezer');
+    await inhoud(page).locator('.bk-prepaid-list tbody tr').filter({ hasText: VERZEKERING }).first().click();
+    const m = modal(page, VERZEKERING);
+    await m.waitFor({ timeout: 10000 });
+    gelijk(await knoppen(m.locator('.modal-foot')), ['Sluiten'], 'knoppen voor de lezer');
+    gelijk(await m.locator('.bk-dispose').count(), 0, 'Eerder stoppen voor de lezer');
+  });
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -3017,7 +3148,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();
