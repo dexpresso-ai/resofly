@@ -129,6 +129,20 @@ const WORKSPACE_OVERVIEW = clientDomainsOverview({
   moved: [{ id: 'd0d0d0d0-0000-4000-8000-000000000002', hostname: 'klanten.studio-lopik.nl', redirectUntil: '2027-10-01T00:00:00Z' }],
 });
 
+/** Het standaardschema van ensure_default_ledger_accounts (een BV), voor `ledger: true`. */
+const LEDGER_ACCOUNTS = [
+  ['0100', 'Vaste activa', 'asset', 'fixed_asset'], ['0150', 'Cumulatieve afschrijving', 'asset', 'accumulated_depreciation'],
+  ['0500', 'Geplaatst en gestort aandelenkapitaal', 'equity', 'share_capital'], ['0510', 'Onverdeeld resultaat', 'equity', 'retained_earnings'],
+  ['1100', 'Bank', 'asset', 'bank'], ['1300', 'Debiteuren', 'asset', 'accounts_receivable'],
+  ['1500', 'Te vorderen BTW (voorbelasting)', 'asset', 'vat_input'], ['1510', 'Af te dragen BTW (verkoop)', 'liability', 'vat_output'],
+  ['1530', 'Te betalen omzetbelasting', 'liability', 'vat_payable'], ['1600', 'Crediteuren', 'liability', 'accounts_payable'],
+  ['4500', 'Algemene kosten', 'expense', 'general_cost'], ['8000', 'Omzet hoog (21%)', 'revenue', 'sales'],
+].map(([code, name, type, subtype], i) => ({
+  id: `1ed9e000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`, organization_id: seed.ids.ORG, code, name, type, subtype,
+  default_vat_code: null, report_group: null, is_restricted_reserve: false, is_system: true, is_active: true,
+  created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+}));
+
 function createSetup(options) {
   if (!options?.onboarding) return null;
   const settings = options.emptySettings ? null : {
@@ -524,7 +538,10 @@ export async function installMock(context, options = {}) {
         const wantsObject = (req.headers()['accept'] ?? '').includes('pgrst.object');
         return json(route, wantsObject ? (written[0] ?? null) : written, req.method() === 'POST' ? 201 : 200);
       }
-      const rows = restRows(table, url, setup);
+      // `ledger: true`: een organisatie met het standaard rekeningschema, voor
+      // de beginbalans met de auditfile-import (2026-11-11). Alleen voor die
+      // pagina: de rest van de seed heeft bewust geen boekhouding.
+      const rows = options.ledger && table === 'ledger_accounts' ? LEDGER_ACCOUNTS : restRows(table, url, setup);
       const accept = req.headers()['accept'] ?? '';
       const headers = { 'content-range': `0-${Math.max(0, rows.length - 1)}/${rows.length}` };
       if (accept.includes('pgrst.object')) {

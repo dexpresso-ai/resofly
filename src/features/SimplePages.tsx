@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, Globe, History, LayoutTemplate, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
+import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, Download, Globe, History, LayoutTemplate, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceSendMethod, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
@@ -25,6 +25,7 @@ import { PageIcon } from '../components/PageIcon';
 import { FULL_PERMISSIONS, isAccountantRole, LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel, type Permissions } from '../lib/permissions';
 import { AuditLogPanel } from './AuditLog';
 import { ClientDomainSettings } from './ClientDomainSettings';
+import { DataExportPanel } from './DataExport';
 import type { AuditTarget } from '../lib/auditLog';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
@@ -87,7 +88,7 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   accountant: 'Boekhouder',
 };
 
-export type SettingsTab = 'organisatie' | 'logboek' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'domein' | 'documenten' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
+export type SettingsTab = 'organisatie' | 'logboek' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'domein' | 'documenten' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'gegevens' | 'ai' | 'api' | 'email';
 
 /** De boekhouder ziet alleen wat bij de financiën hoort, en dan alleen-lezen. */
 // Het logboek ook: de boekhouder ziet daar alleen de regels over Financiën
@@ -103,6 +104,11 @@ export function settingsTabRoleRule(tab: SettingsTab, role: OrganizationRole | n
   if (isAccountantRole(role)) return ACCOUNTANT_SETTINGS_TABS.includes(tab);
   // Een boekhouder uitnodigen of de toegang intrekken is beheer.
   if (tab === 'boekhouder') return role === 'owner' || role === 'admin';
+  // Alles exporteren: de eigenaar en de beheerders (keuze van 11 november).
+  // Het leest met de eigen rechten, maar het is wel alles in één keer; een
+  // gewoon teamlid of de boekhouder doet dat niet. log_data_export weigert hen
+  // ook.
+  if (tab === 'gegevens') return role === 'owner' || role === 'admin';
   return null;
 }
 
@@ -170,6 +176,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'boekhouder', label: 'Boekhouder', Icon: Calculator, description: 'Geef je boekhouder of accountant een gratis gastaccount dat alleen je financiën kan inzien — niets wijzigen, geen klantdossiers of projecten.' },
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Kies of je facturen per e-mail of via Mollie verstuurt, en koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
+  { id: 'gegevens', label: 'Gegevens', Icon: Download, description: 'Download al je gegevens in één keer: om over te stappen naar een ander pakket, voor je archief of voor je accountant.' },
   { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Koppel je eigen AI (Claude, ChatGPT, Gemini) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
   { id: 'api', label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
   { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails en van de ticketmeldingen aan klanten aan, bepaal of klanten e-mail krijgen over hun tickets, en verstuur een testmail om je configuratie te controleren.' },
@@ -3191,6 +3198,17 @@ export function Settings({
       {canAdminOrganization
         ? (activeOrganization ? <AiUsagePanel organizationId={activeOrganization.id} members={organizationContext.teamMembers} /> : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>)
         : <p className="settings-help">Alleen owners en admins kunnen het verbruik van Gerrie inzien.</p>}
+    </div>}
+
+    {activeTab === 'gegevens' && <div className="settings-tab-panel">
+      {activeOrganization && currentUserId
+        ? <DataExportPanel
+          organizationId={activeOrganization.id}
+          organizationName={settings?.company_name || activeOrganization.name || 'organisatie'}
+          userId={currentUserId}
+          userEmail={activeMembership?.email ?? null}
+        />
+        : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>}
     </div>}
 
     {activeTab === 'api' && <div className="settings-tab-panel">

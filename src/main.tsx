@@ -4172,7 +4172,7 @@ function App() {
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'purchase_invoice' ? purchaseInvoiceSeedFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}
       inboxActivity={purchaseInbox.activity}/>;
-    if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
+    if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} canWriteClients={orgCanWrite && permissions.canWrite('clients')}/>;
     if (page === 'bank') return <BankPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'pnl') return <ProfitLossPage data={data} organizationId={activeOrg.id} onChanged={refresh}/>;
