@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowLeft, CalendarDays, ExternalLink, Inbox, Layers, Mail, MailOpen, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, User, Users, X } from 'lucide-react';
-import type { AppData, Client, ClientCall, ClientEmail, ClientEmailSearchHit, ClientEmailThreadOverview, FileTransferBundle, FileTransferRecipient, Ticket } from '../types';
+import { AlertTriangle, ArrowLeft, CalendarDays, Check, ExternalLink, Folder, FolderInput, Inbox, Layers, Mail, MailOpen, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, User, Users, X } from 'lucide-react';
+import type { AppData, Client, ClientCall, ClientEmail, ClientEmailFolder, ClientEmailSearchHit, ClientEmailThreadOverview, FileTransferBundle, FileTransferRecipient, Ticket } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { DetailTabs } from '../components/DetailTabs';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { InboundInboxTab } from '../components/InboundInbox';
+import { FolderLabel, MailFolderTree, useMailFolderActions, type MailTreeItem } from '../components/MailFolders';
 import { TicketTimeline } from '../components/TicketTimeline';
 import { ClientEmailMessageCard, formatEmailDateTime } from '../components/ClientEmailMessage';
 import { MailRecipientSelect, MessageFilesBar, mailRecipientFor, useMessageFiles } from '../components/MessageFiles';
@@ -16,11 +17,13 @@ import {
   loadClientEmailThreadOverviewForClient, loadClientEmailsForThread,
   loadMySenderIdentity, loadSendingDomains, markClientEmailsRead, markTicketRead, searchClientEmails,
 } from '../lib/repository';
+import { folderPathLabel, foldersOfClient } from '../lib/mailFolders';
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
 import {
   DATE_PERIOD_OPTIONS, NO_CLIENT, countUnread, emailConversation, filterConversations, initials, listTime, matchesWords, periodRange,
   queryWords, replySubject, searchSnippet, sortConversations, splitConversations,
-  type CallConversation, type CommunicationTab, type Conversation, type ConversationFilter, type ConversationKind, type DatePeriod, type TicketConversation,
+  type CallConversation, type CommunicationTab, type Conversation, type ConversationFilter, type ConversationKind, type DatePeriod, type EmailConversation,
+  type TicketConversation,
 } from '../lib/communication';
 import { groupNotesByTicket, ticketConversation, ticketPriorityLabel, ticketStatusLabel } from '../lib/tickets';
 import { callConversation, callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, callWasAnswered, formatPhone, telHref } from '../lib/calls';
@@ -42,6 +45,14 @@ export interface CommunicationFocus {
   threadId?: string | null;
   ticketId?: string | null;
 }
+
+/** Een gesprek in de mappenboom: wat de boom nodig heeft, plus de lijstregel zelf. */
+type TreeConversation = MailTreeItem & { conversation: EmailConversation };
+
+/** Slepen alleen met een muis: op een aanraakscherm zou een rij vastpakken het scrollen blokkeren. */
+const FINE_POINTER = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+  ? window.matchMedia('(pointer: fine)').matches
+  : false;
 
 /**
  * Berichten: alle klantcommunicatie van de organisatie op één pagina.
@@ -79,6 +90,12 @@ export interface CommunicationFocus {
  * Op een telefoon is het één venster tegelijk (lijst óf gesprek), net als de
  * teamchat: `.is-single` op de shell, React kiest welk deel er staat. De twee
  * vensters van een klant staan daar onder elkaar.
+ *
+ * Mappen per klant (20261111210000): staat er één klant in het filter, dan is
+ * het mailvenster een verkenner met de mappen van die klant. Een gesprek zet
+ * je in een map via Verplaatsen in de gesprekskop, door het te slepen, of met
+ * Selecteren voor meerdere tegelijk. In de lijst van alle klanten staat de map
+ * als klein label bij het onderwerp. Zie `components/MailFolders.tsx`.
  */
 export function CommunicationPage({
   data,
@@ -157,9 +174,75 @@ export function CommunicationPage({
   /** Álle gesprekken van de klant in het filter — het mailvenster hoort compleet te zijn. */
   const [clientThreads, setClientThreads] = useState<ClientEmailThreadOverview[]>([]);
   const threadsRef = useRef(threads); threadsRef.current = threads;
+  /** Selecteren in de mappenboom: meerdere gesprekken tegelijk verplaatsen. */
+  const [selecting, setSelecting] = useState(false);
+  const [selectedThreads, setSelectedThreads] = useState<Set<string>>(new Set());
 
   /** De klant die in het filter staat, of null bij "alle klanten" en "zonder klant". */
   const focusClientId = clientFilter && clientFilter !== NO_CLIENT ? clientFilter : null;
+
+  // Een selectie hoort bij de boom van één klant; wissel je van klant of
+  // tabblad, dan begint het opnieuw — anders verplaats je straks gesprekken
+  // die je niet meer ziet.
+  useEffect(() => { setSelecting(false); setSelectedThreads(new Set()); }, [focusClientId, tab, kindFilter]);
+
+  // ── Mappen ──────────────────────────────────────────────────────────────
+
+  /** Waar een gesprek nu staat, volgens wat er geladen is. */
+  function folderOfThread(threadId: string): string | null {
+    for (const list of [clientThreads, threads, deepThreads]) {
+      const hit = list.find(t => t.id === threadId);
+      if (hit) return hit.folder_id ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * De lijsten volgen een verplaatsing meteen, zonder op de server te
+   * wachten: een gesprek dat je in een map sleept, hoort daar direct te staan.
+   */
+  function setThreadFolders(change: ReadonlyMap<string, string | null>) {
+    const apply = (rows: ClientEmailThreadOverview[]) => (rows.some(t => change.has(t.id))
+      ? rows.map(t => (change.has(t.id) ? { ...t, folder_id: change.get(t.id) ?? null } : t))
+      : rows);
+    setThreads(apply);
+    setDeepThreads(apply);
+    setClientThreads(apply);
+  }
+
+  function stopSelecting() {
+    setSelecting(false);
+    setSelectedThreads(new Set());
+  }
+
+  const mailFolders = useMailFolderActions(organizationId, canWrite, {
+    folderOfThread,
+    setThreadFolders,
+    threadIdsIn: folderId => {
+      const ids = new Set<string>();
+      for (const list of [clientThreads, threads, deepThreads]) for (const t of list) if (t.folder_id === folderId) ids.add(t.id);
+      return [...ids];
+    },
+    // Na een fout halverwege weten we niet meer zeker wat waar staat.
+    resync: () => {
+      reload().catch(() => { /* best effort */ });
+      mailFolders.reloadFolders().catch(() => { /* best effort */ });
+      if (focusClientId) {
+        loadClientEmailThreadOverviewForClient(organizationId, focusClientId).then(setClientThreads).catch(() => { /* best effort */ });
+      }
+    },
+    // Uit `data`, niet uit clientById: de hook roept dit al tijdens het
+    // renderen aan (het venster), en clientById staat verderop in deze
+    // component. Dat gaf een leeg scherm zodra je op Verplaatsen klikte.
+    clientName: id => data.clients.find(c => c.id === id)?.name ?? 'deze klant',
+    onSelectionMoved: stopSelecting,
+  }, activity);
+  /** De mappen van de organisatie; `foldersAvailable` is false zolang de migratie hier niet gedraaid is. */
+  const { folders, available: foldersAvailable } = mailFolders;
+
+  function requestMoveThread(thread: ClientEmailThreadOverview) {
+    mailFolders.requestMoveThreads(thread.client_id, [thread.id], `Het gesprek "${thread.subject || '(geen onderwerp)'}" met ${thread.client_name}.`);
+  }
 
   const reload = useCallback(async () => {
     const rows = await loadClientEmailThreadOverview(organizationId);
@@ -282,7 +365,7 @@ export function CommunicationPage({
     for (const thread of [...threads, ...deepThreads, ...clientThreads]) {
       if (seen.has(thread.id)) continue;
       seen.add(thread.id);
-      list.push(emailConversation(thread));
+      list.push(emailConversation(thread, thread.folder_id ? folderPathLabel(folders, thread.folder_id) : ''));
     }
     if (canReadTickets) {
       for (const ticket of data.tickets) {
@@ -301,7 +384,7 @@ export function CommunicationPage({
       }));
     }
     return sortConversations(list);
-  }, [threads, deepThreads, clientThreads, data.tickets, data.clientCalls, notesByTicket, clientById, ticketUnreadIds, currentUserId, canReadTickets]);
+  }, [threads, deepThreads, clientThreads, folders, data.tickets, data.clientCalls, notesByTicket, clientById, ticketUnreadIds, currentUserId, canReadTickets]);
 
   const range = useMemo(
     () => (period === 'custom' ? { from: customFrom || null, to: customTo || null } : periodRange(period)),
@@ -383,6 +466,7 @@ export function CommunicationPage({
     await reload();
   }
 
+
   /** Alleen de keuzelijsten (soort, klant, periode); de zoekterm heeft zijn eigen wisknop. */
   function clearFilters() {
     setClientFilter(''); setKindFilter(''); setPeriod(''); setCustomFrom(''); setCustomTo('');
@@ -412,6 +496,15 @@ export function CommunicationPage({
   const focusClient = focusClientId ? clientById.get(focusClientId) ?? null : null;
   const split = Boolean(focusClientId) && !kindFilter;
   const { emails: emailVisible, tickets: ticketVisible, calls: callVisible } = useMemo(() => splitConversations(visible), [visible]);
+
+  // Eén klant gekozen en de mappen bestaan hier: het mailvenster wordt een
+  // verkenner met de mappen van die klant.
+  const useTree = foldersAvailable && Boolean(focusClientId) && (kindFilter === '' || kindFilter === 'email');
+  const clientFolders = useMemo(() => foldersOfClient(folders, focusClientId), [folders, focusClientId]);
+  const treeItems = useMemo<TreeConversation[]>(() => emailVisible
+    .filter((c): c is EmailConversation => c.kind === 'email')
+    .map(c => ({ key: c.key, threadId: c.id, folderId: c.folderId, unread: c.unread, conversation: c })), [emailVisible]);
+  const treeFiltering = query.trim().length > 0 || Boolean(period) || tab === 'unread';
 
   const headSub = ready
     ? [
@@ -462,14 +555,44 @@ export function CommunicationPage({
     </div>}
   </>;
 
-  const renderRow = (item: Conversation, compact = false) => <ConversationRow
+  const renderRow = (item: Conversation, compact = false, pick?: { selecting: boolean; selected: boolean; toggle: () => void }) => <ConversationRow
     key={item.key}
     item={item}
     client={item.clientId ? clientById.get(item.clientId) ?? null : null}
-    active={item.key === selectedKey && !composing}
+    active={item.key === selectedKey && !composing && !pick?.selecting}
     found={foundLine(item)}
     compact={compact}
-    onSelect={() => selectConversation(item.key)}
+    folderLabel={!compact && item.kind === 'email' && item.folderId ? folderPathLabel(folders, item.folderId) || null : null}
+    selecting={pick?.selecting ?? false}
+    selected={pick?.selected ?? false}
+    onSelect={pick?.selecting ? pick.toggle : () => selectConversation(item.key)}
+  />;
+
+  const mailTree = (empty: string) => focusClientId && <MailFolderTree<TreeConversation>
+    clientId={focusClientId}
+    clientName={focusClient?.name ?? 'deze klant'}
+    folders={clientFolders}
+    items={treeItems}
+    filtering={treeFiltering}
+    canWrite={canWrite}
+    dragEnabled={FINE_POINTER && !narrow}
+    renderItem={(item, state) => renderRow(item.conversation, true, state)}
+    selecting={selecting}
+    selected={selectedThreads}
+    onSelectingChange={on => { setSelecting(on); if (!on) setSelectedThreads(new Set()); }}
+    onSelectedChange={setSelectedThreads}
+    onMoveSelected={() => mailFolders.requestMoveThreads(
+      focusClientId,
+      [...selectedThreads],
+      `${selectedThreads.size === 1 ? '1 gesprek' : `${selectedThreads.size} gesprekken`} van ${focusClient?.name ?? 'deze klant'}.`,
+      true,
+    )}
+    onCreate={(parentId, name) => mailFolders.createFolder(focusClientId, parentId, name)}
+    onRename={mailFolders.renameFolder}
+    onRequestDelete={mailFolders.requestDelete}
+    onRequestMoveFolder={mailFolders.requestMoveFolder}
+    onDropThreads={(ids, folderId) => mailFolders.dropThreads(ids, folderId, selecting)}
+    emptyText={empty}
   />;
 
   return <div className={`comm-page${detailFillsScreen ? ' is-detail' : ''}`}>
@@ -577,7 +700,7 @@ export function CommunicationPage({
           </div>
         </div>
       : <div className={`comm-shell${singlePane ? ' is-single' : ''}`}>
-          {showList && <div className={`comm-list${split ? ' is-split' : ''}`}>
+          {showList && <div className={`comm-list${split ? ' is-split' : ''}${useTree ? ' has-tree' : ''}`}>
             {split
               ? <>
                   {hasNotice && <div className="comm-list-notices">{notices}</div>}
@@ -587,8 +710,11 @@ export function CommunicationPage({
                       icon={Mail}
                       count={emailVisible.length}
                       empty={`Geen mailgesprekken van ${focusClient?.name ?? 'deze klant'}.`}
+                      bare={useTree}
                     >
-                      {emailVisible.map(item => renderRow(item, true))}
+                      {useTree
+                        ? mailTree(`Geen mailgesprekken van ${focusClient?.name ?? 'deze klant'}.`)
+                        : emailVisible.map(item => renderRow(item, true))}
                     </ConversationColumn>
                     {canReadTickets && <ConversationColumn
                       label="Tickets"
@@ -608,10 +734,15 @@ export function CommunicationPage({
                     </ConversationColumn>
                   </div>}
                 </>
-              : <div className="comm-list-scroll">
-                  {notices}
-                  {visible.map(item => renderRow(item))}
-                </div>}
+              : useTree
+                ? <>
+                    {hasNotice && <div className="comm-list-notices">{notices}</div>}
+                    {mailTree(`Geen mailgesprekken van ${focusClient?.name ?? 'deze klant'}.`)}
+                  </>
+                : <div className="comm-list-scroll">
+                    {notices}
+                    {visible.map(item => renderRow(item))}
+                  </div>}
           </div>}
 
           {showDetail && <div className="comm-detail">
@@ -629,6 +760,8 @@ export function CommunicationPage({
               key={selected.key}
               data={data}
               thread={selected.thread}
+              folders={foldersAvailable ? folders : null}
+              onRequestMove={() => requestMoveThread(selected.thread)}
               client={clientById.get(selected.clientId) ?? null}
               organizationId={organizationId}
               canWrite={canWrite}
@@ -673,6 +806,8 @@ export function CommunicationPage({
           </div>}
         </div>}
 
+    {mailFolders.dialogs}
+
     {logging && <CallLogDialog
       organizationId={organizationId}
       data={data}
@@ -690,23 +825,27 @@ export function CommunicationPage({
  * daaronder een eigen scrollgebied. Twee scrollgebieden naast elkaar is het
  * hele punt — door de tickets scrollen mag de mail niet verschuiven.
  */
-function ConversationColumn({ label, icon: Icon, count, empty, children }: {
+function ConversationColumn({ label, icon: Icon, count, empty, bare = false, children }: {
   label: string;
   icon: typeof Mail;
   count: number;
   /** Tekst als dit venster niets te tonen heeft; het andere venster blijft dan gewoon staan. */
   empty: string;
+  /** De inhoud regelt zelf zijn scrollgebied en lege staat (de mappenboom). */
+  bare?: boolean;
   children: ReactNode;
 }) {
-  return <section className="comm-col" aria-label={`${label} (${count})`}>
+  return <section className={`comm-col${bare ? ' has-tree' : ''}`} aria-label={`${label} (${count})`}>
     <div className="comm-col-head">
       <Icon size={13} aria-hidden="true" />
       <span className="comm-col-label">{label}</span>
       <span className="comm-col-count">{count}</span>
     </div>
-    <div className="comm-list-scroll">
-      {count === 0 ? <div className="client-empty-line comm-col-empty">{empty}</div> : children}
-    </div>
+    {bare
+      ? children
+      : <div className="comm-list-scroll">
+          {count === 0 ? <div className="client-empty-line comm-col-empty">{empty}</div> : children}
+        </div>}
   </section>;
 }
 
@@ -736,12 +875,20 @@ function ChannelBadge({ item }: { item: Conversation }) {
   </span>;
 }
 
-function ConversationRow({ item, client, active, found, compact = false, onSelect }: {
+function ConversationRow({ item, client, active, found, compact = false, folderLabel = null, selecting = false, selected = false, onSelect }: {
   item: Conversation;
   client: Client | null;
   active: boolean;
   /** Fragment rond de zoektreffer, als die niet al in onderwerp of preview te zien is. */
   found: string | null;
+  /**
+   * De map van een mailgesprek, in de lijst van alle klanten. In de boom van
+   * één klant niet: daar zie je de plek al aan waar de regel staat.
+   */
+  folderLabel?: string | null;
+  /** Selecteren in de mappenboom: klikken kiest de regel in plaats van hem te openen. */
+  selecting?: boolean;
+  selected?: boolean;
   /**
    * In de vensters van één klant: zonder klantrondje en zonder klantnaam.
    * Die staan in elke regel hetzelfde — het is per slot van rekening één klant —
@@ -756,10 +903,12 @@ function ConversationRow({ item, client, active, found, compact = false, onSelec
   const isCall = item.kind === 'call';
   return <button
     type="button"
-    className={`comm-row${active ? ' active' : ''}${unread ? ' unread' : ''}${isTicket ? ' is-ticket' : ''}${isCall ? ' is-call' : ''}${compact ? ' is-compact' : ''}`}
+    className={`comm-row${active ? ' active' : ''}${unread ? ' unread' : ''}${isTicket ? ' is-ticket' : ''}${isCall ? ' is-call' : ''}${compact ? ' is-compact' : ''}${selecting ? ' is-selecting' : ''}${selected ? ' is-picked' : ''}`}
     onClick={onSelect}
     aria-current={active ? 'true' : undefined}
+    aria-pressed={selecting ? selected : undefined}
   >
+    {selecting && <span className={`mf-check${selected ? ' is-on' : ''}`} aria-hidden="true">{selected && <Check size={11} strokeWidth={3} />}</span>}
     {!compact && <span className="comm-row-lead">
       {item.clientId
         ? <span className="comm-row-avatar" style={{ background: client?.color || 'var(--bg4)' }} aria-hidden="true">{initials(item.clientName)}</span>
@@ -771,7 +920,10 @@ function ConversationRow({ item, client, active, found, compact = false, onSelec
         <span className="comm-row-client">{compact ? item.subject : item.clientName}</span>
         <time className="comm-row-time" dateTime={item.lastAt} title={formatEmailDateTime(item.lastAt)}>{listTime(item.lastAt)}</time>
       </span>
-      {!compact && <span className="comm-row-subject">{item.subject}</span>}
+      {!compact && <span className="comm-row-subject">
+        {folderLabel && <span className="comm-row-folder" title={`In map ${folderLabel}`}><Folder size={10} aria-hidden="true" />{folderLabel}</span>}
+        {item.subject}
+      </span>}
       {found
         ? <span className="comm-row-found" title="Gevonden in dit gesprek"><Search size={11} aria-hidden="true" />{found}</span>
         : <span className="comm-row-preview">{item.preview}</span>}
@@ -829,9 +981,13 @@ function stripHtml(html: string): string {
 }
 
 /** Eén gesprek: kop, antwoordknop en de berichten (nieuwste eerst, zoals in het klantdossier). */
-function ThreadPane({ data, thread, client, organizationId, canWrite, activity, singlePane, onBack, onOpenClient, onRead, onChanged }: {
+function ThreadPane({ data, thread, folders, onRequestMove, client, organizationId, canWrite, activity, singlePane, onBack, onOpenClient, onRead, onChanged }: {
   data: AppData;
   thread: ClientEmailThreadOverview;
+  /** Alle mappen van de organisatie, of null als die hier nog niet bestaan (dan geen mapknop). */
+  folders: ClientEmailFolder[] | null;
+  /** Het venster "Verplaatsen naar map" openen voor dit gesprek. */
+  onRequestMove: () => void;
   client: Client | null;
   organizationId: string;
   canWrite: boolean;
@@ -962,9 +1118,13 @@ function ThreadPane({ data, thread, client, organizationId, canWrite, activity, 
           </button>
           <span>{recipient || 'geen e-mailadres'}</span>
           <span>{emails.length} bericht{emails.length === 1 ? '' : 'en'}</span>
+          {folders && <FolderLabel folders={folders} folderId={thread.folder_id} onClick={canWrite ? onRequestMove : undefined} />}
         </div>
       </div>
       <div className="comm-detail-actions">
+        {folders && <Button onClick={onRequestMove} disabled={!canWrite} title={canWrite ? 'Dit gesprek in een map zetten' : 'Je hebt alleen leesrechten op Klanten'}>
+          <FolderInput size={14} /> <span className="btn-label">Verplaatsen</span>
+        </Button>}
         <Button variant="primary" onClick={() => { setReplying(r => !r); setSendMessage(null); }} disabled={!canWrite || !hasRecipient} title={hasRecipient ? 'Antwoord in dit gesprek' : 'Deze klant heeft geen e-mailadres'}>
           <Reply size={14} /> <span className="btn-label">{replying ? 'Sluiten' : 'Beantwoorden'}</span>
         </Button>

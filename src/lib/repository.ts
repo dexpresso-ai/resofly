@@ -41,6 +41,7 @@ import type {
   DunningNotice,
   SendingDomain,
   ClientEmail,
+  ClientEmailFolder,
   ClientEmailSearchHit,
   ClientEmailThread,
   ClientEmailThreadOverview,
@@ -4672,14 +4673,18 @@ const CLIENT_EMAIL_COLUMNS = 'id,organization_id,created_by,thread_id,client_id,
  * versturen loopt via de `mail` Edge Function en de webhook werkt de status bij.
  */
 export async function loadClientEmailThreads(organizationId: UUID, clientId: UUID): Promise<ClientEmailThread[]> {
-  const { data, error } = await supabase
+  const query = (columns: string) => supabase
     .from('client_email_threads')
-    .select(CLIENT_EMAIL_THREAD_COLUMNS)
+    .select(columns)
     .eq('organization_id', organizationId)
     .eq('client_id', clientId)
     .order('last_message_at', { ascending: false });
+  let { data, error } = await query(`${CLIENT_EMAIL_THREAD_COLUMNS},folder_id`);
+  // De app rolt eerder uit dan de migratie met de mappen (20261111210000).
+  // Zonder deze terugval laadde het tabblad Communicatie in dat gaatje niets.
+  if (error && isMissingColumn(error, 'folder_id')) ({ data, error } = await query(CLIENT_EMAIL_THREAD_COLUMNS));
   if (error) throw error;
-  return (data ?? []) as ClientEmailThread[];
+  return (data ?? []) as unknown as ClientEmailThread[];
 }
 
 /**
@@ -4744,18 +4749,37 @@ export async function loadClientEmailUnreadCounts(organizationId: UUID): Promise
 const CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS = 'id,organization_id,created_by,client_id,client_name,client_email,subject,last_message_at,last_direction,created_at,updated_at,message_count,unread_count,has_delivery_problem,last_email_id,last_email_direction,last_from_name,last_from_email,last_status,last_email_at,last_preview';
 
 /**
+ * De view met de map erbij (folder_id, 20261111210000). Kent de view die kolom
+ * nog niet, dan nog één keer zonder: de lijst laadt dan gewoon, alleen zonder
+ * mappen. Eén keer per sessie vastgesteld, zodat niet elke lijst twee keer
+ * vraagt; na de migratie volstaat de pagina verversen.
+ */
+let overviewKnowsFolders = true;
+
+async function selectThreadOverview<T>(
+  build: (columns: string) => PromiseLike<{ data: T[] | null; error: { code?: string; message?: string } | null }>,
+): Promise<{ data: T[] | null; error: { code?: string; message?: string } | null }> {
+  if (overviewKnowsFolders) {
+    const first = await build(`${CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS},folder_id`);
+    if (!first.error || !isMissingColumn(first.error, 'folder_id')) return first;
+    overviewKnowsFolders = false;
+  }
+  return build(CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS);
+}
+
+/**
  * Alle klantgesprekken van de organisatie, nieuwste eerst, mét klantnaam,
  * laatste bericht en ongelezen-teller (view client_email_thread_overview).
  * Begrensd: de pagina Berichten is een postvak, geen archief — wie verder
  * terug wil, zoekt in het klantdossier zelf.
  */
 export async function loadClientEmailThreadOverview(organizationId: UUID, limit = 400): Promise<ClientEmailThreadOverview[]> {
-  const { data, error } = await supabase
+  const { data, error } = await selectThreadOverview<ClientEmailThreadOverview>(columns => supabase
     .from('client_email_thread_overview')
-    .select(CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS)
+    .select(columns)
     .eq('organization_id', organizationId)
     .order('last_message_at', { ascending: false })
-    .limit(limit);
+    .limit(limit) as unknown as PromiseLike<{ data: ClientEmailThreadOverview[] | null; error: { code?: string; message?: string } | null }>);
   if (error) {
     // De frontend loopt vóór op de database (Cloudflare Pages rolt uit op een
     // push, de migratie gaat langs een andere weg). Bestaat de view nog niet,
@@ -4773,13 +4797,13 @@ export async function loadClientEmailThreadOverview(organizationId: UUID, limit 
  * twee jaar post mag niet stilletjes bij het vierhonderdste gesprek ophouden.
  */
 export async function loadClientEmailThreadOverviewForClient(organizationId: UUID, clientId: UUID, limit = 500): Promise<ClientEmailThreadOverview[]> {
-  const { data, error } = await supabase
+  const { data, error } = await selectThreadOverview<ClientEmailThreadOverview>(columns => supabase
     .from('client_email_thread_overview')
-    .select(CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS)
+    .select(columns)
     .eq('organization_id', organizationId)
     .eq('client_id', clientId)
     .order('last_message_at', { ascending: false })
-    .limit(limit);
+    .limit(limit) as unknown as PromiseLike<{ data: ClientEmailThreadOverview[] | null; error: { code?: string; message?: string } | null }>);
   if (error) {
     // Zelfde afspraak als hierboven: bestaat de view nog niet, dan is de lijst
     // leeg en blijft de pagina werken op wat er al geladen is.
@@ -4809,12 +4833,12 @@ export async function loadClientEmailsForThread(organizationId: UUID, threadId: 
 export async function loadClientEmailThreadOverviewByIds(organizationId: UUID, threadIds: UUID[]): Promise<ClientEmailThreadOverview[]> {
   const ids = [...new Set(threadIds)].slice(0, 200);
   if (ids.length === 0) return [];
-  const { data, error } = await supabase
+  const { data, error } = await selectThreadOverview<ClientEmailThreadOverview>(columns => supabase
     .from('client_email_thread_overview')
-    .select(CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS)
+    .select(columns)
     .eq('organization_id', organizationId)
     .in('id', ids)
-    .order('last_message_at', { ascending: false });
+    .order('last_message_at', { ascending: false }) as unknown as PromiseLike<{ data: ClientEmailThreadOverview[] | null; error: { code?: string; message?: string } | null }>);
   if (error) {
     if (isMissingRelation(error)) return [];
     throw error;
@@ -5108,6 +5132,78 @@ export async function deleteClientEmail(organizationId: UUID, clientEmailId: UUI
     p_organization_id: organizationId, p_client_email_id: clientEmailId,
   });
   if (error) throw error;
+}
+
+// ── Mappen voor klantmail (Berichten) ───────────────────────────────────────
+//
+// Lezen mag rechtstreeks (RLS + modulepoort Klanten); schrijven loopt alleen
+// via de rpc's uit 20261111210000. Die zeggen zelf in gewone woorden wat er
+// mis is ("Er staat al een map …"), dus die zin geven we ongewijzigd door.
+
+const CLIENT_EMAIL_FOLDER_COLUMNS = 'id,organization_id,client_id,parent_id,name,created_by,created_at,updated_at';
+
+/**
+ * Alle mappen van de organisatie. Het zijn er per klant een handvol, en de
+ * lijst op Berichten toont ook bij "alle klanten" waar een gesprek staat.
+ * `null` = de tabel bestaat hier nog niet (migratie nog niet gedraaid): de
+ * pagina laat de mappen dan weg in plaats van een fout te tonen.
+ */
+export async function loadClientEmailFolders(organizationId: UUID): Promise<ClientEmailFolder[] | null> {
+  const { data, error } = await supabase
+    .from('client_email_folders')
+    .select(CLIENT_EMAIL_FOLDER_COLUMNS)
+    .eq('organization_id', organizationId)
+    .order('name', { ascending: true })
+    .limit(5000);
+  if (error) {
+    if (isMissingRelation(error)) return null;
+    throw error;
+  }
+  return (data ?? []) as ClientEmailFolder[];
+}
+
+export async function createClientEmailFolder(organizationId: UUID, clientId: UUID, name: string, parentId: UUID | null): Promise<ClientEmailFolder> {
+  const { data, error } = await supabase.rpc('create_client_email_folder', {
+    p_organization_id: organizationId, p_client_id: clientId, p_name: name, p_parent_id: parentId,
+  });
+  if (error) throw error;
+  return data as ClientEmailFolder;
+}
+
+export async function renameClientEmailFolder(organizationId: UUID, folderId: UUID, name: string): Promise<ClientEmailFolder> {
+  const { data, error } = await supabase.rpc('rename_client_email_folder', {
+    p_organization_id: organizationId, p_folder_id: folderId, p_name: name,
+  });
+  if (error) throw error;
+  return data as ClientEmailFolder;
+}
+
+/** Een map (met alles erin) verplaatsen; `parentId` null = bovenaan bij de klant. */
+export async function moveClientEmailFolder(organizationId: UUID, folderId: UUID, parentId: UUID | null): Promise<ClientEmailFolder> {
+  const { data, error } = await supabase.rpc('move_client_email_folder', {
+    p_organization_id: organizationId, p_folder_id: folderId, p_parent_id: parentId,
+  });
+  if (error) throw error;
+  return data as ClientEmailFolder;
+}
+
+/** Een map weg; wat erin stond schuift één laag omhoog. */
+export async function deleteClientEmailFolder(organizationId: UUID, folderId: UUID): Promise<{ threads_moved: number; folders_moved: number; parent_id: UUID | null }> {
+  const { data, error } = await supabase.rpc('delete_client_email_folder', {
+    p_organization_id: organizationId, p_folder_id: folderId,
+  });
+  if (error) throw error;
+  return data as { threads_moved: number; folders_moved: number; parent_id: UUID | null };
+}
+
+/** Gesprekken in een map zetten; `folderId` null = terug naar "Zonder map". Geeft terug hoeveel er echt verplaatst zijn. */
+export async function moveClientEmailThreads(organizationId: UUID, threadIds: UUID[], folderId: UUID | null): Promise<number> {
+  if (threadIds.length === 0) return 0;
+  const { data, error } = await supabase.rpc('move_client_email_threads', {
+    p_organization_id: organizationId, p_thread_ids: threadIds, p_folder_id: folderId,
+  });
+  if (error) throw error;
+  return Number(data ?? 0);
 }
 
 // ── E-mailmarketing / campagnes ─────────────────────────────────────────────
