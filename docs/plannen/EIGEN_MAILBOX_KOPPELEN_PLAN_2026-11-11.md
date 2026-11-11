@@ -40,8 +40,11 @@ alles wat ResoFly aan klanten stuurt, en **het postvak** waaruit Berichten leest
    - Een bounce leest ResoFly uit de mailbox zelf (het "onbestelbaar"-bericht).
    - *Geopend* via een trackingpixel wordt *Bekeken*: de klant opende de offerte- of factuurpagina.
      Dat bestaat al, en het is betrouwbaarder.
-7. **Resend blijft** voor marketing (bulk hoort niet door een gewone mailbox), voor mail van ResoFly
-   aan je eigen team, en als vangnet.
+7. **Ook via ResoFly blijft het je eigen domein.** Marketing en de terugval gaan via Resend, maar
+   vanaf je eigen domein (`administratie@jansen.nl`), zolang dat domein bij ResoFly geverifieerd is.
+   Dat kan nu al: het verzenddomein in Instellingen → Domein. Bij het koppelen van een mailbox
+   stelt ResoFly het meteen voor (§7.4). Alleen mail van ResoFly aan je eigen team komt van ResoFly
+   zelf.
 8. **Het doorstuuradres wordt plan B** voor wie niet wil of kan koppelen.
 
 Waar het draait:
@@ -143,7 +146,8 @@ Gmail/Microsoft-OAuth eerder afgewezen)"*. De reden staat er niet bij. Wat sinds
   vertrouwde verkeer van jouw domein.
 - **Resend schaalt niet als verzenddomein voor iedereen.** Alle organisaties delen één account, en
   Resend Pro heeft 10 domeinen (`CHANGELOG_EIGEN_VERZENDDOMEIN_2026-11-06.md`). Met een gekoppelde
-  mailbox is een eigen verzenddomein alleen nog nodig voor marketing.
+  mailbox gaat het dagelijkse verkeer niet meer via Resend. Het eigen verzenddomein blijft wel
+  nuttig, voor marketing en als vangnet (§7.4).
 - **De helft van het gesprek ontbreekt nu.** Wat de ondernemer vanuit Outlook aan een klant stuurt,
   ziet ResoFly nooit.
 - **Microsoft zet wachtwoorden voor mail uit.**
@@ -190,8 +194,9 @@ klanten vanaf dit adres versturen?* Ja zet alle soorten mail op deze mailbox.
    Per regel kies je een gedeelde mailbox, *de mailbox van wie verstuurt*, of *ResoFly*. Bij *als de
    mailbox niet werkt* kies je *via ResoFly* of *wachten tot hij weer werkt*. Alleen de eigenaar en de
    beheerders mogen dit instellen.
-3. **Zonder mailbox** (ingeklapt als er een mailbox is): het verzenddomein bij ResoFly (nodig voor
-   marketing) en het doorstuuradres.
+3. **Via ResoFly vanaf je eigen domein.** Een verwijzing naar het verzenddomein in Instellingen →
+   Domein (§7.4), met de stand: *jansen.nl: klaar* of *nog niet klaar, dan komt terugval van
+   ResoFly*. Daaronder, ingeklapt, het doorstuuradres voor wie geen mailbox koppelt.
 
 **Berichten en het klantdossier:**
 
@@ -236,6 +241,9 @@ definitief, dan geldt de keuze van §4:
 
 - **Klantmail valt nooit stil terug.** Je ziet de fout, met *Toch versturen via ResoFly*.
 - **Documenten, afspraken, bestanden en portaal** gaan via ResoFly, met:
+  - **hetzelfde afzenderadres als de mailbox** (`administratie@jansen.nl`), als `jansen.nl` bij
+    ResoFly geverifieerd is (§7.4). De klant ziet dan geen verschil. Anders komt de mail van "Jansen
+    Fotografie" op het adres van ResoFly;
   - `Reply-To` naar het adres van de mailbox, zodat het antwoord toch bij jou komt;
   - de reden bij de verzending;
   - een melding aan de beheerders.
@@ -377,6 +385,55 @@ bewust "betaalkritisch" en wilde hem niet aanraken. Daarom gaat de overstap in t
    idempotentiesleutel). Na de overstap moet de payload hetzelfde zijn. Alleen de kleine gaten van §2
    worden bewust gerepareerd, met een eigen test.
 2. **Dan pas de mailbox als weg erbij** (fase 2 en 3), per soort, achter de schakelaar.
+
+### 7.4 Via ResoFly, vanaf je eigen domein
+
+Gaat een mail via ResoFly (marketing, de terugval, of een organisatie zonder mailbox), dan komt hij
+toch van het eigen domein. Dat bestaat al sinds juni, en sinds 6 november werkt het goed
+(`CHANGELOG_EIGEN_VERZENDDOMEIN_2026-11-06.md`): Instellingen → Domein → *Eigen verzenddomein*, naast
+het webadres van het klantportaal.
+
+**Wat de klant daarvoor doet:** eenmalig drie DNS-records bij zijn domeinbeheerder.
+
+- Een DKIM-sleutel (`resend._domainkey.jansen.nl`).
+- Een SPF-record en een MX op het subdomein `send.jansen.nl`.
+
+Zijn gewone mail merkt daar niets van: de MX staat op `send.`, niet op het domein zelf, en het
+SPF-record van `jansen.nl` blijft zoals het is. Resend tekent met DKIM op `jansen.nl`, dus ook een
+strenge DMARC (`p=reject`) laat de mail door. Het scherm controleert de records en vraagt een minuut
+lang zelf de stand op.
+
+**Wat dit plan eraan toevoegt:**
+
+- **Hetzelfde adres als de mailbox.** Valt `administratie@jansen.nl` terug op ResoFly, dan is het
+  `From` ook `administratie@jansen.nl`, met hetzelfde adres als `Reply-To`. `sendOrgMail` neemt
+  het adres van de mailbox over, maar alleen als het domein op dat moment geverifieerd is. Dat is
+  dezelfde controle tegen vervalsen als nu in `resolveSenderIdentity` (`_shared/sendingDomain.ts`).
+  Niet geverifieerd? Dan komt de mail van "Jansen Fotografie" op het adres van ResoFly, met
+  `Reply-To` naar de mailbox. Nooit van een domein dat niet bij ResoFly geverifieerd is: dat haalt
+  DMARC niet en belandt in de spam, of wordt geweigerd.
+- **Meteen voorstellen bij het koppelen.** Na *Mailbox gekoppeld* volgt: *Wil je dat ResoFly ook
+  vanaf jansen.nl kan versturen, als je mailbox even niet werkt en voor nieuwsbrieven? Zet dan deze
+  drie records.* Het domein haalt ResoFly uit het adres van de mailbox. Is het verzenddomein al
+  klaar, dan zie je alleen een vinkje.
+- **De stand per route** in Instellingen → E-mail → Verzenden: *terugval vanaf
+  administratie@jansen.nl* of *terugval vanaf ResoFly, jansen.nl is nog niet klaar*.
+- **Niet in je map Verzonden.** Een terugval loopt buiten je mailbox om. Werkt de mailbox weer,
+  dan zet ResoFly bij IMAP het bewaarde `.eml` alsnog in Verzonden (`APPEND`). Of dat bij Microsoft
+  ook netjes kan (een bericht uit MIME in Verzonden items, niet als concept), test fase 0.
+
+**De grens zit bij Resend, niet bij de klant.**
+
+- Alle organisaties delen één Resend-account. Pro heeft 10 domeinen. Daarboven:
+  - extra domeinen (100 voor $20 per maand, ook op Pro);
+  - of het Scale-abonnement (1.000 domeinen, vanaf $90 per maand).
+
+  Wordt het eigen domein bij ResoFly voor iedereen de standaard, dan is dat uitbreiden een vaste
+  stap vóór de 11e organisatie. Zie §17 en beslissing 15.
+- Een domein kan maar in één Resend-account tegelijk geverifieerd zijn. Staging en productie hebben
+  elk een eigen account; een testdomein hoort dus bij één van de twee (punt 26 van
+  `ACTIEPUNTEN_BEVEILIGING_SAAS_2026-11-01.md`).
+- Per organisatie mag de code nu hooguit vijf verzenddomeinen koppelen. Dat is genoeg.
 
 ---
 
@@ -817,6 +874,7 @@ is het gegevens, nooit een opdracht.
 | Herinneringen in één klap via Microsoft | Na 30 berichten in een minuut weigert Exchange; de rest faalt | Een wachtrij met tempo per mailbox; rondes als `batch` |
 | Mailbox kapot, factuur gaat stil niet weg | De klant krijgt nooit een factuur, niemand weet het | Terugval naar ResoFly (of wachten), altijd zichtbaar, met melding |
 | Klantmail stil via ResoFly als de mailbox kapot is | De klant krijgt mail van een onverwacht adres | Klantmail valt nooit stil terug |
+| Bij een terugval het adres van de mailbox als `From` zetten, zonder geverifieerd domein | DMARC faalt: de factuur belandt in de spam of wordt geweigerd | Het eigen adres alleen als het domein bij ResoFly geverifieerd is; anders het adres van ResoFly met `Reply-To` |
 | De kopie in Verzonden opnieuw inlezen | Elke factuurmail twee keer in het dossier | `X-ResoFly-Id` en de `Message-ID` koppelen de kopie aan de rij in `mail_sends` |
 | *Geopend* laten staan zonder pixel | Elke offerte "nooit geopend"; het Gerrie-signaal vuurt bij alles | *Bekeken* uit de pagina; het signaal kijkt daarnaar |
 | Bounces negeren | Herinneringen naar een adres dat niet bestaat, tot aan de aanmaning | Onbestelbaar-berichten uit de mailbox lezen; `email_suppressions` |
@@ -884,9 +942,14 @@ Dit is op zichzelf waardevol en verkleint het risico van alles wat volgt.
   - de afspraakmails (zonder ICS);
   - bestanden;
   - het portaal en de codes.
-- Terugval, tempo en voorrang.
-- **Scherm:** Instellingen → E-mail (Mailboxen, Verzenden), *Van* in Berichten, de statussen in
-  Financiën, de melding bij een kapotte koppeling, en de stap bij Inrichten.
+- Terugval (vanaf het eigen domein als dat geverifieerd is), tempo en voorrang.
+- **Scherm:**
+  - Instellingen → E-mail (Mailboxen, Verzenden);
+  - na het koppelen het voorstel om het domein ook bij ResoFly klaar te zetten;
+  - *Van* in Berichten;
+  - de statussen in Financiën;
+  - de melding bij een kapotte koppeling;
+  - de stap bij Inrichten.
 - Verder: logboek, vertrek van een teamlid, exportmanifest, en
   `docs/setup/MAILBOX_KOPPELEN_SETUP.md`.
 
@@ -942,8 +1005,10 @@ ongeveer 12 tot 14 weken tot en met fase 5.
   binnen het tegoed van Pro.
 - **R2:** bijlagen, ingelezen `.eml`'s en de `.eml`'s *zoals verstuurd*. De grootste post. Een
   quotum per abonnement is beslissing 13.
-- **Resend:** minder verkeer, en minder eigen domeinen nodig. Op termijn kan een kleiner abonnement
-  volstaan.
+- **Resend:** minder verkeer. Maar wie ook via ResoFly vanaf zijn eigen domein wil versturen
+  (terugval, marketing), heeft een domein bij Resend nodig (§7.4). Pro heeft er 10. Daarboven
+  extra domeinen (100 voor $20 per maand) of Scale (1.000 domeinen, vanaf $90 per maand).
+  Controleer de actuele prijzen.
 - **Microsoft en hosters:** gratis. Lidmaatschap van het Microsoft AI Cloud Partner Program ook.
 
 ---
@@ -966,6 +1031,7 @@ ongeveer 12 tot 14 weken tot en met fase 5.
 | 12 | Gmail? | App-wachtwoord via IMAP; OAuth bij genoeg vraag | Gerjan |
 | 13 | Mailboxen per abonnement, en opslag? | Open | Gerjan |
 | 14 | Wie stelt routes in, wie koppelt? | Routes: eigenaar en beheerders. Persoonlijke mailbox: elk teamlid met schrijfrecht op Klanten. | Voorstel |
+| 15 | Versturen via ResoFly vanaf het eigen domein? | Ja: altijd als het domein geverifieerd is, en bij het koppelen van een mailbox meteen voorstellen. Resend uitbreiden met extra domeinen zodra er meer dan 10 nodig zijn. | Gerjan, 11 november: ja, gevraagd |
 
 ---
 
@@ -976,6 +1042,8 @@ ongeveer 12 tot 14 weken tot en met fase 5.
 - **`npm test`** (app en `_shared`, ook onder Node):
   - `resolveMailRoute` (elke route, elke terugval, een persoonlijke mailbox van een ander, een
     mailbox van een andere organisatie);
+  - de terugval vanaf het adres van de mailbox: met een geverifieerd domein, met een domein dat
+    net zijn verificatie kwijt is, en zonder domein (dan het adres van ResoFly met `Reply-To`);
   - de MIME-bouwer (koppen, `cid`-logo, ICS, PDF en UBL);
   - het herkennen van bounces met de echte voorbeelden;
   - presets en autoconfig, de SSRF-controle, `secretBox`;
@@ -1049,6 +1117,9 @@ ongeveer 12 tot 14 weken tot en met fase 5.
   [FAQ](https://developers.cloudflare.com/containers/faq/).
 - Cloudflare Workers en TCP:
   [TCP sockets](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/).
+- Resend, domeinen per abonnement (Pro 10, Scale 1.000, extra domeinen per 100):
+  [pricing](https://resend.com/pricing),
+  [Introducing the Scale plan](https://resend.com/blog/introducing-the-scale-plan).
 - Mailrechten bij Microsoft en toestemming van een beheerder: indicatief, uit Microsoft Q&A en
   [Nylas over uitgeversverificatie](https://support.nylas.com/hc/en-us/articles/28841177145117-Understanding-This-App-May-Be-Risky-Warnings-Post-Publisher-Verification).
   Fase 0 test dit in een echte tenant.
