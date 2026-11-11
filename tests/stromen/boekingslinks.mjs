@@ -99,6 +99,39 @@ export default async function boekingslinksScenario() {
     gelijk(lijst.links.length, 0, 'geen links van een andere organisatie');
   });
 
+  // Het rooster toont de afspraken uit al je agenda's, niet alleen uit die van
+  // de link. Tekenen en het weekpatroon (skipClashes) zetten dan ook geen
+  // moment over zo'n afspraak; met de hand blijft het een waarschuwing.
+  // Zie docs/changelog/CHANGELOG_BOEKINGSROOSTER_ALLE_AGENDAS_2026-11-11.md.
+  await stap('een afspraak in je andere agenda: dat moment komt er niet op, een afspraak van een collega telt niet', async () => {
+    const los = gelukt(await boeking(w.medewerker.token, w.orgId, 'createLink', { sourceId: bron.id, title: 'Losse link' }), 'losse link');
+    const prive = gelukt(await agenda(w.medewerker.token, w.orgId, 'createNativeCalendar', { name: 'Privé' }), 'tweede agenda').source;
+    const tandarts = moment(78, 60);
+    gelukt(await agenda(w.medewerker.token, w.orgId, 'createEvent', { event: { sourceId: prive.id, title: 'Tandarts', startsAt: tandarts.startsAt, endsAt: tandarts.endsAt } }), 'afspraak');
+    const team = gelukt(await agenda(w.eigenaar.token, w.orgId, 'createNativeCalendar', { name: 'Team', visibility: 'organization' }), 'gedeelde agenda van een collega').source;
+    const overleg = moment(82, 60);
+    gelukt(await agenda(w.eigenaar.token, w.orgId, 'createEvent', { event: { sourceId: team.id, title: 'Overleg van de collega', startsAt: overleg.startsAt, endsAt: overleg.endsAt } }), 'afspraak van de collega');
+
+    // Wat het rooster laat zien: de afspraak uit de andere agenda zit erbij.
+    const inBeeld = gelukt(await agenda(w.medewerker.token, w.orgId, 'listEvents', { start: tandarts.startsAt, end: tandarts.endsAt }), 'afspraken');
+    verwacht(inBeeld.events.some(e => e.source_id === prive.id && e.title === 'Tandarts'), 'de tandarts staat in het rooster');
+
+    const getekend = gelukt(await boeking(w.medewerker.token, w.orgId, 'addSlots', {
+      linkId: los.link.id, slots: [moment(78), moment(82), moment(86)], skipClashes: true,
+    }), 'tekenen');
+    gelijk(getekend.slots.length, 2, 'twee momenten erop');
+    gelijk(getekend.clashes?.map(c => c.conflict), ['Tandarts'], 'het moment van de tandarts overgeslagen');
+    gelijk(getekend.warnings.length, 0, 'geen waarschuwing: het moment staat er niet op');
+
+    // Met de hand: bewust gekozen, dus erop met een waarschuwing.
+    const halfUurLater = { startsAt: new Date(Date.parse(tandarts.startsAt) + 30 * 60_000).toISOString(), endsAt: tandarts.endsAt };
+    const hand = gelukt(await boeking(w.medewerker.token, w.orgId, 'addSlots', { linkId: los.link.id, slots: [halfUurLater] }), 'met de hand');
+    gelijk([hand.slots.length, hand.warnings.map(x => x.conflict)], [1, ['Tandarts']], 'erop, met een waarschuwing');
+    gelijk(hand.clashes ?? [], [], 'niets overgeslagen');
+
+    gelukt(await boeking(w.medewerker.token, w.orgId, 'deleteLink', { linkId: los.link.id }), 'opruimen');
+  });
+
   groep('De boekingspagina van de klant');
   const begonnen = await stap('een moment dat al begonnen is, staat er niet op', async () => {
     // sqlRij leest alleen een select; de rij krijgt hier zelf zijn id.

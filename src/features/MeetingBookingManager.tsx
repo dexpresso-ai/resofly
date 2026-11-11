@@ -14,6 +14,8 @@ import { bookingVideoFields, bookingVideoFromLink, defaultBookingVideo, type Boo
 import {
   BOOKING_STATUS_LABELS,
   LINK_STATE_LABELS,
+  bookingGridSources,
+  clashNotice,
   SLOT_STATUS_LABELS,
   VIDEO_INFO,
   expiryLabel,
@@ -40,6 +42,7 @@ import {
   removeBookingSlot,
   sendBookingLinkMail,
   updateBookingLink,
+  type AddSlotsResult,
   type BookingLinkDetail,
 } from '../lib/meetingBookingApi';
 
@@ -64,7 +67,10 @@ const PROVIDER_LABEL: Record<string, string> = { native: 'ResoFly-agenda', googl
  */
 export type BookingFocus = { key: number; linkId?: string | null; clientId?: string | null; create?: boolean };
 
-export function MeetingBookingManager({ organizationId, data, canWrite, focus, onFocusHandled }: {
+/** Wat er van een reeks nieuwe momenten terechtkwam (voor de melding in het rooster). */
+type AddOutcome = { added: number; clashes: NonNullable<AddSlotsResult['clashes']> };
+
+export function MeetingBookingManager({ organizationId, currentUserId, data, canWrite, focus, onFocusHandled }: {
   organizationId: UUID;
   currentUserId: UUID;
   data: AppData;
@@ -241,6 +247,8 @@ export function MeetingBookingManager({ organizationId, data, canWrite, focus, o
             detail={detail}
             organizationId={organizationId}
             sources={writableSources}
+            allSources={sources}
+            currentUserId={currentUserId}
             videoServices={videoServices}
             clients={clientOptions}
             client={detail.link.client_id ? (clientsById.get(detail.link.client_id) ?? null) : null}
@@ -273,31 +281,34 @@ export function MeetingBookingManager({ organizationId, data, canWrite, focus, o
               await sendBookingLinkMail(organizationId, detail.link.id, tok.token, recipient);
               await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
             }, `Boekingslink verstuurd naar ${recipient.email}.`)}
-            onAddSlots={async (slots) => {
-              let extra = '';
-              let added = 0;
+            onAddSlots={async (slots, opts) => {
+              const outcome: AddOutcome = { added: 0, clashes: [] };
+              let message = '';
               await run(async () => {
                 // De server neemt hooguit 200 momenten per aanvraag; een
                 // weekpatroon kan er meer maken. Dus in porties.
-                const warnings: number[] = [];
+                let warnings = 0;
                 let skipped = 0;
                 try {
                   for (let i = 0; i < slots.length; i += 200) {
-                    const res = await addBookingSlots(organizationId, detail.link.id, slots.slice(i, i + 200));
-                    added += res.slots?.length ?? 0;
-                    warnings.push(res.warnings?.length ?? 0);
+                    const res = await addBookingSlots(organizationId, detail.link.id, slots.slice(i, i + 200), { skipClashes: opts?.skipClashes });
+                    outcome.added += res.slots?.length ?? 0;
+                    outcome.clashes.push(...(res.clashes ?? []));
+                    warnings += res.warnings?.length ?? 0;
                     skipped += res.skipped ?? 0;
                   }
                 } finally {
                   await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
                 }
-                const clashes = warnings.reduce((a, b) => a + b, 0);
                 const parts: string[] = [];
-                if (clashes) parts.push(`${clashes} ${clashes === 1 ? 'moment botst' : 'momenten botsen'} met een afspraak in je agenda`);
-                if (skipped) parts.push(`${skipped} ${skipped === 1 ? 'moment stond' : 'momenten stonden'} er al op`);
-                if (parts.length) extra = `Let op: ${parts.join(', ')}.`;
-              }, slots.length === 1 ? 'Moment toegevoegd.' : `${slots.length} momenten toegevoegd.`);
-              if (extra) setNotice(`${added === 1 ? '1 moment' : `${added} momenten`} toegevoegd. ${extra}`);
+                if (warnings) parts.push(`Let op: ${warnings} ${warnings === 1 ? 'moment botst' : 'momenten botsen'} met een afspraak in je agenda.`);
+                if (outcome.clashes.length) parts.push(clashNotice(outcome.clashes));
+                if (skipped) parts.push(`${skipped} ${skipped === 1 ? 'moment stond' : 'momenten stonden'} er al op.`);
+                const head = outcome.added === 0 ? 'Geen moment toegevoegd.' : outcome.added === 1 ? 'Moment toegevoegd.' : `${outcome.added} momenten toegevoegd.`;
+                message = [head, ...parts].join(' ');
+              });
+              if (message) setNotice(message);
+              return outcome;
             }}
             onRemoveSlots={(slotIds) => run(async () => {
               try {
@@ -422,10 +433,14 @@ function LinkForm({ mode, sources, videoServices, clients, busy, onSubmit, onCan
   );
 }
 
-function LinkDetail({ detail, organizationId, sources, videoServices, clients, client, token, busy, canWrite, onSavedPatch, onRegenerate, onExtend, onSendMail, onAddSlots, onRemoveSlot, onRemoveSlots, onCancelBooking, onDelete }: {
+function LinkDetail({ detail, organizationId, sources, allSources, currentUserId, videoServices, clients, client, token, busy, canWrite, onSavedPatch, onRegenerate, onExtend, onSendMail, onAddSlots, onRemoveSlot, onRemoveSlots, onCancelBooking, onDelete }: {
   detail: BookingLinkDetail;
   organizationId: UUID;
+  /** Agenda's waarin ResoFly mag schrijven (de keuze voor de link). */
   sources: CalendarSource[];
+  /** Alle agenda's die je ziet: voor de afspraken in het rooster en hun kleur. */
+  allSources: CalendarSource[];
+  currentUserId: UUID;
   videoServices?: VideoServices | null;
   clients: Array<{ id: UUID; label: string }>;
   client: { name: string; contact_name?: string | null; email?: string | null } | null;
@@ -436,7 +451,8 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
   onRegenerate: () => void;
   onExtend: () => void;
   onSendMail: (recipient: { email: string; name?: string }, opts: { regenerate: boolean }) => void;
-  onAddSlots: (slots: Array<{ startsAt: string; endsAt: string }>) => void;
+  /** `skipClashes`: wat botst met een afspraak in je agenda's komt er niet op. */
+  onAddSlots: (slots: Array<{ startsAt: string; endsAt: string }>, opts?: { skipClashes?: boolean }) => Promise<AddOutcome>;
   onRemoveSlot: (slotId: UUID) => void;
   onRemoveSlots: (slotIds: UUID[]) => void;
   onCancelBooking: (bookingId: UUID) => void;
@@ -489,23 +505,39 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
   const [drawing, setDrawing] = useState(false);
   const [weekAnchor, setWeekAnchor] = useState<Date>(() => startOfWeek(new Date()));
   const [weekEvents, setWeekEvents] = useState<CalendarExternalEvent[]>([]);
+  const [eventsState, setEventsState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekAnchor, i)), [weekAnchor]);
-  const sourceColors = useMemo(() => new Map(sources.map(s => [s.id, normalizeColor(s.color)])), [sources]);
+  // Alle agenda's die je ziet, niet alleen de schrijfbare: een afspraak uit een
+  // ICS-abonnement of een alleen-lezen Google-agenda had anders geen kleur.
+  const sourceColors = useMemo(() => new Map(allSources.map(s => [s.id, normalizeColor(s.color)])), [allSources]);
+  // De afspraken in het rooster: uit alle agenda's van wie de link maakte (de
+  // ResoFly-agenda en de gekoppelde), niet alleen uit die van de link. Eerst
+  // zag je hier je Google-afspraken niet als de link in je ResoFly-agenda
+  // stond, en tekende je er zo een moment overheen: een dubbele boeking.
+  const gridSources = useMemo(
+    () => bookingGridSources(allSources, link.user_id ?? currentUserId, link.source_id),
+    [allSources, link.user_id, currentUserId, link.source_id],
+  );
+  const gridSourceKey = gridSources.map(s => s.id).join(',');
   const gridOverlay = useMemo<BookingOverlaySlot[]>(
     () => slots.filter(s => s.status !== 'cancelled').map(s => ({ id: s.id, starts_at: s.starts_at, ends_at: s.ends_at, status: s.status, removable: s.status === 'open' })),
     [slots],
   );
-  // Echte afspraken van de bron als context tonen (zodat je niet dubbel plant).
+  // Alleen ophalen als het rooster open is: het is een live vraag aan Google en
+  // Microsoft, en die hoeft niet bij elke klik op een link in de lijst.
   useEffect(() => {
-    if (!link.source_id) { setWeekEvents([]); return; }
+    if (!drawing || !link.source_id) { setWeekEvents([]); setEventsState('idle'); return; }
     let alive = true;
+    const shown = new Set(gridSourceKey.split(',').filter(Boolean));
     const startIso = weekDays[0].toISOString();
     const endIso = addDays(weekDays[6], 1).toISOString();
+    setEventsState('loading');
     listExternalCalendarEvents(organizationId, startIso, endIso)
-      .then(evs => { if (alive) setWeekEvents(evs.filter(e => e.source_id === link.source_id)); })
-      .catch(() => { if (alive) setWeekEvents([]); });
+      .then(evs => { if (alive) { setWeekEvents(evs.filter(e => shown.has(e.source_id))); setEventsState('ready'); } })
+      // Niet stil een leeg rooster: dan lijkt alles vrij terwijl we het niet weten.
+      .catch(() => { if (alive) { setWeekEvents([]); setEventsState('error'); } });
     return () => { alive = false; };
-  }, [organizationId, link.source_id, weekDays]);
+  }, [drawing, organizationId, link.source_id, gridSourceKey, weekDays]);
 
   const weekLabel = `${new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'short' }).format(weekDays[0])} – ${new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'short' }).format(weekDays[6])}`;
 
@@ -558,18 +590,24 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
     const startsAt = localToIso(start);
     const endsAt = localToIso(end);
     if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) return;
-    onAddSlots([{ startsAt, endsAt }]);
+    // Met de hand gekozen: bewust, dus bij een botsing alleen een waarschuwing.
+    void onAddSlots([{ startsAt, endsAt }]);
     setStart(''); setEnd('');
   };
 
   // Een getekend blok in momenten van de gekozen duur. Wat al begonnen is,
-  // valt weg: de server weigert anders de hele aanvraag.
+  // valt weg: de server weigert anders de hele aanvraag. Wat botst met een
+  // afspraak in je agenda's, zet de server er niet op; dat staat hier, want de
+  // gewone melding valt achter het schermvullende rooster.
   const [drawNote, setDrawNote] = useState<string | null>(null);
-  const addDrawn = (startsAt: string, endsAt: string) => {
+  const addDrawn = async (startsAt: string, endsAt: string) => {
     const pieces = splitIntoSlots(startsAt, endsAt, split.durationMin, split.bufferMin).filter(p => Date.parse(p.startsAt) > Date.now());
     if (!pieces.length) { setDrawNote('Dat moment is al voorbij; kies een moment dat nog moet komen.'); return; }
     setDrawNote(null);
-    onAddSlots(pieces);
+    const outcome = await onAddSlots(pieces, { skipClashes: true });
+    if (outcome.clashes.length) {
+      setDrawNote(`${clashNotice(outcome.clashes)}${outcome.added ? '' : ' Wil je toch een moment op die tijd? Zet het er met de hand op (onder Momenten).'}`);
+    }
   };
 
   // De vrije momenten van de week in beeld, een week later nog eens. Wat er
@@ -581,8 +619,11 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
       .map(sl => ({ startsAt: new Date(Date.parse(sl.starts_at) + week).toISOString(), endsAt: new Date(Date.parse(sl.ends_at) + week).toISOString() }))
       .filter(c => Date.parse(c.startsAt) > Date.now());
     if (!copies.length) return;
-    onAddSlots(copies);
+    setDrawNote(null);
     setWeekAnchor(addDays(weekAnchor, 7));
+    void onAddSlots(copies, { skipClashes: true }).then(outcome => {
+      if (outcome.clashes.length) setDrawNote(clashNotice(outcome.clashes));
+    });
   };
 
   // Weekpatroon: in één keer momenten op vaste dagen en tijden.
@@ -751,7 +792,8 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
             <strong>Momenten tekenen</strong>
             <p className="muted">
               Het weekrooster opent schermvullend. Sleep over een dagdeel; dat wordt vanzelf momenten van de duur die je kiest
-              (30 min, een uur …). Je eigen afspraken staan als context in beeld. Met <em>Klaar</em> (of Escape) kom je hier terug.
+              (30 min, een uur …). De afspraken uit je ResoFly-agenda en je gekoppelde agenda's staan erin, en een moment
+              dat daarmee botst, slaan we over. Met <em>Klaar</em> (of Escape) kom je hier terug.
             </p>
           </div>
           <div className="mbk-drawcard-side">
@@ -791,8 +833,9 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
               {split.durationMin
                 ? `Sleep over een dagdeel: dat wordt vanzelf momenten van ${split.durationMin} min${split.bufferMin ? ` met ${split.bufferMin} min pauze` : ''}. Een klik is één moment.`
                 : 'Sleep over het rooster: elk blok is één moment.'}
-              {' '}Klik een groen moment om het weg te halen; een moment met een slotje is geboekt.
+              {' '}Waar je al een afspraak hebt, komt geen moment. Klik een groen moment om het weg te halen; een moment met een slotje is geboekt.
             </p>
+            <BookingGridLegend sources={gridSources} linkSourceId={link.source_id} colors={sourceColors} state={eventsState} />
             {drawNote && <p className="mbk-draw-note" role="status">{drawNote}</p>}
           </div>
           {/* .calendar-agenda-page-scope zodat de gedeelde .tb-scroll-hoogte de vaste
@@ -806,7 +849,7 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
               trackedMinutesFor={() => null}
               canWrite={canWrite}
               writeableSources={sources}
-              onSelectSlot={(day, s, e) => { const iso = slotSelectionToIso(day, s, e); addDrawn(iso.startsAt, iso.endsAt); }}
+              onSelectSlot={(day, s, e) => { const iso = slotSelectionToIso(day, s, e); void addDrawn(iso.startsAt, iso.endsAt); }}
               onEditTask={() => {}}
               onOpenEvent={() => {}}
               onMoveEvent={() => {}}
@@ -850,10 +893,10 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
             <div className="mbk-pattern-foot">
               <span className="muted">
                 {patternSlots.length
-                  ? `${patternSlots.length} ${patternSlots.length === 1 ? 'moment' : 'momenten'}: ${weekdaysLabel(patternDays)}, ${patternFrom}–${patternTo}, ${patternWeeks === 1 ? '1 week' : `${patternWeeks} weken`}.`
+                  ? `${patternSlots.length} ${patternSlots.length === 1 ? 'moment' : 'momenten'}: ${weekdaysLabel(patternDays)}, ${patternFrom}–${patternTo}, ${patternWeeks === 1 ? '1 week' : `${patternWeeks} weken`}. Waar je al een afspraak hebt, slaan we over.`
                   : 'Met deze keuze komt er geen moment bij (geen dag gekozen, of de tijden kloppen niet).'}
               </span>
-              <Button variant="primary" disabled={busy || patternSlots.length === 0} onClick={() => { onAddSlots(patternSlots); setPatternOpen(false); }}>
+              <Button variant="primary" disabled={busy || patternSlots.length === 0} onClick={() => { void onAddSlots(patternSlots, { skipClashes: true }); setPatternOpen(false); }}>
                 {patternSlots.length ? `${patternSlots.length} momenten toevoegen` : 'Momenten toevoegen'}
               </Button>
             </div>
@@ -939,6 +982,35 @@ function LinkDetail({ detail, organizationId, sources, videoServices, clients, c
           <BookingRows bookings={pastBookings} slotById={slotById} canWrite={false} busy={busy} onCancel={onCancelBooking} />
         </>}
       </div>
+    </div>
+  );
+}
+
+const SOURCE_KIND: Record<string, string> = { native: 'ResoFly', google: 'Google', microsoft: 'Microsoft', ics: 'abonnement' };
+
+/**
+ * Welke agenda's in het rooster staan, elk met zijn kleur. Zonder dit wist je
+ * niet of een leeg uur echt vrij was of dat die agenda gewoon niet meetelde.
+ */
+function BookingGridLegend({ sources, linkSourceId, colors, state }: {
+  sources: CalendarSource[];
+  linkSourceId: string | null;
+  colors: Map<string, string>;
+  state: 'idle' | 'loading' | 'ready' | 'error';
+}) {
+  if (state === 'error') {
+    return <p className="mbk-draw-legend is-error" role="alert">Je afspraken konden niet worden opgehaald. Let zelf op dubbele afspraken, of kijk het na in de Agenda.</p>;
+  }
+  return (
+    <div className="mbk-draw-legend" aria-live="polite">
+      <span className="mbk-draw-legend-label">{state === 'loading' ? 'Afspraken ophalen uit' : 'Afspraken uit'}</span>
+      {sources.map(src => (
+        <span key={src.id} className="mbk-draw-legend-item" title={src.id === linkSourceId ? 'Hier komt de afspraak van de klant' : undefined}>
+          <i style={{ background: colors.get(src.id) }} aria-hidden="true" />
+          {src.name}
+          <em>{SOURCE_KIND[src.provider] ?? src.provider}{src.id === linkSourceId ? ', deze link' : ''}</em>
+        </span>
+      ))}
     </div>
   );
 }

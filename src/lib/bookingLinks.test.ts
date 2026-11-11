@@ -31,7 +31,11 @@ import {
   fmtWeekLabel,
   groupByDay,
   linkStateExplanation,
+  bookingGridSources,
+  clashNotice,
+  clashingAppointment,
 } from './bookingLinks.ts';
+import { slotClash } from '../../supabase/functions/_shared/meetingBookingRules.ts';
 
 test('de week telt in Nederlandse tijd, zoals de weeklimiet in de database', () => {
   // Zondag 15 november 23.30 uur in Nederland is in UTC nog zondag 22.30 uur;
@@ -179,4 +183,38 @@ test('de dienst van een link in het beheer, zoals de server hem ziet', () => {
   assert.equal(linkVideoKind({ meeting_url: null, auto_conference: false, conference_provider: 'jitsi' }, 'native'), null);
   assert.equal(linkVideoKind({ meeting_url: 'https://us02web.zoom.us/j/1', auto_conference: true, conference_provider: 'jitsi' }, 'native'), 'zoom');
   assert.equal(linkVideoKind({ meeting_url: 'https://whereby.com/x', auto_conference: true, conference_provider: 'jitsi' }, 'native'), 'link');
+});
+
+test('het rooster van een link: jouw agenda\'s, met die van de link vooraan', () => {
+  const src = (id: string, user_id: string, sync_enabled = true) => ({ id, user_id, sync_enabled });
+  const sources = [src('google', 'ik'), src('resofly', 'ik'), src('collega-cal', 'collega'), src('uit', 'ik', false), src('ics', 'ik')];
+  assert.deepEqual(bookingGridSources(sources, 'ik', 'resofly').map(s => s.id), ['resofly', 'google', 'ics']);
+  // Een gedeelde agenda van een collega als agenda van de link: wel die, niet de rest van de collega.
+  assert.deepEqual(bookingGridSources(sources, 'ik', 'collega-cal').map(s => s.id), ['collega-cal', 'google', 'resofly', 'ics']);
+  // Zonder maker (een oude link) alleen de agenda van de link.
+  assert.deepEqual(bookingGridSources(sources, null, 'resofly').map(s => s.id), ['resofly']);
+});
+
+test('botsingen in de app lopen gelijk op met de server', () => {
+  const scope = { linkSourceId: 'link-cal', ownSourceIds: ['link-cal', 'google'] };
+  const events = [
+    { source_id: 'google', starts_at: '2026-11-12T09:15:00Z', ends_at: '2026-11-12T10:00:00Z', all_day: false, title: 'Teamoverleg' },
+    { source_id: 'google', starts_at: '2026-11-13T00:00:00Z', ends_at: '2026-11-14T00:00:00Z', all_day: true, title: 'Verjaardag' },
+    { source_id: 'link-cal', starts_at: '2026-11-14T00:00:00Z', ends_at: '2026-11-15T00:00:00Z', all_day: true, title: 'Dicht' },
+    { source_id: 'collega', starts_at: '2026-11-16T09:00:00Z', ends_at: '2026-11-16T10:00:00Z', all_day: false, title: 'Van een collega' },
+  ];
+  const slots = ['2026-11-12T09:00:00Z', '2026-11-12T10:00:00Z', '2026-11-13T09:00:00Z', '2026-11-14T09:00:00Z', '2026-11-16T09:00:00Z']
+    .map(startsAt => ({ startsAt, endsAt: new Date(Date.parse(startsAt) + 30 * 60_000).toISOString() }));
+  const app = slots.map(s => clashingAppointment(s, events, scope)?.title ?? null);
+  const server = slots.map(s => (slotClash({ starts_at: s.startsAt, ends_at: s.endsAt }, events, scope) as { title?: string } | null)?.title ?? null);
+  assert.deepEqual(app, ['Teamoverleg', null, null, 'Dicht', null]);
+  assert.deepEqual(server, app);
+});
+
+test('overgeslagen momenten in één zin', () => {
+  assert.equal(clashNotice([]), '');
+  assert.equal(clashNotice([{ conflict: 'Tandarts' }]), '1 moment overgeslagen: dan heb je al een afspraak (Tandarts).');
+  assert.equal(clashNotice([{ conflict: 'Teamoverleg' }, { conflict: 'Teamoverleg' }, { conflict: 'Bezet' }]), '3 momenten overgeslagen: dan heb je al een afspraak (Teamoverleg, Bezet).');
+  assert.equal(clashNotice([{ conflict: 'a' }, { conflict: 'b' }, { conflict: 'c' }, { conflict: 'd' }, { conflict: 'e' }]), '5 momenten overgeslagen: dan heb je al een afspraak (a, b, c en 2 meer).');
+  assert.equal(clashNotice([{ conflict: '' }]), '1 moment overgeslagen: dan heb je al een afspraak.');
 });

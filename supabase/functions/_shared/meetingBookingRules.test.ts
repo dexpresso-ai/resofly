@@ -26,6 +26,7 @@ import {
   isBookableSlot,
   isStalePending,
   parseSlotIds,
+  slotClash,
   withoutDuplicateSlots,
 } from './meetingBookingRules.ts';
 
@@ -160,6 +161,37 @@ test('dubbele blokken worden overgeslagen, ook binnen één aanvraag', () => {
   assert.equal(res.skipped, 2);
   // Een geannuleerd blok telt niet: dat moment mag opnieuw worden aangeboden.
   assert.equal(withoutDuplicateSlots([s], [{ ...s, status: 'cancelled' }]).fresh.length, 1);
+});
+
+test('botsingen: de agenda van de link en je andere agenda\'s, niet die van collega\'s', () => {
+  const slot = { starts_at: '2026-11-12T09:00:00.000Z', ends_at: '2026-11-12T09:30:00.000Z' };
+  const scope = { linkSourceId: 'link-cal', ownSourceIds: ['link-cal', 'google', 'ics'] };
+  const ev = (source_id: string, starts_at: string, ends_at: string, extra: Record<string, unknown> = {}) => ({ source_id, starts_at, ends_at, all_day: false, title: source_id, ...extra });
+  // Een afspraak in je Google-agenda telde eerst niet mee: alleen de agenda van de link.
+  assert.equal(slotClash(slot, [ev('google', '2026-11-12T09:15:00Z', '2026-11-12T10:00:00Z')], scope)?.title, 'google');
+  assert.equal(slotClash(slot, [ev('ics', '2026-11-12T08:00:00Z', '2026-11-12T09:01:00Z')], scope)?.title, 'ics');
+  // Aansluitend is geen botsing.
+  assert.equal(slotClash(slot, [ev('google', '2026-11-12T09:30:00Z', '2026-11-12T10:00:00Z')], scope), null);
+  assert.equal(slotClash(slot, [ev('google', '2026-11-12T08:30:00Z', '2026-11-12T09:00:00Z')], scope), null);
+  // Een collega die zijn agenda deelt, maakt jou niet bezet.
+  assert.equal(slotClash(slot, [ev('collega', '2026-11-12T09:00:00Z', '2026-11-12T09:30:00Z')], scope), null);
+  // Een hele dag telt alleen in de agenda van de link (de publieke pagina weigert de boeking dan ook).
+  const allDay = { all_day: true };
+  assert.equal(slotClash(slot, [ev('google', '2026-11-12T00:00:00Z', '2026-11-13T00:00:00Z', allDay)], scope), null);
+  assert.equal(slotClash(slot, [ev('link-cal', '2026-11-12T00:00:00Z', '2026-11-13T00:00:00Z', allDay)], scope)?.title, 'link-cal');
+  // De agenda van de link telt ook als hij van een ander is (een gedeelde ResoFly-agenda).
+  assert.equal(slotClash(slot, [ev('gedeeld', '2026-11-12T09:00:00Z', '2026-11-12T09:30:00Z')], { linkSourceId: 'gedeeld', ownSourceIds: [] })?.title, 'gedeeld');
+  // Onzin in een afspraak breekt niets.
+  assert.equal(slotClash(slot, [ev('google', 'geen datum', '2026-11-12T10:00:00Z')], scope), null);
+});
+
+test('het beheer slaat botsende momenten over als daarom gevraagd is, anders waarschuwt het', () => {
+  const src = read('../meeting-booking/index.ts');
+  assert.match(src, /skipClashes: body\.skipClashes === true/);
+  assert.match(src, /slotClash\(slot, events, \{ linkSourceId: link\.source_id, ownSourceIds \}\)/);
+  // De agenda's van wie de link maakte, niet alleen die van de link zelf.
+  assert.match(src, /calendarIdsOf\(organizationId, link\.user_id \?\? userId\)/);
+  assert.doesNotMatch(src, /const sameSource = events\.filter/);
 });
 
 test('de publieke functie controleert de maker, remt, en lekt geen interne fouten', () => {

@@ -254,6 +254,46 @@ export function checkNewSlots(slots: NewSlot[], now: number = Date.now()): void 
  * geannuleerd zijn, slaan we over. Twee keer slepen op hetzelfde uur gaf de
  * klant eerst twee keer hetzelfde moment.
  */
+/** Een afspraak zoals listEvents (calendarAvailability.ts) hem geeft: een los record, dus alles optioneel. */
+export type BusyEvent = { source_id?: unknown; starts_at?: unknown; ends_at?: unknown; all_day?: unknown; title?: unknown };
+
+/**
+ * De afspraak waar een nieuw moment mee botst, of null.
+ *
+ * Telt mee:
+ * - alles in de agenda van de link, ook een hele dag. De publieke pagina
+ *   weigert de boeking dan ook (assertNoConflict), dus zo'n moment kan de klant
+ *   toch niet boeken;
+ * - afspraken met een tijd in de andere agenda's van wie de link maakte: de
+ *   ResoFly-agenda, Google, Microsoft en een ICS-abonnement. Een hele dag telt
+ *   daar niet: een verjaardag of feestdag in een gekoppelde agenda maakt je niet
+ *   bezet.
+ *
+ * Eerst telde alleen de agenda van de link. Een afspraak in je Google-agenda
+ * stond niet in het rooster, en het weekpatroon zette er zonder waarschuwing
+ * een moment overheen: een dubbele boeking zodra de klant dat moment koos.
+ */
+export function slotClash<T extends BusyEvent>(
+  slot: NewSlot,
+  events: readonly T[],
+  scope: { linkSourceId: string | null | undefined; ownSourceIds: Iterable<string> },
+): T | null {
+  const starts = Date.parse(slot.starts_at);
+  const ends = Date.parse(slot.ends_at);
+  if (!Number.isFinite(starts) || !Number.isFinite(ends)) return null;
+  const own = new Set(scope.ownSourceIds);
+  for (const event of events) {
+    const source = String(event.source_id ?? '');
+    const onLink = Boolean(scope.linkSourceId) && source === scope.linkSourceId;
+    if (!onLink && (!own.has(source) || event.all_day === true)) continue;
+    const evStarts = Date.parse(String(event.starts_at ?? ''));
+    const evEnds = Date.parse(String(event.ends_at ?? ''));
+    if (!Number.isFinite(evStarts) || !Number.isFinite(evEnds)) continue;
+    if (evStarts < ends && evEnds > starts) return event;
+  }
+  return null;
+}
+
 export function withoutDuplicateSlots(slots: NewSlot[], existing: Array<NewSlot & { status: string }>): { fresh: NewSlot[]; skipped: number } {
   const key = (s: NewSlot) => `${Date.parse(s.starts_at)}|${Date.parse(s.ends_at)}`;
   const taken = new Set(existing.filter(s => s.status !== 'cancelled').map(key));

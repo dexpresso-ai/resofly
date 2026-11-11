@@ -18,7 +18,7 @@ import {
 } from '../lib/meeting';
 import { BookingVideoSelect } from '../components/BookingVideoSelect';
 import { SlotDurationPicker, useSlotSplit } from '../components/SlotDurationPicker';
-import { splitIntoSlots } from '../lib/bookingLinks';
+import { clashNotice, clashingAppointment, splitIntoSlots } from '../lib/bookingLinks';
 import {
   createCalendarAppPassword,
   createExternalCalendarEvent,
@@ -3933,8 +3933,10 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   const [showBookingOptions, setShowBookingOptions] = useState(true);
   const [agendaOptions, setAgendaOptions] = useState<{ id: string; starts_at: string; ends_at: string; status: string }[]>([]);
   const [draftSlots, setDraftSlots] = useState<{ startsAt: string; endsAt: string }[]>([]);
+  // Wat er bij het tekenen wegviel omdat je dan al een afspraak hebt.
+  const [draftNote, setDraftNote] = useState<string | null>(null);
   const [showBookingSend, setShowBookingSend] = useState(false);
-  const [bookingCreated, setBookingCreated] = useState<{ url: string; token: string; linkId: string } | null>(null);
+  const [bookingCreated, setBookingCreated] = useState<{ url: string; token: string; linkId: string; note?: string } | null>(null);
   // Zoomstand van het tijdrooster (knijpen / Ctrl+wiel / +−). Wordt onthouden.
   const [zoom, setZoom] = useState<number>(() => (typeof window === 'undefined' ? 1 : readStoredZoom()));
   // Bump = "scroll het rooster opnieuw naar nu". Bladeren doet dat bewust niet.
@@ -3998,6 +4000,12 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   const sourceColors = useMemo(
     () => new Map(integrations.sources.map(s => [s.id, normalizeHexColor(s.color)])),
     [integrations.sources],
+  );
+  // Je eigen agenda's (ResoFly en gekoppeld): alleen daarin maakt een afspraak
+  // jou bezet als je beschikbaarheid tekent.
+  const ownSourceIds = useMemo(
+    () => integrations.sources.filter(s => s.user_id === currentUserId).map(s => s.id),
+    [integrations.sources, currentUserId],
   );
 
   // Mag dit item bewerkt/verplaatst/verwijderd worden? Native: heeft een db-id;
@@ -4263,9 +4271,19 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     if (bookingMode) {
       // Concept-opties: bewaren tot je ze doorstuurt naar de klant. Een sleep
       // wordt momenten van de gekozen duur (SlotDurationPicker); wat al begonnen
-      // is of er al staat, valt weg.
-      const pieces = splitIntoSlots(sd.toISOString(), ed.toISOString(), slotSplit.durationMin, slotSplit.bufferMin)
+      // is of er al staat, valt weg. Net als in het rooster van een boekingslink
+      // ook wat botst met een afspraak in je eigen agenda's (niet die van een
+      // collega die de zijne deelt): eerst kon je hier zo een dubbele boeking
+      // klaarzetten.
+      const all = splitIntoSlots(sd.toISOString(), ed.toISOString(), slotSplit.durationMin, slotSplit.bufferMin)
         .filter(p => Date.parse(p.startsAt) > Date.now());
+      const clashes: Array<{ conflict: string }> = [];
+      const pieces = all.filter(p => {
+        const clash = clashingAppointment(p, events, { ownSourceIds: ownSourceIds });
+        if (clash) clashes.push({ conflict: clash.title });
+        return !clash;
+      });
+      setDraftNote(clashes.length ? clashNotice(clashes) : null);
       setDraftSlots(prev => {
         const seen = new Set(prev.map(d => d.startsAt));
         return [...prev, ...pieces.filter(p => !seen.has(p.startsAt))].sort((a, b) => a.startsAt.localeCompare(b.startsAt));
@@ -4275,7 +4293,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     setEditingOriginal(null);
     setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', taskId: '', trackTime: true, editingEventId: '', meetingUrl: '', videoService: '' }));
     setShowCreatePanel(true);
-  }, [bookingMode, slotSplit]);
+  }, [bookingMode, slotSplit, events, ownSourceIds]);
 
   // Klikken op een lege plek in de maandweergave maakt een afspraak op die dag —
   // net als Google, dat daar een snelinvoer opent. Standaardduur: het eerstvolgende
@@ -4300,8 +4318,13 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
         introText: p.introText || null, inviteMessage: p.inviteMessage || null, meetingUrl: p.meetingUrl || null,
         maxTotalBookings: p.maxTotalBookings, maxPerWeek: p.maxPerWeek, autoConference: p.autoConference, conferenceProvider: p.conferenceProvider,
       });
-      if (draftSlots.length) await addBookingSlots(organizationId, res.link.id, draftSlots.map(d => ({ startsAt: d.startsAt, endsAt: d.endsAt })));
-      setBookingCreated({ url: res.booking_url, token: res.token, linkId: res.link.id });
+      // De server kijkt nog eens, nu de agenda van de link bekend is (daar telt
+      // ook een hele dag, want daarop weigert de boekingspagina de klant).
+      const added = draftSlots.length
+        ? await addBookingSlots(organizationId, res.link.id, draftSlots.map(d => ({ startsAt: d.startsAt, endsAt: d.endsAt })), { skipClashes: true })
+        : null;
+      setBookingCreated({ url: res.booking_url, token: res.token, linkId: res.link.id, note: added?.clashes?.length ? clashNotice(added.clashes) : undefined });
+      setDraftNote(null);
       setShowBookingSend(false);
       setDraftSlots([]);
       setBookingMode(false);
@@ -4947,7 +4970,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
         <div className="calendar-toolbar-right">
           {isTimeGridView(view) && canWrite && writeableSources.length > 0 && !bookingMode && (
             <>
-              <Button onClick={() => { setBookingMode(true); setDraftSlots([]); }} title="Beschikbaarheid voor klant — teken blokken en stuur ze als boekingsopties door">
+              <Button onClick={() => { setBookingMode(true); setDraftSlots([]); setDraftNote(null); }} title="Beschikbaarheid voor klant — teken blokken en stuur ze als boekingsopties door">
                 <CalendarPlus size={14} /> <span className="calendar-availability-label">Beschikbaarheid</span>
               </Button>
               {bookingLinks.some(l => l.status === 'active') && (
@@ -4972,10 +4995,11 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
         <div className="calendar-toolbar calendar-booking-toolbar">
           <span className="calendar-range-label">Opties tekenen</span>
           <SlotDurationPicker value={slotSplit} onChange={setSlotSplit} />
-          <span className="muted" style={{ fontSize: 13 }}>Sleep over een dagdeel ({draftSlots.length} gekozen) · klik een optie om hem weg te halen.</span>
+          <span className="muted" style={{ fontSize: 13 }}>Sleep over een dagdeel ({draftSlots.length} gekozen) · waar je al een afspraak hebt, komt geen optie · klik een optie om hem weg te halen.</span>
+          {draftNote && <span className="calendar-booking-note" role="status">{draftNote}</span>}
           <Button variant="primary" disabled={draftSlots.length === 0} onClick={() => setShowBookingSend(true)}>Doorsturen naar klant…</Button>
-          {draftSlots.length > 0 && <Button onClick={() => setDraftSlots([])}>Wissen</Button>}
-          <Button onClick={() => { setBookingMode(false); setDraftSlots([]); }}>Sluiten</Button>
+          {draftSlots.length > 0 && <Button onClick={() => { setDraftSlots([]); setDraftNote(null); }}>Wissen</Button>}
+          <Button onClick={() => { setBookingMode(false); setDraftSlots([]); setDraftNote(null); }}>Sluiten</Button>
         </div>
       )}
 
@@ -5116,6 +5140,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     {bookingCreated && (
       <Modal title="Boekingslink klaar om te delen" onClose={() => setBookingCreated(null)}>
         <p className="muted">Deel deze link met de klant. Om veiligheidsredenen tonen we hem hierna niet meer (alleen een versleutelde verwijzing wordt bewaard).</p>
+        {bookingCreated.note && <p className="calendar-booking-note" role="status">{bookingCreated.note}</p>}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
           <Input readOnly value={bookingCreated.url} onFocus={e => e.currentTarget.select()} style={{ flex: 1 }} />
           <Button onClick={() => navigator.clipboard?.writeText(bookingCreated!.url)}>Kopieer</Button>
