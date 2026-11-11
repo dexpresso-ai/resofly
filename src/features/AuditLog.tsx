@@ -8,8 +8,9 @@
  *  - AuditFeed: het blok op het dashboard (vervangt "Laatste activiteit"),
  *    met de laatste regels en een knop naar het hele logboek.
  *
- * Wie welke regel ziet, beslist de database (per module, zie migratie
- * 20261003060000); deze pagina toont wat hij terugkrijgt. De zinnen komen uit
+ * Alleen voor owners en admins: de app toont het tabblad en het blok niet aan
+ * anderen, en de database geeft hun geen regel (migratie 20261111090000;
+ * daarvóór las een teamlid per module mee). De zinnen komen uit
  * src/lib/auditLog.ts.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -33,9 +34,10 @@ const CATEGORY_ICON: Record<AuditCategory, LucideIcon> = {
   calendar: CalendarDays, marketing: Megaphone, stats: BarChart3, team: UserCog, admin: ShieldCheck,
 };
 
-/** Welke categorie in het filter staat: wat je in de app ook mag lezen. */
-function visibleCategories(permissions: Permissions, isAdmin: boolean) {
-  return AUDIT_CATEGORIES.filter(c => c.key === 'team' || (c.key === 'admin' ? isAdmin : permissions.canRead(c.key)));
+/** Welke categorie in het filter staat: wat je in de app ook mag lezen. Het
+ *  logboek is alleen voor owners en admins, dus team en beheer altijd. */
+function visibleCategories(permissions: Permissions) {
+  return AUDIT_CATEGORIES.filter(c => c.key === 'team' || c.key === 'admin' || permissions.canRead(c.key));
 }
 
 function useLookup(data: AppData, members: OrganizationMember[], currentUserId: string | null): AuditLookup {
@@ -59,14 +61,12 @@ function canOpen(target: AuditTarget | null, permissions: Permissions, data: App
 
 // ── Instellingen → Logboek ─────────────────────────────────────────────────
 
-export function AuditLogPanel({ organizationId, data, members, currentUserId, permissions, isAdmin, onOpenTarget }: {
+export function AuditLogPanel({ organizationId, data, members, currentUserId, permissions, onOpenTarget }: {
   organizationId: string;
   data: AppData;
   members: OrganizationMember[];
   currentUserId: string | null;
   permissions: Permissions;
-  /** Owner of admin: ziet ook het beheer (sleutels, koppelingen, abonnement). */
-  isAdmin: boolean;
   onOpenTarget?: (target: AuditTarget) => void;
 }) {
   const [period, setPeriod] = useState<AuditPeriod>('30d');
@@ -132,7 +132,7 @@ export function AuditLogPanel({ organizationId, data, members, currentUserId, pe
     return () => window.clearInterval(timer);
   }, [organizationId, newest]);
 
-  const categories = visibleCategories(permissions, isAdmin);
+  const categories = visibleCategories(permissions);
   const people = useMemo(() => [...members]
     .filter(m => m.user_id)
     .sort((a, b) => (a.email ?? '').localeCompare(b.email ?? '', 'nl')), [members]);
@@ -175,14 +175,14 @@ export function AuditLogPanel({ organizationId, data, members, currentUserId, pe
       <button type="button" className="alog-privacy-head" onClick={() => setPrivacyOpen(open => !open)} aria-expanded={privacyOpen}>
         <Lock size={15} aria-hidden="true" />
         <span>
-          <strong>{isAdmin ? 'Je ziet alles wat er in deze organisatie gebeurt.' : 'Je ziet wat er gebeurt in de onderdelen die je mag openen.'}</strong>
-          {' '}Niemand kan het logboek aanpassen of wissen.
+          <strong>Alleen owners en admins zien het logboek.</strong>
+          {' '}Niemand kan het aanpassen of wissen.
         </span>
         <ChevronDown size={16} className={`alog-chevron${privacyOpen ? ' is-open' : ''}`} aria-hidden="true" />
       </button>
       {privacyOpen && <ul>
         <li>De database schrijft het logboek zelf, bij elke wijziging — ook als Gerrie, een agent of de API iets doet namens een teamlid (dan staat er <em>via koppeling</em>), en als de server iets doet zonder gebruiker, zoals een betaling of een synchronisatie (<em>Systeem</em>).</li>
-        <li>Wie geen toegang heeft tot een onderdeel (bijvoorbeeld Financiën), ziet daar ook in het logboek niets van. Sleutels, koppelingen, uitnodigingen en het abonnement zijn voor owners en admins.</li>
+        <li>Teamleden, kijkers en je boekhouder zien het logboek niet: niet hier, niet op het dashboard en ook niet via Gerrie, een agent of de API. Wat zij doen, staat er wel in.</li>
         <li>Van teksten staat alleen <strong>dát</strong> ze veranderden, niet wat erin staat: omschrijvingen, notities, documenten, mails, e-mailadressen, telefoonnummers, adressen en IBAN's. Links, tokens en wachtwoorden nooit.</li>
         <li>De teamchat, meldingen en de titels van afspraken in een privé-agenda staan er niet in.</li>
         <li>Kleine wijzigingen kort na elkaar aan hetzelfde ding (typen, automatisch opslaan) staan samen in één regel, met het aantal. Bij Financiën telt elke stap apart.</li>

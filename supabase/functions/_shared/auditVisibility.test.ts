@@ -5,13 +5,15 @@ import { ADMIN_ACTIONS, AUDIT_ENTITY_MODULE, visibleAuditEntityTypes } from './a
 import { ActionError, type ActionCtx } from './actions/types.ts';
 
 /**
- * Wie leest welke regel uit het auditlog. Het label van een regel is de naam,
- * titel of het e-mailadres uit de rij die veranderde — dus hoort een regel over
- * een factuur bij Financiën, een regel over een API-sleutel bij owners en admins,
- * en geeft een afspraak in een privé-agenda zijn titel niet prijs.
+ * Wie leest welke regel uit het auditlog. Sinds 20261111090000 alleen owners en
+ * admins: geen teamlid, kijker of boekhouder. Het label van een regel is de
+ * naam, titel of het e-mailadres uit de rij die veranderde; een afspraak in een
+ * privé-agenda geeft zijn titel daarom niet prijs, ook niet aan een owner.
  *
- * De database (RLS) en de handeling audit.list (die met de service-role leest)
- * moeten hetzelfde zeggen: deze test houdt de twee lijsten gelijk.
+ * De indeling per module telt nog voor een sleutel of koppeling van een owner
+ * of admin die tot een paar modules beperkt is. De database (RLS) en de
+ * handeling audit.list (die met de service-role leest) moeten hetzelfde
+ * zeggen: deze test houdt de twee gelijk.
  */
 
 const MIGRATIONS = new URL('../../migrations/', import.meta.url);
@@ -19,6 +21,7 @@ const migrationFiles = readdirSync(MIGRATIONS).filter((name) => name.endsWith('.
 const migration = (name: string) => readFileSync(new URL(name, MIGRATIONS), 'utf8');
 const RECHECK = '20261003060000_recheck_audit_and_licenses.sql';
 const ACCOUNTANT = '20261011000000_accountant_guest_access.sql';
+const ALLEEN_BEHEER = '20261111090000_logboek_alleen_beheer.sql';
 
 /** De laatste definitie van een functie, over alle migraties heen. */
 function latestDefinition(fn: string): { file: string; body: string } {
@@ -68,17 +71,32 @@ test('elke soort regel die ergens gelogd wordt, is bewust ingedeeld', () => {
   assert.deepEqual(missing, [], 'nieuw in het auditlog: kies een module in audit_entity_module() én AUDIT_ENTITY_MODULE');
 });
 
-test('de leesregel: lid van de organisatie, en dan per module of als owner/admin', () => {
-  const sql = migration(RECHECK);
-  const policy = sql.slice(sql.indexOf('create policy "audit logs read by org members"'));
-  assert.match(policy, /public\.can_read_org\(organization_id\)\s*and \(/);
-  assert.match(policy, /public\.can_admin_org\(organization_id\)/);
-  assert.match(policy, /public\.audit_entity_module\(entity_type\) is null/);
-  assert.match(policy, /<> 'admin'\s*and public\.can_read_module\(organization_id, public\.audit_entity_module\(entity_type\)\)/);
-  // Geen latere migratie die de oude, ruime regel terugzet.
-  for (const file of migrationFiles.filter((name) => name > RECHECK)) {
-    assert.doesNotMatch(migration(file), /policy "audit logs read by org members"/, `${file} raakt de leesregel opnieuw`);
+/** De policies op audit_logs na de hele keten: naam → waar en hoe. */
+function auditPolicies(): Map<string, { file: string; body: string }> {
+  const policies = new Map<string, { file: string; body: string }>();
+  const pattern = /(drop policy(?: if exists)?|create policy) "([^"]+)" on (?:public\.)?audit_logs\b([^;]*);/g;
+  for (const file of migrationFiles) {
+    for (const match of migration(file).matchAll(pattern)) {
+      if (match[1].startsWith('drop')) policies.delete(match[2]);
+      else policies.set(match[2], { file, body: match[3] });
+    }
   }
+  return policies;
+}
+
+test('de leesregel: alleen owners en admins van de organisatie lezen het logboek', () => {
+  // Tot 20261111090000 las elk lid de regels over de modules die hij mocht
+  // openen (20261003060000). Met alle modules zag een teamlid zo vrijwel het
+  // hele logboek, met de e-mailadressen van collega's en wie wiens rechten
+  // aanpaste. Nu is het logboek alleen voor wie de organisatie beheert.
+  const policies = auditPolicies();
+  assert.deepEqual([...policies.keys()], ['audit logs read by owners and admins'], 'precies één leesregel op audit_logs');
+  const { file, body } = policies.get('audit logs read by owners and admins')!;
+  assert.equal(file, ALLEEN_BEHEER);
+  assert.match(body, /^\s*for select using \(\s*public\.can_admin_org\(organization_id\)\s*\)\s*$/);
+  assert.doesNotMatch(body, /can_read_org|can_read_module|audit_entity_module/, 'geen leesrecht per module meer');
+  // De oude, ruimere regel is weg en komt niet terug.
+  assert.match(migration(ALLEEN_BEHEER), /drop policy if exists "audit logs read by org members" on public\.audit_logs;/);
 });
 
 test('een privé-agenda geeft in het auditlog geen titel prijs', () => {
@@ -135,27 +153,36 @@ test('owner of admin zonder beperking: alles; met een beperkte sleutel: als team
   }
 });
 
-test('een teamlid ziet per module wat hij mag lezen, en nooit de beheerregels', () => {
-  const member = visibleAuditEntityTypes(ctxFor('member', ALL_MODULES.filter((m) => m !== 'finance')));
-  assert.ok(Array.isArray(member));
-  assert.ok(member.includes('client') && member.includes('task') && member.includes('time_entry'));
-  for (const hidden of ['invoice', 'journal_entry', 'quote', 'api_key', 'webhook_endpoint', 'invitation', 'payment']) {
-    assert.ok(!member.includes(hidden), `${hidden} is niet voor een teamlid zonder Financiën`);
+test('een teamlid, kijker of boekhouder ziet niets uit het logboek, ook niet met alle modules', () => {
+  for (const role of ['member', 'viewer', 'accountant']) {
+    assert.deepEqual(visibleAuditEntityTypes(ctxFor(role, ALL_MODULES)), [], `${role} met alle modules`);
+    assert.deepEqual(visibleAuditEntityTypes({ role }), [], `${role} zonder modulecontrole`);
   }
-  const viewer = visibleAuditEntityTypes(ctxFor('viewer', ALL_MODULES));
-  assert.ok(Array.isArray(viewer) && viewer.includes('invoice') && !viewer.includes('api_key'));
+});
+
+test('audit.list is alleen voor owners en admins, en weigert de rest ook zelf', async () => {
+  const list = ADMIN_ACTIONS.find((a) => a.id === 'audit.list');
+  assert.ok(list?.read);
+  // adminOnly: Gerrie, MCP en de API laten hem dan niet eens zien aan een teamlid.
+  assert.equal(list.adminOnly, true);
+  for (const role of ['member', 'viewer', 'accountant']) {
+    const calls: Array<[string, unknown[]]> = [];
+    await assert.rejects(list.read(ctxFor(role, ALL_MODULES, calls), {}),
+      (error: unknown) => error instanceof ActionError && /alleen voor owners en admins/.test(error.message), role);
+    assert.ok(!calls.some(([name]) => name === 'limit'), `${role}: er gaat geen query naar de database`);
+  }
 });
 
 test('audit.list filtert in de query, en zegt het als je om een verborgen soort vraagt', async () => {
   const list = ADMIN_ACTIONS.find((a) => a.id === 'audit.list');
   assert.ok(list?.read);
   const calls: Array<[string, unknown[]]> = [];
-  await list.read(ctxFor('member', ['clients', 'stats'], calls), {});
+  await list.read(ctxFor('admin', ['clients', 'stats'], calls), {});
   const filter = calls.find(([name]) => name === 'in');
-  assert.ok(filter, 'een teamlid krijgt een filter op entity_type');
+  assert.ok(filter, 'een beperkte sleutel van een admin krijgt een filter op entity_type');
   assert.equal(filter[1][0], 'entity_type');
   assert.ok(!(filter[1][1] as string[]).includes('invoice'));
-  await assert.rejects(list.read(ctxFor('member', ['clients', 'stats']), { entity_type: 'invoice' }),
+  await assert.rejects(list.read(ctxFor('admin', ['clients', 'stats']), { entity_type: 'invoice' }),
     (error: unknown) => error instanceof ActionError && /niet zichtbaar/.test(error.message));
   await assert.rejects(list.read(ctxFor('admin', ['clients', 'stats']), { entity_type: 'api_key' }),
     (error: unknown) => error instanceof ActionError && /niet zichtbaar/.test(error.message), 'beperkte sleutel van een admin');

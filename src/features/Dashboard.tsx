@@ -13,7 +13,7 @@ import { AgentApprovals } from '../components/AgentApprovals';
 import { DecisionFeed } from '../components/DecisionFeed';
 import type { AiDecision, DecisionTarget } from '../lib/decisions-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
-import { FULL_PERMISSIONS, isAccountantRole, type ModuleKey, type Permissions } from '../lib/permissions';
+import { FULL_PERMISSIONS, isAccountantRole, isAdminRole, type ModuleKey, type Permissions } from '../lib/permissions';
 import { isZenitFamily, useLook } from '../lib/look';
 import { computeStream, type StationId, type Stream, type StreamItem } from '../lib/stroom';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
@@ -437,8 +437,9 @@ export function Dashboard({
   </div>;
   // Het logboek (Instellingen → Logboek) in het klein. Tot november 2026 stond
   // hier "Laatste activiteit": vijf regels als "Bijgewerkt · task", zonder wie
-  // of wat er veranderde.
-  const activityBlock = <AuditFeed
+  // of wat er veranderde. Alleen voor owners en admins, net als het logboek
+  // zelf; een teamlid kreeg anders een leeg blok "Nog niets in het logboek".
+  const activityBlock = isAdminRole(organizationContext.activeMembership?.role) && <AuditFeed
     logs={organizationContext.auditLogs}
     data={data}
     members={organizationContext.teamMembers}
@@ -739,17 +740,20 @@ export function Dashboard({
 
           {showProjects && <ProjectTimeline data={data} openProject={openProject} />}
 
-          <section className="dashboard-layout dash-layout-tail">
+          {/* Zonder logboek (een teamlid) en zonder inrichting is de zijkolom
+              leeg; dan krijgen de rapportages de volle breedte in plaats van
+              een lege kolom van 330px naast zich. */}
+          {(reportsBlock || onboardingBlock || activityBlock) && <section className={`dashboard-layout dash-layout-tail${onboardingBlock || activityBlock ? '' : ' dash-layout-single'}`}>
             <div className="dash-main">
               {reportsBlock}
             </div>
 
-            <aside className="dash-side">
+            {(onboardingBlock || activityBlock) && <aside className="dash-side">
               {onboardingBlock}
 
               {activityBlock}
-            </aside>
-          </section>
+            </aside>}
+          </section>}
         </>}
     </div>
   </>;

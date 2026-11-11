@@ -48,8 +48,10 @@ const MODULE_LABELS: Record<string, string> = {
 /**
  * Bij welke module hoort een regel uit het auditlog? Spiegelt
  * public.audit_entity_module() (migratie 20261003060000); auditVisibility.test.ts
- * houdt de twee gelijk. `null` = iedereen in de organisatie, 'admin' = alleen
- * owners en admins. Wat hier niet in staat, is ook voor owners en admins.
+ * houdt de twee gelijk. `null` = het team en de organisatie, 'admin' = beheer
+ * (sleutels, koppelingen, abonnement). Het hele logboek is alleen voor owners
+ * en admins (20261111090000); de indeling telt nog voor een sleutel van een
+ * owner of admin die tot een paar modules beperkt is.
  */
 export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   member: null, organization: null,
@@ -75,19 +77,25 @@ export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
 };
 
 /**
- * Welke soorten auditregels mag de aanroeper zien? `'all'` voor een owner of admin
- * zonder modulebeperking; anders precies de lijst — dezelfde regel als de RLS op
- * audit_logs, die hier niet meedoet (de handelingen lezen met de service-role).
- * Een sleutel of koppeling MET modulebeperking telt als gewoon teamlid, net als bij
- * de kerntools van Gerrie: geen sleutels, webhooks of betalingen, en per module
- * alleen wat hij mag lezen.
+ * Welke soorten auditregels mag de aanroeper zien? Het logboek is sinds
+ * 20261111090000 alleen voor owners en admins (de RLS op audit_logs, die hier
+ * niet meedoet: de handelingen lezen met de service-role). Een teamlid, kijker
+ * of boekhouder krijgt dus een lege lijst. Daarvóór las een teamlid per module
+ * mee, en zag zo met alle modules vrijwel het hele logboek, inclusief wie de
+ * rechten van wie aanpaste.
+ *
+ * `'all'` voor een owner of admin zonder modulebeperking. Een sleutel of
+ * koppeling van een owner of admin MET modulebeperking ziet alleen de modules
+ * die hij mag lezen, plus team en organisatie — geen sleutels, webhooks of
+ * betalingen — net als bij de kerntools van Gerrie.
  */
 export function visibleAuditEntityTypes(ctx: Pick<ActionCtx, 'role' | 'canRead'>): 'all' | string[] {
   const elevated = ctx.role === 'owner' || ctx.role === 'admin';
+  if (!elevated) return [];
   const unrestricted = !ctx.canRead || MODULE_KEYS.every((module) => ctx.canRead!(module));
-  if (elevated && unrestricted) return 'all';
+  if (unrestricted) return 'all';
   return Object.entries(AUDIT_ENTITY_MODULE)
-    .filter(([, module]) => module === null || (module !== 'admin' && (ctx.canRead ? ctx.canRead(module) : elevated)))
+    .filter(([, module]) => module === null || (module !== 'admin' && ctx.canRead!(module)))
     .map(([entityType]) => entityType);
 }
 
@@ -377,13 +385,16 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'audit.list',
+    // Net als in de app (RLS sinds 20261111090000): het logboek is alleen voor
+    // owners en admins, niet voor teamleden, kijkers of de boekhouder.
+    adminOnly: true,
     label: 'Audit-log met de laatste wijzigingen bekijken',
     module: 'stats',
     kind: 'read',
     description:
       'Geeft de server-side gelogde wijzigingen binnen deze organisatie (het logboek onder Instellingen): wat er is aangemaakt, bijgewerkt of verwijderd, wie er is uitgenodigd, welke rol is gewijzigd, facturen en offertes die verstuurd, betaald of geaccepteerd zijn, en gebeurtenissen rond plan en betaling. De log is alleen-lezen en wordt door database-triggers gevuld — hij is de enige plek waar je terugziet wie wat wanneer deed. ' +
       'Per regel: actor_label (wie), via (app = in de app, koppeling = via Gerrie, een agent of de API namens dat teamlid, systeem = zonder gebruiker), client_id en project_id (waar), en in metadata.changes per veld old → new; van teksten alleen dat ze veranderden. event_count > 1 = een reeks wijzigingen kort na elkaar, tot last_at. ' +
-      'Je ziet alleen regels over modules die je mag lezen; sleutels, webhooks, uitnodigingen en betalingen alleen als owner of admin.',
+      'Alleen voor owners en admins. Een sleutel of koppeling die tot een paar modules beperkt is, ziet alleen de regels over die modules; sleutels, webhooks, uitnodigingen en betalingen dan niet.',
     keywords: ['audit', 'log', 'logboek', 'historie', 'geschiedenis', 'wie deed wat', 'wijzigingen', 'activiteit'],
     input: {
       entity_type: { type: 'string', description: 'Alleen dit soort rijen, bijvoorbeeld "invoice", "client" of "member".' },
@@ -394,6 +405,12 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       limit: { type: 'number', description: 'Maximaal aantal regels (standaard 25, hoogstens 100).' },
     },
     async read(ctx, input) {
+      // adminOnly houdt een teamlid al tegen bij Gerrie, MCP en de API. Hier nog
+      // een keer, omdat deze handeling met de service-role leest: een nieuwe
+      // aanroeper die adminOnly vergeet, zou anders het hele logboek geven.
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') {
+        throw new ActionError('Het logboek is alleen voor owners en admins van deze organisatie.');
+      }
       const limit = Math.min(Math.max(Number(input.limit) || 25, 1), 100);
       let query = orgQuery(ctx, 'audit_logs', 'id, actor_user_id, actor_label, via, action, entity_type, entity_id, entity_label, client_id, project_id, event_count, metadata, created_at, last_at')
         .order('created_at', { ascending: false }).limit(limit);

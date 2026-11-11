@@ -234,8 +234,9 @@ export const AUDIT_PAGE_SIZE = 50;
 
 /**
  * Eén pagina uit het logboek, nieuwste eerst, met de filters van de pagina.
- * Wat je ziet, beslist de database (RLS op audit_logs, per module): hier
- * staat geen eigen rechtencontrole, en dus ook geen tweede die kan afwijken.
+ * Wie het mag lezen, beslist de database (RLS op audit_logs: alleen owners en
+ * admins, 20261111090000): hier staat geen eigen rechtencontrole, en dus ook
+ * geen tweede die kan afwijken.
  * `total` = hoeveel regels er bij deze filters zijn (alle pagina's samen).
  */
 export async function loadAuditLogPage(organizationId: UUID, filters: AuditFilters, offset = 0): Promise<{ rows: AuditLog[]; total: number | null }> {
@@ -333,6 +334,9 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     // Voor de rest gaf deze aanroep bij elke start een 403, met een waarschuwing
     // in de console die naar een ontbrekende migratie wees.
     const canSeeBilling = isAdminRole(activeMembership?.role);
+    // Het logboek ook (20261111090000): voor de rest geeft de database niets,
+    // dus vragen we het dan ook niet op.
+    const canSeeAuditLog = canSeeBilling;
     const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }, { data: businessRows, error: businessError }] = await Promise.all([
       supabase
         .from('organization_members')
@@ -347,12 +351,14 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
         .eq('status', 'pending')
         .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
         .order('created_at', { ascending: false }),
-      supabase
-        .from('audit_logs')
-        .select('*')
-        .eq('organization_id', activeOrganization.id)
-        .order('created_at', { ascending: false })
-        .limit(40),
+      canSeeAuditLog
+        ? supabase
+          .from('audit_logs')
+          .select('*')
+          .eq('organization_id', activeOrganization.id)
+          .order('created_at', { ascending: false })
+          .limit(40)
+        : Promise.resolve({ data: [], error: null }),
       supabase.rpc('organization_license_usage', { p_organization_id: activeOrganization.id }),
       canSeeBilling
         ? supabase.rpc('organization_billing_overview', { p_organization_id: activeOrganization.id })
