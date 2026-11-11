@@ -397,7 +397,65 @@ function chatWrite(table, method, url, body) {
   return [];
 }
 
+// Mappen voor klantmail (Berichten, 2026-11-11): de rpc's doen in het
+// geheugen wat de database doet, zodat je bij het handmatig testen echt mappen
+// kunt maken en gesprekken kunt verplaatsen. De lay-outtest klikt niets.
+function mailFolderRpc(fn, body) {
+  const folders = seed.tables.client_email_folders;
+  const now = new Date().toISOString();
+  const setThreadFolder = (ids, folderId) => {
+    let moved = 0;
+    for (const list of [seed.tables.client_email_threads, seed.tables.client_email_thread_overview]) {
+      for (const t of list) if (ids.includes(t.id) && (t.folder_id ?? null) !== folderId) { t.folder_id = folderId; if (list === seed.tables.client_email_threads) moved += 1; }
+    }
+    return moved;
+  };
+  const clash = (clientId, parentId, name, exceptId = null) => folders.some(f => f.client_id === clientId && (f.parent_id ?? null) === (parentId ?? null) && f.id !== exceptId && f.name.toLowerCase() === name.toLowerCase());
+  const fail = (message) => ({ __status: 400, body: { code: '23505', message, details: null, hint: null } });
+  switch (fn) {
+    case 'create_client_email_folder': {
+      const name = String(body?.p_name ?? '').replace(/\s+/g, ' ').trim();
+      if (!name) return fail('Geef de map een naam.');
+      if (clash(body.p_client_id, body.p_parent_id, name)) return fail(`Er staat al een map "${name}" op deze plek.`);
+      const row = { id: `f8${Math.random().toString(16).slice(2, 8).padStart(6, '0')}-0000-4000-8000-000000000000`, organization_id: seed.ids.ORG, client_id: body.p_client_id, parent_id: body.p_parent_id ?? null, name, created_by: seed.ids.USER, created_at: now, updated_at: now };
+      folders.push(row);
+      return row;
+    }
+    case 'rename_client_email_folder': {
+      const row = folders.find(f => f.id === body?.p_folder_id);
+      const name = String(body?.p_name ?? '').replace(/\s+/g, ' ').trim();
+      if (!row) return fail('Map niet gevonden.');
+      if (clash(row.client_id, row.parent_id, name, row.id)) return fail(`Er staat al een map "${name}" op deze plek.`);
+      Object.assign(row, { name, updated_at: now });
+      return row;
+    }
+    case 'move_client_email_folder': {
+      const row = folders.find(f => f.id === body?.p_folder_id);
+      if (!row) return fail('Map niet gevonden.');
+      if (clash(row.client_id, body.p_parent_id, row.name, row.id)) return fail(`Daar staat al een map "${row.name}".`);
+      Object.assign(row, { parent_id: body.p_parent_id ?? null, updated_at: now });
+      return row;
+    }
+    case 'delete_client_email_folder': {
+      const row = folders.find(f => f.id === body?.p_folder_id);
+      if (!row) return fail('Map niet gevonden.');
+      const inside = seed.tables.client_email_threads.filter(t => t.folder_id === row.id).map(t => t.id);
+      const threadsMoved = setThreadFolder(inside, row.parent_id);
+      let foldersMoved = 0;
+      for (const child of folders) if (child.parent_id === row.id) { child.parent_id = row.parent_id; foldersMoved += 1; }
+      folders.splice(folders.indexOf(row), 1);
+      return { threads_moved: threadsMoved, folders_moved: foldersMoved, parent_id: row.parent_id };
+    }
+    case 'move_client_email_threads':
+      return setThreadFolder(Array.isArray(body?.p_thread_ids) ? body.p_thread_ids : [], body?.p_folder_id ?? null);
+    default:
+      return undefined;
+  }
+}
+
 function rpc(fn, body = null) {
+  const folderResult = mailFolderRpc(fn, body);
+  if (folderResult !== undefined) return folderResult;
   switch (fn) {
     case 'ensure_user_default_organization': return null;
     // Instellingen → Domein: de werkruimte heeft al een adres.
@@ -524,7 +582,7 @@ export async function installMock(context, options = {}) {
         if (result !== undefined) return reply(route, result);
       }
       let rpcBody = null; try { rpcBody = req.postDataJSON(); } catch { /* geen json-body */ }
-      return json(route, rpc(fn, rpcBody));
+      return reply(route, rpc(fn, rpcBody));
     }
     if (p.startsWith('/rest/v1/')) {
       const table = p.slice('/rest/v1/'.length);

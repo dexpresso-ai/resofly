@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Archive, ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Phone, PhoneIncoming, PhoneOutgoing, Receipt, RotateCcw, Search, Send, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
+import { Archive, Check, ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Phone, PhoneIncoming, PhoneOutgoing, Receipt, RotateCcw, Search, Send, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
 import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, FileTransferBundle, FileTransferRecipient, InboundMessage, InternalDocument, Invoice, Note, OrganizationMember, Project, Quote, Ticket } from '../types';
 import { holderName, matchesHolder, memberColor, memberInitials, membersWhoCanHold } from '../lib/members';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
@@ -20,6 +20,8 @@ import type { ImportColumn } from '../lib/csvImport';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { InboundInboxTab } from '../components/InboundInbox';
 import { ClientEmailMessageCard, formatEmailDateTime } from '../components/ClientEmailMessage';
+import { FolderLabel, MailFolderTree, useMailFolderActions, type MailTreeItem } from '../components/MailFolders';
+import { foldersOfClient } from '../lib/mailFolders';
 import { PageIcon } from '../components/PageIcon';
 import { ClientStream, ClientStreamBadge } from '../components/StreamRibbon';
 import { computeStream } from '../lib/stroom';
@@ -984,6 +986,11 @@ function FinancePanel<T extends Quote | Invoice>({
   </article>;
 }
 
+/** Slepen alleen met een muis: op een aanraakscherm zou een rij vastpakken het scrollen blokkeren. */
+const FINE_POINTER = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+  ? window.matchMedia('(pointer: fine)').matches
+  : false;
+
 function ClientCommunication({ client, data, organizationId, canWrite, onUnreadChanged, onChanged }: { client: Client; data: AppData; organizationId: string; canWrite: boolean; onUnreadChanged?: () => void; onChanged: () => void }) {
   /** Het logvenster: `{ existing: null }` is een nieuw gesprek, een rij is bewerken. */
   const [loggingCall, setLoggingCall] = useState<{ existing: ClientCall | null } | null>(null);
@@ -1012,6 +1019,24 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
   const mailFiles = useMessageFiles(organizationId, client.id);
   /** De bestanden die met eerdere berichten meegingen, per bericht. */
   const [transfersByEmail, setTransfersByEmail] = useState<Map<string, { bundle: FileTransferBundle; recipient: FileTransferRecipient }>>(new Map());
+
+  // Dezelfde mappen als op Berichten: een map hoort bij de klant, dus hij
+  // staat ook hier, en hij gedraagt zich hier precies hetzelfde.
+  const [selecting, setSelecting] = useState(false);
+  const [selectedThreads, setSelectedThreads] = useState<Set<string>>(new Set());
+  const mailFolders = useMailFolderActions(organizationId, canWrite, {
+    folderOfThread: id => threads.find(t => t.id === id)?.folder_id ?? null,
+    setThreadFolders: change => setThreads(rows => rows.map(t => (change.has(t.id) ? { ...t, folder_id: change.get(t.id) ?? null } : t))),
+    threadIdsIn: folderId => threads.filter(t => t.folder_id === folderId).map(t => t.id),
+    resync: () => {
+      reload().catch(() => { /* best effort */ });
+      mailFolders.reloadFolders().catch(() => { /* best effort */ });
+    },
+    clientName: () => client.name,
+    onSelectionMoved: () => { setSelecting(false); setSelectedThreads(new Set()); },
+  });
+  const clientFolders = useMemo(() => foldersOfClient(mailFolders.folders, client.id), [mailFolders.folders, client.id]);
+  useEffect(() => { setSelecting(false); setSelectedThreads(new Set()); }, [client.id]);
 
   const target = mailRecipientFor(data, client.id, recipientKey);
   const recipient = target?.email ?? '';
@@ -1111,6 +1136,14 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
     return map;
   }, [emails]);
 
+  const treeItems = useMemo<Array<MailTreeItem & { thread: ClientEmailThread }>>(() => threads.map(thread => ({
+    key: thread.id,
+    threadId: thread.id,
+    folderId: thread.folder_id ?? null,
+    unread: (emailsByThread.get(thread.id) ?? []).filter(msg => msg.direction === 'inbound' && !readIds.has(msg.id)).length,
+    thread,
+  })), [threads, emailsByThread, readIds]);
+
   async function toggleThread(threadId: string) {
     const willExpand = !expandedThreads.has(threadId);
     setExpandedThreads(prev => {
@@ -1134,6 +1167,52 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
       // blijft volgen (de 'nieuw'-badge komt dan gewoon terug).
       setReadIds(prev => { const next = new Set(prev); unreadIds.forEach(id => next.delete(id)); return next; });
     }
+  }
+
+  /**
+   * Eén gesprek als uitklapbare regel. Met `pick` staat hij in de mappenboom:
+   * tijdens Selecteren kiest een klik de regel in plaats van hem open te klappen.
+   */
+  function renderThread(thread: ClientEmailThread, pick?: { selecting: boolean; selected: boolean; toggle: () => void }) {
+    const msgs = emailsByThread.get(thread.id) ?? [];
+    const unreadCount = msgs.filter(msg => msg.direction === 'inbound' && !readIds.has(msg.id)).length;
+    const isOpen = expandedThreads.has(thread.id) && !pick?.selecting;
+    return <div className={`client-comm-thread${unreadCount > 0 ? ' has-unread' : ''}${isOpen ? ' open' : ''}${pick?.selected ? ' is-picked' : ''}`} key={thread.id}>
+      <button
+        type="button"
+        className="client-comm-thread-head"
+        onClick={() => (pick?.selecting ? pick.toggle() : toggleThread(thread.id))}
+        aria-expanded={pick?.selecting ? undefined : isOpen}
+        aria-pressed={pick?.selecting ? pick.selected : undefined}
+      >
+        {pick?.selecting
+          ? <span className={`mf-check${pick.selected ? ' is-on' : ''}`} aria-hidden="true">{pick.selected && <Check size={11} strokeWidth={3} />}</span>
+          : <span className="client-comm-thread-caret" aria-hidden="true">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>}
+        <span className="client-comm-thread-title">
+          <strong>{thread.subject || '(geen onderwerp)'}</strong>
+          <span className="client-comm-thread-preview">{msgs.length} bericht{msgs.length === 1 ? '' : 'en'}</span>
+        </span>
+        {unreadCount > 0 && <span className="client-comm-unread-badge">{unreadCount} nieuw</span>}
+        <time className="client-comm-thread-time">{formatEmailDateTime(thread.last_message_at)}</time>
+      </button>
+      {isOpen && <div className="client-comm-messages">
+        {mailFolders.available && <div className="client-comm-thread-tools">
+          <FolderLabel folders={clientFolders} folderId={thread.folder_id} onClick={canWrite ? () => mailFolders.requestMoveThreads(client.id, [thread.id], `Het gesprek "${thread.subject || '(geen onderwerp)'}" met ${client.name}.`) : undefined} />
+        </div>}
+        {msgs.map(msg => (
+          <ClientEmailMessageCard
+            key={msg.id}
+            message={msg}
+            isUnread={msg.direction === 'inbound' && !readIds.has(msg.id)}
+            canWrite={canWrite}
+            onRemove={(id) => void removeMessage(id)}
+            footer={transfersByEmail.has(msg.id)
+              ? <TransferMessageBlock data={data} organizationId={organizationId} bundle={transfersByEmail.get(msg.id)!.bundle} recipientId={transfersByEmail.get(msg.id)!.recipient.id} canWrite={canWrite} />
+              : null}
+          />
+        ))}
+      </div>}
+    </div>;
   }
 
   return <div className="client-comm">
@@ -1174,40 +1253,36 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
       <div className="client-panel-head"><h3>Verzonden &amp; ontvangen</h3><span>{threads.length}</span></div>
       {!loaded && <div className="client-empty-line">Communicatie laden…</div>}
       {loaded && loadError && <div className="error">{loadError}</div>}
-      {loaded && !loadError && threads.length === 0 && <div className="client-empty-line">Nog geen e-mails met deze klant.</div>}
-      <div className="client-comm-threads">
-        {threads.map(thread => {
-          const msgs = emailsByThread.get(thread.id) ?? [];
-          const unreadCount = msgs.filter(msg => msg.direction === 'inbound' && !readIds.has(msg.id)).length;
-          const isOpen = expandedThreads.has(thread.id);
-          return <div className={`client-comm-thread${unreadCount > 0 ? ' has-unread' : ''}${isOpen ? ' open' : ''}`} key={thread.id}>
-            <button type="button" className="client-comm-thread-head" onClick={() => toggleThread(thread.id)} aria-expanded={isOpen}>
-              <span className="client-comm-thread-caret" aria-hidden="true">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
-              <span className="client-comm-thread-title">
-                <strong>{thread.subject || '(geen onderwerp)'}</strong>
-                <span className="client-comm-thread-preview">{msgs.length} bericht{msgs.length === 1 ? '' : 'en'}</span>
-              </span>
-              {unreadCount > 0 && <span className="client-comm-unread-badge">{unreadCount} nieuw</span>}
-              <time className="client-comm-thread-time">{formatEmailDateTime(thread.last_message_at)}</time>
-            </button>
-            {isOpen && <div className="client-comm-messages">
-              {msgs.map(msg => (
-                <ClientEmailMessageCard
-                  key={msg.id}
-                  message={msg}
-                  isUnread={msg.direction === 'inbound' && !readIds.has(msg.id)}
-                  canWrite={canWrite}
-                  onRemove={(id) => void removeMessage(id)}
-                  footer={transfersByEmail.has(msg.id)
-                    ? <TransferMessageBlock data={data} organizationId={organizationId} bundle={transfersByEmail.get(msg.id)!.bundle} recipientId={transfersByEmail.get(msg.id)!.recipient.id} canWrite={canWrite} />
-                    : null}
-                />
-              ))}
-            </div>}
-          </div>;
-        })}
-      </div>
+      {mailFolders.available && loaded && !loadError
+        ? <MailFolderTree<MailTreeItem & { thread: ClientEmailThread }>
+            clientId={client.id}
+            clientName={client.name}
+            folders={clientFolders}
+            items={treeItems}
+            filtering={false}
+            canWrite={canWrite}
+            dragEnabled={FINE_POINTER}
+            renderItem={(item, state) => renderThread(item.thread, state)}
+            selecting={selecting}
+            selected={selectedThreads}
+            onSelectingChange={on => { setSelecting(on); if (!on) setSelectedThreads(new Set()); }}
+            onSelectedChange={setSelectedThreads}
+            onMoveSelected={() => mailFolders.requestMoveThreads(client.id, [...selectedThreads], `${selectedThreads.size === 1 ? '1 gesprek' : `${selectedThreads.size} gesprekken`} van ${client.name}.`, true)}
+            onCreate={(parentId, name) => mailFolders.createFolder(client.id, parentId, name)}
+            onRename={mailFolders.renameFolder}
+            onRequestDelete={mailFolders.requestDelete}
+            onRequestMoveFolder={mailFolders.requestMoveFolder}
+            onDropThreads={(ids, folderId) => mailFolders.dropThreads(ids, folderId, selecting)}
+            emptyText="Nog geen e-mails met deze klant."
+          />
+        : <>
+            {loaded && !loadError && threads.length === 0 && <div className="client-empty-line">Nog geen e-mails met deze klant.</div>}
+            <div className="client-comm-threads">
+              {threads.map(thread => renderThread(thread))}
+            </div>
+          </>}
     </article>
+    {mailFolders.dialogs}
 
     {/* Telefoongesprekken — hetzelfde dossier, dezelfde tijdlijn-gedachte als
         de mail erboven. Openen brengt je in het logvenster, waar ook de
