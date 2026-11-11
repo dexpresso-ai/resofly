@@ -76,6 +76,7 @@ en telefoonnummer over uit de handtekening, en ging je terug om de mail te koppe
 ## Getest
 
 - `npm run typecheck`; `npm test` (1611 tests, 0 fout).
+- `npm run test:mobile -- --theme=both`: 506 pagina's gemeten, 0 met problemen.
 - In Chromium tegen de nagebootste backend: klantenlijst (laptop) en Berichten (telefoon).
   Opvangbak → *Nieuwe klant* → formulier ingevuld uit een mail met handtekening en een
   geciteerd antwoord van het bureau. Het telefoonnummer en de KvK van het bureau worden niet
