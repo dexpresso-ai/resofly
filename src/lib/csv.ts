@@ -24,10 +24,19 @@ export function csvAmountCell(v: string | number): string {
   return /^-?\d+\.\d{2}$/.test(text) ? text.replace('.', ',') : text;
 }
 
-export function downloadCsv(filename: string, header: string[], rows: (string | number)[][]): void {
+/** Regels met ; als scheidingsteken, zonder BOM (die zet downloadCsv of de export ervoor). */
+export function buildCsvLines(rows: (string | number)[][]): string {
   const escape = (v: string | number) => `"${csvSafeText(csvAmountCell(v)).replace(/"/g, '""')}"`;
-  const csv = [header, ...rows].map(r => r.map(escape).join(';')).join('\r\n');
-  const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }));
+  return rows.map(r => r.map(escape).join(';')).join('\r\n');
+}
+
+/** Een heel CSV-bestand met kopregel en BOM, zoals Excel (NL) het verwacht. */
+export function buildCsv(header: string[], rows: (string | number)[][]): string {
+  return `\uFEFF${buildCsvLines([header, ...rows])}`;
+}
+
+export function downloadCsv(filename: string, header: string[], rows: (string | number)[][]): void {
+  const url = URL.createObjectURL(new Blob([buildCsv(header, rows)], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;

@@ -26,6 +26,7 @@ import {
   inboxReasonLabel, splitInboxItems,
 } from '../lib/invoiceInbox';
 import { todayIso } from '../lib/dates';
+import { XafImportPanel } from './XafImport';
 
 // Vaste kolommen voor de bulk CSV-import van leveranciers (crediteuren).
 const SUPPLIER_IMPORT_COLUMNS: ImportColumn[] = [
@@ -960,7 +961,11 @@ function ledgerFiscalYearBounds(startMonth: number, year: number): { start: stri
   return { start, end, label: startMonth === 1 ? `${year}` : `${year}-${year + 1}` };
 }
 
-export function LedgerPage({ data, organizationId, canWrite, onChanged }: PageProps) {
+/**
+ * canWriteClients: de import van een auditfile kan ook klanten toevoegen, en
+ * dat hoort bij de module Klanten, niet bij Financiën (CLAUDE.md, regel 3).
+ */
+export function LedgerPage({ data, organizationId, canWrite, onChanged, canWriteClients = false }: PageProps & { canWriteClients?: boolean }) {
   const [tab, setTab] = useState<'journal' | 'accounts' | 'trial' | 'vat' | 'opening'>('journal');
   const fiscalStartMonth = data.companySettings?.fiscal_year_start_month ?? 1;
 
@@ -1016,7 +1021,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged }: PagePr
       {tab === 'accounts' && <AccountsView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       {tab === 'trial' && <TrialBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       {tab === 'vat' && <VatCodesView vatCodes={data.vatCodes} />}
-      {tab === 'opening' && <OpeningBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
+      {tab === 'opening' && <OpeningBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} canWriteClients={canWriteClients} />}
     </div>
   );
 }
@@ -1396,7 +1401,7 @@ function MemorialModal({ data, organizationId, onClose, onSaved }: {
 
 type OpeningLine = { key: string; account_id: string; debit: string; credit: string };
 
-function OpeningBalanceView({ data, organizationId, canWrite, onChanged }: PageProps) {
+function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWriteClients }: PageProps & { canWriteClients: boolean }) {
   const existing = useMemo(
     // De tegenboeking van een beginbalans is zelf geen beginbalans.
     () => data.journalEntries.find(e => e.source_type === 'opening_balance' && e.status === 'posted' && !e.reversed_by_entry_id && !e.reverses_entry_id) ?? null,
@@ -1473,8 +1478,31 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged }: PageP
     );
   }
 
+  // Uit een auditfile: de datum en de regels hieronder invullen, zodat je ze
+  // nakijkt en met dezelfde knop vastlegt als een beginbalans met de hand.
+  function applyFromXaf(asOf: string, drafts: Array<{ account_id: string; cents: number }>) {
+    setDate(asOf);
+    setLines(drafts.map(d => ({
+      key: uid(),
+      account_id: d.account_id,
+      debit: d.cents > 0 ? (d.cents / 100).toFixed(2) : '',
+      credit: d.cents < 0 ? (-d.cents / 100).toFixed(2) : '',
+    })));
+  }
+
   return (
     <div className="bk-accounts">
+      <XafImportPanel
+        organizationId={organizationId}
+        canWrite={canWrite}
+        canWriteClients={canWriteClients}
+        ledgerAccounts={data.ledgerAccounts}
+        clients={data.clients}
+        suppliers={data.suppliers}
+        defaultDate={data.companySettings?.bookkeeping_start_date ?? null}
+        onApply={applyFromXaf}
+        onRelationsAdded={onChanged}
+      />
       <div className="bk-subhead">
         <p className="bk-muted">
           Stap je over van een ander pakket? Vul hier de eindbalans van je oude administratie in (banksaldo, openstaande debiteuren/crediteuren, activa).

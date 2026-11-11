@@ -48,6 +48,22 @@ export async function downloadStoredFile(storageKey: string, fileName: string): 
   }
 }
 
+/**
+ * Een opgeslagen bestand als Blob, voor "Alles exporteren". De worker
+ * controleert lidmaatschap en modulerechten uit de sleutel, net als bij een
+ * gewone download. null als het bestand er niet (meer) is.
+ */
+export async function fetchStoredFileBlob(storageKey: string): Promise<Blob | null> {
+  const base = getWorkerBase();
+  const token = await getAccessToken();
+  const response = await fetch(`${base}/file/${encodeURIComponent(storageKey)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Ophalen mislukt (${response.status})`);
+  return response.blob();
+}
+
 export async function uploadToR2(file: File, organizationId: UUID, ref: { entity_type: EntityType; entity_id: UUID; parent_task_id?: UUID | null }) {
   if (file.size > MAX_UPLOAD_BYTES) {
     throw new Error(`Bestand is te groot. Maximum is ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB.`);

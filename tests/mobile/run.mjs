@@ -152,6 +152,13 @@ const PAGES = {
   // koppelingen. Stond tot nu toe niet in deze test; de lange URL in een
   // smalle kaart is precies wat zijwaarts uit beeld kan lopen.
   'settings-ai': { page: 'settings', prepare: '[data-settings-tab="ai"]' },
+  // Boekhouding → Beginbalans met het paneel "Overstappen van een ander
+  // pakket?" (auditfile inlezen, 11 november 2026) boven de handmatige regels.
+  'ledger-beginbalans': { page: 'ledger', mock: { ledger: true }, prepare: '.bk-tabs button:has-text("Beginbalans")' },
+  // Instellingen → Gegevens (11 november 2026): alles exporteren, met de twee
+  // kolommen "wat erin zit" en "wat er niet in zit". Alleen voor de eigenaar;
+  // de mock is eigenaar.
+  'settings-gegevens': { page: 'settings', prepare: '[data-settings-tab="gegevens"]' },
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },
