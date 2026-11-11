@@ -108,3 +108,22 @@ oude adres staat. Verwijder de connector daarom nu en voeg hem opnieuw toe met
 - Het nieuwe deel van de rooktest tegen een nagebootste server: een goede
   instelling, geen eigen adres (overgeslagen) en een adres met een slash te veel
   (rood).
+- **Op staging, na de uitrol (run 217 van *Deploy Supabase (staging)*).** De
+  rooktest liep `https://mcp.resofly.com/mcp` af zoals een AI-client dat doet:
+  - de 401 met de wegwijzer naar het resource-document;
+  - het resource-document op beide plekken, met precies dit adres;
+  - de metadata met issuer `https://mcp.resofly.com`;
+  - `/authorize` en `/register`.
+
+  Alle zeven controles slaagden.
+- **De rem telt per client, ook via de Worker.** In de edge-logs van Supabase
+  komen de verzoeken via de Worker binnen met `cf-connecting-ip`
+  `2a06:98c0:3600::103`, het vaste adres van Cloudflare. De registratie van de
+  rooktest via mcp.resofly.com is in `api_auth_failures` niet op dat adres
+  geteld, maar op het adres van de GitHub-runner zelf. Dat is hetzelfde adres
+  waarmee de rechtstreekse verzoeken van de rooktest binnenkwamen.
+- **Bestaande koppeling.** De Claude-koppeling van deze werkruimte stond nog op
+  het Supabase-adres. Die gaf na het zetten van de secrets nog gewoon antwoord
+  (`get_workspace`).
+- **De app.** De Pages-build van staging (`6491a06`) is gebouwd met
+  `VITE_MCP_SERVER_URL`.
