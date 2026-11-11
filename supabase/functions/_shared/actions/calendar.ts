@@ -1443,7 +1443,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     kind: 'write',
     description:
       'Zet één of meer tijdvakken op een boekingslink waaruit de klant kan kiezen. Tijden zijn lokaal (Europe/Amsterdam). ' +
-      'De server kijkt bij het opslaan of een blok botst met een bestaande afspraak in dezelfde agenda en waarschuwt daarvoor; hij blokkeert het niet. ' +
+      'De server kijkt bij het opslaan of een blok botst met een bestaande afspraak in de agenda\'s van wie de link maakte (ResoFly en gekoppeld) en waarschuwt daarvoor; hij blokkeert het niet. ' +
       'Reken relatieve datums ("volgende week dinsdag") eerst om naar JJJJ-MM-DD op basis van de datum van vandaag.',
     keywords: ['tijdblok', 'slot', 'beschikbaarheid', 'tijdvak', 'aanbieden', 'boekingslink', 'moment'],
     input: {

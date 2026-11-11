@@ -70,6 +70,11 @@ export interface AddSlotsResult {
   warnings: Array<{ starts_at: string; conflict: string }>;
   /** Blokken die precies zo al op de link stonden en dus zijn overgeslagen. */
   skipped?: number;
+  /**
+   * Met `skipClashes`: de momenten die er niet op kwamen omdat je dan al een
+   * afspraak hebt. Ontbreekt bij een oudere server; die geeft `warnings`.
+   */
+  clashes?: Array<{ starts_at: string; ends_at: string; conflict: string }>;
 }
 
 export interface TokenResult {
@@ -128,8 +133,13 @@ export async function deleteBookingLink(organizationId: UUID, linkId: UUID): Pro
   await invoke<Record<string, never>>(organizationId, { action: 'deleteLink', linkId });
 }
 
-export async function addBookingSlots(organizationId: UUID, linkId: UUID, slots: Array<{ startsAt: string; endsAt: string }>): Promise<AddSlotsResult> {
-  return await invoke<AddSlotsResult>(organizationId, { action: 'addSlots', linkId, slots });
+/**
+ * Momenten op een link zetten. `skipClashes`: een moment dat botst met een
+ * afspraak in je agenda's komt er niet op (zie `clashes`). Zonder blijft het een
+ * waarschuwing; dat is voor een moment dat iemand bewust met de hand koos.
+ */
+export async function addBookingSlots(organizationId: UUID, linkId: UUID, slots: Array<{ startsAt: string; endsAt: string }>, options: { skipClashes?: boolean } = {}): Promise<AddSlotsResult> {
+  return await invoke<AddSlotsResult>(organizationId, { action: 'addSlots', linkId, slots, ...(options.skipClashes ? { skipClashes: true } : {}) });
 }
 
 export async function removeBookingSlot(organizationId: UUID, linkId: UUID, slotId: UUID): Promise<void> {

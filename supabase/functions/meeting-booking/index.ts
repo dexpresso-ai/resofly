@@ -40,6 +40,7 @@ import {
   expiryAfter,
   isActiveBooking,
   isBookableSlot,
+  slotClash,
   withoutDuplicateSlots,
 } from '../_shared/meetingBookingRules.ts';
 import {
@@ -124,7 +125,7 @@ Deno.serve(async (req) => {
       case 'deleteLink': await deleteLink(organizationId, String(body.linkId || '')); return json({ ok: true });
       case 'regenerateToken': return json({ ok: true, ...(await regenerateToken(organizationId, String(body.linkId || ''), clampTtlDays(body.ttlDays))) });
       case 'extendLink': return json({ ok: true, link: await extendLink(organizationId, String(body.linkId || ''), clampTtlDays(body.ttlDays)) });
-      case 'addSlots': return json({ ok: true, ...(await addSlots(organizationId, user.id, String(body.linkId || ''), body.slots || [])) });
+      case 'addSlots': return json({ ok: true, ...(await addSlots(organizationId, user.id, String(body.linkId || ''), body.slots || [], { skipClashes: body.skipClashes === true })) });
       case 'removeSlot': await removeSlot(organizationId, String(body.linkId || ''), String(body.slotId || '')); return json({ ok: true });
       case 'sendLinkMail': return json({ ok: true, ...(await sendLinkMail(organizationId, String(body.linkId || ''), body)) });
       case 'cancelBooking': await cancelBooking(organizationId, String(body.bookingId || '')); return json({ ok: true });
@@ -552,7 +553,13 @@ async function buildBookingUrl(organizationId: string, token: string): Promise<s
   return `${base}/booking/${encodeURIComponent(token)}`;
 }
 
-async function addSlots(organizationId: string, userId: string, linkId: string, rawSlots: unknown) {
+/**
+ * Momenten op een link zetten. Met `skipClashes` komt een moment dat botst met
+ * een afspraak in je agenda's er niet op (tekenen in het rooster, het
+ * weekpatroon); zonder blijft het een waarschuwing (één moment met de hand,
+ * Gerrie): dan koos een mens dat moment bewust.
+ */
+async function addSlots(organizationId: string, userId: string, linkId: string, rawSlots: unknown, opts: { skipClashes?: boolean } = {}) {
   const link = await loadLink(organizationId, linkId);
   if (!Array.isArray(rawSlots) || rawSlots.length === 0) throw new HttpError('Geen tijdblokken aangeleverd.', 422);
   if (rawSlots.length > 200) throw new HttpError('Te veel blokken in één keer (max 200).', 422);
@@ -572,8 +579,42 @@ async function addSlots(organizationId: string, userId: string, linkId: string, 
   const { data: existingRows } = await supabaseAdmin.from('meeting_booking_slots')
     .select('starts_at,ends_at,status').eq('organization_id', organizationId).eq('booking_link_id', linkId);
   const existing = (existingRows ?? []) as Array<{ starts_at: string; ends_at: string; status: string }>;
-  const { fresh: parsed, skipped } = withoutDuplicateSlots(requested, existing);
-  if (parsed.length === 0) return { slots: [], warnings: [], skipped };
+  const { fresh, skipped } = withoutDuplicateSlots(requested, existing);
+  if (fresh.length === 0) return { slots: [], warnings: [], clashes: [], skipped };
+
+  // Botst een moment met een afspraak in de agenda's van wie de link maakte
+  // (slotClash)? Eerst keken we alleen naar de agenda van de link zelf.
+  // Lukt het lezen niet (Google even onbereikbaar), dan gaan de momenten er
+  // gewoon op: de publieke pagina kijkt bij het boeken nog eens.
+  const warnings: Array<{ starts_at: string; conflict: string }> = [];
+  const clashes: Array<{ starts_at: string; ends_at: string; conflict: string }> = [];
+  let parsed = fresh;
+  if (link.source_id) {
+    const rangeStart = fresh[0].starts_at;
+    const rangeEnd = fresh.reduce((max, s) => (s.ends_at > max ? s.ends_at : max), fresh[0].ends_at);
+    try {
+      const [events, ownSourceIds] = await Promise.all([
+        listEvents(organizationId, userId, rangeStart, rangeEnd),
+        calendarIdsOf(organizationId, link.user_id ?? userId),
+      ]);
+      const keep: typeof fresh = [];
+      for (const slot of fresh) {
+        const clash = slotClash(slot, events, { linkSourceId: link.source_id, ownSourceIds });
+        if (!clash) { keep.push(slot); continue; }
+        const conflict = String(clash.title || 'Bestaande afspraak');
+        if (opts.skipClashes) {
+          clashes.push({ starts_at: slot.starts_at, ends_at: slot.ends_at, conflict });
+        } else {
+          warnings.push({ starts_at: slot.starts_at, conflict });
+          keep.push(slot);
+        }
+      }
+      parsed = keep;
+    } catch (err) {
+      console.warn('overlap check failed', err);
+    }
+  }
+  if (parsed.length === 0) return { slots: [], warnings, clashes, skipped };
 
   // Hooguit 500 vrije momenten die nog moeten komen per link: meer toont de
   // klantpagina niet. Met het weekpatroon zet je er in één klik tientallen op;
@@ -588,25 +629,6 @@ async function addSlots(organizationId: string, userId: string, linkId: string, 
       : `Op een link passen hooguit ${MAX_OPEN_SLOTS_PER_LINK} vrije momenten. Er kunnen er nog ${room} bij; je probeerde er ${parsed.length}.`, 422);
   }
 
-  // Overlap-waarschuwing t.o.v. de bestaande agenda-items op de gekozen bron.
-  const warnings: Array<{ starts_at: string; conflict: string }> = [];
-  if (link.source_id) {
-    const rangeStart = parsed[0].starts_at;
-    const rangeEnd = parsed[parsed.length - 1].ends_at;
-    try {
-      const events = await listEvents(organizationId, userId, rangeStart, rangeEnd);
-      const sameSource = events.filter(e => String(e.source_id) === link.source_id);
-      for (const slot of parsed) {
-        const s = new Date(slot.starts_at).getTime();
-        const e = new Date(slot.ends_at).getTime();
-        const clash = sameSource.find(ev => new Date(String(ev.starts_at)).getTime() < e && new Date(String(ev.ends_at)).getTime() > s);
-        if (clash) warnings.push({ starts_at: slot.starts_at, conflict: String(clash.title || 'Bestaande afspraak') });
-      }
-    } catch (err) {
-      console.warn('overlap check failed', err);
-    }
-  }
-
   const insertRows = parsed.map(p => ({
     booking_link_id: linkId,
     organization_id: organizationId,
@@ -616,7 +638,15 @@ async function addSlots(organizationId: string, userId: string, linkId: string, 
   }));
   const { data, error } = await supabaseAdmin.from('meeting_booking_slots').insert(insertRows).select('*');
   if (error) throw new HttpError(error.message, 500);
-  return { slots: data ?? [], warnings, skipped };
+  return { slots: data ?? [], warnings, clashes, skipped };
+}
+
+/** De agenda's van één teamlid in deze organisatie: zijn ResoFly-agenda's, gekoppelde agenda's en abonnementen. */
+async function calendarIdsOf(organizationId: string, userId: string): Promise<string[]> {
+  const { data, error } = await supabaseAdmin.from('calendar_sources').select('id')
+    .eq('organization_id', organizationId).eq('user_id', userId);
+  if (error) throw error;
+  return (data ?? []).map((row: { id: string }) => row.id);
 }
 
 async function removeSlot(organizationId: string, linkId: string, slotId: string): Promise<void> {

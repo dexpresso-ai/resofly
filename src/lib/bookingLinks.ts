@@ -413,3 +413,66 @@ export function linkVideoKind(link: { meeting_url?: string | null; auto_conferen
   if (provider === 'jitsi' || provider === 'google_meet' || provider === 'teams') return provider;
   return sourceProvider === 'google' ? 'google_meet' : sourceProvider === 'microsoft' ? 'teams' : null;
 }
+
+// ── Je eigen afspraken in het rooster ─────────────────────────────────────
+//
+// Eerst toonde het rooster van een boekingslink alleen de afspraken uit de
+// agenda van die link. Zette je de link in je ResoFly-agenda, dan zag je je
+// Google- of Outlook-afspraken niet, en tekende je er zo een moment overheen:
+// een dubbele boeking zodra de klant dat moment koos.
+
+/**
+ * De agenda's die in het rooster van een link meetellen: die van wie de link
+ * maakte (de ResoFly-agenda, Google, Microsoft, een ICS-abonnement), met de
+ * agenda van de link vooraan. Die van collega's niet: hun afspraken maken jou
+ * niet bezet.
+ */
+export function bookingGridSources<T extends { id: string; user_id: string; sync_enabled: boolean }>(
+  sources: readonly T[],
+  ownerId: string | null | undefined,
+  linkSourceId: string | null | undefined,
+): T[] {
+  const linkSource = sources.find(s => s.id === linkSourceId);
+  const own = sources.filter(s => s.id !== linkSourceId && s.sync_enabled && Boolean(ownerId) && s.user_id === ownerId);
+  return linkSource ? [linkSource, ...own] : own;
+}
+
+/**
+ * De afspraak waar een moment mee botst, of null. Dezelfde regel als de server
+ * (slotClash in meetingBookingRules.ts; de test legt vast dat ze gelijk
+ * oplopen): alles in de agenda van de link telt, ook een hele dag, en in je
+ * andere agenda's alleen een afspraak met een tijd. Een verjaardag of feestdag
+ * maakt je niet bezet.
+ */
+export function clashingAppointment<T extends { source_id: string; starts_at: string; ends_at: string; all_day?: boolean }>(
+  slot: SlotTimes,
+  events: readonly T[],
+  scope: { linkSourceId?: string | null; ownSourceIds: Iterable<string> },
+): T | null {
+  const starts = Date.parse(slot.startsAt);
+  const ends = Date.parse(slot.endsAt);
+  if (!Number.isFinite(starts) || !Number.isFinite(ends)) return null;
+  const own = new Set(scope.ownSourceIds);
+  for (const event of events) {
+    const onLink = Boolean(scope.linkSourceId) && event.source_id === scope.linkSourceId;
+    if (!onLink && (!own.has(event.source_id) || event.all_day === true)) continue;
+    const evStarts = Date.parse(event.starts_at);
+    const evEnds = Date.parse(event.ends_at);
+    if (!Number.isFinite(evStarts) || !Number.isFinite(evEnds)) continue;
+    if (evStarts < ends && evEnds > starts) return event;
+  }
+  return null;
+}
+
+/**
+ * Wat er niet op de link kwam omdat je dan al een afspraak hebt, in één zin:
+ * "2 momenten overgeslagen: dan heb je al een afspraak (Teamoverleg, Tandarts)."
+ * Hooguit drie namen; een afgeschermde afspraak van een collega heet "Bezet".
+ */
+export function clashNotice(clashes: ReadonlyArray<{ conflict?: string | null }>): string {
+  if (!clashes.length) return '';
+  const names = [...new Set(clashes.map(c => (c.conflict ?? '').trim()).filter(Boolean))];
+  const shown = names.slice(0, 3).join(', ') + (names.length > 3 ? ` en ${names.length - 3} meer` : '');
+  const head = clashes.length === 1 ? '1 moment overgeslagen' : `${clashes.length} momenten overgeslagen`;
+  return `${head}: dan heb je al een afspraak${shown ? ` (${shown})` : ''}.`;
+}
