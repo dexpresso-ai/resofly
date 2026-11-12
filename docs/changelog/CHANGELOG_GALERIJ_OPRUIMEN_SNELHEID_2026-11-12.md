@@ -131,3 +131,19 @@ nul rijen in plaats van een fout.
   de volgorde van uitrollen maakt niet uit.
 - **Productie:** zet de geplande taak pas aan als productie een eigen database heeft (actie 8).
   Zie `docs/setup/GALLERY_SETUP.md`.
+
+### Uitgerold op 12 november (alleen staging)
+
+- **`resofly-media-api-staging`, versie `adb41650`**, vanaf `staging` op `87fb348`. De geplande
+  taak `*/15 * * * *` staat erbij, volgens de Cloudflare-API. De secrets van de worker waren
+  er al; alleen de namen bekeken. Van Stream staat er nog steeds alleen `STREAM_ACCOUNT_ID`,
+  dus video loopt op staging via R2 en `stream`-regels blijven liggen tot Stream is ingericht.
+- **Database:** *Deploy Supabase (staging)* run 228 geslaagd, met de rooktest. De migratie
+  `20261112170000` staat erop, de drie triggers ook, en de wachtrij is leeg. Opgevraagd via
+  de Management API, alleen lezen.
+- **App:** Cloudflare Pages heeft `87fb348` gebouwd en uitgerold.
+- **Vooraf:** R2 (`resofly-media-staging`) naast de database gelegd. 57 galerijbestanden,
+  alle 57 met een rij, geen wezen. Er viel op staging dus niets in te halen.
+- Niet gedaan: de worker live aanroepen. De proxy van de cloudsessie laat `*.workers.dev`
+  niet door. Probeer daarom in de app een testalbum te verwijderen; daarna moeten de
+  bestanden binnen een kwartier ook uit `resofly-media-staging` weg zijn.
