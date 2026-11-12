@@ -1,0 +1,40 @@
+{
+  "id": "/app/agenda/",
+  "name": "ResoFly Agenda",
+  "short_name": "Agenda",
+  "description": "Je agenda en boekingslinks van ResoFly, als eigen app.",
+  "lang": "nl",
+  "dir": "ltr",
+  "start_url": "/app/agenda/",
+  "scope": "/app/agenda/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0E0E12",
+  "theme_color": "#0E0E12",
+  "icons": [
+    {
+      "src": "/icons/app-agenda-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/app-agenda-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/app-agenda-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/app-agenda-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

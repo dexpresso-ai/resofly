@@ -1,0 +1,40 @@
+{
+  "id": "/app/financien/",
+  "name": "ResoFly Financiën",
+  "short_name": "Financiën",
+  "description": "Offertes, facturen, inkoop, bank en boekhouding van ResoFly, als eigen app.",
+  "lang": "nl",
+  "dir": "ltr",
+  "start_url": "/app/financien/",
+  "scope": "/app/financien/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0E0E12",
+  "theme_color": "#0E0E12",
+  "icons": [
+    {
+      "src": "/icons/app-financien-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/app-financien-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/app-financien-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/app-financien-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

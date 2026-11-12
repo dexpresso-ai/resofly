@@ -8,7 +8,10 @@ import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type Pers
 import { Breadcrumbs } from './components/Breadcrumbs';
 import type { CrumbTarget } from './lib/breadcrumbs';
 import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type DataGroup, type GroupState } from './lib/dataGroups';
-import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey } from './lib/permissions';
+import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
+import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, isPageInApp, isRunningInstalled, standaloneAppFromPath, type StandaloneApp } from './lib/standaloneApps';
+import { captureInstallPrompt } from './lib/installPrompt';
+import { InstallAppCard } from './components/StandaloneApps';
 import { GlobalSearch, type SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { MemberSelect } from './components/MemberSelect';
@@ -237,6 +240,9 @@ import './styles/rapportages.css';
 // Agents van Gerrie (2026-11-11): eigen klassen (agx-*, agw-*), ná rapportages.css
 // omdat de werkbank de stappenbalk daarvan hergebruikt.
 import './styles/agents.css';
+// Losse apps (2026-11-12): de installeerkaart, Instellingen → Apps en de weg
+// terug naar de werkruimte. Alleen eigen klassen (app-*).
+import './styles/apps.css';
 import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
@@ -318,8 +324,35 @@ type ViewState = {
 };
 type WorkspaceTab = ViewState & { id: string };
 
-/** Nieuw, leeg tabblad op een gegeven pagina (standaard het dashboard). */
-function freshTab(page: Page = 'dashboard'): WorkspaceTab {
+/**
+ * De losse app waarin deze laadbeurt draait (Agenda, Financiën, Communicatie op
+ * /app/<naam>/, zie lib/standaloneApps.ts), of null in de werkruimte. Vast voor
+ * de hele laadbeurt: een andere app is een ander adres, dus een andere laadbeurt.
+ *
+ * Meteen hier, vóór React: het manifest en het icoon moeten in de <head> staan
+ * voordat de browser kijkt of de pagina te installeren is, en
+ * `beforeinstallprompt` komt vaak al voordat de app getekend is.
+ */
+const STANDALONE_APP: StandaloneApp | null = typeof window === 'undefined' ? null : standaloneAppFromPath(window.location.pathname);
+if (STANDALONE_APP) {
+  // /app/agenda zonder slash valt buiten de scope van het manifest (/app/agenda/):
+  // dan biedt de browser installeren niet aan.
+  const canonical = canonicalAppUrl(STANDALONE_APP, window.location);
+  if (canonical) window.history.replaceState(window.history.state, '', canonical);
+  applyStandaloneAppHead(STANDALONE_APP);
+  captureInstallPrompt();
+}
+
+/** Waar een nieuw tabblad opent: het dashboard, of in een losse app zijn eerste pagina. */
+const START_PAGE: Page = (STANDALONE_APP?.home[0] as Page | undefined) ?? 'dashboard';
+
+/** De eerste pagina van de losse app die dit teamlid mag openen; in de werkruimte null. */
+function appStartPage(permissions: Permissions): Page | null {
+  return STANDALONE_APP ? (appHomePage(STANDALONE_APP, permissions.canOpenPage) as Page | null) : null;
+}
+
+/** Nieuw, leeg tabblad op een gegeven pagina (standaard het dashboard, of in een losse app zijn begin). */
+function freshTab(page: Page = START_PAGE): WorkspaceTab {
   return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, galleryId: null, settingsNav: null, pendingReport: null, openAgentId: null, commFocus: null, pendingDraft: null, edit: null };
 }
 
@@ -369,12 +402,12 @@ function applyUpdater<T>(value: React.SetStateAction<T>, prev: T): T {
 
 /** Herbouwt volledige tabbladen uit de (route-only) opgeslagen versie. Verwijzingen
  *  naar niet langer bestaande projecten/klanten vallen terug op de lijstpagina. */
-function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
+function rebuildTabs(persisted: PersistedTab[], data: AppData, fallbackPage: Page = 'dashboard'): WorkspaceTab[] {
   return persisted.map(p => {
     // De agenda-instellingen zijn verhuisd naar Instellingen → tabblad Agenda.
     // Een tabblad dat nog op de oude pagina stond komt daar netjes uit.
     const legacyCalendarSettings = p.page === 'calendar-settings';
-    let page = (legacyCalendarSettings ? 'settings' : PAGE_TITLES[p.page] ? p.page : 'dashboard') as Page;
+    let page = (legacyCalendarSettings ? 'settings' : PAGE_TITLES[p.page] ? p.page : fallbackPage) as Page;
     let projectId = p.projectId;
     let clientId = p.clientId;
     let galleryId = p.galleryId;
@@ -870,7 +903,7 @@ function App() {
   // zichtbaar. Het opstart-tabblad opent de Bankpagina bij een PSD2-terugkomst
   // (?code=&state=…), anders het dashboard. De opgeslagen tabbladen per organisatie
   // worden na het laden van de werkruimte hersteld (zie restoreTabsForOrganization).
-  const [tabs, setTabs] = useState<WorkspaceTab[]>(() => [freshTab(hasBankReturn() ? 'bank' : 'dashboard')]);
+  const [tabs, setTabs] = useState<WorkspaceTab[]>(() => [freshTab(hasBankReturn() ? 'bank' : START_PAGE)]);
   const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id);
   const activeTab = tabs.find(t => t.id === activeTabId) ?? tabs[0];
 
@@ -1032,6 +1065,15 @@ function App() {
   // en of er binnen een module gewijzigd mag worden. De database dwingt hetzelfde
   // af (restrictive RLS + schrijf-triggers); dit is de beleving eromheen.
   const permissions = useMemo(() => buildPermissions(activeMembership), [activeMembership]);
+  // In een losse app toont de navigatie (zijbalk, Zenit, duimbalk) alleen de
+  // pagina's van die app. Alleen voor het menu: de rechten zelf, het laden en
+  // de pagina's blijven die van de werkruimte. Een klant openen vanuit een
+  // factuur kan dus gewoon, binnen hetzelfde venster.
+  const navPermissions = useMemo<Permissions>(() => {
+    if (!STANDALONE_APP) return permissions;
+    const app = STANDALONE_APP;
+    return { ...permissions, canOpenPage: (target: string) => isPageInApp(app, target) && permissions.canOpenPage(target) };
+  }, [permissions]);
   // De live abonnementen hieronder (meldingen, chat, beslislijst) horen bij een
   // module. Staat die dicht — zoals bijna alles voor de boekhouder — dan wordt er
   // ook niets geabonneerd: geen lege polls, en niemand verschijnt "online" in
@@ -1189,19 +1231,31 @@ function App() {
   // Herstel de open tabbladen voor een organisatie: de opgeslagen set (route-only),
   // of anders één vers dashboard-tabblad. Bij een PSD2-bankterugkomst altijd één
   // Bank-tabblad zodat de koppeling wordt afgerond.
-  function restoreTabsForOrganization(organizationId: string, loaded: AppData) {
+  //
+  // Een losse app heeft zijn eigen set, en houdt daarvan alleen de tabbladen op
+  // zijn eigen pagina's: een klant die je vanuit Financiën opende, staat er de
+  // volgende keer niet meer. De app Agenda opent op de agenda, niet op een klant.
+  function restoreTabsForOrganization(organizationId: string, loaded: AppData, access: Permissions) {
     if (hasBankReturn()) {
       const bank = freshTab('bank');
       setTabs([bank]); setActiveTabId(bank.id);
       return;
     }
-    const persisted = loadPersistedTabs(organizationId);
-    const rebuilt = persisted ? rebuildTabs(persisted.tabs, loaded) : [];
+    const app = STANDALONE_APP;
+    const startPage = appStartPage(access) ?? START_PAGE;
+    const persisted = loadPersistedTabs(organizationId, app?.id);
+    let rebuilt = persisted ? rebuildTabs(persisted.tabs, loaded, startPage) : [];
+    let index = persisted ? persisted.activeIndex : 0;
+    if (app && persisted) {
+      const activePage = rebuilt[index]?.page;
+      rebuilt = rebuilt.filter(tab => isPageInApp(app, tab.page) && access.canOpenPage(tab.page));
+      index = Math.max(0, rebuilt.findIndex(tab => tab.page === activePage));
+    }
     if (rebuilt.length) {
-      const index = Math.min(Math.max(0, persisted!.activeIndex), rebuilt.length - 1);
+      index = Math.min(Math.max(0, index), rebuilt.length - 1);
       setTabs(rebuilt); setActiveTabId(rebuilt[index].id);
     } else {
-      const fresh = freshTab('dashboard');
+      const fresh = freshTab(startPage);
       setTabs([fresh]); setActiveTabId(fresh.id);
     }
   }
@@ -1291,7 +1345,7 @@ function App() {
         // een gewone ververs laat de tabbladen ongemoeid.
         if (orgId !== tabsLoadedForRef.current) {
           tabsLoadedForRef.current = orgId;
-          restoreTabsForOrganization(orgId, dataRef.current);
+          restoreTabsForOrganization(orgId, dataRef.current, access);
         }
       } else {
         localStorage.removeItem(activeOrgStorageKey);
@@ -1533,6 +1587,18 @@ function App() {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   }
 
+  /**
+   * Vanuit een losse app naar de hele werkruimte. Draait de app als app (eigen
+   * venster), dan in een nieuw venster: zo blijft de app staan waar hij was, en
+   * opent de browser de werkruimte in zijn eigen app als die geïnstalleerd is.
+   * In een gewoon tabblad gewoon daarheen.
+   */
+  function openWorkspace() {
+    setMobileNavOpen(false);
+    if (isRunningInstalled()) window.open('/', '_blank', 'noopener');
+    else window.location.assign('/');
+  }
+
   async function createNewOrganization() {
     const name = prompt('Naam van de nieuwe organisatie');
     if (!name?.trim()) return;
@@ -1694,7 +1760,7 @@ function App() {
         resetDataGroups(null);
         dataRef.current = emptyData;
         setData(emptyData);
-        const fresh = freshTab('dashboard');
+        const fresh = freshTab();
         setTabs([fresh]); setActiveTabId(fresh.id);
       }
     }
@@ -1724,13 +1790,13 @@ function App() {
     if (!activeOrganizationId || tabsLoadedForRef.current !== activeOrganizationId) return;
     const persisted: PersistedTab[] = tabs.map(t => ({ page: t.page, projectId: t.projectId, clientId: t.clientId, statsReportId: t.statsReportId, galleryId: t.galleryId }));
     const activeIndex = Math.max(0, tabs.findIndex(t => t.id === activeTabId));
-    savePersistedTabs(activeOrganizationId, persisted, activeIndex);
+    savePersistedTabs(activeOrganizationId, persisted, activeIndex, STANDALONE_APP?.id);
   }, [tabs, activeTabId, activeOrganizationId]);
 
   // "+" opent een nieuw (dashboard)tabblad; het menu navigeert vervolgens het
-  // actieve tabblad.
+  // actieve tabblad. In een losse app opent het op het begin van die app.
   function openTab() {
-    const tab = freshTab('dashboard');
+    const tab = freshTab(appStartPage(permissions) ?? START_PAGE);
     setTabs([...tabs, tab]);
     setActiveTabId(tab.id);
     setMobileNavOpen(false);
@@ -1767,9 +1833,10 @@ function App() {
     const target = tabs.find(t => t.id === id);
     if (!target) return;
     if (target.edit && !confirm('Dit tabblad heeft een niet-opgeslagen bewerking open. Toch sluiten?')) return;
-    // Nooit 0 tabbladen: het laatste sluiten vervangt door een vers dashboard-tabblad.
+    // Nooit 0 tabbladen: het laatste sluiten vervangt door een vers dashboard-tabblad
+    // (in een losse app: een tabblad op het begin van de app).
     if (tabs.length <= 1) {
-      const fresh = freshTab('dashboard');
+      const fresh = freshTab(appStartPage(permissions) ?? START_PAGE);
       setTabs([fresh]); setActiveTabId(fresh.id);
       return;
     }
@@ -4031,14 +4098,20 @@ function App() {
     onCloseMobile: () => setMobileNavOpen(false),
     pinned: sidebarPinned,
     onTogglePin: () => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; }),
-    permissions,
     onRefresh: refresh,
     refreshing: loading,
     readOnly: pageReadOnly,
     aiReports: aiReportList.reports,
     activeAiReportId: page === 'report' ? statsReportId : null,
     onOpenAiReport: (id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('report'); setMobileNavOpen(false); },
+    // In een losse app ziet het menu alleen de pagina's van die app (zie navPermissions).
+    permissions: navPermissions,
+    standaloneApp: STANDALONE_APP,
+    onOpenWorkspace: STANDALONE_APP ? openWorkspace : undefined,
   };
+
+  // In een losse app begint het kruimelpad bij het begin van de app.
+  const crumbHome = STANDALONE_APP ? { page: appStartPage(permissions) ?? START_PAGE, label: STANDALONE_APP.shortName, pages: STANDALONE_APP.pages } : null;
 
   return <div className={`app${sidebarPinned ? ' sidebar-pinned' : ''}`}>
     <button
@@ -4097,7 +4170,7 @@ function App() {
       />}
       {/* Zenit heeft geen titelbalk: de werktab draagt de naam, "Ververs" staat in
           het contextpaneel en "Alleen lezen" naast de vraagbalk. */}
-      {!zenitFamily && page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && page !== 'communication' && page !== 'chat' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{pageReadOnly && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
+      {!zenitFamily && page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && page !== 'communication' && page !== 'chat' && <header className="topbar"><div><div className="topbar-eyebrow">{STANDALONE_APP?.name ?? 'ResoFly workspace'}</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{pageReadOnly && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       {/* Alle open tabbladen blijven gemount (keep-alive); alleen het actieve is
           zichtbaar. Elk pane is z'n eigen scrollcontainer én bevat z'n eigen
           EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}
@@ -4105,7 +4178,7 @@ function App() {
         <section key={tab.id} className="content" data-page={tab.page} hidden={tab.id !== activeTab.id}>
           {/* Het kruimelpad staat bóven de foutmelding: ook als een pagina stukloopt,
               blijft de weg terug zichtbaar. */}
-          <Breadcrumbs view={tab} data={data} onNavigate={navigateCrumb} />
+          <Breadcrumbs view={tab} data={data} onNavigate={navigateCrumb} home={crumbHome} />
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
           {tab.edit && <EditModal edit={tab.edit} data={data} dataStatus={dataGroupStatus} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
@@ -4149,7 +4222,7 @@ function App() {
     <TeamChatDock api={teamChat} hidden={page === 'chat' || !permissions.canRead('chat')} onExpand={(id) => openTeamChat(id)} />
     {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
         actieve tabblad naar een kerndestinatie; sluit onderweg het uitschuifmenu. */}
-    <BottomNav page={page} permissions={permissions} dock={look === 'stroom'} onAsk={look === 'stroom' && permissions.canRead('gerrie') ? () => askGerrie() : undefined} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
+    <BottomNav page={page} permissions={permissions} appItems={STANDALONE_APP?.dock} dock={look === 'stroom'} onAsk={look === 'stroom' && permissions.canRead('gerrie') ? () => askGerrie() : undefined} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
         <span className="send-spinner" aria-hidden="true" />
@@ -4158,6 +4231,7 @@ function App() {
       </div>
     </div>}
     <div className="toast-region">
+      {STANDALONE_APP && <InstallAppCard app={STANDALONE_APP} />}
       <ClientEmailToasts
         toasts={clientEmailToasts}
         onOpen={(toast) => openCommunication(toast.kind === 'inbox' ? { tab: 'inbox' } : { tab: 'all', threadId: toast.threadId })}
@@ -4197,7 +4271,7 @@ function App() {
       return <div className="empty">
         <div className="e-big">Geen toegang tot {moduleKey ? MODULE_LABELS[moduleKey] : 'deze module'}</div>
         <p>Een owner of admin van deze organisatie heeft deze module voor jou dichtgezet. Vraag hen om toegang als je die nodig hebt voor je werk.</p>
-        <Button onClick={() => { setPage(firstAllowedPage(permissions) as Page); setProjectId(null); setClientId(null); setStatsReportId(null); }}>Naar een pagina die wél open is</Button>
+        <Button onClick={() => { setPage((appStartPage(permissions) ?? firstAllowedPage(permissions)) as Page); setProjectId(null); setClientId(null); setStatsReportId(null); }}>Naar een pagina die wél open is</Button>
       </div>;
     }
 
@@ -4321,7 +4395,8 @@ function Login() {
     // koppelverzoek in de URL (/mcp/authorize?request=…), dan moet hij terugkomen
     // op precies deze pagina — anders is het verzoek na het inloggen verdwenen en
     // staat de gebruiker zonder uitleg op zijn dashboard.
-    const redirectTo = readAuthorizeRequest() ? window.location.href : window.location.origin;
+    // In een losse app komt hij terug in die app (/app/agenda/), niet in de werkruimte.
+    const redirectTo = readAuthorizeRequest() ? window.location.href : STANDALONE_APP ? `${window.location.origin}${STANDALONE_APP.path}` : window.location.origin;
     const { error } = await supabaseAuth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: redirectTo, shouldCreateUser: false } });
     // "Signups not allowed" = onbekend adres. Dat zeggen we niet: anders is dit
     // scherm een opzoekdienst voor wie er een account heeft (zoals in het portaal).
@@ -4334,7 +4409,7 @@ function Login() {
   const mark = look === 'baken' ? <BrandMark size={48} className="bk-mark" /> : 'R';
   return <main className="login">{look === 'stroom' && <LightField />}{look === 'baken' && <span className="bk-motes" aria-hidden="true" />}<div className="login-shell">
     <section className="login-story">
-      <div className="app-brand"><div className="brand-icon">{mark}</div><span>ResoFly<small>Werkruimte</small></span></div>
+      <div className="app-brand"><div className="brand-icon">{mark}</div><span>ResoFly<small>{STANDALONE_APP?.shortName ?? 'Werkruimte'}</small></span></div>
       <h2>Van eerste mail<br /><span>tot betaalde factuur.</span></h2>
       <p>Klanten, projecten, agenda, uren, offertes en facturen in één werkruimte — met Gerrie, die meedenkt en klaarzet.</p>
       <ol className="login-flow" aria-hidden="true">

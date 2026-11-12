@@ -45,22 +45,25 @@ export type PersistedTab = {
   galleryId: string | null;
 };
 
-/** Open tabbladen worden per organisatie onthouden. */
-function tabsStorageKey(organizationId: string): string {
-  return `brandcore.tabs.${organizationId}`;
+/** Open tabbladen worden per organisatie onthouden. Een losse app (Agenda,
+ *  Financiën, Communicatie, zie standaloneApps.ts) heeft zijn eigen set
+ *  (`scope`): anders opent de werkruimte na een rondje in de app-Agenda op de
+ *  agenda, en de app op wat er in de werkruimte openstond. */
+function tabsStorageKey(organizationId: string, scope?: string | null): string {
+  return scope ? `brandcore.tabs.${organizationId}.app-${scope}` : `brandcore.tabs.${organizationId}`;
 }
 
-export function savePersistedTabs(organizationId: string, tabs: PersistedTab[], activeIndex: number): void {
+export function savePersistedTabs(organizationId: string, tabs: PersistedTab[], activeIndex: number, scope?: string | null): void {
   try {
-    localStorage.setItem(tabsStorageKey(organizationId), JSON.stringify({ tabs, activeIndex }));
+    localStorage.setItem(tabsStorageKey(organizationId, scope), JSON.stringify({ tabs, activeIndex }));
   } catch {
     /* private mode / storage geweigerd — dan simpelweg niet onthouden */
   }
 }
 
-export function loadPersistedTabs(organizationId: string): { tabs: PersistedTab[]; activeIndex: number } | null {
+export function loadPersistedTabs(organizationId: string, scope?: string | null): { tabs: PersistedTab[]; activeIndex: number } | null {
   try {
-    const raw = localStorage.getItem(tabsStorageKey(organizationId));
+    const raw = localStorage.getItem(tabsStorageKey(organizationId, scope));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { tabs?: unknown; activeIndex?: unknown };
     if (!parsed || !Array.isArray(parsed.tabs) || parsed.tabs.length === 0) return null;

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, Download, Globe, History, LayoutTemplate, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
+import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, Download, Globe, History, LayoutTemplate, ListChecks, Mail, MonitorSmartphone, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
+import { AppsSettingsPanel } from '../components/StandaloneApps';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceSendMethod, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
@@ -88,11 +89,12 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   accountant: 'Boekhouder',
 };
 
-export type SettingsTab = 'organisatie' | 'logboek' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'domein' | 'documenten' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'gegevens' | 'ai' | 'api' | 'email';
+export type SettingsTab = 'organisatie' | 'logboek' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'domein' | 'documenten' | 'meldingen' | 'apps' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'gegevens' | 'ai' | 'api' | 'email';
 
 /** De boekhouder ziet alleen wat bij de financiën hoort, en dan alleen-lezen. */
 // Het logboek niet meer: dat is sinds 11 november alleen voor owners en admins.
-export const ACCOUNTANT_SETTINGS_TABS: SettingsTab[] = ['organisatie', 'facturatie', 'boekhouding'];
+// Apps wel (2026-11-12): de losse app Financiën is juist voor wie alleen daar komt.
+export const ACCOUNTANT_SETTINGS_TABS: SettingsTab[] = ['organisatie', 'apps', 'facturatie', 'boekhouding'];
 
 /**
  * De regels per rol voor de instellingen-tabbladen, gedeeld door de pagina en
@@ -174,6 +176,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'domein', label: 'Domein', Icon: Globe, description: 'Het adres waarop je klanten hun portaal, albums, offertes, facturen en contracten openen: je webadres bij ResoFly of je eigen domein. En het domein waarvan je mail verstuurt.' },
   { id: 'documenten', label: 'Documentopmaak', Icon: LayoutTemplate, description: 'Sleep de gegevens van je offertes en facturen naar de plek waar jij ze wilt hebben, of kies een kant-en-klaar sjabloon. Je klant krijgt precies de PDF die je hier ziet.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
+  { id: 'apps', label: 'Apps', Icon: MonitorSmartphone, description: 'Zet Agenda, Financiën en Communicatie elk als eigen app op je telefoon of computer. Zo\'n app opent meteen op de goede pagina.' },
   { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens en betaalteksten die op je facturen en offertes verschijnen. De opmaak en het briefpapier staan bij Documentopmaak.' },
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
@@ -2686,6 +2689,10 @@ export function Settings({
 
     {activeTab === 'meldingen' && <div className="settings-tab-panel">
       <PushNotificationsCard api={push} />
+    </div>}
+
+    {activeTab === 'apps' && <div className="settings-tab-panel">
+      <AppsSettingsPanel permissions={permissions} />
     </div>}
 
     {activeTab === 'agenda' && hasCalendarSettings && <div className="settings-tab-panel settings-tab-panel-calendar">

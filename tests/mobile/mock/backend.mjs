@@ -707,7 +707,7 @@ export function storageScript(spec, extra = {}) {
   const view = typeof spec === 'string' ? { page: spec } : spec;
   // Een publieke pagina (spec.path) heeft geen medewerkerssessie nodig; het
   // portaal (spec.portal) krijgt zijn eigen sessie onder de portaalsleutel.
-  if (view.path) {
+  if (view.path && !view.app) {
     // Een klant heeft geen medewerkerssessie. De pagina's delen binnen één
     // Playwright-context dezelfde localStorage, dus de sessie van de
     // werkruimtepagina's ervoor moet hier eerst weg — anders opent "/" niet
@@ -716,10 +716,12 @@ export function storageScript(spec, extra = {}) {
     return `(() => { try { localStorage.clear(); const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); } catch { /* afgeschermd kader */ } })();`;
   }
   const tabs = { tabs: [{ page: view.page, projectId: view.projectId ?? null, clientId: view.clientId ?? null, statsReportId: view.statsReportId ?? null, galleryId: null }], activeIndex: 0 };
+  // Een losse app (src/lib/standaloneApps.ts) onthoudt zijn tabbladen apart.
+  const tabsKey = view.app ? `brandcore.tabs.${orgId}.app-${view.app}` : `brandcore.tabs.${orgId}`;
   const items = {
     'sb-example-auth-token': JSON.stringify(session),
     'brandcore.activeOrganizationId': orgId,
-    [`brandcore.tabs.${orgId}`]: JSON.stringify(tabs),
+    [tabsKey]: JSON.stringify(tabs),
     'brandcore.sidebarPinned': '0',
     'resofly-dashboard-scope': 'mine',
     ...extra,
