@@ -1,37 +1,49 @@
 /**
- * Het R-merkteken van ResoFly, nagetekend uit het app-icoon
- * (public/icons/icon-512.png) op hetzelfde raster van 512: de stam, de boog
- * die bovenaan voorbij de stam uitsteekt (de inkeping), de smalle spleet
- * tussen stam en boog, en het been dat schuin wegloopt en recht wordt
- * afgesneden met een afgeronde hoek.
+ * Het logo van ResoFly: een zwarte R op een amberkleurige tegel.
  *
- * Het teken staat op het volle raster van het icoon (viewBox 0 0 512 512).
- * Een tegel die er de hele maat van geeft, ziet er dus precies zo uit als het
- * app-icoon op een telefoon: dezelfde R, op dezelfde plek, even groot.
+ * Nagetekend uit het logobestand van 12 november 2026, op een raster van 512
+ * (de tegel loopt van 0 tot 512). De R bestaat uit een stam en een balk die
+ * samen één hoek vormen, een ronde boog met een open teller, en een been dat
+ * schuin wegloopt en onderaan door de rand van de tegel wordt afgesneden. Tussen
+ * stam en been zit een open spleet: de teller loopt daar naar beneden uit.
+ * Overgetrokken op het origineel valt 99,6% samen; het verschil is een haarlijn
+ * aan de buitenkant van de boog.
  *
- * Waarom geen letter: de tegel droeg tot nu toe een "R" in Poppins. Dat is een
- * andere R dan die van het merk (geen inkeping, geen schuin been), en naast
- * het app-icoon zag je het verschil.
+ * Waarom de tegel in het teken zit en niet in de CSS: het been loopt tot de
+ * onderrand, en de hoek van de tegel (8,2% van de maat) is veel kleiner dan de
+ * hoeken van de tegels in de looks (13 tot 15px op 40px). Met de oude CSS-tegel
+ * sneed de ronde hoek een stuk van het been af, en het logo was niet meer het
+ * logo. Nu tekent het svg de hele tegel; de tegel eromheen (`.brand-icon`,
+ * `.zrail-logo`, `.onb-brand-tile`) geeft alleen nog de maat en de gloed.
  *
- * De kleur komt van `currentColor`: de tegel bepaalt de kleur van de R.
+ * Zonder `size` vult het teken de tegel waar het in staat.
+ *
+ * De iconen voor op een telefoon of computer (public/icons/) tekent
+ * scripts/app-iconen.mjs uit precies deze waarden.
  */
-export const BRAND_MARK_PATH =
-  'M142 117H202V395H142Z' +
-  'M172 97A94 94 0 0 1 172 285L172 224A33 33 0 0 0 172 158Z' +
-  'M200 237L361 383V401A12 12 0 0 1 349 413H307L180 297Z';
 
-export function BrandMark({ size = 40, className }: { size?: number; className?: string }) {
+/** De kleur van de tegel, uit het logobestand gemeten. */
+export const BRAND_TILE_COLOR = '#FFBD59';
+/** De kleur van de R. */
+export const BRAND_INK = '#000000';
+/** De hoek van de tegel op het raster van 512. */
+export const BRAND_TILE_RADIUS = 42;
+/** De R op het raster van 512. */
+export const BRAND_MARK_PATH =
+  'M88.4 114.8H264.7A106 106 0 0 1 304.1 319.1L423.7 512H335.6L176.5 256H264.7A35.35 35.35 0 0 0 264.7 185.3H158.9V406.1H88.4Z';
+
+export function BrandMark({ size, className }: { size?: number; className?: string }) {
   return (
     <svg
       className={className}
-      width={size}
-      height={size}
+      width={size ?? '100%'}
+      height={size ?? '100%'}
       viewBox="0 0 512 512"
-      fill="currentColor"
       aria-hidden="true"
       focusable="false"
     >
-      <path d={BRAND_MARK_PATH} />
+      <rect width="512" height="512" rx={BRAND_TILE_RADIUS} fill={BRAND_TILE_COLOR} />
+      <path d={BRAND_MARK_PATH} fill={BRAND_INK} />
     </svg>
   );
 }

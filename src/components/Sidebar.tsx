@@ -312,13 +312,13 @@ export function Sidebar({
         /* Het merk zoals in Value Backlog: de tegel met het R-merkteken, de
            naam, en eronder in goud de organisatie, die je hier ook wisselt. */
         ? <div className="app-brand bk-brand">
-            <div className="brand-icon"><i className="bk-brand-halo" aria-hidden="true" /><BrandMark size={40} className="bk-mark" /></div>
+            <div className="brand-icon"><i className="bk-brand-halo" aria-hidden="true" /><BrandMark className="bk-mark" /></div>
             <div className="bk-brand-text">
               <span className="bk-brand-name">ResoFly{standaloneApp && <span className="app-brand-sub">{standaloneApp.shortName}</span>}</span>
               <div className="bk-org">{organizationSelect}</div>
             </div>
           </div>
-        : <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly<small>{standaloneApp?.shortName ?? 'Werkruimte'}</small></span></div>}
+        : <div className="app-brand"><div className="brand-icon"><BrandMark /></div><span>ResoFly<small>{standaloneApp?.shortName ?? 'Werkruimte'}</small></span></div>}
       {baken
         ? readOnly && <div className="sidebar-readonly"><Lock size={12} aria-hidden="true"/><span>Alleen lezen op deze pagina</span></div>
         : <div className="org-switcher">

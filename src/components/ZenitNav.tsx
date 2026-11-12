@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import { flushSync } from 'react-dom';
 import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calendar, CalendarClock, CalendarRange, Clock, ExternalLink, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Select } from './Ui';
+import { BrandMark } from './BrandMark';
 import { askGerrie } from './GerrieChat';
 import { visibleSettingsTabs, type Page, type SidebarProps } from './Sidebar';
 import { FULL_PERMISSIONS, isAccountantRole, type Permissions } from '../lib/permissions';
@@ -432,8 +433,8 @@ export function ZenitNav({
     <nav className="zrail cmd-scope" aria-label="Modules">
       {/* In een losse app is er geen Vandaag: het merk brengt je naar het begin van de app. */}
       {standaloneApp
-        ? <button type="button" className="zrail-logo" onClick={() => go((standaloneApp.home.find(target => permissions.canOpenPage(target)) ?? standaloneApp.home[0]) as Page)} aria-label={`${standaloneApp.name}, naar het begin`} title={standaloneApp.name}>R</button>
-        : <button type="button" className="zrail-logo" onClick={() => go('dashboard')} aria-label="ResoFly, naar Vandaag" title="ResoFly">R</button>}
+        ? <button type="button" className="zrail-logo" onClick={() => go((standaloneApp.home.find(target => permissions.canOpenPage(target)) ?? standaloneApp.home[0]) as Page)} aria-label={`${standaloneApp.name}, naar het begin`} title={standaloneApp.name}><BrandMark /></button>
+        : <button type="button" className="zrail-logo" onClick={() => go('dashboard')} aria-label="ResoFly, naar Vandaag" title="ResoFly"><BrandMark /></button>}
       {modules.map(module => {
         const on = module.id === activeModuleId;
         const shown = narrow && module.id === shownModule?.id;

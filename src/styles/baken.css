@@ -422,12 +422,15 @@
           mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.4) 20%,transparent 42%);
 }
 
-/* Het merk: de gouden tegel met het R-merkteken en een halo, de naam in wit,
-   eronder de organisatie in goud — daar wissel je ook van organisatie. */
+/* Het merk: het logo met een halo, de naam in wit, eronder de organisatie in
+   goud — daar wissel je ook van organisatie. Het logo tekent zijn eigen tegel
+   (BrandMark.tsx); de hoek hier is die van het logo, 8,2% van de maat. Met de
+   oude 13px lagen de ring en de gloed als een rondere tweede tegel om het
+   logo heen. Hetzelfde geldt voor elke tegel met het logo, in elke look. */
 :root[data-look="baken"] .app .bk-brand{display:flex;align-items:center;gap:11px;min-height:44px}
 :root[data-look="baken"] .app .bk-brand .brand-icon{
   position:relative;display:grid;place-items:center;flex:none;
-  width:40px;height:40px;border-radius:13px;
+  width:40px;height:40px;border-radius:8.2%;
   background:var(--bk-gold-face);color:#191307;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 -1px 0 rgba(110,70,0,.25),0 0 0 4px rgba(247,197,72,.08),0 10px 26px -6px rgba(247,197,72,.6);
 }
@@ -888,7 +891,7 @@
   display:grid;place-items:center;
   background:var(--bk-gold-face);color:#191307;
 }
-:root[data-look="baken"] .login-story .brand-icon{width:48px;height:48px;border-radius:15px;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),0 0 0 7px rgba(247,197,72,.08),0 12px 34px -6px rgba(247,197,72,.62)}
+:root[data-look="baken"] .login-story .brand-icon{width:48px;height:48px;border-radius:8.2%;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),0 0 0 7px rgba(247,197,72,.08),0 12px 34px -6px rgba(247,197,72,.62)}
 :root[data-look="baken"] .login-story h2 span{background:linear-gradient(92deg,#FFEBB0 0%,#F9CD5A 45%,#EAA924 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
 :root[data-look="baken"] .login-story p{color:#B9B9C4}
 :root[data-look="baken"] .login-flow li>span{background:#2A2A34}

@@ -43,8 +43,12 @@ export interface InstallableApp {
   /** Eén zin, voor bij Instellingen → Apps. */
   description: string;
   manifest: string;
-  /** Voor `apple-touch-icon`: Safari op iOS leest het icoon niet uit het manifest. */
+  /** Het tabblad en Instellingen → Apps: het icoon zoals het is, met ronde hoeken. */
   icon: string;
+  /** Voor `apple-touch-icon`: Safari op iOS leest het icoon niet uit het manifest.
+   *  Een volle tegel zonder doorzichtige hoeken: iOS rondt zelf af, en maakt
+   *  wat doorzichtig is zwart. Daarom niet `icon` (scripts/app-iconen.mjs). */
+  touchIcon: string;
 }
 
 /**
@@ -61,6 +65,7 @@ export const WORKSPACE_APP: InstallableApp = {
   description: 'De hele werkruimte, met alles wat je hier ook hebt.',
   manifest: '/manifest.webmanifest',
   icon: '/icons/icon-192.png',
+  touchIcon: '/icons/apple-touch-icon.png',
 };
 
 export interface StandaloneApp extends InstallableApp {
@@ -85,6 +90,7 @@ export const STANDALONE_APPS: readonly StandaloneApp[] = [
     description: 'Je agenda en je boekingslinks, zonder de rest van de werkruimte eromheen.',
     manifest: '/apps/agenda.webmanifest',
     icon: '/icons/app-agenda-192.png',
+    touchIcon: '/icons/app-agenda-maskable-192.png',
     pages: ['calendar', 'meeting-booking'],
     home: ['calendar', 'meeting-booking'],
     dock: [{ page: 'calendar', label: 'Agenda' }, { page: 'meeting-booking', label: 'Boekingslinks' }],
@@ -97,6 +103,7 @@ export const STANDALONE_APPS: readonly StandaloneApp[] = [
     description: 'Offertes, facturen, inkoop, bank en boekhouding: opent meteen op je facturen.',
     manifest: '/apps/financien.webmanifest',
     icon: '/icons/app-financien-192.png',
+    touchIcon: '/icons/app-financien-maskable-192.png',
     pages: FINANCE_PAGES,
     // Facturen eerst: daar begint en eindigt het meeste werk in Financiën.
     home: ['invoices', ...FINANCE_PAGES],
@@ -117,6 +124,7 @@ export const STANDALONE_APPS: readonly StandaloneApp[] = [
     description: 'Je berichten, de teamchat en marketing: alle gesprekken op één plek.',
     manifest: '/apps/communicatie.webmanifest',
     icon: '/icons/app-communicatie-192.png',
+    touchIcon: '/icons/app-communicatie-maskable-192.png',
     pages: ['communication', 'chat', 'marketing'],
     home: ['communication', 'chat', 'marketing'],
     dock: [{ page: 'communication', label: 'Berichten' }, { page: 'chat', label: 'Chat' }, { page: 'marketing', label: 'Marketing' }],
@@ -185,7 +193,7 @@ export function applyStandaloneAppHead(app: StandaloneApp, doc: Document = docum
   const link = (rel: string) => () => { const el = doc.createElement('link'); el.rel = rel; return el; };
   const meta = (name: string) => () => { const el = doc.createElement('meta'); el.name = name; return el; };
   ensure('link[rel="manifest"]', link('manifest')).setAttribute('href', app.manifest);
-  ensure('link[rel="apple-touch-icon"]', link('apple-touch-icon')).setAttribute('href', app.icon);
+  ensure('link[rel="apple-touch-icon"]', link('apple-touch-icon')).setAttribute('href', app.touchIcon);
   ensure('link[rel="icon"]', link('icon')).setAttribute('href', app.icon);
   ensure('meta[name="apple-mobile-web-app-title"]', meta('apple-mobile-web-app-title')).setAttribute('content', app.shortName);
   ensure('meta[name="application-name"]', meta('application-name')).setAttribute('content', app.name);
