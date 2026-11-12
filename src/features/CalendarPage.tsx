@@ -56,6 +56,7 @@ import { calendarEventKey, calendarEventLinkMatchesEvent } from '../lib/calendar
 import { safeHttpUrl } from '../lib/safeUrl';
 import { connectionStatusView } from '../lib/calendarConnection';
 import { vividCalendarColor } from '../lib/calendarColors';
+import { DEFAULT_DAY_CAPACITY_MINUTES, dayOccupancy, formatOccupancy, type DayOccupancy } from '../lib/calendarOccupancy';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
@@ -1930,10 +1931,14 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
 // gelijke hoogte. De TSX rekent met deze pixels uit hoeveel lanes er in een
 // weekrij passen; de CSS krijgt exact dezelfde waarden via custom properties,
 // zodat er maar één bron van waarheid is.
-const MONTH_DATE_ROW_PX = 26;
-const MONTH_LANE_PX = 20;
+// Lanes van 17px (was 20px, met 6px ruimte onderin): met de kleinere letters
+// passen er op een laptopscherm (900px hoog) vijf regels per dag in plaats
+// van vier, voordat "+N meer" verschijnt (2026-11-12). De datumrij is 2px
+// hoger voor het bezettingsbalkje boven het dagnummer.
+const MONTH_DATE_ROW_PX = 28;
+const MONTH_LANE_PX = 17;
 const MONTH_LANE_GAP_PX = 2;
-const MONTH_ROW_PAD_PX = 6;
+const MONTH_ROW_PAD_PX = 4;
 
 // Deelt het maandrooster op in weken van 7 dagen (voor de weeknummer-kolom).
 function weekChunks(days: Date[]): Date[][] {
@@ -2156,8 +2161,16 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
   /** Bureaublad: klikken op een lege plek maakt een afspraak op die dag. */
   onCreateOnDay?: (day: Date) => void;
 }) {
-  function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
+  const eventColor = useCallback((ev: CalendarExternalEvent): string => normalizeHexColor(sourceColors.get(ev.source_id) ?? '#FFD966'), [sourceColors]);
   const weeks = useMemo(() => weekChunks(days), [days]);
+  // Het bezettingsbalkje per dag. Vol is je eigen dagstreep uit de planner,
+  // anders een werkdag van acht uur.
+  const capacityMinutes = data.plannerCapacity && data.plannerCapacity.minutes > 0 ? data.plannerCapacity.minutes : DEFAULT_DAY_CAPACITY_MINUTES;
+  const occupancy = useMemo(() => {
+    const map = new Map<string, DayOccupancy>();
+    for (const day of days) map.set(formatISODate(day), dayOccupancy(day, events, eventColor));
+    return map;
+  }, [days, events, eventColor]);
   const gridRef = useRef<HTMLDivElement | null>(null);
   // Het "+N meer"-kaartje: welke dag, en waar stond de knop die erom vroeg.
   const [moreDay, setMoreDay] = useState<{ day: Date; rect: { left: number; top: number; width: number; height: number } } | null>(null);
@@ -2251,14 +2264,26 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                   {week.map(day => {
                     const isToday = isSameDay(day, today);
                     const isPicked = Boolean(selectedDay && isSameDay(day, selectedDay));
+                    const load = occupancy.get(formatISODate(day));
+                    const busy = load && load.minutes > 0
+                      ? ` · ${formatOccupancy(load.minutes)} bezet van ${formatOccupancy(capacityMinutes)}`
+                      : '';
                     return (
                       <button
                         type="button"
                         className={`cm-date${isSameMonth(day, anchor) ? '' : ' is-outside'}`}
                         key={formatISODate(day)}
                         onClick={() => (isMobile && onSelectDay ? onSelectDay(startOfDay(day)) : onOpenDay(day))}
-                        title={`${formatDateKey(formatISODate(day))}${isMobile ? '' : ' — open dagweergave'}`}
+                        title={`${formatDateKey(formatISODate(day))}${busy}${isMobile ? '' : ' — open dagweergave'}`}
                       >
+                        {load && load.minutes > 0 && (
+                          <span className="cm-load" aria-hidden="true">
+                            {load.segments.map(seg => (
+                              <span className="cm-load-seg" key={seg.color}
+                                style={{ width: `${Math.min(100, (seg.minutes / capacityMinutes) * 100)}%`, background: seg.color }} />
+                            ))}
+                          </span>
+                        )}
                         <span className={`cm-date-num${isToday ? ' is-today' : ''}${isPicked && !isToday ? ' is-selected' : ''}`}>
                           {day.getDate() === 1 ? `${day.getDate()} ${shortMonthNl(day)}` : day.getDate()}
                         </span>
@@ -2272,11 +2297,10 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                     if (chip.kind === 'task' && chip.task) {
                       const task = chip.task;
                       return (
-                        <button type="button" className="cm-chip is-task" key={chip.key} style={{ ...eventColorStyle(taskColorOf(data, task)), ...place }}
+                        <button type="button" className="cm-chip is-task" key={chip.key} style={{ ...taskBlockStyle(taskColorOf(data, task)), ...place }}
                           onClick={() => onEditTask(task)}
+                          aria-label={`Taak: ${task.title}`}
                           title={`Taak · ${task.title} · ${data.projects.find(p => p.id === task.project_id)?.name ?? 'Project'}`}>
-                          <span className="cm-chip-dot" aria-hidden="true" />
-                          <span className="cm-chip-time">Taak</span>
                           <span className="cm-chip-title">{task.title}</span>
                         </button>
                       );
@@ -2304,7 +2328,6 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                         key={chip.key} style={{ ...place, ...eventColorStyle(eventColor(event)) }}
                         onClick={() => onOpenEvent(event)}
                         title={`${formatTime(event.starts_at)} – ${formatTime(event.ends_at)}\n${event.title}`}>
-                        <span className="cm-chip-dot" aria-hidden="true" />
                         <span className="cm-chip-time">{formatTime(event.starts_at)}</span>
                         <span className="cm-chip-title">{event.title}</span>
                         {tracked != null && <em className="cm-chip-track"><Clock size={9} />{formatMinutes(tracked)}</em>}

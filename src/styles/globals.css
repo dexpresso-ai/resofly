@@ -306,8 +306,8 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .calendar-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}.calendar-range{margin-left:auto;color:var(--muted2);font-size:12px;font-weight:700}
 .calendar-week-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
 .calendar-day{background:var(--bg3);border:1px solid var(--border);border-radius:10px;min-height:290px;display:flex;flex-direction:column;overflow:hidden}
-.calendar-day-head{display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border);padding:9px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
-.calendar-day-head strong{font-size:15px;color:var(--text);letter-spacing:0}.calendar-day-body{display:flex;flex-direction:column;gap:6px;padding:8px;min-height:0;flex:1}
+.calendar-day-head{display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border);padding:9px 10px;font-size:calc(11px * var(--cal-fs,1));text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.calendar-day-head strong{font-size:calc(15px * var(--cal-fs,1));color:var(--text);letter-spacing:0}.calendar-day-body{display:flex;flex-direction:column;gap:6px;padding:8px;min-height:0;flex:1}
 .calendar-item{display:flex;flex-direction:column;gap:3px;text-align:left;border:1px solid var(--border);border-radius:8px;padding:8px 9px;background:var(--bg2);color:var(--text);text-decoration:none;cursor:pointer;font-family:inherit}
 .calendar-item:hover{background:var(--bg4);border-color:var(--border2)}
 /* Een taak onderscheidt zich met een VULLING, niet met een gekleurde balk langs
@@ -315,8 +315,8 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
    krijgen hun tint verderop, uit de kleur van hun eigen agenda.) */
 .calendar-item.task{background:rgba(var(--accent-rgb),.1);border-color:var(--border2)}
 .calendar-item.task:hover{background:rgba(var(--accent-rgb),.18)}
-.calendar-item-time{font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.06em}.calendar-item strong{font-size:12px;line-height:1.35}.calendar-item small{font-size:10px;color:var(--muted2);line-height:1.35}
-.calendar-no-items{font-size:11px;color:var(--muted);text-align:center;padding:13px 6px;border:1px dashed var(--border);border-radius:7px}
+.calendar-item-time{font-size:calc(10px * var(--cal-fs,1));color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.06em}.calendar-item strong{font-size:calc(12px * var(--cal-fs,1));line-height:1.35}.calendar-item small{font-size:calc(10px * var(--cal-fs,1));color:var(--muted2);line-height:1.35}
+.calendar-no-items{font-size:calc(11px * var(--cal-fs,1));color:var(--muted);text-align:center;padding:13px 6px;border:1px dashed var(--border);border-radius:7px}
 .calendar-create-card{display:flex;flex-direction:column;gap:10px;position:sticky;top:0}.calendar-create-card label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--muted2);font-weight:700;text-transform:uppercase;letter-spacing:.06em}.calendar-create-card .check-row{flex-direction:row;text-transform:none;letter-spacing:0;font-weight:500;color:var(--text)}
 .calendar-create-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:2px}
 @media(max-width:1100px){.calendar-layout{grid-template-columns:1fr}.calendar-create-card{position:static}.calendar-week-grid{grid-template-columns:repeat(2,1fr)}}
@@ -515,9 +515,9 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 /* Day headers */
 .tb-day-headers{display:grid;grid-template-columns:var(--tb-gutter) repeat(7,1fr);border-bottom:1px solid var(--border);margin:0 -16px;padding:0 16px}
 .tb-gutter{width:var(--tb-gutter);min-width:var(--tb-gutter);flex-shrink:0}
-.tb-dh{display:flex;align-items:center;gap:6px;padding:8px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);justify-content:center}
+.tb-dh{display:flex;align-items:center;gap:6px;padding:8px 6px;font-size:calc(11px * var(--cal-fs,1));text-transform:uppercase;letter-spacing:.08em;color:var(--muted);justify-content:center}
 .tb-dh-name{font-weight:600}
-.tb-dh-num{font-size:15px;font-weight:700;color:var(--text);letter-spacing:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:50%}
+.tb-dh-num{font-size:calc(15px * var(--cal-fs,1));font-weight:700;color:var(--text);letter-spacing:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:50%}
 .tb-today .tb-dh-num,.tb-today-num{background:var(--accent);color:var(--on-accent)}
 
 /* Container */
@@ -525,12 +525,12 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 
 /* All-day row */
 .tb-allday-row{display:grid;grid-template-columns:var(--tb-gutter) repeat(7,1fr);border-bottom:1px solid var(--border);min-height:32px;padding:0 16px}
-.tb-allday-label{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;padding:4px 0}
+.tb-allday-label{font-size:calc(9px * var(--cal-fs,1));font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;padding:4px 0}
 .tb-allday-cell{display:flex;flex-wrap:wrap;gap:3px;padding:4px 3px;align-items:flex-start;align-content:flex-start;border-left:1px solid var(--border)}
-.tb-ad-chip{font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;border:none;cursor:pointer;font-family:inherit;text-decoration:none;line-height:1.4}
+.tb-ad-chip{font-size:calc(10px * var(--cal-fs,1));font-weight:600;padding:2px 6px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;border:none;cursor:pointer;font-family:inherit;text-decoration:none;line-height:1.4}
 .tb-ad-chip.ext{background:rgba(var(--note-rgb),.15);color:var(--accent-v)}
 .tb-ad-chip.task{background:rgba(var(--accent-rgb),.12);color:var(--accent-ink)}
-.tb-ad-empty{font-size:10px;color:var(--muted);opacity:.4}
+.tb-ad-empty{font-size:calc(10px * var(--cal-fs,1));color:var(--muted);opacity:.4}
 
 /* Scroll area */
 .tb-scroll{overflow-y:auto;overflow-x:hidden;max-height:calc(100vh - 340px);min-height:400px;padding:0 16px}
@@ -540,7 +540,7 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 
 /* Gutter time labels */
 .tb-gutter{display:flex;align-items:flex-start;justify-content:flex-end;padding-right:8px;position:relative;height:var(--tb-h)}
-.tb-gutter-full span{font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.04em;transform:translateY(-6px);display:block}
+.tb-gutter-full span{font-size:calc(10px * var(--cal-fs,1));font-weight:700;color:var(--muted);letter-spacing:.04em;transform:translateY(-6px);display:block}
 .tb-gutter-half span{display:none}
 
 /* Day column (positioned context for events) */
@@ -556,7 +556,7 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 
 /* Selection highlight */
 .tb-cell-sel{background:rgba(var(--accent-rgb),.12)!important;border-color:rgba(var(--accent-rgb),.25)!important;z-index:2}
-.tb-sel-label{position:absolute;top:2px;left:6px;font-size:10px;font-weight:700;color:var(--accent-ink);letter-spacing:.02em;pointer-events:none;white-space:nowrap;z-index:3}
+.tb-sel-label{position:absolute;top:2px;left:6px;font-size:calc(10px * var(--cal-fs,1));font-weight:700;color:var(--accent-ink);letter-spacing:.02em;pointer-events:none;white-space:nowrap;z-index:3}
 
 /* Grid lines */
 .tb-line{border-bottom:1px solid rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));pointer-events:none;height:var(--tb-h)}
@@ -572,12 +572,12 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
   background:rgba(var(--note-rgb),.12);border:1px solid rgba(var(--note-rgb),.25)}
 .tb-ev:hover{box-shadow:0 4px 16px rgba(var(--shade-rgb),calc(.4 * var(--shade-k)));transform:scale(1.01);z-index:8}
 .tb-ev-priv{background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));border-color:rgba(var(--sheen-rgb),calc(.2 * var(--sheen-k)))}
-.tb-ev-time{font-size:9px;font-weight:700;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
-.tb-ev-title{font-size:11px;font-weight:600;color:var(--text);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tb-ev-src{font-size:9px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tb-ev-time{font-size:calc(9px * var(--cal-fs,1));font-weight:700;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.tb-ev-title{font-size:calc(11px * var(--cal-fs,1));font-weight:600;color:var(--text);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tb-ev-src{font-size:calc(9px * var(--cal-fs,1));color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Hint text */
-.tb-hint{font-size:10px;color:var(--muted);text-align:center;padding:6px 16px 10px;letter-spacing:.02em;opacity:.7}
+.tb-hint{font-size:calc(10px * var(--cal-fs,1));color:var(--muted);text-align:center;padding:6px 16px 10px;letter-spacing:.02em;opacity:.7}
 
 /* FAB (floating action button) */
 .tb-fab{position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:var(--on-accent);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px rgba(var(--accent-rgb),.3),0 2px 8px rgba(var(--shade-rgb),calc(.3 * var(--shade-k)));transition:transform .15s,box-shadow .15s;z-index:50}
@@ -1056,22 +1056,22 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .tb-day-headers,.tb-allday-row,.tb-grid{grid-template-columns:var(--tb-gutter) repeat(var(--tb-days,7),minmax(0,1fr))}
 .tb-day-headers,.tb-allday-row{padding:0 20px}
 .tb-day-headers{background:rgba(var(--surface3-rgb),.96);position:sticky;top:0;z-index:12;backdrop-filter:blur(10px)}
-.tb-dh{min-height:50px;gap:7px}.tb-dh-month{font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.08em}.tb-dh-name{font-size:11px}.tb-dh-num{width:31px;height:31px;font-size:16px}
+.tb-dh{min-height:50px;gap:7px}.tb-dh-month{font-size:calc(10px * var(--cal-fs,1));color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.08em}.tb-dh-name{font-size:calc(11px * var(--cal-fs,1))}.tb-dh-num{width:31px;height:31px;font-size:calc(16px * var(--cal-fs,1))}
 .tb-container{flex:1;min-height:0}
 .tb-scroll{height:calc(100vh - 300px);min-height:620px;max-height:none;overflow:auto;padding:0 20px;scrollbar-gutter:stable both-edges}
 .tb-grid{min-width:1040px}
 .tb-single-day.tb-day-headers,.tb-single-day .tb-allday-row,.tb-single-day .tb-grid{min-width:0}
 .tb-single-day .tb-grid{min-width:0}
 .tb-single-day .tb-ev{padding:7px 10px;border-radius:10px}
-.tb-single-day .tb-ev-title{font-size:13px;line-height:1.25}
-.tb-single-day .tb-ev-time{font-size:10px}
+.tb-single-day .tb-ev-title{font-size:calc(13px * var(--cal-fs,1));line-height:1.25}
+.tb-single-day .tb-ev-time{font-size:calc(10px * var(--cal-fs,1))}
 .tb-allday-row{min-height:40px;background:rgba(var(--sheen-rgb),calc(.01 * var(--sheen-k)))}
-.tb-allday-cell{padding:6px 5px}.tb-ad-chip{font-size:11px;padding:4px 7px;border-radius:7px}
-.tb-gutter-full span{font-size:11px;transform:translateY(-7px)}
+.tb-allday-cell{padding:6px 5px}.tb-ad-chip{font-size:calc(11px * var(--cal-fs,1));padding:4px 7px;border-radius:7px}
+.tb-gutter-full span{font-size:calc(11px * var(--cal-fs,1));transform:translateY(-7px)}
 .tb-col{min-height:calc(var(--tb-h) * 48)}
 .tb-ev{min-height:34px;padding:5px 8px;border-radius:8px;gap:2px;overflow:hidden}
-.tb-ev-title{font-size:12px;line-height:1.25;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.tb-ev-time{font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tb-ev-src{font-size:9.5px}
+.tb-ev-title{font-size:calc(12px * var(--cal-fs,1));line-height:1.25;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.tb-ev-time{font-size:calc(9.5px * var(--cal-fs,1));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tb-ev-src{font-size:calc(9.5px * var(--cal-fs,1))}
 .tb-line,.tb-gutter{height:var(--tb-h)}
 .tb-hint{padding:8px 16px 12px}
 
@@ -1098,13 +1098,13 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .tb-grid{position:relative;min-width:0}.tb-col{min-height:calc(var(--tb-h) * 48);background:linear-gradient(180deg,rgba(var(--sheen-rgb),calc(.01 * var(--sheen-k))),transparent)}
 .tb-sticky-gutter{position:sticky!important;left:0;z-index:24;background:rgba(var(--surface2-rgb),.98);box-shadow:10px 0 18px rgba(var(--shade-rgb),calc(.22 * var(--shade-k)));border-right:1px solid var(--border)}
 .tb-day-headers .tb-sticky-gutter{z-index:42}.tb-allday-row .tb-sticky-gutter{z-index:38}.tb-corner{height:auto}.tb-time-label{z-index:22}.tb-gutter-full span{color:rgba(var(--ink-rgb),.7)}
-.tb-dh{min-height:58px;border-left:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.012 * var(--sheen-k)));position:relative}.tb-dh:first-of-type{border-left:0}.tb-dh-name{font-size:11px}.tb-dh-month{font-size:9px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.1em}.tb-dh-today{position:absolute;bottom:5px;left:50%;transform:translateX(-50%);font-size:8px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-ink)}
+.tb-dh{min-height:58px;border-left:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.012 * var(--sheen-k)));position:relative}.tb-dh:first-of-type{border-left:0}.tb-dh-name{font-size:calc(11px * var(--cal-fs,1))}.tb-dh-month{font-size:calc(9px * var(--cal-fs,1));color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.1em}.tb-dh-today{position:absolute;bottom:5px;left:50%;transform:translateX(-50%);font-size:calc(8px * var(--cal-fs,1));font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-ink)}
 .tb-allday-label{justify-content:flex-end;padding:10px 10px 0 0}.tb-allday-cell{min-height:46px;border-left:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.008 * var(--sheen-k)))}
 .tb-ad-chip{font-family:inherit;border:1px solid transparent;transition:transform .12s,filter .12s,border-color .12s}.tb-ad-chip.ext{background:var(--event-bg,rgba(var(--accent-rgb),.18));border-color:var(--event-border-soft,rgba(var(--accent-rgb),.32));color:var(--text)}.tb-ad-chip:hover{transform:translateY(-1px);filter:brightness(1.08)}
 .tb-cell-hour{border-bottom-color:rgba(var(--sheen-rgb),calc(.085 * var(--sheen-k)))}.tb-cell-half{border-bottom-color:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)))}.tb-cell-can:hover{background:rgba(var(--accent-rgb),.055)}
 .tb-line{border-bottom-color:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)))}.tb-line-hour{border-bottom-color:rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)))}
-.tb-now{z-index:16}.tb-now::after{height:2px;box-shadow:0 0 18px rgba(var(--danger-rgb),.45)}.tb-now-dot{left:-5px;width:10px;height:10px;box-shadow:0 0 0 3px rgba(var(--danger-rgb),.16)}.tb-now-label{position:absolute;left:8px;top:-11px;background:var(--accent-r);color:var(--on-accent);border-radius:999px;padding:2px 6px;font-size:9px;font-weight:700;letter-spacing:.02em;box-shadow:0 6px 14px rgba(var(--shade-rgb),calc(.25 * var(--shade-k)))}
-.tb-overflow-chip{position:absolute;right:3px;background:rgba(var(--sheen-rgb),calc(.14 * var(--sheen-k)));border:1px solid var(--border2);border-radius:6px;padding:2px 6px;font-size:9px;font-weight:700;color:var(--muted2);letter-spacing:.04em;z-index:7;pointer-events:none;line-height:1.4}
+.tb-now{z-index:16}.tb-now::after{height:2px;box-shadow:0 0 18px rgba(var(--danger-rgb),.45)}.tb-now-dot{left:-5px;width:10px;height:10px;box-shadow:0 0 0 3px rgba(var(--danger-rgb),.16)}.tb-now-label{position:absolute;left:8px;top:-11px;background:var(--accent-r);color:var(--on-accent);border-radius:999px;padding:2px 6px;font-size:calc(9px * var(--cal-fs,1));font-weight:700;letter-spacing:.02em;box-shadow:0 6px 14px rgba(var(--shade-rgb),calc(.25 * var(--shade-k)))}
+.tb-overflow-chip{position:absolute;right:3px;background:rgba(var(--sheen-rgb),calc(.14 * var(--sheen-k)));border:1px solid var(--border2);border-radius:6px;padding:2px 6px;font-size:calc(9px * var(--cal-fs,1));font-weight:700;color:var(--muted2);letter-spacing:.04em;z-index:7;pointer-events:none;line-height:1.4}
 .tb-ev{text-align:left;color:var(--text);background:linear-gradient(180deg,var(--event-bg,rgba(var(--accent-rgb),.62)),rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k))));border:1px solid var(--event-border-soft,rgba(var(--accent-rgb),.72));box-shadow:0 8px 20px rgba(var(--shade-rgb),calc(.18 * var(--shade-k))),0 1px 0 rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k))) inset}.tb-ev:hover{box-shadow:0 14px 32px rgba(var(--shade-rgb),calc(.38 * var(--shade-k))),0 0 0 1px var(--event-border,rgba(var(--accent-rgb),.6)) inset;transform:translateY(-1px) scale(1.006)}
 .tb-ev-time{color:rgba(var(--ink-rgb),.76)}.tb-ev-title{font-weight:700}.tb-ev-src{color:rgba(var(--ink-rgb),.66)}.tb-ev-priv{filter:saturate(.75)}.tb-hint{background:rgba(var(--shade-rgb),calc(.16 * var(--shade-k)));border-top:1px solid var(--border)}
 
@@ -1857,7 +1857,7 @@ body::before{
 }
 
 /* Uren-indicatie op agenda-items (week/dag-blok, maand-chip, lijst) */
-.tb-ev-track{position:absolute;top:2px;right:3px;display:inline-flex;align-items:center;gap:2px;font-size:9px;font-weight:700;line-height:1.25;padding:1px 4px;border-radius:6px;background:rgba(var(--shade-rgb),calc(.34 * var(--shade-k)));color:#fff;pointer-events:none}
+.tb-ev-track{position:absolute;top:2px;right:3px;display:inline-flex;align-items:center;gap:2px;font-size:calc(9px * var(--cal-fs,1));font-weight:700;line-height:1.25;padding:1px 4px;border-radius:6px;background:rgba(var(--shade-rgb),calc(.34 * var(--shade-k)));color:#fff;pointer-events:none}
 .tb-ev-track svg{flex:0 0 auto}
 .tb-ev-tight .tb-ev-track{font-size:0;padding:2px;gap:0}
 .tb-ev-tight .tb-ev-track svg{width:9px;height:9px}
@@ -2166,20 +2166,20 @@ body::before{
 .calendar-agenda-page .tb-scroll,.tb-scroll{height:auto;min-height:0;max-height:none;overflow-x:auto;overflow-y:visible;padding:0;scrollbar-gutter:stable;background:transparent}
 .tb-canvas{min-width:1080px;position:relative}.tb-single-day .tb-canvas{min-width:0}
 .tb-day-headers,.tb-allday-row,.tb-edge-row,.tb-grid{grid-template-columns:var(--tb-gutter) repeat(var(--tb-days,7),minmax(0,1fr));padding:0;margin:0}
-.tb-dh{min-height:44px;gap:5px;padding:6px 5px}.tb-dh-num{width:27px;height:27px;font-size:14px}.tb-dh-name{font-size:10px}.tb-dh-month{font-size:8px}.tb-dh-today{bottom:3px;font-size:7px}
-.tb-allday-row{top:44px;min-height:34px}.tb-allday-label{padding:7px 8px 0 0}.tb-allday-cell{min-height:34px;padding:4px}.tb-ad-chip{font-size:10px;padding:3px 6px;border-radius:7px;line-height:1.25}
+.tb-dh{min-height:44px;gap:5px;padding:6px 5px}.tb-dh-num{width:27px;height:27px;font-size:calc(14px * var(--cal-fs,1))}.tb-dh-name{font-size:calc(10px * var(--cal-fs,1))}.tb-dh-month{font-size:calc(8px * var(--cal-fs,1))}.tb-dh-today{bottom:3px;font-size:calc(7px * var(--cal-fs,1))}
+.tb-allday-row{top:44px;min-height:34px}.tb-allday-label{padding:7px 8px 0 0}.tb-allday-cell{min-height:34px;padding:4px}.tb-ad-chip{font-size:calc(10px * var(--cal-fs,1));padding:3px 6px;border-radius:7px;line-height:1.25}
 .tb-edge-row{display:grid;min-height:32px;background:rgba(var(--surface2-rgb),.94);border-bottom:1px solid var(--border);backdrop-filter:blur(14px)}
-.tb-edge-label{justify-content:flex-end;padding:7px 8px 0 0;color:var(--muted);font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;line-height:1.1;text-align:right}
+.tb-edge-label{justify-content:flex-end;padding:7px 8px 0 0;color:var(--muted);font-size:calc(8px * var(--cal-fs,1));font-weight:700;text-transform:uppercase;letter-spacing:.08em;line-height:1.1;text-align:right}
 .tb-edge-cell{min-height:32px;display:flex;align-items:flex-start;align-content:flex-start;gap:4px;padding:4px;border-left:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.006 * var(--sheen-k)));overflow:hidden}
 .tb-edge-chip{max-width:100%;min-width:0;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--event-border-soft,rgba(var(--accent-rgb),.3));border-radius:8px;background:linear-gradient(90deg,var(--event-bg,rgba(var(--accent-rgb),.18)),rgba(var(--sheen-rgb),calc(.026 * var(--sheen-k))));color:var(--text);padding:3px 7px;font-family:inherit;cursor:pointer;text-align:left;transition:transform .12s,filter .12s}
-.tb-edge-chip:hover{transform:translateY(-1px);filter:brightness(1.08)}.tb-edge-chip span{font-size:8px;font-weight:700;color:rgba(var(--ink-rgb),.72);white-space:nowrap}.tb-edge-chip strong{font-size:10px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tb-grid{position:relative;min-width:0}.tb-col{min-height:calc(var(--tb-h) * var(--tb-slots,20));background:linear-gradient(180deg,rgba(var(--sheen-rgb),calc(.012 * var(--sheen-k))),transparent)}.tb-line,.tb-gutter{height:var(--tb-h)}.tb-gutter-full span{font-size:10px;transform:translateY(-6px)}
-.tb-ev{min-height:0;padding:4px 6px;border-radius:8px;gap:1px;box-shadow:0 6px 16px rgba(var(--shade-rgb),calc(.18 * var(--shade-k))),0 1px 0 rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k))) inset}.tb-ev-time{font-size:8.5px;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tb-ev-title{font-size:11px;line-height:1.12;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tb-ev-src{font-size:8.5px;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:rgba(var(--ink-rgb),.62)}
-.tb-ev-roomy{padding:5px 7px;gap:2px}.tb-ev-roomy .tb-ev-title{font-size:12px;line-height:1.18;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal}.tb-ev-tight{padding:3px 5px}.tb-ev-tight .tb-ev-src{display:none}.tb-ev-tight .tb-ev-title{font-size:10.5px}.tb-ev-tight .tb-ev-time{font-size:8px}
+.tb-edge-chip:hover{transform:translateY(-1px);filter:brightness(1.08)}.tb-edge-chip span{font-size:calc(8px * var(--cal-fs,1));font-weight:700;color:rgba(var(--ink-rgb),.72);white-space:nowrap}.tb-edge-chip strong{font-size:calc(10px * var(--cal-fs,1));font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tb-grid{position:relative;min-width:0}.tb-col{min-height:calc(var(--tb-h) * var(--tb-slots,20));background:linear-gradient(180deg,rgba(var(--sheen-rgb),calc(.012 * var(--sheen-k))),transparent)}.tb-line,.tb-gutter{height:var(--tb-h)}.tb-gutter-full span{font-size:calc(10px * var(--cal-fs,1));transform:translateY(-6px)}
+.tb-ev{min-height:0;padding:4px 6px;border-radius:8px;gap:1px;box-shadow:0 6px 16px rgba(var(--shade-rgb),calc(.18 * var(--shade-k))),0 1px 0 rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k))) inset}.tb-ev-time{font-size:calc(8.5px * var(--cal-fs,1));line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tb-ev-title{font-size:calc(11px * var(--cal-fs,1));line-height:1.12;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tb-ev-src{font-size:calc(8.5px * var(--cal-fs,1));line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:rgba(var(--ink-rgb),.62)}
+.tb-ev-roomy{padding:5px 7px;gap:2px}.tb-ev-roomy .tb-ev-title{font-size:calc(12px * var(--cal-fs,1));line-height:1.18;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal}.tb-ev-tight{padding:3px 5px}.tb-ev-tight .tb-ev-src{display:none}.tb-ev-tight .tb-ev-title{font-size:calc(10.5px * var(--cal-fs,1))}.tb-ev-tight .tb-ev-time{font-size:calc(8px * var(--cal-fs,1))}
 .tb-hint{display:none}
 @media(max-width:1200px){:root{--tb-h:clamp(23px,calc((100vh - 300px) / 20),30px)}.tb-canvas{min-width:980px}.tb-dh{min-height:42px}.tb-allday-row{top:42px}.calendar-toolbar-premium{grid-template-columns:1fr}.calendar-range-block{justify-self:start;text-align:left}}
-@media(max-width:900px){:root{--tb-h:26px;--tb-gutter:52px}.calendar-main-card-day,.calendar-main-card-week{min-height:0}.calendar-main-card{padding:10px}.calendar-toolbar-premium{padding:9px}.tb-scroll{height:auto;min-height:0}.tb-canvas{min-width:900px}.tb-single-day .tb-canvas{min-width:0}.tb-dh{min-height:40px}.tb-allday-row{top:40px}.tb-edge-chip span{display:none}.tb-ev-src{display:none}.tb-ev-title{font-size:10.5px}.tb-ev-roomy .tb-ev-title{font-size:11px}}
-@media(max-width:620px){:root{--tb-h:25px;--tb-gutter:46px}.tb-canvas{min-width:820px}.tb-single-day .tb-canvas{min-width:0}.tb-dh-name,.tb-dh-month,.tb-dh-today{display:none}.tb-dh{min-height:36px}.tb-allday-row{top:36px}.tb-gutter-full span{font-size:9px}.tb-edge-label{font-size:7px}.tb-edge-cell{padding:3px}.tb-ev{padding:3px 5px}.tb-ev-time{font-size:7.5px}.tb-ev-title{font-size:10px}}
+@media(max-width:900px){:root{--tb-h:26px;--tb-gutter:52px}.calendar-main-card-day,.calendar-main-card-week{min-height:0}.calendar-main-card{padding:10px}.calendar-toolbar-premium{padding:9px}.tb-scroll{height:auto;min-height:0}.tb-canvas{min-width:900px}.tb-single-day .tb-canvas{min-width:0}.tb-dh{min-height:40px}.tb-allday-row{top:40px}.tb-edge-chip span{display:none}.tb-ev-src{display:none}.tb-ev-title{font-size:calc(10.5px * var(--cal-fs,1))}.tb-ev-roomy .tb-ev-title{font-size:calc(11px * var(--cal-fs,1))}}
+@media(max-width:620px){:root{--tb-h:25px;--tb-gutter:46px}.tb-canvas{min-width:820px}.tb-single-day .tb-canvas{min-width:0}.tb-dh-name,.tb-dh-month,.tb-dh-today{display:none}.tb-dh{min-height:36px}.tb-allday-row{top:36px}.tb-gutter-full span{font-size:calc(9px * var(--cal-fs,1))}.tb-edge-label{font-size:calc(7px * var(--cal-fs,1))}.tb-edge-cell{padding:3px}.tb-ev{padding:3px 5px}.tb-ev-time{font-size:calc(7.5px * var(--cal-fs,1))}.tb-ev-title{font-size:calc(10px * var(--cal-fs,1))}}
 
 /* Calendar full-day scroll refinement: keep 08:00-18:00 compact, but make early/late hours scrollable */
 :root{--tb-h:clamp(24px,calc((100vh - 340px) / 20),31px);--tb-gutter:58px}
@@ -2195,8 +2195,8 @@ body::before{
 .tb-line{position:relative;z-index:1}.tb-time-label{z-index:32}.tb-ev{z-index:6}.tb-now{z-index:14}
 .tb-edge-row{display:none}
 @media(max-width:1200px){:root{--tb-h:clamp(23px,calc((100vh - 330px) / 20),30px)}.tb-canvas{min-width:980px}.calendar-agenda-page .tb-scroll,.tb-scroll{height:clamp(540px,calc(100vh - 225px),730px);min-height:500px}}
-@media(max-width:900px){:root{--tb-h:26px;--tb-gutter:52px}.calendar-main-card-day,.calendar-main-card-week{min-height:0}.calendar-main-card{padding:10px}.calendar-toolbar-premium{padding:9px}.calendar-agenda-page .tb-scroll,.tb-scroll{height:clamp(500px,calc(100vh - 230px),680px);min-height:430px;overflow:auto}.tb-canvas{min-width:900px}.tb-single-day .tb-canvas{min-width:0}.tb-dh{min-height:40px}.tb-allday-row{top:40px}.tb-ev-src{display:none}.tb-ev-title{font-size:10.5px}.tb-ev-roomy .tb-ev-title{font-size:11px}}
-@media(max-width:620px){:root{--tb-h:25px;--tb-gutter:46px}.calendar-agenda-page .tb-scroll,.tb-scroll{height:clamp(460px,calc(100vh - 210px),620px);min-height:390px}.tb-canvas{min-width:820px}.tb-single-day .tb-canvas{min-width:0}.tb-dh-name,.tb-dh-month,.tb-dh-today{display:none}.tb-dh{min-height:36px}.tb-allday-row{top:36px}.tb-gutter-full span{font-size:9px}.tb-ev{padding:3px 5px}.tb-ev-time{font-size:7.5px}.tb-ev-title{font-size:10px}}
+@media(max-width:900px){:root{--tb-h:26px;--tb-gutter:52px}.calendar-main-card-day,.calendar-main-card-week{min-height:0}.calendar-main-card{padding:10px}.calendar-toolbar-premium{padding:9px}.calendar-agenda-page .tb-scroll,.tb-scroll{height:clamp(500px,calc(100vh - 230px),680px);min-height:430px;overflow:auto}.tb-canvas{min-width:900px}.tb-single-day .tb-canvas{min-width:0}.tb-dh{min-height:40px}.tb-allday-row{top:40px}.tb-ev-src{display:none}.tb-ev-title{font-size:calc(10.5px * var(--cal-fs,1))}.tb-ev-roomy .tb-ev-title{font-size:calc(11px * var(--cal-fs,1))}}
+@media(max-width:620px){:root{--tb-h:25px;--tb-gutter:46px}.calendar-agenda-page .tb-scroll,.tb-scroll{height:clamp(460px,calc(100vh - 210px),620px);min-height:390px}.tb-canvas{min-width:820px}.tb-single-day .tb-canvas{min-width:0}.tb-dh-name,.tb-dh-month,.tb-dh-today{display:none}.tb-dh{min-height:36px}.tb-allday-row{top:36px}.tb-gutter-full span{font-size:calc(9px * var(--cal-fs,1))}.tb-ev{padding:3px 5px}.tb-ev-time{font-size:calc(7.5px * var(--cal-fs,1))}.tb-ev-title{font-size:calc(10px * var(--cal-fs,1))}}
 
 /* ── Agenda: Google Calendar-stijl ───────────────────────────────────────
    Vol gevulde, bijna dekkende event-blokken met automatisch leesbare tekst
@@ -4111,7 +4111,7 @@ body::before{
    verwijderbaar (groen, met een kruisje bij aanwijzen), aangeboden aan de klant
    (gestippeld) en geboekt (accentkleur, met een slotje). Kleuren uit het palet,
    zodat ze in Dag en Nacht leesbaar zijn. */
-.tb-booking-slot{position:absolute;left:2px;right:2px;z-index:6;display:flex;align-items:flex-start;gap:4px;padding:2px 6px;overflow:hidden;border-radius:7px;border:1.5px solid rgba(var(--ok-rgb),.75);background:rgba(var(--ok-rgb),.18);color:var(--text);font:inherit;font-size:11px;font-weight:700;line-height:1.25;text-align:left;font-variant-numeric:tabular-nums;cursor:pointer;transition:background .12s,box-shadow .12s}
+.tb-booking-slot{position:absolute;left:2px;right:2px;z-index:6;display:flex;align-items:flex-start;gap:4px;padding:2px 6px;overflow:hidden;border-radius:7px;border:1.5px solid rgba(var(--ok-rgb),.75);background:rgba(var(--ok-rgb),.18);color:var(--text);font:inherit;font-size:calc(11px * var(--cal-fs,1));font-weight:700;line-height:1.25;text-align:left;font-variant-numeric:tabular-nums;cursor:pointer;transition:background .12s,box-shadow .12s}
 .tb-booking-slot svg{flex:none;margin-top:1px}
 .tb-booking-time{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tb-booking-x{margin-left:auto;opacity:0;transition:opacity .12s}
@@ -4699,10 +4699,10 @@ body::before{
    event-blokken dan in het smalle weekraster. Alleen op telefoonbreedte. */
 @media(max-width:620px){
   .tb-single-day .tb-ev{padding:6px 10px;border-radius:9px}
-  .tb-single-day .tb-ev-time{font-size:11px}
-  .tb-single-day .tb-ev-title{font-size:13.5px;line-height:1.25}
+  .tb-single-day .tb-ev-time{font-size:calc(11px * var(--cal-fs,1))}
+  .tb-single-day .tb-ev-title{font-size:calc(13.5px * var(--cal-fs,1));line-height:1.25}
   .tb-single-day .tb-ev-roomy .tb-ev-src,
-  .tb-single-day .tb-ev-compact .tb-ev-src{display:block;font-size:10.5px;opacity:.82}
+  .tb-single-day .tb-ev-compact .tb-ev-src{display:block;font-size:calc(10.5px * var(--cal-fs,1));opacity:.82}
 }
 
 /* ================================================================
@@ -5095,6 +5095,23 @@ body::before{
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   AGENDA · LETTERGROOTTE  (2026-11-12)
+   ───────────────────────────────────────────────────────────────────────
+   Alle letters van de agenda (dag, 3 dagen, week, maand, lijst) schalen
+   met één knop: --cal-fs. Op 1 was de agenda te druk om in één oogopslag
+   te lezen, en in de maand verdween een gewone werkdag half achter
+   "+N meer". Een stap kleiner geeft meer overzicht.
+
+   Alleen vanaf tabletbreedte. Op de telefoon blijft het 1: daar zijn de
+   letters al zo klein als nog leesbaar is (titels 10px, tijden 7,5px).
+   calendarOccupancy.test.ts bewaakt dat elke font-size in de agendaregels
+   als calc(<n>px * var(--cal-fs,1)) staat; een vaste maat schaalt niet mee.
+   ═══════════════════════════════════════════════════════════════════════ */
+@media(min-width:769px){
+  .calendar-agenda-page{--cal-fs:.92}
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    AGENDA · MAANDWEERGAVE — Google Calendar-look  (2026-08-07)
    ───────────────────────────────────────────────────────────────────────
    Eén schermvullend rooster (ook op de telefoon) met per weekrij een laag
@@ -5118,13 +5135,13 @@ body::before{
 
 /* 2 ── Weekdagenkop ────────────────────────────────────────────────────── */
 .cm-head{flex:0 0 auto;display:grid;grid-template-columns:var(--cm-weekno) repeat(7,minmax(0,1fr));border-bottom:1px solid var(--border)}
-.cm-head-cell{padding:8px 4px 7px;text-align:center;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.cm-head-cell{padding:8px 4px 7px;text-align:center;color:var(--muted);font-size:calc(10px * var(--cal-fs,1));font-weight:700;letter-spacing:.1em;text-transform:uppercase}
 
 /* 3 ── Rooster: gelijke weekrijen, haarlijnen als scheiding ────────────── */
 .cm-grid{flex:1 1 auto;min-height:0;display:grid;grid-auto-rows:minmax(0,1fr);overflow:hidden}
 .cm-week{display:grid;grid-template-columns:var(--cm-weekno) minmax(0,1fr);min-height:0;border-top:1px solid var(--border)}
 .cm-week:first-child{border-top:0}
-.cm-weekno{display:flex;align-items:flex-start;justify-content:center;padding:7px 2px;border-right:1px solid var(--border);color:var(--muted);font-size:10px;font-weight:700;line-height:1;overflow:hidden}
+.cm-weekno{display:flex;align-items:flex-start;justify-content:center;padding:7px 2px;border-right:1px solid var(--border);color:var(--muted);font-size:calc(10px * var(--cal-fs,1));font-weight:700;line-height:1;overflow:hidden}
 .cm-weekno-label{display:none}
 .cm-weekno.is-outside{opacity:.5}
 .cm-week-body{position:relative;min-width:0;display:flex;flex-direction:column;padding-bottom:var(--cm-pad,6px);overflow:hidden}
@@ -5142,21 +5159,31 @@ body::before{
 /* Dagnummers: gecentreerd bovenin, "vandaag" in een gouden rondje. De laag
    laat klikken door naar de cel eronder; alleen de knop zelf vangt ze af. */
 .cm-dates{position:relative;z-index:1;flex:0 0 auto;height:var(--cm-date-h,26px);display:grid;grid-template-columns:repeat(7,minmax(0,1fr));pointer-events:none}
-.cm-date{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding-top:3px;cursor:pointer;pointer-events:auto}
+.cm-date{all:unset;position:relative;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding-top:7px;cursor:pointer;pointer-events:auto}
 .cm-date.is-outside{opacity:.45}
-.cm-date-num{display:flex;align-items:center;justify-content:center;min-width:21px;height:21px;padding:0 6px;border-radius:999px;color:var(--text);font-size:12px;font-weight:600;line-height:1;white-space:nowrap;transition:background .12s}
+.cm-date-num{display:flex;align-items:center;justify-content:center;min-width:21px;height:21px;padding:0 6px;border-radius:999px;color:var(--text);font-size:calc(12px * var(--cal-fs,1));font-weight:600;line-height:1;white-space:nowrap;transition:background .12s}
 .cm-date:hover .cm-date-num:not(.is-today){background:rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k)))}
 .cm-date:focus-visible .cm-date-num{outline:2px solid var(--accent);outline-offset:1px}
 .cm-date-num.is-today{background:var(--accent);color:var(--on-accent);font-weight:700}
 
+/* Bezetting (2026-11-12): een dun balkje langs de bovenrand van de dag. Vol
+   is je werkdag (je dagstreep uit de planner, anders 8 uur); de stukjes
+   hebben de kleur van de agenda waar de uren vandaan komen. Zonder balkje
+   leek een dag met vier korte belletjes even druk als een dag met drie
+   werksessies, en wat achter "+N meer" zat telde niet mee. */
+/* Niet tegen de bovenrand aan: daar las hij als een streep onder de week
+   erboven. Met wat lucht en een eigen spoor leest hij als een meter. */
+.cm-load{position:absolute;top:3px;left:8px;right:8px;height:3px;display:flex;overflow:hidden;border-radius:2px;background:rgba(var(--shade-rgb),calc(.12 * var(--shade-k)));pointer-events:none}
+.cm-load-seg{flex:0 0 auto;height:100%;background:var(--event-color,var(--accent))}
+.cm-date.is-outside .cm-load{opacity:.7}
+
 /* 4 ── Lanes: doorlopende balken en losse chips ────────────────────────── */
 .cm-lanes{position:relative;z-index:1;flex:1 1 auto;min-height:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:var(--cm-lane,20px);row-gap:var(--cm-gap,2px);align-content:start;overflow:hidden;pointer-events:none}
-.cm-chip{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:5px;min-width:0;margin:0 3px;padding:0 6px;border-radius:5px;overflow:hidden;font-size:11.5px;line-height:1;cursor:pointer;pointer-events:auto;transition:background .1s,filter .1s}
+.cm-chip{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:4px;min-width:0;margin:0 3px;padding:0 6px;border-radius:4px;overflow:hidden;font-size:calc(11.5px * var(--cal-fs,1));line-height:1;cursor:pointer;pointer-events:auto;transition:background .1s,filter .1s}
 .cm-chip:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .cm-chip-title{flex:1 1 auto;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cm-chip-time{flex:0 0 auto;font-size:11px;font-weight:600;color:var(--muted2);white-space:nowrap}
-.cm-chip-dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--event-color,var(--accent))}
-.cm-chip-track{flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;font-style:normal;font-size:9px;font-weight:700;opacity:.8}
+.cm-chip-time{flex:0 0 auto;font-size:calc(10.5px * var(--cal-fs,1));font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+.cm-chip-track{flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;font-style:normal;font-size:calc(9px * var(--cal-fs,1));font-weight:700;opacity:.8}
 .cm-chip-cont{flex:0 0 auto;margin-left:-3px;opacity:.75}
 .cm-chip-cont-r{margin-left:0;margin-right:-3px}
 .cm-chip.is-outside{opacity:.55}
@@ -5170,25 +5197,36 @@ body::before{
 .cm-chip.cont-l{margin-left:0;border-left:0;border-top-left-radius:0;border-bottom-left-radius:0}
 .cm-chip.cont-r{margin-right:0;border-right:0;border-top-right-radius:0;border-bottom-right-radius:0}
 
-/* Eén dag mét tijd: gekleurd stipje + tijd + titel op transparant (Google). */
-.cm-chip.is-timed,.cm-chip.is-task{color:var(--text)}
-.cm-chip.is-timed:hover,.cm-chip.is-task:hover{background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)))}
-.cm-chip.is-task .cm-chip-dot{background:var(--accent)}
+/* Eén dag mét tijd: ook een gevuld blokje in de kleur van de agenda, met de
+   begintijd ervoor — zoals Google Agenda op de telefoon, en zoals de blokken
+   in de week. Tot 2026-11-12 was dit een stipje van 8px voor zwarte tekst:
+   de maand las als een grijze lijst, en welke agenda waar zat zag je niet. */
+.cm-chip.is-timed{background:var(--event-solid,rgba(var(--accent-rgb),.96));color:var(--event-text,#1a1a1a);border:1px solid var(--event-edge,rgba(var(--shade-rgb),calc(.16 * var(--shade-k))))}
+.cm-chip.is-timed .cm-chip-title{color:var(--event-text,#1a1a1a)}
+.cm-chip.is-timed .cm-chip-time{color:var(--event-text-soft,rgba(26,26,26,.74))}
+.cm-chip.is-timed:hover{filter:brightness(1.06)}
+/* Een taak is, net als in de week, licht getint met een stippelrand in de
+   kleur van zijn project: "papier" naast de "inkt" van een afspraak. */
+.cm-chip.is-task{
+  background:color-mix(in oklab, var(--event-color, var(--accent)) 24%, var(--panel));
+  border:1px dashed color-mix(in oklab, var(--event-color, var(--accent)) 85%, transparent);
+  box-shadow:inset 3px 0 0 var(--event-color, var(--accent));
+  color:var(--text);padding-left:7px}
+.cm-chip.is-task:hover{background:color-mix(in oklab, var(--event-color, var(--accent)) 36%, var(--panel))}
 .cm-chip.is-private{filter:saturate(.7)}
 
-.cm-more{all:unset;box-sizing:border-box;display:flex;align-items:center;margin:0 3px;padding:0 6px;border-radius:5px;color:var(--muted2);font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;cursor:pointer;pointer-events:auto}
+.cm-more{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:.25em;margin:0 3px;padding:0 6px;border-radius:5px;color:var(--muted2);font-size:calc(11px * var(--cal-fs,1));font-weight:600;white-space:nowrap;overflow:hidden;cursor:pointer;pointer-events:auto}
 .cm-more:hover{background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));color:var(--text)}
 .cm-more:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
 /* 5 ── Smallere schermen: hetzelfde rooster, compacter ─────────────────── */
 @media(max-width:900px){
   .cm-view{--cm-weekno:26px}
-  .cm-head-cell{padding:7px 2px 6px;font-size:9px;letter-spacing:.06em}
-  .cm-date-num{min-width:19px;height:19px;padding:0 5px;font-size:11.5px}
-  .cm-chip{gap:4px;margin:0 2px;padding:0 4px;font-size:10.5px}
-  .cm-chip-time{font-size:10px}
-  .cm-chip-dot{width:6px;height:6px}
-  .cm-more{margin:0 2px;padding:0 4px;font-size:9.5px}
+  .cm-head-cell{padding:7px 2px 6px;font-size:calc(9px * var(--cal-fs,1));letter-spacing:.06em}
+  .cm-date-num{min-width:19px;height:19px;padding:0 5px;font-size:calc(11.5px * var(--cal-fs,1))}
+  .cm-chip{gap:4px;margin:0 2px;padding:0 4px;font-size:calc(10.5px * var(--cal-fs,1))}
+  .cm-chip-time{font-size:calc(10px * var(--cal-fs,1))}
+  .cm-more{margin:0 2px;padding:0 4px;font-size:calc(9.5px * var(--cal-fs,1))}
 }
 @media(max-width:620px){
   /* Weeknummers zijn hier luxe: alle breedte gaat naar de zeven dagen. */
@@ -5196,10 +5234,10 @@ body::before{
   .cm-head{grid-template-columns:repeat(7,minmax(0,1fr))}
   .cm-head-weekno,.cm-weekno{display:none}
   .cm-week{grid-template-columns:minmax(0,1fr)}
-  .cm-chip{padding:0 3px;border-radius:4px;font-size:10px}
+  .cm-chip{padding:0 3px;border-radius:4px;font-size:calc(10px * var(--cal-fs,1))}
   .cm-chip-track{display:none}
   /* In een kolom van ~54px past alleen het aantal, niet het woord erbij. */
-  .cm-more{font-size:9.5px}
+  .cm-more{font-size:calc(9.5px * var(--cal-fs,1))}
   .cm-more-label{display:none}
 }
 
@@ -5314,19 +5352,19 @@ body::before{
 
 /* Titel = primair. */
 .calendar-agenda-page .tb-ev-title{
-  font-size:12.5px;font-weight:600;line-height:1.22;letter-spacing:.005em;
+  font-size:calc(12.5px * var(--cal-fs,1));font-weight:600;line-height:1.22;letter-spacing:.005em;
   color:var(--event-text,var(--text));
   display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;-webkit-line-clamp:unset}
 
 /* Tijd = secundair maar goed leesbaar (geen uppercase/spreiding meer). */
 .calendar-agenda-page .tb-ev-time{
-  font-size:10px;font-weight:600;line-height:1.15;letter-spacing:0;text-transform:none;
+  font-size:calc(10px * var(--cal-fs,1));font-weight:600;line-height:1.15;letter-spacing:0;text-transform:none;
   color:var(--event-text-soft,rgba(var(--sheen-rgb),calc(.88 * var(--sheen-k))));
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* Locatie (verving de bronregel): ingetogen, standaard verborgen. */
 .calendar-agenda-page .tb-ev-src{
-  font-size:10px;font-weight:500;line-height:1.15;
+  font-size:calc(10px * var(--cal-fs,1));font-weight:500;line-height:1.15;
   color:var(--event-text-faint,rgba(var(--sheen-rgb),calc(.74 * var(--sheen-k))));
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:none}
 
@@ -5337,18 +5375,18 @@ body::before{
 .calendar-agenda-page .tb-ev-roomy .tb-ev-src{display:block}
 
 /* Midden (30–60 min): tijd + titel op één regel elk, geen locatie. */
-.calendar-agenda-page .tb-ev-compact .tb-ev-time{font-size:9.5px}
-.calendar-agenda-page .tb-ev-compact .tb-ev-title{font-size:11.5px}
+.calendar-agenda-page .tb-ev-compact .tb-ev-time{font-size:calc(9.5px * var(--cal-fs,1))}
+.calendar-agenda-page .tb-ev-compact .tb-ev-title{font-size:calc(11.5px * var(--cal-fs,1))}
 
 /* Klein (<30 min): alleen de titel — geen overlappende tijdregel. */
 .calendar-agenda-page .tb-ev-tight{padding:1px 7px;gap:0;justify-content:center}
 .calendar-agenda-page .tb-ev-tight .tb-ev-time{display:none}
 .calendar-agenda-page .tb-ev-tight .tb-ev-src{display:none}
-.calendar-agenda-page .tb-ev-tight .tb-ev-title{font-size:11px;line-height:1.12}
+.calendar-agenda-page .tb-ev-tight .tb-ev-title{font-size:calc(11px * var(--cal-fs,1));line-height:1.12}
 
 /* Dagweergave (1 brede kolom): iets royaler + locatie ook op midden. */
-.calendar-agenda-page .tb-single-day .tb-ev-title{font-size:13.5px}
-.calendar-agenda-page .tb-single-day .tb-ev-time{font-size:11px}
+.calendar-agenda-page .tb-single-day .tb-ev-title{font-size:calc(13.5px * var(--cal-fs,1))}
+.calendar-agenda-page .tb-single-day .tb-ev-time{font-size:calc(11px * var(--cal-fs,1))}
 .calendar-agenda-page .tb-single-day .tb-ev-compact .tb-ev-src{display:block}
 
 /* Urenregistratie-badge zit rechtsboven: houd de tijdregel er netjes van vrij. */
@@ -5383,23 +5421,23 @@ body::before{
 
 /* 2 ── Dagkoppen: "MA" boven het nummer, klikbaar; GMT in de hoek ───────── */
 .calendar-agenda-page .tb-dh{flex-direction:column;gap:1px;min-height:0;height:52px;padding:4px 2px;justify-content:center;align-items:center}
-.calendar-agenda-page .tb-dh-name{font-size:10px;font-weight:700;letter-spacing:.08em}
+.calendar-agenda-page .tb-dh-name{font-size:calc(10px * var(--cal-fs,1));font-weight:700;letter-spacing:.08em}
 .calendar-agenda-page .tb-today .tb-dh-name{color:var(--accent-ink)}
-.calendar-agenda-page .tb-dh-num{width:27px;height:27px;font-size:14.5px;font-weight:600;transition:background .12s}
+.calendar-agenda-page .tb-dh-num{width:27px;height:27px;font-size:calc(14.5px * var(--cal-fs,1));font-weight:600;transition:background .12s}
 .tb-dh-hit{all:unset;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:1px;cursor:pointer;border-radius:10px;padding:1px 10px}
 .tb-dh-hit:hover .tb-dh-num:not(.tb-today-num){background:rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)))}
 .tb-dh-hit:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .calendar-agenda-page .tb-corner{display:flex;align-items:flex-end;justify-content:flex-end;padding:0 7px 5px 0}
-.tb-gmt{font-size:8.5px;font-weight:600;color:var(--muted);letter-spacing:.03em}
+.tb-gmt{font-size:calc(8.5px * var(--cal-fs,1));font-weight:600;color:var(--muted);letter-spacing:.03em}
 
 /* 3 ── Hele-dag-rij: doorlopende balken (lanes) ─────────────────────────── */
 .calendar-agenda-page .tb-allday-row{top:52px;min-height:26px;align-items:stretch}
 .calendar-agenda-page .tb-allday-label{display:flex;align-items:center;justify-content:flex-end;gap:4px;padding:2px 6px 2px 0}
-.tb-allday-text{font-size:8.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.tb-allday-text{font-size:calc(8.5px * var(--cal-fs,1));font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .tb-allday-toggle{all:unset;box-sizing:border-box;cursor:pointer;display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;color:var(--muted);flex:0 0 auto}
 .tb-allday-toggle:hover{background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));color:var(--text)}
 .tb-allday-lanes{grid-column:2 / -1;display:grid;grid-auto-rows:21px;row-gap:2px;padding:3px 0;align-content:start;min-width:0}
-.tb-ad-bar{box-sizing:border-box;display:flex;align-items:center;gap:4px;min-width:0;margin:0 2px;padding:0 7px;border-radius:5px;border:1px solid var(--event-edge,rgba(var(--shade-rgb),calc(.16 * var(--shade-k))));background:var(--event-solid,rgba(var(--accent-rgb),.95));color:var(--event-text,#1a1a1a);font-family:inherit;font-size:11px;cursor:pointer;overflow:hidden;text-align:left;transition:filter .12s}
+.tb-ad-bar{box-sizing:border-box;display:flex;align-items:center;gap:4px;min-width:0;margin:0 2px;padding:0 7px;border-radius:5px;border:1px solid var(--event-edge,rgba(var(--shade-rgb),calc(.16 * var(--shade-k))));background:var(--event-solid,rgba(var(--accent-rgb),.95));color:var(--event-text,#1a1a1a);font-family:inherit;font-size:calc(11px * var(--cal-fs,1));cursor:pointer;overflow:hidden;text-align:left;transition:filter .12s}
 .tb-ad-bar:hover{filter:brightness(1.06)}
 .tb-ad-bar-title{flex:1 1 auto;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2}
 .tb-ad-bar-cont{flex:0 0 auto;margin-left:-4px;opacity:.8}
@@ -5408,7 +5446,7 @@ body::before{
 .tb-ad-cont-r{border-top-right-radius:0;border-bottom-right-radius:0;margin-right:0;border-right:0}
 .tb-ad-bar-task{background:rgba(var(--accent-rgb),.13);border:1px dashed rgba(var(--accent-rgb),.45);color:var(--accent-ink)}
 .tb-ad-bar-task .tb-ad-bar-title{font-weight:600}
-.tb-ad-more{all:unset;box-sizing:border-box;cursor:pointer;margin:0 2px;padding:0 7px;border-radius:5px;font-size:10px;font-weight:600;color:var(--muted2);display:flex;align-items:center}
+.tb-ad-more{all:unset;box-sizing:border-box;cursor:pointer;margin:0 2px;padding:0 7px;border-radius:5px;font-size:calc(10px * var(--cal-fs,1));font-weight:600;color:var(--muted2);display:flex;align-items:center}
 .tb-ad-more:hover{background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));color:var(--text)}
 
 /* 4 ── Compact op kleinere schermen ─────────────────────────────────────── */
@@ -5419,7 +5457,7 @@ body::before{
 @media(max-width:900px){
   .calendar-availability-label{display:none}
   .calendar-agenda-page .tb-dh{height:46px}
-  .calendar-agenda-page .tb-dh-num{width:25px;height:25px;font-size:13.5px}
+  .calendar-agenda-page .tb-dh-num{width:25px;height:25px;font-size:calc(13.5px * var(--cal-fs,1))}
   .calendar-agenda-page .tb-allday-row{top:46px}
 }
 @media(max-width:620px){
@@ -5434,7 +5472,7 @@ body::before{
   .calendar-agenda-page .tb-allday-row{top:36px}
   .tb-allday-text{display:none}
   .tb-allday-lanes{grid-auto-rows:19px}
-  .tb-ad-bar{font-size:10px;padding:0 5px}
+  .tb-ad-bar{font-size:calc(10px * var(--cal-fs,1));padding:0 5px}
 }
 
 /* ── AGENDA · Detailpaneel = direct bewerken (2026-07-20) ──────────────────
@@ -5602,8 +5640,8 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .cal-daystrip{display:flex;gap:2px;padding:4px 6px 8px;justify-content:space-between;border-bottom:1px solid var(--border)}
 .cal-daystrip-day{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;font-family:inherit;color:var(--muted2);cursor:pointer;padding:4px 0 5px;border-radius:12px}
 .cal-daystrip-day:active{background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)))}
-.cds-name{font-size:9.5px;font-weight:700;letter-spacing:.06em;color:var(--muted)}
-.cds-num{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600}
+.cds-name{font-size:calc(9.5px * var(--cal-fs,1));font-weight:700;letter-spacing:.06em;color:var(--muted)}
+.cds-num{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:calc(14px * var(--cal-fs,1));font-weight:600}
 .cal-daystrip-day.is-today .cds-name,.cal-daystrip-day.is-today .cds-num{color:var(--accent-ink)}
 .cal-daystrip-day.is-active .cds-num{background:var(--accent);color:var(--on-accent)}
 
@@ -6917,8 +6955,8 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .calendar-agenda-page .tb-canvas,.calendar-agenda-page .tb-grid{min-width:0}
   .calendar-agenda-page .tb-dh{height:52px}
   .calendar-agenda-page .tb-allday-row{top:52px}
-  .calendar-agenda-page .tb-dh-name{font-size:10px}
-  .calendar-agenda-page .tb-dh-num{width:28px;height:28px;font-size:14px}
+  .calendar-agenda-page .tb-dh-name{font-size:calc(10px * var(--cal-fs,1))}
+  .calendar-agenda-page .tb-dh-num{width:28px;height:28px;font-size:calc(14px * var(--cal-fs,1))}
   .calendar-agenda-page .tb-ev{padding:5px 7px;border-radius:9px}
   /* Tekstgroottes in de blokken bewust NIET aangeraakt: het dichtheidsblok
      "AGENDA · LEESBAARHEID" regelt die al per blokduur en is specifieker. */
@@ -6962,7 +7000,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .calendar-agenda-page .tb-ev-tight .tb-ev-time,
 .calendar-agenda-page .tb-ev-tight .tb-ev-start,
 .calendar-agenda-page .tb-ev-tight .tb-ev-src{display:none}
-.calendar-agenda-page .tb-ev-tight .tb-ev-title{flex:1 1 auto;min-width:0;font-size:11px;line-height:1.1}
+.calendar-agenda-page .tb-ev-tight .tb-ev-title{flex:1 1 auto;min-width:0;font-size:calc(11px * var(--cal-fs,1));line-height:1.1}
 .calendar-agenda-page .tb-ev-tight.tb-ev-tracked{padding-right:22px}
 
 /* 30–45 min: titel + starttijd op één regel ("Titel, 10:00"). */
@@ -6970,13 +7008,13 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .calendar-agenda-page .tb-ev-compact .tb-ev-time,
 .calendar-agenda-page .tb-ev-compact .tb-ev-src,
 .calendar-agenda-page .tb-single-day .tb-ev-compact .tb-ev-src{display:none}
-.calendar-agenda-page .tb-ev-compact .tb-ev-title{flex:1 1 auto;min-width:0;font-size:11.5px;line-height:1.15}
+.calendar-agenda-page .tb-ev-compact .tb-ev-title{flex:1 1 auto;min-width:0;font-size:calc(11.5px * var(--cal-fs,1));line-height:1.15}
 .calendar-agenda-page .tb-ev-compact .tb-ev-start{
-  flex:0 0 auto;display:block;font-size:11px;font-weight:600;line-height:1.15;
+  flex:0 0 auto;display:block;font-size:calc(11px * var(--cal-fs,1));font-weight:600;line-height:1.15;
   color:var(--event-text-soft,rgba(var(--sheen-rgb),calc(.86 * var(--sheen-k))));white-space:nowrap}
 .calendar-agenda-page .tb-ev-compact .tb-ev-start::before{content:', '}
 .calendar-agenda-page .tb-ev-compact.tb-ev-tracked{padding-right:48px}
-.calendar-agenda-page .tb-single-day .tb-ev-compact .tb-ev-title{font-size:12.5px}
+.calendar-agenda-page .tb-single-day .tb-ev-compact .tb-ev-title{font-size:calc(12.5px * var(--cal-fs,1))}
 
 /* Videobadge staat normaal absoluut linksboven; op één regel loopt hij dan
    door de titel heen, dus zet hij zich hier gewoon vóór de tekst. */
@@ -6985,30 +7023,30 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
 /* 45–60 min: tijd bóven de titel — precies wat .tb-ev-compact hiervoor deed. */
 .calendar-agenda-page .tb-ev-cozy{padding:2px 8px;gap:0}
-.calendar-agenda-page .tb-ev-cozy .tb-ev-time{font-size:9.5px}
-.calendar-agenda-page .tb-ev-cozy .tb-ev-title{font-size:11.5px}
+.calendar-agenda-page .tb-ev-cozy .tb-ev-time{font-size:calc(9.5px * var(--cal-fs,1))}
+.calendar-agenda-page .tb-ev-cozy .tb-ev-title{font-size:calc(11.5px * var(--cal-fs,1))}
 .calendar-agenda-page .tb-ev-cozy .tb-ev-src{display:none}
-.calendar-agenda-page .tb-single-day .tb-ev-cozy .tb-ev-time{font-size:11px}
-.calendar-agenda-page .tb-single-day .tb-ev-cozy .tb-ev-title{font-size:13px}
+.calendar-agenda-page .tb-single-day .tb-ev-cozy .tb-ev-time{font-size:calc(11px * var(--cal-fs,1))}
+.calendar-agenda-page .tb-single-day .tb-ev-cozy .tb-ev-title{font-size:calc(13px * var(--cal-fs,1))}
 /* In de dagweergave is er breedte zat: daar mag de locatie er wél bij. */
-.calendar-agenda-page .tb-single-day .tb-ev-cozy .tb-ev-src{display:block;font-size:10.5px;opacity:.82}
+.calendar-agenda-page .tb-single-day .tb-ev-cozy .tb-ev-src{display:block;font-size:calc(10.5px * var(--cal-fs,1));opacity:.82}
 
 /* Telefoon: dagkoppen compleet + zeven kolommen die samen op het scherm passen. */
 @media(max-width:768px){
-  .calendar-agenda-page .tb-dh-name{display:block;font-size:9.5px;font-weight:700;letter-spacing:.04em}
+  .calendar-agenda-page .tb-dh-name{display:block;font-size:calc(9.5px * var(--cal-fs,1));font-weight:700;letter-spacing:.04em}
   .calendar-agenda-page .tb-dh{height:46px}
   .calendar-agenda-page .tb-allday-row{top:46px}
-  .calendar-agenda-page .tb-dh-num{width:23px;height:23px;font-size:13px}
+  .calendar-agenda-page .tb-dh-num{width:23px;height:23px;font-size:calc(13px * var(--cal-fs,1))}
   .calendar-agenda-page .tb-dh-hit{padding:1px 4px}
   /* Geen minimumbreedte meer: alle zeven dagen naast elkaar in beeld. */
   .calendar-agenda-page .tb-canvas,.calendar-agenda-page .tb-grid{min-width:0}
   :root{--tb-gutter:38px}
   .tb-container{--tb-strip:6px}
-  .calendar-agenda-page .tb-gutter-full span{font-size:9px}
+  .calendar-agenda-page .tb-gutter-full span{font-size:calc(9px * var(--cal-fs,1))}
   /* In zeven smalle kolommen wint de titel het van de tijd. */
   .calendar-agenda-page .tb-container:not(.tb-few-days) .tb-ev-compact .tb-ev-start{display:none}
   .calendar-agenda-page .tb-container:not(.tb-few-days) .tb-ev{padding-left:3px;padding-right:3px}
-  .calendar-agenda-page .tb-container:not(.tb-few-days) .tb-ev-title{font-size:10px;letter-spacing:-.01em}
+  .calendar-agenda-page .tb-container:not(.tb-few-days) .tb-ev-title{font-size:calc(10px * var(--cal-fs,1));letter-spacing:-.01em}
 }
 
 /* ══ Weekplanner — fase 1: bediening, dichtheid en eerlijke drukte ══════════
@@ -7405,8 +7443,8 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   padding:4px 8px 6px;border-radius:10px;cursor:pointer;transition:background .12s}
 .cm-daycard-date:hover{background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)))}
 .cm-daycard-date:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-.cm-daycard-name{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.cm-daycard-num{font-size:21px;font-weight:600;line-height:1;color:var(--text)}
+.cm-daycard-name{font-size:calc(10px * var(--cal-fs,1));font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.cm-daycard-num{font-size:calc(21px * var(--cal-fs,1));font-weight:600;line-height:1;color:var(--text)}
 .cm-daycard-close{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;
   width:28px;height:28px;border-radius:50%;color:var(--muted);cursor:pointer;transition:background .12s,color .12s}
 .cm-daycard-close:hover{background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));color:var(--text)}
@@ -7414,9 +7452,9 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
 /* Eén regel per item — dezelfde taal als de chips in het rooster. */
 .cm-daylist-items{display:flex;flex-direction:column;gap:1px;overflow-y:auto;min-height:0}
-.cm-daylist-empty{margin:6px 4px 8px;color:var(--muted);font-size:12.5px}
+.cm-daylist-empty{margin:6px 4px 8px;color:var(--muted);font-size:calc(12.5px * var(--cal-fs,1))}
 .cm-dayitem{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:8px;min-width:0;
-  padding:7px 9px;border-radius:9px;font-size:12.5px;line-height:1.25;cursor:pointer;transition:background .12s}
+  padding:7px 9px;border-radius:9px;font-size:calc(12.5px * var(--cal-fs,1));line-height:1.25;cursor:pointer;transition:background .12s}
 .cm-dayitem:hover{background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)))}
 .cm-dayitem:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .cm-dayitem-dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--event-color,var(--accent))}
@@ -7432,8 +7470,8 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   animation:cmDayListIn .18s ease-out}
 @keyframes cmDayListIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .cm-daylist-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
-.cm-daylist-name{display:block;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.cm-daylist-date{display:block;font-size:14px;font-weight:600;color:var(--text)}
+.cm-daylist-name{display:block;font-size:calc(10px * var(--cal-fs,1));font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.cm-daylist-date{display:block;font-size:calc(14px * var(--cal-fs,1));font-weight:600;color:var(--text)}
 .cm-daylist-head .btn{flex:0 0 auto;width:auto;min-height:32px;padding:6px 12px}
 
 /* De gekozen dag krijgt een ring; "vandaag" houdt zijn gouden rondje. */
@@ -8272,7 +8310,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 @media(max-width:620px){
   .cm-chip .cm-chip-time{display:none}
   .cm-chip{gap:3px;padding:0 4px}
-  .cm-chip-title{font-size:10px}
+  .cm-chip-title{font-size:calc(10px * var(--cal-fs,1))}
 }
 
 /* 42 ── De inhoud eindigt boven de zwevende knoppen ───────────────────────
@@ -10356,8 +10394,8 @@ button.task-agenda-when:hover{text-decoration:underline}
    (o.a. `.tb-few-days` op één dag) met dezelfde specificiteit; zo wint dit. */
 .wp-rooster.calendar-agenda-page .tb-dh{height:88px;padding:6px 6px 5px;justify-content:flex-start;gap:1px}
 .wp-rooster.calendar-agenda-page .tb-allday-row{top:88px}
-.wp-rooster .tb-dh-name{font-size:10px}
-.wp-rooster .tb-dh-num{width:24px;height:24px;font-size:13px}
+.wp-rooster .tb-dh-name{font-size:calc(10px * var(--cal-fs,1))}
+.wp-rooster .tb-dh-num{width:24px;height:24px;font-size:calc(13px * var(--cal-fs,1))}
 /* De dagkop van de agenda zet zijn tekst in kapitalen; de cijfers eronder niet. */
 .tb-dh-extra{width:100%;display:flex;flex-direction:column;gap:5px;padding:4px 4px 0;text-transform:none;letter-spacing:0}
 .wp-dh-stats{display:flex;align-items:center;gap:5px;min-height:22px}
@@ -10411,7 +10449,7 @@ button.task-agenda-when:hover{text-decoration:underline}
 .calendar-agenda-page .tb-task-block .tb-ev-title{font-weight:700}
 .calendar-agenda-page .tb-task-block.is-done{opacity:.6;border-style:solid}
 .calendar-agenda-page .tb-task-block.is-done .tb-ev-title{text-decoration:line-through;font-weight:600}
-.calendar-agenda-page .tb-task-block.is-high .tb-ev-title::before{content:"!";display:inline-grid;place-items:center;width:13px;height:13px;margin-right:5px;border-radius:4px;background:var(--accent-r);color:#fff;font-size:9.5px;font-weight:800;vertical-align:1px}
+.calendar-agenda-page .tb-task-block.is-high .tb-ev-title::before{content:"!";display:inline-grid;place-items:center;width:13px;height:13px;margin-right:5px;border-radius:4px;background:var(--accent-r);color:#fff;font-size:calc(9.5px * var(--cal-fs,1));font-weight:800;vertical-align:1px}
 /* Het vinkje linksboven; de tekst schuift ervoor opzij. */
 .tb-ev-check{position:absolute;left:6px;top:5px;width:16px;height:16px;display:grid;place-items:center;padding:0;border-radius:5px;border:1.5px solid color-mix(in srgb, var(--event-color) 75%, var(--border2));background:var(--bg2);color:var(--on-accent);cursor:pointer;z-index:2}
 .tb-ev-check:hover{border-color:var(--accent)}
@@ -10431,7 +10469,7 @@ button.task-agenda-when:hover{text-decoration:underline}
 .calendar-agenda-page .tb-ev.tb-ev-preview.tb-task-block{cursor:default}
 .calendar-agenda-page .tb-ev.tb-ev-preview.is-drag{opacity:1;outline:2px solid var(--accent);box-shadow:0 16px 40px rgba(var(--shade-rgb),calc(.5 * var(--shade-k)))}
 .calendar-agenda-page .tb-ev.tb-ev-preview.is-proposal{opacity:.95;outline:0;border:1.5px dashed color-mix(in srgb, var(--event-color) 85%, transparent);background-color:color-mix(in srgb, var(--event-color) 9%, var(--panel));box-shadow:none;animation:wp-proposal-pulse 1.8s ease-in-out infinite}
-.calendar-agenda-page .tb-ev.tb-ev-preview.is-proposal .tb-ev-title::after{content:"voorstel";margin-left:6px;padding:1px 5px;border-radius:4px;background:var(--accent);color:var(--on-accent);font-size:8.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;vertical-align:1px}
+.calendar-agenda-page .tb-ev.tb-ev-preview.is-proposal .tb-ev-title::after{content:"voorstel";margin-left:6px;padding:1px 5px;border-radius:4px;background:var(--accent);color:var(--on-accent);font-size:calc(8.5px * var(--cal-fs,1));font-weight:800;letter-spacing:.06em;text-transform:uppercase;vertical-align:1px}
 @keyframes wp-proposal-pulse{0%,100%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),0)}50%{box-shadow:0 0 0 4px rgba(var(--accent-rgb),.22)}}
 @media (prefers-reduced-motion: reduce){.calendar-agenda-page .tb-ev.tb-ev-preview.is-proposal{animation:none}}
 
@@ -10472,7 +10510,7 @@ button.task-agenda-when:hover{text-decoration:underline}
   .wp-rooster-hint{display:none}
   .wp-rooster.calendar-agenda-page .tb-dh{height:80px}
   .wp-rooster.calendar-agenda-page .tb-allday-row{top:80px}
-  .wp-rooster.calendar-agenda-page .tb-dh-num{width:22px;height:22px;font-size:12px}
+  .wp-rooster.calendar-agenda-page .tb-dh-num{width:22px;height:22px;font-size:calc(12px * var(--cal-fs,1))}
   .wp-proposal{bottom:calc(var(--bottomnav-h,58px) + 12px);max-width:94vw}
   .wp-proposal-text{white-space:normal}
 }
@@ -12741,7 +12779,7 @@ button.alog-feed-row:hover{background:var(--bg3)}
 @media(min-width:621px){
   .calendar-page.calendar-agenda-page .tb-dh{height:40px;flex-direction:row;gap:6px;padding:2px}
   .calendar-page.calendar-agenda-page .tb-dh-hit{flex-direction:row;gap:7px;padding:3px 10px}
-  .calendar-page.calendar-agenda-page .tb-dh-num{width:26px;height:26px;font-size:14px}
+  .calendar-page.calendar-agenda-page .tb-dh-num{width:26px;height:26px;font-size:calc(14px * var(--cal-fs,1))}
   .calendar-page.calendar-agenda-page .tb-allday-row{top:40px}
 }
 /* Telefoon, dagweergave: de weekstrook boven het rooster noemt de dag al. De
@@ -12774,5 +12812,4 @@ button.alog-feed-row:hover{background:var(--bg3)}
    2px bovenin hield de tijd tegen de rand aan. */
 .calendar-agenda-page .tb-ev-cozy{padding-top:4px}
 /* Maandweergave: een taak toont de kleur van zijn project, niet overal goud. */
-.cm-chip.is-task .cm-chip-dot,
 .cm-dayitem.is-task .cm-dayitem-dot{background:var(--event-color,var(--accent))}
