@@ -3,14 +3,20 @@
  * handzame selectie (wat je op het werk gebruikt), geen volledige Unicode-lijst.
  */
 
-/** De zes snelle reacties van Teams: duim, hart, lach, verbaasd, verdrietig, boos. */
+/**
+ * De zes snelle reacties: wat je op het werk het vaakst terugzegt. Akkoord,
+ * gedaan en "ik kijk ernaar" staan voorop, zodat een reactie ook een antwoord
+ * is. Eerst stond hier het rijtje van Teams (duim, hart, lach, verbaasd,
+ * verdrietig, boos); daarmee kon je wel iets voelen, maar niet afvinken.
+ * De rest staat gewoon in de kiezer.
+ */
 export const QUICK_REACTIONS: { emoji: string; label: string }[] = [
-  { emoji: '👍', label: 'Leuk' },
+  { emoji: '👍', label: 'Akkoord' },
+  { emoji: '✅', label: 'Gedaan' },
+  { emoji: '👀', label: 'Ik kijk ernaar' },
   { emoji: '❤️', label: 'Hart' },
-  { emoji: '😆', label: 'Lach' },
-  { emoji: '😮', label: 'Verbaasd' },
-  { emoji: '😢', label: 'Verdrietig' },
-  { emoji: '😠', label: 'Boos' },
+  { emoji: '😄', label: 'Lach' },
+  { emoji: '🎉', label: 'Feest' },
 ];
 
 export interface EmojiCategory {

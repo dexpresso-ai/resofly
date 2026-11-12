@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AtSign, Bell, BellOff, Bookmark, BookmarkX, CheckCheck, ChevronDown, ChevronRight, Compass, CornerUpLeft, Download,
   EyeOff, FileText, Filter, Hash, LogOut, MailOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Pin,
-  PinOff, Plus, Search, SmilePlus, SquarePen, Users, X,
+  PinOff, Plus, Search, SmilePlus, SquarePen, X,
 } from 'lucide-react';
 import {
   createGroup, leaveConversation, loadChatFiles, loadMessagesByIds, loadPublicChannels, loadSavedMessageIds, searchMessages,
@@ -23,10 +23,12 @@ import { Avatar, IconButton, Menu, Popover, PresenceBadge, TeamAvatar, type Menu
 
 export type ChatView = 'activity' | 'chat' | 'teams' | 'files' | 'saved';
 
+// De sleutel 'teams' blijft staan: hij zit in de sessieopslag (resofly.chat.view).
+// Het label is "Kanalen": zo heten ze in ResoFly, en het is wat je er vindt.
 export const VIEW_ITEMS: { key: ChatView; label: string; icon: (size: number) => ReactNode }[] = [
   { key: 'activity', label: 'Activiteit', icon: (s) => <Bell size={s} /> },
   { key: 'chat', label: 'Chat', icon: (s) => <MessageSquare size={s} /> },
-  { key: 'teams', label: 'Teams', icon: (s) => <Users size={s} /> },
+  { key: 'teams', label: 'Kanalen', icon: (s) => <Hash size={s} /> },
   { key: 'files', label: 'Bestanden', icon: (s) => <FileText size={s} /> },
   { key: 'saved', label: 'Opgeslagen', icon: (s) => <Bookmark size={s} /> },
 ];
@@ -38,28 +40,43 @@ export function viewBadge(api: TeamChatApi, view: ChatView): number {
   return 0;
 }
 
-// ── De app-rail links (zoals in Teams) ───────────────────────────────────────
+// ── De keuzestrook bovenaan ──────────────────────────────────────────────────
 
-export function Rail({ api, view, onView }: { api: TeamChatApi; view: ChatView; onView: (v: ChatView) => void }) {
+/**
+ * De vijf onderdelen als keuzestrook: een verzonken spoor met de gekozen stand
+ * erbovenop, zoals elke keuzestrook in ResoFly (Mijn/Team, Kaarten/Tabel).
+ * Wat op je wacht is een gouden pil.
+ *
+ * Eerst stond hier een eigen app-rail van 72px, de rail van Microsoft Teams.
+ * Die stond pal naast het zijmenu van ResoFly, dus je keek naar twee rails
+ * naast elkaar, en de chat las als een ingebouwd ander programma.
+ *
+ * `compact` (telefoon en zwevend paneel): alleen iconen, het gekozen onderdeel
+ * met zijn naam erbij. Zo past de strook naast je avatar op 390px.
+ */
+export function ViewSwitch({ api, view, onView, compact }: { api: TeamChatApi; view: ChatView; onView: (v: ChatView) => void; compact?: boolean }) {
   return (
-    <nav className="tmc-rail" aria-label="Teamchat">
+    <nav className={`tmc-switch${compact ? ' is-compact' : ''}`} aria-label="Teamchat">
       {VIEW_ITEMS.map((item) => {
         const badge = viewBadge(api, item.key);
+        const on = view === item.key;
         return (
-          <button key={item.key} type="button" className={`tmc-rail-item${view === item.key ? ' is-active' : ''}`} onClick={() => onView(item.key)} aria-current={view === item.key ? 'page' : undefined} title={item.label}>
-            <span className="tmc-rail-icon">{item.icon(20)}{badge > 0 && <span className="tmc-badge is-alert">{badge > 99 ? '99+' : badge}</span>}</span>
-            <span className="tmc-rail-label">{item.label}</span>
+          <button key={item.key} type="button" className={`tmc-switch-item${on ? ' is-active' : ''}`} onClick={() => onView(item.key)} aria-current={on ? 'page' : undefined} aria-label={badge > 0 ? `${item.label}, ${badge} nieuw` : item.label} title={item.label}>
+            <span className="tmc-switch-icon">{item.icon(compact ? 17 : 16)}</span>
+            <span className="tmc-switch-label">{item.label}</span>
+            {badge > 0 && <span className="tmc-switch-count" aria-hidden="true">{badge > 99 ? '99+' : badge}</span>}
           </button>
         );
       })}
-      <span className="tmc-rail-spacer" />
-      <StatusButton api={api} />
     </nav>
   );
 }
 
-/** Je eigen avatar met status; een klik opent het statusmenu van Teams. */
-export function StatusButton({ api, size = 34 }: { api: TeamChatApi; size?: number }) {
+/**
+ * Je eigen avatar met status; een klik opent het statusmenu. Met `withLabel`
+ * staat je status er in woorden naast (op de volledige pagina, rechtsboven).
+ */
+export function StatusButton({ api, size = 34, withLabel, placement = 'below-start' }: { api: TeamChatApi; size?: number; withLabel?: boolean; placement?: 'below-start' | 'below-end' }) {
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
@@ -79,10 +96,17 @@ export function StatusButton({ api, size = 34 }: { api: TeamChatApi; size?: numb
 
   return (
     <>
-      <button type="button" ref={ref} className="tmc-me" onClick={() => setOpen((v) => !v)} aria-label={`Jouw status: ${PRESENCE_LABEL[presence]}`} title={`Jouw status: ${PRESENCE_LABEL[presence]}`} aria-expanded={open}>
+      <button type="button" ref={ref} className={`tmc-me${withLabel ? ' has-label' : ''}`} onClick={() => setOpen((v) => !v)} aria-label={`Jouw status: ${PRESENCE_LABEL[presence]}`} title={`Jouw status: ${PRESENCE_LABEL[presence]}`} aria-expanded={open}>
         <Avatar userId={me} member={member} size={size} presence={presence} />
+        {withLabel && (
+          <span className="tmc-me-text">
+            <strong>{d.first}</strong>
+            <small>{message || PRESENCE_LABEL[presence]}</small>
+          </span>
+        )}
+        {withLabel && <ChevronDown size={14} className="tmc-me-caret" aria-hidden="true" />}
       </button>
-      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} placement="right-start" className="tmc-status-pop" width={300} label="Status">
+      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} placement={placement} className="tmc-status-pop" width={300} label="Status">
         <div className="tmc-status-head">
           <Avatar userId={me} member={member} size={44} presence={presence} />
           <div><strong>{d.name}</strong><small>{d.email}</small></div>
@@ -351,7 +375,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
   );
 }
 
-// ── Teams (kanalen) ──────────────────────────────────────────────────────────
+// ── Kanalen ──────────────────────────────────────────────────────────────────
 
 export function TeamsListPane({ api, activeId, onOpen, onNewChannel, onDiscover, compact }: {
   api: TeamChatApi;
@@ -387,7 +411,7 @@ export function TeamsListPane({ api, activeId, onOpen, onNewChannel, onDiscover,
 
   return (
     <div className={`tmc-list${compact ? ' is-compact' : ''}`}>
-      <PaneHead title="Teams">
+      <PaneHead title="Kanalen">
         <IconButton label="Kanalen ontdekken" onClick={onDiscover}><Compass size={17} /></IconButton>
         {api.canWrite && <IconButton label="Kanaal maken" onClick={onNewChannel}><Plus size={18} /></IconButton>}
       </PaneHead>

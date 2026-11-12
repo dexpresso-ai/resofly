@@ -195,7 +195,7 @@ export const events = [
 ];
 
 // ── Teamchat ───────────────────────────────────────────────────────────────
-// Zoals in Teams: een 1-op-1-chat, een groepschat (vastgemaakt, met een
+// Een 1-op-1-chat, een groepschat (vastgemaakt, met een
 // vermelding en iets dringends), en twee kanalen met posts en draadjes. Plus
 // reacties, een citaat, een vergadering, statussen en wat activiteit — genoeg
 // om de chat op elk formaat echt te laten renderen.

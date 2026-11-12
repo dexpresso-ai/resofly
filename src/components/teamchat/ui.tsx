@@ -8,7 +8,7 @@ import type { OrganizationMember } from '../../types';
 import { avatarHue, memberDisplay, PRESENCE_LABEL, type Presence } from './model';
 
 /**
- * Bouwstenen van de teamchat: avatars met de statusbadges van Teams, menu's en
+ * Bouwstenen van de teamchat: avatars met een statuslampje, menu's en
  * popovers (via een portal, zodat een scrollgebied ze niet afknipt) en het
  * dialoogvenster.
  */
@@ -33,17 +33,23 @@ export function isTouchOnly(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(hover:none)').matches;
 }
 
-// ── Statusbadge (de rondjes van Teams) ────────────────────────────────────────
+// ── Statuslampje ─────────────────────────────────────────────────────────────
 
+/**
+ * Een lampje in de statuskleuren van de app: groen beschikbaar, rood bezet,
+ * oranje afwezig, een open ring als iemand offline is. Alleen "Niet storen"
+ * krijgt een streepje, want dat is een verzoek en geen toestand. Eerst stonden
+ * hier de badges van Teams (vinkje, klokje, kruisje); op 10px las je die niet,
+ * en ze gaven de chat het gezicht van een ander programma.
+ */
 export function PresenceBadge({ presence, size = 12, ring = true }: { presence: Presence; size?: number; ring?: boolean }) {
   return (
     <span className={`tmc-presence is-${presence}${ring ? ' has-ring' : ''}`} style={{ width: size, height: size }} title={PRESENCE_LABEL[presence]} aria-label={PRESENCE_LABEL[presence]} role="img">
       <svg viewBox="0 0 16 16" aria-hidden="true">
-        {presence === 'available' && <><circle cx="8" cy="8" r="8" className="tmc-presence-fill" /><path d="M4.6 8.3l2.2 2.2 4.6-4.8" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" /></>}
-        {presence === 'busy' && <circle cx="8" cy="8" r="8" className="tmc-presence-fill" />}
-        {presence === 'dnd' && <><circle cx="8" cy="8" r="8" className="tmc-presence-fill" /><rect x="4" y="7" width="8" height="2" rx="1" fill="#fff" /></>}
-        {(presence === 'away' || presence === 'brb') && <><circle cx="8" cy="8" r="8" className="tmc-presence-fill" /><path d="M8 4.4v4.1l2.6 1.6" fill="none" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></>}
-        {presence === 'offline' && <><circle cx="8" cy="8" r="6.6" fill="none" className="tmc-presence-stroke" strokeWidth="2.2" /><path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4" className="tmc-presence-stroke" strokeWidth="1.7" strokeLinecap="round" /></>}
+        {presence === 'offline'
+          ? <circle cx="8" cy="8" r="5.8" fill="none" className="tmc-presence-stroke" strokeWidth="2.6" />
+          : <circle cx="8" cy="8" r="8" className="tmc-presence-fill" />}
+        {presence === 'dnd' && <rect x="4" y="7" width="8" height="2" rx="1" fill="#fff" />}
       </svg>
     </span>
   );
@@ -68,7 +74,7 @@ export function Avatar({ userId, member, size = 32, presence, title }: {
   );
 }
 
-/** Groepschat: twee gezichten schuin over elkaar, zoals Teams dat doet. */
+/** Groepschat: twee gezichten schuin over elkaar. */
 export function GroupAvatar({ ids, memberById, size = 32 }: { ids: string[]; memberById: Map<string, OrganizationMember>; size?: number }) {
   if (ids.length < 2) {
     return (
@@ -96,7 +102,7 @@ export function ChannelAvatar({ title, size = 32, isPrivate }: { title: string; 
   );
 }
 
-/** Het team (de organisatie) in de lijst Teams: een vierkantje met initialen. */
+/** Het team (de organisatie) boven de kanalen: een vierkantje met initialen. */
 export function TeamAvatar({ name, size = 30 }: { name: string; size?: number }) {
   const words = name.trim().split(/\s+/).filter(Boolean);
   const initials = (words.length >= 2 ? `${words[0][0]}${words[1][0]}` : name.slice(0, 2)).toUpperCase();
