@@ -47,6 +47,19 @@ self.addEventListener('push', (event) => {
  * de app Agenda zijn, en dan opende een chatbericht in je agenda.
  */
 const APP_FOR_KIND = { chat: '/app/communicatie/', email: '/app/communicatie/', booking: '/app/agenda/', invoice: '/app/financien/' };
+const MODULE_APPS = ['/app/agenda/', '/app/financien/', '/app/communicatie/'];
+
+/*
+ * De werkruimte als app woont op /app/werkruimte/ (WORKSPACE_APP in
+ * standaloneApps.ts). Een venster daar is de werkruimte, net als een venster op
+ * "/". Een melding voor de werkruimte (/?chat=…) gaat in zo'n venster naar zijn
+ * eigen adres: naar "/" zou hij buiten zijn app vallen en een adresbalk krijgen.
+ * Is er geen venster, dan opent hij ook op dat adres; op Android komt hij zo in
+ * de ResoFly-app terecht en niet in Chrome.
+ */
+const WORKSPACE_APP = '/app/werkruimte/';
+
+const inModuleApp = (path) => MODULE_APPS.some((app) => path.startsWith(app));
 
 function pathOf(url) {
   try { return new URL(url).pathname; } catch (_) { return '/'; }
@@ -70,7 +83,6 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       const windows = clientList.filter((client) => 'focus' in client);
-      const inApp = (client) => pathOf(client.url).startsWith('/app/');
       // 1. Het venster van de app waar de melding over gaat. De deeplink
       //    (?chat=…) gaat mee naar het adres van die app.
       const appWindow = appPath ? windows.find((client) => pathOf(client.url).startsWith(appPath)) : null;
@@ -83,16 +95,21 @@ self.addEventListener('notificationclick', (event) => {
       // 2. Een venster op hetzelfde adres als de melding, of anders de werkruimte
       //    zelf. Nooit een losse app die er niets mee te maken heeft.
       const sameWindow = windows.find((client) => pathOf(client.url) === targetPath)
-        || (targetPath.startsWith('/app/') ? null : windows.find((client) => !inApp(client)));
+        || (inModuleApp(targetPath) ? null : windows.find((client) => !inModuleApp(pathOf(client.url))));
+      const target = new URL(targetUrl, self.location.origin);
+      const inWorkspaceApp = (path) => path.startsWith(WORKSPACE_APP);
       if (sameWindow) {
         sameWindow.focus();
         if ('navigate' in sameWindow && targetUrl && targetUrl !== '/') {
-          sameWindow.navigate(targetUrl).catch(() => {});
+          const next = targetPath === '/' && inWorkspaceApp(pathOf(sameWindow.url)) ? WORKSPACE_APP + target.search + target.hash : targetUrl;
+          sameWindow.navigate(next).catch(() => {});
         }
         return undefined;
       }
-      // 3. Niets passends open: een nieuw venster op het adres van de melding.
-      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+      // 3. Niets passends open: een nieuw venster op het adres van de melding,
+      //    voor de werkruimte op het adres van de werkruimte-app.
+      const fresh = targetPath === '/' ? WORKSPACE_APP + target.search + target.hash : targetUrl;
+      if (self.clients.openWindow) return self.clients.openWindow(fresh);
       return undefined;
     }),
   );

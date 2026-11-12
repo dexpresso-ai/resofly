@@ -716,8 +716,9 @@ export function storageScript(spec, extra = {}) {
     return `(() => { try { localStorage.clear(); const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); } catch { /* afgeschermd kader */ } })();`;
   }
   const tabs = { tabs: [{ page: view.page, projectId: view.projectId ?? null, clientId: view.clientId ?? null, statsReportId: view.statsReportId ?? null, galleryId: null }], activeIndex: 0 };
-  // Een losse app (src/lib/standaloneApps.ts) onthoudt zijn tabbladen apart.
-  const tabsKey = view.app ? `brandcore.tabs.${orgId}.app-${view.app}` : `brandcore.tabs.${orgId}`;
+  // Een losse app (src/lib/standaloneApps.ts) onthoudt zijn tabbladen apart. De
+  // werkruimte als app (/app/werkruimte/) is de werkruimte: zelfde tabbladen.
+  const tabsKey = view.app && view.app !== 'werkruimte' ? `brandcore.tabs.${orgId}.app-${view.app}` : `brandcore.tabs.${orgId}`;
   const items = {
     'sb-example-auth-token': JSON.stringify(session),
     'brandcore.activeOrganizationId': orgId,
