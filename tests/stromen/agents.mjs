@@ -94,7 +94,7 @@ export default async function agents() {
     verwacht(bouwer && !bouwer.includes('JE PAST NU EEN BESTAANDE AGENT AAN'), 'een nieuwe agent kreeg toch een huidige agent mee');
   });
 
-  // Gerrie aanzetten (20261112160000): zonder akkoord geen Gerrie, en ook geen
+  // Gerrie aanzetten (20261112190000): zonder akkoord geen Gerrie, en ook geen
   // agent die namens jou je gegevens leest.
   groep('Agents: Gerrie uitzetten');
   await stap('uitzetten pauzeert je agents, en het logboek zegt het', async () => {

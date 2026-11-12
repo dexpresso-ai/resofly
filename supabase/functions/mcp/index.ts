@@ -272,7 +272,7 @@ async function authenticate(req: Request): Promise<Session> {
     throw new Error('Deze gebruiker heeft in deze organisatie geen toegang meer tot Gerrie, dus deze koppeling werkt niet meer.');
   }
   // Een gekoppelde AI leest dezelfde gegevens als Gerrie en zet dezelfde
-  // handelingen klaar. Dus geldt hetzelfde akkoord (20261112160000), en net als
+  // handelingen klaar. Dus geldt hetzelfde akkoord (20261112190000), en net als
   // de module bij elke aanroep: zet iemand Gerrie uit, dan stopt ook zijn
   // eigen AI meteen, niet pas als het token verloopt.
   if (!(await hasAiConsent(admin, String(grant.user_id), String(grant.organization_id)))) {

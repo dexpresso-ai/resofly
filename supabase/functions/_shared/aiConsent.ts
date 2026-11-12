@@ -4,7 +4,7 @@
 // Een gebruiker zet Gerrie zelf aan, per organisatie, en gaat daarbij akkoord
 // met drie punten: de AI leest je gegevens en stelt op basis daarvan
 // handelingen voor, de AI kan fouten maken, en de AI beslist niets zelf
-// (migratie 20261112160000, tabel ai_consents).
+// (migratie 20261112190000, tabel ai_consents).
 //
 // De edge functions draaien met de service-role en komen dus niet langs RLS.
 // Elke plek waar gegevens naar een model gaan, weegt het akkoord daarom hier:

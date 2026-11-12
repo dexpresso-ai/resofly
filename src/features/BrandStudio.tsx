@@ -465,8 +465,12 @@ function BrandingCard({ form, setForm, canWrite }: { form: CompanySettingsInput;
             onChange={(e) => set('brand_hide_powered_by', e.target.checked)}
             disabled={!canWrite}
           />
-          <span>&ldquo;Geleverd via ResoFly&rdquo; verbergen onder je klantpagina's</span>
+          <span>&ldquo;Geleverd via ResoFly&rdquo; verbergen onder je offertes, facturen, contracten, boekingen en galerijen</span>
         </label>
+        <p className="settings-help brand-field-wide">
+          In het klantportaal staan je logo en kleuren; onderaan blijft altijd staan dat het platform beschikbaar
+          wordt gesteld door ResoFly.
+        </p>
       </div>
     </section>
   );
@@ -647,8 +651,8 @@ function LoginBrandCard({ form, setForm, canWrite, loginKey, loginKeyReady, logi
 function LoginReadabilityChecks({ branding, theme }: { branding: BrandingPayload; theme: ReturnType<typeof loginTheme> }) {
   const worstOn = (ink: string, surfaces: string[]) => Math.min(...surfaces.map(bg => contrastRatio(ink, bg)));
   const darkVersion = theme.cardDark && Boolean(branding.logoDarkDataUrl);
-  const { ink: logoInk, ready: logoReady } = useLogoInk(darkVersion ? null : branding.logoDataUrl);
-  const plate = branding.logoDataUrl && !darkVersion && logoReady ? logoPlate(logoInk, [theme.card]) : null;
+  const { ink: logoInk, luminance: logoLuminance, ready: logoReady } = useLogoInk(darkVersion ? null : branding.logoDataUrl);
+  const plate = branding.logoDataUrl && !darkVersion && logoReady ? logoPlate(logoInk, [theme.card], logoLuminance) : null;
   const chosenCard = branding.loginCard ?? theme.card;
   const chosenBackground = branding.loginBackground ?? theme.background.mid;
 
@@ -740,8 +744,8 @@ function ReadabilityChecks({ branding }: { branding: BrandingPayload }) {
 
   const headerDark = isDarkSurface(header.mid);
   const darkVersion = headerDark && Boolean(branding.logoDarkDataUrl);
-  const { ink: logoInk, ready: logoReady } = useLogoInk(darkVersion ? null : branding.logoDataUrl);
-  const plate = branding.logoDataUrl && !darkVersion && logoReady ? logoPlate(logoInk, [header.top, header.mid]) : null;
+  const { ink: logoInk, luminance: logoLuminance, ready: logoReady } = useLogoInk(darkVersion ? null : branding.logoDataUrl);
+  const plate = branding.logoDataUrl && !darkVersion && logoReady ? logoPlate(logoInk, [header.top, header.mid], logoLuminance) : null;
 
   const rows: CheckRow[] = [
     {

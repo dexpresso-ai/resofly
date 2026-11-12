@@ -75,7 +75,7 @@ create table if not exists public.ai_consents (
 );
 
 comment on table public.ai_consents is
-  'Per organisatie en gebruiker: staat Gerrie (AI) aan, en onder welke voorwaarden ging iemand akkoord. Alleen te wijzigen via set_ai_consent (20261112160000).';
+  'Per organisatie en gebruiker: staat Gerrie (AI) aan, en onder welke voorwaarden ging iemand akkoord. Alleen te wijzigen via set_ai_consent (20261112190000).';
 
 drop trigger if exists ai_consents_updated on public.ai_consents;
 create trigger ai_consents_updated before update on public.ai_consents

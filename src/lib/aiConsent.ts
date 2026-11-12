@@ -2,7 +2,7 @@
  * Gerrie aanzetten: wat je leest, wat je aanvinkt, en wanneer Gerrie aanstaat.
  *
  * Een gebruiker zet Gerrie zelf aan, per organisatie (migratie
- * 20261112160000, tabel ai_consents). Daarbij vinkt hij drie punten aan: de
+ * 20261112190000, tabel ai_consents). Daarbij vinkt hij drie punten aan: de
  * AI leest je gegevens en stelt op basis daarvan handelingen voor, de AI kan
  * fouten maken, en de AI beslist niets zelf. Pas daarna kan hij Gerrie
  * gebruiken: de chat, het commandocentrum, de agents, de beslislijst, de

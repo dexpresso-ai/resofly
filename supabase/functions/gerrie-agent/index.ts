@@ -52,7 +52,7 @@ Deno.serve(async (req) => {
       throw new HttpError('Je hebt in deze organisatie geen toegang tot Gerrie.', 403);
     }
     // En de gebruiker zelf moet Gerrie hebben aangezet, met akkoord op wat dat
-    // betekent (20261112160000). Voor élke handeling hier, ook die zonder model
+    // betekent (20261112190000). Voor élke handeling hier, ook die zonder model
     // (verbruik, een verslag verversen): staat Gerrie uit, dan is hij er niet.
     // Zonder deze regel kon een directe aanroep om het scherm heen.
     if (!(await hasAiConsent(supabaseAdmin, user.id, organizationId))) {

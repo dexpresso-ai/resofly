@@ -80,7 +80,7 @@ Gerrie, en je zet ze per keer zelf in gang.
 
 ## Database
 
-Migratie `20261112160000_gerrie_aanzetten.sql`:
+Migratie `20261112190000_gerrie_aanzetten.sql`:
 
 1. `ai_consents`: per organisatie en gebruiker `enabled`, `terms_version`, `acknowledged`,
    `accepted_at` en `disabled_at`. Lezen: je eigen rij, of als owner/admin die van het team. De
@@ -105,7 +105,7 @@ Een gekoppelde eigen AI werkt weer zodra zijn eigenaar Gerrie aanzet.
 
 | Bestand | Wat |
 | --- | --- |
-| `supabase/migrations/20261112160000_gerrie_aanzetten.sql` | tabel, versie, `set_ai_consent`, logboek |
+| `supabase/migrations/20261112190000_gerrie_aanzetten.sql` | tabel, versie, `set_ai_consent`, logboek |
 | `supabase/functions/_shared/aiConsent.ts` | `hasAiConsent`, de versie, de weigering |
 | `supabase/functions/gerrie-agent`, `gerrie-agent-runner`, `gerrie-signals`, `mcp`, `mcp-oauth` | de controle |
 | `src/lib/aiConsent.ts` | de drie punten, de versie, aan/uit |

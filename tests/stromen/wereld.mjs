@@ -19,7 +19,7 @@ export const GERRIE_AKKOORD = ['gegevens_lezen', 'kan_fouten_maken', 'geen_eigen
 
 /**
  * Gerrie aanzetten zoals het scherm dat doet: de eigen sessie, de huidige
- * versie van de uitleg en alle drie de vinkjes (set_ai_consent, 20261112160000).
+ * versie van de uitleg en alle drie de vinkjes (set_ai_consent, 20261112190000).
  */
 export async function zetGerrieAan(orgId, gebruiker) {
   const versie = sqlRij('select public.ai_terms_version() as versie').versie;
@@ -88,7 +88,7 @@ export async function maakWereld(naam, { kor = false } = {}) {
   const zonderFinancien = await lid(orgId, await maakGebruiker(`${naam}-geenfin`), 'member', { finance: 'none' });
   const kijker = await lid(orgId, await maakGebruiker(`${naam}-kijker`), 'viewer');
   const boekhouder = await lid(orgId, await maakGebruiker(`${naam}-boekhouder`), 'accountant');
-  // Gerrie staat pas aan als iemand dat zelf doet (20261112160000). De
+  // Gerrie staat pas aan als iemand dat zelf doet (20261112190000). De
   // scenario's toetsen Gerrie zoals hij werkt voor wie hem aanzette; wat er
   // zonder akkoord gebeurt, staat in agents.mjs. De boekhouder heeft nooit Gerrie.
   for (const gebruiker of [eigenaar, beheerder, medewerker, lezer, zonderFinancien, kijker]) await zetGerrieAan(orgId, gebruiker);

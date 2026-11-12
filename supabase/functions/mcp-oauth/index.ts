@@ -391,7 +391,7 @@ async function handleApprove(req: Request): Promise<Response> {
     throw new HttpError('Je hebt in deze organisatie geen toegang tot Gerrie, dus je kunt hier ook geen AI aan koppelen.', 403);
   }
   // En je moet Gerrie zelf hebben aangezet, met akkoord op wat een AI met je
-  // gegevens doet (20261112160000). Je eigen AI koppelen is hetzelfde akkoord.
+  // gegevens doet (20261112190000). Je eigen AI koppelen is hetzelfde akkoord.
   if (!(await hasAiConsent(admin, user.id, organizationId))) {
     throw new HttpError('Zet eerst Gerrie (AI) aan in deze organisatie: in ResoFly onder Instellingen → AI. Daar lees je ook wat dat betekent. Daarna kun je je eigen AI koppelen.', 403);
   }

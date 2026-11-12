@@ -13,7 +13,9 @@
  *      test om bestaat: koppen, knoppenbalken en filters mogen niet weer
  *      langzaam het scherm opeten;
  *   5. twee delen die naast elkaar horen (`apart` in PAGES) ergens tijdens
- *      het scrollen over elkaar heen liggen.
+ *      het scrollen over elkaar heen liggen;
+ *   6. iets wat er moet staan (`mustShow` in PAGES) ontbreekt, zoals het logo
+ *      van de leverancier of de regel over ResoFly onder het klantportaal.
  *
  * Opties:
  *   --theme=dark|light|both     standaard dark
@@ -66,6 +68,18 @@ function setupPage(step, { pendingLegalForm = null } = {}) {
     storage: { [`resofly.onboarding.${seed.ids.ORG}`]: JSON.stringify({ step, completed, pendingLegalForm }) },
   };
 }
+
+/**
+ * Wat er op een pagina moet staan (`mustShow`): een element met een maat, en
+ * zo nodig met deze tekst erin. Niet per se in beeld: de voetregel staat
+ * onderaan.
+ */
+// Onder elk scherm van het klantportaal, ook als de leverancier "Geleverd via
+// ResoFly" heeft uitgezet (2026-11-12).
+const PORTAL_CREDIT = { selector: '.portal-foot-by', text: 'beschikbaar gesteld door ResoFly', label: 'de regel over ResoFly onderaan' };
+// Het logo in de kop van het portaal, op een licht plaatje (het testlogo heeft
+// donkere letters, die op de donkere kop wegvallen).
+const PORTAL_LOGO_ON_PLATE = { selector: '.portal-hero .brand-logo.plate-light img', label: 'het logo op een licht plaatje in de kop' };
 
 /** Welke pagina's, en met welk tabblad ze openen. */
 const PAGES = {
@@ -195,11 +209,16 @@ const PAGES = {
   'public-gallery': { path: '/gallerij/demo-token' },
   // 2026-11-10 — de afmeldpagina voor marketingmail (de link uit een campagne).
   'public-unsubscribe': { path: '/afmelden?token=demo-token' },
-  'portal-login': { path: '/portal' },
+  'portal-login': { path: '/portal', mustShow: [PORTAL_CREDIT] },
   // 2026-11-05 — het inlogscherm op het eigen adres van de leverancier, met
   // eigen kleuren voor achtergrond, kaart en knop (zie tests/mobile/mock).
-  'portal-login-brand': { path: '/portal/studio-lopik-k7x2m6qp4r' },
-  portal: { path: '/portal', portal: true },
+  'portal-login-brand': { path: '/portal/studio-lopik-k7x2m6qp4r', mustShow: [PORTAL_CREDIT] },
+  portal: { path: '/portal', portal: true, mustShow: [PORTAL_CREDIT] },
+  // 2026-11-12 — het portaal met het logo van de leverancier: groot in de kop,
+  // op een licht plaatje (donkere letters vallen weg op de donkere kop), en
+  // onderaan nog altijd dat het platform van ResoFly komt.
+  'portal-logo': { path: '/portal', portal: true, mock: { portalLogo: true }, mustShow: [PORTAL_LOGO_ON_PLATE, PORTAL_CREDIT] },
+  'portal-login-logo': { path: '/portal/studio-lopik-k7x2m6qp4r', mock: { portalLogo: true }, mustShow: [{ selector: '.portal-login-brand .brand-logo img', label: 'het logo op de inlogkaart' }, PORTAL_CREDIT] },
   // Het tabblad Tickets, met een afgehandeld ticket in het blok "Afgehandeld"
   // onderaan (2026-11-05).
   'portal-tickets': { path: '/portal', portal: true, prepare: '.portal-tab:has-text("Tickets")' },
@@ -215,7 +234,7 @@ const PAGES = {
   // Het voorbeeld dat Instellingen → Huisstijl in een iframe toont: het echte
   // portaal op verzonnen gegevens, zonder sessie. Los geopend moet het net zo
   // goed staan als het portaal zelf.
-  'portal-preview': { path: '/portal/voorbeeld' },
+  'portal-preview': { path: '/portal/voorbeeld', mustShow: [PORTAL_CREDIT] },
   login: { path: '/', login: true },
   // 2026-11-12 — de losse apps: dezelfde werkruimte op een eigen adres, met
   // alleen de pagina's van die app in het menu en in de duimbalk. Op de pagina
@@ -322,6 +341,7 @@ const FIRST_ITEM = {
   'public-invoice': { selector: '.public-lines', maxTop: 700 },
   'public-booking': { selector: '.booking-slot', maxTop: 360 },
   portal: { selector: '.portal-row', maxTop: 380 },
+  'portal-logo': { selector: '.portal-row', maxTop: 380 },
   // Zelfde opbouw als het portaal, alleen zonder tab Tickets.
   'portal-inactief': { selector: '.portal-row', maxTop: 380 },
   // 2026-10-04 — Berichten en Instellingen in het portaal, geopend via de
@@ -485,8 +505,16 @@ try {
           scroller.scrollTop = start;
           return worst;
         }, spec.apart) : 0;
+        const missing = spec.mustShow ? await page.evaluate((wanted) => wanted.filter(({ selector, text }) => {
+          const el = document.querySelector(selector);
+          if (!el) return true;
+          const r = el.getBoundingClientRect();
+          if (r.width < 1 || r.height < 1 || getComputedStyle(el).visibility === 'hidden') return true;
+          return Boolean(text) && !el.textContent.replace(/\s+/g, ' ').includes(text);
+        }).map(({ label }) => label), spec.mustShow) : [];
         const label = `${look ? `${look}/` : ''}${theme}/${vpName}/${key}`;
         const problems = [];
+        for (const what of missing) problems.push(`${what} ontbreekt`);
         if (!shell) problems.push(isPublic ? 'pagina niet gerenderd' : 'app-shell niet gerenderd');
         if (errors.length) problems.push(`js-fout: ${errors[0].slice(0, 90)}`);
         if (m.pageOverflow > 1 || m.contentOverflow > 1) problems.push(`horizontale overloop (${Math.max(m.pageOverflow, m.contentOverflow)}px)`);

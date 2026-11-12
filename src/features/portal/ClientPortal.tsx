@@ -78,6 +78,7 @@ import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl
 import { applyBrandTheme, brandStyle, ensureBrandFontsLoaded, loginThemeVars, sanitizeStoredBranding, type BrandingPayload } from '../../lib/branding';
 import { ReadModal } from '../../components/ReadModal';
 import { BrandMark } from '../../components/PublicBrand';
+import { BrandMark as ResoFlyMark } from '../../components/BrandMark';
 import { dayGreeting, firstName, portalDateLabel, portalSummary } from '../../lib/portalGreeting';
 import { clientHostInfo, isClientHost } from '../../lib/clientHost';
 import {
@@ -267,13 +268,22 @@ function forgetPortalKey(): void {
 /** Hoe lang het inlogscherm op de huisstijl wacht; daarna toch, neutraal. */
 const KEY_BRANDING_WAIT_MS = 4000;
 
-/** Afsluiting van de leverancier onder elk portaalscherm. */
+/**
+ * Onder elk portaalscherm: de afsluiting van de leverancier, en altijd dat het
+ * platform van ResoFly komt. Het portaal staat verder helemaal in het merk van
+ * de leverancier (logo, kleuren, naam). "Geleverd via ResoFly" verbergen
+ * (brand_hide_powered_by) geldt daarom niet hier, alleen op de losse offerte-,
+ * factuur-, contract- en boekingspagina en de galerij. Tot 2026-11-12 verdween
+ * de regel ook uit het portaal, en zag een klant nergens op wiens platform hij
+ * inlogde. Ook zonder huisstijl (het algemene /portal) staat hij er.
+ */
 function PortalFooter({ branding }: { branding: BrandingPayload | null | undefined }) {
-  if (!branding) return null;
-  if (!branding.footerText && branding.hidePoweredBy) return null;
   return <footer className="portal-foot">
-    {branding.footerText && <span className="portal-foot-own">{branding.footerText}</span>}
-    {!branding.hidePoweredBy && <span className="portal-foot-by">Geleverd via ResoFly</span>}
+    {branding?.footerText && <span className="portal-foot-own">{branding.footerText}</span>}
+    <span className="portal-foot-by">
+      {/* Merk en eerste woord aan elkaar: rond een losse afbeelding mag de browser afbreken. */}
+      <span className="portal-foot-lead"><ResoFlyMark size={18} className="portal-foot-mark" />Dit</span> platform wordt beschikbaar gesteld door <strong>ResoFly</strong>
+    </span>
   </footer>;
 }
 
@@ -754,7 +764,7 @@ function PortalDashboard({ branding, onBranding, preview, portalKey = null, onSi
   // dossier (PortalAccountView) zet hem bovenaan zijn eigen kop, met daaronder
   // de groet, de kerncijfers en de tabbladen; zonder dossier staat hij alleen.
   const topbar = <div className="portal-topbar">
-      <div className="portal-brand">
+      <div className={`portal-brand${branding?.logoDataUrl ? ' has-logo' : ''}`}>
         <BrandMark branding={branding} name={companyName} on="header" />
         <div className="portal-brand-text">
           {/* Met een logo staat de naam er al in. */}

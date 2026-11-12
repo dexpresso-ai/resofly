@@ -372,7 +372,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
         : Promise.resolve({ data: null, error: null }),
       supabase.rpc('organization_creative_status', { p_organization_id: activeOrganization.id }),
       supabase.rpc('organization_business_status', { p_organization_id: activeOrganization.id }),
-      // Gerrie aan of uit (20261112160000). Eén vraag: de RLS geeft een teamlid
+      // Gerrie aan of uit (20261112190000). Eén vraag: de RLS geeft een teamlid
       // alleen zijn eigen rij, en een owner of admin die van het hele team.
       // Tegelijk met het lidmaatschap, zodat de chat niet eerst verschijnt en
       // dan weer verdwijnt.
@@ -910,6 +910,28 @@ export async function selectGalleryItems(organizationId: UUID, galleryId: UUID):
     .order('created_at', { ascending: true });
   if (error) throw error;
   return (data ?? []) as GalleryItem[];
+}
+
+/**
+ * Verwijdert een album of één item ervan, en zegt het als er niets is
+ * verwijderd. Houdt RLS een delete tegen (andere organisatie, geen
+ * schrijfrecht op Projecten), dan geeft PostgREST geen fout maar nul rijen:
+ * de app meldde dan niets en leek het verwijderen gelukt, tot de lijst
+ * opnieuw laadde en het album er nog stond.
+ */
+export async function deleteGalleryRecord(table: 'galleries' | 'gallery_items', id: UUID, organizationId: UUID): Promise<void> {
+  const { data, error } = await supabase
+    .from(table)
+    .delete()
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error(table === 'galleries'
+      ? 'Dit album is niet verwijderd. Het bestaat niet meer, of je mag het niet verwijderen.'
+      : 'Dit bestand is niet verwijderd. Het bestaat niet meer, of je mag het niet verwijderen.');
+  }
 }
 
 /** Accountbreed opslagverbruik + limiet; null bij fouten (bijv. migratie nog niet toegepast). */

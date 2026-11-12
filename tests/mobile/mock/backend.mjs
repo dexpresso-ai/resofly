@@ -592,10 +592,14 @@ function edgeFunction(name, body, options = {}) {
       case 'getTicketThread': return inactive ? { ok: false, error: 'Tickets staan voor dit dossier niet meer open.' } : pub.portalTicketThread;
       case 'getNotificationSettings': return inactive ? pub.portalSettingsInactive : pub.portalSettings;
       case 'updateNotificationSettings': return { ok: true, settings: body.settings };
-      default: return inactive ? pub.portalDataInactive : pub.portalData;
+      // Met logo (2026-11-12): portalLogo op de pagina.
+      default: return inactive ? pub.portalDataInactive : options?.portalLogo ? pub.portalDataLogo : pub.portalData;
     }
   }
-  if (name === 'portal-login') return body?.action === 'getBranding' ? (body.key === pub.PORTAL_LOGIN_KEY ? pub.portalLoginBranding : { ok: true, branding: null }) : { ok: true, known: true };
+  if (name === 'portal-login') {
+    const keyBranding = options?.portalLogo ? pub.portalLoginBrandingLogo : pub.portalLoginBranding;
+    return body?.action === 'getBranding' ? (body.key === pub.PORTAL_LOGIN_KEY ? keyBranding : { ok: true, branding: null }) : { ok: true, known: true };
+  }
   // Rapportages met Gerrie: de gegevens van een rapportage (zonder AI), en het tegoed voor de balk.
   if (name === 'gerrie-agent' && body?.action === 'report_data') return { ...seed.aiReportData, reportId: body.reportId };
   if (name === 'gerrie-agent') return { ok: true, budget: { remaining_cents: 5000 }, remaining: 5000, remainingFraction: 0.72, tools: [], proposals: [], usage: [] };

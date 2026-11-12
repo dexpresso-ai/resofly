@@ -208,7 +208,7 @@ async function processSignal(signal: SignalRow): Promise<SignalOutcome> {
   // Gerrie-kaart: handen (actor), dagcap, budget fail-closed, dan één opdracht.
   if (!actor) return skipSignal(signal, 'geen actieve owner/admin als actor');
   // Een Gerrie-kaart gaat met de gegevens van de actor naar het model. Dan moet
-  // die actor Gerrie zelf hebben aangezet (20261112160000). Regelkaarten
+  // die actor Gerrie zelf hebben aangezet (20261112190000). Regelkaarten
   // (hierboven) gebruiken geen model en gaan gewoon door.
   if (!(await hasAiConsent(supabaseAdmin, actor.id, org))) return skipSignal(signal, 'Gerrie staat uit voor de actor van de beslislijst');
   const cap = Number(settings.max_gerrie_cards_per_day ?? 10);

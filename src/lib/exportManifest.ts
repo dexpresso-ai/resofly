@@ -47,11 +47,13 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261112120000 (Gerrie → Gesprekken) zet kind op ai_conversations. Geen
 // nieuwe tabel; ai_conversations en ai_messages blijven 'prive': een chat met
 // Gerrie is van degene die hem voerde, niet van de organisatie.
-// 20261112160000 (Gerrie aanzetten) zet ai_consents erbij: wie in deze
+// 20261112170000 (galerij opruimen) zet gallery_purge_queue erbij: de
+// opruimwachtrij van de media-worker, 'intern', net als storage_purge_queue.
+// 20261112190000 (Gerrie aanzetten) zet ai_consents erbij: wie in deze
 // organisatie Gerrie aanzette, wanneer en onder welke voorwaarden. Gaat mee:
 // het akkoord hoort bij de administratie, en de eigenaar en de beheerders
 // lezen het al in de app (Instellingen → AI).
-export const EXPORT_SCHEMA_VERSION = '20261112160000';
+export const EXPORT_SCHEMA_VERSION = '20261112190000';
 
 export type TableKind =
   | 'export'
@@ -342,6 +344,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   webhook_deliveries: { kind: 'intern', reason: WACHTRIJ },
   notification_outbox: { kind: 'intern', reason: WACHTRIJ },
   storage_purge_queue: { kind: 'intern', reason: WACHTRIJ },
+  gallery_purge_queue: { kind: 'intern', reason: WACHTRIJ },
   notification_preferences: { kind: 'prive', reason: PRIVE },
   push_subscriptions: { kind: 'geheim', reason: GEHEIM },
 

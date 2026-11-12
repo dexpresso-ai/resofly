@@ -594,7 +594,7 @@ export function sentence(e: AuditEntry, lookup: AuditLookup = {}): { parts: Sent
       const files = Number(meta.bestanden ?? 0);
       return { parts: [t('exporteerde alle gegevens van de organisatie'), ...(files > 0 ? [t(`, met ${files} bestanden`)] : [])] };
     }
-    // Gerrie aanzetten (migratie 20261112160000): wie akkoord ging dat de AI
+    // Gerrie aanzetten (migratie 20261112190000): wie akkoord ging dat de AI
     // zijn gegevens leest, en wie dat weer introk.
     case 'ai_enabled': return { parts: [t('zette Gerrie (AI) aan en ging akkoord met de uitleg')] };
     case 'ai_disabled': {

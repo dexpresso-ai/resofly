@@ -177,7 +177,7 @@ Deno.serve(async (req) => {
     const ctx = await buildContext(organizationId, role, user);
     const caps = agentCapabilities(role, ctx.moduleAccess);
     if (!caps.canUse) throw new HttpError('Je hebt in deze organisatie geen toegang tot Gerrie, en dus ook niet tot agents.', 403);
-    // Agents zijn Gerrie: wie hem niet zelf aanzette (20261112160000), maakt,
+    // Agents zijn Gerrie: wie hem niet zelf aanzette (20261112190000), maakt,
     // start of beheert ook geen agents.
     if (!(await hasAiConsent(supabaseAdmin, user.id, organizationId))) throw new HttpError(AI_CONSENT_REFUSAL, 403);
 

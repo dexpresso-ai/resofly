@@ -7,7 +7,9 @@ import {
   contrastRatio,
   headerTheme,
   loginTheme,
+  logoLostShare,
   logoNeedsPlate,
+  logoPlate,
   sanitizeStoredBranding,
   type BrandingPayload,
 } from './branding.ts';
@@ -159,7 +161,61 @@ test('kleuren uit een logo: doorzichtig telt niet, wit alleen voor de gemiddelde
   assert.deepEqual(summary.colors, ['#0F2A4A', '#E4572E']);
   // Gemiddelde van de acht zichtbare pixels, wit meegeteld.
   assert.equal(summary.ink, '#806B70');
-  assert.deepEqual(summarizeLogoPixels([0, 0, 0, 0]), { ink: null, colors: [] });
+  assert.deepEqual(summarizeLogoPixels([0, 0, 0, 0]), { ink: null, colors: [], luminance: [] });
+});
+
+// ── Het logo op de kop van het portaal (2026-11-12) ─────────────────────────
+
+/** Een logo als telling: zoveel pixels van elke kleur, allemaal zichtbaar. */
+function logoPixels(parts: Array<[string, number]>): number[] {
+  const data: number[] = [];
+  for (const [hex, count] of parts) {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    for (let i = 0; i < count; i += 1) data.push(r, g, b, 255);
+  }
+  return data;
+}
+
+test('de helderheid van een logo in twintig delen, van donker naar licht', () => {
+  const { luminance } = summarizeLogoPixels(logoPixels([['#FFFFFF', 2], ['#000000', 2]]));
+  assert.equal(luminance.length, 20);
+  assert.deepEqual(luminance.slice(0, 10), Array(10).fill(0));
+  assert.deepEqual(luminance.slice(10), Array(10).fill(1));
+});
+
+test('donkere letters naast een fel beeldmerk krijgen op de donkere kop een licht plaatje', () => {
+  // Bakkerij Bloem uit de mobiele test: donkergroene letters, een groen
+  // beeldmerk en wat wit. Gemiddeld haalt het de 2,6 : 1 op de kop, dus vóór
+  // 2026-11-12 kwam er geen plaatje en vielen de letters weg.
+  const h = headerTheme(branding('#FFD966', null));
+  const kop = [h.top, h.mid];
+  const logo = summarizeLogoPixels(logoPixels([['#1F3B2D', 45], ['#2E8B57', 40], ['#FFFFFF', 15]]));
+  assert.equal(logoNeedsPlate(logo.ink, kop), false, 'alleen op de gemiddelde kleur: geen plaatje');
+  assert.ok(logoLostShare(logo.luminance, h.mid) >= 0.4, 'de letters vallen weg op de kop');
+  assert.equal(logoPlate(logo.ink, kop, logo.luminance), 'light');
+});
+
+test('een logo dat overal leest, krijgt geen plaatje', () => {
+  const h = headerTheme(branding('#FFD966', null));
+  const wit = summarizeLogoPixels(logoPixels([['#FFFFFF', 60], ['#FFD966', 40]]));
+  assert.equal(logoPlate(wit.ink, [h.top, h.mid], wit.luminance), null);
+});
+
+test('een plaatje dat niet helpt, komt er niet', () => {
+  // Een witte naam naast een donkerblauw beeldmerk: op de kop valt het
+  // beeldmerk weg, op een wit plaatje de (grotere) naam. Dan liever niets.
+  const h = headerTheme(branding('#FFD966', null));
+  const logo = summarizeLogoPixels(logoPixels([['#FFFFFF', 60], ['#0F1B2E', 40]]));
+  assert.ok(logoLostShare(logo.luminance, h.mid) >= 0.3);
+  assert.equal(logoPlate(logo.ink, [h.top, h.mid], logo.luminance), null);
+});
+
+test('zonder telling blijft de oude regel: de gemiddelde kleur beslist', () => {
+  const h = headerTheme(branding('#FFD966', null));
+  assert.equal(logoPlate('#1A1A1A', [h.top, h.mid]), 'light');
+  assert.equal(logoPlate('#F2F2F2', ['#FFFFFF']), 'dark');
+  assert.equal(logoPlate('#F2F2F2', [h.top, h.mid]), null);
+  assert.equal(logoLostShare([], h.mid), 0);
 });
 
 // ── Het inlogscherm (2026-11-05) ────────────────────────────────────────────

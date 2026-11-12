@@ -6,7 +6,7 @@ import { AI_CONSENT_REFUSAL, AI_TERMS_VERSION, consentIsActive, hasAiConsent } f
 import { AI_CONSENT_KEYS, AI_TERMS_VERSION as APP_TERMS_VERSION } from '../../../src/lib/aiConsent.ts';
 
 /**
- * Gerrie aanzetten (20261112160000): de gebruiker zet de AI zelf aan, met
+ * Gerrie aanzetten (20261112190000): de gebruiker zet de AI zelf aan, met
  * akkoord op drie punten. Hier staat dat elke deur naar de AI dat akkoord
  * weegt, en dat de database, de edge functions en de app dezelfde versie van
  * de tekst en dezelfde drie punten kennen.
@@ -18,7 +18,7 @@ import { AI_CONSENT_KEYS, AI_TERMS_VERSION as APP_TERMS_VERSION } from '../../..
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const migrationsDir = new URL('../../migrations/', import.meta.url);
 const migrationFiles = readdirSync(migrationsDir).filter((name) => name.endsWith('.sql')).sort();
-const MIGRATION = '20261112160000_gerrie_aanzetten.sql';
+const MIGRATION = '20261112190000_gerrie_aanzetten.sql';
 const sql = read(`../../migrations/${MIGRATION}`);
 
 function latestDefinition(fn: string): { file: string; body: string } {

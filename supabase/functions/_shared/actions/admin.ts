@@ -719,7 +719,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       brand_heading_font: { type: 'string', enum: [...BRAND_FONTS], description: 'Lettertype voor koppen.' },
       brand_body_font: { type: 'string', enum: [...BRAND_FONTS], description: 'Lettertype voor lopende tekst; "bebas" kan hier niet.' },
       brand_footer_text: { type: 'string', description: 'Afsluitzin onder de klantpagina\'s (hoogstens 160 tekens). Een lege waarde haalt hem weg.' },
-      brand_hide_powered_by: { type: 'boolean', description: 'true verbergt "Geleverd via ResoFly" op de publieke galerijpagina.' },
+      brand_hide_powered_by: { type: 'boolean', description: 'true verbergt "Geleverd via ResoFly" onder de offerte-, factuur-, contract- en boekingspagina en de galerij. Niet in het klantportaal: daar staat altijd dat het platform beschikbaar wordt gesteld door ResoFly.' },
       brand_login_bg_color: { type: 'string', description: 'Achtergrond van het inlogscherm van het klantportaal, als hexcode. "automatisch" zet hem terug: dan is het de kopkleur.' },
       brand_login_card_color: { type: 'string', description: 'Kleur van de inlogkaart, als hexcode. "automatisch" zet hem terug: dan volgt hij de sfeer (licht of donker). De tekst erop wordt vanzelf leesbaar gemaakt.' },
       brand_login_button_color: { type: 'string', description: 'Kleur van de knop op het inlogscherm, als hexcode. "automatisch" zet hem terug: dan is het de merkkleur.' },

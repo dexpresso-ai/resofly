@@ -173,7 +173,7 @@ export interface OrganizationContext {
   aiConsents: AiConsent[];
 }
 
-/** Een rij uit ai_consents (migratie 20261112160000): Gerrie aan of uit, per organisatie en gebruiker. */
+/** Een rij uit ai_consents (migratie 20261112190000): Gerrie aan of uit, per organisatie en gebruiker. */
 export interface AiConsent {
   organization_id: UUID;
   user_id: UUID;
