@@ -8,7 +8,7 @@ import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type Pers
 import { Breadcrumbs } from './components/Breadcrumbs';
 import type { CrumbTarget } from './lib/breadcrumbs';
 import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type DataGroup, type GroupState } from './lib/dataGroups';
-import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
+import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, isAdminRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
 import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFromPath, isPageInApp, isRunningInstalled, standaloneAppFromPath, WORKSPACE_APP, type InstallableApp, type StandaloneApp } from './lib/standaloneApps';
 import { captureInstallPrompt } from './lib/installPrompt';
 import { InstallAppCard } from './components/StandaloneApps';
@@ -101,6 +101,7 @@ import {
   loadInvoiceMollieStatus,
   updateOrganizationMemberRole,
   setMemberModuleAccess,
+  setAiConsent,
   updateRow,
   upsertCompanySettings,
   markTicketRead,
@@ -195,6 +196,8 @@ import { GerrieChat, askGerrie } from './components/GerrieChat';
 import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
 import { watchForReturn, type FinishedCall } from './lib/callBridge';
 import { GerrieCommandCenter, type GerrieConversationsFocus } from './features/GerrieCommandCenter';
+import { GerrieAanzettenPage, type AiConsentChange } from './components/GerrieAanzetten';
+import { AI_TERMS_VERSION, consentIsActive } from './lib/aiConsent';
 import type { GerrieActionHandlers, GerrieProposal, GerrieProposalLine } from './lib/gerrie-api';
 import { runRegistryAction } from './lib/actions';
 import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
@@ -246,6 +249,8 @@ import './styles/gesprekken.css';
 // Losse apps (2026-11-12): de installeerkaart, Instellingen → Apps en de weg
 // terug naar de werkruimte. Alleen eigen klassen (app-*).
 import './styles/apps.css';
+// Gerrie aanzetten (2026-11-12): de drie punten en het vinkje. Eigen klassen (gaz-*).
+import './styles/gerrie-aanzetten.css';
 import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
@@ -283,7 +288,7 @@ type EditMode =
   | null;
 
 const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], prepaidExpenses: [], prepaidExpenseReleases: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankAllocations: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null, bankTransactionsToReconcile: 0, vatReturnsToFile: 0 };
-const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null };
+const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null, aiConsent: null, aiConsents: [] };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 /** Volgnummer voor sprongen naar de pagina Berichten (zie openCommunication). */
 let commFocusSeq = 0;
@@ -1083,7 +1088,11 @@ function App() {
   // Modulerechten van dit lid: bepaalt welke modules in de navigatie verschijnen
   // en of er binnen een module gewijzigd mag worden. De database dwingt hetzelfde
   // af (restrictive RLS + schrijf-triggers); dit is de beleving eromheen.
-  const permissions = useMemo(() => buildPermissions(activeMembership), [activeMembership]);
+  // Gerrie staat pas aan als deze gebruiker dat zelf deed (ai_consents). Zonder
+  // akkoord is de module Gerrie in de hele app dicht, behalve de pagina Gerrie
+  // met het scherm om hem aan te zetten.
+  const aiEnabled = consentIsActive(organizationContext.aiConsent);
+  const permissions = useMemo(() => buildPermissions(activeMembership, { aiEnabled }), [activeMembership, aiEnabled]);
   // In een losse app toont de navigatie (zijbalk, Zenit, duimbalk) alleen de
   // pagina's van die app. Alleen voor het menu: de rechten zelf, het laden en
   // de pagina's blijven die van de werkruimte. Een klant openen vanuit een
@@ -1701,6 +1710,25 @@ function App() {
     await setMemberModuleAccess(memberId, moduleAccess);
     await loadWorkspace();
   }
+
+  /**
+   * Gerrie aan- of uitzetten voor jezelf. De nieuwe stand gaat meteen in de
+   * context van de organisatie, zonder de werkruimte opnieuw te laden: de chat
+   * en de knoppen van Gerrie verschijnen of verdwijnen dan in één keer.
+   */
+  const changeAiConsent: AiConsentChange = async (enabled, acknowledged) => {
+    const organizationId = organizationContext.activeOrganization?.id;
+    if (!organizationId) throw new Error('Geen actieve organisatie.');
+    const row = await setAiConsent(organizationId, enabled, AI_TERMS_VERSION, acknowledged);
+    setOrganizationContext(ctx => {
+      if (ctx.activeOrganization?.id !== organizationId) return ctx;
+      // Een owner of admin ziet het team onder Instellingen → AI; daar staat hij zelf ook in.
+      const aiConsents = row && isAdminRole(ctx.activeMembership?.role)
+        ? [...ctx.aiConsents.filter(c => c.user_id !== row.user_id), row]
+        : ctx.aiConsents;
+      return { ...ctx, aiConsent: row, aiConsents };
+    });
+  };
 
   async function disableMember(memberId: string) {
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
@@ -4359,6 +4387,8 @@ function App() {
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient} teamMembers={workMembers} currentUserId={currentUserId} onNewFromMail={openClientFromMail} inboxRefreshKey={inboxRevision}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} onResolve={(item) => void setTicketStatus(item, 'resolved')} onReopen={(item) => void setTicketStatus(item, TICKET_REOPEN_STATUS)} unreadTicketIds={ticketUnreadIds} teamMembers={workMembers} currentUserId={currentUserId}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} active={view.id === activeTab.id} />;
+    // Gerrie staat voor deze gebruiker nog uit: eerst het scherm om hem aan te zetten.
+    if (page === 'gerrie' && permissions.gerrieNeedsConsent) return <GerrieAanzettenPage organizationName={activeOrg.name} consent={organizationContext.aiConsent} onChange={changeAiConsent} />;
     if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} conversationsFocus={view.gerrieConversationsFocus ?? null} onConversationsFocusConsumed={() => setGerrieConversationsFocus(null)} isAdmin={activeMembership?.role === 'owner' || activeMembership?.role === 'admin'} onOpenDecisionTarget={openDecisionTarget} currentUserId={currentUserId} teamMembers={workMembers} {...gerrieActions} />;
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       openCampaignId={view.pendingDraft?.kind === 'campaign' ? String(view.pendingDraft.payload.id ?? '') : null} onCampaignOpened={() => setPendingDraft(null)}/>;
@@ -4406,7 +4436,7 @@ function App() {
       const calendarSettings = permissions.canRead('calendar')
         ? <CalendarPage mode="settings" linkNotice={calendarLinkNotice} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={orgCanWrite && permissions.canWrite('calendar')} canAdmin={canAdmin} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>
         : null;
-      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings} permissions={permissions} onOpenAuditTarget={openAuditTarget}/>;
+      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings} permissions={permissions} onOpenAuditTarget={openAuditTarget} onSetAiConsent={changeAiConsent}/>;
     }
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
   }

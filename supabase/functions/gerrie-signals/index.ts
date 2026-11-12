@@ -23,6 +23,7 @@ import {
 } from '../_shared/gerrieCore.ts';
 import type { Emit, GerrieContext, OrganizationRole, Proposal, Usage } from '../_shared/gerrieCore.ts';
 import { localYmd, wallToUtc } from '../_shared/schedule.ts';
+import { hasAiConsent } from '../_shared/aiConsent.ts';
 import {
   GERRIE_KINDS, KIND_MODULE, KIND_ORIGIN, SIGNAL_KINDS,
   buildGerrieBrief, buildRuleCard, checkGerrieProposal, severityForProposal,
@@ -206,6 +207,10 @@ async function processSignal(signal: SignalRow): Promise<SignalOutcome> {
 
   // Gerrie-kaart: handen (actor), dagcap, budget fail-closed, dan één opdracht.
   if (!actor) return skipSignal(signal, 'geen actieve owner/admin als actor');
+  // Een Gerrie-kaart gaat met de gegevens van de actor naar het model. Dan moet
+  // die actor Gerrie zelf hebben aangezet (20261112190000). Regelkaarten
+  // (hierboven) gebruiken geen model en gaan gewoon door.
+  if (!(await hasAiConsent(supabaseAdmin, actor.id, org))) return skipSignal(signal, 'Gerrie staat uit voor de actor van de beslislijst');
   const cap = Number(settings.max_gerrie_cards_per_day ?? 10);
   const today = await countGerrieCardsToday(org, settings.timezone || 'Europe/Amsterdam');
   if (today >= cap) return skipSignal(signal, `dagcap van ${cap} Gerrie-kaarten bereikt`);

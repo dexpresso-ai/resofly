@@ -49,7 +49,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // Gerrie is van degene die hem voerde, niet van de organisatie.
 // 20261112170000 (galerij opruimen) zet gallery_purge_queue erbij: de
 // opruimwachtrij van de media-worker, 'intern', net als storage_purge_queue.
-export const EXPORT_SCHEMA_VERSION = '20261112170000';
+// 20261112190000 (Gerrie aanzetten) zet ai_consents erbij: wie in deze
+// organisatie Gerrie aanzette, wanneer en onder welke voorwaarden. Gaat mee:
+// het akkoord hoort bij de administratie, en de eigenaar en de beheerders
+// lezen het al in de app (Instellingen → AI).
+export const EXPORT_SCHEMA_VERSION = '20261112190000';
 
 export type TableKind =
   | 'export'
@@ -324,6 +328,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   ai_signal_settings: { kind: 'export', orderBy: ['organization_id'] },
   ai_action_audit: { kind: 'export' },
   ai_usage: { kind: 'export' },
+  ai_consents: { kind: 'export', orderBy: ['organization_id', 'user_id'] },
   ai_conversations: { kind: 'prive', reason: PRIVE },
   ai_messages: { kind: 'prive', reason: PRIVE },
   ai_signals: { kind: 'intern', reason: WACHTRIJ },

@@ -68,6 +68,17 @@ test('zinnen: alle gegevens exporteren', () => {
     'Jij exporteerde alle gegevens van de organisatie');
 });
 
+test('zinnen: Gerrie aan- en uitzetten', () => {
+  assert.equal(sentenceText(entry({ action: 'ai_enabled', entity_type: 'organization', entity_label: 'Gerrie (AI)' }), lookup),
+    'anne zette Gerrie (AI) aan en ging akkoord met de uitleg');
+  assert.equal(sentenceText(entry({ action: 'ai_disabled', entity_type: 'organization', entity_label: 'Gerrie (AI)', actor_user_id: ME, metadata: { agents_gepauzeerd: 2 } }), lookup),
+    'Jij zette Gerrie (AI) uit; 2 agents gingen op pauze');
+  assert.equal(sentenceText(entry({ action: 'ai_disabled', entity_type: 'organization', entity_label: 'Gerrie (AI)', metadata: { agents_gepauzeerd: 1 } }), lookup),
+    'anne zette Gerrie (AI) uit; één agent ging op pauze');
+  assert.equal(sentenceText(entry({ action: 'ai_disabled', entity_type: 'organization', entity_label: 'Gerrie (AI)', metadata: { agents_gepauzeerd: 0 } }), lookup),
+    'anne zette Gerrie (AI) uit');
+});
+
 test('zinnen: facturen versturen, betalen, herinneren', () => {
   assert.equal(sentenceText(entry({ action: 'invoice_sent_to_client', entity_type: 'invoice', entity_label: '2026-014' }), lookup),
     'anne verstuurde factuur 2026-014 naar de klant');

@@ -515,6 +515,13 @@ function rpc(fn, body = null) {
   if (folderResult !== undefined) return folderResult;
   switch (fn) {
     case 'ensure_user_default_organization': return null;
+    // Gerrie aan- of uitzetten (2026-11-12): de rij zoals set_ai_consent hem teruggeeft.
+    case 'set_ai_consent': {
+      const now = new Date().toISOString();
+      const enabled = body?.p_enabled === true;
+      return { organization_id: seed.ids.ORG, user_id: seed.ids.USER, enabled, terms_version: String(body?.p_terms_version ?? '2026-11-12'),
+        acknowledged: enabled ? body?.p_acknowledged ?? [] : [], accepted_at: enabled ? now : null, disabled_at: enabled ? null : now, created_at: now, updated_at: now };
+    }
     // Instellingen → Domein: de werkruimte heeft al een adres.
     case 'client_subdomain_check': return subdomainCheck(WORKSPACE_OVERVIEW.subdomain.name, body);
     case 'client_subdomain_claim': return { name: String(body?.p_name ?? ''), previous: WORKSPACE_OVERVIEW.subdomain.name, changed: true };
@@ -666,7 +673,10 @@ export async function installMock(context, options = {}) {
       // pagina: de rest van de seed heeft bewust geen boekhouding.
       // `prepaid: true`: vooruitbetaalde kosten met de rekening 1350 erbij.
       const prepaid = options.prepaid ? prepaidRows() : null;
-      const rows = options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
+      // `aiOff: true`: de gebruiker heeft Gerrie nog niet aangezet (2026-11-12);
+      // de pagina Gerrie toont dan het scherm om hem aan te zetten.
+      const rows = options.aiOff && table === 'ai_consents' ? []
+        : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
         : prepaid && table in prepaid ? prepaid[table]
         : restRows(table, url, setup);
       const accept = req.headers()['accept'] ?? '';

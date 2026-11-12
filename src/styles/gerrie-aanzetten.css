@@ -1,0 +1,102 @@
+/* ============================================================
+   Gerrie aanzetten (2026-11-12)
+
+   Het scherm waarmee je Gerrie zelf aanzet: drie punten met elk een vinkje
+   en één knop. Op de pagina Gerrie zolang hij uit staat (.gaz-page), en in
+   Instellingen → AI (.gaz-settings), waar je hem ook weer uitzet.
+
+   Een leesbare kolom, geen dashboard: dit is tekst die je echt hoort te
+   lezen. Alleen app-variabelen, zodat het Dag/Nacht en elke look volgt.
+   ============================================================ */
+
+.gaz{
+  width:100%;max-width:760px;margin:0 auto;padding:26px 0 40px;
+  display:flex;flex-direction:column;gap:18px;
+}
+.gaz-hero h2{margin:0 0 8px;font-size:24px;line-height:1.2;color:var(--text)}
+.gaz-hero p{margin:0;color:var(--muted);font-size:14.5px;line-height:1.55}
+
+/* ── Het formulier ────────────────────────────────────────── */
+.gaz-form{display:flex;flex-direction:column;gap:14px}
+.gaz-note{
+  margin:0;padding:10px 14px;border-radius:10px;font-size:13.5px;line-height:1.5;color:var(--text);
+  background:rgba(var(--warn-rgb),.12);border:1px solid rgba(var(--warn-rgb),.35);
+}
+.gaz-points{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.gaz-point{
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start;
+  padding:16px 18px;border-radius:var(--r2,14px);background:var(--bg2);border:1px solid var(--border);
+  transition:border-color .15s,box-shadow .15s;
+}
+.gaz-point.is-checked{border-color:rgba(var(--accent-rgb),.55);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.10)}
+.gaz-point-icon{
+  display:grid;place-items:center;width:36px;height:36px;border-radius:11px;
+  color:var(--accent);background:rgba(var(--accent-rgb),.12);
+}
+.gaz-point-body{min-width:0}
+.gaz-point-body h3{margin:2px 0 6px;font-size:15.5px;line-height:1.3;color:var(--text)}
+.gaz-point-nr{color:var(--muted2);font-weight:600}
+.gaz-point-body p{margin:0 0 12px;font-size:13.5px;line-height:1.55;color:var(--muted)}
+
+/* Het vinkje is de hele regel: groot genoeg om op een telefoon te raken. */
+.gaz-check{
+  display:flex;gap:10px;align-items:flex-start;cursor:pointer;
+  padding:10px 12px;border-radius:10px;background:var(--bg3);border:1px solid var(--border);
+  font-size:13.5px;line-height:1.45;color:var(--text);
+}
+.gaz-check:hover{border-color:rgba(var(--accent-rgb),.45)}
+.gaz-check input{
+  flex:none;width:18px;height:18px;margin:1px 0 0;accent-color:var(--accent);cursor:pointer;
+}
+.gaz-check input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.gaz-point.is-checked .gaz-check{background:rgba(var(--accent-rgb),.08);border-color:rgba(var(--accent-rgb),.4)}
+
+.gaz-fine{margin:0;font-size:12.5px;line-height:1.5;color:var(--muted2)}
+.gaz-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.gaz-actions .btn{display:inline-flex;align-items:center;gap:7px}
+.gaz-hint{font-size:12.5px;color:var(--muted2)}
+
+/* ── Instellingen → AI ────────────────────────────────────── */
+.gaz-settings{display:flex;flex-direction:column;gap:14px}
+.gaz-settings .gaz-point{background:var(--bg3)}
+.gaz-settings .gaz-check{background:var(--bg2)}
+.gaz-state{
+  flex:none;padding:4px 11px;border-radius:999px;font-size:12px;font-weight:700;
+  color:var(--muted);background:var(--bg3);border:1px solid var(--border);
+}
+.gaz-state.is-on{color:var(--accent-g);background:rgba(var(--ok-rgb),.12);border-color:rgba(var(--ok-rgb),.35)}
+.gaz-on p{margin:0 0 10px;color:var(--text);font-size:14px}
+.gaz-agreed{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:7px}
+.gaz-agreed li{display:flex;gap:9px;align-items:flex-start;font-size:13.5px;line-height:1.45;color:var(--muted)}
+.gaz-agreed li svg{flex:none;margin-top:2px;color:var(--accent-g)}
+.gaz-agreed strong{color:var(--text)}
+
+.gaz-team{border-top:1px solid var(--border);padding-top:14px}
+.gaz-team h4{margin:0 0 4px;font-size:14px;color:var(--text)}
+.gaz-team-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column}
+.gaz-team-list li{
+  display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:8px 0;border-bottom:1px solid var(--border);font-size:13.5px;
+}
+.gaz-team-list li:last-child{border-bottom:0}
+.gaz-team-name{min-width:0;overflow-wrap:anywhere;color:var(--text)}
+.gaz-team-state{font-size:12.5px;color:var(--muted)}
+.gaz-team-state.is-on{color:var(--accent-g);font-weight:600}
+.gaz-team-state.is-outdated{color:var(--text)}
+
+.gaz-off-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:14px;line-height:1.5;color:var(--text)}
+
+/* ── Telefoon ─────────────────────────────────────────────── */
+@media (max-width:640px){
+  .gaz{padding:14px 0 28px;gap:14px}
+  .gaz-hero h2{font-size:20px}
+  /* Het icoon naast de kop in plaats van op een eigen regel: de uitleg en het
+     vinkje krijgen dan de hele breedte. */
+  .gaz-point{grid-template-columns:auto minmax(0,1fr);gap:8px 10px;padding:14px}
+  .gaz-point-body{display:contents}
+  .gaz-point-icon{width:30px;height:30px;border-radius:9px;align-self:center}
+  .gaz-point-body h3{margin:0;align-self:center}
+  .gaz-point-body p,.gaz-check{grid-column:1 / -1}
+  .gaz-point-body p{margin:2px 0 4px}
+  .gaz-actions .btn{width:100%;justify-content:center}
+}

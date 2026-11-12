@@ -51,6 +51,7 @@ import {
   type QueuedAgentEvent,
 } from '../_shared/agentEvents.ts';
 import { memberModuleLevel } from '../_shared/roles.ts';
+import { AI_CONSENT_REFUSAL, hasAiConsent } from '../_shared/aiConsent.ts';
 import { buildScheduledRunMessage, decisionStatusLabel, isNothingToReport, MEMORY_RUNS, type PastRun } from '../_shared/agentRun.ts';
 import { sendViaResend } from '../_shared/resend.ts';
 
@@ -176,6 +177,9 @@ Deno.serve(async (req) => {
     const ctx = await buildContext(organizationId, role, user);
     const caps = agentCapabilities(role, ctx.moduleAccess);
     if (!caps.canUse) throw new HttpError('Je hebt in deze organisatie geen toegang tot Gerrie, en dus ook niet tot agents.', 403);
+    // Agents zijn Gerrie: wie hem niet zelf aanzette (20261112190000), maakt,
+    // start of beheert ook geen agents.
+    if (!(await hasAiConsent(supabaseAdmin, user.id, organizationId))) throw new HttpError(AI_CONSENT_REFUSAL, 403);
 
     const action = String(body.action || '');
     const id = String(body.id || '');
@@ -396,6 +400,15 @@ async function executeAgentRun(
   if (!caps.canUse) {
     await settle('skipped', runId);
     return await cancelRun(agentId, runId, log, 'De medewerker namens wie deze agent draait, heeft geen toegang meer tot Gerrie. Agent gepauzeerd.', 'gerrie_closed');
+  }
+  // Het akkoord van VANDAAG. Wie Gerrie uitzet, pauzeert zijn agents al
+  // (set_ai_consent), maar een run die op dat moment al geclaimd was, of een
+  // bundel gebeurtenissen die al klaarstond, komt hier nog langs. Zonder deze
+  // regel las zo'n agent je gegevens nog namens iemand die de AI net uitzette.
+  // Ook een akkoord onder een oudere tekst telt hier niet (consentIsActive).
+  if (!(await hasAiConsent(supabaseAdmin, runAsUserId, orgId))) {
+    await settle('skipped', runId);
+    return await cancelRun(agentId, runId, log, 'Gerrie staat uit voor de medewerker namens wie deze agent draait. Agent gepauzeerd; zet hem weer aan zodra Gerrie weer aanstaat.', 'ai_off');
   }
   // Alleen gebeurtenissen uit modules die de eigenaar VANDAAG mag lezen. Een
   // ticket-gebeurtenis voor iemand zonder Tickets gaat niet naar het model,

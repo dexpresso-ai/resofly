@@ -23,6 +23,7 @@ import {
 import { agentForEditing } from '../_shared/agentEditing.ts';
 import type { Emit, HttpStatus } from '../_shared/gerrieCore.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
+import { AI_CONSENT_REFUSAL, hasAiConsent } from '../_shared/aiConsent.ts';
 import { handleReportChat, handleReportData } from '../_shared/gerrieReports.ts';
 
 // Toegestane frontend-origins (CORS + harde origin-controle). Alleen HTTP-schil.
@@ -49,6 +50,13 @@ Deno.serve(async (req) => {
     // maar deze functie draait met de service-role en komt daar niet langs.
     if (await getModuleLevel(supabaseAdmin, user.id, organizationId, 'gerrie') === 'none') {
       throw new HttpError('Je hebt in deze organisatie geen toegang tot Gerrie.', 403);
+    }
+    // En de gebruiker zelf moet Gerrie hebben aangezet, met akkoord op wat dat
+    // betekent (20261112190000). Voor élke handeling hier, ook die zonder model
+    // (verbruik, een verslag verversen): staat Gerrie uit, dan is hij er niet.
+    // Zonder deze regel kon een directe aanroep om het scherm heen.
+    if (!(await hasAiConsent(supabaseAdmin, user.id, organizationId))) {
+      throw new HttpError(AI_CONSENT_REFUSAL, 403);
     }
 
     // Rapportages (Statistieken → Rapportages): een eigen pagina per vraag, alleen
