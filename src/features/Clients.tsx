@@ -1037,6 +1037,12 @@ function ClientCommunication({ client, data, organizationId, canWrite, onUnreadC
   });
   const clientFolders = useMemo(() => foldersOfClient(mailFolders.folders, client.id), [mailFolders.folders, client.id]);
   useEffect(() => { setSelecting(false); setSelectedThreads(new Set()); }, [client.id]);
+  // Een goedgekeurd voorstel van Gerrie verplaatste mail: de gesprekken opnieuw laden.
+  useEffect(() => {
+    if (mailFolders.revision === 0) return;
+    reload().catch(() => { /* best effort */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mailFolders.revision]);
 
   const target = mailRecipientFor(data, client.id, recipientKey);
   const recipient = target?.email ?? '';

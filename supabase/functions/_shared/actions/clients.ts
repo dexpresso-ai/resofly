@@ -639,7 +639,8 @@ export const CLIENT_ACTIONS: ActionDef[] = [
     module: 'content',
     kind: 'write',
     description:
-      'Maakt een map aan onder een klant (en optioneel binnen een projectmap of een bestaande map). Mappen zijn de indeling van het klantdossier en van de Inhoud-verkenner; notities, documenten en bestanden gaan erin.',
+      'Maakt een map aan onder een klant (en optioneel binnen een projectmap of een bestaande map). Mappen zijn de indeling van het klantdossier en van de Inhoud-verkenner; notities, documenten en bestanden gaan erin. ' +
+      'Een map voor de MAIL van een klant (Berichten) is iets anders: daarvoor is mail_folder.create.',
     keywords: ['map', 'folder', 'dossier', 'indeling'],
     input: {
       client_id: { type: 'string', description: 'Klant waar de map onder valt.' },
@@ -746,7 +747,7 @@ export const CLIENT_ACTIONS: ActionDef[] = [
     label: 'Mappen van een klantdossier bekijken',
     module: 'content',
     kind: 'read',
-    description: 'Geeft de mappenstructuur van een klant (of van de hele organisatie), met id, naam, bovenliggende map en eventuele projectkoppeling.',
+    description: 'Geeft de mappenstructuur van een klant (of van de hele organisatie) voor notities, documenten en bestanden, met id, naam, bovenliggende map en eventuele projectkoppeling. De mappen van de klantMAIL staan in mail_folder.list.',
     keywords: ['mappen', 'folders', 'dossierstructuur'],
     input: {
       client_id: { type: 'string', description: 'Beperk tot één klant (optioneel).' },

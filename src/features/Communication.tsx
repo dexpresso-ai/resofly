@@ -359,7 +359,16 @@ export function CommunicationPage({
       .then(rows => { if (!cancelled) setClientThreads(rows); })
       .catch(() => { if (!cancelled) setClientThreads([]); });
     return () => { cancelled = true; };
-  }, [organizationId, focusClientId, activity]);
+  }, [organizationId, focusClientId, activity, mailFolders.revision]);
+
+  // Gerrie heeft mail verplaatst of een map gemaakt (een goedgekeurd voorstel):
+  // de lijst laadt opnieuw, zodat de mail meteen op zijn nieuwe plek staat.
+  const folderRevisionRef = useRef(mailFolders.revision);
+  useEffect(() => {
+    if (mailFolders.revision === folderRevisionRef.current) return;
+    folderRevisionRef.current = mailFolders.revision;
+    reload().catch(() => { /* best effort */ });
+  }, [mailFolders.revision, reload]);
 
   const clientById = useMemo(() => new Map(data.clients.map(c => [c.id, c])), [data.clients]);
   const notesByTicket = useMemo(() => groupNotesByTicket(data.ticketNotes), [data.ticketNotes]);

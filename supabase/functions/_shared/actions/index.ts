@@ -1,5 +1,6 @@
 import { ActionError, type ActionDef } from './types.ts';
 import { CLIENT_ACTIONS } from './clients.ts';
+import { MAIL_FOLDER_ACTIONS } from './mailFolders.ts';
 import { FINANCE_ACTIONS } from './finance.ts';
 import { BOOKKEEPING_ACTIONS } from './bookkeeping.ts';
 import { BUSINESS_ACTIONS } from './business.ts';
@@ -26,6 +27,7 @@ import { REMOVAL_ACTIONS } from './removal.ts';
  */
 export const ACTIONS: ActionDef[] = [
   ...CLIENT_ACTIONS,
+  ...MAIL_FOLDER_ACTIONS,
   ...FINANCE_ACTIONS,
   ...BOOKKEEPING_ACTIONS,
   ...BUSINESS_ACTIONS,
