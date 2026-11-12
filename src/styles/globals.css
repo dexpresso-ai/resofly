@@ -12706,3 +12706,62 @@ button.alog-feed-row:hover{background:var(--bg3)}
   .client-domain-current{padding:9px 10px}
   .client-domain-host{font-size:13px}
 }
+
+/* ── AGENDA · MEER OVERZICHT, MEER KLEUR (2026-11-12) ─────────────────────
+   "Zorg dat de agenda een groter deel van het scherm krijgt, voor meer
+   overzicht, en maak de kleuren kleurrijker: ze zijn nu zo mat."
+
+   Ruimte: de rijhoogte past nu 07:00–20:00 in beeld (CalendarPage.tsx,
+   FIT_START/FIT_END); hier de randen eromheen. De dagkoppen van de agenda
+   staan op één regel ("MA 9", 40px in plaats van 52px), de werkbalk is
+   platter, en op de telefoon staat de dag in de dagweergave niet meer twee
+   keer: de weekstrook erboven zegt hem al.
+
+   Kleur: een taakblok was 14% projectkleur door het vlak. In het donker werd
+   dat bruin en navy, in het licht bijna wit. Nu 30% (gemengd in oklab, dat
+   houdt de kleur helderder dan sRGB), een volle kleurstreep links, een rand in
+   de volle kleur en de titel in de kleur zelf. De stippelrand en de arcering
+   blijven: een taak moet naast een (vol gevulde) afspraak nog als taak te
+   lezen zijn. De balkjes in "Hele dag" krijgen de kleur van hun project in
+   plaats van overal goud. Privé-afspraken worden minder grijs. */
+
+/* 1 ── Ruimte (alleen de agenda zelf; weekplanner en boekingen hebben eigen koppen) */
+.calendar-page.calendar-agenda-page .calendar-toolbar-premium{padding-top:5px;padding-bottom:5px}
+@media(min-width:621px){
+  .calendar-page.calendar-agenda-page .tb-dh{height:40px;flex-direction:row;gap:6px;padding:2px}
+  .calendar-page.calendar-agenda-page .tb-dh-hit{flex-direction:row;gap:7px;padding:3px 10px}
+  .calendar-page.calendar-agenda-page .tb-dh-num{width:26px;height:26px;font-size:14px}
+  .calendar-page.calendar-agenda-page .tb-allday-row{top:40px}
+}
+/* Telefoon, dagweergave: de weekstrook boven het rooster noemt de dag al. De
+   kop eronder ("DO 12", met GMT) kostte 56px van een scherm dat al krap is. */
+.calendar-page .cal-daystrip + .cal-stage .tb-single-day .tb-day-headers{display:none}
+.calendar-page .cal-daystrip + .cal-stage .tb-single-day .tb-allday-row{top:0}
+
+/* 2 ── Kleur: taakblokken */
+.calendar-agenda-page .tb-ev.tb-task-block{
+  background-color:color-mix(in oklab, var(--event-color) 30%, var(--panel));
+  border:1.5px dashed color-mix(in oklab, var(--event-color) 90%, transparent);
+  box-shadow:inset 4px 0 0 var(--event-color)}
+.calendar-agenda-page .tb-ev.tb-task-block:hover{background-color:color-mix(in oklab, var(--event-color) 40%, var(--panel))}
+.calendar-agenda-page .tb-task-block .tb-ev-title{color:color-mix(in oklab, var(--event-color) 45%, var(--text))}
+[data-theme="light"] .calendar-agenda-page .tb-task-block .tb-ev-title{color:color-mix(in oklab, var(--event-color) 38%, var(--text))}
+/* De streep links hoort bij de kleur, niet bij de tekst: schuif die ervan af. */
+.calendar-agenda-page .tb-ev.tb-task-block:not(:has(.tb-ev-check)){padding-left:10px}
+
+/* 3 ── Kleur: "Hele dag"-balkjes van taken, in de kleur van hun project */
+.tb-ad-bar.tb-ad-bar-task{
+  background:color-mix(in oklab, var(--event-color, var(--accent)) 26%, var(--panel));
+  border:1px dashed color-mix(in oklab, var(--event-color, var(--accent)) 85%, transparent);
+  box-shadow:inset 3px 0 0 var(--event-color, var(--accent));
+  color:var(--text);padding-left:8px}
+.tb-ad-bar.tb-ad-bar-task:hover{filter:none;background:color-mix(in oklab, var(--event-color, var(--accent)) 38%, var(--panel))}
+
+/* 4 ── Privé-afspraken: herkenbaar, maar niet meer half grijs */
+.calendar-agenda-page .tb-ev-priv{filter:saturate(.85)}
+/* Een blok van een uur is bij de compactere uren "cozy" (tijd boven de titel);
+   2px bovenin hield de tijd tegen de rand aan. */
+.calendar-agenda-page .tb-ev-cozy{padding-top:4px}
+/* Maandweergave: een taak toont de kleur van zijn project, niet overal goud. */
+.cm-chip.is-task .cm-chip-dot,
+.cm-dayitem.is-task .cm-dayitem-dot{background:var(--event-color,var(--accent))}

@@ -3,6 +3,7 @@ import type React from 'react';
 import { CalendarDays, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, MessageSquare, PanelLeftClose, PanelLeftOpen, Play, Plus, Square, Wand2, X } from 'lucide-react';
 import type { AppData, CalendarEventLink, CalendarExternalEvent, OrganizationMember, PlannerDayCapacity, PlannerNote, Priority, Task, TaskStatus, UUID } from '../types';
 import { getCachedCalendarEvents, listCalendarEventsCached, loadCalendarIntegrations } from '../lib/calendar-api';
+import { vividCalendarColor } from '../lib/calendarColors';
 import { memberColor, memberInitials, memberShortName } from '../lib/members';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import { loggedMinutesByTask, useRunningTimer } from '../lib/useTimer';
@@ -366,7 +367,7 @@ export function WeekPlanner({
     loadCalendarIntegrations(organizationId)
       .then(payload => {
         if (cancelled) return;
-        setSourceColors(new Map(payload.sources.map(source => [source.id, source.color ?? '#FFD966'])));
+        setSourceColors(new Map(payload.sources.map(source => [source.id, vividCalendarColor(source.color)])));
       })
       // Geen agenda gekoppeld? Dan blijft het merkgoud de terugvalkleur.
       .catch(() => { /* de planner werkt door zonder agendakleuren */ });
