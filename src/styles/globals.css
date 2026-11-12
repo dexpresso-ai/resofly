@@ -5100,16 +5100,13 @@ body::before{
    Alle letters van de agenda (dag, 3 dagen, week, maand, lijst) schalen
    met één knop: --cal-fs. Op 1 was de agenda te druk om in één oogopslag
    te lezen, en in de maand verdween een gewone werkdag half achter
-   "+N meer". Een stap kleiner geeft meer overzicht.
+   "+N meer". Een stap kleiner geeft meer overzicht, en juist op de
+   telefoon was daar om gevraagd.
 
-   Alleen vanaf tabletbreedte. Op de telefoon blijft het 1: daar zijn de
-   letters al zo klein als nog leesbaar is (titels 10px, tijden 7,5px).
    calendarOccupancy.test.ts bewaakt dat elke font-size in de agendaregels
    als calc(<n>px * var(--cal-fs,1)) staat; een vaste maat schaalt niet mee.
    ═══════════════════════════════════════════════════════════════════════ */
-@media(min-width:769px){
-  .calendar-agenda-page{--cal-fs:.92}
-}
+.calendar-agenda-page{--cal-fs:.92}
 
 /* ═══════════════════════════════════════════════════════════════════════
    AGENDA · MAANDWEERGAVE — Google Calendar-look  (2026-08-07)
@@ -5239,6 +5236,12 @@ body::before{
   /* In een kolom van ~54px past alleen het aantal, niet het woord erbij. */
   .cm-more{font-size:calc(9.5px * var(--cal-fs,1))}
   .cm-more-label{display:none}
+}
+/* Telefoon (dezelfde grens als isMobile in de TSX): een datumrij van 24px
+   (MONTH_METRICS_PHONE), dus het balkje en het dagnummer schuiven mee omhoog. */
+@media(max-width:768px){
+  .cm-date{padding-top:5px}
+  .cm-load{top:2px;left:4px;right:4px}
 }
 
 /* ── Gerrie Routines (geplande agents) ─────────────────────────────────────── */
@@ -7470,6 +7473,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   animation:cmDayListIn .18s ease-out}
 @keyframes cmDayListIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .cm-daylist-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.cm-daylist-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}
 .cm-daylist-name{display:block;font-size:calc(10px * var(--cal-fs,1));font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 .cm-daylist-date{display:block;font-size:calc(14px * var(--cal-fs,1));font-weight:600;color:var(--text)}
 .cm-daylist-head .btn{flex:0 0 auto;width:auto;min-height:32px;padding:6px 12px}
@@ -8309,8 +8313,13 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    wát er is, niet naar het precieze uur. Google doet het net zo. */
 @media(max-width:620px){
   .cm-chip .cm-chip-time{display:none}
-  .cm-chip{gap:3px;padding:0 4px}
-  .cm-chip-title{font-size:calc(10px * var(--cal-fs,1))}
+  /* Sinds 2026-11-12 een gekleurd blokje dat bijna de hele kolom vult, zoals
+     in Google Agenda op de telefoon: 1px marge en 3px binnenruimte laten in
+     een kolom van 54px het meeste over voor de titel. */
+  .cm-chip{gap:3px;margin:0 1px;padding:0 3px;border-radius:3px}
+  .cm-chip.is-task{padding-left:5px;box-shadow:inset 2px 0 0 var(--event-color, var(--accent))}
+  .cm-chip-title{font-size:calc(10px * var(--cal-fs,1));font-weight:600;letter-spacing:-.01em}
+  .cm-more{margin:0 1px;padding:0 3px}
 }
 
 /* 42 ── De inhoud eindigt boven de zwevende knoppen ───────────────────────

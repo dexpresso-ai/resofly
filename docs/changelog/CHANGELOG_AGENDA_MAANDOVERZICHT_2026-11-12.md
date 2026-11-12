@@ -6,12 +6,17 @@
 wat overzichtelijker is. Zorg er daarnaast voor dat zodra ik het maandoverzicht
 open, dat het overzicht exact hetzelfde is als een Google Calendar, waarbij ik
 alle activiteiten en de bezetting en de kleurtjes van de agenda zie."
+En daarna: "Gaat met name voor het overzicht bij de mobiele telefoon."
 
 ## Wat er misging
 
 - De letters van de agenda waren te groot voor een overzicht. In de maand
   pasten op een laptopscherm maar drie afspraken per dag voordat "+N meer"
   verscheen.
+- Op de telefoon was het maandoverzicht vooral een rij getallen. De maand
+  opende met het lijstje van vandaag eronder, en dat nam 40% van het scherm.
+  Per weekrij bleef er plek voor één regel, dus stond er bij bijna elke dag
+  alleen "+4"; afspraken zelf zag je nauwelijks.
 - In de maand was een afspraak met een tijd een stipje van 8px voor zwarte
   tekst. De maand las als een grijze lijst: welke agenda waar zat, zag je
   niet. Alleen afspraken van een hele dag hadden kleur.
@@ -21,13 +26,22 @@ alle activiteiten en de bezetting en de kleurtjes van de agenda zie."
 
 ## Wat er nu klopt
 
-**Kleinere letters in de hele agenda** (dag, 3 dagen, week, maand, lijst).
-Alle lettergroottes van de agenda schalen nu met één knop, `--cal-fs` op
-`.calendar-agenda-page`. Vanaf tabletbreedte staat die op 0,92: een stap
-kleiner, zo'n 1px op de meeste teksten. Op de telefoon (tot 768px) blijft het
-zoals het was: daar zijn de letters al zo klein als nog leesbaar is.
+**Kleinere letters in de hele agenda** (dag, 3 dagen, week, maand, lijst), op
+de telefoon en op de computer. Alle lettergroottes van de agenda schalen nu
+met één knop, `--cal-fs` op `.calendar-agenda-page`. Die staat op 0,92: een
+stap kleiner, zo'n 1px op de meeste teksten.
 
-**Het maandoverzicht, zoals Google Agenda op de telefoon:**
+**Het maandoverzicht op de telefoon, zoals Google Agenda:**
+
+- Het rooster krijgt het hele scherm. Het lijstje van een dag komt pas als je
+  die dag aantikt, met een kruisje om het te sluiten (of tik de dag nog eens
+  aan). "Vandaag" en een andere maand openen het niet vanzelf.
+- Kleinere regels (15px, datumrij 24px): op een telefoon van 844px hoog
+  passen er per dag vier regels in plaats van één.
+- De blokjes vullen bijna de hele dagkolom, met alleen de titel; de tijd past
+  er in een kolom van 54px niet bij (zo was het al).
+
+**Het maandoverzicht, op elk scherm:**
 
 - Elke afspraak is een gevuld blokje in de kleur van zijn agenda, met de
   begintijd ervoor ("09:00 Overleg Joost"). De tekst is donker op een lichte
@@ -36,8 +50,8 @@ zoals het was: daar zijn de letters al zo klein als nog leesbaar is.
 - Een taak is, net als in de week, licht getint met een stippelrand in de
   kleur van zijn project. Het woord "Taak" ervoor is weg; de rand zegt het al,
   en de tooltip noemt het nog.
-- Er passen meer regels per dag: vijf in plaats van vier op een scherm van
-  900px hoog (regels van 17px in plaats van 20px).
+- Op de computer passen er meer regels per dag: vijf in plaats van vier op
+  een scherm van 900px hoog (regels van 17px in plaats van 20px).
 
 **Bezetting per dag.** Boven elk dagnummer staat een dun balkje. Vol is je
 werkdag: je dagstreep uit de Planner, anders 8 uur. De stukjes hebben de
@@ -62,4 +76,5 @@ De berekening staat los van het scherm in `src/lib/calendarOccupancy.ts`.
 - `npm run test:mobile -- --theme=both`.
 - Met de hand, met een volle maand (twee agenda's, hele dagen, meerdaags,
   taken), licht en donker, op 1440×900 en op telefoonformaat: maand, week,
-  dag en lijst.
+  dag en lijst, en op de telefoon (390×844) de maand met en zonder het
+  lijstje van een dag.

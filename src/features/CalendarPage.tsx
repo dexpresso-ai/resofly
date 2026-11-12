@@ -1931,14 +1931,16 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
 // gelijke hoogte. De TSX rekent met deze pixels uit hoeveel lanes er in een
 // weekrij passen; de CSS krijgt exact dezelfde waarden via custom properties,
 // zodat er maar één bron van waarheid is.
-// Lanes van 17px (was 20px, met 6px ruimte onderin): met de kleinere letters
-// passen er op een laptopscherm (900px hoog) vijf regels per dag in plaats
-// van vier, voordat "+N meer" verschijnt (2026-11-12). De datumrij is 2px
-// hoger voor het bezettingsbalkje boven het dagnummer.
-const MONTH_DATE_ROW_PX = 28;
-const MONTH_LANE_PX = 17;
-const MONTH_LANE_GAP_PX = 2;
-const MONTH_ROW_PAD_PX = 4;
+//
+// Kleinere maten sinds 2026-11-12 (waren 26/20/2/6 voor elk scherm): met de
+// kleinere letters passen er op een laptopscherm (900px hoog) vijf regels per
+// dag in plaats van vier. Op de telefoon zijn ze nog krapper, zoals in Google
+// Agenda op de telefoon: met de oude maten paste er in een weekrij één regel,
+// en stond er bij bijna elke dag alleen "+4". De datumrij heeft ruimte voor
+// het bezettingsbalkje boven het dagnummer.
+type MonthMetrics = { dateRow: number; lane: number; gap: number; pad: number };
+const MONTH_METRICS_DESKTOP: MonthMetrics = { dateRow: 28, lane: 17, gap: 2, pad: 4 };
+const MONTH_METRICS_PHONE: MonthMetrics = { dateRow: 24, lane: 15, gap: 1, pad: 2 };
 
 // Deelt het maandrooster op in weken van 7 dagen (voor de weeknummer-kolom).
 function weekChunks(days: Date[]): Date[][] {
@@ -2154,15 +2156,17 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
   onEditTask: (task: Task) => void;
   onOpenDay: (day: Date) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
-  /** Telefoon: tikken kiest een dag en toont die onder het rooster (Google-werkwijze). */
+  /** Telefoon: tikken kiest een dag en toont die onder het rooster; nog eens
+   *  tikken (of het kruisje) sluit hem weer. */
   isMobile?: boolean;
   selectedDay?: Date | null;
-  onSelectDay?: (day: Date) => void;
+  onSelectDay?: (day: Date | null) => void;
   /** Bureaublad: klikken op een lege plek maakt een afspraak op die dag. */
   onCreateOnDay?: (day: Date) => void;
 }) {
   const eventColor = useCallback((ev: CalendarExternalEvent): string => normalizeHexColor(sourceColors.get(ev.source_id) ?? '#FFD966'), [sourceColors]);
   const weeks = useMemo(() => weekChunks(days), [days]);
+  const metrics = isMobile ? MONTH_METRICS_PHONE : MONTH_METRICS_DESKTOP;
   // Het bezettingsbalkje per dag. Vol is je eigen dagstreep uit de planner,
   // anders een werkdag van acht uur.
   const capacityMinutes = data.plannerCapacity && data.plannerCapacity.minutes > 0 ? data.plannerCapacity.minutes : DEFAULT_DAY_CAPACITY_MINUTES;
@@ -2176,13 +2180,20 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
   const [moreDay, setMoreDay] = useState<{ day: Date; rect: { left: number; top: number; width: number; height: number } } | null>(null);
   useEffect(() => { setMoreDay(null); }, [anchor]);
 
+  /** Telefoon: tik een dag aan en zijn lijstje komt onder het rooster; tik
+   *  dezelfde dag nog eens en het gaat weer dicht. */
+  const toggleDay = useCallback((day: Date) => {
+    if (!onSelectDay) return;
+    onSelectDay(selectedDay && isSameDay(selectedDay, day) ? null : startOfDay(day));
+  }, [onSelectDay, selectedDay]);
+
   /** Klikken op een lege plek in een dag: telefoon kiest de dag, bureaublad maakt
    *  er een afspraak op (en valt terug op de dagweergave zonder schrijfrecht). */
   const pickDay = useCallback((day: Date) => {
-    if (isMobile && onSelectDay) { onSelectDay(startOfDay(day)); return; }
+    if (isMobile && onSelectDay) { toggleDay(day); return; }
     if (onCreateOnDay) { onCreateOnDay(startOfDay(day)); return; }
     onOpenDay(day);
-  }, [isMobile, onSelectDay, onCreateOnDay, onOpenDay]);
+  }, [isMobile, onSelectDay, toggleDay, onCreateOnDay, onOpenDay]);
 
   /** "+N meer": bureaublad opent het dagkaartje, telefoon kiest de dag. */
   const openDayCard = useCallback((day: Date, el: HTMLElement) => {
@@ -2203,21 +2214,21 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
       // op de observer i.p.v. één lane vast te leggen op een bogus 0-meting.
       if (el.clientHeight <= 0) return;
       const rowHeight = el.clientHeight / Math.max(1, weeks.length);
-      const usable = rowHeight - MONTH_DATE_ROW_PX - MONTH_ROW_PAD_PX;
-      setMaxLanes(Math.max(1, Math.floor((usable + MONTH_LANE_GAP_PX) / (MONTH_LANE_PX + MONTH_LANE_GAP_PX))));
+      const usable = rowHeight - metrics.dateRow - metrics.pad;
+      setMaxLanes(Math.max(1, Math.floor((usable + metrics.gap) / (metrics.lane + metrics.gap))));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [weeks.length]);
+  }, [weeks.length, metrics]);
 
   const today = new Date();
   const gridStyle = {
-    '--cm-date-h': `${MONTH_DATE_ROW_PX}px`,
-    '--cm-lane': `${MONTH_LANE_PX}px`,
-    '--cm-gap': `${MONTH_LANE_GAP_PX}px`,
-    '--cm-pad': `${MONTH_ROW_PAD_PX}px`,
+    '--cm-date-h': `${metrics.dateRow}px`,
+    '--cm-lane': `${metrics.lane}px`,
+    '--cm-gap': `${metrics.gap}px`,
+    '--cm-pad': `${metrics.pad}px`,
   } as CSSProperties;
 
   return (
@@ -2273,7 +2284,7 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                         type="button"
                         className={`cm-date${isSameMonth(day, anchor) ? '' : ' is-outside'}`}
                         key={formatISODate(day)}
-                        onClick={() => (isMobile && onSelectDay ? onSelectDay(startOfDay(day)) : onOpenDay(day))}
+                        onClick={() => (isMobile && onSelectDay ? toggleDay(day) : onOpenDay(day))}
                         title={`${formatDateKey(formatISODate(day))}${busy}${isMobile ? '' : ' — open dagweergave'}`}
                       >
                         {load && load.minutes > 0 && (
@@ -2357,7 +2368,12 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
               <span className="cm-daylist-name">{dayNameNl(selectedDay)}</span>
               <strong className="cm-daylist-date">{formatDateKey(formatISODate(selectedDay))}</strong>
             </div>
-            <Button onClick={() => onOpenDay(selectedDay)}>Open dag</Button>
+            <div className="cm-daylist-actions">
+              <Button onClick={() => onOpenDay(selectedDay)}>Open dag</Button>
+              {onSelectDay && (
+                <button type="button" className="cm-daycard-close" onClick={() => onSelectDay(null)} aria-label="Sluiten"><X size={15} /></button>
+              )}
+            </div>
           </header>
           <MonthDayItemList items={monthDayItems(selectedDay, events, tasks)} sourceColors={sourceColors} taskColor={task => taskColorOf(data, task)}
             onOpenEvent={onOpenEvent} onEditTask={onEditTask} />
@@ -4663,7 +4679,10 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     if (nextView === view) return;
     slide(0, () => {
       setView(nextView);
-      setMonthDay(nextView === 'month' && isMobile ? startOfDay(new Date()) : null);
+      // Op de telefoon opent de maand zonder lijstje eronder: dan krijgt het
+      // rooster het hele scherm. Met vandaag er standaard onder bleef er per
+      // weekrij plek voor één regel, en zag je bij elke dag alleen "+4".
+      setMonthDay(null);
       setAutoScrollKey(key => key + 1);
       setAnchor(prev => {
         if (nextView === 'month') return startOfMonth(prev);
@@ -4678,9 +4697,8 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     const next = shiftAnchorForView(view, anchorRef.current, direction);
     slide(direction, () => {
       setAnchor(next);
-      // Op de telefoon houdt de maand altijd een gekozen dag (met zijn lijstje
-      // eronder); anders zou het paneel bij elke maandwissel weg- en terugklappen.
-      setMonthDay(view === 'month' && isMobile ? startOfMonth(next) : null);
+      // Een andere maand begint zonder gekozen dag (en dus zonder lijstje).
+      setMonthDay(null);
     }, fromPx);
   }
 
@@ -4700,7 +4718,9 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     const direction: SlideDirection = shown.some(d => isSameDay(d, today)) ? 0 : today.getTime() > shown[0].getTime() ? 1 : -1;
     slide(direction, () => {
       setAnchor(today);
-      setMonthDay(view === 'month' ? today : null);
+      // Op de telefoon klapt "Vandaag" het lijstje niet open: dat kost het rooster
+      // de helft van zijn hoogte. Tik de dag aan als je hem wilt zien.
+      setMonthDay(view === 'month' && !isMobile ? today : null);
       setAutoScrollKey(key => key + 1);
     });
   }
