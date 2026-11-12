@@ -1,4 +1,5 @@
 import { CLIENT_EXECUTORS } from './clients';
+import { MAIL_FOLDER_EXECUTORS } from './mailFolders';
 import { FINANCE_EXECUTORS } from './finance';
 import { BOOKKEEPING_EXECUTORS } from './bookkeeping';
 import { BUSINESS_EXECUTORS } from './business';
@@ -28,6 +29,7 @@ export type { ActionExecutor, ActionRunCtx } from './types';
  */
 export const ACTION_EXECUTORS: Record<string, ActionExecutor> = {
   ...CLIENT_EXECUTORS,
+  ...MAIL_FOLDER_EXECUTORS,
   ...FINANCE_EXECUTORS,
   ...BOOKKEEPING_EXECUTORS,
   ...BUSINESS_EXECUTORS,

@@ -14,6 +14,7 @@ import {
   createClientEmailFolder, deleteClientEmailFolder, loadClientEmailFolders, moveClientEmailFolder, moveClientEmailThreads,
   renameClientEmailFolder,
 } from '../lib/repository';
+import { onMailFoldersChanged } from '../lib/mailFolderEvents';
 
 /**
  * Mappen voor klantmail op Berichten. Drie onderdelen:
@@ -41,6 +42,12 @@ export function useMailFolders(organizationId: string, activity = 0) {
   /** null = nog niet geladen óf de tabel bestaat hier niet; `available` zegt welke. */
   const [folders, setFolders] = useState<ClientEmailFolder[]>([]);
   const [available, setAvailable] = useState(false);
+  /**
+   * Loopt op als de mappen buiten dit scherm om veranderden: een voorstel van
+   * Gerrie dat net is goedgekeurd. Het scherm laadt dan ook zijn gesprekken opnieuw.
+   */
+  const [revision, setRevision] = useState(0);
+  useEffect(() => onMailFoldersChanged(() => setRevision(r => r + 1)), []);
 
   const reload = useCallback(async () => {
     const rows = await loadClientEmailFolders(organizationId);
@@ -56,9 +63,9 @@ export function useMailFolders(organizationId: string, activity = 0) {
       // Stil: zonder mappen werkt Berichten gewoon zoals vóór de mappen.
       .catch(() => { if (!cancelled) { setAvailable(false); setFolders([]); } });
     return () => { cancelled = true; };
-  }, [organizationId, activity]);
+  }, [organizationId, activity, revision]);
 
-  return { folders, setFolders, available, reload };
+  return { folders, setFolders, available, reload, revision };
 }
 
 /** Wat er in het venster "Verplaatsen naar map" staat: gesprekken, of een hele map. */
@@ -92,7 +99,7 @@ const failText = (err: unknown, fallback: string) => (err instanceof Error && er
  * met Ongedaan maken: slepen gaat snel, en soms net naast de bedoelde map.
  */
 export function useMailFolderActions(organizationId: string, canWrite: boolean, host: MailFolderHost, activity = 0) {
-  const { folders, setFolders, available, reload } = useMailFolders(organizationId, activity);
+  const { folders, setFolders, available, reload, revision } = useMailFolders(organizationId, activity);
   const [moveRequest, setMoveRequest] = useState<MoveRequest | null>(null);
   const [deleteRequest, setDeleteRequest] = useState<ClientEmailFolder | null>(null);
   const [notice, setNotice] = useState<FolderNotice | null>(null);
@@ -250,6 +257,8 @@ export function useMailFolderActions(organizationId: string, canWrite: boolean, 
 
   return {
     folders, available, reloadFolders: reload,
+    /** Loopt op na een wijziging buiten dit scherm om (een goedgekeurd voorstel): laad dan ook de gesprekken opnieuw. */
+    revision,
     dropThreads, createFolder, renameFolder,
     requestMoveThreads, requestMoveFolder, requestDelete: setDeleteRequest,
     dialogs,
