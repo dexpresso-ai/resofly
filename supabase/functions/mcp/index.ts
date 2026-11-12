@@ -72,6 +72,7 @@ import {
 import { promptValue, wrapToolData } from '../_shared/gerrieGuard.ts';
 import { directApplier } from '../_shared/actions/apply.ts';
 import { isOrganizationRole, memberModuleLevel } from '../_shared/roles.ts';
+import { hasAiConsent } from '../_shared/aiConsent.ts';
 
 const admin = createAdminClient();
 const RESOURCE_URL = (Deno.env.get('MCP_RESOURCE_URL') || `${requiredEnv('SUPABASE_URL')}/functions/v1/mcp`).replace(/\/$/, '');
@@ -269,6 +270,13 @@ async function authenticate(req: Request): Promise<Session> {
   if (String((member.module_access ?? {}).gerrie ?? '') === 'none'
     || memberModuleLevel(member.role, member.module_access, 'gerrie') === 'none') {
     throw new Error('Deze gebruiker heeft in deze organisatie geen toegang meer tot Gerrie, dus deze koppeling werkt niet meer.');
+  }
+  // Een gekoppelde AI leest dezelfde gegevens als Gerrie en zet dezelfde
+  // handelingen klaar. Dus geldt hetzelfde akkoord (20261112160000), en net als
+  // de module bij elke aanroep: zet iemand Gerrie uit, dan stopt ook zijn
+  // eigen AI meteen, niet pas als het token verloopt.
+  if (!(await hasAiConsent(admin, String(grant.user_id), String(grant.organization_id)))) {
+    throw new Error('Deze gebruiker heeft Gerrie (AI) in deze organisatie uitgezet of nog niet aangezet. Zet hem aan in ResoFly onder Instellingen → AI; daarna werkt deze koppeling weer.');
   }
 
   // Elke aanroep telt: hier één, en een batch boekt de rest erbij (zie boven).

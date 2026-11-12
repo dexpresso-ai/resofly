@@ -167,6 +167,23 @@ export interface OrganizationContext {
   /** Creatieve module: leesbaar voor elk teamlid, anders dan billingOverview. */
   creativeStatus: OrganizationCreativeStatus | null;
   businessStatus: OrganizationBusinessStatus | null;
+  /** Heeft de gebruiker Gerrie in deze organisatie aangezet (src/lib/aiConsent.ts)? null = nooit. */
+  aiConsent: AiConsent | null;
+  /** Owners en admins: hoe Gerrie voor elk teamlid staat. Voor de rest leeg. */
+  aiConsents: AiConsent[];
+}
+
+/** Een rij uit ai_consents (migratie 20261112160000): Gerrie aan of uit, per organisatie en gebruiker. */
+export interface AiConsent {
+  organization_id: UUID;
+  user_id: UUID;
+  enabled: boolean;
+  terms_version: string;
+  acknowledged: string[];
+  accepted_at: string | null;
+  disabled_at: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface OrgScopedRow {

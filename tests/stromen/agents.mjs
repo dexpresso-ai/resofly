@@ -13,9 +13,10 @@
 import { roep } from './functies.mjs';
 import { ai } from './nep-ai.mjs';
 import { claude, installeerClaude } from './rapportages.mjs';
-import { sqlRijen } from './supabase.mjs';
-import { gelijk, groep, stap, verwacht } from './toets.mjs';
-import { maakWereld } from './wereld.mjs';
+import { CRON_SECRET } from './omgeving.mjs';
+import { rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
+import { gelijk, geweigerd, groep, stap, verwacht } from './toets.mjs';
+import { GERRIE_AKKOORD, maakWereld, zetGerrieAan, zetGerrieUit } from './wereld.mjs';
 
 const q = (waarde) => `'${String(waarde).replace(/'/g, "''")}'`;
 
@@ -91,6 +92,71 @@ export default async function agents() {
     gelijk(res.status, 200, `bouwer: ${res.tekst?.slice(0, 200)}`);
     const bouwer = ai.claude.slice(voor).map((c) => (Array.isArray(c.system) ? c.system.map((b) => b.text).join('\n') : String(c.system ?? ''))).find((sys) => sys.includes('JE BENT NU DE AGENT-BOUWER'));
     verwacht(bouwer && !bouwer.includes('JE PAST NU EEN BESTAANDE AGENT AAN'), 'een nieuwe agent kreeg toch een huidige agent mee');
+  });
+
+  // Gerrie aanzetten (20261112160000): zonder akkoord geen Gerrie, en ook geen
+  // agent die namens jou je gegevens leest.
+  groep('Agents: Gerrie uitzetten');
+  await stap('uitzetten pauzeert je agents, en het logboek zegt het', async () => {
+    const aan = await roep('gerrie-agent-runner', { token: w.medewerker.token, body: { action: 'set_status', organizationId: w.orgId, id: agentId, status: 'active' } });
+    gelijk(aan.status, 200, `agent aanzetten: ${aan.tekst?.slice(0, 200)}`);
+    const uit = await zetGerrieUit(w.orgId, w.medewerker);
+    gelijk(uit.status, 200, `uitzetten: ${uit.tekst?.slice(0, 200)}`);
+    gelijk(sqlRij(`select status from public.ai_agents where id = ${q(agentId)}`).status, 'paused', 'de agent staat op pauze');
+    const regel = sqlRij(`select actor_user_id, metadata from public.audit_logs where organization_id = ${q(w.orgId)} and action = 'ai_disabled' order by created_at desc limit 1`);
+    verwacht(regel, 'geen regel in het logboek');
+    gelijk(regel.actor_user_id, w.medewerker.id, 'wie het deed');
+    gelijk(Number(regel.metadata?.agents_gepauzeerd), 1, 'één agent op pauze');
+  });
+  await stap('zonder akkoord weigeren de chat en de agents, ook zonder model', async () => {
+    for (const body of [{ action: 'budget' }, { action: 'usage' }, { action: 'design_agent', messages: [{ role: 'user', content: 'Elke maandag de facturen' }] }, { message: 'Welke facturen staan open?' }]) {
+      const res = await roep('gerrie-agent', { token: w.medewerker.token, body: { organizationId: w.orgId, ...body } });
+      geweigerd(res, `gerrie-agent ${body.action ?? 'chat'}`, [403]);
+      verwacht(/Instellingen → AI/.test(res.json?.error ?? ''), `de weigering zegt niet waar je Gerrie aanzet: ${res.tekst?.slice(0, 200)}`);
+    }
+    for (const action of ['tools', 'run_now']) {
+      geweigerd(await roep('gerrie-agent-runner', { token: w.medewerker.token, body: { action, organizationId: w.orgId, id: agentId } }), `runner ${action}`, [403]);
+    }
+    // Een collega die Gerrie wel aan heeft, merkt er niets van.
+    const collega = await roep('gerrie-agent', { token: w.eigenaar.token, body: { action: 'budget', organizationId: w.orgId } });
+    gelijk(collega.status, 200, `de eigenaar: ${collega.tekst?.slice(0, 200)}`);
+  });
+  await stap('een run die toch nog geclaimd werd, breekt af zonder het model', async () => {
+    // Zoals een tik die de agent claimde vlak voordat hij op pauze ging.
+    sql(`update public.ai_agents set status = 'active', next_run_at = now() - interval '1 minute', lease_until = null where id = ${q(agentId)}`);
+    const voor = ai.claude.length;
+    const tik = await roep('gerrie-agent-runner', { query: 'cron=tick', origin: null, body: {}, headers: { 'x-cron-secret': CRON_SECRET } });
+    gelijk(tik.status, 200, `tik: ${tik.tekst?.slice(0, 200)}`);
+    const [run] = sqlRijen(`select status, error from public.ai_agent_runs where agent_id = ${q(agentId)} order by created_at desc limit 1`);
+    gelijk(run?.status, 'cancelled', `de run: ${JSON.stringify(run)}`);
+    verwacht(/Gerrie staat uit/.test(run?.error ?? ''), `de reden: ${run?.error}`);
+    gelijk(sqlRij(`select status from public.ai_agents where id = ${q(agentId)}`).status, 'paused', 'weer op pauze');
+    const vanDezeAgent = ai.claude.slice(voor).filter((c) => JSON.stringify(c).includes('Welke facturen staan langer dan 30 dagen open'));
+    gelijk(vanDezeAgent.length, 0, 'het model kreeg niets van deze agent');
+  });
+  await stap('weer aanzetten kan alleen met alle drie de vinkjes en de huidige uitleg', async () => {
+    const versie = sqlRij('select public.ai_terms_version() as versie').versie;
+    geweigerd(await rpc('set_ai_consent', { p_organization_id: w.orgId, p_enabled: true, p_terms_version: versie, p_acknowledged: GERRIE_AKKOORD.slice(0, 2) }, w.medewerker.token), 'twee vinkjes', [400]);
+    geweigerd(await rpc('set_ai_consent', { p_organization_id: w.orgId, p_enabled: true, p_terms_version: '2000-01-01', p_acknowledged: GERRIE_AKKOORD }, w.medewerker.token), 'een oude uitleg', [400]);
+    // De boekhouder heeft de module Gerrie niet, en zet hem dus ook niet aan.
+    geweigerd(await rpc('set_ai_consent', { p_organization_id: w.orgId, p_enabled: true, p_terms_version: versie, p_acknowledged: GERRIE_AKKOORD }, w.boekhouder.token), 'de boekhouder', [401, 403]);
+    await zetGerrieAan(w.orgId, w.medewerker);
+    const res = await roep('gerrie-agent', { token: w.medewerker.token, body: { action: 'budget', organizationId: w.orgId } });
+    gelijk(res.status, 200, `weer aan: ${res.tekst?.slice(0, 200)}`);
+    // De agent blijft op pauze tot je hem zelf weer aanzet.
+    gelijk(sqlRij(`select status from public.ai_agents where id = ${q(agentId)}`).status, 'paused', 'de agent blijft op pauze');
+  });
+  await stap('je akkoord is van jou: een collega leest het niet, beheer wel', async () => {
+    const eigen = await rest(`ai_consents?organization_id=eq.${w.orgId}&select=user_id`, { token: w.lezer.token });
+    gelijk(eigen.status, 200, eigen.tekst);
+    gelijk(eigen.json.map((r) => r.user_id), [w.lezer.id], 'een teamlid ziet alleen zijn eigen rij');
+    const beheer = await rest(`ai_consents?organization_id=eq.${w.orgId}&select=user_id`, { token: w.beheerder.token });
+    gelijk(beheer.json.length, 6, 'de beheerder ziet het hele team (zonder de boekhouder)');
+    const boekhouder = await rest(`ai_consents?organization_id=eq.${w.orgId}&select=user_id`, { token: w.boekhouder.token });
+    gelijk(boekhouder.json?.length ?? 0, 0, 'de boekhouder ziet niets');
+    // Zelf schrijven kan niemand: alleen via set_ai_consent.
+    const zelf = await rest('ai_consents', { method: 'POST', token: w.lezer.token, body: { organization_id: w.orgId, user_id: w.lezer.id, enabled: true, terms_version: 'x', accepted_at: new Date().toISOString() } });
+    verwacht(zelf.status >= 400, `zelf een akkoord schrijven gaf ${zelf.status}`);
   });
 
   if (oudeBudget.gebruiker !== undefined) process.env.GERRIE_MONTHLY_USER_COST_EUR = oudeBudget.gebruiker;

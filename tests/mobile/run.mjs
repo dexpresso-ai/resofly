@@ -104,6 +104,12 @@ const PAGES = {
   // open (op telefoon en tablet in plaats van de lijst, met een terugknop).
   'gerrie-gesprekken': { page: 'gerrie', prepare: '.cc-tab:has-text("Gesprekken")' },
   'gerrie-gesprek': { page: 'gerrie', prepare: ['.cc-tab:has-text("Gesprekken")', '.gsp-item'] },
+  // Gerrie aanzetten (2026-11-12): zolang hij uit staat, toont de pagina Gerrie
+  // de drie punten met elk een vinkje. Instellingen → AI heeft dezelfde punten
+  // (settings-ai-uit) of, als hij aanstaat, de knop om hem uit te zetten (settings-ai).
+  'gerrie-aanzetten': { page: 'gerrie', mock: { aiOff: true } },
+  'settings-ai': { page: 'settings', prepare: '[data-settings-tab="ai"]' },
+  'settings-ai-uit': { page: 'settings', mock: { aiOff: true }, prepare: '[data-settings-tab="ai"]' },
   'report-updating': {
     page: 'report', statsReportId: seed.aiReports[0].id,
     prepare: ['.aire-chat-toggle', { fill: '.aire-composer textarea', value: 'Zet er vorig jaar naast' }, '.aire-send', '.aire-chat-close'],

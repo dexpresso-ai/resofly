@@ -47,7 +47,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261112120000 (Gerrie → Gesprekken) zet kind op ai_conversations. Geen
 // nieuwe tabel; ai_conversations en ai_messages blijven 'prive': een chat met
 // Gerrie is van degene die hem voerde, niet van de organisatie.
-export const EXPORT_SCHEMA_VERSION = '20261112120000';
+// 20261112160000 (Gerrie aanzetten) zet ai_consents erbij: wie in deze
+// organisatie Gerrie aanzette, wanneer en onder welke voorwaarden. Gaat mee:
+// het akkoord hoort bij de administratie, en de eigenaar en de beheerders
+// lezen het al in de app (Instellingen → AI).
+export const EXPORT_SCHEMA_VERSION = '20261112160000';
 
 export type TableKind =
   | 'export'
@@ -322,6 +326,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   ai_signal_settings: { kind: 'export', orderBy: ['organization_id'] },
   ai_action_audit: { kind: 'export' },
   ai_usage: { kind: 'export' },
+  ai_consents: { kind: 'export', orderBy: ['organization_id', 'user_id'] },
   ai_conversations: { kind: 'prive', reason: PRIVE },
   ai_messages: { kind: 'prive', reason: PRIVE },
   ai_signals: { kind: 'intern', reason: WACHTRIJ },

@@ -21,6 +21,7 @@ import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholder
 import { ProjectTemplatesManager } from './ProjectTemplates';
 import { ClientFieldsManager } from './ClientFields';
 import { McpConnections } from '../components/McpConnections';
+import { AiConsentSettings, type AiConsentChange } from '../components/GerrieAanzetten';
 import { ApiIntegrations } from '../components/ApiIntegrations';
 import { PageIcon } from '../components/PageIcon';
 import { FULL_PERMISSIONS, isAccountantRole, isAdminRole, LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel, type Permissions } from '../lib/permissions';
@@ -184,7 +185,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Kies of je facturen per e-mail of via Mollie verstuurt, en koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
   { id: 'gegevens', label: 'Gegevens', Icon: Download, description: 'Download al je gegevens in één keer: om over te stappen naar een ander pakket, voor je archief of voor je accountant.' },
-  { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Koppel je eigen AI (Claude, ChatGPT, Gemini) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
+  { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Zet Gerrie, de AI-assistent, voor jezelf aan of uit. Koppel je eigen AI (Claude, ChatGPT, Gemini) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
   { id: 'api', label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
   { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails en van de ticketmeldingen aan klanten aan, bepaal of klanten e-mail krijgen over hun tickets, en verstuur een testmail om je configuratie te controleren.' },
 ];
@@ -1773,6 +1774,7 @@ export function Settings({
   onSave,
   permissions = FULL_PERMISSIONS,
   onOpenAuditTarget,
+  onSetAiConsent,
 }: {
   settings: CompanySettings | null;
   data: AppData;
@@ -1801,6 +1803,8 @@ export function Settings({
   permissions?: Permissions;
   /** Een regel in het logboek openen (de taak, het project, de pagina). */
   onOpenAuditTarget?: (target: AuditTarget) => void;
+  /** Gerrie aan- of uitzetten voor jezelf (Instellingen → AI). Zonder: alleen de stand tonen. */
+  onSetAiConsent?: AiConsentChange;
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(settingsNav?.tab ?? 'organisatie');
   // Elke keer dat het account-menu naar een instellingen-sectie navigeert (nieuwe
@@ -3199,6 +3203,19 @@ export function Settings({
     </div>}
 
     {activeTab === 'ai' && <div className="settings-tab-panel">
+      {activeOrganization && onSetAiConsent && (
+        <AiConsentSettings
+          organizationName={activeOrganization.name}
+          consent={organizationContext.aiConsent}
+          // Open = de module staat open; los van of Gerrie al aanstaat.
+          moduleOpen={permissions.canRead('gerrie') || permissions.gerrieNeedsConsent}
+          onChange={onSetAiConsent}
+          consents={organizationContext.aiConsents}
+          teamMembers={organizationContext.teamMembers}
+          isAdmin={canAdminOrganization}
+          currentUserId={currentUserId}
+        />
+      )}
       {activeOrganization && (
         <McpConnections
           organizationId={activeOrganization.id}

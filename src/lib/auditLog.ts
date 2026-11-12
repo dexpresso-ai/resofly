@@ -594,6 +594,13 @@ export function sentence(e: AuditEntry, lookup: AuditLookup = {}): { parts: Sent
       const files = Number(meta.bestanden ?? 0);
       return { parts: [t('exporteerde alle gegevens van de organisatie'), ...(files > 0 ? [t(`, met ${files} bestanden`)] : [])] };
     }
+    // Gerrie aanzetten (migratie 20261112160000): wie akkoord ging dat de AI
+    // zijn gegevens leest, en wie dat weer introk.
+    case 'ai_enabled': return { parts: [t('zette Gerrie (AI) aan en ging akkoord met de uitleg')] };
+    case 'ai_disabled': {
+      const paused = Number(meta.agents_gepauzeerd ?? 0);
+      return { parts: [t('zette Gerrie (AI) uit'), ...(paused > 0 ? [t(paused === 1 ? '; één agent ging op pauze' : `; ${paused} agents gingen op pauze`)] : [])] };
+    }
   }
 
   // Een eigen domein (client-domains): de gebeurtenis staat in de metadata,

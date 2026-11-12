@@ -569,7 +569,16 @@ export const aiActionAudit = [
     params: { type: 'convert_quote', quote_id: uid('i'), number: '2026-031', client_name: 'Restaurant Bloem', total_eur: 1840 }, created_at: iso(day(-3)) },
 ];
 
+// Gerrie staat aan voor de gebruiker van de test (2026-11-12). De pagina
+// gerrie-aanzetten in run.mjs zet hem uit (installMock met { aiOff: true }).
+export const aiConsents = [
+  { organization_id: ORG, user_id: USER, enabled: true, terms_version: '2026-11-12',
+    acknowledged: ['gegevens_lezen', 'kan_fouten_maken', 'geen_eigen_beslissingen'],
+    accepted_at: iso(day(-30)), disabled_at: null, created_at: iso(day(-30)), updated_at: iso(day(-30)) },
+];
+
 export const tables = {
+  ai_consents: aiConsents,
   ai_agents: aiAgents, ai_agent_runs: aiAgentRuns, ai_agent_run_events: aiAgentRunEvents,
   ai_conversations: aiConversations, ai_messages: aiMessages, ai_action_audit: aiActionAudit,
   clients, client_contacts: [

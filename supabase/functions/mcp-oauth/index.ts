@@ -44,6 +44,7 @@ import {
   describeRedirectTarget, isKnownAiRedirect, senderAddress,
   type AuthRequest, type McpDiscoveryUrls,
 } from '../_shared/mcpAuth.ts';
+import { hasAiConsent } from '../_shared/aiConsent.ts';
 
 const admin = createAdminClient();
 const STATE_SECRET = requiredEnv('MCP_STATE_SECRET');
@@ -388,6 +389,11 @@ async function handleApprove(req: Request): Promise<Response> {
   // gegevens langs een andere deur alsnog naar buiten brengen.
   if (await getModuleLevel(admin, user.id, organizationId, 'gerrie') === 'none') {
     throw new HttpError('Je hebt in deze organisatie geen toegang tot Gerrie, dus je kunt hier ook geen AI aan koppelen.', 403);
+  }
+  // En je moet Gerrie zelf hebben aangezet, met akkoord op wat een AI met je
+  // gegevens doet (20261112160000). Je eigen AI koppelen is hetzelfde akkoord.
+  if (!(await hasAiConsent(admin, user.id, organizationId))) {
+    throw new HttpError('Zet eerst Gerrie (AI) aan in deze organisatie: in ResoFly onder Instellingen → AI. Daar lees je ook wat dat betekent. Daarna kun je je eigen AI koppelen.', 403);
   }
 
   const client = await loadClient(request.clientId);

@@ -157,6 +157,22 @@ export interface Permissions {
   canWritePage: (page: string) => boolean;
   /** Is dit lid ergens beperkt? (bepaalt of we het uitlegzinnetje tonen) */
   isRestricted: boolean;
+  /**
+   * De module Gerrie staat open, maar dit lid heeft Gerrie zelf nog niet
+   * aangezet (src/lib/aiConsent.ts). Dan is Gerrie overal dicht, behalve de
+   * pagina Gerrie: daar staat het scherm om hem aan te zetten.
+   */
+  gerrieNeedsConsent: boolean;
+}
+
+export interface PermissionOptions {
+  /**
+   * Heeft dit lid Gerrie aangezet (ai_consents)? Zonder akkoord is de module
+   * Gerrie voor de rest van de app dicht: geen chat, geen "Vraag Gerrie", geen
+   * beslislijst en geen rapportages met Gerrie. Standaard aan, voor plekken
+   * waar het niet speelt (het portaal, het laden van de gegevens).
+   */
+  aiEnabled?: boolean;
 }
 
 /** Rollen die mogen wijzigen (als de module het ook toestaat). Een allowlist:
@@ -198,12 +214,19 @@ export function resolveModuleLevel(
   return 'none';
 }
 
-export function buildPermissions(membership: MembershipLike | null | undefined): Permissions {
+export function buildPermissions(membership: MembershipLike | null | undefined, options: PermissionOptions = {}): Permissions {
   const role = membership?.role ?? null;
   const access = parseModuleAccess(membership?.module_access);
-  const level = (module: ModuleKey): ModuleLevel => resolveModuleLevel(role, access, module);
+  const aiEnabled = options.aiEnabled ?? true;
+  // Wat de eigenaar of een beheerder instelde, los van het eigen akkoord.
+  const moduleLevel = (module: ModuleKey): ModuleLevel => resolveModuleLevel(role, access, module);
+  // Wat er nu kan: zonder akkoord is Gerrie dicht. Via canRead('gerrie')
+  // verdwijnen zo in één keer de chat, de knoppen en de kaarten van Gerrie,
+  // op elke plek die al naar de module keek.
+  const level = (module: ModuleKey): ModuleLevel => (module === 'gerrie' && !aiEnabled ? 'none' : moduleLevel(module));
   const canRead = (module: ModuleKey) => level(module) !== 'none';
   const canWrite = (module: ModuleKey) => level(module) === 'write';
+  const gerrieNeedsConsent = !aiEnabled && moduleLevel('gerrie') !== 'none';
 
   return {
     level,
@@ -211,6 +234,8 @@ export function buildPermissions(membership: MembershipLike | null | undefined):
     canWrite,
     canOpenPage: (page: string) => {
       const module = PAGE_MODULE[page];
+      // De pagina Gerrie blijft open zolang de module open is: daar zet je hem aan.
+      if (module === 'gerrie') return moduleLevel('gerrie') !== 'none';
       return module ? canRead(module) : Boolean(role);
     },
     canWritePage: (page: string) => {
@@ -220,8 +245,10 @@ export function buildPermissions(membership: MembershipLike | null | undefined):
       const module = PAGE_MODULE[page];
       return module ? canWrite(module) : true;
     },
+    // Over de rechten die iemand kreeg, niet over zijn eigen keuze voor Gerrie.
     isRestricted: Boolean(role) && role !== 'owner' && role !== 'admin'
-      && MODULE_KEYS.some(key => level(key) !== 'write'),
+      && MODULE_KEYS.some(key => moduleLevel(key) !== 'write'),
+    gerrieNeedsConsent,
   };
 }
 

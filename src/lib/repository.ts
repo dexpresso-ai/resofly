@@ -12,6 +12,7 @@ import { isPortalLoginKey } from './portalLoginKey';
 import { cleanQuery, entityTypesFor, periodStart, type AuditFilters } from './auditLog';
 import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import type {
+  AiConsent,
   AppData,
   AuditLog,
   Attachment,
@@ -333,6 +334,8 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
   let billingOverview: OrganizationBillingOverview | null = null;
   let creativeStatus: OrganizationCreativeStatus | null = null;
   let businessStatus: OrganizationBusinessStatus | null = null;
+  let aiConsent: AiConsent | null = null;
+  let aiConsents: AiConsent[] = [];
   if (activeOrganization) {
     // Het abonnement is alleen voor owners en admins (public.can_admin_org).
     // Voor de rest gaf deze aanroep bij elke start een 403, met een waarschuwing
@@ -341,7 +344,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     // Het logboek ook (20261111140000): voor de rest geeft de database niets,
     // dus vragen we het dan ook niet op.
     const canSeeAuditLog = canSeeBilling;
-    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }, { data: businessRows, error: businessError }] = await Promise.all([
+    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }, { data: businessRows, error: businessError }, { data: consentRows, error: consentError }] = await Promise.all([
       supabase
         .from('organization_members')
         .select('*')
@@ -369,7 +372,21 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
         : Promise.resolve({ data: null, error: null }),
       supabase.rpc('organization_creative_status', { p_organization_id: activeOrganization.id }),
       supabase.rpc('organization_business_status', { p_organization_id: activeOrganization.id }),
+      // Gerrie aan of uit (20261112160000). Eén vraag: de RLS geeft een teamlid
+      // alleen zijn eigen rij, en een owner of admin die van het hele team.
+      // Tegelijk met het lidmaatschap, zodat de chat niet eerst verschijnt en
+      // dan weer verdwijnt.
+      supabase.from('ai_consents').select('*').eq('organization_id', activeOrganization.id),
     ]);
+    if (consentError) {
+      // Migratie nog niet toegepast: dan staat Gerrie uit tot hij er is. De
+      // edge functions weigeren zonder akkoord toch al.
+      if (!isMissingRelation(consentError)) console.warn('Of Gerrie aanstaat, kon niet worden geladen.', consentError);
+    } else {
+      const rows = (consentRows ?? []) as AiConsent[];
+      aiConsent = rows.find(row => row.user_id === currentUserId) ?? null;
+      aiConsents = isAdminRole(activeMembership?.role) ? rows : [];
+    }
     if (teamError) throw teamError;
     if (orgInvitationError) throw orgInvitationError;
     if (licenseError) throw licenseError;
@@ -415,7 +432,39 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     billingOverview,
     creativeStatus,
     businessStatus,
+    aiConsent,
+    aiConsents,
   };
+}
+
+/**
+ * Gerrie aan- of uitzetten voor jezelf, in deze organisatie. De database
+ * controleert de versie van de tekst en de drie vinkjes (set_ai_consent), en
+ * zet bij uitzetten je agents op pauze. Geeft de nieuwe rij terug.
+ */
+export async function setAiConsent(
+  organizationId: UUID,
+  enabled: boolean,
+  termsVersion: string,
+  acknowledged: readonly string[],
+): Promise<AiConsent | null> {
+  const { data, error } = await supabase.rpc('set_ai_consent', {
+    p_organization_id: organizationId,
+    p_enabled: enabled,
+    p_terms_version: termsVersion,
+    p_acknowledged: [...acknowledged],
+  });
+  if (error) {
+    // De app staat op Cloudflare soms eerder klaar dan de migratie: dan bestaat
+    // de functie nog niet (PGRST202, of 42883 rechtstreeks uit Postgres).
+    if (isMissingRelation(error) || error.code === 'PGRST202' || error.code === '42883') {
+      throw new Error('Gerrie aanzetten kan nog niet: de database is nog niet bijgewerkt. Probeer het over een paar minuten opnieuw.');
+    }
+    throw new Error(error.message || 'Gerrie aan- of uitzetten is mislukt.');
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as AiConsent | null;
+  // Stond hij al uit en nooit aan, dan is de rij leeg.
+  return row && row.organization_id ? row : null;
 }
 
 /**

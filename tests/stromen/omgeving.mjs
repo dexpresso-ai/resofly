@@ -81,6 +81,9 @@ Object.assign(process.env, {
   INVOICE_MOLLIE_ALLOW_MOCK: 'false',
   MOLLIE_ALLOW_MOCK: 'false',
   INVOICE_REMINDER_CRON_SECRET: CRON_SECRET,
+  // De minuut-tik van de agents (agents.mjs: een run die geclaimd werd terwijl
+  // de eigenaar Gerrie net uitzette).
+  AGENTS_CRON_SECRET: CRON_SECRET,
   // De API laadt via Gerrie ook de agendacode; die eist deze sleutel bij het laden.
   CALENDAR_TOKEN_ENCRYPTION_KEY: 'stromen-test-sleutel-voor-agenda-tokens',
   // De agendakoppeling (agenda.mjs): Google en Microsoft zijn nep, de callback is de echte functie.
