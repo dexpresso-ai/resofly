@@ -9665,7 +9665,9 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .portal-foot-by{display:block;max-width:100%;text-wrap:balance}
 .portal-foot-by strong{font-weight:700;color:inherit}
 .portal-foot-lead{white-space:nowrap}
-.portal-foot-mark{display:inline-block;vertical-align:-4.5px;margin:0 1px 0 -3px;opacity:.85}
+/* 14px: de R van het logo vult zijn vak tot de onderrand, de oude R maar tot 80%.
+   Op 18px stond hij een kwart groter dan voorheen naast de tekst. */
+.portal-foot-mark{display:inline-block;vertical-align:-1px;margin:0 3px 0 -1px;opacity:.85}
 .portal.login .portal-foot{margin-top:4px;padding-top:14px}
 
 /* De keuze donker/licht voor het klantportaal. Elk kaartje toont een miniatuur
@@ -12124,11 +12126,15 @@ body::before{display:none}
 .sidebar-head{border-bottom-color:var(--line);background:none}
 .app-brand{letter-spacing:-.02em}
 .app-brand span{font-weight:600}
-/* Het merkteken: een klein blok zongoud met licht van boven. */
+/* Het merkteken: de R uit het logo op een tegel met licht van boven.
+   --logo-tile is het oranje van het logo (BrandMark.tsx), voor elke tegel met
+   de R in elke look. Tot 12 november was de tegel een goudverloop (#FFE08A
+   naar #E4A11C), een andere kleur dan die van het logo. */
+:root{--logo-tile:#FFBD59}
 .brand-icon{
   border:0;
-  background:linear-gradient(150deg,#FFE08A 0%,#F6C143 48%,#E4A11C 100%);
-  color:#1A1405;
+  background:var(--logo-tile);
+  color:#000;
   font-weight:700;letter-spacing:-.04em;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 -1px 0 rgba(90,55,0,.25),0 6px 16px -6px rgba(var(--accent-rgb),.5);
 }

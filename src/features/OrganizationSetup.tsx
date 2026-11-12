@@ -539,7 +539,7 @@ function SetupRail({ organization, displayName, organizations, steps, current, c
   const pct = Math.round((done / Math.max(1, steps.length - 1)) * 100);
   return <aside className="onb-rail" aria-label="Stappen">
     <div className="onb-brand">
-      <span className="onb-brand-tile"><BrandMark size={30} /></span>
+      <span className="onb-brand-tile"><BrandMark /></span>
       <span className="onb-brand-name">ResoFly<small>Inrichten</small></span>
     </div>
     <div className="onb-rail-intro">
@@ -1627,7 +1627,7 @@ export function OrganizationSetupPending({ organization, organizations, userEmai
   const others = organizations.filter(org => org.id !== organization.id && org.onboarding_completed_at !== null);
   return <div className="onb onb-pending">
     <main className="onb-pending-card">
-      <span className="onb-brand-tile is-big" aria-hidden="true"><BrandMark size={40} /></span>
+      <span className="onb-brand-tile is-big" aria-hidden="true"><BrandMark /></span>
       <h1>{organization.name} wordt nog ingericht</h1>
       <p>De eigenaar of een beheerder loopt eerst de stappen door: rechtsvorm, bedrijfsgegevens, btw en betalen. Zodra dat klaar is, kun je hier aan de slag.</p>
       <div className="onb-pending-actions">

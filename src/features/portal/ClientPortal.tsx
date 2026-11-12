@@ -282,7 +282,7 @@ function PortalFooter({ branding }: { branding: BrandingPayload | null | undefin
     {branding?.footerText && <span className="portal-foot-own">{branding.footerText}</span>}
     <span className="portal-foot-by">
       {/* Merk en eerste woord aan elkaar: rond een losse afbeelding mag de browser afbreken. */}
-      <span className="portal-foot-lead"><ResoFlyMark size={18} className="portal-foot-mark" />Dit</span> platform wordt beschikbaar gesteld door <strong>ResoFly</strong>
+      <span className="portal-foot-lead"><ResoFlyMark size={14} className="portal-foot-mark" />Dit</span> platform wordt beschikbaar gesteld door <strong>ResoFly</strong>
     </span>
   </footer>;
 }

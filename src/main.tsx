@@ -4468,12 +4468,12 @@ function Login() {
   }
   // Op een groot scherm staat links het verhaal (het merk en de weg van klant
   // tot betaling), rechts het formulier; op de telefoon alleen het formulier.
-  // Baken tekent het echte R-merkteken in de tegel (BrandMark), de andere looks
-  // houden hun letter.
-  const mark = look === 'baken' ? <BrandMark size={48} className="bk-mark" /> : 'R';
+  // In elke look staat het logo (BrandMark) in de tegel. Cockpit, Zenit en
+  // Stroom hadden tot 12 november een "R" in Poppins: een andere R dan die van
+  // het logo, en wie van look wisselde zag het merk veranderen.
   return <main className="login">{look === 'stroom' && <LightField />}{look === 'baken' && <span className="bk-motes" aria-hidden="true" />}<div className="login-shell">
     <section className="login-story">
-      <div className="app-brand"><div className="brand-icon">{mark}</div><span>ResoFly<small>{STANDALONE_APP?.shortName ?? 'Werkruimte'}</small></span></div>
+      <div className="app-brand"><div className="brand-icon"><BrandMark /></div><span>ResoFly<small>{STANDALONE_APP?.shortName ?? 'Werkruimte'}</small></span></div>
       <h2>Van eerste mail<br /><span>tot betaalde factuur.</span></h2>
       <p>Klanten, projecten, agenda, uren, offertes en facturen in één werkruimte — met Gerrie, die meedenkt en klaarzet.</p>
       <ol className="login-flow" aria-hidden="true">
@@ -4484,7 +4484,7 @@ function Login() {
         <li><span><CheckCircle2 /></span><small>Betaald</small></li>
       </ol>
     </section>
-    <div className="login-card"><div className="app-brand"><div className="brand-icon">{look === 'baken' ? <BrandMark className="bk-mark" /> : 'R'}</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Je <span className="serif">werkruimte</span></h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Heeft dit adres een werkruimte, dan staat de link nu in je mailbox. Open hem in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div>
+    <div className="login-card"><div className="app-brand"><div className="brand-icon"><BrandMark /></div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Je <span className="serif">werkruimte</span></h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Heeft dit adres een werkruimte, dan staat de link nu in je mailbox. Open hem in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div>
   </div></main>;
 }
 

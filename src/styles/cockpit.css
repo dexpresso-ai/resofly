@@ -262,7 +262,7 @@ main.login:not(.portal) .login-card h1 .serif{color:var(--accent-ink)}
 /* Het merk: het gouden blok met een halo, de naam in wit, eronder in goud. */
 .app .app-brand{gap:11px}
 .app .sidebar .brand-icon{
-  background:var(--gold-face);color:#1A1405;
+  background:var(--logo-tile);color:#000;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 -1px 0 rgba(90,55,0,.25),0 0 0 4px rgba(var(--accent-rgb),.09),0 8px 24px -4px rgba(var(--accent-rgb),.55);
 }
 .app .sidebar .app-brand>span{display:flex;flex-direction:column;line-height:1.12;color:#fff;font-weight:800;letter-spacing:-.015em}
@@ -835,7 +835,7 @@ div.boot .login-card{color:var(--ink)}
 .login-story .app-brand{gap:12px;font-size:18px}
 .login-story .brand-icon{
   width:44px;height:44px;border-radius:14px;font-size:20px;
-  background:var(--gold-face);color:#1A1405;
+  background:var(--logo-tile);color:#000;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 6px rgba(247,197,72,.08),0 10px 30px -6px rgba(247,197,72,.6);
 }
 .login-story .app-brand>span{display:flex;flex-direction:column;line-height:1.1;font-weight:800;letter-spacing:-.015em;color:#fff}

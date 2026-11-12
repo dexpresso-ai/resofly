@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Input, Select } from './Ui';
+import { BrandMark } from './BrandMark';
 import { decideConsent, loadConsentRequest, type McpConsentRequest } from '../lib/mcp-api';
 import type { UUID } from '../types';
 
@@ -77,7 +78,7 @@ export function McpConsent({ request, organizations, defaultOrganizationId }: {
     return (
       <main className="login">
         <div className="login-card">
-          <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
+          <div className="app-brand"><div className="brand-icon"><BrandMark /></div><span>ResoFly</span></div>
           <h1>Koppelen lukt niet</h1>
           <p className="error">{error ?? 'Dit koppelverzoek is niet geldig.'}</p>
           <p>Begin opnieuw vanuit je AI-app. Een koppelverzoek is een kwartier geldig; daarna moet je het opnieuw starten.</p>
@@ -89,7 +90,7 @@ export function McpConsent({ request, organizations, defaultOrganizationId }: {
   return (
     <main className="login">
       <div className="login-card mcp-consent">
-        <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
+        <div className="app-brand"><div className="brand-icon"><BrandMark /></div><span>ResoFly</span></div>
 
         <h1>{info.clientName} koppelen?</h1>
         <p>

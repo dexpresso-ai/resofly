@@ -45,7 +45,7 @@
 .onb-brand{display:flex;align-items:center;gap:11px}
 .onb-brand-tile{
   flex:none;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;
-  background:var(--onb-gold);color:#191307;
+  background:var(--logo-tile);color:#000;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 6px rgba(247,197,72,.08),0 10px 28px -8px rgba(247,197,72,.6);
 }
 .onb-brand-tile.is-big{width:64px;height:64px;border-radius:18px}
@@ -401,7 +401,6 @@
   }
   .onb-brand{grid-area:brand}
   .onb-brand-tile{width:34px;height:34px;border-radius:10px}
-  .onb-brand-tile svg{width:24px;height:24px}
   .onb-rail-intro{display:none}
   .onb-meter{grid-area:meter;height:5px}
   .onb-meter-text{grid-area:text;margin:0}
