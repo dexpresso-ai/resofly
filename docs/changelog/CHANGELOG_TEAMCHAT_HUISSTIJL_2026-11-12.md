@@ -102,9 +102,9 @@ vorm en een paar woorden zijn veranderd.
 
 - `npm run typecheck`: geen fouten.
 - `npm test`: 1723 tests, alle groen.
-- `npm run test:mobile -- --theme=both --pages=chat`: telefoon, tablet en
-  liggend in Dag en Nacht groen (eerste gesprek op de telefoon op 235px,
-  grens 260px).
+- `npm run test:mobile -- --theme=both`: 596 pagina's gemeten, 0 met
+  problemen. De chat zelf op telefoon, tablet en liggend in Dag en Nacht groen
+  (eerste gesprek op de telefoon op 235px, grens 260px).
 - Met de nagebootste backend van de mobiele test bekeken op 1440×900 (Dag en
   Nacht): chat, groepschat, kanaal, activiteit en het zwevende paneel, en op de
   telefoon de lijst en een gesprek.
