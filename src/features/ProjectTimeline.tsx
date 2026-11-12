@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Search, SlidersHorizontal, X } from 'lucide-react';
+import { Archive, Building2, CalendarRange, ChevronLeft, ChevronRight, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { AppData, Project, Task } from '../types';
-import { Input, Select } from '../components/Ui';
+import { Select } from '../components/Ui';
 import { isZenitFamily, useLook } from '../lib/look';
 
 type ProjectPhase = 'planning' | 'active' | 'review' | 'overdue' | 'completed';
@@ -11,6 +11,7 @@ type Scale = 'week' | 'month' | 'quarter';
 type TimelineProject = {
   project: Project;
   clientName: string;
+  hasClient: boolean;
   phase: ProjectPhase;
   start: Date;
   end: Date;
@@ -32,8 +33,14 @@ type Column = {
   groupLabel: string;
 };
 
+/** Waar de naam van een project staat. `full`: naam en datums in de balk;
+ *  `name`: alleen de naam past; `after`/`before`: de balk is te kort, de tekst
+ *  staat ernaast. Afkappen tot "Alge" of "Doc" (zo stond het tot 2026-11-12)
+ *  zegt niemand iets. */
+type LabelFit = 'full' | 'name' | 'after' | 'before';
+
 const projectPhaseOptions: { key: ProjectPhase; label: string; description: string }[] = [
-  { key: 'planning', label: 'Planning', description: 'Nog niet gestart of alleen voorbereid' },
+  { key: 'planning', label: 'Gepland', description: 'Nog niet gestart of alleen voorbereid' },
   { key: 'active', label: 'Bezig', description: 'Project loopt of heeft taken in uitvoering' },
   { key: 'review', label: 'Review', description: 'Er staan taken klaar voor review' },
   { key: 'overdue', label: 'Te laat', description: 'Einddatum is verstreken en niet alles is klaar' },
@@ -90,7 +97,11 @@ export function ProjectTimeline({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const todayRef = useRef<HTMLDivElement>(null);
+  const colsRef = useRef<HTMLDivElement>(null);
   const centeredOnce = useRef(false);
+  /** Breedte van het spoor in pixels en de letter van de pagina: daarmee
+   *  rekenen we uit of een naam in zijn balk past. */
+  const [track, setTrack] = useState<{ px: number; font: string }>({ px: 0, font: '' });
 
   const timelineProjects = useMemo<TimelineProject[]>(() => {
     return data.projects.map(project => {
@@ -103,6 +114,7 @@ export function ProjectTimeline({
       return {
         project,
         clientName: client?.name ?? 'Geen klant',
+        hasClient: Boolean(client),
         phase: deriveProjectPhase(project, tasks),
         start: dates.start,
         end: dates.end,
@@ -186,6 +198,7 @@ export function ProjectTimeline({
   }, [span.from, span.to]);
 
   const scale = pickedScale ?? autoScale;
+  const scaleNoun = scale === 'week' ? 'week' : scale === 'month' ? 'maand' : 'kwartaal';
   const columns = useMemo(() => buildColumns(span.from, span.to, scale), [scale, span.from, span.to]);
   const groups = useMemo(() => groupColumns(columns), [columns]);
 
@@ -200,10 +213,52 @@ export function ProjectTimeline({
   const peakLoad = Math.max(0, ...columnLoads);
   const missingExactPlanning = filteredProjects.filter(item => !item.hasExactPlanning).length;
   const openTasks = filteredProjects.reduce((sum, item) => sum + item.tasks.filter(task => task.status !== 'done').length, 0);
+  const lateCount = filteredProjects.filter(item => item.phase === 'overdue').length;
 
   const now = Date.now();
   const todayFraction = clamp((now - rangeStart) / rangeMs, 0, 1);
   const todayInRange = now >= rangeStart && now <= rangeEnd;
+  const nowIndex = columns.findIndex(column => isNowColumn(column, now));
+  const hasRows = filteredProjects.length > 0;
+
+  /** Per project: waar de balk staat, of hij uitloopt en waar de naam past.
+   *  Zolang de breedte nog niet gemeten is, rekenen we met de standaardkolom. */
+  const bars = useMemo(() => {
+    const trackPx = track.px || columns.length * 110;
+    const font = track.font || 'sans-serif';
+    return filteredProjects.map(item => {
+      const left = clamp((item.start.getTime() - rangeStart) / rangeMs, 0, 1) * 100;
+      const right = clamp((item.end.getTime() + 1 - rangeStart) / rangeMs, 0, 1) * 100;
+      const width = Math.max(right - left, 0.4);
+      // Te laat: de uitloop loopt van de einddatum tot vandaag, gearceerd.
+      // Zo zie je op de balk zelf hoe ver een project over zijn tijd is.
+      const overdueDays = item.phase === 'overdue' ? Math.max(1, Math.ceil((now - item.end.getTime()) / DAY_MS)) : 0;
+      const overrun = overdueDays > 0 && todayInRange
+        ? { left: left + width, width: Math.max(0, todayFraction * 100 - (left + width)) }
+        : null;
+      const dateLabel = item.hasExactPlanning
+        ? formatRange(item.start, item.end)
+        : `${formatRange(item.start, item.end)} · geschat`;
+
+      // 16px links (het accentje), 12px rechts, 8px tussen naam en datum.
+      // Zenit zet in de balk alleen de datums: de naam staat al links.
+      const nameW = calm ? 0 : textWidth(item.project.name, `600 12px ${font}`) * 1.06;
+      const dateW = textWidth(dateLabel, `500 11px ${font}`) * 1.06;
+      const barPx = (width / 100) * trackPx;
+      const outsidePx = nameW + (nameW ? 8 : 0) + dateW;
+      const tailPx = ((overrun ? overrun.left + overrun.width : left + width) / 100) * trackPx;
+      const fit: LabelFit = barPx >= 28 + outsidePx ? 'full'
+        : !calm && barPx >= 28 + nameW ? 'name'
+        : tailPx + 10 + outsidePx <= trackPx || (left / 100) * trackPx < outsidePx + 10 ? 'after'
+        : 'before';
+      // Staat de tekst ná een uitlopende balk, dan begint hij na de uitloop.
+      const afterOffset = fit === 'after' && overrun ? (overrun.width / 100) * trackPx : 0;
+
+      return { item, left, width, overrun, overdueDays, dateLabel, fit, afterOffset };
+    });
+  }, [calm, columns.length, filteredProjects, now, rangeMs, rangeStart, todayFraction, todayInRange, track.font, track.px]);
+  const anyEstimated = bars.some(bar => !bar.item.hasExactPlanning);
+  const anyOverrun = bars.some(bar => bar.overrun && bar.overrun.width > 0);
 
   /** Springt direct (niet `smooth`): een vloeiende scroll wordt door de
    *  compositor gedreven en blijft halverwege steken zodra het tabblad niet
@@ -212,7 +267,16 @@ export function ProjectTimeline({
     const scroller = scrollRef.current;
     const marker = todayRef.current;
     if (!scroller || !marker) return;
-    scroller.scrollLeft = Math.max(0, marker.offsetLeft - scroller.clientWidth / 2);
+    scroller.scrollLeft = todayScrollLeft(scroller, marker);
+  }
+
+  /** Een flink stuk verder of terug, met de projectkolom eraf: zonder
+   *  trackpad is zijwaarts slepen op een desktop een gedoe. */
+  function scrollByPage(direction: 1 | -1) {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const labelWidth = scroller.querySelector<HTMLElement>('.ptl-corner')?.offsetWidth ?? 0;
+    scroller.scrollLeft += direction * Math.max(120, (scroller.clientWidth - labelWidth) * 0.75);
   }
 
   /** Bij het openen staat de tijdbalk op vandaag; daarna bepaalt de gebruiker
@@ -223,11 +287,34 @@ export function ProjectTimeline({
     const marker = todayRef.current;
     if (!scroller || !marker) return;
     centeredOnce.current = true;
-    scroller.scrollLeft = Math.max(0, marker.offsetLeft - scroller.clientWidth / 2);
+    scroller.scrollLeft = todayScrollLeft(scroller, marker);
   }, [columns.length, filteredProjects.length]);
+
+  useEffect(() => {
+    const cells = colsRef.current;
+    if (!cells) return;
+    const measure = () => {
+      const px = cells.clientWidth;
+      const font = getComputedStyle(cells).fontFamily;
+      setTrack(current => (current.px === px && current.font === font ? current : { px, font }));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(cells);
+    // Een webfont dat later binnenkomt, is breder of smaller dan de reserve.
+    document.fonts?.ready.then(measure).catch(() => undefined);
+    return () => observer.disconnect();
+  }, [hasRows]);
 
   function togglePhase(phase: ProjectPhase) {
     setPhaseFilters(current => ({ ...current, [phase]: !current[phase] }));
+  }
+
+  function showEverything() {
+    setQuery('');
+    setClientId('');
+    pickLens('alles');
   }
 
   /** Alleen gegevens staan hier: een inline `--ptl-col-w` zou de media queries
@@ -235,264 +322,283 @@ export function ProjectTimeline({
   const boardStyle = {
     '--ptl-cols': columns.length,
     '--ptl-today': todayFraction,
+    '--ptl-now-i': Math.max(0, nowIndex),
   } as CSSProperties;
 
+  const stats = [
+    { key: 'shown', label: 'Projecten', short: 'Projecten', value: filteredProjects.length, tone: '' },
+    { key: 'late', label: 'Te laat', short: 'Te laat', value: lateCount, tone: lateCount > 0 ? 'is-alert' : '' },
+    { key: 'open', label: 'Open taken', short: 'Open', value: openTasks, tone: '' },
+    { key: 'unplanned', label: 'Zonder vaste datum', short: 'Geen datum', value: missingExactPlanning, tone: '' },
+  ];
+
+  const phaseChips = <div className="ptl-chips" role="group" aria-label="Projectfase filters">
+    {projectPhaseOptions.map(option => <button
+      key={option.key}
+      type="button"
+      className={`ptl-chip phase-${option.key} ${phaseFilters[option.key] ? 'is-on' : ''}`}
+      onClick={() => togglePhase(option.key)}
+      title={option.description}
+      aria-pressed={phaseFilters[option.key]}
+    >
+      <span className="ptl-chip-dot" aria-hidden="true" />
+      {option.label}
+      <span className="ptl-chip-count">{phaseCounts[option.key]}</span>
+    </button>)}
+    {activePhaseKeys.length === 0 && <button
+      type="button"
+      className="ptl-chip-reset"
+      onClick={() => setPhaseFilters({ planning: true, active: true, review: true, overdue: true, completed: true })}
+    >Alles tonen</button>}
+  </div>;
+
+  const scaleSwitch = <div className="ptl-scaleswitch" role="group" aria-label="Schaal van de tijdbalk">
+    {scaleOptions.map(option => <button
+      key={option.key}
+      type="button"
+      className={scale === option.key ? 'is-on' : ''}
+      onClick={() => setPickedScale(option.key)}
+      aria-pressed={scale === option.key}
+    >{option.label}</button>)}
+  </div>;
+
+  const navigator = <div className="ptl-nav" role="group" aria-label="Door de tijd">
+    <button type="button" className="ptl-nav-step" onClick={() => scrollByPage(-1)} disabled={!hasRows} aria-label="Terug in de tijd" title="Terug"><ChevronLeft size={15} aria-hidden="true" /></button>
+    <button type="button" className="ptl-nav-today" onClick={scrollToToday} disabled={!hasRows || !todayInRange}>Vandaag</button>
+    <button type="button" className="ptl-nav-step" onClick={() => scrollByPage(1)} disabled={!hasRows} aria-label="Verder in de tijd" title="Verder"><ChevronRight size={15} aria-hidden="true" /></button>
+  </div>;
+
   return <section className={`ptl ptl-${variant} ptl-scale-${scale}${calm ? ' ptl-calm' : ''}`}>
-    {calm
-      ? <>
-        <header className="ptl-head ptl-calm-head">
+    <div className="ptl-top">
+      {calm
+        ? <>
+          <header className="ptl-head ptl-calm-head">
+            <div className="ptl-heading">
+              <h2>Projectplanning</h2>
+              {/* Eén zin in plaats van vier tegels: wat er loopt, wanneer het
+                  druk is en wat er openstaat. */}
+              <p className="ptl-sentence">
+                {plural(filteredProjects.length, 'project', 'projecten')} in beeld
+                {peakLoad > 1 && <> · drukste {scaleNoun}: <b>{columns[columnLoads.indexOf(peakLoad)]?.label}</b> met {peakLoad} tegelijk</>}
+                {openTasks > 0 && <> · {plural(openTasks, 'open taak', 'open taken')}</>}
+                {phaseCounts.overdue > 0 && phaseFilters.overdue && <> · <b className="is-late">{phaseCounts.overdue} te laat</b></>}
+                {missingExactPlanning > 0 && <> · {missingExactPlanning} zonder vaste datum</>}
+              </p>
+            </div>
+          </header>
+
+          <div className="ptl-toolbar ptl-calm-bar">
+            <div className="ptl-lens" role="group" aria-label="Welke projecten">
+              {([['lopend', 'Lopend'], ['telaat', 'Te laat'], ['alles', 'Alles']] as const).map(([key, label]) => <button
+                key={key}
+                type="button"
+                className={lens === key ? 'is-on' : ''}
+                aria-pressed={lens === key}
+                onClick={() => pickLens(key)}
+              >{label}<span className="ptl-lens-n">{lensCounts[key]}</span></button>)}
+            </div>
+            <label className="ptl-qsearch">
+              <Search size={15} aria-hidden="true" />
+              <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Zoek project, klant of taak" aria-label="Zoek in de planning" />
+              {query && <button type="button" onClick={() => setQuery('')} aria-label="Zoekterm wissen"><X size={13} /></button>}
+            </label>
+            <button
+              type="button"
+              className={`ptl-refine${refineOpen ? ' is-open' : ''}`}
+              aria-expanded={refineOpen}
+              aria-label={refineCount > 0 ? `Verfijnen, ${refineCount} actief` : undefined}
+              onClick={() => setRefineOpen(open => !open)}
+            >
+              <SlidersHorizontal size={14} aria-hidden="true" />Verfijnen
+              {refineCount > 0 && <span className="ptl-refine-n" aria-hidden="true">{refineCount}</span>}
+            </button>
+            <div className="ptl-toolbar-end">
+              {scaleSwitch}
+              {navigator}
+            </div>
+          </div>
+
+          {refineOpen && <div className="ptl-refine-row">
+            <div className="ptl-client">
+              <Select value={clientId} onChange={event => setClientId(event.target.value)} aria-label="Klant">
+                <option value="">Alle klanten</option>
+                {data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+              </Select>
+            </div>
+            <div className="ptl-chips" role="group" aria-label="Fases">
+              {projectPhaseOptions.map(option => <button
+                key={option.key}
+                type="button"
+                className={`ptl-chip phase-${option.key} ${phaseFilters[option.key] ? 'is-on' : ''}`}
+                onClick={() => togglePhase(option.key)}
+                title={option.description}
+                aria-pressed={phaseFilters[option.key]}
+              >
+                <span className="ptl-chip-dot" aria-hidden="true" />
+                {option.label}
+                <span className="ptl-chip-count">{phaseCounts[option.key]}</span>
+              </button>)}
+            </div>
+            <button
+              type="button"
+              className={`ptl-toggle ${showArchived ? 'is-on' : ''}`}
+              onClick={() => setShowArchived(value => !value)}
+              aria-pressed={showArchived}
+            >{showArchived ? 'Met archief' : 'Zonder archief'}</button>
+          </div>}
+
+          {!refineOpen && refineCount > 0 && <div className="ptl-active">
+            {clientName && <button type="button" className="ptl-active-chip" onClick={() => setClientId('')}>Klant: {clientName}<X size={12} aria-label="weg" /></button>}
+            {lens === null && <button type="button" className="ptl-active-chip" onClick={() => pickLens('lopend')}>Eigen keuze: {activePhaseKeys.map(key => phaseLabel(key)).join(', ') || 'geen fases'}{showArchived ? ' + archief' : ''}<X size={12} aria-label="weg" /></button>}
+          </div>}
+        </>
+        : <>
+        <header className="ptl-head">
           <div className="ptl-heading">
             <h2>Projectplanning</h2>
-            {/* Eén zin in plaats van vier tegels: wat er loopt, wanneer het
-                druk is en wat er openstaat. */}
-            <p className="ptl-sentence">
-              {plural(filteredProjects.length, 'project', 'projecten')} in beeld
-              {peakLoad > 1 && <> · drukste {scale === 'week' ? 'week' : scale === 'month' ? 'maand' : 'kwartaal'}: <b>{columns[columnLoads.indexOf(peakLoad)]?.label}</b> met {peakLoad} tegelijk</>}
-              {openTasks > 0 && <> · {plural(openTasks, 'open taak', 'open taken')}</>}
-              {phaseCounts.overdue > 0 && phaseFilters.overdue && <> · <b className="is-late">{phaseCounts.overdue} te laat</b></>}
-              {missingExactPlanning > 0 && <> · {missingExactPlanning} zonder vaste datum</>}
-            </p>
+            <p>{isFull
+              ? 'Alle projecten op één tijdbalk. Scroll opzij of gebruik de pijltjes om vooruit of terug te kijken.'
+              : 'Wie loopt er wanneer? De balken tonen looptijd en voortgang per project.'}</p>
+          </div>
+          {/* Elk cijfer draagt twee labels: het volledige voor een breed scherm en een
+              kort voor de telefoon, waar de vier cijfers op één regel staan. Alleen
+              het zichtbare label wordt voorgelezen — `display:none` haalt het andere
+              ook uit de toegankelijkheidsboom. */}
+          <div className="ptl-stats">
+            {stats.map(stat => <div key={stat.key} className={stat.tone}>
+              <span>
+                <span className="ptl-stat-long">{stat.label}</span>
+                <span className="ptl-stat-short">{stat.short}</span>
+              </span>
+              <strong>{stat.value}</strong>
+            </div>)}
           </div>
         </header>
 
-        <div className="ptl-toolbar ptl-calm-bar">
-          <div className="ptl-lens" role="group" aria-label="Welke projecten">
-            {([['lopend', 'Lopend'], ['telaat', 'Te laat'], ['alles', 'Alles']] as const).map(([key, label]) => <button
-              key={key}
-              type="button"
-              className={lens === key ? 'is-on' : ''}
-              aria-pressed={lens === key}
-              onClick={() => pickLens(key)}
-            >{label}<span className="ptl-lens-n">{lensCounts[key]}</span></button>)}
-          </div>
-          <label className="ptl-qsearch">
+        {/* Op het dashboard is er niets te zoeken: daar delen de fases en de
+            tijdknoppen één regel. */}
+        <div className={`ptl-toolbar${isFull ? '' : ' ptl-toolbar-compact'}`}>
+          {!isFull && phaseChips}
+          {isFull && <label className="ptl-search">
             <Search size={15} aria-hidden="true" />
-            <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Zoek project, klant of taak" aria-label="Zoek in de planning" />
+            <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Zoek op project, klant, taak of tag" aria-label="Zoek in de planning" />
             {query && <button type="button" onClick={() => setQuery('')} aria-label="Zoekterm wissen"><X size={13} /></button>}
-          </label>
-          <button
-            type="button"
-            className={`ptl-refine${refineOpen ? ' is-open' : ''}`}
-            aria-expanded={refineOpen}
-            aria-label={refineCount > 0 ? `Verfijnen, ${refineCount} actief` : undefined}
-            onClick={() => setRefineOpen(open => !open)}
-          >
-            <SlidersHorizontal size={14} aria-hidden="true" />Verfijnen
-            {refineCount > 0 && <span className="ptl-refine-n" aria-hidden="true">{refineCount}</span>}
-          </button>
-          <div className="ptl-toolbar-end">
-            <div className="ptl-scaleswitch" role="group" aria-label="Schaal van de tijdbalk">
-              {scaleOptions.map(option => <button
-                key={option.key}
-                type="button"
-                className={scale === option.key ? 'is-on' : ''}
-                onClick={() => setPickedScale(option.key)}
-                aria-pressed={scale === option.key}
-              >{option.label}</button>)}
-            </div>
-            <button type="button" className="ptl-toggle" onClick={scrollToToday} disabled={!todayInRange}>Vandaag</button>
-          </div>
-        </div>
-
-        {refineOpen && <div className="ptl-refine-row">
-          <div className="ptl-client">
-            <Select value={clientId} onChange={event => setClientId(event.target.value)} aria-label="Klant">
+          </label>}
+          {isFull && <div className="ptl-client">
+            <Select value={clientId} onChange={event => setClientId(event.target.value)} aria-label="Klant" icon={<Building2 size={14} />}>
               <option value="">Alle klanten</option>
               {data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
             </Select>
-          </div>
-          <div className="ptl-chips" role="group" aria-label="Fases">
-            {projectPhaseOptions.map(option => <button
-              key={option.key}
-              type="button"
-              className={`ptl-chip phase-${option.key} ${phaseFilters[option.key] ? 'is-on' : ''}`}
-              onClick={() => togglePhase(option.key)}
-              title={option.description}
-              aria-pressed={phaseFilters[option.key]}
-            >
-              <span className="ptl-chip-dot" aria-hidden="true" />
-              {option.label}
-              <span className="ptl-chip-count">{phaseCounts[option.key]}</span>
-            </button>)}
-          </div>
-          <button
+          </div>}
+          {isFull && <button
             type="button"
-            className={`ptl-toggle ${showArchived ? 'is-on' : ''}`}
+            className={`ptl-toggle ptl-archive ${showArchived ? 'is-on' : ''}`}
             onClick={() => setShowArchived(value => !value)}
             aria-pressed={showArchived}
-          >{showArchived ? 'Met archief' : 'Zonder archief'}</button>
-        </div>}
+            title={showArchived ? 'Gearchiveerde projecten staan erbij' : 'Gearchiveerde projecten staan er niet bij'}
+          ><Archive size={14} aria-hidden="true" /><span className="ptl-archive-text">{showArchived ? 'Met archief' : 'Zonder archief'}</span></button>}
 
-        {!refineOpen && refineCount > 0 && <div className="ptl-active">
-          {clientName && <button type="button" className="ptl-active-chip" onClick={() => setClientId('')}>Klant: {clientName}<X size={12} aria-label="weg" /></button>}
-          {lens === null && <button type="button" className="ptl-active-chip" onClick={() => pickLens('lopend')}>Eigen keuze: {activePhaseKeys.map(key => phaseLabel(key)).join(', ') || 'geen fases'}{showArchived ? ' + archief' : ''}<X size={12} aria-label="weg" /></button>}
-        </div>}
-      </>
-      : <>
-      <header className="ptl-head">
-        <div className="ptl-heading">
-          <h2>Projectplanning</h2>
-          <p>{isFull
-            ? 'Alle projecten op één tijdbalk — sleep horizontaal om verder vooruit of terug te kijken.'
-            : 'Wie loopt er wanneer? De balken tonen looptijd en voortgang per project.'}</p>
-        </div>
-        {/* Elk cijfer draagt twee labels: het volledige voor een breed scherm en een
-            kort voor de telefoon, waar de vier cijfers op één regel staan. Alleen
-            het zichtbare label wordt voorgelezen — `display:none` haalt het andere
-            ook uit de toegankelijkheidsboom. */}
-        <div className="ptl-stats">
-          {[
-            { key: 'shown', label: 'Getoond', short: 'Getoond', value: filteredProjects.length },
-            { key: 'peak', label: 'Piek overlap', short: 'Piek', value: peakLoad },
-            { key: 'open', label: 'Open taken', short: 'Open', value: openTasks },
-            { key: 'unplanned', label: 'Zonder planning', short: 'Ongepland', value: missingExactPlanning },
-          ].map(stat => <div key={stat.key}>
-            <span>
-              <span className="ptl-stat-long">{stat.label}</span>
-              <span className="ptl-stat-short">{stat.short}</span>
-            </span>
-            <strong>{stat.value}</strong>
-          </div>)}
-        </div>
-      </header>
-
-      <div className="ptl-toolbar">
-        {isFull && <div className="ptl-search">
-          <Input value={query} onChange={event => setQuery(event.target.value)} placeholder="Zoek op project, klant, taak of tag" />
-        </div>}
-        {isFull && <div className="ptl-client">
-          <Select value={clientId} onChange={event => setClientId(event.target.value)}>
-            <option value="">Alle klanten</option>
-            {data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
-          </Select>
-        </div>}
-        {isFull && <button
-          type="button"
-          className={`ptl-toggle ${showArchived ? 'is-on' : ''}`}
-          onClick={() => setShowArchived(value => !value)}
-          aria-pressed={showArchived}
-        >{showArchived ? 'Inclusief archief' : 'Alleen actief'}</button>}
-
-        <div className="ptl-toolbar-end">
-          <div className="ptl-scaleswitch" role="group" aria-label="Schaal van de tijdbalk">
-            {scaleOptions.map(option => <button
-              key={option.key}
-              type="button"
-              className={scale === option.key ? 'is-on' : ''}
-              onClick={() => setPickedScale(option.key)}
-              aria-pressed={scale === option.key}
-            >{option.label}</button>)}
+          <div className="ptl-toolbar-end">
+            {scaleSwitch}
+            {navigator}
           </div>
-          <button type="button" className="ptl-toggle" onClick={scrollToToday} disabled={!todayInRange}>Vandaag</button>
         </div>
-      </div>
 
-      <div className="ptl-chips" role="group" aria-label="Projectfase filters">
-        <span className="ptl-chips-label">Fase</span>
-        {projectPhaseOptions.map(option => <button
-          key={option.key}
-          type="button"
-          className={`ptl-chip phase-${option.key} ${phaseFilters[option.key] ? 'is-on' : ''}`}
-          onClick={() => togglePhase(option.key)}
-          title={option.description}
-          aria-pressed={phaseFilters[option.key]}
-        >
-          <span className="ptl-chip-dot" aria-hidden="true" />
-          {option.label}
-          <span className="ptl-chip-count">{phaseCounts[option.key]}</span>
-        </button>)}
-        {activePhaseKeys.length === 0 && <button
-          type="button"
-          className="ptl-chip-reset"
-          onClick={() => setPhaseFilters({ planning: true, active: true, review: true, overdue: true, completed: true })}
-        >Alles tonen</button>}
-      </div>
+        {isFull && phaseChips}
+        </>}
+    </div>
 
-      </>}
-
-    {filteredProjects.length === 0
+    {!hasRows
       ? <div className="ptl-empty">
+        <span className="ptl-empty-icon" aria-hidden="true"><CalendarRange size={20} /></span>
         <strong>Geen projecten binnen deze filters</strong>
-        <span>Zet één of meerdere fases aan of pas je zoekopdracht aan.</span>
+        <span>Zet een fase aan, kies een andere klant of pas je zoekwoord aan.</span>
+        <button type="button" className="ptl-empty-btn" onClick={showEverything}>Alles tonen</button>
       </div>
-      : <div className="ptl-scroll" ref={scrollRef} role="region" aria-label="Projecttijdbalk" tabIndex={0}>
+      : <>
+      <div className="ptl-scroll" ref={scrollRef} role="region" aria-label="Projecttijdbalk" tabIndex={0}>
         <div className="ptl-board" style={boardStyle}>
+          {/* De huidige week (of maand) licht over de hele hoogte op: zo zie
+              je in één oogopslag wat er nú loopt. */}
+          {nowIndex >= 0 && <div className="ptl-nowcol" aria-hidden="true" />}
+
           <div className="ptl-headband">
-            <div className="ptl-row ptl-row-group">
-              <div className="ptl-label ptl-label-head" />
-              <div className="ptl-cells">
-                {groups.map(group => <div className="ptl-group" key={group.key} style={{ gridColumn: `span ${group.span}` }}>
-                  <span>{group.label}</span>
-                </div>)}
-              </div>
+            <div className="ptl-corner">
+              <span>Projecten</span>
+              <b>{filteredProjects.length}</b>
             </div>
-
-            <div className="ptl-row ptl-row-cols">
-              <div className="ptl-label ptl-label-head"><span>Project</span></div>
-              <div className="ptl-cells">
-                {columns.map(column => <div
-                  className={`ptl-col ${isNowColumn(column, now) ? 'is-now' : ''}`}
+            <div className="ptl-cells ptl-groups">
+              {groups.map(group => <div className="ptl-group" key={group.key} style={{ gridColumn: `span ${group.span}` }}>
+                <span>{group.label}</span>
+              </div>)}
+            </div>
+            <div className="ptl-cells ptl-cols" ref={colsRef}>
+              {columns.map(column => <div
+                className={`ptl-col ${isNowColumn(column, now) ? 'is-now' : ''}`}
+                key={column.key}
+              >
+                <strong>{column.label}</strong>
+                {column.sub && <span>{column.sub}</span>}
+              </div>)}
+            </div>
+            <div className="ptl-corner ptl-corner-load" title={`Hoeveel projecten er per ${scaleNoun} tegelijk lopen`}>
+              <span>Drukte</span>
+              {peakLoad > 0 && <em>max {peakLoad}</em>}
+            </div>
+            <div className="ptl-cells ptl-loads">
+              {columns.map((column, index) => {
+                const load = columnLoads[index];
+                return <div
+                  className={`ptl-load${load > 0 && load === peakLoad ? ' is-peak' : ''}${index === nowIndex ? ' is-now' : ''}`}
                   key={column.key}
+                  title={`${plural(load, 'project', 'projecten')} in ${column.label}`}
                 >
-                  <strong>{column.label}</strong>
-                  {column.sub && <span>{column.sub}</span>}
-                </div>)}
-              </div>
+                  {load > 0 && <span className="ptl-load-bar" style={{ '--load': peakLoad ? load / peakLoad : 0 } as CSSProperties} aria-hidden="true" />}
+                  <b>{load || ''}</b>
+                </div>;
+              })}
             </div>
 
-            <div className="ptl-row ptl-row-load">
-              <div className="ptl-label ptl-label-head"><span>Bezetting</span></div>
-              <div className="ptl-cells">
-                {columns.map((column, index) => <div
-                  className="ptl-load"
-                  key={column.key}
-                  title={`${columnLoads[index]} project${columnLoads[index] === 1 ? '' : 'en'} in ${column.label}`}
-                >
-                  <span className="ptl-load-bar" style={{ height: `${peakLoad ? (columnLoads[index] / peakLoad) * 100 : 0}%` }} aria-hidden="true" />
-                  <b>{columnLoads[index] || ''}</b>
-                </div>)}
-              </div>
-            </div>
-
-            {todayInRange && <div className="ptl-todaycap" aria-hidden="true"><span>vandaag</span></div>}
+            {todayInRange && <div className="ptl-todaycap" aria-hidden="true"><span>Vandaag</span></div>}
           </div>
 
           <div className="ptl-rows">
-            {filteredProjects.map(item => {
-              const left = clamp((item.start.getTime() - rangeStart) / rangeMs, 0, 1) * 100;
-              const right = clamp((item.end.getTime() + 1 - rangeStart) / rangeMs, 0, 1) * 100;
-              const width = Math.max(right - left, 0.4);
+            {bars.map(({ item, left, width, overrun, overdueDays, dateLabel, fit, afterOffset }) => {
               const openProjectTasks = item.tasks.length - item.doneTasks;
-              const dateLabel = item.hasExactPlanning
-                ? formatRange(item.start, item.end)
-                : `${formatRange(item.start, item.end)} · geschat`;
-              const barTitle = `${item.project.name} — ${phaseLabel(item.phase)} · ${dateLabel} · ${item.progress}% klaar · ${openProjectTasks} open taken`;
+              const lateNote = overdueDays > 0 ? ` · ${plural(overdueDays, 'dag', 'dagen')} over de einddatum` : '';
+              const barTitle = `${item.project.name} — ${phaseLabel(item.phase)} · ${dateLabel}${lateNote} · ${item.progress}% klaar · ${plural(openProjectTasks, 'open taak', 'open taken')}`;
+              const swatch = { '--pc': item.project.color || 'var(--accent)' } as CSSProperties;
 
               return <article className={`ptl-row ptl-project phase-${item.phase}`} key={item.project.id}>
                 <div className="ptl-label">
                   <button type="button" className="ptl-label-btn" onClick={() => openProject(item.project.id)} title={barTitle}>
-                    <span className="ptl-dot" style={{ background: item.project.color }} aria-hidden="true" />
-                    <span className="ptl-label-text">
-                      <strong>{item.project.name}</strong>
-                      <span className="ptl-label-sub">
-                        {item.clientName}
-                        <em className={`ptl-phase phase-${item.phase}`}>{phaseLabel(item.phase)}</em>
-                      </span>
+                    <span className="ptl-swatch" style={swatch} aria-hidden="true" />
+                    <strong className="ptl-label-name">{item.project.name}</strong>
+                    <span className="ptl-label-sub">
+                      <span className={item.hasClient ? '' : 'is-none'}>{item.clientName}</span>
+                      {item.tasks.length > 0 && <span className="ptl-label-tasks">{item.doneTasks}/{item.tasks.length} taken</span>}
                     </span>
-                    <span className="ptl-label-count">{item.tasks.length ? `${item.doneTasks}/${item.tasks.length}` : '—'}</span>
+                    <em className={`ptl-phase phase-${item.phase}`}>{phaseLabel(item.phase)}</em>
                   </button>
                 </div>
                 <div className="ptl-track">
+                  {overrun && overrun.width > 0 && <span
+                    className="ptl-overrun"
+                    style={{ left: `${overrun.left}%`, width: `${overrun.width}%` }}
+                    aria-hidden="true"
+                  />}
                   <button
                     type="button"
-                    className={`ptl-bar ${item.hasExactPlanning ? '' : 'is-estimated'}`}
+                    className={`ptl-bar fit-${fit}${item.hasExactPlanning ? '' : ' is-estimated'}`}
                     onClick={() => openProject(item.project.id)}
-                    style={{ left: `${left}%`, width: `${width}%`, '--pc': item.project.color } as CSSProperties}
+                    style={{ left: `${left}%`, width: `${width}%`, '--pc': item.project.color || 'var(--accent)', '--after': `${afterOffset}px` } as CSSProperties}
                     title={barTitle}
                     aria-label={barTitle}
                   >
-                    <span className="ptl-bar-fill" style={{ width: `${item.progress}%` }} aria-hidden="true" />
-                    <span className="ptl-bar-text">
+                    <span className="ptl-bar-body" aria-hidden="true">
+                      <span className="ptl-bar-fill" style={{ width: `${item.progress}%` }} />
+                    </span>
+                    <span className="ptl-bar-text" aria-hidden="true">
                       <strong>{item.project.name}</strong>
                       <span>{dateLabel}</span>
                     </span>
@@ -504,7 +610,16 @@ export function ProjectTimeline({
 
           {todayInRange && <div className="ptl-todayline" ref={todayRef} aria-hidden="true" />}
         </div>
+      </div>
+
+      {/* Wat de vormen betekenen, alleen als ze ook op het bord staan. */}
+      {(anyEstimated || anyOverrun || todayInRange) && <div className="ptl-legend" aria-hidden="true">
+        {todayInRange && <span className="ptl-legend-item"><i className="ptl-key-today" />Vandaag</span>}
+        <span className="ptl-legend-item"><i className="ptl-key-progress" />Voortgang (afgeronde taken)</span>
+        {anyEstimated && <span className="ptl-legend-item"><i className="ptl-key-estimated" />Geschatte looptijd</span>}
+        {anyOverrun && <span className="ptl-legend-item"><i className="ptl-key-overrun" />Over de einddatum</span>}
       </div>}
+      </>}
   </section>;
 }
 
@@ -689,6 +804,32 @@ function formatRange(start: Date, end: Date) {
     : '';
   const startLabel = start.getFullYear() !== end.getFullYear() ? `${dayMonth(start)} ${start.getFullYear()}` : dayMonth(start);
   return `${startLabel} – ${dayMonth(end)}${suffix}`;
+}
+
+/** Vandaag op tweevijfde van het zichtbare spoor: iets terug en meer vooruit.
+ *  Het midden van het hele venster lag achter de vaste projectkolom; op de
+ *  telefoon stond vandaag dan tegen de linkerrand. */
+function todayScrollLeft(scroller: HTMLElement, marker: HTMLElement) {
+  const labelWidth = scroller.querySelector<HTMLElement>('.ptl-corner')?.offsetWidth ?? 0;
+  const visibleTrack = Math.max(0, scroller.clientWidth - labelWidth);
+  return Math.max(0, marker.offsetLeft - labelWidth - visibleTrack * 0.4);
+}
+
+let measureContext: CanvasRenderingContext2D | null | undefined;
+
+/** Breedte van een tekst in pixels, zonder hem eerst in de pagina te zetten.
+ *  Zonder canvas (oude browser, test) schatten we per teken. */
+function textWidth(text: string, font: string) {
+  if (measureContext === undefined) {
+    try {
+      measureContext = document.createElement('canvas').getContext('2d');
+    } catch {
+      measureContext = null;
+    }
+  }
+  if (!measureContext) return text.length * 6.8;
+  measureContext.font = font;
+  return measureContext.measureText(text).width;
 }
 
 function clamp(value: number, min: number, max: number) {
