@@ -4156,6 +4156,22 @@ body::before{
 .email-toast-close:hover{color:var(--text)}
 @keyframes email-toast-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 
+/* Meldingen onderin zijn altijd een donkere, dichte kaart: in elke look en
+   ook op Dag. Ze hadden --bg3 als achtergrond, en dat is een waas van 3 tot
+   5% wit, bedoeld als laag óp een kaart. Los boven de pagina scheen alles
+   erdoorheen en was "Installeer ResoFly" niet te lezen.
+   De inkt staat hier opnieuw: --text en --muted zijn op :root al tot de kleur
+   van het thema uitgerekend, en op Dag zou donkere tekst op dit donkere vlak
+   staan. Het goud blijft goud; als tekst is het op donker leesbaar (zie
+   --accent-ink bij Nacht). .mf-notice (verplaatst, met Ongedaan maken) had
+   dezelfde kwaal. */
+.email-toast,.mf-notice{
+  --text:#F4F3F0;--ink:#F4F3F0;--muted:#B5B3AD;--muted2:#C9C7C1;
+  --bg4:rgba(255,255,255,.08);--border2:#3A3A42;
+  --accent-ink:var(--accent);--accent-r:#FF6B72;
+  background:#1C1C21;color:var(--text);color-scheme:dark;
+}
+
 /* ============================================================
    Responsieve navigatie
    - Laptop/desktop (≥761px): smalle iconenbalk die bij hover/focus
