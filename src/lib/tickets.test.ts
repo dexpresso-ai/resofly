@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import type { Ticket } from '../types.ts';
 import {
   TICKET_OPEN_STATUSES, TICKET_REOPEN_STATUS, TICKET_STATUS_LABELS, TICKET_STATUS_ORDER, TICKET_WORKLIST_STATUSES,
-  canResolveTicket, changedTicketValues, isTicketArchived, sortArchivedTickets, ticketClientChangeWarning, ticketInScope, ticketMatchesStatus, ticketResolvedAt, ticketStatusLabel,
+  canResolveTicket, changedTicketValues, isTicketArchived, sortArchivedTickets, ticketClientChangeWarning, ticketInListScope, ticketInScope, ticketMatchesStatus, ticketStatusesInListScope, ticketResolvedAt, ticketStatusLabel,
 } from './tickets.ts';
 
 function ticket(over: Partial<Ticket> = {}): Ticket {
@@ -44,6 +44,17 @@ test('werklijst en archief: alleen afgehandeld gaat naar het archief', () => {
   assert.equal(isTicketArchived(done), true);
   assert.equal(ticketInScope(done, 'worklist'), false);
   assert.equal(ticketInScope(done, 'archive'), true);
+});
+
+test('ticketpagina: actief is nieuw, review en goedgekeurd; alle is alles; archief is afgehandeld', () => {
+  const inScope = (scope: 'active' | 'all' | 'archive') => TICKET_STATUS_ORDER.filter(status => ticketInListScope(ticket({ status }), scope));
+  assert.deepEqual(inScope('active'), ['new', 'review', 'approved']);
+  assert.deepEqual(inScope('all'), TICKET_STATUS_ORDER);
+  assert.deepEqual(inScope('archive'), ['resolved']);
+  // Het statusfilter biedt alleen aan wat in de lijst kan staan, anders kies je een lege lijst.
+  assert.deepEqual(ticketStatusesInListScope('active'), ['new', 'review', 'approved']);
+  assert.deepEqual(ticketStatusesInListScope('all'), TICKET_STATUS_ORDER);
+  assert.deepEqual(ticketStatusesInListScope('archive'), []);
 });
 
 test('afhandelen kan bij alles behalve wat al afgehandeld is of een project werd', () => {

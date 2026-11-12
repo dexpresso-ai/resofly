@@ -1,26 +1,24 @@
-﻿import { useMemo, useState } from 'react';
+﻿import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarPlus, CircleCheck, FolderPlus, List, MoreVertical, RotateCcw, Table as TableIcon } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarPlus, Check, CircleCheck, FolderPlus, List, MoreVertical, RotateCcw, Search, SlidersHorizontal, Table as TableIcon, X } from 'lucide-react';
 import type { AppData, OrganizationMember, Priority, Ticket, TicketStatus } from '../types';
-import { Button } from '../components/Ui';
+import { Button, Select } from '../components/Ui';
 import { Modal } from '../components/Modal';
-import { SearchFilterPanel } from '../components/SearchFilterPanel';
-import type { FilterField } from '../components/SearchFilterPanel';
 import { dateNL, priorityLabel } from '../lib/format';
 import { listTime } from '../lib/communication';
 import {
   TICKET_OPEN_STATUSES, TICKET_STATUS_LABELS, TICKET_STATUS_ORDER, TICKET_WORKLIST_STATUSES,
-  canResolveTicket, isTicketArchived, sortArchivedTickets, ticketInScope, ticketResolvedAt, type TicketScope,
+  canResolveTicket, isTicketArchived, sortArchivedTickets, ticketInListScope, ticketMatchesStatus, ticketResolvedAt,
+  ticketStatusesInListScope, type TicketListScope,
 } from '../lib/tickets';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
 import { holderName, matchesHolder, memberColor, memberInitials, memberShortName, membersWhoCanHold } from '../lib/members';
 
 // Om te zetten naar een project = nog actief te behandelen: dezelfde drie
-// statussen als "Openstaand" (niet afgewezen, niet omgezet en niet
-// afgehandeld). De labels en volgorde staan in lib/tickets.ts, gedeeld met het
-// klantdossier en Berichten.
+// statussen als "Actief" (niet afgewezen, niet omgezet en niet afgehandeld).
+// De labels en volgorde staan in lib/tickets.ts, gedeeld met het klantdossier
+// en Berichten.
 const convertibleStatuses = TICKET_OPEN_STATUSES;
-const openStatuses = TICKET_OPEN_STATUSES;
 const STATUS_ORDER = TICKET_STATUS_ORDER;
 const ticketStatusLabels = TICKET_STATUS_LABELS;
 const priorityRank: Record<Priority, number> = { high: 3, med: 2, low: 1 };
@@ -49,30 +47,42 @@ type TicketActions = {
  * chip getekend zijn. Meerdere vinkjes stapelen: ze moeten állemaal kloppen
  * (EN, geen OF) — "openstaand én hoge prioriteit" is de vraag die je stelt.
  *
- * Een paar vragen gaan alleen over de werklijst: in het archief is alles
- * afgehandeld, niet meer om te zetten en niet ongelezen (de view ticket_unread
- * telt een afgehandeld ticket niet). Daar zouden ze altijd 0 tonen. */
-type QuickFilterKey = 'mine' | 'unassigned' | 'open' | 'unread' | 'high' | 'convertible' | 'noClient';
+ * Een paar vragen horen niet bij het archief: daar is alles afgehandeld, niet
+ * meer om te zetten en niet ongelezen (de view ticket_unread telt een
+ * afgehandeld ticket niet). Daar zouden ze altijd 0 tonen.
+ *
+ * "Openstaand" was hier ook een chip. Dat is nu de lijst Actief, waar de
+ * pagina mee opent; als chip zou hij daar altijd alles tonen. */
+type QuickFilterKey = 'mine' | 'unassigned' | 'unread' | 'high' | 'convertible' | 'noClient';
 type QuickFilterDef = {
   key: QuickFilterKey;
   label: string;
   title: string;
-  worklistOnly?: boolean;
+  notInArchive?: boolean;
   match: (ticket: Ticket, unread: Set<string>, currentUserId: string | null) => boolean;
 };
 const QUICK_FILTERS: QuickFilterDef[] = [
-  // Vooraan: "wat ligt er op mijn bord?" is de eerste vraag van wie de werklijst opent.
+  // Vooraan: "wat ligt er op mijn bord?" is de eerste vraag van wie de tickets opent.
   { key: 'mine', label: 'Aan mij', title: 'Alleen tickets die aan jou zijn toegewezen', match: (ticket, _unread, me) => matchesHolder(ticket.assignee_user_id, 'me', me) },
-  { key: 'unassigned', label: 'Niet toegewezen', title: 'Alleen tickets die nog niemand heeft opgepakt', worklistOnly: true, match: ticket => !ticket.assignee_user_id },
-  { key: 'open', label: 'Openstaand', title: 'Alleen tickets die nog behandeld moeten worden', worklistOnly: true, match: ticket => openStatuses.has(ticket.status) },
-  { key: 'unread', label: 'Ongelezen', title: 'Alleen tickets met iets nieuws dat je nog niet gezien hebt', worklistOnly: true, match: (ticket, unread) => unread.has(ticket.id) },
+  { key: 'unassigned', label: 'Niet toegewezen', title: 'Alleen tickets die nog niemand heeft opgepakt', notInArchive: true, match: ticket => !ticket.assignee_user_id },
+  { key: 'unread', label: 'Ongelezen', title: 'Alleen tickets met iets nieuws dat je nog niet gezien hebt', notInArchive: true, match: (ticket, unread) => unread.has(ticket.id) },
   { key: 'high', label: 'Hoge prioriteit', title: 'Alleen tickets met prioriteit hoog', match: ticket => ticket.priority === 'high' },
-  { key: 'convertible', label: 'Om te zetten', title: 'Alleen tickets die je nog naar een project kunt omzetten', worklistOnly: true, match: ticket => convertibleStatuses.has(ticket.status) && !ticket.converted_to_project_id },
+  { key: 'convertible', label: 'Om te zetten', title: 'Alleen tickets die je nog naar een project kunt omzetten', notInArchive: true, match: ticket => convertibleStatuses.has(ticket.status) && !ticket.converted_to_project_id },
   { key: 'noClient', label: 'Zonder klant', title: 'Alleen tickets die nog aan geen enkele klant hangen', match: ticket => !ticket.client_id },
 ];
-function quickFiltersFor(scope: TicketScope): QuickFilterDef[] {
-  return scope === 'worklist' ? QUICK_FILTERS : QUICK_FILTERS.filter(def => !def.worklistOnly);
+function quickFiltersFor(scope: TicketListScope): QuickFilterDef[] {
+  return scope === 'archive' ? QUICK_FILTERS.filter(def => !def.notInArchive) : QUICK_FILTERS;
 }
+
+/* ── Actief, Alle, Archief ─────────────────────────────────────────────────
+ * Drie lijsten naast Lijst/Tabel. De pagina opent op Actief (zie
+ * TicketListScope in lib/tickets.ts). De teller staat erbij, zodat je ziet
+ * wat er in de andere lijsten ligt zonder te klikken. */
+const SCOPES: { key: TicketListScope; label: string; title: string; ariaLabel: (count: number) => string }[] = [
+  { key: 'active', label: 'Actief', title: 'Nieuw, review en goedgekeurd: wat nog werk is', ariaLabel: n => `Actief: ${n} ticket${n === 1 ? '' : 's'} in behandeling` },
+  { key: 'all', label: 'Alle', title: 'Alle tickets, ook geweigerd, omgezet en afgehandeld', ariaLabel: n => `Alle tickets: ${n}` },
+  { key: 'archive', label: 'Archief', title: 'Afgehandelde tickets', ariaLabel: n => `Archief: ${n} afgehandeld${n === 1 ? ' ticket' : 'e tickets'}` },
+];
 
 /** `assignee`: zie matchesHolder ('' = iedereen, 'me', 'none' of een user-id). */
 type TicketFilters = { query: string; status: string; priority: string; clientId: string; assignee: string; quick: QuickFilterKey[] };
@@ -80,8 +90,8 @@ const emptyTicketFilters: TicketFilters = { query: '', status: '', priority: '',
 
 type SortKey = 'title' | 'client' | 'assignee' | 'priority' | 'status' | 'created' | 'resolved';
 type SortState = { key: SortKey; dir: 'asc' | 'desc' };
-/** Het archief begint bij wat het laatst is afgehandeld, de werklijst bij het nieuwste ticket. */
-function defaultSort(scope: TicketScope): SortState {
+/** Het archief begint bij wat het laatst is afgehandeld, Actief en Alle bij het nieuwste ticket. */
+function defaultSort(scope: TicketListScope): SortState {
   return scope === 'archive' ? { key: 'resolved', dir: 'desc' } : { key: 'created', dir: 'desc' };
 }
 
@@ -110,19 +120,15 @@ function buildTicketSearchText(ticket: Ticket, data: AppData, members: Organizat
   return normalize(parts.filter(part => part !== null && part !== undefined).join(' '));
 }
 
-function filterTickets(tickets: Ticket[], data: AppData, filters: TicketFilters, unread: Set<string>, scope: TicketScope, members: OrganizationMember[], currentUserId: string | null): Ticket[] {
+function filterTickets(tickets: Ticket[], data: AppData, filters: TicketFilters, unread: Set<string>, scope: TicketListScope, members: OrganizationMember[], currentUserId: string | null): Ticket[] {
   const query = normalize(filters.query);
   const quick = quickFiltersFor(scope).filter(def => filters.quick.includes(def.key));
   return tickets.filter(ticket => {
     if (filters.clientId && ticket.client_id !== filters.clientId) return false;
     if (!matchesHolder(ticket.assignee_user_id, filters.assignee, currentUserId)) return false;
     if (filters.priority && ticket.priority !== filters.priority) return false;
-    // Het statusfilter is er alleen op de werklijst; in het archief is alles afgehandeld.
-    if (scope === 'worklist') {
-      if (filters.status === 'open') {
-        if (!openStatuses.has(ticket.status)) return false;
-      } else if (filters.status && ticket.status !== filters.status) return false;
-    }
+    // In het archief is alles afgehandeld; daar is geen statusfilter.
+    if (scope !== 'archive' && !ticketMatchesStatus(ticket, filters.status)) return false;
     for (const def of quick) if (!def.match(ticket, unread, currentUserId)) return false;
     if (!query) return true;
     return buildTicketSearchText(ticket, data, members).includes(query);
@@ -153,81 +159,97 @@ function sortTickets(tickets: Ticket[], data: AppData, sort: SortState, members:
 
 export function Tickets({ data, onNew, onEdit, onConvert, onPlan, onResolve, onReopen, unreadTicketIds, teamMembers = [], currentUserId = null }: { data: AppData; onNew: () => void; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; onPlan: (t: Ticket) => void; onResolve: (t: Ticket) => void; onReopen: (t: Ticket) => void; unreadTicketIds: Set<string>; teamMembers?: OrganizationMember[]; currentUserId?: string | null }) {
   const [view, setView] = useState<TicketView>(() => readStoredView());
-  const [scope, setScope] = useState<TicketScope>('worklist');
+  // Je begint bij wat nog werk is. Bewust niet onthouden: wie de pagina opent,
+  // wil eerst weten wat er ligt, niet wat hij vorige keer bekeek.
+  const [scope, setScope] = useState<TicketListScope>('active');
   const [filters, setFilters] = useState<TicketFilters>(emptyTicketFilters);
-  // Eerst werklijst of archief, dan pas de filters: zo tellen de chips en
-  // "x van y" binnen wat je voor je hebt, niet over alle tickets samen.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filterPanelId = useId();
+  // Eerst de lijst (actief, alle of archief), dan pas de filters: zo tellen de
+  // chips en "x van y" binnen wat je voor je hebt, niet over alle tickets samen.
   const scopeTickets = useMemo(() => {
-    const list = data.tickets.filter(ticket => ticketInScope(ticket, scope));
+    const list = data.tickets.filter(ticket => ticketInListScope(ticket, scope));
     return scope === 'archive' ? sortArchivedTickets(list) : list;
   }, [data.tickets, scope]);
-  const archivedCount = useMemo(() => data.tickets.filter(isTicketArchived).length, [data.tickets]);
+  const scopeCounts = useMemo<Record<TicketListScope, number>>(() => ({
+    active: data.tickets.filter(ticket => ticketInListScope(ticket, 'active')).length,
+    all: data.tickets.length,
+    archive: data.tickets.filter(isTicketArchived).length,
+  }), [data.tickets]);
   // Filteren gebeurt hier en niet in de tabel, zodat hetzelfde filter ook in de
   // lijstweergave werkt en een klik op een statuskaart je niet meer naar de
   // tabel hoeft te duwen om iets te doen.
   const visible = useMemo(() => filterTickets(scopeTickets, data, filters, unreadTicketIds, scope, teamMembers, currentUserId), [scopeTickets, data, filters, unreadTicketIds, scope, teamMembers, currentUserId]);
+  const model = useTicketFilterModel({ data, tickets: scopeTickets, scope, filters, unreadTicketIds, teamMembers, currentUserId });
   const actions: TicketActions = { onEdit, onConvert, onPlan, onResolve, onReopen };
 
   const switchView = (next: TicketView) => { setView(next); persistView(next); };
   const resetFilters = () => setFilters(emptyTicketFilters);
-  /** Zoekterm, klant en prioriteit gaan mee; wat alleen op de werklijst iets betekent, gaat uit. */
-  const switchScope = (next: TicketScope) => {
+  /** Zoekterm, klant, prioriteit en teamlid gaan mee; een status of chip die in de nieuwe lijst niet kan, gaat uit. */
+  const switchScope = (next: TicketListScope) => {
     setScope(next);
     setFilters(prev => ({
       ...prev,
-      status: '',
+      status: ticketStatusesInListScope(next).some(status => status === prev.status) ? prev.status : '',
       quick: prev.quick.filter(key => quickFiltersFor(next).some(def => def.key === key)),
     }));
   };
   const handleStatSelect = (status: TicketStatus) => {
-    // De statuskaarten gaan over de werklijst. Vanuit het archief brengt er een
-    // je terug, met dat filter aan.
-    if (scope === 'archive') {
-      setScope('worklist');
-      setFilters(prev => ({ ...prev, status }));
+    if (scope !== 'archive' && filters.status === status) {
+      setFilters(prev => ({ ...prev, status: '' }));
       return;
     }
-    setFilters(prev => ({ ...prev, status: prev.status === status ? '' : status }));
+    // Staat die status niet in de lijst die je bekijkt (Geweigerd vanuit
+    // Actief, of wat dan ook vanuit het archief), dan neemt de kaart je mee
+    // naar een lijst waar hij wél staat. Anders klik je op "Geweigerd 2" en
+    // zie je niets.
+    if (!ticketStatusesInListScope(scope).includes(status)) switchScope(TICKET_OPEN_STATUSES.has(status) ? 'active' : 'all');
+    setFilters(prev => ({ ...prev, status }));
   };
 
   return <>
-    <TicketStatsBar data={data} activeStatus={scope === 'worklist' ? filters.status : ''} onSelect={handleStatSelect} />
+    <TicketStatsBar data={data} activeStatus={scope === 'archive' ? '' : filters.status} onSelect={handleStatSelect} />
 
     <div className="crm-toolbar ticket-toolbar">
-      <div className="ticket-toolbar-start">
-        <div className="ticket-view-switch" role="group" aria-label="Weergave kiezen">
-          <button type="button" aria-pressed={view === 'list'} onClick={() => switchView('list')}><List size={14}/> Lijst</button>
-          <button type="button" aria-pressed={view === 'table'} onClick={() => switchView('table')}><TableIcon size={14}/> Tabel</button>
-        </div>
-        {/* Het archief zit naast de weergavekeuze en niet in een eigen rij: op
-            een telefoon kost elke rij boven de lijst een ticket minder in beeld. */}
-        <button
-          type="button"
-          className="ticket-archive-toggle"
-          aria-pressed={scope === 'archive'}
-          aria-label={`Archief: ${archivedCount} afgehandeld${archivedCount === 1 ? ' ticket' : 'e tickets'}`}
-          title={scope === 'archive' ? 'Terug naar de werklijst' : 'Afgehandelde tickets bekijken'}
-          onClick={() => switchScope(scope === 'archive' ? 'worklist' : 'archive')}
-        >
-          <Archive size={14} aria-hidden="true"/>
-          <span className="ticket-archive-label">Archief</span>
-          <span className="ticket-archive-count">{archivedCount}</span>
-        </button>
+      <div className="ticket-view-switch" role="group" aria-label="Weergave kiezen">
+        <button type="button" aria-pressed={view === 'list'} onClick={() => switchView('list')}><List size={14}/> Lijst</button>
+        <button type="button" aria-pressed={view === 'table'} onClick={() => switchView('table')}><TableIcon size={14}/> Tabel</button>
       </div>
+      <TicketScopeSwitch scope={scope} counts={scopeCounts} onChange={switchScope} />
+      <TicketSearch
+        query={filters.query}
+        placeholder={scope === 'archive' ? 'Zoek in het archief…' : 'Zoek in tickets…'}
+        onChange={query => setFilters(prev => ({ ...prev, query }))}
+      />
+      <button
+        type="button"
+        className={`ticket-tool ticket-filter-toggle${filtersOpen ? ' is-open' : ''}${model.activeCount > 0 ? ' has-active' : ''}`}
+        onClick={() => setFiltersOpen(open => !open)}
+        aria-expanded={filtersOpen}
+        aria-controls={filtersOpen ? filterPanelId : undefined}
+        aria-label={model.activeCount > 0 ? `Filteren, ${model.activeCount} actief` : 'Filteren'}
+        title="Snelfilters, status, prioriteit, klant en teamlid"
+      >
+        <SlidersHorizontal size={14} aria-hidden="true"/>
+        <span className="ticket-tool-label">Filteren</span>
+        {model.activeCount > 0 && <span className="ticket-tool-count" aria-hidden="true">{model.activeCount}</span>}
+      </button>
       <Button variant="primary" onClick={onNew}>+ Nieuw ticket</Button>
     </div>
 
+    {filtersOpen
+      ? <TicketFilterPanel id={filterPanelId} model={model} filters={filters} scope={scope} visibleCount={visible.length} totalCount={scopeTickets.length} onChange={setFilters} onReset={resetFilters} onClose={() => setFiltersOpen(false)} />
+      : <TicketFilterSummary model={model} filters={filters} scope={scope} visibleCount={visible.length} totalCount={scopeTickets.length} onChange={setFilters} onReset={resetFilters} />}
+
     {scope === 'archive' && <div className="ticket-archive-note">
       <Archive size={15} aria-hidden="true"/>
-      <p><strong>Archief</strong>: afgehandelde tickets, laatst afgehandeld bovenaan. Reageert de klant nog, dan komt het ticket vanzelf terug op de werklijst. <button type="button" className="ticket-archive-back" onClick={() => switchScope('worklist')}>Naar de werklijst</button></p>
+      <p><strong>Archief</strong>: afgehandelde tickets, laatst afgehandeld bovenaan. Reageert de klant nog, dan komt het ticket vanzelf terug bij Actief. <button type="button" className="ticket-archive-back" onClick={() => switchScope('active')}>Naar Actief</button></p>
     </div>}
 
-    <TicketFilterPanel data={data} tickets={scopeTickets} scope={scope} filters={filters} visibleCount={visible.length} onChange={setFilters} unreadTicketIds={unreadTicketIds} teamMembers={teamMembers} currentUserId={currentUserId} />
-
     {view === 'list'
-      ? <TicketCardList data={data} tickets={visible} scope={scope} scopeTotal={scopeTickets.length} actions={actions} unreadTicketIds={unreadTicketIds} onReset={resetFilters} onScope={switchScope} teamMembers={teamMembers} currentUserId={currentUserId} />
+      ? <TicketCardList data={data} tickets={visible} scope={scope} scopeTotal={scopeTickets.length} hasQuery={filters.query.trim() !== ''} actions={actions} unreadTicketIds={unreadTicketIds} onReset={resetFilters} onScope={switchScope} teamMembers={teamMembers} currentUserId={currentUserId} />
       // key: een andere lijst begint met zijn eigen sortering (zie defaultSort).
-      : <TicketTable key={scope} data={data} tickets={visible} scope={scope} scopeTotal={scopeTickets.length} actions={actions} unreadTicketIds={unreadTicketIds} onReset={resetFilters} onScope={switchScope} teamMembers={teamMembers} currentUserId={currentUserId} />}
+      : <TicketTable key={scope} data={data} tickets={visible} scope={scope} scopeTotal={scopeTickets.length} hasQuery={filters.query.trim() !== ''} actions={actions} unreadTicketIds={unreadTicketIds} onReset={resetFilters} onScope={switchScope} teamMembers={teamMembers} currentUserId={currentUserId} />}
   </>;
 }
 
@@ -245,15 +267,22 @@ function TicketStatsBar({ data, activeStatus, onSelect }: { data: AppData; activ
 }
 
 /** Leeg scherm. Onderscheid tussen "er is hier nog niets" en "je filter laat
- *  er nu niets zien" — anders lijkt een te streng filter op een lege app. En
- *  een werklijst die leeg is omdat alles is afgehandeld, wijst naar het archief. */
-function TicketEmpty({ scope, scopeTotal, hasTickets, onReset, onScope }: { scope: TicketScope; scopeTotal: number; hasTickets: boolean; onReset: () => void; onScope: (scope: TicketScope) => void }) {
+ *  er nu niets zien" — anders lijkt een te streng filter op een lege app. Een
+ *  lege lijst Actief wijst naar Alle, en wie zoekt in Actief of het archief en
+ *  niets vindt, kan met één klik in alle tickets zoeken: wat je zoekt is vaak
+ *  al afgehandeld of geweigerd. */
+function TicketEmpty({ scope, scopeTotal, hasTickets, hasQuery, onReset, onScope }: { scope: TicketListScope; scopeTotal: number; hasTickets: boolean; hasQuery: boolean; onReset: () => void; onScope: (scope: TicketListScope) => void }) {
   if (scopeTotal === 0) {
-    if (scope === 'archive') return <div className="empty quote-table-empty"><div className="e-big">Het archief is nog leeg</div><p>Zet een ticket op <strong>Afgehandeld</strong>, dan verdwijnt het van de werklijst en vind je het hier terug.</p></div>;
-    if (hasTickets) return <div className="empty quote-table-empty finance-search-empty"><div className="e-big">Alles is afgehandeld</div><p>Er staat niets meer op de werklijst. Afgehandelde tickets vind je in het archief.</p><button type="button" onClick={() => onScope('archive')}><Archive size={14}/> Naar het archief</button></div>;
+    if (scope === 'archive') return <div className="empty quote-table-empty"><div className="e-big">Het archief is nog leeg</div><p>Zet een ticket op <strong>Afgehandeld</strong>, dan gaat het naar het archief en vind je het hier terug.</p></div>;
+    if (scope === 'active' && hasTickets) return <div className="empty quote-table-empty finance-search-empty"><div className="e-big">Niets meer te doen</div><p>Er staat geen ticket op nieuw, review of goedgekeurd. Geweigerde, omgezette en afgehandelde tickets staan onder Alle.</p><button type="button" onClick={() => onScope('all')}>Alle tickets tonen</button></div>;
     return <div className="empty quote-table-empty"><div className="e-big">Nog geen tickets</div><p>Maak je eerste ticket aan om binnenkomende vragen op te volgen.</p></div>;
   }
-  return <div className="empty quote-table-empty finance-search-empty"><div className="e-big">Geen tickets gevonden</div><p>Pas je zoekterm of filters aan om meer resultaten te tonen.</p><button type="button" onClick={onReset}><RotateCcw size={14}/> Filters wissen</button></div>;
+  return <div className="empty quote-table-empty finance-search-empty"><div className="e-big">Geen tickets gevonden</div><p>Pas je zoekterm of filters aan om meer resultaten te tonen.</p>
+    <div className="ticket-empty-actions">
+      {hasQuery && scope !== 'all' && <button type="button" onClick={() => onScope('all')}><Search size={14}/> Zoek in alle tickets</button>}
+      <button type="button" onClick={onReset}><RotateCcw size={14}/> Filters wissen</button>
+    </div>
+  </div>;
 }
 
 /**
@@ -269,19 +298,19 @@ function TicketEmpty({ scope, scopeTotal, hasTickets, onReset, onScope }: { scop
 function TicketActionButtons({ ticket, actions }: { ticket: Ticket; actions: TicketActions }) {
   const run = (action: (t: Ticket) => void) => (event: MouseEvent) => { event.stopPropagation(); action(ticket); };
   if (isTicketArchived(ticket)) {
-    return <Button onClick={run(actions.onReopen)} title="Terug naar de werklijst, op Review"><ArchiveRestore size={14} aria-hidden="true"/> Heropenen</Button>;
+    return <Button onClick={run(actions.onReopen)} title="Terug naar Actief, op Review"><ArchiveRestore size={14} aria-hidden="true"/> Heropenen</Button>;
   }
   const canConvert = convertibleStatuses.has(ticket.status) && !ticket.converted_to_project_id;
   const canResolve = canResolveTicket(ticket);
   return <>
     {canConvert && <Button onClick={run(actions.onPlan)} title="Maak er meteen een taak van in de weekplanner">Op de planning</Button>}
     {canConvert && <Button onClick={run(actions.onConvert)}>Project maken</Button>}
-    {canResolve && <Button className={`tk-resolve-btn${canConvert ? ' is-compact' : ''}`} onClick={run(actions.onResolve)} aria-label="Afhandelen" title="Afhandelen: het ticket gaat van de werklijst naar het archief"><CircleCheck size={14} aria-hidden="true"/><span className="tk-btn-text">Afhandelen</span></Button>}
+    {canResolve && <Button className={`tk-resolve-btn${canConvert ? ' is-compact' : ''}`} onClick={run(actions.onResolve)} aria-label="Afhandelen" title="Afhandelen: het ticket gaat naar het archief"><CircleCheck size={14} aria-hidden="true"/><span className="tk-btn-text">Afhandelen</span></Button>}
     {!canConvert && !canResolve && <Button disabled>{ticket.status === 'converted' || ticket.converted_to_project_id ? 'Al omgezet' : 'Niet converteerbaar'}</Button>}
   </>;
 }
 
-type TicketListProps = { data: AppData; tickets: Ticket[]; scope: TicketScope; scopeTotal: number; actions: TicketActions; unreadTicketIds: Set<string>; onReset: () => void; onScope: (scope: TicketScope) => void; teamMembers: OrganizationMember[]; currentUserId: string | null };
+type TicketListProps = { data: AppData; tickets: Ticket[]; scope: TicketListScope; scopeTotal: number; hasQuery: boolean; actions: TicketActions; unreadTicketIds: Set<string>; onReset: () => void; onScope: (scope: TicketListScope) => void; teamMembers: OrganizationMember[]; currentUserId: string | null };
 
 /** Wie het ticket heeft, als avatar met naam; niets als niemand het heeft. */
 function TicketAssignee({ ticket, teamMembers, currentUserId, withName = true }: { ticket: Ticket; teamMembers: OrganizationMember[]; currentUserId: string | null; withName?: boolean }) {
@@ -295,8 +324,8 @@ function TicketAssignee({ ticket, teamMembers, currentUserId, withName = true }:
   </span>;
 }
 
-function TicketCardList({ data, tickets, scope, scopeTotal, actions, unreadTicketIds, onReset, onScope, teamMembers, currentUserId }: TicketListProps) {
-  if (tickets.length === 0) return <TicketEmpty scope={scope} scopeTotal={scopeTotal} hasTickets={data.tickets.length > 0} onReset={onReset} onScope={onScope} />;
+function TicketCardList({ data, tickets, scope, scopeTotal, hasQuery, actions, unreadTicketIds, onReset, onScope, teamMembers, currentUserId }: TicketListProps) {
+  if (tickets.length === 0) return <TicketEmpty scope={scope} scopeTotal={scopeTotal} hasTickets={data.tickets.length > 0} hasQuery={hasQuery} onReset={onReset} onScope={onScope} />;
   return <div className={`ticket-list${scope === 'archive' ? ' is-archive' : ''}`}>
     {tickets.map(ticket => {
       const client = data.clients.find(c => c.id === ticket.client_id);
@@ -308,7 +337,7 @@ function TicketCardList({ data, tickets, scope, scopeTotal, actions, unreadTicke
   </div>;
 }
 
-function TicketTable({ data, tickets, scope, scopeTotal, actions, unreadTicketIds, onReset, onScope, teamMembers, currentUserId }: TicketListProps) {
+function TicketTable({ data, tickets, scope, scopeTotal, hasQuery, actions, unreadTicketIds, onReset, onScope, teamMembers, currentUserId }: TicketListProps) {
   const [sort, setSort] = useState<SortState>(() => defaultSort(scope));
   const sorted = useMemo(() => sortTickets(tickets, data, sort, teamMembers), [tickets, data, sort, teamMembers]);
   const narrow = useNarrowViewport();
@@ -318,7 +347,7 @@ function TicketTable({ data, tickets, scope, scopeTotal, actions, unreadTicketId
     ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
     : { key, dir: key === 'created' || key === 'resolved' ? 'desc' : 'asc' });
 
-  const empty = <TicketEmpty scope={scope} scopeTotal={scopeTotal} hasTickets={data.tickets.length > 0} onReset={onReset} onScope={onScope} />;
+  const empty = <TicketEmpty scope={scope} scopeTotal={scopeTotal} hasTickets={data.tickets.length > 0} hasQuery={hasQuery} onReset={onReset} onScope={onScope} />;
   if (narrow) return <TicketCompactTable data={data} tickets={sorted} scope={scope} sort={sort} onSort={toggleSort} actions={actions} unreadTicketIds={unreadTicketIds} empty={empty} teamMembers={teamMembers} currentUserId={currentUserId} />;
 
   return <div className="quote-table-card ticket-table-card">
@@ -393,7 +422,7 @@ function TicketTable({ data, tickets, scope, scopeTotal, actions, unreadTicketId
  * en de kaartstapel die daar op mobiel onder ligt, zou elke regel hier
  * moeten terugdraaien. Welke van de twee er staat, beslist
  * `useNarrowViewport` — dezelfde grens (760px) als de mobiele CSS. */
-function TicketCompactTable({ data, tickets, scope, sort, onSort, actions, unreadTicketIds, empty, teamMembers, currentUserId }: { data: AppData; tickets: Ticket[]; scope: TicketScope; sort: SortState; onSort: (key: SortKey) => void; actions: TicketActions; unreadTicketIds: Set<string>; empty: ReactNode; teamMembers: OrganizationMember[]; currentUserId: string | null }) {
+function TicketCompactTable({ data, tickets, scope, sort, onSort, actions, unreadTicketIds, empty, teamMembers, currentUserId }: { data: AppData; tickets: Ticket[]; scope: TicketListScope; sort: SortState; onSort: (key: SortKey) => void; actions: TicketActions; unreadTicketIds: Set<string>; empty: ReactNode; teamMembers: OrganizationMember[]; currentUserId: string | null }) {
   const [actionsFor, setActionsFor] = useState<Ticket | null>(null);
   const archive = scope === 'archive';
   /** Eerst het paneel dicht, dan de actie: die opent zelf een bevestiging of een andere pagina. */
@@ -475,7 +504,7 @@ function TicketCompactTable({ data, tickets, scope, sort, onSort, actions, unrea
         {isTicketArchived(actionsFor)
           ? <button type="button" className="tk-sheet-item" onClick={() => run(actions.onReopen)}>
               <ArchiveRestore size={18} aria-hidden="true"/>
-              <span><strong>Heropenen</strong><small>Terug naar de werklijst, op Review</small></span>
+              <span><strong>Heropenen</strong><small>Terug naar Actief, op Review</small></span>
             </button>
           : <>
               {sheetConvertible && <button type="button" className="tk-sheet-item" onClick={() => run(actions.onPlan)}>
@@ -488,7 +517,7 @@ function TicketCompactTable({ data, tickets, scope, sort, onSort, actions, unrea
               </button>}
               {canResolveTicket(actionsFor) && <button type="button" className="tk-sheet-item" onClick={() => run(actions.onResolve)}>
                 <CircleCheck size={18} aria-hidden="true"/>
-                <span><strong>Afhandelen</strong><small>Van de werklijst naar het archief</small></span>
+                <span><strong>Afhandelen</strong><small>Het ticket gaat naar het archief</small></span>
               </button>}
             </>}
       </div>
@@ -511,14 +540,35 @@ function SortableTh({ label, sortKey, sort, onSort, className }: { label: string
   </th>;
 }
 
-function TicketFilterPanel({ data, tickets, scope, filters, visibleCount, onChange, unreadTicketIds, teamMembers, currentUserId }: { data: AppData; tickets: Ticket[]; scope: TicketScope; filters: TicketFilters; visibleCount: number; onChange: (filters: TicketFilters) => void; unreadTicketIds: Set<string>; teamMembers: OrganizationMember[]; currentUserId: string | null }) {
+/* ── Zoeken en filteren, ingeklapt ──────────────────────────────────────────
+ * Hier stond een vaste kaart van ruim 200px: een groot zoekveld, een telkaart,
+ * zeven chips en vier keuzelijsten. Op een scherm van 900px hoog begon het
+ * eerste ticket daardoor pas op 501px, terwijl je meestal niet zoekt maar de
+ * lijst afwerkt. Nu zit alles in de werkbalk:
+ *  - Zoeken is een knop die een veld wordt. Met een zoekterm blijft het open,
+ *    leeg en uit beeld klapt het weer dicht.
+ *  - Filteren klapt het paneel met snelfilters en keuzelijsten open.
+ *  - Dicht betekent niet vergeten: staat er iets aan, dan blijft daaronder één
+ *    regel staan met "x van y", elk filter als chip met een kruisje, en
+ *    Filters wissen. */
+type TicketFilterFieldKey = 'status' | 'priority' | 'clientId' | 'assignee';
+type TicketFilterField = { key: TicketFilterFieldKey; label: string; value: string; options: { value: string; label: string }[]; searchable?: boolean; searchPlaceholder?: string };
+type TicketFilterChip = { key: QuickFilterKey; label: string; title: string; count: number };
+type TicketFilterModel = { chips: TicketFilterChip[]; fields: TicketFilterField[]; activeCount: number };
+
+function scopeNoun(scope: TicketListScope): string {
+  if (scope === 'archive') return 'afgehandelde tickets';
+  return scope === 'active' ? 'actieve tickets' : 'tickets';
+}
+
+function useTicketFilterModel({ data, tickets, scope, filters, unreadTicketIds, teamMembers, currentUserId }: { data: AppData; tickets: Ticket[]; scope: TicketListScope; filters: TicketFilters; unreadTicketIds: Set<string>; teamMembers: OrganizationMember[]; currentUserId: string | null }): TicketFilterModel {
   const clientOptions = useMemo(() => {
     const clientIds = new Set(tickets.map(ticket => ticket.client_id).filter(Boolean));
     return data.clients
       .filter(client => clientIds.has(client.id))
       .sort((a, b) => a.name.localeCompare(b.name, 'nl-NL'));
   }, [data.clients, tickets]);
-  const chips = useMemo(
+  const chips = useMemo<TicketFilterChip[]>(
     () => quickFiltersFor(scope).map(def => ({
       key: def.key,
       label: def.label,
@@ -543,33 +593,145 @@ function TicketFilterPanel({ data, tickets, scope, filters, visibleCount, onChan
     ];
   }, [teamMembers, tickets, currentUserId]);
 
-  const update = (patch: Partial<TicketFilters>) => onChange({ ...filters, ...patch });
-  const fields: FilterField[] = [
-    ...(scope === 'worklist'
-      ? [{ key: 'status', label: 'Status', value: filters.status, options: [{ value: '', label: 'Alle statussen' }, { value: 'open', label: 'Openstaand' }, ...TICKET_WORKLIST_STATUSES.map(status => ({ value: status, label: ticketStatusLabels[status] }))] }]
+  const statuses = ticketStatusesInListScope(scope);
+  const fields: TicketFilterField[] = [
+    ...(statuses.length > 0
+      ? [{ key: 'status' as const, label: 'Status', value: filters.status, options: [{ value: '', label: 'Alle statussen' }, ...statuses.map(status => ({ value: status, label: ticketStatusLabels[status] }))] }]
       : []),
     { key: 'priority', label: 'Prioriteit', value: filters.priority, options: [{ value: '', label: 'Alle prioriteiten' }, { value: 'high', label: 'Hoog' }, { value: 'med', label: 'Normaal' }, { value: 'low', label: 'Laag' }] },
     { key: 'clientId', label: 'Klant', value: filters.clientId, searchable: true, searchPlaceholder: 'Zoek een klant…', options: [{ value: '', label: 'Alle klanten' }, ...clientOptions.map(client => ({ value: client.id, label: client.name }))] },
     { key: 'assignee', label: 'Toegewezen aan', value: filters.assignee, searchable: assigneeOptions.length > 8, searchPlaceholder: 'Zoek een teamlid…', options: assigneeOptions },
   ];
+  const activeCount = fields.filter(field => field.value !== '').length + chips.filter(chip => filters.quick.includes(chip.key)).length;
+  return { chips, fields, activeCount };
+}
 
-  return <SearchFilterPanel
-    className="is-wide"
-    ariaLabel={scope === 'archive' ? 'Archief zoeken en filteren' : 'Tickets zoeken en filteren'}
-    query={filters.query}
-    queryPlaceholder={scope === 'archive' ? 'Zoek in het archief…' : 'Zoek op titel, klant, teamlid, omschrijving of notitie…'}
-    onQueryChange={query => update({ query })}
-    visibleCount={visibleCount}
-    totalCount={tickets.length}
-    noun={scope === 'archive' ? 'afgehandelde tickets' : 'tickets'}
-    chips={chips}
-    activeChips={filters.quick}
-    onChipToggle={key => {
-      const quickKey = key as QuickFilterKey;
-      update({ quick: filters.quick.includes(quickKey) ? filters.quick.filter(k => k !== quickKey) : [...filters.quick, quickKey] });
-    }}
-    fields={fields}
-    onFieldChange={(key, value) => update({ [key]: value } as Partial<TicketFilters>)}
-    onReset={() => onChange(emptyTicketFilters)}
-  />;
+function TicketScopeSwitch({ scope, counts, onChange }: { scope: TicketListScope; counts: Record<TicketListScope, number>; onChange: (scope: TicketListScope) => void }) {
+  return <div className="ticket-scope" role="group" aria-label="Welke tickets">
+    {SCOPES.map(item => <button
+      key={item.key}
+      type="button"
+      className="ticket-scope-btn"
+      data-scope={item.key}
+      aria-pressed={scope === item.key}
+      aria-label={item.ariaLabel(counts[item.key])}
+      title={item.title}
+      onClick={() => { if (scope !== item.key) onChange(item.key); }}
+    >
+      {item.key === 'archive' && <Archive size={13} aria-hidden="true"/>}
+      <span className="ticket-scope-label">{item.label}</span>
+      <span className="ticket-scope-count">{counts[item.key]}</span>
+    </button>)}
+  </div>;
+}
+
+/** Een knop die een zoekveld wordt. Open zolang het veld de focus heeft of er
+ *  een zoekterm in staat; Escape wist de term en klapt het dicht. */
+function TicketSearch({ query, placeholder, onChange }: { query: string; placeholder: string; onChange: (query: string) => void }) {
+  const [focused, setFocused] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  // Na Escape terug naar de knop, anders valt de focus naar het begin van de pagina.
+  const returnFocus = useRef(false);
+  const open = opening || focused || query !== '';
+
+  useEffect(() => {
+    if (opening) { inputRef.current?.focus(); setOpening(false); }
+  }, [opening]);
+  useEffect(() => {
+    if (!open && returnFocus.current) { returnFocus.current = false; toggleRef.current?.focus(); }
+  }, [open]);
+
+  if (!open) {
+    return <button ref={toggleRef} type="button" className="ticket-tool ticket-search-toggle" onClick={() => setOpening(true)} aria-label="Zoeken in tickets" title="Zoek op titel, klant, teamlid, omschrijving of notitie">
+      <Search size={14} aria-hidden="true"/>
+      <span className="ticket-tool-label">Zoeken</span>
+    </button>;
+  }
+  return <div className="ticket-search">
+    <Search size={14} aria-hidden="true"/>
+    <input
+      ref={inputRef}
+      type="search"
+      value={query}
+      onChange={event => onChange(event.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onKeyDown={event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        returnFocus.current = true;
+        onChange('');
+        inputRef.current?.blur();
+      }}
+      placeholder={placeholder}
+      title="Zoek op titel, klant, teamlid, omschrijving of notitie"
+      aria-label="Zoeken in tickets"
+      autoComplete="off"
+      enterKeyHint="search"
+    />
+    {query && <button type="button" className="ticket-search-clear" onClick={() => { onChange(''); inputRef.current?.focus(); }} aria-label="Zoekterm wissen"><X size={13} aria-hidden="true"/></button>}
+  </div>;
+}
+
+type TicketFilterViewProps = { model: TicketFilterModel; filters: TicketFilters; scope: TicketListScope; visibleCount: number; totalCount: number; onChange: (filters: TicketFilters) => void; onReset: () => void };
+
+function toggleQuick(filters: TicketFilters, key: QuickFilterKey): TicketFilters {
+  return { ...filters, quick: filters.quick.includes(key) ? filters.quick.filter(k => k !== key) : [...filters.quick, key] };
+}
+
+function TicketFilterPanel({ id, model, filters, scope, visibleCount, totalCount, onChange, onReset, onClose }: TicketFilterViewProps & { id: string; onClose: () => void }) {
+  const narrowed = model.activeCount > 0 || filters.query.trim() !== '';
+  return <section id={id} className="ticket-filter-panel" aria-label={scope === 'archive' ? 'Archief filteren' : 'Tickets filteren'}>
+    {model.chips.length > 0 && <div className="tfp-chips" role="group" aria-label="Snelfilters">
+      {model.chips.map(chip => {
+        const isOn = filters.quick.includes(chip.key);
+        return <label key={chip.key} className={`tfp-chip${isOn ? ' is-on' : ''}${!isOn && chip.count === 0 ? ' is-empty' : ''}`} title={chip.title}>
+          <input type="checkbox" checked={isOn} onChange={() => onChange(toggleQuick(filters, chip.key))} />
+          <Check size={12} strokeWidth={2.6} aria-hidden="true"/>
+          <span>{chip.label}</span>
+          <span className="tfp-chip-n">{chip.count}</span>
+        </label>;
+      })}
+    </div>}
+    <div className="tfp-fields">
+      {model.fields.map(field => <label className="field tfp-field" key={field.key}>
+        <span>{field.label}</span>
+        <Select
+          className="form-select"
+          value={field.value}
+          searchable={field.searchable}
+          searchPlaceholder={field.searchPlaceholder}
+          onChange={event => onChange({ ...filters, [field.key]: event.target.value })}
+        >
+          {field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </Select>
+      </label>)}
+    </div>
+    <div className="tfp-foot">
+      <p className="tfp-count" aria-live="polite"><b>{visibleCount}</b> van {totalCount} {scopeNoun(scope)}</p>
+      {narrowed && <button type="button" className="tfp-clear" onClick={onReset}><RotateCcw size={13} aria-hidden="true"/> Filters wissen</button>}
+      <button type="button" className="tfp-done" onClick={onClose}>Klaar</button>
+    </div>
+  </section>;
+}
+
+function TicketFilterSummary({ model, filters, scope, visibleCount, totalCount, onChange, onReset }: TicketFilterViewProps) {
+  if (model.activeCount === 0 && filters.query.trim() === '') return null;
+  const setFields = model.fields.filter(field => field.value !== '');
+  const setChips = model.chips.filter(chip => filters.quick.includes(chip.key));
+  return <div className="ticket-filter-summary" role="group" aria-label="Actieve filters">
+    <p className="tfs-count" aria-live="polite"><b>{visibleCount}</b> van {totalCount} {scopeNoun(scope)}</p>
+    {setChips.map(chip => <button key={chip.key} type="button" className="tfs-chip" onClick={() => onChange(toggleQuick(filters, chip.key))} aria-label={`${chip.label} — wissen`}>
+      {chip.label}<X size={12} aria-hidden="true"/>
+    </button>)}
+    {setFields.map(field => {
+      const valueLabel = field.options.find(option => option.value === field.value)?.label ?? field.value;
+      return <button key={field.key} type="button" className="tfs-chip" onClick={() => onChange({ ...filters, [field.key]: '' })} aria-label={`${field.label}: ${valueLabel} — wissen`}>
+        <span className="tfs-chip-key">{field.label}:</span> {valueLabel}<X size={12} aria-hidden="true"/>
+      </button>;
+    })}
+    <button type="button" className="tfs-clear" onClick={onReset}><RotateCcw size={13} aria-hidden="true"/> Filters wissen</button>
+  </div>;
 }
