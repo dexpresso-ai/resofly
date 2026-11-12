@@ -301,7 +301,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const isPost = mode === 'post';
   const showSubject = isPost && expanded;
-  const label = importance === 'urgent' ? 'DRINGEND!' : importance === 'important' ? 'BELANGRIJK!' : null;
+  const label = importance === 'urgent' ? 'Dringend' : importance === 'important' ? 'Belangrijk' : null;
 
   return (
     <div className={`tmc-composer${expanded ? ' is-expanded' : ''}${mode === 'reply' ? ' is-reply' : ''}${importance !== 'normal' ? ` is-${importance}` : ''}`}>

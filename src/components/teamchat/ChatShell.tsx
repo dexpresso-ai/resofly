@@ -4,7 +4,7 @@ import { ConversationView, type JumpRequest } from './ConversationView';
 import { DiscoverChannelsDialog, NewChannelDialog } from './Dialogs';
 import { memberDisplay } from './model';
 import {
-  ActivityPane, ChatListPane, FilesView, NewChatPane, Rail, SavedPane, StatusButton, TeamsListPane, VIEW_ITEMS, viewBadge,
+  ActivityPane, ChatListPane, FilesView, NewChatPane, SavedPane, StatusButton, TeamsListPane, VIEW_ITEMS, ViewSwitch,
   type ChatView,
 } from './Panes';
 import type { TeamChatApi } from './useTeamChat';
@@ -22,10 +22,11 @@ function storedView(variant: 'page' | 'dock'): ChatView {
 }
 
 /**
- * De teamchat zoals Microsoft Teams hem opbouwt: links de app-rail (Activiteit,
- * Chat, Teams, Bestanden, Opgeslagen), dan de lijst, rechts het gesprek. Op
- * een telefoon en in het zwevende paneel één venster tegelijk, met de
- * onderdelen als tabbladen bovenaan — de opbouw van de Teams-app op je telefoon.
+ * De teamchat in de huisstijl van ResoFly. Bovenaan een keuzestrook met de
+ * vijf onderdelen (Activiteit, Chat, Kanalen, Bestanden, Opgeslagen) en je
+ * status; daaronder twee kaarten op het werkvlak: de lijst en het gesprek.
+ * Op een telefoon en in het zwevende paneel één venster tegelijk, met dezelfde
+ * strook (alleen iconen) naast je avatar.
  */
 export function ChatShell({ api, variant, onClose, onExpand, active = true }: {
   api: TeamChatApi;
@@ -165,9 +166,15 @@ export function ChatShell({ api, variant, onClose, onExpand, active = true }: {
   if (!single) {
     return (
       <div className="tmc tmc-shell chat-shell chat-page">
-        {variant === 'page' && <Rail api={api} view={view} onView={changeView} />}
-        {listPane && <aside className="tmc-pane">{listPane}</aside>}
-        <main className="tmc-main">{mainPane}</main>
+        <header className="tmc-topbar">
+          <ViewSwitch api={api} view={view} onView={changeView} />
+          <span className="tmc-spacer" />
+          <StatusButton api={api} size={32} withLabel placement="below-end" />
+        </header>
+        <div className="tmc-stage">
+          {listPane && <aside className="tmc-pane">{listPane}</aside>}
+          <main className="tmc-main">{mainPane}</main>
+        </div>
         {dialogs}
       </div>
     );
@@ -180,17 +187,7 @@ export function ChatShell({ api, variant, onClose, onExpand, active = true }: {
         <div className="tmc-single">
           <div className="tmc-single-top">
             <StatusButton api={api} size={30} />
-            <nav className="tmc-tabstrip" aria-label="Teamchat">
-              {VIEW_ITEMS.map((item) => {
-                const badge = viewBadge(api, item.key);
-                return (
-                  <button key={item.key} type="button" className={view === item.key ? 'is-active' : ''} onClick={() => changeView(item.key)} aria-current={view === item.key ? 'page' : undefined} aria-label={item.label} title={item.label}>
-                    <span className="tmc-tabstrip-icon">{item.icon(18)}{badge > 0 && <span className="tmc-badge is-alert">{badge > 99 ? '99+' : badge}</span>}</span>
-                    <span className="tmc-tabstrip-label">{item.label}</span>
-                  </button>
-                );
-              })}
-            </nav>
+            <ViewSwitch api={api} view={view} onView={changeView} compact />
             {variant === 'dock' && onExpand && (
               <button type="button" className="tmc-icon-btn" onClick={() => onExpand(activeId)} aria-label="Openen als volledige pagina" title="Openen als volledige pagina"><Maximize2 size={16} /></button>
             )}
@@ -231,7 +228,7 @@ function EmptyMain({ api, view, onNewChat, onNewChannel }: { api: TeamChatApi; v
 
 // ── Meldingen in de app ──────────────────────────────────────────────────────
 
-/** Een nieuw bericht terwijl je elders in ResoFly bezig bent: een banner rechtsonder, zoals in Teams. */
+/** Een nieuw bericht terwijl je elders in ResoFly bezig bent: een banner rechtsonder. */
 export function TeamChatToasts({ api, onOpen }: { api: TeamChatApi; onOpen: (conversationId: string, messageId: string) => void }) {
   if (api.toasts.length === 0) return null;
   return (
@@ -253,8 +250,8 @@ function ChatToastItem({ api, toast, onOpen }: { api: TeamChatApi; toast: TeamCh
         <Avatar userId={toast.senderId} member={api.memberById.get(toast.senderId ?? '')} size={36} presence={api.presenceOf(toast.senderId)} />
         <span className="tmc-toast-text">
           <span className="tmc-toast-title">
-            {toast.importance === 'urgent' && <span className="tmc-toast-flag"><Bell size={11} /> DRINGEND</span>}
-            {toast.importance === 'important' && <span className="tmc-toast-flag"><AlertTriangle size={11} /> BELANGRIJK</span>}
+            {toast.importance === 'urgent' && <span className="tmc-toast-flag"><Bell size={11} /> Dringend</span>}
+            {toast.importance === 'important' && <span className="tmc-toast-flag"><AlertTriangle size={11} /> Belangrijk</span>}
             <strong>{toast.title}</strong>
           </span>
           <span className="tmc-toast-body">{toast.sender ? `${memberDisplay(api.memberById.get(toast.senderId ?? '')).first}: ` : ''}{toast.mentionsMe ? '@ ' : ''}{toast.snippet}</span>

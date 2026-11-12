@@ -4,16 +4,17 @@ import { ChatShell } from './teamchat/ChatShell';
 import type { TeamChatApi } from './teamchat/useTeamChat';
 
 /**
- * Teamchat — interne chat tussen de leden van één organisatie, met de opbouw
- * en de functies van Microsoft Teams.
+ * Teamchat — interne chat tussen de leden van één organisatie: chats,
+ * kanalen met draadjes, activiteit, bestanden en opgeslagen berichten, in de
+ * huisstijl van ResoFly (zie src/styles/teamchat.css).
  *
  * - `useTeamChat` draait op App-niveau: één realtime-abonnement + één
  *   presence-kanaal. Voedt de sidebar-badge, de pagina, het zwevende paneel en
  *   de meldingen.
- * - `TeamChatPage` = de volledige pagina: app-rail (Activiteit, Chat, Teams,
- *   Bestanden, Opgeslagen), lijst en gesprek naast elkaar; op een telefoon één
- *   venster tegelijk.
- * - `TeamChatDock` = zwevend paneel rechtsonder (één venster, met tabbladen).
+ * - `TeamChatPage` = de volledige pagina: een keuzestrook (Activiteit, Chat,
+ *   Kanalen, Bestanden, Opgeslagen), daaronder lijst en gesprek naast elkaar;
+ *   op een telefoon één venster tegelijk.
+ * - `TeamChatDock` = zwevend paneel rechtsonder (één venster, met de strook).
  * - `TeamChatToasts` = een banner bij een nieuw bericht terwijl je elders bent.
  *
  * De onderdelen staan in ./teamchat; de opmaak in src/styles/teamchat.css.

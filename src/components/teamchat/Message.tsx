@@ -63,8 +63,8 @@ function ImportanceLabel({ importance }: { importance: ChatMessage['importance']
   if (!importance || importance === 'normal') return null;
   return (
     <div className={`tmc-importance is-${importance}`}>
-      {importance === 'urgent' ? <Bell size={13} /> : <AlertTriangle size={13} />}
-      {importance === 'urgent' ? 'DRINGEND!' : 'BELANGRIJK!'}
+      {importance === 'urgent' ? <Bell size={12} /> : <AlertTriangle size={12} />}
+      {importance === 'urgent' ? 'Dringend' : 'Belangrijk'}
     </div>
   );
 }
@@ -423,7 +423,7 @@ function PostEntry({ msg, isRoot }: { msg: ChatMessage; isRoot?: boolean }) {
   );
 }
 
-/** Leesbevestiging voor je eigen bericht, zoals Teams: verzonden of gezien. */
+/** Leesbevestiging voor je eigen bericht: verzonden of gezien. */
 export function receiptFor(
   msg: ChatMessage,
   others: { user_id: string; last_read_at: string }[],
