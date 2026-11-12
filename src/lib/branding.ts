@@ -438,18 +438,56 @@ function ringsImage(dark: boolean): string {
  * strenger dan de 3 : 1 voor iconen niet, maar een logo is groter en vetter
  * dan een icoon: bij 2,6 is een merkteken nog goed te zien.
  */
-export function logoNeedsPlate(ink: string | null | undefined, backgrounds: string[]): boolean {
+export function logoNeedsPlate(ink: string | null | undefined, backgrounds: string[], luminance: number[] = []): boolean {
   if (!ink || !/^#[0-9A-Fa-f]{6}$/.test(ink)) return false;
-  return backgrounds.some(bg => contrastRatio(ink, bg) < 2.6);
+  if (backgrounds.some(bg => contrastRatio(ink, bg) < 2.6)) return true;
+  // Gemiddeld goed, maar valt een flink deel weg? Donkere letters naast een fel
+  // beeldmerk zijn gemiddeld middelgrijs; op de donkere kop bleef zo'n logo
+  // zonder plaatje, en stond er alleen nog het beeldmerk (2026-11-12).
+  return backgrounds.some(bg => logoLostShare(luminance, bg) >= LOGO_LOST_SHARE);
+}
+
+/**
+ * Onder deze verhouding valt een stuk logo weg: je ziet op een scherm nog net
+ * dat er iets staat, maar geen letter.
+ */
+const LOGO_LOST_CONTRAST = 1.6;
+/** Zoveel van een logo mag wegvallen voor het een plaatje krijgt. */
+const LOGO_LOST_SHARE = 0.3;
+
+/**
+ * Welk deel van een logo (0–1) valt weg op dit vlak? `luminance` is de
+ * helderheid van het logo in gelijke delen, van donker naar licht
+ * (`summarizeLogoPixels()` in logoColors.ts). Zonder telling: 0.
+ */
+export function logoLostShare(luminance: number[], background: string): number {
+  if (!luminance.length || !/^#[0-9A-Fa-f]{6}$/.test(background)) return 0;
+  const bg = relativeLuminance(background);
+  const lost = luminance.filter(l => (Math.max(l, bg) + 0.05) / (Math.min(l, bg) + 0.05) < LOGO_LOST_CONTRAST);
+  return lost.length / luminance.length;
 }
 
 /**
  * Welk plaatje een logo nodig heeft op deze vlakken: geen, een licht (voor een
- * donker logo) of een donker (voor een wit logo op een lichte kaart).
+ * donker logo) of een donker (voor een wit logo op een lichte kaart). Met de
+ * telling van `luminance` het plaatje waarop het minst wegvalt.
  */
-export function logoPlate(ink: string | null | undefined, backgrounds: string[]): 'light' | 'dark' | null {
-  if (!logoNeedsPlate(ink, backgrounds)) return null;
-  return contrastRatio(ink!, '#FFFFFF') >= contrastRatio(ink!, PLATE_DARK) ? 'light' : 'dark';
+export function logoPlate(ink: string | null | undefined, backgrounds: string[], luminance: number[] = []): 'light' | 'dark' | null {
+  if (!logoNeedsPlate(ink, backgrounds, luminance)) return null;
+  const byInk = contrastRatio(ink!, '#FFFFFF') >= contrastRatio(ink!, PLATE_DARK) ? 'light' : 'dark';
+  if (!luminance.length) return byInk;
+  const onLight = logoLostShare(luminance, '#FFFFFF');
+  const onDark = logoLostShare(luminance, PLATE_DARK);
+  // Kwam het plaatje alleen door wat er wegvalt (de gemiddelde kleur was goed),
+  // dan moet het plaatje ook echt helpen. Een witte naam naast een donkerblauw
+  // beeldmerk: op de kop valt het beeldmerk weg, op een wit plaatje de naam.
+  // Dan liever geen plaatje.
+  if (backgrounds.every(bg => contrastRatio(ink!, bg) >= 2.6)) {
+    const bare = Math.max(...backgrounds.map(bg => logoLostShare(luminance, bg)));
+    if (Math.min(onLight, onDark) >= bare) return null;
+  }
+  if (onLight === onDark) return byInk;
+  return onLight < onDark ? 'light' : 'dark';
 }
 
 /** Het donkere plaatje: het grafiet van de cockpit. */

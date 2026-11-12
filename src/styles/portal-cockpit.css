@@ -334,6 +334,16 @@
 .brand-logo.plate-dark{background:#17171A}
 .brand-logo.on-plate img{height:30px}
 
+/* Het klantportaal is het portaal van de leverancier: zijn logo staat er groot
+   in de kop, niet als icoontje. Op 38px las de naam in een breed woordmerk
+   amper (2026-11-12). Krimpen mag (flex 0 1), zodat een tweede dossier in de
+   kopbalk het logo kleiner maakt in plaats van de balk uit beeld te duwen;
+   object-fit houdt het dan in verhouding. */
+.portal-hero .brand-logo{flex:0 1 auto;max-width:280px}
+.portal-hero .brand-logo img{height:48px}
+.portal-hero .brand-logo.on-plate{padding:6px 12px}
+.portal-hero .brand-logo.on-plate img{height:38px}
+
 /* ── 6 · Inloggen en laden ───────────────────────────────────────────────────
    Het hele scherm in de kopkleur met de kaart erop, zoals het inlogscherm van
    de werkruimte; de ringen waaieren uit achter de kaart. */
@@ -350,8 +360,10 @@
 .portal.login .login-eyebrow{color:var(--accent-ink)}
 .portal.login .login-card h1{font-family:var(--brand-heading,inherit);letter-spacing:-.02em}
 .portal.login .brand-tile{width:34px;height:34px;border-radius:10px;font-size:15px}
-.portal.login .brand-logo img{height:34px}
-.portal.login .brand-logo.on-plate img{height:28px}
+/* Op de inlogkaart het eerste wat een klant ziet: van wie dit portaal is. */
+.portal.login .brand-logo{max-width:min(260px,100%)}
+.portal.login .brand-logo img{height:48px}
+.portal.login .brand-logo.on-plate img{height:38px}
 .portal.boot{color:var(--hdr-ink)}
 .portal.boot .portal-boot{color:var(--hdr-ink-2)}
 
@@ -407,6 +419,16 @@ html:root .portal.boot{background:var(--hdr-mid)}
   .brand-logo img{height:30px}
   .brand-logo.on-plate{padding:4px 8px;border-radius:10px}
   .brand-logo.on-plate img{height:24px}
+  /* De kop van het portaal: het logo zo groot als naast de knoppen past. De
+     regel met naam en e-mail ernaast werd hier "Joo…" en drukte het logo
+     kleiner; met een logo valt hij op de telefoon weg. */
+  .portal-hero .brand-logo{max-width:180px}
+  .portal-hero .brand-logo img{height:36px}
+  .portal-hero .brand-logo.on-plate{padding:4px 9px}
+  .portal-hero .brand-logo.on-plate img{height:28px}
+  .portal-hero .portal-brand.has-logo .portal-brand-text{display:none}
+  .portal.login .brand-logo img{height:42px}
+  .portal.login .brand-logo.on-plate img{height:34px}
 }
 
 /* ── 8 · De publieke offerte-, factuur- en contractpagina ────────────────────

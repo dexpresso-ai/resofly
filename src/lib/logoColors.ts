@@ -3,18 +3,34 @@
 // 1. Welke kleuren zitten erin? Bij Instellingen → Huisstijl staan die als
 //    knopjes onder de merkkleur en de kopkleur: niet iedereen kent de hexcodes
 //    van zijn eigen merk, maar iedereen herkent zijn logo.
-// 2. Hoe licht of donker is het logo als geheel? Dat bepaalt of het op de kop
-//    van het portaal op een plaatje moet (zie `logoNeedsPlate()` in branding.ts).
+// 2. Hoe licht of donker is het logo, als geheel en in delen? Dat bepaalt of het
+//    op de kop van het portaal op een plaatje moet (zie `logoPlate()` in
+//    branding.ts).
 //
 // Het rekenwerk staat los van de browser (`summarizeLogoPixels`), zodat het te
 // testen is; `analyseLogo` tekent het logo klein op een canvas en telt daar.
+import { relativeLuminance } from './brandColor.ts';
 
 export type LogoSummary = {
   /** Gemiddelde kleur van het zichtbare logo; null als er niets zichtbaars in zit. */
   ink: string | null;
   /** De meest voorkomende, onderling verschillende kleuren; hoogstens vier. */
   colors: string[];
+  /**
+   * De helderheid van het zichtbare logo in LUMINANCE_STEPS gelijke delen, van
+   * donker naar licht (elk getal is de helderheid van een twintigste van de
+   * pixels). Leeg als er niets zichtbaars in zit.
+   *
+   * Waarom naast de gemiddelde kleur: een logo met donkere letters en een fel
+   * beeldmerk is gemiddeld middelgrijs. Op de donkere kop haalde het daarmee
+   * het contrast, dus kwam er geen plaatje, en vielen de letters weg
+   * (2026-11-12). Hiermee is te tellen welk deel van het logo wegvalt.
+   */
+  luminance: number[];
 };
+
+/** In zoveel gelijke delen beschrijft `luminance` het logo. */
+export const LUMINANCE_STEPS = 20;
 
 const MAX_COLORS = 4;
 /** Twee kleuren die dichter bij elkaar liggen (RGB-afstand) tellen als één. */
@@ -42,12 +58,14 @@ export function summarizeLogoPixels(data: ArrayLike<number>): LogoSummary {
   let rs = 0;
   let gs = 0;
   let bs = 0;
+  const lumas: number[] = [];
   for (let i = 0; i + 3 < data.length; i += 4) {
     if (data[i + 3] < 160) continue;
     const r = data[i];
     const g = data[i + 1];
     const b = data[i + 2];
     n += 1; rs += r; gs += g; bs += b;
+    lumas.push(relativeLuminance(toHex(r, g, b)));
     if (Math.min(r, g, b) > 236) continue;
     const key = ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5);
     const bucket = buckets.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
@@ -62,7 +80,16 @@ export function summarizeLogoPixels(data: ArrayLike<number>): LogoSummary {
     if (colors.every(existing => distance(existing, color) > DISTINCT)) colors.push(color);
     if (colors.length === MAX_COLORS) break;
   }
-  return { ink: n ? toHex(rs / n, gs / n, bs / n) : null, colors };
+  lumas.sort((a, b) => a - b);
+  // Het midden van elk twintigste: bij twee pixels zwart en twee wit precies
+  // tien stappen zwart en tien wit.
+  const luminance = n
+    ? Array.from({ length: LUMINANCE_STEPS }, (_, step) => {
+      const value = lumas[Math.min(n - 1, Math.floor(((step + 0.5) / LUMINANCE_STEPS) * n))];
+      return Math.round(value * 10000) / 10000;
+    })
+    : [];
+  return { ink: n ? toHex(rs / n, gs / n, bs / n) : null, colors, luminance };
 }
 
 /** Tekent het logo op 72 px breed en telt de pixels. Alleen in de browser. */
@@ -76,7 +103,7 @@ export async function analyseLogo(src: string): Promise<LogoSummary> {
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) return { ink: null, colors: [] };
+  if (!context) return { ink: null, colors: [], luminance: [] };
   context.drawImage(image, 0, 0, width, height);
   return summarizeLogoPixels(context.getImageData(0, 0, width, height).data);
 }
