@@ -863,6 +863,28 @@ export async function selectGalleryItems(organizationId: UUID, galleryId: UUID):
   return (data ?? []) as GalleryItem[];
 }
 
+/**
+ * Verwijdert een album of één item ervan, en zegt het als er niets is
+ * verwijderd. Houdt RLS een delete tegen (andere organisatie, geen
+ * schrijfrecht op Projecten), dan geeft PostgREST geen fout maar nul rijen:
+ * de app meldde dan niets en leek het verwijderen gelukt, tot de lijst
+ * opnieuw laadde en het album er nog stond.
+ */
+export async function deleteGalleryRecord(table: 'galleries' | 'gallery_items', id: UUID, organizationId: UUID): Promise<void> {
+  const { data, error } = await supabase
+    .from(table)
+    .delete()
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error(table === 'galleries'
+      ? 'Dit album is niet verwijderd. Het bestaat niet meer, of je mag het niet verwijderen.'
+      : 'Dit bestand is niet verwijderd. Het bestaat niet meer, of je mag het niet verwijderen.');
+  }
+}
+
 /** Accountbreed opslagverbruik + limiet; null bij fouten (bijv. migratie nog niet toegepast). */
 export async function fetchOrganizationStorageStatus(organizationId: UUID): Promise<OrganizationStorageStatus | null> {
   const { data, error } = await supabase.rpc('organization_storage_status', { p_organization_id: organizationId });

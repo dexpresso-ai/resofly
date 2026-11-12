@@ -262,6 +262,35 @@ export async function deleteGalleryStreamVideo(organizationId: UUID, uid: string
   await workerPost<{ ok: true }>('/gallery/stream-delete', { json: { organizationId, uid } });
 }
 
+/**
+ * Na het verwijderen van een album, een item of een coverbeeld: laat de worker
+ * de bestanden in R2 en de kijkkopieën bij Stream meteen weghalen. Wat weg moet
+ * heeft de database bij het verwijderen zelf vastgelegd (gallery_purge_queue);
+ * lukt deze aanroep niet, dan ruimt de geplande taak van de worker het later
+ * op. Eerst wiste de browser alles zelf, bestand voor bestand: drie verzoeken
+ * per foto, en wat er niet aan toe kwam omdat het tabblad dichtging, bleef in
+ * Cloudflare staan.
+ *
+ * `'unsupported'` = een worker van vóór deze route (404). Dan ruimt de
+ * aanroeper op de oude manier op met de sleutels die hij heeft.
+ */
+export async function purgeGalleryStorage(organizationId: UUID, galleryId: UUID): Promise<'ok' | 'unsupported'> {
+  const base = getWorkerBase();
+  const token = await getAccessToken();
+  const response = await fetch(`${base}/gallery/purge`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ organizationId, galleryId }),
+  });
+  if (response.status === 404) {
+    const message = await errText(response);
+    if (/route not found/i.test(message)) return 'unsupported';
+    throw new Error(message);
+  }
+  if (!response.ok) throw new Error(await errText(response));
+  return 'ok';
+}
+
 // ── Client-side beeldbewerking ──────────────────────────────────────────────
 
 const PREVIEW_MAX_EDGE = 2560;
