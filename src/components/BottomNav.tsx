@@ -1,5 +1,6 @@
 import { Calendar, FolderKanban, FolderOpen, LayoutDashboard, Receipt, Sunrise, Users, Wallet } from 'lucide-react';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
+import { PAGE_ICON } from './TabBar';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 
@@ -32,15 +33,20 @@ const DOCK: { key: Page; Icon: typeof LayoutDashboard; label: string; group: Pag
 /** Vaste onderbalk (alleen mobiel, zie globals.css ≤760px). Duim-bereikbare
  *  navigatie naar de vijf kerndestinaties; de rest blijft in het hamburgermenu.
  *  In Stroom (`dock`) een zwevende glazen dock met Gerrie in het midden. */
-export function BottomNav({ page, onNavigate, permissions = FULL_PERMISSIONS, dock = false, onAsk }: {
+export function BottomNav({ page, onNavigate, permissions = FULL_PERMISSIONS, dock = false, onAsk, appItems }: {
   page: Page;
   onNavigate: (p: Page) => void;
   permissions?: Permissions;
   dock?: boolean;
   /** Stroom: het orbje in het midden opent Gerrie. Zonder: geen orbje. */
   onAsk?: () => void;
+  /** In een losse app (standaloneApps.ts): zijn eigen knoppen in plaats van de
+   *  vijf van de werkruimte. Een Dashboard- of Klantenknop hoort daar niet. */
+  appItems?: ReadonlyArray<{ page: string; label: string }>;
 }) {
-  const list = dock ? DOCK : ITEMS;
+  const list = appItems
+    ? appItems.map(item => ({ key: item.page as Page, Icon: PAGE_ICON[item.page] ?? LayoutDashboard, label: item.label, group: [item.page as Page] }))
+    : dock ? DOCK : ITEMS;
   const activeKey = list.find(item => item.group.includes(page))?.key ?? null;
   // Modules die voor dit teamlid dichtstaan, verdwijnen ook uit de duimbalk.
   const items = list.filter(item => permissions.canOpenPage(item.key));

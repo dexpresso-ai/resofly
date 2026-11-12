@@ -204,6 +204,12 @@ const PAGES = {
   // goed staan als het portaal zelf.
   'portal-preview': { path: '/portal/voorbeeld' },
   login: { path: '/', login: true },
+  // 2026-11-12 — de losse apps: dezelfde werkruimte op een eigen adres, met
+  // alleen de pagina's van die app in het menu en in de duimbalk. Op de pagina
+  // waar hij na installeren opent (de tabbladen van de app staan apart).
+  'app-agenda': { path: '/app/agenda/', app: 'agenda', page: 'calendar' },
+  'app-financien': { path: '/app/financien/', app: 'financien', page: 'invoices' },
+  'app-communicatie': { path: '/app/communicatie/', app: 'communicatie', page: 'communication' },
   // 2026-11-07 — de inrichtingsstappen, elk op elk formaat. Het abonnement met
   // een gekozen BV: dat is de langste stand (de drie stappen, de pakketten,
   // de modules). Het wachtscherm is wat een teamlid ziet.
@@ -281,6 +287,10 @@ const FIRST_ITEM = {
   // over te laten en de filters als paneel te laten zweven (151px). De grens
   // volgt mee, anders meet deze test niets meer.
   communication: { selector: '.comm-row', maxTop: 185 },
+  // De losse apps openen op dezelfde pagina's met dezelfde balken: dezelfde grenzen.
+  'app-agenda': { selector: '.tb-scroll', maxTop: 260 },
+  'app-financien': { selector: '.quote-table tbody tr', maxTop: 496 },
+  'app-communicatie': { selector: '.comm-row', maxTop: 185 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 356 },
   // 2026-11-11 — vooruitbetaalde kosten: de balk "klaar om te boeken" en twee
   // kerncijfers gaan voor. Gemeten: 435px (licht en donker); de grens ligt 20%
@@ -371,9 +381,10 @@ try {
         const page = await (ownContext ?? context).newPage();
         const errors = [];
         page.on('pageerror', e => errors.push(String(e.message)));
-        const isPublic = typeof spec === 'object' && spec.path;
+        // Een losse app (spec.app) heeft een eigen adres maar is de werkruimte.
+        const isPublic = typeof spec === 'object' && spec.path && !spec.app;
         await page.addInitScript(storageScript(spec, { 'resofly.theme': theme, ...(look ? { 'resofly.look': look } : {}), ...(spec.storage ?? {}) }));
-        await page.goto(isPublic ? new URL(spec.path, baseUrl).href : baseUrl, { waitUntil: 'networkidle' });
+        await page.goto(typeof spec === 'object' && spec.path ? new URL(spec.path, baseUrl).href : baseUrl, { waitUntil: 'networkidle' });
         // Werkruimte: de shell; publieke pagina: de eigen wortel; de inrichting: zijn eigen scherm.
         const shell = await page.waitForSelector(spec.shell ?? (isPublic ? '.public-quote-page, .portal, .galv, .login, .pgal' : '.app'), { timeout: 20000 }).catch(() => null);
         await page.waitForTimeout(isPublic ? 1200 : 700);

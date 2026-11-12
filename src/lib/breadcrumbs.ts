@@ -1,5 +1,6 @@
 import type { AppData } from '../types';
-import { PAGE_TITLES, viewTitle } from './workspaceTabs';
+// Met .ts: zo laadt node --test dit bestand ook (standaloneApps.test.ts).
+import { PAGE_TITLES, viewTitle } from './workspaceTabs.ts';
 
 /**
  * Kruimelpad — het spoor terug naar boven, op elke pagina dezelfde vorm:
@@ -76,23 +77,34 @@ function parentTarget(parent: string, view: CrumbView): CrumbTarget {
 }
 
 /**
- * Het pad naar boven, van dashboard naar de pagina waar je staat. De laatste
- * kruimel is altijd de huidige pagina en dus nooit klikbaar.
+ * In een losse app (standaloneApps.ts) begint het pad bij het begin van die
+ * app, niet bij het dashboard: dat staat daar niet in het menu, en een klik
+ * erop haalde je uit de app. `pages` zijn de pagina's van de app; bij die
+ * pagina's valt de menukop weg, want die is de app zelf
+ * ("Financiën › Financiën › Offertes").
  */
-export function breadcrumbTrail(view: CrumbView, data: AppData): Crumb[] {
-  const crumbs: Crumb[] = [];
+export type CrumbHome = { page: string; label: string; pages: readonly string[] };
 
-  if (view.page !== 'dashboard') {
+/**
+ * Het pad naar boven, van dashboard (of het begin van de app) naar de pagina
+ * waar je staat. De laatste kruimel is altijd de huidige pagina en dus nooit
+ * klikbaar.
+ */
+export function breadcrumbTrail(view: CrumbView, data: AppData, home: CrumbHome | null = null): Crumb[] {
+  const crumbs: Crumb[] = [];
+  const homePage = home?.page ?? 'dashboard';
+
+  if (view.page !== homePage) {
     crumbs.push({
       key: 'home',
-      label: PAGE_TITLES.dashboard,
-      target: { page: 'dashboard', projectId: null, clientId: null, galleryId: null },
+      label: home?.label ?? PAGE_TITLES.dashboard,
+      target: { page: homePage, projectId: null, clientId: null, galleryId: null },
       kind: 'home',
     });
   }
 
   const section = PAGE_SECTIONS[view.page];
-  if (section) crumbs.push({ key: `section:${section}`, label: section, target: null, kind: 'section' });
+  if (section && !home?.pages.includes(view.page)) crumbs.push({ key: `section:${section}`, label: section, target: null, kind: 'section' });
 
   // Voorouders van boven naar beneden. De keten is kort en eindig (hooguit
   // gallery → project → projects), maar `seen` houdt een typefout in
@@ -106,6 +118,8 @@ export function breadcrumbTrail(view: CrumbView, data: AppData): Crumb[] {
     cursor = PAGE_PARENT[cursor];
   }
   for (const ancestor of ancestors) {
+    // Het begin van de app staat al vooraan (Boekingslinks hangt onder de agenda).
+    if (ancestor === homePage) continue;
     // Een galerij zonder project heeft geen projectkruimel om op te klikken.
     if (ancestor === 'project' && !view.projectId) continue;
     if (ancestor === 'client' && !view.clientId) continue;

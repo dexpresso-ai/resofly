@@ -1,0 +1,42 @@
+/* Losse apps (2026-11-12): Agenda, Financiën en Communicatie als eigen app.
+   Alleen eigen klassen (app-*) op de gedeelde variabelen, zodat elke look
+   (Baken, Cockpit, Zenit, Stroom) ze in zijn eigen kleuren tekent.
+   Zie src/lib/standaloneApps.ts. */
+
+/* ── De kaart "Installeer ResoFly Agenda" ─────────────────────────────────
+   Hij staat in .toast-region en leent de vorm van .email-toast. De uitleg
+   voor Safari is een hele zin: die mag hier wel afbreken, anders dan de
+   onderwerpregel van een mailmelding. */
+.app-install-main{display:flex;align-items:center;gap:11px;flex:1;min-width:0;padding:11px 6px 11px 12px}
+.app-install-icon{flex-shrink:0;border-radius:9px;display:block}
+.app-install-sub{font-size:11.5px;line-height:1.4;color:var(--muted)}
+.app-install .email-toast-text strong{white-space:normal}
+.app-install-btn{flex-shrink:0;min-height:34px;padding:0 12px}
+
+/* ── Instellingen → Apps ───────────────────────────────────────────────── */
+.app-list{display:flex;flex-direction:column;gap:10px}
+.app-row{display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--border);border-radius:14px;background:var(--bg3)}
+.app-row-icon{flex-shrink:0;border-radius:11px;display:block}
+.app-row-text{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
+.app-row-text strong{font-size:14px;color:var(--text)}
+.app-row-text span{font-size:12px;line-height:1.45;color:var(--muted2)}
+.app-row-actions{display:flex;gap:8px;flex-shrink:0}
+.app-row-actions .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;text-decoration:none;white-space:nowrap}
+.app-steps{display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:var(--muted2);line-height:1.55}
+.app-steps strong{color:var(--text);font-size:13px}
+.app-steps ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:3px}
+
+@media(max-width:640px){
+  .app-row{flex-wrap:wrap}
+  .app-row-text{flex-basis:calc(100% - 60px)}
+  .app-row-actions{width:100%}
+  .app-row-actions .btn{flex:1}
+}
+
+/* ── Het menu in een losse app ────────────────────────────────────────────
+   Onder de pagina's van de app een weg terug naar de hele werkruimte; die
+   staat iets stiller dan de pagina's zelf, want hij opent een ander venster. */
+.nav-workspace-sep{height:1px;margin:10px 12px 6px;background:var(--border)}
+.nav-item.nav-workspace{opacity:.78}
+.nav-item.nav-workspace:hover,.nav-item.nav-workspace:focus-visible{opacity:1}
+.app-brand-sub{font-weight:600;opacity:.72;margin-left:5px}

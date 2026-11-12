@@ -1,6 +1,6 @@
 import { ChevronLeft, Home } from 'lucide-react';
 import type { AppData } from '../types';
-import { breadcrumbTrail, showsBreadcrumbs, type CrumbTarget, type CrumbView } from '../lib/breadcrumbs';
+import { breadcrumbTrail, showsBreadcrumbs, type CrumbHome, type CrumbTarget, type CrumbView } from '../lib/breadcrumbs';
 
 /**
  * Het kruimelpad boven de pagina-inhoud. Twee dingen tegelijk:
@@ -17,14 +17,17 @@ export function Breadcrumbs({
   view,
   data,
   onNavigate,
+  home = null,
 }: {
   view: CrumbView;
   data: AppData;
   onNavigate: (target: CrumbTarget) => void;
+  /** In een losse app: het begin van die app in plaats van het dashboard. */
+  home?: CrumbHome | null;
 }) {
   if (!showsBreadcrumbs(view.page)) return null;
 
-  const crumbs = breadcrumbTrail(view, data);
+  const crumbs = breadcrumbTrail(view, data, home);
   // Eén kruimel zonder knop is geen pad maar een herhaling van de titel.
   const clickable = crumbs.filter(crumb => crumb.target);
   if (clickable.length === 0) return null;

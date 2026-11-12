@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Plus, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, ExternalLink, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Plus, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, settingsTabRoleRule, type SettingsTab } from '../features/SimplePages';
@@ -9,6 +9,7 @@ import { FULL_PERMISSIONS, isAccountantRole, type Permissions } from '../lib/per
 import { useTheme } from '../lib/theme';
 import { useLook, type Look } from '../lib/look';
 import { useBuildingReports } from '../lib/aiReports';
+import type { StandaloneApp } from '../lib/standaloneApps';
 
 /** De looks in het accountmenu (Weergave). Baken is de standaard; de andere
  *  drie blijven kiesbaar, zodat je ze naast elkaar kunt leggen. */
@@ -145,6 +146,11 @@ export interface SidebarProps {
   aiReports?: Array<{ id: string; title: string }>;
   activeAiReportId?: string | null;
   onOpenAiReport?: (id: string) => void;
+  /** In een losse app (Agenda, Financiën, Communicatie): welke. Het merk noemt
+   *  hem, en `permissions.canOpenPage` laat dan alleen zijn pagina's door. */
+  standaloneApp?: StandaloneApp | null;
+  /** In een losse app: de weg terug naar de hele werkruimte, onder het menu. */
+  onOpenWorkspace?: () => void;
 }
 
 /** Zoveel rapportages staan er onder Rapportages in het menu; de rest via het overzicht. */
@@ -181,6 +187,8 @@ export function Sidebar({
   aiReports = [],
   activeAiReportId = null,
   onOpenAiReport,
+  standaloneApp = null,
+  onOpenWorkspace,
 }: SidebarProps) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [reportsOpen, setReportsOpen] = useState(() => reportPages.includes(page));
@@ -306,11 +314,11 @@ export function Sidebar({
         ? <div className="app-brand bk-brand">
             <div className="brand-icon"><i className="bk-brand-halo" aria-hidden="true" /><BrandMark size={40} className="bk-mark" /></div>
             <div className="bk-brand-text">
-              <span className="bk-brand-name">ResoFly</span>
+              <span className="bk-brand-name">ResoFly{standaloneApp && <span className="app-brand-sub">{standaloneApp.shortName}</span>}</span>
               <div className="bk-org">{organizationSelect}</div>
             </div>
           </div>
-        : <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly<small>Werkruimte</small></span></div>}
+        : <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly<small>{standaloneApp?.shortName ?? 'Werkruimte'}</small></span></div>}
       {baken
         ? readOnly && <div className="sidebar-readonly"><Lock size={12} aria-hidden="true"/><span>Alleen lezen op deze pagina</span></div>
         : <div className="org-switcher">
@@ -455,6 +463,14 @@ export function Sidebar({
         })}
         </Fragment>;
       })}
+      {onOpenWorkspace && <>
+        <div className="nav-workspace-sep" aria-hidden="true" />
+        <div className="nav-item-wrap">
+          <button type="button" className="nav-item nav-workspace" onClick={onOpenWorkspace} title="De hele werkruimte openen">
+            <ExternalLink size={16}/><span className="ni-label">Volledige werkruimte</span>
+          </button>
+        </div>
+      </>}
     </nav>
 
     <div className={`sidebar-user${userMenuOpen ? ' is-open' : ''}`} ref={userRef}>
