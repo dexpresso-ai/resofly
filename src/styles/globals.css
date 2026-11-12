@@ -8541,193 +8541,340 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   PROJECTPLANNING · tijdbalk  (`.ptl`)                          2026-08-14
+   PROJECTPLANNING · tijdbalk  (`.ptl`)                2026-08-14 · 2026-11-12
    ───────────────────────────────────────────────────────────────────────
-   Vervangt de oude `.timeline-*`-opmaak. Die had drie verschillende raster-
-   definities naast elkaar — de kopregel schoof met `margin-left:300px`, de
-   rijen gebruikten een échte kolom `300px 1fr` — waardoor de weekkolommen
-   niet uitlijnden en bij een lange planning halverwege ophielden.
+   Eén raster stuurt het bord aan. Elke rij is `label | rest`, en de rest is
+   verdeeld in `--ptl-cols` gelijke kolommen. Omdat `.ptl-board` een vaste
+   breedte heeft (minstens de volle breedte van het venster) valt elke kolom
+   overal op exact dezelfde plek. (Daarvoor schoof de kopregel met een marge
+   en hadden de rijen een eigen kolom; dan liepen de weken niet gelijk.)
+   De balken staan niet in het raster maar op left/width in procenten, zodat
+   22 juni ook echt midden in week 26 begint.
 
-   Hier stuurt ÉÉN raster alles aan. Elke rij (maandband, kolomkoppen,
-   bezetting én elk project) is `label | rest`, en de rest wordt verdeeld in
-   `--ptl-cols` gelijke kolommen. Omdat `.ptl-board` een vaste breedte heeft
-   (minstens de volle breedte van het venster) valt elke kolom overal op
-   exact dezelfde plek, en loopt de tijdbalk altijd door tot de rechterrand.
-
-   De balken zelf staan NIET in het raster maar op promille nauwkeurig via
-   left/width in procenten: 22 juni begint dan ook echt middenin week 26.
+   Herzien op 2026-11-12, omdat het geheel rommelig oogde:
+     • De kaart had geen binnenmarge: titel en cijfers plakten tegen de rand
+       en "Zonder planning" viel er rechts af. Nu heeft de kop een eigen
+       marge en loopt het bord van rand tot rand.
+     • Zoekveld, klantkeuze, knoppen en chips hadden elk een andere hoogte en
+       ronding. Nu is alle bediening 38px hoog met de ronding van de look.
+     • Korte balken toonden "Alge", "Doc" of één letter. Nu staat de naam in
+       de balk als hij past en anders ernaast (ProjectTimeline.tsx rekent dat
+       uit), en blijft hij bij opzij scrollen in beeld (sticky).
+     • De gele bezettingsblokken en het rode vandaag-label vielen over
+       elkaar. De drukte is nu een rustig staafje per kolom, en vandaag een
+       gouden lijn met een eigen label bovenaan.
+     • Te laat zie je nu op het bord zelf: de uitloop na de einddatum is
+       gearceerd tot vandaag.
    ────────────────────────────────────────────────────────────────────── */
 .ptl{
-  --ptl-label:264px;
-  --ptl-col-w:118px;
+  --ptl-label:288px;
+  --ptl-col-w:120px;
   --ptl-cols:1;
-  --ptl-row-h:44px;
+  --ptl-row-h:56px;
+  --ptl-bar-h:30px;
+  --ptl-pad:24px;
+  --ptl-ctl:38px;
+  --ptl-radius:calc(var(--r-card,14px) - 1px);
   --ptl-panel:var(--surface);
-  --ptl-line:var(--border);
-  display:flex;flex-direction:column;gap:14px;min-width:0;
+  --ptl-line:var(--line);
+  --ptl-grid:color-mix(in srgb,var(--line) 64%,transparent);
+  --ptl-now:rgba(var(--accent-rgb),.08);
+  display:flex;flex-direction:column;min-width:0;
 }
-.ptl-dashboard{--ptl-label:232px;--ptl-row-h:40px}
+.ptl-dashboard{--ptl-label:248px;--ptl-row-h:48px;--ptl-bar-h:26px;--ptl-pad:20px}
 /* Kolombreedte per schaal — als klasse en niet inline, anders wint hij van de
    media queries hieronder en houdt de telefoon nog anderhalve week over. */
-.ptl-scale-week{--ptl-col-w:118px}
-.ptl-scale-month{--ptl-col-w:96px}
-.ptl-scale-quarter{--ptl-col-w:84px}
+.ptl-scale-week{--ptl-col-w:120px}
+.ptl-scale-month{--ptl-col-w:104px}
+.ptl-scale-quarter{--ptl-col-w:92px}
+
+/* Eén kleur per fase, voor de chip, het label in de rij en de legenda. */
+.ptl .phase-planning{--ptl-ph:var(--info)}
+.ptl .phase-active{--ptl-ph:var(--warn)}
+.ptl .phase-review{--ptl-ph:var(--note)}
+.ptl .phase-overdue{--ptl-ph:var(--danger)}
+.ptl .phase-completed{--ptl-ph:var(--ok)}
 
 /* ── Kop ── */
-.ptl-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.ptl-top{display:flex;flex-direction:column;gap:16px;padding:calc(var(--ptl-pad) - 2px) var(--ptl-pad) 16px}
+.ptl-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 28px;flex-wrap:wrap}
+.ptl-heading{min-width:0;flex:1 1 320px}
 .ptl-heading h2{font-size:clamp(19px,2.1vw,26px);font-weight:700;letter-spacing:-.03em;line-height:1.15}
-.ptl-heading p{margin-top:5px;max-width:62ch;color:var(--muted);font-size:12.5px;line-height:1.55}
+.ptl-heading p{margin-top:6px;max-width:60ch;color:var(--ink-3);font-size:13px;line-height:1.55}
 .ptl-dashboard .ptl-heading h2{font-size:17px}
-.ptl-stats{display:flex;align-items:stretch;flex-wrap:wrap}
-.ptl-stats div{display:flex;flex-direction:column;gap:3px;padding:0 16px;border-left:1px solid var(--ptl-line)}
-.ptl-stats div:first-child{padding-left:0;border-left:0}
-.ptl-stats div:last-child{padding-right:0}
-.ptl-stats span{font-size:10px;font-weight:600;letter-spacing:.06em;color:var(--muted);white-space:nowrap}
-.ptl-stats strong{font-size:21px;line-height:1.1;font-weight:700;letter-spacing:-.03em;color:var(--text);font-variant-numeric:tabular-nums}
+.ptl-dashboard .ptl-heading p{font-size:12.5px}
+
+/* De vier cijfers als één rustig blok met haarlijnen ertussen. */
+.ptl-stats{display:flex;align-items:stretch;padding:10px 0;border:1px solid var(--ptl-line);border-radius:14px;background:var(--surface-2)}
+.ptl-stats>div{display:flex;flex-direction:column;gap:4px;min-width:88px;padding:0 18px;border-left:1px solid var(--ptl-line)}
+.ptl-stats>div:first-child{border-left:0}
+.ptl-stats span{font-size:11.5px;font-weight:500;color:var(--ink-3);white-space:nowrap}
+.ptl-stats strong{font-size:20px;line-height:1.1;font-weight:700;letter-spacing:-.03em;color:var(--ink);font-variant-numeric:tabular-nums}
+.ptl-stats>div.is-alert strong{color:var(--danger)}
 .ptl-stat-short{display:none}
 
-/* ── Werkbalk ── */
+/* ── Werkbalk: alles even hoog, met de ronding van de look ── */
 .ptl-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.ptl-search{flex:1 1 260px;min-width:190px}
-.ptl-client{flex:0 1 210px;min-width:160px}
-.ptl-toolbar .form-input,.ptl-toolbar .select-trigger{min-height:36px;border-radius:9px;padding-block:7px;font-size:12.5px;background:var(--bg3);box-shadow:none}
+.ptl-search{display:flex;align-items:center;gap:8px;flex:1 1 240px;min-width:180px;max-width:400px;height:var(--ptl-ctl);padding:0 6px 0 12px;border:1px solid var(--ptl-line);border-radius:var(--r-ctl,10px);background:var(--field);color:var(--ink-3);cursor:text;transition:border-color var(--t-1) var(--ease),box-shadow var(--t-1) var(--ease)}
+.ptl-search:hover{border-color:var(--line-2)}
+.ptl-search:focus-within{border-color:var(--focus-line,var(--accent));box-shadow:0 0 0 3px rgba(var(--accent-rgb),.16)}
+.ptl-search svg{flex:none}
+.ptl-search input{flex:1;min-width:0;height:100%;border:0;outline:0;background:transparent;color:var(--ink);font-family:inherit;font-size:13px}
+.ptl-search input::placeholder{color:var(--ink-3)}
+.ptl-search button{display:grid;place-items:center;width:24px;height:24px;border:0;border-radius:7px;background:none;color:var(--ink-3);cursor:pointer}
+.ptl-search button:hover{background:var(--surface-3);color:var(--ink)}
+.ptl-client{flex:0 1 220px;min-width:170px}
+.ptl-toolbar .select-trigger{min-height:var(--ptl-ctl);height:var(--ptl-ctl);padding-block:0;border-color:var(--ptl-line);border-radius:var(--r-ctl,10px);background:var(--field);box-shadow:none;font-size:13px}
+.ptl-toolbar .select-trigger:hover{border-color:var(--line-2)}
 .ptl-toolbar-end{display:flex;align-items:center;gap:8px;margin-left:auto}
-.ptl-toggle{min-height:36px;padding:0 13px;border:1px solid var(--ptl-line);border-radius:9px;background:transparent;color:var(--muted2);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .14s,color .14s,border-color .14s}
-.ptl-toggle:hover:not(:disabled){background:var(--bg3);color:var(--text)}
+.ptl-toolbar-compact>.ptl-chips{flex:1 1 auto;min-width:0}
+
+.ptl-toggle{display:inline-flex;align-items:center;gap:7px;height:var(--ptl-ctl);padding:0 14px;border:1px solid var(--ptl-line);border-radius:var(--r-ctl,10px);background:var(--ptl-panel);color:var(--ink-2);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background var(--t-1) var(--ease),color var(--t-1) var(--ease),border-color var(--t-1) var(--ease)}
+.ptl-toggle:hover:not(:disabled){border-color:var(--line-2);color:var(--ink)}
 .ptl-toggle:disabled{opacity:.42;cursor:not-allowed}
-.ptl-toggle.is-on{background:rgba(var(--accent-rgb),.13);border-color:rgba(var(--accent-rgb),.34);color:var(--text)}
-.ptl-scaleswitch{display:inline-flex;padding:2px;border:1px solid var(--ptl-line);border-radius:10px;background:var(--bg3)}
-.ptl-scaleswitch button{padding:0 11px;height:30px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:background .14s,color .14s}
-.ptl-scaleswitch button:hover{color:var(--text)}
-.ptl-scaleswitch button.is-on{background:var(--ptl-panel);color:var(--text);box-shadow:var(--shadow-1)}
+.ptl-toggle.is-on{background:rgba(var(--accent-rgb),.13);border-color:rgba(var(--accent-rgb),.42);color:var(--ink)}
 
-/* ── Fasechips ── */
+.ptl-scaleswitch{display:inline-flex;gap:2px;height:var(--ptl-ctl);padding:3px;border:1px solid var(--ptl-line);border-radius:var(--r-ctl,10px);background:var(--surface-2)}
+.ptl-scaleswitch button{padding:0 12px;border:0;border-radius:calc(var(--r-ctl,10px) - 3px);background:transparent;color:var(--ink-3);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:background var(--t-1) var(--ease),color var(--t-1) var(--ease),box-shadow var(--t-1) var(--ease)}
+.ptl-scaleswitch button:hover{color:var(--ink)}
+.ptl-scaleswitch button.is-on{background:var(--ptl-panel);color:var(--ink);box-shadow:var(--shadow-1),0 0 0 1px var(--ptl-line)}
+
+/* Terug · Vandaag · Verder. Het gouden puntje is dezelfde kleur als de lijn
+   op het bord: deze knop brengt je daarheen. */
+.ptl-nav{display:inline-flex;align-items:stretch;height:var(--ptl-ctl);border:1px solid var(--ptl-line);border-radius:var(--r-ctl,10px);background:var(--ptl-panel);overflow:hidden}
+.ptl-nav button{display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:var(--ink-2);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background var(--t-1) var(--ease),color var(--t-1) var(--ease)}
+.ptl-nav button:hover:not(:disabled){background:var(--surface-2);color:var(--ink)}
+.ptl-nav button:disabled{opacity:.4;cursor:not-allowed}
+.ptl-nav button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.ptl-nav-step{width:34px}
+.ptl-nav .ptl-nav-today{gap:7px;padding:0 13px;border-inline:1px solid var(--ptl-line)}
+.ptl-nav-today::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.22)}
+
+/* ── Fasechips: aan = getint in de fasekleur, uit = alleen een ring ── */
 .ptl-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.ptl-chips-label{margin-right:2px;font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
-.ptl-chip{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 11px;border:1px solid var(--ptl-line);border-radius:999px;background:transparent;color:var(--muted);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:background .14s,color .14s,border-color .14s}
-.ptl-chip:hover{background:var(--bg3);color:var(--text)}
-.ptl-chip.is-on{background:var(--bg3);color:var(--text);border-color:var(--border2)}
-.ptl-chip-dot{width:7px;height:7px;border-radius:999px;background:var(--muted);transition:background .14s}
-.ptl-chip.is-on .ptl-chip-dot{background:var(--accent)}
-.ptl-chip.is-on.phase-active .ptl-chip-dot{background:var(--accent-o)}
-.ptl-chip.is-on.phase-review .ptl-chip-dot{background:var(--accent-v)}
-.ptl-chip.is-on.phase-overdue .ptl-chip-dot{background:var(--accent-r)}
-.ptl-chip.is-on.phase-completed .ptl-chip-dot{background:var(--accent-g)}
-.ptl-chip-count{font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted)}
-.ptl-chip.is-on .ptl-chip-count{color:var(--muted2)}
-.ptl-chip-reset{height:30px;padding:0 12px;border:1px dashed var(--border2);border-radius:999px;background:transparent;color:var(--muted2);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer}
-.ptl-chip-reset:hover{color:var(--text);border-color:var(--accent)}
+.ptl-chip{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 6px 0 11px;border:1px solid var(--ptl-line);border-radius:999px;background:transparent;color:var(--ink-3);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background var(--t-1) var(--ease),color var(--t-1) var(--ease),border-color var(--t-1) var(--ease)}
+.ptl-chip:hover{border-color:var(--line-2);color:var(--ink)}
+.ptl-chip-dot{width:8px;height:8px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--ptl-ph,var(--ink-3));transition:background var(--t-1) var(--ease)}
+.ptl-chip.is-on{background:color-mix(in srgb,var(--ptl-ph,var(--accent)) 10%,var(--ptl-panel));border-color:color-mix(in srgb,var(--ptl-ph,var(--accent)) 34%,transparent);color:var(--ink)}
+.ptl-chip.is-on .ptl-chip-dot{background:var(--ptl-ph,var(--accent))}
+.ptl-chip-count{display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border-radius:999px;background:var(--surface-3);color:var(--ink-3);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
+.ptl-chip.is-on .ptl-chip-count{background:color-mix(in srgb,var(--ptl-ph,var(--accent)) 16%,transparent);color:var(--ink-2)}
+.ptl-chip-reset{height:30px;padding:0 12px;border:1px dashed var(--line-2);border-radius:999px;background:transparent;color:var(--ink-2);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.ptl-chip-reset:hover{color:var(--ink);border-color:var(--accent)}
+.ptl :is(.ptl-toggle,.ptl-scaleswitch button,.ptl-chip,.ptl-chip-reset,.ptl-empty-btn):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
-/* ── Het bord ── */
-.ptl-scroll{position:relative;border:1px solid var(--ptl-line);border-radius:var(--r-sm);background:var(--ptl-panel);overflow:auto;overscroll-behavior-x:contain;outline:none}
-.ptl-scroll:focus-visible{box-shadow:0 0 0 2px rgba(var(--accent-rgb),.3)}
+/* ── Het bord: van rand tot rand onder de kop ── */
+.ptl-scroll{position:relative;border-top:1px solid var(--ptl-line);background:var(--ptl-panel);overflow:auto;overscroll-behavior-x:contain;outline:none;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+.ptl-scroll:last-child{border-radius:0 0 var(--ptl-radius) var(--ptl-radius)}
+.ptl-scroll:focus-visible{box-shadow:inset 0 0 0 2px rgba(var(--accent-rgb),.5)}
 .ptl-board{position:relative;width:max(100%,calc(var(--ptl-label) + var(--ptl-cols) * var(--ptl-col-w)))}
 .ptl-row{display:grid;grid-template-columns:var(--ptl-label) minmax(0,1fr)}
-.ptl-cells{display:grid;grid-template-columns:repeat(var(--ptl-cols),minmax(0,1fr))}
+.ptl-cells{display:grid;grid-template-columns:repeat(var(--ptl-cols),minmax(0,1fr));min-width:0}
+
+/* De lopende week of maand licht over de hele hoogte zacht goud op. */
+.ptl-nowcol{position:absolute;top:0;bottom:0;left:calc(var(--ptl-label) + (100% - var(--ptl-label)) * var(--ptl-now-i) / var(--ptl-cols));width:calc((100% - var(--ptl-label)) / var(--ptl-cols));background:var(--ptl-now);pointer-events:none}
 
 /* Kolomkoppen blijven staan bij verticaal scrollen. Stapelvolgorde op het
-   bord: koptekst 6 > vaste labelkolom 4 > vandaaglijn 3 > balken 1. */
-.ptl-headband{position:sticky;top:0;z-index:6;background:var(--ptl-panel);border-bottom:1px solid var(--border2)}
+   bord: koptekst 6 > vaste labelkolom 4 > balken 2 > vandaaglijn 1 >
+   uitloop 0. De lijn loopt áchter de balken langs: erboven sneed hij door
+   de namen ("Campagne wi|nteractie"). Binnen de kop ligt de hoek (2) boven
+   het vandaag-label (1). */
+.ptl-headband{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:var(--ptl-label) minmax(0,1fr);grid-template-rows:30px 44px 38px;background:var(--ptl-panel);border-bottom:1px solid var(--ptl-line)}
 
-.ptl-label{position:sticky;left:0;z-index:2;background:var(--ptl-panel);border-right:1px solid var(--ptl-line);min-width:0}
-.ptl-project .ptl-label{z-index:4}
-.ptl-label-head{display:flex;align-items:center;padding:0 14px}
-.ptl-label-head span{font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.ptl-corner{position:sticky;left:0;z-index:2;grid-column:1;grid-row:1 / 3;display:flex;align-items:flex-end;gap:8px;padding:0 16px 13px 20px;background:var(--ptl-panel);border-right:1px solid var(--ptl-line)}
+.ptl-corner span{font-size:12px;font-weight:600;color:var(--ink-2)}
+.ptl-corner b{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--surface-3);color:var(--ink-2);font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+.ptl-corner-load{grid-row:3;align-items:center;padding-bottom:0;border-top:1px solid var(--ptl-grid)}
+.ptl-corner-load span{font-weight:500;color:var(--ink-3)}
+.ptl-corner-load em{font-style:normal;font-size:11px;color:var(--ink-3);opacity:.8}
 
-.ptl-row-group{height:26px}
-.ptl-group{display:flex;align-items:center;padding:0 10px;border-left:1px solid var(--ptl-line);overflow:hidden}
+/* Maand of jaar: het label schuift mee tot het eind van zijn periode
+   (`clip` en niet `hidden`, anders werkt sticky niet). */
+.ptl-groups{grid-column:2;grid-row:1}
+.ptl-group{display:flex;align-items:flex-end;padding-bottom:3px;border-left:1px solid var(--ptl-line);overflow:clip;min-width:0}
 .ptl-group:first-child{border-left:0}
-.ptl-group span{font-size:10.5px;font-weight:600;letter-spacing:.05em;color:var(--muted);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+.ptl-group span{position:sticky;left:var(--ptl-label);padding:0 12px;font-size:11.5px;font-weight:600;color:var(--ink-2);white-space:nowrap;text-transform:capitalize}
 
-.ptl-row-cols{height:42px}
-.ptl-col{display:flex;flex-direction:column;justify-content:center;gap:1px;padding:0 10px;border-left:1px solid var(--ptl-line);min-width:0}
+.ptl-cols{grid-column:2;grid-row:2}
+.ptl-col{display:flex;flex-direction:column;justify-content:center;gap:2px;padding:0 12px;border-left:1px solid var(--ptl-grid);min-width:0}
 .ptl-col:first-child{border-left:0}
-.ptl-col strong{font-size:12px;font-weight:600;color:var(--muted2);letter-spacing:.01em;white-space:nowrap}
-.ptl-col span{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ptl-col strong{font-size:12.5px;font-weight:600;color:var(--ink-2);white-space:nowrap;text-transform:capitalize}
+.ptl-col span{font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ptl-col.is-now{background:var(--ptl-now)}
 .ptl-col.is-now strong{color:var(--accent-ink)}
 
-.ptl-row-load{height:30px}
-.ptl-load{position:relative;display:grid;place-items:center;border-left:1px solid var(--ptl-line)}
+/* Drukte: per kolom een staafje naar verhouding, de drukste in goud. */
+.ptl-loads{grid-column:2;grid-row:3;border-top:1px solid var(--ptl-grid)}
+.ptl-load{display:flex;align-items:flex-end;justify-content:center;gap:7px;padding:0 12px 8px;border-left:1px solid var(--ptl-grid);min-width:0}
 .ptl-load:first-child{border-left:0}
-.ptl-load-bar{position:absolute;left:2px;right:2px;bottom:0;background:rgba(var(--accent-rgb),.2);border-radius:3px 3px 0 0}
-.ptl-load b{position:relative;font-size:10px;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums}
+.ptl-load.is-now{background:var(--ptl-now)}
+.ptl-load-bar{flex:1 1 auto;max-width:64px;height:calc(4px + var(--load,0) * 14px);border-radius:4px 4px 2px 2px;background:color-mix(in srgb,var(--ink) 13%,transparent)}
+.ptl-load.is-peak .ptl-load-bar{background:var(--accent)}
+.ptl-load b{font-size:11px;font-weight:600;line-height:1;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.ptl-load.is-peak b{color:var(--ink)}
 
 /* ── Projectrijen ── */
 .ptl-rows{display:flex;flex-direction:column}
-.ptl-project{min-height:var(--ptl-row-h);border-bottom:1px solid var(--ptl-line)}
+.ptl-project{min-height:var(--ptl-row-h);border-bottom:1px solid var(--ptl-grid)}
 .ptl-project:last-child{border-bottom:0}
-.ptl-project:hover .ptl-label,.ptl-project:hover .ptl-track{background-color:rgba(var(--sheen-rgb),calc(.028 * var(--sheen-k)))}
+.ptl-project:hover .ptl-track{background-color:rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k)))}
+.ptl-project:hover .ptl-label{background:color-mix(in srgb,var(--ink) 3%,var(--ptl-panel))}
 
-.ptl-label-btn{display:flex;align-items:center;gap:9px;width:100%;height:100%;padding:7px 12px;border:0;background:transparent;color:inherit;font-family:inherit;text-align:left;cursor:pointer;min-width:0}
-.ptl-label-btn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:6px}
-.ptl-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0}
-.ptl-label-text{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
-.ptl-label-text strong{font-size:13px;font-weight:600;letter-spacing:-.01em;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ptl-label-sub{display:flex;align-items:center;gap:0;min-width:0;font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ptl-phase{font-style:normal;font-weight:600;color:var(--muted2);flex-shrink:0}
-.ptl-phase::before{content:'\00b7';margin:0 6px;color:var(--muted)}
-.ptl-phase.phase-overdue{color:var(--accent-r)}
-.ptl-phase.phase-review{color:var(--accent-v)}
-.ptl-phase.phase-completed{color:var(--accent-g)}
-.ptl-label-count{flex-shrink:0;font-size:10.5px;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums}
+.ptl-label{position:sticky;left:0;z-index:4;background:var(--ptl-panel);border-right:1px solid var(--ptl-line);min-width:0;transition:background var(--t-1) var(--ease)}
+.ptl-label-btn{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"sw name phase" "sw sub phase";align-content:center;align-items:center;column-gap:12px;row-gap:2px;width:100%;height:100%;padding:8px 14px 8px 20px;border:0;background:transparent;color:inherit;font-family:inherit;text-align:left;cursor:pointer;min-width:0}
+.ptl-label-btn:focus-visible{outline:2px solid var(--accent);outline-offset:-3px;border-radius:8px}
+.ptl-swatch{grid-area:sw;width:10px;height:10px;border-radius:3px;background:var(--pc);box-shadow:0 0 0 3px color-mix(in srgb,var(--pc) 22%,transparent)}
+.ptl-label-name{grid-area:name;min-width:0;font-size:13px;font-weight:600;letter-spacing:-.01em;line-height:1.3;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ptl-label-sub{grid-area:sub;display:flex;min-width:0;font-size:11.5px;line-height:1.3;color:var(--ink-3);white-space:nowrap}
+.ptl-label-sub>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ptl-label-sub>span.is-none{font-style:italic}
+.ptl-label-tasks{flex:none}
+.ptl-label-tasks::before{content:'·';margin:0 6px}
+.ptl-phase{grid-area:phase;display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;background:color-mix(in srgb,var(--ptl-ph,var(--ink-3)) 11%,transparent);color:var(--ptl-ph,var(--ink-3));font-style:normal;font-size:11px;font-weight:600;white-space:nowrap}
+.ptl-phase::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+/* Op het dashboard is de kolom smaller: daar staat het fasekenmerk altijd
+   onder de naam (zie ook max-width:1250px hieronder). */
+.ptl-dashboard .ptl-label-btn{grid-template-columns:auto auto minmax(0,1fr);grid-template-areas:"sw name name" "sw phase sub";column-gap:8px;row-gap:4px;padding:7px 12px 7px 18px}
+.ptl-dashboard .ptl-phase{height:18px;padding:0 7px;font-size:10.5px}
 
 /* De kolomlijnen in het spoor zijn geverfd, geen DOM: één achtergrond die
    zichzelf per kolom herhaalt houdt honderden lege cellen uit de pagina. */
-.ptl-track{position:relative;min-width:0;background-image:linear-gradient(to right,var(--ptl-line) 0 1px,transparent 1px);background-size:calc(100% / var(--ptl-cols)) 100%;background-position:0 0}
+.ptl-track{position:relative;min-width:0;background-image:linear-gradient(to right,var(--ptl-grid) 0 1px,transparent 1px);background-size:calc(100% / var(--ptl-cols)) 100%;background-position:0 0;transition:background-color var(--t-1) var(--ease)}
 
-.ptl-bar{position:absolute;top:50%;transform:translateY(-50%);height:26px;min-width:8px;display:flex;align-items:center;padding:0 9px 0 11px;border:1px solid color-mix(in srgb,var(--pc,var(--accent)) 42%,transparent);border-radius:7px;background:color-mix(in srgb,var(--pc,var(--accent)) 15%,var(--ptl-panel));color:var(--text);font-family:inherit;text-align:left;cursor:pointer;overflow:hidden;z-index:1;transition:border-color .14s,background .14s,box-shadow .14s}
-.ptl-bar::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--pc,var(--accent))}
-.ptl-bar:hover{background:color-mix(in srgb,var(--pc,var(--accent)) 24%,var(--ptl-panel));border-color:color-mix(in srgb,var(--pc,var(--accent)) 66%,transparent);box-shadow:var(--shadow-1)}
-.ptl-bar:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.ptl-bar.is-estimated{border-style:dashed}
-.ptl-project.phase-completed .ptl-bar{opacity:.62}
-.ptl-project.phase-overdue .ptl-bar{border-color:rgba(var(--danger-rgb),.5)}
-.ptl-bar-fill{position:absolute;left:0;top:0;bottom:0;background:color-mix(in srgb,var(--pc,var(--accent)) 22%,transparent);pointer-events:none}
-.ptl-bar-text{position:relative;display:flex;align-items:baseline;gap:7px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ptl-bar-text strong{font-size:11.5px;font-weight:600;letter-spacing:-.01em;flex-shrink:0}
-.ptl-bar-text span{font-size:10.5px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis}
+/* De balk: een getinte body in de projectkleur met een accentje links. De
+   knop zelf is kaal, zodat de tekst ernaast mag. */
+.ptl-bar{position:absolute;top:50%;height:var(--ptl-bar-h);margin-top:calc(var(--ptl-bar-h) / -2);min-width:12px;display:flex;align-items:center;padding:0 12px 0 16px;border:0;background:none;color:var(--ink);font-family:inherit;text-align:left;cursor:pointer;z-index:2}
+.ptl-bar-body{position:absolute;inset:0;border:1px solid color-mix(in srgb,var(--pc) 42%,transparent);border-radius:9px;background:color-mix(in srgb,var(--pc) 15%,var(--ptl-panel));overflow:hidden;transition:background var(--t-1) var(--ease),border-color var(--t-1) var(--ease),box-shadow var(--t-2) var(--ease)}
+.ptl-bar-body::after{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:3px;border-radius:3px;background:var(--pc)}
+/* Voortgang als een lijntje onderin: een getint vlak liep dwars door de naam. */
+.ptl-bar-fill{position:absolute;left:0;bottom:0;height:3px;border-radius:0 3px 3px 0;background:color-mix(in srgb,var(--pc) 78%,var(--ink))}
+.ptl-bar:hover .ptl-bar-body{border-color:color-mix(in srgb,var(--pc) 72%,transparent);background:color-mix(in srgb,var(--pc) 22%,var(--ptl-panel));box-shadow:0 6px 16px -8px color-mix(in srgb,var(--pc) 70%,transparent)}
+.ptl-bar:focus-visible{outline:none}
+.ptl-bar:focus-visible .ptl-bar-body{box-shadow:0 0 0 2px var(--ptl-panel),0 0 0 4px var(--accent)}
+.ptl-bar.is-estimated .ptl-bar-body{border-style:dashed;background:color-mix(in srgb,var(--pc) 8%,var(--ptl-panel))}
+.ptl-project.phase-completed .ptl-bar{opacity:.6}
+
+/* Een lange balk houdt zijn naam in beeld: hij schuift mee tot de rand van
+   de projectkolom. */
+.ptl-bar-text{position:sticky;left:calc(var(--ptl-label) + 14px);display:flex;align-items:baseline;gap:8px;min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;pointer-events:none}
+.ptl-bar-text strong{flex:none;font-size:12px;font-weight:600;letter-spacing:-.01em;color:var(--ink)}
+.ptl-bar-text span{min-width:0;font-size:11px;font-weight:500;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis}
+.ptl-bar.fit-name .ptl-bar-text span{display:none}
+.ptl-bar.fit-name .ptl-bar-text strong{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis}
+/* Te kort: de tekst staat naast de balk (na een uitloop: na de uitloop). */
+.ptl-bar:is(.fit-after,.fit-before) .ptl-bar-text{position:absolute;top:50%;left:calc(100% + 10px + var(--after,0px));max-width:none;overflow:visible;transform:translateY(-50%)}
+.ptl-bar.fit-before .ptl-bar-text{left:auto;right:calc(100% + 10px)}
+.ptl-bar:is(.fit-after,.fit-before) .ptl-bar-text span{color:var(--ink-3)}
+
+/* Te laat: van de einddatum tot vandaag gearceerd, onder het rondje van de
+   balk door. */
+.ptl-overrun{position:absolute;top:50%;height:var(--ptl-bar-h);margin-top:calc(var(--ptl-bar-h) / -2);margin-left:-10px;padding-left:10px;box-sizing:content-box;border:1px solid rgba(var(--danger-rgb),.28);border-left:0;border-radius:0 9px 9px 0;background:repeating-linear-gradient(-45deg,rgba(var(--danger-rgb),.2) 0 1.5px,transparent 1.5px 7px),rgba(var(--danger-rgb),.04);z-index:0;pointer-events:none}
 
 /* ── Vandaag ── */
-/* De lijn loopt over het hele bord maar duikt onder de koptekst; het vlaggetje
+/* De lijn loopt over het hele bord maar duikt onder de koptekst; het label
    hoort bij de koptekst zelf, zodat het altijd zichtbaar blijft. */
-.ptl-todayline{position:absolute;top:0;bottom:0;left:calc(var(--ptl-label) + (100% - var(--ptl-label)) * var(--ptl-today));width:1px;background:rgba(var(--danger-rgb),.5);z-index:3;pointer-events:none}
-.ptl-todaycap{position:absolute;bottom:0;left:calc(var(--ptl-label) + (100% - var(--ptl-label)) * var(--ptl-today));width:1px;top:26px;background:rgba(var(--danger-rgb),.5);pointer-events:none}
-.ptl-todaycap span{position:absolute;bottom:-1px;left:0;transform:translateX(-50%);padding:1px 6px;border-radius:5px 5px 0 0;background:rgba(var(--danger-rgb),.92);color:var(--surface);font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.ptl-todayline{position:absolute;top:0;bottom:0;left:calc(var(--ptl-label) + (100% - var(--ptl-label)) * var(--ptl-today));width:2px;margin-left:-1px;background:var(--accent);box-shadow:0 0 10px rgba(var(--accent-rgb),.5);z-index:1;pointer-events:none}
+.ptl-todaycap{position:absolute;top:0;bottom:-1px;left:calc(var(--ptl-label) + (100% - var(--ptl-label)) * var(--ptl-today));width:0;z-index:1;pointer-events:none}
+.ptl-todaycap::before{content:'';position:absolute;top:22px;bottom:0;left:-1px;width:2px;background:var(--accent)}
+.ptl-todaycap span{position:absolute;top:5px;left:0;transform:translateX(-50%);padding:3px 9px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:10.5px;font-weight:700;line-height:1.2;white-space:nowrap;box-shadow:0 0 0 2px var(--ptl-panel),0 4px 12px -4px rgba(var(--accent-rgb),.8)}
+
+/* ── Legenda: alleen wat er op het bord staat ── */
+.ptl-legend{display:flex;align-items:center;flex-wrap:wrap;gap:6px 20px;padding:11px var(--ptl-pad);border-top:1px solid var(--ptl-line);border-radius:0 0 var(--ptl-radius) var(--ptl-radius);background:var(--surface-2);color:var(--ink-3);font-size:11.5px}
+.ptl-legend-item{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.ptl-legend i{display:inline-block;flex:none}
+.ptl-key-today{width:2px;height:14px;border-radius:2px;background:var(--accent);box-shadow:0 0 6px rgba(var(--accent-rgb),.6)}
+.ptl-key-progress{width:24px;height:10px;border-radius:4px;background:linear-gradient(var(--ink-2),var(--ink-2)) left bottom / 55% 2px no-repeat,color-mix(in srgb,var(--ink) 10%,transparent)}
+.ptl-key-estimated{width:24px;height:10px;border:1px dashed var(--ink-3);border-radius:4px}
+.ptl-key-overrun{width:24px;height:10px;border:1px solid rgba(var(--danger-rgb),.4);border-left:0;border-radius:0 4px 4px 0;background:repeating-linear-gradient(-45deg,rgba(var(--danger-rgb),.4) 0 1.5px,transparent 1.5px 5px)}
 
 /* ── Leeg ── */
-.ptl-empty{display:flex;flex-direction:column;align-items:center;gap:6px;padding:42px 20px;border:1px dashed var(--border2);border-radius:var(--r-sm);background:var(--bg3);text-align:center}
-.ptl-empty strong{font-size:15px;font-weight:600;color:var(--muted2)}
-.ptl-empty span{font-size:12.5px;color:var(--muted)}
+.ptl-empty{display:flex;flex-direction:column;align-items:center;gap:6px;margin:0 var(--ptl-pad) var(--ptl-pad);padding:40px 20px;border:1px dashed var(--line-2);border-radius:14px;background:var(--surface-2);text-align:center}
+.ptl-empty-icon{display:grid;place-items:center;width:44px;height:44px;margin-bottom:6px;border-radius:13px;background:var(--ptl-panel);color:var(--accent-ink);box-shadow:var(--shadow-1),0 0 0 1px var(--ptl-line)}
+.ptl-empty strong{font-size:14.5px;font-weight:600;color:var(--ink)}
+.ptl-empty>span:not(.ptl-empty-icon){max-width:46ch;font-size:12.5px;line-height:1.5;color:var(--ink-3)}
+.ptl-empty-btn{margin-top:8px;height:34px;padding:0 14px;border:1px solid var(--line-2);border-radius:var(--r-ctl,10px);background:var(--ptl-panel);color:var(--ink);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.ptl-empty-btn:hover{border-color:var(--accent)}
 
+/* Smaller: het fasekenmerk schuift onder de naam, vóór de klant. Ernaast
+   kapte het de naam af tot "Algemene voor…". */
 @media(max-width:1250px){
-  .ptl{--ptl-label:230px}
+  .ptl{--ptl-label:240px}
+  .ptl-label-btn{grid-template-columns:auto auto minmax(0,1fr);grid-template-areas:"sw name name" "sw phase sub";column-gap:8px;row-gap:4px;padding:8px 12px 8px 18px}
+  .ptl-phase{height:18px;padding:0 7px;font-size:10.5px}
+}
+@media(max-width:1100px){
   .ptl-head{align-items:flex-start}
+  .ptl-stats{width:100%;padding:8px 0}
+  .ptl-stats>div{flex:1 1 0;min-width:0}
+  .ptl-stats strong{font-size:18px}
 }
 @media(max-width:900px){
-  .ptl{--ptl-label:190px}
-  .ptl-scale-week{--ptl-col-w:104px}
-  .ptl-scale-month{--ptl-col-w:88px}
-  .ptl-scale-quarter{--ptl-col-w:78px}
-  .ptl-stats div{padding:0 12px}
-  .ptl-stats strong{font-size:18px}
-  .ptl-search,.ptl-client{flex:1 1 100%}
-  .ptl-toolbar-end{margin-left:0;width:100%;justify-content:space-between}
+  .ptl{--ptl-label:212px;--ptl-pad:18px}
+  .ptl-scale-week{--ptl-col-w:108px}
+  .ptl-scale-month{--ptl-col-w:92px}
+  .ptl-scale-quarter{--ptl-col-w:82px}
+  .ptl-search{max-width:none}
+  .ptl-label-tasks{display:none}
 }
-@media(max-width:560px){
-  .ptl{--ptl-label:142px;--ptl-row-h:46px}
-  .ptl-scale-week{--ptl-col-w:90px}
-  .ptl-scale-month{--ptl-col-w:74px}
-  .ptl-scale-quarter{--ptl-col-w:68px}
-  .ptl-heading p{display:none}
-  .ptl-stats{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 0}
-  .ptl-stats div:nth-child(odd){padding-left:0;border-left:0}
-  .ptl-label-btn{padding:6px 9px;gap:7px}
-  .ptl-label-text strong{font-size:12px}
-  .ptl-label-count{display:none}
-  .ptl-toggle,.ptl-chip,.ptl-chip-reset{min-height:40px}
-  .ptl-scaleswitch button{height:38px}
-  .ptl-col{padding:0 8px}
-  .ptl-col span{font-size:9.5px}
+
+/* ── Telefoon ──
+   De uitleg onder de titel valt weg (de tab zegt waar je bent), de cijfers
+   staan in één strook, de werkbalk past in twee regels en de fasechips zijn
+   één veegbare regel. Raakvlakken blijven 36px of hoger. */
+@media(max-width:760px){
+  .ptl{--ptl-label:156px;--ptl-row-h:52px;--ptl-bar-h:28px;--ptl-pad:14px;--ptl-ctl:38px}
+  .ptl-scale-week{--ptl-col-w:96px}
+  .ptl-scale-month{--ptl-col-w:78px}
+  .ptl-scale-quarter{--ptl-col-w:70px}
+  .ptl-top{gap:10px;padding:14px 14px 12px}
+  .ptl-heading{display:none}
+  .ptl-head{gap:8px}
+
+  .ptl-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:8px 0;border-radius:12px}
+  .ptl-stats>div{gap:2px;min-width:0;padding:0 10px}
+  .ptl-stats strong{font-size:16px}
+  .ptl-stats span{font-size:10.5px;overflow:hidden;text-overflow:ellipsis}
+  .ptl-stat-long{display:none}
+  .ptl-stat-short{display:inline}
+
+  /* Zoeken, klant en archief op de eerste regel; schaal en tijdknoppen op
+     de tweede, over de volle breedte. Archief is hier alleen het icoon. */
+  .ptl-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,.75fr) auto;gap:6px}
+  .ptl-search,.ptl-client{min-width:0;max-width:none}
+  .ptl-search input{font-size:16px}
+  .ptl-toolbar .select-trigger .select-icon{display:none}
+  .ptl-archive{width:var(--ptl-ctl);padding:0;justify-content:center}
+  /* Weg uit beeld, niet uit de toegankelijkheidsboom: de tekst is de naam van de knop. */
+  .ptl-archive-text{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .ptl-toolbar-end{grid-column:1/-1;margin-left:0;gap:6px}
+  .ptl-toolbar-compact{grid-template-columns:minmax(0,1fr)}
+  .ptl-scaleswitch{flex:1 1 auto}
+  .ptl-scaleswitch button{flex:1;padding:0 8px}
+  .ptl-nav-step{width:36px}
+  .ptl-nav .ptl-nav-today{padding:0 11px}
+
+  /* Fasechips: één veegbare regel. */
+  .ptl-chips{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;margin-inline:-14px;padding-inline:14px}
+  .ptl-chips::-webkit-scrollbar{display:none}
+  .ptl-chips>*{flex:0 0 auto}
+  .ptl-chip,.ptl-chip-reset{height:34px}
+
+  .ptl-headband{grid-template-rows:26px 40px 34px}
+  .ptl-corner{padding:0 10px 11px 14px}
+  .ptl-corner-load{padding-bottom:0}
+  .ptl-corner-load em{display:none}
+  .ptl-col{padding:0 9px}
+  .ptl-col span{font-size:10px}
+  .ptl-load{padding:0 9px 7px;gap:5px}
+  .ptl-label-btn{padding:7px 8px 7px 12px}
+  .ptl-label-name{font-size:12.5px}
+  .ptl-swatch{width:8px;height:8px;border-radius:2px}
+  .ptl-label-sub{font-size:11px}
+  .ptl-bar-text strong{font-size:11.5px}
+  .ptl-legend{gap:6px 14px;padding:10px 14px;font-size:11px}
+}
+@media(max-width:400px){
+  .ptl{--ptl-label:142px}
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -10936,20 +11083,6 @@ button.task-agenda-when:hover{text-decoration:underline}
   .tt-criterion{padding:12px}
   .time-tracking-page{gap:10px}
 
-  /* ── Projectplanning: de kop met uitleg weg (de tab zegt waar je bent), de
-        vier cijfers op één rij, zoeken en klant naast elkaar. ── */
-  .ptl-heading{display:none}
-  .ptl-head{gap:6px}
-  .ptl-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%}
-  .ptl-stats div{padding:0 8px;min-width:0}
-  .ptl-stats strong{font-size:16px}
-  .ptl-stats span{font-size:9px;white-space:normal;line-height:1.2}
-  .ptl-toolbar{gap:6px}
-  .ptl-search{flex:1 1 52%;min-width:0}
-  .ptl-client{flex:1 1 40%;min-width:0}
-  .ptl-toolbar>.ptl-toggle{flex:0 0 auto}
-  .ptl-toolbar-end{margin-left:0;flex:1 1 auto;justify-content:space-between}
-
   /* ── Instellingen: de kopkaart bevat op de telefoon alleen nog een lege
         rand (de tekst is verborgen), tenzij de alleen-lezen-uitleg erin staat. ── */
   .settings-head:not(:has(.settings-help)){display:none}
@@ -11117,9 +11250,6 @@ button.task-agenda-when:hover{text-decoration:underline}
   .rb-chart-seg{width:100%}
   .rb-chart-seg button{flex:1;justify-content:center}
   .rb-layout{gap:10px}
-
-  /* Projectplanning: "Alleen actief" naast de periode en "Vandaag". */
-  .ptl-toolbar-end{flex:0 1 auto;margin-left:auto}
 
   /* Drawer: de organisatieregel brak "+ administratie" over twee regels. */
   .org-meta{flex-wrap:wrap;gap:4px 10px}
@@ -11931,49 +12061,9 @@ body.ink-sheet-open{overflow:hidden}
   .crumbs-item.is-current .crumbs-text{max-width:min(24ch,48vw)}
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   PROJECTPLANNING COMPACT OP DE TELEFOON  (2026-09-19)
-
-   Op het dashboard stond vóór de eerste projectbalk ruim 200px filterwerk:
-   vier cijferblokken van een halve regel hoog, een rij schaalknoppen en de
-   fasechips die over twee regels vielen. (Die chips hóórden al één veegbare
-   regel te zijn, maar de basisregel `.ptl-chips{flex-wrap:wrap}` staat verderop
-   in dit bestand dan de mediaquery die dat regelde en won dus alsnog.)
-
-   Nu: de vier cijfers als één regel "getal + kort label", de schaalknoppen en
-   de fasechips elk op één veegbare regel. Van ~215px naar ~105px, zonder dat
-   er een filter verdwijnt. Raakvlakken blijven 36px hoog.
-
-   Helemaal achteraan, want alles hier overschrijft een eerdere regel.
-   ═══════════════════════════════════════════════════════════════════════ */
-@media(max-width:760px){
-  .ptl{gap:10px}
-  .ptl-head{gap:8px}
-
-  /* Cijfers: geen vier kolommen meer maar één doorlopende regel. `row-reverse`
-     zet het getal vóór zijn label zonder de DOM-volgorde (label, getal) — en
-     dus de voorleesvolgorde — om te gooien. */
-  .ptl-stats{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 14px;width:100%}
-  .ptl-stats div{flex-direction:row-reverse;align-items:baseline;justify-content:flex-start;gap:5px;padding:0;border-left:0;min-width:0}
-  .ptl-stats strong{font-size:15px}
-  .ptl-stats span{font-size:10.5px;white-space:nowrap;line-height:1.3}
-  .ptl-stat-long{display:none}
-  .ptl-stat-short{display:inline}
-
-  /* Werkbalk: iets lagere knoppen, maar met 36px nog altijd te raken. */
-  .ptl-toolbar{gap:6px}
-  .ptl-toggle{min-height:36px;padding:0 12px;font-size:12px}
-  .ptl-scaleswitch button{height:32px;padding:0 12px;font-size:12px}
-
-  /* Fasechips: één veegbare regel. Het kopje "Fase" is weg — de chips zeggen
-     zelf waar ze over gaan, en de groep houdt zijn aria-label. */
-  .ptl-chips{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;gap:6px}
-  .ptl-chips::-webkit-scrollbar{display:none}
-  .ptl-chips>*{flex:0 0 auto}
-  .ptl-chips-label{display:none}
-  .ptl-chip,.ptl-chip-reset{height:36px;min-height:36px;padding:0 12px;font-size:12px}
-  .ptl-chip{gap:6px}
-}
+/* PROJECTPLANNING OP DE TELEFOON — staat sinds 2026-11-12 bij de rest in het
+   `.ptl`-blok. Hier stond een tweede laag die de eerste weer overschreef; dat
+   maakte elke wijziging aan de tijdbalk een zoektocht. */
 
 /* ══════════════════════════════════════════════════════════════════════════
    BELICHT — de look & feel voor Nacht en Dag  (2026-09-25)

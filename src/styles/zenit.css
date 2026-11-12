@@ -876,11 +876,10 @@
    drie lenzen, zoeken, Verfijnen (klant, fases, archief), zoom en Vandaag.
    In de balk staan de data; de naam staat al in de kolom ernaast.
    De timeline is een kaart zonder binnenmarge (cockpit.css §5), zodat de
-   tijdbalk tot de rand loopt; kop en werkbalk krijgen hier wél lucht. */
-:root[data-look="zenit"] .app .ptl-calm{gap:12px}
-:root[data-look="zenit"] .app .ptl-calm>:not(.ptl-scroll){margin-inline:20px}
-:root[data-look="zenit"] .app .ptl-calm>.ptl-head{padding-top:18px}
-:root[data-look="zenit"] .app .ptl-calm>.ptl-empty{margin-bottom:20px}
+   tijdbalk tot de rand loopt. Kop en werkbalk staan samen in `.ptl-top`,
+   dat zijn eigen marge heeft (globals.css); hier alleen iets krapper. */
+:root[data-look="zenit"] .app .ptl-calm{--ptl-pad:20px}
+:root[data-look="zenit"] .app .ptl-calm>.ptl-top{gap:12px;padding:18px 20px 14px}
 :root[data-look="zenit"] .app .ptl-calm .ptl-heading h2{font-weight:600;letter-spacing:-.03em}
 :root[data-look="zenit"] .app .ptl-calm .ptl-sentence{max-width:none;margin-top:6px;color:var(--ink-2);font-size:13px;line-height:1.5}
 :root[data-look="zenit"] .app .ptl-calm .ptl-sentence b{color:var(--ink);font-weight:600}
@@ -929,8 +928,8 @@
 :root[data-look="zenit"] .app .ptl-calm .ptl-bar-text strong{display:none}
 :root[data-look="zenit"] .app .ptl-calm .ptl-bar-text span{color:var(--ink-2)}
 @media (max-width:760px){
-  :root[data-look="zenit"] .app .ptl-calm>:not(.ptl-scroll){margin-inline:12px}
-  :root[data-look="zenit"] .app .ptl-calm>.ptl-head{padding-top:12px}
+  :root[data-look="zenit"] .app .ptl-calm{--ptl-pad:12px}
+  :root[data-look="zenit"] .app .ptl-calm>.ptl-top{padding:12px 12px 10px}
   :root[data-look="zenit"] .app .ptl-calm-bar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
   :root[data-look="zenit"] .app .ptl-calm-bar .ptl-lens{grid-column:1/-1;justify-self:start}
   :root[data-look="zenit"] .app .ptl-calm-bar .ptl-qsearch{flex:none;min-width:0;width:100%}
