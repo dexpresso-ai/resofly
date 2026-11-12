@@ -1,34 +1,24 @@
 #!/usr/bin/env node
 /*
- * Tekent alle iconen in public/icons/ — `node scripts/app-iconen.mjs`.
+ * Tekent de iconen van de werkruimte (public/icons/icon-<maat>.png, met de R
+ * uit het logo), de witte R voor meldingen (badge-72.png) en die van de losse
+ * apps (Agenda, Financiën, Communicatie, public/icons/app-<id>-<maat>.png)
+ * — `node scripts/app-iconen.mjs`.
  *
- *   resofly-logo.svg                het logo zelf, als vector
- *   icon-<maat>.png                 de werkruimte, `any`: het logo zoals het is
- *   icon-maskable-<maat>.png        de werkruimte, `maskable`: tegel tot de rand
- *   apple-touch-icon.png            het beginscherm van een iPhone of iPad
- *   badge-72.png                    de witte R in de statusbalk bij een melding
- *   app-<id>-<maat>.png             Agenda, Financiën, Communicatie, `any`
- *   app-<id>-maskable-<maat>.png    idem, `maskable` (ook hun apple-touch-icon)
+ * Eén oranje tegel voor alle vier, in de kleur van het logo. De losse apps
+ * hebben in plaats van de R het teken van de module, uit lucide: hetzelfde
+ * teken als in het menu van de app. Zo staan de vier naast elkaar op een
+ * beginscherm als één familie, en zie je toch in één oogopslag welke welke is.
+ * De kleur en de R komen uit src/components/BrandMark.tsx, zodat het icoon en
+ * de tegel in de app altijd hetzelfde zijn.
  *
- * Tegel, kleuren en de R komen uit src/components/BrandMark.tsx: het logo in de
- * app en de iconen op een telefoon zijn zo altijd hetzelfde. Wie het logo
- * wijzigt, wijzigt BrandMark.tsx en draait dit script.
- *
- * Waarom twee soorten iconen:
- *   - `any` is het logo zoals het is, met de kleine ronde hoeken en daarbuiten
- *     doorzichtig. Dat gebruikt een computer (Windows, macOS, het tabblad).
- *     Tot 12 november was `any` een volle vierkante tegel; op een bureaublad
- *     stond ResoFly dan als enige app als hoekig blok tussen de rest.
- *   - `maskable` is een volle tegel tot aan de rand. Android knipt er zelf een
- *     cirkel of druppel uit; alleen wat binnen de cirkel van 80% valt (de
- *     veilige zone, straal 205 op 512) blijft zeker staan. Daarom staat de R
- *     daar kleiner in. Het been loopt in het logo tot de onderrand, en hier dus
- *     door tot onder de tegel: anders hield het in een cirkel net vóór de rand
- *     op, en zag het er afgebroken uit.
- *   - iOS leest het manifest niet en rondt zelf de hoeken af (±22%). Het
- *     apple-touch-icon is daarom een volle tegel met de R op de maat van het
- *     logo; de stam valt ruim binnen de hoeken van iOS. Een doorzichtige hoek
- *     maakt iOS zwart.
+ * Het teken blijft binnen de cirkel van 80% (de veilige zone van een
+ * `maskable` icoon): Android knipt het icoon rond of als druppel, en dan mag er
+ * niets van het teken af vallen. Daarom kan één bestand zowel `any` als
+ * `maskable` zijn. Voor de R betekent dat: kleiner dan in het logo (de
+ * onderhoek van de stam viel op de maat van het logo buiten de cirkel), en het
+ * been loopt door tot onder de rand. Anders hield het in een cirkel net vóór
+ * de rand op, en zag het er afgebroken uit.
  *
  * Chromium: zie CLAUDE.md (RESOFLY_CHROMIUM in een cloudsessie).
  */
@@ -40,53 +30,7 @@ import { chromium } from '@playwright/test';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'public', 'icons');
 
-// ── Het logo, uit BrandMark.tsx ────────────────────────────────────────────
-const brandSource = fs.readFileSync(path.join(ROOT, 'src', 'components', 'BrandMark.tsx'), 'utf8');
-function constant(name) {
-  const match = new RegExp(`export const ${name} =\\s*'([^']+)'`).exec(brandSource) ?? new RegExp(`export const ${name} = (\\d+)`).exec(brandSource);
-  if (!match) throw new Error(`${name} niet gevonden in BrandMark.tsx`);
-  return match[1];
-}
-const TILE = constant('BRAND_TILE_COLOR');
-const INK = constant('BRAND_INK');
-const RADIUS = Number(constant('BRAND_TILE_RADIUS'));
-const R_PATH = constant('BRAND_MARK_PATH');
-
-// Het been van de R: van de boog (rechts) en de teller (links) schuin naar de
-// onderrand. Voor de maskable versie loopt het met dezelfde schuinte door.
-const leg = /A[\d.]+ [\d.]+ 0 0 1 ([\d.]+) ([\d.]+)L([\d.]+) 512H([\d.]+)L([\d.]+) ([\d.]+)H/.exec(R_PATH);
-if (!leg) throw new Error('Het been van de R is niet te vinden in BRAND_MARK_PATH; pas de regex aan.');
-const [rightTopX, rightTopY, rightBottomX, leftBottomX, leftTopX, leftTopY] = leg.slice(1).map(Number);
-const slopeRight = (rightBottomX - rightTopX) / (512 - rightTopY);
-const slopeLeft = (leftBottomX - leftTopX) / (512 - leftTopY);
-const LEG_END = 700;
-const LEG_EXTENSION = `M${leftBottomX} 511L${rightBottomX} 511L${(rightBottomX + slopeRight * (LEG_END - 512)).toFixed(1)} ${LEG_END}L${(leftBottomX + slopeLeft * (LEG_END - 512)).toFixed(1)} ${LEG_END}Z`;
-// Zo groot dat de verste hoek van de stam (88,406) op straal 196 komt: binnen de
-// veilige zone van 205, met wat lucht.
-const MASKABLE_SCALE = 0.87;
-
-const logoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <title>ResoFly</title>
-  <rect width="512" height="512" rx="${RADIUS}" fill="${TILE}"/>
-  <path d="${R_PATH}" fill="${INK}"/>
-</svg>
-`;
-
-/** De werkruimte. `kind`: logo (any), maskable, apple (volle tegel, R op logomaat) of badge (wit, geen tegel). */
-function resoflySvg(kind) {
-  if (kind === 'logo') return logoSvg;
-  if (kind === 'badge') {
-    // Alleen de R, zo groot als het kan; het been loopt tot de onderrand, net als in het logo.
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="46 92 420 420"><path d="${R_PATH}" fill="#FFFFFF"/></svg>`;
-  }
-  const r = kind === 'maskable'
-    ? `<g transform="translate(256 256) scale(${MASKABLE_SCALE}) translate(-256 -256)" fill="${INK}"><path d="${R_PATH}"/><path d="${LEG_EXTENSION}"/></g>`
-    : `<path d="${R_PATH}" fill="${INK}"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="${TILE}"/>${r}</svg>`;
-}
-
-// ── De losse apps: dezelfde tegel, met het teken van de module ──────────────
-/** De tekens op het raster van lucide (24×24), zoals in lucide-react 0.408: hetzelfde teken als in het menu van de app. */
+/** De tekens op het raster van lucide (24×24), zoals in lucide-react 0.408. */
 const GLYPHS = {
   agenda: [
     '<path d="M8 2v4"/>',
@@ -106,48 +50,77 @@ const GLYPHS = {
     '<path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>',
   ],
 };
-// 20 eenheden van lucide worden 260px: ruim binnen de veilige zone (straal 205px),
-// zodat één teken zowel in de ronde tegel (any) als in de volle (maskable) past.
+
+const brandSource = fs.readFileSync(path.join(ROOT, 'src', 'components', 'BrandMark.tsx'), 'utf8');
+function constant(name) {
+  const match = new RegExp(`export const ${name} =\\s*'([^']+)'`).exec(brandSource);
+  if (!match) throw new Error(`${name} niet gevonden in BrandMark.tsx`);
+  return match[1];
+}
+const TILE = constant('BRAND_TILE_COLOR');
+const R_PATH = constant('BRAND_MARK_PATH');
+const R_INK = '#000000';
+const INK = '#1A1A1A';
+// 20 eenheden van lucide worden 260px: ruim binnen de veilige zone (straal 205px).
 const SCALE = 13;
 const OFFSET = 256 - 12 * SCALE;
 
-function appSvg(id, maskable) {
-  const tile = maskable ? `<rect width="512" height="512" fill="${TILE}"/>` : `<rect width="512" height="512" rx="${RADIUS}" fill="${TILE}"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">${tile}
+// Het been van de R: van de boog (rechts) en de teller (links) schuin naar de
+// onderrand. In het icoon loopt het met dezelfde schuinte door tot onder de tegel.
+const leg = /A[\d.]+ [\d.]+ 0 0 1 ([\d.]+) ([\d.]+)L([\d.]+) 512H([\d.]+)L([\d.]+) ([\d.]+)H/.exec(R_PATH);
+if (!leg) throw new Error('Het been van de R is niet te vinden in BRAND_MARK_PATH; pas de regex aan.');
+const [rightTopX, rightTopY, rightBottomX, leftBottomX, leftTopX, leftTopY] = leg.slice(1).map(Number);
+// Het verlengstuk begint ruim in het been (y 400): sloot het precies op de
+// onderrand aan, dan bleef in het icoon van 192 een licht haarlijntje over waar
+// twee halfgedekte pixelrijen elkaar raakten.
+const slopeRight = (rightBottomX - rightTopX) / (512 - rightTopY);
+const slopeLeft = (leftBottomX - leftTopX) / (512 - leftTopY);
+const along = (bottomX, slope, y) => (bottomX + slope * (y - 512)).toFixed(1);
+const legExtension = `M${along(leftBottomX, slopeLeft, 400)} 400L${along(rightBottomX, slopeRight, 400)} 400`
+  + `L${along(rightBottomX, slopeRight, 700)} 700L${along(leftBottomX, slopeLeft, 700)} 700Z`;
+// De verste hoek van de stam (88,406) komt zo op straal 196: binnen de veilige zone van 205.
+const R_SCALE = 0.87;
+
+function resoflySvg() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="${TILE}"/>
+  <g transform="translate(256 256) scale(${R_SCALE}) translate(-256 -256)" fill="${R_INK}"><path d="${R_PATH}"/><path d="${legExtension}"/></g>
+</svg>`;
+}
+
+/** De witte R in de statusbalk van Android: alleen de vorm telt, het been loopt tot de onderrand. */
+function badgeSvg() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="46 92 420 420"><path d="${R_PATH}" fill="#FFFFFF"/></svg>`;
+}
+
+function svg(id) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="${TILE}"/>
   <g transform="translate(${OFFSET} ${OFFSET}) scale(${SCALE})" fill="none" stroke="${INK}" color="${INK}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
     ${GLYPHS[id].join('\n    ')}
   </g>
 </svg>`;
 }
 
-// ── Tekenen ───────────────────────────────────────────────────────────────
-const jobs = [
-  ...[192, 512].flatMap(size => [
-    { file: `icon-${size}.png`, size, svg: resoflySvg('logo') },
-    { file: `icon-maskable-${size}.png`, size, svg: resoflySvg('maskable') },
-    ...Object.keys(GLYPHS).flatMap(id => [
-      { file: `app-${id}-${size}.png`, size, svg: appSvg(id, false) },
-      { file: `app-${id}-maskable-${size}.png`, size, svg: appSvg(id, true) },
-    ]),
-  ]),
-  { file: 'apple-touch-icon.png', size: 180, svg: resoflySvg('apple') },
-  { file: 'badge-72.png', size: 72, svg: resoflySvg('badge') },
-];
-
-fs.writeFileSync(path.join(OUT, 'resofly-logo.svg'), logoSvg);
-console.log(path.relative(ROOT, path.join(OUT, 'resofly-logo.svg')));
-
 const browser = await chromium.launch({ headless: true, executablePath: process.env.RESOFLY_CHROMIUM || undefined });
 try {
-  const page = await browser.newPage({ viewport: { width: 512, height: 512 }, deviceScaleFactor: 1 });
-  for (const job of jobs) {
-    const svg = job.svg.replace('<svg ', `<svg width="${job.size}" height="${job.size}" `);
-    await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent">${svg}</body></html>`);
-    const file = path.join(OUT, job.file);
-    // Doorzichtig waar niets getekend is: de hoeken van `any` en de badge.
-    await page.locator('svg').screenshot({ path: file, omitBackground: true });
-    console.log(path.relative(ROOT, file));
+  for (const size of [192, 512]) {
+    const page = await browser.newPage({ viewport: { width: size, height: size }, deviceScaleFactor: 1 });
+    const icons = [[`icon-${size}.png`, resoflySvg()], ...Object.keys(GLYPHS).map(id => [`app-${id}-${size}.png`, svg(id)])];
+    for (const [name, icon] of icons) {
+      await page.setContent(`<!doctype html><html><body style="margin:0">${icon.replace('width="512" height="512"', `width="${size}" height="${size}"`)}</body></html>`);
+      const file = path.join(OUT, name);
+      await page.locator('svg').screenshot({ path: file, omitBackground: false });
+      console.log(`${path.relative(ROOT, file)}`);
+    }
+    await page.close();
   }
+  // De badge is doorzichtig: Android gebruikt alleen de vorm.
+  const page = await browser.newPage({ viewport: { width: 72, height: 72 }, deviceScaleFactor: 1 });
+  await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent">${badgeSvg().replace('width="512" height="512"', 'width="72" height="72"')}</body></html>`);
+  await page.locator('svg').screenshot({ path: path.join(OUT, 'badge-72.png'), omitBackground: true });
+  console.log('public/icons/badge-72.png');
 } finally {
   await browser.close();
 }
+fs.accessSync(OUT);

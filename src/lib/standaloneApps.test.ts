@@ -106,7 +106,6 @@ test('het manifest van elke app past bij zijn adres, en de iconen bestaan', () =
     assert.ok(manifest.icons.some((icon: { purpose: string }) => icon.purpose === 'maskable'), `${a.id}: maskable icoon`);
     for (const icon of manifest.icons) assert.ok(fs.existsSync(path.join(ROOT, 'public', icon.src)), `${a.id}: ${icon.src} ontbreekt`);
     assert.ok(fs.existsSync(path.join(ROOT, 'public', a.icon)), `${a.id}: ${a.icon} ontbreekt`);
-    assert.ok(fs.existsSync(path.join(ROOT, 'public', a.touchIcon)), `${a.id}: ${a.touchIcon} ontbreekt`);
   }
 });
 
@@ -117,19 +116,6 @@ test('de werkruimte-app blijft dezelfde app als die al op telefoons staat', () =
   assert.equal(readManifest('manifest.webmanifest').id, '/');
   // index.html linkt dit manifest; zo werkt een geïnstalleerde app zich bij.
   assert.match(fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), /<link rel="manifest" href="\/manifest\.webmanifest"\/>/);
-});
-
-test('een iPhone krijgt een volle tegel, geen icoon met doorzichtige hoeken', () => {
-  // Het `any`-icoon heeft sinds het nieuwe logo (12 november) doorzichtige
-  // hoeken. iOS maakt die zwart, en dan staat er op het beginscherm een zwart
-  // randje om de tegel. index.html en elke app wijzen daarom naar een volle tegel.
-  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  assert.match(html, new RegExp(`<link rel="apple-touch-icon" href="${WORKSPACE_APP.touchIcon.replace(/[.]/g, '\\.')}"/>`));
-  for (const a of [WORKSPACE_APP, ...STANDALONE_APPS]) {
-    assert.notEqual(a.touchIcon, a.icon, `${a.id}: apple-touch-icon is het icoon met doorzichtige hoeken`);
-    const maskable = readManifest(a.manifest).icons.filter((icon: { purpose: string }) => icon.purpose === 'maskable').map((icon: { src: string }) => icon.src);
-    assert.ok(a.id === 'werkruimte' || maskable.includes(a.touchIcon), `${a.id}: apple-touch-icon is geen volle tegel uit het manifest`);
-  }
 });
 
 test('geen app woont binnen het adres van een andere: dan kun je ze alle vier installeren', () => {

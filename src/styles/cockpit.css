@@ -262,7 +262,7 @@ main.login:not(.portal) .login-card h1 .serif{color:var(--accent-ink)}
 /* Het merk: het gouden blok met een halo, de naam in wit, eronder in goud. */
 .app .app-brand{gap:11px}
 .app .sidebar .brand-icon{
-  background:var(--gold-face);color:#1A1405;
+  background:var(--logo-tile);color:#000;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 -1px 0 rgba(90,55,0,.25),0 0 0 4px rgba(var(--accent-rgb),.09),0 8px 24px -4px rgba(var(--accent-rgb),.55);
 }
 .app .sidebar .app-brand>span{display:flex;flex-direction:column;line-height:1.12;color:#fff;font-weight:800;letter-spacing:-.015em}
@@ -355,7 +355,7 @@ main.login:not(.portal) .login-card h1 .serif{color:var(--accent-ink)}
   .app .sidebar .org-meta{gap:2px 8px;flex-wrap:wrap}
   .app .sidebar .org-meta span,.app .sidebar .org-meta button{font-size:11px}
   .app .sidebar .app-brand{min-height:34px}
-  .app .sidebar .brand-icon{width:30px;height:30px;border-radius:8.2%}
+  .app .sidebar .brand-icon{width:30px;height:30px;border-radius:9px}
   .app .sidebar .nav-section,.app .sidebar .nav-group{padding:14px 10px 6px 12px;font-size:10px}
   .app .sidebar .nav-item{height:34px;min-height:34px;padding:0 8px 0 13px;font-size:13.5px}
   .app .sidebar{--nav-row-mid:17px;--nav-bar-x:-10px}
@@ -834,8 +834,8 @@ div.boot .login-card{color:var(--ink)}
 .login-story{display:none;color:#F4F3F0}
 .login-story .app-brand{gap:12px;font-size:18px}
 .login-story .brand-icon{
-  width:44px;height:44px;border-radius:8.2%;font-size:20px;
-  background:var(--gold-face);color:#1A1405;
+  width:44px;height:44px;border-radius:14px;font-size:20px;
+  background:var(--logo-tile);color:#000;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 6px rgba(247,197,72,.08),0 10px 30px -6px rgba(247,197,72,.6);
 }
 .login-story .app-brand>span{display:flex;flex-direction:column;line-height:1.1;font-weight:800;letter-spacing:-.015em;color:#fff}
