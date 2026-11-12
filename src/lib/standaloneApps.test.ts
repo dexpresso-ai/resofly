@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appHomePage, availableApps, canonicalAppUrl, isPageInApp, STANDALONE_APPS, standaloneAppFromPath } from './standaloneApps.ts';
+import { appHomePage, availableApps, canonicalAppUrl, installableAppFromPath, installableApps, isPageInApp, STANDALONE_APPS, standaloneAppFromPath, WORKSPACE_APP } from './standaloneApps.ts';
 import { buildPermissions, PAGE_MODULE } from './permissions.ts';
 import { PAGE_TITLES } from './workspaceTabs.ts';
 import { installHint } from './installPrompt.ts';
@@ -27,9 +27,20 @@ test('een adres hoort bij de goede app, met of zonder slash', () => {
   assert.equal(standaloneAppFromPath('/app/financien/')?.id, 'financien');
   assert.equal(standaloneAppFromPath('/app/communicatie')?.id, 'communicatie');
   // De werkruimte, de publieke pagina's en de manifesten zelf zijn geen app.
-  for (const other of ['/', '/app/', '/app/agendas', '/apps/agenda.webmanifest', '/portal', '/invoice/abc', '/agenda']) {
+  for (const other of ['/', '/app/', '/app/agendas', '/apps/agenda.webmanifest', '/portal', '/invoice/abc', '/agenda', '/app/werkruimte/']) {
     assert.equal(standaloneAppFromPath(other), null, other);
   }
+});
+
+test('op /app/werkruimte/ is het de hele werkruimte, als app om te installeren', () => {
+  // Geen losse app: dan zou het menu ingeperkt worden.
+  assert.equal(standaloneAppFromPath('/app/werkruimte/'), null);
+  assert.equal(installableAppFromPath('/app/werkruimte/')?.id, 'werkruimte');
+  assert.equal(installableAppFromPath('/app/werkruimte')?.id, 'werkruimte');
+  assert.equal(installableAppFromPath('/app/agenda/')?.id, 'agenda');
+  // Op "/" in de browser is er geen app en dus geen eigen installeerknop.
+  assert.equal(installableAppFromPath('/'), null);
+  assert.equal(installableAppFromPath('/app/werkruimtes/'), null);
 });
 
 test('zonder slash zet de app hem erbij, en houdt hij de rest van het adres', () => {
@@ -62,6 +73,8 @@ test('elke pagina van een app bestaat en hangt aan een module', () => {
 test('de boekhouder krijgt alleen de app Financiën, en die opent op Facturen', () => {
   const accountant = buildPermissions({ role: 'accountant' });
   assert.deepEqual(availableApps(accountant.canOpenPage).map(a => a.id), ['financien']);
+  // ResoFly zelf staat er altijd bij, voorop.
+  assert.deepEqual(installableApps(accountant.canOpenPage).map(a => a.id), ['werkruimte', 'financien']);
   assert.equal(appHomePage(app('financien'), accountant.canOpenPage), 'invoices');
   assert.equal(appHomePage(app('agenda'), accountant.canOpenPage), null);
 });
@@ -71,17 +84,21 @@ test('Communicatie opent op wat openstaat: zonder klanten op de chat', () => {
   assert.equal(appHomePage(app('communicatie'), member.canOpenPage), 'chat');
   const nothing = buildPermissions({ role: 'member', module_access: { clients: 'none', chat: 'none', marketing: 'none', calendar: 'none', finance: 'none' } });
   assert.deepEqual(availableApps(nothing.canOpenPage), []);
+  assert.deepEqual(installableApps(nothing.canOpenPage).map(a => a.id), ['werkruimte']);
 });
 
+const readManifest = (file: string) => JSON.parse(fs.readFileSync(path.join(ROOT, 'public', file), 'utf8'));
+
 test('het manifest van elke app past bij zijn adres, en de iconen bestaan', () => {
-  for (const a of STANDALONE_APPS) {
-    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'public', a.manifest), 'utf8'));
-    // id, scope en start_url gelijk aan het adres: anders installeert de
-    // browser hem niet, of als een andere app.
-    assert.equal(manifest.id, a.path, `${a.id}: id`);
+  for (const a of [WORKSPACE_APP, ...STANDALONE_APPS]) {
+    const manifest = readManifest(a.manifest);
+    // scope en start_url gelijk aan het adres: anders biedt de browser
+    // installeren niet aan. Het id van een losse app ook; de werkruimte houdt
+    // het id "/" dat hij altijd had (zie het volgende blok).
+    assert.equal(manifest.id, a.id === 'werkruimte' ? '/' : a.path, `${a.id}: id`);
     assert.equal(manifest.scope, a.path, `${a.id}: scope`);
     assert.equal(manifest.start_url, a.path, `${a.id}: start_url`);
-    assert.equal(manifest.name, a.name, `${a.id}: name`);
+    if (a.id !== 'werkruimte') assert.equal(manifest.name, a.name, `${a.id}: name`);
     assert.equal(manifest.short_name, a.shortName, `${a.id}: short_name`);
     assert.equal(manifest.display, 'standalone');
     const sizes = new Set(manifest.icons.map((icon: { sizes: string }) => icon.sizes));
@@ -92,11 +109,40 @@ test('het manifest van elke app past bij zijn adres, en de iconen bestaan', () =
   }
 });
 
+test('de werkruimte-app blijft dezelfde app als die al op telefoons staat', () => {
+  // Zonder id rekende de browser het id uit de start_url: "/". Een ander id
+  // maakt er een nieuwe app van, en dan staat de oude ResoFly-app er nog naast,
+  // met zijn scope over heel ResoFly.
+  assert.equal(readManifest('manifest.webmanifest').id, '/');
+  // index.html linkt dit manifest; zo werkt een geïnstalleerde app zich bij.
+  assert.match(fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), /<link rel="manifest" href="\/manifest\.webmanifest"\/>/);
+});
+
+test('geen app woont binnen het adres van een andere: dan kun je ze alle vier installeren', () => {
+  // Android kijkt bij Installeren of er al een app is waarvan de scope het
+  // adres van de nieuwe app bevat. Had de werkruimte scope "/", dan was dat
+  // zo voor elke losse app, en zei de telefoon "deze app is al geïnstalleerd".
+  const files = ['manifest.webmanifest', ...fs.readdirSync(path.join(ROOT, 'public', 'apps')).filter(f => f.endsWith('.webmanifest')).map(f => `apps/${f}`)];
+  const manifests = files.map(file => ({ file, ...readManifest(file) as { id: string; scope: string; start_url: string } }));
+  assert.equal(manifests.length, 1 + STANDALONE_APPS.length);
+  for (const a of manifests) {
+    assert.ok(a.scope.startsWith('/app/') && a.scope.endsWith('/'), `${a.file}: scope ${a.scope}`);
+    assert.ok(a.start_url.startsWith(a.scope), `${a.file}: start_url buiten de scope`);
+    for (const b of manifests) {
+      if (a === b) continue;
+      assert.ok(!b.scope.startsWith(a.scope), `${b.file} valt binnen de scope van ${a.file}`);
+      assert.notEqual(a.id, b.id, `${a.file} en ${b.file} hebben hetzelfde id`);
+    }
+  }
+});
+
 test('de service worker stuurt meldingen naar adressen die echt een app zijn', () => {
   const sw = fs.readFileSync(path.join(ROOT, 'public', 'sw.js'), 'utf8');
   const paths = [...sw.matchAll(/'(\/app\/[^']+)'/g)].map(m => m[1]);
   assert.ok(paths.length > 0, 'geen app-adressen in sw.js');
-  for (const p of paths) assert.ok(STANDALONE_APPS.some(a => a.path === p), `${p} in sw.js is geen app`);
+  for (const p of paths) assert.ok([WORKSPACE_APP, ...STANDALONE_APPS].some(a => a.path === p), `${p} in sw.js is geen app`);
+  // Alle losse apps staan in de lijst die een venster als "losse app" herkent.
+  for (const a of STANDALONE_APPS) assert.ok(paths.includes(a.path), `${a.path} ontbreekt in sw.js`);
 });
 
 test('de uitleg voor installeren past bij de browser', () => {

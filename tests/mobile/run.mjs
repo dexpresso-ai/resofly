@@ -125,6 +125,9 @@ const PAGES = {
   // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat
   // op de telefoon onder elkaar.
   'settings-boekhouder': { page: 'settings', prepare: '[data-settings-tab="boekhouder"]' },
+  // Instellingen → Apps (2026-11-12): ResoFly zelf en de drie losse apps, elk
+  // met Openen en Link. Op de telefoon onder elkaar, zonder dat de knoppen eraf vallen.
+  'settings-apps': { page: 'settings', prepare: '[data-settings-tab="apps"]' },
   // Instellingen → Logboek (november 2026): de tijdlijn per dag met de
   // filters erboven; op de telefoon de velden achter één knop.
   'settings-logboek': { page: 'settings', prepare: '[data-settings-tab="logboek"]' },
@@ -214,6 +217,10 @@ const PAGES = {
   'app-agenda': { path: '/app/agenda/', app: 'agenda', page: 'calendar' },
   'app-financien': { path: '/app/financien/', app: 'financien', page: 'invoices' },
   'app-communicatie': { path: '/app/communicatie/', app: 'communicatie', page: 'communication' },
+  // De hele werkruimte als app (/app/werkruimte/): zelfde menu en tabbladen als
+  // op "/". Hij kreeg een eigen adres, anders kon Android er geen andere app
+  // naast zetten.
+  'app-werkruimte': { path: '/app/werkruimte/', app: 'werkruimte', page: 'dashboard' },
   // 2026-11-07 — de inrichtingsstappen, elk op elk formaat. Het abonnement met
   // een gekozen BV: dat is de langste stand (de drie stappen, de pakketten,
   // de modules). Het wachtscherm is wat een teamlid ziet.
@@ -295,6 +302,7 @@ const FIRST_ITEM = {
   'app-agenda': { selector: '.tb-scroll', maxTop: 260 },
   'app-financien': { selector: '.quote-table tbody tr', maxTop: 496 },
   'app-communicatie': { selector: '.comm-row', maxTop: 185 },
+  'app-werkruimte': { selector: '.dash-task', maxTop: 280 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 356 },
   // 2026-11-12 — Gerrie → Gesprekken: kop van Gerrie, de vijf tabbladen, de
   // titel met "Nieuw gesprek" en het zoekveld gaan voor het eerste gesprek.

@@ -1,10 +1,11 @@
 {
+  "id": "/",
   "name": "ResoFly Werkruimte",
   "short_name": "ResoFly",
   "description": "ResoFly werkruimte — projecten, klanten, facturen, tickets, teamchat en meldingen.",
   "lang": "nl",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "/app/werkruimte/",
+  "scope": "/app/werkruimte/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#09090A",

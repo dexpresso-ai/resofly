@@ -19,12 +19,20 @@
  *
  * `page` is hier bewust een string, net als in workspaceTabs.ts: de `Page`-union
  * woont in main.tsx, en een import daarvandaan zou een kring maken.
+ *
+ * De werkruimte zelf is sinds dezelfde dag ook een app op een eigen adres
+ * (/app/werkruimte/, zie WORKSPACE_APP). Eerst was zijn scope "/", heel
+ * ResoFly. Android zag dan /app/agenda/ als een pagina van de al geïnstalleerde
+ * ResoFly-app en zei bij Installeren "deze app is al geïnstalleerd": wie
+ * ResoFly op zijn telefoon had, kon er geen tweede app bij zetten. Vier apps
+ * naast elkaar kan alleen als geen van hun adressen onder een ander valt.
  */
 
 export type StandaloneAppId = 'agenda' | 'financien' | 'communicatie';
 
-export interface StandaloneApp {
-  id: StandaloneAppId;
+/** Wat elke app heeft die je kunt installeren, de werkruimte ook. */
+export interface InstallableApp {
+  id: StandaloneAppId | 'werkruimte';
   /** Waar de app woont, met een slash aan het eind. Dat is ook de `scope` en de
    *  `start_url` van zijn manifest: alles daaronder hoort bij deze app. */
   path: string;
@@ -37,6 +45,26 @@ export interface StandaloneApp {
   manifest: string;
   /** Voor `apple-touch-icon`: Safari op iOS leest het icoon niet uit het manifest. */
   icon: string;
+}
+
+/**
+ * De hele werkruimte als app. Hetzelfde manifest als altijd
+ * (public/manifest.webmanifest, met `id` "/"), zodat een ResoFly-app die al
+ * op een telefoon of computer staat dezelfde app blijft en zich bijwerkt naar
+ * het nieuwe adres. Op "/" in de browser verandert er niets.
+ */
+export const WORKSPACE_APP: InstallableApp = {
+  id: 'werkruimte',
+  path: '/app/werkruimte/',
+  name: 'ResoFly',
+  shortName: 'ResoFly',
+  description: 'De hele werkruimte, met alles wat je hier ook hebt.',
+  manifest: '/manifest.webmanifest',
+  icon: '/icons/icon-192.png',
+};
+
+export interface StandaloneApp extends InstallableApp {
+  id: StandaloneAppId;
   /** De pagina's die bij deze app horen; het menu toont alleen deze. */
   pages: readonly string[];
   /** Waar de app opent: de eerste die openstaat voor dit teamlid. */
@@ -105,8 +133,19 @@ export function standaloneAppFromPath(pathname: string): StandaloneApp | null {
   return STANDALONE_APPS.find(app => path.startsWith(app.path)) ?? null;
 }
 
+/**
+ * Welke installeerbare app woont op dit adres: een losse app, de werkruimte op
+ * /app/werkruimte/, of geen (de werkruimte op "/" in de browser).
+ */
+export function installableAppFromPath(pathname: string): InstallableApp | null {
+  const standalone = standaloneAppFromPath(pathname);
+  if (standalone) return standalone;
+  const path = pathname.endsWith('/') ? pathname : `${pathname}/`;
+  return path.startsWith(WORKSPACE_APP.path) ? WORKSPACE_APP : null;
+}
+
 /** Het adres met de slash erbij, of null als het al klopt. */
-export function canonicalAppUrl(app: StandaloneApp, location: { pathname: string; search: string; hash: string }): string | null {
+export function canonicalAppUrl(app: InstallableApp, location: { pathname: string; search: string; hash: string }): string | null {
   if (location.pathname.startsWith(app.path)) return null;
   return `${app.path}${location.search}${location.hash}`;
 }
@@ -126,6 +165,11 @@ export function appHomePage(app: StandaloneApp, canOpenPage: (page: string) => b
  */
 export function availableApps(canOpenPage: (page: string) => boolean): StandaloneApp[] {
   return STANDALONE_APPS.filter(app => appHomePage(app, canOpenPage) !== null);
+}
+
+/** Instellingen → Apps: de werkruimte voorop, dan de losse apps die openstaan. */
+export function installableApps(canOpenPage: (page: string) => boolean): InstallableApp[] {
+  return [WORKSPACE_APP, ...availableApps(canOpenPage)];
 }
 
 /**

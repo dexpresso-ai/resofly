@@ -9,7 +9,7 @@ import { Breadcrumbs } from './components/Breadcrumbs';
 import type { CrumbTarget } from './lib/breadcrumbs';
 import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type DataGroup, type GroupState } from './lib/dataGroups';
 import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
-import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, isPageInApp, isRunningInstalled, standaloneAppFromPath, type StandaloneApp } from './lib/standaloneApps';
+import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFromPath, isPageInApp, isRunningInstalled, standaloneAppFromPath, WORKSPACE_APP, type InstallableApp, type StandaloneApp } from './lib/standaloneApps';
 import { captureInstallPrompt } from './lib/installPrompt';
 import { InstallAppCard } from './components/StandaloneApps';
 import { GlobalSearch, type SearchResult } from './components/GlobalSearch';
@@ -345,12 +345,19 @@ type WorkspaceTab = ViewState & { id: string };
  * `beforeinstallprompt` komt vaak al voordat de app getekend is.
  */
 const STANDALONE_APP: StandaloneApp | null = typeof window === 'undefined' ? null : standaloneAppFromPath(window.location.pathname);
-if (STANDALONE_APP) {
+/**
+ * De app om te installeren op dit adres: de losse app, of de hele werkruimte op
+ * /app/werkruimte/. Op "/" geen: daar staat geen eigen installeerknop, en laten
+ * we de browser zijn gang gaan.
+ */
+const INSTALL_APP: InstallableApp | null = typeof window === 'undefined' ? null : installableAppFromPath(window.location.pathname);
+if (INSTALL_APP) {
   // /app/agenda zonder slash valt buiten de scope van het manifest (/app/agenda/):
   // dan biedt de browser installeren niet aan.
-  const canonical = canonicalAppUrl(STANDALONE_APP, window.location);
+  const canonical = canonicalAppUrl(INSTALL_APP, window.location);
   if (canonical) window.history.replaceState(window.history.state, '', canonical);
-  applyStandaloneAppHead(STANDALONE_APP);
+  // De werkruimte houdt het manifest en het icoon uit index.html.
+  if (STANDALONE_APP) applyStandaloneAppHead(STANDALONE_APP);
   captureInstallPrompt();
 }
 
@@ -1607,7 +1614,9 @@ function App() {
    */
   function openWorkspace() {
     setMobileNavOpen(false);
-    if (isRunningInstalled()) window.open('/', '_blank', 'noopener');
+    // Als app naar het adres van de werkruimte-app: op Android opent hij dan in
+    // de ResoFly-app als die erop staat, en niet in Chrome.
+    if (isRunningInstalled()) window.open(WORKSPACE_APP.path, '_blank', 'noopener');
     else window.location.assign('/');
   }
 
@@ -4255,7 +4264,7 @@ function App() {
       </div>
     </div>}
     <div className="toast-region">
-      {STANDALONE_APP && <InstallAppCard app={STANDALONE_APP} />}
+      {INSTALL_APP && <InstallAppCard app={INSTALL_APP} />}
       <ClientEmailToasts
         toasts={clientEmailToasts}
         onOpen={(toast) => openCommunication(toast.kind === 'inbox' ? { tab: 'inbox' } : { tab: 'all', threadId: toast.threadId })}
@@ -4419,8 +4428,9 @@ function Login() {
     // koppelverzoek in de URL (/mcp/authorize?request=…), dan moet hij terugkomen
     // op precies deze pagina — anders is het verzoek na het inloggen verdwenen en
     // staat de gebruiker zonder uitleg op zijn dashboard.
-    // In een losse app komt hij terug in die app (/app/agenda/), niet in de werkruimte.
-    const redirectTo = readAuthorizeRequest() ? window.location.href : STANDALONE_APP ? `${window.location.origin}${STANDALONE_APP.path}` : window.location.origin;
+    // In een app komt hij terug op het adres van die app (/app/agenda/,
+    // /app/werkruimte/), niet op "/".
+    const redirectTo = readAuthorizeRequest() ? window.location.href : INSTALL_APP ? `${window.location.origin}${INSTALL_APP.path}` : window.location.origin;
     const { error } = await supabaseAuth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: redirectTo, shouldCreateUser: false } });
     // "Signups not allowed" = onbekend adres. Dat zeggen we niet: anders is dit
     // scherm een opzoekdienst voor wie er een account heeft (zoals in het portaal).
