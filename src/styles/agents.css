@@ -494,9 +494,11 @@ button.agx-sum{font:inherit;font-size:12.5px;cursor:pointer}
      verstuurknop van het gesprek eronder. */
   .agx-input{padding-right:58px}
   .agx-chat-starters{padding-left:0}
-  /* De tabs van het commandocentrum: vier gelijke vakken met icoon en woord, in
-     plaats van een veegrij waarin "Beslissingen" van het scherm viel. */
-  .cc-root .cc-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;width:100%;overflow:visible;border-radius:16px}
+  /* De tabs van het commandocentrum: gelijke vakken met icoon en woord, in
+     plaats van een veegrij waarin "Beslissingen" van het scherm viel. Vijf
+     sinds Gesprekken erbij kwam (2026-11-12); met vier viel de vijfde in een
+     tweede rij. */
+  .cc-root .cc-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:2px;width:100%;overflow:visible;border-radius:16px}
   .cc-root .cc-tabs .cc-tab{position:relative;flex-direction:column;justify-content:center;gap:3px;min-height:48px;padding:6px 2px;border-radius:13px;font-size:10.5px;line-height:1.15;text-align:center;white-space:normal}
   .cc-root .cc-tabs .cc-tab .cc-tab-badge{position:absolute;top:3px;left:calc(50% + 6px);margin:0}
 }

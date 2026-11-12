@@ -9,6 +9,8 @@ import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
 import { editVideoLabel, isFormBackedProposal, openProposal, proposalLabel, proposalVerb, proposalVideoLabel, type ProposalKind } from '../lib/gerrie-proposals';
 import { scheduleLabel } from '../lib/agents';
 import { EMPTY_DICTATION, composeDraft, isAndroidUserAgent, readDictationEvent, type DictationState } from '../lib/dictation';
+import { onGerrieConversation, signalGerrieConversation, PROPOSAL_STATUS_LABEL, type PastProposal } from '../lib/gerrieConversations';
+import { loadGerrieConversation } from '../lib/gerrieConversations-api';
 import type { UUID } from '../types';
 
 /**
@@ -22,7 +24,12 @@ import type { UUID } from '../types';
  */
 
 type ChatRole = 'user' | 'assistant';
-interface ChatMessage { id: string; role: ChatRole; text: string; proposal?: GerrieProposal; auditId?: string }
+/**
+ * Eén bericht in de chat. `pastProposals` hoort bij een gesprek dat je uit
+ * Gesprekken weer opende: die voorstellen tonen alleen wat er gebeurde, zonder
+ * knop. Een oud voorstel rekent met de gegevens van toen.
+ */
+interface ChatMessage { id: string; role: ChatRole; text: string; proposal?: GerrieProposal; auditId?: string; pastProposals?: PastProposal[] }
 
 let idSeq = 0;
 const nextId = () => `gerrie-${Date.now()}-${++idSeq}`;
@@ -115,7 +122,13 @@ export function askGerrie(text = ''): void {
   window.dispatchEvent(new CustomEvent(ASK_GERRIE_EVENT, { detail: { text } }));
 }
 
-export function GerrieChat({ organizationId, ...handlers }: { organizationId: UUID } & GerrieActionHandlers) {
+export function GerrieChat({ organizationId, currentUserId = null, onOpenConversations, ...handlers }: {
+  organizationId: UUID;
+  /** Om een eerder gesprek uit Gesprekken te laden (alleen je eigen). */
+  currentUserId?: string | null;
+  /** Naar Gerrie → Gesprekken, met het gesprek dat hier openstaat. */
+  onOpenConversations?: (conversationId: string | null) => void;
+} & GerrieActionHandlers) {
   // De losse handlers blijven met hun eigen naam in beeld (dat leest prettiger in de
   // kaarten hieronder), maar we houden ook de hele set bij de hand: "Openen" geeft een
   // voorstel door aan de gedeelde openProposal, en die verwacht het complete pakket.
@@ -135,6 +148,19 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
   const [conversationId, setConversationId] = useState<UUID | null>(null);
   // Resterend AI-tegoed als fractie 0..1 (null = geen limiet ingesteld / nog onbekend).
   const [budget, setBudget] = useState<number | null>(null);
+  // Een eerder gesprek dat wordt geladen (uit Gesprekken), en een korte melding
+  // als dat niet kan.
+  const [loadingConversation, setLoadingConversation] = useState(false);
+  const [chatNote, setChatNote] = useState<string | null>(null);
+  const loadRequest = useRef(0);
+  // Loopt er nog een antwoord? `thinking` gaat al uit zodra de eerste woorden
+  // binnenkomen; `sending` pas als het antwoord helemaal binnen is.
+  const [sending, setSending] = useState(false);
+  // Welk gesprek er nu in beeld is. Een antwoord dat binnenkomt nadat je een
+  // ander gesprek opende (of dit gesprek elders verwijderde), hoort niet in het
+  // gesprek dat er nu staat. Zonder deze teller kwam het daar wél, en ging je
+  // volgende vraag naar het verkeerde gesprek.
+  const sessionRef = useRef(0);
 
   // Spraakherkenning: actief-luisteren + een korte melding bij microfoonproblemen.
   const [listening, setListening] = useState(false);
@@ -197,14 +223,96 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
 
   // Wissel je van organisatie, dan begint Gerrie met een schone lei.
   useEffect(() => {
+    loadRequest.current += 1;
+    sessionRef.current += 1;
+    setLoadingConversation(false);
+    setChatNote(null);
     setConversationId(null);
     setBudget(null);
     setMessages([{ id: nextId(), role: 'assistant', text: buildIntro(firstNameRef.current) }]);
   }, [organizationId]);
 
+  /** Een schone lei: het vorige gesprek blijft bewaard onder Gesprekken. */
+  function startNewConversation() {
+    loadRequest.current += 1;
+    sessionRef.current += 1;
+    cancelDictation();
+    setLoadingConversation(false);
+    setChatNote(null);
+    setConversationId(null);
+    setDraft('');
+    setMessages([{ id: nextId(), role: 'assistant', text: buildIntro(firstNameRef.current) }]);
+    setOpen(true);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
+  /**
+   * Een eerder gesprek terugzetten, om er verder op te gaan. De server leest de
+   * geschiedenis zelf (op id, en alleen als het jouw chat is); hier gaat het
+   * om wat je ziet.
+   */
+  async function openConversation(id: string) {
+    if (!currentUserId) return;
+    cancelDictation();
+    setOpen(true);
+    if (id === conversationId) return;
+    const request = ++loadRequest.current;
+    setLoadingConversation(true);
+    setChatNote(null);
+    try {
+      const { messages: past } = await loadGerrieConversation(organizationId, currentUserId, id);
+      if (request !== loadRequest.current) return;
+      sessionRef.current += 1;
+      setConversationId(id);
+      setDraft('');
+      setMessages(past.length
+        ? past.map((m) => ({ id: `past-${m.id}`, role: m.role, text: m.text, pastProposals: m.proposals }))
+        : [{ id: nextId(), role: 'assistant', text: buildIntro(firstNameRef.current) }]);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+    } catch (e) {
+      if (request !== loadRequest.current) return;
+      setChatNote(e instanceof Error ? e.message : 'Dit gesprek openen lukte niet.');
+    } finally {
+      if (request === loadRequest.current) setLoadingConversation(false);
+    }
+  }
+
+  // Vanuit Gesprekken: een gesprek openen, een nieuw beginnen, of een gesprek
+  // dat net is verwijderd. Via de ref altijd de handlers van de laatste render.
+  // Is Gerrie nog aan het antwoorden, dan wisselen we niet: het antwoord zou
+  // anders in het verkeerde gesprek in beeld komen.
+  const conversationSignalRef = useRef<(signal: Parameters<Parameters<typeof onGerrieConversation>[0]>[0]) => void>(() => {});
+  conversationSignalRef.current = (signal) => {
+    if (signal.type === 'deleted') {
+      if (signal.id === conversationId) startNewConversationQuietly();
+      return;
+    }
+    if (signal.type !== 'open' && signal.type !== 'new') return;
+    if (thinking || sending) {
+      setOpen(true);
+      setChatNote('Gerrie is nog bezig met je vorige vraag. Probeer het zo nog eens.');
+      return;
+    }
+    if (signal.type === 'new') startNewConversation();
+    else void openConversation(signal.id);
+  };
+  useEffect(() => onGerrieConversation((signal) => conversationSignalRef.current(signal)), []);
+
+  /** Zelfde schone lei, maar zonder de chat open te klappen (na verwijderen). */
+  function startNewConversationQuietly() {
+    loadRequest.current += 1;
+    sessionRef.current += 1;
+    setThinking(false);
+    setStatus(null);
+    setLoadingConversation(false);
+    setConversationId(null);
+    setMessages([{ id: nextId(), role: 'assistant', text: buildIntro(firstNameRef.current) }]);
+  }
+
   async function send(text: string) {
     const trimmed = text.trim();
-    if (!trimmed || thinking) return;
+    if (!trimmed || thinking || loadingConversation) return;
+    setChatNote(null);
     // Wie verstuurt terwijl de microfoon nog aanstaat, wil dat inspreken stopt.
     // Liep de herkenner door, dan zette zijn volgende resultaat het verstuurde
     // bericht opnieuw in het tekstveld.
@@ -214,6 +322,9 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
     setMessages((prev) => [...prev, { id: nextId(), role: 'user', text: trimmed }]);
     setThinking(true);
     setStatus(null);
+    setSending(true);
+    const session = sessionRef.current;
+    const current = () => sessionRef.current === session;
 
     const assistantId = nextId();
     let streamed = '';
@@ -223,9 +334,10 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
         organizationId,
         conversationId,
         message: trimmed,
-        onStatus: (s: GerrieStatus) => setStatus(s.label),
+        onStatus: (s: GerrieStatus) => { if (current()) setStatus(s.label); },
         onDelta: (delta: string) => {
           streamed += delta;
+          if (!current()) return;
           if (!placed) {
             placed = true;
             setThinking(false);
@@ -236,8 +348,13 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
           }
         },
       });
-      setConversationId(result.conversationId);
+      // De lijst onder Gesprekken ververst mee, ook als die nu openstaat.
+      if (result.conversationId) signalGerrieConversation({ type: 'updated', id: result.conversationId });
       if (result.budget) setBudget(result.budget.remainingFraction);
+      // Het antwoord staat bewaard in zijn eigen gesprek; staat er nu een ander
+      // in beeld, dan blijft dat ongemoeid.
+      if (!current()) return;
+      setConversationId(result.conversationId);
       // Finaliseer: definitieve tekst + eventueel een voorstel op het bericht zetten.
       setMessages((prev) => {
         const finalMsg: ChatMessage = { id: assistantId, role: 'assistant', text: result.text, proposal: result.proposal, auditId: result.auditId };
@@ -246,6 +363,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
           : [...prev, finalMsg];
       });
     } catch (error) {
+      if (!current()) return;
       const reason = error instanceof Error ? error.message : 'Er ging iets mis.';
       setMessages((prev) => {
         const errMsg: ChatMessage = { id: assistantId, role: 'assistant', text: `⚠️ ${reason}` };
@@ -254,8 +372,11 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
           : [...prev, errMsg];
       });
     } finally {
-      setThinking(false);
-      setStatus(null);
+      setSending(false);
+      if (current()) {
+        setThinking(false);
+        setStatus(null);
+      }
     }
   }
 
@@ -537,6 +658,17 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
               <div className="gerrie-name">Gerrie <span className="gerrie-badge">AI</span></div>
               <div className="gerrie-status"><span className="dot" />Online · assistent</div>
             </div>
+            <button className="gerrie-head-close" onClick={startNewConversation}
+              disabled={thinking || sending || loadingConversation || (!conversationId && messages.length <= 1)}
+              aria-label="Nieuw gesprek" title="Nieuw gesprek">
+              <NewChatIcon />
+            </button>
+            {onOpenConversations && (
+              <button className="gerrie-head-close" onClick={() => { setOpen(false); onOpenConversations(conversationId); }}
+                aria-label="Alle gesprekken" title="Alle gesprekken">
+                <HistoryIcon />
+              </button>
+            )}
             <button className="gerrie-head-close" onClick={() => setOpen(false)} aria-label="Chat sluiten">
               <ChevronDownIcon />
             </button>
@@ -551,11 +683,27 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
                     <div className="gerrie-bubble">{m.text}</div>
                     {proposalCard(m.proposal, m.auditId)}
                   </div>
+                ) : m.pastProposals?.length ? (
+                  <div className="gerrie-stack">
+                    {m.text && <div className="gerrie-bubble">{m.text}</div>}
+                    {m.pastProposals.map((p) => (
+                      <div key={p.auditId} className="gerrie-past-proposal" data-status={p.status}>
+                        <span className="gerrie-past-kicker">Voorstel · {PROPOSAL_STATUS_LABEL[p.status]}</span>
+                        <span className="gerrie-past-title">{p.title}</span>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   <div className="gerrie-bubble">{m.text}</div>
                 )}
               </div>
             ))}
+            {loadingConversation && (
+              <div className="gerrie-msg assistant">
+                <span className="gerrie-msg-avatar" aria-hidden="true"><RobotIcon /></span>
+                <div className="gerrie-bubble gerrie-bubble-status">Gesprek ophalen…</div>
+              </div>
+            )}
             {thinking && (
               <div className="gerrie-msg assistant">
                 <span className="gerrie-msg-avatar" aria-hidden="true"><RobotIcon /></span>
@@ -566,7 +714,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
             )}
           </div>
 
-          {messages.length <= 1 && !thinking && (
+          {messages.length <= 1 && !thinking && !loadingConversation && !conversationId && (
             <div className="gerrie-suggestions">
               {SUGGESTIONS.map((s) => (
                 <button key={s} className="gerrie-chip" onClick={() => void send(s)}>{s}</button>
@@ -575,6 +723,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
           )}
 
           {micNote && <p className="gerrie-mic-note" role="status">{micNote}</p>}
+          {chatNote && <p className="gerrie-mic-note" role="status">{chatNote}</p>}
 
           <div className="gerrie-composer">
             <textarea
@@ -599,7 +748,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
                 <MicIcon />
               </button>
             )}
-            <button className="gerrie-send" onClick={() => void send(draft)} disabled={!draft.trim() || thinking} aria-label="Versturen">
+            <button className="gerrie-send" onClick={() => void send(draft)} disabled={!draft.trim() || thinking || loadingConversation} aria-label="Versturen">
               <SendIcon />
             </button>
           </div>
@@ -667,6 +816,25 @@ function MicIcon() {
       <rect x="9" y="2.5" width="6" height="11" rx="3" />
       <path d="M5 11a7 7 0 0 0 14 0" />
       <path d="M12 18v3M8.5 21h7" />
+    </svg>
+  );
+}
+
+function NewChatIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.4 2.6a2.1 2.1 0 1 1 3 3L12 15l-4 1 1-4z" />
+    </svg>
+  );
+}
+
+function HistoryIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M12 7v5l4 2" />
     </svg>
   );
 }

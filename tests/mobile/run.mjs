@@ -100,6 +100,10 @@ const PAGES = {
   // een gesprek laat maken. Het overzicht zelf is de pagina "gerrie".
   'gerrie-agent': { page: 'gerrie', prepare: '.agx-card.is-working .agx-card-open' },
   'gerrie-bouwer': { page: 'gerrie', prepare: '.agx-hero-foot .agx-link' },
+  // Gerrie → Gesprekken (2026-11-12): de lijst met eerdere chats, en één chat
+  // open (op telefoon en tablet in plaats van de lijst, met een terugknop).
+  'gerrie-gesprekken': { page: 'gerrie', prepare: '.cc-tab:has-text("Gesprekken")' },
+  'gerrie-gesprek': { page: 'gerrie', prepare: ['.cc-tab:has-text("Gesprekken")', '.gsp-item'] },
   'report-updating': {
     page: 'report', statsReportId: seed.aiReports[0].id,
     prepare: ['.aire-chat-toggle', { fill: '.aire-composer textarea', value: 'Zet er vorig jaar naast' }, '.aire-send', '.aire-chat-close'],
@@ -292,6 +296,10 @@ const FIRST_ITEM = {
   'app-financien': { selector: '.quote-table tbody tr', maxTop: 496 },
   'app-communicatie': { selector: '.comm-row', maxTop: 185 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 356 },
+  // 2026-11-12 — Gerrie → Gesprekken: kop van Gerrie, de vijf tabbladen, de
+  // titel met "Nieuw gesprek" en het zoekveld gaan voor het eerste gesprek.
+  // Gemeten: 356px (licht en donker); de grens ligt 20% hoger.
+  'gerrie-gesprekken': { selector: '.gsp-item', maxTop: 427 },
   // 2026-11-11 — vooruitbetaalde kosten: de balk "klaar om te boeken" en twee
   // kerncijfers gaan voor. Gemeten: 435px (licht en donker); de grens ligt 20%
   // hoger.

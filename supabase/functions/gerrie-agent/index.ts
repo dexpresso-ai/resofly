@@ -88,6 +88,26 @@ Deno.serve(async (req) => {
       const budget = await checkUserBudget(user.id, organizationId);
       return json(req, { remainingFraction: remainingFraction(budget, 0) });
     }
+    // Een eigen chat weggooien (Gerrie → Gesprekken). De app mag niet zelf in de
+    // ai_*-tabellen schrijven; deze functie wel, met de service-role, en slaat
+    // daarmee RLS over. Dus hier zelf de drie voorwaarden: het is een chat (geen
+    // verslag van een agent, waar een beheerder op toeziet), hij is van jou, en
+    // hij hoort bij deze organisatie. Alle drie staan in de delete zelf, niet in
+    // een losse controle ervoor: dan kan er niets tussen lezen en wissen vallen.
+    // De berichten gaan mee (on delete cascade). Het auditspoor en het verbruik
+    // blijven staan, met het gesprek leeg: wat Gerrie voorstelde en wat het
+    // kostte, verdwijnt niet doordat iemand zijn chat opruimt.
+    if (action === 'delete_conversation') {
+      const id = String(body.conversationId || '');
+      if (!UUID_RE.test(id)) throw new HttpError('Onbekend gesprek.', 400);
+      const { data: deleted, error } = await supabaseAdmin.from('ai_conversations')
+        .delete()
+        .eq('id', id).eq('organization_id', organizationId).eq('created_by', user.id).eq('kind', 'chat')
+        .select('id');
+      if (error) throw new HttpError(`Kon het gesprek niet verwijderen: ${error.message}`, 500);
+      if (!deleted || deleted.length === 0) throw new HttpError('Dit gesprek bestaat niet (meer).', 404);
+      return json(req, { deleted: true, conversationId: id });
+    }
     // Commandocentrum — missieplan: splits een groot doel op in parallelle deeltaken (sterk model).
     if (String(body.action || '') === 'plan') {
       if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
@@ -128,17 +148,21 @@ Deno.serve(async (req) => {
     if (message.length > 4000) throw new HttpError('Bericht is te lang.', 400);
     // Een gesprek is persoonlijk (RLS per gebruiker), maar deze functie draait met
     // de service-role: dus hier zelf nagaan dat het meegegeven gesprek van jou is,
-    // anders lees en schrijf je in de geschiedenis van een collega.
+    // anders lees en schrijf je in de geschiedenis van een collega. En dat het een
+    // chat is: sinds je een gesprek uit Gesprekken weer opent, komt er een id uit
+    // de browser terug. Het verslag van een agent-run hoort niet via deze weg
+    // verder te lopen; daarvoor is "antwoorden op een run" in de runner.
     if (conversationId) {
+      if (!UUID_RE.test(conversationId)) throw new HttpError('Dit gesprek bestaat niet (meer).', 404);
       const { data: conversation } = await supabaseAdmin.from('ai_conversations')
-        .select('id').eq('id', conversationId).eq('organization_id', organizationId).eq('created_by', user.id).maybeSingle();
+        .select('id').eq('id', conversationId).eq('organization_id', organizationId).eq('created_by', user.id).eq('kind', 'chat').maybeSingle();
       if (!conversation) throw new HttpError('Dit gesprek bestaat niet (meer).', 404);
     }
 
     // Alles is gevalideerd -> open de SSE-stream en doe het werk asynchroon.
     return streamResponse(req, async (emit) => {
       const ctx = await buildContext(organizationId, role, user);
-      const convId = conversationId ?? (await createConversation(organizationId, user.id, message));
+      const convId = conversationId ?? (await createConversation(organizationId, user.id, message, 'chat'));
       const history = await loadHistory(convId, organizationId);
 
       await insertMessage(convId, organizationId, user.id, 'user', message, []);
@@ -197,6 +221,10 @@ Deno.serve(async (req) => {
     return json(req, { error: publicMessage }, status as HttpStatus);
   }
 });
+
+// Een id uit de browser gaat pas naar de database als het er ook als een uuid
+// uitziet; anders gaf Postgres een fout die als serverfout (500) terugkwam.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ── SSE-stream ───────────────────────────────────────────────────────────────
 function streamResponse(req: Request, work: (emit: Emit) => Promise<void>): Response {

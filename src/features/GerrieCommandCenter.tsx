@@ -20,6 +20,8 @@ import { memberShortName } from '../lib/members';
 import { STANDARD_MERGE_TOKENS } from '../lib/mergeTokens';
 import { executeProposal, openProposal, proposalLabel } from '../lib/gerrie-proposals';
 import { AgentApprovals } from '../components/AgentApprovals';
+import { GerrieConversations } from '../components/GerrieConversations';
+import { signalGerrieConversation } from '../lib/gerrieConversations';
 import { AgentBuilder } from '../components/AgentBuilder';
 import { AgentBatchBoard, asBatchProposal } from '../components/AgentBatchBoard';
 import { DecisionFeed } from '../components/DecisionFeed';
@@ -75,7 +77,10 @@ const QUICK_TASKS = [
   'Geef een overzicht van mijn omzet en grootste klanten dit jaar',
 ];
 
-export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = null, onOpenAgentConsumed, isAdmin = false, onOpenDecisionTarget, currentUserId = null, teamMembers = [], ...handlers }: {
+/** Een sprong naar Gerrie → Gesprekken (vanuit de chat), met eventueel één gesprek open. */
+export interface GerrieConversationsFocus { conversationId: string | null; key: number }
+
+export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = null, onOpenAgentConsumed, isAdmin = false, onOpenDecisionTarget, currentUserId = null, teamMembers = [], conversationsFocus = null, onConversationsFocusConsumed, ...handlers }: {
   organizationId: UUID;
   /** Gerrie op "volledig" met een schrijvende rol: mag voorstellen uitvoeren, en zijn agents mogen iets klaarzetten. */
   canWrite: boolean;
@@ -90,9 +95,23 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
   currentUserId?: string | null;
   /** Voor de naam bij een agent of voorstel van een collega. */
   teamMembers?: OrganizationMember[];
+  /** "Alle gesprekken" in de chat: naar het tabblad Gesprekken, met dat gesprek open. */
+  conversationsFocus?: GerrieConversationsFocus | null;
+  onConversationsFocusConsumed?: () => void;
 } & GerrieActionHandlers) {
   // Agents is de voordeur: daar zit het werk. "Nu uitvoeren" is voor het losse geval.
-  const [tab, setTab] = useState<'agents' | 'run' | 'queue' | 'decisions'>('agents');
+  // Gesprekken staat ernaast: daar lees je terug wat je Gerrie eerder vroeg.
+  const [tab, setTab] = useState<'agents' | 'conversations' | 'run' | 'queue' | 'decisions'>(() => (conversationsFocus ? 'conversations' : 'agents'));
+  // Het gesprek dat het tabblad Gesprekken moet openen. Apart bewaard: de sprong
+  // uit de chat is meteen "verbruikt", maar het tabblad moet hem nog krijgen.
+  const [focusConversationId, setFocusConversationId] = useState<string | null>(() => conversationsFocus?.conversationId ?? null);
+  useEffect(() => {
+    if (!conversationsFocus) return;
+    setTab('conversations');
+    setFocusConversationId(conversationsFocus.conversationId);
+    onConversationsFocusConsumed?.();
+  }, [conversationsFocus?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const consumeConversationFocus = useCallback(() => setFocusConversationId(null), []);
   const [draft, setDraft] = useState('');
   const [runs, setRuns] = useState<RunResult[]>([]);
   const [budget, setBudget] = useState<number | null>(null);
@@ -174,6 +193,8 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
     })
       .then((result) => {
         if (result.budget) setBudget(result.budget.remainingFraction);
+        // Een opdracht is ook een gesprek met Gerrie: hij staat daarna onder Gesprekken.
+        if (result.conversationId) signalGerrieConversation({ type: 'updated', id: result.conversationId });
         patchRun(run.id, {
           status: 'done', statusLabel: null,
           text: result.text || streamed,
@@ -219,6 +240,7 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
         <div className="cc-brand"><span className="cc-spark" aria-hidden="true"><Sparkles size={18} /></span><b>Gerrie</b><span className="cc-sub">Commandocentrum</span></div>
         <nav className="cc-tabs" aria-label="Gerrie-weergave">
           <button className={`cc-tab${tab === 'agents' ? ' on' : ''}`} onClick={() => setTab('agents')}><BotMessageSquare size={15} /> Agents</button>
+          <button className={`cc-tab${tab === 'conversations' ? ' on' : ''}`} onClick={() => setTab('conversations')}><MessagesSquare size={15} /> Gesprekken</button>
           <button className={`cc-tab${tab === 'run' ? ' on' : ''}`} onClick={() => setTab('run')}><Zap size={15} /> Nu uitvoeren</button>
           <button className={`cc-tab${tab === 'queue' ? ' on' : ''}`} onClick={() => { setTab('queue'); reloadPending(); }}>
             <CheckCheck size={15} /> Jouw akkoord
@@ -247,6 +269,9 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
           currentUserId={currentUserId} teamMembers={teamMembers} catalog={catalog}
           canPropose={canPropose} canOversee={canOversee}
           pendingTotal={pendingTotal} onOpenQueue={() => { setTab('queue'); reloadPending(); }} />
+      ) : tab === 'conversations' ? (
+        <GerrieConversations organizationId={organizationId} currentUserId={currentUserId}
+          focusConversationId={focusConversationId} onFocusConsumed={consumeConversationFocus} />
       ) : tab === 'decisions' ? (
         <div className="ag-page">
           <DecisionFeed organizationId={organizationId} canWrite={() => canWrite} handlers={handlers}

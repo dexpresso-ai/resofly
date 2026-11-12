@@ -194,7 +194,7 @@ import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat, askGerrie } from './components/GerrieChat';
 import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
 import { watchForReturn, type FinishedCall } from './lib/callBridge';
-import { GerrieCommandCenter } from './features/GerrieCommandCenter';
+import { GerrieCommandCenter, type GerrieConversationsFocus } from './features/GerrieCommandCenter';
 import type { GerrieActionHandlers, GerrieProposal, GerrieProposalLine } from './lib/gerrie-api';
 import { runRegistryAction } from './lib/actions';
 import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
@@ -240,6 +240,9 @@ import './styles/rapportages.css';
 // Agents van Gerrie (2026-11-11): eigen klassen (agx-*, agw-*), ná rapportages.css
 // omdat de werkbank de stappenbalk daarvan hergebruikt.
 import './styles/agents.css';
+// Gerrie → Gesprekken (2026-11-12): je eerdere chats terugvinden. Eigen
+// klassen (gsp-*) en de voorstelregels in de chat (gerrie-past-*).
+import './styles/gesprekken.css';
 // Losse apps (2026-11-12): de installeerkaart, Instellingen → Apps en de weg
 // terug naar de werkruimte. Alleen eigen klassen (app-*).
 import './styles/apps.css';
@@ -286,6 +289,8 @@ const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 let commFocusSeq = 0;
 /** Volgnummer voor sprongen naar Boekingslinks (zie openBookingLinks). */
 let bookingFocusSeq = 0;
+/** Volgnummer voor sprongen naar Gerrie → Gesprekken (zie openGerrieConversations). */
+let gerrieConversationsSeq = 0;
 
 // === Actieve tabbladen =====================================================
 // De view-state (welke pagina, welk project/klant, welke editor open staat) leeft
@@ -312,6 +317,12 @@ type ViewState = {
    * tabbladen (ook die uit de opslag) gewoon blijven werken.
    */
   bookingFocus?: BookingFocus | null;
+  /**
+   * Sprong naar Gerrie → Gesprekken vanuit de chat ("Alle gesprekken"), met het
+   * gesprek dat daar open stond. Optioneel, net als bookingFocus: tabbladen uit
+   * de opslag kennen dit veld niet, en het hoort daar ook niet in.
+   */
+  gerrieConversationsFocus?: GerrieConversationsFocus | null;
   /**
    * Door een agent klaargezet concept dat in het formulier van een ándere pagina
    * moet openen (leverancier, inkoopfactuur, contract, campagne). Eén veld voor
@@ -939,6 +950,7 @@ function App() {
   const setOpenAgentId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ openAgentId: applyUpdater(v, t.openAgentId) }));
   const setCommFocus = (v: CommunicationFocus | null) => patchActiveTab(() => ({ commFocus: v }));
   const setBookingFocus = (v: BookingFocus | null) => patchActiveTab(() => ({ bookingFocus: v }));
+  const setGerrieConversationsFocus = (v: GerrieConversationsFocus | null) => patchActiveTab(() => ({ gerrieConversationsFocus: v }));
   const setPendingDraft = (v: ViewState['pendingDraft']) => patchActiveTab(() => ({ pendingDraft: v }));
   const setEdit = (v: React.SetStateAction<EditMode>) => patchActiveTab(t => ({ edit: applyUpdater(v, t.edit) }));
   // Word-modus voor interne Documents: de Collabora-editor leeft op app-niveau, zodat een
@@ -3664,6 +3676,18 @@ function App() {
     setPage('meeting-booking');
   }
 
+  /**
+   * Naar Gerrie → Gesprekken, vanuit de chat. Met het gesprek dat daar open
+   * stond, zodat je het in het groot terugleest. Zelfde teller als hierboven.
+   */
+  function openGerrieConversations(conversationId: string | null) {
+    if (!permissions.canRead('gerrie')) return;
+    gerrieConversationsSeq += 1;
+    setGerrieConversationsFocus({ key: gerrieConversationsSeq, conversationId });
+    setProjectId(null); setClientId(null); setStatsReportId(null);
+    setPage('gerrie');
+  }
+
   /** "Openen" op een kaart van de beslislijst: naar het item waar hij over gaat. */
   function openDecisionTarget(target: DecisionTarget) {
     switch (target.kind) {
@@ -4187,7 +4211,7 @@ function App() {
     </main>
     {/* Gerrie en de teamchat zweven over elke pagina; met de module dicht
         (zoals voor de boekhouder) horen ze er niet te staan. */}
-    {permissions.canRead('gerrie') && <GerrieChat organizationId={activeOrg.id} {...gerrieActions} />}
+    {permissions.canRead('gerrie') && <GerrieChat organizationId={activeOrg.id} currentUserId={currentUserId} onOpenConversations={openGerrieConversations} {...gerrieActions} />}
     {/* Terug uit een gesprek: één regel met de vraag of het gelogd moet worden.
         Overal in de app, want je komt terug op de pagina waar je was — niet
         per se op de pagina waar je op "bellen" tikte. */}
@@ -4326,7 +4350,7 @@ function App() {
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient} teamMembers={workMembers} currentUserId={currentUserId} onNewFromMail={openClientFromMail} inboxRefreshKey={inboxRevision}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} onResolve={(item) => void setTicketStatus(item, 'resolved')} onReopen={(item) => void setTicketStatus(item, TICKET_REOPEN_STATUS)} unreadTicketIds={ticketUnreadIds} teamMembers={workMembers} currentUserId={currentUserId}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} active={view.id === activeTab.id} />;
-    if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} isAdmin={activeMembership?.role === 'owner' || activeMembership?.role === 'admin'} onOpenDecisionTarget={openDecisionTarget} currentUserId={currentUserId} teamMembers={workMembers} {...gerrieActions} />;
+    if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} conversationsFocus={view.gerrieConversationsFocus ?? null} onConversationsFocusConsumed={() => setGerrieConversationsFocus(null)} isAdmin={activeMembership?.role === 'owner' || activeMembership?.role === 'admin'} onOpenDecisionTarget={openDecisionTarget} currentUserId={currentUserId} teamMembers={workMembers} {...gerrieActions} />;
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       openCampaignId={view.pendingDraft?.kind === 'campaign' ? String(view.pendingDraft.payload.id ?? '') : null} onCampaignOpened={() => setPendingDraft(null)}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument}/>;

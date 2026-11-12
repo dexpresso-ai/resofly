@@ -44,7 +44,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261111220000 (vooruitbetaalde kosten) zet twee tabellen erbij:
 // prepaid_expenses (met een leesbare lijst) en het schema per maand,
 // prepaid_expense_releases. Boekhouding van de klant zelf: alles gaat mee.
-export const EXPORT_SCHEMA_VERSION = '20261111220000';
+// 20261112120000 (Gerrie → Gesprekken) zet kind op ai_conversations. Geen
+// nieuwe tabel; ai_conversations en ai_messages blijven 'prive': een chat met
+// Gerrie is van degene die hem voerde, niet van de organisatie.
+export const EXPORT_SCHEMA_VERSION = '20261112120000';
 
 export type TableKind =
   | 'export'

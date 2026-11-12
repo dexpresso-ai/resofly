@@ -452,7 +452,7 @@ async function executeAgentRun(
   }
 
   // 5) Gesprek (transcript) aanhaken.
-  const convId = await createConversation(orgId, runAsUserId, `Agent: ${name} — ${todayIso()}`);
+  const convId = await createConversation(orgId, runAsUserId, `Agent: ${name} — ${todayIso()}`, 'agent_run');
   await supabaseAdmin.from('ai_conversations').update({ agent_id: agentId, agent_run_id: runId }).eq('id', convId);
   await supabaseAdmin.from('ai_agent_runs').update({ conversation_id: convId }).eq('id', runId);
 
@@ -692,7 +692,7 @@ async function previewAgent(ctx: GerrieContext, body: Record<string, unknown>): 
   const guard = await screenGerrieMessage(instruction, 'agent');
   const refusal = guardRefusal(guard);
   if (refusal) {
-    const refusedConv = await createConversation(ctx.organizationId, ctx.userId, `Proefrun: ${instruction.slice(0, 50)}`);
+    const refusedConv = await createConversation(ctx.organizationId, ctx.userId, `Proefrun: ${instruction.slice(0, 50)}`, 'agent_preview');
     const refusedId = await insertMessage(refusedConv, ctx.organizationId, ctx.userId, 'assistant', refusal, []);
     if (guard.usage.input || guard.usage.output) await recordUsage(ctx.organizationId, refusedConv, refusedId, ctx.userId, guard.usage, modelKind);
     return { ok: true, text: refusal, steps: [], tools: allowedToolNames, blocked: guard.verdict };
@@ -704,7 +704,7 @@ async function previewAgent(ctx: GerrieContext, body: Record<string, unknown>): 
 
   // Verbruik boeken op een los gesprek: een proefrun kost tegoed, dus die mag niet
   // buiten de telling vallen.
-  const convId = await createConversation(ctx.organizationId, ctx.userId, `Proefrun: ${instruction.slice(0, 50)}`);
+  const convId = await createConversation(ctx.organizationId, ctx.userId, `Proefrun: ${instruction.slice(0, 50)}`, 'agent_preview');
   const msgId = await insertMessage(convId, ctx.organizationId, ctx.userId, 'assistant', outcome.text, outcome.toolCalls);
   await recordUsage(ctx.organizationId, convId, msgId, ctx.userId, outcome.usage, modelKind);
 

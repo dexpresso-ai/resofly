@@ -517,8 +517,61 @@ export const aiAgentRunEvents = [
   { id: uid('e'), organization_id: ORG, agent_id: agentTickets.id, run_id: runningRun.id, seq: 1, kind: 'tool', label: 'Tickets bekijken — 6 gevonden', detail: { tool: 'list_tickets', ok: true, found: 6 }, created_at: runAt(-30) },
 ];
 
+// Gerrie → Gesprekken (2026-11-12): vijf eigen chats verspreid over de tijd
+// (vandaag, gisteren, deze week, deze maand, eerder), met twee voorstellen
+// (uitgevoerd en afgewezen). Daarnaast een agentverslag en een chat van een
+// collega: die horen er níet in te staan, en de filters op kind en created_by
+// halen ze eruit. Geen voorstel op 'proposed': de mock negeert .or() en dan
+// stond het in de goedkeurwachtrij en op het dashboard.
+const hoursAgo = (h) => iso(new Date(NOW.getTime() - h * 3_600_000));
+const gerrieChat = (id, title, updatedAt, extra = {}) => ({
+  id, organization_id: ORG, created_by: USER, title, kind: 'chat', agent_id: null, agent_run_id: null,
+  created_at: updatedAt, updated_at: updatedAt, ...extra,
+});
+const chatIds = Array.from({ length: 7 }, () => uid('k'));
+export const aiConversations = [
+  gerrieChat(chatIds[0], 'Welke facturen staan langer dan 30 dagen open?', hoursAgo(2), { created_at: hoursAgo(3) }),
+  gerrieChat(chatIds[1], 'Wat is mijn omzet dit jaar?', iso(day(-1))),
+  gerrieChat(chatIds[2], 'Zet offerte 2026-031 voor Restaurant Bloem om naar een factuur', iso(day(-3))),
+  gerrieChat(chatIds[3], 'Zoek klant op naam Van Dijk', iso(day(-12))),
+  gerrieChat(chatIds[4], 'Maak een overzicht van alle openstaande facturen per klant en', iso(day(-45))),
+  gerrieChat(chatIds[5], `Agent: ${aiAgents[0].name} — ${dkey(day(-1))}`, iso(day(-1)), { kind: 'agent_run', agent_id: aiAgents[0].id }),
+  gerrieChat(chatIds[6], 'Hoeveel uur heb ik deze week geschreven?', hoursAgo(1), { created_by: USER2 }),
+];
+const gerrieMsg = (conversation, role, content, createdAt, extra = {}) => ({
+  id: uid('n'), organization_id: ORG, conversation_id: conversation.id, created_by: conversation.created_by,
+  role, content, tool_calls: [], created_at: createdAt, ...extra,
+});
+const [chatFacturen, chatOmzet, chatOfferte, chatZoek, chatOverzicht, chatAgent, chatCollega] = aiConversations;
+const factuurAntwoord = gerrieMsg(chatFacturen, 'assistant', 'Ik heb hem klaargezet. Factuur 2026-014 gaat naar joost@dekorenaar.nl zodra je op Versturen klikt.', hoursAgo(2));
+const offerteAntwoord = gerrieMsg(chatOfferte, 'assistant', 'Dat kan. Offerte 2026-031 (€ 1.840) wordt dan een conceptfactuur voor Restaurant Bloem.', iso(day(-3)));
+export const aiMessages = [
+  gerrieMsg(chatFacturen, 'user', 'Welke facturen staan langer dan 30 dagen open?', hoursAgo(3)),
+  gerrieMsg(chatFacturen, 'assistant', 'Er staan vier facturen langer dan 30 dagen open, samen € 7.420,50:\n\n• 2026-009 · Studio Noord · € 3.120 · 52 dagen\n• 2026-011 · Bakkerij De Korenaar · € 1.980,50 · 41 dagen\n• 2026-014 · Bakkerij De Korenaar · € 1.240 · 33 dagen\n• 2026-016 · Fysio Centrum Zuid · € 1.080 · 31 dagen\n\nZal ik herinneringen klaarzetten?', hoursAgo(3)),
+  gerrieMsg(chatFacturen, 'user', 'Stuur factuur 2026-014 nog een keer naar Joost', hoursAgo(2.1)),
+  factuurAntwoord,
+  gerrieMsg(chatOmzet, 'user', 'Wat is mijn omzet dit jaar?', iso(day(-1))),
+  gerrieMsg(chatOmzet, 'assistant', 'Je omzet dit jaar is € 182.400 (exclusief btw), 14% meer dan vorig jaar rond deze tijd. Bakkerij De Korenaar is je grootste klant met € 48.210.', iso(day(-1))),
+  gerrieMsg(chatOfferte, 'user', 'Zet offerte 2026-031 voor Restaurant Bloem om naar een factuur', iso(day(-3))),
+  offerteAntwoord,
+  gerrieMsg(chatZoek, 'user', 'Zoek klant op naam Van Dijk', iso(day(-12))),
+  gerrieMsg(chatZoek, 'assistant', 'Ik vond één klant: Van Dijk Installatietechniek (contact: Peter van Dijk). Er loopt één project en er staat geen factuur open.', iso(day(-12))),
+  gerrieMsg(chatOverzicht, 'user', 'Maak een overzicht van alle openstaande facturen per klant en zet de grootste bovenaan', iso(day(-45))),
+  gerrieMsg(chatOverzicht, 'assistant', 'Hier is het overzicht, grootste bedrag eerst. Studio Noord staat bovenaan met € 3.120.', iso(day(-45))),
+  gerrieMsg(chatAgent, 'user', 'Geef een overzicht van alle openstaande facturen ouder dan 30 dagen.', iso(day(-1))),
+  gerrieMsg(chatCollega, 'user', 'Hoeveel uur heb ik deze week geschreven?', hoursAgo(1)),
+];
+const auditBase = { organization_id: ORG, user_id: USER, agent_id: null, agent_run_id: null, mcp_grant_id: null, api_key_id: null, signal_id: null, result: null };
+export const aiActionAudit = [
+  { ...auditBase, id: uid('y'), conversation_id: chatFacturen.id, message_id: factuurAntwoord.id, action: 'send_invoice', status: 'executed',
+    params: { type: 'send_invoice', invoice_id: uid('i'), number: '2026-014', recipient_email: 'joost@dekorenaar.nl', client_name: 'Bakkerij De Korenaar' }, created_at: hoursAgo(2) },
+  { ...auditBase, id: uid('y'), conversation_id: chatOfferte.id, message_id: offerteAntwoord.id, action: 'convert_quote', status: 'cancelled',
+    params: { type: 'convert_quote', quote_id: uid('i'), number: '2026-031', client_name: 'Restaurant Bloem', total_eur: 1840 }, created_at: iso(day(-3)) },
+];
+
 export const tables = {
   ai_agents: aiAgents, ai_agent_runs: aiAgentRuns, ai_agent_run_events: aiAgentRunEvents,
+  ai_conversations: aiConversations, ai_messages: aiMessages, ai_action_audit: aiActionAudit,
   clients, client_contacts: [
     { id: uid('o'), ...base(), client_id: clients[0].id, name: 'Joost Vermeer', email: 'joost@dekorenaar.nl', phone: '06-11223344', role: 'Eigenaar', gives_portal_access: true, is_active: true },
     { id: uid('o'), ...base(), client_id: clients[0].id, name: 'Anja Vermeer', email: 'anja@dekorenaar.nl', phone: null, role: 'Marketing', gives_portal_access: false, is_active: true },
