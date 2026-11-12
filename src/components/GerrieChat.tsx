@@ -8,6 +8,7 @@ import { supabase } from '../lib/supabase';
 import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
 import { editVideoLabel, isFormBackedProposal, openProposal, proposalLabel, proposalVerb, proposalVideoLabel, type ProposalKind } from '../lib/gerrie-proposals';
 import { scheduleLabel } from '../lib/agents';
+import { EMPTY_DICTATION, composeDraft, isAndroidUserAgent, readDictationEvent, type DictationState } from '../lib/dictation';
 import type { UUID } from '../types';
 
 /**
@@ -86,7 +87,7 @@ const SUGGESTIONS = [
 // verschijnt daarom alleen als de API bestaat. De uitgesproken tekst belandt in
 // het invoerveld zodat de gebruiker hem nakijkt vóór verzenden (Gerrie kan
 // acties uitvoeren, dus niet automatisch versturen).
-interface SpeechAlternativeLike { transcript: string }
+interface SpeechAlternativeLike { transcript: string; confidence?: number }
 interface SpeechResultLike { isFinal: boolean; 0: SpeechAlternativeLike }
 interface SpeechResultListLike { length: number; [index: number]: SpeechResultLike }
 interface SpeechResultEventLike { resultIndex: number; results: SpeechResultListLike }
@@ -105,6 +106,7 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
     : (window as unknown as { SpeechRecognition?: SpeechRecognitionCtor; webkitSpeechRecognition?: SpeechRecognitionCtor }).SpeechRecognition
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
+const speechOnAndroid = typeof navigator !== 'undefined' && isAndroidUserAgent(navigator.userAgent);
 
 /** Open Gerrie en stel meteen een vraag — vanuit de vraagbalk van Zenit, of
  *  van waar dan ook in de app. Zonder tekst gaat alleen het gesprek open. */
@@ -139,7 +141,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
   const [micNote, setMicNote] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const speechBaseRef = useRef('');   // tekst in het veld bij start (inspreken vult aan)
-  const speechFinalRef = useRef('');  // opgebouwde definitieve transcriptie deze sessie
+  const dictationRef = useRef<DictationState>(EMPTY_DICTATION);  // wat er deze sessie vastligt
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -203,6 +205,10 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
   async function send(text: string) {
     const trimmed = text.trim();
     if (!trimmed || thinking) return;
+    // Wie verstuurt terwijl de microfoon nog aanstaat, wil dat inspreken stopt.
+    // Liep de herkenner door, dan zette zijn volgende resultaat het verstuurde
+    // bericht opnieuw in het tekstveld.
+    cancelDictation();
     setDraft('');
     if (inputRef.current) inputRef.current.style.height = 'auto';
     setMessages((prev) => [...prev, { id: nextId(), role: 'user', text: trimmed }]);
@@ -277,44 +283,68 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
 
   // Eenvoudige auto-groei voor het tekstveld.
   function onInput(e: FormEvent<HTMLTextAreaElement>) {
+    // Typ je zelf terwijl de microfoon aanstaat, dan stopt het inspreken. Anders
+    // overschreef het volgende spraakresultaat wat je net had getypt. Alleen bij
+    // een echte wijziging: een toetsenbord dat na een spraakresultaat een
+    // invoer-gebeurtenis met dezelfde tekst stuurt, zet de microfoon niet uit.
     const el = e.currentTarget;
+    if (el.value !== draft) cancelDictation();
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
     setDraft(el.value);
   }
 
   // ── Inspreken (Web Speech API) ─────────────────────────────────────────────
+  // De micknop gebruikt stop() en niet abort(): zo komt wat je net zei nog in het veld.
   function stopDictation() { recognitionRef.current?.stop(); }
+
+  // Bij versturen of zelf typen laten we de herkenner meteen los. Wat hij daarna
+  // nog meldt, hoort niet meer bij dit bericht.
+  function cancelDictation() {
+    const recognition = recognitionRef.current;
+    if (!recognition) return;
+    recognitionRef.current = null;
+    setListening(false);
+    recognition.abort();
+  }
 
   function startDictation() {
     if (!SpeechRecognitionImpl || thinking || listening) return;
     setMicNote(null);
     // Vanaf de huidige tekst beginnen zodat inspreken aanvult i.p.v. overschrijft.
-    speechBaseRef.current = draft ? `${draft.replace(/\s+$/, '')} ` : '';
-    speechFinalRef.current = '';
+    speechBaseRef.current = draft;
+    dictationRef.current = EMPTY_DICTATION;
     const recognition = new SpeechRecognitionImpl();
     recognition.lang = 'nl-NL';
     recognition.interimResults = true;
     recognition.continuous = true;
     recognition.maxAlternatives = 1;
+    // Elke handler kijkt eerst of hij nog de actieve herkenner is. Een oude
+    // herkenner die na een fout of een nieuwe start nog nawerkt, mag het
+    // tekstveld en de knop niet meer aanraken.
+    const isCurrent = () => recognitionRef.current === recognition;
     recognition.onresult = (event) => {
-      let interim = '';
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      if (!isCurrent()) return;
+      const pieces = Array.from({ length: event.results.length }, (_, i) => {
         const result = event.results[i];
-        const text = result[0]?.transcript ?? '';
-        if (result.isFinal) speechFinalRef.current += text;
-        else interim += text;
-      }
-      setDraft(`${speechBaseRef.current}${speechFinalRef.current}${interim}`.slice(0, 4000));
+        return { transcript: result[0]?.transcript ?? '', confidence: result[0]?.confidence, isFinal: result.isFinal };
+      });
+      const { state, text } = readDictationEvent(dictationRef.current, event.resultIndex, pieces, { android: speechOnAndroid });
+      dictationRef.current = state;
+      setDraft(composeDraft(speechBaseRef.current, text));
     };
+    // Na een fout volgt altijd nog `end`; daar ruimen we op.
     recognition.onerror = (event) => {
+      if (!isCurrent()) return;
       setListening(false);
-      recognitionRef.current = null;
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') setMicNote('Geef de browser toegang tot je microfoon om in te spreken.');
       else if (event.error === 'no-speech') setMicNote('Ik hoorde niets — probeer het nog eens.');
       else if (event.error !== 'aborted') setMicNote('Spraakherkenning lukte even niet. Probeer het opnieuw.');
     };
     recognition.onend = () => {
+      // Losgelaten (versturen, zelf typen) of vervangen: niet meer aan het
+      // tekstveld komen. Anders verdween de spatie die je net had getypt.
+      if (!isCurrent()) return;
       setListening(false);
       recognitionRef.current = null;
       setDraft((d) => d.replace(/\s+$/, ''));
