@@ -99,6 +99,16 @@ export const portalSettings = { ok: true, email: c0.email, isPrimary: true, othe
 export const portalDataInactive = { ...portalData, accounts: portalData.accounts.map(account => ({ ...account, ticketsOpen: false, tickets: [] })) };
 export const portalSettingsInactive = { ...portalSettings, ticketsOpen: false };
 
+// Het portaal mét logo (2026-11-12): een woordmerk zoals de meeste leveranciers
+// er een hebben, donkere letters naast een gekleurd beeldmerk op transparant.
+// Gemiddeld is het middelgrijs, maar op de donkere kop valt de naam weg; dan
+// hoort het op een licht plaatje (logoPlate in src/lib/branding.ts). Zie
+// portal-logo en portal-login-logo in run.mjs.
+export const LOGO_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQkAAAA2CAMAAADj7ZyaAAAASFBMVEUXMiYeOiwdOSseOiwtilYsilYkjFMwjFlSn3RurovR5dqbx64AgIAMQAwA/wCz1cKDupsAAAAeOiwui1ceOiwcOSr9/v0dOSx6Wlq6AAAAGHRSTlMQ0UqQoVsO3P////8CBQH//wD9/rEu/2tC9UgGAAAE5klEQVR42u2a2XqrIBCAB4jGJF1OKpT3f9MDzAK4Rdv0LJ/ORVMThOFnNlC4H4ICB4KDxEHiIHGQ+B6JtmlOQZqm3TOJtjn1hZx2QgPGHPqRNC87JNGc+wk5N3sj8XbqZ+T0tisS7SyIgKLdEYn23C/Iud0NiSWL2IGDFCQegAgodkKi6R9KswsSL5NBorvcfl06CRVbe3c2is5f6PTFyhIfDN/qjNHLbf2WjpdJTJjE5faJcr11E0aBs0IxflIJ8B9BfIEmfeHW6aZCUwQQb8oDmGJco4FY1W2+TqIdc/gs5b0b5Q9t7EchBuZm48vxNpAQiummbBTeqHJg7N49i8TQJLrrZy2XqUgRR7e80gqeTMJKUzWYpUMCgJZgn0pikDg69ov394Tkdp5MH6KHr1ftOSTAc5wAY6p7nNiCZQDPItFOekYMD9dsEFHaaRJJD/NkEguRWEjIEjyLRDMB4j3awa0GMXCPHyMBDr5DApxb171zrwMSpzGIi3jJbba6EhJavMNhHFXGVSRSvPcFiRT6Hd6hQnMt2UgHZwg3SQamHOUmSZgJ7/ApoEpK1VaROkkJc9cKf3a29OkJEhgjMG9Gk7j2j0kY/icwCbMyMgSTCKMq7woSQR2bUm9sG5OBiYEhNXfpr2Rg5+3QkITEq9ickIDQWiUNkgLp0lBPuEiU6wzlHpglcc0g+uLfWRJaJ1XNK5EAMlpVkaDUkknQoul07dhSCEu6KXvWJAkTBlbjLOqxraVLkz49XqHpOkgQvANdlDtE4jzwjS7/f613pCMSnNWBq4xKL1IVeCZMQnPSjQ3wa8upIMzRrSCBori0ohHTAATES8carzQtUPbRHN7GJMrIEM3j1wMSynsMDaUny1A4G1A8EfqBTSRNQGFPijRLtuL1QxKWBzZlnODJ0qfHqer8obhDza454x1VZIhUzv2KOAGlK4PTuiIRvRlKEo6jCuqmsX29Rg9JYHhQVNMxCU8qUY+G/DebxloS5zJrdiPnmCOBM0wa5BJcSJQ2mH7IOwpfOBh8gcSdXZ1JcOym62JDoFaRaCZN4jZIofP1BKodRnbs5wUJ9ZFnAhK90T082USUr9iELMECCYvdu20krmWyuA0zxwIJm0c2gzihnKQSUhxkxqJb7mUbiTst94J35IpvBYm2yBzXfvJisdomm5AhhhGz3lZi1ky/OwoQXyYxtImJiGm3kMiBorsUIfLcLR/gjeME6TwggeEAiqRiy4LDfYPEME4AdVxk0bwdWUNixdnd/K6cq15X1g8VifRpCxIyF13t5zeTgGHuoFKqqqzMFhLtOhJttY3xVE/g0UmqJ7BExso/1DwpSxjgnRJFVE2aSnHzYY1VlsphS9sjuXdIArCat3FgrideMW8DssF6v0AV+/d0hCbrAJj8aYMC9y1GUZlEmQCV5RoTq3ncKhiqBS1Xo9bzMZPL501aUbEoPSox+2IJaxeScenckL4zd969SKFHl/GaGjnHjWkLUpNYfuxDYWPNk+JQV20+fwi3wKNzvC2dDjb1q1T6L0754bunMNued7z9o09+3CjV/vzTwAf+8ZcejAa38DMHYjt7QhyK5bmD8529NbDwMOXnSNxfTv/e6xPae/0n3hA83i6aI3F/Od44y9HieAuxgkGyn1dTj7eVDxIHiYPEQeIgsVV+A+3XqGD4tcI2AAAAAElFTkSuQmCC';
+const withLogo = (b) => ({ ...b, logoDataUrl: LOGO_DATA_URL });
+export const portalDataLogo = { ...portalData, accounts: portalData.accounts.map(account => ({ ...account, branding: withLogo(account.branding) })) };
+export const portalLoginBrandingLogo = { ...portalLoginBranding, branding: withLogo(portalLoginBranding.branding) };
+
 // Agenda → Boekingslinks en de kaart Afspraken op de klantpagina (november
 // 2026): een open link met een geboekte afspraak en vrije momenten, en een
 // verlopen link. Zo meet de test de standen, de knoppen en de rijen, niet

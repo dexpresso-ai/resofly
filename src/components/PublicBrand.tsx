@@ -39,38 +39,42 @@ export function usePublicBrandTheme(
   );
 }
 
-/** De gemiddelde kleur per logo, één keer gemeten per sessie. */
-const logoInkCache = new Map<string, string | null>();
+/** Hoe licht of donker een logo is: de gemiddelde kleur en de telling per deel. */
+type LogoTone = { ink: string | null; luminance: number[] };
+const NO_TONE: LogoTone = { ink: null, luminance: [] };
+
+/** De meting per logo, één keer per sessie. */
+const logoToneCache = new Map<string, LogoTone>();
 
 /**
- * Hoe licht of donker is dit logo? Nodig om te weten of het op de kop een
- * plaatje nodig heeft. Meten kost een paar milliseconden (het logo is al een
- * data-URL); tot het klaar is staat het logo onzichtbaar op zijn plek, zodat er
- * geen plaatje bij komt springen.
+ * Hoe licht of donker is dit logo, als geheel en in delen? Nodig om te weten of
+ * het op de kop een plaatje nodig heeft (`logoPlate()`). Meten kost een paar
+ * milliseconden (het logo is al een data-URL); tot het klaar is staat het logo
+ * onzichtbaar op zijn plek, zodat er geen plaatje bij komt springen.
  */
-export function useLogoInk(src: string | null | undefined): { ink: string | null; ready: boolean } {
-  const cached = src ? logoInkCache.get(src) : undefined;
-  const [state, setState] = useState<{ src: string | null; ink: string | null; ready: boolean }>(() => ({
+export function useLogoInk(src: string | null | undefined): LogoTone & { ready: boolean } {
+  const cached = src ? logoToneCache.get(src) : undefined;
+  const [state, setState] = useState<{ src: string | null; tone: LogoTone; ready: boolean }>(() => ({
     src: src ?? null,
-    ink: cached ?? null,
+    tone: cached ?? NO_TONE,
     ready: !src || cached !== undefined,
   }));
   useEffect(() => {
-    if (!src) { setState({ src: null, ink: null, ready: true }); return; }
-    if (logoInkCache.has(src)) { setState({ src, ink: logoInkCache.get(src) ?? null, ready: true }); return; }
+    if (!src) { setState({ src: null, tone: NO_TONE, ready: true }); return; }
+    if (logoToneCache.has(src)) { setState({ src, tone: logoToneCache.get(src) ?? NO_TONE, ready: true }); return; }
     let alive = true;
-    setState({ src, ink: null, ready: false });
+    setState({ src, tone: NO_TONE, ready: false });
     analyseLogo(src)
-      .then(summary => summary.ink, () => null)
-      .then(ink => {
-        logoInkCache.set(src, ink);
-        if (alive) setState({ src, ink, ready: true });
+      .then(summary => ({ ink: summary.ink, luminance: summary.luminance }), () => NO_TONE)
+      .then(tone => {
+        logoToneCache.set(src, tone);
+        if (alive) setState({ src, tone, ready: true });
       });
     return () => { alive = false; };
   }, [src]);
   // Een nieuw logo is pas klaar als het zelf gemeten is, niet het vorige.
-  if (state.src !== (src ?? null)) return { ink: cached ?? null, ready: !src || cached !== undefined };
-  return { ink: state.ink, ready: state.ready };
+  if (state.src !== (src ?? null)) return { ...(cached ?? NO_TONE), ready: !src || cached !== undefined };
+  return { ...state.tone, ready: state.ready };
 }
 
 /**
@@ -110,13 +114,13 @@ export function BrandMark({ branding, name, on, className = '' }: {
   const dark = isDarkSurface(backgrounds[backgrounds.length - 1]);
   const darkVersion = dark && branding?.logoDarkDataUrl ? branding.logoDarkDataUrl : null;
   const src = darkVersion ?? branding?.logoDataUrl ?? null;
-  const { ink, ready } = useLogoInk(darkVersion ? null : src);
+  const { ink, luminance, ready } = useLogoInk(darkVersion ? null : src);
 
   if (!src) {
     if (!name) return null;
     return <span className={`brand-tile ${className}`.trim()} aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>;
   }
-  const plate = darkVersion || !ready ? null : logoPlate(ink, backgrounds);
+  const plate = darkVersion || !ready ? null : logoPlate(ink, backgrounds, luminance);
   return <span
     className={`brand-logo${plate ? ` on-plate plate-${plate}` : ''} ${className}`.trim()}
     style={ready ? undefined : { visibility: 'hidden' }}

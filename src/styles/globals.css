@@ -9432,10 +9432,21 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    instelt. */
 .portal.login .brand-icon{width:30px;height:30px;border-radius:8px;font-size:14px}
 
-/* Afsluiting onderaan: de eigen tekst van de leverancier, en "Geleverd via
-   ResoFly" zolang die niet is uitgezet in Instellingen → Huisstijl. */
-.portal-foot{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted2);font-size:12px;text-align:center}
+/* Afsluiting onderaan: de eigen tekst van de leverancier, en daaronder altijd
+   dat het platform van ResoFly komt (ook als "Geleverd via ResoFly" in
+   Instellingen → Huisstijl uit staat; dat geldt alleen buiten het portaal).
+   Onder elkaar: naast elkaar brak de langere regel op de telefoon midden in
+   een zin af. */
+.portal-foot{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted2);font-size:12px;line-height:1.45;text-align:center}
 .portal-foot-own{color:var(--muted2);font-weight:600}
+/* Het R-merk staat in de zin, niet ernaast: op de smalle inlogkaart brak de
+   zin anders af en bleef het merk los links staan. Het teken heeft rondom
+   lucht (het raster van het app-icoon); op 18px is de R zo hoog als de
+   hoofdletters ernaast. */
+.portal-foot-by{display:block;max-width:100%;text-wrap:balance}
+.portal-foot-by strong{font-weight:700;color:inherit}
+.portal-foot-lead{white-space:nowrap}
+.portal-foot-mark{display:inline-block;vertical-align:-4.5px;margin:0 1px 0 -3px;opacity:.85}
 .portal.login .portal-foot{margin-top:4px;padding-top:14px}
 
 /* De keuze donker/licht voor het klantportaal. Elk kaartje toont een miniatuur
