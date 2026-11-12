@@ -1123,7 +1123,7 @@ async function planMission(ctx: GerrieContext, userId: string, goal: string): Pr
   const guard = await screenGerrieMessage(goal, 'missie');
   const refusal = guardRefusal(guard);
   if (refusal) {
-    const refusedConv = await createConversation(ctx.organizationId, userId, `Missie: ${goal}`);
+    const refusedConv = await createConversation(ctx.organizationId, userId, `Missie: ${goal}`, 'mission');
     await insertMessage(refusedConv, ctx.organizationId, userId, 'user', goal, []);
     const refusedId = await insertMessage(refusedConv, ctx.organizationId, userId, 'assistant', refusal, []);
     if (guard.usage.input || guard.usage.output) await recordUsage(ctx.organizationId, refusedConv, refusedId, userId, guard.usage, 'cheap');
@@ -1178,7 +1178,7 @@ async function planMission(ctx: GerrieContext, userId: string, goal: string): Pr
   const summary = String(parsed?.summary || 'Ik heb het opgesplitst in deeltaken.').slice(0, 400);
 
   // Leg het plan vast als los gesprek + boek het tokenverbruik van de planner (sterk model).
-  const convId = await createConversation(ctx.organizationId, userId, `Missie: ${goal}`);
+  const convId = await createConversation(ctx.organizationId, userId, `Missie: ${goal}`, 'mission');
   await insertMessage(convId, ctx.organizationId, userId, 'user', goal, []);
   const planMsgId = await insertMessage(convId, ctx.organizationId, userId, 'assistant', summary, [{ name: 'emit_plan', input: { subtasks } }]);
   await recordUsage(ctx.organizationId, convId, planMsgId, userId, usage, 'strong');
@@ -1216,7 +1216,7 @@ export async function designAgent(
   const guard = await screenGerrieMessage(lastUserMessage, 'agentbouwer');
   const refusal = guardRefusal(guard);
   if (refusal) {
-    const refusedConv = await createConversation(ctx.organizationId, userId, `Agent bouwen: ${lastUserMessage.slice(0, 60)}`);
+    const refusedConv = await createConversation(ctx.organizationId, userId, `Agent bouwen: ${lastUserMessage.slice(0, 60)}`, 'agent_builder');
     const refusedId = await insertMessage(refusedConv, ctx.organizationId, userId, 'assistant', refusal, []);
     if (guard.usage.input || guard.usage.output) await recordUsage(ctx.organizationId, refusedConv, refusedId, userId, guard.usage, 'cheap');
     return { kind: 'question', question: refusal, suggestions: [] };
@@ -1349,7 +1349,7 @@ export async function designAgent(
 
   // Verbruik boeken op een los gesprek, net als de missie-planner.
   const first = messages.find((m) => m.role === 'user')?.content ?? 'Agent bouwen';
-  const convId = await createConversation(ctx.organizationId, userId, `${current ? 'Agent aanpassen' : 'Agent bouwen'}: ${first.slice(0, 60)}`);
+  const convId = await createConversation(ctx.organizationId, userId, `${current ? 'Agent aanpassen' : 'Agent bouwen'}: ${first.slice(0, 60)}`, 'agent_builder');
   const said = 'text' in chosen ? chosen.text : String(chosen.input?.summary || chosen.input?.question || '');
   const msgId = await insertMessage(convId, ctx.organizationId, userId, 'assistant', said, 'text' in chosen ? [] : [{ name: chosen.name, input: chosen.input }]);
   await recordUsage(ctx.organizationId, convId, msgId, userId, usage, 'strong');
@@ -5887,10 +5887,19 @@ async function buildContext(organizationId: string, role: OrganizationRole, user
   };
 }
 
-async function createConversation(organizationId: string, userId: string, firstMessage: string): Promise<string> {
+/**
+ * Wat voor gesprek het is (ai_conversations.kind). Alleen een 'chat' staat onder
+ * Gerrie → Gesprekken, en alleen een chat is strikt van de gebruiker zelf; de
+ * andere soorten zijn verslagen waar owners en admins op toezien. Verplicht mee
+ * te geven: met een standaardwaarde belandde een nieuw soort verslag ongemerkt
+ * tussen iemands chats.
+ */
+export type ConversationKind = 'chat' | 'agent_run' | 'agent_preview' | 'agent_builder' | 'mission';
+
+async function createConversation(organizationId: string, userId: string, firstMessage: string, kind: ConversationKind): Promise<string> {
   const title = firstMessage.slice(0, 60);
   const { data, error } = await supabaseAdmin.from('ai_conversations')
-    .insert({ organization_id: organizationId, created_by: userId, title }).select('id').single();
+    .insert({ organization_id: organizationId, created_by: userId, title, kind }).select('id').single();
   if (error) throw new HttpError(`Kon het gesprek niet starten: ${error.message}`, 500);
   return data.id as string;
 }

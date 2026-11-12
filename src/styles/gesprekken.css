@@ -1,0 +1,280 @@
+/* ============================================================
+   Gerrie → Gesprekken (2026-11-12)
+
+   Je eerdere chats met Gerrie, om terug te lezen. Links de lijst met zoeken,
+   rechts het gesprek; onder 900px het een na het ander. De berichten lijken
+   bewust op die in de chat rechtsonder (zelfde bellen, zelfde kleuren): het is
+   hetzelfde gesprek, alleen groter.
+
+   Alleen app-variabelen, zodat de pagina Dag/Nacht en elke look volgt.
+
+   Onderaan de regels voor de chat zelf (.gerrie-past-*): een voorstel uit een
+   eerder gesprek, zonder knop.
+   ============================================================ */
+
+.gsp-page{gap:14px}
+.gsp-head{align-items:center}
+.gsp-head .gsp-new{margin-left:auto}
+.gsp-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+.gsp-notice{
+  margin:0;align-self:flex-start;font-size:12.5px;color:var(--accent-g);
+  background:rgba(var(--ok-rgb),.12);border:1px solid rgba(var(--ok-rgb),.3);border-radius:10px;padding:7px 12px;
+}
+
+/* ── Het raamwerk ─────────────────────────────────────────── */
+/* Twee kolommen die elk zelf scrollen: de lijst blijft staan terwijl je een
+   lang gesprek leest. De hoogte volgt het venster; daaronder blijft het
+   leesbaar, daarboven wordt de regel te lang voor een chat. */
+.gsp{
+  display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:16px;
+  height:clamp(460px,calc(100dvh - 292px),1100px);min-height:0;
+}
+.gsp-list,.gsp-thread{
+  display:flex;flex-direction:column;min-height:0;min-width:0;
+  background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2,14px);overflow:hidden;
+}
+
+/* ── De lijst ─────────────────────────────────────────────── */
+.gsp-search{
+  position:relative;display:flex;align-items:center;gap:8px;margin:12px 12px 6px;
+  padding:0 10px;height:38px;border-radius:10px;background:var(--bg3);border:1px solid var(--border);color:var(--muted);
+  transition:border-color .15s,box-shadow .15s;
+}
+.gsp-search:focus-within{border-color:rgba(var(--accent-rgb),.6);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.14)}
+.gsp-search input{
+  flex:1;min-width:0;height:100%;border:0;outline:0;background:transparent;color:var(--text);
+  font:inherit;font-size:13px;
+}
+.gsp-search input::placeholder{color:var(--muted)}
+.gsp-search input::-webkit-search-cancel-button{display:none}
+.gsp-search-clear{
+  all:unset;cursor:pointer;display:grid;place-items:center;width:24px;height:24px;border-radius:7px;color:var(--muted);
+}
+.gsp-search-clear:hover{background:var(--bg4);color:var(--text)}
+.gsp-search-clear:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.gsp-search-status{margin:2px 14px 4px;font-size:11.5px;color:var(--muted2)}
+
+.gsp-list-scroll{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 10px;overscroll-behavior:contain}
+.gsp-group+.gsp-group{margin-top:6px}
+.gsp-group-label{
+  margin:10px 8px 4px;font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+}
+.gsp-items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+
+.gsp-item{
+  all:unset;box-sizing:border-box;cursor:pointer;width:100%;display:flex;align-items:flex-start;gap:10px;
+  padding:9px 10px;border-radius:10px;color:var(--text);transition:background .14s;
+}
+.gsp-item:hover{background:var(--bg3)}
+.gsp-item:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.gsp-item.on{background:var(--accent-soft);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.32)}
+.gsp-item-icon{
+  flex:0 0 auto;display:grid;place-items:center;width:28px;height:28px;margin-top:1px;border-radius:8px;
+  color:var(--muted2);background:var(--bg3);
+}
+.gsp-item.on .gsp-item-icon{color:var(--accent-ink);background:rgba(var(--accent-rgb),.16)}
+.gsp-item-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.gsp-item-row{display:flex;align-items:baseline;gap:8px;min-width:0}
+/* Twee regels: een titel is hooguit 60 tekens, en "Welke facturen staan
+   langer dan 30 d…" op één regel liet net het woord weg waarop je zocht. */
+.gsp-item-title{
+  flex:1;min-width:0;font-size:13px;font-weight:500;line-height:1.35;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;
+}
+.gsp-item.on .gsp-item-title{font-weight:600}
+.gsp-item-time{flex:0 0 auto;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.gsp-item-snippet{
+  font-size:12px;line-height:1.45;color:var(--muted2);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+.gsp-mark{background:rgba(var(--accent-rgb),.32);color:inherit;border-radius:3px;padding:0 1px}
+
+.gsp-more{
+  all:unset;box-sizing:border-box;cursor:pointer;display:block;width:calc(100% - 4px);margin:10px 2px 2px;padding:9px;
+  text-align:center;font-size:12.5px;font-weight:600;color:var(--muted2);border:1px dashed var(--border2);border-radius:10px;
+}
+.gsp-more:hover{color:var(--text);background:var(--bg3)}
+.gsp-more:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.gsp-more:disabled{cursor:default;opacity:.6}
+
+.gsp-privacy{
+  display:flex;align-items:center;gap:6px;margin:0;padding:9px 14px;border-top:1px solid var(--border);
+  font-size:11.5px;color:var(--muted);
+}
+
+.gsp-state{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:16px;font-size:13px;color:var(--muted2)}
+.gsp-state p{margin:0}
+
+.gsp-empty,.gsp-placeholder{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;
+  padding:28px 18px;color:var(--muted2);
+}
+.gsp-placeholder{flex:1}
+.gsp-empty h3,.gsp-placeholder h3{margin:0;font-size:16px;color:var(--text)}
+.gsp-empty p,.gsp-placeholder p{margin:0;max-width:36ch;font-size:13px;line-height:1.55}
+
+/* Laden: grijze balken op de plek van wat komt, in plaats van een draaiend
+   rondje in een lege kolom. */
+@keyframes gsp-shimmer{0%{opacity:.45}50%{opacity:.85}100%{opacity:.45}}
+.gsp-skeleton{display:flex;flex-direction:column;gap:7px;padding:12px 10px}
+.gsp-skeleton span,.gsp-skeleton-msgs span{display:block;border-radius:6px;background:var(--bg4);animation:gsp-shimmer 1.3s ease-in-out infinite}
+.gsp-skeleton span:first-child{height:11px;width:72%}
+.gsp-skeleton span:last-child{height:9px;width:44%}
+.gsp-skeleton-msgs{display:flex;flex-direction:column;gap:14px;padding:6px 0}
+.gsp-skeleton-msgs span{height:46px;width:58%;border-radius:14px}
+.gsp-skeleton-msgs span:nth-child(2){align-self:flex-end;width:40%;height:34px}
+
+/* ── Het gesprek ──────────────────────────────────────────── */
+.gsp-thread-head{
+  display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);
+}
+.gsp-thread-id{flex:1;min-width:0}
+.gsp-thread-title{
+  margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em;line-height:1.3;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.gsp-thread-meta{margin:2px 0 0;font-size:11.5px;color:var(--muted)}
+/* Alleen op de telefoon: daar staat "Verder praten" onderaan een lang gesprek. */
+.gsp-head-continue{display:none}
+.gsp-icon-btn{
+  all:unset;box-sizing:border-box;cursor:pointer;flex:0 0 auto;display:grid;place-items:center;width:34px;height:34px;border-radius:9px;
+  color:var(--muted2);transition:background .14s,color .14s;
+}
+.gsp-icon-btn:hover{background:var(--bg3);color:var(--text)}
+.gsp-icon-btn.danger:hover{background:rgba(var(--danger-rgb),.12);color:var(--accent-r)}
+.gsp-icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.gsp-icon-btn:disabled{opacity:.5;cursor:default}
+
+.gsp-confirm{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:10px 12px 0;padding:11px 13px;border-radius:12px;
+  background:rgba(var(--danger-rgb),.08);border:1px solid rgba(var(--danger-rgb),.3);
+}
+.gsp-confirm>div:first-child{flex:1 1 260px;min-width:0}
+.gsp-confirm-title{margin:0 0 2px;font-size:13px;font-weight:600;color:var(--text)}
+.gsp-confirm-text{margin:0;font-size:12px;line-height:1.5;color:var(--muted2)}
+.gsp-confirm-error{margin:6px 0 0;font-size:12px;color:var(--accent-r)}
+.gsp-confirm-actions{display:flex;gap:8px;margin-left:auto}
+.gsp-danger{background:var(--accent-r,#e5484d);color:#fff}
+.gsp-danger:not(:disabled):hover{filter:brightness(1.08)}
+
+.gsp-thread-scroll{
+  flex:1;min-height:0;overflow-y:auto;padding:16px 18px 20px;display:flex;flex-direction:column;gap:12px;
+  background:var(--bg);overscroll-behavior:contain;
+}
+.gsp-thread-scroll:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.gsp-thread-empty{margin:auto;font-size:13px;color:var(--muted)}
+
+.gsp-day{display:flex;justify-content:center;margin:4px 0}
+.gsp-day span{
+  font-size:11px;font-weight:600;color:var(--muted);background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--r-pill,999px);padding:3px 10px;
+}
+
+.gsp-msg{display:flex;align-items:flex-end;gap:9px;max-width:100%}
+.gsp-msg.user{flex-direction:row-reverse}
+.gsp-avatar{
+  flex:0 0 auto;display:grid;place-items:center;width:28px;height:28px;border-radius:9px;
+}
+.gsp-msg.assistant .gsp-avatar{
+  color:#1a1a1a;
+  background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 80%,#fff 20%),color-mix(in srgb,var(--accent) 90%,#000 10%));
+}
+.gsp-msg.user .gsp-avatar{background:var(--bg4);color:var(--muted2)}
+.gsp-msg-body{display:flex;flex-direction:column;gap:6px;min-width:0;max-width:min(78%,640px)}
+.gsp-msg.user .gsp-msg-body{align-items:flex-end}
+.gsp-msg.assistant .gsp-msg-body{align-items:flex-start}
+.gsp-bubble{
+  padding:10px 13px;border-radius:14px;font-size:13.5px;line-height:1.55;
+  white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;
+}
+.gsp-msg.assistant .gsp-bubble{background:var(--bg3);border:1px solid var(--border);border-bottom-left-radius:4px;color:var(--text)}
+.gsp-msg.user .gsp-bubble{background:var(--accent);color:var(--on-accent);border-bottom-right-radius:4px;font-weight:500}
+.gsp-msg.user .gsp-mark{background:rgba(255,255,255,.55);color:inherit}
+.gsp-time{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums;padding:0 4px}
+
+/* Een voorstel van toen: wat het was en wat ermee gebeurde. Geen knop. */
+.gsp-proposal{
+  display:flex;align-items:flex-start;gap:12px;width:100%;max-width:520px;box-sizing:border-box;
+  padding:10px 12px;border-radius:12px;background:var(--bg2);border:1px solid var(--border);
+}
+.gsp-proposal-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.gsp-proposal-kicker{font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.gsp-proposal-title{font-size:13px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
+.gsp-proposal-sub{font-size:12px;color:var(--muted2);overflow-wrap:anywhere}
+.gsp-proposal-hint{margin-top:4px;font-size:11.5px;line-height:1.45;color:var(--muted2)}
+.gsp-pill{
+  flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;white-space:nowrap;
+  padding:4px 9px;border-radius:var(--r-pill,999px);background:var(--bg4);color:var(--muted2);
+}
+.gsp-pill[data-status="done"],.gsp-pill[data-status="approved"]{background:rgba(var(--ok-rgb),.14);color:var(--accent-g)}
+.gsp-pill[data-status="rejected"]{background:var(--bg4);color:var(--muted2)}
+.gsp-pill[data-status="failed"]{background:rgba(var(--danger-rgb),.13);color:var(--accent-r)}
+.gsp-pill[data-status="open"]{background:rgba(var(--warn-rgb),.14);color:var(--accent-o)}
+
+/* De weg terug naar de chat: ziet eruit als het invoerveld van een chat,
+   want dat is waar hij heen gaat. */
+.gsp-thread-foot{padding:10px 14px 12px;border-top:1px solid var(--border);background:var(--bg2)}
+.gsp-continue{
+  all:unset;box-sizing:border-box;cursor:pointer;width:100%;display:flex;align-items:center;gap:10px;
+  min-height:44px;padding:0 6px 0 14px;border-radius:12px;background:var(--bg3);border:1px solid var(--border);
+  color:var(--muted);font-size:13px;transition:border-color .15s,color .15s,background .15s;
+}
+.gsp-continue:hover{border-color:rgba(var(--accent-rgb),.55);color:var(--text)}
+.gsp-continue:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.gsp-continue-text{flex:1;min-width:0}
+.gsp-continue-key{
+  display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:var(--accent);color:var(--on-accent);
+}
+
+/* Breed: de lijst en het gesprek eindigen vlak boven de onderrand, precies
+   waar de zwevende knoppen van Gerrie en de teamchat staan. Zonder deze
+   ruimte lag de knop "Verder praten" eronder. */
+@media(min-width:900px){
+  .gsp-thread-foot{padding-right:150px}
+}
+
+/* ── Smal: het een na het ander ───────────────────────────── */
+@media(max-width:899px){
+  .gsp{display:block;height:auto}
+  /* Een gesprek openen schuift de pagina naar zijn kop. Zonder deze marge
+     viel die kop onder de titelbalk, en de terugknop met hem. */
+  .gsp-thread{scroll-margin-top:118px}
+  .gsp-list,.gsp-thread{border-radius:var(--r2,14px)}
+  .gsp-list-scroll,.gsp-thread-scroll{overflow:visible;flex:none}
+  .gsp-thread-scroll{padding:14px 12px 18px}
+  .gsp-msg-body{max-width:86%}
+}
+@media(max-width:760px){
+  /* Kop en knop op één regel: de lijst hoort zo hoog mogelijk te beginnen. */
+  .gsp-page .gsp-head{flex-wrap:nowrap}
+  .gsp-page .gsp-head>.gsp-new{width:auto;min-height:38px;margin-left:auto;padding:8px 12px}
+  .gsp-search{margin:10px 10px 4px}
+  .gsp-search input{font-size:16px}
+  .gsp-item{padding:11px 10px}
+  .gsp-thread-head{padding:10px 10px 10px 6px;gap:6px}
+  .gsp-head-continue{display:inline-flex;flex:0 0 auto}
+  .gsp-thread-title{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .gsp-confirm-actions{width:100%;justify-content:flex-end}
+  .gsp-confirm-actions .cc-btn{min-height:40px}
+  /* De zwevende Gerrie-knop staat rechtsonder; zonder deze ruimte viel de
+     knop "Verder praten" eronder. */
+  .gsp-thread-foot{padding-right:72px}
+}
+
+@media(prefers-reduced-motion:reduce){
+  .gsp-skeleton span,.gsp-skeleton-msgs span{animation:none}
+}
+
+/* ── In de chat: een voorstel uit een eerder gesprek ──────── */
+.gerrie-past-proposal{
+  display:flex;flex-direction:column;gap:2px;max-width:100%;box-sizing:border-box;
+  padding:8px 11px;border-radius:10px;background:var(--bg2);border:1px dashed var(--border2);
+}
+.gerrie-past-kicker{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.gerrie-past-proposal[data-status="done"] .gerrie-past-kicker,
+.gerrie-past-proposal[data-status="approved"] .gerrie-past-kicker{color:var(--accent-g)}
+.gerrie-past-proposal[data-status="failed"] .gerrie-past-kicker{color:var(--accent-r)}
+.gerrie-past-title{font-size:12.5px;color:var(--text);overflow-wrap:anywhere}
+.gerrie-head-close:disabled{opacity:.4;cursor:default}
+.gerrie-head-close:disabled:hover{background:transparent;color:var(--muted)}

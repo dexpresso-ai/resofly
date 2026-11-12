@@ -901,6 +901,16 @@ async function postGerrie(body: Record<string, unknown>): Promise<Record<string,
   return (await res.json()) as Record<string, unknown>;
 }
 
+/**
+ * Een eigen chat met Gerrie weggooien (Gerrie → Gesprekken). Via de edge
+ * function en niet rechtstreeks: de app schrijft niet in de ai_*-tabellen, en
+ * de functie gaat zelf na dat het een chat is, van jou, in deze organisatie.
+ * Wat Gerrie voorstelde en wat het kostte, blijft in het auditspoor staan.
+ */
+export async function deleteGerrieConversation(organizationId: UUID, conversationId: UUID): Promise<void> {
+  await postGerrie({ action: 'delete_conversation', organizationId, conversationId });
+}
+
 // Hier stond de multi-agent missie-API (planGerrieMission / estimateGerrieMission).
 // Het missiebord is vervangen door "Nu uitvoeren": één opdracht via streamGerrieReply.
 // De acties 'plan' en 'estimate' bestaan nog wél op gerrie-agent; die zijn bewust
