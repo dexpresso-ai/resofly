@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarRange, Check, Copy, ExternalLink, Lock, Maximize2, Minimize2, Repeat, RefreshCw, Send, ShieldCheck, X } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, CalendarSource, ConferenceProvider, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID, VideoServices } from '../types';
-import { Button, Input, Textarea, Select, normalizeColor } from '../components/Ui';
+import { Button, Input, Textarea, Select } from '../components/Ui';
 import { listExternalCalendarEvents, loadCalendarIntegrations } from '../lib/calendar-api';
+import { vividCalendarColor } from '../lib/calendarColors';
 import { addDays, startOfWeek } from '../lib/dates';
 import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
 import { TimeBlockGrid, slotSelectionToIso, type BookingOverlaySlot } from './CalendarPage';
@@ -509,7 +510,7 @@ function LinkDetail({ detail, organizationId, sources, allSources, currentUserId
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekAnchor, i)), [weekAnchor]);
   // Alle agenda's die je ziet, niet alleen de schrijfbare: een afspraak uit een
   // ICS-abonnement of een alleen-lezen Google-agenda had anders geen kleur.
-  const sourceColors = useMemo(() => new Map(allSources.map(s => [s.id, normalizeColor(s.color)])), [allSources]);
+  const sourceColors = useMemo(() => new Map(allSources.map(s => [s.id, vividCalendarColor(s.color)])), [allSources]);
   // De afspraken in het rooster: uit alle agenda's van wie de link maakte (de
   // ResoFly-agenda en de gekoppelde), niet alleen uit die van de link. Eerst
   // zag je hier je Google-afspraken niet als de link in je ResoFly-agenda

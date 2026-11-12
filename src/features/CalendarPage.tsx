@@ -55,6 +55,7 @@ import { TimeEntryModal } from './TimeTracking';
 import { calendarEventKey, calendarEventLinkMatchesEvent } from '../lib/calendar-links';
 import { safeHttpUrl } from '../lib/safeUrl';
 import { connectionStatusView } from '../lib/calendarConnection';
+import { vividCalendarColor } from '../lib/calendarColors';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
@@ -68,16 +69,31 @@ const THREE_DAY_COUNT = 3;
 const TOTAL_SLOTS = (HOUR_END - HOUR_START) * (60 / SLOT_MINUTES);
 const MIN_EVENT_HEIGHT_SLOTS = 0.85;
 // De volledige dag (00:00-24:00) blijft scrollbaar zodat ook de vroege/late uren
-// bereikbaar zijn. De rijhoogte schaalt zo dat de WERKDAG de zichtbare hoogte
-// vult (schermvullende blokken); de grid scrollt voor de overige uren en opent
-// automatisch op de werkdag-start.
+// bereikbaar zijn. De rijhoogte schaalt zo dat het venster hieronder (FitWindow:
+// in de agenda 07:00–20:00, elders de werkdag) de zichtbare hoogte vult; de grid
+// scrollt voor de overige uren en opent rond "nu" (vandaag in beeld) of op het
+// begin van dat venster.
 // De clamp houdt de rijen compact (Google-dichtheid, ~44-56px per uur i.p.v. de
 // oude ~100px per uur op grote schermen) zodat je in één oogopslag veel meer van
 // de dag ziet.
-const WORKDAY_SLOTS = (WORKDAY_END - WORKDAY_START) * (60 / SLOT_MINUTES);
-// Ondergrens iets ruimer dan de oude 22px: een afspraak van een half uur beslaat
-// precies één rij, en onder ~24px is er geen regel meer leesbaar te krijgen.
-const MIN_ROW_HEIGHT = 24;
+//
+// Het venster dat bij 1× in beeld past, is ruimer dan de werkdag: van 07:00 tot
+// 20:00. Tot november 2026 was dat precies 08:00–18:00, en dan zag je op een
+// gewoon laptopscherm tien uur en moest je voor een vroege afspraak of een
+// avond scrollen: geen overzicht. De werkdag zelf (de schaduw erbuiten) blijft
+// 08:00–18:00.
+//
+// Een half uur is één rij. In de agenda mag die tot 21px zakken: daar past nog
+// één regel in (tijd en titel, zie tb-ev-tight en blockDensity); met 24px zag je
+// op 1280×800 maar tien uur. Wie groter wil, zoomt in (Ctrl/⌘ + wiel, knijpen,
+// +); dat wordt onthouden.
+//
+// Alleen de agenda zelf krijgt dit ruimere venster. De weekplanner en de
+// boekingslinks gebruiken hetzelfde rooster met hun eigen koppen en houden de
+// werkdag (DEFAULT_FIT): daar is om meer overzicht niet gevraagd.
+export interface FitWindow { start: number; end: number; minRow: number }
+const DEFAULT_FIT: FitWindow = { start: WORKDAY_START, end: WORKDAY_END, minRow: 24 };
+const AGENDA_FIT: FitWindow = { start: 7, end: 20, minRow: 21 };
 const MAX_ROW_HEIGHT = 30;
 // Slepen & herschalen van agenda-items: de zichtbare dag beslaat DAY_MINUTES
 // minuten; tijden worden op SNAP_MIN-rasters afgerond zodat slepen netjes "klikt".
@@ -107,6 +123,21 @@ function clampZoom(zoom: number): number {
 function zoomedRowHeight(baseRow: number, zoom: number): number {
   const px = baseRow * clampZoom(zoom);
   return Math.min(ROW_PX_MAX, Math.max(ROW_PX_MIN, Math.round(px * 2) / 2));
+}
+
+/**
+ * Hoeveel tekst een blok toont: de krapste van wat de duur en wat de echte
+ * hoogte toelaten. Alleen op minuten ging het mis zodra de uren compacter
+ * werden (07:00–20:00 in beeld): een afspraak van een uur bleef "ruim" (tijd,
+ * twee regels titel en een locatie) in 52px, en de titel werd halverwege een
+ * regel afgeknipt.
+ */
+const DENSITY = [' tb-ev-tight', ' tb-ev-compact', ' tb-ev-cozy', ' tb-ev-roomy'] as const;
+function blockDensity(minutes: number, rowPx: number | null): typeof DENSITY[number] {
+  const byMinutes = minutes < 30 ? 0 : minutes < 45 ? 1 : minutes < 60 ? 2 : 3;
+  const px = (minutes / SLOT_MINUTES) * (rowPx ?? 26);
+  const byPixels = px < 22 ? 0 : px < 34 ? 1 : px < 64 ? 2 : 3;
+  return DENSITY[Math.min(byMinutes, byPixels)];
 }
 
 function readStoredZoom(): number {
@@ -366,6 +397,18 @@ function taskBlockStyle(color?: string | null): CSSProperties {
     '--event-text-soft': 'var(--muted2)',
     '--event-text-faint': 'var(--muted)',
   } as CSSProperties;
+}
+
+/**
+ * De kleur van een taak: die van zijn project, anders die van de klant. In het
+ * rooster stond dat al zo; de maandweergave gaf elke taak de accentkleur, en
+ * dan stond de hele maand vol gouden bolletjes.
+ */
+function taskColorOf(data: Pick<AppData, 'projects' | 'clients'>, task: Task): string {
+  const project = task.project_id ? data.projects.find(p => p.id === task.project_id) ?? null : null;
+  const clientId = project?.client_id ?? task.client_id ?? null;
+  const client = clientId ? data.clients.find(c => c.id === clientId) ?? null : null;
+  return normalizeHexColor(project?.color ?? client?.color ?? null);
 }
 
 function eventColorStyle(color?: string | null): CSSProperties {
@@ -888,6 +931,8 @@ type TimeBlockGridProps = {
   /** Zoomfactor rond de autofit-rijhoogte. Knijpen/Ctrl+wiel melden een nieuwe waarde via `onZoomChange`. */
   zoom?: number;
   onZoomChange?: (zoom: number) => void;
+  /** Welk deel van de dag bij 1× in beeld past; standaard de werkdag (zie FIT_* hierboven). */
+  fitWindow?: FitWindow;
   /** Bump deze waarde om het rooster opnieuw naar "nu" (of de werkdagstart) te scrollen.
    *  Bladeren naar een andere week doet dat bewust NIET: je blijft op dezelfde hoogte staan. */
   autoScrollKey?: number;
@@ -927,7 +972,7 @@ type TimeBlockGridProps = {
   ghostTaskId?: string | null;
 };
 
-export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>(function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, linkedTaskFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, autoScrollKey = 0, taskBand = 'deadline', bandLabel = 'Hele dag', taskColorFor, taskMetaFor, onMoveTask, onTaskBlockPointerDown, onTaskMenu, onToggleTaskDone, renderTaskBar, renderDayHeader, previewBlocks = [], draft = null, allowSelect, ghostTaskId = null }, ref) {
+export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>(function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, linkedTaskFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, fitWindow = DEFAULT_FIT, autoScrollKey = 0, taskBand = 'deadline', bandLabel = 'Hele dag', taskColorFor, taskMetaFor, onMoveTask, onTaskBlockPointerDown, onTaskMenu, onToggleTaskDone, renderTaskBar, renderDayHeader, previewBlocks = [], draft = null, allowSelect, ghostTaskId = null }, ref) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   // Loopt de tijdselectie via een vinger? Dan houden we de pagina stil.
@@ -1210,8 +1255,8 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
     };
   }, [interaction !== null, daysKey, pointerToCol, autoScrollFor, stopAutoScroll]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Meet de zichtbare hoogte en kies een rijhoogte zó dat de werkdag die hoogte
-  // vult (ruime blokken die het scherm vullen); de volledige dag blijft scrollbaar
+  // Meet de zichtbare hoogte en kies een rijhoogte zó dat 07:00–20:00 die hoogte
+  // vult (fitWindow); de volledige dag blijft scrollbaar
   // voor de vroege/late uren. Reageert op resize én op een groeiende "hele dag"-
   // balk via een ResizeObserver. useLayoutEffect voorkomt een flits.
   useLayoutEffect(() => {
@@ -1223,8 +1268,8 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
       const chrome = (headers?.offsetHeight ?? 0) + (allday?.offsetHeight ?? 0);
       const available = scrollEl.clientHeight - chrome;
       if (available <= 0) return;
-      const fitted = Math.floor(available / WORKDAY_SLOTS);
-      setRowHeight(Math.min(Math.max(fitted, MIN_ROW_HEIGHT), MAX_ROW_HEIGHT));
+      const fitted = Math.floor(available / ((fitWindow.end - fitWindow.start) * (60 / SLOT_MINUTES)));
+      setRowHeight(Math.min(Math.max(fitted, fitWindow.minRow), MAX_ROW_HEIGHT));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -1232,7 +1277,7 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
     const alldayEl = scrollEl.querySelector('.tb-allday-row');
     if (alldayEl) ro.observe(alldayEl);
     return () => ro.disconnect();
-  }, [daysKey]);
+  }, [daysKey, fitWindow.start, fitWindow.end, fitWindow.minRow]);
 
   // ── Zoomen: knijpen, Ctrl/⌘ + wiel ─────────────────────────────────────
   // `rowHeight` is de 1×-stand (autofit); de zoomfactor schaalt daaromheen.
@@ -1396,8 +1441,10 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
       const nowFraction = (nowDate.getHours() * 60 + nowDate.getMinutes()) / DAY_MINUTES;
       target = gridOffsetTop + nowFraction * slotHeight * TOTAL_SLOTS - scrollEl.clientHeight * 0.3;
     } else {
-      const workdayStartSlot = ((WORKDAY_START - HOUR_START) * 60) / SLOT_MINUTES;
-      target = gridOffsetTop + workdayStartSlot * slotHeight - 2;
+      // Op het begin van het venster dat in beeld past (in de agenda 07:00), zodat
+      // de hele werkdag plus de randen er in één keer staan.
+      const fitStartSlot = ((fitWindow.start - HOUR_START) * 60) / SLOT_MINUTES;
+      target = gridOffsetTop + fitStartSlot * slotHeight - 2;
     }
     // Instant (niet smooth): de agenda opent direct op de juiste positie; de
     // CSS `scroll-behavior:smooth` op de scroller zou de sprong anders annuleren.
@@ -1632,7 +1679,7 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
                 </div>
               ) : bar.task ? (
                 <button type="button" className="tb-ad-bar tb-ad-bar-task" key={bar.key}
-                  style={{ gridColumn: `${bar.startIdx + 1} / span ${bar.span}`, gridRow: bar.lane + 1 }}
+                  style={{ ...taskBlockStyle(taskColorFor?.(bar.task) ?? '#FFD966'), gridColumn: `${bar.startIdx + 1} / span ${bar.span}`, gridRow: bar.lane + 1 }}
                   onClick={() => onEditTask(bar.task!)} title={`Taak · ${bar.task.title}`}>
                   <span className="tb-ad-bar-title">{bar.task.title}</span>
                 </button>
@@ -1694,10 +1741,7 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
                     // roosterrij (~26px) hoog: daar zetten titel en starttijd zich
                     // naast elkaar op één regel ("Titel, 10:00", zoals Google) i.p.v.
                     // twee regels die elkaar verdringen.
-                    const densityClass = visibleDuration < 30 ? ' tb-ev-tight'
-                      : visibleDuration < 45 ? ' tb-ev-compact'
-                        : visibleDuration < 60 ? ' tb-ev-cozy'
-                          : ' tb-ev-roomy';
+                    const densityClass = blockDensity(visibleDuration, effectiveRow);
                     const blockStyle = {
                       top: `${segment.top}%`,
                       height: `${segment.height}%`,
@@ -1798,7 +1842,7 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
                     const height = Math.max(((block.endMin - block.startMin) / DAY_MINUTES) * 100, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
                     const fmt = (m: number) => formatHour(Math.floor(m / 60) % 24, Math.round(m % 60));
                     const minutes = block.endMin - block.startMin;
-                    const densityClass = minutes < 30 ? ' tb-ev-tight' : minutes < 45 ? ' tb-ev-compact' : minutes < 60 ? ' tb-ev-cozy' : ' tb-ev-roomy';
+                    const densityClass = blockDensity(minutes, effectiveRow);
                     return (
                       <div key={block.key} className={`tb-ev tb-ev-preview${block.kind === 'task' ? ' tb-task-block' : ''}${densityClass} ${block.className ?? ''}`}
                         style={{ ...(block.kind === 'task' ? taskBlockStyle(block.color) : eventColorStyle(block.color)), top: `${top}%`, height: `${height}%`, left: '2px', right: `calc(${EVENT_CLICK_STRIP} + 2px)` }}>
@@ -2005,7 +2049,8 @@ function layoutMonthWeek(week: Date[], events: CalendarExternalEvent[], tasks: T
    Google kapt een volle dag af met "+3 meer" en laat de rest zien in een klein
    zwevend kaartje bóven het rooster — je blijft in de maand staan. Alleen op de
    telefoon is dat te krap; daar schuift de dag in het paneel onder het rooster. */
-function MonthDayCard({ day, rect, items, sourceColors, onOpenDay, onOpenEvent, onEditTask, onClose }: {
+function MonthDayCard({ day, rect, items, sourceColors, taskColor, onOpenDay, onOpenEvent, onEditTask, onClose }: {
+  taskColor?: (task: Task) => string;
   day: Date;
   rect: { left: number; top: number; width: number; height: number };
   items: MonthDayItem[];
@@ -2045,7 +2090,7 @@ function MonthDayCard({ day, rect, items, sourceColors, onOpenDay, onOpenEvent, 
         </button>
         <button type="button" className="cm-daycard-close" onClick={onClose} aria-label="Sluiten"><X size={15} /></button>
       </div>
-      <MonthDayItemList items={items} sourceColors={sourceColors} onOpenEvent={ev => { onClose(); onOpenEvent(ev); }} onEditTask={task => { onClose(); onEditTask(task); }} />
+      <MonthDayItemList items={items} sourceColors={sourceColors} taskColor={taskColor} onOpenEvent={ev => { onClose(); onOpenEvent(ev); }} onEditTask={task => { onClose(); onEditTask(task); }} />
     </div>
   </>;
 }
@@ -2065,9 +2110,11 @@ function monthDayItems(day: Date, events: CalendarExternalEvent[], tasks: Task[]
   ];
 }
 
-function MonthDayItemList({ items, sourceColors, onOpenEvent, onEditTask }: {
+function MonthDayItemList({ items, sourceColors, taskColor, onOpenEvent, onEditTask }: {
   items: MonthDayItem[];
   sourceColors: Map<string, string>;
+  /** De kleur van een taak (project, anders klant); zonder valt het bolletje terug op de accentkleur. */
+  taskColor?: (task: Task) => string;
   onOpenEvent: (event: CalendarExternalEvent) => void;
   onEditTask: (task: Task) => void;
 }) {
@@ -2082,7 +2129,7 @@ function MonthDayItemList({ items, sourceColors, onOpenEvent, onEditTask }: {
         {item.event.meeting_url && <Video size={12} className="cm-dayitem-video" />}
       </button>
     ) : item.task ? (
-      <button type="button" className="cm-dayitem is-task" key={item.key} onClick={() => onEditTask(item.task!)}>
+      <button type="button" className="cm-dayitem is-task" key={item.key} style={taskColor ? eventColorStyle(taskColor(item.task)) : undefined} onClick={() => onEditTask(item.task!)}>
         <span className="cm-dayitem-dot" aria-hidden="true" />
         <span className="cm-dayitem-time">Taak</span>
         <span className="cm-dayitem-title">{item.task.title}</span>
@@ -2225,7 +2272,7 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                     if (chip.kind === 'task' && chip.task) {
                       const task = chip.task;
                       return (
-                        <button type="button" className="cm-chip is-task" key={chip.key} style={place}
+                        <button type="button" className="cm-chip is-task" key={chip.key} style={{ ...eventColorStyle(taskColorOf(data, task)), ...place }}
                           onClick={() => onEditTask(task)}
                           title={`Taak · ${task.title} · ${data.projects.find(p => p.id === task.project_id)?.name ?? 'Project'}`}>
                           <span className="cm-chip-dot" aria-hidden="true" />
@@ -2289,14 +2336,14 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
             </div>
             <Button onClick={() => onOpenDay(selectedDay)}>Open dag</Button>
           </header>
-          <MonthDayItemList items={monthDayItems(selectedDay, events, tasks)} sourceColors={sourceColors}
+          <MonthDayItemList items={monthDayItems(selectedDay, events, tasks)} sourceColors={sourceColors} taskColor={task => taskColorOf(data, task)}
             onOpenEvent={onOpenEvent} onEditTask={onEditTask} />
         </section>
       )}
 
       {moreDay && (
         <MonthDayCard day={moreDay.day} rect={moreDay.rect} items={monthDayItems(moreDay.day, events, tasks)}
-          sourceColors={sourceColors} onOpenDay={onOpenDay} onOpenEvent={onOpenEvent} onEditTask={onEditTask}
+          sourceColors={sourceColors} taskColor={task => taskColorOf(data, task)} onOpenDay={onOpenDay} onOpenEvent={onOpenEvent} onEditTask={onEditTask}
           onClose={() => setMoreDay(null)} />
       )}
     </div>
@@ -3998,7 +4045,8 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     [integrations.sources, currentUserId],
   );
   const sourceColors = useMemo(
-    () => new Map(integrations.sources.map(s => [s.id, normalizeHexColor(s.color)])),
+    // Bleke kleuren van Google/Microsoft in hun volle variant (alleen weergave; zie calendarColors.ts).
+    () => new Map(integrations.sources.map(s => [s.id, vividCalendarColor(s.color)])),
     [integrations.sources],
   );
   // Je eigen agenda's (ResoFly en gekoppeld): alleen daarin maakt een afspraak
@@ -4050,12 +4098,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   );
   // Taakblokken (taken met een tijd uit de weekplanner) dragen de kleur van
   // hun project, en eronder in één regel waar ze bij horen.
-  const taskColorFor = useCallback((task: Task): string => {
-    const project = task.project_id ? data.projects.find(p => p.id === task.project_id) ?? null : null;
-    const clientId = project?.client_id ?? task.client_id ?? null;
-    const client = clientId ? data.clients.find(c => c.id === clientId) ?? null : null;
-    return normalizeHexColor(project?.color ?? client?.color ?? null);
-  }, [data.projects, data.clients]);
+  const taskColorFor = useCallback((task: Task): string => taskColorOf(data, task), [data.projects, data.clients]); // eslint-disable-line react-hooks/exhaustive-deps
   const taskMetaFor = useCallback((task: Task): string | null => {
     const project = task.project_id ? data.projects.find(p => p.id === task.project_id) ?? null : null;
     const clientId = project?.client_id ?? task.client_id ?? null;
@@ -4792,7 +4835,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
             {srcs.map(src => {
               const ownsSrc = canManageSource(src);
               return <div className="source-row privacy" key={src.id}>
-                <span className="source-dot" style={{ background: src.color || '#FFD966' }} />
+                <span className="source-dot" style={{ background: vividCalendarColor(src.color, '#FFD966') }} />
                 <div className="source-info">
                   <strong>{src.name}</strong>
                   <span>{src.is_primary ? 'Primair · ' : ''}{src.access_role || 'geen rol'}{src.timezone ? ` · ${src.timezone}` : ''}</span>
@@ -4834,7 +4877,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
             const owns = canManageSource(src);
             return (
               <div className="source-row privacy" key={src.id}>
-                <span className="source-dot" style={{ background: src.color || '#2563eb' }} />
+                <span className="source-dot" style={{ background: vividCalendarColor(src.color, '#2563EB') }} />
                 <div className="source-info">
                   <strong>{src.name}</strong>
                   <span>{src.visibility === 'organization' ? 'Gedeeld met de organisatie' : 'Privé'}{owns ? '' : ' · van een teamlid'}</span>
@@ -4878,7 +4921,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
             const owns = canManageSource(src);
             return (
               <div className="source-row privacy" key={src.id}>
-                <span className="source-dot" style={{ background: src.color || '#0891b2' }} />
+                <span className="source-dot" style={{ background: vividCalendarColor(src.color, '#0891B2') }} />
                 <div className="source-info">
                   <strong>{src.name} <span className="privacy-pill">alleen-lezen</span></strong>
                   <span>{src.feed_last_error
@@ -5040,7 +5083,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
               sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} linkedTaskFor={linkedTaskFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
               taskColorFor={taskColorFor} taskMetaFor={taskMetaFor} onMoveTask={onMoveTask}
               onOpenDay={view === 'day' ? undefined : openDay}
-              zoom={zoom} onZoomChange={applyZoom} autoScrollKey={autoScrollKey}
+              zoom={zoom} onZoomChange={applyZoom} fitWindow={AGENDA_FIT} autoScrollKey={autoScrollKey}
               bookingMode={bookingMode} bookingSlots={bookingOverlay} onRemoveBookingSlot={handleRemoveBookingSlot} />
           ) : view === 'month' ? (
             <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
