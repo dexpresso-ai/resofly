@@ -137,8 +137,14 @@ const PAGES = {
   // eronder; clients[0] heeft er een van elk in de seed.
   // De weergave expliciet: de opslag van tickets-table hierboven blijft anders
   // in dezelfde browser staan, en dan meet "de lijst" stilletjes de tabel.
-  'tickets-archive': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: '.ticket-archive-toggle' },
-  'tickets-archive-table': { page: 'tickets', storage: { 'resofly.tickets.view': 'table' }, prepare: '.ticket-archive-toggle' },
+  // 2026-11-12 — de schakelaar is nu Actief · Alle · Archief.
+  'tickets-archive': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: '.ticket-scope-btn[data-scope="archive"]' },
+  'tickets-archive-table': { page: 'tickets', storage: { 'resofly.tickets.view': 'table' }, prepare: '.ticket-scope-btn[data-scope="archive"]' },
+  // 2026-11-12 — zoeken en filteren zitten achter een knop. Open mogen ze
+  // niet buiten beeld lopen: het zoekveld krijgt op de telefoon een eigen
+  // rij, het filterpaneel zijn chips en keuzelijsten.
+  'tickets-search': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: ['.ticket-search-toggle', { fill: '.ticket-search input', value: 'website' }] },
+  'tickets-filters': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: '.ticket-filter-toggle' },
   'client-tickets': { page: 'client', clientId: seed.clients[0].id, prepare: '.client-tab-btn:has-text("Tickets")' },
   quotes: 'quotes', invoices: 'invoices', contracts: 'contracts', ledger: 'ledger', bank: 'bank', pnl: 'pnl',
   'vat-returns': 'vat-returns', suppliers: 'suppliers', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
@@ -288,19 +294,23 @@ const FIRST_ITEM = {
   projects: { selector: '.project-list-card', maxTop: 321 },
   'projects-table': { selector: '.projects-table tbody tr', maxTop: 346 },
   marketing: { selector: '.mk-campaign-table tbody tr', maxTop: 366 },
-  tickets: { selector: '.ticket-item', maxTop: 356 },
+  // 2026-11-12 — zoeken en filteren zitten achter een knop in de werkbalk; de
+  // vaste zoekkaart erboven is weg. Gemeten: lijst 226px, tabel 262px,
+  // archief 306px en archieftabel 342px. De grenzen gingen mee omlaag en
+  // liggen weer 20% hoger, zodat die kaart niet ongemerkt terugkomt.
+  tickets: { selector: '.ticket-item', maxTop: 272 },
   // 2026-09-22 — de tabelweergave is op de telefoon een eigen, smalle tabel
   // (.tk-ctable) in plaats van een kaartstapel. Gemeten: eerste rij op 310px
   // (de kolomkop van 34px zit erboven); de grens ligt 20% hoger. Op de tablet
   // staat de brede tabel en telt deze regel niet.
-  'tickets-table': { selector: '.tk-ctable tbody tr', maxTop: 372 },
+  'tickets-table': { selector: '.tk-ctable tbody tr', maxTop: 315 },
   // 2026-11-05 — het archief van tickets, het tabblad Tickets in het
   // klantdossier en dat in het portaal. Gemeten: 355px (de uitleg boven het
   // archief kost op de telefoon drie regels), 391px, 670px (kop, kerncijfers,
   // tabbladen en zoekbalk van het dossier gaan voor) en 170px. De grenzen
   // liggen 20% hoger.
-  'tickets-archive': { selector: '.ticket-item', maxTop: 426 },
-  'tickets-archive-table': { selector: '.tk-ctable tbody tr', maxTop: 469 },
+  'tickets-archive': { selector: '.ticket-item', maxTop: 368 },
+  'tickets-archive-table': { selector: '.tk-ctable tbody tr', maxTop: 411 },
   'client-tickets': { selector: '.client-ticket-list .ticket-item', maxTop: 804 },
   'portal-tickets': { selector: '.portal-row', maxTop: 204 },
   invoices: { selector: '.quote-table tbody tr', maxTop: 496 },

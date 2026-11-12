@@ -58,8 +58,28 @@ export function ticketInScope(ticket: Pick<Ticket, 'status'>, scope: TicketScope
   return scope === 'archive' ? isTicketArchived(ticket) : !isTicketArchived(ticket);
 }
 
+/* ── De ticketpagina: actief, alle, archief ────────────────────────────────
+ * Op de pagina Tickets begin je bij wat nog werk is: nieuw, review en
+ * goedgekeurd. Daarvóór opende de pagina op de hele werklijst, met geweigerde
+ * en omgezette tickets ertussen, en zocht je het werk eruit met de chip
+ * "Openstaand". "Alle" toont alles, ook het archief; "Archief" alleen wat
+ * afgehandeld is. Het klantdossier houdt zijn werklijst (ticketInScope). */
+export type TicketListScope = 'active' | 'all' | 'archive';
+
+export function ticketInListScope(ticket: Pick<Ticket, 'status'>, scope: TicketListScope): boolean {
+  if (scope === 'active') return TICKET_OPEN_STATUSES.has(ticket.status);
+  if (scope === 'archive') return isTicketArchived(ticket);
+  return true;
+}
+
+/** Welke statussen je binnen een lijst nog kunt kiezen. In het archief geen: daar is alles afgehandeld. */
+export function ticketStatusesInListScope(scope: TicketListScope): TicketStatus[] {
+  if (scope === 'archive') return [];
+  return scope === 'active' ? TICKET_STATUS_ORDER.filter(status => TICKET_OPEN_STATUSES.has(status)) : [...TICKET_STATUS_ORDER];
+}
+
 /**
- * Kan dit ticket met één klik op afgehandeld? Niet als het al afgehandeld is,
+ * Kan dit ticket met één klik op afgehandeld?Niet als het al afgehandeld is,
  * en niet als het een project werd: dan zet de database de status toch terug
  * op omgezet (normalize_ticket_conversion_state).
  */

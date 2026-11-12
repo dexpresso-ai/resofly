@@ -4377,19 +4377,75 @@ body::before{
 }
 @media(max-width:760px){.ticket-toolbar{display:flex}.ticket-view-switch{width:100%}.ticket-view-switch button{flex:1;justify-content:center}}
 
-/* ── Tickets: werklijst en archief ─────────────────────────────────────────
-   Afgehandeld verdwijnt van de werklijst naar het archief. De schakelaar zit
-   naast Lijst/Tabel en niet in een eigen rij: op een telefoon kost elke rij
-   boven de lijst een ticket minder in beeld (tests/mobile meet dat). Hij
-   heeft dezelfde vorm als de weergavekeuze, zodat hij als bediening leest en
-   niet als nog een filterchip. */
-.ticket-toolbar-start{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
-.ticket-archive-toggle{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--muted2);font:inherit;font-size:12px;font-weight:700;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
-.ticket-archive-toggle:hover{color:var(--text);border-color:var(--border2)}
-.ticket-archive-toggle:focus-visible{outline:none;box-shadow:var(--ring)}
-.ticket-archive-toggle[aria-pressed="true"]{background:rgba(var(--accent-rgb),.1);border-color:rgba(var(--accent-rgb),.5);color:var(--accent-ink)}
-.ticket-archive-count{min-width:18px;padding:1px 6px;border-radius:999px;background:var(--bg4);color:var(--muted2);font-size:10.5px;line-height:16px;text-align:center}
-.ticket-archive-toggle[aria-pressed="true"] .ticket-archive-count{background:rgba(var(--accent-rgb),.18);color:var(--accent-ink)}
+/* ── Tickets: de werkbalk ──────────────────────────────────────────────────
+   Lijst/Tabel, dan welke tickets (Actief · Alle · Archief), en rechts Zoeken,
+   Filteren en Nieuw ticket. Zoeken en filteren stonden in een vaste kaart van
+   ruim 200px onder deze balk; nu zijn het knoppen die pas openklappen als je
+   ze nodig hebt (Tickets.tsx, TicketSearch en TicketFilterPanel). De
+   lijstkeuze heeft dezelfde vorm als de weergavekeuze, zodat hij als
+   bediening leest en niet als nog een filterchip. */
+.ticket-toolbar{justify-content:flex-start;gap:8px}
+.ticket-scope{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--border);border-radius:12px;background:var(--bg2)}
+.ticket-scope-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;background:transparent;color:var(--muted2);font:inherit;font-size:12px;font-weight:700;padding:7px 12px;border-radius:9px;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
+.ticket-scope-btn:hover{color:var(--text)}
+.ticket-scope-btn:focus-visible{outline:none;box-shadow:var(--ring)}
+.ticket-scope-btn[aria-pressed="true"]{background:var(--bg4);color:var(--text);box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.3 * var(--shade-k)))}
+.ticket-scope-btn svg{flex:none}
+.ticket-scope-count{min-width:18px;padding:1px 6px;border-radius:999px;background:var(--bg4);color:var(--muted2);font-size:10.5px;line-height:16px;text-align:center}
+.ticket-scope-btn[aria-pressed="true"] .ticket-scope-count{background:rgba(var(--accent-rgb),.18);color:var(--accent-ink)}
+/* Zoeken en Filteren: zelfde hoogte en rand als de keuzes links ervan. */
+.ticket-tool{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--muted2);font:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
+.ticket-tool:hover{color:var(--text);border-color:var(--border2)}
+.ticket-tool:focus-visible{outline:none;box-shadow:var(--ring)}
+.ticket-tool svg{flex:none}
+.ticket-search-toggle,.ticket-search{margin-left:auto}
+.ticket-filter-toggle.has-active{border-color:rgba(var(--accent-rgb),.5);color:var(--accent-ink)}
+.ticket-filter-toggle.is-open{border-color:rgba(var(--accent-rgb),.5);background:rgba(var(--accent-rgb),.1);color:var(--accent-ink)}
+.ticket-tool-count{min-width:18px;padding:1px 6px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:10.5px;line-height:16px;text-align:center}
+/* Het open zoekveld: het krimpt mee voordat de balk een regel bijneemt. */
+.ticket-search{display:flex;align-items:center;gap:6px;flex:0 1 280px;min-width:170px;min-height:36px;padding:0 5px 0 11px;border:1px solid var(--border2);border-radius:12px;background:var(--bg2);color:var(--muted2);transition:border-color .15s,box-shadow .15s}
+.ticket-search:focus-within{border-color:rgba(var(--accent-rgb),.55);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.12)}
+.ticket-search>svg{flex:none}
+.ticket-search input{flex:1 1 auto;min-width:0;border:0;outline:none;background:transparent;color:var(--text);font:inherit;font-size:13px;padding:7px 0;-webkit-appearance:none;appearance:none}
+.ticket-search input::placeholder{color:var(--muted)}
+.ticket-search input::-webkit-search-cancel-button{-webkit-appearance:none;display:none}
+.ticket-search-clear{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:transparent;color:var(--muted2);cursor:pointer}
+.ticket-search-clear:hover{background:var(--bg4);color:var(--text)}
+.ticket-search-clear:focus-visible{outline:none;box-shadow:var(--ring)}
+/* Het filterpaneel: open zolang je filtert, Klaar klapt het dicht. */
+.ticket-filter-panel{display:grid;gap:12px;margin:0 0 12px;padding:14px;border:1px solid var(--border);border-radius:16px;background:var(--bg2)}
+.tfp-chips{display:flex;flex-wrap:wrap;gap:6px}
+.tfp-chip{position:relative;display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 11px;border:1px solid var(--border);border-radius:999px;color:var(--muted2);font-size:12px;font-weight:600;cursor:pointer;user-select:none;transition:background .15s,border-color .15s,color .15s}
+.tfp-chip:hover{border-color:var(--border2);color:var(--text)}
+.tfp-chip input{position:absolute;width:1px;height:1px;margin:0;opacity:0;pointer-events:none}
+.tfp-chip svg{display:none;flex:none;color:var(--accent-ink)}
+.tfp-chip.is-on{border-color:rgba(var(--accent-rgb),.5);background:rgba(var(--accent-rgb),.12);color:var(--text)}
+.tfp-chip.is-on svg{display:block}
+.tfp-chip.is-empty{opacity:.55}
+.tfp-chip:has(input:focus-visible){box-shadow:var(--ring)}
+.tfp-chip-n{min-width:18px;padding:1px 6px;border-radius:999px;background:var(--bg4);color:var(--muted2);font-size:10.5px;line-height:16px;text-align:center}
+.tfp-chip.is-on .tfp-chip-n{background:rgba(var(--accent-rgb),.18);color:var(--accent-ink)}
+.tfp-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,240px));gap:10px}
+.tfp-field{gap:6px}
+.tfp-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding-top:12px;border-top:1px solid var(--border)}
+.tfp-count{margin:0 auto 0 0;font-size:12px;color:var(--muted2)}
+.tfp-count b,.tfs-count b{color:var(--text);font-weight:700}
+.tfp-clear,.tfp-done{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 13px;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--muted2);font:inherit;font-size:12px;font-weight:700;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.tfp-clear:hover,.tfp-done:hover{border-color:var(--border2);color:var(--text)}
+.tfp-done{background:var(--bg4);color:var(--text)}
+.tfp-clear:focus-visible,.tfp-done:focus-visible{outline:none;box-shadow:var(--ring)}
+/* Dicht betekent niet vergeten: wat aanstaat, blijft hier als chip met een kruisje. */
+.ticket-filter-summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.tfs-count{margin:0 4px 0 0;font-size:12px;color:var(--muted2)}
+.tfs-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;min-height:28px;padding:0 8px 0 11px;border:1px solid rgba(var(--accent-rgb),.35);border-radius:999px;background:rgba(var(--accent-rgb),.08);color:var(--text);font:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:border-color .15s,background .15s}
+.tfs-chip:hover{border-color:rgba(var(--accent-rgb),.6);background:rgba(var(--accent-rgb),.14)}
+.tfs-chip:focus-visible{outline:none;box-shadow:var(--ring)}
+.tfs-chip-key{color:var(--muted2);font-weight:500}
+.tfs-chip svg{flex:none;color:var(--muted2)}
+.tfs-clear{display:inline-flex;align-items:center;gap:5px;padding:4px 6px;border:0;border-radius:8px;background:none;color:var(--accent-ink);font:inherit;font-size:12px;font-weight:700;cursor:pointer}
+.tfs-clear:hover{text-decoration:underline}
+.tfs-clear:focus-visible{outline:none;box-shadow:var(--ring)}
+.ticket-empty-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
 /* De uitleg boven het archief: waar je bent en hoe je terugkomt. */
 .ticket-archive-note{display:flex;align-items:flex-start;gap:10px;margin:0 0 12px;padding:10px 14px;border:1px dashed var(--border2);border-radius:12px;color:var(--muted2);font-size:12.5px;line-height:1.5}
 .ticket-archive-note>svg{flex:none;margin-top:2px;color:var(--muted)}
@@ -10733,15 +10789,26 @@ button.task-agenda-when:hover{text-decoration:underline}
   .ticket-stat .ts-label{margin:0;font-size:11px;letter-spacing:.02em;text-transform:none;font-weight:600}
   .ticket-stat .ts-val{font-size:13px;line-height:1}
   .ticket-stat.as-filter:hover{transform:none}
-  .ticket-toolbar{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;margin-bottom:8px}
+  .ticket-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:8px}
   .ticket-view-switch{width:auto;flex:0 0 auto}
   .ticket-view-switch button{flex:0 0 auto;padding:7px 10px}
   .ticket-toolbar .btn-primary{flex:1 1 auto;min-height:38px}
-  /* Het archief deelt die rij: alleen het icoon en de teller, het woord staat
-     in aria-label en title. */
-  .ticket-toolbar-start{flex:0 0 auto;flex-wrap:nowrap;gap:6px}
-  .ticket-archive-toggle{min-height:38px;padding:0 10px}
-  .ticket-archive-label{display:none}
+  /* Zoeken en Filteren delen die rij: alleen het icoon, het woord staat in
+     aria-label en title. */
+  .ticket-tool{min-height:38px;padding:0 11px}
+  .ticket-tool-label{display:none}
+  .ticket-search-toggle{margin-left:0}
+  /* Actief · Alle · Archief op een eigen rij over de hele breedte: naast de
+     knoppen paste het niet, en dit is de keuze die je het vaakst maakt. */
+  .ticket-scope{order:5;flex:1 0 100%}
+  .ticket-scope-btn{flex:1 1 0;min-width:0;padding:7px 8px}
+  /* Een open zoekveld krijgt ook een eigen rij; tussen de knoppen werd het
+     te smal om te lezen. 16px: kleiner en iOS zoomt in zodra je tikt. */
+  .ticket-search{order:6;flex:1 0 100%;min-height:42px;margin-left:0}
+  .ticket-search input{font-size:16px}
+  .ticket-filter-panel{padding:12px;margin-bottom:8px;border-radius:14px}
+  .tfp-fields{grid-template-columns:1fr 1fr;gap:8px}
+  .ticket-filter-summary{margin-bottom:8px}
   .ticket-list{gap:6px}
   .ticket-item{padding:10px 12px}
 
