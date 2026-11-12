@@ -242,6 +242,30 @@ wrangler dev --local --port 8788
 node tests/stromen/werker-documenten.mjs   # MEDIA_DEV_URL / MEDIA_DEV_SIGNING_SECRET / MEDIA_DEV_INTERNAL_SECRET
 ```
 
+Zet ook `COLLABORA_URL` in `[vars]` (een adres waar niets draait is genoeg): zonder die
+waarde geeft de PDF-omzetting een 500 in plaats van de weigering die de test verwacht.
+
+## Werkertest: de galerij (`werker-galerij.mjs`)
+
+Dezelfde worker en dezelfde stack, nu voor de galerij. Getoetst:
+- uploaden en kijken per rol, en niet bij de buren;
+- dat twee keer openen hetzelfde token geeft, en de cache-instelling van een beeld;
+- range en HEAD, de zip;
+- wie een foto of album mag verwijderen: niet de buren, een kijker, de boekhouder of wie
+  Projecten alleen leest;
+- dat de bestanden daarna uit R2 verdwijnen, via `/gallery/purge`, via de geplande taak en na
+  een verwijderd project, met de tweede ronde voor een te laat geland bestand;
+- dat een rij die naar het bestand van een ander album wijst, dat bestand niet kost.
+
+```bash
+# als hierboven, maar met de geplande taak aan:
+wrangler dev --local --port 8788 --test-scheduled
+MEDIA_DEV_DIR=<map van wrangler dev> node tests/stromen/werker-galerij.mjs
+```
+
+`MEDIA_DEV_DIR` is optioneel: daarmee zet de test een bestand rechtstreeks in de lokale R2,
+zoals een upload die pas na het verwijderen landt.
+
 ## Bestanden
 
 | Bestand | Wat |
@@ -252,6 +276,7 @@ node tests/stromen/werker-documenten.mjs   # MEDIA_DEV_URL / MEDIA_DEV_SIGNING_S
 | `nep-agenda.mjs` | nep-Google en nep-Microsoft voor de agendakoppeling (codes, tokens, agendalijsten, afspraken, intrekken) |
 | `nep-ai.mjs` | nep-ElevenLabs (Scribe, synchroon en met webhook, ondertekend zoals ElevenLabs) en nep-Claude (de notulen) |
 | `werker-documenten.mjs` | de werkertest hierboven (los te draaien, niet via `run.mjs`) |
+| `werker-galerij.mjs` | de werkertest voor de galerij (los te draaien, niet via `run.mjs`) |
 | `supabase.mjs` | PostgREST als gebruiker of als server, `psql` voor wat alleen de tijd doet |
 | `functies.mjs` | roept een functie aan met een `Request`, zoals de browser of Mollie |
 | `wereld.mjs` | een organisatie met alle rollen, bedrijfsgegevens en twee klanten met portaal |

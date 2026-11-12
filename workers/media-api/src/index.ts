@@ -113,6 +113,24 @@ export default {
       return errorResponse('Internal server error', 500, context);
     }
   },
+
+  /**
+   * Geplande taak (crons in wrangler.toml): werkt de opruimwachtrij van de
+   * galerij af. De app roept /gallery/purge meteen na het verwijderen aan,
+   * maar dat mist alles waar geen app bij is: een tabblad dat dichtging, een
+   * verwijderd project of een verwijderde organisatie (cascade), en de tweede
+   * ronde over een verwijderde map.
+   */
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil((async () => {
+      try {
+        const result = await drainGalleryPurgeQueue(env, {}, { maxRows: 500, deadline: Date.now() + 5 * 60 * 1000 });
+        if (result.done || result.failed) console.log('galerij-opruimen', result);
+      } catch (error) {
+        console.error('galerij-opruimen mislukt', error instanceof Error ? error.message : String(error));
+      }
+    })());
+  },
 };
 
 async function routeRequest(request: Request, env: Env, context: RouteContext): Promise<Response> {
@@ -245,6 +263,11 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
   }
   if (method === 'POST' && pathname === '/gallery/view-session') {
     return handleGalleryViewSession(request, env, context);
+  }
+  // Na het verwijderen van een album, item of coverbeeld: de bestanden in R2
+  // en de kijkkopieën bij Stream meteen weghalen (zie handleGalleryPurge).
+  if (method === 'POST' && pathname === '/gallery/purge') {
+    return handleGalleryPurge(request, env, context);
   }
   // Interne route (shared secret): tokenbundels voor portaal + publieke deellink.
   if (method === 'POST' && pathname === '/internal/gallery/tokens') {
@@ -954,6 +977,23 @@ type GalleryTokenBundle = {
   exp: number;
 };
 
+/**
+ * Stapgrootte van de vervaltijd. Een token met een vervaltijd tot op de
+ * milliseconde was bij elke keer openen nieuw, en daarmee elke beeld-URL: de
+ * browser downloadde alle miniaturen opnieuw, ook die hij net nog had. Nu
+ * rondt de vervaltijd af op tien minuten. Wie een galerij binnen hetzelfde blok
+ * opnieuw opent, krijgt precies hetzelfde token (HMAC en de RSA-handtekening
+ * van Stream zijn allebei deterministisch), dus dezelfde URL's, en de browser
+ * neemt de beelden uit zijn cache. Een token leeft hierdoor nooit langer dan
+ * de gevraagde levensduur, hoogstens een blok korter.
+ */
+const GALLERY_TOKEN_STEP_MS = 10 * 60 * 1000;
+
+function galleryTokenExp(now: number, ttlMs: number): number {
+  const step = Math.max(1000, Math.min(GALLERY_TOKEN_STEP_MS, Math.floor(ttlMs / 4)));
+  return Math.floor((now + ttlMs) / step) * step;
+}
+
 async function buildGalleryTokenBundle(
   env: Env,
   organizationId: string,
@@ -961,28 +1001,31 @@ async function buildGalleryTokenBundle(
   allowDownload: boolean,
   quality: 'original' | 'web',
   ttlMs: number,
+  streamItems?: GalleryItemRow[],
 ): Promise<GalleryTokenBundle> {
   const secret = gallerySecret(env);
-  const exp = Date.now() + ttlMs;
+  const exp = galleryTokenExp(Date.now(), ttlMs);
   const mediaToken = await signGalleryToken(
     { t: 'gal', org: organizationId, gal: galleryId, exp, dl: allowDownload, q: quality },
     secret,
   );
 
   const streamTokens: Record<string, string> = {};
-  const items = await fetchGalleryItemRows(env, galleryId, organizationId, { onlyStream: true });
+  const items = streamItems ?? await fetchGalleryItemRows(env, galleryId, organizationId, { onlyStream: true });
   const expSeconds = Math.floor(exp / 1000);
   // Het Stream-account is gedeeld: een token voor een id is geldig voor elke
   // video met dat id. Staat een id ook bij een andere organisatie, dan tekenen
   // we alleen als de Stream-meta zegt dat de video van deze organisatie is.
   const uids = [...new Set(items.map((item) => item.stream_uid).filter((uid): uid is string => Boolean(uid)))];
+  if (uids.length === 0) return { mediaToken, streamTokens, exp };
   const contested = await streamUidsUsedElsewhere(env, uids, organizationId);
-  for (const item of items) {
-    if (!item.stream_uid) continue;
-    if (contested.has(item.stream_uid) && !(await streamMetaOwnedBy(env, item.stream_uid, organizationId))) continue;
-    const token = await streamSignedToken(env, item.stream_uid, expSeconds, allowDownload);
-    if (token) streamTokens[item.stream_uid] = token;
-  }
+  // Tegelijk tekenen: na elkaar kostte een videogalerij één ronde per video.
+  const signed = await Promise.all(uids.map(async (uid) => {
+    if (contested.has(uid) && !(await streamMetaOwnedBy(env, uid, organizationId))) return null;
+    const token = await streamSignedToken(env, uid, expSeconds, allowDownload);
+    return token ? ([uid, token] as const) : null;
+  }));
+  for (const entry of signed) if (entry) streamTokens[entry[0]] = entry[1];
 
   return { mediaToken, streamTokens, exp };
 }
@@ -990,41 +1033,33 @@ async function buildGalleryTokenBundle(
 // ── Galerij-routehandlers ───────────────────────────────────────────────────
 
 async function handleGalleryUpload(request: Request, env: Env, context: RouteContext): Promise<Response> {
-  const userId = await requireUser(request, env);
-
   const organizationId = (request.headers.get('x-organization-id') || '').trim();
   const galleryId = (request.headers.get('x-gallery-id') || '').trim();
   const itemId = (request.headers.get('x-item-id') || '').trim();
   const variant = (request.headers.get('x-variant') || 'original').trim();
   const fileName = sanitizeFileName(decodeMaybe(request.headers.get('x-file-name')) || 'bestand');
   const contentType = (request.headers.get('x-file-type') || 'application/octet-stream').trim();
+  const declaredSize = Number(request.headers.get('content-length') || '0');
 
-  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige of ontbrekende organization id.');
-  if (!isUuid(galleryId)) throw new HttpError(400, 'Ongeldige of ontbrekende galerij id.');
+  // Elke variant telt mee in het quotum — previews/thumbs zijn klein, maar een
+  // stroom van 30 MB-derivaten mag de limiet niet alsnog kunnen omzeilen. De
+  // telling loopt tegelijk met de rechtencontrole; de uitkomst telt pas daarna.
+  const { userId, later: storageCheck } = await authorizeGalleryWrite(
+    request, env, organizationId, galleryId,
+    () => assertStorageCapacity(env, organizationId, declaredSize),
+  );
   if (!isUuid(itemId)) throw new HttpError(400, 'Ongeldige of ontbrekende item id.');
   if (!GALLERY_VARIANTS.includes(variant)) throw new HttpError(400, 'Ongeldige variant.');
   if (!request.body) throw new HttpError(400, 'Lege upload.');
-
-  const role = await membershipRole(env, organizationId, userId);
-  if (!role) throw new HttpError(403, 'Geen toegang tot deze organisatie.');
-  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
-  await requireGalleryAccess(env, organizationId, userId, 'write');
-  await assertCreativeModule(env, organizationId);
-
-  // Galerij moet bestaan én bij deze organisatie horen (voorkomt key-wedging).
-  await fetchGalleryRow(env, galleryId, organizationId);
 
   // LET OP: deze route neemt het hele bestand in één request aan en loopt dus
   // tegen de Worker-limiet van ~100 MB aan, hoe hoog de variantgrens ook staat.
   // Alles wat groter kan zijn hoort via /gallery/multipart/* te gaan.
   const maxBytes = Math.min(galleryVariantMaxBytes(variant), GALLERY_SINGLE_REQUEST_MAX_BYTES);
-  const declaredSize = Number(request.headers.get('content-length') || '0');
   if (declaredSize > maxBytes) {
     throw new HttpError(413, tooLargeMessage(maxBytes));
   }
-  // Elke variant telt mee in het quotum — previews/thumbs zijn klein, maar een
-  // stroom van 30 MB-derivaten mag de limiet niet alsnog kunnen omzeilen.
-  await assertStorageCapacity(env, organizationId, declaredSize);
+  await storageCheck();
 
   const key = `${organizationId}/gallery/${galleryId}/${itemId}/${variant}-${crypto.randomUUID()}-${fileName}`;
 
@@ -1067,18 +1102,38 @@ const GALLERY_MULTIPART_VARIANTS = ['master', 'original', 'source'];
  * module staat aan op het abonnement, en de galerij hoort echt bij deze
  * organisatie. Die laatste voorkomt key-wedging: zonder die check kun je in de
  * key-prefix van een andere tenant schrijven.
+ *
+ * Na het inloggen lopen de vragen aan de database tegelijk. Eerst gingen ze
+ * na elkaar, vijf of zes rondes per verzoek, en een foto is drie verzoeken
+ * (origineel, preview, miniatuur): bij een map van 300 foto's ging de meeste
+ * tijd zitten in wachten op Supabase, niet in uploaden. De uitkomsten worden
+ * daarna wel in de oude volgorde getoetst, zodat een buitenstaander dezelfde
+ * melding krijgt als altijd en nooit een antwoord over een galerij die hij
+ * niet mag zien.
+ *
+ * `alongside` is een extra controle (het opslagquotum) die meeloopt; de
+ * aanroeper beslist met `later()` wanneer de uitkomst telt.
  */
-async function authorizeGalleryWrite(request: Request, env: Env, organizationId: string, galleryId: string): Promise<string> {
+async function authorizeGalleryWrite(
+  request: Request,
+  env: Env,
+  organizationId: string,
+  galleryId: string,
+  alongside?: () => Promise<void>,
+): Promise<{ userId: string; later: () => Promise<void> }> {
   const userId = await requireUser(request, env);
   if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige of ontbrekende organization id.');
   if (!isUuid(galleryId)) throw new HttpError(400, 'Ongeldige of ontbrekende galerij id.');
-  const role = await membershipRole(env, organizationId, userId);
-  if (!role) throw new HttpError(403, 'Geen toegang tot deze organisatie.');
-  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
-  await requireGalleryAccess(env, organizationId, userId, 'write');
-  await assertCreativeModule(env, organizationId);
-  await fetchGalleryRow(env, galleryId, organizationId);
-  return userId;
+  const later = alongside ? deferCheck(alongside()) : async () => undefined;
+  const [access, creative, gallery] = await Promise.allSettled([
+    galleryMemberAccess(env, organizationId, userId),
+    assertCreativeModule(env, organizationId),
+    fetchGalleryRow(env, galleryId, organizationId),
+  ]);
+  assertGalleryAccess(settledValue(access), 'write');
+  settledValue(creative);
+  settledValue(gallery);
+  return { userId, later };
 }
 
 /** De client geeft de key terug bij elk part; die moet binnen deze galerij liggen. */
@@ -1114,14 +1169,17 @@ async function handleGalleryMultipartCreate(request: Request, env: Env, context:
   const contentType = (body.contentType || 'application/octet-stream').trim();
   const fileSize = Number(body.fileSize || 0);
 
-  const userId = await authorizeGalleryWrite(request, env, organizationId, galleryId);
+  const { userId, later: storageCheck } = await authorizeGalleryWrite(
+    request, env, organizationId, galleryId,
+    () => assertStorageCapacity(env, organizationId, Number.isFinite(fileSize) ? fileSize : 0),
+  );
   if (!isUuid(itemId)) throw new HttpError(400, 'Ongeldige of ontbrekende item id.');
   if (!GALLERY_MULTIPART_VARIANTS.includes(variant)) throw new HttpError(400, 'Ongeldige variant.');
   if (!Number.isFinite(fileSize) || fileSize <= 0) throw new HttpError(400, 'Ongeldige bestandsgrootte.');
 
   const maxBytes = galleryVariantMaxBytes(variant);
   if (fileSize > maxBytes) throw new HttpError(413, tooLargeMessage(maxBytes));
-  await assertStorageCapacity(env, organizationId, fileSize);
+  await storageCheck();
 
   const key = `${organizationId}/gallery/${galleryId}/${itemId}/${variant}-${crypto.randomUUID()}-${fileName}`;
   const upload = await env.MEDIA_BUCKET.createMultipartUpload(key, {
@@ -1406,8 +1464,7 @@ async function handleGalleryStreamStatus(request: Request, env: Env, context: Ro
   const uid = (body.uid || '').trim();
   if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
   if (!uid || !/^[a-f0-9]{32}$/i.test(uid)) throw new HttpError(400, 'Ongeldige video-id.');
-  await requireMembership(env, organizationId, userId);
-  await requireGalleryAccess(env, organizationId, userId, 'read');
+  assertGalleryAccess(await galleryMemberAccess(env, organizationId, userId), 'read');
 
   const res = await streamApi(env, `/stream/${uid}`);
   if (res.status === 404) throw new HttpError(404, 'Video niet gevonden bij Stream.');
@@ -1459,9 +1516,7 @@ async function handleGalleryStreamDelete(request: Request, env: Env, context: Ro
   const uid = (body.uid || '').trim();
   if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
   if (!uid || !/^[a-f0-9]{32}$/i.test(uid)) throw new HttpError(400, 'Ongeldige video-id.');
-  const role = await membershipRole(env, organizationId, userId);
-  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
-  await requireGalleryAccess(env, organizationId, userId, 'write');
+  assertGalleryAccess(await galleryMemberAccess(env, organizationId, userId), 'write');
 
   const lookup = await streamApi(env, `/stream/${uid}`);
   if (lookup.status === 404) return jsonResponse({ ok: true, deleted: false }, 200, context);
@@ -1482,13 +1537,21 @@ async function handleGalleryViewSession(request: Request, env: Env, context: Rou
   const galleryId = (body.galleryId || '').trim();
   if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
   if (!isUuid(galleryId)) throw new HttpError(400, 'Ongeldige galerij id.');
-  await requireMembership(env, organizationId, userId);
-  await requireGalleryAccess(env, organizationId, userId, 'read');
-  await fetchGalleryRow(env, galleryId, organizationId);
+  // Tegelijk, en daarna in de vaste volgorde getoetst (zie authorizeGalleryWrite):
+  // dit verzoek staat bij elke keer openen tussen de gebruiker en de eerste foto.
+  const [access, gallery, streamItems] = await Promise.allSettled([
+    galleryMemberAccess(env, organizationId, userId),
+    fetchGalleryRow(env, galleryId, organizationId),
+    fetchGalleryItemRows(env, galleryId, organizationId, { onlyStream: true }),
+  ]);
+  assertGalleryAccess(settledValue(access), 'read');
+  settledValue(gallery);
 
   // Teamleden zien altijd de originelen — de download-instellingen van de galerij
   // gelden voor de klant, niet voor de eigenaar van het materiaal.
-  const bundle = await buildGalleryTokenBundle(env, organizationId, galleryId, true, 'original', GALLERY_TOKEN_TTL_MS);
+  const bundle = await buildGalleryTokenBundle(
+    env, organizationId, galleryId, true, 'original', GALLERY_TOKEN_TTL_MS, settledValue(streamItems),
+  );
   return jsonResponse(bundle, 200, context);
 }
 
@@ -1502,15 +1565,322 @@ async function handleInternalGalleryTokens(request: Request, env: Env, context: 
   const galleryId = (body.galleryId || '').trim();
   if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
   if (!isUuid(galleryId)) throw new HttpError(400, 'Ongeldige galerij id.');
-  const gallery = await fetchGalleryRow(env, galleryId, organizationId);
+  const [galleryResult, streamItems] = await Promise.allSettled([
+    fetchGalleryRow(env, galleryId, organizationId),
+    fetchGalleryItemRows(env, galleryId, organizationId, { onlyStream: true }),
+  ]);
+  const gallery = settledValue(galleryResult);
 
   const ttlMs = Math.min(Math.max(Number(body.ttlSeconds || 0) * 1000, 15 * 60 * 1000), GALLERY_TOKEN_TTL_MS) || GALLERY_TOKEN_TTL_MS;
   // Downloadrecht én -kwaliteit komen uit de galerij zelf, niet uit de aanroep:
   // de edge function kan zichzelf zo geen ruimere rechten toekennen.
   const allowDownload = body.allowDownload === true && gallery.allow_downloads === true;
   const quality: 'original' | 'web' = gallery.download_quality === 'web' ? 'web' : 'original';
-  const bundle = await buildGalleryTokenBundle(env, organizationId, galleryId, allowDownload, quality, ttlMs);
+  const bundle = await buildGalleryTokenBundle(
+    env, organizationId, galleryId, allowDownload, quality, ttlMs, settledValue(streamItems),
+  );
   return jsonResponse(bundle, 200, context);
+}
+
+// ── Opruimen na verwijderen (R2 + Stream) ───────────────────────────────────
+//
+// De database zet in gallery_purge_queue wat er na een verwijdering weg moet
+// (migratie 20261112170000): de hele map van een album, losse sleutels van een
+// item of coverbeeld, en kijkkopieën bij Stream. Deze worker werkt die
+// wachtrij af: meteen via /gallery/purge (de app, na het verwijderen) en via
+// de geplande taak (scheduled). Wat hier gewist wordt, staat dus al niet meer
+// in de database. De controles hieronder bewaken dat nog een keer, want de
+// sleutels in een rij schrijft de browser zelf.
+
+type GalleryPurgeRow = {
+  id: string;
+  organization_id: string;
+  gallery_id: string;
+  kind: 'folder' | 'object' | 'stream';
+  target: string;
+  passes: number;
+  attempts: number;
+};
+
+type GalleryPurgeResult = { done: number; failed: number; objects: number; remaining: boolean };
+
+/** Na zoveel mislukte pogingen blijft een regel liggen, als spoor voor wie gaat kijken. */
+const GALLERY_PURGE_MAX_ATTEMPTS = 20;
+/** Tweede ronde over een map: wat nog binnenkwam terwijl het album werd verwijderd. */
+const GALLERY_PURGE_SECOND_PASS_MS = 60 * 60 * 1000;
+/** Wachttijd na een mislukte poging, oplopend tot acht keer deze waarde. */
+const GALLERY_PURGE_RETRY_MS = 15 * 60 * 1000;
+
+/** Verwijderen bij Stream kan zonder signing key; daarvoor zijn account en token genoeg. */
+function streamDeletable(env: Env): boolean {
+  return Boolean(env.STREAM_ACCOUNT_ID && env.STREAM_API_TOKEN);
+}
+
+/**
+ * POST /gallery/purge — na het verwijderen van een album, een item of een
+ * coverbeeld. De app heeft de rij dan al weggehaald met de rechten van de
+ * gebruiker zelf (RLS + modulegate): de database besliste of dat mocht. Deze
+ * route ruimt alleen op wat daardoor in de wachtrij kwam, en alleen binnen de
+ * organisatie waarvan de gebruiker lid is met schrijfrecht op Projecten.
+ *
+ * Met de id van een album dat niet meer bestaat, veegt hij ook meteen de hele
+ * map. Wat onder een verdwenen album staat is afval, ook wat niet in de
+ * wachtrij staat: een upload die halverwege afbrak, of een database waar de
+ * wachtrij er nog niet is.
+ */
+async function handleGalleryPurge(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const userId = await requireUser(request, env);
+  const body = (await request.json().catch(() => ({}))) as { organizationId?: string; galleryId?: string };
+  const organizationId = (body.organizationId || '').trim();
+  const galleryId = (body.galleryId || '').trim();
+  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
+  if (galleryId && !isUuid(galleryId)) throw new HttpError(400, 'Ongeldige galerij id.');
+  // Opruimen is schrijven. De creatieve module hoeft er niet voor aan te staan:
+  // een bevroren galerij mag je nog altijd weggooien (zie assertCreativeModule).
+  assertGalleryAccess(await galleryMemberAccess(env, organizationId, userId), 'write');
+
+  let swept = 0;
+  if (galleryId && !(await galleryRowExists(env, galleryId))) {
+    swept = await purgeGalleryFolder(env, `${organizationId}/gallery/${galleryId}/`);
+  }
+  const result = await drainGalleryPurgeQueue(
+    env,
+    { organizationId, galleryId: galleryId || undefined },
+    { maxRows: 200, deadline: Date.now() + 20_000 },
+  );
+  return jsonResponse({ ok: true, swept, ...result }, 200, context);
+}
+
+/** Bestaat er (bij welke organisatie dan ook) nog een album met deze id? */
+async function galleryRowExists(env: Env, galleryId: string): Promise<boolean> {
+  const query = new URLSearchParams({ select: 'id', id: `eq.${galleryId}`, limit: '1' });
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/galleries?${query.toString()}`, { headers: serviceHeaders(env) });
+  if (!res.ok) throw new HttpError(502, 'Kon de galerij niet controleren.');
+  const rows = (await res.json()) as unknown[];
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+/**
+ * Wist alles onder een map in R2, in porties van duizend (het maximum per
+ * delete-aanroep). Er wordt steeds opnieuw vanaf het begin gelijst: wat al weg
+ * is, komt niet meer terug, dus een cursor is niet nodig en kan ook niets
+ * overslaan. Bij een video-master gaat ook de markering van zijn kijkkopie mee
+ * (zie streamCopyMarkerKey); die staat buiten de map.
+ */
+async function purgeGalleryFolder(env: Env, prefix: string): Promise<number> {
+  if (!isSafeStorageKey(prefix) || !/^[0-9a-f-]{36}\/gallery\/[0-9a-f-]{36}\/$/i.test(prefix)) {
+    throw new HttpError(400, 'Ongeldige galerijmap.');
+  }
+  let deleted = 0;
+  for (let round = 0; round < 1000; round += 1) {
+    const listed = await env.MEDIA_BUCKET.list({ prefix, limit: 1000 });
+    const keys = listed.objects.map((object) => object.key).filter((key) => key.startsWith(prefix));
+    if (keys.length === 0) break;
+    const markers = await Promise.all(
+      keys.filter((key) => galleryVariantFromKey(key) === 'master').map((key) => streamCopyMarkerKey(organizationFromKey(key), key)),
+    );
+    await deleteR2Keys(env, [...keys, ...markers]);
+    deleted += keys.length;
+    if (!listed.truncated && keys.length < 1000) break;
+  }
+  return deleted;
+}
+
+async function deleteR2Keys(env: Env, keys: string[]): Promise<void> {
+  for (let i = 0; i < keys.length; i += 1000) {
+    await env.MEDIA_BUCKET.delete(keys.slice(i, i + 1000));
+  }
+}
+
+async function fetchGalleryPurgeRows(
+  env: Env,
+  scope: { organizationId?: string; galleryId?: string },
+  limit: number,
+): Promise<GalleryPurgeRow[]> {
+  const query = new URLSearchParams({
+    select: 'id,organization_id,gallery_id,kind,target,passes,attempts',
+    purge_after: `lte.${new Date().toISOString()}`,
+    attempts: `lt.${GALLERY_PURGE_MAX_ATTEMPTS}`,
+    order: 'created_at.asc',
+    limit: String(limit),
+  });
+  if (scope.organizationId) query.set('organization_id', `eq.${scope.organizationId}`);
+  if (scope.galleryId) query.set('gallery_id', `eq.${scope.galleryId}`);
+  // Zonder Stream-sleutels blijven die regels liggen tot Stream is ingericht,
+  // in plaats van twintig keer te mislukken.
+  if (!streamDeletable(env)) query.set('kind', 'neq.stream');
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/gallery_purge_queue?${query.toString()}`, { headers: serviceHeaders(env) });
+  // Een database zonder de wachtrij (migratie nog niet toegepast): niets te doen.
+  if (res.status === 404) return [];
+  if (!res.ok) throw new HttpError(502, 'Kon de opruimwachtrij niet lezen.');
+  const rows = (await res.json()) as GalleryPurgeRow[];
+  return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Werkt de wachtrij af, binnen `scope` (een organisatie en eventueel één
+ * album) of helemaal (de geplande taak). Elke regel apart afgehandeld: één
+ * mislukking houdt de rest niet op.
+ */
+async function drainGalleryPurgeQueue(
+  env: Env,
+  scope: { organizationId?: string; galleryId?: string },
+  budget: { maxRows: number; deadline: number },
+): Promise<GalleryPurgeResult> {
+  const rows = await fetchGalleryPurgeRows(env, scope, budget.maxRows);
+  const result: GalleryPurgeResult = { done: 0, failed: 0, objects: 0, remaining: rows.length >= budget.maxRows };
+
+  // Losse sleutels per album bundelen: R2 wist er tot duizend in één aanroep.
+  const objectGroups = new Map<string, GalleryPurgeRow[]>();
+  for (const row of rows) {
+    if (row.kind !== 'object') continue;
+    const group = `${row.organization_id}/${row.gallery_id}`;
+    objectGroups.set(group, [...(objectGroups.get(group) ?? []), row]);
+  }
+  for (const group of objectGroups.values()) {
+    if (Date.now() > budget.deadline) { result.remaining = true; break; }
+    try {
+      result.objects += await purgeGalleryObjectRows(env, group);
+      await Promise.all(group.map((row) => finishGalleryPurgeRow(env, row, 'done')));
+      result.done += group.length;
+    } catch (error) {
+      await Promise.all(group.map((row) => failGalleryPurgeRow(env, row, error)));
+      result.failed += group.length;
+    }
+  }
+
+  for (const row of rows) {
+    if (row.kind === 'object') continue;
+    if (Date.now() > budget.deadline) { result.remaining = true; break; }
+    try {
+      if (row.kind === 'folder') {
+        const { outcome, objects } = await purgeGalleryFolderRow(env, row);
+        result.objects += objects;
+        await finishGalleryPurgeRow(env, row, outcome);
+      } else {
+        await purgeGalleryStreamRow(env, row);
+        await finishGalleryPurgeRow(env, row, 'done');
+      }
+      result.done += 1;
+    } catch (error) {
+      await failGalleryPurgeRow(env, row, error);
+      result.failed += 1;
+    }
+  }
+  return result;
+}
+
+async function purgeGalleryFolderRow(env: Env, row: GalleryPurgeRow): Promise<{ outcome: 'done' | 'again'; objects: number }> {
+  const prefix = `${row.organization_id}/gallery/${row.gallery_id}/`;
+  if (!isUuid(row.organization_id) || !isUuid(row.gallery_id) || row.target !== prefix) {
+    throw new HttpError(400, 'Onverwachte map in de opruimwachtrij.');
+  }
+  // Een album dat bestaat, raken we niet aan: de regel gaat weg, de bestanden blijven.
+  if (await galleryRowExists(env, row.gallery_id)) {
+    console.warn('galerij-opruimen: album bestaat nog, map niet gewist', { gallery: row.gallery_id });
+    return { outcome: 'done', objects: 0 };
+  }
+  const objects = await purgeGalleryFolder(env, prefix);
+  return { outcome: row.passes >= 1 ? 'done' : 'again', objects };
+}
+
+/** Losse sleutels van één album: alleen onder zijn map, en alleen als niets ze nog gebruikt. */
+async function purgeGalleryObjectRows(env: Env, group: GalleryPurgeRow[]): Promise<number> {
+  const { organization_id: organizationId, gallery_id: galleryId } = group[0];
+  const keys = [...new Set(group.map((row) => row.target))];
+  for (const key of keys) assertGalleryKeyBelongs(key, organizationId, galleryId);
+  const inUse = await galleryKeysInUse(env, galleryId, keys);
+  const free = keys.filter((key) => !inUse.has(key));
+  const markers = await Promise.all(
+    free.filter((key) => galleryVariantFromKey(key) === 'master').map((key) => streamCopyMarkerKey(organizationId, key)),
+  );
+  await deleteR2Keys(env, [...free, ...markers]);
+  return free.length;
+}
+
+/** Welke van deze sleutels staan nog bij een item of als cover van dit album? */
+async function galleryKeysInUse(env: Env, galleryId: string, keys: string[]): Promise<Set<string>> {
+  const used = new Set<string>();
+  // Aanhalingstekens: een sleutel bevat punten, en die betekenen iets in de
+  // filtertaal van PostgREST. Een sleutel bevat nooit zelf een aanhalingsteken
+  // (isSafeStorageKey).
+  for (let i = 0; i < keys.length; i += 20) {
+    const list = `(${keys.slice(i, i + 20).map((key) => `"${key}"`).join(',')})`;
+    const items = new URLSearchParams({
+      select: 'storage_key,preview_key,thumb_key',
+      gallery_id: `eq.${galleryId}`,
+      or: `(storage_key.in.${list},preview_key.in.${list},thumb_key.in.${list})`,
+    });
+    const covers = new URLSearchParams({
+      select: 'cover_preview_key,cover_thumb_key',
+      id: `eq.${galleryId}`,
+      or: `(cover_preview_key.in.${list},cover_thumb_key.in.${list})`,
+    });
+    const [itemRes, coverRes] = await Promise.all([
+      fetch(`${supabaseBase(env)}/rest/v1/gallery_items?${items.toString()}`, { headers: serviceHeaders(env) }),
+      fetch(`${supabaseBase(env)}/rest/v1/galleries?${covers.toString()}`, { headers: serviceHeaders(env) }),
+    ]);
+    if (!itemRes.ok || !coverRes.ok) throw new HttpError(502, 'Kon niet controleren of de bestanden nog in gebruik zijn.');
+    const rows = [...((await itemRes.json()) as Array<Record<string, string | null>>), ...((await coverRes.json()) as Array<Record<string, string | null>>)];
+    for (const row of rows) for (const value of Object.values(row)) if (value) used.add(value);
+  }
+  return used;
+}
+
+/**
+ * Een kijkkopie bij Stream. Het Stream-account is gedeeld door alle
+ * organisaties en de browser schrijft stream_uid zelf, dus we wissen alleen
+ * wat aantoonbaar van deze organisatie was: geen rij gebruikt het id nog, en de
+ * meta die wij bij het aanmaken zetten noemt deze organisatie (of ontbreekt,
+ * zoals bij een oude tus-upload waarvan het bijwerken mislukte). Noemt de meta
+ * een andere organisatie, dan blijft de video staan en gaat alleen de regel weg.
+ */
+async function purgeGalleryStreamRow(env: Env, row: GalleryPurgeRow): Promise<void> {
+  const uid = row.target;
+  if (!/^[a-f0-9]{32}$/i.test(uid)) throw new HttpError(400, 'Ongeldige video-id in de opruimwachtrij.');
+  const query = new URLSearchParams({ select: 'id', stream_uid: `eq.${uid}`, limit: '1' });
+  const inUse = await fetch(`${supabaseBase(env)}/rest/v1/gallery_items?${query.toString()}`, { headers: serviceHeaders(env) });
+  if (!inUse.ok) throw new HttpError(502, 'Kon niet controleren of de video nog in gebruik is.');
+  if (((await inUse.json()) as unknown[]).length > 0) return;
+
+  const lookup = await streamApi(env, `/stream/${uid}`);
+  if (lookup.status === 404) return;
+  if (!lookup.ok) throw new HttpError(502, `Stream antwoordde ${lookup.status}.`);
+  const json = (await lookup.json().catch(() => ({}))) as { result?: { meta?: Record<string, string> } };
+  const owner = json.result?.meta?.organizationId;
+  if (owner && owner !== row.organization_id) {
+    console.warn('galerij-opruimen: kijkkopie hoort bij een andere organisatie, niet gewist', { uid });
+    return;
+  }
+  const res = await streamApi(env, `/stream/${uid}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new HttpError(502, `Stream antwoordde ${res.status}.`);
+}
+
+async function finishGalleryPurgeRow(env: Env, row: GalleryPurgeRow, outcome: 'done' | 'again'): Promise<void> {
+  const url = `${supabaseBase(env)}/rest/v1/gallery_purge_queue?id=eq.${encodeURIComponent(row.id)}`;
+  const res = outcome === 'done'
+    ? await fetch(url, { method: 'DELETE', headers: serviceHeaders(env, { prefer: 'return=minimal' }) })
+    : await fetch(url, {
+      method: 'PATCH',
+      headers: serviceHeaders(env, { 'content-type': 'application/json', prefer: 'return=minimal' }),
+      body: JSON.stringify({ passes: row.passes + 1, purge_after: new Date(Date.now() + GALLERY_PURGE_SECOND_PASS_MS).toISOString() }),
+    });
+  if (!res.ok) throw new HttpError(502, 'Kon de opruimwachtrij niet bijwerken.');
+}
+
+async function failGalleryPurgeRow(env: Env, row: GalleryPurgeRow, error: unknown): Promise<void> {
+  const attempts = row.attempts + 1;
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 300);
+  console.warn('galerij-opruimen: poging mislukt', { id: row.id, kind: row.kind, attempts, message });
+  await fetch(`${supabaseBase(env)}/rest/v1/gallery_purge_queue?id=eq.${encodeURIComponent(row.id)}`, {
+    method: 'PATCH',
+    headers: serviceHeaders(env, { 'content-type': 'application/json', prefer: 'return=minimal' }),
+    body: JSON.stringify({
+      attempts,
+      last_error: message,
+      purge_after: new Date(Date.now() + GALLERY_PURGE_RETRY_MS * Math.min(attempts, 8)).toISOString(),
+    }),
+  }).catch(() => undefined);
 }
 
 /** De variant staat vooraan in de bestandsnaam van de key (`{variant}-{uuid}-{naam}`). */
@@ -1553,6 +1923,22 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
     throw new HttpError(403, 'Downloaden is niet toegestaan voor deze link.');
   }
 
+  const rangeHeader = request.headers.get('range') || '';
+  const rangeMatch = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+  const wantsRange = Boolean(rangeMatch && (rangeMatch[1] !== '' || rangeMatch[2] !== ''));
+
+  // Een gewone GET (elke miniatuur en preview in het raster): één aanroep naar
+  // R2. Eerst ging er altijd een head() aan vooraf, alleen om de grootte te
+  // weten, en dat is per beeld een extra ronde wachten. get() geeft de grootte
+  // zelf al mee.
+  if (request.method === 'GET' && !wantsRange) {
+    const object = await env.MEDIA_BUCKET.get(key);
+    if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
+    const headers = galleryFileHeaders(context, object, payload, wantsDownload);
+    headers.set('Content-Length', String(object.size));
+    return new Response(object.body, { status: 200, headers });
+  }
+
   const head = await env.MEDIA_BUCKET.head(key);
   if (!head) throw new HttpError(404, 'Bestand niet gevonden.');
   const totalSize = head.size;
@@ -1561,11 +1947,9 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
   // start/eind uit tegen de bekende objectgrootte, zodat het 206-antwoord altijd
   // een kloppende Content-Range/Content-Length heeft en onzinnige ranges een
   // nette 416 geven in plaats van stilletjes de hele body.
-  const rangeHeader = request.headers.get('range') || '';
-  const rangeMatch = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
   let start: number | null = null;
   let end: number | null = null;
-  if (rangeMatch && (rangeMatch[1] !== '' || rangeMatch[2] !== '')) {
+  if (rangeMatch && wantsRange) {
     if (rangeMatch[1] === '') {
       const suffix = Number(rangeMatch[2]);
       if (!Number.isFinite(suffix) || suffix <= 0) throw new HttpError(416, 'Ongeldige range.');
@@ -1591,13 +1975,7 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
   // Bij HEAD is de head() hierboven al genoeg: we halen het object niet op,
   // maar antwoorden wel met dezelfde headers als een GET zou geven.
   if (request.method === 'HEAD') {
-    const headers = new Headers(context.corsHeaders);
-    headers.set('Content-Type', inlineSafeType(head.httpMetadata?.contentType) || 'application/octet-stream');
-    headers.set('Accept-Ranges', 'bytes');
-    headers.set('Cache-Control', 'private, max-age=900');
-    headers.set('X-Request-Id', context.requestId);
-    setFileSecurityHeaders(headers);
-    if (head.httpEtag) headers.set('ETag', head.httpEtag);
+    const headers = galleryFileHeaders(context, head, payload, wantsDownload);
     headers.set('Content-Length', String(totalSize));
     return new Response(null, { status: 200, headers });
   }
@@ -1607,15 +1985,43 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
     isRanged ? { range: { offset: start as number, length: (end as number) - (start as number) + 1 } } : undefined,
   );
   if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
+  const headers = galleryFileHeaders(context, object, payload, wantsDownload);
 
-  // Het type komt van de uploader: alleen beeld/video/audio mag inline, de rest
-  // gaat als download de deur uit (anders kon een galerij html of svg serveren).
+  if (isRanged) {
+    headers.set('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+    headers.set('Content-Length', String((end as number) - (start as number) + 1));
+    return new Response(object.body, { status: 206, headers });
+  }
+
+  headers.set('Content-Length', String(totalSize));
+  return new Response(object.body, { status: 200, headers });
+}
+
+/**
+ * De headers van een galerijbestand, gelijk voor GET, HEAD en een range.
+ *
+ * Het type komt van de uploader: alleen beeld/video/audio mag inline, de rest
+ * gaat als download de deur uit (anders kon een galerij html of svg serveren).
+ *
+ * Cachen: een sleutel bevat een willekeurige uuid en de inhoud erachter
+ * verandert nooit, dus de browser mag het antwoord bewaren zolang het token in
+ * de URL geldig is, zonder het opnieuw te vragen (immutable). Eerst was dat een
+ * vast kwartier, en omdat elk token een andere URL gaf, haalde de browser bij
+ * elke keer openen alle miniaturen opnieuw. Langer dan het token bewaren mag
+ * niet: dan bleef een beeld zichtbaar nadat de toegang al voorbij was.
+ */
+function galleryFileHeaders(
+  context: RouteContext,
+  object: { httpMetadata?: R2HTTPMetadata; customMetadata?: Record<string, string>; httpEtag?: string },
+  payload: GalleryTokenPayload,
+  wantsDownload: boolean,
+): Headers {
   const safeType = inlineSafeType(object.httpMetadata?.contentType);
   const headers = new Headers(context.corsHeaders);
   headers.set('Content-Type', safeType || 'application/octet-stream');
   headers.set('Accept-Ranges', 'bytes');
-  // Tokens zijn kortlevend; previews/thumbs mogen binnen die sessie gecachet worden.
-  headers.set('Cache-Control', 'private, max-age=900');
+  const maxAge = Math.max(0, Math.min(3600, Math.floor((payload.exp - Date.now()) / 1000)));
+  headers.set('Cache-Control', `private, max-age=${maxAge}, immutable`);
   headers.set('X-Request-Id', context.requestId);
   setFileSecurityHeaders(headers);
   if (object.httpEtag) headers.set('ETag', object.httpEtag);
@@ -1626,15 +2032,7 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
       ? `attachment; filename*=UTF-8''${encodeURIComponent(name)}`
       : safeType ? 'inline' : 'attachment',
   );
-
-  if (isRanged) {
-    headers.set('Content-Range', `bytes ${start}-${end}/${totalSize}`);
-    headers.set('Content-Length', String((end as number) - (start as number) + 1));
-    return new Response(object.body, { status: 206, headers });
-  }
-
-  headers.set('Content-Length', String(totalSize));
-  return new Response(object.body, { status: 200, headers });
+  return headers;
 }
 
 /** `/gallery/file/{key}` — key bevat slashes (org/gallery/galerij-id/item-id/bestand). */
@@ -1874,8 +2272,12 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
   const mediaParam = context.url.searchParams.get('media');
   const media: 'all' | 'photos' | 'videos' = mediaParam === 'photos' || mediaParam === 'videos' ? mediaParam : 'all';
 
-  const gallery = await fetchGalleryRow(env, galleryId, payload.org);
-  const items = await fetchGalleryItemRows(env, galleryId, payload.org);
+  const [galleryResult, itemsResult] = await Promise.allSettled([
+    fetchGalleryRow(env, galleryId, payload.org),
+    fetchGalleryItemRows(env, galleryId, payload.org),
+  ]);
+  const gallery = settledValue(galleryResult);
+  const items = settledValue(itemsResult);
 
   const useWeb = gallery.download_quality === 'web';
   const used = new Set<string>();
@@ -2937,6 +3339,58 @@ async function requireGalleryAccess(env: Env, organizationId: string, userId: st
       : 'Je mag niets wijzigen in de module Projecten van deze organisatie.');
   }
   return level;
+}
+
+type GalleryMemberAccess = { role: string | null; level: ModuleLevel };
+
+/**
+ * Rol en modulerecht op Projecten in één query: ze staan in dezelfde rij van
+ * organization_members. membershipRole en requireGalleryAccess vroegen die rij
+ * na elkaar op, bij elk verzoek en bij elk part van een upload. De regels zelf
+ * zijn die van memberModuleLevel; alleen de vraag aan de database is één keer.
+ */
+async function galleryMemberAccess(env: Env, organizationId: string, userId: string): Promise<GalleryMemberAccess> {
+  if (!isUuid(organizationId)) return { role: null, level: 'none' };
+  const query = new URLSearchParams({
+    select: 'role,module_access',
+    organization_id: `eq.${organizationId}`,
+    user_id: `eq.${userId}`,
+    status: 'eq.active',
+    limit: '1',
+  });
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/organization_members?${query.toString()}`, { headers: serviceHeaders(env) });
+  if (!res.ok) throw new HttpError(502, 'Kon lidmaatschap niet verifiëren.');
+  const rows = (await res.json()) as Array<{ role?: string; module_access?: Record<string, unknown> | null }>;
+  const row = Array.isArray(rows) ? rows[0] : undefined;
+  if (!row?.role) return { role: null, level: 'none' };
+  return { role: row.role, level: memberModuleLevel(row.role, row.module_access, 'projects') };
+}
+
+/** Dezelfde grenzen en meldingen als membershipRole + requireGalleryAccess. */
+function assertGalleryAccess(access: GalleryMemberAccess, need: 'read' | 'write'): void {
+  if (!access.role) throw new HttpError(403, 'Geen toegang tot deze organisatie.');
+  if (need === 'write' && !isWriterRole(access.role)) throw new HttpError(403, 'Geen schrijfrechten.');
+  const ok = need === 'read' ? access.level !== 'none' : access.level === 'write';
+  if (!ok) {
+    throw new HttpError(403, access.level === 'none'
+      ? 'Je hebt geen toegang tot de module Projecten in deze organisatie.'
+      : 'Je mag niets wijzigen in de module Projecten van deze organisatie.');
+  }
+}
+
+/** De waarde uit Promise.allSettled, of de fout die erbij hoort. */
+function settledValue<T>(result: PromiseSettledResult<T>): T {
+  if (result.status === 'rejected') throw result.reason;
+  return result.value;
+}
+
+/** Start een controle nu en gooi zijn fout pas als de aanroeper erom vraagt. */
+function deferCheck(promise: Promise<void>): () => Promise<void> {
+  const outcome = promise.then(() => null, (error: unknown) => ({ error }));
+  return async () => {
+    const result = await outcome;
+    if (result) throw result.error;
+  };
 }
 
 // ── Office-doel: attachment, document (Word-modus) OF contract ──────────────

@@ -19,7 +19,7 @@ import { Button, Input, Select } from '../components/Ui';
 import { dateNL } from '../lib/format';
 import { supabase, supabaseAuth } from '../lib/supabase';
 import {
-  deleteRow, fetchOrganizationStorageStatus, insertRow, replaceGalleryCategoryPresets,
+  deleteGalleryRecord, deleteRow, fetchOrganizationStorageStatus, insertRow, replaceGalleryCategoryPresets,
   selectGalleryCategories, selectGalleryCategoryPresets, selectGalleryFavorites, selectGalleryItems,
   setGalleryItemOrder, setGalleryItemsCategory, updateGallerySettings, updateGalleryShare, updateRow,
 } from '../lib/repository';
@@ -32,7 +32,7 @@ import {
   GALLERY_MASTER_MAX_BYTES, GALLERY_MULTIPART_THRESHOLD_BYTES, GALLERY_ORIGINAL_MAX_BYTES, GALLERY_PHOTO_TYPES,
   captureVideoPoster, createGalleryViewSession, deleteGalleryStreamVideo, galleryFileUrl,
   galleryRefreshDelayMs, galleryZipUrl,
-  generateImageDerivatives, getGalleryStreamStatus, requestGalleryStreamCopy,
+  generateImageDerivatives, getGalleryStreamStatus, purgeGalleryStorage, requestGalleryStreamCopy,
   streamDownloadUrl, uploadGalleryFile, uploadGalleryFileVariant, type GalleryTokenBundle,
 } from '../lib/gallery';
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
@@ -540,25 +540,49 @@ export function GalleryTab({
     }
   }
 
+  /**
+   * Na een verwijdering haalt de worker de bestanden in R2 en de kijkkopieën
+   * bij Stream weg. Wat weg moet, heeft de database bij het verwijderen zelf in
+   * de wachtrij gezet; de app hoeft alleen te zeggen "nu". Niet afwachten: bij
+   * een groot album duurt dat even, en de rijen (en dus de opslagmeter) zijn al
+   * weg. Mislukt de aanroep, dan doet de geplande taak van de worker het later.
+   *
+   * Eerst wiste de browser alles zelf, bestand voor bestand. Bij een album van
+   * 2.000 foto's waren dat 6.000 verzoeken, en wat er niet aan toe kwam omdat
+   * het tabblad dichtging, bleef in Cloudflare staan.
+   *
+   * Alleen bij een worker van vóór /gallery/purge ruimen we nog zelf op, met de
+   * sleutels die we toevallig in handen hebben.
+   */
+  function cleanupStorage(galleryId: UUID, legacy: { keys: Array<string | null>; streamUids: Array<string | null> }) {
+    void purgeGalleryStorage(organizationId, galleryId).then(
+      (result) => {
+        if (result !== 'unsupported') return;
+        for (const key of legacy.keys) if (key) void deleteR2Object(key).catch(() => undefined);
+        for (const uid of legacy.streamUids) if (uid) void deleteGalleryStreamVideo(organizationId, uid).catch(() => undefined);
+      },
+      () => undefined,
+    );
+  }
+
   async function removeGallery(gallery: Gallery) {
     if (!confirm(`Galerij “${gallery.title}” en alle media definitief verwijderen?`)) return;
     setBusy(true);
     setError(null);
     try {
-      const galleryItems = openId === gallery.id ? items : await selectGalleryItems(organizationId, gallery.id);
-      await deleteRow('galleries', gallery.id, organizationId);
-      // Best-effort opruiming van R2 + Stream (DB-rijen zijn al weg via cascade).
-      for (const item of galleryItems) {
-        for (const key of [item.storage_key, item.preview_key, item.thumb_key]) {
-          if (key) void deleteR2Object(key).catch(() => undefined);
-        }
-        if (item.stream_uid) void deleteGalleryStreamVideo(organizationId, item.stream_uid).catch(() => undefined);
-      }
-      // Een eigen coverbeeld hangt niet aan een item en gaat dus niet mee in de
-      // cascade; zonder deze regel blijft het als wees in R2 achter.
-      for (const key of [gallery.cover_preview_key, gallery.cover_thumb_key]) {
-        if (key) void deleteR2Object(key).catch(() => undefined);
-      }
+      // Alleen voor een oude worker (zie cleanupStorage): wat al in beeld is.
+      // Een album laden alleen om het te kunnen verwijderen hoeft niet meer.
+      const loaded = openId === gallery.id ? items : [];
+      // Of dit mag, beslist de database: alleen een album van je eigen
+      // organisatie, met schrijfrecht op Projecten (RLS + modulegate).
+      await deleteGalleryRecord('galleries', gallery.id, organizationId);
+      cleanupStorage(gallery.id, {
+        keys: [
+          ...loaded.flatMap(item => [item.storage_key, item.preview_key, item.thumb_key]),
+          gallery.cover_preview_key, gallery.cover_thumb_key,
+        ],
+        streamUids: loaded.map(item => item.stream_uid),
+      });
       if (openId === gallery.id) setOpenId(null);
       await onChanged();
       await refreshStorage();
@@ -809,12 +833,12 @@ export function GalleryTab({
     if (!confirm(`“${item.file_name}” verwijderen uit de galerij?`)) return;
     stopPolling(item.id);
     try {
-      await deleteRow('gallery_items', item.id, organizationId);
+      await deleteGalleryRecord('gallery_items', item.id, organizationId);
       setItems(prev => prev.filter(x => x.id !== item.id));
-      for (const key of [item.storage_key, item.preview_key, item.thumb_key]) {
-        if (key) void deleteR2Object(key).catch(() => undefined);
-      }
-      if (item.stream_uid) void deleteGalleryStreamVideo(organizationId, item.stream_uid).catch(() => undefined);
+      cleanupStorage(item.gallery_id, {
+        keys: [item.storage_key, item.preview_key, item.thumb_key],
+        streamUids: [item.stream_uid],
+      });
       await refreshStorage();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Verwijderen mislukt.');
@@ -845,11 +869,14 @@ export function GalleryTab({
   // (`cover_preview_key`). Elke keuze zet daarom de andere uit — anders zou de
   // beeldmaker een cover aanwijzen en er een ándere zien verschijnen.
 
-  /** Ruimt een vervangen of weggehaald eigen coverbeeld op in R2. */
+  /**
+   * Ruimt een vervangen of weggehaald eigen coverbeeld op in R2. De database
+   * heeft het oude beeld bij het bijwerken in de wachtrij gezet; zie
+   * cleanupStorage.
+   */
   function discardCoverFiles(gallery: Gallery) {
-    for (const key of [gallery.cover_preview_key, gallery.cover_thumb_key]) {
-      if (key) void deleteR2Object(key).catch(() => undefined);
-    }
+    if (!gallery.cover_preview_key && !gallery.cover_thumb_key) return;
+    cleanupStorage(gallery.id, { keys: [gallery.cover_preview_key, gallery.cover_thumb_key], streamUids: [] });
   }
 
   /** Wijst een beeld uit de galerij aan; `null` = terug naar automatisch. */

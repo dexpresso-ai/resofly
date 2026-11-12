@@ -21,6 +21,8 @@ accountbrede opslagbundels (GB per abonnement, bijkopen via Mollie).
 | App | weergave-instellingen: standaard, herstel, stijlen | `src/lib/galleryLayout.ts` (kopie: `supabase/functions/_shared/galleryLayout.ts`) |
 | App | rekenregels: rijen, waterval, raster, verhaal, afdrukken | `src/lib/galleryLayoutEngine.ts` |
 | App | Instellingen → Weergave, met live voorbeeld | `src/features/GalleryLayoutSettings.tsx` |
+| DB | opruimwachtrij voor R2 en Stream na verwijderen | `supabase/migrations/20261112170000_galerij_opruimen.sql` |
+| Test | de echte worker: rechten, kijken, verwijderen, opruimen | `tests/stromen/werker-galerij.mjs` |
 
 ## Secrets & env
 
@@ -195,6 +197,62 @@ plek krijgt. Details en ontwerpkeuzes: `CHANGELOG_GALERIJ_WEERGAVE_2026-11-04.md
   `galleryLayout.ts` en de test, in één wijziging.
 - `client-portal` en `gallery-public` geven de weergave alleen genormaliseerd mee.
 - Gerrie: `gallery.update_settings` (layout_-velden) en `gallery.set_featured`.
+
+## Verwijderen en opruimen in Cloudflare (2026-11-12)
+
+Wat uit de database verdwijnt, verdwijnt ook uit R2 en Stream. Niet meer de
+browser, maar de database legt vast wat er weg moet:
+
+| Wat verdwijnt | Wat er in `gallery_purge_queue` komt |
+| --- | --- |
+| een album (ook via een verwijderd project of een verwijderde organisatie) | `folder`: de hele map `{organisatie}/gallery/{album}/` |
+| een foto of video, terwijl het album blijft | `object`: zijn drie sleutels, als niets anders ze nog gebruikt |
+| een ander of geen eigen coverbeeld | `object`: het oude coverbeeld |
+| een video met een kijkkopie | `stream`: het id bij Cloudflare Stream |
+
+De media-worker werkt de wachtrij af:
+
+- **meteen**: de app roept na het verwijderen `POST /gallery/purge` aan
+  (`{ organizationId, galleryId }`, JWT, schrijfrecht op Projecten). Is het album
+  weg, dan veegt de worker ook direct de hele map, ook bestanden zonder rij;
+- **elk kwartier**: de geplande taak van de worker (`[env.staging.triggers]` in
+  `wrangler.toml`) voor wat de app niet deed: een tabblad dat dichtging, een
+  verwijderd project, en de **tweede ronde** over een map een uur later (een
+  upload die net vóór het verwijderen langs de controles kwam);
+- zonder Stream-sleutels blijven `stream`-regels liggen tot Stream is ingericht.
+
+Wie mag verwijderen, beslist de database (RLS + modulegate Projecten): alleen
+een album van de eigen organisatie, door een eigenaar, beheerder of medewerker
+met schrijfrecht op Projecten. De worker wist alleen onder de map van dat album
+binnen de eigen organisatie, en een kijkkopie alleen als geen rij hem nog
+gebruikt en de Stream-meta geen andere organisatie noemt.
+
+Mislukt een poging, dan probeert de worker het later opnieuw (oplopend tot elke
+twee uur). Na twintig pogingen blijft de regel liggen, met de fout in
+`last_error`. Nakijken:
+
+```sql
+select kind, target, passes, attempts, last_error, purge_after
+  from public.gallery_purge_queue order by created_at;
+```
+
+**Productie:** de geplande taak staat alleen bij staging. Zet hem bij productie
+pas aan als die een eigen database heeft (actie 8). Anders werken twee workers
+met elk een andere bucket dezelfde wachtrij af.
+
+## Snelheid (2026-11-12)
+
+- **Stabiele tokens.** De vervaltijd van een kijktoken rondt af op tien minuten.
+  Open je een galerij binnen hetzelfde blok opnieuw, dan krijg je hetzelfde token
+  en dus dezelfde URL's. De browser haalt de beelden dan uit zijn cache
+  (`Cache-Control: private, max-age=<rest van het token>, immutable`). Eerst
+  was elk token nieuw en downloadde de browser bij elke keer openen alles opnieuw.
+- **Eén R2-aanroep per beeld.** Een gewone GET doet alleen nog `get()`; de `head()`
+  vooraf bleef alleen over voor HEAD en voor een range (spoelen in een video).
+- **Minder rondes naar Supabase.** Rol en modulerecht komen in één query; de
+  controles op de creatieve module, het album en het opslagquotum lopen
+  tegelijk. Bij een upload waren dat vijf of zes rondes na elkaar, nu twee.
+  De kijksessie en de zip vragen album en items ook tegelijk op.
 
 ## Beveiliging in het kort
 

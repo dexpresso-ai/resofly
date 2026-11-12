@@ -45,6 +45,16 @@ name = "resofly-media-api-staging"
 [env.staging.limits]
 cpu_ms = 300000
 
+# Galerij opruimen (scheduled in src/index.ts): elk kwartier de wachtrij
+# gallery_purge_queue afwerken, voor wat de app niet meteen opruimde (een
+# tabblad dat dichtging, een verwijderd project of organisatie, de tweede
+# ronde over een map). Alleen op staging: de productie-instellingen hieronder
+# wijzen nog naar de database van staging (actie 8). Twee workers op één
+# wachtrij met elk een andere bucket strepen regels weg voor bestanden die de
+# ene niet ziet, en dan blijven ze in de andere bucket staan.
+[env.staging.triggers]
+crons = ["*/15 * * * *"]
+
 [env.staging.vars]
 APP_ENV = "staging"
 ALLOWED_ORIGINS = "https://staging.resofly.nl,https://staging.resofly.com,https://staging.resofly.pages.dev,http://localhost:5173"
