@@ -11,6 +11,25 @@
    grootte en gewicht en verschuift daarmee de layout van alles wat nu ongedekt is. */
 :where(button,input,select,textarea,optgroup,option){font-family:inherit;font-style:inherit;letter-spacing:inherit}
 ::file-selector-button{font-family:inherit}
+/* ── Lettergrootte (2026-11-13) ───────────────────────────────────────────
+   Elke lettergrootte in deze stijlbladen wordt bij het bouwen vermenigvuldigd
+   met var(--letter, 1) (src/lib/letterSchaal.ts, via vite.config.ts). Je
+   schrijft dus gewoon `font-size:12px`; hier staat hoe groot dat uitvalt.
+
+   De PO vond de letters te groot en wilde het overzicht van de agenda, zeker
+   op de telefoon. De agenda en het tijdrooster (ook in de weekplanner en bij
+   boekingslinks) blijven daarom op 1: zij waren het voorbeeld.
+   Alleen in de werkruimte: het klantportaal, de publieke pagina's en het
+   inlogscherm hebben geen .app en houden hun maat. Via :root, zodat ook wat
+   buiten .app aan <body> hangt meekrimpt (keuzelijsten, zoeken, teamchat). */
+:root:has(#root > .app){--letter:.95}
+@media(max-width:760px){:root:has(#root > .app){--letter:.9}}
+.calendar-agenda-page,.tb-scroll{--letter:1}
+/* Een knop zonder eigen lettergrootte krijgt die van de browser (13,33px), en
+   die schaalt niet mee: de bedragen in het klantdossier bleven groot terwijl
+   alles eromheen kromp. Hier staat die maat uitgeschreven. :where() houdt de
+   specificiteit op 0, dus elke regel met een eigen maat wint. */
+:where(:root:has(#root > .app) button){font-size:13.333px}
 html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-family:var(--font-sans);font-size:14px}.app{display:flex;height:100vh;overflow:hidden}.sidebar{width:var(--sidebar);min-width:var(--sidebar);background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column}.sidebar-head{padding:18px 14px 10px;border-bottom:1px solid var(--border)}.app-brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:16px}.brand-icon{width:26px;height:26px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--on-accent);font-weight:700}.sidebar-nav{flex:1;overflow:auto;padding:8px}.nav-section{padding:12px 6px 5px;font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;justify-content:space-between}.nav-section button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px}.nav-item{width:100%;display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:6px;cursor:pointer;color:var(--muted2);font-size:13px;font-weight:500;transition:all .12s;background:transparent;border:none;text-align:left}.nav-item:hover,.nav-item.active{background:var(--bg3);color:var(--text)}.nav-item.active{background:var(--bg4);font-weight:600}.ni-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ni-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}.main{flex:1;display:flex;flex-direction:column;min-width:0}.topbar{height:52px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:10px}.topbar-title{font-weight:700;font-size:17px;letter-spacing:-.02em;flex:1}.content{flex:1;overflow:auto;padding:20px 24px}.btn{padding:7px 13px;border-radius:7px;border:1px solid var(--border2);cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;transition:all .15s;display:inline-flex;align-items:center;justify-content:center;gap:6px;background:transparent;color:var(--muted2)}.btn:hover{background:var(--bg3);color:var(--text)}.btn-primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}.btn-danger{color:var(--accent-r);border-color:rgba(var(--danger-rgb),.35)}.form-input,.form-textarea,.form-select{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:9px 11px;color:var(--text);font-family:inherit;font-size:13px;outline:none}
 .form-textarea{resize:vertical;min-height:92px;line-height:1.6}.form-input:focus,.form-textarea:focus,.form-select:focus{border-color:var(--accent)}
 /* Custom dropdown (Select) — één donkere, on-brand stijl, identiek op elk platform */
