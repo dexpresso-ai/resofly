@@ -10,10 +10,13 @@ import { useThemeMode, type ThemeMode } from '../lib/theme';
 import { useLook, type Look } from '../lib/look';
 import { formatClock, sunTimes } from '../lib/sun';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
+import { useBuildingReports } from '../lib/aiReports';
 
 /**
  * De navigatie van Zenit (designvoorstel 2026-10-22): een smalle nachtrail met
  * zeven modules en daarnaast een contextpaneel met wat je ín die module kunt.
+ * Stroom gebruikt hem ook, en sinds 2026-11-13 Baken, de standaardlook: daar
+ * zijn rail en paneel samen het donkere commandovlak (baken.css, §3).
  *
  * Zelfde gegevens en dezelfde regels als de zijbalk van Cockpit (Sidebar.tsx):
  * modulerechten, de rechtsvorm (vennootschapsbelasting, DGA, aandeelhouders,
@@ -70,6 +73,9 @@ function moduleOfPage(page: Page): ModuleId | null {
   }
   return null;
 }
+
+/** Zoveel rapportages van Gerrie staan er onder Inzicht; de rest via het overzicht. Gelijk aan de zijbalk. */
+const MENU_REPORTS = 6;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const badgeText = (n: number) => (n > 99 ? '99+' : String(n));
@@ -233,13 +239,24 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string; Icon: LucideIcon; swatch:
   { mode: 'system', label: 'Systeem', Icon: Monitor, swatch: 'sys' },
 ];
 
+// Baken is sinds 2026-11-06 de standaard en staat daarom bovenaan; Cockpit is
+// de look daarvoor, de enige die nog de zijbalk heeft.
 const LOOK_OPTIONS: { look: Look; label: string; hint: string }[] = [
+  { look: 'baken', label: 'Baken', hint: 'de standaard: licht werkvlak, donker commandovlak' },
   { look: 'zenit', label: 'Zenit', hint: 'rustig, met de nachtrail' },
   { look: 'stroom', label: 'Stroom', hint: 'licht, glas en de stroom' },
-  // Baken is sinds 2026-11-06 de standaard; Cockpit de look daarvoor.
-  { look: 'baken', label: 'Baken', hint: 'de standaard, met de zijbalk' },
-  { look: 'cockpit', label: 'Cockpit', hint: 'de vorige look' },
+  { look: 'cockpit', label: 'Cockpit', hint: 'de vorige look, met de zijbalk' },
 ];
+
+/** Welk thema de standaard is, verschilt per look (theme.ts): Dag in Baken,
+ *  Nacht in Zenit en Stroom. Het venster Weergave zegt het zoals het is. */
+function themeHint(mode: ThemeMode, look: Look): string | null {
+  const dayIsDefault = look === 'baken';
+  if (mode === 'dark') return dayIsDefault ? 'donker werkvlak' : 'de standaard';
+  if (mode === 'light') return dayIsDefault ? 'de standaard' : 'papier op steen';
+  if (mode === 'system') return 'volgt je apparaat';
+  return null;
+}
 
 function initialsOf(text: string): string {
   const parts = text.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
@@ -276,10 +293,15 @@ export function ZenitNav({
   onRefresh,
   refreshing = false,
   readOnly = false,
+  aiReports = [],
+  activeAiReportId = null,
+  onOpenAiReport,
   standaloneApp = null,
   onOpenWorkspace,
 }: SidebarProps) {
   const narrow = useNarrowViewport();
+  // Rapportages waar Gerrie nu aan bouwt: een knipperend lichtje in het paneel.
+  const buildingReports = useBuildingReports();
   const [themeMode, setThemeMode, theme] = useThemeMode();
   const [look, setLook] = useLook();
   const view = usePopover();
@@ -352,7 +374,15 @@ export function ZenitNav({
     withThemeReveal(origin, () => setThemeMode(mode));
   }
 
-  const isItemActive = (item: NavItem) => item.page === page || (item.also?.includes(page) ?? false);
+  // De rapportages van Gerrie staan onder Inzicht, net als in de zijbalk van
+  // Cockpit onder Rapportages. Zonder deze lijst verdwenen ze uit het menu
+  // zodra Baken de rail kreeg; de zijbalk toonde ze sinds 2026-11-09.
+  const menuReports = onOpenAiReport && permissions.canOpenPage('stats') ? aiReports.slice(0, MENU_REPORTS) : [];
+  const activeReportListed = page === 'report' && menuReports.some(report => report.id === activeAiReportId);
+  // Een rapportage in de lijst licht zelf op; staat hij er niet in (de zevende
+  // of later), dan licht Rapportages op, zodat je ziet waar je bent.
+  const isItemActive = (item: NavItem) => item.page === page
+    || ((item.also?.includes(page) ?? false) && !(item.page === 'stats' && activeReportListed));
   const railSeparatorBefore = new Set<ModuleId>(['agenda', 'berichten']);
 
   // Instellingen hebben geen plek op de rail (alleen het tandwiel onderin);
@@ -391,6 +421,33 @@ export function ZenitNav({
         </div>
       </div>)
     : null;
+  if (!showSettingsPanel && shownModule?.id === 'inzicht' && menuReports.length > 0) {
+    panelBody = <>
+      {panelBody}
+      <div className="zpnav-group">
+        <div className="zpnav-h">Rapportages van Gerrie</div>
+        <div className="zpnav">
+          {menuReports.map(report => {
+            const active = page === 'report' && activeAiReportId === report.id;
+            const building = buildingReports.has(report.id);
+            return <button
+              type="button"
+              key={report.id}
+              className={`zpnav-item${active ? ' is-on' : ''}`}
+              aria-current={active ? 'page' : undefined}
+              title={building ? `${report.title} — Gerrie is bezig` : report.title}
+              aria-label={building ? `${report.title}, Gerrie is bezig` : undefined}
+              onClick={() => { onOpenAiReport?.(report.id); letGo(); }}
+            >
+              <FileText size={16} aria-hidden="true"/>
+              <span className="zpnav-l">{report.title}</span>
+              {building && <span className="aire-nav-live" aria-hidden="true"/>}
+            </button>;
+          })}
+        </div>
+      </div>
+    </>;
+  }
   if (!showSettingsPanel && shownModule?.id === 'gerrie') {
     panelBody = <>
       {panelBody}
@@ -426,8 +483,13 @@ export function ZenitNav({
 
   const showGerrieCard = permissions.canOpenPage('gerrie');
 
+  // In Baken zijn rail én paneel het donkere commandovlak, ook op Dag; in Zenit
+  // en Stroom volgt het paneel het thema en is alleen de rail donker. Met
+  // .cmd-scope krijgt het hele vlak de Nacht-tokens (cockpit.css, baken.css):
+  // zonder die klasse kreeg het donkere paneel op Dag het amber (#855800) en
+  // de grijze inkt (#5E5E6B) van het lichte werkvlak, donker op donker.
   return <aside
-    className={`znav${mobileOpen ? ' is-open' : ''}${view.open || account.open ? ' has-pop' : ''}`}
+    className={`znav${look === 'baken' ? ' cmd-scope' : ''}${mobileOpen ? ' is-open' : ''}${view.open || account.open ? ' has-pop' : ''}`}
     aria-label="Navigatie"
   >
     <nav className="zrail cmd-scope" aria-label="Modules">
@@ -547,16 +609,15 @@ export function ZenitNav({
         >
           <span className={`zth-sw ${option.swatch}`} aria-hidden="true"/>
           <span className="zth-l"><option.Icon size={13} aria-hidden="true"/>{option.label}</span>
-          {option.mode === 'sun' && <small>op {formatClock(sun.rise)} · onder {formatClock(sun.set)}</small>}
-          {option.mode === 'system' && <small>volgt je apparaat</small>}
-          {option.mode === 'dark' && <small>de standaard</small>}
-          {option.mode === 'light' && <small>papier op steen</small>}
+          {option.mode === 'sun'
+            ? <small>op {formatClock(sun.rise)} · onder {formatClock(sun.set)}</small>
+            : <small>{themeHint(option.mode, look)}</small>}
         </button>)}
       </div>
       {(themeMode === 'sun' || themeMode === 'system') && <p className="zpop-note">Nu {theme === 'light' ? 'Dag' : 'Nacht'}{themeMode === 'sun' ? `, tot zon ${theme === 'light' ? 'onder' : 'op'}` : ''}.</p>}
       <div className="zpop-sep" aria-hidden="true"/>
-      {/* De look: Zenit, of Stroom (Zenit met het licht en het glas). Uit = de
-          vertrouwde look (Cockpit). Zenit blijft kiesbaar tot Stroom de standaard is. */}
+      {/* De look: Baken (de standaard), Zenit, Stroom (Zenit met het licht en
+          het glas) of Cockpit, de vorige look met de zijbalk. */}
       <div className="zpop-h">Look</div>
       <div className="zpop-looks" role="group" aria-label="Look">
         {LOOK_OPTIONS.map(option => <button

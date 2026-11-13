@@ -239,9 +239,14 @@
 
 /* ── 4 · De nachtrail ────────────────────────────────────────────────────────
    Altijd donker, ook op Dag: het merkanker. Hij draagt .cmd-scope, zodat
-   Cockpit er op Dag de Nacht-tokens op zet (tellers, focus, tooltips). */
-:root[data-look="zenit"] .znav{position:fixed;top:0;left:0;bottom:0;z-index:60;width:var(--rail);color:var(--ink)}
-:root[data-look="zenit"] .zrail{
+   Cockpit er op Dag de Nacht-tokens op zet (tellers, focus, tooltips).
+
+   §4 tot en met §7 (rail, paneel, de vensters ernaast, de telefoon) gelden
+   sinds 2026-11-13 ook voor Baken, dat dezelfde navigatie kreeg (ZenitNav).
+   Dit is de vorm; baken.css (§3) legt er de kleuren van Baken overheen. Wie
+   hier iets verandert, verandert het dus ook in de standaardlook. */
+:root:is([data-look="zenit"],[data-look="baken"]) .znav{position:fixed;top:0;left:0;bottom:0;z-index:60;width:var(--rail);color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail{
   position:absolute;left:8px;top:8px;bottom:8px;width:68px;z-index:2;
   display:flex;flex-direction:column;align-items:center;gap:2px;padding:12px 0 10px;
   border-radius:20px;color:#F4F3F0;
@@ -254,48 +259,48 @@
     linear-gradient(180deg,#131318 0%,#0C0C0F 60%,#0A0A0D 100%);
   box-shadow:0 0 0 1px rgba(255,255,255,.07),inset 0 1px 0 rgba(255,255,255,.06),0 24px 48px -26px rgba(0,0,0,.75);
 }
-:root[data-look="zenit"][data-theme="light"] .zrail{box-shadow:0 0 0 1px rgba(0,0,0,.2),inset 0 1px 0 rgba(255,255,255,.06),0 24px 48px -24px rgba(28,27,24,.55)}
-:root[data-look="zenit"] .zrail-logo{
+:root:is([data-look="zenit"],[data-look="baken"])[data-theme="light"] .zrail{box-shadow:0 0 0 1px rgba(0,0,0,.2),inset 0 1px 0 rgba(255,255,255,.06),0 24px 48px -24px rgba(28,27,24,.55)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-logo{
   flex:none;display:grid;place-items:center;width:42px;height:42px;margin-bottom:12px;padding:0;border:0;border-radius:13px;cursor:pointer;
   background:var(--logo-tile);color:#000;font:700 21px/1 var(--font-sans);letter-spacing:-.02em;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 1px rgba(0,0,0,.25),0 10px 26px -8px rgba(247,197,72,.65);
   transition:transform var(--t-2) var(--spring);
 }
-:root[data-look="zenit"] .zrail-logo:hover{transform:scale(1.04)}
-:root[data-look="zenit"] .zrail-slot{display:flex;flex-direction:column;align-items:center}
-:root[data-look="zenit"] .zrail-sep{width:26px;height:1px;margin:7px 0;background:rgba(255,255,255,.09)}
-:root[data-look="zenit"] .zrail-btn{
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-logo:hover{transform:scale(1.04)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-slot{display:flex;flex-direction:column;align-items:center}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-sep{width:26px;height:1px;margin:7px 0;background:rgba(255,255,255,.09)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn{
   position:relative;display:grid;place-items:center;width:46px;height:44px;padding:0;border:0;border-radius:13px;cursor:pointer;
   background:transparent;color:#908E88;
   transition:color var(--t-1) var(--ease),background-color var(--t-1) var(--ease);
 }
-:root[data-look="zenit"] .zrail-btn:hover,:root[data-look="zenit"] .zrail-btn.is-shown{color:#F4F3F0;background:rgba(255,255,255,.07)}
-:root[data-look="zenit"] .zrail-btn.is-on{color:#F7C548;background:radial-gradient(closest-side,rgba(247,197,72,.22),rgba(247,197,72,.07) 70%,transparent)}
-:root[data-look="zenit"] .zrail-btn.is-on::before{
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn:hover,:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-shown{color:#F4F3F0;background:rgba(255,255,255,.07)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-on{color:#F7C548;background:radial-gradient(closest-side,rgba(247,197,72,.22),rgba(247,197,72,.07) 70%,transparent)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-on::before{
   content:'';position:absolute;left:-11px;top:11px;bottom:11px;width:3px;border-radius:0 3px 3px 0;
   background:#F7C548;box-shadow:0 0 14px 1px rgba(247,197,72,.42);
 }
-:root[data-look="zenit"] .zrail-btn:focus-visible,:root[data-look="zenit"] .zrail-logo:focus-visible,:root[data-look="zenit"] .zrail-me:focus-visible{outline:2px solid #F7C548;outline-offset:2px}
-:root[data-look="zenit"] .zrail-btn.is-ai svg{color:#B8AAFF}
-:root[data-look="zenit"] .zrail-btn.is-ai.is-on svg{color:#B8AAFF;filter:drop-shadow(0 0 6px rgba(163,146,255,.6))}
-:root[data-look="zenit"] .zrail-btn.is-ai.is-on{background:radial-gradient(closest-side,rgba(163,146,255,.22),rgba(163,146,255,.06) 70%,transparent)}
-:root[data-look="zenit"] .zrail-btn.is-ai.is-on::before{background:linear-gradient(180deg,#A392FF,#6CC4FF);box-shadow:0 0 14px 1px rgba(163,146,255,.5)}
-:root[data-look="zenit"] .zrail-count{
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn:focus-visible,:root:is([data-look="zenit"],[data-look="baken"]) .zrail-logo:focus-visible,:root:is([data-look="zenit"],[data-look="baken"]) .zrail-me:focus-visible{outline:2px solid #F7C548;outline-offset:2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-ai svg{color:#B8AAFF}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-ai.is-on svg{color:#B8AAFF;filter:drop-shadow(0 0 6px rgba(163,146,255,.6))}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-ai.is-on{background:radial-gradient(closest-side,rgba(163,146,255,.22),rgba(163,146,255,.06) 70%,transparent)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-ai.is-on::before{background:linear-gradient(180deg,#A392FF,#6CC4FF);box-shadow:0 0 14px 1px rgba(163,146,255,.5)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-count{
   position:absolute;top:3px;right:1px;display:inline-grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border-radius:999px;
   background:#F7C548;color:#1A1405;font:600 10px/1 var(--font-sans);
   box-shadow:0 0 0 2px #101014;
 }
-:root[data-look="zenit"] .zrail-btn.is-ai .zrail-count{background:linear-gradient(115deg,#A392FF,#6CC4FF 52%,#F7C548);color:#14121C}
-:root[data-look="zenit"] .zrail-foot{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:2px}
-:root[data-look="zenit"] .zrail-me{
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-ai .zrail-count{background:linear-gradient(115deg,#A392FF,#6CC4FF 52%,#F7C548);color:#14121C}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-foot{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-me{
   display:grid;place-items:center;width:34px;height:34px;margin-top:8px;padding:0;border:0;border-radius:50%;cursor:pointer;
   background:var(--gold-face);color:#1A1405;font:600 12.5px/1 var(--font-sans);letter-spacing:.01em;
   box-shadow:0 0 0 2px #0C0C0F,0 0 0 3px rgba(255,255,255,.1);
   transition:box-shadow var(--t-2) var(--ease);
 }
-:root[data-look="zenit"] .zrail-me:hover,:root[data-look="zenit"] .zrail-me.is-open{box-shadow:0 0 0 2px #0C0C0F,0 0 0 4px rgba(247,197,72,.55)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-me:hover,:root:is([data-look="zenit"],[data-look="baken"]) .zrail-me.is-open{box-shadow:0 0 0 2px #0C0C0F,0 0 0 4px rgba(247,197,72,.55)}
 /* Naam van de module naast de rail, bij hover of toetsenbordfocus. */
-:root[data-look="zenit"] .ztip{
+:root:is([data-look="zenit"],[data-look="baken"]) .ztip{
   position:absolute;left:calc(100% + 12px);top:50%;z-index:40;
   padding:6px 9px;border-radius:8px;background:#26262D;color:#F4F3F0;
   font:500 12px/1 var(--font-sans);white-space:nowrap;pointer-events:none;
@@ -303,200 +308,200 @@
   opacity:0;transform:translate(-4px,-50%);
   transition:opacity var(--t-1) var(--ease),transform var(--t-1) var(--ease);
 }
-:root[data-look="zenit"] .zrail-btn:hover .ztip,:root[data-look="zenit"] .zrail-btn:focus-visible .ztip{opacity:1;transform:translate(0,-50%)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn:hover .ztip,:root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn:focus-visible .ztip{opacity:1;transform:translate(0,-50%)}
 
 /* ── 5 · Het contextpaneel ──────────────────────────────────────────────── */
-:root[data-look="zenit"] .zpanel{
+:root:is([data-look="zenit"],[data-look="baken"]) .zpanel{
   position:absolute;top:0;bottom:0;left:76px;width:244px;z-index:1;
   display:flex;flex-direction:column;min-height:0;padding:8px 10px 10px 12px;
   color:var(--ink);
 }
-:root[data-look="zenit"] .zpanel-top{display:flex;align-items:center;gap:4px;margin-bottom:2px}
-:root[data-look="zenit"] .zorg{flex:1;min-width:0;display:flex;align-items:center;gap:10px;height:50px;padding:0 6px 0 8px;border-radius:12px;transition:background-color var(--t-1) var(--ease)}
-:root[data-look="zenit"] .zorg:hover{background:var(--surface-2)}
-:root[data-look="zenit"] .zorg-tile{
+:root:is([data-look="zenit"],[data-look="baken"]) .zpanel-top{display:flex;align-items:center;gap:4px;margin-bottom:2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zorg{flex:1;min-width:0;display:flex;align-items:center;gap:10px;height:50px;padding:0 6px 0 8px;border-radius:12px;transition:background-color var(--t-1) var(--ease)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zorg:hover{background:var(--surface-2)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zorg-tile{
   flex:none;display:grid;place-items:center;width:30px;height:30px;border-radius:9px;
   background:linear-gradient(150deg,#2B2B33,#16161B);color:#F7C548;font:700 11.5px/1 var(--font-sans);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 0 1px rgba(0,0,0,.25);
 }
-:root[data-look="zenit"] .zorg-n{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
-:root[data-look="zenit"] .zorg .select-control{width:100%}
-:root[data-look="zenit"] .zorg .select-trigger{
+:root:is([data-look="zenit"],[data-look="baken"]) .zorg-n{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zorg .select-control{width:100%}
+:root:is([data-look="zenit"],[data-look="baken"]) .zorg .select-trigger{
   width:100%;height:auto;min-height:0;padding:1px 20px 1px 0;border:0;border-radius:6px;
   background:transparent;box-shadow:none;color:var(--ink);font:600 13.5px/1.25 var(--font-sans);
 }
-:root[data-look="zenit"] .zorg .select-trigger:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
-:root[data-look="zenit"] .zorg .select-chevron{right:0;color:var(--ink-3)}
-:root[data-look="zenit"] .zorg-role{font-size:11.5px;line-height:1.2;color:var(--ink-3);text-transform:capitalize}
-:root[data-look="zenit"] .zpanel-close{display:none}
-:root[data-look="zenit"] .zmod-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 4px 8px 8px}
-:root[data-look="zenit"] .zmod-h h2{margin:0;font:600 19px/1.1 var(--font-sans);letter-spacing:-.025em;color:var(--ink)}
-:root[data-look="zenit"] .zmod-acts{display:flex;align-items:center;gap:2px}
-:root[data-look="zenit"] .zicon-btn{
+:root:is([data-look="zenit"],[data-look="baken"]) .zorg .select-trigger:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zorg .select-chevron{right:0;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zorg-role{font-size:11.5px;line-height:1.2;color:var(--ink-3);text-transform:capitalize}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpanel-close{display:none}
+:root:is([data-look="zenit"],[data-look="baken"]) .zmod-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 4px 8px 8px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zmod-h h2{margin:0;font:600 19px/1.1 var(--font-sans);letter-spacing:-.025em;color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zmod-acts{display:flex;align-items:center;gap:2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zicon-btn{
   display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:8px;cursor:pointer;
   background:transparent;color:var(--ink-3);transition:background-color var(--t-1) var(--ease),color var(--t-1) var(--ease);
 }
-:root[data-look="zenit"] .zicon-btn:hover:not(:disabled){background:var(--surface-2);color:var(--ink)}
-:root[data-look="zenit"] .zicon-btn:disabled{cursor:default}
+:root:is([data-look="zenit"],[data-look="baken"]) .zicon-btn:hover:not(:disabled){background:var(--surface-2);color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zicon-btn:disabled{cursor:default}
 @media (prefers-reduced-motion:no-preference){
-  :root[data-look="zenit"] .zicon-btn.is-busy svg{animation:zenit-spin .9s linear infinite}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zicon-btn.is-busy svg{animation:zenit-spin .9s linear infinite}
   @keyframes zenit-spin{to{transform:rotate(360deg)}}
 }
-:root[data-look="zenit"] .zreadonly{display:none}
-:root[data-look="zenit"] .zpanel-scroll{flex:1;min-height:0;overflow:auto;margin:0 -4px;padding:0 4px 8px;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
-:root[data-look="zenit"] .zpnav-h{padding:16px 10px 7px;font:600 11px/1 var(--font-sans);letter-spacing:.01em;color:var(--ink-3)}
-:root[data-look="zenit"] .zpnav-group:first-child .zpnav-h{padding-top:6px}
-:root[data-look="zenit"] .zpnav{display:flex;flex-direction:column;gap:1px}
-:root[data-look="zenit"] .zpnav-item{
+:root:is([data-look="zenit"],[data-look="baken"]) .zreadonly{display:none}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpanel-scroll{flex:1;min-height:0;overflow:auto;margin:0 -4px;padding:0 4px 8px;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-h{padding:16px 10px 7px;font:600 11px/1 var(--font-sans);letter-spacing:.01em;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-group:first-child .zpnav-h{padding-top:6px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav{display:flex;flex-direction:column;gap:1px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-item{
   display:flex;align-items:center;gap:10px;width:100%;height:32px;padding:0 10px;border:0;border-radius:9px;cursor:pointer;
   background:transparent;color:var(--ink-2);font:500 13px/1 var(--font-sans);text-align:left;
   transition:background-color var(--t-1) var(--ease),color var(--t-1) var(--ease);
 }
-:root[data-look="zenit"] .zpnav-item svg{flex:none;color:var(--ink-3)}
-:root[data-look="zenit"] .zpnav-item:hover{background:var(--surface-2);color:var(--ink)}
-:root[data-look="zenit"] .zpnav-item.is-on{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:var(--shadow-1),0 0 0 1px var(--line)}
-:root[data-look="zenit"] .zpnav-item.is-on svg{color:var(--accent-ink)}
-:root[data-look="zenit"] .zpnav-item:focus-visible{outline:2px solid var(--accent-ink);outline-offset:-2px}
-:root[data-look="zenit"] .zpnav-l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-:root[data-look="zenit"] .zpnav-n{
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-item svg{flex:none;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-item:hover{background:var(--surface-2);color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-item.is-on{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:var(--shadow-1),0 0 0 1px var(--line)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-item.is-on svg{color:var(--accent-ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-item:focus-visible{outline:2px solid var(--accent-ink);outline-offset:-2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-n{
   flex:none;display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;
   background:var(--accent);color:var(--on-accent);font:600 10.5px/1 var(--font-sans);
 }
-:root[data-look="zenit"] .zpnav-dot{flex:none;width:9px;height:9px;margin:0 3px;border-radius:3px}
-:root[data-look="zenit"] .zpanel-foot{
+:root:is([data-look="zenit"],[data-look="baken"]) .zpnav-dot{flex:none;width:9px;height:9px;margin:0 3px;border-radius:3px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpanel-foot{
   flex:none;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:3px 10px;margin-top:10px;padding:11px 12px;
   border:1px solid var(--ai-line);border-radius:14px;background:var(--ai-soft);color:var(--ink);text-align:left;cursor:pointer;
   transition:background-color var(--t-1) var(--ease),box-shadow var(--t-2) var(--ease);
 }
-:root[data-look="zenit"] .zpanel-foot:hover{box-shadow:0 10px 26px -16px var(--ai-1)}
-:root[data-look="zenit"] .zpanel-foot .zorb{grid-row:span 2}
-:root[data-look="zenit"] .zpanel-foot b{font:600 12.5px/1.25 var(--font-sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-:root[data-look="zenit"] .zpanel-foot-t{grid-column:2;font-size:11.5px;line-height:1.3;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpanel-foot:hover{box-shadow:0 10px 26px -16px var(--ai-1)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpanel-foot .zorb{grid-row:span 2}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpanel-foot b{font:600 12.5px/1.25 var(--font-sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpanel-foot-t{grid-column:2;font-size:11.5px;line-height:1.3;color:var(--ink-3)}
 
 @media (min-width:761px){
   /* Los: alleen de rail. Het paneel schuift bij hover of focus over het
      werkvlak, als een eigen zwevend vlak. */
-  :root[data-look="zenit"] .app:not(.sidebar-pinned) .zpanel{
+  :root:is([data-look="zenit"],[data-look="baken"]) .app:not(.sidebar-pinned) .zpanel{
     top:8px;bottom:8px;left:84px;padding:6px 10px 10px;
     border-radius:18px;background:var(--bg-deep);box-shadow:var(--shadow-pop);
     opacity:0;visibility:hidden;transform:translateX(-8px);
     transition:opacity var(--t-2) var(--ease),transform var(--t-2) var(--ease),visibility 0s linear var(--t-2);
   }
-  :root[data-look="zenit"] .app:not(.sidebar-pinned) .znav:is(:hover,:focus-within) .zpanel{
+  :root:is([data-look="zenit"],[data-look="baken"]) .app:not(.sidebar-pinned) .znav:is(:hover,:focus-within) .zpanel{
     opacity:1;visibility:visible;transform:none;
     transition:opacity var(--t-2) var(--ease) 60ms,transform var(--t-2) var(--ease) 60ms,visibility 0s linear 60ms;
   }
 }
 /* Weinig hoogte (een laptop met een balk onderin): de rail schuift in. */
 @media (min-width:761px) and (max-height:700px){
-  :root[data-look="zenit"] .zrail{gap:0;padding-top:10px}
-  :root[data-look="zenit"] .zrail-logo{width:36px;height:36px;margin-bottom:6px;border-radius:11px;font-size:18px}
-  :root[data-look="zenit"] .zrail-btn{height:38px}
-  :root[data-look="zenit"] .zrail-sep{margin:4px 0}
-  :root[data-look="zenit"] .zrail-me{width:30px;height:30px;margin-top:4px}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zrail{gap:0;padding-top:10px}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zrail-logo{width:36px;height:36px;margin-bottom:6px;border-radius:11px;font-size:18px}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn{height:38px}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zrail-sep{margin:4px 0}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zrail-me{width:30px;height:30px;margin-top:4px}
 }
 
 /* ── 6 · Weergave en account: de vensters naast de rail ─────────────────── */
-:root[data-look="zenit"] .zpop{
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop{
   position:absolute;left:84px;bottom:12px;z-index:5;width:300px;max-height:calc(100dvh - 24px);overflow:auto;
   padding:8px;border:1px solid var(--line-2);border-radius:16px;
   background:var(--surface);color:var(--ink);box-shadow:var(--shadow-pop);
   animation:zenit-pop .24s var(--spring) both;
 }
-:root[data-look="zenit"] .zpop-h{padding:10px 10px 8px;font:600 11px/1 var(--font-sans);letter-spacing:.02em;color:var(--ink-3)}
-:root[data-look="zenit"] .zpop-themes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:0 4px 4px}
-:root[data-look="zenit"] .zth{
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-h{padding:10px 10px 8px;font:600 11px/1 var(--font-sans);letter-spacing:.02em;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-themes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:0 4px 4px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth{
   display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px;border:1px solid var(--line);border-radius:12px;cursor:pointer;
   background:transparent;color:var(--ink-2);font:500 12px/1.2 var(--font-sans);text-align:left;
   transition:border-color var(--t-1) var(--ease),background-color var(--t-1) var(--ease),box-shadow var(--t-1) var(--ease);
 }
-:root[data-look="zenit"] .zth:hover{background:var(--surface-2);color:var(--ink)}
-:root[data-look="zenit"] .zth[aria-pressed="true"]{border-color:var(--accent-ink);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.16);color:var(--ink)}
-:root[data-look="zenit"] .zth:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
-:root[data-look="zenit"] .zth-l{display:flex;align-items:center;gap:6px;font-weight:600}
-:root[data-look="zenit"] .zth small{font-size:10.5px;font-weight:400;color:var(--ink-3)}
-:root[data-look="zenit"] .zth-sw{position:relative;height:40px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
-:root[data-look="zenit"] .zth-sw.dag{background:linear-gradient(180deg,#FFF4D6,#FAF9F6)}
-:root[data-look="zenit"] .zth-sw.nacht{background:linear-gradient(180deg,#16131F,#0F0F12)}
-:root[data-look="zenit"] .zth-sw.zon{background:linear-gradient(90deg,#FFF4D6 0 50%,#16131F 50% 100%)}
-:root[data-look="zenit"] .zth-sw.sys{background:linear-gradient(135deg,#FAF9F6 0 50%,#0F0F12 50% 100%)}
-:root[data-look="zenit"] .zth-sw::after{content:'';position:absolute;left:50%;top:60%;width:14px;height:14px;margin:-7px;border-radius:50%;background:radial-gradient(circle at 36% 32%,#FFF7D6,#F2B42A)}
-:root[data-look="zenit"] .zth-sw.nacht::after{background:radial-gradient(circle at 62% 38%,transparent 0 3.5px,#E9E6DF 4px)}
-:root[data-look="zenit"] .zth-sw.sys::after{display:none}
-:root[data-look="zenit"] .zpop-note{margin:4px 10px 2px;font-size:11.5px;color:var(--ink-3)}
-:root[data-look="zenit"] .zpop-sep{height:1px;margin:6px 4px;background:var(--line)}
-:root[data-look="zenit"] .zpop-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px}
-:root[data-look="zenit"] .zpop-row-t{display:flex;flex-direction:column;gap:2px;min-width:0}
-:root[data-look="zenit"] .zpop-row-t b{font:600 12.5px/1.2 var(--font-sans)}
-:root[data-look="zenit"] .zpop-row-t small{font-size:11px;line-height:1.35;color:var(--ink-3)}
-:root[data-look="zenit"] .zswitch{
+:root:is([data-look="zenit"],[data-look="baken"]) .zth:hover{background:var(--surface-2);color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth[aria-pressed="true"]{border-color:var(--accent-ink);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.16);color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth-l{display:flex;align-items:center;gap:6px;font-weight:600}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth small{font-size:10.5px;font-weight:400;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth-sw{position:relative;height:40px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth-sw.dag{background:linear-gradient(180deg,#FFF4D6,#FAF9F6)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth-sw.nacht{background:linear-gradient(180deg,#16131F,#0F0F12)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth-sw.zon{background:linear-gradient(90deg,#FFF4D6 0 50%,#16131F 50% 100%)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth-sw.sys{background:linear-gradient(135deg,#FAF9F6 0 50%,#0F0F12 50% 100%)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth-sw::after{content:'';position:absolute;left:50%;top:60%;width:14px;height:14px;margin:-7px;border-radius:50%;background:radial-gradient(circle at 36% 32%,#FFF7D6,#F2B42A)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth-sw.nacht::after{background:radial-gradient(circle at 62% 38%,transparent 0 3.5px,#E9E6DF 4px)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zth-sw.sys::after{display:none}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-note{margin:4px 10px 2px;font-size:11.5px;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-sep{height:1px;margin:6px 4px;background:var(--line)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-row-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-row-t b{font:600 12.5px/1.2 var(--font-sans)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-row-t small{font-size:11px;line-height:1.35;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zswitch{
   position:relative;flex:none;width:38px;height:22px;padding:0;border:0;border-radius:999px;cursor:pointer;
   background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--line-2);
   transition:background-color var(--t-2) var(--ease);
 }
-:root[data-look="zenit"] .zswitch span{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform var(--t-2) var(--spring)}
-:root[data-look="zenit"] .zswitch[aria-checked="true"]{background:var(--accent);box-shadow:none}
-:root[data-look="zenit"] .zswitch[aria-checked="true"] span{transform:translateX(16px)}
-:root[data-look="zenit"] .zswitch:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zswitch span{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform var(--t-2) var(--spring)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zswitch[aria-checked="true"]{background:var(--accent);box-shadow:none}
+:root:is([data-look="zenit"],[data-look="baken"]) .zswitch[aria-checked="true"] span{transform:translateX(16px)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zswitch:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
 /* De look kiezen (Zenit, Stroom of uit): drie regels met een klein voorbeeld. */
-:root[data-look="zenit"] .zpop-looks{display:grid;gap:4px;padding:0 4px 4px}
-:root[data-look="zenit"] .zlook{
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-looks{display:grid;gap:4px;padding:0 4px 4px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook{
   display:flex;align-items:center;gap:10px;width:100%;padding:7px 8px;border:1px solid transparent;border-radius:11px;cursor:pointer;
   background:transparent;color:var(--ink-2);font:500 12.5px/1.2 var(--font-sans);text-align:left;
   transition:border-color var(--t-1) var(--ease),background-color var(--t-1) var(--ease);
 }
-:root[data-look="zenit"] .zlook:hover{background:var(--surface-2);color:var(--ink)}
-:root[data-look="zenit"] .zlook[aria-pressed="true"]{border-color:var(--accent-ink);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.16);color:var(--ink)}
-:root[data-look="zenit"] .zlook:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
-:root[data-look="zenit"] .zlook-sw{position:relative;flex:none;width:38px;height:26px;border-radius:7px;overflow:hidden;border:1px solid var(--line)}
-:root[data-look="zenit"] .zlook-sw.is-zenit{background:linear-gradient(90deg,#0C0C0F 0 30%,#16131F 30% 100%)}
-:root[data-look="zenit"] .zlook-sw.is-zenit::after{content:'';position:absolute;left:5px;top:6px;width:4px;height:4px;border-radius:50%;background:#F7C548;box-shadow:0 7px 0 rgba(255,255,255,.3),0 14px 0 rgba(255,255,255,.3)}
-:root[data-look="zenit"] .zlook-sw.is-stroom{background:radial-gradient(70% 90% at 20% 30%,rgba(247,197,72,.45),transparent 70%),radial-gradient(60% 80% at 90% 0%,rgba(75,59,196,.9),transparent 75%),#07070A}
-:root[data-look="zenit"] .zlook-sw.is-stroom::after{content:'';position:absolute;left:4px;right:4px;top:15px;height:3px;border-radius:3px;background:linear-gradient(90deg,#AEB6D0,#F7C548);box-shadow:0 0 6px rgba(247,197,72,.7)}
-:root[data-look="zenit"] .zlook-sw.is-cockpit{background:linear-gradient(135deg,#0A0A0C,#1A1A1F)}
-:root[data-look="zenit"] .zlook-sw.is-cockpit::after{content:'';position:absolute;inset:6px 18px 6px 5px;border-radius:2px;background:repeating-linear-gradient(180deg,rgba(255,255,255,.28) 0 2px,transparent 2px 5px)}
-:root[data-look="zenit"] .zlook-t{display:flex;flex-direction:column;gap:2px;min-width:0}
-:root[data-look="zenit"] .zlook-t b{font:600 12.5px/1.2 var(--font-sans);color:var(--ink)}
-:root[data-look="zenit"] .zlook-t small{font-size:11px;line-height:1.35;color:var(--ink-3)}
-:root[data-look="zenit"] .zpop-who{display:flex;align-items:center;gap:10px;padding:8px 8px 10px;border-bottom:1px solid var(--line);margin-bottom:2px}
-:root[data-look="zenit"] .zav{
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook:hover{background:var(--surface-2);color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook[aria-pressed="true"]{border-color:var(--accent-ink);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.16);color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-sw{position:relative;flex:none;width:38px;height:26px;border-radius:7px;overflow:hidden;border:1px solid var(--line)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-sw.is-zenit{background:linear-gradient(90deg,#0C0C0F 0 30%,#16131F 30% 100%)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-sw.is-zenit::after{content:'';position:absolute;left:5px;top:6px;width:4px;height:4px;border-radius:50%;background:#F7C548;box-shadow:0 7px 0 rgba(255,255,255,.3),0 14px 0 rgba(255,255,255,.3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-sw.is-stroom{background:radial-gradient(70% 90% at 20% 30%,rgba(247,197,72,.45),transparent 70%),radial-gradient(60% 80% at 90% 0%,rgba(75,59,196,.9),transparent 75%),#07070A}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-sw.is-stroom::after{content:'';position:absolute;left:4px;right:4px;top:15px;height:3px;border-radius:3px;background:linear-gradient(90deg,#AEB6D0,#F7C548);box-shadow:0 0 6px rgba(247,197,72,.7)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-sw.is-cockpit{background:linear-gradient(135deg,#0A0A0C,#1A1A1F)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-sw.is-cockpit::after{content:'';position:absolute;inset:6px 18px 6px 5px;border-radius:2px;background:repeating-linear-gradient(180deg,rgba(255,255,255,.28) 0 2px,transparent 2px 5px)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-t b{font:600 12.5px/1.2 var(--font-sans);color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-t small{font-size:11px;line-height:1.35;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-who{display:flex;align-items:center;gap:10px;padding:8px 8px 10px;border-bottom:1px solid var(--line);margin-bottom:2px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zav{
   flex:none;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;
   background:var(--gold-face);color:#1A1405;font:600 12.5px/1 var(--font-sans);
 }
-:root[data-look="zenit"] .zpop-who-t{display:flex;flex-direction:column;gap:2px;min-width:0}
-:root[data-look="zenit"] .zpop-who-t b{font:600 13px/1.2 var(--font-sans);text-transform:capitalize}
-:root[data-look="zenit"] .zpop-who-t span{font-size:11.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-:root[data-look="zenit"] .zpop-list{max-height:min(46dvh,400px);overflow:auto}
-:root[data-look="zenit"] .zpop-item{
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-who-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-who-t b{font:600 13px/1.2 var(--font-sans);text-transform:capitalize}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-who-t span{font-size:11.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-list{max-height:min(46dvh,400px);overflow:auto}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-item{
   display:flex;align-items:center;gap:10px;width:100%;min-height:34px;padding:0 10px;border:0;border-radius:9px;cursor:pointer;
   background:transparent;color:var(--ink-2);font:500 13px/1.2 var(--font-sans);text-align:left;
 }
-:root[data-look="zenit"] .zpop-item svg{flex:none;color:var(--ink-3)}
-:root[data-look="zenit"] .zpop-item:hover,:root[data-look="zenit"] .zpop-item:focus-visible{background:var(--surface-2);color:var(--ink);outline:none}
-:root[data-look="zenit"] .zpop-item.danger,:root[data-look="zenit"] .zpop-item.danger svg{color:var(--danger)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-item svg{flex:none;color:var(--ink-3)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-item:hover,:root:is([data-look="zenit"],[data-look="baken"]) .zpop-item:focus-visible{background:var(--surface-2);color:var(--ink);outline:none}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-item.danger,:root:is([data-look="zenit"],[data-look="baken"]) .zpop-item.danger svg{color:var(--danger)}
 
 /* ── 7 · Telefoon: één uitschuifmenu met rail en paneel ─────────────────── */
 @media (max-width:760px){
-  :root[data-look="zenit"] .znav{
+  :root:is([data-look="zenit"],[data-look="baken"]) .znav{
     z-index:90;width:min(92vw,360px);display:flex;
     background:var(--bg-deep);
     transform:translateX(-102%);
     transition:transform .28s cubic-bezier(.4,0,.2,1),box-shadow .28s ease;
   }
-  :root[data-look="zenit"] .znav.is-open{transform:none;box-shadow:34px 0 90px rgba(0,0,0,.55)}
-  :root[data-look="zenit"] .zrail{position:relative;left:auto;top:auto;bottom:auto;flex:0 0 64px;width:64px;margin:8px 0 calc(8px + env(safe-area-inset-bottom)) 8px;border-radius:18px}
-  :root[data-look="zenit"] .zrail-btn{width:44px;height:42px}
-  :root[data-look="zenit"] .zrail-btn.is-on::before{left:-10px}
-  :root[data-look="zenit"] .zrail-btn.is-shown:not(.is-on){box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
-  :root[data-look="zenit"] .ztip{display:none}
-  :root[data-look="zenit"] .zpanel{position:relative;left:auto;top:auto;bottom:auto;flex:1;width:auto;min-width:0;padding:10px 10px calc(12px + env(safe-area-inset-bottom))}
-  :root[data-look="zenit"] .zpanel-close{display:grid;place-items:center;flex:none;width:40px;height:40px;padding:0;border:0;border-radius:11px;background:transparent;color:var(--ink-2);cursor:pointer}
-  :root[data-look="zenit"] .zpanel-close:hover{background:var(--surface-2);color:var(--ink)}
-  :root[data-look="zenit"] .zpin{display:none}
-  :root[data-look="zenit"] .zreadonly{display:flex;align-items:center;gap:6px;margin:0 8px 8px;font-size:12px;color:var(--ink-3)}
-  :root[data-look="zenit"] .zpnav-item{height:40px;font-size:14px}
-  :root[data-look="zenit"] .zpop{left:76px;bottom:calc(10px + env(safe-area-inset-bottom));width:min(300px,calc(100% - 84px))}
-  :root[data-look="zenit"] .zth-sw{height:32px}
+  :root:is([data-look="zenit"],[data-look="baken"]) .znav.is-open{transform:none;box-shadow:34px 0 90px rgba(0,0,0,.55)}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zrail{position:relative;left:auto;top:auto;bottom:auto;flex:0 0 64px;width:64px;margin:8px 0 calc(8px + env(safe-area-inset-bottom)) 8px;border-radius:18px}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn{width:44px;height:42px}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-on::before{left:-10px}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zrail-btn.is-shown:not(.is-on){box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
+  :root:is([data-look="zenit"],[data-look="baken"]) .ztip{display:none}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zpanel{position:relative;left:auto;top:auto;bottom:auto;flex:1;width:auto;min-width:0;padding:10px 10px calc(12px + env(safe-area-inset-bottom))}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zpanel-close{display:grid;place-items:center;flex:none;width:40px;height:40px;padding:0;border:0;border-radius:11px;background:transparent;color:var(--ink-2);cursor:pointer}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zpanel-close:hover{background:var(--surface-2);color:var(--ink)}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zpin{display:none}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zreadonly{display:flex;align-items:center;gap:6px;margin:0 8px 8px;font-size:12px;color:var(--ink-3)}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zpnav-item{height:40px;font-size:14px}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zpop{left:76px;bottom:calc(10px + env(safe-area-inset-bottom));width:min(300px,calc(100% - 84px))}
+  :root:is([data-look="zenit"],[data-look="baken"]) .zth-sw{height:32px}
 }
 
 /* ── 8 · Letter en koppen: rustiger dan Cockpit ─────────────────────────── */

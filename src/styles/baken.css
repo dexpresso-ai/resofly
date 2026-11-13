@@ -3,7 +3,7 @@
    ResoFly (2026-11-06). De standaardlook; zie CHANGELOG_BAKEN_2026-11-06.md.
    ──────────────────────────────────────────────────────────────────────────
    Value Backlog werkt met twee lagen: een diep donker commandovlak (de
-   zijbalk, de cockpit, de koppen) en een licht werkvlak met witte kaarten
+   navigatie, de cockpit, de koppen) en een licht werkvlak met witte kaarten
    dat daarop zweeft. Eén felle kleur is het signaal: "hier gebeurt het".
    Baken doet precies dat, met wat van ResoFly is:
 
@@ -60,9 +60,10 @@
 .look-sw.is-zenit::after{content:'';position:absolute;left:5px;top:5px;width:4px;height:4px;border-radius:50%;background:#F7C548;box-shadow:0 7px 0 rgba(255,255,255,.3),0 14px 0 rgba(255,255,255,.3)}
 .look-sw.is-stroom{background:radial-gradient(70% 90% at 20% 30%,rgba(247,197,72,.45),transparent 70%),radial-gradient(60% 80% at 90% 0%,rgba(75,59,196,.9),transparent 75%),#07070A}
 .look-sw.is-stroom::after{content:'';position:absolute;left:4px;right:4px;top:13px;height:3px;border-radius:3px;background:linear-gradient(90deg,#AEB6D0,#F7C548);box-shadow:0 0 6px rgba(247,197,72,.7)}
-/* Hetzelfde staaltje in de lookkeuze van Zenit en Stroom (ZenitNav). */
-:root[data-look="zenit"] .zlook-sw.is-baken{background:linear-gradient(90deg,#1A1A21 0 34%,#F2F2F5 34% 100%)}
-:root[data-look="zenit"] .zlook-sw.is-baken::after{content:'';position:absolute;left:5px;top:6px;width:6px;height:6px;border-radius:2px;background:#F7C548;box-shadow:0 0 6px rgba(247,197,72,.8)}
+/* Hetzelfde staaltje in de lookkeuze van de rail (ZenitNav): in Zenit, Stroom
+   en sinds 2026-11-13 ook in Baken zelf. */
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-sw.is-baken{background:linear-gradient(90deg,#1A1A21 0 34%,#F2F2F5 34% 100%)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zlook-sw.is-baken::after{content:'';position:absolute;left:5px;top:6px;width:6px;height:6px;border-radius:2px;background:#F7C548;box-shadow:0 0 6px rgba(247,197,72,.8)}
 
 /* ── 1 · Tokens ──────────────────────────────────────────────────────────── */
 :root[data-look="baken"]{
@@ -191,7 +192,7 @@
    onder. De afgeleide tokens (--panel, --border, …) worden opnieuw gezet: een
    custom property wordt opgelost waar hij staat, dus --panel op :root bleef
    anders naar het lichte --surface wijzen. */
-:root[data-look="baken"] :is(.sidebar,.cockpit,.proj-dash-hero,.client-detail-hero,.bottomnav,.mobile-nav-toggle,.cmd-scope){
+:root[data-look="baken"] :is(.cockpit,.proj-dash-hero,.client-detail-hero,.bottomnav,.mobile-nav-toggle,.cmd-scope){
   --bg-rgb:21,21,27;
   --bg-deep-rgb:14,14,18;
   --surface-rgb:27,27,34;
@@ -404,122 +405,167 @@
   to{opacity:1;transform:none}
 }
 
-/* ── 3 · De zijbalk: het donkere commandovlak ────────────────────────────── */
-/* Nachtgrafiet met de gouden lamp linksboven, en vanuit het merk de stralen
-   die naar onderen wegvloeien — zoals de honingraat in de zijbalk van Value
-   Backlog. */
-:root[data-look="baken"] .app .sidebar,
-:root[data-look="baken"][data-theme="light"] .app .sidebar{
-  background:
-    radial-gradient(300px 250px at 0 0,rgba(247,197,72,.16),transparent 70%),
-    radial-gradient(240px 260px at 100% 0,rgba(132,118,255,.06),transparent 70%),
-    linear-gradient(180deg,#1A1A21 0%,#141419 52%,#111116 100%);
-}
-:root[data-look="baken"] .app .sidebar::before{
-  background:var(--bk-rays) no-repeat;
-  background-position:34px 34px;
-  -webkit-mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.4) 20%,transparent 42%);
-          mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.4) 20%,transparent 42%);
+/* ── 3 · De rail en het uitklappaneel: het donkere commandovlak ─────────── */
+/* Sinds 2026-11-13 heeft Baken de navigatie van Zenit (ZenitNav): links een
+   smalle rail met de modules, en daarnaast het paneel waarin het submenu van
+   de module uitklapt. Daarvoor had Baken de zijbalk van Cockpit, waarin een
+   submenu als een harmonica tussen de andere regels openklapte: Financiën
+   duwde tot zeventien regels tussen de rest, en wat eronder stond (Berichten,
+   Chat, Rapportages) verdween onder de rand van het scherm.
+   De vorm (maten, plaats, gedrag bij hover en vastzetten, de telefoon) komt
+   uit zenit.css §4–7; hier staan alleen de kleuren van Baken. Rail en paneel
+   zijn samen het commandovlak: nachtgrafiet, ook op Dag. Het paneel draagt
+   daarvoor .cmd-scope (ZenitNav.tsx), zodat ook de tokens erin donker zijn. */
+@media (min-width:761px){
+  /* Rail 68px en 8px grond, dan het werkvlak; vastgezet komt het paneel van
+     244px erbij. Zelfde maten als Zenit. Het werkvlak (.main) houdt zijn
+     eigen marge van 8px boven, rechts en onder. */
+  :root[data-look="baken"] .app{--rail:84px;--sidebar:320px}
 }
 
-/* Het merk: de oranje tegel met de R uit het logo en een halo, de naam in wit,
-   eronder de organisatie in goud — daar wissel je ook van organisatie. */
-:root[data-look="baken"] .app .bk-brand{display:flex;align-items:center;gap:11px;min-height:44px}
-:root[data-look="baken"] .app .bk-brand .brand-icon{
-  position:relative;display:grid;place-items:center;flex:none;
-  width:40px;height:40px;border-radius:13px;
-  background:var(--logo-tile);color:#000;
+/* De rail: de gouden lamp boven het merk, nachtgrafiet dat naar onderen
+   dieper wordt, en de stralen die vanuit het merk wegvloeien. */
+:root[data-look="baken"] .zrail,
+:root[data-look="baken"][data-theme="light"] .zrail{
+  background:
+    radial-gradient(120px 120px at 50% 33px,rgba(247,197,72,.24),transparent 70%),
+    radial-gradient(90px 140px at 100% 0,rgba(132,118,255,.08),transparent 70%),
+    linear-gradient(180deg,#1C1C24 0%,#16161C 52%,#111116 100%);
+  box-shadow:0 0 0 1px rgba(255,255,255,.07),inset 0 1px 0 rgba(255,255,255,.08),0 24px 48px -26px rgba(0,0,0,.8);
+}
+:root[data-look="baken"] .zrail::before{
+  content:'';position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;
+  background:var(--bk-rays) no-repeat 34px 33px;
+  -webkit-mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.35) 22%,transparent 44%);
+          mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.35) 22%,transparent 44%);
+}
+/* Het merk: de gouden tegel met het R-merkteken en een halo. */
+:root[data-look="baken"] .zrail-logo{
   box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 -1px 0 rgba(110,70,0,.25),0 0 0 4px rgba(247,197,72,.08),0 10px 26px -6px rgba(247,197,72,.6);
 }
-:root[data-look="baken"] .bk-brand-halo{
-  position:absolute;inset:-10px;z-index:-1;border-radius:20px;
-  background:radial-gradient(closest-side,rgba(247,197,72,.35),transparent);
-  filter:blur(6px);pointer-events:none;
-}
-/* Het merkteken vult de hele tegel, net als in het app-icoon. */
-:root[data-look="baken"] .bk-mark{display:block;flex:none;width:100%;height:100%}
-:root[data-look="baken"] .bk-brand-text{display:flex;flex-direction:column;min-width:0;line-height:1.15}
-:root[data-look="baken"] .bk-brand-name{font-size:15.5px;font-weight:800;letter-spacing:-.02em;color:#fff}
-:root[data-look="baken"] .bk-org{min-width:0;margin-top:1px}
-:root[data-look="baken"] .bk-org .select-control{width:auto}
-:root[data-look="baken"] .bk-org .select-trigger.bk-org-select{
-  display:inline-flex;align-items:center;gap:5px;max-width:100%;
-  min-height:0;height:auto;padding:1px 4px 1px 0;margin:0;
-  border:0;border-radius:6px;background:none;box-shadow:none;
-  color:#F7C548;font-size:11.5px;font-weight:600;letter-spacing:0;cursor:pointer;
-}
-:root[data-look="baken"] .bk-org .select-trigger.bk-org-select:hover{color:#FFD467;background:rgba(255,255,255,.05)}
-:root[data-look="baken"] .bk-org .select-trigger.bk-org-select:focus-visible{outline:2px solid #F7C548;outline-offset:2px}
-:root[data-look="baken"] .bk-org .select-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-:root[data-look="baken"] .bk-org .select-chevron{display:inline-flex;flex:none;color:rgba(247,197,72,.75)}
-:root[data-look="baken"] .bk-org .select-chevron svg{width:10px;height:7px}
-:root[data-look="baken"] .app .sidebar .sidebar-readonly{margin-top:10px}
+:root[data-look="baken"] .zrail-sep{background:rgba(255,255,255,.08)}
+:root[data-look="baken"] .zrail-btn{color:rgba(243,243,246,.56)}
+:root[data-look="baken"] :is(.zrail-btn:hover,.zrail-btn.is-shown){color:#fff;background:rgba(255,255,255,.07)}
+/* Waar je bent, gloeit: het icoon in goud met een gloed, en de gouden streep
+   langs de rand. */
+:root[data-look="baken"] .zrail-btn.is-on{color:#F7C548;background:radial-gradient(closest-side,rgba(247,197,72,.24),rgba(247,197,72,.08) 70%,transparent)}
+:root[data-look="baken"] .zrail-btn.is-on:not(.is-ai) svg{filter:drop-shadow(0 0 6px rgba(247,197,72,.75))}
+:root[data-look="baken"] .zrail-btn.is-on::before{width:4px;background:#F7C548;box-shadow:0 0 14px rgba(247,197,72,.95)}
+:root[data-look="baken"] .zrail-btn.is-ai.is-on::before{background:linear-gradient(180deg,#A392FF,#6CC4FF);box-shadow:0 0 14px 1px rgba(163,146,255,.5)}
+/* Tellers: wat op je wacht, is een gouden pil met gloed. */
+:root[data-look="baken"] .zrail-count{background:#F7C548;color:#191307;font-weight:700;box-shadow:0 0 0 2px #16161C,0 0 10px rgba(247,197,72,.55)}
+:root[data-look="baken"] .zrail-me{background:var(--bk-gold-face);color:#191307;font-weight:700;box-shadow:0 0 0 2px #111116,0 0 0 3px rgba(255,255,255,.1)}
+:root[data-look="baken"] :is(.zrail-me:hover,.zrail-me.is-open){box-shadow:0 0 0 2px #111116,0 0 0 4px rgba(247,197,72,.55)}
+:root[data-look="baken"] .ztip{background:#1B1B22;color:#F3F3F6;box-shadow:0 0 0 1px rgba(255,255,255,.09),0 8px 24px -8px rgba(0,0,0,.7)}
 
-/* Groepskopjes en menuregels zoals in Value Backlog: kleine kapitalen met
-   lucht, regels van 38px in 14px, en wat actief is gloeit. */
-:root[data-look="baken"] .app .sidebar .nav-section,
-:root[data-look="baken"] .app .sidebar .nav-group{color:#9C9CA8}
-:root[data-look="baken"] .app .sidebar .nav-item{color:rgba(243,243,246,.74)}
-:root[data-look="baken"] .app .sidebar .nav-item svg{color:rgba(243,243,246,.5)}
-:root[data-look="baken"] .app .sidebar .nav-item:hover{background:rgba(255,255,255,.07);color:#fff}
-:root[data-look="baken"] .app .sidebar .nav-item.active{
-  color:#fff;
+/* Het paneel. Vastgezet ligt het op de donkere grond naast de rail; de
+   stralen van het merk lopen erin door. Los schuift het als een eigen vlak
+   over het werkvlak, met dezelfde lamp linksboven. */
+:root[data-look="baken"] .zpanel::before{
+  content:'';position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;
+  background:var(--bk-rays) no-repeat -34px 41px;
+  -webkit-mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.3) 18%,transparent 36%);
+          mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.3) 18%,transparent 36%);
+}
+@media (min-width:761px){
+  :root[data-look="baken"] .app.sidebar-pinned .zpanel{
+    background:radial-gradient(280px 230px at 0 0,rgba(247,197,72,.10),transparent 70%);
+  }
+  :root[data-look="baken"] .app:not(.sidebar-pinned) .zpanel{
+    background:
+      radial-gradient(280px 230px at 0 0,rgba(247,197,72,.13),transparent 70%),
+      linear-gradient(180deg,#1C1C24 0%,#16161C 52%,#121217 100%);
+    box-shadow:0 0 0 1px rgba(255,255,255,.08),inset 0 1px 0 rgba(255,255,255,.06),0 28px 70px -18px rgba(0,0,0,.85);
+  }
+  :root[data-look="baken"] .app:not(.sidebar-pinned) .zpanel::before{background-position:-42px 33px}
+}
+
+/* Bovenin de organisatie, in goud, zoals vroeger onder het merk: daar wissel
+   je ook van organisatie of administratie. */
+:root[data-look="baken"] .zorg:hover{background:rgba(255,255,255,.05)}
+:root[data-look="baken"] .zorg-tile{color:#F7C548;background:linear-gradient(150deg,#34333F 0%,#20202A 52%,#15151B 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 0 1px rgba(0,0,0,.3)}
+:root[data-look="baken"] .zorg .select-trigger{color:#F7C548}
+:root[data-look="baken"] .zorg .select-trigger:hover{color:#FFD467}
+:root[data-look="baken"] .zorg .select-trigger:focus-visible{outline-color:#F7C548}
+:root[data-look="baken"] .zorg .select-chevron{color:rgba(247,197,72,.75)}
+:root[data-look="baken"] .zorg-role{color:#A9A9B6}
+/* De naam van de module: groot en stevig, zoals de paginakoppen. */
+:root[data-look="baken"] .zmod-h h2{font-size:19px;font-weight:800;letter-spacing:-.025em;color:#fff}
+:root[data-look="baken"] .zicon-btn{color:rgba(243,243,246,.6)}
+:root[data-look="baken"] .zicon-btn:hover:not(:disabled){background:rgba(255,255,255,.07);color:#fff}
+:root[data-look="baken"] .zicon-btn:focus-visible{outline:2px solid #F7C548;outline-offset:1px}
+
+/* Groepskopjes en regels zoals de zijbalk van Baken was: kleine kapitalen met
+   lucht, en wat actief is gloeit (een gouden verloop, een gouden streep, een
+   oplichtend icoon). */
+/* 34px per regel, zodat Geld met al zijn onderdelen op een laptop (900px
+   hoog) in één keer past; met 38px zoals de oude zijbalk viel Jaarrekening
+   eronder weg. */
+:root[data-look="baken"] .zpnav-h{padding:16px 10px 7px 12px;font:700 10px/1 var(--font-sans);letter-spacing:.16em;text-transform:uppercase;color:#9C9CA8}
+:root[data-look="baken"] .zpnav-group:first-child .zpnav-h{padding-top:6px}
+:root[data-look="baken"] .zpnav{gap:1px}
+:root[data-look="baken"] .zpnav-item{position:relative;height:34px;padding:0 10px 0 12px;gap:11px;border-radius:11px;color:rgba(243,243,246,.74);font-size:13.5px}
+:root[data-look="baken"] .zpnav-item svg{color:rgba(243,243,246,.5)}
+:root[data-look="baken"] .zpnav-item:hover{background:rgba(255,255,255,.07);color:#fff}
+:root[data-look="baken"] .zpnav-item:hover svg{color:rgba(243,243,246,.8)}
+:root[data-look="baken"] .zpnav-item.is-on{
+  color:#fff;font-weight:600;
   background:linear-gradient(90deg,rgba(247,197,72,.17) 0%,rgba(255,255,255,.06) 60%,rgba(255,255,255,.03) 100%);
   box-shadow:inset 0 0 0 1px rgba(247,197,72,.18);
 }
-:root[data-look="baken"] .app .sidebar .nav-item.active svg{color:#F7C548;filter:drop-shadow(0 0 6px rgba(247,197,72,.75))}
-:root[data-look="baken"] .app .sidebar .nav-item>svg.lucide-sparkles{color:var(--ai-ink)}
-:root[data-look="baken"] .app .sidebar .nav-item.active>svg.lucide-sparkles{color:var(--ai-ink);filter:drop-shadow(0 0 7px var(--ai-glow))}
-@media (min-width:761px){
-  :root[data-look="baken"] .app .sidebar-head{padding:16px 12px 8px 16px}
-  :root[data-look="baken"] .app .sidebar .sidebar-pin{top:20px}
-  :root[data-look="baken"] .app .sidebar-nav{padding:8px 12px 14px}
-  :root[data-look="baken"] .app .sidebar .nav-section,
-  :root[data-look="baken"] .app .sidebar .nav-group{padding:16px 10px 7px 12px;font-size:10px;letter-spacing:.16em}
-  :root[data-look="baken"] .app .sidebar .nav-item{height:38px;min-height:38px;margin:1px 0;padding:0 9px 0 12px;gap:12px;border-radius:12px;font-size:14px}
-  :root[data-look="baken"] .app .sidebar .nav-item svg{width:18px;height:18px}
-  :root[data-look="baken"] .app .sidebar{--nav-row-mid:20px;--nav-bar-x:-12px}
-  :root[data-look="baken"] .app .sidebar .nav-submenu{margin:4px 0 8px 22px;padding-left:12px}
-  :root[data-look="baken"] .app .sidebar .nav-submenu button{min-height:32px;border-radius:10px;font-size:13px}
-  /* De smalle balk: het merk blijft, de organisatie verschijnt pas als je het
-     menu vastzet (zoals de organisatiekeuze in Cockpit). */
-  :root[data-look="baken"] .app:not(.sidebar-pinned) .sidebar .bk-org{visibility:hidden}
-  :root[data-look="baken"] .app:not(.sidebar-pinned) .sidebar-head{padding-left:12px}
+:root[data-look="baken"] .zpnav-item.is-on svg{color:#F7C548;filter:drop-shadow(0 0 6px rgba(247,197,72,.75))}
+:root[data-look="baken"] .zpnav-item.is-on::before{
+  content:'';position:absolute;left:-4px;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;
+  background:#F7C548;box-shadow:0 0 12px rgba(247,197,72,.9);
 }
-/* Op een tablet staat de vastzetknop altijd in beeld (globals.css: de rail
-   opent daar niet bij hover). In de smalle balk viel hij over de R-tegel;
-   hier staat hij eronder, tot de balk openklapt. */
-@media (min-width:761px) and (max-width:1024px){
-  :root[data-look="baken"] .app:not(.sidebar-pinned) .sidebar-head{padding-bottom:44px}
-  :root[data-look="baken"] .app:not(.sidebar-pinned) .sidebar:not(:hover):not(:focus-within) .sidebar-pin{top:66px;left:18px;right:auto}
+:root[data-look="baken"] .zpnav-item:focus-visible{outline:2px solid #F7C548;outline-offset:-2px}
+:root[data-look="baken"] .zpnav-n{min-width:20px;height:20px;padding:0 6px;background:#F7C548;color:#191307;font-weight:700;box-shadow:0 0 12px rgba(247,197,72,.55)}
+:root[data-look="baken"] .zpanel-scroll{scrollbar-color:rgba(255,255,255,.14) transparent}
+
+/* Onderin het paneel: Gerrie, in zijn poollicht. */
+:root[data-look="baken"] .zpanel-foot{
+  border-color:rgba(163,146,255,.3);
+  background:linear-gradient(135deg,rgba(163,146,255,.14) 0%,rgba(108,196,255,.06) 100%);
+  color:#F3F3F6;
 }
-/* De gouden streep langs de rand van de actieve regel, met gloed. */
-:root[data-look="baken"] .app .sidebar .nav-item-wrap:has(>.nav-item.active)::before{
-  width:4px;height:22px;background:#F7C548;box-shadow:0 0 14px rgba(247,197,72,.95);
+:root[data-look="baken"] .zpanel-foot:hover{box-shadow:0 10px 26px -14px rgba(163,146,255,.8)}
+:root[data-look="baken"] .zpanel-foot-t{color:#A9A9B6}
+:root[data-look="baken"] .zorb{
+  --s:18px;position:relative;display:inline-block;flex:none;
+  width:var(--s);height:var(--s);border-radius:50%;
+  background:
+    radial-gradient(circle at 32% 28%,rgba(255,255,255,.95),rgba(255,255,255,0) 32%),
+    conic-gradient(from 200deg,var(--ai-1),var(--ai-2),var(--ai-3),var(--ai-1));
+  box-shadow:0 0 0 1px rgba(255,255,255,.1),0 6px 16px -6px var(--ai-1);
 }
-:root[data-look="baken"] .app .sidebar .nav-submenu{border-left-color:rgba(255,255,255,.08)}
-:root[data-look="baken"] .app .sidebar .nav-submenu button.active{background:rgba(255,255,255,.08);color:#fff}
-:root[data-look="baken"] .app .sidebar .nav-submenu button.active svg{color:#F7C548}
-/* Tellers: wat op je wacht, is een gouden pil met gloed. */
-:root[data-look="baken"] .app .sidebar .nav-badge{
-  min-width:20px;height:20px;padding:0 6px;border-radius:999px;
-  background:#F7C548;color:#191307;font-size:10.5px;font-weight:700;
-  box-shadow:0 0 12px rgba(247,197,72,.55);
+@media (prefers-reduced-motion:no-preference){
+  :root[data-look="baken"] .zorb.live{animation:zenit-orb 6s linear infinite}
 }
 
-/* Onderin: wie je bent, en het accountmenu in hetzelfde donker. */
-:root[data-look="baken"] .app .sidebar .sidebar-user{border-top:1px solid rgba(255,255,255,.08)}
-:root[data-look="baken"] .app .sidebar .user-avatar{background:var(--bk-gold-face);color:#191307;font-weight:700}
-:root[data-look="baken"] .app .sidebar .user-menu{
+/* Weergave en account: de vensters naast de rail, in hetzelfde donker. */
+:root[data-look="baken"] .zpop{
   background:#1B1B22;border:1px solid rgba(255,255,255,.09);border-radius:18px;
   box-shadow:0 0 0 1px rgba(0,0,0,.4),0 28px 70px -18px rgba(0,0,0,.9);
 }
-:root[data-look="baken"] .app .sidebar .look-option{color:rgba(243,243,246,.72)}
-:root[data-look="baken"] .app .sidebar .look-option:hover{background:rgba(255,255,255,.07);color:#fff}
-:root[data-look="baken"] .app .sidebar .look-option.is-on{color:#fff;background:linear-gradient(90deg,rgba(247,197,72,.16),rgba(255,255,255,.04));box-shadow:inset 0 0 0 1px rgba(247,197,72,.24)}
-:root[data-look="baken"] .app .sidebar .look-t small{color:rgba(243,243,246,.5)}
-:root[data-look="baken"] .app .sidebar .theme-switch{background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.08)}
-:root[data-look="baken"] .app .sidebar .theme-switch button.is-on{background:#2C2C36;color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.4),inset 0 0 0 1px rgba(255,255,255,.08)}
+:root[data-look="baken"] :is(.zpop-item:hover,.zpop-item:focus-visible,.zth:hover,.zlook:hover){background:rgba(255,255,255,.07);color:#fff}
+:root[data-look="baken"] :is(.zth,.zlook)[aria-pressed="true"]{border-color:rgba(247,197,72,.6);box-shadow:0 0 0 3px rgba(247,197,72,.14);background:linear-gradient(90deg,rgba(247,197,72,.12),rgba(255,255,255,.03));color:#fff}
+:root[data-look="baken"] .zav{background:var(--bk-gold-face);color:#191307;font-weight:700}
+
+/* Telefoon: één uitschuifmenu met rail en paneel (zenit.css §7), op het
+   nachtgrafiet met de lamp linksboven. */
+@media (max-width:760px){
+  :root[data-look="baken"] .znav{
+    background:
+      radial-gradient(300px 250px at 0 0,rgba(247,197,72,.16),transparent 70%),
+      radial-gradient(240px 260px at 100% 0,rgba(132,118,255,.06),transparent 70%),
+      linear-gradient(180deg,#1A1A21 0%,#141419 52%,#111116 100%);
+  }
+  :root[data-look="baken"] .zpanel::before{background-position:-32px 41px}
+  :root[data-look="baken"] .zpanel-close{color:rgba(243,243,246,.74)}
+  :root[data-look="baken"] .zpanel-close:hover{background:rgba(255,255,255,.07);color:#fff}
+  :root[data-look="baken"] .zreadonly{color:#A9A9B6}
+  :root[data-look="baken"] .zpnav-item{height:42px;font-size:14.5px}
+}
 
 /* ── 4 · Paginakoppen: groot en stevig, met de tegel van het commandovlak ── */
 :root[data-look="baken"] .app .eyebrow{color:var(--accent-ink);font-size:11px;font-weight:700;letter-spacing:.16em}
@@ -857,11 +903,7 @@
     background:radial-gradient(40px 26px at 20% 0%,rgba(247,197,72,.22),transparent 70%),linear-gradient(150deg,#2E2D3A 0%,#1C1C24 55%,#131318 100%);
     box-shadow:inset 0 1px 0 rgba(255,255,255,.12),inset 0 0 0 1px rgba(255,255,255,.06),0 6px 14px -6px rgba(14,14,20,.7);
   }
-  /* Het uitschuifmenu: de stralen komen uit het merk. */
-  :root[data-look="baken"] .app .sidebar::before{background-position:30px 30px}
-  /* In het uitschuifmenu staat de organisatie onder het merk; ruimte voor de
-     sluitknop rechts. */
-  :root[data-look="baken"] .app .bk-brand{padding-right:84px}
+  /* Het uitschuifmenu zelf (rail en paneel) staat in §3. */
 }
 
 /* ── 12 · Inloggen en laden: het commandovlak over het hele scherm ──────── */

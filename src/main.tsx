@@ -18,7 +18,7 @@ import { MemberSelect } from './components/MemberSelect';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
 import { Modal } from './components/Modal';
 import { CheckCircle2, FileText, FolderOpen, Lock, Menu, Receipt, UserCheck, UserPlus, Users, X } from 'lucide-react';
-import { isZenitFamily, useLook } from './lib/look';
+import { isZenitFamily, usesRailNav, useLook } from './lib/look';
 import { LightField } from './components/LightField';
 import { StroomIsland } from './components/StroomIsland';
 import { CreateMenu, CREATE_ORDER, type CreateKind } from './components/CreateMenu';
@@ -999,15 +999,16 @@ function App() {
     if (stored === '1' || stored === '0') return stored === '1';
     return typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1280px)').matches === true;
   });
-  // De look van de werkruimte: Cockpit (de standaard), Zenit of Stroom, de
-  // nieuwe voorkanten achter "Probeer Zenit" en "Probeer Stroom" in het
-  // accountmenu. Zenit heeft zijn eigen navigatie (nachtrail + contextpaneel)
-  // en een vraagbalk in de tabrij. Op de telefoon is er geen vraagbalk: daar
+  // De look van de werkruimte: Baken (de standaard), Cockpit, Zenit of Stroom
+  // (src/lib/look.ts). Baken, Zenit en Stroom hebben de rail met links het
+  // paneel waarin het submenu uitklapt; Cockpit houdt de zijbalk. Zenit heeft
+  // een vraagbalk in de tabrij. Op de telefoon is er geen vraagbalk: daar
   // zoekt ook Cockpit niet (globals.css verbergt .global-search onder 761px).
   // Stroom deelt de navigatie van Zenit, maar heeft bovenin het eiland: zoeken,
   // vragen, maken en de werktabs, ook op de telefoon.
   const [look] = useLook();
   const zenitFamily = isZenitFamily(look);
+  const railNav = usesRailNav(look);
   const narrowViewport = useNarrowViewport();
   // Stroom: bij een klant (of een project van een klant) kleurt het licht
   // rechtsboven in de kleur van die klant.
@@ -4164,7 +4165,7 @@ function App() {
   }
 
   // Dezelfde gegevens voor beide navigaties: de zijbalk van Cockpit en de
-  // nachtrail met contextpaneel van Zenit.
+  // rail met het uitklappaneel van Baken, Zenit en Stroom.
   const navProps: SidebarProps = {
     page,
     data,
@@ -4215,7 +4216,7 @@ function App() {
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
     {/* Stroom: het lichtveld onder alles. Het glas erboven laat het doorschijnen. */}
     {look === 'stroom' && <LightField />}
-    {zenitFamily ? <ZenitNav {...navProps}/> : <Sidebar {...navProps}/>}
+    {railNav ? <ZenitNav {...navProps}/> : <Sidebar {...navProps}/>}
     <main className="main" ref={setMainEl}>
       {look === 'stroom'
         /* Stroom: geen tabrij maar het eiland. De werktabs wonen erin ("Open

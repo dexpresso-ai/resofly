@@ -236,6 +236,12 @@ async function openWerkruimte(gebruiker, naam, organisatieId, { tijdelijk = fals
     'brandcore.activeOrganizationId': organisatieId,
     [`brandcore.tabs.${organisatieId}`]: JSON.stringify({ tabs: [{ page: 'quotes', projectId: null, clientId: null, statsReportId: null, galleryId: null }], activeIndex: 0 }),
     'brandcore.sidebarPinned': '1',
+    // De stromen klikken door de zijbalk van Cockpit, waarin elke pagina op één
+    // niveau staat. Baken, de standaard, heeft sinds 2026-11-13 de rail met het
+    // uitklappaneel; daar ligt een pagina pas in beeld als je in zijn module
+    // bent. Deze test gaat over offertes, facturen en rechten, niet over het
+    // menu: dat menu toetsen test:loading (klikken) en test:mobile (opbouw).
+    'resofly.look': 'cockpit',
   };
   // Alleen bij het eerste laden, en alleen in het hoofdvenster: daarna ververst
   // supabase-js het token zelf, en een herhaald init-script zou de nieuwe sessie

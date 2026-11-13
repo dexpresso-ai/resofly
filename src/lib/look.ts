@@ -6,6 +6,8 @@ import { reapplyTheme } from './theme';
  *
  *  - 'baken'   de standaard sinds 2026-11-06: de opbouw en de contrasten van
  *              Value Backlog in het merk van ResoFly (CHANGELOG_BAKEN_2026-11-06.md).
+ *              Sinds 2026-11-13 met de rail en het uitklappaneel van Zenit
+ *              (CHANGELOG_BAKEN_SUBMENU_LINKS_2026-11-13.md).
  *  - 'cockpit' de vorige standaard (Belicht met de Cockpit-laag van 2026-10-05).
  *  - 'zenit'   de voorkant uit het designvoorstel van 2026-10-22
  *              (DESIGN_VOORSTEL_ZENIT_2026-10-22.md).
@@ -16,7 +18,9 @@ import { reapplyTheme } from './theme';
  *
  * Elke look hangt aan een attribuut op <html>, zodat zijn regels alleen gelden
  * zolang hij aan staat:
- *  - Baken: `data-look="baken"` (src/styles/baken.css);
+ *  - Baken: `data-look="baken"` (src/styles/baken.css). De vorm van de rail
+ *    en het paneel deelt Baken met Zenit (zenit.css, §4–7); de kleuren staan
+ *    in baken.css;
  *  - Zenit: `data-look="zenit"` (src/styles/zenit.css);
  *  - Stroom: `data-look="zenit"` én `data-stroom` (src/styles/stroom.css). Stroom
  *    bouwt op Zenit: dezelfde rail, hetzelfde contextpaneel, dezelfde rustige
@@ -34,10 +38,19 @@ export type Look = 'baken' | 'cockpit' | 'zenit' | 'stroom';
  *  vóór de eerste verf zet. Die twee MOETEN gelijk blijven. */
 export const LOOK_STORAGE_KEY = 'resofly.look';
 
-/** Zenit of Stroom: de rail met het contextpaneel, geen titelbalk, de rustige
- *  onderdelen. Baken en Cockpit vallen erbuiten: zij hebben de zijbalk. */
+/** Zenit of Stroom: geen titelbalk en de rustige onderdelen. Baken en Cockpit
+ *  vallen erbuiten. */
 export function isZenitFamily(look: Look): boolean {
   return look === 'zenit' || look === 'stroom';
+}
+
+/** De navigatie: een smalle rail met links ernaast het paneel waarin het
+ *  submenu van de module uitklapt (ZenitNav). Sinds 2026-11-13 ook in Baken;
+ *  daarvoor had Baken de zijbalk van Cockpit, waarin een submenu als een
+ *  harmonica tussen de andere regels openklapte en de rest naar beneden duwde.
+ *  Alleen Cockpit houdt die zijbalk (Sidebar). */
+export function usesRailNav(look: Look): boolean {
+  return look !== 'cockpit';
 }
 
 /** Leest de look uit de opslag. Een onbekende of lege waarde is Baken, net als
