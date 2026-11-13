@@ -94,6 +94,12 @@ wie geen ResoFly heeft, is er de deellink.
 - Productie heeft nog geen agendaserver; de app zegt dat daar ook zo.
 - Google Agenda haalt een deellink een paar keer per dag op, op zijn eigen
   tempo. Dat kunnen wij niet sneller maken.
+- **robots.txt**: Cloudflare zet voor de hele zone `resofly.com` een eigen
+  robots.txt vóór die van de Worker, met `User-agent: *` en `Allow: /`. Onze
+  `Disallow: /` staat er dus onder en telt bij zoekmachines waarschijnlijk niet.
+  De deellinks zelf geven `X-Robots-Tag: noindex` en hun adres is geheim; wie de
+  robots.txt strenger wil, zet in Cloudflare de beheerde robots.txt voor de
+  zone uit (dat raakt alle adressen op resofly.com).
 
 ## Na de uitrol
 
@@ -105,6 +111,12 @@ wie geen ResoFly heeft, is er de deellink.
   uitgerold.
 - DNS: `caldav-staging AAAA 100::` (proxied) in de zone `resofly.com`.
 - Geen nieuwe secrets op Supabase of Pages: `VITE_APP_ENV=staging` stond er al.
+- Live gecontroleerd op 13 november, na de uitrol: `OPTIONS /` 204 met
+  `DAV: 1, 2, 3, calendar-access`; `PROPFIND /.well-known/caldav` zonder inlog
+  401 met `Basic realm`; een verzonnen deellink 404 met de Nederlandse melding
+  (de Worker bereikt de database en `calendar_feed_lookup` bestaat). Op staging
+  staan de tabel, de lookup en de gereserveerde naam (gelezen via de
+  Management API).
 
 ## Getest
 
