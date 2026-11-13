@@ -430,6 +430,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     // Komen uit loadOrganizationExtras, na het eerste beeld.
     auditLogs: [],
     billingOverview: null,
+    extrasLoaded: false,
     creativeStatus,
     businessStatus,
     aiConsent,
@@ -437,7 +438,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
   };
 }
 
-export type OrganizationExtras = Pick<OrganizationContext, 'billingOverview' | 'auditLogs'>;
+export type OrganizationExtras = Pick<OrganizationContext, 'billingOverview' | 'auditLogs' | 'extrasLoaded'>;
 
 /**
  * Het abonnementsoverzicht (Instellingen → Abonnement) en het logboek (een
@@ -451,7 +452,7 @@ export type OrganizationExtras = Pick<OrganizationContext, 'billingOverview' | '
 export async function loadOrganizationExtras(organizationId: UUID, role: OrganizationRole | null | undefined): Promise<OrganizationExtras> {
   // Voor de rest gaf het abonnement bij elke start een 403, en het logboek
   // (20261111140000) niets: dan vragen we ze ook niet op.
-  if (!isAdminRole(role)) return { billingOverview: null, auditLogs: [] };
+  if (!isAdminRole(role)) return { billingOverview: null, auditLogs: [], extrasLoaded: true };
   const [{ data: billingRows, error: billingError }, { data: auditRows, error: auditError }] = await Promise.all([
     supabase.rpc('organization_billing_overview', { p_organization_id: organizationId }),
     supabase
@@ -467,6 +468,7 @@ export async function loadOrganizationExtras(organizationId: UUID, role: Organiz
   return {
     billingOverview: billingError ? null : (firstBillingRow ?? null) as OrganizationBillingOverview | null,
     auditLogs: auditError ? [] : (auditRows ?? []) as AuditLog[],
+    extrasLoaded: true,
   };
 }
 

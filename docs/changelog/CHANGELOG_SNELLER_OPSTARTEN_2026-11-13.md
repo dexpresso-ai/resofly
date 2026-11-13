@@ -50,7 +50,9 @@ staat op de knop Ververs "Laden…".
   de app gaat openen. Wat van een andere gebruiker in de browser staat, gaat
   bij de start weg.
 - **Uitloggen wist alles** (`signOutOnThisDevice`). Ook als de sessie op een
-  andere manier eindigt (verlopen, uitgelogd in een ander venster).
+  andere manier eindigt (verlopen, uitgelogd in een ander venster). Het wissen
+  wacht hooguit 2 s: hangt IndexedDB (Safari), dan logt de knop toch uit, en
+  wist de app daarna opnieuw.
 - **Een wissel van organisatie wist de bewaarde stand.** Die hoort dan bij een
   organisatie die niet meer opengaat.
 - **Zijn je rechten veranderd** sinds wat er staat? Bijvoorbeeld omdat een
@@ -58,6 +60,18 @@ staat op de knop Ververs "Laden…".
   bewaarde stand weg. Dit geldt nu ook bij een gewone ververs terwijl je
   werkt. Eerder bleef een geladen groep van een module die dichtging in het
   geheugen tot hij opnieuw werd opgehaald.
+- **Elk record draagt de rechten waarmee het is opgehaald.** Een groep komt
+  alleen terug bij een kern met dezelfde rechten. Bij elke keer bewaren gaat
+  een groep weg die niet meer past: een andere organisatie, andere rechten of
+  een andere versie.
+- **Mislukt de eerste ronde, dan gaat de bewaarde stand uit beeld.** De app
+  weet dan niet of je nog lid bent en wat je mag zien. Je krijgt "ResoFly kon
+  niet laden" met de melding en *Opnieuw proberen*. Dat scherm komt er ook als
+  er geen bewaarde stand was. Eerder stond er dan "Geen organisatie gevonden",
+  ook als alleen de verbinding wegviel.
+- **Alleen bij het opstarten.** Na een wissel van organisatie zou een
+  tokenverversing hem anders midden in je werk opnieuw tonen. Dan herstelt de
+  app de tabbladen, en een open bewerking ben je kwijt.
 - **Alleen van dezelfde versie van de app** (`__RESOFLY_BUILD__`, de commit
   van Cloudflare Pages). Een nieuwe versie kan een veld verwachten dat in een
   oude stand ontbreekt. Dan zou het scherm omvallen voordat de nieuwe
@@ -89,7 +103,9 @@ al bij. Op een gedeelde computer: uitloggen, zoals voorheen.
   (`loadOrganizationExtras`). Bij een ververs blijft de vorige stand staan tot
   de nieuwe er is. De tegel met het logboek is dus niet steeds even leeg. Bij
   een organisatie die nog wordt ingericht, wacht de app er wel op: daar
-  beginnen de stappen bij het abonnement.
+  beginnen de stappen bij het abonnement. Op Instellingen → Abonnement staat
+  zolang "Abonnement laden…" (`extrasLoaded`). Eerder stond daar "Abonnement
+  starten" met een melding over een ontbrekende migratie.
 - **De twee tellingen voor het dashboard komen na de kern**
   (`loadAttentionCounts`). Het getal op de tegel verschijnt een tel later.
 
@@ -101,10 +117,15 @@ opstarten. Dan flitste de melding alleen even.
 
 ### 4. De bundel uit de cache
 
-`public/_headers`: `/assets/*` krijgt `Cache-Control: public, max-age=31536000,
-immutable`. Vite zet een hash van de inhoud in elke naam, dus een oude naam
-verandert nooit. `index.html` haalt de browser wel elke keer op; zo komt een
-nieuwe versie binnen.
+`public/_headers`: `/assets/*` krijgt `Cache-Control: public, max-age=604800`.
+Vite zet een hash van de inhoud in elke naam, dus een oude naam verandert
+nooit. `index.html` haalt de browser wel elke keer op; zo komt een nieuwe versie
+binnen.
+
+Waarom een week en niet een jaar met `immutable`: vraagt een oud tabblad na een
+deploy een bestand dat er niet meer is, dan geeft Pages `index.html` terug,
+onder deze regel. Na een terugrol naar die versie zou de browser dat een jaar
+lang voor dat bestand houden.
 
 ## Gemeten
 
@@ -122,18 +143,43 @@ netwerk.
 Opnieuw openen kost nu even veel als zonder netwerk: er wacht niets meer op
 de server.
 
+## Na een onafhankelijke review aangescherpt
+
+Een tweede lezer kreeg de code, niet de redenering. Die vond geen lek tussen
+gebruikers of organisaties, wel deze punten, nu opgelost:
+
+- **Uitloggen kon blijven hangen** als IndexedDB niet opende. Openen heeft nu
+  een grens (1,5 s), een dode verbinding wordt vergeten, en uitloggen wacht
+  hooguit 2 s op het wissen.
+- **Een groep van een module die is dichtgezet kon terugkomen.** Dat gebeurde
+  als de opruimronde gemist werd (de stand was te traag of niet getoond).
+  Daarom draagt nu elk record zijn rechten.
+- **De oude rechten bleven gelden zolang de eerste ronde mislukte.** Iemand
+  die was uitgeschreven, kon dan offline door de laatste stand bladeren. Nu
+  gaat de stand uit beeld.
+- **Kleiner:**
+  - een antwoord van een oudere ronde kon na een nieuwere landen; het
+    volgnummer telt nu vanaf het begin van de ronde;
+  - twee logins die elkaar inhaalden, konden de stand onder de verkeerde
+    gebruiker bewaren;
+  - de melding op Abonnement;
+  - `immutable` in de cache-regel.
+
 ## Bewaakt door
 
 - `src/lib/workspaceSnapshot.test.ts`. Een stand komt alleen in beeld bij
   dezelfde gebruiker, organisatie en versie, en is niet te oud. Een kern
-  waarvan de context een andere organisatie opent, telt niet. Een groep is
-  heel of hij is er niet. Uitloggen wist de stand vóór de sessie weg is.
+  waarvan de context een andere organisatie opent, telt niet. Een groep met
+  andere rechten dan de kern blijft weg. Een groep is heel of hij is er niet.
+  Uitloggen wist de stand vóór de sessie weg is.
 - `tests/laden`, sectie 9 (`npm run test:loading`):
   - de stand wordt bewaard;
   - opnieuw openen terwijl de server 2,5 s per vraag nodig heeft: de
     werkruimte en de agenda (met de uren) staan er voordat er één antwoord
     binnen is, zonder laadscherm, en daarna zijn de uren ververst;
   - de stand van een andere gebruiker is weg;
+  - mislukt de eerste ronde, dan gaat de stand uit beeld met "ResoFly kon
+    niet laden", en *Opnieuw proberen* opent de werkruimte;
   - na het intrekken van Financiën is de bewaarde boekhouding weg;
   - na uitloggen is alles weg.
 

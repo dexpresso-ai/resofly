@@ -164,6 +164,12 @@ export interface OrganizationContext {
   licenseUsage: OrganizationLicenseUsage | null;
   auditLogs: AuditLog[];
   billingOverview: OrganizationBillingOverview | null;
+  /**
+   * Zijn billingOverview en auditLogs al opgehaald (loadOrganizationExtras)?
+   * Die komen na het eerste beeld. Zolang dit false is, betekent een leeg
+   * abonnement "nog niet binnen", niet "er is geen abonnement".
+   */
+  extrasLoaded?: boolean;
   /** Creatieve module: leesbaar voor elk teamlid, anders dan billingOverview. */
   creativeStatus: OrganizationCreativeStatus | null;
   businessStatus: OrganizationBusinessStatus | null;

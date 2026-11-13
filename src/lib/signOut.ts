@@ -24,7 +24,9 @@ export async function signOutOnThisDevice(): Promise<void> {
   await disablePush().catch(() => undefined);
   // De bewaarde stand van de werkruimte (src/lib/workspaceSnapshot.ts): klanten,
   // facturen en taken van deze gebruiker horen na uitloggen niet in de browser.
-  await clearSnapshots();
+  // Met een grens: hangt IndexedDB, dan moet uitloggen toch doorgaan. De app
+  // wist na het uitloggen nog eens (applySession zonder gebruiker).
+  await Promise.race([clearSnapshots(), new Promise(resolve => setTimeout(resolve, 2000))]);
   try {
     const keys: string[] = [];
     for (let i = 0; i < window.localStorage.length; i += 1) {

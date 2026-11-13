@@ -1901,6 +1901,10 @@ export function Settings({
   const selectedPlanIsSelfService = selfServiceBillingPlans.some(plan => plan.plan_key === selectedPlan);
   const hasPendingCheckout = billingOverview ? ['open', 'pending', 'authorized'].includes(billingOverview.payment_status) : false;
   const isBillingExempt = !!seatOverview?.billing_exempt;
+  // Het abonnement komt na het eerste beeld binnen (loadOrganizationExtras).
+  // Tot dan stond hier "Abonnement starten" en een melding over een
+  // ontbrekende migratie, ook bij wie al een abonnement had.
+  const billingPending = canAdminOrganization && organizationContext.extrasLoaded === false && !billingOverview;
   // Een écht lopend Mollie-abonnement vereist een subscription-id. subscription_status
   // staat bij een nieuwe org standaard al op 'active' (licentiemodel), dus daar kunnen
   // we niet op gaten — anders denkt de UI dat er al een abonnement is.
@@ -2987,7 +2991,7 @@ export function Settings({
         </div>
         {canAdminOrganization && <div className="billing-actions">
           <Button onClick={refreshBilling} disabled={billingBusy === 'refresh'}>{billingBusy === 'refresh' ? 'Verversen…' : 'Billing verversen'}</Button>
-          {!isBillingExempt && !hasMollieSubscription && <Button variant="primary" onClick={startSubscription} disabled={billingBusy === 'connect'}>{billingBusy === 'connect' ? 'Bezig…' : 'Abonnement starten'}</Button>}
+          {!isBillingExempt && !hasMollieSubscription && !billingPending && <Button variant="primary" onClick={startSubscription} disabled={billingBusy === 'connect'}>{billingBusy === 'connect' ? 'Bezig…' : 'Abonnement starten'}</Button>}
         </div>}
       </div>
 
@@ -3182,7 +3186,7 @@ export function Settings({
           </div>
           <span className="badge">Neem contact op</span>
         </div>}
-      </> : <p className="settings-help">Billinggegevens konden nog niet worden geladen. Controleer of de Sprint 2 migratie is uitgevoerd.</p>}
+      </> : billingPending ? <p className="settings-help">Abonnement laden…</p> : <p className="settings-help">Billinggegevens konden nog niet worden geladen. Controleer of de Sprint 2 migratie is uitgevoerd.</p>}
 
       {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen billing-acties uitvoeren.</p>}
       {!isBillingExempt && seatOverview && seatOverview.available_seats <= 0 && <div className="error">Geen vrije gebruikerslicentie beschikbaar. Koop eerst een extra gebruikerslicentie voordat je iemand uitnodigt.</div>}

@@ -380,9 +380,38 @@ try {
     check('de stand van een andere gebruiker is weg, de eigen staat er nog', !after.includes('iemand-anders|kern') && after.includes(`${USER}|kern`), `[${after.join(', ')}]`);
     check('opnieuw openen: geen JavaScript-fout', errors.length === 0, errors[0]);
 
-    // c. Rechten veranderd: Financiën is voor dit teamlid dichtgezet sinds de
-    //    vorige keer. De bewaarde boekhouding mag dan niet blijven staan.
     await page.close();
+
+    // c. De eerste ronde mislukt (storing, geen verbinding): dan weten we niet
+    //    of je nog lid bent en wat je mag zien. De bewaarde stand gaat uit
+    //    beeld; er staat een melding met Opnieuw proberen.
+    const failing = await own.newPage();
+    const failingErrors = [];
+    failing.on('pageerror', e => failingErrors.push(String(e.message)));
+    let down = true;
+    await failing.route(`${SUPABASE_URL}/rest/v1/organization_members**`, async (route) => {
+      if (!down || !(new URL(route.request().url()).searchParams.get('select') ?? '').includes('organizations(')) return route.fallback();
+      await new Promise(resolve => setTimeout(resolve, 800));
+      await route.fulfill({ status: 500, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ message: 'Storing (test)' }) });
+    });
+    await failing.addInitScript(storageScript('calendar'));
+    await failing.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    await failing.waitForSelector('.app', { timeout: 20000 });
+    check('eerste ronde mislukt: eerst staat de bewaarde stand er', true);
+    await failing.waitForSelector('.boot [role="alert"]', { timeout: 10000 });
+    const failedBoot = await failing.evaluate(() => ({ app: Boolean(document.querySelector('.app')), text: document.querySelector('.boot [role="alert"]')?.textContent ?? '' }));
+    check('eerste ronde mislukt: de bewaarde stand is uit beeld, met een melding', !failedBoot.app && failedBoot.text.includes('ResoFly kon niet laden') && failedBoot.text.includes('Storing (test)'), JSON.stringify(failedBoot));
+    down = false;
+    await failing.locator('.boot button', { hasText: 'Opnieuw proberen' }).click();
+    await failing.waitForSelector('.app', { timeout: 20000 });
+    await idle(failing);
+    const retriedBoot = await screenState(failing);
+    check('Opnieuw proberen: de werkruimte en de agenda staan er', !retriedBoot.loading && !retriedBoot.failed && retriedBoot.text.length > 40, retriedBoot.text.slice(0, 60));
+    check('eerste ronde mislukt: geen JavaScript-fout', failingErrors.length === 0, failingErrors[0]);
+    await failing.close();
+
+    // d. Rechten veranderd: Financiën is voor dit teamlid dichtgezet sinds de
+    //    vorige keer. De bewaarde boekhouding mag dan niet blijven staan.
     const ledger = await openPage(own, 'ledger');
     await idle(ledger.page);
     await ledger.page.waitForTimeout(1800);
@@ -408,7 +437,7 @@ try {
     check('rechten ingetrokken: geen JavaScript-fout', closedErrors.length === 0, closedErrors[0]);
     await closed.unroute(`${SUPABASE_URL}/rest/v1/organization_members**`);
 
-    // d. Uitloggen: niets van de werkruimte blijft in de browser.
+    // e. Uitloggen: niets van de werkruimte blijft in de browser.
     await closed.locator('.user-trigger').first().click();
     await closed.locator('.user-menu-item.danger', { hasText: 'Uitloggen' }).click();
     await closed.waitForSelector('.app', { state: 'detached', timeout: 10000 });

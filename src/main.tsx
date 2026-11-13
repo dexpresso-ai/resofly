@@ -784,6 +784,15 @@ function BootLoading({ message = 'ResoFly is aan het laden…' }: { message?: st
 
 const BOOT_MESSAGE_DELAY_MS = 400;
 
+/** De werkruimte kon bij het opstarten niet laden (geen verbinding, een storing). */
+function BootFailed({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return <div className="boot"><div className="login-card" role="alert">
+    <h1>ResoFly kon niet laden</h1>
+    <p>{message}</p>
+    <Button variant="primary" onClick={onRetry}>Opnieuw proberen</Button>
+  </div></div>;
+}
+
 /**
  * De context van een nieuwe ronde, met het abonnement en het logboek erbij.
  * Die komen pas na het eerste beeld (loadOrganizationExtras). Tot dan blijft
@@ -794,7 +803,7 @@ function withOrganizationExtras(next: OrganizationContext, extras: OrganizationE
   if (extras) return { ...next, ...extras };
   const sameOrganization = Boolean(prev.activeOrganization) && prev.activeOrganization?.id === next.activeOrganization?.id;
   if (sameOrganization && prev.activeMembership?.role === next.activeMembership?.role) {
-    return { ...next, billingOverview: prev.billingOverview, auditLogs: prev.auditLogs };
+    return { ...next, billingOverview: prev.billingOverview, auditLogs: prev.auditLogs, extrasLoaded: prev.extrasLoaded };
   }
   return next;
 }
@@ -978,6 +987,12 @@ function App() {
    * tabbladen en een open bewerking kwijt.
    */
   const workspaceStartedRef = useRef(false);
+  /** Er staat alleen de bewaarde stand in beeld: de eerste ronde is nog niet geslaagd. */
+  const snapshotOnScreenRef = useRef(false);
+  /** De eerste ronde mislukte en er is niets om te tonen: de melding voor het opstartscherm. */
+  const [bootFailed, setBootFailed] = useState<string | null>(null);
+  /** De gebruiker van de laatste aanroep van applySession, om een ingehaalde aanroep te herkennen. */
+  const latestSessionUserRef = useRef<string | null | undefined>(undefined);
   /** Het nummer van de laatste vraag naar de tellingen, en naar het abonnement en het logboek (applyWhenLatest). */
   const countsSeqRef = useRef(0);
   const extrasSeqRef = useRef(0);
@@ -1360,6 +1375,7 @@ function App() {
     const orgId = snapshot.context.activeOrganization?.id;
     if (!orgId) return;
     workspaceStartedRef.current = true;
+    snapshotOnScreenRef.current = true;
     setOrganizationContext(snapshot.context);
     activeOrgIdRef.current = orgId;
     setActiveOrganizationId(orgId);
@@ -1370,6 +1386,23 @@ function App() {
     updateGroupState(() => ({ loaded: new Set(snapshot.groups), stale: new Set(snapshot.groups), failed: new Map() }));
     tabsLoadedForRef.current = orgId;
     restoreTabsForOrganization(orgId, snapshot.data, buildPermissions(snapshot.context.activeMembership));
+  }
+
+  /**
+   * De bewaarde stand weer uit beeld: de eerste ronde mislukte. Daarna staat
+   * er "ResoFly kon niet laden" met Opnieuw proberen, zoals wanneer er geen
+   * bewaarde stand was. De organisatie blijft de gevraagde, zodat opnieuw
+   * proberen dezelfde opent.
+   */
+  function hideSnapshot(message: string) {
+    snapshotOnScreenRef.current = false;
+    setOrganizationContext(emptyOrganizationContext);
+    resetDataGroups(null);
+    accessKeyRef.current = null;
+    dataRef.current = emptyData;
+    setData(emptyData);
+    tabsLoadedForRef.current = null;
+    setBootFailed(message);
   }
 
   /**
@@ -1412,12 +1445,13 @@ function App() {
 
   /**
    * Een antwoord waar geen scherm op wacht, en dat dus na de ronde binnenkomt.
-   * Alleen de laatste vraag telt, en alleen zolang dezelfde sessie en
+   * Alleen de laatste ronde telt, en alleen zolang dezelfde sessie en
    * organisatie openstaan: een ouder antwoord dat later komt, overschrijft
-   * geen nieuwer.
+   * geen nieuwer. Het nummer (`seq`) krijgt een ronde bij zijn begin; telde
+   * het pas bij het aanvragen, dan kon het antwoord van een oudere ronde nog
+   * landen nadat een nieuwere de context al had gezet.
    */
-  function applyWhenLatest<T>(promise: Promise<T>, seqRef: { current: number }, orgId: string, session: number, apply: (value: T) => void) {
-    const seq = ++seqRef.current;
+  function applyWhenLatest<T>(promise: Promise<T>, seqRef: { current: number }, seq: number, orgId: string, session: number, apply: (value: T) => void) {
     promise.then(
       value => {
         if (seq !== seqRef.current || session !== sessionEpochRef.current || dataOrgRef.current !== orgId) return;
@@ -1438,7 +1472,9 @@ function App() {
     run.running = true;
     workspaceStartedRef.current = true;
     const session = sessionEpochRef.current;
-    setLoading(true); setError(null);
+    const countsSeq = ++countsSeqRef.current;
+    const extrasSeq = ++extrasSeqRef.current;
+    setLoading(true); setError(null); setBootFailed(null);
     try {
       const tooSlow = 'Het laden duurt te lang. Controleer je verbinding en kies Ververs.';
       const requested = target === undefined ? activeOrgIdRef.current : target;
@@ -1516,6 +1552,7 @@ function App() {
           setData(fresh);
         }
         freshOrgRef.current = orgId;
+        snapshotOnScreenRef.current = false;
         // Herstel de open tabbladen éénmalig per organisatie (eerste load of wissel);
         // een gewone ververs laat de tabbladen ongemoeid.
         if (orgId !== tabsLoadedForRef.current) {
@@ -1524,12 +1561,12 @@ function App() {
         }
         // Wat geen scherm tegenhoudt, komt erachteraan: de tellingen voor het
         // dashboard, en het abonnement en het logboek van de owner.
-        applyWhenLatest(load.counts, countsSeqRef, orgId, session, counts => {
+        applyWhenLatest(load.counts, countsSeqRef, countsSeq, orgId, session, counts => {
           dataRef.current = { ...dataRef.current, ...counts };
           setData(prev => ({ ...prev, ...counts }));
         });
         if (!setupExtras) {
-          applyWhenLatest(loadOrganizationExtras(orgId, orgContext.activeMembership?.role), extrasSeqRef, orgId, session, extras => {
+          applyWhenLatest(loadOrganizationExtras(orgId, orgContext.activeMembership?.role), extrasSeqRef, extrasSeq, orgId, session, extras => {
             setOrganizationContext(ctx => (ctx.activeOrganization?.id === orgId ? { ...ctx, ...extras } : ctx));
           });
         }
@@ -1539,9 +1576,27 @@ function App() {
         accessKeyRef.current = null;
         dataRef.current = emptyData;
         setData(emptyData);
+        // Geen organisatie meer (je bent overal uitgeschreven): dan ook niets bewaard.
+        void clearSnapshots();
       }
     } catch (e) {
-      if (session === sessionEpochRef.current) setError(e instanceof Error ? e.message : 'Onbekende fout');
+      if (session === sessionEpochRef.current) {
+        // Een fout van PostgREST is geen Error, maar heeft wel een message.
+        // Zonder die stond er "Onbekende fout", ook bij een duidelijke melding.
+        const raw = (e as { message?: unknown } | null)?.message;
+        const message = typeof raw === 'string' && raw ? raw : 'Onbekende fout';
+        setError(message);
+        // Alleen de bewaarde stand stond in beeld, en de eerste ronde lukte
+        // niet: dan weten we niet of je nog lid bent en wat je mag zien. Die
+        // stand gaat dan uit beeld; anders kon iemand die is uitgeschreven,
+        // offline twee weken door de laatste stand bladeren.
+        // Stond er nog niets, dan dezelfde melding: eerder kwam je dan op
+        // "Geen organisatie gevonden", ook als alleen de verbinding wegviel.
+        if (freshOrgRef.current === null) {
+          if (snapshotOnScreenRef.current) hideSnapshot(message);
+          else if (dataOrgRef.current === null) setBootFailed(message);
+        }
+      }
     } finally {
       run.running = false;
       const next = run.queued;
@@ -1722,10 +1777,12 @@ function App() {
       // de vorige keer, dan blijft die zoals hij was, met zijn eigen datum.
       if (freshOrgRef.current !== organizationId || dataOrgRef.current !== organizationId) return;
       if (context.activeOrganization?.id !== organizationId) return;
+      const access = accessKeyRef.current;
+      if (access === null || access !== accessKey(context.activeMembership)) return;
       const state = groupStateRef.current;
       // Een verouderde groep is niet vers opgehaald: zijn vorige versie blijft bewaard.
       const groups = [...state.loaded].filter(group => !state.stale.has(group));
-      void saveSnapshot({ userId, organizationId, context, data: dataRef.current, groups });
+      void saveSnapshot({ userId, organizationId, access, context, data: dataRef.current, groups });
     };
     pendingSnapshotRef.current = save;
     const timer = window.setTimeout(save, 1500);
@@ -1981,6 +2038,7 @@ function App() {
     async function applySession(session: { user: { id: string; email?: string | null } } | null) {
       if (!active) return;
       const userId = session?.user.id ?? null;
+      latestSessionUserRef.current = userId;
       const storedOrganizationId = localStorage.getItem(activeOrgStorageKey);
       // De eerste keer voor deze gebruiker: eerst de bewaarde stand van dit
       // apparaat (src/lib/workspaceSnapshot.ts), vóór het eerste beeld. Anders
@@ -1989,8 +2047,9 @@ function App() {
       if (userId && userId !== loadedForRef.current && storedOrganizationId && !workspaceStartedRef.current) {
         const epoch = sessionEpochRef.current;
         snapshot = await readSnapshot(userId, storedOrganizationId, emptyData);
-        // Intussen uitgelogd, of een andere aanroep was eerder klaar.
-        if (!active || epoch !== sessionEpochRef.current) return;
+        // Intussen uitgelogd, of een andere gebruiker kwam binnen: dan is deze
+        // aanroep ingehaald, en mag hij niets meer zetten.
+        if (!active || epoch !== sessionEpochRef.current || latestSessionUserRef.current !== userId) return;
       }
       setLoggedIn(Boolean(session));
       setCurrentUserId(userId);
@@ -2017,6 +2076,8 @@ function App() {
         resetDataGroups(null);
         accessKeyRef.current = null;
         workspaceStartedRef.current = false;
+        snapshotOnScreenRef.current = false;
+        setBootFailed(null);
         dataRef.current = emptyData;
         setData(emptyData);
         const fresh = freshTab();
@@ -2132,6 +2193,7 @@ function App() {
   if (!activeOrganization && loading) return <BootLoading />;
   // Een wissel van organisatie: de vorige is al weg, de nieuwe kern nog niet binnen.
   if (activeOrganization && loading && dataOrgId !== activeOrganization.id) return <BootLoading />;
+  if (!activeOrganization && bootFailed) return <BootFailed message={bootFailed} onRetry={() => { void loadWorkspace(); }} />;
   if (!activeOrganization) return <NoOrganizationScreen pendingInvitations={organizationContext.pendingInvitations} onAcceptInvitation={acceptInvitation} onCreateOrganization={createNewOrganization} />;
 
   // Een nieuwe organisatie wordt eerst ingericht (migratie 20261107190000):

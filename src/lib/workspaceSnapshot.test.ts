@@ -36,7 +36,7 @@ function context(organizationId: string): OrganizationContext {
 
 function coreRecord(overrides: Partial<CoreRecord> = {}): CoreRecord {
   return {
-    kind: 'kern', build: 'build-7', userId: 'user-a', organizationId: 'org-1', savedAt: NOW - 60_000,
+    kind: 'kern', build: 'build-7', userId: 'user-a', organizationId: 'org-1', access: 'owner|alles', savedAt: NOW - 60_000,
     context: context('org-1'),
     core: { clients: [{ id: 'c1' }], projects: [{ id: 'p1' }], bankTransactionsToReconcile: 3 } as unknown as Partial<AppData>,
     ...overrides,
@@ -45,7 +45,7 @@ function coreRecord(overrides: Partial<CoreRecord> = {}): CoreRecord {
 
 function timeRecord(overrides: Partial<GroupRecord> = {}): GroupRecord {
   return {
-    kind: 'groep', group: 'time', build: 'build-7', userId: 'user-a', organizationId: 'org-1', savedAt: NOW - 60_000,
+    kind: 'groep', group: 'time', build: 'build-7', userId: 'user-a', organizationId: 'org-1', access: 'owner|alles', savedAt: NOW - 60_000,
     data: { timeEntries: [{ id: 't1', minutes: 30 }] } as unknown as Partial<AppData>,
     ...overrides,
   };
@@ -104,9 +104,21 @@ test('een groep van een andere organisatie, gebruiker of versie blijft weg', () 
   }
 });
 
+test('een groep die met andere rechten is opgehaald dan de kern, blijft weg', () => {
+  // Financiën dichtgezet sinds de groep werd bewaard: de nieuwe kern heeft
+  // andere rechten, en de oude groep mag dan niet terugkomen.
+  for (const access of ['member|finance-dicht', undefined]) {
+    const restored = restoreWorkspace(coreRecord({ access: 'member|finance-dicht' }), [timeRecord({ access: access === undefined ? undefined : 'owner|alles' } as Partial<GroupRecord>)], KEY, BASE);
+    assert.ok(restored);
+    assert.deepEqual(restored.groups, [], `groep met ${access ?? 'geen'} rechten`);
+  }
+  const same = restoreWorkspace(coreRecord({ access: 'member|finance-dicht' }), [timeRecord({ access: 'member|finance-dicht' })], KEY, BASE);
+  assert.deepEqual(same?.groups, ['time']);
+});
+
 test('een halve groep blijft weg: een pagina zou anders een lege lijst tonen', () => {
   const half: GroupRecord = {
-    kind: 'groep', group: 'communication', build: 'build-7', userId: 'user-a', organizationId: 'org-1', savedAt: NOW,
+    kind: 'groep', group: 'communication', build: 'build-7', userId: 'user-a', organizationId: 'org-1', access: 'owner|alles', savedAt: NOW,
     data: { ticketNotes: [{ id: 'n1' }] } as unknown as Partial<AppData>,
   };
   const restored = restoreWorkspace(coreRecord(), [half], KEY, BASE);
@@ -134,9 +146,9 @@ test('kern en groepen samen zijn precies de hele werkruimte', () => {
 
 test('uitloggen wist de bewaarde stand vóór de sessie weg is', () => {
   const signOut = readFileSync(new URL('./signOut.ts', import.meta.url), 'utf8');
-  const clear = signOut.indexOf('await clearSnapshots()');
+  const clear = signOut.indexOf('await Promise.race([clearSnapshots(), ');
   const end = signOut.indexOf('await supabaseAuth.signOut()');
-  assert.ok(clear > 0 && clear < end, 'clearSnapshots moet vóór supabaseAuth.signOut staan');
+  assert.ok(clear > 0 && clear < end, 'clearSnapshots moet vóór supabaseAuth.signOut staan, met een grens');
 });
 
 test('de app toont de bewaarde stand alleen na de sessie, en wist hem als de sessie eindigt', () => {

@@ -59,8 +59,12 @@
 # klopte, en wachtte daarop voordat er iets in beeld kwam (13 november 2026).
 # index.html valt hier niet onder: die haalt de browser wel elke keer op, en
 # zo komt een nieuwe versie binnen.
+# Een week en niet een jaar met immutable: vraagt een oud tabblad na een deploy
+# een bestand dat er niet meer is, dan geeft Pages index.html terug, onder deze
+# regel. Na een terugrol naar die versie zou de browser dat dan een jaar lang
+# voor het bestand houden.
 /assets/*
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: public, max-age=604800
 
 # Pagina's achter een deellink (token in de URL) horen niet in een zoekmachine.
 # De hash hierboven bewaakt scripts/check-csp-hash.mjs in de CI (frontend-checks).
