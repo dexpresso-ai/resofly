@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 import { parseCalendarOAuthReturn, type CalendarOAuthReturn } from './calendarConnection';
 import { throwFunctionError } from './functionErrors';
-import type { AttendeeInput, CalendarAppPassword, CalendarConnection, CalendarEventAttendee, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, EventRecurrence, UUID, VideoService, VideoServices } from '../types';
+import type { AttendeeInput, CalendarAppPassword, CalendarFeedDetail, CalendarFeedLink, CalendarConnection, CalendarEventAttendee, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, EventRecurrence, UUID, VideoService, VideoServices } from '../types';
 
 export interface CalendarIntegrationsPayload {
   connections: CalendarConnection[];
@@ -260,6 +260,22 @@ export async function listCalendarAppPasswords(organizationId: UUID): Promise<Ca
 
 export async function revokeCalendarAppPassword(organizationId: UUID, appPasswordId: UUID): Promise<void> {
   await invokeCalendar<Record<string, never>>(organizationId, { action: 'revokeAppPassword', appPasswordId });
+}
+
+/** Maakt een deellink voor een eigen ResoFly-agenda; `token` komt eenmalig terug. */
+export async function createCalendarFeedLink(organizationId: UUID, input: { sourceId: UUID; label: string; detail: CalendarFeedDetail }): Promise<{ feedLink: CalendarFeedLink; token: string }> {
+  const data = await invokeCalendar<{ feedLink: CalendarFeedLink; token: string }>(organizationId, { action: 'createFeedLink', ...input });
+  return { feedLink: data.feedLink, token: data.token };
+}
+
+/** Je eigen actieve deellinks in deze organisatie. */
+export async function listCalendarFeedLinks(organizationId: UUID): Promise<CalendarFeedLink[]> {
+  const data = await invokeCalendar<{ feedLinks?: CalendarFeedLink[] }>(organizationId, { action: 'listFeedLinks' });
+  return data.feedLinks ?? [];
+}
+
+export async function revokeCalendarFeedLink(organizationId: UUID, feedLinkId: UUID): Promise<void> {
+  await invokeCalendar<Record<string, never>>(organizationId, { action: 'revokeFeedLink', feedLinkId });
 }
 
 export interface CalendarOAuthCompletion {

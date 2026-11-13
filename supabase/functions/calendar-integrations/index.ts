@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { generateAppPasswordToken, generateSalt, hashAppPassword } from '../_shared/appPassword.ts';
+import { MAX_FEED_LINKS_PER_CALENDAR, generateFeedToken, hashFeedToken, normalizeFeedDetail, normalizeFeedLabel } from '../_shared/calendarFeed.ts';
 import {
   type Provider,
   type CalendarVisibility,
@@ -131,6 +132,11 @@ serve(async (req) => {
       case 'createAppPassword': return json({ ok: true, ...(await createAppPassword(organizationId, user.id, body)) });
       case 'listAppPasswords': return json({ ok: true, appPasswords: await listAppPasswords(organizationId, user.id) });
       case 'revokeAppPassword': await revokeAppPassword(organizationId, user.id, String(body.appPasswordId || '')); return json({ ok: true });
+      // Een agenda delen met iemand buiten ResoFly. Intrekken mag ook met alleen
+      // leesrecht: wie minder mag dan toen hij deelde, moet het delen kunnen stoppen.
+      case 'createFeedLink': requireWrite(); return json({ ok: true, ...(await createFeedLink(organizationId, user.id, body)) });
+      case 'listFeedLinks': return json({ ok: true, feedLinks: await listFeedLinks(organizationId, user.id) });
+      case 'revokeFeedLink': await revokeFeedLink(organizationId, user.id, String(body.feedLinkId || '')); return json({ ok: true });
       case 'getEventAttendees': return json({ ok: true, attendees: await getEventAttendees(organizationId, user.id, String(body.eventId || '')) });
       case 'searchContacts': return json({ ok: true, ...(await searchContacts(organizationId, user.id, String(body.sourceId || ''), String(body.query || ''))) });
       // Kan ik hier een losse Meet/Teams maken? Alleen over de eigen koppelingen.
@@ -1065,5 +1071,55 @@ async function revokeAppPassword(organizationId: string, userId: string, appPass
   const { error } = await supabaseAdmin.from('calendar_app_passwords')
     .update({ revoked_at: new Date().toISOString() })
     .eq('organization_id', organizationId).eq('user_id', userId).eq('id', appPasswordId).is('revoked_at', null);
+  if (error) throw error;
+}
+
+// ============================================================
+// Deellinks — een ResoFly-agenda in Google, Outlook of Apple Agenda van
+// iemand zonder ResoFly. De agendaserver (workers/caldav) geeft de agenda op
+// /feed/<token>.ics; hier maakt en beheert de eigenaar de links.
+// ============================================================
+
+const FEED_LINK_COLUMNS = 'id,source_id,label,detail,created_at,last_used_at,revoked_at';
+
+async function createFeedLink(organizationId: string, userId: string, body: Record<string, unknown>) {
+  // Alleen je eigen ResoFly-agenda: getOwnedNativeSource weigert een Google-,
+  // Outlook- of ICS-agenda en de agenda van een collega.
+  const source = await getOwnedNativeSource(organizationId, userId, String(body.sourceId || ''));
+  const { count, error: countError } = await supabaseAdmin.from('calendar_feed_links')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId).eq('source_id', source.id).is('revoked_at', null);
+  if (countError) throw countError;
+  if ((count ?? 0) >= MAX_FEED_LINKS_PER_CALENDAR) {
+    throw new CalendarHttpError(`Deze agenda heeft al ${MAX_FEED_LINKS_PER_CALENDAR} deellinks. Trek er eerst een in.`, 409);
+  }
+  const token = generateFeedToken();
+  const { data, error } = await supabaseAdmin.from('calendar_feed_links').insert({
+    organization_id: organizationId,
+    source_id: source.id,
+    user_id: userId,
+    label: normalizeFeedLabel(body.label),
+    detail: normalizeFeedDetail(body.detail),
+    token_hash: await hashFeedToken(token),
+  }).select(FEED_LINK_COLUMNS).single();
+  if (error) throw error;
+  // Het token gaat EENMALIG terug en wordt nergens bewaard; de app maakt er de link van.
+  return { feedLink: data, token };
+}
+
+async function listFeedLinks(organizationId: string, userId: string) {
+  const { data, error } = await supabaseAdmin.from('calendar_feed_links')
+    .select(FEED_LINK_COLUMNS)
+    .eq('organization_id', organizationId).eq('user_id', userId).is('revoked_at', null)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+async function revokeFeedLink(organizationId: string, userId: string, feedLinkId: string): Promise<void> {
+  if (!UUID_RE.test(feedLinkId)) throw new CalendarHttpError('Ongeldige deellink.', 400);
+  const { error } = await supabaseAdmin.from('calendar_feed_links')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('organization_id', organizationId).eq('user_id', userId).eq('id', feedLinkId).is('revoked_at', null);
   if (error) throw error;
 }

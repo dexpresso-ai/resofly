@@ -352,6 +352,10 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .privacy-pill.shared{color:var(--accent-ink);background:rgba(var(--accent-rgb),.08);border-color:rgba(var(--accent-rgb),.24)}
 .calendar-item.private-event{border-color:var(--muted2)}
 @media(max-width:900px){.source-row.privacy{grid-template-columns:auto 1fr}.source-row.privacy .toggle-row{grid-column:2}}
+.source-row.privacy.native-row{grid-template-columns:auto minmax(180px,1fr) auto}
+.source-row-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+.source-row-actions .btn{display:inline-flex;align-items:center;gap:6px}
+@media(max-width:900px){.source-row.privacy.native-row{grid-template-columns:auto 1fr}.source-row.privacy.native-row .source-row-actions{grid-column:2;justify-content:flex-start}.source-row.privacy.native-row .source-row-actions .toggle-row{grid-column:auto}}
 
 /* Sprint 1 workspace foundation */
 .workspace-hero{display:flex;justify-content:space-between;align-items:stretch;gap:16px;background:linear-gradient(135deg,var(--bg2),var(--bg3));border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px}
@@ -4128,6 +4132,37 @@ body::before{
 .video-server-form label{flex:1 1 260px;display:flex;flex-direction:column;gap:4px;min-width:0}
 .video-server-form .btn{display:inline-flex;align-items:center;gap:6px}
 .calendar-help-warn{color:var(--accent-r)}
+/* Agenda op je telefoon of computer, en deellinks (november 2026). Lange
+   adressen (de server, een deellink) breken af in plaats van de kaart of het
+   venster zijwaarts uit beeld te duwen. */
+.phone-calendar-form{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
+.phone-calendar-form .form-input{flex:1 1 240px;min-width:0}
+.phone-calendar-secret,.feed-link-created{display:grid;gap:8px;margin-bottom:10px}
+.feed-link-copy{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.feed-link-copy .form-input{flex:1 1 220px;min-width:0}
+.feed-link-copy code{flex:1 1 auto;min-width:0;font-size:16px;letter-spacing:1px;overflow-wrap:anywhere}
+.feed-link-copy .btn{display:inline-flex;align-items:center;gap:6px}
+.phone-calendar-steps{display:grid;gap:8px;margin-top:8px}
+.phone-calendar-steps p{margin:0}
+.phone-calendar-steps dl,.feed-link-howto{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 12px;margin:0}
+.phone-calendar-steps dt,.feed-link-howto dt{font-weight:600;color:var(--text)}
+.phone-calendar-steps dd,.feed-link-howto dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.phone-calendar-fields{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 12px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.phone-calendar-fields>span:nth-child(odd){color:var(--muted2)}
+.phone-calendar-fields code{min-width:0;overflow-wrap:anywhere}
+.feed-link-form{display:grid;gap:10px;margin:10px 0 14px}
+.feed-link-form>label{display:flex;flex-direction:column;gap:4px;min-width:0}
+.feed-link-detail{display:grid;gap:6px;margin:0;padding:0;border:0;min-width:0}
+.feed-link-detail legend{padding:0;margin-bottom:4px}
+.feed-link-detail .toggle-row{align-items:flex-start;gap:8px}
+.feed-link-detail .toggle-row input{margin-top:3px}
+.feed-link-form>.btn{justify-self:start}
+.feed-link-created>.btn{justify-self:start}
+.feed-links-title{margin:14px 0 8px;font-size:14px}
+@media (max-width:560px){
+  .phone-calendar-steps dl,.feed-link-howto,.phone-calendar-fields{grid-template-columns:minmax(0,1fr)}
+  .phone-calendar-steps dd,.feed-link-howto dd{margin-bottom:6px}
+}
 .tb-ev-video{position:absolute;top:2px;left:3px;display:inline-flex;align-items:center;justify-content:center;padding:2px;border-radius:6px;background:rgba(var(--info-rgb),.85);color:#fff;pointer-events:none}
 .tb-ev-video svg{flex:0 0 auto}
 .calendar-item-video{vertical-align:-2px;margin-left:5px;color:var(--info)}

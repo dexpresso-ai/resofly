@@ -418,7 +418,7 @@ export default async function klantdomein() {
     });
 
     await stap('gereserveerd en verkeerd gevormd', async () => {
-      for (const naam of ['www', 'portaal', 'staging', 'mcp', 'mcp-staging', 'rabobank-hulp', 'mijn-resofly', 'digid']) {
+      for (const naam of ['www', 'portaal', 'staging', 'mcp', 'mcp-staging', 'caldav', 'caldav-staging', 'rabobank-hulp', 'mijn-resofly', 'digid']) {
         gelijk(gelukt(await check(w.eigenaar, naam), naam).status, 'reserved', naam);
       }
       const kort = gelukt(await check(w.eigenaar, 'ab'), 'kort');
