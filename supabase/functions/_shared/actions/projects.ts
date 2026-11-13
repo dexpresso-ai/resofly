@@ -852,7 +852,7 @@ export const PROJECTS_ACTIONS: ActionDef[] = [
     module: 'projects',
     kind: 'read',
     description:
-      'Geeft wie er aan een project gekoppeld is: het projectteam met naam, e-mail en rol, plus hoeveel taken van dit project aan elk teamlid zijn toegewezen. Alleen wie in het projectteam zit is in het taakformulier te kiezen als toegewezene. ' +
+      'Geeft wie er aan een project gekoppeld is: het projectteam met naam, e-mail en rol, plus hoeveel taken van dit project aan elk teamlid zijn toegewezen. In het taakformulier staat het projectteam vooraan, maar je kunt ieder teamlid kiezen: wie een taak krijgt en nog niet in het team zit, komt er bij het opslaan bij. ' +
       'Geeft er ook bij wie er nog NIET aan gekoppeld is, zodat je meteen weet wie je met `propose_project_team` kunt toevoegen. `list_team_members` geeft alleen de hele organisatie; dit geeft de bezetting van dit ene project.',
     keywords: ['projectteam', 'wie werkt eraan', 'bezetting', 'teamleden', 'toegewezen', 'medewerkers'],
     input: { project_id: { type: 'string', description: 'Id van het project (exact, uit list_projects).' } },

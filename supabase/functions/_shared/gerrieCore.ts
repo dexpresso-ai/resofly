@@ -2081,7 +2081,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_task_assign',
-    description: 'Bepaal wie een taak toegewezen krijgt. Zoek de taak met `list_tasks` en de teamleden met `list_team_members`. De opgegeven lijst VERVANGT de huidige toewijzing; een lege lijst haalt iedereen eraf.',
+    description: 'Bepaal wie een taak toegewezen krijgt. Zoek de taak met `list_tasks` en de teamleden met `list_team_members`. De opgegeven lijst VERVANGT de huidige toewijzing; een lege lijst haalt iedereen eraf. Hoort de taak bij een project, dan komt wie nog niet in het projectteam zit er na goedkeuring bij.',
     input_schema: {
       type: 'object',
       properties: {
