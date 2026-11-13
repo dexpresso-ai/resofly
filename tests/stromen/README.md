@@ -103,6 +103,21 @@ pg_cron elke minuut aanroept (`portal-notify`). Getoetst:
 
 Zie `docs/changelog/CHANGELOG_TICKETS_CONTROLE_2026-11-10.md`.
 
+En `caldav`: de agendaserver (`workers/caldav`), de echte Worker in Node tegen de lokale stack,
+met app-wachtwoorden en deellinks uit `calendar-integrations`. Getoetst:
+- inloggen met een app-wachtwoord (fout, kruislings, overgetypt), `.well-known`, en welke agenda's
+  je ziet: de eigen, wat het team deelt, niet de privé-agenda van een collega of een andere
+  organisatie;
+- een afspraak van de iPhone (met tijdzone en herinnering) in ResoFly en andersom, ETags,
+  alleen de wijzigingen ophalen, een verwijdering, te groot, en meer dan 1000 afspraken;
+- rechten: een collega in een gedeelde agenda, een kijker, de boekhouder, Agenda op "geen
+  toegang", een ingetrokken wachtwoord;
+- deellinks: "alleen bezet" en "titel, tijd en plaats" zonder omschrijving of genodigden, 304,
+  een verzonnen token, alleen de eigen ResoFly-agenda, geen toegang tot de tabel, intrekken,
+  Agenda dicht, vertrekken, en een verwijderde agenda.
+
+Zie `docs/changelog/CHANGELOG_AGENDASERVER_DEELLINKS_2026-11-13.md`.
+
 En `vooruitbetaald`: vooruitbetaalde kosten, een betaling die over de maanden naar de kosten gaat
 (de functies uit migratie 20261111220000). Getoetst:
 - € 1.000 verzekering over 36 maanden: het schema (28 × € 27,78 en 8 × € 27,77, op de laatste dag

@@ -3695,6 +3695,20 @@ export interface CalendarAppPassword {
   revoked_at: string | null;
 }
 
+/** Wat een deellink van een agenda laat zien: alleen "Bezet", of ook titel en plaats. */
+export type CalendarFeedDetail = 'busy' | 'details';
+
+/** Een deellink van een ResoFly-agenda voor iemand buiten ResoFly. Het adres zelf zie je één keer. */
+export interface CalendarFeedLink {
+  id: UUID;
+  source_id: UUID;
+  label: string;
+  detail: CalendarFeedDetail;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
 export type AttendeeStatus = 'needs-action' | 'accepted' | 'declined' | 'tentative';
 
 export interface CalendarEventAttendee {

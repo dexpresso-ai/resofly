@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import type React from 'react';
-import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Lock, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Link2, Lock, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { hasPlannedTime, taskBlockMinutes } from '../lib/planning';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
@@ -21,6 +21,7 @@ import { SlotDurationPicker, useSlotSplit } from '../components/SlotDurationPick
 import { clashNotice, clashingAppointment, splitIntoSlots } from '../lib/bookingLinks';
 import {
   createCalendarAppPassword,
+  createCalendarFeedLink,
   createExternalCalendarEvent,
   createIcsSubscription,
   createNativeCalendar,
@@ -35,9 +36,11 @@ import {
   invalidateCalendarEventsCache,
   listCalendarAppPasswords,
   listCalendarEventsCached,
+  listCalendarFeedLinks,
   loadCalendarIntegrations,
   refreshCalendarSources,
   revokeCalendarAppPassword,
+  revokeCalendarFeedLink,
   searchCalendarContacts,
   updateCalendarEvent,
   updateCalendarSource,
@@ -48,13 +51,14 @@ import {
 import { addBookingSlots, createBookingLink, listBookingLinks, listBookingSlotsInRange, sendBookingLinkMail } from '../lib/meetingBookingApi';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabase';
-import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, ConferenceProvider, EventRecurrence, MeetingBookingLinkListItem, RecurrenceFrequency, VideoService, VideoServices } from '../types';
+import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, CalendarFeedDetail, CalendarFeedLink, ConferenceProvider, EventRecurrence, MeetingBookingLinkListItem, RecurrenceFrequency, VideoService, VideoServices } from '../types';
 import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Supplier, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
 import { calendarEventKey, calendarEventLinkMatchesEvent } from '../lib/calendar-links';
 import { safeHttpUrl } from '../lib/safeUrl';
 import { connectionStatusView } from '../lib/calendarConnection';
+import { caldavHost, caldavServerUrl, feedDetailLabel, feedLinkUrl } from '../lib/caldavSetup';
 import { vividCalendarColor } from '../lib/calendarColors';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
@@ -3442,9 +3446,6 @@ function CalendarEventDetailPanel({ event, organizationId, data, sources, videoS
   );
 }
 
-const CALDAV_SERVER_HOST = 'caldav.resofly.com';
-
-/** Beheer van app-wachtwoorden + uitleg om de ResoFly-agenda op de telefoon te zetten (CalDAV). */
 /* ── Videovergaderen: Jitsi Meet (Instellingen → Agenda) ─────────────── */
 
 // Eén instelling voor de hele organisatie: op welke Jitsi-server de links komen.
@@ -3559,6 +3560,25 @@ function ConnectionMeetingRow({ provider, state, disabled, onEnable }: {
   );
 }
 
+// De agendaserver van deze omgeving (workers/caldav), of null als die er niet is.
+const CALDAV_SERVER_URL = caldavServerUrl({ VITE_CALDAV_URL: import.meta.env.VITE_CALDAV_URL, VITE_APP_ENV: import.meta.env.VITE_APP_ENV });
+
+/** Kopieerknop die even laat zien dat het gelukt is. */
+function CopyButton({ value, label = 'Kopieer' }: { value: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = window.setTimeout(() => setCopied(false), 1800);
+    return () => window.clearTimeout(t);
+  }, [copied]);
+  return (
+    <Button type="button" onClick={() => { navigator.clipboard?.writeText(value).then(() => setCopied(true)).catch(() => {}); }}>
+      {copied ? <><Check size={13} /> Gekopieerd</> : label}
+    </Button>
+  );
+}
+
+/** Beheer van app-wachtwoorden en de stappen om de ResoFly-agenda's op een telefoon of computer te zetten (CalDAV). */
 function PhoneCalendarCard({ organizationId }: { organizationId: UUID }) {
   const [appPasswords, setAppPasswords] = useState<CalendarAppPassword[]>([]);
   const [label, setLabel] = useState('');
@@ -3596,40 +3616,60 @@ function PhoneCalendarCard({ organizationId }: { organizationId: UUID }) {
   }
 
   const active = appPasswords.filter(p => !p.revoked_at);
+  const server = CALDAV_SERVER_URL;
+  const userName = email || 'je inlogmailadres';
 
   return (
     <section className="calendar-section connections-panel" id="calendar-phone">
       <div className="calendar-section-head">
         <div>
-          <h3>Agenda op je telefoon</h3>
-          <p>Zet je ResoFly-agenda’s op je telefoon via CalDAV (Apple Agenda, of Android met DAVx⁵). Maak per apparaat een app-wachtwoord aan.</p>
+          <h3>Agenda op je telefoon of computer</h3>
+          <p>Zet je ResoFly-agenda's in Apple Agenda (iPhone, iPad en Mac), op een Android-telefoon of in Thunderbird. Wat je daar maakt of verschuift, staat meteen in ResoFly, en andersom. Je Google- of Outlook-agenda staat er al via Google of Microsoft; die gaat hier niet mee.</p>
         </div>
       </div>
 
       {err && <div className="error">{err}</div>}
 
-      <form onSubmit={generate} style={{ display: 'flex', gap: 8, margin: '8px 0 12px', flexWrap: 'wrap' }}>
-        <Input value={label} onChange={e => setLabel(e.target.value)} placeholder="Naam van het apparaat, bijv. iPhone van Jan" />
-        <Button variant="primary" disabled={busy}>App-wachtwoord aanmaken</Button>
-      </form>
+      {!server ? (
+        <div className="settings-help">Op deze omgeving staat de agendaserver nog niet aan. Je ResoFly-agenda's werken in de app gewoon.</div>
+      ) : (
+        <>
+          <form onSubmit={generate} className="phone-calendar-form">
+            <Input value={label} onChange={e => setLabel(e.target.value)} placeholder="Naam van het apparaat, bijv. iPhone van Jan" aria-label="Naam van het apparaat" />
+            <Button variant="primary" disabled={busy}>App-wachtwoord aanmaken</Button>
+          </form>
 
-      {secret && (
-        <div className="success" style={{ display: 'grid', gap: 6 }}>
-          <strong>Nieuw app-wachtwoord — kopieer het nu, je ziet het maar één keer:</strong>
-          <code style={{ fontSize: 16, letterSpacing: 1 }}>{secret}</code>
-        </div>
+          {secret && (
+            <div className="success phone-calendar-secret">
+              <strong>Je nieuwe app-wachtwoord. Je ziet het maar één keer:</strong>
+              <div className="feed-link-copy">
+                <code>{secret}</code>
+                <CopyButton value={secret} />
+              </div>
+            </div>
+          )}
+
+          <div className="settings-help phone-calendar-steps">
+            <p>Maak per apparaat een eigen app-wachtwoord. Raak je een telefoon kwijt, dan trek je alleen dat wachtwoord in.</p>
+            <dl>
+              <dt>iPhone en iPad</dt>
+              <dd>Instellingen → Agenda (op iOS 18: Instellingen → Apps → Agenda) → Accounts → Voeg account toe → Andere → Voeg CalDAV-account toe.</dd>
+              <dt>Mac</dt>
+              <dd>Agenda → Instellingen → Accounts → + → Ander CalDAV-account. Kies bij accounttype Handmatig.</dd>
+              <dt>Android</dt>
+              <dd>Installeer DAVx⁵ en kies Inloggen met URL en gebruikersnaam. Gebruik als adres <code>{server}</code>.</dd>
+              <dt>Thunderbird</dt>
+              <dd>Nieuwe agenda → Op het netwerk, met adres <code>{server}</code>.</dd>
+            </dl>
+            <div className="phone-calendar-fields">
+              <span>Server</span><code>{caldavHost(server)}</code>
+              <span>Gebruikersnaam</span><code>{userName}</code>
+              <span>Wachtwoord</span><span>het app-wachtwoord</span>
+            </div>
+            <p>Je ziet je eigen ResoFly-agenda's en de agenda's die collega's met het team delen. Met alleen leesrecht op de Agenda kun je ze bekijken, maar niet wijzigen.</p>
+          </div>
+        </>
       )}
-
-      <div className="settings-help" style={{ marginTop: 8 }}>
-        <strong>Instellen op de telefoon</strong>
-        <ol style={{ margin: '6px 0 0 18px' }}>
-          <li>Voeg een <em>CalDAV-account</em> toe (iPhone: Instellingen → Agenda → Account → Anders → CalDAV-account).</li>
-          <li>Server: <code>{CALDAV_SERVER_HOST}</code></li>
-          <li>Gebruikersnaam: <code>{email || 'je inlogmailadres'}</code></li>
-          <li>Wachtwoord: het app-wachtwoord hierboven</li>
-        </ol>
-        <p style={{ marginTop: 6, opacity: 0.8 }}>De CalDAV-server wordt in een volgende stap geactiveerd; app-wachtwoorden kun je nu al klaarzetten.</p>
-      </div>
 
       {active.length > 0 && (
         <div className="source-list" style={{ marginTop: 10 }}>
@@ -3645,6 +3685,106 @@ function PhoneCalendarCard({ organizationId }: { organizationId: UUID }) {
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Een ResoFly-agenda delen met iemand zonder ResoFly: een geheime link die hij
+ * in Google Agenda, Outlook of Apple Agenda zet. Alleen bekijken. De eigenaar
+ * kiest per link wat er te zien is en trekt hem in wanneer hij wil.
+ */
+function FeedLinksDialog({ organizationId, source, serverUrl, links, canWrite, onCreated, onRevoked, onClose }: {
+  organizationId: UUID;
+  source: CalendarSource;
+  serverUrl: string;
+  links: CalendarFeedLink[];
+  canWrite: boolean;
+  onCreated: (link: CalendarFeedLink) => void;
+  onRevoked: (id: UUID) => void;
+  onClose: () => void;
+}) {
+  const [label, setLabel] = useState('');
+  const [detail, setDetail] = useState<CalendarFeedDetail>('busy');
+  const [created, setCreated] = useState<{ url: string; label: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function create(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    try {
+      const result = await createCalendarFeedLink(organizationId, { sourceId: source.id, label: label.trim(), detail });
+      setCreated({ url: feedLinkUrl(serverUrl, result.token), label: result.feedLink.label });
+      onCreated(result.feedLink);
+      setLabel('');
+    } catch (e2) { setErr(e2 instanceof Error ? e2.message : 'De link maken lukte niet.'); }
+    finally { setBusy(false); }
+  }
+
+  async function revoke(link: CalendarFeedLink) {
+    if (!confirm(`De link "${link.label}" intrekken? Wie hem gebruikt, ziet je agenda daarna niet meer bijgewerkt.`)) return;
+    setErr(null);
+    try {
+      await revokeCalendarFeedLink(organizationId, link.id);
+      onRevoked(link.id);
+    } catch (e2) { setErr(e2 instanceof Error ? e2.message : 'Intrekken lukte niet.'); }
+  }
+
+  return (
+    <Modal title={`${source.name} delen buiten ResoFly`} onClose={onClose} className="feed-links-modal">
+      <p className="muted">Met een deellink zet iemand zonder ResoFly deze agenda in Google Agenda, Outlook of Apple Agenda. Alleen bekijken. Nieuwe afspraken verschijnen daar vanzelf; Google en Outlook kijken een paar keer per dag.</p>
+      {err && <div className="error">{err}</div>}
+
+      {created ? (
+        <div className="success feed-link-created">
+          <strong>De link voor {created.label}. Je ziet hem maar één keer:</strong>
+          <div className="feed-link-copy">
+            <Input readOnly value={created.url} onFocus={e => e.currentTarget.select()} aria-label="Deellink" />
+            <CopyButton value={created.url} />
+          </div>
+          <dl className="feed-link-howto">
+            <dt>Google Agenda</dt>
+            <dd>Op de computer: naast Andere agenda's op + → Via URL → plak de link.</dd>
+            <dt>Outlook</dt>
+            <dd>Agenda toevoegen → Abonneren via internet → plak de link.</dd>
+            <dt>Apple Agenda</dt>
+            <dd>Mac: Archief → Nieuw agenda-abonnement. iPhone: Instellingen → Agenda → Accounts → Voeg account toe → Andere → Voeg agenda-abonnement toe.</dd>
+          </dl>
+          <Button type="button" onClick={() => setCreated(null)}>Nog een link maken</Button>
+        </div>
+      ) : canWrite ? (
+        <form onSubmit={create} className="feed-link-form">
+          <label>Voor wie
+            <Input value={label} onChange={e => setLabel(e.target.value)} placeholder="Bijv. partner of assistent" maxLength={80} />
+          </label>
+          <fieldset className="feed-link-detail">
+            <legend>Wat zien ze</legend>
+            <label className="toggle-row"><input type="radio" name="feed-detail" checked={detail === 'busy'} onChange={() => setDetail('busy')} /> <span><strong>Alleen bezet</strong> · de tijden, zonder titel</span></label>
+            <label className="toggle-row"><input type="radio" name="feed-detail" checked={detail === 'details'} onChange={() => setDetail('details')} /> <span><strong>Titel, tijd en plaats</strong> · geen omschrijving, genodigden of vergaderlink</span></label>
+          </fieldset>
+          <Button variant="primary" disabled={busy}>Link maken</Button>
+        </form>
+      ) : (
+        <p className="calendar-help">Je hebt alleen leesrecht op de Agenda: je kunt hier links intrekken, maar geen nieuwe maken.</p>
+      )}
+
+      <h4 className="feed-links-title">Links van deze agenda</h4>
+      {links.length === 0 ? (
+        <div className="calendar-empty small">Nog geen deellinks. Deze agenda is alleen in ResoFly te zien.</div>
+      ) : (
+        <div className="source-list">
+          {links.map(link => (
+            <div className="source-row privacy" key={link.id}>
+              <div className="source-info">
+                <strong>{link.label}</strong>
+                <span>{feedDetailLabel(link.detail)} · gemaakt {dateNL(link.created_at)}{link.last_used_at ? ` · laatst opgehaald ${dateNL(link.last_used_at)}` : ' · nog niet opgehaald'}</span>
+              </div>
+              <Button variant="danger" onClick={() => revoke(link)}><Trash2 size={13} /> Intrekken</Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -3986,6 +4126,10 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   const [newCalendarName, setNewCalendarName] = useState('');
   const [newIcsUrl, setNewIcsUrl] = useState('');
   const [newIcsName, setNewIcsName] = useState('');
+  // Deellinks van je eigen ResoFly-agenda's (alleen in Instellingen → Agenda).
+  // Zo staat bij elke agenda of hij buiten ResoFly te zien is.
+  const [feedLinks, setFeedLinks] = useState<CalendarFeedLink[]>([]);
+  const [sharingSourceId, setSharingSourceId] = useState<UUID | null>(null);
   // Boekingstool: "beschikbaarheid voor klant"-modus in de agenda. Je zet de modus
   // aan, tekent opties (concept-blokken) op het rooster en kiest PAS bij "Doorsturen"
   // de klant/agenda. De opties van al je actieve boekingslinks blijven als aparte
@@ -4158,6 +4302,12 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     return () => window.clearTimeout(timer);
   }, [organizationId, mode, view, anchor]);
   useEffect(() => { if (mode === 'settings') setShowConnections(true); }, [mode]);
+  useEffect(() => {
+    if (mode !== 'settings' || !CALDAV_SERVER_URL) return;
+    let active = true;
+    listCalendarFeedLinks(organizationId).then(rows => { if (active) setFeedLinks(rows); }).catch(() => {});
+    return () => { active = false; };
+  }, [mode, organizationId]);
   // Zakt het scherm naar telefoonbreedte terwijl je in de (brede) weekweergave zit?
   // Schakel dan naar de dagweergave, die wél op een telefoon past.
   useEffect(() => { if (isMobile && view === 'week') changeView('day'); }, [isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -4864,12 +5014,13 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   </section>;
 
   const nativeSources = integrations.sources.filter(s => s.provider === 'native');
+  const sharingSource = sharingSourceId ? nativeSources.find(s => s.id === sharingSourceId && canManageSource(s)) ?? null : null;
   const nativeCalendarsSection = (
     <section className="calendar-section connections-panel" id="calendar-native">
       <div className="calendar-section-head">
         <div>
           <h3>ResoFly-agenda's</h3>
-          <p>Eigen agenda's, zonder Google of Microsoft. Je kunt ze op je telefoon zetten via "Agenda op je telefoon".</p>
+          <p>Eigen agenda's, zonder Google of Microsoft. Zet ze op je telefoon via "Agenda op je telefoon of computer", of deel er een met iemand zonder ResoFly.</p>
         </div>
       </div>
       {canWrite && (
@@ -4884,24 +5035,42 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
         <div className="source-list">
           {nativeSources.map(src => {
             const owns = canManageSource(src);
+            const sharedOutside = feedLinks.filter(l => l.source_id === src.id).length;
             return (
-              <div className="source-row privacy" key={src.id}>
+              <div className="source-row privacy native-row" key={src.id}>
                 <span className="source-dot" style={{ background: vividCalendarColor(src.color, '#2563EB') }} />
                 <div className="source-info">
                   <strong>{src.name}</strong>
                   <span>{src.visibility === 'organization' ? 'Gedeeld met de organisatie' : 'Privé'}{owns ? '' : ' · van een teamlid'}</span>
+                  {owns && sharedOutside > 0 && (
+                    <span className="privacy-pill shared">Buiten ResoFly via {sharedOutside} {sharedOutside === 1 ? 'link' : 'links'}</span>
+                  )}
                 </div>
+                {/* Eén vak voor de keuzes en knoppen: los in het raster liepen ze
+                    bij vier stuks over twee regels en door de kolom van de stip. */}
                 {owns && (
-                  <>
+                  <div className="source-row-actions">
                     <label className="toggle-row"><input type="checkbox" checked={src.visibility === 'organization'} onChange={() => toggleSource(src, 'visibility')} /> Delen met team</label>
+                    {CALDAV_SERVER_URL && (
+                      <Button onClick={() => setSharingSourceId(src.id)} title="Een link waarmee iemand zonder ResoFly deze agenda in Google, Outlook of Apple Agenda ziet">
+                        <Link2 size={13} /> Delen buiten ResoFly
+                      </Button>
+                    )}
                     <Button onClick={() => renameNative(src)}><Pencil size={13} /> Hernoem</Button>
                     <Button variant="danger" onClick={() => removeNative(src)}><Trash2 size={13} /> Verwijder</Button>
-                  </>
+                  </div>
                 )}
               </div>
             );
           })}
         </div>
+      )}
+      {sharingSource && CALDAV_SERVER_URL && (
+        <FeedLinksDialog organizationId={organizationId} source={sharingSource} serverUrl={CALDAV_SERVER_URL} canWrite={canWrite}
+          links={feedLinks.filter(l => l.source_id === sharingSource.id)}
+          onCreated={link => setFeedLinks(prev => [link, ...prev])}
+          onRevoked={id => setFeedLinks(prev => prev.filter(l => l.id !== id))}
+          onClose={() => setSharingSourceId(null)} />
       )}
     </section>
   );

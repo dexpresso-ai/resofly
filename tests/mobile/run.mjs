@@ -174,6 +174,13 @@ const PAGES = {
   // Instellingen → Agenda: koppelingen met hun status, de uitleg eronder en de
   // knop "Opnieuw koppelen" (november 2026), naast elkaar of onder elkaar.
   'settings-agenda': { page: 'settings', prepare: '[data-settings-tab="agenda"]' },
+  // Instellingen → Agenda → Delen buiten ResoFly (november 2026): het venster
+  // met een net gemaakte deellink (een lang adres met kopieerknop), de stappen
+  // voor Google, Outlook en Apple, en de lijst met links.
+  'settings-agenda-delen': {
+    page: 'settings',
+    prepare: ['[data-settings-tab="agenda"]', 'button:has-text("Delen buiten ResoFly")', { fill: '.feed-link-form input', value: 'Assistent' }, '.feed-link-form button:has-text("Link maken")'],
+  },
   // Instellingen → E-mail: de e-mailteksten met het voorbeeld, waarin sinds
   // november 2026 ook het logo staat zoals bovenaan de mail.
   'settings-email': { page: 'settings', prepare: '[data-settings-tab="email"]' },
@@ -410,6 +417,9 @@ if (shotsDir) fs.mkdirSync(shotsDir, { recursive: true });
 process.env.VITE_SUPABASE_URL ??= 'https://example.supabase.co';
 process.env.VITE_SUPABASE_ANON_KEY ??= 'mock-anon-key-for-layout-test';
 process.env.VITE_R2_WORKER_URL ??= 'https://media.example.test';
+// Staging heeft een agendaserver: dan staan de stappen voor de telefoon en de
+// knop "Delen buiten ResoFly" in beeld (src/lib/caldavSetup.ts).
+process.env.VITE_APP_ENV ??= 'staging';
 let server = null;
 let baseUrl = args.url;
 if (!baseUrl) {

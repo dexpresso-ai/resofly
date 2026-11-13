@@ -53,7 +53,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // organisatie Gerrie aanzette, wanneer en onder welke voorwaarden. Gaat mee:
 // het akkoord hoort bij de administratie, en de eigenaar en de beheerders
 // lezen het al in de app (Instellingen → AI).
-export const EXPORT_SCHEMA_VERSION = '20261112190000';
+// 20261113120000 (agenda delen) zet calendar_feed_links erbij: deellinks van
+// een ResoFly-agenda voor mensen buiten ResoFly. 'geheim', net als de
+// app-wachtwoorden: elke rij is een sleutel tot een agenda. Vervangt verder
+// client_subdomain_problem ("caldav-staging" erbij); geen kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261113120000';
 
 export type TableKind =
   | 'export'
@@ -186,6 +190,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   calendar_connections: { kind: 'export' },
   calendar_connection_tokens: { kind: 'geheim', reason: GEHEIM },
   calendar_app_passwords: { kind: 'geheim', reason: GEHEIM },
+  calendar_feed_links: { kind: 'geheim', reason: GEHEIM },
   calendar_sources: {
     kind: 'export',
     // De app mag feed_url en feed_etag niet lezen (kolomrechten), dus geen `*`.

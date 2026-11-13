@@ -1,0 +1,92 @@
+name: Deploy agendaserver (staging)
+
+# De agendaserver (workers/caldav) op caldav-staging.resofly.com: de
+# ResoFly-agenda op de telefoon (CalDAV) en de deellinks. Tot 13 november 2026
+# ging hij alleen met de hand online, en stond er op staging een versie van
+# 10 november terwijl de code al verder was.
+#
+# Nodig, onder Settings → Secrets and variables → Actions → tabblad Secrets:
+#   CLOUDFLARE_API_TOKEN   een API-token met "Workers Scripts: Edit" op het
+#                          account en "Workers Routes: Edit" op de zone
+#                          resofly.com (Cloudflare → My Profile → API Tokens →
+#                          sjabloon "Edit Cloudflare Workers")
+#   CLOUDFLARE_ACCOUNT_ID  het account-id (Cloudflare → Workers & Pages,
+#                          rechts in beeld)
+# Het secret SUPABASE_SERVICE_ROLE_KEY staat al op de Worker zelf (wrangler
+# secret put); deze workflow raakt het niet aan.
+
+on:
+  push:
+    branches:
+      - staging
+    paths:
+      - "workers/caldav/**"
+      - ".github/workflows/deploy-agendaserver-staging.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Nooit twee tegelijk: de laatste push wint, niet de traagste.
+concurrency:
+  group: deploy-agendaserver-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/caldav
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Zoals bij Deploy Supabase: zeg welke secret ontbreekt en waar hij hoort,
+      # in plaats van een foutmelding van wrangler over inloggen.
+      - name: Controleer de secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          ontbreekt=""
+          [ -n "$CLOUDFLARE_API_TOKEN" ]  || ontbreekt="$ontbreekt CLOUDFLARE_API_TOKEN"
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || ontbreekt="$ontbreekt CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$ontbreekt" ]; then
+            echo "::error title=Secrets ontbreken::De agendaserver is niet uitgerold. Ontbreekt:$ontbreekt. Zet ze onder Settings -> Secrets and variables -> Actions -> Secrets (zie de kop van deze workflow)."
+            exit 1
+          fi
+
+      - name: Afhankelijkheden
+        run: npm ci --no-audit --no-fund
+
+      # Dezelfde controles als in de pull request: de typen, en de regels van
+      # logic.ts (die draaien ook in `npm test` in de root).
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Tests
+        run: node --test src/*.test.ts
+
+      - name: Uitrollen
+        run: npx wrangler deploy --env staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Antwoordt hij op het eigen adres, en is de deellink-route er? Een
+      # verzonnen token hoort 404 te geven; een 500 betekent dat de migratie
+      # met calendar_feed_lookup nog niet op staging staat.
+      - name: Rooktest
+        run: |
+          set -e
+          base=https://caldav-staging.resofly.com
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          opties=$(code -X OPTIONS "$base/")
+          zonder=$(code -X PROPFIND "$base/.well-known/caldav")
+          feed=$(code "$base/feed/$(printf 'A%.0s' $(seq 1 43)).ics")
+          echo "OPTIONS $opties (verwacht 204), PROPFIND zonder inlog $zonder (verwacht 401), verzonnen deellink $feed (verwacht 404)"
+          [ "$opties" = 204 ] && [ "$zonder" = 401 ] && [ "$feed" = 404 ]

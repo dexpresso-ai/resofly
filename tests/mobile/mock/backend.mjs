@@ -552,6 +552,10 @@ function edgeFunction(name, body, options = {}) {
     if (action === 'videoServices') return { ok: true, videoServices: seed.videoServices };
     if (action === 'listEvents') return { ok: true, events: seed.events };
     if (action === 'listAppPasswords') return { ok: true, appPasswords: [] };
+    // Deellinks van de eigen ResoFly-agenda: één bestaande, en een nieuwe met
+    // het lange adres dat in het venster niet zijwaarts uit beeld mag lopen.
+    if (action === 'listFeedLinks') return { ok: true, feedLinks: [seed.calendarFeedLink] };
+    if (action === 'createFeedLink') return { ok: true, feedLink: { ...seed.calendarFeedLink, id: 'feed-nieuw', label: String(body.label || 'Deellink'), detail: body.detail === 'details' ? 'details' : 'busy', last_used_at: null }, token: 'Q7v_-'.repeat(8) + 'abc' };
     return { ok: true, connections: [], sources: [seed.calendarSource], calendars: [seed.calendarSource], events: [], attendees: [], links: [], slots: [], ics: [] };
   }
   if (name === 'meeting-booking') {

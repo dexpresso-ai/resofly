@@ -14,7 +14,7 @@ en per teamlid per module af te schermen.
 - **Cloudflare Workers** in `workers/`:
   - `media-api`: bestanden op R2;
   - `email-inbound`: inkomende mail;
-  - `caldav`: agenda op de telefoon;
+  - `caldav`: de agendaserver: agenda op de telefoon, en deellinks voor wie geen ResoFly heeft (`docs/setup/AGENDASERVER_SETUP.md`);
   - `office-server`: Word/Excel/PowerPoint in de browser.
 - **AI:** Gerrie, de agents en de factuurherkenning praten met de Claude
   Messages API. Welk model: `supabase/functions/_shared/claudeModels.ts`.

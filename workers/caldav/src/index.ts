@@ -1,12 +1,40 @@
-// ResoFly CalDAV-server (Cloudflare Worker) — fase 2: discovery + lezen.
+// ResoFly-agendaserver (Cloudflare Worker): de ResoFly-agenda's op een
+// telefoon of computer, en deellinks voor mensen buiten ResoFly.
 //
-// Bedient telefoons (Apple Agenda, Android/DAVx5) read-only met de native
-// ResoFly-agenda's. Authenticatie via HTTP Basic (gebruikersnaam = inlog-e-mail,
-// wachtwoord = app-wachtwoord). De Worker praat met Supabase via de service-role
-// key en dwingt ZELF tenant-isolatie af (RLS wordt omzeild): elke request wordt
-// strikt beperkt tot het geauthenticeerde paar (user_id, organization_id).
+// 1. CalDAV (Apple Agenda op iPhone en Mac, Android met DAVx⁵, Thunderbird):
+//    inloggen met HTTP Basic, gebruikersnaam = het inlogmailadres, wachtwoord =
+//    een app-wachtwoord uit Instellingen → Agenda. Lezen, maken, wijzigen,
+//    verwijderen en alleen de wijzigingen ophalen (sync-collection).
+// 2. Deellinks: GET /feed/<token>.ics geeft één ResoFly-agenda als .ics, voor
+//    Google Agenda, Outlook of Apple Agenda van iemand zonder ResoFly. Alleen
+//    lezen; wat erin staat ("Bezet" of titel en plaats) koos de eigenaar.
 //
-// Schrijven (PUT/DELETE), sync-collection en herhaling-parsing komen in fase 3.
+// De Worker praat met Supabase via de service-role key en omzeilt dus RLS. Hij
+// dwingt zelf af dat elk verzoek binnen één organisatie blijft: bij CalDAV het
+// paar (user_id, organization_id) van het app-wachtwoord, bij een deellink de
+// organisatie en agenda van die link. Beide komen uit de database, nooit uit
+// het verzoek.
+//
+// Pure regels (iCalendar lezen en schrijven, wat een deellink laat zien) staan
+// in logic.ts, met tests.
+
+import {
+  type EventRow,
+  type FeedDetail,
+  type FeedEventRow,
+  type ParsedEvent,
+  MAX_PUT_BYTES,
+  PAGE_SIZE,
+  buildFeed,
+  feedTokenFromPath,
+  icsForEvent,
+  multigetUids,
+  parseICalEvent,
+  postgrestInList,
+  sha256Hex,
+  unescapeXml,
+  xml,
+} from './logic.ts';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -31,27 +59,23 @@ interface SourceRow {
   change_seq: number;
 }
 
-interface EventRow {
+interface FeedLinkRow {
   id: string;
+  organization_id: string;
   source_id: string;
-  uid: string;
-  icalendar_raw: string | null;
-  title: string;
-  description: string | null;
-  location: string | null;
-  starts_at: string;
-  ends_at: string;
-  all_day: boolean;
-  rrule: string | null;
-  sequence: number;
-  etag: string;
-  sync_rev: number;
-  deleted_at: string | null;
-  updated_at: string;
+  user_id: string;
+  detail: FeedDetail;
+  source_name: string;
+  last_used_at: string | null;
 }
 
 const REALM = 'ResoFly CalDAV';
 const XMLNS = 'xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:CS="http://calendarserver.org/ns/" xmlns:ICAL="http://apple.com/ns/ical/"';
+
+// Een deellink toont afspraken tot een jaar terug, en alle herhalende. Ouder is
+// voor wie meekijkt niet nuttig, en maakte het bestand van een volle agenda
+// elk uur weer groter.
+const FEED_HISTORY_DAYS = 365;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -67,10 +91,23 @@ export default {
 async function handle(request: Request, env: Env): Promise<Response> {
   const method = request.method.toUpperCase();
   const url = new URL(request.url);
-  const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  let segments: string[];
+  try {
+    segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return new Response('Bad Request', { status: 400 });
+  }
 
-  // OPTIONS adverteert de mogelijkheden en mag zonder auth (clients pollen dit).
+  // OPTIONS adverteert de mogelijkheden en mag zonder inloggen (clients pollen dit).
   if (method === 'OPTIONS') return optionsResponse();
+
+  // Zoekmachines horen hier niets op te halen: een deellink is een sleutel.
+  if (segments.length === 1 && segments[0] === 'robots.txt') {
+    return new Response('User-agent: *\nDisallow: /\n', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+  }
+
+  // Deellinks: het token in het adres is de sleutel, er komt geen inlog bij.
+  if (segments[0] === 'feed') return await serveFeed(request, env, segments);
 
   const principal = await authenticate(request, env);
   if (!principal) return unauthorized();
@@ -113,7 +150,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
         const depth = request.headers.get('Depth') ?? '0';
         const responses = [collectionResponse(principal, source, sourceWritable(source, principal))];
         if (depth !== '0') {
-          const events = await fetchEvents(env, source.id);
+          const events = await fetchEvents(env, source);
           for (const ev of events) responses.push(eventResponse(principal, source, ev, false));
         }
         return multiStatus(responses.join(''));
@@ -126,8 +163,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
     // Event: /calendars/{userId}/{sourceId}/{uid}.ics
     if (segments.length === 4) {
       const uid = segments[3].replace(/\.ics$/i, '');
+      if (!uid || uid.length > 255) return new Response('Not Found', { status: 404 });
       if (method === 'PUT') return await putEvent(request, env, principal, source, uid);
-      const ev = await fetchEvent(env, source.id, uid);
+      const ev = await fetchEvent(env, source, uid);
       if (method === 'DELETE') {
         if (!ev) return new Response('Not Found', { status: 404 });
         return await deleteEvent(request, env, principal, source, ev);
@@ -148,7 +186,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
   return new Response('Not Found', { status: 404 });
 }
 
-/* ── Auth ─────────────────────────────────────────────────────────────── */
+/* ── Inloggen (CalDAV) ────────────────────────────────────────────────── */
 
 async function authenticate(request: Request, env: Env): Promise<Principal | null> {
   const creds = parseBasicAuth(request.headers.get('Authorization'));
@@ -166,7 +204,7 @@ async function authenticate(request: Request, env: Env): Promise<Principal | nul
     const hash = await sha256Hex(`${row.salt}:${normalized}`);
     if (timingSafeEqualHex(hash, row.password_hash)) {
       // last_used_at bijwerken (best-effort, blokkeert de respons niet).
-      void patchLastUsed(env, row.id);
+      void patchLastUsed(env, 'calendar_app_passwords', row.id);
       const writeRole = row.role === 'owner' || row.role === 'admin' || row.role === 'member';
       const canWrite = writeRole && (row.calendar_level ?? 'write') === 'write';
       return { userId: row.user_id, orgId: row.organization_id, email: creds.user, appPasswordId: row.id, canWrite };
@@ -178,7 +216,9 @@ async function authenticate(request: Request, env: Env): Promise<Principal | nul
 function parseBasicAuth(header: string | null): { user: string; pass: string } | null {
   if (!header || !/^Basic\s+/i.test(header)) return null;
   try {
-    const decoded = atob(header.replace(/^Basic\s+/i, '').trim());
+    // atob geeft bytes als tekens; een mailadres met een é kwam zo verminkt aan.
+    const binary = atob(header.replace(/^Basic\s+/i, '').trim());
+    const decoded = new TextDecoder().decode(Uint8Array.from(binary, c => c.charCodeAt(0)));
     const idx = decoded.indexOf(':');
     if (idx < 0) return null;
     return { user: decoded.slice(0, idx), pass: decoded.slice(idx + 1) };
@@ -189,11 +229,6 @@ function parseBasicAuth(header: string | null): { user: string; pass: string } |
 
 function normalizeToken(token: string): string {
   return token.replace(/[\s-]/g, '').toLowerCase();
-}
-
-async function sha256Hex(input: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 function timingSafeEqualHex(a: string, b: string): boolean {
@@ -223,6 +258,18 @@ async function rpc<T>(env: Env, fn: string, body: Record<string, unknown>): Prom
   return await res.json() as T;
 }
 
+/** Alle rijen, per blok van PAGE_SIZE: Supabase geeft er per verzoek niet meer. */
+async function fetchAll<T>(env: Env, table: string, query: string): Promise<T[]> {
+  const out: T[] = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/${table}?${query}&limit=${PAGE_SIZE}&offset=${offset}`, { headers: restHeaders(env) });
+    if (!res.ok) throw new Error(`${table} ${res.status}`);
+    const rows = await res.json() as T[];
+    out.push(...rows);
+    if (rows.length < PAGE_SIZE) return out;
+  }
+}
+
 async function fetchSources(env: Env, principal: Principal): Promise<SourceRow[]> {
   const query = `provider=eq.native&organization_id=eq.${principal.orgId}` +
     `&or=(user_id.eq.${principal.userId},visibility.eq.organization)&order=name.asc`;
@@ -241,18 +288,20 @@ async function fetchSource(env: Env, principal: Principal, sourceId: string): Pr
   return rows[0] ?? null;
 }
 
-async function fetchEvents(env: Env, sourceId: string): Promise<EventRow[]> {
-  const res = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/calendar_events?source_id=eq.${sourceId}&deleted_at=is.null&order=starts_at.asc`,
-    { headers: restHeaders(env) },
-  );
-  if (!res.ok) throw new Error(`events ${res.status}`);
-  return await res.json() as EventRow[];
+// Elke afspraak-query filtert ook op de organisatie van de agenda. De agenda
+// is al binnen de organisatie gevonden; dit is de tweede grendel, voor als
+// iemand hier later een andere bron in steekt.
+function eventScope(source: SourceRow): string {
+  return `source_id=eq.${source.id}&organization_id=eq.${source.organization_id}`;
 }
 
-async function fetchEvent(env: Env, sourceId: string, uid: string, { includeDeleted = false } = {}): Promise<EventRow | null> {
+function fetchEvents(env: Env, source: SourceRow): Promise<EventRow[]> {
+  return fetchAll<EventRow>(env, 'calendar_events', `${eventScope(source)}&deleted_at=is.null&order=starts_at.asc,id.asc`);
+}
+
+async function fetchEvent(env: Env, source: SourceRow, uid: string, { includeDeleted = false } = {}): Promise<EventRow | null> {
   const res = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/calendar_events?source_id=eq.${sourceId}&uid=eq.${encodeURIComponent(uid)}${includeDeleted ? '' : '&deleted_at=is.null'}`,
+    `${env.SUPABASE_URL}/rest/v1/calendar_events?${eventScope(source)}&uid=eq.${encodeURIComponent(uid)}${includeDeleted ? '' : '&deleted_at=is.null'}`,
     { headers: restHeaders(env) },
   );
   if (!res.ok) return null;
@@ -260,9 +309,25 @@ async function fetchEvent(env: Env, sourceId: string, uid: string, { includeDele
   return rows[0] ?? null;
 }
 
-async function patchLastUsed(env: Env, appPasswordId: string): Promise<void> {
+/**
+ * Een multiget in blokken van 50. Eerst ging er per afspraak een eigen verzoek
+ * naar de database: na het eerste koppelen vraagt een iPhone alles tegelijk op,
+ * en bij een volle agenda liep de Worker dan tegen zijn grens van verzoeken.
+ */
+async function fetchEventsByUids(env: Env, source: SourceRow, uids: string[]): Promise<EventRow[]> {
+  const out: EventRow[] = [];
+  for (let i = 0; i < uids.length; i += 50) {
+    const list = encodeURIComponent(postgrestInList(uids.slice(i, i + 50)));
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/calendar_events?${eventScope(source)}&deleted_at=is.null&uid=in.${list}`, { headers: restHeaders(env) });
+    if (!res.ok) throw new Error(`multiget ${res.status}`);
+    out.push(...await res.json() as EventRow[]);
+  }
+  return out;
+}
+
+async function patchLastUsed(env: Env, table: 'calendar_app_passwords' | 'calendar_feed_links', id: string): Promise<void> {
   try {
-    await fetch(`${env.SUPABASE_URL}/rest/v1/calendar_app_passwords?id=eq.${appPasswordId}`, {
+    await fetch(`${env.SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
       method: 'PATCH',
       headers: { ...restHeaders(env), Prefer: 'return=minimal' },
       body: JSON.stringify({ last_used_at: new Date().toISOString() }),
@@ -277,23 +342,17 @@ async function patchLastUsed(env: Env, appPasswordId: string): Promise<void> {
 async function report(request: Request, env: Env, principal: Principal, source: SourceRow): Promise<Response> {
   const body = await request.text();
   if (/sync-collection/i.test(body)) return await syncCollection(env, principal, source, body);
-  const isMultiget = /calendar-multiget/i.test(body);
-  let events: EventRow[];
-  if (isMultiget) {
-    const hrefs = [...body.matchAll(/<[^>]*href[^>]*>([^<]+)<\/[^>]*href>/gi)].map(m => m[1].trim());
-    const uids = hrefs.map(h => decodeURIComponent(h.split('/').pop() ?? '').replace(/\.ics$/i, '')).filter(Boolean);
-    events = [];
-    for (const uid of uids) {
-      const ev = await fetchEvent(env, source.id, uid);
-      if (ev) events.push(ev);
-    }
-  } else {
-    // calendar-query: geef alle (niet-verwijderde) events terug; de client
-    // expandeert herhaling en filtert zelf op tijdvenster.
-    events = await fetchEvents(env, source.id);
+  if (/calendar-multiget/i.test(body)) {
+    const events = await fetchEventsByUids(env, source, multigetUids(body));
+    return multiStatus(events.map(ev => eventResponse(principal, source, ev, true)).join(''));
   }
-  const responses = events.map(ev => eventResponse(principal, source, ev, true)).join('');
-  return multiStatus(responses);
+  // calendar-query: alle (niet-verwijderde) afspraken; de client vouwt
+  // herhalingen zelf uit en filtert zelf op tijdvenster. De inhoud alleen als
+  // de client erom vraagt: een iPhone vraagt eerst alleen de etags, en haalt
+  // daarna met een multiget op wat nieuw is.
+  const wantsData = /calendar-data/i.test(body);
+  const events = await fetchEvents(env, source);
+  return multiStatus(events.map(ev => eventResponse(principal, source, ev, wantsData)).join(''));
 }
 
 /* ── PROPFIND-responses ───────────────────────────────────────────────── */
@@ -384,75 +443,6 @@ function syncToken(changeSeq: number): string {
   return `https://resofly.com/ns/sync/${changeSeq}`;
 }
 
-/* ── iCalendar-generatie ──────────────────────────────────────────────── */
-
-function icsForEvent(ev: EventRow): string {
-  if (ev.icalendar_raw && ev.icalendar_raw.trim()) return ev.icalendar_raw;
-  const lines: string[] = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//ResoFly//CalDAV//NL',
-    'CALSCALE:GREGORIAN',
-    'BEGIN:VEVENT',
-    `UID:${escapeIcsText(ev.uid)}`,
-    `DTSTAMP:${icsUtc(new Date())}`,
-  ];
-  if (ev.all_day) {
-    const start = new Date(ev.starts_at);
-    let endExclusive = new Date(ev.ends_at);
-    if (endExclusive.getTime() <= start.getTime()) endExclusive = addUtcDays(start, 1);
-    lines.push(`DTSTART;VALUE=DATE:${icsDate(start)}`);
-    lines.push(`DTEND;VALUE=DATE:${icsDate(endExclusive)}`);
-  } else {
-    lines.push(`DTSTART:${icsUtc(new Date(ev.starts_at))}`);
-    lines.push(`DTEND:${icsUtc(new Date(ev.ends_at))}`);
-  }
-  lines.push(`SUMMARY:${escapeIcsText(ev.title || '(Geen titel)')}`);
-  if (ev.description) lines.push(`DESCRIPTION:${escapeIcsText(ev.description)}`);
-  if (ev.location) lines.push(`LOCATION:${escapeIcsText(ev.location)}`);
-  if (ev.rrule) lines.push(`RRULE:${ev.rrule}`);
-  lines.push(`SEQUENCE:${Number.isFinite(ev.sequence) ? ev.sequence : 0}`);
-  lines.push(`LAST-MODIFIED:${icsUtc(new Date(ev.updated_at))}`);
-  lines.push('END:VEVENT');
-  lines.push('END:VCALENDAR');
-  return lines.map(foldIcsLine).join('\r\n') + '\r\n';
-}
-
-function icsUtc(date: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}T${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}Z`;
-}
-
-function icsDate(date: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}`;
-}
-
-function addUtcDays(date: Date, days: number): Date {
-  const d = new Date(date.getTime());
-  d.setUTCDate(d.getUTCDate() + days);
-  return d;
-}
-
-function escapeIcsText(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
-}
-
-// RFC 5545 line folding: regels langer dan 75 octets vouwen met CRLF + spatie.
-function foldIcsLine(line: string): string {
-  if (line.length <= 75) return line;
-  const parts: string[] = [];
-  let remaining = line;
-  parts.push(remaining.slice(0, 75));
-  remaining = remaining.slice(75);
-  while (remaining.length > 74) {
-    parts.push(' ' + remaining.slice(0, 74));
-    remaining = remaining.slice(74);
-  }
-  if (remaining.length) parts.push(' ' + remaining);
-  return parts.join('\r\n');
-}
-
 /* ── Diverse helpers ──────────────────────────────────────────────────── */
 
 const ALLOW_METHODS = 'OPTIONS, GET, HEAD, PROPFIND, REPORT, PUT, DELETE, PROPPATCH';
@@ -469,7 +459,7 @@ function optionsResponse(): Response {
 }
 
 function unauthorized(): Response {
-  return new Response('Unauthorized', { status: 401, headers: { 'WWW-Authenticate': `Basic realm="${REALM}"` } });
+  return new Response('Unauthorized', { status: 401, headers: { 'WWW-Authenticate': `Basic realm="${REALM}", charset="UTF-8"` } });
 }
 function forbidden(): Response {
   return new Response('Forbidden', { status: 403 });
@@ -496,20 +486,15 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function xml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function unescapeXml(value: string): string {
-  return value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, '&');
-}
-
 /* ── Schrijven (PUT / DELETE / PROPPATCH) ─────────────────────────────── */
 
 async function putEvent(request: Request, env: Env, principal: Principal, source: SourceRow, uid: string): Promise<Response> {
   if (!sourceWritable(source, principal)) return forbidden();
+  const declared = Number(request.headers.get('Content-Length') ?? '0');
+  if (declared > MAX_PUT_BYTES) return new Response('Payload Too Large', { status: 413 });
   const body = await request.text();
-  const existing = await fetchEvent(env, source.id, uid);
+  if (new TextEncoder().encode(body).length > MAX_PUT_BYTES) return new Response('Payload Too Large', { status: 413 });
+  const existing = await fetchEvent(env, source, uid);
   const ifMatch = request.headers.get('If-Match');
   const ifNoneMatch = request.headers.get('If-None-Match');
   if (ifNoneMatch && ifNoneMatch.trim() === '*' && existing) return preconditionFailed();
@@ -517,7 +502,7 @@ async function putEvent(request: Request, env: Env, principal: Principal, source
 
   let parsed: ParsedEvent;
   try {
-    parsed = parseICalEvent(body, uid);
+    parsed = parseICalEvent(body);
   } catch (err) {
     return new Response(`Invalid iCalendar: ${err instanceof Error ? err.message : 'parse error'}`, { status: 400 });
   }
@@ -542,11 +527,11 @@ async function putEvent(request: Request, env: Env, principal: Principal, source
   // maken op de iPhone, een afspraak terugslepen), dan moet die grafsteen weer
   // tot leven komen: een nieuwe rij liep op de unieke sleutel stuk, en elke
   // nieuwe poging van de client gaf opnieuw een 500.
-  const tombstone = existing ? null : await fetchEvent(env, source.id, uid, { includeDeleted: true });
+  const tombstone = existing ? null : await fetchEvent(env, source, uid, { includeDeleted: true });
   const target = existing ?? tombstone;
 
   const row = target
-    ? await mutateEvent(env, `id=eq.${target.id}`, 'PATCH', { ...fields, deleted_at: null })
+    ? await mutateEvent(env, `id=eq.${target.id}&organization_id=eq.${source.organization_id}`, 'PATCH', { ...fields, deleted_at: null })
     : await mutateEvent(env, '', 'POST', {
         organization_id: source.organization_id,
         source_id: source.id,
@@ -562,12 +547,15 @@ async function deleteEvent(request: Request, env: Env, principal: Principal, sou
   if (!sourceWritable(source, principal)) return forbidden();
   const ifMatch = request.headers.get('If-Match');
   if (ifMatch && !etagMatches(ifMatch, ev.etag)) return preconditionFailed();
-  // Soft-delete = tombstone voor sync-collection.
-  await fetch(`${env.SUPABASE_URL}/rest/v1/calendar_events?id=eq.${ev.id}`, {
+  // Soft-delete = grafsteen voor sync-collection.
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/calendar_events?id=eq.${ev.id}&organization_id=eq.${source.organization_id}`, {
     method: 'PATCH',
     headers: { ...restHeaders(env), Prefer: 'return=minimal' },
     body: JSON.stringify({ deleted_at: new Date().toISOString(), sequence: (ev.sequence ?? 0) + 1 }),
   });
+  // Eerst gaf dit altijd 204, ook als de database weigerde: de telefoon dacht
+  // dat de afspraak weg was, en bij de volgende synchronisatie kwam hij terug.
+  if (!res.ok) throw new Error(`delete event ${res.status}`);
   return new Response(null, { status: 204 });
 }
 
@@ -583,7 +571,7 @@ async function proppatch(request: Request, env: Env, principal: Principal, sourc
   const colorM = body.match(/<[^>]*calendar-color[^>]*>([^<]*)<\/[^>]*calendar-color>/i);
   if (colorM) { const c = normalizeColor(colorM[1].trim()); if (c) patch.color = c.slice(0, 7); }
   if (Object.keys(patch).length) {
-    await fetch(`${env.SUPABASE_URL}/rest/v1/calendar_sources?id=eq.${source.id}`, {
+    await fetch(`${env.SUPABASE_URL}/rest/v1/calendar_sources?id=eq.${source.id}&organization_id=eq.${source.organization_id}`, {
       method: 'PATCH', headers: { ...restHeaders(env), Prefer: 'return=minimal' }, body: JSON.stringify(patch),
     }).catch(() => {});
   }
@@ -621,7 +609,7 @@ function preconditionFailed(): Response {
 async function syncCollection(env: Env, principal: Principal, source: SourceRow, body: string): Promise<Response> {
   const tokenMatch = body.match(/<[^>]*sync-token[^>]*>([^<]*)<\/[^>]*sync-token>/i);
   const since = parseSyncToken(tokenMatch ? tokenMatch[1] : '');
-  const changed = await fetchChangedEvents(env, source.id, since);
+  const changed = await fetchChangedEvents(env, source, since);
   const responses = changed.map(ev => {
     if (ev.deleted_at) {
       return `<D:response><D:href>${eventHref(principal.userId, source.id, ev.uid)}</D:href><D:status>HTTP/1.1 404 Not Found</D:status></D:response>`;
@@ -638,169 +626,58 @@ function parseSyncToken(raw: string): number {
   return m ? parseInt(m[1], 10) : 0;
 }
 
-async function fetchChangedEvents(env: Env, sourceId: string, since: number): Promise<EventRow[]> {
-  let query = `source_id=eq.${sourceId}&sync_rev=gt.${since}&order=sync_rev.asc`;
-  if (since === 0) query += '&deleted_at=is.null'; // initiële sync: geen tombstones
-  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/calendar_events?${query}`, { headers: restHeaders(env) });
-  if (!res.ok) throw new Error(`changed ${res.status}`);
-  return await res.json() as EventRow[];
+function fetchChangedEvents(env: Env, source: SourceRow, since: number): Promise<EventRow[]> {
+  let query = `${eventScope(source)}&sync_rev=gt.${since}&order=sync_rev.asc,id.asc`;
+  if (since === 0) query += '&deleted_at=is.null'; // eerste synchronisatie: geen grafstenen
+  return fetchAll<EventRow>(env, 'calendar_events', query);
 }
 
-/* ── iCalendar-parser (projectie uit de canonieke tekst) ──────────────── */
+/* ── Deellinks (GET /feed/<token>.ics) ────────────────────────────────── */
 
-interface ParsedEvent {
-  title: string;
-  description: string | null;
-  location: string | null;
-  startsAt: string;
-  endsAt: string;
-  allDay: boolean;
-  timezone: string | null;
-  rrule: string | null;
-  exdate: string[] | null;
-  sequence: number;
-}
-
-interface IcsProp { name: string; params: Record<string, string>; value: string }
-
-function parseICalEvent(text: string, fallbackUid: string): ParsedEvent {
-  const lines = unfoldIcs(text);
-  const blocks: IcsProp[][] = [];
-  let current: IcsProp[] | null = null;
-  for (const line of lines) {
-    if (/^BEGIN:VEVENT\s*$/i.test(line)) { current = []; continue; }
-    if (/^END:VEVENT\s*$/i.test(line)) { if (current) blocks.push(current); current = null; continue; }
-    if (current) { const p = parsePropLine(line); if (p) current.push(p); }
+async function serveFeed(request: Request, env: Env, segments: string[]): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') {
+    return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD, OPTIONS' } });
   }
-  if (!blocks.length) throw new Error('geen VEVENT gevonden');
-  // De hoofd-instantie = de VEVENT zonder RECURRENCE-ID.
-  const master = blocks.find(b => !b.some(p => p.name === 'RECURRENCE-ID')) ?? blocks[0];
-  const get = (n: string) => master.find(p => p.name === n);
+  const token = feedTokenFromPath(segments);
+  if (!token) return feedNotFound();
 
-  const start = parseIcsTime(get('DTSTART'));
-  const dtend = get('DTEND');
-  let endsAt: string;
-  if (dtend) {
-    endsAt = parseIcsTime(dtend).iso;
-  } else {
-    const dur = get('DURATION');
-    const ms = dur ? parseDurationMs(dur.value) : (start.allDay ? 86400000 : 3600000);
-    endsAt = new Date(new Date(start.iso).getTime() + ms).toISOString();
-  }
+  // Alleen de hash staat in de database. De lookup geeft niets terug als de
+  // link is ingetrokken, de maker geen actief lid meer is of de Agenda niet
+  // meer mag zien, of de agenda niet meer van hem is.
+  const rows = await rpc<FeedLinkRow[]>(env, 'calendar_feed_lookup', { p_token_hash: await sha256Hex(token) });
+  const link = rows[0];
+  if (!link) return feedNotFound();
 
-  const exdateValues: string[] = [];
-  for (const p of master) {
-    if (p.name !== 'EXDATE') continue;
-    for (const part of p.value.split(',')) {
-      const t = parseIcsTime({ name: 'EXDATE', params: p.params, value: part });
-      exdateValues.push(t.iso);
-    }
-  }
+  // Agenda-apps kijken vaak; één keer per uur bijhouden is genoeg.
+  const lastUsed = link.last_used_at ? Date.parse(link.last_used_at) : 0;
+  if (!lastUsed || Date.now() - lastUsed > 3_600_000) void patchLastUsed(env, 'calendar_feed_links', link.id);
 
-  const rrule = get('RRULE')?.value?.trim().toUpperCase() || null;
+  const since = new Date(Date.now() - FEED_HISTORY_DAYS * 86_400_000).toISOString();
+  const events = await fetchAll<FeedEventRow>(env, 'calendar_events',
+    `source_id=eq.${link.source_id}&organization_id=eq.${link.organization_id}&deleted_at=is.null` +
+    `&or=${encodeURIComponent(`(recurs.eq.true,ends_at.gte.${since})`)}` +
+    '&select=uid,title,location,starts_at,ends_at,all_day,rrule,exdate,icalendar_raw,sequence,updated_at' +
+    '&order=starts_at.asc,id.asc');
 
-  return {
-    title: unescapeText(get('SUMMARY')?.value ?? '') || '(Geen titel)',
-    description: get('DESCRIPTION') ? unescapeText(get('DESCRIPTION')!.value) : null,
-    location: get('LOCATION') ? unescapeText(get('LOCATION')!.value) : null,
-    startsAt: start.iso,
-    endsAt,
-    allDay: start.allDay,
-    timezone: start.tzid,
-    rrule,
-    exdate: exdateValues.length ? exdateValues : null,
-    sequence: parseInt(get('SEQUENCE')?.value ?? '0', 10) || 0,
+  const body = buildFeed(link.source_name, events, link.detail === 'details' ? 'details' : 'busy');
+  const etag = quote((await sha256Hex(body)).slice(0, 32));
+  const headers: Record<string, string> = {
+    'Content-Type': 'text/calendar; charset=utf-8',
+    'Content-Disposition': 'inline; filename="agenda.ics"',
+    'Cache-Control': 'private, max-age=300',
+    ETag: etag,
+    'X-Robots-Tag': 'noindex, nofollow',
+    'Referrer-Policy': 'no-referrer',
   };
+  const ifNoneMatch = request.headers.get('If-None-Match');
+  if (ifNoneMatch && etagMatches(ifNoneMatch, etag.replace(/"/g, ''))) return new Response(null, { status: 304, headers });
+  return new Response(method === 'HEAD' ? null : body, { status: 200, headers });
 }
 
-function unfoldIcs(text: string): string[] {
-  const raw = text.split(/\r\n|\n|\r/);
-  const lines: string[] = [];
-  for (const line of raw) {
-    if ((line.startsWith(' ') || line.startsWith('\t')) && lines.length) {
-      lines[lines.length - 1] += line.slice(1);
-    } else {
-      lines.push(line);
-    }
-  }
-  return lines;
-}
-
-function parsePropLine(line: string): IcsProp | null {
-  const colon = line.indexOf(':');
-  if (colon < 0) return null;
-  const left = line.slice(0, colon);
-  const value = line.slice(colon + 1);
-  const segs = left.split(';');
-  const name = segs[0].toUpperCase();
-  if (!name) return null;
-  const params: Record<string, string> = {};
-  for (let i = 1; i < segs.length; i++) {
-    const eq = segs[i].indexOf('=');
-    if (eq > 0) params[segs[i].slice(0, eq).toUpperCase()] = segs[i].slice(eq + 1).replace(/^"|"$/g, '');
-  }
-  return { name, params, value };
-}
-
-function parseIcsTime(prop: IcsProp | undefined): { iso: string; allDay: boolean; tzid: string | null } {
-  if (!prop || !prop.value) return { iso: new Date().toISOString(), allDay: false, tzid: null };
-  const value = prop.value.trim();
-  // All-day: VALUE=DATE of een kale YYYYMMDD.
-  if (prop.params.VALUE === 'DATE' || /^\d{8}$/.test(value)) {
-    const m = value.match(/^(\d{4})(\d{2})(\d{2})/);
-    if (m) return { iso: `${m[1]}-${m[2]}-${m[3]}T00:00:00.000Z`, allDay: true, tzid: null };
-  }
-  const m = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/);
-  if (!m) {
-    const fallback = new Date(value);
-    return { iso: Number.isNaN(fallback.getTime()) ? new Date().toISOString() : fallback.toISOString(), allDay: false, tzid: null };
-  }
-  const [, y, mo, d, h, mi, s, z] = m;
-  if (z === 'Z') {
-    return { iso: new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s)).toISOString(), allDay: false, tzid: null };
-  }
-  const tzid = prop.params.TZID || null;
-  if (tzid) {
-    return { iso: wallTimeToUtcIso(+y, +mo, +d, +h, +mi, +s, tzid), allDay: false, tzid };
-  }
-  // Zwevende tijd (geen zone): behandel als UTC (best-effort).
-  return { iso: new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s)).toISOString(), allDay: false, tzid: null };
-}
-
-// Wandkloktijd in een IANA-zone → UTC-ISO, via Intl (handelt zomertijd af).
-function wallTimeToUtcIso(y: number, mo: number, d: number, h: number, mi: number, s: number, tzid: string): string {
-  try {
-    const guess = Date.UTC(y, mo - 1, d, h, mi, s);
-    const offset1 = tzOffsetMs(guess, tzid);
-    let utc = guess - offset1;
-    const offset2 = tzOffsetMs(utc, tzid);
-    if (offset2 !== offset1) utc = guess - offset2;
-    return new Date(utc).toISOString();
-  } catch {
-    return new Date(Date.UTC(y, mo - 1, d, h, mi, s)).toISOString();
-  }
-}
-
-function tzOffsetMs(utcMs: number, tzid: string): number {
-  const dtf = new Intl.DateTimeFormat('en-US', {
-    timeZone: tzid, hourCycle: 'h23',
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+function feedNotFound(): Response {
+  return new Response('Deze agendalink bestaat niet (meer). Vraag de eigenaar van de agenda om een nieuwe.\n', {
+    status: 404,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' },
   });
-  const parts = dtf.formatToParts(new Date(utcMs));
-  const map: Record<string, number> = {};
-  for (const p of parts) if (p.type !== 'literal') map[p.type] = parseInt(p.value, 10);
-  const asUtc = Date.UTC(map.year, map.month - 1, map.day, map.hour, map.minute, map.second);
-  return asUtc - utcMs;
-}
-
-function parseDurationMs(value: string): number {
-  const m = value.trim().match(/^([+-]?)P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i);
-  if (!m) return 3600000;
-  const sign = m[1] === '-' ? -1 : 1;
-  const w = +(m[2] || 0), d = +(m[3] || 0), h = +(m[4] || 0), mi = +(m[5] || 0), s = +(m[6] || 0);
-  return sign * ((((w * 7 + d) * 24 + h) * 60 + mi) * 60 + s) * 1000;
-}
-
-function unescapeText(value: string): string {
-  return value.replace(/\\([\\;,nN])/g, (_, c: string) => (c === 'n' || c === 'N' ? '\n' : c));
 }

@@ -2,29 +2,44 @@ name = "resofly-caldav"
 main = "src/index.ts"
 compatibility_date = "2026-06-25"
 
-# De CalDAV-Worker bedient telefoons (Apple Agenda, Android/DAVx5) via CalDAV.
-# Hij praat met Supabase via de service-role key:
-#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
-# (NIET hier in git zetten.)
+# De agendaserver: de ResoFly-agenda's op een telefoon of computer (CalDAV) en
+# deellinks voor mensen buiten ResoFly (/feed/<token>.ics). Inrichten en
+# controleren: docs/setup/AGENDASERVER_SETUP.md.
 #
-# Custom hostname (later): bind caldav.resofly.com via een [[routes]]-blok of het
-# Cloudflare-dashboard. Voor de eerste tests volstaat de *.workers.dev-URL, want
-# iOS accepteert elke geldige HTTPS-host.
+# Hij praat met Supabase via de service-role key (NIET hier in git zetten):
+#   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
+#
+# Uitrollen gaat bij een push naar `staging` vanzelf (workflow "Deploy
+# agendaserver (staging)"), of met de hand: npm run deploy:staging.
+#
+# De adressen: https://caldav-staging.resofly.com op staging,
+# https://caldav.resofly.com op productie. Beide namen staan op de lijst met
+# gereserveerde klantnamen ("caldav" sinds 20261108230000, "caldav-staging"
+# sinds 20261113120000). Gebruik geen caldav.staging.resofly.com: een tweede
+# niveau zit niet in het certificaat van *.resofly.com.
 
 [vars]
-SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
+SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
 
 # ---- staging ----
 [env.staging]
 name = "resofly-caldav-staging"
+# Het adres op workers.dev blijft: daarmee controleer je de Worker zonder route.
+workers_dev = true
 
 [env.staging.vars]
 SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
 
-# Later, na DNS:
-# [[env.staging.routes]]
-# pattern = "caldav.staging.resofly.com"
-# custom_domain = true
+# De wildcard *.resofly.com/* (de klantadressen) gaat voor alle andere namen;
+# deze preciezere route gaat daar weer voor. DNS: een eigen record
+# caldav-staging AAAA 100:: (proxied), net als mcp-staging.
+#
+# Tot 13 november 2026 noemde de app caldav.resofly.com, en had de Worker
+# geen route: dat adres kwam bij de klantadressen uit. Een iPhone zei dan
+# alleen "Kan account niet verifiëren".
+[[env.staging.routes]]
+pattern = "caldav-staging.resofly.com/*"
+zone_name = "resofly.com"
 
 # ---- production ----
 [env.production]
@@ -33,6 +48,9 @@ name = "resofly-caldav"
 [env.production.vars]
 SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
 
+# Pas aan zetten als productie live gaat, samen met een DNS-record
+# caldav AAAA 100:: (proxied), het secret van het productieproject en
+# het adres in src/lib/caldavSetup.ts (of VITE_CALDAV_URL bij Pages).
 # [[env.production.routes]]
-# pattern = "caldav.resofly.com"
-# custom_domain = true
+# pattern = "caldav.resofly.com/*"
+# zone_name = "resofly.com"
