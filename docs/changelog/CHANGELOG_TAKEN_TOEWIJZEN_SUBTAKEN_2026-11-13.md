@@ -102,7 +102,8 @@ goedkeuring bij komt.
   - bij opslaan gaan eerst twee rijen naar `project_members`, daarna twee naar
     `task_assignees`, en de subtaak komt in de database als "feedback verwerken";
   - niets loopt zijwaarts uit beeld en er zijn geen JavaScript-fouten.
-- `npm run test:mobile -- --theme=both`: zie het commitbericht.
+- `npm run test:mobile -- --theme=both`: 608 pagina's gemeten, 0 met problemen. Deze test opent
+  het taakvenster niet; daarvoor is de browsercontrole hierboven.
 - `deno check` van de edge functions kon in deze sessie niet draaien: deno.land en esm.sh zijn
   hier niet bereikbaar. De wijziging daar is alleen tekst in twee beschrijvingen. De workflow
   *Frontend checks* draait de controle bij de push naar `staging`.
