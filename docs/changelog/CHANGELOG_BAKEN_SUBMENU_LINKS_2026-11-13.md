@@ -78,7 +78,9 @@ Weergave → Look. Alleen Cockpit heeft nog de oude zijbalk.
 - `npm run typecheck` en `npm test` (1757 tests): groen.
 - `npm run test:loading`: groen. Navigeren loopt nu via de rail en het paneel, van Vandaag via
   Agenda naar Uren. De agenda laadt dezelfde groep (`time`), dus de tellingen gelden nog.
-- `npm run test:mobile -- --theme=both`: zie het volgende commitbericht.
+- `npm run test:mobile -- --theme=both`: 620 pagina's op telefoon, tablet, liggend en laptop,
+  in Dag en Nacht, in Baken: 0 problemen.
+- `npm run build` en `node scripts/check-csp-hash.mjs`: groen.
 - Op 1440×900 en 820×1180 (tablet) en 390×844 (telefoon), in Dag en Nacht bekeken: het paneel
   vastgezet en los, Weergave, Inzicht met een rapportage van Gerrie, en het uitschuifmenu op de
   telefoon. Bij Geld past het hele submenu op een scherm van 900px hoog.
