@@ -1,4 +1,4 @@
-import type { OrganizationMember, UUID } from '../types';
+import type { OrganizationMember, ProjectMember, UUID } from '../types';
 import { parseModuleAccess, resolveModuleLevel, type ModuleKey } from './permissions.ts';
 
 /**
@@ -62,6 +62,51 @@ export function membersWhoCanHold(members: OrganizationMember[], module: ModuleK
     .filter(m => (m.status ?? 'active') === 'active' && m.role !== 'accountant')
     .filter(m => resolveModuleLevel(m.role, parseModuleAccess(m.module_access), module) !== 'none')
     .sort((a, b) => memberEmail(a).localeCompare(memberEmail(b), 'nl'));
+}
+
+/**
+ * Wie je in het taakvenster aan een taak kunt toewijzen.
+ *
+ * - `chips`: de knoppen die je aan- en uitzet. Bij een projecttaak het
+ *   projectteam plus wie er al op staat; zonder project iedereen die
+ *   Projecten mag zien.
+ * - `others`: de rest van het team, voor de keuzelijst "Ander teamlid".
+ * - `canAssignSelf`: of de knop "Aan mij toewijzen" zin heeft.
+ *
+ * Eerder bood een projecttaak alleen het projectteam aan. Was dat team leeg,
+ * dan kon je niemand kiezen, ook jezelf niet, en moest je eerst via het
+ * projectdashboard het team vullen. Nu kun je iedereen kiezen; wie nog niet
+ * in het projectteam zit, komt er bij het opslaan bij (`projectTeamAdditions`).
+ * Zo blijft gelden dat wie een taak heeft, in het projectteam zit.
+ */
+export function taskAssigneeChoices({ projectId, assigneeIds, members, projectMembers, currentUserId }: {
+  projectId: UUID | null;
+  assigneeIds: UUID[];
+  members: OrganizationMember[];
+  projectMembers: ProjectMember[];
+  currentUserId?: UUID | null;
+}): { chips: UUID[]; others: OrganizationMember[]; canAssignSelf: boolean } {
+  const eligible = membersWhoCanHold(members, 'projects');
+  const base = projectId
+    ? projectMembers.filter(pm => pm.project_id === projectId).map(pm => pm.user_id)
+    : eligible.map(m => m.user_id);
+  const chips = Array.from(new Set([...base, ...assigneeIds]));
+  const others = eligible.filter(m => !chips.includes(m.user_id));
+  const canAssignSelf = Boolean(currentUserId)
+    && !assigneeIds.includes(currentUserId as UUID)
+    && eligible.some(m => m.user_id === currentUserId);
+  return { chips, others, canAssignSelf };
+}
+
+/**
+ * Wie er bij het opslaan van een projecttaak nog in het projectteam moet,
+ * omdat de taak aan die persoon is toegewezen. Leeg voor een taak zonder
+ * project: dan is er geen team.
+ */
+export function projectTeamAdditions(projectId: UUID | null, assigneeIds: UUID[], projectMembers: ProjectMember[]): UUID[] {
+  if (!projectId) return [];
+  const team = new Set(projectMembers.filter(pm => pm.project_id === projectId).map(pm => pm.user_id));
+  return Array.from(new Set(assigneeIds.filter(id => !team.has(id))));
 }
 
 /**
