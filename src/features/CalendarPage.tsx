@@ -1930,10 +1930,12 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
 // gelijke hoogte. De TSX rekent met deze pixels uit hoeveel lanes er in een
 // weekrij passen; de CSS krijgt exact dezelfde waarden via custom properties,
 // zodat er maar één bron van waarheid is.
-const MONTH_DATE_ROW_PX = 26;
-const MONTH_LANE_PX = 20;
-const MONTH_LANE_GAP_PX = 2;
-const MONTH_ROW_PAD_PX = 6;
+// De telefoon heeft lagere lanes: met 20px pasten er in een weekrij van ~95px
+// maar twee, en verdween de rest achter "+2". Met 15px zijn het er vier
+// (2026-11-13).
+type MonthMetrics = { dateRow: number; lane: number; laneGap: number; rowPad: number };
+const MONTH_METRICS_DESKTOP: MonthMetrics = { dateRow: 26, lane: 20, laneGap: 2, rowPad: 6 };
+const MONTH_METRICS_PHONE: MonthMetrics = { dateRow: 25, lane: 15, laneGap: 2, rowPad: 3 };
 
 // Deelt het maandrooster op in weken van 7 dagen (voor de weeknummer-kolom).
 function weekChunks(days: Date[]): Date[][] {
@@ -2048,7 +2050,7 @@ function layoutMonthWeek(week: Date[], events: CalendarExternalEvent[], tasks: T
 /* ── Maand: het dagkaartje achter "+N meer" ──────────────────────────────
    Google kapt een volle dag af met "+3 meer" en laat de rest zien in een klein
    zwevend kaartje bóven het rooster — je blijft in de maand staan. Alleen op de
-   telefoon is dat te krap; daar schuift de dag in het paneel onder het rooster. */
+   telefoon is dat te krap; daar opent een tik de dag zelf. */
 function MonthDayCard({ day, rect, items, sourceColors, taskColor, onOpenDay, onOpenEvent, onEditTask, onClose }: {
   taskColor?: (task: Task) => string;
   day: Date;
@@ -2138,7 +2140,7 @@ function MonthDayItemList({ items, sourceColors, taskColor, onOpenEvent, onEditT
   </div>;
 }
 
-export function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent, isMobile = false, selectedDay = null, onSelectDay, onCreateOnDay }: {
+export function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent, isMobile = false, onCreateOnDay }: {
   days: Date[];
   anchor: Date;
   events: CalendarExternalEvent[];
@@ -2149,34 +2151,39 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
   onEditTask: (task: Task) => void;
   onOpenDay: (day: Date) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
-  /** Telefoon: tikken kiest een dag en toont die onder het rooster (Google-werkwijze). */
+  /**
+   * Telefoon: het hele scherm is rooster, met weeknummers, en een tik ergens
+   * in een dag opent die dag (Google-werkwijze). Eerder kwam de gekozen dag
+   * als lijst ónder het rooster; die lijst nam een derde van de hoogte, zodat
+   * er per dag maar één regel overbleef. En een afspraak van 50px breed raak
+   * je toch niet precies.
+   */
   isMobile?: boolean;
-  selectedDay?: Date | null;
-  onSelectDay?: (day: Date) => void;
   /** Bureaublad: klikken op een lege plek maakt een afspraak op die dag. */
   onCreateOnDay?: (day: Date) => void;
 }) {
   function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
   const weeks = useMemo(() => weekChunks(days), [days]);
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const metrics = isMobile ? MONTH_METRICS_PHONE : MONTH_METRICS_DESKTOP;
   // Het "+N meer"-kaartje: welke dag, en waar stond de knop die erom vroeg.
   const [moreDay, setMoreDay] = useState<{ day: Date; rect: { left: number; top: number; width: number; height: number } } | null>(null);
   useEffect(() => { setMoreDay(null); }, [anchor]);
 
-  /** Klikken op een lege plek in een dag: telefoon kiest de dag, bureaublad maakt
+  /** Klikken op een lege plek in een dag: telefoon opent de dag, bureaublad maakt
    *  er een afspraak op (en valt terug op de dagweergave zonder schrijfrecht). */
   const pickDay = useCallback((day: Date) => {
-    if (isMobile && onSelectDay) { onSelectDay(startOfDay(day)); return; }
+    if (isMobile) { onOpenDay(startOfDay(day)); return; }
     if (onCreateOnDay) { onCreateOnDay(startOfDay(day)); return; }
     onOpenDay(day);
-  }, [isMobile, onSelectDay, onCreateOnDay, onOpenDay]);
+  }, [isMobile, onCreateOnDay, onOpenDay]);
 
-  /** "+N meer": bureaublad opent het dagkaartje, telefoon kiest de dag. */
+  /** "+N meer": bureaublad opent het dagkaartje, telefoon de dag zelf. */
   const openDayCard = useCallback((day: Date, el: HTMLElement) => {
-    if (isMobile && onSelectDay) { onSelectDay(startOfDay(day)); return; }
+    if (isMobile) { onOpenDay(startOfDay(day)); return; }
     const rect = el.getBoundingClientRect();
     setMoreDay({ day: startOfDay(day), rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } });
-  }, [isMobile, onSelectDay]);
+  }, [isMobile, onOpenDay]);
 
   // Hoeveel items er per dag passen volgt uit de werkelijke rijhoogte — net als
   // bij Google, dat in een maand met vijf weekrijen meer regels toont dan in een
@@ -2189,26 +2196,42 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
       // Nog geen hoogte (net gemonteerd, of in een verborgen tab)? Dan wachten we
       // op de observer i.p.v. één lane vast te leggen op een bogus 0-meting.
       if (el.clientHeight <= 0) return;
-      const rowHeight = el.clientHeight / Math.max(1, weeks.length);
-      const usable = rowHeight - MONTH_DATE_ROW_PX - MONTH_ROW_PAD_PX;
-      setMaxLanes(Math.max(1, Math.floor((usable + MONTH_LANE_GAP_PX) / (MONTH_LANE_PX + MONTH_LANE_GAP_PX))));
+      // Meet de weekrij zelf, niet rooster ÷ weken: op de telefoon staan
+      // tegels met ruimte ertussen, en op een laag scherm (liggend) krijgt een
+      // rij een minimumhoogte en scrolt het rooster. Gedeeld door zes was dat
+      // daar 19px per week: de dagnummers vielen half weg. offsetHeight, niet
+      // de rechthoek: tijdens het zoomen tussen weergaven is die geschaald.
+      const rowHeights = Array.from(el.children, child => (child as HTMLElement).offsetHeight).filter(h => h > 0);
+      if (rowHeights.length === 0) return;
+      const usable = Math.min(...rowHeights) - metrics.dateRow - metrics.rowPad;
+      setMaxLanes(Math.max(1, Math.floor((usable + metrics.laneGap) / (metrics.lane + metrics.laneGap))));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [weeks.length]);
+  }, [weeks.length, metrics]);
+
+  // Scrolt het rooster (laag scherm), dan opent een maand bij de week van
+  // vandaag, of bovenaan. Anders bleef de scrollstand van de vorige maand staan.
+  useLayoutEffect(() => {
+    const el = gridRef.current;
+    if (!el || el.scrollHeight <= el.clientHeight + 1) return;
+    const todayIdx = weeks.findIndex(week => week.some(day => isSameDay(day, new Date())));
+    const row = todayIdx > 0 ? el.children[todayIdx] as HTMLElement | undefined : undefined;
+    el.scrollTop = row ? row.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 6 : 0;
+  }, [anchor, weeks]);
 
   const today = new Date();
   const gridStyle = {
-    '--cm-date-h': `${MONTH_DATE_ROW_PX}px`,
-    '--cm-lane': `${MONTH_LANE_PX}px`,
-    '--cm-gap': `${MONTH_LANE_GAP_PX}px`,
-    '--cm-pad': `${MONTH_ROW_PAD_PX}px`,
+    '--cm-date-h': `${metrics.dateRow}px`,
+    '--cm-lane': `${metrics.lane}px`,
+    '--cm-gap': `${metrics.laneGap}px`,
+    '--cm-pad': `${metrics.rowPad}px`,
   } as CSSProperties;
 
   return (
-    <div className="cm-view" style={gridStyle}>
+    <div className={`cm-view${isMobile ? ' is-phone' : ''}`} style={gridStyle}>
       <div className="cm-head">
         <span className="cm-head-weekno" aria-hidden="true" />
         {DAY_NAMES_NL.map(name => <span className="cm-head-cell" key={name}>{name}</span>)}
@@ -2240,7 +2263,7 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                 <div className="cm-cells">
                   {week.map(day => (
                     <div
-                      className={`cm-cell${isSameMonth(day, anchor) ? '' : ' is-outside'}${isSameDay(day, today) ? ' is-today' : ''}${selectedDay && isSameDay(day, selectedDay) ? ' is-selected' : ''}`}
+                      className={`cm-cell${isSameMonth(day, anchor) ? '' : ' is-outside'}${isSameDay(day, today) ? ' is-today' : ''}`}
                       key={formatISODate(day)}
                       role="presentation"
                       onClick={() => pickDay(day)}
@@ -2248,18 +2271,21 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                   ))}
                 </div>
                 <div className="cm-dates">
-                  {week.map(day => {
+                  {week.map((day, i) => {
                     const isToday = isSameDay(day, today);
-                    const isPicked = Boolean(selectedDay && isSameDay(day, selectedDay));
+                    // Op de telefoon is het dagnummer de enige knop in de dag
+                    // (de items laten hun tik door): zeg dus ook wat erin staat.
+                    const itemCount = isMobile ? chips.filter(c => i >= c.startIdx && i < c.startIdx + c.span).length : 0;
                     return (
                       <button
                         type="button"
                         className={`cm-date${isSameMonth(day, anchor) ? '' : ' is-outside'}`}
                         key={formatISODate(day)}
-                        onClick={() => (isMobile && onSelectDay ? onSelectDay(startOfDay(day)) : onOpenDay(day))}
-                        title={`${formatDateKey(formatISODate(day))}${isMobile ? '' : ' — open dagweergave'}`}
+                        onClick={() => onOpenDay(startOfDay(day))}
+                        title={`${formatDateKey(formatISODate(day))} — open dagweergave`}
+                        aria-label={isMobile ? `${formatDateKey(formatISODate(day))}, ${itemCount === 0 ? 'niets gepland' : itemCount === 1 ? '1 item' : `${itemCount} items`} — open de dag` : undefined}
                       >
-                        <span className={`cm-date-num${isToday ? ' is-today' : ''}${isPicked && !isToday ? ' is-selected' : ''}`}>
+                        <span className={`cm-date-num${isToday ? ' is-today' : ''}`}>
                           {day.getDate() === 1 ? `${day.getDate()} ${shortMonthNl(day)}` : day.getDate()}
                         </span>
                       </button>
@@ -2269,10 +2295,13 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                 <div className="cm-lanes">
                   {chips.filter(c => visibleKeys.has(c.key)).map(chip => {
                     const place: CSSProperties = { gridColumn: `${chip.startIdx + 1} / span ${chip.span}`, gridRow: chip.lane + 1 };
+                    // Telefoon: de items laten hun tik door naar de dag eronder
+                    // (CSS), en staan dus ook niet in de tabvolgorde.
+                    const passive = isMobile ? { tabIndex: -1, 'aria-hidden': true } as const : {};
                     if (chip.kind === 'task' && chip.task) {
                       const task = chip.task;
                       return (
-                        <button type="button" className="cm-chip is-task" key={chip.key} style={{ ...eventColorStyle(taskColorOf(data, task)), ...place }}
+                        <button type="button" className="cm-chip is-task" key={chip.key} style={{ ...eventColorStyle(taskColorOf(data, task)), ...place }} {...passive}
                           onClick={() => onEditTask(task)}
                           title={`Taak · ${task.title} · ${data.projects.find(p => p.id === task.project_id)?.name ?? 'Project'}`}>
                           <span className="cm-chip-dot" aria-hidden="true" />
@@ -2288,7 +2317,7 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                       return (
                         <button type="button"
                           className={`cm-chip is-bar${chip.continuesLeft ? ' cont-l' : ''}${chip.continuesRight ? ' cont-r' : ''}${event.visibility === 'private' ? ' is-private' : ''}${outside ? ' is-outside' : ''}`}
-                          key={chip.key} style={{ ...place, ...eventColorStyle(eventColor(event)) }}
+                          key={chip.key} style={{ ...place, ...eventColorStyle(eventColor(event)) }} {...passive}
                           onClick={() => onOpenEvent(event)}
                           title={`${event.title}\n${formatEventRange(event)}`}>
                           {chip.continuesLeft && <ChevronLeft size={11} className="cm-chip-cont" />}
@@ -2301,7 +2330,7 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                     return (
                       <button type="button"
                         className={`cm-chip is-timed${event.visibility === 'private' ? ' is-private' : ''}${outside ? ' is-outside' : ''}`}
-                        key={chip.key} style={{ ...place, ...eventColorStyle(eventColor(event)) }}
+                        key={chip.key} style={{ ...place, ...eventColorStyle(eventColor(event)) }} {...passive}
                         onClick={() => onOpenEvent(event)}
                         title={`${formatTime(event.starts_at)} – ${formatTime(event.ends_at)}\n${event.title}`}>
                         <span className="cm-chip-dot" aria-hidden="true" />
@@ -2314,9 +2343,12 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                   {hiddenPerDay.map((count, i) => count > 0 ? (
                     <button type="button" className="cm-more" key={`more-${i}`}
                       style={{ gridColumn: `${i + 1} / span 1`, gridRow: cutoff[i] + 1 }}
+                      {...(isMobile ? { tabIndex: -1, 'aria-hidden': true } as const : {})}
                       onClick={e => openDayCard(week[i], e.currentTarget)}
                       title={`Alles van ${formatDateKey(formatISODate(week[i]))} tonen`}>
-                      +{count}<span className="cm-more-label"> meer</span>
+                      {/* Telefoon: drie puntjes, zoals Google. "+2" in een kolom
+                          van 50px las als een getal dat bij de dag hoorde. */}
+                      {isMobile ? '•••' : <>+{count}<span className="cm-more-label"> meer</span></>}
                     </button>
                   ) : null)}
                 </div>
@@ -2325,21 +2357,6 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
           );
         })}
       </div>
-
-      {/* Telefoon: de gekozen dag als lijstje onder het rooster (Google-werkwijze). */}
-      {isMobile && selectedDay && (
-        <section className="cm-daylist" aria-label={`Items op ${formatDateKey(formatISODate(selectedDay))}`}>
-          <header className="cm-daylist-head">
-            <div>
-              <span className="cm-daylist-name">{dayNameNl(selectedDay)}</span>
-              <strong className="cm-daylist-date">{formatDateKey(formatISODate(selectedDay))}</strong>
-            </div>
-            <Button onClick={() => onOpenDay(selectedDay)}>Open dag</Button>
-          </header>
-          <MonthDayItemList items={monthDayItems(selectedDay, events, tasks)} sourceColors={sourceColors} taskColor={task => taskColorOf(data, task)}
-            onOpenEvent={onOpenEvent} onEditTask={onEditTask} />
-        </section>
-      )}
 
       {moreDay && (
         <MonthDayCard day={moreDay.day} rect={moreDay.rect} items={monthDayItems(moreDay.day, events, tasks)}
@@ -3712,7 +3729,7 @@ const SLIDE_MS = 300;
 const SLIDE_FADE_MS = 200;
 const SLIDE_EASE = 'cubic-bezier(.22,.61,.36,1)';
 /** Interne scrollers waarvan de kopie de positie moet overnemen. */
-const SLIDE_SCROLLERS = '.tb-scroll,.cm-grid,.cm-daylist';
+const SLIDE_SCROLLERS = '.tb-scroll,.cm-grid';
 
 function useCalendarStage() {
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -3988,8 +4005,6 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   const [zoom, setZoom] = useState<number>(() => (typeof window === 'undefined' ? 1 : readStoredZoom()));
   // Bump = "scroll het rooster opnieuw naar nu". Bladeren doet dat bewust niet.
   const [autoScrollKey, setAutoScrollKey] = useState(0);
-  // In de maandweergave: de dag waarvan je de items bekijkt (Google-gedrag).
-  const [monthDay, setMonthDay] = useState<Date | null>(null);
   const { stageRef, liveRef, ghostRef, slide, clearSlide } = useCalendarStage();
 
   const applyZoom = useCallback((next: number) => {
@@ -4640,7 +4655,6 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     if (nextView === view) return;
     slide(0, () => {
       setView(nextView);
-      setMonthDay(nextView === 'month' && isMobile ? startOfDay(new Date()) : null);
       setAutoScrollKey(key => key + 1);
       setAnchor(prev => {
         if (nextView === 'month') return startOfMonth(prev);
@@ -4655,9 +4669,6 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     const next = shiftAnchorForView(view, anchorRef.current, direction);
     slide(direction, () => {
       setAnchor(next);
-      // Op de telefoon houdt de maand altijd een gekozen dag (met zijn lijstje
-      // eronder); anders zou het paneel bij elke maandwissel weg- en terugklappen.
-      setMonthDay(view === 'month' && isMobile ? startOfMonth(next) : null);
     }, fromPx);
   }
 
@@ -4665,7 +4676,6 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     slide(0, () => {
       setAnchor(startOfDay(day));
       setView('day');
-      setMonthDay(null);
       setAutoScrollKey(key => key + 1);
     });
   }
@@ -4677,7 +4687,6 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     const direction: SlideDirection = shown.some(d => isSameDay(d, today)) ? 0 : today.getTime() > shown[0].getTime() ? 1 : -1;
     slide(direction, () => {
       setAnchor(today);
-      setMonthDay(view === 'month' ? today : null);
       setAutoScrollKey(key => key + 1);
     });
   }
@@ -5088,7 +5097,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
           ) : view === 'month' ? (
             <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
               sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} onEditTask={onEditTask} onOpenDay={openDay} onOpenEvent={setSelectedEvent}
-              isMobile={isMobile} selectedDay={monthDay} onSelectDay={setMonthDay}
+              isMobile={isMobile}
               onCreateOnDay={canWrite && writeableSources.length > 0 ? startCreateOnDay : undefined} />
           ) : (
             <div className="calendar-week-grid calendar-list-grid">

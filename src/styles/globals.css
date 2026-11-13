@@ -5271,18 +5271,58 @@ body::before{
   .cm-chip-dot{width:6px;height:6px}
   .cm-more{margin:0 2px;padding:0 4px;font-size:9.5px}
 }
-@media(max-width:620px){
-  /* Weeknummers zijn hier luxe: alle breedte gaat naar de zeven dagen. */
-  .cm-view{--cm-weekno:0px}
-  .cm-head{grid-template-columns:repeat(7,minmax(0,1fr))}
-  .cm-head-weekno,.cm-weekno{display:none}
-  .cm-week{grid-template-columns:minmax(0,1fr)}
-  .cm-chip{padding:0 3px;border-radius:4px;font-size:10px}
-  .cm-chip-track{display:none}
-  /* In een kolom van ~54px past alleen het aantal, niet het woord erbij. */
-  .cm-more{font-size:9.5px}
-  .cm-more-label{display:none}
-}
+
+/* 6 ── Telefoon: tegels, weeknummers en volle balken (2026-11-13) ─────────
+   Naar het maandoverzicht van Google Calendar op Android. Tot nu toe vielen
+   de weeknummers hier weg ("luxe"), stond elk item als stipje met een titel
+   van drie letters, en schoof onder het rooster een daglijst in die een derde
+   van het scherm pakte. Nu:
+     · elke dag is een eigen tegel, de week begint met een pil met het nummer;
+     · elk item is een gekleurde balk met zijn titel, zonder stip of tijd —
+       in een kolom van ~50px is de kleur het enige wat ruimte over laat;
+     · een tik ergens in een dag opent die dag. De items laten hun tik door
+       (`pointer-events:none`); de cel eronder vangt hem.
+   `.is-phone` zet CalendarMonthView zelf, op dezelfde grens als de rest van
+   de mobiele agenda (MOBILE_BREAKPOINT_PX, 768px). */
+.cm-view.is-phone{--cm-weekno:28px;--cm-tile-gap:3px;--cm-tile-r:9px}
+.cm-view.is-phone .cm-head{grid-template-columns:var(--cm-weekno) repeat(7,minmax(0,1fr));column-gap:var(--cm-tile-gap);padding:0 6px;border-bottom:0}
+.cm-view.is-phone .cm-head-cell{padding:6px 0 5px;font-size:10px;font-weight:600;letter-spacing:0;text-transform:lowercase}
+/* Een weekrij is minstens 64px: dagnummer plus twee items. Past de maand
+   daarmee niet (liggend, of een kleine telefoon), dan scrolt het rooster
+   verticaal; zijwaarts vegen blijft bladeren. */
+.cm-view.is-phone .cm-grid{grid-auto-rows:minmax(64px,1fr);row-gap:var(--cm-tile-gap);padding:0 6px 6px;overflow-y:auto;overscroll-behavior:contain}
+.cm-view.is-phone .cm-week{column-gap:var(--cm-tile-gap);border-top:0}
+.cm-view.is-phone .cm-weekno{padding:7px 0 0;border-right:0;border-radius:var(--cm-tile-r);background:rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k)));color:var(--muted2);font-size:11.5px;font-weight:600}
+.cm-view.is-phone .cm-weekno.is-outside{opacity:.55}
+.cm-view.is-phone .cm-cells,
+.cm-view.is-phone .cm-dates,
+.cm-view.is-phone .cm-lanes{column-gap:var(--cm-tile-gap)}
+.cm-view.is-phone .cm-cell{border-left:0;border-radius:var(--cm-tile-r);background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}
+.cm-view.is-phone .cm-cell:hover{background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}
+.cm-view.is-phone .cm-cell:active{background:rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k)))}
+.cm-view.is-phone .cm-cell.is-outside{background:rgba(var(--sheen-rgb),calc(.025 * var(--sheen-k)))}
+.cm-view.is-phone .cm-cell.is-today{background:rgba(var(--accent-rgb),.1)}
+.cm-view.is-phone .cm-date{padding-top:4px}
+.cm-view.is-phone .cm-date-num{min-width:22px;height:22px;padding:0 4px;font-size:13px;font-weight:500}
+.cm-view.is-phone .cm-date-num.is-today{font-weight:700}
+.cm-view.is-phone .cm-date.is-outside{opacity:.5}
+/* Items: volle balk, titel afgekapt zonder puntjes — die puntjes kosten in
+   een kolom van 50px een kwart van de tekst. */
+.cm-view.is-phone .cm-chip{margin:0 1px;padding:0 3px;gap:0;border-radius:4px;font-size:10px;pointer-events:none}
+.cm-view.is-phone .cm-chip-title{font-size:10px;font-weight:600;text-overflow:clip}
+.cm-view.is-phone .cm-chip-dot,
+.cm-view.is-phone .cm-chip-time,
+.cm-view.is-phone .cm-chip-track,
+.cm-view.is-phone .cm-chip-cont{display:none}
+.cm-view.is-phone .cm-chip.is-timed{background:var(--event-solid,rgba(var(--accent-rgb),.96));border:1px solid var(--event-edge,transparent)}
+.cm-view.is-phone .cm-chip.is-timed .cm-chip-title{color:var(--event-text,#1a1a1a)}
+/* Een taak is werk, geen afspraak: dezelfde kleur, maar als tint met een
+   rand in plaats van vol — zo zie je in één oogopslag wat vastligt. */
+.cm-view.is-phone .cm-chip.is-task{background:var(--event-bg,rgba(var(--accent-rgb),.26));box-shadow:inset 0 0 0 1px var(--event-border-soft,rgba(var(--accent-rgb),.55))}
+.cm-view.is-phone .cm-chip.is-task .cm-chip-title{color:var(--text)}
+.cm-view.is-phone .cm-chip.cont-l{margin-left:0}
+.cm-view.is-phone .cm-chip.cont-r{margin-right:0}
+.cm-view.is-phone .cm-more{justify-content:flex-start;margin:0 1px;padding:0 4px;color:var(--muted);font-size:9px;letter-spacing:.12em;pointer-events:none}
 
 /* ── Gerrie Routines (geplande agents) ─────────────────────────────────────── */
 /* Segmentkiezer: pilvormige baan met pilvormige knoppen erin. Het icoon van het
@@ -7444,7 +7484,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .cal-stage-ghost{position:absolute;inset:0;z-index:5;pointer-events:none;overflow:hidden}
 .cal-stage-ghost:empty{display:none}
 .cal-stage-ghost>*{position:absolute;left:0;right:0;top:0;bottom:0}
-.cal-stage-ghost .tb-scroll,.cal-stage-ghost .cm-grid,.cal-stage-ghost .cm-daylist{scroll-behavior:auto}
+.cal-stage-ghost .tb-scroll,.cal-stage-ghost .cm-grid{scroll-behavior:auto}
 /* De lijstweergave heeft een natuurlijke hoogte; daar mag de kopie niet
    uitgerekt worden tot de (dan lege) staghoogte. */
 .calendar-main-card-list .cal-stage-ghost>*{bottom:auto}
@@ -7506,21 +7546,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .cm-dayitem-video{flex:0 0 auto;color:var(--muted2)}
 .cm-dayitem.is-private{filter:saturate(.7)}
 .cm-dayitem.is-task .cm-dayitem-dot{background:var(--accent)}
-
-/* Telefoon: de gekozen dag als lijst ónder het rooster (Google-werkwijze). */
-.cm-daylist{flex:0 0 auto;max-height:40vh;overflow-y:auto;padding:10px 12px calc(12px + env(safe-area-inset-bottom));
-  border-top:1px solid var(--border);background:var(--bg2);
-  animation:cmDayListIn .18s ease-out}
-@keyframes cmDayListIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-.cm-daylist-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
-.cm-daylist-name{display:block;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.cm-daylist-date{display:block;font-size:14px;font-weight:600;color:var(--text)}
-.cm-daylist-head .btn{flex:0 0 auto;width:auto;min-height:32px;padding:6px 12px}
-
-/* De gekozen dag krijgt een ring; "vandaag" houdt zijn gouden rondje. */
-.cm-date-num.is-selected{background:rgba(var(--accent-rgb),.16);box-shadow:inset 0 0 0 1.5px var(--accent);color:var(--text)}
-.cm-cell.is-selected{background:rgba(var(--accent-rgb),.05)}
-.cm-cell.is-today.is-selected{background:rgba(var(--accent-rgb),.1)}
 
 /* ══════════════════════════════════════════════════════════════════════════
    MOBIELE SCHERMEN OPGERUIMD  (2026-08-13)
@@ -8345,16 +8370,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* 41 ── Maandrooster: de titel wint van de tijd ───────────────────────────
-   Een dagkolom is op ≤620 zo'n 54px breed. Daar gaat af: de stip (6px), twee
-   gaten (10px), de starttijd ("10:00" ≈ 30px) en wat padding — er blijft
-   ~2px over voor de titel. Je ziet dus een stip en een tijd, en niet WAT er
-   staat. De tijd is hier de minst nuttige helft: je kijkt in een maand naar
-   wát er is, niet naar het precieze uur. Google doet het net zo. */
-@media(max-width:620px){
-  .cm-chip .cm-chip-time{display:none}
-  .cm-chip{gap:3px;padding:0 4px}
-  .cm-chip-title{font-size:10px}
-}
+   Verhuisd naar `.cm-view.is-phone` bij het maandrooster (2026-11-13). */
 
 /* 42 ── De inhoud eindigt boven de zwevende knoppen ───────────────────────
    `.main` reserveert onderaan alleen de hoogte van de onderbalk. De
@@ -12413,7 +12429,7 @@ body::before{display:none}
    Tientallen kopjes, tabelkoppen en statuslabels stonden in kapitalen met
    spatiëring. In Belicht staan ze in gewone zinsletters: rustiger, en op
    gelijke grootte beter leesbaar. Vanaf 761px gaan ze ook een maat omhoog. */
-.stat-card .sc-label,.cd-tag,.kan-col-head,.tk-status,.fin-status,.ticket-stat .ts-label,.att-list-head,.wp-day-head,.tes-head strong,.ticket-timeline-head strong,.ttl-badge,.settings-card h3,.email-template-placeholders strong,.email-template-preview strong,.style-label,.calendar-section-head h3,.calendar-create-head h3,.provider-badge,.connection-status,.calendar-day-head,.calendar-item-time,.calendar-create-card label,.org-meta span,.organization-card label,.team-list>strong,.team-row small,.license-metric span,.privacy-pill,.eyebrow,.workspace-meta-card span,.workspace-meta-card small,.onboarding-head h3,.activity-card h3,.dash-group-label,.dash-chip,.billing-summary span,.calendar-collapse-indicator,.note-type,.folder-section-head,.folder-link-row em,.drive-pop-head,.drive-group-head,.client-alert,.client-kpi span,.client-info-list dt,.client-finance-status,.client-contact-badge,.client-status-pill,.project-summary-card span,.calendar-range-label,.event-detail-kicker,.event-detail-description span,.event-notes-kicker,.event-link-panel label,.quote-version-pill strong,.proj-dash-hero-kicker,.proj-dash-stat-lbl,.quote-table th,.quote-detail-kicker,.quote-detail-total small,.quote-metric span,.quote-detail-section-head span,.quote-lines-table th,.quote-table td::before,.tt-source-badge,.finance-preview-head>span,.finance-editor-hero span,.finance-total span,.field>span,.finance-status-card span,.finance-line-header,.finance-line-total span,.calendar-settings-metric span,.client-view-toggle button,.clients-table th,.project-view-toggle button,.projects-table th,.client-table-alert,.client-form-intro span,.refund-summary span,.refund-field>span,.finance-search-query>span,.ai-usage-table th,.chat-list-section,.chat-day-sep span,.chat-modal-sub,.mr-list-title,.bk-table th,.bk-field>span,.bk-lines-head,.bk-setting-field>span,.bk-asset-kpis span,.bk-report-kpis span,.bk-report-table .bk-report-section td,.bk-deadline>span,.bk-open-kpis span,.bk-fy-new-fields label>span,.sending-domain-default,.dns-record-label,.client-comm-unread-badge,.client-comm-dir,.comm-col-head,.bank-tag,.rb-field-label,.rb-table th,.rb-lib-label,.gs-group-head,.gs-result-badge,.csv-import-table th,.attendee-suggestion-src,.tk-new-badge,.tk-pri-label,.tk-converted-pill,.mk-step-num,.cc-brand .cc-sub,.cc-budget-label,.cc-quick-label,.cc-plan-eyebrow,.cc-kind,.cc-card-title,.cm-head-cell,.cc-run-tag,.cc-tool-group h5,.odrv-details-head,.tpl-chip em,.tpl-tasks-head strong,.tpl-pick-head strong,.brand-label,.wp-bar-span,.wp-tray-tabs button,.wp-notes-head,.wp-stack-today,.wp-quick-add-modes button,.cm-daycard-name,.cm-daylist-name,.custom-fields-section h4,.cf-archived-title,.mk-token-group-title,.ptl-chips-label,.ptl-label-head span,.ptl-todaycap span,.ag-cap h4,.ag-brief-label,.ag-history-label,.cem-edit-field>span,.ag-tokens-label,.abx-facts dt,.tk-ctable th,.brand-theme-chip,.wp-menu-label,.wp-daystrip-name,.wp-task-ticket,.proj-facts-key,.proj-fin-col-head h4,.proj-status-cell span,.dc-sev,.dc-settings h4,.dc-tag,.mk-campaign-table .mk-status,.note-ink-kicker,.ink-sheet-kicker,.note-ink-badge,.mcp-connection-scope,.mcp-connections-heading,.bk-attachments-label,.call-recording-head,.call-outcome{
+.stat-card .sc-label,.cd-tag,.kan-col-head,.tk-status,.fin-status,.ticket-stat .ts-label,.att-list-head,.wp-day-head,.tes-head strong,.ticket-timeline-head strong,.ttl-badge,.settings-card h3,.email-template-placeholders strong,.email-template-preview strong,.style-label,.calendar-section-head h3,.calendar-create-head h3,.provider-badge,.connection-status,.calendar-day-head,.calendar-item-time,.calendar-create-card label,.org-meta span,.organization-card label,.team-list>strong,.team-row small,.license-metric span,.privacy-pill,.eyebrow,.workspace-meta-card span,.workspace-meta-card small,.onboarding-head h3,.activity-card h3,.dash-group-label,.dash-chip,.billing-summary span,.calendar-collapse-indicator,.note-type,.folder-section-head,.folder-link-row em,.drive-pop-head,.drive-group-head,.client-alert,.client-kpi span,.client-info-list dt,.client-finance-status,.client-contact-badge,.client-status-pill,.project-summary-card span,.calendar-range-label,.event-detail-kicker,.event-detail-description span,.event-notes-kicker,.event-link-panel label,.quote-version-pill strong,.proj-dash-hero-kicker,.proj-dash-stat-lbl,.quote-table th,.quote-detail-kicker,.quote-detail-total small,.quote-metric span,.quote-detail-section-head span,.quote-lines-table th,.quote-table td::before,.tt-source-badge,.finance-preview-head>span,.finance-editor-hero span,.finance-total span,.field>span,.finance-status-card span,.finance-line-header,.finance-line-total span,.calendar-settings-metric span,.client-view-toggle button,.clients-table th,.project-view-toggle button,.projects-table th,.client-table-alert,.client-form-intro span,.refund-summary span,.refund-field>span,.finance-search-query>span,.ai-usage-table th,.chat-list-section,.chat-day-sep span,.chat-modal-sub,.mr-list-title,.bk-table th,.bk-field>span,.bk-lines-head,.bk-setting-field>span,.bk-asset-kpis span,.bk-report-kpis span,.bk-report-table .bk-report-section td,.bk-deadline>span,.bk-open-kpis span,.bk-fy-new-fields label>span,.sending-domain-default,.dns-record-label,.client-comm-unread-badge,.client-comm-dir,.comm-col-head,.bank-tag,.rb-field-label,.rb-table th,.rb-lib-label,.gs-group-head,.gs-result-badge,.csv-import-table th,.attendee-suggestion-src,.tk-new-badge,.tk-pri-label,.tk-converted-pill,.mk-step-num,.cc-brand .cc-sub,.cc-budget-label,.cc-quick-label,.cc-plan-eyebrow,.cc-kind,.cc-card-title,.cm-head-cell,.cc-run-tag,.cc-tool-group h5,.odrv-details-head,.tpl-chip em,.tpl-tasks-head strong,.tpl-pick-head strong,.brand-label,.wp-bar-span,.wp-tray-tabs button,.wp-notes-head,.wp-stack-today,.wp-quick-add-modes button,.cm-daycard-name,.custom-fields-section h4,.cf-archived-title,.mk-token-group-title,.ptl-chips-label,.ptl-label-head span,.ptl-todaycap span,.ag-cap h4,.ag-brief-label,.ag-history-label,.cem-edit-field>span,.ag-tokens-label,.abx-facts dt,.tk-ctable th,.brand-theme-chip,.wp-menu-label,.wp-daystrip-name,.wp-task-ticket,.proj-facts-key,.proj-fin-col-head h4,.proj-status-cell span,.dc-sev,.dc-settings h4,.dc-tag,.mk-campaign-table .mk-status,.note-ink-kicker,.ink-sheet-kicker,.note-ink-badge,.mcp-connection-scope,.mcp-connections-heading,.bk-attachments-label,.call-recording-head,.call-outcome{
   text-transform:none;
   letter-spacing:0;
 }
