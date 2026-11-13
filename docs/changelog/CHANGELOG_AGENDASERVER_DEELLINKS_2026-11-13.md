@@ -85,6 +85,9 @@ wie geen ResoFly heeft, is er de deellink.
 
 ## Bekend, niet in deze wijziging
 
+De zomertijd en de robots.txt zijn later op 13 november opgelost: zie
+`CHANGELOG_AGENDA_ZOMERTIJD_2026-11-13.md`.
+
 - **Herhalende afspraken rond de zomertijd.** ResoFly rekent een reeks die in
   de app is gemaakt in UTC door (`advanceRecurrence`): "elke maandag 9.00 uur"
   uit november staat in de zomer om 10.00 uur, in de app en dus ook op de

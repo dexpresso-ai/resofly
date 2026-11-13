@@ -25,6 +25,7 @@ import {
   generatePatternSlots,
   groupByDay,
   linkVideoKind,
+  sameTimeNextWeek,
   splitIntoSlots,
   weekdaysLabel,
   fmtMoment,
@@ -615,9 +616,8 @@ function LinkDetail({ detail, organizationId, sources, allSources, currentUserId
   // daar al precies zo staat, slaat de server over.
   const visibleWeekOpen = slots.filter(sl => sl.status === 'open' && Date.parse(sl.starts_at) >= weekDays[0].getTime() && Date.parse(sl.starts_at) < addDays(weekDays[6], 1).getTime());
   const repeatWeek = () => {
-    const week = 7 * 86_400_000;
     const copies = visibleWeekOpen
-      .map(sl => ({ startsAt: new Date(Date.parse(sl.starts_at) + week).toISOString(), endsAt: new Date(Date.parse(sl.ends_at) + week).toISOString() }))
+      .map(sl => ({ startsAt: sameTimeNextWeek(sl.starts_at), endsAt: sameTimeNextWeek(sl.ends_at) }))
       .filter(c => Date.parse(c.startsAt) > Date.now());
     if (!copies.length) return;
     setDrawNote(null);

@@ -83,7 +83,8 @@ base=https://caldav-staging.resofly.com
 curl -si -X OPTIONS "$base/"                          # 204, met DAV: 1, 2, 3, calendar-access
 curl -si -X PROPFIND "$base/.well-known/caldav"       # 401, met WWW-Authenticate: Basic
 curl -si "$base/feed/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.ics"   # 404 "Deze agendalink bestaat niet (meer)"
-curl -s "$base/robots.txt"                            # Disallow: /
+curl -s "$base/robots.txt"                            # onderaan: Googlebot, Bingbot, … met Disallow: /
+curl -sI -X OPTIONS "$base/" | grep -i x-robots-tag   # noindex, nofollow, noarchive, nosnippet
 ```
 
 Een 500 op de deellink betekent meestal dat de migratie met
@@ -120,6 +121,12 @@ Een 500 op de deellink betekent meestal dat de migratie met
 - **Tenancy**: de Worker gebruikt de service-role en filtert zelf op
   `organization_id`, uit het app-wachtwoord of de deellink, nooit uit het
   verzoek.
+- **Zomer- en wintertijd**: een reeks uit de app gaat naar de telefoon en de
+  deellink op de kloktijd met tijdzone (`DTSTART;TZID=…` en een VTIMEZONE),
+  dezelfde regel als in de app (`_shared/wallClock.ts`).
+- **Zoekmachines**: Cloudflare zet zijn eigen robots.txt (met `Allow: /` voor
+  iedereen) vóór die van de Worker. Daarom noemt de Worker de zoekmachines bij
+  naam, en geeft elk antwoord `X-Robots-Tag: noindex`.
 
 ## 7. Testen
 

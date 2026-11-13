@@ -27,8 +27,9 @@ import {
   normalizeAllDayEventRange,
   normalizeMicrosoftDateTime,
   parseSimpleRrule,
-  advanceRecurrence,
+  recurrenceTimeZone,
 } from './calendarCore.ts';
+import { recurrenceStarts } from './wallClock.ts';
 import { googleEventConference, microsoftEventConference } from './conference.ts';
 
 /**
@@ -322,37 +323,22 @@ export function nativeRowToBaseEvent(row: NativeEventRow, source: CalendarSource
   };
 }
 
-// Eenvoudige herhaling-uitvouwing voor fase 0 (FREQ DAILY/WEEKLY/MONTHLY +
-// INTERVAL/UNTIL/COUNT + EXDATE). Volledige RRULE-afhandeling (BYDAY etc.) volgt
-// met ical.js in de CalDAV-Worker.
+// Herhaling uitvouwen (FREQ DAILY/WEEKLY/MONTHLY + INTERVAL/UNTIL/COUNT +
+// EXDATE), op de wandklok van de afspraak: zie recurrenceStarts in
+// wallClock.ts. Dezelfde regel gebruikt de agendaserver (workers/caldav) voor
+// de telefoon en de deellinks.
 export function expandRecurringNativeRow(row: NativeEventRow, source: CalendarSourceRow, startIso: string, endIso: string): Record<string, unknown>[] {
   const base = nativeRowToBaseEvent(row, source);
   const rule = parseSimpleRrule(row.rrule);
   if (!rule) return [base];
-  const durationMs = new Date(row.ends_at).getTime() - new Date(row.starts_at).getTime();
-  const winStart = new Date(startIso).getTime();
-  const winEnd = new Date(endIso).getTime();
-  const until = rule.until ? new Date(rule.until).getTime() : null;
+  const startMs = new Date(row.starts_at).getTime();
+  const durationMs = new Date(row.ends_at).getTime() - startMs;
   const exdates = new Set((row.exdate ?? []).map(value => new Date(value).getTime()));
-  const out: Record<string, unknown>[] = [];
-  let cursor = new Date(row.starts_at);
-  let count = 0;
-  for (let i = 0; i < 800; i++) {
-    const startMs = cursor.getTime();
-    if (until !== null && startMs > until) break;
-    if (rule.count && count >= rule.count) break;
-    if (startMs > winEnd) break;
-    const endMs = startMs + durationMs;
-    if (endMs >= winStart && !exdates.has(startMs)) {
-      out.push({
-        ...base,
-        id: `${source.id}:${row.uid}:${startMs}`,
-        starts_at: new Date(startMs).toISOString(),
-        ends_at: new Date(endMs).toISOString(),
-      });
-    }
-    count += 1;
-    cursor = advanceRecurrence(cursor, rule.freq, rule.interval);
-  }
-  return out;
+  const starts = recurrenceStarts(startMs, durationMs, rule, recurrenceTimeZone(row, source), new Date(startIso).getTime(), new Date(endIso).getTime(), exdates);
+  return starts.map(ms => ({
+    ...base,
+    id: `${source.id}:${row.uid}:${ms}`,
+    starts_at: new Date(ms).toISOString(),
+    ends_at: new Date(ms + durationMs).toISOString(),
+  }));
 }

@@ -25,6 +25,7 @@ import {
   type TokenFailure,
 } from './calendarOAuth.ts';
 import { nextDay, toMicrosoftDateTime } from './calendarEventBody.ts';
+import { DEFAULT_TIME_ZONE, isValidTimeZone } from './wallClock.ts';
 
 // De scopes en de base64url-helpers staan in calendarOAuth.ts (puur, los te
 // testen); hier doorgegeven zodat bestaande imports uit calendarCore werken.
@@ -370,12 +371,19 @@ export function parseSimpleRrule(rrule: string | null): SimpleRrule | null {
   };
 }
 
-export function advanceRecurrence(date: Date, freq: 'DAILY' | 'WEEKLY' | 'MONTHLY', interval: number): Date {
-  const next = new Date(date.getTime());
-  if (freq === 'DAILY') next.setUTCDate(next.getUTCDate() + interval);
-  else if (freq === 'WEEKLY') next.setUTCDate(next.getUTCDate() + 7 * interval);
-  else next.setUTCMonth(next.getUTCMonth() + interval);
-  return next;
+/**
+ * In welke tijdzone een reeks herhaalt: die van de afspraak (de telefoon zet
+ * hem uit TZID, de app uit de agenda), anders die van de agenda, anders
+ * Amsterdam. Een afspraak van een hele dag herhaalt op datum, zonder zone.
+ *
+ * Eerst telde de reeks hele dagen in UTC op (advanceRecurrence): "elke maandag
+ * 9.00 uur" uit de winter stond na de klokwissel om 10.00 uur. Zie wallClock.ts.
+ */
+export function recurrenceTimeZone(row: Pick<NativeEventRow, 'timezone' | 'all_day'>, source: Pick<CalendarSourceRow, 'timezone'>): string {
+  if (row.all_day) return 'UTC';
+  if (isValidTimeZone(row.timezone)) return row.timezone;
+  if (isValidTimeZone(source.timezone)) return source.timezone;
+  return DEFAULT_TIME_ZONE;
 }
 
 // RRULE UNTIL "YYYYMMDDTHHMMSSZ" (of "YYYYMMDD") → ISO.

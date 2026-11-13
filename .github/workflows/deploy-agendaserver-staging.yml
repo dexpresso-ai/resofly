@@ -21,6 +21,8 @@ on:
       - staging
     paths:
       - "workers/caldav/**"
+      # De wandklok (zomer- en wintertijd) deelt de Worker met de edge functions.
+      - "supabase/functions/_shared/wallClock.ts"
       - ".github/workflows/deploy-agendaserver-staging.yml"
   workflow_dispatch:
 

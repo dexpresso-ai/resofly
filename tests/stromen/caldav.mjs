@@ -193,6 +193,40 @@ export default async function caldav() {
     gelijk(hrefs(sync.tekst).length, 1005, 'ook bij de eerste synchronisatie');
   });
 
+  await stap('een reeks uit de app houdt over de klokwissel zijn kloktijd, in de app, op de telefoon en in de deellink', async () => {
+    // Maandag 15 maart 2027, 9.00 uur wintertijd; op 28 maart gaat de klok vooruit.
+    gelukt(await agenda(w.eigenaar.token, w.orgId, 'createEvent', { event: {
+      sourceId: kantoor.id, title: 'Weekstart (reeks)', startsAt: '2027-03-15T08:00:00.000Z', endsAt: '2027-03-15T09:00:00.000Z',
+      recurrence: { freq: 'weekly', until: '2027-04-30T23:59:59.000Z' },
+    } }), 'reeks in de app');
+    const lijst = gelukt(await agenda(w.eigenaar.token, w.orgId, 'listEvents', { start: '2027-03-14T00:00:00Z', end: '2027-04-13T00:00:00Z' }), 'agenda');
+    const keren = lijst.events.filter((e) => e.title === 'Weekstart (reeks)').map((e) => e.starts_at).sort();
+    gelijk(keren, ['2027-03-15T08:00:00.000Z', '2027-03-22T08:00:00.000Z', '2027-03-29T07:00:00.000Z', '2027-04-05T07:00:00.000Z', '2027-04-12T07:00:00.000Z'], 'elke maandag 9.00 uur, ook in de zomertijd');
+    const uid = sqlRij(`select uid from public.calendar_events where source_id = ${q(kantoor.id)} and title = 'Weekstart (reeks)'`).uid;
+    const ics = (await dav('GET', `/calendars/${w.eigenaar.id}/${kantoor.id}/${encodeURIComponent(uid)}.ics`, { wie: eigenaar })).tekst;
+    verwacht(ics.includes('DTSTART;TZID=Europe/Amsterdam:20270315T090000'), `op de telefoon met tijdzone: ${ics.slice(0, 300)}`);
+    verwacht(ics.includes('BEGIN:VTIMEZONE') && ics.includes('BYMONTH=3;BYDAY=-1SU'), 'met de regel voor de zomertijd');
+    const feed = gelukt(await agenda(w.eigenaar.token, w.orgId, 'createFeedLink', { sourceId: kantoor.id, label: 'Klokwissel', detail: 'busy' }), 'link');
+    const tekst = (await dav('GET', `/feed/${feed.token}.ics`)).tekst;
+    verwacht(tekst.includes('DTSTART;TZID=Europe/Amsterdam:20270315T090000') && tekst.includes('BEGIN:VTIMEZONE'), 'in de deellink met tijdzone');
+    gelukt(await agenda(w.eigenaar.token, w.orgId, 'revokeFeedLink', { feedLinkId: feed.feedLink.id }), 'opruimen');
+  });
+
+  await stap('een op de telefoon weggehaalde keer in de zomer valt in de app weg', async () => {
+    const reeks = [
+      'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Apple Inc.//iPhone OS 18.1//EN',
+      'BEGIN:VEVENT', 'UID:reeks-zomer', 'DTSTAMP:20261110T090000Z',
+      'DTSTART;TZID=Europe/Amsterdam:20270315T140000', 'DTEND;TZID=Europe/Amsterdam:20270315T150000',
+      'RRULE:FREQ=WEEKLY;COUNT=6', 'EXDATE;TZID=Europe/Amsterdam:20270405T140000', 'SUMMARY:Sport',
+      'END:VEVENT', 'END:VCALENDAR', '',
+    ].join('\r\n');
+    gelijk((await dav('PUT', `/calendars/${w.eigenaar.id}/${kantoor.id}/reeks-zomer.ics`, { wie: eigenaar, body: reeks })).status, 201, 'reeks van de telefoon');
+    const lijst = gelukt(await agenda(w.eigenaar.token, w.orgId, 'listEvents', { start: '2027-03-14T00:00:00Z', end: '2027-05-01T00:00:00Z' }), 'agenda');
+    const keren = lijst.events.filter((e) => e.title === 'Sport').map((e) => e.starts_at).sort();
+    // Eerst schoof de reeks in de app in de zomer naar 15.00 uur, en bleef 5 april staan.
+    gelijk(keren, ['2027-03-15T13:00:00.000Z', '2027-03-22T13:00:00.000Z', '2027-03-29T12:00:00.000Z', '2027-04-12T12:00:00.000Z', '2027-04-19T12:00:00.000Z'], 'elke maandag 14.00 uur, zonder 5 april');
+  });
+
   groep('CalDAV: rechten');
 
   await stap('een collega schrijft in de gedeelde agenda, maar hernoemt hem niet', async () => {
@@ -249,7 +283,7 @@ export default async function caldav() {
     const res = await dav('GET', `/feed/${bezet.token}.ics`);
     gelijk(res.status, 200, 'status');
     verwacht(/^text\/calendar/.test(res.headers.get('content-type') ?? ''), 'text/calendar');
-    gelijk(res.headers.get('x-robots-tag'), 'noindex, nofollow', 'niet in zoekmachines');
+    gelijk(res.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive, nosnippet', 'niet in zoekmachines');
     verwacht(res.tekst.includes('X-WR-CALNAME:Kantoor'), 'de naam van de agenda');
     verwacht(res.tekst.includes('SUMMARY:Bezet'), 'Bezet');
     for (const geheim of ['Lunch met klant', 'Over de offerte', 'Café', 'Terug', 'jan@klant.test', 'LOCATION', 'DESCRIPTION', 'ATTENDEE', 'VALARM']) {
@@ -274,6 +308,11 @@ export default async function caldav() {
     verwacht(sqlRij(`select last_used_at from public.calendar_feed_links where id = ${q(bezet.feedLink.id)}`).last_used_at, 'laatst opgehaald is bijgehouden');
     const robots = await dav('GET', '/robots.txt');
     verwacht(robots.status === 200 && robots.tekst.includes('Disallow: /'), 'robots.txt');
+    verwacht(robots.tekst.includes('User-agent: Googlebot'), 'zoekmachines met hun eigen naam');
+    for (const [methode, pad] of [['PROPFIND', '/'], ['GET', '/feed/onzin.ics'], ['OPTIONS', '/'], ['GET', '/robots.txt']]) {
+      const r = await dav(methode, pad);
+      verwacht(/noindex/.test(r.headers.get('x-robots-tag') ?? ''), `${methode} ${pad}: geen X-Robots-Tag`);
+    }
   });
 
   await stap('een verzonnen, half of oud token: niets', async () => {
