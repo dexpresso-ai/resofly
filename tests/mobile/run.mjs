@@ -97,6 +97,10 @@ const PAGES = {
   // lay-outfout, dus geen enkele meting hier zag het — alleen openen doet dat.
   'calendar-event': { page: 'calendar', prepare: 'button.tb-ev:not(.tb-task-block)' },
   'calendar-task': { page: 'calendar', prepare: '.tb-task-block' },
+  // De maand (2026-11-13): op de telefoon het hele rooster met weeknummers,
+  // zonder daglijst eronder. Die lijst nam een derde van het scherm en drukte
+  // de weekrijen zo plat dat er per dag maar één regel overbleef.
+  'calendar-month': { page: 'calendar', prepare: 'button.tb-vbtn[title^="Maandweergave"]' },
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
   // Rapportages met Gerrie (2026-11-09): het overzicht, de rapportbouwer van
   // voorheen (tweede tabblad), één rapportage met het kader, en dezelfde
@@ -317,6 +321,8 @@ const FIRST_ITEM = {
   quotes: { selector: '.quote-table tbody tr', maxTop: 496 },
   weekplanner: { selector: '.wp-daystrip', maxTop: 600 },
   calendar: { selector: '.tb-scroll', maxTop: 260 },
+  // De eerste weekrij van de maand. Gemeten 2026-11-13: 168px; de grens ligt 20% hoger.
+  'calendar-month': { selector: '.cm-week', maxTop: 202 },
   time: { selector: '.tt-kpi', maxTop: 396 },
   client: { selector: '.client-tabs-bar', maxTop: 516 },
   project: { selector: '.client-tabs-bar', maxTop: 496 },
