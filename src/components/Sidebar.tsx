@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, ExternalLink, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Plus, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, ExternalLink, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, settingsTabRoleRule, type SettingsTab } from '../features/SimplePages';
@@ -11,11 +11,12 @@ import { useLook, type Look } from '../lib/look';
 import { useBuildingReports } from '../lib/aiReports';
 import type { StandaloneApp } from '../lib/standaloneApps';
 
-/** De looks in het accountmenu (Weergave). Baken is de standaard; de andere
- *  drie blijven kiesbaar, zodat je ze naast elkaar kunt leggen. */
+/** De looks in het accountmenu (Weergave). Deze zijbalk staat er alleen nog
+ *  in Cockpit; Baken (de standaard), Zenit en Stroom hebben de rail met het
+ *  uitklappaneel (ZenitNav). Vanuit hier kies je Baken terug. */
 const LOOK_CHOICES: { look: Look; label: string; hint: string }[] = [
   { look: 'baken', label: 'Baken', hint: 'de standaard: licht werkvlak, donker commandovlak' },
-  { look: 'cockpit', label: 'Cockpit', hint: 'de vorige look' },
+  { look: 'cockpit', label: 'Cockpit', hint: 'de vorige look, met deze zijbalk' },
   { look: 'zenit', label: 'Zenit', hint: 'rustig, met de nachtrail' },
   { look: 'stroom', label: 'Stroom', hint: 'licht, glas en de stroom' },
 ];
@@ -202,10 +203,6 @@ export function Sidebar({
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [theme, setTheme] = useTheme();
   const [look, setLook] = useLook();
-  // Baken: het merk met de organisatie eronder (zoals Value Backlog zijn klant
-  // onder de naam zet), zoeken in de bovenbalk, en "+ organisatie" in het
-  // accountmenu. Cockpit houdt zijn eigen kop.
-  const baken = look === 'baken';
   const userRef = useRef<HTMLDivElement>(null);
   const userTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -290,7 +287,6 @@ export function Sidebar({
   const hasEntities = organizationGroups.some(group => group.children.length > 0);
 
   const organizationSelect = <Select
-    className={baken ? 'bk-org-select' : undefined}
     aria-label={hasEntities ? 'Administratie kiezen' : 'Organisatie kiezen'}
     value={activeOrganizationId ?? ''}
     onChange={event => onOrganization(event.target.value)}
@@ -303,25 +299,13 @@ export function Sidebar({
         </optgroup>)}
   </Select>;
 
-  return <aside className={`sidebar${mobileOpen ? ' is-open' : ''}${userMenuOpen ? ' user-open' : ''}${baken ? ' bk-sidebar' : ''}`}>
+  return <aside className={`sidebar${mobileOpen ? ' is-open' : ''}${userMenuOpen ? ' user-open' : ''}`}>
     <div className="sidebar-head">
       <button type="button" className="sidebar-close" onClick={onCloseMobile} aria-label="Menu sluiten"><X size={20}/></button>
       {onRefresh && <button type="button" className={`sidebar-refresh${refreshing ? ' is-busy' : ''}`} onClick={onRefresh} disabled={refreshing} aria-label="Gegevens verversen" title="Verversen"><RefreshCw size={17}/></button>}
       <button type="button" className="sidebar-pin" onClick={onTogglePin} aria-pressed={pinned} aria-label={pinned ? 'Menu losmaken' : 'Menu vastzetten'} title={pinned ? 'Menu losmaken' : 'Menu vastzetten'}>{pinned ? <PinOff size={15}/> : <Pin size={15}/>}</button>
-      {baken
-        /* Het merk zoals in Value Backlog: de tegel met het R-merkteken, de
-           naam, en eronder in goud de organisatie, die je hier ook wisselt. */
-        ? <div className="app-brand bk-brand">
-            <div className="brand-icon"><i className="bk-brand-halo" aria-hidden="true" /><BrandMark className="bk-mark" /></div>
-            <div className="bk-brand-text">
-              <span className="bk-brand-name">ResoFly{standaloneApp && <span className="app-brand-sub">{standaloneApp.shortName}</span>}</span>
-              <div className="bk-org">{organizationSelect}</div>
-            </div>
-          </div>
-        : <div className="app-brand"><div className="brand-icon"><BrandMark /></div><span>ResoFly<small>{standaloneApp?.shortName ?? 'Werkruimte'}</small></span></div>}
-      {baken
-        ? readOnly && <div className="sidebar-readonly"><Lock size={12} aria-hidden="true"/><span>Alleen lezen op deze pagina</span></div>
-        : <div className="org-switcher">
+      <div className="app-brand"><div className="brand-icon"><BrandMark /></div><span>ResoFly<small>{standaloneApp?.shortName ?? 'Werkruimte'}</small></span></div>
+      <div className="org-switcher">
         <label>{hasEntities ? 'Administratie' : 'Organisatie'}</label>
         {organizationSelect}
         {readOnly && <div className="sidebar-readonly"><Lock size={12} aria-hidden="true"/><span>Alleen lezen op deze pagina</span></div>}
@@ -330,12 +314,10 @@ export function Sidebar({
           {onNewEntity && <button onClick={onNewEntity}>+ administratie</button>}
           <button onClick={onNewOrganization}>+ organisatie</button>
         </div>
-      </div>}
+      </div>
     </div>
     <nav className="sidebar-nav">
-      {/* In Baken staat zoeken in de bovenbalk, zoals in Value Backlog. Twee
-          zoekvelden kan niet: elk vangt Ctrl/Cmd+K, en dan wint de verkeerde. */}
-      {!baken && <GlobalSearch data={data} onNavigate={onSearchNavigate} canOpenPage={permissions.canOpenPage} />}
+      <GlobalSearch data={data} onNavigate={onSearchNavigate} canOpenPage={permissions.canOpenPage} />
       {navGroups.map(group => {
         const visibleItems = group.items.filter(([key]) => canOpenNavItem(key, permissions));
         if (visibleItems.length === 0) return null;
@@ -513,8 +495,8 @@ export function Sidebar({
         </div>
         {/* De look: Baken is de standaard; Cockpit, Zenit (DESIGN_VOORSTEL_ZENIT_
             2026-10-22.md) en Stroom (DESIGN_VOORSTEL_STROOM_2026-10-30.md)
-            blijven kiesbaar, per browser. In Zenit en Stroom staat dezelfde
-            keuze onder Weergave → Look in de rail. */}
+            blijven kiesbaar, per browser. In Baken, Zenit en Stroom staat
+            dezelfde keuze onder Weergave → Look in de rail. */}
         <div className="look-switch" role="group" aria-label="Look">
           {LOOK_CHOICES.map(option => <button
             key={option.look}
@@ -527,13 +509,6 @@ export function Sidebar({
             <span className="look-t"><b>{option.label}</b><small>{option.hint}</small></span>
           </button>)}
         </div>
-        {/* In Baken staan deze twee hier in plaats van onder de organisatie in
-            de zijbalk: daar staat nu alleen het merk, zoals in Value Backlog. */}
-        {baken && <>
-          <div className="user-menu-sep" aria-hidden="true" />
-          {onNewEntity && <button type="button" role="menuitem" className="user-menu-item" onClick={() => { setUserMenuOpen(false); onNewEntity(); }}><Plus size={15}/><span>Nieuwe administratie</span></button>}
-          <button type="button" role="menuitem" className="user-menu-item" onClick={() => { setUserMenuOpen(false); onNewOrganization(); }}><Plus size={15}/><span>Nieuwe organisatie</span></button>
-        </>}
         <div className="user-menu-sep" aria-hidden="true" />
         <button
           type="button"

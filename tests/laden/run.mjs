@@ -122,10 +122,22 @@ async function idle(page) {
 /** De knop Ververs in de titelbalk (op desktop staat hij daar, niet in de zijbalk). Tijdens het laden heet hij "Laden…". */
 const refreshButton = (page) => page.locator('.topbar .topbar-actions button').first();
 
-/** Navigeren zoals een gebruiker: via het menu. */
+/**
+ * Navigeren zoals een gebruiker: via het menu. In Baken (de standaard) is dat
+ * sinds 2026-11-13 de rail met het paneel ernaast: een klik op de rail opent de
+ * module op zijn eerste pagina, daarna kies je in het paneel. Uren ligt onder
+ * Agenda, dus de weg erheen loopt langs de agenda. Die laadt dezelfde groep
+ * (time), dus de tellingen hieronder blijven gelden.
+ */
+const MENU = { Uren: ['Agenda', 'Uren'], Dashboard: ['Vandaag', null] };
 async function nav(page, label) {
-  await page.locator('.sidebar-nav .nav-item', { hasText: label }).first().click();
+  const [module, item] = MENU[label];
+  await page.locator(`.zrail .zrail-btn[aria-label^="${module}"]`).first().click();
   await idle(page);
+  if (item) {
+    await page.locator('.zpanel .zpnav-item', { hasText: item }).first().click();
+    await idle(page);
+  }
 }
 
 const browser = await chromium.launch({ headless: true, executablePath: process.env.RESOFLY_CHROMIUM || undefined });
