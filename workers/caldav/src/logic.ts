@@ -2,6 +2,8 @@
 // hebben: iCalendar lezen en schrijven, en wat een deellink wel en niet laat
 // zien. Apart van index.ts, zodat `npm test` ze in Node kan toetsen.
 
+import { DEFAULT_TIME_ZONE, icsWallClock, isValidTimeZone, vtimezoneLines } from '../../../supabase/functions/_shared/wallClock.ts';
+
 /** Eén afspraak zoals hij in calendar_events staat (de kolommen die de server leest). */
 export interface EventRow {
   id: string;
@@ -17,6 +19,8 @@ export interface EventRow {
   all_day: boolean;
   rrule: string | null;
   exdate?: string[] | null;
+  /** De tijdzone van de afspraak (de app: die van de agenda; de telefoon: TZID). */
+  timezone?: string | null;
   sequence: number;
   etag: string;
   sync_rev: number;
@@ -28,7 +32,7 @@ export interface EventRow {
 export type FeedDetail = 'busy' | 'details';
 
 /** Wat de deellink van een afspraak nodig heeft. Bewust geen omschrijving, genodigden of vergaderlink. */
-export type FeedEventRow = Pick<EventRow, 'uid' | 'title' | 'location' | 'starts_at' | 'ends_at' | 'all_day' | 'rrule' | 'exdate' | 'icalendar_raw' | 'sequence' | 'updated_at'>;
+export type FeedEventRow = Pick<EventRow, 'uid' | 'title' | 'location' | 'starts_at' | 'ends_at' | 'all_day' | 'rrule' | 'exdate' | 'timezone' | 'icalendar_raw' | 'sequence' | 'updated_at'>;
 
 // Een deellink is 32 willekeurige bytes in base64url: 43 tekens. Dezelfde vorm
 // maakt supabase/functions/_shared/calendarFeed.ts; logic.test.ts houdt ze gelijk.
@@ -322,18 +326,41 @@ function validDate(value: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** Begin, eind, herhaling en weggelaten keren, uit de velden van de app. */
-function timeLines(ev: Pick<EventRow, 'starts_at' | 'ends_at' | 'all_day' | 'rrule' | 'exdate'>): string[] {
+type TimeFields = Pick<EventRow, 'starts_at' | 'ends_at' | 'all_day' | 'rrule' | 'exdate' | 'timezone'>;
+
+/**
+ * De tijdzone waarin een reeks uit de app herhaalt, of null als dat er niet
+ * toe doet (een losse afspraak, of een hele dag). Dezelfde keuze als de app
+ * (recurrenceTimeZone in calendarCore.ts): die van de afspraak, anders
+ * Amsterdam. Een ResoFly-agenda staat altijd op Amsterdam.
+ */
+export function seriesTimeZone(ev: TimeFields): string | null {
+  if (ev.all_day || !(ev.rrule ?? '').trim()) return null;
+  return isValidTimeZone(ev.timezone) && ev.timezone !== 'UTC' ? ev.timezone : DEFAULT_TIME_ZONE;
+}
+
+/**
+ * Begin, eind, herhaling en weggelaten keren, uit de velden van de app. Een
+ * reeks staat op de kloktijd in zijn tijdzone (DTSTART;TZID=…): zo houdt de
+ * telefoon "elke maandag 9.00 uur" ook na de klokwissel op 9.00 uur, net als
+ * de app. Eerst stond hij in UTC, en schoof hij in de zomer een uur op.
+ */
+function timeLines(ev: TimeFields): string[] {
   const lines: string[] = [];
   const start = new Date(ev.starts_at);
+  const end = new Date(ev.ends_at);
+  const tz = seriesTimeZone(ev);
   if (ev.all_day) {
-    let endExclusive = new Date(ev.ends_at);
+    let endExclusive = end;
     if (endExclusive.getTime() <= start.getTime()) endExclusive = addUtcDays(start, 1);
     lines.push(`DTSTART;VALUE=DATE:${icsDate(start)}`);
     lines.push(`DTEND;VALUE=DATE:${icsDate(endExclusive)}`);
+  } else if (tz) {
+    lines.push(`DTSTART;TZID=${tz}:${icsWallClock(start.getTime(), tz)}`);
+    lines.push(`DTEND;TZID=${tz}:${icsWallClock(end.getTime(), tz)}`);
   } else {
     lines.push(`DTSTART:${icsUtc(start)}`);
-    lines.push(`DTEND:${icsUtc(new Date(ev.ends_at))}`);
+    lines.push(`DTEND:${icsUtc(end)}`);
   }
   const rrule = (ev.rrule ?? '').replace(/[\r\n]/g, '').trim();
   if (rrule) {
@@ -345,10 +372,18 @@ function timeLines(ev: Pick<EventRow, 'starts_at' | 'ends_at' | 'all_day' | 'rru
     if (dates.length) {
       lines.push(ev.all_day
         ? `EXDATE;VALUE=DATE:${dates.map(icsDate).join(',')}`
-        : `EXDATE:${dates.map(icsUtc).join(',')}`);
+        : tz
+          ? `EXDATE;TZID=${tz}:${dates.map(d => icsWallClock(d.getTime(), tz)).join(',')}`
+          : `EXDATE:${dates.map(icsUtc).join(',')}`);
     }
   }
   return lines;
+}
+
+/** Het jaar vóór het begin: de VTIMEZONE begint dan ruim voor de eerste keer. */
+function timezoneFromYear(ev: Pick<EventRow, 'starts_at'>): number {
+  const year = new Date(ev.starts_at).getUTCFullYear();
+  return Number.isFinite(year) ? year - 1 : new Date().getUTCFullYear() - 1;
 }
 
 /** Het tijdstempel van een afspraak: de laatste wijziging, zodat dezelfde afspraak dezelfde tekst geeft. */
@@ -359,11 +394,13 @@ function stamp(ev: Pick<EventRow, 'updated_at'>, fallback: Date): string {
 /** De afspraak voor de eigen telefoon of computer (CalDAV): alles wat de app ook toont. */
 export function icsForEvent(ev: EventRow, now = new Date()): string {
   if (ev.icalendar_raw && ev.icalendar_raw.trim()) return ev.icalendar_raw;
+  const tz = seriesTimeZone(ev);
   const lines: string[] = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//ResoFly//CalDAV//NL',
     'CALSCALE:GREGORIAN',
+    ...(tz ? vtimezoneLines(tz, timezoneFromYear(ev)) : []),
     'BEGIN:VEVENT',
     `UID:${escapeIcsText(ev.uid)}`,
     `DTSTAMP:${stamp(ev, now)}`,
@@ -421,11 +458,19 @@ export function buildFeed(calendarName: string, events: FeedEventRow[], detail: 
   ];
   const timezones = new Map<string, string[]>();
   const vevents: string[][] = [];
+  // Reeksen uit de app: één VTIMEZONE per zone, vanaf het vroegste begin.
+  const fromYears = new Map<string, number>();
   for (const ev of events) {
     const fromPhone = ev.icalendar_raw && ev.icalendar_raw.trim() ? feedEventsFromRaw(ev, detail, timezones, now) : [];
-    if (fromPhone.length) vevents.push(...fromPhone);
-    else vevents.push(feedEventFromFields(ev, detail, now));
+    if (fromPhone.length) {
+      vevents.push(...fromPhone);
+      continue;
+    }
+    vevents.push(feedEventFromFields(ev, detail, now));
+    const tz = seriesTimeZone(ev);
+    if (tz) fromYears.set(tz, Math.min(fromYears.get(tz) ?? Infinity, timezoneFromYear(ev)));
   }
+  for (const [tz, fromYear] of fromYears) if (!timezones.has(tz)) timezones.set(tz, vtimezoneLines(tz, fromYear));
   const lines = [...head];
   for (const tz of timezones.values()) lines.push(...tz);
   for (const ev of vevents) lines.push(...ev);
@@ -480,6 +525,31 @@ export function feedTokenFromPath(segments: string[]): string | null {
   const token = segments[1].replace(/\.ics$/i, '');
   return FEED_TOKEN_RE.test(token) ? token : null;
 }
+
+/* ── Zoekmachines ─────────────────────────────────────────────────────── */
+
+// Zoekmachines horen niet in de agenda te kijken. Cloudflare zet voor de hele
+// zone resofly.com zijn eigen robots.txt vóór deze, met "User-agent: *" en
+// "Allow: /". Een gewone "Disallow: /" onder "*" verloor het daarvan: bij
+// gelijke regels wint de toestemming. Een groep met de eigen naam van een
+// zoekmachine gaat wél voor "*" (RFC 9309 §2.2.1), dus die staan hier apart.
+// Wat toch binnenkomt, krijgt op elk antwoord X-Robots-Tag (zie index.ts).
+const SEARCH_ENGINES = [
+  'Googlebot', 'Bingbot', 'Slurp', 'DuckDuckBot', 'Applebot', 'YandexBot', 'Baiduspider',
+  'Qwantbot', 'SeznamBot', 'Ecosia', 'PetalBot', 'Sogou', 'Exabot', 'Mojeekbot', 'BraveBot',
+];
+
+export const ROBOTS_TXT = [
+  '# De agendaserver van ResoFly: niets om te bekijken of te indexeren.',
+  'User-agent: *',
+  'Disallow: /',
+  '',
+  ...SEARCH_ENGINES.map(name => `User-agent: ${name}`),
+  'Disallow: /',
+  '',
+].join('\n');
+
+export const X_ROBOTS_TAG = 'noindex, nofollow, noarchive, nosnippet';
 
 /* ── Overig ──────────────────────────────────────────────────────────── */
 

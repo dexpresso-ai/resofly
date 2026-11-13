@@ -215,6 +215,16 @@ export function splitIntoSlots(startsAt: string, endsAt: string, durationMin: nu
   return out.length ? out : [{ startsAt: iso(start), endsAt: iso(start + len) }];
 }
 
+/**
+ * Hetzelfde moment een week later, op de klok van je eigen apparaat (zoals het
+ * rooster en het weekpatroon). Eerst telde "Herhaal volgende week" 7 × 24 uur
+ * op: over de klokwissel heen kwam een moment van 9.00 uur op 10.00 of 8.00 uur.
+ */
+export function sameTimeNextWeek(iso: string): string {
+  const d = new Date(iso);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7, d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds()).toISOString();
+}
+
 /** Een weekpatroon: op welke dagen, van hoe laat tot hoe laat, en hoeveel weken. */
 export interface SlotPattern {
   /** 1 = maandag … 7 = zondag. */

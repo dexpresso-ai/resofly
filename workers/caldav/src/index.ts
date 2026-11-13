@@ -25,6 +25,8 @@ import {
   type ParsedEvent,
   MAX_PUT_BYTES,
   PAGE_SIZE,
+  ROBOTS_TXT,
+  X_ROBOTS_TAG,
   buildFeed,
   feedTokenFromPath,
   icsForEvent,
@@ -79,12 +81,18 @@ const FEED_HISTORY_DAYS = 365;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    let res: Response;
     try {
-      return await handle(request, env);
+      res = await handle(request, env);
     } catch (err) {
       console.error('caldav error', err instanceof Error ? err.message : String(err));
-      return new Response('Internal Server Error', { status: 500 });
+      res = new Response('Internal Server Error', { status: 500 });
     }
+    // Op elk antwoord, ook een 401 of 404: zoekmachines nemen niets van deze
+    // server op. Zie ROBOTS_TXT in logic.ts voor waarom robots.txt alleen niet genoeg is.
+    const out = new Response(res.body, res);
+    out.headers.set('X-Robots-Tag', X_ROBOTS_TAG);
+    return out;
   },
 } satisfies ExportedHandler<Env>;
 
@@ -102,8 +110,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
   if (method === 'OPTIONS') return optionsResponse();
 
   // Zoekmachines horen hier niets op te halen: een deellink is een sleutel.
+  // Cloudflare zet zijn eigen robots.txt ervoor; zie ROBOTS_TXT in logic.ts.
   if (segments.length === 1 && segments[0] === 'robots.txt') {
-    return new Response('User-agent: *\nDisallow: /\n', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+    return new Response(ROBOTS_TXT, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   }
 
   // Deellinks: het token in het adres is de sleutel, er komt geen inlog bij.
@@ -657,7 +666,7 @@ async function serveFeed(request: Request, env: Env, segments: string[]): Promis
   const events = await fetchAll<FeedEventRow>(env, 'calendar_events',
     `source_id=eq.${link.source_id}&organization_id=eq.${link.organization_id}&deleted_at=is.null` +
     `&or=${encodeURIComponent(`(recurs.eq.true,ends_at.gte.${since})`)}` +
-    '&select=uid,title,location,starts_at,ends_at,all_day,rrule,exdate,icalendar_raw,sequence,updated_at' +
+    '&select=uid,title,location,starts_at,ends_at,all_day,rrule,exdate,timezone,icalendar_raw,sequence,updated_at' +
     '&order=starts_at.asc,id.asc');
 
   const body = buildFeed(link.source_name, events, link.detail === 'details' ? 'details' : 'busy');
@@ -667,7 +676,6 @@ async function serveFeed(request: Request, env: Env, segments: string[]): Promis
     'Content-Disposition': 'inline; filename="agenda.ics"',
     'Cache-Control': 'private, max-age=300',
     ETag: etag,
-    'X-Robots-Tag': 'noindex, nofollow',
     'Referrer-Policy': 'no-referrer',
   };
   const ifNoneMatch = request.headers.get('If-None-Match');
@@ -678,6 +686,6 @@ async function serveFeed(request: Request, env: Env, segments: string[]): Promis
 function feedNotFound(): Response {
   return new Response('Deze agendalink bestaat niet (meer). Vraag de eigenaar van de agenda om een nieuwe.\n', {
     status: 404,
-    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' },
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }
