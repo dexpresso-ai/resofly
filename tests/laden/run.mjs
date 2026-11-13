@@ -20,6 +20,11 @@
  *   7. mislukt het verversen van een groep die al in beeld staat, dan blijft de
  *      pagina staan en zegt een balk het;
  *   8. bij een stroom verversingen lopen de rondes na elkaar, en komt alles binnen.
+ *   9. opnieuw openen begint bij de bewaarde stand van de vorige keer
+ *      (src/lib/workspaceSnapshot.ts): de werkruimte en de agenda staan er
+ *      voordat de server antwoordt, zonder laadscherm; daarna komt de nieuwe
+ *      stand binnen. Wat van een andere gebruiker is, en alles na uitloggen,
+ *      gaat weg.
  *
  * Opties: --url=http://… gebruik een draaiende dev-server.
  */
@@ -119,6 +124,35 @@ async function idle(page) {
   await page.waitForTimeout(300);
 }
 
+/** De sleutels van de bewaarde stand in IndexedDB (src/lib/workspaceSnapshot.ts). */
+function snapshotKeys(page) {
+  return page.evaluate(() => new Promise(resolve => {
+    const request = indexedDB.open('resofly-werkruimte', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('stand');
+    request.onerror = () => resolve([]);
+    request.onsuccess = () => {
+      const db = request.result;
+      const keys = db.transaction('stand', 'readonly').objectStore('stand').getAllKeys();
+      keys.onsuccess = () => { db.close(); resolve(keys.result.map(String).sort()); };
+      keys.onerror = () => { db.close(); resolve([]); };
+    };
+  }));
+}
+
+/** Eén record in de bewaarde stand zetten, zoals een eerdere sessie dat deed. */
+function putSnapshotRecord(page, key, value) {
+  return page.evaluate(([key, value]) => new Promise(resolve => {
+    const request = indexedDB.open('resofly-werkruimte', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('stand');
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction('stand', 'readwrite');
+      tx.objectStore('stand').put(value, key);
+      tx.oncomplete = () => { db.close(); resolve(true); };
+    };
+  }), [key, value]);
+}
+
 /** De knop Ververs in de titelbalk (op desktop staat hij daar, niet in de zijbalk). Tijdens het laden heet hij "Laden…". */
 const refreshButton = (page) => page.locator('.topbar .topbar-actions button').first();
 
@@ -204,8 +238,12 @@ try {
   }
 
   // ── 6: een mislukte groep, en opnieuw proberen ────────────────────────────
+  // In een eigen context: in deze staat de bewaarde stand van de pagina's
+  // hierboven, en dan is de groep er al (wat er was, met een balk: dat is 7).
   {
-    const page = await context.newPage();
+    const own = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
+    await installMock(own);
+    const page = await own.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(String(e.message)));
     let attempts = 0;
@@ -233,6 +271,7 @@ try {
     check('Opnieuw proberen: de pagina staat er alsnog', attempts === 2 && !retried.failed && !retried.loading && retried.text.length > 40, `${attempts} pogingen, ${retried.failed ? 'nog steeds fout' : retried.loading ? 'laadt nog' : 'ok'}`);
     check('mislukte groep: geen JavaScript-fout', errors.length === 0, errors[0]);
     await page.close();
+    await own.close();
   }
 
   // ── 7: verversen mislukt bij een groep die al in beeld staat ─────────────
@@ -289,6 +328,96 @@ try {
   }
 
   await context.close();
+
+  // ── 9: opnieuw openen begint bij de bewaarde stand ───────────────────────
+  // De klacht (13 november 2026): elke keer "ResoFly is aan het laden…", ook
+  // als je alleen de agenda opent. Nu staat de vorige stand er meteen.
+  {
+    const own = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
+    await installMock(own);
+    const USER = seed.ids.USER;
+
+    // a. De eerste keer op dit apparaat: gewoon laden, en daarna bewaren.
+    const first = await openPage(own, 'calendar');
+    await idle(first.page);
+    await first.page.waitForTimeout(1800); // bewaren gebeurt na anderhalve seconde rust
+    const saved = await snapshotKeys(first.page);
+    check('eerste keer: daarna is de stand bewaard, met de uren van de agenda', saved.includes(`${USER}|kern`) && saved.includes(`${USER}|groep|time`), `[${saved.join(', ')}]`);
+    // Een stand van iemand anders die eerder in deze browser werkte.
+    await putSnapshotRecord(first.page, 'iemand-anders|kern', { kind: 'kern', userId: 'iemand-anders' });
+    await first.page.close();
+
+    // b. Opnieuw openen terwijl de server traag is.
+    const page = await own.newPage();
+    const errors = [];
+    page.on('pageerror', e => errors.push(String(e.message)));
+    let answered = 0;
+    let timeEntryGets = 0;
+    await page.route(`${SUPABASE_URL}/rest/v1/**`, async (route) => {
+      if (route.request().method() === 'GET' && new URL(route.request().url()).pathname === '/rest/v1/time_entries') timeEntryGets += 1;
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      answered += 1;
+      await route.fallback();
+    });
+    await page.addInitScript(storageScript('calendar'));
+    await page.addInitScript(() => {
+      window.__laadscherm = false;
+      new MutationObserver(() => { if (document.querySelector('.boot-loading')) window.__laadscherm = true; })
+        .observe(document, { childList: true, subtree: true });
+    });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.app', { timeout: 20000 });
+    const shownBefore = answered;
+    const shown = await screenState(page);
+    check('opnieuw openen: de werkruimte staat er voordat de server iets antwoordt', shownBefore === 0, `${shownBefore} antwoorden waren al binnen`);
+    check('opnieuw openen: de agenda staat er meteen, met de uren van de vorige keer', !shown.loading && !shown.failed && shown.text.length > 40, shown.loading ? 'Gegevens laden…' : shown.failed ? 'foutmelding' : `te weinig inhoud: "${shown.text.slice(0, 60)}"`);
+    check('opnieuw openen: geen laadscherm', (await page.evaluate(() => window.__laadscherm)) === false);
+    await idle(page);
+    await page.waitForTimeout(3000);
+    await idle(page);
+    check('daarna: de uren zijn op de achtergrond ververst', timeEntryGets >= 1, `${timeEntryGets} keer opgehaald`);
+    const after = await snapshotKeys(page);
+    check('de stand van een andere gebruiker is weg, de eigen staat er nog', !after.includes('iemand-anders|kern') && after.includes(`${USER}|kern`), `[${after.join(', ')}]`);
+    check('opnieuw openen: geen JavaScript-fout', errors.length === 0, errors[0]);
+
+    // c. Rechten veranderd: Financiën is voor dit teamlid dichtgezet sinds de
+    //    vorige keer. De bewaarde boekhouding mag dan niet blijven staan.
+    await page.close();
+    const ledger = await openPage(own, 'ledger');
+    await idle(ledger.page);
+    await ledger.page.waitForTimeout(1800);
+    const withBookkeeping = await snapshotKeys(ledger.page);
+    check('Grootboek: de boekhouding is bewaard', withBookkeeping.includes(`${USER}|groep|bookkeeping`), `[${withBookkeeping.join(', ')}]`);
+    await ledger.page.close();
+    const closed = await own.newPage();
+    const closedErrors = [];
+    closed.on('pageerror', e => closedErrors.push(String(e.message)));
+    await closed.route(`${SUPABASE_URL}/rest/v1/organization_members**`, async (route) => {
+      if (!(new URL(route.request().url()).searchParams.get('select') ?? '').includes('organizations(')) return route.fallback();
+      const mine = seed.members.find(m => m.user_id === USER);
+      await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify([{ ...mine, role: 'member', module_access: { finance: 'none' }, organization: seed.org }]) });
+    });
+    await closed.addInitScript(storageScript('dashboard'));
+    await closed.goto(baseUrl, { waitUntil: 'networkidle' });
+    await closed.waitForSelector('.app', { timeout: 20000 });
+    await idle(closed);
+    await closed.waitForTimeout(1800);
+    const afterClosed = await snapshotKeys(closed);
+    check('rechten ingetrokken: de bewaarde boekhouding is weg', !afterClosed.some(key => key.includes('|groep|bookkeeping')), `[${afterClosed.join(', ')}]`);
+    check('rechten ingetrokken: daarna is de stand opnieuw bewaard, met de nieuwe rechten', afterClosed.includes(`${USER}|kern`), `[${afterClosed.join(', ')}]`);
+    check('rechten ingetrokken: geen JavaScript-fout', closedErrors.length === 0, closedErrors[0]);
+    await closed.unroute(`${SUPABASE_URL}/rest/v1/organization_members**`);
+
+    // d. Uitloggen: niets van de werkruimte blijft in de browser.
+    await closed.locator('.user-trigger').first().click();
+    await closed.locator('.user-menu-item.danger', { hasText: 'Uitloggen' }).click();
+    await closed.waitForSelector('.app', { state: 'detached', timeout: 10000 });
+    await closed.waitForTimeout(300);
+    const gone = await snapshotKeys(closed);
+    check('uitloggen: de bewaarde stand is weg', gone.length === 0, `[${gone.join(', ')}]`);
+    await closed.close();
+    await own.close();
+  }
 } finally {
   await browser.close();
   if (server) await server.close();

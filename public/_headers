@@ -52,6 +52,16 @@
   Permissions-Policy: browsing-topics=(), interest-cohort=()
   Strict-Transport-Security: max-age=31536000; includeSubDomains
 
+# De bestanden van de app zelf (JavaScript, CSS, lettertypen uit de build). Vite
+# zet een hash van de inhoud in elke naam: een nieuwe versie krijgt een nieuwe
+# naam, dus een oude naam verandert nooit. Zonder deze regel vroeg de browser
+# bij elke start van de app opnieuw aan de server of de bundel van 4 MB nog
+# klopte, en wachtte daarop voordat er iets in beeld kwam (13 november 2026).
+# index.html valt hier niet onder: die haalt de browser wel elke keer op, en
+# zo komt een nieuwe versie binnen.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
 # Pagina's achter een deellink (token in de URL) horen niet in een zoekmachine.
 # De hash hierboven bewaakt scripts/check-csp-hash.mjs in de CI (frontend-checks).
 /quote/*

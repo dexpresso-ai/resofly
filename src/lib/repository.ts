@@ -282,23 +282,42 @@ export async function countAuditLogSince(organizationId: UUID, sinceIso: string)
   return count ?? 0;
 }
 
+/**
+ * De organisaties van de ingelogde gebruiker, en van de actieve wat elk scherm
+ * nodig heeft. Wat alleen Instellingen of één tegel op het dashboard gebruikt,
+ * haalt loadOrganizationExtras daarna op.
+ *
+ * Elke ronde hier is wachttijd vóór het eerste beeld. Tot november 2026 waren
+ * het er vier na elkaar: ensure_user_default_organization, getUser (een vraag
+ * aan de auth-server), de lidmaatschappen en de rest. Nu twee: de gebruiker
+ * komt uit de sessie die de browser al heeft (de database controleert het
+ * token bij elke vraag toch), en ensure_user_default_organization loopt naast
+ * de lidmaatschappen. Alleen wie nog geen organisatie heeft, wacht erop.
+ */
 export async function loadOrganizationContext(activeOrganizationId?: UUID | null): Promise<OrganizationContext> {
-  await ensureDefaultOrganization();
-  const { data: userData, error: userError } = await supabaseAuth.getUser();
-  if (userError) throw userError;
+  const { data: sessionData, error: sessionError } = await supabaseAuth.getSession();
+  if (sessionError) throw sessionError;
 
-  const currentUserId = userData.user?.id;
+  const currentUserId = sessionData.session?.user.id;
   if (!currentUserId) throw new Error('Niet ingelogd.');
-  const currentEmail = userData.user?.email?.trim().toLowerCase() ?? '';
+  const currentEmail = sessionData.session?.user.email?.trim().toLowerCase() ?? '';
   const nowIso = new Date().toISOString();
 
-  const [{ data: membershipRows, error: membershipError }, { data: invitationRows, error: invitationError }] = await Promise.all([
-    supabase
-      .from('organization_members')
-      .select('*, organization:organizations(*)')
-      .eq('user_id', currentUserId)
-      .eq('status', 'active')
-      .order('created_at', { ascending: true }),
+  // Vult ook het e-mailadres aan op oude lidmaatschappen. Mislukt dat terwijl
+  // er al een organisatie is, dan werkt de app gewoon; zonder organisatie
+  // wachten we er hieronder wel op, en dan telt de fout.
+  const ensured = ensureDefaultOrganization();
+  ensured.catch(error => console.warn('ensure_user_default_organization mislukte.', error));
+
+  const selectMemberships = () => supabase
+    .from('organization_members')
+    .select('*, organization:organizations(*)')
+    .eq('user_id', currentUserId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: true });
+
+  const [firstMemberships, { data: invitationRows, error: invitationError }] = await Promise.all([
+    selectMemberships(),
     currentEmail
       ? supabase
         .from('organization_invitations')
@@ -310,8 +329,17 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
       : Promise.resolve({ data: [], error: null }),
   ]);
 
-  if (membershipError) throw membershipError;
+  if (firstMemberships.error) throw firstMemberships.error;
   if (invitationError) throw invitationError;
+  let membershipRows = firstMemberships.data;
+  if (!membershipRows?.length) {
+    // Nog geen organisatie: misschien maakt ensure_user_default_organization
+    // er nu een. Daarna opnieuw kijken.
+    await ensured;
+    const { data, error } = await selectMemberships();
+    if (error) throw error;
+    membershipRows = data;
+  }
 
   const memberships = ((membershipRows ?? []) as MembershipRow[])
     .map(row => {
@@ -329,22 +357,13 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
 
   let teamMembers: OrganizationMember[] = [];
   let organizationInvitations: OrganizationInvitation[] = [];
-  let auditLogs: AuditLog[] = [];
   let licenseUsage: OrganizationLicenseUsage | null = null;
-  let billingOverview: OrganizationBillingOverview | null = null;
   let creativeStatus: OrganizationCreativeStatus | null = null;
   let businessStatus: OrganizationBusinessStatus | null = null;
   let aiConsent: AiConsent | null = null;
   let aiConsents: AiConsent[] = [];
   if (activeOrganization) {
-    // Het abonnement is alleen voor owners en admins (public.can_admin_org).
-    // Voor de rest gaf deze aanroep bij elke start een 403, met een waarschuwing
-    // in de console die naar een ontbrekende migratie wees.
-    const canSeeBilling = isAdminRole(activeMembership?.role);
-    // Het logboek ook (20261111140000): voor de rest geeft de database niets,
-    // dus vragen we het dan ook niet op.
-    const canSeeAuditLog = canSeeBilling;
-    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }, { data: businessRows, error: businessError }, { data: consentRows, error: consentError }] = await Promise.all([
+    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: licenseRows, error: licenseError }, { data: creativeRows, error: creativeError }, { data: businessRows, error: businessError }, { data: consentRows, error: consentError }] = await Promise.all([
       supabase
         .from('organization_members')
         .select('*')
@@ -358,18 +377,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
         .eq('status', 'pending')
         .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
         .order('created_at', { ascending: false }),
-      canSeeAuditLog
-        ? supabase
-          .from('audit_logs')
-          .select('*')
-          .eq('organization_id', activeOrganization.id)
-          .order('created_at', { ascending: false })
-          .limit(40)
-        : Promise.resolve({ data: [], error: null }),
       supabase.rpc('organization_license_usage', { p_organization_id: activeOrganization.id }),
-      canSeeBilling
-        ? supabase.rpc('organization_billing_overview', { p_organization_id: activeOrganization.id })
-        : Promise.resolve({ data: null, error: null }),
       supabase.rpc('organization_creative_status', { p_organization_id: activeOrganization.id }),
       supabase.rpc('organization_business_status', { p_organization_id: activeOrganization.id }),
       // Gerrie aan of uit (20261112190000). Eén vraag: de RLS geeft een teamlid
@@ -390,19 +398,10 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     if (teamError) throw teamError;
     if (orgInvitationError) throw orgInvitationError;
     if (licenseError) throw licenseError;
-    if (billingError) {
-      console.warn('Het abonnementsoverzicht kon niet worden geladen.', billingError);
-    }
-    if (auditError) {
-      console.warn('Audit-log kon niet worden geladen. Controleer of de Sprint 1 database-migratie is uitgevoerd.', auditError);
-    }
     teamMembers = (teamRows ?? []) as OrganizationMember[];
     organizationInvitations = (orgInvitationRows ?? []) as OrganizationInvitation[];
-    auditLogs = auditError ? [] : (auditRows ?? []) as AuditLog[];
     const firstLicenseRow = Array.isArray(licenseRows) ? licenseRows[0] : licenseRows;
     licenseUsage = (firstLicenseRow ?? null) as OrganizationLicenseUsage | null;
-    const firstBillingRow = Array.isArray(billingRows) ? billingRows[0] : billingRows;
-    billingOverview = billingError ? null : (firstBillingRow ?? null) as OrganizationBillingOverview | null;
     if (creativeError) {
       // Migratie 20260806000000 nog niet toegepast: geen entitlement-informatie.
       // De galerij valt dan terug op het gedrag van vóór de creatieve module.
@@ -428,12 +427,46 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     pendingInvitations: (invitationRows ?? []) as OrganizationInvitation[],
     organizationInvitations,
     licenseUsage,
-    auditLogs,
-    billingOverview,
+    // Komen uit loadOrganizationExtras, na het eerste beeld.
+    auditLogs: [],
+    billingOverview: null,
     creativeStatus,
     businessStatus,
     aiConsent,
     aiConsents,
+  };
+}
+
+export type OrganizationExtras = Pick<OrganizationContext, 'billingOverview' | 'auditLogs'>;
+
+/**
+ * Het abonnementsoverzicht (Instellingen → Abonnement) en het logboek (een
+ * tegel op het dashboard van de owner). Allebei alleen voor owners en admins.
+ *
+ * Los van loadOrganizationContext, omdat geen scherm erop hoeft te wachten:
+ * organization_billing_overview duurde op staging gemiddeld 330 ms en soms
+ * bijna 5 s (13 november 2026), en hield zolang het hele opstarten op. Geeft
+ * nooit een fout: wat niet lukt, blijft leeg, met een waarschuwing.
+ */
+export async function loadOrganizationExtras(organizationId: UUID, role: OrganizationRole | null | undefined): Promise<OrganizationExtras> {
+  // Voor de rest gaf het abonnement bij elke start een 403, en het logboek
+  // (20261111140000) niets: dan vragen we ze ook niet op.
+  if (!isAdminRole(role)) return { billingOverview: null, auditLogs: [] };
+  const [{ data: billingRows, error: billingError }, { data: auditRows, error: auditError }] = await Promise.all([
+    supabase.rpc('organization_billing_overview', { p_organization_id: organizationId }),
+    supabase
+      .from('audit_logs')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .order('created_at', { ascending: false })
+      .limit(40),
+  ]);
+  if (billingError) console.warn('Het abonnementsoverzicht kon niet worden geladen.', billingError);
+  if (auditError) console.warn('Audit-log kon niet worden geladen. Controleer of de Sprint 1 database-migratie is uitgevoerd.', auditError);
+  const firstBillingRow = Array.isArray(billingRows) ? billingRows[0] : billingRows;
+  return {
+    billingOverview: billingError ? null : (firstBillingRow ?? null) as OrganizationBillingOverview | null,
+    auditLogs: auditError ? [] : (auditRows ?? []) as AuditLog[],
   };
 }
 
@@ -639,12 +672,16 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
   return (data ?? []) as OrganizationInvitation[];
 }
 
+/** De twee tellingen voor het dashboard (zie loadAttentionCounts). */
+export type AttentionCounts = Pick<CoreData, 'bankTransactionsToReconcile' | 'vatReturnsToFile'>;
+
 /**
  * De kern van de werkruimte: wat bijna elke pagina en de vaste delen van het
  * scherm gebruiken. De zware, groeiende tabellen zitten hier niet in; die laadt
  * loadDataGroup pas als een pagina ze nodig heeft (zie src/lib/dataGroups.ts).
+ * De tellingen voor het dashboard ook niet: die haalt loadAttentionCounts.
  */
-export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
+export async function loadCoreData(organizationId: UUID): Promise<Omit<CoreData, keyof AttentionCounts>> {
   const [
     clients,
     clientContacts,
@@ -676,8 +713,6 @@ export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
     projectTemplates,
     projectTemplateTasks,
     contractProjects,
-    bankTransactionsToReconcile,
-    vatReturnsToFile,
   ] = await Promise.all([
     select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), select<Invoice>('invoices', organizationId),
@@ -695,10 +730,24 @@ export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
     selectProjectTemplates(organizationId),
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
+  ]);
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
+}
+
+/**
+ * Hoeveel banktransacties en btw-aangiftes er wachten, voor het dashboard.
+ *
+ * Los van de kern, omdat de telling van de banktransacties op staging de
+ * traagste vraag van het opstarten was (gemiddeld 490 ms, 13 november 2026: de
+ * RLS rekent de modulerechten per rij uit). In de kern wachtte elke pagina
+ * daarop; nu komt het getal op het dashboard even later binnen.
+ */
+export async function loadAttentionCounts(organizationId: UUID): Promise<AttentionCounts> {
+  const [bankTransactionsToReconcile, vatReturnsToFile] = await Promise.all([
     countOptional('bank_transactions', organizationId, { status: ['unmatched', 'suggested'] }),
     countOptional('vat_returns', organizationId, { status: ['finalized'] }),
   ]);
-  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, vatReturnsToFile };
+  return { bankTransactionsToReconcile, vatReturnsToFile };
 }
 
 /** Per groep: welke tabellen, in welke vorm. TypeScript bewaakt dat elke groep precies zijn eigen velden teruggeeft. */

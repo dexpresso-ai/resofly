@@ -8,7 +8,7 @@ import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type Pers
 import { Breadcrumbs } from './components/Breadcrumbs';
 import type { CrumbTarget } from './lib/breadcrumbs';
 import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type DataGroup, type GroupState } from './lib/dataGroups';
-import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, isAdminRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
+import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, isAdminRole, MODULE_KEYS, MODULE_LABELS, PAGE_MODULE, type MembershipLike, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
 import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFromPath, isPageInApp, isRunningInstalled, standaloneAppFromPath, WORKSPACE_APP, type InstallableApp, type StandaloneApp } from './lib/standaloneApps';
 import { captureInstallPrompt } from './lib/installPrompt';
 import { InstallAppCard } from './components/StandaloneApps';
@@ -28,6 +28,7 @@ import { dismiss, notify, tintLight } from './lib/stroomBus';
 import { useNarrowViewport } from './lib/useNarrowViewport';
 import { isSupabaseConfigured, supabase, supabaseAuth } from './lib/supabase';
 import { signOutOnThisDevice } from './lib/signOut';
+import { clearSnapshots, readSnapshot, saveSnapshot, type RestoredWorkspace } from './lib/workspaceSnapshot';
 import {
   acceptOrganizationInvitation,
   convertAcceptedQuoteToInvoice,
@@ -57,11 +58,13 @@ import {
   insertRow,
   inviteOrganizationMember,
   sendTeamInvitationEmail,
+  loadAttentionCounts,
   loadCoreData,
   loadDataGroup,
   loggedMinutesForTask,
   loadFinanceClientDirectory,
   loadOrganizationContext,
+  loadOrganizationExtras,
   previewNextClientCode,
   planTaskInWeek,
   setTaskPlanningPeriod,
@@ -110,6 +113,7 @@ import {
   removeProjectMember,
   createClientContact,
   updateClientContact,
+  type OrganizationExtras,
   type Table,
 } from './lib/repository';
 import { memberShortName, memberColor, memberInitials, memberEmail, projectTeamAdditions, taskAssigneeChoices } from './lib/members';
@@ -766,7 +770,44 @@ function isPortalPreviewRoute(): boolean {
  *  sessie of de werkruimte nog wordt opgehaald, zodat er niet kort een lege of
  *  misleidende staat ("Geen organisatie gevonden") in beeld flitst. */
 function BootLoading({ message = 'ResoFly is aan het laden…' }: { message?: string }) {
-  return <div className="boot"><div className="boot-loading"><span className="boot-spinner" aria-hidden="true" /><span>{message}</span></div></div>;
+  // De melding pas na een moment. Met de bewaarde stand van de vorige keer
+  // (src/lib/workspaceSnapshot.ts) staat de werkruimte er meestal binnen een
+  // paar tientallen milliseconden na het opstarten, en dan flitste de melding
+  // alleen even. Wie echt moet wachten, ziet hem nog steeds.
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisible(true), BOOT_MESSAGE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return <div className="boot">{visible && <div className="boot-loading"><span className="boot-spinner" aria-hidden="true" /><span>{message}</span></div>}</div>;
+}
+
+const BOOT_MESSAGE_DELAY_MS = 400;
+
+/**
+ * De context van een nieuwe ronde, met het abonnement en het logboek erbij.
+ * Die komen pas na het eerste beeld (loadOrganizationExtras). Tot dan blijft
+ * staan wat er voor dezelfde organisatie en rol al was; anders was de tegel
+ * met het logboek bij elke ververs even leeg.
+ */
+function withOrganizationExtras(next: OrganizationContext, extras: OrganizationExtras | null, prev: OrganizationContext): OrganizationContext {
+  if (extras) return { ...next, ...extras };
+  const sameOrganization = Boolean(prev.activeOrganization) && prev.activeOrganization?.id === next.activeOrganization?.id;
+  if (sameOrganization && prev.activeMembership?.role === next.activeMembership?.role) {
+    return { ...next, billingOverview: prev.billingOverview, auditLogs: prev.auditLogs };
+  }
+  return next;
+}
+
+/**
+ * Wat dit lid mag, als tekst om te vergelijken: de rol en per module het
+ * niveau. Verandert die tussen twee rondes (een beheerder zette een module
+ * dicht), dan gaat weg wat er van de groepen en in de bewaarde stand stond.
+ */
+function accessKey(membership: MembershipLike | null | undefined): string {
+  if (!membership) return '';
+  const permissions = buildPermissions(membership);
+  return [membership.role, ...MODULE_KEYS.map(module => permissions.level(module))].join('|');
 }
 
 type DataGroupStatus = 'ready' | 'loading' | 'failed';
@@ -921,6 +962,25 @@ function App() {
   const activeOrgIdRef = useRef<string | null>(localStorage.getItem(activeOrgStorageKey));
   /** Telt op bij uitloggen: wat de vorige sessie nog aan het laden was, vervalt. */
   const sessionEpochRef = useRef(0);
+  /**
+   * Voor welke organisatie de kern in `data` in deze sessie is opgehaald. Niet
+   * gezet zolang er alleen de bewaarde stand van de vorige keer staat: die
+   * schrijven we niet terug alsof hij vers is (src/lib/workspaceSnapshot.ts).
+   */
+  const freshOrgRef = useRef<string | null>(null);
+  /** De rechten (accessKey) waarmee wat in `data` staat, is opgehaald. */
+  const accessKeyRef = useRef<string | null>(null);
+  /**
+   * In deze sessie is al een werkruimte getoond of geladen. De bewaarde stand
+   * is alleen voor de start: na een wissel van organisatie zet
+   * switchOrganization loadedForRef terug, en dan zou de eerstvolgende
+   * tokenverversing hem midden in je werk opnieuw tonen, met herstelde
+   * tabbladen en een open bewerking kwijt.
+   */
+  const workspaceStartedRef = useRef(false);
+  /** Het nummer van de laatste vraag naar de tellingen, en naar het abonnement en het logboek (applyWhenLatest). */
+  const countsSeqRef = useRef(0);
+  const extrasSeqRef = useRef(0);
   const [organizationContext, setOrganizationContext] = useState<OrganizationContext>(emptyOrganizationContext);
   const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(() => localStorage.getItem(activeOrgStorageKey));
   // Open tabbladen blijven allemaal gemount (keep-alive); alleen het actieve is
@@ -1290,6 +1350,29 @@ function App() {
   }
 
   /**
+   * De bewaarde stand van de vorige keer in beeld zetten, terwijl de eerste
+   * ronde de nieuwe ophaalt (src/lib/workspaceSnapshot.ts). Die ronde is een
+   * gewone ververs van dezelfde organisatie: de kern komt over deze heen, en
+   * de groepen uit de bewaarde stand gelden als verouderd, dus een pagina die
+   * er een nodig heeft, toont wat er was en ververst hem meteen.
+   */
+  function showSnapshot(snapshot: RestoredWorkspace) {
+    const orgId = snapshot.context.activeOrganization?.id;
+    if (!orgId) return;
+    workspaceStartedRef.current = true;
+    setOrganizationContext(snapshot.context);
+    activeOrgIdRef.current = orgId;
+    setActiveOrganizationId(orgId);
+    resetDataGroups(orgId);
+    accessKeyRef.current = accessKey(snapshot.context.activeMembership);
+    dataRef.current = snapshot.data;
+    setData(snapshot.data);
+    updateGroupState(() => ({ loaded: new Set(snapshot.groups), stale: new Set(snapshot.groups), failed: new Map() }));
+    tabsLoadedForRef.current = orgId;
+    restoreTabsForOrganization(orgId, snapshot.data, buildPermissions(snapshot.context.activeMembership));
+  }
+
+  /**
    * Organisatie en kern laden. `target` is de organisatie waar een wissel om
    * vraagt; zonder target is het een ververs van de organisatie die actief is.
    *
@@ -1313,6 +1396,38 @@ function App() {
   }
 
   /**
+   * De vragen van één ronde: de kern, de tellingen voor het dashboard en, bij
+   * een ververs, de groepen van de open pagina.
+   */
+  function startCoreLoad(orgId: string, sameOrganization: boolean) {
+    const core = loadCoreData(orgId);
+    const counts = loadAttentionCounts(orgId);
+    // Een vraag op de gok die vervalt, wordt nooit afgewacht. Zonder deze
+    // vangers gaf een fout daarin een "unhandled rejection" in de console.
+    core.catch(() => undefined);
+    counts.catch(() => undefined);
+    const groups = sameOrganization ? refreshOpenGroups(orgId) : Promise.resolve();
+    return { orgId, sameOrganization, core, counts, groups };
+  }
+
+  /**
+   * Een antwoord waar geen scherm op wacht, en dat dus na de ronde binnenkomt.
+   * Alleen de laatste vraag telt, en alleen zolang dezelfde sessie en
+   * organisatie openstaan: een ouder antwoord dat later komt, overschrijft
+   * geen nieuwer.
+   */
+  function applyWhenLatest<T>(promise: Promise<T>, seqRef: { current: number }, orgId: string, session: number, apply: (value: T) => void) {
+    const seq = ++seqRef.current;
+    promise.then(
+      value => {
+        if (seq !== seqRef.current || session !== sessionEpochRef.current || dataOrgRef.current !== orgId) return;
+        apply(value);
+      },
+      error => console.warn('Bijwerken na het laden lukte niet.', error),
+    );
+  }
+
+  /**
    * Eén ronde. Bij dezelfde organisatie is het een ververs na een wijziging: wat
    * de open pagina gebruikt, komt tegelijk met de kern opnieuw binnen, en de
    * andere geladen groepen worden verouderd. Bij een andere organisatie: eerst
@@ -1321,64 +1436,107 @@ function App() {
   async function runWorkspaceRound(target: string | null | undefined): Promise<void> {
     const run = workspaceRunRef.current;
     run.running = true;
+    workspaceStartedRef.current = true;
     const session = sessionEpochRef.current;
     setLoading(true); setError(null);
     try {
       const tooSlow = 'Het laden duurt te lang. Controleer je verbinding en kies Ververs.';
-      const orgContext = await withTimeout(loadOrganizationContext(target === undefined ? activeOrgIdRef.current : target), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
+      const requested = target === undefined ? activeOrgIdRef.current : target;
+      // De organisatie en de kern tegelijk. Welke organisatie opengaat, zegt
+      // pas loadOrganizationContext, maar bijna altijd is het de gevraagde: dan
+      // is de kern al onderweg. Zo niet (je bent er geen lid meer van), dan
+      // vervalt die vraag en komt de kern van de juiste. Na elkaar kostte dit
+      // bij elke start en elke ververs een hele ronde extra.
+      const early = requested ? startCoreLoad(requested, requested === dataOrgRef.current) : null;
+      const orgContext = await withTimeout(loadOrganizationContext(requested), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
       // Intussen uitgelogd: niets van deze ronde hoort nog in beeld.
       if (session !== sessionEpochRef.current) return;
-      setOrganizationContext(orgContext);
       const orgId = orgContext.activeOrganization?.id ?? null;
+      // De inrichtingsstappen beginnen bij het abonnement: daar wachten we wel
+      // op. Anders komen het abonnement en het logboek na het eerste beeld.
+      const setupExtras = orgId && orgContext.activeOrganization?.onboarding_completed_at === null
+        ? await withTimeout(loadOrganizationExtras(orgId, orgContext.activeMembership?.role), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow)
+        : null;
+      if (session !== sessionEpochRef.current) return;
+      setOrganizationContext(prev => withOrganizationExtras(orgContext, setupExtras, prev));
       activeOrgIdRef.current = orgId;
       setActiveOrganizationId(orgId);
       if (orgId) {
         localStorage.setItem(activeOrgStorageKey, orgId);
-        const sameOrganization = orgId === dataOrgRef.current;
+        const previousOrganization = dataOrgRef.current;
+        const sameOrganization = orgId === previousOrganization;
         if (!sameOrganization) {
           // Meteen niets meer van de vorige organisatie tonen, ook als de kern
           // hieronder mislukt: tot de nieuwe kern er is, staat het laadscherm.
           resetDataGroups(null);
           dataRef.current = emptyData;
           setData(emptyData);
+          // Ook de bewaarde stand van de vorige weg: die hoort bij een
+          // organisatie die niet meer opengaat (een wissel, of je bent er geen
+          // lid meer van).
+          if (previousOrganization) void clearSnapshots();
         }
-        const [loaded] = await withTimeout(Promise.all([
-          loadCoreData(orgId),
-          sameOrganization ? refreshOpenGroups(orgId) : Promise.resolve(),
-        ]), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
+        // Je rechten zijn veranderd sinds wat er staat (bij de vorige ronde, of
+        // in de bewaarde stand van de vorige keer). Een groep van een module
+        // die nu dicht is, mag niet blijven staan, en de bewaarde stand ook
+        // niet. De kern hieronder komt al met de nieuwe rechten van de database.
+        const nextAccess = accessKey(orgContext.activeMembership);
+        if (sameOrganization && accessKeyRef.current !== null && accessKeyRef.current !== nextAccess) {
+          resetDataGroups(orgId);
+          dataRef.current = { ...dataRef.current, ...emptyGroupData() };
+          setData(prev => ({ ...prev, ...emptyGroupData() }));
+          void clearSnapshots();
+        }
+        accessKeyRef.current = nextAccess;
+        const load = early && early.orgId === orgId && early.sameOrganization === sameOrganization ? early : startCoreLoad(orgId, sameOrganization);
         // Financiën open maar Klanten dicht (de boekhouder, of een teamlid dat zo
         // is ingesteld): dan de debiteuren zoals ze op de stukken staan, zodat
         // facturen een naam hebben. De klantenkaart zelf blijft dicht.
         const access = buildPermissions(orgContext.activeMembership);
-        if (!access.canRead('clients') && access.canRead('finance')) {
-          try {
-            loaded.clients = await loadFinanceClientDirectory(orgId);
-          } catch (directoryError) {
+        const directory = !access.canRead('clients') && access.canRead('finance')
+          ? loadFinanceClientDirectory(orgId).catch(directoryError => {
             // Migratie 20261011000000 nog niet toegepast: facturen tonen dan geen
             // klantnaam, maar de werkruimte laadt gewoon.
             console.warn('Debiteuren voor Financiën konden niet worden geladen.', directoryError);
-          }
-        }
+            return null;
+          })
+          : null;
+        const [loaded, , directoryClients] = await withTimeout(Promise.all([load.core, load.groups, directory]), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
+        if (directoryClients) loaded.clients = directoryClients;
         if (session !== sessionEpochRef.current) return;
         if (sameOrganization) {
           dataRef.current = { ...dataRef.current, ...loaded };
           setData(prev => ({ ...prev, ...loaded }));
         } else {
           // De groepen beginnen leeg; de pagina vraagt zelf wat hij nodig heeft.
+          // De tellingen voor het dashboard komen hieronder.
           resetDataGroups(orgId);
-          const fresh: AppData = { ...loaded, ...emptyGroupData() };
+          const fresh: AppData = { ...emptyData, ...loaded, ...emptyGroupData() };
           dataRef.current = fresh;
           setData(fresh);
         }
+        freshOrgRef.current = orgId;
         // Herstel de open tabbladen éénmalig per organisatie (eerste load of wissel);
         // een gewone ververs laat de tabbladen ongemoeid.
         if (orgId !== tabsLoadedForRef.current) {
           tabsLoadedForRef.current = orgId;
           restoreTabsForOrganization(orgId, dataRef.current, access);
         }
+        // Wat geen scherm tegenhoudt, komt erachteraan: de tellingen voor het
+        // dashboard, en het abonnement en het logboek van de owner.
+        applyWhenLatest(load.counts, countsSeqRef, orgId, session, counts => {
+          dataRef.current = { ...dataRef.current, ...counts };
+          setData(prev => ({ ...prev, ...counts }));
+        });
+        if (!setupExtras) {
+          applyWhenLatest(loadOrganizationExtras(orgId, orgContext.activeMembership?.role), extrasSeqRef, orgId, session, extras => {
+            setOrganizationContext(ctx => (ctx.activeOrganization?.id === orgId ? { ...ctx, ...extras } : ctx));
+          });
+        }
       } else {
         localStorage.removeItem(activeOrgStorageKey);
         resetDataGroups(null);
+        accessKeyRef.current = null;
         dataRef.current = emptyData;
         setData(emptyData);
       }
@@ -1428,6 +1586,7 @@ function App() {
     groupSeqRef.current = {};
     groupAppliedSeqRef.current = {};
     groupInflightRef.current.clear();
+    freshOrgRef.current = null;
     dataOrgRef.current = orgId;
     setDataOrgId(orgId);
     updateGroupState(() => EMPTY_GROUP_STATE);
@@ -1545,6 +1704,41 @@ function App() {
     if (!dataOrgId) return;
     void ensureGroups(openGroups);
   }, [dataOrgId, openGroups, groupState]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // De stand van nu bewaren voor de volgende start (src/lib/workspaceSnapshot.ts):
+  // als het een tel rustig is, en meteen als de app naar de achtergrond gaat.
+  // Op een telefoon wordt een app op de achtergrond vaak gesloten zonder dat
+  // de wachttijd nog afloopt.
+  const pendingSnapshotRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (loading || !currentUserId || !dataOrgId) return;
+    const userId = currentUserId;
+    const organizationId = dataOrgId;
+    const context = organizationContext;
+    const save = () => {
+      if (pendingSnapshotRef.current !== save) return;
+      pendingSnapshotRef.current = null;
+      // Alleen wat deze sessie zelf ophaalde. Staat er nog alleen de stand van
+      // de vorige keer, dan blijft die zoals hij was, met zijn eigen datum.
+      if (freshOrgRef.current !== organizationId || dataOrgRef.current !== organizationId) return;
+      if (context.activeOrganization?.id !== organizationId) return;
+      const state = groupStateRef.current;
+      // Een verouderde groep is niet vers opgehaald: zijn vorige versie blijft bewaard.
+      const groups = [...state.loaded].filter(group => !state.stale.has(group));
+      void saveSnapshot({ userId, organizationId, context, data: dataRef.current, groups });
+    };
+    pendingSnapshotRef.current = save;
+    const timer = window.setTimeout(save, 1500);
+    return () => {
+      window.clearTimeout(timer);
+      if (pendingSnapshotRef.current === save) pendingSnapshotRef.current = null;
+    };
+  }, [data, organizationContext, groupState, loading, currentUserId, dataOrgId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const flush = () => { if (document.visibilityState === 'hidden') pendingSnapshotRef.current?.(); };
+    document.addEventListener('visibilitychange', flush);
+    return () => document.removeEventListener('visibilitychange', flush);
+  }, []);
 
   /**
    * Herlaadt de werkruimte, maar hoogstens één keer per reeks.
@@ -1784,17 +1978,30 @@ function App() {
     if (portalRoute || onClientHost) { setSessionReady(true); return; }
     let active = true;
 
-    async function applySession(session: { user: { id: string } } | null) {
+    async function applySession(session: { user: { id: string; email?: string | null } } | null) {
       if (!active) return;
       const userId = session?.user.id ?? null;
+      const storedOrganizationId = localStorage.getItem(activeOrgStorageKey);
+      // De eerste keer voor deze gebruiker: eerst de bewaarde stand van dit
+      // apparaat (src/lib/workspaceSnapshot.ts), vóór het eerste beeld. Anders
+      // stond er even het laadscherm, of zelfs "Geen organisatie gevonden".
+      let snapshot: RestoredWorkspace | null = null;
+      if (userId && userId !== loadedForRef.current && storedOrganizationId && !workspaceStartedRef.current) {
+        const epoch = sessionEpochRef.current;
+        snapshot = await readSnapshot(userId, storedOrganizationId, emptyData);
+        // Intussen uitgelogd, of een andere aanroep was eerder klaar.
+        if (!active || epoch !== sessionEpochRef.current) return;
+      }
       setLoggedIn(Boolean(session));
       setCurrentUserId(userId);
-      // De runtime-sessie draagt het e-mailadres, ook al is het type smaller.
-      setCurrentUserEmail((session?.user as { email?: string | null } | undefined)?.email ?? null);
+      setCurrentUserEmail(session?.user.email ?? null);
       setSessionReady(true);
       if (userId && userId !== loadedForRef.current) {
         loadedForRef.current = userId;
-        await loadWorkspace(localStorage.getItem(activeOrgStorageKey));
+        // Wat een vorige gebruiker in deze browser achterliet, gaat weg.
+        void clearSnapshots(userId);
+        if (snapshot && !workspaceStartedRef.current) showSnapshot(snapshot);
+        await loadWorkspace(storedOrganizationId);
       } else if (!userId) {
         loadedForRef.current = null;
         tabsLoadedForRef.current = null;
@@ -1808,10 +2015,15 @@ function App() {
         setActiveOrganizationId(null);
         setOrganizationContext(emptyOrganizationContext);
         resetDataGroups(null);
+        accessKeyRef.current = null;
+        workspaceStartedRef.current = false;
         dataRef.current = emptyData;
         setData(emptyData);
         const fresh = freshTab();
         setTabs([fresh]); setActiveTabId(fresh.id);
+        // Ook als de sessie op een andere manier eindigde dan via de knop
+        // Uitloggen (verlopen, uitgelogd in een ander venster).
+        void clearSnapshots();
       }
     }
 

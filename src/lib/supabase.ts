@@ -36,7 +36,7 @@ export const supabase = createClient(
 
 
 export interface SupabaseSession {
-  user: { id: string };
+  user: { id: string; email?: string | null };
   access_token?: string;
 }
 

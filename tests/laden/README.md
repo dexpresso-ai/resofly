@@ -12,7 +12,15 @@ naar het netwerkverkeer en naar het scherm:
    JavaScript-fout;
 3. een geladen groep wordt bewaard, en na Verversen op de achtergrond ververst;
 4. het ticketvenster laadt zelf de tijdlijn;
-5. een groep die niet laadt, geeft een melding met "Opnieuw proberen".
+5. een groep die niet laadt, geeft een melding met "Opnieuw proberen";
+6. opnieuw openen begint bij de bewaarde stand van de vorige keer
+   (`src/lib/workspaceSnapshot.ts`): de werkruimte en de agenda staan er
+   voordat de server antwoordt, zonder laadscherm. De stand van een andere
+   gebruiker, van een module die is dichtgezet en alles na uitloggen gaat weg.
+
+De pagina's van één browsercontext delen IndexedDB, dus vanaf de tweede pagina
+begint elke pagina bij de bewaarde stand. Wil een controle een groep zien die
+nog nooit laadde, geef hem dan een eigen context (zoals bij de mislukte groep).
 
 ```bash
 npx playwright install chromium   # eenmalig

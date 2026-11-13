@@ -1,5 +1,6 @@
 import { supabaseAuth } from './supabase';
 import { disablePush } from './push-api';
+import { clearSnapshots } from './workspaceSnapshot';
 
 // Werkgegevens die de app per gebruiker in deze browser bewaart. Voorkeuren
 // (thema, zoom, weergave) blijven staan; dit hoort bij de persoon die uitlogt.
@@ -21,6 +22,9 @@ const USER_DATA_KEY_PREFIXES = [
  */
 export async function signOutOnThisDevice(): Promise<void> {
   await disablePush().catch(() => undefined);
+  // De bewaarde stand van de werkruimte (src/lib/workspaceSnapshot.ts): klanten,
+  // facturen en taken van deze gebruiker horen na uitloggen niet in de browser.
+  await clearSnapshots();
   try {
     const keys: string[] = [];
     for (let i = 0; i < window.localStorage.length; i += 1) {
