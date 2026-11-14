@@ -119,8 +119,13 @@ organisatie wordt onthouden, zoals voorheen.
 - `npm run test:mobile -- --theme=both` voor Instellingen → Domein (nu met albums live, de
   langste zin), de publieke galerij en Huisstijl: 18 pagina's, 0 met problemen.
 - `npm run build` (zoals Cloudflare Pages) en `scripts/check-csp-hash.mjs`.
-- `deno check`: niet in deze sessie (esm.sh en deno.land zijn hier niet bereikbaar); wel in de
-  job *edge-functions* van *Frontend checks* in GitHub, zie Uitrol.
+- `npm run test:stromen -- rook api` (66 stappen, 0 fout), `npm run test:loading`,
+  `npm run test:inrichten` en `npm run test:terugknop` (12 van 12).
+- *Frontend checks* in GitHub op de branch, vóór het samenvoegen (run 43595863471): typecheck,
+  CSP, unittests, de hele mobiele lay-outtest in donker en licht (620 pagina's, 0 met
+  problemen), laden per module, inrichten, terugknop, `deno check` op de lijst (met
+  `client-domains` en `gallery-public`) en de migraties vanaf nul. Allemaal groen. In deze
+  sessie zelf kon `deno check` niet: esm.sh en deno.land zijn hier niet bereikbaar.
 
 ## Uitrol
 
