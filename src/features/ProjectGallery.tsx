@@ -42,6 +42,7 @@ import {
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
 import { derivedFileName, formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
 import { useClientBaseUrl } from '../services/domainService';
+import { useBackStep } from '../lib/useBackStep';
 
 const galleryStatusLabels: Record<Gallery['status'], string> = {
   draft: 'Concept',
@@ -386,6 +387,13 @@ export function GalleryTab({
 
   // Terug naar de lijst betekent: er is niets meer om schermvullend te tonen.
   useEffect(() => { if (!openId) setFullscreen(false); }, [openId]);
+
+  // De terugknop van de telefoon: eerst uit de presenteerstand (zoals Escape),
+  // dan van een album terug naar de lijst (zoals "← Galerijen"). Het album
+  // waarmee een eigen tabblad opende niet: daar gaat terug meteen naar het
+  // project waar je vandaan kwam, niet eerst naar een lijst die je nooit zag.
+  useBackStep(openGallery !== null && openId !== (initialGalleryId ?? null), () => setOpenId(null));
+  useBackStep(fullscreen, () => setFullscreen(false));
 
   // Gaat het album dicht (of het scherm weg) terwijl de vraag over dubbele
   // bestanden openstaat, dan stopt die upload. Zonder dit bleef hij eeuwig
@@ -1841,6 +1849,11 @@ function GalleryDuplicatesDialog({ prompt, onAnswer }: {
     dialogRef.current?.querySelector<HTMLButtonElement>('[data-autofocus]')?.focus();
   }, []);
 
+  // De terugknop van de telefoon is ook annuleren, net als Escape. Zonder dit
+  // sloot terug het venster "Bestanden" eronder, terwijl de upload nog op een
+  // antwoord wachtte.
+  useBackStep(true, () => onAnswer(null));
+
   // Escape = annuleren. In de capture-fase en daarna niet verder: anders sloot
   // dezelfde toets ook het venster "Bestanden" eronder, of de presenteerstand.
   useEffect(() => {
@@ -2055,6 +2068,8 @@ function GallerySettingsModal({
   /** Huisstijl van de klantpagina, voor het voorbeeld onder "Weergave". */
   branding?: BrandingPayload | null;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onClose);
   const [title, setTitle] = useState(gallery.title);
   const [description, setDescription] = useState(gallery.description ?? '');
   const [format, setFormat] = useState<GalleryFormat>(gallery.format);
@@ -3026,6 +3041,8 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
   onClose: () => void;
   onPatch: (patch: Partial<Gallery>) => Promise<void>;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onClose);
   const [pin, setPin] = useState('');
   // Alleen nodig in het gaatje tussen opslaan en het opnieuw inlezen van de
   // galerij; daarna komt de link uit de galerij zelf.

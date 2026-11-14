@@ -11,6 +11,7 @@ import { useLook, type Look } from '../lib/look';
 import { formatClock, sunTimes } from '../lib/sun';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
 import { useBuildingReports } from '../lib/aiReports';
+import { useBackStep } from '../lib/useBackStep';
 
 /**
  * De navigatie van Zenit (designvoorstel 2026-10-22): een smalle nachtrail met
@@ -180,6 +181,8 @@ function usePopover() {
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  // De terugknop van de telefoon sluit het venster, zoals een klik ernaast.
+  useBackStep(open, () => setOpen(false));
   useEffect(() => {
     if (!open) return;
     const onPointer = (event: MouseEvent) => {
@@ -350,7 +353,8 @@ export function ZenitNav({
     if (target === 'calendar') {
       // Zelfde als de zijbalk: naar de agenda én naar het rooster scrollen.
       onPage('calendar');
-      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#calendar-agenda`);
+      // Met history.state erin: daar staat de stap van de terugknop (lib/backButton.ts).
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}#calendar-agenda`);
       window.setTimeout(() => window.dispatchEvent(new CustomEvent('brandcore:calendar-anchor', { detail: { anchor: 'agenda' } })), 80);
       return;
     }

@@ -29,6 +29,7 @@ import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscree
 import { normalizeGalleryLayout, type GalleryLayout } from '../lib/galleryLayout';
 import { planPhotoLayout, type LayoutTile } from '../lib/galleryLayoutEngine';
 import { swipeAxis, swipeStep, swipeVelocity, type SwipeAxis, type SwipeSample } from '../lib/swipe';
+import { useBackStep } from '../lib/useBackStep';
 
 /** Minimale item-vorm — zowel de app (GalleryItem) als het portaal (gesanitiseerd) passen hierin. */
 export type GalleryViewerItem = {
@@ -626,6 +627,10 @@ export function GalleryViewer({
   const zipSummary = useMemo(() => summarizeZip(items), [items]);
 
   const closeOverlays = useCallback(() => { setLightbox(null); setPlaying(null); setSlideshow(false); }, []);
+  // In de werkruimte sluit de terugknop van de telefoon de vergrote foto, de
+  // video of de diavoorstelling, zoals het kruisje. Op de publieke galerij
+  // staat de terugknop niet aan (lib/backButton.ts), daar verandert niets.
+  useBackStep(lightbox !== null || playing !== null || slideshow, closeOverlays);
 
   const patchSlideSettings = useCallback((patch: Partial<SlideshowSettings>) => {
     setSlideSettings(prev => ({ ...prev, ...patch }));

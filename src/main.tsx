@@ -6,7 +6,10 @@ import { TabBar } from './components/TabBar';
 import { BottomNav } from './components/BottomNav';
 import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type PersistedTab } from './lib/workspaceTabs';
 import { Breadcrumbs } from './components/Breadcrumbs';
-import type { CrumbTarget } from './lib/breadcrumbs';
+import type { CrumbHome, CrumbTarget } from './lib/breadcrumbs';
+import { backButton } from './lib/backButton';
+import { BackScope, useBackStep } from './lib/useBackStep';
+import { TabHistory, type TabHistoryContext, type TabView } from './lib/tabHistory';
 import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type DataGroup, type GroupState } from './lib/dataGroups';
 import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, isAdminRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
 import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFromPath, isPageInApp, isRunningInstalled, standaloneAppFromPath, WORKSPACE_APP, type InstallableApp, type StandaloneApp } from './lib/standaloneApps';
@@ -367,12 +370,81 @@ if (INSTALL_APP) {
   captureInstallPrompt();
 }
 
+// Herladen midden in de app laat items in de browsergeschiedenis achter van
+// een document dat er niet meer is: meteen terug naar het begin, vóór React
+// iets laadt (zie returnToStartAfterReload in lib/backButton.ts).
+if (typeof window !== 'undefined') backButton().returnToStartAfterReload();
+
 /** Waar een nieuw tabblad opent: het dashboard, of in een losse app zijn eerste pagina. */
 const START_PAGE: Page = (STANDALONE_APP?.home[0] as Page | undefined) ?? 'dashboard';
 
 /** De eerste pagina van de losse app die dit teamlid mag openen; in de werkruimte null. */
 function appStartPage(permissions: Permissions): Page | null {
   return STANDALONE_APP ? (appHomePage(STANDALONE_APP, permissions.canOpenPage) as Page | null) : null;
+}
+
+/** In een losse app begint het kruimelpad (en eindigt terug) bij het begin van de app. */
+function appCrumbHome(permissions: Permissions): CrumbHome | null {
+  return STANDALONE_APP ? { page: appStartPage(permissions) ?? START_PAGE, label: STANDALONE_APP.shortName, pages: STANDALONE_APP.pages } : null;
+}
+
+/** Wat de terugknop van een tabblad onthoudt (lib/tabHistory.ts). */
+function tabViewOf(tab: WorkspaceTab): TabView {
+  return {
+    page: tab.page,
+    projectId: tab.projectId,
+    clientId: tab.clientId,
+    galleryId: tab.galleryId,
+    statsReportId: tab.statsReportId,
+    settingsTab: tab.page === 'settings' ? tab.settingsNav?.tab ?? null : null,
+  };
+}
+
+/**
+ * Een vorige pagina terugzetten. De sprongen (een gesprek in Berichten, een
+ * agent die openklapt, een concept) gaan leeg mee: die hoorden bij de keer
+ * dat je er heen sprong, en zouden anders opnieuw openspringen.
+ */
+function restoredView(view: TabView): Partial<ViewState> {
+  return {
+    page: view.page as Page,
+    projectId: view.projectId,
+    clientId: view.clientId,
+    galleryId: view.galleryId,
+    statsReportId: view.statsReportId,
+    settingsNav: view.page === 'settings' && view.settingsTab ? { tab: view.settingsTab as SettingsTab, key: Date.now() } : null,
+    pendingReport: null,
+    openAgentId: null,
+    commFocus: null,
+    bookingFocus: null,
+    gerrieConversationsFocus: null,
+    pendingDraft: null,
+  };
+}
+
+/** Kan terug hier nog heen? Een verwijderd project of een dichte module niet. */
+function isRestorableView(view: TabView, data: AppData, permissions: Permissions): boolean {
+  if (!PAGE_TITLES[view.page] || !permissions.canOpenPage(view.page)) return false;
+  if (view.page === 'project') return data.projects.some(p => p.id === view.projectId);
+  if (view.page === 'client') return data.clients.some(c => c.id === view.clientId);
+  if (view.page === 'gallery') return data.galleries.some(g => g.id === view.galleryId);
+  if (view.page === 'report') return Boolean(view.statsReportId) && !view.statsReportId!.startsWith(NEW_REPORT_PREFIX);
+  return true;
+}
+
+/**
+ * Staat in de werkruimte: zolang die in beeld is, doet de terugknop van de
+ * telefoon "terug" in de app. Niet op het inlogscherm, de inrichting of een
+ * publieke pagina.
+ */
+function BackButtonActive() {
+  useEffect(() => {
+    const button = backButton();
+    button.start();
+    button.setEnabled(true);
+    return () => button.setEnabled(false);
+  }, []);
+  return null;
 }
 
 /** Nieuw, leeg tabblad op een gegeven pagina (standaard het dashboard, of in een losse app zijn begin). */
@@ -1113,9 +1185,14 @@ function App() {
   // De rapportages van Gerrie van dit teamlid: voor de zijbalk en de tabbladtitels.
   // Alleen de titels; de inhoud laadt de pagina zelf.
   const aiReportList = useAiReportList(loadedOrganizationId, permissions.canRead('stats') && permissions.canRead('gerrie'));
+  // Waar de terugknop van de telefoon heen gaat in elk werktabblad (lib/tabHistory.ts).
+  const tabHistoryRef = useRef<TabHistory | null>(null);
+  if (!tabHistoryRef.current) tabHistoryRef.current = new TabHistory();
   // Een nieuwe rapportage krijgt pas na een halve seconde zijn id; het tabblad
   // stond tot dan op een tijdelijke sleutel. Zo blijft hij na herladen bestaan.
   useEffect(() => onReportCreated((key, reportId) => {
+    // Zelfde pagina, ander id: voor de terugknop geen stap.
+    tabHistoryRef.current?.renameReport(key, reportId);
     setTabs(ts => ts.map(t => (t.statsReportId === key ? { ...t, statsReportId: reportId } : t)));
   }), []);
   // Collega's om werk aan toe te wijzen of mee te chatten. De boekhouder is een
@@ -1830,6 +1907,39 @@ function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [mobileNavOpen]);
+  // En met de terugknop van de telefoon, zoals met het kruisje.
+  useBackStep(mobileNavOpen, () => setMobileNavOpen(false));
+
+  // De terugknop van de telefoon in het werktabblad: eerst de vorige pagina's,
+  // dan omhoog langs het kruimelpad (lib/tabHistory.ts). Vensters en menu's
+  // melden zich zelf aan (useBackStep) en gaan daarvóór dicht.
+  const tabBackContext = (): TabHistoryContext => ({
+    data,
+    home: appCrumbHome(permissions),
+    isValid: view => isRestorableView(view, data, permissions),
+  });
+  // Een ref, zodat een druk op terug altijd de tabbladen van de laatste render ziet.
+  const goBackInTabRef = useRef<(steps: number) => void>(() => {});
+  goBackInTabRef.current = (steps) => {
+    const action = tabHistoryRef.current!.back(tabs.map(t => ({ id: t.id, view: tabViewOf(t) })), activeTab.id, steps, tabBackContext());
+    if (action.kind === 'view') {
+      patchActiveTab(() => restoredView(action.view));
+    } else if (action.kind === 'opener') {
+      // Terug naar het tabblad waaruit dit tabblad opende, en dit tabblad sluit,
+      // zoals een tabblad in Chrome dat een link opende. Met een bewerking open
+      // alleen wisselen: die gooien we niet ongevraagd weg.
+      const closing = activeTab;
+      if (!closing.edit && tabs.length > 1) setTabs(ts => ts.filter(t => t.id !== closing.id));
+      setActiveTabId(action.tabId);
+    }
+  };
+  useEffect(() => {
+    const history = tabHistoryRef.current!;
+    const context = tabBackContext();
+    const entries = tabs.map(t => ({ id: t.id, view: tabViewOf(t) }));
+    history.observe(entries, activeTab.id, context);
+    backButton().setBase(history.steps(entries, activeTab.id, context), steps => goBackInTabRef.current(steps));
+  });
 
   const project = useMemo(() => data.projects.find(p => p.id === projectId) ?? null, [data.projects, projectId]);
   const client = useMemo(() => data.clients.find(c => c.id === clientId) ?? null, [data.clients, clientId]);
@@ -4203,9 +4313,10 @@ function App() {
   };
 
   // In een losse app begint het kruimelpad bij het begin van de app.
-  const crumbHome = STANDALONE_APP ? { page: appStartPage(permissions) ?? START_PAGE, label: STANDALONE_APP.shortName, pages: STANDALONE_APP.pages } : null;
+  const crumbHome = appCrumbHome(permissions);
 
   return <div className={`app${sidebarPinned ? ' sidebar-pinned' : ''}`}>
+    <BackButtonActive />
     <button
       type="button"
       className="mobile-nav-toggle"
@@ -4268,12 +4379,16 @@ function App() {
           EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}
       {tabs.map(tab => (
         <section key={tab.id} className="content" data-page={tab.page} hidden={tab.id !== activeTab.id}>
+          {/* Alleen vensters in het tabblad dat je ziet, gaan dicht met de
+              terugknop van de telefoon (lib/useBackStep.ts). */}
+          <BackScope.Provider value={tab.id === activeTab.id}>
           {/* Het kruimelpad staat bóven de foutmelding: ook als een pagina stukloopt,
               blijft de weg terug zichtbaar. */}
           <Breadcrumbs view={tab} data={data} onNavigate={navigateCrumb} home={crumbHome} />
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
           {tab.edit && <EditModal edit={tab.edit} data={data} dataStatus={dataGroupStatus} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
+          </BackScope.Provider>
         </section>
       ))}
     </main>

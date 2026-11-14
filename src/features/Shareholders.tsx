@@ -17,6 +17,7 @@ import {
 import type { ShareholderInput } from '../lib/repository';
 import { todayIso } from '../lib/dates';
 import { parseDutchAmount, parseDutchAmountCents } from '../lib/money';
+import { useBackStep } from '../lib/useBackStep';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pct = (bp: number | null | undefined) => `${((bp ?? 0) / 100).toFixed(2).replace('.', ',')}%`;
@@ -385,6 +386,8 @@ function ShareholderDialog({ input, isNew, busy, onCancel, onSave }: {
   input: ShareholderInput; isNew: boolean; busy: boolean;
   onCancel: () => void; onSave: (input: ShareholderInput) => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onCancel);
   const [form, setForm] = useState<ShareholderInput>(input);
   const set = <K extends keyof ShareholderInput>(k: K, v: ShareholderInput[K]) => setForm(f => ({ ...f, [k]: v }));
 

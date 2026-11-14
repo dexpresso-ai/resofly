@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { CheckSquare, ChevronDown, FileText, FolderOpen, Plus, Receipt, StickyNote, Ticket, Users, type LucideIcon } from 'lucide-react';
+import { useBackStep } from '../lib/useBackStep';
 
 /** Wat je vanuit de bovenbalk kunt maken. Elk soort opent hetzelfde
  *  bewerkvenster als de knop "+ Nieuw" op zijn eigen pagina. */
@@ -37,6 +38,8 @@ export function CreateMenu({ kinds, onCreate, busy = false }: {
   const boxRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
+  // De terugknop van de telefoon sluit het menu, zoals een klik ernaast.
+  useBackStep(open, () => setOpen(false));
 
   useEffect(() => { if (busy) setOpen(false); }, [busy]);
 

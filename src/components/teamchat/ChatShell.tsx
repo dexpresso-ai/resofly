@@ -9,6 +9,7 @@ import {
 } from './Panes';
 import type { TeamChatApi } from './useTeamChat';
 import { Avatar, useNarrowViewport } from './ui';
+import { useBackStep } from '../../lib/useBackStep';
 
 const VIEW_KEY = 'resofly.chat.view';
 
@@ -155,6 +156,14 @@ export function ChatShell({ api, variant, onClose, onExpand, active = true }: {
       : view === 'files'
         ? <FilesView api={api} onOpen={(c, m) => openConversation(c, m)} />
         : <EmptyMain api={api} view={view} onNewChat={startNewChat} onNewChannel={() => setDialog('channel')} />;
+
+  // Op de telefoon en in het zwevende paneel vult een gesprek het venster, met
+  // een terugpijl in de kop. De terugknop van de telefoon doet hetzelfde.
+  useBackStep(single && (composing || !!activeVm), () => {
+    if (composing) { setComposing(false); return; }
+    setActiveId(null);
+    autoPicked.current = false;
+  });
 
   const dialogs = (
     <>

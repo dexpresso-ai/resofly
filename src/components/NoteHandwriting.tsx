@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Check, Loader2, PenLine, Trash2 } from 'lucide-react';
 import { Button } from './Ui';
 import { InkCanvas, useInkTheme } from './InkCanvas';
+import { useBackStep } from '../lib/useBackStep';
 import { loadNoteHandwriting, saveNoteHandwriting } from '../lib/repository';
 import { createInkDocument, inkPageCount, inkSizeIssue, inkThumbnailDataUrl, isInkEmpty, parseInkDocument, type InkDocument } from '../lib/ink';
 import type { AppData, Note, NoteHandwritingSummary, UUID } from '../types';
@@ -339,6 +340,8 @@ export function InkComposer({ defaultTitle, subtitle, onCancel, onSave }: {
     if (!isInkEmpty(docRef.current) && !window.confirm('Dit handschrift is nog niet opgeslagen. Toch sluiten?')) return;
     onCancel();
   }, [onCancel]);
+  // De terugknop van de telefoon is Annuleren, met dezelfde vraag als er al iets op het vel staat.
+  useBackStep(true, cancel);
 
   async function save() {
     if (saving) return;

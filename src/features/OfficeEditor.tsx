@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Download, X } from 'lucide-react';
 import type { OfficeSession } from '../lib/office';
+import { useBackStep } from '../lib/useBackStep';
 
 /**
  * Volledig-scherm Collabora-editor. Collabora verwacht een POST met het WOPI-access_token
@@ -55,6 +56,8 @@ export function OfficeEditor({ session, onClose, onDownload }: { session: Office
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  // De terugknop van de telefoon sluit de editor, zoals Sluiten.
+  useBackStep(true, onClose);
 
   return (
     <div style={overlay} role="dialog" aria-modal="true" aria-label={session.fileName}>

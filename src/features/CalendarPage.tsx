@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import type React from 'react';
 import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Link2, Lock, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { useBackStep } from '../lib/useBackStep';
 import { hasPlannedTime, taskBlockMinutes } from '../lib/planning';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
@@ -2066,6 +2067,8 @@ function MonthDayCard({ day, rect, items, sourceColors, taskColor, onOpenDay, on
   onEditTask: (task: Task) => void;
   onClose: () => void;
 }) {
+  // De terugknop van de telefoon sluit de dagkaart, zoals een tik ernaast.
+  useBackStep(true, onClose);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
 
@@ -2806,6 +2809,8 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
   onSubmit: (e: FormEvent) => void;
   onClose: () => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onClose);
   const editing = Boolean(newEvent.editingEventId);
   const selectedSource = writeableSources.find(s => s.id === newEvent.sourceId);
   return (
@@ -2919,6 +2924,8 @@ function CalendarEventDetailPanel({ event, organizationId, data, sources, videoS
   onDeleteEvent: (event: CalendarExternalEvent) => void | Promise<void>;
   onClose: () => void;
 }) {
+  // De terugknop van de telefoon sluit het paneel, zoals een tik ernaast.
+  useBackStep(Boolean(event), onClose);
   const [selectedNoteId, setSelectedNoteId] = useState('');
   // Rechtstreeks vanuit de afspraak een notitie toevoegen: getypt (snelle
   // notitie) of geschreven (pen, schermvullend) — zonder het paneel te verlaten.

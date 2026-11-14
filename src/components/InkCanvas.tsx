@@ -7,6 +7,7 @@ import {
   simplifyPoints, type InkColorKey, type InkDocument, type InkPage, type InkPaper, type InkStroke, type InkStrokeTool, type InkTheme, type InkTool,
 } from '../lib/ink';
 import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
+import { useBackStep } from '../lib/useBackStep';
 
 /**
  * Handschrift-editor: schrijven met een pen op een tablet, alsof je op een
@@ -353,6 +354,8 @@ export function InkCanvas({ value, onChange, readOnly = false, title, status, ac
     setSheetState(next);
     onSheetChange?.(next);
   }, [onSheetChange]);
+  // De terugknop van de telefoon verlaat de tabletmodus, zoals Klaar.
+  useBackStep(sheet, () => setSheet(false));
 
   useEffect(() => {
     if (!sheet) return;

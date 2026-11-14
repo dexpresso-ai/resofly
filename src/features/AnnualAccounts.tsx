@@ -25,6 +25,7 @@ import {
 } from '../services/annualAccountsService';
 import { formatISODate } from '../lib/dates';
 import { parseDutchAmountCents } from '../lib/money';
+import { useBackStep } from '../lib/useBackStep';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const today = () => formatISODate(new Date());
@@ -194,6 +195,11 @@ export function AnnualAccountsPage({ data, organizationId, canWrite, canAdmin, b
   const [message, setMessage] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [preview, setPreview] = useState<{ url: string; result: AnnualAccountsPdfResult } | null>(null);
+  // De terugknop van de telefoon sluit het voorbeeld, zoals een tik ernaast.
+  useBackStep(preview !== null, () => {
+    if (preview) URL.revokeObjectURL(preview.url);
+    setPreview(null);
+  });
 
   const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
   const isCorporate = ['bv', 'nv', 'cooperatie'].includes(legalForm);
@@ -1247,6 +1253,8 @@ function PrepareDialog({ year, size, shareholders, filed, busy, error, onCancel,
     supersedeReason: string | null;
   }) => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onCancel);
   const [preparedOn, setPreparedOn] = useState(today());
   const [basis, setBasis] = useState<AccountingBasis>('commercieel');
   const [signatories, setSignatories] = useState<SignatoryDraft[]>([{ name: '', role: 'bestuurder', shareholderId: '' }]);
@@ -1447,6 +1455,8 @@ function AdoptDialog({ account, busy, error, onCancel, onSubmit }: {
     auditorMissingGround: string | null;
   }) => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onCancel);
   /** Bij lid 5 is de vaststellingsdatum geen keuze: de laatste handtekening. */
   const lastSignature = useMemo(() => {
     const dates = account.signatures.map(s => s.signedOn).filter((d): d is string => Boolean(d));
@@ -1618,6 +1628,8 @@ function FileDialog({ account, busy, error, onCancel, onSubmit }: {
     auditorMissingGround: string | null;
   }) => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onCancel);
   const [date, setDate] = useState(today());
   const [reference, setReference] = useState('');
   const [unadopted, setUnadopted] = useState(account.adoptionDate === null);
@@ -1738,6 +1750,8 @@ function ExtendDialog({ account, busy, error, onCancel, onSubmit }: {
   onCancel: () => void;
   onSubmit: (input: { months: number; reason: string; decidedOn: string }) => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onCancel);
   const [months, setMonths] = useState('5');
   const [reason, setReason] = useState('');
   const [decidedOn, setDecidedOn] = useState(today());
@@ -1791,6 +1805,8 @@ function ReverseDialog({ account, busy, error, onCancel, onSubmit }: {
   onCancel: () => void;
   onSubmit: (reason: string) => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onCancel);
   const [reason, setReason] = useState('');
 
   return (

@@ -1,14 +1,17 @@
 import { useEffect } from 'react';
 import { sanitizeRichContentHtml } from '../lib/sanitizeHtml';
+import { useBackStep } from '../lib/useBackStep';
 
-/** Leesvenster voor een gedeelde notitie of tekstdocument. Sluit op Escape en op
- *  een klik buiten het venster, net als de rest van de app. */
+/** Leesvenster voor een gedeelde notitie of tekstdocument. Sluit op Escape, op
+ *  een klik buiten het venster en met de terugknop van de telefoon, net als de
+ *  rest van de app. */
 export function ReadModal({ title, html, onClose }: { title: string; html: string; onClose: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  useBackStep(true, onClose);
 
   return <div className="modal-bg open" onMouseDown={onClose}>
     <section className="modal share-read-modal" role="dialog" aria-modal="true" aria-label={title} onMouseDown={e => e.stopPropagation()}>
