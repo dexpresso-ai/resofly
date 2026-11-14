@@ -857,7 +857,10 @@ function PlanStep({ organizationId, billing, businessStatus, creativeStatus, pen
   }, [waiting, hasSubscription, organizationId, onRefresh]);
 
   const planPrice = plan ? (interval === 'year' ? plan.yearly_price_cents : plan.monthly_price_cents) : 0;
-  const creativePrice = plan ? ((interval === 'year' ? plan.creative_addon_yearly_price_cents : plan.creative_addon_price_cents) ?? 0) : 0;
+  // Inbegrepen in het plan (sinds 20261114100000 bij elk plan): dan geen vinkje en geen meerprijs.
+  const creativePrice = plan && plan.limits?.creative_included !== true
+    ? ((interval === 'year' ? plan.creative_addon_yearly_price_cents : plan.creative_addon_price_cents) ?? 0)
+    : 0;
   const businessPrice = businessStatus ? (businessStatus.billing_interval === 'year' ? businessStatus.addon_yearly_price_cents : businessStatus.addon_price_cents) : (plan?.business_addon_price_cents ?? 0);
   const unit = (billing?.billing_interval ?? interval) === 'year' ? 'jaar' : 'maand';
   const currency = plan?.currency ?? billing?.currency ?? 'EUR';
