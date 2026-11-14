@@ -134,7 +134,14 @@ en Stream krijgen de nieuwe naam.
 - Schermafdrukken bekeken in donker en licht, op desktop en op een telefoon van 390 px breed. Op de
   telefoon stonden de drie knoppen van de vraag scheef over twee regels. Nu staan ze onder
   elkaar, even breed, met de hoofdknop bovenaan.
-- `npm run test:mobile -- --theme=both`: zie hieronder.
+- `npm run test:mobile -- --theme=both --pages=project,public-gallery,projects`: 18 metingen, 0
+  met problemen. De volledige ronde (alle pagina's) liep in de cloudsessie langer dan 25 minuten
+  en is daar afgebroken; niet gedraaid dus. De vraag zelf verschijnt pas bij een upload en is
+  hierboven in de UI-test en op schermafdrukken bekeken.
+- `npm run test:loading`: alle controles geslaagd.
+- Na het samenvoegen met `staging` (de wijziging "een foto houdt de naam van de telefoon", die
+  dezelfde uploadregels raakte): preview en thumb heten nu `derivedFileName(…, nieuwe naam)`.
+  Daarna opnieuw typecheck, `npm test` (1815 geslaagd), `galerij-namen` en `ui.mjs galerij`: groen.
 
 ## Uitrol
 
