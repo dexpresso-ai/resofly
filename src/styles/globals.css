@@ -6802,6 +6802,14 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 @keyframes galv-ss-slide{from{opacity:0;transform:translateX(4.5%)}to{opacity:1;transform:none}}
 @keyframes galv-ss-zoom{from{transform:scale(1.001)}to{transform:scale(1.085)}}
 
+/* Vegen op een aanraakscherm (useSwipeToStep in GalleryViewer): tijdens het
+   slepen volgt het kader de vinger, daarna komt de nieuwe foto binnen van de
+   kant waar de vinger heen ging. Zo voelt het als bladeren, niet als een knop. */
+.galv-swipe-next{animation:galv-swipe-next .3s cubic-bezier(.22,.61,.36,1) both}
+.galv-swipe-prev{animation:galv-swipe-prev .3s cubic-bezier(.22,.61,.36,1) both}
+@keyframes galv-swipe-next{from{opacity:.25;transform:translateX(26%)}to{opacity:1;transform:none}}
+@keyframes galv-swipe-prev{from{opacity:.25;transform:translateX(-26%)}to{opacity:1;transform:none}}
+
 /* Beeldvullend: de foto neemt het hele scherm, het bijschrift legt zich er
    overheen in plaats van eronder. */
 .galv-lightbox.is-fill{padding:0}
