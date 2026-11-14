@@ -7012,6 +7012,24 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .pgal-brand .brand-logo{max-width:min(280px,60vw)}
 .pgal-brand .brand-logo img{height:auto;max-height:56px}
 .pgal-brand .brand-logo.on-plate img{max-height:44px}
+/* Bescherming op de deellinkpagina (src/lib/screenshotGuard.ts). De klassen
+   staan op <body>, zodat ze ook gelden in de lightbox en de videospeler.
+   - Lang drukken op een foto (iPhone: "Bewaar afbeelding") en slepen naar het
+     bureaublad: uit. Alleen op de beelden zelf; tekst en velden blijven
+     gewoon te selecteren.
+   - pgal-shielded: alles behalve de melding onzichtbaar, tot de bezoeker
+     terug is. visibility en geen display, dan verspringt er niets. */
+body.pgal-protected .pgal img,body.pgal-protected .pgal video{-webkit-touch-callout:none;-webkit-user-drag:none;-webkit-user-select:none;user-select:none}
+.pgal-shield{display:none}
+body.pgal-shielded .pgal>:not(.pgal-shield){visibility:hidden}
+body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;background:var(--gal-bg,var(--bg));color:var(--gal-text,var(--text));font-size:13px}
+.pgal-shield strong{font-size:17px}
+.pgal-shield>span:last-child{max-width:320px;color:var(--gal-muted,var(--muted2));line-height:1.6}
+/* Afdrukken (ook "Opslaan als pdf"): geen foto's, alleen een regel uitleg. */
+@media print{
+  body.pgal-protected #root{display:none!important}
+  body.pgal-protected::after{content:"Deze galerij kan niet worden afgedrukt.";display:block;padding:40px;font:14px/1.5 system-ui,sans-serif;color:#000}
+}
 
 /* ── Achtergrond van de galerij ──────────────────────────────────────────────
    De gebruiker kiest één kleur; --gal-text/-muted/-border/-surface worden in
