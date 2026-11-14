@@ -152,3 +152,18 @@ migratie. De media-worker verandert niet. Volgorde maakt niet uit:
   plaats van stil een tweede bestand te maken;
 - de nieuwe app met de oude database: de vraag werkt, alleen de bewaking bij twee tegelijk
   ontbreekt nog.
+
+### Uitgerold op 14 november (alleen staging)
+
+- `staging` op `b4220e9`.
+- **Database:** *Deploy Supabase (staging)* run 236 geslaagd: migraties gezet, edge functions
+  uitgerold, rooktest geslaagd (ook "anon heeft geen rechten in public" en het boekhouder-hek).
+- **Frontend checks** run 231 geslaagd, met wat in de cloudsessie niet lukte: de volledige mobiele
+  lay-outtest in donker en licht. Verder typecheck, unit tests, laden per module,
+  inrichtingsstappen, Deno-typecheck, en de migraties vanaf nul met "elk migratiebestand is
+  toegepast".
+- **App:** Cloudflare Pages bouwt `staging` zelf. De cloudsessie kan Cloudflare niet bereiken;
+  niet nagekeken dat die build klaar is.
+- Niet gedaan: op staging zelf kijken of er al dubbele namen in albums staan. De Management API
+  was vanuit de sessie niet bereikbaar. Dat hoeft ook niet: oude dubbele namen blijven staan en
+  hinderen de nieuwe regel niet.
