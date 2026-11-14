@@ -36,7 +36,7 @@ import {
   streamDownloadUrl, uploadGalleryFile, uploadGalleryFileVariant, type GalleryTokenBundle,
 } from '../lib/gallery';
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
-import { formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
+import { derivedFileName, formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
 import { useClientBaseUrl } from '../services/domainService';
 
 const galleryStatusLabels: Record<Gallery['status'], string> = {
@@ -634,8 +634,8 @@ export function GalleryTab({
         // Een foto van 100 megapixel haalt de 64 MB per request; uploadGalleryFile
         // schakelt dan zelf over op delen.
         uploadGalleryFile(file, file.name, file.type, organizationId, gallery.id, uploadGroupId, 'original'),
-        uploadGalleryFileVariant(derived.preview, `preview-${file.name}.jpg`, 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'preview'),
-        uploadGalleryFileVariant(derived.thumb, `thumb-${file.name}.jpg`, 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb'),
+        uploadGalleryFileVariant(derived.preview, derivedFileName('preview', file.name), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'preview'),
+        uploadGalleryFileVariant(derived.thumb, derivedFileName('thumb', file.name), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb'),
       ]);
       const failure = settled.find(result => result.status === 'rejected');
       if (failure) {
@@ -678,7 +678,7 @@ export function GalleryTab({
     let thumbKey: string | null = null;
     let thumbSize = 0;
     if (poster.thumb) {
-      const thumb = await uploadGalleryFileVariant(poster.thumb, `thumb-${file.name}.jpg`, 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb');
+      const thumb = await uploadGalleryFileVariant(poster.thumb, derivedFileName('thumb', file.name), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb');
       thumbKey = thumb.key;
       thumbSize = thumb.size;
     }
@@ -905,11 +905,10 @@ export function GalleryTab({
     }
     const previous = openGallery;
     const coverId = crypto.randomUUID();
-    const base = file.name.replace(/\.[^.]+$/, '') || 'cover';
     const { preview, thumb } = await generateImageDerivatives(file);
     const [uploadedPreview, uploadedThumb] = await Promise.all([
-      uploadGalleryFileVariant(preview, `${base}.jpg`, 'image/jpeg', organizationId, previous.id, coverId, 'preview'),
-      uploadGalleryFileVariant(thumb, `${base}.jpg`, 'image/jpeg', organizationId, previous.id, coverId, 'thumb'),
+      uploadGalleryFileVariant(preview, derivedFileName('preview', file.name), 'image/jpeg', organizationId, previous.id, coverId, 'preview'),
+      uploadGalleryFileVariant(thumb, derivedFileName('thumb', file.name), 'image/jpeg', organizationId, previous.id, coverId, 'thumb'),
     ]);
     await patchGallery(previous, {
       cover_item_id: null,

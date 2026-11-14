@@ -137,6 +137,15 @@ weergavebestanden. De viewer leidt de variant af uit de key om te bepalen of
 er een afspeelknop hoort te staan (`videoPlaybackSource` in
 `src/lib/galleryMedia.ts`).
 
+**Vorm van de key** (`workers/media-api/src/galleryKeys.ts`):
+`{org}/gallery/{galerij}/{item}/{variant}-{uuid}/{naam}`. Een foto die op de
+telefoon `yes.jpg` heet, staat dus als `…/original-{uuid}/yes.jpg`, met
+`…/preview-{uuid}/preview-yes.jpg` en `…/thumb-{uuid}/thumb-yes.jpg` ernaast.
+Items van vóór 14 november 2026 hebben nog `…/{item}/{variant}-{uuid}-{naam}`.
+Worker en app lezen allebei de vormen. De variant komt altijd uit het deel dat
+de worker schrijft, nooit uit de naam: daarop beslist de worker of een link het
+origineel mag zien.
+
 **Downloadkwaliteit** geldt alleen voor foto's. Een `master` is bereikbaar met
 elk token dat downloaden toestaat — video's worden altijd in de originele
 resolutie geleverd.
