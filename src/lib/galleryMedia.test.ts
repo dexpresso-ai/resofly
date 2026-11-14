@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import {
   GALLERY_ZIP_MAX_BYTES,
   browserCanPlayVideo,
+  derivedFileName,
   formatBytesShort,
   itemZippable,
   keyVariant,
@@ -58,11 +59,31 @@ function photo(over: Partial<GalleryMediaItem> = {}): GalleryMediaItem {
   };
 }
 
-test('keyVariant leest de variant vooraan in de bestandsnaam', () => {
+test('keyVariant leest de variant vooraan in de bestandsnaam (oude vorm)', () => {
   assert.equal(keyVariant(key('master', 'a-b-c.mp4')), 'master');
   assert.equal(keyVariant(key('preview', 'x.jpg')), 'preview');
   assert.equal(keyVariant('gal/orig/1.jpg'), '');
   assert.equal(keyVariant(null), '');
+});
+
+test('keyVariant leest de variant uit de map ervoor (nieuwe vorm)', () => {
+  const nieuw = (variant: string, name: string) => `${ORG}/gallery/${GAL}/item-1/${variant}-abc/${name}`;
+  assert.equal(keyVariant(nieuw('master', 'clip.mp4')), 'master');
+  assert.equal(keyVariant(nieuw('master', 'mijn-clip.mp4')), 'master');
+  assert.equal(keyVariant(nieuw('original', 'preview-yes.jpg')), 'original');
+  assert.equal(keyVariant(nieuw('preview', 'preview-yes.jpg')), 'preview');
+  // Een video zonder kijkkopie speelt ook met de nieuwe sleutel uit R2 af.
+  assert.equal(videoPlaybackSource(video({ storage_key: nieuw('master', 'aftermovie.mp4') }), {}), 'file');
+});
+
+test('derivedFileName: preview-yes.jpg, niet preview-yes.jpg.jpg', () => {
+  assert.equal(derivedFileName('preview', 'yes.jpg'), 'preview-yes.jpg');
+  assert.equal(derivedFileName('thumb', 'yes.jpg'), 'thumb-yes.jpg');
+  assert.equal(derivedFileName('preview', 'yes.HEIC'), 'preview-yes.jpg');
+  assert.equal(derivedFileName('preview', 'Bruiloft Anne & Tom.png'), 'preview-Bruiloft Anne & Tom.jpg');
+  assert.equal(derivedFileName('thumb', 'clip.final.mp4'), 'thumb-clip.final.jpg');
+  assert.equal(derivedFileName('preview', 'zonder-extensie'), 'preview-zonder-extensie.jpg');
+  assert.equal(derivedFileName('preview', '.jpg'), 'preview-foto.jpg');
 });
 
 test('browserCanPlayVideo: containers die de browser aankan', () => {

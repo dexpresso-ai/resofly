@@ -899,17 +899,38 @@ export async function selectGalleries(organizationId: UUID): Promise<Gallery[]> 
   });
 }
 
-/** Items van één galerij (lazy — kan honderden rijen per galerij zijn). */
+/**
+ * Items van één galerij (lazy — kan duizenden rijen per galerij zijn). In
+ * pagina's: PostgREST kapt een antwoord af op 1000 rijen, en dan miste een
+ * album van 1500 foto's er stil 500. Die waren dan ook onzichtbaar voor de
+ * controle op dubbele bestanden.
+ */
 export async function selectGalleryItems(organizationId: UUID, galleryId: UUID): Promise<GalleryItem[]> {
-  const { data, error } = await supabase
+  return fetchAllPages<GalleryItem>(() => supabase
     .from('gallery_items')
     .select('*')
     .eq('organization_id', organizationId)
     .eq('gallery_id', galleryId)
     .order('sort_order', { ascending: true })
-    .order('created_at', { ascending: true });
-  if (error) throw error;
-  return (data ?? []) as GalleryItem[];
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true }));
+}
+
+/**
+ * Naam en grootte van alles wat nu in een album staat, voor de controle op
+ * dubbele bestanden vlak voor een upload. Vers uit de database en niet uit
+ * wat het scherm al had: een collega kan hetzelfde album net hebben gevuld.
+ */
+export async function selectGalleryItemNames(
+  organizationId: UUID,
+  galleryId: UUID,
+): Promise<Array<{ file_name: string; size_bytes: number }>> {
+  return fetchAllPages<{ file_name: string; size_bytes: number }>(() => supabase
+    .from('gallery_items')
+    .select('file_name,size_bytes')
+    .eq('organization_id', organizationId)
+    .eq('gallery_id', galleryId)
+    .order('id', { ascending: true }));
 }
 
 /**
