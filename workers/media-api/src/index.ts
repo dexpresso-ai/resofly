@@ -1,3 +1,5 @@
+import { galleryObjectKey, galleryVariantFromKey } from './galleryKeys.ts';
+
 export interface Env {
   MEDIA_BUCKET: R2Bucket;
   APP_ENV: string;
@@ -1037,7 +1039,10 @@ async function handleGalleryUpload(request: Request, env: Env, context: RouteCon
   const galleryId = (request.headers.get('x-gallery-id') || '').trim();
   const itemId = (request.headers.get('x-item-id') || '').trim();
   const variant = (request.headers.get('x-variant') || 'original').trim();
-  const fileName = sanitizeFileName(decodeMaybe(request.headers.get('x-file-name')) || 'bestand');
+  // Twee namen: de echte (spaties en accenten blijven) voor wie het bestand
+  // downloadt of bewaart, en een opgeschoonde voor in de sleutel.
+  const displayName = displayFileName(decodeMaybe(request.headers.get('x-file-name')) || 'bestand');
+  const fileName = sanitizeFileName(displayName);
   const contentType = (request.headers.get('x-file-type') || 'application/octet-stream').trim();
   const declaredSize = Number(request.headers.get('content-length') || '0');
 
@@ -1061,12 +1066,12 @@ async function handleGalleryUpload(request: Request, env: Env, context: RouteCon
   }
   await storageCheck();
 
-  const key = `${organizationId}/gallery/${galleryId}/${itemId}/${variant}-${crypto.randomUUID()}-${fileName}`;
+  const key = galleryObjectKey({ organizationId, galleryId, itemId, variant, uuid: crypto.randomUUID(), fileName });
 
   const object = await env.MEDIA_BUCKET.put(key, request.body, {
     httpMetadata: { contentType },
     customMetadata: {
-      name: fileName,
+      name: displayName,
       organizationId,
       entityType: 'gallery',
       entityId: galleryId,
@@ -1165,7 +1170,8 @@ async function handleGalleryMultipartCreate(request: Request, env: Env, context:
   const galleryId = (body.galleryId || '').trim();
   const itemId = (body.itemId || '').trim();
   const variant = (body.variant || 'master').trim();
-  const fileName = sanitizeFileName(body.fileName || 'bestand');
+  const displayName = displayFileName(body.fileName || 'bestand');
+  const fileName = sanitizeFileName(displayName);
   const contentType = (body.contentType || 'application/octet-stream').trim();
   const fileSize = Number(body.fileSize || 0);
 
@@ -1181,11 +1187,11 @@ async function handleGalleryMultipartCreate(request: Request, env: Env, context:
   if (fileSize > maxBytes) throw new HttpError(413, tooLargeMessage(maxBytes));
   await storageCheck();
 
-  const key = `${organizationId}/gallery/${galleryId}/${itemId}/${variant}-${crypto.randomUUID()}-${fileName}`;
+  const key = galleryObjectKey({ organizationId, galleryId, itemId, variant, uuid: crypto.randomUUID(), fileName });
   const upload = await env.MEDIA_BUCKET.createMultipartUpload(key, {
     httpMetadata: { contentType },
     customMetadata: {
-      name: fileName,
+      name: displayName,
       organizationId,
       entityType: 'gallery',
       entityId: galleryId,
@@ -1883,13 +1889,6 @@ async function failGalleryPurgeRow(env: Env, row: GalleryPurgeRow, error: unknow
   }).catch(() => undefined);
 }
 
-/** De variant staat vooraan in de bestandsnaam van de key (`{variant}-{uuid}-{naam}`). */
-function galleryVariantFromKey(key: string): string {
-  const fileName = key.slice(key.lastIndexOf('/') + 1);
-  const dash = fileName.indexOf('-');
-  return dash > 0 ? fileName.slice(0, dash) : '';
-}
-
 /** Serveer een galerijbestand inline (met Range-support voor video-seek). */
 async function handleGalleryFile(request: Request, env: Env, context: RouteContext, key: string): Promise<Response> {
   const payload = await requireGalleryToken(request, env);
@@ -2025,17 +2024,16 @@ function galleryFileHeaders(
   headers.set('X-Request-Id', context.requestId);
   setFileSecurityHeaders(headers);
   if (object.httpEtag) headers.set('ETag', object.httpEtag);
+  // Ook bij inline de naam meegeven. Zonder naam bewaarde "Afbeelding opslaan"
+  // (en lang drukken op een telefoon) het bestand onder het laatste deel van de
+  // sleutel, zoals `original-3f2a…-yes.jpg`, in plaats van `yes.jpg`.
   const name = object.customMetadata?.name;
-  headers.set(
-    'Content-Disposition',
-    (wantsDownload || !safeType) && name
-      ? `attachment; filename*=UTF-8''${encodeURIComponent(name)}`
-      : safeType ? 'inline' : 'attachment',
-  );
+  const fileNamePart = name ? `; filename*=UTF-8''${encodeURIComponent(name)}` : '';
+  headers.set('Content-Disposition', `${wantsDownload || !safeType ? 'attachment' : 'inline'}${fileNamePart}`);
   return headers;
 }
 
-/** `/gallery/file/{key}` — key bevat slashes (org/gallery/galerij-id/item-id/bestand). */
+/** `/gallery/file/{key}` — key bevat slashes (org/gallery/galerij-id/item-id/variant-uuid/bestand, zie galleryKeys.ts). */
 function matchGalleryFileRoute(pathname: string): string | null {
   const match = pathname.match(/^\/gallery\/file\/(.+)$/);
   if (!match?.[1]) return null;
@@ -2452,8 +2450,9 @@ function transferBlockedExtension(fileName: string): string | null {
   return TRANSFER_BLOCKED.has(ext) ? ext : null;
 }
 
-/** De naam zoals de ontvanger hem ziet: geen pad, geen stuurtekens, hoogstens 300 tekens. */
-function transferDisplayName(raw: string): string {
+/** De naam zoals de ontvanger hem ziet: geen pad, geen stuurtekens, hoogstens 300 tekens.
+ *  Voor zendingen en galerijbestanden; in de sleutel komt sanitizeFileName(naam). */
+function displayFileName(raw: string): string {
   const base = String(raw ?? '').split(/[\\/]/).pop() ?? '';
   // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[\u0000-\u001f\u007f]+/g, '').replace(/\s+/g, ' ').trim();
@@ -2628,7 +2627,7 @@ async function handleTransferUpload(request: Request, env: Env, context: RouteCo
   const contentType = (request.headers.get('x-file-type') || 'application/octet-stream').trim().slice(0, 200) || 'application/octet-stream';
 
   const { userId } = await authorizeTransferDraftWrite(request, env, organizationId, transferId);
-  const displayName = transferDisplayName(rawName);
+  const displayName = displayFileName(rawName);
   const blocked = transferBlockedExtension(displayName);
   if (blocked) throw new HttpError(422, `“${displayName}” is een .${blocked}-bestand. Programma’s en scripts kun je niet versturen.`);
   if (!request.body) throw new HttpError(400, 'Lege upload.');
@@ -2679,7 +2678,7 @@ async function handleTransferMultipartCreate(request: Request, env: Env, context
   const contentType = (body.contentType || 'application/octet-stream').trim().slice(0, 200) || 'application/octet-stream';
 
   const { userId } = await authorizeTransferDraftWrite(request, env, organizationId, transferId);
-  const displayName = transferDisplayName(body.fileName || 'bestand');
+  const displayName = displayFileName(body.fileName || 'bestand');
   const blocked = transferBlockedExtension(displayName);
   if (blocked) throw new HttpError(422, `“${displayName}” is een .${blocked}-bestand. Programma’s en scripts kun je niet versturen.`);
   if (!Number.isFinite(fileSize) || fileSize <= 0) throw new HttpError(400, 'Ongeldige bestandsgrootte.');
@@ -2759,7 +2758,7 @@ async function handleTransferMultipartComplete(request: Request, env: Env, conte
     throw error;
   }
 
-  const displayName = transferDisplayName(head?.customMetadata?.name || key.slice(key.lastIndexOf('/') + 1));
+  const displayName = displayFileName(head?.customMetadata?.name || key.slice(key.lastIndexOf('/') + 1));
   try {
     const item = await insertTransferItem(env, {
       organization_id: organizationId,
@@ -2827,7 +2826,7 @@ async function handleInternalTransferCopy(request: Request, env: Env, context: R
     throw error;
   }
 
-  const displayName = transferDisplayName(body.fileName || source.customMetadata?.name || 'bestand');
+  const displayName = displayFileName(body.fileName || source.customMetadata?.name || 'bestand');
   const key = `${organizationId}/transfer/${transferId}/${crypto.randomUUID()}-${sanitizeFileName(displayName)}`;
   const contentType = source.httpMetadata?.contentType || 'application/octet-stream';
   // De bestandsrij schrijft de edge function; die haalt deze regel weg zodra
@@ -2910,7 +2909,7 @@ async function handleInternalSignedUrls(request: Request, env: Env, context: Rou
     if (boundTransfer && !key.startsWith(`${organizationId}/transfer/${boundTransfer}/`)) {
       throw new HttpError(403, 'Dit bestand hoort niet bij deze zending.');
     }
-    const name = transferDisplayName(String(file?.fileName || '') || key.slice(key.lastIndexOf('/') + 1));
+    const name = displayFileName(String(file?.fileName || '') || key.slice(key.lastIndexOf('/') + 1));
     const payload: SignedFilePayload = { t: 'sf', org: organizationId, k: key, exp, n: name };
     if (boundTransfer) payload.x = boundTransfer;
     if (boundRecipient) payload.r = boundRecipient;
@@ -2923,7 +2922,7 @@ async function handleInternalSignedUrls(request: Request, env: Env, context: Rou
     const transferId = String(body.zip.transferId || '').trim();
     if (!isUuid(transferId)) throw new HttpError(400, 'Ongeldige zending.');
     if (boundTransfer && boundTransfer !== transferId) throw new HttpError(400, 'Deze zip hoort bij een andere zending.');
-    const name = transferDisplayName(String(body.zip.fileName || 'bestanden.zip'));
+    const name = displayFileName(String(body.zip.fileName || 'bestanden.zip'));
     const payload: SignedZipPayload = { t: 'sz', org: organizationId, x: transferId, exp, n: name };
     if (boundRecipient) payload.r = boundRecipient;
     const token = await signPayload(payload, secret);

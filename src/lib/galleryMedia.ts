@@ -33,16 +33,35 @@ export type GalleryMediaItem = {
 };
 
 /**
- * De variant staat vooraan in de bestandsnaam van de R2-key
- * (`{variant}-{uuid}-{naam}`). `original` = full-res foto, `master` = het
+ * De variant van een R2-key. `original` = full-res foto, `master` = het
  * originele videobestand, `source` = de oude R2-fallbackvideo, `preview` en
  * `thumb` = weergavebestanden.
+ *
+ * Twee vormen, net als galleryVariantFromKey in workers/media-api/src/galleryKeys.ts:
+ * - sinds 14 november 2026 `{org}/gallery/{galerij}/{item}/{variant}-{uuid}/{naam}`;
+ * - daarvoor `{org}/gallery/{galerij}/{item}/{variant}-{uuid}-{naam}`.
+ * Zou de app alleen de oude vorm lezen, dan vond hij bij `master-…/clip.mp4`
+ * geen variant, en speelde een video zonder kijkkopie niet meer af.
  */
 export function keyVariant(key: string | null | undefined): string {
   if (!key) return '';
-  const fileName = key.slice(key.lastIndexOf('/') + 1);
-  const dash = fileName.indexOf('-');
-  return dash > 0 ? fileName.slice(0, dash) : '';
+  const segments = key.split('/');
+  const holder = segments.length >= 6 ? segments[4] : segments[segments.length - 1];
+  const dash = holder.indexOf('-');
+  return dash > 0 ? holder.slice(0, dash) : '';
+}
+
+/**
+ * De naam van een weergavebestand: `yes.jpg` → `preview-yes.jpg`. Een preview
+ * en een thumb zijn altijd JPEG, dus `yes.png` of `yes.heic` krijgt ook `.jpg`.
+ * Eerst plakte de app `.jpg` achter de hele naam, en heette de preview van
+ * `yes.jpg` dus `preview-yes.jpg.jpg`. Zo kwam hij ook bij de klant aan als
+ * die in webkwaliteit downloadde.
+ */
+export function derivedFileName(prefix: 'preview' | 'thumb', fileName: string): string {
+  const base = fileName.split(/[\\/]/).pop() ?? '';
+  const stem = base.replace(/\.[^.]*$/, '').trim() || 'foto';
+  return `${prefix}-${stem}.jpg`;
 }
 
 /**
