@@ -15,6 +15,7 @@ import { brandStyle, ensureBrandFontsLoaded, type BrandingPayload } from '../lib
 import { GalleryViewer, type GalleryViewerItem } from './GalleryViewer';
 import { BrandMark, usePublicPageTitle } from '../components/PublicBrand';
 import type { GalleryLayout } from '../lib/galleryLayout';
+import { installScreenshotGuard } from '../lib/screenshotGuard';
 
 async function extractFunctionError(error: unknown, fallback: string): Promise<string> {
   const context = (error as { context?: unknown })?.context;
@@ -199,6 +200,15 @@ export function PublicGalleryPage({ token }: { token: string }) {
   // Eerste laadpoging zonder pincode (de pin-flow neemt het over als die nodig is).
   useEffect(() => { void load(''); }, [load]);
 
+  // Schermafbeeldingen, rechtsklik-opslaan en afdrukken tegengaan zolang deze
+  // pagina open is (lib/screenshotGuard.ts). Ook als de klant mag downloaden:
+  // dan krijgt hij het origineel via de knop, niet de webversie via een
+  // schermafbeelding die zonder de fotograaf rondgaat. Pas als de foto's er
+  // staan: op het pinscherm valt niets te beschermen, en een pinscherm dat
+  // verdwijnt bij een klik buiten het venster lijkt kapot.
+  const showingGallery = payload !== null && !needsPin;
+  useEffect(() => (showingGallery ? installScreenshotGuard(window, document) : undefined), [showingGallery]);
+
   // Media-tokens leven een uur; ruim daarvoor vernieuwen zodat een galerij die
   // de hele dag open staat niet stilletjes kapotte beelden gaat tonen.
   useEffect(() => {
@@ -378,6 +388,14 @@ export function PublicGalleryPage({ token }: { token: string }) {
     // Accentkleur en lettertypen komen als CSS-variabelen binnen, alleen op
     // deze pagina — zo kleuren alle bestaande stijlen mee zonder duplicatie.
     <main className="pgal" style={brandStyle(branding)}>
+      {/* Staat er altijd, maar is alleen te zien als <body> de klasse
+          pgal-shielded heeft. Die zet de bescherming zelf, buiten React om, zodat
+          het scherm in dezelfde frame dicht is. */}
+      <div className="pgal-shield" aria-hidden="true">
+        <span className="pgal-pin-icon"><Lock size={22} /></span>
+        <strong>Beschermde galerij</strong>
+        <span>De foto’s zijn even verborgen. Klik of tik om verder te kijken.</span>
+      </div>
       {pendingReaction && (
         <VisitorNamePrompt
           reaction={pendingReaction.reaction}
