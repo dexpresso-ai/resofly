@@ -281,6 +281,19 @@ MEDIA_DEV_DIR=<map van wrangler dev> node tests/stromen/werker-galerij.mjs
 `MEDIA_DEV_DIR` is optioneel: daarmee zet de test een bestand rechtstreeks in de lokale R2,
 zoals een upload die pas na het verwijderen landt.
 
+## Galerij: dubbele bestandsnamen
+
+Twee delen, zonder worker:
+
+- `npm run test:stromen -- galerij-namen` (`galerij-namen.mjs`): de regel in de database
+  (20261114150000). Dezelfde naam in één album, ook in andere hoofdletters of Unicode-vorm,
+  wordt geweigerd met de hint die de app herkent. In een ander album mag hij. Oude dubbele
+  bestanden blijven bij te werken. Twee transacties tegelijk geven één rij. Een kijker,
+  boekhouder of buitenstaander krijgt nooit "deze naam bestaat al" te zien.
+- `ui.mjs galerij`: de vraag in het scherm. Eén dubbel bestand, meer tegelijk, Overslaan,
+  Andere naam, Escape, en de vraag boven het venster "Bestanden". De media-worker is hier
+  nagebootst in de browser (`nepGalerijWerker`).
+
 ## Bestanden
 
 | Bestand | Wat |

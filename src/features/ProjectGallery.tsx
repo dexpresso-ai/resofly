@@ -20,9 +20,13 @@ import { dateNL } from '../lib/format';
 import { supabase, supabaseAuth } from '../lib/supabase';
 import {
   deleteGalleryRecord, deleteRow, fetchOrganizationStorageStatus, insertRow, replaceGalleryCategoryPresets,
-  selectGalleryCategories, selectGalleryCategoryPresets, selectGalleryFavorites, selectGalleryItems,
+  selectGalleryCategories, selectGalleryCategoryPresets, selectGalleryFavorites, selectGalleryItemNames, selectGalleryItems,
   setGalleryItemOrder, setGalleryItemsCategory, updateGallerySettings, updateGalleryShare, updateRow,
 } from '../lib/repository';
+import {
+  findGalleryDuplicates, freeGalleryFileName, galleryFileNameKey, isGalleryNameTaken, planGalleryUpload,
+  type ExistingGalleryFile, type GalleryDuplicate, type GalleryDuplicateChoice, type IncomingGalleryFile,
+} from '../lib/galleryDuplicates';
 import { isMissingColumn } from '../lib/postgrestErrors';
 import { normalizeGalleryLayout, sameGalleryLayout, type GalleryLayout } from '../lib/galleryLayout';
 import type { BrandingPayload } from '../lib/branding';
@@ -203,6 +207,48 @@ function skippedNotice(skipped: number): string {
   return `${skipped} bestand${skipped === 1 ? '' : 'en'} overgeslagen — die passen niet in deze galerij.`;
 }
 
+/** Hoe een upload afliep; de aanroeper maakt er één melding van. */
+type UploadSummary = {
+  /** Passen niet in het formaat van de galerij (RAW, sidecars, .DS_Store). */
+  skippedFormat: number;
+  /** Dubbel, en de gebruiker koos "Overslaan". */
+  skippedDuplicates: number;
+  /** Dubbel, en onder een nieuwe naam geüpload. */
+  renamed: number;
+  uploaded: number;
+  /** De gebruiker sloot de vraag over dubbele bestanden: er is niets geüpload. */
+  cancelled: boolean;
+};
+
+const EMPTY_UPLOAD: UploadSummary = { skippedFormat: 0, skippedDuplicates: 0, renamed: 0, uploaded: 0, cancelled: false };
+
+function uploadNotice(summary: UploadSummary): string | null {
+  if (summary.cancelled) return 'Upload gestopt. Er is niets geüpload.';
+  const parts: string[] = [];
+  if (summary.skippedFormat > 0) parts.push(skippedNotice(summary.skippedFormat));
+  const dup = summary.skippedDuplicates;
+  if (dup > 0) parts.push(`${dup} dubbel${dup === 1 ? ' bestand' : 'e bestanden'} overgeslagen.`);
+  const renamed = summary.renamed;
+  if (renamed > 0) parts.push(`${renamed} bestand${renamed === 1 ? ' kreeg' : 'en kregen'} een nieuwe naam.`);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+/** Wat het venster over dubbele bestanden nodig heeft. */
+type DuplicatePrompt = {
+  galleryTitle: string;
+  files: IncomingGalleryFile[];
+  existing: ExistingGalleryFile[];
+  duplicates: GalleryDuplicate[];
+};
+
+/**
+ * De naam waaronder een bestand in het album komt. `current` kan nog
+ * veranderen als de database de naam weigert (zie insertGalleryItem);
+ * `reserved` deelt de hele upload, zodat een nieuwe naam nooit die van een
+ * ander bestand uit dezelfde upload pakt.
+ */
+type UploadName = { original: string; current: string; renamed: boolean; reserved: Set<string> };
+
 /**
  * Bestanden uit een sleepactie halen. Beeldmakers slepen zelden losse foto's:
  * ze pakken de hele exportmap. `webkitGetAsEntry` laat ons daar doorheen lopen,
@@ -314,6 +360,11 @@ export function GalleryTab({
   // onderliggend element op, zodat de melding niet knippert.
   const [dragActive, setDragActive] = useState(false);
   const dragDepth = useRef(0);
+  // De vraag wat er met dubbele bestanden moet. De upload wacht op het
+  // antwoord; `answerDuplicates.current` geeft het door.
+  const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePrompt | null>(null);
+  const answerDuplicates = useRef<((choices: Map<number, GalleryDuplicateChoice> | null) => void) | null>(null);
+  const messageTimer = useRef<number | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pollTimers = useRef(new Map<string, number>());
@@ -335,6 +386,30 @@ export function GalleryTab({
 
   // Terug naar de lijst betekent: er is niets meer om schermvullend te tonen.
   useEffect(() => { if (!openId) setFullscreen(false); }, [openId]);
+
+  // Gaat het album dicht (of het scherm weg) terwijl de vraag over dubbele
+  // bestanden openstaat, dan stopt die upload. Zonder dit bleef hij eeuwig
+  // wachten, en daarmee bleef `busy` aan: geen enkele upload kon nog.
+  useEffect(() => () => {
+    const answer = answerDuplicates.current;
+    answerDuplicates.current = null;
+    setDuplicatePrompt(null);
+    answer?.(null);
+  }, [openId]);
+
+  function askAboutDuplicates(prompt: DuplicatePrompt): Promise<Map<number, GalleryDuplicateChoice> | null> {
+    return new Promise((resolve) => {
+      answerDuplicates.current = resolve;
+      setDuplicatePrompt(prompt);
+    });
+  }
+
+  function answerDuplicatePrompt(choices: Map<number, GalleryDuplicateChoice> | null) {
+    const answer = answerDuplicates.current;
+    answerDuplicates.current = null;
+    setDuplicatePrompt(null);
+    answer?.(choices);
+  }
 
   const refreshStorage = useCallback(async () => {
     setStorage(await fetchOrganizationStorageStatus(organizationId));
@@ -598,10 +673,41 @@ export function GalleryTab({
     setQueue(prev => prev.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
   }
 
+  /**
+   * Slaat de rij van een geüpload bestand op. De naam is vóór het uploaden
+   * gecontroleerd, maar een collega (of een ander tabblad) kan hem in de
+   * tussentijd hebben gepakt; een video-upload duurt soms een uur. Dan weigert
+   * de database de naam (20261114150000).
+   *
+   * Koos de gebruiker al voor een nieuwe naam, dan kiezen we een volgende vrije
+   * naam: dat is wat hij vroeg. Hield het bestand zijn eigen naam, dan heeft
+   * niemand gekozen wat er met dit dubbele bestand moet. Dan stoppen we, en
+   * ruimt uploadOne de bestanden in R2 op.
+   */
+  async function insertGalleryItem(gallery: Gallery, values: Record<string, unknown>, name: UploadName): Promise<GalleryItem> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await insertRow<GalleryItem>('gallery_items', organizationId, { ...values, file_name: name.current });
+      } catch (e) {
+        if (!isGalleryNameTaken(e)) throw e;
+        if (!name.renamed || attempt >= 3) {
+          throw new Error('Niet geüpload: net kwam er een bestand met deze naam in het album. Upload het opnieuw om te kiezen wat ermee moet.');
+        }
+        const fresh = await selectGalleryItemNames(organizationId, gallery.id);
+        const taken = new Set([...fresh.map(row => galleryFileNameKey(row.file_name)), ...name.reserved]);
+        name.current = freeGalleryFileName(name.original, taken);
+        name.reserved.add(galleryFileNameKey(name.current));
+      }
+    }
+  }
+
   async function uploadOne(
-    gallery: Gallery, file: File, sortOrder: number, categoryId: string | null,
+    gallery: Gallery, file: File, name: UploadName, sortOrder: number, categoryId: string | null,
     onProgress: (detail: string) => void,
   ): Promise<GalleryItem> {
+    // De naam waaronder het bestand in het album komt. Bij "Andere naam" is dat
+    // niet file.name; ook R2 en Stream krijgen dan de nieuwe naam.
+    const fileName = name.current;
     const isPhoto = GALLERY_PHOTO_TYPES.has(file.type);
     const isVideo = file.type.startsWith('video/');
     if (!isPhoto && !isVideo) {
@@ -633,9 +739,9 @@ export function GalleryTab({
       const settled = await Promise.allSettled([
         // Een foto van 100 megapixel haalt de 64 MB per request; uploadGalleryFile
         // schakelt dan zelf over op delen.
-        uploadGalleryFile(file, file.name, file.type, organizationId, gallery.id, uploadGroupId, 'original'),
-        uploadGalleryFileVariant(derived.preview, derivedFileName('preview', file.name), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'preview'),
-        uploadGalleryFileVariant(derived.thumb, derivedFileName('thumb', file.name), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb'),
+        uploadGalleryFile(file, fileName, file.type, organizationId, gallery.id, uploadGroupId, 'original'),
+        uploadGalleryFileVariant(derived.preview, derivedFileName('preview', fileName), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'preview'),
+        uploadGalleryFileVariant(derived.thumb, derivedFileName('thumb', fileName), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb'),
       ]);
       const failure = settled.find(result => result.status === 'rejected');
       if (failure) {
@@ -646,10 +752,9 @@ export function GalleryTab({
       }
       const [original, preview, thumb] = settled.map(result => (result as PromiseFulfilledResult<{ key: string; size: number }>).value);
       try {
-        return await insertRow<GalleryItem>('gallery_items', organizationId, {
+        return await insertGalleryItem(gallery, {
           gallery_id: gallery.id,
           media_type: 'photo',
-          file_name: file.name,
           content_type: file.type,
           size_bytes: original.size,
           derived_bytes: preview.size + thumb.size,
@@ -660,7 +765,7 @@ export function GalleryTab({
           height: derived.height,
           sort_order: sortOrder,
           category_id: categoryId,
-        });
+        }, name);
       } catch (e) {
         for (const key of [original.key, preview.key, thumb.key]) void deleteR2Object(key).catch(() => undefined);
         throw e;
@@ -678,7 +783,7 @@ export function GalleryTab({
     let thumbKey: string | null = null;
     let thumbSize = 0;
     if (poster.thumb) {
-      const thumb = await uploadGalleryFileVariant(poster.thumb, derivedFileName('thumb', file.name), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb');
+      const thumb = await uploadGalleryFileVariant(poster.thumb, derivedFileName('thumb', fileName), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb');
       thumbKey = thumb.key;
       thumbSize = thumb.size;
     }
@@ -686,7 +791,7 @@ export function GalleryTab({
     let master: { key: string; size: number };
     try {
       master = await uploadGalleryFile(
-        file, file.name, file.type, organizationId, gallery.id, uploadGroupId, 'master',
+        file, fileName, file.type, organizationId, gallery.id, uploadGroupId, 'master',
         (done, totaal) => onProgress(`uploaden… ${Math.round((done / totaal) * 100)}%`),
       );
     } catch (e) {
@@ -700,17 +805,16 @@ export function GalleryTab({
     onProgress('kijkkopie aanmaken…');
     let streamUid: string | null = null;
     try {
-      const copy = await requestGalleryStreamCopy(organizationId, gallery.id, master.key, file.name);
+      const copy = await requestGalleryStreamCopy(organizationId, gallery.id, master.key, fileName);
       if (copy.mode === 'stream') streamUid = copy.uid;
     } catch {
       /* geen kijkkopie — het item toont dat zelf */
     }
 
     try {
-      const inserted = await insertRow<GalleryItem>('gallery_items', organizationId, {
+      const inserted = await insertGalleryItem(gallery, {
         gallery_id: gallery.id,
         media_type: 'video',
-        file_name: file.name,
         content_type: file.type,
         size_bytes: master.size,
         derived_bytes: thumbSize,
@@ -723,7 +827,7 @@ export function GalleryTab({
         stream_status: streamUid ? 'processing' : null,
         sort_order: sortOrder,
         category_id: categoryId,
-      });
+      }, name);
       if (streamUid) pollStreamItem(inserted);
       return inserted;
     } catch (e) {
@@ -739,60 +843,111 @@ export function GalleryTab({
    * landen: vanuit het paneel geen (dan deelt de gebruiker later in), vanuit het
    * venster "Bestanden" de categorie waarop hij losliet of die open staat.
    */
-  async function handleFiles(fileList: FileList | File[] | null, categoryId: string | null = null) {
+  async function handleFiles(fileList: FileList | File[] | null, categoryId: string | null = null): Promise<UploadSummary> {
     // Ook wachten op `loading`: vóórdat de bestaande items binnen zijn zou
     // nextSort op 0 beginnen en zouden nieuwe uploads tussen de bestaande
     // volgorde in springen.
-    if (!openGallery || !fileList || fileList.length === 0 || busy || loading) return;
-    const files = Array.from(fileList);
-    const galleryId = openGallery.id;
+    if (!openGallery || !fileList || fileList.length === 0 || busy || loading) return EMPTY_UPLOAD;
+    const picked = Array.from(fileList);
+    const gallery = openGallery;
+    const galleryId = gallery.id;
     if (fileInputRef.current) fileInputRef.current.value = '';
     setBusy(true);
     setError(null);
-    setQueue(files.map(file => ({ name: file.name, status: 'wacht' })));
-
-    let nextSort = items.reduce((max, item) => Math.max(max, item.sort_order), -1) + 1;
-    const sortOrders = files.map(() => nextSort++);
-    let cursor = 0;
-    // Grote bestanden gaan in delen van 64 MB. Drie daarvan tegelijk duwt
-    // honderden megabytes door het geheugen en maakt de upload juist trager;
-    // bij een video-master doen we er dus één tegelijk.
-    const hasLarge = files.some(file => file.size > GALLERY_MULTIPART_THRESHOLD_BYTES);
-    const workerCount = hasLarge ? 1 : Math.min(3, files.length);
-    await Promise.all(Array.from({ length: workerCount }, async () => {
-      for (;;) {
-        const index = cursor++;
-        if (index >= files.length) return;
-        setQueueEntry(index, { status: 'bezig' });
-        try {
-          const inserted = await uploadOne(openGallery, files[index], sortOrders[index], categoryId, (detail) => setQueueEntry(index, { detail }));
-          // Alleen tonen als deze galerij nog open staat (anders zou een item
-          // van galerij A in de lijst van galerij B belanden).
-          if (openIdRef.current === galleryId) setItems(prev => [...prev, inserted]);
-          setQueueEntry(index, { status: 'klaar', detail: undefined });
-        } catch (e) {
-          setQueueEntry(index, { status: 'fout', detail: e instanceof Error ? e.message : 'Upload mislukt.' });
-        }
+    try {
+      // ── Dubbele bestanden ──
+      // Eerst kijken wat er al in het album staat, en pas dan uploaden. Wie
+      // dezelfde map nog eens uploadde, kreeg anders alles twee keer, en een
+      // video van 20 GB stond al in Cloudflare voordat iemand iets kon zeggen.
+      // Vers uit de database: een collega kan het album net hebben gevuld. Lukt
+      // dat niet, dan wat het scherm al heeft; de database weigert een dubbele
+      // naam hoe dan ook (zie insertGalleryItem).
+      let existing: ExistingGalleryFile[];
+      try {
+        existing = await selectGalleryItemNames(organizationId, galleryId);
+      } catch {
+        existing = items;
       }
-    }));
-    setBusy(false);
-    await refreshStorage();
-    // Nieuwe media = mogelijk nieuwe Stream-uids zonder token: sessie verversen.
-    if (openIdRef.current === galleryId) await refreshSession(galleryId);
-    window.setTimeout(() => setQueue(prev => (prev.every(q => q.status === 'klaar') ? [] : prev)), 4000);
+      if (openIdRef.current !== galleryId) return { ...EMPTY_UPLOAD, cancelled: true };
+      const incoming = picked.map(file => ({ name: file.name, size: file.size }));
+      const duplicates = findGalleryDuplicates(incoming, existing);
+      let choices = new Map<number, GalleryDuplicateChoice>();
+      if (duplicates.length > 0) {
+        const answer = await askAboutDuplicates({ galleryTitle: gallery.title, files: incoming, existing, duplicates });
+        if (!answer) return { ...EMPTY_UPLOAD, cancelled: true };
+        choices = answer;
+      }
+      const plan = planGalleryUpload(incoming, existing, duplicates, choices);
+      // Een keuze die toch ontbreekt, telt als overslaan: niets uploaden waar
+      // de gebruiker niet voor koos.
+      const skippedDuplicates = plan.skipped + plan.undecided;
+      if (plan.entries.length === 0) return { ...EMPTY_UPLOAD, skippedDuplicates };
+
+      const reserved = new Set(plan.entries.map(entry => galleryFileNameKey(entry.name)));
+      const files = plan.entries.map(entry => picked[entry.index]);
+      const names: UploadName[] = plan.entries.map(entry => ({
+        original: picked[entry.index].name, current: entry.name, renamed: entry.renamed, reserved,
+      }));
+      setQueue(plan.entries.map(entry => ({
+        name: entry.renamed ? `${picked[entry.index].name} → ${entry.name}` : entry.name,
+        status: 'wacht',
+      })));
+
+      let nextSort = items.reduce((max, item) => Math.max(max, item.sort_order), -1) + 1;
+      const sortOrders = files.map(() => nextSort++);
+      let cursor = 0;
+      let uploaded = 0;
+      let renamed = 0;
+      // Grote bestanden gaan in delen van 64 MB. Drie daarvan tegelijk duwt
+      // honderden megabytes door het geheugen en maakt de upload juist trager;
+      // bij een video-master doen we er dus één tegelijk.
+      const hasLarge = files.some(file => file.size > GALLERY_MULTIPART_THRESHOLD_BYTES);
+      const workerCount = hasLarge ? 1 : Math.min(3, files.length);
+      await Promise.all(Array.from({ length: workerCount }, async () => {
+        for (;;) {
+          const index = cursor++;
+          if (index >= files.length) return;
+          setQueueEntry(index, { status: 'bezig' });
+          try {
+            const name = names[index];
+            const inserted = await uploadOne(gallery, files[index], name, sortOrders[index], categoryId, (detail) => setQueueEntry(index, { detail }));
+            uploaded += 1;
+            if (name.renamed) renamed += 1;
+            // Alleen tonen als deze galerij nog open staat (anders zou een item
+            // van galerij A in de lijst van galerij B belanden).
+            if (openIdRef.current === galleryId) setItems(prev => [...prev, inserted]);
+            setQueueEntry(index, {
+              status: 'klaar',
+              detail: undefined,
+              // De database kan bij "Andere naam" nog een volgend nummer hebben gekozen.
+              ...(name.renamed ? { name: `${name.original} → ${inserted.file_name}` } : {}),
+            });
+          } catch (e) {
+            setQueueEntry(index, { status: 'fout', detail: e instanceof Error ? e.message : 'Upload mislukt.' });
+          }
+        }
+      }));
+      await refreshStorage();
+      // Nieuwe media = mogelijk nieuwe Stream-uids zonder token: sessie verversen.
+      if (openIdRef.current === galleryId) await refreshSession(galleryId);
+      window.setTimeout(() => setQueue(prev => (prev.every(q => q.status === 'klaar') ? [] : prev)), 4000);
+      return { ...EMPTY_UPLOAD, uploaded, renamed, skippedDuplicates };
+    } finally {
+      setBusy(false);
+    }
   }
 
   /**
    * Gesleepte bestanden uploaden — gedeeld door het paneel en het venster
-   * "Bestanden". Geeft terug hoeveel bestanden zijn overgeslagen en gooit een
-   * leesbare fout dóór, zodat elke aanroeper hem op zijn eigen plek toont: een
-   * melding van het paneel valt achter een openstaand venster en ziet niemand.
+   * "Bestanden". Geeft terug hoe de upload afliep en gooit een leesbare fout
+   * dóór, zodat elke aanroeper hem op zijn eigen plek toont: een melding van
+   * het paneel valt achter een openstaand venster en ziet niemand.
    *
    * LET OP: moet synchroon vanuit de drop-handler worden aangeroepen — daarna is
    * de DataTransfer leeg.
    */
-  async function uploadFromTransfer(transfer: DataTransfer, categoryId: string | null): Promise<number> {
-    if (!openGallery) return 0;
+  async function uploadFromTransfer(transfer: DataTransfer, categoryId: string | null): Promise<UploadSummary> {
+    if (!openGallery) return EMPTY_UPLOAD;
     if (busy || loading) throw new Error('Er loopt al een upload. Wacht tot die klaar is en sleep daarna opnieuw.');
     let dropped: File[] = [];
     try {
@@ -801,27 +956,47 @@ export function GalleryTab({
       throw new Error('Kon de gesleepte bestanden niet lezen. Gebruik anders de knop “Uploaden”.');
     }
     const { usable, skipped } = usableForGallery(openGallery.format, dropped);
-    await handleFiles(usable, categoryId);
-    return skipped;
+    const summary = await handleFiles(usable, categoryId);
+    return { ...summary, skippedFormat: skipped };
   }
 
   /** Bestanden uit de bladerknop; zelfde filter en zelfde meldingen als een sleep. */
-  async function uploadPicked(picked: File[], categoryId: string | null): Promise<number> {
-    if (!openGallery || picked.length === 0) return 0;
+  async function uploadPicked(picked: File[], categoryId: string | null): Promise<UploadSummary> {
+    if (!openGallery || picked.length === 0) return EMPTY_UPLOAD;
     if (busy || loading) throw new Error('Er loopt al een upload. Wacht tot die klaar is en probeer het daarna opnieuw.');
     const { usable, skipped } = usableForGallery(openGallery.format, picked);
-    await handleFiles(usable, categoryId);
-    return skipped;
+    const summary = await handleFiles(usable, categoryId);
+    return { ...summary, skippedFormat: skipped };
+  }
+
+  function showPanelNotice(summary: UploadSummary) {
+    const text = uploadNotice(summary);
+    if (!text) return;
+    // De klok van een vorige melding eerst stoppen. Anders wiste die de
+    // nieuwe melding al na een paar tellen, als twee uploads kort na elkaar
+    // kwamen (bijvoorbeeld eerst Annuleren, dan opnieuw).
+    if (messageTimer.current) window.clearTimeout(messageTimer.current);
+    setMessage(text);
+    messageTimer.current = window.setTimeout(() => { messageTimer.current = null; setMessage(null); }, 6000);
+  }
+
+  /** De knop "Uploaden" en de lege sleepplek in het paneel. */
+  async function handlePanelPick(list: FileList | null) {
+    // Eerst kopiëren: handleFiles maakt het invoerveld leeg, en dan is een
+    // FileList in sommige browsers ook leeg.
+    const picked = Array.from(list ?? []);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    try {
+      showPanelNotice(await uploadPicked(picked, null));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Uploaden mislukt.');
+    }
   }
 
   /** Bestanden die op het paneel worden losgelaten; de melding hoort dan hier. */
   async function handleDrop(transfer: DataTransfer) {
     try {
-      const skipped = await uploadFromTransfer(transfer, null);
-      if (skipped > 0) {
-        setMessage(skippedNotice(skipped));
-        window.setTimeout(() => setMessage(null), 6000);
-      }
+      showPanelNotice(await uploadFromTransfer(transfer, null));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Uploaden mislukt.');
     }
@@ -1261,7 +1436,7 @@ export function GalleryTab({
    * venster open, dan gaat de sleep dáárover: het paneel houdt zich dan stil.
    */
   function isFileDrag(e: React.DragEvent): boolean {
-    if (!writable || settingsTab || showShare) return false;
+    if (!writable || settingsTab || showShare || duplicatePrompt) return false;
     return dragHasFiles(e);
   }
 
@@ -1425,7 +1600,7 @@ export function GalleryTab({
         multiple
         accept={formatConfig(openGallery.format).accept}
         style={{ display: 'none' }}
-        onChange={(e) => void handleFiles(e.target.files)}
+        onChange={(e) => void handlePanelPick(e.target.files)}
       />
 
       <UploadQueue queue={queue} />
@@ -1585,6 +1760,11 @@ export function GalleryTab({
           onPatch={(patch) => patchGallery(openGallery, patch)}
         />
       )}
+      {/* Als laatste: hij moet boven het venster "Bestanden" komen, want daar
+          kan de upload ook vandaan komen. */}
+      {duplicatePrompt && (
+        <GalleryDuplicatesDialog prompt={duplicatePrompt} onAnswer={answerDuplicatePrompt} />
+      )}
     </article>
   );
 }
@@ -1609,6 +1789,177 @@ function UploadQueue({ queue }: { queue: QueueEntry[] }) {
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Waarom dit bestand dubbel is, in gewone woorden. */
+function duplicateReason(duplicate: GalleryDuplicate): string {
+  if (duplicate.kind === 'album') {
+    return duplicate.sameSize
+      ? 'Staat al in het album en is even groot. Waarschijnlijk hetzelfde bestand.'
+      : 'Er staat al een ander bestand met deze naam in het album.';
+  }
+  return duplicate.sameSize
+    ? 'Zit twee keer in wat je uploadt.'
+    : 'Een ander bestand in deze upload heet ook zo.';
+}
+
+/**
+ * De vraag wat er met dubbele bestanden moet: overslaan, of toch uploaden
+ * onder een nieuwe naam die ResoFly kiest. De gebruiker kiest zelf; er staat
+ * niets vooraf aangevinkt. Bij één bestand zijn dat twee knoppen, bij meer een
+ * keuze per bestand plus "alles".
+ *
+ * Sluiten (Annuleren, Escape) stopt de hele upload: liever niets dan iets wat
+ * de gebruiker niet koos. Klikken naast het venster doet niets; anders was een
+ * misklik genoeg om een upload van honderd foto's af te breken.
+ */
+function GalleryDuplicatesDialog({ prompt, onAnswer }: {
+  prompt: DuplicatePrompt;
+  onAnswer: (choices: Map<number, GalleryDuplicateChoice> | null) => void;
+}) {
+  const { files, existing, duplicates, galleryTitle } = prompt;
+  const [choices, setChoices] = useState<Map<number, GalleryDuplicateChoice>>(() => new Map());
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const single = duplicates.length === 1;
+  const others = files.length - duplicates.length;
+
+  const plan = useMemo(() => planGalleryUpload(files, existing, duplicates, choices), [files, existing, duplicates, choices]);
+  const newNames = useMemo(() => new Map(plan.entries.filter(e => e.renamed).map(e => [e.index, e.name])), [plan]);
+  // Bij één bestand staat de nieuwe naam er al voordat je kiest: dan weet je
+  // waar je ja tegen zegt.
+  const singleNewName = useMemo(() => {
+    if (!single) return null;
+    const preview = planGalleryUpload(files, existing, duplicates, new Map([[duplicates[0].index, 'rename']]));
+    return preview.entries.find(e => e.index === duplicates[0].index)?.name ?? null;
+  }, [single, files, existing, duplicates]);
+
+  // De focus naar de eerste keuze, zodat je met het toetsenbord meteen verder
+  // kunt. Button stuurt geen ref door, vandaar het attribuut.
+  useEffect(() => {
+    dialogRef.current?.querySelector<HTMLButtonElement>('[data-autofocus]')?.focus();
+  }, []);
+
+  // Escape = annuleren. In de capture-fase en daarna niet verder: anders sloot
+  // dezelfde toets ook het venster "Bestanden" eronder, of de presenteerstand.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onAnswer(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onAnswer]);
+
+  function choose(index: number, choice: GalleryDuplicateChoice) {
+    setChoices(prev => new Map(prev).set(index, choice));
+  }
+
+  function chooseAll(choice: GalleryDuplicateChoice) {
+    setChoices(new Map(duplicates.map(d => [d.index, choice])));
+  }
+
+  function answerSingle(choice: GalleryDuplicateChoice) {
+    onAnswer(new Map([[duplicates[0].index, choice]]));
+  }
+
+  const toUpload = plan.entries.length;
+  const othersText = others <= 0
+    ? ''
+    : others === 1
+      ? ' Het andere bestand wordt gewoon geüpload.'
+      : ` De andere ${others} bestanden worden gewoon geüpload.`;
+
+  return (
+    <div className="bk-modal-backdrop gal-modal-shell gal-dup-shell" onDragOver={swallowFileDrag} onDrop={swallowFileDrag}>
+      <div ref={dialogRef} className="bk-modal gal-modal" role="dialog" aria-modal="true" aria-labelledby="gal-dup-title" aria-describedby="gal-dup-intro">
+        <header className="gal-modal-head">
+          <span className="gal-modal-titles">
+            <h3 id="gal-dup-title">{single ? 'Dit bestand is dubbel' : `${duplicates.length} bestanden zijn dubbel`}</h3>
+            <p>{galleryTitle}</p>
+          </span>
+          <button type="button" className="gal-modal-close" onClick={() => onAnswer(null)} aria-label="Upload stoppen" title="Upload stoppen">
+            <X size={18} />
+          </button>
+        </header>
+        <div className="bk-modal-body gal-modal-body">
+          <p className="gal-dup-intro" id="gal-dup-intro">
+            {single
+              ? 'Er bestaat al een bestand met deze naam. Sla het over, of laat ResoFly het toch uploaden onder een nieuwe naam.'
+              : 'Er bestaan al bestanden met deze namen. Kies per bestand: overslaan, of toch uploaden onder een nieuwe naam die ResoFly kiest.'}
+            {othersText}
+          </p>
+          {!single && (
+            <div className="gal-dup-bulk">
+              <span>Voor alle {duplicates.length}:</span>
+              <button type="button" className="gal-linkbtn" onClick={() => chooseAll('skip')}>Alles overslaan</button>
+              <button type="button" className="gal-linkbtn" onClick={() => chooseAll('rename')}>Alles een andere naam</button>
+            </div>
+          )}
+          <ul className="gal-dup-list">
+            {duplicates.map((duplicate, position) => {
+              const choice = choices.get(duplicate.index);
+              return (
+                <li key={duplicate.index} className="gal-dup-row">
+                  <span className="gal-dup-info">
+                    <strong className="gal-dup-name" title={duplicate.name}>{duplicate.name}</strong>
+                    <span className="gal-dup-why">{duplicateReason(duplicate)}</span>
+                    {single && singleNewName && (
+                      <span className="gal-dup-new">Andere naam wordt <strong>{singleNewName}</strong></span>
+                    )}
+                    {!single && choice === 'rename' && (
+                      <span className="gal-dup-new">Wordt geüpload als <strong>{newNames.get(duplicate.index)}</strong></span>
+                    )}
+                    {!single && choice === 'skip' && <span className="gal-dup-new">Wordt niet geüpload</span>}
+                  </span>
+                  {!single && (
+                    <span className="gal-dup-choice" role="radiogroup" aria-label={`Wat moet er met ${duplicate.name} gebeuren?`}>
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={choice === 'skip'}
+                        data-autofocus={position === 0 ? '' : undefined}
+                        onClick={() => choose(duplicate.index, 'skip')}
+                      >
+                        Overslaan
+                      </button>
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={choice === 'rename'}
+                        onClick={() => choose(duplicate.index, 'rename')}
+                      >
+                        Andere naam
+                      </button>
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+        <div className="bk-modal-actions gal-modal-actions">
+          <Button variant="ghost" onClick={() => onAnswer(null)} title="Niets uploaden">Annuleren</Button>
+          <span className="gal-modal-spacer" />
+          {single ? (
+            <>
+              <Button data-autofocus="" onClick={() => answerSingle('skip')}>Overslaan</Button>
+              <Button variant="primary" onClick={() => answerSingle('rename')}>Andere naam en uploaden</Button>
+            </>
+          ) : (
+            <Button variant="primary" disabled={plan.undecided > 0} onClick={() => onAnswer(choices)}>
+              {plan.undecided > 0
+                ? `Nog ${plan.undecided} te kiezen`
+                : toUpload > 0
+                  ? `${toUpload} bestand${toUpload === 1 ? '' : 'en'} uploaden`
+                  : 'Klaar, niets uploaden'}
+            </Button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1655,9 +2006,9 @@ type GalleryFileActions = {
   onRemoveCategory: (category: GalleryCategory) => Promise<void>;
   onApplyPresets: () => Promise<void>;
   onSaveAsPresets: () => Promise<void>;
-  /** Uploaden vanuit dit venster; geeft terug hoeveel bestanden niet pasten. */
-  onUploadDrop: (transfer: DataTransfer, categoryId: string | null) => Promise<number>;
-  onUploadPick: (files: File[], categoryId: string | null) => Promise<number>;
+  /** Uploaden vanuit dit venster; geeft terug hoe het afliep (overgeslagen, nieuwe namen). */
+  onUploadDrop: (transfer: DataTransfer, categoryId: string | null) => Promise<UploadSummary>;
+  onUploadPick: (files: File[], categoryId: string | null) => Promise<UploadSummary>;
 };
 
 /**
@@ -2218,6 +2569,7 @@ function GalleryFileSettings({ items, categories, format, bundle, busy, queue, a
   const [newCategory, setNewCategory] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<number | null>(null);
   const [overBucket, setOverBucket] = useState<string | null>(null);
   const [limit, setLimit] = useState(FILE_PAGE_SIZE);
   const [working, setWorking] = useState(false);
@@ -2265,8 +2617,10 @@ function GalleryFileSettings({ items, categories, format, bundle, busy, queue, a
   }, [error, notice]);
 
   function notify(text: string) {
+    // Een vorige klok eerst stoppen; die wiste anders een nieuwe melding te vroeg.
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     setNotice(text);
-    window.setTimeout(() => setNotice(null), 3500);
+    noticeTimer.current = window.setTimeout(() => { noticeTimer.current = null; setNotice(null); }, 3500);
   }
 
   async function run(action: () => Promise<void>, done?: string) {
@@ -2322,7 +2676,7 @@ function GalleryFileSettings({ items, categories, format, bundle, busy, queue, a
    * begint: sleep je op een categorie, dan is dat die categorie — ook als je
    * daarna een andere aanklikt terwijl de upload nog loopt.
    */
-  function startUpload(key: string, source: (categoryId: string | null) => Promise<number>) {
+  function startUpload(key: string, source: (categoryId: string | null) => Promise<UploadSummary>) {
     if (locked) {
       setError('Er loopt al iets. Wacht tot dat klaar is en probeer het daarna opnieuw.');
       return;
@@ -2331,9 +2685,10 @@ function GalleryFileSettings({ items, categories, format, bundle, busy, queue, a
     // De aanroep moet synchroon: een DataTransfer is na de drop-handler leeg.
     const started = source(categoryId);
     void run(async () => {
-      const skipped = await started;
-      if (skipped > 0) notify(skippedNotice(skipped));
-      else if (categoryId) notify(`Klaar — de nieuwe bestanden staan in “${nameOf(key)}”.`);
+      const summary = await started;
+      const text = uploadNotice(summary);
+      if (text) notify(text);
+      else if (categoryId && summary.uploaded > 0) notify(`Klaar — de nieuwe bestanden staan in “${nameOf(key)}”.`);
     });
   }
 
