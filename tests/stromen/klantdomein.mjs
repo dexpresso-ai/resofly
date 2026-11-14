@@ -341,6 +341,27 @@ async function gotrueVerify(body) {
 }
 
 /** Een factuur opslaan en versturen zoals de app (facturen.mjs). */
+/**
+ * Een gepubliceerd album met een deellink, zoals Galerij → Delen hem maakt:
+ * het token zelf bij de galerij, en de hash waarop gallery-public zoekt.
+ */
+async function albumMetDeellink(w) {
+  const project = gelukt(await rest('projects?select=id', {
+    method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+    body: { organization_id: w.orgId, client_id: w.klantA.id, name: `Bruiloft ${RONDE} ${randomUUID().slice(0, 6)}` },
+  }), 'project')[0];
+  const album = gelukt(await rest('galleries?select=id', {
+    method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+    body: { organization_id: w.orgId, project_id: project.id, title: 'Ceremonie', format: 'photo' },
+  }), 'album')[0];
+  const token = randomBytes(32).toString('base64url');
+  gelukt(await rest(`galleries?id=eq.${album.id}&select=id`, {
+    method: 'PATCH', token: w.medewerker.token, prefer: 'return=representation',
+    body: { status: 'published', share_enabled: true, share_token: token, share_token_hash: sha256(token) },
+  }), 'publiceren en delen');
+  return { id: album.id, token };
+}
+
 async function verstuurFactuur(w) {
   const jaar = new Date().toISOString().slice(0, 4);
   const nummer = `FAC-${jaar}-${String(Math.floor(Math.random() * 9000) + 1000)}`;
@@ -658,11 +679,35 @@ export default async function klantdomein() {
       verwacht(link.startsWith(`${PUBLIEK}/invoice/`), `link: ${link}`);
     });
 
+    // Albums vóór de rest (CLIENT_DOMAINS_LIVE=albums, zoals op staging sinds
+    // 14 november): de deellink van een album gaat naar het klantadres, mails
+    // met een factuur, offerte of het portaal nog naar het algemene adres.
+    process.env.CLIENT_DOMAINS_LIVE = 'albums';
+
+    await stap('alleen albums live: de deellink van een album naar het eigen domein, de rest naar het algemene adres', async () => {
+      const uit = gelukt(await domeinen(w.eigenaar, w.orgId, 'overview'), 'overzicht');
+      gelijk([uit.config.live, uit.config.liveKinds], [false, ['albums']], 'schakelaar');
+      gelijk([uit.albumUrl, uit.albumOnClientHost], [`https://${domein}`, true], 'albums');
+      gelijk([uit.clientUrl, uit.onClientHost], [PUBLIEK, false], 'documenten');
+      gelijk([uit.portalUrl, uit.portalOnClientHost], [PUBLIEK, false], 'portaal');
+      const { link } = await verstuurFactuur(w);
+      verwacht(link.startsWith(`${PUBLIEK}/invoice/`), `factuurlink: ${link}`);
+      // Een teamlid zonder beheerrechten maakt ook deellinks: hetzelfde adres.
+      gelijk(gelukt(await domeinen(w.medewerker, w.orgId, 'overview'), 'overzicht als teamlid').albumUrl, `https://${domein}`, 'albums voor een teamlid');
+    });
+
+    await stap('alleen albums live: elke organisatie haar eigen adres, en niemand het overzicht van een ander', async () => {
+      const uit = gelukt(await domeinen(w2.eigenaar, w2.orgId, 'overview'), 'overzicht van de tweede');
+      gelijk([uit.albumUrl, uit.albumOnClientHost], [herkomstB(), true], 'albums van de tweede (de naam bij ResoFly)');
+      geweigerd(await domeinen(w2.eigenaar, w.orgId, 'overview'), 'het overzicht van een ander', [403]);
+    });
+
     process.env.CLIENT_DOMAINS_LIVE = 'true';
 
     await stap('live: links gaan naar het eigen domein, in het overzicht en in de mail', async () => {
       const uit = gelukt(await domeinen(w.eigenaar, w.orgId, 'overview'), 'overzicht');
       gelijk([uit.clientUrl, uit.onClientHost], [`https://${domein}`, true], 'links');
+      gelijk([uit.albumUrl, uit.albumOnClientHost, uit.config.liveKinds], [`https://${domein}`, true, []], 'albums');
       const { link } = await verstuurFactuur(w);
       verwacht(link.startsWith(`https://${domein}/invoice/`), `link: ${link}`);
     });
@@ -770,6 +815,30 @@ export default async function klantdomein() {
       // Op het eigen adres van de ander, en op het algemene adres, werkt hij wel.
       gelukt(await roep('invoice-public', { origin: herkomstB(), body: { action: 'getInvoice', token: ander.token } }), 'op het adres van de ander');
       gelukt(await roep('invoice-public', { origin: ORIGIN, body: { action: 'getInvoice', token: ander.token } }), 'op het algemene adres');
+    });
+
+    await stap('een album op het klantadres: openen met CORS, en een album van een ander bestaat daar niet', async () => {
+      const eigen = await albumMetDeellink(w);
+      const ander = await albumMetDeellink(w2);
+      // Op het eigen domein en op de naam bij ResoFly: het album, met CORS voor dat adres.
+      for (const herkomst of [`https://${domein}`, herkomstA()]) {
+        const res = await roep('gallery-public', { origin: herkomst, body: { action: 'getGallery', token: eigen.token } });
+        const uit = gelukt(res, `album op ${herkomst}`);
+        gelijk([uit.needsPin, uit.gallery?.id], [false, eigen.id], `album op ${herkomst}`);
+        gelijk(res.headers.get('access-control-allow-origin'), herkomst, `CORS op ${herkomst}`);
+        const voorvlucht = await roep('gallery-public', { method: 'OPTIONS', origin: herkomst });
+        gelijk(voorvlucht.headers.get('access-control-allow-origin'), herkomst, `CORS bij de voorvlucht op ${herkomst}`);
+      }
+      // Het album van een ander op dit adres: dezelfde melding als een onbekende link.
+      const vreemd = await roep('gallery-public', { origin: herkomstA(), body: { action: 'getGallery', token: ander.token } });
+      const onbekend = await roep('gallery-public', { origin: herkomstA(), body: { action: 'getGallery', token: randomBytes(32).toString('base64url') } });
+      geweigerd(vreemd, 'album van een ander', [404]);
+      geweigerd(onbekend, 'onbekende link', [404]);
+      gelijk(vreemd.json?.error, onbekend.json?.error, 'melding');
+      verwacht(!vreemd.tekst.includes('Ceremonie'), 'de titel van het album van een ander lekte');
+      // Op het adres van de ander, en op het algemene adres, werkt het wel.
+      gelijk(gelukt(await roep('gallery-public', { origin: herkomstB(), body: { action: 'getGallery', token: ander.token } }), 'op het adres van de ander').gallery?.id, ander.id, 'album van de ander');
+      gelijk(gelukt(await roep('gallery-public', { origin: ORIGIN, body: { action: 'getGallery', token: ander.token } }), 'op het algemene adres').gallery?.id, ander.id, 'album op het algemene adres');
     });
 
     await stap('een onbekend of verkeerd gevormd klantadres krijgt geen CORS', async () => {

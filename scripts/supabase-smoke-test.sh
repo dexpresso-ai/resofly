@@ -16,6 +16,10 @@
 #   - client-domains (klantadressen): de opzoeking voor de Worker zonder het
 #     goede geheim (401) en de nachtelijke ronde zonder cron-secret (401); met
 #     het secret uit de taak 'client-domains-recheck' 200;
+#   - een klantadres (het oudste actieve webadres, zoals jansen.resofly.com):
+#     de Worker toont er een album, en gallery-public neemt dat adres aan als
+#     herkomst, ook in CORS. Alleen met SUPABASE_DB_PASSWORD (om een adres te
+#     vinden). Daarna pas zet de deploy CLIENT_DOMAINS_LIVE;
 #   - het boekhouder-hek: geen organisatietabel zonder module gate én zonder hek
 #     (public.accountant_fence_gaps() is leeg). Ook alleen met SUPABASE_DB_PASSWORD.
 #   - de secrets voor Mollie: MOLLIE_TOKEN_ENCRYPTION_KEY (de eigen Mollie-key
@@ -226,6 +230,48 @@ SQL
       -X POST "$base/client-domains?cron=recheck" -H "x-cron-secret: $domains_secret" -H 'Content-Type: application/json' --data '{}'
   else
     echo "-      klantadressen (client-domains): nachtelijke ronde overgeslagen (nog geen cron-taak 'client-domains-recheck')"
+  fi
+
+  # Klantadressen: een album op het adres van een organisatie
+  # (jansen.resofly.com). De Worker (workers/client-domains) toont daar de app,
+  # met de meta die zegt dat het een klantadres is, en gallery-public neemt dat
+  # adres aan als herkomst, ook in CORS: precies de weg van een deellink uit
+  # Galerij → Delen. De deploy zet de deellinks van albums pas op het klantadres
+  # (CLIENT_DOMAINS_LIVE, stap "Klantadressen") als deze rooktest slaagt.
+  client_name="$(PGPASSWORD="$SUPABASE_DB_PASSWORD" PGSSLMODE="${PGSSLMODE:-require}" PGCONNECT_TIMEOUT=20 \
+    psql "$pooler" -X -q -t -A -v ON_ERROR_STOP=1 <<'SQL'
+select case when to_regclass('public.client_subdomains') is null then ''
+            else coalesce((select name from public.client_subdomains where status = 'active'
+                            order by created_at, name limit 1), '') end;
+SQL
+)"
+  if [ -n "$client_name" ]; then
+    client_host="${client_name}.${CLIENT_DOMAIN_BASE:-resofly.com}"
+    echo "info   klantadres voor de controle: $client_host"
+    # Een link die niet bestaat: zo verandert de controle niets, en ziet hij
+    # niets van een echt album.
+    probe="rooktest-$(date +%s)-${RANDOM}${RANDOM}${RANDOM}"
+    check "het klantadres toont een album via de Worker" 200 'name="resofly-client-host"' \
+      "https://$client_host/gallerij/$probe"
+    # Zonder klantadres als herkomst zou het antwoord "bestaat niet (meer)" of
+    # "origin niet toegestaan" zijn; "Ongeldige galerijlink" komt alleen uit de
+    # tak voor een klantadres (een link van een andere organisatie, of geen).
+    check "gallery-public neemt het klantadres aan als herkomst (onbekende link: 404)" 404 'Ongeldige galerijlink' \
+      -X POST "$base/gallery-public" -H "Origin: https://$client_host" -H 'Content-Type: application/json' \
+      --data "{\"action\":\"getGallery\",\"token\":\"$probe\"}"
+    allowed_origin="$(curl -s -o /dev/null -D - --max-time 60 -X OPTIONS "$base/gallery-public" \
+      -H "Origin: https://$client_host" -H 'Access-Control-Request-Method: POST' \
+      -H 'Access-Control-Request-Headers: authorization, apikey, content-type, x-client-info' \
+      | tr -d '\r' | awk 'tolower($1) == "access-control-allow-origin:" { print $2; exit }' || true)"
+    if [ "$allowed_origin" = "https://$client_host" ]; then
+      echo "ok     gallery-public laat een browser op het klantadres toe (CORS)"
+    else
+      problems=$((problems + 1))
+      echo "FOUT   gallery-public laat een browser op $client_host niet toe: Access-Control-Allow-Origin ${allowed_origin:-ontbreekt}"
+      if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::gallery-public laat het klantadres niet toe (CORS)"; fi
+    fi
+  else
+    echo "-      klantadres: overgeslagen (nog geen organisatie met een webadres)"
   fi
 
   # Boekhouder-hek (migratie 20261011000000): elke organisatietabel heeft een

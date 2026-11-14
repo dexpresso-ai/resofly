@@ -4,7 +4,7 @@
 // er bij Mollie gebeurde. Met `storing` kun je een dienst laten falen.
 import { createHash, randomUUID } from 'node:crypto';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { API_URL, MEDIA } from './omgeving.mjs';
+import { API_URL, MEDIA, R2_GEHEIM } from './omgeving.mjs';
 
 const echteFetch = globalThis.fetch.bind(globalThis);
 
@@ -294,6 +294,13 @@ async function media(request, url) {
     const body = await request.json();
     if (!post.media.has(body.storageKey)) return json(404, { error: 'Word-document niet gevonden' });
     return new Response(await nepPdf(`Word-contract ${post.media.get(body.storageKey)}`), { status: 200, headers: { 'content-type': 'application/pdf' } });
+  }
+  // De kijk-tokens van een album (gallery-public, client-portal). Verzonnen,
+  // maar alleen met het interne geheim, net als bij de echte worker.
+  if (request.method === 'POST' && pad === '/internal/gallery/tokens') {
+    if (request.headers.get('authorization') !== `Bearer ${R2_GEHEIM}`) return json(401, { error: 'Geen toegang' });
+    const body = await request.json();
+    return json(200, { mediaToken: `nep-kijktoken-${body.galleryId}`, streamTokens: {}, exp: Date.now() + 3_600_000 });
   }
   return json(404, { error: `Nep-media-worker kent ${request.method} ${pad} niet` });
 }

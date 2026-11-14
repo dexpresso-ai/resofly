@@ -241,6 +241,9 @@ function AddressCard({ organizationId, overview, canAdmin, companyName, onChange
   const ready = Boolean(picker && !picker.checking && changed && canClaim(picker.check));
   const appHost = hostOfUrl(overview.clientUrl);
   const domainActive = overview.domain?.status === 'active';
+  // Albums kunnen vóór de rest op het klantadres (CLIENT_DOMAINS_LIVE=albums):
+  // dan zegt het scherm waar ze heen gaan, en dat de rest nog volgt.
+  const albumHost = !overview.config.live && overview.albumOnClientHost ? hostOfUrl(overview.albumUrl ?? '') : '';
 
   function startEditing() {
     setName(current?.name ?? suggestSubdomain(companyName));
@@ -290,8 +293,12 @@ function AddressCard({ organizationId, overview, canAdmin, companyName, onChange
     {!overview.blocked && !current && !canAdmin && <p className="settings-help">Er is nog geen webadres gekozen. De eigenaar of een beheerder kan dat hier doen.</p>}
     {!overview.blocked && !current && canAdmin && <p className="settings-help">Je hebt nog geen webadres. Kies een naam die bij je bedrijf past; je klanten zien hem in elke mail.</p>}
 
-    {current && <p className="settings-help">
-      {!overview.config.live
+    {current && <p className="settings-help" data-testid="client-address-usage">
+      {!overview.config.live && albumHost
+        ? <>De deellinks van je albums gaan al naar {albumHost === current.host ? 'dit adres' : <strong>{albumHost}</strong>}.{appHost
+          ? <> Links in je mails (offertes, facturen, contracten en het portaal) gaan nu nog naar <strong>{appHost}</strong>.</>
+          : null} Zodra ResoFly de klantadressen helemaal aanzet, gaan ook die vanzelf naar {albumHost === current.host ? 'dit adres' : 'je eigen adres'}.</>
+        : !overview.config.live
         ? <>Nog niet in gebruik{appHost ? <>: links in je mails gaan nu naar <strong>{appHost}</strong></> : null}. Zodra ResoFly de klantadressen aanzet, gaan je links vanzelf naar dit adres.</>
         : domainActive
           ? overview.domain?.portalEnabled
@@ -504,6 +511,7 @@ function CustomDomainCard({ organizationId, overview, canAdmin, website, onChang
       domain={domain}
       target={target}
       live={overview.config.live}
+      albumsHere={!overview.config.live && overview.albumOnClientHost === true && hostOfUrl(overview.albumUrl ?? '') === domain.hostname}
       fallbackHost={fallbackHost}
       watching={watching}
       provider={provider}
@@ -575,10 +583,12 @@ function CustomDomainCard({ organizationId, overview, canAdmin, website, onChang
   </section>;
 }
 
-function DomainStatus({ domain, target, live, fallbackHost, watching, provider, onProvider, actions }: {
+function DomainStatus({ domain, target, live, albumsHere, fallbackHost, watching, provider, onProvider, actions }: {
   domain: ClientDomain;
   target: string;
   live: boolean;
+  /** Gaan de deellinks van albums al naar dit domein, terwijl de rest nog niet live is? */
+  albumsHere: boolean;
   fallbackHost: string | null;
   watching: boolean;
   provider: string;
@@ -641,7 +651,9 @@ function DomainStatus({ domain, target, live, fallbackHost, watching, provider, 
     </ol>}
 
     {text && <p className={`settings-help${tone === 'bad' ? ' client-domain-warning' : ''}`} role="status" aria-live="polite">{text}</p>}
-    {domain.status === 'active' && !live && <p className="settings-help">Links in je mails gaan hierheen zodra ResoFly de klantadressen aanzet.</p>}
+    {domain.status === 'active' && !live && <p className="settings-help">{albumsHere
+      ? 'De deellinks van je albums gaan al hierheen. Links in je mails volgen zodra ResoFly de klantadressen helemaal aanzet.'
+      : 'Links in je mails gaan hierheen zodra ResoFly de klantadressen aanzet.'}</p>}
 
     {domain.status !== 'active' && domain.status !== 'blocked' && <div className="dns-records">
       <p className="settings-help">Zet {domain.records.length > 1 ? 'deze twee records' : 'dit record'} bij de DNS van je domein, bij je domeinbeheerder. Bij de meeste beheerders vul je bij Naam alleen het deel vóór je domein in, zoals <code>{shortName}</code>.{txt ? ' Het TXT-record laat zien dat het domein van jou is: zonder wordt het niet actief.' : ''}</p>

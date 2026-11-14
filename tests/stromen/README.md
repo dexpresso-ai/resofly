@@ -294,6 +294,15 @@ Twee delen, zonder worker:
   Andere naam, Escape, en de vraag boven het venster "Bestanden". De media-worker is hier
   nagebootst in de browser (`nepGalerijWerker`).
 
+Daarna, in hetzelfde scenario, publiceren en delen op het eigen webadres (14 november, met
+`CLIENT_DOMAINS_LIVE=albums` zoals op staging): Publiceren, Delen, "Deellink maken". De link
+staat op `<naam>.resofly.com`, met de hash van precies dat token in de database. Een klant
+opent hem in een eigen browser op dat adres (via de nagebootste Worker van `klantdomein`) en
+ziet het album; gallery-public kreeg het webadres als herkomst. In `klantdomein.mjs` (zonder
+browser): het overzicht met alleen albums live (albums naar het eigen domein, facturen en het
+portaal nog naar het algemene adres), en een album op het klantadres: CORS, en het album van
+een andere organisatie bestaat daar niet.
+
 ## Bestanden
 
 | Bestand | Wat |

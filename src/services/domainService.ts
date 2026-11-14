@@ -4,8 +4,11 @@
 import { useEffect, useState } from 'react';
 import { throwFunctionError } from '../lib/functionErrors';
 import { supabase } from '../lib/supabase';
+import { clientAddressFrom, type ClientAddress, type ClientAddressPart } from '../lib/clientAddress';
 import type { SubdomainAvailability, SubdomainCheck } from '../lib/clientDomains';
 import type { UUID } from '../types';
+
+export type { ClientAddress, ClientAddressPart };
 
 export type ClientDomainStatus = 'pending_dns' | 'pending_certificate' | 'active' | 'failing' | 'moved' | 'removed' | 'blocked';
 
@@ -33,8 +36,10 @@ export interface ClientDomainsOverview {
   config: {
     /** De namen staan onder dit domein: <naam>.<base>. */
     base: string;
-    /** Gaan links al naar de klantadressen? */
+    /** Gaan alle links al naar de klantadressen? */
     live: boolean;
+    /** Wat al vóór de rest naar het klantadres gaat (CLIENT_DOMAINS_LIVE=albums); ontbreekt bij een oudere functie. */
+    liveKinds?: string[];
     /** Waar een eigen domein met CNAME naar wijst. */
     cnameTarget: string;
     /** Kan deze omgeving eigen domeinen aan (Cloudflare for SaaS ingericht)? */
@@ -55,6 +60,14 @@ export interface ClientDomainsOverview {
   portalUrl: string;
   /** Is portalUrl het klantadres (en niet het adres van de app)? */
   portalOnClientHost: boolean;
+  /**
+   * Waar de deellink van een album heen gaat: als clientUrl, of met
+   * CLIENT_DOMAINS_LIVE=albums al op het klantadres. Ontbreekt bij een oudere
+   * functie; dan geldt clientUrl.
+   */
+  albumUrl?: string;
+  /** Is albumUrl het klantadres (en niet het adres van de app)? */
+  albumOnClientHost?: boolean;
 }
 
 async function invoke<T>(action: string, organizationId: UUID, payload: Record<string, unknown>, failure: string): Promise<T> {
@@ -125,56 +138,56 @@ export async function setClientDomainPortal(organizationId: UUID, domainId: stri
   return (await invoke<{ domain: ClientDomain }>('setPortal', organizationId, { domainId, enabled }, 'Het klantportaal kon niet worden omgezet.')).domain;
 }
 
-export interface ClientAddress {
-  /** Voor documenten (album, factuur): zonder schuine streep aan het eind. */
-  baseUrl: string;
-  /** Het klantadres (jansen.resofly.com, een eigen domein), niet dat van de app. */
-  onClientHost: boolean;
-  /** Voor het portaal: het eigen domein als het daar aan staat, anders de naam bij ResoFly. */
-  portal: { baseUrl: string; onClientHost: boolean };
-}
-
-function addressFrom(overview: ClientDomainsOverview | undefined, fallback: string): ClientAddress {
-  const documents = overview?.clientUrl
-    ? { baseUrl: overview.clientUrl.replace(/\/+$/, ''), onClientHost: Boolean(overview.onClientHost) }
-    : { baseUrl: fallback, onClientHost: false };
-  const portal = overview?.portalUrl
-    ? { baseUrl: overview.portalUrl.replace(/\/+$/, ''), onClientHost: Boolean(overview.portalOnClientHost) }
-    : { baseUrl: fallback, onClientHost: false };
-  return { ...documents, portal };
+function appOrigin(): string {
+  return typeof window === 'undefined' ? '' : window.location.origin;
 }
 
 /**
  * Het adres voor links naar klantpagina's die de app zelf toont of kopieert
  * (de link naar een album, het portaal): dezelfde als in de mail aan de klant.
- * De server weet het (clientUrl in het overzicht); tot het binnen is, en als
- * het niet lukt, het adres van de app.
+ * De server weet het (het overzicht van client-domains); tot het binnen is, en
+ * als het niet lukt, het adres van de app. `ready` zegt of het antwoord er is:
+ * dan staat er geen link die een tel later een ander adres krijgt.
  */
-export function useClientAddress(organizationId: UUID | null | undefined): ClientAddress {
-  const fallback = typeof window === 'undefined' ? '' : window.location.origin;
-  const [address, setAddress] = useState<ClientAddress>(() => addressFrom(organizationId ? overviews.get(organizationId) : undefined, fallback));
+export function useClientAddress(organizationId: UUID | null | undefined): ClientAddress & { ready: boolean } {
+  const fallback = appOrigin();
+  const cached = organizationId ? overviews.get(organizationId) : undefined;
+  const [state, setState] = useState<{ org: string | null; address: ClientAddress; ready: boolean }>(() => ({
+    org: organizationId ?? null,
+    address: clientAddressFrom(cached, fallback),
+    ready: !organizationId || cached !== undefined,
+  }));
   useEffect(() => {
-    if (!organizationId) { setAddress(addressFrom(undefined, fallback)); return; }
+    if (!organizationId) { setState({ org: null, address: clientAddressFrom(undefined, fallback), ready: true }); return; }
+    const hit = overviews.get(organizationId);
+    if (hit) { setState({ org: organizationId, address: clientAddressFrom(hit, fallback), ready: true }); return; }
     let alive = true;
+    setState({ org: organizationId, address: clientAddressFrom(undefined, fallback), ready: false });
     cachedOverview(organizationId)
-      .then(result => { if (alive) setAddress(addressFrom(result, fallback)); })
-      .catch(() => { if (alive) setAddress(addressFrom(undefined, fallback)); });
+      .then(result => { if (alive) setState({ org: organizationId, address: clientAddressFrom(result, fallback), ready: true }); })
+      .catch(() => { if (alive) setState({ org: organizationId, address: clientAddressFrom(undefined, fallback), ready: true }); });
     return () => { alive = false; };
   }, [organizationId, fallback]);
-  return address;
+  // Net van organisatie gewisseld: niet heel even het adres van de vorige tonen.
+  if (state.org !== (organizationId ?? null)) {
+    return { ...clientAddressFrom(cached, fallback), ready: !organizationId || cached !== undefined };
+  }
+  return { ...state.address, ready: state.ready };
 }
 
-export function useClientBaseUrl(organizationId: UUID | null | undefined): string {
-  return useClientAddress(organizationId).baseUrl;
+/** Waar de deellink van een album heen gaat (Galerij → Delen), met `ready`. */
+export function useAlbumAddress(organizationId: UUID | null | undefined): ClientAddressPart & { ready: boolean } {
+  const address = useClientAddress(organizationId);
+  return { ...address.albums, ready: address.ready };
 }
 
-/** Hetzelfde buiten een component (de handelingen van Gerrie). Gooit nooit. */
-export async function clientBaseUrlFor(organizationId: UUID | null | undefined): Promise<string> {
-  const fallback = typeof window === 'undefined' ? '' : window.location.origin;
-  if (!organizationId) return fallback;
+/** Hetzelfde buiten een component (de handeling van Gerrie die een deellink maakt). Gooit nooit. */
+export async function albumBaseUrlFor(organizationId: UUID | null | undefined): Promise<string> {
+  const fallback = appOrigin();
+  if (!organizationId) return clientAddressFrom(undefined, fallback).albums.baseUrl;
   try {
-    return addressFrom(await cachedOverview(organizationId), fallback).baseUrl;
+    return clientAddressFrom(await cachedOverview(organizationId), fallback).albums.baseUrl;
   } catch {
-    return fallback;
+    return clientAddressFrom(undefined, fallback).albums.baseUrl;
   }
 }

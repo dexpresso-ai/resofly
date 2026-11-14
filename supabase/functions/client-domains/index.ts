@@ -7,7 +7,7 @@ import {
   cloudflareHostnameState, customDomainProblem, dnsInstructions, normalizeHost, ownershipVerdict, parseClientHost,
   parseHostnameInput, subdomainHost, txtValues, type ClientDomainStatus, type CloudflareCustomHostname, type DnsRecordInstruction,
 } from '../_shared/clientDomains.ts';
-import { clientBaseUrl, clientDomainsConfig, clientPortalBaseUrl, type ClientDomainsConfig } from '../_shared/clientLinks.ts';
+import { clientBaseUrl, clientDomainsConfig, clientPortalBaseUrl, liveFor, type ClientDomainsConfig } from '../_shared/clientLinks.ts';
 import { loadBranding } from '../_shared/branding.ts';
 import { escapeHtml, renderEmailLayout } from '../_shared/emailTemplates/layout.ts';
 import { sanitizeIdempotencyPart, sendViaResend } from '../_shared/resend.ts';
@@ -151,13 +151,17 @@ async function customDomainAllowed(organizationId: string): Promise<boolean> {
 }
 
 async function overview(organizationId: string, config: ClientDomainsConfig) {
-  const [subs, domains, clientUrl, portalUrl, allowed] = await Promise.all([
+  const [subs, domains, clientUrl, portalUrl, albumUrl, allowed] = await Promise.all([
     admin.from('client_subdomains').select('name,status,redirect_until,created_at')
       .eq('organization_id', organizationId).order('created_at', { ascending: false }),
     admin.from('client_domains').select(DOMAIN_COLUMNS)
       .eq('organization_id', organizationId).neq('status', 'removed').order('created_at', { ascending: false }),
     clientBaseUrl(admin, organizationId, APP_PUBLIC_URL, config),
     clientPortalBaseUrl(admin, organizationId, APP_PUBLIC_URL, config),
+    // De deellink van een album bouwt de app zelf (Galerij → Delen, en de
+    // handeling van Gerrie). Met CLIENT_DOMAINS_LIVE=albums gaat die al naar
+    // het klantadres, ook als de rest nog niet live is.
+    clientBaseUrl(admin, organizationId, APP_PUBLIC_URL, liveFor(config, 'albums')),
     customDomainAllowed(organizationId),
   ]);
   if (subs.error) throw subs.error;
@@ -171,6 +175,8 @@ async function overview(organizationId: string, config: ClientDomainsConfig) {
     config: {
       base: config.base,
       live: config.live,
+      // Wat al vóór de rest naar het klantadres gaat (CLIENT_DOMAINS_LIVE=albums).
+      liveKinds: config.live ? [] : [...(config.liveKinds ?? [])],
       cnameTarget: config.cnameTarget,
       customDomainsAvailable: cloudflare() !== null,
     },
@@ -191,6 +197,11 @@ async function overview(organizationId: string, config: ClientDomainsConfig) {
     // Het portaal: op het eigen domein als het daar aan staat, anders op de naam bij ResoFly.
     portalUrl,
     portalOnClientHost: Boolean(portalUrl) && portalUrl !== APP_PUBLIC_URL,
+    // De deellink van een album: als clientUrl, of al op het klantadres met
+    // CLIENT_DOMAINS_LIVE=albums. Een actief eigen domein gaat voor de naam
+    // bij ResoFly, net als bij de documenten.
+    albumUrl,
+    albumOnClientHost: Boolean(albumUrl) && albumUrl !== APP_PUBLIC_URL,
   };
 }
 
