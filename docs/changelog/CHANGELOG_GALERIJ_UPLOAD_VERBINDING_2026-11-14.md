@@ -128,7 +128,8 @@ bent, en geen *Niet ingelogd.* bij een haperende verbinding.
     foto's.
   - **Een galerij openen** met 8 foto's: de tegels laden met het token van die galerij. De eerste
     tegel laadt in deze nagebootste omgeving niet, ook zonder deze wijziging.
-- `npm run test:mobile -- --theme=both`: zie de commit.
+- `npm run test:mobile -- --theme=both`: 620 pagina's gemeten, 0 met problemen. De
+  uploadwachtrij zit daar niet in; die is hierboven apart bekeken.
 - **Niet getest:** een echte Android-telefoon met het scherm uit. Dat Chrome lopende verzoeken
   afbreekt als het scherm uitgaat (`ERR_NETWORK_IO_SUSPENDED`), komt uit Chrome zelf. Probeer het
   op staging met een album van een paar dozijn foto's, en zet halverwege wifi uit.
