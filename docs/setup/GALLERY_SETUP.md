@@ -146,6 +146,12 @@ Worker en app lezen allebei de vormen. De variant komt altijd uit het deel dat
 de worker schrijft, nooit uit de naam: daarop beslist de worker of een link het
 origineel mag zien.
 
+**De naam komt van de browser.** Op Android gaat die alleen mee als de
+fotokiezer van Android dicht blijft: die geeft een nummer (`1000022523.jpg`).
+Daarom gaan de uploadvelden van de galerij door `fileInputAccept`
+(`src/lib/filePicker.ts`). Een nieuw uploadveld waarbij de naam ertoe doet,
+hoort daar ook langs.
+
 **Downloadkwaliteit** geldt alleen voor foto's. Een `master` is bereikbaar met
 elk token dat downloaden toestaat — video's worden altijd in de originele
 resolutie geleverd.
