@@ -42,14 +42,18 @@ mobiele menu, de menu's Weergave en Account, het chatpaneel van Gerrie, het
 zwevende teampaneel, de Office-editor, het venster en de dagkaart in de
 agenda, het detail van een afspraak, de vensters in Jaarrekening, Boekjaren,
 Dividend en Aandeelhouders, de instellingen en het delen van een galerij,
-handschrift (schrijven en de tabletmodus), het tekenrooster van de
-boekingslinks, de menu's in Inhoud, het eiland van Stroom en "+ Nieuw".
+de vraag over dubbele bestanden in een galerij (terug is daar Upload stoppen,
+net als Escape), een vergrote foto, video of diavoorstelling in de galerij,
+de presenteerstand van de galerij, handschrift (schrijven en de tabletmodus),
+het tekenrooster van de boekingslinks, de menu's in Inhoud, het eiland van
+Stroom en "+ Nieuw".
 
 Wat met terug een stap terug gaat binnen een pagina: een gesprek in Berichten
 en in de teamchat (op de telefoon), Gerrie → Gesprekken (telefoon en tablet),
 een open agent, de bouwer en het formulier bij Agents, de editors in
-Marketing, een zending (Alle zendingen), een contractsjabloon, en een map in
-Inhoud (één niveau omhoog per druk, zoals Terug).
+Marketing, een zending (Alle zendingen), een contractsjabloon, een album in
+de galerij van een project (zoals "← Galerijen"), en een map in Inhoud (één
+niveau omhoog per druk, zoals Terug).
 
 Op een computer doet de terugknop van de browser of de muis hetzelfde.
 Vooruit doet niets: daar zijn de stappen al weg.
@@ -111,7 +115,8 @@ Vooruit doet niets: daar zijn de stappen al weg.
 ## Getest
 
 - `npm run typecheck` en `npm run build`: schoon.
-- `npm test`: 1861 tests, 0 fout. Nieuw:
+- `npm test` (na het samenvoegen met staging): 1857 tests, 0 fout. (Het
+  eerste commitbericht noemde 1861; dat getal was niet gemeten.) Nieuw:
   - `src/lib/backButton.test.ts` (17), met een nagebootste browser die
     bijhoudt wanneer er getikt is: een item alleen na een tik, nooit als
     antwoord op een druk op terug; dicht met het kruisje haalt het item weg;
@@ -149,6 +154,6 @@ Vooruit doet niets: daar zijn de stappen al weg.
   `GerrieCommandCenter.tsx`, `Marketing.tsx`, `ContentLibrary.tsx`,
   `Contracts.tsx`, `OfficeEditor.tsx`, `MeetingBookingManager.tsx`,
   `AnnualAccounts.tsx`, `FiscalYears.tsx`, `Dividends.tsx`, `Shareholders.tsx`,
-  `ProjectGallery.tsx`, `Bank.tsx`
+  `ProjectGallery.tsx`, `GalleryViewer.tsx`, `Bank.tsx`
 - `tests/terugknop/run.mjs`, `tests/terugknop/README.md` (nieuw),
   `npm run test:terugknop`
