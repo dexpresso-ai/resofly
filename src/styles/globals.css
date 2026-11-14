@@ -6246,6 +6246,35 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .gal-field-row{flex-direction:row;align-items:center;gap:8px;font-size:12.5px}
 .gal-modal-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto;margin-top:0;padding:13px 20px;border-top:1px solid var(--border)}
 .gal-modal-spacer{flex:1}
+/* De vraag over dubbele bestanden. Boven het venster "Bestanden": daar kan de
+   upload ook vandaan komen, en dan moet de vraag ervoor staan, niet erachter. */
+.gal-dup-shell{z-index:61}
+.gal-dup-intro{margin:0;font-size:12.5px;line-height:1.55;color:var(--muted2)}
+.gal-dup-bulk{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12px;color:var(--muted)}
+.gal-dup-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:10px;overflow:hidden;flex-shrink:0}
+.gal-dup-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-top:1px solid var(--border)}
+.gal-dup-row:first-child{border-top:0}
+.gal-dup-info{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.gal-dup-name{font-size:12.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gal-dup-why{font-size:11.5px;color:var(--muted)}
+.gal-dup-new{font-size:11.5px;color:var(--muted2)}
+.gal-dup-new strong{color:var(--text);font-weight:600;overflow-wrap:anywhere}
+.gal-dup-choice{display:inline-flex;flex-shrink:0;border:1px solid var(--border2);border-radius:8px;overflow:hidden}
+.gal-dup-choice button{border:0;background:none;color:var(--muted2);font:inherit;font-size:12px;font-weight:600;padding:7px 11px;min-height:32px;cursor:pointer;transition:background .15s,color .15s}
+.gal-dup-choice button+button{border-left:1px solid var(--border2)}
+.gal-dup-choice button:hover{color:var(--text)}
+.gal-dup-choice button[aria-checked="true"]{background:rgba(var(--accent-rgb),.18);color:var(--text)}
+.gal-dup-choice button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+@media(max-width:560px){
+  .gal-dup-row{flex-direction:column;align-items:stretch;gap:8px}
+  .gal-dup-choice{align-self:flex-start}
+  .gal-dup-choice button{min-height:38px;padding:8px 14px}
+  /* Op een telefoon onder elkaar en even breed, de hoofdknop bovenaan. Naast
+     elkaar liep "Andere naam en uploaden" door naar een tweede regel, rechts
+     onder de andere twee. */
+  .gal-dup-shell .gal-modal-actions{flex-direction:column-reverse;align-items:stretch}
+  .gal-dup-shell .gal-modal-actions .gal-modal-spacer{display:none}
+}
 .gal-unsaved{font-size:11px;font-weight:600;color:var(--accent-ink)}
 /* Groepjes binnen het venster: rustiger dan één lange kolom velden. */
 .gal-card{display:flex;flex-direction:column;gap:10px;border:1px solid var(--border);border-radius:var(--radius-md,14px);background:var(--bg2);padding:14px}

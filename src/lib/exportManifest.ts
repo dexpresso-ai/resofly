@@ -59,7 +59,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // client_subdomain_problem ("caldav-staging" erbij); geen kolommen.
 // 20261114100000 (galerij voor iedereen) zet creative_included in de limits
 // van elk plan en vervangt twee functies; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261114100000';
+// 20261114150000 (galerij: dubbele namen) zet een index en een trigger op
+// gallery_items; geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261114150000';
 
 export type TableKind =
   | 'export'

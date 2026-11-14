@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -49,7 +49,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -226,7 +226,7 @@ function volg(page, naam, context) {
  * De werkruimte als `gebruiker`, ingelogd, met de zijbalk vast open.
  * `tijdelijk`: het scherm gaat dicht na de stap (ná een eventuele schermafdruk).
  */
-async function openWerkruimte(gebruiker, naam, organisatieId, { tijdelijk = false } = {}) {
+async function openWerkruimte(gebruiker, naam, organisatieId, { tijdelijk = false, tabblad = null, voor = null } = {}) {
   const sessie = await sessieVan(gebruiker);
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
   // Het werkblad begint op Offertes: daar beginnen de meeste stromen van deze
@@ -234,7 +234,7 @@ async function openWerkruimte(gebruiker, naam, organisatieId, { tijdelijk = fals
   const items = {
     [SESSIESLEUTEL]: JSON.stringify(sessie),
     'brandcore.activeOrganizationId': organisatieId,
-    [`brandcore.tabs.${organisatieId}`]: JSON.stringify({ tabs: [{ page: 'quotes', projectId: null, clientId: null, statsReportId: null, galleryId: null }], activeIndex: 0 }),
+    [`brandcore.tabs.${organisatieId}`]: JSON.stringify({ tabs: [tabblad ?? { page: 'quotes', projectId: null, clientId: null, statsReportId: null, galleryId: null }], activeIndex: 0 }),
     'brandcore.sidebarPinned': '1',
     // De stromen klikken door de zijbalk van Cockpit, waarin elke pagina op één
     // niveau staat. Baken, de standaard, heeft sinds 2026-11-13 de rail met het
@@ -256,6 +256,8 @@ async function openWerkruimte(gebruiker, naam, organisatieId, { tijdelijk = fals
       localStorage.setItem('stromen.ui.gezet', '1');
     } catch { /* geen opslag in dit venster */ }
   })();`);
+  // Iets wat er al moet zijn als de app laadt, zoals een nagebootste worker.
+  if (voor) await voor(context);
   const page = await context.newPage();
   const scherm = volg(page, naam, context);
   scherm.tijdelijk = tijdelijk;
@@ -3139,6 +3141,159 @@ async function scenarioVooruitbetaald() {
   });
 }
 
+// ── Galerij: dubbele bestanden ──────────────────────────────────────────────
+
+// Een echte PNG van 1×1: de browser maakt er zelf een preview en miniatuur van.
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+
+/**
+ * De media-worker van de galerij. In de UI-test is er geen echte worker; hier
+ * krijgt een upload een sleutel zoals de echte worker hem maakt
+ * (<organisatie>/gallery/<album>/<item>/<variant>-…), zodat de database hem
+ * accepteert. `geupload` houdt bij onder welke naam elk bestand binnenkwam.
+ * Op de context, vóór de app laadt: die vraagt bij het openen van het album
+ * meteen een kijktoken.
+ */
+async function nepGalerijWerker(context, geupload) {
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
+  await context.route(/\/__media\/gallery\//, async (route) => {
+    const verzoek = route.request();
+    if (verzoek.method() === 'OPTIONS') { await route.fulfill({ status: 204, headers: cors }); return; }
+    const pad = new URL(verzoek.url()).pathname.replace(/^.*\/__media/, '');
+    const json = (body) => route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(body) });
+    if (pad === '/gallery/view-session') return json({ mediaToken: 'nep-token', streamTokens: {}, exp: Date.now() + 3600_000 });
+    if (pad === '/gallery/purge') return json({ ok: true });
+    if (pad === '/gallery/upload') {
+      const kop = verzoek.headers();
+      const naam = decodeURIComponent(kop['x-file-name'] ?? 'bestand');
+      const bytes = verzoek.postDataBuffer() ?? Buffer.alloc(0);
+      const sleutel = `${kop['x-organization-id']}/gallery/${kop['x-gallery-id']}/${kop['x-item-id']}/${kop['x-variant']}-${randomUUID()}-${naam.replace(/[^A-Za-z0-9._-]+/g, '_')}`;
+      geupload.push({ naam, variant: kop['x-variant'] });
+      return json({ ok: true, key: sleutel, size: bytes.length });
+    }
+    if (pad.startsWith('/gallery/file/')) return route.fulfill({ status: 200, contentType: 'image/png', headers: cors, body: PNG });
+    return route.fulfill({ status: 404, contentType: 'application/json', headers: cors, body: JSON.stringify({ error: 'Route not found' }) });
+  });
+}
+
+async function scenarioGalerij() {
+  groep('UI: galerij — dubbele bestanden');
+  const { w } = t;
+  const klaar = await stap('een album met taart.png', async () => {
+    const project = gelukt(await rest('projects?select=id', {
+      method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, client_id: w.klantA.id, name: `Bruiloft ${randomUUID().slice(0, 6)}` },
+    }), 'project')[0];
+    const album = gelukt(await rest('galleries?select=id', {
+      method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, project_id: project.id, title: 'Ceremonie', format: 'photo' },
+    }), 'album')[0];
+    gelukt(await rest('gallery_items', {
+      method: 'POST', token: w.medewerker.token,
+      body: { organization_id: w.orgId, gallery_id: album.id, media_type: 'photo', file_name: 'taart.png', content_type: 'image/png', size_bytes: PNG.length },
+    }), 'taart.png');
+    return { project, album };
+  });
+  if (!klaar) return;
+  const { project, album } = klaar;
+  // In JavaScript gesorteerd, niet in de database: die sorteert volgens zijn
+  // collatie, en dan hing de verwachting af van de locale van de stack.
+  const namen = () => sqlRijen(`select file_name from public.gallery_items where gallery_id = ${q(album.id)}`).map((r) => r.file_name).sort();
+  const png = (name) => ({ name, mimeType: 'image/png', buffer: PNG });
+  let lid = null;
+  const geupload = [];
+  const paneelInvoer = () => lid.page.locator('article.gal-detail > input[type="file"]');
+  const vraag = () => lid.page.getByRole('dialog').filter({ has: lid.page.locator('#gal-dup-title') });
+  const melding = () => lid.page.locator('article.gal-detail .gal-notice');
+
+  await uiStap('één dubbel bestand: de vraag noemt de nieuwe naam; "Andere naam" uploadt als taart-2.png', async () => {
+    lid = await openWerkruimte(w.medewerker, 'galerij', w.orgId, {
+      tabblad: { page: 'gallery', projectId: project.id, clientId: null, statsReportId: null, galleryId: album.id },
+      voor: (context) => nepGalerijWerker(context, geupload),
+    });
+    await lid.page.locator('article.gal-detail').waitFor({ timeout: 30000 });
+    await rustig(lid);
+    await paneelInvoer().setInputFiles([png('taart.png'), png('nieuw.png')]);
+    await vraag().waitFor({ timeout: 10000 });
+    const inhoudVraag = tekst(await vraag().innerText());
+    verwacht(inhoudVraag.includes('Dit bestand is dubbel'), `titel: ${inhoudVraag}`);
+    verwacht(inhoudVraag.includes('Waarschijnlijk hetzelfde bestand'), `even groot: ${inhoudVraag}`);
+    verwacht(inhoudVraag.includes('taart-2.png'), `nieuwe naam ontbreekt: ${inhoudVraag}`);
+    verwacht(inhoudVraag.includes('Het andere bestand wordt gewoon geüpload'), `de rest: ${inhoudVraag}`);
+    gelijk(geupload.length, 0, 'er is al iets geüpload vóór de keuze');
+    await vraag().getByRole('button', { name: 'Andere naam en uploaden' }).click();
+    await wachtTot(() => namen().length === 3, { melding: `niet geüpload: ${namen().join(', ')}` });
+    gelijk(namen(), ['nieuw.png', 'taart-2.png', 'taart.png'].sort(), 'het album');
+    verwacht(geupload.some((u) => u.variant === 'original' && u.naam === 'taart-2.png'), `R2 kreeg niet de nieuwe naam: ${JSON.stringify(geupload)}`);
+    await wachtTot(async () => tekst(await melding().innerText().catch(() => '')).includes('1 bestand kreeg een nieuwe naam'), { melding: 'geen melding over de nieuwe naam' });
+  });
+
+  await uiStap('"Overslaan": alleen het nieuwe bestand komt erbij', async () => {
+    if (!lid) throw new Error('de vorige stap opende de galerij niet');
+    await paneelInvoer().setInputFiles([png('taart.png'), png('nog-een.png')]);
+    await vraag().waitFor({ timeout: 10000 });
+    await vraag().getByRole('button', { name: 'Overslaan', exact: true }).click();
+    await wachtTot(() => namen().length === 4, { melding: `niet geüpload: ${namen().join(', ')}` });
+    gelijk(namen(), ['nieuw.png', 'nog-een.png', 'taart-2.png', 'taart.png'].sort(), 'het album');
+    await wachtTot(async () => tekst(await melding().innerText().catch(() => '')).includes('1 dubbel bestand overgeslagen'), { melding: 'geen melding over het overslaan' });
+  });
+
+  await uiStap('meer dubbele bestanden: eerst kiezen; Escape stopt de upload en er komt niets bij', async () => {
+    if (!lid) throw new Error('de vorige stap opende de galerij niet');
+    const voor = geupload.length;
+    await paneelInvoer().setInputFiles([png('taart.png'), png('nieuw.png'), png('TAART.PNG')]);
+    await vraag().waitFor({ timeout: 10000 });
+    verwacht(tekst(await vraag().innerText()).includes('3 bestanden zijn dubbel'), 'titel bij drie');
+    const knop = vraag().getByRole('button', { name: 'Nog 3 te kiezen' });
+    verwacht(await knop.isDisabled(), 'uploaden kon al zonder keuze');
+    await lid.page.keyboard.press('Escape');
+    await vraag().waitFor({ state: 'detached', timeout: 10000 });
+    await wachtTot(async () => tekst(await melding().innerText().catch(() => '')).includes('Upload gestopt'), { melding: 'geen melding na Escape' });
+    gelijk(namen().length, 4, 'rijen na Escape');
+    gelijk(geupload.length, voor, 'uploads na Escape');
+  });
+
+  await uiStap('per bestand kiezen: alles een andere naam, één toch overslaan', async () => {
+    if (!lid) throw new Error('de vorige stap opende de galerij niet');
+    await paneelInvoer().setInputFiles([png('taart.png'), png('nieuw.png'), png('TAART.PNG')]);
+    await vraag().waitFor({ timeout: 10000 });
+    await vraag().getByRole('button', { name: 'Alles een andere naam' }).click();
+    await vraag().getByRole('radiogroup', { name: 'Wat moet er met nieuw.png gebeuren?' }).getByRole('radio', { name: 'Overslaan' }).click();
+    const inhoudVraag = tekst(await vraag().innerText());
+    verwacht(inhoudVraag.includes('taart-3.png') && inhoudVraag.includes('TAART-4.PNG'), `nieuwe namen: ${inhoudVraag}`);    await vraag().getByRole('button', { name: '2 bestanden uploaden' }).click();
+    await wachtTot(() => namen().length === 6, { melding: `niet geüpload: ${namen().join(', ')}` });
+    gelijk(namen(), ['nieuw.png', 'nog-een.png', 'taart-2.png', 'TAART-4.PNG', 'taart-3.png', 'taart.png'].sort(), 'het album');
+    await wachtTot(async () => {
+      const m = tekst(await melding().innerText().catch(() => ''));
+      return m.includes('1 dubbel bestand overgeslagen') && m.includes('2 bestanden kregen een nieuwe naam');
+    }, { melding: 'melding na per bestand kiezen' });
+  });
+
+  await uiStap('vanuit het venster "Bestanden": de vraag staat erboven, en Escape sluit alleen de vraag', async () => {
+    if (!lid) throw new Error('de vorige stap opende de galerij niet');
+    await lid.page.locator('article.gal-detail').getByRole('button', { name: /^Bestanden/ }).click();
+    const venster = lid.page.getByRole('dialog', { name: 'Galerij-instellingen' });
+    await venster.waitFor({ timeout: 10000 });
+    await venster.locator('input[type="file"]').setInputFiles([png('taart.png')]);
+    await vraag().waitFor({ timeout: 10000 });
+    // Wat ligt er bovenop, midden in de vraag? Dat moet de vraag zelf zijn.
+    const bovenop = await vraag().evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return Boolean(hit && el.contains(hit));
+    });
+    verwacht(bovenop, 'de vraag ligt achter het venster "Bestanden"');
+    // Het venster luistert zelf ook naar Escape; die toets is hier voor de vraag.
+    await lid.page.keyboard.press('Escape');
+    await vraag().waitFor({ state: 'detached', timeout: 10000 });
+    await slaap(300);
+    verwacht(await venster.isVisible(), 'het venster "Bestanden" ging mee dicht');
+    gelijk(namen().length, 6, 'rijen');
+    await venster.getByRole('button', { name: 'Sluiten' }).first().click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+  });
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -3154,7 +3309,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();
