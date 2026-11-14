@@ -61,9 +61,9 @@ const AGENT_CATALOG = {
 };
 
 const PLANS = [
-  { plan_key: 'starter', name: 'Starter', description: 'Voor solo-gebruikers en kleine starts.', included_seats: 1, monthly_price_cents: 1500, yearly_price_cents: 18000, extra_seat_price_cents: 900, extra_seat_yearly_price_cents: 10800, currency: 'EUR', is_custom: false, is_active: true, sort_order: 10, limits: { storage_gb: 50, included_seats: 1 }, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000, business_addon_price_cents: 1900, business_addon_yearly_price_cents: 19000 },
-  { plan_key: 'team', name: 'Team', description: 'Voor kleine teams met standaard samenwerking.', included_seats: 3, monthly_price_cents: 3900, yearly_price_cents: 46800, extra_seat_price_cents: 800, extra_seat_yearly_price_cents: 9600, currency: 'EUR', is_custom: false, is_active: true, sort_order: 20, limits: { storage_gb: 250, included_seats: 3 }, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000, business_addon_price_cents: 1900, business_addon_yearly_price_cents: 19000 },
-  { plan_key: 'pro', name: 'Pro', description: 'Voor grotere teams met ruimere capaciteit.', included_seats: 10, monthly_price_cents: 9900, yearly_price_cents: 118800, extra_seat_price_cents: 700, extra_seat_yearly_price_cents: 8400, currency: 'EUR', is_custom: false, is_active: true, sort_order: 30, limits: { storage_gb: 1000, included_seats: 10 }, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000, business_addon_price_cents: 1900, business_addon_yearly_price_cents: 19000 },
+  { plan_key: 'starter', name: 'Starter', description: 'Voor solo-gebruikers en kleine starts.', included_seats: 1, monthly_price_cents: 1500, yearly_price_cents: 18000, extra_seat_price_cents: 900, extra_seat_yearly_price_cents: 10800, currency: 'EUR', is_custom: false, is_active: true, sort_order: 10, limits: { storage_gb: 50, included_seats: 1, creative_included: true }, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000, business_addon_price_cents: 1900, business_addon_yearly_price_cents: 19000 },
+  { plan_key: 'team', name: 'Team', description: 'Voor kleine teams met standaard samenwerking.', included_seats: 3, monthly_price_cents: 3900, yearly_price_cents: 46800, extra_seat_price_cents: 800, extra_seat_yearly_price_cents: 9600, currency: 'EUR', is_custom: false, is_active: true, sort_order: 20, limits: { storage_gb: 250, included_seats: 3, creative_included: true }, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000, business_addon_price_cents: 1900, business_addon_yearly_price_cents: 19000 },
+  { plan_key: 'pro', name: 'Pro', description: 'Voor grotere teams met ruimere capaciteit.', included_seats: 10, monthly_price_cents: 9900, yearly_price_cents: 118800, extra_seat_price_cents: 700, extra_seat_yearly_price_cents: 8400, currency: 'EUR', is_custom: false, is_active: true, sort_order: 30, limits: { storage_gb: 1000, included_seats: 10, creative_included: true }, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000, business_addon_price_cents: 1900, business_addon_yearly_price_cents: 19000 },
   { plan_key: 'custom', name: 'Custom', description: 'Handmatig afgestemd contract.', included_seats: null, monthly_price_cents: 0, yearly_price_cents: 0, extra_seat_price_cents: 0, extra_seat_yearly_price_cents: 0, currency: 'EUR', is_custom: true, is_active: true, sort_order: 90, limits: { business_included: true, creative_included: true } },
 ];
 
@@ -261,12 +261,13 @@ function setupRpc(setup, fn, body) {
         mollie_subscription_id: setup.subscription ? 'sub_mock' : null, last_payment_status: null, next_invoice_date: null,
         trial_ends_at: null, current_period_ends_at: null, monthly_price_cents: 1500, extra_seat_price_cents: 900, currency: 'EUR',
         billing_exempt: false, billing_interval: 'month', yearly_price_cents: 18000, extra_seat_yearly_price_cents: 10800,
-        creative_enabled: setup.creative, creative_included_in_plan: false, creative_active: setup.creative, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000,
+        creative_enabled: setup.creative, creative_included_in_plan: true, creative_active: true, creative_addon_price_cents: 900, creative_addon_yearly_price_cents: 9000,
       }] : [];
     case 'organization_business_status':
       return [{ active: setup.business, enabled: setup.business, included_in_plan: false, in_grace: false, grace_until: null, legal_form: setup.settings?.legal_form ?? 'eenmanszaak', fiscal_regime: BUSINESS_FORMS.includes(setup.settings?.legal_form) ? 'vpb' : 'ib', is_corporate: ['bv', 'nv'].includes(setup.settings?.legal_form), is_child: false, root_organization_id: seed.ids.ORG, entity_count: 1, entity_allowance: 1, addon_price_cents: 1900, addon_yearly_price_cents: 19000, entity_addon_price_cents: 900, entity_addon_yearly_price_cents: 9000, billing_interval: 'month' }];
     case 'organization_creative_status':
-      return [{ active: setup.creative, enabled: setup.creative, included_in_plan: false, in_grace: false, grace_until: null, addon_price_cents: 900, addon_yearly_price_cents: 9000, billing_interval: 'month' }];
+      // Sinds 20261114100000 bij elk plan inbegrepen, met of zonder abonnement.
+      return [{ active: true, enabled: setup.creative, included_in_plan: true, in_grace: false, grace_until: null, addon_price_cents: 900, addon_yearly_price_cents: 9000, billing_interval: 'month' }];
     case 'client_subdomain_check':
       return subdomainCheck(setup.subdomain, body);
     case 'client_subdomain_claim': {

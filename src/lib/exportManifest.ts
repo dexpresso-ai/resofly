@@ -57,7 +57,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // een ResoFly-agenda voor mensen buiten ResoFly. 'geheim', net als de
 // app-wachtwoorden: elke rij is een sleutel tot een agenda. Vervangt verder
 // client_subdomain_problem ("caldav-staging" erbij); geen kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261113120000';
+// 20261114100000 (galerij voor iedereen) zet creative_included in de limits
+// van elk plan en vervangt twee functies; geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261114100000';
 
 export type TableKind =
   | 'export'

@@ -3315,7 +3315,12 @@ function planCostCents(plan: BillingPlan, purchasedSeats: number, interval: 'mon
     + (creative ? creativePlanCents(plan, interval) : 0);
 }
 
+// Zit de module in het plan (sinds 20261114100000 bij elk plan), dan kost hij
+// niets. Zonder die controle bood het scherm een vinkje van €9 aan voor iets
+// wat al inbegrepen was; de billing-functie rekende het dan niet, maar het
+// getoonde totaal wel.
 function creativePlanCents(plan: BillingPlan, interval: 'month' | 'year'): number {
+  if (plan.limits?.creative_included === true) return 0;
   return (interval === 'year' ? plan.creative_addon_yearly_price_cents : plan.creative_addon_price_cents) ?? 0;
 }
 
