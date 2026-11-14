@@ -41,6 +41,7 @@ import {
 } from '../lib/gallery';
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
 import { derivedFileName, formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
+import { fileInputAccept } from '../lib/filePicker';
 import { useClientBaseUrl } from '../services/domainService';
 import { useBackStep } from '../lib/useBackStep';
 
@@ -1606,7 +1607,9 @@ export function GalleryTab({
         ref={fileInputRef}
         type="file"
         multiple
-        accept={formatConfig(openGallery.format).accept}
+        // Op Android anders de fotokiezer, en die maakt van elke foto een
+        // nummer (1000022523.jpg) in plaats van de naam op de telefoon.
+        accept={fileInputAccept(formatConfig(openGallery.format).accept)}
         style={{ display: 'none' }}
         onChange={(e) => void handlePanelPick(e.target.files)}
       />
@@ -2500,7 +2503,8 @@ function GalleryCoverSettings({ gallery, heroTemplate, items, bundle, busy, acti
           <input
             ref={uploadInput}
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            // De naam komt terug in preview-<naam>.jpg; zie fileInputAccept.
+            accept={fileInputAccept('image/jpeg,image/png,image/webp')}
             hidden
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -2845,7 +2849,8 @@ function GalleryFileSettings({ items, categories, format, bundle, busy, queue, a
         ref={uploadInput}
         type="file"
         multiple
-        accept={formatConfig(format).accept}
+        // Zie het uploadveld in het paneel: anders een nummer als naam op Android.
+        accept={fileInputAccept(formatConfig(format).accept)}
         style={{ display: 'none' }}
         onChange={(e) => {
           const picked = Array.from(e.target.files ?? []);
