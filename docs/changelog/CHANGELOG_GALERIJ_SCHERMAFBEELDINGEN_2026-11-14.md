@@ -121,7 +121,9 @@ Twee uitzonderingen staan los van deze controle:
   - bij afdrukken geen foto's;
   - een klik in een iframe laat het beeld open;
   - geen JavaScript-fouten.
-- `npm run test:mobile -- --theme=both`: zie hieronder.
+- `npm run test:mobile -- --theme=both --pages=public-gallery`: 6 metingen (telefoon, tablet en
+  liggend, licht en donker), 0 problemen. De ronde over alle pagina's liep tegen de tijdslimiet van
+  de cloudsessie (30 minuten) en is afgebroken. Alleen de deellinkpagina is veranderd.
 - **Niet getest:** een echte Mac, Windows-pc en telefoon. Probeer op staging een schermafbeelding
   met Cmd+Shift+4 en met Win+Shift+S, en lang drukken op een foto op een iPhone.
 
