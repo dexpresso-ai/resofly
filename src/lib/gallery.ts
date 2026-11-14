@@ -6,6 +6,9 @@
 // Stream-configuratie meldt de worker 'r2' en uploaden we de video als bestand.
 import { getAccessToken, getWorkerBase } from './r2-api';
 import type { GalleryZipMedia } from './galleryMedia';
+import {
+  ConnectionError, HttpStatusError, isConnectionError, messageFromResponseText, withRetry, type RetryOptions,
+} from './networkRetry';
 import type { UUID } from '../types';
 
 export type GalleryTokenBundle = { mediaToken: string; streamTokens: Record<string, string>; exp: number };
@@ -49,21 +52,61 @@ async function errText(response: Response): Promise<string> {
     const json = JSON.parse(text) as { error?: string };
     if (json?.error) return json.error;
   } catch { /* geen JSON */ }
-  return text || `Fout ${response.status}`;
+  return messageFromResponseText(response.status, text);
 }
 
-async function workerPost<T>(path: string, init: { headers?: Record<string, string>; body?: BodyInit; json?: unknown }): Promise<T> {
-  const base = getWorkerBase();
-  const token = await getAccessToken();
-  const headers: Record<string, string> = { authorization: `Bearer ${token}`, ...(init.headers || {}) };
-  let body = init.body;
-  if (init.json !== undefined) {
-    headers['content-type'] = 'application/json';
-    body = JSON.stringify(init.json);
+/**
+ * fetch naar de worker, maar een verbroken verbinding wordt een
+ * ConnectionError met een Nederlandse melding. Eerst kreeg de gebruiker de
+ * kale browsertekst te zien: "Failed to fetch".
+ */
+async function workerFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (isConnectionError(error)) throw new ConnectionError();
+    throw error;
   }
-  const response = await fetch(`${base}${path}`, { method: 'POST', headers, body });
-  if (!response.ok) throw new Error(await errText(response));
-  return (await response.json()) as T;
+}
+
+/** Een foutantwoord van de worker; de status beslist of opnieuw proberen zin heeft. */
+async function workerFailure(response: Response): Promise<HttpStatusError> {
+  return new HttpStatusError(await errText(response), response.status);
+}
+
+/**
+ * `retry: false` alleen voor een verzoek dat niet twee keer mag lopen. Al het
+ * andere probeert het opnieuw bij een haperende verbinding (zie withRetry).
+ * Dat kan hier veilig: een tweede upload na een verloren antwoord geeft
+ * hooguit een los bestand in R2, en dat ruimt het verwijderen van het album op
+ * (alles onder de map van de galerij gaat dan weg).
+ */
+async function workerPost<T>(
+  path: string,
+  init: { headers?: Record<string, string>; body?: BodyInit; json?: unknown },
+  retry: RetryOptions | false = {},
+): Promise<T> {
+  const base = getWorkerBase();
+  const once = async () => {
+    // Per poging een vers token: na een pauze kan het oude verlopen zijn.
+    const token = await getAccessToken();
+    const headers: Record<string, string> = { authorization: `Bearer ${token}`, ...(init.headers || {}) };
+    let body = init.body;
+    if (init.json !== undefined) {
+      headers['content-type'] = 'application/json';
+      body = JSON.stringify(init.json);
+    }
+    const response = await workerFetch(`${base}${path}`, { method: 'POST', headers, body });
+    if (!response.ok) throw await workerFailure(response);
+    try {
+      return (await response.json()) as T;
+    } catch (error) {
+      // De verbinding viel weg terwijl het antwoord binnenkwam.
+      if (isConnectionError(error)) throw new ConnectionError();
+      throw error;
+    }
+  };
+  return retry === false ? once() : withRetry(once, retry);
 }
 
 /** Kort-levende kijk-/downloadtokens voor teamleden (app-weergave). */
@@ -117,6 +160,7 @@ export async function uploadGalleryFileVariant(
   galleryId: UUID,
   itemId: UUID,
   variant: GalleryVariant,
+  retry: RetryOptions = {},
 ): Promise<{ key: string; size: number }> {
   const result = await workerPost<{ ok: true; key: string; size: number }>('/gallery/upload', {
     headers: {
@@ -128,7 +172,7 @@ export async function uploadGalleryFileVariant(
       'x-variant': variant,
     },
     body: blob,
-  });
+  }, retry);
   return { key: result.key, size: result.size };
 }
 
@@ -136,7 +180,10 @@ export async function uploadGalleryFileVariant(
  * Upload een groot bestand in parts. Elk part gaat als eigen request langs de
  * Worker — die neemt maximaal ~100 MB per request aan — met eigen pogingen per
  * part: bij een master van 20 GB zijn dat ruim 300 requests over meer dan een
- * uur, en dan is één wifi-hik zonder herkansing gegarandeerd fataal.
+ * uur, en dan is één wifi-hik zonder herkansing gegarandeerd fataal. Valt de
+ * verbinding langer weg, of gaat het scherm van de telefoon uit, dan wacht een
+ * part tot je terug bent (zie withRetry). Een part opnieuw sturen kan altijd:
+ * R2 bewaart per partnummer alleen de laatste.
  *
  * Mislukt het alsnog, dan breken we de multipart-upload af. R2 ruimt een
  * onvoltooide upload na zeven dagen zelf op, maar tot die tijd tellen de
@@ -151,10 +198,12 @@ export async function uploadGalleryFileMultipart(
   itemId: UUID,
   variant: Extract<GalleryVariant, 'master' | 'original' | 'source'>,
   onProgress?: (uploadedBytes: number, totalBytes: number) => void,
+  retry: RetryOptions = {},
 ): Promise<{ key: string; size: number }> {
   const created = await workerPost<{ ok: true; key: string; uploadId: string; partSize: number }>(
     '/gallery/multipart/create',
     { json: { organizationId, galleryId, itemId, variant, fileName, contentType, fileSize: blob.size } },
+    retry,
   );
   const partSize = created.partSize > 0 ? created.partSize : GALLERY_MULTIPART_THRESHOLD_BYTES;
   const total = blob.size;
@@ -166,48 +215,43 @@ export async function uploadGalleryFileMultipart(
     for (let offset = 0, partNumber = 1; offset < total; offset += partSize, partNumber += 1) {
       // slice() leest niets van schijf; pas bij het versturen wordt de range gelezen.
       const chunk = blob.slice(offset, Math.min(offset + partSize, total));
-      let lastError: unknown = null;
-      for (let attempt = 0; attempt < 4; attempt += 1) {
+      const result = await withRetry(async () => {
+        // Token per poging opnieuw: bij een upload van uren verloopt het anders halverwege.
+        const token = await getAccessToken();
+        const response = await workerFetch(`${base}/gallery/multipart/part`, {
+          method: 'PUT',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'x-organization-id': organizationId,
+            'x-gallery-id': galleryId,
+            // Headers zijn ASCII-only; de key bevat de (mogelijk niet-ASCII) bestandsnaam.
+            'x-key': encodeURIComponent(created.key),
+            'x-upload-id': encodeURIComponent(created.uploadId),
+            'x-part-number': String(partNumber),
+          },
+          body: chunk,
+        });
+        if (!response.ok) throw await workerFailure(response);
         try {
-          // Token per poging opnieuw: bij een upload van uren verloopt het anders halverwege.
-          const token = await getAccessToken();
-          const response = await fetch(`${base}/gallery/multipart/part`, {
-            method: 'PUT',
-            headers: {
-              authorization: `Bearer ${token}`,
-              'x-organization-id': organizationId,
-              'x-gallery-id': galleryId,
-              // Headers zijn ASCII-only; de key bevat de (mogelijk niet-ASCII) bestandsnaam.
-              'x-key': encodeURIComponent(created.key),
-              'x-upload-id': encodeURIComponent(created.uploadId),
-              'x-part-number': String(partNumber),
-            },
-            body: chunk,
-          });
-          if (!response.ok) throw new Error(await errText(response));
-          const result = (await response.json()) as { partNumber: number; etag: string };
-          parts.push({ partNumber: result.partNumber, etag: result.etag });
-          lastError = null;
-          break;
-        } catch (e) {
-          lastError = e;
-          // Oplopend wachten (1s, 2s, 4s): een korte onderbreking is dan voorbij.
-          if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
+          return (await response.json()) as { partNumber: number; etag: string };
+        } catch (error) {
+          if (isConnectionError(error)) throw new ConnectionError();
+          throw error;
         }
-      }
-      if (lastError) throw lastError;
+      }, retry);
+      parts.push({ partNumber: result.partNumber, etag: result.etag });
       uploaded += chunk.size;
       onProgress?.(uploaded, total);
     }
 
     const done = await workerPost<{ ok: true; key: string; size: number }>('/gallery/multipart/complete', {
       json: { organizationId, galleryId, key: created.key, uploadId: created.uploadId, parts },
-    });
+    }, retry);
     return { key: done.key, size: done.size };
   } catch (e) {
     await workerPost('/gallery/multipart/abort', {
       json: { organizationId, galleryId, key: created.key, uploadId: created.uploadId },
-    }).catch(() => undefined);
+    }, false).catch(() => undefined);
     throw e;
   }
 }
@@ -222,16 +266,17 @@ export async function uploadGalleryFile(
   itemId: UUID,
   variant: GalleryVariant,
   onProgress?: (uploadedBytes: number, totalBytes: number) => void,
+  retry: RetryOptions = {},
 ): Promise<{ key: string; size: number }> {
   if (blob.size <= GALLERY_MULTIPART_THRESHOLD_BYTES) {
-    const result = await uploadGalleryFileVariant(blob, fileName, contentType, organizationId, galleryId, itemId, variant);
+    const result = await uploadGalleryFileVariant(blob, fileName, contentType, organizationId, galleryId, itemId, variant, retry);
     onProgress?.(result.size, result.size);
     return result;
   }
   if (variant !== 'master' && variant !== 'original' && variant !== 'source') {
     throw new Error('Alleen originelen en video-masters kunnen in delen worden geüpload.');
   }
-  return uploadGalleryFileMultipart(blob, fileName, contentType, organizationId, galleryId, itemId, variant, onProgress);
+  return uploadGalleryFileMultipart(blob, fileName, contentType, organizationId, galleryId, itemId, variant, onProgress, retry);
 }
 
 export type GalleryStreamCopyResult = { ok: true; mode: 'r2' } | { ok: true; mode: 'stream'; uid: string };
@@ -249,9 +294,12 @@ export async function requestGalleryStreamCopy(
   key: string,
   fileName: string,
 ): Promise<GalleryStreamCopyResult> {
+  // Niet opnieuw proberen: kwam het eerste verzoek wel aan maar het antwoord
+  // niet, dan maakt een tweede een tweede kijkkopie bij Stream, en die kost
+  // geld. Zonder kijkkopie gaat de upload gewoon door (zie uploadOne).
   return workerPost<GalleryStreamCopyResult>('/gallery/stream-copy', {
     json: { organizationId, galleryId, key, fileName },
-  });
+  }, false);
 }
 
 export async function getGalleryStreamStatus(organizationId: UUID, uid: string): Promise<GalleryStreamStatusResult> {
@@ -277,7 +325,7 @@ export async function deleteGalleryStreamVideo(organizationId: UUID, uid: string
 export async function purgeGalleryStorage(organizationId: UUID, galleryId: UUID): Promise<'ok' | 'unsupported'> {
   const base = getWorkerBase();
   const token = await getAccessToken();
-  const response = await fetch(`${base}/gallery/purge`, {
+  const response = await workerFetch(`${base}/gallery/purge`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ organizationId, galleryId }),
