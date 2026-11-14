@@ -282,6 +282,7 @@ export function Modal({ title, onClose, children, footer, width = 480, labelledB
   labelledBy?: string;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // De terugknop van de telefoon sluit het venster, zoals het kruisje.
   useBackStep(true, onClose);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };

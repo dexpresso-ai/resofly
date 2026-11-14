@@ -125,6 +125,13 @@ Vooruit doet niets: daar zijn de stappen al weg.
 - `npm run test:terugknop` (nieuw): 12 scenario's in Chromium op een telefoon
   (en één op een computer), 0 fout. Met de wachttijd op 0 faalt het
   computerscenario, zoals verwacht.
+- `npm run test:mobile -- --theme=both`: 620 pagina's gemeten, 0 met
+  problemen (geen JavaScript-fouten, lay-out ongewijzigd).
+- `npm run test:loading`: alle controles geslaagd.
+- `npm run test:inrichten`: alle controles geslaagd (de inrichting laadt
+  main.tsx ook, zonder terugknop).
+- Niet getest op een echte telefoon: dat Chrome op Android een item zonder
+  tik overslaat, bootst `backButton.test.ts` na; Playwright doet dat niet.
 
 ## Bestanden
 
