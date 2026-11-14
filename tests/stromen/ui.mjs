@@ -23,7 +23,7 @@
  */
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
@@ -2330,7 +2330,7 @@ async function naarBackend(route, scherm) {
  * Een klantadres in een eigen browser zonder sessie: de pagina's zoals de
  * Worker ze geeft, de backend via naarBackend.
  */
-async function openOpKlantadres(adres, naam, { tijdelijk = false } = {}) {
+async function openOpKlantadres(adres, naam, { tijdelijk = false, voor = null } = {}) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
   const page = await context.newPage();
   const scherm = volg(page, naam, context);
@@ -2349,6 +2349,9 @@ async function openOpKlantadres(adres, naam, { tijdelijk = false } = {}) {
   // valt terug op wss://127.0.0.1); op een klantadres bestaat die niet. Zonder
   // HMR heeft hij niets te zeggen: een stille, open verbinding is genoeg.
   await context.routeWebSocket((url) => url.searchParams.has('token') && !url.pathname.startsWith('/realtime/'), () => undefined);
+  // Iets wat er al moet zijn als de pagina laadt, zoals een nagebootste media-worker.
+  // Als laatste geregistreerd, dus vóór de routes hierboven.
+  if (voor) await voor(context);
   await page.goto(adres, { waitUntil: 'domcontentloaded' });
   await rustig(scherm);
   return scherm;
@@ -3292,6 +3295,62 @@ async function scenarioGalerij() {
     await venster.getByRole('button', { name: 'Sluiten' }).first().click();
     await venster.waitFor({ state: 'detached', timeout: 5000 });
   });
+
+  // ── Publiceren en delen op het eigen webadres (14 november) ───────────────
+  // Zoals op staging: CLIENT_DOMAINS_LIVE=albums. De deellink van een album
+  // gaat dan naar het webadres van de organisatie (jansen.resofly.com), de
+  // rest nog naar het adres van de app. Het overzicht van client-domains leest
+  // de schakelaar bij elk verzoek; de app vraagt het pas als Delen opengaat.
+  groep('UI: galerij — publiceren en delen op het eigen webadres');
+  const vroegerLive = process.env.CLIENT_DOMAINS_LIVE;
+  process.env.CLIENT_DOMAINS_LIVE = 'albums';
+  let deellink = null;
+  try {
+    await uiStap('publiceren, dan Delen → "Deellink maken": de link staat op het webadres van de organisatie', async () => {
+      if (!lid) throw new Error('de vorige stappen openden de galerij niet');
+      const naam = sqlRij(`select name from public.client_subdomains where organization_id = ${q(w.orgId)} and status = 'active'`)?.name;
+      verwacht(naam, 'de organisatie heeft geen webadres');
+      const kop = lid.page.locator('article.gal-detail');
+      await kop.getByRole('button', { name: 'Publiceren', exact: true }).click();
+      await wachtTot(() => sqlRij(`select status from public.galleries where id = ${q(album.id)}`)?.status === 'published', { melding: 'het album werd niet gepubliceerd' });
+      await kop.getByRole('button', { name: 'Delen', exact: true }).click();
+      const venster = lid.page.getByRole('dialog', { name: 'Galerij delen' });
+      await venster.waitFor({ timeout: 10000 });
+      await venster.getByRole('button', { name: 'Deellink maken' }).click();
+      const link = venster.locator('.gal-share-url code');
+      deellink = await wachtTot(async () => {
+        const waarde = tekst(await link.innerText().catch(() => ''));
+        return /\/gallerij\/[A-Za-z0-9_-]{20,}$/.test(waarde) ? waarde : null;
+      }, { melding: 'geen deellink in het venster' });
+      verwacht(deellink.startsWith(`https://${naam}.${KLANTADRES_BASIS}/gallerij/`), `de link staat niet op het webadres: ${deellink}`);
+      verwacht(tekst(await venster.innerText()).includes('De link staat op je eigen webadres'), 'de uitleg bij de link ontbreekt');
+      // De link hoort bij dit album: in de database staat de hash van het token uit de link.
+      const token = deellink.split('/gallerij/')[1];
+      gelijk(sqlRij(`select share_token_hash from public.galleries where id = ${q(album.id)}`)?.share_token_hash,
+        createHash('sha256').update(token).digest('hex'), 'de hash van de link');
+      // Kopiëren kan pas als de link er staat; hij staat er nu.
+      verwacht(await venster.getByRole('button', { name: /Kopiëren/ }).isEnabled(), 'kopiëren staat uit');
+      // Twee knoppen heten Sluiten (het kruisje en die onderaan); allebei goed.
+      await venster.getByRole('button', { name: 'Sluiten', exact: true }).last().click();
+      await venster.waitFor({ state: 'detached', timeout: 5000 });
+    });
+
+    await uiStap('de klant opent de link op het webadres: het album, via dat adres', async () => {
+      if (!deellink) throw new Error('de vorige stap maakte geen deellink');
+      const klant = await openOpKlantadres(deellink, 'klant-album', { tijdelijk: true, voor: (context) => nepGalerijWerker(context, []) });
+      await klant.page.locator('main.pgal').first().waitFor({ timeout: 20000 });
+      await wachtTot(async () => tekst(await klant.page.locator('main.pgal').innerText()).includes('Ceremonie'), { melding: 'het album verscheen niet' });
+      verwacht(new URL(klant.page.url()).hostname === new URL(deellink).hostname, `de klant kwam ergens anders uit: ${klant.page.url()}`);
+      // De pagina vroeg het album op bij gallery-public, met het webadres als herkomst.
+      const verzoek = klant.api.find((r) => r.pad === '/functions/v1/gallery-public' && r.actie === 'getGallery');
+      verwacht(verzoek, 'de pagina vroeg het album niet op');
+      gelijk([verzoek.status, verzoek.kop.origin], [200, new URL(deellink).origin], 'gallery-public');
+      verwacht(klant.doorgestuurd.length === 0, `doorgestuurd: ${JSON.stringify(klant.doorgestuurd)}`);
+    });
+  } finally {
+    if (vroegerLive === undefined) delete process.env.CLIENT_DOMAINS_LIVE;
+    else process.env.CLIENT_DOMAINS_LIVE = vroegerLive;
+  }
 }
 
 // ── Draaien ─────────────────────────────────────────────────────────────────

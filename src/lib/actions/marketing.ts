@@ -8,7 +8,8 @@ import {
   resumeCampaign, resumeFlow, scheduleCampaign, sendCampaign, sendTestCampaign,
 } from '../marketing-api';
 import { plainTextToEmailHtml } from '../../services/mailService';
-import { clientBaseUrlFor } from '../../services/domainService';
+import { albumBaseUrlFor } from '../../services/domainService';
+import { galleryShareUrl } from '../clientAddress';
 import { throwFunctionError } from '../functionErrors';
 import { deleteR2Object } from '../r2-api';
 import { supabase } from '../supabase';
@@ -409,10 +410,11 @@ export const MARKETING_EXECUTORS: Record<string, ActionExecutor> = {
       share_pin_failed_count: 0,
       share_pin_locked_until: null,
     }, ctx.organizationId);
-    // Dezelfde link als in de mail aan de klant: op het klantadres als dat er
-    // is (jansen.resofly.com), anders het adres van de app.
-    const base = await clientBaseUrlFor(ctx.organizationId);
-    const url = `${base}/gallerij/${token}`;
+    // Dezelfde link als bij Delen in de galerij: op het adres voor albums (het
+    // eigen domein of jansen.resofly.com) als albums daar al staan, anders het
+    // adres van de app. De organisatie is die van de sessie, nooit uit het
+    // voorstel (harde regel 1).
+    const url = galleryShareUrl(await albumBaseUrlFor(ctx.organizationId), token);
     return `Deellink voor "${updated.title}" aangemaakt: ${url}`
       + (pin ? ` (pincode ${pin}) — de link blijft ook terug te vinden bij Delen in de galerij` : ' — de link blijft ook terug te vinden bij Delen in de galerij');
   },

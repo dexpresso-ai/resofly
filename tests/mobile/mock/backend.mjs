@@ -85,10 +85,13 @@ function subdomainCheck(own, body) {
   return { name, status: 'available', reason: null, message: null };
 }
 
-function clientDomainsOverview({ subdomain, allowed, domain = null, previous = [], moved = [] }) {
+function clientDomainsOverview({ subdomain, allowed, domain = null, previous = [], moved = [], albumsLive = false }) {
+  const albums = albumsLive && subdomain ? `https://${subdomain}.${CLIENT_BASE}` : '';
   return {
     ok: true,
-    config: { base: CLIENT_BASE, live: false, cnameTarget: `domeinen.${CLIENT_BASE}`, customDomainsAvailable: true },
+    // albumsLive: zoals op staging sinds 14 november (CLIENT_DOMAINS_LIVE=albums):
+    // de deellinks van albums al op het webadres, de rest nog op het adres van de app.
+    config: { base: CLIENT_BASE, live: false, liveKinds: albumsLive ? ['albums'] : [], cnameTarget: `domeinen.${CLIENT_BASE}`, customDomainsAvailable: true },
     customDomainAllowed: allowed,
     subdomain: subdomain ? { name: subdomain, host: `${subdomain}.${CLIENT_BASE}` } : null,
     blocked: false,
@@ -96,10 +99,13 @@ function clientDomainsOverview({ subdomain, allowed, domain = null, previous = [
     domain,
     moved,
     // Leeg: de app valt terug op zijn eigen adres, zoals voorheen in deze test.
-    clientUrl: '',
+    // Met albums live het adres van staging, zodat de langste zin in beeld komt.
+    clientUrl: albums ? 'https://staging.resofly.com' : '',
     onClientHost: false,
     portalUrl: '',
     portalOnClientHost: false,
+    albumUrl: albums,
+    albumOnClientHost: Boolean(albums),
   };
 }
 
@@ -124,6 +130,7 @@ const WORKSPACE_DOMAIN = {
 const WORKSPACE_OVERVIEW = clientDomainsOverview({
   subdomain: 'studio-lopik',
   allowed: true,
+  albumsLive: true,
   domain: WORKSPACE_DOMAIN,
   previous: [{ name: 'lopik', host: `lopik.${CLIENT_BASE}`, redirectUntil: '2027-11-08T09:00:00Z' }],
   moved: [{ id: 'd0d0d0d0-0000-4000-8000-000000000002', hostname: 'klanten.studio-lopik.nl', redirectUntil: '2027-10-01T00:00:00Z' }],

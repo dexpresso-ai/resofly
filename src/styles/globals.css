@@ -6351,6 +6351,8 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    selecteren als het klembord dwarsligt. */
 .gal-share-url code{flex:1;min-width:0;font-size:11px;line-height:1.5;word-break:break-all;color:var(--accent-ink)}
 .gal-share-url button{flex:none}
+/* Zolang het webadres onderweg is: geen link, maar een rustige regel. */
+.gal-share-url code.gal-share-url-wait{color:var(--muted2);word-break:normal}
 
 /* ── Huisstijl-lettertypen ───────────────────────────────────────────────────
    --brand-heading en --brand-body worden alleen gezet als de beeldmaker een

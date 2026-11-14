@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clearClientOriginCache, clientBaseUrl, clientDomainsConfig, clientOriginMismatch, clientOriginOf, clientPortalBaseUrl,
-  containsPublicLink, isAllowedReturnUrl, portalLinkBase, portalOriginMismatch, portalOriginOf, rememberClientOrigin,
-  type ClientDomainsConfig,
+  containsPublicLink, isAllowedReturnUrl, liveFor, parseClientDomainsLive, portalLinkBase, portalOriginMismatch, portalOriginOf,
+  rememberClientOrigin, type ClientDomainsConfig,
 } from './clientLinks.ts';
 
 const ORG_A = '11111111-1111-4111-8111-111111111111';
@@ -56,10 +56,55 @@ const tables = {
 };
 
 test('de instellingen: basisdomein, aan of uit, CNAME-doel', () => {
-  assert.deepEqual(clientDomainsConfig(() => undefined), { base: 'resofly.com', live: false, cnameTarget: 'domeinen.resofly.com' });
+  assert.deepEqual(clientDomainsConfig(() => undefined), { base: 'resofly.com', live: false, liveKinds: [], cnameTarget: 'domeinen.resofly.com' });
   const env: Record<string, string> = { CLIENT_DOMAIN_BASE: 'Klant.Example.NL.', CLIENT_DOMAINS_LIVE: 'true', CLIENT_DOMAIN_CNAME_TARGET: 'cname.example.nl' };
-  assert.deepEqual(clientDomainsConfig((n) => env[n]), { base: 'klant.example.nl', live: true, cnameTarget: 'cname.example.nl' });
+  assert.deepEqual(clientDomainsConfig((n) => env[n]), { base: 'klant.example.nl', live: true, liveKinds: [], cnameTarget: 'cname.example.nl' });
   assert.equal(clientDomainsConfig((n) => (n === 'CLIENT_DOMAINS_LIVE' ? 'nee' : undefined)).live, false);
+});
+
+test('CLIENT_DOMAINS_LIVE: alles, alleen albums, of niets', () => {
+  for (const value of ['true', 'TRUE', ' 1 ', 'ja', 'yes', 'on']) {
+    assert.deepEqual(parseClientDomainsLive(value), { live: true, liveKinds: [], unknown: [] }, value);
+  }
+  for (const value of ['albums', 'Albums', 'album', 'galerij', 'gallerij', ' albums ', 'albums,albums', 'albums;galerij']) {
+    assert.deepEqual(parseClientDomainsLive(value), { live: false, liveKinds: ['albums'], unknown: [] }, value);
+  }
+  for (const value of [undefined, null, '', 'false', 'nee', '0', 'off']) {
+    assert.deepEqual(parseClientDomainsLive(value), { live: false, liveKinds: [], unknown: [] }, String(value));
+  }
+  // Een soort die (nog) niet is aangesloten, zet niets aan: die noemt hij, zodat
+  // het in de log staat in plaats van dat iemand denkt dat het aan staat.
+  assert.deepEqual(parseClientDomainsLive('facturen'), { live: false, liveKinds: [], unknown: ['facturen'] });
+  assert.deepEqual(parseClientDomainsLive('albums, facturen'), { live: false, liveKinds: ['albums'], unknown: ['facturen'] });
+  // "true" in een lijst is geen "alles": dan zou een tikfout ineens alle links omzetten.
+  assert.deepEqual(parseClientDomainsLive('albums,true'), { live: false, liveKinds: ['albums'], unknown: ['true'] });
+  // Namen van het prototype van een object zijn geen soort.
+  assert.deepEqual(parseClientDomainsLive('constructor toString __proto__'), { live: false, liveKinds: [], unknown: ['constructor', 'tostring', '__proto__'] });
+
+  const albums = clientDomainsConfig((n) => (n === 'CLIENT_DOMAINS_LIVE' ? 'albums' : undefined));
+  assert.deepEqual([albums.live, albums.liveKinds], [false, ['albums']]);
+  assert.equal(liveFor(albums, 'albums').live, true);
+  assert.equal(liveFor(clientDomainsConfig(() => undefined), 'albums').live, false);
+  assert.equal(liveFor(clientDomainsConfig((n) => (n === 'CLIENT_DOMAINS_LIVE' ? 'true' : undefined)), 'albums').live, true);
+  // liveFor verandert de instellingen zelf niet: de rest blijft uit.
+  assert.equal(albums.live, false);
+});
+
+test('alleen albums live: de deellink naar het klantadres, de rest naar het oude adres', async () => {
+  const ALBUMS: ClientDomainsConfig = { ...NOT_LIVE, liveKinds: ['albums'] };
+  const admin = fakeAdmin(tables);
+  assert.equal(await clientBaseUrl(admin, ORG_A, 'https://staging.resofly.com/', liveFor(ALBUMS, 'albums')), 'https://jansen.resofly.com');
+  // Een actief eigen domein gaat voor de naam bij ResoFly, net als bij de documenten.
+  assert.equal(await clientBaseUrl(admin, ORG_B, 'https://staging.resofly.com', liveFor(ALBUMS, 'albums')), 'https://portaal.pietersen.nl');
+  // Facturen, offertes en het portaal blijven op het oude adres.
+  assert.equal(await clientBaseUrl(admin, ORG_A, 'https://staging.resofly.com/', ALBUMS), 'https://staging.resofly.com');
+  assert.equal(await clientPortalBaseUrl(admin, ORG_A, 'https://staging.resofly.com', ALBUMS), 'https://staging.resofly.com');
+  assert.deepEqual(await portalLinkBase(admin, ORG_B, 'https://staging.resofly.com', ALBUMS), { base: 'https://staging.resofly.com', onClientHost: false });
+  // Elke vraag filtert op de organisatie.
+  assert.ok(admin.calls.every(call => call.filters.some(([op, col, value]) => op === 'eq' && col === 'organization_id' && (value === ORG_A || value === ORG_B))));
+  // Geen naam, of de tabel ontbreekt: het oude adres.
+  assert.equal(await clientBaseUrl(fakeAdmin({}), ORG_A, 'https://staging.resofly.com', liveFor(ALBUMS, 'albums')), 'https://staging.resofly.com');
+  assert.equal(await clientBaseUrl(fakeAdmin(tables, { fail: true }), ORG_A, 'https://staging.resofly.com', liveFor(ALBUMS, 'albums')), 'https://staging.resofly.com');
 });
 
 test('de link gaat naar het klantadres van díe organisatie', async () => {

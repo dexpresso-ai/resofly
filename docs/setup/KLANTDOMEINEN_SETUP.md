@@ -33,7 +33,9 @@ Wat de code al levert:
 
 **Zolang `CLIENT_DOMAINS_LIVE` niet aan staat, verandert er voor klanten niets.** Links in
 mails gaan dan naar het adres van de app, zoals altijd. De namen worden wel al gekozen en
-vastgelegd. Zet de schakelaar pas om als stap 1 tot en met 4 werken.
+vastgelegd. Zet de schakelaar pas om als stap 1 tot en met 4 werken. Eén soort kan vóór de
+rest: met `CLIENT_DOMAINS_LIVE=albums` gaan alleen de deellinks van albums naar het
+klantadres (stap 5).
 
 ## 0. Wat er op staging al staat
 
@@ -55,6 +57,11 @@ Sinds 9 november staan ook stap 1 en 2 op staging:
 
 Komt er een nieuw adres van ResoFly bij dat door Cloudflare loopt, geef het dan een route
 zonder Worker en zet het in `PASSTHROUGH_HOSTS`.
+
+Sinds 14 november staan op staging de **albums live** (`CLIENT_DOMAINS_LIVE=albums`): de
+deellink van een album (Galerij → Delen, en Gerrie) gaat naar `<naam>.resofly.com`, of naar
+een actief eigen domein. Offertes, facturen, contracten en het portaal gaan nog naar
+`staging.resofly.com`. De waarde staat in `.github/workflows/deploy-staging.yml`; zie stap 5.
 
 Controle zonder route: open `https://resofly-client-domains-staging.gerjan.workers.dev/`. Dan
 hoort de neutrale pagina *"Dit adres is niet in gebruik"* (404) te verschijnen: de Worker
@@ -163,15 +170,34 @@ Domein mogen aanroepen; valt terug op `APP_ALLOWED_ORIGINS`, `APP_PUBLIC_URL` en
 
 ## 5. Aanzetten
 
-Pas als `https://<naam>.resofly.com/portal` het portaal toont, in de huisstijl:
+`CLIENT_DOMAINS_LIVE` kent drie waarden:
+
+| Waarde | Wat naar het klantadres gaat |
+|---|---|
+| `false` (of leeg) | niets: alle links naar het adres van de app |
+| `albums` | alleen de deellinks van albums (Galerij → Delen, en de handeling van Gerrie). Offertes, facturen, contracten, boekingen en het portaal blijven op het adres van de app. |
+| `true` | alles: facturen, offertes, contracten, albums, deellinks, boekingslinks, de welkomstmail en de inlogmail van het portaal |
+
+Een andere waarde zet niets aan; de functies zeggen het dan in hun log. Oude links naar het
+adres van de app blijven altijd werken.
+
+**Op staging zet de deploy de waarde**: `CLIENT_DOMAINS_LIVE` bovenaan
+`.github/workflows/deploy-staging.yml`. De stap *Klantadressen (CLIENT_DOMAINS_LIVE)* draait na
+de rooktest (`scripts/supabase-client-domains-live.sh`), en de rooktest controleert eerst dat
+een klantadres echt antwoordt: de Worker toont er een album (met de meta van een klantadres),
+en `gallery-public` neemt het adres aan als herkomst, ook in CORS. Faalt de rooktest, dan
+blijft de schakelaar zoals hij was. Verander de waarde dus in de workflow en niet in het
+dashboard van Supabase: de volgende deploy zet hem anders terug. Alles aanzetten op staging is
+`CLIENT_DOMAINS_LIVE: "true"` daar, en een push naar `staging`. Doe dat pas als
+`https://<naam>.resofly.com/portal` het portaal toont, in de huisstijl.
+
+Op een ander project (productie, straks) zonder die stap:
 
 ```bash
-supabase secrets set --project-ref <REF> CLIENT_DOMAINS_LIVE=true
+supabase secrets set --project-ref <REF> CLIENT_DOMAINS_LIVE=albums   # of true
 ```
 
-Vanaf dat moment linken nieuwe mails (facturen, offertes, contracten, albums, deellinks,
-boekingslinks, de welkomstmail en de inlogmail van het portaal) naar het klantadres. Oude
-links naar het adres van de app blijven werken. Terug: dezelfde regel met `false`.
+Terug: dezelfde regel met `false`.
 
 ## 6. Supabase Auth
 
@@ -202,7 +228,9 @@ duren voor het portaal op het domein verschijnt of weer doorstuurt.
 | De werkruimte (`staging.resofly.com`) is traag of toont een klantpagina | Ontbreekt de route zonder Worker, of staat het adres niet in `PASSTHROUGH_HOSTS`. |
 | Een eigen domein blijft op *Wacht op het record* | Het CNAME-record wijst niet naar `CLIENT_DOMAIN_CNAME_TARGET` (het scherm zegt waarheen wel), het staat bij Cloudflare met een oranje wolkje, of het TXT-record van deze koppeling ontbreekt. Zonder dat TXT-record wordt een domein nooit actief, ook als Cloudflare het al goedkeurde: zo kan niemand een vergeten record van een ander overnemen. |
 | *Certificaat wordt gemaakt* duurt uren | Een CAA-record bij de klant: het scherm geeft de tekst van Cloudflare. |
-| Links gaan nog naar het adres van de app | `CLIENT_DOMAINS_LIVE` staat niet aan, of de organisatie heeft (nog) geen webadres: organisaties van vóór deze functie kiezen het in Instellingen → Domein. |
+| Links gaan nog naar het adres van de app | `CLIENT_DOMAINS_LIVE` staat niet aan, of de organisatie heeft (nog) geen webadres: organisaties van vóór deze functie kiezen het in Instellingen → Domein. Met `albums` gaan alleen de deellinks van albums naar het klantadres; facturen en het portaal horen dan nog naar het adres van de app te gaan. |
+| De deellink van een album staat nog op het adres van de app | Kijk of de laatste deploy groen was: faalt de rooktest (het klantadres antwoordt niet), dan zet de stap *Klantadressen* niets om. Een app die al open stond, onthoudt het webadres tot je de pagina herlaadt. |
+| De rooktest meldt "het klantadres toont een album via de Worker" als FOUT | De Worker op `*.resofly.com` antwoordt niet zoals hij hoort: de route, de DNS (`AAAA *`), of `CLIENT_DOMAINS_WORKER_SECRET` in Worker en Supabase. De rooktest noemt het adres dat hij probeerde. |
 | Een klant ziet *"Je bent uitgelogd. Log opnieuw in."* | De server kent zijn inlog niet (meer): een inlog van vóór 9 november, het portaal is op dat eigen domein uitgezet, of het adres is niet meer van die organisatie. Opnieuw inloggen lost het op. |
 | Op het eigen domein stuurt `/portal` door naar `<naam>.resofly.com` | De schakelaar *"Ook het klantportaal"* staat uit, of het domein is niet actief (ook *Werkt niet* telt niet: dan wijst het record misschien naar een ander). Na omzetten kan het een minuut duren (de Worker onthoudt een opzoeking). |
 | Klanten op een eigen domein zijn ineens uitgelogd | Het portaal ging daar uit, of het domein hapert of is ontkoppeld: dan gooit de database de sleutels van dat domein meteen weg. Opnieuw inloggen kan zodra het domein weer actief is (de ronde loopt een domein met portaal elk kwartier na). |

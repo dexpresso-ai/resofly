@@ -29,6 +29,15 @@ permissions:
 
 env:
   SUPABASE_PROJECT_ID: enzghpduqwaojcxgwarr
+  # Welke links naar het klantadres van een organisatie gaan (jansen.resofly.com,
+  # of haar eigen domein); docs/setup/KLANTDOMEINEN_SETUP.md, stap 5.
+  #   true   = alles (offertes, facturen, contracten, albums, het portaal, …)
+  #   albums = alleen de deellinks van albums; de rest naar het adres van de app
+  #   false  = niets
+  # De stap "Klantadressen" zet het op staging, na een geslaagde rooktest.
+  # Verander het hier en niet in het dashboard van Supabase: de volgende deploy
+  # zet het anders terug.
+  CLIENT_DOMAINS_LIVE: albums
 
 jobs:
   deploy:
@@ -137,4 +146,15 @@ jobs:
           bash scripts/supabase-smoke-test.sh
         env:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      # Welke links al naar het klantadres gaan (CLIENT_DOMAINS_LIVE bovenaan).
+      # Na de rooktest, want die controleert dat een klantadres echt antwoordt:
+      # de Worker toont er een album, en gallery-public neemt het adres aan.
+      # Faalt de rooktest, dan komt deze stap niet aan de beurt en blijft de
+      # schakelaar zoals hij was: liever een link naar het adres van de app dan
+      # een link die nergens heen gaat. Zet alleen iets als de waarde verandert.
+      - name: Klantadressen (CLIENT_DOMAINS_LIVE)
+        run: bash scripts/supabase-client-domains-live.sh
+        env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

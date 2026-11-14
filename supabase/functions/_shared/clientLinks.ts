@@ -14,6 +14,8 @@
 //   2. Pas als de klantadressen echt draaien (CLIENT_DOMAINS_LIVE), gaan links
 //      ernaartoe. Tot die tijd het oude adres: een mail met een link die
 //      nergens heen gaat, is erger dan een mail met het adres van ResoFly.
+//      Eén soort kan vóór de rest: CLIENT_DOMAINS_LIVE=albums zet alleen de
+//      deellink van een album op het klantadres (zie liveFor).
 //   3. Een verzoek van een klantadres mag een publieke functie aanroepen
 //      (CORS), maar het adres bepaalt nooit tot wat het toegang geeft: een
 //      token van organisatie A via het adres van organisatie B geeft niets.
@@ -29,20 +31,75 @@ const denoEnv: EnvGetter = (name) =>
 /** Het basisdomein als CLIENT_DOMAIN_BASE niet is gezet. */
 export const DEFAULT_CLIENT_DOMAIN_BASE = 'resofly.com';
 
+/**
+ * Een soort link die al vóór de rest naar het klantadres kan. Alleen wat hier
+ * staat, is aangesloten: de aanroeper vraagt het met liveFor(config, soort).
+ * Een andere naam in CLIENT_DOMAINS_LIVE (bijvoorbeeld "facturen") doet dus
+ * niets; dat zegt clientDomainsConfig in de log, in plaats van stil te
+ * blijven terwijl iemand denkt dat het aan staat.
+ */
+export type ClientLinkKind = 'albums';
+
+/** De woorden in CLIENT_DOMAINS_LIVE, met de soort die ze aanzetten. */
+const LIVE_KIND_WORDS: Readonly<Record<string, ClientLinkKind>> = {
+  albums: 'albums',
+  album: 'albums',
+  galerij: 'albums',
+  gallerij: 'albums',
+};
+
 export interface ClientDomainsConfig {
   /** De namen staan onder dit domein: <naam>.<base>. */
   base: string;
-  /** Gaan links al naar de klantadressen? Pas als DNS en de Worker er staan. */
+  /** Gaan alle links al naar de klantadressen? Pas als DNS en de Worker er staan. */
   live: boolean;
+  /**
+   * Gaan alleen deze soorten al naar het klantadres (CLIENT_DOMAINS_LIVE=albums)?
+   * Leeg of weg als live aan staat (dan alles) of uit (dan niets).
+   */
+  liveKinds?: readonly ClientLinkKind[];
   /** Waar een eigen domein met een CNAME-record naar wijst. */
   cnameTarget: string;
 }
 
+/**
+ * CLIENT_DOMAINS_LIVE lezen: "true" (of 1, ja, yes, on) zet alles aan, een
+ * lijst van soorten ("albums") alleen die, al het andere niets.
+ */
+export function parseClientDomainsLive(value: string | null | undefined): { live: boolean; liveKinds: ClientLinkKind[]; unknown: string[] } {
+  const raw = String(value ?? '').trim();
+  if (/^(1|true|ja|yes|on)$/i.test(raw)) return { live: true, liveKinds: [], unknown: [] };
+  const kinds = new Set<ClientLinkKind>();
+  const unknown: string[] = [];
+  for (const word of raw.toLowerCase().split(/[\s,;]+/).filter(Boolean)) {
+    const kind = Object.prototype.hasOwnProperty.call(LIVE_KIND_WORDS, word) ? LIVE_KIND_WORDS[word] : undefined;
+    if (kind) kinds.add(kind);
+    else if (!/^(0|false|nee|no|off)$/.test(word)) unknown.push(word);
+  }
+  return { live: false, liveKinds: [...kinds], unknown };
+}
+
+/** Eén waarschuwing per instantie: de functies lezen de instellingen bij elk verzoek. */
+let warnedUnknownLive = false;
+
 export function clientDomainsConfig(env: EnvGetter = denoEnv): ClientDomainsConfig {
   const base = normalizeHost(env('CLIENT_DOMAIN_BASE') || DEFAULT_CLIENT_DOMAIN_BASE);
-  const live = /^(1|true|ja|yes|on)$/i.test(String(env('CLIENT_DOMAINS_LIVE') ?? '').trim());
+  const { live, liveKinds, unknown } = parseClientDomainsLive(env('CLIENT_DOMAINS_LIVE'));
+  if (unknown.length > 0 && !warnedUnknownLive) {
+    warnedUnknownLive = true;
+    console.warn(`CLIENT_DOMAINS_LIVE: onbekend, dus genegeerd: ${unknown.join(', ')}. Gebruik true, false of albums.`);
+  }
   const cnameTarget = normalizeHost(env('CLIENT_DOMAIN_CNAME_TARGET') || `domeinen.${base}`);
-  return { base, live, cnameTarget };
+  return { base, live, liveKinds, cnameTarget };
+}
+
+/**
+ * De instellingen voor één soort link: live als alles aan staat, of als deze
+ * soort al aan staat. Geef het resultaat aan clientBaseUrl:
+ *   clientBaseUrl(admin, orgId, fallback, liveFor(config, 'albums'))
+ */
+export function liveFor(config: ClientDomainsConfig, kind: ClientLinkKind): ClientDomainsConfig {
+  return { ...config, live: config.live || (config.liveKinds ?? []).includes(kind) };
 }
 
 /**

@@ -42,7 +42,8 @@ import {
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
 import { derivedFileName, formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
 import { fileInputAccept } from '../lib/filePicker';
-import { useClientBaseUrl } from '../services/domainService';
+import { useAlbumAddress } from '../services/domainService';
+import { galleryShareUrl } from '../lib/clientAddress';
 import { useBackStep } from '../lib/useBackStep';
 
 const galleryStatusLabels: Record<Gallery['status'], string> = {
@@ -3052,10 +3053,13 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
   // Alleen nodig in het gaatje tussen opslaan en het opnieuw inlezen van de
   // galerij; daarna komt de link uit de galerij zelf.
   const [freshToken, setFreshToken] = useState<string | null>(null);
-  // Het webadres voor klanten (jansen.resofly.com of een eigen domein); tot
-  // de server het weet, en als het niet lukt, het adres van de app. Zo staat
-  // hier dezelfde link als in de mail aan de klant.
-  const clientBase = useClientBaseUrl(gallery.organization_id);
+  // Het adres voor albums: het eigen domein of de naam bij ResoFly
+  // (jansen.resofly.com), zodra de server zegt dat albums daar staan
+  // (CLIENT_DOMAINS_LIVE). Zolang dat antwoord onderweg is, staat er geen link:
+  // eerst toonde het venster een tel het adres van de app, en wie snel
+  // kopieerde, deelde dat in plaats van zijn eigen adres. Lukt het niet, dan het
+  // adres van de app; daar werkt de link altijd.
+  const albums = useAlbumAddress(gallery.organization_id);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -3080,11 +3084,11 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
   // Net gegenereerd wint: die link is de nieuwste, ook als de galerij nog de
   // vorige teruggeeft.
   const shareToken = freshToken ?? savedToken;
-  const shareUrl = shareToken ? `${clientBase}/gallerij/${shareToken}` : null;
+  const shareUrl = shareToken && albums.ready ? galleryShareUrl(albums.baseUrl, shareToken) : null;
   // Wel een actieve deellink, maar geen token om te tonen: een link van vóór
   // deze versie, of een omgeving waar de migratie nog moet draaien. Uit een
   // SHA-256 is het token niet terug te rekenen, dus resteert: nieuwe maken.
-  const tokenLost = gallery.share_enabled && !shareUrl;
+  const tokenLost = gallery.share_enabled && !shareToken;
 
   async function generate() {
     setError(null);
@@ -3155,15 +3159,20 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
             Contactpersonen met portaaltoegang zien gepubliceerde galerijen automatisch in het klantportaal.
             Daarnaast kun je een publieke deellink maken voor wie geen portaal-account heeft.
           </p>
-          {shareUrl && (
+          {shareToken && (
             <>
               <p className="gal-share-note gal-share-active">
                 <Link2 size={13} /> Deellink actief{gallery.share_pin_hash ? ' (met pincode)' : ''} — hij blijft hier staan tot je hem intrekt.
               </p>
               <div className="gal-share-url">
-                <code>{shareUrl}</code>
-                <Button onClick={() => void copyUrl()}><Copy size={13} /> {copied ? 'Gekopieerd!' : 'Kopiëren'}</Button>
+                {shareUrl
+                  ? <code>{shareUrl}</code>
+                  : <code className="gal-share-url-wait" aria-busy="true">Je webadres ophalen…</code>}
+                <Button disabled={!shareUrl} onClick={() => void copyUrl()}><Copy size={13} /> {copied ? 'Gekopieerd!' : 'Kopiëren'}</Button>
               </div>
+              {shareUrl && albums.onClientHost && (
+                <p className="gal-share-note">De link staat op je eigen webadres. Dat stel je in bij Instellingen → Domein.</p>
+              )}
               <p className="gal-share-note">
                 {gallery.status === 'published'
                   ? 'De galerij is gepubliceerd, dus de pagina is bereikbaar. Zet je hem terug naar concept, dan gaat de pagina dicht — deze link blijft staan en werkt weer zodra je opnieuw publiceert.'
