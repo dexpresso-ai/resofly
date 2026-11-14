@@ -129,7 +129,29 @@ organisatie wordt onthouden, zoals voorheen.
 
 ## Uitrol
 
-Zie hieronder; bijgewerkt na de deploy.
+Op 14 november naar `staging` (merge `60f93f9`). *Deploy Supabase (staging)*, run 43598082158:
+groen. Migraties: geen nieuwe. Alle functies uitgerold, daarna de rooktest op het echte
+staging, met als klantadres `brand-new-gerrie.resofly.com` (het oudste actieve webadres):
+
+```
+ok     het klantadres toont een album via de Worker (200)
+ok     gallery-public neemt het klantadres aan als herkomst (onbekende link: 404) (404)
+ok     gallery-public laat een browser op het klantadres toe (CORS)
+Rooktest geslaagd op enzghpduqwaojcxgwarr.
+CLIENT_DOMAINS_LIVE op "albums" gezet: de deellinks van albums gaan naar het klantadres, de rest naar het adres van de app.
+```
+
+Cloudflare Pages bouwt de app uit dezelfde push. Tot die build er staat, toont de oude app de
+link nog op `staging.resofly.com` (hij kent `albumUrl` niet); daarna het webadres.
+
+Gevolgen:
+
+- **Herlaad de app** als hij al open stond: de app onthoudt het webadres per organisatie tot
+  de pagina opnieuw laadt.
+- Een deellink die je al eerder kopieerde of verstuurde, blijft werken: links op
+  `staging.resofly.com` werken altijd. Dezelfde link (hetzelfde token) werkt ook op het
+  webadres; wie hem opnieuw kopieert bij Delen, krijgt hem op het webadres.
+- Niets verandert aan mails met een factuur, offerte of contract, of aan het portaal.
 
 ## Wat nog niet
 
