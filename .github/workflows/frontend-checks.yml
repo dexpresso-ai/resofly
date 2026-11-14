@@ -76,6 +76,13 @@ jobs:
       - name: Inrichtingsstappen
         run: npm run test:inrichten
 
+      # De terugknop van de telefoon (src/lib/backButton.ts): terug sluit eerst
+      # vensters, menu's en panelen, gaat dan naar de vorige pagina, en laat de
+      # app pas los op het dashboard. Zonder deze stap zette de terugknop de
+      # geïnstalleerde app weg (november 2026).
+      - name: Terugknop
+        run: npm run test:terugknop
+
   edge-functions:
     runs-on: ubuntu-latest
     steps:
