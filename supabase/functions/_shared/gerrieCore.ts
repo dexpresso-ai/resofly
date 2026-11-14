@@ -29,6 +29,7 @@ import {
   assertClientToolsOnly, collectUrls, GUARD_REFUSALS, hostsFromOrigins, isBlockedVerdict, promptValue, sanitizeAnswer,
   screenMessage, securityRules, SECURITY_REMINDER, wrapToolData, type GuardContext, type GuardOutcome,
 } from '../_shared/gerrieGuard.ts';
+import { chatProposalText, historyContent } from '../_shared/gerrieProposalText.ts';
 
 // ============================================================
 // gerrie-agent — Gerrie, de AI-assistent, gekoppeld aan Claude (Anthropic).
@@ -483,9 +484,16 @@ interface AgentStep {
   /** Machineleesbaar: de tool-invoer, hoeveel er gevonden is, of de foutmelding. */
   detail: Record<string, unknown>;
 }
+/**
+ * Een tool-aanroep zoals hij in `ai_messages.tool_calls` komt. `summary` staat
+ * alleen bij een gelukt voorstel: wat er precies klaarstond ("project Website").
+ * Het gesprek leest dat terug, zodat het model bij een vervolgvraag weet wát het
+ * klaarzette en het niet zelf hoeft te raden.
+ */
+type ToolCallRecord = { name: string; input: unknown; summary?: string };
 interface AgentOutcome {
   text: string;
-  toolCalls: Array<{ name: string; input: unknown }>;
+  toolCalls: ToolCallRecord[];
   usage: Usage;
   /** Het eerste voorstel — in de chat het enige. */
   proposal?: Proposal;
@@ -563,7 +571,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
   const maxIterations = Math.max(1, Math.min(MAX_AGENT_ITERATIONS, Math.floor(options.maxIterations ?? MAX_TOOL_ITERATIONS)));
 
   const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  const toolCalls: Array<{ name: string; input: unknown }> = [];
+  const toolCalls: ToolCallRecord[] = [];
   const steps: AgentStep[] = []; // het logboek: wat de agent onderweg deed
   // Een stap vastleggen én doorgeven. Het doorgeven is best-effort: een logboek
   // dat de run laat mislukken is erger dan een ontbrekende regel.
@@ -632,7 +640,8 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
       const toolUseId = String(use.id);
       const toolInput = (use.input ?? {}) as Record<string, unknown>;
       const toolName = resolveOfferedTool(askedName, offered);
-      toolCalls.push({ name: toolName ?? askedName, input: toolInput });
+      const call: ToolCallRecord = { name: toolName ?? askedName, input: toolInput };
+      toolCalls.push(call);
 
       if (!toolName) {
         record(logStep('error', askedName, `Probeerde "${askedName}", maar die hoort niet bij deze opdracht`, false, { input: trimForLog(toolInput) }));
@@ -654,6 +663,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         const built = await buildProposal(toolCtx, toolName, toolInput);
         if (built.ok) {
           record(logStep('proposal', toolName, `Klaargezet: ${describeProposal(built.proposal)}`, true, { input: trimForLog(toolInput) }));
+          call.summary = describeProposal(built.proposal);
           proposals.push(built.proposal);
           proposedKeys.add(key);
           // De chat stopt hier: de kaart staat onder de tekst en de gebruiker beslist.
@@ -683,7 +693,14 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
       }
     }
 
-    if (stopForUser) return done(answer() || chatProposalText(proposals[0]));
+    // Schreef het model in de ronde van het voorstel zelf geen tekst, dan zegt de
+    // server wat er klaarstaat, met de juiste naam. Voorheen gebeurde dat alleen
+    // als er in het hele antwoord nog niets stond: na "Even het project opzoeken."
+    // uit een eerdere ronde bleef onbenoemd wat er daarna klaargezet was.
+    if (stopForUser) {
+      const said = answer();
+      return done(chunkText.trim() ? said : [said.trim(), chatProposalText(proposals[0])].filter(Boolean).join('\n\n'));
+    }
     messages.push({ role: 'user', content: toolResults });
     // Het plafond van voorstellen is bereikt: geen nieuwe rondes meer, wel een
     // afsluitende samenvatting hieronder.
@@ -727,39 +744,6 @@ function proposalsSummaryText(proposals: Proposal[]): string {
   return proposals.length === 1
     ? `Ik heb dit klaargezet: ${list}. Het wacht op je akkoord.`
     : `Ik heb ${proposals.length} dingen klaargezet: ${list}. Ze wachten op je akkoord.`;
-}
-
-/** De zin onder een voorstel in de chat, als het model er zelf geen tekst bij gaf. */
-function chatProposalText(proposal: Proposal): string {
-  return proposal.type === 'quote' ? 'Ik heb een conceptofferte voor je klaargezet. Controleer hem en sla op:'
-    : proposal.type === 'client' ? 'Ik heb de nieuwe klant voor je klaargezet. Controleer de gegevens en sla op:'
-    : proposal.type === 'send_invoice' ? `Wil je dat ik factuur ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
-    : proposal.type === 'send_quote' ? `Wil je dat ik offerte ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
-    : proposal.type === 'send_invoices' ? `Ik heb ${proposal.total} factu${proposal.total === 1 ? 'ur' : 'ren'} klaargezet om te versturen. Vink hieronder aan welke er weg mogen.`
-    : proposal.type === 'send_quotes' ? `Ik heb ${proposal.total} offerte${proposal.total === 1 ? '' : 's'} klaargezet om te versturen. Vink hieronder aan welke er weg mogen.`
-    : proposal.type === 'convert_quote' ? `Wil je dat ik offerte ${proposal.number} omzet naar een factuur? Bevestig hieronder.`
-    : proposal.type === 'edit_invoice' ? `Ik heb de wijziging van concept-factuur ${proposal.number} klaargezet. Controleer hem en sla op:`
-    : proposal.type === 'edit_quote' ? `Ik heb de wijziging van concept-offerte ${proposal.number} klaargezet. Controleer hem en sla op:`
-    : proposal.type === 'edit_client' ? `Ik heb de wijziging van klant ${proposal.name} klaargezet. Controleer de gegevens en sla op:`
-    : proposal.type === 'send_reminders' ? `Ik heb ${proposal.total} herinnering${proposal.total === 1 ? '' : 'en'} klaargezet. Vink hieronder aan welke er weg mogen.`
-    : proposal.type === 'project' ? `Ik heb het project "${proposal.name}" voor je klaargezet. Controleer en sla op:`
-    : proposal.type === 'edit_project' ? `Ik heb de wijziging van project "${proposal.name}" klaargezet. Controleer en sla op:`
-    : proposal.type === 'task' ? `Ik heb de taak "${proposal.title}" voor je klaargezet. Controleer en sla op:`
-    : proposal.type === 'create_tasks' ? `Ik heb ${proposal.total} ta${proposal.total === 1 ? 'ak' : 'ken'} klaargezet in "${proposal.project_name}". Vink hieronder aan welke je wilt aanmaken.`
-    : proposal.type === 'edit_task' ? `Ik heb de wijziging van taak "${proposal.title}" klaargezet. Controleer en sla op:`
-    : proposal.type === 'calendar_event' ? `Wil je dat ik dit agenda-item aanmaak in "${proposal.source_name}"? Bevestig hieronder.`
-    : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
-    : proposal.type === 'report' ? `Ik heb de rapportage "${proposal.name}" voor je klaargezet op de Statistieken-pagina. Controleer de grafiek en sla hem op:`
-    : proposal.type === 'supplier' ? `Ik heb de leverancier "${proposal.name}" klaargezet. Controleer de gegevens en sla op:`
-    : proposal.type === 'purchase_invoice' ? 'Ik heb een concept-inkoopfactuur klaargezet. Controleer de regels en boek hem zelf:'
-    : proposal.type === 'contract' ? `Ik heb een concept-contract "${proposal.title}" klaargezet. Controleer de tekst en sla op:`
-    : proposal.type === 'campaign' ? `Ik heb een concept-campagne "${proposal.name}" klaargezet. Er gaat niets weg — jij bepaalt de doelgroep en drukt zelf op verzenden:`
-    : proposal.type === 'content' ? `Ik heb ${proposal.kind === 'note' ? 'de notitie' : 'het document'} "${proposal.title}" klaargezet. Controleer en sla op:`
-    : proposal.type === 'ticket' ? `Ik heb het ticket "${proposal.title}" voor je klaargezet. Controleer het en sla op:`
-    : proposal.type === 'edit_ticket' ? `Ik heb de wijziging van ticket "${proposal.title}" klaargezet. Controleer en sla op:`
-    : proposal.type === 'ticket_note' ? `Wil je dat ik deze ${proposal.is_internal ? 'interne notitie' : 'reactie (zichtbaar voor de klant)'} bij "${proposal.ticket_title}" plaats? Bevestig hieronder.`
-    : proposal.type === 'edit_time_entry' ? 'Wil je dat ik deze urenregistratie aanpas? Bevestig hieronder.'
-    : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
 }
 
 // ── Logboek-hulpjes ──────────────────────────────────────────────────────────
@@ -1090,7 +1074,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
     '- Snap je de vraag niet of is hij dubbelzinnig? Zeg dat eerlijk en stel één gerichte vervolgvraag. Gis niet en doe nóóit zomaar iets anders dan gevraagd.',
     '- Kun je een gevraagde actie (nog) niet uitvoeren? Zeg dat duidelijk en leg kort uit wat wél kan.',
     '- Gebruik altijd de actie die bij de vraag past: een FACTUUR maak je met `propose_invoice`, een OFFERTE met `propose_quote`. Verwissel ze nooit en presenteer het ene nooit als het andere. Vraagt de gebruiker een offerte na een factuur (of andersom), gebruik dan dezelfde klant/regels maar wél het juiste type.',
-    '- Geef ALTIJD een kort tekstantwoord, ook bij een voorstel, en benoem daarin wat je hebt klaargezet (factuur, offerte of klant). Laat de gebruiker nooit zonder reactie zitten.',
+    '- Geef ALTIJD een kort tekstantwoord, ook bij een voorstel, en benoem daarin wat je klaarzet bij zijn eigen naam: een project is een project, een taak een taak, uren zijn uren, een agent is een agent; bij `propose_action` gebruik je de naam van die handeling. Noem iets alleen een (concept)factuur als je echt een factuur klaarzet, ook als je dat eerder in het gesprek anders zei. Laat de gebruiker nooit zonder reactie zitten.',
     '',
     'Stijl:',
     '- Antwoord altijd in het Nederlands, vriendelijk en professioneel, zonder overbodige uitweidingen.',
@@ -5909,32 +5893,15 @@ async function loadHistory(conversationId: string, organizationId: string): Prom
     .select('role, content, tool_calls').eq('conversation_id', conversationId).eq('organization_id', organizationId)
     .order('created_at', { ascending: false }).limit(MAX_HISTORY_MESSAGES);
   if (error) return [];
-  return (data ?? []).map((m: Record<string, unknown>) => {
-    let content = String(m.content);
-    const note = proposalHistoryNote(m.tool_calls);
-    if (note) content = content ? `${content}\n${note}` : note;
-    return { role: String(m.role), content };
-  }).filter((m) => m.content.trim().length > 0).reverse();
+  // De notitie over een voorstel en het rechtzetten van de oude factuurzin staan
+  // in gerrieProposalText.ts, waar ze in node te testen zijn.
+  return (data ?? []).map((m: Record<string, unknown>) => ({
+    role: String(m.role),
+    content: historyContent(String(m.content), m.tool_calls, TOOL_LABELS),
+  })).filter((m) => m.content.trim().length > 0).reverse();
 }
 
-/** Beknopte notitie over een eerder voorstel, zodat het model context houdt bij vervolgvragen. */
-function proposalHistoryNote(toolCalls: unknown): string {
-  if (!Array.isArray(toolCalls)) return '';
-  const prop = toolCalls.find((t) => t && typeof (t as { name?: unknown }).name === 'string' && (t as { name: string }).name.startsWith('propose_')) as { name: string; input?: Record<string, unknown> } | undefined;
-  if (!prop) return '';
-  const input = (prop.input ?? {}) as Record<string, unknown>;
-  if (prop.name === 'propose_client') return `[Eerder voorgesteld: nieuwe klant "${String(input.name ?? '')}".]`;
-  if (prop.name === 'propose_invoice' || prop.name === 'propose_quote') {
-    const kind = prop.name === 'propose_quote' ? 'conceptofferte' : 'conceptfactuur';
-    const lines = Array.isArray(input.lines)
-      ? (input.lines as Record<string, unknown>[]).map((l) => `${num(l.quantity)}× ${String(l.description ?? '')} à €${num(l.unit_price)} (${num(l.vat)}% btw)`).join('; ')
-      : '';
-    return `[Eerder voorgesteld: ${kind} voor client_id ${String(input.client_id ?? '?')}; regels: ${lines}. Wil de gebruiker hierop voortborduren (bijv. "maak er een offerte van"), gebruik dan dezelfde klant en regels met het juiste type.]`;
-  }
-  return '';
-}
-
-async function insertMessage(conversationId: string, organizationId: string, userId: string, role: 'user' | 'assistant', content: string, toolCalls: Array<{ name: string; input: unknown }>): Promise<string> {
+async function insertMessage(conversationId: string, organizationId: string, userId: string, role: 'user' | 'assistant', content: string, toolCalls: ToolCallRecord[]): Promise<string> {
   const { data, error } = await supabaseAdmin.from('ai_messages')
     .insert({ conversation_id: conversationId, organization_id: organizationId, created_by: userId, role, content, tool_calls: toolCalls })
     .select('id').single();
