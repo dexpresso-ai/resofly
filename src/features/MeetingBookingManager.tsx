@@ -12,6 +12,7 @@ import { SlotDurationPicker, useSlotSplit } from '../components/SlotDurationPick
 import { VideoServiceMark } from '../components/VideoServiceMark';
 import { BookingStateBadge } from '../components/ClientBookingLinks';
 import { bookingVideoFields, bookingVideoFromLink, defaultBookingVideo, type BookingVideo } from '../lib/meeting';
+import { useBackStep } from '../lib/useBackStep';
 import {
   BOOKING_STATUS_LABELS,
   LINK_STATE_LABELS,
@@ -554,6 +555,8 @@ function LinkDetail({ detail, organizationId, sources, allSources, currentUserId
     void leaveFullscreen();
     setDrawing(false);
   }, []);
+  // De terugknop van de telefoon klapt het rooster terug, zoals Klaar.
+  useBackStep(drawing, closeDrawing);
 
   // Escape sluit het rooster. Bewust in de capture-fase: de agenda-component
   // die dit rooster levert luistert zelf op window en zou de toets anders eerst

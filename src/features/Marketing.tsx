@@ -13,6 +13,7 @@ import { suppressionLockedMessage, suppressionRemovableByTeam } from '../lib/mar
 import { activeFieldDefinitions, distinctFieldValues } from '../components/CustomFields';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { PageIcon } from '../components/PageIcon';
+import { useBackStep } from '../lib/useBackStep';
 import {
   loadCampaigns, loadCampaignStats, loadCampaignRecipients, loadSuppressions,
   createCampaign, updateCampaign, deleteCampaign, addSuppression, removeSuppression,
@@ -532,6 +533,8 @@ function CampaignEditor({ data, organizationId, canWrite, campaign, onBack, onSa
   onDelete: () => void;
   onError: (msg: string | null) => void;
 }) {
+  // De terugknop van de telefoon doet hetzelfde als Terug in de balk.
+  useBackStep(true, onBack);
   const [name, setName] = useState(campaign.name);
   const [subject, setSubject] = useState(campaign.subject);
   const [preheader, setPreheader] = useState(campaign.preheader ?? '');
@@ -927,6 +930,8 @@ function CampaignDetail({ organizationId, campaign, stats, canWrite, onBack, onC
   onChanged: () => void | Promise<void>;
   onError: (msg: string | null) => void;
 }) {
+  // De terugknop van de telefoon doet hetzelfde als Terug in de balk.
+  useBackStep(true, onBack);
   const [recipients, setRecipients] = useState<EmailCampaignRecipient[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -1198,6 +1203,8 @@ function FlowEditor({ data, organizationId, canWrite, flow, onBack, onSaved, onA
   onDelete: () => void;
   onError: (msg: string | null) => void;
 }) {
+  // De terugknop van de telefoon doet hetzelfde als Terug in de balk.
+  useBackStep(true, onBack);
   const [name, setName] = useState(flow.name);
   const [stopCondition, setStopCondition] = useState<FlowStopCondition>(flow.stop_condition);
   const [audience, setAudience] = useState<CampaignAudience>(flow.audience ?? emptyAudience());
@@ -1337,6 +1344,8 @@ function FlowDetail({ organizationId, flow, stats, stepStats, canWrite, onBack, 
   onChanged: () => void | Promise<void>;
   onError: (msg: string | null) => void;
 }) {
+  // De terugknop van de telefoon doet hetzelfde als Terug in de balk.
+  useBackStep(true, onBack);
   const [busy, setBusy] = useState(false);
 
   async function act(fn: () => Promise<void>) {

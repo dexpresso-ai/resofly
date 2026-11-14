@@ -12,6 +12,7 @@
     "test:mobile": "node tests/mobile/run.mjs",
     "test:loading": "node tests/laden/run.mjs",
     "test:inrichten": "node tests/inrichten/run.mjs",
+    "test:terugknop": "node tests/terugknop/run.mjs",
     "test:stromen": "node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/run.mjs",
     "lint:sql": "node -e \"console.log('SQL lint placeholder')\""
   },

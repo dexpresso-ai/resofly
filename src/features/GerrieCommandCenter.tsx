@@ -31,6 +31,7 @@ import { AGENT_ICONS, AgentGlyph, agentIconKey, type AgentIconKey } from '../com
 import { AgentLiveLine, AgentWorkbench, useAgentActivity, useRunEvents } from '../components/AgentWork';
 import { isLiveRun, runOutcome, whenShort, type LiveRun } from '../lib/agentWork';
 import type { OrganizationMember, UUID } from '../types';
+import { useBackStep } from '../lib/useBackStep';
 
 /**
  * Gerrie Commandocentrum — schermvullende multi-agent-pagina.
@@ -678,6 +679,15 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
   const [showArchive, setShowArchive] = useState(false);
   const [runsKey, setRunsKey] = useState(0);
   const sheetRef = useRef<HTMLDivElement | null>(null);
+  // De bouwer, het formulier en een open agent hebben elk hun knop terug
+  // (Alle agents, Annuleren); de terugknop van de telefoon doet hetzelfde.
+  useBackStep(openId !== null && routines.some((r) => r.id === openId), () => setOpenId(null));
+  useBackStep(editing !== null, () => setEditing(null));
+  useBackStep(builder !== null, () => {
+    const base = builder?.editing ?? null;
+    setBuilder(null);
+    if (base) setOpenId(base.id);
+  });
   const [toast, setToast] = useState<{ text: string; kind: 'info' | 'success' | 'error' } | null>(null);
   const toastTimer = useRef<number | null>(null);
   const reload = () => setReloadKey((k) => k + 1);

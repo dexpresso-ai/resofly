@@ -7,6 +7,7 @@ import { PAGE_ICON } from './TabBar';
 import { intentGaps, parseIntent, type Intent } from '../lib/stroom';
 import { commitNow, dismiss, undo, useStroomNotes, type StroomNote } from '../lib/stroomBus';
 import { useElapsedLabel, useRunningTimer, type RunningTimer } from '../lib/useTimer';
+import { useBackStep } from '../lib/useBackStep';
 
 /**
  * Het eiland van Stroom (designvoorstel 2026-10-30): één plek bovenin om te
@@ -99,6 +100,8 @@ export function StroomIsland({
 }) {
   const uid = useId();
   const [open, setOpen] = useState(false);
+  // De terugknop van de telefoon sluit het eiland, zoals Escape.
+  useBackStep(open, () => close(false));
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);

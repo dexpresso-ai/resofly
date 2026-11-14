@@ -28,6 +28,7 @@ import {
 import { useDriveSelection } from '../lib/useDriveSelection';
 import { useMarqueeSelection } from '../lib/useMarqueeSelection';
 import { MoveDialog } from '../components/MoveDialog';
+import { useBackStep } from '../lib/useBackStep';
 
 export type ContentView = 'all' | 'notes' | 'documents';
 
@@ -187,6 +188,10 @@ export function ContentLibrary({
   const [linkOpen, setLinkOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Een open menu ("+ Nieuw", Weergeven, Sorteren, ⋮) gaat met de terugknop van
+  // de telefoon dicht, net als met een tik ernaast.
+  useBackStep(newOpen || sortOpen || filterOpen || menu !== null, () => { setNewOpen(false); setSortOpen(false); setFilterOpen(false); setMenu(null); });
+
   useEffect(() => { try { window.localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ } }, [view]);
   useEffect(() => { try { window.localStorage.setItem(DETAILS_KEY, detailsOpen ? '1' : '0'); } catch { /* ignore */ } }, [detailsOpen]);
 
@@ -316,6 +321,11 @@ export function ContentLibrary({
     null;
   /** Omhoog kan overal behalve op de wortel; ingebed is de klantmap zelf de wortel. */
   const canGoUp = !atRoot && (!embedded || Boolean(projectId || folderId));
+  // De terugknop van de telefoon doet hetzelfde als "Terug": één niveau omhoog
+  // per druk. Zo vaak als je omhoog kunt: elke map, het project, de klant.
+  const upSteps = !canGoUp ? 0
+    : (folderId ? Math.max(1, currentFolderPath.length) : 0) + (projectId ? 1 : 0) + (embedded ? 0 : 1);
+  useBackStep(upSteps, () => goUp());
 
   const folderCount = (id: string) =>
     data.notes.filter(n => n.folder_id === id).length

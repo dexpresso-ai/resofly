@@ -11,6 +11,7 @@ import { scheduleLabel } from '../lib/agents';
 import { EMPTY_DICTATION, composeDraft, isAndroidUserAgent, readDictationEvent, type DictationState } from '../lib/dictation';
 import { onGerrieConversation, signalGerrieConversation, PROPOSAL_STATUS_LABEL, type PastProposal } from '../lib/gerrieConversations';
 import { loadGerrieConversation } from '../lib/gerrieConversations-api';
+import { useBackStep } from '../lib/useBackStep';
 import type { UUID } from '../types';
 
 /**
@@ -139,6 +140,8 @@ export function GerrieChat({ organizationId, currentUserId = null, onOpenConvers
     onCreateClientContact, onEditClientContact, onSetProjectTeam, onAssignTask, onCreateCampaign,
   } = handlers;
   const [open, setOpen] = useState(false);
+  // De terugknop van de telefoon sluit het chatpaneel, zoals het kruisje.
+  useBackStep(open, () => setOpen(false));
   const [firstName, setFirstName] = useState<string | null>(null);
   const firstNameRef = useRef<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>(() => [{ id: nextId(), role: 'assistant', text: buildIntro(null) }]);

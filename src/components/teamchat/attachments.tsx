@@ -8,6 +8,7 @@ import { getAccessToken, getWorkerBase } from '../../lib/r2-api';
 import { deleteAttachment } from '../../lib/repository';
 import type { Attachment } from '../../types';
 import { formatBytes } from './model';
+import { useBackStep } from '../../lib/useBackStep';
 
 /**
  * Bijlagen in een bericht zoals Teams ze toont: afbeeldingen als voorbeeld in
@@ -77,6 +78,8 @@ export function AttachmentGrid({ attachments, canDelete, onChanged }: {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewer, setViewer] = useState<{ url: string; att: Attachment } | null>(null);
+  // De terugknop van de telefoon sluit de grote weergave, zoals het kruisje.
+  useBackStep(viewer !== null, () => setViewer(null));
   if (attachments.length === 0) return null;
   const images = attachments.filter(isPreviewableImage);
   const files = attachments.filter((a) => !isPreviewableImage(a));

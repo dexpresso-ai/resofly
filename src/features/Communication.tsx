@@ -7,6 +7,7 @@ import { RichTextEditor } from '../components/RichTextEditor';
 import { InboundInboxTab } from '../components/InboundInbox';
 import { FolderLabel, MailFolderTree, useMailFolderActions, type MailTreeItem } from '../components/MailFolders';
 import { TicketTimeline } from '../components/TicketTimeline';
+import { useBackStep } from '../lib/useBackStep';
 import { ClientEmailMessageCard, formatEmailDateTime } from '../components/ClientEmailMessage';
 import { MailRecipientSelect, MessageFilesBar, mailRecipientFor, useMessageFiles } from '../components/MessageFiles';
 import { TransferMessageBlock } from '../components/TransfersPanel';
@@ -495,6 +496,9 @@ export function CommunicationPage({
   const singlePane = narrow;
   const showList = !singlePane || !detailOpen;
   const showDetail = !singlePane || detailOpen;
+  // Op de telefoon vult een gesprek het scherm, met een terugpijl in de kop.
+  // De terugknop van de telefoon doet hetzelfde: terug naar de lijst.
+  useBackStep(singlePane && detailOpen, closeDetail);
   const filterCount = (kindFilter ? 1 : 0) + (clientFilter ? 1 : 0) + (period ? 1 : 0);
   const filtersActive = query.trim().length > 0 || filterCount > 0;
   // Op de telefoon krijgt een geopend gesprek het hele scherm: de balk met

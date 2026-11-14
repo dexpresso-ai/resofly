@@ -10,6 +10,7 @@ import { useTheme } from '../lib/theme';
 import { useLook, type Look } from '../lib/look';
 import { useBuildingReports } from '../lib/aiReports';
 import type { StandaloneApp } from '../lib/standaloneApps';
+import { useBackStep } from '../lib/useBackStep';
 
 /** De looks in het accountmenu (Weergave). Deze zijbalk staat er alleen nog
  *  in Cockpit; Baken (de standaard), Zenit en Stroom hebben de rail met het
@@ -201,6 +202,8 @@ export function Sidebar({
   const [calendarOpen, setCalendarOpen] = useState(() => calendarPages.includes(page));
   // Account-menu onderin: opent alle instellingen + uitloggen boven de avatar.
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  // De terugknop van de telefoon sluit het accountmenu, zoals Escape.
+  useBackStep(userMenuOpen, () => setUserMenuOpen(false));
   const [theme, setTheme] = useTheme();
   const [look, setLook] = useLook();
   const userRef = useRef<HTMLDivElement>(null);
@@ -252,7 +255,8 @@ export function Sidebar({
   function openCalendarView() {
     setCalendarOpen(true);
     onPage('calendar');
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#calendar-agenda`);
+    // Met history.state erin: daar staat de stap van de terugknop (lib/backButton.ts).
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}#calendar-agenda`);
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent('brandcore:calendar-anchor', { detail: { anchor: 'agenda' } }));
     }, 80);

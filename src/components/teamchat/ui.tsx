@@ -5,6 +5,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Hash, Lock, Users, X } from 'lucide-react';
 import type { OrganizationMember } from '../../types';
+import { useBackStep } from '../../lib/useBackStep';
 import { avatarHue, memberDisplay, PRESENCE_LABEL, type Presence } from './model';
 
 /**
@@ -131,6 +132,8 @@ export function Popover({ anchorRef, open, onClose, placement = 'below-end', chi
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
+  // De terugknop van de telefoon sluit het paneel, zoals een tik ernaast.
+  useBackStep(open, onClose);
 
   const place = useCallback(() => {
     const anchor = anchorRef.current;
@@ -279,6 +282,7 @@ export function Modal({ title, onClose, children, footer, width = 480, labelledB
   labelledBy?: string;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  useBackStep(true, onClose);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
     window.addEventListener('keydown', onKey);

@@ -10,6 +10,7 @@ import {
 } from '../lib/gerrieConversations';
 import { listGerrieConversations, loadGerrieConversation, searchGerrieConversations } from '../lib/gerrieConversations-api';
 import { deleteGerrieConversation } from '../lib/gerrie-api';
+import { useBackStep } from '../lib/useBackStep';
 import type { UUID } from '../types';
 
 /**
@@ -164,6 +165,9 @@ export function GerrieConversations({ organizationId, currentUserId, focusConver
     setThreadState('idle');
     setConfirmDelete(false);
   }
+  // Op telefoon en tablet staat een gesprek in plaats van de lijst, met een
+  // terugpijl. De terugknop van de telefoon doet hetzelfde.
+  useBackStep(!wide && threadState !== 'idle', closeThread);
 
   // Andere organisatie of gebruiker: alles opnieuw.
   useEffect(() => {

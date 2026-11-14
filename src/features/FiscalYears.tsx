@@ -10,6 +10,7 @@ import {
   listResultAppropriations, openFiscalYear, reopenFiscalYear, reverseResultAppropriation,
 } from '../lib/repository';
 import { formatISODate } from '../lib/dates';
+import { useBackStep } from '../lib/useBackStep';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -374,6 +375,8 @@ function AppropriationDialog({ row, canDistribute, busy, error, resultLabel, onC
   onCancel: () => void;
   onConfirm: (input: { decisionDate: string; dividendCents: number; boardApproved: boolean; note: string }) => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onCancel);
   const result = row.result_cents ?? 0;
   const isProfit = result > 0;
   const showDividend = isProfit && canDistribute;
@@ -469,6 +472,8 @@ function AppropriationDialog({ row, canDistribute, busy, error, resultLabel, onC
 function ConfirmDialog({ title, confirmLabel, busy, error, children, onCancel, onConfirm }: {
   title: string; confirmLabel: string; busy: boolean; error?: string | null; children: ReactNode; onCancel: () => void; onConfirm: () => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onCancel);
   return (
     <div className="bk-modal-backdrop" onClick={onCancel}>
       <div className="bk-modal" onClick={e => e.stopPropagation()}>

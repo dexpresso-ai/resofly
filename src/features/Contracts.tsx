@@ -13,6 +13,7 @@ import { buildContractDocxBlob } from '../lib/documentExport';
 import { deleteR2Object } from '../lib/r2-api';
 import { createOfficeSessionForContract, downloadContractDocx, uploadContractDocx, warmupOfficeEditor, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
+import { useBackStep } from '../lib/useBackStep';
 
 type PageProps = {
   data: AppData;
@@ -174,6 +175,9 @@ export function Contracts({ data, organizationId, canWrite, onChanged, draft, on
 function ContractTemplatesManager({ organizationId, canWrite, onClose }: { organizationId: string; canWrite: boolean; onClose: () => void }) {
   const [templates, setTemplates] = useState<ContractTemplate[]>([]);
   const [editing, setEditing] = useState<ContractTemplate | 'new' | null>(null);
+  // Een sjabloon open: de terugknop van de telefoon doet hetzelfde als Terug,
+  // eerst terug naar de lijst en pas daarna het venster dicht.
+  useBackStep(editing !== null, () => setEditing(null));
   const [name, setName] = useState('');
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);

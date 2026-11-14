@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { MessageSquare, X } from 'lucide-react';
 import { ChatShell } from './teamchat/ChatShell';
 import type { TeamChatApi } from './teamchat/useTeamChat';
+import { useBackStep } from '../lib/useBackStep';
 
 /**
  * Teamchat — interne chat tussen de leden van één organisatie: chats,
@@ -32,6 +33,8 @@ export function TeamChatPage({ api, active = true }: { api: TeamChatApi; active?
 /** Zwevend chatpaneel rechtsonder (overal beschikbaar, behalve op de chatpagina). */
 export function TeamChatDock({ api, hidden, onExpand }: { api: TeamChatApi; hidden?: boolean; onExpand?: (conversationId: string | null) => void }) {
   const [open, setOpen] = useState(false);
+  // De terugknop van de telefoon sluit het paneel, zoals het kruisje.
+  useBackStep(open && !hidden, () => setOpen(false));
   if (hidden) return null;
   return (
     <div className="team-chat-dock-root">

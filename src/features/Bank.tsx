@@ -787,7 +787,8 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
     finalizedRef.current = true;
     // Verwijder de querystring uit de URL zodat een refresh niet opnieuw afrondt.
     const clean = window.location.origin + window.location.pathname + window.location.hash;
-    window.history.replaceState(null, '', clean);
+    // Met history.state erin: daar staat de stap van de terugknop (lib/backButton.ts).
+    window.history.replaceState(window.history.state, '', clean);
     setBanner(null);
     if (ret.kind === 'error') {
       // Afgebroken of geweigerd. Voorheen kwam je dan zonder één woord op het

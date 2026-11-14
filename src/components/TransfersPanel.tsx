@@ -6,6 +6,7 @@ import {
 import type { AppData, FileTransferBundle, FileTransferEvent, FileTransferItem, UUID } from '../types';
 import { Button, Input, Select } from './Ui';
 import { ReadModal } from './ReadModal';
+import { useBackStep } from '../lib/useBackStep';
 import { dateNL } from '../lib/format';
 import { NotMigratedError } from '../lib/postgrestErrors';
 import {
@@ -120,6 +121,8 @@ export function TransferDetail({ data, organizationId, bundle: initial, canWrite
   /** null = de zending is verwijderd. */
   onChanged?: (bundle: FileTransferBundle | null) => void;
 }) {
+  // De terugknop van de telefoon doet hetzelfde als "Alle zendingen".
+  useBackStep(Boolean(onBack), () => onBack?.());
   const [bundle, setBundle] = useState(initial);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

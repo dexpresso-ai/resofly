@@ -38,6 +38,7 @@ import {
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
 import { formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
 import { useClientBaseUrl } from '../services/domainService';
+import { useBackStep } from '../lib/useBackStep';
 
 const galleryStatusLabels: Record<Gallery['status'], string> = {
   draft: 'Concept',
@@ -1705,6 +1706,8 @@ function GallerySettingsModal({
   /** Huisstijl van de klantpagina, voor het voorbeeld onder "Weergave". */
   branding?: BrandingPayload | null;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onClose);
   const [title, setTitle] = useState(gallery.title);
   const [description, setDescription] = useState(gallery.description ?? '');
   const [format, setFormat] = useState<GalleryFormat>(gallery.format);
@@ -2672,6 +2675,8 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
   onClose: () => void;
   onPatch: (patch: Partial<Gallery>) => Promise<void>;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onClose);
   const [pin, setPin] = useState('');
   // Alleen nodig in het gaatje tussen opslaan en het opnieuw inlezen van de
   // galerij; daarna komt de link uit de galerij zelf.

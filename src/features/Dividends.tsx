@@ -13,6 +13,7 @@ import {
 } from '../lib/repository';
 import { todayIso } from '../lib/dates';
 import { parseDutchAmountCents } from '../lib/money';
+import { useBackStep } from '../lib/useBackStep';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pct = (bp: number | null | undefined) => `${((bp ?? 0) / 100).toFixed(2).replace('.', ',')}%`;
@@ -444,6 +445,8 @@ function DividendForm({ organizationId, positions, asOf, openAppropriations, bus
 function DetailDialog({ row, lines, onClose }: {
   row: DividendDistributionRow; lines: DividendDistributionLine[]; onClose: () => void;
 }) {
+  // De terugknop van de telefoon sluit het venster, zoals een tik ernaast.
+  useBackStep(true, onClose);
   function exportCsv() {
     const escape = (v: string | number) => `"${csvSafeText(v).replace(/"/g, '""')}"`;
     const header = ['Aandeelhouder', 'Adres', 'Postcode', 'Plaats', 'Land', 'Aandelen', 'Bruto', 'Vrijgesteld', 'Ingehouden', 'Netto'];
