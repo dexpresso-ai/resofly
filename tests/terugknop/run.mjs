@@ -94,9 +94,21 @@ async function tap(t, selector, options = {}) {
   await t.page.waitForTimeout(450);
 }
 
-function expect(label, actual, wanted) {
-  for (const [key, value] of Object.entries(wanted)) {
-    if (actual[key] !== value) throw new Error(`${label}: ${key} is ${JSON.stringify(actual[key])}, verwacht ${JSON.stringify(value)} (${JSON.stringify(actual)})`);
+/**
+ * Wacht tot de stand er is, tot vier seconden, en faalt anders met wat er wél
+ * stond. Niet één keer kijken na een vaste wachttijd: op een trage machine (CI)
+ * is een stap terug of een nieuw item dan soms nog niet binnen.
+ */
+async function expectState(t, label, wanted) {
+  const deadline = Date.now() + 4000;
+  for (;;) {
+    // Midden in een laadbeurt (na herladen laadt de app nog een keer) kan
+    // meten even mislukken: dan gewoon opnieuw.
+    const actual = await where(t).catch(error => ({ error: String(error.message ?? error) }));
+    const wrong = Object.entries(wanted).find(([key, value]) => actual[key] !== value);
+    if (!wrong) return actual;
+    if (Date.now() > deadline) throw new Error(`${label}: ${wrong[0]} is ${JSON.stringify(actual[wrong[0]])}, verwacht ${JSON.stringify(wrong[1])} (${JSON.stringify(actual)})`);
+    await t.page.waitForTimeout(100);
   }
 }
 
@@ -119,14 +131,14 @@ async function scenario(name, spec, run, device = PHONE) {
 console.log('Terugknop (telefoon, 390×844)');
 
 await scenario('terug gaat langs de pagina’s waar je was', 'dashboard', async (t) => {
-  expect('start', await where(t), { page: 'dashboard', steps: 0, marker: 0 });
+  await expectState(t, 'start', { page: 'dashboard', steps: 0, marker: 0 });
   await tap(t, '.bottomnav .bn-item', { hasText: 'Klanten' });
   await tap(t, '.client-card');
-  expect('op de klant', await where(t), { page: 'client', steps: 2 });
+  await expectState(t, 'op de klant', { page: 'client', steps: 2 });
   await back(t);
-  expect('terug 1', await where(t), { page: 'clients', steps: 1 });
+  await expectState(t, 'terug 1', { page: 'clients', steps: 1 });
   await back(t);
-  expect('terug 2', await where(t), { page: 'dashboard', steps: 0, marker: 0 });
+  await expectState(t, 'terug 2', { page: 'dashboard', steps: 0, marker: 0 });
   // Op het dashboard is er niets meer: de volgende druk verlaat de app (hier
   // about:blank, op de telefoon het beginscherm). Niets houdt je vast.
   await back(t);
@@ -139,9 +151,9 @@ await scenario('meerdere keren terug zonder tik ertussen', 'dashboard', async (t
   await tap(t, '.project-list-card');
   await tap(t, '.bottomnav .bn-item', { hasText: 'Agenda' });
   const before = await t.cdp.send('Page.getNavigationHistory');
-  expect('na drie pagina’s', await where(t), { page: 'calendar', steps: 3 });
+  await expectState(t, 'na drie pagina’s', { page: 'calendar', steps: 3 });
   await back(t); await back(t); await back(t);
-  expect('drie keer terug', await where(t), { page: 'dashboard', steps: 0 });
+  await expectState(t, 'drie keer terug', { page: 'dashboard', steps: 0 });
   const after = await t.cdp.send('Page.getNavigationHistory');
   if (after.entries.length !== before.entries.length) throw new Error(`terug zette items neer: ${before.entries.length} → ${after.entries.length}`);
 });
@@ -149,96 +161,96 @@ await scenario('meerdere keren terug zonder tik ertussen', 'dashboard', async (t
 await scenario('terug sluit een bewerkvenster, en daarna pas de pagina', 'tickets', async (t) => {
   // Op de titel: midden op de kaart zit de knop "Project maken".
   await tap(t, '.ticket-item .tk-title');
-  expect('venster open', await where(t), { page: 'tickets', modal: true, steps: 2 });
+  await expectState(t, 'venster open', { page: 'tickets', modal: true, steps: 2 });
   await back(t);
-  expect('venster dicht', await where(t), { page: 'tickets', modal: false, steps: 1 });
+  await expectState(t, 'venster dicht', { page: 'tickets', modal: false, steps: 1 });
   // Geen geschiedenis, dus omhoog langs het kruimelpad: naar het dashboard.
   await back(t);
-  expect('omhoog', await where(t), { page: 'dashboard', steps: 0 });
+  await expectState(t, 'omhoog', { page: 'dashboard', steps: 0 });
 });
 
 await scenario('een venster dicht met het kruisje haalt zijn stap weg', 'tickets', async (t) => {
   await tap(t, '.ticket-item .tk-title');
   await tap(t, '.modal-close');
-  expect('dicht met het kruisje', await where(t), { page: 'tickets', modal: false, steps: 1 });
+  await expectState(t, 'dicht met het kruisje', { page: 'tickets', modal: false, steps: 1 });
   await back(t);
-  expect('terug gaat meteen naar het dashboard', await where(t), { page: 'dashboard', modal: false, steps: 0 });
+  await expectState(t, 'terug gaat meteen naar het dashboard', { page: 'dashboard', modal: false, steps: 0 });
 });
 
 await scenario('terug sluit het menu; kies je erin, dan gaat terug naar de pagina ervoor', 'dashboard', async (t) => {
   await tap(t, '.mobile-nav-toggle');
-  expect('menu open', await where(t), { menu: true, steps: 1 });
+  await expectState(t, 'menu open', { menu: true, steps: 1 });
   await back(t);
-  expect('menu dicht', await where(t), { menu: false, page: 'dashboard', steps: 0 });
+  await expectState(t, 'menu dicht', { menu: false, page: 'dashboard', steps: 0 });
   await tap(t, '.mobile-nav-toggle');
   await tap(t, '.znav.is-open .zpnav-item', { hasText: seed.projects[0].name });
-  expect('project via het menu', await where(t), { menu: false, page: 'project', steps: 1 });
+  await expectState(t, 'project via het menu', { menu: false, page: 'project', steps: 1 });
   await back(t);
-  expect('terug', await where(t), { page: 'dashboard', steps: 0 });
+  await expectState(t, 'terug', { page: 'dashboard', steps: 0 });
 });
 
 await scenario('terug sluit het chatpaneel van Gerrie', 'dashboard', async (t) => {
   await tap(t, '.gerrie-fab');
-  expect('Gerrie open', await where(t), { gerrie: true, steps: 1 });
+  await expectState(t, 'Gerrie open', { gerrie: true, steps: 1 });
   await back(t);
-  expect('Gerrie dicht', await where(t), { gerrie: false, page: 'dashboard', steps: 0 });
+  await expectState(t, 'Gerrie dicht', { gerrie: false, page: 'dashboard', steps: 0 });
 });
 
 await scenario('na opstarten op een project gaat terug omhoog: Projecten, dan het dashboard', { page: 'project', projectId: seed.projects[0].id }, async (t) => {
   // Nog niet getikt: Chrome zou een item zonder tik overslaan, dus er staat er nog geen.
-  expect('opgestart', await where(t), { page: 'project', steps: 0 });
+  await expectState(t, 'opgestart', { page: 'project', steps: 0 });
   // Een tik die niets verandert: op het tabblad dat al openstaat.
   await tap(t, '.tab.active');
-  expect('na een tik', await where(t), { page: 'project', steps: 2 });
+  await expectState(t, 'na een tik', { page: 'project', steps: 2 });
   await back(t);
-  expect('omhoog 1', await where(t), { page: 'projects', steps: 1 });
+  await expectState(t, 'omhoog 1', { page: 'projects', steps: 1 });
   await back(t);
-  expect('omhoog 2', await where(t), { page: 'dashboard', steps: 0 });
+  await expectState(t, 'omhoog 2', { page: 'dashboard', steps: 0 });
 });
 
 await scenario('een nieuw tabblad gaat met terug dicht, en terug gaat daarna verder in het tabblad ervoor', 'clients', async (t) => {
   await tap(t, '.client-card');
-  expect('op de klant', await where(t), { page: 'client', steps: 2 });
+  await expectState(t, 'op de klant', { page: 'client', steps: 2 });
   await tap(t, '.tab-new');
   // Het nieuwe tabblad: één stap terug naar het eerste, plus de twee daar.
-  expect('nieuw tabblad', await where(t), { tabs: 2, page: 'dashboard', steps: 3 });
+  await expectState(t, 'nieuw tabblad', { tabs: 2, page: 'dashboard', steps: 3 });
   await back(t);
-  expect('tabblad dicht', await where(t), { tabs: 1, page: 'client', steps: 2 });
+  await expectState(t, 'tabblad dicht', { tabs: 1, page: 'client', steps: 2 });
   // Zonder tik ertussen: de stappen van het eerste tabblad stonden er al.
   await back(t);
-  expect('terug in het eerste tabblad', await where(t), { tabs: 1, page: 'clients', steps: 1 });
+  await expectState(t, 'terug in het eerste tabblad', { tabs: 1, page: 'clients', steps: 1 });
   await back(t);
-  expect('en omhoog', await where(t), { tabs: 1, page: 'dashboard', steps: 0 });
+  await expectState(t, 'en omhoog', { tabs: 1, page: 'dashboard', steps: 0 });
 });
 
 await scenario('Berichten: terug gaat van een gesprek naar de lijst', 'communication', async (t) => {
   await tap(t, '.comm-row');
-  expect('gesprek open', await where(t), { page: 'communication', commThread: true, steps: 2 });
+  await expectState(t, 'gesprek open', { page: 'communication', commThread: true, steps: 2 });
   await back(t);
-  expect('lijst', await where(t), { page: 'communication', commThread: false, steps: 1 });
+  await expectState(t, 'lijst', { page: 'communication', commThread: false, steps: 1 });
 });
 
 await scenario('teamchat: terug gaat van een gesprek naar de lijst', 'chat', async (t) => {
   await tap(t, 'button.tmc-row');
-  expect('gesprek open', await where(t), { page: 'chat', chatThread: true, steps: 2 });
+  await expectState(t, 'gesprek open', { page: 'chat', chatThread: true, steps: 2 });
   await back(t);
-  expect('lijst', await where(t), { page: 'chat', chatThread: false, steps: 1 });
+  await expectState(t, 'lijst', { page: 'chat', chatThread: false, steps: 1 });
 });
 
 await scenario('herladen midden in de app: daarna klopt terug weer', 'dashboard', async (t) => {
   await tap(t, '.bottomnav .bn-item', { hasText: 'Klanten' });
   await tap(t, '.client-card');
-  expect('op de klant', await where(t), { steps: 2 });
+  await expectState(t, 'op de klant', { steps: 2 });
   await t.page.reload({ waitUntil: 'networkidle' });
   await t.page.waitForSelector('.app', { timeout: 20000 });
   await t.page.waitForTimeout(1200);
   // De items van vóór het herladen horen bij een document dat er niet meer is:
   // de app gaat meteen terug naar het begin (en laadt daarbij één keer extra).
-  expect('na herladen', await where(t), { steps: 0, marker: 0 });
+  await expectState(t, 'na herladen', { steps: 0, marker: 0 });
   await tap(t, '.bottomnav .bn-item', { hasText: 'Projecten' });
-  expect('verder', await where(t), { page: 'projects', steps: 1 });
+  await expectState(t, 'verder', { page: 'projects', steps: 1 });
   await back(t);
-  expect('terug', await where(t), { page: 'dashboard', steps: 0 });
+  await expectState(t, 'terug', { page: 'dashboard', steps: 0 });
 });
 
 // Op een computer is de terugknop die van de browser (of de muis). Een menu
@@ -247,12 +259,12 @@ await scenario('herladen midden in de app: daarna klopt terug weer', 'dashboard'
 await scenario('computer: menu dicht bij indrukken, klik opent een pagina', 'dashboard', async (t) => {
   await t.page.locator('.zrail-btn[aria-label="Weergave"]').click({ delay: 120 });
   await t.page.waitForTimeout(400);
-  expect('Weergave open', await where(t), { page: 'dashboard', steps: 1 });
+  await expectState(t, 'Weergave open', { page: 'dashboard', steps: 1 });
   await t.page.locator('.zrail-btn[aria-label="Instellingen"]').click({ delay: 120 });
   await t.page.waitForTimeout(500);
-  expect('Instellingen', await where(t), { page: 'settings', steps: 1 });
+  await expectState(t, 'Instellingen', { page: 'settings', steps: 1 });
   await back(t);
-  expect('terug', await where(t), { page: 'dashboard', steps: 0 });
+  await expectState(t, 'terug', { page: 'dashboard', steps: 0 });
 }, DESKTOP);
 
 await browser.close();

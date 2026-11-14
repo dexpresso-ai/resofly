@@ -156,4 +156,5 @@ Vooruit doet niets: daar zijn de stappen al weg.
   `AnnualAccounts.tsx`, `FiscalYears.tsx`, `Dividends.tsx`, `Shareholders.tsx`,
   `ProjectGallery.tsx`, `GalleryViewer.tsx`, `Bank.tsx`
 - `tests/terugknop/run.mjs`, `tests/terugknop/README.md` (nieuw),
-  `npm run test:terugknop`
+  `npm run test:terugknop`; ook als stap in `.github/workflows/frontend-checks.yml`
+  en in het lijstje "Voor je pusht" van `CLAUDE.md`
