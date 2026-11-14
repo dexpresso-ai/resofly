@@ -4,6 +4,7 @@ import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
 import { throwFunctionError } from './functionErrors';
+import { ConnectionError, isConnectionError, SIGNED_OUT_MESSAGE } from './networkRetry';
 import { isMissingColumn, isMissingRelation, NotMigratedError } from './postgrestErrors';
 import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type InkDocument } from './ink';
 import type { ReportDefinition } from './reporting';
@@ -931,6 +932,28 @@ export async function selectGalleryItemNames(
     .eq('organization_id', organizationId)
     .eq('gallery_id', galleryId)
     .order('id', { ascending: true }));
+}
+
+/**
+ * Het item dat bij dit opgeslagen bestand hoort, als het er is. Gaf het
+ * opslaan van een upload een verbindingsfout, dan kan de rij er tóch staan: de
+ * database sloeg hem op, alleen het antwoord kwam niet terug. Een nieuwe
+ * poging kijkt dan eerst hier, in plaats van hem nog eens te maken.
+ */
+export async function findGalleryItemByStorageKey(
+  organizationId: UUID,
+  galleryId: UUID,
+  storageKey: string,
+): Promise<GalleryItem | null> {
+  const { data, error } = await supabase
+    .from('gallery_items')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('gallery_id', galleryId)
+    .eq('storage_key', storageKey)
+    .limit(1);
+  if (error) throw error;
+  return ((data ?? [])[0] ?? null) as GalleryItem | null;
 }
 
 /**
@@ -4059,11 +4082,23 @@ export async function deleteRow(table: Table, id: UUID, organizationId?: UUID): 
   if (error) throw error;
 }
 
+/**
+ * Wie er is ingelogd, uit de sessie die de browser al heeft. Eerst vroeg dit
+ * het bij elke opslag na bij Supabase (getUser, een netwerkverzoek). Haperde de
+ * verbinding even, dan kwam er geen gebruiker terug en meldde de app "Niet
+ * ingelogd.", terwijl je gewoon ingelogd was: bij een galerij-upload van 51
+ * foto's op een telefoon gebeurde dat midden in de wachtrij (14 november).
+ * Wie je bent, controleert de database bij elk verzoek toch al aan het token;
+ * de sessie in de browser is hier dus genoeg.
+ */
 async function currentUserId(): Promise<UUID> {
-  const { data: userData } = await supabaseAuth.getUser();
-  const userId = userData.user?.id;
-  if (!userId) throw new Error('Niet ingelogd.');
-  return userId;
+  const { data, error } = await supabaseAuth.getSession();
+  const userId = data.session?.user?.id;
+  if (userId) return userId;
+  // Een verlopen token wordt bij getSession ververst. Mislukt dat door het
+  // netwerk, dan ben je niet uitgelogd: zeg dan dat de verbinding weg is.
+  if (isConnectionError(error)) throw new ConnectionError();
+  throw new Error(SIGNED_OUT_MESSAGE);
 }
 
 /** Wie er nu is ingelogd; voor een uitvoerder die alleen namens de voorsteller mag werken. */

@@ -7,8 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
   ArrowUpDown, CheckSquare, ChevronDown, ChevronUp, Copy, Expand, Film, FolderTree, HardDrive, Heart,
-  ExternalLink, Image as ImageIcon, Layers, LayoutDashboard, Link2, Loader2, Maximize2, Minimize2, Pencil, Plus, Settings2,
-  Sparkles, SlidersHorizontal, Star,
+  ExternalLink, Image as ImageIcon, Layers, LayoutDashboard, Link2, Loader2, Maximize2, Minimize2, Pencil, Plus, RotateCcw,
+  Settings2, Sparkles, SlidersHorizontal, Star,
   Trash2, Upload, UploadCloud, X,
 } from 'lucide-react';
 import type {
@@ -19,7 +19,7 @@ import { Button, Input, Select } from '../components/Ui';
 import { dateNL } from '../lib/format';
 import { supabase, supabaseAuth } from '../lib/supabase';
 import {
-  deleteGalleryRecord, deleteRow, fetchOrganizationStorageStatus, insertRow, replaceGalleryCategoryPresets,
+  deleteGalleryRecord, deleteRow, fetchOrganizationStorageStatus, findGalleryItemByStorageKey, insertRow, replaceGalleryCategoryPresets,
   selectGalleryCategories, selectGalleryCategoryPresets, selectGalleryFavorites, selectGalleryItemNames, selectGalleryItems,
   setGalleryItemOrder, setGalleryItemsCategory, updateGallerySettings, updateGalleryShare, updateRow,
 } from '../lib/repository';
@@ -42,6 +42,8 @@ import {
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
 import { derivedFileName, formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
 import { fileInputAccept } from '../lib/filePicker';
+import { isConnectionError, readableError, withRetry, type RetryOptions } from '../lib/networkRetry';
+import { keepScreenOn } from '../lib/screenWakeLock';
 import { useAlbumAddress } from '../services/domainService';
 import { galleryShareUrl } from '../lib/clientAddress';
 import { useBackStep } from '../lib/useBackStep';
@@ -157,6 +159,21 @@ function randomShareToken(): string {
 }
 
 type QueueEntry = { name: string; status: 'wacht' | 'bezig' | 'klaar' | 'fout'; detail?: string };
+
+/** Wat er van de laatste upload mislukte; de knop "Opnieuw proberen" stuurt het nog eens. */
+type FailedUpload = { galleryId: string; files: File[]; categoryId: string | null };
+
+/**
+ * Hoe lang een bestand het blijft proberen voordat het "Geen verbinding" meldt:
+ * zes pogingen mét verbinding, samen ruim een minuut. Genoeg voor een telefoon
+ * die van wifi naar 4G wisselt of even door een dode zone gaat. Pogingen zonder
+ * verbinding of met het scherm uit tellen niet mee; dan wacht de upload tot je
+ * terug bent.
+ */
+const UPLOAD_RETRY: RetryOptions = { attempts: 6, delaysMs: [2_000, 5_000, 10_000, 20_000, 30_000] };
+
+/** Als de verbinding echt weg is, proberen de bestanden die nog wachten het niet meer. */
+const NOT_TRIED_OFFLINE = 'Niet geprobeerd: geen verbinding.';
 
 /**
  * Het sterretje wijst de opening aan. Bij een video heet dat een kopvideo en bij
@@ -355,6 +372,7 @@ export function GalleryTab({
   const [newTitle, setNewTitle] = useState('');
   const [newFormat, setNewFormat] = useState<GalleryFormat>('hybrid');
   const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [failedUpload, setFailedUpload] = useState<FailedUpload | null>(null);
   const [busy, setBusy] = useState(false);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [settingsTab, setSettingsTab] = useState<GallerySettingsTab | null>(null);
@@ -535,13 +553,19 @@ export function GalleryTab({
     setShowShare(false);
     dragDepth.current = 0;
     setDragActive(false);
+    // De kijk-tokens laden los van de lijst. Ze proberen het opnieuw bij een
+    // haperende verbinding (withRetry), en de lijst wachtte daar eerst op: een
+    // storing bij de media-worker hield de hele galerij op "laden". Zonder
+    // tokens toont de lijst lege tegels tot ze er zijn. De bundel van de vorige
+    // galerij moet wel eerst weg: die geldt hier niet.
+    setBundle(null);
+    void refreshSession(openId);
     (async () => {
       try {
         const [loadedItems] = await Promise.all([
           selectGalleryItems(organizationId, openId),
           refreshCategories(openId),
           refreshFavorites(openId),
-          refreshSession(openId),
         ]);
         if (cancelled) return;
         setItems(loadedItems);
@@ -693,11 +717,32 @@ export function GalleryTab({
    * naam: dat is wat hij vroeg. Hield het bestand zijn eigen naam, dan heeft
    * niemand gekozen wat er met dit dubbele bestand moet. Dan stoppen we, en
    * ruimt uploadOne de bestanden in R2 op.
+   *
+   * Hapert de verbinding, dan proberen we het opnieuw. Maar het opslaan kan
+   * dan al gelukt zijn, met alleen het antwoord kwijt. Een nieuwe poging kijkt
+   * daarom eerst of de rij er al staat. Anders weigerde de database de naam
+   * ("net kwam er een bestand met deze naam"), en wiste uploadOne daarna de
+   * bestanden onder een rij die wél bestond.
    */
-  async function insertGalleryItem(gallery: Gallery, values: Record<string, unknown>, name: UploadName): Promise<GalleryItem> {
+  async function insertGalleryItem(
+    gallery: Gallery, values: Record<string, unknown>, name: UploadName, retry: RetryOptions,
+  ): Promise<GalleryItem> {
+    const storageKey = String(values.storage_key);
+    let maybeSaved = false;
     for (let attempt = 1; ; attempt += 1) {
       try {
-        return await insertRow<GalleryItem>('gallery_items', organizationId, { ...values, file_name: name.current });
+        return await withRetry(async () => {
+          if (maybeSaved) {
+            const saved = await findGalleryItemByStorageKey(organizationId, gallery.id, storageKey);
+            if (saved) return saved;
+          }
+          try {
+            return await insertRow<GalleryItem>('gallery_items', organizationId, { ...values, file_name: name.current });
+          } catch (e) {
+            if (isConnectionError(e)) maybeSaved = true;
+            throw e;
+          }
+        }, retry);
       } catch (e) {
         if (!isGalleryNameTaken(e)) throw e;
         if (!name.renamed || attempt >= 3) {
@@ -738,6 +783,12 @@ export function GalleryTab({
       throw new Error('Foto is groter dan 4 GB.');
     }
     const uploadGroupId = crypto.randomUUID();
+    // Elk verzoek van dit bestand probeert het zelf opnieuw; de wachtrij laat
+    // zien dat het wacht, in plaats van meteen "Failed to fetch" te melden.
+    const retry: RetryOptions = {
+      ...UPLOAD_RETRY,
+      onRetry: ({ waiting }) => onProgress(waiting ? 'wacht op verbinding…' : 'opnieuw proberen…'),
+    };
 
     if (isPhoto) {
       onProgress('previews maken…');
@@ -749,9 +800,9 @@ export function GalleryTab({
       const settled = await Promise.allSettled([
         // Een foto van 100 megapixel haalt de 64 MB per request; uploadGalleryFile
         // schakelt dan zelf over op delen.
-        uploadGalleryFile(file, fileName, file.type, organizationId, gallery.id, uploadGroupId, 'original'),
-        uploadGalleryFileVariant(derived.preview, derivedFileName('preview', fileName), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'preview'),
-        uploadGalleryFileVariant(derived.thumb, derivedFileName('thumb', fileName), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb'),
+        uploadGalleryFile(file, fileName, file.type, organizationId, gallery.id, uploadGroupId, 'original', undefined, retry),
+        uploadGalleryFileVariant(derived.preview, derivedFileName('preview', fileName), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'preview', retry),
+        uploadGalleryFileVariant(derived.thumb, derivedFileName('thumb', fileName), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb', retry),
       ]);
       const failure = settled.find(result => result.status === 'rejected');
       if (failure) {
@@ -775,9 +826,14 @@ export function GalleryTab({
           height: derived.height,
           sort_order: sortOrder,
           category_id: categoryId,
-        }, name);
+        }, name, retry);
       } catch (e) {
-        for (const key of [original.key, preview.key, thumb.key]) void deleteR2Object(key).catch(() => undefined);
+        // Bleef de verbinding weg, dan weten we niet of de rij er toch staat.
+        // Liever een los bestand in R2 (dat gaat weg met het album) dan een
+        // foto in het album zonder bestand.
+        if (!isConnectionError(e)) {
+          for (const key of [original.key, preview.key, thumb.key]) void deleteR2Object(key).catch(() => undefined);
+        }
         throw e;
       }
     }
@@ -793,7 +849,7 @@ export function GalleryTab({
     let thumbKey: string | null = null;
     let thumbSize = 0;
     if (poster.thumb) {
-      const thumb = await uploadGalleryFileVariant(poster.thumb, derivedFileName('thumb', fileName), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb');
+      const thumb = await uploadGalleryFileVariant(poster.thumb, derivedFileName('thumb', fileName), 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb', retry);
       thumbKey = thumb.key;
       thumbSize = thumb.size;
     }
@@ -803,6 +859,7 @@ export function GalleryTab({
       master = await uploadGalleryFile(
         file, fileName, file.type, organizationId, gallery.id, uploadGroupId, 'master',
         (done, totaal) => onProgress(`uploaden… ${Math.round((done / totaal) * 100)}%`),
+        retry,
       );
     } catch (e) {
       if (thumbKey) void deleteR2Object(thumbKey).catch(() => undefined);
@@ -837,13 +894,17 @@ export function GalleryTab({
         stream_status: streamUid ? 'processing' : null,
         sort_order: sortOrder,
         category_id: categoryId,
-      }, name);
+      }, name, retry);
       if (streamUid) pollStreamItem(inserted);
       return inserted;
     } catch (e) {
-      void deleteR2Object(master.key).catch(() => undefined);
-      if (thumbKey) void deleteR2Object(thumbKey).catch(() => undefined);
-      if (streamUid) void deleteGalleryStreamVideo(organizationId, streamUid).catch(() => undefined);
+      // Zie de foto hierboven: zonder verbinding niets weggooien wat een rij
+      // in het album misschien nog nodig heeft.
+      if (!isConnectionError(e)) {
+        void deleteR2Object(master.key).catch(() => undefined);
+        if (thumbKey) void deleteR2Object(thumbKey).catch(() => undefined);
+        if (streamUid) void deleteGalleryStreamVideo(organizationId, streamUid).catch(() => undefined);
+      }
       throw e;
     }
   }
@@ -864,6 +925,9 @@ export function GalleryTab({
     if (fileInputRef.current) fileInputRef.current.value = '';
     setBusy(true);
     setError(null);
+    // Het scherm blijft aan tot de upload klaar is. Ging het uit, dan zette
+    // Android het netwerk stil en mislukte de rest van de wachtrij.
+    const releaseScreen = keepScreenOn();
     try {
       // ── Dubbele bestanden ──
       // Eerst kijken wat er al in het album staat, en pas dan uploaden. Wie
@@ -898,6 +962,7 @@ export function GalleryTab({
       const names: UploadName[] = plan.entries.map(entry => ({
         original: picked[entry.index].name, current: entry.name, renamed: entry.renamed, reserved,
       }));
+      setFailedUpload(null);
       setQueue(plan.entries.map(entry => ({
         name: entry.renamed ? `${picked[entry.index].name} → ${entry.name}` : entry.name,
         status: 'wacht',
@@ -908,6 +973,12 @@ export function GalleryTab({
       let cursor = 0;
       let uploaded = 0;
       let renamed = 0;
+      const failed: File[] = [];
+      // Kreeg een bestand na al zijn pogingen nog steeds geen verbinding, dan
+      // beginnen de bestanden die nog wachten er niet meer aan. Anders deed
+      // elk bestand nog een minuut pogingen, en liep de wachtrij alsnog vol
+      // met dezelfde fout. "Opnieuw proberen" pakt ze daarna allemaal op.
+      let connectionLost = false;
       // Grote bestanden gaan in delen van 64 MB. Drie daarvan tegelijk duwt
       // honderden megabytes door het geheugen en maakt de upload juist trager;
       // bij een video-master doen we er dus één tegelijk.
@@ -917,6 +988,11 @@ export function GalleryTab({
         for (;;) {
           const index = cursor++;
           if (index >= files.length) return;
+          if (connectionLost) {
+            failed.push(files[index]);
+            setQueueEntry(index, { status: 'fout', detail: NOT_TRIED_OFFLINE });
+            continue;
+          }
           setQueueEntry(index, { status: 'bezig' });
           try {
             const name = names[index];
@@ -933,18 +1009,32 @@ export function GalleryTab({
               ...(name.renamed ? { name: `${name.original} → ${inserted.file_name}` } : {}),
             });
           } catch (e) {
-            setQueueEntry(index, { status: 'fout', detail: e instanceof Error ? e.message : 'Upload mislukt.' });
+            if (isConnectionError(e)) connectionLost = true;
+            failed.push(files[index]);
+            setQueueEntry(index, { status: 'fout', detail: readableError(e, 'Upload mislukt.') });
           }
         }
       }));
+      // De oorspronkelijke bestanden, niet de nieuwe namen: een tweede poging
+      // kijkt opnieuw naar dubbele namen, want het album kan intussen veranderd zijn.
+      setFailedUpload(failed.length > 0 ? { galleryId, files: failed, categoryId } : null);
       await refreshStorage();
       // Nieuwe media = mogelijk nieuwe Stream-uids zonder token: sessie verversen.
-      if (openIdRef.current === galleryId) await refreshSession(galleryId);
+      // Niet afwachten: zonder verbinding wacht dit tot die terug is, en dan
+      // bleef de upload "bezig" en verscheen "Opnieuw proberen" niet.
+      if (openIdRef.current === galleryId) void refreshSession(galleryId);
       window.setTimeout(() => setQueue(prev => (prev.every(q => q.status === 'klaar') ? [] : prev)), 4000);
       return { ...EMPTY_UPLOAD, uploaded, renamed, skippedDuplicates };
     } finally {
+      releaseScreen();
       setBusy(false);
     }
+  }
+
+  /** De knop "Opnieuw proberen" onder de wachtrij: alleen wat de vorige keer mislukte. */
+  async function retryFailedUploads(): Promise<UploadSummary> {
+    if (!openGallery || !failedUpload || failedUpload.galleryId !== openGallery.id) return EMPTY_UPLOAD;
+    return uploadPicked(failedUpload.files, failedUpload.categoryId);
   }
 
   /**
@@ -999,7 +1089,7 @@ export function GalleryTab({
     try {
       showPanelNotice(await uploadPicked(picked, null));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Uploaden mislukt.');
+      setError(readableError(e, 'Uploaden mislukt.'));
     }
   }
 
@@ -1008,9 +1098,20 @@ export function GalleryTab({
     try {
       showPanelNotice(await uploadFromTransfer(transfer, null));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Uploaden mislukt.');
+      setError(readableError(e, 'Uploaden mislukt.'));
     }
   }
+
+  async function handlePanelRetry() {
+    try {
+      showPanelNotice(await retryFailedUploads());
+    } catch (e) {
+      setError(readableError(e, 'Uploaden mislukt.'));
+    }
+  }
+
+  // Alleen als er iets te herhalen valt in dít album, en niets anders loopt.
+  const canRetryUpload = !busy && !loading && failedUpload !== null && failedUpload.galleryId === openGallery?.id;
 
   // ── Item-acties ──
   async function removeItem(item: GalleryItem) {
@@ -1615,7 +1716,7 @@ export function GalleryTab({
         onChange={(e) => void handlePanelPick(e.target.files)}
       />
 
-      <UploadQueue queue={queue} />
+      <UploadQueue queue={queue} onRetry={canRetryUpload ? () => { void handlePanelRetry(); } : undefined} />
 
       {loading
         ? <div className="galv-empty">Galerij wordt geladen…</div>
@@ -1754,6 +1855,7 @@ export function GalleryTab({
             onSaveAsPresets: saveAsPresets,
             onUploadDrop: uploadFromTransfer,
             onUploadPick: uploadPicked,
+            onUploadRetry: canRetryUpload ? retryFailedUploads : undefined,
           }}
           cover={{
             onPickItem: pickCoverItem,
@@ -1786,21 +1888,35 @@ export function GalleryTab({
  * "Bestanden" — wie daar sleept, moet de voortgang zien zonder het venster te
  * hoeven sluiten.
  */
-function UploadQueue({ queue }: { queue: QueueEntry[] }) {
+function UploadQueue({ queue, onRetry }: { queue: QueueEntry[]; onRetry?: () => void }) {
   if (queue.length === 0) return null;
+  const running = queue.some(entry => entry.status === 'wacht' || entry.status === 'bezig');
+  const failed = queue.filter(entry => entry.status === 'fout').length;
   return (
     <div className="gal-queue">
-      {queue.map((entry, i) => (
-        <div key={i} className={`gal-queue-row is-${entry.status}`}>
-          <span className="gal-queue-name">{entry.name}</span>
-          <span className="gal-queue-status">
-            {entry.status === 'wacht' && 'Wachten…'}
-            {entry.status === 'bezig' && (entry.detail || 'Bezig…')}
-            {entry.status === 'klaar' && 'Klaar'}
-            {entry.status === 'fout' && (entry.detail || 'Mislukt')}
-          </span>
+      {/* Op een telefoon stopt het netwerk zodra je naar een andere app gaat.
+          Het scherm blijft zelf aan (keepScreenOn); dit zegt de rest. */}
+      {running && <p className="gal-queue-hint">Laat dit scherm open tot alles klaar is.</p>}
+      <div className="gal-queue-list">
+        {queue.map((entry, i) => (
+          <div key={i} className={`gal-queue-row is-${entry.status}`}>
+            <span className="gal-queue-name">{entry.name}</span>
+            <span className="gal-queue-status">
+              {entry.status === 'wacht' && 'Wachten…'}
+              {entry.status === 'bezig' && (entry.detail || 'Bezig…')}
+              {entry.status === 'klaar' && 'Klaar'}
+              {entry.status === 'fout' && (entry.detail || 'Mislukt')}
+            </span>
+          </div>
+        ))}
+      </div>
+      {/* Buiten de lijst: die scrollt, en daar viel de knop onderaan weg. */}
+      {!running && failed > 0 && onRetry && (
+        <div className="gal-queue-retry">
+          <span>{failed} bestand{failed === 1 ? '' : 'en'} niet geüpload.</span>
+          <Button type="button" onClick={onRetry}><RotateCcw size={14} /> Opnieuw proberen</Button>
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -2026,6 +2142,8 @@ type GalleryFileActions = {
   /** Uploaden vanuit dit venster; geeft terug hoe het afliep (overgeslagen, nieuwe namen). */
   onUploadDrop: (transfer: DataTransfer, categoryId: string | null) => Promise<UploadSummary>;
   onUploadPick: (files: File[], categoryId: string | null) => Promise<UploadSummary>;
+  /** Wat de vorige upload niet haalde nog eens sturen, naar dezelfde categorie; ontbreekt als er niets is. */
+  onUploadRetry?: () => Promise<UploadSummary>;
 };
 
 /**
@@ -2712,6 +2830,16 @@ function GalleryFileSettings({ items, categories, format, bundle, busy, queue, a
     });
   }
 
+  /** "Opnieuw proberen" onder de wachtrij; de bestanden gaan naar de categorie van de eerste keer. */
+  function retryUpload() {
+    const retry = actions.onUploadRetry;
+    if (!retry || locked) return;
+    void run(async () => {
+      const text = uploadNotice(await retry());
+      if (text) notify(text);
+    });
+  }
+
   /** Alleen echte bestandsslepen; miniaturen verplaatsen is iets anders. */
   function onFileDragEnter(e: React.DragEvent) {
     if (!dragHasFiles(e)) return;
@@ -2845,7 +2973,7 @@ function GalleryFileSettings({ items, categories, format, bundle, busy, queue, a
           </span>
         </div>
       )}
-      <UploadQueue queue={queue} />
+      <UploadQueue queue={queue} onRetry={actions.onUploadRetry && !locked ? retryUpload : undefined} />
       <input
         ref={uploadInput}
         type="file"

@@ -1,4 +1,5 @@
 import { supabaseAuth } from './supabase';
+import { ConnectionError, isConnectionError, SIGNED_OUT_MESSAGE } from './networkRetry';
 
 const workerUrl = import.meta.env.VITE_R2_WORKER_URL as string | undefined;
 
@@ -8,10 +9,14 @@ export function getWorkerBase(): string {
 }
 
 export async function getAccessToken(): Promise<string> {
-  const { data } = await supabaseAuth.getSession();
+  const { data, error } = await supabaseAuth.getSession();
   const accessToken = data.session?.access_token;
-  if (!accessToken) throw new Error('Niet ingelogd. Uploaden vereist een actieve Supabase sessie.');
-  return accessToken;
+  if (accessToken) return accessToken;
+  // Een verlopen token wordt hier ververst, en dat gaat over het netwerk.
+  // Lukte dat niet door een haperende verbinding, dan ben je niet uitgelogd:
+  // dan is opnieuw proberen genoeg (zie withRetry).
+  if (isConnectionError(error)) throw new ConnectionError();
+  throw new Error(SIGNED_OUT_MESSAGE);
 }
 
 export async function deleteR2Object(key: string): Promise<void> {
