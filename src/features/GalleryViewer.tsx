@@ -28,6 +28,7 @@ import {
 import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
 import { normalizeGalleryLayout, type GalleryLayout } from '../lib/galleryLayout';
 import { planPhotoLayout, type LayoutTile } from '../lib/galleryLayoutEngine';
+import { swipeAxis, swipeStep, swipeVelocity, type SwipeAxis, type SwipeSample } from '../lib/swipe';
 
 /** Minimale item-vorm — zowel de app (GalleryItem) als het portaal (gesanitiseerd) passen hierin. */
 export type GalleryViewerItem = {
@@ -298,6 +299,135 @@ function scrollableAncestor(node: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
+/** Waar een veeg niet begint: de knoppen en de balk onder de foto houden hun eigen tik. */
+const SWIPE_IGNORE = 'button, a, input, select, textarea, .galv-lightbox-bar, .galv-ss-panel';
+
+/**
+ * Vegen in de vergrote foto: de foto volgt de vinger, en loslaten bladert naar
+ * de volgende of vorige — of veert terug als de veeg te klein was.
+ *
+ * Bewust met eigen touch-listeners en niet met `touch-action` of React-props:
+ * - React hangt touchmove passief op, en dan werkt preventDefault niet. Zonder
+ *   preventDefault schoof de pagina áchter de open foto mee met elke veeg.
+ * - `touch-action: pinch-zoom` kent Safari op de iPhone niet, en
+ *   `touch-action: none` zou daar ook het knijpen uitzetten. Nu blijft knijpen
+ *   overal werken: met twee vingers doen we niets.
+ * - Is de pagina al ingezoomd, dan laten we één vinger aan de browser: die
+ *   schuift dan door de vergrote foto, zoals je verwacht.
+ *
+ * De sleepbeweging zet de verschuiving rechtstreeks op het kader en niet in
+ * React-state: anders tekent de hele galerij (honderden tegels) bij elke
+ * pixel opnieuw.
+ */
+function useSwipeToStep(
+  boxRef: React.RefObject<HTMLElement | null>,
+  frameRef: React.RefObject<HTMLElement | null>,
+  active: boolean,
+  onStep: (delta: 1 | -1) => void,
+) {
+  // Via een ref, zodat de listeners niet opnieuw worden gehangen terwijl de
+  // diavoorstelling doorbladert — dan raakt een veeg halverwege zijn begin kwijt.
+  const onStepRef = useRef(onStep);
+  useEffect(() => { onStepRef.current = onStep; }, [onStep]);
+
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!active || !box) return;
+    let gesture: { x: number; y: number; axis: SwipeAxis | null; samples: SwipeSample[] } | null = null;
+    // Na een veeg vuren sommige browsers nog een click af; die zou op de zwarte
+    // rand de foto sluiten. Alleen kort na de veeg: komt er geen click, dan mag
+    // een latere muisklik (touchscreen-laptop) niet alsnog worden opgeslokt.
+    let swallowClickUntil = 0;
+
+    const paint = (dx: number) => {
+      const frame = frameRef.current;
+      if (!frame) return;
+      frame.style.transition = 'none';
+      frame.style.transform = `translate3d(${dx}px,0,0)`;
+      frame.style.opacity = String(1 - Math.min(0.35, (Math.abs(dx) / Math.max(1, box.clientWidth)) * 0.6));
+    };
+    const settle = (animate: boolean) => {
+      const frame = frameRef.current;
+      if (!frame) return;
+      frame.style.transition = animate ? 'transform .24s cubic-bezier(.22,.61,.36,1), opacity .24s ease' : 'none';
+      frame.style.transform = '';
+      frame.style.opacity = '';
+    };
+    const abort = () => {
+      if (gesture?.axis === 'x') settle(true);
+      gesture = null;
+    };
+
+    const onStart = (e: TouchEvent) => {
+      swallowClickUntil = 0;
+      // Een tweede vinger erbij: dat is knijpen, geen veeg.
+      if (e.touches.length !== 1) { abort(); return; }
+      if ((window.visualViewport?.scale ?? 1) > 1.01) { gesture = null; return; }
+      const target = e.target as Element | null;
+      if (target?.closest?.(SWIPE_IGNORE)) { gesture = null; return; }
+      const touch = e.touches[0];
+      gesture = { x: touch.clientX, y: touch.clientY, axis: null, samples: [{ x: touch.clientX, t: e.timeStamp }] };
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!gesture) return;
+      if (e.touches.length !== 1) { abort(); return; }
+      const touch = e.touches[0];
+      const dx = touch.clientX - gesture.x;
+      const dy = touch.clientY - gesture.y;
+      // Alleen het staartje bewaren: voor de snelheid telt de laatste 100 ms.
+      gesture.samples.push({ x: touch.clientX, t: e.timeStamp });
+      // 30 punten is ook op een scherm van 120 Hz nog ruim 100 ms.
+      if (gesture.samples.length > 30) gesture.samples.shift();
+      if (!gesture.axis) gesture.axis = swipeAxis(dx, dy);
+      // Pas na de dode zone: een tik moet een tik blijven.
+      if (!gesture.axis) return;
+      if (e.cancelable) e.preventDefault();
+      if (gesture.axis === 'x') paint(dx);
+    };
+    const onEnd = (e: TouchEvent) => {
+      const done = gesture;
+      gesture = null;
+      if (!done?.axis) return;
+      swallowClickUntil = performance.now() + 500;
+      if (done.axis !== 'x') return;
+      const touch = e.changedTouches[0];
+      const step = touch
+        ? swipeStep({
+          dx: touch.clientX - done.x,
+          dy: touch.clientY - done.y,
+          velocity: swipeVelocity(done.samples, e.timeStamp),
+          width: box.clientWidth,
+        })
+        : 0;
+      if (step === 0) { settle(true); return; }
+      // De nieuwe foto komt met haar eigen animatie binnen; het kader gaat
+      // zonder overgang terug, anders schuift de oude eerst nog terug in beeld.
+      settle(false);
+      onStepRef.current(step);
+    };
+    const onClick = (e: MouseEvent) => {
+      if (performance.now() > swallowClickUntil) return;
+      swallowClickUntil = 0;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    box.addEventListener('touchstart', onStart, { passive: true });
+    box.addEventListener('touchmove', onMove, { passive: false });
+    box.addEventListener('touchend', onEnd);
+    box.addEventListener('touchcancel', abort);
+    box.addEventListener('click', onClick, true);
+    return () => {
+      box.removeEventListener('touchstart', onStart);
+      box.removeEventListener('touchmove', onMove);
+      box.removeEventListener('touchend', onEnd);
+      box.removeEventListener('touchcancel', abort);
+      box.removeEventListener('click', onClick, true);
+      settle(false);
+    };
+  }, [active, boxRef, frameRef]);
+}
+
 export function GalleryViewer({
   items,
   bundle,
@@ -411,6 +541,14 @@ export function GalleryViewer({
   /** Muis/vinger al even stil: dan verdwijnt de bediening tijdens het spelen. */
   const [idle, setIdle] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const lightboxRef = useRef<HTMLDivElement | null>(null);
+  const lightboxFrameRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * De foto waar een veeg op uitkwam, en uit welke richting. Die foto komt van
+   * de kant binnen waar de vinger heen ging; zonder dat vervaagde ze gewoon op
+   * haar plek en voelde de veeg als een knop in plaats van als bladeren.
+   */
+  const [swipeIn, setSwipeIn] = useState<{ index: number; delta: 1 | -1 } | null>(null);
   const sectionRefs = useRef(new Map<string, HTMLElement>());
   const dragItemId = useRef<string | null>(null);
 
@@ -531,6 +669,29 @@ export function GalleryViewer({
       return next == null ? prev : { index: next };
     });
   }, [advanceIndex]);
+
+  /** Dezelfde stap als de pijltjes, plus de richting voor de binnenkomst. */
+  const swipeLightbox = useCallback((delta: 1 | -1) => {
+    if (!lightbox) return;
+    const next = advanceIndex(lightbox.index, delta, true);
+    if (next == null) return;
+    setSwipeIn({ index: next, delta });
+    setLightbox({ index: next });
+  }, [lightbox, advanceIndex]);
+
+  // Bladert iets anders verder (pijltjes, toetsen, de diavoorstelling), dan
+  // hoort die foto haar gewone overgang te krijgen. Zonder dit kreeg een foto
+  // waar de voorstelling later weer op uitkwam nog de veeganimatie van toen.
+  useEffect(() => {
+    setSwipeIn(prev => (prev && lightbox?.index === prev.index ? prev : null));
+  }, [lightbox]);
+
+  useSwipeToStep(
+    lightboxRef,
+    lightboxFrameRef,
+    Boolean(lightbox && orderedPhotos[lightbox.index]) && orderedPhotos.length > 1,
+    swipeLightbox,
+  );
 
   /**
    * Start bij de foto die openstaat, of — vanuit het raster — bij het begin van
@@ -1189,6 +1350,7 @@ export function GalleryViewer({
           role="dialog"
           aria-modal="true"
           onClick={closeOverlays}
+          ref={lightboxRef}
         >
           {/* Voortgang van het huidige beeld. Puur sier: de klok is de timeout
               hierboven. Remonteert bij elke wissel (key), zodat de balk telkens
@@ -1208,13 +1370,17 @@ export function GalleryViewer({
           <div className="galv-lightbox-stage" onClick={(e) => e.stopPropagation()}>
             {/* Het kader knipt de langzame zoom af; zonder dit groeit de foto
                 buiten haar vak en schuift ze over de balk eronder. */}
-            <div className="galv-ss-frame">
+            <div className="galv-ss-frame" ref={lightboxFrameRef}>
               <img
                 // De key remonteert het beeld, zodat de overgangsanimatie bij elke
                 // foto opnieuw afspeelt in plaats van één keer bij het openen.
                 key={orderedPhotos[lightbox.index].id}
-                className={`galv-ss-img galv-tr-${slideSettings.transition}`}
-                style={slideSettings.transition === 'zoom'
+                className={swipeIn?.index === lightbox.index
+                  ? `galv-ss-img galv-swipe-${swipeIn.delta > 0 ? 'next' : 'prev'}`
+                  : `galv-ss-img galv-tr-${slideSettings.transition}`}
+                // De duur van de langzame zoom niet op de veeganimatie zetten:
+                // die zou dan net zo lang duren als een dia.
+                style={slideSettings.transition === 'zoom' && swipeIn?.index !== lightbox.index
                   ? { animationDuration: `${Math.max(1, slideSettings.interval)}s` }
                   : undefined}
                 src={itemPreviewUrl(orderedPhotos[lightbox.index], bundle) ?? undefined}
