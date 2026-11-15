@@ -3157,7 +3157,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
  * Op de context, vóór de app laadt: die vraagt bij het openen van het album
  * meteen een kijktoken.
  */
-async function nepGalerijWerker(context, geupload) {
+async function nepGalerijWerker(context, geupload, opgeruimd = []) {
   const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
   await context.route(/\/__media\/gallery\//, async (route) => {
     const verzoek = route.request();
@@ -3165,7 +3165,12 @@ async function nepGalerijWerker(context, geupload) {
     const pad = new URL(verzoek.url()).pathname.replace(/^.*\/__media/, '');
     const json = (body) => route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(body) });
     if (pad === '/gallery/view-session') return json({ mediaToken: 'nep-token', streamTokens: {}, exp: Date.now() + 3600_000 });
-    if (pad === '/gallery/purge') return json({ ok: true });
+    if (pad === '/gallery/purge') {
+      // Welk album de app liet opruimen (de echte worker veegt dan R2 en Stream).
+      let body = null; try { body = verzoek.postDataJSON(); } catch { /* geen json */ }
+      opgeruimd.push(body?.galleryId ?? null);
+      return json({ ok: true });
+    }
     if (pad === '/gallery/upload') {
       const kop = verzoek.headers();
       const naam = decodeURIComponent(kop['x-file-name'] ?? 'bestand');
@@ -3205,6 +3210,7 @@ async function scenarioGalerij() {
   const png = (name) => ({ name, mimeType: 'image/png', buffer: PNG });
   let lid = null;
   const geupload = [];
+  const opgeruimd = [];
   const paneelInvoer = () => lid.page.locator('article.gal-detail > input[type="file"]');
   const vraag = () => lid.page.getByRole('dialog').filter({ has: lid.page.locator('#gal-dup-title') });
   const melding = () => lid.page.locator('article.gal-detail .gal-notice');
@@ -3212,7 +3218,7 @@ async function scenarioGalerij() {
   await uiStap('één dubbel bestand: de vraag noemt de nieuwe naam; "Andere naam" uploadt als taart-2.png', async () => {
     lid = await openWerkruimte(w.medewerker, 'galerij', w.orgId, {
       tabblad: { page: 'gallery', projectId: project.id, clientId: null, statsReportId: null, galleryId: album.id },
-      voor: (context) => nepGalerijWerker(context, geupload),
+      voor: (context) => nepGalerijWerker(context, geupload, opgeruimd),
     });
     await lid.page.locator('article.gal-detail').waitFor({ timeout: 30000 });
     await rustig(lid);
@@ -3274,7 +3280,9 @@ async function scenarioGalerij() {
 
   await uiStap('vanuit het venster "Bestanden": de vraag staat erboven, en Escape sluit alleen de vraag', async () => {
     if (!lid) throw new Error('de vorige stap opende de galerij niet');
-    await lid.page.locator('article.gal-detail').getByRole('button', { name: /^Bestanden/ }).click();
+    // Sinds 15 november onder Ordenen, in plaats van een eigen knop in de werkbalk.
+    await lid.page.locator('article.gal-detail').getByRole('button', { name: /^Ordenen/ }).click();
+    await lid.page.locator('article.gal-detail').getByRole('menuitem', { name: /^Categorieën en bestanden/ }).click();
     const venster = lid.page.getByRole('dialog', { name: 'Galerij-instellingen' });
     await venster.waitFor({ timeout: 10000 });
     await venster.locator('input[type="file"]').setInputFiles([png('taart.png')]);
@@ -3351,6 +3359,68 @@ async function scenarioGalerij() {
     if (vroegerLive === undefined) delete process.env.CLIENT_DOMAINS_LIVE;
     else process.env.CLIENT_DOMAINS_LIVE = vroegerLive;
   }
+
+  // ── Verwijderen vanuit de lijst (15 november) ─────────────────────────────
+  // Achter elk album staat een menu met Bewerken en Verwijderen. Verwijderen
+  // vraagt altijd eerst, en zegt wat er verdwijnt. Na ja: het album is weg, de
+  // database zette de map in de opruimwachtrij, en de app vroeg de worker om
+  // R2 en Stream meteen te vegen.
+  groep('UI: galerij — verwijderen vanuit de lijst');
+  const albumBestaat = () => sqlRij(`select count(*)::int as n from public.galleries where id = ${q(album.id)}`)?.n === 1;
+  const rij = () => lid.page.locator('.gal-list-row').filter({ hasText: 'Ceremonie' });
+  const venster = () => lid.page.getByRole('alertdialog', { name: 'Album verwijderen?' });
+  async function vraagVerwijderen() {
+    await rij().getByRole('button', { name: 'Opties voor Ceremonie' }).click();
+    await lid.page.getByRole('menuitem', { name: /^Verwijderen/ }).click();
+    await venster().waitFor({ timeout: 10000 });
+  }
+
+  await uiStap('het menu achter een album: Verwijderen vraagt eerst, en Annuleren laat alles staan', async () => {
+    if (!lid) throw new Error('de vorige stappen openden de galerij niet');
+    await lid.page.locator('article.gal-detail .gal-crumb').click();
+    await rij().waitFor({ timeout: 10000 });
+    // Bewerken opent het album met de instellingen erop.
+    await rij().getByRole('button', { name: 'Opties voor Ceremonie' }).click();
+    await lid.page.getByRole('menuitem', { name: /^Bewerken/ }).click();
+    const instellingen = lid.page.getByRole('dialog', { name: 'Galerij-instellingen' });
+    await instellingen.waitFor({ timeout: 10000 });
+    await instellingen.getByRole('button', { name: 'Sluiten' }).first().click();
+    await instellingen.waitFor({ state: 'detached', timeout: 5000 });
+    await lid.page.locator('article.gal-detail .gal-crumb').click();
+    await rij().waitFor({ timeout: 10000 });
+
+    await vraagVerwijderen();
+    const inhoud = await wachtTot(async () => {
+      const t = tekst(await venster().innerText());
+      return t.includes('6 bestanden') ? t : null;
+    }, { melding: 'het venster noemt niet hoeveel bestanden er weggaan' });
+    verwacht(inhoud.includes('ook uit de opslag bij Cloudflare'), `R2: ${inhoud}`);
+    verwacht(inhoud.includes('niet meer in het portaal'), `portaal: ${inhoud}`);
+    verwacht(inhoud.includes('De deellink werkt niet meer'), `deellink: ${inhoud}`);
+    verwacht(inhoud.includes('niet ongedaan maken'), `onomkeerbaar: ${inhoud}`);
+    await venster().getByRole('button', { name: 'Annuleren' }).click();
+    await venster().waitFor({ state: 'detached', timeout: 5000 });
+    // Escape is ook nee.
+    await vraagVerwijderen();
+    await lid.page.keyboard.press('Escape');
+    await venster().waitFor({ state: 'detached', timeout: 5000 });
+    await slaap(300);
+    verwacht(albumBestaat(), 'het album is weg na annuleren');
+    gelijk(opgeruimd.length, 0, 'opruimverzoeken na annuleren');
+  });
+
+  await uiStap('"Album verwijderen": weg uit de lijst en de database, en de map gaat uit R2', async () => {
+    if (!lid) throw new Error('de vorige stappen openden de galerij niet');
+    await vraagVerwijderen();
+    await venster().getByRole('button', { name: 'Album verwijderen' }).click();
+    await venster().waitFor({ state: 'detached', timeout: 10000 });
+    await wachtTot(() => !albumBestaat(), { melding: 'het album staat nog in de database' });
+    await wachtTot(async () => (await rij().count()) === 0, { melding: 'het album staat nog in de lijst' });
+    const map = `${w.orgId}/gallery/${album.id}/`;
+    const wachtrij = sqlRijen(`select kind, target from public.gallery_purge_queue where gallery_id = ${q(album.id)}`);
+    verwacht(wachtrij.some((r) => r.kind === 'folder' && r.target === map), `de map staat niet in de wachtrij: ${JSON.stringify(wachtrij)}`);
+    await wachtTot(() => opgeruimd.includes(album.id), { melding: `de worker werd niet gevraagd op te ruimen: ${JSON.stringify(opgeruimd)}` });
+  });
 }
 
 // ── Draaien ─────────────────────────────────────────────────────────────────

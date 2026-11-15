@@ -168,6 +168,49 @@ function monthEndIso(offset) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset + 1, 0)).toISOString().slice(0, 10);
 }
 
+/**
+ * `gallery: true` (2026-11-15): één project met een gevuld album, om de kop
+ * en de werkbalk van de galerij te meten. Zonder album zag de test alleen de
+ * lege lijst, en juist de werkbalk boven de foto's liep vol (zeven knoppen,
+ * een keuzelijst en twee pillen) zonder dat een meting het merkte.
+ */
+export const GALLERY_ID = '6a11e700-0000-4000-8000-000000000001';
+function galleryRows() {
+  const stamp = { organization_id: seed.ids.ORG, created_at: '2026-11-01T09:00:00Z', updated_at: '2026-11-14T09:00:00Z' };
+  const project = seed.projects[0].id;
+  const categories = [
+    { id: '6a11e700-0000-4000-8000-0000000000c1', ...stamp, gallery_id: GALLERY_ID, name: 'Ceremonie', position: 0 },
+    { id: '6a11e700-0000-4000-8000-0000000000c2', ...stamp, gallery_id: GALLERY_ID, name: 'Feest', position: 1 },
+  ];
+  const items = Array.from({ length: 9 }, (_, i) => ({
+    id: `6a11e700-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`, ...stamp, gallery_id: GALLERY_ID,
+    // Drie nog niet ingedeeld: dan staat er een teller bij Ordenen.
+    category_id: i < 3 ? categories[0].id : i < 6 ? categories[1].id : null,
+    media_type: 'photo', file_name: `IMG_${4100 + i}.jpg`, content_type: 'image/jpeg', size_bytes: 6 * 1024 * 1024, derived_bytes: 0,
+    storage_key: `gal/orig/${i}.jpg`, preview_key: `gal/prev/${i}.jpg`, thumb_key: `gal/thumb/${i}.jpg`,
+    width: i % 3 === 0 ? 1200 : 1800, height: i % 3 === 0 ? 1800 : 1200, duration_seconds: null,
+    stream_uid: null, stream_status: null, stream_playback_base: null, sort_order: i, featured: false,
+  }));
+  const gallery = {
+    id: GALLERY_ID, ...stamp, created_by: seed.ids.USER, project_id: project, title: 'Ankie & Berry — de trouwdag',
+    description: null, format: 'photo', hero_template: 'minimal', status: 'draft', published_at: null,
+    cover_item_id: null, cover_preview_key: null, cover_thumb_key: null, cover_bytes: 0, cover_focus_x: 50, cover_focus_y: 50,
+    layout: null, allow_downloads: true, download_quality: 'web', share_enabled: false, share_token: null, share_token_hash: null,
+    share_pin_hash: null, share_pin_failed_count: 0, share_pin_locked_until: null, expires_at: null,
+  };
+  const favorites = [1, 4, 7].map((n, i) => ({
+    id: `6a11e700-0000-4000-8000-0000000002${String(i).padStart(2, '0')}`, organization_id: seed.ids.ORG, gallery_id: GALLERY_ID,
+    item_id: items[n].id, reaction: 'favorite', actor_kind: 'share_link', contact_id: null, session_key: 'klant', actor_label: 'Ankie', created_at: stamp.created_at,
+  }));
+  // Een tweede, ouder album: gepubliceerd en gedeeld. Dan heeft de lijst twee
+  // standen, en zegt het venster "verwijderen?" ook iets over portaal en link.
+  const engaged = {
+    ...gallery, id: '6a11e700-0000-4000-8000-000000000002', created_at: '2026-10-14T09:00:00Z', title: 'Verlovingsshoot',
+    format: 'hybrid', status: 'published', published_at: '2026-10-20T09:00:00Z', share_enabled: true,
+  };
+  return { galleries: [gallery, engaged], gallery_items: items, gallery_categories: categories, gallery_favorites: favorites, gallery_category_presets: [] };
+}
+
 function prepaidRows() {
   const expense = LEDGER_ACCOUNTS.find(a => a.code === '4500').id;
   const bank = LEDGER_ACCOUNTS.find(a => a.code === '1100').id;
@@ -695,6 +738,11 @@ export async function installMock(context, options = {}) {
         if (result !== undefined) return reply(route, result);
       }
       let rpcBody = null; try { rpcBody = req.postDataJSON(); } catch { /* geen json-body */ }
+      // Alleen bij het album: de opslagmeter staat ook bij Instellingen, en
+      // die pagina's meet de test zonder.
+      if (options.gallery && fn === 'organization_storage_status') {
+        return reply(route, [{ used_bytes: 540 * 1024 ** 2, attachments_bytes: 0, documents_bytes: 0, recordings_bytes: 0, gallery_bytes: 540 * 1024 ** 2, limit_bytes: 50 * 1024 ** 3, plan_storage_gb: 50, storage_addons: 0, storage_addon_gb: null }]);
+      }
       return reply(route, rpc(fn, rpcBody));
     }
     if (p.startsWith('/rest/v1/')) {
@@ -718,6 +766,9 @@ export async function installMock(context, options = {}) {
       // pagina: de rest van de seed heeft bewust geen boekhouding.
       // `prepaid: true`: vooruitbetaalde kosten met de rekening 1350 erbij.
       const prepaid = options.prepaid ? prepaidRows() : null;
+      // De albums wél gefilterd (gallery_id=eq.…): het venster "verwijderen?"
+      // telt de bestanden van één album, en kreeg anders die van allemaal.
+      const gallery = options.gallery ? galleryRows() : null;
       // `aiOff: true`: de gebruiker heeft Gerrie nog niet aangezet (2026-11-12);
       // de pagina Gerrie toont dan het scherm om hem aan te zetten.
       // `aiDeclined: true`: hij koos zelf voor geen AI (2026-11-15); Gerrie is
@@ -726,6 +777,7 @@ export async function installMock(context, options = {}) {
         : options.aiOff && table === 'ai_consents' ? []
         : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
         : prepaid && table in prepaid ? prepaid[table]
+        : gallery && table in gallery ? gallery[table].filter(r => [...url.searchParams.entries()].every(([k, v]) => !(k in r) || matchFilter(r[k], v)))
         : restRows(table, url, setup);
       const accept = req.headers()['accept'] ?? '';
       const headers = { 'content-range': `0-${Math.max(0, rows.length - 1)}/${rows.length}` };
@@ -754,7 +806,15 @@ export async function installMock(context, options = {}) {
   });
   // De media-worker van de galerij (VITE_R2_WORKER_URL wijst in de test naar
   // dit adres): elke foto is hetzelfde kleine PNG-vlak.
-  await context.route(`${MEDIA_URL}/**`, r => r.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: Buffer.from(TILE_PNG_BASE64, 'base64') }));
+  await context.route(`${MEDIA_URL}/**`, r => {
+    // De kijksleutels van een album in de werkruimte (gallery: true). Het
+    // beeld zelf gaat langs de regel hieronder.
+    if (new URL(r.request().url()).pathname === '/gallery/view-session') {
+      if (r.request().method() === 'OPTIONS') return r.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' } });
+      return json(r, { mediaToken: 'media-token', streamTokens: {}, exp: Date.now() + 60 * 60 * 1000 });
+    }
+    return r.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: Buffer.from(TILE_PNG_BASE64, 'base64') });
+  });
   // Lettertypen van buiten zijn in een CI-omgeving niet altijd bereikbaar; de
   // test gaat over lay-out, niet over Poppins.
   await context.route('https://fonts.googleapis.com/**', r => r.abort());
@@ -777,7 +837,7 @@ export function storageScript(spec, extra = {}) {
     const items = { ...(view.portal ? { 'resofly.portal.auth': JSON.stringify(session) } : {}), ...extra };
     return `(() => { try { localStorage.clear(); const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); } catch { /* afgeschermd kader */ } })();`;
   }
-  const tabs = { tabs: [{ page: view.page, projectId: view.projectId ?? null, clientId: view.clientId ?? null, statsReportId: view.statsReportId ?? null, galleryId: null }], activeIndex: 0 };
+  const tabs = { tabs: [{ page: view.page, projectId: view.projectId ?? null, clientId: view.clientId ?? null, statsReportId: view.statsReportId ?? null, galleryId: view.galleryId ?? null }], activeIndex: 0 };
   // Een losse app (src/lib/standaloneApps.ts) onthoudt zijn tabbladen apart. De
   // werkruimte als app (/app/werkruimte/) is de werkruimte: zelfde tabbladen.
   const tabsKey = view.app && view.app !== 'werkruimte' ? `brandcore.tabs.${orgId}.app-${view.app}` : `brandcore.tabs.${orgId}`;

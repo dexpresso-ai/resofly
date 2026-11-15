@@ -6,9 +6,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
-  ArrowUpDown, CheckSquare, ChevronDown, ChevronUp, Copy, Expand, Film, FolderTree, HardDrive, Heart,
-  ExternalLink, Image as ImageIcon, Layers, LayoutDashboard, Link2, Loader2, Maximize2, Minimize2, Pencil, Plus, RotateCcw,
-  Settings2, Sparkles, SlidersHorizontal, Star,
+  ArrowDownAZ, ArrowDownZA, ArrowUpDown, CheckSquare, ChevronDown, ChevronLeft, ChevronUp, ClockArrowDown, ClockArrowUp, Copy,
+  Ellipsis, Expand, Eye, Film, FolderTree, GripVertical, HardDrive, Heart,
+  ExternalLink, Image as ImageIcon, Layers, LayoutDashboard, Link2, Loader2, Minimize2, Pencil, Plus, Presentation, RotateCcw,
+  Send, Settings2, Sparkles, SlidersHorizontal, Star,
   Trash2, Upload, UploadCloud, X,
 } from 'lucide-react';
 import type {
@@ -40,6 +41,7 @@ import {
   streamDownloadUrl, uploadGalleryFile, uploadGalleryFileVariant, type GalleryTokenBundle,
 } from '../lib/gallery';
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
+import { GalleryMenu } from './GalleryMenu';
 import { derivedFileName, formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
 import { fileInputAccept } from '../lib/filePicker';
 import { isConnectionError, readableError, withRetry, type RetryOptions } from '../lib/networkRetry';
@@ -377,6 +379,10 @@ export function GalleryTab({
   const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [settingsTab, setSettingsTab] = useState<GallerySettingsTab | null>(null);
   const [showShare, setShowShare] = useState(false);
+  // Het album waarvoor het venster "verwijderen?" openstaat, vanuit de lijst
+  // of vanuit de instellingen.
+  const [deleteTarget, setDeleteTarget] = useState<Gallery | null>(null);
+  const openWithSettings = useRef<GallerySettingsTab | null>(null);
   // Slepen over het paneel: de teller vangt de dragenter/dragleave van elk
   // onderliggend element op, zodat de melding niet knippert.
   const [dragActive, setDragActive] = useState(false);
@@ -549,7 +555,10 @@ export function GalleryTab({
     setOnlyFavorites(false);
     setSelectMode(false);
     setSelectedIds(new Set());
-    setSettingsTab(null);
+    // Dicht, behalve als "Bewerken" in de lijst het album opende: dan meteen
+    // de instellingen erop. Zonder deze ref zette deze regel ze weer dicht.
+    setSettingsTab(openWithSettings.current);
+    openWithSettings.current = null;
     setShowShare(false);
     dragDepth.current = 0;
     setDragActive(false);
@@ -674,32 +683,54 @@ export function GalleryTab({
     );
   }
 
+  /**
+   * Verwijderen gaat altijd langs het venster GalleryDeleteDialog: dat zegt
+   * wat er verdwijnt (hoeveel bestanden, de deellink, het portaal) voordat je
+   * ja zegt. Eerst was het een kale melding van de browser, met alleen de naam.
+   * Deze functie draait pas ná dat ja.
+   */
   async function removeGallery(gallery: Gallery) {
-    if (!confirm(`Galerij “${gallery.title}” en alle media definitief verwijderen?`)) return;
     setBusy(true);
     setError(null);
+    // Alleen voor een oude worker (zie cleanupStorage): wat al in beeld is.
+    // Een album laden alleen om het te kunnen verwijderen hoeft niet meer.
+    const loaded = openId === gallery.id ? items : [];
     try {
-      // Alleen voor een oude worker (zie cleanupStorage): wat al in beeld is.
-      // Een album laden alleen om het te kunnen verwijderen hoeft niet meer.
-      const loaded = openId === gallery.id ? items : [];
       // Of dit mag, beslist de database: alleen een album van je eigen
       // organisatie, met schrijfrecht op Projecten (RLS + modulegate).
+      // Een fout hier gaat naar het venster, dat open blijft en zegt wat er
+      // misging; geen setError, anders stond de melding er ook nog achter.
       await deleteGalleryRecord('galleries', gallery.id, organizationId);
-      cleanupStorage(gallery.id, {
-        keys: [
-          ...loaded.flatMap(item => [item.storage_key, item.preview_key, item.thumb_key]),
-          gallery.cover_preview_key, gallery.cover_thumb_key,
-        ],
-        streamUids: loaded.map(item => item.stream_uid),
-      });
-      if (openId === gallery.id) setOpenId(null);
+    } catch (e) {
+      setBusy(false);
+      throw e;
+    }
+    cleanupStorage(gallery.id, {
+      keys: [
+        ...loaded.flatMap(item => [item.storage_key, item.preview_key, item.thumb_key]),
+        gallery.cover_preview_key, gallery.cover_thumb_key,
+      ],
+      streamUids: loaded.map(item => item.stream_uid),
+    });
+    // Het venster gaat dicht in dezelfde render als het album: anders stond
+    // het, na een verwijdering vanuit een open album, even opnieuw in de lijst.
+    setDeleteTarget(current => (current?.id === gallery.id ? null : current));
+    if (openId === gallery.id) setOpenId(null);
+    // Het album ís weg; lukt het verversen niet, dan hoort dat in het paneel.
+    try {
       await onChanged();
       await refreshStorage();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Verwijderen mislukt.');
+      setError(readableError(e, 'Het album is verwijderd, maar de lijst kon niet worden ververst.'));
     } finally {
       setBusy(false);
     }
+  }
+
+  /** "Bewerken" vanuit de lijst: het album open, met de instellingen erop. */
+  function editGallery(gallery: Gallery) {
+    openWithSettings.current = 'general';
+    setOpenId(gallery.id);
   }
 
   // ── Upload ──
@@ -1453,6 +1484,31 @@ export function GalleryTab({
       )}
     </div>
   );
+  const storageShare = storage?.limit_bytes ? storage.used_bytes / storage.limit_bytes : null;
+  const storageFull = storageShare != null && storageShare >= 0.9;
+  // In een album staat de meter onder "Meer": hij gaat over het hele account,
+  // niet over dit album. Raakt de opslag vol, dan staat dat wél in de kop.
+  const storageMeter = storage && (
+    <div className={`gal-meter${storageFull ? ' is-warn' : ''}`}>
+      <span className="gal-meter-row">
+        <HardDrive size={13} aria-hidden="true" /> Opslag
+        <b>{fmtBytesShort(storage.used_bytes)}{storage.limit_bytes != null ? ` van ${fmtBytesShort(storage.limit_bytes)}` : ''}</b>
+      </span>
+      {storageShare != null && (
+        <span className="gal-meter-bar"><span style={{ width: `${Math.min(100, storageShare * 100)}%` }} /></span>
+      )}
+      <small>Voor je hele account, alle modules samen.</small>
+    </div>
+  );
+
+  const deleteDialog = deleteTarget && (
+    <GalleryDeleteDialog
+      gallery={deleteTarget}
+      organizationId={organizationId}
+      onCancel={() => setDeleteTarget(null)}
+      onConfirm={async () => { await removeGallery(deleteTarget); setDeleteTarget(null); }}
+    />
+  );
 
   // ── Lijstweergave ──
   if (!openGallery) {
@@ -1508,22 +1564,55 @@ export function GalleryTab({
           {galleries.map(gallery => {
             const { Icon } = formatConfig(gallery.format);
             return (
-              <button key={gallery.id} type="button" className="gal-list-card" onClick={() => setOpenId(gallery.id)}>
-                <span className={`gal-list-icon gal-fmt-${gallery.format}`}><Icon size={18} /></span>
-                <span className="gal-list-main">
-                  <span className="gal-list-title">{gallery.title}</span>
-                  <span className="gal-list-sub">
-                    <span className="gal-format-tag">{galleryFormatLabels[gallery.format]}</span>
-                    {gallery.published_at ? `Gepubliceerd ${dateNL(gallery.published_at)}` : `Aangemaakt ${dateNL(gallery.created_at)}`}
-                    {gallery.share_enabled && <> · <Link2 size={11} /> deellink actief</>}
-                    {gallery.expires_at && <> · verloopt {dateNL(gallery.expires_at)}</>}
+              // Openen en het menu zijn twee knoppen naast elkaar: een knop in
+              // een knop mag niet, en dan opende een tik op het menu ook het album.
+              <div key={gallery.id} className={`gal-list-row${writable ? ' has-menu' : ''}`}>
+                <button type="button" className="gal-list-card" onClick={() => setOpenId(gallery.id)}>
+                  <span className={`gal-list-icon gal-fmt-${gallery.format}`}><Icon size={18} /></span>
+                  <span className="gal-list-main">
+                    <span className="gal-list-title">{gallery.title}</span>
+                    <span className="gal-list-sub">
+                      <span className="gal-format-tag">{galleryFormatLabels[gallery.format]}</span>
+                      {gallery.published_at ? `Gepubliceerd ${dateNL(gallery.published_at)}` : `Aangemaakt ${dateNL(gallery.created_at)}`}
+                      {gallery.share_enabled && <> · <Link2 size={11} /> deellink actief</>}
+                      {gallery.expires_at && <> · verloopt {dateNL(gallery.expires_at)}</>}
+                    </span>
                   </span>
-                </span>
-                <span className={`status-pill gal-status-${gallery.status}`}>{galleryStatusLabels[gallery.status]}</span>
-              </button>
+                  <span className={`status-pill gal-status-${gallery.status}`}>{galleryStatusLabels[gallery.status]}</span>
+                </button>
+                {writable && (
+                  <GalleryMenu
+                    label={`Opties voor ${gallery.title}`}
+                    Icon={Ellipsis}
+                    iconOnly
+                    className="gal-list-menu"
+                    sections={[{
+                      items: [
+                        {
+                          key: 'edit',
+                          label: 'Bewerken',
+                          hint: 'Naam, opening, weergave en downloads',
+                          Icon: Pencil,
+                          onSelect: () => editGallery(gallery),
+                        },
+                        {
+                          key: 'delete',
+                          label: 'Verwijderen',
+                          hint: 'Met alles erin; eerst volgt nog een vraag',
+                          Icon: Trash2,
+                          danger: true,
+                          disabled: busy,
+                          onSelect: () => setDeleteTarget(gallery),
+                        },
+                      ],
+                    }]}
+                  />
+                )}
+              </div>
             );
           })}
         </div>
+        {deleteDialog}
       </article>
     );
   }
@@ -1532,6 +1621,27 @@ export function GalleryTab({
   const shownItems: GalleryViewerItem[] = onlyFavorites ? items.filter(i => favoriteCounts.has(i.id)) : items;
   const favoriteTotal = favoriteCounts.size;
   const uncategorized = categories.length > 0 ? items.filter(i => !i.category_id).length : 0;
+  const FormatIcon = formatConfig(openGallery.format).Icon;
+  const photoCount = items.filter(i => i.media_type === 'photo').length;
+  const videoCount = items.length - photoCount;
+  const contentsLabel = items.length === 0
+    ? 'Nog leeg'
+    : [
+      photoCount > 0 && `${photoCount} ${photoCount === 1 ? 'foto' : 'foto’s'}`,
+      videoCount > 0 && `${videoCount} ${videoCount === 1 ? 'video' : 'video’s'}`,
+    ].filter(Boolean).join(' · ');
+
+  // Slepen en indelen sluiten elkaar uit: allebei reageren ze op een tik op een foto.
+  function toggleOrderMode() {
+    setOrderMode(v => !v);
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+  function toggleSelectMode() {
+    setSelectMode(v => !v);
+    setSelectedIds(new Set());
+    setOrderMode(false);
+  }
 
   function openSettings(tab: GallerySettingsTab) {
     // Een sleep die nog "open" stond zou de melding achter het venster laten hangen.
@@ -1578,110 +1688,194 @@ export function GalleryTab({
         void handleDrop(e.dataTransfer);
       }}
     >
-      <div className="client-panel-head">
-        <div className="gal-detail-title">
-          <button type="button" className="gal-back" onClick={() => setOpenId(null)}>← Galerijen</button>
-          <h3>{openGallery.title}</h3>
-          <span className={`gal-format-tag gal-fmt-${openGallery.format}`}>{galleryFormatLabels[openGallery.format]}</span>
-          <span className={`status-pill gal-status-${openGallery.status}`}>{galleryStatusLabels[openGallery.status]}</span>
-        </div>
-        <div className="client-panel-head-right gal-detail-tools">
-          {storageBar}
-          {favoriteTotal > 0 && (
-            <button
-              type="button"
-              className={`gal-fav-filter${onlyFavorites ? ' active' : ''}`}
-              onClick={() => setOnlyFavorites(v => !v)}
-              title="Alleen favorieten van de klant tonen"
-            >
-              <Heart size={13} fill="currentColor" /> {favoriteTotal}
+      {/* De kop in twee lagen. Boven: welke galerij dit is en wat je ermee
+          doet richting de klant (instellen, delen, publiceren, uploaden).
+          Onder, vlak boven de foto's: wat je ziet en hoe het geordend is.
+          Wat je zelden nodig hebt, zit achter "Meer" en "Ordenen". Tot 15
+          november stond alles los op één rij: elf knoppen, een keuzelijst en
+          twee pillen, die de naam van de galerij wegdrukten tot "Ankie …". */}
+      <header className="gal-head">
+        <div className="gal-head-main">
+          <div className="gal-head-id">
+            <button type="button" className="gal-crumb" onClick={() => setOpenId(null)}>
+              <ChevronLeft size={14} aria-hidden="true" /> Galerijen
             </button>
-          )}
-          {/* Bekijken mag ook zonder schrijfrechten, dus deze twee staan buiten
-              het writable-blok. */}
-          {onOpenInTab && (
-            <Button onClick={() => onOpenInTab(openGallery.id)} title="Deze galerij als eigen tabblad openen">
-              <ExternalLink size={14} /> Eigen tabblad
-            </Button>
-          )}
-          <Button
-            onClick={() => setFullscreen(v => !v)}
-            variant={fullscreen ? 'primary' : undefined}
-            title={fullscreen ? 'Terug naar de werkruimte (Escape)' : 'Alleen de galerij tonen'}
-          >
-            {/* Bewust niet "Volledig scherm": die knop bestaat nu ook in de
-                galerij zelf (grootbeeld, écht schermvullend) en twee knoppen met
-                hetzelfde woord naast elkaar leggen niets uit. Deze verbergt de
-                werkruimte eromheen — precies wat de tooltip al zei. */}
-            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />} {fullscreen ? 'Verlaten' : 'Alleen de galerij'}
-          </Button>
-          {writable && (
-            <>
-              <Button onClick={() => openSettings('files')} title="Categorieën beheren en bestanden indelen">
-                <FolderTree size={14} /> Bestanden
-                {uncategorized > 0 && <span className="gal-badge" title={`${uncategorized} nog niet ingedeeld`}>{uncategorized}</span>}
+            <h3 className="gal-head-title" title={openGallery.title}>{openGallery.title}</h3>
+            <div className="gal-head-meta">
+              <span className={`gal-state is-${openGallery.status}`}>{galleryStatusLabels[openGallery.status]}</span>
+              <span className="gal-head-fact">
+                <FormatIcon size={13} aria-hidden="true" /> {galleryFormatLabels[openGallery.format]}
+              </span>
+              {!loading && <span className="gal-head-fact">{contentsLabel}</span>}
+              {openGallery.share_enabled && <span className="gal-head-fact"><Link2 size={12} aria-hidden="true" /> Deellink aan</span>}
+              {openGallery.expires_at && <span className="gal-head-fact">Verloopt {dateNL(openGallery.expires_at)}</span>}
+              {storageFull && <span className="gal-head-fact is-warn"><HardDrive size={12} aria-hidden="true" /> Opslag bijna vol</span>}
+            </div>
+          </div>
+          <div className="gal-head-actions">
+            {/* In de presenteerstand de uitgang in beeld, niet in een menu:
+                daar zoekt niemand hem. */}
+            {fullscreen && (
+              <Button className="gal-act" onClick={() => setFullscreen(false)} title="Terug naar de werkruimte (Escape)">
+                <Minimize2 size={15} aria-hidden="true" /> <span className="gal-act-label">Verlaten</span>
               </Button>
-              {items.length > 0 && categories.length > 0 && (
-                <Button
-                  onClick={() => { setSelectMode(v => !v); setSelectedIds(new Set()); setOrderMode(false); }}
-                  variant={selectMode ? 'primary' : undefined}
-                  title="Foto's in het raster aanwijzen en in één keer indelen"
-                >
-                  <CheckSquare size={14} /> {selectMode ? 'Selectie stoppen' : 'Indelen'}
+            )}
+            {writable && (
+              <>
+                <Button className="gal-act is-compact" onClick={() => openSettings('general')} title="Naam, opening, weergave en downloads">
+                  <Settings2 size={15} aria-hidden="true" /> <span className="gal-act-label">Instellingen</span>
                 </Button>
-              )}
-              {items.length > 1 && (
-                <>
+                <Button className="gal-act is-compact" onClick={() => setShowShare(true)} title="Een deellink maken, met of zonder pincode">
+                  <Link2 size={15} aria-hidden="true" /> <span className="gal-act-label">Delen</span>
+                </Button>
+                {openGallery.status !== 'published' && (
                   <Button
-                    onClick={() => { setOrderMode(v => !v); setSelectMode(false); setSelectedIds(new Set()); }}
-                    variant={orderMode ? 'primary' : undefined}
-                    title="Sleep foto's naar de gewenste plek"
-                  >
-                    <ArrowUpDown size={14} /> {orderMode ? 'Slepen stoppen' : 'Volgorde'}
-                  </Button>
-                  <Select
-                    inline
-                    value=""
+                    className="gal-act gal-publish"
                     disabled={busy}
-                    onChange={(e) => {
-                      const mode = e.target.value as 'name' | 'name-desc' | 'oldest' | 'newest' | '';
-                      if (mode) sortItems(mode);
-                    }}
-                    aria-label="Sorteren"
+                    title="De klant ziet de galerij dan in het portaal en via de deellink"
+                    onClick={() => { void patchGallery(openGallery, { status: 'published' }).catch(() => undefined); }}
                   >
-                    <option value="">Sorteren…</option>
-                    <option value="name">Bestandsnaam (A→Z)</option>
-                    <option value="name-desc">Bestandsnaam (Z→A)</option>
-                    <option value="oldest">Oudste eerst</option>
-                    <option value="newest">Nieuwste eerst</option>
-                  </Select>
-                </>
-              )}
-              <Button onClick={() => setShowShare(true)}><Link2 size={14} /> Delen</Button>
-              <Button onClick={() => openSettings('general')}><Settings2 size={14} /> Instellingen</Button>
-              {openGallery.status !== 'published'
-                ? <Button variant="primary" disabled={busy} onClick={() => { void patchGallery(openGallery, { status: 'published' }).catch(() => undefined); }}>Publiceren</Button>
-                : <Button disabled={busy} onClick={() => { void patchGallery(openGallery, { status: 'draft' }).catch(() => undefined); }}>Terug naar concept</Button>}
-              <Button variant="primary" disabled={busy || loading} onClick={() => fileInputRef.current?.click()}>
-                {busy ? <Loader2 size={14} className="gal-spin" /> : <Upload size={14} />} Uploaden
-              </Button>
-            </>
-          )}
+                    <Send size={15} aria-hidden="true" /> Publiceren
+                  </Button>
+                )}
+                <Button variant="primary" className="gal-act gal-upload" disabled={busy || loading} onClick={() => fileInputRef.current?.click()}>
+                  {busy ? <Loader2 size={15} className="gal-spin" aria-hidden="true" /> : <Upload size={15} aria-hidden="true" />} Uploaden
+                </Button>
+              </>
+            )}
+            <GalleryMenu
+              label="Meer"
+              Icon={Ellipsis}
+              iconOnly
+              sections={[
+                {
+                  title: 'Bekijken',
+                  items: [
+                    // Bewust niet "Volledig scherm": die knop zit in de galerij
+                    // zelf (grootbeeld, écht schermvullend). Deze haalt de
+                    // werkruimte eromheen weg.
+                    {
+                      key: 'present',
+                      label: fullscreen ? 'Terug naar de werkruimte' : 'Alleen de galerij tonen',
+                      hint: fullscreen ? 'Zijbalk en tabbladen komen terug' : 'Zonder zijbalk en tabbladen, om te laten zien',
+                      Icon: fullscreen ? Minimize2 : Presentation,
+                      onSelect: () => setFullscreen(v => !v),
+                    },
+                    onOpenInTab && {
+                      key: 'tab',
+                      label: 'In een eigen tabblad',
+                      hint: 'Dan staat hij naast het project open',
+                      Icon: ExternalLink,
+                      onSelect: () => onOpenInTab(openGallery.id),
+                    },
+                  ],
+                },
+                writable && openGallery.status === 'published' && {
+                  title: 'Status',
+                  items: [{
+                    key: 'draft',
+                    label: 'Terug naar concept',
+                    hint: 'De klant ziet de galerij dan niet meer',
+                    Icon: RotateCcw,
+                    disabled: busy,
+                    onSelect: () => { void patchGallery(openGallery, { status: 'draft' }).catch(() => undefined); },
+                  }],
+                },
+              ]}
+              footer={storageMeter}
+            />
+          </div>
         </div>
-      </div>
+
+        {!loading && items.length > 0 && (
+          <div className="gal-bar">
+            <div className="gal-seg" role="group" aria-label="Wat je ziet">
+              <button type="button" className="gal-seg-btn" aria-pressed={!onlyFavorites} onClick={() => setOnlyFavorites(false)}>
+                Alles <span className="gal-seg-n">{items.length}</span>
+              </button>
+              <button
+                type="button"
+                className="gal-seg-btn is-fav"
+                aria-pressed={onlyFavorites}
+                onClick={() => setOnlyFavorites(true)}
+                title="Wat de klant als favoriet heeft gemarkeerd"
+              >
+                <Heart size={13} fill={favoriteTotal > 0 ? 'currentColor' : 'none'} aria-hidden="true" /> <span className="gal-seg-label">Favorieten</span> <span className="gal-seg-n">{favoriteTotal}</span>
+              </button>
+            </div>
+            {writable && (
+              <GalleryMenu
+                label="Ordenen"
+                Icon={ArrowUpDown}
+                className="gal-bar-end"
+                active={orderMode || selectMode}
+                badge={uncategorized}
+                badgeLabel={`${uncategorized} nog niet ingedeeld`}
+                sections={[
+                  {
+                    title: 'Zelf ordenen',
+                    items: [
+                      items.length > 1 && {
+                        key: 'drag',
+                        label: 'Volgorde slepen',
+                        hint: 'Sleep foto’s naar de plek waar ze moeten staan',
+                        Icon: GripVertical,
+                        checked: orderMode,
+                        onSelect: toggleOrderMode,
+                      },
+                      categories.length > 0 && {
+                        key: 'assign',
+                        label: 'Indelen in categorieën',
+                        hint: 'Kies foto’s en verplaats ze in één keer',
+                        Icon: CheckSquare,
+                        checked: selectMode,
+                        onSelect: toggleSelectMode,
+                      },
+                      {
+                        key: 'files',
+                        label: 'Categorieën en bestanden',
+                        hint: uncategorized > 0
+                          ? `${uncategorized} ${uncategorized === 1 ? 'bestand staat' : 'bestanden staan'} nog nergens in`
+                          : 'Categorieën maken, en uploaden per categorie',
+                        Icon: FolderTree,
+                        badge: uncategorized,
+                        onSelect: () => openSettings('files'),
+                      },
+                    ],
+                  },
+                  items.length > 1 && {
+                    title: 'Sorteren · vervangt de volgorde',
+                    items: [
+                      { key: 'name', label: 'Op naam, A tot Z', Icon: ArrowDownAZ, disabled: busy, onSelect: () => sortItems('name') },
+                      { key: 'name-desc', label: 'Op naam, Z tot A', Icon: ArrowDownZA, disabled: busy, onSelect: () => sortItems('name-desc') },
+                      { key: 'oldest', label: 'Eerst geüpload eerst', Icon: ClockArrowUp, disabled: busy, onSelect: () => sortItems('oldest') },
+                      { key: 'newest', label: 'Laatst geüpload eerst', Icon: ClockArrowDown, disabled: busy, onSelect: () => sortItems('newest') },
+                    ],
+                  },
+                ]}
+              />
+            )}
+          </div>
+        )}
+      </header>
 
       {error && <div className="error">{error}</div>}
       {message && <div className="gal-notice">{message}</div>}
 
       {orderMode && (
         <div className="gal-selectbar">
-          <strong>Volgorde aanpassen</strong>
-          <span className="gal-cats-help">Sleep een foto op de plek waar hij moet komen. Elke wijziging wordt meteen bewaard.</span>
+          <span className="gal-selectbar-ico" aria-hidden="true"><GripVertical size={16} /></span>
+          <span className="gal-selectbar-text">
+            <strong>Volgorde aanpassen</strong>
+            <span>Sleep een foto naar zijn nieuwe plek. Elke wijziging wordt meteen bewaard.</span>
+          </span>
+          <Button variant="primary" className="gal-selectbar-done" onClick={toggleOrderMode}>Klaar</Button>
         </div>
       )}
 
       {selectMode && (
         <div className="gal-selectbar">
+          <span className="gal-selectbar-ico" aria-hidden="true"><CheckSquare size={16} /></span>
           <strong>{selectedIds.size} geselecteerd</strong>
           <button type="button" className="gal-linkbtn" onClick={() => setSelectedIds(new Set(shownItems.map(i => i.id)))}>Alles</button>
           <button type="button" className="gal-linkbtn" onClick={() => setSelectedIds(new Set())}>Niets</button>
@@ -1701,7 +1895,7 @@ export function GalleryTab({
             {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
             <option value="__none__">Geen categorie</option>
           </Select>
-          <button type="button" className="gal-linkbtn" onClick={() => openSettings('files')}>Categorieën beheren</button>
+          <Button variant="primary" className="gal-selectbar-done" onClick={toggleSelectMode}>Klaar</Button>
         </div>
       )}
 
@@ -1844,7 +2038,7 @@ export function GalleryTab({
           queue={queue}
           onClose={() => setSettingsTab(null)}
           onSave={async (patch) => { await patchGallery(openGallery, patch); setSettingsTab(null); }}
-          onDelete={writable ? () => { setSettingsTab(null); void removeGallery(openGallery); } : undefined}
+          onDelete={writable ? () => { setSettingsTab(null); setDeleteTarget(openGallery); } : undefined}
           files={{
             onAssign: assignItemsTo,
             onAddCategory: addCategory,
@@ -1879,6 +2073,7 @@ export function GalleryTab({
       {duplicatePrompt && (
         <GalleryDuplicatesDialog prompt={duplicatePrompt} onAnswer={answerDuplicatePrompt} />
       )}
+      {deleteDialog}
     </article>
   );
 }
@@ -1943,6 +2138,123 @@ function duplicateReason(duplicate: GalleryDuplicate): string {
  * de gebruiker niet koos. Klikken naast het venster doet niets; anders was een
  * misklik genoeg om een upload van honderd foto's af te breken.
  */
+/**
+ * De vraag vóór het verwijderen van een album, vanuit de lijst of vanuit de
+ * instellingen. Hij zegt wat er verdwijnt: hoeveel bestanden en hoe groot, en
+ * of de klant er nu nog bij kan (portaal, deellink). Eerst was het een kale
+ * melding van de browser met alleen de naam; dan klik je er makkelijk doorheen,
+ * en die melding is op een telefoon niet eens in de stijl van de app.
+ *
+ * Wat er in R2 en bij Stream weg moet, regelt de database bij het verwijderen
+ * zelf (gallery_purge_queue); removeGallery laat de worker het meteen doen.
+ * Annuleren heeft de focus: Enter na een dubbelklik verwijdert dus niets.
+ */
+function GalleryDeleteDialog({ gallery, organizationId, onCancel, onConfirm }: {
+  gallery: Gallery;
+  organizationId: UUID;
+  onCancel: () => void;
+  /** Gooit bij een fout; het venster blijft dan open en zegt wat er misging. */
+  onConfirm: () => Promise<void>;
+}) {
+  const [files, setFiles] = useState<{ count: number; bytes: number } | null>(null);
+  const [working, setWorking] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const workingRef = useRef(false);
+  workingRef.current = working;
+
+  // Alleen naam en grootte: het album hoeft er niet voor open.
+  useEffect(() => {
+    let cancelled = false;
+    selectGalleryItemNames(organizationId, gallery.id)
+      .then(rows => { if (!cancelled) setFiles({ count: rows.length, bytes: rows.reduce((sum, row) => sum + (row.size_bytes ?? 0), 0) }); })
+      // Lukt het tellen niet, dan staat er de zin zonder aantal; verwijderen kan nog steeds.
+      .catch(() => { if (!cancelled) setFiles({ count: -1, bytes: 0 }); });
+    return () => { cancelled = true; };
+  }, [organizationId, gallery.id]);
+
+  useEffect(() => {
+    dialogRef.current?.querySelector<HTMLButtonElement>('[data-autofocus]')?.focus();
+  }, []);
+
+  // Terug en Escape zijn annuleren, behalve terwijl het verwijderen loopt.
+  useBackStep(true, () => { if (!workingRef.current) onCancel(); });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // In de capture-fase en niet verder: anders sloot dezelfde toets ook de
+      // presenteerstand of een venster eronder.
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (!workingRef.current) onCancel();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onCancel]);
+
+  async function confirmDelete() {
+    setWorking(true);
+    setFailure(null);
+    try {
+      await onConfirm();
+    } catch (e) {
+      setFailure(readableError(e, 'Verwijderen is niet gelukt.'));
+      setWorking(false);
+    }
+  }
+
+  const filesLine = files === null
+    ? 'De bestanden in dit album'
+    : files.count < 0
+      ? 'Alle foto’s en video’s in dit album'
+      : files.count === 0
+        ? 'Er staan nog geen bestanden in'
+        : `${files.count} ${files.count === 1 ? 'bestand' : 'bestanden'} (${fmtBytesShort(files.bytes)})`;
+
+  return (
+    <div className="bk-modal-backdrop gal-modal-shell gal-dup-shell" onDragOver={swallowFileDrag} onDrop={swallowFileDrag}>
+      <div ref={dialogRef} className="bk-modal gal-modal gal-del" role="alertdialog" aria-modal="true" aria-labelledby="gal-del-title" aria-describedby="gal-del-intro">
+        <header className="gal-modal-head">
+          <span className="gal-del-ico" aria-hidden="true"><Trash2 size={18} /></span>
+          <span className="gal-modal-titles">
+            <h3 id="gal-del-title">Album verwijderen?</h3>
+            <p title={gallery.title}>{gallery.title}</p>
+          </span>
+          <button type="button" className="gal-modal-close" onClick={onCancel} disabled={working} aria-label="Niet verwijderen" title="Niet verwijderen">
+            <X size={18} />
+          </button>
+        </header>
+        <div className="bk-modal-body gal-modal-body">
+          <p className="gal-del-intro" id="gal-del-intro">Het album gaat voorgoed weg, en daarmee:</p>
+          <ul className="gal-del-list">
+            <li>
+              <ImageIcon size={15} aria-hidden="true" />
+              <span><strong>{filesLine}</strong>{files?.count !== 0 && <> — ook uit de opslag bij Cloudflare</>}</span>
+            </li>
+            {gallery.status === 'published' && (
+              <li><Eye size={15} aria-hidden="true" /><span>Je klant ziet het album niet meer in het portaal</span></li>
+            )}
+            {gallery.share_enabled && (
+              <li><Link2 size={15} aria-hidden="true" /><span>De deellink werkt niet meer</span></li>
+            )}
+            <li><Heart size={15} aria-hidden="true" /><span>De favorieten die je klant koos</span></li>
+          </ul>
+          <p className="gal-del-warn">Dit kun je niet ongedaan maken. Wil je iets bewaren? Download het album dan eerst.</p>
+          {failure && <div className="error" role="alert">{failure}</div>}
+        </div>
+        <div className="bk-modal-actions gal-modal-actions">
+          <span className="gal-modal-spacer" />
+          <Button onClick={onCancel} disabled={working} data-autofocus="">Annuleren</Button>
+          <Button variant="danger" className="gal-del-confirm" onClick={() => { void confirmDelete(); }} disabled={working}>
+            {working ? <Loader2 size={14} className="gal-spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
+            {working ? 'Bezig met verwijderen…' : 'Album verwijderen'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GalleryDuplicatesDialog({ prompt, onAnswer }: {
   prompt: DuplicatePrompt;
   onAnswer: (choices: Map<number, GalleryDuplicateChoice> | null) => void;
