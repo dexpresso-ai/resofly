@@ -1784,7 +1784,8 @@ export function Settings({
   organizationContext: OrganizationContext;
   currentUserId: string | null;
   push: PushApi;
-  settingsNav?: { tab: SettingsTab; key: number } | null;
+  /** `auditProjectId`: het logboek opent gefilterd op dat project ("Alles bekijken" op een project). */
+  settingsNav?: { tab: SettingsTab; key: number; auditProjectId?: string } | null;
   /** De agenda-instellingen (koppelingen, eigen agenda's, telefoon-sync) wonen
    *  hier als tabblad in plaats van als eigen pagina onder Agenda. De pagina
    *  zelf komt uit CalendarPage; is dit leeg, dan staat de agenda-module dicht
@@ -2674,12 +2675,16 @@ export function Settings({
         zelf, want het tabblad terugzetten gebeurt pas ná de eerste render. */}
     {activeTab === 'logboek' && canAdminOrganization && <div className="settings-tab-panel">
       <AuditLogPanel
+        // Elke navigatie hierheen begint met verse filters: kom je van een
+        // project, dan op dat project; anders weer de hele organisatie.
+        key={settingsNav?.key ?? 0}
         organizationId={organizationId}
         data={data}
         members={organizationContext.teamMembers}
         currentUserId={currentUserId}
         permissions={permissions}
         onOpenTarget={onOpenAuditTarget}
+        initialProjectId={settingsNav?.auditProjectId ?? null}
       />
     </div>}
 

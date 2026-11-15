@@ -299,6 +299,18 @@ const PAGES = {
     prepare: ['.client-tab-btn:has-text("Galerij")', '.gal-list-card'],
   },
   'gallery-tab': { page: 'gallery', projectId: seed.projects[0].id, galleryId: GALLERY_ID, mock: { gallery: true } },
+  // 2026-11-15 — het projectoverzicht kreeg drie blokken: de laatst bewerkte
+  // notities en documenten, de albums en het logboek van het project. Ze
+  // staan onder de vouw; deze meting kijkt of ze er zijn en niets zijwaarts
+  // laten uitlopen (lange albumnamen, de deellink, een logboekzin).
+  'project-overzicht': {
+    page: 'project', projectId: seed.projects[0].id, mock: { gallery: true },
+    mustShow: [
+      { selector: '.proj-recent .proj-recent-row', label: 'een notitie of document onder Notities & documenten' },
+      { selector: '.proj-albums .proj-album-row', label: 'een album onder Albums' },
+      { selector: '.proj-log .alog-feed-row', label: 'een regel in het logboek van het project' },
+    ],
+  },
   // Het menu Ordenen open: het mag nergens buiten beeld vallen.
   'gallery-ordenen': { page: 'gallery', projectId: seed.projects[0].id, galleryId: GALLERY_ID, mock: { gallery: true }, prepare: '.gal-bar .gal-menu-trigger' },
   // De lijst met albums, met het menu achter een album open (Bewerken,

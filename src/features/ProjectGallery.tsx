@@ -50,7 +50,7 @@ import { useAlbumAddress } from '../services/domainService';
 import { galleryShareUrl } from '../lib/clientAddress';
 import { useBackStep } from '../lib/useBackStep';
 
-const galleryStatusLabels: Record<Gallery['status'], string> = {
+export const galleryStatusLabels: Record<Gallery['status'], string> = {
   draft: 'Concept',
   published: 'Gepubliceerd',
   archived: 'Gearchiveerd',
@@ -73,11 +73,11 @@ const galleryFormats: Array<{
   { key: 'hybrid', label: 'Foto én video', hint: 'Beide in één oplevering; video’s bovenaan.', Icon: Layers, accept: 'image/jpeg,image/png,image/webp,video/*' },
 ];
 
-const galleryFormatLabels: Record<GalleryFormat, string> = {
+export const galleryFormatLabels: Record<GalleryFormat, string> = {
   photo: 'Foto', video: 'Video', hybrid: 'Foto + video',
 };
 
-function formatConfig(format: GalleryFormat) {
+export function formatConfig(format: GalleryFormat) {
   return galleryFormats.find(f => f.key === format) ?? galleryFormats[2];
 }
 
@@ -315,7 +315,7 @@ async function filesFromDataTransfer(transfer: DataTransfer): Promise<File[]> {
 }
 
 export function GalleryTab({
-  data, project, organizationId, canWrite, onChanged, initialGalleryId, onOpenInTab,
+  data, project, organizationId, canWrite, onChanged, initialGalleryId, startGalleryId, onOpenInTab,
 }: {
   data: AppData;
   project: Project;
@@ -324,6 +324,13 @@ export function GalleryTab({
   onChanged: () => void | Promise<void>;
   /** Meteen deze galerij openen i.p.v. de lijst — gebruikt door het eigen tabblad. */
   initialGalleryId?: string;
+  /**
+   * Meteen dit album openen, maar mét de lijst erachter: terug gaat naar de
+   * lijst. Voor een album dat je op het projectoverzicht aantikt. Met
+   * `initialGalleryId` ging terug meteen het project uit, want dat is het
+   * eigen tabblad waar geen lijst achter zit.
+   */
+  startGalleryId?: string | null;
   /** Afwezig = we zitten al in een eigen tabblad, dan heeft die knop geen zin. */
   onOpenInTab?: (galleryId: string) => void;
 }) {
@@ -331,7 +338,7 @@ export function GalleryTab({
     () => data.galleries.filter(g => g.project_id === project.id).sort((a, b) => b.created_at.localeCompare(a.created_at)),
     [data.galleries, project.id],
   );
-  const [openId, setOpenId] = useState<string | null>(initialGalleryId ?? null);
+  const [openId, setOpenId] = useState<string | null>(initialGalleryId ?? startGalleryId ?? null);
   const openGallery = galleries.find(g => g.id === openId) ?? null;
   /**
    * De huisstijl zoals de klant de galerij ziet (achtergrond, letters,
