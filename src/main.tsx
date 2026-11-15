@@ -255,6 +255,9 @@ import './styles/gesprekken.css';
 import './styles/apps.css';
 // Gerrie aanzetten (2026-11-12): de drie punten en het vinkje. Eigen klassen (gaz-*).
 import './styles/gerrie-aanzetten.css';
+// De weekplanner (2026-11-15) als allerlaatste: de zeven oudere lagen planner-
+// CSS in globals.css spraken elkaar tegen, dit blok bepaalt de opbouw.
+import './styles/weekplanner.css';
 import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';

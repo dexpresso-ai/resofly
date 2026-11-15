@@ -1,0 +1,597 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   WEEKPLANNER (2026-11-15)
+   ──────────────────────────────────────────────────────────────────────────
+   De planner kreeg in een half jaar zeven lagen CSS in globals.css (fase 1 tot
+   en met het rooster), elk met eigen bord-, kop- en kaartregels. Die lagen
+   spraken elkaar tegen: in de weergaven Lijst en Team kreeg de werkvoorraad de
+   brede kolom en werden de dagen in 268px geperst, en in de kop viel de
+   zoekregel buiten de kaart. Dit bestand is de laatste laag en de enige die
+   de opbouw bepaalt; het staat als laatste in main.tsx.
+
+   Spelregels
+     • Alles hangt onder `.week-planner`. Het rooster zelf is het gedeelde
+       TimeBlockGrid van de agenda; hier staan alleen de planner-maten
+       (`.wp-rooster`), de agenda verandert niet.
+     • Alleen de tokens van de looks (--surface, --line, --ink, --accent …):
+       Baken, Cockpit en Zenit kleuren het zelf in, dag en nacht.
+     • Twee talen in het rooster blijven zoals de PO ze koos: een afspraak is
+       vol gevuld, een taakblok licht getint met een stippelrand. Violet is
+       de kleur van afspraken in de balken, goud die van je eigen werk.
+     • De sticky-regel van de agenda geldt ook hier: de `top` van
+       `.tb-allday-row` is gelijk aan de hoogte van `.tb-dh`.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.week-planner{
+  --wp-meet:var(--accent-v,var(--note,#B79CFF));
+  --wp-work:var(--accent,#F7C548);
+  --wp-card:var(--surface,var(--bg2));
+  --wp-raise:var(--surface-2,var(--bg3));
+  --wp-line:var(--line,var(--border));
+  --wp-line-2:var(--line-2,var(--border2));
+  --wp-ink:var(--ink,var(--text));
+  --wp-ink-2:var(--ink-2,var(--muted2));
+  --wp-ink-3:var(--ink-3,var(--muted));
+  --wp-radius:var(--r-card,16px);
+  --wp-ctl:34px;
+  display:flex;flex-direction:column;gap:12px;
+}
+
+/* ── 1 · De kop ─────────────────────────────────────────────────────────── */
+.week-planner .wp-hero{
+  position:relative;z-index:6;
+  display:flex;flex-direction:column;gap:10px;
+  padding:12px 14px 10px;
+  border-radius:var(--wp-radius);
+  background:var(--wp-card);
+  border:1px solid var(--wp-line);
+  box-shadow:var(--shadow-card,var(--shadow-1));
+}
+.week-planner .wp-hero-main{display:flex;align-items:center;gap:10px 16px;flex-wrap:wrap;min-width:0}
+
+/* De week: bladeren, het weeknummer als weekkiezer, en Vandaag. */
+.week-planner .wp-when{display:flex;align-items:center;gap:4px;min-width:0}
+.week-planner .wp-navbtn{
+  flex:none;display:grid;place-items:center;width:var(--wp-ctl);height:var(--wp-ctl);padding:0;
+  border:1px solid var(--wp-line);border-radius:10px;background:var(--wp-raise);color:var(--wp-ink-2);
+  cursor:pointer;transition:color .12s,border-color .12s,background .12s;
+}
+.week-planner .wp-navbtn:hover{color:var(--wp-ink);border-color:var(--wp-line-2)}
+.week-planner .wp-navbtn:focus-visible,
+.week-planner .wp-todaybtn:focus-visible,
+.week-planner .wpp-trigger:focus-visible,
+.week-planner .wp-autoplan:focus-visible,
+.week-planner .wp-nudge:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.week-planner .wp-weekbtn{
+  display:grid;grid-template-columns:auto auto;grid-template-areas:"eyebrow eyebrow" "title range";
+  align-items:baseline;column-gap:10px;row-gap:0;
+  padding:3px 10px 4px;margin:0 2px;border:0;border-radius:12px;background:transparent;
+  color:var(--wp-ink);font:inherit;text-align:left;cursor:pointer;transition:background .12s;
+}
+.week-planner .wp-weekbtn:hover,.week-planner .wpp.is-open .wp-weekbtn{background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)))}
+.week-planner .wp-week-eyebrow{
+  grid-area:eyebrow;display:inline-flex;align-items:center;gap:6px;
+  font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--wp-ink-3);
+}
+.week-planner .wp-week-eyebrow.is-now{color:var(--accent-ink)}
+.week-planner .wp-week-eyebrow.is-now::before{
+  content:"";width:6px;height:6px;border-radius:50%;background:var(--accent);
+  box-shadow:0 0 0 3px rgba(var(--accent-rgb),.22),0 0 10px rgba(var(--accent-rgb),.6);
+}
+.week-planner .wp-week-title{
+  grid-area:title;display:inline-flex;align-items:center;gap:3px;
+  font-size:24px;line-height:1.1;font-weight:700;letter-spacing:-.025em;white-space:nowrap;
+}
+.week-planner .wp-week-title svg{color:var(--wp-ink-3);margin-top:2px;transition:transform .16s}
+.week-planner .wpp.is-open .wp-week-title svg{transform:rotate(180deg)}
+.week-planner .wp-week-range{grid-area:range;font-size:13px;font-weight:500;color:var(--wp-ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+.week-planner .wp-todaybtn{
+  flex:none;height:var(--wp-ctl);margin-left:6px;padding:0 14px;
+  border:1px solid var(--wp-line-2);border-radius:10px;background:transparent;color:var(--wp-ink);
+  font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s,border-color .12s,color .12s;
+}
+.week-planner .wp-todaybtn:hover{background:var(--wp-raise)}
+.week-planner .wp-todaybtn.is-current{color:var(--wp-ink-2);border-color:var(--wp-line)}
+
+/* Rechts: weergave, zoeken, filters, instellingen en de hoofdknop. */
+.week-planner .wp-hero-tools{margin-left:auto;display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;min-width:0}
+.week-planner .wp-seg{display:inline-flex;align-items:stretch;gap:2px;padding:3px;border-radius:11px;overflow:visible;flex:none}
+.week-planner .wp-seg button{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  min-height:28px;padding:0 11px;border:0;border-radius:8px;
+  font:inherit;font-size:12px;font-weight:600;white-space:nowrap;cursor:pointer;
+}
+.week-planner .wp-seg button:not(.is-on){color:var(--wp-ink-2);background:transparent}
+.week-planner .wp-seg button:not(.is-on):hover{color:var(--wp-ink)}
+.week-planner .wp-seg button svg{flex:none}
+
+.week-planner .wp-search{
+  position:relative;display:flex;align-items:center;gap:7px;
+  flex:0 1 210px;min-width:120px;height:var(--wp-ctl);padding:0 10px 0 11px;
+  border:1px solid var(--wp-line);border-radius:10px;background:var(--field,var(--wp-raise));color:var(--wp-ink-3);
+  transition:border-color .12s,box-shadow .12s;
+}
+/* Bewust geen bredere stand bij focus: dan verschoof de werkbalk tussen het
+   indrukken en loslaten van een andere knop (het zoekveld kromp weer bij het
+   verliezen van de focus), en deed een klik op Filters of Weergave niets. */
+.week-planner .wp-search:focus-within,.week-planner .wp-search.has-value{border-color:var(--focus-line,var(--accent));color:var(--wp-ink-2)}
+.week-planner .wp-search:focus-within{box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18)}
+.week-planner .wp-search input{flex:1;min-width:0;height:100%;padding:0;border:0;background:transparent;color:var(--wp-ink);font:inherit;font-size:12.5px;outline:none}
+.week-planner .wp-search input::placeholder{color:var(--wp-ink-3)}
+.week-planner .wp-search button{display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--wp-ink-3);cursor:pointer}
+.week-planner .wp-search button:hover{background:var(--wp-raise);color:var(--wp-ink)}
+
+.week-planner .wp-toolbtn{
+  position:relative;display:inline-flex;align-items:center;gap:7px;height:var(--wp-ctl);padding:0 12px;
+  border:1px solid var(--wp-line);border-radius:10px;background:var(--wp-raise);color:var(--wp-ink-2);
+  font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:color .12s,border-color .12s,background .12s;
+}
+.week-planner .wp-toolbtn:hover,.week-planner .wpp.is-open .wp-toolbtn{color:var(--wp-ink);border-color:var(--wp-line-2)}
+.week-planner .wp-toolbtn.is-icon{width:var(--wp-ctl);padding:0;justify-content:center}
+.week-planner .wp-toolbtn.is-on{color:var(--wp-ink);border-color:rgba(var(--accent-rgb),.55);background:rgba(var(--accent-rgb),.1)}
+.week-planner .wpp-badge{
+  display:inline-grid;place-items:center;min-width:17px;height:17px;padding:0 5px;border-radius:99px;
+  background:var(--accent);color:var(--on-accent);font-size:10px;font-weight:800;font-variant-numeric:tabular-nums;
+}
+
+.week-planner .wp-autoplan{
+  display:inline-flex;align-items:center;gap:7px;height:var(--wp-ctl);padding:0 15px;
+  border:0;border-radius:10px;
+  background:var(--bk-gold-face,linear-gradient(155deg,#FFE496 0%,#F9CB55 42%,#F0B530 100%));color:var(--on-accent,#1A1405);
+  font:inherit;font-size:12.5px;font-weight:700;white-space:nowrap;cursor:pointer;
+  box-shadow:0 0 0 1px rgba(var(--accent-rgb),.45),0 8px 22px -10px rgba(var(--accent-rgb),.75);
+  transition:transform .14s var(--ease,ease),box-shadow .14s,filter .14s;
+}
+.week-planner .wp-autoplan:hover{transform:translateY(-1px);filter:brightness(1.04);box-shadow:0 0 0 1px rgba(var(--accent-rgb),.55),0 12px 26px -10px rgba(var(--accent-rgb),.85)}
+.week-planner .wp-autoplan:active{transform:none}
+.week-planner .wp-autoplan:disabled{opacity:.6;cursor:default;transform:none}
+.week-planner .wp-autoplan.is-on{box-shadow:0 0 0 2px var(--wp-card),0 0 0 4px rgba(var(--accent-rgb),.6)}
+
+/* De polsslag: hoe vol de week is, en wat er om aandacht vraagt. */
+.week-planner .wp-pulse{
+  display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap;min-width:0;
+  padding-top:9px;border-top:1px solid var(--wp-line);
+}
+.week-planner .wp-meter{
+  flex:0 0 180px;display:flex;height:8px;border-radius:99px;overflow:hidden;
+  background:var(--load-track,rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k))));
+}
+.week-planner .wp-meter span{display:block;height:100%;transition:width .35s var(--ease,ease)}
+.week-planner .wp-meter-agenda{background:var(--wp-meet)}
+.week-planner .wp-meter-tasks{background:var(--wp-work)}
+.week-planner .wp-meter-tasks.is-over{background:linear-gradient(90deg,var(--wp-work),var(--danger,#FF6B72))}
+.week-planner .wp-pulse-stats{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;min-width:0;font-size:12px;color:var(--wp-ink-2)}
+.week-planner .wp-stat{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.week-planner .wp-stat b{color:var(--wp-ink);font-weight:700;font-variant-numeric:tabular-nums}
+.week-planner .wp-stat i{width:8px;height:8px;border-radius:3px;flex:none}
+.week-planner .wp-stat.is-agenda i{background:var(--wp-meet)}
+.week-planner .wp-stat.is-tasks i{background:var(--wp-work)}
+.week-planner .wp-stat.is-free i{background:var(--load-track);box-shadow:inset 0 0 0 1px var(--wp-line-2)}
+.week-planner .wp-stat.is-over b{color:var(--danger)}
+.week-planner .wp-stat.is-warn{color:var(--accent-ink)}
+
+.week-planner .wp-nudges{margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.week-planner .wp-nudge{
+  display:inline-flex;align-items:center;gap:7px;min-height:28px;padding:0 6px 0 10px;
+  border:1px solid var(--wp-line);border-radius:99px;background:var(--wp-raise);color:var(--wp-ink-2);
+  font:inherit;font-size:11.5px;font-weight:500;white-space:nowrap;cursor:pointer;transition:border-color .12s,background .12s,color .12s;
+}
+.week-planner .wp-nudge b{padding:2px 8px;border-radius:99px;background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));color:var(--wp-ink);font-size:11px;font-weight:700}
+.week-planner .wp-nudge:hover{border-color:var(--wp-line-2);color:var(--wp-ink)}
+.week-planner .wp-nudge svg{flex:none}
+.week-planner .wp-nudge.is-deadline svg{color:var(--danger)}
+.week-planner .wp-nudge.is-carry{border-color:rgba(var(--warn-rgb),.38);background:rgba(var(--warn-rgb),.08)}
+.week-planner .wp-nudge.is-carry svg{color:var(--warn)}
+.week-planner .wp-nudge.is-carry b{background:rgba(var(--warn-rgb),.18);color:var(--wp-ink)}
+
+.week-planner .wp-error{display:flex;align-items:center;gap:10px}
+.week-planner .wp-error button{margin-left:auto;display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:6px;background:transparent;color:inherit;cursor:pointer}
+
+/* ── 2 · Panelen achter een knop (weekkiezer, filters, weergave) ─────────── */
+.week-planner .wpp{position:relative;display:inline-flex;min-width:0}
+.week-planner .wpp-panel{
+  position:absolute;z-index:60;top:calc(100% + 8px);min-width:260px;max-width:min(360px,calc(100vw - 24px));
+  padding:12px;border-radius:14px;background:var(--panel-strong,var(--wp-card));
+  border:1px solid var(--wp-line-2);box-shadow:var(--shadow-pop,var(--shadow-2));
+  animation:wp-pop-in .16s var(--ease,ease);
+}
+.week-planner .wpp-panel.is-end{right:0}
+.week-planner .wpp-panel.is-start{left:0}
+@keyframes wp-pop-in{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
+.week-planner .wp-pop-body{display:flex;flex-direction:column;gap:10px}
+.week-planner .wp-pop-title{font-size:13px;font-weight:700;color:var(--wp-ink)}
+.week-planner .wp-pop-hint{margin:0;font-size:11.5px;line-height:1.45;color:var(--wp-ink-3)}
+.week-planner .wp-pop-field{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:600;color:var(--wp-ink-3)}
+.week-planner .wp-pop-field .select-control,.week-planner .wp-pop-field .select-trigger{width:100%}
+.week-planner .wp-pop-row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--wp-ink-2)}
+.week-planner .wp-pop-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:8px;border-top:1px solid var(--wp-line)}
+.week-planner .wp-pop-count{font-size:11px;color:var(--wp-ink-3)}
+.week-planner .wp-pop-reset,.week-planner .wp-pop-btn,.week-planner .wp-pop-ghost{
+  display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:0 11px;border:1px solid var(--wp-line);border-radius:9px;
+  background:transparent;color:var(--wp-ink-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+}
+.week-planner .wp-pop-reset:hover,.week-planner .wp-pop-btn:hover,.week-planner .wp-pop-ghost:hover{color:var(--wp-ink);border-color:var(--wp-line-2)}
+.week-planner .wp-pop-primary{
+  min-height:32px;padding:0 14px;border:0;border-radius:9px;background:var(--accent);color:var(--on-accent);
+  font:inherit;font-size:12px;font-weight:700;cursor:pointer;
+}
+.week-planner .wp-pop-primary:disabled{opacity:.55;cursor:default}
+.week-planner .wp-filter-pop{width:300px}
+.week-planner .wp-display-pop{width:320px}
+.week-planner .wp-carry-pop{width:380px}
+
+/* De weekkiezer. */
+.week-planner .wp-weekpick-pop{width:296px;padding:10px}
+.week-planner .wpk{display:flex;flex-direction:column;gap:6px}
+.week-planner .wpk-head{display:flex;align-items:center;justify-content:space-between;padding:0 2px 4px}
+.week-planner .wpk-month{font-size:13px;font-weight:700;text-transform:capitalize;color:var(--wp-ink)}
+.week-planner .wpk-step{display:grid;place-items:center;width:28px;height:28px;padding:0;border:1px solid var(--wp-line);border-radius:8px;background:transparent;color:var(--wp-ink-2);cursor:pointer}
+.week-planner .wpk-step:hover{color:var(--wp-ink);background:var(--wp-raise)}
+.week-planner .wpk-grid{display:flex;flex-direction:column;gap:2px}
+.week-planner .wpk-row{display:grid;grid-template-columns:30px repeat(7,1fr);align-items:center;width:100%;min-height:30px;padding:0 2px;border:0;border-radius:9px;background:transparent;font:inherit;text-align:center}
+.week-planner .wpk-dow{min-height:22px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--wp-ink-3)}
+.week-planner .wpk-week{cursor:pointer;color:var(--wp-ink);transition:background .1s}
+.week-planner .wpk-week:hover{background:var(--wp-raise)}
+.week-planner .wpk-week:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.week-planner .wpk-week.is-on{background:rgba(var(--accent-rgb),.16);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.5)}
+.week-planner .wpk-wn{font-size:10.5px;font-weight:700;color:var(--wp-ink-3);font-variant-numeric:tabular-nums}
+.week-planner .wpk-week.is-now .wpk-wn{color:var(--accent-ink)}
+.week-planner .wpk-day{font-size:12px;font-variant-numeric:tabular-nums}
+.week-planner .wpk-day.is-out{color:var(--wp-ink-3);opacity:.6}
+.week-planner .wpk-day.is-today{justify-self:center;display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--accent);color:var(--on-accent);font-weight:700;opacity:1}
+.week-planner .wpk-quick{display:flex;gap:6px;padding-top:8px;border-top:1px solid var(--wp-line)}
+.week-planner .wpk-quick button{flex:1;min-height:30px;border:1px solid var(--wp-line);border-radius:9px;background:transparent;color:var(--wp-ink-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.week-planner .wpk-quick button:hover{color:var(--wp-ink);background:var(--wp-raise)}
+
+/* De dagstreep, in het paneel Weergave. */
+.week-planner .wp-cap{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid var(--wp-line)}
+.week-planner .wp-cap-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:700;color:var(--wp-ink)}
+.week-planner .wp-cap-head b{font-size:11px;font-weight:700;color:var(--wp-ink-3)}
+.week-planner .wp-cap-head b.is-on{color:var(--accent-ink)}
+.week-planner .wp-cap-hint{margin:0;font-size:11.5px;line-height:1.45;color:var(--wp-ink-3)}
+.week-planner .wp-cap-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--wp-ink-2)}
+.week-planner .wp-cap-input{width:72px;height:32px;padding:0 8px;border:1px solid var(--wp-line);border-radius:8px;background:var(--field,var(--wp-raise));color:var(--wp-ink);font:inherit;font-size:13px}
+.week-planner .wp-cap-input:focus{outline:none;border-color:var(--accent)}
+.week-planner .wp-cap-weekend{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--wp-ink-2)}
+.week-planner .wp-cap-actions{display:flex;gap:6px}
+.week-planner .wp-cap-save{min-height:30px;padding:0 13px;border:0;border-radius:9px;background:var(--accent);color:var(--on-accent);font:inherit;font-size:12px;font-weight:700;cursor:pointer}
+.week-planner .wp-cap-clear{min-height:30px;padding:0 12px;border:1px solid var(--wp-line);border-radius:9px;background:transparent;color:var(--wp-ink-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.week-planner .wp-cap-save:disabled,.week-planner .wp-cap-clear:disabled{opacity:.55;cursor:default}
+
+/* Het meeneem-voorstel. */
+.week-planner .wp-carry-list{list-style:none;margin:0;padding:2px;max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:2px;border:1px solid var(--wp-line);border-radius:10px}
+.week-planner .wp-carry-list label{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;font-size:12px;cursor:pointer}
+.week-planner .wp-carry-list label:hover{background:var(--wp-raise)}
+.week-planner .wp-carry-dot{width:7px;height:7px;border-radius:50%}
+.week-planner .wp-carry-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--wp-ink)}
+.week-planner .wp-carry-meta{font-size:11px;color:var(--wp-ink-3);white-space:nowrap}
+
+/* ── 3 · Het bord: werkvoorraad links, de week rechts — in élke weergave ── */
+/* `isolation`: het rooster heeft plakkende koppen met een eigen z-index. Zonder
+   eigen stapel vielen de panelen van de kop (weekkiezer, filters) daarachter. */
+.week-planner .wp-board{display:grid;grid-template-columns:300px minmax(0,1fr);grid-template-rows:auto;gap:12px;align-items:start;position:relative;z-index:0;isolation:isolate}
+.week-planner .wp-board > .wp-tray{order:0;grid-column:1}
+.week-planner .wp-board > .wp-board-main{order:1;grid-column:2;min-width:0;display:flex;flex-direction:column;gap:10px}
+@media (min-width:1025px){
+  /* In de Lijst en het Team scrolt de pagina; de werkvoorraad blijft dan staan. */
+  .week-planner .wp-board:not(.is-grid) > .wp-tray{position:sticky;top:0;max-height:calc(100dvh - 120px)}
+  .week-planner .wp-board.is-grid{grid-template-rows:minmax(0,1fr);align-items:stretch}
+}
+
+/* ── 4 · De werkvoorraad ─────────────────────────────────────────────────── */
+.week-planner .wp-tray{
+  display:flex;flex-direction:column;min-height:0;overflow:hidden;
+  border-radius:var(--wp-radius);background:var(--wp-card);border:1px solid var(--wp-line);
+  box-shadow:var(--shadow-card,var(--shadow-1));transition:box-shadow .15s,border-color .15s;
+}
+.week-planner .wp-tray.is-drop{border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.22),var(--shadow-card,var(--shadow-1))}
+.week-planner .wp-tray-head{display:flex;align-items:center;gap:8px;padding:12px 12px 10px 14px;border-bottom:0;background:transparent}
+.week-planner .wp-tray-icon{display:grid;place-items:center;width:26px;height:26px;border-radius:8px;background:rgba(var(--accent-rgb),.14);color:var(--accent-ink)}
+.week-planner .wp-tray-title{font-size:13.5px;font-weight:700;letter-spacing:-.01em;color:var(--wp-ink)}
+.week-planner .wp-tray-total{
+  min-width:20px;height:20px;display:inline-grid;place-items:center;padding:0 6px;border:0;border-radius:99px;
+  background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));color:var(--wp-ink-2);font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+}
+.week-planner .wp-tray-toggle{margin-left:auto;display:grid;place-items:center;width:28px;height:28px;padding:0;border:1px solid var(--wp-line);border-radius:8px;background:transparent;color:var(--wp-ink-3);cursor:pointer}
+.week-planner .wp-tray-toggle:hover{color:var(--wp-ink);background:var(--wp-raise)}
+.week-planner .wp-tray-tabs{
+  display:flex;gap:2px;margin:0 10px 6px;padding:3px;
+  border:0;border-radius:11px;background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));
+}
+.week-planner .wp-tray-tabs[hidden]{display:none}
+.week-planner .wp-tray-tabs button{
+  flex:1 1 auto;display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;min-height:28px;padding:0 6px;
+  border:0;border-radius:8px;background:transparent;color:var(--wp-ink-2);
+  font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;
+}
+.week-planner .wp-tray-tabs button span{overflow:hidden;text-overflow:ellipsis}
+.week-planner .wp-tray-tabs button b{font-size:10.5px;font-weight:700;color:var(--wp-ink-3);font-variant-numeric:tabular-nums}
+.week-planner .wp-tray-tabs button b.is-zero{opacity:.6}
+.week-planner .wp-tray-tabs button:hover{color:var(--wp-ink)}
+.week-planner .wp-tray-tabs button.is-on{background:var(--raised,var(--wp-card));color:var(--wp-ink);box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.4 * var(--shade-k))),inset 0 0 0 1px var(--wp-line)}
+.week-planner .wp-tray-tabs button.is-on b{color:var(--accent-ink)}
+.week-planner .wp-tray-tabs button::after{display:none}
+.week-planner .wp-tray-body{
+  flex:1 1 auto;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain;
+  display:flex;flex-direction:column;gap:6px;padding:4px 10px 12px;border:0;background:transparent;
+}
+.week-planner .wp-tray-body[hidden]{display:none}
+.week-planner .wp-tray-hint{margin:0 2px 4px;font-size:11px;line-height:1.45;color:var(--wp-ink-3)}
+.week-planner .wp-tray-empty{
+  display:flex;flex-direction:column;align-items:center;gap:6px;margin:6px 0;padding:22px 14px;text-align:center;
+  border:1px dashed var(--wp-line-2);border-radius:12px;font-size:11.5px;line-height:1.45;color:var(--wp-ink-3);
+}
+.week-planner .wp-tray-empty b{font-size:13px;color:var(--wp-ink)}
+.week-planner .wp-tray-empty-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:12px;background:rgba(var(--ok-rgb),.14);color:var(--ok)}
+.week-planner .wp-tray.is-drop .wp-tray-empty{border-color:var(--accent);background:rgba(var(--accent-rgb),.06)}
+
+/* Actiepunten onderin, in te klappen. */
+.week-planner .wp-notes{flex:0 0 auto;display:flex;flex-direction:column;min-height:0;max-height:42%;margin:0;padding:0;border-top:1px solid var(--wp-line);background:transparent}
+.week-planner .wp-notes-head{
+  display:flex;align-items:center;gap:7px;width:100%;padding:10px 14px;border:0;background:transparent;
+  color:var(--wp-ink-2);font:inherit;font-size:12px;font-weight:700;text-align:left;cursor:pointer;
+}
+.week-planner .wp-notes-head:hover{color:var(--wp-ink)}
+.week-planner .wp-notes-caret{transition:transform .15s;color:var(--wp-ink-3)}
+.week-planner .wp-notes.is-closed .wp-notes-caret{transform:rotate(-90deg)}
+.week-planner .wp-notes-count{margin-left:auto;font-size:11px;font-weight:600;color:var(--wp-ink-3)}
+.week-planner .wp-notes-body{display:flex;flex-direction:column;gap:6px;min-height:0;padding:0 12px 12px;overflow:auto}
+.week-planner .wp-notes-list{max-height:none;overflow:visible}
+
+/* ── 5 · De kaart (werkvoorraad, lijst en team) ──────────────────────────── */
+.week-planner .wp-task{
+  position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;
+  grid-template-areas:"check body more" "check body right";
+  column-gap:9px;row-gap:2px;align-items:start;
+  padding:9px 8px 8px 10px;border-radius:12px;
+  background:linear-gradient(120deg,color-mix(in srgb,var(--task-color,var(--accent)) 9%,transparent),transparent 55%),var(--wp-raise);
+  border:1px solid var(--wp-line);box-shadow:var(--shadow-1);
+  cursor:grab;transition:transform .14s var(--ease,ease),box-shadow .14s,border-color .14s;
+}
+.week-planner .wp-task:hover{border-color:var(--wp-line-2);box-shadow:var(--shadow-card-hover,var(--shadow-2));transform:translateY(-1px)}
+.week-planner .wp-task:active{cursor:grabbing}
+.week-planner .wp-task:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.week-planner .wp-task.is-dragging{opacity:.4;transform:none;box-shadow:none}
+.week-planner .wp-task > .wp-task-check{grid-area:check;margin-top:1px}
+.week-planner .wp-task > .wp-task-dot{display:none}
+.week-planner .wp-task > .wp-task-body{grid-area:body;min-width:0}
+.week-planner .wp-task > .wp-task-right{grid-area:right;align-self:end;justify-self:end;display:flex;align-items:center;gap:4px}
+.week-planner .wp-task > .wp-task-more{
+  grid-area:more;position:static;justify-self:end;width:24px;height:22px;margin:-3px -2px 0 0;opacity:0;border-radius:7px;
+}
+.week-planner .wp-task:hover > .wp-task-more,.week-planner .wp-task:focus-within > .wp-task-more{opacity:1}
+@media (hover:none){.week-planner .wp-task > .wp-task-more{opacity:.75}}
+.week-planner .wp-task-title{font-size:12.5px;font-weight:600;line-height:1.35;-webkit-line-clamp:2}
+.week-planner.density-compact .wp-task-title{-webkit-line-clamp:2;font-size:12.5px}
+.week-planner .wp-task-sub{display:block;margin-top:4px;font-size:11px;line-height:1.3;color:var(--wp-ink-3)}
+.week-planner .wp-task-where{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden}
+.week-planner .wp-task-where::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:var(--task-color,var(--accent))}
+.week-planner .wp-task-where > *{flex:0 1 auto;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.week-planner .wp-task-where > * + *::before{content:"·";margin-right:6px;color:var(--wp-ink-3)}
+.week-planner .wp-task-project-link{font-size:11px;color:var(--wp-ink-2);text-align:left}
+.week-planner .wp-task-client{color:var(--wp-ink-3)}
+.week-planner .wp-task-tags{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:6px;min-width:0}
+.week-planner .wp-task-tags > *{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.week-planner .wp-task-tags .wp-task-period,.week-planner .wp-task-tags .wp-task-ticket,.week-planner .wp-task-tags .wp-task-agenda{
+  display:inline-flex;align-items:center;gap:4px;margin:0;padding:1px 7px;border-radius:99px;border:0;
+  background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));color:var(--wp-ink-2);font:inherit;font-size:10.5px;font-weight:600;
+}
+.week-planner .wp-task-tags .wp-task-ticket,.week-planner .wp-task-tags .wp-task-agenda{cursor:pointer}
+.week-planner .wp-task-tags .wp-task-agenda{background:rgba(var(--note-rgb),.14);color:var(--wp-ink)}
+.week-planner .wp-task-tags .wp-task-ticket:hover,.week-planner .wp-task-tags .wp-task-agenda:hover{color:var(--accent-ink)}
+.week-planner .wp-task-due{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:99px;background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));color:var(--wp-ink-2);font-size:10.5px;font-weight:600;white-space:nowrap}
+.week-planner .wp-task-due.is-soon{background:rgba(var(--warn-rgb),.14);color:var(--warn)}
+.week-planner .wp-task-due.is-late{background:rgba(var(--danger-rgb),.14);color:var(--danger)}
+.week-planner .wp-task-est{min-height:22px;padding:0 7px;border-radius:7px;font-size:11px;font-weight:700;color:var(--wp-ink-2);background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));border:1px solid transparent}
+.week-planner .wp-task-est.is-unset{color:var(--wp-ink-3);font-weight:500}
+.week-planner .wp-task-timer{width:22px;height:22px;border-radius:7px;opacity:0;transition:opacity .12s}
+.week-planner .wp-task:hover .wp-task-timer,.week-planner .wp-task:focus-within .wp-task-timer,.week-planner .wp-task-timer.is-running{opacity:1}
+@media (hover:none){.week-planner .wp-task-timer{opacity:1}}
+.week-planner .wp-task.is-insert-target::before{top:-5px}
+
+/* ── 6 · Het rooster ─────────────────────────────────────────────────────── */
+.week-planner .wp-rooster{
+  flex:1 1 auto;min-height:0;display:flex;flex-direction:column;
+  border-radius:var(--wp-radius);overflow:hidden;background:var(--wp-card);
+  border:1px solid var(--wp-line);box-shadow:var(--shadow-card,var(--shadow-1));
+}
+.week-planner .wp-rooster .tb-container{background:transparent}
+.week-planner .wp-rooster .tb-scroll{background:transparent}
+
+/* Dagkop: naam en datum op één regel, daaronder wat er staat en de balk. */
+.week-planner .wp-rooster.calendar-agenda-page .tb-dh{
+  height:70px;min-height:0;padding:9px 10px 8px;gap:0;
+  display:grid;grid-template-columns:auto auto minmax(0,1fr);grid-template-rows:auto 1fr;align-items:center;justify-items:start;justify-content:stretch;
+  text-align:left;border-left:1px solid var(--wp-line);
+}
+.week-planner .wp-rooster.calendar-agenda-page .tb-dh:first-of-type{border-left:0}
+.week-planner .wp-rooster.calendar-agenda-page .tb-allday-row{top:70px}
+.week-planner .wp-rooster.calendar-agenda-page .tb-dh-name{display:block;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--wp-ink-3)}
+.week-planner .wp-rooster.calendar-agenda-page .tb-dh-num{width:auto;height:auto;margin-left:6px;padding:0;border-radius:0;background:transparent;font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--wp-ink)}
+.week-planner .wp-rooster.calendar-agenda-page .tb-today .tb-dh-name{color:var(--accent-ink)}
+.week-planner .wp-rooster.calendar-agenda-page .tb-today .tb-dh-num{
+  display:grid;place-items:center;min-width:26px;height:26px;padding:0 6px;border-radius:99px;
+  background:var(--accent);color:var(--on-accent);font-size:14px;box-shadow:0 4px 12px -4px rgba(var(--accent-rgb),.8);
+}
+.week-planner .wp-rooster.calendar-agenda-page .tb-today{background:linear-gradient(180deg,rgba(var(--accent-rgb),.09),transparent)}
+.week-planner .wp-rooster .tb-dh-extra{grid-column:1 / -1;align-self:end;width:100%;padding:0;gap:6px}
+.week-planner .wp-dh-stats{display:flex;align-items:center;gap:6px;min-height:20px;font-size:11px;color:var(--wp-ink-3);text-transform:none;letter-spacing:0}
+.week-planner .wp-dh-stats .wp-day-count{margin:0;padding:0 6px;border:0;background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));color:var(--wp-ink-2);font-size:10.5px}
+.week-planner .wp-dh-stats .wp-day-total{margin:0;font-size:11px;font-weight:700;color:var(--wp-ink-2)}
+.week-planner .wp-dh-stats .wp-day-total.is-empty{font-weight:500;color:var(--wp-ink-3)}
+.week-planner .wp-dh-stats .wp-day-room{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--ok)}
+.week-planner .wp-dh-stats .wp-day-room.is-over{color:var(--danger)}
+.week-planner .wp-dh-stats .wp-day-add{
+  margin-left:auto;display:grid;place-items:center;width:22px;height:22px;padding:0;border:1px solid var(--wp-line);border-radius:7px;
+  background:var(--wp-card);color:var(--wp-ink-3);cursor:pointer;opacity:0;transition:opacity .12s,color .12s,border-color .12s;
+}
+.week-planner .wp-dh-stats .wp-day-room + .wp-day-add{margin-left:0}
+.week-planner .wp-rooster .tb-dh:hover .wp-day-add,.week-planner .wp-day-add:focus-visible{opacity:1}
+.week-planner .wp-dh-stats .wp-day-add:hover{color:var(--accent-ink);border-color:var(--accent)}
+@media (hover:none){.week-planner .wp-dh-stats .wp-day-add{opacity:1}}
+.week-planner .wp-rooster .tb-dh-extra .wp-day-load{display:flex;height:4px;width:100%;border-radius:99px;background:var(--load-track)}
+.week-planner .wp-day-load-agenda{background:var(--wp-meet);border-radius:99px 0 0 99px}
+.week-planner .wp-day-load-fill{background:var(--wp-work)}
+
+/* De dagband ("Dag"): werk met een dag maar nog zonder tijd. */
+.week-planner .wp-rooster .tb-allday-row{min-height:34px}
+.week-planner .wp-rooster .tb-allday-lanes{grid-auto-rows:26px;row-gap:4px;padding:4px 0}
+.week-planner .wp-rooster .tb-allday-text{font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--wp-ink-3)}
+.week-planner .wp-band-task{
+  height:26px;padding:0 8px 0 5px;border-radius:8px;font-size:11.5px;
+  border:1px dashed color-mix(in srgb,var(--bar) 60%,var(--wp-line));
+  background:color-mix(in srgb,var(--bar) 14%,var(--wp-card));
+  box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.2 * var(--shade-k)));
+}
+.week-planner .wp-band-task:hover{background:color-mix(in srgb,var(--bar) 24%,var(--wp-card));border-style:solid}
+.week-planner .wp-band-check{width:15px;height:15px;border-radius:5px}
+
+/* Taakblokken: licht getint, stippelrand, een vinkje — van jou en te schuiven. */
+.week-planner .wp-rooster .tb-ev{border-radius:8px}
+.week-planner .wp-rooster .tb-ev.tb-task-block{
+  background-color:color-mix(in srgb,var(--event-color) 17%,var(--wp-card));
+  background-image:repeating-linear-gradient(135deg,transparent 0 7px,rgba(var(--ink-rgb),.035) 7px 8px);
+  border:1.5px dashed color-mix(in srgb,var(--event-color) 70%,transparent);
+  transition:box-shadow .14s,background-color .14s,transform .14s var(--ease,ease);
+}
+.week-planner .wp-rooster .tb-ev.tb-task-block:hover{
+  background-color:color-mix(in srgb,var(--event-color) 26%,var(--wp-card));
+  box-shadow:0 10px 24px -10px rgba(var(--shade-rgb),calc(.6 * var(--shade-k)));z-index:5;
+}
+.week-planner .wp-rooster .tb-task-block .tb-ev-time{font-size:10px;font-weight:600;color:var(--wp-ink-2);font-variant-numeric:tabular-nums}
+.week-planner .wp-rooster .tb-task-block .tb-ev-title{font-size:12px;font-weight:700;line-height:1.25;color:var(--wp-ink)}
+.week-planner .wp-rooster .tb-task-block.tb-ev-roomy .tb-ev-title{-webkit-line-clamp:3}
+.week-planner .wp-rooster .tb-task-block .tb-ev-src{font-size:10.5px;color:var(--wp-ink-3)}
+.week-planner .wp-rooster .tb-ev-check{width:16px;height:16px;border-radius:5px;background:var(--wp-card)}
+/* Twee blokken naast elkaar in een dag: dan is een blok soms 70px breed. Woorden
+   werden daar per regel afgekapt ("Wire… afsp…"); nu breken ze af met een
+   streepje, en in zo'n smal blok wijkt het vinkje voor de titel. */
+.week-planner .wp-rooster .tb-ev{container-type:inline-size}
+.week-planner .wp-rooster .tb-ev-title{overflow-wrap:anywhere;hyphens:auto;-webkit-hyphens:auto}
+.week-planner .wp-rooster .tb-ev-time{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@container (max-width:96px){
+  .week-planner .wp-rooster .tb-task-block .tb-ev-check{display:none}
+  .week-planner .wp-rooster .tb-task-block .tb-ev-time,
+  .week-planner .wp-rooster .tb-task-block .tb-ev-title,
+  .week-planner .wp-rooster .tb-task-block .tb-ev-src{padding-left:0}
+  .week-planner .wp-rooster .tb-ev-title{font-size:11px}
+}
+.week-planner .wp-rooster .tb-ev:not(.tb-task-block):not(.tb-ev-preview){box-shadow:0 1px 0 rgba(255,255,255,.12) inset,0 6px 16px -10px rgba(var(--shade-rgb),calc(.7 * var(--shade-k)))}
+.week-planner .wp-rooster .tb-ev-preview.is-drag{border-style:solid;box-shadow:0 0 0 2px var(--accent),0 18px 40px -12px rgba(var(--shade-rgb),calc(.7 * var(--shade-k)))}
+
+/* Het weekend en de uren buiten de werkdag: rustiger, zodat de week zelf spreekt. */
+.week-planner .wp-rooster .tb-today-col{background:rgba(var(--accent-rgb),.035)}
+
+/* ── 7 · De lijst ────────────────────────────────────────────────────────── */
+.week-planner .wp-stack{display:flex;flex-direction:column;gap:8px}
+.week-planner .wp-stack-day{border-radius:var(--wp-radius);background:var(--wp-card);border:1px solid var(--wp-line);box-shadow:var(--shadow-card,var(--shadow-1));overflow:visible}
+.week-planner .wp-stack-day.is-today{border-color:rgba(var(--accent-rgb),.55);box-shadow:0 0 0 1px rgba(var(--accent-rgb),.25),var(--shadow-card,var(--shadow-1))}
+.week-planner .wp-stack-day.is-drop{border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.22)}
+.week-planner .wp-stack-head{display:flex;align-items:center;gap:10px;padding:10px 12px 10px 8px}
+.week-planner .wp-stack-name{font-size:14px;font-weight:700;text-transform:capitalize;color:var(--wp-ink)}
+.week-planner .wp-stack-num{font-size:14px;font-weight:600;color:var(--wp-ink-3)}
+.week-planner .wp-stack-today{padding:2px 8px;border-radius:99px;background:var(--accent);color:var(--on-accent);font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+.week-planner .wp-stack-head .wp-day-load{flex:1 1 auto;min-width:80px;max-width:320px;height:5px;margin-left:6px}
+.week-planner .wp-stack-body{display:flex;flex-direction:column;gap:8px;padding:0 12px 12px}
+.week-planner .wp-stack-body .wp-day-tasks{position:relative;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;max-height:none;overflow:visible}
+.week-planner .wp-stack-body .wp-day-agenda{display:flex;flex-wrap:wrap;gap:6px}
+.week-planner .wp-agenda-chip{border-radius:9px}
+.week-planner .wp-weektasks{border-radius:var(--wp-radius);background:var(--wp-card);border:1px solid var(--wp-line);padding:10px 12px}
+
+/* ── 8 · Het team ────────────────────────────────────────────────────────── */
+.week-planner .wp-week{
+  display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;padding:8px;
+  border-radius:var(--wp-radius);background:var(--wp-card);border:1px solid var(--wp-line);
+}
+.week-planner .wp-week .wp-col{border-radius:10px;background:transparent}
+.week-planner .wp-week .wp-col.is-today{background:rgba(var(--accent-rgb),.08)}
+.week-planner .wp-week .wp-day-head{padding:6px 8px;background:transparent;border:0}
+.week-planner .wp-team{display:flex;flex-direction:column;gap:10px}
+.week-planner .wp-team-row{padding:10px;border-radius:var(--wp-radius);background:var(--wp-card);border:1px solid var(--wp-line);box-shadow:var(--shadow-card,var(--shadow-1))}
+.week-planner .wp-team-head{display:flex;align-items:center;gap:9px;padding:0 2px 8px}
+.week-planner .wp-team-avatar{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;color:#fff;font-size:10.5px;font-weight:800}
+.week-planner .wp-team-name{font-size:13px;font-weight:700;color:var(--wp-ink)}
+.week-planner .wp-team-count{margin-left:auto;font-size:11px;color:var(--wp-ink-3)}
+.week-planner .wp-team .wp-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.week-planner .wp-team-cell{position:relative;display:flex;flex-direction:column;gap:5px;min-width:0;min-height:56px;padding:5px;border-radius:10px;background:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)))}
+.week-planner .wp-team-cell.is-drop{background:rgba(var(--accent-rgb),.1);box-shadow:inset 0 0 0 1.5px var(--accent)}
+/* In een cel van een zevende van de breedte is alleen de titel nog leesbaar. */
+.week-planner .wp-team-cell .wp-task{grid-template-columns:auto minmax(0,1fr);grid-template-areas:"check body" "right right";padding:6px 6px 5px 7px;column-gap:6px}
+.week-planner .wp-team-cell .wp-task-title{font-size:11.5px}
+.week-planner .wp-team-cell .wp-task-sub{display:none}
+.week-planner .wp-team-cell .wp-task-more,.week-planner .wp-team-cell .wp-task-timer{display:none}
+.week-planner .wp-team-cell .wp-task-check{width:15px;height:15px}
+
+/* ── 9 · Meldingen onderin ───────────────────────────────────────────────── */
+.week-planner .wp-undo,.week-planner .wp-proposal{border-radius:14px;box-shadow:var(--shadow-pop,var(--shadow-2))}
+.week-planner .wp-proposal{border-color:rgba(var(--accent-rgb),.6)}
+.week-planner .wp-menu{border-radius:12px;box-shadow:var(--shadow-pop,var(--shadow-2))}
+
+/* ── 10 · Kleinere schermen ──────────────────────────────────────────────── */
+@media (max-width:1280px){
+  .week-planner .wp-board{grid-template-columns:280px minmax(0,1fr)}
+  .week-planner .wp-search{flex-basis:170px}
+  .week-planner .wp-tray-tabs{margin:0 8px 6px;gap:1px}
+  .week-planner .wp-tray-tabs button{padding:0 4px;gap:4px;font-size:11px}
+  .week-planner .wp-toolbtn-label{display:none}
+  .week-planner .wp-toolbtn:not(.is-icon){width:var(--wp-ctl);padding:0;justify-content:center}
+  .week-planner .wp-toolbtn .wpp-badge{position:absolute;top:-6px;right:-6px}
+  .week-planner .wp-meter{flex-basis:120px}
+}
+@media (max-width:1100px){
+  .week-planner .wp-hero-tools{width:100%;margin-left:0;justify-content:flex-start}
+  .week-planner .wp-search{flex:1 1 160px}
+}
+@media (max-width:1024px){
+  /* De werkvoorraad boven de week, in te klappen. */
+  .week-planner .wp-board,.week-planner .wp-board.is-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:none;align-items:start}
+  .week-planner .wp-board > .wp-tray,.week-planner .wp-board > .wp-board-main{grid-column:1}
+  .week-planner .wp-board > .wp-tray{position:static;max-height:none}
+  .week-planner .wp-tray-body{max-height:300px}
+  .week-planner .wp-tray.is-closed .wp-tray-head{padding-bottom:12px}
+  .week-planner .wp-notes{max-height:none}
+}
+@media (max-width:900px){
+  .week-planner{gap:8px;--wp-ctl:36px}
+  .week-planner .wp-hero{padding:10px 10px 8px;gap:8px;border-radius:16px}
+  .week-planner .wp-hero-main{gap:8px}
+  .week-planner .wp-when{width:100%}
+  /* Op de telefoon staan de datums naast "Deze week" in de bovenregel; naast
+     het weeknummer werden ze afgekapt tot "9 – 15 nov…". */
+  .week-planner .wp-weekbtn{flex:1 1 auto;min-width:0;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"eyebrow range" "title title";column-gap:8px;padding:2px 6px}
+  .week-planner .wp-week-title{font-size:21px}
+  .week-planner .wp-week-range{align-self:center;overflow:hidden;text-overflow:ellipsis;font-size:11.5px;color:var(--wp-ink-3)}
+  .week-planner .wp-todaybtn{margin-left:2px;padding:0 11px}
+  .week-planner .wp-hero-tools{flex-wrap:nowrap;gap:6px}
+  .week-planner .wp-viewseg button span{display:none}
+  .week-planner .wp-viewseg button{padding:0 10px}
+  .week-planner .wp-search{flex:1 1 auto;min-width:0}
+  .week-planner .wp-search input{font-size:16px}
+  .week-planner .wp-autoplan{width:var(--wp-ctl);padding:0;justify-content:center}
+  .week-planner .wp-autoplan span{display:none}
+  .week-planner .wp-pulse{gap:6px 10px;padding-top:8px}
+  .week-planner .wp-meter{flex:1 1 100%;height:6px}
+  .week-planner .wp-pulse-stats{font-size:11.5px;gap:4px 12px}
+  .week-planner .wp-stat.is-minor{display:none}
+  .week-planner .wp-nudges{margin-left:0;justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto;max-width:100%;scrollbar-width:none}
+  .week-planner .wp-nudges::-webkit-scrollbar{display:none}
+  .week-planner .wpp-panel{position:fixed;left:12px;right:12px;top:auto;bottom:calc(var(--bottomnav-h,58px) + 12px);max-width:none;width:auto;max-height:70dvh;overflow:auto;border-radius:18px}
+  .week-planner .wpp-panel.is-end,.week-planner .wpp-panel.is-start{left:12px;right:12px}
+  .week-planner .wp-tray{border-radius:14px}
+  .week-planner .wp-tray-head{padding:9px 10px 8px 12px}
+  .week-planner .wp-rooster.calendar-agenda-page .tb-dh{height:58px;padding:7px 10px 6px}
+  .week-planner .wp-rooster.calendar-agenda-page .tb-allday-row{top:58px}
+  .week-planner .wp-rooster{height:calc(100dvh - 300px - var(--bottomnav-h,58px));min-height:440px}
+  .week-planner .wp-stack-body .wp-day-tasks{grid-template-columns:minmax(0,1fr)}
+  .week-planner .wp-week,.week-planner .wp-team .wp-grid{grid-template-columns:minmax(0,1fr)}
+  /* De dagstrip zegt welke dag het is; de kolomkop van één dag herhaalt dat. */
+  .week-planner.is-view-team .wp-week{display:none}
+  /* Een open vel ligt boven de zwevende knoppen (Gerrie, teamchat). */
+  .week-planner .wp-hero:has(.wpp.is-open){z-index:1200}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .week-planner .wp-task,.week-planner .wp-autoplan,.week-planner .wp-meter span,.week-planner .wpp-panel{transition:none;animation:none}
+  .week-planner .wp-task:hover,.week-planner .wp-autoplan:hover{transform:none}
+}
