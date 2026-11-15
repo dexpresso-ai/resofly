@@ -200,7 +200,7 @@ import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
 import { watchForReturn, type FinishedCall } from './lib/callBridge';
 import { GerrieCommandCenter, type GerrieConversationsFocus } from './features/GerrieCommandCenter';
 import { GerrieAanzettenPage, type AiConsentChange } from './components/GerrieAanzetten';
-import { AI_TERMS_VERSION, consentIsActive } from './lib/aiConsent';
+import { AI_TERMS_VERSION, consentIsActive, consentIsDeclined } from './lib/aiConsent';
 import type { GerrieActionHandlers, GerrieProposal, GerrieProposalLine } from './lib/gerrie-api';
 import { runRegistryAction } from './lib/actions';
 import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
@@ -1164,9 +1164,12 @@ function App() {
   // af (restrictive RLS + schrijf-triggers); dit is de beleving eromheen.
   // Gerrie staat pas aan als deze gebruiker dat zelf deed (ai_consents). Zonder
   // akkoord is de module Gerrie in de hele app dicht, behalve de pagina Gerrie
-  // met het scherm om hem aan te zetten.
+  // met het scherm om hem aan te zetten. Koos hij zelf voor geen AI (bij het
+  // inrichten of later), dan is ook die pagina dicht en staat Gerrie nergens
+  // meer in het menu; aanzetten kan dan onder Instellingen → AI.
   const aiEnabled = consentIsActive(organizationContext.aiConsent);
-  const permissions = useMemo(() => buildPermissions(activeMembership, { aiEnabled }), [activeMembership, aiEnabled]);
+  const aiDeclined = consentIsDeclined(organizationContext.aiConsent);
+  const permissions = useMemo(() => buildPermissions(activeMembership, { aiEnabled, aiDeclined }), [activeMembership, aiEnabled, aiDeclined]);
   // In een losse app toont de navigatie (zijbalk, Zenit, duimbalk) alleen de
   // pagina's van die app. Alleen voor het menu: de rechten zelf, het laden en
   // de pagina's blijven die van de werkruimte. Een klant openen vanuit een
@@ -2034,7 +2037,8 @@ function App() {
   if (!activeOrganization) return <NoOrganizationScreen pendingInvitations={organizationContext.pendingInvitations} onAcceptInvitation={acceptInvitation} onCreateOrganization={createNewOrganization} />;
 
   // Een nieuwe organisatie wordt eerst ingericht (migratie 20261107190000):
-  // rechtsvorm, bedrijfsgegevens, btw, facturen en Mollie. Alleen bij null:
+  // rechtsvorm, bedrijfsgegevens, btw, facturen, Mollie en of je AI wilt
+  // gebruiken (2026-11-15). Alleen bij null:
   // ontbreekt de kolom (undefined, de migratie draaide hier nog niet), dan
   // werkt de app zoals daarvoor. De eigenaar of een beheerder doorloopt de
   // stappen; een ander teamlid ziet dat de organisatie nog wordt ingericht.
@@ -2050,6 +2054,7 @@ function App() {
         initialBusinessStatus={organizationContext.businessStatus}
         initialCreativeStatus={organizationContext.creativeStatus}
         initialBillingOverview={organizationContext.billingOverview}
+        initialAiConsent={organizationContext.aiConsent}
         userEmail={currentUserEmail}
         onSwitchOrganization={switchOrganization}
         onAcceptInvitation={acceptInvitation}
@@ -4475,6 +4480,19 @@ function App() {
     // sowieso geen rijen terug; dit voorkomt een verwarrende lege pagina.
     if (!permissions.canOpenPage(page)) {
       const moduleKey = PAGE_MODULE[page];
+      // Gerrie staat uit omdat deze gebruiker dat zelf koos, niet omdat een
+      // beheerder hem dichtzette. Dat zeggen we dan ook: anders las iemand die
+      // net "liever niet" koos, dat hij om toegang moest vragen.
+      if (moduleKey === 'gerrie' && permissions.gerrieDeclined) {
+        return <div className="empty gaz-off-empty">
+          <div className="e-big">Gerrie staat uit</div>
+          <p>Je koos ervoor geen AI te gebruiken in {activeOrg.name}. Gerrie is daarom nergens in de app te zien. Wil je hem toch gebruiken, dan zet je hem aan onder Instellingen → AI.</p>
+          <div className="gaz-empty-actions">
+            <Button variant="primary" onClick={() => openSettings('ai')}>Naar Instellingen → AI</Button>
+            <Button onClick={() => { setPage((appStartPage(permissions) ?? firstAllowedPage(permissions)) as Page); setProjectId(null); setClientId(null); setStatsReportId(null); }}>Verder zonder Gerrie</Button>
+          </div>
+        </div>;
+      }
       return <div className="empty">
         <div className="e-big">Geen toegang tot {moduleKey ? MODULE_LABELS[moduleKey] : 'deze module'}</div>
         <p>Een owner of admin van deze organisatie heeft deze module voor jou dichtgezet. Vraag hen om toegang als je die nodig hebt voor je werk.</p>

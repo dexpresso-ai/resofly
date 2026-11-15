@@ -86,6 +86,17 @@
 
 .gaz-off-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:14px;line-height:1.5;color:var(--text)}
 
+/* ── Geen AI (2026-11-15) ─────────────────────────────────────
+   Wie zelf koos voor geen AI, ziet Gerrie nergens meer. Een onthouden tabblad
+   op de pagina Gerrie zegt dan waarom, met de weg naar Instellingen → AI. */
+.gaz-empty-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.gaz-off-empty p{max-width:520px;margin:0;line-height:1.55}
+.gaz-declined{
+  margin:0;padding:10px 14px;border-radius:10px;font-size:13.5px;line-height:1.5;color:var(--text);
+  background:var(--bg3);border:1px solid var(--border);
+}
+.gaz-team-state.is-declined{color:var(--text)}
+
 /* ── Telefoon ─────────────────────────────────────────────── */
 @media (max-width:640px){
   .gaz{padding:14px 0 28px;gap:14px}

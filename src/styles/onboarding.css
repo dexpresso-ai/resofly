@@ -252,7 +252,9 @@
 .onb-input-prefix>span{font-weight:600;color:var(--ink-3)}
 
 /* ── Welkom ──────────────────────────────────────────────────────────────── */
-.onb-route{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+/* Vier groepen sinds de stap AI (2026-11-15): twee bij twee, anders stond de
+   vierde alleen op een eigen rij. */
+.onb-route{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .onb-route-card{
   position:relative;overflow:hidden;padding:20px;border-radius:var(--onb-radius);
   background:var(--surface);border:1px solid var(--line);box-shadow:var(--onb-shadow);
@@ -363,6 +365,15 @@
 .onb-pending-card h1{margin:4px 0 0;font-size:24px;letter-spacing:-.02em;color:var(--ink)}
 .onb-pending-card p{margin:0;color:var(--ink-2);line-height:1.6}
 .onb-pending-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:6px}
+
+/* ── AI (2026-11-15) ─────────────────────────────────────────────────────
+   De drie punten komen uit de pagina Gerrie (gerrie-aanzetten.css, gaz-*).
+   Hier alleen de kleuren van het werkvlak, zodat ze op een kaart passen. */
+.onb-ai-points{display:flex;flex-direction:column;gap:12px}
+.onb-ai-points .gaz-point{background:var(--surface-2);border-color:var(--line)}
+.onb-ai-points .gaz-point-body h3{color:var(--ink)}
+.onb-ai-points .gaz-point-body p{color:var(--ink-2)}
+.onb-ai-points .gaz-check{background:var(--surface);border-color:var(--line);color:var(--ink)}
 
 /* ── Smaller ─────────────────────────────────────────────────────────────── */
 @media (max-width:1180px){

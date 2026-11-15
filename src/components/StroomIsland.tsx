@@ -142,7 +142,9 @@ export function StroomIsland({
     const { title, parts } = intentSummary(intent);
     const gaps = intentGaps(intent);
     const viaGerrie = intent.kind === 'afspraak' || intent.kind === 'uren';
-    rows.push({
+    // Zonder Gerrie (geen AI gekozen, of de module dicht) geen rij die naar
+    // Gerrie verwijst: die stond er grijs, met het orbje en "Gerrie" erbij.
+    if (!(viaGerrie && !onAsk)) rows.push({
       key: 'make', group: 'Maken', tone: viaGerrie ? 'ai' : 'make',
       icon: viaGerrie ? <span className="zorb sm" aria-hidden="true" /> : (() => { const Icon = MAKE.find(m => m.word === intent.kind)?.Icon ?? Plus; return <Icon size={16} aria-hidden="true" />; })(),
       title,

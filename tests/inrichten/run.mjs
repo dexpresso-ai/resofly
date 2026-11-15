@@ -25,7 +25,15 @@
  *      aan, met de juiste resultaatrekening;
  *   9. een teamlid ziet het wachtscherm, een beheerder kan Mollie niet koppelen;
  *  10. een database zonder de nieuwe kolom opent gewoon de werkruimte;
- *  11. zonder webadres kun je niet afronden, en "Aanpassen" brengt je erheen.
+ *  11. zonder webadres kun je niet afronden, en "Aanpassen" brengt je erheen;
+ *  12. AI (2026-11-15): niets vooraf gekozen. Op desktop "nee": de keuze ligt
+ *      vast (set_ai_consent), het uitlezen van inkoopfacturen met AI gaat uit,
+ *      en in de werkruimte is Gerrie nergens te zien. Op de telefoon "ja": pas
+ *      verder met drie vinkjes, en daarna is Gerrie er. Zonder keuze kun je niet
+ *      afronden, en wie al verder was, gaat bij de stap AI verder;
+ *  13. ook later kun je kiezen: "Liever geen AI" op de pagina Gerrie haalt
+ *      Gerrie overal weg, ook uit het menu; een onthouden tabblad zegt waarom;
+ *      onder Instellingen → AI zet je hem weer aan.
  *
  * Opties: --url=http://… (een draaiende dev-server), --shots=<map>.
  */
@@ -66,13 +74,13 @@ const VIEWPORTS = {
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
 };
 
-async function open(browser, { vp = 'desktop', mock = { onboarding: true }, storage = {} } = {}) {
+async function open(browser, { vp = 'desktop', mock = { onboarding: true }, storage = {}, view = 'dashboard' } = {}) {
   const context = await browser.newContext({ ...VIEWPORTS[vp], locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
   const { setup } = await installMock(context, mock);
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(String(e.message)));
-  await page.addInitScript(storageScript('dashboard', storage));
+  await page.addInitScript(storageScript(view, storage));
   await page.goto(baseUrl, { waitUntil: 'networkidle' });
   return { context, page, setup, errors };
 }
@@ -232,9 +240,42 @@ try {
     check(L('en niet meer op het scherm'), !(await page.content()).includes('abcdefghijklmnopqrstuvwxyz123456'));
     await next(page).click();
 
+    // AI: op desktop "nee", op de telefoon "ja".
+    const withAi = vp === 'phone';
+    await waitForTitle(page, /AI gebruiken/, L('naar de keuze voor AI'));
+    check(L('AI: niets vooraf gekozen'), await page.locator('.onb-choice.is-on').count() === 0);
+    check(L('AI: zonder keuze kun je niet verder'), await next(page).isDisabled());
+    const consentWrites = () => setup.writes.filter(w => w.table === 'rpc/set_ai_consent');
+    if (withAi) {
+      await choice(page, 'Ja, met Gerrie').click();
+      check(L('AI ja: de drie punten staan er'), await page.locator('.onb-ai-points .gaz-point').count() === 3);
+      check(L('AI ja: zonder vinkjes niet verder'), await next(page).isDisabled());
+      const boxes = page.locator('.onb-ai-points input[type="checkbox"]');
+      await boxes.nth(0).check();
+      await boxes.nth(1).check();
+      check(L('AI ja: met twee vinkjes nog niet'), await next(page).isDisabled());
+      await boxes.nth(2).check();
+      check(L('AI ja: met drie wel'), !(await next(page).isDisabled()));
+    } else {
+      await choice(page, 'Nee, zonder AI').click();
+      check(L('AI nee: de uitleg noemt het uitlezen van inkoopfacturen'), /inkoopfacturen/.test(await page.locator('.onb-body').innerText()));
+      check(L('AI nee: je kunt meteen verder'), !(await next(page).isDisabled()));
+    }
+    check(L('AI: nog niets opgeslagen voor Volgende'), consentWrites().length === 0);
+    await shot(page, `${vp}-ai`);
+    await next(page).click();
     await waitForTitle(page, /beginnen/, L('naar klaar'));
+    const consent = consentWrites().at(-1)?.body ?? {};
+    check(L('AI: de keuze ligt vast voor de eigen organisatie'),
+      consent.p_organization_id === ORG && consent.p_enabled === withAi
+      && (withAi ? ['gegevens_lezen', 'kan_fouten_maken', 'geen_eigen_beslissingen'].every(k => consent.p_acknowledged?.includes(k)) : true),
+      JSON.stringify(consent));
+    check(L('AI: één keer opgeslagen'), consentWrites().length === 1);
+    const inbox = setup.writes.find(w => w.table === 'rpc/set_purchase_invoice_inbox_settings')?.body ?? {};
+    check(L(`AI: het uitlezen van inkoopfacturen ${withAi ? 'blijft aan' : 'gaat uit'}`), inbox.p_organization_id === ORG && inbox.p_patch?.ai_enabled === withAi && setup.inboxAi === withAi, JSON.stringify(inbox));
+
     const summary = await page.locator('.onb-summary').innerText();
-    check(L('het overzicht klopt'), /BV/.test(summary) && /Studio Lopik B\.V\./.test(summary) && /studio-lopik\.resofly\.com/.test(summary) && /Via Mollie/.test(summary) && /Gekoppeld/.test(summary), summary.replace(/\s+/g, ' ').slice(0, 260));
+    check(L('het overzicht klopt'), /BV/.test(summary) && /Studio Lopik B\.V\./.test(summary) && /studio-lopik\.resofly\.com/.test(summary) && /Via Mollie/.test(summary) && /Gekoppeld/.test(summary) && (withAi ? /Met Gerrie/ : /Zonder AI/).test(summary), summary.replace(/\s+/g, ' ').slice(0, 300));
     await shot(page, `${vp}-klaar`);
     await next(page).click();
     await page.waitForSelector('.app', { timeout: 15000 }).catch(() => null);
@@ -242,6 +283,17 @@ try {
     const done = setup.writes.find(w => w.table === 'rpc/complete_organization_onboarding');
     check(L('afgerond voor de eigen organisatie, met de handelsnaam'), done?.body?.p_organization_id === ORG && done?.body?.p_display_name === 'Studio Lopik', JSON.stringify(done?.body));
     check(L('de voortgang is opgeruimd'), await page.evaluate((key) => localStorage.getItem(key), PROGRESS_KEY) === null);
+    // Gerrie: met "ja" de chat rechtsonder, met "nee" nergens, ook niet in het menu.
+    await page.waitForTimeout(400);
+    const appText = await page.locator('.app').innerText();
+    const fab = await page.locator('.gerrie-fab').count();
+    if (withAi) {
+      check(L('AI ja: Gerrie is er in de werkruimte'), fab === 1, `${fab} chatknoppen`);
+    } else {
+      check(L('AI nee: geen chat van Gerrie'), fab === 0, `${fab} chatknoppen`);
+      check(L('AI nee: Gerrie staat nergens in de werkruimte'), !/Gerrie/.test(appText), appText.match(/.{0,40}Gerrie.{0,40}/)?.[0]);
+    }
+    await shot(page, `${vp}-werkruimte`);
     check(L('elke schrijfactie op de bedrijfsgegevens ging naar de eigen organisatie'),
       settingsWrites(setup).every(w => (w.method === 'PATCH' ? w.query.includes(`organization_id=eq.${ORG}`) : w.body?.organization_id === ORG)));
     check(L('geen JavaScript-fouten'), errors.length === 0, errors[0]);
@@ -320,18 +372,96 @@ try {
     await context.close();
   }
   {
-    // De browser denkt dat de stap gedaan is, maar er ligt geen naam vast.
-    const progress = JSON.stringify({ step: 'klaar', completed: ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen', 'mollie'], pendingLegalForm: null });
+    // Halverwege van vóór de stap AI (2026-11-15): verder bij AI, niet bij Klaar.
+    const before = JSON.stringify({ step: 'klaar', completed: ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen', 'mollie'], pendingLegalForm: null });
+    const { context, page, errors } = await open(browser, { mock: { onboarding: true, subdomain: 'studio-lopik' }, storage: { [PROGRESS_KEY]: before } });
+    await page.waitForSelector('.onb', { timeout: 20000 });
+    await waitForTitle(page, /AI gebruiken/, 'halverwege van vóór de stap AI: verder bij AI');
+    check('halverwege AI: geen JavaScript-fouten', errors.length === 0, errors[0]);
+    await context.close();
+  }
+  {
+    // De browser denkt dat de stappen gedaan zijn, maar er ligt geen naam en geen keuze voor AI vast.
+    const progress = JSON.stringify({ step: 'klaar', completed: ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen', 'mollie', 'ai'], pendingLegalForm: null });
     const { context, page, setup, errors } = await open(browser, { storage: { [PROGRESS_KEY]: progress } });
     await page.waitForSelector('.onb', { timeout: 20000 });
     await waitForTitle(page, /Nog even dit/, 'geen webadres: het laatste scherm houdt tegen');
     check('geen webadres: dat staat er', /Kies nog het webadres/.test(await page.locator('.onb-body').innerText()));
+    check('geen keuze voor AI: dat staat er ook', /Kies nog of je AI wilt gebruiken/.test(await page.locator('.onb-body').innerText()));
     check('geen webadres: afronden kan niet', await next(page).isDisabled());
     check('geen webadres: niets afgerond', !setup.writes.some(w => w.table === 'rpc/complete_organization_onboarding'));
     await shot(page, 'geen-webadres');
     await page.locator('.onb-notice', { hasText: 'Kies nog het webadres' }).getByRole('button', { name: 'Aanpassen' }).click();
     await waitForTitle(page, /Je webadres/, 'geen webadres: Aanpassen opent de stap');
     check('geen webadres: geen JavaScript-fouten', errors.length === 0, errors[0]);
+    await context.close();
+  }
+  {
+    // Al gekozen voor geen AI (een eerder bezoek): de keuze staat er weer, en
+    // nog eens Volgende schrijft hem niet opnieuw.
+    const progress = JSON.stringify({ step: 'ai', completed: ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen', 'mollie'], pendingLegalForm: null });
+    const { context, page, setup, errors } = await open(browser, { mock: { onboarding: true, subdomain: 'studio-lopik', ai: 'off' }, storage: { [PROGRESS_KEY]: progress } });
+    await page.waitForSelector('.onb', { timeout: 20000 });
+    await waitForTitle(page, /AI gebruiken/, 'al gekozen: opent bij AI');
+    check('al gekozen: "nee" staat aangevinkt', await choice(page, 'Nee, zonder AI').getAttribute('aria-checked') === 'true');
+    await next(page).click();
+    await waitForTitle(page, /beginnen/, 'al gekozen: door naar klaar');
+    check('al gekozen: niet nog eens opgeslagen', !setup.writes.some(w => w.table === 'rpc/set_ai_consent'));
+    check('al gekozen: geen JavaScript-fouten', errors.length === 0, errors[0]);
+    await context.close();
+  }
+
+  // ── 13: later kiezen, en weer aanzetten ──────────────────────────────────
+  {
+    // Nog niet gekozen: de pagina Gerrie vraagt het, Gerrie staat in het menu.
+    const { context, page, errors } = await open(browser, { mock: { aiOff: true }, view: 'gerrie' });
+    const consentCalls = [];
+    page.on('request', req => { if (req.url().includes('/rpc/set_ai_consent')) consentCalls.push(req.postDataJSON()); });
+    await page.waitForSelector('.gaz-page', { timeout: 20000 }).catch(() => null);
+    const railGerrie = () => page.locator('.zrail-btn.is-ai').count();
+    check('later: nog niet gekozen, de pagina Gerrie vraagt het', await page.locator('.gaz-page').count() === 1);
+    check('later: Gerrie staat dan nog in het menu', await railGerrie() === 1);
+    await page.getByRole('button', { name: 'Liever geen AI' }).click();
+    await page.locator('.gaz-off-empty').waitFor({ timeout: 8000 }).catch(() => null);
+    check('later: "liever geen AI" legt de keuze vast', consentCalls.length === 1 && consentCalls[0]?.p_enabled === false && consentCalls[0]?.p_organization_id === ORG, JSON.stringify(consentCalls));
+    check('later: het tabblad zegt dat Gerrie uit staat, en waarom', /Je koos ervoor geen AI te gebruiken/.test(await page.locator('.gaz-off-empty').innerText().catch(() => '')));
+    check('later: en niet dat beheer hem dichtzette', !/dichtgezet/.test(await page.locator('.app').innerText()));
+    check('later: Gerrie is uit het menu', await railGerrie() === 0);
+    check('later: geen chat van Gerrie', await page.locator('.gerrie-fab').count() === 0);
+    await shot(page, 'later-gerrie-uit');
+    await page.getByRole('button', { name: 'Verder zonder Gerrie' }).click();
+    await page.waitForTimeout(300);
+    check('later: verder zonder Gerrie opent een andere pagina', await page.locator('.gaz-off-empty').count() === 0);
+    const text = await page.locator('.app').innerText();
+    check('later: Gerrie staat nergens meer in de werkruimte', !/Gerrie/.test(text), text.match(/.{0,40}Gerrie.{0,40}/)?.[0]);
+    check('later: geen JavaScript-fouten', errors.length === 0, errors[0]);
+    await context.close();
+  }
+  {
+    // Gekozen voor geen AI, met een onthouden tabblad op Gerrie: via de knop
+    // naar Instellingen → AI, en daar weer aanzetten.
+    const { context, page, errors } = await open(browser, { mock: { aiDeclined: true }, view: 'gerrie' });
+    const consentCalls = [];
+    page.on('request', req => { if (req.url().includes('/rpc/set_ai_consent')) consentCalls.push(req.postDataJSON()); });
+    await page.waitForSelector('.gaz-off-empty', { timeout: 20000 }).catch(() => null);
+    check('weer aan: een onthouden tabblad zegt dat Gerrie uit staat', await page.locator('.gaz-off-empty').count() === 1);
+    check('weer aan: niet in het menu', await page.locator('.zrail-btn.is-ai').count() === 0);
+    await page.getByRole('button', { name: 'Naar Instellingen → AI' }).click();
+    await page.locator('.gaz-declined').waitFor({ timeout: 8000 }).catch(() => null);
+    check('weer aan: Instellingen → AI zegt dat je koos voor geen AI', await page.locator('.gaz-declined').count() === 1);
+    check('weer aan: geen tweede "liever niet"', await page.getByRole('button', { name: 'Liever geen AI' }).count() === 0);
+    await shot(page, 'later-instellingen-geen-ai');
+    const settings = page.locator('.gaz-settings');
+    const turnOn = settings.getByRole('button', { name: 'Gerrie aanzetten' });
+    check('weer aan: de knop pas met drie vinkjes', await turnOn.isDisabled());
+    for (const box of await settings.locator('input[type="checkbox"]').all()) await box.check();
+    await turnOn.click();
+    await settings.locator('.gaz-on').waitFor({ timeout: 8000 }).catch(() => null);
+    check('weer aan: aangezet met de drie punten', consentCalls.length === 1 && consentCalls[0]?.p_enabled === true && consentCalls[0]?.p_acknowledged?.length === 3, JSON.stringify(consentCalls));
+    check('weer aan: de kaart zegt dat hij aanstaat', await settings.locator('.gaz-on').count() === 1);
+    check('weer aan: Gerrie is terug in het menu', await page.locator('.zrail-btn.is-ai').count() === 1);
+    check('weer aan: en de chat ook', await page.locator('.gerrie-fab').count() === 1);
+    check('weer aan: geen JavaScript-fouten', errors.length === 0, errors[0]);
     await context.close();
   }
 

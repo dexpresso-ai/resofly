@@ -226,9 +226,24 @@ function createSetup(options) {
     mollie: null,
     /** Het gekozen webadres (client_subdomain_claim); null = nog niet gekozen. */
     subdomain: options.subdomain ?? null,
+    /**
+     * Gerrie aan of uit (set_ai_consent, 2026-11-15). Een nieuwe organisatie
+     * heeft nog geen keuze: null. `ai: 'on' | 'off'` begint met die keuze.
+     */
+    aiConsent: options.ai ? consentRow(options.ai === 'on', options.ai === 'on' ? AI_KEYS : []) : null,
+    /** Het uitlezen van inkoopfacturen met AI (set_purchase_invoice_inbox_settings). */
+    inboxAi: true,
     /** Elke schrijfactie: { table, method, query, body }. */
     writes: [],
   };
+}
+
+const AI_KEYS = ['gegevens_lezen', 'kan_fouten_maken', 'geen_eigen_beslissingen'];
+/** Een rij zoals set_ai_consent hem teruggeeft. Sinds 20261115120000 ook bij "nee" zonder eerdere rij. */
+function consentRow(enabled, acknowledged, termsVersion = '2026-11-12') {
+  const now = new Date().toISOString();
+  return { organization_id: seed.ids.ORG, user_id: seed.ids.USER, enabled, terms_version: termsVersion,
+    acknowledged: enabled ? acknowledged : [], accepted_at: enabled ? now : null, disabled_at: enabled ? null : now, created_at: now, updated_at: now };
 }
 
 function setupOrg(setup) {
@@ -287,6 +302,23 @@ function setupRpc(setup, fn, body) {
       const previous = setup.subdomain;
       setup.subdomain = check.name;
       return { name: check.name, previous, changed: true };
+    }
+    // Gerrie aan of uit, zoals de database het controleert: alleen de eigen
+    // organisatie, en aanzetten alleen met de huidige tekst en drie vinkjes.
+    case 'set_ai_consent': {
+      setup.writes.push({ table: 'rpc/set_ai_consent', method: 'POST', query: '', body });
+      if (body?.p_organization_id !== seed.ids.ORG) return fail(403, '42501', 'Je bent geen lid van deze organisatie.');
+      const enabled = body?.p_enabled === true;
+      if (enabled && body?.p_terms_version !== '2026-11-12') return fail(400, '22023', 'De uitleg over Gerrie is intussen veranderd. Ververs de pagina en lees hem opnieuw.');
+      if (enabled && !AI_KEYS.every(key => (body?.p_acknowledged ?? []).includes(key))) return fail(400, '22023', 'Vink alle drie de punten aan om Gerrie aan te zetten.');
+      setup.aiConsent = consentRow(enabled, AI_KEYS);
+      return setup.aiConsent;
+    }
+    case 'set_purchase_invoice_inbox_settings': {
+      setup.writes.push({ table: 'rpc/set_purchase_invoice_inbox_settings', method: 'POST', query: '', body });
+      if (!owner || body?.p_organization_id !== seed.ids.ORG) return fail(403, '42501', 'Alleen owners en admins wijzigen de instellingen van de factuur-inbox.');
+      if (typeof body?.p_patch?.ai_enabled === 'boolean') setup.inboxAi = body.p_patch.ai_enabled;
+      return { organization_id: seed.ids.ORG, ai_enabled: setup.inboxAi, auto_create_suppliers: true, auto_book: false, updated_at: new Date().toISOString() };
     }
     case 'complete_organization_onboarding': {
       setup.writes.push({ table: 'rpc/complete_organization_onboarding', method: 'POST', query: '', body });
@@ -357,6 +389,7 @@ function restRows(table, url, setup = null) {
     }
     if (table === 'organizations') return [setupOrg(setup)];
     if (table === 'company_settings') return setup.settings ? [setup.settings] : [];
+    if (table === 'ai_consents') return setup.aiConsent ? [setup.aiConsent] : [];
     if (table === 'billing_plans') return PLANS;
   }
   if (table === 'organization_members') {
@@ -687,7 +720,10 @@ export async function installMock(context, options = {}) {
       const prepaid = options.prepaid ? prepaidRows() : null;
       // `aiOff: true`: de gebruiker heeft Gerrie nog niet aangezet (2026-11-12);
       // de pagina Gerrie toont dan het scherm om hem aan te zetten.
-      const rows = options.aiOff && table === 'ai_consents' ? []
+      // `aiDeclined: true`: hij koos zelf voor geen AI (2026-11-15); Gerrie is
+      // dan nergens te zien, ook niet in het menu.
+      const rows = options.aiDeclined && table === 'ai_consents' ? [consentRow(false, [])]
+        : options.aiOff && table === 'ai_consents' ? []
         : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
         : prepaid && table in prepaid ? prepaid[table]
         : restRows(table, url, setup);

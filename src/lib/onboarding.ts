@@ -18,7 +18,7 @@ import { isDutchVatIdFormat, looksLikeTaxNumberWithoutCountry, normalizeVatId } 
 
 export type OnboardingStepKey =
   | 'welkom' | 'rechtsvorm' | 'abonnement' | 'bedrijf' | 'webadres' | 'btw'
-  | 'huisstijl' | 'facturen' | 'mollie' | 'klaar';
+  | 'huisstijl' | 'facturen' | 'mollie' | 'ai' | 'klaar';
 
 export interface OnboardingStep {
   key: OnboardingStepKey;
@@ -37,6 +37,11 @@ export interface OnboardingStep {
  * erop voortbouwen. Het webadres (jansen.resofly.com, migratie
  * 20261108230000) komt direct na de bedrijfsgegevens: dan staat de naam er
  * al om een voorstel uit te maken, en elke mail aan een klant linkt ernaar.
+ *
+ * De keuze voor AI (2026-11-15) staat als laatste vóór Klaar. Niets bouwt
+ * erop voort, en wie de rest net heeft ingericht, weet beter wat hij Gerrie
+ * zou laten lezen. Het is geen gegeven van de organisatie maar van degene die
+ * inricht: elk teamlid kiest later zelf (src/lib/aiConsent.ts).
  */
 export const ONBOARDING_STEPS: readonly OnboardingStep[] = [
   { key: 'welkom', title: 'Welkom', hint: 'Wat we samen inrichten' },
@@ -48,6 +53,7 @@ export const ONBOARDING_STEPS: readonly OnboardingStep[] = [
   { key: 'huisstijl', title: 'Huisstijl', hint: 'Logo en merkkleur', optional: true },
   { key: 'facturen', title: 'Facturen versturen', hint: 'Per e-mail of via Mollie' },
   { key: 'mollie', title: 'Mollie koppelen', hint: 'Online laten betalen', optional: true },
+  { key: 'ai', title: 'AI', hint: 'Met of zonder Gerrie' },
   { key: 'klaar', title: 'Klaar', hint: 'Controleren en starten' },
 ];
 
@@ -652,6 +658,11 @@ export function finishCheck(input: {
   pendingLegalForm: LegalForm | null;
   /** Het gekozen webadres (de naam), of null. Undefined = niet bekend, niet tegenhouden. */
   clientSubdomain?: string | null;
+  /**
+   * De keuze voor AI: 'on', 'off', of null als er nog niet gekozen is.
+   * Undefined = niet bekend, niet tegenhouden.
+   */
+  aiChoice?: 'on' | 'off' | null;
 }): FinishCheck {
   const blocking: FinishCheck['blocking'] = [];
   if (input.pendingLegalForm && input.pendingLegalForm !== input.savedLegalForm) {
@@ -664,5 +675,8 @@ export function finishCheck(input: {
   if (!String(input.addressLine1 ?? '').trim()) blocking.push({ step: 'bedrijf', text: 'Je adres ontbreekt nog; dat hoort op elke factuur.' });
   // De database eist het ook (complete_organization_onboarding).
   if (input.clientSubdomain === null) blocking.push({ step: 'webadres', text: 'Kies nog het webadres voor je klanten.' });
+  // Geen standaard: of de AI je gegevens leest, kiest de gebruiker zelf. Een
+  // vooraf ingevulde "ja" zou een akkoord zijn dat niemand gaf.
+  if (input.aiChoice === null) blocking.push({ step: 'ai', text: 'Kies nog of je AI wilt gebruiken.' });
   return { blocking };
 }

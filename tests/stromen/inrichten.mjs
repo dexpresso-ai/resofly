@@ -10,7 +10,8 @@
 // eerste login geen eigen organisatie meer (en dus ook geen stappen).
 import { maakGebruiker, rest, rpc, sql, sqlRij, uniek } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, nietsVeranderd, stap, verwacht } from './toets.mjs';
-import { webadresNaam } from './wereld.mjs';
+import { GERRIE_AKKOORD, webadresNaam } from './wereld.mjs';
+import { roep } from './functies.mjs';
 
 function q(waarde) {
   return `'${String(waarde).replace(/'/g, "''")}'`;
@@ -126,6 +127,35 @@ export default async function inrichten() {
     gelijk([res?.name, res?.previous, res?.changed], [naam, null, true], 'antwoord');
   });
 
+  // De stap AI (20261115120000): "nee" legt de keuze vast, ook zonder dat
+  // Gerrie ooit aan stond. De app ziet dan een keuze, geen leegte, en haalt
+  // Gerrie overal weg. Het uitlezen van inkoopfacturen met AI gaat ook uit.
+  await stap('de eigenaar kiest voor geen AI, zoals de stap AI', async () => {
+    const rij = gelukt(await rpc('set_ai_consent', { p_organization_id: orgId, p_enabled: false }, eigenaar.token), 'geen AI');
+    gelijk([rij?.organization_id, rij?.user_id, rij?.enabled, rij?.accepted_at], [orgId, eigenaar.id, false, null], 'de rij die terugkomt');
+    const eigen = gelukt(await rest(`ai_consents?organization_id=eq.${orgId}&select=user_id,enabled`, { token: eigenaar.token }), 'lezen');
+    gelijk(eigen?.map(r => [r.user_id, r.enabled]), [[eigenaar.id, false]], 'de app leest de keuze terug');
+    const regel = sqlRij(`select actor_user_id, metadata from public.audit_logs where organization_id = ${q(orgId)} and action = 'ai_disabled'`);
+    gelijk([regel?.actor_user_id, regel?.metadata?.was_aan], [eigenaar.id, false], 'het logboek: koos voor geen AI');
+    // Nog eens: geen tweede regel.
+    gelukt(await rpc('set_ai_consent', { p_organization_id: orgId, p_enabled: false }, eigenaar.token), 'nog eens nee');
+    gelijk(Number(sql(`select count(*) from public.audit_logs where organization_id = ${q(orgId)} and action = 'ai_disabled'`)), 1, 'regels in het logboek');
+  });
+  await stap('met geen AI weigert Gerrie, en de weigering wijst naar Instellingen → AI', async () => {
+    const res = await roep('gerrie-agent', { token: eigenaar.token, body: { action: 'budget', organizationId: orgId } });
+    geweigerd(res, 'gerrie-agent', [403]);
+    verwacht(/Instellingen → AI/.test(res.json?.error ?? ''), `de weigering: ${res.tekst?.slice(0, 200)}`);
+  });
+  await stap('het uitlezen van inkoopfacturen met AI gaat uit; dat mag alleen beheer', async () => {
+    geweigerd(await rpc('set_purchase_invoice_inbox_settings', { p_organization_id: orgId, p_patch: { ai_enabled: false } }, medewerker.token), 'een teamlid', [401, 403]);
+    gelukt(await rpc('set_purchase_invoice_inbox_settings', { p_organization_id: orgId, p_patch: { ai_enabled: false } }, eigenaar.token), 'de eigenaar');
+    gelijk(sqlRij(`select ai_enabled from public.purchase_invoice_inbox_settings where organization_id = ${q(orgId)}`)?.ai_enabled, false, 'uitlezen met AI');
+  });
+  await stap('de keuze is van de eigenaar: een teamlid heeft nog niet gekozen', async () => {
+    const lidRijen = gelukt(await rest(`ai_consents?organization_id=eq.${orgId}&select=user_id`, { token: medewerker.token }), 'lezen');
+    gelijk(lidRijen?.length ?? 0, 0, 'rijen voor het teamlid');
+  });
+
   await stap('de eigenaar rondt af; de organisatie krijgt de naam van het bedrijf', async () => {
     const res = gelukt(await rpc('complete_organization_onboarding', { p_organization_id: orgId, p_display_name: '  Inrichten\nStudio  ' }, eigenaar.token), 'afronden');
     const rij = Array.isArray(res) ? res[0] : res;
@@ -158,6 +188,15 @@ export default async function inrichten() {
     gelukt(await rpc('complete_organization_onboarding', { p_organization_id: id }, beheerder.token), 'afronden als beheerder');
     verwacht(organisatie(id)?.onboarding_completed_at, 'niet afgerond');
     gelijk(organisatie(id)?.name, 'Tweede B.V.', 'naam uit de bedrijfsgegevens');
+  });
+
+  await stap('later zet de eigenaar Gerrie toch aan, met de drie punten', async () => {
+    const versie = sqlRij('select public.ai_terms_version() as versie').versie;
+    geweigerd(await rpc('set_ai_consent', { p_organization_id: orgId, p_enabled: true, p_terms_version: versie, p_acknowledged: GERRIE_AKKOORD.slice(0, 2) }, eigenaar.token), 'twee vinkjes', [400]);
+    const rij = gelukt(await rpc('set_ai_consent', { p_organization_id: orgId, p_enabled: true, p_terms_version: versie, p_acknowledged: GERRIE_AKKOORD }, eigenaar.token), 'aanzetten');
+    gelijk(rij?.enabled, true, 'aan');
+    const res = await roep('gerrie-agent', { token: eigenaar.token, body: { action: 'budget', organizationId: orgId } });
+    gelijk(res.status, 200, `weer aan: ${res.tekst?.slice(0, 200)}`);
   });
 
   groep('Inrichten: wie is uitgenodigd, krijgt geen eigen organisatie');

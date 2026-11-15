@@ -36,6 +36,8 @@ test('de stappen beginnen bij Welkom en eindigen bij Klaar, met het abonnement d
   assert.equal(keys[keys.length - 1], 'klaar');
   assert.equal(keys.indexOf('abonnement'), keys.indexOf('rechtsvorm') + 1, 'een BV heeft de module nodig voordat de rest erop voortbouwt');
   assert.ok(keys.indexOf('facturen') < keys.indexOf('mollie'), 'eerst kiezen hoe je verstuurt, dan pas Mollie');
+  assert.equal(keys.indexOf('ai'), keys.indexOf('klaar') - 1, 'de keuze voor AI is de laatste vóór Klaar');
+  assert.ok(!ONBOARDING_STEPS.find(step => step.key === 'ai')?.optional, 'de keuze voor AI sla je niet over');
   assert.equal(new Set(keys).size, keys.length, 'geen dubbele stappen');
 });
 
@@ -319,6 +321,25 @@ test('afronden kan pas met een webadres, als bekend is dat het er niet is', () =
   // De stap staat direct na de bedrijfsgegevens.
   const keys = ONBOARDING_STEPS.map(step => step.key);
   assert.equal(keys.indexOf('webadres'), keys.indexOf('bedrijf') + 1);
+});
+
+test('afronden kan pas als je koos of je AI wilt gebruiken', () => {
+  const base = { companyName: 'Studio', addressLine1: 'Kerkstraat 1', savedLegalForm: 'eenmanszaak' as const, pendingLegalForm: null };
+  assert.deepEqual(finishCheck({ ...base, aiChoice: 'on' }).blocking, []);
+  // Nee is net zo goed een keuze.
+  assert.deepEqual(finishCheck({ ...base, aiChoice: 'off' }).blocking, []);
+  const open = finishCheck({ ...base, aiChoice: null });
+  assert.deepEqual(open.blocking.map(item => item.step), ['ai']);
+  assert.match(open.blocking[0].text, /AI/);
+  // Niet bekend: niet tegenhouden.
+  assert.deepEqual(finishCheck(base).blocking, []);
+});
+
+test('wie al verder was dan de nieuwe stap AI, gaat daar verder', () => {
+  const steps = onboardingSteps({ isChild: false });
+  const before: OnboardingStepKey[] = ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen', 'mollie'];
+  assert.equal(resumeStep(steps, new Set(before), 'klaar'), 'ai');
+  assert.equal(resumeStep(steps, new Set([...before, 'ai']), 'klaar'), 'klaar');
 });
 
 test('een nieuwe stap staat vanzelf voor wie al verder was', () => {

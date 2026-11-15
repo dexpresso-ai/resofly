@@ -77,6 +77,11 @@ test('zinnen: Gerrie aan- en uitzetten', () => {
     'anne zette Gerrie (AI) uit; één agent ging op pauze');
   assert.equal(sentenceText(entry({ action: 'ai_disabled', entity_type: 'organization', entity_label: 'Gerrie (AI)', metadata: { agents_gepauzeerd: 0 } }), lookup),
     'anne zette Gerrie (AI) uit');
+  // Kiezen voor geen AI, zonder dat Gerrie ooit aan stond (20261115120000).
+  assert.equal(sentenceText(entry({ action: 'ai_disabled', entity_type: 'organization', entity_label: 'Gerrie (AI)', metadata: { agents_gepauzeerd: 0, was_aan: false } }), lookup),
+    'anne koos voor geen AI; Gerrie (AI) staat uit');
+  assert.equal(sentenceText(entry({ action: 'ai_disabled', entity_type: 'organization', entity_label: 'Gerrie (AI)', metadata: { agents_gepauzeerd: 1, was_aan: true } }), lookup),
+    'anne zette Gerrie (AI) uit; één agent ging op pauze');
 });
 
 test('zinnen: facturen versturen, betalen, herinneren', () => {

@@ -599,7 +599,11 @@ export function sentence(e: AuditEntry, lookup: AuditLookup = {}): { parts: Sent
     case 'ai_enabled': return { parts: [t('zette Gerrie (AI) aan en ging akkoord met de uitleg')] };
     case 'ai_disabled': {
       const paused = Number(meta.agents_gepauzeerd ?? 0);
-      return { parts: [t('zette Gerrie (AI) uit'), ...(paused > 0 ? [t(paused === 1 ? '; één agent ging op pauze' : `; ${paused} agents gingen op pauze`)] : [])] };
+      // Stond Gerrie nooit aan (was_aan false, sinds 20261115120000), dan is
+      // dit de keuze voor geen AI: bij het inrichten of op de pagina Gerrie.
+      // Oudere regels hebben de sleutel niet; die gingen altijd over uitzetten.
+      const what = meta.was_aan === false ? 'koos voor geen AI; Gerrie (AI) staat uit' : 'zette Gerrie (AI) uit';
+      return { parts: [t(what), ...(paused > 0 ? [t(paused === 1 ? '; één agent ging op pauze' : `; ${paused} agents gingen op pauze`)] : [])] };
     }
   }
 

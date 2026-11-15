@@ -58,14 +58,17 @@ const VIEWPORTS = {
  * 2026-11-07). Een eigen backend: de organisatie is nieuw (mock met
  * { onboarding: true }), en de voortgang in de opslag opent de stap meteen.
  */
-const SETUP_ORDER = ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen', 'mollie', 'klaar'];
-function setupPage(step, { pendingLegalForm = null } = {}) {
+const SETUP_ORDER = ['welkom', 'rechtsvorm', 'abonnement', 'bedrijf', 'webadres', 'btw', 'huisstijl', 'facturen', 'mollie', 'ai', 'klaar'];
+function setupPage(step, { pendingLegalForm = null, prepare } = {}) {
   const completed = SETUP_ORDER.slice(0, SETUP_ORDER.indexOf(step));
-  // Na de stap Webadres is er een adres gekozen (2026-11-08).
+  // Na de stap Webadres is er een adres gekozen (2026-11-08), na de stap AI
+  // een keuze voor Gerrie (2026-11-15).
   const subdomain = SETUP_ORDER.indexOf(step) > SETUP_ORDER.indexOf('webadres') ? 'studio-lopik' : null;
+  const ai = SETUP_ORDER.indexOf(step) > SETUP_ORDER.indexOf('ai') ? 'on' : null;
   return {
-    page: 'dashboard', mock: { onboarding: true, subdomain }, shell: '.onb',
+    page: 'dashboard', mock: { onboarding: true, subdomain, ai }, shell: '.onb',
     storage: { [`resofly.onboarding.${seed.ids.ORG}`]: JSON.stringify({ step, completed, pendingLegalForm }) },
+    ...(prepare ? { prepare } : {}),
   };
 }
 
@@ -128,6 +131,11 @@ const PAGES = {
   'gerrie-aanzetten': { page: 'gerrie', mock: { aiOff: true } },
   'settings-ai': { page: 'settings', prepare: '[data-settings-tab="ai"]' },
   'settings-ai-uit': { page: 'settings', mock: { aiOff: true }, prepare: '[data-settings-tab="ai"]' },
+  // Geen AI gekozen (2026-11-15): Gerrie staat nergens meer in het menu. Een
+  // onthouden tabblad op Gerrie zegt waarom, met de weg naar Instellingen → AI;
+  // daar staat de keuze boven de drie punten.
+  'gerrie-uit': { page: 'gerrie', mock: { aiDeclined: true }, mustShow: [{ selector: '.gaz-off-empty .gaz-empty-actions .btn', label: 'de knop naar Instellingen → AI' }] },
+  'settings-ai-geen': { page: 'settings', mock: { aiDeclined: true }, prepare: '[data-settings-tab="ai"]', mustShow: [{ selector: '.gaz-declined', label: 'de uitleg dat je koos voor geen AI' }] },
   'report-updating': {
     page: 'report', statsReportId: seed.aiReports[0].id,
     prepare: ['.aire-chat-toggle', { fill: '.aire-composer textarea', value: 'Zet er vorig jaar naast' }, '.aire-send', '.aire-chat-close'],
@@ -276,6 +284,11 @@ const PAGES = {
   'inrichten-huisstijl': setupPage('huisstijl'),
   'inrichten-facturen': setupPage('facturen'),
   'inrichten-mollie': setupPage('mollie'),
+  // Met of zonder AI (2026-11-15): de keuze leeg, "ja" met de drie punten en
+  // hun vinkjes (de langste stand), en "nee" met de uitleg over de inkoopfacturen.
+  'inrichten-ai': setupPage('ai'),
+  'inrichten-ai-ja': setupPage('ai', { prepare: '.onb-choice:has-text("Ja, met Gerrie")' }),
+  'inrichten-ai-nee': setupPage('ai', { prepare: '.onb-choice:has-text("Nee, zonder AI")' }),
   'inrichten-klaar': setupPage('klaar'),
   'inrichten-wachten': { page: 'dashboard', mock: { onboarding: true, role: 'member' }, shell: '.onb-pending' },
 };

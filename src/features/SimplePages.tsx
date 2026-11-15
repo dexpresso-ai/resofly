@@ -3208,7 +3208,7 @@ export function Settings({
           organizationName={activeOrganization.name}
           consent={organizationContext.aiConsent}
           // Open = de module staat open; los van of Gerrie al aanstaat.
-          moduleOpen={permissions.canRead('gerrie') || permissions.gerrieNeedsConsent}
+          moduleOpen={permissions.gerrieModuleOpen}
           onChange={onSetAiConsent}
           consents={organizationContext.aiConsents}
           teamMembers={organizationContext.teamMembers}

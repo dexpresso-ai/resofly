@@ -16,9 +16,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type
 import {
   AlertTriangle, ArrowLeft, ArrowRight, BadgeCheck, Building2, Calculator, CalendarDays, Check, CheckCircle2,
   CreditCard, ExternalLink, Eye, EyeOff, Globe, KeyRound, Landmark, Layers, Loader2, Lock, LogOut, Mail, Palette,
-  Receipt, RefreshCw, Rocket, Scale, ShieldCheck, Sparkles, Trash2, Upload, UserPlus,
+  Receipt, RefreshCw, Rocket, Scale, ShieldCheck, Sparkles, Trash2, Upload, UserPlus, Users,
 } from 'lucide-react';
 import { BrandMark } from '../components/BrandMark';
+import { GerrieConsentPoints, toggleConsentPoint } from '../components/GerrieAanzetten';
+import {
+  AI_CONSENT_KEYS, AI_TERMS_VERSION, aiChoiceOf, allPointsChecked, type AiChoice, type AiConsentPointKey,
+} from '../lib/aiConsent';
 import { ClientAddressPicker, type AddressPickerState } from '../components/ClientAddressPicker';
 import { canClaim, suggestSubdomain } from '../lib/clientDomains';
 import { claimClientSubdomain, loadClientDomainsOverview, type ClientDomainsOverview } from '../services/domainService';
@@ -36,6 +40,7 @@ import {
 import {
   completeOrganizationOnboarding, loadCompanySettings, loadInvoiceMollieStatus, loadOrganizationBusinessStatus,
   loadOrganizationCreativeStatus, saveInvoiceMollieKey, saveInvoiceSendMethod, saveOnboardingSettings,
+  savePurchaseInvoiceInboxSettings, setAiConsent,
   type OnboardingSettingsPatch,
 } from '../lib/repository';
 import {
@@ -44,7 +49,7 @@ import {
 } from '../services/billingService';
 import { LEGAL_FORM_LABELS } from '../types';
 import type {
-  BillingPlan, CompanySettings, InvoiceMollieSettingsStatus, InvoiceSendMethod, LegalForm, Organization,
+  AiConsent, BillingPlan, CompanySettings, InvoiceMollieSettingsStatus, InvoiceSendMethod, LegalForm, Organization,
   OrganizationBillingOverview, OrganizationBusinessStatus, OrganizationCreativeStatus, OrganizationInvitation,
   OrganizationRole, VatReturnPeriodType,
 } from '../types';
@@ -61,6 +66,8 @@ export interface OrganizationSetupProps {
   initialBusinessStatus: OrganizationBusinessStatus | null;
   initialCreativeStatus: OrganizationCreativeStatus | null;
   initialBillingOverview: OrganizationBillingOverview | null;
+  /** Of deze gebruiker Gerrie al aan of uit zette in deze organisatie (ai_consents). */
+  initialAiConsent: AiConsent | null;
   userEmail: string | null;
   onSwitchOrganization: (organizationId: string) => Promise<void>;
   onAcceptInvitation: (invitationId: string) => Promise<void>;
@@ -142,6 +149,17 @@ function invoiceDraftFrom(settings: CompanySettings | null): InvoiceDraft {
     terms: stored && stored !== DEFAULT_TERMS ? stored : paymentTermsText(14, settings?.invoice_send_method ?? null),
     footer: settings?.invoice_footer ?? 'Bedankt voor het vertrouwen.',
   };
+}
+
+/**
+ * De keuze voor AI. Niets staat vooraf gekozen: of een AI je gegevens leest,
+ * beslist de gebruiker zelf. Wie al koos (een eerder bezoek aan deze stap),
+ * ziet die keuze terug, bij "ja" met de drie vinkjes gezet.
+ */
+interface AiDraft { choice: AiChoice | null; checked: Set<AiConsentPointKey> }
+function aiDraftFrom(consent: AiConsent | null): AiDraft {
+  const choice = aiChoiceOf(consent);
+  return { choice, checked: new Set(choice === 'on' ? AI_CONSENT_KEYS : []) };
 }
 
 /**
@@ -230,6 +248,12 @@ export function OrganizationSetup(props: OrganizationSetupProps) {
   const [vatDraft, setVatDraft] = useState<VatDraft>(() => vatDraftFrom(props.initialSettings));
   const [brandDraft, setBrandDraft] = useState<BrandDraft>(() => brandDraftFrom(props.initialSettings));
   const [invoiceDraft, setInvoiceDraft] = useState<InvoiceDraft>(() => invoiceDraftFrom(props.initialSettings));
+  const [aiDraft, setAiDraft] = useState<AiDraft>(() => aiDraftFrom(props.initialAiConsent));
+  // Wat er voor AI is opgeslagen. Apart van de rij uit de database: een
+  // database van vóór 20261115120000 geeft bij "nee" zonder eerdere rij niets
+  // terug, en dan bleef de laatste stap vragen om een keuze die al gemaakt was.
+  const [aiConsent, setAiConsentRow] = useState<AiConsent | null>(props.initialAiConsent);
+  const [aiSaved, setAiSaved] = useState<AiChoice | null>(() => aiChoiceOf(props.initialAiConsent));
   const touchedRef = useRef(false);
 
   // Eén keer vers ophalen: de kern van de app kan net van vóór een wijziging in
@@ -472,6 +496,32 @@ export function OrganizationSetup(props: OrganizationSetupProps) {
         onRefresh={refreshMollie}
         onNext={() => next()} />;
       break;
+    case 'ai':
+      content = <AiStep {...common}
+        organizationName={organizationDisplayName(settings?.company_name, settings?.trade_name) || organization.name}
+        draft={aiDraft}
+        onChange={patch => setAiDraft(d => ({ ...d, ...patch }))}
+        onSave={async () => {
+          const choice = aiDraft.choice;
+          if (!choice) throw new Error('Kies of je AI wilt gebruiken.');
+          if (choice === 'on' && !allPointsChecked(aiDraft.checked)) throw new Error('Vink alle drie de punten aan om Gerrie aan te zetten.');
+          // Dezelfde weg als Instellingen → AI (set_ai_consent): de database
+          // controleert de vinkjes en de versie van de uitleg nog een keer.
+          // Stond het al zo, dan niet nog eens (geen tweede regel in het logboek).
+          if (aiChoiceOf(aiConsent) !== choice) {
+            const row = await setAiConsent(organizationId, choice === 'on', AI_TERMS_VERSION, choice === 'on' ? [...aiDraft.checked] : []);
+            setAiConsentRow(row);
+          }
+          // Het uitlezen van inkoopfacturen met AI is een instelling van de
+          // organisatie, en de eigenaar of een beheerder richt hier in. Wie
+          // "nee" zegt tegen AI, verwacht niet dat de PDF's van zijn
+          // leveranciers wel langs een AI-model gaan. Bij "ja" staat het aan,
+          // zoals bij elke nieuwe organisatie.
+          await savePurchaseInvoiceInboxSettings(organizationId, { ai_enabled: choice === 'on' });
+          setAiSaved(choice);
+          next();
+        }} />;
+      break;
     case 'klaar':
     default:
       content = <DoneStep {...common}
@@ -484,6 +534,7 @@ export function OrganizationSetup(props: OrganizationSetupProps) {
         businessStatus={businessStatus}
         mollie={mollie}
         address={address}
+        aiChoice={aiSaved}
         onGoTo={goTo}
         onFinish={async target => {
           const displayName = organizationDisplayName(settings?.company_name, settings?.trade_name);
@@ -676,6 +727,7 @@ function WelcomeStep({ organization, isChild, steps, invitations, onAcceptInvita
     { icon: <Scale size={20} />, title: 'Wie je bent', text: 'Rechtsvorm, bedrijfsgegevens en, bij een bv, de zakelijke module.', keys: ['rechtsvorm', 'abonnement', 'bedrijf'] },
     { icon: <Calculator size={20} />, title: 'Hoe je boekhoudt', text: 'Btw, de kleineondernemersregeling en je boekjaar.', keys: ['btw'] },
     { icon: <Receipt size={20} />, title: 'Hoe je factureert', text: 'Je huisstijl, per e-mail of via Mollie, en online betalen.', keys: ['huisstijl', 'facturen', 'mollie'] },
+    { icon: <Sparkles size={20} />, title: 'Met of zonder AI', text: 'Of je Gerrie, de AI-assistent, wilt gebruiken. Dat kies je zelf.', keys: ['ai'] },
   ];
   return <StepFrame {...common}
     eyebrow="Welkom"
@@ -1538,9 +1590,62 @@ function MollieStep({ organizationId, isOwner, sendMethod, status, loadError, on
   </StepFrame>;
 }
 
-// ── 9 · Klaar ───────────────────────────────────────────────────────────────
+// ── 9 · AI ──────────────────────────────────────────────────────────────────
 
-function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLegalForm, billing, businessStatus, mollie, address, onGoTo, onFinish, ...common }: StepCommon & {
+/**
+ * Met of zonder Gerrie (2026-11-15). "Ja" vraagt dezelfde drie vinkjes als de
+ * pagina Gerrie en Instellingen → AI; "nee" legt de keuze vast, en dan is
+ * Gerrie voor deze gebruiker overal weg, ook uit het menu. Niets staat vooraf
+ * gekozen.
+ */
+function AiStep({ organizationName, draft, onChange, onSave, ...common }: StepCommon & {
+  organizationName: string;
+  draft: AiDraft;
+  onChange: (patch: Partial<AiDraft>) => void;
+  onSave: () => Promise<void>;
+}) {
+  const { busy, error, run } = useAction();
+  const allChecked = allPointsChecked(draft.checked);
+  const ready = draft.choice === 'off' || (draft.choice === 'on' && allChecked);
+  const option = (choice: AiChoice, icon: ReactNode, title: string, text: string) => {
+    const on = draft.choice === choice;
+    return <button type="button" role="radio" aria-checked={on} className={`onb-choice onb-method${on ? ' is-on' : ''}`} disabled={busy} onClick={() => onChange({ choice })}>
+      <span className="onb-choice-check" aria-hidden="true">{on && <Check size={13} strokeWidth={3} />}</span>
+      <span className="onb-method-icon" aria-hidden="true">{icon}</span>
+      <strong>{title}</strong>
+      <span className="onb-choice-text">{text}</span>
+    </button>;
+  };
+  return <StepFrame {...common}
+    icon={<Sparkles size={14} aria-hidden="true" />}
+    title="Wil je AI gebruiken?"
+    lead={<>ResoFly heeft een AI-assistent: <strong>Gerrie</strong>. Hij beantwoordt je vragen over je administratie, zet werk voor je klaar en houdt met agents dingen voor je in de gaten. Kies of je hem wilt gebruiken. Omzetten kan later altijd, bij Instellingen → AI.</>}
+    footer={<Footer onBack={common.onBack} busy={busy} primaryLabel="Opslaan en verder" disabled={!ready}
+      primary={() => void run(onSave, 'Je keuze kon niet worden opgeslagen.')} />}>
+    {error && <Notice tone="error">{error}</Notice>}
+    <div className="onb-choices is-two" role="radiogroup" aria-label="AI gebruiken">
+      {option('on', <Sparkles size={22} />, 'Ja, met Gerrie', 'Gerrie werkt met de gegevens waar jij bij mag. Eerst lees je wat dat betekent en vink je drie punten aan.')}
+      {option('off', <EyeOff size={22} />, 'Nee, zonder AI', 'Gerrie staat voor jou overal uit en is nergens in de app te zien: geen chat, geen commandocentrum, geen agents en geen "Vraag Gerrie".')}
+    </div>
+    {draft.choice === 'on' && <section className="onb-card onb-ai-points" aria-labelledby="onb-ai-title">
+      <div className="onb-card-head"><ShieldCheck size={18} aria-hidden="true" /><h3 id="onb-ai-title">Wat het betekent</h3></div>
+      <GerrieConsentPoints checked={draft.checked} disabled={busy} idPrefix="onb-ai"
+        onToggle={(key, on) => onChange({ checked: toggleConsentPoint(draft.checked, key, on) })} />
+      {!allChecked && <p className="onb-small">Vink alle drie de punten aan om verder te gaan.</p>}
+    </section>}
+    {draft.choice === 'off' && <Notice tone="info">
+      Ook het uitlezen van inkoopfacturen met AI zetten we uit voor {organizationName}: PDF's en foto's van je leveranciers wachten dan op jou, e-facturen (UBL) gaan gewoon.
+      Later aanzetten kan altijd: Gerrie bij Instellingen → AI, het uitlezen bij Instellingen → E-mail.
+    </Notice>}
+    <div className="onb-facts">
+      <span><Users size={16} aria-hidden="true" /> Dit kies je voor jezelf. Je teamleden kiezen later zelf; wie Gerrie niet mag gebruiken, stel je in bij Instellingen → Organisatie &amp; team.</span>
+    </div>
+  </StepFrame>;
+}
+
+// ── 10 · Klaar ──────────────────────────────────────────────────────────────
+
+function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLegalForm, billing, businessStatus, mollie, address, aiChoice, onGoTo, onFinish, ...common }: StepCommon & {
   organization: Organization;
   isChild: boolean;
   settings: CompanySettings | null;
@@ -1551,6 +1656,8 @@ function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLega
   mollie: InvoiceMollieSettingsStatus | null;
   /** Het webadres; null zolang het overzicht er niet is. */
   address: ClientDomainsOverview | null;
+  /** De opgeslagen keuze voor AI; null = nog niet gekozen. */
+  aiChoice: AiChoice | null;
   onGoTo: (key: OnboardingStepKey) => void;
   onFinish: (next: SetupNext) => Promise<void>;
 }) {
@@ -1559,6 +1666,7 @@ function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLega
     companyName: settings?.company_name, addressLine1: settings?.address_line1, savedLegalForm, pendingLegalForm,
     // Pas tegenhouden als bekend is dat er geen naam is; de database controleert het bij het afronden ook.
     clientSubdomain: address ? (address.subdomain?.name ?? null) : undefined,
+    aiChoice,
   });
   const ready = check.blocking.length === 0;
   const s = settings;
@@ -1572,6 +1680,7 @@ function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLega
     { step: 'btw', icon: <Calculator size={16} />, label: 'Btw', value: s?.kor_enabled ? 'KOR: geen btw' : `Aangifte ${s?.vat_return_period === 'monthly' ? 'per maand' : 'per kwartaal'}`, detail: `Boekjaar vanaf ${MONTH_NAMES[Math.max(0, Math.min(11, (s?.fiscal_year_start_month ?? 1) - 1))]}` },
     { step: 'facturen', icon: <Mail size={16} />, label: 'Facturen', value: method === 'mollie' ? 'Via Mollie, met betaallink' : method === 'email' ? 'Per e-mail' : 'Nog niet gekozen', warn: !method },
     { step: 'mollie', icon: <CreditCard size={16} />, label: 'Mollie', value: mollie?.status === 'connected' ? `Gekoppeld${mollie.mode === 'test' ? ', testmodus' : ''}` : 'Niet gekoppeld', warn: method === 'mollie' && mollie?.status !== 'connected' },
+    { step: 'ai', icon: <Sparkles size={16} />, label: 'AI', value: aiChoice === 'on' ? 'Met Gerrie' : aiChoice === 'off' ? 'Zonder AI' : 'Nog niet gekozen', detail: aiChoice === 'on' ? 'Je ging akkoord met de drie punten' : aiChoice === 'off' ? 'Gerrie staat voor jou overal uit' : undefined, warn: aiChoice === null },
   ];
   if (!isChild) rows.push({ step: 'abonnement', icon: <Layers size={16} />, label: 'Pakket', value: billing ? (billing.billing_exempt ? 'Vrijgesteld' : `${billing.plan_name}${billing.mollie_subscription_id ? '' : ', nog geen abonnement'}`) : '–', detail: businessStatus?.active ? 'Zakelijke module aan' : undefined });
 

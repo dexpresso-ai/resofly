@@ -25,9 +25,14 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0
  */
 export const AI_TERMS_VERSION = '2026-11-12';
 
-/** De zin die de gebruiker leest als Gerrie voor hem uit staat. */
+/**
+ * De zin die de gebruiker leest als Gerrie voor hem uit staat. Alleen
+ * Instellingen → AI: wie koos voor geen AI (20261115120000), heeft geen pagina
+ * Gerrie meer in het menu, en "zet hem aan onder Gerrie" stuurde hem dan naar
+ * iets wat er niet is.
+ */
 export const AI_CONSENT_REFUSAL =
-  'Gerrie staat voor jou nog uit in deze organisatie. Zet hem aan onder Gerrie of onder Instellingen → AI, en lees daar wat dat betekent.';
+  'Gerrie staat voor jou uit in deze organisatie. Zet hem aan onder Instellingen → AI, en lees daar wat dat betekent.';
 
 export interface AiConsentRow {
   enabled?: unknown;

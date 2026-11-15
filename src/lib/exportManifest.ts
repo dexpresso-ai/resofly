@@ -61,7 +61,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // van elk plan en vervangt twee functies; geen tabellen of kolommen.
 // 20261114150000 (galerij: dubbele namen) zet een index en een trigger op
 // gallery_items; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261114150000';
+// 20261115120000 (geen AI kiezen) vervangt set_ai_consent; geen tabellen of
+// kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261115120000';
 
 export type TableKind =
   | 'export'

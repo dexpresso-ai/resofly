@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  AI_CONSENT_KEYS, AI_CONSENT_POINTS, AI_TERMS_VERSION, aiConsentState, allPointsChecked, consentIsActive, consentIsOutdated,
-  consentSinceLabel,
+  AI_CONSENT_KEYS, AI_CONSENT_POINTS, AI_CONSENT_STATE_LABEL, AI_TERMS_VERSION, aiChoiceOf, aiConsentState, allPointsChecked,
+  consentIsActive, consentIsDeclined, consentIsOutdated, consentSinceLabel,
 } from './aiConsent.ts';
-import { buildPermissions } from './permissions.ts';
+import { buildPermissions, firstAllowedPage } from './permissions.ts';
 
 /**
  * Gerrie aanzetten (2026-11-12): de app-kant. De database en de edge
@@ -58,6 +58,60 @@ test('de stand per teamlid voor beheer', () => {
   assert.equal(aiConsentState(on, false), 'blocked');
   assert.equal(aiConsentState(null, true), 'off');
   assert.equal(aiConsentState({ enabled: true, terms_version: 'oud' }, true), 'outdated');
+  assert.equal(aiConsentState({ enabled: false, terms_version: AI_TERMS_VERSION }, true), 'declined');
+  assert.equal(AI_CONSENT_STATE_LABEL.off, 'Nog niet gekozen');
+  assert.equal(AI_CONSENT_STATE_LABEL.declined, 'Koos voor geen AI');
+});
+
+// ── Geen AI (2026-11-15) ─────────────────────────────────────────────────────
+
+const declined = { enabled: false, terms_version: AI_TERMS_VERSION };
+
+test('geen rij is nog niet gekozen; een rij met Gerrie uit is gekozen voor geen AI', () => {
+  assert.equal(consentIsDeclined(null), false);
+  assert.equal(consentIsDeclined(undefined), false);
+  assert.equal(consentIsDeclined(declined), true);
+  // Uitgezet onder een oudere tekst is ook "nee".
+  assert.equal(consentIsDeclined({ enabled: false, terms_version: '2025-01-01' }), true);
+  assert.equal(consentIsDeclined(on), false);
+  assert.equal(consentIsDeclined({ enabled: true, terms_version: 'oud' }), false);
+});
+
+test('de keuze in de inrichtingsstap', () => {
+  assert.equal(aiChoiceOf(null), null);
+  assert.equal(aiChoiceOf(on), 'on');
+  assert.equal(aiChoiceOf(declined), 'off');
+  // Aan onder een oude tekst: nog niet gekozen, want hij leest eerst de nieuwe uitleg.
+  assert.equal(aiChoiceOf({ enabled: true, terms_version: 'oud' }), null);
+});
+
+test('gekozen voor geen AI: Gerrie is overal dicht, ook de pagina en dus het menu', () => {
+  for (const role of ['owner', 'admin', 'member', 'viewer'] as const) {
+    const p = buildPermissions({ role }, { aiEnabled: false, aiDeclined: true });
+    assert.equal(p.canRead('gerrie'), false, role);
+    assert.equal(p.canOpenPage('gerrie'), false, role);
+    assert.equal(p.gerrieNeedsConsent, false, role);
+    assert.equal(p.gerrieDeclined, true, role);
+    // Instellingen → AI moet hem nog kunnen aanzetten: de module zelf is open.
+    assert.equal(p.gerrieModuleOpen, true, role);
+    // De rest verandert niet, en de eerste open pagina is nooit Gerrie.
+    assert.equal(p.canRead('clients'), true, role);
+    assert.notEqual(firstAllowedPage(p), 'gerrie', role);
+  }
+});
+
+test('"geen AI" telt alleen zolang Gerrie niet aan staat, en verruimt nooit iets', () => {
+  // Weer aangezet: het akkoord gaat voor.
+  const back = buildPermissions({ role: 'member' }, { aiEnabled: true, aiDeclined: true });
+  assert.equal(back.canOpenPage('gerrie'), true);
+  assert.equal(back.canRead('gerrie'), true);
+  assert.equal(back.gerrieDeclined, false);
+  // Module dicht: dan is het geen eigen keuze, maar die van beheer.
+  const closed = buildPermissions({ role: 'member', module_access: { gerrie: 'none' } }, { aiEnabled: false, aiDeclined: true });
+  assert.equal(closed.canOpenPage('gerrie'), false);
+  assert.equal(closed.gerrieDeclined, false);
+  assert.equal(closed.gerrieModuleOpen, false);
+  assert.equal(buildPermissions({ role: 'accountant' }, { aiEnabled: false, aiDeclined: true }).gerrieModuleOpen, false);
 });
 
 test('sinds wanneer, in gewone woorden', () => {
@@ -115,7 +169,8 @@ const repository = readFileSync(new URL('./repository.ts', import.meta.url), 'ut
 
 test('de app bouwt de rechten met het akkoord, en toont eerst het aanzetscherm', () => {
   assert.match(main, /const aiEnabled = consentIsActive\(organizationContext\.aiConsent\);/);
-  assert.match(main, /buildPermissions\(activeMembership, \{ aiEnabled \}\)/);
+  assert.match(main, /const aiDeclined = consentIsDeclined\(organizationContext\.aiConsent\);/);
+  assert.match(main, /buildPermissions\(activeMembership, \{ aiEnabled, aiDeclined \}\)/);
   const consentPage = main.indexOf("if (page === 'gerrie' && permissions.gerrieNeedsConsent) return <GerrieAanzettenPage");
   const commandCenter = main.indexOf("if (page === 'gerrie') return <GerrieCommandCenter");
   assert.ok(consentPage > 0 && consentPage < commandCenter, 'het aanzetscherm moet vóór het commandocentrum komen');
@@ -128,4 +183,23 @@ test('het akkoord laadt tegelijk met het lidmaatschap', () => {
   assert.match(load, /\.from\('ai_consents'\)/);
   assert.match(load, /aiConsent = rows\.find\(row => row\.user_id === currentUserId\) \?\? null;/);
   assert.match(repository, /supabase\.rpc\('set_ai_consent', \{/);
+});
+
+test('een onthouden tabblad op Gerrie zegt bij "geen AI" waarom, en niet dat beheer hem dichtzette', () => {
+  const declinedScreen = main.indexOf("if (moduleKey === 'gerrie' && permissions.gerrieDeclined) {");
+  const noAccess = main.indexOf('heeft deze module voor jou dichtgezet');
+  assert.ok(declinedScreen > 0 && declinedScreen < noAccess, 'de uitleg bij "geen AI" moet vóór "geen toegang" komen');
+  assert.match(main.slice(declinedScreen, noAccess), /openSettings\('ai'\)/);
+});
+
+test('de inrichting legt de keuze vast langs dezelfde weg als Instellingen → AI', () => {
+  const setup = readFileSync(new URL('../features/OrganizationSetup.tsx', import.meta.url), 'utf8');
+  const step = setup.slice(setup.indexOf("case 'ai':"), setup.indexOf("case 'klaar':"));
+  assert.match(step, /await setAiConsent\(organizationId, choice === 'on', AI_TERMS_VERSION, choice === 'on' \? \[\.\.\.aiDraft\.checked\] : \[\]\);/);
+  // Ja kan alleen met de drie vinkjes, net als op de pagina Gerrie.
+  assert.match(step, /if \(choice === 'on' && !allPointsChecked\(aiDraft\.checked\)\) throw/);
+  // Nee zet ook het uitlezen van inkoopfacturen met AI uit.
+  assert.match(step, /savePurchaseInvoiceInboxSettings\(organizationId, \{ ai_enabled: choice === 'on' \}\)/);
+  // Niets vooraf gekozen.
+  assert.match(setup, /function aiDraftFrom\(consent: AiConsent \| null\): AiDraft \{\s+const choice = aiChoiceOf\(consent\);/);
 });

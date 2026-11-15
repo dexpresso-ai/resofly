@@ -158,11 +158,22 @@ export interface Permissions {
   /** Is dit lid ergens beperkt? (bepaalt of we het uitlegzinnetje tonen) */
   isRestricted: boolean;
   /**
-   * De module Gerrie staat open, maar dit lid heeft Gerrie zelf nog niet
-   * aangezet (src/lib/aiConsent.ts). Dan is Gerrie overal dicht, behalve de
+   * De module Gerrie staat open, maar dit lid heeft nog niet gekozen of hij
+   * Gerrie wil (src/lib/aiConsent.ts). Dan is Gerrie overal dicht, behalve de
    * pagina Gerrie: daar staat het scherm om hem aan te zetten.
    */
   gerrieNeedsConsent: boolean;
+  /**
+   * De module Gerrie staat open, maar dit lid koos zelf voor geen AI. Dan is
+   * Gerrie overal dicht, ook de pagina en het menu. Aanzetten kan alleen nog
+   * onder Instellingen → AI.
+   */
+  gerrieDeclined: boolean;
+  /**
+   * Staat de module Gerrie open, los van de eigen keuze? Zo niet, dan heeft
+   * een owner of admin hem dichtgezet en kan dit lid hem ook niet aanzetten.
+   */
+  gerrieModuleOpen: boolean;
 }
 
 export interface PermissionOptions {
@@ -173,6 +184,12 @@ export interface PermissionOptions {
    * waar het niet speelt (het portaal, het laden van de gegevens).
    */
   aiEnabled?: boolean;
+  /**
+   * Koos dit lid zelf voor geen AI (een rij in ai_consents met Gerrie uit)?
+   * Dan verdwijnt ook de pagina Gerrie, en daarmee Gerrie uit het menu.
+   * Alleen van belang als aiEnabled false is.
+   */
+  aiDeclined?: boolean;
 }
 
 /** Rollen die mogen wijzigen (als de module het ook toestaat). Een allowlist:
@@ -226,7 +243,9 @@ export function buildPermissions(membership: MembershipLike | null | undefined, 
   const level = (module: ModuleKey): ModuleLevel => (module === 'gerrie' && !aiEnabled ? 'none' : moduleLevel(module));
   const canRead = (module: ModuleKey) => level(module) !== 'none';
   const canWrite = (module: ModuleKey) => level(module) === 'write';
-  const gerrieNeedsConsent = !aiEnabled && moduleLevel('gerrie') !== 'none';
+  const gerrieModuleOpen = moduleLevel('gerrie') !== 'none';
+  const gerrieDeclined = !aiEnabled && Boolean(options.aiDeclined) && gerrieModuleOpen;
+  const gerrieNeedsConsent = !aiEnabled && !gerrieDeclined && gerrieModuleOpen;
 
   return {
     level,
@@ -234,8 +253,11 @@ export function buildPermissions(membership: MembershipLike | null | undefined, 
     canWrite,
     canOpenPage: (page: string) => {
       const module = PAGE_MODULE[page];
-      // De pagina Gerrie blijft open zolang de module open is: daar zet je hem aan.
-      if (module === 'gerrie') return moduleLevel('gerrie') !== 'none';
+      // De pagina Gerrie blijft open zolang de module open is en het lid nog
+      // niet koos: daar zet je hem aan. Koos hij voor geen AI, dan is ook de
+      // pagina dicht. Zo verdwijnt Gerrie uit de zijbalk, Zenit, de duimbalk
+      // en het zoeken, die allemaal naar canOpenPage kijken.
+      if (module === 'gerrie') return gerrieModuleOpen && !gerrieDeclined;
       return module ? canRead(module) : Boolean(role);
     },
     canWritePage: (page: string) => {
@@ -249,6 +271,8 @@ export function buildPermissions(membership: MembershipLike | null | undefined, 
     isRestricted: Boolean(role) && role !== 'owner' && role !== 'admin'
       && MODULE_KEYS.some(key => moduleLevel(key) !== 'write'),
     gerrieNeedsConsent,
+    gerrieDeclined,
+    gerrieModuleOpen,
   };
 }
 

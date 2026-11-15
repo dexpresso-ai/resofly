@@ -89,6 +89,32 @@ export function consentIsOutdated(row: Pick<AiConsent, 'enabled' | 'terms_versio
   return Boolean(row && row.enabled === true && row.terms_version !== AI_TERMS_VERSION);
 }
 
+/**
+ * Koos deze gebruiker zelf voor geen AI? Dan staat er een rij met Gerrie uit:
+ * bij het inrichten "nee" gezegd, op de pagina Gerrie "liever niet", of in de
+ * instellingen uitgezet (migratie 20261115120000). Geen rij is iets anders:
+ * nog niet gekozen.
+ *
+ * Bij "geen AI" is Gerrie overal weg, ook uit het menu. Bij "nog niet gekozen"
+ * staat Gerrie wel in het menu, met het scherm om hem aan te zetten.
+ */
+export function consentIsDeclined(row: Pick<AiConsent, 'enabled'> | null | undefined): boolean {
+  return Boolean(row && row.enabled === false);
+}
+
+/**
+ * De keuze in de inrichtingsstap: aan, geen AI, of nog niet gekozen (null).
+ * Aan onder een oudere tekst telt als nog niet gekozen: dan leest hij eerst de
+ * nieuwe uitleg.
+ */
+export type AiChoice = 'on' | 'off';
+
+export function aiChoiceOf(row: Pick<AiConsent, 'enabled' | 'terms_version'> | null | undefined): AiChoice | null {
+  if (consentIsActive(row)) return 'on';
+  if (consentIsDeclined(row)) return 'off';
+  return null;
+}
+
 /** Zijn alle drie de punten aangevinkt? Dan pas mag de knop. */
 export function allPointsChecked(checked: ReadonlySet<string> | readonly string[]): boolean {
   const set = checked instanceof Set ? checked : new Set(checked as readonly string[]);
@@ -105,20 +131,23 @@ export function consentSinceLabel(row: Pick<AiConsent, 'accepted_at'> | null | u
 
 /**
  * Hoe Gerrie voor een teamlid staat, voor het overzicht van een owner of admin.
+ * `off`: nog niet gekozen. `declined`: koos zelf voor geen AI.
  * `blocked`: de module Gerrie staat voor hem dicht, dus aanzetten kan hij niet.
  */
-export type AiConsentState = 'on' | 'off' | 'outdated' | 'blocked';
+export type AiConsentState = 'on' | 'off' | 'declined' | 'outdated' | 'blocked';
 
 export function aiConsentState(row: Pick<AiConsent, 'enabled' | 'terms_version'> | null | undefined, moduleOpen: boolean): AiConsentState {
   if (!moduleOpen) return 'blocked';
   if (consentIsActive(row)) return 'on';
   if (consentIsOutdated(row)) return 'outdated';
+  if (consentIsDeclined(row)) return 'declined';
   return 'off';
 }
 
 export const AI_CONSENT_STATE_LABEL: Record<AiConsentState, string> = {
   on: 'Gerrie aan',
-  off: 'Gerrie uit',
+  off: 'Nog niet gekozen',
+  declined: 'Koos voor geen AI',
   outdated: 'Moet de nieuwe uitleg nog lezen',
   blocked: 'Geen toegang tot Gerrie',
 };

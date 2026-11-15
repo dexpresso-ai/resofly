@@ -126,6 +126,25 @@ test('niemand schrijft zelf in ai_consents; lezen: jezelf of beheer', () => {
   assert.match(sql, /select public\.apply_accountant_fence\('ai_consents'\);/);
 });
 
+test('"nee" zonder eerdere rij wordt vastgelegd: zo ziet de app een keuze, geen leegte', () => {
+  // 20261115120000: zonder rij zag de app "nog niet gekozen" en bleef Gerrie
+  // in het menu staan, ook na "nee" bij het inrichten.
+  const { file, body } = latestDefinition('set_ai_consent');
+  assert.ok(file >= '20261115120000', `set_ai_consent komt uit ${file}`);
+  const off = body.slice(body.indexOf('-- Uitzetten.'));
+  // Ook hier altijd de ingelogde gebruiker, met Gerrie uit en zonder akkoord.
+  assert.match(off, /values\s*\(p_organization_id, v_user, false, public\.ai_terms_version\(\), '\{\}', null, now\(\)\)/);
+  assert.match(off, /on conflict \(organization_id, user_id\) do update\s+set enabled = false,\s+disabled_at = now\(\)/);
+  // Nog eens "nee": niets te doen, en geen tweede regel in het logboek.
+  const again = off.indexOf('if found and not v_row.enabled then');
+  assert.ok(again > 0 && again < off.indexOf("'ai_disabled'"), 'een tweede "nee" geeft een tweede regel in het logboek');
+  // Het logboek zegt of Gerrie aan stond.
+  assert.match(off, /jsonb_build_object\('agents_gepauzeerd', v_paused, 'was_aan', v_was_on\)/);
+  const migration = read(`../../migrations/${file}`);
+  assert.match(migration, /revoke all on function public\.set_ai_consent\(uuid, boolean, text, text\[\]\) from public, anon;/);
+  assert.match(migration, /grant execute on function public\.set_ai_consent\(uuid, boolean, text, text\[\]\) to authenticated;/);
+});
+
 test('aan- en uitzetten komen in het logboek', () => {
   assert.match(sql, /v_nieuw text\[\] := array\['ai_enabled', 'ai_disabled'\];/);
   const { body } = latestDefinition('set_ai_consent');
