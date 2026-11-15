@@ -138,7 +138,8 @@ hij in, net als voorheen.
   `weekRangeLabel`, `pickerWeeks`, `weekMeter`, `countActiveFilters`. Zonder
   imports, dus rechtstreeks onder `npm test`.
 - `src/features/WeekPlannerParts.tsx`: `PlannerPopover` (knop + paneel, met
-  `useBackStep`), `WeekPicker`, `Segmented`.
+  `useBackStep`), `WeekPicker` (elke week is één knop met een volledige naam
+  voor de schermlezer), `Segmented`.
 - `src/features/WeekPlanner.tsx`: de kop in plaats van `SearchFilterPanel`;
   `PlannerView`, `DayMode` (bewaard in de voorkeuren), het tabblad van de
   werkvoorraad naar boven getild (`trayTab`); `CarryOverPanel` is
@@ -155,7 +156,8 @@ Geen migratie, geen edge function: alleen de app.
 
 ## Getest
 
-- `npm run typecheck` schoon, `npm test` 1913 groen (7 nieuw).
+- `npm run typecheck` schoon, `npm test` groen (1913 vóór en 1918 na het
+  samenvoegen met staging; 7 nieuw in `weekView.test.ts`).
 - Interactietest met Playwright tegen de mock-backend, met een eigen
   geheugenopslag voor taken zodat schrijven en teruglezen echt werkt. 30 van
   de 30 stappen goed: rooster opent op 08:00; geen filtermelding zonder
@@ -172,6 +174,8 @@ Geen migratie, geen edge function: alleen de app.
 - `npm run test:mobile -- --theme=both --pages=weekplanner,calendar,calendar-event,calendar-task,calendar-month`:
   30 pagina's, 0 problemen. Ook `meeting-booking`, `public-booking` en
   `dashboard` (die delen het rooster of de kop): 18 pagina's, 0 problemen.
+- `npm run test:mobile -- --theme=both` over alle pagina's: 680 gemeten,
+  0 problemen.
 - `npm run test:loading`: alle controles geslaagd.
 - `npm run test:terugknop`: 12 gelukt, 0 mislukt.
 - `npm run build` slaagt.

@@ -101,8 +101,10 @@ export function WeekPicker({ anchor, today, onPick }: {
       <span className="wpk-month">{MONTHS_LONG[month.month]} {month.year}</span>
       <button type="button" className="wpk-step" onClick={() => shiftMonth(1)} aria-label="Volgende maand"><ChevronRight size={15}/></button>
     </div>
-    <div className="wpk-grid" role="grid" aria-label={`Weken in ${MONTHS_LONG[month.month]} ${month.year}`}>
-      <div className="wpk-row wpk-dow" role="row" aria-hidden="true">
+    {/* Een rij knoppen, geen tabel: elke week is één knop met een volledige
+        naam ("Week 46, 9 november tot en met 15 november"). */}
+    <div className="wpk-grid" role="group" aria-label={`Weken in ${MONTHS_LONG[month.month]} ${month.year}`}>
+      <div className="wpk-row wpk-dow" aria-hidden="true">
         <span>wk</span>{['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'].map(day => <span key={day}>{day}</span>)}
       </div>
       {weeks.map(monday => {
@@ -111,7 +113,6 @@ export function WeekPicker({ anchor, today, onPick }: {
         const last = days[6];
         return <button
           type="button"
-          role="row"
           key={key}
           className={`wpk-row wpk-week${key === anchorKey ? ' is-on' : ''}${key === todayWeekKey ? ' is-now' : ''}`}
           aria-current={key === anchorKey ? 'true' : undefined}
@@ -120,6 +121,7 @@ export function WeekPicker({ anchor, today, onPick }: {
         >
           <span className="wpk-wn">{isoWeekNumber(monday)}</span>
           {days.map(day => <span
+            aria-hidden="true"
             key={formatISODate(day)}
             className={`wpk-day${day.getMonth() !== month.month ? ' is-out' : ''}${isSameDay(day, today) ? ' is-today' : ''}`}
           >{day.getDate()}</span>)}
