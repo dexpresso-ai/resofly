@@ -1430,13 +1430,21 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
   // en op verzoek van de pagina (knop "Vandaag") via `autoScrollKey`. Bewust NIET
   // bij het bladeren naar een andere week: daar blijf je op dezelfde hoogte staan,
   // zodat het bladeren als één doorlopende beweging voelt (net als Google).
-  useEffect(() => {
+  //
+  // Wachten op de rijhoogte: die wordt pas na de eerste render gemeten. Eerder
+  // rekende dit met de standaardhoogte van vóór die meting, en kwam het rooster
+  // daardoor uren naast "nu" uit (de weekplanner opende om 12:30 terwijl het
+  // 11:28 was, en de ochtend stond buiten beeld). Nu staat het verzoek klaar tot
+  // er een hoogte is, en rekent het met die hoogte.
+  const autoScrolledForRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
     const scrollEl = scrollRef.current;
-    if (!scrollEl) return;
+    const request = `${days.length}|${autoScrollKey}`;
+    if (!scrollEl || effectiveRow == null || autoScrolledForRef.current === request) return;
+    autoScrolledForRef.current = request;
 
-    const firstSlot = scrollEl.querySelector<HTMLElement>('.tb-time-label');
     const grid = scrollEl.querySelector<HTMLElement>('.tb-grid');
-    const slotHeight = firstSlot?.getBoundingClientRect().height ?? 24;
+    const slotHeight = effectiveRow;
     const gridOffsetTop = grid?.offsetTop ?? 0;
     // Google-gedrag: staat vandaag in beeld, open dan met de "nu"-lijn op ±30%
     // van de hoogte; anders op het begin van de werkdag.
@@ -1447,14 +1455,17 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
       target = gridOffsetTop + nowFraction * slotHeight * TOTAL_SLOTS - scrollEl.clientHeight * 0.3;
     } else {
       // Op het begin van het venster dat in beeld past (in de agenda 07:00), zodat
-      // de hele werkdag plus de randen er in één keer staan.
+      // de hele werkdag plus de randen er in één keer staan. Zonder de hoogte van
+      // de koppen erbij: die plakken bovenaan en liggen dus al óver het rooster.
+      // Met die hoogte erbij verdween het begin van de werkdag eronder.
       const fitStartSlot = ((fitWindow.start - HOUR_START) * 60) / SLOT_MINUTES;
-      target = gridOffsetTop + fitStartSlot * slotHeight - 2;
+      // Tien pixels ruimte: het uurlabel staat half bóven zijn lijn.
+      target = fitStartSlot * slotHeight - 10;
     }
     // Instant (niet smooth): de agenda opent direct op de juiste positie; de
     // CSS `scroll-behavior:smooth` op de scroller zou de sprong anders annuleren.
     scrollEl.scrollTo({ top: Math.max(0, Math.round(target)), behavior: 'instant' });
-  }, [days.length, autoScrollKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Tijd selecteren door te slepen (muis, pen én vinger) ───────────────
   // Eén pointer-gebaar voor alle invoerapparaten. Op de muis begint de selectie
