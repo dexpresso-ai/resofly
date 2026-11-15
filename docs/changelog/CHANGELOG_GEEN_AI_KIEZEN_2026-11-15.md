@@ -127,7 +127,11 @@ onthoudt de keuze zelf). Gerrie staat dan alleen nog in het menu tot de migratie
   haalt Gerrie uit het menu, en via **Naar Instellingen → AI** zet je hem weer aan.
 - `npm run test:mobile -- --theme=both`, met vijf nieuwe pagina's: `inrichten-ai`,
   `inrichten-ai-ja`, `inrichten-ai-nee`, `gerrie-uit` en `settings-ai-geen`. `inrichten-welkom`
-  meet nu de vier kaarten.
+  meet nu de vier kaarten. Van de 650 metingen gaven er twee (dashboard en W&V, donker op de
+  telefoon) "app-shell niet gerenderd". Die liepen terwijl tegelijk de stromen-tests en
+  `deno check` draaiden. Los opnieuw gedraaid, op telefoon, tablet en liggend in beide thema's,
+  waren ze groen.
+- `npm run test:loading`: groen.
 - `supabase db start`: de keuze vanaf nul, met daarna in die database als verschillende
   gebruikers: "nee" zonder rij geeft een rij met Gerrie uit en één regel in het logboek
   (`was_aan: false`); nog eens "nee" geen tweede; een teamlid dat "nee" zegt, pauzeert zijn
