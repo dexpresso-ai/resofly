@@ -6194,14 +6194,111 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .status-pill.gal-status-published{background:rgba(var(--ok-rgb),.14);color:var(--accent-g)}
 .status-pill.gal-status-archived{background:var(--bg4);color:var(--muted)}
 
-/* ── Beheer: detailkop + gereedschap ── */
-.gal-detail-title{display:flex;align-items:center;gap:10px;min-width:0}
-.gal-detail-title h3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gal-back{background:none;border:0;color:var(--muted2);font:inherit;font-size:12px;cursor:pointer;padding:4px 6px;border-radius:7px;white-space:nowrap}
-.gal-back:hover{color:var(--text);background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)))}
-.gal-detail-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.gal-fav-filter{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--bg3);color:var(--accent-r);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
-.gal-fav-filter.active{border-color:var(--accent-r);background:rgba(var(--danger-rgb),.12)}
+/* ── Beheer: de kop van een album (2026-11-15) ───────────────────────────────
+   Twee lagen. Boven: welke galerij dit is (naam groot, daaronder status en
+   feiten in gewone tekst) en wat je richting de klant doet. Onder, gescheiden
+   door een haarlijn: wat je van de foto's ziet en hoe ze geordend zijn. Tot
+   deze datum stond alles los op één rij en kneep de naam weg tot "Ankie …";
+   bovendien maakte `.client-panel-head span` van elke span een pil, ook van
+   de tekst ín de opslagmeter. Deze kop staat daarom buiten die klasse.
+   z-index 8: boven de zwevende knoppen van het album (.galv-actions, 6), anders
+   lagen afspelen, grootbeeld en downloaden over een open menu heen. */
+.gal-head{position:relative;z-index:8;display:flex;flex-direction:column;gap:14px;margin-bottom:16px}
+.gal-head-main{display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px 20px}
+.gal-head-id{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0;flex:1 1 280px}
+.gal-crumb{display:inline-flex;align-items:center;gap:2px;margin:0 0 0 -6px;padding:3px 9px 3px 4px;border:0;border-radius:var(--r-sm);background:none;color:var(--ink-3);font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;transition:background var(--t-1) var(--ease),color var(--t-1) var(--ease)}
+.gal-crumb:hover{color:var(--ink);background:var(--surface-2)}
+.gal-crumb:focus-visible{outline:none;box-shadow:var(--ring)}
+.gal-head-title{max-width:100%;margin:0;font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.25;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gal-head-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--ink-3)}
+.gal-head-fact{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.gal-head-fact.is-warn{color:var(--danger);font-weight:600}
+/* De status als stip met woord: grijs is concept, groen is te zien voor de klant. */
+.gal-state{display:inline-flex;align-items:center;gap:6px;padding:3px 10px 3px 8px;border-radius:var(--r-pill);font-size:12px;font-weight:600;color:var(--ink-2);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line)}
+.gal-state::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.5}
+.gal-state.is-published{color:var(--ok);background:rgba(var(--ok-rgb),.1);box-shadow:inset 0 0 0 1px rgba(var(--ok-rgb),.28)}
+.gal-state.is-published::before{opacity:1;box-shadow:0 0 0 3px rgba(var(--ok-rgb),.2)}
+
+.gal-head-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-left:auto}
+.gal-act{display:inline-flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap}
+/* Publiceren is groen, zoals de status die het oplevert; uploaden blijft de
+   gouden hoofdknop. Twee gouden knoppen naast elkaar zeiden niet welke eerst. */
+.app .gal-act.gal-publish{color:var(--ok);background:rgba(var(--ok-rgb),.08);border-color:rgba(var(--ok-rgb),.36)}
+.app .gal-act.gal-publish:hover:not(:disabled){color:var(--ok);background:rgba(var(--ok-rgb),.15);border-color:rgba(var(--ok-rgb),.55)}
+
+/* Onder de kop: wat je ziet (alles of favorieten) en Ordenen. */
+.gal-bar{display:flex;align-items:center;gap:10px;padding-top:14px;border-top:1px solid var(--line)}
+.gal-bar-end{margin-left:auto}
+.gal-seg{display:inline-flex;flex:none;gap:2px;padding:3px;border-radius:var(--r-md);background:var(--well);box-shadow:inset 0 0 0 1px var(--line)}
+.gal-seg-btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;border:0;border-radius:var(--r-sm);background:transparent;color:var(--ink-3);font:inherit;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background var(--t-1) var(--ease),color var(--t-1) var(--ease)}
+.gal-seg-btn:hover{color:var(--ink)}
+.gal-seg-btn:focus-visible{outline:none;box-shadow:var(--ring)}
+.gal-seg-btn[aria-pressed="true"]{background:var(--raised);color:var(--ink);box-shadow:var(--shadow-1)}
+.gal-seg-btn.is-fav svg{color:var(--danger)}
+.gal-seg-n{min-width:20px;padding:1px 6px;border-radius:var(--r-pill);background:var(--surface-3);color:var(--ink-3);font-size:11.5px;font-weight:600;text-align:center;font-variant-numeric:tabular-nums}
+.gal-seg-btn[aria-pressed="true"] .gal-seg-n{color:var(--ink-2)}
+
+/* ── Uitklapmenu van de galerij (GalleryMenu) ── */
+.gal-menu-box{position:relative;display:inline-flex}
+.gal-menu-trigger{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap}
+.gal-menu-trigger.is-icon{min-width:34px;padding-left:8px;padding-right:8px}
+.app .gal-menu-trigger.is-on{border-color:rgba(var(--accent-rgb),.6);background:rgba(var(--accent-rgb),.12);color:var(--ink)}
+.gal-menu-caret{opacity:.6;transition:transform var(--t-2) var(--ease)}
+.gal-menu-trigger[aria-expanded="true"] .gal-menu-caret{transform:rotate(180deg)}
+.gal-menu-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:var(--r-pill);background:var(--accent);color:var(--on-accent);font-size:11px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.gal-menu-trigger.is-icon .gal-menu-count{position:absolute;top:-6px;right:-6px}
+.gal-menu{position:absolute;top:calc(100% + 8px);right:0;z-index:70;width:min(304px,calc(100vw - 32px));padding:6px;border:1px solid var(--line-2);border-radius:var(--r-xl);background:var(--surface);color:var(--ink);box-shadow:var(--shadow-pop);text-align:left;transform-origin:top right;animation:galMenuIn var(--t-2) var(--ease) both}
+@keyframes galMenuIn{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
+.gal-menu-section+.gal-menu-section{margin-top:5px;padding-top:5px;border-top:1px solid var(--line)}
+.gal-menu-head{padding:7px 10px 4px;font-size:11.5px;font-weight:600;color:var(--ink-3)}
+.gal-menu-item{display:flex;align-items:center;gap:11px;width:100%;min-height:40px;padding:6px 8px;border:0;border-radius:12px;background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer;transition:background var(--t-1) var(--ease)}
+.gal-menu-item:hover:not(:disabled),.gal-menu-item:focus-visible{background:var(--surface-2);outline:none}
+.gal-menu-item:focus-visible{box-shadow:inset 0 0 0 2px rgba(var(--accent-rgb),.55)}
+.gal-menu-item:disabled{opacity:.5;cursor:not-allowed}
+.gal-menu-ico{display:grid;place-items:center;flex:none;width:32px;height:32px;border-radius:10px;background:var(--surface-2);color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--line)}
+.gal-menu-item:hover:not(:disabled) .gal-menu-ico{background:var(--surface)}
+.gal-menu-item.is-checked .gal-menu-ico{background:rgba(var(--accent-rgb),.16);color:var(--accent-ink);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.38)}
+.gal-menu-item.is-danger{color:var(--danger)}
+.gal-menu-item.is-danger .gal-menu-ico{background:rgba(var(--danger-rgb),.1);color:var(--danger);box-shadow:inset 0 0 0 1px rgba(var(--danger-rgb),.24)}
+.gal-menu-item.is-danger:hover:not(:disabled){background:rgba(var(--danger-rgb),.08)}
+.gal-menu-text{display:flex;flex-direction:column;flex:1;min-width:0;line-height:1.25}
+.gal-menu-text b{font-size:13.5px;font-weight:600}
+.gal-menu-text small{margin-top:1px;font-size:11.5px;color:var(--ink-3)}
+.gal-menu-item.is-danger .gal-menu-text small{color:var(--ink-3)}
+.gal-menu-check{flex:none;color:var(--accent-ink)}
+.gal-menu-foot{margin-top:5px;padding:10px 10px 6px;border-top:1px solid var(--line)}
+/* De opslagmeter onder "Meer". */
+.gal-meter{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--ink-3)}
+.gal-meter-row{display:flex;align-items:center;gap:6px}
+.gal-meter-row b{margin-left:auto;color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.gal-meter-bar{display:block;height:6px;border-radius:var(--r-pill);background:var(--surface-3);overflow:hidden}
+.gal-meter-bar span{display:block;height:100%;border-radius:inherit;background:var(--accent)}
+.gal-meter.is-warn .gal-meter-bar span{background:var(--danger)}
+.gal-meter small{font-size:11px}
+
+/* ── Lijst: per album een menu (Bewerken, Verwijderen) ── */
+.gal-list-row{position:relative}
+.gal-list-row.has-menu .gal-list-card{padding-right:60px}
+.gal-list-menu{position:absolute;top:0;bottom:0;right:12px;align-items:center}
+.gal-list-menu .gal-menu{top:calc(50% + 24px)}
+/* Het open menu moet over de albums eronder vallen, niet eronder. De focus
+   staat dan in het menu; :has is er voor wie met de muis klikt in Safari. */
+.gal-list-row:focus-within,.gal-list-row:has(.gal-menu){z-index:3}
+
+/* ── Het venster "Album verwijderen?" ── */
+.gal-modal.gal-del{max-width:470px;width:min(470px,94vw)}
+.gal-del .gal-modal-head{align-items:center}
+.gal-del-ico{display:grid;place-items:center;flex:none;width:38px;height:38px;border-radius:12px;background:rgba(var(--danger-rgb),.12);color:var(--danger)}
+.gal-del-intro{margin:0;font-size:13.5px;color:var(--ink-2)}
+.gal-del-list{display:flex;flex-direction:column;margin:0;padding:0;list-style:none;border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden}
+.gal-del-list li{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;font-size:13px;line-height:1.4;color:var(--ink-2)}
+.gal-del-list li+li{border-top:1px solid var(--line)}
+.gal-del-list svg{flex:none;margin-top:2px;color:var(--ink-3)}
+.gal-del-list strong{color:var(--ink);font-weight:600}
+.gal-del-warn{margin:0;font-size:12.5px;color:var(--ink-3)}
+.app .gal-del-confirm{gap:7px;font-weight:600;background:rgba(var(--danger-rgb),.1)}
+.app .gal-del-confirm:hover:not(:disabled){background:rgba(var(--danger-rgb),.17)}
+
 .gal-spin{animation:galSpin 1s linear infinite}
 @keyframes galSpin{to{transform:rotate(360deg)}}
 
@@ -6210,6 +6307,12 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .gal-storage-bar{display:inline-block;width:64px;height:5px;border-radius:3px;background:rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)));overflow:hidden}
 .gal-storage-bar span{display:block;height:100%;border-radius:3px;background:var(--accent)}
 .gal-storage-bar.warn span{background:var(--accent-r)}
+/* In de lijstkop maakt `.client-panel-head span` van elke span een pil, ook
+   van de tekst en het balkje in de meter: een pil in een pil. */
+.client-panel-head .gal-storage span{padding:0;border:0;border-radius:3px;background:none;color:inherit;font-size:inherit}
+.client-panel-head .gal-storage .gal-storage-bar{background:rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)))}
+.client-panel-head .gal-storage .gal-storage-bar span{background:var(--accent)}
+.client-panel-head .gal-storage .gal-storage-bar.warn span{background:var(--accent-r)}
 
 /* ── Upload-wachtrij ── */
 .gal-queue{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:var(--bg2)}
@@ -6658,13 +6761,14 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .gal-detail.is-fullscreen{position:fixed;inset:0;z-index:200;margin:0;border:0;border-radius:0;overflow:auto;-webkit-overflow-scrolling:touch;padding:18px 20px 28px;background:var(--bg)}
 /* De kop blijft plakken: zonder die knop kom je er in een lange galerij niet
    meer uit zonder naar boven te scrollen. */
-.gal-detail.is-fullscreen .client-panel-head{position:sticky;top:0;z-index:3;margin:-18px -20px 14px;padding:12px 20px;background:var(--bg);border-bottom:1px solid var(--border)}
+.gal-detail.is-fullscreen .gal-head{position:sticky;top:0;z-index:8;margin:-18px -20px 14px;padding:12px 20px;background:var(--bg);border-bottom:1px solid var(--line)}
+.gal-detail.is-fullscreen .gal-bar{padding-top:10px}
 /* De app zet overlays op 42px zodat de tabbalk zichtbaar blijft; in deze stand
    is die tabbalk juist wég, dus zou daar een strook galerij doorheen piepen. */
 .gal-detail.is-fullscreen .bk-modal-backdrop{top:0}
 @media(max-width:760px){
   .gal-detail.is-fullscreen{padding:12px 12px 22px}
-  .gal-detail.is-fullscreen .client-panel-head{margin:-12px -12px 10px;padding:10px 12px}
+  .gal-detail.is-fullscreen .gal-head{margin:-12px -12px 10px;padding:10px 12px}
 }
 
 /* ── Downloadmenu: doorzichtige hamburger over de opening ────────────────────
@@ -6893,8 +6997,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .galv-section-billboard .galv-video-card{flex-basis:calc(var(--galv-vcard,300px) * .83)}
   .galv-lightbox{padding:10px}
   .galv-lightbox-nav{width:38px;height:38px}
-  .gal-detail-tools{gap:6px}
-  .gal-detail-title h3{font-size:15px}
+  .gal-head-title{font-size:19px}
   /* Het instellingenvenster wordt een bladzijde vanaf de onderkant — dezelfde
      vorm als de rest van de app op een telefoon. */
   .gal-modal-shell{padding:0;align-items:flex-end}
@@ -8421,18 +8524,30 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* 37 ── Galerij-werkbalk ──────────────────────────────────────────────────
-   `.gal-detail-tools` bevat tot acht knoppen (openen, delen, categorieën,
-   instellingen, uploaden…). Op 343px met ~110px per knop wordt dat vier à
-   vijf rijen werkbalk vóór de eerste foto — op een pagina die juist over
-   de foto's gaat. Eén veegbare regel houdt alle acties bereikbaar. */
+   Tot 2026-11-15 een veegbare strook van acht knoppen. Nu staat er nog maar
+   een handvol in de kop (de rest zit onder "Meer" en "Ordenen"), en dat past
+   op één regel als Instellingen en Delen alleen hun icoon tonen. Het woord
+   blijft er voor een schermlezer: weggeknipt, niet weggehaald. Publiceren en
+   Uploaden delen de rest van de breedte, zonder icoon. */
 @media(max-width:760px){
-  .gal-detail-tools{
-    flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;
-    width:100%;padding-bottom:2px;scrollbar-width:none;
-  }
-  .gal-detail-tools::-webkit-scrollbar{display:none}
-  .gal-detail-tools>*{flex:0 0 auto}
-  .gal-detail-tools .btn{white-space:nowrap}
+  .gal-head{gap:12px;margin-bottom:12px}
+  .gal-head-main{gap:12px}
+  .gal-head-actions{width:100%;margin-left:0;gap:6px;justify-content:flex-start}
+  .gal-head-actions .gal-act.is-compact{min-width:40px;padding-left:10px;padding-right:10px}
+  .gal-head-actions .gal-act.is-compact .gal-act-label{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .gal-head-actions .gal-publish,.gal-head-actions .gal-upload{flex:1 1 auto;padding-left:10px;padding-right:10px}
+  .gal-head-actions .gal-publish svg,.gal-head-actions .gal-upload svg:not(.gal-spin){display:none}
+  .gal-head-actions .gal-menu-trigger.is-icon{min-width:40px}
+  .gal-bar{gap:8px;padding-top:12px}
+  .gal-seg-btn{padding:0 9px}
+  /* Op een smalle telefoon past "Favorieten" er niet naast Ordenen: dan het
+     hartje met het aantal. Het woord blijft voor een schermlezer. */
+  .gal-bar .gal-menu-caret{display:none}
+  .gal-list-row.has-menu .gal-list-card{padding-right:56px}
+  .gal-list-menu{right:8px}
+}
+@media(max-width:420px){
+  .gal-seg-label{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 }
 
 /* 38 ── Lijstweergave van de agenda ───────────────────────────────────────

@@ -33,7 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
-import { installMock, storageScript, seed } from './mock/backend.mjs';
+import { installMock, storageScript, seed, GALLERY_ID } from './mock/backend.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -278,6 +278,26 @@ const PAGES = {
   'inrichten-mollie': setupPage('mollie'),
   'inrichten-klaar': setupPage('klaar'),
   'inrichten-wachten': { page: 'dashboard', mock: { onboarding: true, role: 'member' }, shell: '.onb-pending' },
+  // 2026-11-15 — een album in de werkruimte: in het tabblad Galerij van het
+  // project, en als eigen tabblad. De kop en de werkbalk staan boven de
+  // foto's; die mogen ze niet weer naar beneden drukken.
+  'project-gallery': {
+    page: 'project', projectId: seed.projects[0].id, mock: { gallery: true },
+    prepare: ['.client-tab-btn:has-text("Galerij")', '.gal-list-card'],
+  },
+  'gallery-tab': { page: 'gallery', projectId: seed.projects[0].id, galleryId: GALLERY_ID, mock: { gallery: true } },
+  // Het menu Ordenen open: het mag nergens buiten beeld vallen.
+  'gallery-ordenen': { page: 'gallery', projectId: seed.projects[0].id, galleryId: GALLERY_ID, mock: { gallery: true }, prepare: '.gal-bar .gal-menu-trigger' },
+  // De lijst met albums, met het menu achter een album open (Bewerken,
+  // Verwijderen), en het venster dat vraagt of het album echt weg mag.
+  'galerijen-menu': {
+    page: 'project', projectId: seed.projects[0].id, mock: { gallery: true },
+    prepare: ['.client-tab-btn:has-text("Galerij")', '.gal-list-row:last-child .gal-list-menu .gal-menu-trigger'],
+  },
+  'galerij-verwijderen': {
+    page: 'project', projectId: seed.projects[0].id, mock: { gallery: true },
+    prepare: ['.client-tab-btn:has-text("Galerij")', '.gal-list-row:last-child .gal-list-menu .gal-menu-trigger', '.gal-menu-item.is-danger'],
+  },
 };
 
 /**
