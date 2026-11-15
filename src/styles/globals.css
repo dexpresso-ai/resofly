@@ -10656,6 +10656,25 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
 .proj-fin-col .client-finance-status{grid-area:status;justify-self:end}
 @media(max-width:640px){.proj-fin-cols{grid-template-columns:1fr}}
 
+/* Notities & documenten en Albums (2026-11-15). Dezelfde rij als de
+   eerstvolgende taken, met een icoontje in de kleur van het soort: notities
+   paars, documenten in de kleur van hun bestandstype, albums in die van hun
+   formaat. */
+.proj-recent-head{flex-wrap:wrap;row-gap:6px}
+.proj-recent-links{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.proj-recent-row,.proj-album-row{grid-template-columns:auto minmax(0,1fr) auto}
+.proj-recent-icon{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;flex-shrink:0;background:color-mix(in srgb,currentColor 13%,transparent)}
+.proj-recent-time{font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.proj-recent-new{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+/* Gewone tekst, geen flex: als flex brak de regel tussen de stukjes en bleef
+   op de telefoon een los "·" achter, met de deellink alleen eronder. */
+.proj-album-row .proj-next-meta svg{vertical-align:-2px;margin-right:2px}
+.proj-album-keep{white-space:nowrap}
+.proj-album-row .status-pill{margin-top:0;font-size:11px;white-space:nowrap}
+
+/* Logboek van het project: de regels van het dashboardblok in een projectkaart. */
+.proj-log-error{display:flex;flex-direction:column;align-items:flex-start;gap:8px;font-size:12px;color:var(--muted2);line-height:1.45}
+
 /* Taken per status: één balk plus vier tellers. */
 .proj-status-bar{display:flex;gap:2px;height:8px;border-radius:999px;overflow:hidden;background:var(--bg4);margin-bottom:10px}
 .proj-status-seg{flex:0 1 0;min-width:4px;background:var(--muted)}

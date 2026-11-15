@@ -8,16 +8,21 @@ import { DetailTabs } from '../components/DetailTabs';
 import type { DetailTab } from '../components/DetailTabs';
 import { dateNL, euro, formatMinutes, priorityLabel, total } from '../lib/format';
 import { memberColor, memberInitials, memberName } from '../lib/members';
-import { RelatedNotes } from './Notes';
-import { RelatedDocuments } from './Documents';
+import { RelatedNotes, getNoteTypeLabel } from './Notes';
+import { RelatedDocuments, getDocumentTypeLabel } from './Documents';
 import { ProjectQuotesPanel } from './Finance';
 import { ContractStatusBadge } from './Contracts';
 import { ProjectTimeline } from './ProjectTimeline';
 import { TimeEntryModal, timeEntryValueCents } from './TimeTracking';
-import { GalleryTab } from './ProjectGallery';
+import { GalleryTab, formatConfig, galleryFormatLabels, galleryStatusLabels } from './ProjectGallery';
+import { ProjectAuditFeed } from './AuditLog';
+import { DocumentGlyph, documentAccentColor, officeDocumentLabel } from '../components/DriveGlyphs';
+import { relativeTime, type AuditTarget } from '../lib/auditLog';
+import { recentProjectContent, type RecentContentItem } from '../lib/projectOverview';
+import type { Permissions } from '../lib/permissions';
 import { supabase } from '../lib/supabase';
 import { addContractProject, addProjectMember, deleteTimeEntry, removeContractProject, removeProjectMember, updateTimeEntry } from '../lib/repository';
-import { CalendarRange, ChevronDown, ChevronRight, Clock, FileSignature, FileText, Files, Images, LayoutDashboard, Link2, Pencil, Receipt, SquareKanban, StickyNote, Trash2, UserPlus } from 'lucide-react';
+import { CalendarRange, ChevronDown, ChevronRight, Clock, FileSignature, FileText, Files, Images, LayoutDashboard, Link2, PenLine, Pencil, Receipt, SquareKanban, StickyNote, Trash2, UserPlus } from 'lucide-react';
 
 /** Uitklapbare dashboard-sectie */
 function DashboardSection({
@@ -98,6 +103,20 @@ const projectInvoiceStatusLabels: Record<string, string> = {
 };
 
 const taskStatusLabel = (status: TaskStatus) => columns.find(column => column.key === status)?.label ?? status;
+
+/** Hoeveel albums het overzicht toont; de rest staat in het tabblad Galerij. */
+const ALBUM_LIMIT = 6;
+
+/** "Notitie" of "Notitie · Meeting": het soort alleen als het iets zegt. */
+function recentContentKind(item: RecentContentItem): string {
+  if (item.kind === 'note') {
+    const type = item.note.note_type && item.note.note_type !== 'general' ? ` · ${getNoteTypeLabel(item.note.note_type)}` : '';
+    return `Notitie${type}${item.handwritten ? ' · handgeschreven' : ''}`;
+  }
+  const office = officeDocumentLabel(item.doc);
+  if (office) return office;
+  return item.doc.document_type && item.doc.document_type !== 'general' ? `Document · ${getDocumentTypeLabel(item.doc.document_type)}` : 'Document';
+}
 
 /** Vandaag als lokale kalenderdatum (YYYY-MM-DD). `toISOString()` rekent in UTC
  *  en zegt 's avonds al "morgen" — dan is een deadline van vandaag ineens te laat. */
@@ -940,6 +959,8 @@ export function ProjectPage({
   creativeActive,
   creativeGraceUntil,
   onOpenGalleryTab,
+  canReadContent,
+  logbook = null,
   onNewTask,
   onEditTask,
   onEditProject,
@@ -979,6 +1000,19 @@ export function ProjectPage({
   creativeGraceUntil: string | null;
   /** Opent één galerij als eigen werkruimte-tabblad. */
   onOpenGalleryTab: (galleryId: string) => void;
+  /** Module Inhoud: zonder leesrecht staat er geen blok met notities en documenten op het overzicht. */
+  canReadContent: boolean;
+  /**
+   * Het logboek van dit project op het overzicht. Alleen voor owners en
+   * admins, net als het logboek zelf; voor de rest null, en dan is er geen blok.
+   */
+  logbook?: {
+    members: OrganizationMember[];
+    permissions: Permissions;
+    onOpenTarget: (target: AuditTarget) => void;
+    /** Instellingen → Logboek, gefilterd op dit project. */
+    onOpenAll: () => void;
+  } | null;
   onNewTask: () => void;
   onEditTask: (task: Task) => void;
   onEditProject: () => void;
@@ -1002,6 +1036,10 @@ export function ProjectPage({
   const dragTaskId = useRef<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<TaskStatus | null>(null);
   const [activeTab, setActiveTab] = useState<ProjectTab>('overview');
+  // Een album dat je op het overzicht aantikt: het tabblad Galerij opent
+  // daarmee, met de lijst erachter. Elke andere tabwissel wist het weer, anders
+  // opende "Galerij" later nog steeds dat ene album.
+  const [galleryStart, setGalleryStart] = useState<string | null>(null);
   const [timeModal, setTimeModal] = useState<{ entry: TimeEntry | null } | null>(null);
 
   // Oudste eerst: binnen een project lees je de takenlijst als werkvolgorde, niet
@@ -1087,7 +1125,15 @@ export function ProjectPage({
     : `Urenbasis${project.hourly_rate_cents != null ? ` · ${euro(project.hourly_rate_cents / 100)}/u` : ''}`;
   const facts = projectFacts(project, todayIso, tasks.length, progress);
 
-  const switchTab = (tab: ProjectTab) => setActiveTab(tab);
+  const switchTab = (tab: ProjectTab) => { setGalleryStart(null); setActiveTab(tab); };
+  const openAlbum = (galleryId: string) => { setGalleryStart(galleryId); setActiveTab('gallery'); };
+
+  // Het overzicht: de vijf laatst bewerkte notities en documenten, en de albums
+  // (nieuwste eerst, zoals in het tabblad Galerij).
+  const showGallery = creativeActive || projectGalleries.length > 0;
+  const recentContent = recentProjectContent(projectNotes, projectDocuments, data.noteHandwriting);
+  const albums = [...projectGalleries].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const now = new Date();
 
   // De cijferstrook in de kop: elk cijfer opent het tabblad waar het vandaan komt.
   const stats: Array<{ key: string; label: string; value: string; sub?: string; tone?: 'accent' | 'danger' | 'muted'; tab: ProjectTab }> = [
@@ -1123,7 +1169,7 @@ export function ProjectPage({
     // De galerij hoort bij de creatieve module. Zonder die module is er geen
     // tabblad — behalve wanneer dit project er al galerijen heeft: die blijven
     // zichtbaar (bevroren) zodat niemand zijn werk kwijtraakt.
-    ...((creativeActive || projectGalleries.length > 0)
+    ...(showGallery
       ? [{ id: 'gallery' as ProjectTab, label: 'Galerij', count: projectGalleries.length, icon: Images }]
       : []),
   ];
@@ -1252,6 +1298,86 @@ export function ProjectPage({
               </section>
             </div>
           </article>
+
+          {/* Notities en documenten samen, het laatst bewerkte bovenaan: waar je
+              gebleven was, zonder eerst te kiezen in welk tabblad het staat. */}
+          {canReadContent && <article className="client-panel proj-recent">
+            <div className="client-panel-head proj-recent-head">
+              <h3>Notities &amp; documenten</h3>
+              <div className="proj-recent-links">
+                <button type="button" className="client-overview-more-btn" onClick={() => switchTab('notes')}>Notities ({projectNotes.length}) →</button>
+                <button type="button" className="client-overview-more-btn" onClick={() => switchTab('documents')}>Documenten ({projectDocuments.length}) →</button>
+              </div>
+            </div>
+            {recentContent.length === 0
+              ? <div className="proj-next-empty">
+                  <strong>Nog geen notities of documenten.</strong>
+                  <span>Wat je bij dit project schrijft, staat hier: wat het laatst is bewerkt bovenaan.</span>
+                  {canWrite && !project.archived && <div className="proj-recent-new">
+                    <Button onClick={onNewNote}>+ Notitie</Button>
+                    <Button onClick={onNewDocument}>+ Document</Button>
+                  </div>}
+                </div>
+              : <div className="proj-next-list">
+                  {recentContent.map(item => {
+                    const title = (item.kind === 'note' ? item.note.title : item.doc.title)?.trim() || 'Zonder titel';
+                    const modifiedIso = new Date(item.modified).toISOString();
+                    return <button
+                      key={`${item.kind}-${item.id}`}
+                      type="button"
+                      className="proj-next-row proj-recent-row"
+                      onClick={() => item.kind === 'note' ? onEditNote(item.note) : onEditDocument(item.doc)}
+                    >
+                      <span className="proj-recent-icon" style={{ color: item.kind === 'note' ? 'var(--accent-v)' : documentAccentColor(item.doc) }} aria-hidden="true">
+                        {item.kind === 'note'
+                          ? (item.handwritten ? <PenLine size={15} /> : <StickyNote size={15} />)
+                          : <DocumentGlyph doc={item.doc} size={15} />}
+                      </span>
+                      <span className="proj-next-text">
+                        <span className="proj-next-title">{title}</span>
+                        <span className="proj-next-meta">{recentContentKind(item)}</span>
+                      </span>
+                      <time className="proj-recent-time" dateTime={modifiedIso} title={`Laatst bewerkt ${new Date(item.modified).toLocaleString('nl-NL', { dateStyle: 'long', timeStyle: 'short' })}`}>
+                        {relativeTime(modifiedIso, now)}
+                      </time>
+                    </button>;
+                  })}
+                </div>}
+          </article>}
+
+          {/* De albums van dit project. Een tik opent het album in het tabblad
+              Galerij; terug brengt je daar naar de lijst. */}
+          {showGallery && <article className="client-panel proj-albums">
+            <div className="client-panel-head">
+              <h3>Albums</h3>
+              <div className="client-panel-head-right">
+                <span>{albums.length}</span>
+                <button type="button" className="client-overview-more-btn" onClick={() => switchTab('gallery')}>Galerij →</button>
+              </div>
+            </div>
+            {albums.length === 0
+              ? <div className="client-empty-line">
+                  Nog geen albums bij dit project.{creativeActive && canWrite && !project.archived ? ' Maak er een aan in het tabblad Galerij.' : ''}
+                </div>
+              : <div className="proj-next-list">
+                  {albums.slice(0, ALBUM_LIMIT).map(gallery => {
+                    const { Icon } = formatConfig(gallery.format);
+                    return <button key={gallery.id} type="button" className="proj-next-row proj-album-row" onClick={() => openAlbum(gallery.id)}>
+                      <span className={`proj-recent-icon gal-fmt-${gallery.format}`} aria-hidden="true"><Icon size={15} /></span>
+                      <span className="proj-next-text">
+                        <span className="proj-next-title">{gallery.title}</span>
+                        <span className="proj-next-meta">
+                          {galleryFormatLabels[gallery.format]} · {gallery.published_at ? 'gepubliceerd' : 'aangemaakt'}{' '}
+                          <span className="proj-album-keep">{dateNL(gallery.published_at ?? gallery.created_at)}</span>
+                          {gallery.share_enabled && <> · <span className="proj-album-keep"><Link2 size={11} aria-hidden="true" />deellink actief</span></>}
+                        </span>
+                      </span>
+                      <span className={`status-pill gal-status-${gallery.status}`}>{galleryStatusLabels[gallery.status]}</span>
+                    </button>;
+                  })}
+                  {albums.length > ALBUM_LIMIT && <button type="button" className="client-overview-more-link" onClick={() => switchTab('gallery')}>+{albums.length - ALBUM_LIMIT} meer albums</button>}
+                </div>}
+          </article>}
         </div>
 
         <aside className="proj-home-side">
@@ -1327,6 +1453,18 @@ export function ProjectPage({
               ))}
             </div>
           </article>
+
+          {logbook && <ProjectAuditFeed
+            organizationId={organizationId}
+            projectId={project.id}
+            data={data}
+            members={logbook.members}
+            currentUserId={currentUserId}
+            permissions={logbook.permissions}
+            onOpenTarget={logbook.onOpenTarget}
+            onOpenLog={logbook.onOpenAll}
+            refreshKey={refreshKey}
+          />}
 
           <ProjectTeamPanel project={project} data={data} teamMembers={teamMembers} currentUserId={currentUserId} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
         </aside>
@@ -1542,6 +1680,7 @@ export function ProjectPage({
           canWrite={canWrite && creativeActive}
           onChanged={onChanged}
           onOpenInTab={onOpenGalleryTab}
+          startGalleryId={galleryStart}
         />
       </>}
 

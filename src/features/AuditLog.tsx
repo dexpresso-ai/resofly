@@ -7,6 +7,8 @@
  *    en project, en zoeken. Nieuwe regels meldt hij bovenaan.
  *  - AuditFeed: het blok op het dashboard (vervangt "Laatste activiteit"),
  *    met de laatste regels en een knop naar het hele logboek.
+ *  - ProjectAuditFeed: hetzelfde blok op het projectoverzicht, met alleen de
+ *    regels van dat project.
  *
  * Alleen voor owners en admins: de app toont het tabblad en het blok niet aan
  * anderen, en de database geeft hun geen regel (migratie 20261111140000;
@@ -22,7 +24,7 @@ import type { AppData, AuditLog, OrganizationMember } from '../types';
 import type { Permissions } from '../lib/permissions';
 import { Button, Skeleton } from '../components/Ui';
 import { SearchFilterPanel, type FilterField } from '../components/SearchFilterPanel';
-import { AUDIT_PAGE_SIZE, countAuditLogSince, loadAuditLogPage } from '../lib/repository';
+import { AUDIT_PAGE_SIZE, countAuditLogSince, loadAuditLogPage, loadProjectAuditLog } from '../lib/repository';
 import {
   AUDIT_CATEGORIES, AUDIT_PERIODS, actorEmail, actorName, auditCategory, auditTarget, changeLines, changeSummary, dayLabel,
   groupByDay, relativeTime, sentence, timeLabel, toAuditEntry, viaLabel,
@@ -61,19 +63,26 @@ function canOpen(target: AuditTarget | null, permissions: Permissions, data: App
 
 // ── Instellingen → Logboek ─────────────────────────────────────────────────
 
-export function AuditLogPanel({ organizationId, data, members, currentUserId, permissions, onOpenTarget }: {
+export function AuditLogPanel({ organizationId, data, members, currentUserId, permissions, onOpenTarget, initialProjectId }: {
   organizationId: string;
   data: AppData;
   members: OrganizationMember[];
   currentUserId: string | null;
   permissions: Permissions;
   onOpenTarget?: (target: AuditTarget) => void;
+  /**
+   * Geopend met "Alles bekijken" op een projectoverzicht: meteen gefilterd op
+   * dat project, over de hele periode. Met de standaard van 30 dagen bleef de
+   * lijst leeg voor een project waar de laatste wijziging ouder was, terwijl
+   * het overzicht die wél toonde.
+   */
+  initialProjectId?: string | null;
 }) {
-  const [period, setPeriod] = useState<AuditPeriod>('30d');
+  const [period, setPeriod] = useState<AuditPeriod>(initialProjectId ? 'alles' : '30d');
   const [actor, setActor] = useState('');
   const [category, setCategory] = useState<AuditCategory | ''>('');
   const [clientId, setClientId] = useState('');
-  const [projectId, setProjectId] = useState('');
+  const [projectId, setProjectId] = useState(initialProjectId ?? '');
   const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
   const [entries, setEntries] = useState<AuditEntry[]>([]);
@@ -325,9 +334,7 @@ export function AuditFeed({ logs, data, members, currentUserId, permissions, onO
   onOpenLog: () => void;
   limit?: number;
 }) {
-  const lookup = useLookup(data, members, currentUserId);
   const entries = useMemo(() => logs.slice(0, limit).map(toAuditEntry), [logs, limit]);
-  const now = new Date();
 
   return <div className="activity-card compact-activity alog-feed">
     <div className="alog-feed-head">
@@ -336,31 +343,115 @@ export function AuditFeed({ logs, data, members, currentUserId, permissions, onO
     </div>
     {entries.length === 0
       ? <p className="settings-help">Nog niets in het logboek. Zodra iemand iets aanmaakt, verstuurt of wijzigt, staat het hier.</p>
-      : <ul className="alog-feed-list">
-          {entries.map(e => {
-            const category = auditCategory(e.entityType);
-            const Icon = CATEGORY_ICON[category];
-            const said = sentence(e, lookup);
-            const target = auditTarget(e);
-            const openable = Boolean(onOpenTarget) && canOpen(target, permissions, data);
-            const client = e.clientId ? lookup.clients?.get(e.clientId) : undefined;
-            const content = <>
-              <span className={`alog-icon cat-${category}`}><Icon size={14} aria-hidden="true" /></span>
-              <span className="alog-feed-text">
-                <span className="alog-sentence">
-                  {!said.subjectless && <><b>{actorName(e, members, currentUserId)}</b>{' '}</>}
-                  {said.parts.map((part, i) => part.strong ? <b key={i}>{part.text}</b> : <span key={i}>{part.text}</span>)}
-                </span>
-                {client && <span className="alog-feed-meta">{client}{e.count > 1 ? ` · ${e.count}×` : ''}</span>}
-              </span>
-              <time dateTime={e.createdAt}>{relativeTime(e.lastAt, now)}</time>
-            </>;
-            return <li key={e.id}>
-              {openable
-                ? <button type="button" className="alog-feed-row" onClick={() => onOpenTarget?.(target as AuditTarget)}>{content}</button>
-                : <div className="alog-feed-row">{content}</div>}
-            </li>;
-          })}
-        </ul>}
+      : <AuditFeedList entries={entries} data={data} members={members} currentUserId={currentUserId} permissions={permissions} onOpenTarget={onOpenTarget} showClient />}
   </div>;
+}
+
+/** De regels van een klein logboek: het dashboard en het projectoverzicht. */
+function AuditFeedList({ entries, data, members, currentUserId, permissions, onOpenTarget, showClient }: {
+  entries: AuditEntry[];
+  data: AppData;
+  members: OrganizationMember[];
+  currentUserId: string | null;
+  permissions: Permissions;
+  onOpenTarget?: (target: AuditTarget) => void;
+  /** Op het dashboard wel; op een project is de klant overal dezelfde. */
+  showClient: boolean;
+}) {
+  const lookup = useLookup(data, members, currentUserId);
+  const now = new Date();
+  return <ul className="alog-feed-list">
+    {entries.map(e => {
+      const category = auditCategory(e.entityType);
+      const Icon = CATEGORY_ICON[category];
+      const said = sentence(e, lookup);
+      const target = auditTarget(e);
+      const openable = Boolean(onOpenTarget) && canOpen(target, permissions, data);
+      const client = showClient && e.clientId ? lookup.clients?.get(e.clientId) : undefined;
+      const meta = client
+        ? `${client}${e.count > 1 ? ` · ${e.count}×` : ''}`
+        : !showClient && e.count > 1 ? `${e.count} wijzigingen kort na elkaar` : null;
+      const content = <>
+        <span className={`alog-icon cat-${category}`}><Icon size={14} aria-hidden="true" /></span>
+        <span className="alog-feed-text">
+          <span className="alog-sentence">
+            {!said.subjectless && <><b>{actorName(e, members, currentUserId)}</b>{' '}</>}
+            {said.parts.map((part, i) => part.strong ? <b key={i}>{part.text}</b> : <span key={i}>{part.text}</span>)}
+          </span>
+          {meta && <span className="alog-feed-meta">{meta}</span>}
+        </span>
+        <time dateTime={e.createdAt}>{relativeTime(e.lastAt, now)}</time>
+      </>;
+      return <li key={e.id}>
+        {openable
+          ? <button type="button" className="alog-feed-row" onClick={() => onOpenTarget?.(target as AuditTarget)}>{content}</button>
+          : <div className="alog-feed-row">{content}</div>}
+      </li>;
+    })}
+  </ul>;
+}
+
+// ── Het projectoverzicht ─────────────────────────────────────────────────
+
+/**
+ * Wat er het laatst aan dit project gebeurde: taken, notities, documenten,
+ * offertes, facturen, albums en het project zelf. De database zet bij elke
+ * regel het project erbij (audit_context), dus één vraag op project_id dekt
+ * alles. Alleen voor owners en admins, net als het logboek zelf: de aanroeper
+ * toont het blok niet aan anderen, en RLS geeft hun geen regel.
+ *
+ * Haalt zelf op, want `organizationContext.auditLogs` (het dashboard) is de
+ * laatste regels van de hele organisatie: daar zat voor een rustig project
+ * vaak niets van dat project tussen.
+ */
+export function ProjectAuditFeed({ organizationId, projectId, data, members, currentUserId, permissions, onOpenTarget, onOpenLog, refreshKey = 0, limit = 6 }: {
+  organizationId: string;
+  projectId: string;
+  data: AppData;
+  members: OrganizationMember[];
+  currentUserId: string | null;
+  permissions: Permissions;
+  onOpenTarget?: (target: AuditTarget) => void;
+  /** Instellingen → Logboek, gefilterd op dit project. */
+  onOpenLog: () => void;
+  /** Gaat omhoog bij elke ververs: na een wijziging staat die er meteen bij. */
+  refreshKey?: number;
+  limit?: number;
+}) {
+  // Per project bewaard: open je een ander project in hetzelfde tabblad, dan
+  // staan de regels van het vorige er niet even onder de verkeerde naam.
+  const [state, setState] = useState<{ projectId: string; logs: AuditLog[]; error: null } | { projectId: string; logs: null; error: string } | null>(null);
+  const seq = useRef(0);
+
+  const load = useCallback(async () => {
+    const mine = ++seq.current;
+    try {
+      const logs = await loadProjectAuditLog(organizationId, projectId, limit);
+      if (mine === seq.current) setState({ projectId, logs, error: null });
+    } catch (err) {
+      if (mine === seq.current) setState({ projectId, logs: null, error: err instanceof Error ? err.message : 'Het logboek kon niet worden geladen.' });
+    }
+  }, [organizationId, projectId, limit]);
+
+  useEffect(() => { void load(); }, [load, refreshKey]);
+
+  const current = state?.projectId === projectId ? state : null;
+  const entries = useMemo(() => current?.logs?.map(toAuditEntry) ?? [], [current]);
+
+  return <article className="client-panel proj-log">
+    <div className="client-panel-head">
+      <h3>Logboek</h3>
+      <button type="button" className="client-overview-more-btn" onClick={onOpenLog}>Alles bekijken →</button>
+    </div>
+    {current === null
+      ? <Skeleton lines={3} />
+      : current.error !== null
+        ? <div className="proj-log-error">
+            <span>Het logboek kon niet worden geladen. {current.error}</span>
+            <Button onClick={() => void load()}>Opnieuw proberen</Button>
+          </div>
+        : entries.length === 0
+          ? <div className="client-empty-line">Nog niets in het logboek van dit project. Zodra iemand hier iets aanmaakt, verstuurt of wijzigt, staat het hier.</div>
+          : <AuditFeedList entries={entries} data={data} members={members} currentUserId={currentUserId} permissions={permissions} onOpenTarget={onOpenTarget} showClient={false} />}
+  </article>;
 }

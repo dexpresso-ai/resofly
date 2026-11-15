@@ -72,6 +72,14 @@ export function documentAccentColor(doc?: Pick<InternalDocument, 'mime_type'> | 
   if (m.includes('presentation') || m.includes('powerpoint')) return 'var(--accent-o)';
   return 'var(--accent-b)';
 }
+/** Het bestandstype van een Office-document ("Word-document"); null voor een tekstdocument uit de editor. */
+export function officeDocumentLabel(doc: Pick<InternalDocument, 'mime_type' | 'storage_key'>): string | null {
+  if (!doc.storage_key) return null;
+  const m = doc.mime_type || '';
+  if (m.includes('spreadsheet') || m.includes('ms-excel') || m === 'text/csv') return 'Excel-werkblad';
+  if (m.includes('presentation') || m.includes('powerpoint')) return 'PowerPoint';
+  return 'Word-document';
+}
 /** Icoon voor een intern Document — volgt in Office-modus het bestandstype (Sheet/Presentation). */
 export function DocumentGlyph({ doc, size }: { doc?: Pick<InternalDocument, 'mime_type'> | null; size: number }) {
   const m = doc?.mime_type || '';

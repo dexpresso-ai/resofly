@@ -272,6 +272,31 @@ export async function loadAuditLogPage(organizationId: UUID, filters: AuditFilte
   return { rows: (data ?? []) as AuditLog[], total: count ?? null };
 }
 
+/**
+ * De laatste regels uit het logboek van één project, nieuwste eerst, voor het
+ * projectoverzicht. Zonder periode: het overzicht toont wat er het laatst
+ * gebeurde, ook als dat maanden geleden was. Ook hier beslist RLS wie het
+ * mag lezen (alleen owners en admins); de index op (organization_id,
+ * project_id, created_at) maakt het één korte zoektocht.
+ */
+export async function loadProjectAuditLog(organizationId: UUID, projectId: UUID, limit = 6): Promise<AuditLog[]> {
+  const { data, error } = await supabase
+    .from('audit_logs')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit);
+  if (error) {
+    if (isMissingColumn(error, 'project_id')) {
+      throw new NotMigratedError('Het logboek heeft migratie 20261108100000_logboek.sql nodig.');
+    }
+    throw error;
+  }
+  return (data ?? []) as AuditLog[];
+}
+
 /** Hoeveel regels er bij zijn gekomen sinds `sinceIso` (voor "3 nieuwe wijzigingen"). */
 export async function countAuditLogSince(organizationId: UUID, sinceIso: string): Promise<number> {
   const { count, error } = await supabase
