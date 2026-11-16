@@ -97,7 +97,13 @@ De regels staan in `src/lib/openWorkspaceApp.ts`, de melding in
 
   Nergens nog `window.open`, nergens een fout in de pagina, en de terugknop
   sluit de melding.
-- `npm run test:mobile -- --theme=both` en `npm run test:terugknop`.
+- `npm run test:terugknop`: 12 gelukt.
+- `npm run test:mobile -- --theme=both` op de pagina's die dit raakt: de drie
+  losse apps, de werkruimte als app, Instellingen → Apps en het dashboard. Alle
+  36 metingen in orde. De volledige ronde paste hier niet in de tijd van een
+  achtergrondtaak; die draait in de CI (*Frontend checks*) bij de push naar
+  staging.
+- `node scripts/check-csp-hash.mjs`: in orde.
 - Niet getest op een echte telefoon of computer met geïnstalleerde apps; dat
   kan hier niet. Dat Chrome een link doorstuurt en een pop-up niet, volgt uit
   de broncode van Chrome 158. Op de computer staat dat in
