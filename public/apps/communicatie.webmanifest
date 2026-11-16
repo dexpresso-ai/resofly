@@ -11,6 +11,9 @@
   "orientation": "any",
   "background_color": "#0E0E12",
   "theme_color": "#0E0E12",
+  "related_applications": [
+    { "platform": "webapp", "url": "/manifest.webmanifest" }
+  ],
   "icons": [
     {
       "src": "/icons/app-communicatie-192.png",

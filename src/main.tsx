@@ -14,7 +14,8 @@ import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, 
 import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, isAdminRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
 import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFromPath, isPageInApp, isRunningInstalled, standaloneAppFromPath, WORKSPACE_APP, type InstallableApp, type StandaloneApp } from './lib/standaloneApps';
 import { captureInstallPrompt } from './lib/installPrompt';
-import { InstallAppCard } from './components/StandaloneApps';
+import { isAndroid, takeInstallRequest, trackWorkspaceApp } from './lib/openWorkspaceApp';
+import { InstallAppCard, useOpenWorkspace } from './components/StandaloneApps';
 import { GlobalSearch, type SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { MemberSelect } from './components/MemberSelect';
@@ -364,6 +365,12 @@ const STANDALONE_APP: StandaloneApp | null = typeof window === 'undefined' ? nul
  * we de browser zijn gang gaan.
  */
 const INSTALL_APP: InstallableApp | null = typeof window === 'undefined' ? null : installableAppFromPath(window.location.pathname);
+/**
+ * Kwam je hier via ResoFly installeren in een losse app
+ * (/app/werkruimte/?installeren=1)? Dan staat de installeerkaart er, ook als je
+ * hem ooit wegklikte. Zie lib/openWorkspaceApp.ts.
+ */
+let FORCE_INSTALL_CARD = false;
 if (INSTALL_APP) {
   // /app/agenda zonder slash valt buiten de scope van het manifest (/app/agenda/):
   // dan biedt de browser installeren niet aan.
@@ -372,6 +379,15 @@ if (INSTALL_APP) {
   // De werkruimte houdt het manifest en het icoon uit index.html.
   if (STANDALONE_APP) applyStandaloneAppHead(STANDALONE_APP);
   captureInstallPrompt();
+  if (INSTALL_APP.id === WORKSPACE_APP.id) {
+    const request = takeInstallRequest(window.location.search);
+    if (request.requested) {
+      FORCE_INSTALL_CARD = true;
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${request.search}${window.location.hash}`);
+    }
+    // Zo weten de losse apps of de ResoFly-app op dit apparaat staat.
+    trackWorkspaceApp({ runningInstalled: isRunningInstalled(), android: isAndroid() });
+  }
 }
 
 // Herladen midden in de app laat items in de browsergeschiedenis achter van
@@ -1703,16 +1719,14 @@ function App() {
 
   /**
    * Vanuit een losse app naar de hele werkruimte. Draait de app als app (eigen
-   * venster), dan in een nieuw venster: zo blijft de app staan waar hij was, en
-   * opent de browser de werkruimte in zijn eigen app als die geïnstalleerd is.
-   * In een gewoon tabblad gewoon daarheen.
+   * venster), dan opent de ResoFly-app, of eerst de melding dat je die moet
+   * installeren. In een gewoon tabblad gewoon daarheen. Zie
+   * lib/openWorkspaceApp.ts.
    */
+  const workspaceOpener = useOpenWorkspace(Boolean(STANDALONE_APP));
   function openWorkspace() {
     setMobileNavOpen(false);
-    // Als app naar het adres van de werkruimte-app: op Android opent hij dan in
-    // de ResoFly-app als die erop staat, en niet in Chrome.
-    if (isRunningInstalled()) window.open(WORKSPACE_APP.path, '_blank', 'noopener');
-    else window.location.assign('/');
+    workspaceOpener.open();
   }
 
   async function createNewOrganization() {
@@ -4446,8 +4460,9 @@ function App() {
         <small>Sluit dit venster niet — dit kan enkele seconden duren.</small>
       </div>
     </div>}
+    {workspaceOpener.dialog}
     <div className="toast-region">
-      {INSTALL_APP && <InstallAppCard app={INSTALL_APP} />}
+      {INSTALL_APP && <InstallAppCard app={INSTALL_APP} force={FORCE_INSTALL_CARD} />}
       <ClientEmailToasts
         toasts={clientEmailToasts}
         onOpen={(toast) => openCommunication(toast.kind === 'inbox' ? { tab: 'inbox' } : { tab: 'all', threadId: toast.threadId })}
