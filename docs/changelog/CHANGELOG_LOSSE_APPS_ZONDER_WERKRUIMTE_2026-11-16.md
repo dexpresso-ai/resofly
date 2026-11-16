@@ -46,6 +46,8 @@ Dit bestond alleen voor die knop (zie
 
 - `npm run typecheck` en `npm test`: 1918 geslaagd.
 - `npm run test:terugknop`: 12 geslaagd.
+- `npm run test:mobile -- --theme=both`: 686 pagina's gemeten, 0 met
+  problemen, ook de drie losse apps en de werkruimte-app.
 - In Chromium met de nagebootste backend: Agenda, Financiën en Communicatie in
   Cockpit, Baken, Zenit en Stroom, met het accountmenu open. Nergens
   *Volledige werkruimte*, en geen fouten op de pagina. De werkruimte op `/` en
