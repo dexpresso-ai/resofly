@@ -1,10 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { Check, Copy, ExternalLink, MonitorSmartphone, X } from 'lucide-react';
 import { Button } from './Ui';
-import { Modal } from './Modal';
 import { installableApps, isRunningInstalled, WORKSPACE_APP, type InstallableApp } from '../lib/standaloneApps';
 import { INSTALL_STEPS, installHint, promptInstall, useInstallPrompt } from '../lib/installPrompt';
-import { askBrowserForWorkspaceApp, isAndroid, openInApp, planWorkspaceOpen, rememberWorkspaceAppInstalled, WORKSPACE_INSTALL_URL, workspaceAppSeenInstalled, workspaceAppStatus } from '../lib/openWorkspaceApp';
 import type { Permissions } from '../lib/permissions';
 
 /** Wie de kaart wegklikt, krijgt hem in deze browser niet meer te zien. */
@@ -30,14 +28,10 @@ function readDismissed(app: InstallableApp): boolean {
  * geïnstalleerd of nog niet installeerbaar, en een uitleg zonder knop is daar
  * alleen ruis. De uitleg voor Safari alleen in de browser zelf: draait hij als
  * app, dan is hij al op het beginscherm gezet.
- *
- * `force`: je komt hier via ResoFly installeren in een losse app
- * (openWorkspaceApp.ts). Dan staat de kaart er ook als je hem ooit wegklikte;
- * daar kwam je voor.
  */
-export function InstallAppCard({ app, force = false }: { app: InstallableApp; force?: boolean }) {
+export function InstallAppCard({ app }: { app: InstallableApp }) {
   const { canPrompt, installed } = useInstallPrompt();
-  const [dismissed, setDismissed] = useState(() => !force && readDismissed(app));
+  const [dismissed, setDismissed] = useState(() => readDismissed(app));
   const [hint] = useState(() => installHint());
   if (dismissed || installed) return null;
   if (!canPrompt && (isRunningInstalled() || (hint !== 'ios' && hint !== 'mac-safari'))) return null;
@@ -149,114 +143,4 @@ async function copyAddress(url: string): Promise<boolean> {
     window.prompt('Kopieer dit adres:', url);
     return false;
   }
-}
-
-type WorkspaceDialogKind = 'install-first' | 'home-screen';
-
-/**
- * "Volledige werkruimte" in een losse app: open de ResoFly-app, of zeg eerst
- * dat je hem moet installeren. De regels staan in lib/openWorkspaceApp.ts.
- *
- * `enabled` alleen in een losse app. Op Android vragen we de browser vooraf of
- * ResoFly er staat, en opnieuw als je terugkomt in de app (misschien heb je
- * hem net geïnstalleerd). Bij de klik zelf is geen tijd om te wachten: een
- * browser opent een link alleen tijdens de klik.
- */
-export function useOpenWorkspace(enabled: boolean): { open: () => void; dialog: ReactNode } {
-  const [hint] = useState(() => installHint());
-  const [browserSays, setBrowserSays] = useState<boolean | null>(null);
-  const [dialog, setDialog] = useState<WorkspaceDialogKind | null>(null);
-
-  useEffect(() => {
-    if (!enabled || hint !== 'chromium' || !isAndroid()) return;
-    let alive = true;
-    const ask = () => {
-      void askBrowserForWorkspaceApp().then((answer) => {
-        if (!alive) return;
-        if (answer) rememberWorkspaceAppInstalled();
-        setBrowserSays(answer);
-      });
-    };
-    ask();
-    const onVisible = () => { if (document.visibilityState === 'visible') ask(); };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => { alive = false; document.removeEventListener('visibilitychange', onVisible); };
-  }, [enabled, hint]);
-
-  function open() {
-    const status = workspaceAppStatus({ hint, seenInstalled: workspaceAppSeenInstalled(), browserSays });
-    const plan = planWorkspaceOpen({ runningInstalled: isRunningInstalled(), hint, status });
-    if (plan === 'same-tab') window.location.assign('/');
-    else if (plan === 'open-app') openInApp(WORKSPACE_APP.path);
-    else setDialog(plan);
-  }
-
-  return {
-    open,
-    dialog: dialog && <WorkspaceAppDialog kind={dialog} onClose={() => setDialog(null)} />,
-  };
-}
-
-/**
- * De melding als ResoFly niet te openen is: niet geïnstalleerd (Chrome, Edge),
- * of op een iPhone of iPad, waar de ene app de andere niet kan openen.
- */
-function WorkspaceAppDialog({ kind, onClose }: { kind: WorkspaceDialogKind; onClose: () => void }) {
-  const [copied, setCopied] = useState(false);
-
-  if (kind === 'home-screen') {
-    const url = `${window.location.origin}${WORKSPACE_APP.path}`;
-    return <Modal
-      title="Open ResoFly vanaf je beginscherm"
-      className="app-open-modal"
-      onClose={onClose}
-      footer={<>
-        <Button type="button" onClick={onClose}>Sluiten</Button>
-        <Button type="button" variant="primary" onClick={() => { void copyAddress(url).then(setCopied); }}>
-          {copied ? <><Check size={14} aria-hidden="true" />Gekopieerd</> : <><Copy size={14} aria-hidden="true" />Link kopiëren</>}
-        </Button>
-      </>}
-    >
-      <div className="app-open">
-        <img className="app-open-icon" src={WORKSPACE_APP.icon} alt="" width={48} height={48} />
-        <p>Op een iPhone of iPad kan de ene app de andere niet openen. Ga naar je beginscherm en tik daar op <b>ResoFly</b>.</p>
-        <div className="app-steps">
-          <strong>Staat ResoFly er nog niet op? Installeer hem dan eerst.</strong>
-          <ol>
-            <li>Kies <b>Link kopiëren</b>.</li>
-            <li>Open Safari en plak de link in de adresbalk.</li>
-            <li>Tik op Deel (het vierkantje met de pijl omhoog) en kies <b>Zet op beginscherm</b>.</li>
-          </ol>
-        </div>
-      </div>
-    </Modal>;
-  }
-
-  const device = isAndroid() ? 'je telefoon' : 'deze computer';
-  return <Modal
-    title="Installeer eerst de ResoFly-app"
-    className="app-open-modal"
-    onClose={onClose}
-    footer={<>
-      {/* Wie nu niet wil installeren, kan nog altijd in de browser verder. "/"
-          valt onder geen enkele app, dus dit blijft in de browser. */}
-      <Button type="button" onClick={() => { openInApp('/'); onClose(); }}>In de browser openen</Button>
-      <Button type="button" variant="primary" onClick={() => { openInApp(WORKSPACE_INSTALL_URL); onClose(); }}>
-        <ExternalLink size={14} aria-hidden="true" />ResoFly installeren
-      </Button>
-    </>}
-  >
-    <div className="app-open">
-      <img className="app-open-icon" src={WORKSPACE_APP.icon} alt="" width={48} height={48} />
-      <p><b>Volledige werkruimte</b> opent de app ResoFly. Die staat nog niet op {device}.</p>
-      <div className="app-steps">
-        <ol>
-          <li>Kies <b>ResoFly installeren</b>. ResoFly opent dan in je browser.</li>
-          <li>Kies daar onderin op <b>Installeren</b>.</li>
-          <li>Daarna opent <b>Volledige werkruimte</b> meteen de app.</li>
-        </ol>
-      </div>
-      <p className="settings-help">Staat ResoFly er toch al op? Dan opent dezelfde knop gewoon de app.</p>
-    </div>
-  </Modal>;
 }

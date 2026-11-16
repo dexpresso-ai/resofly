@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, ExternalLink, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, settingsTabRoleRule, type SettingsTab } from '../features/SimplePages';
@@ -151,8 +151,6 @@ export interface SidebarProps {
   /** In een losse app (Agenda, Financiën, Communicatie): welke. Het merk noemt
    *  hem, en `permissions.canOpenPage` laat dan alleen zijn pagina's door. */
   standaloneApp?: StandaloneApp | null;
-  /** In een losse app: de weg terug naar de hele werkruimte, onder het menu. */
-  onOpenWorkspace?: () => void;
 }
 
 /** Zoveel rapportages staan er onder Rapportages in het menu; de rest via het overzicht. */
@@ -190,7 +188,6 @@ export function Sidebar({
   activeAiReportId = null,
   onOpenAiReport,
   standaloneApp = null,
-  onOpenWorkspace,
 }: SidebarProps) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [reportsOpen, setReportsOpen] = useState(() => reportPages.includes(page));
@@ -449,14 +446,6 @@ export function Sidebar({
         })}
         </Fragment>;
       })}
-      {onOpenWorkspace && <>
-        <div className="nav-workspace-sep" aria-hidden="true" />
-        <div className="nav-item-wrap">
-          <button type="button" className="nav-item nav-workspace" onClick={onOpenWorkspace} title="De hele werkruimte openen">
-            <ExternalLink size={16}/><span className="ni-label">Volledige werkruimte</span>
-          </button>
-        </div>
-      </>}
     </nav>
 
     <div className={`sidebar-user${userMenuOpen ? ' is-open' : ''}`} ref={userRef}>
