@@ -26,15 +26,6 @@
 .app-steps strong{color:var(--text);font-size:13px}
 .app-steps ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:3px}
 
-/* ── De melding bij Volledige werkruimte ──────────────────────────────────
-   Als ResoFly niet te openen is: eerst installeren, of op een iPhone vanaf het
-   beginscherm. Zie src/lib/openWorkspaceApp.ts. */
-.app-open-modal{width:460px}
-.app-open{display:flex;flex-direction:column;gap:12px;font-size:13.5px;line-height:1.55;color:var(--muted2)}
-.app-open p{margin:0}
-.app-open b{color:var(--text);font-weight:600}
-.app-open-icon{border-radius:12px;display:block}
-
 @media(max-width:640px){
   .app-row{flex-wrap:wrap}
   .app-row-text{flex-basis:calc(100% - 60px)}
@@ -42,10 +33,5 @@
   .app-row-actions .btn{flex:1}
 }
 
-/* ── Het menu in een losse app ────────────────────────────────────────────
-   Onder de pagina's van de app een weg terug naar de hele werkruimte; die
-   staat iets stiller dan de pagina's zelf, want hij opent een ander venster. */
-.nav-workspace-sep{height:1px;margin:10px 12px 6px;background:var(--border)}
-.nav-item.nav-workspace{opacity:.78}
-.nav-item.nav-workspace:hover,.nav-item.nav-workspace:focus-visible{opacity:1}
+/* ── Het menu in een losse app ──────────────────────────────────────────── */
 .app-brand-sub{font-weight:600;opacity:.72;margin-left:5px}

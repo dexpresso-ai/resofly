@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calendar, CalendarClock, CalendarRange, Clock, ExternalLink, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Select } from './Ui';
 import { BrandMark } from './BrandMark';
 import { askGerrie } from './GerrieChat';
@@ -300,7 +300,6 @@ export function ZenitNav({
   activeAiReportId = null,
   onOpenAiReport,
   standaloneApp = null,
-  onOpenWorkspace,
 }: SidebarProps) {
   const narrow = useNarrowViewport();
   // Rapportages waar Gerrie nu aan bouwt: een knipperend lichtje in het paneel.
@@ -520,15 +519,6 @@ export function ZenitNav({
         </div>;
       })}
       <div className="zrail-foot">
-        {onOpenWorkspace && <button
-          type="button"
-          className="zrail-btn"
-          aria-label="Volledige werkruimte"
-          onClick={onOpenWorkspace}
-        >
-          <ExternalLink size={19} strokeWidth={1.6} aria-hidden="true"/>
-          <span className="ztip" aria-hidden="true">Volledige werkruimte</span>
-        </button>}
         <button
           ref={view.triggerRef}
           type="button"
@@ -653,7 +643,6 @@ export function ZenitNav({
         ><tab.Icon size={15} aria-hidden="true"/><span>{tab.label}</span></button>)}
       </div>
       <div className="zpop-sep" aria-hidden="true"/>
-      {onOpenWorkspace && <button type="button" role="menuitem" className="zpop-item" onClick={() => { account.setOpen(false); onOpenWorkspace(); }}><ExternalLink size={15} aria-hidden="true"/><span>Volledige werkruimte</span></button>}
       {onNewEntity && <button type="button" role="menuitem" className="zpop-item" onClick={() => { account.setOpen(false); onNewEntity(); }}><Plus size={15} aria-hidden="true"/><span>Nieuwe administratie</span></button>}
       <button type="button" role="menuitem" className="zpop-item" onClick={() => { account.setOpen(false); onNewOrganization(); }}><Plus size={15} aria-hidden="true"/><span>Nieuwe organisatie</span></button>
       <div className="zpop-sep" aria-hidden="true"/>

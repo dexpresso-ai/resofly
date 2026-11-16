@@ -12,10 +12,9 @@ import { BackScope, useBackStep } from './lib/useBackStep';
 import { TabHistory, type TabHistoryContext, type TabView } from './lib/tabHistory';
 import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type DataGroup, type GroupState } from './lib/dataGroups';
 import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, isAdminRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
-import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFromPath, isPageInApp, isRunningInstalled, standaloneAppFromPath, WORKSPACE_APP, type InstallableApp, type StandaloneApp } from './lib/standaloneApps';
+import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFromPath, isPageInApp, standaloneAppFromPath, type InstallableApp, type StandaloneApp } from './lib/standaloneApps';
 import { captureInstallPrompt } from './lib/installPrompt';
-import { isAndroid, takeInstallRequest, trackWorkspaceApp } from './lib/openWorkspaceApp';
-import { InstallAppCard, useOpenWorkspace } from './components/StandaloneApps';
+import { InstallAppCard } from './components/StandaloneApps';
 import { GlobalSearch, type SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { MemberSelect } from './components/MemberSelect';
@@ -365,12 +364,6 @@ const STANDALONE_APP: StandaloneApp | null = typeof window === 'undefined' ? nul
  * we de browser zijn gang gaan.
  */
 const INSTALL_APP: InstallableApp | null = typeof window === 'undefined' ? null : installableAppFromPath(window.location.pathname);
-/**
- * Kwam je hier via ResoFly installeren in een losse app
- * (/app/werkruimte/?installeren=1)? Dan staat de installeerkaart er, ook als je
- * hem ooit wegklikte. Zie lib/openWorkspaceApp.ts.
- */
-let FORCE_INSTALL_CARD = false;
 if (INSTALL_APP) {
   // /app/agenda zonder slash valt buiten de scope van het manifest (/app/agenda/):
   // dan biedt de browser installeren niet aan.
@@ -379,15 +372,6 @@ if (INSTALL_APP) {
   // De werkruimte houdt het manifest en het icoon uit index.html.
   if (STANDALONE_APP) applyStandaloneAppHead(STANDALONE_APP);
   captureInstallPrompt();
-  if (INSTALL_APP.id === WORKSPACE_APP.id) {
-    const request = takeInstallRequest(window.location.search);
-    if (request.requested) {
-      FORCE_INSTALL_CARD = true;
-      window.history.replaceState(window.history.state, '', `${window.location.pathname}${request.search}${window.location.hash}`);
-    }
-    // Zo weten de losse apps of de ResoFly-app op dit apparaat staat.
-    trackWorkspaceApp({ runningInstalled: isRunningInstalled(), android: isAndroid() });
-  }
 }
 
 // Herladen midden in de app laat items in de browsergeschiedenis achter van
@@ -1715,18 +1699,6 @@ function App() {
     setStatsReportId(null);
     setMobileNavOpen(false);
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-  }
-
-  /**
-   * Vanuit een losse app naar de hele werkruimte. Draait de app als app (eigen
-   * venster), dan opent de ResoFly-app, of eerst de melding dat je die moet
-   * installeren. In een gewoon tabblad gewoon daarheen. Zie
-   * lib/openWorkspaceApp.ts.
-   */
-  const workspaceOpener = useOpenWorkspace(Boolean(STANDALONE_APP));
-  function openWorkspace() {
-    setMobileNavOpen(false);
-    workspaceOpener.open();
   }
 
   async function createNewOrganization() {
@@ -4332,7 +4304,6 @@ function App() {
     // In een losse app ziet het menu alleen de pagina's van die app (zie navPermissions).
     permissions: navPermissions,
     standaloneApp: STANDALONE_APP,
-    onOpenWorkspace: STANDALONE_APP ? openWorkspace : undefined,
   };
 
   // In een losse app begint het kruimelpad bij het begin van de app.
@@ -4460,9 +4431,8 @@ function App() {
         <small>Sluit dit venster niet — dit kan enkele seconden duren.</small>
       </div>
     </div>}
-    {workspaceOpener.dialog}
     <div className="toast-region">
-      {INSTALL_APP && <InstallAppCard app={INSTALL_APP} force={FORCE_INSTALL_CARD} />}
+      {INSTALL_APP && <InstallAppCard app={INSTALL_APP} />}
       <ClientEmailToasts
         toasts={clientEmailToasts}
         onOpen={(toast) => openCommunication(toast.kind === 'inbox' ? { tab: 'inbox' } : { tab: 'all', threadId: toast.threadId })}
