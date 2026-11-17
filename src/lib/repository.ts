@@ -159,6 +159,7 @@ import type {
   DgaSignals,
   OwnersEquityOverview,
   PartnershipPartner,
+  PartnershipPartnerHours,
   DividendDistributionLine,
   DividendDistributionRow,
   DividendKind,
@@ -2699,6 +2700,39 @@ export async function savePartnershipPartner(
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as PartnershipPartner;
+}
+
+/**
+ * Koppelt een vennoot aan het teamlid dat hij is (of los, met `null`). Dan tellen
+ * de uren van dat teamlid voor het urencriterium van de vennoot.
+ */
+export async function setPartnershipPartnerMember(
+  organizationId: UUID, partnerId: UUID, userId: UUID | null,
+): Promise<PartnershipPartner> {
+  const { data, error } = await supabase.rpc('set_partnership_partner_member', {
+    p_organization_id: organizationId,
+    p_partner_id: partnerId,
+    p_user_id: userId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as PartnershipPartner;
+}
+
+/**
+ * De uren per vennoot in één kalenderjaar (het urencriterium). Vraagt leesrecht
+ * op Financiën én Uren; de database weigert anders.
+ */
+export async function loadPartnershipPartnerHours(organizationId: UUID, year: number): Promise<PartnershipPartnerHours[]> {
+  const { data, error } = await supabase.rpc('partnership_partner_hours', {
+    p_organization_id: organizationId,
+    p_year: year,
+  });
+  if (error) throw bookkeepingError(error);
+  return ((data ?? []) as PartnershipPartnerHours[]).map(row => ({
+    ...row,
+    direct_minutes: Number(row.direct_minutes ?? 0),
+    indirect_minutes: Number(row.indirect_minutes ?? 0),
+  }));
 }
 
 /** De kapitaalvergelijking van één boekjaar: begin, resultaat, stortingen, opnamen, eind. */

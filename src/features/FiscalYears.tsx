@@ -303,7 +303,7 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
           onConfirm={() => doClose(confirmClose)}
         >
           {isPartnershipForm
-            ? <p>Het resultaat van dit boekjaar wordt verdeeld over de kapitaalrekeningen van de vennoten, naar rato van hun winstaandeel (zie Financiën → Vennoten), en het privé van elke vennoot gaat naar zijn kapitaal. Zijn er nog geen vennoten vastgelegd, dan gaat het resultaat naar <strong>{resultLabel}</strong>. Het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.</p>
+            ? <p>Het resultaat van dit boekjaar wordt verdeeld over de kapitaalrekeningen van de vennoten, naar rato van hun winstaandeel (zie Financiën → Vennoten), en het privé van elke vennoot gaat naar zijn kapitaal. Is er geen actieve vennoot, dan gaat het resultaat zonder verdeling naar <strong>{resultLabel}</strong>. Het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.</p>
             : <p>Het resultaat van dit boekjaar wordt geboekt naar <strong>{resultLabel}</strong> en het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.{isSoleTrader && ' Privé-opnamen en -stortingen (0550 en 0560) gaan naar 0500 Eigen vermogen.'}</p>}
           <p className="bk-fy-result">Te bestemmen resultaat: <strong className={confirmClose.computed_result_cents >= 0 ? 'bk-pos' : 'bk-neg'}>{euroCents(confirmClose.computed_result_cents)}</strong> ({confirmClose.computed_result_cents >= 0 ? 'winst' : 'verlies'})</p>
           <p className="bk-muted">Alle BTW-aangiften van dit boekjaar moeten eerst gefinaliseerd zijn. Een afgesloten boekjaar kan later alleen door een eigenaar/beheerder worden heropend.</p>

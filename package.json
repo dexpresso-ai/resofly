@@ -14,6 +14,7 @@
     "test:inrichten": "node tests/inrichten/run.mjs",
     "test:terugknop": "node tests/terugknop/run.mjs",
     "test:stromen": "node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/run.mjs",
+    "test:database": "bash tests/database/run.sh",
     "lint:sql": "node -e \"console.log('SQL lint placeholder')\""
   },
   "dependencies": {

@@ -207,6 +207,27 @@ const PAGES = {
   // Boekhouding → Beginbalans met het paneel "Overstappen van een ander
   // pakket?" (auditfile inlezen, 11 november 2026) boven de handmatige regels.
   'ledger-beginbalans': { page: 'ledger', mock: { ledger: true }, prepare: '.bk-tabs button:has-text("Beginbalans")' },
+  // 2026-11-17 — de beginbalans van een vof: de uitleg met de kapitaalrekening
+  // van elke vennoot, en na "Regel per vennoot" een regel per vennoot met een
+  // lange rekeningnaam.
+  'ledger-beginbalans-vof': {
+    page: 'ledger', mock: { ledger: true, vof: true },
+    prepare: ['.bk-tabs button:has-text("Beginbalans")', '.bk-opening-partners button:has-text("Regel per vennoot")'],
+    mustShow: [{ selector: '.bk-opening-partners', text: '0501 Kapitaal Anna de Vries', label: 'de uitleg met de kapitaalrekening van elke vennoot' }],
+  },
+  // 2026-11-17 — Vennoten bij een vof: de vennoten met hun teamlid en het
+  // urencriterium per vennoot (een uitgetreden vennoot met een lange naam en
+  // zonder teamlid), de kapitaalvergelijking met de regel "nog niet aan een
+  // vennoot toegewezen", en het formulier om een vennoot te bewerken met de
+  // keuze voor het teamlid.
+  owners: {
+    page: 'owners', mock: { ledger: true, vof: true },
+    mustShow: [
+      { selector: '.bk-partner-hours', text: 'gehaald', label: 'het urencriterium van de eerste vennoot' },
+      { selector: '.bk-balance-sub', text: 'Nog niet aan een vennoot toegewezen', label: 'de regel met vermogen op geen enkele vennoot' },
+    ],
+  },
+  'owners-bewerken': { page: 'owners', mock: { ledger: true, vof: true }, prepare: '.bk-cell-action .bk-line-del' },
   // Vooruitbetaalde kosten (2026-11-11): de lijst met de balk "klaar om te
   // boeken", een lopende post met zijn schema, en het formulier voor een
   // nieuwe vooruitbetaling met het voorbeeld van de verdeling.

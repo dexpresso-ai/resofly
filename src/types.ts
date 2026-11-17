@@ -2001,8 +2001,20 @@ export interface PartnershipPartner extends OrgScopedRow {
   capital_account_id: UUID;
   withdrawals_account_id: UUID;
   contributions_account_id: UUID;
+  /** Het teamlid dat deze vennoot is; zijn uren tellen voor het urencriterium van de vennoot. */
+  user_id: UUID | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Uitkomst van partnership_partner_hours: de uren van één vennoot in een kalenderjaar. */
+export interface PartnershipPartnerHours {
+  partner_id: UUID;
+  user_id: UUID | null;
+  direct_minutes: number;
+  indirect_minutes: number;
+  /** De eerste dag met uren in dat jaar: vanaf daar rekent de prognose. */
+  first_entry_date: string | null;
 }
 
 /** Eén regel van de kapitaalvergelijking: de ondernemer of één vennoot. */

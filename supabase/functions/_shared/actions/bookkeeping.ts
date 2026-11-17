@@ -2207,7 +2207,8 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Sluit een boekjaar af: het resultaat wordt in één boekstuk naar de resultaatrekening geboekt (standaard 0510 Onverdeeld resultaat; bij een eenmanszaak meestal 0500, en dan gaan ook de privé-opnamen en -stortingen naar 0500; bij een vof, maatschap of cv met vennoten naar rato naar hun kapitaalrekeningen) en het HELE JAAR wordt vergrendeld — daarna kan er niets meer in worden geboekt. ' +
+      'Sluit een boekjaar af: het resultaat wordt in één boekstuk naar de resultaatrekening geboekt (standaard 0510 Onverdeeld resultaat; bij een eenmanszaak meestal 0500, en dan gaan ook de privé-opnamen en -stortingen naar 0500; bij een vof, maatschap of cv met actieve vennoten naar rato naar hun kapitaalrekeningen) en het HELE JAAR wordt vergrendeld — daarna kan er niets meer in worden geboekt. ' +
+      'Het privé van elke vennoot (055n, 056n) gaat altijd naar zijn eigen kapitaal, ook na de overstap naar een eenmanszaak. ' +
       'Alle btw-aangiften van dat jaar moeten eerst zijn afgesloten. ' +
       'Een afgesloten boekjaar kan alleen nog door een eigenaar of beheerder worden heropend; doe dat alleen om een fout te herstellen. Bekijk het te bestemmen resultaat eerst met `list_fiscal_years`.',
     keywords: ['boekjaar afsluiten', 'jaarafsluiting', 'resultaat', '0510', 'vergrendelen', 'jaar dicht'],
@@ -2227,25 +2228,28 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       const legalForm = String(settingsRow?.legal_form ?? 'eenmanszaak');
 
       // Waar het resultaat heen gaat, zoals close_fiscal_year het doet: bij een
-      // vof, maatschap of cv met vennoten naar rato naar hun kapitaalrekeningen
-      // (en hun privé naar hun eigen kapitaal); bij een eenmanszaak gaat ook het
-      // privé naar 0500. Telt de verdeling niet op tot 100%, dan weigert de
+      // vof, maatschap of cv met actieve vennoten naar rato naar hun
+      // kapitaalrekeningen; bij een eenmanszaak gaat ook het privé naar 0500.
+      // Het privé van elke vennoot gaat altijd naar zijn eigen kapitaal, ook als
+      // er geen actieve vennoot meer is of de rechtsvorm eenmanszaak werd
+      // (20261117100000). Telt de verdeling niet op tot 100%, dan weigert de
       // afsluiting — dat hoort vóór de kaart te blijken, niet erna.
+      const { data: partners, error: partnersError } = await orgQuery(ctx, 'partnership_partners', 'name, profit_share_basis_points, is_active');
+      if (partnersError) throw new ActionError(`Vennoten ophalen mislukt: ${partnersError.message}`);
+      const allPartners = (partners ?? []) as Array<{ name: string; profit_share_basis_points: number; is_active?: boolean }>;
+      const list = allPartners.filter((p) => p.is_active !== false);
+      const distributes = ['vof', 'maatschap', 'cv'].includes(legalForm) && list.length > 0;
       let destination = `naar ${resultCode}`;
-      if (['vof', 'maatschap', 'cv'].includes(legalForm)) {
-        const { data: partners, error: partnersError } = await orgQuery(ctx, 'partnership_partners', 'name, profit_share_basis_points').eq('is_active', true);
-        if (partnersError) throw new ActionError(`Vennoten ophalen mislukt: ${partnersError.message}`);
-        const list = (partners ?? []) as Array<{ name: string; profit_share_basis_points: number }>;
-        if (list.length > 0) {
-          const total = list.reduce((sum, p) => sum + Number(p.profit_share_basis_points || 0), 0);
-          if (total !== 10000) {
-            throw new ActionError(`De winstverdeling van de vennoten telt op tot ${(total / 100).toLocaleString('nl-NL')}% in plaats van 100%. Pas de winstaandelen aan (Vennoten) voordat je het boekjaar afsluit.`);
-          }
-          destination = `naar de kapitaalrekeningen van ${list.length} vennoten (${list.map((p) => `${p.name} ${(p.profit_share_basis_points / 100).toLocaleString('nl-NL')}%`).join(', ')}); hun privé naar hun eigen kapitaal`;
+      if (distributes) {
+        const total = list.reduce((sum, p) => sum + Number(p.profit_share_basis_points || 0), 0);
+        if (total !== 10000) {
+          throw new ActionError(`De winstverdeling van de vennoten telt op tot ${(total / 100).toLocaleString('nl-NL')}% in plaats van 100%. Pas de winstaandelen aan (Vennoten) voordat je het boekjaar afsluit.`);
         }
+        destination = `naar de kapitaalrekeningen van ${list.length} vennoten (${list.map((p) => `${p.name} ${(p.profit_share_basis_points / 100).toLocaleString('nl-NL')}%`).join(', ')}); hun privé naar hun eigen kapitaal`;
       } else if (legalForm === 'eenmanszaak') {
         destination = `naar ${resultCode}; privé-opnamen en -stortingen naar 0500 Eigen vermogen`;
       }
+      if (!distributes && allPartners.length > 0) destination += '; het privé van de vennoten naar hun eigen kapitaal';
 
       return {
         title: `Boekjaar ${fiscalYear.label} definitief afsluiten`,

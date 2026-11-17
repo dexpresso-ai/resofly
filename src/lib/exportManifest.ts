@@ -63,7 +63,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // gallery_items; geen tabellen of kolommen.
 // 20261115120000 (geen AI kiezen) vervangt set_ai_consent; geen tabellen of
 // kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261115120000';
+// 20261117100000 (vennoten: uren en privé) zet user_id op partnership_partners:
+// het teamlid dat de vennoot is. Gaat gewoon mee met de vennoten, net als
+// clients.account_lead_user_id: geen geheim en geen opslagsleutel.
+export const EXPORT_SCHEMA_VERSION = '20261117100000';
 
 export type TableKind =
   | 'export'

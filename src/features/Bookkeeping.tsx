@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Calculator, Download, FileDown, FileText, Hourglass, Inbox, Layers, Mail, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
-  AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceInboxItem, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
+  AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PartnershipPartner, PurchaseInvoice, PurchaseInvoiceInboxItem, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
 } from '../types';
 import { REPORT_GROUPS_BY_TYPE, REPORT_GROUP_LABELS } from '../types';
 import { Modal } from '../components/Modal';
@@ -14,7 +14,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
-  loadInboundAlias, loadPurchaseInvoiceInbox, openingBalancePlugAccount,
+  listPartnershipPartners, loadInboundAlias, loadPurchaseInvoiceInbox, openingBalancePlugAccount,
   postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow,
 } from '../lib/repository';
 import { downloadXaf } from '../lib/xaf';
@@ -1437,19 +1437,52 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
   }, [organizationId]);
   const plugLabel = plug ? `${plug.code} ${plug.name}` : 'de eigen-vermogensrekening';
 
+  // Bij een vof, maatschap of cv heeft elke vennoot een eigen kapitaalrekening.
+  // Kwam het hele vermogen als sluitpost op 0500, dan stond het bij Vennoten als
+  // "nog niet aan een vennoot toegewezen" en moest het er met een memoriaal
+  // alsnog af. Daarom hier de vennoten, en een knop die per vennoot een regel
+  // klaarzet.
+  const isPartnershipForm = ['vof', 'maatschap', 'cv'].includes(data.companySettings?.legal_form ?? 'eenmanszaak');
+  const [partners, setPartners] = useState<PartnershipPartner[]>([]);
+  useEffect(() => {
+    if (!isPartnershipForm) { setPartners([]); return; }
+    let cancelled = false;
+    listPartnershipPartners(organizationId)
+      .then(rows => { if (!cancelled) setPartners(rows.filter(p => p.is_active)); })
+      .catch(() => { /* zonder vennoten: alleen de gewone uitleg */ });
+    return () => { cancelled = true; };
+  }, [organizationId, isPartnershipForm]);
+
   const accountById = useMemo(() => new Map(data.ledgerAccounts.map(a => [a.id, a])), [data.ledgerAccounts]);
   // Beginbalans = balansstanden; W&V-rekeningen horen er niet in.
   const balanceAccounts = data.ledgerAccounts.filter(a => a.is_active && (a.type === 'asset' || a.type === 'liability' || a.type === 'equity'));
   const update = (key: string, patch: Partial<OpeningLine>) => setLines(ls => ls.map(l => (l.key === key ? { ...l, ...patch } : l)));
+  const partnerCapitalAccounts = partners
+    .map(p => accountById.get(p.capital_account_id))
+    .filter((a): a is LedgerAccount => !!a && a.is_active);
 
   const totalDebit = lines.reduce((s, l) => s + parseEuro(l.debit), 0);
   const totalCredit = lines.reduce((s, l) => s + parseEuro(l.credit), 0);
   const equity = totalDebit - totalCredit;
   const filled = lines.filter(l => l.account_id && (parseEuro(l.debit) !== 0 || parseEuro(l.credit) !== 0));
+  const plugOnNoPartner = partnerCapitalAccounts.length > 0 && equity !== 0;
+
+  /** Per vennoot een regel op zijn kapitaalrekening, in plaats van de lege regels. */
+  function addPartnerLines() {
+    setLines(ls => {
+      const present = new Set(ls.map(l => l.account_id));
+      const kept = ls.filter(l => l.account_id || l.debit || l.credit);
+      const extra = partnerCapitalAccounts
+        .filter(a => !present.has(a.id))
+        .map(a => ({ key: uid(), account_id: a.id, debit: '', credit: '' }));
+      return [...kept, ...extra, emptyLine()];
+    });
+  }
 
   async function save() {
     if (!canWrite || filled.length === 0) return;
-    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op ${plugLabel} gezet. Dit kan maar één keer.`)) return;
+    const partnerWarning = plugOnNoPartner ? ' Die staat op geen enkele vennoot; zet het kapitaal liever per vennoot op zijn kapitaalrekening.' : '';
+    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op ${plugLabel} gezet.${partnerWarning} Dit kan maar één keer.`)) return;
     setBusy(true); setError(null);
     try {
       await createOpeningBalance(organizationId, date, filled.map(l => ({
@@ -1527,6 +1560,24 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
       <div className="bk-form-grid">
         <Field label="Per datum" hint="Meestal de boekhoud-startdatum (zie Instellingen → Boekhouding)."><Input type="date" value={date} onChange={e => setDate(e.target.value)} disabled={!canWrite} /></Field>
       </div>
+      {isPartnershipForm && (
+        <div className="bk-note bk-opening-partners">
+          <div className="bk-subhead">
+            {partnerCapitalAccounts.length > 0
+              ? <p>
+                  Zet het kapitaal van elke vennoot op zijn eigen kapitaalrekening ({partnerCapitalAccounts.map(a => `${a.code} ${a.name}`).join(', ')}),
+                  meestal in de kolom Credit. Wat daarna nog overblijft, komt als sluitpost op 0500 en staat bij Vennoten als ‘nog niet aan een vennoot toegewezen’.
+                </p>
+              : <p>
+                  Leg eerst de vennoten vast (Financiën → Vennoten). Dan krijgt elke vennoot een eigen kapitaalrekening en zet je hier ieders kapitaal apart.
+                  Anders komt het hele verschil als sluitpost op 0500, op geen enkele vennoot.
+                </p>}
+            {canWrite && partnerCapitalAccounts.length > 0 && (
+              <Button onClick={addPartnerLines}><Plus size={14} /> Regel per vennoot</Button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="bk-lines">
         <div className="bk-lines-head bk-lines-head-opening"><span>Rekening</span><span className="bk-num">Debet</span><span className="bk-num">Credit</span><span /></div>
         {lines.map(l => (
@@ -1549,6 +1600,9 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
         <div><span>Credit</span><strong>{euroCents(totalCredit)}</strong></div>
         <div><span>Sluitpost eigen vermogen{plug ? ` (${plug.code})` : ''}</span><strong>{euroCents(Math.abs(equity))} {equity >= 0 ? 'credit' : 'debet'}</strong></div>
       </div>
+      {plugOnNoPartner && (
+        <p className="bk-muted">De sluitpost staat op geen enkele vennoot. Klopt het kapitaal per vennoot, dan is hij nul.</p>
+      )}
     </div>
   );
 }

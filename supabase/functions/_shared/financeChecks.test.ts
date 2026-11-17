@@ -201,6 +201,50 @@ test('afsluiten weigert vooraf als de winstverdeling van de vennoten niet op 100
   assert.match(plan.sub, /kapitaalrekeningen van 2 vennoten/);
 });
 
+// ── Vennoten: privé en uren (17 november 2026) ───────────────────────────
+
+test('zonder actieve vennoot of na de overstap naar een eenmanszaak: privé van de vennoten naar hun eigen kapitaal', async () => {
+  const close = action(BOOKKEEPING_ACTIONS, 'fiscal_year.close');
+  const lijst = { list_fiscal_years: [{ id: ID, computed_result_cents: 100000 }] };
+  const fiscal_years = [{ label: '2025', period_start: '2025-01-01', period_end: '2025-12-31', status: 'open' }];
+  const vroegere = [{ name: 'Anna', profit_share_basis_points: 6000, is_active: false }, { name: 'Bram', profit_share_basis_points: 0, is_active: false }];
+
+  // Een vof waarvan iedereen is uitgetreden: geen weigering om 0%, het resultaat naar 0510.
+  const vof = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0510', legal_form: 'vof' }], partnership_partners: vroegere }, lijst), { fiscal_year_id: ID });
+  assert.match(vof.sub, /naar 0510; het privé van de vennoten naar hun eigen kapitaal/);
+
+  // Een eenmanszaak die eerst een vof was.
+  const eenmanszaak = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }], partnership_partners: vroegere }, lijst), { fiscal_year_id: ID });
+  assert.match(eenmanszaak.sub, /0500 Eigen vermogen; het privé van de vennoten naar hun eigen kapitaal/);
+
+  // Een gewone eenmanszaak: geen woord over vennoten.
+  const gewoon = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }] }, lijst), { fiscal_year_id: ID });
+  assert.doesNotMatch(gewoon.sub, /vennoten/);
+});
+
+test('de kapitaalvergelijking geeft de uren per vennoot alleen aan wie Uren mag lezen', async () => {
+  const overview = action(BUSINESS_ACTIONS, 'owners.equity_overview');
+  const rows = {
+    partnership_partners: [{ id: ID, partner_number: 1, name: 'Anna', profit_share_basis_points: 10000, kind: 'beherend', is_active: true, user_id: '00000000-0000-0000-0000-0000000000a1' }],
+  };
+  const overzicht = { fiscalYear: { id: ID, label: '2026', periodStart: '2026-01-01', periodEnd: '2026-12-31', status: 'open' } };
+  const uren = [{ partner_id: ID, user_id: '00000000-0000-0000-0000-0000000000a1', direct_minutes: 600, indirect_minutes: 120, first_entry_date: '2026-02-01' }];
+
+  // Zonder Uren: geen aanroep van partnership_partner_hours (de nep-database
+  // gooit bij een onverwachte rpc), en hours is null.
+  const boekjaren = [{ id: ID, label: '2026', period_start: '2026-01-01', period_end: '2026-12-31', status: 'open' }];
+  const zonder = { ...ctx(rows, { list_fiscal_years: boekjaren, owners_equity_overview: overzicht }), canRead: (module: string) => module !== 'time' };
+  const a = await overview.read!(zonder, { fiscal_year_id: ID }) as { hours: unknown; partners: Array<{ user_id: string }> };
+  assert.equal(a.hours, null);
+  assert.equal(a.partners[0].user_id, '00000000-0000-0000-0000-0000000000a1');
+
+  const met = ctx(rows, { list_fiscal_years: boekjaren, owners_equity_overview: overzicht, partnership_partner_hours: uren });
+  const b = await overview.read!(met, { fiscal_year_id: ID }) as { hours: { year: number; criterionMinutes: number; partners: unknown[] } };
+  assert.equal(b.hours.year, 2026);
+  assert.equal(b.hours.criterionMinutes, 1225 * 60);
+  assert.deepEqual(b.hours.partners, uren);
+});
+
 // ── Foutmeldingen ────────────────────────────────────────────────────────
 
 test('databasetekst gaat niet naar de browser; een eigen melding wel', () => {

@@ -1079,8 +1079,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     kind: 'read',
     description:
       'Alleen voor een eenmanszaak, vof, maatschap of cv: daar is de winst van de ondernemer of de vennoten zelf. Geeft voor één boekjaar de kapitaalvergelijking: beginvermogen, resultaat (bij een vof met vennoten het winstaandeel per vennoot volgens de winstverdeling, tot op de cent sluitend), privé-stortingen, privé-opnamen, overige mutaties en eindvermogen. ' +
-      'Dat is wat de aangifte inkomstenbelasting vraagt als ondernemingsvermogen aan het begin en het eind van het jaar; elke vennoot geeft zijn eigen winstaandeel aan. Bij een open boekjaar is het resultaat voorlopig. `unassigned` is vermogen dat op geen enkele vennoot staat (bijv. een beginbalans van vóór de vennoten). Ook de vennoten zelf met hun winstaandeel en rekeningen.',
-    keywords: ['eigen vermogen', 'kapitaal', 'privé', 'privé-opname', 'privé-storting', 'vennoot', 'vennoten', 'winstverdeling', 'winstaandeel', 'vof', 'eenmanszaak', 'kapitaalvergelijking'],
+      'Dat is wat de aangifte inkomstenbelasting vraagt als ondernemingsvermogen aan het begin en het eind van het jaar; elke vennoot geeft zijn eigen winstaandeel aan. Bij een open boekjaar is het resultaat voorlopig. `unassigned` is vermogen dat op geen enkele vennoot staat (bijv. een beginbalans van vóór de vennoten). Ook de vennoten zelf met hun winstaandeel en rekeningen, en het teamlid dat de vennoot is (`user_id`). ' +
+      '`hours` geeft per vennoot zijn uren in het kalenderjaar van het boekjaar (direct, indirect, in minuten) voor het urencriterium van 1225 uur; alleen als de aanroeper Uren mag lezen, anders null. Een vennoot zonder gekoppeld teamlid heeft geen uren.',
+    keywords: ['eigen vermogen', 'kapitaal', 'privé', 'privé-opname', 'privé-storting', 'vennoot', 'vennoten', 'winstverdeling', 'winstaandeel', 'vof', 'eenmanszaak', 'kapitaalvergelijking', 'urencriterium', 'uren per vennoot'],
     input: {
       fiscal_year_id: { type: 'string', description: 'Id van het boekjaar (uit list_fiscal_years).' },
     },
@@ -1094,10 +1095,24 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       });
       if (error) throw new ActionError(`Kapitaalvergelijking ophalen mislukt: ${error.message}`);
       const { data: partners, error: partnersError } = await orgQuery(ctx, 'partnership_partners',
-        'id, partner_number, name, profit_share_basis_points, kind, is_active')
+        'id, partner_number, name, profit_share_basis_points, kind, is_active, user_id')
         .order('partner_number', { ascending: true });
       if (partnersError) throw new ActionError(`Vennoten ophalen mislukt: ${partnersError.message}`);
-      return { overview: data ?? null, partners: partners ?? [] };
+
+      // De uren horen bij de module Uren. De handeling draait als service-role,
+      // dus de database kijkt hier niet naar de rechten: wie Uren niet mag lezen,
+      // krijgt ze dan ook niet via deze weg (CLAUDE.md, regel 3).
+      let hours: unknown = null;
+      const periodStart = String((data as { fiscalYear?: { periodStart?: string } } | null)?.fiscalYear?.periodStart ?? '');
+      if (ctx.canRead?.('time') && (partners ?? []).length > 0 && /^\d{4}-/.test(periodStart)) {
+        const { data: rows, error: hoursError } = await ctx.db.rpc('partnership_partner_hours', {
+          p_organization_id: ctx.organizationId,
+          p_year: Number(periodStart.slice(0, 4)),
+        });
+        if (hoursError) throw new ActionError(`Uren per vennoot ophalen mislukt: ${hoursError.message}`);
+        hours = { year: Number(periodStart.slice(0, 4)), criterionMinutes: 1225 * 60, partners: rows ?? [] };
+      }
+      return { overview: data ?? null, partners: partners ?? [], hours };
     },
   },
 

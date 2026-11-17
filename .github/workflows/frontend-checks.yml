@@ -192,3 +192,13 @@ jobs:
             echo "::error title=Migratie overgeslagen::$files bestanden, $applied toegepast. Een migratie heet <14 cijfers>_<naam>.sql."
             exit 1
           fi
+
+      # De databasetests (tests/database) op dezelfde verse database, elk in een
+      # transactie die wordt teruggedraaid. Eerst de jaarafsluiting van een vof:
+      # de verdeling over de vennoten tot op de cent, verlies, het privé naar het
+      # kapitaal, de 100%-controle, heropenen, de overstap naar een eenmanszaak,
+      # de uren per vennoot en wie wat mag. close_fiscal_year wordt bij elke
+      # wijziging helemaal opnieuw geschreven; tot 17 november 2026 had geen
+      # test gezien als het vennotendeel daarbij wegviel.
+      - name: Databasetests
+        run: bash tests/database/run.sh
