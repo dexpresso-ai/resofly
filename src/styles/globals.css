@@ -5585,6 +5585,14 @@ body::before{
 .tb-ad-bar-task .tb-ad-bar-title{font-weight:600}
 .tb-ad-more{all:unset;box-sizing:border-box;cursor:pointer;margin:0 2px;padding:0 7px;border-radius:5px;font-size:10px;font-weight:600;color:var(--muted2);display:flex;align-items:center}
 .tb-ad-more:hover{background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));color:var(--text)}
+/* Hele dagen selecteren: klik/sleep in de band, of sleep in het rooster over
+   meerdere dagen. De band toont de selectie als een gouden balk-in-wording,
+   de gekozen dagkolommen krijgen een zachte vulling. */
+.tb-allday-lanes{position:relative}
+.tb-ad-can{cursor:crosshair;user-select:none;-webkit-user-select:none}
+.tb-ad-sel{position:absolute;top:0;bottom:0;box-sizing:border-box;padding:3px 2px;z-index:3;pointer-events:none;display:flex}
+.tb-ad-sel-label{flex:1 1 auto;min-width:0;display:flex;align-items:center;min-height:19px;padding:0 7px;border-radius:5px;background:rgba(var(--accent-rgb),.92);color:var(--on-accent);font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 2px 8px rgba(var(--shade-rgb),calc(.22 * var(--shade-k)))}
+.tb-daysel{position:absolute;inset:0;z-index:2;pointer-events:none;background:rgba(var(--accent-rgb),.09)}
 
 /* 4 ── Compact op kleinere schermen ─────────────────────────────────────── */
 @media(max-width:1200px){

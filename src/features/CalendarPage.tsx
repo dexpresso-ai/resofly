@@ -254,6 +254,22 @@ function allDayEndDateKeyExclusive(event: CalendarExternalEvent): string {
   return end <= start ? addDateKeyDays(start, 1) : end;
 }
 
+/** Laatste dag (t/m) van een hele-dag-afspraak, zoals de formulieren hem tonen. */
+function allDayLastDateKey(event: CalendarExternalEvent): string {
+  return addDateKeyDays(allDayEndDateKeyExclusive(event), -1);
+}
+
+/** Einde van een hele-dag-afspraak zoals we hem opslaan, vanuit de "t/m"-datum
+ *  uit het formulier. Google en Microsoft maken er server-side zelf de exclusieve
+ *  einddatum van (dag erna). De eigen ResoFly-agenda bewaart wat we sturen, en de
+ *  weergave leest dat einde als exclusief — zonder deze stap viel bij een
+ *  meerdaagse ResoFly-afspraak de laatste dag weg. Eén dag laten we zoals hij
+ *  was (einde = begin), dat leest de weergave al goed. */
+function allDayEndIsoForSave(startKey: string, lastKey: string, isNative: boolean): string {
+  const endKey = isNative && lastKey > startKey ? addDateKeyDays(lastKey, 1) : lastKey;
+  return `${endKey}T00:00:00.000Z`;
+}
+
 function formatEventRange(event: CalendarExternalEvent): string {
   if (event.all_day) {
     const start = allDayStartDateKey(event);
@@ -591,7 +607,16 @@ function eventOverlapsVisibleWindow(event: CalendarExternalEvent, day: Date): bo
 
 type CalendarView = 'day' | '3day' | 'week' | 'month' | 'list';
 
-interface DragState { dayIndex: number; startSlot: number; endSlot: number }
+/** Lopende sleep-selectie. `dayIndex` is de dag waar je begon, `endDayIndex` de dag
+ *  onder de cursor. Loopt de selectie over meer dan één dag (of begon hij in de
+ *  hele-dag-band: `wholeDays`), dan wordt het een selectie van hele dagen. */
+interface DragState { dayIndex: number; endDayIndex: number; startSlot: number; endSlot: number; wholeDays: boolean }
+
+/** Welke dagen (index van/t/m) een selectie beslaat als het hele dagen zijn; anders null. */
+function daySelectionRange(d: DragState): { lo: number; hi: number } | null {
+  if (!d.wholeDays && d.dayIndex === d.endDayIndex) return null;
+  return { lo: Math.min(d.dayIndex, d.endDayIndex), hi: Math.max(d.dayIndex, d.endDayIndex) };
+}
 
 /* ── TimeBlockGrid ───────────────────────────────────────────────────── */
 
@@ -922,6 +947,10 @@ type TimeBlockGridProps = {
   canWrite: boolean;
   writeableSources: CalendarSource[];
   onSelectSlot: (day: Date, startSlot: number, endSlot: number) => void;
+  /** Selecteren over meerdere dagen (of in de hele-dag-band) levert hele dagen op:
+   *  de eerste en de laatste geselecteerde dag (t/m). Zonder deze callback blijft
+   *  een selectie binnen de dag waar je begon (planner, boekingslinks). */
+  onSelectDays?: (firstDay: Date, lastDay: Date) => void;
   onEditTask: (task: Task) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
   onMoveEvent: (event: CalendarExternalEvent, startIso: string, endIso: string) => void | Promise<void>;
@@ -977,7 +1006,7 @@ type TimeBlockGridProps = {
   ghostTaskId?: string | null;
 };
 
-export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>(function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, linkedTaskFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, fitWindow = DEFAULT_FIT, autoScrollKey = 0, taskBand = 'deadline', bandLabel = 'Hele dag', taskColorFor, taskMetaFor, onMoveTask, onTaskBlockPointerDown, onTaskMenu, onToggleTaskDone, renderTaskBar, renderDayHeader, previewBlocks = [], draft = null, allowSelect, ghostTaskId = null }, ref) {
+export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>(function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, linkedTaskFor, canWrite, writeableSources, onSelectSlot, onSelectDays, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, fitWindow = DEFAULT_FIT, autoScrollKey = 0, taskBand = 'deadline', bandLabel = 'Hele dag', taskColorFor, taskMetaFor, onMoveTask, onTaskBlockPointerDown, onTaskMenu, onToggleTaskDone, renderTaskBar, renderDayHeader, previewBlocks = [], draft = null, allowSelect, ghostTaskId = null }, ref) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   // Loopt de tijdselectie via een vinger? Dan houden we de pagina stil.
@@ -997,6 +1026,8 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
   daysRef.current = days;
   const onSelectSlotRef = useRef(onSelectSlot);
   onSelectSlotRef.current = onSelectSlot;
+  const onSelectDaysRef = useRef(onSelectDays);
+  onSelectDaysRef.current = onSelectDays;
   const onMoveEventRef = useRef(onMoveEvent);
   onMoveEventRef.current = onMoveEvent;
   const onMoveTaskRef = useRef(onMoveTask);
@@ -1480,15 +1511,57 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
     return Math.floor(frac * TOTAL_SLOTS);
   }, []);
 
-  const armSelection = useCallback((dayIndex: number, clientY: number, touch: boolean) => {
-    const slot = slotFromClientY(dayIndex, clientY);
+  const armSelection = useCallback((dayIndex: number, clientY: number, touch: boolean, wholeDays = false) => {
+    const slot = wholeDays ? 0 : slotFromClientY(dayIndex, clientY);
     if (slot == null) return;
-    const next: DragState = { dayIndex, startSlot: slot, endSlot: slot };
+    const next: DragState = { dayIndex, endDayIndex: dayIndex, startSlot: slot, endSlot: slot, wholeDays };
     dragRef.current = next;
     setDrag(next);
     setIsDragging(true);
     setTouchSelecting(touch);
   }, [slotFromClientY]);
+
+  // ── Hele dagen selecteren in de hele-dag-band (zoals Google) ───────────
+  // Klik op een lege plek in de band = een hele-dag-afspraak op die dag; sleep
+  // je over meerdere dagen, dan worden het al die dagen. Alleen als de pagina
+  // er iets mee kan (`onSelectDays`).
+  const canSelectDays = canSelect && Boolean(onSelectDays) && !bookingMode;
+  const beginDaySelection = useCallback((e: React.PointerEvent) => {
+    if (!canSelectDays) return;
+    if (interactionRef.current || dragRef.current) return;
+    // Op een bestaande balk, "+N" of de in-/uitklapknop: die doen zelf iets.
+    if ((e.target as HTMLElement).closest('button,.tb-ad-slot')) return;
+    const hit = pointerToCol(e.clientX, e.clientY);
+    if (!hit || hit.dayIndex < 0) return;
+    const dayIndex = hit.dayIndex;
+    const { clientX, clientY } = e;
+    if (e.pointerType === 'mouse') {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      armSelection(dayIndex, clientY, false, true);
+      return;
+    }
+    // Touch/pen: een tik is één hele dag, een lange druk + slepen meerdere.
+    let isTap = true;
+    function cleanup() {
+      window.removeEventListener('pointermove', onTapMove);
+      window.removeEventListener('pointerup', onTapUp);
+      window.removeEventListener('pointercancel', cleanup);
+    }
+    function onTapMove(ev: PointerEvent) {
+      if (Math.hypot(ev.clientX - clientX, ev.clientY - clientY) > TOUCH_HOLD_TOLERANCE_PX) { isTap = false; cleanup(); }
+    }
+    function onTapUp() {
+      cleanup();
+      if (!isTap || dragRef.current) return;
+      const day = daysRef.current[dayIndex];
+      if (day) onSelectDaysRef.current?.(day, day);
+    }
+    window.addEventListener('pointermove', onTapMove);
+    window.addEventListener('pointerup', onTapUp);
+    window.addEventListener('pointercancel', cleanup);
+    startHold(clientX, clientY, () => { isTap = false; cleanup(); armSelection(dayIndex, clientY, true, true); });
+  }, [canSelectDays, pointerToCol, armSelection, startHold]);
 
   const beginSelection = useCallback((e: React.PointerEvent, dayIndex: number) => {
     if (!canSelect) return;
@@ -1528,23 +1601,32 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
 
   useEffect(() => {
     if (!isDragging) return;
-    function apply(clientY: number) {
+    function apply(clientX: number, clientY: number) {
       const cur = dragRef.current;
       if (!cur) return;
-      const slot = slotFromClientY(cur.dayIndex, clientY);
-      if (slot == null || slot === cur.endSlot) return;
-      const next: DragState = { ...cur, endSlot: slot };
+      // Over de dagen heen slepen mag alleen als de pagina hele dagen aankan;
+      // anders blijft de selectie in de kolom waar hij begon.
+      let endDayIndex = cur.endDayIndex;
+      if (onSelectDaysRef.current) {
+        const hit = pointerToCol(clientX, clientY);
+        if (hit && hit.dayIndex >= 0) endDayIndex = hit.dayIndex;
+      }
+      const slot = cur.wholeDays ? cur.endSlot : slotFromClientY(cur.dayIndex, clientY);
+      if (slot == null || (slot === cur.endSlot && endDayIndex === cur.endDayIndex)) return;
+      const next: DragState = { ...cur, endSlot: slot, endDayIndex };
       dragRef.current = next;
       setDrag(next);
     }
     function onMove(e: PointerEvent) {
       lastPointerRef.current = { x: e.clientX, y: e.clientY };
-      autoScrollFor(e.clientY);
-      apply(e.clientY);
+      // In de (plakkende) hele-dag-band zit je altijd tegen de bovenrand: daar
+      // niet meescrollen, er valt in de band niets te scrollen.
+      if (!dragRef.current?.wholeDays) autoScrollFor(e.clientY);
+      apply(e.clientX, e.clientY);
     }
     let raf = requestAnimationFrame(function tick() {
       const p = lastPointerRef.current;
-      if (p && autoScrollDyRef.current !== 0) apply(p.y);
+      if (p && autoScrollDyRef.current !== 0) apply(p.x, p.y);
       raf = requestAnimationFrame(tick);
     });
     function onUp() {
@@ -1556,7 +1638,16 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
       setDrag(null);
       setTouchSelecting(false);
       if (!cur) return;
-      const day = daysRef.current[cur.dayIndex];
+      const shown = daysRef.current;
+      // Meer dan één dag (of begonnen in de band): standaard hele dagen.
+      const range = daySelectionRange(cur);
+      if (range && onSelectDaysRef.current) {
+        const first = shown[range.lo];
+        const last = shown[range.hi];
+        if (first && last) onSelectDaysRef.current(first, last);
+        return;
+      }
+      const day = shown[cur.dayIndex];
       if (!day) return;
       onSelectSlotRef.current(day, Math.min(cur.startSlot, cur.endSlot), Math.max(cur.startSlot, cur.endSlot));
     }
@@ -1570,7 +1661,7 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [isDragging, daysKey, slotFromClientY, autoScrollFor, stopAutoScroll]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isDragging, daysKey, slotFromClientY, pointerToCol, autoScrollFor, stopAutoScroll]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Zolang een touch-gebaar loopt mag de pagina niet meescrollen — anders
   // schuift het rooster onder je vinger vandaan tijdens het slepen.
@@ -1614,11 +1705,17 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
       const hi = Math.max(draft.startSlot, draft.endSlot);
       if (si >= lo && si <= hi) return true;
     }
-    if (!drag || !isDragging || di !== drag.dayIndex) return false;
+    if (!drag || !isDragging || di !== drag.dayIndex || daySel) return false;
     const lo = Math.min(drag.startSlot, drag.endSlot);
     const hi = Math.max(drag.startSlot, drag.endSlot);
     return si >= lo && si <= hi;
   }
+
+  // Loopt de selectie over hele dagen? Dan tekenen we geen tijdvak maar een
+  // balk in de hele-dag-band plus een zachte vulling over de gekozen dagen.
+  const daySel = drag && isDragging ? daySelectionRange(drag) : null;
+  const daySelCount = daySel ? daySel.hi - daySel.lo + 1 : 0;
+  const daySelLabel = daySelCount > 1 ? `${daySelCount} dagen · hele dag` : 'Hele dag';
 
   function selectionLabel(): string | null {
     if (!drag || !isDragging) return null;
@@ -1674,7 +1771,14 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
                 </button>
               )}
             </div>
-            <div className="tb-allday-lanes" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
+            <div className={`tb-allday-lanes${canSelectDays ? ' tb-ad-can' : ''}`} style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}
+              onPointerDown={canSelectDays ? beginDaySelection : undefined}>
+              {daySel && (
+                <div className="tb-ad-sel" aria-hidden="true"
+                  style={{ left: `${(daySel.lo / days.length) * 100}%`, width: `${(daySelCount / days.length) * 100}%` }}>
+                  <span className="tb-ad-sel-label">{daySelLabel}</span>
+                </div>
+              )}
               {visibleAllDayBars.map(bar => bar.kind === 'event' && bar.event ? (
                 <button type="button"
                   className={`tb-ad-bar${bar.continuesLeft ? ' tb-ad-cont-l' : ''}${bar.continuesRight ? ' tb-ad-cont-r' : ''}${bar.event.visibility === 'private' ? ' tb-ev-priv' : ''}`}
@@ -1726,6 +1830,7 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
               return (
                 <div className={`tb-col${isToday ? ' tb-today-col' : ''}`} key={di} ref={el => { colRefs.current[di] = el; }} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}
                   onPointerDown={canSelect ? e => beginSelection(e, di) : undefined}>
+                  {daySel && di >= daySel.lo && di <= daySel.hi && <div className="tb-daysel" aria-hidden="true" />}
                   {hourLabels.map((h, si) => {
                     const selected = isInSelection(di, si);
                     return (
@@ -2798,6 +2903,35 @@ function AttendeePicker({ organizationId, sourceId, sourceProvider, clients, sup
   );
 }
 
+/** Zet alleen de datum van een `YYYY-MM-DDTHH:mm`-waarde om; de tijd blijft
+ *  bewaard voor als je "Hele dag" weer uitzet. Een leeg datumveld verandert niets. */
+function withDatePart(value: string, date: string): string {
+  if (!date) return value;
+  return `${date}T${value.slice(11, 16) || '09:00'}`;
+}
+
+/** Begin/einde van een nieuwe afspraak: tijden, of bij "Hele dag" alleen datums
+ *  met een einddatum t/m (zo selecteer je ook meerdere dagen in het rooster). */
+function EventRangeFields({ newEvent, setNewEvent }: {
+  newEvent: NewEventState;
+  setNewEvent: (fn: (prev: NewEventState) => NewEventState) => void;
+}) {
+  if (newEvent.allDay) {
+    return (
+      <div className="settings-grid compact">
+        <label>Van<Input type="date" value={newEvent.startsAt.slice(0, 10)} onChange={e => { const v = e.target.value; setNewEvent(p => ({ ...p, startsAt: withDatePart(p.startsAt, v) })); }} /></label>
+        <label>Tot en met<Input type="date" value={newEvent.endsAt.slice(0, 10)} min={newEvent.startsAt.slice(0, 10)} onChange={e => { const v = e.target.value; setNewEvent(p => ({ ...p, endsAt: withDatePart(p.endsAt, v) })); }} /></label>
+      </div>
+    );
+  }
+  return (
+    <div className="settings-grid compact">
+      <label>Start<Input type="datetime-local" value={newEvent.startsAt} onChange={e => { const v = e.target.value; setNewEvent(p => ({ ...p, startsAt: v })); }} /></label>
+      <label>Einde<Input type="datetime-local" value={newEvent.endsAt} onChange={e => { const v = e.target.value; setNewEvent(p => ({ ...p, endsAt: v })); }} /></label>
+    </div>
+  );
+}
+
 function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, suppliers, projects, tasks, loading, canWrite, selectedSourceIsNative, selectedSourceProvider, organizationId, jitsiBaseUrl, videoServices, conference, onSubmit, onClose }: {
   newEvent: NewEventState;
   setNewEvent: (fn: (prev: NewEventState) => NewEventState) => void;
@@ -2838,10 +2972,7 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
         {editing && <p className="calendar-help">De agenda van een bestaande afspraak kan niet worden gewijzigd.</p>}
         <label>Titel<Input autoFocus value={newEvent.title} onChange={e => setNewEvent(p => ({ ...p, title: e.target.value }))} placeholder="Bijv. Intake klant" /></label>
         <label>Locatie<LocationField value={newEvent.location} onChange={next => setNewEvent(p => ({ ...p, location: next }))} placeholder="Zoek een adres of plaats…" /></label>
-        <div className="settings-grid compact">
-          <label>Start<Input type="datetime-local" value={newEvent.startsAt} onChange={e => setNewEvent(p => ({ ...p, startsAt: e.target.value }))} /></label>
-          <label>Einde<Input type="datetime-local" value={newEvent.endsAt} onChange={e => setNewEvent(p => ({ ...p, endsAt: e.target.value }))} /></label>
-        </div>
+        <EventRangeFields newEvent={newEvent} setNewEvent={setNewEvent} />
         <label>Omschrijving<Textarea value={newEvent.description} onChange={e => setNewEvent(p => ({ ...p, description: e.target.value }))} placeholder="Optioneel" /></label>
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
         <MeetingFields sourceProvider={selectedSourceProvider} sourceConferenceTypes={selectedSource?.conference_types} videoServices={videoServices}
@@ -2899,8 +3030,11 @@ function detailFormFromEvent(event: CalendarExternalEvent, available: Record<Vid
     title: event.title === '(Geen titel)' ? '' : (event.title ?? ''),
     location: event.location ?? '',
     description: event.description ?? '',
-    startLocal: toInputDateTime(new Date(event.starts_at)),
-    endLocal: toInputDateTime(new Date(event.ends_at)),
+    // Hele dag: datums rechtstreeks uit de sleutels (niet via de lokale klok), en
+    // het einde als laatste dag t/m — opgeslagen staat het einde exclusief. Zo
+    // schuift een hele-dag-afspraak bij opslaan niet stilletjes een dag op.
+    startLocal: event.all_day ? `${allDayStartDateKey(event)}T00:00` : toInputDateTime(new Date(event.starts_at)),
+    endLocal: event.all_day ? `${allDayLastDateKey(event)}T00:00` : toInputDateTime(new Date(event.ends_at)),
     allDay: event.all_day,
     recurrenceFreq: rec.freq,
     recurrenceUntil: rec.until,
@@ -3169,11 +3303,19 @@ function CalendarEventDetailPanel({ event, organizationId, data, sources, videoS
             <div className="event-detail-meta-card event-detail-time-edit">
               <Clock size={15} />
               <div className="event-time-edit">
-                <div className="event-time-edit-fields">
-                  <Input type="datetime-local" value={form!.startLocal} onChange={e => setForm(p => p ? { ...p, startLocal: e.target.value } : p)} aria-label="Starttijd" />
-                  <span className="event-time-edit-sep">tot</span>
-                  <Input type="datetime-local" value={form!.endLocal} onChange={e => setForm(p => p ? { ...p, endLocal: e.target.value } : p)} aria-label="Eindtijd" />
-                </div>
+                {form!.allDay ? (
+                  <div className="event-time-edit-fields">
+                    <Input type="date" value={form!.startLocal.slice(0, 10)} onChange={e => { const v = e.target.value; setForm(p => p ? { ...p, startLocal: withDatePart(p.startLocal, v) } : p); }} aria-label="Startdatum" />
+                    <span className="event-time-edit-sep">t/m</span>
+                    <Input type="date" value={form!.endLocal.slice(0, 10)} min={form!.startLocal.slice(0, 10)} onChange={e => { const v = e.target.value; setForm(p => p ? { ...p, endLocal: withDatePart(p.endLocal, v) } : p); }} aria-label="Einddatum (tot en met)" />
+                  </div>
+                ) : (
+                  <div className="event-time-edit-fields">
+                    <Input type="datetime-local" value={form!.startLocal} onChange={e => setForm(p => p ? { ...p, startLocal: e.target.value } : p)} aria-label="Starttijd" />
+                    <span className="event-time-edit-sep">tot</span>
+                    <Input type="datetime-local" value={form!.endLocal} onChange={e => setForm(p => p ? { ...p, endLocal: e.target.value } : p)} aria-label="Eindtijd" />
+                  </div>
+                )}
                 <label className="check-row event-allday-row">
                   <input type="checkbox" checked={form!.allDay} onChange={e => setForm(p => p ? { ...p, allDay: e.target.checked } : p)} /> Hele dag
                 </label>
@@ -4521,6 +4663,16 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     setShowCreatePanel(true);
   }, [bookingMode, slotSplit, events, ownSourceIds]);
 
+  // Selecteren over meerdere dagen (of in de hele-dag-band) = standaard een
+  // hele-dag-afspraak over die dagen. De einddatum in het formulier is "t/m".
+  const handleDaysSelect = useCallback((firstDay: Date, lastDay: Date) => {
+    const sd = startOfDay(firstDay);
+    const ed = startOfDay(lastDay);
+    setEditingOriginal(null);
+    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: true, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
+    setShowCreatePanel(true);
+  }, []);
+
   // Klikken op een lege plek in de maandweergave maakt een afspraak op die dag —
   // net als Google, dat daar een snelinvoer opent. Standaardduur: het eerstvolgende
   // hele uur (of 9:00 op een andere dag dan vandaag), één uur lang.
@@ -4565,12 +4717,12 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     if (!canWrite) { setError('Je hebt alleen-lezen toegang.'); return; }
     if (!newEvent.sourceId) { setError('Kies eerst een schrijfbare agenda.'); return; }
     if (!newEvent.title.trim()) { setError('Geef het event een titel.'); return; }
-    const sIso = newEvent.allDay ? `${newEvent.startsAt.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(newEvent.startsAt);
-    const eIso = newEvent.allDay ? `${newEvent.endsAt.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(newEvent.endsAt);
-    if (!newEvent.allDay && new Date(eIso).getTime() <= new Date(sIso).getTime()) { setError('Eindtijd moet na starttijd liggen.'); return; }
-    if (newEvent.allDay && dateKeyFromValue(eIso) < dateKeyFromValue(sIso)) { setError('Einddatum mag niet voor startdatum liggen.'); return; }
     const source = integrations.sources.find(s => s.id === newEvent.sourceId);
     const isNative = source?.provider === 'native';
+    const sIso = newEvent.allDay ? `${newEvent.startsAt.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(newEvent.startsAt);
+    const eIso = newEvent.allDay ? allDayEndIsoForSave(newEvent.startsAt.slice(0, 10), newEvent.endsAt.slice(0, 10), isNative) : inputDateTimeToIso(newEvent.endsAt);
+    if (!newEvent.allDay && new Date(eIso).getTime() <= new Date(sIso).getTime()) { setError('Eindtijd moet na starttijd liggen.'); return; }
+    if (newEvent.allDay && newEvent.endsAt.slice(0, 10) < newEvent.startsAt.slice(0, 10)) { setError('Einddatum mag niet voor startdatum liggen.'); return; }
     const recurrence: EventRecurrence | null = isNative && newEvent.recurrenceFreq
       ? { freq: newEvent.recurrenceFreq, until: newEvent.recurrenceUntil ? `${newEvent.recurrenceUntil}T23:59:59.000Z` : null }
       : null;
@@ -4621,11 +4773,11 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     if (!eventIsEditable(event)) return;
     const title = form.title.trim();
     if (!title) throw new Error('Geef de afspraak een titel.');
-    const sIso = form.allDay ? `${form.startLocal.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(form.startLocal);
-    const eIso = form.allDay ? `${form.endLocal.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(form.endLocal);
-    if (!form.allDay && new Date(eIso).getTime() <= new Date(sIso).getTime()) throw new Error('Eindtijd moet na starttijd liggen.');
-    if (form.allDay && dateKeyFromValue(eIso) < dateKeyFromValue(sIso)) throw new Error('Einddatum mag niet voor startdatum liggen.');
     const isNative = event.provider === 'native';
+    const sIso = form.allDay ? `${form.startLocal.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(form.startLocal);
+    const eIso = form.allDay ? allDayEndIsoForSave(form.startLocal.slice(0, 10), form.endLocal.slice(0, 10), isNative) : inputDateTimeToIso(form.endLocal);
+    if (!form.allDay && new Date(eIso).getTime() <= new Date(sIso).getTime()) throw new Error('Eindtijd moet na starttijd liggen.');
+    if (form.allDay && form.endLocal.slice(0, 10) < form.startLocal.slice(0, 10)) throw new Error('Einddatum mag niet voor startdatum liggen.');
     const recurrence: EventRecurrence | null = isNative && form.recurrenceFreq
       ? { freq: form.recurrenceFreq, until: form.recurrenceUntil ? `${form.recurrenceUntil}T23:59:59.000Z` : null }
       : null;
@@ -4908,11 +5060,13 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [mode, view, zoom, isMobile, showCreatePanel, selectedEvent, showBookingSend, bookingCreated, logTimeEvent]); // eslint-disable-line
 
-  // Muiswiel navigeert door periodes (net als de pijltjes). In dag/week scrollt het
-  // wiel eerst het tijdrooster; pas aan de boven-/onderrand springt het naar de
-  // vorige/volgende periode ("blijf scrollen om naar de volgende week te gaan").
-  // In de maandweergave (geen interne scroll) springt elk wieltje meteen een maand.
-  // Een korte vergrendeling ontdubbelt trackpad-momentum tot één sprong per gebaar.
+  // Het gewone (verticale) muiswiel bladert NOOIT naar een andere periode: het
+  // scrollt alleen het rooster of de pagina. Vroeger sprong het wiel aan de rand
+  // van het rooster door naar de volgende week (en in de maand naar de volgende
+  // maand) — dat gebeurde te vaak per ongeluk. Bladeren gaat met de pijlknoppen,
+  // ← / → op het toetsenbord, vegen op een aanraakscherm, of horizontaal vegen op
+  // een trackpad (hieronder). Een korte vergrendeling ontdubbelt trackpad-momentum
+  // tot één sprong per gebaar.
   const mainCardRef = useRef<HTMLDivElement | null>(null);
   const wheelLockRef = useRef(0);
   useEffect(() => {
@@ -4924,38 +5078,18 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       // Ctrl/⌘ + wiel is zoomen; dat handelt het rooster zelf af.
       if (e.ctrlKey || e.metaKey) return;
       if (view === 'list') return; // de lijst scrollt gewoon verticaal
+      // Verticaal wiel: altijd gewoon scrollen, nooit bladeren.
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
       // Horizontaal vegen op een trackpad bladert — maar alleen als het rooster
       // zelf niet zijwaarts te scrollen valt (breed weekcanvas op een klein scherm).
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-        const scroller = el!.querySelector<HTMLElement>('.tb-scroll');
-        if (scroller && scroller.scrollWidth > scroller.clientWidth + 1) return;
-        if (Math.abs(e.deltaX) < 8) return;
-        e.preventDefault();
-        const now = Date.now();
-        if (now < wheelLockRef.current) return;
-        wheelLockRef.current = now + 450;
-        movePeriod(e.deltaX > 0 ? 1 : -1);
-        return;
-      }
-      if (e.deltaY === 0) return;
-      const dir: -1 | 1 = e.deltaY > 0 ? 1 : -1;
-      // Maand op mobiel is een natuurlijke scroll-lijst — die niet kapen.
-      if (view === 'month' && window.innerWidth <= 900) return;
-      // Dag/3 dagen/week: respecteer de interne tijdscroll; navigeer pas aan de rand.
-      if (isTimeGridView(view)) {
-        const scroller = el!.querySelector<HTMLElement>('.tb-scroll');
-        if (scroller) {
-          const atTop = scroller.scrollTop <= 1;
-          const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
-          if (dir === 1 && !atBottom) return; // laat het rooster naar beneden scrollen
-          if (dir === -1 && !atTop) return;   // laat het rooster naar boven scrollen
-        }
-      }
+      const scroller = el!.querySelector<HTMLElement>('.tb-scroll');
+      if (scroller && scroller.scrollWidth > scroller.clientWidth + 1) return;
+      if (Math.abs(e.deltaX) < 8) return;
       e.preventDefault();
       const now = Date.now();
       if (now < wheelLockRef.current) return; // binnen de ontdubbel-vergrendeling
       wheelLockRef.current = now + 450;
-      movePeriod(dir);
+      movePeriod(e.deltaX > 0 ? 1 : -1);
     }
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -5276,7 +5410,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
         <div className="cal-stage-live" ref={liveRef}>
           {isTimeGridView(view) ? (
             <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
-              sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} linkedTaskFor={linkedTaskFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
+              sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} linkedTaskFor={linkedTaskFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onSelectDays={bookingMode ? undefined : handleDaysSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
               taskColorFor={taskColorFor} taskMetaFor={taskMetaFor} onMoveTask={onMoveTask}
               onOpenDay={view === 'day' ? undefined : openDay}
               zoom={zoom} onZoomChange={applyZoom} fitWindow={AGENDA_FIT} autoScrollKey={autoScrollKey}
@@ -5325,10 +5459,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
         </Select></label>
         <label>Titel<Input value={newEvent.title} onChange={e => setNewEvent(p => ({ ...p, title: e.target.value }))} placeholder="Bijv. Intake klant" /></label>
         <label>Locatie<LocationField value={newEvent.location} onChange={next => setNewEvent(p => ({ ...p, location: next }))} placeholder="Zoek een adres of plaats…" /></label>
-        <div className="settings-grid compact">
-          <label>Start<Input type="datetime-local" value={newEvent.startsAt} onChange={e => setNewEvent(p => ({ ...p, startsAt: e.target.value }))} /></label>
-          <label>Einde<Input type="datetime-local" value={newEvent.endsAt} onChange={e => setNewEvent(p => ({ ...p, endsAt: e.target.value }))} /></label>
-        </div>
+        <EventRangeFields newEvent={newEvent} setNewEvent={setNewEvent} />
         <label>Omschrijving<Textarea value={newEvent.description} onChange={e => setNewEvent(p => ({ ...p, description: e.target.value }))} placeholder="Optioneel" /></label>
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
         <MeetingFields key={createdCount} sourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
