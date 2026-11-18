@@ -249,7 +249,22 @@ vof-administratie).
 
   Staging veranderde vandaag ongeveer elk uur, en een volledige ronde duurt hier
   ruim een half uur; daarom de laatste keer gericht. De volledige ronde op de
-  stand die uitrolt draait CI (Frontend checks) bij het uitrollen.
+  stand die uitrolt draaide CI bij het uitrollen: groen (hieronder).
+
+## Uitgerold
+
+Op staging op 18 november om 10:02 (`8eab2a4`, na de vof-administratie):
+
+- **Deploy Supabase (staging)**: de migratie `20261118144500_prognose.sql` gepusht
+  (`supabase db push` slaagde; die stap faalt als een nieuwe migratie vóór de
+  laatste op staging valt of niet toegepast kan worden), alle edge functions
+  uitgerold, en de rooktest geslaagd: ook "boekhouder-hek: elke organisatietabel
+  is afgeschermd", anon zonder rechten in `public` en zonder toegang tot het
+  schema.
+- **Frontend checks** op die stand: de keten vanaf nul met de databasetests, deno
+  check van de edge functions (met de echte imports van esm.sh), typecheck, unit
+  tests, de volledige mobiele lay-outtest (licht en donker, 32 minuten), laden per
+  module, inrichtingsstappen en terugknop. Alles groen.
 
 ## Niet in deze stap
 
