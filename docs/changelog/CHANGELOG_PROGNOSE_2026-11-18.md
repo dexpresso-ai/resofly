@@ -172,10 +172,11 @@ gekoppelde AI (MCP) en de openbare API tegelijk:
 - Migratie `20261118124500_prognose.sql`: `forecasts`, `forecast_versions`, de
   triggers `forecasts_guard` (naam netjes, versie tellen, wie het deed) en
   `forecasts_snapshot`, RLS met de modulepoort, en `forecast_history(org, van, tot)`.
-  Veilig om opnieuw te draaien. Eerst geschreven als `20261117120000`; op 18
-  november kreeg staging `20261118090000` en `20261118100000`, en een oudere versie
-  dan de laatste op staging weigert `supabase db push`. Hij stond nog niet op
-  staging, dus is hij hernummerd.
+  Veilig om opnieuw te draaien. Eerst geschreven als `20261117120000`. Op 18
+  november kreeg staging eerst `20261118090000` en `20261118100000`, en daarna
+  `20261118120000` (bonnen en declaraties). Een oudere versie dan de laatste op
+  staging weigert `supabase db push`. Hij stond nog niet op staging, dus is hij
+  twee keer hernummerd.
 - Rekenregels: `supabase/functions/_shared/forecast.ts`, puur (geen imports, geen
   Deno, geen DOM, geen Intl), zodat Deno, de browserbundel en `npm test` het alle
   drie laden. `src/lib/forecast.ts` zet het door; `forecast.test.ts` bewaakt dat het
@@ -205,10 +206,11 @@ gekoppelde AI (MCP) en de openbare API tegelijk:
 ## Getest
 
 Alles hieronder is gedraaid op de stand ná het samenvoegen met staging (met de
-eenmanszaak en de instellingen in groepen erin), zoals hij uitrolt:
+eenmanszaak, de instellingen in groepen en de bonnen en declaraties erin), zoals
+hij uitrolt:
 
 - `npm run typecheck`: schoon.
-- `npm test`: 1961 geslaagd, 0 mislukt. Daarin de rekenregels
+- `npm test`: 1987 geslaagd, 0 mislukt. Daarin de rekenregels
   (`forecast.test.ts`, ook de bewaking dat het bestand puur blijft), de
   zoekvragen in `actionSearch.test.ts`, en de bestaande wachters
   `actionTenancy.test.ts`, `migrationGrants.test.ts`, `exportManifest.test.ts`
@@ -217,21 +219,20 @@ eenmanszaak en de instellingen in groepen erin), zoals hij uitrolt:
   bestanden van de documentopmaak en de twee nieuwe gedeelde bestanden: schoon.
   Lokaal met een import map naar `npm:`, omdat esm.sh hier niet bereikbaar is.
 - De migratieketen vanaf nul (`supabase db reset`, Postgres 17.11.0.018, de versie
-  van staging): `20261118090000`, `20261118100000` en daarna `20261118124500`. De
-  prognose-migratie daarna nog een keer: geen fout.
+  van staging): `20261118090000`, `20261118100000`, `20261118120000` en daarna
+  `20261118124500`. De prognose-migratie daarna nog een keer: geen fout.
 - De databasecontroles van de rooktest van staging: het boekhouder-hek dekt beide
   tabellen, anon heeft op geen tabel of functie rechten, en het schema `public`
   blijft dicht voor anon.
-- Stromentest `prognose`: 20 van de 20 stappen geslaagd.
+- Stromentest `prognose`: 20 van de 20 stappen geslaagd. Ter controle ook
+  `bonnen`, de buur op staging: 22 van de 22.
 - UI-test `prognose` in Chromium tegen de echte backend: 8 van de 8 stappen
   geslaagd.
 - Laden per module: alle controles geslaagd; de prognose haalt geen zware groep op
   en elke tabel één keer.
-- Inrichtingsstappen: alle controles geslaagd. Terugknop: 13 van de 13.
-- Mobiele lay-outtest, licht en donker: alle 118 pagina's (in vier rondes), 710
-  metingen, 0 met problemen. De vier nieuwe (de prognose, met een gewijzigde
-  aanname, de geschiedenis en een nieuwe prognose) op telefoon, tablet en
-  liggend; het eerste kerncijfer staat op de telefoon op 183px (grens 220).
+- Inrichtingsstappen: alle controles geslaagd. Terugknop: 15 van de 15.
+- Mobiele lay-outtest, licht en donker: loopt nog (alle 125 pagina's, in vier
+  rondes); de uitslag komt hier.
 
 ## Niet in deze stap
 
