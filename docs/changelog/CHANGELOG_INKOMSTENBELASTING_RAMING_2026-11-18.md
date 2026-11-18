@@ -61,26 +61,36 @@ stond dat bewust open. Nu staat het erin.
   een prognose. De prognose trekt de geboekte winst in hetzelfde tempo door tot
   31 december. Begon de boekhouding later in het jaar, dan telt het tempo vanaf
   die dag. In de eerste maand is er nog geen prognose.
-- **Het urencriterium uit Uren:** bij een eenmanszaak zonder opgeslagen keuze
-  volgt het de geregistreerde uren van de eigenaar, net als Eigen vermogen. De
-  raming zegt dat erbij; kies je zelf en sla je op, dan geldt jouw keuze. Alleen
-  met leesrecht op Uren. Bij een vof geldt het urencriterium per vennoot, en
-  vul je het per vennoot in.
+- **Het urencriterium uit Uren:** zonder opgeslagen keuze volgt het de
+  geregistreerde uren. Bij een eenmanszaak zijn dat de uren van de eigenaar,
+  net als op Eigen vermogen. Bij een vennoot zijn het de uren van het teamlid
+  waaraan hij hangt, net als op Vennoten. De raming zegt dat erbij; kies je
+  zelf en sla je op, dan geldt jouw keuze. Alleen met leesrecht op Uren. Een
+  vennoot zonder teamlid vul je zelf in.
 - **Gerrie, API en MCP:** `owners.income_tax_estimate` geeft dezelfde raming.
   De beschrijving draagt Gerrie op de disclaimer steeds te noemen.
 
-## Afgestemd op Eigen vermogen
+## Afgestemd op Eigen vermogen en Vennoten
 
-De controle eenmanszaak van vandaag (`CHANGELOG_EENMANSZAAK_CONTROLE_2026-11-18.md`)
-zette op Eigen vermogen een overzicht van winst naar belastbare winst
-(`src/lib/incomeTax.ts`). Die twee mogen niet uiteenlopen:
+Twee sessies van vandaag raakten hetzelfde, en die mogen niet uiteenlopen:
+
+- **Controle eenmanszaak** (`CHANGELOG_EENMANSZAAK_CONTROLE_2026-11-18.md`): op
+  Eigen vermogen staat een overzicht van winst naar belastbare winst
+  (`src/lib/incomeTax.ts`).
+- **Vof-administratie** (`CHANGELOG_VOF_ADMINISTRATIE_2026-11-18.md`): een vennoot
+  kan aan een teamlid hangen, en Vennoten toont per vennoot zijn uren
+  (`partnership_partner_hours`).
+
+Wat de raming daarvan overneemt:
 
 - **Gemengde kosten:** de raming rekent het niet-aftrekbare deel van 4600 nu
   zelf mee, met dezelfde som: het gunstigste van 20% of de drempel van
   € 5.700 (2025 en 2026, niet geïndexeerd). Bij een vof gaat dat deel naar
   winstaandeel. In de correcties staat het als automatische regel, zonder
   prullenbak. Het formulier waarschuwt dat je 4600 niet nog eens opgeeft.
-- **Urencriterium:** standaard de uren van de eigenaar, zoals daar.
+- **Urencriterium:** standaard de uren van de eigenaar, en per vennoot die van
+  zijn teamlid. Dat zijn dezelfde tellingen als op Eigen vermogen en Vennoten:
+  direct en indirect, per kalenderjaar.
 - **Bewaakt:** een test vergelijkt de bedragen (zelfstandigenaftrek,
   startersaftrek, mkb-winstvrijstelling, drempel) en de som voor gemengde
   kosten van beide rekenharten. Hij rekent ook vijf eenmanszaken door beide,
@@ -150,7 +160,7 @@ tabellen, en ik heb ze met de hand nagelopen. Een voorbeeld: € 50.000 winst in
   aanroep. De winst komt uit dezelfde bron als Eigen vermogen: de W&V zonder de
   jaarafsluiting, maar dan over het kalenderjaar. Ook de kosten op 4600
   (subtype `mixed_costs`) en de uren van de eigenaar. Die uren alleen met
-  leesrecht op Uren; Gerrie geeft met `p_owner_hours` mee of de aanroeper Uren
+  leesrecht op Uren; Gerrie geeft met `p_hours` mee of de aanroeper Uren
   mag lezen.
 - **Schrijven alleen via functies:** `save_income_tax_profile`,
   `add_income_tax_correction`, `delete_income_tax_correction` en
@@ -182,26 +192,34 @@ tabellen, en ik heb ze met de hand nagelopen. Een voorbeeld: € 50.000 winst in
 
 ## Verificatie
 
-Alles hieronder na het samenvoegen met staging. Daar kwamen vandaag de
-controle eenmanszaak, het wisselen van btw-tijdvak, bonnen en declaraties en
-instellingen in groepen bij. Mijn migratie had eerst hetzelfde versienummer als
-die van de eenmanszaak (`20261118090000`). Hij heet nu `20261118150000`, na de
-laatste op staging.
+Alles hieronder na het samenvoegen met staging. Daar kwamen vandaag bij:
 
-- **Rekenhart:** `npm test`, 2013 tests groen, waarvan 42 voor de raming:
+- de controle eenmanszaak;
+- het wisselen van btw-tijdvak;
+- bonnen en declaraties;
+- instellingen in groepen;
+- de vof-administratie;
+- de prognose.
+
+Mijn migratie had eerst hetzelfde versienummer als die van de eenmanszaak
+(`20261118090000`). Hij heet nu `20261118150000`, na de laatste op staging
+(`20261118144500_prognose`).
+
+- **Rekenhart:** `npm test`, 2036 tests groen, waarvan 43 voor de raming:
   - elke stap van de som en de randen van de tabellen (KIA, kortingen,
     schijven);
   - de verdeling, gelijk aan `partnership_result_shares`;
   - de prognose;
   - het overzicht voor eenmanszaak, vof, cv en een vof zonder vennoten;
-  - de gemengde kosten en het urencriterium uit Uren;
+  - de gemengde kosten, en het urencriterium uit Uren voor de eigenaar en per
+    vennoot;
   - de gelijkheid met `incomeTax.ts` van Eigen vermogen;
   - de spiegel, teken voor teken.
 - **Database, end-to-end:** nieuw scenario `npm run test:stromen --
   inkomstenbelasting`, tegen een lokale stack met echte gebruikers, RLS en alle
   migraties. 8 stappen, 0 fouten:
-  - de winst van het kalenderjaar, en de uren van de eigenaar (ook: geen uren
-    voor de boekhouder, en niet zonder `p_owner_hours`);
+  - de winst van het kalenderjaar, de uren van de eigenaar en van een vennoot
+    met een teamlid (geen uren voor de boekhouder, en niet zonder `p_hours`);
   - opslaan en bijwerken, en een raming die tot op de cent klopt;
   - rechten voor lezer, zonder Financiën, een andere organisatie en anoniem;
   - rechtstreeks schrijven, dat geweigerd wordt;
@@ -212,8 +230,9 @@ laatste op staging.
   - cv met een commanditaire vennoot, stichting en het logboek.
 
   Samen met de scenario's die vandaag de boekhouding raakten (`eenmanszaak`,
-  `bonnen`, `vooruitbetaald`): 91 stappen, 0 fouten.
-- **Migratieketen:** `supabase db reset` op een lege database, alle 283
+  `bonnen`, `vooruitbetaald`, `prognose`): 111 stappen, 0 fouten. De
+  databasetests van de vof-administratie (`npm run test:database`) slagen ook.
+- **Migratieketen:** `supabase db reset` op een lege database, alle 285
   migraties, de mijne als laatste. De migratie draait ook een tweede keer
   schoon.
 - **Typecheck en build:** typecheck ✓, build ✓, CSP ✓.

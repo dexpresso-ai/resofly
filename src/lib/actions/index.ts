@@ -9,6 +9,7 @@ import { TICKETS_EXECUTORS } from './tickets';
 import { MARKETING_EXECUTORS } from './marketing';
 import { ADMIN_EXECUTORS } from './admin';
 import { INSIGHT_EXECUTORS } from './insight';
+import { FORECAST_EXECUTORS } from './forecast';
 import { FILES_EXECUTORS } from './files';
 import { CONTENT_EXECUTORS } from './content';
 import { WORK_EXECUTORS } from './work';
@@ -39,6 +40,7 @@ export const ACTION_EXECUTORS: Record<string, ActionExecutor> = {
   ...MARKETING_EXECUTORS,
   ...ADMIN_EXECUTORS,
   ...INSIGHT_EXECUTORS,
+  ...FORECAST_EXECUTORS,
   ...FILES_EXECUTORS,
   ...CONTENT_EXECUTORS,
   ...WORK_EXECUTORS,

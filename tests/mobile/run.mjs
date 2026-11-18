@@ -276,6 +276,45 @@ const PAGES = {
   // Boekhouding → Beginbalans met het paneel "Overstappen van een ander
   // pakket?" (auditfile inlezen, 11 november 2026) boven de handmatige regels.
   'ledger-beginbalans': { page: 'ledger', mock: { ledger: true }, prepare: '.bk-tabs button:has-text("Beginbalans")' },
+  // 2026-11-17 — de beginbalans van een vof: de uitleg met de kapitaalrekening
+  // van elke vennoot, en na "Regel per vennoot" een regel per vennoot met een
+  // lange rekeningnaam.
+  'ledger-beginbalans-vof': {
+    page: 'ledger', mock: { ledger: true, vof: true },
+    prepare: ['.bk-tabs button:has-text("Beginbalans")', '.bk-opening-partners button:has-text("Regel per vennoot")'],
+    mustShow: [{ selector: '.bk-opening-partners', text: '0501 Kapitaal Anna de Vries', label: 'de uitleg met de kapitaalrekening van elke vennoot' }],
+  },
+  // 2026-11-17 — Vennoten bij een vof: de vennoten met hun teamlid en het
+  // urencriterium per vennoot (een uitgetreden vennoot met een lange naam en
+  // zonder teamlid), de kapitaalvergelijking met de regel "nog niet aan een
+  // vennoot toegewezen", en het formulier om een vennoot te bewerken met de
+  // keuze voor het teamlid.
+  owners: {
+    page: 'owners', mock: { ledger: true, vof: true },
+    mustShow: [
+      { selector: '.bk-partner-hours', text: 'gehaald', label: 'het urencriterium van de eerste vennoot' },
+      { selector: '.bk-balance-sub', text: 'Nog niet aan een vennoot toegewezen', label: 'de regel met vermogen op geen enkele vennoot' },
+    ],
+  },
+  'owners-bewerken': { page: 'owners', mock: { ledger: true, vof: true }, prepare: '.bk-cell-action .bk-line-del' },
+  // 2026-11-18 — inkoopfacturen van een vof: de betaalstatus in de lijst, en
+  // het venster "Privé betaald" met de keuze van de vennoot.
+  'inkoop-vof': {
+    page: 'purchase-invoices', mock: { ledger: true, vof: true },
+    mustShow: [{ selector: '.bk-cell-action button', text: 'Privé betaald', label: 'de knop Privé betaald bij de open factuur' }],
+  },
+  'inkoop-vof-prive': {
+    page: 'purchase-invoices', mock: { ledger: true, vof: true },
+    prepare: 'tr:has-text("VD-1077") .bk-cell-action button:has-text("Privé betaald")',
+    mustShow: [{ selector: '.modal .select-trigger', text: 'kies de vennoot', label: 'de keuze van de vennoot' }],
+  },
+  // Een declaratie van een teamlid dat geen vennoot is: die betaal je terug via
+  // de bank, en dat zegt het venster erbij.
+  'inkoop-vof-declaratie': {
+    page: 'purchase-invoices', mock: { ledger: true, vof: true },
+    prepare: 'tr:has-text("BON-0412") .bk-cell-action button:has-text("Privé betaald")',
+    mustShow: [{ selector: '.modal .bk-note', text: 'koppel de betaling dan op Bank', label: 'de verwijzing naar Bank bij een declaratie' }],
+  },
   // Vooruitbetaalde kosten (2026-11-11): de lijst met de balk "klaar om te
   // boeken", een lopende post met zijn schema, en het formulier voor een
   // nieuwe vooruitbetaling met het voorbeeld van de verdeling.
@@ -289,6 +328,16 @@ const PAGES = {
     page: 'prepaid', mock: { ledger: true, prepaid: true },
     prepare: ['button:has-text("Vooruitbetaling vastleggen")', { fill: '.modal input[type="number"]', value: '1000' }],
   },
+  // De prognose (2026-11-17): kerncijfers, de vraagbalk voor Gerrie, de
+  // grafiek, de tabel en de aannames (op de telefoon onder elkaar, de tabel
+  // met maand, omzet, kosten en winst). Met een gewijzigde aanname staat de
+  // balk "Nog niet bewaard" erboven; de geschiedenis en een nieuwe prognose
+  // zijn een venster. "Nieuwe prognose" staat op de telefoon tussen de
+  // scenario's en anders in de kop: vandaar :visible.
+  forecast: 'forecast',
+  'forecast-wijzigen': { page: 'forecast', prepare: [{ fill: '.fc-field[data-field="projects_per_month"] input', value: '4,5' }] },
+  'forecast-geschiedenis': { page: 'forecast', prepare: '.fc-foot button:has-text("Geschiedenis")' },
+  'forecast-nieuw': { page: 'forecast', prepare: 'button.fc-new:visible' },
   // Instellingen → Gegevens (11 november 2026): alles exporteren, met de twee
   // kolommen "wat erin zit" en "wat er niet in zit". Alleen voor de eigenaar
   // en de beheerders; de mock is eigenaar.
@@ -481,6 +530,10 @@ const FIRST_ITEM = {
   // kerncijfers gaan voor. Gemeten: 435px (licht en donker); de grens ligt 20%
   // hoger.
   prepaid: { selector: '.bk-prepaid-list tbody tr', maxTop: 522 },
+  // 2026-11-17 — de prognose: de scenario's (met "Nieuwe prognose" ertussen)
+  // en de periode gaan voor het eerste kerncijfer. Gemeten: 183px (licht en
+  // donker); de grens ligt 20% hoger.
+  forecast: { selector: '.fc-kpi', maxTop: 220 },
   'public-quote': { selector: '.public-lines', maxTop: 560 },
   'public-invoice': { selector: '.public-lines', maxTop: 700 },
   'public-booking': { selector: '.booking-slot', maxTop: 360 },

@@ -242,8 +242,8 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
             {!isPartnershipForm && overview.ownerMinutes === null && inputs.myMinutes !== null && (
               <p className="bk-muted">Jij hebt in {year} {Math.floor(inputs.myMinutes / 60).toLocaleString('nl-NL')} uur geregistreerd; het urencriterium vraagt er 1.225.</p>
             )}
-            {isPartnershipForm && inputs.myMinutes !== null && (
-              <p className="bk-muted">Jij hebt in {year} {Math.floor(inputs.myMinutes / 60).toLocaleString('nl-NL')} uur geregistreerd. Het urencriterium (1.225 uur) geldt per vennoot.</p>
+            {isPartnershipForm && inputs.partnerMinutes !== null && overview.persons.some(p => p.kind === 'beherend' && p.registeredMinutes === null) && (
+              <p className="bk-muted">Het urencriterium (1.225 uur) geldt per vennoot. Koppel een vennoot bij Vennoten aan zijn teamlid, dan vult ResoFly het in met zijn uren bij Uren.</p>
             )}
           </div>
 
@@ -385,9 +385,10 @@ function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose
                   <option value="ja">Ja, 1.225 uur of meer</option>
                   <option value="nee">Nee, minder dan 1.225 uur</option>
                 </Select>
-                <small className="bk-muted">{person.hoursFromTimeTracking
-                  ? 'Ingevuld volgens de uren van de eigenaar bij Uren. Kies zelf als dat niet klopt, en sla op.'
-                  : 'Alle uren aan de onderneming, ook indirecte. Meer dan de helft van je werktijd, behalve als starter.'}</small>
+                <small className="bk-muted">
+                  {person.registeredMinutes !== null && `Bij Uren: ${Math.floor(person.registeredMinutes / 60).toLocaleString('nl-NL')} uur in ${year}${person.hoursFromTimeTracking ? ', en daarmee is dit ingevuld. Kies zelf als dat niet klopt, en sla op.' : '.'} `}
+                  Alle uren aan de onderneming tellen, ook indirecte, en meer dan de helft van de werktijd (behalve als starter).
+                </small>
               </label>
               <label className="bk-setting-check">
                 <input type="checkbox" checked={profile.starter} disabled={!canWrite || busy} onChange={ev => change({ starter: ev.target.checked })} />

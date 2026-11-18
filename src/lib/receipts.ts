@@ -210,3 +210,25 @@ export function submitterShortName(email: string | null | undefined): string | n
   if (!value) return null;
   return value.includes('@') ? value.split('@')[0] : value;
 }
+
+/**
+ * "Privé betaald" bij een bon: wie betaalde hem met eigen geld? Meestal wie
+ * hem fotografeerde. Is dat een vennoot (gekoppeld als teamlid), dan staat
+ * die al gekozen.
+ *
+ * Een declaratie van iemand die geen vennoot is, betaal je terug via de
+ * bank. Het scherm zegt dat erbij. Anders kwam de bon van een werknemer
+ * makkelijk op de privé-stortingen van een vennoot terecht, terwijl de
+ * werknemer zijn geld nog moest krijgen.
+ */
+export function receiptPayer(
+  partners: ReadonlyArray<{ id: string; user_id?: string | null }>,
+  extractionMeta: unknown,
+): { partnerId: string | null; declarationByNonPartner: boolean } {
+  const meta = extractionMeta && typeof extractionMeta === 'object'
+    ? extractionMeta as { channel?: unknown; submitted_by?: unknown }
+    : {};
+  const submittedBy = typeof meta.submitted_by === 'string' && meta.submitted_by ? meta.submitted_by : null;
+  const partner = submittedBy ? partners.find(p => p.user_id === submittedBy) ?? null : null;
+  return { partnerId: partner?.id ?? null, declarationByNonPartner: meta.channel === 'declaration' && !partner };
+}

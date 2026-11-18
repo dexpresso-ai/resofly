@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DECLARATION_STATUS_HINTS, DECLARATION_STATUS_LABELS, READING_LINES, RECEIPT_MAX_EDGE, canFillIn, declarationActionsFor,
   declarationAwaitsApproval, declarationStatusLabel, fitWithin, inboxChannelLabel, isImageFile, isPdfFile, readingLine,
-  receiptFileName, receiptOutcomeKind, receiptUnreadReason, splitDeclarations, submitterShortName,
+  receiptFileName, receiptOutcomeKind, receiptPayer, receiptUnreadReason, splitDeclarations, submitterShortName,
 } from './receipts.ts';
 import { buildPermissions, canSubmitDeclarations, DECLARATIONS_PAGE } from './permissions.ts';
 import { inboxItemSummary, inboxNeedsAttention, splitInboxItems } from './invoiceInbox.ts';
@@ -151,4 +151,19 @@ test('Declaraties staat open voor wie schrijft maar Financiën niet beheert', ()
   assert.equal(buildPermissions({ role: 'owner' }).canOpenPage(DECLARATIONS_PAGE), false);
   assert.equal(buildPermissions({ role: 'viewer' }).canOpenPage(DECLARATIONS_PAGE), false);
   assert.equal(buildPermissions({ role: 'accountant' }).canOpenPage(DECLARATIONS_PAGE), false);
+});
+
+test('privé betaald: de vennoot die de bon fotografeerde staat al gekozen', () => {
+  const partners = [{ id: 'p-anna', user_id: 'u-anna' }, { id: 'p-bram', user_id: null }];
+  assert.deepEqual(receiptPayer(partners, { channel: 'receipt', submitted_by: 'u-anna' }), { partnerId: 'p-anna', declarationByNonPartner: false });
+  assert.deepEqual(receiptPayer(partners, { channel: 'declaration', submitted_by: 'u-anna' }), { partnerId: 'p-anna', declarationByNonPartner: false },
+    'een vennoot zonder Financiën dient een declaratie in; hij betaalde zelf');
+  assert.deepEqual(receiptPayer(partners, { channel: 'declaration', submitted_by: 'u-werknemer' }), { partnerId: null, declarationByNonPartner: true },
+    'een werknemer krijgt zijn geld terug via de bank');
+  assert.deepEqual(receiptPayer([], { channel: 'declaration', submitted_by: 'u-werknemer' }), { partnerId: null, declarationByNonPartner: true },
+    'ook bij een eenmanszaak: een declaratie is van een ander');
+  assert.deepEqual(receiptPayer(partners, { channel: 'email' }), { partnerId: null, declarationByNonPartner: false });
+  assert.deepEqual(receiptPayer(partners, null), { partnerId: null, declarationByNonPartner: false });
+  assert.deepEqual(receiptPayer(partners, { channel: 'receipt', submitted_by: '' }), { partnerId: null, declarationByNonPartner: false },
+    'een vennoot zonder teamlid wordt niet gekozen voor een bon zonder indiener');
 });

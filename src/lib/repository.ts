@@ -163,6 +163,7 @@ import type {
   DgaSignals,
   OwnersEquityOverview,
   PartnershipPartner,
+  PartnershipPartnerHours,
   DividendDistributionLine,
   DividendDistributionRow,
   DividendKind,
@@ -173,6 +174,8 @@ import type {
   ShareholderPosition,
   ShareTransaction,
   SavedReport,
+  Forecast,
+  ForecastVersion,
   PlannerNote,
   PlannerDayCapacity,
   ContractProject,
@@ -1439,6 +1442,113 @@ export async function updateSavedReport(organizationId: UUID, id: UUID, patch: P
 
 export async function deleteSavedReport(organizationId: UUID, id: UUID): Promise<void> {
   return deleteRow('saved_reports', id, organizationId);
+}
+
+// ── Prognose (Financiën → Prognose, migratie 20261118144500) ────────────────
+
+/**
+ * De app rolt via Cloudflare Pages uit vóór de migratie draait. In dat gaatje
+ * bestaan de tabel en forecast_history nog niet; dan een rustige regel in
+ * plaats van een PostgREST-zin.
+ */
+function forecastError(error: { code?: string; message?: string } | null, fallback: string): Error {
+  if (isMissingRelation(error)) return new NotMigratedError('De prognose staat in deze omgeving nog niet aan: de database wordt nog bijgewerkt. Probeer het over een paar minuten opnieuw.');
+  if (error?.code === '23505') return new Error('Er is al een prognose met deze naam. Kies een andere naam.');
+  if (error?.code === '42501') return new Error('Je mag prognoses niet wijzigen: daarvoor heb je schrijfrecht op Financiën nodig.');
+  return new Error(error?.message ? `${fallback} (${error.message})` : fallback);
+}
+
+export async function selectForecasts(organizationId: UUID): Promise<Forecast[]> {
+  const { data, error } = await supabase
+    .from('forecasts')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: true })
+    .limit(200);
+  if (error) throw forecastError(error, 'De prognoses konden niet worden geladen.');
+  return (data ?? []) as Forecast[];
+}
+
+/** De laatste standen van één prognose, nieuwste eerst. */
+export async function selectForecastVersions(organizationId: UUID, forecastId: UUID): Promise<ForecastVersion[]> {
+  const { data, error } = await supabase
+    .from('forecast_versions')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('forecast_id', forecastId)
+    .order('version', { ascending: false })
+    .limit(50);
+  if (error) throw forecastError(error, 'De geschiedenis kon niet worden geladen.');
+  return (data ?? []) as ForecastVersion[];
+}
+
+/**
+ * De cijfers per maand waar de prognose op rust. Gerrie roept dezelfde
+ * functie aan (actions/forecast.ts), zodat de kaart die je goedkeurt en het
+ * scherm daarna hetzelfde uitrekenen. `from` en `to` zijn maanden ('JJJJ-MM').
+ */
+export async function loadForecastHistory(organizationId: UUID, from: string, to: string): Promise<unknown> {
+  const { data, error } = await supabase.rpc('forecast_history', {
+    p_organization_id: organizationId,
+    p_from: `${from}-01`,
+    p_to: `${to}-01`,
+  });
+  if (error) throw forecastError(error, 'De cijfers voor de prognose konden niet worden geladen.');
+  return data;
+}
+
+export async function createForecast(
+  organizationId: UUID,
+  values: { name: string; notes?: string | null; assumptions: unknown; change_note?: string | null },
+): Promise<Forecast> {
+  const createdBy = await currentUserId();
+  const { data, error } = await supabase
+    .from('forecasts')
+    .insert({
+      organization_id: organizationId,
+      created_by: createdBy,
+      name: values.name,
+      notes: values.notes ?? null,
+      assumptions: values.assumptions,
+      change_note: values.change_note ?? null,
+    })
+    .select('*')
+    .single();
+  if (error) throw forecastError(error, 'De prognose kon niet worden aangemaakt.');
+  return data as Forecast;
+}
+
+/**
+ * Wijzigt een prognose, en met `expectedVersion` alleen als hij nog op die
+ * versie staat. Een goedgekeurde kaart van Gerrie beschrijft de stap vanaf één
+ * versie; veranderde iemand intussen iets op de pagina, dan zou de kaart die
+ * wijziging anders stil overschrijven.
+ */
+export async function updateForecast(
+  organizationId: UUID,
+  id: UUID,
+  patch: { name?: string; notes?: string | null; assumptions?: unknown; change_note?: string | null },
+  expectedVersion?: number,
+): Promise<Forecast> {
+  let query = supabase.from('forecasts').update(patch).eq('organization_id', organizationId).eq('id', id);
+  if (expectedVersion !== undefined) query = query.eq('version', expectedVersion);
+  const { data, error } = await query.select('*').maybeSingle();
+  if (error) throw forecastError(error, 'De prognose kon niet worden bewaard.');
+  if (data) return data as Forecast;
+  // Niets bijgewerkt: zeg waarom. RLS laat een rij zonder schrijfrecht net zo
+  // stil liggen als een rij die intussen een nieuwere versie heeft.
+  const { data: now } = await supabase.from('forecasts').select('version').eq('organization_id', organizationId).eq('id', id).maybeSingle();
+  if (!now) throw new Error('Deze prognose bestaat niet meer.');
+  if (expectedVersion !== undefined && (now as { version: number }).version !== expectedVersion) {
+    throw new Error('De prognose is intussen gewijzigd. Bekijk wat er nu staat en vraag het opnieuw.');
+  }
+  throw new Error('Je mag deze prognose niet wijzigen: daarvoor heb je schrijfrecht op Financiën nodig.');
+}
+
+export async function deleteForecast(organizationId: UUID, id: UUID): Promise<void> {
+  const { error, count } = await supabase.from('forecasts').delete({ count: 'exact' }).eq('organization_id', organizationId).eq('id', id);
+  if (error) throw forecastError(error, 'De prognose kon niet worden verwijderd.');
+  if (count === 0) throw new Error('Deze prognose bestaat niet (meer), of je mag hem niet verwijderen.');
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -2734,6 +2844,58 @@ export async function savePartnershipPartner(
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as PartnershipPartner;
+}
+
+/**
+ * Koppelt een vennoot aan het teamlid dat hij is (of los, met `null`). Dan tellen
+ * de uren van dat teamlid voor het urencriterium van de vennoot.
+ */
+export async function setPartnershipPartnerMember(
+  organizationId: UUID, partnerId: UUID, userId: UUID | null,
+): Promise<PartnershipPartner> {
+  const { data, error } = await supabase.rpc('set_partnership_partner_member', {
+    p_organization_id: organizationId,
+    p_partner_id: partnerId,
+    p_user_id: userId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as PartnershipPartner;
+}
+
+/**
+ * De uren per vennoot in één kalenderjaar (het urencriterium). Vraagt leesrecht
+ * op Financiën én Uren; de database weigert anders.
+ */
+export async function loadPartnershipPartnerHours(organizationId: UUID, year: number): Promise<PartnershipPartnerHours[]> {
+  const { data, error } = await supabase.rpc('partnership_partner_hours', {
+    p_organization_id: organizationId,
+    p_year: year,
+  });
+  if (error) throw bookkeepingError(error);
+  return ((data ?? []) as PartnershipPartnerHours[]).map(row => ({
+    ...row,
+    direct_minutes: Number(row.direct_minutes ?? 0),
+    indirect_minutes: Number(row.indirect_minutes ?? 0),
+  }));
+}
+
+/**
+ * Een geboekte inkoopfactuur die de ondernemer of een vennoot met eigen geld
+ * betaalde: het openstaande bedrag gaat naar de privé-stortingen (0560, of 056n
+ * van de vennoot) en de factuur staat daarna op betaald. Alleen bij een
+ * eenmanszaak, vof, maatschap of cv.
+ */
+export async function payPurchaseInvoicePrivately(
+  organizationId: UUID, purchaseInvoiceId: UUID, partnerId: UUID | null, date: string,
+): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('pay_purchase_invoice_privately', {
+    p_organization_id: organizationId,
+    p_purchase_invoice_id: purchaseInvoiceId,
+    p_partner_id: partnerId,
+    p_date: date,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
 }
 
 /** De kapitaalvergelijking van één boekjaar: begin, resultaat, stortingen, opnamen, eind. */

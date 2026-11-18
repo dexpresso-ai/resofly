@@ -201,6 +201,88 @@ test('afsluiten weigert vooraf als de winstverdeling van de vennoten niet op 100
   assert.match(plan.sub, /kapitaalrekeningen van 2 vennoten/);
 });
 
+// ── Vennoten: privé en uren (17 november 2026) ───────────────────────────
+
+test('zonder actieve vennoot of na de overstap naar een eenmanszaak: privé van de vennoten naar hun eigen kapitaal', async () => {
+  const close = action(BOOKKEEPING_ACTIONS, 'fiscal_year.close');
+  const lijst = { list_fiscal_years: [{ id: ID, computed_result_cents: 100000 }] };
+  const fiscal_years = [{ label: '2025', period_start: '2025-01-01', period_end: '2025-12-31', status: 'open' }];
+  const vroegere = [{ name: 'Anna', profit_share_basis_points: 6000, is_active: false }, { name: 'Bram', profit_share_basis_points: 0, is_active: false }];
+
+  // Een vof waarvan iedereen is uitgetreden: geen weigering om 0%, het resultaat naar 0510.
+  const vof = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0510', legal_form: 'vof' }], partnership_partners: vroegere }, lijst), { fiscal_year_id: ID });
+  assert.match(vof.sub, /naar 0510 \(geen actieve vennoot: niet verdeeld\); privé \(0550\/0560\) naar 0500 Eigen vermogen; het privé van de vennoten naar hun eigen kapitaal/);
+
+  // Een eenmanszaak die eerst een vof was.
+  const eenmanszaak = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }], partnership_partners: vroegere }, lijst), { fiscal_year_id: ID });
+  assert.match(eenmanszaak.sub, /naar 0500; privé \(0550\/0560\) naar 0500 Eigen vermogen; het privé van de vennoten naar hun eigen kapitaal/);
+
+  // Een gewone eenmanszaak: geen woord over vennoten.
+  const gewoon = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }] }, lijst), { fiscal_year_id: ID });
+  assert.doesNotMatch(gewoon.sub, /vennoten/);
+});
+
+test('de kapitaalvergelijking geeft de uren per vennoot alleen aan wie Uren mag lezen', async () => {
+  const overview = action(BUSINESS_ACTIONS, 'owners.equity_overview');
+  const rows = {
+    partnership_partners: [{ id: ID, partner_number: 1, name: 'Anna', profit_share_basis_points: 10000, kind: 'beherend', is_active: true, user_id: '00000000-0000-0000-0000-0000000000a1' }],
+  };
+  const overzicht = { fiscalYear: { id: ID, label: '2026', periodStart: '2026-01-01', periodEnd: '2026-12-31', status: 'open' } };
+  const uren = [{ partner_id: ID, user_id: '00000000-0000-0000-0000-0000000000a1', direct_minutes: 600, indirect_minutes: 120, first_entry_date: '2026-02-01' }];
+
+  // Zonder Uren: geen aanroep van partnership_partner_hours (de nep-database
+  // gooit bij een onverwachte rpc), en hours is null.
+  const boekjaren = [{ id: ID, label: '2026', period_start: '2026-01-01', period_end: '2026-12-31', status: 'open' }];
+  const zonder = { ...ctx(rows, { list_fiscal_years: boekjaren, owners_equity_overview: overzicht }), canRead: (module: string) => module !== 'time' };
+  const a = await overview.read!(zonder, { fiscal_year_id: ID }) as { hours: unknown; partners: Array<{ user_id: string }> };
+  assert.equal(a.hours, null);
+  assert.equal(a.partners[0].user_id, '00000000-0000-0000-0000-0000000000a1');
+
+  const met = ctx(rows, { list_fiscal_years: boekjaren, owners_equity_overview: overzicht, partnership_partner_hours: uren });
+  const b = await overview.read!(met, { fiscal_year_id: ID }) as { hours: { year: number; criterionMinutes: number; partners: unknown[] } };
+  assert.equal(b.hours.year, 2026);
+  assert.equal(b.hours.criterionMinutes, 1225 * 60);
+  assert.deepEqual(b.hours.partners, uren);
+});
+
+test('privé betaald via Gerrie: alleen bij IB, en bij een vof met vennoten de vennoot kiezen', async () => {
+  const pay = action(BOOKKEEPING_ACTIONS, 'purchase_invoice.pay_privately');
+  const invoice = { internal_number: 'INK-1', supplier_invoice_number: 'VD-1077', supplier_id: null, date: '2025-10-10', status: 'booked', payment_status: 'unpaid', total_cents: 12100, journal_entry_id: ID };
+  const bram = { id: ID, name: 'Bram', is_active: true };
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'bv' }] }), { purchase_invoice_id: ID }),
+    (error: unknown) => error instanceof ActionError && /alleen bij een eenmanszaak, vof/.test(error.message));
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }), { purchase_invoice_id: ID }),
+    (error: unknown) => error instanceof ActionError && /Kies de vennoot/.test(error.message));
+  const plan = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }), { purchase_invoice_id: ID, partner_id: ID });
+  assert.match(plan.sub, /betaald door Bram/);
+  assert.equal(plan.payload.date, '2025-10-10', 'standaard de factuurdatum');
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [{ ...invoice, payment_status: 'paid' }], company_settings: [{ legal_form: 'vof' }] }), { purchase_invoice_id: ID }),
+    (error: unknown) => error instanceof ActionError && /al betaald/.test(error.message));
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [{ ...invoice, status: 'draft', journal_entry_id: null }], company_settings: [{ legal_form: 'eenmanszaak' }] }), { purchase_invoice_id: ID }),
+    (error: unknown) => error instanceof ActionError && /Boek de inkoopfactuur eerst/.test(error.message));
+});
+
+test('vennoot vastleggen via Gerrie: alleen bij een vof, met de verdeling op de kaart', async () => {
+  const save = action(BUSINESS_ACTIONS, 'owners.save_partner');
+  await assert.rejects(save.plan!(ctx({ company_settings: [{ legal_form: 'eenmanszaak' }] }), { name: 'Anna', profit_share_percent: 60 }),
+    (error: unknown) => error instanceof ActionError && /horen bij een vof/.test(error.message));
+  const rows = {
+    company_settings: [{ legal_form: 'vof' }],
+    partnership_partners: [{ id: 'c0000000-0000-4000-8000-000000000002', name: 'Bram', profit_share_basis_points: 4000, kind: 'beherend', is_active: true, user_id: null }],
+  };
+  const plan = await save.plan!(ctx(rows), { name: 'Anna', profit_share_percent: 60 });
+  assert.match(plan.title, /Vennoot Anna vastleggen/);
+  assert.match(plan.sub, /verdeling actieve vennoten daarna 100%/);
+  assert.equal(plan.payload.profit_share_basis_points, 6000);
+  const krap = await save.plan!(ctx(rows), { name: 'Anna', profit_share_percent: 50 });
+  assert.match(krap.sub, /daarna 90% \(bij het afsluiten moet dat 100% zijn\)/);
+  await assert.rejects(save.plan!(ctx(rows), { name: 'Anna', profit_share_percent: 60, kind: 'commanditair' }),
+    (error: unknown) => error instanceof ActionError && /alleen bij een cv/.test(error.message));
+  const metBoekhouder = { ...rows, organization_members: [{ email: 'boekhouder@kantoor.test', role: 'accountant', status: 'active' }] };
+  await assert.rejects(save.plan!(ctx(metBoekhouder), { name: 'Anna', profit_share_percent: 60, user_id: '00000000-0000-0000-0000-0000000000b1' }),
+    (error: unknown) => error instanceof ActionError && /boekhouder/.test(error.message));
+});
+
 // ── Foutmeldingen ────────────────────────────────────────────────────────
 
 test('databasetekst gaat niet naar de browser; een eigen melding wel', () => {

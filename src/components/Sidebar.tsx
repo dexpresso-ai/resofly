@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calculator, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, ReceiptText, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calculator, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, ReceiptText, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { settingsMenuGroups, type SettingsTab } from '../features/SimplePages';
@@ -23,7 +23,7 @@ const LOOK_CHOICES: { look: Look; label: string; hint: string }[] = [
   { look: 'stroom', label: 'Stroom', hint: 'licht, glas en de stroom' },
 ];
 
-export type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
+export type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 
 /**
  * Het menu in categorieën in plaats van dertien regels onder elkaar. Een groep
@@ -82,7 +82,7 @@ function canOpenNavItem(key: string, permissions: Permissions): boolean {
   return permissions.canOpenPage(key);
 }
 
-const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'prepaid', 'pnl', 'vat-returns', 'corporate-tax', 'income-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'];
+const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'prepaid', 'pnl', 'forecast', 'vat-returns', 'corporate-tax', 'income-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'];
 const calendarPages: Page[] = ['calendar', 'meeting-booking'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'weekplanner', 'archive'];
 /**
@@ -263,7 +263,7 @@ export function Sidebar({
     onPage(target);
   }
 
-  function openFinancePage(target: 'quotes' | 'contracts' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'bank' | 'assets' | 'prepaid' | 'pnl' | 'vat-returns' | 'corporate-tax' | 'income-tax' | 'dga' | 'shareholders' | 'owners' | 'fiscal-years' | 'annual-accounts') {
+  function openFinancePage(target: 'quotes' | 'contracts' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'bank' | 'assets' | 'prepaid' | 'pnl' | 'forecast' | 'vat-returns' | 'corporate-tax' | 'income-tax' | 'dga' | 'shareholders' | 'owners' | 'fiscal-years' | 'annual-accounts') {
     setFinanceOpen(true);
     onPage(target);
   }
@@ -415,6 +415,8 @@ export function Sidebar({
             <button type="button" className={page === 'assets' ? 'active' : ''} onClick={() => openFinancePage('assets')}><Boxes size={13}/><span>Activa</span></button>
             <button type="button" className={page === 'prepaid' ? 'active' : ''} onClick={() => openFinancePage('prepaid')}><Hourglass size={13}/><span>Vooruitbetaald</span></button>
             <button type="button" className={page === 'pnl' ? 'active' : ''} onClick={() => openFinancePage('pnl')}><TrendingUp size={13}/><span>Winst &amp; verlies</span></button>
+            {/* Vooruit kijken naast terugkijken: de prognose (2026-11-17). */}
+            <button type="button" className={page === 'forecast' ? 'active' : ''} onClick={() => openFinancePage('forecast')}><LineChart size={13}/><span>Prognose</span></button>
             <button type="button" className={page === 'vat-returns' ? 'active' : ''} onClick={() => openFinancePage('vat-returns')}><Percent size={13}/><span>Omzetbelasting</span></button>
             {/* Vennootschapsbelasting bestaat alleen bij een rechtsvorm die er
                 zelfstandig belastingplichtig voor is; een eenmanszaak betaalt

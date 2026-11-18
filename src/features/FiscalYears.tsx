@@ -7,7 +7,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import {
   appropriateResult, closeFiscalYear, ensureDefaultLedgerAccounts, listFiscalYears,
-  listResultAppropriations, openFiscalYear, reopenFiscalYear, reverseResultAppropriation, setUpBookkeeping
+  listPartnershipPartners, listResultAppropriations, openFiscalYear, reopenFiscalYear, reverseResultAppropriation, setUpBookkeeping
 } from '../lib/repository';
 import { formatISODate } from '../lib/dates';
 import { useBackStep } from '../lib/useBackStep';
@@ -91,14 +91,30 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
   const [newStart, setNewStart] = useState('');
   const [newEnd, setNewEnd] = useState('');
 
-  const startMonth = data.companySettings?.fiscal_year_start_month ?? 1;
   const resultCode = data.companySettings?.year_result_account_code ?? '0510';
   const resultLabel = resultCode === '0500' ? '0500 · Eigen vermogen' : '0510 · Onverdeeld resultaat';
   // De rechtsvorm staat al in de bedrijfsgegevens; die hoeft niet nog eens als
   // prop door de app te reizen. Zonder rechtsvorm: eenmanszaak, dus geen AvA.
   const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
-  const isSoleTrader = legalForm === 'eenmanszaak';
   const isPartnershipForm = ['vof', 'maatschap', 'cv'].includes(legalForm);
+  // Eenmanszaak, vof, maatschap of cv: inkomstenbelasting. Het boekjaar is dan
+  // het kalenderjaar (de database weigert een gebroken boekjaar), en privé
+  // (0550/0560) gaat bij het afsluiten naar 0500 Eigen vermogen.
+  const isIbForm = isPartnershipForm || legalForm === 'eenmanszaak';
+  const startMonth = isIbForm ? 1 : (data.companySettings?.fiscal_year_start_month ?? 1);
+  // Bij een vof met actieve vennoten gaat het resultaat naar hun kapitaal, niet
+  // naar 0510. De kop en de dialoog zeiden tot november 2026 altijd 0510.
+  const [activePartners, setActivePartners] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isPartnershipForm) { setActivePartners(null); return; }
+    let cancelled = false;
+    listPartnershipPartners(organizationId)
+      .then(rows => { if (!cancelled) setActivePartners(rows.filter(p => p.is_active).length); })
+      .catch(() => { if (!cancelled) setActivePartners(null); });
+    return () => { cancelled = true; };
+  }, [organizationId, isPartnershipForm]);
+  const distributes = isPartnershipForm && (activePartners ?? 0) > 0;
+  const destinationLabel = distributes ? 'de kapitaalrekeningen van de vennoten' : resultLabel;
   // De rechtsvorm is los van het abonnement in te stellen, maar appropriate_result
   // weigert zonder de zakelijke module. Beide moeten kloppen, anders staat er een
   // knop die het nooit kan doen.
@@ -207,7 +223,7 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
         <div><PageIcon page="fiscal-years" />
           <h2>Boekjaren</h2>
           <p>
-            Open een nieuw boekjaar, sluit een lopend boekjaar af (resultaat naar {resultLabel}) en bekijk voorgaande jaren.
+            Open een nieuw boekjaar, sluit een lopend boekjaar af (resultaat naar {destinationLabel}) en bekijk voorgaande jaren.
             {usesAppropriation && ' Daarna bestemt de algemene vergadering het resultaat: naar de reserves of als dividend.'}
           </p>
         </div>
@@ -260,7 +276,7 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
                       {euroCents(result)}
                       {r.status === 'open' && <span className="bk-muted bk-fy-hint"> (lopend)</span>}
                       {r.status === 'closed' && (r.result_cents ?? 0) !== r.computed_result_cents && (
-                        <span className="bk-fy-hint bk-neg" title={`Na afsluiting is er nog in dit boekjaar geboekt. Bestemd naar ${resultLabel}: ${euroCents(r.result_cents ?? 0)}; nu herberekend: ${euroCents(r.computed_result_cents)}. Heropen en sluit opnieuw af om te corrigeren.`}> ⚠ afwijking</span>
+                        <span className="bk-fy-hint bk-neg" title={`Na afsluiting is er nog in dit boekjaar geboekt. Bestemd naar ${destinationLabel}: ${euroCents(r.result_cents ?? 0)}; nu herberekend: ${euroCents(r.computed_result_cents)}. Heropen en sluit opnieuw af om te corrigeren.`}> ⚠ afwijking</span>
                       )}
                     </td>
                     <td className="bk-fy-actions">
@@ -302,9 +318,12 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
           onCancel={() => { setConfirmClose(null); setActionError(null); }}
           onConfirm={() => doClose(confirmClose)}
         >
-          {isPartnershipForm
-            ? <p>Het resultaat van dit boekjaar wordt verdeeld over de kapitaalrekeningen van de vennoten, naar rato van hun winstaandeel (zie Financiën → Vennoten), en het privé van elke vennoot gaat naar zijn kapitaal. Zijn er nog geen vennoten vastgelegd, dan gaat het resultaat naar <strong>{resultLabel}</strong>. Het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.</p>
-            : <p>Het resultaat van dit boekjaar wordt geboekt naar <strong>{resultLabel}</strong> en het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.{isSoleTrader && ' Privé-opnamen en -stortingen (0550 en 0560) gaan naar 0500 Eigen vermogen.'}</p>}
+          {isPartnershipForm && !distributes && activePartners !== null && (
+            <p className="bk-neg">Er staat geen actieve vennoot bij Financiën → Vennoten. Het resultaat wordt dan niet over de vennoten verdeeld, maar gaat in zijn geheel naar {resultLabel}. Leg de vennoten eerst vast als je dat niet wilt.</p>
+          )}
+          {distributes
+            ? <p>Het resultaat van dit boekjaar wordt verdeeld over de kapitaalrekeningen van de vennoten, naar rato van hun winstaandeel (zie Financiën → Vennoten), en het privé van elke vennoot gaat naar zijn kapitaal. Het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.</p>
+            : <p>Het resultaat van dit boekjaar wordt geboekt naar <strong>{resultLabel}</strong> en het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.{isIbForm && ' Privé-opnamen en -stortingen (0550 en 0560) gaan naar 0500 Eigen vermogen'}{isPartnershipForm && ', en het privé van elke vennoot naar zijn eigen kapitaal'}{isIbForm && '.'}</p>}
           <p className="bk-fy-result">Te bestemmen resultaat: <strong className={confirmClose.computed_result_cents >= 0 ? 'bk-pos' : 'bk-neg'}>{euroCents(confirmClose.computed_result_cents)}</strong> ({confirmClose.computed_result_cents >= 0 ? 'winst' : 'verlies'})</p>
           <p className="bk-muted">Eerst moeten de btw-aangiften van dit boekjaar zijn afgesloten (niet met de KOR), en de afschrijvingen en de termijnen van vooruitbetaalde kosten tot en met {dateNL(confirmClose.period_end)} geboekt (bij Activa en Vooruitbetaald). Anders komen ze in het volgende jaar en klopt de winst van beide jaren niet. Een afgesloten boekjaar kan later alleen door een eigenaar of beheerder worden heropend.</p>
         </ConfirmDialog>

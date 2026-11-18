@@ -215,10 +215,13 @@ create trigger income_tax_corrections_audit after insert or update or delete on 
 --   - de kosten op rekeningen met subtype mixed_costs (4600 Eten, drinken en
 --     representatie): het rekenhart telt het niet-aftrekbare deel erbij;
 --   - de geregistreerde uren van de eigenaar: daarmee vult de raming het
---     urencriterium in zolang er niets is opgeslagen. Alleen met leesrecht op
---     Uren. Gerrie draait als service-role en geeft met p_owner_hours mee of
---     de aanroeper Uren mag lezen.
-create or replace function public.get_income_tax_inputs(p_organization_id uuid, p_year integer, p_owner_hours boolean default true)
+--     urencriterium in zolang er niets is opgeslagen.
+-- En bij een vof, maatschap of cv de uren per vennoot die aan een teamlid hangt
+-- (20261118130000, partnership_partners.user_id): het urencriterium geldt per
+-- vennoot, en dezelfde telling staat bij Vennoten.
+-- De uren alleen met leesrecht op Uren. Gerrie draait als service-role en geeft
+-- met p_hours mee of de aanroeper Uren mag lezen.
+create or replace function public.get_income_tax_inputs(p_organization_id uuid, p_year integer, p_hours boolean default true)
 returns jsonb
 language plpgsql
 stable
@@ -235,6 +238,8 @@ declare
   v_minutes bigint := null;
   v_owner uuid;
   v_owner_minutes bigint := null;
+  v_partner_minutes jsonb := null;
+  v_may_read_hours boolean;
   v_company text;
   v_bookkeeping_start date;
 begin
@@ -295,11 +300,12 @@ begin
       and te.entry_date between v_start and v_end;
   end if;
 
+  v_may_read_hours := coalesce(p_hours, false)
+    and (auth.role() = 'service_role' or (auth.uid() is not null and public.can_read_module(p_organization_id, 'time')));
+
   -- De uren van de eigenaar: bij een eenmanszaak is hij de ondernemer (zoals
-  -- op Eigen vermogen). Bij een vof gaat het urencriterium per vennoot, en die
-  -- kent geen gebruiker: dan niet.
-  if coalesce(p_owner_hours, false) and not v_partnership_form
-     and (auth.role() = 'service_role' or (auth.uid() is not null and public.can_read_module(p_organization_id, 'time'))) then
+  -- op Eigen vermogen).
+  if v_may_read_hours and not v_partnership_form then
     select om.user_id into v_owner
     from public.organization_members om
     where om.organization_id = p_organization_id and om.role = 'owner' and om.status = 'active'
@@ -313,6 +319,24 @@ begin
         and te.user_id = v_owner
         and te.entry_date between v_start and v_end;
     end if;
+  end if;
+
+  -- De uren per vennoot, voor wie aan een teamlid hangt; direct en indirect,
+  -- declarabel of niet, net als partnership_partner_hours.
+  if v_may_read_hours and v_partnership_form then
+    select coalesce(jsonb_object_agg(x.partner_id, x.minutes), '{}'::jsonb)
+    into v_partner_minutes
+    from (
+      select pp.id as partner_id, coalesce(sum(te.minutes), 0)::bigint as minutes
+      from public.partnership_partners pp
+      left join public.time_entries te
+        on te.organization_id = p_organization_id
+       and te.user_id = pp.user_id
+       and te.entry_date between v_start and v_end
+      where pp.organization_id = p_organization_id
+        and pp.user_id is not null
+      group by pp.id
+    ) x;
   end if;
 
   return jsonb_build_object(
@@ -378,7 +402,8 @@ begin
         and fa.acquisition_date between v_start and v_end
     ), '[]'::jsonb),
     'myMinutes', v_minutes,
-    'ownerMinutes', v_owner_minutes
+    'ownerMinutes', v_owner_minutes,
+    'partnerMinutes', v_partner_minutes
   );
 end;
 $$;

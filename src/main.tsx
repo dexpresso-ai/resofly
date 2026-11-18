@@ -160,6 +160,7 @@ import { BankPage } from './features/Bank';
 import { AssetsPage } from './features/Assets';
 import { PrepaidPage } from './features/Prepaid';
 import { ProfitLossPage } from './features/ProfitLoss';
+import { ForecastPage } from './features/Forecast';
 import { VatReturnsPage } from './features/VatReturns';
 import { FiscalYearsPage } from './features/FiscalYears';
 import { CorporateTaxPage } from './features/CorporateTax';
@@ -261,12 +262,14 @@ import './styles/gerrie-aanzetten.css';
 // Bonnen fotograferen en declaraties (2026-11-18): eigen klassen (rcp-*, decl-*),
 // ná rapportages.css omdat het bonvenster het orbje en de stappenbalk daarvan gebruikt.
 import './styles/bonnen.css';
+// De prognose (2026-11-17): eigen klassen (fc-*) op de gedeelde variabelen.
+import './styles/prognose.css';
 // De weekplanner (2026-11-15) als allerlaatste: de zeven oudere lagen planner-
 // CSS in globals.css spraken elkaar tegen, dit blok bepaalt de opbouw.
 import './styles/weekplanner.css';
 import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 /**
  * Een nieuwe klant uit een mail in de opvangbak ("Nieuwe klant" in
  * InboundInbox). Na opslaan koppelt persistEdit de mail aan de nieuwe klant.
@@ -1692,6 +1695,7 @@ function App() {
     if (next === 'team') openSettings('organisatie');
     else if (next === 'agenda') openSettings('agenda');
     else if (next === 'bank') { setPage('bank'); setProjectId(null); setClientId(null); setStatsReportId(null); }
+    else if (next === 'vennoten') { setPage('owners'); setProjectId(null); setClientId(null); setStatsReportId(null); }
   }
 
   // Opent de instellingenpagina op een specifieke sectie (standaard 'organisatie').
@@ -4579,10 +4583,13 @@ function App() {
     if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'prepaid') return <PrepaidPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'pnl') return <ProfitLossPage data={data} organizationId={activeOrg.id} onChanged={refresh}/>;
+    // De prognose laadt zijn eigen cijfers (forecast_history); refreshRound laat
+    // hem opnieuw laden na een goedgekeurd voorstel van Gerrie.
+    if (page === 'forecast') return <ForecastPage organizationId={activeOrg.id} canWrite={canWrite} canAskGerrie={permissions.canRead('gerrie')} refreshKey={refreshRound} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId}/>;
     if (page === 'vat-returns') return <VatReturnsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'dga') return <DgaPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'corporate-tax') return <CorporateTaxPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'owners') return <OwnersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} ownerUserId={organizationContext.teamMembers.find(member => member.role === 'owner')?.user_id ?? null} canReadHours={permissions.canRead('time')}/>;
+    if (page === 'owners') return <OwnersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} ownerUserId={organizationContext.teamMembers.find(member => member.role === 'owner')?.user_id ?? null} canReadHours={permissions.canRead('time')} teamMembers={workMembers} currentUserId={currentUserId}/>;
     if (page === 'income-tax') return <IncomeTaxPage data={data} organizationId={activeOrg.id} canWrite={canWrite}/>;
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;

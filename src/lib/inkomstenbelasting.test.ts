@@ -427,7 +427,7 @@ function inputs(overrides: Partial<IncomeTaxInputs> = {}): IncomeTaxInputs {
   return {
     year: 2026, legalForm: 'eenmanszaak', isPartnershipForm: false, companyName: 'Studio Test', bookkeepingStartDate: '2024-01-01',
     resultCents: E(50_000), mixedCostsCents: 0, overlappingFiscalYears: [{ id: 'fy', label: '2026', periodStart: '2026-01-01', periodEnd: '2026-12-31', status: 'open' }],
-    partners: [], profiles: [], corrections: [], investments: [], myMinutes: null, ownerMinutes: null, ...overrides,
+    partners: [], profiles: [], corrections: [], investments: [], myMinutes: null, ownerMinutes: null, partnerMinutes: null, ...overrides,
   };
 }
 
@@ -654,4 +654,34 @@ test('urencriterium: zonder opgeslagen keuze de uren van de eigenaar, met een ke
   const vof = buildIncomeTaxOverview(inputs({ legalForm: 'vof', isPartnershipForm: true, ownerMinutes: 2000 * 60 }), { basis: 'geboekt', today: TODAY });
   assert.equal(vof?.ownerMinutes, null);
   assert.equal(vof?.persons[0].profile.meetsHoursCriterion, null);
+});
+
+test('vof: het urencriterium per vennoot uit de uren van zijn teamlid, zoals bij Vennoten', () => {
+  const overview = buildIncomeTaxOverview(inputs({
+    legalForm: 'cv', isPartnershipForm: true,
+    partners: [
+      { id: 'a', name: 'Anna', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 5000 },
+      { id: 'b', name: 'Bram', partnerNumber: 2, kind: 'beherend', isActive: true, shareBasisPoints: 3000 },
+      { id: 'c', name: 'Cas', partnerNumber: 3, kind: 'beherend', isActive: true, shareBasisPoints: 1000 },
+      { id: 's', name: 'Stil', partnerNumber: 4, kind: 'commanditair', isActive: true, shareBasisPoints: 1000 },
+    ],
+    // Anna en Bram hangen aan een teamlid (Bram met te weinig uren), Cas niet;
+    // Bram heeft zelf al "ja" opgeslagen. De stille vennoot is geen ondernemer.
+    partnerMinutes: { a: 1300 * 60, b: 900 * 60, s: 2000 * 60 },
+    profiles: [{ ...defaultIncomeTaxProfile('b'), meetsHoursCriterion: true }],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.ok(overview);
+  const [anna, bram, cas, stil] = overview.persons;
+  assert.deepEqual([anna.registeredMinutes, anna.hoursFromTimeTracking, anna.profile.meetsHoursCriterion], [1300 * 60, true, true]);
+  assert.equal(anna.estimate.zelfstandigenaftrekCents, E(1200));
+  assert.ok(anna.notes.some(n => /het teamlid van deze vennoot heeft 1\.300 uur/.test(n)));
+  assert.deepEqual([bram.registeredMinutes, bram.hoursFromTimeTracking, bram.profile.meetsHoursCriterion], [900 * 60, false, true], 'een opgeslagen keuze wint');
+  assert.deepEqual([cas.registeredMinutes, cas.hoursFromTimeTracking, cas.profile.meetsHoursCriterion], [null, false, null], 'niet gekoppeld: niet ingevuld');
+  assert.deepEqual([stil.registeredMinutes, stil.hoursFromTimeTracking, stil.estimate.entrepreneurDeductionCents], [null, false, 0], 'een commanditaire vennoot telt geen uren');
+  // Zonder recht op Uren (null) blijft alles zoals het was.
+  const zonder = buildIncomeTaxOverview(inputs({
+    legalForm: 'vof', isPartnershipForm: true, partnerMinutes: null,
+    partners: [{ id: 'a', name: 'Anna', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 10000 }],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.deepEqual([zonder?.persons[0].registeredMinutes, zonder?.persons[0].profile.meetsHoursCriterion], [null, null]);
 });

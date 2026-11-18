@@ -140,7 +140,7 @@ export default async function inkomstenbelasting() {
     // Wie Uren niet mag lezen, of Gerrie die het niet vraagt: geen uren.
     gelijk(gelukt(await invoer(w, w.boekhouder), 'boekhouder').ownerMinutes, null, 'de boekhouder (geen Uren) ziet geen uren');
     gelijk(gelukt(await invoer(w, w.lezer), 'lezer').ownerMinutes, 1230 * 60, 'de lezer mag Uren wel lezen');
-    gelijk(gelukt(await invoer(w, w.medewerker, JAAR, w.orgId, { p_owner_hours: false }), 'zonder uren').ownerMinutes, null, 'zonder p_owner_hours geen uren');
+    gelijk(gelukt(await invoer(w, w.medewerker, JAAR, w.orgId, { p_hours: false }), 'zonder uren').ownerMinutes, null, 'zonder p_hours geen uren');
     return r;
   });
 
@@ -274,6 +274,17 @@ export default async function inkomstenbelasting() {
     const bram = gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: null, p_name: 'Bram', p_profit_share_basis_points: 4000 }, w.medewerker.token), 'vennoot Bram');
     gelukt(await rechtsvorm(ander, 'vof'), 'de andere organisatie wordt een vof');
     const anderVennoot = gelukt(await rpc('save_partnership_partner', { p_organization_id: ander.orgId, p_partner_id: null, p_name: 'Vreemd', p_profit_share_basis_points: 10000 }, ander.medewerker.token), 'vennoot andere organisatie');
+
+    // Bram hangt aan een teamlid met 1.300 uur: zonder opgeslagen keuze vult de
+    // raming zijn urencriterium daarmee in, zoals Vennoten de uren toont.
+    gelukt(await rpc('set_partnership_partner_member', { p_organization_id: w.orgId, p_partner_id: bram.id, p_user_id: w.beheerder.id }, w.medewerker.token), 'Bram aan een teamlid');
+    sql(`insert into public.time_entries (organization_id, user_id, entry_date, minutes)
+         values (${q(w.orgId)}, ${q(w.beheerder.id)}, '${JAAR}-04-04', ${1300 * 60})`);
+    const metUren = gelukt(await invoer(w, w.medewerker), 'invoer met uren per vennoot');
+    gelijk([metUren.ownerMinutes, metUren.partnerMinutes], [null, { [bram.id]: 1300 * 60 + 900 }], 'alleen de uren van de gekoppelde vennoot (plus zijn 15 minuten van eerder)');
+    const bramVooraf = raming(metUren).persons.find((p) => p.partnerId === bram.id);
+    gelijk([bramVooraf?.hoursFromTimeTracking, bramVooraf?.estimate.zelfstandigenaftrekCents], [true, 120_000], 'Bram volgens Uren');
+    gelijk(gelukt(await invoer(w, w.boekhouder), 'boekhouder').partnerMinutes, null, 'de boekhouder ziet geen uren');
 
     gelukt(await profiel(w, w.medewerker, { p_partner_id: anna.id, p_meets_hours_criterion: true, p_starter: true }), 'Anna: urencriterium en starter');
     gelukt(await profiel(w, w.medewerker, { p_partner_id: bram.id, p_meets_hours_criterion: false }), 'Bram: geen urencriterium');

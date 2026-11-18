@@ -731,6 +731,11 @@ export interface IncomeTaxInputs {
   myMinutes: number | null;
   /** Geregistreerde minuten van de eigenaar (eenmanszaak); null zonder recht op Uren of bij een vof. */
   ownerMinutes: number | null;
+  /**
+   * Bij een vof, maatschap of cv: geregistreerde minuten per vennoot die aan een
+   * teamlid hangt (partner-id → minuten). Null zonder recht op Uren of zonder vof.
+   */
+  partnerMinutes: Record<string, number> | null;
 }
 
 export type IncomeTaxBasis = 'geboekt' | 'prognose';
@@ -759,8 +764,10 @@ export interface IncomeTaxPerson {
   profileSaved: boolean;
   /** `automatic`: door ResoFly zelf (gemengde kosten op 4600), niet te verwijderen. */
   corrections: Array<{ id: string; code: IbCorrectionCode; label: string; amountCents: number; shared: boolean; automatic: boolean }>;
-  /** Het urencriterium komt uit de geregistreerde uren van de eigenaar, niet uit wat er is opgeslagen. */
+  /** Het urencriterium komt uit de geregistreerde uren (eigenaar of vennoot), niet uit wat er is opgeslagen. */
   hoursFromTimeTracking: boolean;
+  /** Geregistreerde minuten van deze persoon in het jaar; null als ResoFly ze niet kent of niet mag tonen. */
+  registeredMinutes: number | null;
   estimate: IbPersonEstimate;
   notes: string[];
 }
@@ -816,14 +823,15 @@ export function defaultIncomeTaxProfile(partnerId: string | null): IncomeTaxProf
 /** Het urencriterium in minuten: 1.225 uur. */
 const HOURS_CRITERION_MINUTES = 1225 * 60;
 
-function personNotes(rules: IbYearRules, person: { kind: IncomeTaxPerson['kind']; profile: IncomeTaxProfile; estimate: IbPersonEstimate; hoursFromTimeTracking: boolean; ownerMinutes: number | null }): string[] {
+function personNotes(rules: IbYearRules, person: { kind: IncomeTaxPerson['kind']; profile: IncomeTaxProfile; estimate: IbPersonEstimate; hoursFromTimeTracking: boolean; registeredMinutes: number | null }): string[] {
   const notes: string[] = [];
   const { profile, estimate } = person;
-  if (person.hoursFromTimeTracking && person.ownerMinutes !== null) {
-    const hours = Math.floor(person.ownerMinutes / 60).toLocaleString('nl-NL');
+  if (person.hoursFromTimeTracking && person.registeredMinutes !== null) {
+    const hours = Math.floor(person.registeredMinutes / 60).toLocaleString('nl-NL');
+    const who = person.kind === 'ondernemer' ? 'de eigenaar heeft' : 'het teamlid van deze vennoot heeft';
     notes.push(profile.meetsHoursCriterion
-      ? `Urencriterium volgens Uren: de eigenaar heeft ${hours} uur geregistreerd. Besteed je minder dan de helft van je werktijd aan de onderneming (en ben je geen starter), zet het dan op nee.`
-      : `Urencriterium volgens Uren: de eigenaar heeft ${hours} uur geregistreerd, minder dan 1.225. Registreer je niet al je uren in ResoFly, vul het dan zelf in.`);
+      ? `Urencriterium volgens Uren: ${who} ${hours} uur geregistreerd. Gaat minder dan de helft van de werktijd naar de onderneming (en is het geen starter), zet het dan op nee.`
+      : `Urencriterium volgens Uren: ${who} ${hours} uur geregistreerd, minder dan 1.225. Staan niet alle uren in ResoFly, vul het dan zelf in.`);
   }
   if (person.kind === 'commanditair') {
     notes.push('Commanditaire vennoot: voor de inkomstenbelasting geen ondernemer. Geen ondernemersaftrek en geen mkb-winstvrijstelling, en het winstaandeel telt niet als arbeidsinkomen voor de arbeidskorting. De KIA geldt wel.');
@@ -938,17 +946,26 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
     warnings.push(`${orphaned.length === 1 ? 'Eén correctie staat' : `${orphaned.length} correcties staan`} op een vennoot die niet (meer) meedoet in de verdeling en ${orphaned.length === 1 ? 'telt' : 'tellen'} niet mee.`);
   }
 
-  // Bij een eenmanszaak zonder opgeslagen gegevens: het urencriterium uit de
-  // uren van de eigenaar, zoals het overzicht op Eigen vermogen. Zo tonen de
-  // twee schermen dezelfde belastbare winst, tot je zelf iets kiest.
+  // Zonder opgeslagen gegevens volgt het urencriterium de geregistreerde uren:
+  // bij een eenmanszaak die van de eigenaar (zoals Eigen vermogen), bij een vof
+  // die van het teamlid dat de vennoot is (zoals Vennoten). Zo tonen de
+  // schermen hetzelfde, tot je zelf iets kiest.
   const ownerMinutes = inputs.isPartnershipForm ? null : (inputs.ownerMinutes ?? null);
+  const partnerMinutes = inputs.isPartnershipForm ? (inputs.partnerMinutes ?? null) : null;
+  const minutesOf = (who: Who): number | null => {
+    if (who.kind === 'commanditair') return null;
+    if (who.partnerId === null) return ownerMinutes;
+    const minutes = partnerMinutes?.[who.partnerId];
+    return typeof minutes === 'number' && Number.isFinite(minutes) ? minutes : null;
+  };
 
   const persons: IncomeTaxPerson[] = people.map(who => {
     const saved = profileFor(who.partnerId);
-    const hoursFromTimeTracking = saved === null && who.kind === 'ondernemer' && ownerMinutes !== null;
+    const registeredMinutes = minutesOf(who);
+    const hoursFromTimeTracking = saved === null && registeredMinutes !== null;
     const profile = saved ?? {
       ...defaultIncomeTaxProfile(who.partnerId),
-      meetsHoursCriterion: hoursFromTimeTracking ? (ownerMinutes as number) >= HOURS_CRITERION_MINUTES : null,
+      meetsHoursCriterion: registeredMinutes !== null ? registeredMinutes >= HOURS_CRITERION_MINUTES : null,
     };
     const corrections: IncomeTaxPerson['corrections'] = [
       ...sharedSplits.map(({ correction, parts }) => ({
@@ -983,8 +1000,9 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
       profileSaved: saved !== null,
       corrections,
       hoursFromTimeTracking,
+      registeredMinutes,
       estimate,
-      notes: personNotes(rules, { kind: who.kind, profile, estimate, hoursFromTimeTracking, ownerMinutes }),
+      notes: personNotes(rules, { kind: who.kind, profile, estimate, hoursFromTimeTracking, registeredMinutes }),
     };
   });
 

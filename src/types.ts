@@ -1793,7 +1793,9 @@ export type JournalSourceType =
   | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition' | 'asset_disposal'
   | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note'
   | 'result_appropriation' | 'corporate_tax' | 'dga_interest' | 'payroll' | 'dividend'
-  | 'prepaid_start' | 'prepaid_release' | 'prepaid_end';
+  | 'prepaid_start' | 'prepaid_release' | 'prepaid_end'
+  /** Een inkoopfactuur die de ondernemer of een vennoot privé betaalde (20261118130000). */
+  | 'purchase_private_payment';
 
 /**
  * Rubriek van een grootboekrekening in de balans of de winst- en verliesrekening.
@@ -2031,8 +2033,20 @@ export interface PartnershipPartner extends OrgScopedRow {
   capital_account_id: UUID;
   withdrawals_account_id: UUID;
   contributions_account_id: UUID;
+  /** Het teamlid dat deze vennoot is; zijn uren tellen voor het urencriterium van de vennoot. */
+  user_id: UUID | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Uitkomst van partnership_partner_hours: de uren van één vennoot in een kalenderjaar. */
+export interface PartnershipPartnerHours {
+  partner_id: UUID;
+  user_id: UUID | null;
+  direct_minutes: number;
+  indirect_minutes: number;
+  /** De eerste dag met uren in dat jaar: vanaf daar rekent de prognose. */
+  first_entry_date: string | null;
 }
 
 /** Eén regel van de kapitaalvergelijking: de ondernemer of één vennoot. */
@@ -3705,6 +3719,38 @@ export interface SavedReport extends OrgScopedRow {
   position: number;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Een prognose (Financiën → Prognose, migratie 20261118144500). De aannames
+ * staan als jsonb en worden bij het lezen hersteld (normalizeAssumptions in
+ * src/lib/forecast.ts); daarom hier `unknown`.
+ */
+export interface Forecast extends OrgScopedRow {
+  name: string;
+  notes: string | null;
+  assumptions: unknown;
+  /** Telt op bij elke wijziging (de trigger); de app stuurt hem alleen mee als controle. */
+  version: number;
+  /** Wat de laatste wijziging deed, in gewone woorden. */
+  change_note: string | null;
+  updated_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Eén stand van een prognose; de trigger forecasts_snapshot schrijft ze. */
+export interface ForecastVersion {
+  id: UUID;
+  organization_id: UUID;
+  forecast_id: UUID;
+  version: number;
+  name: string;
+  notes: string | null;
+  assumptions: unknown;
+  change_note: string | null;
+  created_by: UUID | null;
+  created_at: string;
 }
 
 export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; prepaidExpenses: PrepaidExpense[]; prepaidExpenseReleases: PrepaidExpenseRelease[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankAllocations: BankAllocation[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null;
