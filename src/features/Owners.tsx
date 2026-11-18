@@ -374,7 +374,7 @@ function IncomeTaxSection({ data, organizationId, overview, ownerUserId }: {
         <p className="bk-muted">De bedragen voor {year} (zelfstandigenaftrek, mkb-winstvrijstelling, de drempel voor gemengde kosten) staan nog niet in ResoFly. De winst en het eigen vermogen hierboven kun je wel gebruiken.</p>
       ) : (
         <>
-          <div className="bk-table-wrap"><table className="bk-table bk-report-table">
+          <div className="bk-table-wrap"><table className="bk-table bk-report-table bk-ib-table">
             <tbody>
               {row('Winst volgens je boekhouding', r.profitCents)}
               {r.mixedCosts.totalCents > 0 && row(
