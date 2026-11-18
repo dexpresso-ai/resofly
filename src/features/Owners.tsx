@@ -30,10 +30,12 @@ const EMPTY_FORM: PartnerForm = { id: null, name: '', share: '', kind: 'beherend
  * als ondernemingsvermogen aan het begin en het eind van het jaar. Bij een vof
  * staat dat per vennoot, en hier leg je de vennoten en hun winstaandeel vast.
  */
-export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUserId = null }: {
+export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUserId = null, canReadHours = true }: {
   data: AppData; organizationId: string; canWrite: boolean; onChanged: () => void;
   /** De eigenaar is bij een eenmanszaak de ondernemer: zijn uren tellen voor het urencriterium. */
   ownerUserId?: UUID | null;
+  /** Zonder leesrecht op Uren (vaak de boekhouder) zie je geen uren: dan zegt het overzicht dat, in plaats van "0 uur, niet gehaald". */
+  canReadHours?: boolean;
 }) {
   const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
   const isIb = ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm);
@@ -312,7 +314,7 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
       )}
 
       {overview && !isPartnershipForm && (
-        <IncomeTaxSection data={data} organizationId={organizationId} overview={overview} ownerUserId={ownerUserId} />
+        <IncomeTaxSection data={data} organizationId={organizationId} overview={overview} ownerUserId={canReadHours ? ownerUserId : null} />
       )}
     </div>
   );
@@ -384,7 +386,7 @@ function IncomeTaxSection({ data, organizationId, overview, ownerUserId }: {
                 r.mixedCosts.addBackCents, '+')}
               {row('Winst uit onderneming vóór ondernemersaftrek', r.fiscalProfitCents, '=', true)}
               {/* Aftrekposten positief, met het minteken ervoor: "− € 1.200", niet "− € -1.200". */}
-              {row(<>Zelfstandigenaftrek {hoursMet ? (r.selfEmployedCapped ? '(niet hoger dan de winst)' : '') : '(urencriterium niet gehaald)'}</>, r.selfEmployedDeductionCents, '−')}
+              {row(<>Zelfstandigenaftrek {hoursMet ? (r.selfEmployedCapped ? '(niet hoger dan de winst)' : '') : hours == null ? '(uren niet te zien)' : '(urencriterium niet gehaald)'}</>, r.selfEmployedDeductionCents, '−')}
               {starter && row('Startersaftrek', r.starterDeductionCents, '−')}
               {/* Bij een verlies maakt de vrijstelling het verlies kleiner: dan staat er een plus. */}
               {row(`Mkb-winstvrijstelling (${(r.rules.smeExemptionBasisPoints / 100).toLocaleString('nl-NL', { minimumFractionDigits: 2 })}%)${r.smeExemptionCents < 0 ? ', maakt het verlies kleiner' : ''}`, Math.abs(r.smeExemptionCents), r.smeExemptionCents < 0 ? '+' : '−')}
@@ -398,7 +400,7 @@ function IncomeTaxSection({ data, organizationId, overview, ownerUserId }: {
           {!hoursMet && (
             <p className="bk-muted">
               {hours == null
-                ? 'De uren van de eigenaar zijn hier niet te zien.'
+                ? 'De uren van de eigenaar zie je hier alleen met leesrecht op Uren; de zelfstandigenaftrek is daarom niet meegerekend.'
                 : `Bij Uren staan ${hours.toLocaleString('nl-NL')} uur in ${year}.`}
               {' '}Zonder urencriterium (1.225 uur, en meer dan de helft van je werktijd) geen zelfstandigenaftrek en startersaftrek; de mkb-winstvrijstelling krijg je wel.
             </p>
