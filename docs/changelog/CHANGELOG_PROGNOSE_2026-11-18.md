@@ -228,8 +228,10 @@ eenmanszaak en de instellingen in groepen erin), zoals hij uitrolt:
 - Laden per module: alle controles geslaagd; de prognose haalt geen zware groep op
   en elke tabel één keer.
 - Inrichtingsstappen: alle controles geslaagd. Terugknop: 13 van de 13.
-- Mobiele lay-outtest, licht en donker: loopt nog (alle 118 pagina's, in vier
-  rondes); de uitslag komt hier.
+- Mobiele lay-outtest, licht en donker: alle 118 pagina's (in vier rondes), 710
+  metingen, 0 met problemen. De vier nieuwe (de prognose, met een gewijzigde
+  aanname, de geschiedenis en een nieuwe prognose) op telefoon, tablet en
+  liggend; het eerste kerncijfer staat op de telefoon op 183px (grens 220).
 
 ## Niet in deze stap
 
