@@ -222,9 +222,9 @@ laatste op staging.
   cloudsessie niet bereikbaar; daarom ging het met een import-map naar dezelfde
   pakketten via npm. In CI draait de gewone check.
 - **Scherm:**
-  - mobiele lay-outtest met beide thema's voor de raming als eenmanszaak en als
-    vof: telefoon, tablet en liggend, 0 problemen. De volledige ronde over alle
-    pagina's na het samenvoegen staat hieronder bij de uitrol;
+  - `npm run test:mobile -- --theme=both`: 740 metingen, 0 problemen. Daarbij
+    de raming als eenmanszaak en als vof, op telefoon, tablet en liggend, licht
+    en donker (12 metingen);
   - laadtest: alle controles geslaagd; de pagina haalt geen zware groep op;
   - terugknop: 15 gelukt.
 - **Zelf bekeken, en hersteld vóór het uitrollen:**
