@@ -14,11 +14,11 @@ import { consentState, isCancelledBankReturn, isSandboxLink, readBankReturn } fr
 import {
   bookBankTransaction, createBankRequisition, createManualBankTransaction, deleteManualBankTransaction, deleteRow,
   fetchBankAllocationCandidates, finalizeBankRequisition, importBankTransactions, insertRow, listBankInstitutions,
-  matchBankTransactions, mergeBankTransactions, PossibleDuplicateBankTransactionError, selectBankReconciliation,
+  matchBankTransactionsInRounds, mergeBankTransactions, PossibleDuplicateBankTransactionError, selectBankReconciliation,
   setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction, updateManualBankTransaction, updateRow,
 } from '../lib/repository';
 import { parseDutchAmountCents } from '../lib/money';
-import { describeMatchResult } from '../lib/bankMatch';
+import { describeMatchProgress, describeMatchResult } from '../lib/bankMatch';
 import { amsterdamTodayIso } from '../lib/dates';
 import {
   addLine, allocationPayload, allocationState, buildManualIndex, centsToInput, manualMatchesFor, naturalAmount, putRemainder,
@@ -119,7 +119,12 @@ function ReconcileTab({ data, organizationId, canWrite, onChanged }: PageProps) 
     if (!canWrite) return;
     setMatching(true); setError(null); setNotice(null);
     try {
-      const res = await matchBankTransactions(organizationId);
+      // In rondes: elke ronde blijft onder de tijdgrens van de database (8 s)
+      // en geeft door waar de volgende verder moet. Zo lukt ook een grote
+      // achterstand, en zie je onderweg hoe ver het is.
+      const res = await matchBankTransactionsInRounds(organizationId, null, {
+        onProgress: (sofar) => setNotice(describeMatchProgress(sofar)),
+      });
       // Zeg wat er vanzelf geboekt is: anders lijken transacties te verdwijnen
       // uit "Openstaand" (ze staan onder "Geboekt", met het label automatisch).
       setNotice(describeMatchResult(res));
@@ -1019,8 +1024,17 @@ function ImportButton({ account, organizationId, canWrite, onChanged }: { accoun
       const parsed = await parseBankFile(file);
       if (parsed.transactions.length === 0) throw new Error('Geen transacties in dit bestand gevonden.');
       const res = await importBankTransactions(organizationId, account.id, parsed);
-      const matched = describeMatchResult(res.match, { nothingText: null });
-      setMsg(`${res.inserted} nieuw, ${res.duplicates} al bekend (${parsed.format.toUpperCase()}).${matched ? ` ${matched}` : ''}`);
+      const head = `${res.inserted} nieuw, ${res.duplicates} al bekend (${parsed.format.toUpperCase()}).`;
+      // Stopte het matchen bij het inlezen op de tijdgrens, dan gaat het hier
+      // in rondes verder (zie "Opnieuw matchen").
+      const match = res.match.next_cursor
+        ? await matchBankTransactionsInRounds(organizationId, account.id, {
+            first: res.match,
+            onProgress: (sofar) => setMsg(`${head} ${describeMatchProgress(sofar)}`),
+          })
+        : res.match;
+      const matched = describeMatchResult(match, { nothingText: null });
+      setMsg(`${head}${matched ? ` ${matched}` : ''}`);
       // Klopt het afschrift met zichzelf? Beginsaldo + regels moet het eindsaldo
       // geven; zo niet, dan mist het bestand regels en zou de bank straks niet
       // aansluiten zonder dat je weet waarom.

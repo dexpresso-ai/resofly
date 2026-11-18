@@ -522,6 +522,16 @@ export default async function bank() {
     gelijk([transactie(incasso.id).auto_booked, transactie(incasso.id).auto_book_blocked], [false, true], 'teruggedraaid: niet meer vanzelf');
     const opnieuw = gelukt(await rpc('match_bank_transactions', { p_organization_id: w.orgId, p_bank_account_id: rekening2.id }, w.medewerker.token), 'opnieuw matchen');
     gelijk(opnieuw.auto_booked, 0, 'opnieuw matchen boekt de teruggedraaide incasso niet');
+    // Rondes (20261118200000): de uitkomst zegt hoeveel er is nagelopen en
+    // waar een volgende ronde verder moet. Een kleine rekening past in één.
+    gelijk([opnieuw.processed > 0, opnieuw.remaining, opnieuw.next_cursor], [true, 0, null], 'één ronde: alles nagelopen, geen cursor');
+    geweigerd(await rpc('match_bank_transactions', { p_organization_id: w.orgId, p_bank_account_id: rekening2.id, p_cursor: "x'; drop table x; --" }, w.medewerker.token), 'een kapotte cursor');
+    const verder = gelukt(await rpc('match_bank_transactions', {
+      p_organization_id: w.orgId, p_bank_account_id: rekening2.id, p_cursor: `${vandaag(-1)}|${incasso.id}`,
+    }, w.medewerker.token), 'verder na een cursor');
+    // Met een cursor van gisteren loopt de ronde alleen wat daarna komt: nooit
+    // meer dan zonder cursor.
+    verwacht(verder.processed <= opnieuw.processed, `na de cursor meer nagelopen dan zonder: ${verder.processed} > ${opnieuw.processed}`);
     const na = transactie(incasso.id);
     gelijk([na.status, na.matched_purchase_invoice_id], ['suggested', t1.id], 'teruggedraaid: wel een voorstel');
     verwacht(/draaide een automatische boeking/.test(na.match_reason ?? ''), `reden na terugdraaien: ${na.match_reason}`);

@@ -1,7 +1,7 @@
 import {
   bookAssetAcquisition, bookAssetDisposal, bookBankTransaction, bookPrepaidExpenseStart, bookPurchaseInvoice, fetchPurchaseInvoicePaymentStatus,
   closeFiscalYear, closeVatPeriod, createManualBankTransaction, createOpeningBalance, createVatSupplement,
-  deleteManualBankTransaction, endPrepaidExpense, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, matchBankTransactions,
+  deleteManualBankTransaction, endPrepaidExpense, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, matchBankTransactionsInRounds,
   mergeBankTransactions, openFiscalYear, payPurchaseInvoicePrivately, postAssetDepreciation, postManualJournalEntry, postPrepaidReleases, reopenFiscalYear,
   reverseJournalEntry, savePrepaidExpense, setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction,
   updateManualBankTransaction, updateRow, type BankAllocationInput,
@@ -210,7 +210,8 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
 
   'bank.rematch': async (payload, ctx) => {
     const bankAccountId = optText(payload, 'bank_account_id') as UUID | null;
-    const result = await matchBankTransactions(ctx.organizationId, bankAccountId);
+    // In rondes, zoals de knop: elke ronde blijft onder de tijdgrens.
+    const result = await matchBankTransactionsInRounds(ctx.organizationId, bankAccountId);
     const scope = optText(payload, 'scope');
     // Dezelfde zin als op de Bankpagina na "Opnieuw matchen".
     return `${describeMatchResult(result)}${scope ? ` (${scope})` : ''}`;

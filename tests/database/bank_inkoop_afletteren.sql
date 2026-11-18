@@ -442,8 +442,81 @@ select pg_temp.gelijk((select count(*) from public.bank_transaction_allocations 
                        join public.bank_transactions t on t.id = a.bank_transaction_id
                        where t.organization_id = :'ander_org' and a.organization_id <> :'ander_org'), 0::bigint,
   'organisatiegrens: geen verdeling over de grens');
-select pg_temp.gelijk(has_function_privilege('anon', 'public.match_bank_transactions(uuid, uuid, uuid, uuid, boolean)', 'execute'), false,
+select pg_temp.gelijk(has_function_privilege('anon', 'public.match_bank_transactions(uuid, uuid, uuid, uuid, boolean, text)', 'execute'), false,
   'rechten: anon matcht niet');
+
+-- ── 14. Rondes: stoppen vóór de grens en verdergaan met de cursor ─────────
+--
+-- (20261118200000) Een ronde stopt op 70% van statement_timeout en geeft
+-- next_cursor terug; de volgende ronde gaat daar verder. Met het testbudget
+-- van 0 ms doet elke ronde precies één bankregel. Doorgaan tot er geen cursor
+-- meer is, moet hetzelfde opleveren als één ronde: alles nagelopen, en wat
+-- zeker is geboekt.
+
+insert into public.suppliers (organization_id, created_by, name, iban, default_expense_account_id, default_vat_code)
+values (:'org', :'eigenaar', 'Rondes BV', 'NL70RNDS0000000070', :'rek_kosten', 'HOOG')
+returning id as rondes \gset
+select pg_temp.inkoop(:'org', :'eigenaar', :'rondes', 'RB-1', :'vandaag'::date - 6, 1100, :'rek_kosten') as rb1 \gset
+select pg_temp.inkoop(:'org', :'eigenaar', :'rondes', 'RB-2', :'vandaag'::date - 6, 1200, :'rek_kosten') as rb2 \gset
+select pg_temp.inkoop(:'org', :'eigenaar', :'rondes', 'RB-3', :'vandaag'::date - 6, 1300, :'rek_kosten') as rb3 \gset
+select pg_temp.bankregel(:'org', :'bank', 'r-1', :'vandaag'::date - 2, -1331, 'Rondes BV', 'NL70RNDS0000000070', 'Een') is not null as ok \gset
+select pg_temp.bankregel(:'org', :'bank', 'r-2', :'vandaag'::date - 2, -1452, 'Rondes BV', 'NL70RNDS0000000070', 'Twee') is not null as ok \gset
+select pg_temp.bankregel(:'org', :'bank', 'r-3', :'vandaag'::date - 2, -1573, 'Rondes BV', 'NL70RNDS0000000070', 'Drie') is not null as ok \gset
+select pg_temp.bankregel(:'org', :'bank', 'r-ruis', :'vandaag'::date - 2, -999, 'Kiosk', null, 'Koffie') is not null as ok \gset
+
+select count(*) as open_op_bank from public.bank_transactions
+where organization_id = :'org' and bank_account_id = :'bank' and status in ('unmatched', 'suggested') \gset
+
+-- Ronde na ronde als de eigenaar, zoals de app het doet.
+create function pg_temp.rondes(p_org uuid, p_bank uuid, p_user uuid) returns jsonb language plpgsql as $$
+declare
+  v jsonb;
+  v_cursor text := null;
+  v_rondes integer := 0;
+  v_gedaan integer := 0;
+  v_auto integer := 0;
+begin
+  perform pg_temp.als(p_user);
+  set local role authenticated;
+  perform set_config('resofly.bank_match_budget_ms', '0', true);
+  loop
+    v := public.match_bank_transactions(p_org, p_bank, p_cursor => v_cursor);
+    v_rondes := v_rondes + 1;
+    v_gedaan := v_gedaan + (v ->> 'processed')::integer;
+    v_auto := v_auto + (v ->> 'auto_booked_purchase')::integer;
+    if (v ->> 'processed')::integer <> 1 then
+      raise exception 'MISLUKT: rondes — een ronde met budget 0 deed % bankregels, verwacht 1', v ->> 'processed';
+    end if;
+    v_cursor := v ->> 'next_cursor';
+    exit when v_cursor is null or v_rondes > 1000;
+  end loop;
+  perform set_config('resofly.bank_match_budget_ms', '', true);
+  reset role;
+  perform pg_temp.beheer();
+  return jsonb_build_object('rondes', v_rondes, 'gedaan', v_gedaan, 'auto', v_auto);
+end $$;
+
+select pg_temp.rondes(:'org', :'bank', :'eigenaar') as rondes_uitslag \gset
+\o
+\echo rondes: :rondes_uitslag
+\o /dev/null
+select pg_temp.gelijk((:'rondes_uitslag'::jsonb ->> 'rondes')::bigint, :open_op_bank::bigint, 'rondes: één ronde per openstaande bankregel');
+select pg_temp.gelijk((:'rondes_uitslag'::jsonb ->> 'gedaan')::bigint, :open_op_bank::bigint, 'rondes: elke bankregel precies één keer nagelopen');
+select pg_temp.gelijk((:'rondes_uitslag'::jsonb ->> 'auto')::int, 3, 'rondes: de drie zekere betalingen geboekt');
+select pg_temp.gelijk((select string_agg(payment_status, ',' order by supplier_invoice_number) from public.purchase_invoices where id in (:'rb1', :'rb2', :'rb3')),
+  'paid,paid,paid', 'rondes: RB-1, RB-2 en RB-3 betaald');
+select pg_temp.gelijk((select status from public.bank_transactions where organization_id = :'org' and dedup_key = 'r-ruis'), 'unmatched', 'rondes: de koffie blijft gewoon open');
+
+-- Zonder testbudget: één ronde doet alles, zonder cursor.
+select pg_temp.als(:'eigenaar');
+set local role authenticated;
+select public.match_bank_transactions(:'org', :'bank') as heel \gset
+select pg_temp.weigert(format('select public.match_bank_transactions(%L, %L, p_cursor => %L)', :'org', :'bank', 'gisteren'),
+  'Ongeldige cursor', 'rondes: een kapotte cursor wordt geweigerd');
+reset role;
+select pg_temp.beheer();
+select pg_temp.gelijk((:'heel'::jsonb ->> 'remaining')::int, 0, 'één ronde: niets meer over');
+select pg_temp.gelijk(:'heel'::jsonb ->> 'next_cursor', null::text, 'één ronde: geen cursor');
 
 -- Geboekt is geboekt: de banksaldi van de organisatie kloppen met de som van
 -- wat er geboekt is.
