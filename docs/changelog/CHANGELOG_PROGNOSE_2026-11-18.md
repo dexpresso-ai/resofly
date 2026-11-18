@@ -169,7 +169,7 @@ gekoppelde AI (MCP) en de openbare API tegelijk:
 
 ## Techniek
 
-- Migratie `20261117120000_prognose.sql`: `forecasts`, `forecast_versions`, de
+- Migratie `20261118113000_prognose.sql`: `forecasts`, `forecast_versions`, de
   triggers `forecasts_guard` (naam netjes, versie tellen, wie het deed) en
   `forecasts_snapshot`, RLS met de modulepoort, en `forecast_history(org, van, tot)`.
   Veilig om opnieuw te draaien.
@@ -192,7 +192,7 @@ gekoppelde AI (MCP) en de openbare API tegelijk:
   `src/lib/actions/forecast.ts`, zoekvragen in `actionSearch.test.ts`, en een regel
   in de instructies van Gerrie (`gerrieCore.ts`).
 - Export (Instellingen → Gegevens): beide tabellen gaan mee, de prognoses ook als
-  leesbare lijst `lijsten/prognoses.csv`; schemaversie 20261117120000.
+  leesbare lijst `lijsten/prognoses.csv`; schemaversie 20261118113000.
 - De grafiekkleuren zijn nagerekend op kleurenblindheid, lichtheid en contrast
   (licht #A36F00 en #1A5FBA, de huisstijl; donker #C08A20 en #3E8FE0, omdat het
   lichtere goud van `--viz-1` daar buiten de lichtheidsband viel). Omzet en kosten

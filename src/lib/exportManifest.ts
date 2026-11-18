@@ -63,11 +63,16 @@ export const EXPORT_FORMAT_VERSION = 1;
 // gallery_items; geen tabellen of kolommen.
 // 20261115120000 (geen AI kiezen) vervangt set_ai_consent; geen tabellen of
 // kolommen.
-// 20261117120000 (prognose) zet forecasts en forecast_versions erbij. Allebei
+// 20261118090000 (eenmanszaak) vervangt boekhoudfuncties en triggers, voegt
+// open_initial_fiscal_years toe en rekeningen aan het rekeningschema (rijen,
+// geen kolommen); geen tabellen of kolommen.
+// 20261118100000 (btw-tijdvak wisselen) vervangt drie btw-functies; geen
+// tabellen of kolommen.
+// 20261118113000 (prognose) zet forecasts en forecast_versions erbij. Allebei
 // 'export': een prognose is de verwachting van de organisatie zelf, en de
 // versies laten zien hoe die verwachting bijgesteld werd. De aannames staan
 // als jsonb; de prognoses ook als leesbare lijst.
-export const EXPORT_SCHEMA_VERSION = '20261117120000';
+export const EXPORT_SCHEMA_VERSION = '20261118113000';
 
 export type TableKind =
   | 'export'

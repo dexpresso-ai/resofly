@@ -702,7 +702,7 @@ async function scenarioOfferte() {
     gelijk(sqlRij(`select status, internal_approval_status from public.quotes where id = ${q(nieuw.id)}`), { status: 'internally_approved', internal_approval_status: 'approved' }, 'database');
   });
 
-  const link = await uiStap('"Verstuur via Resend" als medewerker: mail met link en PDF naar klant A', async () => {
+  const link = await uiStap('"Verstuur per e-mail" als medewerker: mail met link en PDF naar klant A', async () => {
     const lid = t.lid;
     await sluitAlles(lid);
     await ververs(lid);
@@ -710,12 +710,12 @@ async function scenarioOfferte() {
     const sinds = server.verkeer.length;
     const m = await openDocument(lid, nieuw.nummer, 'Offerte');
     const dialogenVoor = lid.dialogen.length;
-    await klik(m, 'Verstuur via Resend');
+    await klik(m, 'Verstuur per e-mail');
     await rustig(lid);
     const vragen = lid.dialogen.slice(dialogenVoor);
     gelijk(vragen.map((v) => v.type), ['prompt', 'prompt'], 'vragen bij versturen');
     gelijk(vragen[0].standaard, w.klantA.email, 'voorgesteld adres (het adres van klant A)');
-    verwachtAanroep(sinds, { functie: 'quote-workflow', actie: 'sendQuoteEmail' }, 'Verstuur via Resend');
+    verwachtAanroep(sinds, { functie: 'quote-workflow', actie: 'sendQuoteEmail' }, 'Verstuur per e-mail');
     await wachtTot(async () => (await detailStatus(m)) === 'Verzonden', { melding: 'status werd niet "Verzonden"' });
     verwacht(tekst(await m.locator('.quote-email-status').innerText()).includes(w.klantA.email), 'de ontvanger staat niet bij de verzendstatus');
     const nieuweMails = mailsAan(w.klantA.email).slice(mailsVoor);
@@ -800,7 +800,7 @@ async function scenarioFactuur() {
       const f = await factuurConcept(w, 'FAC-UI-0001');
       // Het werkblad van het lid laadde al bij het begin van de run, vóór dit
       // concept in de database stond, en ververst niet vanzelf (de lokale stack
-      // heeft geen realtime). Zonder herladen vond "Verstuur via Resend" het
+      // heeft geen realtime). Zonder herladen vond "Verstuur per e-mail" het
       // concept niet ("Nog geen facturen"), en faalde ook de herinneringsstap.
       const lid = await medewerker();
       await rustig(lid);
@@ -812,7 +812,7 @@ async function scenarioFactuur() {
   }
   const f1 = t.factuur;
 
-  const link = await uiStap('"Verstuur via Resend": factuur naar klant A met link', async () => {
+  const link = await uiStap('"Verstuur per e-mail": factuur naar klant A met link', async () => {
     const lid = await medewerker();
     await sluitAlles(lid);
     await naarFinancien(lid, 'Facturen');
@@ -820,12 +820,12 @@ async function scenarioFactuur() {
     const sinds = server.verkeer.length;
     const m = await openDocument(lid, f1.nummer, 'Factuur');
     const dialogenVoor = lid.dialogen.length;
-    await klik(m, 'Verstuur via Resend');
+    await klik(m, 'Verstuur per e-mail');
     await rustig(lid);
     const vragen = lid.dialogen.slice(dialogenVoor);
     gelijk(vragen.map((v) => v.type), ['prompt', 'prompt'], 'vragen bij versturen');
     gelijk(vragen[0].standaard, w.klantA.email, 'voorgesteld adres');
-    verwachtAanroep(sinds, { functie: 'invoice-workflow', actie: 'sendInvoiceEmail' }, 'Verstuur via Resend');
+    verwachtAanroep(sinds, { functie: 'invoice-workflow', actie: 'sendInvoiceEmail' }, 'Verstuur per e-mail');
     await wachtTot(async () => (await detailStatus(m)) === 'Verzonden', { melding: 'status werd niet "Verzonden"' });
     gelijk(sqlRij(`select status from public.invoices where id = ${q(f1.id)}`).status, 'sent', 'status in de database');
     const nieuweMails = mailsAan(w.klantA.email).slice(mailsVoor);
@@ -1007,7 +1007,7 @@ async function scenarioIntrekken() {
     const status = await wachtTot(async () => { const s = await detailStatus(m); return /ingetrokken|geannuleerd/i.test(s) ? s : null; }, { melding: 'de status in de app veranderde niet' });
     noten.push(`statuslabel in de app na intrekken: "${status}"`);
     const lijst = await knoppen(m);
-    verwacht(!lijst.some((k) => /^(Intrekken|Verstuur via Resend)$/.test(k)), `na intrekken nog knoppen: ${lijst.join(', ')}`);
+    verwacht(!lijst.some((k) => /^(Intrekken|Verstuur per e-mail)$/.test(k)), `na intrekken nog knoppen: ${lijst.join(', ')}`);
     await sluitModal(m);
     return status;
   });
@@ -1157,8 +1157,8 @@ async function scenarioContract() {
 
 /** De knoppen die iets veranderen; wie geen schrijfrecht heeft, hoort ze niet te zien. */
 const SCHRIJFKNOPPEN = {
-  offerte: [/^Ter goedkeuring$/, /^Goedkeuren$/, /^Afwijzen$/, /^Verstuur via Resend$/, /^Maak factuur van offerte$/, /^Intrekken$/],
-  factuur: [/^Verstuur via Resend$/, /^Verstuur e-factuur$/, /^Verstuur via Mollie$/, /^Stuur herinnering/, /^Crediteren$/, /^Terugbetaling$/, /^Boek naar grootboek$/, /^(Pauzeer|Hervat) herinneringen$/, /^Stel aanmaning op$/],
+  offerte: [/^Ter goedkeuring$/, /^Goedkeuren$/, /^Afwijzen$/, /^Verstuur per e-mail$/, /^Maak factuur van offerte$/, /^Intrekken$/],
+  factuur: [/^Verstuur per e-mail$/, /^Verstuur e-factuur$/, /^Verstuur via Mollie$/, /^Stuur herinnering/, /^Crediteren$/, /^Terugbetaling$/, /^Boek naar grootboek$/, /^(Pauzeer|Hervat) herinneringen$/, /^Stel aanmaning op$/],
   contract: [/^Verstuur ter ondertekening$/, /^Opnieuw versturen$/, /^Terug naar concept$/, /^Intrekken$/, /^Verwijderen$/, /^Bewerken$/, /^Plaats$/, /^Nieuw project aanmaken$/],
 };
 
@@ -1177,12 +1177,12 @@ async function scenarioRollen() {
     return {
       offertes: [
         { nummer: qWacht.number, verwachtLid: ['Intrekken'], verwachtBeheerder: ['Goedkeuren', 'Afwijzen'] },
-        { nummer: qGoed.number, verwachtLid: ['Verstuur via Resend', 'Intrekken'] },
+        { nummer: qGoed.number, verwachtLid: ['Verstuur per e-mail', 'Intrekken'] },
         { nummer: qVerstuurd.number, verwachtLid: ['Intrekken'] },
       ],
       facturen: [
-        { nummer: fVerstuurd.number, verwachtLid: ['Verstuur via Resend', 'Stuur herinnering (niveau 1)', 'Crediteren'] },
-        { nummer: fConcept.number, verwachtLid: ['Verstuur via Resend'], bewerk: true },
+        { nummer: fVerstuurd.number, verwachtLid: ['Verstuur per e-mail', 'Stuur herinnering (niveau 1)', 'Crediteren'] },
+        { nummer: fConcept.number, verwachtLid: ['Verstuur per e-mail'], bewerk: true },
       ],
       contracten: [
         { nummer: cConcept.number, verwachtLid: ['Verstuur ter ondertekening', 'Intrekken', 'Verwijderen', 'Bewerken'] },

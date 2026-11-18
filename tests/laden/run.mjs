@@ -8,7 +8,7 @@
  * test (tests/mobile/mock), naar het netwerkverkeer en naar het scherm:
  *
  *   1. elke pagina haalt precies de groepen op die PAGE_DATA_GROUPS noemt, en
- *      niets meer; het dashboard dus niets, op de twee tellingen na;
+ *      niets meer; het dashboard dus niets, op de telling van de bank na;
  *   2. elke pagina toont daarna zichzelf: geen laadmelding, geen foutmelding,
  *      geen JavaScript-fout;
  *   3. een geladen groep wordt bewaard: terug en weer heen haalt hem niet opnieuw;
@@ -165,7 +165,10 @@ try {
     check(`${key}: elke tabel één keer`, twice.length === 0, `dubbel: ${twice.join(', ')}`);
     if (key === 'dashboard') {
       const heads = requests.filter(r => r.method === 'HEAD').map(r => r.table);
-      check('dashboard: telt banktransacties en btw-aangiftes zonder ze te laden', same(heads, ['bank_transactions', 'vat_returns']), `HEAD: [${sorted(heads).join(', ')}]`);
+      // De btw-tijdvakken met een aangifte komen sinds 18 november uit één
+      // RPC (list_filed_vat_periods), voor de herinnering met de deadline;
+      // vat_returns zelf haalt het dashboard niet op (zie de controle hierboven).
+      check('dashboard: telt banktransacties zonder ze te laden', same(heads, ['bank_transactions']), `HEAD: [${sorted(heads).join(', ')}]`);
     }
     const state = await screenState(page);
     check(`${key}: toont de pagina (geen laadmelding, geen fout)`, !state.loading && !state.failed && state.text.length > 40, state.loading ? 'nog aan het laden' : state.failed ? 'foutmelding' : `te weinig inhoud: "${state.text.slice(0, 60)}"`);

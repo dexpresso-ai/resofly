@@ -231,11 +231,15 @@ export default async function rapportages() {
   });
 
   await stap('boekingsregels: datum en status komen van de boeking (koppeling via PostgREST)', async () => {
-    const [omzet, debiteuren, e1, e2, e3] = [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    // Sinds 18 november zet het afronden van de inrichting het rekeningschema
+    // klaar (20261118090000); dan bestaan 8000 en 1300 al en boeken we daarop.
+    const bestaand = (code) => sqlRij(`select id from public.ledger_accounts where organization_id = ${q(w.orgId)} and code = ${q(code)}`)?.id;
+    const [omzet, debiteuren, e1, e2, e3] = [bestaand('8000') ?? randomUUID(), bestaand('1300') ?? randomUUID(), randomUUID(), randomUUID(), randomUUID()];
     const vorig = Number(JAAR) - 1;
     sql(`begin; set local session_replication_role = replica;
       insert into public.ledger_accounts (id, organization_id, code, name, type) values
-        (${q(omzet)}, ${q(w.orgId)}, '8000', 'Omzet', 'revenue'), (${q(debiteuren)}, ${q(w.orgId)}, '1300', 'Debiteuren', 'asset');
+        (${q(omzet)}, ${q(w.orgId)}, '8000', 'Omzet', 'revenue'), (${q(debiteuren)}, ${q(w.orgId)}, '1300', 'Debiteuren', 'asset')
+        on conflict (organization_id, code) do nothing;
       insert into public.journal_entries (id, organization_id, entry_number, date, year, quarter, month, description, source_type, status) values
         (${q(e1)}, ${q(w.orgId)}, 'M1', '${JAAR}-02-01', ${JAAR}, 1, 2, 'Verkoop', 'manual', 'posted'),
         (${q(e2)}, ${q(w.orgId)}, 'M2', '${JAAR}-02-02', ${JAAR}, 1, 2, 'Concept', 'manual', 'draft'),
