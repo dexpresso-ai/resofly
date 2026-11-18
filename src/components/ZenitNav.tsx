@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, ReceiptText, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calculator, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, ReceiptText, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Select } from './Ui';
 import { BrandMark } from './BrandMark';
 import { askGerrie } from './GerrieChat';
@@ -54,7 +54,7 @@ interface ModuleDef {
   badgeTitle?: string;
 }
 
-const FINANCE_PAGES: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'prepaid', 'pnl', 'forecast', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'];
+const FINANCE_PAGES: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'prepaid', 'pnl', 'forecast', 'vat-returns', 'corporate-tax', 'income-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'];
 
 /** Bij welke module hoort een pagina? Ook pagina's zonder eigen menuregel
  *  (een klant, een project, een galerij) lichten zo de goede plek op. */
@@ -157,6 +157,7 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
         hasShares && { page: 'dga', label: 'DGA', Icon: Users },
         hasShares && { page: 'shareholders', label: 'Aandeelhouders', Icon: BookUser },
         isIb && { page: 'owners', label: isPartnership ? 'Vennoten' : 'Eigen vermogen', Icon: Wallet },
+        isIb && { page: 'income-tax', label: 'Inkomstenbelasting', Icon: Calculator },
         isCompany && { page: 'annual-accounts', label: 'Jaarrekening', Icon: Scale },
       ]) },
       // Alleen voor wie Financiën niet mag bewerken (permissions.canSubmitDeclarations).

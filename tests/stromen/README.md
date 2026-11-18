@@ -185,6 +185,20 @@ En `prognose`: Financiën → Prognose en wat de AI ermee mag (migratie 20261118
 
 Zie `docs/changelog/CHANGELOG_PROGNOSE_2026-11-18.md`.
 
+En `inkomstenbelasting`: de raming per ondernemer en per vennoot (`get_income_tax_inputs` en de
+schrijffuncties van 20261118150000), met het rekenhart van de app erachter. Getoetst:
+- de winst van het kalenderjaar (een ander jaar en de jaarafsluiting tellen niet mee), de kosten op
+  4600, je eigen uren en die van de eigenaar of een gekoppelde vennoot (niet voor de boekhouder, niet
+  zonder `p_hours`);
+- opslaan en bijwerken, en een raming die tot op de cent klopt met de los nagerekende som;
+- wie wat mag, en dat niemand rechtstreeks in de tabellen schrijft;
+- de invoercontrole, correcties en KIA, en nooit een vennoot of activum van een andere organisatie,
+  ook niet buiten de functies om (de samengestelde sleutels);
+- een vof met dezelfde verdeling als de jaarafsluiting, een cv met een commanditaire vennoot, een
+  stichting zonder raming, en het logboek onder Financiën.
+
+Zie `docs/changelog/CHANGELOG_INKOMSTENBELASTING_RAMING_2026-11-18.md`.
+
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in

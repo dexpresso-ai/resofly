@@ -94,7 +94,8 @@ export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   annual_account: 'finance', annual_account_filing: 'finance', annual_account_signature: 'finance', bank_account: 'finance',
   bank_rule: 'finance', bank_transaction: 'finance', company_settings: 'finance', contract: 'finance', contract_note: 'finance', contract_project: 'finance',
   contract_template: 'finance', corporate_tax_return: 'finance', credit_note: 'finance', dividend_distribution: 'finance',
-  fiscal_year: 'finance', fiscal_year_size_input: 'finance', fixed_asset: 'finance', invoice: 'finance', journal_entry: 'finance',
+  fiscal_year: 'finance', fiscal_year_size_input: 'finance', fixed_asset: 'finance', income_tax_correction: 'finance', income_tax_profile: 'finance',
+  invoice: 'finance', journal_entry: 'finance',
   ledger_account: 'finance', partnership_partner: 'finance', prepaid_expense: 'finance', purchase_invoice: 'finance', quote: 'finance', result_appropriation: 'finance',
   share_transaction: 'finance', shareholder: 'finance', supplier: 'finance', vat_return: 'finance',
   calendar_event: 'calendar', calendar_event_link: 'calendar', calendar_source: 'calendar', note_calendar_link: 'calendar',
@@ -469,6 +470,7 @@ const NOUN: Record<string, string> = {
   annual_account: 'jaarrekening', annual_account_filing: 'deponering', annual_account_signature: 'ondertekening van',
   dividend_distribution: 'dividenduitkering', result_appropriation: 'resultaatbestemming', share_transaction: 'aandelentransactie',
   shareholder: 'aandeelhouder', partnership_partner: 'vennoot', fiscal_year_size_input: 'grootte-gegevens',
+  income_tax_profile: 'IB-gegevens', income_tax_correction: 'IB-correctie',
   member: 'teamlid', invitation: 'uitnodiging voor', api_key: 'API-sleutel', webhook_endpoint: 'webhook',
   mollie_connection: 'Mollie-koppeling', subscription: 'abonnement', billing_profile: 'abonnement', payment: 'betaling',
   billing_event: 'abonnementsgebeurtenis', license_change: 'licentiewijziging', license_event: 'licentie',
@@ -812,7 +814,7 @@ export type AuditTarget =
   | { kind: 'task'; id: string }
   | { kind: 'project'; id: string }
   | { kind: 'client'; id: string }
-  | { kind: 'page'; page: 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'documents' | 'notes' | 'content' | 'time' | 'marketing' | 'purchase-invoices' | 'suppliers' | 'ledger' | 'bank' | 'prepaid' | 'vat-returns' | 'calendar' | 'stats' | 'settings' };
+  | { kind: 'page'; page: 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'documents' | 'notes' | 'content' | 'time' | 'marketing' | 'purchase-invoices' | 'suppliers' | 'ledger' | 'bank' | 'prepaid' | 'vat-returns' | 'income-tax' | 'calendar' | 'stats' | 'settings' };
 
 export function auditTarget(e: AuditEntry): AuditTarget | null {
   if (e.action === 'deleted') {
@@ -839,6 +841,7 @@ export function auditTarget(e: AuditEntry): AuditTarget | null {
     case 'bank_account': case 'bank_rule': case 'bank_transaction': return { kind: 'page', page: 'bank' };
     case 'vat_return': return { kind: 'page', page: 'vat-returns' };
     case 'prepaid_expense': return { kind: 'page', page: 'prepaid' };
+    case 'income_tax_profile': case 'income_tax_correction': return { kind: 'page', page: 'income-tax' };
     case 'calendar_event': case 'calendar_source': return { kind: 'page', page: 'calendar' };
     case 'saved_report': return { kind: 'page', page: 'stats' };
     default: return null;

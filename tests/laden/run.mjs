@@ -60,6 +60,9 @@ const PAGES = {
   'purchase-invoices': 'purchase-invoices',
   // De prognose (2026-11-17) laadt zijn eigen cijfers (forecast_history) en geen groep.
   forecast: 'forecast',
+  // De raming van de inkomstenbelasting haalt alles in één aanroep op
+  // (get_income_tax_inputs): geen enkele zware groep.
+  'income-tax': 'income-tax',
 };
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));

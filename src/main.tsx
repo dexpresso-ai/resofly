@@ -166,6 +166,7 @@ import { FiscalYearsPage } from './features/FiscalYears';
 import { CorporateTaxPage } from './features/CorporateTax';
 import { DgaPage } from './features/Dga';
 import { OwnersPage } from './features/Owners';
+import { IncomeTaxPage } from './features/IncomeTax';
 import { ShareholdersPage } from './features/Shareholders';
 import { AnnualAccountsPage } from './features/AnnualAccounts';
 import { PublicQuotePage } from './features/PublicQuotePage';
@@ -268,7 +269,7 @@ import './styles/prognose.css';
 import './styles/weekplanner.css';
 import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 /**
  * Een nieuwe klant uit een mail in de opvangbak ("Nieuwe klant" in
  * InboundInbox). Na opslaan koppelt persistEdit de mail aan de nieuwe klant.
@@ -4589,6 +4590,7 @@ function App() {
     if (page === 'dga') return <DgaPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'corporate-tax') return <CorporateTaxPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'owners') return <OwnersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} ownerUserId={organizationContext.teamMembers.find(member => member.role === 'owner')?.user_id ?? null} canReadHours={permissions.canRead('time')} teamMembers={workMembers} currentUserId={currentUserId}/>;
+    if (page === 'income-tax') return <IncomeTaxPage data={data} organizationId={activeOrg.id} canWrite={canWrite}/>;
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
