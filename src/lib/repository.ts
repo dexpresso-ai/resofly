@@ -671,8 +671,11 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
  * De kern van de werkruimte: wat bijna elke pagina en de vaste delen van het
  * scherm gebruiken. De zware, groeiende tabellen zitten hier niet in; die laadt
  * loadDataGroup pas als een pagina ze nodig heeft (zie src/lib/dataGroups.ts).
+ *
+ * `organizationCreatedAt`: wanneer de organisatie in ResoFly begon. De
+ * btw-herinnering slaat deadlines van daarvóór over (lib/vatPeriods.ts).
  */
-export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
+export async function loadCoreData(organizationId: UUID, { organizationCreatedAt = null }: { organizationCreatedAt?: string | null } = {}): Promise<CoreData> {
   const [
     clients,
     clientContacts,
@@ -727,13 +730,16 @@ export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
     selectFiledVatPeriods(organizationId),
   ]);
   // Btw-aangiftes die nog moeten: afgelopen tijdvakken zonder aangifte (zie
-  // lib/vatPeriods.ts). Alleen met een rekeningschema: wie de boekhouding niet
-  // in ResoFly doet, krijgt geen herinnering.
+  // lib/vatPeriods.ts). Alleen met een rekeningschema. Dat krijgt sinds
+  // 20261118090000 elke organisatie bij de inrichting; vatPeriodsToFile kijkt
+  // daarom ook naar de startdatum, eerdere aangiftes en de start in ResoFly.
+  const createdAt = organizationCreatedAt && !Number.isNaN(Date.parse(organizationCreatedAt)) ? new Date(organizationCreatedAt) : null;
   const vatDue: VatPeriodDue[] = ledgerAccounts.length === 0 || filedVatPeriods === null ? [] : vatPeriodsToFile({
     today: formatISODate(new Date()),
     frequency: companySettings?.vat_return_period === 'monthly' ? 'monthly' : 'quarterly',
     kor: Boolean(companySettings?.kor_enabled),
     bookkeepingStart: companySettings?.bookkeeping_start_date ?? null,
+    since: createdAt ? formatISODate(createdAt) : null,
     filed: filedVatPeriods,
   });
   const vatReturnsToFile = vatDue.length;
