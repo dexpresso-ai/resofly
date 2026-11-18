@@ -173,10 +173,11 @@ gekoppelde AI (MCP) en de openbare API tegelijk:
   triggers `forecasts_guard` (naam netjes, versie tellen, wie het deed) en
   `forecasts_snapshot`, RLS met de modulepoort, en `forecast_history(org, van, tot)`.
   Veilig om opnieuw te draaien. Eerst geschreven als `20261117120000`. Op 18
-  november kreeg staging eerst `20261118090000` en `20261118100000`, en daarna
-  `20261118120000` (bonnen en declaraties). Een oudere versie dan de laatste op
+  november kreeg staging, terwijl de tests liepen, `20261118090000` en
+  `20261118100000` (eenmanszaak, btw-tijdvak), `20261118120000` (bonnen en
+  declaraties) en `20261118130000` (vof). Een oudere versie dan de laatste op
   staging weigert `supabase db push`. Hij stond nog niet op staging, dus is hij
-  twee keer hernummerd.
+  elke keer hernummerd, de laatste keer bewust niet op een rond uur.
 - Rekenregels: `supabase/functions/_shared/forecast.ts`, puur (geen imports, geen
   Deno, geen DOM, geen Intl), zodat Deno, de browserbundel en `npm test` het alle
   drie laden. `src/lib/forecast.ts` zet het door; `forecast.test.ts` bewaakt dat het
@@ -205,12 +206,12 @@ gekoppelde AI (MCP) en de openbare API tegelijk:
 
 ## Getest
 
-Alles hieronder is gedraaid op de stand ná het samenvoegen met staging (met de
-eenmanszaak, de instellingen in groepen en de bonnen en declaraties erin), zoals
-hij uitrolt:
+Gedraaid op de stand die uitrolt: ná het samenvoegen met staging van 18 november
+(de eenmanszaak, de instellingen in groepen, de bonnen en declaraties, en de
+vof-administratie).
 
 - `npm run typecheck`: schoon.
-- `npm test`: 1987 geslaagd, 0 mislukt. Daarin de rekenregels
+- `npm test`: 1993 geslaagd, 0 mislukt. Daarin de rekenregels
   (`forecast.test.ts`, ook de bewaking dat het bestand puur blijft), de
   zoekvragen in `actionSearch.test.ts`, en de bestaande wachters
   `actionTenancy.test.ts`, `migrationGrants.test.ts`, `exportManifest.test.ts`
@@ -219,20 +220,36 @@ hij uitrolt:
   bestanden van de documentopmaak en de twee nieuwe gedeelde bestanden: schoon.
   Lokaal met een import map naar `npm:`, omdat esm.sh hier niet bereikbaar is.
 - De migratieketen vanaf nul (`supabase db reset`, Postgres 17.11.0.018, de versie
-  van staging): `20261118090000`, `20261118100000`, `20261118120000` en daarna
-  `20261118144500`. De prognose-migratie daarna nog een keer: geen fout.
+  van staging): `20261118090000`, `20261118100000`, `20261118120000`,
+  `20261118130000` en daarna `20261118144500`. De prognose-migratie daarna nog een
+  keer: geen fout.
 - De databasecontroles van de rooktest van staging: het boekhouder-hek dekt beide
   tabellen, anon heeft op geen tabel of functie rechten, en het schema `public`
   blijft dicht voor anon.
+- De databasetests van de vof (`tests/database`, met de prognose erna): allebei
+  geslaagd.
 - Stromentest `prognose`: 20 van de 20 stappen geslaagd. Ter controle ook
-  `bonnen`, de buur op staging: 22 van de 22.
+  `bonnen`, een buur op staging: 22 van de 22.
 - UI-test `prognose` in Chromium tegen de echte backend: 8 van de 8 stappen
   geslaagd.
 - Laden per module: alle controles geslaagd; de prognose haalt geen zware groep op
   en elke tabel één keer.
 - Inrichtingsstappen: alle controles geslaagd. Terugknop: 15 van de 15.
-- Mobiele lay-outtest, licht en donker: loopt nog (alle 125 pagina's, in vier
-  rondes); de uitslag komt hier.
+- Mobiele lay-outtest, licht en donker:
+  - helemaal, na de eerste samenvoeging (eenmanszaak, instellingen): 118 pagina's,
+    710 metingen, 0 met problemen; de vier nieuwe (de prognose, met een gewijzigde
+    aanname, de geschiedenis en een nieuwe prognose) op telefoon, tablet en
+    liggend, het eerste kerncijfer op de telefoon op 183px (grens 220);
+  - na de tweede (bonnen): de eerste twee van de vier rondes, 384 metingen, 0 met
+    problemen; toen kwam de vof op staging en is de ronde gestopt;
+  - op de stand die uitrolt gericht op de 23 pagina's waar de wijzigingen elkaar
+    raken (de prognose, bonnen en declaraties, vennoten en de vof-inkoop, het
+    menu van Financiën, Instellingen, het dashboard): loopt nog; de uitslag komt
+    hier.
+
+  Staging veranderde vandaag ongeveer elk uur, en een volledige ronde duurt hier
+  ruim een half uur; daarom de laatste keer gericht. De volledige ronde op de
+  stand die uitrolt draait CI (Frontend checks) bij het uitrollen.
 
 ## Niet in deze stap
 
