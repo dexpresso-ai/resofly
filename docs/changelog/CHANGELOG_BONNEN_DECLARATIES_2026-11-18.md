@@ -180,7 +180,7 @@ Op 18 november is staging hierin samengevoegd (eenmanszaak, btw-tijdvak wisselen
 in groepen). De migratie heette eerst `20261117120000`. Ze kreeg een nummer na de twee migraties
 die staging die ochtend kreeg; anders had ze vóór de laatste op staging gestaan, en dan draait
 ze daar nooit. Na het samenvoegen opnieuw gedraaid: typecheck, `npm test`, `deno check`, de
-keten vanaf nul, de SQL-controle en `test:stromen -- bonnen`.
+build, de keten vanaf nul, de SQL-controle en alle stromen-scenario's.
 
 - `npm run typecheck`: schoon.
 - `npm test`: 1971 tests, alle geslaagd. Nieuw zijn `receiptUpload.test.ts` (regels, edge
@@ -201,6 +201,11 @@ keten vanaf nul, de SQL-controle en `test:stromen -- bonnen`.
 - `npm run test:stromen -- bonnen`: 22 stappen, alle geslaagd, met de echte edge function, de
   echte database, een nep-Claude en een nep-media-worker. Daarin ook de teller van de badge,
   precies zoals de app hem aan PostgREST vraagt. Zie `tests/stromen/README.md`.
+- `npm run test:stromen` (alle scenario's, na het samenvoegen): 1195 stappen, 0 fout. De
+  eerste keer faalden 13 stappen van `bonnen`, terwijl het scenario alleen wel slaagde.
+  `rapportages` zet een eigen nep-Claude neer die de rest van de run blijft staan, en die gaf
+  op een bon de notulen terug. Het bonantwoord is nu gedeeld (`bonAntwoord` in `nep-ai.mjs`,
+  zoals de poortwachter), zodat de volgorde van de scenario's niet uitmaakt.
 - `npm run test:mobile -- --theme=both`: 722 metingen, alle in orde. Twee haalden eerst de
   wachttijd van 20 seconden niet: `declaratie-afwijzen` en het bestaande `inrichten-facturen`,
   allebei op tablet in donker. Er draaiden toen andere tests naast. Opnieuw gemeten slaagden
