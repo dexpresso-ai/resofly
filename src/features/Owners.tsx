@@ -383,9 +383,11 @@ function IncomeTaxSection({ data, organizationId, overview, ownerUserId }: {
                   : <>tot de drempel van {euroCents(r.rules.mixedCostsThresholdCents)}</>})</>,
                 r.mixedCosts.addBackCents, '+')}
               {row('Winst uit onderneming vóór ondernemersaftrek', r.fiscalProfitCents, '=', true)}
-              {row(<>Zelfstandigenaftrek {hoursMet ? (r.selfEmployedCapped ? '(niet hoger dan de winst)' : '') : '(urencriterium niet gehaald)'}</>, -r.selfEmployedDeductionCents, '−')}
-              {starter && row('Startersaftrek', -r.starterDeductionCents, '−')}
-              {row(`Mkb-winstvrijstelling (${(r.rules.smeExemptionBasisPoints / 100).toLocaleString('nl-NL')}%)`, -r.smeExemptionCents, '−')}
+              {/* Aftrekposten positief, met het minteken ervoor: "− € 1.200", niet "− € -1.200". */}
+              {row(<>Zelfstandigenaftrek {hoursMet ? (r.selfEmployedCapped ? '(niet hoger dan de winst)' : '') : '(urencriterium niet gehaald)'}</>, r.selfEmployedDeductionCents, '−')}
+              {starter && row('Startersaftrek', r.starterDeductionCents, '−')}
+              {/* Bij een verlies maakt de vrijstelling het verlies kleiner: dan staat er een plus. */}
+              {row(`Mkb-winstvrijstelling (${(r.rules.smeExemptionBasisPoints / 100).toLocaleString('nl-NL', { minimumFractionDigits: 2 })}%)${r.smeExemptionCents < 0 ? ', maakt het verlies kleiner' : ''}`, Math.abs(r.smeExemptionCents), r.smeExemptionCents < 0 ? '+' : '−')}
               {row('Belastbare winst uit onderneming', r.taxableProfitCents, '=', true)}
             </tbody>
           </table></div>

@@ -5,7 +5,7 @@
  *
  *   npx supabase start -x studio,imgproxy,mailpit,logflare,vector,supavisor,edge-runtime,postgres-meta,realtime,storage-api
  *   npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0
- *   npm run test:stromen -- [rook] [offertes] [facturen] [mollie] [verzendwijze] [herinneringen] [contracten] [beveiliging] [automatisering] [agenda] [videovergadering] [bank] [marketing] [inrichten] [klantdomein] [notulen] [rapportages] [agents] [boekingslinks] [tickets] [api] [vooruitbetaald] [caldav] [galerij-namen]
+ *   npm run test:stromen -- [rook] [offertes] [facturen] [mollie] [verzendwijze] [herinneringen] [contracten] [beveiliging] [automatisering] [agenda] [videovergadering] [bank] [marketing] [inrichten] [klantdomein] [notulen] [rapportages] [agents] [boekingslinks] [tickets] [api] [vooruitbetaald] [caldav] [galerij-namen] [eenmanszaak]
  *
  * Resend, Mollie en de media-worker zijn nep (nepdiensten.mjs): er gaat niets
  * de deur uit, maar elke mail, betaling en PDF wordt vastgelegd en gecontroleerd.
