@@ -73,6 +73,17 @@ const CASES: Array<[string, string]> = [
   ['termijnen van de vooruitbetaalde kosten boeken', 'prepaid.post_releases'],
   ['verzekering opgezegd, vooruitbetaling beëindigen', 'prepaid.end'],
   ['welke vooruitbetalingen staan er nog op de balans', 'prepaid.list'],
+  // De prognose (2026-11-17). De vraag zelf: "een forecast over aantal
+  // projecten, verkoop, winst", en wat iemand daarna tegen Gerrie zegt.
+  ['forecast bekijken', 'forecast.list'],
+  ['wat is de verwachte winst komend jaar', 'forecast.list'],
+  ['prognose van het aantal projecten en de omzet', 'forecast.list'],
+  ['forecast aanpassen', 'forecast.update'],
+  ['reken in de prognose met tien procent groei', 'forecast.update'],
+  ['extra medewerker in de prognose vanaf maart', 'forecast.update'],
+  ['nieuwe prognose maken', 'forecast.create'],
+  ['een voorzichtig scenario naast de prognose', 'forecast.create'],
+  ['prognose verwijderen', 'forecast.delete'],
   ['dividend uitkeren', 'dividend.declare'],
   ['aandeelhouder toevoegen', 'shareholder.create'],
   ['jaarrekening opmaken', 'annual_accounts.prepare'],

@@ -76,7 +76,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261118130000 (vof: vennoten en privé) zet user_id op partnership_partners:
 // het teamlid dat de vennoot is. Gaat gewoon mee met de vennoten, net als
 // clients.account_lead_user_id: geen geheim en geen opslagsleutel.
-export const EXPORT_SCHEMA_VERSION = '20261118130000';
+// 20261118144500 (prognose) zet forecasts en forecast_versions erbij. Allebei
+// 'export': een prognose is de verwachting van de organisatie zelf, en de
+// versies laten zien hoe die verwachting bijgesteld werd. De aannames staan
+// als jsonb; de prognoses ook als leesbare lijst.
+export const EXPORT_SCHEMA_VERSION = '20261118144500';
 
 export type TableKind =
   | 'export'
@@ -341,6 +345,8 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
 
   // ── Rapportages en Gerrie ────────────────────────────────────────────────
   saved_reports: { kind: 'export' },
+  forecasts: { kind: 'export', list: 'prognoses' },
+  forecast_versions: { kind: 'export' },
   ai_reports: { kind: 'export' },
   ai_report_versions: { kind: 'export' },
   ai_report_messages: { kind: 'export' },

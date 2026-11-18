@@ -1,0 +1,191 @@
+/* ============================================================
+   Financiën → Prognose (2026-11-17). Eigen klassen (fc-*), op de gedeelde
+   variabelen, zodat Baken, Cockpit, Zenit en Stroom hem allemaal kleuren.
+   De kerncijfers lenen .stat-card van het dashboard, de tabel .bk-table van
+   de boekhouding.
+
+   De twee reekskleuren (omzet en kosten) zijn nagerekend op
+   kleurenblindheid en contrast (validate_palette.js uit de dataviz-richtlijn):
+   licht #A36F00 / #1A5FBA op wit, donker #C08A20 / #3E8FE0 op #1B1B22. De
+   lichtere goudtint van --viz-1 in het donker viel buiten de lichtheidsband.
+   ============================================================ */
+
+.fc-page{--fc-rev:#C08A20;--fc-cost:#3E8FE0;gap:14px}
+:root[data-theme="light"] .fc-page{--fc-rev:#A36F00;--fc-cost:#1A5FBA}
+
+.fc-card{border:1px solid var(--border);background:var(--panel);box-shadow:var(--shadow-soft);border-radius:var(--radius-md,16px);padding:16px;min-width:0}
+.fc-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.fc-card-head h3{margin:0;font-size:.95rem;font-weight:700}
+.fc-muted{color:var(--muted2);font-size:.82rem}
+.fc-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.fc-note{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.fc-note p{margin:0}
+.fc-note.is-error{border-color:rgba(var(--danger-rgb),.4)}
+
+/* ── Scenario's ──────────────────────────────────────────────── */
+.fc-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.fc-scenarios{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;min-width:0;padding:2px}
+.fc-scenarios::-webkit-scrollbar{display:none}
+.fc-scenario{flex:none;border:1px solid var(--border);background:transparent;color:var(--muted2);border-radius:999px;padding:7px 14px;font:inherit;font-size:.84rem;font-weight:600;cursor:pointer;white-space:nowrap}
+.fc-scenario:hover{color:var(--text);border-color:var(--border2)}
+.fc-scenario.is-on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.fc-scenario small{font-weight:500;opacity:.8;margin-left:4px}
+.fc-scenario-new{display:none;align-items:center;gap:4px;border-style:dashed}
+.fc-span{flex:none;color:var(--muted2);font-size:.82rem;font-variant-numeric:tabular-nums}
+
+/* ── Kerncijfers ─────────────────────────────────────────────── */
+.fc-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.fc-kpi{padding:16px}
+.fc-kpi .sc-val{font-size:clamp(20px,2.2vw,28px)}
+.fc-kpi .sc-sub{flex-wrap:wrap}
+/* Het dashboard kort de regel onder een kerncijfer op de telefoon in; hier
+   staat de vergelijking met vorig jaar erin, die mag op twee regels. */
+.fc-kpi.stat-card .sc-sub{white-space:normal;overflow:visible}
+.fc-kpi.stat-card .sc-sub>span:not(.sc-trend){white-space:normal;overflow:visible}
+.fc-kpi.stat-card .sc-trend+span{display:inline}
+.fc-kpi.stat-card .sc-label{font-size:11px;letter-spacing:.03em}
+.fc-kpi .sc-spark{position:absolute;top:14px;right:14px}
+
+/* ── Pas aan met Gerrie ──────────────────────────────────────── */
+.fc-ask{display:flex;flex-direction:column;gap:10px}
+.fc-ask-row{display:flex;align-items:center;gap:10px}
+.fc-ask-label{flex:none;display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:.88rem}
+.fc-ask-row .form-input{flex:1;min-width:0}
+.fc-ask-suggest{display:flex;flex-wrap:wrap;gap:6px}
+.fc-ask-suggest button{border:1px dashed var(--border2);background:transparent;color:var(--muted2);border-radius:999px;padding:6px 12px;font:inherit;font-size:.8rem;cursor:pointer;text-align:left}
+.fc-ask-suggest button:hover{color:var(--text);border-style:solid}
+.fc-ask-note{margin:0;color:var(--muted2);font-size:.8rem}
+
+/* ── Niet bewaard / bewaard ──────────────────────────────────── */
+.fc-dirty{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-color:rgba(var(--accent-rgb),.45)}
+.fc-dirty p{margin:0;flex:1;min-width:220px;font-size:.86rem}
+.fc-dirty.is-error{border-color:rgba(var(--danger-rgb),.45)}
+.fc-dirty-acts{display:flex;gap:8px;flex-wrap:wrap}
+.fc-sofar{font-size:.86rem}
+
+/* ── Opbouw: links de cijfers, rechts de aannames ────────────── */
+.fc-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,360px);gap:14px;align-items:start}
+.fc-main,.fc-side{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+/* ── De grafiek ──────────────────────────────────────────────── */
+.fc-legend{display:flex;gap:14px;list-style:none;margin:0;padding:0;font-size:.78rem;color:var(--muted2)}
+.fc-legend li{display:inline-flex;align-items:center;gap:6px}
+.fc-key{display:inline-block;width:16px;height:0;border-top:2px solid var(--muted2);vertical-align:middle}
+.fc-key.is-rev{border-top-color:var(--fc-rev)}
+.fc-key.is-cost{border-top-color:var(--fc-cost)}
+.fc-key.is-dash{border-top-style:dashed}
+.fc-chart{position:relative;outline:none;border-radius:10px}
+.fc-chart:focus-visible{box-shadow:0 0 0 3px rgba(var(--accent-rgb),.35)}
+.fc-chart svg{display:block;touch-action:pan-y}
+.fc-band{fill:rgba(var(--accent-rgb),.06)}
+.fc-grid{stroke:var(--grid,rgba(127,127,127,.15));stroke-width:1}
+.fc-axis{stroke:var(--border2);stroke-width:1}
+.fc-tick{fill:var(--muted2);font-size:11px;font-variant-numeric:tabular-nums}
+.fc-now{stroke:var(--border2);stroke-width:1}
+.fc-now-label{font-weight:700}
+.fc-line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.fc-line.is-rev{stroke:var(--fc-rev)}
+.fc-line.is-cost{stroke:var(--fc-cost)}
+.fc-line.is-dash{stroke-dasharray:6 4}
+.fc-dot{stroke:var(--panel);stroke-width:2}
+.fc-dot.is-rev{fill:var(--fc-rev)}
+.fc-dot.is-cost{fill:var(--fc-cost)}
+.fc-cross{stroke:var(--muted2);stroke-width:1}
+.fc-tip{position:absolute;top:6px;transform:translateX(-50%);pointer-events:none;display:flex;flex-direction:column;gap:3px;min-width:170px;padding:9px 11px;border-radius:10px;border:1px solid var(--border2);background:var(--panel);box-shadow:var(--shadow-soft);font-size:.78rem;color:var(--muted2);z-index:2}
+.fc-tip b{color:var(--text);font-size:.82rem;text-transform:capitalize}
+.fc-tip span{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.fc-tip strong{color:var(--text);font-variant-numeric:tabular-nums}
+.fc-tip .fc-key{width:12px}
+
+/* ── De tabel ────────────────────────────────────────────────── */
+.app .bk-table.fc-table tbody th[scope="row"],.app .bk-table.fc-table tfoot th[scope="row"]{font-size:.86rem;font-weight:600;letter-spacing:0;text-transform:capitalize;color:var(--text);white-space:nowrap}
+.fc-table td small,.fc-table th small{display:block;color:var(--muted2);font-size:.72rem;font-weight:500;letter-spacing:0;text-transform:none;white-space:nowrap}
+.fc-table .fc-proj-inline{display:none}
+.app .bk-table.fc-table tr.is-past th[scope="row"]{color:var(--muted2)}
+.fc-table tfoot th,.fc-table tfoot td{border-top:2px solid var(--border);font-weight:700}
+.fc-mark{color:var(--accent-ink)}
+.fc-neg{color:var(--accent-r,var(--danger))}
+
+/* ── Aannames ────────────────────────────────────────────────── */
+.fc-intro{margin:0 0 12px}
+.fc-fields{display:flex;flex-direction:column;gap:12px}
+.fc-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.fc-field>label{font-size:.82rem;font-weight:600;color:var(--text)}
+.fc-hint{color:var(--muted2);font-size:.75rem;line-height:1.35}
+.fc-hint.is-error{color:var(--accent-r,var(--danger))}
+.fc-input{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:12px;background:var(--field,transparent);padding:0 11px;min-width:0}
+.fc-input:focus-within{border-color:var(--border-strong,var(--border2));box-shadow:0 0 0 3px rgba(var(--accent-rgb),.12)}
+.fc-input.is-invalid{border-color:rgba(var(--danger-rgb),.6)}
+.fc-input input{flex:1;min-width:0;border:0;background:transparent;color:var(--text);font:inherit;font-size:.9rem;padding:9px 0;outline:none;font-variant-numeric:tabular-nums}
+.fc-input input::placeholder{color:var(--muted2);opacity:.85}
+.fc-unit{flex:none;color:var(--muted2);font-size:.82rem}
+.fc-link{align-self:flex-start;border:0;background:none;padding:0;color:var(--accent-ink);font:inherit;font-size:.78rem;font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.fc-sub{border-top:1px solid var(--border);margin-top:14px;padding-top:12px;display:flex;flex-direction:column;gap:8px}
+.fc-sub h4,.fc-pipeline h4{margin:0;font-size:.86rem;font-weight:700}
+.fc-sub p{margin:0}
+.fc-empty{font-style:italic}
+/* Naam over de hele breedte; soort en bedrag; van, tot en met en weghalen. */
+.fc-item{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:6px;padding:10px;border:1px solid var(--border);border-radius:12px;align-items:center}
+.fc-item .fc-item-label{grid-column:1/-1}
+.fc-item .form-select{min-width:0}
+.fc-item .fc-item-amount{grid-column:2/-1}
+.fc-icon{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--muted2);cursor:pointer}
+.fc-icon:hover{color:var(--accent-r,var(--danger));border-color:rgba(var(--danger-rgb),.4)}
+.fc-month{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:.86rem}
+.fc-month span{text-transform:capitalize}
+.fc-month b{margin-left:auto;font-variant-numeric:tabular-nums}
+.fc-month-add{display:grid;grid-template-columns:minmax(0,1fr) 72px auto;gap:6px;align-items:center}
+
+/* ── Waar het op rust ────────────────────────────────────────── */
+.fc-basis p{margin:0 0 8px;font-size:.86rem}
+.fc-facts{margin:0 0 10px;padding-left:18px;font-size:.86rem;display:flex;flex-direction:column;gap:3px}
+.fc-pipeline{border-top:1px solid var(--border);padding-top:10px;margin-top:6px;display:flex;flex-direction:column;gap:6px}
+.fc-pipeline p{margin:0}
+
+/* ── Voet en vensters ────────────────────────────────────────── */
+.fc-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;color:var(--muted2);font-size:.8rem}
+.fc-foot-acts{display:flex;gap:8px;flex-wrap:wrap}
+.fc-dialog{display:flex;flex-direction:column;gap:14px}
+.fc-choice{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;font-size:.88rem}
+.fc-choice legend{font-weight:600;margin-bottom:4px;font-size:.82rem}
+.fc-choice label{display:flex;gap:8px;align-items:flex-start;cursor:pointer}
+.fc-versions{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.fc-versions li{border:1px solid var(--border);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.fc-versions p{margin:0;font-size:.86rem}
+.fc-version-head{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+
+/* ── Tablet: de aannames onder de cijfers ────────────────────── */
+@media (max-width:1100px){
+  .fc-layout{grid-template-columns:minmax(0,1fr)}
+  .fc-side{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));align-items:start}
+}
+
+/* ── Telefoon ────────────────────────────────────────────────── */
+@media (max-width:760px){
+  .fc-page{gap:10px}
+  .fc-bar{flex-wrap:wrap}
+  .fc-span{width:100%}
+  .fc-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .fc-kpi{padding:12px}
+  .fc-kpi .sc-val{font-size:20px}
+  .fc-kpi .sc-spark{display:none}
+  .fc-card{padding:12px}
+  .fc-head .bk-head-actions{display:none}
+  .fc-scenario-new{display:inline-flex}
+  .fc-ask{gap:8px}
+  .fc-ask-row{flex-wrap:wrap;gap:8px}
+  .fc-ask-label{width:100%}
+  .fc-ask-row .btn{flex:none;padding-left:14px;padding-right:14px}
+  .fc-ask-suggest{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -12px;padding:0 12px}
+  .fc-ask-suggest::-webkit-scrollbar{display:none}
+  .fc-ask-suggest button{flex:none;white-space:nowrap}
+  .fc-ask-note{font-size:.75rem}
+  .bk-table.fc-table{min-width:0;font-size:.8rem}
+  .bk-table.fc-table th,.bk-table.fc-table td{padding:9px 8px}
+  .fc-table .fc-col-proj,.fc-table .fc-col-cum{display:none}
+  .fc-table .fc-proj-inline{display:block}
+  .fc-side{display:flex}
+  .fc-legend{gap:10px;flex-wrap:wrap}
+  .fc-tip{min-width:150px}
+  .fc-foot{flex-direction:column;align-items:flex-start}
+}

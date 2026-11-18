@@ -58,6 +58,8 @@ const PAGES = {
   // inkoopfacturen, leveranciers en rekeningen. De werklijst haalt zijn eigen
   // rijen op, buiten de groepen om.
   'purchase-invoices': 'purchase-invoices',
+  // De prognose (2026-11-17) laadt zijn eigen cijfers (forecast_history) en geen groep.
+  forecast: 'forecast',
 };
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));

@@ -615,6 +615,46 @@ export const aiConsents = [
     accepted_at: iso(day(-30)), disabled_at: null, created_at: iso(day(-30)), updated_at: iso(day(-30)) },
 ];
 
+
+// ── Prognose (2026-11-17) ─────────────────────────────────────────────────
+// Twee prognoses (Basis met een extra post en een rustige maand, en een
+// voorzichtig scenario), een paar versies voor de geschiedenis, en de cijfers
+// van twaalf maanden waar "automatisch" op rust (forecast_history).
+const monthKey = (offset) => { const d = new Date(NOW.getFullYear(), NOW.getMonth() + offset, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+const FORECAST_BASIS = uid('f');
+const basisAssumptions = {
+  growth_pct: 8, project_months: 2,
+  month_projects: { [monthKey(8)]: 1 },
+  items: [
+    { id: 'post-1', label: 'Nieuwe ontwerper (parttime)', kind: 'cost', amount: 2800, from: monthKey(3), to: null },
+    { id: 'post-2', label: 'Opdracht jubileum Van Dijk', kind: 'revenue', amount: 12500, from: monthKey(2), to: monthKey(2) },
+  ],
+};
+export const forecasts = [
+  { id: FORECAST_BASIS, ...base(), name: 'Basis', notes: null, assumptions: basisAssumptions, version: 3, change_note: 'AI-voorstel: Groei per jaar: 0% → 8%', updated_by: USER },
+  { id: uid('f'), ...base(), name: 'Voorzichtig', notes: 'Als de grote opdrachten uitblijven.', assumptions: { projects_per_month: 2, growth_pct: -5 }, version: 1, change_note: null, updated_by: USER },
+];
+export const forecastVersions = [
+  { id: uid('g'), organization_id: ORG, forecast_id: FORECAST_BASIS, version: 3, name: 'Basis', notes: null, assumptions: basisAssumptions, change_note: 'AI-voorstel: Groei per jaar: 0% → 8%', created_by: USER, created_at: iso(day(-1)) },
+  { id: uid('g'), organization_id: ORG, forecast_id: FORECAST_BASIS, version: 2, name: 'Basis', notes: null, assumptions: { ...basisAssumptions, growth_pct: 0 }, change_note: 'Post erbij: Nieuwe ontwerper (parttime): kosten € 2.800 per maand, vanaf ' + monthKey(3), created_by: USER2, created_at: iso(day(-6)) },
+  { id: uid('g'), organization_id: ORG, forecast_id: FORECAST_BASIS, version: 1, name: 'Basis', notes: null, assumptions: {}, change_note: 'Bewaard zoals uitgerekend', created_by: USER, created_at: iso(day(-20)) },
+];
+const HISTORY_PROJECTS = [3, 2, 4, 3, 2, 3, 1, 2, 4, 3, 3, 2, 1];
+const HISTORY_REVENUE = [1450000, 980000, 1720000, 1260000, 1110000, 1390000, 640000, 870000, 1810000, 1330000, 1420000, 1150000, 310000];
+const HISTORY_COSTS = [905000, 870000, 940000, 910000, 880000, 960000, 790000, 820000, 990000, 930000, 950000, 920000, 410000];
+/** Het antwoord van forecast_history: twaalf hele maanden en deze maand tot nu. */
+export function forecastHistory() {
+  const months = HISTORY_PROJECTS.map((projects, i) => ({
+    month: monthKey(i - 12), projects,
+    revenue_project_cents: HISTORY_REVENUE[i], revenue_other_cents: i === 12 ? 60000 : 180000,
+    purchase_cents: Math.round(HISTORY_COSTS[i] * 0.4), ledger_revenue_cents: HISTORY_REVENUE[i] + 180000, ledger_expense_cents: HISTORY_COSTS[i],
+  }));
+  return {
+    from: monthKey(-12), to: monthKey(0), today: dkey(day(0)), projects_visible: true, months,
+    pipeline: { open_count: 3, open_cents: 1840000, accepted_count: 1, accepted_cents: 650000, won_count: 9, lost_count: 5 },
+  };
+}
+
 export const tables = {
   ai_consents: aiConsents,
   ai_agents: aiAgents, ai_agent_runs: aiAgentRuns, ai_agent_run_events: aiAgentRunEvents,
@@ -649,7 +689,7 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
-  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: purchaseInvoices, purchase_invoice_inbox: purchaseInvoiceInbox, fixed_assets: [], asset_depreciations: [], prepaid_expenses: [], prepaid_expense_releases: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], ai_reports: aiReports, ai_report_messages: aiReportMessages, ai_report_versions: aiReportVersions, planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: auditLogs, contracts: [],
+  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: purchaseInvoices, purchase_invoice_inbox: purchaseInvoiceInbox, fixed_assets: [], asset_depreciations: [], prepaid_expenses: [], prepaid_expense_releases: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], forecasts, forecast_versions: forecastVersions, ai_reports: aiReports, ai_report_messages: aiReportMessages, ai_report_versions: aiReportVersions, planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: auditLogs, contracts: [],
   client_email_threads: clientEmailThreads, client_email_folders: clientEmailFolders, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
   inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias], organization_email_domains: sendingDomains,
   // Het eerste ticket heeft een klantreactie die nog niet gelezen is (view

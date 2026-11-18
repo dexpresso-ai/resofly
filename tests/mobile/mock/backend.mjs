@@ -700,6 +700,8 @@ function rpc(fn, body = null) {
   if (folderResult !== undefined) return folderResult;
   switch (fn) {
     case 'ensure_user_default_organization': return null;
+    // De prognose (2026-11-17): de cijfers per maand en de offertes.
+    case 'forecast_history': return seed.forecastHistory();
     // Gerrie aan- of uitzetten (2026-11-12): de rij zoals set_ai_consent hem teruggeeft.
     case 'set_ai_consent': {
       const now = new Date().toISOString();
