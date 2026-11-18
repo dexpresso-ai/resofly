@@ -179,8 +179,7 @@ toetst dat dezelfde foto later nog eens als dubbel wordt herkend.
 Op 18 november is staging hierin samengevoegd (eenmanszaak, btw-tijdvak wisselen, instellingen
 in groepen). De migratie heette eerst `20261117120000`. Ze kreeg een nummer na de twee migraties
 die staging die ochtend kreeg; anders had ze vóór de laatste op staging gestaan, en dan draait
-ze daar nooit. Na het samenvoegen opnieuw gedraaid: typecheck, `npm test`, `deno check`, de
-build, de keten vanaf nul, de SQL-controle en alle stromen-scenario's.
+ze daar nooit. Na het samenvoegen is alles hieronder opnieuw gedraaid.
 
 - `npm run typecheck`: schoon.
 - `npm test`: 1971 tests, alle geslaagd. Nieuw zijn `receiptUpload.test.ts` (regels, edge
@@ -206,10 +205,10 @@ build, de keten vanaf nul, de SQL-controle en alle stromen-scenario's.
   `rapportages` zet een eigen nep-Claude neer die de rest van de run blijft staan, en die gaf
   op een bon de notulen terug. Het bonantwoord is nu gedeeld (`bonAntwoord` in `nep-ai.mjs`,
   zoals de poortwachter), zodat de volgorde van de scenario's niet uitmaakt.
-- `npm run test:mobile -- --theme=both`: 722 metingen, alle in orde. Twee haalden eerst de
-  wachttijd van 20 seconden niet: `declaratie-afwijzen` en het bestaande `inrichten-facturen`,
-  allebei op tablet in donker. Er draaiden toen andere tests naast. Opnieuw gemeten slaagden
-  ze. Nieuw in de test:
+- `npm run test:mobile -- --theme=both`: 728 metingen, alle in orde. In een run vóór het
+  samenvoegen haalden er twee eerst de wachttijd van 20 seconden niet: `declaratie-afwijzen` en
+  het bestaande `inrichten-facturen`, allebei op tablet in donker. Er draaiden toen andere tests
+  naast; opnieuw gemeten slaagden ze. Nieuw in de test:
   - de pagina's Inkoopfacturen (met de werklijst) en Declaraties, elk met een grens voor het
     eerste item (322 en 354 px gemeten, grens 386 en 425);
   - het bonvenster: terwijl Gerrie leest, na een concept en na "winkel nog geen leverancier";
@@ -222,8 +221,10 @@ build, de keten vanaf nul, de SQL-controle en alle stromen-scenario's.
   keuzelijst met een lange naam krimpt in een flex-rij en een grid niet vanzelf. Dat is
   hersteld (`bonnen.css`), en met de oude opmaak faalt de controle.
 - `npm run test:loading`: alles geslaagd, ook Inkoopfacturen (alleen de kern, geen groep).
-- `npm run test:terugknop`: 14 geslaagd. Nieuw: na de foto sluit terug het bonvenster, en
+- `npm run test:inrichten`: alles geslaagd.
+- `npm run test:terugknop`: 15 geslaagd. Nieuw: na de foto sluit terug het bonvenster, en
   daarna gaat terug naar het dashboard. Dat geldt op Inkoopfacturen en op Declaraties.
+- `npm run build` en de CSP-controle (`scripts/check-csp-hash.mjs`): schoon.
 
 ## Wat (nog) niet
 
