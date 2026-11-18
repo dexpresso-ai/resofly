@@ -224,6 +224,7 @@ const FIELD_LABELS: Record<string, string> = {
   reversed_by_entry_id: 'Teruggedraaid met', code: 'Code', type: 'Soort', subtype: 'Subsoort', report_group: 'Rapportgroep',
   is_restricted_reserve: 'Wettelijke reserve', is_system: 'Systeemrekening', provider: 'Aanbieder', ledger_account_id: 'Grootboekrekening',
   auto_book: 'Automatisch boeken', match_direction: 'Richting', target_vat_code: 'Btw-code', target_account_id: 'Rekening',
+  auto_book_purchase_invoices: 'Inkoopfacturen automatisch afletteren',
   period_type: 'Periode', year: 'Jaar', period_index: 'Periode', period_start: 'Begin periode', period_end: 'Eind periode',
   finalized_at: 'Definitief op', filed_at: 'Ingediend op', rubrieken: 'Rubrieken', paid_bank_transaction_id: 'Betaald met',
   asset_number: 'Activumnummer', category: 'Categorie', acquisition_date: 'Aanschafdatum', acquisition_cost_cents: 'Aanschafprijs',

@@ -187,3 +187,45 @@ test('btw-code bij een andere rekening: geen btw op privé en schulden, en met d
   assert.equal(vatCodeForAccount('', kosten, { kor: true }), '');
   assert.equal(vatCodeForAccount('', null), '');
 });
+
+test('een verzamelbetaling die de matcher voorstelt: een regel per inkoopfactuur met zijn bedrag', () => {
+  // Zoals bank_purchase_match het vastlegt (20261118190000): de oudste
+  // facturen van één leverancier die samen precies het bedrag zijn.
+  const lines = suggestAllocations(txn({
+    amount_cents: -18150,
+    description: 'Facturen oktober',
+    suggested_allocations: [
+      { kind: 'purchase_invoice', purchase_invoice_id: 'p1', amount_cents: 12100 },
+      { kind: 'purchase_invoice', purchase_invoice_id: 'p2', amount_cents: 6050 },
+    ],
+  }), CANDIDATES);
+  assert.deepEqual(amounts(lines), [['purchase_invoice', 'p1', '121,00'], ['purchase_invoice', 'p2', '60,50']]);
+  assert.equal(allocationState(lines, 18150).problem, null);
+});
+
+test('een factuur met een rest: de rest staat klaar op een regel waar je zelf de rekening kiest', () => {
+  const lines = suggestAllocations(txn({
+    amount_cents: -13000,
+    suggested_account_id: null,
+    suggested_allocations: [
+      { kind: 'purchase_invoice', purchase_invoice_id: 'p1', amount_cents: 12100 },
+      { kind: 'ledger', amount_cents: 900 },
+    ],
+  }), CANDIDATES);
+  assert.deepEqual(amounts(lines), [['purchase_invoice', 'p1', '121,00'], ['ledger', '', '9,00']]);
+  // Nog niet te boeken: eerst een rekening kiezen.
+  assert.equal(allocationState(lines, 13000).problem, 'Regel 2: kies een grootboekrekening.');
+});
+
+test('een voorstel van de matcher met één regel of onleesbare regels: gewoon het oude voorstel', () => {
+  const single = suggestAllocations(txn({
+    amount_cents: -12100, matched_purchase_invoice_id: 'p1',
+    suggested_allocations: [{ kind: 'purchase_invoice', purchase_invoice_id: 'p1', amount_cents: 12100 }],
+  }), CANDIDATES);
+  assert.deepEqual(amounts(single), [['purchase_invoice', 'p1', '']]);
+  const broken = suggestAllocations(txn({
+    amount_cents: -12100, matched_purchase_invoice_id: 'p1',
+    suggested_allocations: [{ kind: 'purchase_invoice', amount_cents: 12100 }, { kind: 'ledger', amount_cents: 0 }] as never,
+  }), CANDIDATES);
+  assert.deepEqual(amounts(broken), [['purchase_invoice', 'p1', '']]);
+});

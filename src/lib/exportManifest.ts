@@ -91,7 +91,13 @@ export const EXPORT_FORMAT_VERSION = 1;
 // aannames staan in forecasts.assumptions (jsonb) en gaan daar al mee.
 // 20261118180000 (btw-betaling in het banksaldo) vervangt alleen
 // forecast_cash_position; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261118180000';
+// 20261118190000 (betalingen vanzelf koppelen aan inkoopfacturen) zet
+// match_reason, suggested_allocations, auto_booked en auto_book_blocked op
+// bank_transactions en auto_book_purchase_invoices op bank_accounts. Ze gaan
+// mee: waaróp een betaling is gekoppeld en of ResoFly hem zelf boekte, hoort
+// bij de administratie. Geen geheim en geen opslagsleutel. Verder een rijtype
+// (bank_open_purchase_invoice), functies en triggers; geen tabellen.
+export const EXPORT_SCHEMA_VERSION = '20261118190000';
 
 export type TableKind =
   | 'export'
