@@ -132,25 +132,8 @@ registreerDienst('https://api.anthropic.com', async (request, url) => {
   const user = (body.messages ?? []).map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
   const poort = poortwachterAntwoord(body, user);
   if (poort) return poort;
-  // Een bon of factuur uitlezen: het antwoord is de tool extract_invoice,
-  // zoals het echte model hem aanroept.
-  if ((body.tools ?? []).some((tool) => tool.name === 'extract_invoice')) {
-    const inhoud = (body.messages ?? []).flatMap((m) => (Array.isArray(m.content) ? m.content : []));
-    ai.bonnen.push({
-      model: body.model,
-      tekst: inhoud.filter((b) => b.type === 'text').map((b) => b.text).join('\n'),
-      beelden: inhoud.filter((b) => b.type === 'image').length,
-      documenten: inhoud.filter((b) => b.type === 'document').length,
-    });
-    const gelezen = ai.bon ?? BON;
-    ai.bon = null;
-    return json(200, {
-      id: `msg_${randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model: body.model,
-      stop_reason: 'tool_use', stop_sequence: null,
-      content: [{ type: 'tool_use', id: `toolu_${randomUUID().replace(/-/g, '')}`, name: 'extract_invoice', input: gelezen }],
-      usage: { input_tokens: 1800, output_tokens: 240, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-    });
-  }
+  const bon = bonAntwoord(body);
+  if (bon) return bon;
   ai.claude.push({ apiKey: request.headers.get('x-api-key'), model: body.model, system: body.system, user });
   return json(200, {
     id: `msg_${randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model: body.model,
@@ -159,6 +142,35 @@ registreerDienst('https://api.anthropic.com', async (request, url) => {
     usage: { input_tokens: 1200, output_tokens: 300, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
   });
 });
+
+/**
+ * Een bon of factuur uitlezen (tool extract_invoice): het antwoord is de tool,
+ * zoals het echte model hem aanroept; `null` als de vraag iets anders is.
+ *
+ * Gedeeld, net als de poortwachter: rapportages.mjs zet een eigen nep-Claude
+ * neer die voor de rest van de run blijft staan, en die moet een bon net zo
+ * lezen. Eerst stond dit alleen hier. In de hele suite (rapportages vóór
+ * bonnen) kreeg elke bon toen de notulen terug, "niet gestructureerd
+ * uitgelezen", terwijl `npm run test:stromen -- bonnen` alleen wel slaagde.
+ */
+export function bonAntwoord(body) {
+  if (!(body.tools ?? []).some((tool) => tool.name === 'extract_invoice')) return null;
+  const inhoud = (body.messages ?? []).flatMap((m) => (Array.isArray(m.content) ? m.content : []));
+  ai.bonnen.push({
+    model: body.model,
+    tekst: inhoud.filter((b) => b.type === 'text').map((b) => b.text).join('\n'),
+    beelden: inhoud.filter((b) => b.type === 'image').length,
+    documenten: inhoud.filter((b) => b.type === 'document').length,
+  });
+  const gelezen = ai.bon ?? BON;
+  ai.bon = null;
+  return json(200, {
+    id: `msg_${randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model: body.model,
+    stop_reason: 'tool_use', stop_sequence: null,
+    content: [{ type: 'tool_use', id: `toolu_${randomUUID().replace(/-/g, '')}`, name: 'extract_invoice', input: gelezen }],
+    usage: { input_tokens: 1800, output_tokens: 240, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+  });
+}
 
 /**
  * De poortwachter van Gerrie stelt zijn vraag niet-streamend, met een eigen
