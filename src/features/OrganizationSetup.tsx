@@ -55,7 +55,7 @@ import type {
 } from '../types';
 
 /** Waar de app heen gaat na het afronden. */
-export type SetupNext = 'dashboard' | 'team' | 'agenda' | 'bank';
+export type SetupNext = 'dashboard' | 'team' | 'agenda' | 'bank' | 'vennoten';
 
 export interface OrganizationSetupProps {
   organization: Organization;
@@ -1157,7 +1157,9 @@ function CompanyStep({ draft, onChange, legalForm, korEnabled, onSave, ...common
     <section className="onb-card">
       <div className="onb-card-head"><Building2 size={18} aria-hidden="true" /><h3>Je bedrijf</h3></div>
       <div className="onb-fields">
-        {field('company_name', legalForm === 'eenmanszaak' ? 'Bedrijfsnaam' : 'Statutaire naam', { required: true, placeholder: info.nameExample, hint: 'Zoals hij bij de KvK staat.', span: 3, autoComplete: 'organization' })}
+        {/* Een eenmanszaak, vof, maatschap of cv heeft geen statuten: daar heet het
+            gewoon de bedrijfsnaam (tot november 2026 stond er bij een vof "Statutaire naam"). */}
+        {field('company_name', ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm) ? 'Bedrijfsnaam' : 'Statutaire naam', { required: true, placeholder: info.nameExample, hint: 'Zoals hij bij de KvK staat.', span: 3, autoComplete: 'organization' })}
         {field('trade_name', 'Handelsnaam', { placeholder: 'Leeg = de bedrijfsnaam', hint: 'De naam waaronder je klanten je kennen. Ook de naam in ResoFly.', span: 3 })}
       </div>
     </section>
@@ -1685,6 +1687,11 @@ function DoneStep({ organization, isChild, settings, savedLegalForm, pendingLega
   if (!isChild) rows.push({ step: 'abonnement', icon: <Layers size={16} />, label: 'Pakket', value: billing ? (billing.billing_exempt ? 'Vrijgesteld' : `${billing.plan_name}${billing.mollie_subscription_id ? '' : ', nog geen abonnement'}`) : '–', detail: businessStatus?.active ? 'Zakelijke module aan' : undefined });
 
   const after: Array<{ next: SetupNext; icon: ReactNode; title: string; text: string }> = [
+    // Een vof zonder vennoten verdeelt bij de jaarafsluiting niets: de winst
+    // gaat dan in zijn geheel naar 0510. Daarom staat dit bij een vof vooraan.
+    ...(['vof', 'maatschap', 'cv'].includes(savedLegalForm)
+      ? [{ next: 'vennoten' as const, icon: <Users size={18} />, title: 'Vennoten vastleggen', text: 'Wie er deelt in de winst, en in welke verhouding.' }]
+      : []),
     { next: 'team', icon: <UserPlus size={18} />, title: 'Team uitnodigen', text: 'Collega’s, met rechten per module.' },
     { next: 'agenda', icon: <CalendarDays size={18} />, title: 'Agenda koppelen', text: 'Google of Microsoft 365.' },
     { next: 'bank', icon: <Landmark size={18} />, title: 'Bank koppelen', text: 'Je mutaties vanzelf binnen.' },

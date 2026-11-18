@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Calculator, Camera, Download, FileDown, FileText, Hourglass, Inbox, Layers, Mail, PenLine, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
-  AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceInboxItem, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
+  AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PartnershipPartner, PurchaseInvoice, PurchaseInvoiceInboxItem, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
 } from '../types';
 import { REPORT_GROUPS_BY_TYPE, REPORT_GROUP_LABELS } from '../types';
 import { Modal } from '../components/Modal';
@@ -14,7 +14,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
-  loadInboundAlias, loadPurchaseInvoiceInbox, openingBalancePlugAccount,
+  listPartnershipPartners, loadInboundAlias, loadPurchaseInvoiceInbox, openingBalancePlugAccount, payPurchaseInvoicePrivately,
   postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow, setUpBookkeeping
 } from '../lib/repository';
 import { downloadXaf } from '../lib/xaf';
@@ -26,7 +26,7 @@ import {
   inboxReasonLabel, splitInboxItems,
 } from '../lib/invoiceInbox';
 import { todayIso } from '../lib/dates';
-import { canFillIn, declarationActionsFor, inboxChannelLabel, submitterShortName } from '../lib/receipts';
+import { canFillIn, declarationActionsFor, inboxChannelLabel, receiptPayer, submitterShortName } from '../lib/receipts';
 import { ReceiptCapture } from '../components/ReceiptCapture';
 import { XafImportPanel } from './XafImport';
 import { PrepaidForm } from './Prepaid';
@@ -284,6 +284,101 @@ const purchaseStatusLabel: Record<PurchaseInvoice['status'], string> = {
   draft: 'Concept', booked: 'Geboekt', paid: 'Betaald', cancelled: 'Geannuleerd',
 };
 
+/**
+ * De status in de lijst. Een geboekte factuur blijft `booked`; of hij betaald
+ * is, staat in `payment_status`. Tot november 2026 toonde de lijst alleen
+ * "Geboekt", ook als de factuur allang via de bank was betaald.
+ */
+function purchaseListStatus(pi: PurchaseInvoice): { key: string; label: string } {
+  if (pi.status !== 'booked') return { key: pi.status, label: purchaseStatusLabel[pi.status] };
+  if (pi.payment_status === 'paid') return { key: 'paid', label: 'Betaald' };
+  if (pi.payment_status === 'partially_paid') return { key: 'booked', label: 'Deels betaald' };
+  return { key: 'booked', label: 'Geboekt · open' };
+}
+
+/**
+ * Een geboekte inkoopfactuur die de ondernemer of een vennoot met eigen geld
+ * betaalde. Tot november 2026 kon dat niet: een inkoopfactuur gold alleen als
+ * betaald via de bank, en bleef dan voorgoed open staan.
+ */
+function PrivatePaymentModal({ invoice, organizationId, legalForm, onClose, onSaved }: {
+  invoice: PurchaseInvoice; organizationId: UUID; legalForm: string; onClose: () => void; onSaved: () => void;
+}) {
+  const isPartnershipForm = ['vof', 'maatschap', 'cv'].includes(legalForm);
+  const [partners, setPartners] = useState<PartnershipPartner[]>([]);
+  // Pas na het laden van de vennoten weet je of de indiener er een is; zonder
+  // deze vlag stond de verwijzing naar Bank even in beeld bij een vennoot.
+  const [partnersLoaded, setPartnersLoaded] = useState(!isPartnershipForm);
+  const [partnerId, setPartnerId] = useState('');
+  const [date, setDate] = useState(invoice.date || todayIso());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isPartnershipForm) return;
+    let cancelled = false;
+    listPartnershipPartners(organizationId)
+      .then(rows => {
+        if (cancelled) return;
+        const active = rows.filter(p => p.is_active);
+        setPartners(active);
+        setPartnersLoaded(true);
+        const own = receiptPayer(active, invoice.extraction_meta).partnerId;
+        if (own) setPartnerId(current => current || own);
+      })
+      .catch(() => { if (!cancelled) setPartnersLoaded(true); /* zonder vennoten: de database zegt het bij vastleggen */ });
+    return () => { cancelled = true; };
+  }, [organizationId, isPartnershipForm, invoice.extraction_meta]);
+  const needsPartner = partners.length > 0;
+  const chosen = partners.find(p => p.id === partnerId) ?? null;
+  const { declarationByNonPartner } = receiptPayer(partners, invoice.extraction_meta);
+
+  async function save() {
+    if (needsPartner && !partnerId) { setError('Kies de vennoot die de factuur betaalde.'); return; }
+    setBusy(true); setError(null);
+    try {
+      await payPurchaseInvoicePrivately(organizationId, invoice.id, needsPartner ? partnerId : null, date);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Vastleggen mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Privé betaald: ${invoice.internal_number || invoice.supplier_invoice_number || 'inkoopfactuur'}`} onClose={onClose}
+      footer={<div className="bk-foot">
+        <span className="bk-spacer" />
+        <Button onClick={onClose}>Annuleren</Button>
+        <Button variant="primary" onClick={() => void save()} disabled={busy}>{busy ? 'Bezig…' : 'Vastleggen'}</Button>
+      </div>}>
+      <p className="bk-muted">
+        {needsPartner
+          ? `Betaalde een vennoot deze factuur met eigen geld? Dan komt wat openstaat op de privé-stortingen van ${chosen ? chosen.name : 'die vennoot'}, en staat de factuur op betaald.`
+          : 'Betaalde je deze factuur met je eigen geld? Dan komt wat openstaat op 0560 Privé-stortingen, en staat de factuur op betaald.'}
+        {' '}De btw blijft gewoon aftrekbaar. Vergist? Boek de privébetaling tegen bij Grootboek → Journaal.
+      </p>
+      {partnersLoaded && declarationByNonPartner && (
+        <div className="bk-note">
+          {isPartnershipForm ? 'Dit is een declaratie van een teamlid dat geen vennoot is.' : 'Dit is een declaratie van een teamlid.'}
+          {' '}Die betaal je normaal terug via de bank: koppel de betaling dan op Bank.
+          {' '}{isPartnershipForm ? 'Leg hier alleen vast dat een vennoot hem met eigen geld terugbetaalde.' : 'Leg hier alleen vast dat je hem met je eigen geld terugbetaalde.'}
+        </div>
+      )}
+      {error && <div className="error">{error}</div>}
+      {needsPartner && (
+        <Field label="Betaald door">
+          <Select value={partnerId} onChange={e => setPartnerId(e.target.value)}>
+            <option value="">— kies de vennoot —</option>
+            {partners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </Select>
+        </Field>
+      )}
+      <Field label="Betaald op"><Input type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
+    </Modal>
+  );
+}
+
 export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed, inboxActivity = 0 }: PageProps & {
   /** Door een agent klaargezette inkoopfactuur; gebruikt hetzelfde seed-pad als de
    *  AI-factuurscan, dus het formulier hoefde er niets voor te leren. */
@@ -304,6 +399,11 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
   const [scan, setScan] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [privatePay, setPrivatePay] = useState<PurchaseInvoice | null>(null);
+  // Privé betalen bestaat alleen bij een eenmanszaak, vof, maatschap of cv.
+  const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
+  const canPayPrivately = (pi: PurchaseInvoice) => ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm)
+    && pi.status === 'booked' && pi.payment_status !== 'paid' && Number(pi.total_cents) > 0;
   // Een concept dat vanuit de factuur-inbox wordt geopend maar nog niet in `data`
   // zit (de verwerking liep net af): onthouden en openen zodra het geladen is.
   const [pendingOpenId, setPendingOpenId] = useState<string | null>(null);
@@ -403,16 +503,21 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
                 <td className="bk-num">{euroCents(pi.subtotal_cents)}</td>
                 <td className="bk-num">{euroCents(pi.vat_cents)}</td>
                 <td className="bk-num"><strong>{euroCents(pi.total_cents)}</strong></td>
-                <td><span className={`status-pill bk-status-${pi.status}`}>{purchaseStatusLabel[pi.status]}</span></td>
+                <td><span className={`status-pill bk-status-${purchaseListStatus(pi).key}`}>{purchaseListStatus(pi).label}</span></td>
                 <td className="bk-cell-action">
                   {/* Bij een declaratie is boeken de goedkeuring die de indiener ziet. */}
                   {pi.status === 'draft'
                     ? <Button variant="primary" disabled={!canWrite || busyId === pi.id} onClick={() => book(pi)}>{busyId === pi.id ? 'Boeken…' : channelOf(pi) === 'declaration' ? 'Goedkeuren' : 'Boeken'}</Button>
-                    : <span className="bk-muted">{pi.journal_entry_id ? 'In grootboek' : ''}</span>}
+                    : canWrite && canPayPrivately(pi)
+                      ? <Button onClick={() => setPrivatePay(pi)} title="Met eigen geld betaald door de ondernemer of een vennoot">Privé betaald</Button>
+                      : <span className="bk-muted">{pi.journal_entry_id ? 'In grootboek' : ''}</span>}
                 </td>
               </tr>
             ))}</tbody>
           </table></div>}
+      {privatePay && <PrivatePaymentModal invoice={privatePay} organizationId={organizationId} legalForm={legalForm}
+        onClose={() => setPrivatePay(null)}
+        onSaved={() => { setPrivatePay(null); onChanged(); }} />}
       {scan && <InvoiceScanModal data={data} organizationId={organizationId}
         onClose={() => setScan(false)}
         onSeed={s => { setScan(false); setSeed(s); setEdit('new'); }} />}
@@ -1603,19 +1708,52 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
   }, [organizationId]);
   const plugLabel = plug ? `${plug.code} ${plug.name}` : 'de eigen-vermogensrekening';
 
+  // Bij een vof, maatschap of cv heeft elke vennoot een eigen kapitaalrekening.
+  // Kwam het hele vermogen als sluitpost op 0500, dan stond het bij Vennoten als
+  // "nog niet aan een vennoot toegewezen" en moest het er met een memoriaal
+  // alsnog af. Daarom hier de vennoten, en een knop die per vennoot een regel
+  // klaarzet.
+  const isPartnershipForm = ['vof', 'maatschap', 'cv'].includes(data.companySettings?.legal_form ?? 'eenmanszaak');
+  const [partners, setPartners] = useState<PartnershipPartner[]>([]);
+  useEffect(() => {
+    if (!isPartnershipForm) { setPartners([]); return; }
+    let cancelled = false;
+    listPartnershipPartners(organizationId)
+      .then(rows => { if (!cancelled) setPartners(rows.filter(p => p.is_active)); })
+      .catch(() => { /* zonder vennoten: alleen de gewone uitleg */ });
+    return () => { cancelled = true; };
+  }, [organizationId, isPartnershipForm]);
+
   const accountById = useMemo(() => new Map(data.ledgerAccounts.map(a => [a.id, a])), [data.ledgerAccounts]);
   // Beginbalans = balansstanden; W&V-rekeningen horen er niet in.
   const balanceAccounts = data.ledgerAccounts.filter(a => a.is_active && (a.type === 'asset' || a.type === 'liability' || a.type === 'equity'));
   const update = (key: string, patch: Partial<OpeningLine>) => setLines(ls => ls.map(l => (l.key === key ? { ...l, ...patch } : l)));
+  const partnerCapitalAccounts = partners
+    .map(p => accountById.get(p.capital_account_id))
+    .filter((a): a is LedgerAccount => !!a && a.is_active);
 
   const totalDebit = lines.reduce((s, l) => s + parseEuro(l.debit), 0);
   const totalCredit = lines.reduce((s, l) => s + parseEuro(l.credit), 0);
   const equity = totalDebit - totalCredit;
   const filled = lines.filter(l => l.account_id && (parseEuro(l.debit) !== 0 || parseEuro(l.credit) !== 0));
+  const plugOnNoPartner = partnerCapitalAccounts.length > 0 && equity !== 0;
+
+  /** Per vennoot een regel op zijn kapitaalrekening, in plaats van de lege regels. */
+  function addPartnerLines() {
+    setLines(ls => {
+      const present = new Set(ls.map(l => l.account_id));
+      const kept = ls.filter(l => l.account_id || l.debit || l.credit);
+      const extra = partnerCapitalAccounts
+        .filter(a => !present.has(a.id))
+        .map(a => ({ key: uid(), account_id: a.id, debit: '', credit: '' }));
+      return [...kept, ...extra, emptyLine()];
+    });
+  }
 
   async function save() {
     if (!canWrite || filled.length === 0) return;
-    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op ${plugLabel} gezet. Dit kan maar één keer.`)) return;
+    const partnerWarning = plugOnNoPartner ? ' Die staat op geen enkele vennoot; zet het kapitaal liever per vennoot op zijn kapitaalrekening.' : '';
+    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op ${plugLabel} gezet.${partnerWarning} Dit kan maar één keer.`)) return;
     setBusy(true); setError(null);
     try {
       await createOpeningBalance(organizationId, date, filled.map(l => ({
@@ -1693,6 +1831,24 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
       <div className="bk-form-grid">
         <Field label="Per datum" hint="Meestal de boekhoud-startdatum (zie Instellingen → Boekhouding)."><Input type="date" value={date} onChange={e => setDate(e.target.value)} disabled={!canWrite} /></Field>
       </div>
+      {isPartnershipForm && (
+        <div className="bk-note bk-opening-partners">
+          <div className="bk-subhead">
+            {partnerCapitalAccounts.length > 0
+              ? <p>
+                  Zet het kapitaal van elke vennoot op zijn eigen kapitaalrekening ({partnerCapitalAccounts.map(a => `${a.code} ${a.name}`).join(', ')}),
+                  meestal in de kolom Credit. Wat daarna nog overblijft, komt als sluitpost op 0500 en staat bij Vennoten als ‘nog niet aan een vennoot toegewezen’.
+                </p>
+              : <p>
+                  Leg eerst de vennoten vast (Financiën → Vennoten). Dan krijgt elke vennoot een eigen kapitaalrekening en zet je hier ieders kapitaal apart.
+                  Anders komt het hele verschil als sluitpost op 0500, op geen enkele vennoot.
+                </p>}
+            {canWrite && partnerCapitalAccounts.length > 0 && (
+              <Button onClick={addPartnerLines}><Plus size={14} /> Regel per vennoot</Button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="bk-lines">
         <div className="bk-lines-head bk-lines-head-opening"><span>Rekening</span><span className="bk-num">Debet</span><span className="bk-num">Credit</span><span /></div>
         {lines.map(l => (
@@ -1715,6 +1871,9 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
         <div><span>Credit</span><strong>{euroCents(totalCredit)}</strong></div>
         <div><span>Sluitpost eigen vermogen{plug ? ` (${plug.code})` : ''}</span><strong>{euroCents(Math.abs(equity))} {equity >= 0 ? 'credit' : 'debet'}</strong></div>
       </div>
+      {plugOnNoPartner && (
+        <p className="bk-muted">De sluitpost staat op geen enkele vennoot. Klopt het kapitaal per vennoot, dan is hij nul.</p>
+      )}
     </div>
   );
 }
@@ -1914,8 +2073,10 @@ function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, o
           (art. 2:216 lid 1 BW) mag niets uitkeren boven het eigen vermogen
           minus de reserves die de wet of de statuten verplicht aanhouden. Een
           statutaire reserve staat in de statuten van deze BV — die kunnen wij
-          niet raden, dus die wijst de gebruiker hier aan. */}
-      {isEquity && (
+          niet raden, dus die wijst de gebruiker hier aan. Een eenmanszaak, vof,
+          maatschap of cv keert geen dividend uit: daar stond het vinkje tot
+          november 2026 ook bij het kapitaal van elke vennoot. */}
+      {isEquity && !['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(data.companySettings?.legal_form ?? 'eenmanszaak') && (
         <label className="bk-setting-check">
           <input type="checkbox" checked={Boolean(form.is_restricted_reserve)} onChange={e => set('is_restricted_reserve', e.target.checked)} disabled={!canWrite} />
           <span>

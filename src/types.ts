@@ -1793,7 +1793,9 @@ export type JournalSourceType =
   | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition' | 'asset_disposal'
   | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note'
   | 'result_appropriation' | 'corporate_tax' | 'dga_interest' | 'payroll' | 'dividend'
-  | 'prepaid_start' | 'prepaid_release' | 'prepaid_end';
+  | 'prepaid_start' | 'prepaid_release' | 'prepaid_end'
+  /** Een inkoopfactuur die de ondernemer of een vennoot privé betaalde (20261118130000). */
+  | 'purchase_private_payment';
 
 /**
  * Rubriek van een grootboekrekening in de balans of de winst- en verliesrekening.
@@ -2031,8 +2033,20 @@ export interface PartnershipPartner extends OrgScopedRow {
   capital_account_id: UUID;
   withdrawals_account_id: UUID;
   contributions_account_id: UUID;
+  /** Het teamlid dat deze vennoot is; zijn uren tellen voor het urencriterium van de vennoot. */
+  user_id: UUID | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Uitkomst van partnership_partner_hours: de uren van één vennoot in een kalenderjaar. */
+export interface PartnershipPartnerHours {
+  partner_id: UUID;
+  user_id: UUID | null;
+  direct_minutes: number;
+  indirect_minutes: number;
+  /** De eerste dag met uren in dat jaar: vanaf daar rekent de prognose. */
+  first_entry_date: string | null;
 }
 
 /** Eén regel van de kapitaalvergelijking: de ondernemer of één vennoot. */

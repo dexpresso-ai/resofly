@@ -76,6 +76,7 @@ npm run test:loading                    # bij pagina's en het laden van gegevens
 npm run test:inrichten                  # bij de inrichtingsstappen (OrganizationSetup)
 npm run test:terugknop                  # bij navigatie, vensters en panelen (useBackStep)
 supabase db start                       # bij een migratie: de keten vanaf nul
+npm run test:database                   # daarna: de databasetests (tests/database)
 ```
 
 Raakt je wijziging een edge function, draai dan ook de `deno check`-lijst uit

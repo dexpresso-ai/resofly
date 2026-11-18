@@ -3,14 +3,14 @@ import {
   adoptAnnualAccounts, appropriateResult, bookDgaInterest, createShareholder, declareDividend,
   extendPreparationTerm, fileAnnualAccounts, postPayrollJournal, prepareAnnualAccounts,
   reverseAnnualAccounts, reverseCorporateTaxReturn, reverseDgaInterest, reverseDividendDistribution,
-  patchShareholder, reverseResultAppropriation, saveFiscalYearSizeInputs, signAnnualAccounts, updateShareholder,
-  updateRow,
+  patchShareholder, reverseResultAppropriation, saveFiscalYearSizeInputs, savePartnershipPartner, setPartnershipPartnerMember,
+  signAnnualAccounts, updateShareholder, updateRow,
   type ShareholderInput,
 } from '../repository';
 import { finalizeCorporateTax, saveCorporateTax } from '../../services/corporateTaxService';
 import { renderAnnualAccountsPdf, renderAnnualAccountsPublication } from '../../services/annualAccountsService';
 import { euro, dateNL } from '../format';
-import { optText, text, type ActionExecutor } from './types';
+import { flag, optText, text, type ActionExecutor } from './types';
 import type { LegalForm } from '../../types';
 
 /**
@@ -48,6 +48,21 @@ function numberOf(payload: Record<string, unknown>, key: string): number {
 }
 
 export const BUSINESS_EXECUTORS: Record<string, ActionExecutor> = {
+  // Een vennoot van een vof, maatschap of cv: precies de knop op de pagina
+  // Vennoten (opslaan, dan zo nodig het teamlid koppelen).
+  'owners.save_partner': async (payload, ctx) => {
+    const kind = optText(payload, 'kind') === 'commanditair' ? 'commanditair' : 'beherend';
+    const saved = await savePartnershipPartner(ctx.organizationId, {
+      id: optText(payload, 'partner_id'), name: text(payload, 'name'),
+      profitShareBasisPoints: Number(payload.profit_share_basis_points), kind, isActive: payload.is_active !== false,
+    });
+    if (flag(payload, 'set_user') && (saved.user_id ?? null) !== (optText(payload, 'user_id') ?? null)) {
+      await setPartnershipPartnerMember(ctx.organizationId, saved.id, optText(payload, 'user_id'));
+    }
+    const share = (saved.profit_share_basis_points / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 });
+    return `Vennoot ${saved.name} ${optText(payload, 'partner_id') ? 'bijgewerkt' : 'vastgelegd'} (winstaandeel ${share}%)`;
+  },
+
   // ── De module zelf ────────────────────────────────────────────────────────
   'business.set_legal_form': async (payload, ctx) => {
     const legalForm = text(payload, 'legal_form') as LegalForm;

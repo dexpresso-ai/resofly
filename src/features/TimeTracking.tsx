@@ -364,7 +364,7 @@ function HourCriterionCard({ data, currentUserId }: { data: AppData; currentUser
           : <p className="tt-criterion-prognosis behind">Niet gehaald: {formatMinutes(remainingMinutes)} tekort in {year}.</p>}
       <p className="tt-criterion-note">
         Telt al jóuw geregistreerde uren in kalenderjaar {year}, inclusief indirecte uren (administratie, acquisitie, reistijd, scholing).
-        {isPartnershipMember && ' Bij een vof, maatschap of cv geldt het urencriterium per vennoot: dit zijn alleen jouw uren.'}
+        {isPartnershipMember && ' Bij een vof, maatschap of cv geldt het urencriterium per vennoot: dit zijn alleen jouw uren. De uren van elke vennoot samen staan bij Financiën → Vennoten, zodra de vennoot aan zijn teamlid is gekoppeld.'}
         {' '}Naast de 1225 uur moet je meer dan de helft van je werktijd aan je onderneming besteden, tenzij je in een of meer van de vijf voorgaande jaren geen ondernemer was.
         Begin je dit jaar, dan geldt de volle 1225 uur voor het deel van het jaar dat je onderneemt; er wordt niet herrekend. Bij zwangerschap tellen 16 weken mee als gewerkte uren.
         {year === 2026
