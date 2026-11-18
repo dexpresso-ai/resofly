@@ -259,6 +259,38 @@ Mijn migratie had eerst hetzelfde versienummer als die van de eenmanszaak
   € 52.345,67 winst, en een vof met een vennoot die in augustus de
   AOW-leeftijd bereikt.
 
+## Uitrol
+
+**Staging: uitgerold op 18 november 2026** (merge `f3fe444`, *Deploy Supabase
+(staging)* run 244):
+
+- de migratie `20261118150000_inkomstenbelasting_raming` is toegepast;
+- alle 40 edge functions zijn uitgerold, waaronder `gerrie-agent`, `mcp` en
+  `api` met de leeshandeling `owners.income_tax_estimate`;
+- de rooktest is geslaagd. Daarbij ook "boekhouder-hek: elke organisatietabel is
+  afgeschermd" en "publieke sleutel: anon heeft geen rechten in public": de drie
+  nieuwe tabellen en de functies staan dicht;
+- Cloudflare Pages bouwt de app bij de push naar `staging`.
+
+Wat de migratie met bestaande gegevens doet: niets.
+
+- Er komen drie nieuwe, lege tabellen.
+- `partnership_partners` en `fixed_assets` krijgen een unieke sleutel
+  `(organization_id, id)`. De id's waren al uniek, dus dat lukt altijd.
+- `audit_entity_module` krijgt twee soorten erbij.
+
+Een eenmanszaak of vof ziet de raming meteen, op basis van de boekhouding die er
+al staat. Zolang er niets is opgeslagen, volgt het urencriterium de uren uit
+Uren.
+
+*Frontend checks* van deze uitrol (run 259): de keten vanaf nul met de
+databasetests, de Deno-check van de edge functions, typecheck, CSP en de
+unittests zijn groen. De mobiele lay-outtest, het laden per module, de
+inrichtingsstappen en de terugknop liepen nog bij het schrijven van dit stuk.
+
+Voor productie: dezelfde migratie, na de migraties van vandaag
+(`20261118090000` t/m `20261118144500`). Hij is veilig om opnieuw te draaien.
+
 ## Bewust open
 
 | Punt | Waarom nog niet |
