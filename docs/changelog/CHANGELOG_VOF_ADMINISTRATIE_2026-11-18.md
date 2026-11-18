@@ -173,10 +173,10 @@ twee migraties: `20261118090000` en `20261118100000`. Die vervangen ook
 - **Schermen:**
   - `npm run test:loading`, `npm run test:inrichten` en
     `npm run test:terugknop` (13) ✓;
-  - mobiele lay-outtest, donker en licht: 716 metingen, 0 problemen (vóór het
-    samenvoegen). Er zijn nieuwe pagina's bij: Vennoten, een vennoot bewerken,
-    de beginbalans van een vof, en Inkoopfacturen van een vof met het venster
-    Privé betaald.
+  - mobiele lay-outtest, donker en licht: 716 metingen, 0 problemen, vóór én
+    na het samenvoegen. Er zijn nieuwe pagina's bij: Vennoten, een vennoot
+    bewerken, de beginbalans van een vof, en Inkoopfacturen van een vof met het
+    venster Privé betaald.
 
 ## Bewust open
 
