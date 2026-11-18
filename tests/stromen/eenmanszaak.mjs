@@ -537,8 +537,59 @@ async function vangnetten() {
   });
 }
 
+// ── 4. Van kwartaal- naar maandaangifte ─────────────────────────────────
+//
+// De Belastingdienst zet je per 1 januari op maandaangifte (of je vraagt dat
+// zelf aan). Je zet het bij Instellingen om en doet in januari nog de
+// aangifte over Q4. Dat kon na 20261118090000 alleen door de instelling heen
+// en weer te zetten, en het jaar ervoor kwam daarna niet meer dicht
+// (20261118100000).
+
+async function tijdvakWissel() {
+  groep('Eenmanszaak — van kwartaal- naar maandaangifte');
+  const w = await stap('een eenmanszaak die in 2025 per kwartaal aangifte deed', () => maakEenmanszaak('tijdvak', { start: '2025-01-01' }));
+  if (!w) return;
+  const t = {};
+
+  await stap('Q1 t/m Q3 2025 per kwartaal, daarna bij Instellingen per maand', async () => {
+    for (const n of [1, 2, 3]) gelukt(await sluitKwartaal(w, 2025, n), `btw Q${n} 2025`);
+    gelukt(await rest(`company_settings?organization_id=eq.${w.orgId}`, { method: 'PATCH', token: w.eigenaar.token, prefer: 'return=minimal', body: { vat_return_period: 'monthly' } }), 'per maand');
+    [t.j2025] = await boekjaren(w);
+  });
+
+  await stap('2025 gaat zonder Q4 niet dicht, en de melding noemt het kwartaal', async () => {
+    const res = await rpc('close_fiscal_year', { p_organization_id: w.orgId, p_fiscal_year_id: nodig(t.j2025, 'boekjaar 2025').id }, w.eigenaar.token);
+    geweigerd(res, 'afsluiten zonder Q4');
+    verwacht(/01-10-2025 t\/m 31-12-2025/.test(res.tekst), `melding: ${res.tekst.slice(0, 200)}`);
+  });
+
+  await stap('Q4 2025 gaat nog per kwartaal, en dan gaat 2025 dicht', async () => {
+    gelukt(await sluitKwartaal(w, 2025, 4), 'btw Q4 2025');
+    gelukt(await rpc('close_fiscal_year', { p_organization_id: w.orgId, p_fiscal_year_id: nodig(t.j2025, 'boekjaar 2025').id }, w.eigenaar.token), 'afsluiten 2025');
+  });
+
+  await stap('2026 gaat per maand: januari mag, een kwartaal niet', async () => {
+    gelukt(await rpc('finalize_vat_return', {
+      p_organization_id: w.orgId, p_period_type: 'month', p_year: 2026, p_period_index: 1, p_from: '2026-01-01', p_to: '2026-01-31',
+    }, w.eigenaar.token), 'januari 2026');
+    const res = await sluitKwartaal(w, 2026, 2);
+    geweigerd(res, 'een kwartaal in een maandjaar');
+    verwacht(/per maand/.test(res.tekst) && /in 2026/.test(res.tekst), `melding: ${res.tekst.slice(0, 250)}`);
+  });
+
+  await stap('het dashboard krijgt de vier kwartalen en januari als aangegeven', async () => {
+    const rijen = gelukt(await rpc('list_filed_vat_periods', { p_organization_id: w.orgId }, w.eigenaar.token), 'aangegeven tijdvakken');
+    const sleutels = rijen.map((r) => `${r.period_type}:${r.year}:${r.period_index}`).sort();
+    // De functie geeft dit jaar en de twee jaren ervoor.
+    const vanaf = Number(vandaag().slice(0, 4)) - 2;
+    const alle = ['month:2026:1', 'quarter:2025:1', 'quarter:2025:2', 'quarter:2025:3', 'quarter:2025:4'];
+    gelijk(sleutels, alle.filter((s) => Number(s.split(':')[1]) >= vanaf), 'tijdvakken');
+  });
+}
+
 export default async function eenmanszaak() {
   await hetJaar();
   await deKor();
   await vangnetten();
+  await tijdvakWissel();
 }

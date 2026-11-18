@@ -66,7 +66,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261118090000 (eenmanszaak) vervangt boekhoudfuncties en triggers, voegt
 // open_initial_fiscal_years toe en rekeningen aan het rekeningschema (rijen,
 // geen kolommen); geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261118090000';
+// 20261118100000 (btw-tijdvak wisselen) vervangt drie btw-functies; geen
+// tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261118100000';
 
 export type TableKind =
   | 'export'

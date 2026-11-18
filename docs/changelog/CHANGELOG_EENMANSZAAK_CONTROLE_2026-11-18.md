@@ -64,7 +64,7 @@ Nagelopen en niet veranderd:
 | 3 | hoog | **Met de KOR splitste een bankboeking toch btw af.** € 121 op 4500 (code HOOG) werd € 100 kosten en € 21 voorbelasting, die met de KOR niet bestaat. Een ontvangst op 8000 gaf af te dragen btw. Kosten, omzet en winst klopten niet. | Met de KOR geen splitsing: het hele bedrag op de rekening, code KOR. Verlegde btw (EU-dienst, invoer) geef je wel aan in 2a/4a/4b, zonder aftrek, net als bij een inkoopfactuur. |
 | 4 | midden | **Btw op privé.** Wie in de bankverdeling eerst 4500 koos en daarna 0550 Privé-opnamen, hield code HOOG: een privé-uitgave van € 121 gaf € 21 voorbelasting in rubriek 5b. | De database weigert btw op eigen vermogen; het scherm haalt de code weg bij eigen vermogen en schulden. |
 | 5 | hoog | **Een btw-tijdvak dat nog liep, was af te sluiten.** De pagina opent op het lopende kwartaal en de knop stond aan. Wie op 17 november Q4 afsloot, zag een factuur van 15 december op 1 januari geboekt: omzet in het verkeerde jaar, btw een kwartaal te laat. **Nagespeeld.** | Afsluiten kan vanaf de dag na het tijdvak, net als de aangifte bij de Belastingdienst. Ook voor Gerrie. |
-| 6 | midden | **Een maand afsluiten bij aangifte per kwartaal maakte het jaar onafsluitbaar** (Q1 overlapte daarna, en de jaarafsluiting eist kwartalen). | Alleen in de frequentie van Instellingen; het scherm toont de andere weergave alleen ter inzage. |
+| 6 | midden | **Een maand afsluiten bij aangifte per kwartaal maakte het jaar onafsluitbaar** (Q1 overlapte daarna, en de jaarafsluiting eist kwartalen). | Alleen in de frequentie van Instellingen, of in de soort waarin dat jaar al is aangegeven (zie 25). Anders toont het scherm de andere weergave alleen ter inzage. |
 | 7 | midden | **De jaarafsluiting keek niet naar geplande afschrijvingen en termijnen.** Een laptop die t/m september was afgeschreven, kreeg oktober t/m december stil in het nieuwe jaar; de winst van beide jaren klopte niet. | Afsluiten weigert met de namen erbij; het venster zegt het vooraf. |
 | 8 | laag | Een beginbalans per 31-12 vóór het eerste boekjaar liet dat jaar nooit afsluiten ("sluit eerst het voorgaande boekjaar af", dat niet bestond). | De beginbalans telt daar niet mee. |
 | 9 | laag | Een desinvestering rekende met wat er toevallig al was afgeschreven, en de geplande termijnen verdwenen: € 650 boekverlies in plaats van € 250 afschrijving en € 400 verlies. | Eerst afschrijven tot de verkoopdatum. |
@@ -88,6 +88,14 @@ Nagelopen en niet veranderd:
 | 22 | laag | "€ -0,00" in de vergelijkingskolom van Winst & verlies. | € 0,00. |
 | 23 | laag | Vaktaal en Engels: "Verstuur via Resend", "PDF-snapshot", "Volwassen factuurmodule …", "Controleer de Edge Function logs", "Resend provider request failed …". | Gewone woorden. |
 | 24 | laag | Bij de KOR stond bij een activum "Aanschafwaarde (excl. btw)", terwijl de btw dan bij de aanschafprijs hoort. | "Incl. btw" bij de KOR; een gekozen bron-inkoopfactuur vult datum en bedrag in. |
+
+### Na de uitrol: wisselen van aangiftetijdvak (migratie `20261118100000_btw_tijdvak_wissel`)
+
+Bij een laatste controle bleek dat fix 6 een gewone situatie lastiger maakte.
+
+| # | Ernst | Wat er misging | Nu |
+|---|---|---|---|
+| 25 | midden | **Wisselen van kwartaal- naar maandaangifte (of andersom) liep vast.** De Belastingdienst zet je per 1 januari om, of je vraagt het zelf aan, bijvoorbeeld om btw sneller terug te krijgen. Zette je dat bij Instellingen om, dan gebeurde het volgende. Q4 van het jaar ervoor kon je niet meer afsluiten (fix 6). Dat jaar kwam ook niet meer dicht: de jaarafsluiting vroeg twaalf maanden, en dat deed hij al vóór deze controle. En het dashboard toonde alle kwartalen van vorig jaar als twaalf niet aangegeven maanden, in het rood. Je moest de instelling dus heen en weer zetten. **Nagespeeld:** met de oude functies faalden vier van de zes nieuwe stappen. | Een tijdvak mag ook in de soort waarin dat jaar al is aangegeven. Een losse maand in een kwartaaljaar blijft geweigerd (fix 6). De jaarafsluiting vraagt dat elke maand in een afgesloten maand of kwartaal valt. De melding noemt het ontbrekende tijdvak zoals dat jaar ging. Het dashboard telt een eerder jaar in de soort waarin het is aangegeven. De pagina Omzetbelasting volgt dezelfde regel. Een tijdvak dat helemaal vóór de start in ResoFly ligt, krijgt uitleg in plaats van een rode deadline: de jaarafsluiting vraagt er wel om. |
 
 ### Nieuw: overzicht voor de aangifte inkomstenbelasting
 
@@ -149,6 +157,23 @@ de halve zelfstandigenaftrek vanaf de AOW-leeftijd) staat eronder.
   `documentPdf.ts` schoon; `invoice-workflow` dezelfde 11 meldingen als vóór de
   wijziging (staat al buiten de CI-lijst).
 - **De migratie** draait in één transactie, en nog eens zonder fout.
+- **Wisselen van tijdvak (fix 25)**:
+  - stromentest `eenmanszaak`, nieuwe groep van zes stappen. Q1 t/m Q3 2025
+    per kwartaal, dan per maand ingesteld. 2025 weigert af te sluiten zonder
+    Q4, met "01-10-2025 t/m 31-12-2025" in de melding. Q4 per kwartaal en
+    2025 dicht. Januari 2026 per maand mag, een kwartaal in 2026 niet. Het
+    dashboard krijgt de vier kwartalen en januari. Met de functies van
+    `20261118090000` faalden vier van de zes stappen;
+  - unit: van kwartaal naar maand en andersom per 1 januari, en een wissel
+    midden in het jaar (`vatPeriods.test.ts`);
+  - de keten vanaf nul (281 migraties) en de migratie twee keer achter
+    elkaar; `npm test` 1944/1944; typecheck; `test:loading` ✓;
+    `test:mobile` voor dashboard en Omzetbelasting, licht en donker: 12
+    metingen, 0 problemen;
+  - in Chromium op de pagina Omzetbelasting, met een eenmanszaak die na Q3
+    op maandaangifte overging. September 2025 valt in Q3. Q4 2025 heeft de
+    knop "Periode afsluiten" en sluit af. Q2 2026 per kwartaal is alleen te
+    bekijken. Geen JavaScript-fouten.
 
 ## Bewust open
 

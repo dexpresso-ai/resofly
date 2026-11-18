@@ -147,13 +147,21 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
 
   const period = useMemo(() => bounds(view, year, month, quarter), [view, year, month, quarter]);
   // Afsluiten en aangifte doen kan pas na afloop van het tijdvak, en alleen in
-  // de frequentie van Instellingen (de database weigert de rest; 20261118090000).
+  // de frequentie van Instellingen (de database weigert de rest; 20261118090000)
+  // of in de soort waarin dat jaar al is aangegeven: na een wissel per
+  // 1 januari doe je het laatste kwartaal van vorig jaar nog per kwartaal
+  // (20261118100000). Eerst kon dat alleen door de instelling terug te zetten.
   const today = formatISODate(now);
   const periodRunning = period.to >= today;
-  const otherFrequency = view !== settingPeriod;
+  const yearUsesView = data.vatReturns.some(r => r.year === year && r.period_type === period.dbType && !r.supplements_return_id && r.status !== 'draft');
+  const otherFrequency = view !== settingPeriod && !yearUsesView;
   const deadline = vatFilingDeadline(period.to);
   const bookkeepingStart = data.companySettings?.bookkeeping_start_date ?? null;
   const startsInside = bookkeepingStart != null && bookkeepingStart > period.from && bookkeepingStart <= period.to;
+  // Een tijdvak helemaal vóór de start in ResoFly gaf je elders aan. De
+  // jaarafsluiting vraagt toch om elk tijdvak van het boekjaar; zonder deze
+  // uitleg stond hier in het rood dat de deadline voorbij was.
+  const beforeStart = bookkeepingStart != null && period.to < bookkeepingStart;
   // Suppleties zijn extra rijen voor dezelfde periode; de primaire aangifte is de rij zónder supplements_return_id.
   const existing = useMemo(
     () => data.vatReturns.find(r => r.period_type === period.dbType && r.year === year && r.period_index === period.index && !r.supplements_return_id) ?? null,
@@ -312,7 +320,10 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
             {finalized && existing!.status === 'filed' && canWrite && <Button onClick={() => setStatus(existing!, 'paid')} disabled={busy}><CheckCircle2 size={14} /> Markeer als betaald</Button>}
           </div>
 
-          {!finalized && !otherFrequency && (
+          {!finalized && !otherFrequency && beforeStart && (
+            <p className="bk-muted">Dit tijdvak ligt vóór de start van je boekhouding in ResoFly ({dateNL(bookkeepingStart)}): de aangifte deed je daarbuiten. Sluit het hier toch af, zodat je het boekjaar kunt afsluiten. Bij de Belastingdienst hoef je niets opnieuw te doen.</p>
+          )}
+          {!finalized && !otherFrequency && !beforeStart && (
             <p className={`bk-muted${!periodRunning && today > deadline ? ' bk-neg' : ''}`}>
               {periodRunning
                 ? `Dit tijdvak loopt nog tot en met ${dateNL(period.to)}. Aangifte doen en betalen kan daarna, uiterlijk ${dateNL(deadline)}.`
@@ -320,7 +331,7 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
             </p>
           )}
           {!finalized && otherFrequency && (
-            <p className="bk-muted">Je doet aangifte per {settingPeriod === 'monthly' ? 'maand' : 'kwartaal'} (Instellingen → Bedrijf). Deze weergave per {view === 'monthly' ? 'maand' : 'kwartaal'} is alleen om te bekijken; afsluiten gaat per {settingPeriod === 'monthly' ? 'maand' : 'kwartaal'}.</p>
+            <p className="bk-muted">Je doet aangifte per {settingPeriod === 'monthly' ? 'maand' : 'kwartaal'} (Instellingen → Bedrijf). Deze weergave per {view === 'monthly' ? 'maand' : 'kwartaal'} is alleen om te bekijken; afsluiten gaat per {settingPeriod === 'monthly' ? 'maand' : 'kwartaal'}. Moet dit tijdvak toch per {view === 'monthly' ? 'maand' : 'kwartaal'}, bijvoorbeeld het laatste vóór een wissel, zet de instelling dan eerst om.</p>
           )}
           {startsInside && (
             <p className="bk-muted">Je boekhouding in ResoFly begint op {dateNL(bookkeepingStart)}. Wat daarvóór in dit tijdvak viel, staat hier niet in: neem dat zelf mee in deze aangifte.</p>
