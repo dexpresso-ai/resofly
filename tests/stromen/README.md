@@ -170,7 +170,7 @@ En `eenmanszaak`: een heel boekjaar zoals een zzp'er het doet, in één administ
 
 Zie `docs/changelog/CHANGELOG_EENMANSZAAK_CONTROLE_2026-11-18.md`.
 
-En `prognose`: Financiën → Prognose en wat de AI ermee mag (migratie 20261118124500). Getoetst:
+En `prognose`: Financiën → Prognose en wat de AI ermee mag (migratie 20261118144500). Getoetst:
 - `forecast_history`: per maand de nieuwe projecten, de omzet met en zonder project (min een
   creditnota), de inkoop en de offertes; concepten, geannuleerde facturen en een andere organisatie
   tellen niet, en de boekhouder krijgt geen aantallen projecten;

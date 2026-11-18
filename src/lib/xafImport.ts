@@ -349,12 +349,48 @@ const KEYWORDS: ReadonlyArray<{ test: RegExp; subtype: string; reason: string }>
 
 const BALANCE_TYPES = new Set(['asset', 'liability', 'equity']);
 
+/** De naam van een vennotenrekening in ResoFly, genormaliseerd, zonder de vennoot. */
+const PARTNER_PREFIX: Readonly<Record<string, string>> = {
+  partner_capital: 'kapitaal ',
+  partner_withdrawals: 'prive opnamen ',
+  partner_contributions: 'prive stortingen ',
+};
+
+/**
+ * Bij een vof, maatschap of cv: het kapitaal of het privé van één vennoot,
+ * herkend aan een woord uit zijn naam ("Kapitaal Jansen" → 0501 Kapitaal Anna
+ * Jansen). Tot november 2026 ging zo'n rekening naar het algemene 0500 of 0550,
+ * en stond het hele beginvermogen daarna op geen enkele vennoot. Twee vennoten
+ * die even goed passen (dezelfde achternaam): geen voorstel, de gebruiker kiest.
+ */
+function partnerAccount(name: string, options: TargetAccount[]): TargetAccount | null {
+  const subtype = /\b(prive opname|prive opnamen|onttrekking)/.test(name) ? 'partner_withdrawals'
+    : /\b(prive storting|prive stortingen)/.test(name) ? 'partner_contributions'
+    : /\b(kapitaal|eigen vermogen)\b/.test(name) ? 'partner_capital'
+    : null;
+  if (!subtype) return null;
+  const words = new Set(name.split(' ').filter(w => w.length >= 3));
+  let best: TargetAccount | null = null;
+  let bestScore = 0;
+  let tie = false;
+  for (const target of options) {
+    if (target.subtype !== subtype) continue;
+    const partnerName = normalize(target.name).replace(PARTNER_PREFIX[subtype], '');
+    const score = partnerName.split(' ').filter(w => w.length >= 3 && words.has(w)).length;
+    if (score > bestScore) { best = target; bestScore = score; tie = false; }
+    else if (score > 0 && score === bestScore) tie = true;
+  }
+  return bestScore > 0 && !tie ? best : null;
+}
+
 /** Een voorstel per rekening uit de auditfile: dezelfde naam, dan een herkend woord, dan dezelfde code. */
 export function proposeAccount(account: { code: string; name: string }, targets: TargetAccount[]): AccountProposal {
   const options = targets.filter(t => BALANCE_TYPES.has(t.type) && t.is_active !== false);
   const name = normalize(account.name);
   const byName = options.find(t => normalize(t.name) === name);
   if (byName) return { targetId: byName.id, reason: 'Zelfde naam' };
+  const partner = partnerAccount(name, options);
+  if (partner) return { targetId: partner.id, reason: 'Vennoot' };
   for (const keyword of KEYWORDS) {
     if (!keyword.test.test(name)) continue;
     const wanted = keyword.subtype === 'equity'

@@ -451,7 +451,7 @@ export const auditLogs = [
   audit(60 * 51, 'created', 'attachment', { id: attachments[0].id }, 'moodboard-winter-2026-definitief-versie-3-met-opmerkingen.pdf', USER3),
 ];
 
-export const ids = { ORG, USER, USER2 };
+export const ids = { ORG, USER, USER2, USER3 };
 // Rapportages met Gerrie (2026-11-09): één rapportage met inhoud, zoals Gerrie
 // hem oplevert (HTML met de RF-bouwstenen en twee datasets), plus een kort
 // gesprek en drie versies. Het kader zelf (public/rapport-weergave.html) draait

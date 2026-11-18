@@ -162,6 +162,7 @@ import type {
   DgaSignals,
   OwnersEquityOverview,
   PartnershipPartner,
+  PartnershipPartnerHours,
   DividendDistributionLine,
   DividendDistributionRow,
   DividendKind,
@@ -1442,7 +1443,7 @@ export async function deleteSavedReport(organizationId: UUID, id: UUID): Promise
   return deleteRow('saved_reports', id, organizationId);
 }
 
-// ── Prognose (Financiën → Prognose, migratie 20261118124500) ────────────────
+// ── Prognose (Financiën → Prognose, migratie 20261118144500) ────────────────
 
 /**
  * De app rolt via Cloudflare Pages uit vóór de migratie draait. In dat gaatje
@@ -2842,6 +2843,58 @@ export async function savePartnershipPartner(
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as PartnershipPartner;
+}
+
+/**
+ * Koppelt een vennoot aan het teamlid dat hij is (of los, met `null`). Dan tellen
+ * de uren van dat teamlid voor het urencriterium van de vennoot.
+ */
+export async function setPartnershipPartnerMember(
+  organizationId: UUID, partnerId: UUID, userId: UUID | null,
+): Promise<PartnershipPartner> {
+  const { data, error } = await supabase.rpc('set_partnership_partner_member', {
+    p_organization_id: organizationId,
+    p_partner_id: partnerId,
+    p_user_id: userId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as PartnershipPartner;
+}
+
+/**
+ * De uren per vennoot in één kalenderjaar (het urencriterium). Vraagt leesrecht
+ * op Financiën én Uren; de database weigert anders.
+ */
+export async function loadPartnershipPartnerHours(organizationId: UUID, year: number): Promise<PartnershipPartnerHours[]> {
+  const { data, error } = await supabase.rpc('partnership_partner_hours', {
+    p_organization_id: organizationId,
+    p_year: year,
+  });
+  if (error) throw bookkeepingError(error);
+  return ((data ?? []) as PartnershipPartnerHours[]).map(row => ({
+    ...row,
+    direct_minutes: Number(row.direct_minutes ?? 0),
+    indirect_minutes: Number(row.indirect_minutes ?? 0),
+  }));
+}
+
+/**
+ * Een geboekte inkoopfactuur die de ondernemer of een vennoot met eigen geld
+ * betaalde: het openstaande bedrag gaat naar de privé-stortingen (0560, of 056n
+ * van de vennoot) en de factuur staat daarna op betaald. Alleen bij een
+ * eenmanszaak, vof, maatschap of cv.
+ */
+export async function payPurchaseInvoicePrivately(
+  organizationId: UUID, purchaseInvoiceId: UUID, partnerId: UUID | null, date: string,
+): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('pay_purchase_invoice_privately', {
+    p_organization_id: organizationId,
+    p_purchase_invoice_id: purchaseInvoiceId,
+    p_partner_id: partnerId,
+    p_date: date,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
 }
 
 /** De kapitaalvergelijking van één boekjaar: begin, resultaat, stortingen, opnamen, eind. */

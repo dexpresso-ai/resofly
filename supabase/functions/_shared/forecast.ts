@@ -15,7 +15,7 @@
 // nooit een import van een URL, npm: of jsr: in: dan breekt de app.
 //
 // De cijfers waarop de prognose rust komen uit public.forecast_history
-// (migratie 20261118124500). De app en de server roepen dezelfde functie aan.
+// (migratie 20261118144500). De app en de server roepen dezelfde functie aan.
 // ============================================================
 
 // ── Maanden ─────────────────────────────────────────────────────────────────

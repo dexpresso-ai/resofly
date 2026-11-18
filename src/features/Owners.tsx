@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Pencil, Plus, Save, X } from 'lucide-react';
-import type { AppData, FiscalYearListRow, OwnersEquityOverview, PartnershipPartner, UUID } from '../types';
+import type { AppData, FiscalYearListRow, OrganizationMember, OwnersEquityOverview, PartnershipPartner, PartnershipPartnerHours, UUID } from '../types';
 import { Button, Input, Select, Skeleton } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
-import { euro } from '../lib/format';
-import { listFiscalYears, listPartnershipPartners, loadOwnersEquityOverview, reportProfitAndLoss, savePartnershipPartner, setUpBookkeeping } from '../lib/repository';
+import { euro, formatMinutes, minutesToHours } from '../lib/format';
+import { formatISODate } from '../lib/dates';
+import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
+import { memberName } from '../lib/members';
 import { businessProfit } from '../lib/incomeTax';
-import { HOUR_CRITERION_MINUTES } from '../lib/hourCriterion';
+import {
+  listFiscalYears, listPartnershipPartners, loadOwnersEquityOverview, loadPartnershipPartnerHours, reportProfitAndLoss,
+  savePartnershipPartner, setPartnershipPartnerMember, setUpBookkeeping,
+} from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pct = (bp: number | null | undefined) => `${((bp ?? 0) / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}%`;
@@ -18,8 +23,31 @@ function parsePercent(value: string): number | null {
   return Math.round(n * 100);
 }
 
-type PartnerForm = { id: string | null; name: string; share: string; kind: PartnershipPartner['kind']; isActive: boolean };
-const EMPTY_FORM: PartnerForm = { id: null, name: '', share: '', kind: 'beherend', isActive: true };
+/** De rekening uit Instellingen → Boekhouding, zoals de jaarafsluiting hem gebruikt. */
+function resultAccountLabel(code: string | null | undefined): string {
+  return code === '0500' ? '0500 Eigen vermogen' : '0510 Onverdeeld resultaat';
+}
+
+type PartnerForm = { id: string | null; name: string; share: string; kind: PartnershipPartner['kind']; isActive: boolean; userId: string };
+const EMPTY_FORM: PartnerForm = { id: null, name: '', share: '', kind: 'beherend', isActive: true, userId: '' };
+
+/** Wat er in de kolom Urencriterium staat: de uren, en of het haalbaar is. */
+function hoursCell(partner: PartnershipPartner, row: PartnershipPartnerHours | undefined, year: number, today: string) {
+  // Een commanditaire vennoot is voor de inkomstenbelasting geen ondernemer.
+  if (partner.kind === 'commanditair') return { text: 'n.v.t.', tone: '' };
+  if (!partner.user_id) return { text: '—', tone: 'bk-muted' };
+  if (!row) return { text: '—', tone: 'bk-muted' };
+  const total = row.direct_minutes + row.indirect_minutes;
+  const hours = `${Math.floor(minutesToHours(total)).toLocaleString('nl-NL')} u`;
+  if (total >= HOUR_CRITERION_MINUTES) return { text: `${hours} · gehaald`, tone: 'bk-pos' };
+  const currentYear = Number(today.slice(0, 4));
+  if (year > currentYear) return { text: hours, tone: '' };
+  if (year < currentYear) return { text: `${hours} · niet gehaald`, tone: 'bk-neg' };
+  const projection = projectHourCriterion({ totalMinutes: total, firstEntryDate: row.first_entry_date, today, year });
+  return projection.projectedMinutes >= HOUR_CRITERION_MINUTES
+    ? { text: `${hours} · op koers`, tone: '' }
+    : { text: `${hours} · onder koers, nog ${formatMinutes(projection.remainingMinutes)}`, tone: 'bk-neg' };
+}
 
 /**
  * Eigen vermogen van een eenmanszaak, en de vennoten van een vof, maatschap of cv.
@@ -29,22 +57,33 @@ const EMPTY_FORM: PartnerForm = { id: null, name: '', share: '', kind: 'beherend
  * stortingen, opnamen, eind): dat is wat de aangifte inkomstenbelasting vraagt
  * als ondernemingsvermogen aan het begin en het eind van het jaar. Bij een vof
  * staat dat per vennoot, en hier leg je de vennoten en hun winstaandeel vast.
+ *
+ * Het urencriterium geldt per vennoot. Tot 17 november 2026 telde ResoFly
+ * alleen de uren van wie was ingelogd (bij Uren), en kon niemand zien of de
+ * andere vennoot de 1225 uur haalde. Daarom hangt een vennoot nu aan zijn
+ * teamlid, en staan hier de uren van elke vennoot in het kalenderjaar van het
+ * gekozen boekjaar. Alleen met leesrecht op Uren: de database weigert anders.
  */
-export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUserId = null, canReadHours = true }: {
+export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUserId = null, canReadHours = true, teamMembers = [], currentUserId = null }: {
   data: AppData; organizationId: string; canWrite: boolean; onChanged: () => void;
   /** De eigenaar is bij een eenmanszaak de ondernemer: zijn uren tellen voor het urencriterium. */
   ownerUserId?: UUID | null;
   /** Zonder leesrecht op Uren (vaak de boekhouder) zie je geen uren: dan zegt het overzicht dat, in plaats van "0 uur, niet gehaald". */
   canReadHours?: boolean;
+  /** De teamleden die je aan een vennoot kunt koppelen (vof, maatschap, cv). */
+  teamMembers?: OrganizationMember[];
+  currentUserId?: UUID | null;
 }) {
   const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
   const isIb = ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm);
   const isPartnershipForm = ['vof', 'maatschap', 'cv'].includes(legalForm);
+  const resultLabel = resultAccountLabel(data.companySettings?.year_result_account_code);
 
   const [years, setYears] = useState<FiscalYearListRow[]>([]);
   const [fiscalYearId, setFiscalYearId] = useState('');
   const [partners, setPartners] = useState<PartnershipPartner[]>([]);
   const [overview, setOverview] = useState<OwnersEquityOverview | null>(null);
+  const [hours, setHours] = useState<Map<string, PartnershipPartnerHours> | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +91,14 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
   const [form, setForm] = useState<PartnerForm | null>(null);
 
   const accountCode = useMemo(() => new Map(data.ledgerAccounts.map(a => [a.id, a.code])), [data.ledgerAccounts]);
+  const today = formatISODate(new Date());
+  // Het urencriterium loopt over het kalenderjaar. Bij een eenmanszaak, vof,
+  // maatschap of cv is het boekjaar het kalenderjaar; anders telt het jaar
+  // waarin het boekjaar begint.
+  const selectedYear = years.find(y => y.id === fiscalYearId) ?? null;
+  const hoursYear = selectedYear ? Number(selectedYear.period_start.slice(0, 4)) : Number(today.slice(0, 4));
+  const showHours = isPartnershipForm && canReadHours;
+  const anyLinked = partners.some(p => p.user_id);
 
   const loadBase = useCallback(async () => {
     try {
@@ -70,8 +117,22 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
     finally { setLoading(false); }
   }, [organizationId]);
 
+  const loadHours = useCallback(async (year: number) => {
+    try {
+      const rows = await loadPartnershipPartnerHours(organizationId, year);
+      setHours(new Map(rows.map(r => [r.partner_id, r])));
+    } catch {
+      // Zonder uren blijft de rest van de pagina gewoon bruikbaar.
+      setHours(null);
+    }
+  }, [organizationId]);
+
   useEffect(() => { if (isIb) void loadBase(); }, [isIb, loadBase]);
   useEffect(() => { if (isIb && fiscalYearId) void loadOverview(fiscalYearId); }, [isIb, fiscalYearId, loadOverview]);
+  useEffect(() => {
+    if (showHours && anyLinked) void loadHours(hoursYear);
+    else setHours(null);
+  }, [showHours, anyLinked, hoursYear, loadHours]);
 
   if (!isIb) {
     return <div className="bk-page"><div className="empty">
@@ -81,8 +142,16 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
     </div></div>;
   }
 
-  const activeShare = partners.filter(p => p.is_active).reduce((s, p) => s + p.profit_share_basis_points, 0);
+  const activePartners = partners.filter(p => p.is_active);
+  const activeShare = activePartners.reduce((s, p) => s + p.profit_share_basis_points, 0);
   const shareOk = activeShare === 10000;
+  // Teamleden die je aan een vennoot kunt koppelen: actief, en nog niet aan een
+  // andere vennoot gekoppeld (de database weigert dat ook).
+  const linkableMembers = (forPartnerId: string | null) => teamMembers.filter(m =>
+    m.status === 'active' && !partners.some(p => p.user_id === m.user_id && p.id !== forPartnerId));
+  const linkedName = (userId: UUID) => (teamMembers.some(m => m.user_id === userId)
+    ? memberName(userId, teamMembers, currentUserId)
+    : 'Teamlid (niet meer in de organisatie)');
 
   const savePartner = async () => {
     if (!form) return;
@@ -91,16 +160,22 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
     try {
       if (!form.name.trim()) throw new Error('Geef de vennoot een naam.');
       if (share === null) throw new Error('Vul het winstaandeel in als percentage tussen 0 en 100.');
-      await savePartnershipPartner(organizationId, {
+      const saved = await savePartnershipPartner(organizationId, {
         id: form.id, name: form.name.trim(), profitShareBasisPoints: share,
         kind: legalForm === 'cv' ? form.kind : 'beherend', isActive: form.isActive,
       });
+      const wantedUser = form.userId || null;
+      if ((saved.user_id ?? null) !== wantedUser) await setPartnershipPartnerMember(organizationId, saved.id, wantedUser);
       setForm(null);
       await loadBase();
       await loadOverview(fiscalYearId);
       onChanged();
       setMessage(form.id ? 'Vennoot bijgewerkt.' : 'Vennoot vastgelegd, met eigen kapitaal- en privérekeningen.');
-    } catch (e) { setError(e instanceof Error ? e.message : 'Opslaan mislukt'); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Opslaan mislukt');
+      // Een nieuwe vennoot kan al bestaan als alleen het koppelen misging.
+      void loadBase();
+    }
     finally { setBusy(false); }
   };
 
@@ -149,8 +224,8 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
         <div className="bk-report">
           <div className="bk-report-bar">
             <div className="bk-report-kpis">
-              <div><span>Vennoten</span><strong>{partners.filter(p => p.is_active).length}</strong></div>
-              <div><span>Winstverdeling</span><strong className={partners.length > 0 && !shareOk ? 'bk-neg' : ''}>{pct(activeShare)}</strong></div>
+              <div><span>Vennoten</span><strong>{activePartners.length}</strong></div>
+              <div><span>Winstverdeling</span><strong className={activePartners.length > 0 && !shareOk ? 'bk-neg' : ''}>{pct(activeShare)}</strong></div>
             </div>
             {canWrite && !form && (
               <Button onClick={() => setForm({ ...EMPTY_FORM, share: partners.length === 0 ? '50' : '' })} disabled={busy}><Plus size={14} /> Vennoot toevoegen</Button>
@@ -158,30 +233,47 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
           </div>
 
           {partners.length === 0
-            ? <p className="bk-muted">Nog geen vennoten vastgelegd. Zolang dat zo is, behandelt de boekhouding de {legalForm} als een eenmanszaak: de winst gaat naar 0500 Eigen vermogen, zonder verdeling.</p>
+            ? <p className="bk-muted">
+                Nog geen vennoten vastgelegd. Zolang dat zo is, verdeelt de jaarafsluiting niets: de winst gaat naar {resultLabel} (in te stellen bij
+                Instellingen → Boekhouding), en privé-opnamen en -stortingen op 0550 en 0560 gaan naar 0500 Eigen vermogen.
+              </p>
             : <div className="bk-table-wrap"><table className="bk-table">
                 <thead><tr>
                   <th>Vennoot</th><th className="bk-num">Winstaandeel</th>
                   {legalForm === 'cv' && <th>Soort</th>}
+                  {showHours && <th>Urencriterium {hoursYear}</th>}
                   <th>Rekeningen</th><th>Status</th><th />
                 </tr></thead>
-                <tbody>{partners.map(p => (
-                  <tr key={p.id} className={p.is_active ? '' : 'is-reversed'}>
-                    <td><strong>{p.name}</strong></td>
-                    <td className="bk-num">{pct(p.profit_share_basis_points)}</td>
-                    {legalForm === 'cv' && <td>{p.kind === 'commanditair' ? 'Commanditair (stil)' : 'Beherend'}</td>}
-                    <td className="bk-muted">{[p.capital_account_id, p.withdrawals_account_id, p.contributions_account_id].map(id => accountCode.get(id) ?? '—').join(' · ')}</td>
-                    <td>{p.is_active ? 'Actief' : 'Uitgetreden'}</td>
-                    <td className="bk-cell-action">
-                      {canWrite && <button className="bk-line-del" title="Aanpassen" disabled={busy}
-                        onClick={() => setForm({ id: p.id, name: p.name, share: String(p.profit_share_basis_points / 100).replace('.', ','), kind: p.kind, isActive: p.is_active })}>
-                        <Pencil size={12} /></button>}
-                    </td>
-                  </tr>
-                ))}</tbody>
+                <tbody>{partners.map(p => {
+                  const cell = hoursCell(p, hours?.get(p.id), hoursYear, today);
+                  return (
+                    <tr key={p.id} className={p.is_active ? '' : 'is-reversed'}>
+                      {/* Het teamlid onder de naam: als eigen kolom duwde het e-mailadres
+                          het urencriterium op de telefoon buiten beeld. */}
+                      <td><strong>{p.name}</strong>
+                        <div className="bk-muted bk-partner-member">{p.user_id ? `Teamlid: ${linkedName(p.user_id)}` : 'Geen teamlid gekoppeld'}</div>
+                      </td>
+                      <td className="bk-num">{pct(p.profit_share_basis_points)}</td>
+                      {legalForm === 'cv' && <td>{p.kind === 'commanditair' ? 'Commanditair (stil)' : 'Beherend'}</td>}
+                      {showHours && <td className={`bk-partner-hours ${cell.tone}`.trim()}>{cell.text}</td>}
+                      <td className="bk-muted">{[p.capital_account_id, p.withdrawals_account_id, p.contributions_account_id].map(id => accountCode.get(id) ?? '—').join(' · ')}</td>
+                      <td>{p.is_active ? 'Actief' : 'Uitgetreden'}</td>
+                      <td className="bk-cell-action">
+                        {canWrite && <button className="bk-line-del" title="Aanpassen" disabled={busy}
+                          onClick={() => setForm({ id: p.id, name: p.name, share: String(p.profit_share_basis_points / 100).replace('.', ','), kind: p.kind, isActive: p.is_active, userId: p.user_id ?? '' })}>
+                          <Pencil size={12} /></button>}
+                      </td>
+                    </tr>
+                  );
+                })}</tbody>
               </table></div>}
 
-          {partners.length > 0 && !shareOk && (
+          {partners.length > 0 && activePartners.length === 0 && (
+            <p className="bk-muted">
+              Er is geen actieve vennoot. Bij de jaarafsluiting gaat de winst dan zonder verdeling naar {resultLabel}; het privé van elke vennoot gaat naar zijn eigen kapitaal.
+            </p>
+          )}
+          {activePartners.length > 0 && !shareOk && (
             <p className="bk-neg"><AlertTriangle size={13} /> De winstverdeling van de actieve vennoten telt op tot {pct(activeShare)}. Bij de jaarafsluiting moet dat precies 100% zijn.</p>
           )}
 
@@ -198,6 +290,17 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
                     </Select>
                   </label>
                 )}
+                <label><span>Teamlid</span>
+                  <Select value={form.userId} onChange={e => setForm({ ...form, userId: e.target.value })}>
+                    <option value="">Niet gekoppeld</option>
+                    {form.userId && !teamMembers.some(m => m.user_id === form.userId) && (
+                      <option value={form.userId}>Teamlid (niet meer in de organisatie)</option>
+                    )}
+                    {linkableMembers(form.id).map(m => (
+                      <option key={m.user_id} value={m.user_id}>{memberName(m.user_id, teamMembers, currentUserId)}</option>
+                    ))}
+                  </Select>
+                </label>
                 {form.id && (
                   <label><span>Status</span>
                     <Select value={form.isActive ? 'actief' : 'uit'} onChange={e => setForm({ ...form, isActive: e.target.value === 'actief' })}>
@@ -220,6 +323,13 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
             Staat er in het vennootschapscontract een arbeidsvergoeding of rente over het kapitaal vóór de verdeling, boek die dan als memoriaal tussen de kapitaalrekeningen.
             {legalForm === 'cv' && ' Een commanditaire vennoot deelt in de winst, maar is voor de inkomstenbelasting geen ondernemer: geen ondernemersaftrek en geen urencriterium.'}
           </p>
+          {partners.length > 0 && (
+            <p className="bk-muted">
+              {showHours
+                ? `Het urencriterium geldt per vennoot: ten minste 1225 uur in ${hoursYear}, directe en indirecte uren samen. Koppel elke vennoot aan zijn teamlid; dan tellen de uren die hij bij Uren schrijft hier mee. Daarnaast moet een vennoot meer dan de helft van zijn werktijd aan de onderneming besteden, tenzij hij starter is. Indicatief, geen fiscaal advies.`
+                : 'Het urencriterium geldt per vennoot. Koppel elke vennoot aan zijn teamlid; met leesrecht op Uren zie je hier dan ieders uren.'}
+            </p>
+          )}
         </div>
       )}
 
@@ -261,7 +371,8 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
                   <td className="bk-num">{euroCents(o.beginCents)}</td>
                   <td className="bk-num">{euroCents(o.resultShareCents)}</td>
                   <td className="bk-num">{euroCents(o.contributionsCents)}</td>
-                  <td className="bk-num">{euroCents(-o.withdrawalsCents)}</td>
+                  {/* Zonder opnamen stond er "€ -0,00". */}
+                  <td className="bk-num">{euroCents(o.withdrawalsCents ? -o.withdrawalsCents : 0)}</td>
                   <td className="bk-num">{o.otherMovementsCents ? euroCents(o.otherMovementsCents) : '—'}</td>
                   <td className="bk-num"><strong>{euroCents(o.endCents)}</strong></td>
                 </tr>
@@ -282,7 +393,7 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
                 <td className="bk-num">{euroCents(totals.begin + (unassigned?.beginCents ?? 0))}</td>
                 <td className="bk-num">{euroCents(totals.result)}</td>
                 <td className="bk-num">{euroCents(totals.contributions)}</td>
-                <td className="bk-num">{euroCents(-totals.withdrawals)}</td>
+                <td className="bk-num">{euroCents(totals.withdrawals ? -totals.withdrawals : 0)}</td>
                 <td className="bk-num">{euroCents(totals.other + (unassigned?.movementsCents ?? 0))}</td>
                 <td className="bk-num">{euroCents(totals.end + (unassigned?.endCents ?? 0))}</td>
               </tr></tfoot>
@@ -291,8 +402,9 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
 
           {unassigned && (
             <p className="bk-muted">
-              Een deel van het eigen vermogen staat op 0500, 0510 of de algemene privérekeningen en dus op geen enkele vennoot — bijvoorbeeld een beginbalans van vóór de
-              vennoten. Verdeel het met een memoriaalboeking over de kapitaalrekeningen, zodat ieders beginvermogen klopt.
+              Een deel van het eigen vermogen staat op 0500, 0510 of de algemene privérekeningen en dus op geen enkele vennoot — bijvoorbeeld de sluitpost van een
+              beginbalans van vóór de vennoten. Verdeel het met een memoriaalboeking over de kapitaalrekeningen, zodat ieders beginvermogen klopt.
+              Bij een nieuwe beginbalans voorkom je dit door het kapitaal van elke vennoot meteen op zijn eigen kapitaalrekening te zetten (Grootboek → Beginbalans).
             </p>
           )}
           {(overview.openPriorYears?.length ?? 0) > 0 && (

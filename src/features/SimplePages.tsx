@@ -1873,6 +1873,8 @@ export function Settings({
     onTabChange?.(tab);
   }
   const [form, setForm] = useState<CompanySettingsInput>(() => settingsToForm(settings));
+  // Eenmanszaak, vof, maatschap of cv: inkomstenbelasting, boekjaar = kalenderjaar.
+  const ibForm = ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(form.legal_form ?? 'eenmanszaak');
   const [message, setMessage] = useState<string | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -2914,7 +2916,7 @@ export function Settings({
     {message && <div className="success">{message}</div>}
     <section className="settings-card">
       <h3>Boekhouding</h3>
-      <p className="settings-help">De boekhoud-startdatum is de knipdatum vanaf wanneer het grootboek leidend is: verkoopfacturen van vóór deze datum worden niet meer naar het grootboek geboekt (die stand zit in je beginbalans). Kies bij voorkeur een kwartaal- of jaargrens. Met de KOR-regeling wordt geen BTW in rekening gebracht en is voorbelasting niet aftrekbaar. De boekjaar-startmaand bepaalt de jaargrens (gebruik januari voor een gewoon kalenderjaar, een andere maand voor een gebroken boekjaar). Bij een jaarafsluiting wordt het resultaat op de gekozen resultaatrekening geboekt.</p>
+      <p className="settings-help">De boekhoud-startdatum is de knipdatum vanaf wanneer het grootboek leidend is: verkoopfacturen van vóór deze datum worden niet meer naar het grootboek geboekt (die stand zit in je beginbalans). Kies bij voorkeur een kwartaal- of jaargrens. Met de KOR-regeling wordt geen BTW in rekening gebracht en is voorbelasting niet aftrekbaar. De boekjaar-startmaand bepaalt de jaargrens: januari voor een gewoon kalenderjaar, een andere maand voor een gebroken boekjaar (alleen bij een BV, NV of coöperatie). Bij een jaarafsluiting wordt het resultaat op de gekozen resultaatrekening geboekt.</p>
       <div className="settings-grid">
         <label className="bk-setting-field"><span>Boekhouding leidend vanaf</span>
           <Input type="date" value={form.bookkeeping_start_date ?? ''} onChange={e=>set('bookkeeping_start_date', e.target.value || null)} disabled={!canAdminOrganization} />
@@ -2926,9 +2928,14 @@ export function Settings({
           </select>
         </label>
         <label className="bk-setting-field"><span>Boekjaar begint in</span>
-          <select className="form-select" value={form.fiscal_year_start_month ?? 1} onChange={e=>set('fiscal_year_start_month', Number(e.target.value))} disabled={!canAdminOrganization}>
+          {/* Voor de inkomstenbelasting is het boekjaar het kalenderjaar. Tot
+              november 2026 kon een vof hier juli kiezen en kreeg dan een boekjaar
+              "2026/2027" dat niet op de aangifte van de vennoten past; de database
+              houdt de startmaand nu op januari. */}
+          <select className="form-select" value={ibForm ? 1 : (form.fiscal_year_start_month ?? 1)} onChange={e=>set('fiscal_year_start_month', Number(e.target.value))} disabled={!canAdminOrganization || ibForm}>
             {['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'].map((m, i) => <option key={m} value={i + 1}>{m[0].toUpperCase() + m.slice(1)}</option>)}
           </select>
+          {ibForm && <small className="bk-muted">Bij een eenmanszaak, vof, maatschap of cv is het boekjaar het kalenderjaar.</small>}
         </label>
         <label className="bk-setting-field"><span>Jaarresultaat boeken op</span>
           <select className="form-select" value={form.year_result_account_code ?? '0510'} onChange={e=>set('year_result_account_code', e.target.value)} disabled={!canAdminOrganization}>

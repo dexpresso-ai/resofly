@@ -163,6 +163,107 @@ const PREPAID_ACCOUNT = {
   is_system: false, is_active: true, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
 };
 
+/**
+ * `vof: true` (2026-11-17): een vof met twee vennoten die aan een teamlid hangen
+ * (de ingelogde gebruiker en Sanne) en één uitgetreden vennoot met een lange
+ * naam en zonder teamlid. Voor de pagina Vennoten (teamlid, het urencriterium
+ * per vennoot, de kapitaalvergelijking met vermogen op geen enkele vennoot) en
+ * de beginbalans met de knop "Regel per vennoot". Het rekeningschema is dat van
+ * een IB-onderneming: 0500 Eigen vermogen, 0550/0560, en per vennoot 050n,
+ * 055n en 056n.
+ */
+const VOF_YEAR = new Date().getUTCFullYear();
+const VOF_SETTINGS = { ...seed.companySettings, company_name: 'Jansen & De Vries V.O.F.', trade_name: 'Jansen & De Vries', legal_form: 'vof', year_result_account_code: '0510' };
+const VOF_PARTNER_DEFS = [
+  [1, 'Anna de Vries', 5000, true, seed.ids.USER],
+  [2, 'Bram Jansen', 5000, true, seed.ids.USER2],
+  [3, 'Cornelis van der Heijden-Wolters', 0, false, null],
+];
+const vofAccount = (code, name, subtype, i) => ({
+  id: `1ed9e000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`, organization_id: seed.ids.ORG, code, name, type: 'equity', subtype,
+  default_vat_code: null, report_group: 'eigen_vermogen', is_restricted_reserve: false, is_system: true, is_active: true,
+  created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+});
+const VOF_PARTNER_ACCOUNTS = VOF_PARTNER_DEFS.flatMap(([n, name]) => [
+  vofAccount(`050${n}`, `Kapitaal ${name}`, 'partner_capital', n * 3),
+  vofAccount(`055${n}`, `Privé-opnamen ${name}`, 'partner_withdrawals', n * 3 + 1),
+  vofAccount(`056${n}`, `Privé-stortingen ${name}`, 'partner_contributions', n * 3 + 2),
+]);
+const VOF_LEDGER_ACCOUNTS = [
+  ...LEDGER_ACCOUNTS.map(a => (a.code === '0500' ? { ...a, name: 'Eigen vermogen', subtype: 'equity' } : a)),
+  // Zoals de database ze noemt zodra er een vennoot is (20261118130000).
+  vofAccount('0550', 'Privé-opnamen (geen vennoot)', 'private_withdrawals', 1),
+  vofAccount('0560', 'Privé-stortingen (geen vennoot)', 'private_contributions', 2),
+  ...VOF_PARTNER_ACCOUNTS,
+].sort((a, b) => a.code.localeCompare(b.code));
+const VOF_PARTNERS = VOF_PARTNER_DEFS.map(([n, name, bp, active, userId]) => ({
+  id: `9a77e000-0000-4000-8000-00000000000${n}`, organization_id: seed.ids.ORG, created_by: seed.ids.USER,
+  partner_number: n, name, profit_share_basis_points: bp, kind: 'beherend', is_active: active, user_id: userId,
+  capital_account_id: VOF_PARTNER_ACCOUNTS.find(a => a.code === `050${n}`).id,
+  withdrawals_account_id: VOF_PARTNER_ACCOUNTS.find(a => a.code === `055${n}`).id,
+  contributions_account_id: VOF_PARTNER_ACCOUNTS.find(a => a.code === `056${n}`).id,
+  created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+}));
+const VOF_FISCAL_YEARS = [
+  { id: '9a77e000-0000-4000-8000-0000000000f1', label: String(VOF_YEAR), period_start: `${VOF_YEAR}-01-01`, period_end: `${VOF_YEAR}-12-31`, status: 'open', result_cents: null, close_journal_entry_id: null, computed_result_cents: 8412345, has_entries: true },
+  { id: '9a77e000-0000-4000-8000-0000000000f0', label: String(VOF_YEAR - 1), period_start: `${VOF_YEAR - 1}-01-01`, period_end: `${VOF_YEAR - 1}-12-31`, status: 'closed', result_cents: 7020000, close_journal_entry_id: null, computed_result_cents: 7020000, has_entries: true },
+];
+function vofOverview(fiscalYearId) {
+  const fy = VOF_FISCAL_YEARS.find(y => y.id === fiscalYearId) ?? VOF_FISCAL_YEARS[0];
+  const result = fy.computed_result_cents;
+  const half = Math.floor(result / 2);
+  const owner = (p, begin, share, contributions, withdrawals) => ({
+    partnerId: p.id, name: p.name, partnerNumber: p.partner_number, kind: p.kind, isActive: p.is_active,
+    shareBasisPoints: p.profit_share_basis_points, beginCents: begin, resultShareCents: share,
+    contributionsCents: contributions, withdrawalsCents: withdrawals, otherMovementsCents: 0,
+    endCents: begin + share + contributions - withdrawals,
+  });
+  return {
+    fiscalYear: { id: fy.id, label: fy.label, periodStart: fy.period_start, periodEnd: fy.period_end, status: fy.status },
+    legalForm: 'vof', isPartnershipForm: true, isPartnership: true, partnersDefined: true, shareTotalBasisPoints: 10000,
+    resultCents: result,
+    owners: [
+      owner(VOF_PARTNERS[0], 2_450_000, result - half, 0, 3_600_000),
+      owner(VOF_PARTNERS[1], 1_980_000, half, 150_000, 3_250_000),
+      owner(VOF_PARTNERS[2], 0, 0, 0, 0),
+    ],
+    unassigned: { beginCents: 1_000_000, movementsCents: -25_000, endCents: 975_000 },
+  };
+}
+// Anna haalt de 1225 uur (1260 uur), Bram zit eronder, Cornelis heeft geen teamlid.
+const VOF_HOURS = [
+  { partner_id: VOF_PARTNERS[0].id, user_id: seed.ids.USER, direct_minutes: 66_000, indirect_minutes: 9_600, first_entry_date: `${VOF_YEAR}-01-02` },
+  { partner_id: VOF_PARTNERS[1].id, user_id: seed.ids.USER2, direct_minutes: 30_000, indirect_minutes: 4_200, first_entry_date: `${VOF_YEAR}-01-06` },
+  { partner_id: VOF_PARTNERS[2].id, user_id: null, direct_minutes: 0, indirect_minutes: 0, first_entry_date: null },
+];
+// Drie geboekte inkoopfacturen: een die nog openstaat (met de knop "Privé
+// betaald"), een die via de bank is betaald, en een open declaratie van een
+// teamlid dat geen vennoot is (Daan): het venster wijst dan op de bank.
+const vofPurchase = (n, number, cents, paymentStatus, extractionMeta = null) => ({
+  id: `9a77e000-0000-4000-8000-0000000000a${n}`, organization_id: seed.ids.ORG, created_by: seed.ids.USER,
+  supplier_id: seed.suppliers[0]?.id ?? null, supplier_invoice_number: number, internal_number: `INK-${VOF_YEAR}-00${n}`,
+  date: `${VOF_YEAR}-10-1${n}`, due_date: `${VOF_YEAR}-10-2${n}`, lines: [], subtotal_cents: cents, vat_cents: Math.round(cents * 0.21),
+  total_cents: cents + Math.round(cents * 0.21), currency: 'EUR', status: 'booked', payment_status: paymentStatus,
+  paid_at: paymentStatus === 'paid' ? `${VOF_YEAR}-10-20T00:00:00Z` : null, project_id: null,
+  journal_entry_id: `9a77e000-0000-4000-8000-0000000000b${n}`, notes: null, source: extractionMeta ? 'ai_scan' : 'manual', extraction_meta: extractionMeta,
+  created_at: `${VOF_YEAR}-10-10T09:00:00Z`, updated_at: `${VOF_YEAR}-10-10T09:00:00Z`,
+});
+const VOF_PURCHASES = [
+  vofPurchase(1, 'VD-1077', 10000, 'unpaid'),
+  vofPurchase(2, 'VD-1001', 20000, 'paid'),
+  vofPurchase(3, 'BON-0412', 3415, 'unpaid', { channel: 'declaration', inbox_id: '9a77e000-0000-4000-8000-0000000000c3', submitted_by: seed.ids.USER3 }),
+];
+const VOF_TABLES = { company_settings: [VOF_SETTINGS], partnership_partners: VOF_PARTNERS, ledger_accounts: VOF_LEDGER_ACCOUNTS, purchase_invoices: VOF_PURCHASES };
+function vofRpc(fn, body) {
+  switch (fn) {
+    case 'list_fiscal_years': return VOF_FISCAL_YEARS;
+    case 'owners_equity_overview': return vofOverview(body?.p_fiscal_year_id);
+    case 'partnership_partner_hours': return VOF_HOURS;
+    case 'opening_balance_plug_account': return [{ code: '0500', name: 'Eigen vermogen' }];
+    default: return undefined;
+  }
+}
+
 function monthEndIso(offset) {
   const now = new Date();
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset + 1, 0)).toISOString().slice(0, 10);
@@ -778,6 +879,10 @@ export async function installMock(context, options = {}) {
       if (options.gallery && fn === 'organization_storage_status') {
         return reply(route, [{ used_bytes: 540 * 1024 ** 2, attachments_bytes: 0, documents_bytes: 0, recordings_bytes: 0, gallery_bytes: 540 * 1024 ** 2, limit_bytes: 50 * 1024 ** 3, plan_storage_gb: 50, storage_addons: 0, storage_addon_gb: null }]);
       }
+      if (options.vof) {
+        const vof = vofRpc(fn, rpcBody);
+        if (vof !== undefined) return reply(route, vof);
+      }
       return reply(route, rpc(fn, rpcBody));
     }
     if (p.startsWith('/rest/v1/')) {
@@ -813,6 +918,8 @@ export async function installMock(context, options = {}) {
       const rows = options.declarant && table === 'organization_members' ? declarantMembers(url)
         : options.aiDeclined && table === 'ai_consents' ? [consentRow(false, [])]
         : options.aiOff && table === 'ai_consents' ? []
+        // `vof: true`: bedrijfsgegevens, vennoten en rekeningschema van een vof.
+        : options.vof && table in VOF_TABLES ? VOF_TABLES[table]
         : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
         : prepaid && table in prepaid ? prepaid[table]
         : gallery && table in gallery ? gallery[table].filter(r => [...url.searchParams.entries()].every(([k, v]) => !(k in r) || matchFilter(r[k], v)))
