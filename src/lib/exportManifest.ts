@@ -89,7 +89,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261118171500 (prognose: seizoen en cashflow) vervangt forecast_history en
 // zet forecast_cash_position erbij; geen tabellen of kolommen. De nieuwe
 // aannames staan in forecasts.assumptions (jsonb) en gaan daar al mee.
-export const EXPORT_SCHEMA_VERSION = '20261118171500';
+// 20261118180000 (btw-betaling in het banksaldo) vervangt alleen
+// forecast_cash_position; geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261118180000';
 
 export type TableKind =
   | 'export'

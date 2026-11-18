@@ -1276,6 +1276,12 @@ export interface CashVatReturn {
 export interface CashTaxPayment {
   date: string;
   cents: number;
+  /**
+   * Zit deze betaling in het banksaldo waarmee de cashflow automatisch begint?
+   * Een handmatige mutatie die de bank nog niet leverde (of op een rekening uit
+   * de boekhouding nog niet geboekt is) niet: zie forecast_cash_position.
+   */
+  in_balance: boolean;
 }
 
 /** Het antwoord van forecast_cash_position, gelezen. */
@@ -1344,7 +1350,9 @@ export function parseCashPosition(raw: unknown, today: string): CashPosition {
   if (Array.isArray(raw.tax_payments)) {
     for (const row of raw.tax_payments) {
       if (!isObject(row) || typeof row.date !== 'string' || !DATE_RE.test(row.date)) continue;
-      taxes.push({ date: row.date, cents: intOf(row.cents) });
+      // Zonder vlag (de functie van vóór 20261118180000) zoals toen: elke
+      // betaling telt als betaald.
+      taxes.push({ date: row.date, cents: intOf(row.cents), in_balance: row.in_balance !== false });
     }
   }
   const collection = isObject(raw.collection) ? raw.collection : {};
@@ -1528,7 +1536,9 @@ export function cashflowEffective(result: ForecastResult, cash: CashPosition): C
  *   zijn plus die van de prognose. Een tijdvak waarvan de betaalmaand voorbij
  *   is, is betaald. Ging er na afloop van het tijdvak al geld naar de
  *   Belastingdienst, dan ook: dat staat al in het banksaldo, en twee keer
- *   aftrekken zou een tekort voorspellen dat er niet is.
+ *   aftrekken zou een tekort voorspellen dat er niet is. Maar alleen een
+ *   betaling die echt in het beginsaldo zit (`in_balance`), of elke als je je
+ *   banksaldo zelf invulde.
  * - Geld erbij en eraf (posten cash_in en cash_out) in hun maanden.
  */
 export function computeCashflow(result: ForecastResult, inputs: ForecastInputs, cash: CashPosition, today: string): CashflowResult {
@@ -1619,6 +1629,12 @@ export function computeCashflow(result: ForecastResult, inputs: ForecastInputs, 
   };
   const payments: CashVatPayment[] = [];
   const notes: string[] = [];
+  // Betalingen aan de Belastingdienst die al in het beginsaldo zitten. Een
+  // handmatige mutatie die de bank nog niet leverde, zit niet in het
+  // automatische saldo: telde die toch, dan ging de btw er nergens af en kwam
+  // het saldo te hoog uit. Een zelf ingevuld saldo is van nu: daar zit elke
+  // betaling in.
+  const taxPaid = cash.tax_payments.filter((payment) => !effective.start_auto || payment.in_balance);
   if (!effective.kor) {
     const type: 'month' | 'quarter' = effective.vat_frequency === 'monthly' ? 'month' : 'quarter';
     for (let t = 0; t < count; t += 1) {
@@ -1636,7 +1652,7 @@ export function computeCashflow(result: ForecastResult, inputs: ForecastInputs, 
       // de Belastingdienst: dan is het (meestal) deze btw, en die zit al in het
       // banksaldo. Ook als de aangifte in ResoFly nog niet op betaald staat:
       // die gaat pas op betaald als de bankregel geboekt is.
-      if (t === 0 && cash.tax_payments.some((payment) => payment.date > `${lastMonth}-31`)) {
+      if (t === 0 && taxPaid.some((payment) => payment.date > `${lastMonth}-31`)) {
         notes.push(`De btw over ${label} staat er niet in: na afloop van dat tijdvak ging er al geld naar de Belastingdienst, en dat zit in je banksaldo.`);
         continue;
       }

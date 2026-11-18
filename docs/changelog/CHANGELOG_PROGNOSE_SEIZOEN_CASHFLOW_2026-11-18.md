@@ -105,7 +105,11 @@ de twaalf samen precies twaalf maanden zijn.
   betaald. Ging er na afloop van het tijdvak al geld naar de Belastingdienst
   (herkend zoals op de Bankpagina: de inningsrekening of "Belastingdienst" in de
   naam), dan ook: dat zit al in het banksaldo, en twee keer aftrekken zou een tekort
-  voorspellen dat er niet is. Met de KOR geen btw.
+  voorspellen dat er niet is. Maar alleen een betaling die echt in dat banksaldo zit:
+  een bankregel, of op een rekening uit de boekhouding een geboekte mutatie. Een
+  handmatige mutatie die de bank nog niet leverde, zit er niet in; dan gaat de btw er
+  nog wel af. Vul je je banksaldo zelf in, dan telt elke betaling. Met de KOR geen
+  btw.
 - **Geld erbij en eraf** in hun maanden.
 
 De btw per maand komt uit je facturen, inkoopfacturen en boekhouding, het hoogste
@@ -149,7 +153,9 @@ Dezelfde vier handelingen, uitgebreid:
   `ledger_vat_in_cents` en `ledger_depreciation_cents`; en de nieuwe functie
   `forecast_cash_position(organisatie)`. Geen tabellen of kolommen: de nieuwe
   aannames staan in `forecasts.assumptions`. Veilig om opnieuw te draaien.
-  Exportschema 20261118171500.
+- Migratie `20261118180000_prognose_btw_betaling_in_saldo.sql` (na de eerste
+  uitrol, zie hieronder): `forecast_cash_position` opnieuw, met per betaling aan de
+  Belastingdienst `in_balance`. Exportschema 20261118180000.
 - Rekenregels in `supabase/functions/_shared/forecast.ts` (puur, voor de app en
   Gerrie): `computeSeasonality`, `seasonFactor`, `parseCashPosition`,
   `cashflowEffective`, `computeCashflow`, `summarizeCashflow`; nieuwe velden met een
@@ -196,8 +202,42 @@ Dezelfde vier handelingen, uitgebreid:
 - De controles uit de rooktest van staging, lokaal: het boekhouder-hek is dicht, anon
   heeft geen rechten in public en komt het schema niet in.
 
+Na de verbetering van de btw-betalingen (hieronder) opnieuw: typecheck, `npm test`
+(2057 tests, 0 fout; één nieuwe), `deno check`, de stromentest `prognose` (26
+stappen, 0 fout) en `npm run test:database` (alle drie de bestanden). De migratie
+draaide twee keer achter elkaar. De databasetest heeft zeven nieuwe controles en één
+aangepaste, en faalt tegen de functie van 20261118171500; de nieuwe unittest faalt
+zonder de verbetering in de rekenkern.
+
+## Verbeterd na de eerste uitrol: een btw-betaling telt alleen als hij in het saldo zit
+
+Bij een laatste controle bleek een gat. De cashflow slaat de btw van deze maand over
+als er na afloop van het tijdvak al geld naar de Belastingdienst ging. Dat gold ook
+voor een handmatige mutatie, maar die zit niet altijd in het banksaldo: op een
+rekening met afschrift telt het saldo alleen bankregels, op een rekening uit de
+boekhouding alleen wat geboekt is. Wie zijn btw-betaling met de hand invoerde
+voordat de bank hem leverde, kreeg dan een saldo zonder die betaling én een
+cashflow zonder die btw. De betaling verdween helemaal, en het saldo kwam te hoog
+uit.
+
+Nu geeft `forecast_cash_position` per betaling mee of hij in het saldo zit
+(`in_balance`):
+
+- rekening met afschrift: alleen een bankregel. Levert de bank de handmatige
+  mutatie, dan voegt de matcher die samen; zo'n samengevoegde bankregel telt nu ook
+  mee (eerder telde hij niet);
+- rekening uit de boekhouding: een bankregel, of een geboekte mutatie;
+- een rekening zonder bekend saldo of een inactieve rekening: ja. Dat geld telt in het
+  saldo niet mee, dus de betaling hoeft er ook niet nog eens af.
+
+De cashflow slaat de btw alleen nog over bij zo'n betaling, of als je je banksaldo
+zelf invulde: dat saldo is van nu, met alles wat al betaald is.
+
 ## Niet in deze stap
 
+- **Een cashflow voor een prognose die later begint**: de cashflow rekent vanaf
+  vandaag. Begint de prognose pas over een paar maanden, dan zegt de cashflow dat, en
+  dat je hem ziet als de prognose deze maand begint.
 - **Inkomsten- en vennootschapsbelasting in de cashflow**: die zet je nu als geld eraf.
   ResoFly heeft sinds vandaag een raming van de inkomstenbelasting; die zou de
   cashflow later kunnen gebruiken.

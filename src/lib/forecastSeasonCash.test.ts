@@ -312,16 +312,31 @@ test('cashflow: zonder betaalgedrag de betaaltermijn, en een aangifte die er al 
 
 test('cashflow: al betaalde btw gaat er niet nog eens af', () => {
   const monthly: CashPosition = { ...POSITION, vat_frequency: 'monthly', vat_returns: [] };
-  const paidAtBank = computeCashflow(computeForecast({}, STEADY, TODAY), STEADY, { ...monthly, tax_payments: [{ date: '2026-11-10', cents: 126000 }] }, TODAY);
+  const paidAtBank = computeCashflow(computeForecast({}, STEADY, TODAY), STEADY, { ...monthly, tax_payments: [{ date: '2026-11-10', cents: 126000, in_balance: true }] }, TODAY);
   assert.equal(paidAtBank.months[0].vat_cents, 0);
   assert.ok(paidAtBank.notes.some((note) => /btw over oktober 2026 staat er niet in/.test(note)));
   // Een betaling vóór het eind van het tijdvak is niet voor dit tijdvak.
-  const earlier = computeCashflow(computeForecast({}, STEADY, TODAY), STEADY, { ...monthly, tax_payments: [{ date: '2026-10-28', cents: 50000 }] }, TODAY);
+  const earlier = computeCashflow(computeForecast({}, STEADY, TODAY), STEADY, { ...monthly, tax_payments: [{ date: '2026-10-28', cents: 50000, in_balance: true }] }, TODAY);
   assert.equal(earlier.months[0].vat_cents, 126000);
   const paidReturn = computeCashflow(computeForecast({}, STEADY, TODAY), STEADY, {
     ...monthly, vat_returns: [{ period_type: 'month', year: 2026, index: 10, status: 'paid', saldo_cents: 126000 }],
   }, TODAY);
   assert.equal(paidReturn.months[0].vat_cents, 0);
+});
+
+test('cashflow: een handmatige btw-betaling die nog niet in het banksaldo zit, gaat er nog af', () => {
+  const monthly: CashPosition = { ...POSITION, vat_frequency: 'monthly', vat_returns: [] };
+  const manual: CashPosition = { ...monthly, tax_payments: [{ date: '2026-11-10', cents: 126000, in_balance: false }] };
+  // Het saldo komt van het afschrift en de handmatige mutatie zit er niet in:
+  // sloeg de cashflow de btw over oktober over, dan ging hij nergens af.
+  const auto = computeCashflow(computeForecast({}, STEADY, TODAY), STEADY, manual, TODAY);
+  assert.equal(auto.months[0].vat_cents, 126000);
+  assert.ok(!auto.notes.some((note) => /btw over oktober 2026 staat er niet in/.test(note)));
+  // Een zelf ingevuld saldo is van nu: daar zit de betaling al in.
+  const typed = computeCashflow(computeForecast({ cash_start: 40000 }, STEADY, TODAY), STEADY, manual, TODAY);
+  assert.equal(typed.effective.start_auto, false);
+  assert.equal(typed.months[0].vat_cents, 0);
+  assert.ok(typed.notes.some((note) => /btw over oktober 2026 staat er niet in/.test(note)));
 });
 
 test('cashflow: met de KOR geen btw, en de btw-percentages automatisch 0', () => {
@@ -415,7 +430,7 @@ test('cashposition lezen: tekst wordt een getal, rommel valt weg, een onbekend s
     payables: [],
     vat_frequency: 'monthly', kor: false,
     vat_returns: [{ period_type: 'quarter', year: 2026, index: 3, status: 'filed', saldo_cents: '48300' }, { period_type: 'jaar' }],
-    tax_payments: [{ date: '2026-11-10', cents: 100 }, { date: 'nooit', cents: 5 }],
+    tax_payments: [{ date: '2026-11-10', cents: 100 }, { date: '2026-11-12', cents: 200, in_balance: false }, { date: 'nooit', cents: 5 }],
     payment_terms_days: 400,
     collection: { paid_count: 7, days: '23.5' },
   }, TODAY);
@@ -429,7 +444,8 @@ test('cashposition lezen: tekst wordt een getal, rommel valt weg, een onbekend s
   assert.equal(parsed.vat_frequency, 'monthly');
   assert.equal(parsed.vat_returns.length, 1);
   assert.equal(parsed.vat_returns[0].saldo_cents, 48300);
-  assert.deepEqual(parsed.tax_payments, [{ date: '2026-11-10', cents: 100 }]);
+  // Zonder vlag (de functie van vóór 20261118180000): telt als in het saldo, zoals toen.
+  assert.deepEqual(parsed.tax_payments, [{ date: '2026-11-10', cents: 100, in_balance: true }, { date: '2026-11-12', cents: 200, in_balance: false }]);
   assert.equal(parsed.payment_terms_days, 120);
   assert.equal(parsed.collection_days, 23.5);
   assert.equal(parseCashPosition(null, TODAY).available, false);

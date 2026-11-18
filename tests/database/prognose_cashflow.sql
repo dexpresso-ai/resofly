@@ -293,8 +293,8 @@ select pg_temp.gelijk((select r - 'period_end' from jsonb_array_elements(:'pos':
                      (select status from public.vat_returns where id = :'aangifte'), 'saldo_cents', 48300),
   'btw: de aangifte van het vorige kwartaal, met status en saldo');
 select pg_temp.gelijk(:'pos'::jsonb -> 'tax_payments',
-  jsonb_build_array(jsonb_build_object('date', to_char(:'vandaag'::date - 7, 'YYYY-MM-DD'), 'cents', 45600)),
-  'btw: de betaling aan de Belastingdienst (herkend aan de inningsrekening)');
+  jsonb_build_array(jsonb_build_object('date', to_char(:'vandaag'::date - 7, 'YYYY-MM-DD'), 'cents', 45600, 'in_balance', true)),
+  'btw: de betaling aan de Belastingdienst (herkend aan de inningsrekening), en die zit in het saldo');
 select pg_temp.gelijk(:'pos'::jsonb ->> 'vat_frequency', 'quarterly', 'btw: per kwartaal');
 select pg_temp.gelijk((:'pos'::jsonb ->> 'kor')::boolean, false, 'btw: geen KOR');
 select pg_temp.gelijk((:'pos'::jsonb ->> 'payment_terms_days')::int, 30, 'betaaltermijn: "binnen 30 dagen" is 30');
@@ -325,7 +325,69 @@ select pg_temp.gelijk((:'maand_nu'::jsonb ->> 'vat_in_cents')::bigint, 10500::bi
 select pg_temp.gelijk((:'maand_nu'::jsonb ->> 'ledger_vat_out_cents')::bigint, 21000::bigint, 'historie: btw op R1 in de boekhouding');
 select pg_temp.gelijk((:'maand_nu'::jsonb ->> 'ledger_depreciation_cents')::bigint, 0::bigint, 'historie: geen afschrijving deze maand');
 
--- ── 7. Wie het mag zien ────────────────────────────────────────────────────
+-- ── 7. Zit een betaling aan de Belastingdienst al in het banksaldo? ─────────
+-- Alleen dan slaat de cashflow de btw van dat tijdvak over. Een handmatige
+-- mutatie zit er op een rekening met afschrift niet in (het saldo telt alleen
+-- bankregels), op een rekening uit de boekhouding pas als hij geboekt is. Een
+-- betaling vanaf een rekening zonder bekend saldo telt wel: dat geld zit niet
+-- in het saldo, dus de betaling hoeft er ook niet nog eens af.
+
+-- A (afschrift): handmatig, nog niet door de bank geleverd.
+insert into public.bank_transactions (organization_id, bank_account_id, dedup_key, booking_date, amount_cents,
+                                      counterparty_name, description, status, is_manual) values
+  (:'org', :'bank_a', 'a-btw-handmatig', :'vandaag'::date - 1, -11100, 'Belastingdienst', 'Btw met de hand', 'unmatched', true);
+-- B (boekhouding): handmatig en nog niet geboekt.
+insert into public.bank_transactions (organization_id, bank_account_id, dedup_key, booking_date, amount_cents,
+                                      counterparty_name, description, status, is_manual) values
+  (:'org', :'bank_b', 'b-btw-open', :'vandaag'::date - 2, -22200, 'Belastingdienst', 'Btw met de hand', 'unmatched', true);
+-- C (geen bekend saldo): een bankregel.
+insert into public.bank_transactions (organization_id, bank_account_id, dedup_key, booking_date, amount_cents,
+                                      counterparty_name, counterparty_iban, description, status) values
+  (:'org', :'bank_c', 'c-btw', :'vandaag'::date - 6, -33300, 'Belastingdienst', 'NL86INGB0002445588', 'Omzetbelasting', 'unmatched');
+-- B (boekhouding): handmatig én geboekt op 1530, vandaag (het vorige kwartaal
+-- is afgesloten). Ander bedrag dan de aangifte: die blijft afgesloten.
+select pg_temp.als(:'eigenaar');
+set local role authenticated;
+select (public.create_manual_bank_transaction(:'org', :'bank_b', :'vandaag', -7700, 'Belastingdienst', 'NL86INGB0002445588', 'Btw')).id as btw_geboekt \gset
+select (public.book_bank_transaction(:'org', :'btw_geboekt', p_allocations => jsonb_build_array(
+  jsonb_build_object('kind', 'ledger', 'account_code', '1530', 'amount_cents', 7700)))).id is not null as ok \gset
+select public.forecast_cash_position(:'org') as pos2 \gset
+reset role;
+select pg_temp.beheer();
+select pg_temp.gelijk((select status from public.bank_transactions where id = :'btw_geboekt'), 'booked', 'btw-betaling: de mutatie op B is geboekt');
+select pg_temp.gelijk((select status from public.vat_returns where id = :'aangifte'), 'finalized', 'btw-betaling: de aangifte blijft afgesloten');
+
+select pg_temp.gelijk(:'pos2'::jsonb -> 'tax_payments',
+  jsonb_build_array(
+    jsonb_build_object('date', to_char(:'vandaag'::date - 7, 'YYYY-MM-DD'), 'cents', 45600, 'in_balance', true),
+    jsonb_build_object('date', to_char(:'vandaag'::date - 6, 'YYYY-MM-DD'), 'cents', 33300, 'in_balance', true),
+    jsonb_build_object('date', to_char(:'vandaag'::date - 2, 'YYYY-MM-DD'), 'cents', 22200, 'in_balance', false),
+    jsonb_build_object('date', to_char(:'vandaag'::date - 1, 'YYYY-MM-DD'), 'cents', 11100, 'in_balance', false),
+    jsonb_build_object('date', to_char(:'vandaag'::date, 'YYYY-MM-DD'), 'cents', 7700, 'in_balance', true)),
+  'btw-betaling: bankregel op A wel, op C (onbekend saldo) wel, handmatig open op B en A niet, geboekt op B wel');
+select pg_temp.gelijk((select b ->> 'balance_cents' from jsonb_array_elements(:'pos2'::jsonb -> 'bank') b where b ->> 'name' = 'Zakelijke rekening'),
+  '784400', 'btw-betaling: de handmatige mutatie op A verandert het saldo van A niet');
+select pg_temp.gelijk((select b ->> 'balance_cents' from jsonb_array_elements(:'pos2'::jsonb -> 'bank') b where b ->> 'name' = 'Spaarrekening'),
+  '499300', 'btw-betaling: B is € 77 lager door de geboekte betaling, de open mutatie telt niet');
+
+-- Levert de bank de mutatie op A, dan voegt de matcher hem samen: de bankregel
+-- gaat op 'merged'. Die bankregel zit in het saldo, en telt dus als betaald.
+insert into public.bank_transactions (organization_id, bank_account_id, dedup_key, booking_date, amount_cents,
+                                      counterparty_name, counterparty_iban, description, status, merged_into_id) values
+  (:'org', :'bank_a', 'a-btw-bank', :'vandaag'::date - 1, -11100, 'Belastingdienst', 'NL86INGB0002445588', 'Omzetbelasting', 'merged',
+   (select id from public.bank_transactions where organization_id = :'org' and dedup_key = 'a-btw-handmatig'));
+select pg_temp.als(:'eigenaar');
+set local role authenticated;
+select public.forecast_cash_position(:'org') as pos3 \gset
+reset role;
+select pg_temp.beheer();
+select pg_temp.gelijk((select count(*) from jsonb_array_elements(:'pos3'::jsonb -> 'tax_payments') p
+                        where p ->> 'date' = to_char(:'vandaag'::date - 1, 'YYYY-MM-DD') and (p ->> 'in_balance')::boolean),
+  1::bigint, 'btw-betaling: de samengevoegde bankregel op A zit in het saldo');
+select pg_temp.gelijk((select b ->> 'balance_cents' from jsonb_array_elements(:'pos3'::jsonb -> 'bank') b where b ->> 'name' = 'Zakelijke rekening'),
+  '773300', 'btw-betaling: en het saldo van A telt hem nu mee (€ 7.844 − € 111)');
+
+-- ── 8. Wie het mag zien ────────────────────────────────────────────────────
 
 select pg_temp.als(:'lezer');
 set local role authenticated;
