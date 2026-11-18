@@ -294,8 +294,15 @@ const PAGES = {
   },
   'inkoop-vof-prive': {
     page: 'purchase-invoices', mock: { ledger: true, vof: true },
-    prepare: '.bk-cell-action button:has-text("Privé betaald")',
+    prepare: 'tr:has-text("VD-1077") .bk-cell-action button:has-text("Privé betaald")',
     mustShow: [{ selector: '.modal .select-trigger', text: 'kies de vennoot', label: 'de keuze van de vennoot' }],
+  },
+  // Een declaratie van een teamlid dat geen vennoot is: die betaal je terug via
+  // de bank, en dat zegt het venster erbij.
+  'inkoop-vof-declaratie': {
+    page: 'purchase-invoices', mock: { ledger: true, vof: true },
+    prepare: 'tr:has-text("BON-0412") .bk-cell-action button:has-text("Privé betaald")',
+    mustShow: [{ selector: '.modal .bk-note', text: 'koppel de betaling dan op Bank', label: 'de verwijzing naar Bank bij een declaratie' }],
   },
   // Vooruitbetaalde kosten (2026-11-11): de lijst met de balk "klaar om te
   // boeken", een lopende post met zijn schema, en het formulier voor een

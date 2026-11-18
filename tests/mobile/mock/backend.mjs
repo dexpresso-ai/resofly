@@ -236,18 +236,23 @@ const VOF_HOURS = [
   { partner_id: VOF_PARTNERS[1].id, user_id: seed.ids.USER2, direct_minutes: 30_000, indirect_minutes: 4_200, first_entry_date: `${VOF_YEAR}-01-06` },
   { partner_id: VOF_PARTNERS[2].id, user_id: null, direct_minutes: 0, indirect_minutes: 0, first_entry_date: null },
 ];
-// Twee geboekte inkoopfacturen: een die nog openstaat (met de knop "Privé
-// betaald") en een die via de bank is betaald.
-const vofPurchase = (n, number, cents, paymentStatus) => ({
+// Drie geboekte inkoopfacturen: een die nog openstaat (met de knop "Privé
+// betaald"), een die via de bank is betaald, en een open declaratie van een
+// teamlid dat geen vennoot is (Daan): het venster wijst dan op de bank.
+const vofPurchase = (n, number, cents, paymentStatus, extractionMeta = null) => ({
   id: `9a77e000-0000-4000-8000-0000000000a${n}`, organization_id: seed.ids.ORG, created_by: seed.ids.USER,
   supplier_id: seed.suppliers[0]?.id ?? null, supplier_invoice_number: number, internal_number: `INK-${VOF_YEAR}-00${n}`,
   date: `${VOF_YEAR}-10-1${n}`, due_date: `${VOF_YEAR}-10-2${n}`, lines: [], subtotal_cents: cents, vat_cents: Math.round(cents * 0.21),
   total_cents: cents + Math.round(cents * 0.21), currency: 'EUR', status: 'booked', payment_status: paymentStatus,
   paid_at: paymentStatus === 'paid' ? `${VOF_YEAR}-10-20T00:00:00Z` : null, project_id: null,
-  journal_entry_id: `9a77e000-0000-4000-8000-0000000000b${n}`, notes: null, source: 'manual', extraction_meta: null,
+  journal_entry_id: `9a77e000-0000-4000-8000-0000000000b${n}`, notes: null, source: extractionMeta ? 'ai_scan' : 'manual', extraction_meta: extractionMeta,
   created_at: `${VOF_YEAR}-10-10T09:00:00Z`, updated_at: `${VOF_YEAR}-10-10T09:00:00Z`,
 });
-const VOF_PURCHASES = [vofPurchase(1, 'VD-1077', 10000, 'unpaid'), vofPurchase(2, 'VD-1001', 20000, 'paid')];
+const VOF_PURCHASES = [
+  vofPurchase(1, 'VD-1077', 10000, 'unpaid'),
+  vofPurchase(2, 'VD-1001', 20000, 'paid'),
+  vofPurchase(3, 'BON-0412', 3415, 'unpaid', { channel: 'declaration', inbox_id: '9a77e000-0000-4000-8000-0000000000c3', submitted_by: seed.ids.USER3 }),
+];
 const VOF_TABLES = { company_settings: [VOF_SETTINGS], partnership_partners: VOF_PARTNERS, ledger_accounts: VOF_LEDGER_ACCOUNTS, purchase_invoices: VOF_PURCHASES };
 function vofRpc(fn, body) {
   switch (fn) {

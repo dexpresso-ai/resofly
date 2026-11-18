@@ -26,7 +26,7 @@ import {
   inboxReasonLabel, splitInboxItems,
 } from '../lib/invoiceInbox';
 import { todayIso } from '../lib/dates';
-import { canFillIn, declarationActionsFor, inboxChannelLabel, submitterShortName } from '../lib/receipts';
+import { canFillIn, declarationActionsFor, inboxChannelLabel, receiptPayer, submitterShortName } from '../lib/receipts';
 import { ReceiptCapture } from '../components/ReceiptCapture';
 import { XafImportPanel } from './XafImport';
 import { PrepaidForm } from './Prepaid';
@@ -306,6 +306,9 @@ function PrivatePaymentModal({ invoice, organizationId, legalForm, onClose, onSa
 }) {
   const isPartnershipForm = ['vof', 'maatschap', 'cv'].includes(legalForm);
   const [partners, setPartners] = useState<PartnershipPartner[]>([]);
+  // Pas na het laden van de vennoten weet je of de indiener er een is; zonder
+  // deze vlag stond de verwijzing naar Bank even in beeld bij een vennoot.
+  const [partnersLoaded, setPartnersLoaded] = useState(!isPartnershipForm);
   const [partnerId, setPartnerId] = useState('');
   const [date, setDate] = useState(invoice.date || todayIso());
   const [busy, setBusy] = useState(false);
@@ -314,12 +317,20 @@ function PrivatePaymentModal({ invoice, organizationId, legalForm, onClose, onSa
     if (!isPartnershipForm) return;
     let cancelled = false;
     listPartnershipPartners(organizationId)
-      .then(rows => { if (!cancelled) setPartners(rows.filter(p => p.is_active)); })
-      .catch(() => { /* zonder vennoten: de database zegt het bij vastleggen */ });
+      .then(rows => {
+        if (cancelled) return;
+        const active = rows.filter(p => p.is_active);
+        setPartners(active);
+        setPartnersLoaded(true);
+        const own = receiptPayer(active, invoice.extraction_meta).partnerId;
+        if (own) setPartnerId(current => current || own);
+      })
+      .catch(() => { if (!cancelled) setPartnersLoaded(true); /* zonder vennoten: de database zegt het bij vastleggen */ });
     return () => { cancelled = true; };
-  }, [organizationId, isPartnershipForm]);
+  }, [organizationId, isPartnershipForm, invoice.extraction_meta]);
   const needsPartner = partners.length > 0;
   const chosen = partners.find(p => p.id === partnerId) ?? null;
+  const { declarationByNonPartner } = receiptPayer(partners, invoice.extraction_meta);
 
   async function save() {
     if (needsPartner && !partnerId) { setError('Kies de vennoot die de factuur betaalde.'); return; }
@@ -343,10 +354,17 @@ function PrivatePaymentModal({ invoice, organizationId, legalForm, onClose, onSa
       </div>}>
       <p className="bk-muted">
         {needsPartner
-          ? `Betaalde een vennoot deze factuur met zijn eigen geld? Dan komt wat openstaat op de privé-stortingen van ${chosen ? chosen.name : 'die vennoot'}, en staat de factuur op betaald.`
+          ? `Betaalde een vennoot deze factuur met eigen geld? Dan komt wat openstaat op de privé-stortingen van ${chosen ? chosen.name : 'die vennoot'}, en staat de factuur op betaald.`
           : 'Betaalde je deze factuur met je eigen geld? Dan komt wat openstaat op 0560 Privé-stortingen, en staat de factuur op betaald.'}
         {' '}De btw blijft gewoon aftrekbaar. Vergist? Boek de privébetaling tegen bij Grootboek → Journaal.
       </p>
+      {partnersLoaded && declarationByNonPartner && (
+        <div className="bk-note">
+          {isPartnershipForm ? 'Dit is een declaratie van een teamlid dat geen vennoot is.' : 'Dit is een declaratie van een teamlid.'}
+          {' '}Die betaal je normaal terug via de bank: koppel de betaling dan op Bank.
+          {' '}{isPartnershipForm ? 'Leg hier alleen vast dat een vennoot hem met eigen geld terugbetaalde.' : 'Leg hier alleen vast dat je hem met je eigen geld terugbetaalde.'}
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
       {needsPartner && (
         <Field label="Betaald door">

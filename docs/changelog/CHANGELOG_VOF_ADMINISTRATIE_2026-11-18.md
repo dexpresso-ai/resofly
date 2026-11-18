@@ -7,7 +7,9 @@ eenmanszaak) bruikbaar is. Alles wat niet klopte of ontbrak, is meteen opgelost.
 Dit bouwt voort op `CHANGELOG_EENMANSZAAK_VOF_CONTROLE_2026-11-04.md`. Het
 liep tegelijk met de controle van de eenmanszaak
 (`CHANGELOG_EENMANSZAAK_CONTROLE_2026-11-18.md`); hoe die twee zijn
-samengevoegd, staat onder "Samen met de controle van de eenmanszaak".
+samengevoegd, staat onder "Samen met de controle van de eenmanszaak". Ook
+bonnen en declaraties kwamen die dag op staging; zie "Samen met bonnen en
+declaraties".
 
 > **Status:**
 > - **Database:** één migratie, `20261118130000_vof_vennoten_en_prive`.
@@ -110,7 +112,8 @@ Terwijl deze controle liep, kwam de controle van de eenmanszaak op staging, met
 twee migraties: `20261118090000` en `20261118100000`. Die vervangen ook
 `close_fiscal_year` en `owners_equity_overview`. Daarom:
 
-- **Volgorde:** deze migratie heet `20261118130000` en komt dus daarna. Een
+- **Volgorde:** deze migratie heet `20261118130000` en komt dus daarna, ook na
+  `20261118120000` (bonnen en declaraties), die er nog later bij kwam. Een
   oudere versie weigert `supabase db push`.
 - **De twee functies:** ze zijn opnieuw opgebouwd vanaf de versie op staging,
   met alleen de wijziging van deze migratie erbovenop. Dat is met een diff
@@ -123,6 +126,26 @@ twee migraties: `20261118090000` en `20261118100000`. Die vervangen ook
 - **De resultaatrekening:** die volgt sinds de eenmanszaak de rechtsvorm. Na
   de overstap van een vof naar een eenmanszaak gaat het resultaat dus naar
   0500. `tests/database/vennoten_jaarafsluiting.sql` toetst dat nu.
+
+## Samen met bonnen en declaraties
+
+Dezelfde dag kwamen bonnen fotograferen en declaraties op staging
+(`20261118120000`). Een vennoot die met zijn eigen pas tankt, fotografeert de
+bon, boekt het concept en kiest daarna **Privé betaald**. Daarom:
+
+- **De vennoot staat al gekozen.** Heeft een vennoot de bon gefotografeerd met
+  zijn eigen teamlid, dan kiest het venster Privé betaald hem vooraf.
+- **De declaratie van een werknemer.** Is de bon een declaratie van iemand die
+  geen vennoot is, dan zegt het venster dat je die terugbetaalt via de bank.
+  Anders kwam de bon van een werknemer makkelijk op het privé van een vennoot,
+  terwijl de werknemer zijn geld nog moest krijgen. Bij een eenmanszaak geldt
+  hetzelfde.
+- **De migratie van de bonnen** raakt geen functie of constraint van deze
+  migratie, alleen de inbox, de meldingen en hun controles. Beide migraties
+  draaien een tweede keer zonder fout.
+
+De regel staat in `receiptPayer` (`src/lib/receipts.ts`), met een test in
+`receipts.test.ts`. De schermtest heeft de pagina `inkoop-vof-declaratie`.
 
 ## Gerrie, API en MCP
 
@@ -155,28 +178,35 @@ twee migraties: `20261118090000` en `20261118100000`. Die vervangen ook
 
 ## Verificatie
 
-**Lokaal, op de stand samengevoegd met staging (met de eenmanszaak):**
+**Lokaal, op de stand samengevoegd met staging (met de eenmanszaak én de
+bonnen):**
 
 - **Database:**
-  - `supabase db reset`: alle 282 migraties op een lege database
+  - `supabase db reset`: alle 283 migraties op een lege database
     (Postgres 17.11.0.018);
-  - de nieuwe migratie draait ook een tweede keer;
+  - deze migratie en die van de bonnen draaien ook een tweede keer;
   - `npm run test:database`: 69 en 61 controles geslaagd;
+  - geen enkele functie in `public` is uit te voeren door anon;
 - **Code:**
   - typecheck ✓;
-  - `npm test`: 1950/1950. Hiervan zijn 5 nieuw: de afsluitkaart, de uren via
-    Gerrie, privé betaald en een vennoot vastleggen via Gerrie, en de vennoten
-    in de auditfile-import;
-  - `deno check` op de registry van de handelingen en op `reportRecords.ts` ✓.
-    De volledige lijst uit CI kon hier niet, omdat esm.sh en deno.land in deze
-    omgeving dicht staan;
+  - `npm test`: 1977/1977. Hiervan zijn 6 nieuw: de afsluitkaart, de uren via
+    Gerrie, privé betaald en een vennoot vastleggen via Gerrie, de vennoten
+    in de auditfile-import, en wie een bon privé betaalde (`receiptPayer`);
+  - `deno check` op de handelingen (`bookkeeping`, `business`, `admin`,
+    `types`), `reportRecords.ts` en `invoiceInboxRules.ts` ✓. De volledige
+    lijst uit CI kon hier niet, omdat esm.sh en deno.land in deze omgeving
+    dicht staan;
 - **Schermen:**
   - `npm run test:loading`, `npm run test:inrichten` en
-    `npm run test:terugknop` (13) ✓;
-  - mobiele lay-outtest, donker en licht: 716 metingen, 0 problemen, vóór én
-    na het samenvoegen. Er zijn nieuwe pagina's bij: Vennoten, een vennoot
-    bewerken, de beginbalans van een vof, en Inkoopfacturen van een vof met het
-    venster Privé betaald.
+    `npm run test:terugknop` (15) ✓;
+  - mobiele lay-outtest, donker en licht. Vóór de bonnen: alle pagina's,
+    716 metingen, 0 problemen. Na de bonnen: de pagina's van de vof en van de
+    bonnen, 78 metingen. Eén meting (bon-concept) viel weg omdat de app
+    tijdens de run herlaadde na een wijziging. Opnieuw gedraaid op de
+    definitieve code: 36 metingen, 0 problemen;
+  - nieuwe pagina's in die test: Vennoten, een vennoot bewerken, de
+    beginbalans van een vof, Inkoopfacturen van een vof met het venster Privé
+    betaald, en een declaratie van een werknemer.
 
 ## Bewust open
 
