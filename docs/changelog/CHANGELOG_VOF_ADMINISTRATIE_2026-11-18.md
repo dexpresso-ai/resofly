@@ -249,8 +249,10 @@ lokaal op een lege database, twee keer.
 - `deno check` op de volledige lijst van edge functions is schoon, ook met
   esm.sh. Dat kon lokaal niet;
 - typecheck en unit tests zijn geslaagd;
-- de schermtests (mobiel, laden, inrichten en terugknop) liepen nog toen dit
-  werd geschreven.
+- de schermtests zijn geslaagd: de mobiele lay-outtest in licht en donker,
+  laden per module, de inrichtingsstappen en de terugknop.
+
+Alles groen.
 
 Voor productie: alle migraties in volgorde, ook deze. Ze zijn veilig om opnieuw
 te draaien.
