@@ -27,6 +27,23 @@ export const ai = {
   webhookMeteen: false,
   /** Wat de webhook-bezorging opleverde, voor de wedloop-test. */
   bezorgd: [],
+  /** Elke vraag om een bon of factuur uit te lezen (tool extract_invoice): { model, tekst, beelden, documenten } */
+  bonnen: [],
+  /** Wat Claude de volgende keer uit een bon leest; daarna weer BON. */
+  bon: null,
+};
+
+/** Een parkeerbon zoals Claude hem uitleest (tool extract_invoice, zie _shared/claudeInvoice.ts). */
+export const BON = {
+  supplier: { name: 'Q-Park Utrecht', vat_number: null, kvk_number: null, iban: null, email: null, phone: null, address_line1: 'Stationsplein 1', postal_code: '3511 ED', city: 'Utrecht', country: 'NL' },
+  supplier_invoice_number: 'T-48213',
+  invoice_date: '2026-11-16',
+  due_date: null,
+  currency: 'EUR',
+  lines: [{ description: 'Parkeren', amount_excl_vat: 12.4, vat_rate: 21, account_code: null, vat_code: 'HOOG' }],
+  totals: { subtotal_excl_vat: 12.4, vat_amount: 2.6, total_incl_vat: 15 },
+  confidence: 'high',
+  notes: 'Betaald met pin',
 };
 
 /** Een gesprek van twee sprekers dat eindigt op `einde` seconden. */
@@ -115,6 +132,25 @@ registreerDienst('https://api.anthropic.com', async (request, url) => {
   const user = (body.messages ?? []).map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
   const poort = poortwachterAntwoord(body, user);
   if (poort) return poort;
+  // Een bon of factuur uitlezen: het antwoord is de tool extract_invoice,
+  // zoals het echte model hem aanroept.
+  if ((body.tools ?? []).some((tool) => tool.name === 'extract_invoice')) {
+    const inhoud = (body.messages ?? []).flatMap((m) => (Array.isArray(m.content) ? m.content : []));
+    ai.bonnen.push({
+      model: body.model,
+      tekst: inhoud.filter((b) => b.type === 'text').map((b) => b.text).join('\n'),
+      beelden: inhoud.filter((b) => b.type === 'image').length,
+      documenten: inhoud.filter((b) => b.type === 'document').length,
+    });
+    const gelezen = ai.bon ?? BON;
+    ai.bon = null;
+    return json(200, {
+      id: `msg_${randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model: body.model,
+      stop_reason: 'tool_use', stop_sequence: null,
+      content: [{ type: 'tool_use', id: `toolu_${randomUUID().replace(/-/g, '')}`, name: 'extract_invoice', input: gelezen }],
+      usage: { input_tokens: 1800, output_tokens: 240, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    });
+  }
   ai.claude.push({ apiKey: request.headers.get('x-api-key'), model: body.model, system: body.system, user });
   return json(200, {
     id: `msg_${randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model: body.model,

@@ -75,6 +75,25 @@ aanvragen beantwoordt hij zoals `nep-ai.mjs`). Getoetst:
 
 Zie `docs/changelog/CHANGELOG_RAPPORTAGES_GERRIE_2026-11-09.md`.
 
+En `bonnen`: een bon fotograferen en declaraties (`invoice-inbox`, action `upload`, `decline` en
+`link`), met een nep-Claude die de bon leest (tool `extract_invoice` in `nep-ai.mjs`) en de
+nep-media-worker die de foto bewaart (`POST /internal/media`). Getoetst:
+- een bon van iemand met Financiën wordt een concept met de foto als bewijsstuk, ook met
+  "direct boeken" aan nooit geboekt, en Claude hoort dat het een bon is;
+- een teamlid zonder Financiën (of met alleen lezen) dient een declaratie in, krijgt alleen zijn
+  eigen bon terug en ziet in `list_my_declarations` alleen zijn eigen declaraties, niet die van
+  een collega, en komt niet in de werklijst, de inkoopfacturen of de leveranciers; de badge telt
+  declaraties die op goedkeuring wachten, eigen bonnen niet;
+- kijker, boekhouder, een vreemde organisatie en anon sturen niets in; afwijzen alleen met
+  Financiën bewerken en met een reden, negeren kan niet, herstellen, goedkeuren is boeken, en
+  wat geboekt is wijs je niet meer af;
+- dezelfde foto twee keer met hetzelfde verzoek-id is één bon, dezelfde foto later nog eens is
+  dubbel, geen foto wordt geweigerd, een opslagstoring laat niets achter;
+- wie nee zei tegen Gerrie: de bon gaat niet langs Claude, en "zelf invullen" hangt hem aan een
+  met de hand gemaakt concept.
+
+Zie `docs/changelog/CHANGELOG_BONNEN_DECLARATIES_2026-11-17.md`.
+
 En `boekingslinks`: de boekingslinks door `meeting-booking` en `meeting-booking-public`.
 Getoetst:
 - lezen met leesrecht op de Agenda, schrijven met schrijfrecht, en niets voor de boekhouder

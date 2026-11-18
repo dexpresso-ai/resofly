@@ -16,7 +16,15 @@
 //
 // Twee aanroepers: mail-inbound (op de achtergrond, direct na ontvangst) en de
 // invoice-inbox edge function (knoppen in het scherm: opnieuw verwerken,
-// klaarzetten met een gekozen leverancier, toch klaarzetten bij een duplicaat).
+// klaarzetten met een gekozen leverancier, toch klaarzetten bij een duplicaat,
+// en sinds 2026-11-17 een bon die in de app is gefotografeerd).
+//
+// Een bon (channel 'receipt' of 'declaration') loopt door dezelfde stappen,
+// met vier verschillen: Gerrie krijgt te horen dat het een bon is, het
+// afzenderadres telt niet voor de leverancier (dat is het teamlid zelf), een
+// "nee" tegen AI van wie de foto maakte wordt gerespecteerd, en er wordt nooit
+// vanzelf geboekt: een bon is altijd eerst een concept, en een declaratie
+// keurt iemand met Financiën goed.
 //
 // Principes:
 // - Niets verdwijnt stil: elke uitkomst is een status met een reden op de rij.
@@ -28,7 +36,7 @@
 // ============================================================
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
-import { HttpError } from './edgeAuth.ts';
+import { getModuleLevel, HttpError } from './edgeAuth.ts';
 import { hasAnthropicKey, SUPPORTED_MIME_TYPES } from './claudeInvoice.ts';
 import { userHasBudget } from './claudeSummary.ts';
 import {
@@ -38,9 +46,10 @@ import {
 } from './invoiceProposal.ts';
 import { looksLikeUblXml } from './ubl.ts';
 import {
-  autoBookEligible, isDocumentAttachment, isXmlFile, looksLikeInvoice, looksLikeInvoiceText, normEmail, normIban,
-  normalizeDocumentMime, normNumber, purgeEligible, retryEligibility, safeFileName, sameInvoice,
-  type InboxAttachmentKind,
+  aiRefusedBy, autoBookEligible, declineAllowed, isDocumentAttachment, isUploadChannel, isXmlFile, looksLikeInvoice,
+  looksLikeInvoiceText, normEmail, normIban, normalizeDocumentMime, normNumber, purgeEligible, receiptTwinWarning,
+  retryEligibility, safeFileName, sameInvoice,
+  type InboxAttachmentKind, type InboxChannel,
 } from './invoiceInboxRules.ts';
 
 // De regels zelf staan in invoiceInboxRules.ts (import-vrij, met node-tests);
@@ -87,6 +96,12 @@ export type InboxStatus =
 export interface InboxRow {
   id: string;
   organization_id: string;
+  /** email = factuuradres; receipt/declaration = in de app gefotografeerd (20261117120000). */
+  channel: InboxChannel;
+  /** Wie de bon instuurde; leeg bij mail. */
+  submitted_by: string | null;
+  /** Waarom een declaratie is afgewezen; de indiener leest dit. */
+  review_note: string | null;
   alias_id: string | null;
   parent_id: string | null;
   dedup_key: string;
@@ -162,7 +177,7 @@ const MAX_DOCUMENTS_PER_MAIL = 5;
 const STALE_PROCESSING_MINUTES = 10;
 
 export const INBOX_COLUMNS =
-  'id,organization_id,alias_id,parent_id,dedup_key,recipient,rfc_message_id,sender_email,sender_name,subject,body_excerpt,body_text,received_at,' +
+  'id,organization_id,channel,submitted_by,review_note,alias_id,parent_id,dedup_key,recipient,rfc_message_id,sender_email,sender_name,subject,body_excerpt,body_text,received_at,' +
   'attachments,status,reason,error_message,method,confidence,warnings,proposal,extraction_meta,supplier_id,supplier_match,supplier_created,' +
   'purchase_invoice_id,duplicate_of_purchase_invoice_id,duplicate_of_inbox_id,auto_booked,attempts,processing_started_at,processed_at,handled_by,handled_at,' +
   'purged_at,updated_at';
@@ -256,6 +271,10 @@ export async function loadInboxSettings(admin: SupabaseClient, organizationId: s
 function normalizeRow(raw: Record<string, unknown>): InboxRow {
   return {
     ...(raw as unknown as InboxRow),
+    // Een rij van vóór 20261117120000 (of een select zonder de kolom) is mail.
+    channel: raw.channel === 'receipt' || raw.channel === 'declaration' ? raw.channel : 'email',
+    submitted_by: typeof raw.submitted_by === 'string' ? raw.submitted_by : null,
+    review_note: typeof raw.review_note === 'string' ? raw.review_note : null,
     attachments: Array.isArray(raw.attachments) ? (raw.attachments as InboxAttachment[]) : [],
     warnings: Array.isArray(raw.warnings) ? (raw.warnings as string[]) : [],
     proposal: (raw.proposal && typeof raw.proposal === 'object') ? (raw.proposal as InvoiceProposal) : null,
@@ -365,7 +384,16 @@ async function runPipeline(admin: SupabaseClient, row: InboxRow, opts: ProcessOp
   const candidates: Array<{ attachment: InboxAttachment; result: ProposalResult }> = [];
   const errors: string[] = [];
   const skipped: Array<{ name: string; why: string }> = [];
-  let aiBlocked: 'ai_disabled' | 'ai_unavailable' | 'budget_exhausted' | null = null;
+  let aiBlocked: 'ai_disabled' | 'ai_declined' | 'ai_unavailable' | 'budget_exhausted' | null = null;
+  // Een bon uit de app is van een mens die "nee" tegen AI kan hebben gezegd;
+  // één keer opzoeken, en alleen als er echt iets naar het model zou gaan.
+  const isReceipt = isUploadChannel(row.channel);
+  let refused: boolean | null = null;
+  const aiRefused = async () => {
+    if (!isReceipt) return false;
+    if (refused === null) refused = await aiRefusedForUser(admin, budgetUserId, organizationId);
+    return refused;
+  };
 
   for (const att of toExtract) {
     const mime = normalizeDocumentMime(att.name, att.mime_type);
@@ -382,9 +410,13 @@ async function runPipeline(admin: SupabaseClient, row: InboxRow, opts: ProcessOp
       } else {
         if (!SUPPORTED_MIME_TYPES.includes(mime)) { skipped.push({ name: att.name, why: 'bestandstype niet ondersteund' }); continue; }
         if (!settings.ai_enabled) { aiBlocked = aiBlocked ?? 'ai_disabled'; continue; }
+        if (await aiRefused()) { aiBlocked = aiBlocked ?? 'ai_declined'; continue; }
         if (!hasAnthropicKey()) { aiBlocked = aiBlocked ?? 'ai_unavailable'; continue; }
         if (!(await userHasBudget(admin, budgetUserId ?? null, organizationId))) { aiBlocked = aiBlocked ?? 'budget_exhausted'; continue; }
-        result = await buildAiProposal(admin, organizationId, { fileName: att.name, mimeType: mime, dataBase64: bytesToBase64(bytes) }, ctx, { usageUserId: budgetUserId });
+        result = await buildAiProposal(admin, organizationId, { fileName: att.name, mimeType: mime, dataBase64: bytesToBase64(bytes) }, ctx, {
+          usageUserId: budgetUserId,
+          documentKind: isReceipt ? 'receipt' : 'invoice',
+        });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -505,7 +537,9 @@ async function applyCandidate(
   };
 
   // 1. Leverancier ─────────────────────────────────────────────────────────────
-  const senderForMatch = await senderEmailForMatching(admin, organizationId, row.sender_email);
+  // Bij een bon uit de app is de "afzender" het teamlid zelf, nooit de winkel.
+  const isReceipt = isUploadChannel(row.channel);
+  const senderForMatch = isReceipt ? null : await senderEmailForMatching(admin, organizationId, row.sender_email);
   let supplier: SupplierRow | null = null;
   let supplierMatch: SupplierMatchKind | 'manual' | 'created' | null = null;
   let supplierCreated = false;
@@ -582,6 +616,10 @@ async function applyCandidate(
   }
   const totals = computePurchaseTotals(lines, fallbackAccountId);
   const date = proposal.date ?? now.slice(0, 10);
+  if (isReceipt) {
+    const twin = receiptTwinWarning(await findReceiptTwin(admin, organizationId, supplier.id, date, totals.total_cents));
+    if (twin) warnings.push(twin);
+  }
   const { data: numberData, error: numberError } = await admin.rpc('next_purchase_invoice_number', {
     p_organization_id: organizationId, p_date: date,
   });
@@ -608,11 +646,14 @@ async function applyCandidate(
     source: result.method === 'ubl' ? 'import' : 'ai_scan',
     extraction_meta: {
       ...(result.extraction_meta ?? {}),
-      channel: 'email',
+      // 'email', of 'receipt'/'declaration' voor een bon uit de app: het
+      // formulier en de lijst tonen er een envelop of een camera bij.
+      channel: row.channel,
       inbox_id: row.id,
       sender_email: row.sender_email,
       subject: row.subject,
       received_at: row.received_at,
+      ...(isReceipt ? { submitted_by: row.submitted_by } : {}),
       warnings,
       confidence: proposal.confidence,
       supplier_match: supplierMatch,
@@ -622,31 +663,23 @@ async function applyCandidate(
   const purchaseInvoiceId = String((created as { id: string }).id);
 
   // Bijlagen als bewijsstuk aan het concept hangen (best effort per bestand).
-  for (const att of (extra.attachments ?? row.attachments)) {
-    if (!att.storage_key) continue;
-    const { error: attError } = await admin.from('attachments').insert({
-      organization_id: organizationId, created_by: budgetUserId,
-      entity_type: 'purchase_invoice', entity_id: purchaseInvoiceId, parent_task_id: null,
-      name: att.name, mime_type: att.mime_type || 'application/octet-stream', size_bytes: att.size_bytes || 0,
-      storage_key: att.storage_key, public_url: attachmentPublicUrl(att.storage_key),
-    });
-    if (attError) {
-      console.warn('invoice-inbox: bijlage koppelen mislukt:', attError.message);
-      warnings.push(`Bijlage ${att.name} kon niet aan het concept worden gekoppeld.`);
-    }
-  }
+  warnings.push(...await attachToInvoice(admin, organizationId, budgetUserId, purchaseInvoiceId, extra.attachments ?? row.attachments));
 
   // 4. Boeken? ─────────────────────────────────────────────────────────────────
   let status: InboxStatus = 'ready';
   let autoBooked = false;
-  // Nooit vanzelf boeken wat bewust ondanks een dubbelmelding is doorgezet, of
-  // wat met de hand is klaargezet: anders konden kosten en voorbelasting dubbel
-  // in het grootboek komen, met een kaart die zei dat er niets geboekt werd.
-  if (settings.auto_book && (opts.allowDuplicate || opts.noAutoBook)) {
+  // Een bon uit de app is altijd eerst een concept: wie hem fotografeerde kijkt
+  // hem na, en een declaratie keurt iemand met Financiën goed. Daarom hier
+  // geen automatisch boeken, en ook geen waarschuwing dat het niet gebeurde.
+  const mayAutoBook = settings.auto_book && !isReceipt;
+  if (mayAutoBook && (opts.allowDuplicate || opts.noAutoBook)) {
+    // Nooit vanzelf boeken wat bewust ondanks een dubbelmelding is doorgezet, of
+    // wat met de hand is klaargezet: anders konden kosten en voorbelasting dubbel
+    // in het grootboek komen, met een kaart die zei dat er niets geboekt werd.
     warnings.push(opts.allowDuplicate
       ? 'Niet automatisch geboekt: dit item is ondanks de dubbelmelding klaargezet. Controleer het en boek het zelf.'
       : 'Niet automatisch geboekt: met de hand klaargezet. Controleer het concept en boek het zelf.');
-  } else if (settings.auto_book) {
+  } else if (mayAutoBook) {
     const eligible = autoBookEligible({ supplierCreated, supplierUnverified: Boolean(supplier.inbox_unverified), supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch, ibanVerified, currency: proposal.currency });
     if (eligible.ok) {
       const { error: bookError } = await admin.rpc('book_purchase_invoice', {
@@ -821,9 +854,14 @@ async function deleteStoredObject(storageKey: string): Promise<void> {
 
 // ── Bouwstenen ──────────────────────────────────────────────────────────────────
 
-/** Wiens AI-tegoed draagt de automatische verwerking? De aanmaker van het adres. */
+/**
+ * Wiens AI-tegoed draagt de verwerking? Wie de knop indrukte; bij een bon uit
+ * de app wie hem fotografeerde (ook als de opruimronde hem later opnieuw
+ * oppakt); bij mail de aanmaker van het adres.
+ */
 async function resolveBudgetUser(admin: SupabaseClient, row: InboxRow, actorUserId: string | null): Promise<string | null> {
   if (actorUserId) return actorUserId;
+  if (row.submitted_by) return row.submitted_by;
   if (!row.alias_id) return null;
   const { data } = await admin.from('organization_inbound_aliases').select('created_by').eq('id', row.alias_id).maybeSingle();
   const createdBy = (data as { created_by?: string | null } | null)?.created_by ?? null;
@@ -841,6 +879,79 @@ async function senderEmailForMatching(admin: SupabaseClient, organizationId: str
   const { data, error } = await admin.rpc('is_own_org_address', { p_organization_id: organizationId, p_email: email });
   if (error) { console.warn('is_own_org_address mislukt:', error.message); return null; }
   return data === true ? null : email;
+}
+
+/**
+ * Hangt de opgeslagen bestanden van een inbox-item als bewijsstuk aan een
+ * inkoopfactuur. Best effort per bestand; geeft een waarschuwing terug per
+ * bestand dat niet lukte. Een bestand dat er al hangt, komt er niet twee keer.
+ */
+async function attachToInvoice(
+  admin: SupabaseClient,
+  organizationId: string,
+  createdBy: string | null,
+  purchaseInvoiceId: string,
+  attachments: InboxAttachment[],
+): Promise<string[]> {
+  const warnings: string[] = [];
+  const { data: present } = await admin.from('attachments').select('storage_key')
+    .eq('organization_id', organizationId).eq('entity_type', 'purchase_invoice').eq('entity_id', purchaseInvoiceId);
+  const have = new Set(((present ?? []) as Array<{ storage_key: string | null }>).map((a) => a.storage_key));
+  for (const att of attachments) {
+    if (!att.storage_key || have.has(att.storage_key)) continue;
+    const { error: attError } = await admin.from('attachments').insert({
+      organization_id: organizationId, created_by: createdBy,
+      entity_type: 'purchase_invoice', entity_id: purchaseInvoiceId, parent_task_id: null,
+      name: att.name, mime_type: att.mime_type || 'application/octet-stream', size_bytes: att.size_bytes || 0,
+      storage_key: att.storage_key, public_url: attachmentPublicUrl(att.storage_key),
+    });
+    if (attError) {
+      console.warn('invoice-inbox: bijlage koppelen mislukt:', attError.message);
+      warnings.push(`Bijlage ${att.name} kon niet aan het concept worden gekoppeld.`);
+    } else {
+      have.add(att.storage_key);
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Zei wie hier de AI laat lezen (de knop of de foto) zelf nee tegen Gerrie,
+ * of zette een beheerder Gerrie voor hem dicht? Dan gaat zijn bon niet langs
+ * het model. Bij een fout van de database: nee tegen de AI, net als
+ * hasAiConsent (liever een keer niet uitlezen dan tegen iemands keuze in).
+ */
+async function aiRefusedForUser(admin: SupabaseClient, userId: string | null, organizationId: string): Promise<boolean> {
+  if (!userId) return false;
+  const [consent, gerrieLevel] = await Promise.all([
+    admin.from('ai_consents').select('enabled').eq('organization_id', organizationId).eq('user_id', userId).maybeSingle(),
+    getModuleLevel(admin, userId, organizationId, 'gerrie').catch(() => 'none' as const),
+  ]);
+  if (consent.error) {
+    console.warn('invoice-inbox: ai_consents lezen mislukt; deze bon gaat niet langs de AI', consent.error.message);
+    return true;
+  }
+  const row = consent.data as { enabled?: unknown } | null;
+  return aiRefusedBy({ consentEnabled: row ? row.enabled === true : null, gerrieLevel });
+}
+
+/** Een eerder concept van dezelfde winkel, op dezelfde dag, voor hetzelfde bedrag (zie receiptTwinWarning). */
+async function findReceiptTwin(
+  admin: SupabaseClient, organizationId: string, supplierId: string, date: string, totalCents: number,
+): Promise<{ internal_number: string | null; supplier_invoice_number: string | null } | null> {
+  if (!totalCents) return null;
+  const { data, error } = await admin.from('purchase_invoices')
+    .select('internal_number, supplier_invoice_number')
+    .eq('organization_id', organizationId)
+    .eq('supplier_id', supplierId)
+    .eq('date', date)
+    .eq('total_cents', totalCents)
+    .neq('status', 'cancelled')
+    .limit(1);
+  // Een waarschuwing die niet kan draaien, houdt het concept niet tegen: de
+  // bestands- en nummercontrole (findDuplicate) hebben dan al gedraaid.
+  if (error) { console.warn('invoice-inbox: controle op een gelijke bon mislukt:', error.message); return null; }
+  return ((data ?? [])[0] as { internal_number: string | null; supplier_invoice_number: string | null } | undefined) ?? null;
 }
 
 function canAutoCreateSupplier(proposal: InvoiceProposal): boolean {
@@ -877,7 +988,9 @@ async function createSupplier(
     // gezien. Tot die bevestigt, boekt de inbox niets vanzelf op deze leverancier.
     inbox_unverified: true,
     status: 'active',
-    notes: `Automatisch aangemaakt uit een per e-mail ontvangen factuur (${new Date(row.received_at).toLocaleDateString('nl-NL')}${row.sender_email ? `, afzender ${row.sender_email}` : ''}).`,
+    notes: isUploadChannel(row.channel)
+      ? `Automatisch aangemaakt uit een ${row.channel === 'declaration' ? 'declaratie' : 'bon'} die in de app is gefotografeerd (${new Date(row.received_at).toLocaleDateString('nl-NL')}).`
+      : `Automatisch aangemaakt uit een per e-mail ontvangen factuur (${new Date(row.received_at).toLocaleDateString('nl-NL')}${row.sender_email ? `, afzender ${row.sender_email}` : ''}).`,
   }).select('id, name, vat_number, iban, email, default_expense_account_id, default_vat_code, inbox_unverified').single();
   if (error) throw new HttpError(`Leverancier aanmaken mislukt: ${error.message}`, 500);
   return data as SupplierRow;
@@ -944,7 +1057,12 @@ async function findDuplicate(
       .eq('organization_id', row.organization_id)
       .neq('id', row.id)
       .in('status', ['ready', 'booked'])
-      .contains('attachments', [{ sha256 }])
+      // Als JSON-tekst, niet als lijst: supabase-js maakt van een lijst een
+      // Postgres-array (`cs.{[object Object]}`), en dan weigerde de database
+      // de filter op deze jsonb-kolom met "invalid input syntax for type json".
+      // Elke mail met een bijlage liep zo vast op 'processing_error', en elke
+      // bon uit de app ook (gevonden met tests/stromen/bonnen.mjs).
+      .contains('attachments', JSON.stringify([{ sha256 }]))
       .limit(1);
     if (error) {
       throw new InboxProcessingError('processing_error', `Duplicaatcontrole op bestand kon niet draaien: ${error.message}`);
@@ -975,6 +1093,11 @@ export async function rejectInboxItem(admin: SupabaseClient, row: InboxRow, acto
   if (!REJECTABLE.includes(row.status)) {
     throw new HttpError(`Een item in status '${row.status}' kan niet genegeerd worden.`, 409);
   }
+  // Een declaratie zonder reden wegleggen, las voor de indiener als "afgewezen"
+  // zonder dat hij wist waarom. Die gaat via declineDeclaration, met de reden.
+  if (row.channel === 'declaration') {
+    throw new HttpError('Een declaratie wijs je af met een reden (Afwijzen), zodat de indiener weet waarom.', 409);
+  }
   return await updateRow(admin, row.id, {
     status: 'rejected', reason: 'dismissed_by_user', handled_by: actorUserId, handled_at: new Date().toISOString(),
   });
@@ -983,8 +1106,148 @@ export async function rejectInboxItem(admin: SupabaseClient, row: InboxRow, acto
 /** "Herstellen": terug op de werklijst en opnieuw verwerken. */
 export async function restoreInboxItem(admin: SupabaseClient, row: InboxRow, actorUserId: string): Promise<InboxRow> {
   if (row.status !== 'rejected') throw new HttpError('Alleen een genegeerd item kan hersteld worden.', 409);
-  await updateRow(admin, row.id, { status: 'received', reason: null, handled_by: actorUserId, handled_at: new Date().toISOString() });
+  // Een herstelde declaratie is niet langer afgewezen: de reden gaat mee weg.
+  await updateRow(admin, row.id, { status: 'received', reason: null, review_note: null, handled_by: actorUserId, handled_at: new Date().toISOString() });
   return await processInboxItem(admin, row.id, { actorUserId });
+}
+
+// ── Bonnen uit de app ───────────────────────────────────────────────────────────
+
+export interface ReceiptUpload {
+  organizationId: string;
+  channel: 'receipt' | 'declaration';
+  /** Uit de geverifieerde sessie, nooit uit de invoer. */
+  submittedBy: string;
+  submitterEmail: string | null;
+  /** Door de app gekozen uuid per foto: een tweede verzoek met dezelfde foto maakt geen tweede rij. */
+  clientRequestId: string;
+  file: { name: string; mimeType: string; bytes: Uint8Array };
+}
+
+/**
+ * Een bon uit de app vastleggen: eerst de rij (status 'received'), dan de foto
+ * op R2, dan de bijlage op de rij. Daarna verwerkt de aanroeper hem met
+ * processInboxItem, precies zoals een mail.
+ *
+ * Haperde de verbinding na het versturen en stuurt de app dezelfde foto met
+ * hetzelfde verzoek-id nog eens, dan komt er geen tweede rij: `created` is dan
+ * false en de bestaande rij komt terug.
+ */
+export async function createUploadItem(admin: SupabaseClient, input: ReceiptUpload): Promise<{ row: InboxRow; created: boolean }> {
+  const dedupKey = `upload:${input.organizationId}:${input.submittedBy}:${input.clientRequestId}`;
+  const label = input.channel === 'declaration' ? 'Declaratie' : 'Bon';
+  const { data, error } = await admin.from('purchase_invoice_inbox').insert({
+    organization_id: input.organizationId,
+    channel: input.channel,
+    submitted_by: input.submittedBy,
+    dedup_key: dedupKey,
+    recipient: '',
+    sender_email: input.submitterEmail,
+    subject: `${label}: ${input.file.name}`.slice(0, 998),
+    received_at: new Date().toISOString(),
+    status: 'received',
+  }).select(INBOX_COLUMNS).single();
+
+  if (error) {
+    if (error.code !== '23505') throw new HttpError(`Bon vastleggen mislukt: ${error.message}`, 500);
+    const { data: existing, error: findError } = await admin.from('purchase_invoice_inbox').select(INBOX_COLUMNS)
+      .eq('organization_id', input.organizationId).eq('dedup_key', dedupKey).maybeSingle();
+    if (findError || !existing) throw new HttpError('Bon vastleggen mislukt.', 500);
+    const row = normalizeRow(existing as unknown as Record<string, unknown>);
+    // De eerste poging strandde vóór de foto er stond: die alsnog opslaan.
+    if (row.status === 'received' && row.attachments.length === 0) return { row: await storeUpload(admin, row, input.file), created: true };
+    return { row, created: false };
+  }
+  const row = normalizeRow(data as unknown as Record<string, unknown>);
+  return { row: await storeUpload(admin, row, input.file), created: true };
+}
+
+async function storeUpload(admin: SupabaseClient, row: InboxRow, file: ReceiptUpload['file']): Promise<InboxRow> {
+  let stored: { storage_key: string; sha256: string };
+  try {
+    stored = await storeInboxAttachment(row.organization_id, row.id, file);
+  } catch (err) {
+    // De foto staat nergens. Dan ook geen rij die zegt dat hij binnenkwam: de
+    // app zegt het meteen, en wie hem maakte probeert het opnieuw. (Bij mail
+    // ligt dat anders; daar is er geen mens die het ziet gebeuren.)
+    console.error('invoice-inbox: bon opslaan mislukt:', err instanceof Error ? err.message : String(err));
+    await admin.from('purchase_invoice_inbox').delete().eq('id', row.id).eq('status', 'received');
+    throw new HttpError('De foto kon niet worden opgeslagen. Probeer het opnieuw.', 502);
+  }
+  const attachment: InboxAttachment = {
+    name: file.name, mime_type: file.mimeType, size_bytes: file.bytes.byteLength,
+    storage_key: stored.storage_key, sha256: stored.sha256, kind: 'document',
+  };
+  return await updateRow(admin, row.id, { attachments: [attachment] });
+}
+
+/**
+ * Een declaratie afwijzen, met de reden die de indiener leest. Stond er al een
+ * concept, dan gaat dat weg (alleen een concept: geboekt is goedgekeurd, en
+ * dat herstel je met een tegenboeking). De foto blijft bij de declaratie op de
+ * werklijst, onder afgehandeld, en is met Herstellen terug te halen.
+ */
+export async function declineDeclaration(admin: SupabaseClient, row: InboxRow, actorUserId: string, note: string): Promise<InboxRow> {
+  const verdict = declineAllowed(row);
+  if (!verdict.ok) throw new HttpError(verdict.why, 409);
+  const reasonText = note.trim().slice(0, 1000);
+  if (!reasonText) throw new HttpError('Schrijf erbij waarom je de declaratie afwijst; de indiener leest dat.', 400);
+
+  if (row.purchase_invoice_id) {
+    const { data: removed, error } = await admin.from('purchase_invoices').delete()
+      .eq('id', row.purchase_invoice_id).eq('organization_id', row.organization_id).eq('status', 'draft')
+      .select('id');
+    if (error) throw new HttpError(`Het concept verwijderen mislukte: ${error.message}`, 500);
+    if (!(removed ?? []).length) {
+      const { data: still } = await admin.from('purchase_invoices').select('status')
+        .eq('id', row.purchase_invoice_id).eq('organization_id', row.organization_id).maybeSingle();
+      if (still) throw new HttpError('Het concept van deze declaratie is intussen geboekt. Terugdraaien kan alleen met een tegenboeking.', 409);
+    }
+    // De regels in attachments wezen naar het concept; het bestand zelf blijft
+    // bij het inbox-item tot de opruimronde.
+    await admin.from('attachments').delete()
+      .eq('organization_id', row.organization_id).eq('entity_type', 'purchase_invoice').eq('entity_id', row.purchase_invoice_id);
+  }
+
+  return await updateRow(admin, row.id, {
+    status: 'rejected', reason: 'declaration_declined', review_note: reasonText,
+    purchase_invoice_id: null, handled_by: actorUserId, handled_at: new Date().toISOString(),
+  });
+}
+
+/**
+ * "Zelf invullen": Gerrie kon de bon of factuur niet lezen (AI uit, tegoed op,
+ * niets herkend), en iemand met Financiën maakte de inkoopfactuur met de hand.
+ * Dan hoort het item daarbij: het bestand gaat als bewijsstuk naar die factuur
+ * en het item staat op klaar. Zo is een declaratie voor de indiener gewoon
+ * ingediend, en keurt boeken hem goed. Eerder bleef zo'n item op "aandacht
+ * nodig" staan, en Negeren las voor de indiener als afgewezen.
+ */
+export async function linkInboxItem(admin: SupabaseClient, row: InboxRow, purchaseInvoiceId: string, actorUserId: string): Promise<InboxRow> {
+  if (!['needs_review', 'failed', 'duplicate'].includes(row.status) || row.purchase_invoice_id) {
+    throw new HttpError('Dit item heeft al een concept, of kan in deze status niet gekoppeld worden.', 409);
+  }
+  const { data: invoice, error } = await admin.from('purchase_invoices').select('id, status, supplier_id')
+    .eq('id', purchaseInvoiceId).eq('organization_id', row.organization_id).maybeSingle();
+  if (error) throw new HttpError(`Inkoopfactuur laden mislukt: ${error.message}`, 500);
+  if (!invoice) throw new HttpError('Inkoopfactuur niet gevonden.', 404);
+  const pi = invoice as { id: string; status: string; supplier_id: string | null };
+  if (pi.status !== 'draft') throw new HttpError('Alleen een concept kun je aan een binnengekomen bon of factuur koppelen.', 409);
+  const { data: other, error: otherError } = await admin.from('purchase_invoice_inbox').select('id')
+    .eq('organization_id', row.organization_id).eq('purchase_invoice_id', pi.id).neq('id', row.id).limit(1);
+  if (otherError) throw new HttpError(`Controle mislukt: ${otherError.message}`, 500);
+  if ((other ?? []).length) throw new HttpError('Deze inkoopfactuur hoort al bij een ander binnengekomen item.', 409);
+
+  const warnings = await attachToInvoice(admin, row.organization_id, actorUserId, pi.id,
+    row.attachments.filter((a) => a.kind === 'document' || a.kind === 'body'));
+  const now = new Date().toISOString();
+  return await updateRow(admin, row.id, {
+    status: 'ready', reason: null, error_message: null,
+    warnings: [...row.warnings, ...warnings],
+    purchase_invoice_id: pi.id, supplier_id: pi.supplier_id, supplier_match: 'manual',
+    duplicate_of_purchase_invoice_id: null, duplicate_of_inbox_id: null,
+    handled_by: actorUserId, handled_at: now, processed_at: now,
+  });
 }
 
 /** Verwerking op de achtergrond starten zonder het antwoord op te houden (Supabase EdgeRuntime). */

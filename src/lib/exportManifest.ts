@@ -63,7 +63,12 @@ export const EXPORT_FORMAT_VERSION = 1;
 // gallery_items; geen tabellen of kolommen.
 // 20261115120000 (geen AI kiezen) vervangt set_ai_consent; geen tabellen of
 // kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261115120000';
+// 20261117120000 (bonnen en declaraties) zet channel, submitted_by en
+// review_note op purchase_invoice_inbox. Die gaan mee met de inbox: waar een
+// bon vandaan kwam, wie hem instuurde en waarom een declaratie is afgewezen,
+// hoort bij de administratie. Geen geheim, geen nieuwe opslagsleutel (de foto
+// staat al in attachments).
+export const EXPORT_SCHEMA_VERSION = '20261117120000';
 
 export type TableKind =
   | 'export'

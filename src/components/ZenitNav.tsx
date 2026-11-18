@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, ReceiptText, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Select } from './Ui';
 import { BrandMark } from './BrandMark';
 import { askGerrie } from './GerrieChat';
@@ -132,7 +132,7 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
       { page: 'tickets', label: 'Tickets', Icon: Ticket, badge: ticketUnread, badgeTitle: ticketTitle },
       { page: 'archive', label: 'Archief', Icon: Archive },
     ]) }] },
-    { id: 'geld', label: 'Geld', Icon: Wallet, home: ['invoices', ...FINANCE_PAGES], badge: purchaseInboxOpen, badgeTitle: purchaseTitle, groups: [
+    { id: 'geld', label: 'Geld', Icon: Wallet, home: ['invoices', ...FINANCE_PAGES, 'declarations'], badge: purchaseInboxOpen, badgeTitle: purchaseTitle, groups: [
       { label: 'Verkoop', items: keep([
         { page: 'quotes', label: 'Offertes', Icon: FileText },
         { page: 'contracts', label: 'Contracten', Icon: FileSignature },
@@ -157,6 +157,11 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
         hasShares && { page: 'shareholders', label: 'Aandeelhouders', Icon: BookUser },
         isIb && { page: 'owners', label: isPartnership ? 'Vennoten' : 'Eigen vermogen', Icon: Wallet },
         isCompany && { page: 'annual-accounts', label: 'Jaarrekening', Icon: Scale },
+      ]) },
+      // Alleen voor wie Financiën niet mag bewerken (permissions.canSubmitDeclarations).
+      // Zonder Financiën is dit de enige regel onder Geld.
+      { label: 'Declaraties', items: keep([
+        { page: 'declarations', label: 'Mijn declaraties', Icon: ReceiptText },
       ]) },
     ] },
     { id: 'berichten', label: 'Berichten', Icon: Inbox, home: ['communication', 'chat', 'marketing'], badge: messageBadge + chatUnread, badgeTitle: [messageTitle, chatUnread > 0 ? chatTitle : ''].filter(Boolean).join(' · '), groups: [{ items: keep([

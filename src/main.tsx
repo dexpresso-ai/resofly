@@ -154,6 +154,7 @@ import { clientFolderOptions } from './lib/folders';
 import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail, mollieInvoicingAllowed } from './lib/eInvoicing';
 import { Invoices, Quotes, type RefundInput } from './features/Finance';
 import { LedgerPage, PurchaseInvoicesPage, SuppliersPage, nextPurchaseNumber, purchaseTotals } from './features/Bookkeeping';
+import { DeclarationsPage } from './features/Declarations';
 import type { InvoiceFormSeed } from './features/Bookkeeping';
 import { BankPage } from './features/Bank';
 import { AssetsPage } from './features/Assets';
@@ -255,12 +256,15 @@ import './styles/gesprekken.css';
 import './styles/apps.css';
 // Gerrie aanzetten (2026-11-12): de drie punten en het vinkje. Eigen klassen (gaz-*).
 import './styles/gerrie-aanzetten.css';
+// Bonnen fotograferen en declaraties (2026-11-17): eigen klassen (rcp-*, decl-*),
+// ná rapportages.css omdat het bonvenster het orbje en de stappenbalk daarvan gebruikt.
+import './styles/bonnen.css';
 // De weekplanner (2026-11-15) als allerlaatste: de zeven oudere lagen planner-
 // CSS in globals.css spraken elkaar tegen, dit blok bepaalt de opbouw.
 import './styles/weekplanner.css';
 import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 /**
  * Een nieuwe klant uit een mail in de opvangbak ("Nieuwe klant" in
  * InboundInbox). Na opslaan koppelt persistEdit de mail aan de nieuwe klant.
@@ -4468,6 +4472,16 @@ function App() {
     // niet via een onthouden tabblad of een gedeelde link. De database geeft
     // sowieso geen rijen terug; dit voorkomt een verwarrende lege pagina.
     if (!permissions.canOpenPage(page)) {
+      // Declaraties zijn voor wie Financiën niet beheert. Wie dat wel doet (of
+      // een onthouden tabblad heeft van toen hij het nog niet deed), maakt zijn
+      // bon op Inkoopfacturen en krijgt daar meteen een concept.
+      if (page === 'declarations' && permissions.canOpenPage('purchase-invoices')) {
+        return <div className="empty">
+          <div className="e-big">Je bonnen staan bij Inkoopfacturen</div>
+          <p>Jij beheert Financiën. Een bon die je fotografeert, wordt daar meteen een concept; daar keur je ook de declaraties van je team goed.</p>
+          <Button variant="primary" onClick={() => { setPage('purchase-invoices'); setProjectId(null); setClientId(null); setStatsReportId(null); }}>Naar Inkoopfacturen</Button>
+        </div>;
+      }
       const moduleKey = PAGE_MODULE[page];
       // Gerrie staat uit omdat deze gebruiker dat zelf koos, niet omdat een
       // beheerder hem dichtzette. Dat zeggen we dan ook: anders las iemand die
@@ -4555,6 +4569,7 @@ function App() {
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'purchase_invoice' ? purchaseInvoiceSeedFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}
       inboxActivity={purchaseInbox.activity}/>;
+    if (page === 'declarations') return <DeclarationsPage organizationId={activeOrg.id} canWrite={canWrite}/>;
     if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} canWriteClients={orgCanWrite && permissions.canWrite('clients')}/>;
     if (page === 'bank') return <BankPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;

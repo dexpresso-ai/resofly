@@ -22,7 +22,7 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0
 import { HttpError } from './edgeAuth.ts';
 import {
   extractInvoiceFromDocument, extractInvoiceFromText, SUPPORTED_MIME_TYPES,
-  type AccountRef, type InvoiceConfidence, type InvoiceExtraction, type VatCodeRef,
+  type AccountRef, type DocumentKind, type InvoiceConfidence, type InvoiceExtraction, type VatCodeRef,
 } from './claudeInvoice.ts';
 import { recordAiUsage } from './claudeSummary.ts';
 import { parseUblDocument, type ParsedUblDocument } from './ublParse.ts';
@@ -170,16 +170,19 @@ export async function buildAiProposal(
   organizationId: string,
   file: AiProposalInput,
   ctx: ProposalContext,
-  opts: { usageUserId: string | null },
+  opts: { usageUserId: string | null; documentKind?: DocumentKind },
 ): Promise<ProposalResult> {
   const { fileName, mimeType, dataBase64 } = file;
   const { extraction, usage, model } = await extractInvoiceFromDocument({
-    dataBase64, mimeType, accounts: accountRefs(ctx), vatCodes: vatRefs(ctx),
+    dataBase64, mimeType, accounts: accountRefs(ctx), vatCodes: vatRefs(ctx), documentKind: opts.documentKind,
   });
   // Verbruik loggen (fail-open: een logfout mag het resultaat niet blokkeren).
   await recordAiUsage(admin, organizationId, opts.usageUserId, model, usage)
     .catch((e) => console.warn('ai_usage log mislukt:', e?.message));
-  return finishAiProposal(extraction, model, ctx, { file_name: fileName });
+  return finishAiProposal(extraction, model, ctx, {
+    file_name: fileName,
+    ...(opts.documentKind === 'receipt' ? { document_kind: 'receipt' } : {}),
+  });
 }
 
 /**

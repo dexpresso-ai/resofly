@@ -32,6 +32,9 @@ export const INBOX_REASON_LABELS: Record<string, string> = {
   oversized: 'De mail is te groot om te verwerken (limiet 12 MB)',
   nothing_extracted: 'In de bijlagen is geen factuur herkend',
   ai_disabled: 'AI-uitlezen staat uit in de instellingen (alleen UBL-e-facturen gaan automatisch)',
+  // Bonnen uit de app (20261117120000): wie de foto maakte, koos voor geen AI.
+  ai_declined: 'Gerrie staat uit voor wie deze bon instuurde, dus hij is niet gelezen — vul hem zelf in',
+  declaration_declined: 'Declaratie afgewezen',
   ai_unavailable: 'AI is niet geconfigureerd op de server',
   budget_exhausted: 'Het AI-tegoed van deze maand is op',
   extraction_failed: 'Uitlezen mislukt',
@@ -61,7 +64,13 @@ export function inboxReasonLabel(reason: string | null | undefined): string | nu
   return INBOX_REASON_LABELS[reason] ?? reason;
 }
 
-export function inboxNeedsAttention(item: Pick<PurchaseInvoiceInboxItem, 'status'>): boolean {
+/**
+ * Moet hier iemand naar kijken? Ook een declaratie met een concept: die wacht
+ * op goedkeuring. Een concept uit de mail of een eigen bon niet; dat boek je
+ * wanneer je wilt. (Zonder `channel`, van vóór 20261117120000, is het mail.)
+ */
+export function inboxNeedsAttention(item: Pick<PurchaseInvoiceInboxItem, 'status'> & { channel?: PurchaseInvoiceInboxItem['channel'] }): boolean {
+  if (item.channel === 'declaration' && item.status === 'ready') return true;
   return INBOX_ATTENTION_STATUSES.includes(item.status);
 }
 
@@ -73,24 +82,36 @@ export function inboxIsBusy(item: Pick<PurchaseInvoiceInboxItem, 'status'>): boo
  * Twee stapels: wat nu aandacht vraagt of nog loopt (bovenaan, nieuwste eerst)
  * en wat afgehandeld is (concept klaar, geboekt, genegeerd), ook nieuwste eerst.
  */
-export function splitInboxItems<T extends Pick<PurchaseInvoiceInboxItem, 'status' | 'received_at'>>(items: T[]): { open: T[]; done: T[] } {
+export function splitInboxItems<T extends Pick<PurchaseInvoiceInboxItem, 'status' | 'received_at'> & { channel?: PurchaseInvoiceInboxItem['channel'] }>(items: T[]): { open: T[]; done: T[] } {
   const byDate = (a: T, b: T) => b.received_at.localeCompare(a.received_at);
   const open = items.filter(i => inboxNeedsAttention(i) || inboxIsBusy(i)).sort(byDate);
   const done = items.filter(i => !inboxNeedsAttention(i) && !inboxIsBusy(i)).sort(byDate);
   return { open, done };
 }
 
-export function countInboxAttention<T extends Pick<PurchaseInvoiceInboxItem, 'status'>>(items: T[]): number {
+export function countInboxAttention<T extends Pick<PurchaseInvoiceInboxItem, 'status'> & { channel?: PurchaseInvoiceInboxItem['channel'] }>(items: T[]): number {
   return items.filter(inboxNeedsAttention).length;
 }
 
 /**
  * Eén regel die zegt wat er is uitgelezen: leverancier, factuurnummer en
- * totaal. Zonder voorstel valt hij terug op afzender en onderwerp.
+ * totaal. Zonder voorstel valt hij terug op afzender en onderwerp; bij een bon
+ * uit de app op "Bon" of "Declaratie" (de afzender is daar het teamlid zelf,
+ * en dat staat al op de regel eronder).
  */
-export function inboxItemSummary(item: Pick<PurchaseInvoiceInboxItem, 'proposal' | 'sender_name' | 'sender_email' | 'subject'>): {
+export function inboxItemSummary(item: Pick<PurchaseInvoiceInboxItem, 'proposal' | 'sender_name' | 'sender_email' | 'subject'> & { channel?: PurchaseInvoiceInboxItem['channel'] }): {
   title: string; number: string | null; totalCents: number | null; fallback: boolean;
 } {
+  if (item.channel === 'receipt' || item.channel === 'declaration') {
+    const p = item.proposal;
+    const label = item.channel === 'declaration' ? 'Declaratie' : 'Bon';
+    return {
+      title: p?.supplier.name || label,
+      number: p?.supplier_invoice_number ?? null,
+      totalCents: p ? (p.totals.total_cents || p.extracted_totals?.total_cents || null) : null,
+      fallback: !p?.supplier.name,
+    };
+  }
   const p = item.proposal;
   if (p && (p.supplier.name || p.supplier_invoice_number || p.totals.total_cents)) {
     return {

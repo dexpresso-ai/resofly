@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Calculator, Download, FileDown, FileText, Hourglass, Inbox, Layers, Mail, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
+import { BookOpen, Calculator, Camera, Download, FileDown, FileText, Hourglass, Inbox, Layers, Mail, PenLine, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
   AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceInboxItem, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
 } from '../types';
@@ -26,6 +26,8 @@ import {
   inboxReasonLabel, splitInboxItems,
 } from '../lib/invoiceInbox';
 import { todayIso } from '../lib/dates';
+import { canFillIn, declarationActionsFor, inboxChannelLabel, submitterShortName } from '../lib/receipts';
+import { ReceiptCapture } from '../components/ReceiptCapture';
 import { XafImportPanel } from './XafImport';
 import { PrepaidForm } from './Prepaid';
 
@@ -311,7 +313,50 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
     if (found) { setSeed(null); setEdit(found); setPendingOpenId(null); }
   }, [pendingOpenId, data.purchaseInvoices]);
   const supplierName = (id: string | null) => data.suppliers.find(s => s.id === id)?.name ?? '—';
-  const viaEmail = (pi: PurchaseInvoice) => (pi.extraction_meta as { channel?: string } | null)?.channel === 'email';
+  const channelOf = (pi: PurchaseInvoice) => (pi.extraction_meta as { channel?: string } | null)?.channel ?? null;
+  const viaEmail = (pi: PurchaseInvoice) => channelOf(pi) === 'email';
+  const viaReceipt = (pi: PurchaseInvoice) => channelOf(pi) === 'receipt' || channelOf(pi) === 'declaration';
+
+  /** Een concept openen, ook als het net is aangemaakt en nog niet in `data` zit. */
+  const openInvoice = useCallback((id: string) => {
+    const found = data.purchaseInvoices.find(pi => pi.id === id);
+    if (found) { setSeed(null); setEdit(found); }
+    else { setPendingOpenId(id); onChanged(); }
+  }, [data.purchaseInvoices, onChanged]);
+
+  /**
+   * "Zelf invullen": Gerrie las de bon of factuur niet. Het formulier opent met
+   * wat er wél gelezen is, de foto ernaast, en hangt het item na het opslaan aan
+   * het nieuwe concept (invoice-inbox, action 'link').
+   */
+  const fillIn = useCallback((item: PurchaseInvoiceInboxItem, file: File | null) => {
+    const p = item.proposal;
+    const stored = item.attachments.find(a => a.storage_key && (a.kind === 'document' || a.kind === 'body')) ?? null;
+    setSeed({
+      supplierId: item.supplier_id ?? p?.supplier.matchedId ?? null,
+      newSupplier: null,
+      source: 'manual',
+      form: {
+        supplier_invoice_number: p?.supplier_invoice_number ?? '',
+        date: p?.date ?? todayIso(),
+        due_date: p?.due_date ?? '',
+        notes: '',
+        currency: (p?.currency || 'EUR').toUpperCase(),
+      },
+      lines: (p?.lines ?? []).map(l => ({ id: uid(), description: l.description, amount_cents: l.amount_cents, vat_code: l.vat_code, vat_rate: l.vat_rate, account_id: l.account_id })),
+      pendingFile: null,
+      extractionMeta: { channel: item.channel, inbox_id: item.id, filled_in_by_hand: true, ...(item.submitted_by ? { submitted_by: item.submitted_by } : {}) },
+      ai: { confidence: 'low', warnings: [] },
+      inbox: {
+        itemId: item.id,
+        channel: item.channel,
+        submitter: submitterShortName(item.sender_email),
+        previewFile: file,
+        attachment: stored?.storage_key ? { storage_key: stored.storage_key, name: stored.name } : null,
+      },
+    });
+    setEdit('new');
+  }, []);
 
   async function book(pi: PurchaseInvoice) {
     if (!canWrite) return;
@@ -328,6 +373,10 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
       <div className="bk-head">
         <div><PageIcon page="purchase-invoices" /><h2>Inkoopfacturen</h2><p>Boek leveranciersfacturen in en verwerk de voorbelasting.</p></div>
         <div className="bk-head-actions">
+          {/* Een bon fotograferen: Gerrie leest hem en hij staat meteen als
+              concept klaar (2026-11-17). Zie components/ReceiptCapture.tsx. */}
+          <ReceiptCapture organizationId={organizationId} mode="receipt" data={data} disabled={!canWrite || notReady} compact
+            onChanged={onChanged} onOpenInvoice={openInvoice} onFillIn={fillIn} />
           <Button disabled={!canWrite || notReady} onClick={() => setScan(true)} title="Lees een factuur automatisch uit: UBL-e-facturen (XML) deterministisch, PDF/foto met AI"><Sparkles size={15} /> Factuur scannen (AI / UBL)</Button>
           <Button variant="primary" disabled={!canWrite || notReady} onClick={() => { setSeed(null); setEdit('new'); }}><Plus size={15} /> Nieuwe inkoopfactuur</Button>
         </div>
@@ -339,11 +388,8 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
         canWrite={canWrite}
         onChanged={onChanged}
         activity={inboxActivity}
-        onOpenInvoice={id => {
-          const found = data.purchaseInvoices.find(pi => pi.id === id);
-          if (found) { setSeed(null); setEdit(found); }
-          else { setPendingOpenId(id); onChanged(); }
-        }}
+        onOpenInvoice={openInvoice}
+        onFillIn={item => fillIn(item, null)}
       />}
       {data.purchaseInvoices.length === 0
         ? <div className="empty"><div className="e-big">Nog geen inkoopfacturen</div></div>
@@ -351,7 +397,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
             <thead><tr><th>Nummer</th><th>Leverancier</th><th>Datum</th><th className="bk-num">Excl.</th><th className="bk-num">BTW</th><th className="bk-num">Totaal</th><th>Status</th><th></th></tr></thead>
             <tbody>{data.purchaseInvoices.map(pi => (
               <tr key={pi.id} className="bk-row">
-                <td onClick={() => setEdit(pi)}><strong>{pi.internal_number || '—'}</strong>{pi.supplier_invoice_number && <small className="bk-muted"> · {pi.supplier_invoice_number}</small>}{viaEmail(pi) && <span className="bk-via-email" title="Per e-mail binnengekomen op je factuuradres"><Mail size={12} /></span>}</td>
+                <td onClick={() => setEdit(pi)}><strong>{pi.internal_number || '—'}</strong>{pi.supplier_invoice_number && <small className="bk-muted"> · {pi.supplier_invoice_number}</small>}{viaEmail(pi) && <span className="bk-via-email" title="Per e-mail binnengekomen op je factuuradres"><Mail size={12} /></span>}{viaReceipt(pi) && <span className="bk-via-email" title={channelOf(pi) === 'declaration' ? 'Declaratie van een teamlid' : 'Bon, in de app gefotografeerd'}><Camera size={12} /></span>}</td>
                 <td onClick={() => setEdit(pi)}>{supplierName(pi.supplier_id)}</td>
                 <td onClick={() => setEdit(pi)}>{dateNL(pi.date)}</td>
                 <td className="bk-num">{euroCents(pi.subtotal_cents)}</td>
@@ -359,8 +405,9 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
                 <td className="bk-num"><strong>{euroCents(pi.total_cents)}</strong></td>
                 <td><span className={`status-pill bk-status-${pi.status}`}>{purchaseStatusLabel[pi.status]}</span></td>
                 <td className="bk-cell-action">
+                  {/* Bij een declaratie is boeken de goedkeuring die de indiener ziet. */}
                   {pi.status === 'draft'
-                    ? <Button variant="primary" disabled={!canWrite || busyId === pi.id} onClick={() => book(pi)}>{busyId === pi.id ? 'Boeken…' : 'Boeken'}</Button>
+                    ? <Button variant="primary" disabled={!canWrite || busyId === pi.id} onClick={() => book(pi)}>{busyId === pi.id ? 'Boeken…' : channelOf(pi) === 'declaration' ? 'Goedkeuren' : 'Boeken'}</Button>
                     : <span className="bk-muted">{pi.journal_entry_id ? 'In grootboek' : ''}</span>}
                 </td>
               </tr>
@@ -382,14 +429,23 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
 
 const CONFIDENCE_WORD: Record<'high' | 'medium' | 'low', string> = { high: 'hoog', medium: 'gemiddeld', low: 'laag' };
 
+/** Bij een declaratie zegt de status iets over de goedkeuring, niet over de verwerking. */
+const DECLARATION_INBOX_STATUS: Partial<Record<PurchaseInvoiceInboxItem['status'], string>> = {
+  ready: 'Wacht op goedkeuring',
+  booked: 'Goedgekeurd',
+  rejected: 'Afgewezen',
+};
+
 /**
  * De werklijst boven de inkoopfacturen: wat automatisch is klaargezet (of
  * geboekt), wat dubbel is en wat op een mens wacht. Ververst zichzelf zolang
  * er nog iets wordt uitgelezen; de knoppen lopen via de edge function
  * invoice-inbox, en na een nieuw concept wordt de werkruimte opnieuw geladen.
  */
-function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, onOpenInvoice, activity = 0 }: {
+function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, onOpenInvoice, onFillIn, activity = 0 }: {
   data: AppData; organizationId: string; canWrite: boolean; onChanged: () => void; onOpenInvoice: (purchaseInvoiceId: string) => void;
+  /** "Zelf invullen": Gerrie las dit item niet; het formulier opent en hangt het na opslaan aan het concept. */
+  onFillIn: (item: PurchaseInvoiceInboxItem) => void;
   /** Realtime-tikker van usePurchaseInvoiceInbox: elke wijziging in de inbox herlaadt de lijst. */
   activity?: number;
 }) {
@@ -442,18 +498,19 @@ function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, 
 
   if (loaded && !loadError && hasAlias === false && items.length === 0) {
     return <div className="bk-note pi-inbox-hint">
-      <Inbox size={14} /> Stuur inkoopfacturen door naar je eigen factuuradres en ze staan hier automatisch klaar als concept.
+      <Inbox size={14} /> Fotografeer een bon met <strong>Bon fotograferen</strong>, of stuur inkoopfacturen door naar je eigen factuuradres: ze staan hier automatisch klaar als concept.
       Maak het adres aan onder <strong>Instellingen → E-mail → Inkoopfacturen per e-mail</strong>.
     </div>;
   }
   if (!loaded || (items.length === 0 && !loadError)) {
-    return loaded ? <div className="bk-note pi-inbox-hint"><Inbox size={14} /> Nog niets binnengekomen op je factuuradres. Wat je ernaartoe stuurt, verschijnt hier.</div> : null;
+    return loaded ? <div className="bk-note pi-inbox-hint"><Inbox size={14} /> Nog niets binnengekomen. Wat je naar je factuuradres stuurt, en elke bon of declaratie uit de app, verschijnt hier.</div> : null;
   }
 
   return <section className="pi-inbox">
     <div className="pi-inbox-head">
       <div>
-        <h3><Inbox size={15} /> Binnengekomen per e-mail</h3>
+        {/* Sinds 2026-11-17 staan hier ook bonnen en declaraties uit de app, niet alleen mail. */}
+        <h3><Inbox size={15} /> Binnengekomen</h3>
         <p className="bk-muted">
           {open.length === 0
             ? 'Alles is verwerkt.'
@@ -464,23 +521,32 @@ function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, 
     </div>
     {loadError && <div className="error">{loadError}</div>}
     <div className="pi-inbox-list">
-      {open.map(item => <PurchaseInvoiceInboxRow key={item.id} item={item} data={data} organizationId={organizationId} canWrite={canWrite} onChanged={reload} onOpenInvoice={onOpenInvoice} />)}
-      {showDone && done.slice(0, 30).map(item => <PurchaseInvoiceInboxRow key={item.id} item={item} data={data} organizationId={organizationId} canWrite={canWrite} onChanged={reload} onOpenInvoice={onOpenInvoice} />)}
+      {open.map(item => <PurchaseInvoiceInboxRow key={item.id} item={item} data={data} organizationId={organizationId} canWrite={canWrite} onChanged={reload} onWorkspaceChanged={onChanged} onOpenInvoice={onOpenInvoice} onFillIn={onFillIn} />)}
+      {showDone && done.slice(0, 30).map(item => <PurchaseInvoiceInboxRow key={item.id} item={item} data={data} organizationId={organizationId} canWrite={canWrite} onChanged={reload} onWorkspaceChanged={onChanged} onOpenInvoice={onOpenInvoice} onFillIn={onFillIn} />)}
     </div>
   </section>;
 }
 
-function PurchaseInvoiceInboxRow({ item, data, organizationId, canWrite, onChanged, onOpenInvoice }: {
+function PurchaseInvoiceInboxRow({ item, data, organizationId, canWrite, onChanged, onWorkspaceChanged, onOpenInvoice, onFillIn }: {
   item: PurchaseInvoiceInboxItem; data: AppData; organizationId: string; canWrite: boolean;
-  onChanged: () => Promise<void>; onOpenInvoice: (purchaseInvoiceId: string) => void;
+  onChanged: () => Promise<void>;
+  /** De werkruimte opnieuw laden: na goedkeuren of afwijzen veranderde er een inkoopfactuur. */
+  onWorkspaceChanged: () => void;
+  onOpenInvoice: (purchaseInvoiceId: string) => void;
+  onFillIn: (item: PurchaseInvoiceInboxItem) => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [supplierChoice, setSupplierChoice] = useState<string>(item.proposal?.supplier.matchedId ?? (item.proposal?.supplier.name ? '__new__' : ''));
   const [showDetails, setShowDetails] = useState(false);
+  const [declining, setDeclining] = useState(false);
+  const [declineNote, setDeclineNote] = useState('');
 
   const summary = inboxItemSummary(item);
   const actions = inboxActionsFor(item);
+  const isDeclaration = item.channel === 'declaration';
+  const declaration = declarationActionsFor(item);
+  const submitter = submitterShortName(item.sender_email);
   const supplier = item.supplier_id ? data.suppliers.find(s => s.id === item.supplier_id) : null;
   const duplicateOf = item.duplicate_of_purchase_invoice_id ? data.purchaseInvoices.find(pi => pi.id === item.duplicate_of_purchase_invoice_id) : null;
   const linked = item.purchase_invoice_id ? data.purchaseInvoices.find(pi => pi.id === item.purchase_invoice_id) : null;
@@ -508,18 +574,23 @@ function PurchaseInvoiceInboxRow({ item, data, organizationId, canWrite, onChang
         <strong>{summary.title}</strong>
         {summary.number && <span className="inbound-row-address">nr. {summary.number}</span>}
         {summary.totalCents != null && <span className="pi-inbox-total">{euroCents(summary.totalCents)}</span>}
-        <span className={statusClass}>{INBOX_STATUS_LABELS[item.status]}</span>
+        <span className={statusClass}>{isDeclaration && DECLARATION_INBOX_STATUS[item.status] ? DECLARATION_INBOX_STATUS[item.status] : INBOX_STATUS_LABELS[item.status]}</span>
         {item.auto_booked && <span className="status-pill">automatisch geboekt</span>}
       </div>
       <time title={new Date(item.received_at).toLocaleString('nl-NL')}>{formatEmailDateTime(item.received_at)}</time>
     </div>
 
-    <div className="inbound-row-subject">
-      {item.subject || '(geen onderwerp)'}
-      <span className="pi-inbox-from"> — van {item.sender_name || item.sender_email || 'onbekende afzender'}{item.sender_name && item.sender_email ? ` <${item.sender_email}>` : ''}</span>
-    </div>
+    {item.channel === 'email'
+      ? <div className="inbound-row-subject">
+          {item.subject || '(geen onderwerp)'}
+          <span className="pi-inbox-from"> — van {item.sender_name || item.sender_email || 'onbekende afzender'}{item.sender_name && item.sender_email ? ` <${item.sender_email}>` : ''}</span>
+        </div>
+      : <div className="inbound-row-subject pi-inbox-channel">
+          <Camera size={12} /> {inboxChannelLabel(item, submitter)}
+        </div>}
 
-    {item.reason && item.status !== 'ready' && item.status !== 'booked' && <p className="inbound-row-reason">{inboxReasonLabel(item.reason)}</p>}
+    {item.reason && item.status !== 'ready' && item.status !== 'booked' && item.reason !== 'declaration_declined' && <p className="inbound-row-reason">{inboxReasonLabel(item.reason)}</p>}
+    {isDeclaration && item.status === 'rejected' && item.review_note && <p className="inbound-row-reason">Afgewezen: {item.review_note}</p>}
     {item.error_message && item.status === 'failed' && <p className="inbound-row-note">{item.error_message}</p>}
     {duplicateOf && <p className="inbound-row-note">Staat al geregistreerd als <strong>{duplicateOf.internal_number ?? duplicateOf.supplier_invoice_number ?? 'inkoopfactuur'}</strong> ({purchaseStatusLabel[duplicateOf.status]}).</p>}
     {linked && <p className="inbound-row-note">Concept <strong>{linked.internal_number ?? '—'}</strong> · {purchaseStatusLabel[linked.status]}{supplier ? ` · ${supplier.name}` : ''}{item.supplier_match && INBOX_SUPPLIER_MATCH_LABELS[item.supplier_match] ? ` (leverancier ${INBOX_SUPPLIER_MATCH_LABELS[item.supplier_match]})` : ''}</p>}
@@ -553,12 +624,20 @@ function PurchaseInvoiceInboxRow({ item, data, organizationId, canWrite, onChang
     {error && <div className="error">{error}</div>}
 
     {canWrite && !isBusyStatus && <div className="inbound-row-actions">
+      {/* Een declaratie keur je goed door hem te boeken; dat ziet de indiener. */}
+      {declaration.approve && <Button variant="primary" disabled={busy != null} onClick={() => {
+        if (!window.confirm('Goedkeuren boekt deze declaratie als inkoopfactuur in het grootboek. Daarna ligt hij vast. Doorgaan?')) return;
+        void act('approve', async () => { await bookPurchaseInvoice(organizationId, item.purchase_invoice_id!); onWorkspaceChanged(); });
+      }}>{busy === 'approve' ? 'Bezig…' : 'Goedkeuren'}</Button>}
       {/* Bij een duplicaat is er geen eigen concept maar wél een bestaande
           factuur; dan wijst de knop daarheen, en heet hij ook zo. */}
       {actions.open && (item.purchase_invoice_id ?? item.duplicate_of_purchase_invoice_id) && <Button
-        variant="primary"
+        variant={declaration.approve ? 'ghost' : 'primary'}
         onClick={() => onOpenInvoice((item.purchase_invoice_id ?? item.duplicate_of_purchase_invoice_id)!)}
       >{item.purchase_invoice_id ? 'Open concept' : 'Open bestaande factuur'}</Button>}
+      {canFillIn(item) && <Button disabled={busy != null} onClick={() => onFillIn(item)} title="Gerrie las dit niet. Vul de inkoopfactuur zelf in; dit item hoort er daarna bij.">
+        <PenLine size={13} /> Zelf invullen
+      </Button>}
       {actions.prepare && <>
         <Select value={supplierChoice} onChange={e => setSupplierChoice(e.target.value)} disabled={busy != null}>
           <option value="">Kies een leverancier…</option>
@@ -577,13 +656,35 @@ function PurchaseInvoiceInboxRow({ item, data, organizationId, canWrite, onChang
       {actions.retry && <Button disabled={busy != null} onClick={() => act('retry', () => runInvoiceInboxAction(organizationId, item.id, { action: 'process' }))}>
         <RotateCcw size={13} /> {busy === 'retry' ? 'Bezig…' : 'Opnieuw verwerken'}
       </Button>}
-      {actions.reject && <Button disabled={busy != null} onClick={() => act('reject', () => runInvoiceInboxAction(organizationId, item.id, { action: 'reject' }))}>
+      {/* Een declaratie leg je niet stil weg: de indiener hoort waarom (Afwijzen). */}
+      {actions.reject && !isDeclaration && <Button disabled={busy != null} onClick={() => act('reject', () => runInvoiceInboxAction(organizationId, item.id, { action: 'reject' }))}>
         {busy === 'reject' ? 'Bezig…' : 'Negeren'}
       </Button>}
+      {declaration.decline && !declining && <Button disabled={busy != null} onClick={() => setDeclining(true)}>Afwijzen</Button>}
       {actions.restore && <Button disabled={busy != null} onClick={() => act('restore', () => runInvoiceInboxAction(organizationId, item.id, { action: 'restore' }))}>
         {busy === 'restore' ? 'Bezig…' : 'Herstellen en verwerken'}
       </Button>}
     </div>}
+    {canWrite && declining && <form className="pi-inbox-decline" onSubmit={e => {
+      e.preventDefault();
+      const note = declineNote.trim();
+      if (!note) return;
+      void act('decline', async () => {
+        await runInvoiceInboxAction(organizationId, item.id, { action: 'decline', note });
+        setDeclining(false); setDeclineNote('');
+        onWorkspaceChanged();
+      });
+    }}>
+      <label>
+        <span>Waarom wijs je deze declaratie af? {submitter ? `${submitter} leest dit.` : 'De indiener leest dit.'}</span>
+        <Textarea value={declineNote} onChange={e => setDeclineNote(e.target.value)} rows={2} maxLength={1000} autoFocus
+          placeholder="Bijvoorbeeld: privé-uitgave, of graag de bon met btw-specificatie" />
+      </label>
+      <div className="inbound-row-actions">
+        <Button type="submit" variant="danger" disabled={busy != null || !declineNote.trim()}>{busy === 'decline' ? 'Bezig…' : 'Afwijzen'}</Button>
+        <Button type="button" disabled={busy != null} onClick={() => { setDeclining(false); setDeclineNote(''); }}>Annuleren</Button>
+      </div>
+    </form>}
     {isBusyStatus && <p className="inbound-row-note">Wordt uitgelezen — dit duurt meestal minder dan een minuut.</p>}
   </article>;
 }
@@ -602,13 +703,29 @@ interface NewSupplierPayload {
 export interface InvoiceFormSeed {
   supplierId: UUID | null;
   newSupplier: NewSupplierPayload | null;
-  /** Herkomst van het concept: 'ai_scan' (Claude) of 'import' (UBL-e-factuur). */
-  source: 'ai_scan' | 'import';
+  /** Herkomst van het concept: 'ai_scan' (Claude), 'import' (UBL-e-factuur) of
+   *  'manual' (zelf ingevuld vanaf de werklijst, als Gerrie het niet las). */
+  source: 'ai_scan' | 'import' | 'manual';
   form: { supplier_invoice_number: string; date: string; due_date: string; notes: string; currency?: string };
   lines: PurchaseInvoiceLine[];
   pendingFile: File | null;
   extractionMeta: Record<string, unknown>;
   ai: { confidence: 'high' | 'medium' | 'low'; warnings: string[] };
+  /**
+   * "Zelf invullen" vanaf de werklijst of na een bon die Gerrie niet las. Na
+   * het opslaan hangt invoice-inbox (action 'link') het item aan dit concept,
+   * met het bestand als bewijsstuk; de foto staat dus al op R2 en gaat niet
+   * nog eens mee als pendingFile.
+   */
+  inbox?: {
+    itemId: UUID;
+    channel: PurchaseInvoiceInboxItem['channel'];
+    submitter: string | null;
+    /** De foto die net is gemaakt, om naast het formulier te tonen. */
+    previewFile: File | null;
+    /** Anders het opgeslagen bestand, om te downloaden. */
+    attachment: { storage_key: string; name: string } | null;
+  };
 }
 
 /** Upload een factuur → laat de AI hem uitlezen → toon het voorstel → neem over in een concept. */
@@ -765,6 +882,40 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
   );
 }
 
+/**
+ * Bij "Zelf invullen": de bon naast het formulier, zodat je overneemt wat
+ * erop staat. Net gefotografeerd: de foto zelf. Vanaf de werklijst: een knop
+ * om het opgeslagen bestand te bekijken.
+ */
+function FillInSource({ inbox }: { inbox: NonNullable<InvoiceFormSeed['inbox']> }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!inbox.previewFile || !inbox.previewFile.type.startsWith('image/')) return undefined;
+    const objectUrl = URL.createObjectURL(inbox.previewFile);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [inbox.previewFile]);
+
+  async function view() {
+    if (!inbox.attachment) return;
+    setError(null);
+    try { await downloadStoredFile(inbox.attachment.storage_key, inbox.attachment.name); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Bekijken mislukt.'); }
+  }
+
+  const what = inbox.channel === 'email' ? 'factuur' : 'bon';
+  return <div className="bk-note bk-ai-note bk-fillin">
+    <div>
+      <strong><PenLine size={13} /> Zelf invullen</strong> — Gerrie las deze {what} niet. Neem leverancier, datum en bedragen over.
+      {' '}Na opslaan hoort {inbox.channel === 'declaration' ? `de declaratie${inbox.submitter ? ` van ${inbox.submitter}` : ''}` : 'het item op de werklijst'} bij dit concept, met het bestand als bewijsstuk.
+      {!url && inbox.attachment && <div className="bk-fillin-actions"><Button type="button" onClick={() => void view()}><Download size={13} /> {inbox.attachment.name} bekijken</Button></div>}
+      {error && <div className="error">{error}</div>}
+    </div>
+    {url && <a href={url} target="_blank" rel="noreferrer" className="bk-fillin-photo" title="Openen op ware grootte"><img src={url} alt="De gefotografeerde bon" /></a>}
+  </div>;
+}
+
 function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, onClose, onSaved, onRefresh }: {
   data: AppData; organizationId: string; canWrite: boolean; invoice: PurchaseInvoice | null; seed?: InvoiceFormSeed | null;
   onClose: () => void; onSaved: () => void;
@@ -851,6 +1002,13 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
           try { await uploadToR2(seed.pendingFile, organizationId, { entity_type: 'purchase_invoice', entity_id: saved.id }); }
           catch (uploadErr) { console.warn('Bijlage koppelen aan inkoopfactuur mislukt:', uploadErr); }
         }
+        // Zelf ingevuld vanaf de werklijst: het item hoort nu bij dit concept,
+        // en de bon gaat er als bewijsstuk mee. Lukt dat niet, dan staat het
+        // concept er wel; het item blijft dan op de werklijst staan.
+        if (seed?.inbox && saved?.id) {
+          try { await runInvoiceInboxAction(organizationId, seed.inbox.itemId, { action: 'link', purchaseInvoiceId: saved.id }); }
+          catch (linkErr) { console.warn('Het item van de werklijst koppelen aan het concept mislukte:', linkErr); }
+        }
       }
       onSaved();
     } catch (e) { setError(e instanceof Error ? e.message : 'Opslaan mislukt'); setBusy(false); }
@@ -870,20 +1028,28 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
           {!readOnly && <Button onClick={() => set('currency', 'EUR')}>Bedragen zijn omgerekend: valuta op EUR</Button>}
         </div>
       )}
-      {seed && (
+      {seed && !seed.inbox && (
         <div className="bk-note bk-ai-note">
           <strong><Sparkles size={13} /> {seed.source === 'import' ? 'E-factuur (UBL)' : 'AI-voorstel'}</strong> — controleer leverancier, grootboekrekeningen, BTW en bedragen voordat je opslaat.{seed.source !== 'import' && <> Betrouwbaarheid: {CONFIDENCE_LABEL[seed.ai.confidence]}.</>}
           {seed.ai.warnings.length > 0 && <ul className="bk-ai-warnings">{seed.ai.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
         </div>
       )}
+      {seed?.inbox && <FillInSource inbox={seed.inbox} />}
       {invoice && !seed && (() => {
         const meta = (invoice.extraction_meta ?? null) as { channel?: string; warnings?: unknown; confidence?: string; sender_email?: string | null; received_at?: string } | null;
         const warnings = Array.isArray(meta?.warnings) ? (meta!.warnings as unknown[]).map(String) : [];
-        if (!meta || (meta.channel !== 'email' && warnings.length === 0)) return null;
+        const fromApp = meta?.channel === 'receipt' || meta?.channel === 'declaration';
+        if (!meta || (meta.channel !== 'email' && !fromApp && warnings.length === 0)) return null;
+        const who = submitterShortName(meta.sender_email);
         return <div className="bk-note bk-ai-note">
-          <strong><Sparkles size={13} /> {meta.channel === 'email' ? 'Per e-mail binnengekomen' : invoice.source === 'import' ? 'E-factuur (UBL)' : 'AI-voorstel'}</strong>
+          <strong>{fromApp ? <Camera size={13} /> : <Sparkles size={13} />} {meta.channel === 'email' ? 'Per e-mail binnengekomen'
+            : meta.channel === 'declaration' ? `Declaratie${who ? ` van ${who}` : ''}`
+            : meta.channel === 'receipt' ? `Bon${who ? `, gefotografeerd door ${who}` : ', in de app gefotografeerd'}`
+            : invoice.source === 'import' ? 'E-factuur (UBL)' : 'AI-voorstel'}</strong>
           {meta.channel === 'email' && <> op je factuuradres{meta.received_at ? ` (${dateNL(meta.received_at.slice(0, 10))})` : ''}{meta.sender_email ? `, van ${meta.sender_email}` : ''}</>}
-          {invoice.status === 'draft' && <> — controleer leverancier, grootboekrekeningen, BTW en bedragen voordat je boekt.</>}
+          {fromApp && meta.received_at && <> ({dateNL(meta.received_at.slice(0, 10))})</>}
+          {invoice.status === 'draft' && meta.channel === 'declaration' && <> — controleer winkel, grootboekrekening, BTW en bedrag. Boeken is goedkeuren: dat ziet de indiener. Terugbetalen gaat via de bank.</>}
+          {invoice.status === 'draft' && meta.channel !== 'declaration' && <> — controleer leverancier, grootboekrekeningen, BTW en bedragen voordat je boekt.</>}
           {meta.confidence && invoice.source !== 'import' && <> Zekerheid: {CONFIDENCE_LABEL[(meta.confidence as 'high' | 'medium' | 'low')] ?? meta.confidence}.</>}
           {warnings.length > 0 && <ul className="bk-ai-warnings">{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
         </div>;
