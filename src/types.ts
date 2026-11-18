@@ -1,6 +1,7 @@
 import type { DocumentLayouts } from './lib/documentLayout';
 import type { GalleryLayout } from './lib/galleryLayout';
 import type { ReportDefinition } from './lib/reporting';
+import type { VatPeriodDue } from './lib/vatPeriods';
 
 export type UUID = string;
 export type ClientStatus = 'active' | 'prospect' | 'inactive';
@@ -2033,6 +2034,14 @@ export interface OwnersEquityOverview {
   partnersDefined: boolean;
   shareTotalBasisPoints: number | null;
   resultCents: number;
+  /**
+   * Winst van eerdere jaren die nog niet naar het eigen vermogen is gegaan
+   * (die jaren zijn niet afgesloten). Zit al in het beginvermogen; optioneel,
+   * want een database van vóór 20261118090000 kent hem niet.
+   */
+  openPriorResultCents?: number;
+  /** De labels van die nog open boekjaren, oudste eerst. */
+  openPriorYears?: string[];
   owners: OwnersEquityRow[];
   /** Vermogen dat op geen enkele vennoot staat (0500, 0510, 0550/0560). */
   unassigned: { beginCents: number; movementsCents: number; endCents: number } | null;
@@ -3671,7 +3680,9 @@ export interface SavedReport extends OrgScopedRow {
 
 export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; prepaidExpenses: PrepaidExpense[]; prepaidExpenseReleases: PrepaidExpenseRelease[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankAllocations: BankAllocation[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null;
   /** Tellingen voor het dashboard, zonder de bank en de boekhouding te laden (src/lib/dataGroups.ts). */
-  bankTransactionsToReconcile: number; vatReturnsToFile: number; }
+  bankTransactionsToReconcile: number;
+  /** Afgelopen btw-tijdvakken zonder aangifte (lib/vatPeriods.ts), en de eerste daarvan met zijn deadline. */
+  vatReturnsToFile: number; vatReturnNextDue: VatPeriodDue | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

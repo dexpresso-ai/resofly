@@ -6,7 +6,7 @@ import { Button, Input, Select, Textarea } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
-  bookAssetAcquisition, bookAssetDisposal, deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow,
+  bookAssetAcquisition, bookAssetDisposal, deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow, setUpBookkeeping
 } from '../lib/repository';
 import { formatISODate, todayIso } from '../lib/dates';
 
@@ -24,7 +24,7 @@ function SetupBanner({ organizationId, canWrite, onChanged }: { organizationId: 
   const [error, setError] = useState<string | null>(null);
   async function setup() {
     setBusy(true); setError(null);
-    try { await ensureDefaultLedgerAccounts(organizationId); onChanged(); }
+    try { await setUpBookkeeping(organizationId); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Aanmaken mislukt'); }
     finally { setBusy(false); }
   }
@@ -32,10 +32,10 @@ function SetupBanner({ organizationId, canWrite, onChanged }: { organizationId: 
     <div className="bk-setup">
       <div>
         <strong>Boekhouding nog niet ingericht.</strong>
-        <p>Maak eerst het rekeningschema aan (tabblad Grootboek) om activa te kunnen afschrijven.</p>
+        <p>Met één klik komen het rekeningschema, de btw-codes en het boekjaar klaar te staan; daarna kun je activa vastleggen en afschrijven.</p>
         {error && <p className="error">{error}</p>}
       </div>
-      <Button variant="primary" disabled={!canWrite || busy} onClick={setup}>{busy ? 'Bezig…' : 'Rekeningschema aanmaken'}</Button>
+      <Button variant="primary" disabled={!canWrite || busy} onClick={setup}>{busy ? 'Bezig…' : 'Boekhouding inrichten'}</Button>
     </div>
   );
 }
@@ -179,6 +179,41 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
   const acquisitionBooked = Boolean(currentAsset?.acquisition_journal_entry_id);
   const isDisposed = currentAsset?.status === 'disposed';
   const financialsLocked = !canWrite || hasPosted || acquisitionBooked;
+  const kor = Boolean(data.companySettings?.kor_enabled);
+  // De bron-inkoopfactuur zoals opgeslagen: die zette de aanschaf al op de
+  // activarekening als hij geboekt is met een regel op die rekening. Dan
+  // koppel je hem in plaats van de aanschaf nog eens te boeken; tot 18
+  // november kon zo'n activum nooit worden afgeschreven (de database eiste een
+  // aanschafboeking, en het scherm zei terecht dat die dubbel zou tellen).
+  const savedSource = currentAsset?.source_purchase_invoice_id
+    ? data.purchaseInvoices.find(pi => pi.id === currentAsset.source_purchase_invoice_id) ?? null
+    : null;
+  const sourceOnAssetAccount = Boolean(savedSource?.journal_entry_id)
+    && (savedSource?.lines ?? []).some(line => line.account_id === currentAsset?.asset_account_id);
+  const sourceUnsaved = (form.source_purchase_invoice_id || '') !== (currentAsset?.source_purchase_invoice_id ?? '');
+  const sourceLabel = (pi: { internal_number?: string | null; supplier_invoice_number?: string | null; id: string }) =>
+    pi.internal_number || pi.supplier_invoice_number || pi.id.slice(0, 8);
+
+  /**
+   * Een bron-inkoopfactuur kiezen vult bij een nieuw activum de aanschaf in:
+   * datum, en het bedrag op de activarekening (met de KOR inclusief btw, want
+   * dan is de btw niet aftrekbaar en hoort hij bij de aanschafprijs).
+   */
+  function pickSource(id: string) {
+    set('source_purchase_invoice_id', id);
+    const pi = data.purchaseInvoices.find(p => p.id === id);
+    if (!pi || financialsLocked) return;
+    const onAccount = (pi.lines ?? []).filter(line => line.account_id === form.asset_account_id);
+    const base = onAccount.reduce((sum, line) => sum + (Number(line.amount_cents) || 0), 0);
+    const vat = onAccount.reduce((sum, line) => sum + Math.round((Number(line.amount_cents) || 0) * (Number(line.vat_rate) || 0) / 100), 0);
+    setForm(f => ({
+      ...f,
+      source_purchase_invoice_id: id,
+      acquisition_date: f.acquisition_cost_cents ? f.acquisition_date : pi.date,
+      start_date: f.acquisition_cost_cents ? f.start_date : pi.date,
+      acquisition_cost_cents: f.acquisition_cost_cents || (base > 0 ? base + (kor ? vat : 0) : 0),
+    }));
+  }
 
   async function save() {
     if (!String(form.name || '').trim()) { setError('Naam is verplicht.'); return; }
@@ -211,6 +246,15 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
     setBusy(true); setError(null);
     try { const updated = await bookAssetAcquisition(organizationId, currentAsset.id, creditAccountId); setCurrentAsset(updated); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Aanschaf boeken mislukt'); }
+    finally { setBusy(false); }
+  }
+
+  /** De aanschaf koppelen aan de geboekte bron-inkoopfactuur: geen nieuwe boeking. */
+  async function linkAcquisition() {
+    if (!currentAsset) return;
+    setBusy(true); setError(null);
+    try { const updated = await bookAssetAcquisition(organizationId, currentAsset.id, null); setCurrentAsset(updated); onChanged(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Koppelen mislukt'); }
     finally { setBusy(false); }
   }
 
@@ -268,7 +312,9 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
         <Field label="Activanummer"><Input value={form.asset_number} onChange={e => set('asset_number', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Categorie"><Input value={form.category} onChange={e => set('category', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Aanschafdatum"><Input type="date" value={form.acquisition_date} onChange={e => set('acquisition_date', e.target.value)} disabled={financialsLocked} /></Field>
-        <Field label="Aanschafwaarde (excl. btw)"><Input type="number" step="0.01" value={(form.acquisition_cost_cents / 100).toString()} onChange={e => set('acquisition_cost_cents', centsFromInput(e.target.value))} disabled={financialsLocked} /></Field>
+        {/* Met de KOR trek je de btw niet af: dan hoort hij bij de aanschafprijs
+            en schrijf je hem mee af. "Excl. btw" stond er ook bij de KOR. */}
+        <Field label={kor ? 'Aanschafwaarde (incl. btw, je gebruikt de KOR)' : 'Aanschafwaarde (excl. btw)'}><Input type="number" step="0.01" value={(form.acquisition_cost_cents / 100).toString()} onChange={e => set('acquisition_cost_cents', centsFromInput(e.target.value))} disabled={financialsLocked} /></Field>
         <Field label="Restwaarde"><Input type="number" step="0.01" value={(form.residual_value_cents / 100).toString()} onChange={e => set('residual_value_cents', centsFromInput(e.target.value))} disabled={financialsLocked} /></Field>
         <Field label="Gebruiksduur (maanden)" hint="Bijv. 60 voor 5 jaar."><Input type="number" step="1" value={String(form.useful_life_months)} onChange={e => set('useful_life_months', parseInt(e.target.value, 10) || 0)} disabled={financialsLocked} /></Field>
         <Field label="Afschrijving start"><Input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} disabled={financialsLocked} /></Field>
@@ -290,10 +336,10 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
             {assetAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
           </Select>
         </Field>
-        <Field label="Bron-inkoopfactuur" hint="Optioneel.">
-          <Select value={form.source_purchase_invoice_id || ''} onChange={e => set('source_purchase_invoice_id', e.target.value)} disabled={!canWrite}>
+        <Field label="Bron-inkoopfactuur" hint="De factuur waarmee je het kocht. Staat die al op de activarekening, dan koppel je de aanschaf eraan.">
+          <Select value={form.source_purchase_invoice_id || ''} onChange={e => pickSource(e.target.value)} disabled={!canWrite || acquisitionBooked}>
             <option value="">— geen —</option>
-            {data.purchaseInvoices.map(pi => <option key={pi.id} value={pi.id}>{pi.internal_number || pi.supplier_invoice_number || pi.id.slice(0, 8)}</option>)}
+            {data.purchaseInvoices.map(pi => <option key={pi.id} value={pi.id}>{sourceLabel(pi)}</option>)}
           </Select>
         </Field>
       </div>
@@ -328,20 +374,34 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
 
       {currentAsset && (
         currentAsset.acquisition_journal_entry_id
-          ? <div className="bk-note bk-acq-done"><Landmark size={14} /> De aanschaf staat op de balans (debet activarekening / credit tegenrekening). Boekwaarde = aanschaf − cumulatieve afschrijving.</div>
-          : <div className="bk-acq">
-              <div className="bk-acq-text">
-                <strong>Aanschaf nog niet op de balans.</strong>
-                <span className="bk-muted"> Boek de aanschafwaarde debet op de activarekening / credit een tegenrekening, zodat de boekwaarde op de balans verschijnt. Doe dit níét als de aanschaf al via een inkoopfactuur op de activarekening is geboekt (dan telt het dubbel).</span>
+          ? <div className="bk-note bk-acq-done"><Landmark size={14} /> {savedSource && savedSource.journal_entry_id === currentAsset.acquisition_journal_entry_id
+              ? `De aanschaf staat op de balans via inkoopfactuur ${sourceLabel(savedSource)}. Boekwaarde = aanschaf − cumulatieve afschrijving.`
+              : 'De aanschaf staat op de balans (debet activarekening / credit tegenrekening). Boekwaarde = aanschaf − cumulatieve afschrijving.'}</div>
+          : sourceOnAssetAccount && savedSource && !sourceUnsaved
+            ? <div className="bk-acq">
+                <div className="bk-acq-text">
+                  <strong>De aanschaf staat al op de balans, via inkoopfactuur {sourceLabel(savedSource)}.</strong>
+                  <span className="bk-muted"> Koppel hem aan dit activum; dan kun je afschrijven. Er komt geen tweede boeking.</span>
+                </div>
+                <div className="bk-acq-actions">
+                  {canWrite && <Button variant="primary" onClick={linkAcquisition} disabled={busy}><Landmark size={14} /> Koppelen aan de inkoopfactuur</Button>}
+                </div>
               </div>
-              <div className="bk-acq-actions">
-                <Select value={creditAccountId} onChange={e => setCreditAccountId(e.target.value)} disabled={!canWrite}>
-                  <option value="">— tegenrekening —</option>
-                  {creditAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
-                </Select>
-                {canWrite && <Button variant="primary" onClick={bookAcquisition} disabled={busy || !creditAccountId}><Landmark size={14} /> Boek aanschaf</Button>}
+            : <div className="bk-acq">
+                <div className="bk-acq-text">
+                  <strong>Aanschaf nog niet op de balans.</strong>
+                  <span className="bk-muted">{sourceUnsaved
+                    ? ' Sla eerst op: dan zie je of de gekozen inkoopfactuur de aanschaf al op de balans zette.'
+                    : ' Boek de aanschafwaarde debet op de activarekening / credit een tegenrekening, zodat de boekwaarde op de balans verschijnt. Kwam het binnen als inkoopfactuur op de activarekening? Kies die dan als bron-inkoopfactuur en sla op: dan koppel je hem, in plaats van hem dubbel te boeken. Stond de inkoopfactuur op een kostenrekening, kies dan die kostenrekening als tegenrekening.'}</span>
+                </div>
+                <div className="bk-acq-actions">
+                  <Select value={creditAccountId} onChange={e => setCreditAccountId(e.target.value)} disabled={!canWrite}>
+                    <option value="">— tegenrekening —</option>
+                    {creditAccounts.concat(expenseAccounts.filter(a => a.is_active)).map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                  </Select>
+                  {canWrite && <Button variant="primary" onClick={bookAcquisition} disabled={busy || !creditAccountId || sourceUnsaved}><Landmark size={14} /> Boek aanschaf</Button>}
+                </div>
               </div>
-            </div>
       )}
 
       {acquisitionBooked && !isDisposed && (

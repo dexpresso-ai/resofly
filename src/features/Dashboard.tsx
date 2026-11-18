@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeEuro, BarChart3, BellRing, CalendarDays, CalendarRange, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Hammer, Landmark, ListTodo, MessagesSquare, Percent, Pin, Receipt, Ticket as TicketIcon, type LucideIcon } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, Invoice, OrganizationContext, OrganizationMember, SavedReport, Task, TaskStatus, UUID } from '../types';
 import { coversDay, isOverdue, scopeTasks, taskDayKey, taskLastDayKey } from '../lib/workweek';
-import { euro, formatMinutes, total } from '../lib/format';
+import { dateNL, euro, formatMinutes, total } from '../lib/format';
 import { addDays, formatISODate, isoWeekNumber, startOfWeek } from '../lib/dates';
 import { getCachedCalendarEvents, listCalendarEventsCached } from '../lib/calendar-api';
 import { Button } from '../components/Ui';
@@ -386,7 +386,15 @@ export function Dashboard({
   if (showFinance && openQuotes) attention.push({ key: 'quotes', tone: 'default', icon: <FileText size={16} />, label: pl(openQuotes, 'offerte open bij klanten', 'offertes open bij klanten'), count: openQuotes, onClick: () => openPage('quotes') });
   if (permissions.canRead('tickets') && newTickets) attention.push({ key: 'tickets', tone: 'default', icon: <TicketIcon size={16} />, label: pl(newTickets, 'ticket onbehandeld', 'tickets onbehandeld'), count: newTickets, onClick: () => openPage('tickets') });
   if (showProjects && overdueTaskCount) attention.push({ key: 'tasks', tone: 'default', icon: <Clock size={16} />, label: pl(overdueTaskCount, 'taak over de deadline', 'taken over de deadline'), count: overdueTaskCount, onClick: () => openPage('weekplanner') });
-  if (showFinance && vatToFile) attention.push({ key: 'vat', tone: 'default', icon: <Percent size={16} />, label: pl(vatToFile, 'btw-aangifte klaar om in te dienen', 'btw-aangiftes klaar om in te dienen'), count: vatToFile, onClick: () => openPage('vat-returns') });
+  // Wat er echt nog moet: afgelopen tijdvakken zonder aangifte, met de deadline
+  // van de oudste (lib/vatPeriods.ts). Rood als die voorbij is.
+  const vatNext = data.vatReturnNextDue;
+  if (showFinance && vatToFile && vatNext) attention.push({
+    key: 'vat', tone: vatNext.overdue ? 'danger' : 'default', icon: <Percent size={16} />,
+    label: vatToFile === 1 ? `Btw-aangifte ${vatNext.label} nog doen` : `${vatToFile} btw-aangiftes nog doen`,
+    meta: `${vatToFile === 1 ? '' : `${vatNext.label}: `}uiterlijk ${dateNL(vatNext.deadline)}${vatNext.overdue ? ' (verlopen)' : ''}`,
+    count: vatToFile, onClick: () => openPage('vat-returns'),
+  });
 
   // ── Onboarding ──────────────────────────────────────────────────────────
   const activeOrganization = organizationContext.activeOrganization;

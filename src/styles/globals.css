@@ -8023,6 +8023,13 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
   .bk-table th,.bk-table td{padding:10px 11px}
 }
 
+/* Het overzicht voor de aangifte inkomstenbelasting (Eigen vermogen) heeft
+   twee kolommen: omschrijving en bedrag. Met de ondergrens van 560px hierboven
+   viel het bedrag op een telefoon buiten beeld, achter een veegrij. */
+@media(max-width:900px){
+  .bk-ib-table{min-width:0}
+}
+
 /* 12 ── Vaste kolomrasters die niet inklappen ─────────────────────────────
    Vijf kolommen in 343px geeft invoervelden van 22 tot 37px breed. Deze
    rasters volgen nu hetzelfde patroon als de factuurregels: de kopregel met

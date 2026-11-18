@@ -5,10 +5,12 @@ import { Button, Skeleton, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
+import { formatISODate } from '../lib/dates';
+import { vatFilingDeadline } from '../lib/vatPeriods';
 import { downloadCsv } from '../lib/csv';
 import {
   closeVatPeriod, computeIcpDeclaration, computeVatReturn, computeVatSupplementDelta, createVatSupplement,
-  ensureDefaultLedgerAccounts, listVatSupplementEntries, updateRow,
+  listVatSupplementEntries, reportProfitAndLoss, setUpBookkeeping, updateRow,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -43,14 +45,54 @@ function SetupBanner({ organizationId, onChanged }: { organizationId: string; on
   const [error, setError] = useState<string | null>(null);
   async function setup() {
     setBusy(true); setError(null);
-    try { await ensureDefaultLedgerAccounts(organizationId); onChanged(); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Aanmaken mislukt'); }
+    try { await setUpBookkeeping(organizationId); onChanged(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Inrichten mislukt'); }
     finally { setBusy(false); }
   }
   return (
     <div className="bk-setup">
-      <div><strong>Boekhouding nog niet ingericht.</strong><p>Maak eerst het rekeningschema aan (tabblad Grootboek).</p>{error && <p className="error">{error}</p>}</div>
-      <Button variant="primary" disabled={busy} onClick={setup}>{busy ? 'Bezig…' : 'Rekeningschema aanmaken'}</Button>
+      <div><strong>Boekhouding nog niet ingericht.</strong><p>Met één klik komen het rekeningschema, de btw-codes en het boekjaar klaar te staan.</p>{error && <p className="error">{error}</p>}</div>
+      <Button variant="primary" disabled={busy} onClick={setup}>{busy ? 'Bezig…' : 'Boekhouding inrichten'}</Button>
+    </div>
+  );
+}
+
+/** De KOR-grens: € 20.000 omzet in een kalenderjaar (dit jaar én vorig jaar). */
+const KOR_LIMIT_CENTS = 2_000_000;
+/** Vanaf hier een waarschuwing: nog één grote opdracht en je zit erover. */
+const KOR_WARN_CENTS = 1_750_000;
+
+/**
+ * Omzet tegen de KOR-grens. Boven de € 20.000 eindigt de KOR meteen, vanaf de
+ * levering die de grens overschrijdt; die factuur gaat al met btw. Er bewaakte
+ * tot 18 november niets die grens: een factuur van € 2.000 bij € 19.000 omzet
+ * ging zonder btw en zonder waarschuwing de deur uit.
+ */
+function KorTurnover({ organizationId }: { organizationId: string }) {
+  const year = new Date().getFullYear();
+  const [turnover, setTurnover] = useState<{ current: number; previous: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const omzet = (rows: Awaited<ReturnType<typeof reportProfitAndLoss>>) =>
+      rows.filter(row => row.account_type === 'revenue' && (row.report_group ?? 'netto_omzet') === 'netto_omzet').reduce((sum, row) => sum + row.amount_cents, 0);
+    Promise.all([
+      reportProfitAndLoss(organizationId, `${year}-01-01`, `${year}-12-31`),
+      reportProfitAndLoss(organizationId, `${year - 1}-01-01`, `${year - 1}-12-31`),
+    ]).then(([cur, prev]) => { if (!cancelled) setTurnover({ current: omzet(cur), previous: omzet(prev) }); })
+      .catch(() => { /* de teller is een hulp; zonder blijft de pagina werken */ });
+    return () => { cancelled = true; };
+  }, [organizationId, year]);
+  if (!turnover) return null;
+  const pct = Math.min(100, Math.round((turnover.current / KOR_LIMIT_CENTS) * 100));
+  const over = turnover.current > KOR_LIMIT_CENTS;
+  const near = !over && turnover.current >= KOR_WARN_CENTS;
+  return (
+    <div className={`bk-note${over || turnover.previous > KOR_LIMIT_CENTS ? ' bk-balance-bad' : ''}`}>
+      <strong>Omzet {year}: {euroCents(turnover.current)} van de € 20.000</strong> ({pct}%)
+      {over && <> — <strong>je zit boven de grens.</strong> De KOR eindigt op de dag van de factuur die de grens overschreed; vanaf die factuur reken je btw. Meld je af bij de Belastingdienst en zet de KOR uit bij Instellingen → Bedrijf.</>}
+      {near && <> — je nadert de grens. Overschrijdt een factuur de € 20.000, dan reken je op díe factuur al btw.</>}
+      {turnover.previous > KOR_LIMIT_CENTS && <> Je omzet in {year - 1} was {euroCents(turnover.previous)}: boven de grens. Dan kun je de KOR in {year} niet gebruiken.</>}
+      <span className="bk-muted"> De teller telt de netto-omzet in je boekhouding; vrijgestelde omzet en omzet in het buitenland tellen voor de grens niet mee.</span>
     </div>
   );
 }
@@ -67,7 +109,7 @@ const BOX_ROWS: { box: string; label: string; hasVat: boolean; alwaysShow: boole
   { box: '3b', label: 'Leveringen naar/diensten in landen binnen de EU', hasVat: false, alwaysShow: false },
   { box: '3c', label: 'Installatie/afstandsverkopen binnen de EU', hasVat: false, alwaysShow: false },
   { box: '4a', label: 'Leveringen/diensten uit landen buiten de EU', hasVat: true, alwaysShow: false },
-  { box: '4b', label: 'Verwervingen uit landen binnen de EU', hasVat: true, alwaysShow: false },
+  { box: '4b', label: 'Leveringen/diensten uit landen binnen de EU', hasVat: true, alwaysShow: false },
 ];
 const BOX_SECTION: Record<string, string> = {
   '1a': 'Prestaties binnenland — verschuldigde omzetbelasting',
@@ -104,6 +146,14 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
   const [icpLoading, setIcpLoading] = useState(false);
 
   const period = useMemo(() => bounds(view, year, month, quarter), [view, year, month, quarter]);
+  // Afsluiten en aangifte doen kan pas na afloop van het tijdvak, en alleen in
+  // de frequentie van Instellingen (de database weigert de rest; 20261118090000).
+  const today = formatISODate(now);
+  const periodRunning = period.to >= today;
+  const otherFrequency = view !== settingPeriod;
+  const deadline = vatFilingDeadline(period.to);
+  const bookkeepingStart = data.companySettings?.bookkeeping_start_date ?? null;
+  const startsInside = bookkeepingStart != null && bookkeepingStart > period.from && bookkeepingStart <= period.to;
   // Suppleties zijn extra rijen voor dezelfde periode; de primaire aangifte is de rij zónder supplements_return_id.
   const existing = useMemo(
     () => data.vatReturns.find(r => r.period_type === period.dbType && r.year === year && r.period_index === period.index && !r.supplements_return_id) ?? null,
@@ -187,7 +237,9 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
           <td>{def.label}</td>
           <td className="bk-num">{euroCents(base)}</td>
           <td className="bk-num">{def.hasVat ? euroCents(vat) : '—'}</td>
-          <td className="bk-num bk-muted">{f ? (def.hasVat ? `€ ${f.vat ?? 0}` : `€ ${f.base}`) : ''}</td>
+          {/* De aangifte vraagt per rubriek de omzet én (waar van toepassing) de
+              btw, in hele euro's; hier stond alleen de btw. */}
+          <td className="bk-num bk-muted">{f ? (def.hasVat ? `€ ${f.base ?? 0} · € ${f.vat ?? 0}` : `€ ${f.base}`) : ''}</td>
         </tr>,
       );
     }
@@ -199,7 +251,8 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
         <div><PageIcon page="vat-returns" /><h2>Omzetbelasting</h2><p>BTW-aangifte per {view === 'monthly' ? 'maand' : 'kwartaal'}, berekend uit de geboekte journaalposten.</p></div>
       </div>
 
-      {kor && <div className="bk-note">Je organisatie valt onder de <strong>KOR</strong>: je brengt geen BTW in rekening en mag geen voorbelasting aftrekken. Is er btw naar je verlegd (een dienst uit de EU, invoer of binnenlands verlegd), dan geef je die wél aan en betaal je hem, zonder aftrek: die staat hieronder in rubriek 2a, 4a of 4b. Anders is de aangifte nihil.</div>}
+      {kor && <div className="bk-note">Je organisatie valt onder de <strong>KOR</strong>: je brengt geen btw in rekening en mag geen voorbelasting aftrekken. Is er btw naar je verlegd (een dienst uit de EU, invoer of binnenlands verlegd), dan geef je die wél aan en betaal je hem, zonder aftrek: die staat hieronder in rubriek 2a, 4a of 4b. Zonder verlegde btw doe je met de KOR geen aangifte.</div>}
+      {kor && <KorTurnover organizationId={organizationId} />}
 
       <div className="bk-report-controls">
         <div className="bk-seg">
@@ -253,11 +306,25 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
               <div><span>Saldo {period.label}</span><strong className={saldoAfgerond > 0 ? 'bk-neg' : 'bk-pos'}>{euroCents(Math.abs(saldoAfgerond))}</strong></div>
               <div className={saldoAfgerond > 0 ? 'bk-balance-bad' : 'bk-balance-ok'}>{saldoAfgerond > 0 ? 'Te betalen' : saldoAfgerond < 0 ? 'Terug te ontvangen' : 'Nihil'}</div>
             </div>
-            {!finalized && !overlapsClosed && canWrite && <Button variant="primary" onClick={() => setShowClose(true)} disabled={busy}><Landmark size={14} /> Periode afsluiten</Button>}
+            {!finalized && !overlapsClosed && !periodRunning && !otherFrequency && canWrite && <Button variant="primary" onClick={() => setShowClose(true)} disabled={busy}><Landmark size={14} /> Periode afsluiten</Button>}
             {!finalized && overlapsClosed && <span className="bk-muted">Deze periode valt binnen een al afgesloten aangifteperiode.</span>}
             {finalized && existing!.status === 'finalized' && canWrite && <Button onClick={() => setStatus(existing!, 'filed')} disabled={busy}><CheckCircle2 size={14} /> Markeer als ingediend</Button>}
             {finalized && existing!.status === 'filed' && canWrite && <Button onClick={() => setStatus(existing!, 'paid')} disabled={busy}><CheckCircle2 size={14} /> Markeer als betaald</Button>}
           </div>
+
+          {!finalized && !otherFrequency && (
+            <p className={`bk-muted${!periodRunning && today > deadline ? ' bk-neg' : ''}`}>
+              {periodRunning
+                ? `Dit tijdvak loopt nog tot en met ${dateNL(period.to)}. Aangifte doen en betalen kan daarna, uiterlijk ${dateNL(deadline)}.`
+                : `Aangifte doen en betalen: uiterlijk ${dateNL(deadline)}${today > deadline ? ' — die datum is voorbij' : ''}. Je vult de bedragen in de kolom "Aangifte (hele €)" over in Mijn Belastingdienst Zakelijk en sluit daarna hier de periode af.`}
+            </p>
+          )}
+          {!finalized && otherFrequency && (
+            <p className="bk-muted">Je doet aangifte per {settingPeriod === 'monthly' ? 'maand' : 'kwartaal'} (Instellingen → Bedrijf). Deze weergave per {view === 'monthly' ? 'maand' : 'kwartaal'} is alleen om te bekijken; afsluiten gaat per {settingPeriod === 'monthly' ? 'maand' : 'kwartaal'}.</p>
+          )}
+          {startsInside && (
+            <p className="bk-muted">Je boekhouding in ResoFly begint op {dateNL(bookkeepingStart)}. Wat daarvóór in dit tijdvak viel, staat hier niet in: neem dat zelf mee in deze aangifte.</p>
+          )}
 
           {hasBoxes && r.boxes_consistent === false && (
             <div className="bk-note"><AlertTriangle size={14} /> De rubriekverdeling sluit niet aan op het grootboek (verschil {euroCents(Math.abs(r.boxes_vat_diff_cents ?? 0))} op 1510/1520). Waarschijnlijk is er rechtstreeks op een BTW-rekening geboekt zonder btw-code. Het af te dragen bedrag is daarom op het totaal afgerond; controleer de rubrieken vóór het indienen.</div>
@@ -265,7 +332,7 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
 
           {hasBoxes ? (
             <div className="bk-table-wrap"><table className="bk-table bk-report-table">
-              <thead><tr><th>Rubriek</th><th>Omschrijving</th><th className="bk-num">Grondslag</th><th className="bk-num">BTW</th><th className="bk-num">Aangifte (hele €)</th></tr></thead>
+              <thead><tr><th>Rubriek</th><th>Omschrijving</th><th className="bk-num">Grondslag</th><th className="bk-num">BTW</th><th className="bk-num" title="Wat je in Mijn Belastingdienst invult: omzet · btw">Aangifte (hele €)</th></tr></thead>
               <tbody>
                 {boxTableRows}
                 <tr className="bk-report-total"><td>5a</td><td>Verschuldigde omzetbelasting</td><td className="bk-num" /><td className="bk-num">{euroCents(r.verschuldigd_total)}</td><td className="bk-num bk-muted">{formTotal(r, '5a') != null ? `€ ${formTotal(r, '5a')}` : ''}</td></tr>
@@ -273,7 +340,7 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
               </tbody>
               <tfoot>
                 <tr className="bk-report-result"><td>5c</td><td>Saldo (5a − 5b)</td><td className="bk-num" /><td className={`bk-num ${saldo > 0 ? 'bk-neg' : 'bk-pos'}`}>{euroCents(Math.abs(saldo))}</td><td className="bk-num bk-muted">{formTotal(r, '5c') != null ? `€ ${formTotal(r, '5c')}` : ''}</td></tr>
-                <tr className="bk-report-result"><td /><td>{saldoAfgerond >= 0 ? 'Af te dragen' : 'Terug te ontvangen'} (hele euro's per rubriek)</td><td className="bk-num" /><td className={`bk-num ${saldoAfgerond > 0 ? 'bk-neg' : 'bk-pos'}`} colSpan={2}>{euroCents(Math.abs(saldoAfgerond))}</td></tr>
+                <tr className="bk-report-result"><td>5g</td><td>{saldoAfgerond >= 0 ? 'Totaal te betalen' : 'Totaal terug te vragen'} (hele euro's per rubriek)</td><td className="bk-num" /><td className={`bk-num ${saldoAfgerond > 0 ? 'bk-neg' : 'bk-pos'}`} colSpan={2}>{euroCents(Math.abs(saldoAfgerond))}</td></tr>
               </tfoot>
             </table></div>
           ) : (
