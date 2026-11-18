@@ -4284,6 +4284,8 @@ function App() {
     onSearchNavigate: handleSearchNavigate,
     userEmail: currentUserEmail ?? activeMembership?.email ?? null,
     onOpenSettings: openSettings,
+    // Zonder gekozen onderdeel opent de pagina op Organisatie & team.
+    settingsTab: page === 'settings' ? settingsNav?.tab ?? 'organisatie' : null,
     onSignOut: () => void signOutOnThisDevice(),
     messageUnread: clientEmailUnread.total,
     inboxOpen: inboxCount,
@@ -4589,7 +4591,12 @@ function App() {
       const calendarSettings = permissions.canRead('calendar')
         ? <CalendarPage mode="settings" linkNotice={calendarLinkNotice} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={orgCanWrite && permissions.canWrite('calendar')} canAdmin={canAdmin} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>
         : null;
-      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings} permissions={permissions} onOpenAuditTarget={openAuditTarget} onSetAiConsent={changeAiConsent}/>;
+      // onTabChange: een onderdeel kiezen op de pagina zelf komt in het
+      // werktabblad terecht. Zonder dit wist het menu links niet waar je was
+      // (er lichtte niets op), en sloeg de terugknop het onderdeel over. De
+      // `key` blijft gelijk: die zet het logboek op nul, en dat hoort alleen
+      // bij navigeren via het menu.
+      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings} permissions={permissions} onOpenAuditTarget={openAuditTarget} onSetAiConsent={changeAiConsent} onTabChange={tab => setSettingsNav(prev => ({ tab, key: prev?.key ?? 0 }))}/>;
     }
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
   }

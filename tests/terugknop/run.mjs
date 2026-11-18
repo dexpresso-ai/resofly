@@ -79,6 +79,7 @@ async function where(t) {
     gerrie: Boolean(document.querySelector('.gerrie-panel')),
     commThread: Boolean(document.querySelector('.comm-shell.is-single .comm-back')),
     chatThread: Boolean(document.querySelector('.chat-single .tmc-back')),
+    settingsTab: document.querySelector('section.content:not([hidden]) .settings-subtabs [aria-selected="true"]')?.dataset.settingsTab ?? null,
     marker: history.state && typeof history.state === 'object' ? history.state.resoflyBack ?? null : null,
   }));
   return { ...view, steps: nav.currentIndex - t.start, url: nav.entries[nav.currentIndex]?.url ?? '' };
@@ -235,6 +236,25 @@ await scenario('teamchat: terug gaat van een gesprek naar de lijst', 'chat', asy
   await expectState(t, 'gesprek open', { page: 'chat', chatThread: true, steps: 2 });
   await back(t);
   await expectState(t, 'lijst', { page: 'chat', chatThread: false, steps: 1 });
+});
+
+// Instellingen in groepen (2026-11-18): een groep en een onderdeel kiezen op de
+// pagina zijn stappen, net als via het menu. Terug gaat langs de onderdelen
+// waar je was, en daarna omhoog naar het dashboard.
+await scenario('Instellingen: terug gaat langs de onderdelen die je koos', 'settings', async (t) => {
+  // Bij de eerste keuze komen er twee stappen bij: terug naar Organisatie &
+  // team, en omhoog naar het dashboard, zoals op elke pagina.
+  await expectState(t, 'start', { page: 'settings', settingsTab: 'organisatie', steps: 0 });
+  await tap(t, '[data-settings-group="geld"]');
+  await expectState(t, 'groep Geld', { settingsTab: 'facturatie', steps: 2 });
+  await tap(t, '[data-settings-tab="betalen"]');
+  await expectState(t, 'Online betalen', { settingsTab: 'betalen', steps: 3 });
+  await back(t);
+  await expectState(t, 'terug 1', { page: 'settings', settingsTab: 'facturatie', steps: 2 });
+  await back(t);
+  await expectState(t, 'terug 2', { page: 'settings', settingsTab: 'organisatie', steps: 1 });
+  await back(t);
+  await expectState(t, 'omhoog', { page: 'dashboard', steps: 0 });
 });
 
 await scenario('herladen midden in de app: daarna klopt terug weer', 'dashboard', async (t) => {
