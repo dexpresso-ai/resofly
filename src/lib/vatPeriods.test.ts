@@ -39,3 +39,29 @@ test('per maand', () => {
   const due = vatPeriodsToFile({ today: '2026-03-05', frequency: 'monthly', kor: false, bookkeepingStart: '2026-01-01', filed: new Set([vatPeriodKey('month', 2026, 1)]) });
   assert.deepEqual(due.map(d => [d.label, d.deadline]), [['februari 2026', '2026-03-31']]);
 });
+
+test('van kwartaal naar maand per 1 januari: vorig jaar telt in kwartalen, dit jaar in maanden', () => {
+  const q = (n: number) => vatPeriodKey('quarter', 2026, n);
+  // In januari staat de instelling al op per maand, en moet Q4 2026 nog.
+  const januari = vatPeriodsToFile({ today: '2027-01-15', frequency: 'monthly', kor: false, bookkeepingStart: '2026-01-01', filed: new Set([q(1), q(2), q(3)]) });
+  assert.deepEqual(januari.map(d => [d.label, d.deadline, d.overdue]), [['Q4 2026', '2027-01-31', false]]);
+  // Na Q4 en januari: alleen februari.
+  const maart = vatPeriodsToFile({ today: '2027-03-05', frequency: 'monthly', kor: false, bookkeepingStart: '2026-01-01', filed: new Set([q(1), q(2), q(3), q(4), vatPeriodKey('month', 2027, 1)]) });
+  assert.deepEqual(maart.map(d => [d.label, d.deadline]), [['februari 2027', '2027-03-31']]);
+});
+
+test('van maand naar kwartaal per 1 januari: december gaat nog per maand', () => {
+  const maanden = Array.from({ length: 11 }, (_, i) => vatPeriodKey('month', 2026, i + 1));
+  const due = vatPeriodsToFile({ today: '2027-01-15', frequency: 'quarterly', kor: false, bookkeepingStart: '2026-01-01', filed: new Set(maanden) });
+  assert.deepEqual(due.map(d => [d.label, d.deadline]), [['december 2026', '2027-01-31']]);
+});
+
+test('wissel midden in het jaar: maanden die in een aangegeven kwartaal vallen, zijn gedaan', () => {
+  const filed = new Set([vatPeriodKey('quarter', 2026, 1), vatPeriodKey('quarter', 2026, 2), vatPeriodKey('month', 2026, 7), vatPeriodKey('month', 2026, 8), vatPeriodKey('month', 2026, 9)]);
+  const due = vatPeriodsToFile({ today: '2026-11-18', frequency: 'monthly', kor: false, bookkeepingStart: '2026-01-01', filed });
+  assert.deepEqual(due.map(d => [d.label, d.overdue]), [['oktober 2026', false]]);
+  // Andersom: per kwartaal ingesteld, en Q1 en Q2 per maand aangegeven.
+  const maanden = new Set([1, 2, 3, 4, 5, 6].map(m => vatPeriodKey('month', 2026, m)));
+  const terug = vatPeriodsToFile({ today: '2026-11-18', frequency: 'quarterly', kor: false, bookkeepingStart: '2026-01-01', filed: maanden });
+  assert.deepEqual(terug.map(d => d.label), ['Q3 2026']);
+});

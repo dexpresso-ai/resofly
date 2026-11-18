@@ -62,17 +62,23 @@ export function vatPeriodOf(date: string, frequency: VatFrequency): VatPeriod {
   return frequency === 'monthly' ? vatPeriod('month', year, month) : vatPeriod('quarter', year, Math.floor((month - 1) / 3) + 1);
 }
 
-function previous(period: VatPeriod): VatPeriod {
-  if (period.type === 'month') return period.index === 1 ? vatPeriod('month', period.year - 1, 12) : vatPeriod('month', period.year, period.index - 1);
-  return period.index === 1 ? vatPeriod('quarter', period.year - 1, 4) : vatPeriod('quarter', period.year, period.index - 1);
-}
-
 export const vatPeriodKey = (type: string, year: number, index: number) => `${type}:${year}:${index}`;
 
 /**
  * Afgelopen tijdvakken zonder aangifte, oudste eerst. Vanaf de start van de
  * boekhouding (wat daarvóór viel, deed je buiten ResoFly) en hooguit twee
  * jaar terug. Met de KOR doe je geen aangifte: dan niets.
+ *
+ * Wisselen van tijdvak (kwartaal ↔ maand) gebeurt in de praktijk per
+ * 1 januari: de Belastingdienst zet je om, of je vraagt het zelf aan. Hier
+ * telde eerst alleen de frequentie van nu, en na zo'n wissel stonden alle
+ * kwartalen van vorig jaar als twaalf niet aangegeven maanden op het
+ * dashboard, rood. Daarom:
+ * - een eerder jaar telt in de soort waarin het is aangegeven (alleen
+ *   kwartalen of alleen maanden), anders in de frequentie van nu;
+ * - een tijdvak is aangegeven als al zijn maanden in een aangifte vallen, per
+ *   maand of per kwartaal (een wissel midden in het jaar).
+ * Dezelfde regel als finalize_vat_return en close_fiscal_year (20261118100000).
  */
 export function vatPeriodsToFile(input: {
   today: string;
@@ -87,14 +93,36 @@ export function vatPeriodsToFile(input: {
   const start = input.bookkeepingStart ?? `${ty - 1}-01-01`;
   const twoYearsBack = `${ty - 2}-01-01`;
   const floor = start > twoYearsBack ? start : twoYearsBack;
+
+  const kindsPerYear = new Map<number, Set<'month' | 'quarter'>>();
+  const coveredMonths = new Set<string>();
+  for (const key of input.filed) {
+    const [type, y, i] = key.split(':');
+    const year = Number(y);
+    const index = Number(i);
+    if (type !== 'month' && type !== 'quarter') continue;
+    if (!kindsPerYear.has(year)) kindsPerYear.set(year, new Set());
+    kindsPerYear.get(year)!.add(type);
+    const firstMonth = type === 'month' ? index : (index - 1) * 3 + 1;
+    for (let m = firstMonth; m < firstMonth + (type === 'month' ? 1 : 3); m++) coveredMonths.add(`${year}:${m}`);
+  }
+  const current: 'month' | 'quarter' = input.frequency === 'monthly' ? 'month' : 'quarter';
+
   const due: VatPeriodDue[] = [];
-  let period = previous(vatPeriodOf(input.today, input.frequency));
-  for (let i = 0; i < 40 && period.to >= floor; i++) {
-    if (!input.filed.has(vatPeriodKey(period.type, period.year, period.index))) {
+  for (let year = Number(floor.slice(0, 4)); year <= ty; year++) {
+    const kinds = kindsPerYear.get(year);
+    const type = year < ty && kinds?.size === 1 ? [...kinds][0] : current;
+    for (let index = 1; index <= (type === 'month' ? 12 : 4); index++) {
+      const period = vatPeriod(type, year, index);
+      // Het lopende tijdvak (en wat erna komt) kan nog niet.
+      if (period.to >= input.today) break;
+      if (period.to < floor) continue;
+      const firstMonth = type === 'month' ? index : (index - 1) * 3 + 1;
+      const months = type === 'month' ? [firstMonth] : [firstMonth, firstMonth + 1, firstMonth + 2];
+      if (months.every(m => coveredMonths.has(`${year}:${m}`))) continue;
       const deadline = vatFilingDeadline(period.to);
       due.push({ ...period, deadline, overdue: input.today > deadline });
     }
-    period = previous(period);
   }
-  return due.reverse();
+  return due;
 }
