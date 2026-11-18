@@ -172,7 +172,10 @@ gekoppelde AI (MCP) en de openbare API tegelijk:
 - Migratie `20261118113000_prognose.sql`: `forecasts`, `forecast_versions`, de
   triggers `forecasts_guard` (naam netjes, versie tellen, wie het deed) en
   `forecasts_snapshot`, RLS met de modulepoort, en `forecast_history(org, van, tot)`.
-  Veilig om opnieuw te draaien.
+  Veilig om opnieuw te draaien. Eerst geschreven als `20261117120000`; op 18
+  november kreeg staging `20261118090000` en `20261118100000`, en een oudere versie
+  dan de laatste op staging weigert `supabase db push`. Hij stond nog niet op
+  staging, dus is hij hernummerd.
 - Rekenregels: `supabase/functions/_shared/forecast.ts`, puur (geen imports, geen
   Deno, geen DOM, geen Intl), zodat Deno, de browserbundel en `npm test` het alle
   drie laden. `src/lib/forecast.ts` zet het door; `forecast.test.ts` bewaakt dat het
@@ -201,24 +204,32 @@ gekoppelde AI (MCP) en de openbare API tegelijk:
 
 ## Getest
 
-Vóór het samenvoegen met staging:
+Alles hieronder is gedraaid op de stand ná het samenvoegen met staging (met de
+eenmanszaak en de instellingen in groepen erin), zoals hij uitrolt:
 
 - `npm run typecheck`: schoon.
-- `npm test`: 1934 geslaagd, 0 mislukt. Daarin de rekenregels
+- `npm test`: 1961 geslaagd, 0 mislukt. Daarin de rekenregels
   (`forecast.test.ts`, ook de bewaking dat het bestand puur blijft), de
   zoekvragen in `actionSearch.test.ts`, en de bestaande wachters
-  `actionTenancy.test.ts`, `migrationGrants.test.ts` en `exportManifest.test.ts`.
-- `deno check` van de edge functions uit `frontend-checks.yml` en de nieuwe
-  gedeelde bestanden: schoon. Lokaal met een import map naar `npm:`, omdat esm.sh
-  hier niet bereikbaar is.
-- De migratieketen vanaf nul op Postgres 17.11.0.018 (de versie van staging), en
-  de migratie daarna nog een keer: geen fout.
+  `actionTenancy.test.ts`, `migrationGrants.test.ts`, `exportManifest.test.ts`
+  (de schemaversie volgt de nieuwste migratie) en `dataGroups.test.ts`.
+- `deno check` van de 35 edge functions uit `frontend-checks.yml`, de twee
+  bestanden van de documentopmaak en de twee nieuwe gedeelde bestanden: schoon.
+  Lokaal met een import map naar `npm:`, omdat esm.sh hier niet bereikbaar is.
+- De migratieketen vanaf nul (`supabase db reset`, Postgres 17.11.0.018, de versie
+  van staging): `20261118090000`, `20261118100000` en daarna `20261118113000`. De
+  prognose-migratie daarna nog een keer: geen fout.
 - De databasecontroles van de rooktest van staging: het boekhouder-hek dekt beide
-  tabellen, en anon heeft op geen tabel of functie rechten.
+  tabellen, anon heeft op geen tabel of functie rechten, en het schema `public`
+  blijft dicht voor anon.
 - Stromentest `prognose`: 20 van de 20 stappen geslaagd.
-
-De mobiele lay-outtest, de UI-test en de controles na het samenvoegen volgen
-hieronder.
+- UI-test `prognose` in Chromium tegen de echte backend: 8 van de 8 stappen
+  geslaagd.
+- Laden per module: alle controles geslaagd; de prognose haalt geen zware groep op
+  en elke tabel één keer.
+- Inrichtingsstappen: alle controles geslaagd. Terugknop: 13 van de 13.
+- Mobiele lay-outtest, licht en donker: loopt nog (alle 118 pagina's, in vier
+  rondes); de uitslag komt hier.
 
 ## Niet in deze stap
 
