@@ -149,9 +149,9 @@ een diff nagelopen.
 - **Schermen:**
   - `npm run test:inrichten` (157), `npm run test:terugknop` (12) en
     `npm run test:loading` (107) ✓;
-  - mobiele lay-outtest, donker en licht, met nieuwe pagina's: Vennoten, een
-    vennoot bewerken, de beginbalans van een vof, en Inkoopfacturen van een vof
-    met het venster Privé betaald.
+  - mobiele lay-outtest, donker en licht: 716 metingen, 0 problemen. Er zijn
+    nieuwe pagina's bij: Vennoten, een vennoot bewerken, de beginbalans van
+    een vof, en Inkoopfacturen van een vof met het venster Privé betaald.
 
 ## Bewust open
 
