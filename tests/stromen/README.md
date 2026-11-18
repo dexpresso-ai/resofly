@@ -181,7 +181,12 @@ En `prognose`: Financiën → Prognose en wat de AI ermee mag (migratie 20261118
   dezelfde winst als het scherm, `forecast.update` als kaart met de wijziging en de winst ervoor en
   erna, goedkeuren met de PATCH van de uitvoerder (het scherm komt dan op de winst van de kaart), een
   oud voorstel dat niets meer verandert, onzin met een reden, en een prognose van een andere
-  organisatie die voor de AI niet bestaat.
+  organisatie die voor de AI niet bestaat;
+- seizoen en cashflow (20261118171500): `forecast_cash_position` met een afschrift en een bankregel
+  daarna, de openstaande posten en de betaaltermijn (en wie het niet mag zien); `forecast.list` met
+  hetzelfde saldo als het scherm; een investering (geld eraf) die de winst laat staan en het laagste
+  saldo op de kaart zet, en na goedkeuren op het scherm precies dat laagste saldo; het
+  seizoenspatroon en de cashvelden op de kaart, en onzin met een reden.
 
 Zie `docs/changelog/CHANGELOG_PROGNOSE_2026-11-18.md`.
 
@@ -289,7 +294,9 @@ En `prognose`: een aanname die meteen doorrekent, "Bewaren als prognose" (een PO
 Bewaren met de versie als controle (een PATCH), de geschiedenis met wat er veranderde, een
 goedgekeurd voorstel van Gerrie dat er na verversen staat zonder niet-bewaarde wijziging, versie 1
 terugzetten (wordt versie 4), "Pas aan met Gerrie" dat de chat opent met de vraag over deze
-prognose, en een lezer die alles ziet maar niets kan wijzigen of vragen.
+prognose, de cashflow (zonder bankrekening "onbekend", zelf een banksaldo invullen, de balk en het
+kerncijfer rekenen door, bewaren wordt versie 5), en een lezer die alles ziet maar niets kan
+wijzigen of vragen.
 
 Elke stap controleert ook: geen JavaScript-fout, geen foutmelding of "laden…" die blijft staan,
 en geen mislukte aanroep die de stap niet verwachtte. Mislukt een stap, dan komt er een

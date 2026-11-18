@@ -3530,6 +3530,33 @@ async function scenarioPrognose() {
     await page.keyboard.press('Escape');
   }, { toegestaan: [{ soort: 'functie', functie: 'gerrie-agent' }], foutmelding: /./ });
 
+  await uiStap('de cashflow: zonder bankrekening onbekend, zelf een banksaldo invullen en bewaren', async () => {
+    const id = basis?.id;
+    verwacht(id, 'overgeslagen: de prognose ontbreekt');
+    const page = t.lid.page;
+    const scherm = inhoud(page);
+    // Het seizoen staat bij de aannames, ook als er nog geen patroon is (deze
+    // wereld heeft maar een paar maanden omzet): dan zegt het waarom.
+    verwacht(/twee hele jaren|nog geen omzet/.test(tekst(await scherm.locator('.fc-season-sub').innerText())), 'het seizoensblok zegt niet waarom er geen patroon is');
+    await scherm.locator('.fc-views button', { hasText: 'Cashflow' }).click();
+    await scherm.locator('.fc-kpi-cash[data-kpi="start"]').waitFor({ timeout: 10000 });
+    gelijk(tekst(await scherm.locator('.fc-kpi-cash[data-kpi="start"] .sc-val').innerText()), 'Onbekend', 'banksaldo zonder bankrekening');
+    verwacht(tekst(await scherm.locator('.fc-cash-notes').innerText()).includes('weet je banksaldo niet'), 'geen uitleg bij een onbekend banksaldo');
+    await scherm.locator('.fc-field[data-field="cash_start"] input').fill('12500');
+    await wachtTot(() => scherm.locator('.fc-dirty .fc-dirty-acts').isVisible(), { melding: 'geen balk "Nog niet bewaard"' });
+    verwacht(tekst(await scherm.locator('.fc-dirty').innerText()).includes('Banksaldo nu: automatisch → € 12.500'), 'de balk noemt het banksaldo niet');
+    await wachtTot(async () => tekst(await scherm.locator('.fc-kpi-cash[data-kpi="start"] .sc-val').innerText()) === '€ 12.500', { melding: 'het kerncijfer rekende niet door' });
+    verwacht(await scherm.locator('.fc-cash-table tbody tr').count() >= 2, 'de tabel van de cashflow is leeg');
+    const sinds = server.verkeer.length;
+    await scherm.locator('.fc-dirty').getByRole('button', { name: 'Bewaren', exact: true }).click();
+    await rustig(t.lid);
+    verwachtAanroep(sinds, { soort: 'rest', tabel: 'forecasts', methode: 'PATCH' }, 'Bewaren wijzigde de prognose niet');
+    const rij = sqlRij(`select version, assumptions from public.forecasts where id = ${q(id)}`);
+    gelijk([rij?.version, Number(rij?.assumptions?.cash_start)], [5, 12500], 'het banksaldo in de database');
+    // Terug naar het resultaat: de stappen hierna kijken daar.
+    await scherm.locator('.fc-views button', { hasText: 'Resultaat' }).click();
+  });
+
   await uiStap('de lezer ziet de prognose, maar kan niets wijzigen of Gerrie vragen', async () => {
     const lezer = await openWerkruimte(w.lezer, 'lezer', w.orgId, { tijdelijk: true });
     await naarFinancien(lezer, 'Prognose');
