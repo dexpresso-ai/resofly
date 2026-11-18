@@ -12,6 +12,7 @@ import { isAdminRole, type ModuleAccess } from './permissions';
 import { isPortalLoginKey } from './portalLoginKey';
 import { cleanQuery, entityTypesFor, periodStart, type AuditFilters } from './auditLog';
 import type { CoreData, DataGroup, GroupData } from './dataGroups';
+import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
 import type {
   AiConsent,
   AppData,
@@ -2709,6 +2710,73 @@ export async function loadOwnersEquityOverview(organizationId: UUID, fiscalYearI
   });
   if (error) throw bookkeepingError(error);
   return data as OwnersEquityOverview;
+}
+
+// ── Inkomstenbelasting (raming per ondernemer of vennoot) ───────────────────
+// Het rekenwerk staat in src/lib/inkomstenbelasting.ts; hier alleen de
+// gegevens. Schrijven gaat via de functies van migratie 20261118090000, die de
+// rechten, de rechtsvorm en de organisatie van een vennoot of activum toetsen.
+
+/** Alles wat de raming van één kalenderjaar nodig heeft (get_income_tax_inputs). */
+export async function loadIncomeTaxInputs(organizationId: UUID, year: number): Promise<IncomeTaxInputs> {
+  const { data, error } = await supabase.rpc('get_income_tax_inputs', {
+    p_organization_id: organizationId,
+    p_year: year,
+  });
+  if (error) throw bookkeepingError(error);
+  if (!data) throw new Error('Geen gegevens gevonden voor dit jaar.');
+  return data as IncomeTaxInputs;
+}
+
+/** Wat de raming per persoon per jaar nodig heeft en niet in de boekhouding staat. */
+export async function saveIncomeTaxProfile(organizationId: UUID, year: number, profile: IncomeTaxProfile): Promise<void> {
+  const { error } = await supabase.rpc('save_income_tax_profile', {
+    p_organization_id: organizationId,
+    p_year: year,
+    p_partner_id: profile.partnerId,
+    p_meets_hours_criterion: profile.meetsHoursCriterion,
+    p_starter: profile.starter,
+    p_aow_status: profile.aowStatus,
+    p_aow_month: profile.aowStatus === 'in_jaar' ? profile.aowMonth : null,
+    p_loss_carry_forward_cents: profile.lossCarryForwardCents,
+    p_other_entrepreneur_deduction_cents: profile.otherEntrepreneurDeductionCents,
+    p_provisional_income_tax_cents: profile.provisionalIncomeTaxCents,
+    p_provisional_zvw_cents: profile.provisionalZvwCents,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+export async function addIncomeTaxCorrection(
+  organizationId: UUID,
+  input: { year: number; partnerId: UUID | null; code: IbCorrectionCode; label: string; amountCents: number },
+): Promise<void> {
+  const { error } = await supabase.rpc('add_income_tax_correction', {
+    p_organization_id: organizationId,
+    p_year: input.year,
+    p_partner_id: input.partnerId,
+    p_code: input.code,
+    p_label: input.label,
+    p_amount_cents: input.amountCents,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+export async function deleteIncomeTaxCorrection(organizationId: UUID, correctionId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('delete_income_tax_correction', {
+    p_organization_id: organizationId,
+    p_correction_id: correctionId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/** Een activum wel of niet laten meetellen voor de KIA. */
+export async function setIncomeTaxKiaExclusion(organizationId: UUID, assetId: UUID, excluded: boolean): Promise<void> {
+  const { error } = await supabase.rpc('set_income_tax_kia_exclusion', {
+    p_organization_id: organizationId,
+    p_asset_id: assetId,
+    p_excluded: excluded,
+  });
+  if (error) throw bookkeepingError(error);
 }
 
 export async function computeDgaInterest(organizationId: UUID, year: number): Promise<DgaInterestComputation> {

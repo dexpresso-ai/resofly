@@ -4,6 +4,7 @@ import {
   type ActionCtx, type ActionDef,
 } from './types.ts';
 import { computeVpb, type LossCarryForward, type VpbCarryBackBasis, type VpbCorrection, type VpbYearRules } from '../vpb.ts';
+import { IB_FIRST_YEAR, buildIncomeTaxOverview, type IncomeTaxInputs } from '../inkomstenbelasting.ts';
 
 /**
  * Handelingen rond de ZAKELIJKE MODULE: de BV, de NV en de coöperatie.
@@ -129,6 +130,8 @@ interface FiscalYearRow {
 const SHARE_COMPANY_FORMS = ['bv', 'nv'];
 /** BV, NV en coöperatie: vennootschapsbelasting, resultaatbestemming en dividend (dezelfde grens als de schermen). */
 const VPB_FORMS = ['bv', 'nv', 'cooperatie'];
+/** Eenmanszaak, vof, maatschap en cv: de winst is van de ondernemer of de vennoten zelf (inkomstenbelasting). */
+const IB_FORMS = ['eenmanszaak', 'vof', 'maatschap', 'cv'];
 
 async function legalFormOf(ctx: ActionCtx): Promise<string> {
   const { data, error } = await orgQuery(ctx, 'company_settings', 'legal_form').maybeSingle();
@@ -1098,6 +1101,71 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
         .order('partner_number', { ascending: true });
       if (partnersError) throw new ActionError(`Vennoten ophalen mislukt: ${partnersError.message}`);
       return { overview: data ?? null, partners: partners ?? [] };
+    },
+  },
+
+  {
+    id: 'owners.income_tax_estimate',
+    label: 'Raming inkomstenbelasting bekijken (per ondernemer of vennoot)',
+    module: 'finance',
+    kind: 'read',
+    description:
+      'Alleen voor een eenmanszaak, vof, maatschap of cv. Een raming per kalenderjaar van wat de ondernemer, of elke vennoot over zijn winstaandeel, aan inkomstenbelasting (box 1, inclusief premie volksverzekeringen) en inkomensafhankelijke bijdrage Zvw betaalt: ' +
+      'winst(aandeel) + fiscale correcties − KIA = winst uit onderneming; − zelfstandigenaftrek (urencriterium), startersaftrek en overige ondernemersaftrek; − mkb-winstvrijstelling (12,70%) = belastbare winst; − verlies uit eerdere jaren; tarief box 1 met de aftrekbeperking; − algemene heffingskorting, arbeidskorting (over de winst vóór ondernemersaftrek) en bij de AOW-leeftijd de ouderenkorting; + Zvw-bijdrage; − betaalde voorlopige aanslagen = nog te betalen (negatief = terug). ' +
+      'Een commanditaire vennoot is geen ondernemer: geen ondernemersaftrek, mkb-winstvrijstelling of arbeidskorting. Tarieven en bedragen van 2025 en 2026; een later jaar rekent met die van 2026 en zegt dat in `warnings`. Bedragen in centen. ' +
+      '`basis` "prognose" trekt de geboekte winst van het lopende jaar door naar 31 december (pas na de eerste maand). Het urencriterium, de startersaftrek, de AOW-leeftijd en de voorlopige aanslagen vult de gebruiker in op de pagina Inkomstenbelasting; staat het urencriterium op null, dan is er gerekend zonder zelfstandigenaftrek. ' +
+      'BELANGRIJK: dit rekent alleen met het zakelijke inkomen uit deze onderneming. Noem bij elk antwoord de `disclaimer`: ander inkomen, persoonlijke aftrekposten en kortingen die van de persoonlijke situatie afhangen, zijn niet meegenomen. Het is geen aangifte en geen advies.',
+    keywords: ['inkomstenbelasting', 'ib', 'aangifte inkomstenbelasting', 'hoeveel belasting', 'belasting betalen', 'reserveren', 'zelfstandigenaftrek', 'startersaftrek', 'mkb-winstvrijstelling', 'kia', 'kleinschaligheidsinvesteringsaftrek', 'heffingskorting', 'arbeidskorting', 'zvw', 'zorgverzekeringswet', 'voorlopige aanslag', 'urencriterium', 'eenmanszaak', 'vof', 'vennoot'],
+    input: {
+      year: { type: 'number', description: `Kalenderjaar, vanaf ${IB_FIRST_YEAR}. Standaard het lopende jaar.` },
+      basis: { type: 'string', enum: ['geboekt', 'prognose'], description: 'geboekt (standaard): de winst die nu geboekt is. prognose: voor het lopende jaar de geboekte winst doorgetrokken naar 31 december.' },
+    },
+    async read(ctx, input) {
+      await requireLegalForm(ctx, IB_FORMS, 'De raming van de inkomstenbelasting');
+      const year = Math.trunc(optNum(input, 'year') ?? Number(ctx.today.slice(0, 4)));
+      const basis = optChoice(input, 'basis', ['geboekt', 'prognose'] as const) ?? 'geboekt';
+      const { data, error } = await ctx.db.rpc('get_income_tax_inputs', {
+        p_organization_id: ctx.organizationId,
+        p_year: year,
+      });
+      if (error) throw new ActionError(`Gegevens voor de inkomstenbelasting ophalen mislukt: ${error.message}`);
+      if (!data) throw new ActionError('Geen gegevens gevonden voor dit jaar.');
+      // Hetzelfde rekenhart als het scherm (src/lib/inkomstenbelasting.ts, gespiegeld).
+      const overview = buildIncomeTaxOverview(data as IncomeTaxInputs, { basis, today: ctx.today });
+      if (!overview) throw new ActionError(`Voor ${year} rekent ResoFly de inkomstenbelasting niet uit: de tarieven staan erin vanaf ${IB_FIRST_YEAR}.`);
+      return {
+        disclaimer: overview.disclaimer,
+        year: overview.year,
+        rulesYear: overview.rulesYear,
+        rulesExact: overview.rulesExact,
+        basis: overview.basis,
+        bookedResultCents: overview.resultCents,
+        usedResultCents: overview.usedResultCents,
+        projection: overview.projection,
+        investmentTotalCents: overview.investmentTotalCents,
+        kiaCents: overview.kiaCents,
+        totals: overview.totals,
+        warnings: overview.warnings,
+        persons: overview.persons.map((p) => ({
+          name: p.name,
+          kind: p.kind,
+          shareBasisPoints: p.shareBasisPoints,
+          inputs: {
+            meetsHoursCriterion: p.profile.meetsHoursCriterion,
+            starter: p.profile.starter,
+            aowStatus: p.profile.aowStatus,
+            aowMonth: p.profile.aowMonth,
+            lossCarryForwardCents: p.profile.lossCarryForwardCents,
+            otherEntrepreneurDeductionCents: p.profile.otherEntrepreneurDeductionCents,
+            provisionalIncomeTaxCents: p.profile.provisionalIncomeTaxCents,
+            provisionalZvwCents: p.profile.provisionalZvwCents,
+            saved: p.profileSaved,
+          },
+          corrections: p.corrections.map((c) => ({ code: c.code, label: c.label, amountCents: c.amountCents, shared: c.shared })),
+          estimate: p.estimate,
+          notes: p.notes,
+        })),
+      };
     },
   },
 

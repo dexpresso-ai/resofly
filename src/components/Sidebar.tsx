@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calculator, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, settingsTabRoleRule, type SettingsTab } from '../features/SimplePages';
@@ -22,7 +22,7 @@ const LOOK_CHOICES: { look: Look; label: string; hint: string }[] = [
   { look: 'stroom', label: 'Stroom', hint: 'licht, glas en de stroom' },
 ];
 
-export type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+export type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 
 /**
  * Het menu in categorieën in plaats van dertien regels onder elkaar. Een groep
@@ -78,7 +78,7 @@ function canOpenNavItem(key: string, permissions: Permissions): boolean {
   return permissions.canOpenPage(key);
 }
 
-const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'prepaid', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'];
+const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'prepaid', 'pnl', 'vat-returns', 'corporate-tax', 'income-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'];
 const calendarPages: Page[] = ['calendar', 'meeting-booking'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'weekplanner', 'archive'];
 /**
@@ -264,7 +264,7 @@ export function Sidebar({
     onPage(target);
   }
 
-  function openFinancePage(target: 'quotes' | 'contracts' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'bank' | 'assets' | 'prepaid' | 'pnl' | 'vat-returns' | 'corporate-tax' | 'dga' | 'shareholders' | 'owners' | 'fiscal-years' | 'annual-accounts') {
+  function openFinancePage(target: 'quotes' | 'contracts' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'bank' | 'assets' | 'prepaid' | 'pnl' | 'vat-returns' | 'corporate-tax' | 'income-tax' | 'dga' | 'shareholders' | 'owners' | 'fiscal-years' | 'annual-accounts') {
     setFinanceOpen(true);
     onPage(target);
   }
@@ -432,9 +432,12 @@ export function Sidebar({
             {/* Eenmanszaak, vof, maatschap en cv: de winst is van de ondernemer of
                 de vennoten zelf; daar horen het privé en de kapitaalvergelijking
                 bij (bij een vof per vennoot). */}
-            {['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(data.companySettings?.legal_form ?? 'eenmanszaak') && (
+            {['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(data.companySettings?.legal_form ?? 'eenmanszaak') && (<>
               <button type="button" className={page === 'owners' ? 'active' : ''} onClick={() => openFinancePage('owners')}><Wallet size={13}/><span>{['vof', 'maatschap', 'cv'].includes(data.companySettings?.legal_form ?? 'eenmanszaak') ? 'Vennoten' : 'Eigen vermogen'}</span></button>
-            )}
+              {/* De raming van de inkomstenbelasting: de tegenhanger van de
+                  vennootschapsbelasting bij een BV. */}
+              <button type="button" className={page === 'income-tax' ? 'active' : ''} onClick={() => openFinancePage('income-tax')}><Calculator size={13}/><span>Inkomstenbelasting</span></button>
+            </>)}
             <button type="button" className={page === 'fiscal-years' ? 'active' : ''} onClick={() => openFinancePage('fiscal-years')}><CalendarClock size={13}/><span>Boekjaren</span></button>
             {/* Een jaarrekening volgens Titel 9 Boek 2 BW hoort bij een BV, NV of
                 coöperatie; een eenmanszaak maakt er geen op en deponeert niets. */}

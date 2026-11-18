@@ -158,6 +158,17 @@ const PAGES = {
   'tickets-search': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: ['.ticket-search-toggle', { fill: '.ticket-search input', value: 'website' }] },
   'tickets-filters': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: '.ticket-filter-toggle' },
   'client-tickets': { page: 'client', clientId: seed.clients[0].id, prepare: '.client-tab-btn:has-text("Tickets")' },
+  // Inkomstenbelasting (2026-11-18): de raming als eenmanszaak en als vof, met
+  // de disclaimer bovenaan. Per persoon het formulier naast de berekening; op de
+  // telefoon onder elkaar, zonder dat een bedrag of een lange naam eraf valt.
+  'income-tax': {
+    page: 'income-tax', mock: { incomeTax: 'eenmanszaak' },
+    mustShow: [{ selector: '.ib-disclaimer', label: 'de disclaimer dat alleen zakelijk inkomen meetelt' }, { selector: '.ib-person .ib-calc', label: 'de berekening' }],
+  },
+  'income-tax-vof': {
+    page: 'income-tax', mock: { incomeTax: 'vof' },
+    mustShow: [{ selector: '.ib-disclaimer', label: 'de disclaimer dat alleen zakelijk inkomen meetelt' }, { selector: '.ib-person ~ .ib-person .ib-calc', label: 'de berekening van de tweede vennoot' }],
+  },
   quotes: 'quotes', invoices: 'invoices', contracts: 'contracts', ledger: 'ledger', bank: 'bank', pnl: 'pnl',
   'vat-returns': 'vat-returns', suppliers: 'suppliers', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
   // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat

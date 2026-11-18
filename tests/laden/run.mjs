@@ -54,6 +54,9 @@ const PAGES = {
   project: { page: 'project', projectId: seed.projects[0].id },
   communication: 'communication', quotes: 'quotes', invoices: 'invoices',
   ledger: 'ledger', bank: 'bank', 'vat-returns': 'vat-returns', assets: 'assets', prepaid: 'prepaid', pnl: 'pnl',
+  // De raming van de inkomstenbelasting haalt alles in één aanroep op
+  // (get_income_tax_inputs): geen enkele zware groep.
+  'income-tax': 'income-tax',
 };
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));
