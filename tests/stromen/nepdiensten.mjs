@@ -273,11 +273,21 @@ async function mollie(request, url) {
 
 async function media(request, url) {
   const pad = url.pathname;
-  if (post.r2Storing.aantal > 0 && /snapshot/.test(pad)) {
+  // Ook de bestanden van de factuur-inbox (POST /internal/media) kunnen haperen:
+  // een bon waarvan de foto niet opgeslagen kon worden (bonnen.mjs).
+  if (post.r2Storing.aantal > 0 && (/snapshot/.test(pad) || (request.method === 'POST' && pad === '/internal/media'))) {
     post.r2Storing.aantal -= 1;
     return json(503, { error: 'Nep-storing R2' });
   }
   if (request.method === 'POST' && /^\/internal\/[a-z]+-snapshot$/.test(pad)) {
+    const sleutel = request.headers.get('x-storage-key');
+    if (!sleutel) return json(400, { error: 'X-Storage-Key ontbreekt' });
+    post.r2.set(sleutel, new Uint8Array(await request.arrayBuffer()));
+    return json(200, { ok: true, key: sleutel });
+  }
+  // Een bestand van de factuur-inbox: een bijlage uit de mail of een bon uit de
+  // app (storeInboxAttachment in _shared/invoiceInbox.ts), sleutel in X-Storage-Key.
+  if (request.method === 'POST' && pad === '/internal/media') {
     const sleutel = request.headers.get('x-storage-key');
     if (!sleutel) return json(400, { error: 'X-Storage-Key ontbreekt' });
     post.r2.set(sleutel, new Uint8Array(await request.arrayBuffer()));

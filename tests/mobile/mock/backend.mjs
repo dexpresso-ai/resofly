@@ -596,9 +596,10 @@ function mailFolderRpc(fn, body) {
 
 /**
  * `incomeTax: 'eenmanszaak' | 'vof'`: de raming van de inkomstenbelasting
- * (2026-11-18). Een eenmanszaak met een bijtelling, gemengde kosten en vier
- * activa (een personenauto uitgesloten, een muis onder de € 450), of een vof
- * met twee vennoten en een uitgetreden vennoot. Het jaar komt uit de aanroep,
+ * (2026-11-18). Een eenmanszaak met een bijtelling, een boete, € 1.562 op 4600
+ * (eten, drinken en representatie) en vier activa (een personenauto
+ * uitgesloten, een muis onder de € 450), of een vof met twee vennoten en een
+ * uitgetreden vennoot. De eigenaar van de eenmanszaak heeft 1.235 uur. Het jaar komt uit de aanroep,
  * zodat de pagina in elk jaar iets toont.
  */
 function incomeTaxInputs(form, body) {
@@ -611,6 +612,7 @@ function incomeTaxInputs(form, body) {
   return {
     year, legalForm: form, isPartnershipForm: partnership, companyName: 'Studio Lopik', bookkeepingStartDate: '2024-01-01',
     resultCents: partnership ? 11834567 : 5234567,
+    mixedCostsCents: 156200,
     overlappingFiscalYears: [{ id: 'fy-ib', label: String(year), periodStart: `${year}-01-01`, periodEnd: `${year}-12-31`, status: 'open' }],
     partners: partnership ? [
       { id: 'pp-1', name: 'Anna van den Heuvel-Bakker', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 6000 },
@@ -622,7 +624,7 @@ function incomeTaxInputs(form, body) {
       : [profile(null, {})],
     corrections: [
       { id: 'itc-1', partnerId: partnership ? 'pp-2' : null, code: 'privegebruik_auto', label: 'Bijtelling auto van de zaak (22% van de cataloguswaarde)', amountCents: 294000 },
-      { id: 'itc-2', partnerId: null, code: 'gemengde_kosten', label: 'Lunches en relatiegeschenken (20%)', amountCents: 31240 },
+      { id: 'itc-2', partnerId: null, code: 'niet_aftrekbaar', label: 'Verkeersboete', amountCents: 9500 },
     ],
     investments: [
       { assetId: 'fa-1', name: 'MacBook Pro 16 inch voor de studio', assetNumber: 'ACT-2026-001', acquisitionDate: `${year}-02-14`, costCents: 324900, excluded: false },
@@ -631,6 +633,7 @@ function incomeTaxInputs(form, body) {
       { assetId: 'fa-4', name: 'Muis', assetNumber: null, acquisitionDate: `${year}-06-01`, costCents: 8900, excluded: false },
     ],
     myMinutes: 61380,
+    ownerMinutes: partnership ? null : 74100,
   };
 }
 
@@ -653,6 +656,8 @@ function rpc(fn, body = null) {
     case 'ensure_portal_login_key': return pub.PORTAL_LOGIN_KEY;
     case 'organization_license_usage': return [{ organization_id: seed.ids.ORG, licensed_seats: 3, active_members: 2, pending_invitations: 0, used_seats: 2, available_seats: 1, license_status: 'active', billing_exempt: false }];
     case 'organization_billing_overview': return [];
+    // Mijn declaraties (2026-11-18), als teamlid zonder Financiën.
+    case 'list_my_declarations': return seed.declarations;
     case 'chat_unread_counts': return seed.chatUnread;
     case 'chat_last_messages': {
       const latest = new Map();
@@ -669,7 +674,30 @@ function rpc(fn, body = null) {
   }
 }
 
+/**
+ * Een bon insturen (invoice-inbox, action 'upload', 2026-11-18). Met
+ * `declarant: true` als teamlid zonder Financiën: een declaratie. Anders een
+ * concept, zoals iemand met Financiën het terugkrijgt. (`receiptReading`
+ * beantwoordt het verzoek niet: zie installMock.)
+ */
+function receiptUpload(options) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (options.declarant) {
+    return { ok: true, channel: 'declaration', declaration: { id: 'decl-nieuw', status: 'submitted', store_name: 'Q-Park Utrecht Centrum', receipt_date: today, total_cents: 1500, currency: 'EUR', read: true } };
+  }
+  const item = { ...seed.purchaseInvoiceInbox[1], id: 'inbox-nieuw', status: 'ready', reason: null, method: 'ai', confidence: 'high', purchase_invoice_id: seed.purchaseInvoices[0].id,
+    proposal: seed.purchaseInvoiceInbox[0].proposal, warnings: [] };
+  // `receiptOutcome: 'supplier'`: gelezen, maar de winkel is nog geen leverancier.
+  if (options.receiptOutcome === 'supplier') {
+    const proposal = { ...item.proposal, supplier: { ...item.proposal.supplier, name: 'Q-Park Utrecht Centrum Stationsplein' } };
+    return { ok: true, channel: 'receipt', item: { ...item, status: 'needs_review', reason: 'supplier_unknown', purchase_invoice_id: null, proposal }, invoice: null };
+  }
+  return { ok: true, channel: 'receipt', item, invoice: { id: seed.purchaseInvoices[0].id, internal_number: seed.purchaseInvoices[0].internal_number, date: today, total_cents: 2500, currency: 'EUR', supplier_id: seed.purchaseInvoices[0].supplier_id, supplier_name: 'Amazon.nl', status: 'draft' } };
+}
+
 function edgeFunction(name, body, options = {}) {
+  if (name === 'invoice-inbox' && body?.action === 'upload') return receiptUpload(options);
+  if (name === 'invoice-inbox') return { ok: true, item: seed.purchaseInvoiceInbox[0] };
   if (name === 'calendar-integrations') {
     const action = body?.action;
     if (action === 'listIntegrations') return { ok: true, connections: seed.calendarConnections, sources: [seed.calendarSource, seed.googleCalendarSource], videoServices: seed.videoServices };
@@ -749,6 +777,14 @@ function edgeFunction(name, body, options = {}) {
   return { ok: true };
 }
 
+/** De leden, met de ingelogde gebruiker als teamlid zonder Financiën. */
+function declarantMembers(url) {
+  const members = seed.members.map(m => (m.user_id === seed.ids.USER ? { ...m, role: 'member', module_access: { finance: 'none' } } : m));
+  const select = url.searchParams.get('select') ?? '*';
+  if (select.includes('organizations(')) return members.filter(m => m.user_id === seed.ids.USER).map(m => ({ ...m, organization: seed.org }));
+  return members;
+}
+
 /** Een antwoord dat een foutstatus moet krijgen ({ __status, body }), of gewoon JSON. */
 function reply(route, result, okStatus = 200, headers = {}) {
   if (result && typeof result === 'object' && '__status' in result) return json(route, result.body, result.__status, headers);
@@ -817,7 +853,10 @@ export async function installMock(context, options = {}) {
       // de pagina Gerrie toont dan het scherm om hem aan te zetten.
       // `aiDeclined: true`: hij koos zelf voor geen AI (2026-11-15); Gerrie is
       // dan nergens te zien, ook niet in het menu.
+      // `declarant: true` (2026-11-18): de ingelogde gebruiker is een teamlid
+      // zonder Financiën. Hij ziet Declaraties, en geen inkoopfacturen.
       const rows = options.incomeTax && table === 'company_settings' ? [{ ...seed.companySettings, company_name: 'Studio Lopik', legal_form: options.incomeTax }]
+        : options.declarant && table === 'organization_members' ? declarantMembers(url)
         : options.aiDeclined && table === 'ai_consents' ? [consentRow(false, [])]
         : options.aiOff && table === 'ai_consents' ? []
         : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
@@ -844,6 +883,9 @@ export async function installMock(context, options = {}) {
       // report-updating in run.mjs). Een leeg antwoord gaf in de app "de
       // verbinding viel weg".
       if (name === 'gerrie-agent' && body?.action === 'report_chat') return;
+      // Gerrie leest een bon (2026-11-18): het antwoord blijft uit, zodat de
+      // test het bonvenster meet terwijl de animatie loopt.
+      if (name === 'invoice-inbox' && body?.action === 'upload' && options.receiptReading) return;
       return json(route, edgeFunction(name, body, options));
     }
     if (p.startsWith('/realtime')) return route.abort();

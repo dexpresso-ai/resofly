@@ -445,7 +445,7 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
       if (openError) throw new ActionError(`Openstaand bedrag bepalen mislukt: ${openError.message}`);
       if (Number(openCents ?? 0) > 0) {
         throw new ActionError(status === 'paid'
-          ? 'Deze factuur staat in het grootboek en er staat nog een bedrag open. Registreer de betaling door de banktransactie te koppelen of met een memoriaalpost op Debiteuren; dan staat hij vanzelf op betaald.'
+          ? 'Deze factuur staat in het grootboek en er staat nog een bedrag open. Registreer de betaling door de banktransactie te koppelen (contant geld via een kasrekening); dan staat hij vanzelf op betaald.'
           : 'Deze factuur staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur.');
       }
     }
@@ -454,7 +454,7 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
         .eq('organization_id', ctx.organizationId).maybeSingle();
       const startDate = (settings as { bookkeeping_start_date?: string | null } | null)?.bookkeeping_start_date ?? null;
       if (!(startDate && cur.date && cur.date < String(startDate).slice(0, 10))) {
-        throw new ActionError('Op betaald zetten boekt deze factuur in het grootboek, maar niet de betaling: de debiteurenstand bleef dan te hoog. Registreer de betaling door de banktransactie te koppelen of met een memoriaalpost op Debiteuren.');
+        throw new ActionError('Op betaald zetten boekt deze factuur in het grootboek, maar niet de betaling: de debiteurenstand bleef dan te hoog. Registreer de betaling door de banktransactie te koppelen (contant geld via een kasrekening).');
       }
     }
     // Alleen als de status nog is wat er op de kaart stond: een kaart is een

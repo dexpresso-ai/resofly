@@ -8,7 +8,7 @@
  * test (tests/mobile/mock), naar het netwerkverkeer en naar het scherm:
  *
  *   1. elke pagina haalt precies de groepen op die PAGE_DATA_GROUPS noemt, en
- *      niets meer; het dashboard dus niets, op de twee tellingen na;
+ *      niets meer; het dashboard dus niets, op de telling van de bank na;
  *   2. elke pagina toont daarna zichzelf: geen laadmelding, geen foutmelding,
  *      geen JavaScript-fout;
  *   3. een geladen groep wordt bewaard: terug en weer heen haalt hem niet opnieuw;
@@ -54,6 +54,10 @@ const PAGES = {
   project: { page: 'project', projectId: seed.projects[0].id },
   communication: 'communication', quotes: 'quotes', invoices: 'invoices',
   ledger: 'ledger', bank: 'bank', 'vat-returns': 'vat-returns', assets: 'assets', prepaid: 'prepaid', pnl: 'pnl',
+  // Inkoopfacturen met het bonvenster (2026-11-18) heeft genoeg aan de kern:
+  // inkoopfacturen, leveranciers en rekeningen. De werklijst haalt zijn eigen
+  // rijen op, buiten de groepen om.
+  'purchase-invoices': 'purchase-invoices',
   // De raming van de inkomstenbelasting haalt alles in één aanroep op
   // (get_income_tax_inputs): geen enkele zware groep.
   'income-tax': 'income-tax',
@@ -166,7 +170,10 @@ try {
     check(`${key}: elke tabel één keer`, twice.length === 0, `dubbel: ${twice.join(', ')}`);
     if (key === 'dashboard') {
       const heads = requests.filter(r => r.method === 'HEAD').map(r => r.table);
-      check('dashboard: telt banktransacties en btw-aangiftes zonder ze te laden', same(heads, ['bank_transactions', 'vat_returns']), `HEAD: [${sorted(heads).join(', ')}]`);
+      // De btw-tijdvakken met een aangifte komen sinds 18 november uit één
+      // RPC (list_filed_vat_periods), voor de herinnering met de deadline;
+      // vat_returns zelf haalt het dashboard niet op (zie de controle hierboven).
+      check('dashboard: telt banktransacties zonder ze te laden', same(heads, ['bank_transactions']), `HEAD: [${sorted(heads).join(', ')}]`);
     }
     const state = await screenState(page);
     check(`${key}: toont de pagina (geen laadmelding, geen fout)`, !state.loading && !state.failed && state.text.length > 40, state.loading ? 'nog aan het laden' : state.failed ? 'foutmelding' : `te weinig inhoud: "${state.text.slice(0, 60)}"`);

@@ -14,6 +14,7 @@ export const PAGE_TITLES: Record<string, string> = {
   suppliers: 'Leveranciers', 'purchase-invoices': 'Inkoopfacturen', ledger: 'Grootboek',
   bank: 'Bank', assets: 'Activa', prepaid: 'Vooruitbetaald', pnl: 'Winst & verlies', 'vat-returns': 'Omzetbelasting', 'corporate-tax': 'Vennootschapsbelasting', 'income-tax': 'Inkomstenbelasting', dga: 'DGA', shareholders: 'Aandeelhouders', owners: 'Eigen vermogen',
   'fiscal-years': 'Boekjaren', 'annual-accounts': 'Jaarrekening',
+  declarations: 'Declaraties',
   archive: 'Archief', settings: 'Instellingen', project: 'Project',
   gallery: 'Galerij',
 };

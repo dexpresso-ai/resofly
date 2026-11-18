@@ -88,6 +88,8 @@ export interface IbYearRules {
   elderlyCredit: IbPhaseOutCredit;
   zvwRate: number;
   zvwMaxBaseCents: number;
+  /** Art. 3.15: niet aftrekbaar is 20% van de gemengde kosten, of naar keuze alles tot deze drempel. */
+  mixedCostsThresholdCents: number;
 }
 
 const EURO = 100;
@@ -145,6 +147,7 @@ export const IB_RULES: Record<number, IbYearRules> = {
     elderlyCredit: { maxCents: 2_035 * EURO, phaseOutFromCents: 45_308 * EURO, rate: 15_000, zeroFromCents: null },
     zvwRate: 5_260,
     zvwMaxBaseCents: 75_864 * EURO,
+    mixedCostsThresholdCents: 5_700 * EURO,
   },
   2026: {
     year: 2026,
@@ -191,6 +194,8 @@ export const IB_RULES: Record<number, IbYearRules> = {
     elderlyCredit: { maxCents: 2_067 * EURO, phaseOutFromCents: 46_002 * EURO, rate: 15_000, zeroFromCents: null },
     zvwRate: 4_850,
     zvwMaxBaseCents: 79_409 * EURO,
+    // In 2026 niet geïndexeerd: dezelfde drempel als in 2025.
+    mixedCostsThresholdCents: 5_700 * EURO,
   },
 };
 
@@ -249,6 +254,24 @@ export function kiaForInvestments(rules: IbYearRules, totalInvestmentCents: numb
   if (total <= k.fixedUpToCents) return k.fixedCents;
   if (total <= k.maxCents) return Math.max(0, k.fixedCents - applyRate(total - k.fixedUpToCents, k.phaseOutRate));
   return 0;
+}
+
+/** Het deel van de gemengde kosten dat niet aftrekbaar is: 20%. */
+const MIXED_COSTS_RATE = 20_000;
+
+/**
+ * Het niet-aftrekbare deel van eten, drinken en representatie (art. 3.15): de
+ * ondernemer kiest per jaar de gunstigste van twee methoden, 20% van het
+ * totaal of alles tot de drempel. Zelfde uitkomst als mixedCostsAddBack in
+ * src/lib/incomeTax.ts (de test houdt de twee gelijk).
+ */
+export function mixedCostsAddBack(rules: IbYearRules, totalCents: number): { addBackCents: number; method: 'percentage' | 'threshold' } {
+  const total = Math.max(0, Math.trunc(Number.isFinite(totalCents) ? totalCents : 0));
+  const percentage = applyRate(total, MIXED_COSTS_RATE);
+  const threshold = Math.min(total, rules.mixedCostsThresholdCents);
+  return percentage <= threshold
+    ? { addBackCents: percentage, method: 'percentage' }
+    : { addBackCents: threshold, method: 'threshold' };
 }
 
 /** Algemene heffingskorting of ouderenkorting: vol tot de grens, daarna de afbouw. */
@@ -641,6 +664,8 @@ export interface IncomeTaxInputs {
   bookkeepingStartDate: string | null;
   /** W&V binnen het kalenderjaar, zonder de jaarafsluiting; winst positief. */
   resultCents: number;
+  /** Kosten op rekeningen voor eten, drinken en representatie (subtype mixed_costs, 4600). */
+  mixedCostsCents: number;
   overlappingFiscalYears: Array<{ id: string; label: string; periodStart: string; periodEnd: string; status: string }>;
   partners: Array<{ id: string; name: string; partnerNumber: number; kind: 'beherend' | 'commanditair'; isActive: boolean; shareBasisPoints: number }>;
   profiles: IncomeTaxProfile[];
@@ -648,6 +673,8 @@ export interface IncomeTaxInputs {
   investments: Array<{ assetId: string; name: string; assetNumber: string | null; acquisitionDate: string; costCents: number; excluded: boolean }>;
   /** Geregistreerde minuten van de ingelogde gebruiker in dit jaar; null zonder recht op Uren. */
   myMinutes: number | null;
+  /** Geregistreerde minuten van de eigenaar (eenmanszaak); null zonder recht op Uren of bij een vof. */
+  ownerMinutes: number | null;
 }
 
 export type IncomeTaxBasis = 'geboekt' | 'prognose';
@@ -674,7 +701,10 @@ export interface IncomeTaxPerson {
   profile: IncomeTaxProfile;
   /** Of er voor dit jaar al gegevens zijn opgeslagen. */
   profileSaved: boolean;
-  corrections: Array<{ id: string; code: IbCorrectionCode; label: string; amountCents: number; shared: boolean }>;
+  /** `automatic`: door ResoFly zelf (gemengde kosten op 4600), niet te verwijderen. */
+  corrections: Array<{ id: string; code: IbCorrectionCode; label: string; amountCents: number; shared: boolean; automatic: boolean }>;
+  /** Het urencriterium komt uit de geregistreerde uren van de eigenaar, niet uit wat er is opgeslagen. */
+  hoursFromTimeTracking: boolean;
   estimate: IbPersonEstimate;
   notes: string[];
 }
@@ -691,6 +721,10 @@ export interface IncomeTaxOverview {
   investments: IncomeTaxInvestment[];
   investmentTotalCents: number;
   kiaCents: number;
+  /** Eten, drinken en representatie (4600): het totaal en het niet-aftrekbare deel; null zonder zulke kosten. */
+  mixedCosts: { totalCents: number; addBackCents: number; method: 'percentage' | 'threshold'; thresholdCents: number } | null;
+  /** Uren van de eigenaar in dit jaar (eenmanszaak), als hint en standaard voor het urencriterium. */
+  ownerMinutes: number | null;
   persons: IncomeTaxPerson[];
   warnings: string[];
   totals: { incomeTaxCents: number; zvwCents: number; totalCents: number; provisionalCents: number; balanceCents: number };
@@ -723,9 +757,18 @@ export function defaultIncomeTaxProfile(partnerId: string | null): IncomeTaxProf
   };
 }
 
-function personNotes(rules: IbYearRules, person: { kind: IncomeTaxPerson['kind']; profile: IncomeTaxProfile; estimate: IbPersonEstimate }): string[] {
+/** Het urencriterium in minuten: 1.225 uur. */
+const HOURS_CRITERION_MINUTES = 1225 * 60;
+
+function personNotes(rules: IbYearRules, person: { kind: IncomeTaxPerson['kind']; profile: IncomeTaxProfile; estimate: IbPersonEstimate; hoursFromTimeTracking: boolean; ownerMinutes: number | null }): string[] {
   const notes: string[] = [];
   const { profile, estimate } = person;
+  if (person.hoursFromTimeTracking && person.ownerMinutes !== null) {
+    const hours = Math.floor(person.ownerMinutes / 60).toLocaleString('nl-NL');
+    notes.push(profile.meetsHoursCriterion
+      ? `Urencriterium volgens Uren: de eigenaar heeft ${hours} uur geregistreerd. Besteed je minder dan de helft van je werktijd aan de onderneming (en ben je geen starter), zet het dan op nee.`
+      : `Urencriterium volgens Uren: de eigenaar heeft ${hours} uur geregistreerd, minder dan 1.225. Registreer je niet al je uren in ResoFly, vul het dan zelf in.`);
+  }
   if (person.kind === 'commanditair') {
     notes.push('Commanditaire vennoot: voor de inkomstenbelasting geen ondernemer. Geen ondernemersaftrek en geen mkb-winstvrijstelling, en het winstaandeel telt niet als arbeidsinkomen voor de arbeidskorting. De KIA geldt wel.');
   } else {
@@ -815,7 +858,23 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
 
   const profitShares = split(usedResultCents);
   const kiaShares = split(kiaCents);
-  const sharedCorrections = inputs.corrections.filter(c => c.partnerId === null);
+  // Eten, drinken en representatie op 4600: het niet-aftrekbare deel telt
+  // ResoFly zelf mee, voor de hele onderneming (bij een vof naar winstaandeel).
+  const mixedTotal = Math.max(0, Math.trunc(inputs.mixedCostsCents ?? 0));
+  const mixedCosts = mixedTotal > 0
+    ? { totalCents: mixedTotal, ...mixedCostsAddBack(rules, mixedTotal), thresholdCents: rules.mixedCostsThresholdCents }
+    : null;
+  const automatic = mixedCosts && mixedCosts.addBackCents > 0 ? [{
+    id: 'gemengde-kosten-4600', partnerId: null, code: 'gemengde_kosten' as IbCorrectionCode,
+    label: mixedCosts.method === 'percentage'
+      ? `Eten, drinken en representatie: 20% van ${euroText(mixedCosts.totalCents)}`
+      : `Eten, drinken en representatie: tot de drempel van ${euroText(mixedCosts.thresholdCents)}`,
+    amountCents: mixedCosts.addBackCents, automatic: true,
+  }] : [];
+  const sharedCorrections = [
+    ...automatic,
+    ...inputs.corrections.filter(c => c.partnerId === null).map(c => ({ ...c, automatic: false })),
+  ];
   const sharedSplits = sharedCorrections.map(c => ({ correction: c, parts: split(c.amountCents) }));
   const knownKeys = new Set(people.map(p => p.partnerId).filter((id): id is string => id !== null));
   const orphaned = inputs.corrections.filter(c => c.partnerId !== null && !knownKeys.has(c.partnerId));
@@ -823,15 +882,25 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
     warnings.push(`${orphaned.length === 1 ? 'Eén correctie staat' : `${orphaned.length} correcties staan`} op een vennoot die niet (meer) meedoet in de verdeling en ${orphaned.length === 1 ? 'telt' : 'tellen'} niet mee.`);
   }
 
+  // Bij een eenmanszaak zonder opgeslagen gegevens: het urencriterium uit de
+  // uren van de eigenaar, zoals het overzicht op Eigen vermogen. Zo tonen de
+  // twee schermen dezelfde belastbare winst, tot je zelf iets kiest.
+  const ownerMinutes = inputs.isPartnershipForm ? null : (inputs.ownerMinutes ?? null);
+
   const persons: IncomeTaxPerson[] = people.map(who => {
     const saved = profileFor(who.partnerId);
-    const profile = saved ?? defaultIncomeTaxProfile(who.partnerId);
+    const hoursFromTimeTracking = saved === null && who.kind === 'ondernemer' && ownerMinutes !== null;
+    const profile = saved ?? {
+      ...defaultIncomeTaxProfile(who.partnerId),
+      meetsHoursCriterion: hoursFromTimeTracking ? (ownerMinutes as number) >= HOURS_CRITERION_MINUTES : null,
+    };
     const corrections: IncomeTaxPerson['corrections'] = [
       ...sharedSplits.map(({ correction, parts }) => ({
-        id: correction.id, code: correction.code, label: correction.label, amountCents: parts.get(who.key) ?? 0, shared: people.length > 1,
+        id: correction.id, code: correction.code, label: correction.label, amountCents: parts.get(who.key) ?? 0,
+        shared: people.length > 1, automatic: correction.automatic,
       })),
       ...inputs.corrections.filter(c => c.partnerId !== null && c.partnerId === who.partnerId)
-        .map(c => ({ id: c.id, code: c.code, label: c.label, amountCents: c.amountCents, shared: false })),
+        .map(c => ({ id: c.id, code: c.code, label: c.label, amountCents: c.amountCents, shared: false, automatic: false })),
     ];
     const isEntrepreneur = who.kind !== 'commanditair';
     const estimate = estimatePerson(rules, {
@@ -857,8 +926,9 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
       profile,
       profileSaved: saved !== null,
       corrections,
+      hoursFromTimeTracking,
       estimate,
-      notes: personNotes(rules, { kind: who.kind, profile, estimate }),
+      notes: personNotes(rules, { kind: who.kind, profile, estimate, hoursFromTimeTracking, ownerMinutes }),
     };
   });
 
@@ -889,6 +959,8 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
     investments,
     investmentTotalCents,
     kiaCents,
+    mixedCosts,
+    ownerMinutes,
     persons,
     warnings,
     totals,

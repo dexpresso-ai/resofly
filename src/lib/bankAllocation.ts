@@ -56,6 +56,28 @@ export function emptyDraft(kind: BankAllocationKind = 'ledger', patch: Partial<D
   return { key: newDraftKey(), kind, documentId: '', accountId: '', vatCode: '', partyId: '', amount: '', description: '', ...patch };
 }
 
+/**
+ * De btw-code van een grootboekregel nadat je een andere rekening kiest.
+ *
+ * Tot 18 november bleef een eenmaal gekozen code staan: wie eerst 4500
+ * Algemene kosten koos (HOOG) en daarna 0550 Privé-opnamen, boekte bij een
+ * privé-uitgave van € 121 € 21 voorbelasting. Nu:
+ * - eigen vermogen en schulden (privé, te betalen btw, crediteuren): geen btw;
+ * - met de KOR: geen voorstel (verlegde btw kies je zelf);
+ * - anders de standaardcode van de nieuwe rekening, en zonder die de vorige.
+ * De database weigert btw op eigen vermogen en splitst met de KOR geen btw af.
+ */
+export function vatCodeForAccount(
+  previous: string,
+  account: { type: string; default_vat_code?: string | null } | null | undefined,
+  options: { kor?: boolean } = {},
+): string {
+  if (!account) return '';
+  if (account.type === 'equity' || account.type === 'liability') return '';
+  if (options.kor) return '';
+  return account.default_vat_code || previous || '';
+}
+
 /** Centen als euro-tekst om in een invoerveld te zetten: 12345 → "123,45". */
 export function centsToInput(cents: number): string {
   const sign = cents < 0 ? '-' : '';

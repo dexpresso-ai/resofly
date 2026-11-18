@@ -684,3 +684,16 @@ test('de migratie bewaakt type en grootte van de opmaak', () => {
   const bytes = Buffer.byteLength(JSON.stringify({ version: 1, font: 'auto', invoice: full, quote: full }), 'utf8');
   assert.ok(bytes < 262144, `${bytes} bytes`);
 });
+
+test('KOR: geen btw-groep "0%" in de totalen, wel het bedrag zonder btw (app en server gelijk)', () => {
+  for (const kant of [app, server]) {
+    const kor = kant.documentAmounts([{ description: 'Portretshoot', quantity: 1, unit_price: 450, vat: 0, vat_code: 'KOR' }]);
+    assert.deepEqual(kor.totals.vatBreakdown, []);
+    assert.equal(kor.totals.korBase, 450);
+    assert.equal(kor.totals.total, 450);
+    // Een gewone 0%-regel (export, vrijgesteld) houdt zijn grondslag per tarief.
+    const nul = kant.documentAmounts([{ description: 'Export', quantity: 1, unit_price: 100, vat: 0, vat_code: 'EXPORT' }]);
+    assert.deepEqual(nul.totals.vatBreakdown, [{ rate: 0, base: 100, vat: 0 }]);
+    assert.equal(nul.totals.korBase, undefined);
+  }
+});

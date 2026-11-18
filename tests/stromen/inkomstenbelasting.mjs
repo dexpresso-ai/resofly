@@ -2,9 +2,10 @@
 //
 // Wat hier wordt nagelopen (CHANGELOG_INKOMSTENBELASTING_RAMING_2026-11-18.md):
 //   1. eenmanszaak: de winst van het KALENDERJAAR uit het journaal (een ander
-//      jaar en de jaarafsluiting tellen niet mee), de eigen uren, opslaan en
-//      bijwerken van de gegevens, en een raming die tot op de cent klopt met
-//      de los nagerekende som (€ 50.000 winst in 2026: € 9.674,05);
+//      jaar en de jaarafsluiting tellen niet mee), de eigen uren en die van de
+//      eigenaar (de standaard voor het urencriterium, zoals Eigen vermogen),
+//      opslaan en bijwerken van de gegevens, en een raming die tot op de cent
+//      klopt met de los nagerekende som (€ 50.000 winst in 2026: € 9.674,05);
 //   2. wie wat mag: lezen met leesrecht op Financiën, schrijven alleen met
 //      schrijfrecht, niets zonder Financiën of van buiten, en niemand die
 //      rechtstreeks in de tabellen schrijft;
@@ -12,7 +13,8 @@
 //      correctie;
 //   4. correcties en KIA: toevoegen, een activum uitsluiten, verwijderen, en
 //      nooit een activum of vennoot van een andere organisatie — ook niet als
-//      iemand de functies omzeilt (de samengestelde sleutel);
+//      iemand de functies omzeilt (de samengestelde sleutel); eten, drinken en
+//      representatie op 4600 tellen vanzelf mee;
 //   5. vof en cv: per vennoot, met dezelfde verdeling als de jaarafsluiting
 //      (partnership_result_shares), en een commanditaire vennoot die geen
 //      ondernemer is;
@@ -39,8 +41,8 @@ async function rekeningId(w, code) {
   return nodig(rij?.id, `grootboekrekening ${code}`);
 }
 
-function invoer(w, gebruiker, jaar = JAAR, orgId = w.orgId) {
-  return rpc('get_income_tax_inputs', { p_organization_id: orgId, p_year: jaar }, gebruiker.token);
+function invoer(w, gebruiker, jaar = JAAR, orgId = w.orgId, extra = {}) {
+  return rpc('get_income_tax_inputs', { p_organization_id: orgId, p_year: jaar, ...extra }, gebruiker.token);
 }
 
 function profiel(w, gebruiker, waarden, orgId = w.orgId) {
@@ -120,15 +122,25 @@ export default async function inkomstenbelasting() {
                 (${q(w.orgId)}, ${q(w.medewerker.id)}, '${JAAR - 1}-02-02', 6000),
                 (${q(w.orgId)}, ${q(w.beheerder.id)}, '${JAAR}-02-02', 900)`);
 
-    const inputs = gelukt(await invoer(w, w.medewerker), 'invoer ophalen');
-    gelijk([inputs.year, inputs.legalForm, inputs.isPartnershipForm, inputs.resultCents], [JAAR, 'eenmanszaak', false, 5_000_000], 'jaar, rechtsvorm en winst');
+    let inputs = gelukt(await invoer(w, w.medewerker), 'invoer ophalen');
+    gelijk([inputs.year, inputs.legalForm, inputs.isPartnershipForm, inputs.resultCents, inputs.mixedCostsCents], [JAAR, 'eenmanszaak', false, 5_000_000, 0], 'jaar, rechtsvorm en winst');
     gelijk([inputs.partners, inputs.profiles, inputs.corrections, inputs.investments], [[], [], [], []], 'nog niets vastgelegd');
-    gelijk(inputs.myMinutes, 600, 'alleen je eigen uren van dit jaar');
+    gelijk([inputs.myMinutes, inputs.ownerMinutes], [600, 0], 'je eigen uren en die van de eigenaar (nog geen)');
     gelijk(gelukt(await invoer(w, w.medewerker, JAAR - 1), 'vorig jaar').resultCents, 500_000, 'de winst van het jaar ervoor');
-    // Zonder gegevens rekent de raming zonder zelfstandigenaftrek, en zegt dat.
+    // Zonder gegevens volgt het urencriterium de uren van de eigenaar: 0 uur, dus niet.
     const zonder = raming(inputs);
-    gelijk(zonder.persons[0].estimate.zelfstandigenaftrekCents, 0, 'geen zelfstandigenaftrek zonder urencriterium');
-    verwacht(zonder.persons[0].notes.some((n) => /Urencriterium nog niet ingevuld/.test(n)), 'de raming zegt dat het urencriterium ontbreekt');
+    gelijk([zonder.persons[0].hoursFromTimeTracking, zonder.persons[0].estimate.zelfstandigenaftrekCents], [true, 0], 'geen zelfstandigenaftrek zonder uren');
+    verwacht(zonder.persons[0].notes.some((n) => /volgens Uren: de eigenaar heeft 0 uur/.test(n)), 'de raming zegt waar het urencriterium vandaan komt');
+    // De eigenaar schrijft 1.230 uur: dan wel, zonder iets op te slaan.
+    sql(`insert into public.time_entries (organization_id, user_id, entry_date, minutes)
+         values (${q(w.orgId)}, ${q(w.eigenaar.id)}, '${JAAR}-03-03', ${1230 * 60})`);
+    inputs = gelukt(await invoer(w, w.medewerker), 'invoer met uren van de eigenaar');
+    gelijk(inputs.ownerMinutes, 1230 * 60, 'de uren van de eigenaar');
+    gelijk(raming(inputs).persons[0].estimate.zelfstandigenaftrekCents, 120_000, 'zelfstandigenaftrek volgens Uren');
+    // Wie Uren niet mag lezen, of Gerrie die het niet vraagt: geen uren.
+    gelijk(gelukt(await invoer(w, w.boekhouder), 'boekhouder').ownerMinutes, null, 'de boekhouder (geen Uren) ziet geen uren');
+    gelijk(gelukt(await invoer(w, w.lezer), 'lezer').ownerMinutes, 1230 * 60, 'de lezer mag Uren wel lezen');
+    gelijk(gelukt(await invoer(w, w.medewerker, JAAR, w.orgId, { p_owner_hours: false }), 'zonder uren').ownerMinutes, null, 'zonder p_owner_hours geen uren');
     return r;
   });
 
@@ -205,6 +217,14 @@ export default async function inkomstenbelasting() {
     gelukt(await correctie(w, w.medewerker, { p_code: 'investeringsaftrek', p_label: 'EIA warmtepomp', p_amount_cents: -100_000 }), 'EIA');
     gelukt(await correctie(w, w.medewerker, { p_code: 'overig', p_label: 'Overige', p_amount_cents: -50_000 }), 'overig negatief');
 
+    // Eten, drinken en representatie: € 1.000 op 4600. Het niet-aftrekbare deel
+    // (20%) telt vanzelf mee, net als op Eigen vermogen.
+    const representatie = await rekeningId(w, '4600');
+    await boek(w, `${JAAR}-05-05`, 'Lunch met een klant', [
+      { account_id: representatie, description: 'Lunch', debit_cents: 100_000, credit_cents: 0 },
+      { account_id: r.bank, description: 'Lunch', debit_cents: 0, credit_cents: 100_000 },
+    ]);
+
     const laptop = await activum(w, r, 'Laptop', `${JAAR}-03-01`, 350_000);
     const bus = await activum(w, r, 'Personenauto', `${JAAR}-05-01`, 4_000_000);
     await activum(w, r, 'Oud bureau', `${JAAR - 1}-06-01`, 120_000);
@@ -220,9 +240,11 @@ export default async function inkomstenbelasting() {
     inputs = gelukt(await invoer(w, w.medewerker), 'invoer');
     gelijk(inputs.investments.map((i) => i.excluded), [false, true], 'de auto telt niet mee');
     const o = raming(inputs);
+    gelijk([inputs.resultCents, inputs.mixedCostsCents], [4_900_000, 100_000], 'de lunch gaat van de winst af en staat op 4600');
+    gelijk([o.mixedCosts?.addBackCents, o.mixedCosts?.method], [20_000, 'percentage'], '20% niet aftrekbaar');
     gelijk([o.investmentTotalCents, o.kiaCents], [350_000, 98_000], 'KIA 28% over de laptop');
-    gelijk(o.persons[0].estimate.correctionsCents, 300_000 - 100_000 - 50_000, 'de correcties tellen mee');
-    gelijk(o.persons[0].estimate.profitCents, 5_000_000 + 150_000 - 98_000, 'winst uit onderneming');
+    gelijk(o.persons[0].estimate.correctionsCents, 20_000 + 300_000 - 100_000 - 50_000, 'de correcties tellen mee, met 4600 vanzelf');
+    gelijk(o.persons[0].estimate.profitCents, 4_900_000 + 170_000 - 98_000, 'winst uit onderneming');
 
     // Een activum van een ander: niet via de eigen organisatie, niet via die van de ander.
     geweigerd(await rpc('set_income_tax_kia_exclusion', { p_organization_id: w.orgId, p_asset_id: vreemd, p_excluded: true }, w.medewerker.token), 'activum van een ander');

@@ -18,7 +18,7 @@
 import { randomUUID } from 'node:crypto';
 import { roep } from './functies.mjs';
 import { registreerDienst } from './nepdiensten.mjs';
-import { ai, NOTULEN, poortwachterAntwoord } from './nep-ai.mjs';
+import { ai, bonAntwoord, NOTULEN, poortwachterAntwoord } from './nep-ai.mjs';
 import { rest, sql, sqlRij, sqlRijen } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, stap, verwacht } from './toets.mjs';
 import { maakWereld } from './wereld.mjs';
@@ -61,11 +61,14 @@ export function installeerClaude() {
   registreerDienst('https://api.anthropic.com', async (request, url) => {
     if (request.method !== 'POST' || url.pathname !== '/v1/messages') return new Response('nee', { status: 404 });
     const body = await request.json();
-    // Niet-streamend is de notulen-AI (meeting-transcribe): die blijft antwoorden
-    // zoals nep-ai.mjs, zodat de volgorde van de scenario's niet uitmaakt.
+    // Niet-streamend zijn de notulen-AI (meeting-transcribe) en het uitlezen
+    // van een bon of factuur: die blijven antwoorden zoals nep-ai.mjs, zodat de
+    // volgorde van de scenario's niet uitmaakt.
     if (!body.stream) {
       const poort = poortwachterAntwoord(body, (body.messages ?? []).map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n'));
       if (poort) return poort;
+      const bon = bonAntwoord(body);
+      if (bon) return bon;
       ai.claude.push({ apiKey: request.headers.get('x-api-key'), model: body.model, system: body.system, user: JSON.stringify(body.messages) });
       return new Response(JSON.stringify({
         id: `msg_${randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model: body.model, stop_reason: 'end_turn', stop_sequence: null,
@@ -231,11 +234,15 @@ export default async function rapportages() {
   });
 
   await stap('boekingsregels: datum en status komen van de boeking (koppeling via PostgREST)', async () => {
-    const [omzet, debiteuren, e1, e2, e3] = [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    // Sinds 18 november zet het afronden van de inrichting het rekeningschema
+    // klaar (20261118090000); dan bestaan 8000 en 1300 al en boeken we daarop.
+    const bestaand = (code) => sqlRij(`select id from public.ledger_accounts where organization_id = ${q(w.orgId)} and code = ${q(code)}`)?.id;
+    const [omzet, debiteuren, e1, e2, e3] = [bestaand('8000') ?? randomUUID(), bestaand('1300') ?? randomUUID(), randomUUID(), randomUUID(), randomUUID()];
     const vorig = Number(JAAR) - 1;
     sql(`begin; set local session_replication_role = replica;
       insert into public.ledger_accounts (id, organization_id, code, name, type) values
-        (${q(omzet)}, ${q(w.orgId)}, '8000', 'Omzet', 'revenue'), (${q(debiteuren)}, ${q(w.orgId)}, '1300', 'Debiteuren', 'asset');
+        (${q(omzet)}, ${q(w.orgId)}, '8000', 'Omzet', 'revenue'), (${q(debiteuren)}, ${q(w.orgId)}, '1300', 'Debiteuren', 'asset')
+        on conflict (organization_id, code) do nothing;
       insert into public.journal_entries (id, organization_id, entry_number, date, year, quarter, month, description, source_type, status) values
         (${q(e1)}, ${q(w.orgId)}, 'M1', '${JAAR}-02-01', ${JAAR}, 1, 2, 'Verkoop', 'manual', 'posted'),
         (${q(e2)}, ${q(w.orgId)}, 'M2', '${JAAR}-02-02', ${JAAR}, 1, 2, 'Concept', 'manual', 'draft'),

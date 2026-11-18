@@ -12,6 +12,8 @@ import { isAdminRole, type ModuleAccess } from './permissions';
 import { isPortalLoginKey } from './portalLoginKey';
 import { cleanQuery, entityTypesFor, periodStart, type AuditFilters } from './auditLog';
 import type { CoreData, DataGroup, GroupData } from './dataGroups';
+import { formatISODate } from './dates';
+import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods';
 import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
 import type {
   AiConsent,
@@ -53,6 +55,7 @@ import type {
   InboundAliasPurpose,
   PurchaseInvoiceInboxItem,
   PurchaseInvoiceInboxSettings,
+  Declaration,
   InboundMessage,
   InboundMessageCategory,
   EmailCampaign,
@@ -670,8 +673,11 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
  * De kern van de werkruimte: wat bijna elke pagina en de vaste delen van het
  * scherm gebruiken. De zware, groeiende tabellen zitten hier niet in; die laadt
  * loadDataGroup pas als een pagina ze nodig heeft (zie src/lib/dataGroups.ts).
+ *
+ * `organizationCreatedAt`: wanneer de organisatie in ResoFly begon. De
+ * btw-herinnering slaat deadlines van daarvóór over (lib/vatPeriods.ts).
  */
-export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
+export async function loadCoreData(organizationId: UUID, { organizationCreatedAt = null }: { organizationCreatedAt?: string | null } = {}): Promise<CoreData> {
   const [
     clients,
     clientContacts,
@@ -704,7 +710,7 @@ export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
     projectTemplateTasks,
     contractProjects,
     bankTransactionsToReconcile,
-    vatReturnsToFile,
+    filedVatPeriods,
   ] = await Promise.all([
     select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), select<Invoice>('invoices', organizationId),
@@ -723,9 +729,24 @@ export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
     countOptional('bank_transactions', organizationId, { status: ['unmatched', 'suggested'] }),
-    countOptional('vat_returns', organizationId, { status: ['finalized'] }),
+    selectFiledVatPeriods(organizationId),
   ]);
-  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, vatReturnsToFile };
+  // Btw-aangiftes die nog moeten: afgelopen tijdvakken zonder aangifte (zie
+  // lib/vatPeriods.ts). Alleen met een rekeningschema. Dat krijgt sinds
+  // 20261118090000 elke organisatie bij de inrichting; vatPeriodsToFile kijkt
+  // daarom ook naar de startdatum, eerdere aangiftes en de start in ResoFly.
+  const createdAt = organizationCreatedAt && !Number.isNaN(Date.parse(organizationCreatedAt)) ? new Date(organizationCreatedAt) : null;
+  const vatDue: VatPeriodDue[] = ledgerAccounts.length === 0 || filedVatPeriods === null ? [] : vatPeriodsToFile({
+    today: formatISODate(new Date()),
+    frequency: companySettings?.vat_return_period === 'monthly' ? 'monthly' : 'quarterly',
+    kor: Boolean(companySettings?.kor_enabled),
+    bookkeepingStart: companySettings?.bookkeeping_start_date ?? null,
+    since: createdAt ? formatISODate(createdAt) : null,
+    filed: filedVatPeriods,
+  });
+  const vatReturnsToFile = vatDue.length;
+  const vatReturnNextDue = vatDue[0] ?? null;
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, vatReturnsToFile, vatReturnNextDue };
 }
 
 /** Per groep: welke tabellen, in welke vorm. TypeScript bewaakt dat elke groep precies zijn eigen velden teruggeeft. */
@@ -791,6 +812,19 @@ export function loadDataGroup<G extends DataGroup>(organizationId: UUID, group: 
  * een HEAD-verzoek zonder foutmelding) geeft nul en een waarschuwing: een
  * attentiepunt minder op het dashboard mag de werkruimte niet tegenhouden.
  */
+/**
+ * De tijdvakken met een (primaire) btw-aangifte van de laatste drie jaar, als
+ * sleutels (lib/vatPeriods.ts). Klein: hooguit 36 rijen. Null als het niet
+ * lukt (geen leesrecht op Financiën): dan geen herinnering, geen fout.
+ */
+async function selectFiledVatPeriods(organizationId: UUID): Promise<Set<string> | null> {
+  // Een RPC en niet de tabel: vat_returns hoort bij de boekhouding, die de
+  // kern bewust niet laadt (dataGroups.ts; tests/laden bewaakt dat).
+  const { data, error } = await supabase.rpc('list_filed_vat_periods', { p_organization_id: organizationId });
+  if (error || !Array.isArray(data)) return null;
+  return new Set((data ?? []).map((row: { period_type: string; year: number; period_index: number }) => vatPeriodKey(row.period_type, row.year, row.period_index)));
+}
+
 async function countOptional(table: string, organizationId: UUID, inFilters: Record<string, string[]>): Promise<number> {
   let query = supabase.from(table).select('id', { count: 'exact', head: true }).eq('organization_id', organizationId);
   for (const [column, values] of Object.entries(inFilters)) query = query.in(column, values);
@@ -2714,7 +2748,7 @@ export async function loadOwnersEquityOverview(organizationId: UUID, fiscalYearI
 
 // ── Inkomstenbelasting (raming per ondernemer of vennoot) ───────────────────
 // Het rekenwerk staat in src/lib/inkomstenbelasting.ts; hier alleen de
-// gegevens. Schrijven gaat via de functies van migratie 20261118090000, die de
+// gegevens. Schrijven gaat via de functies van migratie 20261118150000, die de
 // rechten, de rechtsvorm en de organisatie van een vennoot of activum toetsen.
 
 /** Alles wat de raming van één kalenderjaar nodig heeft (get_income_tax_inputs). */
@@ -3593,7 +3627,12 @@ export async function postAssetDepreciation(organizationId: UUID, assetId: UUID,
 }
 
 /** Boekt de aanschaf van een activum naar de balans (debet activa / credit tegenrekening). */
-export async function bookAssetAcquisition(organizationId: UUID, assetId: UUID, creditAccountId: UUID, date?: string): Promise<FixedAsset> {
+/**
+ * Boekt de aanschaf van een activum. Zonder tegenrekening (null) koppelt de
+ * database de aanschaf aan de geboekte bron-inkoopfactuur, als die het bedrag
+ * al op de activarekening zette: dan komt er geen tweede boeking.
+ */
+export async function bookAssetAcquisition(organizationId: UUID, assetId: UUID, creditAccountId: UUID | null, date?: string): Promise<FixedAsset> {
   const { data, error } = await supabase.rpc('book_asset_acquisition', {
     p_organization_id: organizationId,
     p_asset_id: assetId,
@@ -3921,6 +3960,19 @@ export async function ensureDefaultLedgerAccounts(organizationId: UUID): Promise
   const { error } = await supabase.rpc('ensure_default_ledger_accounts', {
     p_organization_id: organizationId,
   });
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * De boekhouding in één keer klaarzetten: het rekeningschema en de btw-codes,
+ * en de boekjaren vanaf de startdatum tot en met het lopende jaar (alleen als
+ * er nog geen boekjaar is). Hetzelfde als het afronden van de inrichting doet
+ * (20261118090000). Tot 18 november maakte de knop alleen het rekeningschema;
+ * Eigen vermogen zei daarna nog "Maak eerst een boekjaar aan", zonder knop.
+ */
+export async function setUpBookkeeping(organizationId: UUID): Promise<void> {
+  await ensureDefaultLedgerAccounts(organizationId);
+  const { error } = await supabase.rpc('open_initial_fiscal_years', { p_organization_id: organizationId });
   if (error) throw bookkeepingError(error);
 }
 
@@ -5285,23 +5337,32 @@ export async function rotateInboundAlias(organizationId: UUID, purpose: InboundA
 // negeren lopen via de edge function invoice-inbox (zie invoice-inbox-api.ts);
 // alleen de instellingen hebben een eigen RPC.
 
-const PURCHASE_INVOICE_INBOX_COLUMNS =
+const PURCHASE_INVOICE_INBOX_COLUMNS_BASE =
   'id,organization_id,alias_id,parent_id,rfc_message_id,sender_email,sender_name,subject,body_excerpt,received_at,attachments,status,reason,error_message,' +
   'method,confidence,warnings,proposal,extraction_meta,supplier_id,supplier_match,supplier_created,purchase_invoice_id,duplicate_of_purchase_invoice_id,' +
   'duplicate_of_inbox_id,auto_booked,attempts,processed_at,handled_by,handled_at,purged_at,created_at,updated_at';
+/** Met de kolommen van 20261118120000 (bonnen en declaraties). */
+const PURCHASE_INVOICE_INBOX_COLUMNS = `${PURCHASE_INVOICE_INBOX_COLUMNS_BASE},channel,submitted_by,review_note`;
 
 const PURCHASE_INVOICE_INBOX_HINT =
   'Voer de migratie 20260918010000_purchase_invoice_inbox.sql uit in Supabase om de factuur-inbox te activeren.';
 
-/** Alles wat per e-mail binnenkwam (behalve transport-drops), nieuwste eerst. Leeg zolang de migratie ontbreekt. */
+/**
+ * Alles wat binnenkwam (behalve transport-drops), nieuwste eerst: mail op het
+ * factuuradres, en bonnen en declaraties uit de app. Leeg zolang de migratie
+ * ontbreekt.
+ */
 export async function loadPurchaseInvoiceInbox(organizationId: UUID): Promise<PurchaseInvoiceInboxItem[]> {
-  const { data, error } = await supabase
+  const query = (columns: string) => supabase
     .from('purchase_invoice_inbox')
-    .select(PURCHASE_INVOICE_INBOX_COLUMNS)
+    .select(columns)
     .eq('organization_id', organizationId)
     .neq('status', 'dropped')
     .order('received_at', { ascending: false })
     .limit(200);
+  let { data, error } = await query(PURCHASE_INVOICE_INBOX_COLUMNS);
+  // De app loopt vóór op de database: zonder de kolom channel is alles mail.
+  if (error && isMissingColumn(error, 'channel')) ({ data, error } = await query(PURCHASE_INVOICE_INBOX_COLUMNS_BASE));
   if (error) {
     if (isMissingRelation(error)) { console.warn(PURCHASE_INVOICE_INBOX_HINT); return []; }
     throw error;
@@ -5312,24 +5373,62 @@ export async function loadPurchaseInvoiceInbox(organizationId: UUID): Promise<Pu
 function normalizeInboxItem(raw: Record<string, unknown>): PurchaseInvoiceInboxItem {
   return {
     ...(raw as unknown as PurchaseInvoiceInboxItem),
+    channel: raw.channel === 'receipt' || raw.channel === 'declaration' ? raw.channel : 'email',
+    submitted_by: typeof raw.submitted_by === 'string' ? raw.submitted_by : null,
+    review_note: typeof raw.review_note === 'string' ? raw.review_note : null,
     attachments: Array.isArray(raw.attachments) ? (raw.attachments as PurchaseInvoiceInboxItem['attachments']) : [],
     warnings: Array.isArray(raw.warnings) ? (raw.warnings as string[]) : [],
     proposal: raw.proposal && typeof raw.proposal === 'object' ? (raw.proposal as PurchaseInvoiceInboxItem['proposal']) : null,
   };
 }
 
-/** Aantal items dat op een mens wacht (voor een teller op de pagina). */
+/**
+ * Aantal items dat op een mens wacht (voor een teller op de pagina): aandacht
+ * nodig, dubbel of mislukt, en een declaratie die op goedkeuring wacht. Een
+ * concept uit de mail of een eigen bon telt niet: dat boek je wanneer je wilt.
+ */
 export async function loadPurchaseInvoiceInboxOpenCount(organizationId: UUID): Promise<number> {
-  const { count, error } = await supabase
-    .from('purchase_invoice_inbox')
-    .select('id', { count: 'exact', head: true })
-    .eq('organization_id', organizationId)
-    .in('status', ['needs_review', 'duplicate', 'failed']);
+  const count = (withDeclarations: boolean) => {
+    const q = supabase
+      .from('purchase_invoice_inbox')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', organizationId);
+    return withDeclarations
+      ? q.or('status.in.(needs_review,duplicate,failed),and(channel.eq.declaration,status.eq.ready)')
+      : q.in('status', ['needs_review', 'duplicate', 'failed']);
+  };
+  let { count: total, error } = await count(true);
+  if (error && isMissingColumn(error, 'channel')) ({ count: total, error } = await count(false));
   if (error) {
     if (isMissingRelation(error)) return 0;
     throw error;
   }
-  return count ?? 0;
+  return total ?? 0;
+}
+
+/**
+ * Mijn eigen declaraties (list_my_declarations, 20261118120000). Alleen wat ik
+ * zelf instuurde; de database geeft niets van een ander, ook niet als je het
+ * vraagt. Leeg zolang de migratie ontbreekt.
+ */
+export async function listMyDeclarations(organizationId: UUID): Promise<Declaration[]> {
+  const { data, error } = await supabase.rpc('list_my_declarations', { p_organization_id: organizationId });
+  if (error) {
+    if (error.code === 'PGRST202' || error.code === '42883' || isMissingRelation(error)) return [];
+    throw error;
+  }
+  return ((data ?? []) as Array<Record<string, unknown>>).map(row => ({
+    id: String(row.id),
+    status: (['processing', 'submitted', 'approved', 'paid', 'rejected'].includes(String(row.status)) ? row.status : 'submitted') as Declaration['status'],
+    submitted_at: String(row.submitted_at ?? ''),
+    store_name: typeof row.store_name === 'string' ? row.store_name : null,
+    receipt_date: typeof row.receipt_date === 'string' ? row.receipt_date : null,
+    total_cents: row.total_cents == null ? null : Number(row.total_cents),
+    currency: typeof row.currency === 'string' && row.currency ? row.currency : 'EUR',
+    file_name: typeof row.file_name === 'string' ? row.file_name : null,
+    review_note: typeof row.review_note === 'string' ? row.review_note : null,
+    decided_at: typeof row.decided_at === 'string' ? row.decided_at : null,
+  }));
 }
 
 const INBOX_SETTINGS_DEFAULTS: Omit<PurchaseInvoiceInboxSettings, 'organization_id' | 'updated_at'> = {

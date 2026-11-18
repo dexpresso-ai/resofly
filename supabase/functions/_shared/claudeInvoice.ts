@@ -183,6 +183,28 @@ function documentBlock(dataBase64: string, mimeType: string): Record<string, unk
   return { type: 'image', source: { type: 'base64', media_type: mimeType, data: dataBase64 } };
 }
 
+/** Wat er op de foto of in de pdf staat: een gewone factuur, of een bon van een winkel. */
+export type DocumentKind = 'invoice' | 'receipt';
+
+/**
+ * Een kassabon is geen factuur: geen factuurnummer en geen vervaldatum, de
+ * bedragen staan er inclusief btw, en onderaan staat per tarief de grondslag
+ * en de btw. Zonder deze uitleg maakte het model van een boodschappenbon
+ * dertig regels van een paar cent, of rekende het de 9% van de levensmiddelen
+ * als 21%. Dit staat in het bericht en niet in de systeemprompt, zodat die
+ * gecachet blijft voor facturen en bonnen samen.
+ */
+export const RECEIPT_INSTRUCTION = [
+  'Dit is een bon: een kassabon, pinbon, tankbon, parkeerbon of ander betaalbewijs, gefotografeerd of gescand. Gerrie leest hem uit voor de boekhouding.',
+  '- De leverancier is de winkel of het bedrijf bovenaan de bon (naam, adres, btw-nummer of KvK als die erop staan). Niet de bank of de betaalterminal.',
+  '- Een bonnummer, transactienummer of ticketnummer mag als supplier_invoice_number; staat er niets, gebruik dan null.',
+  '- invoice_date is de datum op de bon. due_date is null: een bon is al betaald.',
+  '- De bedragen op een bon zijn meestal INCLUSIEF btw. Gebruik de btw-specificatie onderaan (per tarief de grondslag en de btw) en reken zo nodig terug naar excl.',
+  '- Maak per btw-tarief één regel, met een korte omschrijving van wat er gekocht is (bijvoorbeeld "Boodschappen", "Brandstof", "Parkeren"). Splits alleen verder als het duidelijk verschillende soorten kosten zijn.',
+  '- Zet de betaalwijze (pin, contant, creditcard) in notes als die op de bon staat.',
+  '- Is de foto onscherp of is een deel van de bon niet te lezen, zeg dat dan in notes en zet confidence op low. Verzin geen bedragen.',
+].join('\n');
+
 /**
  * Leest een inkoopfactuur (PDF of afbeelding) uit met Claude en geeft
  * gestructureerde gegevens + per-regel grootboek-/BTW-voorstel terug.
@@ -192,13 +214,18 @@ export async function extractInvoiceFromDocument(input: {
   mimeType: string;
   accounts: AccountRef[];
   vatCodes: VatCodeRef[];
+  /** 'receipt' voor een bon die in de app is gefotografeerd; standaard een factuur. */
+  documentKind?: DocumentKind;
 }): Promise<{ extraction: InvoiceExtraction; usage: Usage; model: string }> {
   if (!SUPPORTED_MIME_TYPES.includes(input.mimeType)) {
     throw new HttpError(`Bestandstype ${input.mimeType} wordt niet ondersteund. Gebruik PDF, JPG, PNG, WEBP of GIF.`, 400);
   }
+  const ask = input.documentKind === 'receipt'
+    ? `${RECEIPT_INSTRUCTION}\n\nLees deze bon uit en roep de tool extract_invoice aan.`
+    : 'Lees deze inkoopfactuur uit en roep de tool extract_invoice aan.';
   return await runExtraction(input.accounts, input.vatCodes, [
     documentBlock(input.dataBase64, input.mimeType),
-    { type: 'text', text: 'Lees deze inkoopfactuur uit en roep de tool extract_invoice aan.' },
+    { type: 'text', text: ask },
   ]);
 }
 

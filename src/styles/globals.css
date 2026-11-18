@@ -201,7 +201,32 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .settings-card h3{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted2)}
 .settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .settings-grid.compact{margin-top:4px}
-.settings-tabs-bar{position:sticky;top:0;z-index:5}
+/* De navigatie van de instellingen (2026-11-18): de groepen, en daaronder de
+   onderdelen van de gekozen groep als keuzestrook. Samen plakken ze bovenaan,
+   met de kleur van het werkvlak eronder, zodat de inhoud er niet doorheen
+   schuift. Eén rij van negentien tabbladen schoof voor de helft uit beeld. */
+.settings-nav{position:sticky;top:0;z-index:5;display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding-bottom:4px;background:var(--bg)}
+/* Plakt de balk, dan dekt dit vlak de strook erboven (useStickyCover). */
+.settings-nav::before{content:'';position:absolute;left:0;right:0;bottom:100%;height:var(--stuck-cover,0px);background:inherit;pointer-events:none}
+.settings-nav .settings-tabs-bar{position:static}
+.settings-subtabs{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:3px;border:1px solid var(--line,var(--border));border-radius:var(--r-md,10px);background:var(--well,var(--bg3));overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}
+.settings-subtabs::-webkit-scrollbar{display:none}
+.settings-subtabs button{display:inline-flex;align-items:center;gap:7px;flex:0 0 auto;height:32px;padding:0 12px;border:0;border-radius:7px;background:transparent;color:var(--ink-3,var(--muted2));font:500 12.5px/1 var(--font-sans);white-space:nowrap;cursor:pointer;transition:background-color .15s,color .15s,box-shadow .15s}
+.settings-subtabs button svg{flex:none;color:var(--ink-3,var(--muted))}
+.settings-subtabs button:hover{color:var(--ink,var(--text))}
+.settings-subtabs button:focus-visible{outline:2px solid var(--accent-ink,var(--accent));outline-offset:-2px}
+.settings-subtabs button.is-on{background:var(--raised,var(--bg2));color:var(--ink,var(--text));font-weight:600;box-shadow:var(--shadow-1,0 1px 2px rgba(0,0,0,.2)),0 0 0 1px var(--line-2,var(--border2))}
+.settings-subtabs button.is-on svg{color:var(--accent-ink,var(--accent))}
+@media(max-width:760px){
+  .settings-nav{gap:8px;padding-bottom:6px}
+  /* Geen kader om de groepen: de keuzestrook eronder heeft er al een, en twee
+     kaders op elkaar lazen als één blok. */
+  .settings-nav .settings-groups{background:transparent;border-color:transparent}
+  /* Op de telefoon vult de keuzestrook de breedte: dan wijst hij niet als
+     een losse knop rechts het scherm uit. */
+  .settings-subtabs{display:flex;width:100%}
+  .settings-subtabs button{flex:1 0 auto;justify-content:center;height:36px}
+}
 .settings-tab-panel{display:flex;flex-direction:column;gap:14px;animation:settings-tab-in .18s ease}
 /* Instellingen → Gegevens: alles exporteren (2026-11-11). */
 .data-export-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
@@ -8040,6 +8065,13 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
   .bk-table th,.bk-table td{padding:10px 11px}
 }
 
+/* Het overzicht voor de aangifte inkomstenbelasting (Eigen vermogen) heeft
+   twee kolommen: omschrijving en bedrag. Met de ondergrens van 560px hierboven
+   viel het bedrag op een telefoon buiten beeld, achter een veegrij. */
+@media(max-width:900px){
+  .bk-ib-table{min-width:0}
+}
+
 /* 12 ── Vaste kolomrasters die niet inklappen ─────────────────────────────
    Vijf kolommen in 343px geeft invoervelden van 22 tot 37px breed. Deze
    rasters volgen nu hetzelfde patroon als de factuurregels: de kopregel met
@@ -12508,6 +12540,12 @@ body::before{display:none}
 .user-menu{background:var(--surface);border-color:var(--line-2);border-radius:var(--r-xl);box-shadow:var(--shadow-pop)}
 .umh-label,.user-menu-section{color:var(--ink-3);font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none}
 .user-menu-item{border-radius:var(--r-sm);color:var(--ink-2);font-weight:500}
+/* De instellingen per groep (2026-11-18): een klein kopje boven elke groep,
+   ingesprongen onder "Instellingen", en het onderdeel dat openstaat licht op. */
+.user-menu-group+.user-menu-group{margin-top:4px}
+.user-menu-group-h{padding:8px 11px 3px;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.user-menu-item.is-current{background:var(--surface-2,var(--bg3));color:var(--ink,var(--text));font-weight:600}
+.user-menu-item.is-current svg{color:var(--accent-ink)}
 .user-menu-item:hover{background:var(--surface-2);color:var(--ink)}
 .user-menu-item:hover svg{color:var(--ink-2)}
 .theme-switch{background:var(--well);border-color:var(--line);border-radius:var(--r-md)}

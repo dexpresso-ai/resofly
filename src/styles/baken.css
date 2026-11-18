@@ -656,11 +656,11 @@
 
 /* Keuzestroken (Mijn/Team, Kaarten/Tabel …): een verzonken spoor, de gekozen
    stand ligt er wit bovenop. */
-:root[data-look="baken"][data-theme="light"] .app :is(.dash-scope,.wp-seg,.bk-seg,.client-view-toggle,.project-view-toggle,.finance-editor-tabs,.wp-quick-add-modes,.tt-period-tabs,.tt-scope-tog){
+:root[data-look="baken"][data-theme="light"] .app :is(.dash-scope,.wp-seg,.bk-seg,.client-view-toggle,.project-view-toggle,.finance-editor-tabs,.wp-quick-add-modes,.tt-period-tabs,.tt-scope-tog,.settings-subtabs){
   background:rgba(22,22,28,.055);
   box-shadow:inset 0 0 0 1px rgba(22,22,28,.04);
 }
-:root[data-look="baken"][data-theme="light"] .app :is(.dash-scope button.is-on,.wp-seg button.is-on,.bk-seg button.is-active,.client-view-toggle button.active,.project-view-toggle button.active,.finance-editor-tabs button.is-active,.wp-quick-add-modes button.is-on,.tt-period-tab.active,.tt-scope-tog button.active){
+:root[data-look="baken"][data-theme="light"] .app :is(.dash-scope button.is-on,.wp-seg button.is-on,.bk-seg button.is-active,.client-view-toggle button.active,.project-view-toggle button.active,.finance-editor-tabs button.is-active,.wp-quick-add-modes button.is-on,.tt-period-tab.active,.tt-scope-tog button.active,.settings-subtabs button.is-on){
   background:#fff;color:var(--ink);
   box-shadow:0 1px 2px rgba(22,22,28,.12),0 4px 10px -6px rgba(22,22,28,.3),inset 0 0 0 1px rgba(22,22,28,.06);
 }

@@ -289,7 +289,9 @@ serve(async (req) => {
       ? (INVOICE_DEBUG_ERRORS ? error.message : publicActionError(error.message).message)
       : INVOICE_DEBUG_ERRORS
         ? `Invoice workflow-actie mislukt: ${internalMessage}`
-        : 'Invoice workflow-actie mislukt door een server- of providerfout. Controleer de Edge Function logs.';
+        // In gewone woorden: de gebruiker kan niet in de logboeken van de
+        // server kijken. Hier stond "Controleer de Edge Function logs".
+        : 'Dit lukte niet door een fout op de server. Probeer het zo nog eens; blijft het misgaan, laat het ons dan weten.';
     return json(req, { ok: false, error: publicMessage }, status);
   }
 });
@@ -482,9 +484,11 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     });
     resendPayloadResponse = (await resendResponse.json().catch(() => ({}))) as Record<string, unknown>;
   } catch (error) {
-    const errorMessage = `Resend provider request failed before a response was received: ${describeError(error)}`;
+    // Bij de verzending bewaard en in het scherm getoond: in het Nederlands,
+    // met de technische oorzaak erachter voor wie het uitzoekt.
+    const errorMessage = `De mailserver gaf geen antwoord (${describeError(error)})`;
     await failInvoiceEmailSend(prepared.deliveryId, organizationId, userId, errorMessage);
-    throw new WorkflowHttpError(`Resend kon de factuur-e-mail niet versturen: ${errorMessage}`, 502);
+    throw new WorkflowHttpError('De factuur is niet verstuurd: de mailserver gaf geen antwoord. Probeer het over een paar minuten opnieuw.', 502);
   }
 
   if (!resendResponse.ok) {
@@ -738,9 +742,9 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
     });
     resendPayloadResponse = (await resendResponse.json().catch(() => ({}))) as Record<string, unknown>;
   } catch (error) {
-    const message = `Resend provider request failed before a response was received: ${describeError(error)}`;
+    const message = `De mailserver gaf geen antwoord (${describeError(error)})`;
     await failInvoiceReminderSend(prepared.deliveryId, organizationId, actorUserId, message);
-    throw new WorkflowHttpError(`Resend kon de herinnering niet versturen: ${message}`, 502);
+    throw new WorkflowHttpError('De herinnering is niet verstuurd: de mailserver gaf geen antwoord. Probeer het over een paar minuten opnieuw.', 502);
   }
 
   if (!resendResponse.ok) {
@@ -1109,9 +1113,9 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
     });
     resendPayloadResponse = (await resendResponse.json().catch(() => ({}))) as Record<string, unknown>;
   } catch (error) {
-    const message = `Resend provider request failed before a response was received: ${describeError(error)}`;
+    const message = `De mailserver gaf geen antwoord (${describeError(error)})`;
     await failDunningSend(noticeId, prepared.deliveryId, organizationId, userId, message);
-    throw new WorkflowHttpError(`Resend kon de aanmaning niet versturen: ${message}`, 502);
+    throw new WorkflowHttpError('De aanmaning is niet verstuurd: de mailserver gaf geen antwoord. Probeer het over een paar minuten opnieuw.', 502);
   }
   if (!resendResponse.ok) {
     const message = String(resendPayloadResponse.message || resendPayloadResponse.error || resendResponse.statusText || 'Resend send failed');

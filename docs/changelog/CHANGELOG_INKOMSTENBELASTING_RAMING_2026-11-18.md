@@ -8,11 +8,13 @@ zelf inkomstenbelasting over de winst. ResoFly leverde tot nu toe de bouwstenen
 ongeveer moet betalen, moest hij zelf uitrekenen. In de controle van 4 november
 stond dat bewust open. Nu staat het erin.
 
-> **Status:** één migratie (`20261118090000_inkomstenbelasting_raming`), een
+> **Status:** één migratie (`20261118150000_inkomstenbelasting_raming`), een
 > nieuwe pagina **Financiën → Inkomstenbelasting** (alleen bij een IB-rechtsvorm)
 > en een leeshandeling voor Gerrie, de API en MCP (`owners.income_tax_estimate`).
 > Het rekenwerk staat op één plek, met tests, en het scherm en Gerrie gebruiken
-> dezelfde code.
+> dezelfde code. Afgestemd op het overzicht voor de aangifte op Eigen vermogen
+> uit de controle eenmanszaak van vandaag: bij een eenmanszaak tonen de twee
+> schermen dezelfde belastbare winst (zie hieronder).
 
 ## Wat er nu kan
 
@@ -26,7 +28,8 @@ stond dat bewust open. Nu staat het erin.
   | Stap | Wat |
   |---|---|
   | Winst | het winstaandeel uit de boekhouding |
-  | Fiscale correcties | bijtelling auto, gemengde kosten, boetes, desinvesteringsbijtelling, EIA/MIA |
+  | Gemengde kosten | het niet-aftrekbare deel van wat op 4600 Eten, drinken en representatie staat, vanzelf |
+  | Fiscale correcties | bijtelling auto, boetes, desinvesteringsbijtelling, EIA/MIA, gemengde kosten op een andere rekening |
   | KIA | kleinschaligheidsinvesteringsaftrek |
   | Ondernemersaftrek | zelfstandigenaftrek, startersaftrek, overige |
   | Mkb-winstvrijstelling | 12,70% van de winst na ondernemersaftrek |
@@ -58,10 +61,33 @@ stond dat bewust open. Nu staat het erin.
   een prognose. De prognose trekt de geboekte winst in hetzelfde tempo door tot
   31 december. Begon de boekhouding later in het jaar, dan telt het tempo vanaf
   die dag. In de eerste maand is er nog geen prognose.
-- **Je eigen uren** uit de urenregistratie staan erbij als hint voor het
-  urencriterium. Dat geldt alleen met leesrecht op Uren.
+- **Het urencriterium uit Uren:** bij een eenmanszaak zonder opgeslagen keuze
+  volgt het de geregistreerde uren van de eigenaar, net als Eigen vermogen. De
+  raming zegt dat erbij; kies je zelf en sla je op, dan geldt jouw keuze. Alleen
+  met leesrecht op Uren. Bij een vof geldt het urencriterium per vennoot, en
+  vul je het per vennoot in.
 - **Gerrie, API en MCP:** `owners.income_tax_estimate` geeft dezelfde raming.
   De beschrijving draagt Gerrie op de disclaimer steeds te noemen.
+
+## Afgestemd op Eigen vermogen
+
+De controle eenmanszaak van vandaag (`CHANGELOG_EENMANSZAAK_CONTROLE_2026-11-18.md`)
+zette op Eigen vermogen een overzicht van winst naar belastbare winst
+(`src/lib/incomeTax.ts`). Die twee mogen niet uiteenlopen:
+
+- **Gemengde kosten:** de raming rekent het niet-aftrekbare deel van 4600 nu
+  zelf mee, met dezelfde som: het gunstigste van 20% of de drempel van
+  € 5.700 (2025 en 2026, niet geïndexeerd). Bij een vof gaat dat deel naar
+  winstaandeel. In de correcties staat het als automatische regel, zonder
+  prullenbak. Het formulier waarschuwt dat je 4600 niet nog eens opgeeft.
+- **Urencriterium:** standaard de uren van de eigenaar, zoals daar.
+- **Bewaakt:** een test vergelijkt de bedragen (zelfstandigenaftrek,
+  startersaftrek, mkb-winstvrijstelling, drempel) en de som voor gemengde
+  kosten van beide rekenharten. Hij rekent ook vijf eenmanszaken door beide,
+  van winst tot belastbare winst. Ze komen tot op de cent overeen.
+- **Verwijzing:** het overzicht op Eigen vermogen zegt nu dat KIA,
+  correcties, de AOW-leeftijd en de belasting zelf bij Inkomstenbelasting
+  staan.
 
 ## Het rekenhart
 
@@ -109,7 +135,7 @@ uitgerekend. Ze komen uit een losse berekening met Decimal, rechtstreeks uit de
 tabellen, en ik heb ze met de hand nagelopen. Een voorbeeld: € 50.000 winst in
 2026 met urencriterium geeft € 7.607,83 inkomstenbelasting en € 2.066,22 Zvw.
 
-## De database (migratie `20261118090000`)
+## De database (migratie `20261118150000`)
 
 - **`income_tax_profiles`:** per ondernemer of vennoot per kalenderjaar, één
   rij (unique nulls not distinct). Het kalenderjaar omdat de
@@ -122,7 +148,10 @@ tabellen, en ik heb ze met de hand nagelopen. Een voorbeeld: € 50.000 winst in
 - **`income_tax_kia_exclusions`:** de activa die niet meetellen voor de KIA.
 - **`get_income_tax_inputs`:** alles wat het rekenhart nodig heeft, in één
   aanroep. De winst komt uit dezelfde bron als Eigen vermogen: de W&V zonder de
-  jaarafsluiting, maar dan over het kalenderjaar.
+  jaarafsluiting, maar dan over het kalenderjaar. Ook de kosten op 4600
+  (subtype `mixed_costs`) en de uren van de eigenaar. Die uren alleen met
+  leesrecht op Uren; Gerrie geeft met `p_owner_hours` mee of de aanroeper Uren
+  mag lezen.
 - **Schrijven alleen via functies:** `save_income_tax_profile`,
   `add_income_tax_correction`, `delete_income_tax_correction` en
   `set_income_tax_kia_exclusion`.
@@ -153,44 +182,63 @@ tabellen, en ik heb ze met de hand nagelopen. Een voorbeeld: € 50.000 winst in
 
 ## Verificatie
 
-- **Rekenhart:** `npm test`, 1956 tests groen, waarvan 38 nieuw voor de raming:
+Alles hieronder na het samenvoegen met staging. Daar kwamen vandaag de
+controle eenmanszaak, het wisselen van btw-tijdvak, bonnen en declaraties en
+instellingen in groepen bij. Mijn migratie had eerst hetzelfde versienummer als
+die van de eenmanszaak (`20261118090000`). Hij heet nu `20261118150000`, na de
+laatste op staging.
+
+- **Rekenhart:** `npm test`, 2013 tests groen, waarvan 42 voor de raming:
   - elke stap van de som en de randen van de tabellen (KIA, kortingen,
     schijven);
   - de verdeling, gelijk aan `partnership_result_shares`;
   - de prognose;
   - het overzicht voor eenmanszaak, vof, cv en een vof zonder vennoten;
+  - de gemengde kosten en het urencriterium uit Uren;
+  - de gelijkheid met `incomeTax.ts` van Eigen vermogen;
   - de spiegel, teken voor teken.
 - **Database, end-to-end:** nieuw scenario `npm run test:stromen --
   inkomstenbelasting`, tegen een lokale stack met echte gebruikers, RLS en alle
   migraties. 8 stappen, 0 fouten:
-  - de winst van het kalenderjaar;
+  - de winst van het kalenderjaar, en de uren van de eigenaar (ook: geen uren
+    voor de boekhouder, en niet zonder `p_owner_hours`);
   - opslaan en bijwerken, en een raming die tot op de cent klopt;
   - rechten voor lezer, zonder Financiën, een andere organisatie en anoniem;
   - rechtstreeks schrijven, dat geweigerd wordt;
   - de invoercontrole;
-  - correcties en KIA;
+  - correcties, KIA en 4600;
   - de samengestelde sleutels;
   - vof met dezelfde verdeling als de database;
   - cv met een commanditaire vennoot, stichting en het logboek.
-- **Migratieketen:** `supabase db reset` op een lege database, alle 280
-  migraties. De nieuwe migratie draait ook een tweede keer schoon.
+
+  Samen met de scenario's die vandaag de boekhouding raakten (`eenmanszaak`,
+  `bonnen`, `vooruitbetaald`): 91 stappen, 0 fouten.
+- **Migratieketen:** `supabase db reset` op een lege database, alle 283
+  migraties, de mijne als laatste. De migratie draait ook een tweede keer
+  schoon.
 - **Typecheck en build:** typecheck ✓, build ✓, CSP ✓.
-- **Deno-check:** alle 35 functies uit de CI-lijst plus de raming zelf ✓.
-  esm.sh en deno.land zijn vanuit de cloudsessie niet bereikbaar; daarom ging
-  het met een import-map naar dezelfde pakketten via npm. In CI draait de
-  gewone check.
+- **Deno-check:** alle 35 functies uit de CI-lijst, `documentLayout`,
+  `documentPdf` en de raming zelf ✓. esm.sh en deno.land zijn vanuit de
+  cloudsessie niet bereikbaar; daarom ging het met een import-map naar dezelfde
+  pakketten via npm. In CI draait de gewone check.
 - **Scherm:**
-  - mobiele lay-outtest met beide thema's, met de raming als eenmanszaak en als
-    vof erbij: telefoon, tablet en liggend, 0 problemen;
-  - laadtest: de pagina haalt geen zware groep op;
-  - terugknop: 12 gelukt.
+  - mobiele lay-outtest met beide thema's voor de raming als eenmanszaak en als
+    vof: telefoon, tablet en liggend, 0 problemen. De volledige ronde over alle
+    pagina's na het samenvoegen staat hieronder bij de uitrol;
+  - laadtest: alle controles geslaagd; de pagina haalt geen zware groep op;
+  - terugknop: 15 gelukt.
 - **Zelf bekeken, en hersteld vóór het uitrollen:**
   - op de telefoon viel de bedragenkolom van de berekening buiten beeld. De
     algemene regel voor brede boekhoudtabellen (min-width 560px, zijwaarts
     schuiven) gold ook hier; een tabel met twee kolommen past nu gewoon;
   - een aftrek van nul stond er als "€ -0,00";
   - de keuzelijst "Voor" bij de correcties liep met een lange naam buiten de
-    kaart.
+    kaart;
+  - het gemiddelde tarief stond er met drie decimalen.
+
+  De bedragen op het scherm zijn met de hand nagerekend: een eenmanszaak met
+  € 52.345,67 winst, en een vof met een vennoot die in augustus de
+  AOW-leeftijd bereikt.
 
 ## Bewust open
 

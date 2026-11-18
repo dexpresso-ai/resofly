@@ -53,9 +53,9 @@ const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch:
 const DESKTOP = { viewport: { width: 1440, height: 900 }, isMobile: false, hasTouch: false };
 
 /** Een telefoon (of computer) met de werkruimte open op `spec` (zoals in tests/mobile). */
-async function open(spec, device = PHONE) {
+async function open(spec, device = PHONE, mock = {}) {
   const context = await browser.newContext({ ...device, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
-  await installMock(context);
+  await installMock(context, mock);
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(String(e.message)));
@@ -79,6 +79,7 @@ async function where(t) {
     gerrie: Boolean(document.querySelector('.gerrie-panel')),
     commThread: Boolean(document.querySelector('.comm-shell.is-single .comm-back')),
     chatThread: Boolean(document.querySelector('.chat-single .tmc-back')),
+    settingsTab: document.querySelector('section.content:not([hidden]) .settings-subtabs [aria-selected="true"]')?.dataset.settingsTab ?? null,
     marker: history.state && typeof history.state === 'object' ? history.state.resoflyBack ?? null : null,
   }));
   return { ...view, steps: nav.currentIndex - t.start, url: nav.entries[nav.currentIndex]?.url ?? '' };
@@ -112,9 +113,9 @@ async function expectState(t, label, wanted) {
   }
 }
 
-async function scenario(name, spec, run, device = PHONE) {
+async function scenario(name, spec, run, device = PHONE, mock = {}) {
   if (args.only && !name.includes(args.only)) return;
-  const t = await open(spec, device);
+  const t = await open(spec, device, mock);
   try {
     await run(t);
     if (t.errors.length) throw new Error(`JavaScript-fout: ${t.errors.join(' | ')}`);
@@ -237,6 +238,25 @@ await scenario('teamchat: terug gaat van een gesprek naar de lijst', 'chat', asy
   await expectState(t, 'lijst', { page: 'chat', chatThread: false, steps: 1 });
 });
 
+// Instellingen in groepen (2026-11-18): een groep en een onderdeel kiezen op de
+// pagina zijn stappen, net als via het menu. Terug gaat langs de onderdelen
+// waar je was, en daarna omhoog naar het dashboard.
+await scenario('Instellingen: terug gaat langs de onderdelen die je koos', 'settings', async (t) => {
+  // Bij de eerste keuze komen er twee stappen bij: terug naar Organisatie &
+  // team, en omhoog naar het dashboard, zoals op elke pagina.
+  await expectState(t, 'start', { page: 'settings', settingsTab: 'organisatie', steps: 0 });
+  await tap(t, '[data-settings-group="geld"]');
+  await expectState(t, 'groep Geld', { settingsTab: 'facturatie', steps: 2 });
+  await tap(t, '[data-settings-tab="betalen"]');
+  await expectState(t, 'Online betalen', { settingsTab: 'betalen', steps: 3 });
+  await back(t);
+  await expectState(t, 'terug 1', { page: 'settings', settingsTab: 'facturatie', steps: 2 });
+  await back(t);
+  await expectState(t, 'terug 2', { page: 'settings', settingsTab: 'organisatie', steps: 1 });
+  await back(t);
+  await expectState(t, 'omhoog', { page: 'dashboard', steps: 0 });
+});
+
 await scenario('herladen midden in de app: daarna klopt terug weer', 'dashboard', async (t) => {
   await tap(t, '.bottomnav .bn-item', { hasText: 'Klanten' });
   await tap(t, '.client-card');
@@ -252,6 +272,36 @@ await scenario('herladen midden in de app: daarna klopt terug weer', 'dashboard'
   await back(t);
   await expectState(t, 'terug', { page: 'dashboard', steps: 0 });
 });
+
+// Bon fotograferen (2026-11-18): na de foto opent het bonvenster vanzelf, niet
+// na een tik. Ook dan hoort terug het venster te sluiten, en niet de app. Zoals
+// op de telefoon: een tik op "Bon fotograferen" opent de camera (hier de
+// bestandskiezer), en de foto komt terug. Die tik telt: zonder tik zet de
+// terugknop geen stap neer (zie backButton.ts), en zo'n stap zou Chrome op een
+// telefoon toch overslaan.
+const RECEIPT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAADwAAABgCAAAAABk204iAAAAZElEQVR42u2XoQ0AIAwEGQzNEEzCJEyLQGAQpKShEJrc+TPfMw3tgIDsVE47/pS5szO5rngic6q7cpGZhDwwk1lbGk6/tiyzNm3TNm3TNm3TNm3TtsO2+W6UctRiJnMqZGQzuQOLFgqFPkzjQQAAAABJRU5ErkJggg==';
+for (const [name, spec, mock] of [
+  ['Inkoopfacturen: terug sluit het bonvenster', 'purchase-invoices', { ledger: true }],
+  ['Declaraties: terug sluit het bonvenster', 'declarations', { declarant: true }],
+]) {
+  await scenario(name, spec, async (t) => {
+    await expectState(t, 'start', { page: spec, modal: false, steps: 0 });
+    const [chooser] = await Promise.all([
+      t.page.waitForEvent('filechooser', { timeout: 5000 }),
+      t.page.locator('.content:not([hidden]) .rcp-launch .btn-primary').first().tap(),
+    ]);
+    await chooser.setFiles({ name: 'bon.png', mimeType: 'image/png', buffer: Buffer.from(RECEIPT_PNG, 'base64') });
+    await t.page.waitForSelector('.rcp-result', { timeout: 8000 });
+    // Twee stappen: opgestart op deze pagina gaat terug eerst naar het
+    // dashboard (die stap komt bij de eerste tik, zie het projectscenario),
+    // en het venster ligt daarbovenop.
+    await expectState(t, 'bonvenster open', { page: spec, modal: true, steps: 2 });
+    await back(t);
+    await expectState(t, 'terug: venster dicht', { page: spec, modal: false, steps: 1 });
+    await back(t);
+    await expectState(t, 'nog eens terug: het dashboard', { page: 'dashboard', modal: false, steps: 0 });
+  }, PHONE, mock);
+}
 
 // Op een computer is de terugknop die van de browser (of de muis). Een menu
 // dat sluit bij het indrukken van de muis en een klik die daarna een pagina

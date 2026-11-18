@@ -1111,9 +1111,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     kind: 'read',
     description:
       'Alleen voor een eenmanszaak, vof, maatschap of cv. Een raming per kalenderjaar van wat de ondernemer, of elke vennoot over zijn winstaandeel, aan inkomstenbelasting (box 1, inclusief premie volksverzekeringen) en inkomensafhankelijke bijdrage Zvw betaalt: ' +
-      'winst(aandeel) + fiscale correcties − KIA = winst uit onderneming; − zelfstandigenaftrek (urencriterium), startersaftrek en overige ondernemersaftrek; − mkb-winstvrijstelling (12,70%) = belastbare winst; − verlies uit eerdere jaren; tarief box 1 met de aftrekbeperking; − algemene heffingskorting, arbeidskorting (over de winst vóór ondernemersaftrek) en bij de AOW-leeftijd de ouderenkorting; + Zvw-bijdrage; − betaalde voorlopige aanslagen = nog te betalen (negatief = terug). ' +
+      'winst(aandeel) + het niet-aftrekbare deel van eten, drinken en representatie op 4600 (20% of tot de drempel van € 5.700, het gunstigste) + fiscale correcties − KIA = winst uit onderneming; − zelfstandigenaftrek (urencriterium), startersaftrek en overige ondernemersaftrek; − mkb-winstvrijstelling (12,70%) = belastbare winst; − verlies uit eerdere jaren; tarief box 1 met de aftrekbeperking; − algemene heffingskorting, arbeidskorting (over de winst vóór ondernemersaftrek) en bij de AOW-leeftijd de ouderenkorting; + Zvw-bijdrage; − betaalde voorlopige aanslagen = nog te betalen (negatief = terug). ' +
       'Een commanditaire vennoot is geen ondernemer: geen ondernemersaftrek, mkb-winstvrijstelling of arbeidskorting. Tarieven en bedragen van 2025 en 2026; een later jaar rekent met die van 2026 en zegt dat in `warnings`. Bedragen in centen. ' +
-      '`basis` "prognose" trekt de geboekte winst van het lopende jaar door naar 31 december (pas na de eerste maand). Het urencriterium, de startersaftrek, de AOW-leeftijd en de voorlopige aanslagen vult de gebruiker in op de pagina Inkomstenbelasting; staat het urencriterium op null, dan is er gerekend zonder zelfstandigenaftrek. ' +
+      '`basis` "prognose" trekt de geboekte winst van het lopende jaar door naar 31 december (pas na de eerste maand). Het urencriterium, de startersaftrek, de AOW-leeftijd en de voorlopige aanslagen vult de gebruiker in op de pagina Inkomstenbelasting; staat het urencriterium op null, dan is er gerekend zonder zelfstandigenaftrek. Bij een eenmanszaak zonder opgeslagen gegevens volgt het urencriterium de geregistreerde uren van de eigenaar (`hoursFromTimeTracking`). ' +
       'BELANGRIJK: dit rekent alleen met het zakelijke inkomen uit deze onderneming. Noem bij elk antwoord de `disclaimer`: ander inkomen, persoonlijke aftrekposten en kortingen die van de persoonlijke situatie afhangen, zijn niet meegenomen. Het is geen aangifte en geen advies.',
     keywords: ['inkomstenbelasting', 'ib', 'aangifte inkomstenbelasting', 'hoeveel belasting', 'belasting betalen', 'reserveren', 'zelfstandigenaftrek', 'startersaftrek', 'mkb-winstvrijstelling', 'kia', 'kleinschaligheidsinvesteringsaftrek', 'heffingskorting', 'arbeidskorting', 'zvw', 'zorgverzekeringswet', 'voorlopige aanslag', 'urencriterium', 'eenmanszaak', 'vof', 'vennoot'],
     input: {
@@ -1127,6 +1127,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       const { data, error } = await ctx.db.rpc('get_income_tax_inputs', {
         p_organization_id: ctx.organizationId,
         p_year: year,
+        // De uren van de eigenaar (de standaard voor het urencriterium) alleen
+        // voor wie Uren mag lezen; de service-role ziet anders alles.
+        p_owner_hours: ctx.canRead?.('time') !== false,
       });
       if (error) throw new ActionError(`Gegevens voor de inkomstenbelasting ophalen mislukt: ${error.message}`);
       if (!data) throw new ActionError('Geen gegevens gevonden voor dit jaar.');
@@ -1144,6 +1147,8 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
         projection: overview.projection,
         investmentTotalCents: overview.investmentTotalCents,
         kiaCents: overview.kiaCents,
+        mixedCosts: overview.mixedCosts,
+        ownerMinutes: overview.ownerMinutes,
         totals: overview.totals,
         warnings: overview.warnings,
         persons: overview.persons.map((p) => ({
@@ -1160,8 +1165,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
             provisionalIncomeTaxCents: p.profile.provisionalIncomeTaxCents,
             provisionalZvwCents: p.profile.provisionalZvwCents,
             saved: p.profileSaved,
+            hoursFromTimeTracking: p.hoursFromTimeTracking,
           },
-          corrections: p.corrections.map((c) => ({ code: c.code, label: c.label, amountCents: c.amountCents, shared: c.shared })),
+          corrections: p.corrections.map((c) => ({ code: c.code, label: c.label, amountCents: c.amountCents, shared: c.shared, automatic: c.automatic })),
           estimate: p.estimate,
           notes: p.notes,
         })),

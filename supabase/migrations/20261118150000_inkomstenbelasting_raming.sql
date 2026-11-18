@@ -208,7 +208,17 @@ create trigger income_tax_corrections_audit after insert or update or delete on 
 -- ── 5. Alles wat het rekenhart nodig heeft, in één aanroep ──────────────────
 -- De winst komt uit dezelfde bron als het overzicht Eigen vermogen: de W&V
 -- zonder de jaarafsluiting, maar dan over het KALENDERJAAR.
-create or replace function public.get_income_tax_inputs(p_organization_id uuid, p_year integer)
+--
+-- Twee dingen sluiten aan op het overzicht voor de aangifte op Eigen vermogen
+-- (20261118090000, src/lib/incomeTax.ts), zodat beide schermen bij een
+-- eenmanszaak dezelfde belastbare winst tonen:
+--   - de kosten op rekeningen met subtype mixed_costs (4600 Eten, drinken en
+--     representatie): het rekenhart telt het niet-aftrekbare deel erbij;
+--   - de geregistreerde uren van de eigenaar: daarmee vult de raming het
+--     urencriterium in zolang er niets is opgeslagen. Alleen met leesrecht op
+--     Uren. Gerrie draait als service-role en geeft met p_owner_hours mee of
+--     de aanroeper Uren mag lezen.
+create or replace function public.get_income_tax_inputs(p_organization_id uuid, p_year integer, p_owner_hours boolean default true)
 returns jsonb
 language plpgsql
 stable
@@ -221,7 +231,10 @@ declare
   v_start date;
   v_end date;
   v_result bigint := 0;
+  v_mixed bigint := 0;
   v_minutes bigint := null;
+  v_owner uuid;
+  v_owner_minutes bigint := null;
   v_company text;
   v_bookkeeping_start date;
 begin
@@ -253,6 +266,19 @@ begin
     and je.date between v_start and v_end
     and la.type in ('revenue', 'expense');
 
+  -- Eten, drinken en representatie: beperkt aftrekbaar (art. 3.15 Wet IB).
+  select coalesce(sum(jl.debit_cents - jl.credit_cents), 0)::bigint
+  into v_mixed
+  from public.journal_lines jl
+  join public.journal_entries je on je.id = jl.entry_id
+  join public.ledger_accounts la on la.id = jl.account_id
+  where jl.organization_id = p_organization_id
+    and je.status = 'posted'
+    and je.source_type <> 'year_close'
+    and je.date between v_start and v_end
+    and la.type = 'expense'
+    and la.subtype = 'mixed_costs';
+
   select nullif(btrim(cs.company_name), ''), cs.bookkeeping_start_date
   into v_company, v_bookkeeping_start
   from public.company_settings cs
@@ -269,6 +295,26 @@ begin
       and te.entry_date between v_start and v_end;
   end if;
 
+  -- De uren van de eigenaar: bij een eenmanszaak is hij de ondernemer (zoals
+  -- op Eigen vermogen). Bij een vof gaat het urencriterium per vennoot, en die
+  -- kent geen gebruiker: dan niet.
+  if coalesce(p_owner_hours, false) and not v_partnership_form
+     and (auth.role() = 'service_role' or (auth.uid() is not null and public.can_read_module(p_organization_id, 'time'))) then
+    select om.user_id into v_owner
+    from public.organization_members om
+    where om.organization_id = p_organization_id and om.role = 'owner' and om.status = 'active'
+    order by om.created_at, om.user_id
+    limit 1;
+    if v_owner is not null then
+      select coalesce(sum(te.minutes), 0)::bigint
+      into v_owner_minutes
+      from public.time_entries te
+      where te.organization_id = p_organization_id
+        and te.user_id = v_owner
+        and te.entry_date between v_start and v_end;
+    end if;
+  end if;
+
   return jsonb_build_object(
     'year', p_year,
     'legalForm', v_legal,
@@ -276,6 +322,7 @@ begin
     'companyName', v_company,
     'bookkeepingStartDate', v_bookkeeping_start,
     'resultCents', v_result,
+    'mixedCostsCents', v_mixed,
     'overlappingFiscalYears', coalesce((
       select jsonb_agg(jsonb_build_object(
                'id', fy.id, 'label', fy.label, 'periodStart', fy.period_start,
@@ -330,7 +377,8 @@ begin
       where fa.organization_id = p_organization_id
         and fa.acquisition_date between v_start and v_end
     ), '[]'::jsonb),
-    'myMinutes', v_minutes
+    'myMinutes', v_minutes,
+    'ownerMinutes', v_owner_minutes
   );
 end;
 $$;
@@ -567,8 +615,9 @@ end;
 $$;
 
 -- ── 7. Logboek: de nieuwe soorten horen bij Financiën ───────────────────────
--- Gelijk aan 20261111220000, met 'income_tax_profile' en 'income_tax_correction'
--- bij Financiën.
+-- Gelijk aan 20261111220000 (de laatste definitie; 20261118090000 t/m
+-- 20261118120000 lieten hem staan), met 'income_tax_profile' en
+-- 'income_tax_correction' bij Financiën.
 create or replace function public.audit_entity_module(p_entity_type text)
 returns text
 language sql
@@ -601,8 +650,8 @@ $$;
 -- ── 8. Rechten op de functies ───────────────────────────────────────────────
 -- Wat de app aanroept: ingelogde gebruikers (de functies controleren zelf de
 -- organisatie en de modulerechten). De hulpjes: alleen de server.
-revoke all on function public.get_income_tax_inputs(uuid, integer) from public, anon;
-grant execute on function public.get_income_tax_inputs(uuid, integer) to authenticated, service_role;
+revoke all on function public.get_income_tax_inputs(uuid, integer, boolean) from public, anon;
+grant execute on function public.get_income_tax_inputs(uuid, integer, boolean) to authenticated, service_role;
 revoke all on function public.save_income_tax_profile(uuid, integer, uuid, boolean, boolean, text, integer, bigint, bigint, bigint, bigint) from public, anon;
 grant execute on function public.save_income_tax_profile(uuid, integer, uuid, boolean, boolean, text, integer, bigint, bigint, bigint, bigint) to authenticated, service_role;
 revoke all on function public.add_income_tax_correction(uuid, integer, uuid, text, text, bigint) from public, anon;

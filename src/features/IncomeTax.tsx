@@ -236,11 +236,14 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
             {overview.basis === 'geboekt' && year === currentYear && (
               <p className="bk-muted">Het jaar loopt nog: dit is de raming over de winst die nu geboekt is.{overview.projection ? ' Kies Prognose heel jaar om de winst door te trekken naar 31 december.' : ''}</p>
             )}
-            {!isPartnershipForm && inputs.myMinutes !== null && (
-              <p className="bk-muted">Jij hebt in {year} {Math.round(inputs.myMinutes / 60).toLocaleString('nl-NL')} uur geregistreerd; het urencriterium vraagt er 1.225.</p>
+            {!isPartnershipForm && overview.ownerMinutes !== null && (
+              <p className="bk-muted">De eigenaar heeft in {year} {Math.floor(overview.ownerMinutes / 60).toLocaleString('nl-NL')} uur geregistreerd bij Uren; het urencriterium vraagt er 1.225.</p>
+            )}
+            {!isPartnershipForm && overview.ownerMinutes === null && inputs.myMinutes !== null && (
+              <p className="bk-muted">Jij hebt in {year} {Math.floor(inputs.myMinutes / 60).toLocaleString('nl-NL')} uur geregistreerd; het urencriterium vraagt er 1.225.</p>
             )}
             {isPartnershipForm && inputs.myMinutes !== null && (
-              <p className="bk-muted">Jij hebt in {year} {Math.round(inputs.myMinutes / 60).toLocaleString('nl-NL')} uur geregistreerd. Het urencriterium (1.225 uur) geldt per vennoot.</p>
+              <p className="bk-muted">Jij hebt in {year} {Math.floor(inputs.myMinutes / 60).toLocaleString('nl-NL')} uur geregistreerd. Het urencriterium (1.225 uur) geldt per vennoot.</p>
             )}
           </div>
 
@@ -382,7 +385,9 @@ function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose
                   <option value="ja">Ja, 1.225 uur of meer</option>
                   <option value="nee">Nee, minder dan 1.225 uur</option>
                 </Select>
-                <small className="bk-muted">Alle uren aan de onderneming, ook indirecte. Meer dan de helft van je werktijd, behalve als starter.</small>
+                <small className="bk-muted">{person.hoursFromTimeTracking
+                  ? 'Ingevuld volgens de uren van de eigenaar bij Uren. Kies zelf als dat niet klopt, en sla op.'
+                  : 'Alle uren aan de onderneming, ook indirecte. Meer dan de helft van je werktijd, behalve als starter.'}</small>
               </label>
               <label className="bk-setting-check">
                 <input type="checkbox" checked={profile.starter} disabled={!canWrite || busy} onChange={ev => change({ starter: ev.target.checked })} />
@@ -431,7 +436,7 @@ function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose
                 isPrognose ? 'prognose heel jaar' : undefined)}
               {person.corrections.map(c => (
                 <tr key={c.id} className="bk-balance-sub">
-                  <td>{c.label}<span className="bk-muted"> · {IB_CORRECTION_LABELS[c.code] ?? c.code}{c.shared ? ', naar winstaandeel' : ''}</span></td>
+                  <td>{c.label}<span className="bk-muted"> · {c.automatic ? 'uit rekening 4600, niet aftrekbaar' : IB_CORRECTION_LABELS[c.code] ?? c.code}{c.shared ? ', naar winstaandeel' : ''}</span></td>
                   <td className="bk-num">{euroCents(c.amountCents)}</td>
                 </tr>
               ))}
@@ -480,7 +485,7 @@ function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose
 
       {(person.notes.length > 0 || e.effectiveRate > 0) && (
         <div className="ib-notes">
-          {e.effectiveRate > 0 && <p className="bk-muted">Gemiddeld {formatRate(e.effectiveRate)} van de winst uit onderneming gaat naar inkomstenbelasting en Zvw.</p>}
+          {e.effectiveRate > 0 && <p className="bk-muted">Gemiddeld {(e.effectiveRate / 1000).toLocaleString('nl-NL', { maximumFractionDigits: 1 })}% van de winst uit onderneming gaat naar inkomstenbelasting en Zvw.</p>}
           {person.notes.map(note => <p key={note} className="bk-muted">{note}</p>)}
         </div>
       )}
@@ -549,14 +554,14 @@ function CorrectionsSection({ overview, year, canWrite, busy, isPartnershipForm,
 
   const partners = overview.persons.filter(p => p.partnerId !== null);
   const all = useMemo(() => {
-    const seen = new Map<string, { id: string; code: IbCorrectionCode; label: string; amountCents: number; who: string }>();
+    const seen = new Map<string, { id: string; code: IbCorrectionCode; label: string; amountCents: number; who: string; automatic: boolean }>();
     for (const p of overview.persons) {
       for (const c of p.corrections) {
         if (c.shared) {
           const prev = seen.get(c.id);
-          seen.set(c.id, { id: c.id, code: c.code, label: c.label, amountCents: (prev?.amountCents ?? 0) + c.amountCents, who: 'Hele onderneming' });
+          seen.set(c.id, { id: c.id, code: c.code, label: c.label, amountCents: (prev?.amountCents ?? 0) + c.amountCents, who: 'Hele onderneming', automatic: c.automatic });
         } else {
-          seen.set(c.id, { id: c.id, code: c.code, label: c.label, amountCents: c.amountCents, who: partners.length > 0 ? p.name : 'Onderneming' });
+          seen.set(c.id, { id: c.id, code: c.code, label: c.label, amountCents: c.amountCents, who: partners.length > 0 ? p.name : 'Onderneming', automatic: c.automatic });
         }
       }
     }
@@ -582,15 +587,17 @@ function CorrectionsSection({ overview, year, canWrite, busy, isPartnershipForm,
         <span className="bk-muted">Wat de fiscale winst anders maakt dan de winst in de boekhouding</span>
       </div>
       {all.length === 0
-        ? <p className="bk-muted">Geen correcties. Denk aan de bijtelling voor privégebruik van een auto van de zaak, het niet-aftrekbare deel van eten, drinken en representatie (20%, of alles tot de drempel), boetes, of een energie- of milieu-investeringsaftrek.</p>
+        ? <p className="bk-muted">Geen correcties. Denk aan de bijtelling voor privégebruik van een auto van de zaak, boetes, of een energie- of milieu-investeringsaftrek. Eten, drinken en representatie op 4600 rekent ResoFly zelf mee.</p>
         : <div className="bk-table-wrap"><table className="bk-table">
             <thead><tr><th>Correctie</th><th className="bk-num">Bedrag</th><th aria-label="Acties" /></tr></thead>
             <tbody>{all.map(c => (
               <tr key={c.id}>
-                <td>{c.label}<div className="bk-muted ib-sub">{IB_CORRECTION_LABELS[c.code] ?? c.code}{isPartnershipForm ? ` · ${c.who}` : ''}</div></td>
+                <td>{c.label}<div className="bk-muted ib-sub">{c.automatic
+                  ? 'Automatisch: wat op 4600 Eten, drinken en representatie staat, is beperkt aftrekbaar. Het gunstigste van 20% of de drempel.'
+                  : IB_CORRECTION_LABELS[c.code] ?? c.code}{isPartnershipForm ? ` · ${c.who}` : ''}</div></td>
                 <td className="bk-num">{euroCents(c.amountCents)}</td>
                 <td className="bk-cell-action">
-                  {canWrite && <button type="button" className="bk-line-del" title="Verwijderen" aria-label={`Correctie ${c.label} verwijderen`} disabled={busy} onClick={() => onDelete(c.id)}><Trash2 size={13} /></button>}
+                  {canWrite && !c.automatic && <button type="button" className="bk-line-del" title="Verwijderen" aria-label={`Correctie ${c.label} verwijderen`} disabled={busy} onClick={() => onDelete(c.id)}><Trash2 size={13} /></button>}
                 </td>
               </tr>
             ))}</tbody>
@@ -616,6 +623,7 @@ function CorrectionsSection({ overview, year, canWrite, busy, isPartnershipForm,
           </div>
           <p className="bk-muted">
             {SIGN_BY_CODE[code] === -1 ? 'Deze correctie verlaagt de winst.' : SIGN_BY_CODE[code] === 1 ? 'Deze correctie verhoogt de winst.' : 'Positief verhoogt de winst, negatief (met een min) verlaagt hem.'}
+            {code === 'gemengde_kosten' && ' Wat op 4600 Eten, drinken en representatie staat, rekent ResoFly zelf mee; vul hier alleen het niet-aftrekbare deel in van wat op een andere rekening staat.'}
           </p>
           {formError && <p className="bk-neg">{formError}</p>}
           <div className="bk-fy-new-actions">

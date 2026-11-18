@@ -75,6 +75,25 @@ aanvragen beantwoordt hij zoals `nep-ai.mjs`). Getoetst:
 
 Zie `docs/changelog/CHANGELOG_RAPPORTAGES_GERRIE_2026-11-09.md`.
 
+En `bonnen`: een bon fotograferen en declaraties (`invoice-inbox`, action `upload`, `decline` en
+`link`), met een nep-Claude die de bon leest (tool `extract_invoice` in `nep-ai.mjs`) en de
+nep-media-worker die de foto bewaart (`POST /internal/media`). Getoetst:
+- een bon van iemand met Financiën wordt een concept met de foto als bewijsstuk, ook met
+  "direct boeken" aan nooit geboekt, en Claude hoort dat het een bon is;
+- een teamlid zonder Financiën (of met alleen lezen) dient een declaratie in, krijgt alleen zijn
+  eigen bon terug en ziet in `list_my_declarations` alleen zijn eigen declaraties, niet die van
+  een collega, en komt niet in de werklijst, de inkoopfacturen of de leveranciers; de badge telt
+  declaraties die op goedkeuring wachten, eigen bonnen niet;
+- kijker, boekhouder, een vreemde organisatie en anon sturen niets in; afwijzen alleen met
+  Financiën bewerken en met een reden, negeren kan niet, herstellen, goedkeuren is boeken, en
+  wat geboekt is wijs je niet meer af;
+- dezelfde foto twee keer met hetzelfde verzoek-id is één bon, dezelfde foto later nog eens is
+  dubbel, geen foto wordt geweigerd, een opslagstoring laat niets achter;
+- wie nee zei tegen Gerrie: de bon gaat niet langs Claude, en "zelf invullen" hangt hem aan een
+  met de hand gemaakt concept.
+
+Zie `docs/changelog/CHANGELOG_BONNEN_DECLARATIES_2026-11-18.md`.
+
 En `boekingslinks`: de boekingslinks door `meeting-booking` en `meeting-booking-public`.
 Getoetst:
 - lezen met leesrecht op de Agenda, schrijven met schrijfrecht, en niets voor de boekhouder
@@ -134,6 +153,35 @@ En `vooruitbetaald`: vooruitbetaalde kosten, een betaling die over de maanden na
   boekhouding in ResoFly.
 
 Zie `docs/changelog/CHANGELOG_VOORUITBETAALDE_KOSTEN_2026-11-11.md`.
+
+En `eenmanszaak`: een heel boekjaar zoals een zzp'er het doet, in één administratie. Getoetst:
+- de inrichting zet het rekeningschema (met kas en de kosten van de aangifte inkomstenbelasting) en
+  de boekjaren klaar;
+- beginbalans, een factuur aan een bedrijf en aan een particulier, inkoop, een camera via een
+  inkoopfactuur die je aan het register koppelt en afschrijft, de bank met privé-opnamen en
+  -stortingen (geen btw op privé), vier btw-aangiften in hele euro's, de winst, een sluitende balans;
+- de kapitaalvergelijking vóór en na de jaarafsluiting, en 2026 met 2025 nog open (het begin is het
+  eind van 2025, met een melding);
+- de KOR: code KOR op de factuur, geen omzet in de aangifte, geen btw uit de bank, verlegde btw wel
+  in 4b zonder aftrek;
+- vangnetten: geen lopend btw-tijdvak afsluiten, alleen de ingestelde frequentie, eerst afschrijven en
+  dan het jaar dicht, afschrijven tot de verkoopdatum, tegenboeken van een gekoppelde inkoopfactuur,
+  en de resultaatrekening die de rechtsvorm volgt.
+
+Zie `docs/changelog/CHANGELOG_EENMANSZAAK_CONTROLE_2026-11-18.md`.
+
+En `inkomstenbelasting`: de raming per ondernemer en per vennoot (`get_income_tax_inputs` en de
+schrijffuncties van 20261118150000), met het rekenhart van de app erachter. Getoetst:
+- de winst van het kalenderjaar (een ander jaar en de jaarafsluiting tellen niet mee), de kosten op
+  4600, je eigen uren en die van de eigenaar (niet voor de boekhouder, niet zonder `p_owner_hours`);
+- opslaan en bijwerken, en een raming die tot op de cent klopt met de los nagerekende som;
+- wie wat mag, en dat niemand rechtstreeks in de tabellen schrijft;
+- de invoercontrole, correcties en KIA, en nooit een vennoot of activum van een andere organisatie,
+  ook niet buiten de functies om (de samengestelde sleutels);
+- een vof met dezelfde verdeling als de jaarafsluiting, een cv met een commanditaire vennoot, een
+  stichting zonder raming, en het logboek onder Financiën.
+
+Zie `docs/changelog/CHANGELOG_INKOMSTENBELASTING_RAMING_2026-11-18.md`.
 
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in

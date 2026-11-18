@@ -11,10 +11,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   IB_DISCLAIMER, IB_RULES, applyRate, bracketTax, buildIncomeTaxOverview, defaultIncomeTaxProfile, estimatePerson,
-  euroText, formatRate, incomeTaxRulesFor, kiaForInvestments, phaseOutCredit, premiumMonths, projectYearResult,
+  euroText, formatRate, incomeTaxRulesFor, kiaForInvestments, mixedCostsAddBack, phaseOutCredit, premiumMonths, projectYearResult,
   splitByShares, tableCredit, type IbPersonInput, type IncomeTaxInputs,
 } from './inkomstenbelasting.ts';
 import * as server from '../../supabase/functions/_shared/inkomstenbelasting.ts';
+import * as aangifte from './incomeTax.ts';
 
 const R25 = IB_RULES[2025];
 const R26 = IB_RULES[2026];
@@ -425,8 +426,8 @@ test('prognose: niet voor een afgelopen of toekomstig jaar, en niet in de eerste
 function inputs(overrides: Partial<IncomeTaxInputs> = {}): IncomeTaxInputs {
   return {
     year: 2026, legalForm: 'eenmanszaak', isPartnershipForm: false, companyName: 'Studio Test', bookkeepingStartDate: '2024-01-01',
-    resultCents: E(50_000), overlappingFiscalYears: [{ id: 'fy', label: '2026', periodStart: '2026-01-01', periodEnd: '2026-12-31', status: 'open' }],
-    partners: [], profiles: [], corrections: [], investments: [], myMinutes: null, ...overrides,
+    resultCents: E(50_000), mixedCostsCents: 0, overlappingFiscalYears: [{ id: 'fy', label: '2026', periodStart: '2026-01-01', periodEnd: '2026-12-31', status: 'open' }],
+    partners: [], profiles: [], corrections: [], investments: [], myMinutes: null, ownerMinutes: null, ...overrides,
   };
 }
 
@@ -497,8 +498,8 @@ test('vof 60/40: winst, KIA en gedeelde correcties verdeeld, eigen correcties pe
   assert.equal(bram.estimate.profitShareCents, 4_000_000);
   assert.equal(anna.estimate.kiaCents + bram.estimate.kiaCents, E(1120));
   assert.equal(anna.estimate.kiaCents, E(672));
-  assert.deepEqual(anna.corrections.map(c => [c.id, c.amountCents, c.shared]), [['c1', 60_001, true]]);
-  assert.deepEqual(bram.corrections.map(c => [c.id, c.amountCents, c.shared]), [['c1', 40_000, true], ['c2', E(3000), false]]);
+  assert.deepEqual(anna.corrections.map(c => [c.id, c.amountCents, c.shared, c.automatic]), [['c1', 60_001, true, false]]);
+  assert.deepEqual(bram.corrections.map(c => [c.id, c.amountCents, c.shared, c.automatic]), [['c1', 40_000, true, false], ['c2', E(3000), false, false]]);
   assert.equal(anna.estimate.startersaftrekCents, E(2123));
   assert.equal(bram.estimate.zelfstandigenaftrekCents, 0);
   assert.equal(overview.totals.totalCents, anna.estimate.totalCents + bram.estimate.totalCents);
@@ -563,4 +564,94 @@ test('een boekjaar dat niet gelijk loopt met het kalenderjaar: waarschuwen', () 
   }), { basis: 'geboekt', today: TODAY });
   assert.ok(overview);
   assert.ok(overview.warnings.some(w => /niet gelijk met het kalenderjaar/.test(w)));
+});
+
+// ── Gemengde kosten en het urencriterium: gelijk aan Eigen vermogen ─────────
+
+test('gemengde kosten: het gunstigste van 20% of de drempel van € 5.700', () => {
+  assert.equal(R25.mixedCostsThresholdCents, E(5700));
+  assert.equal(R26.mixedCostsThresholdCents, E(5700));
+  assert.deepEqual(mixedCostsAddBack(R26, 0), { addBackCents: 0, method: 'percentage' });
+  assert.deepEqual(mixedCostsAddBack(R26, E(1000)), { addBackCents: E(200), method: 'percentage' });
+  assert.deepEqual(mixedCostsAddBack(R26, E(28_500)), { addBackCents: E(5700), method: 'percentage' });
+  assert.deepEqual(mixedCostsAddBack(R26, E(40_000)), { addBackCents: E(5700), method: 'threshold' });
+  assert.deepEqual(mixedCostsAddBack(R26, -500), { addBackCents: 0, method: 'percentage' });
+});
+
+test('dezelfde bedragen en dezelfde som als het overzicht op Eigen vermogen (incomeTax.ts)', () => {
+  // Twee schermen, één belastbare winst: lopen de bedragen of de som voor de
+  // gemengde kosten uiteen, dan zegt Eigen vermogen iets anders dan deze raming.
+  for (const year of [2025, 2026]) {
+    const theirs = aangifte.incomeTaxRules(year);
+    assert.ok(theirs, `incomeTax.ts kent ${year}`);
+    const ours = IB_RULES[year];
+    assert.equal(theirs.selfEmployedDeductionCents, ours.zelfstandigenaftrekCents, `zelfstandigenaftrek ${year}`);
+    assert.equal(theirs.starterDeductionCents, ours.startersaftrekCents, `startersaftrek ${year}`);
+    assert.equal(theirs.smeExemptionBasisPoints * 10, ours.mkbExemptionRate, `mkb-winstvrijstelling ${year}`);
+    assert.equal(theirs.mixedCostsThresholdCents, ours.mixedCostsThresholdCents, `drempel gemengde kosten ${year}`);
+    for (const total of [0, 1, 999, 100_000, 2_849_999, 2_850_000, 2_850_001, 9_999_999]) {
+      const a = aangifte.mixedCostsAddBack(total, theirs.mixedCostsThresholdCents);
+      assert.deepEqual(mixedCostsAddBack(ours, total), a, `gemengde kosten ${total} in ${year}`);
+    }
+  }
+  // De hele som tot de belastbare winst, voor een paar eenmanszaken.
+  for (const [profit, mixed, hours, starter] of [[E(50_000), E(1000), true, false], [E(2000), 0, true, true], [E(800), 0, true, false], [E(-10_000), E(300), false, false], [E(90_000), E(40_000), true, false]] as const) {
+    const theirs = aangifte.businessProfit({ year: 2026, profitCents: profit, mixedCostsCents: mixed, hoursCriterionMet: hours, starter });
+    assert.ok(theirs);
+    const overview = buildIncomeTaxOverview(inputs({
+      resultCents: profit, mixedCostsCents: mixed,
+      profiles: [{ ...defaultIncomeTaxProfile(null), meetsHoursCriterion: hours, starter }],
+    }), { basis: 'geboekt', today: TODAY });
+    assert.ok(overview);
+    const e = overview.persons[0].estimate;
+    assert.equal(e.profitCents, theirs.fiscalProfitCents, `winst uit onderneming bij ${profit}`);
+    assert.equal(e.entrepreneurDeductionCents, theirs.entrepreneurDeductionCents, `ondernemersaftrek bij ${profit}`);
+    assert.equal(e.mkbExemptionCents, theirs.smeExemptionCents, `mkb-winstvrijstelling bij ${profit}`);
+    assert.equal(e.taxableProfitCents, theirs.taxableProfitCents, `belastbare winst bij ${profit}`);
+  }
+});
+
+test('gemengde kosten op 4600: een automatische correctie, bij een vof naar winstaandeel', () => {
+  const eenmanszaak = buildIncomeTaxOverview(inputs({ mixedCostsCents: E(1000) }), { basis: 'geboekt', today: TODAY });
+  assert.ok(eenmanszaak);
+  assert.deepEqual(eenmanszaak.mixedCosts, { totalCents: E(1000), addBackCents: E(200), method: 'percentage', thresholdCents: E(5700) });
+  const [c] = eenmanszaak.persons[0].corrections;
+  assert.deepEqual([c.id, c.code, c.amountCents, c.automatic, c.shared], ['gemengde-kosten-4600', 'gemengde_kosten', E(200), true, false]);
+  assert.match(c.label, /20% van € 1\.000,00/);
+  assert.equal(eenmanszaak.persons[0].estimate.profitCents, E(50_200));
+  const vof = buildIncomeTaxOverview(inputs({
+    legalForm: 'vof', isPartnershipForm: true, mixedCostsCents: 100_001 * 5,
+    partners: [
+      { id: 'p1', name: 'A', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 6000 },
+      { id: 'p2', name: 'B', partnerNumber: 2, kind: 'beherend', isActive: true, shareBasisPoints: 4000 },
+    ],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.ok(vof);
+  const parts = vof.persons.map(p => p.corrections.find(x => x.automatic)?.amountCents ?? 0);
+  assert.deepEqual(parts, [60_001, 40_000], 'het niet-aftrekbare deel (€ 1.000,01) naar winstaandeel, tot op de cent');
+  assert.equal(buildIncomeTaxOverview(inputs({ mixedCostsCents: 0 }), { basis: 'geboekt', today: TODAY })?.mixedCosts, null);
+});
+
+test('urencriterium: zonder opgeslagen keuze de uren van de eigenaar, met een keuze die keuze', () => {
+  const genoeg = buildIncomeTaxOverview(inputs({ ownerMinutes: 1225 * 60 }), { basis: 'geboekt', today: TODAY });
+  assert.ok(genoeg);
+  assert.equal(genoeg.persons[0].hoursFromTimeTracking, true);
+  assert.equal(genoeg.persons[0].profile.meetsHoursCriterion, true);
+  assert.equal(genoeg.persons[0].estimate.zelfstandigenaftrekCents, E(1200));
+  assert.ok(genoeg.persons[0].notes.some(n => /volgens Uren: de eigenaar heeft 1\.225 uur/.test(n)));
+  const te = buildIncomeTaxOverview(inputs({ ownerMinutes: 1225 * 60 - 1 }), { basis: 'geboekt', today: TODAY });
+  assert.equal(te?.persons[0].profile.meetsHoursCriterion, false);
+  assert.ok(te?.persons[0].notes.some(n => /minder dan 1\.225/.test(n)));
+  // Een opgeslagen keuze wint, ook "nog niet ingevuld".
+  const gekozen = buildIncomeTaxOverview(inputs({ ownerMinutes: 2000 * 60, profiles: [defaultIncomeTaxProfile(null)] }), { basis: 'geboekt', today: TODAY });
+  assert.equal(gekozen?.persons[0].hoursFromTimeTracking, false);
+  assert.equal(gekozen?.persons[0].profile.meetsHoursCriterion, null);
+  // Zonder uren (geen leesrecht op Uren): niet ingevuld, zoals voorheen.
+  const zonder = buildIncomeTaxOverview(inputs({ ownerMinutes: null }), { basis: 'geboekt', today: TODAY });
+  assert.equal(zonder?.persons[0].hoursFromTimeTracking, false);
+  assert.equal(zonder?.persons[0].profile.meetsHoursCriterion, null);
+  // Bij een vof gaat het urencriterium per vennoot: de uren van de eigenaar tellen niet.
+  const vof = buildIncomeTaxOverview(inputs({ legalForm: 'vof', isPartnershipForm: true, ownerMinutes: 2000 * 60 }), { basis: 'geboekt', today: TODAY });
+  assert.equal(vof?.ownerMinutes, null);
+  assert.equal(vof?.persons[0].profile.meetsHoursCriterion, null);
 });

@@ -877,7 +877,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     module: 'finance',
     kind: 'read',
     description:
-      'Geeft wat er op het factuur-doorstuuradres binnenkwam: per item de status (ontvangen, wordt uitgelezen, concept klaargezet, geboekt, aandacht nodig, dubbel, genegeerd, mislukt), ' +
+      'Geeft wat er op het factuur-doorstuuradres binnenkwam, en de bonnen en declaraties die teamleden in de app fotografeerden (`channel`: email, receipt of declaration): per item de status (ontvangen, wordt uitgelezen, concept klaargezet, geboekt, aandacht nodig, dubbel, genegeerd, mislukt), ' +
       'de reden als er iets te doen is, afzender en onderwerp, de herkende leverancier, het factuurnummer en het totaal, en het id van het klaargezette concept. ' +
       'Standaard alleen wat open staat (aandacht nodig, dubbel, mislukt, nog bezig); met `scope: all` ook de afgehandelde items. ' +
       'Klaarzetten, opnieuw verwerken of negeren doe je met `purchase_invoice_inbox.prepare`, `purchase_invoice_inbox.reprocess` en `purchase_invoice_inbox.reject`.',
@@ -890,7 +890,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       const scope = optChoice(input, 'scope', ['open', 'all'] as const) ?? 'open';
       const limit = Math.min(Math.max(Math.round(optNum(input, 'limit') ?? 50), 1), 200);
       let query = orgQuery(ctx, 'purchase_invoice_inbox',
-        'id, status, reason, received_at, sender_email, sender_name, subject, supplier_id, purchase_invoice_id, duplicate_of_purchase_invoice_id, method, confidence, warnings, proposal, attachments, auto_booked')
+        'id, channel, submitted_by, review_note, status, reason, received_at, sender_email, sender_name, subject, supplier_id, purchase_invoice_id, duplicate_of_purchase_invoice_id, method, confidence, warnings, proposal, attachments, auto_booked')
         .neq('status', 'dropped').order('received_at', { ascending: false }).limit(limit);
       if (scope === 'open') query = query.in('status', ['received', 'processing', 'needs_review', 'duplicate', 'failed']);
       const { data, error } = await query;
@@ -913,6 +913,10 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
           const supplierId = typeof r.supplier_id === 'string' ? r.supplier_id : null;
           return {
             inbox_id: r.id,
+            // email = factuuradres; receipt = bon uit de app; declaration = declaratie van een teamlid.
+            channel: r.channel ?? 'email',
+            submitted_by: r.submitted_by ?? null,
+            review_note: r.review_note ?? null,
             status: r.status,
             reason: r.reason ?? null,
             received_at: r.received_at,
@@ -1039,10 +1043,14 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     required: ['inbox_id'],
     async plan(ctx, input) {
       const inboxId = id(input, 'inbox_id');
-      const item = await row<{ status: string; subject: string; sender_email: string | null; sender_name: string | null }>(
-        ctx, 'purchase_invoice_inbox', inboxId, 'status, subject, sender_email, sender_name', 'Inbox-item');
+      const item = await row<{ status: string; channel: string | null; subject: string; sender_email: string | null; sender_name: string | null }>(
+        ctx, 'purchase_invoice_inbox', inboxId, 'status, channel, subject, sender_email, sender_name', 'Inbox-item');
       if (!['received', 'needs_review', 'duplicate', 'failed'].includes(item.status)) {
         throw new ActionError(`Dit item staat op "${item.status}" en kan niet genegeerd worden.`);
+      }
+      // Zelfde regel als de edge function: de indiener moet weten waarom.
+      if (item.channel === 'declaration') {
+        throw new ActionError('Dit is een declaratie van een teamlid. Die wijs je af met een reden, op de pagina Inkoopfacturen (Afwijzen); negeren kan niet.');
       }
       const label = item.sender_name || item.sender_email || item.subject || inboxId.slice(0, 8);
       return {

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calculator, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, type LucideIcon, Users, Wallet, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calculator, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, ReceiptText, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Select } from './Ui';
 import { BrandMark } from './BrandMark';
 import { askGerrie } from './GerrieChat';
-import { visibleSettingsTabs, type Page, type SidebarProps } from './Sidebar';
+import { visibleSettingsGroups, type Page, type SidebarProps } from './Sidebar';
 import { FULL_PERMISSIONS, isAccountantRole, type Permissions } from '../lib/permissions';
 import { useThemeMode, type ThemeMode } from '../lib/theme';
 import { useLook, type Look } from '../lib/look';
@@ -132,7 +132,7 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
       { page: 'tickets', label: 'Tickets', Icon: Ticket, badge: ticketUnread, badgeTitle: ticketTitle },
       { page: 'archive', label: 'Archief', Icon: Archive },
     ]) }] },
-    { id: 'geld', label: 'Geld', Icon: Wallet, home: ['invoices', ...FINANCE_PAGES], badge: purchaseInboxOpen, badgeTitle: purchaseTitle, groups: [
+    { id: 'geld', label: 'Geld', Icon: Wallet, home: ['invoices', ...FINANCE_PAGES, 'declarations'], badge: purchaseInboxOpen, badgeTitle: purchaseTitle, groups: [
       { label: 'Verkoop', items: keep([
         { page: 'quotes', label: 'Offertes', Icon: FileText },
         { page: 'contracts', label: 'Contracten', Icon: FileSignature },
@@ -158,6 +158,11 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
         isIb && { page: 'owners', label: isPartnership ? 'Vennoten' : 'Eigen vermogen', Icon: Wallet },
         isIb && { page: 'income-tax', label: 'Inkomstenbelasting', Icon: Calculator },
         isCompany && { page: 'annual-accounts', label: 'Jaarrekening', Icon: Scale },
+      ]) },
+      // Alleen voor wie Financiën niet mag bewerken (permissions.canSubmitDeclarations).
+      // Zonder Financiën is dit de enige regel onder Geld.
+      { label: 'Declaraties', items: keep([
+        { page: 'declarations', label: 'Mijn declaraties', Icon: ReceiptText },
       ]) },
     ] },
     { id: 'berichten', label: 'Berichten', Icon: Inbox, home: ['communication', 'chat', 'marketing'], badge: messageBadge + chatUnread, badgeTitle: [messageTitle, chatUnread > 0 ? chatTitle : ''].filter(Boolean).join(' · '), groups: [{ items: keep([
@@ -282,6 +287,7 @@ export function ZenitNav({
   onSearchNavigate,
   userEmail = null,
   onOpenSettings,
+  settingsTab = null,
   onSignOut,
   messageUnread = 0,
   inboxOpen = 0,
@@ -326,7 +332,7 @@ export function ZenitNav({
     ?? modules.find(module => module.id === activeModuleId)
     ?? modules[0];
 
-  const settingsTabs = visibleSettingsTabs(activeRole, permissions);
+  const settingsGroups = visibleSettingsGroups(activeRole, permissions);
   const roleLabel = isAccountantRole(activeRole) ? 'boekhouder' : activeRole ?? 'geen rol';
   const accountName = (userEmail ?? '').split('@')[0] || 'Account';
   const accountInitials = userEmail ? initialsOf((userEmail.split('@')[0] || userEmail)) : '?';
@@ -390,20 +396,30 @@ export function ZenitNav({
   const railSeparatorBefore = new Set<ModuleId>(['agenda', 'berichten']);
 
   // Instellingen hebben geen plek op de rail (alleen het tandwiel onderin);
-  // daar toont het paneel de onderdelen van de instellingen zelf. Tik je op de
-  // telefoon een module aan, dan wint die.
+  // daar toont het paneel de onderdelen van de instellingen zelf, per groep
+  // met een kopje, zoals Geld zijn Verkoop, Inkoop en Boekhouding heeft. Het
+  // onderdeel dat openstaat licht op. Tik je op de telefoon een module aan,
+  // dan wint die.
   const showSettingsPanel = page === 'settings' && shownModuleId === null;
   const panelTitle = showSettingsPanel ? 'Instellingen' : shownModule?.label ?? 'Menu';
+  const openSettingsTab = page === 'settings' ? settingsTab : null;
 
   let panelBody: ReactNode = showSettingsPanel
-    ? <div className="zpnav-group"><div className="zpnav">
-        {settingsTabs.map(tab => <button
-          type="button"
-          key={tab.id}
-          className="zpnav-item"
-          onClick={() => { onOpenSettings(tab.id); letGo(); }}
-        ><tab.Icon size={16} aria-hidden="true"/><span className="zpnav-l">{tab.label}</span></button>)}
-      </div></div>
+    ? settingsGroups.map(group => <div className="zpnav-group" key={group.id}>
+        <div className="zpnav-h">{group.label}</div>
+        <div className="zpnav">
+          {group.tabs.map(tab => {
+            const active = tab.id === openSettingsTab;
+            return <button
+              type="button"
+              key={tab.id}
+              className={`zpnav-item${active ? ' is-on' : ''}`}
+              aria-current={active ? 'page' : undefined}
+              onClick={() => { onOpenSettings(tab.id); letGo(); }}
+            ><tab.Icon size={16} aria-hidden="true"/><span className="zpnav-l">{tab.label}</span></button>;
+          })}
+        </div>
+      </div>)
     : shownModule
     ? shownModule.groups.map((group, index) => <div className="zpnav-group" key={group.label ?? index}>
         {group.label && <div className="zpnav-h">{group.label}</div>}
@@ -633,15 +649,26 @@ export function ZenitNav({
         <span className="zav" aria-hidden="true">{accountInitials}</span>
         <span className="zpop-who-t"><b>{accountName}</b><span title={userEmail ?? undefined}>{userEmail ?? 'Onbekend account'}</span></span>
       </div>
+      {/* Per groep één regel, met wat erin zit. Negentien onderdelen pasten
+          hier niet: E-mail, AI en Abonnement vielen onder de vouw. Een groep
+          opent de instellingen op zijn eerste onderdeel; het paneel links toont
+          daarna de hele indeling. */}
       <div className="zpop-h">Instellingen</div>
       <div className="zpop-list">
-        {settingsTabs.map(tab => <button
-          key={tab.id}
+        {settingsGroups.map(group => <button
+          key={group.id}
           type="button"
           role="menuitem"
-          className="zpop-item"
-          onClick={() => { account.setOpen(false); onOpenSettings(tab.id); }}
-        ><tab.Icon size={15} aria-hidden="true"/><span>{tab.label}</span></button>)}
+          className={`zpop-item zpop-group${openSettingsTab && group.tabs.some(tab => tab.id === openSettingsTab) ? ' is-current' : ''}`}
+          data-settings-group={group.id}
+          onClick={() => { account.setOpen(false); onOpenSettings(group.tabs[0].id); }}
+        >
+          <group.Icon size={15} aria-hidden="true"/>
+          <span className="zpop-group-t">
+            <span>{group.label}</span>
+            <small>{group.tabs.map(tab => tab.label).join(' · ')}</small>
+          </span>
+        </button>)}
       </div>
       <div className="zpop-sep" aria-hidden="true"/>
       {onNewEntity && <button type="button" role="menuitem" className="zpop-item" onClick={() => { account.setOpen(false); onNewEntity(); }}><Plus size={15} aria-hidden="true"/><span>Nieuwe administratie</span></button>}
