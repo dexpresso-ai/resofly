@@ -244,8 +244,8 @@ vof-administratie).
     problemen; toen kwam de vof op staging en is de ronde gestopt;
   - op de stand die uitrolt gericht op de 23 pagina's waar de wijzigingen elkaar
     raken (de prognose, bonnen en declaraties, vennoten en de vof-inkoop, het
-    menu van Financiën, Instellingen, het dashboard): loopt nog; de uitslag komt
-    hier.
+    menu van Financiën, Instellingen, het dashboard): 138 metingen, 0 met
+    problemen.
 
   Staging veranderde vandaag ongeveer elk uur, en een volledige ronde duurt hier
   ruim een half uur; daarom de laatste keer gericht. De volledige ronde op de
