@@ -202,6 +202,8 @@ de halve zelfstandigenaftrek vanaf de AOW-leeftijd) staat eronder.
 | Het IB-overzicht per vennoot (vof) | Elke vennoot met zijn eigen uren en winstaandeel; vraagt uren per vennoot. |
 | Leverdatum op de factuur (art. 35a lid 1 onder g) | Stond al open. |
 | Een knop "Ontvangst registreren" bij de factuur | Contant geld gaat nu via een kasrekening bij Bank; een knop bij de factuur zelf is handiger. |
+| Tijdvakken vóór de start in ResoFly | De jaarafsluiting vraagt elk tijdvak van het boekjaar, ook van vóór de startdatum. Je sluit ze af met € 0; de pagina Omzetbelasting legt dat uit. Overslaan kan ook, maar dan staan boekingen in die maanden zonder btw-slot. |
+| Herinnering vlak na een wissel in het lopende jaar | Zet je de instelling al om voordat het laatste kwartaal van de oude soort is aangegeven, dan toont het dashboard dat kwartaal als drie maanden. Afsluiten als kwartaal kan wel (fix 25). Wanneer de wissel ingaat, legt ResoFly niet vast. |
 
 ## Uitrol
 
