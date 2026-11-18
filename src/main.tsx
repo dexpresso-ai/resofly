@@ -1429,7 +1429,7 @@ function App() {
           setData(emptyData);
         }
         const [loaded] = await withTimeout(Promise.all([
-          loadCoreData(orgId),
+          loadCoreData(orgId, { organizationCreatedAt: orgContext.activeOrganization?.created_at ?? null }),
           sameOrganization ? refreshOpenGroups(orgId) : Promise.resolve(),
         ]), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
         // Financiën open maar Klanten dicht (de boekhouder, of een teamlid dat zo

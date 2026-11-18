@@ -79,16 +79,30 @@ export const vatPeriodKey = (type: string, year: number, index: number) => `${ty
  * - een tijdvak is aangegeven als al zijn maanden in een aangifte vallen, per
  *   maand of per kwartaal (een wissel midden in het jaar).
  * Dezelfde regel als finalize_vat_return en close_fiscal_year (20261118100000).
+ *
+ * Sinds de inrichting elke organisatie een rekeningschema geeft
+ * (20261118090000), zegt een rekeningschema niet meer dat je de btw in
+ * ResoFly doet. Een organisatie die vandaag begon, kreeg zo "7
+ * btw-aangiftes nog doen" in het rood: vanaf 1 januari vorig jaar, want de
+ * startdatum is bij de inrichting niet verplicht. Daarom:
+ * - zonder startdatum van de boekhouding én zonder één aangifte in ResoFly:
+ *   geen herinnering;
+ * - geen herinnering voor een deadline die al voorbij was toen de
+ *   organisatie in ResoFly begon (`since`): die aangifte deed je elders. De
+ *   jaarafsluiting vraagt die tijdvakken wel; die zegt dat zelf.
  */
 export function vatPeriodsToFile(input: {
   today: string;
   frequency: VatFrequency;
   kor: boolean;
   bookkeepingStart: string | null;
+  /** De dag waarop de organisatie in ResoFly begon (JJJJ-MM-DD). */
+  since?: string | null;
   /** Sleutels (vatPeriodKey) van tijdvakken met een aangifte. */
   filed: ReadonlySet<string>;
 }): VatPeriodDue[] {
   if (input.kor) return [];
+  if (!input.bookkeepingStart && input.filed.size === 0) return [];
   const [ty] = input.today.split('-').map(Number);
   const start = input.bookkeepingStart ?? `${ty - 1}-01-01`;
   const twoYearsBack = `${ty - 2}-01-01`;
@@ -121,6 +135,7 @@ export function vatPeriodsToFile(input: {
       const months = type === 'month' ? [firstMonth] : [firstMonth, firstMonth + 1, firstMonth + 2];
       if (months.every(m => coveredMonths.has(`${year}:${m}`))) continue;
       const deadline = vatFilingDeadline(period.to);
+      if (input.since && deadline < input.since) continue;
       due.push({ ...period, deadline, overdue: input.today > deadline });
     }
   }

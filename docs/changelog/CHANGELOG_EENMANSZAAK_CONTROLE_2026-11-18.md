@@ -8,10 +8,11 @@ inrichten, factureren, inkopen, de bank, btw-aangiften, afschrijven, het jaar
 afsluiten en de cijfers voor de aangifte inkomstenbelasting. Wat niet klopte of
 ontbrak, is meteen ingebouwd.
 
-> **Status:** één migratie (`20261118090000_eenmanszaak_controle`), aanpassingen
-> in tien schermen en in de handelingen van Gerrie, drie nieuwe rekenmodules
+> **Status:** twee migraties (`20261118090000_eenmanszaak_controle` en, na een
+> laatste controle, `20261118100000_btw_tijdvak_wissel`), aanpassingen in tien
+> schermen en in de handelingen van Gerrie, drie nieuwe rekenmodules
 > (`vatPeriods`, `incomeTax`, `vatCodeForAccount`) en een nieuw stromenscenario
-> (`tests/stromen/eenmanszaak.mjs`, 35 stappen). Uitrol: zie onderaan.
+> (`tests/stromen/eenmanszaak.mjs`, 41 stappen). Uitrol: zie onderaan.
 
 ## Werkwijze
 
@@ -89,13 +90,16 @@ Nagelopen en niet veranderd:
 | 23 | laag | Vaktaal en Engels: "Verstuur via Resend", "PDF-snapshot", "Volwassen factuurmodule …", "Controleer de Edge Function logs", "Resend provider request failed …". | Gewone woorden. |
 | 24 | laag | Bij de KOR stond bij een activum "Aanschafwaarde (excl. btw)", terwijl de btw dan bij de aanschafprijs hoort. | "Incl. btw" bij de KOR; een gekozen bron-inkoopfactuur vult datum en bedrag in. |
 
-### Na de uitrol: wisselen van aangiftetijdvak (migratie `20261118100000_btw_tijdvak_wissel`)
+### Na de uitrol: tijdvak wisselen en de herinnering bij een nieuwe organisatie
 
-Bij een laatste controle bleek dat fix 6 een gewone situatie lastiger maakte.
+Bij een laatste controle bleek dat twee fixes samen met wat er al was een
+gewone situatie lastiger maakten. Fix 25 gaat met migratie
+`20261118100000_btw_tijdvak_wissel`, fix 26 zit alleen in de app.
 
 | # | Ernst | Wat er misging | Nu |
 |---|---|---|---|
 | 25 | midden | **Wisselen van kwartaal- naar maandaangifte (of andersom) liep vast.** De Belastingdienst zet je per 1 januari om, of je vraagt het zelf aan, bijvoorbeeld om btw sneller terug te krijgen. Zette je dat bij Instellingen om, dan gebeurde het volgende. Q4 van het jaar ervoor kon je niet meer afsluiten (fix 6). Dat jaar kwam ook niet meer dicht: de jaarafsluiting vroeg twaalf maanden, en dat deed hij al vóór deze controle. En het dashboard toonde alle kwartalen van vorig jaar als twaalf niet aangegeven maanden, in het rood. Je moest de instelling dus heen en weer zetten. **Nagespeeld:** met de oude functies faalden vier van de zes nieuwe stappen. | Een tijdvak mag ook in de soort waarin dat jaar al is aangegeven. Een losse maand in een kwartaaljaar blijft geweigerd (fix 6). De jaarafsluiting vraagt dat elke maand in een afgesloten maand of kwartaal valt. De melding noemt het ontbrekende tijdvak zoals dat jaar ging. Het dashboard telt een eerder jaar in de soort waarin het is aangegeven. De pagina Omzetbelasting volgt dezelfde regel. Een tijdvak dat helemaal vóór de start in ResoFly ligt, krijgt uitleg in plaats van een rode deadline: de jaarafsluiting vraagt er wel om. |
+| 26 | midden | **Een organisatie die vandaag begon, kreeg meteen "btw-aangiftes nog doen (verlopen)".** Sinds fix 10 krijgt elke organisatie bij de inrichting een rekeningschema. Dat was voor de herinnering van fix 15 het teken dat je de btw in ResoFly doet. De startdatum van de boekhouding is bij de inrichting niet verplicht. Een eenmanszaak met startdatum 1 januari zag op dag één Q1 t/m Q3 als verlopen, en zonder startdatum telde het vanaf 1 januari vorig jaar: zeven aangiftes. **Nagespeeld in Chromium:** met de code van run 240 "3 btw-aangiftes nog doen". | Geen herinnering voor een deadline die al voorbij was toen de organisatie in ResoFly begon (`organizations.created_at`; `onboarding_completed_at` kreeg op 7 november bij elke bestaande organisatie dezelfde datum). Zonder startdatum én zonder één aangifte in ResoFly: geen herinnering. Een organisatie die er sinds 1 maart is, ziet Q1 t/m Q3 wel. |
 
 ### Nieuw: overzicht voor de aangifte inkomstenbelasting
 
@@ -174,6 +178,15 @@ de halve zelfstandigenaftrek vanaf de AOW-leeftijd) staat eronder.
     op maandaangifte overging. September 2025 valt in Q3. Q4 2025 heeft de
     knop "Periode afsluiten" en sluit af. Q2 2026 per kwartaal is alleen te
     bekijken. Geen JavaScript-fouten.
+- **De herinnering bij een nieuwe organisatie (fix 26)**:
+  - unit: zonder startdatum en zonder aangifte niets; vandaag begonnen met
+    startdatum 1 januari niets, en in januari Q4; een deadline op de
+    startdag telt mee (`vatPeriods.test.ts`, 10/10; `npm test` 1945/1945;
+    typecheck; `test:loading` ✓);
+  - in Chromium op het dashboard, twee eenmanszaken met startdatum
+    1 januari 2026. Vandaag begonnen: geen herinnering, met de code van
+    run 240 wel ("3 btw-aangiftes nog doen"). Sinds 1 maart: "3
+    btw-aangiftes nog doen · Q1 2026: uiterlijk 30-4-2026 (verlopen)".
 
 ## Bewust open
 
@@ -217,4 +230,18 @@ staging-database zelf is dus niet ingezien. De controle is de uitrol (de CLI
 breekt af bij een fout in de migratie), de rooktest, en dezelfde migratie op
 een lege en op een gevulde lokale database.
 
-Voor productie: dezelfde migratie. Hij is veilig om opnieuw te draaien.
+*Frontend checks* van deze uitrol (run 249) en van de changelog erna (run
+250): alles groen, ook de mobiele lay-outtest in licht en donker, laden per
+module, de inrichtingsstappen en de terugknop.
+
+**Fix 25: uitgerold op 18 november 2026** (merge `9f88df3`, *Deploy Supabase
+(staging)* run 240): de migratie `20261118100000_btw_tijdvak_wissel` is
+toegepast, de 40 edge functions zijn opnieuw uitgerold, en de rooktest is
+geslaagd. Bestaande gegevens veranderen niet: alleen drie functies zijn
+vervangen.
+
+**Fix 26** zit alleen in de app: Cloudflare Pages bouwt hem bij de push naar
+`staging`.
+
+Voor productie: dezelfde twee migraties, in volgorde. Ze zijn veilig om
+opnieuw te draaien.

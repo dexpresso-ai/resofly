@@ -29,10 +29,24 @@ test('een start midden in een kwartaal telt dat kwartaal mee; daarvóór niets',
   assert.deepEqual(due.map(d => d.label), ['Q2 2026', 'Q3 2026']);
 });
 
-test('met de KOR geen aangifte; zonder start hooguit vanaf vorig jaar', () => {
+test('met de KOR geen aangifte; zonder start hooguit vanaf vorig jaar, en alleen als je hier al aangifte deed', () => {
   assert.deepEqual(vatPeriodsToFile({ today: '2026-11-18', frequency: 'quarterly', kor: true, bookkeepingStart: null, filed: new Set() }), []);
-  const due = vatPeriodsToFile({ today: '2026-01-10', frequency: 'quarterly', kor: false, bookkeepingStart: null, filed: new Set() });
-  assert.deepEqual(due.map(d => [d.label, d.overdue]), [['Q1 2025', true], ['Q2 2025', true], ['Q3 2025', true], ['Q4 2025', false]]);
+  // Geen startdatum en geen aangifte in ResoFly: niets wijst erop dat je de btw hier doet.
+  assert.deepEqual(vatPeriodsToFile({ today: '2026-01-10', frequency: 'quarterly', kor: false, bookkeepingStart: null, filed: new Set() }), []);
+  const due = vatPeriodsToFile({ today: '2026-01-10', frequency: 'quarterly', kor: false, bookkeepingStart: null, filed: new Set([vatPeriodKey('quarter', 2025, 1)]) });
+  assert.deepEqual(due.map(d => [d.label, d.overdue]), [['Q2 2025', true], ['Q3 2025', true], ['Q4 2025', false]]);
+});
+
+test('een organisatie die vandaag begint: geen deadlines van vóór de start in ResoFly', () => {
+  // Startdatum 1 januari (een van de voorstellen bij de inrichting): Q1 t/m Q3
+  // deed je elders. Zonder `since` stonden die er op dag één als verlopen.
+  const vandaag = vatPeriodsToFile({ today: '2026-11-18', since: '2026-11-18', frequency: 'quarterly', kor: false, bookkeepingStart: '2026-01-01', filed: new Set() });
+  assert.deepEqual(vandaag, []);
+  const januari = vatPeriodsToFile({ today: '2027-01-05', since: '2026-11-18', frequency: 'quarterly', kor: false, bookkeepingStart: '2026-01-01', filed: new Set() });
+  assert.deepEqual(januari.map(d => [d.label, d.deadline, d.overdue]), [['Q4 2026', '2027-01-31', false]]);
+  // Een deadline op de startdag zelf telt mee.
+  const opDeDag = vatPeriodsToFile({ today: '2026-11-18', since: '2026-10-31', frequency: 'quarterly', kor: false, bookkeepingStart: '2026-01-01', filed: new Set() });
+  assert.deepEqual(opDeDag.map(d => d.label), ['Q3 2026']);
 });
 
 test('per maand', () => {
