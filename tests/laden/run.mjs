@@ -54,6 +54,10 @@ const PAGES = {
   project: { page: 'project', projectId: seed.projects[0].id },
   communication: 'communication', quotes: 'quotes', invoices: 'invoices',
   ledger: 'ledger', bank: 'bank', 'vat-returns': 'vat-returns', assets: 'assets', prepaid: 'prepaid', pnl: 'pnl',
+  // Inkoopfacturen met het bonvenster (2026-11-18) heeft genoeg aan de kern:
+  // inkoopfacturen, leveranciers en rekeningen. De werklijst haalt zijn eigen
+  // rijen op, buiten de groepen om.
+  'purchase-invoices': 'purchase-invoices',
   // De prognose (2026-11-17) laadt zijn eigen cijfers (forecast_history) en geen groep.
   forecast: 'forecast',
 };

@@ -68,11 +68,16 @@ export const EXPORT_FORMAT_VERSION = 1;
 // geen kolommen); geen tabellen of kolommen.
 // 20261118100000 (btw-tijdvak wisselen) vervangt drie btw-functies; geen
 // tabellen of kolommen.
-// 20261118113000 (prognose) zet forecasts en forecast_versions erbij. Allebei
+// 20261118120000 (bonnen en declaraties) zet channel, submitted_by en
+// review_note op purchase_invoice_inbox. Die gaan mee met de inbox: waar een
+// bon vandaan kwam, wie hem instuurde en waarom een declaratie is afgewezen,
+// hoort bij de administratie. Geen geheim, geen nieuwe opslagsleutel (de foto
+// staat al in attachments).
+// 20261118124500 (prognose) zet forecasts en forecast_versions erbij. Allebei
 // 'export': een prognose is de verwachting van de organisatie zelf, en de
 // versies laten zien hoe die verwachting bijgesteld werd. De aannames staan
 // als jsonb; de prognoses ook als leesbare lijst.
-export const EXPORT_SCHEMA_VERSION = '20261118113000';
+export const EXPORT_SCHEMA_VERSION = '20261118124500';
 
 export type TableKind =
   | 'export'

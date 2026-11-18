@@ -147,6 +147,151 @@ export function autoBookEligible(input: {
   return { ok: true };
 }
 
+// ── Bonnen en declaraties (in de app gefotografeerd) ────────────────────────────
+//
+// Een bon komt niet per mail maar uit de camera van een teamlid. Wie Financiën
+// mag bewerken, krijgt een concept dat hij zelf boekt ('receipt'); wie dat niet
+// mag, dient een declaratie in die iemand met Financiën goedkeurt
+// ('declaration'). Migratie 20261118120000.
+
+export type InboxChannel = 'email' | 'receipt' | 'declaration';
+
+/** Foto's en pdf-scans. Een e-factuur (XML) gaat via "Factuur scannen" of het factuuradres. */
+export const UPLOAD_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+
+/** Ruim boven wat een mens met de hand fotografeert, ver onder een AI-rekening die uit de hand loopt. */
+export const MAX_UPLOADS_PER_HOUR = 60;
+
+/** Het kanaal volgt uit de rechten van wie de foto maakt, nooit uit de invoer. */
+export function uploadChannelFor(financeLevel: 'none' | 'read' | 'write'): 'receipt' | 'declaration' {
+  return financeLevel === 'write' ? 'receipt' : 'declaration';
+}
+
+export function isUploadChannel(channel: string | null | undefined): channel is 'receipt' | 'declaration' {
+  return channel === 'receipt' || channel === 'declaration';
+}
+
+/** Mag dit bestand via "Bon fotograferen"? Op type, met de extensie als terugval. */
+export function isUploadableReceipt(name: string, mimeType: string): boolean {
+  const mime = normalizeDocumentMime(name, mimeType);
+  return UPLOAD_MIME_TYPES.includes(mime);
+}
+
+/**
+ * Zijn de bytes ook echt wat het type zegt? Een browser zet het type op
+ * grond van de extensie; een hernoemd bestand (bon.jpg dat een HEIC is, of
+ * een tekstbestand) kwam anders pas bij het model als fout terug, nadat het
+ * al op R2 stond.
+ */
+export function bytesMatchType(bytes: Uint8Array, mimeType: string): boolean {
+  const at = (i: number) => bytes[i] ?? -1;
+  const ascii = (from: number, text: string) => [...text].every((ch, i) => at(from + i) === ch.charCodeAt(0));
+  switch (mimeType) {
+    case 'image/jpeg': return at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff;
+    case 'image/png': return at(0) === 0x89 && ascii(1, 'PNG');
+    case 'image/webp': return ascii(0, 'RIFF') && ascii(8, 'WEBP');
+    case 'application/pdf': {
+      // De pdf-standaard staat toe dat de kop niet helemaal vooraan staat
+      // (binnen de eerste 1024 bytes); sommige scanners doen dat ook.
+      const head = Math.min(bytes.length, 1024);
+      for (let i = 0; i + 4 <= head; i += 1) if (ascii(i, '%PDF')) return true;
+      return false;
+    }
+    default: return false;
+  }
+}
+
+/**
+ * Heeft deze persoon de AI uitgezet? Een eigen "nee" tegen Gerrie (een rij in
+ * ai_consents met enabled = false) of de module Gerrie dichtgezet door een
+ * beheerder: dan gaat zijn bon niet langs het model. "Nog niet gekozen" telt
+ * niet als nee: wie op "Bon fotograferen" drukt, vraagt Gerrie om deze ene bon
+ * te lezen, zoals "Factuur scannen" dat altijd deed.
+ */
+export function aiRefusedBy(input: { consentEnabled: boolean | null; gerrieLevel: 'none' | 'read' | 'write' }): boolean {
+  if (input.gerrieLevel === 'none') return true;
+  return input.consentEnabled === false;
+}
+
+export type DeclarationStatus = 'processing' | 'submitted' | 'approved' | 'paid' | 'rejected';
+
+/**
+ * De status zoals de indiener hem leest. Spiegel van list_my_declarations: wat
+ * bij Financiën op een keuze wacht (dubbel, leverancier onbekend, mislukt),
+ * is voor de indiener gewoon "ingediend".
+ */
+export function declarationStatus(
+  inboxStatus: string,
+  invoice: { status: string | null; payment_status: string | null } | null,
+): DeclarationStatus {
+  if (inboxStatus === 'received' || inboxStatus === 'processing') return 'processing';
+  if (inboxStatus === 'rejected') return 'rejected';
+  if (invoice && (invoice.status === 'paid' || invoice.payment_status === 'paid')) return 'paid';
+  if (inboxStatus === 'booked' || invoice?.status === 'booked') return 'approved';
+  return 'submitted';
+}
+
+export interface DeclarationView {
+  id: string;
+  status: DeclarationStatus;
+  store_name: string | null;
+  receipt_date: string | null;
+  total_cents: number | null;
+  currency: string;
+  /** Heeft Gerrie er een bon in gelezen (winkel of bedrag)? */
+  read: boolean;
+}
+
+/**
+ * Wat de indiener na het insturen terugkrijgt: alleen zijn eigen bon. Bewust
+ * zonder waarschuwingen, reden, leverancier-id of concept-id: een waarschuwing
+ * kan een andere factuur noemen ("staat al als INK-2026-0012") of het IBAN dat
+ * bij een leverancier bekend is, en dat gaat een declarant niet aan.
+ */
+export function declarationView(row: {
+  id: string;
+  status: string;
+  proposal: { supplier?: { name?: string | null } | null; date?: string | null; currency?: string | null; totals?: { total_cents?: number | null } | null } | null;
+}): DeclarationView {
+  const p = row.proposal;
+  const store = (p?.supplier?.name ?? '').trim() || null;
+  const total = typeof p?.totals?.total_cents === 'number' && Number.isFinite(p.totals.total_cents) ? Math.round(p.totals.total_cents) : null;
+  const date = typeof p?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.date) ? p.date : null;
+  return {
+    id: row.id,
+    status: declarationStatus(row.status, null),
+    store_name: store,
+    receipt_date: date,
+    total_cents: total,
+    currency: ((p?.currency ?? '').trim() || 'EUR').toUpperCase().slice(0, 3),
+    read: Boolean(store || (total != null && total !== 0)),
+  };
+}
+
+/** Waarin een declaratie nog af te wijzen is: alles wat niet geboekt, al afgewezen of nog bezig is. */
+export const DECLINABLE_STATUSES = ['received', 'ready', 'needs_review', 'duplicate', 'failed'];
+
+export function declineAllowed(row: { channel: string | null; status: string }): { ok: true } | { ok: false; why: string } {
+  if (row.channel !== 'declaration') return { ok: false, why: 'Alleen een declaratie wijs je af. Een bon of mail leg je weg met Negeren.' };
+  if (row.status === 'booked') return { ok: false, why: 'Deze declaratie is al goedgekeurd en geboekt. Terugdraaien kan alleen met een tegenboeking.' };
+  if (row.status === 'rejected') return { ok: false, why: 'Deze declaratie is al afgewezen.' };
+  if (row.status === 'processing') return { ok: false, why: 'Deze declaratie wordt nog uitgelezen. Probeer het zo opnieuw.' };
+  if (!DECLINABLE_STATUSES.includes(row.status)) return { ok: false, why: `Een declaratie in status '${row.status}' kan niet afgewezen worden.` };
+  return { ok: true };
+}
+
+/**
+ * Twee bonnen van dezelfde winkel, op dezelfde dag, voor hetzelfde bedrag: dat
+ * is vaak twee keer dezelfde bon (twee foto's van één bonnetje hebben elk een
+ * eigen bestand, dus de bestandscontrole ziet het niet). Soms is het echt twee
+ * keer parkeren. Daarom een waarschuwing op het concept, geen blokkade.
+ */
+export function receiptTwinWarning(twin: { internal_number: string | null; supplier_invoice_number: string | null } | null): string | null {
+  if (!twin) return null;
+  const label = twin.internal_number || twin.supplier_invoice_number || 'een andere inkoopfactuur';
+  return `Lijkt op ${label}: zelfde winkel, datum en bedrag. Controleer dat deze bon niet twee keer is ingestuurd.`;
+}
+
 // ── De opruimronde ──────────────────────────────────────────────────────────────
 
 export interface SweepRowLike {

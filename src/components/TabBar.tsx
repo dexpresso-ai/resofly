@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Archive, BarChart3, FileBarChart, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Megaphone, MessageSquare, Percent, Plus, Receipt, Scale, Settings, Sparkles, StickyNote, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, BarChart3, FileBarChart, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Megaphone, MessageSquare, Percent, Plus, Receipt, ReceiptText, Scale, Settings, Sparkles, StickyNote, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData } from '../types';
 import { viewTitle } from '../lib/workspaceTabs';
 import { useBuildingReports } from '../lib/aiReports';
@@ -25,6 +25,8 @@ export const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
   contracts: FileSignature, invoices: Receipt, suppliers: Truck, 'purchase-invoices': FileText, ledger: BookOpen,
   bank: Landmark, assets: Boxes, prepaid: Hourglass, pnl: TrendingUp, forecast: LineChart, 'vat-returns': Percent, 'corporate-tax': Landmark, dga: Users, shareholders: Users, owners: Wallet, 'fiscal-years': CalendarClock,
   'annual-accounts': Scale,
+  // Declaraties (2026-11-18): een bonnetje, zodat hij niet op Facturen lijkt.
+  declarations: ReceiptText,
   archive: Archive, settings: Settings, gallery: Images,
 };
 

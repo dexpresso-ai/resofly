@@ -1459,9 +1459,18 @@ export interface PurchaseInvoiceInboxProposal {
   extracted_totals: { subtotal_cents: number | null; vat_cents: number | null; total_cents: number | null } | null;
 }
 
+/** Waar een item vandaan komt: het factuuradres, of een bon die in de app is gefotografeerd. */
+export type PurchaseInvoiceInboxChannel = 'email' | 'receipt' | 'declaration';
+
 export interface PurchaseInvoiceInboxItem {
   id: UUID;
   organization_id: UUID;
+  /** email = factuuradres; receipt = bon van iemand met Financiën; declaration = declaratie van een teamlid. */
+  channel: PurchaseInvoiceInboxChannel;
+  /** Wie de bon in de app instuurde; leeg bij mail. */
+  submitted_by: UUID | null;
+  /** Waarom een declaratie is afgewezen; de indiener leest dit. */
+  review_note: string | null;
   alias_id: UUID | null;
   parent_id: UUID | null;
   rfc_message_id: string | null;
@@ -1494,6 +1503,26 @@ export interface PurchaseInvoiceInboxItem {
   purged_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** De status van een declaratie zoals de indiener hem leest (list_my_declarations). */
+export type DeclarationStatus = 'processing' | 'submitted' | 'approved' | 'paid' | 'rejected';
+
+/**
+ * Eén eigen declaratie, uit list_my_declarations. Alleen wat over de eigen bon
+ * gaat: geen waarschuwingen, geen leverancier of concept, niets van anderen.
+ */
+export interface Declaration {
+  id: UUID;
+  status: DeclarationStatus;
+  submitted_at: string;
+  store_name: string | null;
+  receipt_date: string | null;
+  total_cents: number | null;
+  currency: string;
+  file_name: string | null;
+  review_note: string | null;
+  decided_at: string | null;
 }
 
 export interface PurchaseInvoiceInboxSettings {
@@ -3679,7 +3708,7 @@ export interface SavedReport extends OrgScopedRow {
 }
 
 /**
- * Een prognose (Financiën → Prognose, migratie 20261118113000). De aannames
+ * Een prognose (Financiën → Prognose, migratie 20261118124500). De aannames
  * staan als jsonb en worden bij het lezen hersteld (normalizeAssumptions in
  * src/lib/forecast.ts); daarom hier `unknown`.
  */

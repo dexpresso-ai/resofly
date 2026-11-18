@@ -101,7 +101,7 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   assets: 'finance',
   prepaid: 'finance',
   pnl: 'finance',
-  // De prognose toont omzet, kosten en winst (migratie 20261118113000).
+  // De prognose toont omzet, kosten en winst (migratie 20261118124500).
   forecast: 'finance',
   'vat-returns': 'finance',
   'corporate-tax': 'finance',
@@ -254,6 +254,7 @@ export function buildPermissions(membership: MembershipLike | null | undefined, 
     canRead,
     canWrite,
     canOpenPage: (page: string) => {
+      if (page === DECLARATIONS_PAGE) return canSubmitDeclarations(role, level('finance'));
       const module = PAGE_MODULE[page];
       // De pagina Gerrie blijft open zolang de module open is en het lid nog
       // niet koos: daar zet je hem aan. Koos hij voor geen AI, dan is ook de
@@ -276,6 +277,19 @@ export function buildPermissions(membership: MembershipLike | null | undefined, 
     gerrieDeclined,
     gerrieModuleOpen,
   };
+}
+
+/**
+ * De pagina Declaraties (2026-11-18). Hij hoort bij geen module: iedereen die
+ * schrijft, mag een bon insturen. Maar wie Financiën mag bewerken, fotografeert
+ * zijn bon op Inkoopfacturen en krijgt meteen een concept; voor hem is er
+ * niets te declareren, en de pagina zou alleen een lege lijst tonen. De server
+ * (invoice-inbox) beslist het kanaal op dezelfde regel.
+ */
+export const DECLARATIONS_PAGE = 'declarations';
+
+export function canSubmitDeclarations(role: OrganizationRole | null | undefined, financeLevel: ModuleLevel): boolean {
+  return isWriterRole(role) && financeLevel !== 'write';
 }
 
 /** Alle rechten volledig — voor plekken zonder membership-context (portaal, publieke pagina's). */

@@ -1,0 +1,136 @@
+/* ============================================================
+   Bonnen fotograferen en declaraties (2026-11-18).
+
+   Het bonvenster (components/ReceiptCapture.tsx): zolang Gerrie leest, ligt
+   de foto als een bonnetje op een scanner. Een lichtstraal gaat erover op en
+   neer, de hoeken van het scanvak lichten op en het orbje van Gerrie denkt
+   mee (zijn stijl staat in rapportages.css, .aire-orb). Daarna de uitslag met
+   de keuze Verder of Nieuwe boeking.
+
+   Met "minder beweging" zet globals.css alle animaties uit: dan zie je de foto,
+   het scanvak en de stappenbalk, maar beweegt er niets.
+   ============================================================ */
+
+.rcp-launch{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rcp-launch.is-compact{gap:10px}
+
+.rcp-modal{width:min(560px,96vw)}
+.rcp-modal .modal-body{display:grid;gap:14px}
+.rcp-note{margin:0;font-size:12px;line-height:1.5;color:var(--ink-3,var(--muted))}
+
+/* ── Gerrie aan het werk ─────────────────────────────────────── */
+.rcp-working{display:grid;gap:0;border:1.5px solid transparent;border-radius:var(--r-card,var(--r-xl,18px));overflow:hidden;background:linear-gradient(var(--surface),var(--surface)) padding-box,conic-gradient(from var(--aire-angle,0deg),transparent 0 58%,var(--ai-1) 72%,var(--ai-2) 84%,var(--ai-3) 93%,transparent) border-box,linear-gradient(var(--line),var(--line)) border-box;animation:aire-rotate 5s linear infinite;box-shadow:var(--shadow-card,var(--shadow-1)),0 26px 52px -34px var(--ai-glow,rgba(110,90,230,.3))}
+.rcp-stage{position:relative;display:grid;place-items:center;height:230px;background:radial-gradient(120% 90% at 0% 0%,var(--ai-soft,rgba(110,90,230,.07)),transparent 62%),radial-gradient(circle,var(--line-2) 1px,transparent 1.3px) 0 0/16px 16px,var(--bg,var(--surface-2));border-bottom:1px solid var(--line);overflow:hidden;isolation:isolate}
+/* Het bonnetje: wit, iets gedraaid, met een kartelrand onderaan. De schaduw
+   zit op het kader (drop-shadow volgt de kartelrand; box-shadow knipt hij weg). */
+.rcp-frame{position:relative;transform:rotate(-2.5deg);filter:drop-shadow(0 14px 18px rgba(0,0,0,.28)) drop-shadow(0 2px 3px rgba(0,0,0,.12));animation:rcp-land .5s cubic-bezier(.2,.9,.3,1.2) both}
+.rcp-paper{position:relative;width:132px;height:188px;overflow:hidden;background:#fff;border-radius:4px 4px 0 0;clip-path:polygon(0 0,100% 0,100% 96%,95% 100%,90% 96%,85% 100%,80% 96%,75% 100%,70% 96%,65% 100%,60% 96%,55% 100%,50% 96%,45% 100%,40% 96%,35% 100%,30% 96%,25% 100%,20% 96%,15% 100%,10% 96%,5% 100%,0 96%)}
+.rcp-paper img{display:block;width:100%;height:100%;object-fit:cover;object-position:top center}
+.rcp-paper-blank{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:9px;padding:22px 16px 0;color:#9aa1ad}
+.rcp-paper-blank i{display:block;width:100%;height:5px;border-radius:3px;background:#e7e9ee}
+.rcp-paper-blank i:nth-of-type(2){width:72%}
+.rcp-paper-blank i:nth-of-type(3){width:86%}
+.rcp-paper-blank i:nth-of-type(4){width:54%}
+/* De lichtstraal van de scanner. */
+.rcp-beam{position:absolute;left:-4%;right:-4%;top:-18%;height:18%;background:linear-gradient(180deg,transparent,rgba(var(--ai-rgb,110,90,230),.28) 55%,rgba(var(--ai-rgb,110,90,230),.75) 92%,transparent);box-shadow:0 6px 18px -4px var(--ai-glow,rgba(110,90,230,.5));animation:rcp-scan 2.4s ease-in-out infinite alternate;pointer-events:none}
+.rcp-working[data-phase="0"] .rcp-beam,.rcp-working[data-phase="1"] .rcp-beam{opacity:.35;animation-duration:3.6s}
+/* De hoeken van het scanvak. */
+.rcp-corner{position:absolute;width:18px;height:18px;border:2.5px solid var(--ai-1);opacity:.9;animation:rcp-corner 2.4s ease-in-out infinite}
+.rcp-corner-tl{left:-12px;top:-12px;border-right:0;border-bottom:0;border-top-left-radius:6px}
+.rcp-corner-tr{right:-12px;top:-12px;border-left:0;border-bottom:0;border-top-right-radius:6px}
+.rcp-corner-bl{left:-12px;bottom:-12px;border-right:0;border-top:0;border-bottom-left-radius:6px}
+.rcp-corner-br{right:-12px;bottom:-12px;border-left:0;border-top:0;border-bottom-right-radius:6px}
+.rcp-orb{left:calc(50% + 92px);top:30%}
+@keyframes rcp-scan{from{top:-18%}to{top:100%}}
+@keyframes rcp-corner{0%,100%{opacity:.45}50%{opacity:1}}
+@keyframes rcp-land{from{opacity:0;transform:translateY(14px) rotate(-6deg) scale(.94)}}
+
+.rcp-info{display:grid;gap:12px;padding:14px 16px 16px}
+.rcp-info-head{display:flex;align-items:center;gap:10px;min-width:0}
+.rcp-info-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.rcp-info-text b{font-size:14px;font-weight:650;color:var(--ink)}
+.rcp-info-text span{font-size:12.5px;color:var(--ink-2,var(--muted2));overflow-wrap:anywhere}
+
+/* ── De uitslag ──────────────────────────────────────────────── */
+.rcp-result{display:flex;gap:12px;align-items:flex-start;padding:14px;border:1px solid var(--line);border-radius:var(--r-lg,14px);background:var(--surface)}
+.rcp-result>svg{flex:0 0 auto;margin-top:1px}
+/* minmax(0,1fr): de kolom past zich anders aan de breedste inhoud aan (een
+   keuzelijst met een lange naam), en dan liep de kaart rechts uit het venster. */
+.rcp-result>div{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;min-width:0;flex:1}
+.rcp-result b{font-size:15px;font-weight:650;color:var(--ink)}
+.rcp-result p{margin:0;font-size:13px;line-height:1.5;color:var(--ink-2,var(--muted2))}
+.rcp-result.is-done>svg{color:var(--ok)}
+.rcp-result.is-attention>svg{color:var(--warn)}
+.rcp-result.is-error{border-color:rgba(var(--danger-rgb),.35);background:rgba(var(--danger-rgb),.06)}
+.rcp-result.is-error>svg{color:var(--danger)}
+.rcp-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:6px 0 0}
+.rcp-summary>div{display:grid;gap:2px;min-width:0;padding:8px 10px;border-radius:var(--r-md,10px);background:var(--surface-2,var(--bg3))}
+.rcp-summary dt{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3,var(--muted))}
+.rcp-summary dd{margin:0;font-size:13.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rcp-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px}
+/* De keuzelijst krimpt mee: een lange leveranciersnaam ("➕ Nieuwe leverancier:
+   Q-Park Utrecht Centrum") duwde de kaart anders buiten het venster, want een
+   flex-item wordt standaard niet smaller dan zijn tekst. */
+.rcp-actions>.select-control{flex:1 1 220px;min-width:0;max-width:100%}
+.rcp-foot{display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap}
+.rcp-batch{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.rcp-batch li{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-md,10px);background:var(--surface)}
+.rcp-batch-num{flex:0 0 auto;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:var(--surface-2,var(--bg3));color:var(--ink-2)}
+.rcp-batch-line{font-size:13px;color:var(--ink);min-width:0;overflow-wrap:anywhere}
+.rcp-batch-line.is-attention{color:var(--ink-2)}
+.rcp-batch-line.is-error{color:var(--danger)}
+
+/* ── De werklijst op Inkoopfacturen ──────────────────────────── */
+.pi-inbox-channel{display:flex;align-items:center;gap:6px}
+.pi-inbox-channel svg{flex:0 0 auto;color:var(--ink-3,var(--muted))}
+.pi-inbox-decline{display:grid;gap:8px;margin-top:8px;padding:10px 12px;border:1px solid rgba(var(--danger-rgb),.3);border-radius:var(--r-md,10px);background:rgba(var(--danger-rgb),.05)}
+.pi-inbox-decline label{display:grid;gap:6px}
+.pi-inbox-decline label>span{font-size:12.5px;font-weight:600;color:var(--ink)}
+
+/* Zelf invullen: de bon naast het formulier. */
+.bk-fillin{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
+.bk-fillin>div{flex:1 1 260px;min-width:0}
+.bk-fillin-actions{margin-top:8px}
+.bk-fillin-photo{flex:0 0 auto;display:block;border-radius:8px;overflow:hidden;border:1px solid var(--line);background:#fff}
+.bk-fillin-photo img{display:block;max-height:260px;max-width:min(220px,100%);object-fit:contain}
+
+/* ── Declaraties ─────────────────────────────────────────────── */
+.decl-hero{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:16px;margin-bottom:16px;border:1px solid var(--line);border-radius:var(--r-card,var(--r-xl,18px));background:radial-gradient(120% 140% at 0% 0%,var(--ai-soft,rgba(110,90,230,.07)),transparent 60%),var(--surface);box-shadow:var(--shadow-card,var(--shadow-1))}
+.decl-hero-text{display:flex;align-items:center;gap:12px;min-width:0;flex:1 1 260px}
+.decl-hero-text>div{display:grid;gap:3px;min-width:0}
+.decl-hero-text b{font-size:15px;font-weight:650;color:var(--ink)}
+.decl-hero-text span{font-size:12.5px;line-height:1.45;color:var(--ink-2,var(--muted2))}
+.decl-hero-icon{flex:0 0 auto;width:42px;height:42px;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;background:var(--aurora,var(--accent));color:#fff}
+.decl-section{margin-bottom:18px}
+.decl-section h3{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;letter-spacing:.02em;margin:0 0 8px;color:var(--ink)}
+.decl-section h3 .bk-link-button{margin-left:auto}
+.decl-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.decl-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r-lg,14px);background:var(--surface)}
+.decl-row-main{display:grid;gap:3px;min-width:0}
+.decl-row-main b{font-size:14px;font-weight:650;color:var(--ink);overflow-wrap:anywhere}
+.decl-row-meta{font-size:12px;color:var(--ink-3,var(--muted));overflow-wrap:anywhere}
+.decl-row-note{font-size:12.5px;color:var(--ink-2,var(--muted2));overflow-wrap:anywhere}
+.decl-row.is-rejected .decl-row-note{color:var(--danger)}
+.decl-row-side{display:grid;justify-items:end;gap:4px;flex:0 0 auto;text-align:right}
+.decl-row-amount{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink);white-space:nowrap}
+.decl-status{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap;background:var(--surface-2,var(--bg3));color:var(--ink-2)}
+.decl-status-processing{background:var(--ai-soft,rgba(110,90,230,.12));color:var(--ai-ink,var(--accent-ink))}
+.decl-status-submitted{background:rgba(var(--warn-rgb),.14);color:var(--ink)}
+.decl-status-approved,.decl-status-paid{background:rgba(var(--ok-rgb),.15);color:var(--ink)}
+.decl-status-rejected{background:rgba(var(--danger-rgb),.13);color:var(--danger)}
+.decl-privacy{font-size:12px;margin:4px 0 0}
+
+@media (max-width:760px){
+  .rcp-stage{height:200px}
+  .rcp-paper{width:116px;height:166px}
+  .rcp-orb{left:calc(50% + 80px)}
+  .rcp-info{padding:12px 14px 14px}
+  .rcp-summary{grid-template-columns:1fr 1fr}
+  .rcp-summary>div:first-child{grid-column:1/-1}
+  .rcp-foot .btn{flex:1 1 auto;justify-content:center}
+  .rcp-foot .bk-spacer{display:none}
+  .decl-row{flex-direction:column}
+  .decl-row-side{justify-items:start;text-align:left;grid-auto-flow:column;align-items:center}
+  .decl-hero .rcp-launch{width:100%}
+  .decl-hero .rcp-launch .btn{flex:1 1 auto;justify-content:center}
+}

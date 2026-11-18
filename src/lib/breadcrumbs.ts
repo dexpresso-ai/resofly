@@ -51,6 +51,8 @@ const PAGE_SECTIONS: Record<string, string> = {
   bank: 'Financiën', assets: 'Financiën', prepaid: 'Financiën', pnl: 'Financiën', forecast: 'Financiën', 'vat-returns': 'Financiën',
   'corporate-tax': 'Financiën', dga: 'Financiën', shareholders: 'Financiën', owners: 'Financiën',
   'fiscal-years': 'Financiën', 'annual-accounts': 'Financiën',
+  // In het menu onder Financiën, ook voor wie verder niets van Financiën ziet.
+  declarations: 'Financiën',
   communication: 'Communicatie', chat: 'Communicatie', marketing: 'Communicatie',
   content: 'Kennis & inzicht', notes: 'Kennis & inzicht', documents: 'Kennis & inzicht',
   stats: 'Kennis & inzicht', report: 'Kennis & inzicht',
