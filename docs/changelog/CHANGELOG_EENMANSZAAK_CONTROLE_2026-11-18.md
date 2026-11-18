@@ -133,7 +133,17 @@ de halve zelfstandigenaftrek vanaf de AOW-leeftijd) staat eronder.
     btw-tijdvakken uit één RPC, niet uit de boekhoudtabellen);
   - `npm run test:mobile -- --theme=both`: 686 pagina's, 0 problemen;
   - UI-test in Chromium voor offerte, factuur, intrekken, rollen, bank en
-    vooruitbetaald (de knop heet nu "Verstuur per e-mail"): zie hieronder.
+    vooruitbetaald (de knop heet nu "Verstuur per e-mail"): 41 stappen, 0 fout;
+  - de keten vanaf nul (`supabase db reset`), met daarna de stromen
+    eenmanszaak, bank, vooruitbetaald, facturen, inrichten en herinneringen:
+    252 stappen, 0 fout;
+  - na het samenvoegen met staging (instellingen in groepen) opnieuw:
+    typecheck, `npm test` 1941/1941, `test:loading` en `test:mobile` voor de
+    financiële pagina's (48 metingen, 0 problemen);
+  - de pagina's die `test:mobile` niet kent (Eigen vermogen, Omzetbelasting,
+    Activa, Boekjaren) zelf op 390 × 844, donker en licht: niets scrolt
+    zijwaarts. Het overzicht voor de aangifte paste eerst niet (de bedragen
+    vielen achter de veegrij van 560px); nu wel.
 - **Deno-check** (esm.sh is hier geblokkeerd; met een importmap naar npm):
   de 35 functies uit de CI-lijst en `_shared/documentLayout.ts` en
   `documentPdf.ts` schoon; `invoice-workflow` dezelfde 11 meldingen als vóór de
@@ -157,4 +167,29 @@ de halve zelfstandigenaftrek vanaf de AOW-leeftijd) staat eronder.
 
 ## Uitrol
 
-(volgt na de uitrol op staging)
+**Staging: uitgerold op 18 november 2026** (merge `ae4f075`, *Deploy Supabase
+(staging)* run 239):
+
+- de migratie `20261118090000_eenmanszaak_controle` is toegepast;
+- alle 40 edge functions zijn uitgerold (waaronder `invoice-workflow` met de
+  nieuwe meldingen, en de handelingen van Gerrie, MCP en de API);
+- de rooktest is geslaagd, ook "anon heeft geen rechten in public": de nieuwe
+  functies staan dicht voor de publieke sleutel;
+- Cloudflare Pages bouwt de app bij de push naar `staging`; dat is van hieruit
+  niet te zien (het netwerk blokkeert het domein).
+
+Wat de migratie op staging met bestaande gegevens doet:
+
+- eenmanszaken die nog op 0510 stonden en nog nooit naar 0510 afsloten, staan
+  nu op 0500 (er stond niets op 0510, dus de cijfers veranderen niet);
+- IB-administraties met een rekeningschema kregen 1000 Kas en de nieuwe
+  kostenrekeningen (geen systeemrekeningen: naam, btw-code en actief blijven
+  vrij);
+- verder niets: de functies werken voor nieuwe boekingen en overzichten.
+
+De Management API van Supabase was vanuit deze sessie niet bereikbaar; de
+staging-database zelf is dus niet ingezien. De controle is de uitrol (de CLI
+breekt af bij een fout in de migratie), de rooktest, en dezelfde migratie op
+een lege en op een gevulde lokale database.
+
+Voor productie: dezelfde migratie. Hij is veilig om opnieuw te draaien.
