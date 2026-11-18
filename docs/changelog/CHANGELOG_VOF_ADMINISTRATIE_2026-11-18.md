@@ -142,7 +142,7 @@ een diff nagelopen.
   - `npm run test:database`: 67 en 61 controles geslaagd;
 - **Code:**
   - typecheck ✓;
-  - `npm test`: 1921/1921;
+  - `npm test`: 1923/1923, waarvan 5 nieuw (de afsluitkaart, de uren via Gerrie, privé betaald en een vennoot vastleggen via Gerrie, en de vennoten in de auditfile-import);
   - `deno check` op de registry van de handelingen en op `reportRecords.ts` ✓.
     De volledige lijst uit CI kon hier niet, omdat esm.sh en deno.land in deze
     omgeving dicht staan;

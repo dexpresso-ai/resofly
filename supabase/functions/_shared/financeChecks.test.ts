@@ -245,6 +245,44 @@ test('de kapitaalvergelijking geeft de uren per vennoot alleen aan wie Uren mag 
   assert.deepEqual(b.hours.partners, uren);
 });
 
+test('privé betaald via Gerrie: alleen bij IB, en bij een vof met vennoten de vennoot kiezen', async () => {
+  const pay = action(BOOKKEEPING_ACTIONS, 'purchase_invoice.pay_privately');
+  const invoice = { internal_number: 'INK-1', supplier_invoice_number: 'VD-1077', supplier_id: null, date: '2025-10-10', status: 'booked', payment_status: 'unpaid', total_cents: 12100, journal_entry_id: ID };
+  const bram = { id: ID, name: 'Bram', is_active: true };
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'bv' }] }), { purchase_invoice_id: ID }),
+    (error: unknown) => error instanceof ActionError && /alleen bij een eenmanszaak, vof/.test(error.message));
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }), { purchase_invoice_id: ID }),
+    (error: unknown) => error instanceof ActionError && /Kies de vennoot/.test(error.message));
+  const plan = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }), { purchase_invoice_id: ID, partner_id: ID });
+  assert.match(plan.sub, /betaald door Bram/);
+  assert.equal(plan.payload.date, '2025-10-10', 'standaard de factuurdatum');
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [{ ...invoice, payment_status: 'paid' }], company_settings: [{ legal_form: 'vof' }] }), { purchase_invoice_id: ID }),
+    (error: unknown) => error instanceof ActionError && /al betaald/.test(error.message));
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [{ ...invoice, status: 'draft', journal_entry_id: null }], company_settings: [{ legal_form: 'eenmanszaak' }] }), { purchase_invoice_id: ID }),
+    (error: unknown) => error instanceof ActionError && /Boek de inkoopfactuur eerst/.test(error.message));
+});
+
+test('vennoot vastleggen via Gerrie: alleen bij een vof, met de verdeling op de kaart', async () => {
+  const save = action(BUSINESS_ACTIONS, 'owners.save_partner');
+  await assert.rejects(save.plan!(ctx({ company_settings: [{ legal_form: 'eenmanszaak' }] }), { name: 'Anna', profit_share_percent: 60 }),
+    (error: unknown) => error instanceof ActionError && /horen bij een vof/.test(error.message));
+  const rows = {
+    company_settings: [{ legal_form: 'vof' }],
+    partnership_partners: [{ id: 'c0000000-0000-4000-8000-000000000002', name: 'Bram', profit_share_basis_points: 4000, kind: 'beherend', is_active: true, user_id: null }],
+  };
+  const plan = await save.plan!(ctx(rows), { name: 'Anna', profit_share_percent: 60 });
+  assert.match(plan.title, /Vennoot Anna vastleggen/);
+  assert.match(plan.sub, /verdeling actieve vennoten daarna 100%/);
+  assert.equal(plan.payload.profit_share_basis_points, 6000);
+  const krap = await save.plan!(ctx(rows), { name: 'Anna', profit_share_percent: 50 });
+  assert.match(krap.sub, /daarna 90% \(bij het afsluiten moet dat 100% zijn\)/);
+  await assert.rejects(save.plan!(ctx(rows), { name: 'Anna', profit_share_percent: 60, kind: 'commanditair' }),
+    (error: unknown) => error instanceof ActionError && /alleen bij een cv/.test(error.message));
+  const metBoekhouder = { ...rows, organization_members: [{ email: 'boekhouder@kantoor.test', role: 'accountant', status: 'active' }] };
+  await assert.rejects(save.plan!(ctx(metBoekhouder), { name: 'Anna', profit_share_percent: 60, user_id: '00000000-0000-0000-0000-0000000000b1' }),
+    (error: unknown) => error instanceof ActionError && /boekhouder/.test(error.message));
+});
+
 // ── Foutmeldingen ────────────────────────────────────────────────────────
 
 test('databasetekst gaat niet naar de browser; een eigen melding wel', () => {
