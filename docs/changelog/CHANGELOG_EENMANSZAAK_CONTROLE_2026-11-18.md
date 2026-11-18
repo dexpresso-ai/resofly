@@ -167,4 +167,29 @@ de halve zelfstandigenaftrek vanaf de AOW-leeftijd) staat eronder.
 
 ## Uitrol
 
-(volgt na de uitrol op staging)
+**Staging: uitgerold op 18 november 2026** (merge `ae4f075`, *Deploy Supabase
+(staging)* run 239):
+
+- de migratie `20261118090000_eenmanszaak_controle` is toegepast;
+- alle 40 edge functions zijn uitgerold (waaronder `invoice-workflow` met de
+  nieuwe meldingen, en de handelingen van Gerrie, MCP en de API);
+- de rooktest is geslaagd, ook "anon heeft geen rechten in public": de nieuwe
+  functies staan dicht voor de publieke sleutel;
+- Cloudflare Pages bouwt de app bij de push naar `staging`; dat is van hieruit
+  niet te zien (het netwerk blokkeert het domein).
+
+Wat de migratie op staging met bestaande gegevens doet:
+
+- eenmanszaken die nog op 0510 stonden en nog nooit naar 0510 afsloten, staan
+  nu op 0500 (er stond niets op 0510, dus de cijfers veranderen niet);
+- IB-administraties met een rekeningschema kregen 1000 Kas en de nieuwe
+  kostenrekeningen (geen systeemrekeningen: naam, btw-code en actief blijven
+  vrij);
+- verder niets: de functies werken voor nieuwe boekingen en overzichten.
+
+De Management API van Supabase was vanuit deze sessie niet bereikbaar; de
+staging-database zelf is dus niet ingezien. De controle is de uitrol (de CLI
+breekt af bij een fout in de migratie), de rooktest, en dezelfde migratie op
+een lege en op een gevulde lokale database.
+
+Voor productie: dezelfde migratie. Hij is veilig om opnieuw te draaien.
