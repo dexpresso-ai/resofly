@@ -359,13 +359,16 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
       const tooLow = flow.below_buffer !== null;
       cashKpis.push({
         key: 'lowest', label: 'Laagste saldo', value: money(flow.lowest.cents), danger: e.start_known && (flow.lowest.cents < 0 || tooLow),
-        sub: `${flow.lowest.at_start ? 'nu; daarna niet lager' : `eind ${monthLabel(flow.lowest.month, 'short')}`}${tooLow ? ` · ${e.buffer_cents > 0 ? 'onder je ondergrens' : 'rood'} vanaf ${monthLabel(flow.below_buffer as string, 'short')}` : ''}`,
+        // Zonder bekend banksaldo rekent de cashflow vanaf € 0: dan is dit
+        // geen saldo maar hoeveel er tot dan toe bij of af ging, en dat zegt het.
+        // Zonder die woorden las een negatief bedrag hier als rood staan.
+        sub: `${flow.lowest.at_start ? 'nu; daarna niet lager' : `eind ${monthLabel(flow.lowest.month, 'short')}`}${!e.start_known ? ' · vanaf € 0 gerekend' : ''}${tooLow ? ` · ${e.buffer_cents > 0 ? 'onder je ondergrens' : 'rood'} vanaf ${monthLabel(flow.below_buffer as string, 'short')}` : ''}`,
       });
     }
     const last = flow.months[flow.months.length - 1];
     cashKpis.push({
       key: 'end', label: 'Saldo aan het eind', value: money(flow.end_cents), danger: e.start_known && flow.end_cents < 0,
-      sub: `eind ${monthLabel(last.month, 'short')} · ${flow.totals.net_cents >= 0 ? '+' : ''}${money(flow.totals.net_cents)}`,
+      sub: `eind ${monthLabel(last.month, 'short')} · ${flow.totals.net_cents >= 0 ? '+' : ''}${money(flow.totals.net_cents)}${!e.start_known ? ' · vanaf € 0 gerekend' : ''}`,
       spark: flow.months.map(month => month.end_cents),
     });
     const next = flow.vat_payments[0];
