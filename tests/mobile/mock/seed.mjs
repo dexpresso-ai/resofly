@@ -373,6 +373,43 @@ export const suppliers = [
   { id: uid('s'), ...base(), name: 'Amazon.nl', supplier_code: null, contact_name: null, email: null, phone: null, vat_number: null, iban: 'NL35INGB0654321098', address_line1: null, postal_code: null, city: null, country: 'NL', default_ledger_account_id: null, notes: null },
 ];
 
+// ── Bonnen en declaraties (2026-11-18) ──────────────────────────────────
+// Drie inkoopfacturen: een bon die je zelf fotografeerde (concept), een
+// declaratie van Sanne die op goedkeuring wacht, en een geboekte factuur uit
+// de mail. Op de werklijst de declaratie, en een bon die Gerrie niet las
+// (AI-uitlezen stond uit): die heeft "Zelf invullen".
+const receiptLines = (desc, cents, code, rate) => [{ id: uid('l'), description: desc, amount_cents: cents, vat_code: code, vat_rate: rate, account_id: null }];
+export const purchaseInvoices = [
+  { id: uid('p'), ...base(), supplier_id: suppliers[1].id, supplier_invoice_number: 'T-48213', internal_number: `INK-${NOW.getFullYear()}-0003`, date: dkey(day(-1)), due_date: null, lines: receiptLines('Kantoorartikelen', 2066, 'HOOG', 21), subtotal_cents: 2066, vat_cents: 434, total_cents: 2500, currency: 'EUR', status: 'draft', payment_status: 'unpaid', paid_at: null, project_id: null, journal_entry_id: null, notes: 'Betaald met pin', source: 'ai_scan', extraction_meta: { channel: 'receipt', sender_email: 'gerjan@studiolopik.nl', received_at: iso(day(-1)) } },
+  { id: uid('p'), ...base(), supplier_id: suppliers[1].id, supplier_invoice_number: null, internal_number: `INK-${NOW.getFullYear()}-0002`, date: dkey(day(-2)), due_date: null, lines: receiptLines('Parkeren', 1240, 'HOOG', 21), subtotal_cents: 1240, vat_cents: 260, total_cents: 1500, currency: 'EUR', status: 'draft', payment_status: 'unpaid', paid_at: null, project_id: null, journal_entry_id: null, notes: null, source: 'ai_scan', extraction_meta: { channel: 'declaration', sender_email: 'sanne@studiolopik.nl', received_at: iso(day(-2)) } },
+  { id: uid('p'), ...base(), supplier_id: suppliers[0].id, supplier_invoice_number: 'F-2026-118', internal_number: `INK-${NOW.getFullYear()}-0001`, date: dkey(day(-9)), due_date: dkey(day(21)), lines: receiptLines('Drukwerk flyers', 41322, 'HOOG', 21), subtotal_cents: 41322, vat_cents: 8678, total_cents: 50000, currency: 'EUR', status: 'booked', payment_status: 'unpaid', paid_at: null, project_id: null, journal_entry_id: null, notes: null, source: 'ai_scan', extraction_meta: { channel: 'email', sender_email: 'bert@drukkerijvanwijk.nl', received_at: iso(day(-9)) } },
+];
+const inboxProposal = (name, cents, date) => ({
+  supplier: { matchedId: null, matchedBy: null, name, vat_number: null, kvk_number: null, iban: null, email: null },
+  supplier_invoice_number: null, date, due_date: null, currency: 'EUR', notes: null, confidence: 'high', warnings: [],
+  lines: [{ description: 'Parkeren', amount_cents: Math.round(cents / 1.21), vat_code: 'HOOG', vat_rate: 21, account_id: null, account_code: null }],
+  totals: { subtotal_cents: Math.round(cents / 1.21), vat_cents: cents - Math.round(cents / 1.21), total_cents: cents }, extracted_totals: null,
+});
+const inboxRow = (over) => ({
+  id: uid('i'), organization_id: ORG, channel: 'email', submitted_by: null, review_note: null, alias_id: null, parent_id: null, rfc_message_id: null,
+  sender_email: null, sender_name: null, subject: '', body_excerpt: null, received_at: iso(day(-1)), attachments: [], status: 'received', reason: null,
+  error_message: null, method: 'ai', confidence: 'high', warnings: [], proposal: null, extraction_meta: null, supplier_id: null, supplier_match: null,
+  supplier_created: false, purchase_invoice_id: null, duplicate_of_purchase_invoice_id: null, duplicate_of_inbox_id: null, auto_booked: false, attempts: 1,
+  processed_at: iso(day(-1)), handled_by: null, handled_at: null, purged_at: null, created_at: iso(day(-1)), updated_at: iso(day(-1)), ...over,
+});
+const photo = (name) => [{ name, mime_type: 'image/jpeg', size_bytes: 412000, storage_key: `${ORG}/purchase_invoice_inbox/x/${name}`, sha256: 'abc', kind: 'document' }];
+export const purchaseInvoiceInbox = [
+  inboxRow({ channel: 'declaration', submitted_by: USER2, sender_email: 'sanne@studiolopik.nl', subject: 'Declaratie: bon.jpg', received_at: iso(day(-2)), status: 'ready', supplier_id: suppliers[1].id, supplier_match: 'name', purchase_invoice_id: purchaseInvoices[1].id, proposal: inboxProposal('Q-Park Utrecht', 1500, dkey(day(-2))), attachments: photo('bon-parkeren.jpg') }),
+  inboxRow({ channel: 'receipt', submitted_by: USER, sender_email: 'gerjan@studiolopik.nl', subject: 'Bon: bon.jpg', received_at: iso(day(0)), status: 'needs_review', reason: 'ai_disabled', method: null, confidence: null, attachments: photo('bon-lunch.jpg') }),
+];
+// Mijn declaraties (list_my_declarations), als teamlid zonder Financiën.
+export const declarations = [
+  { id: uid('d'), status: 'processing', submitted_at: iso(day(0)), store_name: null, receipt_date: null, total_cents: null, currency: 'EUR', file_name: 'bon-2026-11-17-0912.jpg', review_note: null, decided_at: null },
+  { id: uid('d'), status: 'submitted', submitted_at: iso(day(-2)), store_name: 'Q-Park Utrecht Centrum', receipt_date: dkey(day(-2)), total_cents: 1500, currency: 'EUR', file_name: 'bon-parkeren.jpg', review_note: null, decided_at: null },
+  { id: uid('d'), status: 'approved', submitted_at: iso(day(-8)), store_name: 'Shell Lopikerkapel', receipt_date: dkey(day(-8)), total_cents: 7289, currency: 'EUR', file_name: 'tankbon.jpg', review_note: null, decided_at: iso(day(-7)) },
+  { id: uid('d'), status: 'rejected', submitted_at: iso(day(-12)), store_name: 'Albert Heijn', receipt_date: dkey(day(-12)), total_cents: 4315, currency: 'EUR', file_name: 'boodschappen.jpg', review_note: 'Dit zijn privé-boodschappen; die declareren we niet.', decided_at: iso(day(-11)) },
+];
+
 // ── Campagnes ──────────────────────────────────────────────────────────────
 // Eén verzonden campagne met cijfers en één concept zonder. Zo meet de test
 // zowel de kaart mét resultaatchips als de variant waar die regel wegvalt.
@@ -612,7 +649,7 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
-  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], prepaid_expenses: [], prepaid_expense_releases: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], ai_reports: aiReports, ai_report_messages: aiReportMessages, ai_report_versions: aiReportVersions, planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: auditLogs, contracts: [],
+  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: purchaseInvoices, purchase_invoice_inbox: purchaseInvoiceInbox, fixed_assets: [], asset_depreciations: [], prepaid_expenses: [], prepaid_expense_releases: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], ai_reports: aiReports, ai_report_messages: aiReportMessages, ai_report_versions: aiReportVersions, planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: auditLogs, contracts: [],
   client_email_threads: clientEmailThreads, client_email_folders: clientEmailFolders, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
   inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias], organization_email_domains: sendingDomains,
   // Het eerste ticket heeft een klantreactie die nog niet gelezen is (view

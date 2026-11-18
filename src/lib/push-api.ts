@@ -22,7 +22,8 @@ export type PushEventType =
   | 'mcp_proposal'
   | 'purchase_invoice_inbox'
   | 'file_transfer_downloaded'
-  | 'agent_run';
+  | 'agent_run'
+  | 'declaration';
 
 export const PUSH_EVENTS: Array<{ type: PushEventType; label: string; hint: string }> = [
   { type: 'ticket_new', label: 'Nieuw ticket', hint: 'Een klant maakt een ticket aan via het portaal.' },
@@ -36,6 +37,7 @@ export const PUSH_EVENTS: Array<{ type: PushEventType; label: string; hint: stri
   { type: 'purchase_invoice_inbox', label: 'Inkoopfactuur per e-mail', hint: 'Een factuur op je factuur-doorstuuradres is klaargezet, geboekt, of heeft je aandacht nodig.' },
   { type: 'file_transfer_downloaded', label: 'Verstuurde bestanden gedownload', hint: 'Een ontvanger downloadt voor het eerst bestanden die jij verstuurde.' },
   { type: 'agent_run', label: 'Je agents', hint: 'Een agent van jou heeft iets klaargezet of zijn overzicht klaar. Alleen voor je eigen agents waarbij je pushmeldingen aanzette.' },
+  { type: 'declaration', label: 'Declaraties', hint: 'Jouw declaratie is goedgekeurd of afgewezen. Beheer je Financiën, dan ook: een teamlid diende een declaratie in.' },
 ];
 
 /** Draait deze browser Web Push? (nodig: service worker + PushManager + Notification) */

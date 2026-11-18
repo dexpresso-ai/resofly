@@ -1,8 +1,8 @@
-import { Calendar, FolderKanban, FolderOpen, LayoutDashboard, Receipt, Sunrise, Users, Wallet } from 'lucide-react';
+import { Calendar, FolderKanban, FolderOpen, LayoutDashboard, Receipt, ReceiptText, Sunrise, Users, Wallet } from 'lucide-react';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 import { PAGE_ICON } from './TabBar';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 
 // Welke pagina's onder welke onderbalk-knop vallen (voor de actief-markering).
 // Zelfde groepering als de zijbalk, zodat bv. de Grootboek-pagina "Financiën" oplicht.
@@ -44,9 +44,15 @@ export function BottomNav({ page, onNavigate, permissions = FULL_PERMISSIONS, do
    *  vijf van de werkruimte. Een Dashboard- of Klantenknop hoort daar niet. */
   appItems?: ReadonlyArray<{ page: string; label: string }>;
 }) {
+  // Wie Financiën niet ziet maar wel declareert, krijgt op die plek Declaraties:
+  // de telefoon is precies waar je een bon fotografeert (2026-11-18).
+  const declarationsInstead = !permissions.canOpenPage('invoices') && permissions.canOpenPage('declarations');
+  const base = dock ? DOCK : ITEMS;
   const list = appItems
     ? appItems.map(item => ({ key: item.page as Page, Icon: PAGE_ICON[item.page] ?? LayoutDashboard, label: item.label, group: [item.page as Page] }))
-    : dock ? DOCK : ITEMS;
+    : declarationsInstead
+      ? base.map(item => (item.key === 'invoices' ? { key: 'declarations' as Page, Icon: ReceiptText, label: 'Declaraties', group: ['declarations' as Page] } : item))
+      : base;
   const activeKey = list.find(item => item.group.includes(page))?.key ?? null;
   // Modules die voor dit teamlid dichtstaan, verdwijnen ook uit de duimbalk.
   const items = list.filter(item => permissions.canOpenPage(item.key));

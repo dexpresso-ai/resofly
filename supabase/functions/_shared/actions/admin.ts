@@ -161,6 +161,7 @@ const NOTIFICATION_EVENTS = [
   { type: 'invoice_paid', label: 'Factuur betaald' },
   { type: 'file_transfer_downloaded', label: 'Verstuurde bestanden gedownload' },
   { type: 'agent_run', label: 'Je agents' },
+  { type: 'declaration', label: 'Declaraties' },
 ] as const;
 const NOTIFICATION_TYPES = NOTIFICATION_EVENTS.map((e) => e.type) as unknown as readonly string[];
 

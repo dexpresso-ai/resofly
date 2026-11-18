@@ -68,6 +68,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // geen kolommen); geen tabellen of kolommen.
 // 20261118100000 (btw-tijdvak wisselen) vervangt drie btw-functies; geen
 // tabellen of kolommen.
+// 20261118120000 (bonnen en declaraties) zet channel, submitted_by en
+// review_note op purchase_invoice_inbox. Die gaan mee met de inbox: waar een
+// bon vandaan kwam, wie hem instuurde en waarom een declaratie is afgewezen,
+// hoort bij de administratie. Geen geheim, geen nieuwe opslagsleutel (de foto
+// staat al in attachments).
 // 20261118130000 (vof: vennoten en privé) zet user_id op partnership_partners:
 // het teamlid dat de vennoot is. Gaat gewoon mee met de vennoten, net als
 // clients.account_lead_user_id: geen geheim en geen opslagsleutel.
