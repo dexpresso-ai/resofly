@@ -74,7 +74,7 @@ export interface StandaloneApp extends InstallableApp {
 }
 
 /** Zelfde lijst als financePages in Sidebar.tsx en FINANCE_PAGES in ZenitNav.tsx. */
-const FINANCE_PAGES = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'prepaid', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'] as const;
+const FINANCE_PAGES = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'prepaid', 'pnl', 'forecast', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'] as const;
 
 export const STANDALONE_APPS: readonly StandaloneApp[] = [
   {

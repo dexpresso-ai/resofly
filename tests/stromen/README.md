@@ -135,6 +135,21 @@ En `vooruitbetaald`: vooruitbetaalde kosten, een betaling die over de maanden na
 
 Zie `docs/changelog/CHANGELOG_VOORUITBETAALDE_KOSTEN_2026-11-11.md`.
 
+En `prognose`: Financiën → Prognose en wat de AI ermee mag (migratie 20261117120000). Getoetst:
+- `forecast_history`: per maand de nieuwe projecten, de omzet met en zonder project (min een
+  creditnota), de inkoop en de offertes; concepten, geannuleerde facturen en een andere organisatie
+  tellen niet, en de boekhouder krijgt geen aantallen projecten;
+- bewaren zoals het scherm: aanmaken, wijzigen met de versie als controle, de geschiedenis die de
+  database zelf schrijft, en wie dat niet mag (lezer, kijker, boekhouder, zonder Financiën, een andere
+  organisatie);
+- de AI via de echte functie `api` (dezelfde registry als Gerrie en de MCP): `forecast.list` met
+  dezelfde winst als het scherm, `forecast.update` als kaart met de wijziging en de winst ervoor en
+  erna, goedkeuren met de PATCH van de uitvoerder (het scherm komt dan op de winst van de kaart), een
+  oud voorstel dat niets meer verandert, onzin met een reden, en een prognose van een andere
+  organisatie die voor de AI niet bestaat.
+
+Zie `docs/changelog/CHANGELOG_PROGNOSE_2026-11-18.md`.
+
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in
@@ -220,6 +235,12 @@ vastleggen (28 × € 27,78 en 8 × € 27,77), de bevestigingsvraag, de drie fu
 en boeken", het venster daarna (kerncijfers, de nieuwe balansrekening, het schema), de rij in de
 lijst, de twee boekstukken in het Grootboek, Tegenboeken van de termijn (die staat daarna weer klaar),
 de knop Vooruitbetaald in het journaal, en een lezer die alles ziet maar niets kan boeken.
+
+En `prognose`: een aanname die meteen doorrekent, "Bewaren als prognose" (een POST) en daarna
+Bewaren met de versie als controle (een PATCH), de geschiedenis met wat er veranderde, een
+goedgekeurd voorstel van Gerrie dat er na verversen staat zonder niet-bewaarde wijziging, versie 1
+terugzetten (wordt versie 4), "Pas aan met Gerrie" dat de chat opent met de vraag over deze
+prognose, en een lezer die alles ziet maar niets kan wijzigen of vragen.
 
 Elke stap controleert ook: geen JavaScript-fout, geen foutmelding of "laden…" die blijft staan,
 en geen mislukte aanroep die de stap niet verwachtte. Mislukt een stap, dan komt er een

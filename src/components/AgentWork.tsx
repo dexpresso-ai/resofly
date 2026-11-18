@@ -103,6 +103,8 @@ const TOOL_ICONS: Array<[RegExp, LucideIcon]> = [
   [/email|mail/, Mails],
   [/campaign|marketing/, Megaphone],
   [/report|summary|stats/, TrendingUp],
+  // De prognose (forecast.list, .update): vooruit kijken, hetzelfde icoon als de trend.
+  [/forecast/, TrendingUp],
   [/^action:/, Zap],
 ];
 export function toolIcon(name: string): LucideIcon {

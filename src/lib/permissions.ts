@@ -101,6 +101,8 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   assets: 'finance',
   prepaid: 'finance',
   pnl: 'finance',
+  // De prognose toont omzet, kosten en winst (migratie 20261117120000).
+  forecast: 'finance',
   'vat-returns': 'finance',
   'corporate-tax': 'finance',
   dga: 'finance',

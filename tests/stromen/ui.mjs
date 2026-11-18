@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij] [prognose]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -49,7 +49,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij', 'prognose'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -3423,6 +3423,125 @@ async function scenarioGalerij() {
   });
 }
 
+// ── Prognose ────────────────────────────────────────────────────────────────
+
+/** De maand na deze, als JJJJ-MM (Europe/Amsterdam). */
+function volgendeMaand() {
+  const [j, m] = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Amsterdam' }).format(new Date()).split('-').map(Number);
+  return m === 12 ? `${j + 1}-01` : `${j}-${String(m + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Waarom in de browser: de database en de handelingen van de AI toetst run.mjs
+ * (scenario prognose). Hier gaat het om de pagina zoals de vraag hem bedoelde:
+ * een prognose maken en aanpassen, met Gerrie ernaast. Rekent een aanname
+ * meteen door, bewaart de knop precies dat (met de versie als controle), staat
+ * elke stand in de geschiedenis, en neemt de pagina een goedgekeurd voorstel
+ * van Gerrie over na verversen?
+ */
+async function scenarioPrognose() {
+  groep('UI: prognose — maken, aanpassen, een voorstel van Gerrie, terugzetten');
+  const { w } = t;
+  const winst = async (scherm) => tekst(await scherm.locator('.fc-kpi').filter({ hasText: 'Winst' }).locator('.sc-val').innerText());
+
+  const basis = await uiStap('een aanname rekent meteen door, en "Bewaren als prognose" legt hem vast', async () => {
+    const lid = await medewerker();
+    await naarFinancien(lid, 'Prognose');
+    const scherm = inhoud(lid.page);
+    await scherm.locator('.fc-kpi').first().waitFor({ timeout: 10000 });
+    verwacht(tekst(await scherm.locator('.fc-scenarios').innerText()).includes('Automatisch'), 'zonder bewaarde prognose hoort de automatische er te staan');
+    const voor = await winst(scherm);
+    await scherm.locator('.fc-field[data-field="other_revenue"] input').fill('2500');
+    await wachtTot(() => scherm.locator('.fc-dirty').isVisible(), { melding: 'geen balk "Nog niet bewaard"' });
+    const balk = tekst(await scherm.locator('.fc-dirty').innerText());
+    verwacht(balk.includes('Overige omzet per maand: automatisch → € 2.500'), `de balk: ${balk}`);
+    verwacht((await winst(scherm)) !== voor, 'de winst rekende niet door');
+    const sinds = server.verkeer.length;
+    await scherm.getByRole('button', { name: 'Bewaren als prognose' }).click();
+    await rustig(lid);
+    verwachtAanroep(sinds, { soort: 'rest', tabel: 'forecasts', methode: 'POST' }, 'Bewaren schreef de prognose niet weg');
+    const rij = sqlRij(`select id, name, version, assumptions from public.forecasts where organization_id = ${q(w.orgId)}`);
+    gelijk([rij?.name, rij?.version, Number(rij?.assumptions?.other_revenue)], ['Basis', 1, 2500], 'de prognose in de database');
+    await wachtTot(async () => tekst(await scherm.locator('.fc-foot').innerText()).includes('Versie 1'), { melding: 'onder de pagina staat geen versie 1' });
+    verwacht(!(await scherm.locator('.fc-dirty .fc-dirty-acts').isVisible()), 'na bewaren staat er nog een niet-bewaarde wijziging');
+    return rij;
+  });
+
+  await uiStap('nog een wijziging: versie 2, en de geschiedenis zegt wat er veranderde', async () => {
+    const id = basis?.id;
+    verwacht(id, 'overgeslagen: de prognose ontbreekt');
+    const scherm = inhoud(t.lid.page);
+    await scherm.locator('.fc-field[data-field="growth_pct"] input').fill('12');
+    await wachtTot(() => scherm.locator('.fc-dirty .fc-dirty-acts').isVisible(), { melding: 'geen balk "Nog niet bewaard"' });
+    const sinds = server.verkeer.length;
+    await scherm.locator('.fc-dirty').getByRole('button', { name: 'Bewaren', exact: true }).click();
+    await rustig(t.lid);
+    verwachtAanroep(sinds, { soort: 'rest', tabel: 'forecasts', methode: 'PATCH' }, 'Bewaren wijzigde de prognose niet');
+    gelijk(sqlRij(`select version from public.forecasts where id = ${q(id)}`)?.version, 2, 'versie');
+    gelijk(sqlRij(`select change_note from public.forecast_versions where forecast_id = ${q(id)} and version = 2`)?.change_note, 'Groei per jaar: 0% → 12%', 'de geschiedenis');
+  });
+
+  await uiStap('een goedgekeurd voorstel van Gerrie staat er na verversen, zonder niet-bewaarde wijziging', async () => {
+    const id = basis?.id;
+    verwacht(id, 'overgeslagen: de prognose ontbreekt');
+    // Wat de uitvoerder na akkoord in de chat doet (src/lib/actions/forecast.ts):
+    // dezelfde PATCH als updateForecast(), met de versie van de kaart.
+    const nu = sqlRij(`select assumptions from public.forecasts where id = ${q(id)}`).assumptions;
+    const post = { id: 'post-1', label: 'Nieuwe medewerker', kind: 'cost', amount: 3500, from: volgendeMaand(), to: null };
+    const res = await rest(`forecasts?id=eq.${id}&organization_id=eq.${w.orgId}&version=eq.2&select=version`, {
+      method: 'PATCH', token: w.medewerker.token, prefer: 'return=representation',
+      body: { assumptions: { ...nu, items: [post] }, change_note: 'AI-voorstel: Post erbij: Nieuwe medewerker' },
+    });
+    gelijk(res.json?.[0]?.version, 3, 'het voorstel uitvoeren');
+    await ververs(t.lid);
+    const scherm = inhoud(t.lid.page);
+    await wachtTot(async () => tekst(await scherm.locator('.fc-foot').innerText()).includes('Versie 3'), { melding: 'de pagina toont versie 3 niet' });
+    gelijk(await scherm.locator('.fc-item input[aria-label="Naam van de post"]').first().inputValue(), 'Nieuwe medewerker', 'de post in de aannames');
+    verwacht(!(await scherm.locator('.fc-dirty .fc-dirty-acts').isVisible()), 'het voorstel staat er als niet-bewaarde wijziging');
+  });
+
+  await uiStap('de geschiedenis: versie 1 terugzetten wordt versie 4', async () => {
+    const id = basis?.id;
+    verwacht(id, 'overgeslagen: de prognose ontbreekt');
+    const page = t.lid.page;
+    await inhoud(page).locator('.fc-foot').getByRole('button', { name: 'Geschiedenis' }).click();
+    const m = modal(page, 'Geschiedenis van Basis');
+    await m.waitFor({ timeout: 10000 });
+    await wachtTot(async () => (await m.locator('.fc-versions li').count()) === 3, { melding: 'het venster toont geen drie versies' });
+    verwacht(tekst(await m.locator('.fc-versions li').first().innerText()).includes('AI-voorstel: Post erbij: Nieuwe medewerker'), 'de nieuwste versie zegt niet dat hij van Gerrie kwam');
+    const sinds = server.verkeer.length;
+    await m.locator('.fc-versions li').filter({ hasText: 'Versie 1' }).getByRole('button', { name: 'Terugzetten' }).click();
+    await m.waitFor({ state: 'detached', timeout: 10000 });
+    await rustig(t.lid);
+    verwachtAanroep(sinds, { soort: 'rest', tabel: 'forecasts', methode: 'PATCH' }, 'terugzetten');
+    const rij = sqlRij(`select version, assumptions from public.forecasts where id = ${q(id)}`);
+    gelijk([rij?.version, Number(rij?.assumptions?.other_revenue), Number(rij?.assumptions?.growth_pct ?? 0), (rij?.assumptions?.items ?? []).length], [4, 2500, 0, 0], 'na terugzetten');
+    gelijk(sqlRij(`select change_note from public.forecast_versions where forecast_id = ${q(id)} and version = 4`)?.change_note, 'Versie 1 teruggezet', 'de geschiedenis');
+  });
+
+  await uiStap('"Pas aan met Gerrie" opent de chat met de vraag over deze prognose', async () => {
+    const page = t.lid.page;
+    await inhoud(page).locator('.fc-ask-suggest button').first().click();
+    const paneel = page.locator('.gerrie-panel');
+    await paneel.waitFor({ timeout: 10000 });
+    await wachtTot(async () => (await paneel.locator('.gerrie-msg.user .gerrie-bubble').allInnerTexts()).some((regel) => regel.includes('Pas de prognose "Basis" aan: Reken met 10% groei per jaar')),
+      { melding: 'de vraag staat niet in de chat' });
+    // Het antwoord van Gerrie is hier niet het onderwerp (dat toetst run.mjs via de registry).
+    await page.keyboard.press('Escape');
+  }, { toegestaan: [{ soort: 'functie', functie: 'gerrie-agent' }], foutmelding: /./ });
+
+  await uiStap('de lezer ziet de prognose, maar kan niets wijzigen of Gerrie vragen', async () => {
+    const lezer = await openWerkruimte(w.lezer, 'lezer', w.orgId, { tijdelijk: true });
+    await naarFinancien(lezer, 'Prognose');
+    const scherm = inhoud(lezer.page);
+    await scherm.locator('.fc-kpi').first().waitFor({ timeout: 10000 });
+    verwacht(tekst(await scherm.locator('.fc-scenarios').innerText()).includes('Basis'), 'de lezer ziet de prognose niet');
+    verwacht(await scherm.locator('.fc-field[data-field="growth_pct"] input').isDisabled(), 'de lezer kan een aanname wijzigen');
+    gelijk(await scherm.locator('.fc-ask').count(), 0, 'de lezer kan Gerrie vragen de prognose te wijzigen');
+    gelijk(await scherm.getByRole('button', { name: /Nieuwe prognose|Verwijderen/ }).count(), 0, 'knoppen om te maken of te verwijderen');
+  });
+}
+
 // ── Draaien ─────────────────────────────────────────────────────────────────
 
 let fouten = 1;
@@ -3438,7 +3557,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij, prognose: scenarioPrognose };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

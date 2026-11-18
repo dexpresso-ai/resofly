@@ -3669,6 +3669,38 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
+/**
+ * Een prognose (Financiën → Prognose, migratie 20261117120000). De aannames
+ * staan als jsonb en worden bij het lezen hersteld (normalizeAssumptions in
+ * src/lib/forecast.ts); daarom hier `unknown`.
+ */
+export interface Forecast extends OrgScopedRow {
+  name: string;
+  notes: string | null;
+  assumptions: unknown;
+  /** Telt op bij elke wijziging (de trigger); de app stuurt hem alleen mee als controle. */
+  version: number;
+  /** Wat de laatste wijziging deed, in gewone woorden. */
+  change_note: string | null;
+  updated_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Eén stand van een prognose; de trigger forecasts_snapshot schrijft ze. */
+export interface ForecastVersion {
+  id: UUID;
+  organization_id: UUID;
+  forecast_id: UUID;
+  version: number;
+  name: string;
+  notes: string | null;
+  assumptions: unknown;
+  change_note: string | null;
+  created_by: UUID | null;
+  created_at: string;
+}
+
 export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; prepaidExpenses: PrepaidExpense[]; prepaidExpenseReleases: PrepaidExpenseRelease[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankAllocations: BankAllocation[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null;
   /** Tellingen voor het dashboard, zonder de bank en de boekhouding te laden (src/lib/dataGroups.ts). */
   bankTransactionsToReconcile: number; vatReturnsToFile: number; }

@@ -54,6 +54,8 @@ const PAGES = {
   project: { page: 'project', projectId: seed.projects[0].id },
   communication: 'communication', quotes: 'quotes', invoices: 'invoices',
   ledger: 'ledger', bank: 'bank', 'vat-returns': 'vat-returns', assets: 'assets', prepaid: 'prepaid', pnl: 'pnl',
+  // De prognose (2026-11-17) laadt zijn eigen cijfers (forecast_history) en geen groep.
+  forecast: 'forecast',
 };
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));
