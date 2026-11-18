@@ -275,7 +275,8 @@ Op staging op 18 november om 10:02 (`8eab2a4`, na de vof-administratie):
   geschiedenis met wie en wat. In het logboek zou ze `audit_entity_module` en
   `AUDIT_ENTITY_MODULE` nodig hebben.
 - **Een seizoenspatroon uit vorige jaren**: nu zet je een rustige maand met de hand
-  (of laat je Gerrie dat doen).
+  (of laat je Gerrie dat doen). *Later op 18 november gebouwd: zie
+  `CHANGELOG_PROGNOSE_SEIZOEN_CASHFLOW_2026-11-18.md`.*
 - **Een cashflowprognose** (wanneer er betaald wordt, de btw): dit is een prognose
-  van het resultaat.
+  van het resultaat. *Later op 18 november gebouwd: zie dezelfde changelog.*
 - **De prognose op het dashboard**.
