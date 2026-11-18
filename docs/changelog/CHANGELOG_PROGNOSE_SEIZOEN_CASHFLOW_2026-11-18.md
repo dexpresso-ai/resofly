@@ -161,7 +161,40 @@ Dezelfde vier handelingen, uitgebreid:
 
 ## Getest
 
-De volledige controle loopt nog; de uitslag komt hier.
+- `npm run typecheck`: schoon.
+- `npm test`: 2056 tests, 0 fout. Nieuw is `src/lib/forecastSeasonCash.test.ts` (20
+  tests):
+  - een bekend seizoenspatroon komt er precies uit, ook bij 30% groei per jaar;
+  - één uitschieter van twintig keer gewoon, en twee keer per jaar factureren;
+  - te weinig historie zegt waarom, en rekent zonder seizoen;
+  - een cashflow die met de hand is nagerekend, maand voor maand;
+  - btw per maand en per kwartaal, een afgesloten en een al betaalde aangifte, een
+    betaling aan de Belastingdienst op de bank, de KOR, de betaaltermijn, geld erbij en
+    eraf, de ondergrens en een onbekend banksaldo.
+
+  In `actionSearch.test.ts` vinden acht nieuwe vragen ("kom ik rood te staan",
+  "lening", "drukke en rustige maanden", …) de juiste handeling.
+- Database: `tests/database/prognose_cashflow.sql` (nieuw) controleert elk veld van
+  `forecast_cash_position`. De organisatie heeft drie bankrekeningen (met afschrift,
+  alleen in de boekhouding, en een die zijn grootboekrekening deelt), een kas,
+  openstaande en betaalde facturen en inkoop, een creditnota, een afschrijving en een
+  afgesloten btw-aangifte. Ook de rechten: een lezer wel, iemand zonder Financiën en
+  een andere organisatie niet, anon helemaal niet. `npm run test:database`: alle drie
+  de bestanden slagen. De keten vanaf nul (`supabase db start`) en de migratie twee
+  keer achter elkaar: goed.
+- `deno check` op de lijst uit `frontend-checks.yml`: schoon.
+- Stromentest `prognose`: 26 stappen, 0 fout. Zes zijn nieuw: seizoen en cashflow via
+  de echte handelingen en de echte database.
+- UI-test `prognose` in Chromium: 9 stappen, 0 fout. Nieuw: de cashflow zonder
+  bankrekening, zelf een banksaldo invullen en bewaren.
+- `npm run test:loading`, `npm run test:inrichten` en `npm run test:terugknop` (15 van
+  15): goed.
+- `npm run test:mobile -- --theme=both`: 135 pagina's, 812 metingen, 0 problemen. Twee
+  pagina's zijn nieuw: de cashflow, en de cashflow met een wijziging die nog niet
+  bewaard is. Na de laatste tekstwijziging nog eens de zes prognosepagina's: 36
+  metingen, 0 problemen.
+- De controles uit de rooktest van staging, lokaal: het boekhouder-hek is dicht, anon
+  heeft geen rechten in public en komt het schema niet in.
 
 ## Niet in deze stap
 
