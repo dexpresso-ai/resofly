@@ -479,6 +479,16 @@
 :root:is([data-look="zenit"],[data-look="baken"]) .zpop-item svg{flex:none;color:var(--ink-3)}
 :root:is([data-look="zenit"],[data-look="baken"]) .zpop-item:hover,:root:is([data-look="zenit"],[data-look="baken"]) .zpop-item:focus-visible{background:var(--surface-2);color:var(--ink);outline:none}
 :root:is([data-look="zenit"],[data-look="baken"]) .zpop-item.danger,:root:is([data-look="zenit"],[data-look="baken"]) .zpop-item.danger svg{color:var(--danger)}
+/* De instellingen in het accountmenu: per groep één regel, met eronder wat
+   erin zit (2026-11-18). De lijst hoeft niet meer te schuiven. */
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-account .zpop-list{max-height:none}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-group{min-height:44px;padding-block:6px}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-group-t{display:flex;flex-direction:column;gap:3px;min-width:0}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-group-t>span{font-weight:500}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-group-t small{font-size:11px;line-height:1.3;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-group.is-current{color:var(--ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-group.is-current>svg{color:var(--accent-ink)}
+:root:is([data-look="zenit"],[data-look="baken"]) .zpop-group.is-current .zpop-group-t>span{font-weight:600}
 
 /* ── 7 · Telefoon: één uitschuifmenu met rail en paneel ─────────────────── */
 @media (max-width:760px){
