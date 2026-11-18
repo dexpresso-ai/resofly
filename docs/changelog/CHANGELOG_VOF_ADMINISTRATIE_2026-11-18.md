@@ -208,6 +208,53 @@ bonnen):**
     beginbalans van een vof, Inkoopfacturen van een vof met het venster Privé
     betaald, en een declaratie van een werknemer.
 
+## Uitrol
+
+**Staging: uitgerold op 18 november 2026** (merge `4f213d9`, *Deploy Supabase
+(staging)* run 242):
+
+- de migratie `20261118130000_vof_vennoten_en_prive` is toegepast;
+- alle 40 edge functions zijn uitgerold, met de nieuwe en aangepaste
+  handelingen van Gerrie, MCP en de API;
+- de rooktest is geslaagd (Postgres 17.11). Daarbij ook "anon heeft geen
+  rechten in public" en het boekhouder-hek: de nieuwe functies staan dicht
+  voor de publieke sleutel;
+- Cloudflare Pages bouwt de app bij de push naar `staging`. Dat is van hieruit
+  niet te zien.
+
+Wat de migratie op staging met bestaande gegevens doet:
+
+- **Startmaand:** een eenmanszaak, vof, maatschap of cv met een andere
+  startmaand dan januari staat nu op januari. Bestaande boekjaren blijven
+  zoals ze zijn;
+- **Bankregels:** een bankregel met een btw-code op een privé- of
+  kapitaalrekening is die btw-code kwijt. Wat al geboekt is, blijft staan;
+- **0550 en 0560:** bij een organisatie met vennoten heten ze "(geen
+  vennoot)", als ze nog hun standaardnaam hadden;
+- **Teamleden:** vennoten hebben nog geen teamlid. Koppel dat bij Vennoten,
+  dan telt het urencriterium;
+- **Verder niets:** boekingen blijven staan. De functies werken voor nieuwe
+  boekingen en overzichten.
+
+De staging-database zelf is niet ingezien: Supabase is in deze sessie niet als
+koppeling verbonden. De controles zijn de uitrol zelf (de CLI breekt af bij een
+fout in de migratie) en de rooktest. Daarnaast draaide dezelfde migratie
+lokaal op een lege database, twee keer.
+
+*Frontend checks* van deze uitrol (run 255):
+
+- de keten vanaf nul op een lege database is geslaagd;
+- de nieuwe stap **Databasetests** draaide er voor het eerst mee. Beide
+  bestanden zijn geslaagd;
+- `deno check` op de volledige lijst van edge functions is schoon, ook met
+  esm.sh. Dat kon lokaal niet;
+- typecheck en unit tests zijn geslaagd;
+- de schermtests (mobiel, laden, inrichten en terugknop) liepen nog toen dit
+  werd geschreven.
+
+Voor productie: alle migraties in volgorde, ook deze. Ze zijn veilig om opnieuw
+te draaien.
+
 ## Bewust open
 
 | Punt | Waarom nog niet |
