@@ -233,6 +233,31 @@ Nu geeft `forecast_cash_position` per betaling mee of hij in het saldo zit
 De cashflow slaat de btw alleen nog over bij zo'n betaling, of als je je banksaldo
 zelf invulde: dat saldo is van nu, met alles wat al betaald is.
 
+## Uitgerold
+
+Op staging op 18 november, in twee keer (tijden in UTC):
+
+- **Seizoen en cashflow** om 12:41 (`a3fc133`):
+  - *Deploy Supabase (staging)* run 245: de migratie
+    `20261118171500_prognose_seizoen_cashflow.sql` gepusht, alle edge functions
+    uitgerold, en de rooktest geslaagd. Daarbij ook "boekhouder-hek: elke
+    organisatietabel is afgeschermd", anon zonder rechten in `public` en zonder
+    toegang tot het schema.
+  - *Frontend checks* run 261 op die stand: de keten vanaf nul met de
+    databasetests, deno check, typecheck, unittests, de volledige mobiele
+    lay-outtest (licht en donker), laden per module, inrichtingsstappen en
+    terugknop (15 van 15). Alles groen.
+- **Btw-betaling in het saldo** om 12:53 (`137df64`):
+  - *Deploy Supabase (staging)* run 246: de migratie
+    `20261118180000_prognose_btw_betaling_in_saldo.sql` gepusht, alle edge
+    functions uitgerold, de rooktest geslaagd.
+  - *Frontend checks* run 262: dezelfde stappen, met de nieuwe databasecontroles in
+    de keten vanaf nul. Alles groen.
+
+De rooktest roept `forecast_cash_position` zelf niet aan, en op de gegevens van
+staging is de functie niet los gedraaid. De databasetest en de stromentest doen dat
+op een verse database met dezelfde migraties.
+
 ## Niet in deze stap
 
 - **Een cashflow voor een prognose die later begint**: de cashflow rekent vanaf
