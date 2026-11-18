@@ -198,7 +198,18 @@ factuur en journaalpost (7,9 s voor 300 facturen); nu eerst de geboekte facturen
   via de REST-laag (inlezen, de reden voor de lezer, met de hand boeken, de
   factuur na de betaling, terugdraaien, de instelling per rekening en wie die
   mag wijzigen, een andere organisatie). 19 stappen, 0 fout.
-- **De hele stroomtest**: zie de uitslag in de commit.
+- **De hele stroomtest** (alle scenario's): 1.230 stappen, 0 fout. Een eerdere
+  ronde, terwijl tegelijk de schermtest draaide, gaf twee fouten buiten de bank
+  (een API-sleutel en een agendalink, allebei een 500); los herhaald en in deze
+  ronde zonder belasting ernaast slaagden ze.
+- **Browser** (`tests/stromen/ui.mjs bank`, 10 stappen, 0 fout), met een nieuwe
+  stap: een betaling die bij het inlezen meteen geboekt is, met het label
+  *automatisch* en de reden; automatisch boeken uit- en aanzetten in het
+  bewerkvenster van de rekening; daarna "Opnieuw matchen" met de melding.
+- `npm run test:mobile -- --theme=both`: 812 pagina's gemeten, één fout
+  (`dark/phone/bon-concept`, het bonvenster, niet aangeraakt); los herhaald:
+  de bonpagina's 18 van 18 goed. Bank en Inkoopfacturen: 12 van 12.
+- `npm run test:loading`: alle controles geslaagd.
 - `npm test`: 2.063 tests, waaronder `bankMatch.test.ts` (nieuw) en drie nieuwe
   in `bankAllocation.test.ts` (het voorstel over meer facturen).
 - `npm run typecheck` en `deno check` op alle functies uit de CI (met een
