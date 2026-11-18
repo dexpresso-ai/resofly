@@ -10,6 +10,7 @@ import { TICKETS_ACTIONS } from './tickets.ts';
 import { MARKETING_ACTIONS } from './marketing.ts';
 import { ADMIN_ACTIONS } from './admin.ts';
 import { INSIGHT_ACTIONS } from './insight.ts';
+import { FORECAST_ACTIONS } from './forecast.ts';
 import { FILES_ACTIONS } from './files.ts';
 import { CONTENT_ACTIONS } from './content.ts';
 import { WORK_ACTIONS } from './work.ts';
@@ -37,6 +38,7 @@ export const ACTIONS: ActionDef[] = [
   ...MARKETING_ACTIONS,
   ...ADMIN_ACTIONS,
   ...INSIGHT_ACTIONS,
+  ...FORECAST_ACTIONS,
   ...FILES_ACTIONS,
   ...CONTENT_ACTIONS,
   ...WORK_ACTIONS,
