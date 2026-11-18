@@ -9,12 +9,13 @@ import { askGerrie } from '../components/GerrieChat';
 import { formatISODate } from '../lib/dates';
 import { memberShortName } from '../lib/members';
 import { NotMigratedError } from '../lib/postgrestErrors';
-import { createForecast, deleteForecast, loadForecastHistory, selectForecastVersions, selectForecasts, updateForecast } from '../lib/repository';
+import { createForecast, deleteForecast, loadForecastCashPosition, loadForecastHistory, selectForecastVersions, selectForecasts, updateForecast } from '../lib/repository';
 import {
   COST_SOURCE_TEXT, DEFAULT_ASSUMPTIONS, FORECAST_FIELDS, MAX_ITEMS, MAX_MONTH_PROJECTS, addMonths, baselineWindow, changeNote,
-  computeForecast, diffAssumptions, euroText, fieldValueText, historyRange, monthLabel, monthOfDate, monthShortName,
-  monthsBetween, normalizeAssumptions, numberText, parseForecastInputs, pctText, wholeEuroText,
-  type ForecastAssumptions, type ForecastFieldInfo, type ForecastInputs, type ForecastItem, type ForecastResult,
+  computeCashflow, computeForecast, diffAssumptions, emptyCashPosition, euroText, fieldValueText, historyRange, isCashItem, monthLabel,
+  monthOfDate, monthShortName, monthsBetween, normalizeAssumptions, numberText, parseCashPosition, parseForecastInputs, pctText, wholeEuroText,
+  type CashPosition, type CashflowResult, type ForecastAssumptions, type ForecastFieldInfo, type ForecastInputs, type ForecastItem,
+  type ForecastItemKind, type ForecastResult, type SeasonalPattern,
 } from '../lib/forecast';
 
 /**
@@ -36,6 +37,15 @@ const SUGGESTIONS = [
   'Een extra medewerker van € 3.500 per maand vanaf volgend kwartaal',
   'Maak een voorzichtig scenario met 20% minder projecten',
 ];
+
+/** Op de cashflow: wat iemand daar wil weten, als wijziging die Gerrie kan klaarzetten. */
+const CASH_SUGGESTIONS = [
+  'Een nieuwe bus van € 25.000 in maart',
+  'Een lening van € 10.000 volgende maand',
+  'Reken met het seizoenspatroon van de vorige jaren',
+];
+
+type ForecastView = 'result' | 'cash';
 
 /** Hele euro's, net als de kaart van Gerrie (wholeEuroText). */
 const money = wholeEuroText;
@@ -76,6 +86,18 @@ function editText(value: number | null): string {
   return value === null ? '' : String(value).replace('.', ',');
 }
 
+/**
+ * " Laagste saldo € 3.400 → € 900." voor de balk "Nog niet bewaard": een
+ * investering verandert de winst niet, het saldo wel. Leeg zonder cashflow,
+ * zonder bekend banksaldo of als het niet verandert.
+ */
+function lowestChange(before: CashflowResult | null, after: CashflowResult | null): string {
+  if (!before?.available || !after?.available || !before.lowest || !after.lowest || !after.effective.start_known) return '';
+  const was = wholeEuroText(before.lowest.cents);
+  const is = wholeEuroText(after.lowest.cents);
+  return was === is ? '' : ` Laagste saldo ${was} → ${is}.`;
+}
+
 function readStorage(key: string): string | null {
   try { return window.localStorage.getItem(key); } catch { return null; }
 }
@@ -113,6 +135,15 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
   const [actionError, setActionError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<null | 'new' | 'history' | 'delete'>(null);
   const [question, setQuestion] = useState('');
+  const [cash, setCash] = useState<CashPosition | null>(null);
+  const [cashError, setCashError] = useState<string | null>(null);
+  const viewKey = `resofly.forecast.view.${organizationId}`;
+  const [view, setView] = useState<ForecastView>(() => (readStorage(viewKey) === 'cash' ? 'cash' : 'result'));
+
+  function chooseView(next: ForecastView) {
+    setView(next);
+    writeStorage(viewKey, next);
+  }
 
   // Een ververs na een goedgekeurd voorstel en het bijladen voor een vroeger
   // begin kunnen tegelijk lopen: alleen het laatst gestarte antwoord telt, anders
@@ -121,13 +152,23 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
   const load = useCallback(async (extraStart: string | null = null) => {
     const seq = ++loadSeq.current;
     setLoadError(null);
+    // De cashpositie los: lukt die niet (de migratie loopt nog, een tijdelijke
+    // fout), dan staat de prognose er gewoon, alleen nog zonder cashflow.
+    const cashLoad = loadForecastCashPosition(organizationId)
+      .then(raw => ({ position: parseCashPosition(raw, today), error: null as string | null }))
+      .catch((error: unknown) => ({
+        position: emptyCashPosition(today),
+        error: error instanceof NotMigratedError ? null : errorText(error, 'Het banksaldo kon niet worden geladen.'),
+      }));
     try {
       const rows = await selectForecasts(organizationId);
       const range = historyRange(today, [...rows.map(row => normalizeAssumptions(row.assumptions).start_month), extraStart]);
-      const raw = await loadForecastHistory(organizationId, range.from, range.to);
+      const [raw, cashResult] = await Promise.all([loadForecastHistory(organizationId, range.from, range.to), cashLoad]);
       if (seq !== loadSeq.current) return;
       setForecasts(rows);
       setInputs(parseForecastInputs(raw, today));
+      setCash(cashResult.position);
+      setCashError(cashResult.error);
       setNotMigrated(false);
     } catch (error) {
       if (seq !== loadSeq.current) return;
@@ -176,6 +217,8 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
 
   const result = useMemo(() => (inputs ? computeForecast(draft, inputs, today) : null), [draft, inputs, today]);
   const savedResult = useMemo(() => (inputs ? computeForecast(savedAssumptions, inputs, today) : null), [savedAssumptions, inputs, today]);
+  const flow = useMemo(() => (result && inputs && cash ? computeCashflow(result, inputs, cash, today) : null), [result, inputs, cash, today]);
+  const savedFlow = useMemo(() => (savedResult && inputs && cash ? computeCashflow(savedResult, inputs, cash, today) : null), [savedResult, inputs, cash, today]);
   const changes = useMemo(() => {
     const list = diffAssumptions(savedAssumptions, draft);
     if (selected && draftName.trim() && draftName.trim() !== savedName) list.unshift(`Naam: ${savedName} → ${draftName.trim()}`);
@@ -241,7 +284,7 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
     const target = selected
       ? `de prognose "${selected.name}"`
       : 'mijn prognose (er is er nog geen bewaard: maak een nieuwe)';
-    askGerrie(`Pas ${target} aan: ${wish}`);
+    askGerrie(`Pas ${target} aan${view === 'cash' ? ' (ik kijk naar de cashflow)' : ''}: ${wish}`);
     setQuestion('');
   }
 
@@ -256,7 +299,7 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
 
   const head = (
     <div className="bk-head fc-head">
-      <div><PageIcon page="forecast" /><h2>Prognose</h2><p>Wat je de komende maanden verwacht aan nieuwe projecten, omzet, kosten en winst. Uitgerekend uit je cijfers van het afgelopen jaar; pas aan wat je anders verwacht.</p></div>
+      <div><PageIcon page="forecast" /><h2>Prognose</h2><p>Wat je de komende maanden verwacht aan nieuwe projecten, omzet, kosten en winst, en wat er op je rekening staat. Uitgerekend uit je eigen cijfers; pas aan wat je anders verwacht.</p></div>
       {canWrite && !notMigrated && forecasts !== null && <div className="bk-head-actions">
         <Button className="fc-new" onClick={() => setDialog('new')}><Plus size={15} aria-hidden="true" /> Nieuwe prognose</Button>
       </div>}
@@ -302,6 +345,39 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
     trend: null, goodUp: true,
   });
 
+  const cashKpis: Array<{ key: string; label: string; value: string; sub: string; danger?: boolean; spark?: number[] }> = [];
+  if (flow?.available) {
+    const e = flow.effective;
+    const knownAccounts = flow.bank.filter(account => account.balance_cents !== null).length;
+    const startSub = !e.start_known
+      ? 'onbekend: vul het in bij de aannames'
+      : !e.start_auto
+        ? 'zelf ingevuld'
+        : `${knownAccounts} ${knownAccounts === 1 ? 'rekening' : 'rekeningen'}${flow.cash_accounts_cents !== 0 ? ' en de kas' : ''}${flow.unknown_accounts.length > 0 ? ` · ${flow.unknown_accounts.length} onbekend` : ''}`;
+    cashKpis.push({ key: 'start', label: 'Saldo nu', value: e.start_known ? money(e.start_cents) : 'Onbekend', sub: startSub });
+    if (flow.lowest) {
+      const tooLow = flow.below_buffer !== null;
+      cashKpis.push({
+        key: 'lowest', label: 'Laagste saldo', value: money(flow.lowest.cents), danger: e.start_known && (flow.lowest.cents < 0 || tooLow),
+        // Zonder bekend banksaldo rekent de cashflow vanaf € 0: dan is dit
+        // geen saldo maar hoeveel er tot dan toe bij of af ging, en dat zegt het.
+        // Zonder die woorden las een negatief bedrag hier als rood staan.
+        sub: `${flow.lowest.at_start ? 'nu; daarna niet lager' : `eind ${monthLabel(flow.lowest.month, 'short')}`}${!e.start_known ? ' · vanaf € 0 gerekend' : ''}${tooLow ? ` · ${e.buffer_cents > 0 ? 'onder je ondergrens' : 'rood'} vanaf ${monthLabel(flow.below_buffer as string, 'short')}` : ''}`,
+      });
+    }
+    const last = flow.months[flow.months.length - 1];
+    cashKpis.push({
+      key: 'end', label: 'Saldo aan het eind', value: money(flow.end_cents), danger: e.start_known && flow.end_cents < 0,
+      sub: `eind ${monthLabel(last.month, 'short')} · ${flow.totals.net_cents >= 0 ? '+' : ''}${money(flow.totals.net_cents)}${!e.start_known ? ' · vanaf € 0 gerekend' : ''}`,
+      spark: flow.months.map(month => month.end_cents),
+    });
+    const next = flow.vat_payments[0];
+    cashKpis.push({
+      key: 'vat', label: 'Btw naar de Belastingdienst', value: money(flow.totals.vat_cents),
+      sub: e.kor ? 'geen btw: je hebt de KOR' : next ? `eerst ${monthLabel(next.month, 'short')}: ${money(next.cents)} (${next.period})` : 'geen betaling in deze periode',
+    });
+  }
+
   return (
     <div className="bk-page fc-page">
       {head}
@@ -320,10 +396,20 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
           {/* Op de telefoon is de kop met de knop verborgen (alleen de werktab draagt de naam). */}
           {canWrite && <button type="button" className="fc-scenario fc-scenario-new fc-new" onClick={() => setDialog('new')}><Plus size={14} aria-hidden="true" /> Nieuwe prognose</button>}
         </div>
-        <span className="fc-span">{monthLabel(result.effective.start_month, 'short')} t/m {monthLabel(result.effective.end_month, 'short')}</span>
+        {/* Resultaat of cashflow: dezelfde prognose, twee vragen. Wat verdien
+            ik, en wat staat er op mijn rekening. Op de regel van de periode:
+            als eigen regel duwde hij op de telefoon het eerste kerncijfer
+            onder de 220px die de schermtest toestaat. */}
+        <div className="fc-bar-end">
+          <div className="fc-views" role="group" aria-label="Weergave">
+            <button type="button" className={`fc-view${view === 'result' ? ' is-on' : ''}`} aria-pressed={view === 'result'} onClick={() => chooseView('result')}>Resultaat</button>
+            <button type="button" className={`fc-view${view === 'cash' ? ' is-on' : ''}`} aria-pressed={view === 'cash'} onClick={() => chooseView('cash')}>Cashflow</button>
+          </div>
+          <span className="fc-span">{monthLabel(view === 'cash' && flow?.available ? flow.months[0].month : result.effective.start_month, 'short')} t/m {monthLabel(result.effective.end_month, 'short')}</span>
+        </div>
       </div>
 
-      <div className="fc-kpis">
+      {view === 'result' && <div className="fc-kpis">
         {kpis.map(kpi => {
           const up = kpi.trend !== null && kpi.trend >= 0;
           const good = kpi.trend !== null && (up === kpi.goodUp);
@@ -337,7 +423,21 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
             </div>
           </div>;
         })}
-      </div>
+      </div>}
+
+      {view === 'cash' && (flow?.available
+        ? <div className="fc-kpis">
+          {cashKpis.map(kpi => <div key={kpi.key} className={`stat-card fc-kpi fc-kpi-cash${kpi.danger ? ' stat-card-danger' : ''}`} data-kpi={kpi.key}>
+            {kpi.spark && kpi.spark.length > 1 && <Sparkline values={kpi.spark} />}
+            <div className="sc-label">{kpi.label}</div>
+            <div className="sc-val">{kpi.value}</div>
+            <div className="sc-sub"><span>{kpi.sub}</span></div>
+          </div>)}
+        </div>
+        : <div className="fc-card fc-note" role="status">
+          <p>{cashError ? `De cashflow kon niet worden geladen: ${cashError}` : flow?.reason ?? 'De cashflow wordt geladen…'}</p>
+          {cashError && <Button onClick={() => void load(draft.start_month)}>Opnieuw proberen</Button>}
+        </div>)}
 
       {canAskGerrie && canWrite && <form className="fc-card fc-ask" onSubmit={onAsk}>
         <div className="fc-ask-row">
@@ -353,9 +453,9 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
           <Button variant="primary" type="submit" disabled={!question.trim()}>Vraag Gerrie</Button>
         </div>
         <div className="fc-ask-suggest">
-          {SUGGESTIONS.map(suggestion => <button key={suggestion} type="button" onClick={() => ask(suggestion)}>{suggestion}</button>)}
+          {(view === 'cash' ? CASH_SUGGESTIONS : SUGGESTIONS).map(suggestion => <button key={suggestion} type="button" onClick={() => ask(suggestion)}>{suggestion}</button>)}
         </div>
-        <p className="fc-ask-note">Gerrie zet de wijziging klaar met de winst ervoor en erna. Er verandert pas iets als jij op Uitvoeren klikt{dirty ? '; hij werkt met de bewaarde versie, dus bewaar eerst je eigen wijzigingen' : ''}.</p>
+        <p className="fc-ask-note">Gerrie zet de wijziging klaar met de winst{flow?.available ? ' en het laagste saldo' : ''} ervoor en erna. Er verandert pas iets als jij op Uitvoeren klikt{dirty ? '; hij werkt met de bewaarde versie, dus bewaar eerst je eigen wijzigingen' : ''}.</p>
       </form>}
 
       {loadError && <div className="fc-card fc-note is-error" role="alert">
@@ -372,7 +472,7 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
         {actionError
           ? <p>{actionError}</p>
           : dirty
-            ? <p><b>Nog niet bewaard:</b> {changes.slice(0, 4).join(' · ')}{changes.length > 4 ? ` en ${changes.length - 4} meer` : ''}. Verwachte winst {money(savedResult.totals.profit_cents)} → {money(result.totals.profit_cents)}.</p>
+            ? <p><b>Nog niet bewaard:</b> {changes.slice(0, 4).join(' · ')}{changes.length > 4 ? ` en ${changes.length - 4} meer` : ''}. Verwachte winst {money(savedResult.totals.profit_cents)} → {money(result.totals.profit_cents)}.{lowestChange(savedFlow, flow)}</p>
             : <p>{notice}</p>}
         {dirty && <div className="fc-dirty-acts">
           <Button onClick={undo} disabled={busy}><RotateCcw size={14} aria-hidden="true" /> Ongedaan maken</Button>
@@ -380,26 +480,44 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
         </div>}
       </div>}
 
-      {result.so_far && <div className="fc-card fc-sofar">
+      {view === 'result' && result.so_far && <div className="fc-card fc-sofar">
         <b>Tot nu toe</b> ({result.so_far.months} {result.so_far.months === 1 ? 'maand' : 'maanden'}): omzet {money(result.so_far.actual.revenue_cents)} werkelijk tegen {money(result.so_far.expected.revenue_cents)} verwacht, winst {money(result.so_far.actual.profit_cents)} tegen {money(result.so_far.expected.profit_cents)}.
       </div>}
 
       <div className="fc-layout">
-        <div className="fc-main">
-          <section className="fc-card fc-chart-card" aria-labelledby="fc-chart-title">
-            <div className="fc-card-head">
-              <h3 id="fc-chart-title">Omzet en kosten per maand</h3>
-              <ChartLegend />
-            </div>
-            <ForecastChart result={result} currentMonth={currentMonth} />
-          </section>
+        {view === 'result'
+          ? <div className="fc-main">
+            <section className="fc-card fc-chart-card" aria-labelledby="fc-chart-title">
+              <div className="fc-card-head">
+                <h3 id="fc-chart-title">Omzet en kosten per maand</h3>
+                <ChartLegend />
+              </div>
+              <ForecastChart result={result} currentMonth={currentMonth} />
+            </section>
 
-          <ForecastTable result={result} projectsVisible={projectsVisible} />
-        </div>
+            <ForecastTable result={result} projectsVisible={projectsVisible} />
+          </div>
+          : <div className="fc-main">
+            {flow?.available && <>
+              {flow.notes.length > 0 && <div className="fc-card fc-cash-notes" role="note">
+                <ul>{flow.notes.map(note => <li key={note}>{note}</li>)}</ul>
+              </div>}
+              <section className="fc-card fc-chart-card" aria-labelledby="fc-cash-title">
+                <div className="fc-card-head">
+                  <h3 id="fc-cash-title">Saldo aan het eind van elke maand</h3>
+                  <CashLegend buffer={flow.effective.buffer_cents} />
+                </div>
+                <CashChart flow={flow} />
+              </section>
+              <CashTable flow={flow} />
+            </>}
+          </div>}
 
         <aside className="fc-side">
           <AssumptionsPanel
             result={result}
+            flow={flow}
+            view={view}
             draft={draft}
             onChange={update}
             canWrite={canWrite}
@@ -410,7 +528,7 @@ export function ForecastPage({ organizationId, canWrite, canAskGerrie, refreshKe
             showName={Boolean(selected)}
             currentMonth={currentMonth}
           />
-          <BasisPanel result={result} inputs={inputs} draft={draft} canWrite={canWrite} onAddItem={(item) => update({ items: [...draft.items, item] })} />
+          <BasisPanel result={result} flow={flow} view={view} inputs={inputs} draft={draft} canWrite={canWrite} onAddItem={(item) => update({ items: [...draft.items, item] })} />
         </aside>
       </div>
 
@@ -772,14 +890,245 @@ function ForecastTable({ result, projectsVisible }: { result: ForecastResult; pr
   </div>;
 }
 
+// ── De cashflow ─────────────────────────────────────────────────────────────
+
+function CashLegend({ buffer }: { buffer: number }) {
+  return <ul className="fc-legend" aria-label="Legenda">
+    <li><span className="fc-key is-cash" aria-hidden="true" />Saldo</li>
+    {buffer > 0 && <li><span className="fc-key is-buffer" aria-hidden="true" />Ondergrens</li>}
+  </ul>;
+}
+
+/**
+ * Het saldo aan het eind van elke maand, van nu tot het eind van de prognose.
+ * Eén lijn, één as in euro's; de nullijn is donkerder en een ondergrens
+ * gestippeld. Een maand onder nul of onder de ondergrens krijgt een rode
+ * stip. In de tooltip wat er die maand binnenkomt en uitgaat; de tabel eronder
+ * heeft dezelfde cijfers.
+ */
+interface CashPoint {
+  key: string;
+  /** Null: het saldo van nu, vóór de eerste maand. */
+  month: CashflowResult['months'][number] | null;
+  end_cents: number;
+}
+
+function CashChart({ flow }: { flow: CashflowResult }) {
+  const [boxRef, width] = useWidth<HTMLDivElement>(640);
+  const [active, setActive] = useState<number | null>(null);
+  const descriptionId = useId();
+  // Het saldo van nu als eerste punt: het laagste saldo kan nu zijn, en een
+  // lijn die pas eind deze maand begint, liet dat niet zien.
+  const points = useMemo<CashPoint[]>(() => [
+    { key: 'nu', month: null, end_cents: flow.effective.start_cents },
+    ...flow.months.map(month => ({ key: month.month, month, end_cents: month.end_cents })),
+  ], [flow]);
+  const buffer = flow.effective.buffer_cents;
+  const height = width < 520 ? 200 : 240;
+  const pad = { left: width < 520 ? 52 : 64, right: 14, top: 18, bottom: 30 };
+  const innerW = width - pad.left - pad.right;
+  const innerH = height - pad.top - pad.bottom;
+  const values = [...points.map(point => point.end_cents), buffer];
+  const rawMax = Math.max(0, ...values);
+  const rawMin = Math.min(0, ...values);
+  const step = niceStep((rawMax - rawMin) / 4 || 100000);
+  const top = Math.max(step, Math.ceil(rawMax / step) * step);
+  const bottom = Math.min(0, Math.floor(rawMin / step) * step);
+  const ticks: number[] = [];
+  for (let value = bottom; value <= top + step / 2; value += step) ticks.push(value);
+  const n = points.length;
+  const x = (index: number) => pad.left + (n <= 1 ? innerW / 2 : (index / (n - 1)) * innerW);
+  const y = (value: number) => pad.top + innerH - ((value - bottom) / (top - bottom || 1)) * innerH;
+  const line = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${x(index).toFixed(1)},${y(point.end_cents).toFixed(1)}`).join('');
+  const low = (cents: number) => flow.effective.start_known && (cents < 0 || cents < buffer);
+
+  // Dezelfde regel als de grafiek van het resultaat: eerst het begin, het eind
+  // en elke januari, dan de rest waar er ruimte is. Labels raken elkaar nooit.
+  const labels = useMemo(() => {
+    const text = (index: number) => {
+      const month = points[index].month?.month;
+      if (!month) return 'nu';
+      return month.endsWith('-01') || index === 1 ? `${monthShortName(month)} ${month.slice(2, 4)}` : monthShortName(month);
+    };
+    const span = (index: number): [number, number] => {
+      const w = text(index).length * 6.6 + 6;
+      const at = x(index);
+      return index === 0 ? [at, at + w] : index === n - 1 ? [at - w, at] : [at - w / 2, at + w / 2];
+    };
+    const isJanuary = (index: number) => Boolean(points[index].month?.month.endsWith('-01'));
+    const order = [0, n - 1, ...points.map((_, index) => (isJanuary(index) ? index : -1)).filter(index => index > 0 && index < n - 1),
+      ...points.map((_, index) => index).filter(index => index > 0 && index < n - 1 && !isJanuary(index))];
+    const chosen: Array<[number, number, number]> = [];
+    for (const index of order) {
+      if (index < 0 || index >= n || chosen.some(([i]) => i === index)) continue;
+      const [left, right] = span(index);
+      if (chosen.every(([, l, r]) => right + 8 <= l || left >= r + 8)) chosen.push([index, left, right]);
+    }
+    return chosen.sort((a, b) => a[0] - b[0]).map(([index]) => ({ index, text: text(index) }));
+  // x hangt alleen af van n en innerW.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [points, n, innerW]);
+
+  function pick(clientX: number, target: Element) {
+    const box = target.getBoundingClientRect();
+    const index = n <= 1 ? 0 : Math.round(((clientX - box.left - pad.left) / innerW) * (n - 1));
+    setActive(Math.min(n - 1, Math.max(0, index)));
+  }
+
+  function onKey(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Escape'].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === 'Escape') { setActive(null); return; }
+    const from = active ?? 0;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? n - 1 : event.key === 'ArrowLeft' ? from - 1 : from + 1;
+    setActive(Math.min(n - 1, Math.max(0, next)));
+  }
+
+  const shown = active !== null ? points[active] : null;
+  const tipLeft = active !== null ? Math.min(Math.max(x(active), 95), width - 95) : 0;
+  return <div
+    ref={boxRef}
+    className="fc-chart"
+    tabIndex={0}
+    role="group"
+    aria-label="Grafiek met het saldo aan het eind van elke maand. Pijltjes links en rechts lopen langs de maanden; de tabel eronder heeft alle cijfers."
+    aria-describedby={descriptionId}
+    onKeyDown={onKey}
+    onBlur={() => setActive(null)}
+  >
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true"
+      onPointerMove={(event: ReactPointerEvent<SVGSVGElement>) => pick(event.clientX, event.currentTarget)}
+      onPointerDown={(event: ReactPointerEvent<SVGSVGElement>) => pick(event.clientX, event.currentTarget)}
+      onPointerLeave={() => setActive(null)}
+    >
+      {ticks.map(value => <g key={value}>
+        <line className={value === 0 ? 'fc-axis' : 'fc-grid'} x1={pad.left} x2={width - pad.right} y1={y(value)} y2={y(value)} />
+        <text className="fc-tick" x={pad.left - 8} y={y(value) + 4} textAnchor="end">{axisMoney(value)}</text>
+      </g>)}
+      {buffer > 0 && <line className="fc-buffer" x1={pad.left} x2={width - pad.right} y1={y(buffer)} y2={y(buffer)} />}
+      <path className="fc-line is-cash" d={line} />
+      {points.map((point, index) => (low(point.end_cents) || index === 0 || index === n - 1 || index === active)
+        ? <circle key={point.key} className={`fc-dot ${low(point.end_cents) ? 'is-low' : 'is-cash'}`} cx={x(index)} cy={y(point.end_cents)} r={4} />
+        : null)}
+      {labels.map(label => <text
+        key={points[label.index].key}
+        className="fc-tick"
+        x={x(label.index)}
+        y={height - 10}
+        textAnchor={label.index === 0 ? 'start' : label.index === n - 1 ? 'end' : 'middle'}
+      >{label.text}</text>)}
+      {active !== null && <line className="fc-cross" x1={x(active)} x2={x(active)} y1={pad.top} y2={pad.top + innerH} />}
+    </svg>
+    <p id={descriptionId} className="fc-sr">De tabel onder de grafiek toont per maand wat er binnenkomt, uitgaat en overblijft.</p>
+    {shown && !shown.month && <div className="fc-tip" style={{ left: tipLeft }} role="status">
+      <b>Nu</b>
+      <span><i className="fc-key is-cash" aria-hidden="true" /><strong>{flow.effective.start_known ? money(shown.end_cents) : 'onbekend'}</strong> saldo</span>
+    </div>}
+    {shown?.month && <div className="fc-tip" style={{ left: tipLeft }} role="status">
+      <b>{monthLabel(shown.month.month)}{shown.month.partial ? ' (vanaf vandaag)' : ''}</b>
+      <span><strong>{money(shown.month.in_open_cents + shown.month.in_sales_cents)}</strong> binnen</span>
+      <span><strong>{money(shown.month.out_open_cents + shown.month.out_costs_cents)}</strong> uit</span>
+      {shown.month.vat_cents !== 0 && <span><strong>{money(shown.month.vat_cents)}</strong> btw ({shown.month.vat_periods.join(', ')})</span>}
+      {shown.month.other_cents !== 0 && <span><strong>{money(Math.abs(shown.month.other_cents))}</strong> {shown.month.other_cents > 0 ? 'geld erbij' : 'geld eraf'}</span>}
+      <span><i className="fc-key is-cash" aria-hidden="true" /><strong>{money(shown.end_cents)}</strong> saldo</span>
+    </div>}
+  </div>;
+}
+
+function CashTable({ flow }: { flow: CashflowResult }) {
+  const buffer = flow.effective.buffer_cents;
+  const known = flow.effective.start_known;
+  return <div className="bk-table-wrap fc-table-wrap">
+    <table className="bk-table fc-table fc-cash-table">
+      <caption className="fc-sr">Cashflow per maand</caption>
+      <thead>
+        <tr>
+          <th scope="col">Maand</th>
+          <th scope="col" className="bk-num">Binnen</th>
+          <th scope="col" className="bk-num">Uit</th>
+          <th scope="col" className="bk-num fc-col-vat">Btw</th>
+          <th scope="col" className="bk-num fc-col-other">Geld erbij/eraf</th>
+          <th scope="col" className="bk-num">Saldo</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr className="is-past">
+          <th scope="row">Nu</th>
+          <td className="bk-num" />
+          <td className="bk-num" />
+          <td className="bk-num fc-col-vat" />
+          <td className="bk-num fc-col-other" />
+          <td className={`bk-num${known && flow.effective.start_cents < 0 ? ' fc-neg' : ''}`}>{known ? money(flow.effective.start_cents) : 'onbekend'}</td>
+        </tr>
+        {flow.months.map(month => {
+          const low = known && (month.end_cents < 0 || month.end_cents < buffer);
+          return <tr key={month.month}>
+            <th scope="row">
+              {monthLabel(month.month, 'short')}
+              {month.partial && <small>vanaf vandaag</small>}
+              {month.vat_cents !== 0 && <small className="fc-vat-inline">btw {money(month.vat_cents)}</small>}
+              {month.other_cents !== 0 && <small className="fc-other-inline">{month.other_cents > 0 ? 'geld erbij' : 'geld eraf'} {money(Math.abs(month.other_cents))}</small>}
+            </th>
+            <td className="bk-num">{money(month.in_open_cents + month.in_sales_cents)}{month.in_open_cents !== 0 && <small className="fc-open-sub">open {money(month.in_open_cents)}</small>}</td>
+            <td className="bk-num">{money(month.out_open_cents + month.out_costs_cents)}{month.out_open_cents !== 0 && <small className="fc-open-sub">open {money(month.out_open_cents)}</small>}</td>
+            <td className="bk-num fc-col-vat">{month.vat_cents !== 0 ? money(month.vat_cents) : '–'}{month.vat_periods.length > 0 && <small>{month.vat_periods.join(', ')}</small>}</td>
+            <td className="bk-num fc-col-other">{month.other_cents !== 0 ? money(month.other_cents) : '–'}</td>
+            <td className={`bk-num${low ? ' fc-neg' : ''}`}>{money(month.end_cents)}{low && <small>{month.end_cents < 0 ? 'rood' : 'onder de ondergrens'}</small>}</td>
+          </tr>;
+        })}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th scope="row">Totaal{flow.totals.vat_cents !== 0 && <small className="fc-vat-inline">btw {money(flow.totals.vat_cents)}</small>}</th>
+          <td className="bk-num">{money(flow.totals.in_cents)}</td>
+          <td className="bk-num">{money(flow.totals.out_cents)}</td>
+          <td className="bk-num fc-col-vat">{money(flow.totals.vat_cents)}</td>
+          <td className="bk-num fc-col-other">{money(flow.totals.other_cents)}</td>
+          <td className={`bk-num${known && flow.end_cents < 0 ? ' fc-neg' : ''}`}>{money(flow.end_cents)}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>;
+}
+
+// ── Het seizoen ─────────────────────────────────────────────────────────────
+
+/**
+ * De twaalf maanden van het seizoenspatroon als staafjes: hoe druk elke maand
+ * was tegen een gemiddelde maand (de streep op 100%). Met het percentage
+ * eronder, zodat het ook zonder kleur en zonder de staafjes te lezen is.
+ */
+function SeasonBars({ season, strength }: { season: SeasonalPattern; strength: number }) {
+  const max = Math.max(1.2, ...season.index);
+  const applied = (value: number) => 1 + (strength / 100) * (value - 1);
+  return <ol className="fc-season" aria-label="Seizoenspatroon per maand; 100% is een gemiddelde maand">
+    {season.index.map((value, cal) => {
+      const pct = Math.round(value * 100);
+      const used = Math.round(applied(value) * 100);
+      return <li key={cal} className={value >= 1 ? 'is-busy' : 'is-quiet'} title={strength > 0 && strength < 100 ? `${pct}% in de vorige jaren, ${used}% in de prognose` : `${pct}%`}>
+        <span className="fc-season-bar" aria-hidden="true"><span style={{ height: `${Math.max(2, (value / max) * 100)}%` }} /><i style={{ bottom: `${(1 / max) * 100}%` }} /></span>
+        <span className="fc-season-m">{monthShortName(`2000-${String(cal + 1).padStart(2, '0')}`)}</span>
+        <span className="fc-season-v">{pct}%</span>
+      </li>;
+    })}
+  </ol>;
+}
+
 // ── De aannames ─────────────────────────────────────────────────────────────
 
-function autoText(field: ForecastFieldInfo, result: ForecastResult): string | null {
+function autoText(field: ForecastFieldInfo, result: ForecastResult, flow: CashflowResult | null): string | null {
   if (!field.auto) return null;
   if (field.key === 'projects_per_month') return numberText(result.baseline.projects_per_month, 2);
   if (field.key === 'revenue_per_project') return money(result.baseline.revenue_per_project_cents);
   if (field.key === 'other_revenue') return money(result.baseline.other_revenue_cents);
   if (field.key === 'fixed_costs') return money(result.baseline.fixed_costs_cents);
+  if (!flow) return null;
+  const e = flow.effective;
+  if (field.key === 'cash_start') return e.start_known ? money(e.start_cents) : 'onbekend';
+  if (field.key === 'collection_days') return fieldValueText('collection_days', e.collection_days);
+  if (field.key === 'vat_sales_pct') return pctText(e.vat_sales_pct);
+  if (field.key === 'vat_costs_pct') return pctText(e.vat_costs_pct);
+  if (field.key === 'noncash_costs') return money(e.noncash_cents);
   return null;
 }
 
@@ -818,7 +1167,12 @@ function NumberField({ field, value, auto, disabled, onChange }: {
   }
 
   const hintId = `${id}-hint`;
-  const unit = field.unit === 'pct' ? '%' : field.unit === 'months' ? 'mnd' : null;
+  const unit = field.unit === 'pct' ? '%' : field.unit === 'months' ? 'mnd' : field.unit === 'days' ? 'dagen' : null;
+  // De eenheid staat al naast het veld: "21" en niet "21% %".
+  const placeholder = auto === null ? ''
+    : field.unit === 'euro' ? auto.replace(/^€\s*/, '')
+      : field.unit === 'pct' ? auto.replace(/%$/, '')
+        : field.unit === 'days' ? auto.replace(/\s*dagen?$/, '') : auto;
   return <div className="fc-field" data-field={field.key}>
     <label htmlFor={id}>{field.label}</label>
     <div className={`fc-input${problem ? ' is-invalid' : ''}`}>
@@ -828,7 +1182,7 @@ function NumberField({ field, value, auto, disabled, onChange }: {
         type="text"
         inputMode="decimal"
         value={text}
-        placeholder={auto === null ? '' : field.unit === 'euro' ? auto.replace(/^€\s*/, '') : auto}
+        placeholder={placeholder}
         disabled={disabled}
         aria-invalid={problem ? true : undefined}
         aria-describedby={hintId}
@@ -846,7 +1200,7 @@ function NumberField({ field, value, auto, disabled, onChange }: {
 }
 
 /** Bedrag per maand van een extra post, met eigen tekst zolang je typt. */
-function AmountInput({ value, disabled, onChange }: { value: number; disabled: boolean; onChange: (value: number) => void }) {
+function AmountInput({ value, disabled, cashOnly, onChange }: { value: number; disabled: boolean; cashOnly: boolean; onChange: (value: number) => void }) {
   const [text, setText] = useState(editText(value));
   const [focused, setFocused] = useState(false);
   useEffect(() => { if (!focused) setText(editText(value)); }, [value, focused]);
@@ -857,7 +1211,7 @@ function AmountInput({ value, disabled, onChange }: { value: number; disabled: b
     <input
       type="text"
       inputMode="decimal"
-      aria-label="Bedrag per maand, exclusief btw"
+      aria-label={cashOnly ? 'Bedrag per maand' : 'Bedrag per maand, exclusief btw'}
       aria-invalid={invalid ? true : undefined}
       value={text}
       disabled={disabled}
@@ -880,8 +1234,17 @@ function monthOptions(currentMonth: string, extra: Array<string | null>): string
   return [...set].sort();
 }
 
-function AssumptionsPanel({ result, draft, onChange, canWrite, name, notes, onName, onNotes, showName, currentMonth }: {
+const KIND_OPTIONS: Array<{ value: ForecastItemKind; label: string }> = [
+  { value: 'cost', label: 'Kosten' },
+  { value: 'revenue', label: 'Omzet' },
+  { value: 'cash_out', label: 'Geld eraf' },
+  { value: 'cash_in', label: 'Geld erbij' },
+];
+
+function AssumptionsPanel({ result, flow, view, draft, onChange, canWrite, name, notes, onName, onNotes, showName, currentMonth }: {
   result: ForecastResult;
+  flow: CashflowResult | null;
+  view: ForecastView;
   draft: ForecastAssumptions;
   onChange: (patch: Partial<ForecastAssumptions>) => void;
   canWrite: boolean;
@@ -898,8 +1261,22 @@ function AssumptionsPanel({ result, draft, onChange, canWrite, name, notes, onNa
   const [newMonth, setNewMonth] = useState(addMonths(currentMonth, 1));
   const [newCount, setNewCount] = useState('0');
   const options = monthOptions(currentMonth, [draft.start_month, ...draft.items.flatMap(item => [item.from, item.to]), ...Object.keys(draft.month_projects)]);
-  const fields = FORECAST_FIELDS.filter(field => field.key !== 'months');
+  const fields = FORECAST_FIELDS.filter(field => field.group === 'result' && field.key !== 'months');
+  const cashFields = FORECAST_FIELDS.filter(field => field.group === 'cash');
   const monthsField = FORECAST_FIELDS.find(field => field.key === 'months') as ForecastFieldInfo;
+  const seasonField = FORECAST_FIELDS.find(field => field.key === 'seasonality_pct') as ForecastFieldInfo;
+  const season = result.season;
+  const numberField = (field: ForecastFieldInfo) => <NumberField
+    key={field.key}
+    field={field}
+    value={(draft as unknown as Record<string, number | null>)[field.key]}
+    auto={autoText(field, result, flow)}
+    disabled={!canWrite}
+    onChange={value => {
+      if (value === null && !field.auto) return;
+      onChange({ [field.key]: value } as Partial<ForecastAssumptions>);
+    }}
+  />;
 
   function setItem(index: number, patch: Partial<ForecastItem>) {
     onChange({ items: draft.items.map((item, i) => (i === index ? { ...item, ...patch } : item)) });
@@ -943,32 +1320,39 @@ function AssumptionsPanel({ result, draft, onChange, canWrite, name, notes, onNa
         <small className="fc-hint">Een vast begin houdt de prognose op zijn plek; dan zie je per maand ook wat er werkelijk gebeurde.</small>
       </div>
       <NumberField field={monthsField} value={draft.months} auto={null} disabled={disabled} onChange={value => { if (value !== null) onChange({ months: value }); }} />
-      {fields.map(field => <NumberField
-        key={field.key}
-        field={field}
-        value={(draft as unknown as Record<string, number | null>)[field.key]}
-        auto={autoText(field, result)}
-        disabled={disabled}
-        onChange={value => {
-          if (value === null && !field.auto) return;
-          onChange({ [field.key]: value } as Partial<ForecastAssumptions>);
-        }}
-      />)}
+      {fields.map(numberField)}
     </div>
+
+    <div className="fc-sub fc-season-sub">
+      <h4>Seizoen</h4>
+      {season.available
+        ? <p className="fc-muted">Geleerd uit je omzet van {monthLabel(season.from as string)} t/m {monthLabel(season.to as string)}. Op 100% volgen de nieuwe projecten en de overige omzet de drukke en rustige maanden; een maand met een eigen aantal projecten houdt dat aantal.</p>
+        : <p className="fc-muted">{season.reason}</p>}
+      {numberField(seasonField)}
+      {season.available && <SeasonBars season={season} strength={draft.seasonality_pct} />}
+    </div>
+
+    {view === 'cash' && <div className="fc-sub fc-cash-sub">
+      <h4>Geld</h4>
+      <p className="fc-muted">Wat er op je rekening gebeurt. Leeg is automatisch, uit je bank, je facturen en je btw.</p>
+      <div className="fc-fields">{cashFields.map(numberField)}</div>
+    </div>}
 
     <div className="fc-sub">
       <h4>Extra posten</h4>
-      <p className="fc-muted">Een nieuwe medewerker, een investering of een grote opdracht: per maand, in de maanden die je kiest.</p>
+      <p className="fc-muted">Een nieuwe medewerker of een grote opdracht (omzet of kosten), of alleen geld: een lening, een investering, een privé-opname. Geld erbij of eraf telt niet in de winst, wel in de cashflow.</p>
       {draft.items.length === 0 && <p className="fc-muted fc-empty">Nog geen extra posten.</p>}
       {draft.items.map((item, index) => <div key={item.id} className="fc-item">
         <input className="form-input fc-item-label" aria-label="Naam van de post" value={item.label} maxLength={80} disabled={disabled}
           onChange={event => setItem(index, { label: event.target.value })}
           onBlur={() => { if (!item.label.trim()) setItem(index, { label: 'Post' }); }} />
-        <select className="form-select fc-item-kind" aria-label="Soort" value={item.kind} disabled={disabled} onChange={event => setItem(index, { kind: event.target.value === 'revenue' ? 'revenue' : 'cost' })}>
-          <option value="cost">Kosten</option>
-          <option value="revenue">Omzet</option>
+        <select className="form-select fc-item-kind" aria-label="Soort" value={item.kind} disabled={disabled} onChange={event => {
+          const kind = KIND_OPTIONS.find(option => option.value === event.target.value)?.value ?? 'cost';
+          setItem(index, { kind });
+        }}>
+          {KIND_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
-        <AmountInput value={item.amount} disabled={disabled} onChange={amount => setItem(index, { amount })} />
+        <AmountInput value={item.amount} disabled={disabled} cashOnly={isCashItem(item.kind)} onChange={amount => setItem(index, { amount })} />
         <select className="form-select" aria-label="Vanaf" value={item.from} disabled={disabled} onChange={event => setItem(index, { from: event.target.value, to: item.to !== null && item.to < event.target.value ? event.target.value : item.to })}>
           {options.map(month => <option key={month} value={month}>{monthLabel(month, 'short')}</option>)}
         </select>
@@ -1012,8 +1396,44 @@ function AssumptionsPanel({ result, draft, onChange, canWrite, name, notes, onNa
 
 // ── Waar het op rust ────────────────────────────────────────────────────────
 
-function BasisPanel({ result, inputs, draft, canWrite, onAddItem }: {
+const METHOD_TEXT: Record<'statement' | 'ledger', string> = {
+  statement: 'afschrift en de regels daarna',
+  ledger: 'boekhouding en de nog niet geboekte regels',
+};
+
+/** Waar de cashflow begint: het saldo per rekening, de openstaande posten, het betaalgedrag en de btw. */
+function CashBasis({ flow }: { flow: CashflowResult }) {
+  const e = flow.effective;
+  const collection = e.collection_source === 'set' ? 'zelf ingevuld'
+    : e.collection_source === 'history' ? 'zo snel betaalden je klanten het afgelopen jaar gemiddeld, naar bedrag gewogen'
+      : 'je betaaltermijn uit de bedrijfsgegevens (er zijn nog te weinig betaalde facturen om het betaalgedrag te gebruiken)';
+  return <div className="fc-pipeline fc-cash-basis">
+    <h4>Cashflow</h4>
+    <p>Banksaldo {e.start_auto ? 'uit ResoFly' : <b>zelf ingevuld: {money(e.start_cents)}</b>}{e.start_auto && !e.start_known ? ': nog niet bekend' : ''}:</p>
+    {(flow.bank.length > 0 || flow.cash_accounts_cents !== 0) && <ul className="fc-facts">
+      {flow.bank.map(account => <li key={account.name}>
+        {account.name}: {account.balance_cents === null
+          ? <span className="fc-muted">onbekend (geen afschrift met eindsaldo en geen beginbalans)</span>
+          : <><b>{money(account.balance_cents)}</b> <span className="fc-muted">volgens je {METHOD_TEXT[account.method ?? 'ledger']}{account.as_of ? `, t/m ${Number(account.as_of.slice(8, 10))} ${monthShortName(account.as_of.slice(0, 7))} ${account.as_of.slice(0, 4)}` : ''}</span></>}
+      </li>)}
+      {flow.cash_accounts_cents !== 0 && <li>Kas: <b>{money(flow.cash_accounts_cents)}</b></li>}
+    </ul>}
+    <p>Openstaande facturen <b>{money(flow.open.receivables_cents + flow.open.receivables_later_cents)}</b>{flow.open.receivables_overdue_cents > 0 ? `, waarvan ${money(flow.open.receivables_overdue_cents)} te laat` : ''}; openstaande inkoopfacturen <b>{money(flow.open.payables_cents + flow.open.payables_later_cents)}</b>. Ze tellen in de maand waarin ze vervallen.</p>
+    <p>Klanten betalen na <b>{fieldValueText('collection_days', e.collection_days)}</b>: {collection}.</p>
+    <p>{e.kor
+      ? 'Je hebt de KOR: geen btw op je facturen en geen aftrek.'
+      : <>Btw {e.vat_frequency === 'monthly' ? 'per maand' : 'per kwartaal'}, betaald in de maand erna: <b>{pctText(e.vat_sales_pct)}</b> op je omzet, <b>{pctText(e.vat_costs_pct)}</b> op je kosten.</>}</p>
+    {flow.vat_payments.length > 0 && <ul className="fc-facts">
+      {flow.vat_payments.map(payment => <li key={payment.period}>{payment.period}: <b>{money(payment.cents)}</b> in {monthLabel(payment.month)} <span className="fc-muted">({payment.source === 'return' ? 'uit je aangifte' : 'uitgerekend'})</span></li>)}
+    </ul>}
+    {e.noncash_cents > 0 && <p className="fc-muted">Afschrijvingen ({money(e.noncash_cents)} per maand) staan in je kosten, maar gaan niet van je rekening af; de cashflow laat ze weg.</p>}
+  </div>;
+}
+
+function BasisPanel({ result, flow, view, inputs, draft, canWrite, onAddItem }: {
   result: ForecastResult;
+  flow: CashflowResult | null;
+  view: ForecastView;
   inputs: ForecastInputs;
   draft: ForecastAssumptions;
   canWrite: boolean;
@@ -1025,6 +1445,7 @@ function BasisPanel({ result, inputs, draft, canWrite, onAddItem }: {
   const alreadyAdded = draft.items.some(item => item.label === 'Geaccepteerde offertes');
   return <section className="fc-card fc-basis" aria-labelledby="fc-basis-title">
     <div className="fc-card-head"><h3 id="fc-basis-title">Waar dit op rust</h3></div>
+    {view === 'cash' && flow?.available && <><CashBasis flow={flow} /><h4 className="fc-basis-h">Resultaat</h4></>}
     {base.months === 0 || !base.from || !base.to
       ? <p>Er zijn nog geen cijfers uit de afgelopen twaalf maanden. Vul je verwachting zelf in, of vraag Gerrie om mee te denken.</p>
       : <>

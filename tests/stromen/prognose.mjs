@@ -24,7 +24,8 @@ import { rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, nietsVeranderd, stap, verwacht } from './toets.mjs';
 import { maakWereld } from './wereld.mjs';
 import {
-  addMonths, computeForecast, historyRange, monthOfDate, normalizeAssumptions, parseForecastInputs, wholeEuroText,
+  addMonths, computeCashflow, computeForecast, historyRange, monthOfDate, normalizeAssumptions, parseCashPosition,
+  parseForecastInputs, wholeEuroText,
 } from '../../supabase/functions/_shared/forecast.ts';
 
 const BASIS = `${API_URL}/functions/v1/api`;
@@ -74,6 +75,19 @@ async function scherm(w, gebruiker, assumptions) {
     p_organization_id: w.orgId, p_from: `${range.from}-01`, p_to: `${range.to}-01`,
   }, gebruiker.token), 'forecast_history');
   return computeForecast(assumptions, parseForecastInputs(raw, today), today);
+}
+
+/** Wat het scherm in de weergave Cashflow doet: ook de cashpositie ophalen, en de cashflow uitrekenen. */
+async function schermCash(w, gebruiker, assumptions) {
+  const today = vandaag();
+  const range = historyRange(today, [normalizeAssumptions(assumptions).start_month]);
+  const raw = gelukt(await rpc('forecast_history', {
+    p_organization_id: w.orgId, p_from: `${range.from}-01`, p_to: `${range.to}-01`,
+  }, gebruiker.token), 'forecast_history');
+  const positie = gelukt(await rpc('forecast_cash_position', { p_organization_id: w.orgId }, gebruiker.token), 'forecast_cash_position');
+  const inputs = parseForecastInputs(raw, today);
+  const uitkomst = computeForecast(assumptions, inputs, today);
+  return { uitkomst, flow: computeCashflow(uitkomst, inputs, parseCashPosition(positie, today), today) };
 }
 
 /** Wat repository.createForecast() verstuurt. */
@@ -329,5 +343,92 @@ export default async function prognose() {
     gelijk(weg.status, 202, 'forecast.delete');
     gelijk(weg.json.proposal.irreversible, true, 'verwijderen is onomkeerbaar');
     gelijk(Number(sql(`select count(*) from public.forecasts where organization_id = ${q(a.orgId)}`)), 1, 'al aangemaakt of verwijderd zonder akkoord');
+  });
+
+  // ── Seizoen en cashflow (20261118171500) ──────────────────────────────────
+  groep('Prognose: seizoen en cashflow');
+  await stap('een bankrekening met een afschrift, en klanten die binnen 30 dagen betalen', async () => {
+    const org = q(a.orgId);
+    sql(`
+      update public.company_settings set invoice_payment_terms = 'Betaling binnen 30 dagen.' where organization_id = ${org};
+      insert into public.bank_accounts (organization_id, created_by, name, iban, currency, ledger_account_id, is_active, source)
+        select ${org}, ${q(a.eigenaar.id)}, 'Zakelijk', 'NL91ABNA0417164300', 'EUR', id, true, 'import'
+          from public.ledger_accounts where organization_id = ${org} and code = '1100';
+      insert into public.bank_statements (organization_id, bank_account_id, format, period_start, period_end, opening_balance_cents, closing_balance_cents)
+        select ${org}, id, 'camt053', (now() at time zone 'Europe/Amsterdam')::date - 40, (now() at time zone 'Europe/Amsterdam')::date - 10, 1000000, 1500000
+          from public.bank_accounts where organization_id = ${org} and name = 'Zakelijk';
+      insert into public.bank_transactions (organization_id, bank_account_id, dedup_key, booking_date, amount_cents, counterparty_name, status)
+        select ${org}, id, 'prg-na-afschrift', (now() at time zone 'Europe/Amsterdam')::date - 3, 250000, 'Klant', 'unmatched'
+          from public.bank_accounts where organization_id = ${org} and name = 'Zakelijk';
+    `);
+  });
+
+  await stap('forecast_cash_position: saldo, openstaande posten en de betaaltermijn; wie het niet mag, krijgt niets', async () => {
+    const positie = gelukt(await rpc('forecast_cash_position', { p_organization_id: a.orgId }, a.eigenaar.token), 'forecast_cash_position');
+    gelijk(positie.bank.map((rekening) => [rekening.name, rekening.balance_cents, rekening.method]), [['Zakelijk', 1750000, 'statement']],
+      'het afschrift (€ 15.000) plus wat er daarna binnenkwam (€ 2.500)');
+    gelijk(positie.receivables.reduce((som, rij) => som + rij.cents, 0), 242000, 'openstaand: PRG-002 (€ 2.000 + 21%); betaald, concept en geannuleerd niet');
+    gelijk(positie.payables.reduce((som, rij) => som + rij.cents, 0), 181500, 'te betalen: de geboekte inkoop (€ 1.500 + € 315), het concept niet');
+    gelijk(positie.payment_terms_days, 30, 'betaaltermijn uit de bedrijfsgegevens');
+    gelijk(positie.vat_frequency, 'quarterly', 'btw per kwartaal');
+    const boekhouder = gelukt(await rpc('forecast_cash_position', { p_organization_id: a.orgId }, a.boekhouder.token), 'boekhouder');
+    gelijk(boekhouder.bank[0]?.balance_cents, 1750000, 'de boekhouder ziet het saldo (leesrecht op Financiën)');
+    geweigerd(await rpc('forecast_cash_position', { p_organization_id: a.orgId }, a.zonderFinancien.token), 'zonder Financiën', [401, 403]);
+    geweigerd(await rpc('forecast_cash_position', { p_organization_id: a.orgId }, b.eigenaar.token), 'andere organisatie', [401, 403]);
+  });
+
+  await stap('forecast.list: de cashflow begint bij hetzelfde saldo als het scherm, en het seizoen zegt waarom het er nog niet is', async () => {
+    const res = await api('/v1/actions/forecast.list', { sleutel: nodig(sleutels?.lezen, 'leessleutel').geheim, method: 'POST', body: {} });
+    gelijk(res.status, 200, `forecast.list ${res.tekst.slice(0, 200)}`);
+    const prognose = res.json.result?.forecasts?.[0] ?? res.json.forecasts?.[0] ?? res.json.data?.forecasts?.[0];
+    nodig(prognose, `de prognose in ${res.tekst.slice(0, 300)}`);
+    gelijk(prognose.cashflow.available, true, `cashflow: ${prognose.cashflow.reason}`);
+    gelijk(prognose.cashflow.start.balance, 17500, 'banksaldo nu in euro\'s');
+    const { flow } = await schermCash(a, a.eigenaar, prognose.assumptions);
+    gelijk(prognose.cashflow.end_balance, flow.end_cents / 100, 'het saldo aan het eind: dezelfde som als het scherm');
+    gelijk(prognose.seasonality.available, false, 'seizoen met drie maanden omzet');
+    verwacht(/minstens twee hele jaren/.test(prognose.seasonality.reason), `reden: ${prognose.seasonality.reason}`);
+  });
+
+  const busVoorstel = await stap('een investering (geld eraf) klaarzetten: de winst blijft, het laagste saldo staat op de kaart', async () => {
+    const id = nodig(basis?.id, 'prognose Basis');
+    const res = await api('/v1/actions/forecast.update', {
+      sleutel: nodig(sleutels?.klaarzetten, 'voorstelsleutel').geheim, method: 'POST',
+      body: { forecast_id: id, add_items: [{ label: 'Nieuwe bus', kind: 'cash_out', amount: 25000, from: maanden.volgende, to: maanden.volgende }] },
+    });
+    gelijk(res.status, 202, `klaarzetten ${res.tekst.slice(0, 300)}`);
+    const kaart = res.json.proposal;
+    verwacht(kaart.details.includes('Post erbij: Nieuwe bus: geld eraf € 25.000 per maand'), `de kaart noemt de bus niet: ${kaart.details}`);
+    verwacht(/verwachte winst € -?[\d.]+ over/.test(kaart.details) && !/verwachte winst € -?[\d.]+ →/.test(kaart.details), `de winst veranderde: ${kaart.details}`);
+    verwacht(/laagste saldo € -?[\d.]+ → € -?[\d.]+ \(/.test(kaart.details), `geen laagste saldo ervoor en erna: ${kaart.details}`);
+    return kaart;
+  });
+
+  await stap('goedkeuren: het scherm komt op het laagste saldo van de kaart', async () => {
+    const id = nodig(basis?.id, 'prognose Basis');
+    const kaart = nodig(busVoorstel, 'voorstel met de bus');
+    const payload = nodig(sqlRij(`select params from public.ai_action_audit where id = ${q(kaart.id)}`)?.params?.payload, 'payload');
+    const rij = gelukt(await wijzigPrognose(a, a.eigenaar, id, { ...payload.patch, change_note: payload.change_note }, payload.expected_version), 'uitvoeren')[0];
+    const { flow } = await schermCash(a, a.eigenaar, rij.assumptions);
+    const beloofd = kaart.details.match(/laagste saldo € -?[\d.]+ → (€ -?[\d.]+) \(/)?.[1];
+    gelijk(wholeEuroText(flow.lowest.cents), beloofd, 'het laagste saldo op het scherm na goedkeuren');
+    gelijk(flow.months.find((maand) => maand.month === maanden.volgende)?.other_cents, -2500000, 'de bus in zijn maand');
+  });
+
+  await stap('het seizoenspatroon aanzetten: de kaart zegt het, en zonder patroon blijft de winst gelijk', async () => {
+    const id = nodig(basis?.id, 'prognose Basis');
+    const res = await api('/v1/actions/forecast.update', {
+      sleutel: nodig(sleutels?.klaarzetten, 'voorstelsleutel').geheim, method: 'POST',
+      body: { forecast_id: id, seasonality_pct: 100, collection_days: 45, cash_buffer: 5000 },
+    });
+    gelijk(res.status, 202, `klaarzetten ${res.tekst.slice(0, 300)}`);
+    const details = res.json.proposal.details;
+    for (const verwachtTekst of ['Seizoenspatroon: uit → 100%', 'Klanten betalen na: automatisch → 45 dagen', 'Ondergrens saldo: € 0 → € 5.000']) {
+      verwacht(details.includes(verwachtTekst), `de kaart noemt "${verwachtTekst}" niet: ${details}`);
+    }
+    verwacht(!/verwachte winst € -?[\d.]+ →/.test(details), `zonder patroon veranderde de winst: ${details}`);
+    const onzin = await api('/v1/actions/forecast.update', { sleutel: nodig(sleutels?.klaarzetten, 'voorstelsleutel').geheim, method: 'POST', body: { forecast_id: id, seasonality_pct: 150 } });
+    geweigerd(onzin, 'seizoen 150%', [400, 422]);
+    verwacht(onzin.tekst.includes('Seizoenspatroon'), `geen reden: ${onzin.tekst}`);
   });
 }

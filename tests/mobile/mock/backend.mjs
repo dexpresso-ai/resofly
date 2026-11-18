@@ -746,6 +746,7 @@ function rpc(fn, body = null) {
     case 'ensure_user_default_organization': return null;
     // De prognose (2026-11-17): de cijfers per maand en de offertes.
     case 'forecast_history': return seed.forecastHistory();
+    case 'forecast_cash_position': return seed.forecastCashPosition();
     // Gerrie aan- of uitzetten (2026-11-12): de rij zoals set_ai_consent hem teruggeeft.
     case 'set_ai_consent': {
       const now = new Date().toISOString();

@@ -27,7 +27,8 @@ function year(row: Partial<HistoryMonth>, per: (month: string, index: number) =>
     const month = addMonths('2025-11', index);
     return {
       month, projects: 0, revenue_project_cents: 0, revenue_other_cents: 0, purchase_cents: 0,
-      ledger_revenue_cents: 0, ledger_expense_cents: 0, ...row, ...per(month, index),
+      ledger_revenue_cents: 0, ledger_expense_cents: 0, vat_out_cents: 0, vat_in_cents: 0,
+      ledger_vat_out_cents: 0, ledger_vat_in_cents: 0, ledger_depreciation_cents: 0, ...row, ...per(month, index),
     };
   });
 }
@@ -36,6 +37,7 @@ function inputs(months: HistoryMonth[], extra: Partial<ForecastInputs> = {}): Fo
   return {
     from: months[0]?.month ?? '2025-11', to: '2026-11', today: TODAY, projects_visible: true, months,
     pipeline: { open_count: 0, open_cents: 0, accepted_count: 0, accepted_cents: 0, won_count: 0, lost_count: 0 },
+    cash_fields: true,
     ...extra,
   };
 }
@@ -162,7 +164,7 @@ test('wijzigen: onzin wordt geweigerd met een reden die het model begrijpt', () 
   refuses({ remove_item_ids: ['post-9'] }, /forecast\.list/);
   refuses({ update_items: [{ id: 'post-9', amount: 1 }] }, /forecast\.list/);
   refuses({ add_items: [{ label: '', kind: 'cost', amount: 1, from: '2027-01' }] }, /naam/);
-  refuses({ add_items: [{ label: 'Huur', kind: 'uitgave', amount: 1, from: '2027-01' }] }, /revenue \(omzet\) of cost \(kosten\)/);
+  refuses({ add_items: [{ label: 'Huur', kind: 'uitgave', amount: 1, from: '2027-01' }] }, /revenue \(omzet\), cost \(kosten\), cash_in .* of cash_out/);
   refuses({ add_items: [{ label: 'Huur', kind: 'cost', amount: -5, from: '2027-01' }] }, /andere soort/);
   refuses({ add_items: [{ label: 'Huur', kind: 'cost', amount: 5, from: '2027-05', to: '2027-01' }] }, /vóór de eerste/);
   refuses({ add_items: Array.from({ length: 51 }, (_, i) => ({ label: `Post ${i}`, kind: 'cost', amount: 1, from: '2027-01' })) }, /Hooguit 50/);
@@ -302,9 +304,11 @@ test('een prognose die al begon: werkelijk naast verwacht', () => {
   assert.equal(result.so_far?.expected.revenue_cents, 2300000);
 });
 
-test('welke maanden de app en Gerrie opvragen: het leerjaar plus een eerder begin, nooit meer dan vier jaar', () => {
-  assert.deepEqual(historyRange(TODAY, []), { from: '2025-11', to: '2026-11' });
-  assert.deepEqual(historyRange(TODAY, [null, '2026-03', '2025-02']), { from: '2025-02', to: '2026-11' });
+test('welke maanden de app en Gerrie opvragen: altijd vier jaar terug (het seizoen), nooit meer', () => {
+  // Tot 18 november alleen het leerjaar (plus een eerder begin); voor het
+  // seizoenspatroon zijn de jaren ervoor nodig.
+  assert.deepEqual(historyRange(TODAY, []), { from: '2022-11', to: '2026-11' });
+  assert.deepEqual(historyRange(TODAY, [null, '2026-03', '2025-02']), { from: '2022-11', to: '2026-11' });
   assert.deepEqual(historyRange(TODAY, ['2010-01']), { from: '2022-11', to: '2026-11' });
 });
 

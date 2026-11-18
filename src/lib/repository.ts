@@ -1497,6 +1497,19 @@ export async function loadForecastHistory(organizationId: UUID, from: string, to
   return data;
 }
 
+/**
+ * Waar de cashflow van de prognose begint (forecast_cash_position,
+ * 20261118171500): banksaldo, openstaande posten, btw-aangiftes, betaalgedrag.
+ * Gerrie leest dezelfde functie. Bestaat hij nog niet (de app rolt uit vóór
+ * de migratie), dan een NotMigratedError: de pagina toont de prognose dan
+ * gewoon, alleen nog zonder cashflow.
+ */
+export async function loadForecastCashPosition(organizationId: UUID): Promise<unknown> {
+  const { data, error } = await supabase.rpc('forecast_cash_position', { p_organization_id: organizationId });
+  if (error) throw forecastError(error, 'Het banksaldo en de openstaande posten konden niet worden geladen.');
+  return data;
+}
+
 export async function createForecast(
   organizationId: UUID,
   values: { name: string; notes?: string | null; assumptions: unknown; change_note?: string | null },

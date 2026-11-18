@@ -338,6 +338,19 @@ const PAGES = {
   'forecast-wijzigen': { page: 'forecast', prepare: [{ fill: '.fc-field[data-field="projects_per_month"] input', value: '4,5' }] },
   'forecast-geschiedenis': { page: 'forecast', prepare: '.fc-foot button:has-text("Geschiedenis")' },
   'forecast-nieuw': { page: 'forecast', prepare: 'button.fc-new:visible' },
+  // De cashflow (2026-11-18): saldo per maand met grafiek en tabel, de notities
+  // en waar het op rust; op de telefoon de tabel met maand, binnen, uit, btw en
+  // saldo. Met een laag banksaldo zakt het onder de ondergrens: dan staan de
+  // rode stippen, de waarschuwing en de balk "Nog niet bewaard" er ook.
+  'forecast-cashflow': {
+    page: 'forecast', prepare: '.fc-views button:has-text("Cashflow")',
+    mustShow: [{ selector: '.fc-cash-table', label: 'de tabel van de cashflow' }],
+  },
+  'forecast-cashflow-wijzigen': {
+    page: 'forecast',
+    prepare: ['.fc-views button:has-text("Cashflow")', { fill: '.fc-field[data-field="cash_start"] input', value: '2000' }],
+    mustShow: [{ selector: '.fc-dirty .fc-dirty-acts', label: 'de balk "Nog niet bewaard"' }],
+  },
   // Instellingen → Gegevens (11 november 2026): alles exporteren, met de twee
   // kolommen "wat erin zit" en "wat er niet in zit". Alleen voor de eigenaar
   // en de beheerders; de mock is eigenaar.

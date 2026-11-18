@@ -4,9 +4,10 @@ import {
 } from './types.ts';
 import {
   COST_SOURCE_TEXT, DEFAULT_ASSUMPTIONS, FORECAST_FIELDS, ForecastInputError, applyForecastPatch, changeNote,
-  computeForecast, describeAssumptions, diffAssumptions, historyRange, monthLabel, normalizeAssumptions,
-  numberText, parseForecastInputs, pctText, summarizeForecast, wholeEuroText,
-  type ForecastAssumptions, type ForecastInputs, type ForecastResult,
+  computeCashflow, computeForecast, describeAssumptions, describeCashflow, diffAssumptions, emptyCashPosition,
+  historyRange, monthLabel, normalizeAssumptions, numberText, parseCashPosition, parseForecastInputs, pctText,
+  seasonText, summarizeCashflow, summarizeForecast, wholeEuroText,
+  type CashPosition, type CashflowResult, type ForecastAssumptions, type ForecastInputs, type ForecastResult,
 } from '../forecast.ts';
 
 /**
@@ -69,6 +70,18 @@ async function loadInputs(ctx: ActionCtx, starts: Array<string | null>): Promise
   return inputs;
 }
 
+/**
+ * Waar de cashflow begint (forecast_cash_position, 20261118171500): banksaldo,
+ * openstaande posten, btw-aangiftes, betaalgedrag. Gaat dat mis (de functie
+ * bestaat nog niet terwijl de edge functions al nieuw zijn), dan geen cashflow
+ * in plaats van een prognose die helemaal niet laadt: de winst klopt dan nog.
+ */
+async function loadCash(ctx: ActionCtx): Promise<CashPosition> {
+  const { data, error } = await ctx.db.rpc('forecast_cash_position', { p_organization_id: ctx.organizationId });
+  if (error) return emptyCashPosition(ctx.today);
+  return parseCashPosition(data, ctx.today);
+}
+
 function startOf(assumptions: unknown): string | null {
   return normalizeAssumptions(assumptions).start_month;
 }
@@ -99,13 +112,72 @@ function patchFrom(input: Record<string, unknown>): Record<string, unknown> {
   return patch;
 }
 
+const MONTH_KEYS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+
+/** Het seizoenspatroon voor het model: per maand een percentage (100 = een gemiddelde maand). */
+function seasonView(result: ForecastResult) {
+  const season = result.season;
+  return {
+    strength_pct: result.assumptions.seasonality_pct,
+    applied: result.effective.season_applied,
+    available: season.available,
+    reason: season.reason,
+    learned_from: season.from,
+    learned_to: season.to,
+    pattern_pct: season.available ? Object.fromEntries(MONTH_KEYS.map((key, cal) => [key, Math.round(season.index[cal] * 100)])) : null,
+    text: seasonText(season),
+  };
+}
+
+/** De cashflow voor het model: saldo nu, het laagste punt, de btw, en per maand wat erin en eruit gaat. */
+function cashflowView(flow: CashflowResult, includeMonths: boolean) {
+  const e = flow.effective;
+  return {
+    available: flow.available,
+    reason: flow.reason,
+    summary: summarizeCashflow(flow),
+    effective_text: describeCashflow(flow),
+    start: {
+      balance: e.start_known ? eur(e.start_cents) : null,
+      automatic: e.start_auto,
+      accounts: flow.bank.map((account) => ({ name: account.name, balance: account.balance_cents === null ? null : eur(account.balance_cents), method: account.method, as_of: account.as_of })),
+      cash_box: eur(flow.cash_accounts_cents),
+    },
+    lowest: flow.lowest ? { month: flow.lowest.at_start ? 'nu' : flow.lowest.month, balance: eur(flow.lowest.cents) } : null,
+    end_balance: flow.available ? eur(flow.end_cents) : null,
+    below_buffer_month: flow.below_buffer,
+    open_invoices: eur(flow.open.receivables_cents),
+    open_invoices_overdue: eur(flow.open.receivables_overdue_cents),
+    open_purchase_invoices: eur(flow.open.payables_cents),
+    vat_payments: flow.vat_payments.map((payment) => ({ period: payment.period, month: payment.month, amount: eur(payment.cents), from_filed_return: payment.source === 'return' })),
+    notes: flow.notes,
+    months: includeMonths && flow.available
+      ? flow.months.map((month) => ({
+        month: month.month,
+        from_today: month.partial,
+        start: eur(month.start_cents),
+        in_open_invoices: eur(month.in_open_cents),
+        in_new_sales: eur(month.in_sales_cents),
+        out_open_purchase_invoices: eur(month.out_open_cents),
+        out_costs: eur(month.out_costs_cents),
+        vat: eur(month.vat_cents),
+        vat_periods: month.vat_periods,
+        other: eur(month.other_cents),
+        end: eur(month.end_cents),
+      }))
+      : undefined,
+  };
+}
+
 /** Wat een prognose voor het model betekent: aannames, uitkomst, en per maand de cijfers. */
-function forecastView(result: ForecastResult, includeMonths: boolean) {
+function forecastView(result: ForecastResult, includeMonths: boolean, flow: CashflowResult) {
   const { effective, totals } = result;
   return {
     summary: summarizeForecast(result),
     assumptions: result.assumptions,
     assumptions_text: describeAssumptions(result),
+    seasonality: seasonView(result),
+    cashflow: cashflowView(flow, includeMonths),
     effective: {
       start_month: effective.start_month,
       end_month: effective.end_month,
@@ -169,12 +241,32 @@ function effectText(before: ForecastResult | null, after: ForecastResult): strin
   return !before || was === is ? `verwachte winst ${is} over ${span}` : `verwachte winst ${was} → ${is} over ${span}`;
 }
 
+/**
+ * "laagste saldo € 3.400 → € 900 (maart 2027)": wat een wijziging met je
+ * rekening doet. Een investering of lening verandert de winst niet maar wel
+ * het saldo; zonder deze zin zei de kaart dan "winst blijft gelijk", en dat
+ * is precies wat je bij een cashflow niet wilt weten. Null zonder cashflow.
+ */
+function cashEffectText(before: CashflowResult | null, after: CashflowResult): string | null {
+  if (!after.available || !after.lowest || !after.effective.start_known) return null;
+  const is = `${wholeEuroText(after.lowest.cents)} (${after.lowest.at_start ? 'nu' : monthLabel(after.lowest.month)})`;
+  if (!before || !before.available || !before.lowest) return `laagste saldo ${is}`;
+  const was = wholeEuroText(before.lowest.cents);
+  return was === wholeEuroText(after.lowest.cents) ? `laagste saldo ${is}` : `laagste saldo ${was} → ${is}`;
+}
+
 // ── Het invoerschema van een wijziging ──────────────────────────────────────
 
 const ITEM_PROPERTIES = {
-  label: { type: 'string', description: 'Naam van de post, bijvoorbeeld "Nieuwe medewerker" of "Opdracht Jansen".' },
-  kind: { type: 'string', enum: ['revenue', 'cost'], description: 'revenue = extra omzet, cost = extra kosten.' },
-  amount: { type: 'number', description: "Bedrag PER MAAND in euro's exclusief btw (een eenmalige post: from en to dezelfde maand)." },
+  label: { type: 'string', description: 'Naam van de post, bijvoorbeeld "Nieuwe medewerker", "Opdracht Jansen", "Lening" of "Nieuwe bus".' },
+  kind: {
+    type: 'string',
+    enum: ['revenue', 'cost', 'cash_in', 'cash_out'],
+    description: 'revenue = extra omzet, cost = extra kosten (allebei in de winst én de cashflow). ' +
+      'cash_in = alleen geld erbij (een lening, een privé-storting, een subsidie die geen omzet is), cash_out = alleen geld eraf ' +
+      '(een investering zoals een bus of computer, een aflossing, een privé-opname, een belastingaanslag): die tellen NIET in omzet, kosten of winst, alleen in de cashflow.',
+  },
+  amount: { type: 'number', description: "Bedrag PER MAAND in euro's: omzet en kosten exclusief btw, geld erbij/eraf zoals het van de rekening gaat (een eenmalige post: from en to dezelfde maand)." },
   from: { type: 'string', description: 'Eerste maand, JJJJ-MM.' },
   to: { type: ['string', 'null'], description: 'Laatste maand (tot en met), JJJJ-MM. Leeg/null = tot het eind van de prognose.' },
 };
@@ -206,6 +298,13 @@ const PATCH_INPUT: Record<string, unknown> = {
     items: { type: 'object', properties: { id: { type: 'string', description: 'Het id van de post, bijvoorbeeld "post-2".' }, ...ITEM_PROPERTIES }, required: ['id'] },
   },
   remove_item_ids: { type: 'array', items: { type: 'string' }, description: 'Id\'s van posten die weg moeten (uit forecast.list).' },
+  seasonality_pct: { type: 'number', description: 'Seizoenspatroon uit de vorige jaren, 0 t/m 100: 0 = uit (elke maand gelijk), 100 = drukke en rustige maanden zoals de vorige jaren, 50 = half zo sterk. Werkt op de nieuwe projecten en de overige omzet. Kijk in forecast.list (seasonality) of er een patroon is: daarvoor zijn twee jaar omzet nodig.' },
+  cash_start: { type: ['number', 'null'], description: "Banksaldo vandaag in euro's (bank en kas samen; negatief = rood). null = automatisch uit de bankrekeningen in ResoFly." },
+  collection_days: { type: ['number', 'null'], description: 'Na hoeveel dagen klanten betalen, 0 t/m 180. null = automatisch: hoe snel ze het afgelopen jaar betaalden, anders de betaaltermijn.' },
+  vat_sales_pct: { type: ['number', 'null'], description: 'Btw op de omzet in procenten, 0 t/m 30 (gemiddeld over alle facturen). null = automatisch (met de KOR 0).' },
+  vat_costs_pct: { type: ['number', 'null'], description: 'Btw op de kosten zonder afschrijvingen in procenten, 0 t/m 30. null = automatisch.' },
+  noncash_costs: { type: ['number', 'null'], description: "Kosten per maand die geen geld kosten (afschrijvingen), in euro's. null = automatisch." },
+  cash_buffer: { type: 'number', description: "Ondergrens voor het saldo in euro's: komt het saldo eronder, dan waarschuwt de cashflow. 0 = alleen bij rood staan." },
 };
 
 const PATCH_FIELDS = Object.keys(PATCH_INPUT);
@@ -221,9 +320,11 @@ export const FORECAST_ACTIONS: ActionDef[] = [
     description:
       'Geeft de prognoses (forecast) onder Financiën → Prognose: per prognose de aannames, wat automatisch uit de cijfers komt, de uitkomst (nieuwe projecten, omzet, kosten, winst en marge) en per maand de cijfers. ' +
       'Voor een prognose die al begon staat bij de voorbije maanden ook wat er werkelijk gebeurde (actual). Daarnaast: waar "automatisch" op rust (de laatste twaalf hele maanden), de cijfers van die maanden, en de openstaande en geaccepteerde offertes. ' +
-      'Bedragen in euro\'s exclusief btw. Gebruik dit vóór je een prognose aanpast (forecast.update), zodat je het id, de posten en de huidige winst kent. ' +
+      'Per prognose ook het SEIZOENSPATROON uit de vorige jaren (seasonality: per maand een percentage, en of het aanstaat) en de CASHFLOW (cashflow): het banksaldo nu, per maand wat er binnenkomt en uitgaat, de btw-betalingen, het laagste saldo en het saldo aan het eind. ' +
+      'Bedragen in euro\'s; omzet en kosten exclusief btw, de cashflow met btw. Gebruik dit vóór je een prognose aanpast (forecast.update), zodat je het id, de posten en de huidige winst kent. ' +
       'Is er nog geen prognose, dan staat er een automatische bij (niet bewaard): maak er een met forecast.create.',
-    keywords: ['prognose', 'prognoses', 'forecast', 'verwachting', 'begroting', 'budget', 'vooruitblik', 'scenario', 'komend jaar', 'volgend jaar', 'verwachte winst', 'verwachte omzet', 'omzetprognose', 'winstprognose'],
+    keywords: ['prognose', 'prognoses', 'forecast', 'verwachting', 'begroting', 'budget', 'vooruitblik', 'scenario', 'komend jaar', 'volgend jaar', 'verwachte winst', 'verwachte omzet', 'omzetprognose', 'winstprognose',
+      'cashflow', 'cashflowprognose', 'liquiditeit', 'liquiditeitsprognose', 'geldstroom', 'verwacht saldo', 'rood staan', 'seizoenspatroon', 'seizoen'],
     input: {
       forecast_id: { type: 'string', description: 'Eén prognose (met haar laatste versies). Weglaten = allemaal.' },
       include_months: { type: 'boolean', description: 'De cijfers per maand meegeven (standaard true).' },
@@ -235,8 +336,12 @@ export const FORECAST_ACTIONS: ActionDef[] = [
       if (forecastId) rows = [await row<ForecastRow>(ctx, 'forecasts', forecastId, FORECAST_COLUMNS, 'Prognose')];
       else rows = await loadForecasts(ctx);
 
-      const inputs = await loadInputs(ctx, rows.map((forecast) => startOf(forecast.assumptions)));
+      const [inputs, cash] = await Promise.all([
+        loadInputs(ctx, rows.map((forecast) => startOf(forecast.assumptions))),
+        loadCash(ctx),
+      ]);
       const automatic = computeForecast(DEFAULT_ASSUMPTIONS, inputs, ctx.today);
+      const view = (result: ForecastResult) => forecastView(result, includeMonths, computeCashflow(result, inputs, cash, ctx.today));
       const forecasts = rows.map((forecast) => ({
         id: forecast.id,
         name: forecast.name,
@@ -244,7 +349,7 @@ export const FORECAST_ACTIONS: ActionDef[] = [
         version: forecast.version,
         last_change: forecast.change_note,
         updated_at: forecast.updated_at,
-        ...forecastView(computeForecast(forecast.assumptions, inputs, ctx.today), includeMonths),
+        ...view(computeForecast(forecast.assumptions, inputs, ctx.today)),
       }));
 
       let versions: Array<{ version: number; created_at: string; change: string | null }> | undefined;
@@ -262,7 +367,7 @@ export const FORECAST_ACTIONS: ActionDef[] = [
         today: ctx.today,
         forecasts,
         versions,
-        automatic: rows.length === 0 ? { note: 'Nog geen prognose bewaard. Dit is de automatische, uit de cijfers van het afgelopen jaar.', ...forecastView(automatic, includeMonths) } : undefined,
+        automatic: rows.length === 0 ? { note: 'Nog geen prognose bewaard. Dit is de automatische, uit de cijfers van het afgelopen jaar.', ...view(automatic) } : undefined,
         baseline: {
           text: baselineText(automatic),
           from: automatic.baseline.from,
@@ -290,6 +395,7 @@ export const FORECAST_ACTIONS: ActionDef[] = [
           win_rate_pct: decided >= 3 ? Math.round((pipeline.won_count / decided) * 100) : null,
           note: 'Offertes tellen niet vanzelf mee in een prognose (die zitten al in het gemiddelde). Zet een grote opdracht of een geaccepteerde offerte als extra post erbij als de gebruiker dat wil.',
         },
+        cash_note: 'De cashflow rekent vanaf vandaag tot het eind van de prognose. Een investering, lening of privé-opname zet je als post met kind cash_out of cash_in: die verandert het saldo, niet de winst. Een btw-aangifte die in ResoFly is afgesloten of ingediend telt met haar saldo; een betaalde niet.',
         fields: FIELD_GUIDE,
       };
     },
@@ -303,9 +409,9 @@ export const FORECAST_ACTIONS: ActionDef[] = [
     description:
       'Maakt een NIEUWE prognose (een scenario, zoals "Voorzichtig" of "Met extra medewerker"), leeg (alles automatisch uit de cijfers) of als kopie van een bestaande (copy_from_id), met meteen de aanpassingen die je meegeeft. ' +
       'Een bestaande prognose aanpassen doe je met forecast.update. Velden: ' + FIELD_GUIDE + '. ' +
-      'Extra posten met add_items; per maand een eigen aantal projecten met month_projects. Bedragen in euro\'s exclusief btw. ' +
-      'De kaart noemt de aannames en de verwachte winst; pas na akkoord wordt hij aangemaakt.',
-    keywords: ['prognose', 'forecast', 'scenario', 'nieuwe prognose', 'begroting', 'budget', 'verwachting', 'kopie', 'what-if', 'wat als'],
+      'Extra posten met add_items (omzet, kosten, of alleen geld erbij/eraf voor de cashflow); per maand een eigen aantal projecten met month_projects; het seizoen met seasonality_pct. Omzet en kosten in euro\'s exclusief btw. ' +
+      'De kaart noemt de aannames, de verwachte winst en het laagste saldo; pas na akkoord wordt hij aangemaakt.',
+    keywords: ['prognose', 'forecast', 'scenario', 'nieuwe prognose', 'begroting', 'budget', 'verwachting', 'kopie', 'what-if', 'wat als', 'cashflowscenario'],
     input: {
       name: { type: 'string', description: 'Naam, uniek binnen de organisatie, bijvoorbeeld "Voorzichtig 2027".' },
       notes: { type: 'string', description: 'Optioneel: een toelichting voor wie hem later leest.' },
@@ -323,12 +429,13 @@ export const FORECAST_ACTIONS: ActionDef[] = [
       let changes: string[];
       try { ({ next, changes } = applyForecastPatch(base, patchFrom(input))); } catch (error) { inputError(error); }
 
-      const inputs = await loadInputs(ctx, [next.start_month]);
+      const [inputs, cash] = await Promise.all([loadInputs(ctx, [next.start_month]), loadCash(ctx)]);
       const result = computeForecast(next, inputs, ctx.today);
+      const flow = computeCashflow(result, inputs, cash, ctx.today);
       const origin = source ? `kopie van ${source.name}` : 'automatisch uit je cijfers';
       return {
         title: `Nieuwe prognose: ${name}`,
-        sub: joinShort([origin, ...changes.slice(0, 3), changes.length > 3 ? `en ${changes.length - 3} meer` : null, effectText(null, result)], 240),
+        sub: joinShort([origin, ...changes.slice(0, 3), changes.length > 3 ? `en ${changes.length - 3} meer` : null, effectText(null, result), cashEffectText(null, flow)], 280),
         kind: 'insight',
         payload: {
           name,
@@ -346,11 +453,13 @@ export const FORECAST_ACTIONS: ActionDef[] = [
     module: 'finance',
     kind: 'write',
     description:
-      'Past een BESTAANDE prognose aan: groei, aantal projecten, omzet per project, kosten, het begin of de looptijd, per maand een eigen aantal projecten, of extra posten (een nieuwe medewerker, een investering, een grote opdracht). ' +
-      'Zoek hem eerst op met forecast.list (id, posten, huidige winst). Geef alleen wat verandert; null bij een automatisch veld zet het terug op automatisch. Velden: ' + FIELD_GUIDE + '. ' +
+      'Past een BESTAANDE prognose aan: groei, aantal projecten, omzet per project, kosten, het begin of de looptijd, per maand een eigen aantal projecten, extra posten (een nieuwe medewerker, een grote opdracht), ' +
+      'het seizoenspatroon uit de vorige jaren (seasonality_pct), of de cashflow: het banksaldo, hoe snel klanten betalen, de btw, en posten die alleen geld zijn (kind cash_in of cash_out: een lening, een investering, een privé-opname). ' +
+      'Zoek hem eerst op met forecast.list (id, posten, huidige winst, cashflow). Geef alleen wat verandert; null bij een automatisch veld zet het terug op automatisch. Velden: ' + FIELD_GUIDE + '. ' +
       'Een eerdere stand terugzetten: restore_version (nummer uit forecast.list met forecast_id). ' +
-      'De kaart toont elke wijziging en de verwachte winst ervoor en erna. Bedragen in euro\'s exclusief btw.',
-    keywords: ['prognose', 'forecast', 'aanpassen', 'wijzigen', 'groei', 'scenario', 'begroting', 'budget', 'verwachting', 'extra medewerker', 'investering', 'seizoen', 'terugzetten', 'wat als'],
+      'De kaart toont elke wijziging, de verwachte winst en het laagste saldo ervoor en erna. Omzet en kosten in euro\'s exclusief btw.',
+    keywords: ['prognose', 'forecast', 'aanpassen', 'wijzigen', 'groei', 'scenario', 'begroting', 'budget', 'verwachting', 'extra medewerker', 'investering', 'seizoen', 'terugzetten', 'wat als',
+      'seizoenspatroon', 'drukke maanden', 'rustige maanden', 'cashflow', 'banksaldo invullen', 'lening', 'privé-opname', 'betaaltermijn klanten'],
     input: {
       forecast_id: { type: 'string', description: 'Id van de prognose (exact, uit forecast.list).' },
       name: { type: 'string', description: 'Nieuwe naam. Weglaten = blijft.' },
@@ -402,13 +511,15 @@ export const FORECAST_ACTIONS: ActionDef[] = [
       }
       patch.assumptions = next;
 
-      const inputs = await loadInputs(ctx, [currentAssumptions.start_month, next.start_month]);
+      const [inputs, cash] = await Promise.all([loadInputs(ctx, [currentAssumptions.start_month, next.start_month]), loadCash(ctx)]);
       const before = computeForecast(currentAssumptions, inputs, ctx.today);
       const after = computeForecast(next, inputs, ctx.today);
+      const flowBefore = computeCashflow(before, inputs, cash, ctx.today);
+      const flowAfter = computeCashflow(after, inputs, cash, ctx.today);
       const lead = restored !== null ? [`versie ${restored} terugzetten`] : [];
       return {
         title: `Prognose aanpassen: ${current.name}`,
-        sub: joinShort([...lead, ...changes.slice(0, 3), changes.length > 3 ? `en ${changes.length - 3} meer` : null, effectText(before, after)], 260),
+        sub: joinShort([...lead, ...changes.slice(0, 3), changes.length > 3 ? `en ${changes.length - 3} meer` : null, effectText(before, after), cashEffectText(flowBefore, flowAfter)], 300),
         kind: 'insight',
         payload: {
           forecast_id: forecastId,
