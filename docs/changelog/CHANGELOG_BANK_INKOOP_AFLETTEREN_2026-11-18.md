@@ -216,3 +216,16 @@ factuur en journaalpost (7,9 s voor 300 facturen); nu eerst de geboekte facturen
   import map naar npm, omdat esm.sh vanuit de sessie niet bereikbaar was).
 - **Migratie**: de hele keten vanaf nul (`supabase db reset`, 288 bestanden),
   daarna deze migratie nog eens: schoon. Precies één versie van elke functie.
+
+## Uitrol op staging
+
+- Gemerged naar `staging` (e3a7c24). *Deploy Supabase (staging)* run 247:
+  migratie 20261118190000 toegepast, edge functions uitgerold, rooktest groen.
+- Nagekeken op staging (Management API, alleen lezen): de vijf nieuwe
+  functies en twee triggers staan erin, de vier kolommen op
+  `bank_transactions` ook, en `bank_match_run` is niet aan te roepen door een
+  ingelogde gebruiker. Op staging staan 3.619 open bankregels uit de
+  sandbox-koppeling en één inkoopfactuur; er is nog niets automatisch geboekt.
+- *Frontend checks* run 264: helemaal groen (typecheck, unit-tests, de
+  migratieketen vanaf nul met de databasetests, `deno check`, de mobiele
+  lay-outtest, laden per module, inrichten en de terugknop).
