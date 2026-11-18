@@ -105,6 +105,7 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   forecast: 'finance',
   'vat-returns': 'finance',
   'corporate-tax': 'finance',
+  'income-tax': 'finance',
   dga: 'finance',
   shareholders: 'finance',
   // Eenmanszaak, vof, maatschap en cv: vennoten en kapitaalvergelijking.

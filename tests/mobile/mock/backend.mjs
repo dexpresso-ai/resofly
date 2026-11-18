@@ -695,6 +695,50 @@ function mailFolderRpc(fn, body) {
   }
 }
 
+/**
+ * `incomeTax: 'eenmanszaak' | 'vof'`: de raming van de inkomstenbelasting
+ * (2026-11-18). Een eenmanszaak met een bijtelling, een boete, € 1.562 op 4600
+ * (eten, drinken en representatie) en vier activa (een personenauto
+ * uitgesloten, een muis onder de € 450), of een vof met twee vennoten en een
+ * uitgetreden vennoot. De eigenaar van de eenmanszaak heeft 1.235 uur. Het jaar komt uit de aanroep,
+ * zodat de pagina in elk jaar iets toont.
+ */
+function incomeTaxInputs(form, body) {
+  const year = Number(body?.p_year) || 2026;
+  const partnership = form !== 'eenmanszaak';
+  const profile = (partnerId, extra) => ({
+    partnerId, meetsHoursCriterion: true, starter: false, aowStatus: 'nee', aowMonth: null, lossCarryForwardCents: 0,
+    otherEntrepreneurDeductionCents: 0, provisionalIncomeTaxCents: 600000, provisionalZvwCents: 180000, updatedAt: `${year}-03-02T09:12:00+00:00`, ...extra,
+  });
+  return {
+    year, legalForm: form, isPartnershipForm: partnership, companyName: 'Studio Lopik', bookkeepingStartDate: '2024-01-01',
+    resultCents: partnership ? 11834567 : 5234567,
+    mixedCostsCents: 156200,
+    overlappingFiscalYears: [{ id: 'fy-ib', label: String(year), periodStart: `${year}-01-01`, periodEnd: `${year}-12-31`, status: 'open' }],
+    partners: partnership ? [
+      { id: 'pp-1', name: 'Anna van den Heuvel-Bakker', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 6000 },
+      { id: 'pp-2', name: 'Bram Lopik', partnerNumber: 2, kind: 'beherend', isActive: true, shareBasisPoints: 4000 },
+      { id: 'pp-3', name: 'Oud-vennoot', partnerNumber: 3, kind: 'beherend', isActive: false, shareBasisPoints: 0 },
+    ] : [],
+    profiles: partnership
+      ? [profile('pp-1', { starter: true }), profile('pp-2', { meetsHoursCriterion: null, aowStatus: 'in_jaar', aowMonth: 8, provisionalIncomeTaxCents: 0, provisionalZvwCents: 0 })]
+      : [profile(null, {})],
+    corrections: [
+      { id: 'itc-1', partnerId: partnership ? 'pp-2' : null, code: 'privegebruik_auto', label: 'Bijtelling auto van de zaak (22% van de cataloguswaarde)', amountCents: 294000 },
+      { id: 'itc-2', partnerId: null, code: 'niet_aftrekbaar', label: 'Verkeersboete', amountCents: 9500 },
+    ],
+    investments: [
+      { assetId: 'fa-1', name: 'MacBook Pro 16 inch voor de studio', assetNumber: 'ACT-2026-001', acquisitionDate: `${year}-02-14`, costCents: 324900, excluded: false },
+      { assetId: 'fa-2', name: 'Monitor', assetNumber: 'ACT-2026-002', acquisitionDate: `${year}-02-14`, costCents: 64900, excluded: false },
+      { assetId: 'fa-3', name: 'Personenauto', assetNumber: 'ACT-2026-003', acquisitionDate: `${year}-05-01`, costCents: 3850000, excluded: true },
+      { assetId: 'fa-4', name: 'Muis', assetNumber: null, acquisitionDate: `${year}-06-01`, costCents: 8900, excluded: false },
+    ],
+    myMinutes: 61380,
+    ownerMinutes: partnership ? null : 74100,
+    partnerMinutes: partnership ? { 'pp-1': 78000 } : null,
+  };
+}
+
 function rpc(fn, body = null) {
   const folderResult = mailFolderRpc(fn, body);
   if (folderResult !== undefined) return folderResult;
@@ -874,6 +918,10 @@ export async function installMock(context, options = {}) {
         if (result !== undefined) return reply(route, result);
       }
       let rpcBody = null; try { rpcBody = req.postDataJSON(); } catch { /* geen json-body */ }
+      if (options.incomeTax && fn === 'get_income_tax_inputs') return reply(route, incomeTaxInputs(options.incomeTax, rpcBody));
+      if (options.incomeTax && fn === 'organization_business_status') {
+        return reply(route, [{ active: false, enabled: false, included_in_plan: false, in_grace: false, grace_until: null, legal_form: options.incomeTax, fiscal_regime: 'ib', is_corporate: false }]);
+      }
       // Alleen bij het album: de opslagmeter staat ook bij Instellingen, en
       // die pagina's meet de test zonder.
       if (options.gallery && fn === 'organization_storage_status') {
@@ -915,7 +963,8 @@ export async function installMock(context, options = {}) {
       // dan nergens te zien, ook niet in het menu.
       // `declarant: true` (2026-11-18): de ingelogde gebruiker is een teamlid
       // zonder Financiën. Hij ziet Declaraties, en geen inkoopfacturen.
-      const rows = options.declarant && table === 'organization_members' ? declarantMembers(url)
+      const rows = options.incomeTax && table === 'company_settings' ? [{ ...seed.companySettings, company_name: 'Studio Lopik', legal_form: options.incomeTax }]
+        : options.declarant && table === 'organization_members' ? declarantMembers(url)
         : options.aiDeclined && table === 'ai_consents' ? [consentRow(false, [])]
         : options.aiOff && table === 'ai_consents' ? []
         // `vof: true`: bedrijfsgegevens, vennoten en rekeningschema van een vof.

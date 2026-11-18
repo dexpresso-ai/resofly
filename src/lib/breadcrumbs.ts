@@ -49,7 +49,7 @@ const PAGE_SECTIONS: Record<string, string> = {
   quotes: 'Financiën', contracts: 'Financiën', invoices: 'Financiën',
   suppliers: 'Financiën', 'purchase-invoices': 'Financiën', ledger: 'Financiën',
   bank: 'Financiën', assets: 'Financiën', prepaid: 'Financiën', pnl: 'Financiën', forecast: 'Financiën', 'vat-returns': 'Financiën',
-  'corporate-tax': 'Financiën', dga: 'Financiën', shareholders: 'Financiën', owners: 'Financiën',
+  'corporate-tax': 'Financiën', 'income-tax': 'Financiën', dga: 'Financiën', shareholders: 'Financiën', owners: 'Financiën',
   'fiscal-years': 'Financiën', 'annual-accounts': 'Financiën',
   // In het menu onder Financiën, ook voor wie verder niets van Financiën ziet.
   declarations: 'Financiën',

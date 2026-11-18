@@ -3048,6 +3048,48 @@ body::before{
   .bk-prepaid-due .bk-acq-actions{width:100%}
   .bk-prepaid-due .bk-acq-actions .form-input{flex:1 1 140px;width:auto;min-width:0}
 }
+/* Inkomstenbelasting (2026-11-18): de raming per ondernemer of vennoot. De
+   disclaimer staat bovenaan en valt op; per persoon het formulier naast de
+   berekening, op een smal scherm eronder. Lange namen en omschrijvingen breken,
+   bedragen nooit: anders viel op de telefoon de laatste cijfers van de rand. */
+.ib-disclaimer{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border:1px solid rgba(var(--accent-rgb),.45);border-radius:14px;background:rgba(var(--accent-rgb),.08);font-size:.84rem;line-height:1.45}
+.ib-disclaimer svg{flex:none;margin-top:2px;color:var(--accent-ink)}
+.ib-disclaimer p{margin:0}
+.ib-warning{display:flex;gap:8px;align-items:flex-start;margin-bottom:0}
+.ib-warning svg{flex:none;margin-top:3px;color:var(--danger)}
+.ib-person,.ib-kia,.ib-corrections{padding:16px;border:1px solid var(--border);border-radius:18px;background:rgba(var(--sheen-rgb),calc(.015 * var(--sheen-k)))}
+.ib-person-head{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ib-person-head h3{margin:0;font-size:1.02rem;overflow-wrap:anywhere}
+.ib-person-grid{display:grid;grid-template-columns:minmax(240px,320px) minmax(0,1fr);gap:18px;align-items:start}
+.ib-person-form{display:grid;gap:12px;min-width:0}
+/* Een veld is een raster met één kolom; zonder minmax(0,1fr) rekende die met de
+   volle tekst van de keuzelijst ("Hele onderneming (naar winstaandeel)") en liep
+   het veld op de telefoon buiten de kaart. */
+.ib-person-form .bk-setting-field,.ib-correction-form label{grid-template-columns:minmax(0,1fr);min-width:0}
+.ib-person-form .bk-setting-field small,.ib-person-form .bk-setting-check small{font-size:.74rem}
+.ib-person-form .bk-setting-check,.ib-kia-list .bk-setting-check{align-items:flex-start}
+.ib-person-form .bk-setting-check small,.ib-kia-list small{display:block;margin-top:2px}
+.ib-calc .bk-table td:first-child{overflow-wrap:anywhere}
+.ib-calc .bk-num{white-space:nowrap}
+.ib-notes{display:grid;gap:6px}
+.ib-notes p,.ib-saved{margin:0;font-size:.8rem}
+.ib-kia-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.ib-kia-list span{overflow-wrap:anywhere}
+.ib-corrections .bk-table td:first-child{overflow-wrap:anywhere}
+.ib-sub{font-size:.76rem;margin-top:2px}
+.ib-rules{font-size:.78rem;line-height:1.5}
+/* De algemene regel voor brede boekhoudtabellen (min-width 560px, zijwaarts
+   schuiven) gaf hier een berekening van twee kolommen waarvan de bedragen
+   buiten beeld vielen: je moest opzij schuiven om te zien wat je betaalt. */
+@media(max-width:900px){
+  .ib-person-grid{grid-template-columns:minmax(0,1fr)}
+  .ib-calc .bk-table,.ib-corrections .bk-table{min-width:0}
+}
+@media(max-width:640px){
+  .ib-person,.ib-kia,.ib-corrections{padding:12px}
+  .ib-calc .bk-table td,.ib-calc .bk-table th{padding:9px 10px}
+  .ib-correction-form label{flex:1 1 100%}
+}
 /* Balans: uitklapbare boekwaarderegel voor vaste activa */
 .bk-balance-group{cursor:pointer}
 .bk-balance-group td{font-weight:600}

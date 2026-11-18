@@ -524,6 +524,7 @@ function IncomeTaxSection({ data, organizationId, overview, ownerUserId }: {
             Een indicatie{overview.fiscalYear.status !== 'closed' ? ', op basis van wat er nu geboekt is' : ''}. Niet meegerekend: de kleinschaligheidsinvesteringsaftrek (investeerde je in {year} meer dan € 2.901 in bedrijfsmiddelen van elk minstens € 450?),
             de bijtelling als je privé rijdt in een auto van de zaak, een desinvesteringsbijtelling, de meewerkaftrek, en de halve zelfstandigenaftrek als je aan het begin van het jaar de AOW-leeftijd had.
             Niet benutte zelfstandigenaftrek schuift door naar volgende jaren.
+            {' '}Die posten, de AOW-leeftijd en wat je aan inkomstenbelasting en Zvw-bijdrage betaalt, rekent Financiën → Inkomstenbelasting uit, tot op de cent gelijk aan dit overzicht.
           </p>
         </>
       )}

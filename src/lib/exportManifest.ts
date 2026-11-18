@@ -80,7 +80,13 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 'export': een prognose is de verwachting van de organisatie zelf, en de
 // versies laten zien hoe die verwachting bijgesteld werd. De aannames staan
 // als jsonb; de prognoses ook als leesbare lijst.
-export const EXPORT_SCHEMA_VERSION = '20261118144500';
+// 20261118150000 (raming inkomstenbelasting) zet drie tabellen erbij:
+// income_tax_profiles (urencriterium, starter, AOW-leeftijd en voorlopige
+// aanslagen per ondernemer of vennoot per jaar), income_tax_corrections en
+// income_tax_kia_exclusions. De fiscale gegevens van de klant zelf: alles gaat
+// mee. Verder twee unieke sleutels (organization_id, id) op
+// partnership_partners en fixed_assets; geen kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261118150000';
 
 export type TableKind =
   | 'export'
@@ -329,6 +335,9 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   share_transactions: { kind: 'export' },
   share_encumbrances: { kind: 'export' },
   partnership_partners: { kind: 'export' },
+  income_tax_profiles: { kind: 'export' },
+  income_tax_corrections: { kind: 'export' },
+  income_tax_kia_exclusions: { kind: 'export' },
 
   // ── Marketing ────────────────────────────────────────────────────────────
   email_campaigns: { kind: 'export' },
