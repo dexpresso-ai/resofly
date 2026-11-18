@@ -962,7 +962,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       year_result_account_code: { type: 'string', enum: ['0510', '0500'], description: '0510 = onverdeeld resultaat, 0500 = eigen vermogen.' },
     },
     async plan(ctx, input) {
-      const settings = await settingsRow(ctx, 'bookkeeping_start_date, kor_enabled, vat_return_period, fiscal_year_start_month, year_result_account_code') ?? {};
+      const settings = await settingsRow(ctx, 'bookkeeping_start_date, kor_enabled, vat_return_period, fiscal_year_start_month, year_result_account_code, legal_form') ?? {};
       const current = {
         bookkeeping_start_date: settings.bookkeeping_start_date == null ? null : String(settings.bookkeeping_start_date),
         kor_enabled: settings.kor_enabled === true,
@@ -996,6 +996,11 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       if (startMonth !== null) {
         const month = Math.round(startMonth);
         if (month < 1 || month > 12) throw new ActionError('De startmaand van het boekjaar moet 1 tot en met 12 zijn.');
+        // Voor de inkomstenbelasting is het boekjaar het kalenderjaar; de
+        // database houdt de startmaand van een IB-onderneming op januari.
+        if (month !== 1 && ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(String(settings.legal_form ?? 'eenmanszaak'))) {
+          throw new ActionError('Bij een eenmanszaak, vof, maatschap of cv is het boekjaar het kalenderjaar: het begint in januari. Een gebroken boekjaar kan alleen bij een BV, NV of coöperatie.');
+        }
         if (month !== current.fiscal_year_start_month) {
           patch.fiscal_year_start_month = month;
           described.push(`boekjaar begint in ${MONTH_NAMES[month - 1]}`);

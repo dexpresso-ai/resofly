@@ -329,6 +329,14 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, teamMemb
             </span>
           </div>
 
+          {/* Stond het jaar ervoor nog open, dan leek het beginvermogen te laag,
+              zonder uitleg: de winst van dat jaar stond nog op de W&V-rekeningen. */}
+          {(overview.openPriorResultCents ?? 0) !== 0 && (
+            <p className="bk-neg"><AlertTriangle size={13} /> Een eerder boekjaar is nog niet afgesloten. Het resultaat daarvan
+              ({euroCents(overview.openPriorResultCents)}) zit nog niet in het beginvermogen{overview.isPartnership ? ' van de vennoten' : ''}.
+              Sluit dat jaar eerst af bij Financiën → Boekjaren.</p>
+          )}
+
           <div className="bk-table-wrap"><table className="bk-table">
             <thead><tr>
               <th>{overview.isPartnership ? 'Vennoot' : 'Ondernemer'}</th>

@@ -432,11 +432,18 @@ function AllocationEditor({ txn, data, candidates, disabled, busy, onBook, child
               {line.kind === 'ledger' ? (
                 <>
                   <Select value={line.accountId} disabled={disabled} searchable aria-label={`Grootboekrekening, regel ${index + 1}`}
-                    onChange={e => update(line.key, { accountId: e.target.value, partyId: '', vatCode: line.vatCode || (data.ledgerAccounts.find(a => a.id === e.target.value)?.default_vat_code ?? '') })}>
+                    onChange={e => {
+                      const account = data.ledgerAccounts.find(a => a.id === e.target.value);
+                      // Privé en kapitaal hebben geen btw. Bleef de btw-code van een
+                      // kostenrekening staan, dan gaf een privé-opname voorbelasting
+                      // (november 2026); de database weigert dat nu ook.
+                      const vatCode = account?.type === 'equity' ? '' : (line.vatCode || (account?.default_vat_code ?? ''));
+                      update(line.key, { accountId: e.target.value, partyId: '', vatCode });
+                    }}>
                     <option value="">— grootboekrekening —</option>
                     {accounts.map((a: LedgerAccount) => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
                   </Select>
-                  <Select value={line.vatCode} disabled={disabled} aria-label={`Btw, regel ${index + 1}`} onChange={e => update(line.key, { vatCode: e.target.value })}>
+                  <Select value={line.vatCode} disabled={disabled || data.ledgerAccounts.find(a => a.id === line.accountId)?.type === 'equity'} aria-label={`Btw, regel ${index + 1}`} onChange={e => update(line.key, { vatCode: e.target.value })}>
                     <option value="">Geen btw</option>
                     {data.vatCodes.map(v => <option key={v.id} value={v.code}>{v.label}</option>)}
                   </Select>
@@ -1203,13 +1210,17 @@ function BankRuleForm({ data, organizationId, canWrite, rule, onClose, onSaved }
         <Field label="Naam bevat"><Input value={form.match_counterparty_name_contains} onChange={e => set('match_counterparty_name_contains', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Omschrijving bevat"><Input value={form.match_description_contains} onChange={e => set('match_description_contains', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Boek op grootboekrekening">
-          <Select value={form.target_account_id || ''} onChange={e => set('target_account_id', e.target.value)} disabled={!canWrite}>
+          <Select value={form.target_account_id || ''} onChange={e => {
+            set('target_account_id', e.target.value);
+            // Op privé of kapitaal geen btw (de database weigert een regel met btw daarop).
+            if (accounts.find(a => a.id === e.target.value)?.type === 'equity') set('target_vat_code', '');
+          }} disabled={!canWrite}>
             <option value="">— kies —</option>
             {accounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
           </Select>
         </Field>
         <Field label="BTW-code">
-          <Select value={form.target_vat_code || ''} onChange={e => set('target_vat_code', e.target.value)} disabled={!canWrite}>
+          <Select value={form.target_vat_code || ''} onChange={e => set('target_vat_code', e.target.value)} disabled={!canWrite || accounts.find(a => a.id === form.target_account_id)?.type === 'equity'}>
             <option value="">Geen</option>
             {data.vatCodes.map(v => <option key={v.id} value={v.code}>{v.label}</option>)}
           </Select>

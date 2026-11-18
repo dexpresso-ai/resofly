@@ -23,9 +23,34 @@
 --      jaarafsluiting naar zijn eigen kapitaal, en telt de kapitaalvergelijking
 --      het als opname of storting.
 --
+--   3. EEN INKOOPFACTUUR DIE PRIVÉ IS BETAALD. Bij een vof betaalt een vennoot
+--      een zakelijke factuur nogal eens met zijn eigen pas. Een inkoopfactuur
+--      gold alleen als betaald via een bankboeking: de factuur bleef voorgoed
+--      open staan (en kwam terug als kandidaat bij elke bankbetaling), 1600
+--      Crediteuren ook, en de uitgave stond niet op het privé van de vennoot.
+--      Nu boekt pay_purchase_invoice_privately 1600 tegen de privé-stortingen
+--      van die vennoot (056n), of 0560 bij een eenmanszaak, en staat de factuur
+--      op betaald. Tegenboeken van die betaling zet hem weer open.
+--   4. BEGINVERMOGEN ZONDER HET VORIGE JAAR. Stond het vorige boekjaar nog
+--      open, dan miste het beginvermogen in de kapitaalvergelijking het
+--      resultaat van dat jaar, zonder dat er iets bij stond.
+--      owners_equity_overview geeft dat resultaat nu mee (openPriorResultCents).
+--   5. OPENSTAANDE POSTEN. report_open_items telt een privébetaling als
+--      betaald (anders stond de factuur bij Openstaand → Crediteuren).
+--   6. GEEN GEBROKEN BOEKJAAR BIJ EEN IB-ONDERNEMING. Voor de
+--      inkomstenbelasting is het boekjaar het kalenderjaar. open_fiscal_year
+--      weigert een boekjaar over twee kalenderjaren, en de startmaand blijft
+--      januari.
+--   7. GEEN BTW OP PRIVÉ OF KAPITAAL. Bij de bank bleef de btw-code staan als
+--      je naar een privérekening wisselde: een privé-opname gaf zo
+--      voorbelasting. Een bankverdeling en een bankregel op een
+--      eigen-vermogensrekening krijgen geen btw-code meer.
+--   8. 0550 EN 0560 NAAST DE VENNOTEN. Bij een vof met vennoten heten ze nu
+--      "(geen vennoot)": wie daar boekt, boekt op niemand.
+--
 -- De verdeling zelf verandert niet. Die wordt sinds deze migratie bewaakt door
--- tests/database/vennoten_jaarafsluiting.sql, die in CI op een lege database
--- draait (job migrations in frontend-checks.yml).
+-- tests/database/vennoten_jaarafsluiting.sql en tests/database/vof_administratie.sql,
+-- die in CI op een lege database draaien (job migrations in frontend-checks.yml).
 --
 -- Veilig om meermaals te draaien.
 -- ============================================================
@@ -452,7 +477,8 @@ end;
 $function$;
 
 -- ── 4. De kapitaalvergelijking: privé van vennoten telt als privé ──────────
--- Gelijk aan 20261104070000, op één plek na: zie GEWIJZIGD (20261117100000).
+-- Gelijk aan 20261104070000, op twee plekken na: zie GEWIJZIGD en TOEGEVOEGD
+-- (20261117100000).
 create or replace function public.owners_equity_overview(p_organization_id uuid, p_fiscal_year_id uuid)
 returns jsonb
 language plpgsql
@@ -475,6 +501,7 @@ declare
   v_withdraw bigint;
   v_other bigint;
   v_name text;
+  v_open_prior bigint := 0;
   r record;
 begin
   if auth.role() <> 'service_role'
@@ -507,6 +534,20 @@ begin
     and je.status = 'posted'
     and je.source_type <> 'year_close'
     and je.date between v_fy.period_start and v_fy.period_end
+    and la.type in ('revenue', 'expense');
+
+  -- TOEGEVOEGD (20261117100000): het resultaat van eerdere jaren dat nog op de
+  -- W&V-rekeningen staat, omdat dat jaar nog niet is afgesloten. Een
+  -- afgesloten jaar telt hier nul (de jaarafsluiting zet die rekeningen op
+  -- nul). Zonder deze regel leek het beginvermogen te laag, zonder uitleg.
+  select coalesce(sum(jl.credit_cents - jl.debit_cents), 0)::bigint
+  into v_open_prior
+  from public.journal_lines jl
+  join public.journal_entries je on je.id = jl.entry_id
+  join public.ledger_accounts la on la.id = jl.account_id
+  where jl.organization_id = p_organization_id
+    and je.status = 'posted'
+    and je.date < v_fy.period_start
     and la.type in ('revenue', 'expense');
 
   if v_partnership then
@@ -649,12 +690,645 @@ begin
     'shareTotalBasisPoints', case when v_partnership then v_share_total else null end,
     'resultCents', v_result,
     'owners', v_owners,
-    'unassigned', v_unassigned
+    'unassigned', v_unassigned,
+    'openPriorResultCents', v_open_prior
   );
 end;
 $$;
 
--- ── 5. Rechten ──────────────────────────────────────────────────────────────
+-- ── 5. Een inkoopfactuur die privé is betaald ──────────────────────────────
+
+-- Een eigen boekingssoort, zodat de betaling bij de factuur hoort: de lijst uit
+-- 20261111220000, met purchase_private_payment erbij.
+alter table public.journal_entries drop constraint if exists journal_entries_source_type_check;
+alter table public.journal_entries
+  add constraint journal_entries_source_type_check check (source_type in (
+    'sales_invoice','purchase_invoice','asset_depreciation','asset_acquisition','asset_disposal',
+    'vat_return','payment','opening_balance','manual','year_close','credit_note',
+    'result_appropriation','corporate_tax','dga_interest','payroll','dividend',
+    'prepaid_start','prepaid_release','prepaid_end',
+    'purchase_private_payment'
+  ));
+
+-- Gelijk aan 20261107110000, met de privébetalingen erbij (TOEGEVOEGD).
+create or replace function public.purchase_invoice_open_payable_cents(p_organization_id uuid, p_purchase_invoice_id uuid)
+returns bigint
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce((
+    select sum(jl.credit_cents - jl.debit_cents)
+    from public.purchase_invoices pi
+    join public.journal_entries je on je.id = pi.journal_entry_id and je.reversed_by_entry_id is null
+    join public.journal_lines jl on jl.entry_id = je.id
+    join public.ledger_accounts la on la.id = jl.account_id and la.subtype = 'accounts_payable'
+    where pi.id = p_purchase_invoice_id and pi.organization_id = p_organization_id
+  ), 0)::bigint - coalesce((
+    select sum(-a.amount_cents)
+    from public.bank_transaction_allocations a
+    join public.journal_entries je on je.id = a.journal_entry_id and je.status = 'posted'
+      and je.reversed_by_entry_id is null and je.reverses_entry_id is null
+    where a.organization_id = p_organization_id
+      and a.purchase_invoice_id = p_purchase_invoice_id
+      and a.kind = 'purchase_invoice'
+  ), 0)::bigint - coalesce((
+    -- TOEGEVOEGD (20261117100000): wat de ondernemer of een vennoot privé
+    -- betaalde (pay_purchase_invoice_privately). Tegengeboekt telt niet.
+    select sum(jl.debit_cents - jl.credit_cents)
+    from public.journal_entries je
+    join public.journal_lines jl on jl.entry_id = je.id
+    join public.ledger_accounts la on la.id = jl.account_id and la.subtype = 'accounts_payable'
+    where je.organization_id = p_organization_id
+      and je.source_type = 'purchase_private_payment'
+      and je.source_id = p_purchase_invoice_id
+      and je.status = 'posted'
+      and je.reversed_by_entry_id is null and je.reverses_entry_id is null
+  ), 0)::bigint;
+$$;
+
+-- Gelijk aan 20261107110000; de betaaldatum komt nu ook uit een privébetaling.
+create or replace function public.refresh_purchase_invoice_payment_status(p_organization_id uuid, p_purchase_invoice_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_pi public.purchase_invoices;
+  v_total bigint;
+  v_open bigint;
+  v_status text;
+  v_paid_at timestamptz;
+begin
+  select * into v_pi from public.purchase_invoices
+  where id = p_purchase_invoice_id and organization_id = p_organization_id;
+  if not found or v_pi.journal_entry_id is null then
+    return;
+  end if;
+
+  select coalesce(sum(jl.credit_cents - jl.debit_cents), 0) into v_total
+  from public.journal_lines jl
+  join public.ledger_accounts la on la.id = jl.account_id and la.subtype = 'accounts_payable'
+  where jl.entry_id = v_pi.journal_entry_id;
+
+  v_open := public.purchase_invoice_open_payable_cents(p_organization_id, p_purchase_invoice_id);
+  v_status := case
+    when v_total > 0 and v_open <= 0 then 'paid'
+    when v_total < 0 and v_open >= 0 then 'paid'
+    when v_total <> 0 and abs(v_open) < abs(v_total) then 'partially_paid'
+    else 'unpaid'
+  end;
+  if v_status = 'paid' then
+    select max(betaald)::timestamptz into v_paid_at
+    from (
+      select bt.booking_date as betaald
+      from public.bank_transaction_allocations a
+      join public.journal_entries je on je.id = a.journal_entry_id and je.status = 'posted'
+        and je.reversed_by_entry_id is null and je.reverses_entry_id is null
+      join public.bank_transactions bt on bt.id = a.bank_transaction_id
+      where a.organization_id = p_organization_id
+        and a.purchase_invoice_id = p_purchase_invoice_id
+      union all
+      -- TOEGEVOEGD (20261117100000): de datum van een privébetaling.
+      select je.date
+      from public.journal_entries je
+      where je.organization_id = p_organization_id
+        and je.source_type = 'purchase_private_payment'
+        and je.source_id = p_purchase_invoice_id
+        and je.status = 'posted'
+        and je.reversed_by_entry_id is null and je.reverses_entry_id is null
+    ) betalingen;
+    v_paid_at := coalesce(v_paid_at, now());
+  end if;
+
+  update public.purchase_invoices
+  set payment_status = v_status, paid_at = v_paid_at
+  where id = p_purchase_invoice_id
+    and (payment_status is distinct from v_status or paid_at is distinct from v_paid_at);
+end;
+$$;
+
+create or replace function public.pay_purchase_invoice_privately(
+  p_organization_id uuid,
+  p_purchase_invoice_id uuid,
+  p_partner_id uuid default null,
+  p_date date default null,
+  p_created_by uuid default auth.uid()
+)
+returns public.journal_entries
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_pi public.purchase_invoices;
+  v_partner public.partnership_partners;
+  v_open bigint;
+  v_private uuid;
+  v_payable uuid;
+  v_who text;
+  v_ref text;
+  v_date date;
+  v_start date;
+  v_entry public.journal_entries;
+begin
+  if auth.role() <> 'service_role'
+     and not (public.can_write_org(p_organization_id) and public.can_write_module(p_organization_id, 'finance')) then
+    raise exception 'Geen schrijfrechten voor de financiën van deze organisatie.' using errcode = '42501';
+  end if;
+  -- Privé bestaat alleen bij een IB-onderneming. Betaalt bij een BV de dga een
+  -- factuur, dan loopt dat via zijn rekening-courant.
+  if public.org_fiscal_regime(p_organization_id) <> 'ib' then
+    raise exception 'Privé betalen kan bij een eenmanszaak, vof, maatschap of cv. Bij een BV boek je een betaling door de dga op zijn rekening-courant.'
+      using errcode = '23514';
+  end if;
+
+  select * into v_pi from public.purchase_invoices
+  where id = p_purchase_invoice_id and organization_id = p_organization_id
+  for update;
+  if not found then
+    raise exception 'Inkoopfactuur niet gevonden.' using errcode = '02000';
+  end if;
+  if v_pi.journal_entry_id is null or v_pi.status = 'cancelled' then
+    raise exception 'Boek de inkoopfactuur eerst; daarna kun je hem als privé betaald vastleggen.' using errcode = '23514';
+  end if;
+  v_open := public.purchase_invoice_open_payable_cents(p_organization_id, p_purchase_invoice_id);
+  if v_open <= 0 then
+    raise exception 'Op deze inkoopfactuur staat niets meer open.' using errcode = '23514';
+  end if;
+
+  if p_partner_id is not null then
+    select * into v_partner from public.partnership_partners pp
+    where pp.id = p_partner_id and pp.organization_id = p_organization_id;
+    if not found then
+      raise exception 'Vennoot niet gevonden.' using errcode = '02000';
+    end if;
+    v_private := v_partner.contributions_account_id;
+    v_who := v_partner.name;
+  else
+    -- Bij een vof met vennoten hoort de betaling bij één vennoot: op 0560
+    -- stond hij op niemand.
+    if public.org_legal_form(p_organization_id) in ('vof', 'maatschap', 'cv')
+       and exists (select 1 from public.partnership_partners pp where pp.organization_id = p_organization_id and pp.is_active) then
+      raise exception 'Kies de vennoot die de factuur betaalde: het bedrag komt op zijn privé-stortingen.' using errcode = '23514';
+    end if;
+    perform public.ensure_default_ledger_accounts(p_organization_id);
+    select la.id into v_private from public.ledger_accounts la
+    where la.organization_id = p_organization_id and la.subtype = 'private_contributions'
+    order by la.code limit 1;
+    if v_private is null then
+      raise exception 'Er is geen rekening voor privé-stortingen (0560).' using errcode = '23514';
+    end if;
+    v_who := 'de ondernemer';
+  end if;
+
+  v_date := coalesce(p_date, v_pi.date);
+  select cs.bookkeeping_start_date into v_start
+  from public.company_settings cs where cs.organization_id = p_organization_id;
+  if v_start is not null and v_date < v_start then
+    raise exception 'Je boekhouding in ResoFly begint op %. Kies een betaaldatum vanaf die dag.', to_char(v_start, 'DD-MM-YYYY')
+      using errcode = '23514';
+  end if;
+  if v_date > (now() at time zone 'Europe/Amsterdam')::date then
+    raise exception 'Een betaling ligt niet in de toekomst. Kies de dag waarop er betaald is.' using errcode = '23514';
+  end if;
+
+  select jl.account_id into v_payable
+  from public.journal_lines jl
+  join public.ledger_accounts la on la.id = jl.account_id and la.subtype = 'accounts_payable'
+  where jl.entry_id = v_pi.journal_entry_id
+  limit 1;
+  v_payable := coalesce(v_payable, public.bookkeeping_account_id(p_organization_id, '1600'));
+
+  v_ref := coalesce(nullif(btrim(v_pi.internal_number), ''), nullif(btrim(v_pi.supplier_invoice_number), ''), 'inkoopfactuur');
+  v_entry := public.post_journal_entry(
+    p_organization_id, v_date,
+    'Privé betaald door ' || v_who || ': ' || v_ref,
+    'purchase_private_payment', p_purchase_invoice_id,
+    jsonb_build_array(
+      jsonb_build_object('account_id', v_payable, 'description', 'Privé betaald: ' || v_ref,
+        'debit_cents', v_open, 'credit_cents', 0, 'supplier_id', v_pi.supplier_id),
+      jsonb_build_object('account_id', v_private, 'description', 'Privé betaald: ' || v_ref,
+        'debit_cents', 0, 'credit_cents', v_open)
+    ),
+    p_created_by
+  );
+
+  perform public.refresh_purchase_invoice_payment_status(p_organization_id, p_purchase_invoice_id);
+  return v_entry;
+end;
+$$;
+
+-- Tegenboeken: een privébetaling terugdraaien zet de factuur weer open, en een
+-- inkoopfactuur met een privébetaling erop boek je niet tegen (dan bleef die
+-- betaling op 1600 staan zonder factuur ertegenover), net als bij een
+-- bankbetaling (reverse_journal_entry, 20261107110000). Als trigger, zodat het
+-- geldt welke weg het tegenboeken ook neemt.
+create or replace function public.purchase_private_payment_on_reverse()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.reversed_by_entry_id is null or old.reversed_by_entry_id is not null then
+    return new;
+  end if;
+  if new.source_type = 'purchase_invoice' and new.source_id is not null and exists (
+    select 1 from public.journal_entries p
+    where p.organization_id = new.organization_id
+      and p.source_type = 'purchase_private_payment'
+      and p.source_id = new.source_id
+      and p.status = 'posted'
+      and p.reversed_by_entry_id is null and p.reverses_entry_id is null
+  ) then
+    raise exception 'Deze inkoopfactuur is privé betaald. Boek eerst die privébetaling tegen (Grootboek → Journaal); daarna de inkoopfactuur.'
+      using errcode = '23514';
+  end if;
+  if new.source_type = 'purchase_private_payment' and new.source_id is not null then
+    perform public.refresh_purchase_invoice_payment_status(new.organization_id, new.source_id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists journal_entries_private_payment_reverse on public.journal_entries;
+create trigger journal_entries_private_payment_reverse
+  after update of reversed_by_entry_id on public.journal_entries
+  for each row execute function public.purchase_private_payment_on_reverse();
+
+-- ── 6. Openstaande posten: een privébetaling telt als betaald ──────────────
+-- Gelijk aan 20261107110000, met de privébetalingen erbij (TOEGEVOEGD). Zonder
+-- die tak stond een privé betaalde factuur bij Openstaand → Crediteuren, en
+-- het bedrag op 1600 als "niet aan een factuur gekoppeld".
+CREATE OR REPLACE FUNCTION public.report_open_items(p_organization_id uuid, p_as_of date DEFAULT CURRENT_DATE)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_recv_rows jsonb;
+  v_recv_open bigint;
+  v_recv_matched bigint;
+  v_recv_gl bigint;
+  v_pay_rows jsonb;
+  v_pay_open bigint;
+  v_pay_matched bigint;
+  v_pay_gl bigint;
+begin
+  if auth.role() <> 'service_role'
+     and not (public.can_read_org(p_organization_id) and public.can_read_module(p_organization_id, 'finance')) then
+    raise exception 'Geen leesrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  -- ---------------- Debiteuren (1300) ----------------
+  with ar_lines as (
+    select je.source_type, je.source_id, jl.debit_cents, jl.credit_cents
+    from public.journal_lines jl
+    join public.journal_entries je on je.id = jl.entry_id
+    join public.ledger_accounts la on la.id = jl.account_id
+    where jl.organization_id = p_organization_id
+      and je.status = 'posted'
+      and je.date <= p_as_of
+      and la.subtype = 'accounts_receivable'
+  ),
+  inv_booked as (
+    select source_id as invoice_id, sum(debit_cents - credit_cents)::bigint as amt
+    from ar_lines where source_type = 'sales_invoice' group by 1
+  ),
+  inv_credited as (
+    select cn.invoice_id, sum(al.credit_cents - al.debit_cents)::bigint as amt
+    from ar_lines al
+    join public.credit_notes cn on cn.organization_id = p_organization_id and cn.id = al.source_id
+    where al.source_type = 'credit_note'
+    group by 1
+  ),
+  inv_paid as (
+    select a.invoice_id,
+           sum(case when je.date <= p_as_of then a.amount_cents else 0 end
+             - case when rev.status = 'posted' and rev.date <= p_as_of then a.amount_cents else 0 end)::bigint as amt
+    from public.bank_transaction_allocations a
+    join public.journal_entries je on je.id = a.journal_entry_id and je.status = 'posted'
+    left join public.journal_entries rev on rev.id = je.reversed_by_entry_id
+    where a.organization_id = p_organization_id
+      and a.kind in ('sales_invoice', 'sales_credit_note')
+      and a.invoice_id is not null
+    group by 1
+  ),
+  -- TOEGEVOEGD (20261104020000): Mollie-betalingen, -terugbetalingen en
+  -- -chargebacks boeken met de factuur zelf als bron. Zonder deze tak stond
+  -- elke via Mollie betaalde factuur voorgoed als openstaand in de lijst.
+  inv_psp as (
+    select i.id as invoice_id, sum(al.credit_cents - al.debit_cents)::bigint as amt
+    from ar_lines al
+    join public.invoices i on i.organization_id = p_organization_id and i.id = al.source_id
+    where al.source_type = 'payment'
+    group by 1
+  ),
+  inv_rows as (
+    select
+      i.id, i.number, i.date, i.due_date, i.client_id, c.name as client_name,
+      coalesce(b.amt, 0) as booked_cents,
+      coalesce(p.amt, 0) + coalesce(pp.amt, 0) as paid_cents,
+      coalesce(cr.amt, 0) as credited_cents,
+      coalesce(b.amt, 0) - coalesce(p.amt, 0) - coalesce(pp.amt, 0) - coalesce(cr.amt, 0) as open_cents
+    from public.invoices i
+    left join inv_booked b on b.invoice_id = i.id
+    left join inv_paid p on p.invoice_id = i.id
+    left join inv_psp pp on pp.invoice_id = i.id
+    left join inv_credited cr on cr.invoice_id = i.id
+    left join public.clients c on c.id = i.client_id
+    where i.organization_id = p_organization_id
+      and (coalesce(b.amt, 0) <> 0 or coalesce(p.amt, 0) <> 0 or coalesce(pp.amt, 0) <> 0 or coalesce(cr.amt, 0) <> 0)
+  )
+  select
+    coalesce(jsonb_agg(jsonb_build_object(
+      'invoice_id', r.id, 'number', r.number, 'date', r.date, 'due_date', r.due_date,
+      'client_id', r.client_id, 'client_name', r.client_name,
+      'booked_cents', r.booked_cents, 'paid_cents', r.paid_cents,
+      'credited_cents', r.credited_cents, 'open_cents', r.open_cents
+    ) order by r.date, r.number) filter (where r.open_cents <> 0), '[]'::jsonb),
+    coalesce(sum(r.open_cents), 0),
+    coalesce(sum(r.booked_cents - r.paid_cents - r.credited_cents), 0),
+    (select coalesce(sum(debit_cents - credit_cents), 0) from ar_lines)
+  into v_recv_rows, v_recv_open, v_recv_matched, v_recv_gl
+  from inv_rows r;
+
+  -- ---------------- Crediteuren (1600) ----------------
+  with ap_lines as (
+    select je.source_type, je.source_id, jl.debit_cents, jl.credit_cents
+    from public.journal_lines jl
+    join public.journal_entries je on je.id = jl.entry_id
+    join public.ledger_accounts la on la.id = jl.account_id
+    where jl.organization_id = p_organization_id
+      and je.status = 'posted'
+      and je.date <= p_as_of
+      and la.subtype = 'accounts_payable'
+  ),
+  pi_booked as (
+    select source_id as pi_id, sum(credit_cents - debit_cents)::bigint as amt
+    from ap_lines where source_type = 'purchase_invoice' group by 1
+  ),
+  pi_paid as (
+    select a.purchase_invoice_id as pi_id,
+           sum(case when je.date <= p_as_of then -a.amount_cents else 0 end
+             - case when rev.status = 'posted' and rev.date <= p_as_of then -a.amount_cents else 0 end)::bigint as amt
+    from public.bank_transaction_allocations a
+    join public.journal_entries je on je.id = a.journal_entry_id and je.status = 'posted'
+    left join public.journal_entries rev on rev.id = je.reversed_by_entry_id
+    where a.organization_id = p_organization_id
+      and a.kind = 'purchase_invoice'
+    group by 1
+  ),
+  -- TOEGEVOEGD (20261117100000): wat de ondernemer of een vennoot privé
+  -- betaalde. Een tegenboeking heeft dezelfde bron en valt ertegen weg.
+  pi_private as (
+    select source_id as pi_id, sum(debit_cents - credit_cents)::bigint as amt
+    from ap_lines where source_type = 'purchase_private_payment' group by 1
+  ),
+  pi_rows as (
+    select
+      pi.id, coalesce(pi.supplier_invoice_number, pi.internal_number) as number,
+      pi.date, pi.due_date, pi.supplier_id, s.name as supplier_name,
+      coalesce(b.amt, 0) as booked_cents,
+      coalesce(p.amt, 0) + coalesce(pv.amt, 0) as paid_cents,
+      coalesce(b.amt, 0) - coalesce(p.amt, 0) - coalesce(pv.amt, 0) as open_cents
+    from public.purchase_invoices pi
+    left join pi_booked b on b.pi_id = pi.id
+    left join pi_paid p on p.pi_id = pi.id
+    left join pi_private pv on pv.pi_id = pi.id
+    left join public.suppliers s on s.id = pi.supplier_id
+    where pi.organization_id = p_organization_id
+      and (coalesce(b.amt, 0) <> 0 or coalesce(p.amt, 0) <> 0 or coalesce(pv.amt, 0) <> 0)
+  )
+  select
+    coalesce(jsonb_agg(jsonb_build_object(
+      'purchase_invoice_id', r.id, 'number', r.number, 'date', r.date, 'due_date', r.due_date,
+      'supplier_id', r.supplier_id, 'supplier_name', r.supplier_name,
+      'booked_cents', r.booked_cents, 'paid_cents', r.paid_cents, 'open_cents', r.open_cents
+    ) order by r.date, r.number) filter (where r.open_cents <> 0), '[]'::jsonb),
+    coalesce(sum(r.open_cents), 0),
+    coalesce(sum(r.booked_cents - r.paid_cents), 0),
+    (select coalesce(sum(credit_cents - debit_cents), 0) from ap_lines)
+  into v_pay_rows, v_pay_open, v_pay_matched, v_pay_gl
+  from pi_rows r;
+
+  return jsonb_build_object(
+    'as_of', p_as_of,
+    'receivables', jsonb_build_object(
+      'rows', v_recv_rows,
+      'open_total_cents', v_recv_open,
+      'gl_balance_cents', v_recv_gl,
+      -- Beweging op 1300 die niet aan een factuur toe te rekenen is
+      -- (beginbalans, vrije boekingen): het gat tussen lijst en grootboek.
+      'unmatched_cents', v_recv_gl - v_recv_matched
+    ),
+    'payables', jsonb_build_object(
+      'rows', v_pay_rows,
+      'open_total_cents', v_pay_open,
+      'gl_balance_cents', v_pay_gl,
+      'unmatched_cents', v_pay_gl - v_pay_matched
+    )
+  );
+end;
+$function$;
+
+-- ── 7. Het boekjaar van een IB-onderneming is het kalenderjaar ─────────────
+-- Voor de inkomstenbelasting is het boekjaar het kalenderjaar; alleen een
+-- rechtspersoon kan een gebroken boekjaar hebben. De inrichting zette de
+-- startmaand al op januari, maar daarna kon het overal anders: bij
+-- Instellingen → Boekhouding, bij een nieuw boekjaar en via Gerrie en de API.
+-- Een vof kreeg zo een boekjaar "2026/2027", dat niet past op de aangifte van
+-- de vennoten. Een eerste of laatste boekjaar dat niet op 1 januari begint of
+-- op 31 december eindigt, blijft kunnen (starten of stoppen in de loop van
+-- het jaar), zolang het in één kalenderjaar valt.
+-- Gelijk aan 20261106110000, met de controle erbij (TOEGEVOEGD).
+CREATE OR REPLACE FUNCTION public.open_fiscal_year(p_organization_id uuid, p_period_start date, p_period_end date, p_label text DEFAULT NULL::text, p_created_by uuid DEFAULT auth.uid())
+ RETURNS fiscal_years
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_fy public.fiscal_years;
+  v_label text;
+begin
+  if auth.role() <> 'service_role' and not (public.can_write_org(p_organization_id) and public.can_write_module(p_organization_id, 'finance')) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+  if p_period_end <= p_period_start then
+    raise exception 'De einddatum van het boekjaar moet na de begindatum liggen.' using errcode = '23514';
+  end if;
+  -- TOEGEVOEGD (20261106110000): een boekjaar van vijf jaar (een tikfout in
+  -- het jaartal) kon gewoon. De auditfile-export (XAF) van ResoFly verwerkt
+  -- hooguit 36 maanden; een langer boekjaar is vrijwel zeker een vergissing.
+  if p_period_end >= (p_period_start + interval '36 months')::date then
+    raise exception 'Een boekjaar duurt in ResoFly hooguit 36 maanden. Kijk de begin- en einddatum na.' using errcode = '23514';
+  end if;
+  -- TOEGEVOEGD (20261117100000): bij een eenmanszaak, vof, maatschap of cv
+  -- valt een boekjaar in één kalenderjaar.
+  if public.org_fiscal_regime(p_organization_id) = 'ib'
+     and extract(year from p_period_start) <> extract(year from p_period_end) then
+    raise exception 'Bij een eenmanszaak, vof, maatschap of cv is het boekjaar het kalenderjaar: het begint en eindigt in hetzelfde jaar, meestal 1 januari t/m 31 december. Een gebroken boekjaar kan alleen bij een BV, NV of coöperatie.'
+      using errcode = '23514';
+  end if;
+  -- TOEGEVOEGD (20261106110000): eerst de grendel, dan de overlapcontrole.
+  -- Twee verzoeken tegelijk (twee tabbladen) zagen elkaars boekjaar nog niet
+  -- en konden zo twee overlappende boekjaren maken.
+  perform pg_advisory_xact_lock(hashtext(p_organization_id::text || ':boekjaren'));
+  if exists (
+    select 1 from public.fiscal_years f
+    where f.organization_id = p_organization_id
+      and daterange(f.period_start, f.period_end, '[]') && daterange(p_period_start, p_period_end, '[]')
+  ) then
+    raise exception 'Dit boekjaar overlapt met een bestaand boekjaar.' using errcode = '23514';
+  end if;
+
+  v_label := coalesce(nullif(btrim(p_label), ''),
+    case when extract(year from p_period_start) = extract(year from p_period_end)
+         then extract(year from p_period_start)::text
+         else extract(year from p_period_start)::text || '/' || extract(year from p_period_end)::text end);
+
+  insert into public.fiscal_years(organization_id, created_by, label, period_start, period_end, status)
+  values (p_organization_id, p_created_by, v_label, p_period_start, p_period_end, 'open')
+  returning * into v_fy;
+
+  return v_fy;
+end;
+$function$;
+
+-- De startmaand van het boekjaar staat bij een IB-onderneming op januari, ook
+-- als iets anders hem probeert te veranderen: het scherm toont de keuze dan
+-- niet, en Gerrie en de API weigeren vooraf. Dit is het vangnet.
+create or replace function public.company_settings_ib_calendar_year()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if coalesce(new.legal_form, 'eenmanszaak') in ('eenmanszaak', 'vof', 'maatschap', 'cv')
+     and new.fiscal_year_start_month is not null and new.fiscal_year_start_month <> 1 then
+    new.fiscal_year_start_month := 1;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists company_settings_ib_calendar_year on public.company_settings;
+create trigger company_settings_ib_calendar_year
+  before insert or update of legal_form, fiscal_year_start_month on public.company_settings
+  for each row execute function public.company_settings_ib_calendar_year();
+
+update public.company_settings
+set fiscal_year_start_month = 1
+where coalesce(legal_form, 'eenmanszaak') in ('eenmanszaak', 'vof', 'maatschap', 'cv')
+  and fiscal_year_start_month is not null and fiscal_year_start_month <> 1;
+
+-- ── 8. Geen btw op privé of kapitaal ───────────────────────────────────────
+-- Bij de bank hield een regel zijn btw-code als je van een kostenrekening naar
+-- een privérekening wisselde. Een privé-opname van € 1.500 werd zo € 1.239,67
+-- opname en € 260,33 voorbelasting: btw terugvragen over geld dat je voor
+-- jezelf opnam. Hetzelfde kon met een bankregel die automatisch boekt, en via
+-- Gerrie. Een eigen-vermogensrekening (privé, kapitaal) krijgt nu nooit een
+-- btw-code, in een bankverdeling en in een bankregel.
+create or replace function public.refuse_vat_on_equity_allocation()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_code text;
+begin
+  if nullif(btrim(coalesce(new.vat_code, '')), '') is null or new.account_id is null then
+    return new;
+  end if;
+  select la.code into v_code from public.ledger_accounts la
+  where la.id = new.account_id and la.type = 'equity';
+  if v_code is not null then
+    raise exception 'Op privé of kapitaal (rekening %) zit geen btw. Kies bij deze regel geen btw-code.', v_code
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists bank_transaction_allocations_no_vat_on_equity on public.bank_transaction_allocations;
+create trigger bank_transaction_allocations_no_vat_on_equity
+  before insert or update of account_id, vat_code on public.bank_transaction_allocations
+  for each row execute function public.refuse_vat_on_equity_allocation();
+
+create or replace function public.refuse_vat_on_equity_bank_rule()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_code text;
+begin
+  if nullif(btrim(coalesce(new.target_vat_code, '')), '') is null or new.target_account_id is null then
+    return new;
+  end if;
+  select la.code into v_code from public.ledger_accounts la
+  where la.id = new.target_account_id and la.type = 'equity';
+  if v_code is not null then
+    raise exception 'Op privé of kapitaal (rekening %) zit geen btw. Kies bij deze bankregel geen btw-code.', v_code
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists bank_rules_no_vat_on_equity on public.bank_rules;
+create trigger bank_rules_no_vat_on_equity
+  before insert or update of target_account_id, target_vat_code on public.bank_rules
+  for each row execute function public.refuse_vat_on_equity_bank_rule();
+
+-- Bestaande bankregels met een btw-code op privé of kapitaal: de btw-code eraf,
+-- anders boekte elke volgende automatische boeking weer voorbelasting op een
+-- privé-opname. Wat al geboekt is, blijft staan (dat corrigeer je met een
+-- memoriaal of een suppletie).
+update public.bank_rules r
+set target_vat_code = null
+where nullif(btrim(coalesce(r.target_vat_code, '')), '') is not null
+  and exists (select 1 from public.ledger_accounts la where la.id = r.target_account_id and la.type = 'equity');
+
+-- ── 9. Algemeen privé naast de vennoten ────────────────────────────────────
+-- Bij een vof met vennoten stonden 0550 en 0560 in elke keuzelijst naast de
+-- privérekeningen van de vennoten, met dezelfde naam. Wie daar boekte, boekte
+-- op geen enkele vennoot: bij de jaarafsluiting ging het naar 0500. Zodra er
+-- een vennoot is, zegt de naam het.
+create or replace function public.mark_general_private_accounts()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.ledger_accounts
+  set name = case subtype when 'private_withdrawals' then 'Privé-opnamen (geen vennoot)' else 'Privé-stortingen (geen vennoot)' end
+  where organization_id = new.organization_id
+    and subtype in ('private_withdrawals', 'private_contributions')
+    and name in ('Privé-opnamen', 'Privé-stortingen');
+  return new;
+end;
+$$;
+
+drop trigger if exists partnership_partners_mark_general_private on public.partnership_partners;
+create trigger partnership_partners_mark_general_private
+  after insert on public.partnership_partners
+  for each row execute function public.mark_general_private_accounts();
+
+update public.ledger_accounts la
+set name = case la.subtype when 'private_withdrawals' then 'Privé-opnamen (geen vennoot)' else 'Privé-stortingen (geen vennoot)' end
+where la.subtype in ('private_withdrawals', 'private_contributions')
+  and la.name in ('Privé-opnamen', 'Privé-stortingen')
+  and exists (select 1 from public.partnership_partners pp where pp.organization_id = la.organization_id);
+
+-- ── 10. Rechten ─────────────────────────────────────────────────────────────
 -- Wat de app aanroept: ingelogde gebruikers (de functies controleren zelf de
 -- organisatie en de modulerechten), en de server.
 revoke all on function public.set_partnership_partner_member(uuid, uuid, uuid) from public, anon;
@@ -665,5 +1339,23 @@ revoke all on function public.close_fiscal_year(uuid, uuid, uuid) from public, a
 grant execute on function public.close_fiscal_year(uuid, uuid, uuid) to authenticated, service_role;
 revoke all on function public.owners_equity_overview(uuid, uuid) from public, anon;
 grant execute on function public.owners_equity_overview(uuid, uuid) to authenticated, service_role;
+revoke all on function public.pay_purchase_invoice_privately(uuid, uuid, uuid, date, uuid) from public, anon;
+grant execute on function public.pay_purchase_invoice_privately(uuid, uuid, uuid, date, uuid) to authenticated, service_role;
+-- Zoals in 20261107110000: interne hulpjes, alleen voor de server.
+revoke all on function public.purchase_invoice_open_payable_cents(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.purchase_invoice_open_payable_cents(uuid, uuid) to service_role;
+revoke all on function public.refresh_purchase_invoice_payment_status(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.refresh_purchase_invoice_payment_status(uuid, uuid) to service_role;
+-- Zoals in 20261107110000 en 20261106110000.
+revoke all on function public.report_open_items(uuid, date) from public, anon;
+grant execute on function public.report_open_items(uuid, date) to authenticated, service_role;
+revoke all on function public.open_fiscal_year(uuid, date, date, text, uuid) from public, anon;
+grant execute on function public.open_fiscal_year(uuid, date, date, text, uuid) to authenticated, service_role;
+-- Triggerfuncties vuren ook zonder EXECUTE.
+revoke all on function public.purchase_private_payment_on_reverse() from public, anon, authenticated;
+revoke all on function public.company_settings_ib_calendar_year() from public, anon, authenticated;
+revoke all on function public.refuse_vat_on_equity_allocation() from public, anon, authenticated;
+revoke all on function public.refuse_vat_on_equity_bank_rule() from public, anon, authenticated;
+revoke all on function public.mark_general_private_accounts() from public, anon, authenticated;
 
 commit;

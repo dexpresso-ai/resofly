@@ -1117,6 +1117,93 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
   },
 
   {
+    id: 'owners.save_partner',
+    label: 'Vennoot vastleggen of aanpassen',
+    module: 'finance',
+    kind: 'write',
+    risk: 'high',
+    description:
+      'Alleen bij een vof, maatschap of cv: legt een vennoot vast (zonder `partner_id`) of past er een aan: naam, winstaandeel in procenten, soort (alleen bij een cv: beherend of commanditair), actief of uitgetreden, en het teamlid dat de vennoot is (`user_id`; een lege tekst koppelt los). ' +
+      'Een nieuwe vennoot krijgt eigen rekeningen: kapitaal 050n, privé-opnamen 055n en privé-stortingen 056n. De winstaandelen van de actieve vennoten moeten bij de jaarafsluiting samen precies 100% zijn; de kaart toont de verdeling daarna. ' +
+      'Een vennoot verwijder je niet: zet hem op uitgetreden (`is_active: false`). Bekijk de vennoten eerst met `owners.equity_overview`; teamleden (met hun user_id) met `team.list_access`.',
+    keywords: ['vennoot', 'vennoten', 'vennoot toevoegen', 'winstaandeel', 'winstverdeling', 'uittreden', 'vof', 'maatschap', 'cv', 'teamlid koppelen'],
+    input: {
+      partner_id: { type: 'string', description: 'Id van de vennoot om aan te passen (uit owners.equity_overview). Weglaten voor een nieuwe vennoot.' },
+      name: { type: 'string', description: 'Naam van de vennoot. Verplicht bij een nieuwe vennoot.' },
+      profit_share_percent: { type: 'number', description: 'Winstaandeel in procenten, 0 tot en met 100 (bijv. 60 of 33.33). Verplicht bij een nieuwe vennoot.' },
+      kind: { type: 'string', enum: ['beherend', 'commanditair'], description: 'Alleen bij een cv. Standaard beherend.' },
+      is_active: { type: 'boolean', description: 'false = uitgetreden.' },
+      user_id: { type: 'string', description: 'Het teamlid dat de vennoot is (voor het urencriterium); lege tekst koppelt los.' },
+    },
+    async plan(ctx, input) {
+      const { data: settings, error: settingsError } = await orgQuery(ctx, 'company_settings', 'legal_form').maybeSingle();
+      if (settingsError) throw new ActionError(`Bedrijfsgegevens ophalen mislukt: ${settingsError.message}`);
+      const legalForm = String((settings as { legal_form?: string } | null)?.legal_form ?? 'eenmanszaak');
+      if (!['vof', 'maatschap', 'cv'].includes(legalForm)) {
+        throw new ActionError(`Vennoten horen bij een vof, maatschap of cv; deze administratie staat als ${legalForm} ingesteld.`);
+      }
+
+      type PartnerRow = { id: string; name: string; profit_share_basis_points: number; kind: string; is_active: boolean; user_id: string | null };
+      const { data: partnerRows, error: partnersError } = await orgQuery(ctx, 'partnership_partners',
+        'id, name, profit_share_basis_points, kind, is_active, user_id');
+      if (partnersError) throw new ActionError(`Vennoten ophalen mislukt: ${partnersError.message}`);
+      const partners = (partnerRows ?? []) as PartnerRow[];
+
+      const partnerId = optId(input, 'partner_id');
+      const current = partnerId ? partners.find((p) => p.id === partnerId) : null;
+      if (partnerId && !current) throw new ActionError('Vennoot niet gevonden in deze organisatie. Zoek hem op met `owners.equity_overview`.');
+
+      const name = optStr(input, 'name', 120) ?? current?.name ?? null;
+      if (!name) throw new ActionError('Geef de vennoot een naam.');
+      const percent = optNum(input, 'profit_share_percent');
+      if (percent === null && !current) throw new ActionError('Geef het winstaandeel in procenten (profit_share_percent).');
+      if (percent !== null && (percent < 0 || percent > 100)) throw new ActionError('Het winstaandeel ligt tussen 0 en 100 procent.');
+      const basisPoints = percent !== null ? Math.round(percent * 100) : current!.profit_share_basis_points;
+      const kind = optChoice(input, 'kind', ['beherend', 'commanditair'] as const) ?? (current?.kind as 'beherend' | 'commanditair' | undefined) ?? 'beherend';
+      if (kind === 'commanditair' && legalForm !== 'cv') throw new ActionError('Een commanditaire (stille) vennoot bestaat alleen bij een cv.');
+      const isActive = typeof input.is_active === 'boolean' ? input.is_active : (current?.is_active ?? true);
+
+      // Het teamlid: alleen een actief teamlid van deze organisatie, niet de
+      // boekhouder, en één teamlid hoort bij één vennoot (zoals
+      // set_partnership_partner_member).
+      const setUser = input.user_id !== undefined;
+      const userId = setUser ? (optStr(input, 'user_id', 64) || null) : (current?.user_id ?? null);
+      let memberLabel: string | null = null;
+      if (setUser && userId) {
+        const { data: member } = await orgQuery(ctx, 'organization_members', 'email, role, status').eq('user_id', userId).maybeSingle();
+        const m = member as { email?: string | null; role?: string; status?: string } | null;
+        if (!m || m.status !== 'active') throw new ActionError('Dit teamlid hoort niet (meer) bij deze organisatie.');
+        if (m.role === 'accountant') throw new ActionError('De boekhouder kun je niet aan een vennoot koppelen.');
+        const other = partners.find((p) => p.user_id === userId && p.id !== partnerId);
+        if (other) throw new ActionError(`Dit teamlid is al gekoppeld aan vennoot ${other.name}.`);
+        memberLabel = m.email ?? 'teamlid';
+      }
+
+      const after = partners
+        .filter((p) => p.id !== partnerId)
+        .filter((p) => p.is_active)
+        .reduce((sum, p) => sum + Number(p.profit_share_basis_points || 0), 0) + (isActive ? basisPoints : 0);
+      const pct = (bp: number) => `${(bp / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}%`;
+      return {
+        title: current ? `Vennoot ${name} aanpassen` : `Vennoot ${name} vastleggen`,
+        sub: joinShort([
+          `winstaandeel ${pct(basisPoints)}`,
+          legalForm === 'cv' ? kind : null,
+          isActive ? null : 'uitgetreden',
+          setUser ? (userId ? `teamlid ${memberLabel}` : 'geen teamlid') : null,
+          `verdeling actieve vennoten daarna ${pct(after)}${after === 10000 ? '' : ' (bij het afsluiten moet dat 100% zijn)'}`,
+          current ? null : 'met eigen kapitaal- en privérekeningen',
+        ], 240),
+        kind: 'money',
+        payload: {
+          partner_id: partnerId, name, profit_share_basis_points: basisPoints, kind, is_active: isActive,
+          set_user: setUser, user_id: userId,
+        },
+      };
+    },
+  },
+
+  {
     id: 'dga.interest',
     label: 'Renteberekening over de rekening-courant DGA bekijken',
     module: 'finance',

@@ -1763,7 +1763,9 @@ export type JournalSourceType =
   | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition' | 'asset_disposal'
   | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note'
   | 'result_appropriation' | 'corporate_tax' | 'dga_interest' | 'payroll' | 'dividend'
-  | 'prepaid_start' | 'prepaid_release' | 'prepaid_end';
+  | 'prepaid_start' | 'prepaid_release' | 'prepaid_end'
+  /** Een inkoopfactuur die de ondernemer of een vennoot privé betaalde (20261117100000). */
+  | 'purchase_private_payment';
 
 /**
  * Rubriek van een grootboekrekening in de balans of de winst- en verliesrekening.
@@ -2048,6 +2050,11 @@ export interface OwnersEquityOverview {
   owners: OwnersEquityRow[];
   /** Vermogen dat op geen enkele vennoot staat (0500, 0510, 0550/0560). */
   unassigned: { beginCents: number; movementsCents: number; endCents: number } | null;
+  /**
+   * Resultaat van eerdere boekjaren dat nog niet is afgesloten: dat zit nog niet
+   * in het beginvermogen. Ontbreekt bij een database van vóór 20261117100000.
+   */
+  openPriorResultCents?: number;
 }
 
 export interface DgaInterestComputation {

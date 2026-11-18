@@ -39,65 +39,8 @@ set client_min_messages = notice;
 
 begin;
 
--- ── Hulpjes ────────────────────────────────────────────────────────────────
-
--- Wat volgt, draait als deze gebruiker (met `set local role authenticated`
--- erachter), zoals PostgREST het doet.
-create function pg_temp.als(p_user uuid) returns void language plpgsql as $$
-begin
-  perform set_config('request.jwt.claims', json_build_object(
-    'sub', p_user, 'role', 'authenticated',
-    'email', (select u.email from auth.users u where u.id = p_user))::text, true);
-end $$;
-
--- Terug naar de beheerder (na `reset role`): geen ingelogde gebruiker.
-create function pg_temp.beheer() returns void language plpgsql as $$
-begin
-  perform set_config('request.jwt.claims', '', true);
-end $$;
-
-create function pg_temp.gelijk(p_echt anycompatible, p_verwacht anycompatible, p_wat text) returns void language plpgsql as $$
-begin
-  if p_echt is distinct from p_verwacht then
-    raise exception 'MISLUKT: % — kreeg %, verwacht %', p_wat, coalesce(p_echt::text, 'null'), coalesce(p_verwacht::text, 'null');
-  end if;
-  raise notice 'ok: %', p_wat;
-end $$;
-
--- De aanroep moet worden geweigerd, met deze tekst in de melding.
-create function pg_temp.weigert(p_sql text, p_melding text, p_wat text) returns void language plpgsql as $$
-declare
-  v_fout text;
-begin
-  begin
-    execute p_sql;
-  exception when others then
-    v_fout := sqlstate || ': ' || sqlerrm;
-  end;
-  if v_fout is null then
-    raise exception 'MISLUKT: % — werd niet geweigerd', p_wat;
-  end if;
-  if position(p_melding in v_fout) = 0 then
-    raise exception 'MISLUKT: % — kreeg "%", verwacht "%"', p_wat, v_fout, p_melding;
-  end if;
-  raise notice 'ok: %', p_wat;
-end $$;
-
--- Saldo van een rekening (debet min credit) over alle geboekte posten.
-create function pg_temp.saldo(p_org uuid, p_code text) returns bigint language sql as $$
-  select coalesce(sum(jl.debit_cents - jl.credit_cents), 0)::bigint
-  from public.journal_lines jl
-  join public.journal_entries je on je.id = jl.entry_id
-  join public.ledger_accounts la on la.id = jl.account_id
-  where jl.organization_id = p_org and la.code = p_code and je.status = 'posted'
-$$;
-
--- Eén regel van de kapitaalvergelijking: de vennoot met dit nummer, of de
--- ondernemer (nummer null).
-create function pg_temp.eigenaar(p_overzicht jsonb, p_nummer int) returns jsonb language sql as $$
-  select o from jsonb_array_elements(p_overzicht -> 'owners') o
-  where (o ->> 'partnerNumber')::int is not distinct from p_nummer
-$$;
+-- De hulpjes: als, beheer, gelijk, weigert, saldo en eigenaar.
+\ir hulpjes.psql
 
 -- ── De wereld: een vof met vier teamleden, een boekhouder en een vreemde ───
 

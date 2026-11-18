@@ -228,6 +228,17 @@ const PAGES = {
     ],
   },
   'owners-bewerken': { page: 'owners', mock: { ledger: true, vof: true }, prepare: '.bk-cell-action .bk-line-del' },
+  // 2026-11-18 — inkoopfacturen van een vof: de betaalstatus in de lijst, en
+  // het venster "Privé betaald" met de keuze van de vennoot.
+  'inkoop-vof': {
+    page: 'purchase-invoices', mock: { ledger: true, vof: true },
+    mustShow: [{ selector: '.bk-cell-action button', text: 'Privé betaald', label: 'de knop Privé betaald bij de open factuur' }],
+  },
+  'inkoop-vof-prive': {
+    page: 'purchase-invoices', mock: { ledger: true, vof: true },
+    prepare: '.bk-cell-action button:has-text("Privé betaald")',
+    mustShow: [{ selector: '.modal .select-trigger', text: 'kies de vennoot', label: 'de keuze van de vennoot' }],
+  },
   // Vooruitbetaalde kosten (2026-11-11): de lijst met de balk "klaar om te
   // boeken", een lopende post met zijn schema, en het formulier voor een
   // nieuwe vooruitbetaling met het voorbeeld van de verdeling.

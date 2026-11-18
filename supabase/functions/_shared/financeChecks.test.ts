@@ -211,11 +211,11 @@ test('zonder actieve vennoot of na de overstap naar een eenmanszaak: privé van 
 
   // Een vof waarvan iedereen is uitgetreden: geen weigering om 0%, het resultaat naar 0510.
   const vof = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0510', legal_form: 'vof' }], partnership_partners: vroegere }, lijst), { fiscal_year_id: ID });
-  assert.match(vof.sub, /naar 0510; het privé van de vennoten naar hun eigen kapitaal/);
+  assert.match(vof.sub, /naar 0510 \(geen actieve vennoot: niet verdeeld\); privé \(0550\/0560\) naar 0500 Eigen vermogen; het privé van de vennoten naar hun eigen kapitaal/);
 
   // Een eenmanszaak die eerst een vof was.
   const eenmanszaak = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }], partnership_partners: vroegere }, lijst), { fiscal_year_id: ID });
-  assert.match(eenmanszaak.sub, /0500 Eigen vermogen; het privé van de vennoten naar hun eigen kapitaal/);
+  assert.match(eenmanszaak.sub, /naar 0500; privé \(0550\/0560\) naar 0500 Eigen vermogen; het privé van de vennoten naar hun eigen kapitaal/);
 
   // Een gewone eenmanszaak: geen woord over vennoten.
   const gewoon = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }] }, lijst), { fiscal_year_id: ID });

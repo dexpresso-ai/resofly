@@ -2735,6 +2735,25 @@ export async function loadPartnershipPartnerHours(organizationId: UUID, year: nu
   }));
 }
 
+/**
+ * Een geboekte inkoopfactuur die de ondernemer of een vennoot met eigen geld
+ * betaalde: het openstaande bedrag gaat naar de privé-stortingen (0560, of 056n
+ * van de vennoot) en de factuur staat daarna op betaald. Alleen bij een
+ * eenmanszaak, vof, maatschap of cv.
+ */
+export async function payPurchaseInvoicePrivately(
+  organizationId: UUID, purchaseInvoiceId: UUID, partnerId: UUID | null, date: string,
+): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('pay_purchase_invoice_privately', {
+    p_organization_id: organizationId,
+    p_purchase_invoice_id: purchaseInvoiceId,
+    p_partner_id: partnerId,
+    p_date: date,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
 /** De kapitaalvergelijking van één boekjaar: begin, resultaat, stortingen, opnamen, eind. */
 export async function loadOwnersEquityOverview(organizationId: UUID, fiscalYearId: UUID): Promise<OwnersEquityOverview> {
   const { data, error } = await supabase.rpc('owners_equity_overview', {

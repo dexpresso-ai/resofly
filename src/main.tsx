@@ -1686,6 +1686,7 @@ function App() {
     if (next === 'team') openSettings('organisatie');
     else if (next === 'agenda') openSettings('agenda');
     else if (next === 'bank') { setPage('bank'); setProjectId(null); setClientId(null); setStatsReportId(null); }
+    else if (next === 'vennoten') { setPage('owners'); setProjectId(null); setClientId(null); setStatsReportId(null); }
   }
 
   // Opent de instellingenpagina op een specifieke sectie (standaard 'organisatie').

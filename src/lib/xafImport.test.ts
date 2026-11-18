@@ -183,6 +183,24 @@ test('voorstellen voor het rekeningschema', () => {
   assert.equal(propose('8000', 'Omzet'), null, 'een W&V-rekening van ResoFly is nooit een doel');
 });
 
+test('vof: kapitaal en privé van een vennoot gaan naar zijn eigen rekening', () => {
+  const vof: TargetAccount[] = [
+    ...resofly,
+    { id: 'a0501', code: '0501', name: 'Kapitaal Anna Jansen', type: 'equity', subtype: 'partner_capital' },
+    { id: 'a0502', code: '0502', name: 'Kapitaal Bram de Vries', type: 'equity', subtype: 'partner_capital' },
+    { id: 'a0551', code: '0551', name: 'Privé-opnamen Anna Jansen', type: 'equity', subtype: 'partner_withdrawals' },
+    { id: 'a0562', code: '0562', name: 'Privé-stortingen Bram de Vries', type: 'equity', subtype: 'partner_contributions' },
+    { id: 'a0503', code: '0503', name: 'Kapitaal Piet Jansen', type: 'equity', subtype: 'partner_capital' },
+  ];
+  const propose = (code: string, name: string) => proposeAccount({ code, name }, vof).targetId;
+  assert.equal(propose('0610', 'Kapitaal vennoot B. de Vries'), 'a0502');
+  assert.equal(propose('0620', 'Privé-opnamen Anna'), 'a0551');
+  assert.equal(propose('0630', 'Prive stortingen Bram'), 'a0562');
+  assert.equal(propose('0640', 'Kapitaal Anna Jansen'), 'a0501', 'dezelfde naam');
+  assert.equal(propose('0650', 'Kapitaal Jansen'), 'a0500', 'twee vennoten heten Jansen: geen vennoot raden, het algemene kapitaal');
+  assert.equal(propose('0660', 'Kapitaal'), 'a0500', 'zonder naam: het algemene kapitaal');
+});
+
 test('regels voor de beginbalans: per rekening opgeteld, en niets zonder koppeling', () => {
   const balances = [
     { code: '1010', name: 'Rabo', type: 'B' as const, cents: 500000 },

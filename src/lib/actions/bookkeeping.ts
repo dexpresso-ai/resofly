@@ -2,7 +2,7 @@ import {
   bookAssetAcquisition, bookAssetDisposal, bookBankTransaction, bookPrepaidExpenseStart, bookPurchaseInvoice,
   closeFiscalYear, closeVatPeriod, createManualBankTransaction, createOpeningBalance, createVatSupplement,
   deleteManualBankTransaction, endPrepaidExpense, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, matchBankTransactions,
-  mergeBankTransactions, openFiscalYear, postAssetDepreciation, postManualJournalEntry, postPrepaidReleases, reopenFiscalYear,
+  mergeBankTransactions, openFiscalYear, payPurchaseInvoicePrivately, postAssetDepreciation, postManualJournalEntry, postPrepaidReleases, reopenFiscalYear,
   reverseJournalEntry, savePrepaidExpense, setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction,
   updateManualBankTransaction, updateRow, type BankAllocationInput,
 } from '../repository';
@@ -124,6 +124,14 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
     const number = optText(payload, 'number');
     const supplier = optText(payload, 'supplier_name');
     return `Inkoopfactuur ${number ?? ''}${supplier ? ` van ${supplier}` : ''} geboekt als ${entry.entry_number ?? 'boekstuk'}`.replace('  ', ' ');
+  },
+
+  'purchase_invoice.pay_privately': async (payload, ctx) => {
+    const entry = await payPurchaseInvoicePrivately(
+      ctx.organizationId, text(payload, 'purchase_invoice_id'), optText(payload, 'partner_id'), text(payload, 'date'),
+    );
+    const number = optText(payload, 'number');
+    return `Inkoopfactuur ${number ?? ''} vastgelegd als privé betaald door ${optText(payload, 'who') ?? 'de ondernemer'} (${entry.entry_number ?? 'boekstuk'})`.replace('  ', ' ');
   },
 
   // ── Factuur-inbox (inkoopfacturen per e-mail) ─────────────────────────────
