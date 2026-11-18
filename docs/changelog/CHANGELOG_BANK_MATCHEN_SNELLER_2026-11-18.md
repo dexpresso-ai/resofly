@@ -162,3 +162,16 @@ schrijven), de rest alleen voor de server. Veilig om meermaals te draaien.
 - `npm run typecheck`.
 - **De keten vanaf nul**: `supabase db reset`, 289 migraties. Daarna deze
   migratie nog eens: schoon.
+
+## Uitrol op staging
+
+- Gemerged naar `staging` (9e3df31). *Deploy Supabase (staging)* run 248 is
+  groen: migratie 20261118200000, de edge functions en de rooktest.
+- Nagekeken op staging (Management API, alleen lezen):
+  - er is één `match_bank_transactions`, met `p_cursor`;
+  - het rijtype `bank_sales_invoice_ref` staat erin;
+  - `bank_match_run` is dicht voor ingelogde gebruikers, en
+    `match_bank_transactions` voor anon.
+- *Frontend checks* run 266 is helemaal groen.
+- Op staging zelf is niet gemeten: een matchronde schrijft voorstellen en
+  boekingen, en op staging lezen we alleen.
