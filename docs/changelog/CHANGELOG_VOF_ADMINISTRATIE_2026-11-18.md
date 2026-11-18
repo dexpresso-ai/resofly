@@ -10,7 +10,7 @@ liep tegelijk met de controle van de eenmanszaak
 samengevoegd, staat onder "Samen met de controle van de eenmanszaak".
 
 > **Status:**
-> - **Database:** één migratie, `20261118110000_vof_vennoten_en_prive`.
+> - **Database:** één migratie, `20261118130000_vof_vennoten_en_prive`.
 > - **Tests:** twee databasetests die in CI meedraaien (`tests/database/`).
 > - **Schermen:** Vennoten, Inkoopfacturen, Bank, Grootboek → Beginbalans,
 >   Boekjaren, Instellingen → Boekhouding, Uren en de inrichting.
@@ -88,7 +88,7 @@ samengevoegd, staat onder "Samen met de controle van de eenmanszaak".
 
 ## Database
 
-Alles in `20261118110000`. De functies die al bestonden, zijn letterlijk
+Alles in `20261118130000`. De functies die al bestonden, zijn letterlijk
 overgenomen; per wijziging staat een GEWIJZIGD- of TOEGEVOEGD-regel. Dat is met
 een diff nagelopen.
 
@@ -110,7 +110,7 @@ Terwijl deze controle liep, kwam de controle van de eenmanszaak op staging, met
 twee migraties: `20261118090000` en `20261118100000`. Die vervangen ook
 `close_fiscal_year` en `owners_equity_overview`. Daarom:
 
-- **Volgorde:** deze migratie heet `20261118110000` en komt dus daarna. Een
+- **Volgorde:** deze migratie heet `20261118130000` en komt dus daarna. Een
   oudere versie weigert `supabase db push`.
 - **De twee functies:** ze zijn opnieuw opgebouwd vanaf de versie op staging,
   met alleen de wijziging van deze migratie erbovenop. Dat is met een diff
@@ -151,7 +151,7 @@ twee migraties: `20261118090000` en `20261118100000`. Die vervangen ook
 - **Een vennoot koppelen:** alleen aan een actief teamlid van dezelfde
   organisatie, niet aan de boekhouder, en één teamlid per vennoot.
 - **Gegevens meenemen:** `user_id` gaat mee met de vennoten.
-  `EXPORT_SCHEMA_VERSION` staat op `20261118110000`.
+  `EXPORT_SCHEMA_VERSION` staat op `20261118130000`.
 
 ## Verificatie
 

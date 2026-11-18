@@ -176,7 +176,7 @@ $$;
 
 -- ── 3. Jaarafsluiting: het privé van elke vennoot naar zijn eigen kapitaal ──
 -- Gelijk aan 20261118100000 (de versie op staging), op één plek na: zie
--- GEWIJZIGD (20261118110000).
+-- GEWIJZIGD (20261118130000).
 CREATE OR REPLACE FUNCTION public.close_fiscal_year(p_organization_id uuid, p_fiscal_year_id uuid, p_created_by uuid DEFAULT auth.uid())
  RETURNS fiscal_years
  LANGUAGE plpgsql
@@ -433,7 +433,7 @@ begin
 
   -- Het privé van elke vennoot (ook een vertrokken vennoot) gaat naar zijn
   -- eigen kapitaal.
-  -- GEWIJZIGD (20261118110000): altijd, niet alleen bij een vof, maatschap of
+  -- GEWIJZIGD (20261118130000): altijd, niet alleen bij een vof, maatschap of
   -- cv met actieve vennoten. Werd de rechtsvorm eenmanszaak, of stond elke
   -- vennoot op uitgetreden, dan bleven 055n en 056n open staan en schoven ze
   -- mee naar het volgende jaar. Het privé hoort bij de vennoot, welke
@@ -531,7 +531,7 @@ $function$;
 
 -- ── 4. De kapitaalvergelijking: privé van vennoten telt als privé ──────────
 -- Gelijk aan 20261118090000 (de versie op staging), op één plek na: zie
--- GEWIJZIGD (20261118110000).
+-- GEWIJZIGD (20261118130000).
 create or replace function public.owners_equity_overview(p_organization_id uuid, p_fiscal_year_id uuid)
 returns jsonb
 language plpgsql
@@ -710,7 +710,7 @@ begin
             and je.date between v_fy.period_start and v_fy.period_end)
       );
 
-    -- GEWIJZIGD (20261118110000): ook het privé van (vroegere) vennoten telt als
+    -- GEWIJZIGD (20261118130000): ook het privé van (vroegere) vennoten telt als
     -- storting of opname. Zonder actieve vennoot, of na de overstap van een vof
     -- naar een eenmanszaak, stond een opname op 0551 hier als "overig".
     select
@@ -803,7 +803,7 @@ as $$
       and a.purchase_invoice_id = p_purchase_invoice_id
       and a.kind = 'purchase_invoice'
   ), 0)::bigint - coalesce((
-    -- TOEGEVOEGD (20261118110000): wat de ondernemer of een vennoot privé
+    -- TOEGEVOEGD (20261118130000): wat de ondernemer of een vennoot privé
     -- betaalde (pay_purchase_invoice_privately). Tegengeboekt telt niet.
     select sum(jl.debit_cents - jl.credit_cents)
     from public.journal_entries je
@@ -860,7 +860,7 @@ begin
       where a.organization_id = p_organization_id
         and a.purchase_invoice_id = p_purchase_invoice_id
       union all
-      -- TOEGEVOEGD (20261118110000): de datum van een privébetaling.
+      -- TOEGEVOEGD (20261118130000): de datum van een privébetaling.
       select je.date
       from public.journal_entries je
       where je.organization_id = p_organization_id
@@ -1152,7 +1152,7 @@ begin
       and a.kind = 'purchase_invoice'
     group by 1
   ),
-  -- TOEGEVOEGD (20261118110000): wat de ondernemer of een vennoot privé
+  -- TOEGEVOEGD (20261118130000): wat de ondernemer of een vennoot privé
   -- betaalde. Een tegenboeking heeft dezelfde bron en valt ertegen weg.
   pi_private as (
     select source_id as pi_id, sum(debit_cents - credit_cents)::bigint as amt
@@ -1237,7 +1237,7 @@ begin
   if p_period_end >= (p_period_start + interval '36 months')::date then
     raise exception 'Een boekjaar duurt in ResoFly hooguit 36 maanden. Kijk de begin- en einddatum na.' using errcode = '23514';
   end if;
-  -- TOEGEVOEGD (20261118110000): bij een eenmanszaak, vof, maatschap of cv
+  -- TOEGEVOEGD (20261118130000): bij een eenmanszaak, vof, maatschap of cv
   -- valt een boekjaar in één kalenderjaar.
   if public.org_fiscal_regime(p_organization_id) = 'ib'
      and extract(year from p_period_start) <> extract(year from p_period_end) then

@@ -10,7 +10,7 @@
 --
 -- Waarom deze test er is: close_fiscal_year wordt bij elke wijziging helemaal
 -- opnieuw geschreven (20261104000000, 20261104070000, 20261105000000,
--- 20261118110000). De verdeling over de vennoten was alleen droog op staging
+-- 20261118130000). De verdeling over de vennoten was alleen droog op staging
 -- nagespeeld. Viel het vennotendeel bij een herschrijving weg, dan merkte geen
 -- test dat.
 --
@@ -25,7 +25,7 @@
 --   6. verlies (€ 300,01 → € 180,01 en € 120,00);
 --   7. geen actieve vennoot, of de overstap naar een eenmanszaak: het resultaat
 --      gaat naar 0510, het privé van de vennoot nog steeds naar zijn kapitaal,
---      en in de kapitaalvergelijking telt het als opname (20261118110000);
+--      en in de kapitaalvergelijking telt het als opname (20261118130000);
 --   8. een vennoot aan een teamlid koppelen, en de uren per vennoot in een
 --      kalenderjaar, alleen van déze organisatie;
 --   9. wie wat mag: lezer, lid zonder Uren, boekhouder en een buitenstaander.

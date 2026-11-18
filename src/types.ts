@@ -1765,7 +1765,7 @@ export type JournalSourceType =
   | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note'
   | 'result_appropriation' | 'corporate_tax' | 'dga_interest' | 'payroll' | 'dividend'
   | 'prepaid_start' | 'prepaid_release' | 'prepaid_end'
-  /** Een inkoopfactuur die de ondernemer of een vennoot privé betaalde (20261118110000). */
+  /** Een inkoopfactuur die de ondernemer of een vennoot privé betaalde (20261118130000). */
   | 'purchase_private_payment';
 
 /**

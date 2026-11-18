@@ -191,7 +191,7 @@ const VOF_PARTNER_ACCOUNTS = VOF_PARTNER_DEFS.flatMap(([n, name]) => [
 ]);
 const VOF_LEDGER_ACCOUNTS = [
   ...LEDGER_ACCOUNTS.map(a => (a.code === '0500' ? { ...a, name: 'Eigen vermogen', subtype: 'equity' } : a)),
-  // Zoals de database ze noemt zodra er een vennoot is (20261118110000).
+  // Zoals de database ze noemt zodra er een vennoot is (20261118130000).
   vofAccount('0550', 'Privé-opnamen (geen vennoot)', 'private_withdrawals', 1),
   vofAccount('0560', 'Privé-stortingen (geen vennoot)', 'private_contributions', 2),
   ...VOF_PARTNER_ACCOUNTS,

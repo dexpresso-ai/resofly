@@ -1425,7 +1425,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
         if (!account.is_active) throw new ActionError(`${accountLabel(account)} staat op inactief.`);
         const vatCode = optStr(input, 'vat_code', 40);
         // Privé en kapitaal hebben geen btw: anders werd een privé-opname
-        // voorbelasting (de database weigert het ook, sinds 20261118110000).
+        // voorbelasting (de database weigert het ook, sinds 20261118130000).
         if (vatCode && account.type === 'equity') throw new ActionError(`Op ${accountLabel(account)} zit geen btw: laat vat_code weg.`);
         if (vatCode) await loadVatCode(ctx, vatCode);
         payload.line = { account_id: accountId, amount_cents: abs, vat_code: vatCode, description: label };
@@ -2258,7 +2258,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       const start = isoDate(input, 'period_start');
       const end = isoDate(input, 'period_end');
       if (end <= start) throw new ActionError('De einddatum moet ná de begindatum liggen.');
-      // Zoals open_fiscal_year (20261118110000): bij de inkomstenbelasting is
+      // Zoals open_fiscal_year (20261118130000): bij de inkomstenbelasting is
       // het boekjaar het kalenderjaar.
       if (start.slice(0, 4) !== end.slice(0, 4)) {
         const { data: settings } = await orgQuery(ctx, 'company_settings', 'legal_form').maybeSingle();
@@ -2313,7 +2313,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       // kapitaalrekeningen; bij een eenmanszaak gaat ook het privé naar 0500.
       // Het privé van elke vennoot gaat altijd naar zijn eigen kapitaal, ook als
       // er geen actieve vennoot meer is of de rechtsvorm eenmanszaak werd
-      // (20261118110000). Telt de verdeling niet op tot 100%, dan weigert de
+      // (20261118130000). Telt de verdeling niet op tot 100%, dan weigert de
       // afsluiting — dat hoort vóór de kaart te blijken, niet erna.
       const { data: partners, error: partnersError } = await orgQuery(ctx, 'partnership_partners', 'name, profit_share_basis_points, is_active');
       if (partnersError) throw new ActionError(`Vennoten ophalen mislukt: ${partnersError.message}`);
