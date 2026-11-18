@@ -241,7 +241,7 @@ Mijn migratie had eerst hetzelfde versienummer als die van de eenmanszaak
   cloudsessie niet bereikbaar; daarom ging het met een import-map naar dezelfde
   pakketten via npm. In CI draait de gewone check.
 - **Scherm:**
-  - `npm run test:mobile -- --theme=both`: 740 metingen, 0 problemen. Daarbij
+  - `npm run test:mobile -- --theme=both`: 800 metingen, 0 problemen. Daarbij
     de raming als eenmanszaak en als vof, op telefoon, tablet en liggend, licht
     en donker (12 metingen);
   - laadtest: alle controles geslaagd; de pagina haalt geen zware groep op;
