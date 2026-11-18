@@ -135,6 +135,22 @@ En `vooruitbetaald`: vooruitbetaalde kosten, een betaling die over de maanden na
 
 Zie `docs/changelog/CHANGELOG_VOORUITBETAALDE_KOSTEN_2026-11-11.md`.
 
+En `eenmanszaak`: een heel boekjaar zoals een zzp'er het doet, in één administratie. Getoetst:
+- de inrichting zet het rekeningschema (met kas en de kosten van de aangifte inkomstenbelasting) en
+  de boekjaren klaar;
+- beginbalans, een factuur aan een bedrijf en aan een particulier, inkoop, een camera via een
+  inkoopfactuur die je aan het register koppelt en afschrijft, de bank met privé-opnamen en
+  -stortingen (geen btw op privé), vier btw-aangiften in hele euro's, de winst, een sluitende balans;
+- de kapitaalvergelijking vóór en na de jaarafsluiting, en 2026 met 2025 nog open (het begin is het
+  eind van 2025, met een melding);
+- de KOR: code KOR op de factuur, geen omzet in de aangifte, geen btw uit de bank, verlegde btw wel
+  in 4b zonder aftrek;
+- vangnetten: geen lopend btw-tijdvak afsluiten, alleen de ingestelde frequentie, eerst afschrijven en
+  dan het jaar dicht, afschrijven tot de verkoopdatum, tegenboeken van een gekoppelde inkoopfactuur,
+  en de resultaatrekening die de rechtsvorm volgt.
+
+Zie `docs/changelog/CHANGELOG_EENMANSZAAK_CONTROLE_2026-11-18.md`.
+
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in

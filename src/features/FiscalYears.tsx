@@ -7,7 +7,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import {
   appropriateResult, closeFiscalYear, ensureDefaultLedgerAccounts, listFiscalYears,
-  listPartnershipPartners, listResultAppropriations, openFiscalYear, reopenFiscalYear, reverseResultAppropriation,
+  listPartnershipPartners, listResultAppropriations, openFiscalYear, reopenFiscalYear, reverseResultAppropriation, setUpBookkeeping
 } from '../lib/repository';
 import { formatISODate } from '../lib/dates';
 import { useBackStep } from '../lib/useBackStep';
@@ -59,14 +59,14 @@ function SetupBanner({ organizationId, onChanged }: { organizationId: string; on
   const [error, setError] = useState<string | null>(null);
   async function setup() {
     setBusy(true); setError(null);
-    try { await ensureDefaultLedgerAccounts(organizationId); onChanged(); }
+    try { await setUpBookkeeping(organizationId); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Aanmaken mislukt'); }
     finally { setBusy(false); }
   }
   return (
     <div className="bk-setup">
-      <div><strong>Boekhouding nog niet ingericht.</strong><p>Maak eerst het rekeningschema aan (tabblad Grootboek).</p>{error && <p className="error">{error}</p>}</div>
-      <Button variant="primary" disabled={busy} onClick={setup}>{busy ? 'Bezig…' : 'Rekeningschema aanmaken'}</Button>
+      <div><strong>Boekhouding nog niet ingericht.</strong><p>Met één klik komen het rekeningschema, de btw-codes en het boekjaar klaar te staan.</p>{error && <p className="error">{error}</p>}</div>
+      <Button variant="primary" disabled={busy} onClick={setup}>{busy ? 'Bezig…' : 'Boekhouding inrichten'}</Button>
     </div>
   );
 }
@@ -325,7 +325,7 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
             ? <p>Het resultaat van dit boekjaar wordt verdeeld over de kapitaalrekeningen van de vennoten, naar rato van hun winstaandeel (zie Financiën → Vennoten), en het privé van elke vennoot gaat naar zijn kapitaal. Het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.</p>
             : <p>Het resultaat van dit boekjaar wordt geboekt naar <strong>{resultLabel}</strong> en het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.{isIbForm && ' Privé-opnamen en -stortingen (0550 en 0560) gaan naar 0500 Eigen vermogen'}{isPartnershipForm && ', en het privé van elke vennoot naar zijn eigen kapitaal'}{isIbForm && '.'}</p>}
           <p className="bk-fy-result">Te bestemmen resultaat: <strong className={confirmClose.computed_result_cents >= 0 ? 'bk-pos' : 'bk-neg'}>{euroCents(confirmClose.computed_result_cents)}</strong> ({confirmClose.computed_result_cents >= 0 ? 'winst' : 'verlies'})</p>
-          <p className="bk-muted">Alle BTW-aangiften van dit boekjaar moeten eerst gefinaliseerd zijn. Een afgesloten boekjaar kan later alleen door een eigenaar/beheerder worden heropend.</p>
+          <p className="bk-muted">Eerst moeten de btw-aangiften van dit boekjaar zijn afgesloten (niet met de KOR), en de afschrijvingen en de termijnen van vooruitbetaalde kosten tot en met {dateNL(confirmClose.period_end)} geboekt (bij Activa en Vooruitbetaald). Anders komen ze in het volgende jaar en klopt de winst van beide jaren niet. Een afgesloten boekjaar kan later alleen door een eigenaar of beheerder worden heropend.</p>
         </ConfirmDialog>
       )}
 

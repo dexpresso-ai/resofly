@@ -10,7 +10,7 @@
 --
 -- Waarom deze test er is: close_fiscal_year wordt bij elke wijziging helemaal
 -- opnieuw geschreven (20261104000000, 20261104070000, 20261105000000,
--- 20261117100000). De verdeling over de vennoten was alleen droog op staging
+-- 20261118110000). De verdeling over de vennoten was alleen droog op staging
 -- nagespeeld. Viel het vennotendeel bij een herschrijving weg, dan merkte geen
 -- test dat.
 --
@@ -25,7 +25,7 @@
 --   6. verlies (€ 300,01 → € 180,01 en € 120,00);
 --   7. geen actieve vennoot, of de overstap naar een eenmanszaak: het resultaat
 --      gaat naar 0510, het privé van de vennoot nog steeds naar zijn kapitaal,
---      en in de kapitaalvergelijking telt het als opname (20261117100000);
+--      en in de kapitaalvergelijking telt het als opname (20261118110000);
 --   8. een vennoot aan een teamlid koppelen, en de uren per vennoot in een
 --      kalenderjaar, alleen van déze organisatie;
 --   9. wie wat mag: lezer, lid zonder Uren, boekhouder en een buitenstaander.
@@ -293,6 +293,10 @@ select (public.save_partnership_partner(:'org', :'bram', 'Bram', 4000, 'beherend
 reset role;
 select pg_temp.beheer();
 update public.company_settings set legal_form = 'eenmanszaak' where organization_id = :'org';
+-- De resultaatrekening volgt de rechtsvorm als hij nog op de standaard stond
+-- (20261118090000): bij een eenmanszaak 0500.
+select pg_temp.gelijk((select year_result_account_code from public.company_settings where organization_id = :'org'), '0500',
+  'eenmanszaak: de resultaatrekening wordt 0500');
 
 select pg_temp.als(:'eigenaar');
 set local role authenticated;
@@ -302,7 +306,8 @@ select (public.close_fiscal_year(:'org', :'fy2025')).status as fy2025_status \gs
 select public.owners_equity_overview(:'org', :'fy2025') as ov2025_eenmanszaak \gset
 reset role;
 select pg_temp.beheer();
-select pg_temp.gelijk(pg_temp.saldo(:'org', '0510'), 30001::bigint, 'eenmanszaak: het verlies gaat naar 0510');
+select pg_temp.gelijk(pg_temp.saldo(:'org', '0500'), (-99000 + 30001)::bigint, 'eenmanszaak: het verlies van € 300,01 gaat naar 0500 (daar stond € 990)');
+select pg_temp.gelijk(pg_temp.saldo(:'org', '0510'), 0::bigint, 'eenmanszaak: niets meer op 0510');
 select pg_temp.gelijk(pg_temp.saldo(:'org', '0551'), 0::bigint, 'eenmanszaak: het privé van de vroegere vennoot staat niet meer open');
 select pg_temp.gelijk(pg_temp.saldo(:'org', '0501'), -633001::bigint, 'eenmanszaak: de opname gaat naar het kapitaal van Anna');
 select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_eenmanszaak'::jsonb, null) ->> 'withdrawalsCents')::bigint, 7000::bigint, 'eenmanszaak: de opname telt als opname');

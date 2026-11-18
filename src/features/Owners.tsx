@@ -7,9 +7,10 @@ import { euro, formatMinutes, minutesToHours } from '../lib/format';
 import { formatISODate } from '../lib/dates';
 import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
 import { memberName } from '../lib/members';
+import { businessProfit } from '../lib/incomeTax';
 import {
-  listFiscalYears, listPartnershipPartners, loadOwnersEquityOverview, loadPartnershipPartnerHours,
-  savePartnershipPartner, setPartnershipPartnerMember,
+  listFiscalYears, listPartnershipPartners, loadOwnersEquityOverview, loadPartnershipPartnerHours, reportProfitAndLoss,
+  savePartnershipPartner, setPartnershipPartnerMember, setUpBookkeeping,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -63,9 +64,15 @@ function hoursCell(partner: PartnershipPartner, row: PartnershipPartnerHours | u
  * teamlid, en staan hier de uren van elke vennoot in het kalenderjaar van het
  * gekozen boekjaar. Alleen met leesrecht op Uren: de database weigert anders.
  */
-export function OwnersPage({ data, organizationId, canWrite, onChanged, teamMembers, currentUserId, canReadTime }: {
+export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUserId = null, canReadHours = true, teamMembers = [], currentUserId = null }: {
   data: AppData; organizationId: string; canWrite: boolean; onChanged: () => void;
-  teamMembers: OrganizationMember[]; currentUserId: UUID | null; canReadTime: boolean;
+  /** De eigenaar is bij een eenmanszaak de ondernemer: zijn uren tellen voor het urencriterium. */
+  ownerUserId?: UUID | null;
+  /** Zonder leesrecht op Uren (vaak de boekhouder) zie je geen uren: dan zegt het overzicht dat, in plaats van "0 uur, niet gehaald". */
+  canReadHours?: boolean;
+  /** De teamleden die je aan een vennoot kunt koppelen (vof, maatschap, cv). */
+  teamMembers?: OrganizationMember[];
+  currentUserId?: UUID | null;
 }) {
   const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
   const isIb = ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm);
@@ -90,7 +97,7 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, teamMemb
   // waarin het boekjaar begint.
   const selectedYear = years.find(y => y.id === fiscalYearId) ?? null;
   const hoursYear = selectedYear ? Number(selectedYear.period_start.slice(0, 4)) : Number(today.slice(0, 4));
-  const showHours = isPartnershipForm && canReadTime;
+  const showHours = isPartnershipForm && canReadHours;
   const anyLinked = partners.some(p => p.user_id);
 
   const loadBase = useCallback(async () => {
@@ -169,6 +176,19 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, teamMemb
       // Een nieuwe vennoot kan al bestaan als alleen het koppelen misging.
       void loadBase();
     }
+    finally { setBusy(false); }
+  };
+
+  // Geen boekjaar: met één klik het rekeningschema en de boekjaren vanaf de
+  // start van de boekhouding. Hier stond alleen "Maak eerst een boekjaar aan
+  // bij Financiën → Boekjaren", zonder knop.
+  const setUp = async () => {
+    setBusy(true); setError(null);
+    try {
+      await setUpBookkeeping(organizationId);
+      await loadBase();
+      onChanged();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Boekjaar openen mislukt'); }
     finally { setBusy(false); }
   };
 
@@ -315,7 +335,12 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, teamMemb
 
       {/* ── Kapitaalvergelijking ── */}
       {loading ? <div className="bk-report-loading"><Skeleton lines={5} /></div> : !overview ? (
-        <p className="bk-muted">{years.length === 0 ? 'Maak eerst een boekjaar aan bij Financiën → Boekjaren.' : 'Kies een boekjaar.'}</p>
+        years.length === 0
+          ? <div className="bk-setup">
+              <div><strong>Nog geen boekjaar.</strong><p>De kapitaalvergelijking gaat per boekjaar. Open het boekjaar vanaf de start van je boekhouding{data.companySettings?.bookkeeping_start_date ? ` (${data.companySettings.bookkeeping_start_date.split('-').reverse().join('-')})` : ''}.</p></div>
+              {canWrite && <Button variant="primary" disabled={busy} onClick={() => void setUp()}>{busy ? 'Bezig…' : 'Boekjaar openen'}</Button>}
+            </div>
+          : <p className="bk-muted">Kies een boekjaar.</p>
       ) : (
         <div className="bk-report">
           <div className="bk-report-bar">
@@ -328,14 +353,6 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, teamMemb
               {overview.fiscalYear.status === 'closed' ? 'Afgesloten' : 'Voorlopig'}
             </span>
           </div>
-
-          {/* Stond het jaar ervoor nog open, dan leek het beginvermogen te laag,
-              zonder uitleg: de winst van dat jaar stond nog op de W&V-rekeningen. */}
-          {(overview.openPriorResultCents ?? 0) !== 0 && (
-            <p className="bk-neg"><AlertTriangle size={13} /> Een eerder boekjaar is nog niet afgesloten. Het resultaat daarvan
-              ({euroCents(overview.openPriorResultCents)}) zit nog niet in het beginvermogen{overview.isPartnership ? ' van de vennoten' : ''}.
-              Sluit dat jaar eerst af bij Financiën → Boekjaren.</p>
-          )}
 
           <div className="bk-table-wrap"><table className="bk-table">
             <thead><tr>
@@ -390,6 +407,13 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, teamMemb
               Bij een nieuwe beginbalans voorkom je dit door het kapitaal van elke vennoot meteen op zijn eigen kapitaalrekening te zetten (Grootboek → Beginbalans).
             </p>
           )}
+          {(overview.openPriorYears?.length ?? 0) > 0 && (
+            <p className="bk-note">
+              <AlertTriangle size={13} /> {overview.openPriorYears!.length === 1 ? `Boekjaar ${overview.openPriorYears![0]} is` : `De boekjaren ${overview.openPriorYears!.join(', ')} zijn`} nog niet afgesloten.
+              Het beginvermogen telt de voorlopige winst daarvan mee ({euroCents(overview.openPriorResultCents ?? 0)}){overview.isPartnership ? ', nog niet over de vennoten verdeeld' : ''}.
+              Sluit {overview.openPriorYears!.length === 1 ? 'dat jaar' : 'die jaren'} af bij Boekjaren zodra de cijfers vaststaan, bijvoorbeeld na je aangifte.
+            </p>
+          )}
           {overview.fiscalYear.status !== 'closed' && (
             <p className="bk-muted">Het boekjaar loopt nog of is nog niet afgesloten: de {overview.isPartnership ? 'winstaandelen zijn' : 'winst is'} voorlopig, op basis van wat er nu geboekt is.</p>
           )}
@@ -399,6 +423,109 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, teamMemb
               : 'Boek geld dat je voor jezelf opneemt op 0550 Privé-opnamen en geld dat je inbrengt op 0560 Privé-stortingen, ook bij de bank. Bij de jaarafsluiting gaan ze naar 0500 Eigen vermogen. Begin- en eindvermogen heb je nodig in je aangifte inkomstenbelasting; de winst volgt uit de vergelijking van die twee, plus de opnamen en min de stortingen.'}
           </p>
         </div>
+      )}
+
+      {overview && !isPartnershipForm && (
+        <IncomeTaxSection data={data} organizationId={organizationId} overview={overview} ownerUserId={canReadHours ? ownerUserId : null} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Van winst naar belastbare winst uit onderneming (lib/incomeTax.ts), voor de
+ * aangifte inkomstenbelasting van een eenmanszaak. Bij een vof doet elke
+ * vennoot dit zelf over zijn winstaandeel, met zijn eigen uren; dat rekent
+ * deze pagina niet uit.
+ */
+function IncomeTaxSection({ data, organizationId, overview, ownerUserId }: {
+  data: AppData; organizationId: string; overview: OwnersEquityOverview; ownerUserId: UUID | null;
+}) {
+  const year = Number(overview.fiscalYear.periodStart.slice(0, 4));
+  const [mixedCostsCents, setMixedCostsCents] = useState<number | null>(null);
+  const [starter, setStarter] = useState(false);
+
+  // Eten, drinken en representatie: de rekeningen met subtype mixed_costs
+  // (4600 in het rekeningschema van een IB-onderneming).
+  const mixedAccounts = useMemo(() => new Set(data.ledgerAccounts.filter(a => a.subtype === 'mixed_costs').map(a => a.id)), [data.ledgerAccounts]);
+  useEffect(() => {
+    let cancelled = false;
+    setMixedCostsCents(null);
+    reportProfitAndLoss(organizationId, overview.fiscalYear.periodStart, overview.fiscalYear.periodEnd)
+      .then(rows => { if (!cancelled) setMixedCostsCents(rows.filter(r => r.account_type === 'expense' && r.account_id && mixedAccounts.has(r.account_id)).reduce((sum, r) => sum + r.amount_cents, 0)); })
+      .catch(() => { if (!cancelled) setMixedCostsCents(0); });
+    return () => { cancelled = true; };
+  }, [organizationId, overview.fiscalYear.periodStart, overview.fiscalYear.periodEnd, mixedAccounts]);
+
+  // Het urencriterium per kalenderjaar, met de uren van de eigenaar.
+  const hoursMinutes = useMemo(() => {
+    if (!ownerUserId) return null;
+    return data.timeEntries
+      .filter(e => e.user_id === ownerUserId && e.entry_date >= `${year}-01-01` && e.entry_date <= `${year}-12-31`)
+      .reduce((sum, e) => sum + e.minutes, 0);
+  }, [data.timeEntries, ownerUserId, year]);
+  const hoursMet = hoursMinutes != null && hoursMinutes >= HOUR_CRITERION_MINUTES;
+
+  if (mixedCostsCents == null) return <div className="bk-report-loading"><Skeleton lines={4} /></div>;
+  const r = businessProfit({ year, profitCents: overview.resultCents, mixedCostsCents, hoursCriterionMet: hoursMet, starter });
+  const hours = hoursMinutes == null ? null : Math.floor(hoursMinutes / 60);
+  const row = (label: React.ReactNode, cents: number, sign: '' | '+' | '−' | '=' = '', strong = false) => (
+    <tr className={strong ? 'bk-report-total' : ''}>
+      <td>{sign && <span className="bk-muted">{sign} </span>}{label}</td>
+      <td className="bk-num">{euroCents(cents)}</td>
+    </tr>
+  );
+
+  return (
+    <div className="bk-report">
+      <div className="bk-report-bar">
+        <div className="bk-report-kpis">
+          <div><span>Voor je aangifte inkomstenbelasting {year}</span><strong>{r ? euroCents(r.taxableProfitCents) : '—'}</strong></div>
+          <div><span>Urencriterium {year}</span><strong className={hoursMet ? 'bk-pos' : ''}>{hours == null ? '—' : `${hours.toLocaleString('nl-NL')} / 1.225 uur`}</strong></div>
+        </div>
+      </div>
+      {!r ? (
+        <p className="bk-muted">De bedragen voor {year} (zelfstandigenaftrek, mkb-winstvrijstelling, de drempel voor gemengde kosten) staan nog niet in ResoFly. De winst en het eigen vermogen hierboven kun je wel gebruiken.</p>
+      ) : (
+        <>
+          <div className="bk-table-wrap"><table className="bk-table bk-report-table bk-ib-table">
+            <tbody>
+              {row('Winst volgens je boekhouding', r.profitCents)}
+              {r.mixedCosts.totalCents > 0 && row(
+                <>Niet aftrekbaar deel van eten, drinken en representatie ({r.mixedCosts.method === 'percentage'
+                  ? <>20% van {euroCents(r.mixedCosts.totalCents)}</>
+                  : <>tot de drempel van {euroCents(r.rules.mixedCostsThresholdCents)}</>})</>,
+                r.mixedCosts.addBackCents, '+')}
+              {row('Winst uit onderneming vóór ondernemersaftrek', r.fiscalProfitCents, '=', true)}
+              {/* Aftrekposten positief, met het minteken ervoor: "− € 1.200", niet "− € -1.200". */}
+              {row(<>Zelfstandigenaftrek {hoursMet ? (r.selfEmployedCapped ? '(niet hoger dan de winst)' : '') : hours == null ? '(uren niet te zien)' : '(urencriterium niet gehaald)'}</>, r.selfEmployedDeductionCents, '−')}
+              {starter && row('Startersaftrek', r.starterDeductionCents, '−')}
+              {/* Bij een verlies maakt de vrijstelling het verlies kleiner: dan staat er een plus. */}
+              {row(`Mkb-winstvrijstelling (${(r.rules.smeExemptionBasisPoints / 100).toLocaleString('nl-NL', { minimumFractionDigits: 2 })}%)${r.smeExemptionCents < 0 ? ', maakt het verlies kleiner' : ''}`, Math.abs(r.smeExemptionCents), r.smeExemptionCents < 0 ? '+' : '−')}
+              {row('Belastbare winst uit onderneming', r.taxableProfitCents, '=', true)}
+            </tbody>
+          </table></div>
+          <label className="bk-setting-check">
+            <input type="checkbox" checked={starter} onChange={e => setStarter(e.target.checked)} />
+            <span>Ik ben starter: in een of meer van de vijf jaren hiervoor was ik geen ondernemer, en ik had nog geen drie keer startersaftrek ({euroCents(r.rules.starterDeductionCents)}).</span>
+          </label>
+          {!hoursMet && (
+            <p className="bk-muted">
+              {hours == null
+                ? 'De uren van de eigenaar zie je hier alleen met leesrecht op Uren; de zelfstandigenaftrek is daarom niet meegerekend.'
+                : `Bij Uren staan ${hours.toLocaleString('nl-NL')} uur in ${year}.`}
+              {' '}Zonder urencriterium (1.225 uur, en meer dan de helft van je werktijd) geen zelfstandigenaftrek en startersaftrek; de mkb-winstvrijstelling krijg je wel.
+            </p>
+          )}
+          {mixedAccounts.size === 0 && (
+            <p className="bk-muted">Er is geen rekening voor eten, drinken en representatie (4600). Boek je die kosten op een andere rekening, tel het niet-aftrekbare deel dan zelf bij de winst.</p>
+          )}
+          <p className="bk-muted">
+            Een indicatie{overview.fiscalYear.status !== 'closed' ? ', op basis van wat er nu geboekt is' : ''}. Niet meegerekend: de kleinschaligheidsinvesteringsaftrek (investeerde je in {year} meer dan € 2.901 in bedrijfsmiddelen van elk minstens € 450?),
+            de bijtelling als je privé rijdt in een auto van de zaak, een desinvesteringsbijtelling, de meewerkaftrek, en de halve zelfstandigenaftrek als je aan het begin van het jaar de AOW-leeftijd had.
+            Niet benutte zelfstandigenaftrek schuift door naar volgende jaren.
+          </p>
+        </>
       )}
     </div>
   );

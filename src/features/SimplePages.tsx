@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, Download, Globe, History, LayoutTemplate, ListChecks, Mail, MonitorSmartphone, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Bell, BookOpen, Building2, Calculator, CalendarCog, CreditCard, Download, Globe, History, LayoutTemplate, ListChecks, Mail, MonitorSmartphone, Palette, Plug, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Wallet, Webhook, type LucideIcon } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { AppsSettingsPanel } from '../components/StandaloneApps';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
@@ -29,6 +29,7 @@ import { AuditLogPanel } from './AuditLog';
 import { ClientDomainSettings } from './ClientDomainSettings';
 import { DataExportPanel } from './DataExport';
 import type { AuditTarget } from '../lib/auditLog';
+import { SETTINGS_TAB_IDS, groupSettingsTabs, settingsGroupOf, visibleSettingsTabIds, type SettingsGroupId, type SettingsTab } from '../lib/settingsMenu';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -90,34 +91,10 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   accountant: 'Boekhouder',
 };
 
-export type SettingsTab = 'organisatie' | 'logboek' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'domein' | 'documenten' | 'meldingen' | 'apps' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'gegevens' | 'ai' | 'api' | 'email';
-
-/** De boekhouder ziet alleen wat bij de financiën hoort, en dan alleen-lezen. */
-// Het logboek niet meer: dat is sinds 11 november alleen voor owners en admins.
-// Apps wel (2026-11-12): de losse app Financiën is juist voor wie alleen daar komt.
-export const ACCOUNTANT_SETTINGS_TABS: SettingsTab[] = ['organisatie', 'apps', 'facturatie', 'boekhouding'];
-
-/**
- * De regels per rol voor de instellingen-tabbladen, gedeeld door de pagina en
- * het accountmenu. `null` = geen rolregel; dan beslist de aanroeper met zijn
- * eigen regels (agenda, AI, API).
- */
-export function settingsTabRoleRule(tab: SettingsTab, role: OrganizationRole | null | undefined): boolean | null {
-  if (isAccountantRole(role)) return ACCOUNTANT_SETTINGS_TABS.includes(tab);
-  // Een boekhouder uitnodigen of de toegang intrekken is beheer.
-  if (tab === 'boekhouder') return role === 'owner' || role === 'admin';
-  // Het logboek is overzicht voor wie de organisatie beheert. Een teamlid zag
-  // er per module wie wat deed, met de e-mailadressen van collega's en wie
-  // wiens rechten aanpaste. De database geeft het hun ook niet meer
-  // (20261111140000).
-  if (tab === 'logboek') return isAdminRole(role);
-  // Alles exporteren: de eigenaar en de beheerders (keuze van 11 november).
-  // Het leest met de eigen rechten, maar het is wel alles in één keer; een
-  // gewoon teamlid of de boekhouder doet dat niet. log_data_export weigert hen
-  // ook.
-  if (tab === 'gegevens') return role === 'owner' || role === 'admin';
-  return null;
-}
+// De onderdelen, hun groepen en wie wat ziet staan sinds 18 november in
+// lib/settingsMenu.ts: het paneel links, het accountmenu en deze pagina lazen
+// elk hun eigen lijst en liepen uit elkaar.
+export type { SettingsTab };
 
 /**
  * Rechtenraster: per module kiezen tussen geen toegang, alleen lezen en
@@ -168,27 +145,54 @@ function moduleAccessSummary(role: OrganizationRole, raw: unknown): string {
   return parts.join(' · ');
 }
 
-export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
-  { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen.' },
-  { id: 'logboek', label: 'Logboek', Icon: History, description: 'Wie wat wanneer en waar heeft aangepast: facturen verstuurd, documenten gewijzigd, taken afgerond, rechten aangepast. Per regel zie je wat er veranderde, van oud naar nieuw.' },
-  { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
-  { id: 'klantvelden', label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
-  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en lettertypen op wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s, je offerte- en factuur-PDF\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
-  { id: 'domein', label: 'Domein', Icon: Globe, description: 'Het adres waarop je klanten hun portaal, albums, offertes, facturen en contracten openen: je webadres bij ResoFly of je eigen domein. En het domein waarvan je mail verstuurt.' },
-  { id: 'documenten', label: 'Documentopmaak', Icon: LayoutTemplate, description: 'Sleep de gegevens van je offertes en facturen naar de plek waar jij ze wilt hebben, of kies een kant-en-klaar sjabloon. Je klant krijgt precies de PDF die je hier ziet.' },
-  { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
-  { id: 'apps', label: 'Apps', Icon: MonitorSmartphone, description: 'Zet Agenda, Financiën en Communicatie elk als eigen app op je telefoon of computer. Zo\'n app opent meteen op de goede pagina.' },
-  { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
-  { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens en betaalteksten die op je facturen en offertes verschijnen. De opmaak en het briefpapier staan bij Documentopmaak.' },
-  { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
-  { id: 'boekhouder', label: 'Boekhouder', Icon: Calculator, description: 'Geef je boekhouder of accountant een gratis gastaccount dat alleen je financiën kan inzien — niets wijzigen, geen klantdossiers of projecten.' },
-  { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Kies of je facturen per e-mail of via Mollie verstuurt, en koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
-  { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
-  { id: 'gegevens', label: 'Gegevens', Icon: Download, description: 'Download al je gegevens in één keer: om over te stappen naar een ander pakket, voor je archief of voor je accountant.' },
-  { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Zet Gerrie, de AI-assistent, voor jezelf aan of uit. Koppel je eigen AI (Claude, ChatGPT, Gemini) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
-  { id: 'api', label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
-  { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails en van de ticketmeldingen aan klanten aan, bepaal of klanten e-mail krijgen over hun tickets, en verstuur een testmail om je configuratie te controleren.' },
-];
+type SettingsTabMeta = { label: string; Icon: LucideIcon; description: string };
+
+/** Naam, icoon en uitleg per onderdeel. Een Record, zodat TypeScript klaagt
+ *  als een onderdeel uit lib/settingsMenu.ts hier nog geen gezicht heeft. */
+const SETTINGS_TAB_META: Record<SettingsTab, SettingsTabMeta> = {
+  organisatie: { label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen.' },
+  logboek: { label: 'Logboek', Icon: History, description: 'Wie wat wanneer en waar heeft aangepast: facturen verstuurd, documenten gewijzigd, taken afgerond, rechten aangepast. Per regel zie je wat er veranderde, van oud naar nieuw.' },
+  sjablonen: { label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
+  klantvelden: { label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
+  huisstijl: { label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en lettertypen op wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s, je offerte- en factuur-PDF\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
+  domein: { label: 'Domein', Icon: Globe, description: 'Het adres waarop je klanten hun portaal, albums, offertes, facturen en contracten openen: je webadres bij ResoFly of je eigen domein. En het domein waarvan je mail verstuurt.' },
+  documenten: { label: 'Documentopmaak', Icon: LayoutTemplate, description: 'Sleep de gegevens van je offertes en facturen naar de plek waar jij ze wilt hebben, of kies een kant-en-klaar sjabloon. Je klant krijgt precies de PDF die je hier ziet.' },
+  meldingen: { label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
+  apps: { label: 'Apps', Icon: MonitorSmartphone, description: 'Zet Agenda, Financiën en Communicatie elk als eigen app op je telefoon of computer. Zo\'n app opent meteen op de goede pagina.' },
+  agenda: { label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
+  facturatie: { label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens en betaalteksten die op je facturen en offertes verschijnen. De opmaak en het briefpapier staan bij Documentopmaak.' },
+  boekhouding: { label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
+  boekhouder: { label: 'Boekhouder', Icon: Calculator, description: 'Geef je boekhouder of accountant een gratis gastaccount dat alleen je financiën kan inzien — niets wijzigen, geen klantdossiers of projecten.' },
+  betalen: { label: 'Online betalen', Icon: CreditCard, description: 'Kies of je facturen per e-mail of via Mollie verstuurt, en koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
+  abonnement: { label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
+  gegevens: { label: 'Gegevens', Icon: Download, description: 'Download al je gegevens in één keer: om over te stappen naar een ander pakket, voor je archief of voor je accountant.' },
+  ai: { label: 'AI', Icon: Sparkles, description: 'Zet Gerrie, de AI-assistent, voor jezelf aan of uit. Koppel je eigen AI (Claude, ChatGPT, Gemini) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
+  api: { label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
+  email: { label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails en van de ticketmeldingen aan klanten aan, bepaal of klanten e-mail krijgen over hun tickets, en verstuur een testmail om je configuratie te controleren.' },
+};
+
+export type SettingsTabInfo = SettingsTabMeta & { id: SettingsTab };
+
+/** Alle onderdelen, in de volgorde van hun groepen. */
+export const SETTINGS_TABS: SettingsTabInfo[] = SETTINGS_TAB_IDS.map(id => ({ id, ...SETTINGS_TAB_META[id] }));
+
+/** Het icoon van een groep: in het accountmenu staat per groep één regel. */
+const SETTINGS_GROUP_ICONS: Record<SettingsGroupId, LucideIcon> = {
+  organisatie: Building2,
+  werkwijze: ListChecks,
+  klant: Palette,
+  geld: Wallet,
+  koppelingen: Plug,
+  apparaat: MonitorSmartphone,
+};
+
+export type SettingsMenuGroup = { id: SettingsGroupId; label: string; Icon: LucideIcon; tabs: SettingsTabInfo[] };
+
+/** Wat dit teamlid in de instellingen ziet, per groep. Lege groepen vallen weg. */
+export function settingsMenuGroups(visible: readonly SettingsTab[]): SettingsMenuGroup[] {
+  return groupSettingsTabs(SETTINGS_TABS.filter(tab => visible.includes(tab.id)))
+    .map(group => ({ ...group, Icon: SETTINGS_GROUP_ICONS[group.id] }));
+}
 
 export function CalendarPage() {
   return <div className="empty"><div className="e-big">Kalender</div><p>V1 toont deadlines in projecten. Koppeling met Google/Microsoft Calendar kan hierop worden gebouwd.</p></div>;
@@ -1752,6 +1756,46 @@ function AccountantAccessCard({
   </section>;
 }
 
+/**
+ * Een plakkende balk in .content blijft staan op de binnenrand (padding) van
+ * .content, niet tegen de bovenkant. In die strook schoof de inhoud zichtbaar
+ * door: halve kaarten boven de tabbladen. Zodra de balk plakt, krijgt hij
+ * daarom een vlak in de kleur van het werkvlak dat de strook dekt
+ * (--stuck-cover, zie .settings-nav::before). In rust niet: dan viel dat vlak
+ * over de kop erboven.
+ */
+function useStickyCover(ref: RefObject<HTMLElement>) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let scroller: HTMLElement | null = el.parentElement;
+    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const pad = scroller ? parseFloat(getComputedStyle(scroller).paddingTop) || 0 : 0;
+      const edge = scroller ? scroller.getBoundingClientRect().top : 0;
+      const scrolled = scroller ? scroller.scrollTop > 0 : window.scrollY > 0;
+      const stuck = scrolled && el.getBoundingClientRect().top <= edge + pad + 0.5;
+      el.style.setProperty('--stuck-cover', stuck ? `${Math.ceil(pad)}px` : '0px');
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+    const target: HTMLElement | Window = scroller ?? window;
+    target.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    // Een werktabblad dat weer zichtbaar wordt, scrolt niet maar krijgt wel weer een maat.
+    const resize = new ResizeObserver(schedule);
+    resize.observe(el);
+    update();
+    return () => {
+      target.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      resize.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [ref]);
+}
+
 export function Settings({
   settings,
   data,
@@ -1775,6 +1819,7 @@ export function Settings({
   permissions = FULL_PERMISSIONS,
   onOpenAuditTarget,
   onSetAiConsent,
+  onTabChange,
 }: {
   settings: CompanySettings | null;
   data: AppData;
@@ -1806,11 +1851,27 @@ export function Settings({
   onOpenAuditTarget?: (target: AuditTarget) => void;
   /** Gerrie aan- of uitzetten voor jezelf (Instellingen → AI). Zonder: alleen de stand tonen. */
   onSetAiConsent?: AiConsentChange;
+  /** Je koos hier een ander onderdeel. Het paneel links licht het dan op, en
+   *  de terugknop gaat naar het onderdeel ervoor. */
+  onTabChange?: (tab: SettingsTab) => void;
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(settingsNav?.tab ?? 'organisatie');
   // Elke keer dat het account-menu naar een instellingen-sectie navigeert (nieuwe
   // `key`, ook bij dezelfde tab) springt de instellingenpagina naar die tab.
-  useEffect(() => { if (settingsNav) setActiveTab(settingsNav.tab); }, [settingsNav]);
+  // Zonder sectie (terug naar hoe de pagina opende) is dat het eerste
+  // onderdeel; anders bleef terug op het onderdeel staan waar je vandaan kwam.
+  useEffect(() => { setActiveTab(settingsNav?.tab ?? 'organisatie'); }, [settingsNav]);
+  // Per groep het onderdeel waar je laatst was: terug naar Geld brengt je weer
+  // bij Online betalen in plaats van bij het eerste onderdeel.
+  const lastTabInGroup = useRef<Partial<Record<SettingsGroupId, SettingsTab>>>({});
+  const settingsNavRef = useRef<HTMLDivElement>(null);
+  useStickyCover(settingsNavRef);
+  lastTabInGroup.current[settingsGroupOf(activeTab).id] = activeTab;
+  function selectTab(tab: SettingsTab) {
+    if (tab === activeTab) return;
+    setActiveTab(tab);
+    onTabChange?.(tab);
+  }
   const [form, setForm] = useState<CompanySettingsInput>(() => settingsToForm(settings));
   // Eenmanszaak, vof, maatschap of cv: inkomstenbelasting, boekjaar = kalenderjaar.
   const ibForm = ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(form.legal_form ?? 'eenmanszaak');
@@ -1862,30 +1923,19 @@ export function Settings({
   const canAdminOrganization = activeMembership ? ['owner', 'admin'].includes(activeMembership.role) : false;
   // De boekhouder (gast) ziet hier alleen wat bij de financiën hoort, alleen-lezen.
   const isAccountant = isAccountantRole(activeMembership?.role);
-  // Het agenda-tabblad verschijnt alleen als de agenda-module openstaat. Landt
-  // iemand toch op een tabblad dat er voor hem niet is (onthouden keuze, wissel
-  // van organisatie), dan valt hij terug op het eerste tabblad in plaats van op
-  // een lege pagina te staren.
+  // Wie welk onderdeel ziet (agenda alleen met de agenda-module, AI voor
+  // iedereen, API voor owners en admins, de boekhouder alleen de financiën),
+  // staat in lib/settingsMenu.ts: dezelfde regel als het paneel links en het
+  // accountmenu. Het AI-tabblad staat voor ieder teamlid open, ook al is het
+  // verbruikscijfer erbinnen alleen voor owners en admins.
   //
-  // Het AI-tabblad staat voor IEDER teamlid open, ook al is het verbruikscijfer
-  // erbinnen alleen voor owners en admins: je eigen AI koppel je persoonlijk,
-  // met je eigen rechten, en dan hoor je hem ook zelf te kunnen loskoppelen.
-  //
-  // API & webhooks staat daarentegen alleen open voor owners en admins: een
-  // API-sleutel is een deur naar de hele organisatie, en die geeft niet elk
-  // teamlid uit (api-admin weigert het ook).
-  //
-  // De boekhouder ziet alleen Organisatie, Facturatie en Boekhouding; de
-  // tabbladen Boekhouder (uitnodigen, intrekken) en Logboek zijn voor owners
-  // en admins.
+  // Landt iemand toch op een tabblad dat er voor hem niet is (onthouden keuze,
+  // wissel van organisatie), dan valt hij terug op het eerste tabblad in plaats
+  // van op een lege pagina te staren.
   const hasCalendarSettings = Boolean(calendarSettings);
-  const visibleTabs = SETTINGS_TABS.filter(tab => {
-    const roleRule = settingsTabRoleRule(tab.id, activeMembership?.role);
-    if (roleRule !== null) return roleRule;
-    if (tab.id === 'agenda') return hasCalendarSettings;
-    if (tab.id === 'api') return canAdminOrganization;
-    return true;
-  });
+  const visibleTabIds = visibleSettingsTabIds(activeMembership?.role, { canReadCalendar: hasCalendarSettings });
+  const visibleTabs = SETTINGS_TABS.filter(tab => visibleTabIds.includes(tab.id));
+  const menuGroups = settingsMenuGroups(visibleTabIds);
   const visibleTabKey = visibleTabs.map(tab => tab.id).join(',');
   useEffect(() => {
     if (!visibleTabs.some(tab => tab.id === activeTab)) setActiveTab('organisatie');
@@ -2509,6 +2559,7 @@ export function Settings({
   }
 
   const activeTabMeta = SETTINGS_TABS.find(tab => tab.id === activeTab) ?? SETTINGS_TABS[0];
+  const activeGroup = menuGroups.find(group => group.tabs.some(tab => tab.id === activeTab)) ?? menuGroups[0] ?? null;
 
   return <div className="settings-page">
     <div className="settings-head">
@@ -2522,21 +2573,48 @@ export function Settings({
         : !canAdminOrganization && <p className="settings-help">Je kunt deze instellingen bekijken, maar alleen owners en admins kunnen ze aanpassen.</p>}
     </div>
 
-    <div className="client-tabs-bar settings-tabs-bar" role="tablist">
-      {visibleTabs.map(tab => (
-        <button
-          key={tab.id}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === tab.id}
-          className={`client-tab-btn${activeTab === tab.id ? ' active' : ''}`}
-          data-settings-tab={tab.id}
-          onClick={() => setActiveTab(tab.id)}
-        >
-          <tab.Icon size={15} aria-hidden="true" />
-          {tab.label}
-        </button>
-      ))}
+    {/* Twee lagen: eerst de groep, dan het onderdeel. Eén rij van negentien
+        tabbladen schoof voor de helft uit beeld; zes groepen passen op een
+        computer naast elkaar, en per groep zijn het er hooguit vijf. Elke
+        groepsknop noemt zijn onderdelen (data-settings-tabs), zodat een test
+        of een link via de groep bij elk onderdeel komt. */}
+    <div className="settings-nav" ref={settingsNavRef}>
+      <nav className="client-tabs-bar settings-tabs-bar settings-groups" aria-label="Soorten instellingen">
+        {menuGroups.map(group => {
+          const isActive = group.id === activeGroup?.id;
+          return <button
+            key={group.id}
+            type="button"
+            className={`client-tab-btn${isActive ? ' active' : ''}`}
+            aria-current={isActive ? 'true' : undefined}
+            data-settings-group={group.id}
+            data-settings-tabs={group.tabs.map(tab => tab.id).join(' ')}
+            onClick={() => {
+              const remembered = lastTabInGroup.current[group.id];
+              selectTab(group.tabs.find(tab => tab.id === remembered)?.id ?? group.tabs[0].id);
+            }}
+          >
+            <group.Icon size={15} aria-hidden="true" />
+            {group.label}
+          </button>;
+        })}
+      </nav>
+      {activeGroup && <div className="settings-subtabs" role="tablist" aria-label={activeGroup.label}>
+        {activeGroup.tabs.map(tab => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            className={activeTab === tab.id ? 'is-on' : undefined}
+            data-settings-tab={tab.id}
+            onClick={() => selectTab(tab.id)}
+          >
+            <tab.Icon size={14} aria-hidden="true" />
+            {tab.label}
+          </button>
+        ))}
+      </div>}
     </div>
 
     {activeTab === 'organisatie' && <div className="settings-tab-panel">

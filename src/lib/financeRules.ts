@@ -106,3 +106,26 @@ export function invoiceContentLocked(
     || committed
     || payments.some(payment => payment.status === 'creating' || payment.status === 'open');
 }
+
+/**
+ * Het aantal dagen betaaltermijn, uit de betaaltekst van de bedrijfsgegevens
+ * ("Betaling binnen 14 dagen."). Zonder getal 14 dagen; nooit minder dan 1 of
+ * meer dan 120.
+ *
+ * Een nieuwe factuur kreeg geen vervaldatum. Zonder vervaldatum wordt een
+ * factuur nooit "te laat": er kwam geen herinnering en geen aanmaning, ook niet
+ * als de klant maanden niet betaalde.
+ */
+export function paymentTermDays(terms: string | null | undefined): number {
+  const match = /(\d{1,3})\s*(?:dagen|dag|days)\b/i.exec(String(terms ?? ''));
+  const days = match ? Number(match[1]) : 14;
+  return Math.min(120, Math.max(1, Number.isFinite(days) ? days : 14));
+}
+
+/** De vervaldatum: factuurdatum plus de betaaltermijn (als kalenderdatum). */
+export function defaultDueDate(invoiceDate: string, terms: string | null | undefined): string {
+  const [y, m, d] = invoiceDate.split('-').map(Number);
+  const due = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+  due.setUTCDate(due.getUTCDate() + paymentTermDays(terms));
+  return due.toISOString().slice(0, 10);
+}

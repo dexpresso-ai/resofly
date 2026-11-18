@@ -12,6 +12,8 @@ import { isAdminRole, type ModuleAccess } from './permissions';
 import { isPortalLoginKey } from './portalLoginKey';
 import { cleanQuery, entityTypesFor, periodStart, type AuditFilters } from './auditLog';
 import type { CoreData, DataGroup, GroupData } from './dataGroups';
+import { formatISODate } from './dates';
+import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods';
 import type {
   AiConsent,
   AppData,
@@ -670,8 +672,11 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
  * De kern van de werkruimte: wat bijna elke pagina en de vaste delen van het
  * scherm gebruiken. De zware, groeiende tabellen zitten hier niet in; die laadt
  * loadDataGroup pas als een pagina ze nodig heeft (zie src/lib/dataGroups.ts).
+ *
+ * `organizationCreatedAt`: wanneer de organisatie in ResoFly begon. De
+ * btw-herinnering slaat deadlines van daarvóór over (lib/vatPeriods.ts).
  */
-export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
+export async function loadCoreData(organizationId: UUID, { organizationCreatedAt = null }: { organizationCreatedAt?: string | null } = {}): Promise<CoreData> {
   const [
     clients,
     clientContacts,
@@ -704,7 +709,7 @@ export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
     projectTemplateTasks,
     contractProjects,
     bankTransactionsToReconcile,
-    vatReturnsToFile,
+    filedVatPeriods,
   ] = await Promise.all([
     select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), select<Invoice>('invoices', organizationId),
@@ -723,9 +728,24 @@ export async function loadCoreData(organizationId: UUID): Promise<CoreData> {
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
     countOptional('bank_transactions', organizationId, { status: ['unmatched', 'suggested'] }),
-    countOptional('vat_returns', organizationId, { status: ['finalized'] }),
+    selectFiledVatPeriods(organizationId),
   ]);
-  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, vatReturnsToFile };
+  // Btw-aangiftes die nog moeten: afgelopen tijdvakken zonder aangifte (zie
+  // lib/vatPeriods.ts). Alleen met een rekeningschema. Dat krijgt sinds
+  // 20261118090000 elke organisatie bij de inrichting; vatPeriodsToFile kijkt
+  // daarom ook naar de startdatum, eerdere aangiftes en de start in ResoFly.
+  const createdAt = organizationCreatedAt && !Number.isNaN(Date.parse(organizationCreatedAt)) ? new Date(organizationCreatedAt) : null;
+  const vatDue: VatPeriodDue[] = ledgerAccounts.length === 0 || filedVatPeriods === null ? [] : vatPeriodsToFile({
+    today: formatISODate(new Date()),
+    frequency: companySettings?.vat_return_period === 'monthly' ? 'monthly' : 'quarterly',
+    kor: Boolean(companySettings?.kor_enabled),
+    bookkeepingStart: companySettings?.bookkeeping_start_date ?? null,
+    since: createdAt ? formatISODate(createdAt) : null,
+    filed: filedVatPeriods,
+  });
+  const vatReturnsToFile = vatDue.length;
+  const vatReturnNextDue = vatDue[0] ?? null;
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, vatReturnsToFile, vatReturnNextDue };
 }
 
 /** Per groep: welke tabellen, in welke vorm. TypeScript bewaakt dat elke groep precies zijn eigen velden teruggeeft. */
@@ -791,6 +811,19 @@ export function loadDataGroup<G extends DataGroup>(organizationId: UUID, group: 
  * een HEAD-verzoek zonder foutmelding) geeft nul en een waarschuwing: een
  * attentiepunt minder op het dashboard mag de werkruimte niet tegenhouden.
  */
+/**
+ * De tijdvakken met een (primaire) btw-aangifte van de laatste drie jaar, als
+ * sleutels (lib/vatPeriods.ts). Klein: hooguit 36 rijen. Null als het niet
+ * lukt (geen leesrecht op Financiën): dan geen herinnering, geen fout.
+ */
+async function selectFiledVatPeriods(organizationId: UUID): Promise<Set<string> | null> {
+  // Een RPC en niet de tabel: vat_returns hoort bij de boekhouding, die de
+  // kern bewust niet laadt (dataGroups.ts; tests/laden bewaakt dat).
+  const { data, error } = await supabase.rpc('list_filed_vat_periods', { p_organization_id: organizationId });
+  if (error || !Array.isArray(data)) return null;
+  return new Set((data ?? []).map((row: { period_type: string; year: number; period_index: number }) => vatPeriodKey(row.period_type, row.year, row.period_index)));
+}
+
 async function countOptional(table: string, organizationId: UUID, inFilters: Record<string, string[]>): Promise<number> {
   let query = supabase.from(table).select('id', { count: 'exact', head: true }).eq('organization_id', organizationId);
   for (const [column, values] of Object.entries(inFilters)) query = query.in(column, values);
@@ -3578,7 +3611,12 @@ export async function postAssetDepreciation(organizationId: UUID, assetId: UUID,
 }
 
 /** Boekt de aanschaf van een activum naar de balans (debet activa / credit tegenrekening). */
-export async function bookAssetAcquisition(organizationId: UUID, assetId: UUID, creditAccountId: UUID, date?: string): Promise<FixedAsset> {
+/**
+ * Boekt de aanschaf van een activum. Zonder tegenrekening (null) koppelt de
+ * database de aanschaf aan de geboekte bron-inkoopfactuur, als die het bedrag
+ * al op de activarekening zette: dan komt er geen tweede boeking.
+ */
+export async function bookAssetAcquisition(organizationId: UUID, assetId: UUID, creditAccountId: UUID | null, date?: string): Promise<FixedAsset> {
   const { data, error } = await supabase.rpc('book_asset_acquisition', {
     p_organization_id: organizationId,
     p_asset_id: assetId,
@@ -3906,6 +3944,19 @@ export async function ensureDefaultLedgerAccounts(organizationId: UUID): Promise
   const { error } = await supabase.rpc('ensure_default_ledger_accounts', {
     p_organization_id: organizationId,
   });
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * De boekhouding in één keer klaarzetten: het rekeningschema en de btw-codes,
+ * en de boekjaren vanaf de startdatum tot en met het lopende jaar (alleen als
+ * er nog geen boekjaar is). Hetzelfde als het afronden van de inrichting doet
+ * (20261118090000). Tot 18 november maakte de knop alleen het rekeningschema;
+ * Eigen vermogen zei daarna nog "Maak eerst een boekjaar aan", zonder knop.
+ */
+export async function setUpBookkeeping(organizationId: UUID): Promise<void> {
+  await ensureDefaultLedgerAccounts(organizationId);
+  const { error } = await supabase.rpc('open_initial_fiscal_years', { p_organization_id: organizationId });
   if (error) throw bookkeepingError(error);
 }
 

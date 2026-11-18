@@ -21,7 +21,7 @@ import { parseDutchAmountCents } from '../lib/money';
 import { amsterdamTodayIso } from '../lib/dates';
 import {
   addLine, allocationPayload, allocationState, buildManualIndex, centsToInput, manualMatchesFor, naturalAmount, putRemainder,
-  removeLine, suggestAllocations, type AllocationPayload, type DraftAllocation,
+  removeLine, suggestAllocations, vatCodeForAccount, type AllocationPayload, type DraftAllocation,
 } from '../lib/bankAllocation';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -432,14 +432,7 @@ function AllocationEditor({ txn, data, candidates, disabled, busy, onBook, child
               {line.kind === 'ledger' ? (
                 <>
                   <Select value={line.accountId} disabled={disabled} searchable aria-label={`Grootboekrekening, regel ${index + 1}`}
-                    onChange={e => {
-                      const account = data.ledgerAccounts.find(a => a.id === e.target.value);
-                      // Privé en kapitaal hebben geen btw. Bleef de btw-code van een
-                      // kostenrekening staan, dan gaf een privé-opname voorbelasting
-                      // (november 2026); de database weigert dat nu ook.
-                      const vatCode = account?.type === 'equity' ? '' : (line.vatCode || (account?.default_vat_code ?? ''));
-                      update(line.key, { accountId: e.target.value, partyId: '', vatCode });
-                    }}>
+                    onChange={e => update(line.key, { accountId: e.target.value, partyId: '', vatCode: vatCodeForAccount(line.vatCode, data.ledgerAccounts.find(a => a.id === e.target.value), { kor: Boolean(data.companySettings?.kor_enabled) }) })}>
                     <option value="">— grootboekrekening —</option>
                     {accounts.map((a: LedgerAccount) => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
                   </Select>

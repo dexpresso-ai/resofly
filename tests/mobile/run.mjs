@@ -84,6 +84,26 @@ const PORTAL_CREDIT = { selector: '.portal-foot-by', text: 'beschikbaar gesteld 
 // donkere letters, die op de donkere kop wegvallen).
 const PORTAL_LOGO_ON_PLATE = { selector: '.portal-hero .brand-logo.plate-light img', label: 'het logo op een licht plaatje in de kop' };
 
+/**
+ * Instellingen → een onderdeel. Sinds 2026-11-18 staan de onderdelen in groepen:
+ * eerst de groep die het onderdeel noemt (data-settings-tabs), dan het onderdeel
+ * zelf. Alleen het onderdeel aanklikken kan niet meer: dat staat pas in beeld
+ * als zijn groep openstaat, en een stap die niet in beeld is slaat de test
+ * stilletjes over. Dan mat hij Organisatie & team in plaats van wat je vroeg;
+ * daarom moet het gekozen onderdeel er ook echt staan (mustShow).
+ */
+function settingsPage(tab, spec = {}) {
+  return {
+    page: 'settings',
+    ...spec,
+    prepare: [`[data-settings-tabs~="${tab}"]`, `[data-settings-tab="${tab}"]`, ...(spec.prepare ?? [])],
+    mustShow: [
+      { selector: `.settings-subtabs [data-settings-tab="${tab}"][aria-selected="true"]`, label: `het onderdeel ${tab}, gekozen in zijn groep` },
+      ...(spec.mustShow ?? []),
+    ],
+  };
+}
+
 /** Welke pagina's, en met welk tabblad ze openen. */
 const PAGES = {
   dashboard: 'dashboard', gerrie: 'gerrie', weekplanner: 'weekplanner', calendar: 'calendar', time: 'time',
@@ -129,13 +149,13 @@ const PAGES = {
   // de drie punten met elk een vinkje. Instellingen → AI heeft dezelfde punten
   // (settings-ai-uit) of, als hij aanstaat, de knop om hem uit te zetten (settings-ai).
   'gerrie-aanzetten': { page: 'gerrie', mock: { aiOff: true } },
-  'settings-ai': { page: 'settings', prepare: '[data-settings-tab="ai"]' },
-  'settings-ai-uit': { page: 'settings', mock: { aiOff: true }, prepare: '[data-settings-tab="ai"]' },
+  'settings-ai': settingsPage('ai'),
+  'settings-ai-uit': settingsPage('ai', { mock: { aiOff: true } }),
   // Geen AI gekozen (2026-11-15): Gerrie staat nergens meer in het menu. Een
   // onthouden tabblad op Gerrie zegt waarom, met de weg naar Instellingen → AI;
   // daar staat de keuze boven de drie punten.
   'gerrie-uit': { page: 'gerrie', mock: { aiDeclined: true }, mustShow: [{ selector: '.gaz-off-empty .gaz-empty-actions .btn', label: 'de knop naar Instellingen → AI' }] },
-  'settings-ai-geen': { page: 'settings', mock: { aiDeclined: true }, prepare: '[data-settings-tab="ai"]', mustShow: [{ selector: '.gaz-declined', label: 'de uitleg dat je koos voor geen AI' }] },
+  'settings-ai-geen': settingsPage('ai', { mock: { aiDeclined: true }, mustShow: [{ selector: '.gaz-declined', label: 'de uitleg dat je koos voor geen AI' }] }),
   'report-updating': {
     page: 'report', statsReportId: seed.aiReports[0].id,
     prepare: ['.aire-chat-toggle', { fill: '.aire-composer textarea', value: 'Zet er vorig jaar naast' }, '.aire-send', '.aire-chat-close'],
@@ -159,51 +179,53 @@ const PAGES = {
   'tickets-filters': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: '.ticket-filter-toggle' },
   'client-tickets': { page: 'client', clientId: seed.clients[0].id, prepare: '.client-tab-btn:has-text("Tickets")' },
   quotes: 'quotes', invoices: 'invoices', contracts: 'contracts', ledger: 'ledger', bank: 'bank', pnl: 'pnl',
-  'vat-returns': 'vat-returns', suppliers: 'suppliers', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
+  'vat-returns': 'vat-returns', suppliers: 'suppliers', 'meeting-booking': 'meeting-booking', archive: 'archive',
+  // Instellingen (2026-11-18): de zes groepen, en daaronder de onderdelen van
+  // de eerste groep met Organisatie & team gekozen.
+  settings: settingsPage('organisatie', { prepare: [], mustShow: [{ selector: '.settings-groups [data-settings-group="geld"]', label: 'de groepen van de instellingen' }] }),
   // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat
   // op de telefoon onder elkaar.
-  'settings-boekhouder': { page: 'settings', prepare: '[data-settings-tab="boekhouder"]' },
+  'settings-boekhouder': settingsPage('boekhouder'),
   // Instellingen → Apps (2026-11-12): ResoFly zelf en de drie losse apps, elk
   // met Openen en Link. Op de telefoon onder elkaar, zonder dat de knoppen eraf vallen.
-  'settings-apps': { page: 'settings', prepare: '[data-settings-tab="apps"]' },
+  'settings-apps': settingsPage('apps'),
   // Instellingen → Logboek (november 2026): de tijdlijn per dag met de
   // filters erboven; op de telefoon de velden achter één knop.
-  'settings-logboek': { page: 'settings', prepare: '[data-settings-tab="logboek"]' },
+  'settings-logboek': settingsPage('logboek'),
   // Instellingen → Huisstijl: de instellingen met het klantportaal als
   // voorbeeld ernaast (op de telefoon eronder), in een iframe.
-  'settings-huisstijl': { page: 'settings', prepare: '[data-settings-tab="huisstijl"]' },
+  'settings-huisstijl': settingsPage('huisstijl'),
   // Instellingen → Documentopmaak: de sleep-editor met het A4-blad. Op de
   // telefoon staat het blad bovenaan en schaalt het mee; de velden en de
   // instellingen staan eronder. De lijst met velden blijft vanaf de
   // tabletbreedte in beeld (sticky) en mag daarbij nooit over de
   // instellingen schuiven: op een laptop lagen Dupliceren, Verwijderen en de
   // kleurknoppen eronder.
-  'settings-documenten': { page: 'settings', prepare: '[data-settings-tab="documenten"]', apart: ['.dle-palette', '.dle-panel'] },
+  'settings-documenten': settingsPage('documenten', { apart: ['.dle-palette', '.dle-panel'] }),
   // Instellingen → Agenda: koppelingen met hun status, de uitleg eronder en de
   // knop "Opnieuw koppelen" (november 2026), naast elkaar of onder elkaar.
-  'settings-agenda': { page: 'settings', prepare: '[data-settings-tab="agenda"]' },
+  'settings-agenda': settingsPage('agenda'),
   // Instellingen → Agenda → Delen buiten ResoFly (november 2026): het venster
   // met een net gemaakte deellink (een lang adres met kopieerknop), de stappen
   // voor Google, Outlook en Apple, en de lijst met links.
-  'settings-agenda-delen': {
-    page: 'settings',
-    prepare: ['[data-settings-tab="agenda"]', 'button:has-text("Delen buiten ResoFly")', { fill: '.feed-link-form input', value: 'Assistent' }, '.feed-link-form button:has-text("Link maken")'],
-  },
+  'settings-agenda-delen': settingsPage('agenda', {
+    prepare: ['button:has-text("Delen buiten ResoFly")', { fill: '.feed-link-form input', value: 'Assistent' }, '.feed-link-form button:has-text("Link maken")'],
+  }),
   // Instellingen → E-mail: de e-mailteksten met het voorbeeld, waarin sinds
   // november 2026 ook het logo staat zoals bovenaan de mail.
-  'settings-email': { page: 'settings', prepare: '[data-settings-tab="email"]' },
+  'settings-email': settingsPage('email'),
   // Instellingen → Betalen: de Mollie-koppeling met het profiel (een lange naam
   // en website) en de waarschuwing voor de testmodus (november 2026).
-  'settings-betalen': { page: 'settings', prepare: '[data-settings-tab="betalen"]' },
+  'settings-betalen': settingsPage('betalen'),
   // Instellingen → Domein (november 2026): het webadres, een eigen domein dat
   // nog op het record wacht (lange hostnaam, CNAME en TXT met kopieerknoppen,
   // de stappen per provider) en een verhuisd domein. De langste stand.
-  'settings-domein': { page: 'settings', prepare: '[data-settings-tab="domein"]' },
+  'settings-domein': settingsPage('domein'),
   // Instellingen → AI (november 2026): het adres van de connector met
   // kopieerknop, de keuze tussen vijf AI-apps met hun stappen, en de
   // koppelingen. Stond tot nu toe niet in deze test; de lange URL in een
   // smalle kaart is precies wat zijwaarts uit beeld kan lopen.
-  'settings-ai': { page: 'settings', prepare: '[data-settings-tab="ai"]' },
+  'settings-ai': settingsPage('ai'),
   // Boekhouding → Beginbalans met het paneel "Overstappen van een ander
   // pakket?" (auditfile inlezen, 11 november 2026) boven de handmatige regels.
   'ledger-beginbalans': { page: 'ledger', mock: { ledger: true }, prepare: '.bk-tabs button:has-text("Beginbalans")' },
@@ -255,7 +277,7 @@ const PAGES = {
   // Instellingen → Gegevens (11 november 2026): alles exporteren, met de twee
   // kolommen "wat erin zit" en "wat er niet in zit". Alleen voor de eigenaar
   // en de beheerders; de mock is eigenaar.
-  'settings-gegevens': { page: 'settings', prepare: '[data-settings-tab="gegevens"]' },
+  'settings-gegevens': settingsPage('gegevens'),
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },

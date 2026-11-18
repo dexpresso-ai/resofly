@@ -181,3 +181,15 @@ test('bewerken: een concept met alleen een ongebruikte betaallink blijft bewerkb
   }
 });
 
+
+test('betaaltermijn en vervaldatum uit de betaaltekst', async () => {
+  const { paymentTermDays, defaultDueDate } = await import('./financeRules.ts');
+  assert.equal(paymentTermDays('Betaling binnen 14 dagen.'), 14);
+  assert.equal(paymentTermDays('Graag betalen binnen 30 dagen na factuurdatum'), 30);
+  assert.equal(paymentTermDays('Binnen 1 dag'), 1);
+  assert.equal(paymentTermDays(''), 14);
+  assert.equal(paymentTermDays(null), 14);
+  assert.equal(paymentTermDays('Binnen 999 dagen'), 120);
+  assert.equal(defaultDueDate('2026-12-20', 'Betaling binnen 14 dagen.'), '2027-01-03');
+  assert.equal(defaultDueDate('2026-02-14', 'binnen 14 dagen'), '2026-02-28');
+});

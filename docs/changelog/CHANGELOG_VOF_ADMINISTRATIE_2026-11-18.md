@@ -4,10 +4,13 @@
 
 Doel: zeker weten dat de administratie van een vof (en van een maatschap, cv of
 eenmanszaak) bruikbaar is. Alles wat niet klopte of ontbrak, is meteen opgelost.
-Dit bouwt voort op `CHANGELOG_EENMANSZAAK_VOF_CONTROLE_2026-11-04.md`.
+Dit bouwt voort op `CHANGELOG_EENMANSZAAK_VOF_CONTROLE_2026-11-04.md`. Het
+liep tegelijk met de controle van de eenmanszaak
+(`CHANGELOG_EENMANSZAAK_CONTROLE_2026-11-18.md`); hoe die twee zijn
+samengevoegd, staat onder "Samen met de controle van de eenmanszaak".
 
 > **Status:**
-> - **Database:** één migratie, `20261117100000_vennoten_uren_en_prive`.
+> - **Database:** één migratie, `20261118110000_vof_vennoten_en_prive`.
 > - **Tests:** twee databasetests die in CI meedraaien (`tests/database/`).
 > - **Schermen:** Vennoten, Inkoopfacturen, Bank, Grootboek → Beginbalans,
 >   Boekjaren, Instellingen → Boekhouding, Uren en de inrichting.
@@ -30,7 +33,7 @@ Dit bouwt voort op `CHANGELOG_EENMANSZAAK_VOF_CONTROLE_2026-11-04.md`.
   - de jaarafsluiting, de kapitaalvergelijking en het beginvermogen van het
     volgende jaar.
 - **De verdeling apart.** `tests/database/vennoten_jaarafsluiting.sql` doet
-  67 controles. Zie "Wat de databasetests nagaan".
+  69 controles. Zie "Wat de databasetests nagaan".
 - **Schermen en handelingen nagelopen.** Gezocht is naar elke plek waar een
   vof als BV of als eenmanszaak werd behandeld, of vastliep.
 
@@ -38,7 +41,7 @@ Dit bouwt voort op `CHANGELOG_EENMANSZAAK_VOF_CONTROLE_2026-11-04.md`.
 
 | # | Ernst | Wat er misging | Nu |
 |---|---|---|---|
-| 1 | hoog | **Btw op privé.** Bij de bank hield een regel zijn btw-code als je van een kostenrekening naar een privérekening wisselde. Een privé-opname van € 1.500 werd zo € 1.239,67 opname en € 260,33 voorbelasting. Dat kon ook met een bankregel die automatisch boekt, en via Gerrie. | Een privé- of kapitaalrekening krijgt nooit een btw-code. Het scherm haalt de code weg en zet het btw-veld uit. De database weigert het in een bankverdeling en in een bankregel. Gerrie weigert het op de kaart. Bestaande bankregels met btw op privé of kapitaal zijn hun btw-code kwijt. |
+| 1 | hoog | **Btw op privé.** Bij de bank hield een regel zijn btw-code als je van een kostenrekening naar een privérekening wisselde. Een privé-opname van € 1.500 werd zo € 1.239,67 opname en € 260,33 voorbelasting. Dat kon ook met een bankregel die automatisch boekt, en via Gerrie. De controle van de eenmanszaak vond het ook (punt 4 daar): die loste het op in het scherm en bij het boeken van de bank. | Daarbovenop: de bankregel (scherm en database) en de bankverdeling zelf weigeren btw op privé of kapitaal, en Gerrie weigert het al op de kaart. Het btw-veld staat uit bij een privé- of kapitaalrekening. Bestaande bankregels met btw op privé of kapitaal zijn hun btw-code kwijt. |
 | 2 | hoog | **Privé betaald.** Een inkoopfactuur die een vennoot met zijn eigen pas betaalde, kon nergens als betaald worden vastgelegd. De factuur bleef open staan, ook bij Openstaand → Crediteuren en als kandidaat bij elke bankbetaling. 1600 Crediteuren bleef ook staan, en de uitgave stond niet op het privé van de vennoot. | Bij een geboekte inkoopfactuur staat de knop **Privé betaald**: je kiest de vennoot en de datum. Wat openstaat gaat naar zijn privé-stortingen (056n), of naar 0560 bij een eenmanszaak. De factuur staat daarna op betaald en de btw blijft aftrekbaar. Tegenboeken in het journaal zet hem weer open. Een inkoopfactuur met een privébetaling erop boek je pas tegen nadat die betaling is tegengeboekt. Ook via Gerrie (`purchase_invoice.pay_privately`). |
 | 3 | hoog | **Gebroken boekjaar.** Een vof kon een boekjaar "2026/2027" krijgen, dat niet op de aangifte van de vennoten past. Dat kon bij Instellingen → Boekhouding, bij een nieuw boekjaar en via Gerrie en de API. | Bij een eenmanszaak, vof, maatschap of cv valt een boekjaar in één kalenderjaar. De database weigert anders, en de startmaand blijft januari: bestaande instellingen zijn rechtgezet. Een eerste of laatste boekjaar dat niet op 1 januari begint of op 31 december eindigt, blijft kunnen. Het scherm toont de keuze dan niet en Gerrie weigert vooraf. |
 | 4 | hoog | **Privé van vennoten bleef open.** Na de overstap naar een eenmanszaak, of als geen vennoot meer actief was, nam de jaarafsluiting het privé van de vennoten (055n, 056n) niet mee. Het schoof ongemerkt naar het volgende jaar. | Het privé van elke vennoot gaat bij elke jaarafsluiting naar zijn eigen kapitaal. De kapitaalvergelijking telt het als opname of storting. |
@@ -46,14 +49,13 @@ Dit bouwt voort op `CHANGELOG_EENMANSZAAK_VOF_CONTROLE_2026-11-04.md`.
 | 6 | midden | **Geen test op de verdeling.** De verdeling over de vennoten had geen test in de repo, terwijl `close_fiscal_year` bij elke wijziging helemaal opnieuw wordt geschreven. | Twee databasetests, in CI na de keten vanaf nul en lokaal met `npm run test:database`. Ze falen op de jaarafsluiting van 5 november en op een versie zonder vennotendeel. |
 | 7 | midden | **Gerrie kon geen vennoten vastleggen.** Gerrie, de API en MCP konden alleen lezen, terwijl de afsluitkaart verwees naar "pas de verdeling aan". | Nieuwe handeling `owners.save_partner`: vastleggen, aanpassen, uittreden en het teamlid koppelen. De kaart toont de verdeling van de actieve vennoten daarna. |
 | 8 | midden | **0550 en 0560 naast de vennoten.** Ze stonden in elke keuzelijst naast de privérekeningen van de vennoten, met dezelfde naam. Wie daar boekte, boekte op geen enkele vennoot. | Zodra er een vennoot is, heten ze "Privé-opnamen (geen vennoot)" en "Privé-stortingen (geen vennoot)". |
-| 9 | midden | **Beginvermogen zonder het vorige jaar.** Stond het vorige boekjaar nog open, dan miste het beginvermogen in de kapitaalvergelijking de winst van dat jaar, zonder uitleg. | Vennoten zegt het nu: "Een eerder boekjaar is nog niet afgesloten", met het bedrag. |
-| 10 | midden | **Beginbalans zonder vennoten.** De sluitpost van de beginbalans kwam bij een vof helemaal op 0500. Die stond daarna op geen enkele vennoot. | De beginbalans legt uit dat elke vennoot zijn kapitaal op zijn eigen kapitaalrekening krijgt, met de knop **Regel per vennoot**. Blijft er een sluitpost over, dan zeggen het scherm, de bevestiging en de kaart van Gerrie dat die op geen enkele vennoot staat. |
-| 11 | midden | **Inrichten vroeg niet naar vennoten.** Een vof zonder vennoten verdeelt bij het afsluiten niets. | Na de inrichting van een vof, maatschap of cv staat **Vennoten vastleggen** vooraan bij de vervolgstappen. De afsluitdialoog bij Boekjaren waarschuwt als er geen actieve vennoot is. |
-| 12 | midden | **Auditfile inlezen.** "Kapitaal vennoot B. de Vries" uit een ander pakket werd voorgesteld als 0500, en zijn privé als 0550. | De vennoot wordt herkend aan zijn naam: kapitaal naar 050n, privé naar 055n of 056n. Passen twee vennoten even goed (dezelfde achternaam), dan komt er geen voorstel. |
-| 13 | laag | **Betaalstatus van inkoopfacturen.** Een inkoopfactuur stond als "Geboekt", ook als hij allang betaald was. | De lijst toont "Betaald", "Deels betaald" of "Geboekt · open". |
-| 14 | laag | **Teksten.** Bij een vof zonder vennoten stond dat de winst naar 0500 gaat; een vof krijgt 0510. De kop en de afsluitdialoog van Boekjaren noemden altijd 0510, ook als de winst naar de vennoten gaat. Het privé naar 0500 stond er alleen bij een eenmanszaak. Bij het inrichten van een vof stond "Statutaire naam". | Elke tekst volgt de rechtsvorm en de instelling. Een vof krijgt "Bedrijfsnaam": hij heeft geen statuten. |
-| 15 | laag | **Reservevinkje.** Het vinkje "Wettelijke of statutaire reserve" (dividend bij een BV) stond bij het kapitaal van elke vennoot. | Alleen nog bij een BV, NV of coöperatie. |
-| 16 | laag | **€ -0,00.** Bij een vennoot zonder opnamen stond "€ -0,00". | "€ 0,00". |
+| 9 | midden | **Beginbalans zonder vennoten.** De sluitpost van de beginbalans kwam bij een vof helemaal op 0500. Die stond daarna op geen enkele vennoot. | De beginbalans legt uit dat elke vennoot zijn kapitaal op zijn eigen kapitaalrekening krijgt, met de knop **Regel per vennoot**. Blijft er een sluitpost over, dan zeggen het scherm, de bevestiging en de kaart van Gerrie dat die op geen enkele vennoot staat. |
+| 10 | midden | **Inrichten vroeg niet naar vennoten.** Een vof zonder vennoten verdeelt bij het afsluiten niets. | Na de inrichting van een vof, maatschap of cv staat **Vennoten vastleggen** vooraan bij de vervolgstappen. De afsluitdialoog bij Boekjaren waarschuwt als er geen actieve vennoot is. |
+| 11 | midden | **Auditfile inlezen.** "Kapitaal vennoot B. de Vries" uit een ander pakket werd voorgesteld als 0500, en zijn privé als 0550. | De vennoot wordt herkend aan zijn naam: kapitaal naar 050n, privé naar 055n of 056n. Passen twee vennoten even goed (dezelfde achternaam), dan komt er geen voorstel. |
+| 12 | laag | **Betaalstatus van inkoopfacturen.** Een inkoopfactuur stond als "Geboekt", ook als hij allang betaald was. | De lijst toont "Betaald", "Deels betaald" of "Geboekt · open". |
+| 13 | laag | **Teksten.** Bij een vof zonder vennoten stond dat de winst naar 0500 gaat; een vof krijgt 0510. De kop en de afsluitdialoog van Boekjaren noemden altijd 0510, ook als de winst naar de vennoten gaat. Het privé naar 0500 stond er alleen bij een eenmanszaak. Bij het inrichten van een vof stond "Statutaire naam". | Elke tekst volgt de rechtsvorm en de instelling. Een vof krijgt "Bedrijfsnaam": hij heeft geen statuten. |
+| 14 | laag | **Reservevinkje.** Het vinkje "Wettelijke of statutaire reserve" (dividend bij een BV) stond bij het kapitaal van elke vennoot. | Alleen nog bij een BV, NV of coöperatie. |
+| 15 | laag | **€ -0,00.** Bij een vennoot zonder opnamen stond "€ -0,00". | "€ 0,00". |
 
 ## Wat de databasetests nagaan
 
@@ -73,7 +75,7 @@ Dit bouwt voort op `CHANGELOG_EENMANSZAAK_VOF_CONTROLE_2026-11-04.md`.
   januari;
 - de balans sluit vóór en na de jaarafsluiting.
 
-**`vennoten_jaarafsluiting.sql`** (67 controles):
+**`vennoten_jaarafsluiting.sql`** (69 controles):
 
 - winst 60/40 tot op de cent (€ 1.000,01 wordt € 600,01 en € 400,00), en
   verlies (€ 300,01 wordt € 180,01 en € 120,00);
@@ -86,7 +88,7 @@ Dit bouwt voort op `CHANGELOG_EENMANSZAAK_VOF_CONTROLE_2026-11-04.md`.
 
 ## Database
 
-Alles in `20261117100000`. De functies die al bestonden, zijn letterlijk
+Alles in `20261118110000`. De functies die al bestonden, zijn letterlijk
 overgenomen; per wijziging staat een GEWIJZIGD- of TOEGEVOEGD-regel. Dat is met
 een diff nagelopen.
 
@@ -94,13 +96,33 @@ een diff nagelopen.
 |---|---|
 | `partnership_partners.user_id`, `set_partnership_partner_member`, `partnership_partner_hours` | Het teamlid van een vennoot, en de uren per vennoot. |
 | `close_fiscal_year` | Het privé van de vennoten gaat altijd naar hun kapitaal. |
-| `owners_equity_overview` | Het privé van vennoten telt als privé; `openPriorResultCents`. |
+| `owners_equity_overview` | Het privé van vennoten telt als privé. |
 | Boekingssoort `purchase_private_payment`, `pay_purchase_invoice_privately` | Privé betaald. |
 | `purchase_invoice_open_payable_cents`, `refresh_purchase_invoice_payment_status`, `report_open_items` | Een privébetaling telt als betaling. |
 | Trigger `journal_entries_private_payment_reverse` | Tegenboeken: de status bijwerken, en de inkoopfactuur beschermen. |
 | `open_fiscal_year`, trigger `company_settings_ib_calendar_year` | Het boekjaar is het kalenderjaar. |
 | Triggers `bank_transaction_allocations_no_vat_on_equity`, `bank_rules_no_vat_on_equity` | Geen btw op privé of kapitaal. |
 | Trigger `partnership_partners_mark_general_private` | 0550 en 0560 heten "(geen vennoot)". |
+
+## Samen met de controle van de eenmanszaak
+
+Terwijl deze controle liep, kwam de controle van de eenmanszaak op staging, met
+twee migraties: `20261118090000` en `20261118100000`. Die vervangen ook
+`close_fiscal_year` en `owners_equity_overview`. Daarom:
+
+- **Volgorde:** deze migratie heet `20261118110000` en komt dus daarna. Een
+  oudere versie weigert `supabase db push`.
+- **De twee functies:** ze zijn opnieuw opgebouwd vanaf de versie op staging,
+  met alleen de wijziging van deze migratie erbovenop. Dat is met een diff
+  nagelopen.
+- **Het beginvermogen:** als het vorige boekjaar nog open stond, miste het
+  beginvermogen de winst daarvan. Dat had de eenmanszaak al opgelost
+  (`openPriorResultCents`, `openPriorYears`), en die melding staat ook bij
+  Vennoten. Deze migratie voegt daar niets aan toe.
+- **Btw op privé:** zie punt 1.
+- **De resultaatrekening:** die volgt sinds de eenmanszaak de rechtsvorm. Na
+  de overstap van een vof naar een eenmanszaak gaat het resultaat dus naar
+  0500. `tests/database/vennoten_jaarafsluiting.sql` toetst dat nu.
 
 ## Gerrie, API en MCP
 
@@ -129,29 +151,32 @@ een diff nagelopen.
 - **Een vennoot koppelen:** alleen aan een actief teamlid van dezelfde
   organisatie, niet aan de boekhouder, en één teamlid per vennoot.
 - **Gegevens meenemen:** `user_id` gaat mee met de vennoten.
-  `EXPORT_SCHEMA_VERSION` staat op `20261117100000`.
+  `EXPORT_SCHEMA_VERSION` staat op `20261118110000`.
 
 ## Verificatie
 
-**Lokaal:**
+**Lokaal, op de stand samengevoegd met staging (met de eenmanszaak):**
 
 - **Database:**
-  - `supabase db reset`: alle 280 migraties op een lege database
+  - `supabase db reset`: alle 282 migraties op een lege database
     (Postgres 17.11.0.018);
   - de nieuwe migratie draait ook een tweede keer;
-  - `npm run test:database`: 67 en 61 controles geslaagd;
+  - `npm run test:database`: 69 en 61 controles geslaagd;
 - **Code:**
   - typecheck ✓;
-  - `npm test`: 1923/1923, waarvan 5 nieuw (de afsluitkaart, de uren via Gerrie, privé betaald en een vennoot vastleggen via Gerrie, en de vennoten in de auditfile-import);
+  - `npm test`: 1950/1950. Hiervan zijn 5 nieuw: de afsluitkaart, de uren via
+    Gerrie, privé betaald en een vennoot vastleggen via Gerrie, en de vennoten
+    in de auditfile-import;
   - `deno check` op de registry van de handelingen en op `reportRecords.ts` ✓.
     De volledige lijst uit CI kon hier niet, omdat esm.sh en deno.land in deze
     omgeving dicht staan;
 - **Schermen:**
-  - `npm run test:inrichten` (157), `npm run test:terugknop` (12) en
-    `npm run test:loading` (107) ✓;
-  - mobiele lay-outtest, donker en licht: 716 metingen, 0 problemen. Er zijn
-    nieuwe pagina's bij: Vennoten, een vennoot bewerken, de beginbalans van
-    een vof, en Inkoopfacturen van een vof met het venster Privé betaald.
+  - `npm run test:loading`, `npm run test:inrichten` en
+    `npm run test:terugknop` (13) ✓;
+  - mobiele lay-outtest, donker en licht: 716 metingen, 0 problemen (vóór het
+    samenvoegen). Er zijn nieuwe pagina's bij: Vennoten, een vennoot bewerken,
+    de beginbalans van een vof, en Inkoopfacturen van een vof met het venster
+    Privé betaald.
 
 ## Bewust open
 

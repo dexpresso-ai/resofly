@@ -31,21 +31,17 @@
 --      Nu boekt pay_purchase_invoice_privately 1600 tegen de privé-stortingen
 --      van die vennoot (056n), of 0560 bij een eenmanszaak, en staat de factuur
 --      op betaald. Tegenboeken van die betaling zet hem weer open.
---   4. BEGINVERMOGEN ZONDER HET VORIGE JAAR. Stond het vorige boekjaar nog
---      open, dan miste het beginvermogen in de kapitaalvergelijking het
---      resultaat van dat jaar, zonder dat er iets bij stond.
---      owners_equity_overview geeft dat resultaat nu mee (openPriorResultCents).
---   5. OPENSTAANDE POSTEN. report_open_items telt een privébetaling als
+--   4. OPENSTAANDE POSTEN. report_open_items telt een privébetaling als
 --      betaald (anders stond de factuur bij Openstaand → Crediteuren).
---   6. GEEN GEBROKEN BOEKJAAR BIJ EEN IB-ONDERNEMING. Voor de
+--   5. GEEN GEBROKEN BOEKJAAR BIJ EEN IB-ONDERNEMING. Voor de
 --      inkomstenbelasting is het boekjaar het kalenderjaar. open_fiscal_year
 --      weigert een boekjaar over twee kalenderjaren, en de startmaand blijft
 --      januari.
---   7. GEEN BTW OP PRIVÉ OF KAPITAAL. Bij de bank bleef de btw-code staan als
+--   6. GEEN BTW OP PRIVÉ OF KAPITAAL. Bij de bank bleef de btw-code staan als
 --      je naar een privérekening wisselde: een privé-opname gaf zo
 --      voorbelasting. Een bankverdeling en een bankregel op een
 --      eigen-vermogensrekening krijgen geen btw-code meer.
---   8. 0550 EN 0560 NAAST DE VENNOTEN. Bij een vof met vennoten heten ze nu
+--   7. 0550 EN 0560 NAAST DE VENNOTEN. Bij een vof met vennoten heten ze nu
 --      "(geen vennoot)": wie daar boekt, boekt op niemand.
 --
 -- De verdeling zelf verandert niet. Die wordt sinds deze migratie bewaakt door
@@ -179,7 +175,8 @@ end;
 $$;
 
 -- ── 3. Jaarafsluiting: het privé van elke vennoot naar zijn eigen kapitaal ──
--- Gelijk aan 20261105000000, op één plek na: zie GEWIJZIGD (20261117100000).
+-- Gelijk aan 20261118100000 (de versie op staging), op één plek na: zie
+-- GEWIJZIGD (20261118110000).
 CREATE OR REPLACE FUNCTION public.close_fiscal_year(p_organization_id uuid, p_fiscal_year_id uuid, p_created_by uuid DEFAULT auth.uid())
  RETURNS fiscal_years
  LANGUAGE plpgsql
@@ -202,10 +199,15 @@ declare
   v_p_start date;
   v_p_end date;
   v_regime text;
+  v_year_period text;
   v_partnership boolean := false;
   v_share_total integer := 0;
   v_capital uuid;
   s record;
+  v_open_dep integer := 0;
+  v_open_dep_names text;
+  v_open_prepaid integer := 0;
+  v_open_prepaid_names text;
 begin
   if auth.role() <> 'service_role' and not (public.can_write_org(p_organization_id) and public.can_write_module(p_organization_id, 'finance')) then
     raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
@@ -239,7 +241,11 @@ begin
     join public.journal_entries je on je.id = jl.entry_id
     where jl.organization_id = p_organization_id
       and je.status = 'posted'
-      and je.source_type <> 'year_close'
+      -- GEWIJZIGD (20261118090000): een beginbalans van vóór het eerste
+      -- boekjaar (per 31-12) is geen boekjaar dat nog dicht moet. Die liet het
+      -- eerste jaar nooit afsluiten: "sluit eerst het voorgaande boekjaar af",
+      -- terwijl er geen voorgaand boekjaar bestond.
+      and je.source_type not in ('year_close', 'opening_balance')
       and je.date < v_fy.period_start
       and not exists (
         select 1 from public.closed_periods cp
@@ -262,35 +268,82 @@ begin
   v_result_code := coalesce(v_result_code, '0510');
 
   if not v_kor then
-    v_cursor := date_trunc(case when v_vat_period = 'monthly' then 'month' else 'quarter' end, v_fy.period_start)::date;
+    -- GEWIJZIGD (20261118100000): elke maand die het boekjaar overlapt, valt in
+    -- een afgesloten aangifte: die van de maand zelf, of die van het hele
+    -- kwartaal eromheen. Hier telde alleen de frequentie van nu. Wie per
+    -- 1 januari per maand aangifte ging doen en dat bij Instellingen omzette,
+    -- kreeg het jaar ervoor (per kwartaal aangegeven) zo nooit meer dicht.
+    -- Alleen precies een kalendermaand of -kwartaal telt, zoals
+    -- finalize_vat_return ze vastlegt; een maand telt niet voor zijn kwartaal.
+    --
+    -- De melding noemt het ontbrekende tijdvak zoals dat jaar aangegeven werd:
+    -- alleen kwartalen of alleen maanden, en anders de frequentie van nu.
+    select case
+             when bool_or(cp.period_type = 'quarter') and not bool_or(cp.period_type = 'month') then 'quarterly'
+             when bool_or(cp.period_type = 'month') and not bool_or(cp.period_type = 'quarter') then 'monthly'
+           end
+      into v_year_period
+    from public.closed_periods cp
+    where cp.organization_id = p_organization_id
+      and cp.period_type in ('month', 'quarter')
+      and cp.period_end >= v_fy.period_start and cp.period_start <= v_fy.period_end;
+    v_year_period := coalesce(v_year_period, v_vat_period);
+
+    v_cursor := date_trunc('month', v_fy.period_start)::date;
     while v_cursor <= v_fy.period_end loop
-      if v_vat_period = 'monthly' then
-        v_p_start := v_cursor;
-        v_p_end := (v_cursor + interval '1 month' - interval '1 day')::date;
-      else
-        v_p_start := v_cursor;
-        v_p_end := (v_cursor + interval '3 months' - interval '1 day')::date;
+      if not exists (
+        select 1 from public.closed_periods cp
+        where cp.organization_id = p_organization_id
+          and (
+            (cp.period_type = 'month'
+              and cp.period_start = v_cursor
+              and cp.period_end = (v_cursor + interval '1 month' - interval '1 day')::date)
+            or (cp.period_type = 'quarter'
+              and cp.period_start = date_trunc('quarter', v_cursor)::date
+              and cp.period_end = (date_trunc('quarter', v_cursor) + interval '3 months' - interval '1 day')::date)
+          )
+      ) then
+        v_p_start := date_trunc(case when v_year_period = 'monthly' then 'month' else 'quarter' end, v_cursor)::date;
+        v_p_end := (v_p_start + case when v_year_period = 'monthly' then interval '1 month' else interval '3 months' end - interval '1 day')::date;
+        raise exception 'Finaliseer eerst alle BTW-aangiften van dit boekjaar (ontbreekt de periode % t/m %).',
+          to_char(v_p_start, 'DD-MM-YYYY'), to_char(v_p_end, 'DD-MM-YYYY')
+          using errcode = '23514';
       end if;
-      -- Elke kalender-aangifteperiode die het boekjaar OVERLAPT moet gefinaliseerd
-      -- zijn (ook een leidende/afsluitende deelperiode bij een gebroken boekjaar dat
-      -- niet op een kwartaal-/maandgrens begint). Match strikt op de ingestelde
-      -- frequentie én het volledige bereik dat finalize_vat_return vastlegt, zodat een
-      -- maand-finalisatie niet ten onrechte als kwartaal-finalisatie telt.
-      if v_p_end >= v_fy.period_start and v_p_start <= v_fy.period_end then
-        if not exists (
-          select 1 from public.closed_periods cp
-          where cp.organization_id = p_organization_id
-            and cp.period_type = case when v_vat_period = 'monthly' then 'month' else 'quarter' end
-            and cp.period_start = v_p_start
-            and cp.period_end = v_p_end
-        ) then
-          raise exception 'Finaliseer eerst alle BTW-aangiften van dit boekjaar (ontbreekt de periode % t/m %).',
-            to_char(v_p_start, 'DD-MM-YYYY'), to_char(v_p_end, 'DD-MM-YYYY')
-            using errcode = '23514';
-        end if;
-      end if;
-      v_cursor := (v_p_end + interval '1 day')::date;
+      v_cursor := (v_cursor + interval '1 month')::date;
     end loop;
+  end if;
+
+  -- TOEGEVOEGD (20261118090000): afschrijvingen en termijnen van
+  -- vooruitbetaalde kosten die in dit jaar vallen, horen erin vóór het slot.
+  -- Daarna boekten ze stil op de eerste open dag van het volgende jaar: een
+  -- laptop die t/m september was afgeschreven, kreeg oktober t/m december in
+  -- het nieuwe jaar. De winst van beide jaren klopte dan niet.
+  select count(*), string_agg(distinct fa.name, ', ')
+    into v_open_dep, v_open_dep_names
+  from public.asset_depreciations ad
+  join public.fixed_assets fa on fa.id = ad.asset_id
+  where ad.organization_id = p_organization_id
+    and ad.status = 'scheduled'
+    and ad.date <= v_fy.period_end
+    and fa.acquisition_journal_entry_id is not null
+    and fa.status <> 'disposed';
+  if coalesce(v_open_dep, 0) > 0 then
+    raise exception 'Er staan nog % afschrijvingstermijn(en) tot en met % klaar die niet geboekt zijn (%). Boek ze eerst bij Activa; anders komen ze in het volgende jaar en klopt de winst van beide jaren niet.',
+      v_open_dep, to_char(v_fy.period_end, 'DD-MM-YYYY'), v_open_dep_names
+      using errcode = '23514';
+  end if;
+  select count(*), string_agg(distinct pe.description, ', ')
+    into v_open_prepaid, v_open_prepaid_names
+  from public.prepaid_expense_releases pr
+  join public.prepaid_expenses pe on pe.id = pr.prepaid_expense_id
+  where pr.organization_id = p_organization_id
+    and pr.status = 'scheduled'
+    and pr.date <= v_fy.period_end
+    and pe.start_journal_entry_id is not null;
+  if coalesce(v_open_prepaid, 0) > 0 then
+    raise exception 'Er staan nog % termijn(en) van vooruitbetaalde kosten tot en met % klaar die niet geboekt zijn (%). Boek ze eerst bij Vooruitbetaald; anders komen ze in het volgende jaar.',
+      v_open_prepaid, to_char(v_fy.period_end, 'DD-MM-YYYY'), v_open_prepaid_names
+      using errcode = '23514';
   end if;
 
   perform public.ensure_default_ledger_accounts(p_organization_id);
@@ -380,7 +433,7 @@ begin
 
   -- Het privé van elke vennoot (ook een vertrokken vennoot) gaat naar zijn
   -- eigen kapitaal.
-  -- GEWIJZIGD (20261117100000): altijd, niet alleen bij een vof, maatschap of
+  -- GEWIJZIGD (20261118110000): altijd, niet alleen bij een vof, maatschap of
   -- cv met actieve vennoten. Werd de rechtsvorm eenmanszaak, of stond elke
   -- vennoot op uitgetreden, dan bleven 055n en 056n open staan en schoven ze
   -- mee naar het volgende jaar. Het privé hoort bij de vennoot, welke
@@ -477,15 +530,14 @@ end;
 $function$;
 
 -- ── 4. De kapitaalvergelijking: privé van vennoten telt als privé ──────────
--- Gelijk aan 20261104070000, op twee plekken na: zie GEWIJZIGD en TOEGEVOEGD
--- (20261117100000).
+-- Gelijk aan 20261118090000 (de versie op staging), op één plek na: zie
+-- GEWIJZIGD (20261118110000).
 create or replace function public.owners_equity_overview(p_organization_id uuid, p_fiscal_year_id uuid)
 returns jsonb
 language plpgsql
-stable
-security definer
-set search_path = public
-as $$
+stable security definer
+set search_path to 'public'
+as $function$
 declare
   v_fy public.fiscal_years;
   v_legal text;
@@ -502,6 +554,7 @@ declare
   v_other bigint;
   v_name text;
   v_open_prior bigint := 0;
+  v_open_years jsonb := '[]'::jsonb;
   r record;
 begin
   if auth.role() <> 'service_role'
@@ -536,10 +589,9 @@ begin
     and je.date between v_fy.period_start and v_fy.period_end
     and la.type in ('revenue', 'expense');
 
-  -- TOEGEVOEGD (20261117100000): het resultaat van eerdere jaren dat nog op de
-  -- W&V-rekeningen staat, omdat dat jaar nog niet is afgesloten. Een
-  -- afgesloten jaar telt hier nul (de jaarafsluiting zet die rekeningen op
-  -- nul). Zonder deze regel leek het beginvermogen te laag, zonder uitleg.
+  -- TOEGEVOEGD (20261118090000): de winst van eerdere jaren die nog niet naar
+  -- het eigen vermogen is gegaan (het jaar is niet afgesloten). Mét de
+  -- jaarafsluitingen: daarin vallen omzet en kosten van een dicht jaar weg.
   select coalesce(sum(jl.credit_cents - jl.debit_cents), 0)::bigint
   into v_open_prior
   from public.journal_lines jl
@@ -549,6 +601,13 @@ begin
     and je.status = 'posted'
     and je.date < v_fy.period_start
     and la.type in ('revenue', 'expense');
+
+  select coalesce(jsonb_agg(f.label order by f.period_start), '[]'::jsonb)
+  into v_open_years
+  from public.fiscal_years f
+  where f.organization_id = p_organization_id
+    and f.status <> 'closed'
+    and f.period_end < v_fy.period_start;
 
   if v_partnership then
     select coalesce(sum(pp.profit_share_basis_points), 0)::int into v_share_total
@@ -621,6 +680,11 @@ begin
       and la.type = 'equity'
       and not (jl.account_id = any (v_partner_accounts));
 
+    -- TOEGEVOEGD (20261118090000): de winst van een vorig jaar dat nog open
+    -- is, is nog niet over de vennoten verdeeld; die staat hier tot dat jaar
+    -- dicht is.
+    v_begin := v_begin + v_open_prior;
+
     if v_begin <> 0 or v_other <> 0 then
       v_unassigned := jsonb_build_object(
         'beginCents', v_begin,
@@ -632,17 +696,21 @@ begin
     select coalesce(nullif(btrim(cs.company_name), ''), 'Ondernemer') into v_name
     from public.company_settings cs where cs.organization_id = p_organization_id;
 
+    -- GEWIJZIGD (20261118090000): ook omzet en kosten van vóór de begindatum
+    -- (zie de toelichting boven deze functie).
     select coalesce(sum(jl.credit_cents - jl.debit_cents), 0)::bigint into v_begin
     from public.journal_lines jl
     join public.journal_entries je on je.id = jl.entry_id
     join public.ledger_accounts la on la.id = jl.account_id
     where jl.organization_id = p_organization_id
       and je.status = 'posted'
-      and la.type = 'equity'
-      and (je.date < v_fy.period_start
-           or (je.source_type = 'opening_balance' and je.date between v_fy.period_start and v_fy.period_end));
+      and (
+        (je.date < v_fy.period_start and la.type in ('equity', 'revenue', 'expense'))
+        or (la.type = 'equity' and je.source_type = 'opening_balance'
+            and je.date between v_fy.period_start and v_fy.period_end)
+      );
 
-    -- GEWIJZIGD (20261117100000): ook het privé van (vroegere) vennoten telt als
+    -- GEWIJZIGD (20261118110000): ook het privé van (vroegere) vennoten telt als
     -- storting of opname. Zonder actieve vennoot, of na de overstap van een vof
     -- naar een eenmanszaak, stond een opname op 0551 hier als "overig".
     select
@@ -689,12 +757,14 @@ begin
     'partnersDefined', v_partners_defined,
     'shareTotalBasisPoints', case when v_partnership then v_share_total else null end,
     'resultCents', v_result,
+    -- TOEGEVOEGD (20261118090000): voor de melding "2025 is nog niet afgesloten".
+    'openPriorResultCents', v_open_prior,
+    'openPriorYears', v_open_years,
     'owners', v_owners,
-    'unassigned', v_unassigned,
-    'openPriorResultCents', v_open_prior
+    'unassigned', v_unassigned
   );
 end;
-$$;
+$function$;
 
 -- ── 5. Een inkoopfactuur die privé is betaald ──────────────────────────────
 
@@ -733,7 +803,7 @@ as $$
       and a.purchase_invoice_id = p_purchase_invoice_id
       and a.kind = 'purchase_invoice'
   ), 0)::bigint - coalesce((
-    -- TOEGEVOEGD (20261117100000): wat de ondernemer of een vennoot privé
+    -- TOEGEVOEGD (20261118110000): wat de ondernemer of een vennoot privé
     -- betaalde (pay_purchase_invoice_privately). Tegengeboekt telt niet.
     select sum(jl.debit_cents - jl.credit_cents)
     from public.journal_entries je
@@ -790,7 +860,7 @@ begin
       where a.organization_id = p_organization_id
         and a.purchase_invoice_id = p_purchase_invoice_id
       union all
-      -- TOEGEVOEGD (20261117100000): de datum van een privébetaling.
+      -- TOEGEVOEGD (20261118110000): de datum van een privébetaling.
       select je.date
       from public.journal_entries je
       where je.organization_id = p_organization_id
@@ -1082,7 +1152,7 @@ begin
       and a.kind = 'purchase_invoice'
     group by 1
   ),
-  -- TOEGEVOEGD (20261117100000): wat de ondernemer of een vennoot privé
+  -- TOEGEVOEGD (20261118110000): wat de ondernemer of een vennoot privé
   -- betaalde. Een tegenboeking heeft dezelfde bron en valt ertegen weg.
   pi_private as (
     select source_id as pi_id, sum(debit_cents - credit_cents)::bigint as amt
@@ -1167,7 +1237,7 @@ begin
   if p_period_end >= (p_period_start + interval '36 months')::date then
     raise exception 'Een boekjaar duurt in ResoFly hooguit 36 maanden. Kijk de begin- en einddatum na.' using errcode = '23514';
   end if;
-  -- TOEGEVOEGD (20261117100000): bij een eenmanszaak, vof, maatschap of cv
+  -- TOEGEVOEGD (20261118110000): bij een eenmanszaak, vof, maatschap of cv
   -- valt een boekjaar in één kalenderjaar.
   if public.org_fiscal_regime(p_organization_id) = 'ib'
      and extract(year from p_period_start) <> extract(year from p_period_end) then

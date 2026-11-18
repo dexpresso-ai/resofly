@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Send, XCircle } from 'lucide-react';
-import type { AppData, CreditNote, DunningNotice, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
+import type { AppData, Client, CreditNote, DunningNotice, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
 import { FinanceDocPreview, type SentPdfSource } from '../components/FinanceDocPreview';
 import { Button, Select } from '../components/Ui';
@@ -634,7 +634,7 @@ function InvoiceTable({
       <div>
         <PageIcon page="invoices" />
         <h2>{title}</h2>
-        <p>Volwassen factuurmodule met detailpaneel, verzendhistorie, Mollie-betaalstatus, snapshots en audit-timeline.</p>
+        <p>Je facturen: versturen, zien wat er betaald is, herinneringen, en per factuur wat er gebeurde.</p>
       </div>
       <Button variant="primary" onClick={onNew} disabled={!canWrite}>+ Nieuw</Button>
     </div>
@@ -938,7 +938,7 @@ function InvoiceDetailModal({
       </section>}
 
       <section className="quote-detail-section">
-        <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
+        <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en de verstuurde pdf</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} eInvoiceDelivery={eInvoiceDelivery} upcomingEInvoiceTo={eInvoiceClient && !invoiceHasStoredPdf(invoice) ? invoiceRecipientFor(client) : null} upcomingVia={eInvoiceChannel} paymentLinks={mollieInvoicingAllowed(data.companySettings?.invoice_send_method)} />
         {mollieDelivery && <MollieEInvoicePanel invoice={invoice} delivery={mollieDelivery} partialNote={molliePartialNote(events)} onSync={onSyncMollie} onDownloadPdf={onDownloadMolliePdf} />}
         <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} payments={payments} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} onCredit={onCredit} />
@@ -952,7 +952,7 @@ function InvoiceDetailModal({
 
       {(dunningNotice || invoiceIsReminderEligible(invoice)) && <section className="quote-detail-section">
         <div className="quote-detail-section-head"><div><span>Aanmaning</span><strong>Formele aanmaning · rente + WIK-incassokosten</strong></div></div>
-        <InvoiceDunningPanel invoice={invoice} notice={dunningNotice} canWrite={canWrite} onPropose={onProposeDunning} onSend={onSendDunning} onCancel={onCancelDunning} />
+        <InvoiceDunningPanel invoice={invoice} client={client} notice={dunningNotice} canWrite={canWrite} onPropose={onProposeDunning} onSend={onSendDunning} onCancel={onCancelDunning} />
       </section>}
 
       <section className="quote-detail-split">
@@ -962,7 +962,7 @@ function InvoiceDetailModal({
 
       <section className="quote-detail-split">
         <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Betalingen</span><strong>Mollie records</strong></div></div><InvoicePayments payments={payments} /></div>
-        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>PDF-snapshots</span><strong>Factuurversies</strong></div></div><InvoiceVersions versions={versions} /></div>
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Verstuurde pdf's</span><strong>Factuurversies</strong></div></div><InvoiceVersions versions={versions} /></div>
       </section>
 
       {(refunds.length > 0 || creditNotes.length > 0) && <section className="quote-detail-split">
@@ -1085,7 +1085,7 @@ function QuoteActions({ quote, canWrite, canAdmin, linkedInvoice, onSubmitApprov
     {canSubmit && <Button onClick={() => onSubmitApproval?.(quote)}><ShieldCheck size={14}/> Ter goedkeuring</Button>}
     {canApprove && <Button variant="primary" onClick={() => onApprove?.(quote)}><ShieldCheck size={14}/> Goedkeuren</Button>}
     {canApprove && <Button variant="danger" onClick={() => onReject?.(quote)}><XCircle size={14}/> Afwijzen</Button>}
-    {canSend && <Button variant="primary" onClick={() => onSend?.(quote)}><Send size={14}/> Verstuur via Resend</Button>}
+    {canSend && <Button variant="primary" onClick={() => onSend?.(quote)}><Send size={14}/> Verstuur per e-mail</Button>}
     {canDownloadStored && <Button onClick={() => onDownloadPdf?.(quote)}><Download size={14}/> Download verzonden PDF</Button>}
     {canConvert && <Button variant="primary" onClick={() => onConvertToInvoice?.(quote)}><FileText size={14}/> Maak factuur van offerte</Button>}
     {canWithdraw && <Button variant="danger" onClick={() => onWithdraw?.(quote)}><XCircle size={14}/> Intrekken</Button>}
@@ -1164,7 +1164,7 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments
       ? <Button variant="primary" onClick={() => onSend?.(invoice)} title="Bij deze klant gaan facturen via Mollie: Mollie geeft hem uit met een eigen nummer, verstuurt hem over Peppol, mailt een PDF-kopie en int de betaling."><Send size={14}/> Verstuur via Mollie</Button>
       : eInvoice
         ? <Button variant="primary" onClick={() => onSend?.(invoice)} title="Bij deze klant staat e-facturatie aan: de factuur gaat als e-factuur (UBL, Peppol BIS 3.0) met de PDF erin naar het e-factuuradres."><Send size={14}/> Verstuur e-factuur</Button>
-        : <Button variant="primary" onClick={() => onSend?.(invoice)}><Send size={14}/> Verstuur via Resend</Button>)}
+        : <Button variant="primary" onClick={() => onSend?.(invoice)}><Send size={14}/> Verstuur per e-mail</Button>)}
     {canRemind && <Button onClick={() => onSendReminder?.(invoice)} title={`Stuurt betalingsherinnering niveau ${nextReminderLevel} naar de klant.`}><Bell size={14}/> Stuur herinnering (niveau {nextReminderLevel})</Button>}
     {canDownloadStored && !mollieIssued && <Button onClick={() => onDownloadPdf?.(invoice)}><Download size={14}/> Download verzonden PDF</Button>}
     {onDownloadUbl && !mollieIssued && !['cancelled', 'void'].includes(invoice.status) && <Button onClick={() => onDownloadUbl(invoice)} title="Download deze factuur als UBL 2.1 e-factuur (Peppol BIS 3.0) met de PDF erin — voor overheden en boekhoudpakketten."><Download size={14}/> E-factuur (UBL)</Button>}
@@ -1271,12 +1271,12 @@ function dateTimeNL(value: string): string {
 
 function QuoteVersions({ versions, compact = false }: { versions: QuoteVersion[]; compact?: boolean }) {
   if (versions.length === 0) return <div className={`quote-versions ${compact ? 'compact' : ''}`}><span>Nog geen offerteversies vastgelegd.</span></div>;
-  return <div className={`quote-versions ${compact ? 'compact' : ''}`}>{versions.map(version => <div className="quote-version-pill" key={version.id} title={version.pdf_sha256 ? `PDF SHA-256: ${version.pdf_sha256}` : undefined}><strong>v{version.version_number}</strong><span>{quoteVersionReasonLabel(version.snapshot_reason)}</span>{!compact && <small>{dateNL(version.created_at)} · {euro(Number(version.total_amount || 0))}</small>}{!compact && version.pdf_file_name && <small>PDF-snapshot: {version.pdf_file_name}{version.pdf_size_bytes ? ` · ${formatBytes(version.pdf_size_bytes)}` : ''}</small>}</div>)}</div>;
+  return <div className={`quote-versions ${compact ? 'compact' : ''}`}>{versions.map(version => <div className="quote-version-pill" key={version.id} title={version.pdf_sha256 ? `PDF SHA-256: ${version.pdf_sha256}` : undefined}><strong>v{version.version_number}</strong><span>{quoteVersionReasonLabel(version.snapshot_reason)}</span>{!compact && <small>{dateNL(version.created_at)} · {euro(Number(version.total_amount || 0))}</small>}{!compact && version.pdf_file_name && <small>Pdf: {version.pdf_file_name}{version.pdf_size_bytes ? ` · ${formatBytes(version.pdf_size_bytes)}` : ''}</small>}</div>)}</div>;
 }
 
 function InvoiceVersions({ versions }: { versions: InvoiceVersion[] }) {
   if (versions.length === 0) return <div className="quote-versions"><span>Nog geen factuurversies vastgelegd.</span></div>;
-  return <div className="quote-versions">{versions.map(version => <div className="quote-version-pill" key={version.id} title={version.pdf_sha256 ? `PDF SHA-256: ${version.pdf_sha256}` : undefined}><strong>v{version.version_number}</strong><span>{invoiceVersionReasonLabel(version.snapshot_reason)}</span><small>{dateNL(version.created_at)} · {euro(Number(version.total_amount || 0))}</small>{version.pdf_file_name && <small>PDF-snapshot: {version.pdf_file_name}{version.pdf_size_bytes ? ` · ${formatBytes(version.pdf_size_bytes)}` : ''}</small>}</div>)}</div>;
+  return <div className="quote-versions">{versions.map(version => <div className="quote-version-pill" key={version.id} title={version.pdf_sha256 ? `PDF SHA-256: ${version.pdf_sha256}` : undefined}><strong>v{version.version_number}</strong><span>{invoiceVersionReasonLabel(version.snapshot_reason)}</span><small>{dateNL(version.created_at)} · {euro(Number(version.total_amount || 0))}</small>{version.pdf_file_name && <small>Pdf: {version.pdf_file_name}{version.pdf_size_bytes ? ` · ${formatBytes(version.pdf_size_bytes)}` : ''}</small>}</div>)}</div>;
 }
 
 function InvoiceDeliveries({ deliveries }: { deliveries: InvoiceEmailDelivery[] }) {
@@ -1318,8 +1318,10 @@ function dunningStatusLabel(status: DunningNotice['status']): string {
   }
 }
 
-function InvoiceDunningPanel({ invoice, notice, canWrite, onPropose, onSend, onCancel }: {
+function InvoiceDunningPanel({ invoice, client, notice, canWrite, onPropose, onSend, onCancel }: {
   invoice: Invoice;
+  /** Voor de vraag of "zakelijk" klopt: een klant zonder KvK- en btw-nummer is vaak een particulier. */
+  client?: Client | null;
   notice: DunningNotice | null;
   canWrite: boolean;
   onPropose?: (invoice: Invoice) => void;
@@ -1335,6 +1337,12 @@ function InvoiceDunningPanel({ invoice, notice, canWrite, onPropose, onSend, onC
   }
   const isConsumer = notice.client_kind === 'consumer';
   const dueNowCents = isConsumer ? notice.principal_cents + notice.interest_cents : notice.total_claim_cents;
+  // Een nieuwe klant staat standaard op "zakelijk". Is het een particulier (een
+  // bruidspaar, een gezin), dan gelden andere regels: eerst een
+  // veertiendagenbrief, de wettelijke rente in plaats van de handelsrente, en
+  // pas daarna incassokosten. Zonder die brief zijn ze niet verschuldigd
+  // (art. 6:96 lid 6 BW). Geen KvK- en geen btw-nummer is daarvoor een teken.
+  const maybeConsumer = !isConsumer && client != null && !String(client.kvk_number ?? '').trim() && !String(client.vat_number ?? '').trim();
   const open = notice.status === 'proposed' || notice.status === 'confirmed' || notice.status === 'failed';
   return <div className="invoice-reminder-panel">
     <div className="invoice-reminder-summary">
@@ -1351,6 +1359,7 @@ function InvoiceDunningPanel({ invoice, notice, canWrite, onPropose, onSend, onC
       <div className="quote-version-pill"><strong>Incassokosten{isConsumer ? ' (na termijn)' : ''}{notice.collection_costs_vat_cents > 0 ? ' + btw' : ''}</strong><span>{c(notice.collection_costs_cents + notice.collection_costs_vat_cents)}</span></div>
       <div className="quote-version-pill total"><strong>{isConsumer ? 'Nu te voldoen' : 'Totaal te voldoen'}</strong><span>{c(isConsumer ? dueNowCents : notice.total_claim_cents)}</span></div>
     </div>
+    {open && maybeConsumer && <div className="bk-note"><AlertTriangle size={14} /> {client!.name} staat als <strong>zakelijke</strong> klant, maar zonder KvK- en btw-nummer. Is het een particulier? Annuleer dit voorstel, zet bij de klant het type op "Consument" en stel de aanmaning opnieuw op: voor een particulier gelden de veertiendagenbrief en de wettelijke rente.</div>}
     {open && canWrite && <div className="invoice-reminder-summary">
       {onSend && <Button variant="primary" onClick={() => onSend(notice)} title="Bevestigt de bedragen (rente herberekend op vandaag) en verstuurt de formele 14-dagenbrief per e-mail."><Send size={14}/> {notice.status === 'failed' ? 'Opnieuw versturen' : 'Bevestig & verstuur'}</Button>}
       {onCancel && notice.status !== 'confirmed' && <Button onClick={() => onCancel(notice)} title="Annuleer dit aanmaningsvoorstel."><XCircle size={14}/> Annuleer voorstel</Button>}
