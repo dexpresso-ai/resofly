@@ -2,7 +2,8 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, ReceiptText, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
-import { SETTINGS_TABS, settingsTabRoleRule, type SettingsTab } from '../features/SimplePages';
+import { settingsMenuGroups, type SettingsTab } from '../features/SimplePages';
+import { visibleSettingsTabIds } from '../lib/settingsMenu';
 import { Select } from './Ui';
 import { BrandMark } from './BrandMark';
 import { FULL_PERMISSIONS, isAccountantRole, type Permissions } from '../lib/permissions';
@@ -94,19 +95,11 @@ const contentPages: Page[] = ['content', 'notes', 'documents'];
 /** Een rapportage van Gerrie is een eigen pagina, maar hoort onder Rapportages. */
 const reportPages: Page[] = ['stats', 'report'];
 
-/** De instellingen in het accountmenu. AI-gebruik en API-sleutels zijn alleen
- *  zichtbaar voor owners/admins, en de agenda-instellingen alleen als de
- *  agenda-module openstaat — zelfde regels als op de instellingenpagina zelf. */
-export function visibleSettingsTabs(activeRole: OrganizationRole | null, permissions: Permissions) {
-  const canAdmin = activeRole === 'owner' || activeRole === 'admin';
-  return SETTINGS_TABS.filter(tab => {
-    // Boekhouder: alleen de financiële tabbladen; Boekhouder-toegang: beheer.
-    const roleRule = settingsTabRoleRule(tab.id, activeRole);
-    if (roleRule !== null) return roleRule;
-    if (tab.id === 'ai' || tab.id === 'api') return canAdmin;
-    if (tab.id === 'agenda') return permissions.canRead('calendar');
-    return true;
-  });
+/** De instellingen in het menu, per groep (lib/settingsMenu.ts). Dezelfde
+ *  regel als de instellingenpagina zelf: tot 18 november had het menu een
+ *  eigen lijst, en die verborg AI voor een teamlid terwijl de pagina het toonde. */
+export function visibleSettingsGroups(activeRole: OrganizationRole | null, permissions: Permissions) {
+  return settingsMenuGroups(visibleSettingsTabIds(activeRole, { canReadCalendar: permissions.canRead('calendar') }));
 }
 
 export interface SidebarProps {
@@ -123,6 +116,8 @@ export interface SidebarProps {
   onSearchNavigate: (result: SearchResult) => void;
   userEmail?: string | null;
   onOpenSettings: (tab?: SettingsTab) => void;
+  /** Op de pagina Instellingen: welk onderdeel openstaat, zodat het menu het oplicht. */
+  settingsTab?: SettingsTab | null;
   onSignOut: () => void;
   /** Ongelezen klantmail van dit teamlid — samen met `inboxOpen` de badge op Berichten. */
   messageUnread?: number;
@@ -172,6 +167,7 @@ export function Sidebar({
   onSearchNavigate,
   userEmail = null,
   onOpenSettings,
+  settingsTab = null,
   onSignOut,
   messageUnread = 0,
   inboxOpen = 0,
@@ -229,7 +225,7 @@ export function Sidebar({
     return () => { document.removeEventListener('mousedown', onPointer); document.removeEventListener('keydown', onKey); };
   }, [userMenuOpen]);
 
-  const settingsTabs = visibleSettingsTabs(activeRole, permissions);
+  const settingsGroups = visibleSettingsGroups(activeRole, permissions);
   // De rollen staan hier zoals ze in de database heten; de boekhouder in het Nederlands.
   const roleLabel = isAccountantRole(activeRole) ? 'boekhouder' : activeRole ?? 'geen rol';
   const purchaseInboxTitle = `${purchaseInboxOpen} per e-mail binnengekomen inkoopfactu${purchaseInboxOpen === 1 ? 'ur' : 'ren'} met aandacht nodig`;
@@ -458,17 +454,22 @@ export function Sidebar({
           <span className="umh-email" title={userEmail ?? undefined}>{userEmail ?? 'Onbekend account'}</span>
         </div>
         <div className="user-menu-section">Instellingen</div>
-        {settingsTabs.map(tab => (
-          <button
-            key={tab.id}
-            type="button"
-            role="menuitem"
-            className="user-menu-item"
-            onClick={() => { onOpenSettings(tab.id); setUserMenuOpen(false); }}
-          >
-            <tab.Icon size={15}/><span>{tab.label}</span>
-          </button>
-        ))}
+        {/* Per groep een kopje: negentien regels onder elkaar las je niet. */}
+        {settingsGroups.map(group => <div className="user-menu-group" role="group" aria-label={group.label} key={group.id}>
+          <div className="user-menu-group-h" aria-hidden="true">{group.label}</div>
+          {group.tabs.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              role="menuitem"
+              className={`user-menu-item${page === 'settings' && settingsTab === tab.id ? ' is-current' : ''}`}
+              aria-current={page === 'settings' && settingsTab === tab.id ? 'page' : undefined}
+              onClick={() => { onOpenSettings(tab.id); setUserMenuOpen(false); }}
+            >
+              <tab.Icon size={15}/><span>{tab.label}</span>
+            </button>
+          ))}
+        </div>)}
         <div className="user-menu-sep" aria-hidden="true" />
         <div className="user-menu-section">Weergave</div>
         <div className="theme-switch" role="group" aria-label="Thema">

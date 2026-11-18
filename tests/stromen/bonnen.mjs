@@ -1,9 +1,9 @@
 // Bonnen fotograferen en declaraties, van begin tot eind tegen een lokale stack.
 //
 // De echte edge function invoice-inbox (action upload, decline, link), de
-// echte database met de migratie 20261117120000, een nep-Claude die de bon
+// echte database met de migratie 20261118120000, een nep-Claude die de bon
 // "leest" (nep-ai.mjs, tool extract_invoice) en de nep-media-worker die de foto
-// bewaart. Wat hier wordt nagelopen (CHANGELOG_BONNEN_DECLARATIES_2026-11-17.md):
+// bewaart. Wat hier wordt nagelopen (CHANGELOG_BONNEN_DECLARATIES_2026-11-18.md):
 //   1. de eigenaar fotografeert een bon: Gerrie leest hem als bon, en er staat
 //      een concept met de foto als bewijsstuk; er wordt niets geboekt;
 //   2. een teamlid zonder Financiën dient een declaratie in: hij krijgt alleen
@@ -259,7 +259,7 @@ export default async function bonnen() {
   });
 
   await stap('precies dezelfde foto later nog eens: dubbel, geen tweede concept', async () => {
-    // De dubbelcontrole op bestand liep tot 2026-11-17 altijd vast ("invalid
+    // De dubbelcontrole op bestand liep tot 2026-11-18 altijd vast ("invalid
     // input syntax for type json"), voor mail en voor bonnen.
     const zelfde = foto();
     leest('Hema Utrecht', 'HM-12', 9.95);

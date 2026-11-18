@@ -32,7 +32,7 @@ export const INBOX_REASON_LABELS: Record<string, string> = {
   oversized: 'De mail is te groot om te verwerken (limiet 12 MB)',
   nothing_extracted: 'In de bijlagen is geen factuur herkend',
   ai_disabled: 'AI-uitlezen staat uit in de instellingen (alleen UBL-e-facturen gaan automatisch)',
-  // Bonnen uit de app (20261117120000): wie de foto maakte, koos voor geen AI.
+  // Bonnen uit de app (20261118120000): wie de foto maakte, koos voor geen AI.
   ai_declined: 'Gerrie staat uit voor wie deze bon instuurde, dus hij is niet gelezen — vul hem zelf in',
   declaration_declined: 'Declaratie afgewezen',
   ai_unavailable: 'AI is niet geconfigureerd op de server',
@@ -67,7 +67,7 @@ export function inboxReasonLabel(reason: string | null | undefined): string | nu
 /**
  * Moet hier iemand naar kijken? Ook een declaratie met een concept: die wacht
  * op goedkeuring. Een concept uit de mail of een eigen bon niet; dat boek je
- * wanneer je wilt. (Zonder `channel`, van vóór 20261117120000, is het mail.)
+ * wanneer je wilt. (Zonder `channel`, van vóór 20261118120000, is het mail.)
  */
 export function inboxNeedsAttention(item: Pick<PurchaseInvoiceInboxItem, 'status'> & { channel?: PurchaseInvoiceInboxItem['channel'] }): boolean {
   if (item.channel === 'declaration' && item.status === 'ready') return true;

@@ -152,7 +152,7 @@ export function autoBookEligible(input: {
 // Een bon komt niet per mail maar uit de camera van een teamlid. Wie Financiën
 // mag bewerken, krijgt een concept dat hij zelf boekt ('receipt'); wie dat niet
 // mag, dient een declaratie in die iemand met Financiën goedkeurt
-// ('declaration'). Migratie 20261117120000.
+// ('declaration'). Migratie 20261118120000.
 
 export type InboxChannel = 'email' | 'receipt' | 'declaration';
 

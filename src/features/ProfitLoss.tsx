@@ -6,7 +6,7 @@ import { REPORT_GROUP_LABELS } from '../types';
 import { Button, Skeleton } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
-import { ensureDefaultLedgerAccounts, reportBalanceSheet, reportOpenItems, reportProfitAndLoss } from '../lib/repository';
+import { ensureDefaultLedgerAccounts, reportBalanceSheet, reportOpenItems, reportProfitAndLoss, setUpBookkeeping } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -88,14 +88,14 @@ function SetupBanner({ organizationId, onChanged }: { organizationId: string; on
   const [error, setError] = useState<string | null>(null);
   async function setup() {
     setBusy(true); setError(null);
-    try { await ensureDefaultLedgerAccounts(organizationId); onChanged(); }
+    try { await setUpBookkeeping(organizationId); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Aanmaken mislukt'); }
     finally { setBusy(false); }
   }
   return (
     <div className="bk-setup">
-      <div><strong>Boekhouding nog niet ingericht.</strong><p>Maak eerst het rekeningschema aan (tabblad Grootboek).</p>{error && <p className="error">{error}</p>}</div>
-      <Button variant="primary" disabled={busy} onClick={setup}>{busy ? 'Bezig…' : 'Rekeningschema aanmaken'}</Button>
+      <div><strong>Boekhouding nog niet ingericht.</strong><p>Met één klik komen het rekeningschema, de btw-codes en het boekjaar klaar te staan.</p>{error && <p className="error">{error}</p>}</div>
+      <Button variant="primary" disabled={busy} onClick={setup}>{busy ? 'Bezig…' : 'Boekhouding inrichten'}</Button>
     </div>
   );
 }

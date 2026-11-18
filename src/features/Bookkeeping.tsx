@@ -15,7 +15,7 @@ import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
   loadInboundAlias, loadPurchaseInvoiceInbox, openingBalancePlugAccount,
-  postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow,
+  postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow, setUpBookkeeping
 } from '../lib/repository';
 import { downloadXaf } from '../lib/xaf';
 import { downloadStoredFile, uploadToR2 } from '../lib/r2';
@@ -67,7 +67,7 @@ export function SetupBanner({ organizationId, canWrite, onChanged }: { organizat
   const [error, setError] = useState<string | null>(null);
   async function setup() {
     setBusy(true); setError(null);
-    try { await ensureDefaultLedgerAccounts(organizationId); onChanged(); }
+    try { await setUpBookkeeping(organizationId); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Aanmaken mislukt'); }
     finally { setBusy(false); }
   }
@@ -75,10 +75,10 @@ export function SetupBanner({ organizationId, canWrite, onChanged }: { organizat
     <div className="bk-setup">
       <div>
         <strong>Boekhouding nog niet ingericht.</strong>
-        <p>Maak het standaard rekeningschema en de BTW-codes aan om te beginnen.</p>
+        <p>Met één klik komen het rekeningschema, de btw-codes en het boekjaar klaar te staan.</p>
         {error && <p className="error">{error}</p>}
       </div>
-      <Button variant="primary" disabled={!canWrite || busy} onClick={setup}>{busy ? 'Bezig…' : 'Rekeningschema aanmaken'}</Button>
+      <Button variant="primary" disabled={!canWrite || busy} onClick={setup}>{busy ? 'Bezig…' : 'Boekhouding inrichten'}</Button>
     </div>
   );
 }
@@ -374,7 +374,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
         <div><PageIcon page="purchase-invoices" /><h2>Inkoopfacturen</h2><p>Boek leveranciersfacturen in en verwerk de voorbelasting.</p></div>
         <div className="bk-head-actions">
           {/* Een bon fotograferen: Gerrie leest hem en hij staat meteen als
-              concept klaar (2026-11-17). Zie components/ReceiptCapture.tsx. */}
+              concept klaar (2026-11-18). Zie components/ReceiptCapture.tsx. */}
           <ReceiptCapture organizationId={organizationId} mode="receipt" data={data} disabled={!canWrite || notReady} compact
             onChanged={onChanged} onOpenInvoice={openInvoice} onFillIn={fillIn} />
           <Button disabled={!canWrite || notReady} onClick={() => setScan(true)} title="Lees een factuur automatisch uit: UBL-e-facturen (XML) deterministisch, PDF/foto met AI"><Sparkles size={15} /> Factuur scannen (AI / UBL)</Button>
@@ -509,7 +509,7 @@ function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, 
   return <section className="pi-inbox">
     <div className="pi-inbox-head">
       <div>
-        {/* Sinds 2026-11-17 staan hier ook bonnen en declaraties uit de app, niet alleen mail. */}
+        {/* Sinds 2026-11-18 staan hier ook bonnen en declaraties uit de app, niet alleen mail. */}
         <h3><Inbox size={15} /> Binnengekomen</h3>
         <p className="bk-muted">
           {open.length === 0

@@ -45,7 +45,7 @@ export function BottomNav({ page, onNavigate, permissions = FULL_PERMISSIONS, do
   appItems?: ReadonlyArray<{ page: string; label: string }>;
 }) {
   // Wie Financiën niet ziet maar wel declareert, krijgt op die plek Declaraties:
-  // de telefoon is precies waar je een bon fotografeert (2026-11-17).
+  // de telefoon is precies waar je een bon fotografeert (2026-11-18).
   const declarationsInstead = !permissions.canOpenPage('invoices') && permissions.canOpenPage('declarations');
   const base = dock ? DOCK : ITEMS;
   const list = appItems

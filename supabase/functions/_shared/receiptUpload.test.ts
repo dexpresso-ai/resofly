@@ -7,7 +7,7 @@ import {
 } from './invoiceInboxRules.ts';
 
 /**
- * Bonnen fotograferen en declaraties (2026-11-17). Wie Financiën mag bewerken,
+ * Bonnen fotograferen en declaraties (2026-11-18). Wie Financiën mag bewerken,
  * krijgt van een foto een concept; ieder ander teamlid dient een declaratie in
  * en ziet daarvan alleen zijn eigen bon. Deze tests bewaken die scheiding op
  * alle drie de plekken: de regels, de edge function en de database.
@@ -19,7 +19,7 @@ import {
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const edge = read('../invoice-inbox/index.ts');
 const inbox = read('./invoiceInbox.ts');
-const sql = read('../../migrations/20261117120000_bonnen_en_declaraties.sql');
+const sql = read('../../migrations/20261118120000_bonnen_en_declaraties.sql');
 
 // ── De regels ────────────────────────────────────────────────────────────────
 

@@ -17,7 +17,7 @@
 // Twee aanroepers: mail-inbound (op de achtergrond, direct na ontvangst) en de
 // invoice-inbox edge function (knoppen in het scherm: opnieuw verwerken,
 // klaarzetten met een gekozen leverancier, toch klaarzetten bij een duplicaat,
-// en sinds 2026-11-17 een bon die in de app is gefotografeerd).
+// en sinds 2026-11-18 een bon die in de app is gefotografeerd).
 //
 // Een bon (channel 'receipt' of 'declaration') loopt door dezelfde stappen,
 // met vier verschillen: Gerrie krijgt te horen dat het een bon is, het
@@ -96,7 +96,7 @@ export type InboxStatus =
 export interface InboxRow {
   id: string;
   organization_id: string;
-  /** email = factuuradres; receipt/declaration = in de app gefotografeerd (20261117120000). */
+  /** email = factuuradres; receipt/declaration = in de app gefotografeerd (20261118120000). */
   channel: InboxChannel;
   /** Wie de bon instuurde; leeg bij mail. */
   submitted_by: string | null;
@@ -271,7 +271,7 @@ export async function loadInboxSettings(admin: SupabaseClient, organizationId: s
 function normalizeRow(raw: Record<string, unknown>): InboxRow {
   return {
     ...(raw as unknown as InboxRow),
-    // Een rij van vóór 20261117120000 (of een select zonder de kolom) is mail.
+    // Een rij van vóór 20261118120000 (of een select zonder de kolom) is mail.
     channel: raw.channel === 'receipt' || raw.channel === 'declaration' ? raw.channel : 'email',
     submitted_by: typeof raw.submitted_by === 'string' ? raw.submitted_by : null,
     review_note: typeof raw.review_note === 'string' ? raw.review_note : null,

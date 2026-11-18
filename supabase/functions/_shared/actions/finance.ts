@@ -339,7 +339,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Zet de status van een factuur met de hand. "paid" kan alleen voor een factuur van vóór de startdatum van de boekhouding (die vordering staat in de beginbalans). Voor elke andere factuur registreer je een betaling door de banktransactie te koppelen (`invoice.reconcile_bank_transaction`) of met een memoriaalpost op Debiteuren; daarna staat hij vanzelf op betaald. ' +
+      'Zet de status van een factuur met de hand. "paid" kan alleen voor een factuur van vóór de startdatum van de boekhouding (die vordering staat in de beginbalans). Voor elke andere factuur registreer je een betaling door de banktransactie te koppelen (`invoice.reconcile_bank_transaction`); contant geld gaat net zo, via een kasrekening als bankrekening. Een memoriaalpost op Debiteuren telt niet als betaling van de factuur. Daarna staat hij vanzelf op betaald. ' +
       'draft = concept, sent = verzonden, overdue = te laat, paid = betaald, cancelled = geannuleerd, void = ongeldig gemaakt, written_off = afgeboekt (oninbaar). ' +
       'Let op: "void" en "written_off" zijn feitelijk eindstations, en de bedragen zelf verander je hiermee niet. Zoek de factuur met `list_invoices`.',
     keywords: ['status', 'betaald', 'betaling registreren', 'markeren', 'voldaan', 'geannuleerd', 'afboeken', 'oninbaar', 'storneren', 'debiteuren'],
@@ -368,7 +368,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         const startDate = await bookkeepingStartDate(ctx);
         const inOpeningBalance = Boolean(startDate && invoice.date && invoice.date < startDate);
         if (!inOpeningBalance) {
-          throw new ActionError(`Op betaald zetten boekt factuur ${invoice.number} in het grootboek (omzet en btw op Debiteuren), maar niet de betaling: de debiteurenstand bleef dan ${euro(docTotalEur(invoice))} te hoog. Registreer de betaling door de banktransactie te koppelen (\`invoice.reconcile_bank_transaction\`) of met een memoriaalpost op Debiteuren; dan staat hij vanzelf op betaald.`);
+          throw new ActionError(`Op betaald zetten boekt factuur ${invoice.number} in het grootboek (omzet en btw op Debiteuren), maar niet de betaling: de debiteurenstand bleef dan ${euro(docTotalEur(invoice))} te hoog. Registreer de betaling door de banktransactie te koppelen (\`invoice.reconcile_bank_transaction\`); contant geld gaat net zo, via een kasrekening. Dan staat hij vanzelf op betaald.`);
         }
       }
       // Een betaalde, geboekte factuur sluit je met een terugbetaling en
@@ -384,7 +384,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
           // Alleen de status op betaald zetten laat 1300 Debiteuren open staan
           // (en de factuur in de openstaande posten): de betaling hoort geboekt.
           throw new ActionError(status === 'paid'
-            ? `Factuur ${invoice.number} staat in het grootboek en er staat nog ${euro(Number(openCents) / 100)} open. Registreer de betaling door de banktransactie te koppelen (\`invoice.reconcile_bank_transaction\`) of met een memoriaalpost op Debiteuren; dan staat hij vanzelf op betaald.`
+            ? `Factuur ${invoice.number} staat in het grootboek en er staat nog ${euro(Number(openCents) / 100)} open. Registreer de betaling door de banktransactie te koppelen (\`invoice.reconcile_bank_transaction\`); contant geld gaat net zo, via een kasrekening. Dan staat hij vanzelf op betaald.`
             : `Factuur ${invoice.number} staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur in ResoFly.`);
         }
       }

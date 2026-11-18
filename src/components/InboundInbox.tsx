@@ -106,7 +106,7 @@ export function InboundInboxTab({ organizationId, clients, canWrite, onChanged, 
     {loaded && !loadError && hasAlias === false && <div className="client-empty-state">
       <strong>Je hebt nog geen doorstuuradres</strong>
       <span>
-        Stel er een in onder Instellingen → E-mail &amp; domeinen. Daarna komt mail die een klant rechtstreeks
+        Stel er een in onder Instellingen → E-mail. Daarna komt mail die een klant rechtstreeks
         naar je eigen adres stuurt hier binnen als hij niet vanzelf te plaatsen is.
       </span>
     </div>}

@@ -373,7 +373,7 @@ export const suppliers = [
   { id: uid('s'), ...base(), name: 'Amazon.nl', supplier_code: null, contact_name: null, email: null, phone: null, vat_number: null, iban: 'NL35INGB0654321098', address_line1: null, postal_code: null, city: null, country: 'NL', default_ledger_account_id: null, notes: null },
 ];
 
-// ── Bonnen en declaraties (2026-11-17) ──────────────────────────────────
+// ── Bonnen en declaraties (2026-11-18) ──────────────────────────────────
 // Drie inkoopfacturen: een bon die je zelf fotografeerde (concept), een
 // declaratie van Sanne die op goedkeuring wacht, en een geboekte factuur uit
 // de mail. Op de werklijst de declaratie, en een bon die Gerrie niet las

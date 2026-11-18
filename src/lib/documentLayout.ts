@@ -356,6 +356,12 @@ export interface DocumentTotals {
   vat: number;
   total: number;
   vatBreakdown: Array<{ rate: number; base: number; vat: number }>;
+  /**
+   * Bedrag van regels met de code KOR (kleineondernemersregeling): geen btw,
+   * dus ook geen regel "Btw 0% over …" (KVK: geen btw-percentage of
+   * btw-bedrag op de factuur). De vermelding van de KOR staat eronder.
+   */
+  korBase?: number;
 }
 
 export interface DocumentCompany {
@@ -570,6 +576,7 @@ export interface SalesLineLike {
   quantity?: number | string | null;
   unit_price?: number | string | null;
   vat?: number | string | null;
+  vat_code?: string | null;
 }
 
 function amount(value: number | string | null | undefined): number {
@@ -595,6 +602,7 @@ function cents(euros: number): number {
 export function documentAmounts(lines: SalesLineLike[]): { lines: DocumentLine[]; totals: DocumentTotals } {
   const baseByRate = new Map<number, number>();
   let subtotal = 0;
+  let korBase = 0;
   const out: DocumentLine[] = [];
   for (const line of Array.isArray(lines) ? lines : []) {
     const quantity = amount(line.quantity);
@@ -603,7 +611,9 @@ export function documentAmounts(lines: SalesLineLike[]): { lines: DocumentLine[]
     const net = cents(quantity * unitPrice);
     const vat = cents((net / 100) * (vatRate / 100));
     subtotal += net;
-    baseByRate.set(vatRate, (baseByRate.get(vatRate) ?? 0) + net);
+    // KOR: geen btw-groep "0%"; zie DocumentTotals.korBase.
+    if (vatRate === 0 && str(line.vat_code).toUpperCase() === 'KOR') korBase += net;
+    else baseByRate.set(vatRate, (baseByRate.get(vatRate) ?? 0) + net);
     out.push({ description: str(line.description), quantity, unitPrice, vatRate, net: net / 100, gross: (net + vat) / 100 });
   }
   let vatTotal = 0;
@@ -613,7 +623,7 @@ export function documentAmounts(lines: SalesLineLike[]): { lines: DocumentLine[]
     vatTotal += vat;
     vatBreakdown.push({ rate, base: base / 100, vat: vat / 100 });
   }
-  return { lines: out, totals: { subtotal: subtotal / 100, vat: vatTotal / 100, total: (subtotal + vatTotal) / 100, vatBreakdown } };
+  return { lines: out, totals: { subtotal: subtotal / 100, vat: vatTotal / 100, total: (subtotal + vatTotal) / 100, vatBreakdown, ...(korBase !== 0 ? { korBase: korBase / 100 } : {}) } };
 }
 
 // ── Creditfactuur en aanmaning als document ─────────────────────────────────
@@ -2128,7 +2138,7 @@ function planPass(
     if (data.totals.vatBreakdown.length > 0) {
       // Per tarief de grondslag én het btw-bedrag (art. 35a lid 1 Wet OB).
       for (const row of data.totals.vatBreakdown) rows.push([`Btw ${formatRate(row.rate)} over ${formatDocMoney(row.base)}`, formatDocMoney(row.vat)]);
-    } else rows.push(['Btw', formatDocMoney(data.totals.vat)]);
+    } else if (!(data.totals.korBase && data.totals.vat === 0)) rows.push(['Btw', formatDocMoney(data.totals.vat)]);
     const height = rows.length * rowHeight + 8 + totalHeight;
     if (y + height > flowBottom) startPage();
     const top = y;

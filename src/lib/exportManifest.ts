@@ -63,12 +63,17 @@ export const EXPORT_FORMAT_VERSION = 1;
 // gallery_items; geen tabellen of kolommen.
 // 20261115120000 (geen AI kiezen) vervangt set_ai_consent; geen tabellen of
 // kolommen.
-// 20261117120000 (bonnen en declaraties) zet channel, submitted_by en
+// 20261118090000 (eenmanszaak) vervangt boekhoudfuncties en triggers, voegt
+// open_initial_fiscal_years toe en rekeningen aan het rekeningschema (rijen,
+// geen kolommen); geen tabellen of kolommen.
+// 20261118100000 (btw-tijdvak wisselen) vervangt drie btw-functies; geen
+// tabellen of kolommen.
+// 20261118120000 (bonnen en declaraties) zet channel, submitted_by en
 // review_note op purchase_invoice_inbox. Die gaan mee met de inbox: waar een
 // bon vandaan kwam, wie hem instuurde en waarom een declaratie is afgewezen,
 // hoort bij de administratie. Geen geheim, geen nieuwe opslagsleutel (de foto
 // staat al in attachments).
-export const EXPORT_SCHEMA_VERSION = '20261117120000';
+export const EXPORT_SCHEMA_VERSION = '20261118120000';
 
 export type TableKind =
   | 'export'

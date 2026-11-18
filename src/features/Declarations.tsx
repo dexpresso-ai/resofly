@@ -10,7 +10,7 @@ import { readableError } from '../lib/networkRetry';
 import { DECLARATION_STATUS_HINTS, DECLARATION_STATUS_LABELS, splitDeclarations } from '../lib/receipts';
 
 /**
- * Declaraties (2026-11-17): voor teamleden die Financiën niet mogen bewerken.
+ * Declaraties (2026-11-18): voor teamleden die Financiën niet mogen bewerken.
  *
  * Je fotografeert een bon die je zelf hebt betaald; Gerrie leest hem en hij
  * komt bij Financiën als concept dat iemand goedkeurt. Hier zie je je eigen

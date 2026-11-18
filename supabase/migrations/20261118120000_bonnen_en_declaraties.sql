@@ -1,6 +1,6 @@
 -- ============================================================
 -- ResoFly — Bonnen fotograferen en declaraties
--- Date: 2026-11-17
+-- Date: 2026-11-18
 --
 -- WAAROM
 -- Een bon (kassabon, parkeerbon, tankbon) kwam tot nu toe alleen in de

@@ -25,7 +25,7 @@ export const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
   contracts: FileSignature, invoices: Receipt, suppliers: Truck, 'purchase-invoices': FileText, ledger: BookOpen,
   bank: Landmark, assets: Boxes, prepaid: Hourglass, pnl: TrendingUp, 'vat-returns': Percent, 'corporate-tax': Landmark, dga: Users, shareholders: Users, owners: Wallet, 'fiscal-years': CalendarClock,
   'annual-accounts': Scale,
-  // Declaraties (2026-11-17): een bonnetje, zodat hij niet op Facturen lijkt.
+  // Declaraties (2026-11-18): een bonnetje, zodat hij niet op Facturen lijkt.
   declarations: ReceiptText,
   archive: Archive, settings: Settings, gallery: Images,
 };

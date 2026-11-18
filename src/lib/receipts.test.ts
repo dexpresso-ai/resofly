@@ -9,7 +9,7 @@ import { buildPermissions, canSubmitDeclarations, DECLARATIONS_PAGE } from './pe
 import { inboxItemSummary, inboxNeedsAttention, splitInboxItems } from './invoiceInbox.ts';
 
 /**
- * Bonnen fotograferen en declaraties (2026-11-17): wat het scherm beslist.
+ * Bonnen fotograferen en declaraties (2026-11-18): wat het scherm beslist.
  * Na de foto moet er altijd een duidelijke volgende stap zijn (Verder, een
  * leverancier kiezen, zelf invullen), en een declarant ziet zijn eigen
  * declaratie in gewone woorden.

@@ -15,7 +15,7 @@ import {
 } from '../lib/receipts';
 
 /**
- * Bon fotograferen (2026-11-17).
+ * Bon fotograferen (2026-11-18).
  *
  * Eén tik op "Bon fotograferen" en de camera gaat open (op een computer: de
  * bestandskiezer). Zodra de foto er is, opent dit venster: Gerrie leest de

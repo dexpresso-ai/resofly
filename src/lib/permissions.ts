@@ -278,7 +278,7 @@ export function buildPermissions(membership: MembershipLike | null | undefined, 
 }
 
 /**
- * De pagina Declaraties (2026-11-17). Hij hoort bij geen module: iedereen die
+ * De pagina Declaraties (2026-11-18). Hij hoort bij geen module: iedereen die
  * schrijft, mag een bon insturen. Maar wie Financiën mag bewerken, fotografeert
  * zijn bon op Inkoopfacturen en krijgt meteen een concept; voor hem is er
  * niets te declareren, en de pagina zou alleen een lege lijst tonen. De server

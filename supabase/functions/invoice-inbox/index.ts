@@ -1,6 +1,6 @@
 // ============================================================
 // invoice-inbox — de knoppen van de factuur-inbox (inkoopfacturen per e-mail,
-// en sinds 2026-11-17 ook bonnen die in de app zijn gefotografeerd).
+// en sinds 2026-11-18 ook bonnen die in de app zijn gefotografeerd).
 //
 // De automatische verwerking van mail start in mail-inbound; hier komen de
 // handelingen van een mens in het scherm:

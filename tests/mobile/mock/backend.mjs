@@ -613,7 +613,7 @@ function rpc(fn, body = null) {
     case 'ensure_portal_login_key': return pub.PORTAL_LOGIN_KEY;
     case 'organization_license_usage': return [{ organization_id: seed.ids.ORG, licensed_seats: 3, active_members: 2, pending_invitations: 0, used_seats: 2, available_seats: 1, license_status: 'active', billing_exempt: false }];
     case 'organization_billing_overview': return [];
-    // Mijn declaraties (2026-11-17), als teamlid zonder Financiën.
+    // Mijn declaraties (2026-11-18), als teamlid zonder Financiën.
     case 'list_my_declarations': return seed.declarations;
     case 'chat_unread_counts': return seed.chatUnread;
     case 'chat_last_messages': {
@@ -632,7 +632,7 @@ function rpc(fn, body = null) {
 }
 
 /**
- * Een bon insturen (invoice-inbox, action 'upload', 2026-11-17). Met
+ * Een bon insturen (invoice-inbox, action 'upload', 2026-11-18). Met
  * `declarant: true` als teamlid zonder Financiën: een declaratie. Anders een
  * concept, zoals iemand met Financiën het terugkrijgt. (`receiptReading`
  * beantwoordt het verzoek niet: zie installMock.)
@@ -806,7 +806,7 @@ export async function installMock(context, options = {}) {
       // de pagina Gerrie toont dan het scherm om hem aan te zetten.
       // `aiDeclined: true`: hij koos zelf voor geen AI (2026-11-15); Gerrie is
       // dan nergens te zien, ook niet in het menu.
-      // `declarant: true` (2026-11-17): de ingelogde gebruiker is een teamlid
+      // `declarant: true` (2026-11-18): de ingelogde gebruiker is een teamlid
       // zonder Financiën. Hij ziet Declaraties, en geen inkoopfacturen.
       const rows = options.declarant && table === 'organization_members' ? declarantMembers(url)
         : options.aiDeclined && table === 'ai_consents' ? [consentRow(false, [])]
@@ -835,7 +835,7 @@ export async function installMock(context, options = {}) {
       // report-updating in run.mjs). Een leeg antwoord gaf in de app "de
       // verbinding viel weg".
       if (name === 'gerrie-agent' && body?.action === 'report_chat') return;
-      // Gerrie leest een bon (2026-11-17): het antwoord blijft uit, zodat de
+      // Gerrie leest een bon (2026-11-18): het antwoord blijft uit, zodat de
       // test het bonvenster meet terwijl de animatie loopt.
       if (name === 'invoice-inbox' && body?.action === 'upload' && options.receiptReading) return;
       return json(route, edgeFunction(name, body, options));

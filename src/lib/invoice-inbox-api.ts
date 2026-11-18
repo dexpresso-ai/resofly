@@ -19,7 +19,7 @@ export type InvoiceInboxAction =
   | { action: 'prepare'; supplierId?: UUID | null; createSupplier?: boolean; allowDuplicate?: boolean }
   | { action: 'reject' }
   | { action: 'restore' }
-  // Een declaratie afwijzen; de reden leest de indiener (20261117120000).
+  // Een declaratie afwijzen; de reden leest de indiener (20261118120000).
   | { action: 'decline'; note: string }
   // "Zelf invullen": een met de hand gemaakt concept aan het item hangen.
   | { action: 'link'; purchaseInvoiceId: UUID };

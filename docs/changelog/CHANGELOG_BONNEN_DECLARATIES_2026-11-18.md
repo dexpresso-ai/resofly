@@ -1,4 +1,4 @@
-# Bonnen fotograferen en declaraties (2026-11-17)
+# Bonnen fotograferen en declaraties (2026-11-18)
 
 De vraag: maak het mogelijk om bij inkoopfacturen snel een foto of scan van een bon te maken,
 die wordt uitgelezen en standaard als concept wordt opgeslagen.
@@ -132,7 +132,7 @@ toetst dat dezelfde foto later nog eens als dubbel wordt herkend.
 
 ## Onder de motorkap
 
-- **Migratie `20261117120000_bonnen_en_declaraties.sql`** (veilig opnieuw te draaien):
+- **Migratie `20261118120000_bonnen_en_declaraties.sql`** (veilig opnieuw te draaien):
   - op `purchase_invoice_inbox` de kolommen `channel` (email, receipt of declaration),
     `submitted_by` en `review_note`, plus een index op indiener;
   - `list_my_declarations(p_organization_id)`: security definer, alleen
@@ -171,19 +171,26 @@ toetst dat dezelfde foto later nog eens als dubbel wordt herkend.
   - de pagina `declarations` met de regel `canSubmitDeclarations` in `permissions.ts`;
   - `loadPurchaseInvoiceInbox` en de teller vallen terug op de oude kolommen zolang de migratie
     nog niet gedraaid is.
-- **Gegevensexport**: `EXPORT_SCHEMA_VERSION` gaat naar `20261117120000`; de nieuwe kolommen
+- **Gegevensexport**: `EXPORT_SCHEMA_VERSION` gaat naar `20261118120000`; de nieuwe kolommen
   gaan mee met de inbox.
 
 ## Getest
 
+Op 18 november is staging hierin samengevoegd (eenmanszaak, btw-tijdvak wisselen, instellingen
+in groepen). De migratie heette eerst `20261117120000`. Ze kreeg een nummer na de twee migraties
+die staging die ochtend kreeg; anders had ze vóór de laatste op staging gestaan, en dan draait
+ze daar nooit. Na het samenvoegen opnieuw gedraaid: typecheck, `npm test`, `deno check`, de
+keten vanaf nul, de SQL-controle en `test:stromen -- bonnen`.
+
 - `npm run typecheck`: schoon.
-- `npm test`: 1944 tests, alle geslaagd. Nieuw zijn `receiptUpload.test.ts` (regels, edge
+- `npm test`: 1971 tests, alle geslaagd. Nieuw zijn `receiptUpload.test.ts` (regels, edge
   function, migratie en meldingen) en `receipts.test.ts` (scherm en rechten).
-- `deno check` op de lijst uit `frontend-checks.yml` (37 bestanden): schoon. esm.sh en deno.land
+- `deno check` op de lijst uit `frontend-checks.yml` (40 bestanden): schoon. esm.sh en deno.land
   zijn vanuit deze sessie niet bereikbaar, dus de imports gingen via een import map naar
   dezelfde versies op npm en JSR. In CI loopt de controle gewoon via esm.sh.
-- `supabase db start`: de hele keten op een lege database, met de nieuwe migratie; daarna de
-  migratie nog eens: geen fout.
+- `supabase db start`: de hele keten op een lege database, met de nieuwe migratie als laatste
+  (na `20261118100000`); daarna de migratie nog eens: geen fout. De twee nieuwe migraties van
+  staging raken de inbox, de meldingen en hun controles niet.
 - Een SQL-controle op die database:
   - een lid zonder Financiën ziet 0 rijen van de werklijst en alleen zijn eigen declaratie;
   - een andere organisatie wordt geweigerd, en anon mag de functie niet aanroepen;
