@@ -150,7 +150,12 @@ schrijven), de rest alleen voor de server. Veilig om meermaals te draaien.
 - **Stroomtest** `bank`: 19 stappen, 0 fout. Nieuw in de stap over
   inkoopfacturen: `processed`/`remaining`/`next_cursor` via de REST-laag, een
   kapotte cursor geweigerd, en verder na een geldige cursor.
+- **De hele stroomtest** (alle scenario's): 1.230 stappen, 0 fout. Die toetst
+  ook het versnelde rekeningschema-hulpje, dat elke boeking raakt: facturen,
+  Mollie, activa, vooruitbetaald, eenmanszaak, vof en prognose.
 - **Browser** `ui.mjs bank`: 10 stappen, 0 fout.
+- `npm run test:mobile -- --theme=both --pages=bank,purchase-invoices`: 12 van
+  12. `npm run test:loading`: alle controles geslaagd.
 - `npm test`: 2.067, waaronder `bankMatch.test.ts`: de zinnen, rondes optellen,
   doorgaan tot er geen cursor meer is, en stoppen na het maximum of zonder
   voortgang.
