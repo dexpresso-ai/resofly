@@ -283,10 +283,10 @@ Een eenmanszaak of vof ziet de raming meteen, op basis van de boekhouding die er
 al staat. Zolang er niets is opgeslagen, volgt het urencriterium de uren uit
 Uren.
 
-*Frontend checks* van deze uitrol (run 259): de keten vanaf nul met de
-databasetests, de Deno-check van de edge functions, typecheck, CSP en de
-unittests zijn groen. De mobiele lay-outtest, het laden per module, de
-inrichtingsstappen en de terugknop liepen nog bij het schrijven van dit stuk.
+*Frontend checks* van deze uitrol (run 259): helemaal groen. Daarin zaten de
+keten vanaf nul met de databasetests, de Deno-check van de edge functions,
+typecheck, CSP en de unittests. Ook de mobiele lay-outtest in licht en
+donker, het laden per module, de inrichtingsstappen en de terugknop.
 
 Voor productie: dezelfde migratie, na de migraties van vandaag
 (`20261118090000` t/m `20261118144500`). Hij is veilig om opnieuw te draaien.
