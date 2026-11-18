@@ -83,6 +83,9 @@ Waarschuwingen:
   niet geboekt: er kwam veel tegelijk binnen"; de volgende ronde boekt verder.
   Zonder die grens liep een eerste import met een jaar aan betalingen tegen de
   8 seconden van PostgREST aan en ging de hele import verloren.
+  *Bijgewerkt dezelfde dag:* de vaste drie seconden zijn vervangen door een
+  grens die meegroeit met de echte tijdgrens, in rondes met een cursor; zie
+  [CHANGELOG_BANK_MATCHEN_SNELLER_2026-11-18.md](CHANGELOG_BANK_MATCHEN_SNELLER_2026-11-18.md).
 
 ### Een factuur ná de betaling
 

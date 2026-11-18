@@ -97,7 +97,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // mee: waaróp een betaling is gekoppeld en of ResoFly hem zelf boekte, hoort
 // bij de administratie. Geen geheim en geen opslagsleutel. Verder een rijtype
 // (bank_open_purchase_invoice), functies en triggers; geen tabellen.
-export const EXPORT_SCHEMA_VERSION = '20261118190000';
+// 20261118200000 (bank: matchen sneller) vervangt functies en zet het rijtype
+// bank_sales_invoice_ref erbij; geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261118200000';
 
 export type TableKind =
   | 'export'

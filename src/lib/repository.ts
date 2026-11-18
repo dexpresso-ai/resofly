@@ -14,6 +14,7 @@ import { cleanQuery, entityTypesFor, periodStart, type AuditFilters } from './au
 import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import { formatISODate } from './dates';
 import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods';
+import { runMatchRounds } from './bankMatch';
 import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
 import type {
   AiConsent,
@@ -2473,7 +2474,7 @@ export async function importBankTransactions(
     inserted?: number; skipped?: number; statement_id?: UUID | null;
     duplicates?: number; skipped_no_date?: number; skipped_zero_amount?: number;
     balance_ok?: boolean | null; balance_difference_cents?: number | null;
-  } & Partial<Record<keyof BankMatchResult, number>>;
+  } & BankMatchRow;
   return {
     inserted: row.inserted ?? 0,
     skipped: row.skipped ?? 0,
@@ -2517,33 +2518,66 @@ export interface BankMatchResult {
   auto_booked: number;
   /** Waarvan tegen een inkoopfactuur (20261118190000). */
   auto_booked_purchase: number;
-  /** Zeker, maar nog niet geboekt: er kwam te veel tegelijk binnen. Nog eens matchen boekt ze. */
-  auto_book_pending: number;
   /** Bankregels die een handmatige mutatie bevestigen en daarmee zijn samengevoegd. */
   merged: number;
+  /** Nagelopen in deze ronde (20261118200000). */
+  processed: number;
+  /** Nog niet nagelopen: de ronde stopte vóór de tijdgrens van de database. */
+  remaining: number;
+  /** Waar de volgende ronde verder moet (matchBankTransactions met cursor), of null. */
+  next_cursor: string | null;
 }
 
-function bankMatchResult(row: Partial<Record<keyof BankMatchResult, number>> | null | undefined): BankMatchResult {
+type BankMatchRow = Partial<Record<Exclude<keyof BankMatchResult, 'next_cursor'>, number>> & { next_cursor?: string | null };
+
+function bankMatchResult(row: BankMatchRow | null | undefined): BankMatchResult {
   return {
     suggested: row?.suggested ?? 0,
     auto_booked: row?.auto_booked ?? 0,
     auto_booked_purchase: row?.auto_booked_purchase ?? 0,
-    auto_book_pending: row?.auto_book_pending ?? 0,
     merged: row?.merged ?? 0,
+    processed: row?.processed ?? 0,
+    remaining: row?.remaining ?? 0,
+    next_cursor: row?.next_cursor ?? null,
   };
 }
 
-/** Stelt opnieuw matches/voorstellen voor over de openstaande transacties, en boekt wat zeker is. */
+/**
+ * Eén matchronde: stelt matches/voorstellen voor over de openstaande
+ * transacties en boekt wat zeker is. Stopt de ronde vóór de tijdgrens, dan
+ * staat er een next_cursor in de uitkomst: geef die mee aan de volgende ronde.
+ */
 export async function matchBankTransactions(
   organizationId: UUID,
   bankAccountId?: UUID | null,
+  cursor?: string | null,
 ): Promise<BankMatchResult> {
-  const { data, error } = await supabase.rpc('match_bank_transactions', {
+  const params: Record<string, unknown> = {
     p_organization_id: organizationId,
     p_bank_account_id: bankAccountId ?? null,
-  });
+  };
+  // Alleen meesturen als de database er zelf een gaf: een database van vóór
+  // 20261118200000 kent p_cursor niet.
+  if (cursor) params.p_cursor = cursor;
+  const { data, error } = await supabase.rpc('match_bank_transactions', params);
   if (error) throw bookkeepingError(error);
-  return bankMatchResult(data as Partial<Record<keyof BankMatchResult, number>> | null);
+  return bankMatchResult(data as BankMatchRow | null);
+}
+
+/**
+ * Matchen tot alles is nagelopen: de eerste ronde (of de uitkomst van het
+ * inlezen als `first`), en dan verder met de cursor zolang de database er een
+ * teruggeeft. Elke ronde blijft onder de tijdgrens; samen doen ze alles.
+ */
+export async function matchBankTransactionsInRounds(
+  organizationId: UUID,
+  bankAccountId: UUID | null,
+  options: { first?: BankMatchResult; maxRounds?: number; onProgress?: (sofar: BankMatchResult) => void } = {},
+): Promise<BankMatchResult> {
+  const first = options.first ?? await matchBankTransactions(organizationId, bankAccountId);
+  return runMatchRounds(first, (cursor) => matchBankTransactions(organizationId, bankAccountId, cursor), {
+    maxRounds: options.maxRounds, onProgress: options.onProgress,
+  });
 }
 
 /** Eén regel van een verdeling zoals book_bank_transaction hem aanneemt. */
