@@ -838,6 +838,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     risk: 'high',
     description:
       'Boekt een concept-inkoopfactuur in het grootboek: de kosten op de gekozen rekeningen, de voorbelasting op 1500 en de crediteurenstand op 1600. Pas daarna telt de factuur mee in de btw-aangifte en is hij tegen een banktransactie af te letteren. ' +
+      'Staat de betaling al op de bank en is het zeker (bedrag precies, en het factuurnummer of de leverancier herkend), dan lettert ResoFly die betaling bij het boeken meteen af; anders krijgt die betaling een voorstel. ' +
       'Controleer eerst de regels en de grootboekrekeningen met `list_purchase_invoices`. ' +
       'DIT IS DEFINITIEF: na het boeken is de factuur niet meer te wijzigen en kan alleen nog met een tegenboeking worden gecorrigeerd. Valt de factuurdatum in een afgesloten periode (boekjaar of btw-aangifte), dan boekt ResoFly op de eerste open datum daarna — mogelijk in het volgende boekjaar; de factuurdatum zelf blijft staan.',
     keywords: ['inkoopfactuur boeken', 'grootboek', 'voorbelasting', 'crediteuren', 'definitief', 'boeken'],
@@ -1322,9 +1323,9 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     module: 'finance',
     kind: 'write',
     description:
-      'Laat de matcher opnieuw over alle openstaande banktransacties lopen en stelt facturen of grootboekrekeningen voor. ' +
-      'LET OP: bankregels waarbij "automatisch boeken" aanstaat, BOEKEN de gevonden transacties meteen in het grootboek — dat zijn definitieve boekingen die alleen met een tegenboeking terug te draaien zijn. Zonder zulke regels blijft het bij voorstellen.',
-    keywords: ['matchen', 'opnieuw matchen', 'afletteren', 'voorstellen', 'bankregels', 'automatisch boeken'],
+      'Laat de matcher opnieuw over alle openstaande banktransacties lopen (ook die al een voorstel hadden) en stelt facturen, inkoopfacturen of grootboekrekeningen voor. ' +
+      'LET OP: een betaling die ZEKER bij een geboekte inkoopfactuur hoort (het bedrag klopt precies én het factuurnummer staat in de omschrijving, of de leverancier is herkend aan zijn IBAN of naam), wordt op rekeningen waar dat aanstaat METEEN tegen die factuur geboekt. Bankregels met "automatisch boeken" boeken hun transacties ook meteen. Dat zijn definitieve boekingen die alleen met een tegenboeking terug te draaien zijn (`bank_transaction.unbook`); daarna boekt de matcher die transactie nooit meer vanzelf. Twijfel blijft een voorstel.',
+    keywords: ['matchen', 'opnieuw matchen', 'afletteren', 'voorstellen', 'bankregels', 'automatisch boeken', 'inkoopfacturen koppelen', 'betalingen koppelen'],
     input: { bank_account_id: { type: 'string', description: 'Beperk tot één bankrekening (optioneel).' } },
     async plan(ctx, input) {
       const bankAccountId = optId(input, 'bank_account_id');
@@ -1340,19 +1341,38 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       const { data: autoRules } = await orgQuery(ctx, 'bank_rules', 'id, name').eq('auto_book', true).eq('is_active', true);
       const auto: Array<{ name: string }> = (autoRules ?? []) as Array<{ name: string }>;
 
+      // Zekere betalingen van inkoopfacturen boekt de matcher meteen
+      // (20261118190000), per rekening uit te zetten. Kan de instelling niet
+      // gelezen worden, ga dan uit van aan: liever een zwaardere knop dan een
+      // onverwachte boeking.
+      let accountsQuery = orgQuery(ctx, 'bank_accounts', 'id, auto_book_purchase_invoices');
+      if (bankAccountId) accountsQuery = accountsQuery.eq('id', bankAccountId);
+      const { data: accountRows, error: accountsError } = await accountsQuery;
+      const purchaseAutoOn = accountsError != null
+        || ((accountRows ?? []) as Array<{ auto_book_purchase_invoices?: boolean | null }>).some((a) => a.auto_book_purchase_invoices !== false);
+      const { count: openPurchase } = await ctx.db.from('purchase_invoices').select('id', { count: 'exact', head: true })
+        .eq('organization_id', ctx.organizationId).not('journal_entry_id', 'is', null)
+        .neq('status', 'cancelled').neq('payment_status', 'paid');
+      const purchaseAuto = purchaseAutoOn && Number(openPurchase ?? 0) > 0;
+      const books = auto.length > 0 || purchaseAuto;
+
       return {
         title: `Openstaande banktransacties opnieuw matchen (${scope})`,
         sub: joinShort([
           `${Number(count ?? 0)} openstaande transacties`,
+          purchaseAuto
+            ? `${Number(openPurchase)} openstaande inkoopfactu${Number(openPurchase) === 1 ? 'ur' : 'ren'}: zekere betalingen worden meteen geboekt`
+            : null,
           auto.length > 0
             ? `${auto.length} regel${auto.length === 1 ? '' : 's'} met automatisch boeken: ${auto.map((r) => r.name).join(', ')}`
-            : 'geen regels met automatisch boeken: het blijft bij voorstellen',
+            : null,
+          books ? null : 'het blijft bij voorstellen',
         ], 200),
-        // Zonder auto-boekregels is dit ongevaarlijk; mét zulke regels ontstaan er
+        // Zonder iets wat vanzelf boekt is dit ongevaarlijk; anders ontstaan er
         // meteen definitieve boekingen, en dat hoort een zwaardere knop te krijgen.
-        risk: auto.length > 0 ? 'high' : 'normal',
-        warning: auto.length > 0
-          ? 'Die regels boeken de gevonden transacties meteen definitief in het grootboek; terugdraaien kan alleen met een tegenboeking.'
+        risk: books ? 'high' : 'normal',
+        warning: books
+          ? 'Wat zeker is, wordt meteen definitief in het grootboek geboekt; terugdraaien kan alleen met een tegenboeking.'
           : undefined,
         kind: 'money',
         payload: { bank_account_id: bankAccountId, scope },

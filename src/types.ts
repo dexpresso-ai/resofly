@@ -3115,6 +3115,11 @@ export interface BankAccount extends OrgScopedRow {
   last_sync_error?: string | null;
   last_imported_at: string | null;
   is_active: boolean;
+  /**
+   * Zekere betalingen van inkoopfacturen meteen boeken (migratie
+   * 20261118190000; ontbreekt daarvóór). Uit = alleen voorstellen.
+   */
+  auto_book_purchase_invoices?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -3205,6 +3210,26 @@ export interface BankTransaction {
   merged_by?: UUID | null;
   /** Losgemaakt: de matcher voegt deze bankregel niet meer vanzelf samen. */
   auto_merge_blocked?: boolean;
+  /** Waaróp de matcher dit voorstelde of boekte, in gewone woorden (20261118190000). */
+  match_reason?: string | null;
+  /**
+   * Een voorstel over meer dan één stuk (verzamelbetaling, of een factuur met
+   * een rest), zoals book_bank_transaction het als p_allocations aanneemt. Een
+   * regel 'ledger' zonder account_id is "de rest, kies zelf een rekening".
+   */
+  suggested_allocations?: BankSuggestedAllocation[] | null;
+  /** Door de matcher geboekt (inkoopfactuur of bankregel), niet door een mens. */
+  auto_booked?: boolean;
+  /** Een automatische boeking is teruggedraaid: de matcher boekt hem niet meer vanzelf. */
+  auto_book_blocked?: boolean;
+}
+
+/** Eén regel van BankTransaction.suggested_allocations. Bedrag in de richting van de transactie. */
+export interface BankSuggestedAllocation {
+  kind: 'purchase_invoice' | 'ledger';
+  amount_cents: number;
+  purchase_invoice_id?: UUID;
+  account_id?: UUID;
 }
 
 /** Soort regel in de verdeling van een bankboeking. */

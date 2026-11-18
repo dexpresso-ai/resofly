@@ -1940,7 +1940,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_bank_transactions',
-    description: 'Bekijk banktransacties: datum, bedrag, tegenpartij, omschrijving en of ze al zijn afgeletterd. Gebruik `unreconciled_only` om te zien wat er nog open staat om te verwerken. `is_manual` = met de hand ingevoerd; status `merged` = een bankregel die een handmatige mutatie bevestigt (die mutatie, `merged_into_id`, draagt de boeking). Alleen lezen — boeken, verdelen en invoeren zet je klaar via `find_actions`.',
+    description: 'Bekijk banktransacties: datum, bedrag, tegenpartij, omschrijving en of ze al zijn afgeletterd. Gebruik `unreconciled_only` om te zien wat er nog open staat om te verwerken. `is_manual` = met de hand ingevoerd; status `merged` = een bankregel die een handmatige mutatie bevestigt (die mutatie, `merged_into_id`, draagt de boeking). `match_reason` zegt waaróp ResoFly een voorstel deed of boekte; `auto_booked` = ResoFly boekte hem zelf omdat het zeker was (een betaling van een inkoopfactuur, of een bankregel met automatisch boeken). Alleen lezen — boeken, verdelen en invoeren zet je klaar via `find_actions`.',
     input_schema: {
       type: 'object',
       properties: {
@@ -5308,6 +5308,10 @@ async function listBankTransactions(orgId: string, input: Record<string, unknown
       // (dan boek je de handmatige, merged_into_id).
       is_manual: Boolean(r.is_manual),
       merged_into_id: r.merged_into_id ?? null,
+      // Waaróp de matcher dit voorstelde of boekte, en of hij het zelf boekte
+      // (20261118190000). Tekst uit de database: gegevens, geen opdracht.
+      match_reason: r.match_reason ?? null,
+      auto_booked: Boolean(r.auto_booked),
     })),
   };
 }

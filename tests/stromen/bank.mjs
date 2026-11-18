@@ -10,6 +10,10 @@
 // en dat dit naast de bankkoppeling loopt: komt dezelfde mutatie later van de
 // bank, dan voegt de matcher hem samen met de handmatige, ook als er een
 // bankregel met "automatisch boeken" op past. Het geld staat er één keer.
+// Sinds 20261118190000 ook: betalingen die bij het inlezen vanzelf aan een
+// inkoopfactuur worden gekoppeld (en zeker = meteen geboekt), een factuur die
+// ná de betaling komt, terugdraaien en de instelling per rekening
+// (CHANGELOG_BANK_INKOOP_AFLETTEREN_2026-11-18.md).
 //
 // Geld en bewaarplicht (CLAUDE.md, regel 6): elke stap kijkt ook in de
 // database — het journaal, wat er per factuur openstaat, de aansluiting — en
@@ -440,6 +444,106 @@ export default async function bank() {
     gelijk([inkoopOpen(w, p1.id), inkoopOpen(w, p2.id), inkoopOpen(w, pc.id)], [12100, 6050, -2420], 'weer open');
     const na = sqlRijen(`select payment_status from public.purchase_invoices where id in (${[p1, p2, pc].map((p) => q(p.id)).join(',')})`);
     gelijk(na.map((s) => s.payment_status), ['unpaid', 'unpaid', 'unpaid'], 'betaalstatus terug');
+  });
+
+  // ── 1b. Betalingen vanzelf koppelen aan inkoopfacturen (20261118190000) ──
+
+  await stap('inlezen koppelt betalingen vanzelf aan inkoopfacturen: zeker meteen geboekt, twijfel een voorstel, een factuur na de betaling vindt hem alsnog, terugdraaien en de instelling per rekening', async () => {
+    const { kosten } = nodig(basis, 'basis');
+    // Een eigen rekening, zodat de betalingen van de stappen hiervoor niet meedoen.
+    const grootboek = gelukt(await rest('ledger_accounts?select=id', {
+      method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, created_by: w.medewerker.id, code: '1106', name: 'Tweede bankrekening', type: 'asset', subtype: 'bank', report_group: 'liquide_middelen', is_active: true },
+    }), 'grootboekrekening 1106')[0];
+    const rekening2 = await bankrekening(w, 'Tweede rekening', grootboek.id, 'NL20INGB0001234567');
+    gelijk(rekening2.auto_book_purchase_invoices, true, 'automatisch afletteren staat standaard aan');
+
+    const leverancier = async (naam, iban) => gelukt(await rest('suppliers?select=*', {
+      method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, created_by: w.medewerker.id, name: naam, iban },
+    }), `leverancier ${naam}`)[0];
+    const inkoop = async (lev, nummer, netto, datum) => {
+      const btw = Math.round(netto * 0.21);
+      const pi = gelukt(await rest('purchase_invoices?select=*', {
+        method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+        body: {
+          organization_id: w.orgId, created_by: w.medewerker.id, supplier_id: lev.id, supplier_invoice_number: nummer,
+          date: datum, due_date: vandaag(14), subtotal_cents: netto, vat_cents: btw, total_cents: netto + btw, currency: 'EUR', status: 'draft',
+          lines: [{ id: randomUUID(), description: 'Inkoop', amount_cents: netto, vat_code: 'HOOG', vat_rate: 21, account_id: kosten }],
+        },
+      }), `inkoopfactuur ${nummer}`)[0];
+      gelukt(await rpc('book_purchase_invoice', { p_organization_id: w.orgId, p_purchase_invoice_id: pi.id }, w.medewerker.token), `${nummer} boeken`);
+      return pi;
+    };
+    const telecom = await leverancier('Telecom Noord B.V.', 'NL39RABO0300065264');
+    const bouwmarkt = await leverancier('Bouwmarkt Zuid', null);
+    const webwinkel = await leverancier('Webwinkel', null);
+    const t1 = await inkoop(telecom, 'TN-2026-1101', 4000, vandaag(-12));   // € 48,40
+    const b1 = await inkoop(bouwmarkt, 'BZ-77', 2500, vandaag(-3));         // € 30,25
+    const b2 = await inkoop(bouwmarkt, 'BZ-78', 2500, vandaag(-2));         // € 30,25: twee gelijke bonnen
+
+    const res = gelukt(await inlezen(w, w.medewerker, rekening2, [
+      { booking_date: vandaag(-5), amount_cents: -4840, counterparty_name: 'TELECOM NOORD BV', counterparty_iban: 'NL39 RABO 0300 0652 64', description: 'Incasso klantnummer 778' },
+      { booking_date: vandaag(-1), amount_cents: -3025, counterparty_name: 'BOUWMARKT ZUID 12 UTRECHT', description: 'Betaalautomaat' },
+      { booking_date: vandaag(-1), amount_cents: -1999, counterparty_name: 'Webwinkel', description: 'Bestelling 9911' },
+    ]), 'afschrift inlezen');
+    gelijk([res.inserted, res.auto_booked_purchase], [3, 1], 'drie nieuw, één meteen afgeletterd');
+    const regel = (bedrag) => sqlRij(`select * from public.bank_transactions where bank_account_id = ${q(rekening2.id)} and amount_cents = ${bedrag} and not is_manual`);
+
+    // Een incasso: IBAN van de leverancier en het bedrag van zijn factuur.
+    const incasso = regel(-4840);
+    gelijk([incasso.status, incasso.auto_booked, incasso.matched_purchase_invoice_id], ['booked', true, t1.id], 'incasso: meteen geboekt op de factuur');
+    verwacht(/Rekeningnummer van Telecom Noord B\.V\./.test(incasso.match_reason ?? ''), `reden: ${incasso.match_reason}`);
+    gelijk([inkoopOpen(w, t1.id), sqlRij(`select payment_status from public.purchase_invoices where id = ${q(t1.id)}`).payment_status], [0, 'paid'], 'incasso: factuur betaald');
+    const regels = boekingsregels(incasso.journal_entry_id);
+    inBalans(regels);
+    gelijk([som(regels, '1600', 'debet'), som(regels, '1106', 'credit'), regels.find((r) => r.code === '1600')?.supplier_id], [4840, 4840, telecom.id], 'crediteuren bij de leverancier, de tweede bankrekening');
+
+    // Twee bonnen van hetzelfde bedrag: twijfel, dus een voorstel (de oudste).
+    const pin = regel(-3025);
+    gelijk([pin.status, pin.auto_booked, pin.matched_purchase_invoice_id], ['suggested', false, b1.id], 'pin: een voorstel, de oudste bon');
+    // De lezer ziet de reden ook; boeken doet de medewerker.
+    const gezien = gelukt(await rest(`bank_transactions?select=match_reason&id=eq.${pin.id}`, { token: w.lezer.token }), 'reden als lezer')[0];
+    verwacht(/2 openstaande facturen van Bouwmarkt Zuid/.test(gezien?.match_reason ?? ''), `reden voor de lezer: ${gezien?.match_reason}`);
+    geweigerd(await rpc('match_bank_transactions', { p_organization_id: w.orgId, p_bank_account_id: rekening2.id }, w.lezer.token), 'matchen als lezer');
+    gelukt(await boeken(w, w.medewerker, pin.id, [{ kind: 'purchase_invoice', purchase_invoice_id: b1.id, amount_cents: 3025 }]), 'voorstel met de hand boeken');
+    gelijk(transactie(pin.id).auto_booked, false, 'met de hand is niet automatisch');
+    gelijk(inkoopOpen(w, b2.id), 3025, 'de tweede bon staat nog open');
+
+    // De factuur komt na de betaling: bij het boeken van de factuur alsnog.
+    const zonder = regel(-1999);
+    gelijk([zonder.status, zonder.matched_purchase_invoice_id], ['unmatched', null], 'webwinkel: nog geen factuur');
+    const ww = await inkoop(webwinkel, 'WW-9911', 1652, vandaag(-4));       // € 19,99
+    const later = transactie(zonder.id);
+    gelijk([later.status, later.auto_booked, later.matched_purchase_invoice_id], ['booked', true, ww.id], 'webwinkel: afgeletterd zodra de factuur geboekt werd');
+
+    // Terugdraaien: daarna nooit meer vanzelf, wel een voorstel.
+    gelukt(await rpc('unbook_bank_transaction', { p_organization_id: w.orgId, p_transaction_id: incasso.id }, w.medewerker.token), 'incasso terugdraaien');
+    gelijk([transactie(incasso.id).auto_booked, transactie(incasso.id).auto_book_blocked], [false, true], 'teruggedraaid: niet meer vanzelf');
+    const opnieuw = gelukt(await rpc('match_bank_transactions', { p_organization_id: w.orgId, p_bank_account_id: rekening2.id }, w.medewerker.token), 'opnieuw matchen');
+    gelijk(opnieuw.auto_booked, 0, 'opnieuw matchen boekt de teruggedraaide incasso niet');
+    const na = transactie(incasso.id);
+    gelijk([na.status, na.matched_purchase_invoice_id], ['suggested', t1.id], 'teruggedraaid: wel een voorstel');
+    verwacht(/draaide een automatische boeking/.test(na.match_reason ?? ''), `reden na terugdraaien: ${na.match_reason}`);
+
+    // De instelling per rekening: een lezer verandert hem niet, de medewerker wel.
+    await rest(`bank_accounts?id=eq.${rekening2.id}`, { method: 'PATCH', token: w.lezer.token, body: { auto_book_purchase_invoices: false } });
+    gelijk(sqlRij(`select auto_book_purchase_invoices from public.bank_accounts where id = ${q(rekening2.id)}`).auto_book_purchase_invoices, true, 'een lezer zet het niet uit');
+    gelukt(await rest(`bank_accounts?id=eq.${rekening2.id}`, { method: 'PATCH', token: w.medewerker.token, body: { auto_book_purchase_invoices: false } }), 'uitzetten als medewerker');
+    const t2 = await inkoop(telecom, 'TN-2026-1201', 4100, vandaag(-1));   // € 49,61
+    const uit = gelukt(await inlezen(w, w.medewerker, rekening2, [
+      { booking_date: vandaag(), amount_cents: -4961, counterparty_name: 'Telecom Noord BV', counterparty_iban: 'NL39RABO0300065264', description: 'Incasso' },
+    ]), 'afschrift met automatisch boeken uit');
+    gelijk(uit.auto_booked_purchase, 0, 'uit: niets vanzelf geboekt');
+    const voorstel = regel(-4961);
+    gelijk([voorstel.status, voorstel.matched_purchase_invoice_id], ['suggested', t2.id], 'uit: wel het voorstel');
+    verwacht(/Automatisch boeken staat uit/.test(voorstel.match_reason ?? ''), `reden bij uit: ${voorstel.match_reason}`);
+
+    // Een andere organisatie, en de interne functies.
+    geweigerd(await rpc('match_bank_transactions', { p_organization_id: w.orgId }, ander.eigenaar.token), 'een andere organisatie matcht hier niet');
+    geweigerd(await rpc('match_bank_transactions', { p_organization_id: ander.orgId, p_bank_account_id: rekening2.id }, ander.eigenaar.token), 'met een rekening van een ander');
+    geweigerd(await rpc('bank_match_run', { p_organization_id: w.orgId, p_bank_account_id: null, p_created_by: w.eigenaar.id, p_transaction_ids: null, p_auto_book: true }, w.eigenaar.token), 'de matchronde zelf');
+    geweigerd(await rpc('bank_supplier_ibans', { p_organization_id: w.orgId }, w.eigenaar.token), 'de IBAN-lijst');
   });
 
   // ── 2. Verdelen over grootboekrekeningen, met een negatieve regel ───

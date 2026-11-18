@@ -1,5 +1,5 @@
 import {
-  bookAssetAcquisition, bookAssetDisposal, bookBankTransaction, bookPrepaidExpenseStart, bookPurchaseInvoice,
+  bookAssetAcquisition, bookAssetDisposal, bookBankTransaction, bookPrepaidExpenseStart, bookPurchaseInvoice, fetchPurchaseInvoicePaymentStatus,
   closeFiscalYear, closeVatPeriod, createManualBankTransaction, createOpeningBalance, createVatSupplement,
   deleteManualBankTransaction, endPrepaidExpense, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, matchBankTransactions,
   mergeBankTransactions, openFiscalYear, payPurchaseInvoicePrivately, postAssetDepreciation, postManualJournalEntry, postPrepaidReleases, reopenFiscalYear,
@@ -7,6 +7,7 @@ import {
   updateManualBankTransaction, updateRow, type BankAllocationInput,
 } from '../repository';
 import { purchaseTotals } from '../../features/Bookkeeping';
+import { describeMatchResult } from '../bankMatch';
 import { runInvoiceInboxAction } from '../invoice-inbox-api';
 import { INBOX_STATUS_LABELS, inboxReasonLabel } from '../invoiceInbox';
 import { flag, list, optText, patchOf, text, type ActionExecutor } from './types';
@@ -120,10 +121,17 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
   },
 
   'purchase_invoice.book': async (payload, ctx) => {
-    const entry = await bookPurchaseInvoice(ctx.organizationId, text(payload, 'purchase_invoice_id'));
+    const id = text(payload, 'purchase_invoice_id');
+    const entry = await bookPurchaseInvoice(ctx.organizationId, id);
     const number = optText(payload, 'number');
     const supplier = optText(payload, 'supplier_name');
-    return `Inkoopfactuur ${number ?? ''}${supplier ? ` van ${supplier}` : ''} geboekt als ${entry.entry_number ?? 'boekstuk'}`.replace('  ', ' ');
+    // Een betaling die al op de bank stond, lettert de database bij het boeken
+    // meteen af als hij zeker is (20261118190000). Dat hoort in het antwoord.
+    const paid = await fetchPurchaseInvoicePaymentStatus(ctx.organizationId, id).catch(() => null);
+    const tail = paid?.payment_status === 'paid'
+      ? '; de betaling stond al op de bank en is meteen afgeletterd (betaald)'
+      : paid?.payment_status === 'partially_paid' ? '; een betaling op de bank is meteen afgeletterd (deels betaald)' : '';
+    return `Inkoopfactuur ${number ?? ''}${supplier ? ` van ${supplier}` : ''} geboekt als ${entry.entry_number ?? 'boekstuk'}${tail}`.replace('  ', ' ');
   },
 
   'purchase_invoice.pay_privately': async (payload, ctx) => {
@@ -204,8 +212,8 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
     const bankAccountId = optText(payload, 'bank_account_id') as UUID | null;
     const result = await matchBankTransactions(ctx.organizationId, bankAccountId);
     const scope = optText(payload, 'scope');
-    const merged = result.merged > 0 ? `; ${result.merged} bankregel(s) samengevoegd met een handmatige mutatie` : '';
-    return `${result.suggested} transacties kregen een voorstel en ${result.auto_booked} zijn automatisch geboekt${merged}${scope ? ` (${scope})` : ''}`;
+    // Dezelfde zin als op de Bankpagina na "Opnieuw matchen".
+    return `${describeMatchResult(result)}${scope ? ` (${scope})` : ''}`;
   },
 
   'bank_transaction.book': async (payload, ctx) => {

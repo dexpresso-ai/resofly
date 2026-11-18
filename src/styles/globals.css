@@ -3867,6 +3867,16 @@ body::before{
    rekening, btw, klant, bedrag en omschrijving op een laptop op één lijn past
    en op een telefoon onder elkaar valt. */
 .bank-tag-manual{color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));border-color:var(--border)}
+/* Vanzelf koppelen aan inkoopfacturen (20261118190000): waaróp het herkend is,
+   en het label bij wat ResoFly zelf boekte. Een voorstel op alleen het bedrag
+   is zwakker en staat in grijs. */
+.bank-tag-auto{color:var(--accent-ink);background:rgba(var(--accent-rgb),.1);border-color:rgba(var(--accent-rgb),.28)}
+.bank-tx-info small.bank-tx-reason{display:flex;align-items:flex-start;gap:5px;font-weight:500}
+.bank-tx-info small.bank-tx-reason svg{flex-shrink:0;margin-top:2px}
+.bank-tx-info small.bank-tx-reason.is-weak{color:var(--muted2)}
+.bk-setting-check.bank-setting-auto{align-items:flex-start}
+.bk-setting-check.bank-setting-auto input{margin-top:2px;flex-shrink:0}
+.bank-setting-help{display:block;margin-top:3px;font-size:.76rem;line-height:1.45}
 .bank-tx-info small.bank-tx-partner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;white-space:normal;overflow:visible;color:var(--muted2);margin-top:2px}
 .bank-link{background:none;border:0;padding:0;color:var(--accent-ink);font-weight:600;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
 .bank-link:disabled{opacity:.5;cursor:default}

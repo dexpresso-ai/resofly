@@ -18,6 +18,7 @@ import {
   setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction, updateManualBankTransaction, updateRow,
 } from '../lib/repository';
 import { parseDutchAmountCents } from '../lib/money';
+import { describeMatchResult } from '../lib/bankMatch';
 import { amsterdamTodayIso } from '../lib/dates';
 import {
   addLine, allocationPayload, allocationState, buildManualIndex, centsToInput, manualMatchesFor, naturalAmount, putRemainder,
@@ -119,7 +120,9 @@ function ReconcileTab({ data, organizationId, canWrite, onChanged }: PageProps) 
     setMatching(true); setError(null); setNotice(null);
     try {
       const res = await matchBankTransactions(organizationId);
-      if (res.merged > 0) setNotice(`${res.merged} ${res.merged === 1 ? 'bankregel bevestigt' : 'bankregels bevestigen'} een mutatie die je zelf invoerde; samengevoegd.`);
+      // Zeg wat er vanzelf geboekt is: anders lijken transacties te verdwijnen
+      // uit "Openstaand" (ze staan onder "Geboekt", met het label automatisch).
+      setNotice(describeMatchResult(res));
       onChanged();
     }
     catch (e) { setError(e instanceof Error ? e.message : 'Matchen mislukt'); }
@@ -242,6 +245,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
             {txn.counterparty_name || txn.description || 'Transactie'}
             {manual && <span className="bank-tag bank-tag-manual">handmatig</span>}
             {manual && partner && <span className="bank-tag">bevestigd door bank</span>}
+            {txn.status === 'booked' && txn.auto_booked && <span className="bank-tag bank-tag-auto" title="Door ResoFly geboekt omdat het zeker was">automatisch</span>}
           </strong>
           <small className="bk-muted">
             {accountName}
@@ -250,6 +254,14 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
           </small>
           {isOpen && txn.match_confidence === 'tax_authority' && (
             <small className="bank-tx-hint">Herkend als Belastingdienst — voorgesteld: omzetbelasting (1530). De aangifte met dit saldo wordt bij boeken automatisch op “Betaald” gezet.</small>
+          )}
+          {/* Waaróp de matcher dit voorstelde of boekte (20261118190000). Zonder
+              uitleg kun je een voorstel niet beoordelen, en vertrouwt niemand
+              een automatische boeking. */}
+          {(isOpen || (txn.status === 'booked' && txn.auto_booked)) && txn.match_reason && txn.match_confidence !== 'tax_authority' && (
+            <small className={`bank-tx-hint bank-tx-reason${txn.match_confidence === 'purchase_amount' ? ' is-weak' : ''}`}>
+              <Sparkles size={12} aria-hidden="true" /> {txn.status === 'booked' ? `Automatisch geboekt: ${txn.match_reason}` : txn.match_reason}
+            </small>
           )}
           {manual && partner && (
             <small className="bank-tx-partner">
@@ -895,7 +907,12 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
                     return rec ? <ReconciliationPanel rec={rec} /> : null;
                   })()}
                   <div className="bank-account-meta">
-                    <span className="bk-muted">{count} transacties · {linked ? lastSync(a) : lastImport(a)}</span>
+                    <span className="bk-muted">
+                      {count} transacties · {linked ? lastSync(a) : lastImport(a)}
+                      {a.auto_book_purchase_invoices !== undefined && (a.auto_book_purchase_invoices
+                        ? ' · inkoopfacturen: zeker = meteen geboekt'
+                        : ' · inkoopfacturen: alleen voorstellen')}
+                    </span>
                     <span className="bk-spacer" />
                     {/* Afschrift inlezen kan ALTIJD, ook bij een gekoppelde rekening: de
                         PSD2-sync levert geen begin-/eindsaldo mee, dus zonder een CAMT- of
@@ -1002,7 +1019,8 @@ function ImportButton({ account, organizationId, canWrite, onChanged }: { accoun
       const parsed = await parseBankFile(file);
       if (parsed.transactions.length === 0) throw new Error('Geen transacties in dit bestand gevonden.');
       const res = await importBankTransactions(organizationId, account.id, parsed);
-      setMsg(`${res.inserted} nieuw, ${res.duplicates} al bekend (${parsed.format.toUpperCase()}).`);
+      const matched = describeMatchResult(res.match, { nothingText: null });
+      setMsg(`${res.inserted} nieuw, ${res.duplicates} al bekend (${parsed.format.toUpperCase()}).${matched ? ` ${matched}` : ''}`);
       // Klopt het afschrift met zichzelf? Beginsaldo + regels moet het eindsaldo
       // geven; zo niet, dan mist het bestand regels en zou de bank straks niet
       // aansluiten zonder dat je weet waarom.
@@ -1034,9 +1052,15 @@ function BankAccountForm({ data, organizationId, canWrite, account, onClose, onS
 }) {
   const bankAccounts = useMemo(() => data.ledgerAccounts.filter(a => a.type === 'asset'), [data.ledgerAccounts]);
   const defaultLedger = data.ledgerAccounts.find(a => a.subtype === 'bank') ?? data.ledgerAccounts.find(a => a.code === '1100');
+  // De instelling bestaat pas na migratie 20261118190000. Zonder de kolom niet
+  // meesturen: PostgREST weigert dan de hele opslag.
+  const hasAutoBookSetting = account
+    ? account.auto_book_purchase_invoices !== undefined
+    : data.bankAccounts.some(a => a.auto_book_purchase_invoices !== undefined);
   const [form, setForm] = useState<Record<string, any>>(() => account ? {
     name: account.name, iban: account.iban ?? '', currency: account.currency, ledger_account_id: account.ledger_account_id, is_active: account.is_active,
-  } : { name: '', iban: '', currency: 'EUR', ledger_account_id: defaultLedger?.id ?? '', is_active: true });
+    auto_book_purchase_invoices: account.auto_book_purchase_invoices ?? true,
+  } : { name: '', iban: '', currency: 'EUR', ledger_account_id: defaultLedger?.id ?? '', is_active: true, auto_book_purchase_invoices: true });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
@@ -1046,7 +1070,8 @@ function BankAccountForm({ data, organizationId, canWrite, account, onClose, onS
     if (!form.ledger_account_id) { setError('Kies een grootboekrekening.'); return; }
     setBusy(true); setError(null);
     try {
-      const values = { name: form.name, iban: form.iban || null, currency: form.currency || 'EUR', ledger_account_id: form.ledger_account_id, is_active: Boolean(form.is_active) };
+      const values: Record<string, unknown> = { name: form.name, iban: form.iban || null, currency: form.currency || 'EUR', ledger_account_id: form.ledger_account_id, is_active: Boolean(form.is_active) };
+      if (hasAutoBookSetting) values.auto_book_purchase_invoices = Boolean(form.auto_book_purchase_invoices);
       account ? await updateRow<BankAccount>('bank_accounts', account.id, values, organizationId)
               : await insertRow<BankAccount>('bank_accounts', organizationId, { ...values, source: 'import' });
       onSaved();
@@ -1084,6 +1109,18 @@ function BankAccountForm({ data, organizationId, canWrite, account, onClose, onS
         <input type="checkbox" checked={Boolean(form.is_active)} onChange={e => set('is_active', e.target.checked)} disabled={!canWrite} />
         <span>Actief</span>
       </label>
+      {hasAutoBookSetting && (
+        <label className="bk-setting-check bk-account-active bank-setting-auto">
+          <input type="checkbox" checked={Boolean(form.auto_book_purchase_invoices)} onChange={e => set('auto_book_purchase_invoices', e.target.checked)} disabled={!canWrite} />
+          <span>
+            Betalingen van inkoopfacturen meteen boeken als het zeker is
+            <small className="bk-muted bank-setting-help">
+              Zeker = het bedrag klopt precies én het factuurnummer staat in de omschrijving, of de leverancier is herkend aan zijn
+              rekeningnummer of naam. Uit: ResoFly stelt de factuur alleen voor en jij klikt op Boeken.
+            </small>
+          </span>
+        </label>
+      )}
     </Modal>
   );
 }
@@ -1099,7 +1136,12 @@ function RulesTab({ data, organizationId, canWrite, onChanged }: PageProps) {
   return (
     <div className="bk-page">
       <div className="bk-subhead">
-        <p className="bk-muted">Regels stellen automatisch een grootboekrekening voor bij herkende transacties (bv. bankkosten). Zet “Automatisch boeken” aan om ze direct te boeken zodra ze binnenkomen.</p>
+        <p className="bk-muted">
+          Betalingen van inkoopfacturen koppelt ResoFly zelf, vóór deze regels: op het factuurnummer in de omschrijving, of op het
+          rekeningnummer of de naam van de leverancier samen met het bedrag. Is dat zeker, dan staat de betaling meteen geboekt
+          (per rekening uit te zetten onder “Rekeningen &amp; koppeling”). Regels zijn voor de rest: ze stellen een grootboekrekening
+          voor bij herkende transacties (bv. bankkosten). Zet “Automatisch boeken” aan om ze direct te boeken zodra ze binnenkomen.
+        </p>
         <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe regel</Button>
       </div>
       {data.bankRules.length === 0

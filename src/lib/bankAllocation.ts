@@ -118,11 +118,36 @@ function mentioned(text: string, docs: BankOpenDocument[]): BankOpenDocument[] {
 }
 
 /**
+ * Het voorstel van de matcher over meer dan één stuk (suggested_allocations,
+ * 20261118190000): een verzamelbetaling over de oudste facturen van een
+ * leverancier, of een factuur met een rest. Een regel 'ledger' zonder rekening
+ * is "de rest": die rekening kies je zelf. Null als er zo'n voorstel niet is.
+ */
+export function serverAllocations(txn: BankTransaction): DraftAllocation[] | null {
+  const list = Array.isArray(txn.suggested_allocations) ? txn.suggested_allocations : [];
+  if (list.length < 2) return null;
+  const lines: DraftAllocation[] = [];
+  for (const item of list) {
+    const cents = Number(item?.amount_cents);
+    if (!Number.isFinite(cents) || cents === 0) continue;
+    if (item.kind === 'purchase_invoice' && item.purchase_invoice_id) {
+      lines.push(emptyDraft('purchase_invoice', { documentId: item.purchase_invoice_id, amount: centsToInput(cents) }));
+    } else if (item.kind === 'ledger') {
+      lines.push(emptyDraft('ledger', {
+        accountId: item.account_id ?? txn.suggested_account_id ?? '',
+        vatCode: item.account_id ? '' : txn.suggested_vat_code ?? '',
+        amount: centsToInput(cents),
+      }));
+    }
+  }
+  return lines.length >= 2 ? lines : null;
+}
+
+/**
  * Een eerste verdeling voor een openstaande transactie. Het voorstel van de
- * server (matcher of bankregel) gaat voor; noemt de omschrijving meerdere
- * openstaande stukken, dan krijgt elk een regel met zijn openstaande bedrag en
- * gaat de rest op een grootboekregel. Dat laatste kan de server niet: die kent
- * per transactie maar één voorstel.
+ * server (matcher of bankregel) gaat voor, ook als dat over meer stukken gaat;
+ * noemt de omschrijving meerdere openstaande stukken, dan krijgt elk een regel
+ * met zijn openstaande bedrag en gaat de rest op een grootboekregel.
  */
 export function suggestAllocations(txn: BankTransaction, candidates: BankAllocationCandidates | null): DraftAllocation[] {
   const full = Math.abs(txn.amount_cents);
@@ -133,6 +158,9 @@ export function suggestAllocations(txn: BankTransaction, candidates: BankAllocat
     vatCode: txn.suggested_vat_code ?? '',
     ...patch,
   });
+
+  const fromServer = serverAllocations(txn);
+  if (fromServer) return fromServer;
 
   if (candidates) {
     const docs: Array<{ kind: BankAllocationKind; doc: BankOpenDocument; open: number }> = incoming

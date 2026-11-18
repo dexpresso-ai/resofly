@@ -1903,6 +1903,95 @@ async function scenarioBank() {
       await page.evaluate((waarde) => { if (waarde) document.documentElement.setAttribute('data-theme', waarde); else document.documentElement.removeAttribute('data-theme'); }, themaVoor);
     }
   });
+
+  // Betalingen vanzelf koppelen aan inkoopfacturen (20261118190000): wat de
+  // gebruiker ziet van een automatische boeking, en de instelling per rekening.
+  await uiStap('een betaling van een inkoopfactuur: meteen geboekt met het label "automatisch" en de reden; automatisch boeken uit- en aanzetten, en "Opnieuw matchen" zegt wat er gebeurde', async () => {
+    const lid = t.lid;
+    const page = lid.page;
+    const kosten = gelukt(await rest(`ledger_accounts?select=id&organization_id=eq.${w.orgId}&code=eq.4500`, { token: w.medewerker.token }), 'rekening 4500')[0];
+    const leverancier = gelukt(await rest('suppliers?select=*', {
+      method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, created_by: w.medewerker.id, name: 'Drukkerij UI', iban: 'NL44RABO0123456788' },
+    }), 'leverancier')[0];
+    const inkoop = async (nummer, netto) => {
+      const pi = gelukt(await rest('purchase_invoices?select=*', {
+        method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
+        body: {
+          organization_id: w.orgId, created_by: w.medewerker.id, supplier_id: leverancier.id, supplier_invoice_number: nummer,
+          date: datum(), due_date: datum(), subtotal_cents: netto, vat_cents: Math.round(netto * 0.21), total_cents: netto + Math.round(netto * 0.21),
+          currency: 'EUR', status: 'draft',
+          lines: [{ id: randomUUID(), description: 'Drukwerk', amount_cents: netto, vat_code: 'HOOG', vat_rate: 21, account_id: kosten.id }],
+        },
+      }), `inkoopfactuur ${nummer}`)[0];
+      gelukt(await rpc('book_purchase_invoice', { p_organization_id: w.orgId, p_purchase_invoice_id: pi.id }, w.medewerker.token), `${nummer} boeken`);
+      return pi;
+    };
+    const p1 = await inkoop('DUI-1', 10000);
+    const p2 = await inkoop('DUI-2', 5000);
+    gelukt(await rpc('import_bank_transactions', {
+      p_organization_id: w.orgId, p_bank_account_id: b.rekening.id, p_statement: { format: 'csv', file_name: 'ui-inkoop.csv' },
+      p_transactions: [{ booking_date: datum(), amount_cents: -12100, counterparty_name: 'DRUKKERIJ UI', counterparty_iban: 'NL44 RABO 0123 4567 88', description: 'Overboeking' }],
+    }, w.medewerker.token), 'afschrift met de betaling');
+    gelijk(sqlRij(`select payment_status from public.purchase_invoices where id = ${q(p1.id)}`).payment_status, 'paid', 'meteen afgeletterd');
+
+    await ververs(lid);
+    await bankTab(lid, 'Geboekt');
+    const geboekt = bankRij(page, 'DRUKKERIJ UI').first();
+    await geboekt.waitFor({ timeout: 10000 });
+    const tekstGeboekt = tekst(await geboekt.innerText());
+    verwacht(/automatisch/i.test(tekstGeboekt), `geen label "automatisch": ${tekstGeboekt.slice(0, 300)}`);
+    verwacht(tekstGeboekt.includes('Automatisch geboekt: Rekeningnummer van Drukkerij UI en het bedrag van inkoopfactuur DUI-1.'), `geen reden bij de geboekte betaling: ${tekstGeboekt.slice(0, 400)}`);
+    verwacht(tekstGeboekt.includes('Inkoopfactuur DUI-1'), 'de verdeling noemt de inkoopfactuur niet');
+    await schermafdruk('bank-automatisch-geboekt', lid);
+
+    // Uitzetten in het bewerkvenster van de rekening.
+    const zet = async (aan) => {
+      await inhoud(page).locator('.bk-tabs button').filter({ hasText: /Rekeningen/ }).click();
+      await rustig(lid);
+      const kaart = inhoud(page).locator('.bank-account-card').filter({ hasText: 'Zakelijk UI' }).first();
+      await kaart.getByRole('button', { name: 'Bewerk' }).click();
+      const m = modal(page, 'Bankrekening bewerken');
+      await m.waitFor({ timeout: 10000 });
+      const vink = m.locator('label.bank-setting-auto input[type="checkbox"]');
+      gelijk(await vink.isChecked(), !aan, 'de instelling staat zoals verwacht vóór het wijzigen');
+      await vink.setChecked(aan);
+      const sinds = server.verkeer.length;
+      await klik(m, 'Opslaan');
+      await m.waitFor({ state: 'detached', timeout: 10000 });
+      await rustig(lid);
+      verwachtAanroep(sinds, { tabel: 'bank_accounts', methode: 'PATCH' }, 'rekening opslaan');
+      gelijk(sqlRij(`select auto_book_purchase_invoices from public.bank_accounts where id = ${q(b.rekening.id)}`).auto_book_purchase_invoices, aan, 'de instelling in de database');
+      await wachtTot(async () => (aan ? /zeker = meteen geboekt/ : /alleen voorstellen/).test(await kaart.innerText()), { melding: 'de kaart toont de instelling niet' });
+    };
+    await zet(false);
+
+    gelukt(await rpc('import_bank_transactions', {
+      p_organization_id: w.orgId, p_bank_account_id: b.rekening.id, p_statement: { format: 'csv', file_name: 'ui-inkoop-2.csv' },
+      p_transactions: [{ booking_date: datum(), amount_cents: -6050, counterparty_name: 'DRUKKERIJ UI', counterparty_iban: 'NL44RABO0123456788', description: 'Tweede overboeking' }],
+    }, w.medewerker.token), 'afschrift met de tweede betaling');
+    await ververs(lid);
+    await inhoud(page).locator('.bk-tabs button').filter({ hasText: /Af te letteren/ }).click();
+    await rustig(lid);
+    await bankTab(lid, 'Openstaand');
+    const open = bankRij(page, 'Tweede overboeking').first();
+    await open.waitFor({ timeout: 10000 });
+    verwacht(/Automatisch boeken staat uit voor deze rekening/.test(await open.innerText()), 'de reden zegt niet dat automatisch boeken uit staat');
+    const keuze = tekst(await open.locator('.bank-alloc-line .select-control').nth(1).locator('.select-value').innerText());
+    verwacht(keuze.startsWith('DUI-2'), `de voorgestelde inkoopfactuur: ${keuze}`);
+
+    // Weer aan, en dan "Opnieuw matchen": die boekt hem en zegt het.
+    await zet(true);
+    await inhoud(page).locator('.bk-tabs button').filter({ hasText: /Af te letteren/ }).click();
+    await rustig(lid);
+    const sinds = server.verkeer.length;
+    await inhoud(page).getByRole('button', { name: 'Opnieuw matchen' }).click();
+    await rustig(lid);
+    verwachtAanroep(sinds, { rpc: 'match_bank_transactions' }, 'opnieuw matchen');
+    await wachtTot(async () => /1 betaling meteen afgeletterd tegen een inkoopfactuur/.test(await inhoud(page).locator('.bank-reconcile .bk-note').first().innerText().catch(() => '')),
+      { melding: 'geen melding na opnieuw matchen' });
+    gelijk(sqlRij(`select payment_status from public.purchase_invoices where id = ${q(p2.id)}`).payment_status, 'paid', 'de tweede factuur is betaald');
+  });
 }
 
 // ── Inrichten: een nieuwe gebruiker richt zijn organisatie in ───────────────

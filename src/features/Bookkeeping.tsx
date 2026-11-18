@@ -13,7 +13,7 @@ import { formatEmailDateTime } from '../components/ClientEmailMessage';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
-  bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
+  bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, fetchPurchaseInvoicePaymentStatus, insertRow,
   listPartnershipPartners, loadInboundAlias, loadPurchaseInvoiceInbox, openingBalancePlugAccount, payPurchaseInvoicePrivately,
   postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow, setUpBookkeeping
 } from '../lib/repository';
@@ -399,6 +399,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
   const [scan, setScan] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [privatePay, setPrivatePay] = useState<PurchaseInvoice | null>(null);
   // Privé betalen bestaat alleen bij een eenmanszaak, vof, maatschap of cv.
   const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
@@ -460,8 +461,18 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
 
   async function book(pi: PurchaseInvoice) {
     if (!canWrite) return;
-    setBusyId(pi.id); setError(null);
-    try { await bookPurchaseInvoice(organizationId, pi.id); onChanged(); }
+    setBusyId(pi.id); setError(null); setNotice(null);
+    try {
+      await bookPurchaseInvoice(organizationId, pi.id);
+      // Stond de betaling al op de bank (een incasso, een pinbetaling), dan
+      // heeft de database hem bij het boeken meteen afgeletterd
+      // (20261118190000). Zeg dat: anders zoek je hem nog op de Bankpagina.
+      const label = `Inkoopfactuur ${pi.internal_number || pi.supplier_invoice_number || ''}`.trim();
+      const paid = await fetchPurchaseInvoicePaymentStatus(organizationId, pi.id).catch(() => null);
+      if (paid?.payment_status === 'paid') setNotice(`${label} is geboekt. De betaling stond al op de bank en is meteen afgeletterd: de factuur staat op betaald.`);
+      else if (paid?.payment_status === 'partially_paid') setNotice(`${label} is geboekt. Een betaling die al op de bank stond, is meteen afgeletterd: de factuur is deels betaald.`);
+      onChanged();
+    }
     catch (e) { setError(e instanceof Error ? e.message : 'Boeken mislukt'); }
     finally { setBusyId(null); }
   }
@@ -482,6 +493,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
         </div>
       </div>
       {error && <div className="error">{error}</div>}
+      {notice && <div className="bk-note" role="status">{notice}</div>}
       {!notReady && <PurchaseInvoiceInboxPanel
         data={data}
         organizationId={organizationId}

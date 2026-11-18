@@ -2458,6 +2458,8 @@ export async function importBankTransactions(
   inserted: number; skipped: number; statement_id: UUID | null;
   duplicates: number; skippedNoDate: number; skippedZeroAmount: number;
   balanceOk: boolean | null; balanceDifferenceCents: number | null;
+  /** Wat de matcher meteen deed met wat er nieuw binnenkwam (20261118190000; nullen daarvóór). */
+  match: BankMatchResult;
 }> {
   const { transactions, warnings: _warnings, ...meta } = statement;
   const { data, error } = await supabase.rpc('import_bank_transactions', {
@@ -2471,7 +2473,7 @@ export async function importBankTransactions(
     inserted?: number; skipped?: number; statement_id?: UUID | null;
     duplicates?: number; skipped_no_date?: number; skipped_zero_amount?: number;
     balance_ok?: boolean | null; balance_difference_cents?: number | null;
-  };
+  } & Partial<Record<keyof BankMatchResult, number>>;
   return {
     inserted: row.inserted ?? 0,
     skipped: row.skipped ?? 0,
@@ -2481,6 +2483,7 @@ export async function importBankTransactions(
     skippedZeroAmount: row.skipped_zero_amount ?? 0,
     balanceOk: row.balance_ok ?? null,
     balanceDifferenceCents: row.balance_difference_cents ?? null,
+    match: bankMatchResult(row),
   };
 }
 
@@ -2506,19 +2509,41 @@ export async function selectBankReconciliation(organizationId: UUID): Promise<Ba
   return (data ?? []) as BankReconciliation[];
 }
 
-/** Stelt opnieuw matches/voorstellen voor over de openstaande transacties. */
+/** Wat een matchronde deed (match_bank_transactions en import_bank_transactions). */
+export interface BankMatchResult {
+  /** Transacties die nu een voorstel hebben. */
+  suggested: number;
+  /** Vanzelf geboekt: tegen een inkoopfactuur of door een bankregel. */
+  auto_booked: number;
+  /** Waarvan tegen een inkoopfactuur (20261118190000). */
+  auto_booked_purchase: number;
+  /** Zeker, maar nog niet geboekt: er kwam te veel tegelijk binnen. Nog eens matchen boekt ze. */
+  auto_book_pending: number;
+  /** Bankregels die een handmatige mutatie bevestigen en daarmee zijn samengevoegd. */
+  merged: number;
+}
+
+function bankMatchResult(row: Partial<Record<keyof BankMatchResult, number>> | null | undefined): BankMatchResult {
+  return {
+    suggested: row?.suggested ?? 0,
+    auto_booked: row?.auto_booked ?? 0,
+    auto_booked_purchase: row?.auto_booked_purchase ?? 0,
+    auto_book_pending: row?.auto_book_pending ?? 0,
+    merged: row?.merged ?? 0,
+  };
+}
+
+/** Stelt opnieuw matches/voorstellen voor over de openstaande transacties, en boekt wat zeker is. */
 export async function matchBankTransactions(
   organizationId: UUID,
   bankAccountId?: UUID | null,
-): Promise<{ suggested: number; auto_booked: number; merged: number }> {
+): Promise<BankMatchResult> {
   const { data, error } = await supabase.rpc('match_bank_transactions', {
     p_organization_id: organizationId,
     p_bank_account_id: bankAccountId ?? null,
   });
   if (error) throw bookkeepingError(error);
-  // merged: bankregels die een handmatige mutatie bevestigen en daarmee zijn samengevoegd.
-  const row = (data ?? {}) as { suggested?: number; auto_booked?: number; merged?: number };
-  return { suggested: row.suggested ?? 0, auto_booked: row.auto_booked ?? 0, merged: row.merged ?? 0 };
+  return bankMatchResult(data as Partial<Record<keyof BankMatchResult, number>> | null);
 }
 
 /** Eén regel van een verdeling zoals book_bank_transaction hem aanneemt. */
@@ -3970,6 +3995,25 @@ export async function bookPurchaseInvoice(organizationId: UUID, purchaseInvoiceI
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/**
+ * De betaalstatus van een inkoopfactuur, vers uit de database. Bij het boeken
+ * zoekt de database meteen de betaling die al op de bank stond en lettert die
+ * af als hij zeker is (20261118190000); zo kan het scherm dat melden.
+ */
+export async function fetchPurchaseInvoicePaymentStatus(
+  organizationId: UUID,
+  purchaseInvoiceId: UUID,
+): Promise<{ payment_status: PurchaseInvoice['payment_status']; paid_at: string | null } | null> {
+  const { data, error } = await supabase
+    .from('purchase_invoices')
+    .select('payment_status, paid_at')
+    .eq('organization_id', organizationId)
+    .eq('id', purchaseInvoiceId)
+    .maybeSingle();
+  if (error) throw bookkeepingError(error);
+  return (data ?? null) as { payment_status: PurchaseInvoice['payment_status']; paid_at: string | null } | null;
 }
 
 /** Boekt een verkoopfactuur naar het grootboek (omzet + af te dragen BTW). */
