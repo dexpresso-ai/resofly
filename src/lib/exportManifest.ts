@@ -68,7 +68,12 @@ export const EXPORT_FORMAT_VERSION = 1;
 // geen kolommen); geen tabellen of kolommen.
 // 20261118100000 (btw-tijdvak wisselen) vervangt drie btw-functies; geen
 // tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261118100000';
+// 20261118120000 (bonnen en declaraties) zet channel, submitted_by en
+// review_note op purchase_invoice_inbox. Die gaan mee met de inbox: waar een
+// bon vandaan kwam, wie hem instuurde en waarom een declaratie is afgewezen,
+// hoort bij de administratie. Geen geheim, geen nieuwe opslagsleutel (de foto
+// staat al in attachments).
+export const EXPORT_SCHEMA_VERSION = '20261118120000';
 
 export type TableKind =
   | 'export'

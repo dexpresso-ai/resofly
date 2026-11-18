@@ -84,6 +84,13 @@ const PORTAL_CREDIT = { selector: '.portal-foot-by', text: 'beschikbaar gesteld 
 // donkere letters, die op de donkere kop wegvallen).
 const PORTAL_LOGO_ON_PLATE = { selector: '.portal-hero .brand-logo.plate-light img', label: 'het logo op een licht plaatje in de kop' };
 
+// Een klein plaatje als "foto van een bon" (60×96 px, grijs, met regels als
+// op een kassabon). De app maakt er zelf een JPEG van, zoals bij een echte
+// foto; daarvoor moet het een geldige PNG zijn (createImageBitmap is streng,
+// een <img> niet: het tegelplaatje van de mock is dat niet).
+const RECEIPT_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAADwAAABgCAAAAABk204iAAAAZElEQVR42u2XoQ0AIAwEGQzNEEzCJEyLQGAQpKShEJrc+TPfMw3tgIDsVE47/pS5szO5rngic6q7cpGZhDwwk1lbGk6/tiyzNm3TNm3TNm3TNm3TtsO2+W6UctRiJnMqZGQzuQOLFgqFPkzjQQAAAABJRU5ErkJggg==';
+const CAMERA = 'input[data-receipt-input="camera"]';
+
 /**
  * Instellingen → een onderdeel. Sinds 2026-11-18 staan de onderdelen in groepen:
  * eerst de groep die het onderdeel noemt (data-settings-tabs), dan het onderdeel
@@ -106,6 +113,35 @@ function settingsPage(tab, spec = {}) {
 
 /** Welke pagina's, en met welk tabblad ze openen. */
 const PAGES = {
+  // Bonnen fotograferen en declaraties (2026-11-18). Inkoopfacturen met de
+  // werklijst (een declaratie die op goedkeuring wacht, en een bon die Gerrie
+  // niet las); het bonvenster terwijl Gerrie leest en met de uitslag; de
+  // werklijst met het afwijzen van een declaratie open; en Declaraties als
+  // teamlid zonder Financiën, leeg en na het indienen.
+  'purchase-invoices': { page: 'purchase-invoices', mock: { ledger: true } },
+  'bon-lezen': {
+    page: 'purchase-invoices', mock: { ledger: true, receiptReading: true }, prepare: { upload: CAMERA }, contained: '.rcp-modal',
+    mustShow: [{ selector: '.rcp-working .rcp-paper', label: 'de bon op de scanner' }, { selector: '.rcp-working .aire-steps', label: 'de stappen van Gerrie' }],
+  },
+  'bon-concept': {
+    page: 'purchase-invoices', mock: { ledger: true }, prepare: { upload: CAMERA }, contained: '.rcp-modal',
+    mustShow: [{ selector: '.rcp-result.is-done', label: 'de uitslag' }, { selector: '.rcp-foot .btn-primary', text: 'Verder', label: 'de knop Verder' }, { selector: '.rcp-foot .btn', text: 'Nieuwe boeking', label: 'de knop Nieuwe boeking' }],
+  },
+  // Gelezen, maar de winkel is nog geen leverancier: de keuzelijst met een
+  // lange naam duwde de kaart buiten het venster.
+  'bon-leverancier': {
+    page: 'purchase-invoices', mock: { ledger: true, receiptOutcome: 'supplier' }, prepare: { upload: CAMERA }, contained: '.rcp-modal',
+    mustShow: [{ selector: '.rcp-result .select-control', label: 'de keuze van de leverancier' }],
+  },
+  'declaratie-afwijzen': {
+    page: 'purchase-invoices', mock: { ledger: true }, prepare: '.pi-inbox-row button:has-text("Afwijzen")',
+    mustShow: [{ selector: '.pi-inbox-decline textarea', label: 'het veld voor de reden' }],
+  },
+  declaraties: { page: 'declarations', mock: { declarant: true }, mustShow: [{ selector: '.decl-hero .rcp-launch .btn-primary', text: 'Bon fotograferen', label: 'de knop Bon fotograferen' }] },
+  'declaratie-ingediend': {
+    page: 'declarations', mock: { declarant: true }, prepare: { upload: CAMERA }, contained: '.rcp-modal',
+    mustShow: [{ selector: '.rcp-result.is-done', text: 'ingediend', label: 'de bevestiging' }, { selector: '.rcp-foot .btn', text: 'Nieuwe declaratie', label: 'de knop Nieuwe declaratie' }],
+  },
   dashboard: 'dashboard', gerrie: 'gerrie', weekplanner: 'weekplanner', calendar: 'calendar', time: 'time',
   clients: 'clients', client: { page: 'client', clientId: seed.clients[0].id },
   projects: 'projects', project: { page: 'project', projectId: seed.projects[0].id },
@@ -361,6 +397,12 @@ const PAGES = {
  * weekplanner, teamchat, Berichten) en alles buiten de werkruimte.
  */
 const FIRST_ITEM = {
+  // Bonnen en declaraties (2026-11-18): de eerste regel van de werklijst onder
+  // de vier knoppen van Inkoopfacturen, en de eerste declaratie onder de kaart
+  // met "Bon fotograferen". Gemeten 2026-11-17: 322px en 354px, in licht en
+  // donker gelijk; de grens ligt 20% hoger.
+  'purchase-invoices': { selector: '.pi-inbox-row', maxTop: 386 },
+  declaraties: { selector: '.decl-row', maxTop: 425 },
   dashboard: { selector: '.dash-task', maxTop: 280 },
   // De klantenlijst toont boven de kaarten de tabstrook "Klanten | Niet
   // gekoppeld" zodra er post in de opvangbak ligt — en dat ligt er in de seed
@@ -531,6 +573,14 @@ try {
         // klikken, of { fill, value } om een veld in te vullen. Zo opent de test
         // het gesprek, typt een vraag en verstuurt die.
         for (const step of spec.prepare ? [spec.prepare].flat() : []) {
+          // Een bestand kiezen (2026-11-18): de camera en de galerij van "Bon
+          // fotograferen" zijn verborgen <input type=file>-velden. Die vult de
+          // test rechtstreeks, zoals de telefoon dat na de foto doet.
+          if (typeof step === 'object' && step.upload) {
+            await page.setInputFiles(step.upload, { name: 'bon.png', mimeType: 'image/png', buffer: Buffer.from(RECEIPT_PNG_BASE64, 'base64') }).catch(() => {});
+            await page.waitForTimeout(step.wait ?? 1500);
+            continue;
+          }
           const knop = page.locator(typeof step === 'string' ? step : step.fill).first();
           if (!(await knop.isVisible().catch(() => false))) continue;
           if (typeof step !== 'string') { await knop.fill(step.value); continue; }
@@ -614,6 +664,15 @@ try {
         if (m.pageOverflow > 1 || m.contentOverflow > 1) problems.push(`horizontale overloop (${Math.max(m.pageOverflow, m.contentOverflow)}px)`);
         if (m.chrome > vp.maxChrome) problems.push(`chrome ${m.chrome}px > ${vp.maxChrome}px`);
         if (overlap) problems.push(`${spec.apart[0]} schuift over ${spec.apart[1]} (${overlap}px²)`);
+        // Een venster dat zijwaarts scrolt (`contained`, 2026-11-18). Een venster
+        // staat vast boven de pagina, dus de meting van .content ziet het niet:
+        // de uitslag "winkel nog geen leverancier" liep op de telefoon rechts uit
+        // het bonvenster, en elke andere meting stond op groen.
+        const spill = spec.contained ? await page.evaluate((sel) => {
+          const el = document.querySelector(sel);
+          return el ? el.scrollWidth - el.clientWidth : 0;
+        }, spec.contained) : 0;
+        if (spill > 1) problems.push(`${spec.contained} loopt ${spill}px zijwaarts uit`);
         // Bereikbaarheid geldt op élk formaat — juist liggend, waar de hoogte
         // schaars is, gaat dit mis. 12px is ruim onder een normale regel en
         // ruim boven het gerommel van een afrondingsfout.
