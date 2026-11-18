@@ -265,7 +265,8 @@ test('cashflow: elke maand nagerekend (kwartaal-btw, betaaltermijn, openstaande 
   assert.equal(flow.months[8].vat_cents, 378000); // juli: Q2 2027
   assert.equal(flow.months[11].vat_cents, 378000); // oktober: Q3 2027
   assert.equal(flow.end_cents, 12137000);
-  assert.deepEqual(flow.lowest, { month: '2026-11', cents: 5300000 });
+  // Het laagste punt is nu: daarna komt er alleen bij.
+  assert.deepEqual(flow.lowest, { month: '2026-11', cents: 5000000, at_start: true });
   assert.equal(flow.below_buffer, null);
   assert.deepEqual(flow.vat_payments.map((payment) => [payment.period, payment.month, payment.cents, payment.source]), [
     ['Q4 2026', '2027-01', 378000, 'estimate'],
@@ -282,7 +283,11 @@ test('cashflow: elke maand nagerekend (kwartaal-btw, betaaltermijn, openstaande 
   assert.ok(flow.notes.some((note) => /€ 3\.000 aan facturen is al te laat/.test(note)));
   // De winst verandert er niet door: de cashflow rekent alleen anders in de tijd.
   assert.equal(result.totals.profit_cents, 12 * 1000000 - 12 * 500000);
-  assert.equal(summarizeCashflow(flow), 'Saldo nu € 50.000; laagste € 53.000 eind november 2026; eind oktober 2027 € 121.370; btw naar de Belastingdienst € 15.120.');
+  assert.equal(summarizeCashflow(flow), 'Saldo nu € 50.000, daarna niet lager; eind oktober 2027 € 121.370; btw naar de Belastingdienst € 15.120.');
+  // Met een grote uitgave in februari zakt het eronder: dan dat punt.
+  const bus = computeCashflow(computeForecast({ items: [{ id: 'post-1', label: 'Bus', kind: 'cash_out', amount: 60000, from: '2027-02', to: '2027-02' }] }, STEADY, TODAY), STEADY, POSITION, TODAY);
+  assert.deepEqual(bus.lowest, { month: '2027-02', cents: 7463000 - 6000000, at_start: false });
+  assert.match(summarizeCashflow(bus), /^Saldo nu € 50\.000; laagste € 14\.630 eind februari 2027;/);
 });
 
 test('cashflow: zonder betaalgedrag de betaaltermijn, en een aangifte die er al is telt met haar saldo', () => {
@@ -357,7 +362,9 @@ test('cashflow: geld erbij en eraf telt alleen in de cashflow; zelf ingevuld gaa
   assert.equal(flow.below_buffer, null);
   const tight = computeCashflow(computeForecast({ ...assumptions, cash_start: 5000 }, STEADY, TODAY), STEADY, { ...POSITION, vat_returns: [], receivables: [], payables: [] }, TODAY);
   assert.equal(tight.months[0].end_cents, 800000);
+  // Nu al onder de ondergrens (€ 5.000 tegen € 10.000): deze maand.
   assert.equal(tight.below_buffer, '2026-11');
+  assert.deepEqual(tight.lowest, { month: '2026-11', cents: 500000, at_start: true });
   assert.ok(describeCashflow(flow).includes('Ondergrens saldo: € 10.000'));
 });
 

@@ -143,7 +143,7 @@ function cashflowView(flow: CashflowResult, includeMonths: boolean) {
       accounts: flow.bank.map((account) => ({ name: account.name, balance: account.balance_cents === null ? null : eur(account.balance_cents), method: account.method, as_of: account.as_of })),
       cash_box: eur(flow.cash_accounts_cents),
     },
-    lowest: flow.lowest ? { month: flow.lowest.month, balance: eur(flow.lowest.cents) } : null,
+    lowest: flow.lowest ? { month: flow.lowest.at_start ? 'nu' : flow.lowest.month, balance: eur(flow.lowest.cents) } : null,
     end_balance: flow.available ? eur(flow.end_cents) : null,
     below_buffer_month: flow.below_buffer,
     open_invoices: eur(flow.open.receivables_cents),
@@ -249,7 +249,7 @@ function effectText(before: ForecastResult | null, after: ForecastResult): strin
  */
 function cashEffectText(before: CashflowResult | null, after: CashflowResult): string | null {
   if (!after.available || !after.lowest || !after.effective.start_known) return null;
-  const is = `${wholeEuroText(after.lowest.cents)} (${monthLabel(after.lowest.month)})`;
+  const is = `${wholeEuroText(after.lowest.cents)} (${after.lowest.at_start ? 'nu' : monthLabel(after.lowest.month)})`;
   if (!before || !before.available || !before.lowest) return `laagste saldo ${is}`;
   const was = wholeEuroText(before.lowest.cents);
   return was === wholeEuroText(after.lowest.cents) ? `laagste saldo ${is}` : `laagste saldo ${was} → ${is}`;

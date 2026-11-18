@@ -1446,8 +1446,12 @@ export interface CashflowResult {
   unknown_accounts: string[];
   months: CashflowMonth[];
   totals: CashflowTotals;
-  /** Het laagste saldo aan het eind van een maand. */
-  lowest: { month: string; cents: number } | null;
+  /**
+   * Het laagste saldo: nu (at_start) of aan het eind van een maand. Het saldo
+   * van nu telt mee: anders zei de cashflow "laagste € 37.431" terwijl er nu
+   * € 30.450 staat, omdat het die maand alleen maar beter wordt.
+   */
+  lowest: { month: string; cents: number; at_start: boolean } | null;
   end_cents: number;
   /** De eerste maand die eindigt onder de ondergrens (bij 0: onder nul). */
   below_buffer: string | null;
@@ -1669,8 +1673,8 @@ export function computeCashflow(result: ForecastResult, inputs: ForecastInputs, 
   const months: CashflowMonth[] = [];
   let balance = effective.start_cents;
   const totals: CashflowTotals = { in_cents: 0, out_cents: 0, vat_cents: 0, other_cents: 0, net_cents: 0 };
-  let lowest: { month: string; cents: number } | null = null;
-  let belowBuffer: string | null = null;
+  let lowest: { month: string; cents: number; at_start: boolean } = { month: current, cents: balance, at_start: true };
+  let belowBuffer: string | null = balance < effective.buffer_cents ? current : null;
   for (let t = 0; t < count; t += 1) {
     const month = addMonths(current, t);
     const row = {
@@ -1690,7 +1694,7 @@ export function computeCashflow(result: ForecastResult, inputs: ForecastInputs, 
     totals.vat_cents += row.vat_cents;
     totals.other_cents += row.other_cents;
     totals.net_cents += net;
-    if (!lowest || balance < lowest.cents) lowest = { month, cents: balance };
+    if (balance < lowest.cents) lowest = { month, cents: balance, at_start: false };
     if (belowBuffer === null && balance < effective.buffer_cents) belowBuffer = month;
   }
 
@@ -1727,7 +1731,7 @@ export function computeCashflow(result: ForecastResult, inputs: ForecastInputs, 
 export function summarizeCashflow(flow: CashflowResult): string {
   if (!flow.available) return flow.reason ?? 'Geen cashflow.';
   const start = flow.effective.start_known ? `Saldo nu ${wholeEuroText(flow.effective.start_cents)}` : 'Saldo nu onbekend (gerekend vanaf € 0)';
-  const lowest = flow.lowest ? `; laagste ${wholeEuroText(flow.lowest.cents)} eind ${monthLabel(flow.lowest.month)}` : '';
+  const lowest = !flow.lowest ? '' : flow.lowest.at_start ? ', daarna niet lager' : `; laagste ${wholeEuroText(flow.lowest.cents)} eind ${monthLabel(flow.lowest.month)}`;
   const last = flow.months[flow.months.length - 1];
   const end = last ? `; eind ${monthLabel(last.month)} ${wholeEuroText(flow.end_cents)}` : '';
   const vat = flow.totals.vat_cents !== 0 ? `; btw naar de Belastingdienst ${wholeEuroText(flow.totals.vat_cents)}` : '';

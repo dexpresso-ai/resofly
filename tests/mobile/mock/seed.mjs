@@ -622,12 +622,15 @@ export const aiConsents = [
 // van twaalf maanden waar "automatisch" op rust (forecast_history).
 const monthKey = (offset) => { const d = new Date(NOW.getFullYear(), NOW.getMonth() + offset, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const FORECAST_BASIS = uid('f');
+// Sinds 2026-11-18 met het seizoenspatroon aan, een ondergrens voor het saldo
+// en een investering die alleen in de cashflow telt (een bus).
 const basisAssumptions = {
-  growth_pct: 8, project_months: 2,
+  growth_pct: 8, project_months: 2, seasonality_pct: 100, cash_buffer: 10000,
   month_projects: { [monthKey(8)]: 1 },
   items: [
     { id: 'post-1', label: 'Nieuwe ontwerper (parttime)', kind: 'cost', amount: 2800, from: monthKey(3), to: null },
     { id: 'post-2', label: 'Opdracht jubileum Van Dijk', kind: 'revenue', amount: 12500, from: monthKey(2), to: monthKey(2) },
+    { id: 'post-3', label: 'Nieuwe bus', kind: 'cash_out', amount: 25000, from: monthKey(4), to: monthKey(4) },
   ],
 };
 export const forecasts = [
@@ -642,16 +645,60 @@ export const forecastVersions = [
 const HISTORY_PROJECTS = [3, 2, 4, 3, 2, 3, 1, 2, 4, 3, 3, 2, 1];
 const HISTORY_REVENUE = [1450000, 980000, 1720000, 1260000, 1110000, 1390000, 640000, 870000, 1810000, 1330000, 1420000, 1150000, 310000];
 const HISTORY_COSTS = [905000, 870000, 940000, 910000, 880000, 960000, 790000, 820000, 990000, 930000, 950000, 920000, 410000];
-/** Het antwoord van forecast_history: twaalf hele maanden en deze maand tot nu. */
+/**
+ * Het antwoord van forecast_history: drie hele jaren en deze maand tot nu. De
+ * laatste twaalf maanden zijn die van vóór 18 november (de kerncijfers op het
+ * scherm verschuiven dus niet); de twee jaren ervoor hebben hetzelfde ritme,
+ * iets kleiner, zodat er een seizoenspatroon uit te leren is. Met btw (21%) en
+ * € 250 afschrijving per maand.
+ */
 export function forecastHistory() {
-  const months = HISTORY_PROJECTS.map((projects, i) => ({
-    month: monthKey(i - 12), projects,
-    revenue_project_cents: HISTORY_REVENUE[i], revenue_other_cents: i === 12 ? 60000 : 180000,
-    purchase_cents: Math.round(HISTORY_COSTS[i] * 0.4), ledger_revenue_cents: HISTORY_REVENUE[i] + 180000, ledger_expense_cents: HISTORY_COSTS[i],
-  }));
+  const months = [];
+  for (let i = -36; i <= 0; i += 1) {
+    const recent = i >= -12;
+    const idx = recent ? i + 12 : (i + 36) % 12;
+    const scale = recent ? 1 : i < -24 ? 0.84 : 0.92;
+    const revenue = Math.round(HISTORY_REVENUE[idx] * scale);
+    const other = recent && idx === 12 ? 60000 : 180000;
+    const costs = Math.round(HISTORY_COSTS[idx] * scale);
+    const purchase = Math.round(costs * 0.4);
+    const vatOut = Math.round((revenue + other) * 0.21);
+    const vatIn = Math.round(purchase * 0.21);
+    months.push({
+      month: monthKey(i), projects: HISTORY_PROJECTS[idx],
+      revenue_project_cents: revenue, revenue_other_cents: other,
+      purchase_cents: purchase, ledger_revenue_cents: revenue + other, ledger_expense_cents: costs,
+      vat_out_cents: vatOut, vat_in_cents: vatIn, ledger_vat_out_cents: vatOut, ledger_vat_in_cents: vatIn,
+      ledger_depreciation_cents: i === 0 ? 0 : 25000,
+    });
+  }
   return {
-    from: monthKey(-12), to: monthKey(0), today: dkey(day(0)), projects_visible: true, months,
+    from: monthKey(-36), to: monthKey(0), today: dkey(day(0)), projects_visible: true, months,
     pipeline: { open_count: 3, open_cents: 1840000, accepted_count: 1, accepted_cents: 650000, won_count: 9, lost_count: 5 },
+  };
+}
+
+/** Het antwoord van forecast_cash_position: twee rekeningen, openstaande posten, btw per kwartaal. */
+export function forecastCashPosition() {
+  return {
+    today: dkey(day(0)),
+    bank: [
+      { name: 'ING Zakelijk', balance_cents: 1845000, method: 'statement', as_of: dkey(day(-2)) },
+      { name: 'Spaarrekening', balance_cents: 1200000, method: 'ledger', as_of: dkey(day(0)) },
+    ],
+    cash_accounts_cents: 0,
+    receivables: [
+      { month: monthKey(-1), cents: 302500, count: 1 },
+      { month: monthKey(0), cents: 726000, count: 2 },
+      { month: monthKey(1), cents: 1452000, count: 3 },
+    ],
+    payables: [{ month: monthKey(0), cents: 186000, count: 2 }, { month: monthKey(1), cents: 95000, count: 1 }],
+    vat_frequency: 'quarterly',
+    kor: false,
+    vat_returns: [],
+    tax_payments: [],
+    payment_terms_days: 14,
+    collection: { paid_count: 18, days: 21.5 },
   };
 }
 
