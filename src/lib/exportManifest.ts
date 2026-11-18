@@ -86,7 +86,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // income_tax_kia_exclusions. De fiscale gegevens van de klant zelf: alles gaat
 // mee. Verder twee unieke sleutels (organization_id, id) op
 // partnership_partners en fixed_assets; geen kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261118150000';
+// 20261118171500 (prognose: seizoen en cashflow) vervangt forecast_history en
+// zet forecast_cash_position erbij; geen tabellen of kolommen. De nieuwe
+// aannames staan in forecasts.assumptions (jsonb) en gaan daar al mee.
+export const EXPORT_SCHEMA_VERSION = '20261118171500';
 
 export type TableKind =
   | 'export'
