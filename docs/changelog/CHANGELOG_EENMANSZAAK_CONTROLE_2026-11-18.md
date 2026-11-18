@@ -133,7 +133,17 @@ de halve zelfstandigenaftrek vanaf de AOW-leeftijd) staat eronder.
     btw-tijdvakken uit één RPC, niet uit de boekhoudtabellen);
   - `npm run test:mobile -- --theme=both`: 686 pagina's, 0 problemen;
   - UI-test in Chromium voor offerte, factuur, intrekken, rollen, bank en
-    vooruitbetaald (de knop heet nu "Verstuur per e-mail"): zie hieronder.
+    vooruitbetaald (de knop heet nu "Verstuur per e-mail"): 41 stappen, 0 fout;
+  - de keten vanaf nul (`supabase db reset`), met daarna de stromen
+    eenmanszaak, bank, vooruitbetaald, facturen, inrichten en herinneringen:
+    252 stappen, 0 fout;
+  - na het samenvoegen met staging (instellingen in groepen) opnieuw:
+    typecheck, `npm test` 1941/1941, `test:loading` en `test:mobile` voor de
+    financiële pagina's (48 metingen, 0 problemen);
+  - de pagina's die `test:mobile` niet kent (Eigen vermogen, Omzetbelasting,
+    Activa, Boekjaren) zelf op 390 × 844, donker en licht: niets scrolt
+    zijwaarts. Het overzicht voor de aangifte paste eerst niet (de bedragen
+    vielen achter de veegrij van 560px); nu wel.
 - **Deno-check** (esm.sh is hier geblokkeerd; met een importmap naar npm):
   de 35 functies uit de CI-lijst en `_shared/documentLayout.ts` en
   `documentPdf.ts` schoon; `invoice-workflow` dezelfde 11 meldingen als vóór de
