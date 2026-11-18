@@ -125,7 +125,10 @@ bleef hij staan op het onderdeel waar je vandaan kwam.
 - `npm run typecheck`: groen.
 - `npm test`: 1925 tests, alles groen (waarvan 7 nieuw in settingsMenu.test.ts).
 - `npm run test:terugknop`: 13 van 13, met het nieuwe scenario.
-- `npm run test:mobile -- --theme=both`: zie hieronder.
+- `npm run test:mobile -- --theme=both`: 686 pagina's gemeten, 0 met
+  problemen. De vijftien instellingenpagina's daarna nog eens apart op de
+  definitieve code: 92 metingen, 0 met problemen. Elk onderdeel stond daarbij
+  echt gekozen (de nieuwe eis in `settingsPage`).
 - Met de hand gekeken (schermafdrukken) in Baken licht en donker, Stroom en
   Cockpit: desktop met het paneel vast, het accountmenu open, gescrold, en de
   telefoon met het menu open.
