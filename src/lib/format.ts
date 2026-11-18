@@ -1,8 +1,12 @@
 import { computeTotals, lineGross, lineNet, type MoneyTotals } from './money.ts';
 import { ticketPriorityLabel } from './tickets.ts';
 
-export const euro = (amount: number | null | undefined) =>
-  new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(Number(amount ?? 0));
+export const euro = (amount: number | null | undefined) => {
+  const value = Number(amount ?? 0);
+  // Een kostenpost van nul, omgekeerd voor de weergave (−1 × 0), werd "€ -0,00"
+  // in de vergelijkingskolom van Winst & verlies. Nul is nul.
+  return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(Object.is(value, -0) ? 0 : value);
+};
 
 function parseDateForDisplay(date: string): Date {
   // Treat Postgres DATE values (YYYY-MM-DD) as local calendar dates. `new Date('YYYY-MM-DD')`

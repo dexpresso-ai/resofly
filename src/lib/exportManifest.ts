@@ -63,7 +63,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // gallery_items; geen tabellen of kolommen.
 // 20261115120000 (geen AI kiezen) vervangt set_ai_consent; geen tabellen of
 // kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261115120000';
+// 20261118090000 (eenmanszaak) vervangt boekhoudfuncties en triggers, voegt
+// open_initial_fiscal_years toe en rekeningen aan het rekeningschema (rijen,
+// geen kolommen); geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261118090000';
 
 export type TableKind =
   | 'export'

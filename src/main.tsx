@@ -194,6 +194,7 @@ import { ProjectShiftDialog } from './components/ProjectShiftDialog';
 import type { ProjectShift } from './components/ProjectShiftDialog';
 import { applyPeriodLocally, applyPlanningLocally, applyTimeLocally, clockLabel, mergeTaskRows, restoreTasksForDates, splitTitleAndEstimate } from './lib/planning';
 import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
+import { defaultDueDate } from './lib/financeRules';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat, askGerrie } from './components/GerrieChat';
 import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
@@ -294,7 +295,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], prepaidExpenses: [], prepaidExpenseReleases: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankAllocations: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null, bankTransactionsToReconcile: 0, vatReturnsToFile: 0 };
+const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], prepaidExpenses: [], prepaidExpenseReleases: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankAllocations: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null, bankTransactionsToReconcile: 0, vatReturnsToFile: 0, vatReturnNextDue: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null, aiConsent: null, aiConsents: [] };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 /** Volgnummer voor sprongen naar de pagina Berichten (zie openCommunication). */
@@ -3801,7 +3802,7 @@ function App() {
     const target = editModeForProposal(proposal, data);
     if (!target) throw new Error('Dit voorstel kan hier niet uitgevoerd worden.');
     if ('error' in target) throw new Error(target.error);
-    const values = cleanForm(target.edit.kind, initialForm(target.edit, data), data.clientFieldDefinitions);
+    const values = cleanForm(target.edit.kind, initialForm(target.edit, data), data.clientFieldDefinitions, data);
     // Het formulier vinkt "welkomstmail sturen" standaard aan bij een nieuwe klant.
     // Dat is daar zichtbaar; hier niet. Post naar een klant hoort niet mee te liften
     // op een kaart die alleen "Klant aanmaken" belooft.
@@ -4563,7 +4564,7 @@ function App() {
     if (page === 'vat-returns') return <VatReturnsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'dga') return <DgaPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'corporate-tax') return <CorporateTaxPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'owners') return <OwnersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
+    if (page === 'owners') return <OwnersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} ownerUserId={organizationContext.teamMembers.find(member => member.role === 'owner')?.user_id ?? null}/>;
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
@@ -4951,7 +4952,7 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
     edit.kind === 'task' || edit.kind === 'ticket' || edit.kind === 'project' ? 'modal-task-editor' : '',
   ].filter(Boolean).join(' ');
 
-  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && edit.kind === 'document' && item && !(item as InternalDocument).storage_key && <Button variant="ghost" onClick={() => { onClose(); onConvertToWord(item as InternalDocument); }}>Bewerk als Word</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form, data.clientFieldDefinitions))} disabled={saveBlockedByDuplicate || eInvoiceEmailInvalid}>Opslaan</Button>}</>}>
+  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && edit.kind === 'document' && item && !(item as InternalDocument).storage_key && <Button variant="ghost" onClick={() => { onClose(); onConvertToWord(item as InternalDocument); }}>Bewerk als Word</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form, data.clientFieldDefinitions, data))} disabled={saveBlockedByDuplicate || eInvoiceEmailInvalid}>Opslaan</Button>}</>}>
     {readOnly && <div className="readonly-note">Je bekijkt dit item met alleen-lezen rechten. Wijzigen, verwijderen en uploaden zijn uitgeschakeld.</div>}
     {quoteWorkflowLocked && <div className="readonly-note">Deze offerte zit al in de goedkeuringsflow. Inhoudelijke velden zijn vergrendeld zodat een goedgekeurde of verzonden offerte niet ongemerkt kan wijzigen.</div>}
     {edit.kind === 'client' && <FormGrid className="client-form-grid">
@@ -5334,14 +5335,16 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     const clamped = k === 'vat' ? Math.min(safe, 100) : safe;
     return { ...l, [k]: clamped };
   }));
-  const addLine = () => set('lines', [...lines, { id: uid(), description: '', quantity: 1, unit_price: 0, vat: defaultVatRate(data) }]);
+  const addLine = () => set('lines', [...lines, newFinanceLine(data)]);
   const removeLine = (id: string) => set('lines', lines.length <= 1 ? lines : lines.filter(x => x.id !== id));
 
   // Verkooprelevante btw-codes van de organisatie: die bepalen naast het tarief
   // ook de UBL-categorie van de e-factuur (verlegd/ICP/vrijgesteld i.p.v. een
   // ambigu 0%). Zonder geconfigureerde codes valt de editor terug op het kale
   // percentageveld (en leidt de UBL-generator de categorie af uit het tarief).
-  const SALES_VAT_KINDS = ['standard', 'reduced', 'zero', 'exempt', 'reverse_charge_sales', 'icp_goods', 'icp_services'];
+  // Met de KOR hoort de code KOR erbij; zonder KOR niet (die zou de omzet uit
+  // de aangifte halen).
+  const SALES_VAT_KINDS = ['standard', 'reduced', 'zero', 'exempt', 'reverse_charge_sales', 'icp_goods', 'icp_services', ...(data.companySettings?.kor_enabled ? ['kor'] : [])];
   const salesVatCodes = data.vatCodes.filter(v => SALES_VAT_KINDS.includes(v.kind) && v.is_active !== false);
   const lineVatSelectValue = (line: FinanceLine): string => {
     if (line.vat_code && salesVatCodes.some(v => v.code === line.vat_code)) return line.vat_code;
@@ -5403,7 +5406,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <option value="">Geen project</option>{projectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
-        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt. "Betaald" kan pas als er niets meer openstaat: koppel de ontvangst bij de bank of boek een memoriaalpost op Debiteuren.' : 'Status van de factuur.'}>
+        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt. "Betaald" komt vanzelf als er niets meer openstaat: leg de ontvangst vast bij Bank (Mutatie invoeren, en verdeel hem op deze factuur). Contant ontvangen gaat net zo, met een kasrekening (1000 Kas) als bankrekening.' : 'Status van de factuur.'}>
           <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled || invoiceStatusFixed}>
             {form.status === 'refunded' && <option value="refunded">Terugbetaald</option>}
             <option value="draft">Concept</option>
@@ -5672,6 +5675,17 @@ function defaultVatRate(data: AppData): number {
   return data.companySettings?.kor_enabled ? 0 : 21;
 }
 
+/**
+ * Een lege regel voor een offerte of factuur. Met de KOR krijgt hij de code
+ * KOR: dan staat de vermelding van de kleineondernemersregeling op de factuur
+ * en telt de omzet in geen enkele rubriek. Zonder code gaf de pdf "Btw 0%"
+ * zonder reden, en viel de omzet in rubriek 1e.
+ */
+function newFinanceLine(data: AppData): FinanceLine {
+  const kor = Boolean(data.companySettings?.kor_enabled) && data.vatCodes.some(v => v.code === 'KOR' && v.is_active !== false);
+  return { id: uid(), description: '', quantity: 1, unit_price: 0, vat: defaultVatRate(data), ...(kor ? { vat_code: 'KOR' } : {}) };
+}
+
 function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
   if (edit.kind === "client") {
     const item = edit.item;
@@ -5700,16 +5714,22 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
     const item = edit.item;
     return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", document_type: item?.document_type ?? edit.defaults?.document_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", folder_id: item?.folder_id ?? edit.defaults?.folder_id ?? "" };
   }
-  const today = new Date().toISOString().slice(0,10);
+  // De datum in Nederland, niet in UTC: tussen middernacht en 1:00/2:00 stond
+  // hier gisteren, en op 1 januari het vorige boekjaar.
+  const today = formatISODate(new Date());
   if (edit.kind === "quote") {
     const item = edit.item;
-    return { number: item?.number ?? createNextFinanceNumber('quote', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? edit.defaults?.valid_until ?? "", status: item?.status ?? "draft", internal_approval_status: item?.internal_approval_status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: defaultVatRate(data) }] };
+    return { number: item?.number ?? createNextFinanceNumber('quote', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? edit.defaults?.valid_until ?? "", status: item?.status ?? "draft", internal_approval_status: item?.internal_approval_status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [newFinanceLine(data)] };
   }
   const item = edit.item;
-  return { number: item?.number ?? createNextFinanceNumber('invoice', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? edit.defaults?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: defaultVatRate(data) }] };
+  // Een nieuwe factuur krijgt een vervaldatum uit de betaaltermijn van de
+  // bedrijfsgegevens; zonder vervaldatum werd een factuur nooit "te laat" en
+  // kwamen er geen herinneringen.
+  const date = item?.date ?? today;
+  return { number: item?.number ?? createNextFinanceNumber('invoice', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date, due_date: item ? item.due_date ?? "" : edit.defaults?.due_date ?? defaultDueDate(date, data.companySettings?.invoice_payment_terms), status: item?.status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [newFinanceLine(data)] };
 }
 
-function cleanForm(kind: string, form: Record<string, any>, clientFieldDefinitions: ClientFieldDefinition[] = []) {
+function cleanForm(kind: string, form: Record<string, any>, clientFieldDefinitions: ClientFieldDefinition[] = [], data?: AppData) {
   const cleaned: Record<string, any> = { ...form };
   if (kind === 'client') {
     // De vrije velden komen als formulierstrings binnen; de databasetrigger
@@ -5804,7 +5824,9 @@ function cleanForm(kind: string, form: Record<string, any>, clientFieldDefinitio
       .filter((line: FinanceLine) => line.description || line.quantity || line.unit_price);
   }
   if (kind === "quote") {
-    if (!cleaned.number) cleaned.number = createFallbackFinanceNumber('quote');
+    // Een leeg nummerveld: het volgende nummer van de reeks. Eerder werd dat
+    // de klok (FAC-2026-4822), en liep de hele reeks daarna vanaf 4822 door.
+    if (!cleaned.number) cleaned.number = data ? createNextFinanceNumber('quote', data) : createFallbackFinanceNumber('quote');
     delete cleaned.due_date;
     delete cleaned.quote_id;
     // Offerte-status en approvalvelden lopen via de beveiligde workflow/RPC's.
@@ -5834,7 +5856,7 @@ function cleanForm(kind: string, form: Record<string, any>, clientFieldDefinitio
     delete cleaned.accepted_at;
   }
   if (kind === "invoice") {
-    if (!cleaned.number) cleaned.number = createFallbackFinanceNumber('invoice');
+    if (!cleaned.number) cleaned.number = data ? createNextFinanceNumber('invoice', data) : createFallbackFinanceNumber('invoice');
     delete cleaned.valid_until;
   }
   if (!["quote","invoice"].includes(kind)) {

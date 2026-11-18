@@ -8,7 +8,7 @@ import { dateNL, euro } from '../lib/format';
 import { amsterdamTodayIso } from '../lib/dates';
 import {
   bookPrepaidExpenseStart, deletePrepaidExpense, endPrepaidExpense, ensureDefaultLedgerAccounts, postPrepaidReleases, savePrepaidExpense,
-  type PrepaidExpenseInput,
+  type PrepaidExpenseInput, setUpBookkeeping
 } from '../lib/repository';
 import { isOnBalance, monthEnd, monthLabel, prepaidSchedule, prepaidSummary, termGroups } from '../lib/prepaid';
 
@@ -52,7 +52,7 @@ function SetupBanner({ organizationId, canWrite, onChanged }: { organizationId: 
   const [error, setError] = useState<string | null>(null);
   async function setup() {
     setBusy(true); setError(null);
-    try { await ensureDefaultLedgerAccounts(organizationId); onChanged(); }
+    try { await setUpBookkeeping(organizationId); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Aanmaken mislukt'); }
     finally { setBusy(false); }
   }
@@ -60,10 +60,10 @@ function SetupBanner({ organizationId, canWrite, onChanged }: { organizationId: 
     <div className="bk-setup">
       <div>
         <strong>Boekhouding nog niet ingericht.</strong>
-        <p>Maak eerst het rekeningschema aan (tabblad Grootboek) om vooruitbetaalde kosten te kunnen boeken.</p>
+        <p>Met één klik komen het rekeningschema, de btw-codes en het boekjaar klaar te staan; daarna kun je vooruitbetaalde kosten boeken.</p>
         {error && <p className="error">{error}</p>}
       </div>
-      <Button variant="primary" disabled={!canWrite || busy} onClick={setup}>{busy ? 'Bezig…' : 'Rekeningschema aanmaken'}</Button>
+      <Button variant="primary" disabled={!canWrite || busy} onClick={setup}>{busy ? 'Bezig…' : 'Boekhouding inrichten'}</Button>
     </div>
   );
 }

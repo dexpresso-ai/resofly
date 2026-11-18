@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addLine, allocationPayload, allocationState, buildManualIndex, centsToInput, emptyDraft, manualMatchesFor, mentionsReference,
-  naturalAmount, putRemainder, removeLine, suggestAllocations, type DraftAllocation,
+  naturalAmount, putRemainder, removeLine, suggestAllocations, vatCodeForAccount, type DraftAllocation,
 } from './bankAllocation.ts';
 import type { BankAllocationCandidates, BankTransaction } from '../types';
 
@@ -169,4 +169,21 @@ test('het bedrag van een stuk heeft het teken van de kant van het geld', () => {
   assert.equal(naturalAmount('purchase_invoice', -2420, -15730), -2420);
   assert.equal(naturalAmount('sales_credit_note', 5000, -5000), 5000);
   assert.equal(naturalAmount('sales_invoice', 17363, -1000), -17363);
+});
+
+test('btw-code bij een andere rekening: geen btw op privé en schulden, en met de KOR geen voorstel', () => {
+  const kosten = { type: 'expense', default_vat_code: 'HOOG' };
+  const privé = { type: 'equity', default_vat_code: null };
+  const btwSchuld = { type: 'liability', default_vat_code: null };
+  const eigenKosten = { type: 'expense', default_vat_code: null };
+  // Eerst 4500 (HOOG), dan 0550: de code gaat weg (dat gaf voorbelasting op privé).
+  assert.equal(vatCodeForAccount('', kosten), 'HOOG');
+  assert.equal(vatCodeForAccount('HOOG', privé), '');
+  assert.equal(vatCodeForAccount('HOOG', btwSchuld), '');
+  // Een rekening zonder standaardcode houdt wat er stond; een met code neemt die.
+  assert.equal(vatCodeForAccount('LAAG', eigenKosten), 'LAAG');
+  assert.equal(vatCodeForAccount('LAAG', kosten), 'HOOG');
+  // Met de KOR stelt het scherm niets voor.
+  assert.equal(vatCodeForAccount('', kosten, { kor: true }), '');
+  assert.equal(vatCodeForAccount('', null), '');
 });

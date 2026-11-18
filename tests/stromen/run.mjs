@@ -18,7 +18,7 @@ import { samenvatting } from './toets.mjs';
 
 installeer({ functie: roepRequest });
 
-const ALLE = ['rook', 'offertes', 'facturen', 'mollie', 'verzendwijze', 'herinneringen', 'contracten', 'beveiliging', 'automatisering', 'agenda', 'videovergadering', 'documenten', 'verzenddomein', 'bank', 'marketing', 'inrichten', 'klantdomein', 'notulen', 'rapportages', 'agents', 'boekingslinks', 'tickets', 'api', 'vooruitbetaald', 'caldav', 'galerij-namen']
+const ALLE = ['rook', 'offertes', 'facturen', 'mollie', 'verzendwijze', 'herinneringen', 'contracten', 'beveiliging', 'automatisering', 'agenda', 'videovergadering', 'documenten', 'verzenddomein', 'bank', 'marketing', 'inrichten', 'klantdomein', 'notulen', 'rapportages', 'agents', 'boekingslinks', 'tickets', 'api', 'vooruitbetaald', 'caldav', 'galerij-namen', 'eenmanszaak']
   .filter((naam) => existsSync(new URL(`./${naam}.mjs`, import.meta.url)));
 const gekozen = process.argv.slice(2).filter((arg) => !arg.startsWith('-'));
 for (const naam of gekozen.length ? gekozen : ALLE) {

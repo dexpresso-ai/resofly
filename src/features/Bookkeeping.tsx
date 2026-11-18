@@ -15,7 +15,7 @@ import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
   loadInboundAlias, loadPurchaseInvoiceInbox, openingBalancePlugAccount,
-  postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow,
+  postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow, setUpBookkeeping
 } from '../lib/repository';
 import { downloadXaf } from '../lib/xaf';
 import { downloadStoredFile, uploadToR2 } from '../lib/r2';
@@ -65,7 +65,7 @@ export function SetupBanner({ organizationId, canWrite, onChanged }: { organizat
   const [error, setError] = useState<string | null>(null);
   async function setup() {
     setBusy(true); setError(null);
-    try { await ensureDefaultLedgerAccounts(organizationId); onChanged(); }
+    try { await setUpBookkeeping(organizationId); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Aanmaken mislukt'); }
     finally { setBusy(false); }
   }
@@ -73,10 +73,10 @@ export function SetupBanner({ organizationId, canWrite, onChanged }: { organizat
     <div className="bk-setup">
       <div>
         <strong>Boekhouding nog niet ingericht.</strong>
-        <p>Maak het standaard rekeningschema en de BTW-codes aan om te beginnen.</p>
+        <p>Met één klik komen het rekeningschema, de btw-codes en het boekjaar klaar te staan.</p>
         {error && <p className="error">{error}</p>}
       </div>
-      <Button variant="primary" disabled={!canWrite || busy} onClick={setup}>{busy ? 'Bezig…' : 'Rekeningschema aanmaken'}</Button>
+      <Button variant="primary" disabled={!canWrite || busy} onClick={setup}>{busy ? 'Bezig…' : 'Boekhouding inrichten'}</Button>
     </div>
   );
 }
