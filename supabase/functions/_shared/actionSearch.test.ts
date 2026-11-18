@@ -84,6 +84,16 @@ const CASES: Array<[string, string]> = [
   ['nieuwe prognose maken', 'forecast.create'],
   ['een voorzichtig scenario naast de prognose', 'forecast.create'],
   ['prognose verwijderen', 'forecast.delete'],
+  // Seizoen en cashflow (2026-11-18): "seizoenspatroon uit vorige jaren, een
+  // cashflowprognose".
+  ['cashflowprognose voor het komende jaar', 'forecast.list'],
+  ['kom ik de komende maanden rood te staan', 'forecast.list'],
+  ['hoe ziet mijn liquiditeit er volgend jaar uit', 'forecast.list'],
+  ['wat is mijn verwacht saldo over drie maanden', 'forecast.list'],
+  ['zet het seizoenspatroon aan in de prognose', 'forecast.update'],
+  ['reken met drukke en rustige maanden', 'forecast.update'],
+  ['een lening van tienduizend euro in de cashflow', 'forecast.update'],
+  ['privé-opname van 2500 per maand in de prognose', 'forecast.update'],
   ['dividend uitkeren', 'dividend.declare'],
   ['aandeelhouder toevoegen', 'shareholder.create'],
   ['jaarrekening opmaken', 'annual_accounts.prepare'],
