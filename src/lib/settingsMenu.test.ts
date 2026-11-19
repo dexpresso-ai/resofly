@@ -27,10 +27,11 @@ test('elk onderdeel hoort bij precies één groep', () => {
   assert.equal(settingsGroupOf('organisatie').id, 'organisatie');
 });
 
-test('elk onderdeel heeft een naam, icoon en uitleg in SimplePages', () => {
-  // De groepen bepalen welke onderdelen er zijn; SimplePages geeft ze een
-  // gezicht. Een onderdeel zonder dat gezicht viel stil uit het menu.
-  const source = readFileSync(new URL('../features/SimplePages.tsx', import.meta.url), 'utf8');
+test('elk onderdeel heeft een naam, icoon en uitleg in settingsMenuItems', () => {
+  // De groepen bepalen welke onderdelen er zijn; components/settingsMenuItems.ts
+  // geeft ze een gezicht (tot november 2026 deed SimplePages dat). Een
+  // onderdeel zonder dat gezicht viel stil uit het menu.
+  const source = readFileSync(new URL('../components/settingsMenuItems.ts', import.meta.url), 'utf8');
   const meta = source.slice(source.indexOf('const SETTINGS_TAB_META'), source.indexOf('export const SETTINGS_TABS'));
   for (const tab of SETTINGS_TAB_IDS) {
     assert.match(meta, new RegExp(`\\b${tab}: \\{ label: '`), `${tab} mist in SETTINGS_TAB_META`);
