@@ -3930,6 +3930,30 @@ export async function bookAssetAcquisition(organizationId: UUID, assetId: UUID, 
   return (Array.isArray(data) ? data[0] : data) as FixedAsset;
 }
 
+/**
+ * Maakt de koppeling los tussen een activum en het boekstuk dat zijn aanschaf
+ * draagt (een inkoopfactuur of de beginbalans). Koppelen boekt niets, dus
+ * losmaken ook niet; daarna zijn de velden weer te wijzigen. Kan zolang er
+ * niets is afgeschreven. Een losse aanschafboeking boek je tegen in het Journaal.
+ */
+export async function unlinkAssetAcquisition(organizationId: UUID, assetId: UUID): Promise<FixedAsset> {
+  const { data, error } = await supabase.rpc('unlink_asset_acquisition', {
+    p_organization_id: organizationId,
+    p_asset_id: assetId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FixedAsset;
+}
+
+/** Een boekjaar dat per vergissing is geopend (verkeerde datums) weer weghalen. Alleen zonder boekingen. */
+export async function deleteOpenFiscalYear(organizationId: UUID, fiscalYearId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('delete_open_fiscal_year', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
 /** Stoot een activum af: boekt boekwaarde af, verwerkt de opbrengst tegen de
  *  tegenrekening en boekt boekwinst/-verlies naar 4950. */
 /**

@@ -7,7 +7,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import {
   appropriateResult, closeFiscalYear, ensureDefaultLedgerAccounts, listFiscalYears,
-  listPartnershipPartners, listResultAppropriations, openFiscalYear, reopenFiscalYear, reverseResultAppropriation, setUpBookkeeping
+  deleteOpenFiscalYear, listPartnershipPartners, listResultAppropriations, openFiscalYear, reopenFiscalYear, reverseResultAppropriation, setUpBookkeeping
 } from '../lib/repository';
 import { formatISODate } from '../lib/dates';
 import { useBackStep } from '../lib/useBackStep';
@@ -173,6 +173,21 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
     finally { setBusyId(null); }
   }
 
+  /**
+   * Een boekjaar dat per vergissing is geopend (een tikfout in de datums) weer
+   * weghalen. Dat kon niet: het stond er dan voorgoed. De database staat het
+   * alleen toe zonder boekingen en zonder afgesloten btw-tijdvakken.
+   */
+  async function doDelete(row: FiscalYearListRow) {
+    if (!confirm(`Boekjaar ${row.label} (${dateNL(row.period_start)} – ${dateNL(row.period_end)}) verwijderen? Dat kan alleen als er nog niets in geboekt is.`)) return;
+    setBusyId(row.id); setActionError(null);
+    try {
+      await deleteOpenFiscalYear(organizationId, row.id);
+      await load(); onChanged();
+    } catch (e) { setActionError(e instanceof Error ? e.message : 'Verwijderen mislukt'); }
+    finally { setBusyId(null); }
+  }
+
   async function doReopen(row: FiscalYearListRow) {
     setBusyId(row.id); setActionError(null);
     try {
@@ -283,6 +298,9 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
                       {r.status === 'open' && canWrite && (
                         <Button disabled={busyId === r.id} onClick={() => { setActionError(null); setConfirmClose(r); }}><Lock size={13} /> Afsluiten</Button>
                       )}
+                      {r.status === 'open' && canWrite && rows.length > 1 && r.computed_result_cents === 0 && (
+                        <Button variant="ghost" disabled={busyId === r.id} title="Per vergissing geopend? Een boekjaar zonder boekingen kan weer weg." onClick={() => void doDelete(r)}>Verwijderen</Button>
+                      )}
                       {canAppropriate && canWrite && (
                         <Button disabled={busyId === r.id} onClick={() => { setActionError(null); setAppropriate(r); }}><Scale size={13} /> Resultaat bestemmen</Button>
                       )}
@@ -325,7 +343,7 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
             ? <p>Het resultaat van dit boekjaar wordt verdeeld over de kapitaalrekeningen van de vennoten, naar rato van hun winstaandeel (zie Financiën → Vennoten), en het privé van elke vennoot gaat naar zijn kapitaal. Het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.</p>
             : <p>Het resultaat van dit boekjaar wordt geboekt naar <strong>{resultLabel}</strong> en het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.{isIbForm && ' Privé-opnamen en -stortingen (0550 en 0560) gaan naar 0500 Eigen vermogen'}{isPartnershipForm && ', en het privé van elke vennoot naar zijn eigen kapitaal'}{isIbForm && '.'}</p>}
           <p className="bk-fy-result">Te bestemmen resultaat: <strong className={confirmClose.computed_result_cents >= 0 ? 'bk-pos' : 'bk-neg'}>{euroCents(confirmClose.computed_result_cents)}</strong> ({confirmClose.computed_result_cents >= 0 ? 'winst' : 'verlies'})</p>
-          <p className="bk-muted">Eerst moeten de btw-aangiften van dit boekjaar zijn afgesloten (niet met de KOR), en de afschrijvingen en de termijnen van vooruitbetaalde kosten tot en met {dateNL(confirmClose.period_end)} geboekt (bij Activa en Vooruitbetaald). Anders komen ze in het volgende jaar en klopt de winst van beide jaren niet. Een afgesloten boekjaar kan later alleen door een eigenaar of beheerder worden heropend.</p>
+          <p className="bk-muted">Eerst moeten de btw-aangiften van dit boekjaar zijn afgesloten (met de KOR alleen de tijdvakken waarin je verlegde btw aangeeft), de bankmutaties van dit jaar geboekt of genegeerd (bij Bank → Af te letteren), en de afschrijvingen en de termijnen van vooruitbetaalde kosten tot en met {dateNL(confirmClose.period_end)} geboekt (bij Activa en Vooruitbetaald). Anders komen ze in het volgende jaar en klopt de winst van beide jaren niet. Kijk ook of er nog conceptfacturen of concept-inkoopfacturen van dit jaar liggen: die boeken na het afsluiten op 1 januari. Een afgesloten boekjaar kan later alleen door een eigenaar of beheerder worden heropend.</p>
         </ConfirmDialog>
       )}
 

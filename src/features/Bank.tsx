@@ -225,7 +225,11 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
   }
 
   const unbook = () => {
-    if (!confirm('Deze geboekte transactie terugdraaien? Er komt een tegenboeking in het grootboek; de facturen staan daarna weer open.')) return;
+    // De tegenboeking komt op de datum van de boeking zelf (of, als dat
+    // tijdvak of boekjaar al dicht is, op de eerste open dag daarna). Eerder
+    // kwam hij op vandaag: terugdraaien en opnieuw boeken zette de kosten dan
+    // dubbel in de oude periode en negatief in de nieuwe.
+    if (!confirm('Deze geboekte transactie terugdraaien? Er komt een tegenboeking in het grootboek op dezelfde datum als de boeking, zodat de twee tegen elkaar wegvallen. Is dat btw-tijdvak of boekjaar al afgesloten, dan komt de tegenboeking op de eerste open dag daarna. De facturen staan daarna weer open, en je kunt de mutatie opnieuw boeken.')) return;
     void run(() => unbookBankTransaction(organizationId, txn.id), 'Terugdraaien mislukt');
   };
   const remove = () => {
@@ -263,7 +267,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
           {/* Waaróp de matcher dit voorstelde of boekte (20261118190000). Zonder
               uitleg kun je een voorstel niet beoordelen, en vertrouwt niemand
               een automatische boeking. */}
-          {(isOpen || (txn.status === 'booked' && txn.auto_booked)) && txn.match_reason && txn.match_confidence !== 'tax_authority' && (
+          {(isOpen || txn.status === 'ignored' || (txn.status === 'booked' && txn.auto_booked)) && txn.match_reason && txn.match_confidence !== 'tax_authority' && (
             <small className={`bank-tx-hint bank-tx-reason${txn.match_confidence === 'purchase_amount' ? ' is-weak' : ''}`}>
               <Sparkles size={12} aria-hidden="true" /> {txn.status === 'booked' ? `Automatisch geboekt: ${txn.match_reason}` : txn.match_reason}
             </small>
@@ -572,6 +576,12 @@ function BookedSummary({ txn, data }: { txn: BankTransaction; data: AppData }) {
         {entry?.entry_number && <span className="bk-muted">{entry.entry_number}</span>}
         {entry?.description && <span className="bank-booked-desc">{entry.description}</span>}
       </div>
+      {/* Viel de mutatie in een afgesloten btw-tijdvak of boekjaar, dan staat de
+          boeking op de eerste open dag daarna. Zeg dat erbij: anders zoek je
+          hem in de verkeerde periode. */}
+      {entry?.date && entry.date !== txn.booking_date && (
+        <small className="bank-tx-hint">Geboekt op {dateNL(entry.date)}: de periode van {dateNL(txn.booking_date)} was al afgesloten. De kosten of opbrengst en de btw tellen dus mee vanaf {dateNL(entry.date)}.</small>
+      )}
       {items.length > 0 && (
         <ul className="bank-booked-lines">
           {items.map(item => <li key={item.key}><span>{item.label}</span><span className="bank-booked-amount">{euroCents(item.cents)}</span></li>)}

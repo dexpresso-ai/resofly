@@ -6,7 +6,7 @@ import { Button, Input, Select, Textarea } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
-  bookAssetAcquisition, bookAssetDisposal, deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow, setUpBookkeeping
+  bookAssetAcquisition, bookAssetDisposal, deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow, setUpBookkeeping, unlinkAssetAcquisition
 } from '../lib/repository';
 import { formatISODate, todayIso } from '../lib/dates';
 
@@ -173,7 +173,18 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
     () => data.assetDepreciations.filter(d => d.asset_id === currentAsset?.id).sort((a, b) => a.period_index - b.period_index),
     [data.assetDepreciations, currentAsset],
   );
-  const hasPosted = schedule.some(d => d.status === 'posted');
+  // Geboekt met een journaalpost. Termijnen van vóór de start van de
+  // boekhouding tellen wel als afgeschreven (ze zitten in de cumulatieve
+  // afschrijving van de beginbalans), maar hebben geen boeking.
+  const hasPosted = schedule.some(d => d.status === 'posted' && d.journal_entry_id);
+  const openingTerms = schedule.filter(d => d.status === 'posted' && !d.journal_entry_id);
+  const openingDepreciationCents = openingTerms.reduce((sum, d) => sum + d.amount_cents, 0);
+  // Een activum van vóór de start van de boekhouding staat al op de
+  // beginbalans. De aanschaf nog eens boeken zette hem dubbel op de balans, op
+  // een datum vóór het eerste boekjaar, en dat boekjaar ging dan nooit meer
+  // dicht. Zo'n activum koppel je aan de beginbalans.
+  const startDate = data.companySettings?.bookkeeping_start_date ?? null;
+  const beforeStart = Boolean(startDate && currentAsset && currentAsset.acquisition_date < startDate);
   // Zodra de aanschaf op de balans staat (of er is afgeschreven) zijn de financiële
   // velden vergrendeld — anders zouden het activum en de journaalpost uiteenlopen.
   const acquisitionBooked = Boolean(currentAsset?.acquisition_journal_entry_id);
@@ -191,6 +202,10 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
   const sourceOnAssetAccount = Boolean(savedSource?.journal_entry_id)
     && (savedSource?.lines ?? []).some(line => line.account_id === currentAsset?.asset_account_id);
   const sourceUnsaved = (form.source_purchase_invoice_id || '') !== (currentAsset?.source_purchase_invoice_id ?? '');
+  // Gekoppeld aan een boekstuk dat geen losse aanschaf is: de inkoopfactuur,
+  // of (bij een activum van vóór de start) de beginbalans.
+  const linkedToSource = Boolean(savedSource?.journal_entry_id && savedSource.journal_entry_id === currentAsset?.acquisition_journal_entry_id);
+  const linkedToOpening = acquisitionBooked && !linkedToSource && beforeStart;
   const sourceLabel = (pi: { internal_number?: string | null; supplier_invoice_number?: string | null; id: string }) =>
     pi.internal_number || pi.supplier_invoice_number || pi.id.slice(0, 8);
 
@@ -258,6 +273,21 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
     finally { setBusy(false); }
   }
 
+  /**
+   * De koppeling losmaken. Koppelen boekt niets, maar vergrendelt wel de
+   * velden: wie € 200 typte bij een camera van € 2.000 kon niets meer, behalve
+   * de inkoopfactuur tegenboeken (en die weigerde tot de bankbetaling ongedaan
+   * was).
+   */
+  async function unlinkAcquisition() {
+    if (!currentAsset) return;
+    if (!confirm('De koppeling losmaken? Er wordt niets geboekt of tegengeboekt. Daarna kun je de gegevens van het activum weer wijzigen en opnieuw koppelen.')) return;
+    setBusy(true); setError(null);
+    try { const updated = await unlinkAssetAcquisition(organizationId, currentAsset.id); setCurrentAsset(updated); onChanged(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Losmaken mislukt'); }
+    finally { setBusy(false); }
+  }
+
   async function dispose() {
     if (!currentAsset || !counterAccountId) return;
     const vatText = disposalVatCents ? ` Er komt ${euroCents(disposalVatCents)} btw op 1510 (de tegenrekening krijgt ${euroCents(disposalProceedsCents + disposalVatCents)}).` : '';
@@ -305,7 +335,14 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
         {canWrite && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : currentAsset ? 'Opslaan' : 'Opslaan & doorgaan'}</Button>}
       </div>}>
       {error && <div className="error">{error}</div>}
-      {(hasPosted || acquisitionBooked) && !isDisposed && <div className="bk-note">De aanschaf staat in het grootboek{hasPosted ? ' en er is al afgeschreven' : ''}; de financiële velden zijn vergrendeld zodat het activum en de journaalposten gelijk blijven. Corrigeren kan via een tegenboeking in het grootboek; het register gaat dan mee terug. Draai eerst de afschrijvingen terug, dan de aanschaf.</div>}
+      {(hasPosted || acquisitionBooked) && !isDisposed && <div className="bk-note">De aanschaf staat in het grootboek{hasPosted ? ' en er is al afgeschreven' : ''}; de financiële velden zijn vergrendeld zodat het activum en de journaalposten gelijk blijven.
+        {(linkedToSource || linkedToOpening)
+          ? (hasPosted
+              ? ' Corrigeren: boek eerst de afschrijvingen tegen in het Journaal (de tegenboeking komt op dezelfde datum als de afschrijving); daarna kun je de koppeling losmaken.'
+              : ' Klopt er iets niet, maak dan de koppeling los: er wordt niets geboekt, en daarna kun je de gegevens wijzigen en opnieuw koppelen.')
+          : ' Corrigeren kan via een tegenboeking in het Journaal; het register gaat dan mee terug. Draai eerst de afschrijvingen terug, dan de aanschaf. Een tegenboeking komt op dezelfde datum als het boekstuk, zodat de twee in dezelfde periode tegen elkaar wegvallen.'}
+        {(linkedToSource || linkedToOpening) && !hasPosted && canWrite && <> <Button onClick={unlinkAcquisition} disabled={busy}>Koppeling losmaken</Button></>}
+      </div>}
 
       <div className="bk-grid2">
         <Field label="Naam"><Input value={form.name} onChange={e => set('name', e.target.value)} disabled={!canWrite} /></Field>
@@ -376,7 +413,19 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
         currentAsset.acquisition_journal_entry_id
           ? <div className="bk-note bk-acq-done"><Landmark size={14} /> {savedSource && savedSource.journal_entry_id === currentAsset.acquisition_journal_entry_id
               ? `De aanschaf staat op de balans via inkoopfactuur ${sourceLabel(savedSource)}. Boekwaarde = aanschaf − cumulatieve afschrijving.`
-              : 'De aanschaf staat op de balans (debet activarekening / credit tegenrekening). Boekwaarde = aanschaf − cumulatieve afschrijving.'}</div>
+              : linkedToOpening
+                ? `De aanschaf staat in je beginbalans. Wat volgens het schema vóór ${dateNL(startDate)} is afgeschreven (${euroCents(openingDepreciationCents)}) hoort in de cumulatieve afschrijving van je beginbalans te staan en krijgt geen eigen boeking; vanaf de start boek je de afschrijving hier. Wijkt het bedrag af van je beginbalans, maak dan de koppeling los en pas de gebruiksduur of de restwaarde aan.`
+                : 'De aanschaf staat op de balans (debet activarekening / credit tegenrekening). Boekwaarde = aanschaf − cumulatieve afschrijving.'}</div>
+          : beforeStart && !sourceOnAssetAccount
+            ? <div className="bk-acq">
+                <div className="bk-acq-text">
+                  <strong>Dit activum is van vóór de start van je boekhouding in ResoFly ({dateNL(startDate)}).</strong>
+                  <span className="bk-muted"> Het hoort al in je beginbalans te staan: de aanschafwaarde op de activarekening en wat er tot de start is afgeschreven op de cumulatieve afschrijving (Grootboek → Beginbalans). Koppel het aan de beginbalans; dan schrijft het vanaf de start verder af. Er komt geen boeking, dus niets telt dubbel.</span>
+                </div>
+                <div className="bk-acq-actions">
+                  {canWrite && <Button variant="primary" onClick={linkAcquisition} disabled={busy}><Landmark size={14} /> Koppelen aan de beginbalans</Button>}
+                </div>
+              </div>
           : sourceOnAssetAccount && savedSource && !sourceUnsaved
             ? <div className="bk-acq">
                 <div className="bk-acq-text">
@@ -436,7 +485,8 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
             <div className="bk-schedule-actions">
               {canWrite && !isDisposed && <Button onClick={generate} disabled={busy}>{schedule.length ? 'Herbereken schema' : 'Genereer schema'}</Button>}
               {canWrite && !isDisposed && schedule.length > 0 && <span className="bk-post-inline">
-                <Input type="date" value={throughDate} onChange={e => setThroughDate(e.target.value)} />
+                {/* Niet verder dan het einde van dit jaar: "t/m 2062" (een tikfout) boekte in één keer alle termijnen. */}
+                <Input type="date" value={throughDate} max={`${today.slice(0, 4)}-12-31`} onChange={e => setThroughDate(e.target.value)} />
                 <Button variant="primary" onClick={post} disabled={busy || dueCount === 0}><CalendarClock size={14} /> Boek t/m ({dueCount})</Button>
               </span>}
             </div>
@@ -451,7 +501,7 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
                     <td>{dateNL(d.date)}</td>
                     <td className="bk-num">{euroCents(d.amount_cents)}</td>
                     <td className="bk-num">{euroCents(d.book_value_after_cents)}</td>
-                    <td><span className={`status-pill bk-dep-${d.status}`}>{d.status === 'posted' ? 'Geboekt' : 'Gepland'}</span></td>
+                    <td><span className={`status-pill bk-dep-${d.status}`}>{d.status !== 'posted' ? 'Gepland' : d.journal_entry_id ? 'Geboekt' : 'In beginbalans'}</span></td>
                   </tr>
                 ))}</tbody>
               </table></div>}

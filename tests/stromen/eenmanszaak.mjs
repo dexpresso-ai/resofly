@@ -16,17 +16,17 @@ import { maakGebruiker, rest, rpc, sql, sqlRij, sqlRijen, uniek } from './supaba
 import { gelijk, gelukt, geweigerd, groep, stap, verwacht } from './toets.mjs';
 import { webadresNaam } from './wereld.mjs';
 
-function q(waarde) {
+export function q(waarde) {
   return `'${String(waarde).replace(/'/g, "''")}'`;
 }
 
-function nodig(waarde, wat) {
+export function nodig(waarde, wat) {
   if (waarde === undefined || waarde === null) throw new Error(`overgeslagen: ${wat} ontbreekt (een eerdere stap faalde)`);
   return waarde;
 }
 
 /** De datum van vandaag in Nederland (JJJJ-MM-DD), plus `dagen`. */
-function vandaag(dagen = 0) {
+export function vandaag(dagen = 0) {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Amsterdam' }).format(new Date(Date.now() + dagen * 86_400_000));
 }
 
@@ -35,7 +35,7 @@ function vandaag(dagen = 0) {
  * bedrijfsgegevens, webadres, afronden. Het afronden zet sinds 18 november
  * ook het rekeningschema en de boekjaren klaar.
  */
-async function maakEenmanszaak(naam, { resultaatrekening = '0500', start = '2025-01-01', kor = false, rechtsvorm = 'eenmanszaak' } = {}) {
+export async function maakEenmanszaak(naam, { resultaatrekening = '0500', start = '2025-01-01', kor = false, rechtsvorm = 'eenmanszaak' } = {}) {
   const eigenaar = await maakGebruiker(`${naam}-eigenaar`);
   const orgNaam = uniek(`Eenmanszaak ${naam}`);
   const org = gelukt(await rpc('create_organization', { p_name: orgNaam }, eigenaar.token), 'create_organization');
@@ -58,16 +58,16 @@ async function maakEenmanszaak(naam, { resultaatrekening = '0500', start = '2025
   return { naam, orgId, eigenaar };
 }
 
-function wf(w, action, extra = {}) {
+export function wf(w, action, extra = {}) {
   return roep('invoice-workflow', { token: w.eigenaar.token, body: { action, organizationId: w.orgId, ...extra } });
 }
 
-async function rekening(w, code) {
+export async function rekening(w, code) {
   const rij = gelukt(await rest(`ledger_accounts?select=id,code,name,type,subtype,report_group&organization_id=eq.${w.orgId}&code=eq.${code}`, { token: w.eigenaar.token }), `rekening ${code}`)[0];
   return nodig(rij, `grootboekrekening ${code}`);
 }
 
-async function klant(w, naam, soort) {
+export async function klant(w, naam, soort) {
   return gelukt(await rest('clients?select=id,name,email', {
     method: 'POST', token: w.eigenaar.token, prefer: 'return=representation',
     body: {
@@ -78,7 +78,7 @@ async function klant(w, naam, soort) {
   }), `klant ${naam}`)[0];
 }
 
-async function conceptFactuur(w, klantRij, datum, regels) {
+export async function conceptFactuur(w, klantRij, datum, regels) {
   return gelukt(await rest('invoices?select=*', {
     method: 'POST', token: w.eigenaar.token, prefer: 'return=representation',
     body: {
@@ -90,7 +90,7 @@ async function conceptFactuur(w, klantRij, datum, regels) {
 }
 
 /** Een factuur zoals het formulier hem opslaat, en versturen (boekt hem ook). */
-async function verstuurdeFactuur(w, klantRij, datum, regels) {
+export async function verstuurdeFactuur(w, klantRij, datum, regels) {
   const concept = await conceptFactuur(w, klantRij, datum, regels);
   gelukt(await wf(w, 'sendInvoiceEmail', {
     invoiceId: concept.id, recipientEmail: klantRij.email, recipientName: klantRij.name, includePaymentLink: false,
@@ -100,14 +100,14 @@ async function verstuurdeFactuur(w, klantRij, datum, regels) {
   return rij;
 }
 
-async function leverancier(w, naam) {
+export async function leverancier(w, naam) {
   return gelukt(await rest('suppliers?select=*', {
     method: 'POST', token: w.eigenaar.token, prefer: 'return=representation',
     body: { organization_id: w.orgId, created_by: w.eigenaar.id, name: naam, iban: 'NL44RABO0123456788' },
   }), 'leverancier')[0];
 }
 
-async function inkoopfactuur(w, lev, datum, regels) {
+export async function inkoopfactuur(w, lev, datum, regels) {
   const netto = regels.reduce((s, r) => s + r.amount_cents, 0);
   const btw = regels.reduce((s, r) => s + Math.round(r.amount_cents * (r.vat_rate ?? 0) / 100), 0);
   const pi = gelukt(await rest('purchase_invoices?select=*', {
@@ -122,7 +122,7 @@ async function inkoopfactuur(w, lev, datum, regels) {
   return sqlRij(`select id, journal_entry_id, total_cents from public.purchase_invoices where id = ${q(pi.id)}`);
 }
 
-async function bankrekening(w) {
+export async function bankrekening(w) {
   const bankGb = await rekening(w, '1100');
   return gelukt(await rest('bank_accounts?select=*', {
     method: 'POST', token: w.eigenaar.token, prefer: 'return=representation',
@@ -131,7 +131,7 @@ async function bankrekening(w) {
 }
 
 /** Een mutatie invoeren; de verdeling gaat in de richting van het geld (bedragen positief). */
-async function invoeren(w, bank, datum, bedrag, omschrijving) {
+export async function invoeren(w, bank, datum, bedrag, omschrijving) {
   const txn = gelukt(await rpc('create_manual_bank_transaction', {
     p_organization_id: w.orgId, p_bank_account_id: bank.id, p_booking_date: datum, p_amount_cents: bedrag,
     p_counterparty_name: omschrijving, p_counterparty_iban: null, p_description: omschrijving, p_allow_duplicate: true,
@@ -139,76 +139,76 @@ async function invoeren(w, bank, datum, bedrag, omschrijving) {
   return (Array.isArray(txn) ? txn[0] : txn).id;
 }
 
-function boekMutatie(w, txnId, verdeling) {
+export function boekMutatie(w, txnId, verdeling) {
   return rpc('book_bank_transaction', { p_organization_id: w.orgId, p_transaction_id: txnId, p_allocations: verdeling }, w.eigenaar.token);
 }
 
-async function bankmutatie(w, bank, datum, bedrag, omschrijving, verdeling) {
+export async function bankmutatie(w, bank, datum, bedrag, omschrijving, verdeling) {
   const id = await invoeren(w, bank, datum, bedrag, omschrijving);
   const res = gelukt(await boekMutatie(w, id, verdeling), `boeken ${omschrijving}`);
   return { id, boeking: Array.isArray(res) ? res[0] : res };
 }
 
-function boekingsregels(entryId) {
+export function boekingsregels(entryId) {
   return sqlRijen(`select la.code, jl.debit_cents as debet, jl.credit_cents as credit, jl.vat_code, jl.vat_base_cents as grondslag, jl.vat_amount_cents as btw
     from public.journal_lines jl join public.ledger_accounts la on la.id = jl.account_id
     where jl.entry_id = ${q(entryId)} order by jl.line_index`);
 }
 
-function saldo(w, code, totEnMet) {
+export function saldo(w, code, totEnMet) {
   return Number(sql(`select coalesce(sum(jl.debit_cents - jl.credit_cents), 0) from public.journal_lines jl
     join public.journal_entries je on je.id = jl.entry_id join public.ledger_accounts la on la.id = jl.account_id
     where jl.organization_id = ${q(w.orgId)} and je.status = 'posted' and la.code = ${q(code)} and je.date <= ${q(totEnMet)}`));
 }
 
 /** Het bedrag op een W&V-rekening over een periode, zonder de jaarafsluiting (zoals Winst & verlies het toont). */
-function wv(w, code, van, tot) {
+export function wv(w, code, van, tot) {
   const rij = sqlRijen(`select * from public.report_profit_and_loss(${q(w.orgId)}, ${q(van)}, ${q(tot)})`).find((r) => r.code === code);
   return Number(rij?.amount_cents ?? 0);
 }
 
-function balansTotalen(w, peildatum) {
+export function balansTotalen(w, peildatum) {
   const rijen = sqlRijen(`select * from public.report_balance_sheet(${q(w.orgId)}, ${q(peildatum)})`);
   const activa = rijen.filter((r) => r.section === 'asset').reduce((s, r) => s + Number(r.amount_cents), 0);
   const passiva = rijen.filter((r) => r.section !== 'asset').reduce((s, r) => s + Number(r.amount_cents), 0);
   return { activa, passiva, rijen };
 }
 
-async function overzicht(w, jaar) {
+export async function overzicht(w, jaar) {
   return gelukt(await rpc('owners_equity_overview', { p_organization_id: w.orgId, p_fiscal_year_id: jaar.id }, w.eigenaar.token), `eigen vermogen ${jaar.label}`);
 }
 
-async function kapitaal(w, jaar) {
+export async function kapitaal(w, jaar) {
   const res = await overzicht(w, jaar);
   const o = res.owners[0];
   return { begin: o.beginCents, resultaat: o.resultShareCents, stortingen: o.contributionsCents, opnamen: o.withdrawalsCents, overig: o.otherMovementsCents, eind: o.endCents, status: res.fiscalYear.status, open: res.openPriorResultCents, openJaren: res.openPriorYears };
 }
 
-function kwartaal(jaar, nummer) {
+export function kwartaal(jaar, nummer) {
   const van = `${jaar}-${String((nummer - 1) * 3 + 1).padStart(2, '0')}-01`;
   const tot = new Date(Date.UTC(jaar, nummer * 3, 0)).toISOString().slice(0, 10);
   return { van, tot };
 }
 
-function sluitKwartaal(w, jaar, nummer) {
+export function sluitKwartaal(w, jaar, nummer) {
   const { van, tot } = kwartaal(jaar, nummer);
   return rpc('finalize_vat_return', {
     p_organization_id: w.orgId, p_period_type: 'quarter', p_year: jaar, p_period_index: nummer, p_from: van, p_to: tot,
   }, w.eigenaar.token);
 }
 
-async function btwAangifte(w, jaar, nummer) {
+export async function btwAangifte(w, jaar, nummer) {
   const { van, tot } = kwartaal(jaar, nummer);
   const vakken = gelukt(await rpc('compute_vat_return', { p_organization_id: w.orgId, p_from: van, p_to: tot }, w.eigenaar.token), `btw Q${nummer} ${jaar} berekenen`);
   gelukt(await sluitKwartaal(w, jaar, nummer), `btw Q${nummer} ${jaar} afsluiten`);
   return Array.isArray(vakken) ? vakken[0] : vakken;
 }
 
-async function boekjaren(w) {
+export async function boekjaren(w) {
   return sqlRijen(`select id, label, period_start, period_end, status from public.fiscal_years where organization_id = ${q(w.orgId)} order by period_start`);
 }
 
-async function maakActivum(w, velden) {
+export async function maakActivum(w, velden) {
   const afschrijving = await rekening(w, '4000');
   const cumulatief = await rekening(w, '0150');
   const activa = await rekening(w, '0100');
