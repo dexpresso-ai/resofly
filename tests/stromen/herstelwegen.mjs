@@ -365,6 +365,26 @@ async function voorDeStart() {
     gelijk(Number(sql(`select count(*) from public.journal_entries where organization_id = ${q(w.orgId)} and date < '2026-10-01'`)), 0, 'geen enkel boekstuk vóór de start');
   });
 
+  await stap('de aansluiting klopt ook als een mutatie van het afschrift in het volgende tijdvak is geboekt', async () => {
+    // Een eigen administratie: alleen deze ene mutatie, zodat het afschrift
+    // en het grootboek precies te volgen zijn.
+    const a0 = await maakEenmanszaak('aansluiting');
+    const bank = await bankrekening(a0);
+    const res = gelukt(await rpc('import_bank_transactions', {
+      p_organization_id: a0.orgId, p_bank_account_id: bank.id,
+      p_statement: { format: 'camt053', file_name: `sept-${randomUUID()}.xml`, period_start: '2026-09-01', period_end: '2026-09-30', opening_balance_cents: 0, closing_balance_cents: -1000 },
+      p_transactions: [{ booking_date: '2026-09-28', amount_cents: -1000, counterparty_name: 'Postzegels', description: 'PostNL' }],
+    }, a0.eigenaar.token), 'afschrift september');
+    gelijk(res.inserted, 1, 'ingelezen');
+    for (const n of [1, 2, 3]) gelukt(await sluitKwartaal(a0, 2026, n), `btw Q${n} 2026`);
+    const id = sqlRij(`select id from public.bank_transactions where bank_account_id = ${q(bank.id)} and amount_cents = -1000`).id;
+    gelukt(await boekMutatie(a0, id, [{ kind: 'ledger', account_id: (await rekening(a0, '4300')).id, vat_code: 'HOOG', amount_cents: 1000 }]), 'boeken met btw in het dichte Q3');
+    gelijk(boekstuk(bankrij(id).journal_entry_id).date, '2026-10-01', 'geboekt op 1 oktober');
+    const a = sqlRij(`select public.report_bank_reconciliation(${q(a0.orgId)}) as r`).r.find((r) => r.bank_account_id === bank.id);
+    gelijk([a.as_of, a.ledger_balance_cents, a.timing_count, a.timing_sum_cents, a.difference_cents], ['2026-09-30', 0, 1, -1000, 0],
+      'peildatum 30 september: het grootboek heeft hem nog niet, één tijdsverschil van € 10, geen verschil');
+  });
+
   await stap('een beginbalans in de toekomst wordt geweigerd', async () => {
     const ander = await maakEenmanszaak('toekomst');
     const res = await rpc('create_opening_balance', { p_organization_id: ander.orgId, p_as_of_date: '2052-01-01',
