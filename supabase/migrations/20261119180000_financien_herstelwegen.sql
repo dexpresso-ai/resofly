@@ -4029,3 +4029,39 @@ $function$;
 
 revoke all on function public.delete_open_fiscal_year(uuid, uuid) from public, anon;
 grant execute on function public.delete_open_fiscal_year(uuid, uuid) to authenticated, service_role;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 17. Rechten van de vervangen functies: ongewijzigd, hier nog eens vastgelegd
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- create or replace laat de rechten staan. Ze staan er toch bij: de publieke
+-- sleutel (anon) mag nergens bij, en een verse database mag niet afhangen van
+-- wat een eerdere migratie toevallig deed.
+revoke all on function public.bank_account_block_delete_with_bookings() from public, anon, authenticated;
+revoke all on function public.bank_match_run(uuid, uuid, uuid, uuid[], boolean, integer, text) from public, anon, authenticated;
+grant execute on function public.bank_match_run(uuid, uuid, uuid, uuid[], boolean, integer, text) to service_role;
+revoke all on function public.bank_purchase_match(bank_transactions, text, bank_open_purchase_invoice[], jsonb, uuid[], text, jsonb) from public, anon, authenticated;
+grant execute on function public.bank_purchase_match(bank_transactions, text, bank_open_purchase_invoice[], jsonb, uuid[], text, jsonb) to service_role;
+revoke all on function public.book_asset_acquisition(uuid, uuid, uuid, date, uuid) from public, anon;
+grant execute on function public.book_asset_acquisition(uuid, uuid, uuid, date, uuid) to authenticated, service_role;
+revoke all on function public.book_bank_transaction(uuid, uuid, jsonb, uuid, uuid, uuid, jsonb, text) from public, anon;
+grant execute on function public.book_bank_transaction(uuid, uuid, jsonb, uuid, uuid, uuid, jsonb, text) to authenticated, service_role;
+revoke all on function public.book_purchase_invoice(uuid, uuid, uuid) from public, anon;
+grant execute on function public.book_purchase_invoice(uuid, uuid, uuid) to authenticated, service_role;
+revoke all on function public.close_fiscal_year(uuid, uuid, uuid) from public, anon;
+grant execute on function public.close_fiscal_year(uuid, uuid, uuid) to authenticated, service_role;
+revoke all on function public.compute_vat_boxes(uuid, date, date, uuid[]) from public, anon;
+grant execute on function public.compute_vat_boxes(uuid, date, date, uuid[]) to authenticated, service_role;
+revoke all on function public.create_opening_balance(uuid, date, jsonb, uuid) from public, anon;
+grant execute on function public.create_opening_balance(uuid, date, jsonb, uuid) to authenticated, service_role;
+revoke all on function public.enforce_invoice_kor_no_vat() from public, anon, authenticated;
+revoke all on function public.finalize_vat_return(uuid, text, integer, integer, date, date, uuid) from public, anon;
+grant execute on function public.finalize_vat_return(uuid, text, integer, integer, date, date, uuid) to authenticated, service_role;
+revoke all on function public.journal_lines_touch_vat(uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.journal_lines_touch_vat(uuid, jsonb) to service_role;
+revoke all on function public.post_asset_depreciation(uuid, uuid, date, uuid) from public, anon;
+grant execute on function public.post_asset_depreciation(uuid, uuid, date, uuid) to authenticated, service_role;
+revoke all on function public.report_bank_reconciliation(uuid) from public, anon;
+grant execute on function public.report_bank_reconciliation(uuid) to authenticated, service_role;
+revoke all on function public.reverse_journal_entry(uuid, date, uuid) from public, anon;
+grant execute on function public.reverse_journal_entry(uuid, date, uuid) to authenticated, service_role;

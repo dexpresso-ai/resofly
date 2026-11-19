@@ -69,9 +69,11 @@ export const PAGE_DATA_GROUPS: Readonly<Record<string, readonly DataGroup[]>> = 
   assets: ['bookkeeping'],
   prepaid: ['bookkeeping'],
   pnl: ['bookkeeping'],
-  // Eigen vermogen van een eenmanszaak: het urencriterium van de eigenaar,
-  // voor de zelfstandigenaftrek in het overzicht voor de aangifte.
-  owners: ['time'],
+  // Eigen vermogen (owners) staat hier niet meer: het overzicht voor de
+  // aangifte haalt de uren van de eigenaar uit dezelfde aanroep als de raming
+  // (get_income_tax_inputs), zodat het dezelfde belastbare winst toont als
+  // Financiën → Inkomstenbelasting. De hele urengroep laden was daar niet
+  // meer voor nodig.
 };
 
 /**
@@ -94,7 +96,6 @@ export const GROUP_FILES: Readonly<Record<DataGroup, readonly string[]>> = {
     'src/features/WeekPlanner.tsx', // geboekt per taak en per afspraak (weekplanner)
     'src/features/CalendarPage.tsx', // geregistreerd per afspraak (calendar)
     'src/features/TimeTracking.tsx', // (time)
-    'src/features/Owners.tsx', // het urencriterium in het overzicht voor de aangifte (owners)
     'src/main.tsx', // reserveTimeForTask laadt de groep zelf; stopTimerForTask voegt één post toe
   ],
   communication: [

@@ -7,9 +7,11 @@ import { euro, formatMinutes, minutesToHours } from '../lib/format';
 import { formatISODate } from '../lib/dates';
 import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
 import { memberName } from '../lib/members';
-import { businessProfit } from '../lib/incomeTax';
 import {
-  listFiscalYears, listPartnershipPartners, loadOwnersEquityOverview, loadPartnershipPartnerHours, reportProfitAndLoss,
+  IB_CORRECTION_LABELS, IB_RULES, buildIncomeTaxOverview, formatRate, incomeTaxRulesFor, type IncomeTaxInputs,
+} from '../lib/inkomstenbelasting';
+import {
+  listFiscalYears, listPartnershipPartners, loadIncomeTaxInputs, loadOwnersEquityOverview, loadPartnershipPartnerHours,
   savePartnershipPartner, setPartnershipPartnerMember, setUpBookkeeping,
 } from '../lib/repository';
 
@@ -64,15 +66,22 @@ function hoursCell(partner: PartnershipPartner, row: PartnershipPartnerHours | u
  * teamlid, en staan hier de uren van elke vennoot in het kalenderjaar van het
  * gekozen boekjaar. Alleen met leesrecht op Uren: de database weigert anders.
  */
-export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUserId = null, canReadHours = true, teamMembers = [], currentUserId = null }: {
+export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadHours = true, teamMembers = [], currentUserId = null, onOpenIncomeTax }: {
   data: AppData; organizationId: string; canWrite: boolean; onChanged: () => void;
-  /** De eigenaar is bij een eenmanszaak de ondernemer: zijn uren tellen voor het urencriterium. */
+  /**
+   * Niet meer gebruikt. De uren van de eigenaar komen nu uit dezelfde aanroep
+   * als de raming (get_income_tax_inputs), zodat dit overzicht en Financiën →
+   * Inkomstenbelasting dezelfde eigenaar en dezelfde uren tellen. De app-shell
+   * geeft hem nog mee.
+   */
   ownerUserId?: UUID | null;
   /** Zonder leesrecht op Uren (vaak de boekhouder) zie je geen uren: dan zegt het overzicht dat, in plaats van "0 uur, niet gehaald". */
   canReadHours?: boolean;
   /** De teamleden die je aan een vennoot kunt koppelen (vof, maatschap, cv). */
   teamMembers?: OrganizationMember[];
   currentUserId?: UUID | null;
+  /** Naar Financiën → Inkomstenbelasting; zonder deze prop staat er alleen waar je het vindt. */
+  onOpenIncomeTax?: () => void;
 }) {
   const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
   const isIb = ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm);
@@ -426,108 +435,146 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, ownerUse
       )}
 
       {overview && !isPartnershipForm && (
-        <IncomeTaxSection data={data} organizationId={organizationId} overview={overview} ownerUserId={canReadHours ? ownerUserId : null} />
+        <IncomeTaxSection data={data} organizationId={organizationId} overview={overview} onOpenIncomeTax={onOpenIncomeTax} />
       )}
     </div>
   );
 }
 
 /**
- * Van winst naar belastbare winst uit onderneming (lib/incomeTax.ts), voor de
- * aangifte inkomstenbelasting van een eenmanszaak. Bij een vof doet elke
- * vennoot dit zelf over zijn winstaandeel, met zijn eigen uren; dat rekent
- * deze pagina niet uit.
+ * Van winst naar belastbare winst uit onderneming, voor de aangifte
+ * inkomstenbelasting van een eenmanszaak. Bij een vof doet elke vennoot dit
+ * zelf over zijn winstaandeel; dat staat bij Financiën → Inkomstenbelasting.
+ *
+ * Dit blok rekent niet zelf: het toont de regels van de raming
+ * (get_income_tax_inputs + buildIncomeTaxOverview, geboekt), met wat daar is
+ * opgeslagen. Tot november 2026 rekende het hier apart (lib/incomeTax.ts), met
+ * de uren die de app zelf had geladen en een eigen startervinkje dat nergens werd
+ * bewaard, zonder KIA en zonder fiscale correcties. Wie bij Inkomstenbelasting
+ * "urencriterium ja" en "starter" had opgeslagen, zag daar bij € 45.000 winst
+ * een belastbare winst van € 36.384,02 en hier € 39.285,00, onder een tekst
+ * die "tot op de cent gelijk" beloofde.
  */
-function IncomeTaxSection({ data, organizationId, overview, ownerUserId }: {
-  data: AppData; organizationId: string; overview: OwnersEquityOverview; ownerUserId: UUID | null;
+function IncomeTaxSection({ data, organizationId, overview, onOpenIncomeTax }: {
+  data: AppData; organizationId: string; overview: OwnersEquityOverview; onOpenIncomeTax?: () => void;
 }) {
   const year = Number(overview.fiscalYear.periodStart.slice(0, 4));
-  const [mixedCostsCents, setMixedCostsCents] = useState<number | null>(null);
-  const [starter, setStarter] = useState(false);
+  const hasRules = incomeTaxRulesFor(year) !== null;
+  const [loaded, setLoaded] = useState<{ inputs: IncomeTaxInputs | null; error: string | null } | null>(null);
 
-  // Eten, drinken en representatie: de rekeningen met subtype mixed_costs
-  // (4600 in het rekeningschema van een IB-onderneming).
-  const mixedAccounts = useMemo(() => new Set(data.ledgerAccounts.filter(a => a.subtype === 'mixed_costs').map(a => a.id)), [data.ledgerAccounts]);
+  // Opnieuw bij elk nieuw overzicht (een ander boekjaar, of na een wijziging):
+  // de winst hierboven en de raming hieronder horen bij hetzelfde moment.
   useEffect(() => {
     let cancelled = false;
-    setMixedCostsCents(null);
-    reportProfitAndLoss(organizationId, overview.fiscalYear.periodStart, overview.fiscalYear.periodEnd)
-      .then(rows => { if (!cancelled) setMixedCostsCents(rows.filter(r => r.account_type === 'expense' && r.account_id && mixedAccounts.has(r.account_id)).reduce((sum, r) => sum + r.amount_cents, 0)); })
-      .catch(() => { if (!cancelled) setMixedCostsCents(0); });
+    setLoaded(null);
+    if (!hasRules) return undefined;
+    loadIncomeTaxInputs(organizationId, year)
+      .then(inputs => { if (!cancelled) setLoaded({ inputs, error: null }); })
+      .catch(e => { if (!cancelled) setLoaded({ inputs: null, error: e instanceof Error ? e.message : 'De raming laden mislukt' }); });
     return () => { cancelled = true; };
-  }, [organizationId, overview.fiscalYear.periodStart, overview.fiscalYear.periodEnd, mixedAccounts]);
+  }, [organizationId, year, hasRules, overview]);
 
-  // Het urencriterium per kalenderjaar, met de uren van de eigenaar.
-  const hoursMinutes = useMemo(() => {
-    if (!ownerUserId) return null;
-    return data.timeEntries
-      .filter(e => e.user_id === ownerUserId && e.entry_date >= `${year}-01-01` && e.entry_date <= `${year}-12-31`)
-      .reduce((sum, e) => sum + e.minutes, 0);
-  }, [data.timeEntries, ownerUserId, year]);
-  const hoursMet = hoursMinutes != null && hoursMinutes >= HOUR_CRITERION_MINUTES;
+  const today = formatISODate(new Date());
+  const ib = useMemo(() => (loaded?.inputs ? buildIncomeTaxOverview(loaded.inputs, { basis: 'geboekt', today }) : null), [loaded, today]);
+  const hasMixedAccount = useMemo(() => data.ledgerAccounts.some(a => a.subtype === 'mixed_costs'), [data.ledgerAccounts]);
 
-  if (mixedCostsCents == null) return <div className="bk-report-loading"><Skeleton lines={4} /></div>;
-  const r = businessProfit({ year, profitCents: overview.resultCents, mixedCostsCents, hoursCriterionMet: hoursMet, starter });
-  const hours = hoursMinutes == null ? null : Math.floor(hoursMinutes / 60);
-  const row = (label: React.ReactNode, cents: number, sign: '' | '+' | '−' | '=' = '', strong = false) => (
-    <tr className={strong ? 'bk-report-total' : ''}>
+  const where = onOpenIncomeTax
+    ? <Button onClick={onOpenIncomeTax}>Naar Inkomstenbelasting</Button>
+    : null;
+
+  if (!hasRules) {
+    return (
+      <div className="bk-report">
+        <div className="bk-report-bar">
+          <div className="bk-report-kpis">
+            <div><span>Voor je aangifte inkomstenbelasting {year}</span><strong>—</strong></div>
+          </div>
+        </div>
+        <p className="bk-muted">De bedragen voor {year} (zelfstandigenaftrek, mkb-winstvrijstelling, de drempel voor gemengde kosten) staan nog niet in ResoFly. De winst en het eigen vermogen hierboven kun je wel gebruiken.</p>
+      </div>
+    );
+  }
+  if (!loaded) return <div className="bk-report-loading"><Skeleton lines={4} /></div>;
+  const person = ib?.persons[0] ?? null;
+  const rules = ib ? IB_RULES[ib.rulesYear] ?? null : null;
+  if (!ib || !person || !rules) {
+    return (
+      <div className="bk-report">
+        <p className="bk-muted">De berekening voor je aangifte inkomstenbelasting {year} kon niet worden geladen{loaded.error ? `: ${loaded.error}` : '.'} Je vindt hem bij Financiën → Inkomstenbelasting.</p>
+        {where && <div className="bk-fy-new-actions">{where}</div>}
+      </div>
+    );
+  }
+
+  const { profile, estimate: e } = person;
+  const meets = profile.meetsHoursCriterion;
+  const hours = person.registeredMinutes === null ? null : Math.floor(person.registeredMinutes / 60).toLocaleString('nl-NL');
+  const row = (key: string, label: React.ReactNode, cents: number, sign: '' | '+' | '−' | '=' = '', strong = false) => (
+    <tr className={strong ? 'bk-report-total' : ''} key={key}>
       <td>{sign && <span className="bk-muted">{sign} </span>}{label}</td>
       <td className="bk-num">{euroCents(cents)}</td>
     </tr>
   );
+  const zaHint = meets === null ? '(urencriterium niet ingevuld)'
+    : !meets ? '(urencriterium niet gehaald)'
+    : profile.aowStatus === 'heel_jaar' ? '(de helft, AOW-leeftijd)'
+    : e.zelfstandigenaftrekUnusedCents > 0 ? '(niet hoger dan de winst)' : '';
 
   return (
     <div className="bk-report">
       <div className="bk-report-bar">
         <div className="bk-report-kpis">
-          <div><span>Voor je aangifte inkomstenbelasting {year}</span><strong>{r ? euroCents(r.taxableProfitCents) : '—'}</strong></div>
-          <div><span>Urencriterium {year}</span><strong className={hoursMet ? 'bk-pos' : ''}>{hours == null ? '—' : `${hours.toLocaleString('nl-NL')} / 1.225 uur`}</strong></div>
+          <div><span>Voor je aangifte inkomstenbelasting {year}</span><strong>{euroCents(e.taxableProfitCents)}</strong></div>
+          <div><span>Urencriterium {year}</span>{/* De uren alleen als het urencriterium ze volgt: "200 / 1.225 uur" in het groen naast een zelf gekozen ja las als een fout. */}
+            <strong className={meets ? 'bk-pos' : ''}>{person.hoursFromTimeTracking && hours !== null ? `${hours} / 1.225 uur` : meets === null ? '—' : meets ? 'Ja, zelf gekozen' : 'Nee, zelf gekozen'}</strong></div>
         </div>
+        {where}
       </div>
-      {!r ? (
-        <p className="bk-muted">De bedragen voor {year} (zelfstandigenaftrek, mkb-winstvrijstelling, de drempel voor gemengde kosten) staan nog niet in ResoFly. De winst en het eigen vermogen hierboven kun je wel gebruiken.</p>
-      ) : (
-        <>
-          <div className="bk-table-wrap"><table className="bk-table bk-report-table bk-ib-table">
-            <tbody>
-              {row('Winst volgens je boekhouding', r.profitCents)}
-              {r.mixedCosts.totalCents > 0 && row(
-                <>Niet aftrekbaar deel van eten, drinken en representatie ({r.mixedCosts.method === 'percentage'
-                  ? <>20% van {euroCents(r.mixedCosts.totalCents)}</>
-                  : <>tot de drempel van {euroCents(r.rules.mixedCostsThresholdCents)}</>})</>,
-                r.mixedCosts.addBackCents, '+')}
-              {row('Winst uit onderneming vóór ondernemersaftrek', r.fiscalProfitCents, '=', true)}
-              {/* Aftrekposten positief, met het minteken ervoor: "− € 1.200", niet "− € -1.200". */}
-              {row(<>Zelfstandigenaftrek {hoursMet ? (r.selfEmployedCapped ? '(niet hoger dan de winst)' : '') : hours == null ? '(uren niet te zien)' : '(urencriterium niet gehaald)'}</>, r.selfEmployedDeductionCents, '−')}
-              {starter && row('Startersaftrek', r.starterDeductionCents, '−')}
-              {/* Bij een verlies maakt de vrijstelling het verlies kleiner: dan staat er een plus. */}
-              {row(`Mkb-winstvrijstelling (${(r.rules.smeExemptionBasisPoints / 100).toLocaleString('nl-NL', { minimumFractionDigits: 2 })}%)${r.smeExemptionCents < 0 ? ', maakt het verlies kleiner' : ''}`, Math.abs(r.smeExemptionCents), r.smeExemptionCents < 0 ? '+' : '−')}
-              {row('Belastbare winst uit onderneming', r.taxableProfitCents, '=', true)}
-            </tbody>
-          </table></div>
-          <label className="bk-setting-check">
-            <input type="checkbox" checked={starter} onChange={e => setStarter(e.target.checked)} />
-            <span>Ik ben starter: in een of meer van de vijf jaren hiervoor was ik geen ondernemer, en ik had nog geen drie keer startersaftrek ({euroCents(r.rules.starterDeductionCents)}).</span>
-          </label>
-          {!hoursMet && (
-            <p className="bk-muted">
-              {hours == null
-                ? 'De uren van de eigenaar zie je hier alleen met leesrecht op Uren; de zelfstandigenaftrek is daarom niet meegerekend.'
-                : `Bij Uren staan ${hours.toLocaleString('nl-NL')} uur in ${year}.`}
-              {' '}Zonder urencriterium (1.225 uur, en meer dan de helft van je werktijd) geen zelfstandigenaftrek en startersaftrek; de mkb-winstvrijstelling krijg je wel.
-            </p>
-          )}
-          {mixedAccounts.size === 0 && (
-            <p className="bk-muted">Er is geen rekening voor eten, drinken en representatie (4600). Boek je die kosten op een andere rekening, tel het niet-aftrekbare deel dan zelf bij de winst.</p>
-          )}
-          <p className="bk-muted">
-            Een indicatie{overview.fiscalYear.status !== 'closed' ? ', op basis van wat er nu geboekt is' : ''}. Niet meegerekend: de kleinschaligheidsinvesteringsaftrek (investeerde je in {year} meer dan € 2.901 in bedrijfsmiddelen van elk minstens € 450?),
-            de bijtelling als je privé rijdt in een auto van de zaak, een desinvesteringsbijtelling, de meewerkaftrek, en de halve zelfstandigenaftrek als je aan het begin van het jaar de AOW-leeftijd had.
-            Niet benutte zelfstandigenaftrek schuift door naar volgende jaren.
-            {' '}Die posten, de AOW-leeftijd en wat je aan inkomstenbelasting en Zvw-bijdrage betaalt, rekent Financiën → Inkomstenbelasting uit, tot op de cent gelijk aan dit overzicht.
-          </p>
-        </>
+
+      {ib.warnings.map(w => <p key={w} className="bk-note ib-warning"><AlertTriangle size={13} aria-hidden="true" /> {w}</p>)}
+
+      <div className="bk-table-wrap"><table className="bk-table bk-report-table bk-ib-table">
+        <tbody>
+          {row('winst', 'Winst volgens je boekhouding', e.profitShareCents)}
+          {/* Een correctie kan de winst verhogen of verlagen: het teken ervoor, het bedrag positief. */}
+          {person.corrections.map(c => row(c.id,
+            <>{c.label}<span className="bk-muted"> · {c.automatic ? 'uit rekening 4600, niet aftrekbaar' : IB_CORRECTION_LABELS[c.code] ?? c.code}</span></>,
+            Math.abs(c.amountCents), c.amountCents < 0 ? '−' : '+'))}
+          {e.kiaCents > 0 && row('kia', <>Investeringsaftrek (KIA)<span className="bk-muted"> · over {euroCents(ib.investmentTotalCents)} aan investeringen</span></>, e.kiaCents, '−')}
+          {row('winst-uit-onderneming', 'Winst uit onderneming', e.profitCents, '=', true)}
+          {/* Aftrekposten positief, met het minteken ervoor: "− € 1.200", niet "− € -1.200". */}
+          {row('zelfstandigenaftrek', <>Zelfstandigenaftrek {zaHint}</>, e.zelfstandigenaftrekCents, '−')}
+          {(profile.starter || e.startersaftrekCents > 0) && row('startersaftrek',
+            <>Startersaftrek {meets !== true ? '(alleen met het urencriterium)' : profile.aowStatus === 'heel_jaar' ? '(de helft, AOW-leeftijd)' : ''}</>, e.startersaftrekCents, '−')}
+          {e.otherEntrepreneurDeductionCents > 0 && row('overige-aftrek', 'Overige ondernemersaftrek', e.otherEntrepreneurDeductionCents, '−')}
+          {/* Bij een verlies maakt de vrijstelling het verlies kleiner: dan staat er een plus. */}
+          {row('mkb', `Mkb-winstvrijstelling (${formatRate(rules.mkbExemptionRate)})${e.mkbExemptionCents < 0 ? ', maakt het verlies kleiner' : ''}`, Math.abs(e.mkbExemptionCents), e.mkbExemptionCents < 0 ? '+' : '−')}
+          {row('belastbare-winst', 'Belastbare winst uit onderneming', e.taxableProfitCents, '=', true)}
+        </tbody>
+      </table></div>
+
+      <p className="bk-muted">
+        {person.hoursFromTimeTracking
+          ? `Urencriterium volgens Uren: de eigenaar heeft in ${year} ${hours} uur geregistreerd, ${meets ? 'genoeg voor de 1.225 uur' : 'minder dan 1.225'}.`
+          : meets === null
+            ? 'Het urencriterium is nog niet ingevuld, en de uren van de eigenaar zie je hier alleen met leesrecht op Uren: de zelfstandigenaftrek is daarom niet meegerekend.'
+            : `Urencriterium: bij Inkomstenbelasting is zelf ${meets ? 'ja' : 'nee'} gekozen${hours !== null ? `; bij Uren staan ${hours} uur in ${year}` : ''}.`}
+        {meets !== true && ' Zonder urencriterium (1.225 uur, en meer dan de helft van je werktijd) geen zelfstandigenaftrek en startersaftrek; de mkb-winstvrijstelling krijg je wel.'}
+      </p>
+      {/* Een gebroken boekjaar: de kapitaalvergelijking gaat over het boekjaar, de inkomstenbelasting over het kalenderjaar. */}
+      {e.profitShareCents !== overview.resultCents && (
+        <p className="bk-muted">
+          De winst van {year} hier ({euroCents(e.profitShareCents)}) is die van het kalenderjaar; de kapitaalvergelijking hierboven telt boekjaar {overview.fiscalYear.label} ({euroCents(overview.resultCents)}).
+        </p>
       )}
+      {!hasMixedAccount && !ib.mixedCosts && (
+        <p className="bk-muted">Er is geen rekening voor eten, drinken en representatie (4600). Boek je die kosten op een andere rekening, geef het niet-aftrekbare deel dan op als fiscale correctie bij Inkomstenbelasting.</p>
+      )}
+      <p className="bk-muted">
+        Een indicatie{overview.fiscalYear.status !== 'closed' ? ', op basis van wat er nu geboekt is' : ''}: dezelfde berekening als bij Financiën → Inkomstenbelasting, met wat daar is opgeslagen.
+        {' '}Het urencriterium, starter, de AOW-leeftijd, wat meetelt voor de KIA en fiscale correcties (zoals de bijtelling voor een auto van de zaak) stel je daar in.
+        Daar staat ook wat je aan inkomstenbelasting en Zvw-bijdrage betaalt.
+      </p>
     </div>
   );
 }
