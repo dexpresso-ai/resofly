@@ -484,6 +484,11 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
           periodLabel={period.label}
           period={{ periodType: period.dbType, year, periodIndex: period.index, from: period.from, to: period.to }}
           saldoAfgerond={saldoAfgerond}
+          looseEnds={{
+            bank: data.bankTransactions.filter(t => (t.status === 'unmatched' || t.status === 'suggested') && t.booking_date >= period.from && t.booking_date <= period.to).length,
+            purchaseDrafts: data.purchaseInvoices.filter(p => p.status === 'draft' && p.date >= period.from && p.date <= period.to).length,
+            salesDrafts: data.invoices.filter(i => i.status === 'draft' && (i.date ?? '') >= period.from && (i.date ?? '') <= period.to).length,
+          }}
           onClose={() => setShowClose(false)}
           onClosed={() => { setShowClose(false); onChanged(); }}
         />
@@ -494,11 +499,18 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
 
 // ─────────────────────────────── Periode-afsluiten-modal ───────────────────────────────
 
-function ClosePeriodModal({ organizationId, periodLabel, period, saldoAfgerond, onClose, onClosed }: {
+function ClosePeriodModal({ organizationId, periodLabel, period, saldoAfgerond, looseEnds, onClose, onClosed }: {
   organizationId: string;
   periodLabel: string;
   period: { periodType: 'month' | 'quarter'; year: number; periodIndex: number; from: string; to: string };
   saldoAfgerond: number;
+  /**
+   * Wat er in dit tijdvak nog onverwerkt ligt. Afsluiten ging zonder één
+   * woord door met een conceptfactuur en een niet-geboekte bankmutatie erin;
+   * die komen daarna in het volgende tijdvak terecht, en na Q4 in het
+   * volgende boekjaar.
+   */
+  looseEnds: { bank: number; purchaseDrafts: number; salesDrafts: number };
   onClose: () => void;
   onClosed: () => void;
 }) {
@@ -532,6 +544,18 @@ function ClosePeriodModal({ organizationId, periodLabel, period, saldoAfgerond, 
         <p className={saldoAfgerond > 0 ? 'bk-neg' : saldoAfgerond < 0 ? 'bk-pos' : 'bk-muted'}>{bedrag}</p>
       </div>
 
+      {(looseEnds.bank > 0 || looseEnds.purchaseDrafts > 0 || looseEnds.salesDrafts > 0) && (
+        <div className="bk-note">
+          <strong>In dit tijdvak ligt nog iets dat niet verwerkt is:</strong>
+          <ul>
+            {looseEnds.bank > 0 && <li>{looseEnds.bank === 1 ? '1 bankmutatie die' : `${looseEnds.bank} bankmutaties die`} nog niet geboekt {looseEnds.bank === 1 ? 'is' : 'zijn'} (Bank → Af te letteren);</li>}
+            {looseEnds.purchaseDrafts > 0 && <li>{looseEnds.purchaseDrafts === 1 ? '1 concept-inkoopfactuur' : `${looseEnds.purchaseDrafts} concept-inkoopfacturen`} (Inkoopfacturen);</li>}
+            {looseEnds.salesDrafts > 0 && <li>{looseEnds.salesDrafts === 1 ? '1 conceptfactuur' : `${looseEnds.salesDrafts} conceptfacturen`} (Facturen).</li>}
+          </ul>
+          Horen ze in deze aangifte, verwerk ze dan eerst. Na het afsluiten boeken ze op de eerste dag van het volgende tijdvak: de btw komt dan in de volgende aangifte{period.to.slice(5) === '12-31' ? ', en de omzet of kosten in het volgende boekjaar' : ''}.
+        </div>
+      )}
+
       {error && <div className="error">{error}</div>}
 
       <label className="bk-check">
@@ -543,7 +567,7 @@ function ClosePeriodModal({ organizationId, periodLabel, period, saldoAfgerond, 
         {saldoAfgerond === 0
           ? 'Bij afsluiten wordt de periode vergrendeld (nihilaangifte — er wordt niets doorgeboekt).'
           : `Bij afsluiten wordt ${bedrag} doorgeboekt naar “Te betalen omzetbelasting” en wordt de periode vergrendeld.`}
-        {' '}Nagekomen boekingen schuiven daarna automatisch naar de eerstvolgende open datum.
+        {' '}Wat je daarna nog boekt met een datum in dit tijdvak (een factuur, een inkoopfactuur, een bankmutatie met btw) komt op de eerste dag van het volgende tijdvak. Boekingen zonder btw blijven op hun eigen datum.
       </p>
 
       <div className="bk-modal-actions">
