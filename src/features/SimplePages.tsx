@@ -11,7 +11,8 @@ import { DocumentLayoutEditor } from './DocumentLayoutEditor';
 import { parseDocumentLayouts, serializeDocumentLayouts } from '../lib/documentLayout';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, refreshSendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, saveInvoiceSendMethod, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceLetterhead, loadInvoiceMollieStatus, saveInvoiceMollieKey, saveInvoiceSendMethod, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
+import { letterheadFieldsForSave, letterheadMissing } from '../lib/letterhead';
 import { formatBytes } from '../lib/transfers';
 import { isDutchVatIdFormat, looksLikeTaxNumberWithoutCountry } from '../lib/vatId';
 import { invoiceInboxAddress } from '../lib/invoiceInbox';
@@ -1966,6 +1967,28 @@ export function Settings({
     setResendTestEmail(settings?.email ?? '');
     setResendTestName(settings?.trade_name || settings?.company_name || '');
   }, [settings]);
+  // Het briefpapier zit niet in de kern (lib/letterhead.ts). Hier halen we het
+  // op, voor de documentopmaak en het PDF-voorbeeld in dit scherm. Tot het er
+  // is, staat het veld op undefined, en opslaan laat het briefpapier dan staan.
+  // Per versie (invoice_template_updated_at): een ander briefpapier opnieuw.
+  const [letterhead, setLetterhead] = useState<{ version: string; url: string | null } | null>(null);
+  useEffect(() => {
+    if (!activeOrganization || !settings || !letterheadMissing(settings)) return;
+    let alive = true;
+    const version = settings.invoice_template_updated_at ?? '';
+    loadInvoiceLetterhead(activeOrganization.id, settings.invoice_template_updated_at ?? null)
+      .then(url => { if (alive) setLetterhead({ version, url }); })
+      .catch(error => {
+        if (alive) setTemplateError(`Je briefpapier kon niet worden geladen${error instanceof Error && error.message ? ` (${error.message})` : ''}. Opslaan laat het gewoon staan.`);
+      });
+    return () => { alive = false; };
+    // settings zelf verandert bij elke ververs; alleen een ander briefpapier telt.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeOrganization?.id, settings?.invoice_template_updated_at, settings?.invoice_template_kind]);
+  useEffect(() => {
+    if (!letterhead || (settings?.invoice_template_updated_at ?? '') !== letterhead.version) return;
+    setForm(prev => (prev.invoice_template_data_url === undefined ? { ...prev, invoice_template_data_url: letterhead.url } : prev));
+  }, [letterhead, settings]);
   useEffect(() => {
     setBillingOverview(organizationContext.billingOverview);
     setSelectedPlan(organizationContext.billingOverview?.plan_key ?? 'starter');
@@ -2843,7 +2866,8 @@ export function Settings({
         {(() => {
           const layouts = parseDocumentLayouts(form.document_layouts);
           const own = [layouts.invoice ? 'facturen' : '', layouts.quote ? 'offertes' : ''].filter(Boolean);
-          const paper = form.invoice_template_kind !== 'none' && form.invoice_template_data_url ? ' met je eigen briefpapier' : '';
+          // undefined = er is briefpapier, het is alleen nog niet geladen.
+          const paper = form.invoice_template_kind !== 'none' && form.invoice_template_data_url !== null ? ' met je eigen briefpapier' : '';
           return own.length > 0
             ? `Je ${own.join(' en ')} hebben een eigen opmaak${paper}.`
             : `Je offertes en facturen gebruiken de standaardopmaak van ResoFly${paper}, met je logo en merkkleur.`;
@@ -3418,7 +3442,10 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     invoice_template_file_name: settings.invoice_template_file_name ?? null,
     invoice_template_mime_type: settings.invoice_template_mime_type ?? null,
     invoice_template_file_size: settings.invoice_template_file_size ?? 0,
-    invoice_template_data_url: settings.invoice_template_data_url ?? null,
+    // Niet geladen blijft niet geladen (undefined): de kern laadt het briefpapier
+    // niet (lib/letterhead.ts). Met `?? null` las opslaan dat als "geen
+    // briefpapier" en wiste het.
+    invoice_template_data_url: settings.invoice_template_data_url,
     invoice_template_text_color: settings.invoice_template_text_color ?? '#1a1a1a',
     invoice_accent_color: settings.invoice_accent_color ?? '#FFD966',
     invoice_font_size: settings.invoice_font_size ?? 10,
@@ -3453,9 +3480,9 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     return trimmed || null;
   };
 
-  const templateKind = input.invoice_template_data_url && input.invoice_template_kind !== 'none'
-    ? input.invoice_template_kind
-    : 'none';
+  // Het briefpapier: is het niet geladen, dan blijft het zoals het is; anders
+  // betekent geen data-URL geen briefpapier (lib/letterhead.ts).
+  const letterhead = letterheadFieldsForSave(input);
 
   return {
     ...input,
@@ -3474,12 +3501,7 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     iban: clean(input.iban),
     invoice_payment_terms: clean(input.invoice_payment_terms),
     invoice_footer: clean(input.invoice_footer),
-    invoice_template_kind: templateKind,
-    invoice_template_file_name: templateKind === 'none' ? null : clean(input.invoice_template_file_name),
-    invoice_template_mime_type: templateKind === 'none' ? null : clean(input.invoice_template_mime_type),
-    invoice_template_file_size: templateKind === 'none' ? 0 : Number(input.invoice_template_file_size || 0),
-    invoice_template_data_url: templateKind === 'none' ? null : input.invoice_template_data_url,
-    invoice_template_updated_at: templateKind === 'none' ? null : input.invoice_template_updated_at,
+    ...letterhead,
     invoice_template_text_color: normalizeHex(input.invoice_template_text_color, '#1a1a1a'),
     // De merkkleur is de enige bron; de factuurkleur volgt (de database houdt
     // dit ook af met een trigger, hier al zodat de UI meteen klopt).

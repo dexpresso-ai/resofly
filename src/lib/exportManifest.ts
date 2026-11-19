@@ -101,7 +101,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // bank_sales_invoice_ref erbij; geen tabellen of kolommen.
 // 20261119100000 (opstarten sneller) zet alleen de functie
 // bank_transactions_to_reconcile erbij; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261119100000';
+// 20261119110000 (briefpapier los) zet alleen de functie company_settings_core
+// erbij; geen tabellen of kolommen. Het briefpapier gaat gewoon mee in de export.
+export const EXPORT_SCHEMA_VERSION = '20261119110000';
 
 export type TableKind =
   | 'export'

@@ -26,6 +26,7 @@ import {
   type DocumentLayouts,
 } from './documentLayout';
 import { appPdfFonts } from './pdfFonts';
+import { withInvoiceLetterhead } from './repository';
 import type { AppData, Client, CompanySettings, Invoice, Quote } from '../types';
 
 function downloadBlob(blob: Blob, filename: string): void {
@@ -71,7 +72,10 @@ export function financePdfOptions(
 }
 
 export async function createFinancePDFBytes(doc: Quote | Invoice, kind: 'quote' | 'invoice', client: Client | null, opts: PdfOptions = {}): Promise<Uint8Array> {
-  const company = opts.company ?? null;
+  // De kern laadt de instellingen zonder het briefpapier (lib/letterhead.ts).
+  // Hier halen we het op; lukt dat niet, dan geen PDF in plaats van een PDF
+  // zonder briefpapier.
+  const company = await withInvoiceLetterhead(opts.company ?? null);
   const lines = Array.isArray(doc.lines) ? doc.lines : [];
   const totals = total(lines);
 

@@ -3616,7 +3616,13 @@ export interface CompanySettings extends OrgScopedRow {
   invoice_template_file_name: string | null;
   invoice_template_mime_type: string | null;
   invoice_template_file_size: number;
-  invoice_template_data_url: string | null;
+  /**
+   * Het briefpapier als data-URL. Ontbreekt (undefined) in de kern van de
+   * werkruimte: die laadt het niet, het kan honderden KB's zijn. null = geen
+   * briefpapier. Voor een PDF: withInvoiceLetterhead (lib/repository.ts); zie
+   * lib/letterhead.ts.
+   */
+  invoice_template_data_url?: string | null;
   invoice_template_text_color: string;
   invoice_accent_color: string;
   invoice_font_size: number;
