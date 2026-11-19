@@ -12,7 +12,10 @@
 // de knop van de instellingenpagina, zoals bij Huisstijl.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from 'react';
-import * as PdfLib from 'pdf-lib';
+// pdf-lib pas bij het openen van de editor (loadPdfLib), niet bij de start van
+// de app: deze editor hangt aan Instellingen, en met een gewone import kwam
+// het pakket in de opstartbundel terecht. Zie ook lib/pdf.ts.
+const loadPdfLib = () => import('pdf-lib');
 import {
   ArrowDown, ArrowUp, Check, CircleAlert, Copy, Download, Eye, Image as ImageIcon, LayoutTemplate, Minus, Plus,
   Redo2, RotateCcw, Square, Trash2, Type, Undo2,
@@ -96,6 +99,7 @@ function useDocumentTools(style: DocumentStyle): TextTools | null {
     // De webletters voor het blad zelf (de SVG); de PDF sluit ze apart in.
     ensureBrandFontsLoaded([styleRef.current.headingFont, styleRef.current.bodyFont].filter(font => brandFont(font).key === font));
     void (async () => {
+      const PdfLib = await loadPdfLib();
       const doc = await PdfLib.PDFDocument.create();
       const fonts = await embedDocumentFonts(doc, styleRef.current, await appPdfFonts(), message => console.warn(message));
       if (alive) setState({ key, tools: documentFontTools(fonts) });
@@ -1226,7 +1230,7 @@ function PdfPreview({ form, layouts, kind }: { form: CompanySettingsInput; layou
     setState('busy');
     const handle = window.setTimeout(() => {
       const assets = documentAssetsFromSettings(form);
-      appPdfFonts().then(fonts => renderDocumentPdf(PdfLib, {
+      Promise.all([appPdfFonts(), loadPdfLib()]).then(([fonts, PdfLib]) => renderDocumentPdf(PdfLib, {
         layout: resolveDocumentLayout(layouts, kind, { letterhead: Boolean(assets.letterhead) }),
         data: sampleDocumentData(kind, form),
         style: resolveDocumentStyle(form, layoutFonts(layouts)),

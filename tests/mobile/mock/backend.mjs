@@ -761,6 +761,10 @@ function rpc(fn, body = null) {
     case 'ensure_portal_login_key': return pub.PORTAL_LOGIN_KEY;
     case 'organization_license_usage': return [{ organization_id: seed.ids.ORG, licensed_seats: 3, active_members: 2, pending_invitations: 0, used_seats: 2, available_seats: 1, license_status: 'active', billing_exempt: false }];
     case 'organization_billing_overview': return [];
+    // De telling voor het dashboard (2026-11-19, opstarten sneller): eerst een
+    // HEAD op bank_transactions, nu één RPC die de rechten één keer controleert.
+    case 'bank_transactions_to_reconcile':
+      return (seed.tables.bank_transactions ?? []).filter(row => ['unmatched', 'suggested'].includes(row.status)).length;
     // Mijn declaraties (2026-11-18), als teamlid zonder Financiën.
     case 'list_my_declarations': return seed.declarations;
     case 'chat_unread_counts': return seed.chatUnread;

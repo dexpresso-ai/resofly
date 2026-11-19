@@ -1,4 +1,7 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from 'pdf-lib';
+// Alleen types bij het laden: pdf-lib zelf komt pas binnen bij de eerste PDF
+// (import() in buildDocumentPdfBlob). Een gewone import zette het pakket in de
+// bundel die bij elke start geladen wordt; zie ook lib/pdf.ts.
+import type { PDFDocument, PDFFont, PDFPage, RGB } from 'pdf-lib';
 import { parseRichTextToBlocks, type DocBlock, type DocRun } from './richTextModel';
 
 export interface DocumentExportMeta {
@@ -13,10 +16,6 @@ export interface DocumentExportMeta {
 
 const A4: [number, number] = [595.28, 841.89];
 const MARGIN = 56;
-const NEAR_BLACK = rgb(0.1, 0.1, 0.1);
-const BODY = rgb(0.16, 0.16, 0.16);
-const MUTED = rgb(0.42, 0.42, 0.42);
-const ACCENT = rgb(1, 0.85, 0.4);
 
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -144,6 +143,11 @@ function listPrefix(block: DocBlock, counters: number[]): string {
 }
 
 export async function buildDocumentPdfBlob(meta: DocumentExportMeta): Promise<Blob> {
+  const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
+  const NEAR_BLACK = rgb(0.1, 0.1, 0.1);
+  const BODY = rgb(0.16, 0.16, 0.16);
+  const MUTED = rgb(0.42, 0.42, 0.42);
+  const ACCENT = rgb(1, 0.85, 0.4);
   const pdfDoc = await PDFDocument.create();
   const fonts: Fonts = {
     regular: await pdfDoc.embedFont(StandardFonts.Helvetica),
