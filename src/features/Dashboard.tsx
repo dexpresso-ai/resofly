@@ -15,7 +15,7 @@ import type { AiDecision, DecisionTarget } from '../lib/decisions-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { FULL_PERMISSIONS, isAccountantRole, isAdminRole, type ModuleKey, type Permissions } from '../lib/permissions';
 import { isZenitFamily, useLook } from '../lib/look';
-import { computeStream, type StationId, type Stream, type StreamItem } from '../lib/stroom';
+import { computeStream, invoiceIsOverdue, type StationId, type Stream, type StreamItem } from '../lib/stroom';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
 import { askGerrie } from '../components/GerrieChat';
 import { DayArc, type DayArcItem } from './DayArc';
@@ -1073,13 +1073,11 @@ function isSameMonth(date: Date | null, year: number, month: number) {
   return date != null && date.getFullYear() === year && date.getMonth() === month;
 }
 
-// Spiegelt de cron-/Financiën-logica: onbetaald én vervaldatum verstreken.
+// Eén regel voor "te laat", gedeeld met de stroom en de klantpagina
+// (lib/stroom.ts): een concept is nog niet verstuurd en de vervaldag zelf is
+// nog op tijd. Hier stond een eigen variant die beide wel meetelde.
 function invoiceOverdue(invoice: Invoice): boolean {
-  if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) return false;
-  if (invoice.status === 'overdue') return true;
-  if (!invoice.due_date) return false;
-  const due = new Date(invoice.due_date);
-  return !Number.isNaN(due.getTime()) && due.getTime() < Date.now();
+  return invoiceIsOverdue(invoice);
 }
 
 function priorityRank(task: Task): number {

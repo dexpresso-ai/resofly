@@ -24,7 +24,7 @@ import { FolderLabel, MailFolderTree, useMailFolderActions, type MailTreeItem } 
 import { foldersOfClient } from '../lib/mailFolders';
 import { PageIcon } from '../components/PageIcon';
 import { ClientStream, ClientStreamBadge } from '../components/StreamRibbon';
-import { computeStream } from '../lib/stroom';
+import { computeStream, invoiceIsOverdue } from '../lib/stroom';
 import { useLook } from '../lib/look';
 import { createClientWithServerCode, deleteClientEmail, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadInboundOpenCount, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead } from '../lib/repository';
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
@@ -1526,15 +1526,16 @@ function getClientDocuments(data: AppData, clientId: string) {
   return data.documents.filter(doc => doc.client_id === clientId || Boolean(doc.project_id && projectIds.has(doc.project_id)));
 }
 
+// Open = de deur uit en nog geld te krijgen. Ingetrokken, afgeboekt en
+// terugbetaald tellen niet mee, net als op de pagina Facturen.
 function isInvoiceOpen(invoice: Invoice) {
-  return !['paid', 'cancelled', 'draft'].includes(invoice.status);
+  return !['paid', 'cancelled', 'draft', 'void', 'written_off', 'refunded'].includes(invoice.status);
 }
 
+// Dezelfde regel als het dashboard en de database (lib/stroom.ts). Eerder
+// telde een concept hier als "vervallen" en ging het om de UTC-datum.
 function isInvoiceOverdue(invoice: Invoice) {
-  if (invoice.status === 'paid' || invoice.status === 'cancelled') return false;
-  if (invoice.status === 'overdue') return true;
-  if (!invoice.due_date) return false;
-  return invoice.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
+  return invoiceIsOverdue(invoice);
 }
 
 // ── Zoeken/filteren op de klantdetailpagina ────────────────────────────
