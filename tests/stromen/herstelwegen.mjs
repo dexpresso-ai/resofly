@@ -602,6 +602,13 @@ async function vanzelfBoeken() {
     gelijk([laat.status, laat.auto_booked], ['booked', true], 'de incasso van november: vanzelf afgeletterd');
   });
 
+  await stap('een betaling aan de Belastingdienst zonder aangifte met dat bedrag: geen voorstel, wel de weg (1530 voor btw, privé voor inkomstenbelasting)', async () => {
+    gelukt(await lees([{ booking_date: '2026-11-04', amount_cents: -120000, counterparty_name: 'Belastingdienst', counterparty_iban: 'NL86INGB0002445588', description: 'Betalingskenmerk 1234 5678 9012 3456' }]), 'betaling aan de Belastingdienst');
+    const rij = rijen(-120000)[0];
+    gelijk(rij.status, 'unmatched', 'geen voorstel');
+    verwacht(/1530 Te betalen omzetbelasting/.test(rij.match_reason) && /0550 Privé-opnamen/.test(rij.match_reason), `reden: ${rij.match_reason}`);
+  });
+
   await stap('een omschrijving met een factuurnummer dat ResoFly niet kent: een voorstel, niet vanzelf geboekt op een andere factuur', async () => {
     const hn = gelukt(await rest('suppliers?select=*', { method: 'POST', token: w.eigenaar.token, prefer: 'return=representation',
       body: { organization_id: w.orgId, created_by: w.eigenaar.id, name: 'Hosting Noord', iban: 'NL44HNRD0000000044' } }), 'leverancier')[0];

@@ -2005,6 +2005,20 @@ begin
       v_done := true;
     end if;
 
+    -- 4b. TOEGEVOEGD (20261119180000): de Belastingdienst, maar geen aangifte met dit
+    --     bedrag en geen woord over btw. Geen voorstel (het kan btw zijn, of
+    --     inkomstenbelasting), wel de weg. Wie de btw betaalde vóór hij het
+    --     tijdvak in ResoFly afsloot, koos anders 1510 en hield 1510 en 1530
+    --     met tegengestelde saldi; en inkomstenbelasting van de zakelijke
+    --     rekening is bij een eenmanszaak of vof een privé-opname, geen kosten.
+    if not v_done
+       and (v_iban = 'NL86INGB0002445588' or coalesce(v_txn.counterparty_name,'') ilike '%belastingdienst%') then
+      o_reason := 'Belastingdienst, maar er is in ResoFly geen aangifte met dit bedrag. Is dit btw? Sluit dan eerst het tijdvak af bij Omzetbelasting en klik op Opnieuw matchen, of boek op 1530 Te betalen omzetbelasting (niet op 1500 of 1510).'
+        || case when public.org_fiscal_regime(p_organization_id) = 'ib'
+                then ' Is dit inkomstenbelasting of de Zvw-bijdrage? Dat is privé: boek op 0550 Privé-opnamen.'
+                else '' end;
+    end if;
+
     -- 5. Alleen het bedrag van één openstaande inkoopfactuur. Na de regels en
     --    de Belastingdienst: dit is het zwakste signaal. Eerst kijken of er
     --    überhaupt een factuur met dat bedrag openstaat (open = −bedrag, in
