@@ -521,18 +521,30 @@ export function estimatePerson(rules: IbYearRules, input: IbPersonInput): IbPers
   const top = rules.brackets[rules.brackets.length - 1];
   const topLowerCents = rules.brackets.length > 1 ? (rules.brackets[rules.brackets.length - 2].upToCents ?? 0) : 0;
   const cappedDeductions = entrepreneurDeductionCents + Math.max(0, mkbExemptionCents);
+  // Art. 2.10 lid 2: de aftrekposten tellen als het bovenste deel van het
+  // inkomen. De verhoging gaat dus over de aftrekposten, tot hoogstens het
+  // bedrag waarmee het inkomen MET die aftrekposten erbij boven de grens van
+  // de hoogste schijf uitkomt. Eerder stond hier het inkomen ná aftrek
+  // tegenover de grens. Bij € 90.000 winst (belastbaar € 77.522, net onder
+  // de grens) was de verhoging daardoor € 0 in plaats van € 1.381,94: elke
+  // winst tussen ongeveer € 78.000 en € 108.000 kreeg een te lage raming.
   const deductionCapCents = applyRate(
-    Math.min(cappedDeductions, Math.max(0, taxableIncomeCents - topLowerCents)),
+    Math.min(cappedDeductions, Math.max(0, taxableIncomeCents + cappedDeductions - topLowerCents)),
     Math.max(0, top.rate - rules.deductionCapRate),
   );
   const taxBeforeCreditsCents = box1.taxCents + deductionCapCents;
 
-  // Heffingskortingen: de algemene over het verzamelinkomen (hier: het
-  // belastbare inkomen), de arbeidskorting over de winst vóór aftrek.
+  // Heffingskortingen: de algemene en de ouderenkorting over het
+  // verzamelinkomen, de arbeidskorting over de winst vóór aftrek. Het
+  // verzamelinkomen is het inkomen vóór verliesverrekening (art. 2.18): een
+  // verlies uit een eerder jaar maakt de belasting lager, niet de afbouw van
+  // de kortingen. Eerder stond hier het inkomen ná verrekening, en kreeg wie
+  // een oud verlies verrekende te veel korting in de raming.
+  const aggregateIncomeCents = Math.max(0, taxableProfitCents);
   const labourIncomeCents = input.isEntrepreneur ? Math.max(0, profitCents) : 0;
   const generalCreditCents = blend(
-    phaseOutCredit(rules.generalCreditAow, taxableIncomeCents),
-    phaseOutCredit(rules.generalCredit, taxableIncomeCents),
+    phaseOutCredit(rules.generalCreditAow, aggregateIncomeCents),
+    phaseOutCredit(rules.generalCredit, aggregateIncomeCents),
     months,
   );
   const labourCreditCents = blend(
@@ -540,7 +552,7 @@ export function estimatePerson(rules: IbYearRules, input: IbPersonInput): IbPers
     tableCredit(rules.labourCredit, labourIncomeCents),
     months,
   );
-  const elderlyCreditCents = input.aowStatus === 'nee' ? 0 : phaseOutCredit(rules.elderlyCredit, taxableIncomeCents);
+  const elderlyCreditCents = input.aowStatus === 'nee' ? 0 : phaseOutCredit(rules.elderlyCredit, aggregateIncomeCents);
   const creditsCents = generalCreditCents + labourCreditCents + elderlyCreditCents;
   const creditsAppliedCents = Math.min(creditsCents, taxBeforeCreditsCents);
   const incomeTaxCents = taxBeforeCreditsCents - creditsAppliedCents;
@@ -768,6 +780,8 @@ export interface IncomeTaxPerson {
   hoursFromTimeTracking: boolean;
   /** Geregistreerde minuten van deze persoon in het jaar; null als ResoFly ze niet kent of niet mag tonen. */
   registeredMinutes: number | null;
+  /** Alleen in de prognose, als het urencriterium de uren volgt: de uren doorgetrokken naar 31 december. */
+  projectedMinutes: number | null;
   estimate: IbPersonEstimate;
   notes: string[];
 }
@@ -823,15 +837,32 @@ export function defaultIncomeTaxProfile(partnerId: string | null): IncomeTaxProf
 /** Het urencriterium in minuten: 1.225 uur. */
 const HOURS_CRITERION_MINUTES = 1225 * 60;
 
-function personNotes(rules: IbYearRules, person: { kind: IncomeTaxPerson['kind']; profile: IncomeTaxProfile; estimate: IbPersonEstimate; hoursFromTimeTracking: boolean; registeredMinutes: number | null }): string[] {
+function personNotes(rules: IbYearRules, person: {
+  kind: IncomeTaxPerson['kind']; profile: IncomeTaxProfile; estimate: IbPersonEstimate; hoursFromTimeTracking: boolean;
+  registeredMinutes: number | null; projectedMinutes: number | null; investmentTotalCents: number;
+}): string[] {
   const notes: string[] = [];
   const { profile, estimate } = person;
+  const hoursText = (minutes: number) => Math.floor(minutes / 60).toLocaleString('nl-NL');
   if (person.hoursFromTimeTracking && person.registeredMinutes !== null) {
-    const hours = Math.floor(person.registeredMinutes / 60).toLocaleString('nl-NL');
+    const hours = hoursText(person.registeredMinutes);
     const who = person.kind === 'ondernemer' ? 'de eigenaar heeft' : 'het teamlid van deze vennoot heeft';
-    notes.push(profile.meetsHoursCriterion
-      ? `Urencriterium volgens Uren: ${who} ${hours} uur geregistreerd. Gaat minder dan de helft van de werktijd naar de onderneming (en is het geen starter), zet het dan op nee.`
-      : `Urencriterium volgens Uren: ${who} ${hours} uur geregistreerd, minder dan 1.225. Staan niet alle uren in ResoFly, vul het dan zelf in.`);
+    if (person.projectedMinutes !== null) {
+      // De prognose trekt de winst door naar 31 december; dan de uren ook.
+      // Anders kreeg wie op koers ligt een prognose zonder zelfstandigenaftrek.
+      notes.push(`Urencriterium volgens Uren: ${who} nu ${hours} uur geregistreerd. In hetzelfde tempo zijn dat er ongeveer ${hoursText(person.projectedMinutes)} op 31 december: ${profile.meetsHoursCriterion ? 'genoeg voor de 1.225 uur' : 'minder dan 1.225'}. Klopt dat niet, kies dan zelf ja of nee.`);
+    } else {
+      notes.push(profile.meetsHoursCriterion
+        ? `Urencriterium volgens Uren: ${who} ${hours} uur geregistreerd. Gaat minder dan de helft van de werktijd naar de onderneming (en is het geen starter), zet het dan op nee.`
+        : `Urencriterium volgens Uren: ${who} ${hours} uur geregistreerd, minder dan 1.225. Staan niet alle uren in ResoFly, vul het dan zelf in.`);
+    }
+  } else if (profile.meetsHoursCriterion === false && person.registeredMinutes !== null && person.registeredMinutes >= HOURS_CRITERION_MINUTES) {
+    // Een opgeslagen "nee" dat de uren hebben ingehaald: zeg het, want zonder
+    // deze regel bleef de zelfstandigenaftrek stil weg.
+    notes.push(`Bij Uren staan ${hoursText(person.registeredMinutes)} uur, maar het urencriterium staat hier op nee: er is gerekend zonder zelfstandigenaftrek. Klopt dat niet meer, kies dan "Volgens Uren" of ja, en sla op.`);
+  }
+  if (estimate.kiaCents > 0 && person.investmentTotalCents > 0) {
+    notes.push(`De KIA rekent met ${euroText(person.investmentTotalCents)} aan investeringen uit Activa. Loop bij KIA na wat meetelt: een personenauto, grond, een woning en wat je verhuurt of vooral privé gebruikt tellen niet mee. Zet die uit, anders valt de raming te laag uit.`);
   }
   if (person.kind === 'commanditair') {
     notes.push('Commanditaire vennoot: voor de inkomstenbelasting geen ondernemer. Geen ondernemersaftrek en geen mkb-winstvrijstelling, en het winstaandeel telt niet als arbeidsinkomen voor de arbeidskorting. De KIA geldt wel.');
@@ -962,11 +993,19 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
   const persons: IncomeTaxPerson[] = people.map(who => {
     const saved = profileFor(who.partnerId);
     const registeredMinutes = minutesOf(who);
-    const hoursFromTimeTracking = saved === null && registeredMinutes !== null;
-    const profile = saved ?? {
-      ...defaultIncomeTaxProfile(who.partnerId),
-      meetsHoursCriterion: registeredMinutes !== null ? registeredMinutes >= HOURS_CRITERION_MINUTES : null,
-    };
+    // Het urencriterium volgt de uren zolang er geen eigen keuze is opgeslagen
+    // (null), ook als de rest van het profiel wel is opgeslagen. Eerder volgde
+    // het de uren alleen zonder opgeslagen profiel: wie in maart alleen zijn
+    // voorlopige aanslag invulde, legde daarmee "nee" vast, en hield in
+    // november met 1.400 uur nog steeds geen zelfstandigenaftrek.
+    const stored = saved ?? defaultIncomeTaxProfile(who.partnerId);
+    const hoursFromTimeTracking = stored.meetsHoursCriterion === null && registeredMinutes !== null;
+    const projectedMinutes = hoursFromTimeTracking && registeredMinutes !== null && basis === 'prognose' && projection
+      ? mulDiv(Math.max(0, Math.trunc(registeredMinutes)), projection.totalDays, projection.elapsedDays)
+      : null;
+    const profile: IncomeTaxProfile = hoursFromTimeTracking && registeredMinutes !== null
+      ? { ...stored, meetsHoursCriterion: (projectedMinutes ?? registeredMinutes) >= HOURS_CRITERION_MINUTES }
+      : stored;
     const corrections: IncomeTaxPerson['corrections'] = [
       ...sharedSplits.map(({ correction, parts }) => ({
         id: correction.id, code: correction.code, label: correction.label, amountCents: parts.get(who.key) ?? 0,
@@ -1001,8 +1040,9 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
       corrections,
       hoursFromTimeTracking,
       registeredMinutes,
+      projectedMinutes,
       estimate,
-      notes: personNotes(rules, { kind: who.kind, profile, estimate, hoursFromTimeTracking, registeredMinutes }),
+      notes: personNotes(rules, { kind: who.kind, profile, estimate, hoursFromTimeTracking, registeredMinutes, projectedMinutes, investmentTotalCents }),
     };
   });
 
@@ -1010,8 +1050,21 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
   // kalenderjaar? De inkomstenbelasting rekent per kalenderjaar.
   const yearStart = `${inputs.year}-01-01`;
   const yearEnd = `${inputs.year}-12-31`;
-  if (inputs.overlappingFiscalYears.some(fy => fy.periodStart.slice(0, 10) !== yearStart || fy.periodEnd.slice(0, 10) !== yearEnd)) {
+  // Alleen een boekjaar dat óver de jaargrens loopt. Een kort eerste boekjaar
+  // (1 juli t/m 31 december) valt binnen het kalenderjaar en kreeg deze
+  // waarschuwing ook, terwijl daar iets anders speelt: zie hieronder.
+  if (inputs.overlappingFiscalYears.some(fy => fy.periodStart.slice(0, 10) < yearStart || fy.periodEnd.slice(0, 10) > yearEnd)) {
     warnings.push(`Je boekjaar loopt niet gelijk met het kalenderjaar. De inkomstenbelasting rekent met de winst per kalenderjaar; deze raming telt de boekingen van 1 januari tot en met 31 december ${inputs.year}.`);
+  }
+  // Begon de boekhouding in ResoFly in de loop van dit jaar, dan kent ResoFly
+  // de winst van daarvóór niet (die zit hooguit in de beginbalans). Wie op
+  // 1 juli overstapte, zag "Winst 2026" over een half jaar, met de kortingen
+  // van een heel jaar: een raming die duizenden euro's te laag kon zijn,
+  // zonder één woord erbij.
+  const startDate = inputs.bookkeepingStartDate ? inputs.bookkeepingStartDate.slice(0, 10) : null;
+  if (startDate && startDate > yearStart && startDate <= yearEnd) {
+    const [, startMonth, startDay] = startDate.split('-').map(Number);
+    warnings.push(`Je boekhouding in ResoFly begint op ${startDay} ${MONTHS[startMonth - 1]} ${inputs.year}: deze raming telt de winst vanaf die dag. Had je eerder in ${inputs.year} al winst uit deze onderneming, tel die er dan bij onder Fiscale correcties (soort "Overige correctie"). Anders valt de raming te laag uit.`);
   }
 
   const totals = persons.reduce((t, p) => ({
