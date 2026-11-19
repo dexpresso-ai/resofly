@@ -6,7 +6,11 @@
 // een eigen tekenroutine: die gebruikte wel het briefpapier en de lettergrootte,
 // de verstuurde PDF niet, en geen van beide zette het logo erop. Het voorbeeld
 // beloofde dus iets wat de klant niet kreeg.
-import * as PdfLib from 'pdf-lib';
+//
+// pdf-lib komt pas binnen bij de eerste PDF (import() in createFinancePDFBytes).
+// Met een gewone import zat hij met pako en de standaardletters (samen ruim
+// 1 MB onverkleind) in de bundel die bij elke start geladen en geparsed werd,
+// ook als je die dag geen enkele PDF maakte.
 import { invoiceVatNotes } from './invoiceVatNotes';
 import { total } from './format';
 import { lineGross, lineNet, toNumber } from './money';
@@ -110,6 +114,7 @@ export async function createFinancePDFBytes(doc: Quote | Invoice, kind: 'quote' 
 
   const layouts = parseDocumentLayouts(opts.layouts !== undefined ? opts.layouts : company?.document_layouts);
   const assets = documentAssetsFromSettings(company);
+  const PdfLib = await import('pdf-lib');
   return renderDocumentPdf(PdfLib, {
     layout: resolveDocumentLayout(layouts, kind, { letterhead: Boolean(assets.letterhead) }),
     data,

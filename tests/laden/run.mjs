@@ -8,7 +8,9 @@
  * test (tests/mobile/mock), naar het netwerkverkeer en naar het scherm:
  *
  *   1. elke pagina haalt precies de groepen op die PAGE_DATA_GROUPS noemt, en
- *      niets meer; het dashboard dus niets, op de telling van de bank na;
+ *      niets meer; het dashboard dus niets. De banktransacties die nog
+ *      gekoppeld moeten worden, telt het via één RPC (sinds 19 november; eerst
+ *      een HEAD op de tabel, die door de RLS per rij seconden kon kosten);
  *   2. elke pagina toont daarna zichzelf: geen laadmelding, geen foutmelding,
  *      geen JavaScript-fout;
  *   3. een geladen groep wordt bewaard: terug en weer heen haalt hem niet opnieuw;
@@ -90,10 +92,12 @@ const same = (a, b) => JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
 async function openPage(context, spec, storage = {}) {
   const page = await context.newPage();
   const requests = [];
+  const rpcs = [];
   const errors = [];
   page.on('pageerror', e => errors.push(String(e.message)));
   page.on('request', req => {
     const url = new URL(req.url());
+    if (url.origin === SUPABASE_URL && url.pathname.startsWith('/rest/v1/rpc/')) rpcs.push(url.pathname.slice('/rest/v1/rpc/'.length));
     if (url.origin !== SUPABASE_URL || !url.pathname.startsWith('/rest/v1/') || url.pathname.startsWith('/rest/v1/rpc/')) return;
     const table = url.pathname.slice('/rest/v1/'.length);
     if (ALL_GROUP_TABLES.includes(table)) requests.push({ table, method: req.method() });
@@ -109,7 +113,7 @@ async function openPage(context, spec, storage = {}) {
     new MutationObserver(seen).observe(document.body, { childList: true, subtree: true });
   });
   const gets = (table) => requests.filter(r => r.method === 'GET' && (!table || r.table === table));
-  return { page, requests, errors, gets };
+  return { page, requests, rpcs, errors, gets };
 }
 
 async function screenState(page) {
@@ -161,7 +165,7 @@ try {
 
   // ── 1 en 2: per pagina precies de eigen groepen, en daarna de pagina zelf ──
   for (const [key, spec] of Object.entries(PAGES)) {
-    const { page, requests, errors, gets } = await openPage(context, spec);
+    const { page, requests, rpcs, errors, gets } = await openPage(context, spec);
     await idle(page);
     const pageName = typeof spec === 'string' ? spec : spec.page;
     const expected = (PAGE_DATA_GROUPS[pageName] ?? []).flatMap(group => GROUP_TABLES[group]);
@@ -175,7 +179,7 @@ try {
       // De btw-tijdvakken met een aangifte komen sinds 18 november uit één
       // RPC (list_filed_vat_periods), voor de herinnering met de deadline;
       // vat_returns zelf haalt het dashboard niet op (zie de controle hierboven).
-      check('dashboard: telt banktransacties zonder ze te laden', same(heads, ['bank_transactions']), `HEAD: [${sorted(heads).join(', ')}]`);
+      check('dashboard: telt banktransacties zonder ze te laden', heads.length === 0 && rpcs.includes('bank_transactions_to_reconcile'), `HEAD: [${sorted(heads).join(', ')}], RPC bank_transactions_to_reconcile: ${rpcs.includes('bank_transactions_to_reconcile') ? 'ja' : 'nee'}`);
     }
     const state = await screenState(page);
     check(`${key}: toont de pagina (geen laadmelding, geen fout)`, !state.loading && !state.failed && state.text.length > 40, state.loading ? 'nog aan het laden' : state.failed ? 'foutmelding' : `te weinig inhoud: "${state.text.slice(0, 60)}"`);

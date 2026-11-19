@@ -99,7 +99,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // (bank_open_purchase_invoice), functies en triggers; geen tabellen.
 // 20261118200000 (bank: matchen sneller) vervangt functies en zet het rijtype
 // bank_sales_invoice_ref erbij; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261118200000';
+// 20261119100000 (opstarten sneller) zet alleen de functie
+// bank_transactions_to_reconcile erbij; geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261119100000';
 
 export type TableKind =
   | 'export'

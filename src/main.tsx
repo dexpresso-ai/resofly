@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Sidebar, type SidebarProps } from './components/Sidebar';
 import { ZenitNav } from './components/ZenitNav';
@@ -169,17 +169,8 @@ import { OwnersPage } from './features/Owners';
 import { IncomeTaxPage } from './features/IncomeTax';
 import { ShareholdersPage } from './features/Shareholders';
 import { AnnualAccountsPage } from './features/AnnualAccounts';
-import { PublicQuotePage } from './features/PublicQuotePage';
-import { PublicInvoicePage } from './features/PublicInvoicePage';
-import { PublicContractPage } from './features/PublicContractPage';
-import { PublicBookingPage } from './features/PublicBookingPage';
-import { PublicGalleryPage } from './features/PublicGalleryPage';
-import { PublicSharePage } from './features/PublicSharePage';
-import { PublicUnsubscribePage } from './features/PublicUnsubscribePage';
-import { PublicTransferPage } from './features/PublicTransferPage';
 import { GalleryTab } from './features/ProjectGallery';
 import { Contracts } from './features/Contracts';
-import { ClientPortal, PortalPreview } from './features/portal/ClientPortal';
 import { clientHostInfo, portalRedirectTarget } from './lib/clientHost';
 import { PORTAL_PREVIEW_PATH } from './lib/portalPreview';
 import { Archive, Settings, type SettingsTab } from './features/SimplePages';
@@ -209,6 +200,7 @@ import type { GerrieActionHandlers, GerrieProposal, GerrieProposalLine } from '.
 import { runRegistryAction } from './lib/actions';
 import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
 import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
+import { loadBillingOverview } from './services/billingService';
 import { exportFinancePDF, financePdfOptions } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
@@ -267,7 +259,29 @@ import './styles/prognose.css';
 // De weekplanner (2026-11-15) als allerlaatste: de zeven oudere lagen planner-
 // CSS in globals.css spraken elkaar tegen, dit blok bepaalt de opbouw.
 import './styles/weekplanner.css';
-import { OrganizationSetup, OrganizationSetupPending, type SetupNext } from './features/OrganizationSetup';
+import type { SetupNext } from './features/OrganizationSetup';
+import { installChunkReload } from './lib/chunkReload';
+
+/*
+ * Los geladen: wat een teamlid in zijn werkruimte nooit ziet. De pagina's
+ * achter een deellink en het klantportaal zijn voor klanten; de inrichting
+ * zie je één keer, bij een nieuwe organisatie. Tot november 2026 zaten ze in
+ * de bundel die bij elke start geladen en geparsed werd (samen ruim 400 KB
+ * onverkleind). Een klant die een offerte opent, haalt nu de hoofdbundel plus
+ * dit ene stuk op. Elk gebruik staat in een <Suspense> met het laadscherm.
+ */
+const PublicQuotePage = lazy(() => import('./features/PublicQuotePage').then(m => ({ default: m.PublicQuotePage })));
+const PublicInvoicePage = lazy(() => import('./features/PublicInvoicePage').then(m => ({ default: m.PublicInvoicePage })));
+const PublicContractPage = lazy(() => import('./features/PublicContractPage').then(m => ({ default: m.PublicContractPage })));
+const PublicBookingPage = lazy(() => import('./features/PublicBookingPage').then(m => ({ default: m.PublicBookingPage })));
+const PublicGalleryPage = lazy(() => import('./features/PublicGalleryPage').then(m => ({ default: m.PublicGalleryPage })));
+const PublicSharePage = lazy(() => import('./features/PublicSharePage').then(m => ({ default: m.PublicSharePage })));
+const PublicUnsubscribePage = lazy(() => import('./features/PublicUnsubscribePage').then(m => ({ default: m.PublicUnsubscribePage })));
+const PublicTransferPage = lazy(() => import('./features/PublicTransferPage').then(m => ({ default: m.PublicTransferPage })));
+const ClientPortal = lazy(() => import('./features/portal/ClientPortal').then(m => ({ default: m.ClientPortal })));
+const PortalPreview = lazy(() => import('./features/portal/ClientPortal').then(m => ({ default: m.PortalPreview })));
+const OrganizationSetup = lazy(() => import('./features/OrganizationSetup').then(m => ({ default: m.OrganizationSetup })));
+const OrganizationSetupPending = lazy(() => import('./features/OrganizationSetup').then(m => ({ default: m.OrganizationSetupPending })));
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 /**
@@ -854,6 +868,11 @@ function BootLoading({ message = 'ResoFly is aan het laden…' }: { message?: st
   return <div className="boot"><div className="boot-loading"><span className="boot-spinner" aria-hidden="true" /><span>{message}</span></div></div>;
 }
 
+/** Een los geladen scherm (zie de lazy-imports bovenin): tot het binnen is, het laadscherm. */
+function Deferred({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<BootLoading />}>{children}</Suspense>;
+}
+
 type DataGroupStatus = 'ready' | 'loading' | 'failed';
 
 /**
@@ -1412,6 +1431,26 @@ function App() {
    * andere geladen groepen worden verouderd. Bij een andere organisatie: eerst
    * alles van de vorige weg, dan de kern; de pagina vraagt daarna zelf zijn groepen.
    */
+  /** Welke aanvraag van het abonnementsoverzicht het laatst begon: een ouder antwoord dat later binnenkomt, telt niet. */
+  const billingSeqRef = useRef(0);
+  /**
+   * Het abonnementsoverzicht (alleen owners en admins) na de kern, niet ervoor.
+   * Het is alleen voor Instellingen; de inrichting haalt het zelf op. De
+   * aanroep rekent het opslagverbruik uit en kostte op staging gemiddeld 290 ms
+   * (max 4,8 s): zolang hij in de opstartronde zat, wachtte het laadscherm erop.
+   */
+  function loadBillingInBackground(orgId: string, role: OrganizationRole | null | undefined) {
+    if (!isAdminRole(role)) return;
+    const seq = ++billingSeqRef.current;
+    const session = sessionEpochRef.current;
+    loadBillingOverview(orgId).then(overview => {
+      if (seq !== billingSeqRef.current || session !== sessionEpochRef.current) return;
+      setOrganizationContext(prev => (prev.activeOrganization?.id === orgId ? { ...prev, billingOverview: overview } : prev));
+    }).catch(billingError => {
+      console.warn('Het abonnementsoverzicht kon niet worden geladen.', billingError);
+    });
+  }
+
   async function runWorkspaceRound(target: string | null | undefined): Promise<void> {
     const run = workspaceRunRef.current;
     run.running = true;
@@ -1419,10 +1458,28 @@ function App() {
     setLoading(true); setError(null);
     try {
       const tooSlow = 'Het laden duurt te lang. Controleer je verbinding en kies Ververs.';
-      const orgContext = await withTimeout(loadOrganizationContext(target === undefined ? activeOrgIdRef.current : target), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
+      const candidate = target === undefined ? activeOrgIdRef.current : target;
+      const orgContextLoad = withTimeout(loadOrganizationContext(candidate, { includeBilling: false }), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
+      // De kern alvast laden voor de organisatie die we verwachten (de
+      // onthouden of de gekozen), tegelijk met het lidmaatschap. Eerst wachtte
+      // hij daarop, en stond het laadscherm twee rondes achter elkaar.
+      // Veilig: de RLS geeft alleen gegevens van een organisatie waar je lid
+      // van bent, en kiest loadOrganizationContext een andere, dan gooien we
+      // dit weg en laden we de kern voor die.
+      const early = candidate
+        ? { orgId: candidate, core: loadCoreData(candidate, { organizationCreatedAt: orgContextLoad.then(context => context.activeOrganization?.created_at ?? null, () => null) }) }
+        : null;
+      // Een vooruit geladen kern die we niet gebruiken, geeft geen onafgehandelde fout.
+      early?.core.catch(() => undefined);
+      const orgContext = await orgContextLoad;
       // Intussen uitgelogd: niets van deze ronde hoort nog in beeld.
       if (session !== sessionEpochRef.current) return;
-      setOrganizationContext(orgContext);
+      // Het abonnementsoverzicht komt los binnen (loadBillingInBackground). Tot
+      // dan blijft bij een ververs het vorige staan, anders knippert Instellingen.
+      setOrganizationContext(prev => ({
+        ...orgContext,
+        billingOverview: prev.activeOrganization?.id === orgContext.activeOrganization?.id ? prev.billingOverview : null,
+      }));
       const orgId = orgContext.activeOrganization?.id ?? null;
       activeOrgIdRef.current = orgId;
       setActiveOrganizationId(orgId);
@@ -1436,23 +1493,28 @@ function App() {
           dataRef.current = emptyData;
           setData(emptyData);
         }
-        const [loaded] = await withTimeout(Promise.all([
-          loadCoreData(orgId, { organizationCreatedAt: orgContext.activeOrganization?.created_at ?? null }),
-          sameOrganization ? refreshOpenGroups(orgId) : Promise.resolve(),
-        ]), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
         // Financiën open maar Klanten dicht (de boekhouder, of een teamlid dat zo
         // is ingesteld): dan de debiteuren zoals ze op de stukken staan, zodat
-        // facturen een naam hebben. De klantenkaart zelf blijft dicht.
+        // facturen een naam hebben. De klantenkaart zelf blijft dicht. Tegelijk
+        // met de kern, niet erachteraan.
         const access = buildPermissions(orgContext.activeMembership);
-        if (!access.canRead('clients') && access.canRead('finance')) {
-          try {
-            loaded.clients = await loadFinanceClientDirectory(orgId);
-          } catch (directoryError) {
+        const financeDirectory = !access.canRead('clients') && access.canRead('finance')
+          ? loadFinanceClientDirectory(orgId).catch(directoryError => {
             // Migratie 20261011000000 nog niet toegepast: facturen tonen dan geen
             // klantnaam, maar de werkruimte laadt gewoon.
             console.warn('Debiteuren voor Financiën konden niet worden geladen.', directoryError);
-          }
-        }
+            return null;
+          })
+          : null;
+        const core = early && early.orgId === orgId
+          ? early.core
+          : loadCoreData(orgId, { organizationCreatedAt: orgContext.activeOrganization?.created_at ?? null });
+        const [loaded] = await withTimeout(Promise.all([
+          core,
+          sameOrganization ? refreshOpenGroups(orgId) : Promise.resolve(),
+        ]), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
+        const directoryClients = financeDirectory ? await financeDirectory : null;
+        if (directoryClients) loaded.clients = directoryClients;
         if (session !== sessionEpochRef.current) return;
         if (sameOrganization) {
           dataRef.current = { ...dataRef.current, ...loaded };
@@ -1470,6 +1532,7 @@ function App() {
           tabsLoadedForRef.current = orgId;
           restoreTabsForOrganization(orgId, dataRef.current, access);
         }
+        loadBillingInBackground(orgId, orgContext.activeMembership?.role);
       } else {
         localStorage.removeItem(activeOrgStorageKey);
         resetDataGroups(null);
@@ -2014,18 +2077,18 @@ function App() {
   }
 
   if (portalElsewhere) return <BootLoading message="Even doorsturen…" />;
-  if (portalRoute) return !onClientHost && isPortalPreviewRoute() ? <PortalPreview /> : <ClientPortal />;
+  if (portalRoute) return <Deferred>{!onClientHost && isPortalPreviewRoute() ? <PortalPreview /> : <ClientPortal />}</Deferred>;
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
-  if (publicUnsubscribeToken) return <PublicUnsubscribePage token={publicUnsubscribeToken} />;
-  if (publicQuoteToken) return <PublicQuotePage token={publicQuoteToken} />;
-  if (publicInvoiceToken) return <PublicInvoicePage token={publicInvoiceToken} />;
-  if (publicContractToken) return <PublicContractPage token={publicContractToken} />;
-  if (publicBookingToken) return <PublicBookingPage token={publicBookingToken} />;
-  if (publicGalleryToken) return <PublicGalleryPage token={publicGalleryToken} />;
-  if (publicShareToken) return <PublicSharePage token={publicShareToken} />;
-  if (publicTransferToken) return <PublicTransferPage token={publicTransferToken} />;
+  if (publicUnsubscribeToken) return <Deferred><PublicUnsubscribePage token={publicUnsubscribeToken} /></Deferred>;
+  if (publicQuoteToken) return <Deferred><PublicQuotePage token={publicQuoteToken} /></Deferred>;
+  if (publicInvoiceToken) return <Deferred><PublicInvoicePage token={publicInvoiceToken} /></Deferred>;
+  if (publicContractToken) return <Deferred><PublicContractPage token={publicContractToken} /></Deferred>;
+  if (publicBookingToken) return <Deferred><PublicBookingPage token={publicBookingToken} /></Deferred>;
+  if (publicGalleryToken) return <Deferred><PublicGalleryPage token={publicGalleryToken} /></Deferred>;
+  if (publicShareToken) return <Deferred><PublicSharePage token={publicShareToken} /></Deferred>;
+  if (publicTransferToken) return <Deferred><PublicTransferPage token={publicTransferToken} /></Deferred>;
   // Nooit de werkruimte of het inlogscherm van een teamlid op een klantadres.
-  if (onClientHost) return <ClientPortal />;
+  if (onClientHost) return <Deferred><ClientPortal /></Deferred>;
   if (!sessionReady) return <BootLoading />;
   if (!loggedIn) return <Login />;
   // Zolang de werkruimte nog wordt geladen weten we nog niet of er een organisatie
@@ -2044,7 +2107,7 @@ function App() {
   // stappen; een ander teamlid ziet dat de organisatie nog wordt ingericht.
   if (activeOrganization.onboarding_completed_at === null) {
     if (activeMembership && canAdmin) {
-      return <OrganizationSetup
+      return <Deferred><OrganizationSetup
         key={activeOrganization.id}
         organization={activeOrganization}
         role={activeMembership.role}
@@ -2060,16 +2123,16 @@ function App() {
         onAcceptInvitation={acceptInvitation}
         onSignOut={() => void signOutOnThisDevice()}
         onCompleted={finishOrganizationSetup}
-      />;
+      /></Deferred>;
     }
-    return <OrganizationSetupPending
+    return <Deferred><OrganizationSetupPending
       organization={activeOrganization}
       organizations={organizationContext.organizations}
       userEmail={currentUserEmail}
       onSwitchOrganization={switchOrganization}
       onReload={() => loadWorkspace()}
       onSignOut={() => void signOutOnThisDevice()}
-    />;
+    /></Deferred>;
   }
 
   // Toestemming geven voor een AI-koppeling. Staat bewust hier: pas voorbij de
@@ -5897,4 +5960,5 @@ function cleanForm(kind: string, form: Record<string, any>, clientFieldDefinitio
   return cleaned;
 }
 
+installChunkReload();
 createRoot(document.getElementById('root')!).render(<App />);

@@ -316,23 +316,44 @@ export async function countAuditLogSince(organizationId: UUID, sinceIso: string)
   return count ?? 0;
 }
 
-export async function loadOrganizationContext(activeOrganizationId?: UUID | null): Promise<OrganizationContext> {
-  await ensureDefaultOrganization();
-  const { data: userData, error: userError } = await supabaseAuth.getUser();
-  if (userError) throw userError;
-
-  const currentUserId = userData.user?.id;
+/**
+ * Het lidmaatschap, de organisatie en wat de werkruimte erbij nodig heeft.
+ *
+ * Draait bij elke start en elke ververs, dus elke rondgang naar de server die
+ * na een andere moet wachten, zit in het laadscherm. Tot november 2026 waren
+ * dat er vier achter elkaar: ensure_user_default_organization, getUser (de
+ * auth-server), het lidmaatschap en daarna de rest. Nu:
+ *  - de gebruiker komt uit de sessie die de app al heeft. getUser() vroeg hem
+ *    opnieuw op bij de auth-server; de database controleert het token bij
+ *    elke vraag toch zelf, en filtert met de RLS op de echte gebruiker.
+ *  - ensure_user_default_organization loopt tegelijk met het lidmaatschap.
+ *    Alleen wie nog geen organisatie heeft (de eerste login), wacht erop en
+ *    vraagt het lidmaatschap daarna opnieuw op.
+ *
+ * `includeBilling: false` laat het abonnementsoverzicht weg: dat is alleen
+ * voor Instellingen en de inrichting, en kostte gemiddeld 290 ms (de app laadt
+ * het daarna op de achtergrond).
+ */
+export async function loadOrganizationContext(activeOrganizationId?: UUID | null, { includeBilling = true }: { includeBilling?: boolean } = {}): Promise<OrganizationContext> {
+  const { data: sessionData, error: sessionError } = await supabaseAuth.getSession();
+  if (sessionError) throw sessionError;
+  // De runtime-sessie draagt het e-mailadres, ook al is het type smaller.
+  const sessionUser = sessionData.session?.user as { id: string; email?: string | null } | undefined;
+  const currentUserId = sessionUser?.id;
   if (!currentUserId) throw new Error('Niet ingelogd.');
-  const currentEmail = userData.user?.email?.trim().toLowerCase() ?? '';
+  const currentEmail = sessionUser?.email?.trim().toLowerCase() ?? '';
   const nowIso = new Date().toISOString();
 
-  const [{ data: membershipRows, error: membershipError }, { data: invitationRows, error: invitationError }] = await Promise.all([
-    supabase
-      .from('organization_members')
-      .select('*, organization:organizations(*)')
-      .eq('user_id', currentUserId)
-      .eq('status', 'active')
-      .order('created_at', { ascending: true }),
+  const ensured = ensureDefaultOrganization();
+  const loadMemberships = () => supabase
+    .from('organization_members')
+    .select('*, organization:organizations(*)')
+    .eq('user_id', currentUserId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: true });
+
+  let [{ data: membershipRows, error: membershipError }, { data: invitationRows, error: invitationError }] = await Promise.all([
+    loadMemberships(),
     currentEmail
       ? supabase
         .from('organization_invitations')
@@ -343,6 +364,17 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
         .order('created_at', { ascending: false })
       : Promise.resolve({ data: [], error: null }),
   ]);
+
+  if (!membershipError && (membershipRows ?? []).length === 0) {
+    // De eerste login: ensure maakt de eigen organisatie (of laat hem bewust
+    // weg bij een uitnodiging of een portaalklant). Pas daarna bestaat het lidmaatschap.
+    await ensured;
+    ({ data: membershipRows, error: membershipError } = await loadMemberships());
+  } else {
+    // Al lid: ensure vult hooguit een ontbrekend e-mailadres aan. Een fout
+    // daarin houdt de werkruimte niet tegen.
+    ensured.catch(error => console.warn('ensure_user_default_organization mislukt.', error));
+  }
 
   if (membershipError) throw membershipError;
   if (invitationError) throw invitationError;
@@ -375,6 +407,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     // Voor de rest gaf deze aanroep bij elke start een 403, met een waarschuwing
     // in de console die naar een ontbrekende migratie wees.
     const canSeeBilling = isAdminRole(activeMembership?.role);
+    const loadBilling = canSeeBilling && includeBilling;
     // Het logboek ook (20261111140000): voor de rest geeft de database niets,
     // dus vragen we het dan ook niet op.
     const canSeeAuditLog = canSeeBilling;
@@ -401,7 +434,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
           .limit(40)
         : Promise.resolve({ data: [], error: null }),
       supabase.rpc('organization_license_usage', { p_organization_id: activeOrganization.id }),
-      canSeeBilling
+      loadBilling
         ? supabase.rpc('organization_billing_overview', { p_organization_id: activeOrganization.id })
         : Promise.resolve({ data: null, error: null }),
       supabase.rpc('organization_creative_status', { p_organization_id: activeOrganization.id }),
@@ -679,9 +712,11 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
  * loadDataGroup pas als een pagina ze nodig heeft (zie src/lib/dataGroups.ts).
  *
  * `organizationCreatedAt`: wanneer de organisatie in ResoFly begon. De
- * btw-herinnering slaat deadlines van daarvóór over (lib/vatPeriods.ts).
+ * btw-herinnering slaat deadlines van daarvóór over (lib/vatPeriods.ts). Mag
+ * een belofte zijn: de app begint de kern al te laden terwijl de organisatie
+ * zelf nog onderweg is, en de datum is pas nodig als alles binnen is.
  */
-export async function loadCoreData(organizationId: UUID, { organizationCreatedAt = null }: { organizationCreatedAt?: string | null } = {}): Promise<CoreData> {
+export async function loadCoreData(organizationId: UUID, { organizationCreatedAt = null }: { organizationCreatedAt?: string | null | PromiseLike<string | null> } = {}): Promise<CoreData> {
   const [
     clients,
     clientContacts,
@@ -732,14 +767,15 @@ export async function loadCoreData(organizationId: UUID, { organizationCreatedAt
     selectProjectTemplates(organizationId),
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
-    countOptional('bank_transactions', organizationId, { status: ['unmatched', 'suggested'] }),
+    countBankTransactionsToReconcile(organizationId),
     selectFiledVatPeriods(organizationId),
   ]);
   // Btw-aangiftes die nog moeten: afgelopen tijdvakken zonder aangifte (zie
   // lib/vatPeriods.ts). Alleen met een rekeningschema. Dat krijgt sinds
   // 20261118090000 elke organisatie bij de inrichting; vatPeriodsToFile kijkt
   // daarom ook naar de startdatum, eerdere aangiftes en de start in ResoFly.
-  const createdAt = organizationCreatedAt && !Number.isNaN(Date.parse(organizationCreatedAt)) ? new Date(organizationCreatedAt) : null;
+  const createdAtValue = await organizationCreatedAt;
+  const createdAt = createdAtValue && !Number.isNaN(Date.parse(createdAtValue)) ? new Date(createdAtValue) : null;
   const vatDue: VatPeriodDue[] = ledgerAccounts.length === 0 || filedVatPeriods === null ? [] : vatPeriodsToFile({
     today: formatISODate(new Date()),
     frequency: companySettings?.vat_return_period === 'monthly' ? 'monthly' : 'quarterly',
@@ -827,6 +863,23 @@ async function selectFiledVatPeriods(organizationId: UUID): Promise<Set<string> 
   const { data, error } = await supabase.rpc('list_filed_vat_periods', { p_organization_id: organizationId });
   if (error || !Array.isArray(data)) return null;
   return new Set((data ?? []).map((row: { period_type: string; year: number; period_index: number }) => vatPeriodKey(row.period_type, row.year, row.period_index)));
+}
+
+/**
+ * Hoeveel banktransacties nog gekoppeld moeten worden, voor het dashboard.
+ * Via een RPC die de rechten één keer controleert (migratie 20261119100000).
+ * De telling op de tabel zelf liep door de RLS per rij: gemiddeld 410 ms op
+ * staging, en de kern wacht op zijn traagste vraag. Staat de app op Cloudflare
+ * eerder klaar dan de migratie, dan telt hij nog even op de oude manier.
+ */
+async function countBankTransactionsToReconcile(organizationId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('bank_transactions_to_reconcile', { p_organization_id: organizationId });
+  if (!error) return Number(data) || 0;
+  if (error.code === 'PGRST202' || error.code === '42883') {
+    return countOptional('bank_transactions', organizationId, { status: ['unmatched', 'suggested'] });
+  }
+  console.warn('Telling van banktransacties mislukt; het dashboard toont hier nul.', error);
+  return 0;
 }
 
 async function countOptional(table: string, organizationId: UUID, inFilters: Record<string, string[]>): Promise<number> {
