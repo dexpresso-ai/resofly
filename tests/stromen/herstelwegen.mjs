@@ -29,6 +29,11 @@ function mutatie(w, code, van, tot) {
       and la.code = ${q(code)} and je.date between ${q(van)} and ${q(tot)}`));
 }
 
+/** Het saldo van een rekening over alle datums (debet − credit). */
+function mutatieOp(w, code) {
+  return mutatie(w, code, '2000-01-01', '2100-12-31');
+}
+
 function boekstuk(id) {
   return sqlRij(`select id, entry_number, date, description, source_type, reverses_entry_id, reversed_by_entry_id from public.journal_entries where id = ${q(id)}`);
 }
@@ -520,10 +525,79 @@ async function kor() {
   });
 }
 
+// ── 6. Wat ResoFly vanzelf boekt ────────────────────────────────────────
+
+async function vanzelfBoeken() {
+  groep('Herstelwegen — vanzelf boeken alleen als het zeker is');
+  const w = await stap('een eenmanszaak met een bankregel "Shell → 4200, automatisch" en een leverancier met rekeningnummer', async () => {
+    const w0 = await maakEenmanszaak('vanzelf');
+    w0.t = {};
+    w0.t.bank = await bankrekening(w0);
+    w0.t.auto = await rekening(w0, '4200');
+    gelukt(await rest('bank_rules', { method: 'POST', token: w0.eigenaar.token, body: {
+      organization_id: w0.orgId, created_by: w0.eigenaar.id, name: 'Shell', match_direction: 'out', match_counterparty_name_contains: 'Shell',
+      target_account_id: w0.t.auto.id, target_vat_code: null, auto_book: true, is_active: true, priority: 1,
+    } }), 'bankregel');
+    w0.t.kpn = gelukt(await rest('suppliers?select=*', { method: 'POST', token: w0.eigenaar.token, prefer: 'return=representation',
+      body: { organization_id: w0.orgId, created_by: w0.eigenaar.id, name: 'KPN B.V.', iban: 'NL02KPNB0123456789' } }), 'leverancier')[0];
+    return w0;
+  });
+  if (!w) return;
+  const t = w.t;
+  const lees = (regels) => rpc('import_bank_transactions', {
+    p_organization_id: w.orgId, p_bank_account_id: t.bank.id, p_statement: { format: 'csv', file_name: `v-${randomUUID()}.csv` }, p_transactions: regels,
+  }, w.eigenaar.token);
+  const rijen = (bedrag) => sqlRijen(`select id, status, auto_booked, match_reason from public.bank_transactions where bank_account_id = ${q(t.bank.id)} and amount_cents = ${bedrag} order by created_at`);
+
+  await stap('dezelfde tankbeurt twee keer ingelezen met een andere omschrijving: de tweede wordt niet nog eens als kosten geboekt', async () => {
+    gelukt(await lees([{ booking_date: '2026-10-12', amount_cents: -5000, counterparty_name: 'SHELL UTRECHT', description: 'Pasbetaling 12-10 SHELL UTRECHT pas 001' }]), 'eerst het afschrift');
+    gelijk(rijen(-5000).map((r) => [r.status, r.auto_booked]), [['booked', true]], 'de eerste: vanzelf geboekt door de bankregel');
+    gelukt(await lees([{ booking_date: '2026-10-12', amount_cents: -5000, counterparty_name: 'SHELL UTRECHT', description: 'SHELL UTRECHT' }]), 'later de bankkoppeling');
+    const twee = rijen(-5000);
+    gelijk(twee.map((r) => r.status), ['booked', 'suggested'], 'de tweede is een voorstel');
+    verwacht(/dubbel ingelezen/.test(twee[1].match_reason), `reden: ${twee[1].match_reason}`);
+    gelijk(mutatieOp(w, '4200'), 5000, 'de kosten staan er één keer');
+    t.dubbel = twee[1].id;
+  });
+
+  await stap('de dubbele mutatie kan weg; een mutatie die echt op het afschrift staat niet', async () => {
+    gelukt(await rpc('delete_duplicate_bank_transaction', { p_organization_id: w.orgId, p_transaction_id: nodig(t.dubbel, 'dubbele mutatie') }, w.eigenaar.token), 'dubbele verwijderen');
+    gelijk(rijen(-5000).length, 1, 'er staat er nog één');
+    gelukt(await lees([{ booking_date: '2026-10-14', amount_cents: -1999, counterparty_name: 'Bol', description: 'Bestelling' }]), 'een gewone mutatie');
+    const res = await rpc('delete_duplicate_bank_transaction', { p_organization_id: w.orgId, p_transaction_id: rijen(-1999)[0].id }, w.eigenaar.token);
+    geweigerd(res, 'een mutatie zonder dubbele verwijderen');
+    verwacht(/dit is geen dubbele/.test(res.tekst), `melding: ${res.tekst.slice(0, 200)}`);
+    geweigerd(await rpc('delete_duplicate_bank_transaction', { p_organization_id: w.orgId, p_transaction_id: rijen(-5000)[0].id }, w.eigenaar.token), 'een geboekte mutatie verwijderen');
+  });
+
+  await stap('een incasso van zes weken vóór de factuurdatum wordt een voorstel; een incasso erna boekt vanzelf', async () => {
+    gelukt(await lees([{ booking_date: '2026-09-25', amount_cents: -3630, counterparty_name: 'KPN B.V.', counterparty_iban: 'NL02KPNB0123456789', description: 'Incasso september' }]), 'de incasso van september');
+    await inkoopfactuur(w, t.kpn, '2026-11-05', [{ description: 'Abonnement november', amount_cents: 3000, vat_code: 'HOOG', vat_rate: 21, account_id: (await rekening(w, '4300')).id }]);
+    gelukt(await rpc('match_bank_transactions', { p_organization_id: w.orgId, p_bank_account_id: t.bank.id }, w.eigenaar.token), 'matchen');
+    const vroeg = rijen(-3630)[0];
+    gelijk([vroeg.status, vroeg.auto_booked], ['suggested', false], 'de incasso van september: een voorstel');
+    verwacht(/van vóór de factuurdatum \(05-11-2026\)/.test(vroeg.match_reason), `reden: ${vroeg.match_reason}`);
+    gelukt(await lees([{ booking_date: '2026-11-18', amount_cents: -3630, counterparty_name: 'KPN B.V.', counterparty_iban: 'NL02KPNB0123456789', description: 'Incasso november' }]), 'de incasso van november');
+    const laat = rijen(-3630).find((r) => r.id !== vroeg.id);
+    gelijk([laat.status, laat.auto_booked], ['booked', true], 'de incasso van november: vanzelf afgeletterd');
+  });
+
+  await stap('een omschrijving met een factuurnummer dat ResoFly niet kent: een voorstel, niet vanzelf geboekt op een andere factuur', async () => {
+    const hn = gelukt(await rest('suppliers?select=*', { method: 'POST', token: w.eigenaar.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, created_by: w.eigenaar.id, name: 'Hosting Noord', iban: 'NL44HNRD0000000044' } }), 'leverancier')[0];
+    await inkoopfactuur(w, hn, '2026-10-01', [{ description: 'Hosting oktober', amount_cents: 2500, vat_code: 'HOOG', vat_rate: 21, account_id: (await rekening(w, '4300')).id }]);
+    gelukt(await lees([{ booking_date: '2026-11-03', amount_cents: -3025, counterparty_name: 'Hosting Noord', counterparty_iban: 'NL44HNRD0000000044', description: 'Factuur HN-2026-11' }]), 'betaling met een ander factuurnummer');
+    const rij = rijen(-3025)[0];
+    gelijk([rij.status, rij.auto_booked], ['suggested', false], 'een voorstel');
+    verwacht(/noemt een factuurnummer dat hier niet bij een openstaande factuur staat/.test(rij.match_reason), `reden: ${rij.match_reason}`);
+  });
+}
+
 export default async function herstelwegen() {
   await tegenboekenEnOpnieuw();
   await afgeslotenJaar();
   await voorDeStart();
   await activumEnBeginbalans();
   await kor();
+  await vanzelfBoeken();
 }

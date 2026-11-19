@@ -12,7 +12,7 @@ import { SetupBanner } from './Bookkeeping';
 import { parseBankFile } from '../lib/bankImport';
 import { consentState, isCancelledBankReturn, isSandboxLink, readBankReturn } from '../lib/bankLink';
 import {
-  bookBankTransaction, createBankRequisition, createManualBankTransaction, deleteManualBankTransaction, deleteRow,
+  bookBankTransaction, createBankRequisition, createManualBankTransaction, deleteDuplicateBankTransaction, deleteManualBankTransaction, deleteRow,
   fetchBankAllocationCandidates, finalizeBankRequisition, importBankTransactions, insertRow, listBankInstitutions,
   matchBankTransactionsInRounds, mergeBankTransactions, PossibleDuplicateBankTransactionError, selectBankReconciliation,
   setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction, updateManualBankTransaction, updateRow,
@@ -236,6 +236,21 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
     if (!confirm('Deze handmatige mutatie verwijderen?')) return;
     void run(() => deleteManualBankTransaction(organizationId, txn.id), 'Verwijderen mislukt');
   };
+  // Dezelfde betaling twee keer ingelezen (een afschrift en later de
+  // bankkoppeling, met een andere omschrijving). Negeren hielp niet: een
+  // genegeerde mutatie telt mee in de aansluiting, dus het verschil bleef
+  // voorgoed staan. Dezelfde regel als de database: zelfde rekening, datum en
+  // bedrag, en dezelfde of geen tegenrekening.
+  const iban = (value: string | null | undefined) => (value ?? '').replace(/\s/g, '').toUpperCase();
+  const twin = !manual && !everBooked
+    ? data.bankTransactions.find(o => o.id !== txn.id && !o.is_manual && o.bank_account_id === txn.bank_account_id
+        && o.booking_date === txn.booking_date && o.amount_cents === txn.amount_cents
+        && (!iban(o.counterparty_iban) || !iban(txn.counterparty_iban) || iban(o.counterparty_iban) === iban(txn.counterparty_iban))) ?? null
+    : null;
+  const removeDuplicate = () => {
+    if (!confirm('Deze mutatie verwijderen omdat hij dubbel is ingelezen? De andere mutatie met dezelfde datum en hetzelfde bedrag blijft staan. Doe dit alleen als het om dezelfde betaling gaat: twee echte betalingen staan allebei op je afschrift.')) return;
+    void run(() => deleteDuplicateBankTransaction(organizationId, txn.id), 'Verwijderen mislukt');
+  };
   const unmerge = () => {
     if (!confirm('Losmaken? De bankregel komt dan apart in "Af te letteren" te staan. Is de handmatige mutatie al geboekt, boek de bankregel dan niet nog eens.')) return;
     void run(() => unmergeBankTransaction(organizationId, txn.id), 'Losmaken mislukt');
@@ -308,6 +323,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
           onBook={(allocations, description) => run(() => bookBankTransaction(organizationId, txn.id, { allocations, description }), 'Boeken mislukt')}>
           {manual && canWrite && <Button onClick={() => onEditManual(txn)} disabled={busy}><PenSquare size={14} /> Bewerken</Button>}
           {manual && canWrite && !everBooked && <Button onClick={remove} disabled={busy} title="Verwijderen"><Trash2 size={14} /> Verwijderen</Button>}
+          {twin && canWrite && <Button onClick={removeDuplicate} disabled={busy} title="Dezelfde betaling staat er twee keer: deze verwijderen"><Trash2 size={14} /> Dubbele verwijderen</Button>}
           <Button onClick={() => void run(() => setBankTransactionStatus(organizationId, txn.id, 'ignored'), 'Mislukt')}
             disabled={!canWrite || busy || (manual && Boolean(partner))}
             title={manual && partner ? 'Bevestigd door de bank: maak eerst los' : 'Negeren'}><X size={14} /> Negeren</Button>
@@ -326,6 +342,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
           <span className="bk-muted">Genegeerd</span>
           <span className="bk-spacer" />
           {manual && canWrite && !everBooked && <Button onClick={remove} disabled={busy}><Trash2 size={14} /> Verwijderen</Button>}
+          {twin && canWrite && <Button onClick={removeDuplicate} disabled={busy} title="Dezelfde betaling staat er twee keer: deze verwijderen"><Trash2 size={14} /> Dubbele verwijderen</Button>}
           {canWrite && <Button onClick={() => void run(() => setBankTransactionStatus(organizationId, txn.id, 'unmatched'), 'Mislukt')} disabled={busy}>Weer openen</Button>}
         </div>
       )}
@@ -743,7 +760,7 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
       {!ok && (
         <ul className="bank-recon-hints">
           {rec.ignored_count > 0 && (
-            <li>Genegeerde transacties staan wél op het afschrift en tellen dus mee in de aansluiting. Heb je een dubbele regel genegeerd, dan blijft het verschil zichtbaar tot de dubbele rij echt weg is.</li>
+            <li>Genegeerde transacties staan wél op het afschrift en tellen dus mee in de aansluiting. Heb je een dubbele regel genegeerd, dan blijft het verschil zichtbaar tot de dubbele rij echt weg is: open hem bij Genegeerd en kies "Dubbele verwijderen".</li>
           )}
           {(rec.manual_unconfirmed_count ?? 0) > 0 && (
             <li>

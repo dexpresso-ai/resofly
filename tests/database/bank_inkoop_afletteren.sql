@@ -281,7 +281,17 @@ select pg_temp.gelijk((pg_temp.tx(:'t_horn')).status, 'booked', 'pin Hornbach: g
 select pg_temp.gelijk(pg_temp.verdeling(:'t_horn'), 'BON-4411=-4840', 'pin Hornbach: op de bon');
 
 -- 3. Verzamelbetaling: de twee oudste van Drukkerij Zuid, de derde blijft open.
-select pg_temp.gelijk((pg_temp.tx(:'t_druk')).status, 'booked', 'verzamelbetaling Drukkerij Zuid: geboekt');
+--    GEWIJZIGD (20261119180000): een voorstel, niet meer vanzelf geboekt. Op
+--    alleen bedragen is het een vermoeden: € 181,50 voor een nieuwe bestelling
+--    was toevallig precies de twee oudste facturen samen en werd zo geboekt.
+--    Het voorstel draagt de verdeling; boeken is één klik.
+select pg_temp.gelijk((pg_temp.tx(:'t_druk')).status, 'suggested', 'verzamelbetaling Drukkerij Zuid: een voorstel');
+select pg_temp.gelijk(position('Verzamelbetaling aan' in (pg_temp.tx(:'t_druk')).match_reason) > 0
+                      and position('Controleer het voordat je boekt' in (pg_temp.tx(:'t_druk')).match_reason) > 0,
+                      true, 'verzamelbetaling: de reden zegt dat je moet controleren');
+select pg_temp.als(:'eigenaar');
+select (public.book_bank_transaction(:'org', :'t_druk', null, null, null, :'eigenaar', (pg_temp.tx(:'t_druk')).suggested_allocations, null)).id is not null as ok \gset
+reset role;
 select pg_temp.gelijk(pg_temp.verdeling(:'t_druk'), 'DZ-1=-12100, DZ-2=-24200', 'verzamelbetaling: DZ-1 en DZ-2');
 select pg_temp.gelijk((select payment_status from public.purchase_invoices where id = :'d3'), 'unpaid', 'verzamelbetaling: DZ-3 staat nog open');
 

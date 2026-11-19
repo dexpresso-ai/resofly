@@ -2758,6 +2758,20 @@ export async function deleteManualBankTransaction(organizationId: UUID, transact
   if (error) throw bookkeepingError(error);
 }
 
+/**
+ * Een dubbel ingelezen bankmutatie verwijderen (dezelfde betaling via een
+ * afschrift én de bankkoppeling). De database staat het alleen toe als de
+ * mutatie nooit geboekt is en er een tweede met dezelfde datum, hetzelfde
+ * bedrag en dezelfde tegenrekening staat.
+ */
+export async function deleteDuplicateBankTransaction(organizationId: UUID, transactionId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('delete_duplicate_bank_transaction', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
 /** Een bankregel samenvoegen met de handmatige mutatie die hij bevestigt. */
 export async function mergeBankTransactions(organizationId: UUID, bankTransactionId: UUID, manualTransactionId: UUID): Promise<BankTransaction> {
   const { data, error } = await supabase.rpc('merge_bank_transactions', {
