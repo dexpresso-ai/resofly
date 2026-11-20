@@ -12,10 +12,7 @@
 // de knop van de instellingenpagina, zoals bij Huisstijl.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from 'react';
-// pdf-lib pas bij het openen van de editor (loadPdfLib), niet bij de start van
-// de app: deze editor hangt aan Instellingen, en met een gewone import kwam
-// het pakket in de opstartbundel terecht. Zie ook lib/pdf.ts.
-const loadPdfLib = () => import('pdf-lib');
+import { letterheadMissing } from '../lib/letterhead';
 import {
   ArrowDown, ArrowUp, Check, CircleAlert, Copy, Download, Eye, Image as ImageIcon, LayoutTemplate, Minus, Plus,
   Redo2, RotateCcw, Square, Trash2, Type, Undo2,
@@ -34,6 +31,11 @@ import {
 import { brandFont, ensureBrandFontsLoaded } from '../lib/branding';
 import { appPdfFonts } from '../lib/pdfFonts';
 import type { CompanySettingsInput } from '../types';
+
+// pdf-lib pas bij het openen van de editor (loadPdfLib), niet bij de start van
+// de app: deze editor hangt aan Instellingen, en met een gewone import kwam
+// het pakket in de opstartbundel terecht. Zie ook lib/pdf.ts.
+const loadPdfLib = () => import('pdf-lib');
 
 type SetForm = Dispatch<SetStateAction<CompanySettingsInput>>;
 type Shape = 'text' | 'logo' | 'line' | 'box';
@@ -1228,6 +1230,9 @@ function PdfPreview({ form, layouts, kind }: { form: CompanySettingsInput; layou
   useEffect(() => {
     let cancelled = false;
     setState('busy');
+    // Het briefpapier komt los binnen (lib/letterhead.ts; Instellingen haalt het op).
+    // Tot het er is: geen voorbeeld, want dat zou zonder briefpapier zijn.
+    if (letterheadMissing(form)) return;
     const handle = window.setTimeout(() => {
       const assets = documentAssetsFromSettings(form);
       Promise.all([appPdfFonts(), loadPdfLib()]).then(([fonts, PdfLib]) => renderDocumentPdf(PdfLib, {

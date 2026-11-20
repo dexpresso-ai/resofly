@@ -11,6 +11,7 @@ import { createTimeEntry, deleteTimeEntry, updateTimeEntry } from '../lib/reposi
 // Urencriterium Belastingdienst: 1225 uur per kalenderjaar (incl. indirecte uren).
 import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
 import type { ReportRow } from '../lib/reporting';
+import { defaultBillableForProject, resolveRateCents } from '../lib/timeRates';
 import type { AppData, IndirectHoursCategory, OrganizationMember, TimeEntry, TimeEntrySource, TimeEntryType, UUID } from '../types';
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
@@ -26,22 +27,6 @@ function endOfQuarter(d: Date): Date { return new Date(d.getFullYear(), Math.flo
 export function timeEntryValueCents(entry: TimeEntry): number {
   if (!entry.billable || !entry.hourly_rate_cents) return 0;
   return Math.round((entry.minutes / 60) * entry.hourly_rate_cents);
-}
-
-/** Resolve het standaardtarief (centen) voor een project: project-tarief, anders bedrijfsdefault. */
-export function resolveRateCents(data: AppData, projectId: string | null): number | null {
-  const project = projectId ? data.projects.find(p => p.id === projectId) : null;
-  return project?.hourly_rate_cents ?? data.companySettings?.default_hourly_rate_cents ?? null;
-}
-
-/**
- * Standaard declarabel-stand voor een project: urenbasis-projecten zijn declarabel,
- * aangenomen-prijs-projecten ('fixed_price') worden via offerte/factuur afgerekend
- * en komen dus standaard niet-declarabel binnen. Zonder project: declarabel.
- */
-export function defaultBillableForProject(data: AppData, projectId: string | null): boolean {
-  const project = projectId ? data.projects.find(p => p.id === projectId) : null;
-  return project ? project.billing_type !== 'fixed_price' : true;
 }
 
 const SOURCE_LABEL: Record<TimeEntrySource, string> = { calendar: 'Agenda', manual: 'Handmatig', timer: 'Timer' };

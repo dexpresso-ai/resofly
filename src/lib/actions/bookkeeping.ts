@@ -6,7 +6,7 @@ import {
   reverseJournalEntry, savePrepaidExpense, setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction,
   updateManualBankTransaction, updateRow, type BankAllocationInput,
 } from '../repository';
-import { purchaseTotals } from '../../features/Bookkeeping';
+import { purchaseTotals } from '../purchaseInvoiceNumbers';
 import { describeMatchResult } from '../bankMatch';
 import { runInvoiceInboxAction } from '../invoice-inbox-api';
 import { INBOX_STATUS_LABELS, inboxReasonLabel } from '../invoiceInbox';

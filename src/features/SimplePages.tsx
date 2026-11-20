@@ -11,7 +11,8 @@ import { DocumentLayoutEditor } from './DocumentLayoutEditor';
 import { parseDocumentLayouts, serializeDocumentLayouts } from '../lib/documentLayout';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, refreshSendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, saveInvoiceSendMethod, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceLetterhead, loadInvoiceMollieStatus, saveInvoiceMollieKey, saveInvoiceSendMethod, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
+import { letterheadFieldsForSave, letterheadMissing } from '../lib/letterhead';
 import { formatBytes } from '../lib/transfers';
 import { isDutchVatIdFormat, looksLikeTaxNumberWithoutCountry } from '../lib/vatId';
 import { invoiceInboxAddress } from '../lib/invoiceInbox';
@@ -30,6 +31,8 @@ import { ClientDomainSettings } from './ClientDomainSettings';
 import { DataExportPanel } from './DataExport';
 import type { AuditTarget } from '../lib/auditLog';
 import { SETTINGS_TAB_IDS, groupSettingsTabs, settingsGroupOf, visibleSettingsTabIds, type SettingsGroupId, type SettingsTab } from '../lib/settingsMenu';
+import { SETTINGS_TABS, settingsMenuGroups } from '../components/settingsMenuItems';
+export { SETTINGS_TABS, settingsMenuGroups, type SettingsMenuGroup, type SettingsTabInfo } from '../components/settingsMenuItems';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -145,54 +148,6 @@ function moduleAccessSummary(role: OrganizationRole, raw: unknown): string {
   return parts.join(' · ');
 }
 
-type SettingsTabMeta = { label: string; Icon: LucideIcon; description: string };
-
-/** Naam, icoon en uitleg per onderdeel. Een Record, zodat TypeScript klaagt
- *  als een onderdeel uit lib/settingsMenu.ts hier nog geen gezicht heeft. */
-const SETTINGS_TAB_META: Record<SettingsTab, SettingsTabMeta> = {
-  organisatie: { label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen.' },
-  logboek: { label: 'Logboek', Icon: History, description: 'Wie wat wanneer en waar heeft aangepast: facturen verstuurd, documenten gewijzigd, taken afgerond, rechten aangepast. Per regel zie je wat er veranderde, van oud naar nieuw.' },
-  sjablonen: { label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
-  klantvelden: { label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
-  huisstijl: { label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur, kopkleur en lettertypen op wat je klant ziet — het klantportaal, je offerte-, factuur- en contractpagina\'s, je offerte- en factuur-PDF\'s en de galerij — met een live voorbeeld van je klantportaal ernaast.' },
-  domein: { label: 'Domein', Icon: Globe, description: 'Het adres waarop je klanten hun portaal, albums, offertes, facturen en contracten openen: je webadres bij ResoFly of je eigen domein. En het domein waarvan je mail verstuurt.' },
-  documenten: { label: 'Documentopmaak', Icon: LayoutTemplate, description: 'Sleep de gegevens van je offertes en facturen naar de plek waar jij ze wilt hebben, of kies een kant-en-klaar sjabloon. Je klant krijgt precies de PDF die je hier ziet.' },
-  meldingen: { label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
-  apps: { label: 'Apps', Icon: MonitorSmartphone, description: 'Zet Agenda, Financiën en Communicatie elk als eigen app op je telefoon of computer. Zo\'n app opent meteen op de goede pagina.' },
-  agenda: { label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
-  facturatie: { label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens en betaalteksten die op je facturen en offertes verschijnen. De opmaak en het briefpapier staan bij Documentopmaak.' },
-  boekhouding: { label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
-  boekhouder: { label: 'Boekhouder', Icon: Calculator, description: 'Geef je boekhouder of accountant een gratis gastaccount dat alleen je financiën kan inzien — niets wijzigen, geen klantdossiers of projecten.' },
-  betalen: { label: 'Online betalen', Icon: CreditCard, description: 'Kies of je facturen per e-mail of via Mollie verstuurt, en koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
-  abonnement: { label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
-  gegevens: { label: 'Gegevens', Icon: Download, description: 'Download al je gegevens in één keer: om over te stappen naar een ander pakket, voor je archief of voor je accountant.' },
-  ai: { label: 'AI', Icon: Sparkles, description: 'Zet Gerrie, de AI-assistent, voor jezelf aan of uit. Koppel je eigen AI (Claude, ChatGPT, Gemini) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
-  api: { label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
-  email: { label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails en van de ticketmeldingen aan klanten aan, bepaal of klanten e-mail krijgen over hun tickets, en verstuur een testmail om je configuratie te controleren.' },
-};
-
-export type SettingsTabInfo = SettingsTabMeta & { id: SettingsTab };
-
-/** Alle onderdelen, in de volgorde van hun groepen. */
-export const SETTINGS_TABS: SettingsTabInfo[] = SETTINGS_TAB_IDS.map(id => ({ id, ...SETTINGS_TAB_META[id] }));
-
-/** Het icoon van een groep: in het accountmenu staat per groep één regel. */
-const SETTINGS_GROUP_ICONS: Record<SettingsGroupId, LucideIcon> = {
-  organisatie: Building2,
-  werkwijze: ListChecks,
-  klant: Palette,
-  geld: Wallet,
-  koppelingen: Plug,
-  apparaat: MonitorSmartphone,
-};
-
-export type SettingsMenuGroup = { id: SettingsGroupId; label: string; Icon: LucideIcon; tabs: SettingsTabInfo[] };
-
-/** Wat dit teamlid in de instellingen ziet, per groep. Lege groepen vallen weg. */
-export function settingsMenuGroups(visible: readonly SettingsTab[]): SettingsMenuGroup[] {
-  return groupSettingsTabs(SETTINGS_TABS.filter(tab => visible.includes(tab.id)))
-    .map(group => ({ ...group, Icon: SETTINGS_GROUP_ICONS[group.id] }));
-}
 
 export function CalendarPage() {
   return <div className="empty"><div className="e-big">Kalender</div><p>V1 toont deadlines in projecten. Koppeling met Google/Microsoft Calendar kan hierop worden gebouwd.</p></div>;
@@ -2012,6 +1967,28 @@ export function Settings({
     setResendTestEmail(settings?.email ?? '');
     setResendTestName(settings?.trade_name || settings?.company_name || '');
   }, [settings]);
+  // Het briefpapier zit niet in de kern (lib/letterhead.ts). Hier halen we het
+  // op, voor de documentopmaak en het PDF-voorbeeld in dit scherm. Tot het er
+  // is, staat het veld op undefined, en opslaan laat het briefpapier dan staan.
+  // Per versie (invoice_template_updated_at): een ander briefpapier opnieuw.
+  const [letterhead, setLetterhead] = useState<{ version: string; url: string | null } | null>(null);
+  useEffect(() => {
+    if (!activeOrganization || !settings || !letterheadMissing(settings)) return;
+    let alive = true;
+    const version = settings.invoice_template_updated_at ?? '';
+    loadInvoiceLetterhead(activeOrganization.id, settings.invoice_template_updated_at ?? null)
+      .then(url => { if (alive) setLetterhead({ version, url }); })
+      .catch(error => {
+        if (alive) setTemplateError(`Je briefpapier kon niet worden geladen${error instanceof Error && error.message ? ` (${error.message})` : ''}. Opslaan laat het gewoon staan.`);
+      });
+    return () => { alive = false; };
+    // settings zelf verandert bij elke ververs; alleen een ander briefpapier telt.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeOrganization?.id, settings?.invoice_template_updated_at, settings?.invoice_template_kind]);
+  useEffect(() => {
+    if (!letterhead || (settings?.invoice_template_updated_at ?? '') !== letterhead.version) return;
+    setForm(prev => (prev.invoice_template_data_url === undefined ? { ...prev, invoice_template_data_url: letterhead.url } : prev));
+  }, [letterhead, settings]);
   useEffect(() => {
     setBillingOverview(organizationContext.billingOverview);
     setSelectedPlan(organizationContext.billingOverview?.plan_key ?? 'starter');
@@ -2889,7 +2866,8 @@ export function Settings({
         {(() => {
           const layouts = parseDocumentLayouts(form.document_layouts);
           const own = [layouts.invoice ? 'facturen' : '', layouts.quote ? 'offertes' : ''].filter(Boolean);
-          const paper = form.invoice_template_kind !== 'none' && form.invoice_template_data_url ? ' met je eigen briefpapier' : '';
+          // undefined = er is briefpapier, het is alleen nog niet geladen.
+          const paper = form.invoice_template_kind !== 'none' && form.invoice_template_data_url !== null ? ' met je eigen briefpapier' : '';
           return own.length > 0
             ? `Je ${own.join(' en ')} hebben een eigen opmaak${paper}.`
             : `Je offertes en facturen gebruiken de standaardopmaak van ResoFly${paper}, met je logo en merkkleur.`;
@@ -3464,7 +3442,10 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     invoice_template_file_name: settings.invoice_template_file_name ?? null,
     invoice_template_mime_type: settings.invoice_template_mime_type ?? null,
     invoice_template_file_size: settings.invoice_template_file_size ?? 0,
-    invoice_template_data_url: settings.invoice_template_data_url ?? null,
+    // Niet geladen blijft niet geladen (undefined): de kern laadt het briefpapier
+    // niet (lib/letterhead.ts). Met `?? null` las opslaan dat als "geen
+    // briefpapier" en wiste het.
+    invoice_template_data_url: settings.invoice_template_data_url,
     invoice_template_text_color: settings.invoice_template_text_color ?? '#1a1a1a',
     invoice_accent_color: settings.invoice_accent_color ?? '#FFD966',
     invoice_font_size: settings.invoice_font_size ?? 10,
@@ -3499,9 +3480,9 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     return trimmed || null;
   };
 
-  const templateKind = input.invoice_template_data_url && input.invoice_template_kind !== 'none'
-    ? input.invoice_template_kind
-    : 'none';
+  // Het briefpapier: is het niet geladen, dan blijft het zoals het is; anders
+  // betekent geen data-URL geen briefpapier (lib/letterhead.ts).
+  const letterhead = letterheadFieldsForSave(input);
 
   return {
     ...input,
@@ -3520,12 +3501,7 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     iban: clean(input.iban),
     invoice_payment_terms: clean(input.invoice_payment_terms),
     invoice_footer: clean(input.invoice_footer),
-    invoice_template_kind: templateKind,
-    invoice_template_file_name: templateKind === 'none' ? null : clean(input.invoice_template_file_name),
-    invoice_template_mime_type: templateKind === 'none' ? null : clean(input.invoice_template_mime_type),
-    invoice_template_file_size: templateKind === 'none' ? 0 : Number(input.invoice_template_file_size || 0),
-    invoice_template_data_url: templateKind === 'none' ? null : input.invoice_template_data_url,
-    invoice_template_updated_at: templateKind === 'none' ? null : input.invoice_template_updated_at,
+    ...letterhead,
     invoice_template_text_color: normalizeHex(input.invoice_template_text_color, '#1a1a1a'),
     // De merkkleur is de enige bron; de factuurkleur volgt (de database houdt
     // dit ook af met een trigger, hier al zodat de UI meteen klopt).

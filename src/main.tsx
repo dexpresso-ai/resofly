@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Sidebar, type SidebarProps } from './components/Sidebar';
 import { ZenitNav } from './components/ZenitNav';
@@ -122,9 +122,8 @@ import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumen
 import { deleteR2Object } from './lib/r2-api';
 import { OfficeEditor } from './features/OfficeEditor';
 import { Dashboard } from './features/Dashboard';
-import { ClientDetailPage, Clients } from './features/Clients';
 import { useClientEmailUnread, ClientEmailToasts } from './components/ClientEmailNotifications';
-import { CommunicationPage, type CommunicationFocus } from './features/Communication';
+import type { CommunicationFocus } from './features/Communication';
 import { useDecisionAlerts, DecisionToasts } from './components/DecisionNotifications';
 import { usePurchaseInvoiceInbox } from './components/PurchaseInvoiceInboxAlerts';
 import type { DecisionTarget } from './lib/decisions-api';
@@ -135,54 +134,31 @@ import { usePushNotifications } from './components/usePushNotifications';
 import { McpConsent } from './components/McpConsent';
 import { readAuthorizeRequest } from './lib/mcp-api';
 import { readBankReturn } from './lib/bankLink';
-import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
-import { TimeTracking, defaultBillableForProject, resolveRateCents } from './features/TimeTracking';
-import { Tickets } from './features/Tickets';
+import { defaultBillableForProject, resolveRateCents } from './lib/timeRates';
 import { TICKET_REOPEN_STATUS, changedTicketValues, ticketClientChangeWarning } from './lib/tickets';
 import { clientDraftFromEmail, describeFoundFields, type ClientDraftField } from './lib/clientFromEmail';
 import { TicketTimeline } from './components/TicketTimeline';
-import { Marketing } from './features/Marketing';
 import { RelatedNotes, noteTypeLabels } from './features/Notes';
 import { NoteInkSection, noteHandwritingSummary } from './components/NoteHandwriting';
 import type { InkDocument } from './lib/ink';
 import { inkSizeIssue } from './lib/ink';
 import { documentTypeLabels } from './features/Documents';
-import { ContentLibrary } from './features/ContentLibrary';
 import { clientFolderOptions } from './lib/folders';
 import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail, mollieInvoicingAllowed } from './lib/eInvoicing';
-import { Invoices, Quotes, type CreditInput, type RefundInput } from './features/Finance';
+import type { CreditInput, RefundInput } from './features/Finance';
 import { creditInvoiceAmount, issueCreditNoteForRefund, previewInvoiceSend, refundInvoice as refundInvoiceWithPurpose, type InvoiceBookingNotice } from './services/invoiceRecoveryService';
-import { LedgerPage, PurchaseInvoicesPage, SuppliersPage, nextPurchaseNumber, purchaseTotals } from './features/Bookkeeping';
-import { DeclarationsPage } from './features/Declarations';
+import { nextPurchaseNumber, purchaseTotals } from './lib/purchaseInvoiceNumbers';
 import type { InvoiceFormSeed } from './features/Bookkeeping';
-import { BankPage } from './features/Bank';
-import { AssetsPage } from './features/Assets';
-import { PrepaidPage } from './features/Prepaid';
-import { ProfitLossPage } from './features/ProfitLoss';
-import { ForecastPage } from './features/Forecast';
-import { VatReturnsPage } from './features/VatReturns';
-import { FiscalYearsPage } from './features/FiscalYears';
-import { CorporateTaxPage } from './features/CorporateTax';
-import { DgaPage } from './features/Dga';
-import { OwnersPage } from './features/Owners';
-import { IncomeTaxPage } from './features/IncomeTax';
-import { ShareholdersPage } from './features/Shareholders';
-import { AnnualAccountsPage } from './features/AnnualAccounts';
-import { GalleryTab } from './features/ProjectGallery';
-import { Contracts } from './features/Contracts';
 import { clientHostInfo, portalRedirectTarget } from './lib/clientHost';
 import { PORTAL_PREVIEW_PATH } from './lib/portalPreview';
-import { Archive, Settings, type SettingsTab } from './features/SimplePages';
+import type { SettingsTab } from './lib/settingsMenu';
 import { ProjectTemplatePicker } from './features/ProjectTemplates';
-import { Reports } from './features/Reports';
-import { AiReportPage } from './features/AiReportPage';
 import { NEW_REPORT_PREFIX, onReportCreated, useAiReportList } from './lib/aiReports';
 import type { ReportDefinition } from './lib/reporting';
-import { CalendarPage, type CalendarDraft, type CalendarLinkNotice } from './features/CalendarPage';
+import type { CalendarDraft, CalendarLinkNotice } from './features/CalendarPage';
 import { TaskAgendaSection } from './components/TaskAgenda';
 import { calendarEventLinkMatchesEvent } from './lib/calendar-links';
-import { MeetingBookingManager, type BookingFocus } from './features/MeetingBookingManager';
-import { WeekPlanner } from './features/WeekPlanner';
+import type { BookingFocus } from './features/MeetingBookingManager';
 import { ProjectShiftDialog } from './components/ProjectShiftDialog';
 import type { ProjectShift } from './components/ProjectShiftDialog';
 import { applyPeriodLocally, applyPlanningLocally, applyTimeLocally, clockLabel, mergeTaskRows, restoreTasksForDates, splitTitleAndEstimate } from './lib/planning';
@@ -192,7 +168,7 @@ import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat, askGerrie } from './components/GerrieChat';
 import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
 import { watchForReturn, type FinishedCall } from './lib/callBridge';
-import { GerrieCommandCenter, type GerrieConversationsFocus } from './features/GerrieCommandCenter';
+import type { GerrieConversationsFocus } from './features/GerrieCommandCenter';
 import { GerrieAanzettenPage, type AiConsentChange } from './components/GerrieAanzetten';
 import { AI_TERMS_VERSION, consentIsActive, consentIsDeclined } from './lib/aiConsent';
 import type { GerrieActionHandlers, GerrieProposal, GerrieProposalLine } from './lib/gerrie-api';
@@ -260,6 +236,7 @@ import './styles/prognose.css';
 import './styles/weekplanner.css';
 import type { SetupNext } from './features/OrganizationSetup';
 import { installChunkReload } from './lib/chunkReload';
+import { lazyPage, PageLoadBoundary, PageLoading } from './components/LazyPage';
 
 /*
  * Los geladen: wat een teamlid in zijn werkruimte nooit ziet. De pagina's
@@ -269,18 +246,65 @@ import { installChunkReload } from './lib/chunkReload';
  * onverkleind). Een klant die een offerte opent, haalt nu de hoofdbundel plus
  * dit ene stuk op. Elk gebruik staat in een <Suspense> met het laadscherm.
  */
-const PublicQuotePage = lazy(() => import('./features/PublicQuotePage').then(m => ({ default: m.PublicQuotePage })));
-const PublicInvoicePage = lazy(() => import('./features/PublicInvoicePage').then(m => ({ default: m.PublicInvoicePage })));
-const PublicContractPage = lazy(() => import('./features/PublicContractPage').then(m => ({ default: m.PublicContractPage })));
-const PublicBookingPage = lazy(() => import('./features/PublicBookingPage').then(m => ({ default: m.PublicBookingPage })));
-const PublicGalleryPage = lazy(() => import('./features/PublicGalleryPage').then(m => ({ default: m.PublicGalleryPage })));
-const PublicSharePage = lazy(() => import('./features/PublicSharePage').then(m => ({ default: m.PublicSharePage })));
-const PublicUnsubscribePage = lazy(() => import('./features/PublicUnsubscribePage').then(m => ({ default: m.PublicUnsubscribePage })));
-const PublicTransferPage = lazy(() => import('./features/PublicTransferPage').then(m => ({ default: m.PublicTransferPage })));
-const ClientPortal = lazy(() => import('./features/portal/ClientPortal').then(m => ({ default: m.ClientPortal })));
-const PortalPreview = lazy(() => import('./features/portal/ClientPortal').then(m => ({ default: m.PortalPreview })));
-const OrganizationSetup = lazy(() => import('./features/OrganizationSetup').then(m => ({ default: m.OrganizationSetup })));
-const OrganizationSetupPending = lazy(() => import('./features/OrganizationSetup').then(m => ({ default: m.OrganizationSetupPending })));
+const PublicQuotePage = lazyPage(() => import('./features/PublicQuotePage'), 'PublicQuotePage');
+const PublicInvoicePage = lazyPage(() => import('./features/PublicInvoicePage'), 'PublicInvoicePage');
+const PublicContractPage = lazyPage(() => import('./features/PublicContractPage'), 'PublicContractPage');
+const PublicBookingPage = lazyPage(() => import('./features/PublicBookingPage'), 'PublicBookingPage');
+const PublicGalleryPage = lazyPage(() => import('./features/PublicGalleryPage'), 'PublicGalleryPage');
+const PublicSharePage = lazyPage(() => import('./features/PublicSharePage'), 'PublicSharePage');
+const PublicUnsubscribePage = lazyPage(() => import('./features/PublicUnsubscribePage'), 'PublicUnsubscribePage');
+const PublicTransferPage = lazyPage(() => import('./features/PublicTransferPage'), 'PublicTransferPage');
+const ClientPortal = lazyPage(() => import('./features/portal/ClientPortal'), 'ClientPortal');
+const PortalPreview = lazyPage(() => import('./features/portal/ClientPortal'), 'PortalPreview');
+const OrganizationSetup = lazyPage(() => import('./features/OrganizationSetup'), 'OrganizationSetup');
+const OrganizationSetupPending = lazyPage(() => import('./features/OrganizationSetup'), 'OrganizationSetupPending');
+/*
+ * De pagina's van de werkruimte laden pas als je ze opent (zie
+ * components/LazyPage.tsx). Het dashboard blijft in de hoofdbundel: dat is de
+ * startpagina. renderPage zet elke pagina in een Suspense en een
+ * PageLoadBoundary per tabblad. Hulpfuncties die main.tsx zelf gebruikt, staan
+ * in src/lib; een gewone import uit een pagina zou die pagina terug in de
+ * hoofdbundel trekken (Vite waarschuwt dan bij het bouwen).
+ */
+const ClientDetailPage = lazyPage(() => import('./features/Clients'), 'ClientDetailPage');
+const Clients = lazyPage(() => import('./features/Clients'), 'Clients');
+const CommunicationPage = lazyPage(() => import('./features/Communication'), 'CommunicationPage');
+const ProjectPage = lazyPage(() => import('./features/Projects'), 'ProjectPage');
+const ProjectsListPage = lazyPage(() => import('./features/Projects'), 'ProjectsListPage');
+const ProjectsPlanningPage = lazyPage(() => import('./features/Projects'), 'ProjectsPlanningPage');
+const TimeTracking = lazyPage(() => import('./features/TimeTracking'), 'TimeTracking');
+const Tickets = lazyPage(() => import('./features/Tickets'), 'Tickets');
+const Marketing = lazyPage(() => import('./features/Marketing'), 'Marketing');
+const ContentLibrary = lazyPage(() => import('./features/ContentLibrary'), 'ContentLibrary');
+const Invoices = lazyPage(() => import('./features/Finance'), 'Invoices');
+const Quotes = lazyPage(() => import('./features/Finance'), 'Quotes');
+const LedgerPage = lazyPage(() => import('./features/Bookkeeping'), 'LedgerPage');
+const PurchaseInvoicesPage = lazyPage(() => import('./features/Bookkeeping'), 'PurchaseInvoicesPage');
+const SuppliersPage = lazyPage(() => import('./features/Bookkeeping'), 'SuppliersPage');
+const DeclarationsPage = lazyPage(() => import('./features/Declarations'), 'DeclarationsPage');
+const BankPage = lazyPage(() => import('./features/Bank'), 'BankPage');
+const AssetsPage = lazyPage(() => import('./features/Assets'), 'AssetsPage');
+const PrepaidPage = lazyPage(() => import('./features/Prepaid'), 'PrepaidPage');
+const ProfitLossPage = lazyPage(() => import('./features/ProfitLoss'), 'ProfitLossPage');
+const ForecastPage = lazyPage(() => import('./features/Forecast'), 'ForecastPage');
+const VatReturnsPage = lazyPage(() => import('./features/VatReturns'), 'VatReturnsPage');
+const FiscalYearsPage = lazyPage(() => import('./features/FiscalYears'), 'FiscalYearsPage');
+const CorporateTaxPage = lazyPage(() => import('./features/CorporateTax'), 'CorporateTaxPage');
+const DgaPage = lazyPage(() => import('./features/Dga'), 'DgaPage');
+const OwnersPage = lazyPage(() => import('./features/Owners'), 'OwnersPage');
+const IncomeTaxPage = lazyPage(() => import('./features/IncomeTax'), 'IncomeTaxPage');
+const ShareholdersPage = lazyPage(() => import('./features/Shareholders'), 'ShareholdersPage');
+const AnnualAccountsPage = lazyPage(() => import('./features/AnnualAccounts'), 'AnnualAccountsPage');
+const GalleryTab = lazyPage(() => import('./features/ProjectGallery'), 'GalleryTab');
+const Contracts = lazyPage(() => import('./features/Contracts'), 'Contracts');
+const Reports = lazyPage(() => import('./features/Reports'), 'Reports');
+const AiReportPage = lazyPage(() => import('./features/AiReportPage'), 'AiReportPage');
+const WeekPlanner = lazyPage(() => import('./features/WeekPlanner'), 'WeekPlanner');
+const Archive = lazyPage(() => import('./features/SimplePages'), 'Archive');
+const Settings = lazyPage(() => import('./features/SimplePages'), 'Settings');
+const CalendarPage = lazyPage(() => import('./features/CalendarPage'), 'CalendarPage');
+const MeetingBookingManager = lazyPage(() => import('./features/MeetingBookingManager'), 'MeetingBookingManager');
+const GerrieCommandCenter = lazyPage(() => import('./features/GerrieCommandCenter'), 'GerrieCommandCenter');
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 /**
@@ -869,7 +893,7 @@ function BootLoading({ message = 'ResoFly is aan het laden…' }: { message?: st
 
 /** Een los geladen scherm (zie de lazy-imports bovenin): tot het binnen is, het laadscherm. */
 function Deferred({ children }: { children: React.ReactNode }) {
-  return <Suspense fallback={<BootLoading />}>{children}</Suspense>;
+  return <PageLoadBoundary resetKey=""><Suspense fallback={<BootLoading />}>{children}</Suspense></PageLoadBoundary>;
 }
 
 type DataGroupStatus = 'ready' | 'loading' | 'failed';
@@ -4497,7 +4521,9 @@ function App() {
               blijft de weg terug zichtbaar. */}
           <Breadcrumbs view={tab} data={data} onNavigate={navigateCrumb} home={crumbHome} />
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
-          {renderPage(tab)}
+          {/* Pagina's laden pas als je ze opent (components/LazyPage.tsx). De grens
+              begint opnieuw bij een andere pagina in dit tabblad. */}
+          <PageLoadBoundary resetKey={tab.page}><Suspense fallback={<PageLoading />}>{renderPage(tab)}</Suspense></PageLoadBoundary>
           {tab.edit && <EditModal edit={tab.edit} data={data} dataStatus={dataGroupStatus} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
           </BackScope.Provider>
         </section>

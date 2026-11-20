@@ -927,6 +927,18 @@ export async function installMock(context, options = {}) {
         if (result !== undefined) return reply(route, result);
       }
       let rpcBody = null; try { rpcBody = req.postDataJSON(); } catch { /* geen json-body */ }
+      // De bedrijfsinstellingen voor de kern, zonder het briefpapier (2026-11-19,
+      // company_settings_core): dezelfde rij als een GET op company_settings in
+      // deze opzet, min invoice_template_data_url. Een lege lijst (het standaard-
+      // antwoord op een onbekende RPC) las de app als "geen instellingen".
+      if (fn === 'company_settings_core') {
+        const row = options.incomeTax ? { ...seed.companySettings, company_name: 'Studio Lopik', legal_form: options.incomeTax }
+          : options.vof ? VOF_TABLES.company_settings[0]
+          : restRows('company_settings', url, setup)[0];
+        if (!row) return reply(route, null);
+        const { invoice_template_data_url: _paper, ...core } = row;
+        return reply(route, core);
+      }
       if (options.incomeTax && fn === 'get_income_tax_inputs') return reply(route, incomeTaxInputs(options.incomeTax, rpcBody));
       if (options.incomeTax && fn === 'organization_business_status') {
         return reply(route, [{ active: false, enabled: false, included_in_plan: false, in_grace: false, grace_until: null, legal_form: options.incomeTax, fiscal_regime: 'ib', is_corporate: false }]);

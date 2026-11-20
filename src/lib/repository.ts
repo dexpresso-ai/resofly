@@ -15,6 +15,7 @@ import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import { formatISODate } from './dates';
 import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods';
 import { runMatchRounds } from './bankMatch';
+import { letterheadMissing, withoutUnloadedLetterhead } from './letterhead';
 import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
 import type {
   AiConsent,
@@ -1969,14 +1970,65 @@ export async function deleteTimeEntry(organizationId: UUID, id: UUID): Promise<v
   if (error) throw error;
 }
 
+/**
+ * De bedrijfsinstellingen zonder het briefpapier (lib/letterhead.ts): de kern
+ * laadt ze bij elke start en na elke wijziging, en het briefpapier kon
+ * honderden KB's zijn. `invoice_template_data_url` ontbreekt dan (undefined =
+ * niet geladen); een PDF haalt het op met withInvoiceLetterhead. Staat de app
+ * eerder op Cloudflare dan de migratie (20261119110000), dan de hele rij.
+ */
 export async function loadCompanySettings(organizationId: UUID): Promise<CompanySettings | null> {
-  const { data, error } = await supabase
+  const { data, error } = await supabase.rpc('company_settings_core', { p_organization_id: organizationId });
+  if (!error) return (data ?? null) as CompanySettings | null;
+  if (error.code !== 'PGRST202' && error.code !== '42883') throw error;
+  const { data: full, error: fullError } = await supabase
     .from('company_settings')
     .select('*')
     .eq('organization_id', organizationId)
     .maybeSingle();
-  if (error) throw error;
-  return (data ?? null) as CompanySettings | null;
+  if (fullError) throw fullError;
+  return (full ?? null) as CompanySettings | null;
+}
+
+/** Het briefpapier per organisatie, bij de versie (invoice_template_updated_at) waarvoor het is opgehaald. */
+const letterheadCache = new Map<UUID, { version: string; load: Promise<string | null> }>();
+
+/**
+ * Het briefpapier (de data-URL) van een organisatie. Eén keer per versie: een
+ * nieuw briefpapier krijgt een nieuwe invoice_template_updated_at, en dan
+ * halen we het opnieuw op. Een mislukte poging blijft niet in de cache.
+ */
+export function loadInvoiceLetterhead(organizationId: UUID, updatedAt: string | null): Promise<string | null> {
+  const version = updatedAt ?? '';
+  const cached = letterheadCache.get(organizationId);
+  if (cached && cached.version === version) return cached.load;
+  const load = (async () => {
+    const { data, error } = await supabase
+      .from('company_settings')
+      .select('invoice_template_data_url')
+      .eq('organization_id', organizationId)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as { invoice_template_data_url: string | null } | null)?.invoice_template_data_url ?? null;
+  })();
+  letterheadCache.set(organizationId, { version, load });
+  load.catch(() => { if (letterheadCache.get(organizationId)?.load === load) letterheadCache.delete(organizationId); });
+  return load;
+}
+
+/**
+ * De instellingen mét briefpapier, voor een PDF. Ontbreekt het (de kern laadt
+ * het niet), dan halen we het op. Lukt dat niet, dan gooit dit een fout: een
+ * offerte of factuur hoort niet stil zonder briefpapier te verschijnen.
+ */
+export async function withInvoiceLetterhead<T extends CompanySettings | null | undefined>(company: T): Promise<T> {
+  if (!company || !letterheadMissing(company)) return company;
+  try {
+    const url = await loadInvoiceLetterhead(company.organization_id, company.invoice_template_updated_at ?? null);
+    return { ...company, invoice_template_data_url: url };
+  } catch (error) {
+    throw new Error(`Het briefpapier kon niet worden geladen, dus de PDF is niet gemaakt. Controleer je verbinding en probeer het opnieuw.${error instanceof Error && error.message ? ` (${error.message})` : ''}`);
+  }
 }
 
 /**
@@ -2176,7 +2228,10 @@ export async function upsertCompanySettings(organizationId: UUID, values: Compan
     .upsert({ ...row, organization_id: organizationId, created_by: createdBy }, { onConflict: 'organization_id' })
     .select('*')
     .single();
-  const row = sanitizeMutationValues(values as unknown as Record<string, unknown>);
+  // Briefpapier niet geladen (de kern laadt het niet, lib/letterhead.ts): dan
+  // de zes briefpapierkolommen niet aanraken. Anders wiste elke opslag van de
+  // instellingen of een handeling van Gerrie het briefpapier.
+  const row = withoutUnloadedLetterhead(sanitizeMutationValues(values as unknown as Record<string, unknown>));
   let { data, error } = await write(row);
   // Elke ronde kan PostgREST maar één ontbrekende kolom noemen; per ronde valt
   // dus hooguit één groep weg. Alleen weglaten wat echt ontbreekt: een
