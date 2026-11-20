@@ -94,8 +94,6 @@ import {
   downloadMollieInvoicePdf,
   syncMollieSalesInvoice,
   downloadCreditNoteUbl,
-  createInvoiceRefund,
-  creditInvoice,
   postSalesInvoiceToLedger,
   bookAllUnbookedSalesInvoices,
   postCreditNoteToLedger,
@@ -152,7 +150,8 @@ import { documentTypeLabels } from './features/Documents';
 import { ContentLibrary } from './features/ContentLibrary';
 import { clientFolderOptions } from './lib/folders';
 import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail, mollieInvoicingAllowed } from './lib/eInvoicing';
-import { Invoices, Quotes, type RefundInput } from './features/Finance';
+import { Invoices, Quotes, type CreditInput, type RefundInput } from './features/Finance';
+import { creditInvoiceAmount, issueCreditNoteForRefund, previewInvoiceSend, refundInvoice as refundInvoiceWithPurpose, type InvoiceBookingNotice } from './services/invoiceRecoveryService';
 import { LedgerPage, PurchaseInvoicesPage, SuppliersPage, nextPurchaseNumber, purchaseTotals } from './features/Bookkeeping';
 import { DeclarationsPage } from './features/Declarations';
 import type { InvoiceFormSeed } from './features/Bookkeeping';
@@ -204,7 +203,7 @@ import { loadBillingOverview } from './services/billingService';
 import { exportFinancePDF, financePdfOptions } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InboundMessage, InternalDocument, Invoice, Note, NoteHandwritingSummary, Organization, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InboundMessage, InternalDocument, Invoice, InvoiceRefund, Note, NoteHandwritingSummary, Organization, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, Subtask, Comment as TaskComment,
 } from './types';
 import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
@@ -3240,6 +3239,13 @@ function App() {
     if (!recipientEmail) return;
     const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
 
+    // Weten vóór je verstuurt: komt de boeking wel op de factuurdatum? Na het
+    // versturen ligt de factuur vast. Eerder ging een factuur met een datum in
+    // een afgesloten kwartaal stil naar de eerste open dag (soms het volgende
+    // boekjaar), en een factuur van vóór de startdatum werd verstuurd maar
+    // nooit geboekt.
+    if (!(await confirmInvoiceBooking(invoice))) return;
+
     // Toon meteen de laad-overlay: de Mollie-statuscheck hieronder plus het
     // versturen zelf kunnen samen enkele seconden duren.
     setSending(viaMollie ? 'E-factuur wordt via Mollie uitgegeven…' : eInvoice ? 'E-factuur wordt verstuurd…' : 'Factuur wordt verstuurd via Resend…');
@@ -3293,6 +3299,19 @@ function App() {
     } finally {
       setLoading(false); setSending(null);
     }
+  }
+
+  /**
+   * Vraagt de server waar de boeking van deze factuur terechtkomt en legt het
+   * de gebruiker voor als dat niet de factuurdatum is. True: versturen.
+   * Lukt de controle zelf niet, dan houdt dat het versturen niet tegen (de
+   * server geeft dezelfde melding mee in het antwoord).
+   */
+  async function confirmInvoiceBooking(invoice: Pick<Invoice, 'id' | 'number'>): Promise<boolean> {
+    let notice: InvoiceBookingNotice | null = null;
+    try { notice = await previewInvoiceSend(activeOrg.id, invoice.id); } catch { return true; }
+    if (!notice) return true;
+    return confirm(`${notice.message}\n\n${notice.advice}\n\nKlik op OK om de factuur toch zo te versturen, of op Annuleren om eerst de datum aan te passen (Bewerken).`);
   }
 
   async function sendInvoiceReminder(invoice: Invoice) {
@@ -3401,19 +3420,35 @@ function App() {
     }
   }
 
-  async function creditUnpaidInvoice(invoice: Invoice) {
-    if (!ensureCanWrite()) return;
-    const reason = prompt(
-      `Factuur ${invoice.number} crediteren?\n\nEr komt een creditfactuur voor het volledige bedrag (die gaat ook naar de klant), omzet en btw worden teruggeboekt en de factuur gaat op geannuleerd. Dit kan niet ongedaan worden gemaakt.\n\nReden (komt op de creditfactuur):`,
-      'Factuur vervalt',
-    );
-    if (reason === null) return;
+  // Het venster Crediteren (Finance.tsx) vraagt het bedrag, de reden en of de
+  // klant de creditfactuur krijgt. Fouten gaan terug naar dat venster.
+  async function creditUnpaidInvoice(invoice: Invoice, input: CreditInput) {
+    if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
     setLoading(true); setError(null);
     try {
-      await creditInvoice(activeOrg.id, invoice.id, reason.trim() || undefined);
+      const result = await creditInvoiceAmount(activeOrg.id, invoice.id, {
+        amountCents: input.amountCents,
+        reason: input.reason || undefined,
+        sendToClient: input.sendToClient,
+      });
+      await refresh();
+      if (result.warnings.length > 0) setError(`${result.summary} Let op: ${result.warnings.join(' ')}`);
+    } catch (e) {
+      throw e instanceof Error ? e : new Error('Crediteren mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Een terugbetaling zonder creditfactuur alsnog een creditfactuur geven.
+  async function creditNoteForRefund(refund: InvoiceRefund) {
+    if (!ensureCanAdmin()) throw new Error('Alleen owners en admins mogen terugbetalingen bijwerken.');
+    setLoading(true); setError(null);
+    try {
+      await issueCreditNoteForRefund(activeOrg.id, refund.id);
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Crediteren mislukt');
+      throw e instanceof Error ? e : new Error('Creditfactuur maken mislukt');
     } finally {
       setLoading(false);
     }
@@ -3453,10 +3488,12 @@ function App() {
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins mogen terugbetalingen registreren.');
     setLoading(true); setError(null);
     try {
-      await createInvoiceRefund(activeOrg.id, invoice.id, {
+      await refundInvoiceWithPurpose(activeOrg.id, invoice.id, {
         amountCents: input.amountCents,
         reason: input.reason,
-        createCreditNote: input.createCreditNote,
+        // Waarom er wordt terugbetaald: de verkoop vervalt (creditfactuur) of
+        // de klant betaalde te veel (alleen geld terug).
+        purpose: input.purpose,
         idempotencyKey: input.idempotencyKey,
         kind: input.kind,
       });
@@ -4001,6 +4038,9 @@ function App() {
         // Mollie-koppeling niet twintig keer opnieuw op te halen.
         try { includePaymentLink = await mollieConnected(activeOrg.id); } catch { /* PDF-only als de status niet op te halen is */ }
       }
+      // Dezelfde vraag als bij de knop: komt de boeking niet op de factuurdatum,
+      // dan beslist de mens, ook als Gerrie het versturen klaarzette.
+      if (!(await confirmInvoiceBooking({ id: p.id, number: p.number }))) throw new Error(`Factuur ${p.number} is niet verstuurd: pas eerst de factuurdatum aan.`);
       await sendInvoiceEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined, includePaymentLink });
       scheduleRefresh();
     },
@@ -4634,7 +4674,7 @@ function App() {
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onWithdraw={withdrawQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} refreshKey={refreshRound}
       draft={view.pendingDraft?.kind === 'contract' ? contractDraftFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onPostToLedger={postInvoiceToLedger} onCreditInvoice={creditUnpaidInvoice} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onCreditNoteForRefund={creditNoteForRefund} onPostToLedger={postInvoiceToLedger} onCreditInvoice={creditUnpaidInvoice} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'supplier' ? (view.pendingDraft.payload as Partial<Supplier>) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}

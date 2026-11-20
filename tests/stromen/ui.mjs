@@ -537,6 +537,27 @@ async function klik(container, naam) {
   await knop.first().click();
 }
 
+/**
+ * Crediteren via het venster van de factuur. Sinds 19 november is dat een eigen
+ * venster (wat er betaald is, wat er openstaat, het bedrag, de reden, en of de
+ * klant de creditfactuur krijgt) in plaats van één prompt voor het hele bedrag:
+ * een deels betaalde factuur liep daar dood. De stappen hieronder verwachtten
+ * die prompt; ze vullen nu het venster in. Geeft het venster terug, nog open
+ * tot de server klaar is.
+ */
+async function crediteerInVenster(scherm, m, nummer, reden) {
+  await klik(m, 'Crediteren');
+  // Het venster staat in het factuurvenster; .last() is het binnenste.
+  const venster = modal(scherm.page, `Crediteren — factuur ${nummer}`).last();
+  await venster.waitFor({ timeout: 10000 });
+  // Het openstaande bedrag komt van de server (het grootboek).
+  await venster.locator('.refund-summary').waitFor({ timeout: 10000 });
+  const stand = tekst(await venster.locator('.refund-summary').innerText());
+  await venster.locator('textarea').fill(reden);
+  await venster.locator('.modal-foot').getByRole('button', { name: /^Crediteren$/ }).click();
+  return { venster, stand };
+}
+
 /** Staat de knop zichtbaar in het venster? (Uitgeschakeld telt als aanwezig.) */
 async function heeftKnop(container, naam) {
   const knop = container.getByRole('button', { name: naam instanceof RegExp ? naam : regexVan(naam) });
@@ -941,8 +962,7 @@ async function scenarioFactuur() {
           + `creditInvoice rechtstreeks: ${antwoord.status} ${antwoord.json?.error ?? antwoord.tekst.slice(0, 200)}`);
       }
       const sinds = server.verkeer.length;
-      lid.plan.push({ antwoord: 'Factuur vervalt (UI-test)' });
-      await klik(m, 'Crediteren');
+      await crediteerInVenster(lid, m, f1.nummer, 'Factuur vervalt (UI-test)');
       await rustig(lid);
       verwachtAanroep(sinds, { functie: 'invoice-workflow', actie: 'creditInvoice' }, 'Crediteren na de herinnering');
       await wachtTot(async () => (await detailStatus(m)) === 'Geannuleerd', { melding: 'status werd niet "Geannuleerd"' });
@@ -957,11 +977,14 @@ async function scenarioFactuur() {
     const mailsVoor = mailsAan(w.klantA.email).length;
     const sinds = server.verkeer.length;
     const m = await openDocument(lid, f3.number, 'Factuur');
-    lid.plan.push({ antwoord: 'Dubbel gefactureerd (UI-test)' });
-    await klik(m, 'Crediteren');
+    // Geen prompt meer: het venster Crediteren toont wat er openstaat (hier het
+    // hele bedrag, er is niets betaald) en vraagt het bedrag en de reden.
+    const { stand } = await crediteerInVenster(lid, m, f3.number, 'Dubbel gefactureerd (UI-test)');
+    // De kopjes staan in hoofdletters in beeld (CSS); vergelijk zonder hoofdletters.
+    const standKlein = stand.toLowerCase();
+    verwacht(standKlein.includes(`staat nog open ${TOTAAL}`) && standKlein.includes('betaald € 0,00'), `de stand in het venster Crediteren: ${stand}`);
     await rustig(lid);
-    const vraag = lid.dialogen.at(-1);
-    verwacht(vraag?.type === 'prompt' && vraag.tekst.includes(`Factuur ${f3.number} crediteren?`), `vraag bij crediteren: ${JSON.stringify(vraag)}`);
+    verwachtAanroep(sinds, { functie: 'invoice-workflow', actie: 'previewInvoiceCredit' }, 'het openstaande bedrag ophalen');
     verwachtAanroep(sinds, { functie: 'invoice-workflow', actie: 'creditInvoice' }, 'Crediteren');
     await wachtTot(async () => (await detailStatus(m)) === 'Geannuleerd', { melding: 'status werd niet "Geannuleerd"' });
     const credit = sqlRij(`select number, total_amount, reason from public.credit_notes where invoice_id = ${q(f3.id)}`);

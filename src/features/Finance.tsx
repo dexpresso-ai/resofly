@@ -15,8 +15,17 @@ import { loadInvoicePdfSnapshot, loadMollieInvoicePdf } from '../lib/repository'
 import { parseDutchAmount, parseDutchAmountCents } from '../lib/money';
 import { invoiceContentLocked, paymentsBlockCredit } from '../lib/financeRules';
 import { amsterdamTodayIso } from '../lib/dates';
+import { loadInvoiceCreditState, type InvoiceCreditState, type RefundPurpose } from '../services/invoiceRecoveryService';
 
-export type RefundInput = { amountCents: number; reason: string; createCreditNote: boolean; idempotencyKey: string; kind: 'manual' | 'mollie' };
+/**
+ * Een terugbetaling. `purpose` zegt waarom: 'sale' = de verkoop gaat (deels)
+ * niet door (creditfactuur), 'overpayment' = te veel of dubbel betaald (alleen
+ * geld terug). Er was één vinkje "creditfactuur aanmaken"; dat gaf in beide
+ * standen foute cijfers bij het verkeerde geval.
+ */
+export type RefundInput = { amountCents: number; reason: string; purpose: RefundPurpose; idempotencyKey: string; kind: 'manual' | 'mollie' };
+/** Crediteren van wat openstaat. `sendToClient` false = afboeken als oninbaar (interne creditnota). */
+export type CreditInput = { amountCents: number; reason: string; sendToClient: boolean };
 
 export function Quotes({
   data,
@@ -64,8 +73,8 @@ export function Quotes({
   />;
 }
 
-export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onDownloadUbl, onRefund, onDownloadCreditNote, onDownloadCreditNoteUbl, onEmailCreditNote, onPostCreditNote, onPostToLedger, onCreditInvoice, onBookAllUnbooked, onProposeDunning, onSendDunning, onCancelDunning, onSyncMollie, onDownloadMolliePdf }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onDownloadUbl?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostCreditNote?: (creditNote: CreditNote) => void; onPostToLedger?: (i: Invoice) => void; onCreditInvoice?: (i: Invoice) => void; onBookAllUnbooked?: () => void; onProposeDunning?: (i: Invoice) => void; onSendDunning?: (n: DunningNotice) => void; onCancelDunning?: (n: DunningNotice) => void; onSyncMollie?: (i: Invoice, options?: { silent?: boolean }) => Promise<void>; onDownloadMolliePdf?: (i: Invoice) => void }) {
-  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onDownloadInvoiceUbl={onDownloadUbl} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onDownloadCreditNoteUbl={onDownloadCreditNoteUbl} onEmailCreditNote={onEmailCreditNote} onPostCreditNote={onPostCreditNote} onPostInvoiceToLedger={onPostToLedger} onCreditInvoice={onCreditInvoice} onBookAllUnbooked={onBookAllUnbooked} onProposeDunning={onProposeDunning} onSendDunning={onSendDunning} onCancelDunning={onCancelDunning} onSyncMollie={onSyncMollie} onDownloadMolliePdf={onDownloadMolliePdf}/>;
+export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onDownloadUbl, onRefund, onDownloadCreditNote, onDownloadCreditNoteUbl, onEmailCreditNote, onPostCreditNote, onCreditNoteForRefund, onPostToLedger, onCreditInvoice, onBookAllUnbooked, onProposeDunning, onSendDunning, onCancelDunning, onSyncMollie, onDownloadMolliePdf }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onDownloadUbl?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostCreditNote?: (creditNote: CreditNote) => void; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void>; onPostToLedger?: (i: Invoice) => void; onCreditInvoice?: (i: Invoice, input: CreditInput) => Promise<void>; onBookAllUnbooked?: () => void; onProposeDunning?: (i: Invoice) => void; onSendDunning?: (n: DunningNotice) => void; onCancelDunning?: (n: DunningNotice) => void; onSyncMollie?: (i: Invoice, options?: { silent?: boolean }) => Promise<void>; onDownloadMolliePdf?: (i: Invoice) => void }) {
+  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onDownloadInvoiceUbl={onDownloadUbl} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onDownloadCreditNoteUbl={onDownloadCreditNoteUbl} onEmailCreditNote={onEmailCreditNote} onPostCreditNote={onPostCreditNote} onCreditNoteForRefund={onCreditNoteForRefund} onPostInvoiceToLedger={onPostToLedger} onCreditInvoice={onCreditInvoice} onBookAllUnbooked={onBookAllUnbooked} onProposeDunning={onProposeDunning} onSendDunning={onSendDunning} onCancelDunning={onCancelDunning} onSyncMollie={onSyncMollie} onDownloadMolliePdf={onDownloadMolliePdf}/>;
 }
 
 function FinanceList<T extends Quote | Invoice>({
@@ -94,6 +103,7 @@ function FinanceList<T extends Quote | Invoice>({
   onDownloadCreditNoteUbl,
   onEmailCreditNote,
   onPostCreditNote,
+  onCreditNoteForRefund,
   onPostInvoiceToLedger,
   onCreditInvoice,
   onBookAllUnbooked,
@@ -127,9 +137,9 @@ function FinanceList<T extends Quote | Invoice>({
   onDownloadCreditNote?: (creditNote: CreditNote) => void;
   onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void;
   onEmailCreditNote?: (creditNote: CreditNote) => void;
-  onPostCreditNote?: (creditNote: CreditNote) => void;
+  onPostCreditNote?: (creditNote: CreditNote) => void; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void>;
   onPostInvoiceToLedger?: (i: Invoice) => void;
-  onCreditInvoice?: (i: Invoice) => void;
+  onCreditInvoice?: (i: Invoice, input: CreditInput) => Promise<void>;
   onBookAllUnbooked?: () => void;
   onProposeDunning?: (i: Invoice) => void;
   onSendDunning?: (n: DunningNotice) => void;
@@ -173,7 +183,7 @@ function FinanceList<T extends Quote | Invoice>({
     onDownloadCreditNote={onDownloadCreditNote}
     onDownloadCreditNoteUbl={onDownloadCreditNoteUbl}
     onEmailCreditNote={onEmailCreditNote}
-    onPostCreditNote={onPostCreditNote}
+    onPostCreditNote={onPostCreditNote} onCreditNoteForRefund={onCreditNoteForRefund}
     onPostToLedger={onPostInvoiceToLedger}
     onCredit={onCreditInvoice}
     onBookAllUnbooked={onBookAllUnbooked}
@@ -571,6 +581,7 @@ function InvoiceTable({
   onDownloadCreditNoteUbl,
   onEmailCreditNote,
   onPostCreditNote,
+  onCreditNoteForRefund,
   onPostToLedger,
   onCredit,
   onBookAllUnbooked,
@@ -596,9 +607,9 @@ function InvoiceTable({
   onDownloadCreditNote?: (creditNote: CreditNote) => void;
   onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void;
   onEmailCreditNote?: (creditNote: CreditNote) => void;
-  onPostCreditNote?: (creditNote: CreditNote) => void;
+  onPostCreditNote?: (creditNote: CreditNote) => void; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void>;
   onPostToLedger?: (invoice: Invoice) => void;
-  onCredit?: (invoice: Invoice) => void;
+  onCredit?: (invoice: Invoice, input: CreditInput) => Promise<void>;
   onBookAllUnbooked?: () => void;
   onProposeDunning?: (invoice: Invoice) => void;
   onSendDunning?: (notice: DunningNotice) => void;
@@ -706,7 +717,7 @@ function InvoiceTable({
       onDownloadCreditNote={onDownloadCreditNote}
       onDownloadCreditNoteUbl={onDownloadCreditNoteUbl}
       onEmailCreditNote={onEmailCreditNote}
-      onPostCreditNote={onPostCreditNote}
+      onPostCreditNote={onPostCreditNote} onCreditNoteForRefund={onCreditNoteForRefund}
       onPostToLedger={onPostToLedger}
       onCredit={onCredit}
       onProposeDunning={onProposeDunning}
@@ -815,6 +826,7 @@ function InvoiceDetailModal({
   onDownloadCreditNoteUbl,
   onEmailCreditNote,
   onPostCreditNote,
+  onCreditNoteForRefund,
   onPostToLedger,
   onCredit,
   onProposeDunning,
@@ -838,9 +850,9 @@ function InvoiceDetailModal({
   onDownloadCreditNote?: (creditNote: CreditNote) => void;
   onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void;
   onEmailCreditNote?: (creditNote: CreditNote) => void;
-  onPostCreditNote?: (creditNote: CreditNote) => void;
+  onPostCreditNote?: (creditNote: CreditNote) => void; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void>;
   onPostToLedger?: (invoice: Invoice) => void;
-  onCredit?: (invoice: Invoice) => void;
+  onCredit?: (invoice: Invoice, input: CreditInput) => Promise<void>;
   onProposeDunning?: (invoice: Invoice) => void;
   onSendDunning?: (notice: DunningNotice) => void;
   onCancelDunning?: (notice: DunningNotice) => void;
@@ -908,6 +920,20 @@ function InvoiceDetailModal({
     && !payment.provider_payment_id.startsWith('invoice_')
     && ((payment.amount_cents || 0) - (payment.amount_refunded_cents || 0)) > 0);
   const [showRefund, setShowRefund] = useState(false);
+  const [showCredit, setShowCredit] = useState(false);
+  // Wat gecrediteerd is zonder terugbetaling (Crediteren van wat openstond) is
+  // nooit betaald, en kan dus ook niet worden terugbetaald.
+  const creditedUnpaidCents = creditNotes
+    .filter(creditNote => !creditNote.refund_id && creditNote.status !== 'void')
+    .reduce((sum, creditNote) => sum + Math.round(Number(creditNote.total_amount || 0) * 100), 0);
+  // Een verstuurde factuur van vóór de startdatum van de boekhouding wordt niet
+  // geboekt (die omzet hoort in de beginbalans). De knop "Boek naar grootboek"
+  // gaf dan "zit al in de beginbalans", en de bank zei bij het afletteren
+  // "boek de factuur eerst": twee meldingen die naar elkaar wezen. Nu zegt de
+  // factuur zelf wat er aan de hand is en hoe de betaling geboekt wordt.
+  const bookkeepingStart = data.companySettings?.bookkeeping_start_date ?? null;
+  const beforeBookkeepingStart = !invoice.journal_entry_id && invoice.status !== 'draft'
+    && Boolean(bookkeepingStart && invoice.date && invoice.date < bookkeepingStart);
 
   return <Modal title={`Factuur ${invoice.number}`} onClose={onClose} className="quote-detail-modal invoice-detail-modal has-preview">
     <div className="quote-detail-layout">
@@ -941,8 +967,10 @@ function InvoiceDetailModal({
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en de verstuurde pdf</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} eInvoiceDelivery={eInvoiceDelivery} upcomingEInvoiceTo={eInvoiceClient && !invoiceHasStoredPdf(invoice) ? invoiceRecipientFor(client) : null} upcomingVia={eInvoiceChannel} paymentLinks={mollieInvoicingAllowed(data.companySettings?.invoice_send_method)} />
         {mollieDelivery && <MollieEInvoicePanel invoice={invoice} delivery={mollieDelivery} partialNote={molliePartialNote(events)} onSync={onSyncMollie} onDownloadPdf={onDownloadMolliePdf} />}
-        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} payments={payments} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} onCredit={onCredit} />
-        {showRefund && onRefund && <RefundModal invoice={invoice} mollieRefundable={mollieRefundable} inFlightCents={inFlightCents} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
+        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} payments={payments} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} onCredit={onCredit ? () => setShowCredit(true) : undefined} beforeBookkeepingStart={beforeBookkeepingStart} creditedUnpaidCents={creditedUnpaidCents} />
+        {beforeBookkeepingStart && <p className="refund-note">Deze factuur heeft een datum van vóór de startdatum van je boekhouding ({dateNL(bookkeepingStart)}) en staat daarom niet in het grootboek: die omzet hoort in je beginbalans. Komt de betaling binnen, boek die dan bij Bank op <strong>1300 Debiteuren</strong> (niet op de factuur) en zet de factuur hier zelf op Betaald.</p>}
+        {showRefund && onRefund && <RefundModal invoice={invoice} mollieRefundable={mollieRefundable} inFlightCents={inFlightCents} creditedUnpaidCents={creditedUnpaidCents} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
+        {showCredit && onCredit && <CreditModal invoice={invoice} onClose={() => setShowCredit(false)} onSubmit={(input) => onCredit(invoice, input)} />}
       </section>
 
       {(invoiceIsReminderEligible(invoice) || (invoice.reminder_level ?? 0) > 0 || reminderDeliveries.length > 0) && <section className="quote-detail-section">
@@ -966,7 +994,7 @@ function InvoiceDetailModal({
       </section>
 
       {(refunds.length > 0 || creditNotes.length > 0) && <section className="quote-detail-split">
-        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Terugbetalingen</span><strong>Refund-ledger</strong></div></div><InvoiceRefunds refunds={refunds} /></div>
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Terugbetalingen</span><strong>Refund-ledger</strong></div></div><InvoiceRefunds refunds={refunds} onCreditNoteForRefund={canAdmin ? onCreditNoteForRefund : undefined} /></div>
         <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Creditfacturen</span><strong>Credit notes</strong></div></div><CreditNotes creditNotes={creditNotes} canWrite={canWrite} onDownload={onDownloadCreditNote} onDownloadUbl={onDownloadCreditNoteUbl} onEmail={onEmailCreditNote} onPostToLedger={onPostCreditNote} /></div>
       </section>}
 
@@ -1120,7 +1148,7 @@ function InvoiceStatusStrip({ invoice, delivery, payment, eInvoiceDelivery = nul
   </div>;
 }
 
-function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments, eInvoice = false, mollieIssued = false, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger, onCredit }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; /** Alle betalingen van deze factuur, nieuwste eerst. */ payments: InvoicePaymentRecord[]; eInvoice?: boolean | 'mollie'; mollieIssued?: boolean; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void; onCredit?: (invoice: Invoice) => void }) {
+function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments, eInvoice = false, mollieIssued = false, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger, onCredit, beforeBookkeepingStart = false, creditedUnpaidCents = 0 }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; /** Alle betalingen van deze factuur, nieuwste eerst. */ payments: InvoicePaymentRecord[]; eInvoice?: boolean | 'mollie'; mollieIssued?: boolean; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void; /** Opent het venster Crediteren. */ onCredit?: () => void; /** De factuurdatum ligt vóór de startdatum van de boekhouding: boeken kan niet. */ beforeBookkeepingStart?: boolean; /** Gecrediteerd zonder terugbetaling: dat deel is nooit betaald. */ creditedUnpaidCents?: number }) {
   const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
   // Precies de regel van de database (enforce_invoice_immutability), over alle
   // betalingen van de factuur: een verlopen of mislukte link vergrendelt niet,
@@ -1133,7 +1161,7 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments
   // A refund is only possible for a paid invoice that still has a non-refunded
   // remainder. Gated to owners/admins (passed as onRefund only when allowed).
   const refundedCents = Math.round((invoice.refunded_amount ?? 0) * 100);
-  const remainingCents = Math.max(total(invoice.lines).totalCents - refundedCents, 0);
+  const remainingCents = Math.max(total(invoice.lines).totalCents - creditedUnpaidCents - refundedCents, 0);
   const canRefund = Boolean(canAdmin && onRefund) && ['paid', 'refunded'].includes(invoice.status) && remainingCents > 0;
   // Herinnering kan zodra de factuur onbetaald én over de vervaldatum is. Het
   // volgende niveau is reminder_level + 1 (max 3); de Edge Function kiest 'm zelf.
@@ -1142,9 +1170,12 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments
   // Verkoopfactuur in het grootboek boeken (omzet + af te dragen BTW). Kan zodra de
   // factuur niet geannuleerd is en nog niet eerder is geboekt.
   const isPosted = Boolean(invoice.journal_entry_id);
-  const canPostToLedger = Boolean(canWrite && onPostToLedger) && !isPosted && !['draft', 'cancelled', 'void'].includes(invoice.status);
-  // Een verzonden, onbetaalde factuur annuleer je met een creditnota: die boekt
-  // omzet en btw terug. Een betaalde factuur loopt via Terugbetaling.
+  // Vóór de startdatum van de boekhouding weigert de database het boeken; dan
+  // geen knop die alleen een foutmelding geeft (de uitleg staat eronder).
+  const canPostToLedger = Boolean(canWrite && onPostToLedger) && !isPosted && !beforeBookkeepingStart && !['draft', 'cancelled', 'void'].includes(invoice.status);
+  // Een verzonden factuur annuleer je met een creditnota: die boekt omzet en
+  // btw terug voor wat nog openstaat (ook als er al een deel betaald is). Een
+  // volledig betaalde factuur loopt via Terugbetaling.
   // Een lopende Mollie-betaling houdt crediteren tegen (zoals op de server); een
   // verlopen of mislukte link niet. Eerder verdween de knop na de eerste
   // betaallink voorgoed (de link verloopt na 30 minuten), terwijl de server
@@ -1169,7 +1200,7 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments
     {canDownloadStored && !mollieIssued && <Button onClick={() => onDownloadPdf?.(invoice)}><Download size={14}/> Download verzonden PDF</Button>}
     {onDownloadUbl && !mollieIssued && !['cancelled', 'void'].includes(invoice.status) && <Button onClick={() => onDownloadUbl(invoice)} title="Download deze factuur als UBL 2.1 e-factuur (Peppol BIS 3.0) met de PDF erin — voor overheden en boekhoudpakketten."><Download size={14}/> E-factuur (UBL)</Button>}
     {canRefund && <Button variant="danger" onClick={() => onRefund?.()}><RotateCcw size={14}/> Terugbetaling</Button>}
-    {canCredit && <Button variant="danger" onClick={() => onCredit?.(invoice)} title="Maakt een creditfactuur voor het volledige bedrag, boekt omzet en btw terug en zet de factuur op geannuleerd."><RotateCcw size={14}/> Crediteren</Button>}
+    {canCredit && <Button variant="danger" onClick={() => onCredit?.()} title="Maakt een creditfactuur voor wat nog openstaat (of een deel daarvan) en boekt omzet en btw terug. Hier boek je ook een oninbare factuur af."><RotateCcw size={14}/> Crediteren</Button>}
     {canPostToLedger && <Button onClick={() => onPostToLedger?.(invoice)} title="Boekt de omzet en af te dragen BTW van deze factuur in het grootboek."><BookOpen size={14}/> Boek naar grootboek</Button>}
     {isPosted && <span className="status-pill bk-je-posted" title="Deze factuur staat in het grootboek."><BookOpen size={13}/> In grootboek</span>}
   </div>;
@@ -1404,28 +1435,34 @@ function emailStatusLabel(status: string): string {
   return labels[status] || status;
 }
 
-function RefundModal({ invoice, mollieRefundable, inFlightCents = 0, onClose, onSubmit }: { invoice: Invoice; mollieRefundable: boolean; inFlightCents?: number; onClose: () => void; onSubmit: (input: RefundInput) => Promise<void> }) {
+function RefundModal({ invoice, mollieRefundable, inFlightCents = 0, creditedUnpaidCents = 0, onClose, onSubmit }: { invoice: Invoice; mollieRefundable: boolean; inFlightCents?: number; creditedUnpaidCents?: number; onClose: () => void; onSubmit: (input: RefundInput) => Promise<void> }) {
   const totals = total(invoice.lines);
   const refundedCents = Math.round((invoice.refunded_amount ?? 0) * 100);
-  const remainingCents = Math.max(totals.totalCents - refundedCents - inFlightCents, 0);
+  const remainingCents = Math.max(totals.totalCents - creditedUnpaidCents - refundedCents - inFlightCents, 0);
   const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
   const [method, setMethod] = useState<'manual' | 'mollie'>(mollieRefundable ? 'mollie' : 'manual');
   const [amountEuro, setAmountEuro] = useState((remainingCents / 100).toFixed(2));
   const [reason, setReason] = useState('');
-  const [createCreditNote, setCreateCreditNote] = useState(true);
+  // Waarom betaal je terug? Geen standaard: het was een vinkje dat aan stond,
+  // en wie een dubbele betaling terugstortte, boekte zo zijn omzet weg.
+  const [purpose, setPurpose] = useState<RefundPurpose | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const amountCents = parseDutchAmountCents(String(amountEuro)) ?? NaN;
-  const amountValid = Number.isFinite(amountCents) && amountCents > 0 && amountCents <= remainingCents;
   const isMollie = method === 'mollie';
+  const overpayment = purpose === 'overpayment';
+  // Te veel betaald geld hangt niet aan het factuurbedrag (bij een dubbele
+  // betaling is het precies dat bedrag nog eens); de server bewaakt de grens.
+  const overLimit = !overpayment && amountCents > remainingCents;
+  const amountValid = Number.isFinite(amountCents) && amountCents > 0 && !overLimit;
 
   async function submit() {
-    if (!amountValid || busy) return;
+    if (!amountValid || busy || !purpose) return;
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ amountCents, reason: reason.trim(), createCreditNote, idempotencyKey, kind: method });
+      await onSubmit({ amountCents, reason: reason.trim(), purpose, idempotencyKey, kind: method });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Terugbetaling mislukt');
@@ -1440,15 +1477,30 @@ function RefundModal({ invoice, mollieRefundable, inFlightCents = 0, onClose, on
     className="refund-modal"
     footer={<>
       <Button onClick={onClose} disabled={busy}>Annuleren</Button>
-      <Button variant="primary" onClick={() => void submit()} disabled={!amountValid || busy}>{busy ? 'Bezig…' : (isMollie ? 'Via Mollie terugbetalen' : 'Terugbetaling registreren')}</Button>
+      <Button variant="primary" onClick={() => void submit()} disabled={!amountValid || busy || !purpose} title={!purpose ? 'Kies eerst waarom je terugbetaalt.' : undefined}>{busy ? 'Bezig…' : (isMollie ? 'Via Mollie terugbetalen' : 'Terugbetaling registreren')}</Button>
     </>}
   >
     <div className="refund-form">
       <div className="refund-summary">
         <div><span>Factuurtotaal</span><strong>{euro(totals.total)}</strong></div>
+        {creditedUnpaidCents > 0 && <div><span>Gecrediteerd (niet betaald)</span><strong>{euro(creditedUnpaidCents / 100)}</strong></div>}
         <div><span>Al terugbetaald</span><strong>{euro(refundedCents / 100)}</strong></div>
         {inFlightCents > 0 && <div><span>In behandeling</span><strong>{euro(inFlightCents / 100)}</strong></div>}
         <div><span>Resterend</span><strong>{euro(remainingCents / 100)}</strong></div>
+      </div>
+
+      <div className="refund-field">
+        <span>Waarom betaal je terug?</span>
+        <div className="send-method" role="radiogroup" aria-label="Waarom betaal je terug?">
+          <button type="button" role="radio" aria-checked={purpose === 'sale'} className={purpose === 'sale' ? 'is-active' : ''} disabled={busy} onClick={() => setPurpose('sale')}>
+            <strong>De verkoop gaat (deels) niet door</strong>
+            <small>Annulering, retour of korting achteraf. De klant krijgt een creditfactuur; omzet en btw gaan terug.</small>
+          </button>
+          <button type="button" role="radio" aria-checked={overpayment} className={overpayment ? 'is-active' : ''} disabled={busy} onClick={() => setPurpose('overpayment')}>
+            <strong>De klant betaalde te veel of dubbel</strong>
+            <small>Alleen geld terug. Geen creditfactuur: de factuur klopt, blijft Betaald en houdt zijn omzet en btw.</small>
+          </button>
+        </div>
       </div>
 
       {mollieRefundable && <div className="refund-method" role="radiogroup" aria-label="Terugbetaalmethode">
@@ -1462,39 +1514,183 @@ function RefundModal({ invoice, mollieRefundable, inFlightCents = 0, onClose, on
 
       <label className="refund-field">
         <span>Bedrag (EUR)</span>
-        <input type="number" inputMode="decimal" min="0" step="0.01" max={(remainingCents / 100).toFixed(2)} value={amountEuro} disabled={busy} onChange={event => setAmountEuro(event.target.value)} />
+        <input type="number" inputMode="decimal" min="0" step="0.01" max={overpayment ? undefined : (remainingCents / 100).toFixed(2)} value={amountEuro} disabled={busy} onChange={event => setAmountEuro(event.target.value)} />
       </label>
-      <button type="button" className="refund-full-btn" disabled={busy} onClick={() => setAmountEuro((remainingCents / 100).toFixed(2))}>Volledig restbedrag ({euro(remainingCents / 100)})</button>
+      {!overpayment && <button type="button" className="refund-full-btn" disabled={busy} onClick={() => setAmountEuro((remainingCents / 100).toFixed(2))}>Volledig restbedrag ({euro(remainingCents / 100)})</button>}
 
       <label className="refund-field">
-        <span>Reden (optioneel)</span>
-        <textarea rows={3} value={reason} disabled={busy} placeholder="Bijv. annulering, prijscorrectie, dubbele betaling…" onChange={event => setReason(event.target.value)} />
+        <span>{overpayment ? 'Notitie (optioneel)' : 'Reden (optioneel, komt op de creditfactuur)'}</span>
+        <textarea rows={3} value={reason} disabled={busy} placeholder={overpayment ? 'Bijv. factuur twee keer overgemaakt' : 'Bijv. annulering, retour, prijscorrectie…'} onChange={event => setReason(event.target.value)} />
       </label>
 
-      <label className="refund-checkbox">
-        <input type="checkbox" checked={createCreditNote} disabled={busy} onChange={event => setCreateCreditNote(event.target.checked)} />
-        <span>Creditfactuur aanmaken (aanbevolen voor de boekhouding)</span>
-      </label>
+      {purpose === 'sale' && (isMollie
+        ? <p className="refund-note">Dit stuurt de terugbetaling naar <strong>Mollie</strong>; de klant krijgt het bedrag terug op de oorspronkelijke betaalmethode. Dat kan even “in behandeling” staan. Zodra Mollie klaar is, krijgt de klant een <strong>creditfactuur</strong> en gaan omzet en btw terug. Bij een volledige terugbetaling gaat de factuur naar “Terugbetaald”.</p>
+        : <p className="refund-note">De klant krijgt een <strong>creditfactuur</strong>; omzet en btw gaan terug. Maak het bedrag zelf over, en verdeel die uitgaande betaling bij Bank op de <strong>creditfactuur</strong>. Bij een volledige terugbetaling gaat de factuur naar “Terugbetaald”.</p>)}
+      {overpayment && (isMollie
+        ? <p className="refund-note">Het geld gaat via <strong>Mollie</strong> terug naar de klant. Er komt geen creditfactuur en de factuur blijft Betaald. De andere ontvangst (bij Bank) is nu de betaling van deze factuur: verdeel die bankmutatie op de factuur, of boek hem op <strong>1300 Debiteuren</strong>.</p>
+        : <p className="refund-note">Maak het bedrag zelf over. Er komt geen creditfactuur en de factuur blijft Betaald; omzet en btw veranderen niet. Boek de uitgaande betaling bij Bank op <strong>1300 Debiteuren</strong>: daar staat de dubbele of te hoge ontvangst ook, dus samen is dat weer nul.</p>)}
 
-      {isMollie
-        ? <p className="refund-note">Dit stuurt de terugbetaling naar <strong>Mollie</strong>; de klant krijgt het bedrag automatisch terug op de oorspronkelijke betaalmethode. De terugbetaling kan even “in behandeling” staan — de status en de creditfactuur volgen automatisch zodra Mollie de terugbetaling heeft verwerkt.</p>
-        : <p className="refund-note">Dit registreert een <strong>handmatige</strong> terugbetaling: maak het bedrag zelf over (bijv. via je bank). De factuurstatus en aggregaten worden direct bijgewerkt; bij een volledige terugbetaling gaat de factuur naar “Terugbetaald”.</p>}
-
-      {amountCents > remainingCents && <p className="refund-error">Bedrag mag niet groter zijn dan het resterende bedrag ({euro(remainingCents / 100)}).</p>}
+      {overLimit && <p className="refund-error">Bedrag mag niet groter zijn dan het resterende bedrag ({euro(remainingCents / 100)}).</p>}
       {error && <p className="refund-error">{error}</p>}
     </div>
   </Modal>;
 }
 
-function InvoiceRefunds({ refunds }: { refunds: InvoiceRefund[] }) {
+/**
+ * Crediteren: een creditfactuur voor wat er op een verstuurde factuur nog
+ * openstaat, of een deel daarvan. Het openstaande bedrag komt van de server
+ * (het grootboek): de app heeft de betalingen per bank niet bij de hand.
+ *
+ * Dit was een enkele vraag ("Factuur crediteren? Reden:") voor het hele bedrag,
+ * en alleen als er niets betaald was. Een deels betaalde factuur liep dood:
+ * Crediteren verwees naar Terugbetaling, en Terugbetaling naar een betaalde
+ * factuur.
+ */
+function CreditModal({ invoice, onClose, onSubmit }: { invoice: Invoice; onClose: () => void; onSubmit: (input: CreditInput) => Promise<void> }) {
+  const [state, setState] = useState<InvoiceCreditState | null>(null);
+  const [mode, setMode] = useState<'credit' | 'write_off'>('credit');
+  const [amountEuro, setAmountEuro] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    loadInvoiceCreditState(invoice.organization_id, invoice.id)
+      .then(loaded => { if (alive) { setState(loaded); setAmountEuro((loaded.openCents / 100).toFixed(2)); } })
+      .catch(e => { if (alive) setError(e instanceof Error ? e.message : 'Het openstaande bedrag kon niet worden opgehaald.'); });
+    return () => { alive = false; };
+  }, [invoice.organization_id, invoice.id]);
+
+  const openCents = state?.openCents ?? 0;
+  const amountCents = parseDutchAmountCents(String(amountEuro)) ?? NaN;
+  const amountValid = Boolean(state) && Number.isFinite(amountCents) && amountCents > 0 && amountCents <= openCents;
+  const restCents = amountValid ? openCents - amountCents : 0;
+  const writeOff = mode === 'write_off';
+
+  async function submit() {
+    if (!amountValid || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit({ amountCents, reason: reason.trim(), sendToClient: !writeOff });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Crediteren mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Wat er met de factuur gebeurt, in één zin, afhankelijk van wat er betaald is.
+  const outcome = !state ? null
+    : restCents > 0 ? `De rest (${euro(restCents / 100)}) blijft openstaan.`
+    : writeOff ? 'Daarna staat de factuur op Afgeboekt.'
+    : state.paidCents > 0 ? 'Daarna staat de factuur op Betaald: wat overblijft, is betaald.'
+    : 'Daarna staat de factuur op Geannuleerd.';
+
+  return <Modal
+    title={`Crediteren — factuur ${invoice.number}`}
+    onClose={onClose}
+    className="refund-modal"
+    footer={<>
+      <Button onClick={onClose} disabled={busy}>Annuleren</Button>
+      <Button variant="primary" onClick={() => void submit()} disabled={!amountValid || busy}>{busy ? 'Bezig…' : (writeOff ? 'Afboeken als oninbaar' : 'Crediteren')}</Button>
+    </>}
+  >
+    <div className="refund-form">
+      {!state && !error && <p className="refund-note">Het openstaande bedrag wordt opgehaald…</p>}
+      {state && <>
+        <div className="refund-summary">
+          <div><span>Factuurtotaal</span><strong>{euro(state.totalCents / 100)}</strong></div>
+          <div><span>Betaald</span><strong>{euro(state.paidCents / 100)}</strong></div>
+          {state.creditedCents > 0 && <div><span>Al gecrediteerd</span><strong>{euro(state.creditedCents / 100)}</strong></div>}
+          <div><span>Staat nog open</span><strong>{euro(openCents / 100)}</strong></div>
+        </div>
+
+        {openCents <= 0
+          ? <p className="refund-error">Op deze factuur staat niets meer open; er valt niets te crediteren.</p>
+          : <p className="refund-note">{state.paidCents > 0
+            ? <>Er is <strong>{euro(state.paidCents / 100)}</strong> betaald; de {writeOff ? 'creditnota' : 'creditfactuur'} gaat over de <strong>{euro(openCents / 100)}</strong> die nog openstaat. </>
+            : <>De {writeOff ? 'creditnota' : 'creditfactuur'} gaat over de <strong>{euro(openCents / 100)}</strong> die openstaat. </>}
+            Omzet en btw van dat bedrag worden teruggeboekt. Je kunt ook een deel {writeOff ? 'afboeken' : 'crediteren'}.</p>}
+
+        <div className="send-method" role="radiogroup" aria-label="Soort creditering">
+          <button type="button" role="radio" aria-checked={!writeOff} className={!writeOff ? 'is-active' : ''} disabled={busy} onClick={() => setMode('credit')}>
+            <strong>Creditfactuur naar de klant</strong>
+            <small>De klant hoeft dit bedrag niet meer te betalen en krijgt de creditfactuur per e-mail.</small>
+          </button>
+          <button type="button" role="radio" aria-checked={writeOff} className={writeOff ? 'is-active' : ''} disabled={busy} onClick={() => setMode('write_off')}>
+            <strong>Afboeken als oninbaar</strong>
+            <small>Je verwacht het geld niet meer. Een interne creditnota boekt omzet en btw terug; er gaat niets naar de klant.</small>
+          </button>
+        </div>
+
+        <label className="refund-field">
+          <span>Bedrag (EUR, incl. btw)</span>
+          <input type="number" inputMode="decimal" min="0" step="0.01" max={(openCents / 100).toFixed(2)} value={amountEuro} disabled={busy || openCents <= 0} onChange={event => setAmountEuro(event.target.value)} />
+        </label>
+        <button type="button" className="refund-full-btn" disabled={busy || openCents <= 0} onClick={() => setAmountEuro((openCents / 100).toFixed(2))}>Alles wat openstaat ({euro(openCents / 100)})</button>
+
+        <label className="refund-field">
+          <span>{writeOff ? 'Reden (komt op de interne creditnota)' : 'Reden (komt op de creditfactuur)'}</span>
+          <textarea rows={3} value={reason} disabled={busy} placeholder={writeOff ? 'Bijv. klant failliet, na aanmaning niet betaald' : 'Bijv. factuur vervalt, uren te veel gerekend'} onChange={event => setReason(event.target.value)} />
+        </label>
+
+        {amountValid && <p className="refund-note">{outcome} Dit kan niet ongedaan worden gemaakt.{writeOff ? ' De btw over dit bedrag krijg je via je btw-aangifte terug.' : ''}</p>}
+        {!state.booked && <p className="refund-note">Deze factuur staat niet in het grootboek (hij is van vóór de startdatum van je boekhouding); de creditnota wordt daarom ook niet geboekt.</p>}
+        {Number.isFinite(amountCents) && amountCents > openCents && openCents > 0 && <p className="refund-error">Je kunt hoogstens crediteren wat nog openstaat ({euro(openCents / 100)}).{state.paidCents > 0 ? ' Het betaalde deel draai je daarna terug met Terugbetaling.' : ''}</p>}
+      </>}
+      {error && <p className="refund-error">{error}</p>}
+    </div>
+  </Modal>;
+}
+
+/** Was deze terugbetaling het terugstorten van te veel of dubbel betaald geld? */
+function refundIsOverpayment(refund: InvoiceRefund): boolean {
+  if (refund.metadata?.purpose === 'overpayment') return true;
+  // Een terugbetaling in het Mollie-dashboard van wat de klant te veel betaalde:
+  // de server zag dat aan het grootboek en maakte er bewust geen creditnota bij.
+  return refund.metadata?.source === 'mollie_dashboard' && refund.metadata?.create_credit_note === false;
+}
+
+function InvoiceRefunds({ refunds, onCreditNoteForRefund }: { refunds: InvoiceRefund[]; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void> }) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   if (refunds.length === 0) return <div className="quote-timeline-empty">Nog geen terugbetalingen.</div>;
-  return <div className="quote-versions">{refunds.map(refund => <div className="quote-version-pill" key={refund.id}>
-    <strong>{refundStatusLabel(refund.status)}</strong>
-    <span>{euro(refund.amount_cents / 100)} {refund.currency}</span>
-    <small>{dateNL(refund.created_at)} · {refund.kind === 'manual' ? 'Handmatig' : 'Mollie'}</small>
-    {refund.reason && <small>{refund.reason}</small>}
-    {refund.status === 'failed' && refund.error_message && <small className="refund-error">{refund.error_message}</small>}
-  </div>)}</div>;
+
+  // Een terugbetaling zonder creditfactuur liet omzet en btw staan. Was het
+  // toch een verkoop die (deels) verviel, dan kan de creditfactuur er alsnog bij.
+  async function addCreditNote(refund: InvoiceRefund) {
+    if (!onCreditNoteForRefund || busyId) return;
+    const overpayment = refundIsOverpayment(refund);
+    if (!confirm(`Voor deze terugbetaling van ${euro(refund.amount_cents / 100)} alsnog een creditfactuur maken?\n\nDe klant krijgt de creditfactuur per e-mail; omzet en btw van dit bedrag worden teruggeboekt.${overpayment ? ' Doe dit alleen als de verkoop (deels) niet doorging; bij een dubbele betaling hoort er geen creditfactuur.' : ''} Dit kan niet ongedaan worden gemaakt.`)) return;
+    setBusyId(refund.id);
+    setError(null);
+    try {
+      await onCreditNoteForRefund(refund);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Creditfactuur maken mislukt');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return <div className="quote-versions">{refunds.map(refund => {
+    const overpayment = refundIsOverpayment(refund);
+    const canAddCreditNote = Boolean(onCreditNoteForRefund) && refund.status === 'refunded' && !refund.credit_note_id;
+    return <div className="quote-version-pill" key={refund.id}>
+      <strong>{overpayment && refund.status === 'refunded' ? 'Te veel betaald teruggestort' : refundStatusLabel(refund.status)}</strong>
+      <span>{euro(refund.amount_cents / 100)} {refund.currency}</span>
+      <small>{dateNL(refund.created_at)} · {refund.kind === 'manual' ? 'Handmatig' : 'Mollie'}{overpayment && refund.status !== 'refunded' ? ' · te veel betaald' : ''}</small>
+      {refund.reason && <small>{refund.reason}</small>}
+      {refund.status === 'failed' && refund.error_message && <small className="refund-error">{refund.error_message}</small>}
+      {refund.status === 'refunded' && !refund.credit_note_id && !overpayment && <small className="refund-error">Zonder creditfactuur: omzet en btw staan nog in je boeken.</small>}
+      {canAddCreditNote && <div className="cn-pill-actions">
+        <button type="button" className="att-btn" disabled={busyId !== null} title={overpayment ? 'Ging de verkoop toch (deels) niet door? Dan komt er alsnog een creditfactuur en gaan omzet en btw terug.' : 'Maakt alsnog de creditfactuur bij deze terugbetaling: omzet en btw gaan terug.'} onClick={() => void addCreditNote(refund)}><FileText size={14}/> {busyId === refund.id ? 'Bezig…' : overpayment ? 'Toch een creditfactuur maken' : 'Creditfactuur alsnog maken'}</button>
+      </div>}
+    </div>;
+  })}{error && <p className="refund-error">{error}</p>}</div>;
 }
 
 function CreditNotes({ creditNotes, canWrite = false, onDownload, onDownloadUbl, onEmail, onPostToLedger }: { creditNotes: CreditNote[]; canWrite?: boolean; onDownload?: (creditNote: CreditNote) => void; onDownloadUbl?: (creditNote: CreditNote) => void; onEmail?: (creditNote: CreditNote) => void; onPostToLedger?: (creditNote: CreditNote) => void }) {

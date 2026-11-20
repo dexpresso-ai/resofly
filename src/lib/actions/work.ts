@@ -1,9 +1,10 @@
 import {
-  appendClientCallNotes, blockInboundSender, createClientCall, creditInvoice, currentSessionUserId, markClientEmailsRead,
+  appendClientCallNotes, blockInboundSender, createClientCall, currentSessionUserId, markClientEmailsRead,
   saveJitsiServer, saveOrganizationPortalSettings, savePlannerDayCapacity, shiftProjectTaskPlanning, updateClientCall,
   withdrawQuote,
 } from '../repository';
 import { extendBookingLink } from '../meetingBookingApi';
+import { creditInvoiceAmount } from '../../services/invoiceRecoveryService';
 import { renameAiReport } from '../aiReports';
 import { sendMessage, startDm } from '../chat';
 import { flag, list, optText, patchOf, text, type ActionExecutor } from './types';
@@ -35,9 +36,15 @@ export const WORK_EXECUTORS: Record<string, ActionExecutor> = {
   },
 
   'invoice.credit': async (payload, ctx) => {
-    const { creditNote } = await creditInvoice(ctx.organizationId, text(payload, 'invoice_id'), optText(payload, 'reason') ?? undefined);
-    const number = (creditNote as { number?: string } | null)?.number;
-    return `Factuur ${optText(payload, 'number') ?? ''} gecrediteerd${number ? ` met creditfactuur ${number}` : ''}; de factuur staat op geannuleerd`;
+    // Dezelfde actie als het venster Crediteren: wat openstaat (of een deel),
+    // en zonder mail bij afboeken als oninbaar. De server zegt wat er gebeurd is.
+    const amount = typeof payload.amount_cents === 'number' && Number.isFinite(payload.amount_cents) ? payload.amount_cents : undefined;
+    const result = await creditInvoiceAmount(ctx.organizationId, text(payload, 'invoice_id'), {
+      reason: optText(payload, 'reason') ?? undefined,
+      amountCents: amount,
+      sendToClient: payload.send_to_client === false ? false : true,
+    });
+    return result.summary || `Factuur ${optText(payload, 'number') ?? ''} gecrediteerd`;
   },
 
   'client_email.mark_read': async (payload, ctx) => {

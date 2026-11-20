@@ -101,7 +101,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // bank_sales_invoice_ref erbij; geen tabellen of kolommen.
 // 20261119100000 (opstarten sneller) zet alleen de functie
 // bank_transactions_to_reconcile erbij; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261119100000';
+// 20261119180000 (financiën: herstelwegen) en 20261119190000 (facturen
+// herstellen) vervangen functies en triggers; geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261119190000';
 
 export type TableKind =
   | 'export'
