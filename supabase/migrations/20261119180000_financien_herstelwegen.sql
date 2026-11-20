@@ -898,6 +898,14 @@ begin
       -- Afletteren kan alleen tegen een factuur die in het grootboek staat. Zonder
       -- debitering van 1300 zou de creditering hier Debiteuren negatief maken.
       if v_inv.journal_entry_id is null then
+        -- TOEGEVOEGD (20261119180000): een factuur van vóór de start van de boekhouding
+        -- komt nooit in het grootboek. "Boek de factuur eerst" stuurde naar een
+        -- knop die antwoordde "zit al in de beginbalans": de twee meldingen
+        -- wezen naar elkaar.
+        if v_start_date is not null and v_inv.date < v_start_date then
+          raise exception 'Factuur % is van vóór de start van je boekhouding in ResoFly (%) en staat niet in het grootboek. Boek deze ontvangst op 1300 Debiteuren (kies "Grootboekrekening") in plaats van op de factuur; daar staat de vordering uit je beginbalans.',
+            coalesce(v_inv.number, ''), to_char(v_start_date, 'DD-MM-YYYY') using errcode = '23514';
+        end if;
         raise exception 'Factuur % staat nog niet in het grootboek. Boek de factuur eerst ("Boek naar grootboek") en letter daarna af.', coalesce(v_inv.number, '')
           using errcode = '23514';
       end if;
@@ -2507,6 +2515,176 @@ grant execute on function public.delete_duplicate_bank_transaction(uuid, uuid) t
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- 6c. Een factuur van vóór de start: de melding zegt wat je dan wel doet
+-- ═══════════════════════════════════════════════════════════════════════════
+
+CREATE OR REPLACE FUNCTION public.post_sales_invoice_to_ledger(p_organization_id uuid, p_invoice_id uuid, p_created_by uuid DEFAULT auth.uid())
+ RETURNS journal_entries
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_inv public.invoices;
+  v_start date;
+  v_lines jsonb := '[]'::jsonb;
+  v_output_vat bigint := 0;
+  v_receivable bigint := 0;
+  v_entry public.journal_entries;
+  v_book_date date;
+  v_desc text;
+  r record;
+begin
+  if auth.role() <> 'service_role' and not (public.can_write_org(p_organization_id) and public.can_write_module(p_organization_id, 'finance')) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  select * into v_inv from public.invoices
+  where id = p_invoice_id and organization_id = p_organization_id for update;
+  if not found then
+    raise exception 'Factuur niet gevonden.' using errcode = '02000';
+  end if;
+  if v_inv.journal_entry_id is not null then
+    raise exception 'Deze factuur is al naar het grootboek geboekt.' using errcode = '23514';
+  end if;
+  -- Statusguard: alleen een uitgegeven factuur boekt omzet. Concept/geannuleerd niet.
+  if v_inv.status in ('draft', 'cancelled') then
+    raise exception 'Een % factuur kan niet naar het grootboek worden geboekt.', v_inv.status using errcode = '23514';
+  end if;
+
+  select bookkeeping_start_date into v_start
+  from public.company_settings where organization_id = p_organization_id;
+
+  if v_start is not null and v_inv.date < v_start then
+    -- GEWIJZIGD (20261119180000): zeggen wat je dan wel doet. "Deze omzet zit al in de
+    -- beginbalans" klopte niet voor een factuur die ná de beginbalans was
+    -- gemaakt met een oudere datum, en wees nergens heen.
+    raise exception 'Factuur % heeft een datum (%) van vóór de start van je boekhouding in ResoFly (%) en komt daarom niet in het grootboek. Stond hij als debiteur in je beginbalans, boek de betaling dan bij Bank op 1300 Debiteuren. Is het een nieuwe factuur, geef hem dan een datum vanaf de startdatum.',
+      coalesce(v_inv.number, ''), to_char(v_inv.date, 'DD-MM-YYYY'), to_char(v_start, 'DD-MM-YYYY')
+      using errcode = '23514';
+  end if;
+
+  perform public.ensure_default_ledger_accounts(p_organization_id);
+
+  -- Omzet per (btw-code, tarief); btw per groep afgerond. Het TARIEF komt van
+  -- de factuurregel (dat is wat gefactureerd is); de CODE bepaalt de rubriek
+  -- (via vat_codes.sales_box in de aangifte) en de omzetrekening: buitenland/
+  -- verlegd (3a/3b/3c of verlegd-verkoop) → 8030, anders op tarief.
+  -- GEWIJZIGD (20261105230000): (1) aantal, prijs en tarief worden gelezen zoals
+  -- invoice_calculated_totals ze leest (een onleesbare waarde telt als 0); een
+  -- harde ::numeric liet het boeken mislukken of boekte iets anders dan het
+  -- factuurtotaal ("1e3" gaf totaal € 0 en een vordering van € 121.000).
+  -- (2) De btw wordt per TARIEF afgerond, zoals op de factuur, de PDF, de UBL en
+  -- bij Mollie; per (code, tarief) afronden gaf bij twee regels van € 1,02 tegen
+  -- 21% (één zonder code, één met HOOG) een vordering van € 2,46 tegen een
+  -- factuur van € 2,47 — en daarna kon de factuur niet meer worden gecrediteerd.
+  -- Het afrondingsverschil binnen een tarief gaat naar de grootste groep.
+  for r in
+    with regels as (
+      select
+        nullif(btrim(coalesce(line->>'vat_code', '')), '') as vat_code,
+        case when coalesce(line->>'vat', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (line->>'vat')::numeric else 0 end as rate,
+        round(
+          (case when coalesce(line->>'quantity', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (line->>'quantity')::numeric else 0 end)
+          * (case when coalesce(line->>'unit_price', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (line->>'unit_price')::numeric else 0 end)
+          * 100) as base_cents
+      from jsonb_array_elements(v_inv.lines) as line
+    ),
+    groepen as (
+      select g.vat_code, (vc.id is not null) as has_code, vc.kind, vc.sales_box, g.rate, sum(g.base_cents) as base_cents
+        from regels g
+        left join public.vat_codes vc
+          on vc.organization_id = p_organization_id
+         and vc.code = g.vat_code
+       group by 1, 2, 3, 4, 5
+    ),
+    per_tarief as (
+      select rate, round(sum(base_cents) * rate / 100.0) as rate_vat_cents
+        from groepen
+       group by rate
+    ),
+    gerangschikt as (
+      select gr.*, round(gr.base_cents * gr.rate / 100.0) as group_vat_cents, pt.rate_vat_cents,
+             row_number() over (partition by gr.rate order by abs(gr.base_cents) desc, gr.vat_code nulls last) as rn
+        from groepen gr
+        join per_tarief pt on pt.rate = gr.rate
+    )
+    select x.vat_code, x.has_code, x.kind, x.sales_box, x.rate, x.base_cents,
+           x.group_vat_cents + case when x.rn = 1
+             then x.rate_vat_cents - sum(x.group_vat_cents) over (partition by x.rate)
+             else 0 end as vat_cents
+      from gerangschikt x
+  loop
+    declare
+      -- GEWIJZIGD (20261105233000): bij de KOR werd de btw hier stil op 0 gezet,
+      -- ook als de factuur btw noemde. Btw die op een factuur staat, is
+      -- verschuldigd (art. 37 Wet OB 1968), en 1300 week dan af van het
+      -- factuurbedrag. Sinds 20261105230000 gaat een KOR-factuur met btw niet
+      -- de deur uit (invoices_kor_no_vat); wat hier nog met btw aankomt, is
+      -- uitgegeven vóór de KOR aanging. Die btw hoort in het grootboek.
+      v_vat bigint := r.vat_cents;
+      v_revenue_account text := case
+        when r.has_code and (r.sales_box in ('3a','3b','3c') or r.kind = 'reverse_charge_sales') then '8030'
+        when r.rate >= 21 then '8000'
+        when r.rate > 0 then '8010'
+        else '8020'
+      end;
+    begin
+      -- GEWIJZIGD (20261104020000): een negatieve groep (korting, correctie)
+      -- komt aan de debetzijde; een negatieve credit bestaat niet en liet het
+      -- boeken stil mislukken. Grondslag en btw houden hun teken.
+      v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'account_id', public.bookkeeping_account_id(p_organization_id, v_revenue_account),
+        'description', 'Omzet',
+        'debit_cents', greatest(-r.base_cents, 0), 'credit_cents', greatest(r.base_cents, 0),
+        'vat_code', r.vat_code,
+        'vat_rate', r.rate, 'vat_base_cents', r.base_cents, 'vat_amount_cents', v_vat,
+        'client_id', v_inv.client_id, 'project_id', v_inv.project_id
+      ));
+      v_output_vat := v_output_vat + v_vat;
+      v_receivable := v_receivable + r.base_cents + v_vat;
+    end;
+  end loop;
+
+  if v_output_vat <> 0 then
+    v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+      'account_id', public.bookkeeping_account_id(p_organization_id, '1510'),
+      'description', 'Af te dragen BTW',
+      'debit_cents', greatest(-v_output_vat, 0), 'credit_cents', greatest(v_output_vat, 0),
+      'client_id', v_inv.client_id
+    ));
+  end if;
+
+  if v_receivable <> 0 then
+    v_lines := jsonb_build_array(jsonb_build_object(
+      'account_id', public.bookkeeping_account_id(p_organization_id, '1300'),
+      'description', 'Debiteuren',
+      'debit_cents', greatest(v_receivable, 0), 'credit_cents', greatest(-v_receivable, 0),
+      'client_id', v_inv.client_id
+    )) || v_lines;
+  end if;
+
+  -- Nagekomen factuur in een al ingediende periode: boek op de eerstvolgende
+  -- open datum (documentdatum blijft leidend op de factuur zelf). De btw komt
+  -- dan in de eerstvolgende aangifte (kleine correctie) of via een suppletie.
+  v_book_date := public.first_open_booking_date(p_organization_id, v_inv.date);
+  v_desc := 'Verkoopfactuur ' || coalesce(v_inv.number, '');
+  if v_book_date <> v_inv.date then
+    v_desc := v_desc || ' (factuurdatum ' || to_char(v_inv.date, 'DD-MM-YYYY') || ', geboekt in eerstvolgende open periode)';
+  end if;
+
+  v_entry := public.post_journal_entry(
+    p_organization_id, v_book_date, v_desc,
+    'sales_invoice', v_inv.id, v_lines, p_created_by
+  );
+
+  update public.invoices set journal_entry_id = v_entry.id where id = v_inv.id;
+  return v_entry;
+end;
+$function$;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- 7. Inkoopfactuur boeken: het btw-bedrag van de factuur, niets vóór de start, geen verkoopcode
 -- ═══════════════════════════════════════════════════════════════════════════
 
@@ -4079,3 +4257,5 @@ revoke all on function public.report_bank_reconciliation(uuid) from public, anon
 grant execute on function public.report_bank_reconciliation(uuid) to authenticated, service_role;
 revoke all on function public.reverse_journal_entry(uuid, date, uuid) from public, anon;
 grant execute on function public.reverse_journal_entry(uuid, date, uuid) to authenticated, service_role;
+revoke all on function public.post_sales_invoice_to_ledger(uuid, uuid, uuid) from public, anon;
+grant execute on function public.post_sales_invoice_to_ledger(uuid, uuid, uuid) to authenticated, service_role;
